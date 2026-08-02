@@ -5,8 +5,9 @@ set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 find_package(Vulkan REQUIRED)
-set(SDL2_DIR "$ENV{VULKAN_SDK}/cmake")
-find_package(SDL2 CONFIG REQUIRED)
+set(SDL3_DIR "$ENV{VULKAN_SDK}/cmake")
+find_package(SDL3 CONFIG REQUIRED)
+find_path(GLM_INCLUDE_DIR NAMES glm/glm.hpp HINTS "$ENV{VULKAN_SDK}/Include" REQUIRED)
 
 add_executable(GamEngine
         main.cpp
@@ -14,7 +15,8 @@ add_executable(GamEngine
         src/msaa.h
 )
 
-target_link_libraries(GamEngine PRIVATE SDL2::SDL2 Vulkan::Vulkan)
+target_link_libraries(GamEngine PRIVATE SDL3::SDL3 Vulkan::Vulkan)
+target_include_directories(GamEngine PRIVATE ${GLM_INCLUDE_DIR})
 
 find_program(GLSLANG_VALIDATOR NAMES glslangValidator)
 find_program(GLSLC NAMES glslc)
