@@ -7,35 +7,23 @@ Buffer::~Buffer() {
     destroy();
 }
 
-void Buffer::createDeviceLocal(
-    VkPhysicalDevice physicalDevice,
-    VkDevice device,
-    const void* data,
-    VkDeviceSize size,
-    VkBufferUsageFlags usage,
-    VkCommandPool commandPool,
-    VkQueue queue) {
+void Buffer::createDeviceLocal(VkPhysicalDevice physicalDevice, VkDevice device, const void *data, VkDeviceSize size,
+                               VkBufferUsageFlags usage, VkCommandPool commandPool, VkQueue queue) {
     if (data == nullptr || size == 0) {
         throw std::invalid_argument("Buffer upload requires non-empty data");
     }
 
     Buffer staging;
-    staging.create(
-        physicalDevice, device, size,
-        VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
-        VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
-
-    void* mapped = nullptr;
+    staging.create(physicalDevice, device, size, VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+                   VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+    void *mapped = nullptr;
     if (vkMapMemory(device, staging.memory_, 0, size, 0, &mapped) != VK_SUCCESS) {
         throw std::runtime_error("Could not map staging buffer memory");
     }
     std::memcpy(mapped, data, static_cast<size_t>(size));
     vkUnmapMemory(device, staging.memory_);
 
-    create(
-        physicalDevice, device, size,
-        usage | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
-        VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+    create(physicalDevice, device, size, usage | VK_BUFFER_USAGE_TRANSFER_DST_BIT, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
 
     VkCommandBufferAllocateInfo allocateInfo{VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO};
     allocateInfo.commandPool = commandPool;
@@ -125,7 +113,7 @@ void Buffer::create(
 uint32_t Buffer::findMemoryType(
     VkPhysicalDevice physicalDevice,
     uint32_t typeFilter,
-    VkMemoryPropertyFlags properties) const {
+    VkMemoryPropertyFlags properties) {
     VkPhysicalDeviceMemoryProperties memoryProperties{};
     vkGetPhysicalDeviceMemoryProperties(physicalDevice, &memoryProperties);
     for (uint32_t i = 0; i < memoryProperties.memoryTypeCount; ++i) {
