@@ -13,8 +13,11 @@
 #include "msaa.h"
 #include "depth_buffer.h"
 #include "graphics_pipeline.h"
+#include "buffer.h"
 #include "vulkan_device.h"
 #include "swapchain.h"
+#include "../render/vertex.h"
+#include "../render/mesh.h"
 
 #include <cstdint>
 #include <cstdio>
@@ -76,6 +79,9 @@ namespace {
 
         GraphicsPipeline graphicsPipeline;
         DepthBuffer depthBuffer;
+        Mesh cubeMesh;
+        Buffer vertexBuffer;
+        Buffer indexBuffer;
 
         VkCommandPool commandPool{};
         std::vector<VkCommandBuffer> commandBuffers;
@@ -122,6 +128,7 @@ namespace {
             createGraphicsPipeline();
             createFramebuffers();
             createCommandPool();
+            createMeshBuffers();
             createCommandBuffers();
             createSyncObjects();
         }
@@ -479,7 +486,41 @@ namespace {
             options.fragmentShader = "shaders/frag.spv";
             options.pushConstantSize = sizeof(PushConstants);
             options.cullMode = VK_CULL_MODE_NONE;
+            options.vertexBinding = {
+                .binding = 0,
+                .stride = sizeof(Vertex),
+                .inputRate = VK_VERTEX_INPUT_RATE_VERTEX,
+            };
+            options.vertexAttributes = {
+                {.location = 0, .binding = 0, .format = VK_FORMAT_R32G32B32_SFLOAT, .offset = offsetof(Vertex, position)},
+                {.location = 1, .binding = 0, .format = VK_FORMAT_R32G32B32_SFLOAT, .offset = offsetof(Vertex, color)},
+                {.location = 2, .binding = 0, .format = VK_FORMAT_R32G32_SFLOAT, .offset = offsetof(Vertex, texCoord)},
+            };
             graphicsPipeline.create(device, options);
+        }
+
+        void createMeshBuffers() {
+            cubeMesh = {
+                .vertices = {
+                    {{-0.5f, -0.5f, -0.5f}, {0.95f, 0.25f, 0.20f}, {0.0f, 0.0f}}, {{ 0.5f, -0.5f, -0.5f}, {0.95f, 0.25f, 0.20f}, {1.0f, 0.0f}}, {{ 0.5f,  0.5f, -0.5f}, {0.95f, 0.25f, 0.20f}, {1.0f, 1.0f}}, {{-0.5f,  0.5f, -0.5f}, {0.95f, 0.25f, 0.20f}, {0.0f, 1.0f}},
+                    {{-0.5f, -0.5f,  0.5f}, {0.20f, 0.75f, 0.95f}, {0.0f, 0.0f}}, {{ 0.5f, -0.5f,  0.5f}, {0.20f, 0.75f, 0.95f}, {1.0f, 0.0f}}, {{ 0.5f,  0.5f,  0.5f}, {0.20f, 0.75f, 0.95f}, {1.0f, 1.0f}}, {{-0.5f,  0.5f,  0.5f}, {0.20f, 0.75f, 0.95f}, {0.0f, 1.0f}},
+                    {{-0.5f, -0.5f, -0.5f}, {0.25f, 0.90f, 0.40f}, {0.0f, 0.0f}}, {{-0.5f, -0.5f,  0.5f}, {0.25f, 0.90f, 0.40f}, {1.0f, 0.0f}}, {{ 0.5f, -0.5f,  0.5f}, {0.25f, 0.90f, 0.40f}, {1.0f, 1.0f}}, {{ 0.5f, -0.5f, -0.5f}, {0.25f, 0.90f, 0.40f}, {0.0f, 1.0f}},
+                    {{-0.5f,  0.5f, -0.5f}, {0.95f, 0.75f, 0.20f}, {0.0f, 0.0f}}, {{ 0.5f,  0.5f, -0.5f}, {0.95f, 0.75f, 0.20f}, {1.0f, 0.0f}}, {{ 0.5f,  0.5f,  0.5f}, {0.95f, 0.75f, 0.20f}, {1.0f, 1.0f}}, {{-0.5f,  0.5f,  0.5f}, {0.95f, 0.75f, 0.20f}, {0.0f, 1.0f}},
+                    {{ 0.5f, -0.5f, -0.5f}, {0.75f, 0.30f, 0.95f}, {0.0f, 0.0f}}, {{ 0.5f, -0.5f,  0.5f}, {0.75f, 0.30f, 0.95f}, {1.0f, 0.0f}}, {{ 0.5f,  0.5f,  0.5f}, {0.75f, 0.30f, 0.95f}, {1.0f, 1.0f}}, {{ 0.5f,  0.5f, -0.5f}, {0.75f, 0.30f, 0.95f}, {0.0f, 1.0f}},
+                    {{-0.5f, -0.5f, -0.5f}, {0.20f, 0.85f, 0.75f}, {0.0f, 0.0f}}, {{-0.5f,  0.5f, -0.5f}, {0.20f, 0.85f, 0.75f}, {1.0f, 0.0f}}, {{-0.5f,  0.5f,  0.5f}, {0.20f, 0.85f, 0.75f}, {1.0f, 1.0f}}, {{-0.5f, -0.5f,  0.5f}, {0.20f, 0.85f, 0.75f}, {0.0f, 1.0f}},
+                },
+                .indices = {
+                    0, 1, 2, 2, 3, 0, 4, 6, 5, 6, 4, 7,
+                    8, 9, 10, 10, 11, 8, 12, 13, 14, 14, 15, 12,
+                    16, 17, 18, 18, 19, 16, 20, 21, 22, 22, 23, 20,
+                },
+            };
+            vertexBuffer.createDeviceLocal(vulkanDevice.physical(), device, cubeMesh.vertices.data(),
+                sizeof(Vertex) * cubeMesh.vertices.size(), VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
+                commandPool, vulkanDevice.graphicsQueue());
+            indexBuffer.createDeviceLocal(vulkanDevice.physical(), device, cubeMesh.indices.data(),
+                sizeof(uint32_t) * cubeMesh.indices.size(), VK_BUFFER_USAGE_INDEX_BUFFER_BIT,
+                commandPool, vulkanDevice.graphicsQueue());
         }
 
         void createFramebuffers() {
@@ -563,6 +604,10 @@ namespace {
             vkCmdBeginRenderPass(commandBuffer, &renderPassInfo, VK_SUBPASS_CONTENTS_INLINE);
 
             vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, graphicsPipeline.handle());
+            const VkBuffer vertexBuffers[] = {vertexBuffer.handle()};
+            const VkDeviceSize vertexOffsets[] = {0};
+            vkCmdBindVertexBuffers(commandBuffer, 0, 1, vertexBuffers, vertexOffsets);
+            vkCmdBindIndexBuffer(commandBuffer, indexBuffer.handle(), 0, VK_INDEX_TYPE_UINT32);
 
             VkViewport viewport{};
             viewport.x = 0.0f;
@@ -591,7 +636,7 @@ namespace {
             vkCmdPushConstants(commandBuffer, graphicsPipeline.layout(), VK_SHADER_STAGE_VERTEX_BIT, 0,
                                sizeof(PushConstants), &constants);
 
-            vkCmdDraw(commandBuffer, 36, 1, 0, 0);
+            vkCmdDrawIndexed(commandBuffer, cubeMesh.indexCount(), 1, 0, 0, 0);
 
             vkCmdEndRenderPass(commandBuffer);
 
@@ -659,6 +704,8 @@ namespace {
 
             if (oldFormat != swapchain.format()) {
                 graphicsPipeline.destroy();
+                indexBuffer.destroy();
+                vertexBuffer.destroy();
                 createGraphicsPipeline();
             }
 

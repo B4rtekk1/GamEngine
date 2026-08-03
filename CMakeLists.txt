@@ -25,6 +25,10 @@ add_executable(GamEngine
         src/vulkan/depth_buffer.cpp
         src/vulkan/graphics_pipeline.h
         src/vulkan/graphics_pipeline.cpp
+        src/vulkan/buffer.h
+        src/vulkan/buffer.cpp
+        src/render/vertex.h
+        src/render/mesh.h
 )
 
 target_link_libraries(GamEngine PRIVATE SDL3::SDL3 Vulkan::Vulkan)

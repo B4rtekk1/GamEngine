@@ -4,6 +4,7 @@
 
 #include <cstdint>
 #include <filesystem>
+#include <vector>
 
 struct GraphicsPipelineOptions {
     VkFormat colorFormat = VK_FORMAT_UNDEFINED;
@@ -18,6 +19,9 @@ struct GraphicsPipelineOptions {
 
     VkCullModeFlags cullMode = VK_CULL_MODE_BACK_BIT;
     VkFrontFace frontFace = VK_FRONT_FACE_CLOCKWISE;
+
+    VkVertexInputBindingDescription vertexBinding{};
+    std::vector<VkVertexInputAttributeDescription> vertexAttributes;
 };
 
 class GraphicsPipeline final {
