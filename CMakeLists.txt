@@ -10,9 +10,13 @@ find_package(SDL3 CONFIG REQUIRED)
 find_path(GLM_INCLUDE_DIR NAMES glm/glm.hpp HINTS "$ENV{VULKAN_SDK}/Include" REQUIRED)
 
 add_executable(GamEngine
-        main.cpp
+        src/main.cpp
         src/msaa.cpp
         src/msaa.h
+        src/utils/shader_loader.cpp
+        src/utils/shader_loader.h
+        src/vulkan/vulkan_device.h
+        src/vulkan/vulkan_device.cpp
 )
 
 target_link_libraries(GamEngine PRIVATE SDL3::SDL3 Vulkan::Vulkan)

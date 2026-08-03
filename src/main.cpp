@@ -8,14 +8,15 @@
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_transform.hpp>
 
-#include "src/msaa.h"
+#include "msaa.h"
+#include "utils/shader_loader.h"
+#include "vulkan/vulkan_device.h"
 
 #include <algorithm>
 #include <array>
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
-#include <fstream>
 #include <iostream>
 #include <optional>
 #include <stdexcept>
@@ -41,28 +42,7 @@ const std::vector<const char*> validationLayers = {
     "VK_LAYER_KHRONOS_validation"
 };
 
-static std::vector<char> readFile(const std::string& filename) {
-    std::ifstream file(filename, std::ios::ate | std::ios::binary);
-    if (!file.is_open()) {
-        throw std::runtime_error("Cannot open file: " + filename);
-    }
-    size_t fileSize = (size_t)file.tellg();
-    std::vector<char> buffer(fileSize);
-    file.seekg(0);
-    file.read(buffer.data(), static_cast<std::streamsize>(fileSize));
-    file.close();
-    return buffer;
-}
-
 namespace {
-    struct QueueFamilyIndices {
-        std::optional<uint32_t> graphicsFamily;
-        std::optional<uint32_t> presentFamily;
-        [[nodiscard]] bool isComplete() const {
-            return graphicsFamily.has_value() && presentFamily.has_value();
-        }
-    };
-
     struct SwapChainSupportDetails {
         VkSurfaceCapabilitiesKHR capabilities{};
         std::vector<VkSurfaceFormatKHR> formats;
@@ -86,11 +66,11 @@ namespace {
         VkDebugUtilsMessengerEXT debugMessenger{};
         VkSurfaceKHR surface{};
 
+        VulkanDevice vulkanDevice;
         VkPhysicalDevice physicalDevice = VK_NULL_HANDLE;
-        VkDevice device{};
-
-        VkQueue graphicsQueue{};
-        VkQueue presentQueue{};
+        VkDevice device = VK_NULL_HANDLE;
+        VkQueue graphicsQueue = VK_NULL_HANDLE;
+        VkQueue presentQueue = VK_NULL_HANDLE;
 
         VkSwapchainKHR swapChain{};
         std::vector<VkImage> swapChainImages;
@@ -143,8 +123,11 @@ namespace {
             createInstance();
             setupDebugMessenger();
             createSurface();
-            pickPhysicalDevice();
-            createLogicalDevice();
+            vulkanDevice.create(instance, surface);
+            physicalDevice = vulkanDevice.physical();
+            device = vulkanDevice.logical();
+            graphicsQueue = vulkanDevice.graphicsQueue();
+            presentQueue = vulkanDevice.presentQueue();
             msaa.initialize(physicalDevice, device, VK_SAMPLE_COUNT_4_BIT);
             createSwapChain();
         createImageViews();
@@ -282,48 +265,6 @@ namespace {
             }
         }
 
-        // ---------- DEVICE ----------
-
-        QueueFamilyIndices findQueueFamilies(VkPhysicalDevice dev) const {
-            QueueFamilyIndices indices;
-            uint32_t queueFamilyCount = 0;
-            vkGetPhysicalDeviceQueueFamilyProperties(dev, &queueFamilyCount, nullptr);
-            std::vector<VkQueueFamilyProperties> queueFamilies(queueFamilyCount);
-            vkGetPhysicalDeviceQueueFamilyProperties(dev, &queueFamilyCount, queueFamilies.data());
-
-            int i = 0;
-            for (const auto& qf : queueFamilies) {
-                if (qf.queueFlags & VK_QUEUE_GRAPHICS_BIT) {
-                    indices.graphicsFamily = i;
-                }
-                VkBool32 presentSupport = false;
-                vkGetPhysicalDeviceSurfaceSupportKHR(dev, i, surface, &presentSupport);
-                if (presentSupport) {
-                    indices.presentFamily = i;
-                }
-                if (indices.isComplete()) break;
-                i++;
-            }
-            return indices;
-        }
-
-        const std::vector<const char*> deviceExtensions = {
-            VK_KHR_SWAPCHAIN_EXTENSION_NAME
-        };
-
-        bool checkDeviceExtensionSupport(VkPhysicalDevice dev) const {
-            uint32_t extensionCount;
-            vkEnumerateDeviceExtensionProperties(dev, nullptr, &extensionCount, nullptr);
-            std::vector<VkExtensionProperties> availableExtensions(extensionCount);
-            vkEnumerateDeviceExtensionProperties(dev, nullptr, &extensionCount, availableExtensions.data());
-
-            std::vector<std::string> required(deviceExtensions.begin(), deviceExtensions.end());
-            for (const auto& ext : availableExtensions) {
-                std::erase(required, std::string(ext.extensionName));
-            }
-            return required.empty();
-        }
-
         SwapChainSupportDetails querySwapChainSupport(VkPhysicalDevice dev) const {
             SwapChainSupportDetails details;
             vkGetPhysicalDeviceSurfaceCapabilitiesKHR(dev, surface, &details.capabilities);
@@ -342,80 +283,6 @@ namespace {
                 vkGetPhysicalDeviceSurfacePresentModesKHR(dev, surface, &presentModeCount, details.presentModes.data());
             }
             return details;
-        }
-
-        bool isDeviceSuitable(VkPhysicalDevice dev) const {
-            const QueueFamilyIndices indices = findQueueFamilies(dev);
-            const bool extensionsSupported = checkDeviceExtensionSupport(dev);
-            bool swapChainAdequate = false;
-            if (extensionsSupported) {
-                SwapChainSupportDetails swapChainSupport = querySwapChainSupport(dev);
-                swapChainAdequate = !swapChainSupport.formats.empty() && !swapChainSupport.presentModes.empty();
-            }
-            return indices.isComplete() && extensionsSupported && swapChainAdequate;
-        }
-
-        void pickPhysicalDevice() {
-            uint32_t deviceCount = 0;
-            vkEnumeratePhysicalDevices(instance, &deviceCount, nullptr);
-            if (deviceCount == 0) {
-                throw std::runtime_error("Nie znaleziono urzadzenia z obsluga Vulkan (GPU)");
-            }
-            std::vector<VkPhysicalDevice> devices(deviceCount);
-            vkEnumeratePhysicalDevices(instance, &deviceCount, devices.data());
-
-            for (const auto& dev : devices) {
-                if (isDeviceSuitable(dev)) {
-                    physicalDevice = dev;
-                    break;
-                }
-            }
-            if (physicalDevice == VK_NULL_HANDLE) {
-                throw std::runtime_error("Nie znaleziono odpowiedniego GPU");
-            }
-        }
-
-        void createLogicalDevice() {
-            QueueFamilyIndices indices = findQueueFamilies(physicalDevice);
-
-            std::vector<VkDeviceQueueCreateInfo> queueCreateInfos;
-            std::vector<uint32_t> uniqueQueueFamilies = {indices.graphicsFamily.value(), indices.presentFamily.value()};
-            std::ranges::sort(uniqueQueueFamilies);
-            uniqueQueueFamilies.erase(std::ranges::unique(uniqueQueueFamilies).begin(), uniqueQueueFamilies.end());
-
-            float queuePriority = 1.0f;
-            for (uint32_t queueFamily : uniqueQueueFamilies) {
-                VkDeviceQueueCreateInfo queueCreateInfo{};
-                queueCreateInfo.sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO;
-                queueCreateInfo.queueFamilyIndex = queueFamily;
-                queueCreateInfo.queueCount = 1;
-                queueCreateInfo.pQueuePriorities = &queuePriority;
-                queueCreateInfos.push_back(queueCreateInfo);
-            }
-
-            VkPhysicalDeviceFeatures deviceFeatures{};
-
-            VkDeviceCreateInfo createInfo{};
-            createInfo.sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO;
-            createInfo.queueCreateInfoCount = static_cast<uint32_t>(queueCreateInfos.size());
-            createInfo.pQueueCreateInfos = queueCreateInfos.data();
-            createInfo.pEnabledFeatures = &deviceFeatures;
-            createInfo.enabledExtensionCount = static_cast<uint32_t>(deviceExtensions.size());
-            createInfo.ppEnabledExtensionNames = deviceExtensions.data();
-
-            if (checkValidationLayerSupport()) {
-                createInfo.enabledLayerCount = static_cast<uint32_t>(validationLayers.size());
-                createInfo.ppEnabledLayerNames = validationLayers.data();
-            } else {
-                createInfo.enabledLayerCount = 0;
-            }
-
-            if (vkCreateDevice(physicalDevice, &createInfo, nullptr, &device) != VK_SUCCESS) {
-                throw std::runtime_error("Nie udalo sie utworzyc logicznego urzadzenia");
-            }
-
-            vkGetDeviceQueue(device, indices.graphicsFamily.value(), 0, &graphicsQueue);
-            vkGetDeviceQueue(device, indices.presentFamily.value(), 0, &presentQueue);
         }
 
         // ---------- SWAPCHAIN ----------
@@ -442,7 +309,7 @@ namespace {
             } else {
                 int w, h;
                 SDL_GetWindowSizeInPixels(window, &w, &h);
-                VkExtent2D actualExtent = {static_cast<uint32_t>(w), static_cast<uint32_t>(h)};
+                VkExtent2D actualExtent = {.width = static_cast<uint32_t>(w), .height = static_cast<uint32_t>(h)};
                 actualExtent.width = std::clamp(actualExtent.width, capabilities.minImageExtent.width, capabilities.maxImageExtent.width);
                 actualExtent.height = std::clamp(actualExtent.height, capabilities.minImageExtent.height, capabilities.maxImageExtent.height);
                 return actualExtent;
@@ -471,10 +338,10 @@ namespace {
             createInfo.imageArrayLayers = 1;
             createInfo.imageUsage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
 
-            QueueFamilyIndices indices = findQueueFamilies(physicalDevice);
-            uint32_t queueFamilyIndices[] = {indices.graphicsFamily.value(), indices.presentFamily.value()};
+            const QueueFamilyIndices& indices = vulkanDevice.queueFamilies();
+            uint32_t queueFamilyIndices[] = {indices.graphics.value(), indices.present.value()};
 
-            if (indices.graphicsFamily != indices.presentFamily) {
+            if (indices.graphics != indices.present) {
                 createInfo.imageSharingMode = VK_SHARING_MODE_CONCURRENT;
                 createInfo.queueFamilyIndexCount = 2;
                 createInfo.pQueueFamilyIndices = queueFamilyIndices;
@@ -508,8 +375,8 @@ namespace {
                 createInfo.image = swapChainImages[i];
                 createInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
                 createInfo.format = swapChainImageFormat;
-                createInfo.components = {VK_COMPONENT_SWIZZLE_IDENTITY, VK_COMPONENT_SWIZZLE_IDENTITY,
-                                          VK_COMPONENT_SWIZZLE_IDENTITY, VK_COMPONENT_SWIZZLE_IDENTITY};
+                createInfo.components = {.r = VK_COMPONENT_SWIZZLE_IDENTITY, .g = VK_COMPONENT_SWIZZLE_IDENTITY,
+                                          .b = VK_COMPONENT_SWIZZLE_IDENTITY, .a = VK_COMPONENT_SWIZZLE_IDENTITY};
                 createInfo.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
                 createInfo.subresourceRange.baseMipLevel = 0;
                 createInfo.subresourceRange.levelCount = 1;
@@ -542,7 +409,7 @@ namespace {
         VkImageCreateInfo imageInfo{};
         imageInfo.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
         imageInfo.imageType = VK_IMAGE_TYPE_2D;
-        imageInfo.extent = {swapChainExtent.width, swapChainExtent.height, 1};
+        imageInfo.extent = {.width = swapChainExtent.width, .height = swapChainExtent.height, .depth = 1};
         imageInfo.mipLevels = 1;
         imageInfo.arrayLayers = 1;
         imageInfo.format = depthFormat;
@@ -672,36 +539,20 @@ namespace {
             }
         }
 
-        [[nodiscard]] VkShaderModule createShaderModule(const std::vector<char>& code) const {
-            VkShaderModuleCreateInfo createInfo{};
-            createInfo.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
-            createInfo.codeSize = code.size();
-            createInfo.pCode = reinterpret_cast<const uint32_t*>(code.data());
-
-            VkShaderModule shaderModule;
-            if (vkCreateShaderModule(device, &createInfo, nullptr, &shaderModule) != VK_SUCCESS) {
-                throw std::runtime_error("Nie udalo sie utworzyc shader module");
-            }
-            return shaderModule;
-        }
-
         void createGraphicsPipeline() {
-            auto vertShaderCode = readFile("shaders/vert.spv");
-            auto fragShaderCode = readFile("shaders/frag.spv");
-
-            VkShaderModule vertShaderModule = createShaderModule(vertShaderCode);
-            VkShaderModule fragShaderModule = createShaderModule(fragShaderCode);
+            const auto vertShaderModule = vkutil::loadShaderModule(device, "shaders/vert.spv");
+            const auto fragShaderModule = vkutil::loadShaderModule(device, "shaders/frag.spv");
 
             VkPipelineShaderStageCreateInfo vertShaderStageInfo{};
             vertShaderStageInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
             vertShaderStageInfo.stage = VK_SHADER_STAGE_VERTEX_BIT;
-            vertShaderStageInfo.module = vertShaderModule;
+            vertShaderStageInfo.module = vertShaderModule.get();
             vertShaderStageInfo.pName = "main";
 
             VkPipelineShaderStageCreateInfo fragShaderStageInfo{};
             fragShaderStageInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
             fragShaderStageInfo.stage = VK_SHADER_STAGE_FRAGMENT_BIT;
-            fragShaderStageInfo.module = fragShaderModule;
+            fragShaderStageInfo.module = fragShaderModule.get();
             fragShaderStageInfo.pName = "main";
 
             VkPipelineShaderStageCreateInfo shaderStages[] = {vertShaderStageInfo, fragShaderStageInfo};
@@ -798,8 +649,6 @@ namespace {
                 throw std::runtime_error("Nie udalo sie utworzyc graphics pipeline");
             }
 
-            vkDestroyShaderModule(device, fragShaderModule, nullptr);
-            vkDestroyShaderModule(device, vertShaderModule, nullptr);
         }
 
         void createFramebuffers() {
@@ -830,12 +679,10 @@ namespace {
         }
 
         void createCommandPool() {
-            QueueFamilyIndices queueFamilyIndices = findQueueFamilies(physicalDevice);
-
             VkCommandPoolCreateInfo poolInfo{};
             poolInfo.sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
             poolInfo.flags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT;
-            poolInfo.queueFamilyIndex = queueFamilyIndices.graphicsFamily.value();
+            poolInfo.queueFamilyIndex = vulkanDevice.graphicsQueueFamily();
 
             if (vkCreateCommandPool(device, &poolInfo, nullptr, &commandPool) != VK_SUCCESS) {
                 throw std::runtime_error("Nie udalo sie utworzyc command pool");
@@ -868,7 +715,7 @@ namespace {
             renderPassInfo.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
             renderPassInfo.renderPass = renderPass;
             renderPassInfo.framebuffer = swapChainFramebuffers[imageIndex];
-            renderPassInfo.renderArea.offset = {0, 0};
+            renderPassInfo.renderArea.offset = {.x = 0, .y = 0};
             renderPassInfo.renderArea.extent = swapChainExtent;
 
             VkClearValue clearValues[2]{};
@@ -876,7 +723,7 @@ namespace {
             clearValues[0].color.float32[1] = 0.02f;
             clearValues[0].color.float32[2] = 0.05f;
             clearValues[0].color.float32[3] = 1.0f;
-            clearValues[1].depthStencil = {1.0f, 0};
+            clearValues[1].depthStencil = {.depth = 1.0f, .stencil = 0};
             renderPassInfo.clearValueCount = 2;
             renderPassInfo.pClearValues = clearValues;
 
@@ -894,7 +741,7 @@ namespace {
             vkCmdSetViewport(commandBuffer, 0, 1, &viewport);
 
             VkRect2D scissor{};
-            scissor.offset = {0, 0};
+            scissor.offset = {.x = 0, .y = 0};
             scissor.extent = swapChainExtent;
             vkCmdSetScissor(commandBuffer, 0, 1, &scissor);
 
@@ -1095,7 +942,11 @@ namespace {
             }
 
             vkDestroyCommandPool(device, commandPool, nullptr);
-            vkDestroyDevice(device, nullptr);
+            vulkanDevice.destroy();
+            device = VK_NULL_HANDLE;
+            physicalDevice = VK_NULL_HANDLE;
+            graphicsQueue = VK_NULL_HANDLE;
+            presentQueue = VK_NULL_HANDLE;
 
             if (checkValidationLayerSupport()) {
                 DestroyDebugUtilsMessengerEXT(instance, debugMessenger, nullptr);
