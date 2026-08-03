@@ -11,6 +11,8 @@ find_path(GLM_INCLUDE_DIR NAMES glm/glm.hpp HINTS "$ENV{VULKAN_SDK}/Include" REQ
 
 add_executable(GamEngine
         src/main.cpp
+        src/vulkan/renderer.cpp
+        src/vulkan/renderer.h
         src/vulkan/msaa.cpp
         src/vulkan/msaa.h
         src/utils/shader_loader.cpp
@@ -21,6 +23,8 @@ add_executable(GamEngine
         src/vulkan/swapchain.h
         src/vulkan/depth_buffer.h
         src/vulkan/depth_buffer.cpp
+        src/vulkan/graphics_pipeline.h
+        src/vulkan/graphics_pipeline.cpp
 )
 
 target_link_libraries(GamEngine PRIVATE SDL3::SDL3 Vulkan::Vulkan)

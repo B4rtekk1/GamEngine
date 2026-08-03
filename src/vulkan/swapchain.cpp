@@ -79,8 +79,8 @@ namespace {
     VkPresentModeKHR choosePresentMode(
         const std::vector<VkPresentModeKHR> &presentModes) {
         constexpr std::array preferredModes = {
-            VK_PRESENT_MODE_MAILBOX_KHR,
             VK_PRESENT_MODE_IMMEDIATE_KHR,
+            VK_PRESENT_MODE_MAILBOX_KHR,
             VK_PRESENT_MODE_FIFO_KHR
         };
 
