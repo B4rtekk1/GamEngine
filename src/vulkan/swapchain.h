@@ -23,8 +23,6 @@ public:
         VkSurfaceKHR surface,
         const VulkanDevice& device);
 
-    // Przed wywolaniem GPU musi byc bezczynne, a framebuffery korzystajace
-    // ze starych image views musza zostac zniszczone.
     void recreate();
     void destroy() noexcept;
 

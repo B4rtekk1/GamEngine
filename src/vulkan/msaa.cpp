@@ -58,18 +58,16 @@ uint32_t MsaaResources::findMemoryType(
         }
     }
 
-    throw std::runtime_error("Nie znaleziono odpowiedniego typu pamieci dla MSAA");
+    throw std::runtime_error("GPU does not support the requested memory type for MSAA");
 }
 
 void MsaaResources::create(VkExtent2D extent, VkFormat colorFormat) {
     if (physicalDevice_ == VK_NULL_HANDLE || device_ == VK_NULL_HANDLE) {
-        throw std::runtime_error("MsaaResources nie zostalo zainicjalizowane");
+        throw std::runtime_error("MsaaResources not initialized");
     }
 
     destroy();
 
-    // Gdy GPU nie obsluguje wieloprobkowania, renderujemy bezposrednio
-    // do obrazu swapchainu i nie potrzebujemy dodatkowego obrazu koloru.
     if (!enabled()) {
         return;
     }
@@ -89,7 +87,7 @@ void MsaaResources::create(VkExtent2D extent, VkFormat colorFormat) {
     imageInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
 
     if (vkCreateImage(device_, &imageInfo, nullptr, &colorImage_) != VK_SUCCESS) {
-        throw std::runtime_error("Nie udalo sie utworzyc obrazu MSAA");
+        throw std::runtime_error("GPU does not support the requested image format for MSAA");
     }
 
     try {
@@ -104,11 +102,11 @@ void MsaaResources::create(VkExtent2D extent, VkFormat colorFormat) {
             VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
 
         if (vkAllocateMemory(device_, &allocationInfo, nullptr, &colorImageMemory_) != VK_SUCCESS) {
-            throw std::runtime_error("Nie udalo sie zaalokowac pamieci obrazu MSAA");
+            throw std::runtime_error("GPU does not support the requested memory type for MSAA");
         }
 
         if (vkBindImageMemory(device_, colorImage_, colorImageMemory_, 0) != VK_SUCCESS) {
-            throw std::runtime_error("Nie udalo sie podpiac pamieci obrazu MSAA");
+            throw std::runtime_error("GPU does not support the requested memory type for MSAA");
         }
 
         VkImageViewCreateInfo viewInfo{};
@@ -123,7 +121,7 @@ void MsaaResources::create(VkExtent2D extent, VkFormat colorFormat) {
         viewInfo.subresourceRange.layerCount = 1;
 
         if (vkCreateImageView(device_, &viewInfo, nullptr, &colorImageView_) != VK_SUCCESS) {
-            throw std::runtime_error("Nie udalo sie utworzyc image view dla MSAA");
+            throw std::runtime_error("GPU does not support the requested image format for MSAA");
         }
     } catch (...) {
         destroy();

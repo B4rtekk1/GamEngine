@@ -19,6 +19,8 @@ add_executable(GamEngine
         src/vulkan/vulkan_device.cpp
         src/vulkan/swapchain.cpp
         src/vulkan/swapchain.h
+        src/vulkan/depth_buffer.h
+        src/vulkan/depth_buffer.cpp
 )
 
 target_link_libraries(GamEngine PRIVATE SDL3::SDL3 Vulkan::Vulkan)

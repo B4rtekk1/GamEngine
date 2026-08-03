@@ -22,7 +22,7 @@ namespace {
                 physicalDevice,
                 surface,
                 &support.capabilities) != VK_SUCCESS) {
-            throw std::runtime_error("Nie udalo sie pobrac mozliwosci surface");
+            throw std::runtime_error("GPU does not support the requested surface capabilities");
         }
 
         uint32_t formatCount = 0;
@@ -31,7 +31,7 @@ namespace {
                 surface,
                 &formatCount,
                 nullptr) != VK_SUCCESS || formatCount == 0) {
-            throw std::runtime_error("Surface nie udostepnia zadnego formatu");
+            throw std::runtime_error("Surface does not share any format");
         }
 
         support.formats.resize(formatCount);
@@ -40,7 +40,7 @@ namespace {
                 surface,
                 &formatCount,
                 support.formats.data()) != VK_SUCCESS) {
-            throw std::runtime_error("Nie udalo sie pobrac formatow surface");
+            throw std::runtime_error("GPU does not support the requested surface format");
         }
 
         uint32_t presentModeCount = 0;
@@ -49,7 +49,7 @@ namespace {
                 surface,
                 &presentModeCount,
                 nullptr) != VK_SUCCESS || presentModeCount == 0) {
-            throw std::runtime_error("Surface nie udostepnia present mode");
+            throw std::runtime_error("Surface does not share any present modes");
         }
 
         support.presentModes.resize(presentModeCount);
@@ -58,7 +58,7 @@ namespace {
                 surface,
                 &presentModeCount,
                 support.presentModes.data()) != VK_SUCCESS) {
-            throw std::runtime_error("Nie udalo sie pobrac present modes");
+            throw std::runtime_error("GPU does not support the requested present modes");
         }
 
         return support;
@@ -78,8 +78,6 @@ namespace {
 
     VkPresentModeKHR choosePresentMode(
         const std::vector<VkPresentModeKHR> &presentModes) {
-        // MAILBOX daje niski input lag bez tearingu. IMMEDIATE jest drugim
-        // wyborem, a FIFO jest zawsze wymagane przez specyfikacje Vulkan.
         constexpr std::array preferredModes = {
             VK_PRESENT_MODE_MAILBOX_KHR,
             VK_PRESENT_MODE_IMMEDIATE_KHR,
@@ -107,7 +105,7 @@ namespace {
         int width = 0;
         int height = 0;
         if (!SDL_GetWindowSizeInPixels(window, &width, &height)) {
-            throw std::runtime_error("Nie udalo sie pobrac rozmiaru okna SDL");
+            throw std::runtime_error("GPU does not support the requested window size");
         }
 
         VkExtent2D extent{
@@ -142,9 +140,9 @@ namespace {
             }
         }
 
-        throw std::runtime_error("Surface nie udostepnia composite alpha");
+        throw std::runtime_error("Surface does not share composite alpha");
     }
-} // namespace
+}
 
 Swapchain::~Swapchain() {
     destroy();
@@ -155,17 +153,17 @@ void Swapchain::create(
     VkSurfaceKHR surface,
     const VulkanDevice &device) {
     if (window == nullptr) {
-        throw std::invalid_argument("SDL_Window nie moze byc pusty");
+        throw std::invalid_argument("SDL_Window does not exist");
     }
     if (surface == VK_NULL_HANDLE) {
-        throw std::invalid_argument("VkSurfaceKHR nie moze byc pusty");
+        throw std::invalid_argument("VkSurfaceKHR does not exist");
     }
     if (device.logical() == VK_NULL_HANDLE ||
         device.physical() == VK_NULL_HANDLE) {
-        throw std::invalid_argument("VulkanDevice nie zostalo utworzone");
+        throw std::invalid_argument("VulkanDevice does not exist");
     }
     if (swapchain_ != VK_NULL_HANDLE) {
-        throw std::logic_error("Swapchain zostal juz utworzony");
+        throw std::logic_error("Swapchain already exists");
     }
 
     window_ = window;
@@ -184,7 +182,7 @@ void Swapchain::create(
 
 void Swapchain::recreate() {
     if (swapchain_ == VK_NULL_HANDLE || device_ == nullptr) {
-        throw std::logic_error("Nie mozna odtworzyc pustego swapchainu");
+        throw std::logic_error("Cannot recreate an empty swapchain");
     }
 
     createResources(swapchain_);
@@ -212,7 +210,7 @@ void Swapchain::createResources(VkSwapchainKHR oldSwapchain) {
     if ((support.capabilities.supportedUsageFlags &
          VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT) == 0) {
         throw std::runtime_error(
-            "Surface nie obsluguje obrazow jako color attachment");
+            "Surface does not support images as color attachment");
     }
 
     VkSwapchainCreateInfoKHR createInfo{};
@@ -252,7 +250,7 @@ void Swapchain::createResources(VkSwapchainKHR oldSwapchain) {
             &createInfo,
             nullptr,
             &newSwapchain) != VK_SUCCESS) {
-        throw std::runtime_error("Nie udalo sie utworzyc swapchainu");
+        throw std::runtime_error("GPU does not support the requested swapchain creation");
     }
 
     std::vector<VkImage> newImages;
@@ -265,7 +263,7 @@ void Swapchain::createResources(VkSwapchainKHR oldSwapchain) {
                 newSwapchain,
                 &actualImageCount,
                 nullptr) != VK_SUCCESS || actualImageCount == 0) {
-            throw std::runtime_error("Nie udalo sie pobrac obrazow swapchainu");
+            throw std::runtime_error("GPU does not support the requested swapchain images");
         }
 
         newImages.resize(actualImageCount);
@@ -274,7 +272,7 @@ void Swapchain::createResources(VkSwapchainKHR oldSwapchain) {
                 newSwapchain,
                 &actualImageCount,
                 newImages.data()) != VK_SUCCESS) {
-            throw std::runtime_error("Nie udalo sie pobrac obrazow swapchainu");
+            throw std::runtime_error("GPU does not support the requested swapchain images");
         }
 
         newImageViews.reserve(newImages.size());
@@ -303,7 +301,7 @@ void Swapchain::createResources(VkSwapchainKHR oldSwapchain) {
                     nullptr,
                     &imageView) != VK_SUCCESS) {
                 throw std::runtime_error(
-                    "Nie udalo sie utworzyc image view swapchainu");
+                    "GPU does not support the requested image view creation for swapchain");
             }
 
             newImageViews.push_back(imageView);

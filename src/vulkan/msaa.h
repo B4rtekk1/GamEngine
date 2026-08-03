@@ -34,5 +34,5 @@ private:
         VkPhysicalDevice physicalDevice,
         VkSampleCountFlagBits preferredSamples);
 
-    uint32_t findMemoryType(uint32_t typeFilter, VkMemoryPropertyFlags properties) const;
+    [[nodiscard]] uint32_t findMemoryType(uint32_t typeFilter, VkMemoryPropertyFlags properties) const;
 };

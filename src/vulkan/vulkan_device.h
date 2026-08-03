@@ -64,10 +64,10 @@ private:
     QueueFamilyIndices queueFamilies_{};
 
     [[nodiscard]] QueueFamilyIndices findQueueFamilies(VkPhysicalDevice candidate) const;
-    static [[nodiscard]] bool supportsRequiredExtensions(VkPhysicalDevice candidate) ;
+    [[nodiscard]] static bool supportsRequiredExtensions(VkPhysicalDevice candidate) ;
     [[nodiscard]] bool hasAdequateSwapchain(VkPhysicalDevice candidate) const;
     [[nodiscard]] bool isSuitable(VkPhysicalDevice candidate) const;
-    static [[nodiscard]] int scoreDevice(VkPhysicalDevice candidate) ;
+    [[nodiscard]] static int scoreDevice(VkPhysicalDevice candidate) ;
 
     void selectPhysicalDevice(VkInstance candidate);
     void createLogicalDevice();

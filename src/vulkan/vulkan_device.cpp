@@ -159,7 +159,7 @@ void VulkanDevice::selectPhysicalDevice(VkInstance instance) {
     uint32_t deviceCount = 0;
     if (vkEnumeratePhysicalDevices(instance, &deviceCount, nullptr) != VK_SUCCESS ||
         deviceCount == 0) {
-        throw std::runtime_error("Nie znaleziono GPU z obsluga Vulkan");
+        throw std::runtime_error("GPU does not support Vulkan");
     }
 
     std::vector<VkPhysicalDevice> candidates(deviceCount);
@@ -167,7 +167,7 @@ void VulkanDevice::selectPhysicalDevice(VkInstance instance) {
             instance,
             &deviceCount,
             candidates.data()) != VK_SUCCESS) {
-        throw std::runtime_error("Nie udalo sie pobrac listy GPU Vulkan");
+        throw std::runtime_error("GPU does not support Vulkan");
     }
 
     int bestScore = std::numeric_limits<int>::min();
@@ -187,7 +187,7 @@ void VulkanDevice::selectPhysicalDevice(VkInstance instance) {
 
     if (bestDevice == VK_NULL_HANDLE) {
         throw std::runtime_error(
-            "Nie znaleziono GPU obslugujacego wymagane kolejki i swapchain");
+            "GPU does not support the required queues and swapchain");
     }
 
     physicalDevice_ = bestDevice;
@@ -196,7 +196,7 @@ void VulkanDevice::selectPhysicalDevice(VkInstance instance) {
 
 void VulkanDevice::createLogicalDevice() {
     if (physicalDevice_ == VK_NULL_HANDLE || !queueFamilies_.complete()) {
-        throw std::logic_error("Najpierw trzeba wybrac physical device");
+        throw std::logic_error("GPU does not exist");
     }
 
     const std::set<uint32_t> uniqueFamilies = {
@@ -234,7 +234,7 @@ void VulkanDevice::createLogicalDevice() {
             &createInfo,
             nullptr,
             &device_) != VK_SUCCESS) {
-        throw std::runtime_error("Nie udalo sie utworzyc logical device");
+        throw std::runtime_error("GPU does not support the requested logical device creation");
     }
 
     vkGetDeviceQueue(
