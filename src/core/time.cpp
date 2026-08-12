@@ -1,3 +1,5 @@
+/** @file time.cpp Time implementation. */
+
 #include "time.h"
 
 #include <algorithm>

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "../core/Vec3.h"
+#include "../core/Vec2.h"
 
 #include <glm/glm.hpp>
 
@@ -8,5 +9,5 @@
 struct Vertex {
     Vec3 position;
     Vec3 color;
-    glm::vec2 texCoord;
+    Vec2 texCoord;
 };

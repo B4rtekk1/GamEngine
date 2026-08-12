@@ -22,6 +22,7 @@
 #include "../render/mesh.h"
 #include "../render/scene.h"
 #include "../core/camera.h"
+#include "../core/Vec4.h"
 #include "../core/time.h"
 
 #include <cstdint>
@@ -778,9 +779,10 @@ namespace {
 
             const glm::mat4 cameraOrbit = glm::rotate(
                 glm::mat4{1.0f}, animationTime * glm::radians(35.0f), Vec3{0.0f, 1.0f, 0.0f}.native());
-            const Vec3 cameraPosition{glm::vec3(cameraOrbit * glm::vec4(2.5f, 2.0f, 3.5f, 1.0f))};
+            const Vec4 orbitPosition{2.5f, 2.0f, 3.5f, 1.0f};
+            const Vec3 cameraPosition{Vec4{cameraOrbit * orbitPosition.native()}.native()};
             const Vec3 direction = -cameraPosition;
-            const float horizontalDistance = glm::length(glm::vec2{direction.x(), direction.z()});
+            const float horizontalDistance = Vec2{direction.x(), direction.z()}.length();
             camera.setPosition(cameraPosition);
             camera.setRotation(
                 glm::degrees(std::atan2(direction.z(), direction.x())),
