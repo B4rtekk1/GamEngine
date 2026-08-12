@@ -21,6 +21,14 @@ public:
         VkCommandPool commandPool,
         VkQueue queue);
 
+    void createHostVisible(
+        VkPhysicalDevice physicalDevice,
+        VkDevice device,
+        VkDeviceSize size,
+        VkBufferUsageFlags usage);
+
+    void update(const void* data, VkDeviceSize size, VkDeviceSize offset = 0) const;
+
     void destroy() noexcept;
 
     [[nodiscard]] VkBuffer handle() const noexcept { return buffer_; }
@@ -29,6 +37,7 @@ private:
     VkDevice device_ = VK_NULL_HANDLE;
     VkBuffer buffer_ = VK_NULL_HANDLE;
     VkDeviceMemory memory_ = VK_NULL_HANDLE;
+    VkDeviceSize size_ = 0;
 
     void create(
         VkPhysicalDevice physicalDevice,

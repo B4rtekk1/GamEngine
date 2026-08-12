@@ -7,13 +7,18 @@ layout(location = 2) in vec2 inTexCoord;
 layout(location = 0) out vec3 fragColor;
 layout(location = 1) out vec4 fragLightSpacePosition;
 
+layout(binding = 1) uniform FrameData {
+    mat4 view;
+    mat4 projection;
+    mat4 lightSpace;
+} frame;
+
 layout(push_constant) uniform PushConstants {
-    mat4 mvp;
-    mat4 lightMvp;
+    mat4 model;
 } pushConstants;
 
 void main() {
-    gl_Position = pushConstants.mvp * vec4(inPosition, 1.0);
+    gl_Position = frame.projection * frame.view * pushConstants.model * vec4(inPosition, 1.0);
     fragColor = inColor;
-    fragLightSpacePosition = pushConstants.lightMvp * vec4(inPosition, 1.0);
+    fragLightSpacePosition = frame.lightSpace * pushConstants.model * vec4(inPosition, 1.0);
 }

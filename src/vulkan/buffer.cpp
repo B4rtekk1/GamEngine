@@ -62,6 +62,27 @@ void Buffer::createDeviceLocal(VkPhysicalDevice physicalDevice, VkDevice device,
     vkFreeCommandBuffers(device, commandPool, 1, &commandBuffer);
 }
 
+void Buffer::createHostVisible(const VkPhysicalDevice physicalDevice, const VkDevice device,
+                               const VkDeviceSize size, const VkBufferUsageFlags usage) {
+    if (size == 0) {
+        throw std::invalid_argument("Host-visible buffer requires non-zero size");
+    }
+    create(physicalDevice, device, size, usage,
+           VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+}
+
+void Buffer::update(const void* data, const VkDeviceSize size, const VkDeviceSize offset) const {
+    if (data == nullptr || size == 0 || offset > size_ || size > size_ - offset) {
+        throw std::invalid_argument("Uniform buffer update is out of bounds");
+    }
+    void* mapped = nullptr;
+    if (vkMapMemory(device_, memory_, offset, size, 0, &mapped) != VK_SUCCESS) {
+        throw std::runtime_error("Could not map host-visible buffer memory");
+    }
+    std::memcpy(mapped, data, static_cast<size_t>(size));
+    vkUnmapMemory(device_, memory_);
+}
+
 void Buffer::destroy() noexcept {
     if (device_ != VK_NULL_HANDLE) {
         if (buffer_ != VK_NULL_HANDLE) {
@@ -74,6 +95,7 @@ void Buffer::destroy() noexcept {
     memory_ = VK_NULL_HANDLE;
     buffer_ = VK_NULL_HANDLE;
     device_ = VK_NULL_HANDLE;
+    size_ = 0;
 }
 
 void Buffer::create(
@@ -84,6 +106,7 @@ void Buffer::create(
     VkMemoryPropertyFlags properties) {
     destroy();
     device_ = device;
+    size_ = size;
 
     VkBufferCreateInfo bufferInfo{VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
     bufferInfo.size = size;

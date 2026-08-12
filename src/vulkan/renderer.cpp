@@ -26,6 +26,7 @@
 #include "../core/time.h"
 
 #include <cstdint>
+#include <array>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
@@ -44,8 +45,13 @@ namespace {
     constexpr float SHADOW_DEPTH_BIAS_SLOPE = 0.35f;
 
     struct PushConstants {
-        glm::mat4 mvp;
-        glm::mat4 lightMvp;
+        glm::mat4 model;
+    };
+
+    struct UniformBufferObject {
+        glm::mat4 view;
+        glm::mat4 projection;
+        glm::mat4 lightSpace;
     };
 }
 
@@ -93,13 +99,14 @@ namespace {
         ShadowMap shadowMap;
         VkDescriptorSetLayout shadowDescriptorSetLayout = VK_NULL_HANDLE;
         VkDescriptorPool shadowDescriptorPool = VK_NULL_HANDLE;
-        VkDescriptorSet shadowDescriptorSet = VK_NULL_HANDLE;
+        std::vector<VkDescriptorSet> descriptorSets;
         VkPipelineLayout shadowPipelineLayout = VK_NULL_HANDLE;
         VkPipeline shadowPipeline = VK_NULL_HANDLE;
         Scene scene;
         Camera camera{45.0f, static_cast<float>(WIDTH) / static_cast<float>(HEIGHT), 0.1f, 10.0f};
         Buffer vertexBuffer;
         Buffer indexBuffer;
+        std::array<Buffer, MAX_FRAMES_IN_FLIGHT> uniformBuffers;
 
         VkCommandPool commandPool{};
         std::vector<VkCommandBuffer> commandBuffers;
@@ -142,11 +149,12 @@ namespace {
             createSwapChain();
             msaa.create(swapchain.extent(), swapchain.format());
             createDepthResources();
+            createCommandPool();
+            createMeshBuffers();
+            createUniformBuffers();
             createShadowResources();
             createGraphicsPipeline();
             createFramebuffers();
-            createCommandPool();
-            createMeshBuffers();
             createCommandBuffers();
             createSyncObjects();
         }
@@ -521,43 +529,64 @@ namespace {
         void createShadowResources() {
             shadowMap.create(vulkanDevice.physical(), device);
 
-            VkDescriptorSetLayoutBinding binding{};
-            binding.binding = 0;
-            binding.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-            binding.descriptorCount = 1;
-            binding.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+            VkDescriptorSetLayoutBinding bindings[2]{};
+            bindings[0].binding = 0;
+            bindings[0].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+            bindings[0].descriptorCount = 1;
+            bindings[0].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+            bindings[1].binding = 1;
+            bindings[1].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+            bindings[1].descriptorCount = 1;
+            bindings[1].stageFlags = VK_SHADER_STAGE_VERTEX_BIT;
             VkDescriptorSetLayoutCreateInfo layoutInfo{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
-            layoutInfo.bindingCount = 1;
-            layoutInfo.pBindings = &binding;
+            layoutInfo.bindingCount = 2;
+            layoutInfo.pBindings = bindings;
             if (vkCreateDescriptorSetLayout(device, &layoutInfo, nullptr, &shadowDescriptorSetLayout) != VK_SUCCESS) {
                 throw std::runtime_error("Could not create shadow descriptor-set layout");
             }
-            VkDescriptorPoolSize poolSize{VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1};
+            VkDescriptorPoolSize poolSizes[2] = {
+                {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, MAX_FRAMES_IN_FLIGHT},
+                {VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, MAX_FRAMES_IN_FLIGHT},
+            };
             VkDescriptorPoolCreateInfo poolInfo{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
-            poolInfo.maxSets = 1;
-            poolInfo.poolSizeCount = 1;
-            poolInfo.pPoolSizes = &poolSize;
+            poolInfo.maxSets = MAX_FRAMES_IN_FLIGHT;
+            poolInfo.poolSizeCount = 2;
+            poolInfo.pPoolSizes = poolSizes;
             if (vkCreateDescriptorPool(device, &poolInfo, nullptr, &shadowDescriptorPool) != VK_SUCCESS) {
                 throw std::runtime_error("Could not create shadow descriptor pool");
             }
             VkDescriptorSetAllocateInfo allocateInfo{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};
             allocateInfo.descriptorPool = shadowDescriptorPool;
-            allocateInfo.descriptorSetCount = 1;
-            allocateInfo.pSetLayouts = &shadowDescriptorSetLayout;
-            if (vkAllocateDescriptorSets(device, &allocateInfo, &shadowDescriptorSet) != VK_SUCCESS) {
+            std::vector<VkDescriptorSetLayout> layouts(MAX_FRAMES_IN_FLIGHT, shadowDescriptorSetLayout);
+            descriptorSets.resize(MAX_FRAMES_IN_FLIGHT);
+            allocateInfo.descriptorSetCount = MAX_FRAMES_IN_FLIGHT;
+            allocateInfo.pSetLayouts = layouts.data();
+            if (vkAllocateDescriptorSets(device, &allocateInfo, descriptorSets.data()) != VK_SUCCESS) {
                 throw std::runtime_error("Could not allocate shadow descriptor set");
             }
             VkDescriptorImageInfo imageInfo{};
             imageInfo.sampler = shadowMap.sampler();
             imageInfo.imageView = shadowMap.imageView();
             imageInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-            VkWriteDescriptorSet write{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
-            write.dstSet = shadowDescriptorSet;
-            write.dstBinding = 0;
-            write.descriptorCount = 1;
-            write.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-            write.pImageInfo = &imageInfo;
-            vkUpdateDescriptorSets(device, 1, &write, 0, nullptr);
+            for (uint32_t frame = 0; frame < MAX_FRAMES_IN_FLIGHT; ++frame) {
+                VkDescriptorBufferInfo bufferInfo{};
+                bufferInfo.buffer = uniformBuffers[frame].handle();
+                bufferInfo.range = sizeof(UniformBufferObject);
+                VkWriteDescriptorSet writes[2]{};
+                writes[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+                writes[0].dstSet = descriptorSets[frame];
+                writes[0].dstBinding = 0;
+                writes[0].descriptorCount = 1;
+                writes[0].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+                writes[0].pImageInfo = &imageInfo;
+                writes[1].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+                writes[1].dstSet = descriptorSets[frame];
+                writes[1].dstBinding = 1;
+                writes[1].descriptorCount = 1;
+                writes[1].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+                writes[1].pBufferInfo = &bufferInfo;
+                vkUpdateDescriptorSets(device, 2, writes, 0, nullptr);
+            }
 
             const auto shader = vkutil::loadShaderModule(device, "shaders/shadow.vert.spv");
             VkPipelineShaderStageCreateInfo stage{VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO};
@@ -614,7 +643,7 @@ namespace {
             if (shadowDescriptorPool != VK_NULL_HANDLE) vkDestroyDescriptorPool(device, shadowDescriptorPool, nullptr);
             if (shadowDescriptorSetLayout != VK_NULL_HANDLE) vkDestroyDescriptorSetLayout(device, shadowDescriptorSetLayout, nullptr);
             shadowPipeline = VK_NULL_HANDLE; shadowPipelineLayout = VK_NULL_HANDLE;
-            shadowDescriptorPool = VK_NULL_HANDLE; shadowDescriptorSetLayout = VK_NULL_HANDLE; shadowDescriptorSet = VK_NULL_HANDLE;
+            shadowDescriptorPool = VK_NULL_HANDLE; shadowDescriptorSetLayout = VK_NULL_HANDLE; descriptorSets.clear();
             shadowMap.destroy();
         }
 
@@ -634,6 +663,13 @@ namespace {
             indexBuffer.createDeviceLocal(vulkanDevice.physical(), device, sceneMesh.indices.data(),
                 sizeof(uint32_t) * sceneMesh.indices.size(), VK_BUFFER_USAGE_INDEX_BUFFER_BIT,
                 commandPool, vulkanDevice.graphicsQueue());
+        }
+
+        void createUniformBuffers() {
+            for (Buffer& buffer : uniformBuffers) {
+                buffer.createHostVisible(vulkanDevice.physical(), device, sizeof(UniformBufferObject),
+                                         VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT);
+            }
         }
 
         void createFramebuffers() {
@@ -690,6 +726,32 @@ namespace {
             }
         }
 
+        [[nodiscard]] glm::mat4 lightSpaceMatrix() const {
+            const vec3 lightPosition{3.0f, 5.0f, 2.0f};
+            const vec3 lightTarget{};
+            const vec3 worldUp{0.0f, 1.0f, 0.0f};
+            const glm::mat4 lightView = glm::lookAt(lightPosition.native(), lightTarget.native(), worldUp.native());
+            glm::mat4 lightProjection = glm::ortho(-5.0f, 5.0f, -5.0f, 5.0f, 0.1f, 12.0f);
+            lightProjection[1][1] *= -1.0f;
+            return lightProjection * lightView;
+        }
+
+        void updateUniformBuffer(const uint32_t frame) {
+            const float animationTime = static_cast<float>(Time::elapsedTime());
+            const glm::mat4 cameraOrbit = glm::rotate(
+                glm::mat4{1.0f}, animationTime * glm::radians(35.0f), vec3{0.0f, 1.0f, 0.0f}.native());
+            const vec4 orbitPosition{2.5f, 2.0f, 3.5f, 1.0f};
+            const vec3 cameraPosition{vec4{cameraOrbit * orbitPosition.native()}.native()};
+            const vec3 direction = -cameraPosition;
+            const float horizontalDistance = vec2{direction.x(), direction.z()}.length();
+            camera.setPosition(cameraPosition);
+            camera.setRotation(glm::degrees(std::atan2(direction.z(), direction.x())),
+                               glm::degrees(std::atan2(direction.y(), horizontalDistance)));
+
+            const UniformBufferObject data{camera.viewMatrix(), camera.projectionMatrix(), lightSpaceMatrix()};
+            uniformBuffers[frame].update(&data, sizeof(data));
+        }
+
         void recordCommandBuffer(VkCommandBuffer commandBuffer, uint32_t imageIndex) {
             VkCommandBufferBeginInfo beginInfo{};
             beginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
@@ -698,14 +760,7 @@ namespace {
                 throw std::runtime_error("Could not begin command buffer");
             }
 
-            const vec3 lightPosition{3.0f, 5.0f, 2.0f};
-            const vec3 lightTarget{};
-            const vec3 worldUp{0.0f, 1.0f, 0.0f};
-            const glm::mat4 lightView = glm::lookAt(lightPosition.native(), lightTarget.native(), worldUp.native());
-            glm::mat4 lightProjection = glm::ortho(-5.0f, 5.0f, -5.0f, 5.0f, 0.1f, 12.0f);
-            lightProjection[1][1] *= -1.0f;
-            const glm::mat4 lightSpace = lightProjection * lightView;
-            const float animationTime = static_cast<float>(Time::elapsedTime());
+            const glm::mat4 lightSpace = lightSpaceMatrix();
 
             VkRenderPassBeginInfo shadowPassInfo{VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO};
             shadowPassInfo.renderPass = shadowMap.renderPass();
@@ -757,7 +812,8 @@ namespace {
             vkCmdBeginRenderPass(commandBuffer, &renderPassInfo, VK_SUBPASS_CONTENTS_INLINE);
 
             vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, graphicsPipeline.handle());
-            vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, graphicsPipeline.layout(), 0, 1, &shadowDescriptorSet, 0, nullptr);
+            vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, graphicsPipeline.layout(), 0, 1,
+                                    &descriptorSets[currentFrame], 0, nullptr);
             const VkBuffer vertexBuffers[] = {vertexBuffer.handle()};
             const VkDeviceSize vertexOffsets[] = {0};
             vkCmdBindVertexBuffers(commandBuffer, 0, 1, vertexBuffers, vertexOffsets);
@@ -777,25 +833,11 @@ namespace {
             scissor.extent = swapchain.extent();
             vkCmdSetScissor(commandBuffer, 0, 1, &scissor);
 
-            const glm::mat4 cameraOrbit = glm::rotate(
-                glm::mat4{1.0f}, animationTime * glm::radians(35.0f), vec3{0.0f, 1.0f, 0.0f}.native());
-            const vec4 orbitPosition{2.5f, 2.0f, 3.5f, 1.0f};
-            const vec3 cameraPosition{vec4{cameraOrbit * orbitPosition.native()}.native()};
-            const vec3 direction = -cameraPosition;
-            const float horizontalDistance = vec2{direction.x(), direction.z()}.length();
-            camera.setPosition(cameraPosition);
-            camera.setRotation(
-                glm::degrees(std::atan2(direction.z(), direction.x())),
-                glm::degrees(std::atan2(direction.y(), horizontalDistance)));
-
-            const glm::mat4 view = camera.viewMatrix();
-            const glm::mat4 projection = camera.projectionMatrix();
             const auto drawObject = [&](const GameObject& object, const uint32_t indexCount,
                                         const uint32_t firstIndex) {
                 const glm::mat4 model = object.modelMatrix();
-                const PushConstants constants{projection * view * model, lightSpace * model};
                 vkCmdPushConstants(commandBuffer, graphicsPipeline.layout(), VK_SHADER_STAGE_VERTEX_BIT, 0,
-                                   sizeof(PushConstants), &constants);
+                                   sizeof(model), &model);
                 vkCmdDrawIndexed(commandBuffer, indexCount, 1, firstIndex, 0, 0);
             };
             drawObject(scene.plane, scene.plane.mesh.indexCount(), 0);
@@ -897,6 +939,9 @@ namespace {
                 graphicsPipeline.destroy();
                 indexBuffer.destroy();
                 vertexBuffer.destroy();
+                for (Buffer& uniformBuffer : uniformBuffers) {
+                    uniformBuffer.destroy();
+                }
                 createGraphicsPipeline();
             }
 
@@ -922,6 +967,7 @@ namespace {
             vkResetFences(device, 1, &inFlightFences[currentFrame]);
 
             vkResetCommandBuffer(commandBuffers[currentFrame], 0);
+            updateUniformBuffer(currentFrame);
             recordCommandBuffer(commandBuffers[currentFrame], imageIndex);
 
             VkSubmitInfo submitInfo{};
