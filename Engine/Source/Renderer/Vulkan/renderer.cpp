@@ -25,6 +25,8 @@
 #include "Engine/Math/Vec4.h"
 #include "Engine/Core/Time.h"
 #include "Engine/Renderer/Skybox/Skybox.h"
+#include "Input/Input.h"
+#include "Platform/SDL/SDLInput.h"
 
 #include <cstdint>
 #include <array>
@@ -1075,7 +1077,9 @@ namespace {
             SDL_Event event;
             Time::init();
             while (running) {
+                Input::beginFrame();
                 while (SDL_PollEvent(&event)) {
+                    SDLInput::processEvent(event);
                     if (event.type == SDL_EVENT_QUIT) {
                         running = false;
                     } else if (event.type == SDL_EVENT_WINDOW_RESIZED ||

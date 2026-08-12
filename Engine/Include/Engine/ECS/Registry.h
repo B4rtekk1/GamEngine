@@ -97,7 +97,7 @@ public:
                 return;
             }
 
-            for (auto &[entity, firstComponent] : *firstPool) {
+            for (const Entity entity : firstPool->entities()) {
                 if ((has<Components>(entity) && ...)) {
                     std::invoke(func, entity, get<Components>(entity)...);
                 }

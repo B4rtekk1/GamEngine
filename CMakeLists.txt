@@ -13,6 +13,7 @@ add_library(Engine
         Engine/Source/Core/camera.cpp
         Engine/Source/Core/time.cpp
         Engine/Source/ECS/Registry.cpp
+        Engine/Source/Input/Input.cpp
         Engine/Source/Renderer/shader_loader.cpp
         Engine/Source/Renderer/Textures/Cubemap.cpp
         Engine/Source/Renderer/Skybox/Skybox.cpp
@@ -25,6 +26,7 @@ add_library(Engine
         Engine/Source/Renderer/Vulkan/shadow_map.cpp
         Engine/Source/Renderer/Vulkan/swapchain.cpp
         Engine/Source/Renderer/Vulkan/vulkan_device.cpp
+        Platform/SDL/SDLInput.cpp
 )
 
 target_link_libraries(Engine PUBLIC SDL3::SDL3 Vulkan::Vulkan)
@@ -32,6 +34,9 @@ target_include_directories(Engine
         PUBLIC
             $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/Engine/Include>
             ${GLM_INCLUDE_DIR}
+        PRIVATE
+            ${CMAKE_CURRENT_SOURCE_DIR}
+            ${CMAKE_CURRENT_SOURCE_DIR}/Engine/Source
 )
 
 add_executable(GamEngine Sandbox/Source/main.cpp)
