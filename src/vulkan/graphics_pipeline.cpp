@@ -121,6 +121,8 @@ void GraphicsPipeline::createPipelineLayout(const GraphicsPipelineOptions& optio
     range.size = options.pushConstantSize;
 
     VkPipelineLayoutCreateInfo info{VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
+    info.setLayoutCount = static_cast<uint32_t>(options.descriptorSetLayouts.size());
+    info.pSetLayouts = options.descriptorSetLayouts.data();
     if (range.size != 0) {
         info.pushConstantRangeCount = 1;
         info.pPushConstantRanges = &range;

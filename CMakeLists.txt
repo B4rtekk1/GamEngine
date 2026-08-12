@@ -23,12 +23,18 @@ add_executable(GamEngine
         src/vulkan/swapchain.h
         src/vulkan/depth_buffer.h
         src/vulkan/depth_buffer.cpp
+        src/vulkan/shadow_map.h
+        src/vulkan/shadow_map.cpp
         src/vulkan/graphics_pipeline.h
         src/vulkan/graphics_pipeline.cpp
         src/vulkan/buffer.h
         src/vulkan/buffer.cpp
         src/render/vertex.h
         src/render/mesh.h
+        src/render/game_object.h
+        src/render/cube.h
+        src/render/plane.h
+        src/render/scene.h
 )
 
 target_link_libraries(GamEngine PRIVATE SDL3::SDL3 Vulkan::Vulkan)
@@ -47,6 +53,11 @@ if(GLSLC)
             DEPENDS ${CMAKE_SOURCE_DIR}/src/shaders/triangle.vert
     )
     add_custom_command(
+            OUTPUT ${SHADER_OUT_DIR}/shadow.vert.spv
+            COMMAND ${GLSLC} ${CMAKE_SOURCE_DIR}/src/shaders/shadow.vert -o ${SHADER_OUT_DIR}/shadow.vert.spv
+            DEPENDS ${CMAKE_SOURCE_DIR}/src/shaders/shadow.vert
+    )
+    add_custom_command(
             OUTPUT ${SHADER_OUT_DIR}/frag.spv
             COMMAND ${GLSLC} ${CMAKE_SOURCE_DIR}/src/shaders/triangle.frag -o ${SHADER_OUT_DIR}/frag.spv
             DEPENDS ${CMAKE_SOURCE_DIR}/src/shaders/triangle.frag
@@ -62,9 +73,14 @@ elseif(GLSLANG_VALIDATOR)
             COMMAND ${GLSLANG_VALIDATOR} -V ${CMAKE_SOURCE_DIR}/src/shaders/triangle.frag -o ${SHADER_OUT_DIR}/frag.spv
             DEPENDS ${CMAKE_SOURCE_DIR}/src/shaders/triangle.frag
     )
+    add_custom_command(
+            OUTPUT ${SHADER_OUT_DIR}/shadow.vert.spv
+            COMMAND ${GLSLANG_VALIDATOR} -V ${CMAKE_SOURCE_DIR}/src/shaders/shadow.vert -o ${SHADER_OUT_DIR}/shadow.vert.spv
+            DEPENDS ${CMAKE_SOURCE_DIR}/src/shaders/shadow.vert
+    )
 else()
     message(FATAL_ERROR "glslc not found install Vulkan SDK.")
 endif()
 
-add_custom_target(Shaders DEPENDS ${SHADER_OUT_DIR}/vert.spv ${SHADER_OUT_DIR}/frag.spv)
+add_custom_target(Shaders DEPENDS ${SHADER_OUT_DIR}/vert.spv ${SHADER_OUT_DIR}/frag.spv ${SHADER_OUT_DIR}/shadow.vert.spv)
 add_dependencies(GamEngine Shaders)

@@ -12,12 +12,15 @@
 
 #include "msaa.h"
 #include "depth_buffer.h"
+#include "shadow_map.h"
+#include "../utils/shader_loader.h"
 #include "graphics_pipeline.h"
 #include "buffer.h"
 #include "vulkan_device.h"
 #include "swapchain.h"
 #include "../render/vertex.h"
 #include "../render/mesh.h"
+#include "../render/scene.h"
 
 #include <cstdint>
 #include <cstdio>
@@ -33,8 +36,12 @@ constexpr uint32_t HEIGHT = 600;
 constexpr int MAX_FRAMES_IN_FLIGHT = 2;
 
 namespace {
+    constexpr float SHADOW_DEPTH_BIAS_CONSTANT = 0.15f;
+    constexpr float SHADOW_DEPTH_BIAS_SLOPE = 0.35f;
+
     struct PushConstants {
         glm::mat4 mvp;
+        glm::mat4 lightMvp;
     };
 }
 
@@ -79,7 +86,13 @@ namespace {
 
         GraphicsPipeline graphicsPipeline;
         DepthBuffer depthBuffer;
-        Mesh cubeMesh;
+        ShadowMap shadowMap;
+        VkDescriptorSetLayout shadowDescriptorSetLayout = VK_NULL_HANDLE;
+        VkDescriptorPool shadowDescriptorPool = VK_NULL_HANDLE;
+        VkDescriptorSet shadowDescriptorSet = VK_NULL_HANDLE;
+        VkPipelineLayout shadowPipelineLayout = VK_NULL_HANDLE;
+        VkPipeline shadowPipeline = VK_NULL_HANDLE;
+        Scene scene;
         Buffer vertexBuffer;
         Buffer indexBuffer;
 
@@ -96,7 +109,6 @@ namespace {
 
     uint32_t fpsFrameCount = 0;
     uint64_t fpsLastTime = 0;
-    uint64_t animationStartTime = 0;
 
         // ---------- INIT ----------
 
@@ -125,6 +137,7 @@ namespace {
             createSwapChain();
             msaa.create(swapchain.extent(), swapchain.format());
             createDepthResources();
+            createShadowResources();
             createGraphicsPipeline();
             createFramebuffers();
             createCommandPool();
@@ -486,6 +499,7 @@ namespace {
             options.fragmentShader = "shaders/frag.spv";
             options.pushConstantSize = sizeof(PushConstants);
             options.cullMode = VK_CULL_MODE_NONE;
+            options.descriptorSetLayouts = {shadowDescriptorSetLayout};
             options.vertexBinding = {
                 .binding = 0,
                 .stride = sizeof(Vertex),
@@ -499,27 +513,121 @@ namespace {
             graphicsPipeline.create(device, options);
         }
 
+        void createShadowResources() {
+            shadowMap.create(vulkanDevice.physical(), device);
+
+            VkDescriptorSetLayoutBinding binding{};
+            binding.binding = 0;
+            binding.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+            binding.descriptorCount = 1;
+            binding.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+            VkDescriptorSetLayoutCreateInfo layoutInfo{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
+            layoutInfo.bindingCount = 1;
+            layoutInfo.pBindings = &binding;
+            if (vkCreateDescriptorSetLayout(device, &layoutInfo, nullptr, &shadowDescriptorSetLayout) != VK_SUCCESS) {
+                throw std::runtime_error("Could not create shadow descriptor-set layout");
+            }
+            VkDescriptorPoolSize poolSize{VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1};
+            VkDescriptorPoolCreateInfo poolInfo{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
+            poolInfo.maxSets = 1;
+            poolInfo.poolSizeCount = 1;
+            poolInfo.pPoolSizes = &poolSize;
+            if (vkCreateDescriptorPool(device, &poolInfo, nullptr, &shadowDescriptorPool) != VK_SUCCESS) {
+                throw std::runtime_error("Could not create shadow descriptor pool");
+            }
+            VkDescriptorSetAllocateInfo allocateInfo{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};
+            allocateInfo.descriptorPool = shadowDescriptorPool;
+            allocateInfo.descriptorSetCount = 1;
+            allocateInfo.pSetLayouts = &shadowDescriptorSetLayout;
+            if (vkAllocateDescriptorSets(device, &allocateInfo, &shadowDescriptorSet) != VK_SUCCESS) {
+                throw std::runtime_error("Could not allocate shadow descriptor set");
+            }
+            VkDescriptorImageInfo imageInfo{};
+            imageInfo.sampler = shadowMap.sampler();
+            imageInfo.imageView = shadowMap.imageView();
+            imageInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+            VkWriteDescriptorSet write{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
+            write.dstSet = shadowDescriptorSet;
+            write.dstBinding = 0;
+            write.descriptorCount = 1;
+            write.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+            write.pImageInfo = &imageInfo;
+            vkUpdateDescriptorSets(device, 1, &write, 0, nullptr);
+
+            const auto shader = vkutil::loadShaderModule(device, "shaders/shadow.vert.spv");
+            VkPipelineShaderStageCreateInfo stage{VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO};
+            stage.stage = VK_SHADER_STAGE_VERTEX_BIT;
+            stage.module = shader.get();
+            stage.pName = "main";
+            VkPushConstantRange range{VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(glm::mat4)};
+            VkPipelineLayoutCreateInfo shadowLayoutInfo{VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
+            shadowLayoutInfo.pushConstantRangeCount = 1;
+            shadowLayoutInfo.pPushConstantRanges = &range;
+            if (vkCreatePipelineLayout(device, &shadowLayoutInfo, nullptr, &shadowPipelineLayout) != VK_SUCCESS) {
+                throw std::runtime_error("Could not create shadow pipeline layout");
+            }
+            VkVertexInputBindingDescription vertexBinding{0, sizeof(Vertex), VK_VERTEX_INPUT_RATE_VERTEX};
+            const VkVertexInputAttributeDescription attribute{0, 0, VK_FORMAT_R32G32B32_SFLOAT, offsetof(Vertex, position)};
+            VkPipelineVertexInputStateCreateInfo vertexInput{VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO};
+            vertexInput.vertexBindingDescriptionCount = 1;
+            vertexInput.pVertexBindingDescriptions = &vertexBinding;
+            vertexInput.vertexAttributeDescriptionCount = 1;
+            vertexInput.pVertexAttributeDescriptions = &attribute;
+            VkPipelineInputAssemblyStateCreateInfo assembly{VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO};
+            assembly.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
+            VkPipelineViewportStateCreateInfo viewport{VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO};
+            viewport.viewportCount = 1; viewport.scissorCount = 1;
+            VkPipelineRasterizationStateCreateInfo rasterizer{VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO};
+            rasterizer.polygonMode = VK_POLYGON_MODE_FILL;
+            rasterizer.cullMode = VK_CULL_MODE_BACK_BIT;
+            rasterizer.frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE;
+            rasterizer.lineWidth = 1.0f;
+            rasterizer.depthBiasEnable = VK_TRUE;
+            VkPipelineMultisampleStateCreateInfo multisampling{VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO};
+            multisampling.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
+            VkPipelineDepthStencilStateCreateInfo depth{VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO};
+            depth.depthTestEnable = VK_TRUE; depth.depthWriteEnable = VK_TRUE; depth.depthCompareOp = VK_COMPARE_OP_LESS;
+            const std::vector dynamicStates{VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR, VK_DYNAMIC_STATE_DEPTH_BIAS};
+            VkPipelineDynamicStateCreateInfo dynamic{VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO};
+            dynamic.dynamicStateCount = static_cast<uint32_t>(dynamicStates.size());
+            dynamic.pDynamicStates = dynamicStates.data();
+            VkGraphicsPipelineCreateInfo pipelineInfo{VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO};
+            pipelineInfo.stageCount = 1; pipelineInfo.pStages = &stage;
+            pipelineInfo.pVertexInputState = &vertexInput; pipelineInfo.pInputAssemblyState = &assembly;
+            pipelineInfo.pViewportState = &viewport; pipelineInfo.pRasterizationState = &rasterizer;
+            pipelineInfo.pMultisampleState = &multisampling; pipelineInfo.pDepthStencilState = &depth;
+            pipelineInfo.pDynamicState = &dynamic; pipelineInfo.layout = shadowPipelineLayout;
+            pipelineInfo.renderPass = shadowMap.renderPass();
+            if (vkCreateGraphicsPipelines(device, VK_NULL_HANDLE, 1, &pipelineInfo, nullptr, &shadowPipeline) != VK_SUCCESS) {
+                throw std::runtime_error("Could not create shadow pipeline");
+            }
+        }
+
+        void destroyShadowResources() noexcept {
+            if (shadowPipeline != VK_NULL_HANDLE) vkDestroyPipeline(device, shadowPipeline, nullptr);
+            if (shadowPipelineLayout != VK_NULL_HANDLE) vkDestroyPipelineLayout(device, shadowPipelineLayout, nullptr);
+            if (shadowDescriptorPool != VK_NULL_HANDLE) vkDestroyDescriptorPool(device, shadowDescriptorPool, nullptr);
+            if (shadowDescriptorSetLayout != VK_NULL_HANDLE) vkDestroyDescriptorSetLayout(device, shadowDescriptorSetLayout, nullptr);
+            shadowPipeline = VK_NULL_HANDLE; shadowPipelineLayout = VK_NULL_HANDLE;
+            shadowDescriptorPool = VK_NULL_HANDLE; shadowDescriptorSetLayout = VK_NULL_HANDLE; shadowDescriptorSet = VK_NULL_HANDLE;
+            shadowMap.destroy();
+        }
+
         void createMeshBuffers() {
-            cubeMesh = {
-                .vertices = {
-                    {{-0.5f, -0.5f, -0.5f}, {0.95f, 0.25f, 0.20f}, {0.0f, 0.0f}}, {{ 0.5f, -0.5f, -0.5f}, {0.95f, 0.25f, 0.20f}, {1.0f, 0.0f}}, {{ 0.5f,  0.5f, -0.5f}, {0.95f, 0.25f, 0.20f}, {1.0f, 1.0f}}, {{-0.5f,  0.5f, -0.5f}, {0.95f, 0.25f, 0.20f}, {0.0f, 1.0f}},
-                    {{-0.5f, -0.5f,  0.5f}, {0.20f, 0.75f, 0.95f}, {0.0f, 0.0f}}, {{ 0.5f, -0.5f,  0.5f}, {0.20f, 0.75f, 0.95f}, {1.0f, 0.0f}}, {{ 0.5f,  0.5f,  0.5f}, {0.20f, 0.75f, 0.95f}, {1.0f, 1.0f}}, {{-0.5f,  0.5f,  0.5f}, {0.20f, 0.75f, 0.95f}, {0.0f, 1.0f}},
-                    {{-0.5f, -0.5f, -0.5f}, {0.25f, 0.90f, 0.40f}, {0.0f, 0.0f}}, {{-0.5f, -0.5f,  0.5f}, {0.25f, 0.90f, 0.40f}, {1.0f, 0.0f}}, {{ 0.5f, -0.5f,  0.5f}, {0.25f, 0.90f, 0.40f}, {1.0f, 1.0f}}, {{ 0.5f, -0.5f, -0.5f}, {0.25f, 0.90f, 0.40f}, {0.0f, 1.0f}},
-                    {{-0.5f,  0.5f, -0.5f}, {0.95f, 0.75f, 0.20f}, {0.0f, 0.0f}}, {{ 0.5f,  0.5f, -0.5f}, {0.95f, 0.75f, 0.20f}, {1.0f, 0.0f}}, {{ 0.5f,  0.5f,  0.5f}, {0.95f, 0.75f, 0.20f}, {1.0f, 1.0f}}, {{-0.5f,  0.5f,  0.5f}, {0.95f, 0.75f, 0.20f}, {0.0f, 1.0f}},
-                    {{ 0.5f, -0.5f, -0.5f}, {0.75f, 0.30f, 0.95f}, {0.0f, 0.0f}}, {{ 0.5f, -0.5f,  0.5f}, {0.75f, 0.30f, 0.95f}, {1.0f, 0.0f}}, {{ 0.5f,  0.5f,  0.5f}, {0.75f, 0.30f, 0.95f}, {1.0f, 1.0f}}, {{ 0.5f,  0.5f, -0.5f}, {0.75f, 0.30f, 0.95f}, {0.0f, 1.0f}},
-                    {{-0.5f, -0.5f, -0.5f}, {0.20f, 0.85f, 0.75f}, {0.0f, 0.0f}}, {{-0.5f,  0.5f, -0.5f}, {0.20f, 0.85f, 0.75f}, {1.0f, 0.0f}}, {{-0.5f,  0.5f,  0.5f}, {0.20f, 0.85f, 0.75f}, {1.0f, 1.0f}}, {{-0.5f, -0.5f,  0.5f}, {0.20f, 0.85f, 0.75f}, {0.0f, 1.0f}},
-                },
-                .indices = {
-                    0, 1, 2, 2, 3, 0, 4, 6, 5, 6, 4, 7,
-                    8, 9, 10, 10, 11, 8, 12, 13, 14, 14, 15, 12,
-                    16, 17, 18, 18, 19, 16, 20, 21, 22, 22, 23, 20,
-                },
-            };
-            vertexBuffer.createDeviceLocal(vulkanDevice.physical(), device, cubeMesh.vertices.data(),
-                sizeof(Vertex) * cubeMesh.vertices.size(), VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
+            Mesh sceneMesh = scene.plane.mesh;
+            const uint32_t gameObjectVertexOffset = sceneMesh.vertexCount();
+            sceneMesh.vertices.insert(sceneMesh.vertices.end(),
+                                      scene.gameObject.mesh.vertices.begin(),
+                                      scene.gameObject.mesh.vertices.end());
+            for (const uint32_t index : scene.gameObject.mesh.indices) {
+                sceneMesh.indices.push_back(gameObjectVertexOffset + index);
+            }
+
+            vertexBuffer.createDeviceLocal(vulkanDevice.physical(), device, sceneMesh.vertices.data(),
+                sizeof(Vertex) * sceneMesh.vertices.size(), VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
                 commandPool, vulkanDevice.graphicsQueue());
-            indexBuffer.createDeviceLocal(vulkanDevice.physical(), device, cubeMesh.indices.data(),
-                sizeof(uint32_t) * cubeMesh.indices.size(), VK_BUFFER_USAGE_INDEX_BUFFER_BIT,
+            indexBuffer.createDeviceLocal(vulkanDevice.physical(), device, sceneMesh.indices.data(),
+                sizeof(uint32_t) * sceneMesh.indices.size(), VK_BUFFER_USAGE_INDEX_BUFFER_BIT,
                 commandPool, vulkanDevice.graphicsQueue());
         }
 
@@ -585,6 +693,43 @@ namespace {
                 throw std::runtime_error("Could not begin command buffer");
             }
 
+            const glm::mat4 lightView = glm::lookAt(glm::vec3(3.0f, 5.0f, 2.0f), glm::vec3(0.0f), glm::vec3(0.0f, 1.0f, 0.0f));
+            glm::mat4 lightProjection = glm::ortho(-5.0f, 5.0f, -5.0f, 5.0f, 0.1f, 12.0f);
+            lightProjection[1][1] *= -1.0f;
+            const glm::mat4 lightSpace = lightProjection * lightView;
+            const float animationTime = static_cast<float>(SDL_GetTicks()) / 1000.0f;
+
+            VkRenderPassBeginInfo shadowPassInfo{VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO};
+            shadowPassInfo.renderPass = shadowMap.renderPass();
+            shadowPassInfo.framebuffer = shadowMap.framebuffer();
+            shadowPassInfo.renderArea.extent = {ShadowMap::Resolution, ShadowMap::Resolution};
+            VkClearValue shadowClear{};
+            shadowClear.depthStencil = {1.0f, 0};
+            shadowPassInfo.clearValueCount = 1;
+            shadowPassInfo.pClearValues = &shadowClear;
+            vkCmdBeginRenderPass(commandBuffer, &shadowPassInfo, VK_SUBPASS_CONTENTS_INLINE);
+            vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, shadowPipeline);
+            const VkBuffer shadowVertexBuffers[] = {vertexBuffer.handle()};
+            const VkDeviceSize shadowVertexOffsets[] = {0};
+            vkCmdBindVertexBuffers(commandBuffer, 0, 1, shadowVertexBuffers, shadowVertexOffsets);
+            vkCmdBindIndexBuffer(commandBuffer, indexBuffer.handle(), 0, VK_INDEX_TYPE_UINT32);
+            VkViewport shadowViewport{0.0f, 0.0f, static_cast<float>(ShadowMap::Resolution), static_cast<float>(ShadowMap::Resolution), 0.0f, 1.0f};
+            VkRect2D shadowScissor{{0, 0}, {ShadowMap::Resolution, ShadowMap::Resolution}};
+            vkCmdSetViewport(commandBuffer, 0, 1, &shadowViewport);
+            vkCmdSetScissor(commandBuffer, 0, 1, &shadowScissor);
+            // Keep the depth offset minimal: a larger bias visibly detaches the shadow
+            // from the object ("peter panning").
+            vkCmdSetDepthBias(commandBuffer, SHADOW_DEPTH_BIAS_CONSTANT, 0.0f,
+                              SHADOW_DEPTH_BIAS_SLOPE);
+            const auto drawShadowObject = [&](const GameObject& object, uint32_t indexCount, uint32_t firstIndex) {
+                const glm::mat4 lightMvp = lightSpace * object.modelMatrix();
+                vkCmdPushConstants(commandBuffer, shadowPipelineLayout, VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(lightMvp), &lightMvp);
+                vkCmdDrawIndexed(commandBuffer, indexCount, 1, firstIndex, 0, 0);
+            };
+            drawShadowObject(scene.plane, scene.plane.mesh.indexCount(), 0);
+            drawShadowObject(scene.gameObject, scene.gameObject.mesh.indexCount(), scene.plane.mesh.indexCount());
+            vkCmdEndRenderPass(commandBuffer);
+
             VkRenderPassBeginInfo renderPassInfo{};
             renderPassInfo.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
             renderPassInfo.renderPass = graphicsPipeline.renderPass();
@@ -604,6 +749,7 @@ namespace {
             vkCmdBeginRenderPass(commandBuffer, &renderPassInfo, VK_SUBPASS_CONTENTS_INLINE);
 
             vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, graphicsPipeline.handle());
+            vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, graphicsPipeline.layout(), 0, 1, &shadowDescriptorSet, 0, nullptr);
             const VkBuffer vertexBuffers[] = {vertexBuffer.handle()};
             const VkDeviceSize vertexOffsets[] = {0};
             vkCmdBindVertexBuffers(commandBuffer, 0, 1, vertexBuffers, vertexOffsets);
@@ -623,20 +769,27 @@ namespace {
             scissor.extent = swapchain.extent();
             vkCmdSetScissor(commandBuffer, 0, 1, &scissor);
 
-            const float elapsedSeconds = static_cast<float>(SDL_GetTicks() - animationStartTime) / 1000.0f;
-            const glm::mat4 model = glm::rotate(glm::mat4(1.0f), elapsedSeconds, glm::vec3(0.4f, 1.0f, 0.2f));
-            const glm::mat4 view = glm::lookAt(glm::vec3(2.5f, 2.0f, 3.5f), glm::vec3(0.0f), glm::vec3(0.0f, 1.0f, 0.0f));
+            const glm::mat4 cameraOrbit = glm::rotate(
+                glm::mat4{1.0f}, animationTime * glm::radians(35.0f), glm::vec3{0.0f, 1.0f, 0.0f});
+            const glm::vec3 cameraPosition = glm::vec3(cameraOrbit * glm::vec4(2.5f, 2.0f, 3.5f, 1.0f));
+            const glm::mat4 view = glm::lookAt(cameraPosition, glm::vec3(0.0f), glm::vec3(0.0f, 1.0f, 0.0f));
             glm::mat4 projection = glm::perspective(
                 glm::radians(45.0f),
                 static_cast<float>(swapchain.extent().width) /
                     static_cast<float>(swapchain.extent().height),
                 0.1f, 10.0f);
             projection[1][1] *= -1.0f;
-            const PushConstants constants{projection * view * model};
-            vkCmdPushConstants(commandBuffer, graphicsPipeline.layout(), VK_SHADER_STAGE_VERTEX_BIT, 0,
-                               sizeof(PushConstants), &constants);
-
-            vkCmdDrawIndexed(commandBuffer, cubeMesh.indexCount(), 1, 0, 0, 0);
+            const auto drawObject = [&](const GameObject& object, const uint32_t indexCount,
+                                        const uint32_t firstIndex) {
+                const glm::mat4 model = object.modelMatrix();
+                const PushConstants constants{projection * view * model, lightSpace * model};
+                vkCmdPushConstants(commandBuffer, graphicsPipeline.layout(), VK_SHADER_STAGE_VERTEX_BIT, 0,
+                                   sizeof(PushConstants), &constants);
+                vkCmdDrawIndexed(commandBuffer, indexCount, 1, firstIndex, 0, 0);
+            };
+            drawObject(scene.plane, scene.plane.mesh.indexCount(), 0);
+            drawObject(scene.gameObject, scene.gameObject.mesh.indexCount(),
+                       scene.plane.mesh.indexCount());
 
             vkCmdEndRenderPass(commandBuffer);
 
@@ -647,7 +800,7 @@ namespace {
 
         void createSyncObjects() {
             imageAvailableSemaphores.resize(MAX_FRAMES_IN_FLIGHT);
-            renderFinishedSemaphores.resize(MAX_FRAMES_IN_FLIGHT);
+            renderFinishedSemaphores.resize(swapchain.imageCount());
             inFlightFences.resize(MAX_FRAMES_IN_FLIGHT);
 
             VkSemaphoreCreateInfo semaphoreInfo{};
@@ -676,7 +829,30 @@ namespace {
 
             msaa.destroy();
             destroyDepthResources();
+            destroyRenderFinishedSemaphores();
             swapchain.destroy();
+        }
+
+        void destroyRenderFinishedSemaphores() noexcept {
+            for (VkSemaphore semaphore : renderFinishedSemaphores) {
+                if (semaphore != VK_NULL_HANDLE) {
+                    vkDestroySemaphore(device, semaphore, nullptr);
+                }
+            }
+            renderFinishedSemaphores.clear();
+        }
+
+        void createRenderFinishedSemaphores() {
+            renderFinishedSemaphores.resize(swapchain.imageCount());
+
+            VkSemaphoreCreateInfo semaphoreInfo{};
+            semaphoreInfo.sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO;
+            for (VkSemaphore& semaphore : renderFinishedSemaphores) {
+                if (vkCreateSemaphore(device, &semaphoreInfo, nullptr, &semaphore) != VK_SUCCESS) {
+                    destroyRenderFinishedSemaphores();
+                    throw std::runtime_error("Could not create render-finished semaphore");
+                }
+            }
         }
 
         void recreateSwapChain() {
@@ -696,11 +872,13 @@ namespace {
             swapChainFramebuffers.clear();
             msaa.destroy();
             destroyDepthResources();
+            destroyRenderFinishedSemaphores();
 
             const VkFormat oldFormat = swapchain.format();
             swapchain.recreate();
             msaa.create(swapchain.extent(), swapchain.format());
             createDepthResources();
+            createRenderFinishedSemaphores();
 
             if (oldFormat != swapchain.format()) {
                 graphicsPipeline.destroy();
@@ -744,7 +922,7 @@ namespace {
             submitInfo.commandBufferCount = 1;
             submitInfo.pCommandBuffers = &commandBuffers[currentFrame];
 
-            VkSemaphore signalSemaphores[] = {renderFinishedSemaphores[currentFrame]};
+            VkSemaphore signalSemaphores[] = {renderFinishedSemaphores[imageIndex]};
             submitInfo.signalSemaphoreCount = 1;
             submitInfo.pSignalSemaphores = signalSemaphores;
 
@@ -795,7 +973,6 @@ namespace {
             bool running = true;
             SDL_Event event;
         fpsLastTime = SDL_GetTicks();
-        animationStartTime = fpsLastTime;
             while (running) {
                 while (SDL_PollEvent(&event)) {
                     if (event.type == SDL_EVENT_QUIT) {
@@ -831,12 +1008,11 @@ namespace {
                 cleanupSwapChain();
 
                 graphicsPipeline.destroy();
+                destroyShadowResources();
 
-                for (VkSemaphore semaphore : renderFinishedSemaphores) {
-                    if (semaphore != VK_NULL_HANDLE) {
-                        vkDestroySemaphore(device, semaphore, nullptr);
-                    }
-                }
+                indexBuffer.destroy();
+                vertexBuffer.destroy();
+
                 for (VkSemaphore semaphore : imageAvailableSemaphores) {
                     if (semaphore != VK_NULL_HANDLE) {
                         vkDestroySemaphore(device, semaphore, nullptr);
@@ -848,7 +1024,6 @@ namespace {
                     }
                 }
 
-                renderFinishedSemaphores.clear();
                 imageAvailableSemaphores.clear();
                 inFlightFences.clear();
 

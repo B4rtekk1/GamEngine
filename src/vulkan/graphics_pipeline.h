@@ -22,6 +22,7 @@ struct GraphicsPipelineOptions {
 
     VkVertexInputBindingDescription vertexBinding{};
     std::vector<VkVertexInputAttributeDescription> vertexAttributes;
+    std::vector<VkDescriptorSetLayout> descriptorSetLayouts;
 };
 
 class GraphicsPipeline final {
