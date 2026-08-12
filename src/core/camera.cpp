@@ -12,7 +12,7 @@
 namespace {
     constexpr float MIN_PITCH = -89.0f;
     constexpr float MAX_PITCH = 89.0f;
-    constexpr Vec3 WORLD_UP{0.0f, 1.0f, 0.0f};
+    constexpr vec3 WORLD_UP{0.0f, 1.0f, 0.0f};
 }
 
 Camera::Camera(const float fovDegrees, const float aspectRatio, const float nearPlane, const float farPlane)
@@ -31,7 +31,7 @@ Camera::Camera(const float fovDegrees, const float aspectRatio, const float near
     }
 }
 
-void Camera::setPosition(const Vec3& position) {
+void Camera::setPosition(const vec3& position) {
     m_position = position;
 }
 
@@ -40,7 +40,7 @@ void Camera::setRotation(const float yaw, const float pitch) {
     m_pitch = std::clamp(pitch, MIN_PITCH, MAX_PITCH);
 }
 
-void Camera::move(const Vec3& offset) {
+void Camera::move(const vec3& offset) {
     m_position += offset;
 }
 
@@ -57,23 +57,23 @@ glm::mat4 Camera::projectionMatrix() const {
     return projection;
 }
 
-Vec3 Camera::forward() const {
+vec3 Camera::forward() const {
     const float yaw = glm::radians(m_yaw);
     const float pitch = glm::radians(m_pitch);
 
-    return Vec3{
+    return vec3{
         std::cos(pitch) * std::cos(yaw),
         std::sin(pitch),
         std::cos(pitch) * std::sin(yaw)
     }.normalized();
 }
 
-Vec3 Camera::right() const {
-    return Vec3{glm::normalize(glm::cross(forward().native(), WORLD_UP.native()))};
+vec3 Camera::right() const {
+    return vec3{glm::normalize(glm::cross(forward().native(), WORLD_UP.native()))};
 }
 
-Vec3 Camera::up() const {
-    return Vec3{glm::normalize(glm::cross(right().native(), forward().native()))};
+vec3 Camera::up() const {
+    return vec3{glm::normalize(glm::cross(right().native(), forward().native()))};
 }
 
 void Camera::setAspectRatio(const float aspectRatio) {

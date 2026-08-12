@@ -1,4 +1,5 @@
 /** @file time.h Engine timing interface. */
+#pragma once
 
 #include <chrono>
 
