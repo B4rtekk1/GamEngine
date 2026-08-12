@@ -11,6 +11,6 @@ public:
 
     Scene() {
         plane.scale = {8.0f, 1.0f, 8.0f};
-        gameObject.position.y = 0.5f;
+        gameObject.position.setY(0.5f);
     }
 };

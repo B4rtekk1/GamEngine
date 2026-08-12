@@ -21,9 +21,11 @@
 #include "../render/vertex.h"
 #include "../render/mesh.h"
 #include "../render/scene.h"
+#include "../core/camera.h"
 #include "../core/time.h"
 
 #include <cstdint>
+#include <cmath>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -94,6 +96,7 @@ namespace {
         VkPipelineLayout shadowPipelineLayout = VK_NULL_HANDLE;
         VkPipeline shadowPipeline = VK_NULL_HANDLE;
         Scene scene;
+        Camera camera{45.0f, static_cast<float>(WIDTH) / static_cast<float>(HEIGHT), 0.1f, 10.0f};
         Buffer vertexBuffer;
         Buffer indexBuffer;
 
@@ -686,7 +689,7 @@ namespace {
             }
         }
 
-        void recordCommandBuffer(VkCommandBuffer commandBuffer, uint32_t imageIndex) const {
+        void recordCommandBuffer(VkCommandBuffer commandBuffer, uint32_t imageIndex) {
             VkCommandBufferBeginInfo beginInfo{};
             beginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
 
@@ -694,7 +697,10 @@ namespace {
                 throw std::runtime_error("Could not begin command buffer");
             }
 
-            const glm::mat4 lightView = glm::lookAt(glm::vec3(3.0f, 5.0f, 2.0f), glm::vec3(0.0f), glm::vec3(0.0f, 1.0f, 0.0f));
+            const Vec3 lightPosition{3.0f, 5.0f, 2.0f};
+            const Vec3 lightTarget{};
+            const Vec3 worldUp{0.0f, 1.0f, 0.0f};
+            const glm::mat4 lightView = glm::lookAt(lightPosition.native(), lightTarget.native(), worldUp.native());
             glm::mat4 lightProjection = glm::ortho(-5.0f, 5.0f, -5.0f, 5.0f, 0.1f, 12.0f);
             lightProjection[1][1] *= -1.0f;
             const glm::mat4 lightSpace = lightProjection * lightView;
@@ -771,15 +777,17 @@ namespace {
             vkCmdSetScissor(commandBuffer, 0, 1, &scissor);
 
             const glm::mat4 cameraOrbit = glm::rotate(
-                glm::mat4{1.0f}, animationTime * glm::radians(35.0f), glm::vec3{0.0f, 1.0f, 0.0f});
-            const glm::vec3 cameraPosition = glm::vec3(cameraOrbit * glm::vec4(2.5f, 2.0f, 3.5f, 1.0f));
-            const glm::mat4 view = glm::lookAt(cameraPosition, glm::vec3(0.0f), glm::vec3(0.0f, 1.0f, 0.0f));
-            glm::mat4 projection = glm::perspective(
-                glm::radians(45.0f),
-                static_cast<float>(swapchain.extent().width) /
-                    static_cast<float>(swapchain.extent().height),
-                0.1f, 10.0f);
-            projection[1][1] *= -1.0f;
+                glm::mat4{1.0f}, animationTime * glm::radians(35.0f), Vec3{0.0f, 1.0f, 0.0f}.native());
+            const Vec3 cameraPosition{glm::vec3(cameraOrbit * glm::vec4(2.5f, 2.0f, 3.5f, 1.0f))};
+            const Vec3 direction = -cameraPosition;
+            const float horizontalDistance = glm::length(glm::vec2{direction.x(), direction.z()});
+            camera.setPosition(cameraPosition);
+            camera.setRotation(
+                glm::degrees(std::atan2(direction.z(), direction.x())),
+                glm::degrees(std::atan2(direction.y(), horizontalDistance)));
+
+            const glm::mat4 view = camera.viewMatrix();
+            const glm::mat4 projection = camera.projectionMatrix();
             const auto drawObject = [&](const GameObject& object, const uint32_t indexCount,
                                         const uint32_t firstIndex) {
                 const glm::mat4 model = object.modelMatrix();
@@ -877,6 +885,8 @@ namespace {
 
             const VkFormat oldFormat = swapchain.format();
             swapchain.recreate();
+            camera.setAspectRatio(static_cast<float>(swapchain.extent().width) /
+                                  static_cast<float>(swapchain.extent().height));
             msaa.create(swapchain.extent(), swapchain.format());
             createDepthResources();
             createRenderFinishedSemaphores();

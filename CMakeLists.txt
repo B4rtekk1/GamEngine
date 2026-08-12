@@ -37,6 +37,7 @@ add_executable(GamEngine
         src/render/scene.h
         src/core/time.h
         src/core/time.cpp
+        src/core/Vec3.h
         src/core/camera.h
         src/core/camera.cpp
         src/core/position.h
