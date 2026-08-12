@@ -35,8 +35,11 @@ add_executable(GamEngine
         src/render/cube.h
         src/render/plane.h
         src/render/scene.h
-        src/app/time.h
-        src/app/time.cpp
+        src/core/time.h
+        src/core/time.cpp
+        src/core/camera.h
+        src/core/camera.cpp
+        src/core/position.h
 )
 
 target_link_libraries(GamEngine PRIVATE SDL3::SDL3 Vulkan::Vulkan)

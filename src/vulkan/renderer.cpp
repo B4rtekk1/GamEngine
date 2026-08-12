@@ -21,7 +21,7 @@
 #include "../render/vertex.h"
 #include "../render/mesh.h"
 #include "../render/scene.h"
-#include "../app/time.h"
+#include "../core/time.h"
 
 #include <cstdint>
 #include <cstdio>
