@@ -9,47 +9,29 @@ set(SDL3_DIR "$ENV{VULKAN_SDK}/cmake")
 find_package(SDL3 CONFIG REQUIRED)
 find_path(GLM_INCLUDE_DIR NAMES glm/glm.hpp HINTS "$ENV{VULKAN_SDK}/Include" REQUIRED)
 
-add_executable(GamEngine
-        src/main.cpp
-        src/vulkan/renderer.cpp
-        src/vulkan/renderer.h
-        src/vulkan/msaa.cpp
-        src/vulkan/msaa.h
-        src/utils/shader_loader.cpp
-        src/utils/shader_loader.h
-        src/vulkan/vulkan_device.h
-        src/vulkan/vulkan_device.cpp
-        src/vulkan/swapchain.cpp
-        src/vulkan/swapchain.h
-        src/vulkan/depth_buffer.h
-        src/vulkan/depth_buffer.cpp
-        src/vulkan/shadow_map.h
-        src/vulkan/shadow_map.cpp
-        src/vulkan/graphics_pipeline.h
-        src/vulkan/graphics_pipeline.cpp
-        src/vulkan/buffer.h
-        src/vulkan/buffer.cpp
-        src/render/vertex.h
-        src/render/mesh.h
-        src/ECS/GameObject.h
-        src/render/cube.h
-        src/render/plane.h
-        src/render/scene.h
-        src/core/time.h
-        src/core/time.cpp
-        src/Math/vec2.h
-        src/Math/vec3.h
-        src/Math/vec4.h
-        src/Math/quat.h
-        src/Math/mat4.h
-        src/Math/translate.h
-        src/core/camera.h
-        src/core/camera.cpp
-        src/core/position.h
+add_library(Engine
+        Engine/Source/Core/camera.cpp
+        Engine/Source/Core/time.cpp
+        Engine/Source/ECS/Registry.cpp
+        Engine/Source/Renderer/shader_loader.cpp
+        Engine/Source/Renderer/Textures/Cubemap.cpp
+        Engine/Source/Renderer/Skybox/Skybox.cpp
+        Engine/Source/Renderer/Skybox/SkyboxPipeline.cpp
+        Engine/Source/Renderer/Vulkan/buffer.cpp
+        Engine/Source/Renderer/Vulkan/depth_buffer.cpp
+        Engine/Source/Renderer/Vulkan/graphics_pipeline.cpp
+        Engine/Source/Renderer/Vulkan/msaa.cpp
+        Engine/Source/Renderer/Vulkan/renderer.cpp
+        Engine/Source/Renderer/Vulkan/shadow_map.cpp
+        Engine/Source/Renderer/Vulkan/swapchain.cpp
+        Engine/Source/Renderer/Vulkan/vulkan_device.cpp
 )
 
-target_link_libraries(GamEngine PRIVATE SDL3::SDL3 Vulkan::Vulkan)
-target_include_directories(GamEngine PRIVATE ${GLM_INCLUDE_DIR})
+target_link_libraries(Engine PUBLIC SDL3::SDL3 Vulkan::Vulkan)
+target_include_directories(Engine PUBLIC Engine/Include ${GLM_INCLUDE_DIR})
+
+add_executable(GamEngine Sandbox/Source/main.cpp)
+target_link_libraries(GamEngine PRIVATE Engine)
 
 find_program(GLSLANG_VALIDATOR NAMES glslangValidator)
 find_program(GLSLC NAMES glslc)
@@ -60,38 +42,58 @@ file(MAKE_DIRECTORY ${SHADER_OUT_DIR})
 if(GLSLC)
     add_custom_command(
             OUTPUT ${SHADER_OUT_DIR}/vert.spv
-            COMMAND ${GLSLC} ${CMAKE_SOURCE_DIR}/src/shaders/triangle.vert -o ${SHADER_OUT_DIR}/vert.spv
-            DEPENDS ${CMAKE_SOURCE_DIR}/src/shaders/triangle.vert
+            COMMAND ${GLSLC} ${CMAKE_SOURCE_DIR}/Assets/Shaders/triangle.vert -o ${SHADER_OUT_DIR}/vert.spv
+            DEPENDS ${CMAKE_SOURCE_DIR}/Assets/Shaders/triangle.vert
     )
     add_custom_command(
             OUTPUT ${SHADER_OUT_DIR}/shadow.vert.spv
-            COMMAND ${GLSLC} ${CMAKE_SOURCE_DIR}/src/shaders/shadow.vert -o ${SHADER_OUT_DIR}/shadow.vert.spv
-            DEPENDS ${CMAKE_SOURCE_DIR}/src/shaders/shadow.vert
+            COMMAND ${GLSLC} ${CMAKE_SOURCE_DIR}/Assets/Shaders/shadow.vert -o ${SHADER_OUT_DIR}/shadow.vert.spv
+            DEPENDS ${CMAKE_SOURCE_DIR}/Assets/Shaders/shadow.vert
     )
     add_custom_command(
             OUTPUT ${SHADER_OUT_DIR}/frag.spv
-            COMMAND ${GLSLC} ${CMAKE_SOURCE_DIR}/src/shaders/triangle.frag -o ${SHADER_OUT_DIR}/frag.spv
-            DEPENDS ${CMAKE_SOURCE_DIR}/src/shaders/triangle.frag
+            COMMAND ${GLSLC} ${CMAKE_SOURCE_DIR}/Assets/Shaders/triangle.frag -o ${SHADER_OUT_DIR}/frag.spv
+            DEPENDS ${CMAKE_SOURCE_DIR}/Assets/Shaders/triangle.frag
+    )
+    add_custom_command(
+            OUTPUT ${SHADER_OUT_DIR}/skybox.vert.spv
+            COMMAND ${GLSLC} ${CMAKE_SOURCE_DIR}/Assets/Shaders/skybox.vert -o ${SHADER_OUT_DIR}/skybox.vert.spv
+            DEPENDS ${CMAKE_SOURCE_DIR}/Assets/Shaders/skybox.vert
+    )
+    add_custom_command(
+            OUTPUT ${SHADER_OUT_DIR}/skybox.frag.spv
+            COMMAND ${GLSLC} ${CMAKE_SOURCE_DIR}/Assets/Shaders/skybox.frag -o ${SHADER_OUT_DIR}/skybox.frag.spv
+            DEPENDS ${CMAKE_SOURCE_DIR}/Assets/Shaders/skybox.frag
     )
 elseif(GLSLANG_VALIDATOR)
     add_custom_command(
             OUTPUT ${SHADER_OUT_DIR}/vert.spv
-            COMMAND ${GLSLANG_VALIDATOR} -V ${CMAKE_SOURCE_DIR}/src/shaders/triangle.vert -o ${SHADER_OUT_DIR}/vert.spv
-            DEPENDS ${CMAKE_SOURCE_DIR}/src/shaders/triangle.vert
+            COMMAND ${GLSLANG_VALIDATOR} -V ${CMAKE_SOURCE_DIR}/Assets/Shaders/triangle.vert -o ${SHADER_OUT_DIR}/vert.spv
+            DEPENDS ${CMAKE_SOURCE_DIR}/Assets/Shaders/triangle.vert
     )
     add_custom_command(
             OUTPUT ${SHADER_OUT_DIR}/frag.spv
-            COMMAND ${GLSLANG_VALIDATOR} -V ${CMAKE_SOURCE_DIR}/src/shaders/triangle.frag -o ${SHADER_OUT_DIR}/frag.spv
-            DEPENDS ${CMAKE_SOURCE_DIR}/src/shaders/triangle.frag
+            COMMAND ${GLSLANG_VALIDATOR} -V ${CMAKE_SOURCE_DIR}/Assets/Shaders/triangle.frag -o ${SHADER_OUT_DIR}/frag.spv
+            DEPENDS ${CMAKE_SOURCE_DIR}/Assets/Shaders/triangle.frag
     )
     add_custom_command(
             OUTPUT ${SHADER_OUT_DIR}/shadow.vert.spv
-            COMMAND ${GLSLANG_VALIDATOR} -V ${CMAKE_SOURCE_DIR}/src/shaders/shadow.vert -o ${SHADER_OUT_DIR}/shadow.vert.spv
-            DEPENDS ${CMAKE_SOURCE_DIR}/src/shaders/shadow.vert
+            COMMAND ${GLSLANG_VALIDATOR} -V ${CMAKE_SOURCE_DIR}/Assets/Shaders/shadow.vert -o ${SHADER_OUT_DIR}/shadow.vert.spv
+            DEPENDS ${CMAKE_SOURCE_DIR}/Assets/Shaders/shadow.vert
+    )
+    add_custom_command(
+            OUTPUT ${SHADER_OUT_DIR}/skybox.vert.spv
+            COMMAND ${GLSLANG_VALIDATOR} -V ${CMAKE_SOURCE_DIR}/Assets/Shaders/skybox.vert -o ${SHADER_OUT_DIR}/skybox.vert.spv
+            DEPENDS ${CMAKE_SOURCE_DIR}/Assets/Shaders/skybox.vert
+    )
+    add_custom_command(
+            OUTPUT ${SHADER_OUT_DIR}/skybox.frag.spv
+            COMMAND ${GLSLANG_VALIDATOR} -V ${CMAKE_SOURCE_DIR}/Assets/Shaders/skybox.frag -o ${SHADER_OUT_DIR}/skybox.frag.spv
+            DEPENDS ${CMAKE_SOURCE_DIR}/Assets/Shaders/skybox.frag
     )
 else()
     message(FATAL_ERROR "glslc not found install Vulkan SDK.")
 endif()
 
-add_custom_target(Shaders DEPENDS ${SHADER_OUT_DIR}/vert.spv ${SHADER_OUT_DIR}/frag.spv ${SHADER_OUT_DIR}/shadow.vert.spv)
+add_custom_target(Shaders DEPENDS ${SHADER_OUT_DIR}/vert.spv ${SHADER_OUT_DIR}/frag.spv ${SHADER_OUT_DIR}/shadow.vert.spv ${SHADER_OUT_DIR}/skybox.vert.spv ${SHADER_OUT_DIR}/skybox.frag.spv)
 add_dependencies(GamEngine Shaders)
