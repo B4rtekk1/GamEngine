@@ -2,7 +2,7 @@
 
 /** @file transform.h Object transform value type. */
 
-#include "math/vec3.h"
+#include "../Math/vec3.h"
 
 /** @brief Position, Euler rotation and scale of a renderable object. */
 struct Transform {

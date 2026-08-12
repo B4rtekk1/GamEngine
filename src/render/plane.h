@@ -1,6 +1,6 @@
 #pragma once
 
-#include "game_object.h"
+#include "../ECS/GameObject.h"
 
 class Plane final : public GameObject {
 public:

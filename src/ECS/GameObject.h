@@ -1,7 +1,7 @@
 #pragma once
 
-#include "mesh.h"
-#include "../core/math/vec3.h"
+#include "../render/mesh.h"
+#include "../Math/vec3.h"
 
 #include <glm/gtc/matrix_transform.hpp>
 #include <glm/gtc/quaternion.hpp>

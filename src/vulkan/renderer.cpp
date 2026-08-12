@@ -22,7 +22,7 @@
 #include "../render/mesh.h"
 #include "../render/scene.h"
 #include "../core/camera.h"
-#include "../core/math/vec4.h"
+#include "../Math/vec4.h"
 #include "../core/time.h"
 
 #include <cstdint>

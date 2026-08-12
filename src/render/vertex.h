@@ -1,7 +1,7 @@
 #pragma once
 
 #include "../core/math/vec3.h"
-#include "../core/math/vec2.h"
+#include "../Math/vec2.h"
 
 #include <glm/glm.hpp>
 

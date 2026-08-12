@@ -1,6 +1,6 @@
 #pragma once
 
-#include "translate.h"
+#include "../core/math/translate.h"
 
 #include <glm/glm.hpp>
 

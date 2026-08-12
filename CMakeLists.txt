@@ -31,17 +31,18 @@ add_executable(GamEngine
         src/vulkan/buffer.cpp
         src/render/vertex.h
         src/render/mesh.h
-        src/render/game_object.h
+        src/ECS/GameObject.h
         src/render/cube.h
         src/render/plane.h
         src/render/scene.h
         src/core/time.h
         src/core/time.cpp
-        src/core/math/vec2.h
-        src/core/math/vec3.h
-        src/core/math/vec4.h
-        src/core/math/mat4.h
-        src/core/math/translate.h
+        src/Math/vec2.h
+        src/Math/vec3.h
+        src/Math/vec4.h
+        src/Math/quat.h
+        src/Math/mat4.h
+        src/Math/translate.h
         src/core/camera.h
         src/core/camera.cpp
         src/core/position.h

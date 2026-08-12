@@ -2,7 +2,7 @@
 
 /** @file camera.h Perspective camera interface. */
 
-#include "math/vec3.h"
+#include "../Math/vec3.h"
 
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_transform.hpp>
