@@ -14,20 +14,20 @@ namespace Engine {
  * The default value is the identity rotation. Quaternion multiplication
  * composes rotations; `a * b` applies b first and then a.
  */
-class quat {
+class Quat {
 public:
     /** @brief Constructs the identity rotation. */
-    constexpr quat() : m_value(1.0f, 0.0f, 0.0f, 0.0f) {}
+    constexpr Quat() : m_value(1.0f, 0.0f, 0.0f, 0.0f) {}
 
     /** @brief Constructs a quaternion from its scalar and vector components. */
-    constexpr quat(float w, float x, float y, float z) : m_value(w, x, y, z) {}
+    constexpr Quat(float w, float x, float y, float z) : m_value(w, x, y, z) {}
 
     /** @brief Constructs a quaternion from GLM's native representation. */
-    explicit constexpr quat(const glm::quat& value) : m_value(value) {}
+    explicit constexpr Quat(const glm::quat& value) : m_value(value) {}
 
     /** @brief Creates a rotation by angleRadians about axis. */
-    [[nodiscard]] static quat angleAxis(float angleRadians, const vec3& axis) noexcept {
-        return quat{glm::angleAxis(angleRadians, glm::normalize(axis.native()))};
+    [[nodiscard]] static Quat angleAxis(float angleRadians, const vec3& axis) noexcept {
+        return Quat{glm::angleAxis(angleRadians, glm::normalize(axis.native()))};
     }
 
     /** @brief Returns the scalar component. */
@@ -40,12 +40,12 @@ public:
     [[nodiscard]] constexpr float z() const noexcept { return m_value.z; }
 
     /** @brief Returns the composition of this rotation with rhs. */
-    [[nodiscard]] constexpr quat operator*(const quat& rhs) const noexcept {
-        return quat{m_value * rhs.m_value};
+    [[nodiscard]] constexpr Quat operator*(const Quat& rhs) const noexcept {
+        return Quat{m_value * rhs.m_value};
     }
 
     /** @brief Composes this rotation with rhs. */
-    constexpr quat& operator*=(const quat& rhs) noexcept { return *this = *this * rhs; }
+    constexpr Quat& operator*=(const Quat& rhs) noexcept { return *this = *this * rhs; }
 
     /** @brief Rotates a vector by this quaternion. */
     [[nodiscard]] vec3 operator*(const vec3& value) const noexcept {
@@ -53,7 +53,7 @@ public:
     }
 
     /** @brief Returns a normalized copy of this quaternion. */
-    [[nodiscard]] quat normalized() const noexcept { return quat{glm::normalize(m_value)}; }
+    [[nodiscard]] Quat normalized() const noexcept { return Quat{glm::normalize(m_value)}; }
 
     /** @brief Returns the native GLM representation. */
     [[nodiscard]] constexpr glm::quat native() const noexcept { return m_value; }

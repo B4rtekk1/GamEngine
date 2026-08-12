@@ -28,7 +28,11 @@ add_library(Engine
 )
 
 target_link_libraries(Engine PUBLIC SDL3::SDL3 Vulkan::Vulkan)
-target_include_directories(Engine PUBLIC Engine/Include ${GLM_INCLUDE_DIR})
+target_include_directories(Engine
+        PUBLIC
+            $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/Engine/Include>
+            ${GLM_INCLUDE_DIR}
+)
 
 add_executable(GamEngine Sandbox/Source/main.cpp)
 target_link_libraries(GamEngine PRIVATE Engine)

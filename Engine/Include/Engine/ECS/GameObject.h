@@ -1,7 +1,7 @@
 #pragma once
 
 #include "Engine/Renderer/mesh.h"
-#include "Engine/Math/vec3.h"
+#include "Engine/Math/Vec3.h"
 
 #include <glm/gtc/matrix_transform.hpp>
 #include <glm/gtc/quaternion.hpp>
@@ -14,9 +14,9 @@ public:
     virtual ~GameObject() = default;
 
     Mesh mesh;
-    vec3 position{0.0f, 0.0f, 0.0f};
+    Vec3 position{0.0f, 0.0f, 0.0f};
     glm::quat rotation{1.0f, 0.0f, 0.0f, 0.0f};
-    vec3 scale{1.0f, 1.0f, 1.0f};
+    Vec3 scale{1.0f, 1.0f, 1.0f};
     bool castShadow{true};
 
     [[nodiscard]] glm::mat4 modelMatrix() const noexcept {

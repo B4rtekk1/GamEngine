@@ -21,9 +21,9 @@
 #include "Engine/Renderer/vertex.h"
 #include "Engine/Renderer/mesh.h"
 #include "Engine/Renderer/scene.h"
-#include "Engine/Core/camera.h"
-#include "Engine/Math/vec4.h"
-#include "Engine/Core/time.h"
+#include "Engine/Core/Camera.h"
+#include "Engine/Math/Vec4.h"
+#include "Engine/Core/Time.h"
 #include "Engine/Renderer/Skybox/Skybox.h"
 
 #include <cstdint>
@@ -765,9 +765,9 @@ namespace {
         }
 
         [[nodiscard]] glm::mat4 lightSpaceMatrix() const {
-            const vec3 lightPosition{3.0f, 5.0f, 2.0f};
-            const vec3 lightTarget{};
-            const vec3 worldUp{0.0f, 1.0f, 0.0f};
+            const Vec3 lightPosition{3.0f, 5.0f, 2.0f};
+            const Vec3 lightTarget{};
+            const Vec3 worldUp{0.0f, 1.0f, 0.0f};
             const glm::mat4 lightView = glm::lookAt(lightPosition.native(), lightTarget.native(), worldUp.native());
             glm::mat4 lightProjection = glm::ortho(-5.0f, 5.0f, -5.0f, 5.0f, 0.1f, 12.0f);
             lightProjection[1][1] *= -1.0f;
@@ -777,11 +777,11 @@ namespace {
         void updateUniformBuffer(const uint32_t frame) {
             const float animationTime = static_cast<float>(Time::elapsedTime());
             const glm::mat4 cameraOrbit = glm::rotate(
-                glm::mat4{1.0f}, animationTime * glm::radians(35.0f), vec3{0.0f, 1.0f, 0.0f}.native());
-            const vec4 orbitPosition{2.5f, 2.0f, 3.5f, 1.0f};
-            const vec3 cameraPosition{vec4{cameraOrbit * orbitPosition.native()}.native()};
-            const vec3 direction = -cameraPosition;
-            const float horizontalDistance = vec2{direction.x(), direction.z()}.length();
+                glm::mat4{1.0f}, animationTime * glm::radians(35.0f), Vec3{0.0f, 1.0f, 0.0f}.native());
+            const Vec4 orbitPosition{2.5f, 2.0f, 3.5f, 1.0f};
+            const Vec3 cameraPosition{Vec4{cameraOrbit * orbitPosition.native()}.native()};
+            const Vec3 direction = -cameraPosition;
+            const float horizontalDistance = Vec2{direction.x(), direction.z()}.length();
             camera.setPosition(cameraPosition);
             camera.setRotation(glm::degrees(std::atan2(direction.z(), direction.x())),
                                glm::degrees(std::atan2(direction.y(), horizontalDistance)));

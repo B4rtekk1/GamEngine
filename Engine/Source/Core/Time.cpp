@@ -1,6 +1,6 @@
 /** @file time.cpp Time implementation. */
 
-#include "Engine/Core/time.h"
+#include "Engine/Core/Time.h"
 
 #include <algorithm>
 

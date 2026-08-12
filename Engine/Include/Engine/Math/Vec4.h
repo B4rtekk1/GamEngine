@@ -11,14 +11,14 @@ namespace Engine {
  *
  * Vec4 is suitable for homogeneous coordinates, shader data and RGBA values.
  */
-class vec4 {
+class Vec4 {
 public:
     /** @brief Constructs a zero vector. */
-    constexpr vec4() = default;
+    constexpr Vec4() = default;
     /** @brief Constructs a vector from its four components. */
-    constexpr vec4(float x, float y, float z, float w) : m_value(x, y, z, w) {}
+    constexpr Vec4(float x, float y, float z, float w) : m_value(x, y, z, w) {}
     /** @brief Constructs a vector from its native GLM representation. */
-    explicit constexpr vec4(const glm::vec4& value) : m_value(value) {}
+    explicit constexpr Vec4(const glm::vec4& value) : m_value(value) {}
 
     /** @brief Returns the X component. */
     [[nodiscard]] constexpr float x() const noexcept { return m_value.x; }
@@ -38,28 +38,28 @@ public:
     constexpr void setW(float value) noexcept { m_value.w = value; }
 
     /** @brief Returns the component-wise sum. */
-    constexpr vec4 operator+(const vec4& rhs) const noexcept { return vec4{m_value + rhs.m_value}; }
+    constexpr Vec4 operator+(const Vec4& rhs) const noexcept { return Vec4{m_value + rhs.m_value}; }
     /** @brief Returns the component-wise difference. */
-    constexpr vec4 operator-(const vec4& rhs) const noexcept { return vec4{m_value - rhs.m_value}; }
+    constexpr Vec4 operator-(const Vec4& rhs) const noexcept { return Vec4{m_value - rhs.m_value}; }
     /** @brief Returns the negated vector. */
-    constexpr vec4 operator-() const noexcept { return vec4{-m_value}; }
+    constexpr Vec4 operator-() const noexcept { return Vec4{-m_value}; }
     /** @brief Returns the component-wise product. */
-    constexpr vec4 operator*(const vec4& rhs) const noexcept { return vec4{m_value * rhs.m_value}; }
+    constexpr Vec4 operator*(const Vec4& rhs) const noexcept { return Vec4{m_value * rhs.m_value}; }
     /** @brief Returns the vector multiplied by a scalar. */
-    constexpr vec4 operator*(float scalar) const noexcept { return vec4{m_value * scalar}; }
+    constexpr Vec4 operator*(float scalar) const noexcept { return Vec4{m_value * scalar}; }
     /** @brief Adds another vector component-wise. */
-    constexpr vec4& operator+=(const vec4& rhs) noexcept { return *this = *this + rhs; }
+    constexpr Vec4& operator+=(const Vec4& rhs) noexcept { return *this = *this + rhs; }
     /** @brief Subtracts another vector component-wise. */
-    constexpr vec4& operator-=(const vec4& rhs) noexcept { return *this = *this - rhs; }
+    constexpr Vec4& operator-=(const Vec4& rhs) noexcept { return *this = *this - rhs; }
     /** @brief Multiplies this vector component-wise. */
-    constexpr vec4& operator*=(const vec4& rhs) noexcept { return *this = *this * rhs; }
+    constexpr Vec4& operator*=(const Vec4& rhs) noexcept { return *this = *this * rhs; }
     /** @brief Multiplies this vector by a scalar. */
-    constexpr vec4& operator*=(float scalar) noexcept { return *this = *this * scalar; }
+    constexpr Vec4& operator*=(float scalar) noexcept { return *this = *this * scalar; }
 
     /** @brief Returns the Euclidean length. */
     [[nodiscard]] float length() const noexcept { return glm::length(m_value); }
     /** @brief Returns a normalized copy of this vector. */
-    [[nodiscard]] vec4 normalized() const noexcept { return vec4{glm::normalize(m_value)}; }
+    [[nodiscard]] Vec4 normalized() const noexcept { return Vec4{glm::normalize(m_value)}; }
     /** @brief Returns the native GLM representation. */
     [[nodiscard]] constexpr glm::vec4 native() const noexcept { return m_value; }
 
@@ -68,6 +68,6 @@ private:
 };
 
 /** @brief Returns a vector multiplied by a scalar. */
-constexpr vec4 operator*(float scalar, const vec4& value) noexcept { return value * scalar; }
+constexpr Vec4 operator*(float scalar, const Vec4& value) noexcept { return value * scalar; }
 
 } // namespace Engine

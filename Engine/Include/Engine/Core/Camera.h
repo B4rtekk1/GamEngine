@@ -2,7 +2,7 @@
 
 /** @file camera.h Perspective camera interface. */
 
-#include "../Math/vec3.h"
+#include "../Math/Vec3.h"
 
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_transform.hpp>
@@ -28,12 +28,12 @@ public:
     Camera(float fovDegrees, float aspectRatio, float nearPlane, float farPlane);
 
     /** @brief Sets the camera world position. */
-    void setPosition(const vec3& position);
+    void setPosition(const Vec3& position);
     /** @brief Sets yaw and pitch in degrees; pitch is clamped to [-89, 89]. */
     void setRotation(float yaw, float pitch);
 
     /** @brief Translates the camera by a world-space offset. */
-    void move(const vec3& offset);
+    void move(const Vec3& offset);
 
     /** @brief Returns the view matrix derived from position and orientation. */
     [[nodiscard]] glm::mat4 viewMatrix() const;
@@ -41,19 +41,19 @@ public:
     [[nodiscard]] glm::mat4 projectionMatrix() const;
 
     /** @brief Returns the camera world position. */
-    [[nodiscard]] vec3 position() const { return m_position; }
+    [[nodiscard]] Vec3 position() const { return m_position; }
     /** @brief Returns the normalized forward direction. */
-    [[nodiscard]] vec3 forward() const;
+    [[nodiscard]] Vec3 forward() const;
     /** @brief Returns the normalized right direction. */
-    [[nodiscard]] vec3 right() const;
+    [[nodiscard]] Vec3 right() const;
     /** @brief Returns the normalized up direction. */
-    [[nodiscard]] vec3 up() const;
+    [[nodiscard]] Vec3 up() const;
 
     /** @brief Updates the aspect ratio used by the projection matrix. */
     void setAspectRatio(float aspectRatio);
 
 private:
-    vec3 m_position{0.0f, 0.0f, 3.0f};
+    Vec3 m_position{0.0f, 0.0f, 3.0f};
 
     float m_yaw{-90.0f};
     float m_pitch{0.0f};
