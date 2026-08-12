@@ -21,6 +21,7 @@
 #include "../render/vertex.h"
 #include "../render/mesh.h"
 #include "../render/scene.h"
+#include "../app/time.h"
 
 #include <cstdint>
 #include <cstdio>
@@ -107,8 +108,8 @@ namespace {
         bool framebufferResized = false;
         bool cleanedUp = false;
 
-    uint32_t fpsFrameCount = 0;
-    uint64_t fpsLastTime = 0;
+        uint32_t fpsFrameCount = 0;
+        double fpsElapsedTime = 0.0;
 
         // ---------- INIT ----------
 
@@ -697,7 +698,7 @@ namespace {
             glm::mat4 lightProjection = glm::ortho(-5.0f, 5.0f, -5.0f, 5.0f, 0.1f, 12.0f);
             lightProjection[1][1] *= -1.0f;
             const glm::mat4 lightSpace = lightProjection * lightView;
-            const float animationTime = static_cast<float>(SDL_GetTicks()) / 1000.0f;
+            const float animationTime = static_cast<float>(Time::elapsedTime());
 
             VkRenderPassBeginInfo shadowPassInfo{VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO};
             shadowPassInfo.renderPass = shadowMap.renderPass();
@@ -955,24 +956,24 @@ namespace {
 
         void updateFpsCounter() {
             fpsFrameCount++;
-            const uint64_t currentTime = SDL_GetTicks();
+            fpsElapsedTime += Time::unscaledDeltaTime();
 
-            if (const uint64_t elapsed = currentTime - fpsLastTime; elapsed >= 1000) {
-                const double fps = fpsFrameCount * 1000.0 / static_cast<double>(elapsed);
+            if (fpsElapsedTime >= 1.0) {
+                const double fps = fpsFrameCount / fpsElapsedTime;
 
                 char title[128];
-            snprintf(title, sizeof(title), "Vulkan + SDL3 - Cube | FPS: %.1f", fps);
+                snprintf(title, sizeof(title), "Vulkan + SDL3 - Cube | FPS: %.1f", fps);
                 SDL_SetWindowTitle(window, title);
 
                 fpsFrameCount = 0;
-                fpsLastTime = currentTime;
+                fpsElapsedTime = 0.0;
             }
         }
 
         void mainLoop() {
             bool running = true;
             SDL_Event event;
-        fpsLastTime = SDL_GetTicks();
+            Time::init();
             while (running) {
                 while (SDL_PollEvent(&event)) {
                     if (event.type == SDL_EVENT_QUIT) {
@@ -989,6 +990,7 @@ namespace {
                     break;
                 }
 
+                Time::update();
                 drawFrame();
                 updateFpsCounter();
             }
