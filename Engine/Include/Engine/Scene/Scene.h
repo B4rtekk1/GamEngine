@@ -11,18 +11,19 @@
 
 namespace Engine {
 
-// Default ECS scene: a 10 by 10 by 10 block of cubes standing on a plane.
 class Scene final {
 public:
-    static constexpr std::size_t CubesPerAxis = 10;
+    static constexpr std::size_t CubesPerAxis = 30;
     static constexpr std::size_t CubeCount = CubesPerAxis * CubesPerAxis * CubesPerAxis;
+    static constexpr float CubeSpacing = 1.25f;
+    static constexpr float GridHalfExtent =
+        ((CubesPerAxis - 1) * CubeSpacing + 1.0f) * 0.5f;
 
     Registry registry;
     Entity plane{NullEntity};
     std::array<Entity, CubeCount> cubes{};
 
 private:
-    // Keep the source geometry alive for every renderer component that shares it.
     std::shared_ptr<const Mesh> planeMesh;
     std::shared_ptr<const Mesh> cubeMesh;
 
@@ -34,14 +35,14 @@ public:
 
         plane = registry.create();
         registry.add<Transform>(plane, Transform{
-            .scale = {14.0f, 1.0f, 14.0f},
+            .scale = {GridHalfExtent * 2.0f + 4.0f, 1.0f,
+                      GridHalfExtent * 2.0f + 4.0f},
         });
         registry.add<MeshRenderer>(plane, MeshRenderer{
             .mesh = planeMesh,
         });
 
-        constexpr float spacing = 1.25f;
-        constexpr float halfGridWidth = (CubesPerAxis - 1) * spacing * 0.5f;
+        constexpr float halfGridWidth = (CubesPerAxis - 1) * CubeSpacing * 0.5f;
 
         for (std::size_t layer = 0; layer < CubesPerAxis; ++layer) {
             for (std::size_t row = 0; row < CubesPerAxis; ++row) {
@@ -53,13 +54,18 @@ public:
 
                     registry.add<Transform>(cube, Transform{
                         .position = {
-                            static_cast<float>(column) * spacing - halfGridWidth,
-                            static_cast<float>(layer) * spacing + 0.5f,
-                            static_cast<float>(row) * spacing - halfGridWidth,
+                            static_cast<float>(column) * CubeSpacing - halfGridWidth,
+                            static_cast<float>(layer) * CubeSpacing + 0.5f,
+                            static_cast<float>(row) * CubeSpacing - halfGridWidth,
                         },
                     });
                     registry.add<MeshRenderer>(cube, MeshRenderer{
                         .mesh = cubeMesh,
+                        .material = {
+                            .baseColor = {0.72f, 0.72f, 0.72f},
+                            .metallic = 0.05f,
+                            .roughness = 0.62f,
+                        },
                     });
                 }
             }

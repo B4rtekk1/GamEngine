@@ -5,6 +5,8 @@
 
 #include "Engine/Renderer/shader_loader.h"
 
+#include <SDL3/SDL.h>
+
 #include <fstream>
 #include <stdexcept>
 #include <string>
@@ -70,7 +72,17 @@ void ShaderModule::reset() noexcept {
  *         invalid size, or cannot be read completely.
  */
 std::vector<uint32_t> loadSpirv(const std::filesystem::path& path) {
-    std::ifstream file(path, std::ios::ate | std::ios::binary);
+    std::filesystem::path resolvedPath = path;
+    if (path.is_relative() && !std::filesystem::exists(path)) {
+        if (const char* const basePath = SDL_GetBasePath()) {
+            const std::filesystem::path executablePath = std::filesystem::path{basePath} / path;
+            if (std::filesystem::exists(executablePath)) {
+                resolvedPath = executablePath;
+            }
+        }
+    }
+
+    std::ifstream file(resolvedPath, std::ios::ate | std::ios::binary);
     if (!file.is_open()) {
         throw std::runtime_error(
             "Couldnt open SPIR-V shader: " + path.string());

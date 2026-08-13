@@ -143,8 +143,8 @@ void GraphicsPipeline::createGraphicsPipeline(const GraphicsPipelineOptions& opt
     };
 
     VkPipelineVertexInputStateCreateInfo vertexInput{VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO};
-    vertexInput.vertexBindingDescriptionCount = 1;
-    vertexInput.pVertexBindingDescriptions = &options.vertexBinding;
+    vertexInput.vertexBindingDescriptionCount = static_cast<uint32_t>(options.vertexBindings.size());
+    vertexInput.pVertexBindingDescriptions = options.vertexBindings.data();
     vertexInput.vertexAttributeDescriptionCount = static_cast<uint32_t>(options.vertexAttributes.size());
     vertexInput.pVertexAttributeDescriptions = options.vertexAttributes.data();
     VkPipelineInputAssemblyStateCreateInfo assembly{VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO};

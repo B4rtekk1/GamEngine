@@ -49,13 +49,16 @@ namespace {
     constexpr float SHADOW_DEPTH_BIAS_SLOPE = 0.35f;
 
     struct PushConstants {
-        Mat4 model;
+        glm::vec4 baseColorMetallic;
+        glm::vec4 roughnessAo;
     };
 
     struct UniformBufferObject {
         Mat4 view;
         Mat4 projection;
         Mat4 lightSpace;
+        glm::vec4 cameraPosition;
+        glm::vec4 lightDirectionIntensity;
     };
 }
 
@@ -99,8 +102,6 @@ namespace {
         MsaaResources msaa;
 
         GraphicsPipeline graphicsPipeline;
-        GraphicsPipeline occlusionPrepassPipeline;
-        GraphicsPipeline occlusionQueryPipeline;
         Skybox skybox;
         DepthBuffer depthBuffer;
         ShadowMap shadowMap;
@@ -111,14 +112,13 @@ namespace {
         VkPipelineLayout shadowPipelineLayout = VK_NULL_HANDLE;
         VkPipeline shadowPipeline = VK_NULL_HANDLE;
         Scene scene;
-        Camera camera{Degrees{45.0f}, static_cast<float>(WIDTH) / static_cast<float>(HEIGHT), 0.1f, 75.0f};
+        Camera camera{Degrees{45.0f}, static_cast<float>(WIDTH) / static_cast<float>(HEIGHT),
+                      0.1f, Scene::GridHalfExtent * 10.0f};
         Buffer vertexBuffer;
         Buffer indexBuffer;
+        std::array<Buffer, MAX_FRAMES_IN_FLIGHT> instanceBuffers;
         std::array<Buffer, MAX_FRAMES_IN_FLIGHT> uniformBuffers;
-        std::array<VkQueryPool, MAX_FRAMES_IN_FLIGHT> occlusionQueryPools{};
-        std::array<bool, MAX_FRAMES_IN_FLIGHT> occlusionResultsReady{};
-        std::vector<VkBool32> occlusionVisibility;
-        uint32_t occlusionQueryCount{0};
+        std::vector<glm::mat4> instanceModels;
 
         VkCommandPool commandPool{};
         std::vector<VkCommandBuffer> commandBuffers;
@@ -163,7 +163,7 @@ namespace {
             createDepthResources();
             createCommandPool();
             createMeshBuffers();
-            createOcclusionQueryPools();
+            createInstanceBuffer();
             createUniformBuffers();
             createShadowResources();
             createGraphicsPipeline();
@@ -232,10 +232,9 @@ namespace {
         }
 
         void createInstance() {
-            const bool useValidation =
-                checkValidationLayerSupport();
+            const bool useValidation = enableValidationLayers && checkValidationLayerSupport();
 
-            if (!useValidation) {
+            if (enableValidationLayers && !useValidation) {
                 std::cerr << "Validation layers are incorrect\n";
             }
 
@@ -245,7 +244,6 @@ namespace {
             appInfo.applicationVersion = VK_MAKE_VERSION(1, 0, 0);
             appInfo.pEngineName = "No Engine";
             appInfo.engineVersion = VK_MAKE_VERSION(1, 0, 0);
-            // vkCmdResetQueryPool, used by the occlusion-culling pass, is core in 1.2.
             appInfo.apiVersion = VK_API_VERSION_1_2;
 
             VkInstanceCreateInfo createInfo{};
@@ -287,7 +285,7 @@ namespace {
         }
 
         void setupDebugMessenger() {
-            if (!(checkValidationLayerSupport())) return;
+            if (!enableValidationLayers || !checkValidationLayerSupport()) return;
             VkDebugUtilsMessengerCreateInfoEXT createInfo;
             populateDebugMessengerCreateInfo(createInfo);
             if (CreateDebugUtilsMessengerEXT(instance, &createInfo, nullptr, &debugMessenger) != VK_SUCCESS) {
@@ -523,35 +521,25 @@ namespace {
             options.colorFormat = swapchain.format();
             options.depthFormat = depthBuffer.format();
             options.samples = msaa.sampleCount();
-            options.vertexShader = "shaders/vert.spv";
-            options.fragmentShader = "shaders/frag.spv";
+            options.vertexShader = "shaders/pbr.vert.spv";
+            options.fragmentShader = "shaders/pbr.frag.spv";
             options.pushConstantSize = sizeof(PushConstants);
+            options.pushConstantStages = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
             options.cullMode = VK_CULL_MODE_BACK_BIT;
             options.descriptorSetLayouts = {shadowDescriptorSetLayout};
-            options.vertexBinding = {
-                .binding = 0,
-                .stride = sizeof(Vertex),
-                .inputRate = VK_VERTEX_INPUT_RATE_VERTEX,
+            options.vertexBindings = {
+                {.binding = 0, .stride = sizeof(Vertex), .inputRate = VK_VERTEX_INPUT_RATE_VERTEX},
+                {.binding = 1, .stride = sizeof(glm::mat4), .inputRate = VK_VERTEX_INPUT_RATE_INSTANCE},
             };
             options.vertexAttributes = {
                 {.location = 0, .binding = 0, .format = VK_FORMAT_R32G32B32_SFLOAT, .offset = offsetof(Vertex, position)},
                 {.location = 1, .binding = 0, .format = VK_FORMAT_R32G32B32_SFLOAT, .offset = offsetof(Vertex, color)},
-                {.location = 2, .binding = 0, .format = VK_FORMAT_R32G32_SFLOAT, .offset = offsetof(Vertex, texCoord)},
+                {.location = 3, .binding = 0, .format = VK_FORMAT_R32G32B32_SFLOAT, .offset = offsetof(Vertex, normal)},
+                {.location = 4, .binding = 1, .format = VK_FORMAT_R32G32B32A32_SFLOAT, .offset = 0},
+                {.location = 5, .binding = 1, .format = VK_FORMAT_R32G32B32A32_SFLOAT, .offset = sizeof(glm::vec4)},
+                {.location = 6, .binding = 1, .format = VK_FORMAT_R32G32B32A32_SFLOAT, .offset = sizeof(glm::vec4) * 2},
+                {.location = 7, .binding = 1, .format = VK_FORMAT_R32G32B32A32_SFLOAT, .offset = sizeof(glm::vec4) * 3},
             };
-            graphicsPipeline.create(device, options);
-
-            // The depth prepass establishes the nearest surface for each pixel.
-            // The next pipeline only counts samples and never changes that depth.
-            options.colorWriteMask = 0;
-            occlusionPrepassPipeline.create(device, options);
-            options.depthWriteEnable = VK_FALSE;
-            options.depthCompareOp = VK_COMPARE_OP_LESS_OR_EQUAL;
-            occlusionQueryPipeline.create(device, options);
-
-            // Colour is emitted after the prepass, so equal depth values must pass.
-            options.colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT |
-                                     VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT;
-            graphicsPipeline.destroy();
             graphicsPipeline.create(device, options);
         }
 
@@ -566,7 +554,7 @@ namespace {
             bindings[1].binding = 1;
             bindings[1].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
             bindings[1].descriptorCount = 1;
-            bindings[1].stageFlags = VK_SHADER_STAGE_VERTEX_BIT;
+            bindings[1].stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
             VkDescriptorSetLayoutCreateInfo layoutInfo{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
             layoutInfo.bindingCount = 2;
             layoutInfo.pBindings = bindings;
@@ -629,13 +617,22 @@ namespace {
             if (vkCreatePipelineLayout(device, &shadowLayoutInfo, nullptr, &shadowPipelineLayout) != VK_SUCCESS) {
                 throw std::runtime_error("Could not create shadow pipeline layout");
             }
-            VkVertexInputBindingDescription vertexBinding{0, sizeof(Vertex), VK_VERTEX_INPUT_RATE_VERTEX};
-            constexpr VkVertexInputAttributeDescription attribute{0, 0, VK_FORMAT_R32G32B32_SFLOAT, offsetof(Vertex, position)};
+            const VkVertexInputBindingDescription vertexBindings[] = {
+                {0, sizeof(Vertex), VK_VERTEX_INPUT_RATE_VERTEX},
+                {1, sizeof(glm::mat4), VK_VERTEX_INPUT_RATE_INSTANCE},
+            };
+            const VkVertexInputAttributeDescription attributes[] = {
+                {0, 0, VK_FORMAT_R32G32B32_SFLOAT, offsetof(Vertex, position)},
+                {4, 1, VK_FORMAT_R32G32B32A32_SFLOAT, 0},
+                {5, 1, VK_FORMAT_R32G32B32A32_SFLOAT, sizeof(glm::vec4)},
+                {6, 1, VK_FORMAT_R32G32B32A32_SFLOAT, sizeof(glm::vec4) * 2},
+                {7, 1, VK_FORMAT_R32G32B32A32_SFLOAT, sizeof(glm::vec4) * 3},
+            };
             VkPipelineVertexInputStateCreateInfo vertexInput{VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO};
-            vertexInput.vertexBindingDescriptionCount = 1;
-            vertexInput.pVertexBindingDescriptions = &vertexBinding;
-            vertexInput.vertexAttributeDescriptionCount = 1;
-            vertexInput.pVertexAttributeDescriptions = &attribute;
+            vertexInput.vertexBindingDescriptionCount = std::size(vertexBindings);
+            vertexInput.pVertexBindingDescriptions = vertexBindings;
+            vertexInput.vertexAttributeDescriptionCount = std::size(attributes);
+            vertexInput.pVertexAttributeDescriptions = attributes;
             VkPipelineInputAssemblyStateCreateInfo assembly{VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO};
             assembly.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
             VkPipelineViewportStateCreateInfo viewport{VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO};
@@ -643,7 +640,9 @@ namespace {
             VkPipelineRasterizationStateCreateInfo rasterizer{VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO};
             rasterizer.polygonMode = VK_POLYGON_MODE_FILL;
             rasterizer.cullMode = VK_CULL_MODE_BACK_BIT;
-            rasterizer.frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE;
+            // Use the same winding as the colour pass.  Rendering the opposite
+            // faces into the shadow map made cube surfaces shadow themselves.
+            rasterizer.frontFace = VK_FRONT_FACE_CLOCKWISE;
             rasterizer.lineWidth = 1.0f;
             rasterizer.depthBiasEnable = VK_TRUE;
             VkPipelineMultisampleStateCreateInfo multisampling{VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO};
@@ -719,7 +718,6 @@ namespace {
                         return;
                     }
 
-                    renderer.occlusionQueryIndex = occlusionQueryCount++;
                     const Mesh* const mesh = renderer.mesh.get();
                     if (const auto existing = firstIndices.find(mesh); existing != firstIndices.end()) {
                         renderer.firstIndex = existing->second;
@@ -748,49 +746,25 @@ namespace {
                 commandPool, vulkanDevice.graphicsQueue());
         }
 
-        void createOcclusionQueryPools() {
-            if (occlusionQueryCount == 0) {
-                return;
+        void createInstanceBuffer() {
+            instanceModels.resize(Scene::CubeCount + 1);
+            updateInstanceBuffer();
+            for (Buffer& buffer : instanceBuffers) {
+                buffer.createHostVisible(vulkanDevice.physical(), device,
+                    sizeof(glm::mat4) * instanceModels.size(), VK_BUFFER_USAGE_VERTEX_BUFFER_BIT);
+                buffer.update(instanceModels.data(), sizeof(glm::mat4) * instanceModels.size());
             }
-
-            VkQueryPoolCreateInfo info{VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO};
-            info.queryType = VK_QUERY_TYPE_OCCLUSION;
-            info.queryCount = occlusionQueryCount;
-            for (VkQueryPool& pool : occlusionQueryPools) {
-                if (vkCreateQueryPool(device, &info, nullptr, &pool) != VK_SUCCESS) {
-                    throw std::runtime_error("Could not create occlusion query pool");
-                }
-            }
-            occlusionVisibility.assign(occlusionQueryCount, VK_TRUE);
         }
 
-        void destroyOcclusionQueryPools() noexcept {
-            for (VkQueryPool& pool : occlusionQueryPools) {
-                if (pool != VK_NULL_HANDLE) {
-                    vkDestroyQueryPool(device, pool, nullptr);
-                    pool = VK_NULL_HANDLE;
-                }
+        void updateInstanceBuffer() {
+            instanceModels[0] = scene.registry.get<Transform>(scene.plane).matrix().native();
+            for (std::size_t index = 0; index < scene.cubes.size(); ++index) {
+                const Transform& transform = scene.registry.get<Transform>(scene.cubes[index]);
+                instanceModels[index + 1] = transform.matrix().native();
             }
-            occlusionVisibility.clear();
-            occlusionResultsReady.fill(false);
-            occlusionQueryCount = 0;
-        }
-
-        void readOcclusionResults(const uint32_t frame) {
-            if (occlusionQueryCount == 0) {
-                return;
-            }
-
-            std::vector<uint64_t> samples(occlusionQueryCount);
-            const VkResult result = vkGetQueryPoolResults(
-                device, occlusionQueryPools[frame], 0, occlusionQueryCount,
-                samples.size() * sizeof(uint64_t), samples.data(), sizeof(uint64_t),
-                VK_QUERY_RESULT_64_BIT);
-            if (result != VK_SUCCESS) {
-                throw std::runtime_error("Could not read occlusion query results");
-            }
-            for (uint32_t index = 0; index < occlusionQueryCount; ++index) {
-                occlusionVisibility[index] = samples[index] != 0 ? VK_TRUE : VK_FALSE;
+            if (instanceBuffers[currentFrame].handle() != VK_NULL_HANDLE) {
+                instanceBuffers[currentFrame].update(instanceModels.data(),
+                                                     sizeof(glm::mat4) * instanceModels.size());
             }
         }
 
@@ -856,36 +830,36 @@ namespace {
         }
 
         static Mat4 lightSpaceMatrix() {
-            const Vec3 lightPosition{16.0f, 24.0f, 16.0f};
-            const Vec3 lightTarget{0.0f, 5.5f, 0.0f};
+            constexpr float extent = Scene::GridHalfExtent;
+            const Vec3 lightTarget{0.0f, extent, 0.0f};
+            const Vec3 lightPosition = lightTarget + Vec3{extent * 2.6f, extent * 3.5f,
+                                                          extent * 2.6f};
             const Vec3 worldUp{0.0f, 1.0f, 0.0f};
             const Mat4 lightView = Mat4::lookAt(lightPosition, lightTarget, worldUp);
             const Mat4 lightProjection = Mat4::scale(
-                Mat4::ortho(-14.0f, 14.0f, -14.0f, 14.0f, 0.1f, 50.0f),
+                Mat4::ortho(-extent * 2.25f, extent * 2.25f,
+                            -extent * 2.25f, extent * 2.25f,
+                            0.1f, extent * 8.0f),
                 Vec3{1.0f, -1.0f, 1.0f});
             return lightProjection * lightView;
         }
 
         void updateUniformBuffer(const uint32_t frame) {
-            const auto animationTime = static_cast<float>(Time::elapsedTime());
-            const Mat4 cameraOrbit = Mat4::rotate(
-                Mat4{}, animationTime * Radians{Degrees{35.0f}}, Vec3{0.0f, 1.0f, 0.0f});
-            constexpr Vec3 sceneCenter{0.0f, 5.5f, 0.0f};
-            constexpr Vec4 orbitPosition{18.0f, 16.0f, 24.0f, 1.0f};
-            const Vec4 rotatedOrbitPosition = cameraOrbit * orbitPosition;
-            const Vec3 cameraPosition{
-                rotatedOrbitPosition.x(), rotatedOrbitPosition.y(), rotatedOrbitPosition.z()};
-            const Vec3 centeredCameraPosition = cameraPosition + sceneCenter;
+            constexpr float extent = Scene::GridHalfExtent;
+            constexpr Vec3 sceneCenter{0.0f, extent, 0.0f};
+            constexpr Vec3 cameraOffset{extent * 2.9f, extent * 2.6f, extent * 3.9f};
+            const Vec3 centeredCameraPosition = sceneCenter + cameraOffset;
             const Vec3 direction = sceneCenter - centeredCameraPosition;
             const float horizontalDistance = Vec2{direction.x(), direction.z()}.length();
             camera.setPosition(centeredCameraPosition);
-            camera.setRotation(Degrees{Degrees(std::atan2(direction.z(), direction.x()))},
-                               Degrees{Degrees(std::atan2(direction.y(), horizontalDistance))});
+            // atan2 returns radians; convert explicitly before storing camera angles.
+            camera.setRotation(Degrees{Radians{std::atan2(direction.z(), direction.x())}},
+                               Degrees{Radians{std::atan2(direction.y(), horizontalDistance)}});
 
             const UniformBufferObject data{
-                camera.viewMatrix(),
-                camera.projectionMatrix(),
-                lightSpaceMatrix()};
+                camera.viewMatrix(), camera.projectionMatrix(), lightSpaceMatrix(),
+                glm::vec4{centeredCameraPosition.native(), 1.0f},
+                glm::vec4{-0.45f, -0.80f, -0.35f, 4.0f}};
             uniformBuffers[frame].update(&data, sizeof(data));
         }
 
@@ -898,10 +872,6 @@ namespace {
             }
 
             const Mat4 lightSpace = lightSpaceMatrix();
-            VkQueryPool occlusionQueries = occlusionQueryPools[currentFrame];
-            if (occlusionQueries != VK_NULL_HANDLE) {
-                vkCmdResetQueryPool(commandBuffer, occlusionQueries, 0, occlusionQueryCount);
-            }
 
             VkRenderPassBeginInfo shadowPassInfo{VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO};
             shadowPassInfo.renderPass = shadowMap.renderPass();
@@ -913,9 +883,9 @@ namespace {
             shadowPassInfo.pClearValues = &shadowClear;
             vkCmdBeginRenderPass(commandBuffer, &shadowPassInfo, VK_SUBPASS_CONTENTS_INLINE);
             vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, shadowPipeline);
-            const VkBuffer shadowVertexBuffers[] = {vertexBuffer.handle()};
-            constexpr VkDeviceSize shadowVertexOffsets[] = {0};
-            vkCmdBindVertexBuffers(commandBuffer, 0, 1, shadowVertexBuffers, shadowVertexOffsets);
+            const VkBuffer shadowVertexBuffers[] = {vertexBuffer.handle(), instanceBuffers[currentFrame].handle()};
+            constexpr VkDeviceSize shadowVertexOffsets[] = {0, 0};
+            vkCmdBindVertexBuffers(commandBuffer, 0, 2, shadowVertexBuffers, shadowVertexOffsets);
             vkCmdBindIndexBuffer(commandBuffer, indexBuffer.handle(), 0, VK_INDEX_TYPE_UINT32);
             VkViewport shadowViewport{0.0f, 0.0f, static_cast<float>(ShadowMap::Resolution), static_cast<float>(ShadowMap::Resolution), 0.0f, 1.0f};
             VkRect2D shadowScissor{{0, 0}, {ShadowMap::Resolution, ShadowMap::Resolution}};
@@ -923,19 +893,18 @@ namespace {
             vkCmdSetScissor(commandBuffer, 0, 1, &shadowScissor);
             vkCmdSetDepthBias(commandBuffer, SHADOW_DEPTH_BIAS_CONSTANT, 0.0f,
                               SHADOW_DEPTH_BIAS_SLOPE);
-            const auto drawShadowObject = [&](const Transform& transform, const MeshRenderer& renderer) {
+            vkCmdPushConstants(commandBuffer, shadowPipelineLayout, VK_SHADER_STAGE_VERTEX_BIT, 0,
+                               sizeof(lightSpace), &lightSpace);
+            const auto drawShadowBatch = [&](const MeshRenderer& renderer, const uint32_t instanceCount,
+                                             const uint32_t firstInstance) {
                 if (!renderer.castShadow || !renderer.hasMesh()) {
                     return;
                 }
-
-                const Mat4 lightMvp = lightSpace * transform.matrix();
-                vkCmdPushConstants(commandBuffer, shadowPipelineLayout, VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(lightMvp), &lightMvp);
-                vkCmdDrawIndexed(commandBuffer, renderer.mesh->indexCount(), 1, renderer.firstIndex, 0, 0);
+                vkCmdDrawIndexed(commandBuffer, renderer.mesh->indexCount(), instanceCount,
+                                 renderer.firstIndex, 0, firstInstance);
             };
-            scene.registry.view<Transform, MeshRenderer>(
-                [&](Entity, const Transform& transform, const MeshRenderer& renderer) {
-                    drawShadowObject(transform, renderer);
-                });
+            drawShadowBatch(scene.registry.get<MeshRenderer>(scene.plane), 1, 0);
+            drawShadowBatch(scene.registry.get<MeshRenderer>(scene.cubes.front()), Scene::CubeCount, 1);
             vkCmdEndRenderPass(commandBuffer);
 
             VkRenderPassBeginInfo renderPassInfo{};
@@ -959,9 +928,9 @@ namespace {
             vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, graphicsPipeline.handle());
             vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, graphicsPipeline.layout(), 0, 1,
                                     &descriptorSets[currentFrame], 0, nullptr);
-            const VkBuffer vertexBuffers[] = {vertexBuffer.handle()};
-            constexpr VkDeviceSize vertexOffsets[] = {0};
-            vkCmdBindVertexBuffers(commandBuffer, 0, 1, vertexBuffers, vertexOffsets);
+            const VkBuffer vertexBuffers[] = {vertexBuffer.handle(), instanceBuffers[currentFrame].handle()};
+            constexpr VkDeviceSize vertexOffsets[] = {0, 0};
+            vkCmdBindVertexBuffers(commandBuffer, 0, 2, vertexBuffers, vertexOffsets);
             vkCmdBindIndexBuffer(commandBuffer, indexBuffer.handle(), 0, VK_INDEX_TYPE_UINT32);
 
             VkViewport viewport{};
@@ -978,50 +947,20 @@ namespace {
             scissor.extent = swapchain.extent();
             vkCmdSetScissor(commandBuffer, 0, 1, &scissor);
 
-            const auto pushModelAndDraw = [&](VkPipelineLayout layout, const Transform& transform,
-                                              const MeshRenderer& renderer) {
-                const Mat4 model = transform.matrix();
-                vkCmdPushConstants(commandBuffer, layout, VK_SHADER_STAGE_VERTEX_BIT, 0,
-                                   sizeof(model), &model);
-                vkCmdDrawIndexed(commandBuffer, renderer.mesh->indexCount(), 1, renderer.firstIndex, 0, 0);
+            const auto drawBatch = [&](const MeshRenderer& renderer, const uint32_t instanceCount,
+                                       const uint32_t firstInstance) {
+                if (!renderer.hasMesh()) return;
+                const PushConstants constants{
+                    glm::vec4{renderer.material.baseColor.native(), renderer.material.metallic},
+                    glm::vec4{renderer.material.roughness, renderer.material.ambientOcclusion, 0.0f, 0.0f}};
+                vkCmdPushConstants(commandBuffer, graphicsPipeline.layout(),
+                                   VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0,
+                                   sizeof(constants), &constants);
+                vkCmdDrawIndexed(commandBuffer, renderer.mesh->indexCount(), instanceCount,
+                                 renderer.firstIndex, 0, firstInstance);
             };
-
-            // Build the nearest-depth buffer, then count only fragments which remain visible.
-            vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, occlusionPrepassPipeline.handle());
-            vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, occlusionPrepassPipeline.layout(),
-                                    0, 1, &descriptorSets[currentFrame], 0, nullptr);
-            scene.registry.view<Transform, MeshRenderer>(
-                [&](Entity, const Transform& transform, const MeshRenderer& renderer) {
-                    if (renderer.hasMesh()) pushModelAndDraw(occlusionPrepassPipeline.layout(), transform, renderer);
-                });
-
-            vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, occlusionQueryPipeline.handle());
-            vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, occlusionQueryPipeline.layout(),
-                                    0, 1, &descriptorSets[currentFrame], 0, nullptr);
-            scene.registry.view<Transform, MeshRenderer>(
-                [&](Entity, const Transform& transform, const MeshRenderer& renderer) {
-                    if (!renderer.hasMesh() || renderer.occlusionQueryIndex >= occlusionQueryCount) return;
-                    vkCmdBeginQuery(commandBuffer, occlusionQueries, renderer.occlusionQueryIndex, 0);
-                    pushModelAndDraw(occlusionQueryPipeline.layout(), transform, renderer);
-                    vkCmdEndQuery(commandBuffer, occlusionQueries, renderer.occlusionQueryIndex);
-                });
-
-            vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, graphicsPipeline.handle());
-            vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, graphicsPipeline.layout(), 0, 1,
-                                    &descriptorSets[currentFrame], 0, nullptr);
-
-            const auto drawObject = [&](const Transform& transform, const MeshRenderer& renderer) {
-                if (!renderer.hasMesh() ||
-                    (renderer.occlusionQueryIndex < occlusionVisibility.size() &&
-                     occlusionVisibility[renderer.occlusionQueryIndex] == VK_FALSE)) {
-                    return;
-                }
-                pushModelAndDraw(graphicsPipeline.layout(), transform, renderer);
-            };
-            scene.registry.view<Transform, MeshRenderer>(
-                [&](Entity, const Transform& transform, const MeshRenderer& renderer) {
-                    drawObject(transform, renderer);
-                });
+            drawBatch(scene.registry.get<MeshRenderer>(scene.plane), 1, 0);
+            drawBatch(scene.registry.get<MeshRenderer>(scene.cubes.front()), Scene::CubeCount, 1);
 
             skybox.draw(commandBuffer, currentFrame);
 
@@ -1118,8 +1057,6 @@ namespace {
 
             if (oldFormat != swapchain.format()) {
                 destroySkyboxResources();
-                occlusionPrepassPipeline.destroy();
-                occlusionQueryPipeline.destroy();
                 graphicsPipeline.destroy();
                 indexBuffer.destroy();
                 vertexBuffer.destroy();
@@ -1137,10 +1074,6 @@ namespace {
 
         void drawFrame() {
             vkWaitForFences(device, 1, &inFlightFences[currentFrame], VK_TRUE, UINT64_MAX);
-            if (occlusionResultsReady[currentFrame]) {
-                readOcclusionResults(currentFrame);
-            }
-
             uint32_t imageIndex;
             VkResult result = vkAcquireNextImageKHR(device, swapchain.handle(), UINT64_MAX,
                 imageAvailableSemaphores[currentFrame], VK_NULL_HANDLE, &imageIndex);
@@ -1156,6 +1089,7 @@ namespace {
 
             vkResetCommandBuffer(commandBuffers[currentFrame], 0);
             updateUniformBuffer(currentFrame);
+            updateInstanceBuffer();
             recordCommandBuffer(commandBuffers[currentFrame], imageIndex);
 
             VkSubmitInfo submitInfo{};
@@ -1177,8 +1111,6 @@ namespace {
                               inFlightFences[currentFrame]) != VK_SUCCESS) {
                 throw std::runtime_error("Could not submit command buffer to queue");
             }
-            occlusionResultsReady[currentFrame] = true;
-
             VkPresentInfoKHR presentInfo{};
             presentInfo.sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR;
             presentInfo.waitSemaphoreCount = 1;
@@ -1259,14 +1191,13 @@ namespace {
                 cleanupSwapChain();
 
                 destroySkyboxResources();
-                occlusionPrepassPipeline.destroy();
-                occlusionQueryPipeline.destroy();
                 graphicsPipeline.destroy();
                 destroyShadowResources();
-                destroyOcclusionQueryPools();
-
                 indexBuffer.destroy();
                 vertexBuffer.destroy();
+                for (Buffer& buffer : instanceBuffers) {
+                    buffer.destroy();
+                }
                 for (Buffer& uniformBuffer : uniformBuffers) {
                     uniformBuffer.destroy();
                 }

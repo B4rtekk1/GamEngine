@@ -1,6 +1,7 @@
 #pragma once
 
 #include "Engine/Renderer/Geometry/Mesh.h"
+#include "Engine/Renderer/Materials/PBRMateial.h"
 
 #include <cstdint>
 #include <limits>
@@ -14,6 +15,7 @@ struct MeshRenderer {
     // single cube mesh avoids allocating the same vertices and indices for
     // every cube in a scene.
     std::shared_ptr<const Mesh> mesh;
+    PBRMaterial material{};
     bool castShadow{true};
 
     // Set when the scene geometry is uploaded to the shared GPU index buffer.

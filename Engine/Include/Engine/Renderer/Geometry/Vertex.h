@@ -12,6 +12,7 @@ struct Vertex {
     Vec3 position;
     Vec3 color;
     Vec2 texCoord;
+    Vec3 normal;
 };
 
 } // namespace Engine

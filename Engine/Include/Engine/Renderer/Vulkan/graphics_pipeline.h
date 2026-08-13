@@ -26,7 +26,7 @@ struct GraphicsPipelineOptions {
     VkBool32 depthWriteEnable = VK_TRUE;
     VkCompareOp depthCompareOp = VK_COMPARE_OP_LESS;
 
-    VkVertexInputBindingDescription vertexBinding{};
+    std::vector<VkVertexInputBindingDescription> vertexBindings;
     std::vector<VkVertexInputAttributeDescription> vertexAttributes;
     std::vector<VkDescriptorSetLayout> descriptorSetLayouts;
 };

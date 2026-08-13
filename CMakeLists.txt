@@ -51,9 +51,9 @@ file(MAKE_DIRECTORY ${SHADER_OUT_DIR})
 
 if(GLSLC)
     add_custom_command(
-            OUTPUT ${SHADER_OUT_DIR}/vert.spv
-            COMMAND ${GLSLC} ${CMAKE_SOURCE_DIR}/Assets/Shaders/triangle.vert -o ${SHADER_OUT_DIR}/vert.spv
-            DEPENDS ${CMAKE_SOURCE_DIR}/Assets/Shaders/triangle.vert
+            OUTPUT ${SHADER_OUT_DIR}/pbr.vert.spv
+            COMMAND ${GLSLC} ${CMAKE_SOURCE_DIR}/Assets/Shaders/Library/pbr.vert -o ${SHADER_OUT_DIR}/pbr.vert.spv
+            DEPENDS ${CMAKE_SOURCE_DIR}/Assets/Shaders/Library/pbr.vert
     )
     add_custom_command(
             OUTPUT ${SHADER_OUT_DIR}/shadow.vert.spv
@@ -61,9 +61,9 @@ if(GLSLC)
             DEPENDS ${CMAKE_SOURCE_DIR}/Assets/Shaders/shadow.vert
     )
     add_custom_command(
-            OUTPUT ${SHADER_OUT_DIR}/frag.spv
-            COMMAND ${GLSLC} ${CMAKE_SOURCE_DIR}/Assets/Shaders/triangle.frag -o ${SHADER_OUT_DIR}/frag.spv
-            DEPENDS ${CMAKE_SOURCE_DIR}/Assets/Shaders/triangle.frag
+            OUTPUT ${SHADER_OUT_DIR}/pbr.frag.spv
+            COMMAND ${GLSLC} ${CMAKE_SOURCE_DIR}/Assets/Shaders/Library/pbr.frag -o ${SHADER_OUT_DIR}/pbr.frag.spv
+            DEPENDS ${CMAKE_SOURCE_DIR}/Assets/Shaders/Library/pbr.frag
     )
     add_custom_command(
             OUTPUT ${SHADER_OUT_DIR}/skybox.vert.spv
@@ -77,14 +77,14 @@ if(GLSLC)
     )
 elseif(GLSLANG_VALIDATOR)
     add_custom_command(
-            OUTPUT ${SHADER_OUT_DIR}/vert.spv
-            COMMAND ${GLSLANG_VALIDATOR} -V ${CMAKE_SOURCE_DIR}/Assets/Shaders/triangle.vert -o ${SHADER_OUT_DIR}/vert.spv
-            DEPENDS ${CMAKE_SOURCE_DIR}/Assets/Shaders/triangle.vert
+            OUTPUT ${SHADER_OUT_DIR}/pbr.vert.spv
+            COMMAND ${GLSLANG_VALIDATOR} -V ${CMAKE_SOURCE_DIR}/Assets/Shaders/Library/pbr.vert -o ${SHADER_OUT_DIR}/pbr.vert.spv
+            DEPENDS ${CMAKE_SOURCE_DIR}/Assets/Shaders/Library/pbr.vert
     )
     add_custom_command(
-            OUTPUT ${SHADER_OUT_DIR}/frag.spv
-            COMMAND ${GLSLANG_VALIDATOR} -V ${CMAKE_SOURCE_DIR}/Assets/Shaders/triangle.frag -o ${SHADER_OUT_DIR}/frag.spv
-            DEPENDS ${CMAKE_SOURCE_DIR}/Assets/Shaders/triangle.frag
+            OUTPUT ${SHADER_OUT_DIR}/pbr.frag.spv
+            COMMAND ${GLSLANG_VALIDATOR} -V ${CMAKE_SOURCE_DIR}/Assets/Shaders/Library/pbr.frag -o ${SHADER_OUT_DIR}/pbr.frag.spv
+            DEPENDS ${CMAKE_SOURCE_DIR}/Assets/Shaders/Library/pbr.frag
     )
     add_custom_command(
             OUTPUT ${SHADER_OUT_DIR}/shadow.vert.spv
@@ -105,5 +105,10 @@ else()
     message(FATAL_ERROR "glslc not found install Vulkan SDK.")
 endif()
 
-add_custom_target(Shaders DEPENDS ${SHADER_OUT_DIR}/vert.spv ${SHADER_OUT_DIR}/frag.spv ${SHADER_OUT_DIR}/shadow.vert.spv ${SHADER_OUT_DIR}/skybox.vert.spv ${SHADER_OUT_DIR}/skybox.frag.spv)
+add_custom_target(Shaders DEPENDS ${SHADER_OUT_DIR}/pbr.vert.spv ${SHADER_OUT_DIR}/pbr.frag.spv ${SHADER_OUT_DIR}/shadow.vert.spv ${SHADER_OUT_DIR}/skybox.vert.spv ${SHADER_OUT_DIR}/skybox.frag.spv)
 add_dependencies(GamEngine Shaders)
+add_custom_command(TARGET GamEngine POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_FILE_DIR:GamEngine>/shaders"
+        COMMAND ${CMAKE_COMMAND} -E copy_directory "${SHADER_OUT_DIR}" "$<TARGET_FILE_DIR:GamEngine>/shaders"
+        COMMENT "Copying SPIR-V shaders beside GamEngine"
+)
