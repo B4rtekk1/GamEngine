@@ -1,6 +1,7 @@
 #pragma once
 
 #include "Engine/Math/Radians.h"
+#include "Engine/Math/Quat.h"
 #include "Engine/Math/Vec3.h"
 
 #include <glm/glm.hpp>
@@ -25,6 +26,11 @@ public:
         return Mat4{glm::rotate(matrix.m_value, angle.value(), axis.native())};
     }
 
+    /** @brief Returns a matrix representing the given quaternion rotation. */
+    [[nodiscard]] static Mat4 rotate(const Quat& rotation) noexcept {
+        return Mat4{glm::mat4_cast(rotation.native())};
+    }
+
     /** @brief Returns matrix scaled by the given per-axis factors. */
     [[nodiscard]] static Mat4 scale(const Mat4& matrix, const Vec3& factors) noexcept {
         return Mat4{glm::scale(matrix.m_value, factors.native())};
@@ -32,6 +38,11 @@ public:
 
     [[nodiscard]] const glm::mat4& native() const noexcept {
         return m_value;
+    }
+
+    /** @brief Returns the composition of this transform followed by rhs. */
+    [[nodiscard]] Mat4 operator*(const Mat4& rhs) const noexcept {
+        return Mat4{m_value * rhs.m_value};
     }
 
 private:

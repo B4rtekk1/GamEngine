@@ -1,10 +1,7 @@
 #pragma once
 
-#include "Engine/Renderer/mesh.h"
-#include "Engine/Math/Vec3.h"
-
-#include <glm/gtc/matrix_transform.hpp>
-#include <glm/gtc/quaternion.hpp>
+#include <Engine/Math/Math.h>
+#include <Engine/Renderer/mesh.h>
 
 namespace Engine {
 
@@ -15,14 +12,14 @@ public:
 
     Mesh mesh;
     Vec3 position{0.0f, 0.0f, 0.0f};
-    glm::quat rotation{1.0f, 0.0f, 0.0f, 0.0f};
+    Quat rotation{1.0f, 0.0f, 0.0f, 0.0f};
     Vec3 scale{1.0f, 1.0f, 1.0f};
     bool castShadow{true};
 
-    [[nodiscard]] glm::mat4 modelMatrix() const noexcept {
-        return glm::translate(glm::mat4{1.0f}, position.native()) *
-               glm::mat4_cast(rotation) *
-               glm::scale(glm::mat4{1.0f}, scale.native());
+    [[nodiscard]] Mat4 modelMatrix() const noexcept {
+        return Mat4::translate(position) *
+               Mat4::rotate(rotation) *
+               Mat4::scale(Mat4{}, scale);
     }
 };
 

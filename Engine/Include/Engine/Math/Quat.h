@@ -2,7 +2,7 @@
 
 /** @file quat.h Quaternion rotation type. */
 
-#include "Engine/Math/vec3.h"
+#include "Engine/Math/Vec3.h"
 
 #include <glm/gtc/quaternion.hpp>
 
@@ -26,7 +26,7 @@ public:
     explicit constexpr Quat(const glm::quat& value) : m_value(value) {}
 
     /** @brief Creates a rotation by angleRadians about axis. */
-    [[nodiscard]] static Quat angleAxis(float angleRadians, const vec3& axis) noexcept {
+    [[nodiscard]] static Quat angleAxis(float angleRadians, const Vec3& axis) noexcept {
         return Quat{glm::angleAxis(angleRadians, glm::normalize(axis.native()))};
     }
 
@@ -48,8 +48,8 @@ public:
     constexpr Quat& operator*=(const Quat& rhs) noexcept { return *this = *this * rhs; }
 
     /** @brief Rotates a vector by this quaternion. */
-    [[nodiscard]] vec3 operator*(const vec3& value) const noexcept {
-        return vec3{m_value * value.native()};
+    [[nodiscard]] Vec3 operator*(const Vec3& value) const noexcept {
+        return Vec3{m_value * value.native()};
     }
 
     /** @brief Returns a normalized copy of this quaternion. */

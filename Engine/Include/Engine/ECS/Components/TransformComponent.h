@@ -2,9 +2,7 @@
 
 /** @file TransformComponent.h Position, rotation and scale ECS component. */
 
-#include "Engine/Math/Vec3.h"
-#include "Engine/Math/Radians.h"
-#include <Engine/Math/Mat4.h>
+#include <Engine/Math/Math.h>
 
 namespace Engine {
 
