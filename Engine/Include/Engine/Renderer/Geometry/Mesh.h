@@ -1,6 +1,6 @@
 #pragma once
 
-#include "vertex.h"
+#include "Engine/Renderer/Geometry/Vertex.h"
 
 #include <cstdint>
 #include <vector>

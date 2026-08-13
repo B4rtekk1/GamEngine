@@ -17,14 +17,14 @@
 #include "Engine/Renderer/Vulkan/buffer.h"
 #include "Engine/Renderer/Vulkan/vulkan_device.h"
 #include "Engine/Renderer/Vulkan/swapchain.h"
-#include "Engine/Renderer/vertex.h"
-#include "Engine/Renderer/mesh.h"
-#include "Engine/Renderer/scene.h"
+#include "Engine/Renderer/Geometry/Vertex.h"
+#include "Engine/Renderer/Geometry/Mesh.h"
+#include "Engine/Scene/Scene.h"
 #include "Engine/Core/Camera.h"
 #include "Engine/Math/Math.h"
 #include "Engine/Core/Time.h"
 #include "Engine/Renderer/Skybox/Skybox.h"
-#include "Input/Input.h"
+#include "Engine/Input/Input.h"
 #include "Platform/SDL/SDLInput.h"
 
 #include <cstdint>
@@ -879,8 +879,8 @@ namespace {
             const Vec3 direction = sceneCenter - centeredCameraPosition;
             const float horizontalDistance = Vec2{direction.x(), direction.z()}.length();
             camera.setPosition(centeredCameraPosition);
-            camera.setRotation(Degrees{glm::degrees(std::atan2(direction.z(), direction.x()))},
-                               Degrees{glm::degrees(std::atan2(direction.y(), horizontalDistance))});
+            camera.setRotation(Degrees{Degrees(std::atan2(direction.z(), direction.x()))},
+                               Degrees{Degrees(std::atan2(direction.y(), horizontalDistance))});
 
             const UniformBufferObject data{
                 camera.viewMatrix(),

@@ -1,6 +1,6 @@
 #include "SDLInput.h"
 
-#include "Input/Input.h"
+#include "Engine/Input/Input.h"
 
 namespace Engine {
     namespace {

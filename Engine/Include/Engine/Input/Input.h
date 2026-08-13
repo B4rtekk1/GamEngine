@@ -1,7 +1,7 @@
 #pragma once
 
-#include "KeyCode.h"
-#include "MouseButton.h"
+#include "Engine/Input/KeyCode.h"
+#include "Engine/Input/MouseButton.h"
 #include "Engine/Math/Vec2.h"
 
 namespace Engine {

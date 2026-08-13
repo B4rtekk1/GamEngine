@@ -1,7 +1,7 @@
 #pragma once
 
 #include <Engine/Math/Math.h>
-#include <Engine/Renderer/mesh.h>
+#include <Engine/Renderer/Geometry/Mesh.h>
 
 namespace Engine {
 

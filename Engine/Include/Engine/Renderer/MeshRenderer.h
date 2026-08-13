@@ -1,6 +1,6 @@
 #pragma once
 
-#include "mesh.h"
+#include "Engine/Renderer/Geometry/Mesh.h"
 
 #include <cstdint>
 #include <limits>

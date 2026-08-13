@@ -1,7 +1,7 @@
 #pragma once
 
-#include "../Math/Vec3.h"
-#include "../Math/Vec2.h"
+#include "Engine/Math/Vec3.h"
+#include "Engine/Math/Vec2.h"
 
 #include <glm/glm.hpp>
 

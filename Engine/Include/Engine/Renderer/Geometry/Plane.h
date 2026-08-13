@@ -1,6 +1,6 @@
 #pragma once
 
-#include "mesh.h"
+#include "Engine/Renderer/Geometry/Mesh.h"
 
 namespace Engine {
 

@@ -1,8 +1,8 @@
 #pragma once
 
-#include "cube.h"
-#include "plane.h"
-#include "MeshRenderer.h"
+#include "Engine/Renderer/Geometry/Cube.h"
+#include "Engine/Renderer/Geometry/Plane.h"
+#include "Engine/Renderer/MeshRenderer.h"
 #include "Engine/Core/Transform.h"
 #include "Engine/ECS/Registry.h"
 
