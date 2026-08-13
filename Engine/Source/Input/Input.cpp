@@ -9,6 +9,14 @@ namespace Engine {
         constexpr std::size_t KEY_COUNT = static_cast<std::size_t>(KeyCode::Count);
         constexpr std::size_t MOUSE_COUNT = static_cast<std::size_t>(MouseButton::Count);
 
+        constexpr bool isValidKey(const KeyCode key) {
+            return static_cast<std::size_t>(key) < KEY_COUNT;
+        }
+
+        constexpr bool isValidMouseButton(const MouseButton button) {
+            return static_cast<std::size_t>(button) < MOUSE_COUNT;
+        }
+
         std::array<bool, KEY_COUNT> currentKeys{};
         std::array<bool, KEY_COUNT> previousKeys{};
 
@@ -30,16 +38,14 @@ namespace Engine {
     }
 
     bool Input::keyDown(KeyCode key) {
-        return currentKeys[
-            static_cast<std::size_t>(key)
-        ];
+        return isValidKey(key) && currentKeys[static_cast<std::size_t>(key)];
     }
 
     bool Input::keyPressed(KeyCode key) {
         const auto index =
             static_cast<std::size_t>(key);
 
-        return currentKeys[index] &&
+        return isValidKey(key) && currentKeys[index] &&
                !previousKeys[index];
     }
 
@@ -47,21 +53,19 @@ namespace Engine {
         const auto index =
             static_cast<std::size_t>(key);
 
-        return !currentKeys[index] &&
+        return isValidKey(key) && !currentKeys[index] &&
                previousKeys[index];
     }
 
     bool Input::mouseDown(MouseButton button) {
-        return currentMouseButtons[
-            static_cast<std::size_t>(button)
-        ];
+        return isValidMouseButton(button) && currentMouseButtons[static_cast<std::size_t>(button)];
     }
 
     bool Input::mousePressed(MouseButton button) {
         const auto index =
             static_cast<std::size_t>(button);
 
-        return currentMouseButtons[index] &&
+        return isValidMouseButton(button) && currentMouseButtons[index] &&
                !previousMouseButtons[index];
     }
 
@@ -69,7 +73,7 @@ namespace Engine {
         const auto index =
             static_cast<std::size_t>(button);
 
-        return !currentMouseButtons[index] &&
+        return isValidMouseButton(button) && !currentMouseButtons[index] &&
                previousMouseButtons[index];
     }
 
@@ -86,7 +90,7 @@ namespace Engine {
     }
 
     void Input::setKey(KeyCode key, bool down) {
-        if (key == KeyCode::Unknown)
+        if (!isValidKey(key) || key == KeyCode::Unknown)
             return;
 
         currentKeys[
@@ -98,6 +102,10 @@ namespace Engine {
         MouseButton button,
         bool down
     ) {
+        if (!isValidMouseButton(button)) {
+            return;
+        }
+
         currentMouseButtons[
             static_cast<std::size_t>(button)
         ] = down;

@@ -26,6 +26,7 @@ void Cubemap::create(VkPhysicalDevice physicalDevice, VkDevice device, VkCommand
     constexpr VkDeviceSize imageSize = 4 * 6;
     VkBuffer staging = VK_NULL_HANDLE;
     VkDeviceMemory stagingMemory = VK_NULL_HANDLE;
+    VkCommandBuffer commandBuffer = VK_NULL_HANDLE;
     try {
         VkBufferCreateInfo bufferInfo{VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
         bufferInfo.size = imageSize;
@@ -39,7 +40,7 @@ void Cubemap::create(VkPhysicalDevice physicalDevice, VkDevice device, VkCommand
         alloc.memoryTypeIndex = findMemoryType(physicalDevice, requirements.memoryTypeBits,
             VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
         if (vkAllocateMemory(device_, &alloc, nullptr, &stagingMemory) != VK_SUCCESS) throw std::runtime_error("Could not allocate cubemap staging memory");
-        vkBindBufferMemory(device_, staging, stagingMemory, 0);
+        if (vkBindBufferMemory(device_, staging, stagingMemory, 0) != VK_SUCCESS) throw std::runtime_error("Could not bind cubemap staging memory");
         void* mapped = nullptr;
         if (vkMapMemory(device_, stagingMemory, 0, imageSize, 0, &mapped) != VK_SUCCESS) throw std::runtime_error("Could not map cubemap staging memory");
         std::memcpy(mapped, faceColours.data(), static_cast<size_t>(imageSize));
@@ -62,10 +63,9 @@ void Cubemap::create(VkPhysicalDevice physicalDevice, VkDevice device, VkCommand
 
         VkCommandBufferAllocateInfo commandAlloc{VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO};
         commandAlloc.commandPool = commandPool; commandAlloc.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY; commandAlloc.commandBufferCount = 1;
-        VkCommandBuffer commandBuffer = VK_NULL_HANDLE;
         if (vkAllocateCommandBuffers(device_, &commandAlloc, &commandBuffer) != VK_SUCCESS) throw std::runtime_error("Could not allocate cubemap upload command buffer");
         VkCommandBufferBeginInfo begin{VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO}; begin.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
-        vkBeginCommandBuffer(commandBuffer, &begin);
+        if (vkBeginCommandBuffer(commandBuffer, &begin) != VK_SUCCESS) throw std::runtime_error("Could not begin cubemap upload command buffer");
         VkImageMemoryBarrier barrier{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER};
         barrier.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED; barrier.newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
         barrier.srcAccessMask = 0; barrier.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
@@ -80,6 +80,7 @@ void Cubemap::create(VkPhysicalDevice physicalDevice, VkDevice device, VkCommand
         VkSubmitInfo submit{VK_STRUCTURE_TYPE_SUBMIT_INFO}; submit.commandBufferCount = 1; submit.pCommandBuffers = &commandBuffer;
         if (vkQueueSubmit(queue, 1, &submit, VK_NULL_HANDLE) != VK_SUCCESS || vkQueueWaitIdle(queue) != VK_SUCCESS) throw std::runtime_error("Could not upload cubemap");
         vkFreeCommandBuffers(device_, commandPool, 1, &commandBuffer);
+        commandBuffer = VK_NULL_HANDLE;
 
         VkImageViewCreateInfo view{VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
         view.image = image_; view.viewType = VK_IMAGE_VIEW_TYPE_CUBE; view.format = imageInfo.format;
@@ -91,10 +92,11 @@ void Cubemap::create(VkPhysicalDevice physicalDevice, VkDevice device, VkCommand
         sampler.addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE; sampler.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
         sampler.maxLod = 1.0f;
         if (vkCreateSampler(device_, &sampler, nullptr, &sampler_) != VK_SUCCESS) throw std::runtime_error("Could not create cubemap sampler");
-        vkFreeMemory(device_, stagingMemory, nullptr); vkDestroyBuffer(device_, staging, nullptr);
+        vkDestroyBuffer(device_, staging, nullptr); vkFreeMemory(device_, stagingMemory, nullptr);
     } catch (...) {
-        if (stagingMemory != VK_NULL_HANDLE) vkFreeMemory(device_, stagingMemory, nullptr);
+        if (commandBuffer != VK_NULL_HANDLE) vkFreeCommandBuffers(device_, commandPool, 1, &commandBuffer);
         if (staging != VK_NULL_HANDLE) vkDestroyBuffer(device_, staging, nullptr);
+        if (stagingMemory != VK_NULL_HANDLE) vkFreeMemory(device_, stagingMemory, nullptr);
         destroy(); throw;
     }
 }

@@ -1,0 +1,346 @@
+#version 460
+
+layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
+
+struct ObjectData
+{
+    mat4 model;
+
+    vec4 localAabbMin;
+    vec4 localAabbMax;
+
+    uint indexCount;
+    uint instanceCount;
+    uint firstIndex;
+    uint vertexOffset;
+    uint firstInstance;
+};
+
+struct DrawIndexedIndirectCommand
+{
+    uint indexCount;
+    uint instanceCount;
+    uint firstIndex;
+    int vertexOffset;
+    uint firstInstance;
+};
+
+layout(std430, set = 0, binding = 0) readonly buffer ObjectBuffer
+{
+    ObjectData objects[];
+};
+
+layout(std430, set = 0, binding = 1) writeonly buffer IndirectBuffer
+{
+    DrawIndexedIndirectCommand commands[];
+};
+
+layout(std430, set = 0, binding = 2) buffer DrawCountBuffer
+{
+    uint drawCount;
+};
+
+layout(set = 0, binding = 3) uniform sampler2D hiZTexture;
+
+layout(std140, set = 0, binding = 4) uniform CullingData
+{
+    mat4 viewProjection;
+
+    uint objectCount;
+    uint maxDrawCount;
+    uint hiZMipCount;
+    uint enableOcclusionCulling;
+
+    float viewportWidth;
+    float viewportHeight;
+    float depthBias;
+    float aabbExpansion;
+
+    uint cameraCut;
+    uint padding0;
+    uint padding1;
+    uint padding2;
+} culling;
+
+const vec3 AABB_CORNERS[8] = vec3[](
+        vec3(0.0, 0.0, 0.0),
+        vec3(1.0, 0.0, 0.0),
+        vec3(0.0, 1.0, 0.0),
+        vec3(1.0, 1.0, 0.0),
+        vec3(0.0, 0.0, 1.0),
+        vec3(1.0, 0.0, 1.0),
+        vec3(0.0, 1.0, 1.0),
+        vec3(1.0, 1.0, 1.0)
+);
+
+void appendDraw(
+        uint objectIndex,
+        ObjectData objectData
+)
+{
+    uint destinationIndex = atomicAdd(drawCount, 1u);
+
+    if (destinationIndex >= culling.maxDrawCount)
+    {
+        return;
+    }
+
+    commands[destinationIndex].indexCount =
+    objectData.indexCount;
+
+    commands[destinationIndex].instanceCount = 1u;
+
+    commands[destinationIndex].firstIndex =
+    objectData.firstIndex;
+
+    commands[destinationIndex].vertexOffset = int(objectData.vertexOffset);
+
+    commands[destinationIndex].firstInstance = objectIndex + 1u;
+}
+
+bool outsideFrustum(
+        vec4 clipPositions[8]
+)
+{
+    bool outsideLeft = true;
+    bool outsideRight = true;
+    bool outsideBottom = true;
+    bool outsideTop = true;
+    bool outsideNear = true;
+    bool outsideFar = true;
+
+    for (uint i = 0u; i < 8u; ++i)
+    {
+        vec4 clip = clipPositions[i];
+
+        outsideLeft =
+        outsideLeft &&
+        clip.x < -clip.w;
+
+        outsideRight =
+        outsideRight &&
+        clip.x > clip.w;
+
+        outsideBottom =
+        outsideBottom &&
+        clip.y < -clip.w;
+
+        outsideTop =
+        outsideTop &&
+        clip.y > clip.w;
+
+        outsideNear =
+        outsideNear &&
+        clip.z < 0.0;
+
+        outsideFar =
+        outsideFar &&
+        clip.z > clip.w;
+    }
+
+    return
+    outsideLeft ||
+    outsideRight ||
+    outsideBottom ||
+    outsideTop ||
+    outsideNear ||
+    outsideFar;
+}
+
+bool occlusionTest(
+        vec4 clipPositions[8]
+)
+{
+    vec2 minimumNdc = vec2(1.0);
+    vec2 maximumNdc = vec2(-1.0);
+
+    float nearestObjectDepth = 1.0;
+
+    for (uint i = 0u; i < 8u; ++i)
+    {
+        vec4 clip = clipPositions[i];
+        if (clip.w <= 0.00001 || clip.z <= 0.0)
+        {
+            return false;
+        }
+
+        vec3 ndc = clip.xyz / clip.w;
+
+        minimumNdc = min(minimumNdc, ndc.xy);
+        maximumNdc = max(maximumNdc, ndc.xy);
+
+        nearestObjectDepth = min(nearestObjectDepth, ndc.z);
+    }
+
+    minimumNdc = clamp(
+            minimumNdc,
+            vec2(-1.0),
+            vec2(1.0)
+    );
+
+    maximumNdc = clamp(
+            maximumNdc,
+            vec2(-1.0),
+            vec2(1.0)
+    );
+
+    vec2 minimumUv =
+    minimumNdc * 0.5 + 0.5;
+
+    vec2 maximumUv =
+    maximumNdc * 0.5 + 0.5;
+
+    minimumUv.y = 1.0 - minimumUv.y;
+    maximumUv.y = 1.0 - maximumUv.y;
+
+    float temporaryY = minimumUv.y;
+    minimumUv.y = min(temporaryY, maximumUv.y);
+    maximumUv.y = max(temporaryY, maximumUv.y);
+
+    minimumUv = clamp(
+            minimumUv,
+            vec2(0.0),
+            vec2(1.0)
+    );
+
+    maximumUv = clamp(
+            maximumUv,
+            vec2(0.0),
+            vec2(1.0)
+    );
+
+    vec2 rectanglePixels =
+    (maximumUv - minimumUv) *
+    vec2(
+            culling.viewportWidth,
+            culling.viewportHeight
+    );
+
+    float maximumExtent = max(
+            rectanglePixels.x,
+            rectanglePixels.y
+    );
+
+    float selectedMipFloat = ceil(
+            log2(max(maximumExtent, 1.0))
+    );
+
+    uint selectedMip = uint(clamp(
+            selectedMipFloat,
+            0.0,
+            float(culling.hiZMipCount - 1u)
+    ));
+
+    ivec2 mipSize = textureSize(
+            hiZTexture,
+            int(selectedMip)
+    );
+
+    ivec2 minimumTexel = ivec2(
+            floor(minimumUv * vec2(mipSize))
+    );
+
+    ivec2 maximumTexel = ivec2(
+            floor(maximumUv * vec2(mipSize))
+    );
+
+    minimumTexel = clamp(
+            minimumTexel,
+            ivec2(0),
+            mipSize - 1
+    );
+
+    maximumTexel = clamp(
+            maximumTexel,
+            ivec2(0),
+            mipSize - 1
+    );
+
+    float regionDepth = 0.0;
+
+    for (
+    int y = minimumTexel.y;
+        y <= maximumTexel.y;
+    ++y
+    )
+    {
+        for (
+        int x = minimumTexel.x;
+            x <= maximumTexel.x;
+        ++x
+        )
+        {
+            float depth = texelFetch(
+                    hiZTexture,
+                    ivec2(x, y),
+                    int(selectedMip)
+            ).r;
+
+            regionDepth = max(regionDepth, depth);
+        }
+    }
+
+    return nearestObjectDepth > regionDepth + culling.depthBias;
+}
+
+void main()
+{
+    uint objectIndex = gl_GlobalInvocationID.x;
+
+    if (objectIndex >= culling.objectCount)
+    {
+        return;
+    }
+
+    ObjectData objectData = objects[objectIndex];
+
+    vec3 localMinimum =
+    objectData.localAabbMin.xyz -
+    vec3(culling.aabbExpansion);
+
+    vec3 localMaximum =
+    objectData.localAabbMax.xyz +
+    vec3(culling.aabbExpansion);
+
+    vec4 clipPositions[8];
+
+    for (uint i = 0u; i < 8u; ++i)
+    {
+        vec3 localPosition = mix(
+                localMinimum,
+                localMaximum,
+                AABB_CORNERS[i]
+        );
+
+        vec4 worldPosition =
+        objectData.model *
+        vec4(localPosition, 1.0);
+
+        clipPositions[i] =
+        culling.viewProjection *
+        worldPosition;
+    }
+
+    if (outsideFrustum(clipPositions))
+    {
+        return;
+    }
+
+    bool occluded = false;
+
+    if (
+        culling.enableOcclusionCulling != 0u &&
+        culling.cameraCut == 0u
+    )
+    {
+        occluded = occlusionTest(clipPositions);
+    }
+
+    if (!occluded)
+    {
+        appendDraw(
+                objectIndex,
+                objectData
+        );
+    }
+}

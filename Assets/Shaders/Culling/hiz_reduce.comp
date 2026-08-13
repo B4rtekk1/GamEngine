@@ -1,0 +1,67 @@
+#version 460
+
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
+
+layout(set = 0, binding = 0) uniform sampler2D sourceMip;
+
+layout(
+set = 0,
+binding = 1,
+r32f
+) uniform writeonly image2D destinationMip;
+
+void main()
+{
+    ivec2 destinationCoordinate =
+    ivec2(gl_GlobalInvocationID.xy);
+
+    ivec2 destinationSize =
+    imageSize(destinationMip);
+
+    if (any(greaterThanEqual(
+            destinationCoordinate,
+            destinationSize
+    )))
+    {
+        return;
+    }
+
+    ivec2 sourceSize = textureSize(sourceMip, 0);
+    ivec2 sourceBase = destinationCoordinate * 2;
+
+    ivec2 p0 = min(
+            sourceBase + ivec2(0, 0),
+            sourceSize - 1
+    );
+
+    ivec2 p1 = min(
+            sourceBase + ivec2(1, 0),
+            sourceSize - 1
+    );
+
+    ivec2 p2 = min(
+            sourceBase + ivec2(0, 1),
+            sourceSize - 1
+    );
+
+    ivec2 p3 = min(
+            sourceBase + ivec2(1, 1),
+            sourceSize - 1
+    );
+
+    float d0 = texelFetch(sourceMip, p0, 0).r;
+    float d1 = texelFetch(sourceMip, p1, 0).r;
+    float d2 = texelFetch(sourceMip, p2, 0).r;
+    float d3 = texelFetch(sourceMip, p3, 0).r;
+
+    float reducedDepth = max(
+            max(d0, d1),
+            max(d2, d3)
+    );
+
+    imageStore(
+            destinationMip,
+            destinationCoordinate,
+            vec4(reducedDepth, 0.0, 0.0, 0.0)
+    );
+}

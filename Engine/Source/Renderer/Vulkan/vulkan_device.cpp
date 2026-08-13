@@ -119,7 +119,18 @@ bool VulkanDevice::supportsRequiredExtensions(
 bool VulkanDevice::isSuitable(VkPhysicalDevice candidate) const {
     VkPhysicalDeviceProperties properties{};
     vkGetPhysicalDeviceProperties(candidate, &properties);
-    if (properties.apiVersion < VK_API_VERSION_1_2) {
+    if (properties.apiVersion < VK_API_VERSION_1_4) {
+        return false;
+    }
+    VkPhysicalDeviceVulkan13Features features13{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES};
+    VkPhysicalDeviceVulkan12Features features12{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES};
+    VkPhysicalDeviceFeatures2 features2{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2};
+    features2.pNext = &features12;
+    features12.pNext = &features13;
+    vkGetPhysicalDeviceFeatures2(candidate, &features2);
+    if (features13.synchronization2 != VK_TRUE ||
+        features12.drawIndirectCount != VK_TRUE ||
+        features2.features.multiDrawIndirect != VK_TRUE) {
         return false;
     }
     if (!findQueueFamilies(candidate).complete()) {
@@ -224,14 +235,21 @@ void VulkanDevice::createLogicalDevice() {
         queueCreateInfos.push_back(queueInfo);
     }
 
-    VkPhysicalDeviceFeatures enabledFeatures{};
+    VkPhysicalDeviceVulkan13Features features13{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES};
+    features13.synchronization2 = VK_TRUE;
+    VkPhysicalDeviceVulkan12Features features12{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES};
+    features12.drawIndirectCount = VK_TRUE;
+    features12.pNext = &features13;
+    VkPhysicalDeviceFeatures2 features2{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2};
+    features2.features.multiDrawIndirect = VK_TRUE;
+    features2.pNext = &features12;
 
     VkDeviceCreateInfo createInfo{};
     createInfo.sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO;
     createInfo.queueCreateInfoCount =
         static_cast<uint32_t>(queueCreateInfos.size());
     createInfo.pQueueCreateInfos = queueCreateInfos.data();
-    createInfo.pEnabledFeatures = &enabledFeatures;
+    createInfo.pNext = &features2;
     createInfo.enabledExtensionCount =
         static_cast<uint32_t>(kRequiredDeviceExtensions.size());
     createInfo.ppEnabledExtensionNames = kRequiredDeviceExtensions.data();

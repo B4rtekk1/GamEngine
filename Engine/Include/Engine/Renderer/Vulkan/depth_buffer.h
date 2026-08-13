@@ -32,6 +32,8 @@ public:
         return format_;
     }
 
+    [[nodiscard]] VkSampler sampler() const noexcept { return sampler_; }
+
 private:
     VkPhysicalDevice physicalDevice_ = VK_NULL_HANDLE;
     VkDevice device_ = VK_NULL_HANDLE;
@@ -39,6 +41,7 @@ private:
     VkImage image_ = VK_NULL_HANDLE;
     VkDeviceMemory memory_ = VK_NULL_HANDLE;
     VkImageView imageView_ = VK_NULL_HANDLE;
+    VkSampler sampler_ = VK_NULL_HANDLE;
     VkFormat format_ = VK_FORMAT_UNDEFINED;
 
     [[nodiscard]] uint32_t findMemoryType(

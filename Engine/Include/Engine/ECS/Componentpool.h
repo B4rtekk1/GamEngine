@@ -69,11 +69,16 @@ public:
             return get(entity);
         }
 
-        const auto index = m_components.size();
         ensureSparseCapacity(entity);
-        m_sparse[static_cast<std::size_t>(entity)] = index;
-        m_entities.push_back(entity);
+        const auto index = m_components.size();
         m_components.emplace_back(std::forward<Args>(args)...);
+        try {
+            m_entities.push_back(entity);
+        } catch (...) {
+            m_components.pop_back();
+            throw;
+        }
+        m_sparse[static_cast<std::size_t>(entity)] = index;
         return m_components.back();
     }
 
