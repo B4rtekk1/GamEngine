@@ -16,6 +16,7 @@ add_library(Engine
         Engine/Source/Input/Input.cpp
         Engine/Source/Renderer/shader_loader.cpp
         Engine/Source/Renderer/Textures/Cubemap.cpp
+        Engine/Source/Renderer/Textures/Texture2D.cpp
         Engine/Source/Renderer/Skybox/Skybox.cpp
         Engine/Source/Renderer/Skybox/SkyboxPipeline.cpp
         Engine/Source/Renderer/Lighting/LightingBuffer.cpp
