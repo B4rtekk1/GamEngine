@@ -37,6 +37,7 @@
 #include <iostream>
 #include <stdexcept>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 namespace Engine {
@@ -100,6 +101,8 @@ namespace {
         MsaaResources msaa;
 
         GraphicsPipeline graphicsPipeline;
+        GraphicsPipeline occlusionPrepassPipeline;
+        GraphicsPipeline occlusionQueryPipeline;
         Skybox skybox;
         DepthBuffer depthBuffer;
         ShadowMap shadowMap;
@@ -110,10 +113,14 @@ namespace {
         VkPipelineLayout shadowPipelineLayout = VK_NULL_HANDLE;
         VkPipeline shadowPipeline = VK_NULL_HANDLE;
         Scene scene;
-        Camera camera{45.0f, static_cast<float>(WIDTH) / static_cast<float>(HEIGHT), 0.1f, 10.0f};
+        Camera camera{45.0f, static_cast<float>(WIDTH) / static_cast<float>(HEIGHT), 0.1f, 75.0f};
         Buffer vertexBuffer;
         Buffer indexBuffer;
         std::array<Buffer, MAX_FRAMES_IN_FLIGHT> uniformBuffers;
+        std::array<VkQueryPool, MAX_FRAMES_IN_FLIGHT> occlusionQueryPools{};
+        std::array<bool, MAX_FRAMES_IN_FLIGHT> occlusionResultsReady{};
+        std::vector<VkBool32> occlusionVisibility;
+        uint32_t occlusionQueryCount{0};
 
         VkCommandPool commandPool{};
         std::vector<VkCommandBuffer> commandBuffers;
@@ -158,6 +165,7 @@ namespace {
             createDepthResources();
             createCommandPool();
             createMeshBuffers();
+            createOcclusionQueryPools();
             createUniformBuffers();
             createShadowResources();
             createGraphicsPipeline();
@@ -239,7 +247,8 @@ namespace {
             appInfo.applicationVersion = VK_MAKE_VERSION(1, 0, 0);
             appInfo.pEngineName = "No Engine";
             appInfo.engineVersion = VK_MAKE_VERSION(1, 0, 0);
-            appInfo.apiVersion = VK_API_VERSION_1_0;
+            // vkCmdResetQueryPool, used by the occlusion-culling pass, is core in 1.2.
+            appInfo.apiVersion = VK_API_VERSION_1_2;
 
             VkInstanceCreateInfo createInfo{};
             createInfo.sType = VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO;
@@ -532,6 +541,20 @@ namespace {
                 {.location = 2, .binding = 0, .format = VK_FORMAT_R32G32_SFLOAT, .offset = offsetof(Vertex, texCoord)},
             };
             graphicsPipeline.create(device, options);
+
+            // The depth prepass establishes the nearest surface for each pixel.
+            // The next pipeline only counts samples and never changes that depth.
+            options.colorWriteMask = 0;
+            occlusionPrepassPipeline.create(device, options);
+            options.depthWriteEnable = VK_FALSE;
+            options.depthCompareOp = VK_COMPARE_OP_LESS_OR_EQUAL;
+            occlusionQueryPipeline.create(device, options);
+
+            // Colour is emitted after the prepass, so equal depth values must pass.
+            options.colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT |
+                                     VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT;
+            graphicsPipeline.destroy();
+            graphicsPipeline.create(device, options);
         }
 
         void createShadowResources() {
@@ -689,17 +712,28 @@ namespace {
 
         void createMeshBuffers() {
             Mesh sceneMesh;
+            // Each MeshRenderer retains its own draw range, but identical
+            // meshes contribute their geometry to the GPU buffers only once.
+            std::unordered_map<const Mesh*, uint32_t> firstIndices;
             scene.registry.view<Transform, MeshRenderer>(
                 [&](Entity, Transform&, MeshRenderer& renderer) {
-                    if (renderer.mesh.empty()) {
+                    if (!renderer.hasMesh()) {
+                        return;
+                    }
+
+                    renderer.occlusionQueryIndex = occlusionQueryCount++;
+                    const Mesh* const mesh = renderer.mesh.get();
+                    if (const auto existing = firstIndices.find(mesh); existing != firstIndices.end()) {
+                        renderer.firstIndex = existing->second;
                         return;
                     }
 
                     const uint32_t vertexOffset = sceneMesh.vertexCount();
                     renderer.firstIndex = sceneMesh.indexCount();
+                    firstIndices.emplace(mesh, renderer.firstIndex);
                     sceneMesh.vertices.insert(sceneMesh.vertices.end(),
-                                              renderer.mesh.vertices.begin(), renderer.mesh.vertices.end());
-                    for (const uint32_t index : renderer.mesh.indices) {
+                                              mesh->vertices.begin(), mesh->vertices.end());
+                    for (const uint32_t index : mesh->indices) {
                         sceneMesh.indices.push_back(vertexOffset + index);
                     }
                 });
@@ -714,6 +748,52 @@ namespace {
             indexBuffer.createDeviceLocal(vulkanDevice.physical(), device, sceneMesh.indices.data(),
                 sizeof(uint32_t) * sceneMesh.indices.size(), VK_BUFFER_USAGE_INDEX_BUFFER_BIT,
                 commandPool, vulkanDevice.graphicsQueue());
+        }
+
+        void createOcclusionQueryPools() {
+            if (occlusionQueryCount == 0) {
+                return;
+            }
+
+            VkQueryPoolCreateInfo info{VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO};
+            info.queryType = VK_QUERY_TYPE_OCCLUSION;
+            info.queryCount = occlusionQueryCount;
+            for (VkQueryPool& pool : occlusionQueryPools) {
+                if (vkCreateQueryPool(device, &info, nullptr, &pool) != VK_SUCCESS) {
+                    throw std::runtime_error("Could not create occlusion query pool");
+                }
+            }
+            occlusionVisibility.assign(occlusionQueryCount, VK_TRUE);
+        }
+
+        void destroyOcclusionQueryPools() noexcept {
+            for (VkQueryPool& pool : occlusionQueryPools) {
+                if (pool != VK_NULL_HANDLE) {
+                    vkDestroyQueryPool(device, pool, nullptr);
+                    pool = VK_NULL_HANDLE;
+                }
+            }
+            occlusionVisibility.clear();
+            occlusionResultsReady.fill(false);
+            occlusionQueryCount = 0;
+        }
+
+        void readOcclusionResults(const uint32_t frame) {
+            if (occlusionQueryCount == 0) {
+                return;
+            }
+
+            std::vector<uint64_t> samples(occlusionQueryCount);
+            const VkResult result = vkGetQueryPoolResults(
+                device, occlusionQueryPools[frame], 0, occlusionQueryCount,
+                samples.size() * sizeof(uint64_t), samples.data(), sizeof(uint64_t),
+                VK_QUERY_RESULT_64_BIT);
+            if (result != VK_SUCCESS) {
+                throw std::runtime_error("Could not read occlusion query results");
+            }
+            for (uint32_t index = 0; index < occlusionQueryCount; ++index) {
+                occlusionVisibility[index] = samples[index] != 0 ? VK_TRUE : VK_FALSE;
+            }
         }
 
         void createUniformBuffers() {
@@ -778,11 +858,11 @@ namespace {
         }
 
         [[nodiscard]] glm::mat4 lightSpaceMatrix() const {
-            const Vec3 lightPosition{3.0f, 5.0f, 2.0f};
-            const Vec3 lightTarget{};
+            const Vec3 lightPosition{16.0f, 24.0f, 16.0f};
+            const Vec3 lightTarget{0.0f, 5.5f, 0.0f};
             const Vec3 worldUp{0.0f, 1.0f, 0.0f};
             const glm::mat4 lightView = glm::lookAt(lightPosition.native(), lightTarget.native(), worldUp.native());
-            glm::mat4 lightProjection = glm::ortho(-5.0f, 5.0f, -5.0f, 5.0f, 0.1f, 12.0f);
+            glm::mat4 lightProjection = glm::ortho(-14.0f, 14.0f, -14.0f, 14.0f, 0.1f, 50.0f);
             lightProjection[1][1] *= -1.0f;
             return lightProjection * lightView;
         }
@@ -791,9 +871,11 @@ namespace {
             const float animationTime = static_cast<float>(Time::elapsedTime());
             const glm::mat4 cameraOrbit = glm::rotate(
                 glm::mat4{1.0f}, animationTime * glm::radians(35.0f), Vec3{0.0f, 1.0f, 0.0f}.native());
-            const Vec4 orbitPosition{2.5f, 2.0f, 3.5f, 1.0f};
-            const Vec3 cameraPosition{Vec4{cameraOrbit * orbitPosition.native()}.native()};
-            const Vec3 direction = -cameraPosition;
+            const Vec3 sceneCenter{0.0f, 5.5f, 0.0f};
+            const Vec4 orbitPosition{18.0f, 16.0f, 24.0f, 1.0f};
+            const Vec3 cameraPosition =
+                Vec3{glm::vec3{cameraOrbit * orbitPosition.native()}} + sceneCenter;
+            const Vec3 direction = sceneCenter - cameraPosition;
             const float horizontalDistance = Vec2{direction.x(), direction.z()}.length();
             camera.setPosition(cameraPosition);
             camera.setRotation(glm::degrees(std::atan2(direction.z(), direction.x())),
@@ -812,6 +894,10 @@ namespace {
             }
 
             const glm::mat4 lightSpace = lightSpaceMatrix();
+            const VkQueryPool occlusionQueries = occlusionQueryPools[currentFrame];
+            if (occlusionQueries != VK_NULL_HANDLE) {
+                vkCmdResetQueryPool(commandBuffer, occlusionQueries, 0, occlusionQueryCount);
+            }
 
             VkRenderPassBeginInfo shadowPassInfo{VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO};
             shadowPassInfo.renderPass = shadowMap.renderPass();
@@ -836,13 +922,13 @@ namespace {
             vkCmdSetDepthBias(commandBuffer, SHADOW_DEPTH_BIAS_CONSTANT, 0.0f,
                               SHADOW_DEPTH_BIAS_SLOPE);
             const auto drawShadowObject = [&](const Transform& transform, const MeshRenderer& renderer) {
-                if (!renderer.castShadow || renderer.mesh.empty()) {
+                if (!renderer.castShadow || !renderer.hasMesh()) {
                     return;
                 }
 
-                const glm::mat4 lightMvp = lightSpace * transform.matrix();
+                const glm::mat4 lightMvp = lightSpace * transform.matrix().native();
                 vkCmdPushConstants(commandBuffer, shadowPipelineLayout, VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(lightMvp), &lightMvp);
-                vkCmdDrawIndexed(commandBuffer, renderer.mesh.indexCount(), 1, renderer.firstIndex, 0, 0);
+                vkCmdDrawIndexed(commandBuffer, renderer.mesh->indexCount(), 1, renderer.firstIndex, 0, 0);
             };
             scene.registry.view<Transform, MeshRenderer>(
                 [&](Entity, Transform& transform, MeshRenderer& renderer) {
@@ -890,15 +976,45 @@ namespace {
             scissor.extent = swapchain.extent();
             vkCmdSetScissor(commandBuffer, 0, 1, &scissor);
 
+            const auto pushModelAndDraw = [&](VkPipelineLayout layout, const Transform& transform,
+                                              const MeshRenderer& renderer) {
+                const glm::mat4 model = transform.matrix().native();
+                vkCmdPushConstants(commandBuffer, layout, VK_SHADER_STAGE_VERTEX_BIT, 0,
+                                   sizeof(model), &model);
+                vkCmdDrawIndexed(commandBuffer, renderer.mesh->indexCount(), 1, renderer.firstIndex, 0, 0);
+            };
+
+            // Build the nearest-depth buffer, then count only fragments which remain visible.
+            vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, occlusionPrepassPipeline.handle());
+            vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, occlusionPrepassPipeline.layout(),
+                                    0, 1, &descriptorSets[currentFrame], 0, nullptr);
+            scene.registry.view<Transform, MeshRenderer>(
+                [&](Entity, Transform& transform, MeshRenderer& renderer) {
+                    if (renderer.hasMesh()) pushModelAndDraw(occlusionPrepassPipeline.layout(), transform, renderer);
+                });
+
+            vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, occlusionQueryPipeline.handle());
+            vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, occlusionQueryPipeline.layout(),
+                                    0, 1, &descriptorSets[currentFrame], 0, nullptr);
+            scene.registry.view<Transform, MeshRenderer>(
+                [&](Entity, Transform& transform, MeshRenderer& renderer) {
+                    if (!renderer.hasMesh() || renderer.occlusionQueryIndex >= occlusionQueryCount) return;
+                    vkCmdBeginQuery(commandBuffer, occlusionQueries, renderer.occlusionQueryIndex, 0);
+                    pushModelAndDraw(occlusionQueryPipeline.layout(), transform, renderer);
+                    vkCmdEndQuery(commandBuffer, occlusionQueries, renderer.occlusionQueryIndex);
+                });
+
+            vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, graphicsPipeline.handle());
+            vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, graphicsPipeline.layout(), 0, 1,
+                                    &descriptorSets[currentFrame], 0, nullptr);
+
             const auto drawObject = [&](const Transform& transform, const MeshRenderer& renderer) {
-                if (renderer.mesh.empty()) {
+                if (!renderer.hasMesh() ||
+                    (renderer.occlusionQueryIndex < occlusionVisibility.size() &&
+                     occlusionVisibility[renderer.occlusionQueryIndex] == VK_FALSE)) {
                     return;
                 }
-
-                const glm::mat4 model = transform.matrix();
-                vkCmdPushConstants(commandBuffer, graphicsPipeline.layout(), VK_SHADER_STAGE_VERTEX_BIT, 0,
-                                   sizeof(model), &model);
-                vkCmdDrawIndexed(commandBuffer, renderer.mesh.indexCount(), 1, renderer.firstIndex, 0, 0);
+                pushModelAndDraw(graphicsPipeline.layout(), transform, renderer);
             };
             scene.registry.view<Transform, MeshRenderer>(
                 [&](Entity, Transform& transform, MeshRenderer& renderer) {
@@ -1000,6 +1116,8 @@ namespace {
 
             if (oldFormat != swapchain.format()) {
                 destroySkyboxResources();
+                occlusionPrepassPipeline.destroy();
+                occlusionQueryPipeline.destroy();
                 graphicsPipeline.destroy();
                 indexBuffer.destroy();
                 vertexBuffer.destroy();
@@ -1017,6 +1135,9 @@ namespace {
 
         void drawFrame() {
             vkWaitForFences(device, 1, &inFlightFences[currentFrame], VK_TRUE, UINT64_MAX);
+            if (occlusionResultsReady[currentFrame]) {
+                readOcclusionResults(currentFrame);
+            }
 
             uint32_t imageIndex;
             VkResult result = vkAcquireNextImageKHR(device, swapchain.handle(), UINT64_MAX,
@@ -1054,6 +1175,7 @@ namespace {
                               inFlightFences[currentFrame]) != VK_SUCCESS) {
                 throw std::runtime_error("Could not submit command buffer to queue");
             }
+            occlusionResultsReady[currentFrame] = true;
 
             VkPresentInfoKHR presentInfo{};
             presentInfo.sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR;
@@ -1135,11 +1257,17 @@ namespace {
                 cleanupSwapChain();
 
                 destroySkyboxResources();
+                occlusionPrepassPipeline.destroy();
+                occlusionQueryPipeline.destroy();
                 graphicsPipeline.destroy();
                 destroyShadowResources();
+                destroyOcclusionQueryPools();
 
                 indexBuffer.destroy();
                 vertexBuffer.destroy();
+                for (Buffer& uniformBuffer : uniformBuffers) {
+                    uniformBuffer.destroy();
+                }
 
                 for (VkSemaphore semaphore : imageAvailableSemaphores) {
                     if (semaphore != VK_NULL_HANDLE) {

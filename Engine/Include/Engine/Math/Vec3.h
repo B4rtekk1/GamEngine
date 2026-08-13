@@ -18,7 +18,7 @@ public:
     constexpr Vec3() = default;
 
     /** @brief Constructs a vector from its three components. */
-    constexpr Vec3(float x, float y, float z) : m_value(x, y, z) {}
+    constexpr Vec3(const float x, const float y, const float z) : m_value(x, y, z) {}
 
     /** @brief Constructs a vector from its native GLM representation. */
     explicit constexpr Vec3(const glm::vec3& value) : m_value(value) {}

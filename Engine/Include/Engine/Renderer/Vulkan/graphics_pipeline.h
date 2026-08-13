@@ -21,6 +21,10 @@ struct GraphicsPipelineOptions {
 
     VkCullModeFlags cullMode = VK_CULL_MODE_BACK_BIT;
     VkFrontFace frontFace = VK_FRONT_FACE_CLOCKWISE;
+    VkColorComponentFlags colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT |
+                                           VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT;
+    VkBool32 depthWriteEnable = VK_TRUE;
+    VkCompareOp depthCompareOp = VK_COMPARE_OP_LESS;
 
     VkVertexInputBindingDescription vertexBinding{};
     std::vector<VkVertexInputAttributeDescription> vertexAttributes;

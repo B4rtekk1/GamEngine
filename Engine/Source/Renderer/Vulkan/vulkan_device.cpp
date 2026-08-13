@@ -117,6 +117,11 @@ bool VulkanDevice::supportsRequiredExtensions(
 }
 
 bool VulkanDevice::isSuitable(VkPhysicalDevice candidate) const {
+    VkPhysicalDeviceProperties properties{};
+    vkGetPhysicalDeviceProperties(candidate, &properties);
+    if (properties.apiVersion < VK_API_VERSION_1_2) {
+        return false;
+    }
     if (!findQueueFamilies(candidate).complete()) {
         return false;
     }
