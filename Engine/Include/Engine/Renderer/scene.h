@@ -2,18 +2,35 @@
 
 #include "cube.h"
 #include "plane.h"
+#include "MeshRenderer.h"
+#include "Engine/Core/Transform.h"
+#include "Engine/ECS/Registry.h"
 
 namespace Engine {
 
-// Default scene: a cube (the scene's GameObject) standing on a plane.
+// Default ECS scene: a cube standing on a plane.
 class Scene final {
 public:
-    Plane plane;
-    Cube gameObject;
+    Registry registry;
+    Entity plane{NullEntity};
+    Entity cube{NullEntity};
 
     Scene() {
-        plane.scale = {8.0f, 1.0f, 8.0f};
-        gameObject.position.setY(0.5f);
+        plane = registry.create();
+        registry.add<Transform>(plane, Transform{
+            .scale = {8.0f, 1.0f, 8.0f},
+        });
+        registry.add<MeshRenderer>(plane, MeshRenderer{
+            .mesh = Plane::createMesh(),
+        });
+
+        cube = registry.create();
+        registry.add<Transform>(cube, Transform{
+            .position = {0.0f, 0.5f, 0.0f},
+        });
+        registry.add<MeshRenderer>(cube, MeshRenderer{
+            .mesh = Cube::createMesh(),
+        });
     }
 };
 

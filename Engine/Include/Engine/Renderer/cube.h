@@ -1,13 +1,13 @@
 #pragma once
 
-#include "../ECS/GameObject.h"
+#include "mesh.h"
 
 namespace Engine {
 
-class Cube final : public GameObject {
+class Cube final {
 public:
-    Cube() {
-        mesh = {
+    [[nodiscard]] static Mesh createMesh() {
+        return {
             .vertices = {
                 {{-0.5f, -0.5f, -0.5f}, {0.95f, 0.25f, 0.20f}, {0.0f, 0.0f}}, {{ 0.5f, -0.5f, -0.5f}, {0.95f, 0.25f, 0.20f}, {1.0f, 0.0f}}, {{ 0.5f,  0.5f, -0.5f}, {0.95f, 0.25f, 0.20f}, {1.0f, 1.0f}}, {{-0.5f,  0.5f, -0.5f}, {0.95f, 0.25f, 0.20f}, {0.0f, 1.0f}},
                 {{-0.5f, -0.5f,  0.5f}, {0.20f, 0.75f, 0.95f}, {0.0f, 0.0f}}, {{ 0.5f, -0.5f,  0.5f}, {0.20f, 0.75f, 0.95f}, {1.0f, 0.0f}}, {{ 0.5f,  0.5f,  0.5f}, {0.20f, 0.75f, 0.95f}, {1.0f, 1.0f}}, {{-0.5f,  0.5f,  0.5f}, {0.20f, 0.75f, 0.95f}, {0.0f, 1.0f}},

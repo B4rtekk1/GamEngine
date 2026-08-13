@@ -1,13 +1,13 @@
 #pragma once
 
-#include "../ECS/GameObject.h"
+#include "mesh.h"
 
 namespace Engine {
 
-class Plane final : public GameObject {
+class Plane final {
 public:
-    Plane() {
-        mesh = {
+    [[nodiscard]] static Mesh createMesh() {
+        return {
             .vertices = {
                 {{-0.5f, 0.0f, -0.5f}, {0.70f, 0.70f, 0.70f}, {0.0f, 0.0f}},
                 {{ 0.5f, 0.0f, -0.5f}, {0.70f, 0.70f, 0.70f}, {1.0f, 0.0f}},

@@ -5,7 +5,7 @@
 namespace Engine {
     namespace {
 
-    KeyCode toKeyCode(SDL_Scancode key) {
+    KeyCode toKeyCode(const SDL_Scancode key) {
         switch (key) {
             case SDL_SCANCODE_A: return KeyCode::A;
             case SDL_SCANCODE_B: return KeyCode::B;

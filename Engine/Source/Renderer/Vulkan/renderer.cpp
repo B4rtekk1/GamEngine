@@ -688,13 +688,24 @@ namespace {
         }
 
         void createMeshBuffers() {
-            Mesh sceneMesh = scene.plane.mesh;
-            const uint32_t gameObjectVertexOffset = sceneMesh.vertexCount();
-            sceneMesh.vertices.insert(sceneMesh.vertices.end(),
-                                      scene.gameObject.mesh.vertices.begin(),
-                                      scene.gameObject.mesh.vertices.end());
-            for (const uint32_t index : scene.gameObject.mesh.indices) {
-                sceneMesh.indices.push_back(gameObjectVertexOffset + index);
+            Mesh sceneMesh;
+            scene.registry.view<Transform, MeshRenderer>(
+                [&](Entity, Transform&, MeshRenderer& renderer) {
+                    if (renderer.mesh.empty()) {
+                        return;
+                    }
+
+                    const uint32_t vertexOffset = sceneMesh.vertexCount();
+                    renderer.firstIndex = sceneMesh.indexCount();
+                    sceneMesh.vertices.insert(sceneMesh.vertices.end(),
+                                              renderer.mesh.vertices.begin(), renderer.mesh.vertices.end());
+                    for (const uint32_t index : renderer.mesh.indices) {
+                        sceneMesh.indices.push_back(vertexOffset + index);
+                    }
+                });
+
+            if (sceneMesh.empty()) {
+                throw std::runtime_error("Scene contains no renderable geometry");
             }
 
             vertexBuffer.createDeviceLocal(vulkanDevice.physical(), device, sceneMesh.vertices.data(),
@@ -824,13 +835,19 @@ namespace {
             // from the object ("peter panning").
             vkCmdSetDepthBias(commandBuffer, SHADOW_DEPTH_BIAS_CONSTANT, 0.0f,
                               SHADOW_DEPTH_BIAS_SLOPE);
-            const auto drawShadowObject = [&](const GameObject& object, uint32_t indexCount, uint32_t firstIndex) {
-                const glm::mat4 lightMvp = lightSpace * object.modelMatrix();
+            const auto drawShadowObject = [&](const Transform& transform, const MeshRenderer& renderer) {
+                if (!renderer.castShadow || renderer.mesh.empty()) {
+                    return;
+                }
+
+                const glm::mat4 lightMvp = lightSpace * transform.matrix();
                 vkCmdPushConstants(commandBuffer, shadowPipelineLayout, VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(lightMvp), &lightMvp);
-                vkCmdDrawIndexed(commandBuffer, indexCount, 1, firstIndex, 0, 0);
+                vkCmdDrawIndexed(commandBuffer, renderer.mesh.indexCount(), 1, renderer.firstIndex, 0, 0);
             };
-            drawShadowObject(scene.plane, scene.plane.mesh.indexCount(), 0);
-            drawShadowObject(scene.gameObject, scene.gameObject.mesh.indexCount(), scene.plane.mesh.indexCount());
+            scene.registry.view<Transform, MeshRenderer>(
+                [&](Entity, Transform& transform, MeshRenderer& renderer) {
+                    drawShadowObject(transform, renderer);
+                });
             vkCmdEndRenderPass(commandBuffer);
 
             VkRenderPassBeginInfo renderPassInfo{};
@@ -873,16 +890,20 @@ namespace {
             scissor.extent = swapchain.extent();
             vkCmdSetScissor(commandBuffer, 0, 1, &scissor);
 
-            const auto drawObject = [&](const GameObject& object, const uint32_t indexCount,
-                                        const uint32_t firstIndex) {
-                const glm::mat4 model = object.modelMatrix();
+            const auto drawObject = [&](const Transform& transform, const MeshRenderer& renderer) {
+                if (renderer.mesh.empty()) {
+                    return;
+                }
+
+                const glm::mat4 model = transform.matrix();
                 vkCmdPushConstants(commandBuffer, graphicsPipeline.layout(), VK_SHADER_STAGE_VERTEX_BIT, 0,
                                    sizeof(model), &model);
-                vkCmdDrawIndexed(commandBuffer, indexCount, 1, firstIndex, 0, 0);
+                vkCmdDrawIndexed(commandBuffer, renderer.mesh.indexCount(), 1, renderer.firstIndex, 0, 0);
             };
-            drawObject(scene.plane, scene.plane.mesh.indexCount(), 0);
-            drawObject(scene.gameObject, scene.gameObject.mesh.indexCount(),
-                       scene.plane.mesh.indexCount());
+            scene.registry.view<Transform, MeshRenderer>(
+                [&](Entity, Transform& transform, MeshRenderer& renderer) {
+                    drawObject(transform, renderer);
+                });
 
             skybox.draw(commandBuffer, currentFrame);
 
