@@ -21,6 +21,8 @@
 #include "Engine/Renderer/Geometry/Mesh.h"
 #include "Engine/Scene/Scene.h"
 #include "Engine/Core/Camera.h"
+#include "Engine/Math/AABB.h"
+#include "Engine/Math/Frustum.h"
 #include "Engine/Math/Math.h"
 #include "Engine/Core/Time.h"
 #include "Engine/Renderer/Skybox/Skybox.h"
@@ -117,8 +119,11 @@ namespace {
         Buffer vertexBuffer;
         Buffer indexBuffer;
         std::array<Buffer, MAX_FRAMES_IN_FLIGHT> instanceBuffers;
+        std::array<Buffer, MAX_FRAMES_IN_FLIGHT> shadowInstanceBuffers;
         std::array<Buffer, MAX_FRAMES_IN_FLIGHT> uniformBuffers;
         std::vector<glm::mat4> instanceModels;
+        std::vector<glm::mat4> shadowInstanceModels;
+        uint32_t visibleCubeCount = 0;
 
         VkCommandPool commandPool{};
         std::vector<VkCommandBuffer> commandBuffers;
@@ -748,23 +753,39 @@ namespace {
 
         void createInstanceBuffer() {
             instanceModels.resize(Scene::CubeCount + 1);
+            shadowInstanceModels.resize(Scene::CubeCount + 1);
             updateInstanceBuffer();
             for (Buffer& buffer : instanceBuffers) {
                 buffer.createHostVisible(vulkanDevice.physical(), device,
                     sizeof(glm::mat4) * instanceModels.size(), VK_BUFFER_USAGE_VERTEX_BUFFER_BIT);
                 buffer.update(instanceModels.data(), sizeof(glm::mat4) * instanceModels.size());
             }
+            for (Buffer& buffer : shadowInstanceBuffers) {
+                buffer.createHostVisible(vulkanDevice.physical(), device,
+                    sizeof(glm::mat4) * shadowInstanceModels.size(), VK_BUFFER_USAGE_VERTEX_BUFFER_BIT);
+                buffer.update(shadowInstanceModels.data(), sizeof(glm::mat4) * shadowInstanceModels.size());
+            }
         }
 
         void updateInstanceBuffer() {
-            instanceModels[0] = scene.registry.get<Transform>(scene.plane).matrix().native();
+            const glm::mat4 planeModel = scene.registry.get<Transform>(scene.plane).matrix().native();
+            instanceModels[0] = planeModel;
+            shadowInstanceModels[0] = planeModel;
+            const Frustum frustum{camera.projectionMatrix().native() * camera.viewMatrix().native()};
+            visibleCubeCount = 0;
             for (std::size_t index = 0; index < scene.cubes.size(); ++index) {
                 const Transform& transform = scene.registry.get<Transform>(scene.cubes[index]);
-                instanceModels[index + 1] = transform.matrix().native();
+                const glm::mat4 model = transform.matrix().native();
+                shadowInstanceModels[index + 1] = model;
+                if (frustum.intersects(AABB::unitCube().transformed(model))) {
+                    instanceModels[++visibleCubeCount] = model;
+                }
             }
             if (instanceBuffers[currentFrame].handle() != VK_NULL_HANDLE) {
                 instanceBuffers[currentFrame].update(instanceModels.data(),
-                                                     sizeof(glm::mat4) * instanceModels.size());
+                                                     sizeof(glm::mat4) * (visibleCubeCount + 1));
+                shadowInstanceBuffers[currentFrame].update(shadowInstanceModels.data(),
+                                                           sizeof(glm::mat4) * shadowInstanceModels.size());
             }
         }
 
@@ -883,7 +904,7 @@ namespace {
             shadowPassInfo.pClearValues = &shadowClear;
             vkCmdBeginRenderPass(commandBuffer, &shadowPassInfo, VK_SUBPASS_CONTENTS_INLINE);
             vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, shadowPipeline);
-            const VkBuffer shadowVertexBuffers[] = {vertexBuffer.handle(), instanceBuffers[currentFrame].handle()};
+            const VkBuffer shadowVertexBuffers[] = {vertexBuffer.handle(), shadowInstanceBuffers[currentFrame].handle()};
             constexpr VkDeviceSize shadowVertexOffsets[] = {0, 0};
             vkCmdBindVertexBuffers(commandBuffer, 0, 2, shadowVertexBuffers, shadowVertexOffsets);
             vkCmdBindIndexBuffer(commandBuffer, indexBuffer.handle(), 0, VK_INDEX_TYPE_UINT32);
@@ -960,7 +981,7 @@ namespace {
                                  renderer.firstIndex, 0, firstInstance);
             };
             drawBatch(scene.registry.get<MeshRenderer>(scene.plane), 1, 0);
-            drawBatch(scene.registry.get<MeshRenderer>(scene.cubes.front()), Scene::CubeCount, 1);
+            drawBatch(scene.registry.get<MeshRenderer>(scene.cubes.front()), visibleCubeCount, 1);
 
             skybox.draw(commandBuffer, currentFrame);
 
@@ -1141,7 +1162,8 @@ namespace {
                 const double fps = fpsFrameCount / fpsElapsedTime;
 
                 char title[128];
-                snprintf(title, sizeof(title), "Vulkan + SDL3 - Cube | FPS: %.1f", fps);
+                snprintf(title, sizeof(title), "Vulkan + SDL3 - Cube | FPS: %.1f | Visible: %u/%zu",
+                         fps, visibleCubeCount, Scene::CubeCount);
                 SDL_SetWindowTitle(window, title);
 
                 fpsFrameCount = 0;
@@ -1196,6 +1218,9 @@ namespace {
                 indexBuffer.destroy();
                 vertexBuffer.destroy();
                 for (Buffer& buffer : instanceBuffers) {
+                    buffer.destroy();
+                }
+                for (Buffer& buffer : shadowInstanceBuffers) {
                     buffer.destroy();
                 }
                 for (Buffer& uniformBuffer : uniformBuffers) {
