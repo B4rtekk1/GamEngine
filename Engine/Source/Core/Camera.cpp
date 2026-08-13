@@ -46,17 +46,17 @@ void Camera::move(const Vec3& offset) {
     m_position += offset;
 }
 
-glm::mat4 Camera::viewMatrix() const {
-    return glm::lookAt(m_position.native(), (m_position + forward()).native(), up().native());
+Mat4 Camera::viewMatrix() const {
+    return Mat4::lookAt(m_position, m_position + forward(), up());
 }
 
-glm::mat4 Camera::projectionMatrix() const {
+Mat4 Camera::projectionMatrix() const {
     glm::mat4 projection = glm::perspective(
         glm::radians(m_fov), m_aspectRatio, m_nearPlane, m_farPlane);
 
     // Vulkan's viewport has its Y axis pointing down.
     projection[1][1] *= -1.0f;
-    return projection;
+    return Mat4{projection};
 }
 
 Vec3 Camera::forward() const {

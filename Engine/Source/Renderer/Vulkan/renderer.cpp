@@ -8,7 +8,6 @@
 #define GLM_FORCE_RADIANS
 #define GLM_FORCE_DEPTH_ZERO_TO_ONE
 #include <glm/glm.hpp>
-#include <glm/gtc/matrix_transform.hpp>
 
 #include "Engine/Renderer/Vulkan/msaa.h"
 #include "Engine/Renderer/Vulkan/depth_buffer.h"
@@ -22,7 +21,7 @@
 #include "Engine/Renderer/mesh.h"
 #include "Engine/Renderer/scene.h"
 #include "Engine/Core/Camera.h"
-#include "Engine/Math/Vec4.h"
+#include "Engine/Math/Math.h"
 #include "Engine/Core/Time.h"
 #include "Engine/Renderer/Skybox/Skybox.h"
 #include "Input/Input.h"
@@ -32,7 +31,6 @@
 #include <array>
 #include <cmath>
 #include <cstdio>
-#include <cstdlib>
 #include <cstring>
 #include <iostream>
 #include <stdexcept>
@@ -235,9 +233,9 @@ namespace {
 
         void createInstance() {
             const bool useValidation =
-                enableValidationLayers && checkValidationLayerSupport();
+                checkValidationLayerSupport();
 
-            if (enableValidationLayers && !useValidation) {
+            if (!useValidation) {
                 std::cerr << "Validation layers are incorrect\n";
             }
 
@@ -289,7 +287,7 @@ namespace {
         }
 
         void setupDebugMessenger() {
-            if (!(enableValidationLayers && checkValidationLayerSupport())) return;
+            if (!(checkValidationLayerSupport())) return;
             VkDebugUtilsMessengerCreateInfoEXT createInfo;
             populateDebugMessengerCreateInfo(createInfo);
             if (CreateDebugUtilsMessengerEXT(instance, &createInfo, nullptr, &debugMessenger) != VK_SUCCESS) {
@@ -632,7 +630,7 @@ namespace {
                 throw std::runtime_error("Could not create shadow pipeline layout");
             }
             VkVertexInputBindingDescription vertexBinding{0, sizeof(Vertex), VK_VERTEX_INPUT_RATE_VERTEX};
-            const VkVertexInputAttributeDescription attribute{0, 0, VK_FORMAT_R32G32B32_SFLOAT, offsetof(Vertex, position)};
+            constexpr VkVertexInputAttributeDescription attribute{0, 0, VK_FORMAT_R32G32B32_SFLOAT, offsetof(Vertex, position)};
             VkPipelineVertexInputStateCreateInfo vertexInput{VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO};
             vertexInput.vertexBindingDescriptionCount = 1;
             vertexInput.pVertexBindingDescriptions = &vertexBinding;
@@ -857,31 +855,35 @@ namespace {
             }
         }
 
-        [[nodiscard]] glm::mat4 lightSpaceMatrix() const {
+        static Mat4 lightSpaceMatrix() {
             const Vec3 lightPosition{16.0f, 24.0f, 16.0f};
             const Vec3 lightTarget{0.0f, 5.5f, 0.0f};
             const Vec3 worldUp{0.0f, 1.0f, 0.0f};
-            const glm::mat4 lightView = glm::lookAt(lightPosition.native(), lightTarget.native(), worldUp.native());
-            glm::mat4 lightProjection = glm::ortho(-14.0f, 14.0f, -14.0f, 14.0f, 0.1f, 50.0f);
-            lightProjection[1][1] *= -1.0f;
+            const Mat4 lightView = Mat4::lookAt(lightPosition, lightTarget, worldUp);
+            const Mat4 lightProjection = Mat4::scale(
+                Mat4::ortho(-14.0f, 14.0f, -14.0f, 14.0f, 0.1f, 50.0f),
+                Vec3{1.0f, -1.0f, 1.0f});
             return lightProjection * lightView;
         }
 
         void updateUniformBuffer(const uint32_t frame) {
-            const float animationTime = static_cast<float>(Time::elapsedTime());
-            const glm::mat4 cameraOrbit = glm::rotate(
-                glm::mat4{1.0f}, animationTime * glm::radians(35.0f), Vec3{0.0f, 1.0f, 0.0f}.native());
-            const Vec3 sceneCenter{0.0f, 5.5f, 0.0f};
-            const Vec4 orbitPosition{18.0f, 16.0f, 24.0f, 1.0f};
+            const auto animationTime = static_cast<float>(Time::elapsedTime());
+            const Mat4 cameraOrbit = Mat4::rotate(
+                Mat4{}, animationTime * Radians::fromDegrees(35.0f), Vec3{0.0f, 1.0f, 0.0f});
+            constexpr Vec3 sceneCenter{0.0f, 5.5f, 0.0f};
+            constexpr Vec4 orbitPosition{18.0f, 16.0f, 24.0f, 1.0f};
             const Vec3 cameraPosition =
-                Vec3{glm::vec3{cameraOrbit * orbitPosition.native()}} + sceneCenter;
+                Vec3{glm::vec3{cameraOrbit.native() * orbitPosition.native()}} + sceneCenter;
             const Vec3 direction = sceneCenter - cameraPosition;
             const float horizontalDistance = Vec2{direction.x(), direction.z()}.length();
             camera.setPosition(cameraPosition);
             camera.setRotation(glm::degrees(std::atan2(direction.z(), direction.x())),
                                glm::degrees(std::atan2(direction.y(), horizontalDistance)));
 
-            const UniformBufferObject data{camera.viewMatrix(), camera.projectionMatrix(), lightSpaceMatrix()};
+            const UniformBufferObject data{
+                camera.viewMatrix().native(),
+                camera.projectionMatrix().native(),
+                lightSpaceMatrix().native()};
             uniformBuffers[frame].update(&data, sizeof(data));
         }
 
@@ -893,8 +895,8 @@ namespace {
                 throw std::runtime_error("Could not begin command buffer");
             }
 
-            const glm::mat4 lightSpace = lightSpaceMatrix();
-            const VkQueryPool occlusionQueries = occlusionQueryPools[currentFrame];
+            const glm::mat4 lightSpace = lightSpaceMatrix().native();
+            VkQueryPool occlusionQueries = occlusionQueryPools[currentFrame];
             if (occlusionQueries != VK_NULL_HANDLE) {
                 vkCmdResetQueryPool(commandBuffer, occlusionQueries, 0, occlusionQueryCount);
             }
@@ -910,15 +912,13 @@ namespace {
             vkCmdBeginRenderPass(commandBuffer, &shadowPassInfo, VK_SUBPASS_CONTENTS_INLINE);
             vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, shadowPipeline);
             const VkBuffer shadowVertexBuffers[] = {vertexBuffer.handle()};
-            const VkDeviceSize shadowVertexOffsets[] = {0};
+            constexpr VkDeviceSize shadowVertexOffsets[] = {0};
             vkCmdBindVertexBuffers(commandBuffer, 0, 1, shadowVertexBuffers, shadowVertexOffsets);
             vkCmdBindIndexBuffer(commandBuffer, indexBuffer.handle(), 0, VK_INDEX_TYPE_UINT32);
             VkViewport shadowViewport{0.0f, 0.0f, static_cast<float>(ShadowMap::Resolution), static_cast<float>(ShadowMap::Resolution), 0.0f, 1.0f};
             VkRect2D shadowScissor{{0, 0}, {ShadowMap::Resolution, ShadowMap::Resolution}};
             vkCmdSetViewport(commandBuffer, 0, 1, &shadowViewport);
             vkCmdSetScissor(commandBuffer, 0, 1, &shadowScissor);
-            // Keep the depth offset minimal: a larger bias visibly detaches the shadow
-            // from the object ("peter panning").
             vkCmdSetDepthBias(commandBuffer, SHADOW_DEPTH_BIAS_CONSTANT, 0.0f,
                               SHADOW_DEPTH_BIAS_SLOPE);
             const auto drawShadowObject = [&](const Transform& transform, const MeshRenderer& renderer) {
@@ -931,7 +931,7 @@ namespace {
                 vkCmdDrawIndexed(commandBuffer, renderer.mesh->indexCount(), 1, renderer.firstIndex, 0, 0);
             };
             scene.registry.view<Transform, MeshRenderer>(
-                [&](Entity, Transform& transform, MeshRenderer& renderer) {
+                [&](Entity, const Transform& transform, const MeshRenderer& renderer) {
                     drawShadowObject(transform, renderer);
                 });
             vkCmdEndRenderPass(commandBuffer);
@@ -958,7 +958,7 @@ namespace {
             vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, graphicsPipeline.layout(), 0, 1,
                                     &descriptorSets[currentFrame], 0, nullptr);
             const VkBuffer vertexBuffers[] = {vertexBuffer.handle()};
-            const VkDeviceSize vertexOffsets[] = {0};
+            constexpr VkDeviceSize vertexOffsets[] = {0};
             vkCmdBindVertexBuffers(commandBuffer, 0, 1, vertexBuffers, vertexOffsets);
             vkCmdBindIndexBuffer(commandBuffer, indexBuffer.handle(), 0, VK_INDEX_TYPE_UINT32);
 
@@ -989,7 +989,7 @@ namespace {
             vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, occlusionPrepassPipeline.layout(),
                                     0, 1, &descriptorSets[currentFrame], 0, nullptr);
             scene.registry.view<Transform, MeshRenderer>(
-                [&](Entity, Transform& transform, MeshRenderer& renderer) {
+                [&](Entity, const Transform& transform, const MeshRenderer& renderer) {
                     if (renderer.hasMesh()) pushModelAndDraw(occlusionPrepassPipeline.layout(), transform, renderer);
                 });
 
@@ -997,7 +997,7 @@ namespace {
             vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, occlusionQueryPipeline.layout(),
                                     0, 1, &descriptorSets[currentFrame], 0, nullptr);
             scene.registry.view<Transform, MeshRenderer>(
-                [&](Entity, Transform& transform, MeshRenderer& renderer) {
+                [&](Entity, const Transform& transform, const MeshRenderer& renderer) {
                     if (!renderer.hasMesh() || renderer.occlusionQueryIndex >= occlusionQueryCount) return;
                     vkCmdBeginQuery(commandBuffer, occlusionQueries, renderer.occlusionQueryIndex, 0);
                     pushModelAndDraw(occlusionQueryPipeline.layout(), transform, renderer);
@@ -1017,7 +1017,7 @@ namespace {
                 pushModelAndDraw(graphicsPipeline.layout(), transform, renderer);
             };
             scene.registry.view<Transform, MeshRenderer>(
-                [&](Entity, Transform& transform, MeshRenderer& renderer) {
+                [&](Entity, const Transform& transform, const MeshRenderer& renderer) {
                     drawObject(transform, renderer);
                 });
 

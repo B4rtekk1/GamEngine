@@ -21,6 +21,28 @@ public:
         return Mat4{glm::translate(glm::mat4{1.0f}, position.native())};
     }
 
+    /**
+     * @brief Returns a right-handed view matrix looking from @p eye towards @p center.
+     * @param eye Camera position in world space.
+     * @param center Point the camera looks at.
+     * @param up World-space up direction.
+     */
+    [[nodiscard]] static Mat4 lookAt(const Vec3& eye, const Vec3& center, const Vec3& up) noexcept {
+        return Mat4{glm::lookAt(eye.native(), center.native(), up.native())};
+    }
+
+    /**
+     * @brief Returns a right-handed orthographic projection matrix.
+     *
+     * The depth range follows the GLM configuration in effect when this header
+     * is included (use @c GLM_FORCE_DEPTH_ZERO_TO_ONE for Vulkan).
+     */
+    [[nodiscard]] static Mat4 ortho(const float left, const float right,
+                                    const float bottom, const float top,
+                                    const float nearPlane, const float farPlane) noexcept {
+        return Mat4{glm::ortho(left, right, bottom, top, nearPlane, farPlane)};
+    }
+
     /** @brief Returns matrix rotated by angle radians around axis. */
     [[nodiscard]] static Mat4 rotate(const Mat4& matrix, const Radians angle, const Vec3& axis) noexcept {
         return Mat4{glm::rotate(matrix.m_value, angle.value(), axis.native())};
