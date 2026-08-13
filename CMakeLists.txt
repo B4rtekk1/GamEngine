@@ -19,6 +19,9 @@ add_library(Engine
         Engine/Source/Renderer/Skybox/Skybox.cpp
         Engine/Source/Renderer/Skybox/SkyboxPipeline.cpp
         Engine/Source/Renderer/Lighting/LightingBuffer.cpp
+        Engine/Source/Renderer/Passes/ForwardPass.cpp
+        Engine/Source/Renderer/Passes/ShadowPass.cpp
+        Engine/Source/Renderer/Passes/SkyPass.cpp
         Engine/Source/Renderer/Culling/GPUCullingPass.cpp
         Engine/Source/Renderer/Culling/IndexedIndirectDrawCount.cpp
         Engine/Source/Renderer/Culling/HiZBuffer.cpp
