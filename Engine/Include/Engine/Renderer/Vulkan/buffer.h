@@ -40,6 +40,7 @@ private:
     VkBuffer buffer_ = VK_NULL_HANDLE;
     VkDeviceMemory memory_ = VK_NULL_HANDLE;
     VkDeviceSize size_ = 0;
+    void* mapped_ = nullptr;
 
     void create(
         VkPhysicalDevice physicalDevice,

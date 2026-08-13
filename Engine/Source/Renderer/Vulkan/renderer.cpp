@@ -128,10 +128,15 @@ namespace {
         std::array<Buffer, MAX_FRAMES_IN_FLIGHT> uniformBuffers;
         Buffer cullingObjectBuffer;
         std::array<Buffer, MAX_FRAMES_IN_FLIGHT> cullingUniformBuffers;
+        std::array<Buffer, MAX_FRAMES_IN_FLIGHT> shadowCullingUniformBuffers;
         std::array<Buffer, MAX_FRAMES_IN_FLIGHT> indirectBuffers;
+        std::array<Buffer, MAX_FRAMES_IN_FLIGHT> shadowIndirectBuffers;
         std::array<Buffer, MAX_FRAMES_IN_FLIGHT> drawCountBuffers;
+        std::array<Buffer, MAX_FRAMES_IN_FLIGHT> shadowDrawCountBuffers;
         std::array<Culling::GPUCullingPass, MAX_FRAMES_IN_FLIGHT> gpuCullingPasses;
+        std::array<Culling::GPUCullingPass, MAX_FRAMES_IN_FLIGHT> shadowCullingPasses;
         std::array<Culling::IndexedIndirectDrawCount, MAX_FRAMES_IN_FLIGHT> indirectDraws;
+        std::array<Culling::IndexedIndirectDrawCount, MAX_FRAMES_IN_FLIGHT> shadowIndirectDraws;
         Culling::HiZBuffer hiZBuffer;
         Culling::HiZPass hiZPass;
         VkDescriptorPool cullingDescriptorPool = VK_NULL_HANDLE;
@@ -832,6 +837,20 @@ namespace {
             cullingUniformBuffers[frame].update(&data, sizeof(data));
         }
 
+        void updateShadowCullingUniformBuffer(const uint32_t frame) {
+            Culling::CullingUniformData data{};
+            const glm::mat4 lightViewProjection = lightSpaceMatrix().native();
+            std::memcpy(data.viewProjection.data, &lightViewProjection, sizeof(lightViewProjection));
+            data.objectCount = static_cast<uint32_t>(gpuObjects.size());
+            data.maxDrawCount = data.objectCount;
+            // Shadow culling uses only the light frustum. Camera Hi-Z cannot safely
+            // reject casters which are invisible to the camera but visible to the light.
+            data.enableOcclusionCulling = 0;
+            data.aabbExpansion = 0.01f;
+            data.cameraCut = 1;
+            shadowCullingUniformBuffers[frame].update(&data, sizeof(data));
+        }
+
         void createUniformBuffers() {
             for (Buffer& buffer : uniformBuffers) {
                 buffer.createHostVisible(vulkanDevice.physical(), device, sizeof(UniformBufferObject),
@@ -919,8 +938,14 @@ namespace {
             for (uint32_t frame = 0; frame < MAX_FRAMES_IN_FLIGHT; ++frame) {
                 cullingUniformBuffers[frame].createHostVisible(vulkanDevice.physical(), device,
                     sizeof(Culling::CullingUniformData), VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT);
+                shadowCullingUniformBuffers[frame].createHostVisible(vulkanDevice.physical(), device,
+                    sizeof(Culling::CullingUniformData), VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT);
                 std::vector<VkDrawIndexedIndirectCommand> emptyCommands(objectCount);
                 indirectBuffers[frame].createDeviceLocal(vulkanDevice.physical(), device, emptyCommands.data(),
+                    sizeof(VkDrawIndexedIndirectCommand) * objectCount,
+                    VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+                    commandPool, vulkanDevice.graphicsQueue());
+                shadowIndirectBuffers[frame].createDeviceLocal(vulkanDevice.physical(), device, emptyCommands.data(),
                     sizeof(VkDrawIndexedIndirectCommand) * objectCount,
                     VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
                     commandPool, vulkanDevice.graphicsQueue());
@@ -929,17 +954,22 @@ namespace {
                     VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT |
                     VK_BUFFER_USAGE_TRANSFER_DST_BIT,
                     commandPool, vulkanDevice.graphicsQueue());
+                shadowDrawCountBuffers[frame].createDeviceLocal(vulkanDevice.physical(), device, &zero, sizeof(zero),
+                    VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT |
+                    VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+                    commandPool, vulkanDevice.graphicsQueue());
             }
 
-            const uint32_t imageDescriptors = hiZBuffer.mipCount() + MAX_FRAMES_IN_FLIGHT;
+            const uint32_t cullingSetCount = MAX_FRAMES_IN_FLIGHT * 2;
+            const uint32_t imageDescriptors = hiZBuffer.mipCount() + cullingSetCount;
             const VkDescriptorPoolSize poolSizes[] = {
                 {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, imageDescriptors},
                 {VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, hiZBuffer.mipCount()},
-                {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, MAX_FRAMES_IN_FLIGHT * 3},
-                {VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, MAX_FRAMES_IN_FLIGHT},
+                {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, cullingSetCount * 3},
+                {VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, cullingSetCount},
             };
             VkDescriptorPoolCreateInfo poolInfo{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
-            poolInfo.maxSets = hiZBuffer.mipCount() + MAX_FRAMES_IN_FLIGHT;
+            poolInfo.maxSets = hiZBuffer.mipCount() + cullingSetCount;
             poolInfo.poolSizeCount = std::size(poolSizes); poolInfo.pPoolSizes = poolSizes;
             if (vkCreateDescriptorPool(device, &poolInfo, nullptr, &cullingDescriptorPool) != VK_SUCCESS) {
                 throw std::runtime_error("Could not create Hi-Z descriptor pool");
@@ -948,33 +978,52 @@ namespace {
                 hiZCopyDescriptorSetLayout, hiZReducePipeline, hiZReducePipelineLayout,
                 hiZReduceDescriptorSetLayout, hiZBuffer, depthBuffer.imageView(), depthBuffer.sampler());
 
-            std::array<VkDescriptorSetLayout, MAX_FRAMES_IN_FLIGHT> cullLayouts{};
+            std::array<VkDescriptorSetLayout, MAX_FRAMES_IN_FLIGHT * 2> cullLayouts{};
             cullLayouts.fill(cullingDescriptorSetLayout);
-            std::array<VkDescriptorSet, MAX_FRAMES_IN_FLIGHT> cullSets{};
+            std::array<VkDescriptorSet, MAX_FRAMES_IN_FLIGHT * 2> cullSets{};
             VkDescriptorSetAllocateInfo allocateInfo{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};
-            allocateInfo.descriptorPool = cullingDescriptorPool; allocateInfo.descriptorSetCount = MAX_FRAMES_IN_FLIGHT;
+            allocateInfo.descriptorPool = cullingDescriptorPool;
+            allocateInfo.descriptorSetCount = static_cast<uint32_t>(cullSets.size());
             allocateInfo.pSetLayouts = cullLayouts.data();
             if (vkAllocateDescriptorSets(device, &allocateInfo, cullSets.data()) != VK_SUCCESS) {
                 throw std::runtime_error("Could not allocate culling descriptor sets");
             }
             for (uint32_t frame = 0; frame < MAX_FRAMES_IN_FLIGHT; ++frame) {
-                const VkDescriptorBufferInfo objectInfo{cullingObjectBuffer.handle(), 0, VK_WHOLE_SIZE};
-                const VkDescriptorBufferInfo indirectInfo{indirectBuffers[frame].handle(), 0, VK_WHOLE_SIZE};
-                const VkDescriptorBufferInfo countInfo{drawCountBuffers[frame].handle(), 0, sizeof(uint32_t)};
-                const VkDescriptorBufferInfo uniformInfo{cullingUniformBuffers[frame].handle(), 0, sizeof(Culling::CullingUniformData)};
                 const VkDescriptorImageInfo hiZInfo{hiZBuffer.sampler(), hiZBuffer.fullView(), VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
-                VkWriteDescriptorSet writes[5]{};
-                for (uint32_t i = 0; i < 5; ++i) { writes[i].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET; writes[i].dstSet = cullSets[frame]; writes[i].dstBinding = i; writes[i].descriptorCount = 1; }
-                writes[0].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER; writes[0].pBufferInfo = &objectInfo;
-                writes[1].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER; writes[1].pBufferInfo = &indirectInfo;
-                writes[2].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER; writes[2].pBufferInfo = &countInfo;
-                writes[3].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER; writes[3].pImageInfo = &hiZInfo;
-                writes[4].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER; writes[4].pBufferInfo = &uniformInfo;
-                vkUpdateDescriptorSets(device, std::size(writes), writes, 0, nullptr);
+                const auto updateCullingSet = [&](const VkDescriptorSet set, const Buffer& indirectBuffer,
+                                                  const Buffer& countBuffer, const Buffer& uniformBuffer) {
+                    const VkDescriptorBufferInfo objectInfo{cullingObjectBuffer.handle(), 0, VK_WHOLE_SIZE};
+                    const VkDescriptorBufferInfo indirectInfo{indirectBuffer.handle(), 0, VK_WHOLE_SIZE};
+                    const VkDescriptorBufferInfo countInfo{countBuffer.handle(), 0, sizeof(uint32_t)};
+                    const VkDescriptorBufferInfo uniformInfo{uniformBuffer.handle(), 0, sizeof(Culling::CullingUniformData)};
+                    VkWriteDescriptorSet writes[5]{};
+                    for (uint32_t i = 0; i < 5; ++i) {
+                        writes[i].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+                        writes[i].dstSet = set;
+                        writes[i].dstBinding = i;
+                        writes[i].descriptorCount = 1;
+                    }
+                    writes[0].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER; writes[0].pBufferInfo = &objectInfo;
+                    writes[1].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER; writes[1].pBufferInfo = &indirectInfo;
+                    writes[2].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER; writes[2].pBufferInfo = &countInfo;
+                    writes[3].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER; writes[3].pImageInfo = &hiZInfo;
+                    writes[4].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER; writes[4].pBufferInfo = &uniformInfo;
+                    vkUpdateDescriptorSets(device, std::size(writes), writes, 0, nullptr);
+                };
+                const VkDescriptorSet cameraCullSet = cullSets[frame];
+                const VkDescriptorSet shadowCullSet = cullSets[MAX_FRAMES_IN_FLIGHT + frame];
+                updateCullingSet(cameraCullSet, indirectBuffers[frame], drawCountBuffers[frame],
+                                 cullingUniformBuffers[frame]);
+                updateCullingSet(shadowCullSet, shadowIndirectBuffers[frame], shadowDrawCountBuffers[frame],
+                                 shadowCullingUniformBuffers[frame]);
                 gpuCullingPasses[frame].create(device, cullingPipeline, cullingPipelineLayout, cullSets[frame],
                     indirectBuffers[frame].handle(), drawCountBuffers[frame].handle(), objectCount);
                 indirectDraws[frame].create(
                     indirectBuffers[frame].handle(), drawCountBuffers[frame].handle(), objectCount);
+                shadowCullingPasses[frame].create(device, cullingPipeline, cullingPipelineLayout, shadowCullSet,
+                    shadowIndirectBuffers[frame].handle(), shadowDrawCountBuffers[frame].handle(), objectCount);
+                shadowIndirectDraws[frame].create(
+                    shadowIndirectBuffers[frame].handle(), shadowDrawCountBuffers[frame].handle(), objectCount);
             }
             hiZValid = false;
         }
@@ -982,9 +1031,13 @@ namespace {
         void destroyCullingResources() noexcept {
             hiZPass.destroy();
             for (auto& draw : indirectDraws) draw.destroy();
+            for (auto& draw : shadowIndirectDraws) draw.destroy();
             for (Buffer& buffer : cullingUniformBuffers) buffer.destroy();
+            for (Buffer& buffer : shadowCullingUniformBuffers) buffer.destroy();
             for (Buffer& buffer : indirectBuffers) buffer.destroy();
+            for (Buffer& buffer : shadowIndirectBuffers) buffer.destroy();
             for (Buffer& buffer : drawCountBuffers) buffer.destroy();
+            for (Buffer& buffer : shadowDrawCountBuffers) buffer.destroy();
             cullingObjectBuffer.destroy();
             if (cullingDescriptorPool != VK_NULL_HANDLE) vkDestroyDescriptorPool(device, cullingDescriptorPool, nullptr);
             if (hiZCopyPipeline != VK_NULL_HANDLE) vkDestroyPipeline(device, hiZCopyPipeline, nullptr);
@@ -1100,6 +1153,12 @@ namespace {
 
             const Mat4 lightSpace = lightSpaceMatrix();
 
+            const MeshRenderer& cubeRenderer = scene.registry.get<MeshRenderer>(scene.cubes.front());
+            if (cubeRenderer.castShadow && cubeRenderer.hasMesh()) {
+                shadowCullingPasses[currentFrame].record(commandBuffer,
+                    static_cast<uint32_t>(gpuObjects.size()));
+            }
+
             VkRenderPassBeginInfo shadowPassInfo{VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO};
             shadowPassInfo.renderPass = shadowMap.renderPass();
             shadowPassInfo.framebuffer = shadowMap.framebuffer();
@@ -1131,7 +1190,9 @@ namespace {
                                  renderer.firstIndex, 0, firstInstance);
             };
             drawShadowBatch(scene.registry.get<MeshRenderer>(scene.plane), 1, 0);
-            drawShadowBatch(scene.registry.get<MeshRenderer>(scene.cubes.front()), Scene::CubeCount, 1);
+            if (cubeRenderer.castShadow && cubeRenderer.hasMesh()) {
+                shadowIndirectDraws[currentFrame].record(commandBuffer);
+            }
             vkCmdEndRenderPass(commandBuffer);
 
             gpuCullingPasses[currentFrame].record(commandBuffer, static_cast<uint32_t>(gpuObjects.size()));
@@ -1189,7 +1250,6 @@ namespace {
                                  renderer.firstIndex, 0, firstInstance);
             };
             drawBatch(scene.registry.get<MeshRenderer>(scene.plane), 1, 0);
-            const MeshRenderer& cubeRenderer = scene.registry.get<MeshRenderer>(scene.cubes.front());
             const PushConstants cubeConstants{
                 glm::vec4{cubeRenderer.material.baseColor.native(), cubeRenderer.material.metallic},
                 glm::vec4{cubeRenderer.material.roughness, cubeRenderer.material.ambientOcclusion, 0.0f, 0.0f}};
@@ -1346,6 +1406,7 @@ namespace {
             updateUniformBuffer(currentFrame);
             updateInstanceBuffer();
             updateCullingUniformBuffer(currentFrame);
+            updateShadowCullingUniformBuffer(currentFrame);
             recordCommandBuffer(commandBuffers[currentFrame], imageIndex);
 
             VkSubmitInfo submitInfo{};

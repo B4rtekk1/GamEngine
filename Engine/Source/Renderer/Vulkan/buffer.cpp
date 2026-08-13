@@ -18,12 +18,7 @@ void Buffer::createDeviceLocal(VkPhysicalDevice physicalDevice, VkDevice device,
     Buffer staging;
     staging.create(physicalDevice, device, size, VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
                    VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
-    void *mapped = nullptr;
-    if (vkMapMemory(device, staging.memory_, 0, size, 0, &mapped) != VK_SUCCESS) {
-        throw std::runtime_error("Could not map staging buffer memory");
-    }
-    std::memcpy(mapped, data, static_cast<size_t>(size));
-    vkUnmapMemory(device, staging.memory_);
+    staging.update(data, size);
 
     create(physicalDevice, device, size, usage | VK_BUFFER_USAGE_TRANSFER_DST_BIT, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
 
@@ -77,16 +72,17 @@ void Buffer::update(const void* data, const VkDeviceSize size, const VkDeviceSiz
     if (data == nullptr || size == 0 || offset > size_ || size > size_ - offset) {
         throw std::invalid_argument("Uniform buffer update is out of bounds");
     }
-    void* mapped = nullptr;
-    if (vkMapMemory(device_, memory_, offset, size, 0, &mapped) != VK_SUCCESS) {
-        throw std::runtime_error("Could not map host-visible buffer memory");
+    if (mapped_ == nullptr) {
+        throw std::runtime_error("Cannot update buffer without host-visible memory");
     }
-    std::memcpy(mapped, data, static_cast<size_t>(size));
-    vkUnmapMemory(device_, memory_);
+    std::memcpy(static_cast<char*>(mapped_) + offset, data, static_cast<size_t>(size));
 }
 
 void Buffer::destroy() noexcept {
     if (device_ != VK_NULL_HANDLE) {
+        if (mapped_ != nullptr) {
+            vkUnmapMemory(device_, memory_);
+        }
         if (buffer_ != VK_NULL_HANDLE) {
             vkDestroyBuffer(device_, buffer_, nullptr);
         }
@@ -98,6 +94,7 @@ void Buffer::destroy() noexcept {
     buffer_ = VK_NULL_HANDLE;
     device_ = VK_NULL_HANDLE;
     size_ = 0;
+    mapped_ = nullptr;
 }
 
 void Buffer::create(
@@ -132,6 +129,11 @@ void Buffer::create(
     if (vkBindBufferMemory(device_, buffer_, memory_, 0) != VK_SUCCESS) {
         destroy();
         throw std::runtime_error("Could not bind Vulkan buffer memory");
+    }
+    if ((properties & VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT) != 0 &&
+        vkMapMemory(device_, memory_, 0, size_, 0, &mapped_) != VK_SUCCESS) {
+        destroy();
+        throw std::runtime_error("Could not persistently map host-visible buffer memory");
     }
 }
 
