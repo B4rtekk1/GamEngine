@@ -11,6 +11,7 @@
 
 #include "Engine/Renderer/Vulkan/msaa.h"
 #include "Engine/Renderer/Vulkan/depth_buffer.h"
+#include "Engine/Renderer/Vulkan/hdr_buffer.h"
 #include "Engine/Renderer/shader_loader.h"
 #include "Engine/Renderer/Vulkan/buffer.h"
 #include "Engine/Renderer/Vulkan/vulkan_device.h"
@@ -26,6 +27,7 @@
 #include "Engine/Renderer/Passes/ForwardPass.h"
 #include "Engine/Renderer/Passes/ShadowPass.h"
 #include "Engine/Renderer/Passes/SkyPass.h"
+#include "Engine/Renderer/Passes/TonemapPass.h"
 #include "Engine/Renderer/Culling/CullingTypes.h"
 #include "Engine/Renderer/Culling/GPUCullingPass.h"
 #include "Engine/Renderer/Culling/IndexedIndirectDrawCount.h"
@@ -96,12 +98,14 @@ namespace {
         VkDevice device = VK_NULL_HANDLE;
 
         Swapchain swapchain;
-        std::vector<VkFramebuffer> swapChainFramebuffers;
+        VkFramebuffer hdrFramebuffer = VK_NULL_HANDLE;
 
         MsaaResources msaa;
+        HdrBuffer hdrBuffer;
 
         ForwardPass forwardPass;
         SkyPass skyPass;
+        TonemapPass tonemapPass;
         DepthBuffer depthBuffer;
         ShadowPass shadowPass;
         Scene scene;
@@ -182,7 +186,8 @@ namespace {
             // depth buffer keeps that path portable without a depth-resolve pass.
             msaa.initialize(vulkanDevice.physical(), device, VK_SAMPLE_COUNT_1_BIT);
             createSwapChain();
-            msaa.create(swapchain.extent(), swapchain.format());
+            hdrBuffer.create(vulkanDevice.physical(), device, swapchain.extent());
+            msaa.create(swapchain.extent(), HdrBuffer::Format);
             createDepthResources();
             createCommandPool();
             createMeshBuffers();
@@ -193,6 +198,7 @@ namespace {
             createCullingResources();
             createSkyPass();
             createFramebuffers();
+            createTonemapPass();
             createCommandBuffers();
             createSyncObjects();
         }
@@ -350,7 +356,7 @@ namespace {
         }
 
         void createForwardPass() {
-            forwardPass.create(device, swapchain.format(), depthBuffer.format(),
+            forwardPass.create(device, HdrBuffer::Format, depthBuffer.format(),
                                msaa.sampleCount(), shadowPass.descriptorSetLayout());
         }
 
@@ -362,8 +368,14 @@ namespace {
             }
             skyPass.create(vulkanDevice.physical(), device, commandPool,
                            vulkanDevice.graphicsQueue(), forwardPass.renderPass(),
-                           swapchain.format(), msaa.sampleCount(), buffers,
+                           HdrBuffer::Format, msaa.sampleCount(), buffers,
                            sizeof(UniformBufferObject));
+        }
+
+        void createTonemapPass() {
+            tonemapPass.create(device, swapchain.format(), swapchain.extent(),
+                               swapchain.imageViews(), hdrBuffer.imageView(),
+                               hdrBuffer.sampler());
         }
 
         void createMeshBuffers() {
@@ -677,31 +689,27 @@ namespace {
         }
 
         void createFramebuffers() {
-            const auto& imageViews = swapchain.imageViews();
             const VkExtent2D extent = swapchain.extent();
-            swapChainFramebuffers.resize(imageViews.size());
-            for (size_t i = 0; i < imageViews.size(); i++) {
-                VkImageView msaaAttachments[] = {
-                    msaa.colorImageView(),
-                    depthBuffer.imageView(),
-                    imageViews[i]
-                };
-                VkImageView directAttachment[] = {imageViews[i], depthBuffer.imageView()};
+            VkImageView msaaAttachments[] = {
+                msaa.colorImageView(), depthBuffer.imageView(), hdrBuffer.imageView()
+            };
+            VkImageView directAttachments[] = {
+                hdrBuffer.imageView(), depthBuffer.imageView()
+            };
 
-                VkFramebufferCreateInfo framebufferInfo{};
-                framebufferInfo.sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO;
-                framebufferInfo.renderPass = forwardPass.renderPass();
-                framebufferInfo.attachmentCount = msaa.enabled() ? 3u : 2u;
-                framebufferInfo.pAttachments = msaa.enabled()
-                    ? msaaAttachments
-                    : directAttachment;
-                framebufferInfo.width = extent.width;
-                framebufferInfo.height = extent.height;
-                framebufferInfo.layers = 1;
+            VkFramebufferCreateInfo framebufferInfo{VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO};
+            framebufferInfo.renderPass = forwardPass.renderPass();
+            framebufferInfo.attachmentCount = msaa.enabled() ? 3u : 2u;
+            framebufferInfo.pAttachments = msaa.enabled()
+                ? msaaAttachments
+                : directAttachments;
+            framebufferInfo.width = extent.width;
+            framebufferInfo.height = extent.height;
+            framebufferInfo.layers = 1;
 
-                if (vkCreateFramebuffer(device, &framebufferInfo, nullptr, &swapChainFramebuffers[i]) != VK_SUCCESS) {
-                    throw std::runtime_error("Could not create framebuffer");
-                }
+            if (vkCreateFramebuffer(device, &framebufferInfo, nullptr,
+                                    &hdrFramebuffer) != VK_SUCCESS) {
+                throw std::runtime_error("Could not create HDR framebuffer");
             }
         }
 
@@ -787,7 +795,7 @@ namespace {
                 commandBuffer, static_cast<std::uint32_t>(gpuObjects.size()));
 
             forwardPass.begin(
-                commandBuffer, swapChainFramebuffers[imageIndex], swapchain.extent(),
+                commandBuffer, hdrFramebuffer, swapchain.extent(),
                 shadowPass.descriptorSet(currentFrame), vertexBuffer.handle(),
                 instanceBuffers[currentFrame].handle(), indexBuffer.handle());
             forwardPass.draw(commandBuffer, planeRenderer, cubeRenderer,
@@ -810,6 +818,8 @@ namespace {
             vkCmdPipelineBarrier2(commandBuffer, &depthDependency);
             hiZPass.record(commandBuffer, hiZBuffer, hiZValid);
             hiZValid = true;
+
+            tonemapPass.record(commandBuffer, imageIndex, swapchain.extent());
 
             if (vkEndCommandBuffer(commandBuffer) != VK_SUCCESS) {
                 throw std::runtime_error("Could not end command buffer");
@@ -841,12 +851,14 @@ namespace {
         // ---------- SWAPCHAIN RECREATE ----------
 
         void cleanupSwapChain() {
-            for (auto framebuffer : swapChainFramebuffers) {
-                vkDestroyFramebuffer(device, framebuffer, nullptr);
+            tonemapPass.destroy();
+            if (hdrFramebuffer != VK_NULL_HANDLE) {
+                vkDestroyFramebuffer(device, hdrFramebuffer, nullptr);
+                hdrFramebuffer = VK_NULL_HANDLE;
             }
-            swapChainFramebuffers.clear();
 
             msaa.destroy();
+            hdrBuffer.destroy();
             destroyDepthResources();
             destroyRenderFinishedSemaphores();
             swapchain.destroy();
@@ -887,30 +899,26 @@ namespace {
 
             destroyCullingResources();
 
-            for (auto framebuffer : swapChainFramebuffers) {
-                vkDestroyFramebuffer(device, framebuffer, nullptr);
+            tonemapPass.destroy();
+            if (hdrFramebuffer != VK_NULL_HANDLE) {
+                vkDestroyFramebuffer(device, hdrFramebuffer, nullptr);
+                hdrFramebuffer = VK_NULL_HANDLE;
             }
-            swapChainFramebuffers.clear();
             msaa.destroy();
+            hdrBuffer.destroy();
             destroyDepthResources();
             destroyRenderFinishedSemaphores();
 
-            const VkFormat oldFormat = swapchain.format();
             swapchain.recreate();
             camera.setAspectRatio(static_cast<float>(swapchain.extent().width) /
                                   static_cast<float>(swapchain.extent().height));
-            msaa.create(swapchain.extent(), swapchain.format());
+            hdrBuffer.create(vulkanDevice.physical(), device, swapchain.extent());
+            msaa.create(swapchain.extent(), HdrBuffer::Format);
             createDepthResources();
             createRenderFinishedSemaphores();
 
-            if (oldFormat != swapchain.format()) {
-                skyPass.destroy();
-                forwardPass.destroy();
-                createForwardPass();
-                createSkyPass();
-            }
-
             createFramebuffers();
+            createTonemapPass();
             createCullingResources();
         }
 

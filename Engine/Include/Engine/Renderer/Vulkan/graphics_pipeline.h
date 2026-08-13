@@ -12,6 +12,7 @@ struct GraphicsPipelineOptions {
     VkFormat colorFormat = VK_FORMAT_UNDEFINED;
     VkFormat depthFormat = VK_FORMAT_UNDEFINED;
     VkSampleCountFlagBits samples = VK_SAMPLE_COUNT_1_BIT;
+    VkImageLayout colorFinalLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
 
     std::filesystem::path vertexShader;
     std::filesystem::path fragmentShader;
@@ -24,6 +25,7 @@ struct GraphicsPipelineOptions {
     VkColorComponentFlags colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT |
                                            VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT;
     VkBool32 depthWriteEnable = VK_TRUE;
+    VkBool32 depthTestEnable = VK_TRUE;
     VkCompareOp depthCompareOp = VK_COMPARE_OP_LESS;
 
     std::vector<VkVertexInputBindingDescription> vertexBindings;

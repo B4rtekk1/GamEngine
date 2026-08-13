@@ -61,5 +61,7 @@ void main() {
     vec3 diffuse = (vec3(1.0) - f) * (1.0 - metallic) * albedo / PI;
     vec3 direct = (diffuse + specular) * frame.lightDirectionIntensity.w * nDotL * (1.0 - calculateShadow());
     vec3 color = vec3(0.035) * albedo * clamp(pushConstants.roughnessAo.y, 0.0, 1.0) + direct;
-    outColor = vec4(pow(color / (color + vec3(1.0)), vec3(1.0 / 2.2)), 1.0);
+    // Keep lighting in linear HDR space. Display mapping is performed once,
+    // after the complete scene (including the skybox) has been rendered.
+    outColor = vec4(color, 1.0);
 }

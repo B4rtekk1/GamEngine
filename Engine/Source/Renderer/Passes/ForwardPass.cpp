@@ -32,6 +32,7 @@ void ForwardPass::create(const VkDevice device, const VkFormat colorFormat,
     options.colorFormat = colorFormat;
     options.depthFormat = depthFormat;
     options.samples = samples;
+    options.colorFinalLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
     options.vertexShader = "shaders/pbr.vert.spv";
     options.fragmentShader = "shaders/pbr.frag.spv";
     options.pushConstantSize = sizeof(MaterialPushConstants);

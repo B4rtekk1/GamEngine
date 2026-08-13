@@ -16,8 +16,8 @@ void GraphicsPipeline::create(VkDevice device, const GraphicsPipelineOptions& op
     if (device == VK_NULL_HANDLE) {
         throw std::invalid_argument("Could not create graphics pipeline for a null VkDevice");
     }
-    if (options.colorFormat == VK_FORMAT_UNDEFINED || options.depthFormat == VK_FORMAT_UNDEFINED) {
-        throw std::invalid_argument("Graphics pipeline requires color and depth formats");
+    if (options.colorFormat == VK_FORMAT_UNDEFINED) {
+        throw std::invalid_argument("Graphics pipeline requires a color format");
     }
 
     destroy();
@@ -52,6 +52,7 @@ void GraphicsPipeline::destroy() noexcept {
 
 void GraphicsPipeline::createRenderPass(const GraphicsPipelineOptions& options) {
     const bool usesMsaa = options.samples != VK_SAMPLE_COUNT_1_BIT;
+    const bool usesDepth = options.depthFormat != VK_FORMAT_UNDEFINED;
 
     VkAttachmentDescription color{};
     color.format = options.colorFormat;
@@ -61,7 +62,8 @@ void GraphicsPipeline::createRenderPass(const GraphicsPipelineOptions& options) 
     color.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
     color.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
     color.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-    color.finalLayout = usesMsaa ? VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL : VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
+    color.finalLayout = usesMsaa ? VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL
+                                 : options.colorFinalLayout;
 
     VkAttachmentDescription depth{};
     depth.format = options.depthFormat;
@@ -76,23 +78,29 @@ void GraphicsPipeline::createRenderPass(const GraphicsPipelineOptions& options) 
 
     VkAttachmentReference colorRef{0, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL};
     VkAttachmentReference depthRef{1, VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL};
-    VkAttachmentReference resolveRef{2, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL};
+    VkAttachmentReference resolveRef{usesDepth ? 2u : 1u,
+                                     VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL};
 
     VkSubpassDescription subpass{};
     subpass.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
     subpass.colorAttachmentCount = 1;
     subpass.pColorAttachments = &colorRef;
     subpass.pResolveAttachments = usesMsaa ? &resolveRef : nullptr;
-    subpass.pDepthStencilAttachment = &depthRef;
+    subpass.pDepthStencilAttachment = usesDepth ? &depthRef : nullptr;
 
     VkSubpassDependency dependency{};
     dependency.srcSubpass = VK_SUBPASS_EXTERNAL;
     dependency.dstSubpass = 0;
-    dependency.srcStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT | VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT;
+    dependency.srcStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT |
+                              (usesDepth ? VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT : 0);
     dependency.dstStageMask = dependency.srcStageMask;
-    dependency.dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT | VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
+    dependency.dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT |
+                               (usesDepth ? VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT : 0);
 
-    std::vector<VkAttachmentDescription> attachments{color, depth};
+    std::vector<VkAttachmentDescription> attachments{color};
+    if (usesDepth) {
+        attachments.push_back(depth);
+    }
     if (usesMsaa) {
         VkAttachmentDescription resolve{};
         resolve.format = options.colorFormat;
@@ -102,17 +110,29 @@ void GraphicsPipeline::createRenderPass(const GraphicsPipelineOptions& options) 
         resolve.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
         resolve.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
         resolve.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-        resolve.finalLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
+        resolve.finalLayout = options.colorFinalLayout;
         attachments.push_back(resolve);
     }
+
+    VkSubpassDependency sampledDependency{};
+    sampledDependency.srcSubpass = 0;
+    sampledDependency.dstSubpass = VK_SUBPASS_EXTERNAL;
+    sampledDependency.srcStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+    sampledDependency.srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+    sampledDependency.dstStageMask = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
+    sampledDependency.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+
+    std::array dependencies{dependency, sampledDependency};
+    const bool sampledAfterPass =
+        options.colorFinalLayout == VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
 
     VkRenderPassCreateInfo info{VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO};
     info.attachmentCount = static_cast<uint32_t>(attachments.size());
     info.pAttachments = attachments.data();
     info.subpassCount = 1;
     info.pSubpasses = &subpass;
-    info.dependencyCount = 1;
-    info.pDependencies = &dependency;
+    info.dependencyCount = sampledAfterPass ? 2u : 1u;
+    info.pDependencies = dependencies.data();
     if (vkCreateRenderPass(device_, &info, nullptr, &renderPass_) != VK_SUCCESS) {
         throw std::runtime_error("Could not create render pass");
     }
@@ -161,7 +181,7 @@ void GraphicsPipeline::createGraphicsPipeline(const GraphicsPipelineOptions& opt
     VkPipelineMultisampleStateCreateInfo multisampling{VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO};
     multisampling.rasterizationSamples = options.samples;
     VkPipelineDepthStencilStateCreateInfo depth{VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO};
-    depth.depthTestEnable = VK_TRUE;
+    depth.depthTestEnable = options.depthTestEnable;
     depth.depthWriteEnable = options.depthWriteEnable;
     depth.depthCompareOp = options.depthCompareOp;
     VkPipelineColorBlendAttachmentState colorAttachment{};

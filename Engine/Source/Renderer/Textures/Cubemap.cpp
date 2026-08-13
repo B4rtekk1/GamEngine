@@ -49,7 +49,9 @@ void Cubemap::create(VkPhysicalDevice physicalDevice, VkDevice device, VkCommand
         VkImageCreateInfo imageInfo{VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO};
         imageInfo.flags = VK_IMAGE_CREATE_CUBE_COMPATIBLE_BIT;
         imageInfo.imageType = VK_IMAGE_TYPE_2D;
-        imageInfo.format = VK_FORMAT_R8G8B8A8_UNORM;
+        // Face colours are authored as display-space bytes. An sRGB view makes
+        // texture sampling return linear values to the HDR lighting pipeline.
+        imageInfo.format = VK_FORMAT_R8G8B8A8_SRGB;
         imageInfo.extent = {1, 1, 1}; imageInfo.mipLevels = 1; imageInfo.arrayLayers = 6;
         imageInfo.samples = VK_SAMPLE_COUNT_1_BIT; imageInfo.tiling = VK_IMAGE_TILING_OPTIMAL;
         imageInfo.usage = VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
