@@ -5,7 +5,6 @@
 #include "Engine/ECS/Components/TransformComponent.h"
 
 #include <cstring>
-#include <glm/geometric.hpp>
 #include <stdexcept>
 
 namespace Engine {
@@ -235,18 +234,22 @@ void LightingBuffer::update(Registry& registry) const {
                 return;
             }
 
-            const glm::vec3 direction = glm::normalize(
-                glm::vec3{
-                    transform.matrix().native() *
-                    glm::vec4{0.0f, 0.0f, -1.0f, 0.0f}
-                }
-            );
+            const Vec4 rotatedDirection{
+                transform.matrix().native() *
+                Vec4{0.0f, 0.0f, -1.0f, 0.0f}.native()
+            };
+
+            const Vec3 direction = Vec3{
+                rotatedDirection.x(),
+                rotatedDirection.y(),
+                rotatedDirection.z()
+            }.normalized();
 
             gpuData.directionIntensity =
                 Vec4{
-                    direction.x,
-                    direction.y,
-                    direction.z,
+                    direction.x(),
+                    direction.y(),
+                    direction.z(),
                     light.intensity
                 };
 

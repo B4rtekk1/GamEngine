@@ -22,12 +22,12 @@ public:
      * @param farPlane Distance to the far clipping plane; must exceed @p nearPlane.
      * @throws std::invalid_argument If any parameter is invalid.
      */
-    Camera(float fovDegrees, float aspectRatio, float nearPlane, float farPlane);
+    Camera(Degrees fov, float aspectRatio, float nearPlane, float farPlane);
 
     /** @brief Sets the camera world position. */
     void setPosition(const Vec3& position);
     /** @brief Sets yaw and pitch in degrees; pitch is clamped to [-89, 89]. */
-    void setRotation(float yaw, float pitch);
+    void setRotation(Degrees yaw, Degrees pitch);
 
     /** @brief Translates the camera by a world-space offset. */
     void move(const Vec3& offset);
@@ -52,10 +52,10 @@ public:
 private:
     Vec3 m_position{0.0f, 0.0f, 3.0f};
 
-    float m_yaw{-90.0f};
-    float m_pitch{0.0f};
+    Degrees m_yaw{Degrees{-90.0f}};
+    Degrees m_pitch{};
 
-    float m_fov;
+    Degrees m_fov;
     float m_aspectRatio;
     float m_nearPlane;
     float m_farPlane;

@@ -49,13 +49,13 @@ namespace {
     constexpr float SHADOW_DEPTH_BIAS_SLOPE = 0.35f;
 
     struct PushConstants {
-        glm::mat4 model;
+        Mat4 model;
     };
 
     struct UniformBufferObject {
-        glm::mat4 view;
-        glm::mat4 projection;
-        glm::mat4 lightSpace;
+        Mat4 view;
+        Mat4 projection;
+        Mat4 lightSpace;
     };
 }
 
@@ -111,7 +111,7 @@ namespace {
         VkPipelineLayout shadowPipelineLayout = VK_NULL_HANDLE;
         VkPipeline shadowPipeline = VK_NULL_HANDLE;
         Scene scene;
-        Camera camera{45.0f, static_cast<float>(WIDTH) / static_cast<float>(HEIGHT), 0.1f, 75.0f};
+        Camera camera{Degrees{45.0f}, static_cast<float>(WIDTH) / static_cast<float>(HEIGHT), 0.1f, 75.0f};
         Buffer vertexBuffer;
         Buffer indexBuffer;
         std::array<Buffer, MAX_FRAMES_IN_FLIGHT> uniformBuffers;
@@ -869,21 +869,23 @@ namespace {
         void updateUniformBuffer(const uint32_t frame) {
             const auto animationTime = static_cast<float>(Time::elapsedTime());
             const Mat4 cameraOrbit = Mat4::rotate(
-                Mat4{}, animationTime * Radians::fromDegrees(35.0f), Vec3{0.0f, 1.0f, 0.0f});
+                Mat4{}, animationTime * Radians{Degrees{35.0f}}, Vec3{0.0f, 1.0f, 0.0f});
             constexpr Vec3 sceneCenter{0.0f, 5.5f, 0.0f};
             constexpr Vec4 orbitPosition{18.0f, 16.0f, 24.0f, 1.0f};
-            const Vec3 cameraPosition =
-                Vec3{glm::vec3{cameraOrbit.native() * orbitPosition.native()}} + sceneCenter;
-            const Vec3 direction = sceneCenter - cameraPosition;
+            const Vec4 rotatedOrbitPosition = cameraOrbit * orbitPosition;
+            const Vec3 cameraPosition{
+                rotatedOrbitPosition.x(), rotatedOrbitPosition.y(), rotatedOrbitPosition.z()};
+            const Vec3 centeredCameraPosition = cameraPosition + sceneCenter;
+            const Vec3 direction = sceneCenter - centeredCameraPosition;
             const float horizontalDistance = Vec2{direction.x(), direction.z()}.length();
-            camera.setPosition(cameraPosition);
-            camera.setRotation(glm::degrees(std::atan2(direction.z(), direction.x())),
-                               glm::degrees(std::atan2(direction.y(), horizontalDistance)));
+            camera.setPosition(centeredCameraPosition);
+            camera.setRotation(Degrees{glm::degrees(std::atan2(direction.z(), direction.x()))},
+                               Degrees{glm::degrees(std::atan2(direction.y(), horizontalDistance))});
 
             const UniformBufferObject data{
-                camera.viewMatrix().native(),
-                camera.projectionMatrix().native(),
-                lightSpaceMatrix().native()};
+                camera.viewMatrix(),
+                camera.projectionMatrix(),
+                lightSpaceMatrix()};
             uniformBuffers[frame].update(&data, sizeof(data));
         }
 
@@ -895,7 +897,7 @@ namespace {
                 throw std::runtime_error("Could not begin command buffer");
             }
 
-            const glm::mat4 lightSpace = lightSpaceMatrix().native();
+            const Mat4 lightSpace = lightSpaceMatrix();
             VkQueryPool occlusionQueries = occlusionQueryPools[currentFrame];
             if (occlusionQueries != VK_NULL_HANDLE) {
                 vkCmdResetQueryPool(commandBuffer, occlusionQueries, 0, occlusionQueryCount);
@@ -926,7 +928,7 @@ namespace {
                     return;
                 }
 
-                const glm::mat4 lightMvp = lightSpace * transform.matrix().native();
+                const Mat4 lightMvp = lightSpace * transform.matrix();
                 vkCmdPushConstants(commandBuffer, shadowPipelineLayout, VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(lightMvp), &lightMvp);
                 vkCmdDrawIndexed(commandBuffer, renderer.mesh->indexCount(), 1, renderer.firstIndex, 0, 0);
             };
@@ -978,7 +980,7 @@ namespace {
 
             const auto pushModelAndDraw = [&](VkPipelineLayout layout, const Transform& transform,
                                               const MeshRenderer& renderer) {
-                const glm::mat4 model = transform.matrix().native();
+                const Mat4 model = transform.matrix();
                 vkCmdPushConstants(commandBuffer, layout, VK_SHADER_STAGE_VERTEX_BIT, 0,
                                    sizeof(model), &model);
                 vkCmdDrawIndexed(commandBuffer, renderer.mesh->indexCount(), 1, renderer.firstIndex, 0, 0);

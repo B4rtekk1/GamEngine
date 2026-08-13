@@ -17,12 +17,12 @@ namespace {
     constexpr Vec3 WORLD_UP{0.0f, 1.0f, 0.0f};
 }
 
-Camera::Camera(const float fovDegrees, const float aspectRatio, const float nearPlane, const float farPlane)
-    : m_fov(fovDegrees),
+Camera::Camera(const Degrees fov, const float aspectRatio, const float nearPlane, const float farPlane)
+    : m_fov(fov),
       m_aspectRatio(aspectRatio),
       m_nearPlane(nearPlane),
       m_farPlane(farPlane) {
-    if (fovDegrees <= 0.0f || fovDegrees >= 180.0f) {
+    if (fov.value() <= 0.0f || fov.value() >= 180.0f) {
         throw std::invalid_argument("Camera field of view must be between 0 and 180 degrees");
     }
     if (aspectRatio <= 0.0f) {
@@ -37,9 +37,9 @@ void Camera::setPosition(const Vec3& position) {
     m_position = position;
 }
 
-void Camera::setRotation(const float yaw, const float pitch) {
+void Camera::setRotation(const Degrees yaw, const Degrees pitch) {
     m_yaw = yaw;
-    m_pitch = std::clamp(pitch, MIN_PITCH, MAX_PITCH);
+    m_pitch = Degrees{std::clamp(pitch.value(), MIN_PITCH, MAX_PITCH)};
 }
 
 void Camera::move(const Vec3& offset) {
@@ -51,17 +51,21 @@ Mat4 Camera::viewMatrix() const {
 }
 
 Mat4 Camera::projectionMatrix() const {
-    glm::mat4 projection = glm::perspective(
-        glm::radians(m_fov), m_aspectRatio, m_nearPlane, m_farPlane);
+    Mat4 projection = Mat4::perspective(
+        Radians{m_fov},
+        m_aspectRatio,
+        m_nearPlane,
+        m_farPlane
+    );
 
     // Vulkan's viewport has its Y axis pointing down.
-    projection[1][1] *= -1.0f;
-    return Mat4{projection};
+    projection.native()[1][1] *= -1.0f;
+    return projection;
 }
 
 Vec3 Camera::forward() const {
-    const float yaw = glm::radians(m_yaw);
-    const float pitch = glm::radians(m_pitch);
+    const float yaw = Radians{m_yaw}.value();
+    const float pitch = Radians{m_pitch}.value();
 
     return Vec3{
         std::cos(pitch) * std::cos(yaw),
@@ -71,11 +75,11 @@ Vec3 Camera::forward() const {
 }
 
 Vec3 Camera::right() const {
-    return Vec3{glm::normalize(glm::cross(forward().native(), WORLD_UP.native()))};
+    return cross(forward(), WORLD_UP).normalized();
 }
 
 Vec3 Camera::up() const {
-    return Vec3{glm::normalize(glm::cross(right().native(), forward().native()))};
+    return cross(right(), forward()).normalized();
 }
 
 void Camera::setAspectRatio(const float aspectRatio) {

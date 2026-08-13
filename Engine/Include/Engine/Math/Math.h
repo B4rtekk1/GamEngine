@@ -2,6 +2,7 @@
 
 #include "Mat4.h"
 #include "Quat.h"
+#include "Degrees.h"
 #include "Radians.h"
 #include "Translate.h"
 #include "Vec2.h"
