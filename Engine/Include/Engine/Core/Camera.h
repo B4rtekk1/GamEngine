@@ -2,10 +2,7 @@
 
 /** @file camera.h Perspective camera interface. */
 
-#include "../Math/Vec3.h"
-
-#include <glm/glm.hpp>
-#include <glm/gtc/matrix_transform.hpp>
+#include "Engine/Math/Math.h"
 
 namespace Engine {
 
@@ -36,9 +33,9 @@ public:
     void move(const Vec3& offset);
 
     /** @brief Returns the view matrix derived from position and orientation. */
-    [[nodiscard]] glm::mat4 viewMatrix() const;
+    [[nodiscard]] Mat4 viewMatrix() const;
     /** @brief Returns the Vulkan-compatible perspective projection matrix. */
-    [[nodiscard]] glm::mat4 projectionMatrix() const;
+    [[nodiscard]] Mat4 projectionMatrix() const;
 
     /** @brief Returns the camera world position. */
     [[nodiscard]] Vec3 position() const { return m_position; }

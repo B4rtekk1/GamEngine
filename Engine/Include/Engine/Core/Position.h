@@ -2,7 +2,7 @@
 
 /** @file position.h Position value type. */
 
-#include "../Math/Vec3.h"
+#include "Engine/Math/Math.h"
 
 namespace Engine {
 

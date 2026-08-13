@@ -18,6 +18,7 @@ add_library(Engine
         Engine/Source/Renderer/Textures/Cubemap.cpp
         Engine/Source/Renderer/Skybox/Skybox.cpp
         Engine/Source/Renderer/Skybox/SkyboxPipeline.cpp
+        Engine/Source/Renderer/Lighting/LightingBuffer.cpp
         Engine/Source/Renderer/Vulkan/buffer.cpp
         Engine/Source/Renderer/Vulkan/depth_buffer.cpp
         Engine/Source/Renderer/Vulkan/graphics_pipeline.cpp
