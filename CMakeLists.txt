@@ -17,7 +17,9 @@ add_library(Engine
         Engine/Source/ECS/Registry.cpp
         Engine/Source/Input/Input.cpp
         Engine/Source/UI/Canvas.cpp
+        Engine/Source/UI/CanvasRenderer.cpp
         Engine/Source/UI/RectTransform.cpp
+        Engine/Source/UI/Vulkan/UIPipeline.cpp
         Engine/Source/Renderer/shader_loader.cpp
         Engine/Source/Renderer/Textures/Cubemap.cpp
         Engine/Source/Renderer/Textures/Texture2D.cpp
@@ -74,6 +76,9 @@ set(SHADER_SOURCES
         Assets/Shaders/Culling/hiz_copy.comp
         Assets/Shaders/Culling/hiz_reduce.comp
         Assets/Shaders/Culling/hiz_cull.comp)
+list(APPEND SHADER_SOURCES
+        Assets/Shaders/UI/ui.vert
+        Assets/Shaders/UI/ui.frag)
 foreach(SHADER_SOURCE IN LISTS SHADER_SOURCES)
     get_filename_component(SHADER_NAME ${SHADER_SOURCE} NAME)
     if(GLSLC)
@@ -89,7 +94,7 @@ foreach(SHADER_SOURCE IN LISTS SHADER_SOURCES)
     endif()
 endforeach()
 
-add_custom_target(Shaders DEPENDS ${SHADER_OUT_DIR}/pbr.vert.spv ${SHADER_OUT_DIR}/pbr.frag.spv ${SHADER_OUT_DIR}/shadow.vert.spv ${SHADER_OUT_DIR}/skybox.vert.spv ${SHADER_OUT_DIR}/skybox.frag.spv ${SHADER_OUT_DIR}/tonemap.vert.spv ${SHADER_OUT_DIR}/tonemap.frag.spv ${SHADER_OUT_DIR}/hiz_copy.comp.spv ${SHADER_OUT_DIR}/hiz_reduce.comp.spv ${SHADER_OUT_DIR}/hiz_cull.comp.spv)
+add_custom_target(Shaders DEPENDS ${SHADER_OUT_DIR}/pbr.vert.spv ${SHADER_OUT_DIR}/pbr.frag.spv ${SHADER_OUT_DIR}/shadow.vert.spv ${SHADER_OUT_DIR}/skybox.vert.spv ${SHADER_OUT_DIR}/skybox.frag.spv ${SHADER_OUT_DIR}/tonemap.vert.spv ${SHADER_OUT_DIR}/tonemap.frag.spv ${SHADER_OUT_DIR}/hiz_copy.comp.spv ${SHADER_OUT_DIR}/hiz_reduce.comp.spv ${SHADER_OUT_DIR}/hiz_cull.comp.spv ${SHADER_OUT_DIR}/ui.vert.spv ${SHADER_OUT_DIR}/ui.frag.spv)
 add_dependencies(GamEngine Shaders)
 add_custom_command(TARGET GamEngine POST_BUILD
         COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_FILE_DIR:GamEngine>/shaders"

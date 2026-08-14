@@ -1,0 +1,34 @@
+#pragma once
+
+#include <Engine/Renderer/Vulkan/graphics_pipeline.h>
+
+#include <vulkan/vulkan.h>
+
+#include <cstdint>
+#include <vector>
+
+namespace Engine::UI {
+
+class UIPipeline final {
+public:
+    ~UIPipeline();
+
+    UIPipeline() = default;
+    UIPipeline(const UIPipeline&) = delete;
+    UIPipeline& operator=(const UIPipeline&) = delete;
+
+    void create(VkDevice device, VkFormat colorFormat, VkExtent2D extent,
+                const std::vector<VkImageView>& imageViews);
+    void destroy() noexcept;
+
+    void record(VkCommandBuffer commandBuffer, std::uint32_t imageIndex,
+                VkExtent2D extent, VkBuffer vertexBuffer, VkBuffer indexBuffer,
+                std::uint32_t indexCount) const;
+
+private:
+    VkDevice device_ = VK_NULL_HANDLE;
+    GraphicsPipeline pipeline_;
+    std::vector<VkFramebuffer> framebuffers_;
+};
+
+} // namespace Engine::UI

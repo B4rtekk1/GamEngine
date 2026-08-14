@@ -57,11 +57,11 @@ void GraphicsPipeline::createRenderPass(const GraphicsPipelineOptions& options) 
     VkAttachmentDescription color{};
     color.format = options.colorFormat;
     color.samples = options.samples;
-    color.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+    color.loadOp = options.colorLoadOp;
     color.storeOp = usesMsaa ? VK_ATTACHMENT_STORE_OP_DONT_CARE : VK_ATTACHMENT_STORE_OP_STORE;
     color.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
     color.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
-    color.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+    color.initialLayout = options.colorInitialLayout;
     color.finalLayout = usesMsaa ? VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL
                                  : options.colorFinalLayout;
 
@@ -94,7 +94,12 @@ void GraphicsPipeline::createRenderPass(const GraphicsPipelineOptions& options) 
     dependency.srcStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT |
                               (usesDepth ? VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT : 0);
     dependency.dstStageMask = dependency.srcStageMask;
-    dependency.dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT |
+    dependency.srcAccessMask =
+        options.colorInitialLayout == VK_IMAGE_LAYOUT_UNDEFINED
+            ? 0
+            : VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+    dependency.dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_READ_BIT |
+                               VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT |
                                (usesDepth ? VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT : 0);
 
     std::vector<VkAttachmentDescription> attachments{color};
@@ -186,6 +191,13 @@ void GraphicsPipeline::createGraphicsPipeline(const GraphicsPipelineOptions& opt
     depth.depthCompareOp = options.depthCompareOp;
     VkPipelineColorBlendAttachmentState colorAttachment{};
     colorAttachment.colorWriteMask = options.colorWriteMask;
+    colorAttachment.blendEnable = options.alphaBlendEnable;
+    colorAttachment.srcColorBlendFactor = VK_BLEND_FACTOR_SRC_ALPHA;
+    colorAttachment.dstColorBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
+    colorAttachment.colorBlendOp = VK_BLEND_OP_ADD;
+    colorAttachment.srcAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
+    colorAttachment.dstAlphaBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
+    colorAttachment.alphaBlendOp = VK_BLEND_OP_ADD;
     VkPipelineColorBlendStateCreateInfo blend{VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO};
     blend.attachmentCount = 1;
     blend.pAttachments = &colorAttachment;

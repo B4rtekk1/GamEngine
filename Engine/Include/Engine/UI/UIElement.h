@@ -6,6 +6,8 @@
 #include <vector>
 
 namespace Engine::UI {
+    class UIBatch;
+
     class UIElement {
         public:
         virtual ~UIElement() = default;
@@ -16,7 +18,7 @@ namespace Engine::UI {
         }
 
         virtual void update(float deltaTime) {}
-        virtual void buildGeometry(class UIBatch& batch) const {}
+        virtual void buildGeometry(UIBatch& batch) const {}
 
         void updateLayout(const Rect& parentRect) {
             rectTransform.calculate(parentRect);

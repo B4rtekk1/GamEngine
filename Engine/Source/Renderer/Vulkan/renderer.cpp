@@ -34,6 +34,9 @@
 #include "Engine/Renderer/Culling/HiZBuffer.h"
 #include "Engine/Renderer/Culling/HiZPass.h"
 #include "Engine/Input/Input.h"
+#include "Engine/UI/Canvas.h"
+#include "Engine/UI/CanvasRenderer.h"
+#include "Engine/UI/PanelElement.h"
 #include "Platform/SDL/SDLInput.h"
 
 #include <cstdint>
@@ -106,6 +109,8 @@ namespace {
         ForwardPass forwardPass;
         SkyPass skyPass;
         TonemapPass tonemapPass;
+        UI::Canvas canvas{WIDTH, HEIGHT};
+        UI::CanvasRenderer canvasRenderer;
         DepthBuffer depthBuffer;
         ShadowPass shadowPass;
         Scene scene;
@@ -199,6 +204,7 @@ namespace {
             createSkyPass();
             createFramebuffers();
             createTonemapPass();
+            createUIResources();
             createCommandBuffers();
             createSyncObjects();
         }
@@ -376,6 +382,34 @@ namespace {
             tonemapPass.create(device, swapchain.format(), swapchain.extent(),
                                swapchain.imageViews(), hdrBuffer.imageView(),
                                hdrBuffer.sampler());
+        }
+
+        void createUIResources() {
+            const VkExtent2D extent = swapchain.extent();
+            canvas.resize(extent.width, extent.height);
+
+            if (canvas.empty()) {
+                auto panel = std::make_unique<UI::PanelElement>(
+                    Vec4{0.025f, 0.035f, 0.055f, 0.82f});
+                panel->rectTransform.anchorMin = {0.0f, 0.0f};
+                panel->rectTransform.anchorMax = {0.0f, 0.0f};
+                panel->rectTransform.offsetMin = {20.0f, 20.0f};
+                panel->rectTransform.offsetMax = {300.0f, 110.0f};
+
+                auto accent = std::make_unique<UI::PanelElement>(
+                    Vec4{0.10f, 0.75f, 0.90f, 1.0f});
+                accent->rectTransform.anchorMin = {0.0f, 0.0f};
+                accent->rectTransform.anchorMax = {0.0f, 1.0f};
+                accent->rectTransform.offsetMin = {0.0f, 0.0f};
+                accent->rectTransform.offsetMax = {4.0f, 0.0f};
+                panel->addChild(std::move(accent));
+
+                static_cast<void>(canvas.addElement(std::move(panel)));
+            }
+
+            canvasRenderer.create(
+                vulkanDevice.physical(), device, swapchain.format(), extent,
+                swapchain.imageViews(), MAX_FRAMES_IN_FLIGHT);
         }
 
         void createMeshBuffers() {
@@ -820,6 +854,8 @@ namespace {
             hiZValid = true;
 
             tonemapPass.record(commandBuffer, imageIndex, swapchain.extent());
+            canvasRenderer.record(canvas, commandBuffer, imageIndex, currentFrame,
+                                  swapchain.extent());
 
             if (vkEndCommandBuffer(commandBuffer) != VK_SUCCESS) {
                 throw std::runtime_error("Could not end command buffer");
@@ -851,6 +887,7 @@ namespace {
         // ---------- SWAPCHAIN RECREATE ----------
 
         void cleanupSwapChain() {
+            canvasRenderer.destroy();
             tonemapPass.destroy();
             if (hdrFramebuffer != VK_NULL_HANDLE) {
                 vkDestroyFramebuffer(device, hdrFramebuffer, nullptr);
@@ -899,6 +936,7 @@ namespace {
 
             destroyCullingResources();
 
+            canvasRenderer.destroy();
             tonemapPass.destroy();
             if (hdrFramebuffer != VK_NULL_HANDLE) {
                 vkDestroyFramebuffer(device, hdrFramebuffer, nullptr);
@@ -919,6 +957,7 @@ namespace {
 
             createFramebuffers();
             createTonemapPass();
+            createUIResources();
             createCullingResources();
         }
 

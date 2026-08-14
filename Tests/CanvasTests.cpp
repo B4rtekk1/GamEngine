@@ -1,7 +1,11 @@
 #include <Engine/UI/Canvas.h>
+#include <Engine/UI/PanelElement.h>
+#include <Engine/UI/UIBatch.h>
 
 #include <memory>
+#include <cstdint>
 #include <stdexcept>
+#include <vector>
 
 namespace {
     bool equal(const Engine::UI::Rect& lhs, const Engine::UI::Rect& rhs)
@@ -14,7 +18,9 @@ namespace {
 int main()
 {
     using Engine::UI::Canvas;
+    using Engine::UI::PanelElement;
     using Engine::UI::Rect;
+    using Engine::UI::UIBatch;
     using Engine::UI::UIElement;
 
     Canvas canvas{800, 600};
@@ -53,5 +59,23 @@ int main()
 
     static_cast<void>(canvas.addElement(std::make_unique<UIElement>()));
     canvas.clear();
-    return canvas.empty() ? 0 : 6;
+    if (!canvas.empty()) {
+        return 6;
+    }
+
+    PanelElement panel{{0.1f, 0.2f, 0.3f, 0.5f}};
+    panel.rectTransform.calculatedRect = {10.0f, 20.0f, 100.0f, 50.0f};
+    UIBatch batch;
+    panel.buildGeometry(batch);
+    if (batch.vertices.size() != 4 || batch.indices.size() != 6 ||
+        batch.indices != std::vector<std::uint32_t>{0, 1, 2, 0, 2, 3}) {
+        return 7;
+    }
+
+    batch.clear();
+    if (!batch.empty() || !batch.vertices.empty()) {
+        return 8;
+    }
+
+    return 0;
 }
