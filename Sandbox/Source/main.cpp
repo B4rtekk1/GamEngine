@@ -1,4 +1,5 @@
 #include "Engine/Renderer/Vulkan/renderer.h"
+#include "Engine/Scene/Scene.h"
 
 #include <cstdlib>
 #include <exception>
@@ -6,8 +7,9 @@
 
 int main() {
     try {
+        Engine::Scene scene;
         Engine::Renderer renderer;
-        renderer.run();
+        renderer.run(scene.registry);
     } catch (const std::exception& exception) {
         std::cerr << "Error: " << exception.what() << '\n';
         return EXIT_FAILURE;

@@ -2,27 +2,9 @@
 
 #include "Engine/Renderer/Culling/IndexedIndirectDrawCount.h"
 #include "Engine/Renderer/Geometry/Vertex.h"
-#include "Engine/Renderer/MeshRenderer.h"
-
-#include <glm/glm.hpp>
-
 #include <cstddef>
 
 namespace Engine {
-namespace {
-struct MaterialPushConstants {
-    glm::vec4 baseColorMetallic;
-    glm::vec4 roughnessAo;
-};
-
-MaterialPushConstants materialConstants(const MeshRenderer& renderer) {
-    return {
-        glm::vec4{renderer.material.baseColor.native(), renderer.material.metallic},
-        glm::vec4{renderer.material.roughness, renderer.material.ambientOcclusion,
-                  0.0f, 0.0f},
-    };
-}
-}
 
 void ForwardPass::create(const VkDevice device, const VkFormat colorFormat,
                          const VkFormat depthFormat,
@@ -35,8 +17,6 @@ void ForwardPass::create(const VkDevice device, const VkFormat colorFormat,
     options.colorFinalLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
     options.vertexShader = "shaders/pbr.vert.spv";
     options.fragmentShader = "shaders/pbr.frag.spv";
-    options.pushConstantSize = sizeof(MaterialPushConstants);
-    options.pushConstantStages = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
     options.cullMode = VK_CULL_MODE_BACK_BIT;
     options.descriptorSetLayouts = {sceneLayout};
     options.vertexBindings = {
@@ -90,21 +70,8 @@ void ForwardPass::begin(const VkCommandBuffer commandBuffer,
 }
 
 void ForwardPass::draw(const VkCommandBuffer commandBuffer,
-                       const MeshRenderer& plane, const MeshRenderer& cubes,
                        const Culling::IndexedIndirectDrawCount& indirectDraw) const {
-    if (plane.hasMesh()) {
-        const auto constants = materialConstants(plane);
-        vkCmdPushConstants(commandBuffer, pipeline_.layout(),
-                           VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
-                           0, sizeof(constants), &constants);
-        vkCmdDrawIndexed(commandBuffer, plane.mesh->indexCount(), 1,
-                         plane.firstIndex, 0, 0);
-    }
-    if (cubes.hasMesh()) {
-        const auto constants = materialConstants(cubes);
-        vkCmdPushConstants(commandBuffer, pipeline_.layout(),
-                           VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
-                           0, sizeof(constants), &constants);
+    if (indirectDraw.valid()) {
         indirectDraw.record(commandBuffer);
     }
 }

@@ -8,8 +8,6 @@
 
 namespace Engine {
 
-struct MeshRenderer;
-
 namespace Culling {
 class IndexedIndirectDrawCount;
 }
@@ -24,8 +22,7 @@ public:
                VkExtent2D extent, VkDescriptorSet sceneDescriptorSet,
                VkBuffer vertexBuffer, VkBuffer instanceBuffer,
                VkBuffer indexBuffer) const;
-    void draw(VkCommandBuffer commandBuffer, const MeshRenderer& plane,
-              const MeshRenderer& cubes,
+    void draw(VkCommandBuffer commandBuffer,
               const Culling::IndexedIndirectDrawCount& indirectDraw) const;
     void end(VkCommandBuffer commandBuffer) const;
 

@@ -4,6 +4,7 @@ layout(location = 0) in vec3 fragColor;
 layout(location = 1) in vec4 fragLightSpacePosition;
 layout(location = 2) in vec3 fragWorldPosition;
 layout(location = 3) in vec3 fragNormal;
+layout(location = 4) flat in uint fragMaterialIndex;
 layout(location = 0) out vec4 outColor;
 
 layout(binding = 0) uniform sampler2D shadowMap;
@@ -11,9 +12,13 @@ layout(binding = 1) uniform FrameData {
     mat4 view; mat4 projection; mat4 lightSpace;
     vec4 cameraPosition; vec4 lightDirectionIntensity;
 } frame;
-layout(push_constant) uniform PushConstants {
-    vec4 baseColorMetallic; vec4 roughnessAo;
-} pushConstants;
+struct MaterialData {
+    vec4 baseColorMetallic;
+    vec4 roughnessAmbientOcclusion;
+};
+layout(std430, binding = 2) readonly buffer MaterialBuffer {
+    MaterialData materials[];
+};
 
 const float PI = 3.14159265359;
 const float MIN_SHADOW_BIAS = 0.0025;
@@ -46,9 +51,10 @@ float geometrySchlickGGX(float nDotV, float r) {
 vec3 fresnelSchlick(float cosTheta, vec3 f0) { return f0 + (1.0 - f0) * pow(1.0 - cosTheta, 5.0); }
 
 void main() {
-    vec3 albedo = pow(fragColor * pushConstants.baseColorMetallic.rgb, vec3(2.2));
-    float metallic = clamp(pushConstants.baseColorMetallic.a, 0.0, 1.0);
-    float roughness = clamp(pushConstants.roughnessAo.x, 0.045, 1.0);
+    MaterialData material = materials[fragMaterialIndex];
+    vec3 albedo = pow(fragColor * material.baseColorMetallic.rgb, vec3(2.2));
+    float metallic = clamp(material.baseColorMetallic.a, 0.0, 1.0);
+    float roughness = clamp(material.roughnessAmbientOcclusion.x, 0.045, 1.0);
     vec3 n = normalize(fragNormal);
     vec3 v = normalize(frame.cameraPosition.xyz - fragWorldPosition);
     vec3 l = normalize(-frame.lightDirectionIntensity.xyz);
@@ -60,7 +66,7 @@ void main() {
     vec3 specular = distributionGGX(n, h, roughness) * geometry * f / max(4.0 * nDotV * nDotL, 0.0001);
     vec3 diffuse = (vec3(1.0) - f) * (1.0 - metallic) * albedo / PI;
     vec3 direct = (diffuse + specular) * frame.lightDirectionIntensity.w * nDotL * (1.0 - calculateShadow());
-    vec3 color = vec3(0.035) * albedo * clamp(pushConstants.roughnessAo.y, 0.0, 1.0) + direct;
+    vec3 color = vec3(0.035) * albedo * clamp(material.roughnessAmbientOcclusion.y, 0.0, 1.0) + direct;
     // Keep lighting in linear HDR space. Display mapping is performed once,
     // after the complete scene (including the skybox) has been rendered.
     outColor = vec4(color, 1.0);

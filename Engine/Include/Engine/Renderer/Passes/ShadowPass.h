@@ -11,8 +11,6 @@ namespace Engine {
 
 class Buffer;
 class Mat4;
-struct MeshRenderer;
-
 namespace Culling {
 class GPUCullingPass;
 class IndexedIndirectDrawCount;
@@ -28,12 +26,12 @@ public:
 
     void create(VkPhysicalDevice physicalDevice, VkDevice device,
                 const std::vector<VkBuffer>& uniformBuffers,
+                const std::vector<VkBuffer>& materialBuffers,
                 VkDeviceSize uniformBufferRange);
     void destroy() noexcept;
 
     void record(VkCommandBuffer commandBuffer, const Mat4& lightSpace,
                 VkBuffer vertexBuffer, VkBuffer instanceBuffer, VkBuffer indexBuffer,
-                const MeshRenderer& plane, const MeshRenderer& cubes,
                 const Culling::GPUCullingPass& cullingPass,
                 const Culling::IndexedIndirectDrawCount& indirectDraw,
                 std::uint32_t objectCount) const;

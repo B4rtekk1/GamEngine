@@ -28,6 +28,7 @@ namespace Engine::Culling {
         std::uint32_t firstIndex;
         std::uint32_t vertexOffset;
         std::uint32_t firstInstance;
+        std::uint32_t castShadow;
     };
 
     struct alignas(16) CullingUniformData
@@ -45,7 +46,7 @@ namespace Engine::Culling {
         float aabbExpansion;
 
         std::uint32_t cameraCut;
-        std::uint32_t padding0;
+        std::uint32_t shadowPass;
         std::uint32_t padding1;
         std::uint32_t padding2;
     };

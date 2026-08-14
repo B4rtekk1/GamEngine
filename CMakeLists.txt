@@ -16,6 +16,7 @@ add_library(Engine
         Engine/Source/Core/time.cpp
         Engine/Source/ECS/Registry.cpp
         Engine/Source/Input/Input.cpp
+        Engine/Source/Scene/SceneSerializer.cpp
         Engine/Source/UI/Canvas.cpp
         Engine/Source/UI/CanvasRenderer.cpp
         Engine/Source/UI/RectTransform.cpp
@@ -106,4 +107,8 @@ if(BUILD_TESTING)
     add_executable(CanvasTests Tests/CanvasTests.cpp)
     target_link_libraries(CanvasTests PRIVATE Engine)
     add_test(NAME CanvasTests COMMAND CanvasTests)
+
+    add_executable(SceneSerializerTests Tests/SceneSerializerTests.cpp)
+    target_link_libraries(SceneSerializerTests PRIVATE Engine)
+    add_test(NAME SceneSerializerTests COMMAND SceneSerializerTests)
 endif()

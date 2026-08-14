@@ -4,7 +4,6 @@
 #include "Engine/Renderer/Culling/GPUCullingPass.h"
 #include "Engine/Renderer/Culling/IndexedIndirectDrawCount.h"
 #include "Engine/Renderer/Geometry/Vertex.h"
-#include "Engine/Renderer/MeshRenderer.h"
 #include "Engine/Renderer/shader_loader.h"
 
 #include <glm/glm.hpp>
@@ -24,6 +23,7 @@ ShadowPass::~ShadowPass() {
 
 void ShadowPass::create(const VkPhysicalDevice physicalDevice, const VkDevice device,
                         const std::vector<VkBuffer>& uniformBuffers,
+                        const std::vector<VkBuffer>& materialBuffers,
                         const VkDeviceSize uniformBufferRange) {
     destroy();
     device_ = device;
@@ -31,14 +31,20 @@ void ShadowPass::create(const VkPhysicalDevice physicalDevice, const VkDevice de
     try {
         shadowMap_.create(physicalDevice, device_);
 
-        VkDescriptorSetLayoutBinding bindings[2]{};
+        if (materialBuffers.size() != uniformBuffers.size()) {
+            throw std::invalid_argument("Material and uniform frame counts must match");
+        }
+
+        VkDescriptorSetLayoutBinding bindings[3]{};
         bindings[0] = {0, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1,
                        VK_SHADER_STAGE_FRAGMENT_BIT, nullptr};
         bindings[1] = {1, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1,
                        VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, nullptr};
+        bindings[2] = {2, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1,
+                       VK_SHADER_STAGE_FRAGMENT_BIT, nullptr};
         const VkDescriptorSetLayoutCreateInfo layoutInfo{
             VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO, nullptr, 0,
-            2, bindings};
+            3, bindings};
         if (vkCreateDescriptorSetLayout(device_, &layoutInfo, nullptr,
                                         &descriptorSetLayout_) != VK_SUCCESS) {
             throw std::runtime_error("Could not create shadow descriptor-set layout");
@@ -48,6 +54,7 @@ void ShadowPass::create(const VkPhysicalDevice physicalDevice, const VkDevice de
         const VkDescriptorPoolSize poolSizes[] = {
             {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, frameCount},
             {VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, frameCount},
+            {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, frameCount},
         };
         VkDescriptorPoolCreateInfo poolInfo{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
         poolInfo.maxSets = frameCount;
@@ -73,13 +80,18 @@ void ShadowPass::create(const VkPhysicalDevice physicalDevice, const VkDevice de
         for (std::uint32_t frame = 0; frame < frameCount; ++frame) {
             const VkDescriptorBufferInfo bufferInfo{
                 uniformBuffers[frame], 0, uniformBufferRange};
-            VkWriteDescriptorSet writes[2]{};
+            const VkDescriptorBufferInfo materialInfo{
+                materialBuffers[frame], 0, VK_WHOLE_SIZE};
+            VkWriteDescriptorSet writes[3]{};
             writes[0] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr,
                          descriptorSets_[frame], 0, 0, 1,
                          VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &imageInfo, nullptr, nullptr};
             writes[1] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr,
                          descriptorSets_[frame], 1, 0, 1,
                          VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, nullptr, &bufferInfo, nullptr};
+            writes[2] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr,
+                         descriptorSets_[frame], 2, 0, 1,
+                         VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, nullptr, &materialInfo, nullptr};
             vkUpdateDescriptorSets(device_, std::size(writes), writes, 0, nullptr);
         }
 
@@ -189,12 +201,11 @@ VkDescriptorSet ShadowPass::descriptorSet(const std::uint32_t frameIndex) const 
 
 void ShadowPass::record(const VkCommandBuffer commandBuffer, const Mat4& lightSpace,
                         const VkBuffer vertexBuffer, const VkBuffer instanceBuffer,
-                        const VkBuffer indexBuffer, const MeshRenderer& plane,
-                        const MeshRenderer& cubes,
+                        const VkBuffer indexBuffer,
                         const Culling::GPUCullingPass& cullingPass,
                         const Culling::IndexedIndirectDrawCount& indirectDraw,
                         const std::uint32_t objectCount) const {
-    if (cubes.castShadow && cubes.hasMesh()) {
+    if (objectCount != 0) {
         cullingPass.record(commandBuffer, objectCount);
     }
 
@@ -222,11 +233,7 @@ void ShadowPass::record(const VkCommandBuffer commandBuffer, const Mat4& lightSp
     vkCmdPushConstants(commandBuffer, pipelineLayout_, VK_SHADER_STAGE_VERTEX_BIT,
                        0, sizeof(lightSpace), &lightSpace);
 
-    if (plane.castShadow && plane.hasMesh()) {
-        vkCmdDrawIndexed(commandBuffer, plane.mesh->indexCount(), 1,
-                         plane.firstIndex, 0, 0);
-    }
-    if (cubes.castShadow && cubes.hasMesh()) {
+    if (objectCount != 0 && indirectDraw.valid()) {
         indirectDraw.record(commandBuffer);
     }
     vkCmdEndRenderPass(commandBuffer);

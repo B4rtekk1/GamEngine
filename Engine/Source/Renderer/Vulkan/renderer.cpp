@@ -18,7 +18,8 @@
 #include "Engine/Renderer/Vulkan/swapchain.h"
 #include "Engine/Renderer/Geometry/Vertex.h"
 #include "Engine/Renderer/Geometry/Mesh.h"
-#include "Engine/Scene/Scene.h"
+#include "Engine/ECS/Registry.h"
+#include "Engine/Core/Transform.h"
 #include "Engine/Core/Camera.h"
 #include "Engine/Math/AABB.h"
 #include "Engine/Math/Frustum.h"
@@ -33,6 +34,8 @@
 #include "Engine/Renderer/Culling/IndexedIndirectDrawCount.h"
 #include "Engine/Renderer/Culling/HiZBuffer.h"
 #include "Engine/Renderer/Culling/HiZPass.h"
+#include "Engine/Renderer/Materials/MaterialBuffer.h"
+#include "Engine/Renderer/MeshRenderer.h"
 #include "Engine/Input/Input.h"
 #include "Engine/UI/Canvas.h"
 #include "Engine/UI/CanvasRenderer.h"
@@ -45,6 +48,7 @@
 #include <cstdio>
 #include <cstring>
 #include <iostream>
+#include <limits>
 #include <stdexcept>
 #include <string>
 #include <unordered_map>
@@ -77,9 +81,11 @@ const std::vector<const char*> validationLayers = {
 };
 
 namespace {
-    class CubeApp {
+    class RenderApp {
     public:
-        ~CubeApp() {
+        explicit RenderApp(Registry& registry) : registry(registry) {}
+
+        ~RenderApp() {
             cleanup();
         }
 
@@ -113,15 +119,16 @@ namespace {
         UI::CanvasRenderer canvasRenderer;
         DepthBuffer depthBuffer;
         ShadowPass shadowPass;
-        Scene scene;
+        Registry& registry;
         Camera camera{Degrees{45.0f}, static_cast<float>(WIDTH) / static_cast<float>(HEIGHT),
-                      0.1f, Scene::GridHalfExtent * 10.0f};
+                      0.1f, 100'000.0f};
         Buffer vertexBuffer;
         Buffer indexBuffer;
         std::array<Buffer, MAX_FRAMES_IN_FLIGHT> instanceBuffers;
         std::array<Buffer, MAX_FRAMES_IN_FLIGHT> shadowInstanceBuffers;
+        std::array<Buffer, MAX_FRAMES_IN_FLIGHT> materialBuffers;
         std::array<Buffer, MAX_FRAMES_IN_FLIGHT> uniformBuffers;
-        Buffer cullingObjectBuffer;
+        std::array<Buffer, MAX_FRAMES_IN_FLIGHT> cullingObjectBuffers;
         std::array<Buffer, MAX_FRAMES_IN_FLIGHT> cullingUniformBuffers;
         std::array<Buffer, MAX_FRAMES_IN_FLIGHT> shadowCullingUniformBuffers;
         std::array<Buffer, MAX_FRAMES_IN_FLIGHT> indirectBuffers;
@@ -146,9 +153,16 @@ namespace {
         VkPipeline cullingPipeline = VK_NULL_HANDLE;
         std::vector<Culling::GPUObjectData> gpuObjects;
         bool hiZValid = false;
+        struct RenderableRecord {
+            Entity entity{NullEntity};
+            AABB localBounds{};
+        };
+        std::vector<RenderableRecord> renderables;
         std::vector<glm::mat4> instanceModels;
         std::vector<glm::mat4> shadowInstanceModels;
-        uint32_t visibleCubeCount = 0;
+        std::vector<GPUMaterialData> materials;
+        Vec3 sceneCenter{};
+        float sceneRadius{1.0f};
 
         VkCommandPool commandPool{};
         std::vector<VkCommandBuffer> commandBuffers;
@@ -353,11 +367,17 @@ namespace {
 
         void createShadowPass() {
             std::vector<VkBuffer> buffers;
+            std::vector<VkBuffer> gpuMaterialBuffers;
             buffers.reserve(uniformBuffers.size());
+            gpuMaterialBuffers.reserve(materialBuffers.size());
             for (const Buffer& buffer : uniformBuffers) {
                 buffers.push_back(buffer.handle());
             }
+            for (const Buffer& buffer : materialBuffers) {
+                gpuMaterialBuffers.push_back(buffer.handle());
+            }
             shadowPass.create(vulkanDevice.physical(), device, buffers,
+                              gpuMaterialBuffers,
                               sizeof(UniformBufferObject));
         }
 
@@ -414,34 +434,63 @@ namespace {
 
         void createMeshBuffers() {
             Mesh sceneMesh;
+            renderables.clear();
+            glm::vec3 sceneMinimum{std::numeric_limits<float>::max()};
+            glm::vec3 sceneMaximum{std::numeric_limits<float>::lowest()};
             // Each MeshRenderer retains its own draw range, but identical
             // meshes contribute their geometry to the GPU buffers only once.
             std::unordered_map<const Mesh*, uint32_t> firstIndices;
-            scene.registry.view<Transform, MeshRenderer>(
-                [&](Entity, Transform&, MeshRenderer& renderer) {
+            registry.view<Transform, MeshRenderer>(
+                [&](const Entity entity, Transform& transform, MeshRenderer& renderer) {
                     if (!renderer.hasMesh()) {
                         return;
                     }
 
                     const Mesh* const mesh = renderer.mesh.get();
-                    if (const auto existing = firstIndices.find(mesh); existing != firstIndices.end()) {
+                    if (const auto existing = firstIndices.find(mesh);
+                        existing != firstIndices.end()) {
                         renderer.firstIndex = existing->second;
-                        return;
+                    } else {
+                        if (sceneMesh.vertices.size() + mesh->vertices.size() >
+                                std::numeric_limits<uint32_t>::max() ||
+                            sceneMesh.indices.size() + mesh->indices.size() >
+                                std::numeric_limits<uint32_t>::max()) {
+                            throw std::runtime_error("Scene geometry exceeds 32-bit draw limits");
+                        }
+                        const uint32_t vertexOffset = sceneMesh.vertexCount();
+                        renderer.firstIndex = sceneMesh.indexCount();
+                        firstIndices.emplace(mesh, renderer.firstIndex);
+                        sceneMesh.vertices.insert(sceneMesh.vertices.end(),
+                                                  mesh->vertices.begin(), mesh->vertices.end());
+                        for (const uint32_t index : mesh->indices) {
+                            sceneMesh.indices.push_back(vertexOffset + index);
+                        }
                     }
 
-                    const uint32_t vertexOffset = sceneMesh.vertexCount();
-                    renderer.firstIndex = sceneMesh.indexCount();
-                    firstIndices.emplace(mesh, renderer.firstIndex);
-                    sceneMesh.vertices.insert(sceneMesh.vertices.end(),
-                                              mesh->vertices.begin(), mesh->vertices.end());
-                    for (const uint32_t index : mesh->indices) {
-                        sceneMesh.indices.push_back(vertexOffset + index);
+                    AABB localBounds{
+                        .min = glm::vec3{std::numeric_limits<float>::max()},
+                        .max = glm::vec3{std::numeric_limits<float>::lowest()},
+                    };
+                    for (const Vertex& vertex : mesh->vertices) {
+                        localBounds.min = glm::min(localBounds.min, vertex.position.native());
+                        localBounds.max = glm::max(localBounds.max, vertex.position.native());
                     }
+                    renderables.push_back({entity, localBounds});
+
+                    const AABB worldBounds =
+                        localBounds.transformed(transform.matrix().native());
+                    sceneMinimum = glm::min(sceneMinimum, worldBounds.min);
+                    sceneMaximum = glm::max(sceneMaximum, worldBounds.max);
                 });
 
             if (sceneMesh.empty()) {
                 throw std::runtime_error("Scene contains no renderable geometry");
             }
+
+            const glm::vec3 center = (sceneMinimum + sceneMaximum) * 0.5f;
+            const glm::vec3 halfExtent = (sceneMaximum - sceneMinimum) * 0.5f;
+            sceneCenter = Vec3{center};
+            sceneRadius = std::max({halfExtent.x, halfExtent.y, halfExtent.z, 1.0f});
 
             vertexBuffer.createDeviceLocal(vulkanDevice.physical(), device, sceneMesh.vertices.data(),
                 sizeof(Vertex) * sceneMesh.vertices.size(), VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
@@ -452,9 +501,10 @@ namespace {
         }
 
         void createInstanceBuffer() {
-            instanceModels.resize(Scene::CubeCount + 1);
-            shadowInstanceModels.resize(Scene::CubeCount + 1);
-            updateInstanceBuffer();
+            instanceModels.resize(renderables.size());
+            shadowInstanceModels.resize(renderables.size());
+            materials.resize(renderables.size());
+            updateRenderableBuffers();
             for (Buffer& buffer : instanceBuffers) {
                 buffer.createHostVisible(vulkanDevice.physical(), device,
                     sizeof(glm::mat4) * instanceModels.size(), VK_BUFFER_USAGE_VERTEX_BUFFER_BIT);
@@ -465,25 +515,45 @@ namespace {
                     sizeof(glm::mat4) * shadowInstanceModels.size(), VK_BUFFER_USAGE_VERTEX_BUFFER_BIT);
                 buffer.update(shadowInstanceModels.data(), sizeof(glm::mat4) * shadowInstanceModels.size());
             }
+            for (Buffer& buffer : materialBuffers) {
+                buffer.createHostVisible(vulkanDevice.physical(), device,
+                    sizeof(GPUMaterialData) * materials.size(),
+                    VK_BUFFER_USAGE_STORAGE_BUFFER_BIT);
+                buffer.update(materials.data(), sizeof(GPUMaterialData) * materials.size());
+            }
         }
 
-        void updateInstanceBuffer() {
-            const glm::mat4 planeModel = scene.registry.get<Transform>(scene.plane).matrix().native();
-            instanceModels[0] = planeModel;
-            shadowInstanceModels[0] = planeModel;
-            // GPU culling indexes this stable per-instance array directly.
-            visibleCubeCount = static_cast<uint32_t>(scene.cubes.size());
-            for (std::size_t index = 0; index < scene.cubes.size(); ++index) {
-                const Transform& transform = scene.registry.get<Transform>(scene.cubes[index]);
+        void updateRenderableBuffers() {
+            for (std::size_t index = 0; index < renderables.size(); ++index) {
+                const Entity entity = renderables[index].entity;
+                const Transform& transform = registry.get<Transform>(entity);
+                const MeshRenderer& renderer = registry.get<MeshRenderer>(entity);
                 const glm::mat4 model = transform.matrix().native();
-                shadowInstanceModels[index + 1] = model;
-                instanceModels[index + 1] = model;
+                shadowInstanceModels[index] = model;
+                instanceModels[index] = model;
+                materials[index] = {
+                    glm::vec4{renderer.material.baseColor.native(),
+                              renderer.material.metallic},
+                    glm::vec4{renderer.material.roughness,
+                              renderer.material.ambientOcclusion, 0.0f, 0.0f},
+                };
+                if (gpuObjects.size() == renderables.size()) {
+                    std::memcpy(gpuObjects[index].model.data, &model, sizeof(model));
+                    gpuObjects[index].castShadow = renderer.castShadow ? 1u : 0u;
+                }
             }
             if (instanceBuffers[currentFrame].handle() != VK_NULL_HANDLE) {
                 instanceBuffers[currentFrame].update(instanceModels.data(),
                                                      sizeof(glm::mat4) * instanceModels.size());
                 shadowInstanceBuffers[currentFrame].update(shadowInstanceModels.data(),
                                                            sizeof(glm::mat4) * shadowInstanceModels.size());
+                materialBuffers[currentFrame].update(
+                    materials.data(), sizeof(GPUMaterialData) * materials.size());
+                if (cullingObjectBuffers[currentFrame].handle() != VK_NULL_HANDLE) {
+                    cullingObjectBuffers[currentFrame].update(
+                        gpuObjects.data(),
+                        sizeof(Culling::GPUObjectData) * gpuObjects.size());
+                }
             }
         }
 
@@ -501,6 +571,7 @@ namespace {
             data.aabbExpansion = 0.01f;
             // Never reject objects using an uninitialized hierarchy.
             data.cameraCut = hiZValid ? 0u : 1u;
+            data.shadowPass = 0;
             cullingUniformBuffers[frame].update(&data, sizeof(data));
         }
 
@@ -515,6 +586,7 @@ namespace {
             data.enableOcclusionCulling = 0;
             data.aabbExpansion = 0.01f;
             data.cameraCut = 1;
+            data.shadowPass = 1;
             shadowCullingUniformBuffers[frame].update(&data, sizeof(data));
         }
 
@@ -542,7 +614,7 @@ namespace {
         }
 
         void createCullingResources() {
-            const uint32_t objectCount = static_cast<uint32_t>(scene.cubes.size());
+            const uint32_t objectCount = static_cast<uint32_t>(renderables.size());
             if (objectCount == 0) return;
 
             hiZBuffer.create(vulkanDevice.physical(), device, swapchain.extent().width, swapchain.extent().height);
@@ -585,22 +657,33 @@ namespace {
             cullingPipeline = createComputePipeline("shaders/hiz_cull.comp.spv", cullingPipelineLayout);
 
             gpuObjects.resize(objectCount);
-            const MeshRenderer& cubeRenderer = scene.registry.get<MeshRenderer>(scene.cubes.front());
             for (uint32_t i = 0; i < objectCount; ++i) {
-                const glm::mat4 model = scene.registry.get<Transform>(scene.cubes[i]).matrix().native();
+                const Entity entity = renderables[i].entity;
+                const glm::mat4 model =
+                    registry.get<Transform>(entity).matrix().native();
+                const MeshRenderer& renderer = registry.get<MeshRenderer>(entity);
                 auto& object = gpuObjects[i];
                 std::memcpy(object.model.data, &model, sizeof(model));
-                object.localAabbMin = {-0.5f, -0.5f, -0.5f, 0.0f};
-                object.localAabbMax = { 0.5f,  0.5f,  0.5f, 0.0f};
-                object.indexCount = cubeRenderer.mesh->indexCount();
+                const AABB& bounds = renderables[i].localBounds;
+                object.localAabbMin = {
+                    bounds.min.x, bounds.min.y, bounds.min.z, 0.0f};
+                object.localAabbMax = {
+                    bounds.max.x, bounds.max.y, bounds.max.z, 0.0f};
+                object.indexCount = renderer.mesh->indexCount();
                 object.instanceCount = 1;
-                object.firstIndex = cubeRenderer.firstIndex;
+                object.firstIndex = renderer.firstIndex;
                 object.vertexOffset = 0;
-                object.firstInstance = i + 1;
+                object.firstInstance = i;
+                object.castShadow = renderer.castShadow ? 1u : 0u;
             }
-            cullingObjectBuffer.createDeviceLocal(vulkanDevice.physical(), device, gpuObjects.data(),
-                sizeof(Culling::GPUObjectData) * gpuObjects.size(), VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
-                commandPool, vulkanDevice.graphicsQueue());
+            for (Buffer& buffer : cullingObjectBuffers) {
+                buffer.createHostVisible(
+                    vulkanDevice.physical(), device,
+                    sizeof(Culling::GPUObjectData) * gpuObjects.size(),
+                    VK_BUFFER_USAGE_STORAGE_BUFFER_BIT);
+                buffer.update(gpuObjects.data(),
+                              sizeof(Culling::GPUObjectData) * gpuObjects.size());
+            }
 
             for (uint32_t frame = 0; frame < MAX_FRAMES_IN_FLIGHT; ++frame) {
                 cullingUniformBuffers[frame].createHostVisible(vulkanDevice.physical(), device,
@@ -659,7 +742,8 @@ namespace {
                 const VkDescriptorImageInfo hiZInfo{hiZBuffer.sampler(), hiZBuffer.fullView(), VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
                 const auto updateCullingSet = [&](const VkDescriptorSet set, const Buffer& indirectBuffer,
                                                   const Buffer& countBuffer, const Buffer& uniformBuffer) {
-                    const VkDescriptorBufferInfo objectInfo{cullingObjectBuffer.handle(), 0, VK_WHOLE_SIZE};
+                    const VkDescriptorBufferInfo objectInfo{
+                        cullingObjectBuffers[frame].handle(), 0, VK_WHOLE_SIZE};
                     const VkDescriptorBufferInfo indirectInfo{indirectBuffer.handle(), 0, VK_WHOLE_SIZE};
                     const VkDescriptorBufferInfo countInfo{countBuffer.handle(), 0, sizeof(uint32_t)};
                     const VkDescriptorBufferInfo uniformInfo{uniformBuffer.handle(), 0, sizeof(Culling::CullingUniformData)};
@@ -705,7 +789,7 @@ namespace {
             for (Buffer& buffer : shadowIndirectBuffers) buffer.destroy();
             for (Buffer& buffer : drawCountBuffers) buffer.destroy();
             for (Buffer& buffer : shadowDrawCountBuffers) buffer.destroy();
-            cullingObjectBuffer.destroy();
+            for (Buffer& buffer : cullingObjectBuffers) buffer.destroy();
             if (cullingDescriptorPool != VK_NULL_HANDLE) vkDestroyDescriptorPool(device, cullingDescriptorPool, nullptr);
             if (hiZCopyPipeline != VK_NULL_HANDLE) vkDestroyPipeline(device, hiZCopyPipeline, nullptr);
             if (hiZReducePipeline != VK_NULL_HANDLE) vkDestroyPipeline(device, hiZReducePipeline, nullptr);
@@ -772,11 +856,11 @@ namespace {
             }
         }
 
-        static Mat4 lightSpaceMatrix() {
-            constexpr float extent = Scene::GridHalfExtent;
-            const Vec3 lightTarget{0.0f, extent, 0.0f};
-            const Vec3 lightPosition = lightTarget + Vec3{extent * 2.6f, extent * 3.5f,
-                                                          extent * 2.6f};
+        Mat4 lightSpaceMatrix() const {
+            const float extent = sceneRadius;
+            const Vec3 lightTarget = sceneCenter;
+            const Vec3 lightPosition = lightTarget + Vec3{
+                extent * 2.6f, extent * 3.5f, extent * 2.6f};
             const Vec3 worldUp{0.0f, 1.0f, 0.0f};
             const Mat4 lightView = Mat4::lookAt(lightPosition, lightTarget, worldUp);
             const Mat4 lightProjection = Mat4::scale(
@@ -788,9 +872,9 @@ namespace {
         }
 
         void updateUniformBuffer(const uint32_t frame) {
-            constexpr float extent = Scene::GridHalfExtent;
-            constexpr Vec3 sceneCenter{0.0f, extent, 0.0f};
-            constexpr Vec3 cameraOffset{extent * 2.9f, extent * 2.6f, extent * 3.9f};
+            const float extent = sceneRadius;
+            const Vec3 cameraOffset{
+                extent * 2.9f, extent * 2.6f, extent * 3.9f};
             const Vec3 centeredCameraPosition = sceneCenter + cameraOffset;
             const Vec3 direction = sceneCenter - centeredCameraPosition;
             const float horizontalDistance = Vec2{direction.x(), direction.z()}.length();
@@ -813,15 +897,10 @@ namespace {
             if (vkBeginCommandBuffer(commandBuffer, &beginInfo) != VK_SUCCESS) {
                 throw std::runtime_error("Could not begin command buffer");
             }
-            const MeshRenderer& planeRenderer =
-                scene.registry.get<MeshRenderer>(scene.plane);
-            const MeshRenderer& cubeRenderer =
-                scene.registry.get<MeshRenderer>(scene.cubes.front());
-
             shadowPass.record(
                 commandBuffer, lightSpaceMatrix(), vertexBuffer.handle(),
                 shadowInstanceBuffers[currentFrame].handle(), indexBuffer.handle(),
-                planeRenderer, cubeRenderer, shadowCullingPasses[currentFrame],
+                shadowCullingPasses[currentFrame],
                 shadowIndirectDraws[currentFrame],
                 static_cast<std::uint32_t>(gpuObjects.size()));
 
@@ -832,8 +911,7 @@ namespace {
                 commandBuffer, hdrFramebuffer, swapchain.extent(),
                 shadowPass.descriptorSet(currentFrame), vertexBuffer.handle(),
                 instanceBuffers[currentFrame].handle(), indexBuffer.handle());
-            forwardPass.draw(commandBuffer, planeRenderer, cubeRenderer,
-                             indirectDraws[currentFrame]);
+            forwardPass.draw(commandBuffer, indirectDraws[currentFrame]);
             skyPass.record(commandBuffer, currentFrame);
             forwardPass.end(commandBuffer);
 
@@ -980,7 +1058,7 @@ namespace {
 
             vkResetCommandBuffer(commandBuffers[currentFrame], 0);
             updateUniformBuffer(currentFrame);
-            updateInstanceBuffer();
+            updateRenderableBuffers();
             updateCullingUniformBuffer(currentFrame);
             updateShadowCullingUniformBuffer(currentFrame);
             recordCommandBuffer(commandBuffers[currentFrame], imageIndex);
@@ -1034,8 +1112,9 @@ namespace {
                 const double fps = fpsFrameCount / fpsElapsedTime;
 
                 char title[128];
-                snprintf(title, sizeof(title), "Vulkan + SDL3 - Cube | FPS: %.1f | Visible: %u/%zu",
-                         fps, visibleCubeCount, Scene::CubeCount);
+                snprintf(title, sizeof(title),
+                         "GamEngine | FPS: %.1f | Renderables: %zu",
+                         fps, renderables.size());
                 SDL_SetWindowTitle(window, title);
 
                 fpsFrameCount = 0;
@@ -1096,6 +1175,9 @@ namespace {
                 for (Buffer& buffer : shadowInstanceBuffers) {
                     buffer.destroy();
                 }
+                for (Buffer& buffer : materialBuffers) {
+                    buffer.destroy();
+                }
                 for (Buffer& uniformBuffer : uniformBuffers) {
                     uniformBuffer.destroy();
                 }
@@ -1147,8 +1229,8 @@ namespace {
 
 } // namespace
 
-void Renderer::run() {
-    CubeApp app;
+void Renderer::run(Registry& registry) {
+    RenderApp app{registry};
     app.run();
 }
 

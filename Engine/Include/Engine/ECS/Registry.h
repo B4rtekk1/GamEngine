@@ -206,6 +206,36 @@ public:
         }
     }
 
+    /**
+     * @brief Invokes a function for entities matching a component set.
+     *
+     * This overload permits read-only systems, such as scene serialization,
+     * to iterate a const registry. Component arguments passed to the callback
+     * are const references.
+     */
+    template<typename... Components, typename Func>
+    void view(Func &&func) const {
+        if constexpr (sizeof...(Components) == 0) {
+            for (const Entity entity : m_entities) {
+                std::invoke(func, entity);
+            }
+        } else {
+            using FirstComponent =
+                std::tuple_element_t<0, std::tuple<Components...>>;
+            const auto *firstPool = findPool<FirstComponent>();
+
+            if (firstPool == nullptr) {
+                return;
+            }
+
+            for (const Entity entity : firstPool->entities()) {
+                if ((has<Components>(entity) && ...)) {
+                    std::invoke(func, entity, get<Components>(entity)...);
+                }
+            }
+        }
+    }
+
 private:
     /**
      * @brief Returns the pool for a component type, creating it when needed.
