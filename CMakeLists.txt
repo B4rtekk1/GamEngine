@@ -1,6 +1,8 @@
 cmake_minimum_required(VERSION 4.4)
 project(GamEngine)
 
+include(CTest)
+
 set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
@@ -14,6 +16,8 @@ add_library(Engine
         Engine/Source/Core/time.cpp
         Engine/Source/ECS/Registry.cpp
         Engine/Source/Input/Input.cpp
+        Engine/Source/UI/Canvas.cpp
+        Engine/Source/UI/RectTransform.cpp
         Engine/Source/Renderer/shader_loader.cpp
         Engine/Source/Renderer/Textures/Cubemap.cpp
         Engine/Source/Renderer/Textures/Texture2D.cpp
@@ -92,3 +96,9 @@ add_custom_command(TARGET GamEngine POST_BUILD
         COMMAND ${CMAKE_COMMAND} -E copy_directory "${SHADER_OUT_DIR}" "$<TARGET_FILE_DIR:GamEngine>/shaders"
         COMMENT "Copying SPIR-V shaders beside GamEngine"
 )
+
+if(BUILD_TESTING)
+    add_executable(CanvasTests Tests/CanvasTests.cpp)
+    target_link_libraries(CanvasTests PRIVATE Engine)
+    add_test(NAME CanvasTests COMMAND CanvasTests)
+endif()
