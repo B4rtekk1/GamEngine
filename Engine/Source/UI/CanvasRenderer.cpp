@@ -26,7 +26,8 @@ void CanvasRenderer::create(const VkPhysicalDevice physicalDevice,
                             const VkDevice device, const VkFormat colorFormat,
                             const VkExtent2D extent,
                             const std::vector<VkImageView>& imageViews,
-                            const std::uint32_t framesInFlight) {
+                            const std::uint32_t framesInFlight,
+                            Assets::AssetManager& assets) {
     if (physicalDevice == VK_NULL_HANDLE || device == VK_NULL_HANDLE ||
         framesInFlight == 0) {
         throw std::invalid_argument("Canvas renderer received incomplete resources");
@@ -36,7 +37,7 @@ void CanvasRenderer::create(const VkPhysicalDevice physicalDevice,
     physicalDevice_ = physicalDevice;
     device_ = device;
     try {
-        pipeline_.create(device_, colorFormat, extent, imageViews);
+        pipeline_.create(device_, colorFormat, extent, imageViews, assets);
         frames_.reserve(framesInFlight);
         for (std::uint32_t index = 0; index < framesInFlight; ++index) {
             frames_.push_back(std::make_unique<FrameResources>());

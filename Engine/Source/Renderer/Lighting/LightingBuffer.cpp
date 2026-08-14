@@ -208,8 +208,7 @@ void LightingBuffer::update(Registry& registry) const {
     gpuData.directionIntensity =
         Vec4{0.0f, -1.0f, 0.0f, 0.0f};
 
-    gpuData.color =
-        Vec4{1.0f, 1.0f, 1.0f, 0.0f};
+    gpuData.color = Math::Color::white().with_alpha(0.0f);
 
     bool foundDirectionalLight = false;
 
@@ -253,13 +252,7 @@ void LightingBuffer::update(Registry& registry) const {
                     light.intensity
                 };
 
-            gpuData.color =
-                Vec4{
-                    light.color.x(),
-                    light.color.y(),
-                    light.color.z(),
-                    0.0f
-                };
+            gpuData.color = light.color.with_alpha(0.0f);
 
             foundDirectionalLight = true;
         }

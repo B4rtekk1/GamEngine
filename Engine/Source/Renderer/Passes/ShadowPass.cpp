@@ -24,7 +24,8 @@ ShadowPass::~ShadowPass() {
 void ShadowPass::create(const VkPhysicalDevice physicalDevice, const VkDevice device,
                         const std::vector<VkBuffer>& uniformBuffers,
                         const std::vector<VkBuffer>& materialBuffers,
-                        const VkDeviceSize uniformBufferRange) {
+                        const VkDeviceSize uniformBufferRange,
+                        Assets::AssetManager& assets) {
     destroy();
     device_ = device;
 
@@ -95,7 +96,7 @@ void ShadowPass::create(const VkPhysicalDevice physicalDevice, const VkDevice de
             vkUpdateDescriptorSets(device_, std::size(writes), writes, 0, nullptr);
         }
 
-        const auto shader = vkutil::loadShaderModule(device_, "shaders/shadow.vert.spv");
+        const auto shader = vkutil::loadShaderModule(device_, assets, "shaders/shadow.vert.spv");
         const VkPipelineShaderStageCreateInfo stage{
             VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO, nullptr, 0,
             VK_SHADER_STAGE_VERTEX_BIT, shader.get(), "main", nullptr};

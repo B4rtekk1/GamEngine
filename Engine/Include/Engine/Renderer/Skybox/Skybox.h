@@ -9,6 +9,7 @@
 #include <vector>
 
 namespace Engine {
+namespace Assets { class AssetManager; }
 
 class Skybox final {
 public:
@@ -20,7 +21,8 @@ public:
     void create(VkPhysicalDevice physicalDevice, VkDevice device, VkCommandPool commandPool,
                 VkQueue queue, VkRenderPass renderPass, VkFormat colorFormat,
                 VkSampleCountFlagBits samples, VkDescriptorSetLayout descriptorSetLayout,
-                const std::vector<VkBuffer>& uniformBuffers, VkDeviceSize uniformBufferRange);
+                const std::vector<VkBuffer>& uniformBuffers, VkDeviceSize uniformBufferRange,
+                Assets::AssetManager& assets);
     void draw(VkCommandBuffer commandBuffer, uint32_t frameIndex) const;
     void destroy() noexcept;
 

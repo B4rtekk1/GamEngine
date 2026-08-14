@@ -17,6 +17,11 @@ bool equal(const Engine::Vec3& lhs, const Engine::Vec3& rhs) {
     return lhs.x() == rhs.x() && lhs.y() == rhs.y() && lhs.z() == rhs.z();
 }
 
+bool equal(const Engine::Math::Color& lhs, const Engine::Math::Color& rhs) {
+    return lhs.r() == rhs.r() && lhs.g() == rhs.g() && lhs.b() == rhs.b() &&
+           lhs.a() == rhs.a();
+}
+
 } // namespace
 
 int main() {

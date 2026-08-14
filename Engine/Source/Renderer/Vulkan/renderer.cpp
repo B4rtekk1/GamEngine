@@ -29,6 +29,7 @@
 #include "Engine/Renderer/Passes/ShadowPass.h"
 #include "Engine/Renderer/Passes/SkyPass.h"
 #include "Engine/Renderer/Passes/TonemapPass.h"
+#include "Engine/Assets/AssetManager.h"
 #include "Engine/Renderer/Culling/CullingTypes.h"
 #include "Engine/Renderer/Culling/GPUCullingPass.h"
 #include "Engine/Renderer/Culling/IndexedIndirectDrawCount.h"
@@ -53,6 +54,7 @@
 #include <string>
 #include <unordered_map>
 #include <vector>
+#include <filesystem>
 
 namespace Engine {
 
@@ -120,6 +122,7 @@ namespace {
         DepthBuffer depthBuffer;
         ShadowPass shadowPass;
         Registry& registry;
+        Assets::AssetManager assetManager;
         Camera camera{Degrees{45.0f}, static_cast<float>(WIDTH) / static_cast<float>(HEIGHT),
                       0.1f, 100'000.0f};
         Buffer vertexBuffer;
@@ -195,6 +198,10 @@ namespace {
         }
 
         void initVulkan() {
+            const char* basePath = SDL_GetBasePath();
+            assetManager.set_asset_root(basePath ? std::filesystem::path(basePath) : std::filesystem::path{});
+            Assets::register_default_asset_loaders(assetManager);
+            assetManager.set_error_handler([](const std::string& message) { std::cerr << "[Assets] " << message << '\\n'; });
             createInstance();
             setupDebugMessenger();
             createSurface();
@@ -378,12 +385,12 @@ namespace {
             }
             shadowPass.create(vulkanDevice.physical(), device, buffers,
                               gpuMaterialBuffers,
-                              sizeof(UniformBufferObject));
+                              sizeof(UniformBufferObject), assetManager);
         }
 
         void createForwardPass() {
             forwardPass.create(device, HdrBuffer::Format, depthBuffer.format(),
-                               msaa.sampleCount(), shadowPass.descriptorSetLayout());
+                               msaa.sampleCount(), shadowPass.descriptorSetLayout(), assetManager);
         }
 
         void createSkyPass() {
@@ -395,13 +402,13 @@ namespace {
             skyPass.create(vulkanDevice.physical(), device, commandPool,
                            vulkanDevice.graphicsQueue(), forwardPass.renderPass(),
                            HdrBuffer::Format, msaa.sampleCount(), buffers,
-                           sizeof(UniformBufferObject));
+                           sizeof(UniformBufferObject), assetManager);
         }
 
         void createTonemapPass() {
             tonemapPass.create(device, swapchain.format(), swapchain.extent(),
                                swapchain.imageViews(), hdrBuffer.imageView(),
-                               hdrBuffer.sampler());
+                               hdrBuffer.sampler(), assetManager);
         }
 
         void createUIResources() {
@@ -410,14 +417,14 @@ namespace {
 
             if (canvas.empty()) {
                 auto panel = std::make_unique<UI::PanelElement>(
-                    Vec4{0.025f, 0.035f, 0.055f, 0.82f});
+                    Math::Color{0.025f, 0.035f, 0.055f, 0.82f});
                 panel->rectTransform.anchorMin = {0.0f, 0.0f};
                 panel->rectTransform.anchorMax = {0.0f, 0.0f};
                 panel->rectTransform.offsetMin = {20.0f, 20.0f};
                 panel->rectTransform.offsetMax = {300.0f, 110.0f};
 
                 auto accent = std::make_unique<UI::PanelElement>(
-                    Vec4{0.10f, 0.75f, 0.90f, 1.0f});
+                    Math::Color{0.10f, 0.75f, 0.90f, 1.0f});
                 accent->rectTransform.anchorMin = {0.0f, 0.0f};
                 accent->rectTransform.anchorMax = {0.0f, 1.0f};
                 accent->rectTransform.offsetMin = {0.0f, 0.0f};
@@ -429,7 +436,7 @@ namespace {
 
             canvasRenderer.create(
                 vulkanDevice.physical(), device, swapchain.format(), extent,
-                swapchain.imageViews(), MAX_FRAMES_IN_FLIGHT);
+                swapchain.imageViews(), MAX_FRAMES_IN_FLIGHT, assetManager);
         }
 
         void createMeshBuffers() {
@@ -532,7 +539,9 @@ namespace {
                 shadowInstanceModels[index] = model;
                 instanceModels[index] = model;
                 materials[index] = {
-                    glm::vec4{renderer.material.baseColor.native(),
+                    glm::vec4{renderer.material.baseColor.r(),
+                              renderer.material.baseColor.g(),
+                              renderer.material.baseColor.b(),
                               renderer.material.metallic},
                     glm::vec4{renderer.material.roughness,
                               renderer.material.ambientOcclusion, 0.0f, 0.0f},
@@ -598,7 +607,7 @@ namespace {
         }
 
         VkPipeline createComputePipeline(const char* shaderPath, VkPipelineLayout layout) {
-            const auto shader = vkutil::loadShaderModule(device, shaderPath);
+            const auto shader = vkutil::loadShaderModule(device, assetManager, shaderPath);
             VkPipelineShaderStageCreateInfo stage{VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO};
             stage.stage = VK_SHADER_STAGE_COMPUTE_BIT;
             stage.module = shader.get();

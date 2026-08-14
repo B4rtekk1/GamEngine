@@ -3,6 +3,7 @@
 #include <vulkan/vulkan.h>
 
 namespace Engine {
+namespace Assets { class AssetManager; }
 
 class SkyboxPipeline final {
 public:
@@ -12,7 +13,8 @@ public:
     SkyboxPipeline& operator=(const SkyboxPipeline&) = delete;
 
     void create(VkDevice device, VkRenderPass renderPass, VkFormat colorFormat,
-                VkSampleCountFlagBits samples, VkDescriptorSetLayout descriptorSetLayout);
+                VkSampleCountFlagBits samples, VkDescriptorSetLayout descriptorSetLayout,
+                Assets::AssetManager& assets);
     void destroy() noexcept;
     [[nodiscard]] VkPipeline handle() const noexcept { return pipeline_; }
     [[nodiscard]] VkPipelineLayout layout() const noexcept { return layout_; }

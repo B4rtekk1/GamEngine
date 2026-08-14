@@ -8,6 +8,7 @@
 #include <vector>
 
 namespace Engine {
+namespace Assets { class AssetManager; }
 
 class Buffer;
 class Mat4;
@@ -27,7 +28,7 @@ public:
     void create(VkPhysicalDevice physicalDevice, VkDevice device,
                 const std::vector<VkBuffer>& uniformBuffers,
                 const std::vector<VkBuffer>& materialBuffers,
-                VkDeviceSize uniformBufferRange);
+                VkDeviceSize uniformBufferRange, Assets::AssetManager& assets);
     void destroy() noexcept;
 
     void record(VkCommandBuffer commandBuffer, const Mat4& lightSpace,

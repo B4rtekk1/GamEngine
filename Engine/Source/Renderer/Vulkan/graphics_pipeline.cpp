@@ -161,8 +161,12 @@ void GraphicsPipeline::createPipelineLayout(const GraphicsPipelineOptions& optio
 }
 
 void GraphicsPipeline::createGraphicsPipeline(const GraphicsPipelineOptions& options) {
-    const auto vertexShader = vkutil::loadShaderModule(device_, options.vertexShader);
-    const auto fragmentShader = vkutil::loadShaderModule(device_, options.fragmentShader);
+    const auto vertexShader = options.assetManager
+        ? vkutil::loadShaderModule(device_, *options.assetManager, options.vertexShader)
+        : vkutil::loadShaderModule(device_, options.vertexShader);
+    const auto fragmentShader = options.assetManager
+        ? vkutil::loadShaderModule(device_, *options.assetManager, options.fragmentShader)
+        : vkutil::loadShaderModule(device_, options.fragmentShader);
     const std::array stages{
         VkPipelineShaderStageCreateInfo{VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO, nullptr, 0, VK_SHADER_STAGE_VERTEX_BIT, vertexShader.get(), "main"},
         VkPipelineShaderStageCreateInfo{VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO, nullptr, 0, VK_SHADER_STAGE_FRAGMENT_BIT, fragmentShader.get(), "main"},

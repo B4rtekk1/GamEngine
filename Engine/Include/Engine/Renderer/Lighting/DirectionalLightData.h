@@ -1,11 +1,12 @@
 #pragma once
 
+#include <Engine/Math/Color.h>
 #include <Engine/Math/Vec4.h>
 
 namespace Engine {
     struct alignas(16) DirectionalLightGPU {
         Vec4 directionIntensity;
-        Vec4 color;
+        Math::Color color;
     };
 
     static_assert(

@@ -15,7 +15,7 @@ public:
         indices.clear();
     }
 
-    void addQuad(const Rect& rect, const Vec4& color) {
+    void addQuad(const Rect& rect, const Math::Color& color) {
         if (rect.width <= 0.0f || rect.height <= 0.0f) {
             return;
         }

@@ -1,7 +1,6 @@
 #pragma once
 
-#include "Engine/Math/Vec3.h"
-
+#include "Engine/Math/Math.h"
 namespace Engine {
 
     enum class LightType {
@@ -13,7 +12,7 @@ namespace Engine {
     struct LightComponent {
         LightType type = LightType::Directional;
 
-        Vec3 color{1.0f, 1.0f, 1.0f};
+        Math::Color color{1.0f, 1.0f, 1.0f};
         float intensity = 1.0f;
 
         bool enabled = true;

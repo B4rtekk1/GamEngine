@@ -24,14 +24,14 @@ Skybox::~Skybox() { destroy(); }
 void Skybox::create(VkPhysicalDevice physicalDevice, VkDevice device, VkCommandPool commandPool, VkQueue queue,
                     VkRenderPass renderPass, VkFormat colorFormat, VkSampleCountFlagBits samples,
                     VkDescriptorSetLayout descriptorSetLayout, const std::vector<VkBuffer>& uniformBuffers,
-                    VkDeviceSize uniformBufferRange) {
+                    VkDeviceSize uniformBufferRange, Assets::AssetManager& assets) {
     if (uniformBuffers.empty()) throw std::invalid_argument("Skybox requires camera uniform buffers");
     destroy(); device_ = device; descriptorSetLayout_ = descriptorSetLayout;
     try {
         vertexBuffer_.createDeviceLocal(physicalDevice, device_, kVertices.data(), sizeof(kVertices),
                                         VK_BUFFER_USAGE_VERTEX_BUFFER_BIT, commandPool, queue);
         cubemap_.create(physicalDevice, device_, commandPool, queue, kFaceColours);
-        pipeline_.create(device_, renderPass, colorFormat, samples, descriptorSetLayout_);
+        pipeline_.create(device_, renderPass, colorFormat, samples, descriptorSetLayout_, assets);
         VkDescriptorPoolSize sizes[] = {{VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, static_cast<uint32_t>(uniformBuffers.size())}, {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, static_cast<uint32_t>(uniformBuffers.size())}};
         VkDescriptorPoolCreateInfo pool{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO}; pool.maxSets = static_cast<uint32_t>(uniformBuffers.size()); pool.poolSizeCount = 2; pool.pPoolSizes = sizes;
         if (vkCreateDescriptorPool(device_, &pool, nullptr, &descriptorPool_) != VK_SUCCESS) throw std::runtime_error("Could not create skybox descriptor pool");

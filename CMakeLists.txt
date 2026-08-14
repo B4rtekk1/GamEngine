@@ -12,6 +12,7 @@ find_package(SDL3 CONFIG REQUIRED)
 find_path(GLM_INCLUDE_DIR NAMES glm/glm.hpp HINTS "$ENV{VULKAN_SDK}/Include" REQUIRED)
 
 add_library(Engine
+        Engine/Source/Assets/AssetManager.cpp
         Engine/Source/Core/camera.cpp
         Engine/Source/Core/time.cpp
         Engine/Source/ECS/Registry.cpp

@@ -78,8 +78,19 @@ Vec3 readVec3(std::istream& input, const std::string_view description) {
     };
 }
 
+Math::Color readColor(std::istream& input, const std::string_view description) {
+    const float red = readFloat(input, description);
+    const float green = readFloat(input, description);
+    const float blue = readFloat(input, description);
+    return Math::Color::from_rgb(red, green, blue);
+}
+
 void writeVec3(std::ostream& output, const Vec3& value) {
     output << value.x() << ' ' << value.y() << ' ' << value.z();
+}
+
+void writeColor(std::ostream& output, const Math::Color& value) {
+    output << value.r() << ' ' << value.g() << ' ' << value.b();
 }
 
 std::vector<Entity> sortedEntities(const Registry& registry) {
@@ -166,7 +177,7 @@ void SceneSerializer::save(const Registry& registry, std::ostream& output) {
                 ? static_cast<long long>(meshIds.at(renderer.mesh.get()))
                 : -1;
             serialized << "MESH_RENDERER " << meshId << ' ';
-            writeVec3(serialized, renderer.material.baseColor);
+            writeColor(serialized, renderer.material.baseColor);
             serialized << ' ' << renderer.material.metallic << ' '
                        << renderer.material.roughness << ' '
                        << renderer.material.ambientOcclusion << ' '
@@ -175,7 +186,7 @@ void SceneSerializer::save(const Registry& registry, std::ostream& output) {
         if (registry.has<LightComponent>(entity)) {
             const auto& light = registry.get<LightComponent>(entity);
             serialized << "LIGHT " << static_cast<int>(light.type) << ' ';
-            writeVec3(serialized, light.color);
+            writeColor(serialized, light.color);
             serialized << ' ' << light.intensity << ' '
                        << static_cast<int>(light.enabled) << ' '
                        << static_cast<int>(light.castShadows) << '\n';
@@ -286,7 +297,7 @@ void SceneSerializer::load(Registry& registry, std::istream& input) {
                 if (meshId >= 0) {
                     renderer.mesh = meshes[static_cast<std::size_t>(meshId)];
                 }
-                renderer.material.baseColor = readVec3(input, "material base color");
+                renderer.material.baseColor = readColor(input, "material base color");
                 renderer.material.metallic = readFloat(input, "material metallic");
                 renderer.material.roughness = readFloat(input, "material roughness");
                 renderer.material.ambientOcclusion =
@@ -305,7 +316,7 @@ void SceneSerializer::load(Registry& registry, std::istream& input) {
                 }
                 LightComponent light;
                 light.type = static_cast<LightType>(type);
-                light.color = readVec3(input, "light color");
+                light.color = readColor(input, "light color");
                 light.intensity = readFloat(input, "light intensity");
                 light.enabled = readBool(input, "light enabled flag");
                 light.castShadows = readBool(input, "light cast-shadows flag");

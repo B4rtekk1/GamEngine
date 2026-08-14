@@ -9,7 +9,8 @@ namespace Engine {
 void ForwardPass::create(const VkDevice device, const VkFormat colorFormat,
                          const VkFormat depthFormat,
                          const VkSampleCountFlagBits samples,
-                         const VkDescriptorSetLayout sceneLayout) {
+                         const VkDescriptorSetLayout sceneLayout,
+                         Assets::AssetManager& assets) {
     GraphicsPipelineOptions options{};
     options.colorFormat = colorFormat;
     options.depthFormat = depthFormat;
@@ -17,6 +18,7 @@ void ForwardPass::create(const VkDevice device, const VkFormat colorFormat,
     options.colorFinalLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
     options.vertexShader = "shaders/pbr.vert.spv";
     options.fragmentShader = "shaders/pbr.frag.spv";
+    options.assetManager = &assets;
     options.cullMode = VK_CULL_MODE_BACK_BIT;
     options.descriptorSetLayouts = {sceneLayout};
     options.vertexBindings = {

@@ -12,6 +12,7 @@
 
 namespace Engine {
 class Buffer;
+namespace Assets { class AssetManager; }
 }
 
 namespace Engine::UI {
@@ -30,7 +31,8 @@ public:
     void create(VkPhysicalDevice physicalDevice, VkDevice device,
                 VkFormat colorFormat, VkExtent2D extent,
                 const std::vector<VkImageView>& imageViews,
-                std::uint32_t framesInFlight);
+                std::uint32_t framesInFlight,
+                Assets::AssetManager& assets);
     void destroy() noexcept;
 
     void record(const Canvas& canvas, VkCommandBuffer commandBuffer,

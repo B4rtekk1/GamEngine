@@ -13,7 +13,8 @@ void SkyPass::create(const VkPhysicalDevice physicalDevice, const VkDevice devic
                      const VkRenderPass renderPass, const VkFormat colorFormat,
                      const VkSampleCountFlagBits samples,
                      const std::vector<VkBuffer>& uniformBuffers,
-                     const VkDeviceSize uniformBufferRange) {
+                     const VkDeviceSize uniformBufferRange,
+                     Assets::AssetManager& assets) {
     destroy();
     device_ = device;
     try {
@@ -31,7 +32,7 @@ void SkyPass::create(const VkPhysicalDevice physicalDevice, const VkDevice devic
         }
         skybox_.create(physicalDevice, device_, commandPool, queue, renderPass,
                        colorFormat, samples, descriptorSetLayout_, uniformBuffers,
-                       uniformBufferRange);
+                       uniformBufferRange, assets);
     } catch (...) {
         destroy();
         throw;

@@ -25,7 +25,8 @@ TonemapPass::~TonemapPass() {
 void TonemapPass::create(const VkDevice device, const VkFormat swapchainFormat,
                          const VkExtent2D extent,
                          const std::vector<VkImageView>& swapchainViews,
-                         const VkImageView hdrView, const VkSampler hdrSampler) {
+                         const VkImageView hdrView, const VkSampler hdrSampler,
+                         Assets::AssetManager& assets) {
     if (device == VK_NULL_HANDLE || swapchainFormat == VK_FORMAT_UNDEFINED ||
         swapchainViews.empty() || hdrView == VK_NULL_HANDLE || hdrSampler == VK_NULL_HANDLE) {
         throw std::invalid_argument("Tonemap pass received incomplete resources");
@@ -55,6 +56,7 @@ void TonemapPass::create(const VkDevice device, const VkFormat swapchainFormat,
         options.colorFinalLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
         options.vertexShader = "shaders/tonemap.vert.spv";
         options.fragmentShader = "shaders/tonemap.frag.spv";
+        options.assetManager = &assets;
         options.pushConstantSize = sizeof(TonemapSettings);
         options.pushConstantStages = VK_SHADER_STAGE_FRAGMENT_BIT;
         options.cullMode = VK_CULL_MODE_NONE;

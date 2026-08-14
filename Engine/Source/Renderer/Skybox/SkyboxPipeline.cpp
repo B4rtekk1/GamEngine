@@ -9,11 +9,12 @@ namespace Engine {
 SkyboxPipeline::~SkyboxPipeline() { destroy(); }
 
 void SkyboxPipeline::create(VkDevice device, VkRenderPass renderPass, VkFormat, VkSampleCountFlagBits samples,
-                            VkDescriptorSetLayout descriptorSetLayout) {
+                            VkDescriptorSetLayout descriptorSetLayout,
+                            Assets::AssetManager& assets) {
     destroy(); device_ = device;
     try {
-        const auto vert = vkutil::loadShaderModule(device_, "shaders/skybox.vert.spv");
-        const auto frag = vkutil::loadShaderModule(device_, "shaders/skybox.frag.spv");
+        const auto vert = vkutil::loadShaderModule(device_, assets, "shaders/skybox.vert.spv");
+        const auto frag = vkutil::loadShaderModule(device_, assets, "shaders/skybox.frag.spv");
         const std::array stages{
             VkPipelineShaderStageCreateInfo{VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO, nullptr, 0, VK_SHADER_STAGE_VERTEX_BIT, vert.get(), "main"},
             VkPipelineShaderStageCreateInfo{VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO, nullptr, 0, VK_SHADER_STAGE_FRAGMENT_BIT, frag.get(), "main"},

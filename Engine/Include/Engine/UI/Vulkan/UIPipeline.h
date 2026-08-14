@@ -7,6 +7,8 @@
 #include <cstdint>
 #include <vector>
 
+namespace Engine { namespace Assets { class AssetManager; } }
+
 namespace Engine::UI {
 
 class UIPipeline final {
@@ -18,7 +20,8 @@ public:
     UIPipeline& operator=(const UIPipeline&) = delete;
 
     void create(VkDevice device, VkFormat colorFormat, VkExtent2D extent,
-                const std::vector<VkImageView>& imageViews);
+                const std::vector<VkImageView>& imageViews,
+                Engine::Assets::AssetManager& assets);
     void destroy() noexcept;
 
     void record(VkCommandBuffer commandBuffer, std::uint32_t imageIndex,

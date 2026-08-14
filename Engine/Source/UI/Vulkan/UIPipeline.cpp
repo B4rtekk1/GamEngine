@@ -22,7 +22,8 @@ UIPipeline::~UIPipeline() {
 
 void UIPipeline::create(const VkDevice device, const VkFormat colorFormat,
                         const VkExtent2D extent,
-                        const std::vector<VkImageView>& imageViews) {
+                        const std::vector<VkImageView>& imageViews,
+                        Engine::Assets::AssetManager& assets) {
     if (device == VK_NULL_HANDLE || colorFormat == VK_FORMAT_UNDEFINED ||
         extent.width == 0 || extent.height == 0 || imageViews.empty()) {
         throw std::invalid_argument("UI pipeline received incomplete resources");
@@ -52,6 +53,7 @@ void UIPipeline::create(const VkDevice device, const VkFormat colorFormat,
         options.colorFinalLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
         options.vertexShader = "shaders/ui.vert.spv";
         options.fragmentShader = "shaders/ui.frag.spv";
+        options.assetManager = &assets;
         options.pushConstantSize = sizeof(ScreenData);
         options.pushConstantStages = VK_SHADER_STAGE_VERTEX_BIT;
         options.cullMode = VK_CULL_MODE_NONE;

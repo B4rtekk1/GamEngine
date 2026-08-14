@@ -7,6 +7,7 @@
 #include <cstdint>
 
 namespace Engine {
+namespace Assets { class AssetManager; }
 
 namespace Culling {
 class IndexedIndirectDrawCount;
@@ -15,7 +16,8 @@ class IndexedIndirectDrawCount;
 class ForwardPass final {
 public:
     void create(VkDevice device, VkFormat colorFormat, VkFormat depthFormat,
-                VkSampleCountFlagBits samples, VkDescriptorSetLayout sceneLayout);
+                VkSampleCountFlagBits samples, VkDescriptorSetLayout sceneLayout,
+                Assets::AssetManager& assets);
     void destroy() noexcept;
 
     void begin(VkCommandBuffer commandBuffer, VkFramebuffer framebuffer,

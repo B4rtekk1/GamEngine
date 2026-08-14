@@ -8,6 +8,8 @@
 
 namespace Engine {
 
+namespace Assets { class AssetManager; }
+
 struct GraphicsPipelineOptions {
     VkFormat colorFormat = VK_FORMAT_UNDEFINED;
     VkFormat depthFormat = VK_FORMAT_UNDEFINED;
@@ -18,6 +20,7 @@ struct GraphicsPipelineOptions {
 
     std::filesystem::path vertexShader;
     std::filesystem::path fragmentShader;
+    Assets::AssetManager* assetManager = nullptr;
 
     uint32_t pushConstantSize = 0;
     VkShaderStageFlags pushConstantStages = VK_SHADER_STAGE_VERTEX_BIT;

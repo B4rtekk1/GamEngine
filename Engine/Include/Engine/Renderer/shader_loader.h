@@ -8,6 +8,8 @@
 
 namespace Engine {
 
+namespace Assets { class AssetManager; }
+
 namespace vkutil {
     class ShaderModule final {
     public:
@@ -36,6 +38,11 @@ namespace vkutil {
 
     [[nodiscard]] ShaderModule loadShaderModule(
         VkDevice device,
+        const std::filesystem::path& path);
+
+    [[nodiscard]] ShaderModule loadShaderModule(
+        VkDevice device,
+        Assets::AssetManager& assets,
         const std::filesystem::path& path);
 }
 

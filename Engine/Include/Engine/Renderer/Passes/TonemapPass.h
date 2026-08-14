@@ -8,6 +8,7 @@
 #include <vector>
 
 namespace Engine {
+namespace Assets { class AssetManager; }
 
 class TonemapPass final {
 public:
@@ -19,7 +20,8 @@ public:
 
     void create(VkDevice device, VkFormat swapchainFormat, VkExtent2D extent,
                 const std::vector<VkImageView>& swapchainViews,
-                VkImageView hdrView, VkSampler hdrSampler);
+                VkImageView hdrView, VkSampler hdrSampler,
+                Assets::AssetManager& assets);
     void destroy() noexcept;
 
     void record(VkCommandBuffer commandBuffer, std::uint32_t imageIndex,

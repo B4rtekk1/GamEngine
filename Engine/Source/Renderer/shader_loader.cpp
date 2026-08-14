@@ -4,10 +4,12 @@
  */
 
 #include "Engine/Renderer/shader_loader.h"
+#include "Engine/Assets/AssetManager.h"
 
 #include <SDL3/SDL.h>
 
 #include <fstream>
+#include <cstring>
 #include <stdexcept>
 #include <string>
 #include <utility>
@@ -142,6 +144,29 @@ ShaderModule loadShaderModule(
             "Couldnt create VkShaderModule: " + path.string());
     }
 
+    return {device, module};
+}
+
+ShaderModule loadShaderModule(const VkDevice device, Assets::AssetManager& assets,
+                              const std::filesystem::path& path) {
+    if (device == VK_NULL_HANDLE) {
+        throw std::invalid_argument("Couldnt create shader for null VkDevice");
+    }
+    const auto asset = assets.load<Assets::BinaryAsset>(path, Assets::AssetType::Binary);
+    if (!asset || asset->bytes.empty() || asset->bytes.size() % sizeof(std::uint32_t) != 0) {
+        throw std::runtime_error("Invalid SPIR-V shader asset: " + path.string());
+    }
+
+    const std::size_t wordCount = asset->bytes.size() / sizeof(std::uint32_t);
+    std::vector<std::uint32_t> code(wordCount);
+    std::memcpy(code.data(), asset->bytes.data(), asset->bytes.size());
+    VkShaderModuleCreateInfo createInfo{VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO};
+    createInfo.codeSize = code.size() * sizeof(std::uint32_t);
+    createInfo.pCode = code.data();
+    VkShaderModule module = VK_NULL_HANDLE;
+    if (vkCreateShaderModule(device, &createInfo, nullptr, &module) != VK_SUCCESS) {
+        throw std::runtime_error("Couldnt create VkShaderModule: " + path.string());
+    }
     return {device, module};
 }
 

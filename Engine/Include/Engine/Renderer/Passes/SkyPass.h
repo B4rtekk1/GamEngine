@@ -8,6 +8,7 @@
 #include <vector>
 
 namespace Engine {
+namespace Assets { class AssetManager; }
 
 class SkyPass final {
 public:
@@ -22,7 +23,7 @@ public:
                 VkRenderPass renderPass, VkFormat colorFormat,
                 VkSampleCountFlagBits samples,
                 const std::vector<VkBuffer>& uniformBuffers,
-                VkDeviceSize uniformBufferRange);
+                VkDeviceSize uniformBufferRange, Assets::AssetManager& assets);
     void destroy() noexcept;
     void record(VkCommandBuffer commandBuffer, std::uint32_t frameIndex) const;
 
