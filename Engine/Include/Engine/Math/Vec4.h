@@ -50,6 +50,8 @@ namespace Engine {
         constexpr Vec4 operator*(const Vec4 &rhs) const noexcept { return Vec4{m_value * rhs.m_value}; }
         /** @brief Returns the vector multiplied by a scalar. */
         constexpr Vec4 operator*(float scalar) const noexcept { return Vec4{m_value * scalar}; }
+        /** @brief Returns the vector divided by a scalar. */
+        constexpr Vec4 operator/(float scalar) const noexcept { return Vec4{m_value / scalar}; }
         /** @brief Adds another vector component-wise. */
         constexpr Vec4 &operator+=(const Vec4 &rhs) noexcept { return *this = *this + rhs; }
         /** @brief Subtracts another vector component-wise. */

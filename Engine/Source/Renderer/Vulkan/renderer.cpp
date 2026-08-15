@@ -475,19 +475,27 @@ namespace {
                     }
 
                     AABB localBounds{
-                        .min = glm::vec3{std::numeric_limits<float>::max()},
-                        .max = glm::vec3{std::numeric_limits<float>::lowest()},
+                        .min = Vec3{std::numeric_limits<float>::max(),
+                                    std::numeric_limits<float>::max(),
+                                    std::numeric_limits<float>::max()},
+                        .max = Vec3{std::numeric_limits<float>::lowest(),
+                                    std::numeric_limits<float>::lowest(),
+                                    std::numeric_limits<float>::lowest()},
                     };
                     for (const Vertex& vertex : mesh->vertices) {
-                        localBounds.min = glm::min(localBounds.min, vertex.position.native());
-                        localBounds.max = glm::max(localBounds.max, vertex.position.native());
+                        localBounds.min.setX(std::min(localBounds.min.x(), vertex.position.x()));
+                        localBounds.min.setY(std::min(localBounds.min.y(), vertex.position.y()));
+                        localBounds.min.setZ(std::min(localBounds.min.z(), vertex.position.z()));
+                        localBounds.max.setX(std::max(localBounds.max.x(), vertex.position.x()));
+                        localBounds.max.setY(std::max(localBounds.max.y(), vertex.position.y()));
+                        localBounds.max.setZ(std::max(localBounds.max.z(), vertex.position.z()));
                     }
                     renderables.push_back({entity, localBounds});
 
                     const AABB worldBounds =
                         localBounds.transformed(transform.matrix().native());
-                    sceneMinimum = glm::min(sceneMinimum, worldBounds.min);
-                    sceneMaximum = glm::max(sceneMaximum, worldBounds.max);
+                    sceneMinimum = glm::min(sceneMinimum, worldBounds.min.native());
+                    sceneMaximum = glm::max(sceneMaximum, worldBounds.max.native());
                 });
 
             if (sceneMesh.empty()) {
@@ -675,9 +683,9 @@ namespace {
                 std::memcpy(object.model.data, &model, sizeof(model));
                 const AABB& bounds = renderables[i].localBounds;
                 object.localAabbMin = {
-                    bounds.min.x, bounds.min.y, bounds.min.z, 0.0f};
+                    bounds.min.x(), bounds.min.y(), bounds.min.z(), 0.0f};
                 object.localAabbMax = {
-                    bounds.max.x, bounds.max.y, bounds.max.z, 0.0f};
+                    bounds.max.x(), bounds.max.y(), bounds.max.z(), 0.0f};
                 object.indexCount = renderer.mesh->indexCount();
                 object.instanceCount = 1;
                 object.firstIndex = renderer.firstIndex;

@@ -26,9 +26,9 @@ namespace Engine {
         /** @brief Returns the Y component. */
         [[nodiscard]] constexpr float y() const noexcept { return m_value.y; }
         /** @brief Sets the X component. */
-        constexpr void setX(float value) noexcept { m_value.x = value; }
+        constexpr void setX(const float value) noexcept { m_value.x = value; }
         /** @brief Sets the Y component. */
-        constexpr void setY(float value) noexcept { m_value.y = value; }
+        constexpr void setY(const float value) noexcept { m_value.y = value; }
 
         /** @brief Returns the component-wise sum. */
         constexpr Vec2 operator+(const Vec2 &rhs) const noexcept { return Vec2{m_value + rhs.m_value}; }

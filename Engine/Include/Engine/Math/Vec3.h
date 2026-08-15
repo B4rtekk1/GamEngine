@@ -13,6 +13,8 @@ namespace Engine {
      */
     class Vec3 {
     public:
+        using value_type = float;
+
         /** @brief Constructs a zero vector. */
         constexpr Vec3() = default;
 
