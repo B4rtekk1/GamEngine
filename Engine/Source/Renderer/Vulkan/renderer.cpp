@@ -501,8 +501,25 @@ namespace {
                 uint32_t firstIndex;
                 AABB localBounds;
             };
+            struct BatchKey {
+                const Mesh* mesh;
+                bool castShadow;
+
+                bool operator==(const BatchKey& other) const noexcept {
+                    return mesh == other.mesh && castShadow == other.castShadow;
+                }
+            };
+            struct BatchKeyHash {
+                std::size_t operator()(const BatchKey& key) const noexcept {
+                    const auto meshHash = std::hash<const Mesh*>{}(key.mesh);
+                    return meshHash ^ (static_cast<std::size_t>(key.castShadow) +
+                                       0x9e3779b9u + (meshHash << 6u) + (meshHash >> 2u));
+                }
+            };
             std::unordered_map<const Mesh*, MeshUploadRecord> uploadedMeshes;
             uploadedMeshes.reserve(registry.size());
+            std::unordered_map<BatchKey, std::size_t, BatchKeyHash> batchIndices;
+            batchIndices.reserve(registry.size());
             std::unordered_set<const Mesh*> uniqueMeshes;
             uniqueMeshes.reserve(registry.size());
             std::size_t vertexCapacity = 0;
@@ -563,14 +580,11 @@ namespace {
                     const AABB worldBounds =
                         localBounds.transformed(transform.matrix().native());
                     const bool castShadow = renderer.castShadow;
-                    std::size_t batchIndex = 0;
-                    for (; batchIndex < instanceBatches.size(); ++batchIndex) {
-                        const InstanceBatch& batch = instanceBatches[batchIndex];
-                        if (batch.mesh == mesh && batch.castShadow == castShadow) {
-                            break;
-                        }
-                    }
-                    if (batchIndex == instanceBatches.size()) {
+                    const BatchKey batchKey{mesh, castShadow};
+                    const auto [batchIt, inserted] = batchIndices.try_emplace(
+                        batchKey, instanceBatches.size());
+                    const std::size_t batchIndex = batchIt->second;
+                    if (inserted) {
                         instanceBatches.push_back(InstanceBatch{
                             .mesh = mesh,
                             .firstIndex = renderer.firstIndex,

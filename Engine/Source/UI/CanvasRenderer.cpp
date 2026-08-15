@@ -57,6 +57,9 @@ void CanvasRenderer::create(const VkPhysicalDevice physicalDevice,
 void CanvasRenderer::destroy() noexcept {
     frames_.clear();
     batch_.clear();
+    sortedRootElements_.clear();
+    rootElementsSource_.clear();
+    sortedChildren_.clear();
     pipeline_.destroy();
     device_ = VK_NULL_HANDLE;
     physicalDevice_ = VK_NULL_HANDLE;
@@ -64,6 +67,53 @@ void CanvasRenderer::destroy() noexcept {
     cachedCanvasRevision_ = 0;
     batchDirty_ = true;
     pendingFrameUploads_ = 0;
+}
+
+void CanvasRenderer::sortIfNeeded(const std::vector<const UIElement*>& source,
+                                  std::vector<const UIElement*>& cache) {
+    bool valid = cache.size() == source.size();
+    if (valid) {
+        std::unordered_map<const UIElement*, std::size_t> sourceIndices;
+        sourceIndices.reserve(source.size());
+        for (std::size_t index = 0; index < source.size(); ++index) {
+            sourceIndices.emplace(source[index], index);
+        }
+
+        for (std::size_t index = 0; index < cache.size() && valid; ++index) {
+            const auto sourceIndex = sourceIndices.find(cache[index]);
+            valid = sourceIndex != sourceIndices.end();
+            if (!valid) {
+                break;
+            }
+            if (index > 0) {
+                const UIElement* const previous = cache[index - 1];
+                const UIElement* const current = cache[index];
+                valid = previous->sortingOrder < current->sortingOrder ||
+                        (previous->sortingOrder == current->sortingOrder &&
+                         sourceIndices.at(previous) < sourceIndex->second);
+            }
+        }
+    }
+
+    if (!valid) {
+        cache = source;
+        std::stable_sort(cache.begin(), cache.end(),
+                         [](const UIElement* lhs, const UIElement* rhs) {
+                             return lhs->sortingOrder < rhs->sortingOrder;
+                         });
+    }
+}
+
+const std::vector<const UIElement*>&
+CanvasRenderer::sortedChildren(const UIElement& element) {
+    auto& source = sortedChildren_[&element];
+    std::vector<const UIElement*> current;
+    current.reserve(element.children().size());
+    for (const auto& child : element.children()) {
+        current.push_back(child.get());
+    }
+    sortIfNeeded(current, source);
+    return source;
 }
 
 namespace {
@@ -114,16 +164,7 @@ void CanvasRenderer::appendElement(const UIElement& element) {
     }
     element.buildGeometry(batch_);
 
-    std::vector<const UIElement*> children;
-    children.reserve(element.children().size());
-    for (const auto& child : element.children()) {
-        children.push_back(child.get());
-    }
-    std::stable_sort(children.begin(), children.end(),
-                     [](const UIElement* lhs, const UIElement* rhs) {
-                         return lhs->sortingOrder < rhs->sortingOrder;
-                     });
-    for (const UIElement* child : children) {
+    for (const UIElement* child : sortedChildren(element)) {
         appendElement(*child);
     }
 }
@@ -164,16 +205,13 @@ void CanvasRenderer::record(const Canvas& canvas,
     if (batchDirty_ || revision != cachedCanvasRevision_) {
         batch_.clear();
 
-        std::vector<const UIElement*> elements;
-        elements.reserve(canvas.elements().size());
+        rootElementsSource_.clear();
+        rootElementsSource_.reserve(canvas.elements().size());
         for (const auto& element : canvas.elements()) {
-            elements.push_back(element.get());
+            rootElementsSource_.push_back(element.get());
         }
-        std::stable_sort(elements.begin(), elements.end(),
-                         [](const UIElement* lhs, const UIElement* rhs) {
-                             return lhs->sortingOrder < rhs->sortingOrder;
-                         });
-        for (const UIElement* element : elements) {
+        sortIfNeeded(rootElementsSource_, sortedRootElements_);
+        for (const UIElement* element : sortedRootElements_) {
             appendElement(*element);
         }
         cachedCanvasRevision_ = revision;

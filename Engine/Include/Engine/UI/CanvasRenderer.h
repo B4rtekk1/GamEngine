@@ -9,6 +9,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <memory>
+#include <unordered_map>
 #include <vector>
 
 namespace Engine {
@@ -47,6 +48,9 @@ private:
     struct FrameResources;
 
     void appendElement(const UIElement& element);
+    [[nodiscard]] const std::vector<const UIElement*>& sortedChildren(const UIElement& element);
+    void sortIfNeeded(const std::vector<const UIElement*>& source,
+                      std::vector<const UIElement*>& cache);
     [[nodiscard]] std::uint64_t canvasRevision(const Canvas& canvas) const noexcept;
     [[nodiscard]] std::uint64_t elementRevision(const UIElement& element) const noexcept;
     [[nodiscard]] bool ensureCapacity(FrameResources& frame);
@@ -57,6 +61,9 @@ private:
     UIPipeline pipeline_;
     UIBatch batch_;
     std::vector<std::unique_ptr<FrameResources>> frames_;
+    std::vector<const UIElement*> sortedRootElements_;
+    std::vector<const UIElement*> rootElementsSource_;
+    std::unordered_map<const UIElement*, std::vector<const UIElement*>> sortedChildren_;
     std::uint64_t cachedCanvasRevision_{};
     bool batchDirty_{true};
     std::uint64_t pendingFrameUploads_{};
