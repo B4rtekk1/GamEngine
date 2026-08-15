@@ -20,6 +20,9 @@ add_library(Engine
         Engine/Source/Scene/SceneSerializer.cpp
         Engine/Source/UI/Canvas.cpp
         Engine/Source/UI/CanvasRenderer.cpp
+        Engine/Source/UI/UIBatch.cpp
+        Engine/Source/UI/Vulkan/UIFontAtlas.cpp
+        Engine/Source/UI/Vulkan/UIFontAtlasRuntime.cpp
         Engine/Source/UI/RectTransform.cpp
         Engine/Source/UI/Vulkan/UIPipeline.cpp
         Engine/Source/Renderer/shader_loader.cpp

@@ -32,7 +32,9 @@ public:
                 VkFormat colorFormat, VkExtent2D extent,
                 const std::vector<VkImageView>& imageViews,
                 std::uint32_t framesInFlight,
-                Assets::AssetManager& assets);
+                Assets::AssetManager& assets,
+                VkImageView fontAtlasView = VK_NULL_HANDLE,
+                VkSampler fontAtlasSampler = VK_NULL_HANDLE);
     void destroy() noexcept;
 
     void record(const Canvas& canvas, VkCommandBuffer commandBuffer,

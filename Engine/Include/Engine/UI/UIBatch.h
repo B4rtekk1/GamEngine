@@ -1,44 +1,48 @@
 #pragma once
 
-#include <Engine/UI/RectTransform.h>
-#include <Engine/UI/UIVertex.h>
+#include "Engine/UI/UIVertex.h"
+#include "Engine/UI/RectTransform.h"
+#include "Engine/UI/Components/TextComponent.h"
+#include "Engine/UI/Vulkan/UIFontAtlas.h"
 
 #include <cstdint>
 #include <vector>
 
-namespace Engine::UI {
-
-class UIBatch final {
-public:
-    void clear() noexcept {
-        vertices.clear();
-        indices.clear();
-    }
-
-    void addQuad(const Rect& rect, const Math::Color& color) {
-        if (rect.width <= 0.0f || rect.height <= 0.0f) {
-            return;
+namespace Engine::UI
+{
+    /**
+     * @brief CPU-side batch of vertices and indices for UI text.
+     */
+    class UIBatch final
+    {
+    public:
+        /** @brief Removes all previously generated geometry. */
+        void clear() noexcept
+        {
+            vertices.clear();
+            indices.clear();
         }
 
-        const auto first = static_cast<std::uint32_t>(vertices.size());
-        const float right = rect.x + rect.width;
-        const float bottom = rect.y + rect.height;
-        vertices.insert(vertices.end(), {
-            {{rect.x, rect.y}, {0.0f, 0.0f}, color},
-            {{right, rect.y}, {1.0f, 0.0f}, color},
-            {{right, bottom}, {1.0f, 1.0f}, color},
-            {{rect.x, bottom}, {0.0f, 1.0f}, color},
-        });
-        indices.insert(indices.end(), {
-            first, first + 1, first + 2,
-            first, first + 2, first + 3,
-        });
-    }
+        /**
+         * @brief Appends one text component as indexed quads.
+         * @param text Text component to append.
+         * @param atlas Font atlas containing glyph metrics.
+         * @param originX Baseline origin in UI coordinates.
+         * @param originY Baseline origin in UI coordinates.
+         */
+        void appendText(const TextComponent& text,
+                        const UIFontAtlas& atlas,
+                        float originX,
+                        float originY);
 
-    [[nodiscard]] bool empty() const noexcept { return indices.empty(); }
+        void addQuad(const Rect& rect, const Math::Color& color);
 
-    std::vector<UIVertex> vertices;
-    std::vector<std::uint32_t> indices;
-};
+        [[nodiscard]] bool empty() const noexcept { return indices.empty(); }
 
-} // namespace Engine::UI
+        // Kept public for the existing renderer and callers that upload the batch directly.
+        std::vector<UIVertex> vertices;
+        std::vector<std::uint32_t> indices;
+
+    private:
+    };
+}

@@ -6,10 +6,20 @@
 #include "Engine/Core/Transform.h"
 #include "Engine/ECS/Registry.h"
 #include "Engine/ECS/Components/CameraComponent.h"
+#include "Engine/UI/Canvas.h"
+#include "Engine/UI/PanelElement.h"
+#include "Engine/UI/TextElement.h"
+#include "Engine/UI/Vulkan/UIFontAtlas.h"
 
 #include <array>
+#include <algorithm>
 #include <cmath>
+#include <cstdio>
+#include <filesystem>
+#include <iostream>
 #include <memory>
+#include <stdexcept>
+#include <string>
 
 namespace Engine {
 
@@ -22,6 +32,8 @@ public:
         ((CubesPerAxis - 1) * CubeSpacing + 1.0f) * 0.5f;
 
     Registry registry;
+    UI::Canvas canvas{800, 600};
+    UI::UIFontAtlas fontAtlas;
     Entity plane{NullEntity};
     Entity camera{NullEntity};
     std::array<Entity, CubeCount> cubes{};
@@ -29,6 +41,7 @@ public:
 private:
     std::shared_ptr<const Mesh> planeMesh;
     std::shared_ptr<const Mesh> cubeMesh;
+    UI::TextElement* fpsTextElement = nullptr;
 
 public:
 
@@ -69,6 +82,58 @@ public:
             .aspectRatio = 800.0f / 600.0f,
         });
 
+        const std::array<std::filesystem::path, 5> fontCandidates{
+            std::filesystem::path{"C:/Windows/Fonts/segoeui.ttf"},
+            std::filesystem::path{"C:/Windows/Fonts/arial.ttf"},
+            std::filesystem::path{"C:/Windows/Fonts/consola.ttf"},
+            std::filesystem::path{"/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"},
+            std::filesystem::path{"/usr/share/fonts/truetype/liberation2/LiberationSans-Regular.ttf"}
+        };
+        const auto font = std::find_if(fontCandidates.begin(), fontCandidates.end(),
+                                       [](const auto& candidate) {
+                                           return std::filesystem::exists(candidate);
+                                       });
+        if (font == fontCandidates.end()) {
+            throw std::runtime_error("Could not find a system TrueType font for the FPS HUD");
+        }
+        if (const std::string error = fontAtlas.build(font->string(), 24, 32, 126);
+            !error.empty()) {
+            throw std::runtime_error("Could not build FPS font atlas: " + error);
+        }
+        const auto nonZeroPixels = std::count_if(fontAtlas.pixels().begin(), fontAtlas.pixels().end(),
+                                                 [](const std::uint8_t pixel) { return pixel != 0; });
+        std::cout << "FPS HUD font: " << font->string()
+                  << " (non-zero atlas pixels: " << nonZeroPixels
+                  << ", glyph F: " << (fontAtlas.glyph('F') != nullptr ? "yes" : "no") << ")\n";
+
+        auto panel = std::make_unique<UI::PanelElement>(
+            Math::Color{0.025f, 0.035f, 0.055f, 0.82f});
+        panel->rectTransform.anchorMin = {0.0f, 0.0f};
+        panel->rectTransform.anchorMax = {0.0f, 0.0f};
+        panel->rectTransform.offsetMin = {20.0f, 20.0f};
+        panel->rectTransform.offsetMax = {300.0f, 110.0f};
+
+        auto accent = std::make_unique<UI::PanelElement>(
+            Math::Color{0.10f, 0.75f, 0.90f, 1.0f});
+        accent->rectTransform.anchorMin = {0.0f, 0.0f};
+        accent->rectTransform.anchorMax = {0.0f, 1.0f};
+        accent->rectTransform.offsetMin = {0.0f, 0.0f};
+        accent->rectTransform.offsetMax = {4.0f, 0.0f};
+        panel->addChild(std::move(accent));
+
+        TextComponent fpsText;
+        fpsText.text = "FPS: --";
+        fpsText.fontSize = 24.0f;
+        fpsText.color = Math::Color{0.90f, 0.96f, 1.0f, 1.0f};
+        auto textElement = std::make_unique<UI::TextElement>(fpsText, fontAtlas);
+        fpsTextElement = textElement.get();
+        textElement->rectTransform.anchorMin = {0.0f, 0.0f};
+        textElement->rectTransform.anchorMax = {1.0f, 1.0f};
+        textElement->rectTransform.offsetMin = {14.0f, 12.0f};
+        textElement->rectTransform.offsetMax = {-8.0f, -8.0f};
+        panel->addChild(std::move(textElement));
+        static_cast<void>(canvas.addElement(std::move(panel)));
+
         constexpr float halfGridWidth = (CubesPerAxis - 1) * CubeSpacing * 0.5f;
 
         for (std::size_t layer = 0; layer < CubesPerAxis; ++layer) {
@@ -98,6 +163,16 @@ public:
                 }
             }
         }
+    }
+
+    [[nodiscard]] UI::Canvas& uiCanvas() noexcept { return canvas; }
+    [[nodiscard]] const UI::UIFontAtlas& uiFontAtlas() const noexcept { return fontAtlas; }
+
+    void setFps(const double fps) {
+        if (fpsTextElement == nullptr) return;
+        char text[64];
+        std::snprintf(text, sizeof(text), "FPS: %.1f", fps);
+        fpsTextElement->text.text = text;
     }
 };
 

@@ -16,9 +16,11 @@
 #include "Engine/Renderer/Vulkan/buffer.h"
 #include "Engine/Renderer/Vulkan/vulkan_device.h"
 #include "Engine/Renderer/Vulkan/swapchain.h"
+#include "Engine/Renderer/Textures/Texture2D.h"
 #include "Engine/Renderer/Geometry/Vertex.h"
 #include "Engine/Renderer/Geometry/Mesh.h"
 #include "Engine/ECS/Registry.h"
+#include "Engine/Scene/Scene.h"
 #include "Engine/ECS/Components/CameraComponent.h"
 #include "Engine/Core/Transform.h"
 #include "Engine/Core/Camera.h"
@@ -87,7 +89,7 @@ const std::vector<const char*> validationLayers = {
 namespace {
     class RenderApp {
     public:
-        explicit RenderApp(Registry& registry) : registry(registry) {}
+        explicit RenderApp(Scene& scene) : scene(scene), registry(scene.registry) {}
 
         ~RenderApp() {
             cleanup();
@@ -119,10 +121,11 @@ namespace {
         ForwardPass forwardPass;
         SkyPass skyPass;
         TonemapPass tonemapPass;
-        UI::Canvas canvas{WIDTH, HEIGHT};
         UI::CanvasRenderer canvasRenderer;
+        Texture2D fpsFontTexture;
         DepthBuffer depthBuffer;
         ShadowPass shadowPass;
+        Scene& scene;
         Registry& registry;
         Assets::AssetManager assetManager;
         std::optional<Camera> camera;
@@ -450,30 +453,29 @@ namespace {
 
         void createUIResources() {
             const VkExtent2D extent = swapchain.extent();
-            canvas.resize(extent.width, extent.height);
+            scene.uiCanvas().resize(extent.width, extent.height);
 
-            if (canvas.empty()) {
-                auto panel = std::make_unique<UI::PanelElement>(
-                    Math::Color{0.025f, 0.035f, 0.055f, 0.82f});
-                panel->rectTransform.anchorMin = {0.0f, 0.0f};
-                panel->rectTransform.anchorMax = {0.0f, 0.0f};
-                panel->rectTransform.offsetMin = {20.0f, 20.0f};
-                panel->rectTransform.offsetMax = {300.0f, 110.0f};
-
-                auto accent = std::make_unique<UI::PanelElement>(
-                    Math::Color{0.10f, 0.75f, 0.90f, 1.0f});
-                accent->rectTransform.anchorMin = {0.0f, 0.0f};
-                accent->rectTransform.anchorMax = {0.0f, 1.0f};
-                accent->rectTransform.offsetMin = {0.0f, 0.0f};
-                accent->rectTransform.offsetMax = {4.0f, 0.0f};
-                panel->addChild(std::move(accent));
-
-                static_cast<void>(canvas.addElement(std::move(panel)));
+            if (!fpsFontTexture.valid()) {
+                std::vector<std::uint8_t> rgba;
+                const auto& atlas = scene.uiFontAtlas();
+                rgba.resize(atlas.pixels().size() * 4);
+                for (std::size_t i = 0; i < atlas.pixels().size(); ++i) {
+                    const std::uint8_t coverage = atlas.pixels()[i];
+                    rgba[i * 4] = coverage;
+                    rgba[i * 4 + 1] = coverage;
+                    rgba[i * 4 + 2] = coverage;
+                    rgba[i * 4 + 3] = 255;
+                }
+                fpsFontTexture.create(vulkanDevice.physical(), device, commandPool,
+                                      vulkanDevice.graphicsQueue(), atlas.width(),
+                                      atlas.height(), rgba, TextureColorSpace::Linear,
+                                      false);
             }
 
             canvasRenderer.create(
                 vulkanDevice.physical(), device, swapchain.format(), extent,
-                swapchain.imageViews(), MAX_FRAMES_IN_FLIGHT, assetManager);
+                swapchain.imageViews(), MAX_FRAMES_IN_FLIGHT, assetManager,
+                fpsFontTexture.imageView(), fpsFontTexture.sampler());
         }
 
         void createMeshBuffers() {
@@ -1096,7 +1098,7 @@ namespace {
             hiZValid = true;
 
             tonemapPass.record(commandBuffer, imageIndex, swapchain.extent());
-            canvasRenderer.record(canvas, commandBuffer, imageIndex, currentFrame,
+            canvasRenderer.record(scene.uiCanvas(), commandBuffer, imageIndex, currentFrame,
                                   swapchain.extent());
 
             if (vkEndCommandBuffer(commandBuffer) != VK_SUCCESS) {
@@ -1287,6 +1289,7 @@ namespace {
 
                 fpsFrameCount = 0;
                 fpsElapsedTime = 0.0;
+                scene.setFps(fps);
             }
         }
 
@@ -1313,8 +1316,8 @@ namespace {
                 }
 
                 Time::update();
-                drawFrame();
                 updateFpsCounter();
+                drawFrame();
             }
             vkDeviceWaitIdle(device);
         }
@@ -1349,6 +1352,7 @@ namespace {
                 for (Buffer& uniformBuffer : uniformBuffers) {
                     uniformBuffer.destroy();
                 }
+                fpsFontTexture.destroy();
 
                 for (VkSemaphore semaphore : imageAvailableSemaphores) {
                     if (semaphore != VK_NULL_HANDLE) {
@@ -1397,8 +1401,8 @@ namespace {
 
 } // namespace
 
-void Renderer::run(Registry& registry) {
-    RenderApp app{registry};
+void Renderer::run(Scene& scene) {
+    RenderApp app{scene};
     app.run();
 }
 
