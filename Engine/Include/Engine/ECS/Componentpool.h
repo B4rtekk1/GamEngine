@@ -163,6 +163,31 @@ public:
         return m_entities;
     }
 
+    /**
+     * @brief Returns the number of components stored in the dense array.
+     */
+    [[nodiscard]] std::size_t size() const noexcept {
+        return m_entities.size();
+    }
+
+    /**
+     * @brief Returns a component without repeating the membership check.
+     *
+     * @pre The entity owns a component in this pool.
+     */
+    T& getUnchecked(Entity entity) noexcept {
+        return m_components[m_sparse[static_cast<std::size_t>(entity)]];
+    }
+
+    /**
+     * @brief Returns a component without repeating the membership check.
+     *
+     * @pre The entity owns a component in this pool.
+     */
+    const T& getUnchecked(Entity entity) const noexcept {
+        return m_components[m_sparse[static_cast<std::size_t>(entity)]];
+    }
+
 private:
     /**
      * @brief Sentinel indicating that an entity has no dense-array entry.

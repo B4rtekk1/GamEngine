@@ -160,6 +160,11 @@ namespace {
         struct RenderableRecord {
             Entity entity{NullEntity};
             AABB localBounds{};
+            // A change must reach every frame-in-flight buffer before its bit
+            // can be discarded; otherwise the next frame could render stale data.
+            uint8_t transformDirtyFrames{0};
+            uint8_t materialDirtyFrames{0};
+            uint8_t cullingDirtyFrames{0};
         };
         std::vector<RenderableRecord> renderables;
         std::vector<glm::mat4> instanceModels;
@@ -181,6 +186,13 @@ namespace {
 
         uint32_t fpsFrameCount = 0;
         double fpsElapsedTime = 0.0;
+
+        static constexpr uint8_t allFrameBits =
+            static_cast<uint8_t>((1u << MAX_FRAMES_IN_FLIGHT) - 1u);
+
+        [[nodiscard]] static uint8_t frameBit(const uint32_t frame) noexcept {
+            return static_cast<uint8_t>(1u << frame);
+        }
 
 
         void initWindow() {
@@ -533,6 +545,44 @@ namespace {
                     VK_BUFFER_USAGE_STORAGE_BUFFER_BIT);
                 buffer.update(materials.data(), sizeof(GPUMaterialData) * materials.size());
             }
+
+            // Every instance/material buffer has just received the complete
+            // CPU snapshot, so no incremental upload is pending for it.
+            for (RenderableRecord& record : renderables) {
+                record.transformDirtyFrames = 0;
+                record.materialDirtyFrames = 0;
+            }
+        }
+
+        template <typename T>
+        void uploadDirtyRanges(const Buffer& buffer, const std::vector<T>& data,
+                               uint8_t RenderableRecord::* dirtyFrames,
+                               const uint8_t bit) const {
+            std::size_t rangeBegin = 0;
+            while (rangeBegin < renderables.size()) {
+                while (rangeBegin < renderables.size() &&
+                       (renderables[rangeBegin].*dirtyFrames & bit) == 0) {
+                    ++rangeBegin;
+                }
+                std::size_t rangeEnd = rangeBegin;
+                while (rangeEnd < renderables.size() &&
+                       (renderables[rangeEnd].*dirtyFrames & bit) != 0) {
+                    ++rangeEnd;
+                }
+                if (rangeBegin != rangeEnd) {
+                    buffer.update(data.data() + rangeBegin,
+                                  sizeof(T) * (rangeEnd - rangeBegin),
+                                  sizeof(T) * rangeBegin);
+                }
+                rangeBegin = rangeEnd;
+            }
+        }
+
+        void clearDirtyFrame(uint8_t RenderableRecord::* dirtyFrames,
+                             const uint8_t bit) {
+            for (RenderableRecord& record : renderables) {
+                record.*dirtyFrames &= static_cast<uint8_t>(~bit);
+            }
         }
 
         void updateRenderableBuffers() {
@@ -541,9 +591,7 @@ namespace {
                 const Transform& transform = registry.get<Transform>(entity);
                 const MeshRenderer& renderer = registry.get<MeshRenderer>(entity);
                 const glm::mat4 model = transform.matrix().native();
-                shadowInstanceModels[index] = model;
-                instanceModels[index] = model;
-                materials[index] = {
+                const GPUMaterialData material{
                     glm::vec4{renderer.material.baseColor.r(),
                               renderer.material.baseColor.g(),
                               renderer.material.baseColor.b(),
@@ -551,22 +599,46 @@ namespace {
                     glm::vec4{renderer.material.roughness,
                               renderer.material.ambientOcclusion, 0.0f, 0.0f},
                 };
+
+                RenderableRecord& record = renderables[index];
+                if (std::memcmp(&instanceModels[index], &model, sizeof(model)) != 0) {
+                    shadowInstanceModels[index] = model;
+                    instanceModels[index] = model;
+                    record.transformDirtyFrames |= allFrameBits;
+                    record.cullingDirtyFrames |= allFrameBits;
+                }
+                if (std::memcmp(&materials[index], &material, sizeof(material)) != 0) {
+                    materials[index] = material;
+                    record.materialDirtyFrames |= allFrameBits;
+                }
                 if (gpuObjects.size() == renderables.size()) {
-                    std::memcpy(gpuObjects[index].model.data, &model, sizeof(model));
-                    gpuObjects[index].castShadow = renderer.castShadow ? 1u : 0u;
+                    Culling::GPUObjectData& object = gpuObjects[index];
+                    if (std::memcmp(object.model.data, &model, sizeof(model)) != 0) {
+                        std::memcpy(object.model.data, &model, sizeof(model));
+                        record.cullingDirtyFrames |= allFrameBits;
+                    }
+                    const uint32_t castShadow = renderer.castShadow ? 1u : 0u;
+                    if (object.castShadow != castShadow) {
+                        object.castShadow = castShadow;
+                        record.cullingDirtyFrames |= allFrameBits;
+                    }
                 }
             }
             if (instanceBuffers[currentFrame].handle() != VK_NULL_HANDLE) {
-                instanceBuffers[currentFrame].update(instanceModels.data(),
-                                                     sizeof(glm::mat4) * instanceModels.size());
-                shadowInstanceBuffers[currentFrame].update(shadowInstanceModels.data(),
-                                                           sizeof(glm::mat4) * shadowInstanceModels.size());
-                materialBuffers[currentFrame].update(
-                    materials.data(), sizeof(GPUMaterialData) * materials.size());
+                const uint8_t bit = frameBit(currentFrame);
+                uploadDirtyRanges(instanceBuffers[currentFrame], instanceModels,
+                                  &RenderableRecord::transformDirtyFrames, bit);
+                uploadDirtyRanges(shadowInstanceBuffers[currentFrame], shadowInstanceModels,
+                                  &RenderableRecord::transformDirtyFrames, bit);
+                clearDirtyFrame(&RenderableRecord::transformDirtyFrames, bit);
+
+                uploadDirtyRanges(materialBuffers[currentFrame], materials,
+                                  &RenderableRecord::materialDirtyFrames, bit);
+                clearDirtyFrame(&RenderableRecord::materialDirtyFrames, bit);
                 if (cullingObjectBuffers[currentFrame].handle() != VK_NULL_HANDLE) {
-                    cullingObjectBuffers[currentFrame].update(
-                        gpuObjects.data(),
-                        sizeof(Culling::GPUObjectData) * gpuObjects.size());
+                    uploadDirtyRanges(cullingObjectBuffers[currentFrame], gpuObjects,
+                                      &RenderableRecord::cullingDirtyFrames, bit);
+                    clearDirtyFrame(&RenderableRecord::cullingDirtyFrames, bit);
                 }
             }
         }
@@ -700,6 +772,10 @@ namespace {
                     VK_BUFFER_USAGE_STORAGE_BUFFER_BIT);
                 buffer.update(gpuObjects.data(),
                               sizeof(Culling::GPUObjectData) * gpuObjects.size());
+            }
+            // Culling buffers were initialized in full for every frame.
+            for (RenderableRecord& record : renderables) {
+                record.cullingDirtyFrames = 0;
             }
 
             for (uint32_t frame = 0; frame < MAX_FRAMES_IN_FLIGHT; ++frame) {

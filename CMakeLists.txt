@@ -112,4 +112,8 @@ if(BUILD_TESTING)
     add_executable(SceneSerializerTests Tests/SceneSerializerTests.cpp)
     target_link_libraries(SceneSerializerTests PRIVATE Engine)
     add_test(NAME SceneSerializerTests COMMAND SceneSerializerTests)
+
+    add_executable(RegistryTests Tests/RegistryTests.cpp)
+    target_link_libraries(RegistryTests PRIVATE Engine)
+    add_test(NAME RegistryTests COMMAND RegistryTests)
 endif()

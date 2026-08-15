@@ -167,9 +167,9 @@ public:
      * @brief Invokes a function for entities matching a component set.
      *
      * When component types are provided, iteration uses the dense entity list
-     * of the first component pool and checks that every remaining component is
-     * present. With an empty component pack, the function is invoked once for
-     * every live entity.
+     * of the smallest component pool and checks membership in the remaining
+     * cached pools. With an empty component pack, the function is invoked once
+     * for every live entity.
      *
      * Callback signatures:
      * @code
@@ -181,7 +181,6 @@ public:
      * @tparam Func Callable type.
      * @param func Function invoked for each matching entity.
      *
-     * @note Put the least common component first to reduce iteration work.
      */
     template<typename... Components, typename Func>
     void view(Func &&func) {
@@ -190,19 +189,12 @@ public:
                 std::invoke(func, entity);
             }
         } else {
-            using FirstComponent =
-                std::tuple_element_t<0, std::tuple<Components...>>;
-            auto *firstPool = findPool<FirstComponent>();
-
-            if (firstPool == nullptr) {
+            const auto pools = std::tuple{findPool<Components>()...};
+            if (!allPoolsExist(pools)) {
                 return;
             }
 
-            for (const Entity entity : firstPool->entities()) {
-                if ((has<Components>(entity) && ...)) {
-                    std::invoke(func, entity, get<Components>(entity)...);
-                }
-            }
+            forEachSmallestPool(pools, std::forward<Func>(func));
         }
     }
 
@@ -220,23 +212,62 @@ public:
                 std::invoke(func, entity);
             }
         } else {
-            using FirstComponent =
-                std::tuple_element_t<0, std::tuple<Components...>>;
-            const auto *firstPool = findPool<FirstComponent>();
-
-            if (firstPool == nullptr) {
+            const auto pools = std::tuple{findPool<Components>()...};
+            if (!allPoolsExist(pools)) {
                 return;
             }
 
-            for (const Entity entity : firstPool->entities()) {
-                if ((has<Components>(entity) && ...)) {
-                    std::invoke(func, entity, get<Components>(entity)...);
-                }
-            }
+            forEachSmallestPool(pools, std::forward<Func>(func));
         }
     }
 
 private:
+    template<typename Pools>
+    [[nodiscard]] static bool allPoolsExist(const Pools& pools) {
+        return std::apply([](auto*... pool) {
+            return ((pool != nullptr) && ...);
+        }, pools);
+    }
+
+    template<std::size_t Index = 0, typename Pools, typename Func>
+    static void forEachPoolAt(std::size_t targetIndex, const Pools& pools,
+                              Func&& func) {
+        if constexpr (Index < std::tuple_size_v<Pools>) {
+            if (targetIndex == Index) {
+                std::forward<Func>(func)(*std::get<Index>(pools));
+                return;
+            }
+            forEachPoolAt<Index + 1>(targetIndex, pools,
+                                     std::forward<Func>(func));
+        }
+    }
+
+    template<typename Pools, typename Func>
+    static void forEachSmallestPool(const Pools& pools, Func&& func) {
+        std::size_t smallestIndex = 0;
+        std::size_t smallestSize = std::get<0>(pools)->size();
+
+        std::apply([&](auto*... pool) {
+            std::size_t index = 0;
+            ((pool->size() < smallestSize
+                  ? (smallestSize = pool->size(), smallestIndex = index)
+                  : 0,
+              ++index), ...);
+        }, pools);
+
+        forEachPoolAt(smallestIndex, pools, [&](const auto& drivingPool) {
+            for (const Entity entity : drivingPool.entities()) {
+                if (std::apply([entity](auto*... pool) {
+                        return (pool->has(entity) && ...);
+                    }, pools)) {
+                    std::apply([&](auto*... pool) {
+                        std::invoke(func, entity, pool->getUnchecked(entity)...);
+                    }, pools);
+                }
+            }
+        });
+    }
+
     /**
      * @brief Returns the pool for a component type, creating it when needed.
      *

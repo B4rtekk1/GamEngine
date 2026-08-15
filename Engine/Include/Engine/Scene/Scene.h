@@ -46,13 +46,13 @@ public:
         });
 
         camera = registry.create();
-        const float cameraTargetY = (CubesPerAxis - 1) * CubeSpacing * 0.5f + 0.5f;
-        const Vec3 cameraPosition{
+        constexpr float cameraTargetY = (CubesPerAxis - 1) * CubeSpacing * 0.5f + 0.5f;
+        constexpr Vec3 cameraPosition{
             GridHalfExtent * 2.9f,
             cameraTargetY + GridHalfExtent * 2.6f,
             GridHalfExtent * 3.9f,
         };
-        const Vec3 cameraDirection = Vec3{0.0f, cameraTargetY, 0.0f} - cameraPosition;
+        constexpr Vec3 cameraDirection = Vec3{0.0f, cameraTargetY, 0.0f} - cameraPosition;
         const float horizontalDistance = Vec2{cameraDirection.x(), cameraDirection.z()}.length();
         registry.add<Transform>(camera, Transform{
             .position = cameraPosition,
@@ -93,6 +93,7 @@ public:
                             .metallic = 0.05f,
                             .roughness = 0.62f,
                         },
+                        .castShadow = false,
                     });
                 }
             }
