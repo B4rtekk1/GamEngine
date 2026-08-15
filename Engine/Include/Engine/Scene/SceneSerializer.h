@@ -10,7 +10,7 @@ class Registry;
 /**
  * @brief Saves and loads the serializable portion of an ECS scene.
  *
- * The current format stores Transform, MeshRenderer and LightComponent.
+ * The current format stores Transform, CameraComponent, MeshRenderer and LightComponent.
  * Runtime-only renderer state, such as uploaded index offsets and occlusion
  * query slots, is intentionally rebuilt instead of serialized.
  */

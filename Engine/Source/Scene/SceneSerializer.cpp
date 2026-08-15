@@ -1,6 +1,7 @@
 #include "Engine/Scene/SceneSerializer.h"
 
 #include "Engine/Core/Transform.h"
+#include "Engine/ECS/Components/CameraComponent.h"
 #include "Engine/ECS/Registry.h"
 #include "Engine/Renderer/MeshRenderer.h"
 #include "Engine/Scene/Components/LightComponent.h"
@@ -191,6 +192,13 @@ void SceneSerializer::save(const Registry& registry, std::ostream& output) {
                        << static_cast<int>(light.enabled) << ' '
                        << static_cast<int>(light.castShadows) << '\n';
         }
+        if (registry.has<CameraComponent>(entity)) {
+            const auto& camera = registry.get<CameraComponent>(entity);
+            serialized << "CAMERA " << static_cast<int>(camera.projection) << ' '
+                       << camera.fieldOfView << ' ' << camera.orthographicSize << ' '
+                       << camera.nearClip << ' ' << camera.farClip << ' '
+                       << camera.aspectRatio << ' ' << static_cast<int>(camera.primary) << '\n';
+        }
         serialized << "END_ENTITY\n";
     }
     serialized << "END_SCENE\n";
@@ -267,6 +275,7 @@ void SceneSerializer::load(Registry& registry, std::istream& input) {
         bool hasTransform = false;
         bool hasRenderer = false;
         bool hasLight = false;
+        bool hasCamera = false;
 
         while (true) {
             const auto component = read<std::string>(input, "component name");
@@ -321,6 +330,28 @@ void SceneSerializer::load(Registry& registry, std::istream& input) {
                 light.enabled = readBool(input, "light enabled flag");
                 light.castShadows = readBool(input, "light cast-shadows flag");
                 loaded.add<LightComponent>(entity, light);
+            } else if (component == "CAMERA") {
+                if (hasCamera) {
+                    invalidScene("entity contains more than one CameraComponent");
+                }
+                hasCamera = true;
+                const int projection = read<int>(input, "camera projection");
+                if (projection < static_cast<int>(CameraProjection::Perspective) ||
+                    projection > static_cast<int>(CameraProjection::Orthographic)) {
+                    invalidScene("unknown camera projection");
+                }
+                CameraComponent camera;
+                camera.projection = static_cast<CameraProjection>(projection);
+                camera.fieldOfView = readFloat(input, "camera field of view");
+                camera.orthographicSize = readFloat(input, "camera orthographic size");
+                camera.nearClip = readFloat(input, "camera near clip");
+                camera.farClip = readFloat(input, "camera far clip");
+                camera.aspectRatio = readFloat(input, "camera aspect ratio");
+                camera.primary = readBool(input, "camera primary flag");
+                if (!camera.isValid()) {
+                    invalidScene("camera settings are invalid");
+                }
+                loaded.add<CameraComponent>(entity, camera);
             } else {
                 invalidScene("unknown component '" + component + "'");
             }

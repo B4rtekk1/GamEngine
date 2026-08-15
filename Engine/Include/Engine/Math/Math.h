@@ -4,7 +4,6 @@
 #include "Angle.h"
 #include "Color.h"
 #include "Degrees.h"
-#include "Frustum.h"
 #include "Mat4.h"
 #include "Quat.h"
 #include "Radians.h"
@@ -22,3 +21,4 @@ template <typename T>
 
 } // namespace Engine
 
+#include "Engine/Math/Frustum.h"

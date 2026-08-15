@@ -26,7 +26,7 @@ namespace Engine {
             barrier.oldLayout = oldLayout;
             barrier.newLayout = newLayout;
             barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-            barrier.dstQueueFamilyIndex = baseMipLevel;
+            barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
             barrier.image = image;
             barrier.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, baseMipLevel, levelCount, 0, 1};
             barrier.srcAccessMask = sourceAccess;

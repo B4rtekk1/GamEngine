@@ -19,6 +19,7 @@
 #include "Engine/Renderer/Geometry/Vertex.h"
 #include "Engine/Renderer/Geometry/Mesh.h"
 #include "Engine/ECS/Registry.h"
+#include "Engine/ECS/Components/CameraComponent.h"
 #include "Engine/Core/Transform.h"
 #include "Engine/Core/Camera.h"
 #include "Engine/Math/AABB.h"
@@ -55,6 +56,7 @@
 #include <unordered_map>
 #include <vector>
 #include <filesystem>
+#include <optional>
 
 namespace Engine {
 
@@ -123,8 +125,7 @@ namespace {
         ShadowPass shadowPass;
         Registry& registry;
         Assets::AssetManager assetManager;
-        Camera camera{Degrees{45.0f}, static_cast<float>(WIDTH) / static_cast<float>(HEIGHT),
-                      0.1f, 100'000.0f};
+        std::optional<Camera> camera;
         Buffer vertexBuffer;
         Buffer indexBuffer;
         std::array<Buffer, MAX_FRAMES_IN_FLIGHT> instanceBuffers;
@@ -181,7 +182,6 @@ namespace {
         uint32_t fpsFrameCount = 0;
         double fpsElapsedTime = 0.0;
 
-        // ---------- INIT ----------
 
         void initWindow() {
             if (!SDL_Init(SDL_INIT_VIDEO)) {
@@ -337,8 +337,7 @@ namespace {
         }
 
         static void DestroyDebugUtilsMessengerEXT(VkInstance instance, VkDebugUtilsMessengerEXT debugMessenger, const VkAllocationCallbacks* pAllocator) {
-            auto func = reinterpret_cast<PFN_vkDestroyDebugUtilsMessengerEXT>(vkGetInstanceProcAddr(instance, "vkDestroyDebugUtilsMessengerEXT"));
-            if (func != nullptr) func(instance, debugMessenger, pAllocator);
+            if (const auto func = reinterpret_cast<PFN_vkDestroyDebugUtilsMessengerEXT>(vkGetInstanceProcAddr(instance, "vkDestroyDebugUtilsMessengerEXT")); func != nullptr) func(instance, debugMessenger, pAllocator);
         }
 
         void setupDebugMessenger() {
@@ -356,13 +355,11 @@ namespace {
             }
         }
 
-        // ---------- SWAPCHAIN ----------
 
         void createSwapChain() {
             swapchain.create(window, surface, vulkanDevice);
         }
 
-    // ---------- RENDER PASS / PIPELINE ----------
 
     void createDepthResources() {
         depthBuffer.create(swapchain.extent(), msaa.sampleCount());
@@ -448,7 +445,7 @@ namespace {
             // meshes contribute their geometry to the GPU buffers only once.
             std::unordered_map<const Mesh*, uint32_t> firstIndices;
             registry.view<Transform, MeshRenderer>(
-                [&](const Entity entity, Transform& transform, MeshRenderer& renderer) {
+                [&](const Entity entity, const Transform& transform, MeshRenderer& renderer) {
                     if (!renderer.hasMesh()) {
                         return;
                     }
@@ -574,9 +571,12 @@ namespace {
             }
         }
 
-        void updateCullingUniformBuffer(const uint32_t frame) {
+        void updateCullingUniformBuffer(const uint32_t frame) const {
             Culling::CullingUniformData data{};
-            const glm::mat4 viewProjection = camera.projectionMatrix().native() * camera.viewMatrix().native();
+            if (!camera) {
+                throw std::runtime_error("Camera must be initialized before culling");
+            }
+            const glm::mat4 viewProjection = camera->projectionMatrix().native() * camera->viewMatrix().native();
             std::memcpy(data.viewProjection.data, &viewProjection, sizeof(viewProjection));
             data.objectCount = static_cast<uint32_t>(gpuObjects.size());
             data.maxDrawCount = data.objectCount;
@@ -592,7 +592,7 @@ namespace {
             cullingUniformBuffers[frame].update(&data, sizeof(data));
         }
 
-        void updateShadowCullingUniformBuffer(const uint32_t frame) {
+        void updateShadowCullingUniformBuffer(const uint32_t frame) const {
             Culling::CullingUniformData data{};
             const glm::mat4 lightViewProjection = lightSpaceMatrix().native();
             std::memcpy(data.viewProjection.data, &lightViewProjection, sizeof(lightViewProjection));
@@ -631,12 +631,12 @@ namespace {
         }
 
         void createCullingResources() {
-            const uint32_t objectCount = static_cast<uint32_t>(renderables.size());
+            const auto objectCount = static_cast<uint32_t>(renderables.size());
             if (objectCount == 0) return;
 
             hiZBuffer.create(vulkanDevice.physical(), device, swapchain.extent().width, swapchain.extent().height);
 
-            const VkDescriptorSetLayoutBinding copyBindings[] = {
+            constexpr VkDescriptorSetLayoutBinding copyBindings[] = {
                 {0, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
                 {1, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
             };
@@ -716,7 +716,7 @@ namespace {
                     sizeof(VkDrawIndexedIndirectCommand) * objectCount,
                     VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
                     commandPool, vulkanDevice.graphicsQueue());
-                const uint32_t zero = 0;
+                constexpr uint32_t zero = 0;
                 drawCountBuffers[frame].createDeviceLocal(vulkanDevice.physical(), device, &zero, sizeof(zero),
                     VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT |
                     VK_BUFFER_USAGE_TRANSFER_DST_BIT,
@@ -727,7 +727,7 @@ namespace {
                     commandPool, vulkanDevice.graphicsQueue());
             }
 
-            const uint32_t cullingSetCount = MAX_FRAMES_IN_FLIGHT * 2;
+            constexpr uint32_t cullingSetCount = MAX_FRAMES_IN_FLIGHT * 2;
             const uint32_t imageDescriptors = hiZBuffer.mipCount() + cullingSetCount;
             const VkDescriptorPoolSize poolSizes[] = {
                 {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, imageDescriptors},
@@ -757,7 +757,7 @@ namespace {
             }
             for (uint32_t frame = 0; frame < MAX_FRAMES_IN_FLIGHT; ++frame) {
                 const VkDescriptorImageInfo hiZInfo{hiZBuffer.sampler(), hiZBuffer.fullView(), VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
-                const auto updateCullingSet = [&](const VkDescriptorSet set, const Buffer& indirectBuffer,
+                const auto updateCullingSet = [&](VkDescriptorSet set, const Buffer& indirectBuffer,
                                                   const Buffer& countBuffer, const Buffer& uniformBuffer) {
                     const VkDescriptorBufferInfo objectInfo{
                         cullingObjectBuffers[frame].handle(), 0, VK_WHOLE_SIZE};
@@ -778,8 +778,8 @@ namespace {
                     writes[4].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER; writes[4].pBufferInfo = &uniformInfo;
                     vkUpdateDescriptorSets(device, std::size(writes), writes, 0, nullptr);
                 };
-                const VkDescriptorSet cameraCullSet = cullSets[frame];
-                const VkDescriptorSet shadowCullSet = cullSets[MAX_FRAMES_IN_FLIGHT + frame];
+                VkDescriptorSet cameraCullSet = cullSets[frame];
+                VkDescriptorSet shadowCullSet = cullSets[MAX_FRAMES_IN_FLIGHT + frame];
                 updateCullingSet(cameraCullSet, indirectBuffers[frame], drawCountBuffers[frame],
                                  cullingUniformBuffers[frame]);
                 updateCullingSet(shadowCullSet, shadowIndirectBuffers[frame], shadowDrawCountBuffers[frame],
@@ -878,7 +878,7 @@ namespace {
             const Vec3 lightTarget = sceneCenter;
             const Vec3 lightPosition = lightTarget + Vec3{
                 extent * 2.6f, extent * 3.5f, extent * 2.6f};
-            const Vec3 worldUp{0.0f, 1.0f, 0.0f};
+            constexpr Vec3 worldUp{0.0f, 1.0f, 0.0f};
             const Mat4 lightView = Mat4::lookAt(lightPosition, lightTarget, worldUp);
             const Mat4 lightProjection = Mat4::scale(
                 Mat4::ortho(-extent * 2.25f, extent * 2.25f,
@@ -889,20 +889,32 @@ namespace {
         }
 
         void updateUniformBuffer(const uint32_t frame) {
-            const float extent = sceneRadius;
-            const Vec3 cameraOffset{
-                extent * 2.9f, extent * 2.6f, extent * 3.9f};
-            const Vec3 centeredCameraPosition = sceneCenter + cameraOffset;
-            const Vec3 direction = sceneCenter - centeredCameraPosition;
-            const float horizontalDistance = Vec2{direction.x(), direction.z()}.length();
-            camera.setPosition(centeredCameraPosition);
-            // atan2 returns radians; convert explicitly before storing camera angles.
-            camera.setRotation(Degrees{Radians{std::atan2(direction.z(), direction.x())}},
-                               Degrees{Radians{std::atan2(direction.y(), horizontalDistance)}});
+            Entity activeCamera = NullEntity;
+            registry.view<CameraComponent, Transform>(
+                [&](const Entity entity, CameraComponent& component, Transform&) {
+                    if (activeCamera == NullEntity && component.primary) {
+                        activeCamera = entity;
+                    }
+                });
+            if (activeCamera == NullEntity) {
+                throw std::runtime_error("Scene has no primary CameraComponent with Transform");
+            }
+
+            const CameraComponent& component = registry.get<CameraComponent>(activeCamera);
+            const Transform& transform = registry.get<Transform>(activeCamera);
+            if (!component.isPerspective() || !component.isValid()) {
+                throw std::runtime_error("Primary CameraComponent has unsupported settings");
+            }
+
+            camera.emplace(Degrees{component.fieldOfView}, component.aspectRatio,
+                           component.nearClip, component.farClip);
+            camera->setPosition(transform.position);
+            camera->setRotation(Degrees{transform.rotation.y()},
+                                Degrees{transform.rotation.x()});
 
             const UniformBufferObject data{
-                camera.viewMatrix(), camera.projectionMatrix(), lightSpaceMatrix(),
-                glm::vec4{centeredCameraPosition.native(), 1.0f},
+                camera->viewMatrix(), camera->projectionMatrix(), lightSpaceMatrix(),
+                glm::vec4{camera->position().native(), 1.0f},
                 glm::vec4{-0.45f, -0.80f, -0.35f, 4.0f}};
             uniformBuffers[frame].update(&data, sizeof(data));
         }
@@ -1043,8 +1055,12 @@ namespace {
             destroyRenderFinishedSemaphores();
 
             swapchain.recreate();
-            camera.setAspectRatio(static_cast<float>(swapchain.extent().width) /
-                                  static_cast<float>(swapchain.extent().height));
+            registry.view<CameraComponent>([&](const Entity, CameraComponent& component) {
+                if (component.primary) {
+                    component.setAspectRatio(static_cast<float>(swapchain.extent().width),
+                                             static_cast<float>(swapchain.extent().height));
+                }
+            });
             hdrBuffer.create(vulkanDevice.physical(), device, swapchain.extent());
             msaa.create(swapchain.extent(), HdrBuffer::Format);
             createDepthResources();

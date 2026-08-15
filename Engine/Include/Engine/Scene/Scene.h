@@ -5,8 +5,10 @@
 #include "Engine/Renderer/MeshRenderer.h"
 #include "Engine/Core/Transform.h"
 #include "Engine/ECS/Registry.h"
+#include "Engine/ECS/Components/CameraComponent.h"
 
 #include <array>
+#include <cmath>
 #include <memory>
 
 namespace Engine {
@@ -21,6 +23,7 @@ public:
 
     Registry registry;
     Entity plane{NullEntity};
+    Entity camera{NullEntity};
     std::array<Entity, CubeCount> cubes{};
 
 private:
@@ -40,6 +43,30 @@ public:
         });
         registry.add<MeshRenderer>(plane, MeshRenderer{
             .mesh = planeMesh,
+        });
+
+        camera = registry.create();
+        const float cameraTargetY = (CubesPerAxis - 1) * CubeSpacing * 0.5f + 0.5f;
+        const Vec3 cameraPosition{
+            GridHalfExtent * 2.9f,
+            cameraTargetY + GridHalfExtent * 2.6f,
+            GridHalfExtent * 3.9f,
+        };
+        const Vec3 cameraDirection = Vec3{0.0f, cameraTargetY, 0.0f} - cameraPosition;
+        const float horizontalDistance = Vec2{cameraDirection.x(), cameraDirection.z()}.length();
+        registry.add<Transform>(camera, Transform{
+            .position = cameraPosition,
+            .rotation = {
+                Degrees{Radians{std::atan2(cameraDirection.y(), horizontalDistance)}}.value(),
+                Degrees{Radians{std::atan2(cameraDirection.z(), cameraDirection.x())}}.value(),
+                0.0f,
+            },
+        });
+        registry.add<CameraComponent>(camera, CameraComponent{
+            .fieldOfView = 45.0f,
+            .nearClip = 0.1f,
+            .farClip = 100'000.0f,
+            .aspectRatio = 800.0f / 600.0f,
         });
 
         constexpr float halfGridWidth = (CubesPerAxis - 1) * CubeSpacing * 0.5f;

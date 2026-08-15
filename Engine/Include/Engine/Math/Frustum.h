@@ -3,6 +3,8 @@
 /** @file Frustum.h View-frustum intersection utilities. */
 
 
+#include "Engine/Math/Math.h"
+
 #include <algorithm>
 #include <array>
 
@@ -29,7 +31,10 @@ public:
                 plane.y() >= 0.0f ? bounds.max.y() : bounds.min.y(),
                 plane.z() >= 0.0f ? bounds.max.z() : bounds.min.z(),
             };
-            return dot(Vec3{plane.x(), plane.y(), plane.z()}, positiveVertex) + plane.w() >= 0.0f;
+            const float distance = plane.x() * positiveVertex.x() +
+                                   plane.y() * positiveVertex.y() +
+                                   plane.z() * positiveVertex.z() + plane.w();
+            return distance >= 0.0f;
         });
     }
 
