@@ -10,6 +10,7 @@ find_package(Vulkan 1.4 REQUIRED)
 set(SDL3_DIR "$ENV{VULKAN_SDK}/cmake")
 find_package(SDL3 CONFIG REQUIRED)
 find_path(GLM_INCLUDE_DIR NAMES glm/glm.hpp HINTS "$ENV{VULKAN_SDK}/Include" REQUIRED)
+find_path(VMA_INCLUDE_DIR NAMES vk_mem_alloc.h HINTS "$ENV{VULKAN_SDK}/Include/vma" REQUIRED)
 
 add_library(Engine
         Engine/Source/Assets/AssetManager.cpp
@@ -48,6 +49,7 @@ add_library(Engine
         Engine/Source/Renderer/Vulkan/shadow_map.cpp
         Engine/Source/Renderer/Vulkan/swapchain.cpp
         Engine/Source/Renderer/Vulkan/vulkan_device.cpp
+        Engine/Source/Renderer/Vulkan/vma_impl.cpp
         Platform/SDL/SDLInput.cpp
 )
 
@@ -56,6 +58,7 @@ target_include_directories(Engine
         PUBLIC
             $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/Engine/Include>
             ${GLM_INCLUDE_DIR}
+            ${VMA_INCLUDE_DIR}
         PRIVATE
             ${CMAKE_CURRENT_SOURCE_DIR}
             ${CMAKE_CURRENT_SOURCE_DIR}/Engine/Source

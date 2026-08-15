@@ -22,7 +22,7 @@ public:
                 VkQueue queue, VkRenderPass renderPass, VkFormat colorFormat,
                 VkSampleCountFlagBits samples, VkDescriptorSetLayout descriptorSetLayout,
                 const std::vector<VkBuffer>& uniformBuffers, VkDeviceSize uniformBufferRange,
-                Assets::AssetManager& assets);
+                Assets::AssetManager& assets, VmaAllocator allocator);
     void draw(VkCommandBuffer commandBuffer, uint32_t frameIndex) const;
     void destroy() noexcept;
 

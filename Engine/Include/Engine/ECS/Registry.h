@@ -43,6 +43,7 @@ public:
         }
         const Entity entity = makeEntity(index, m_generations[index]);
         m_entities.insert(entity);
+        ++m_mutationRevision;
         return entity;
     }
 
@@ -65,6 +66,7 @@ public:
         const std::uint32_t index = entityIndex(entity);
         ++m_generations[index];
         m_freeEntities.push_back(index);
+        ++m_mutationRevision;
     }
 
     /**
@@ -81,6 +83,11 @@ public:
     /** Returns the number of live entities. */
     [[nodiscard]] std::size_t size() const noexcept {
         return m_entities.size();
+    }
+
+    /** @brief Monotonically increasing revision for mutable ECS operations. */
+    [[nodiscard]] std::uint64_t mutationRevision() const noexcept {
+        return m_mutationRevision;
     }
 
     /**
@@ -101,7 +108,9 @@ public:
     template<typename T, typename... Args>
     T &add(Entity entity, Args &&... args) {
         assert(valid(entity) && "Cannot add a component to an invalid entity");
-        return getOrCreatePool<T>().add(entity, std::forward<Args>(args)...);
+        T& component = getOrCreatePool<T>().add(entity, std::forward<Args>(args)...);
+        ++m_mutationRevision;
+        return component;
     }
 
     /**
@@ -121,6 +130,7 @@ public:
 
         if (auto *pool = findPool<T>()) {
             pool->remove(entity);
+            ++m_mutationRevision;
         }
     }
 
@@ -158,6 +168,7 @@ public:
 
         auto *pool = findPool<T>();
         assert(pool != nullptr && "Component type is not registered");
+        ++m_mutationRevision;
         return pool->get(entity);
     }
 
@@ -353,6 +364,8 @@ private:
         std::type_index,
         std::unique_ptr<IComponentPool>
     > m_componentPools;
+
+    std::uint64_t m_mutationRevision = 0;
 };
 
 }

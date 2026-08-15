@@ -44,13 +44,15 @@ namespace Engine {
         *this = std::move(other);
     }
 
-    Texture2D &Texture2D::operator=(Texture2D &&other) noexcept {
-        if (this != &other) { return *this; }
+Texture2D &Texture2D::operator=(Texture2D &&other) noexcept {
+        if (this == &other) { return *this; }
 
         destroy();
         device_ = std::exchange(other.device_, VK_NULL_HANDLE);
         image_ = std::exchange(other.image_, VK_NULL_HANDLE);
         memory_ = std::exchange(other.memory_, VK_NULL_HANDLE);
+        allocation_ = std::exchange(other.allocation_, VK_NULL_HANDLE);
+        allocator_ = std::exchange(other.allocator_, VK_NULL_HANDLE);
         imageView_ = std::exchange(other.imageView_, VK_NULL_HANDLE);
         sampler_ = std::exchange(other.sampler_, VK_NULL_HANDLE);
         format_ = std::exchange(other.format_, VK_FORMAT_UNDEFINED);
@@ -69,7 +71,9 @@ namespace Engine {
         const std::uint32_t height,
         const std::span<const std::uint8_t> rgbaPixels,
         const TextureColorSpace colorSpace,
-        const bool generateMipmaps) {
+        const bool generateMipmaps,
+        const VmaAllocator allocator,
+        const TexturePixelFormat pixelFormat) {
         if (physicalDevice == VK_NULL_HANDLE || device == VK_NULL_HANDLE ||
             commandPool == VK_NULL_HANDLE || queue == VK_NULL_HANDLE) {
             throw std::invalid_argument("Texture2D requires valid Vulkan handles");
@@ -77,18 +81,21 @@ namespace Engine {
         if (width == 0 || height == 0) {
             throw std::invalid_argument("Texture2D dimensions cannot be zero");
         }
-        if (width > std::numeric_limits<std::size_t>::max() / 4u / height) {
+        const std::size_t bytesPerPixel = pixelFormat == TexturePixelFormat::R8 ? 1u : 4u;
+        if (width > std::numeric_limits<std::size_t>::max() / bytesPerPixel / height) {
             throw std::invalid_argument("Texture2D dimensions are too large");
         }
 
-        const std::size_t expectedSize = static_cast<std::size_t>(width) * height * 4u;
+        const std::size_t expectedSize = static_cast<std::size_t>(width) * height * bytesPerPixel;
         if (rgbaPixels.size() != expectedSize) {
-            throw std::invalid_argument("Texture2D requires exactly width * height RGBA8 pixels");
+            throw std::invalid_argument("Texture2D pixel data has an invalid size");
         }
 
-        const VkFormat format = colorSpace == TextureColorSpace::SRGB
-                                    ? VK_FORMAT_R8G8B8A8_SRGB
-                                    : VK_FORMAT_R8G8B8A8_UNORM;
+        const VkFormat format = pixelFormat == TexturePixelFormat::R8
+                                    ? VK_FORMAT_R8_UNORM
+                                    : (colorSpace == TextureColorSpace::SRGB
+                                           ? VK_FORMAT_R8G8B8A8_SRGB
+                                           : VK_FORMAT_R8G8B8A8_UNORM);
         const std::uint32_t mipLevels = generateMipmaps
                                             ? std::bit_width(std::max(width, height))
                                             : 1u;
@@ -104,6 +111,7 @@ namespace Engine {
         destroy();
         device_ = device;
         format_ = format;
+        allocator_ = allocator;
         width_ = width;
         height_ = height;
         mipLevels_ = mipLevels;
@@ -113,7 +121,7 @@ namespace Engine {
         try {
             staging.createHostVisible(
                 physicalDevice, device_, static_cast<VkDeviceSize>(expectedSize),
-                VK_BUFFER_USAGE_TRANSFER_SRC_BIT);
+                VK_BUFFER_USAGE_TRANSFER_SRC_BIT, allocator);
             staging.update(rgbaPixels.data(), static_cast<VkDeviceSize>(expectedSize));
 
             VkImageCreateInfo imageInfo{VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO};
@@ -134,18 +142,18 @@ namespace Engine {
                 throw std::runtime_error("Could not create Texture2D image");
             }
 
-            VkMemoryRequirements requirements{};
-            vkGetImageMemoryRequirements(device_, image_, &requirements);
-            VkMemoryAllocateInfo allocation{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO};
-            allocation.allocationSize = requirements.size;
-            allocation.memoryTypeIndex = findMemoryType(
-                physicalDevice, requirements.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
-            if (vkAllocateMemory(device_, &allocation, nullptr, &memory_) != VK_SUCCESS) {
-                throw std::runtime_error("Could not allocate Texture2D image memory");
+            if (allocator_ == VK_NULL_HANDLE) {
+                throw std::invalid_argument("Texture2D requires a VMA allocator");
             }
-            if (vkBindImageMemory(device_, image_, memory_, 0) != VK_SUCCESS) {
-                throw std::runtime_error("Could not bind Texture2D image memory");
+            VmaAllocationCreateInfo allocationInfo{};
+            allocationInfo.usage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE;
+            if (vmaCreateImage(allocator_, &imageInfo, &allocationInfo, &image_,
+                               &allocation_, nullptr) != VK_SUCCESS) {
+                throw std::runtime_error("Could not allocate Texture2D image with VMA");
             }
+            VmaAllocationInfo allocationDetails{};
+            vmaGetAllocationInfo(allocator_, allocation_, &allocationDetails);
+            memory_ = allocationDetails.deviceMemory;
 
             VkCommandBufferAllocateInfo commandAllocation{VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO};
             commandAllocation.commandPool = commandPool;
@@ -272,15 +280,18 @@ namespace Engine {
                 vkDestroyImageView(device_, imageView_, nullptr);
             }
             if (image_ != VK_NULL_HANDLE) {
-                vkDestroyImage(device_, image_, nullptr);
-            }
-            if (memory_ != VK_NULL_HANDLE) {
-                vkFreeMemory(device_, memory_, nullptr);
+                if (allocator_ != VK_NULL_HANDLE && allocation_ != VK_NULL_HANDLE) {
+                    vmaDestroyImage(allocator_, image_, allocation_);
+                } else {
+                    vkDestroyImage(device_, image_, nullptr);
+                }
             }
         }
         device_ = VK_NULL_HANDLE;
         image_ = VK_NULL_HANDLE;
         memory_ = VK_NULL_HANDLE;
+        allocation_ = VK_NULL_HANDLE;
+        allocator_ = VK_NULL_HANDLE;
         imageView_ = VK_NULL_HANDLE;
         sampler_ = VK_NULL_HANDLE;
         format_ = VK_FORMAT_UNDEFINED;

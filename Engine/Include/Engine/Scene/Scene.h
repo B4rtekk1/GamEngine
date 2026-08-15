@@ -102,9 +102,6 @@ public:
         }
         const auto nonZeroPixels = std::count_if(fontAtlas.pixels().begin(), fontAtlas.pixels().end(),
                                                  [](const std::uint8_t pixel) { return pixel != 0; });
-        std::cout << "FPS HUD font: " << font->string()
-                  << " (non-zero atlas pixels: " << nonZeroPixels
-                  << ", glyph F: " << (fontAtlas.glyph('F') != nullptr ? "yes" : "no") << ")\n";
 
         auto panel = std::make_unique<UI::PanelElement>(
             Math::Color{0.025f, 0.035f, 0.055f, 0.82f});

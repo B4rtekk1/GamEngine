@@ -1,6 +1,7 @@
 #pragma once
 
 #include <vulkan/vulkan.h>
+#include <vk_mem_alloc.h>
 
 #include <cstdint>
 #include <span>
@@ -10,6 +11,11 @@ namespace Engine {
 enum class TextureColorSpace {
     Linear,
     SRGB
+};
+
+enum class TexturePixelFormat {
+    RGBA8,
+    R8
 };
 
 // Owns an RGBA8 image uploaded to device-local memory and ready for sampling.
@@ -35,7 +41,9 @@ public:
         std::uint32_t height,
         std::span<const std::uint8_t> rgbaPixels,
         TextureColorSpace colorSpace = TextureColorSpace::SRGB,
-        bool generateMipmaps = true);
+        bool generateMipmaps = true,
+        VmaAllocator allocator = VK_NULL_HANDLE,
+        TexturePixelFormat pixelFormat = TexturePixelFormat::RGBA8);
 
     void destroy() noexcept;
 
@@ -57,6 +65,8 @@ private:
     VkDevice device_ = VK_NULL_HANDLE;
     VkImage image_ = VK_NULL_HANDLE;
     VkDeviceMemory memory_ = VK_NULL_HANDLE;
+    VmaAllocation allocation_ = VK_NULL_HANDLE;
+    VmaAllocator allocator_ = VK_NULL_HANDLE;
     VkImageView imageView_ = VK_NULL_HANDLE;
     VkSampler sampler_ = VK_NULL_HANDLE;
     VkFormat format_ = VK_FORMAT_UNDEFINED;

@@ -70,7 +70,7 @@ public:
         }
 
         ensureSparseCapacity(entity);
-        const auto index = m_components.size();
+        const auto index = static_cast<std::uint32_t>(m_components.size());
         m_components.emplace_back(std::forward<Args>(args)...);
         try {
             m_entities.push_back(entity);
@@ -192,8 +192,8 @@ private:
     /**
      * @brief Sentinel indicating that an entity has no dense-array entry.
      */
-    static constexpr std::size_t InvalidIndex =
-        std::numeric_limits<std::size_t>::max();
+    static constexpr std::uint32_t InvalidIndex =
+        std::numeric_limits<std::uint32_t>::max();
 
     /**
      * @brief Enlarges the sparse array so it can index an entity.
@@ -223,7 +223,9 @@ private:
     /**
      * @brief Sparse mapping from entity identifier to dense-array index.
      */
-    std::vector<std::size_t> m_sparse;
+    // Entity indices are uint32_t, so size_t only doubles this table on
+    // 64-bit platforms without providing additional addressable entities.
+    std::vector<std::uint32_t> m_sparse;
 };
 
 }

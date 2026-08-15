@@ -159,7 +159,7 @@ namespace Engine::Math {
          * @return Vector containing red, green, blue and alpha channels.
          */
         [[nodiscard]] constexpr Vec4 to_vec4() const noexcept {
-            return Vec4(r_, g_, b_, a_);
+            return {r_, g_, b_, a_};
         }
 
         /**

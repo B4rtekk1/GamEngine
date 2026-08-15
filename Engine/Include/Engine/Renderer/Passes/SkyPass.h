@@ -3,6 +3,7 @@
 #include "Engine/Renderer/Skybox/Skybox.h"
 
 #include <vulkan/vulkan.h>
+#include <vk_mem_alloc.h>
 
 #include <cstdint>
 #include <vector>
@@ -23,7 +24,8 @@ public:
                 VkRenderPass renderPass, VkFormat colorFormat,
                 VkSampleCountFlagBits samples,
                 const std::vector<VkBuffer>& uniformBuffers,
-                VkDeviceSize uniformBufferRange, Assets::AssetManager& assets);
+                VkDeviceSize uniformBufferRange, Assets::AssetManager& assets,
+                VmaAllocator allocator);
     void destroy() noexcept;
     void record(VkCommandBuffer commandBuffer, std::uint32_t frameIndex) const;
 

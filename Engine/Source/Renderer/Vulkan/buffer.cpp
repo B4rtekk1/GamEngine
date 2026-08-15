@@ -10,17 +10,20 @@ Buffer::~Buffer() {
 }
 
 void Buffer::createDeviceLocal(VkPhysicalDevice physicalDevice, VkDevice device, const void *data, VkDeviceSize size,
-                               VkBufferUsageFlags usage, VkCommandPool commandPool, VkQueue queue) {
+                               VkBufferUsageFlags usage, VkCommandPool commandPool, VkQueue queue,
+                               VmaAllocator allocator) {
     if (data == nullptr || size == 0) {
         throw std::invalid_argument("Buffer upload requires non-empty data");
     }
 
     Buffer staging;
     staging.create(physicalDevice, device, size, VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
-                   VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+                   VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+                   allocator);
     staging.update(data, size);
 
-    create(physicalDevice, device, size, usage | VK_BUFFER_USAGE_TRANSFER_DST_BIT, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+    create(physicalDevice, device, size, usage | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+           VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, allocator);
 
     VkCommandBufferAllocateInfo allocateInfo{VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO};
     allocateInfo.commandPool = commandPool;
@@ -69,12 +72,14 @@ void Buffer::createDeviceLocal(VkPhysicalDevice physicalDevice, VkDevice device,
 }
 
 void Buffer::createHostVisible(const VkPhysicalDevice physicalDevice, const VkDevice device,
-                               const VkDeviceSize size, const VkBufferUsageFlags usage) {
+                               const VkDeviceSize size, const VkBufferUsageFlags usage,
+                               VmaAllocator allocator) {
     if (size == 0) {
         throw std::invalid_argument("Host-visible buffer requires non-zero size");
     }
     create(physicalDevice, device, size, usage,
-           VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+           VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+           allocator);
 }
 
 void Buffer::update(const void* data, const VkDeviceSize size, const VkDeviceSize offset) const {
@@ -89,18 +94,14 @@ void Buffer::update(const void* data, const VkDeviceSize size, const VkDeviceSiz
 
 void Buffer::destroy() noexcept {
     if (device_ != VK_NULL_HANDLE) {
-        if (mapped_ != nullptr) {
-            vkUnmapMemory(device_, memory_);
-        }
         if (buffer_ != VK_NULL_HANDLE) {
-            vkDestroyBuffer(device_, buffer_, nullptr);
-        }
-        if (memory_ != VK_NULL_HANDLE) {
-            vkFreeMemory(device_, memory_, nullptr);
+            vmaDestroyBuffer(allocator_, buffer_, allocation_);
         }
     }
     memory_ = VK_NULL_HANDLE;
     buffer_ = VK_NULL_HANDLE;
+    allocation_ = VK_NULL_HANDLE;
+    allocator_ = VK_NULL_HANDLE;
     device_ = VK_NULL_HANDLE;
     size_ = 0;
     mapped_ = nullptr;
@@ -111,38 +112,38 @@ void Buffer::create(
     VkDevice device,
     VkDeviceSize size,
     VkBufferUsageFlags usage,
-    VkMemoryPropertyFlags properties) {
+    VkMemoryPropertyFlags properties,
+    VmaAllocator allocator) {
     destroy();
+    if (allocator == VK_NULL_HANDLE) {
+        throw std::invalid_argument("VMA allocator is null");
+    }
     device_ = device;
     size_ = size;
+    allocator_ = allocator;
 
     VkBufferCreateInfo bufferInfo{VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
     bufferInfo.size = size;
     bufferInfo.usage = usage;
     bufferInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
-    if (vkCreateBuffer(device_, &bufferInfo, nullptr, &buffer_) != VK_SUCCESS) {
-        destroy();
-        throw std::runtime_error("Could not create Vulkan buffer");
+    VmaAllocationCreateInfo allocationInfo{};
+    allocationInfo.usage = (properties & VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT) != 0
+        ? VMA_MEMORY_USAGE_AUTO_PREFER_HOST
+        : VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE;
+    if ((properties & VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT) != 0) {
+        allocationInfo.flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT |
+                               VMA_ALLOCATION_CREATE_MAPPED_BIT;
     }
-
-    VkMemoryRequirements requirements{};
-    vkGetBufferMemoryRequirements(device_, buffer_, &requirements);
-
-    VkMemoryAllocateInfo allocateInfo{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO};
-    allocateInfo.allocationSize = requirements.size;
-    allocateInfo.memoryTypeIndex = findMemoryType(physicalDevice, requirements.memoryTypeBits, properties);
-    if (vkAllocateMemory(device_, &allocateInfo, nullptr, &memory_) != VK_SUCCESS) {
+    if (vmaCreateBuffer(allocator_, &bufferInfo, &allocationInfo, &buffer_,
+                        &allocation_, nullptr) != VK_SUCCESS) {
         destroy();
-        throw std::runtime_error("Could not allocate Vulkan buffer memory");
+        throw std::runtime_error("Could not create Vulkan buffer with VMA");
     }
-    if (vkBindBufferMemory(device_, buffer_, memory_, 0) != VK_SUCCESS) {
-        destroy();
-        throw std::runtime_error("Could not bind Vulkan buffer memory");
-    }
-    if ((properties & VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT) != 0 &&
-        vkMapMemory(device_, memory_, 0, size_, 0, &mapped_) != VK_SUCCESS) {
-        destroy();
-        throw std::runtime_error("Could not persistently map host-visible buffer memory");
+    if ((properties & VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT) != 0) {
+        VmaAllocationInfo info{};
+        vmaGetAllocationInfo(allocator_, allocation_, &info);
+        mapped_ = info.pMappedData;
+        memory_ = info.deviceMemory;
     }
 }
 

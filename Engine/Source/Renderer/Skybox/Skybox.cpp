@@ -24,12 +24,12 @@ Skybox::~Skybox() { destroy(); }
 void Skybox::create(VkPhysicalDevice physicalDevice, VkDevice device, VkCommandPool commandPool, VkQueue queue,
                     VkRenderPass renderPass, VkFormat colorFormat, VkSampleCountFlagBits samples,
                     VkDescriptorSetLayout descriptorSetLayout, const std::vector<VkBuffer>& uniformBuffers,
-                    VkDeviceSize uniformBufferRange, Assets::AssetManager& assets) {
+                    VkDeviceSize uniformBufferRange, Assets::AssetManager& assets, VmaAllocator allocator) {
     if (uniformBuffers.empty()) throw std::invalid_argument("Skybox requires camera uniform buffers");
     destroy(); device_ = device; descriptorSetLayout_ = descriptorSetLayout;
     try {
         vertexBuffer_.createDeviceLocal(physicalDevice, device_, kVertices.data(), sizeof(kVertices),
-                                        VK_BUFFER_USAGE_VERTEX_BUFFER_BIT, commandPool, queue);
+                                        VK_BUFFER_USAGE_VERTEX_BUFFER_BIT, commandPool, queue, allocator);
         cubemap_.create(physicalDevice, device_, commandPool, queue, kFaceColours);
         pipeline_.create(device_, renderPass, colorFormat, samples, descriptorSetLayout_, assets);
         VkDescriptorPoolSize sizes[] = {{VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, static_cast<uint32_t>(uniformBuffers.size())}, {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, static_cast<uint32_t>(uniformBuffers.size())}};

@@ -56,6 +56,7 @@
 #include <stdexcept>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 #include <filesystem>
 #include <optional>
@@ -175,6 +176,7 @@ namespace {
         std::vector<glm::mat4> instanceModels;
         std::vector<glm::mat4> shadowInstanceModels;
         std::vector<GPUMaterialData> materials;
+        std::uint64_t lastRenderableRevision = std::numeric_limits<std::uint64_t>::max();
         std::array<std::vector<std::size_t>, MAX_FRAMES_IN_FLIGHT> dirtyTransforms;
         std::array<std::vector<std::size_t>, MAX_FRAMES_IN_FLIGHT> dirtyMaterials;
         std::array<std::vector<std::size_t>, MAX_FRAMES_IN_FLIGHT> dirtyCullingObjects;
@@ -271,6 +273,9 @@ namespace {
             createUIResources();
             createCommandBuffers();
             createSyncObjects();
+            // Shader modules no longer need their source text after pipeline
+            // creation. Release cache-only asset records before the main loop.
+            assetManager.unload_unused();
         }
 
         // ---------- INSTANCE / DEBUG ----------
@@ -442,7 +447,8 @@ namespace {
             skyPass.create(vulkanDevice.physical(), device, commandPool,
                            vulkanDevice.graphicsQueue(), forwardPass.renderPass(),
                            HdrBuffer::Format, msaa.sampleCount(), buffers,
-                           sizeof(UniformBufferObject), assetManager);
+                           sizeof(UniformBufferObject), assetManager,
+                           vulkanDevice.allocator());
         }
 
         void createTonemapPass() {
@@ -456,30 +462,23 @@ namespace {
             scene.uiCanvas().resize(extent.width, extent.height);
 
             if (!fpsFontTexture.valid()) {
-                std::vector<std::uint8_t> rgba;
                 const auto& atlas = scene.uiFontAtlas();
-                rgba.resize(atlas.pixels().size() * 4);
-                for (std::size_t i = 0; i < atlas.pixels().size(); ++i) {
-                    const std::uint8_t coverage = atlas.pixels()[i];
-                    rgba[i * 4] = coverage;
-                    rgba[i * 4 + 1] = coverage;
-                    rgba[i * 4 + 2] = coverage;
-                    rgba[i * 4 + 3] = 255;
-                }
                 fpsFontTexture.create(vulkanDevice.physical(), device, commandPool,
                                       vulkanDevice.graphicsQueue(), atlas.width(),
-                                      atlas.height(), rgba, TextureColorSpace::Linear,
-                                      false);
+                                      atlas.height(), atlas.pixels(), TextureColorSpace::Linear,
+                                      false, vulkanDevice.allocator(), TexturePixelFormat::R8);
             }
 
             canvasRenderer.create(
                 vulkanDevice.physical(), device, swapchain.format(), extent,
                 swapchain.imageViews(), MAX_FRAMES_IN_FLIGHT, assetManager,
-                fpsFontTexture.imageView(), fpsFontTexture.sampler());
+                fpsFontTexture.imageView(), fpsFontTexture.sampler(),
+                vulkanDevice.allocator());
         }
 
         void createMeshBuffers() {
             Mesh sceneMesh;
+            renderables.reserve(registry.size());
             renderables.clear();
             glm::vec3 sceneMinimum{std::numeric_limits<float>::max()};
             glm::vec3 sceneMaximum{std::numeric_limits<float>::lowest()};
@@ -490,6 +489,20 @@ namespace {
                 AABB localBounds;
             };
             std::unordered_map<const Mesh*, MeshUploadRecord> uploadedMeshes;
+            uploadedMeshes.reserve(registry.size());
+            std::unordered_set<const Mesh*> uniqueMeshes;
+            uniqueMeshes.reserve(registry.size());
+            std::size_t vertexCapacity = 0;
+            std::size_t indexCapacity = 0;
+            registry.view<MeshRenderer>([&](const Entity, const MeshRenderer& renderer) {
+                if (!renderer.hasMesh() || !uniqueMeshes.insert(renderer.mesh.get()).second) {
+                    return;
+                }
+                vertexCapacity += renderer.mesh->vertices.size();
+                indexCapacity += renderer.mesh->indices.size();
+            });
+            sceneMesh.vertices.reserve(vertexCapacity);
+            sceneMesh.indices.reserve(indexCapacity);
             registry.view<Transform, MeshRenderer>(
                 [&](const Entity entity, const Transform& transform, MeshRenderer& renderer) {
                     if (!renderer.hasMesh()) {
@@ -553,10 +566,10 @@ namespace {
 
             vertexBuffer.createDeviceLocal(vulkanDevice.physical(), device, sceneMesh.vertices.data(),
                 sizeof(Vertex) * sceneMesh.vertices.size(), VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
-                commandPool, vulkanDevice.graphicsQueue());
+                commandPool, vulkanDevice.graphicsQueue(), vulkanDevice.allocator());
             indexBuffer.createDeviceLocal(vulkanDevice.physical(), device, sceneMesh.indices.data(),
                 sizeof(uint32_t) * sceneMesh.indices.size(), VK_BUFFER_USAGE_INDEX_BUFFER_BIT,
-                commandPool, vulkanDevice.graphicsQueue());
+                commandPool, vulkanDevice.graphicsQueue(), vulkanDevice.allocator());
         }
 
         void createInstanceBuffer() {
@@ -566,18 +579,20 @@ namespace {
             updateRenderableBuffers();
             for (Buffer& buffer : instanceBuffers) {
                 buffer.createHostVisible(vulkanDevice.physical(), device,
-                    sizeof(glm::mat4) * instanceModels.size(), VK_BUFFER_USAGE_VERTEX_BUFFER_BIT);
+                    sizeof(glm::mat4) * instanceModels.size(), VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
+                    vulkanDevice.allocator());
                 buffer.update(instanceModels.data(), sizeof(glm::mat4) * instanceModels.size());
             }
             for (Buffer& buffer : shadowInstanceBuffers) {
                 buffer.createHostVisible(vulkanDevice.physical(), device,
-                    sizeof(glm::mat4) * shadowInstanceModels.size(), VK_BUFFER_USAGE_VERTEX_BUFFER_BIT);
+                    sizeof(glm::mat4) * shadowInstanceModels.size(), VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
+                    vulkanDevice.allocator());
                 buffer.update(shadowInstanceModels.data(), sizeof(glm::mat4) * shadowInstanceModels.size());
             }
             for (Buffer& buffer : materialBuffers) {
                 buffer.createHostVisible(vulkanDevice.physical(), device,
                     sizeof(GPUMaterialData) * materials.size(),
-                    VK_BUFFER_USAGE_STORAGE_BUFFER_BIT);
+                    VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, vulkanDevice.allocator());
                 buffer.update(materials.data(), sizeof(GPUMaterialData) * materials.size());
             }
 
@@ -642,10 +657,16 @@ namespace {
         }
 
         void updateRenderableBuffers() {
+            const std::uint64_t revision = registry.mutationRevision();
+            if (revision == lastRenderableRevision) {
+                return;
+            }
+
+            const Registry& readRegistry = registry;
             for (std::size_t index = 0; index < renderables.size(); ++index) {
                 const Entity entity = renderables[index].entity;
-                const Transform& transform = registry.get<Transform>(entity);
-                const MeshRenderer& renderer = registry.get<MeshRenderer>(entity);
+                const Transform& transform = readRegistry.get<Transform>(entity);
+                const MeshRenderer& renderer = readRegistry.get<MeshRenderer>(entity);
                 RenderableRecord& record = renderables[index];
                 if (!record.hasCachedTransform || !sameTransform(record.cachedTransform, transform)) {
                     const glm::mat4 model = transform.matrix().native();
@@ -702,6 +723,7 @@ namespace {
                                       dirtyCullingObjects[currentFrame], bit);
                 }
             }
+            lastRenderableRevision = revision;
         }
 
         void updateCullingUniformBuffer(const uint32_t frame) const {
@@ -743,7 +765,7 @@ namespace {
         void createUniformBuffers() {
             for (Buffer& buffer : uniformBuffers) {
                 buffer.createHostVisible(vulkanDevice.physical(), device, sizeof(UniformBufferObject),
-                                         VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT);
+                                         VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT, vulkanDevice.allocator());
             }
         }
 
@@ -830,7 +852,7 @@ namespace {
                 buffer.createHostVisible(
                     vulkanDevice.physical(), device,
                     sizeof(Culling::GPUObjectData) * gpuObjects.size(),
-                    VK_BUFFER_USAGE_STORAGE_BUFFER_BIT);
+                    VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, vulkanDevice.allocator());
                 buffer.update(gpuObjects.data(),
                               sizeof(Culling::GPUObjectData) * gpuObjects.size());
             }
@@ -841,27 +863,29 @@ namespace {
 
             for (uint32_t frame = 0; frame < MAX_FRAMES_IN_FLIGHT; ++frame) {
                 cullingUniformBuffers[frame].createHostVisible(vulkanDevice.physical(), device,
-                    sizeof(Culling::CullingUniformData), VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT);
+                    sizeof(Culling::CullingUniformData), VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
+                    vulkanDevice.allocator());
                 shadowCullingUniformBuffers[frame].createHostVisible(vulkanDevice.physical(), device,
-                    sizeof(Culling::CullingUniformData), VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT);
+                    sizeof(Culling::CullingUniformData), VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
+                    vulkanDevice.allocator());
                 std::vector<VkDrawIndexedIndirectCommand> emptyCommands(objectCount);
                 indirectBuffers[frame].createDeviceLocal(vulkanDevice.physical(), device, emptyCommands.data(),
                     sizeof(VkDrawIndexedIndirectCommand) * objectCount,
                     VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
-                    commandPool, vulkanDevice.graphicsQueue());
+                    commandPool, vulkanDevice.graphicsQueue(), vulkanDevice.allocator());
                 shadowIndirectBuffers[frame].createDeviceLocal(vulkanDevice.physical(), device, emptyCommands.data(),
                     sizeof(VkDrawIndexedIndirectCommand) * objectCount,
                     VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
-                    commandPool, vulkanDevice.graphicsQueue());
+                    commandPool, vulkanDevice.graphicsQueue(), vulkanDevice.allocator());
                 constexpr uint32_t zero = 0;
                 drawCountBuffers[frame].createDeviceLocal(vulkanDevice.physical(), device, &zero, sizeof(zero),
                     VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT |
                     VK_BUFFER_USAGE_TRANSFER_DST_BIT,
-                    commandPool, vulkanDevice.graphicsQueue());
+                    commandPool, vulkanDevice.graphicsQueue(), vulkanDevice.allocator());
                 shadowDrawCountBuffers[frame].createDeviceLocal(vulkanDevice.physical(), device, &zero, sizeof(zero),
                     VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT |
                     VK_BUFFER_USAGE_TRANSFER_DST_BIT,
-                    commandPool, vulkanDevice.graphicsQueue());
+                    commandPool, vulkanDevice.graphicsQueue(), vulkanDevice.allocator());
             }
 
             constexpr uint32_t cullingSetCount = MAX_FRAMES_IN_FLIGHT * 2;
@@ -1027,8 +1051,9 @@ namespace {
 
         void updateUniformBuffer(const uint32_t frame) {
             Entity activeCamera = NullEntity;
-            registry.view<CameraComponent, Transform>(
-                [&](const Entity entity, CameraComponent& component, Transform&) {
+            const Registry& readRegistry = registry;
+            readRegistry.view<CameraComponent, Transform>(
+                [&](const Entity entity, const CameraComponent& component, const Transform&) {
                     if (activeCamera == NullEntity && component.primary) {
                         activeCamera = entity;
                     }
@@ -1037,8 +1062,8 @@ namespace {
                 throw std::runtime_error("Scene has no primary CameraComponent with Transform");
             }
 
-            const CameraComponent& component = registry.get<CameraComponent>(activeCamera);
-            const Transform& transform = registry.get<Transform>(activeCamera);
+            const CameraComponent& component = readRegistry.get<CameraComponent>(activeCamera);
+            const Transform& transform = readRegistry.get<Transform>(activeCamera);
             if (!component.isPerspective() || !component.isValid()) {
                 throw std::runtime_error("Primary CameraComponent has unsupported settings");
             }

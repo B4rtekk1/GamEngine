@@ -1,6 +1,7 @@
 #pragma once
 
 #include <vulkan/vulkan.h>
+#include <vk_mem_alloc.h>
 
 namespace Engine {
 
@@ -21,13 +22,15 @@ public:
         VkDeviceSize size,
         VkBufferUsageFlags usage,
         VkCommandPool commandPool,
-        VkQueue queue);
+        VkQueue queue,
+        VmaAllocator allocator);
 
     void createHostVisible(
         VkPhysicalDevice physicalDevice,
         VkDevice device,
         VkDeviceSize size,
-        VkBufferUsageFlags usage);
+        VkBufferUsageFlags usage,
+        VmaAllocator allocator);
 
     void update(const void* data, VkDeviceSize size, VkDeviceSize offset = 0) const;
 
@@ -39,6 +42,8 @@ private:
     VkDevice device_ = VK_NULL_HANDLE;
     VkBuffer buffer_ = VK_NULL_HANDLE;
     VkDeviceMemory memory_ = VK_NULL_HANDLE;
+    VmaAllocation allocation_ = VK_NULL_HANDLE;
+    VmaAllocator allocator_ = VK_NULL_HANDLE;
     VkDeviceSize size_ = 0;
     void* mapped_ = nullptr;
 
@@ -47,7 +52,8 @@ private:
         VkDevice device,
         VkDeviceSize size,
         VkBufferUsageFlags usage,
-        VkMemoryPropertyFlags properties);
+        VkMemoryPropertyFlags properties,
+        VmaAllocator allocator);
 
     [[nodiscard]] static uint32_t findMemoryType(
         VkPhysicalDevice physicalDevice,

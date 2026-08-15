@@ -4,6 +4,7 @@
 #include <Engine/UI/Vulkan/UIPipeline.h>
 
 #include <vulkan/vulkan.h>
+#include <vk_mem_alloc.h>
 
 #include <cstddef>
 #include <cstdint>
@@ -34,7 +35,8 @@ public:
                 std::uint32_t framesInFlight,
                 Assets::AssetManager& assets,
                 VkImageView fontAtlasView = VK_NULL_HANDLE,
-                VkSampler fontAtlasSampler = VK_NULL_HANDLE);
+                VkSampler fontAtlasSampler = VK_NULL_HANDLE,
+                VmaAllocator allocator = VK_NULL_HANDLE);
     void destroy() noexcept;
 
     void record(const Canvas& canvas, VkCommandBuffer commandBuffer,
@@ -51,6 +53,7 @@ private:
 
     VkPhysicalDevice physicalDevice_ = VK_NULL_HANDLE;
     VkDevice device_ = VK_NULL_HANDLE;
+    VmaAllocator allocator_ = VK_NULL_HANDLE;
     UIPipeline pipeline_;
     UIBatch batch_;
     std::vector<std::unique_ptr<FrameResources>> frames_;

@@ -30,7 +30,8 @@ void CanvasRenderer::create(const VkPhysicalDevice physicalDevice,
                             const std::uint32_t framesInFlight,
                             Assets::AssetManager& assets,
                             const VkImageView fontAtlasView,
-                            const VkSampler fontAtlasSampler) {
+                            const VkSampler fontAtlasSampler,
+                            const VmaAllocator allocator) {
     if (physicalDevice == VK_NULL_HANDLE || device == VK_NULL_HANDLE ||
         framesInFlight == 0) {
         throw std::invalid_argument("Canvas renderer received incomplete resources");
@@ -39,6 +40,7 @@ void CanvasRenderer::create(const VkPhysicalDevice physicalDevice,
     destroy();
     physicalDevice_ = physicalDevice;
     device_ = device;
+    allocator_ = allocator;
     try {
         pipeline_.create(device_, colorFormat, extent, imageViews, assets,
                          fontAtlasView, fontAtlasSampler);
@@ -58,6 +60,7 @@ void CanvasRenderer::destroy() noexcept {
     pipeline_.destroy();
     device_ = VK_NULL_HANDLE;
     physicalDevice_ = VK_NULL_HANDLE;
+    allocator_ = VK_NULL_HANDLE;
     cachedCanvasRevision_ = 0;
     batchDirty_ = true;
     pendingFrameUploads_ = 0;
@@ -139,14 +142,14 @@ bool CanvasRenderer::ensureCapacity(FrameResources& frame) {
         frame.vertexCapacity = grow(batch_.vertices.size());
         frame.vertices.createHostVisible(
             physicalDevice_, device_, frame.vertexCapacity * sizeof(UIVertex),
-            VK_BUFFER_USAGE_VERTEX_BUFFER_BIT);
+            VK_BUFFER_USAGE_VERTEX_BUFFER_BIT, allocator_);
         recreated = true;
     }
     if (batch_.indices.size() > frame.indexCapacity) {
         frame.indexCapacity = grow(batch_.indices.size());
         frame.indices.createHostVisible(
             physicalDevice_, device_, frame.indexCapacity * sizeof(std::uint32_t),
-            VK_BUFFER_USAGE_INDEX_BUFFER_BIT);
+            VK_BUFFER_USAGE_INDEX_BUFFER_BIT, allocator_);
         recreated = true;
     }
     return recreated;

@@ -32,6 +32,15 @@ void VulkanDevice::create(VkInstance instance, VkSurfaceKHR surface) {
     try {
         selectPhysicalDevice(instance);
         createLogicalDevice();
+
+        VmaAllocatorCreateInfo allocatorInfo{};
+        allocatorInfo.vulkanApiVersion = VK_API_VERSION_1_4;
+        allocatorInfo.physicalDevice = physicalDevice_;
+        allocatorInfo.device = device_;
+        allocatorInfo.instance = instance;
+        if (vmaCreateAllocator(&allocatorInfo, &allocator_) != VK_SUCCESS) {
+            throw std::runtime_error("Could not create VMA allocator");
+        }
     } catch(...) {
         destroy();
         throw;
@@ -39,6 +48,10 @@ void VulkanDevice::create(VkInstance instance, VkSurfaceKHR surface) {
 }
 
 void VulkanDevice::destroy() noexcept {
+    if (allocator_ != VK_NULL_HANDLE) {
+        vmaDestroyAllocator(allocator_);
+        allocator_ = VK_NULL_HANDLE;
+    }
     if (device_ != VK_NULL_HANDLE) {
         vkDestroyDevice(device_, nullptr);
     }
