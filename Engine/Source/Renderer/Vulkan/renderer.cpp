@@ -160,6 +160,8 @@ namespace {
         struct RenderableRecord {
             Entity entity{NullEntity};
             AABB localBounds{};
+            Transform cachedTransform{};
+            bool hasCachedTransform{false};
             // A change must reach every frame-in-flight buffer before its bit
             // can be discarded; otherwise the next frame could render stale data.
             uint8_t transformDirtyFrames{0};
@@ -170,6 +172,9 @@ namespace {
         std::vector<glm::mat4> instanceModels;
         std::vector<glm::mat4> shadowInstanceModels;
         std::vector<GPUMaterialData> materials;
+        std::array<std::vector<std::size_t>, MAX_FRAMES_IN_FLIGHT> dirtyTransforms;
+        std::array<std::vector<std::size_t>, MAX_FRAMES_IN_FLIGHT> dirtyMaterials;
+        std::array<std::vector<std::size_t>, MAX_FRAMES_IN_FLIGHT> dirtyCullingObjects;
         Vec3 sceneCenter{};
         float sceneRadius{1.0f};
 
@@ -192,6 +197,29 @@ namespace {
 
         [[nodiscard]] static uint8_t frameBit(const uint32_t frame) noexcept {
             return static_cast<uint8_t>(1u << frame);
+        }
+
+        [[nodiscard]] static bool sameTransform(const Transform& lhs,
+                                                const Transform& rhs) noexcept {
+            const auto sameVector = [](const Vec3& a, const Vec3& b) {
+                return a.x() == b.x() && a.y() == b.y() && a.z() == b.z();
+            };
+            return sameVector(lhs.position, rhs.position) &&
+                   sameVector(lhs.rotation, rhs.rotation) &&
+                   sameVector(lhs.scale, rhs.scale);
+        }
+
+        void markDirty(const std::size_t index,
+                       uint8_t RenderableRecord::* dirtyFrames,
+                       std::array<std::vector<std::size_t>, MAX_FRAMES_IN_FLIGHT>& dirtyIndices) {
+            RenderableRecord& record = renderables[index];
+            for (uint32_t frame = 0; frame < MAX_FRAMES_IN_FLIGHT; ++frame) {
+                const uint8_t bit = frameBit(frame);
+                if ((record.*dirtyFrames & bit) == 0) {
+                    dirtyIndices[frame].push_back(index);
+                }
+            }
+            record.*dirtyFrames |= allFrameBits;
         }
 
 
@@ -552,6 +580,8 @@ namespace {
                 record.transformDirtyFrames = 0;
                 record.materialDirtyFrames = 0;
             }
+            for (auto& indices : dirtyTransforms) indices.clear();
+            for (auto& indices : dirtyMaterials) indices.clear();
         }
 
         template <typename T>
@@ -578,11 +608,30 @@ namespace {
             }
         }
 
-        void clearDirtyFrame(uint8_t RenderableRecord::* dirtyFrames,
-                             const uint8_t bit) {
-            for (RenderableRecord& record : renderables) {
-                record.*dirtyFrames &= static_cast<uint8_t>(~bit);
+        template <typename T>
+        void uploadDirtyIndices(const Buffer& buffer, const std::vector<T>& data,
+                                uint8_t RenderableRecord::* dirtyFrames,
+                                const std::vector<std::size_t>& indices) const {
+            std::size_t rangeStart = 0;
+            while (rangeStart < indices.size()) {
+                std::size_t rangeEnd = rangeStart + 1;
+                while (rangeEnd < indices.size() &&
+                       indices[rangeEnd] == indices[rangeEnd - 1] + 1) {
+                    ++rangeEnd;
+                }
+                const std::size_t first = indices[rangeStart];
+                buffer.update(data.data() + first, sizeof(T) * (rangeEnd - rangeStart),
+                              sizeof(T) * first);
+                rangeStart = rangeEnd;
             }
+        }
+
+        void clearDirtyIndices(uint8_t RenderableRecord::* dirtyFrames,
+                               std::vector<std::size_t>& indices, const uint8_t bit) {
+            for (const std::size_t index : indices) {
+                renderables[index].*dirtyFrames &= static_cast<uint8_t>(~bit);
+            }
+            indices.clear();
         }
 
         void updateRenderableBuffers() {
@@ -590,55 +639,60 @@ namespace {
                 const Entity entity = renderables[index].entity;
                 const Transform& transform = registry.get<Transform>(entity);
                 const MeshRenderer& renderer = registry.get<MeshRenderer>(entity);
-                const glm::mat4 model = transform.matrix().native();
-                const GPUMaterialData material{
-                    glm::vec4{renderer.material.baseColor.r(),
-                              renderer.material.baseColor.g(),
-                              renderer.material.baseColor.b(),
-                              renderer.material.metallic},
-                    glm::vec4{renderer.material.roughness,
-                              renderer.material.ambientOcclusion, 0.0f, 0.0f},
-                };
-
                 RenderableRecord& record = renderables[index];
-                if (std::memcmp(&instanceModels[index], &model, sizeof(model)) != 0) {
+                if (!record.hasCachedTransform || !sameTransform(record.cachedTransform, transform)) {
+                    const glm::mat4 model = transform.matrix().native();
                     shadowInstanceModels[index] = model;
                     instanceModels[index] = model;
-                    record.transformDirtyFrames |= allFrameBits;
-                    record.cullingDirtyFrames |= allFrameBits;
+                    record.cachedTransform = transform;
+                    record.hasCachedTransform = true;
+                    markDirty(index, &RenderableRecord::transformDirtyFrames, dirtyTransforms);
+                    markDirty(index, &RenderableRecord::cullingDirtyFrames, dirtyCullingObjects);
                 }
+                const GPUMaterialData material{
+                    glm::vec4{renderer.material.baseColor.r(), renderer.material.baseColor.g(),
+                              renderer.material.baseColor.b(), renderer.material.metallic},
+                    glm::vec4{renderer.material.roughness, renderer.material.ambientOcclusion, 0.0f, 0.0f},
+                };
                 if (std::memcmp(&materials[index], &material, sizeof(material)) != 0) {
                     materials[index] = material;
-                    record.materialDirtyFrames |= allFrameBits;
+                    markDirty(index, &RenderableRecord::materialDirtyFrames, dirtyMaterials);
                 }
                 if (gpuObjects.size() == renderables.size()) {
                     Culling::GPUObjectData& object = gpuObjects[index];
+                    const glm::mat4& model = instanceModels[index];
                     if (std::memcmp(object.model.data, &model, sizeof(model)) != 0) {
                         std::memcpy(object.model.data, &model, sizeof(model));
-                        record.cullingDirtyFrames |= allFrameBits;
+                        markDirty(index, &RenderableRecord::cullingDirtyFrames, dirtyCullingObjects);
                     }
                     const uint32_t castShadow = renderer.castShadow ? 1u : 0u;
                     if (object.castShadow != castShadow) {
                         object.castShadow = castShadow;
-                        record.cullingDirtyFrames |= allFrameBits;
+                        markDirty(index, &RenderableRecord::cullingDirtyFrames, dirtyCullingObjects);
                     }
                 }
             }
             if (instanceBuffers[currentFrame].handle() != VK_NULL_HANDLE) {
                 const uint8_t bit = frameBit(currentFrame);
-                uploadDirtyRanges(instanceBuffers[currentFrame], instanceModels,
-                                  &RenderableRecord::transformDirtyFrames, bit);
-                uploadDirtyRanges(shadowInstanceBuffers[currentFrame], shadowInstanceModels,
-                                  &RenderableRecord::transformDirtyFrames, bit);
-                clearDirtyFrame(&RenderableRecord::transformDirtyFrames, bit);
-
-                uploadDirtyRanges(materialBuffers[currentFrame], materials,
-                                  &RenderableRecord::materialDirtyFrames, bit);
-                clearDirtyFrame(&RenderableRecord::materialDirtyFrames, bit);
+                uploadDirtyIndices(instanceBuffers[currentFrame], instanceModels,
+                                   &RenderableRecord::transformDirtyFrames,
+                                   dirtyTransforms[currentFrame]);
+                uploadDirtyIndices(shadowInstanceBuffers[currentFrame], shadowInstanceModels,
+                                   &RenderableRecord::transformDirtyFrames,
+                                   dirtyTransforms[currentFrame]);
+                clearDirtyIndices(&RenderableRecord::transformDirtyFrames,
+                                  dirtyTransforms[currentFrame], bit);
+                uploadDirtyIndices(materialBuffers[currentFrame], materials,
+                                   &RenderableRecord::materialDirtyFrames,
+                                   dirtyMaterials[currentFrame]);
+                clearDirtyIndices(&RenderableRecord::materialDirtyFrames,
+                                  dirtyMaterials[currentFrame], bit);
                 if (cullingObjectBuffers[currentFrame].handle() != VK_NULL_HANDLE) {
-                    uploadDirtyRanges(cullingObjectBuffers[currentFrame], gpuObjects,
-                                      &RenderableRecord::cullingDirtyFrames, bit);
-                    clearDirtyFrame(&RenderableRecord::cullingDirtyFrames, bit);
+                    uploadDirtyIndices(cullingObjectBuffers[currentFrame], gpuObjects,
+                                       &RenderableRecord::cullingDirtyFrames,
+                                       dirtyCullingObjects[currentFrame]);
+                    clearDirtyIndices(&RenderableRecord::cullingDirtyFrames,
+                                      dirtyCullingObjects[currentFrame], bit);
                 }
             }
         }

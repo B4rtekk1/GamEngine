@@ -43,13 +43,18 @@ private:
     struct FrameResources;
 
     void appendElement(const UIElement& element);
-    void ensureCapacity(FrameResources& frame);
+    [[nodiscard]] std::uint64_t canvasRevision(const Canvas& canvas) const noexcept;
+    [[nodiscard]] std::uint64_t elementRevision(const UIElement& element) const noexcept;
+    [[nodiscard]] bool ensureCapacity(FrameResources& frame);
 
     VkPhysicalDevice physicalDevice_ = VK_NULL_HANDLE;
     VkDevice device_ = VK_NULL_HANDLE;
     UIPipeline pipeline_;
     UIBatch batch_;
     std::vector<std::unique_ptr<FrameResources>> frames_;
+    std::uint64_t cachedCanvasRevision_{};
+    bool batchDirty_{true};
+    std::uint64_t pendingFrameUploads_{};
 };
 
 } // namespace Engine::UI

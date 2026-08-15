@@ -3,6 +3,7 @@
 #include <Engine/UI/RectTransform.h>
 
 #include <memory>
+#include <cstdint>
 #include <vector>
 
 namespace Engine::UI {
@@ -19,6 +20,11 @@ namespace Engine::UI {
 
         virtual void update(float deltaTime) {}
         virtual void buildGeometry(UIBatch& batch) const {}
+
+        /// Returns a value that changes whenever subclass-owned visual data changes.
+        /// The renderer combines it with hierarchy, visibility and layout state to
+        /// decide whether the cached UI batch can be reused.
+        [[nodiscard]] virtual std::uint64_t geometryRevision() const noexcept { return 0; }
 
         void updateLayout(const Rect& parentRect) {
             rectTransform.calculate(parentRect);

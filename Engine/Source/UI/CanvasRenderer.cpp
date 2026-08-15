@@ -5,6 +5,7 @@
 #include <Engine/UI/UIElement.h>
 
 #include <algorithm>
+#include <bit>
 #include <stdexcept>
 
 namespace Engine::UI {
@@ -54,6 +55,51 @@ void CanvasRenderer::destroy() noexcept {
     pipeline_.destroy();
     device_ = VK_NULL_HANDLE;
     physicalDevice_ = VK_NULL_HANDLE;
+    cachedCanvasRevision_ = 0;
+    batchDirty_ = true;
+    pendingFrameUploads_ = 0;
+}
+
+namespace {
+constexpr std::uint64_t FnvOffset = 14695981039346656037ull;
+constexpr std::uint64_t FnvPrime = 1099511628211ull;
+
+void hashValue(std::uint64_t& hash, const std::uint64_t value) noexcept {
+    hash ^= value;
+    hash *= FnvPrime;
+}
+
+void hashFloat(std::uint64_t& hash, const float value) noexcept {
+    hashValue(hash, std::bit_cast<std::uint32_t>(value));
+}
+}
+
+std::uint64_t CanvasRenderer::elementRevision(const UIElement& element) const noexcept {
+    std::uint64_t hash = FnvOffset;
+    hashValue(hash, reinterpret_cast<std::uintptr_t>(&element));
+    hashValue(hash, element.visible);
+    hashValue(hash, static_cast<std::uint64_t>(static_cast<std::int64_t>(element.sortingOrder)));
+    const Rect& rect = element.rectTransform.calculatedRect;
+    hashFloat(hash, rect.x);
+    hashFloat(hash, rect.y);
+    hashFloat(hash, rect.width);
+    hashFloat(hash, rect.height);
+    hashValue(hash, element.geometryRevision());
+    for (const auto& child : element.children()) {
+        hashValue(hash, elementRevision(*child));
+    }
+    return hash;
+}
+
+std::uint64_t CanvasRenderer::canvasRevision(const Canvas& canvas) const noexcept {
+    std::uint64_t hash = FnvOffset;
+    hashValue(hash, canvas.width());
+    hashValue(hash, canvas.height());
+    hashValue(hash, static_cast<std::uint64_t>(static_cast<std::int64_t>(canvas.sortingOrder)));
+    for (const auto& element : canvas.elements()) {
+        hashValue(hash, elementRevision(*element));
+    }
+    return hash;
 }
 
 void CanvasRenderer::appendElement(const UIElement& element) {
@@ -76,7 +122,8 @@ void CanvasRenderer::appendElement(const UIElement& element) {
     }
 }
 
-void CanvasRenderer::ensureCapacity(FrameResources& frame) {
+bool CanvasRenderer::ensureCapacity(FrameResources& frame) {
+    bool recreated = false;
     const auto grow = [](const std::size_t required) {
         std::size_t capacity = 64;
         while (capacity < required) {
@@ -90,13 +137,16 @@ void CanvasRenderer::ensureCapacity(FrameResources& frame) {
         frame.vertices.createHostVisible(
             physicalDevice_, device_, frame.vertexCapacity * sizeof(UIVertex),
             VK_BUFFER_USAGE_VERTEX_BUFFER_BIT);
+        recreated = true;
     }
     if (batch_.indices.size() > frame.indexCapacity) {
         frame.indexCapacity = grow(batch_.indices.size());
         frame.indices.createHostVisible(
             physicalDevice_, device_, frame.indexCapacity * sizeof(std::uint32_t),
             VK_BUFFER_USAGE_INDEX_BUFFER_BIT);
+        recreated = true;
     }
+    return recreated;
 }
 
 void CanvasRenderer::record(const Canvas& canvas,
@@ -104,28 +154,38 @@ void CanvasRenderer::record(const Canvas& canvas,
                             const std::uint32_t imageIndex,
                             const std::uint32_t frameIndex,
                             const VkExtent2D extent) {
-    batch_.clear();
+    const std::uint64_t revision = canvasRevision(canvas);
+    if (batchDirty_ || revision != cachedCanvasRevision_) {
+        batch_.clear();
 
-    std::vector<const UIElement*> elements;
-    elements.reserve(canvas.elements().size());
-    for (const auto& element : canvas.elements()) {
-        elements.push_back(element.get());
-    }
-    std::stable_sort(elements.begin(), elements.end(),
-                     [](const UIElement* lhs, const UIElement* rhs) {
-                         return lhs->sortingOrder < rhs->sortingOrder;
-                     });
-    for (const UIElement* element : elements) {
-        appendElement(*element);
+        std::vector<const UIElement*> elements;
+        elements.reserve(canvas.elements().size());
+        for (const auto& element : canvas.elements()) {
+            elements.push_back(element.get());
+        }
+        std::stable_sort(elements.begin(), elements.end(),
+                         [](const UIElement* lhs, const UIElement* rhs) {
+                             return lhs->sortingOrder < rhs->sortingOrder;
+                         });
+        for (const UIElement* element : elements) {
+            appendElement(*element);
+        }
+        cachedCanvasRevision_ = revision;
+        batchDirty_ = false;
+        pendingFrameUploads_ = (std::uint64_t{1} << frames_.size()) - 1;
     }
 
     FrameResources& frame = *frames_.at(frameIndex);
     if (!batch_.empty()) {
-        ensureCapacity(frame);
-        frame.vertices.update(batch_.vertices.data(),
-                              batch_.vertices.size() * sizeof(UIVertex));
-        frame.indices.update(batch_.indices.data(),
-                             batch_.indices.size() * sizeof(std::uint32_t));
+        const bool recreated = ensureCapacity(frame);
+        const std::uint64_t frameBit = std::uint64_t{1} << frameIndex;
+        if (recreated || (pendingFrameUploads_ & frameBit) != 0) {
+            frame.vertices.update(batch_.vertices.data(),
+                                  batch_.vertices.size() * sizeof(UIVertex));
+            frame.indices.update(batch_.indices.data(),
+                                 batch_.indices.size() * sizeof(std::uint32_t));
+            pendingFrameUploads_ &= ~frameBit;
+        }
     }
 
     pipeline_.record(commandBuffer, imageIndex, extent,
