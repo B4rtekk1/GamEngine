@@ -89,10 +89,10 @@ public:
             std::filesystem::path{"/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"},
             std::filesystem::path{"/usr/share/fonts/truetype/liberation2/LiberationSans-Regular.ttf"}
         };
-        const auto font = std::find_if(fontCandidates.begin(), fontCandidates.end(),
-                                       [](const auto& candidate) {
-                                           return std::filesystem::exists(candidate);
-                                       });
+        const auto font = std::ranges::find_if(fontCandidates,
+                                               [](const auto& candidate) {
+                                                   return std::filesystem::exists(candidate);
+                                               });
         if (font == fontCandidates.end()) {
             throw std::runtime_error("Could not find a system TrueType font for the FPS HUD");
         }
@@ -100,8 +100,6 @@ public:
             !error.empty()) {
             throw std::runtime_error("Could not build FPS font atlas: " + error);
         }
-        const auto nonZeroPixels = std::count_if(fontAtlas.pixels().begin(), fontAtlas.pixels().end(),
-                                                 [](const std::uint8_t pixel) { return pixel != 0; });
 
         auto panel = std::make_unique<UI::PanelElement>(
             Math::Color{0.025f, 0.035f, 0.055f, 0.82f});

@@ -89,7 +89,7 @@ void appendDraw(
     commands[destinationIndex].indexCount =
     objectData.indexCount;
 
-    commands[destinationIndex].instanceCount = 1u;
+    commands[destinationIndex].instanceCount = objectData.instanceCount;
 
     commands[destinationIndex].firstIndex =
     objectData.firstIndex;

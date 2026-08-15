@@ -164,6 +164,7 @@ namespace {
         struct RenderableRecord {
             Entity entity{NullEntity};
             AABB localBounds{};
+            std::size_t batchIndex{0};
             Transform cachedTransform{};
             bool hasCachedTransform{false};
             // A change must reach every frame-in-flight buffer before its bit
@@ -172,7 +173,17 @@ namespace {
             uint8_t materialDirtyFrames{0};
             uint8_t cullingDirtyFrames{0};
         };
+        struct InstanceBatch {
+            const Mesh* mesh{nullptr};
+            uint32_t firstIndex{0};
+            uint32_t indexCount{0};
+            uint32_t firstInstance{0};
+            uint32_t instanceCount{0};
+            bool castShadow{true};
+            AABB worldBounds{};
+        };
         std::vector<RenderableRecord> renderables;
+        std::vector<InstanceBatch> instanceBatches;
         std::vector<glm::mat4> instanceModels;
         std::vector<glm::mat4> shadowInstanceModels;
         std::vector<GPUMaterialData> materials;
@@ -480,6 +491,8 @@ namespace {
             Mesh sceneMesh;
             renderables.reserve(registry.size());
             renderables.clear();
+            instanceBatches.clear();
+            instanceBatches.reserve(registry.size());
             glm::vec3 sceneMinimum{std::numeric_limits<float>::max()};
             glm::vec3 sceneMaximum{std::numeric_limits<float>::lowest()};
             // Each MeshRenderer retains its own draw range, but identical
@@ -547,10 +560,42 @@ namespace {
                         }
                         uploadedMeshes.emplace(mesh, MeshUploadRecord{renderer.firstIndex, localBounds});
                     }
-                    renderables.push_back({entity, localBounds});
-
                     const AABB worldBounds =
                         localBounds.transformed(transform.matrix().native());
+                    const bool castShadow = renderer.castShadow;
+                    std::size_t batchIndex = 0;
+                    for (; batchIndex < instanceBatches.size(); ++batchIndex) {
+                        const InstanceBatch& batch = instanceBatches[batchIndex];
+                        if (batch.mesh == mesh && batch.castShadow == castShadow) {
+                            break;
+                        }
+                    }
+                    if (batchIndex == instanceBatches.size()) {
+                        instanceBatches.push_back(InstanceBatch{
+                            .mesh = mesh,
+                            .firstIndex = renderer.firstIndex,
+                            .indexCount = mesh->indexCount(),
+                            .firstInstance = static_cast<uint32_t>(renderables.size()),
+                            .instanceCount = 0,
+                            .castShadow = castShadow,
+                            .worldBounds = worldBounds,
+                        });
+                    }
+                    InstanceBatch& batch = instanceBatches[batchIndex];
+                    if (batch.instanceCount == 0) {
+                        batch.worldBounds = worldBounds;
+                    } else {
+                        batch.worldBounds.min = Vec3{
+                            std::min(batch.worldBounds.min.x(), worldBounds.min.x()),
+                            std::min(batch.worldBounds.min.y(), worldBounds.min.y()),
+                            std::min(batch.worldBounds.min.z(), worldBounds.min.z())};
+                        batch.worldBounds.max = Vec3{
+                            std::max(batch.worldBounds.max.x(), worldBounds.max.x()),
+                            std::max(batch.worldBounds.max.y(), worldBounds.max.y()),
+                            std::max(batch.worldBounds.max.z(), worldBounds.max.z())};
+                    }
+                    ++batch.instanceCount;
+                    renderables.push_back({entity, localBounds, batchIndex});
                     sceneMinimum = glm::min(sceneMinimum, worldBounds.min.native());
                     sceneMaximum = glm::max(sceneMaximum, worldBounds.max.native());
                 });
@@ -686,17 +731,44 @@ namespace {
                     materials[index] = material;
                     markDirty(index, &RenderableRecord::materialDirtyFrames, dirtyMaterials);
                 }
-                if (gpuObjects.size() == renderables.size()) {
-                    Culling::GPUObjectData& object = gpuObjects[index];
-                    const glm::mat4& model = instanceModels[index];
-                    if (std::memcmp(object.model.data, &model, sizeof(model)) != 0) {
-                        std::memcpy(object.model.data, &model, sizeof(model));
-                        markDirty(index, &RenderableRecord::cullingDirtyFrames, dirtyCullingObjects);
+            }
+            if (gpuObjects.size() == instanceBatches.size()) {
+                std::vector<AABB> batchBounds(instanceBatches.size());
+                std::vector<bool> initialized(instanceBatches.size(), false);
+                for (std::size_t index = 0; index < renderables.size(); ++index) {
+                    const RenderableRecord& record = renderables[index];
+                    const Transform& transform = readRegistry.get<Transform>(record.entity);
+                    const AABB worldBounds =
+                        record.localBounds.transformed(transform.matrix().native());
+                    AABB& bounds = batchBounds[record.batchIndex];
+                    if (!initialized[record.batchIndex]) {
+                        bounds = worldBounds;
+                        initialized[record.batchIndex] = true;
+                    } else {
+                        bounds.min = Vec3{
+                            std::min(bounds.min.x(), worldBounds.min.x()),
+                            std::min(bounds.min.y(), worldBounds.min.y()),
+                            std::min(bounds.min.z(), worldBounds.min.z())};
+                        bounds.max = Vec3{
+                            std::max(bounds.max.x(), worldBounds.max.x()),
+                            std::max(bounds.max.y(), worldBounds.max.y()),
+                            std::max(bounds.max.z(), worldBounds.max.z())};
                     }
-                    const uint32_t castShadow = renderer.castShadow ? 1u : 0u;
-                    if (object.castShadow != castShadow) {
-                        object.castShadow = castShadow;
-                        markDirty(index, &RenderableRecord::cullingDirtyFrames, dirtyCullingObjects);
+                }
+                for (std::size_t batchIndex = 0; batchIndex < instanceBatches.size(); ++batchIndex) {
+                    instanceBatches[batchIndex].worldBounds = batchBounds[batchIndex];
+                    auto& object = gpuObjects[batchIndex];
+                    object.localAabbMin = {batchBounds[batchIndex].min.x(), batchBounds[batchIndex].min.y(), batchBounds[batchIndex].min.z(), 0.0f};
+                    object.localAabbMax = {batchBounds[batchIndex].max.x(), batchBounds[batchIndex].max.y(), batchBounds[batchIndex].max.z(), 0.0f};
+                    object.model = {};
+                    object.model.data[0] = 1.0f;
+                    object.model.data[5] = 1.0f;
+                    object.model.data[10] = 1.0f;
+                    object.model.data[15] = 1.0f;
+                }
+                for (Buffer& buffer : cullingObjectBuffers) {
+                    if (buffer.handle() != VK_NULL_HANDLE) {
+                        buffer.update(gpuObjects.data(), sizeof(Culling::GPUObjectData) * gpuObjects.size());
                     }
                 }
             }
@@ -715,13 +787,6 @@ namespace {
                                    dirtyMaterials[currentFrame]);
                 clearDirtyIndices(&RenderableRecord::materialDirtyFrames,
                                   dirtyMaterials[currentFrame], bit);
-                if (cullingObjectBuffers[currentFrame].handle() != VK_NULL_HANDLE) {
-                    uploadDirtyIndices(cullingObjectBuffers[currentFrame], gpuObjects,
-                                       &RenderableRecord::cullingDirtyFrames,
-                                       dirtyCullingObjects[currentFrame]);
-                    clearDirtyIndices(&RenderableRecord::cullingDirtyFrames,
-                                      dirtyCullingObjects[currentFrame], bit);
-                }
             }
             lastRenderableRevision = revision;
         }
@@ -786,7 +851,7 @@ namespace {
         }
 
         void createCullingResources() {
-            const auto objectCount = static_cast<uint32_t>(renderables.size());
+            const auto objectCount = static_cast<uint32_t>(instanceBatches.size());
             if (objectCount == 0) return;
 
             hiZBuffer.create(vulkanDevice.physical(), device, swapchain.extent().width, swapchain.extent().height);
@@ -830,23 +895,24 @@ namespace {
 
             gpuObjects.resize(objectCount);
             for (uint32_t i = 0; i < objectCount; ++i) {
-                const Entity entity = renderables[i].entity;
-                const glm::mat4 model =
-                    registry.get<Transform>(entity).matrix().native();
-                const MeshRenderer& renderer = registry.get<MeshRenderer>(entity);
+                const InstanceBatch& batch = instanceBatches[i];
                 auto& object = gpuObjects[i];
-                std::memcpy(object.model.data, &model, sizeof(model));
-                const AABB& bounds = renderables[i].localBounds;
+                object.model = {};
+                object.model.data[0] = 1.0f;
+                object.model.data[5] = 1.0f;
+                object.model.data[10] = 1.0f;
+                object.model.data[15] = 1.0f;
+                const AABB& bounds = batch.worldBounds;
                 object.localAabbMin = {
                     bounds.min.x(), bounds.min.y(), bounds.min.z(), 0.0f};
                 object.localAabbMax = {
                     bounds.max.x(), bounds.max.y(), bounds.max.z(), 0.0f};
-                object.indexCount = renderer.mesh->indexCount();
-                object.instanceCount = 1;
-                object.firstIndex = renderer.firstIndex;
+                object.indexCount = batch.indexCount;
+                object.instanceCount = batch.instanceCount;
+                object.firstIndex = batch.firstIndex;
                 object.vertexOffset = 0;
-                object.firstInstance = i;
-                object.castShadow = renderer.castShadow ? 1u : 0u;
+                object.firstInstance = batch.firstInstance;
+                object.castShadow = batch.castShadow ? 1u : 0u;
             }
             for (Buffer& buffer : cullingObjectBuffers) {
                 buffer.createHostVisible(
