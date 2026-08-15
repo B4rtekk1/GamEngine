@@ -47,15 +47,24 @@ void Buffer::createDeviceLocal(VkPhysicalDevice physicalDevice, VkDevice device,
         throw std::runtime_error("Could not end buffer copy command buffer");
     }
 
+    VkFenceCreateInfo fenceInfo{VK_STRUCTURE_TYPE_FENCE_CREATE_INFO};
+    VkFence uploadFence = VK_NULL_HANDLE;
+    if (vkCreateFence(device, &fenceInfo, nullptr, &uploadFence) != VK_SUCCESS) {
+        vkFreeCommandBuffers(device, commandPool, 1, &commandBuffer);
+        throw std::runtime_error("Could not create buffer upload fence");
+    }
+
     VkSubmitInfo submitInfo{VK_STRUCTURE_TYPE_SUBMIT_INFO};
     submitInfo.commandBufferCount = 1;
     submitInfo.pCommandBuffers = &commandBuffer;
-    if (vkQueueSubmit(queue, 1, &submitInfo, VK_NULL_HANDLE) != VK_SUCCESS ||
-        vkQueueWaitIdle(queue) != VK_SUCCESS) {
+    if (vkQueueSubmit(queue, 1, &submitInfo, uploadFence) != VK_SUCCESS ||
+        vkWaitForFences(device, 1, &uploadFence, VK_TRUE, UINT64_MAX) != VK_SUCCESS) {
+        vkDestroyFence(device, uploadFence, nullptr);
         vkFreeCommandBuffers(device, commandPool, 1, &commandBuffer);
         throw std::runtime_error("Could not submit buffer copy command buffer");
     }
 
+    vkDestroyFence(device, uploadFence, nullptr);
     vkFreeCommandBuffers(device, commandPool, 1, &commandBuffer);
 }
 

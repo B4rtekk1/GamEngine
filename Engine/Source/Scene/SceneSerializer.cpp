@@ -96,6 +96,7 @@ void writeColor(std::ostream& output, const Math::Color& value) {
 
 std::vector<Entity> sortedEntities(const Registry& registry) {
     std::vector<Entity> entities;
+    entities.reserve(registry.size());
     registry.view<>([&entities](const Entity entity) {
         entities.push_back(entity);
     });

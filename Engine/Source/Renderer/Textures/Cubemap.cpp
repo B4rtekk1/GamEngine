@@ -80,7 +80,15 @@ void Cubemap::create(VkPhysicalDevice physicalDevice, VkDevice device, VkCommand
         vkCmdPipelineBarrier(commandBuffer, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0, 0, nullptr, 0, nullptr, 1, &barrier);
         if (vkEndCommandBuffer(commandBuffer) != VK_SUCCESS) throw std::runtime_error("Could not finish cubemap upload command buffer");
         VkSubmitInfo submit{VK_STRUCTURE_TYPE_SUBMIT_INFO}; submit.commandBufferCount = 1; submit.pCommandBuffers = &commandBuffer;
-        if (vkQueueSubmit(queue, 1, &submit, VK_NULL_HANDLE) != VK_SUCCESS || vkQueueWaitIdle(queue) != VK_SUCCESS) throw std::runtime_error("Could not upload cubemap");
+        VkFenceCreateInfo fenceInfo{VK_STRUCTURE_TYPE_FENCE_CREATE_INFO};
+        VkFence uploadFence = VK_NULL_HANDLE;
+        if (vkCreateFence(device_, &fenceInfo, nullptr, &uploadFence) != VK_SUCCESS) throw std::runtime_error("Could not create cubemap upload fence");
+        const VkResult submitResult = vkQueueSubmit(queue, 1, &submit, uploadFence);
+        const VkResult waitResult = submitResult == VK_SUCCESS
+            ? vkWaitForFences(device_, 1, &uploadFence, VK_TRUE, UINT64_MAX)
+            : submitResult;
+        vkDestroyFence(device_, uploadFence, nullptr);
+        if (waitResult != VK_SUCCESS) throw std::runtime_error("Could not upload cubemap");
         vkFreeCommandBuffers(device_, commandPool, 1, &commandBuffer);
         commandBuffer = VK_NULL_HANDLE;
 

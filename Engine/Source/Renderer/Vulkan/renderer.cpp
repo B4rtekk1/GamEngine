@@ -483,7 +483,11 @@ namespace {
             glm::vec3 sceneMaximum{std::numeric_limits<float>::lowest()};
             // Each MeshRenderer retains its own draw range, but identical
             // meshes contribute their geometry to the GPU buffers only once.
-            std::unordered_map<const Mesh*, uint32_t> firstIndices;
+            struct MeshUploadRecord {
+                uint32_t firstIndex;
+                AABB localBounds;
+            };
+            std::unordered_map<const Mesh*, MeshUploadRecord> uploadedMeshes;
             registry.view<Transform, MeshRenderer>(
                 [&](const Entity entity, const Transform& transform, MeshRenderer& renderer) {
                     if (!renderer.hasMesh()) {
@@ -491,9 +495,11 @@ namespace {
                     }
 
                     const Mesh* const mesh = renderer.mesh.get();
-                    if (const auto existing = firstIndices.find(mesh);
-                        existing != firstIndices.end()) {
-                        renderer.firstIndex = existing->second;
+                    AABB localBounds;
+                    if (const auto existing = uploadedMeshes.find(mesh);
+                        existing != uploadedMeshes.end()) {
+                        renderer.firstIndex = existing->second.firstIndex;
+                        localBounds = existing->second.localBounds;
                     } else {
                         if (sceneMesh.vertices.size() + mesh->vertices.size() >
                                 std::numeric_limits<uint32_t>::max() ||
@@ -503,29 +509,28 @@ namespace {
                         }
                         const uint32_t vertexOffset = sceneMesh.vertexCount();
                         renderer.firstIndex = sceneMesh.indexCount();
-                        firstIndices.emplace(mesh, renderer.firstIndex);
                         sceneMesh.vertices.insert(sceneMesh.vertices.end(),
                                                   mesh->vertices.begin(), mesh->vertices.end());
                         for (const uint32_t index : mesh->indices) {
                             sceneMesh.indices.push_back(vertexOffset + index);
                         }
-                    }
-
-                    AABB localBounds{
+                        localBounds = {
                         .min = Vec3{std::numeric_limits<float>::max(),
                                     std::numeric_limits<float>::max(),
                                     std::numeric_limits<float>::max()},
                         .max = Vec3{std::numeric_limits<float>::lowest(),
                                     std::numeric_limits<float>::lowest(),
                                     std::numeric_limits<float>::lowest()},
-                    };
-                    for (const Vertex& vertex : mesh->vertices) {
+                        };
+                        for (const Vertex& vertex : mesh->vertices) {
                         localBounds.min.setX(std::min(localBounds.min.x(), vertex.position.x()));
                         localBounds.min.setY(std::min(localBounds.min.y(), vertex.position.y()));
                         localBounds.min.setZ(std::min(localBounds.min.z(), vertex.position.z()));
                         localBounds.max.setX(std::max(localBounds.max.x(), vertex.position.x()));
                         localBounds.max.setY(std::max(localBounds.max.y(), vertex.position.y()));
                         localBounds.max.setZ(std::max(localBounds.max.z(), vertex.position.z()));
+                        }
+                        uploadedMeshes.emplace(mesh, MeshUploadRecord{renderer.firstIndex, localBounds});
                     }
                     renderables.push_back({entity, localBounds});
 
@@ -1230,7 +1235,7 @@ namespace {
             submitInfo.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
 
             VkSemaphore waitSemaphores[] = {imageAvailableSemaphores[currentFrame]};
-            VkPipelineStageFlags waitStages[] = {VK_PIPELINE_STAGE_ALL_COMMANDS_BIT};
+            VkPipelineStageFlags waitStages[] = {VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT};
             submitInfo.waitSemaphoreCount = 1;
             submitInfo.pWaitSemaphores = waitSemaphores;
             submitInfo.pWaitDstStageMask = waitStages;

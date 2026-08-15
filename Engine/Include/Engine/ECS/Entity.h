@@ -12,6 +12,19 @@ namespace Engine {
      */
     using Entity = std::uint64_t;
 
+    constexpr std::uint32_t entityIndex(const Entity entity) noexcept {
+        return static_cast<std::uint32_t>(entity);
+    }
+
+    constexpr std::uint32_t entityGeneration(const Entity entity) noexcept {
+        return static_cast<std::uint32_t>(entity >> 32u);
+    }
+
+    constexpr Entity makeEntity(const std::uint32_t index,
+                                const std::uint32_t generation) noexcept {
+        return (static_cast<Entity>(generation) << 32u) | index;
+    }
+
     /**
      * @brief Sentinel representing an invalid or absent entity.
      */

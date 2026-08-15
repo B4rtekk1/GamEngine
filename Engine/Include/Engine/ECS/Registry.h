@@ -12,6 +12,7 @@
 #include <ranges>
 #include <tuple>
 #include <utility>
+#include <vector>
 
 namespace Engine {
 
@@ -21,8 +22,8 @@ namespace Engine {
  * Registry provides entity lifetime management and type-safe component
  * operations. Each component type is stored in its own ComponentPool.
  *
- * @note Entity identifiers are monotonically increasing and are not currently
- * recycled.
+ * Entity slots are recycled with a generation counter, so stale identifiers
+ * remain invalid after their slot is reused.
  */
 class Registry {
 public:
@@ -32,7 +33,15 @@ public:
      * @return Identifier of the newly created entity.
      */
     Entity create() {
-        const Entity entity = m_nextEntity++;
+        std::uint32_t index;
+        if (!m_freeEntities.empty()) {
+            index = m_freeEntities.back();
+            m_freeEntities.pop_back();
+        } else {
+            index = m_nextEntity++;
+            m_generations.push_back(0);
+        }
+        const Entity entity = makeEntity(index, m_generations[index]);
         m_entities.insert(entity);
         return entity;
     }
@@ -53,6 +62,9 @@ public:
         for (auto &pool: m_componentPools | std::views::values) {
             pool->remove(entity);
         }
+        const std::uint32_t index = entityIndex(entity);
+        ++m_generations[index];
+        m_freeEntities.push_back(index);
     }
 
     /**
@@ -64,6 +76,11 @@ public:
     [[nodiscard]]
     bool valid(Entity entity) const {
         return entity != NullEntity && m_entities.contains(entity);
+    }
+
+    /** Returns the number of live entities. */
+    [[nodiscard]] std::size_t size() const noexcept {
+        return m_entities.size();
     }
 
     /**
@@ -316,7 +333,13 @@ private:
     /**
      * @brief Identifier that will be assigned to the next created entity.
      */
-    Entity m_nextEntity = 1;
+    std::uint32_t m_nextEntity = 1;
+
+    /** Generation counters prevent stale handles becoming valid after reuse. */
+    std::vector<std::uint32_t> m_generations{0};
+
+    /** Reusable sparse-set indices released by destroy(). */
+    std::vector<std::uint32_t> m_freeEntities;
 
     /**
      * @brief Set of currently alive entities.

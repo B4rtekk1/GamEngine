@@ -78,7 +78,7 @@ public:
             m_components.pop_back();
             throw;
         }
-        m_sparse[static_cast<std::size_t>(entity)] = index;
+        m_sparse[entityIndex(entity)] = index;
         return m_components.back();
     }
 
@@ -95,7 +95,7 @@ public:
             return;
         }
 
-        const auto index = m_sparse[static_cast<std::size_t>(entity)];
+        const auto index = m_sparse[entityIndex(entity)];
         const auto lastIndex = m_components.size() - 1;
 
         if (index != lastIndex) {
@@ -103,12 +103,12 @@ public:
 
             const Entity movedEntity = m_entities[lastIndex];
             m_entities[index] = movedEntity;
-            m_sparse[static_cast<std::size_t>(movedEntity)] = index;
+            m_sparse[entityIndex(movedEntity)] = index;
         }
 
         m_components.pop_back();
         m_entities.pop_back();
-        m_sparse[static_cast<std::size_t>(entity)] = InvalidIndex;
+        m_sparse[entityIndex(entity)] = InvalidIndex;
     }
 
     /**
@@ -118,11 +118,11 @@ public:
      * @return true if the entity has a component of type @p T.
      */
     [[nodiscard]] bool has(Entity entity) const override {
-        const auto entityIndex = static_cast<std::size_t>(entity);
-        return entityIndex < m_sparse.size()
-            && m_sparse[entityIndex] != InvalidIndex
-            && m_sparse[entityIndex] < m_entities.size()
-            && m_entities[m_sparse[entityIndex]] == entity;
+        const auto index = Engine::entityIndex(entity);
+        return index < m_sparse.size()
+            && m_sparse[index] != InvalidIndex
+            && m_sparse[index] < m_entities.size()
+            && m_entities[m_sparse[index]] == entity;
     }
 
     /**
@@ -135,7 +135,7 @@ public:
      */
     T& get(Entity entity) {
         assert(has(entity) && "Component does not exist for this entity");
-        return m_components[m_sparse[static_cast<std::size_t>(entity)]];
+        return m_components[m_sparse[entityIndex(entity)]];
     }
 
     /**
@@ -148,7 +148,7 @@ public:
      */
     const T& get(Entity entity) const {
         assert(has(entity) && "Component does not exist for this entity");
-        return m_components[m_sparse[static_cast<std::size_t>(entity)]];
+        return m_components[m_sparse[entityIndex(entity)]];
     }
 
     /**
@@ -176,7 +176,7 @@ public:
      * @pre The entity owns a component in this pool.
      */
     T& getUnchecked(Entity entity) noexcept {
-        return m_components[m_sparse[static_cast<std::size_t>(entity)]];
+        return m_components[m_sparse[entityIndex(entity)]];
     }
 
     /**
@@ -185,7 +185,7 @@ public:
      * @pre The entity owns a component in this pool.
      */
     const T& getUnchecked(Entity entity) const noexcept {
-        return m_components[m_sparse[static_cast<std::size_t>(entity)]];
+        return m_components[m_sparse[entityIndex(entity)]];
     }
 
 private:
@@ -203,12 +203,10 @@ private:
      * @param entity Entity whose numeric value must become addressable.
      */
     void ensureSparseCapacity(Entity entity) {
-        const auto entityIndex = static_cast<std::size_t>(entity);
-        assert(static_cast<Entity>(entityIndex) == entity &&
-               "Entity value exceeds sparse-set index range");
+        const auto index = Engine::entityIndex(entity);
 
-        if (entityIndex >= m_sparse.size()) {
-            m_sparse.resize(entityIndex + 1, InvalidIndex);
+        if (index >= m_sparse.size()) {
+            m_sparse.resize(static_cast<std::size_t>(index) + 1, InvalidIndex);
         }
     }
 

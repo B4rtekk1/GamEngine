@@ -44,6 +44,15 @@ int main()
         return 1;
     }
 
+    const Entity recycled = registry.create();
+    registry.add<Common>(recycled, 1);
+    registry.destroy(recycled);
+    const Entity replacement = registry.create();
+    if (Engine::entityIndex(replacement) != Engine::entityIndex(recycled) ||
+        replacement == recycled || registry.valid(recycled) || !registry.valid(replacement)) {
+        return 4;
+    }
+
     const Entity renderable = registry.create();
     registry.add<Engine::MeshRendererComponent>(
         renderable,

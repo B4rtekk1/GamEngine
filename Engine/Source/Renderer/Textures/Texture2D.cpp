@@ -217,8 +217,17 @@ namespace Engine {
             VkSubmitInfo submit{VK_STRUCTURE_TYPE_SUBMIT_INFO};
             submit.commandBufferCount = 1;
             submit.pCommandBuffers = &commandBuffer;
-            if (vkQueueSubmit(queue, 1, &submit, VK_NULL_HANDLE) != VK_SUCCESS ||
-                vkQueueWaitIdle(queue) != VK_SUCCESS) {
+            VkFenceCreateInfo fenceInfo{VK_STRUCTURE_TYPE_FENCE_CREATE_INFO};
+            VkFence uploadFence = VK_NULL_HANDLE;
+            if (vkCreateFence(device_, &fenceInfo, nullptr, &uploadFence) != VK_SUCCESS) {
+                throw std::runtime_error("Could not create Texture2D upload fence");
+            }
+            const VkResult submitResult = vkQueueSubmit(queue, 1, &submit, uploadFence);
+            const VkResult waitResult = submitResult == VK_SUCCESS
+                ? vkWaitForFences(device_, 1, &uploadFence, VK_TRUE, UINT64_MAX)
+                : submitResult;
+            vkDestroyFence(device_, uploadFence, nullptr);
+            if (waitResult != VK_SUCCESS) {
                 throw std::runtime_error("Could not upload Texture2D");
             }
             vkFreeCommandBuffers(device_, commandPool, 1, &commandBuffer);
