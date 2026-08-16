@@ -50,11 +50,11 @@ namespace Engine::Particles {
         void setEmitter(const ParticleEmitter& emitter) { emitter_ = emitter; }
         // Kept in the frame recording API for renderer ordering; simulation is
         // CPU-authoritative so no device-wide wait is needed before uploads.
-        void recordCompute(VkCommandBuffer commandBuffer, float deltaTime) const;
+        static void recordCompute(VkCommandBuffer commandBuffer, float deltaTime);
         void recordRender(VkCommandBuffer commandBuffer,
                           const ParticleFrameData& frameData,
                           VkPipeline pipeline, VkPipelineLayout pipelineLayout,
-                          uint32_t frameIndex);
+                          uint32_t frameIndex) const;
         [[nodiscard]] VkDescriptorSetLayout descriptorSetLayout() const noexcept {
             return descriptorSetLayout_;
         }

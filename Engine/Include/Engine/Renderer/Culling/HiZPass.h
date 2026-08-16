@@ -37,7 +37,7 @@ namespace Engine::Culling
         void updateDepthImage(
             VkImageView depthImageView,
             VkSampler depthSampler
-        );
+        ) const;
 
         void record(
             VkCommandBuffer commandBuffer,

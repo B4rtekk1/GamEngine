@@ -12,17 +12,17 @@ namespace Engine::Culling
     }
 
     void HiZPass::create(
-        const VkDevice device,
-        const VkDescriptorPool descriptorPool,
-        const VkPipeline copyPipeline,
-        const VkPipelineLayout copyPipelineLayout,
-        const VkDescriptorSetLayout copyDescriptorSetLayout,
-        const VkPipeline reducePipeline,
-        const VkPipelineLayout reducePipelineLayout,
-        const VkDescriptorSetLayout reduceDescriptorSetLayout,
+        VkDevice device,
+        VkDescriptorPool descriptorPool,
+        VkPipeline copyPipeline,
+        VkPipelineLayout copyPipelineLayout,
+        VkDescriptorSetLayout copyDescriptorSetLayout,
+        VkPipeline reducePipeline,
+        VkPipelineLayout reducePipelineLayout,
+        VkDescriptorSetLayout reduceDescriptorSetLayout,
         const HiZBuffer& hiZBuffer,
-        const VkImageView depthImageView,
-        const VkSampler depthSampler
+        VkImageView depthImageView,
+        VkSampler depthSampler
     )
     {
         destroy();
@@ -72,8 +72,8 @@ namespace Engine::Culling
 
     void HiZPass::allocateDescriptorSets(
         const HiZBuffer& hiZBuffer,
-        const VkImageView depthImageView,
-        const VkSampler depthSampler
+        VkImageView depthImageView,
+        VkSampler depthSampler
     )
     {
         VkDescriptorSetAllocateInfo copyAllocateInfo{
@@ -228,10 +228,9 @@ namespace Engine::Culling
     }
 
     void HiZPass::updateDepthImage(
-        const VkImageView depthImageView,
-        const VkSampler depthSampler
-    )
-    {
+        VkImageView depthImageView,
+        VkSampler depthSampler
+    ) const {
         VkDescriptorImageInfo depthInfo{
             .sampler = depthSampler,
             .imageView = depthImageView,
@@ -259,7 +258,7 @@ namespace Engine::Culling
     }
 
     void HiZPass::record(
-        const VkCommandBuffer commandBuffer,
+        VkCommandBuffer commandBuffer,
         const HiZBuffer& hiZBuffer,
         const bool hasPreviousContents
     ) const
@@ -372,7 +371,7 @@ namespace Engine::Culling
                 m_reducePipeline
             );
 
-            const VkDescriptorSet descriptorSet =
+            VkDescriptorSet descriptorSet =
                 m_reduceDescriptorSets[destinationMip - 1];
 
             vkCmdBindDescriptorSets(

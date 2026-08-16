@@ -94,7 +94,7 @@ void ParticleSystem::spawnParticles(float deltaTime) {
     }
 
     emitter_.accumulator += dt * std::max(0.0f, emitter_.spawnRate);
-    const uint32_t count = static_cast<uint32_t>(emitter_.accumulator);
+    const auto count = static_cast<uint32_t>(emitter_.accumulator);
     emitter_.accumulator -= static_cast<float>(count);
     for (uint32_t i = 0; i < std::min(count, maxParticles_); ++i) {
         Particle& p = particles_[nextSpawnIndex_++ % maxParticles_];
@@ -120,7 +120,7 @@ void ParticleSystem::spawnParticles(float deltaTime) {
     activeParticles_ = static_cast<uint32_t>(renderParticles_.size());
 }
 
-void ParticleSystem::recordCompute(VkCommandBuffer, float) const {
+void ParticleSystem::recordCompute(VkCommandBuffer, float) {
     // Simulation is CPU-authoritative and uploads into the current frame's
     // buffer during recordRender. This intentionally emits no GPU work.
 }
@@ -128,7 +128,7 @@ void ParticleSystem::recordCompute(VkCommandBuffer, float) const {
 void ParticleSystem::recordRender(VkCommandBuffer commandBuffer,
                                   const ParticleFrameData& frameData,
                                   VkPipeline pipeline, VkPipelineLayout pipelineLayout,
-                                  uint32_t frameIndex) {
+                                  uint32_t frameIndex) const {
     const uint32_t frame = frameIndex % FramesInFlight;
     if (!renderParticles_.empty()) {
         std::memcpy(particleMapped_[frame], renderParticles_.data(),
@@ -162,7 +162,7 @@ void ParticleSystem::createBuffers() {
 }
 
 void ParticleSystem::createDescriptorResources() {
-    const VkDescriptorSetLayoutBinding bindings[] = {
+    constexpr VkDescriptorSetLayoutBinding bindings[] = {
         {0, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_VERTEX_BIT, nullptr},
         {1, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1, VK_SHADER_STAGE_VERTEX_BIT, nullptr}};
     VkDescriptorSetLayoutCreateInfo layout{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
@@ -172,7 +172,7 @@ void ParticleSystem::createDescriptorResources() {
         throw std::runtime_error("ParticleSystem: descriptor layout creation failed");
     }
 
-    const VkDescriptorPoolSize sizes[] = {
+    constexpr VkDescriptorPoolSize sizes[] = {
         {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, FramesInFlight},
         {VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, FramesInFlight}};
     VkDescriptorPoolCreateInfo pool{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
@@ -219,7 +219,7 @@ void ParticleSystem::uploadInitialParticles() {
     for (uint32_t frame = 0; frame < FramesInFlight; ++frame) {
         std::memset(particleMapped_[frame], 0, sizeof(Particle) * particles_.size());
         std::memset(frameMapped_[frame], 0, sizeof(ParticleFrameData));
-        const VkDrawIndirectCommand draw{6, 0, 0, 0};
+        constexpr VkDrawIndirectCommand draw{6, 0, 0, 0};
         std::memcpy(indirectMapped_[frame], &draw, sizeof(draw));
     }
 }
