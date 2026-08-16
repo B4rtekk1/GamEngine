@@ -3,9 +3,11 @@
 #include "Engine/Renderer/Geometry/Cube.h"
 #include "Engine/Renderer/Geometry/Plane.h"
 #include "Engine/Renderer/MeshRenderer.h"
+#include "Engine/Assets/AssetManager.h"
 #include "Engine/Core/Transform.h"
 #include "Engine/ECS/Registry.h"
 #include "Engine/ECS/Components/CameraComponent.h"
+#include "Engine/Scene/Components/LightComponent.h"
 #include "Engine/UI/Canvas.h"
 #include "Engine/UI/PanelElement.h"
 #include "Engine/UI/TextElement.h"
@@ -23,6 +25,11 @@
 
 namespace Engine {
 
+enum class SceneType {
+    Cubes,
+    Tree,
+};
+
 class Scene final {
 public:
     static constexpr std::size_t CubesPerAxis = 30;
@@ -36,36 +43,92 @@ public:
     UI::UIFontAtlas fontAtlas;
     Entity plane{NullEntity};
     Entity camera{NullEntity};
+    Entity tree{NullEntity};
     std::array<Entity, CubeCount> cubes{};
 
 private:
     std::shared_ptr<const Mesh> planeMesh;
     std::shared_ptr<const Mesh> cubeMesh;
+    std::shared_ptr<const Mesh> treeMesh;
     UI::TextElement* fpsTextElement = nullptr;
 
 public:
 
-    Scene() {
+    explicit Scene(const SceneType sceneType = SceneType::Cubes) {
+        const bool treeScene = sceneType == SceneType::Tree;
+
         planeMesh = std::make_shared<Mesh>(Plane::createMesh());
         cubeMesh = std::make_shared<Mesh>(Cube::createMesh());
 
+        if (treeScene) {
+            Assets::AssetManager assets;
+            Assets::register_default_asset_loaders(assets);
+            const std::array<std::filesystem::path, 2> treeCandidates{
+                std::filesystem::path{"Assets/Models/tree.glb"},
+                std::filesystem::path{"Models/tree.glb"},
+            };
+            const auto treePath = std::ranges::find_if(
+                treeCandidates, [](const auto& candidate) {
+                    return std::filesystem::is_regular_file(candidate);
+                });
+            if (treePath == treeCandidates.end()) {
+                throw std::runtime_error("Could not find Assets/Models/tree.glb");
+            }
+            const auto loadedTree = assets.load<Mesh>(*treePath, Assets::AssetType::Mesh);
+            if (!loadedTree) {
+                throw std::runtime_error("Could not load tree GLB: " + treePath->string());
+            }
+            treeMesh = loadedTree.shared();
+        }
+
         plane = registry.create();
         registry.add<Transform>(plane, Transform{
-            .scale = {GridHalfExtent * 2.0f + 4.0f, 1.0f,
-                      GridHalfExtent * 2.0f + 4.0f},
+            .scale = treeScene ? Vec3{10.0f, 1.0f, 10.0f}
+                               : Vec3{GridHalfExtent * 2.0f + 4.0f, 1.0f,
+                                      GridHalfExtent * 2.0f + 4.0f},
         });
-        registry.add<MeshRenderer>(plane, MeshRenderer{
-            .mesh = planeMesh,
-        });
+        MeshRenderer planeRenderer{.mesh = planeMesh};
+        if (treeScene) {
+            planeRenderer.material = {.baseColor = {0.24f, 0.16f, 0.08f},
+                                       .metallic = 0.0f,
+                                       .roughness = 0.9f};
+            planeRenderer.castShadow = false;
+        }
+        registry.add<MeshRenderer>(plane, planeRenderer);
+
+        if (treeScene) {
+            tree = registry.create();
+            registry.add<Transform>(tree, Transform{.position = {3.0f, 0.0f, 1.0f}});
+            registry.add<MeshRenderer>(tree, MeshRenderer{
+                .mesh = treeMesh,
+                .material = {.baseColor = {0.20f, 0.48f, 0.08f},
+                             .metallic = 0.0f,
+                             .roughness = 0.82f},
+                .castShadow = true,
+            });
+
+            const Entity sun = registry.create();
+            registry.add<Transform>(sun, Transform{
+                .rotation = {35.0f, -35.0f, 0.0f},
+            });
+            registry.add<LightComponent>(sun, LightComponent{
+                .type = LightType::Directional,
+                .color = Math::Color::white(),
+                .intensity = 4.0f,
+                .enabled = true,
+                .castShadows = true,
+            });
+        }
 
         camera = registry.create();
-        constexpr float cameraTargetY = (CubesPerAxis - 1) * CubeSpacing * 0.5f + 0.5f;
-        constexpr Vec3 cameraPosition{
-            GridHalfExtent * 2.9f,
-            cameraTargetY + GridHalfExtent * 2.6f,
-            GridHalfExtent * 3.9f,
-        };
-        constexpr Vec3 cameraDirection = Vec3{0.0f, cameraTargetY, 0.0f} - cameraPosition;
+        const float cameraTargetY = treeScene ? 4.2f
+                                              : (CubesPerAxis - 1) * CubeSpacing * 0.5f + 0.5f;
+        const Vec3 cameraPosition = treeScene
+            ? Vec3{8.0f, 6.5f, 10.0f}
+            : Vec3{GridHalfExtent * 2.9f,
+                   cameraTargetY + GridHalfExtent * 2.6f,
+                   GridHalfExtent * 3.9f};
+        const Vec3 cameraDirection = Vec3{0.0f, cameraTargetY, 0.0f} - cameraPosition;
         const float horizontalDistance = Vec2{cameraDirection.x(), cameraDirection.z()}.length();
         registry.add<Transform>(camera, Transform{
             .position = cameraPosition,
@@ -128,6 +191,10 @@ public:
         textElement->rectTransform.offsetMax = {-8.0f, -8.0f};
         panel->addChild(std::move(textElement));
         static_cast<void>(canvas.addElement(std::move(panel)));
+
+        if (treeScene) {
+            return;
+        }
 
         constexpr float halfGridWidth = (CubesPerAxis - 1) * CubeSpacing * 0.5f;
 

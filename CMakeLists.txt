@@ -13,6 +13,7 @@ find_path(GLM_INCLUDE_DIR NAMES glm/glm.hpp HINTS "$ENV{VULKAN_SDK}/Include" REQ
 find_path(VMA_INCLUDE_DIR NAMES vk_mem_alloc.h HINTS "$ENV{VULKAN_SDK}/Include/vma" REQUIRED)
 
 add_library(Engine
+        Engine/Source/Assets/StbImage.cpp
         Engine/Source/Assets/AssetManager.cpp
         Engine/Source/Core/camera.cpp
         Engine/Source/Core/time.cpp
@@ -62,6 +63,7 @@ target_include_directories(Engine
         PRIVATE
             ${CMAKE_CURRENT_SOURCE_DIR}
             ${CMAKE_CURRENT_SOURCE_DIR}/Engine/Source
+            ${CMAKE_CURRENT_SOURCE_DIR}/ThridParty/stb
 )
 
 add_executable(GamEngine Sandbox/Source/main.cpp)
@@ -77,6 +79,7 @@ set(SHADER_SOURCES
         Assets/Shaders/Library/pbr.vert
         Assets/Shaders/Library/pbr.frag
         Assets/Shaders/shadow.vert
+        Assets/Shaders/shadow.frag
         Assets/Shaders/skybox.vert
         Assets/Shaders/skybox.frag
         Assets/Shaders/tonemap.vert
@@ -102,11 +105,13 @@ foreach(SHADER_SOURCE IN LISTS SHADER_SOURCES)
     endif()
 endforeach()
 
-add_custom_target(Shaders DEPENDS ${SHADER_OUT_DIR}/pbr.vert.spv ${SHADER_OUT_DIR}/pbr.frag.spv ${SHADER_OUT_DIR}/shadow.vert.spv ${SHADER_OUT_DIR}/skybox.vert.spv ${SHADER_OUT_DIR}/skybox.frag.spv ${SHADER_OUT_DIR}/tonemap.vert.spv ${SHADER_OUT_DIR}/tonemap.frag.spv ${SHADER_OUT_DIR}/hiz_copy.comp.spv ${SHADER_OUT_DIR}/hiz_reduce.comp.spv ${SHADER_OUT_DIR}/hiz_cull.comp.spv ${SHADER_OUT_DIR}/ui.vert.spv ${SHADER_OUT_DIR}/ui.frag.spv)
+add_custom_target(Shaders DEPENDS ${SHADER_OUT_DIR}/pbr.vert.spv ${SHADER_OUT_DIR}/pbr.frag.spv ${SHADER_OUT_DIR}/shadow.vert.spv ${SHADER_OUT_DIR}/shadow.frag.spv ${SHADER_OUT_DIR}/skybox.vert.spv ${SHADER_OUT_DIR}/skybox.frag.spv ${SHADER_OUT_DIR}/tonemap.vert.spv ${SHADER_OUT_DIR}/tonemap.frag.spv ${SHADER_OUT_DIR}/hiz_copy.comp.spv ${SHADER_OUT_DIR}/hiz_reduce.comp.spv ${SHADER_OUT_DIR}/hiz_cull.comp.spv ${SHADER_OUT_DIR}/ui.vert.spv ${SHADER_OUT_DIR}/ui.frag.spv)
 add_dependencies(GamEngine Shaders)
 add_custom_command(TARGET GamEngine POST_BUILD
         COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_FILE_DIR:GamEngine>/shaders"
         COMMAND ${CMAKE_COMMAND} -E copy_directory "${SHADER_OUT_DIR}" "$<TARGET_FILE_DIR:GamEngine>/shaders"
+        COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_FILE_DIR:GamEngine>/Assets/Models"
+        COMMAND ${CMAKE_COMMAND} -E copy_directory "${CMAKE_SOURCE_DIR}/Assets/Models" "$<TARGET_FILE_DIR:GamEngine>/Assets/Models"
         COMMENT "Copying SPIR-V shaders beside GamEngine"
 )
 
@@ -122,4 +127,8 @@ if(BUILD_TESTING)
     add_executable(RegistryTests Tests/RegistryTests.cpp)
     target_link_libraries(RegistryTests PRIVATE Engine)
     add_test(NAME RegistryTests COMMAND RegistryTests)
+
+    add_executable(AssetManagerTests Tests/AssetManagerTests.cpp)
+    target_link_libraries(AssetManagerTests PRIVATE Engine)
+    add_test(NAME AssetManagerTests COMMAND AssetManagerTests)
 endif()

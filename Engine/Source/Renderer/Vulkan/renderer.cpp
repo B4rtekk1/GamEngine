@@ -22,6 +22,7 @@
 #include "Engine/ECS/Registry.h"
 #include "Engine/Scene/Scene.h"
 #include "Engine/ECS/Components/CameraComponent.h"
+#include "Engine/Scene/Components/LightComponent.h"
 #include "Engine/Core/Transform.h"
 #include "Engine/Core/Camera.h"
 #include "Engine/Math/AABB.h"
@@ -74,6 +75,9 @@ namespace {
         Mat4 lightSpace;
         glm::vec4 cameraPosition;
         glm::vec4 lightDirectionIntensity;
+        glm::vec4 lightColor;
+        std::uint32_t materialSlots{1};
+        std::array<std::uint32_t, 3> materialSlotsPadding{};
     };
 }
 
@@ -90,7 +94,8 @@ const std::vector<const char*> validationLayers = {
 namespace {
     class RenderApp {
     public:
-        explicit RenderApp(Scene& scene) : scene(scene), registry(scene.registry) {}
+        explicit RenderApp(Scene& scene, const RenderOptimizationFeatures& optimizationFeatures)
+            : scene(scene), registry(scene.registry), optimizationFeatures(optimizationFeatures) {}
 
         ~RenderApp() {
             cleanup();
@@ -124,10 +129,15 @@ namespace {
         TonemapPass tonemapPass;
         UI::CanvasRenderer canvasRenderer;
         Texture2D fpsFontTexture;
+        Texture2D fallbackMaterialTexture;
+        std::vector<Texture2D> materialTextures;
+        std::vector<VkDescriptorImageInfo> materialTextureDescriptors;
+        std::unordered_map<const Mesh*, std::uint32_t> meshTextureOffsets;
         DepthBuffer depthBuffer;
         ShadowPass shadowPass;
         Scene& scene;
         Registry& registry;
+        const RenderOptimizationFeatures& optimizationFeatures;
         Assets::AssetManager assetManager;
         std::optional<Camera> camera;
         Buffer vertexBuffer;
@@ -187,6 +197,7 @@ namespace {
         std::vector<glm::mat4> instanceModels;
         std::vector<glm::mat4> shadowInstanceModels;
         std::vector<GPUMaterialData> materials;
+        std::uint32_t materialSlots{1};
         std::uint64_t lastRenderableRevision = std::numeric_limits<std::uint64_t>::max();
         std::array<std::vector<std::size_t>, MAX_FRAMES_IN_FLIGHT> dirtyTransforms;
         std::array<std::vector<std::size_t>, MAX_FRAMES_IN_FLIGHT> dirtyMaterials;
@@ -257,7 +268,7 @@ namespace {
             const char* basePath = SDL_GetBasePath();
             assetManager.set_asset_root(basePath ? std::filesystem::path(basePath) : std::filesystem::path{});
             Assets::register_default_asset_loaders(assetManager);
-            assetManager.set_error_handler([](const std::string& message) { std::cerr << "[Assets] " << message << '\\n'; });
+            assetManager.set_error_handler([](const std::string& message) { std::cerr << "[Assets] " << message << '\n'; });
             createInstance();
             setupDebugMessenger();
             createSurface();
@@ -272,6 +283,7 @@ namespace {
             msaa.create(swapchain.extent(), HdrBuffer::Format);
             createDepthResources();
             createCommandPool();
+            createMaterialTextures();
             createMeshBuffers();
             createInstanceBuffer();
             createUniformBuffers();
@@ -440,7 +452,7 @@ namespace {
                 gpuMaterialBuffers.push_back(buffer.handle());
             }
             shadowPass.create(vulkanDevice.physical(), device, buffers,
-                              gpuMaterialBuffers,
+                              gpuMaterialBuffers, materialTextureDescriptors,
                               sizeof(UniformBufferObject), assetManager);
         }
 
@@ -487,6 +499,50 @@ namespace {
                 vulkanDevice.allocator());
         }
 
+        void createMaterialTextures() {
+            constexpr std::array<std::uint8_t, 4> white = {255, 255, 255, 255};
+            fallbackMaterialTexture.create(
+                vulkanDevice.physical(), device, commandPool, vulkanDevice.graphicsQueue(),
+                1, 1, white, TextureColorSpace::SRGB, false, vulkanDevice.allocator());
+            const VkDescriptorImageInfo fallback{
+                fallbackMaterialTexture.sampler(), fallbackMaterialTexture.imageView(),
+                VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
+            materialTextureDescriptors.assign(MaxMaterialTextures, fallback);
+
+            std::unordered_set<const Mesh*> uploaded;
+            registry.view<MeshRenderer>([&](const Entity, const MeshRenderer& renderer) {
+                if (!renderer.hasMesh() || !uploaded.insert(renderer.mesh.get()).second) return;
+                const Mesh& mesh = *renderer.mesh;
+                const std::uint32_t offset = static_cast<std::uint32_t>(materialTextures.size() + 1);
+                if (mesh.images.size() > MaxMaterialTextures - offset) {
+                    throw std::runtime_error("GLB scene exceeds the material texture limit");
+                }
+                meshTextureOffsets.emplace(&mesh, offset);
+                for (std::size_t i = 0; i < mesh.images.size(); ++i) {
+                    const Mesh::Image& image = mesh.images[i];
+                    const bool isBaseColorTexture = std::ranges::any_of(
+                        mesh.materials, [i](const PBRMaterial& material) {
+                            return material.baseColorTexture == static_cast<std::int32_t>(i);
+                        });
+                    if (image.width == 0 || image.height == 0 || image.rgbaPixels.empty()) {
+                        materialTextures.emplace_back();
+                        continue;
+                    }
+                    Texture2D texture;
+                    texture.create(vulkanDevice.physical(), device, commandPool,
+                                   vulkanDevice.graphicsQueue(), image.width, image.height,
+                                   image.rgbaPixels, isBaseColorTexture ? TextureColorSpace::SRGB
+                                                                        : TextureColorSpace::Linear,
+                                   true,
+                                   vulkanDevice.allocator());
+                    materialTextureDescriptors[offset + i] = {
+                        texture.sampler(), texture.imageView(),
+                        VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
+                    materialTextures.push_back(std::move(texture));
+                }
+            });
+        }
+
         void createMeshBuffers() {
             Mesh sceneMesh;
             renderables.reserve(registry.size());
@@ -524,12 +580,15 @@ namespace {
             uniqueMeshes.reserve(registry.size());
             std::size_t vertexCapacity = 0;
             std::size_t indexCapacity = 0;
+            materialSlots = 1;
             registry.view<MeshRenderer>([&](const Entity, const MeshRenderer& renderer) {
                 if (!renderer.hasMesh() || !uniqueMeshes.insert(renderer.mesh.get()).second) {
                     return;
                 }
                 vertexCapacity += renderer.mesh->vertices.size();
                 indexCapacity += renderer.mesh->indices.size();
+                materialSlots = std::max(materialSlots, static_cast<std::uint32_t>(
+                    std::max<std::size_t>(1, renderer.mesh->materials.size())));
             });
             sceneMesh.vertices.reserve(vertexCapacity);
             sceneMesh.indices.reserve(indexCapacity);
@@ -541,10 +600,43 @@ namespace {
 
                     const Mesh* const mesh = renderer.mesh.get();
                     AABB localBounds;
-                    if (const auto existing = uploadedMeshes.find(mesh);
-                        existing != uploadedMeshes.end()) {
+                    if (optimizationFeatures.meshDeduplication) {
+                        const auto existing = uploadedMeshes.find(mesh);
+                        if (existing != uploadedMeshes.end()) {
                         renderer.firstIndex = existing->second.firstIndex;
                         localBounds = existing->second.localBounds;
+                        } else {
+                            if (sceneMesh.vertices.size() + mesh->vertices.size() >
+                                    std::numeric_limits<uint32_t>::max() ||
+                                sceneMesh.indices.size() + mesh->indices.size() >
+                                    std::numeric_limits<uint32_t>::max()) {
+                                throw std::runtime_error("Scene geometry exceeds 32-bit draw limits");
+                            }
+                            const uint32_t vertexOffset = sceneMesh.vertexCount();
+                            renderer.firstIndex = sceneMesh.indexCount();
+                            sceneMesh.vertices.insert(sceneMesh.vertices.end(),
+                                                      mesh->vertices.begin(), mesh->vertices.end());
+                            for (const uint32_t index : mesh->indices) {
+                                sceneMesh.indices.push_back(vertexOffset + index);
+                            }
+                            localBounds = {
+                            .min = Vec3{std::numeric_limits<float>::max(),
+                                        std::numeric_limits<float>::max(),
+                                        std::numeric_limits<float>::max()},
+                            .max = Vec3{std::numeric_limits<float>::lowest(),
+                                        std::numeric_limits<float>::lowest(),
+                                        std::numeric_limits<float>::lowest()},
+                            };
+                            for (const Vertex& vertex : mesh->vertices) {
+                                localBounds.min.setX(std::min(localBounds.min.x(), vertex.position.x()));
+                                localBounds.min.setY(std::min(localBounds.min.y(), vertex.position.y()));
+                                localBounds.min.setZ(std::min(localBounds.min.z(), vertex.position.z()));
+                                localBounds.max.setX(std::max(localBounds.max.x(), vertex.position.x()));
+                                localBounds.max.setY(std::max(localBounds.max.y(), vertex.position.y()));
+                                localBounds.max.setZ(std::max(localBounds.max.z(), vertex.position.z()));
+                            }
+                            uploadedMeshes.emplace(mesh, MeshUploadRecord{renderer.firstIndex, localBounds});
+                        }
                     } else {
                         if (sceneMesh.vertices.size() + mesh->vertices.size() >
                                 std::numeric_limits<uint32_t>::max() ||
@@ -575,15 +667,16 @@ namespace {
                         localBounds.max.setY(std::max(localBounds.max.y(), vertex.position.y()));
                         localBounds.max.setZ(std::max(localBounds.max.z(), vertex.position.z()));
                         }
-                        uploadedMeshes.emplace(mesh, MeshUploadRecord{renderer.firstIndex, localBounds});
                     }
                     const AABB worldBounds =
                         localBounds.transformed(transform.matrix().native());
                     const bool castShadow = renderer.castShadow;
                     const BatchKey batchKey{mesh, castShadow};
-                    const auto [batchIt, inserted] = batchIndices.try_emplace(
-                        batchKey, instanceBatches.size());
-                    const std::size_t batchIndex = batchIt->second;
+                    const auto [batchIt, inserted] = optimizationFeatures.instancedRendering
+                        ? batchIndices.try_emplace(batchKey, instanceBatches.size())
+                        : std::pair{batchIndices.end(), true};
+                    const std::size_t batchIndex = optimizationFeatures.instancedRendering
+                        ? batchIt->second : instanceBatches.size();
                     if (inserted) {
                         instanceBatches.push_back(InstanceBatch{
                             .mesh = mesh,
@@ -634,7 +727,7 @@ namespace {
         void createInstanceBuffer() {
             instanceModels.resize(renderables.size());
             shadowInstanceModels.resize(renderables.size());
-            materials.resize(renderables.size());
+            materials.resize(renderables.size() * materialSlots);
             updateRenderableBuffers();
             for (Buffer& buffer : instanceBuffers) {
                 buffer.createHostVisible(vulkanDevice.physical(), device,
@@ -727,7 +820,8 @@ namespace {
                 const Transform& transform = readRegistry.get<Transform>(entity);
                 const MeshRenderer& renderer = readRegistry.get<MeshRenderer>(entity);
                 RenderableRecord& record = renderables[index];
-                if (!record.hasCachedTransform || !sameTransform(record.cachedTransform, transform)) {
+                if (!optimizationFeatures.transformCaching ||
+                    !record.hasCachedTransform || !sameTransform(record.cachedTransform, transform)) {
                     const glm::mat4 model = transform.matrix().native();
                     shadowInstanceModels[index] = model;
                     instanceModels[index] = model;
@@ -736,13 +830,36 @@ namespace {
                     markDirty(index, &RenderableRecord::transformDirtyFrames, dirtyTransforms);
                     markDirty(index, &RenderableRecord::cullingDirtyFrames, dirtyCullingObjects);
                 }
-                const GPUMaterialData material{
-                    glm::vec4{renderer.material.baseColor.r(), renderer.material.baseColor.g(),
-                              renderer.material.baseColor.b(), renderer.material.metallic},
-                    glm::vec4{renderer.material.roughness, renderer.material.ambientOcclusion, 0.0f, 0.0f},
-                };
-                if (std::memcmp(&materials[index], &material, sizeof(material)) != 0) {
-                    materials[index] = material;
+                const Mesh& mesh = *renderer.mesh;
+                bool materialChanged = false;
+                for (std::uint32_t slot = 0; slot < materialSlots; ++slot) {
+                    const PBRMaterial source = mesh.materials.empty()
+                        ? renderer.material
+                        : (slot < mesh.materials.size() ? mesh.materials[slot] : PBRMaterial{});
+                    const auto textureIndex = [&](const std::int32_t localIndex) {
+                        const auto offset = meshTextureOffsets.find(&mesh);
+                        if (localIndex < 0 || offset == meshTextureOffsets.end() ||
+                            static_cast<std::size_t>(localIndex) >= mesh.images.size()) return -1;
+                        return static_cast<std::int32_t>(offset->second + localIndex);
+                    };
+                    const GPUMaterialData material{
+                        glm::vec4{source.baseColor.r(), source.baseColor.g(),
+                                  source.baseColor.b(), source.metallic},
+                        glm::vec4{source.roughness, source.ambientOcclusion,
+                                  source.alphaCutoff, source.normalScale},
+                        glm::ivec4{textureIndex(source.baseColorTexture),
+                                   textureIndex(source.metallicRoughnessTexture),
+                                   textureIndex(source.normalTexture),
+                                   (source.doubleSided ? 1 : 0) | (source.alphaBlend ? 2 : 0)},
+                    };
+                    GPUMaterialData& destination = materials[index * materialSlots + slot];
+                    if (!optimizationFeatures.materialCaching ||
+                        std::memcmp(&destination, &material, sizeof(material)) != 0) {
+                        destination = material;
+                        materialChanged = true;
+                    }
+                }
+                if (materialChanged) {
                     markDirty(index, &RenderableRecord::materialDirtyFrames, dirtyMaterials);
                 }
             }
@@ -796,9 +913,12 @@ namespace {
                                    dirtyTransforms[currentFrame]);
                 clearDirtyIndices(&RenderableRecord::transformDirtyFrames,
                                   dirtyTransforms[currentFrame], bit);
-                uploadDirtyIndices(materialBuffers[currentFrame], materials,
-                                   &RenderableRecord::materialDirtyFrames,
-                                   dirtyMaterials[currentFrame]);
+                for (const std::size_t index : dirtyMaterials[currentFrame]) {
+                    materialBuffers[currentFrame].update(
+                        materials.data() + index * materialSlots,
+                        sizeof(GPUMaterialData) * materialSlots,
+                        sizeof(GPUMaterialData) * index * materialSlots);
+                }
                 clearDirtyIndices(&RenderableRecord::materialDirtyFrames,
                                   dirtyMaterials[currentFrame], bit);
             }
@@ -815,7 +935,8 @@ namespace {
             data.objectCount = static_cast<uint32_t>(gpuObjects.size());
             data.maxDrawCount = data.objectCount;
             data.hizMipCount = hiZBuffer.mipCount();
-            data.enableOcclusionCulling = 1;
+            data.enableOcclusionCulling = (optimizationFeatures.gpuCulling &&
+                                           optimizationFeatures.occlusionCulling) ? 1u : 0u;
             data.viewportWidth = static_cast<float>(swapchain.extent().width);
             data.viewportHeight = static_cast<float>(swapchain.extent().height);
             data.depthBias = 0.0025f;
@@ -1115,10 +1236,10 @@ namespace {
         }
 
         Mat4 lightSpaceMatrix() const {
+            const auto light = directionalLight();
             const float extent = sceneRadius;
             const Vec3 lightTarget = sceneCenter;
-            const Vec3 lightPosition = lightTarget + Vec3{
-                extent * 2.6f, extent * 3.5f, extent * 2.6f};
+            const Vec3 lightPosition = lightTarget - light.direction * (extent * 5.0f);
             constexpr Vec3 worldUp{0.0f, 1.0f, 0.0f};
             const Mat4 lightView = Mat4::lookAt(lightPosition, lightTarget, worldUp);
             const Mat4 lightProjection = Mat4::scale(
@@ -1127,6 +1248,30 @@ namespace {
                             0.1f, extent * 8.0f),
                 Vec3{1.0f, -1.0f, 1.0f});
             return lightProjection * lightView;
+        }
+
+        struct DirectionalLight final {
+            Vec3 direction{-0.45f, -0.80f, -0.35f};
+            Math::Color color = Math::Color::white();
+            float intensity{4.0f};
+        };
+
+        [[nodiscard]] DirectionalLight directionalLight() const {
+            DirectionalLight result;
+            const Registry& readRegistry = registry;
+            bool found = false;
+            readRegistry.view<Transform, LightComponent>(
+                [&](const Entity, const Transform& transform, const LightComponent& light) {
+                    if (found || !light.enabled || light.type != LightType::Directional) return;
+                    const glm::vec3 direction = glm::vec3(transform.matrix().native() *
+                                                          glm::vec4{0.0f, 0.0f, -1.0f, 0.0f});
+                    if (glm::length(direction) <= 1e-6f) return;
+                    result.direction = Vec3{glm::normalize(direction)};
+                    result.color = light.color;
+                    result.intensity = std::max(0.0f, light.intensity);
+                    found = true;
+                });
+            return result;
         }
 
         void updateUniformBuffer(const uint32_t frame) {
@@ -1154,10 +1299,13 @@ namespace {
             camera->setRotation(Degrees{transform.rotation.y()},
                                 Degrees{transform.rotation.x()});
 
+            const DirectionalLight light = directionalLight();
             const UniformBufferObject data{
                 camera->viewMatrix(), camera->projectionMatrix(), lightSpaceMatrix(),
                 glm::vec4{camera->position().native(), 1.0f},
-                glm::vec4{-0.45f, -0.80f, -0.35f, 4.0f}};
+                glm::vec4{light.direction.native(), light.intensity},
+                glm::vec4{light.color.r(), light.color.g(), light.color.b(), 1.0f},
+                materialSlots};
             uniformBuffers[frame].update(&data, sizeof(data));
         }
 
@@ -1171,6 +1319,7 @@ namespace {
             shadowPass.record(
                 commandBuffer, lightSpaceMatrix(), vertexBuffer.handle(),
                 shadowInstanceBuffers[currentFrame].handle(), indexBuffer.handle(),
+                shadowPass.descriptorSet(currentFrame),
                 shadowCullingPasses[currentFrame],
                 shadowIndirectDraws[currentFrame],
                 static_cast<std::uint32_t>(gpuObjects.size()));
@@ -1458,6 +1607,13 @@ namespace {
                     uniformBuffer.destroy();
                 }
                 fpsFontTexture.destroy();
+                for (Texture2D& texture : materialTextures) {
+                    texture.destroy();
+                }
+                materialTextures.clear();
+                materialTextureDescriptors.clear();
+                meshTextureOffsets.clear();
+                fallbackMaterialTexture.destroy();
 
                 for (VkSemaphore semaphore : imageAvailableSemaphores) {
                     if (semaphore != VK_NULL_HANDLE) {
@@ -1507,7 +1663,7 @@ namespace {
 } // namespace
 
 void Renderer::run(Scene& scene) {
-    RenderApp app{scene};
+    RenderApp app{scene, optimizationFeatures_};
     app.run();
 }
 

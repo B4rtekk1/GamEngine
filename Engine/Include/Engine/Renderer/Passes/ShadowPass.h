@@ -28,11 +28,13 @@ public:
     void create(VkPhysicalDevice physicalDevice, VkDevice device,
                 const std::vector<VkBuffer>& uniformBuffers,
                 const std::vector<VkBuffer>& materialBuffers,
+                const std::vector<VkDescriptorImageInfo>& materialTextures,
                 VkDeviceSize uniformBufferRange, Assets::AssetManager& assets);
     void destroy() noexcept;
 
     void record(VkCommandBuffer commandBuffer, const Mat4& lightSpace,
                 VkBuffer vertexBuffer, VkBuffer instanceBuffer, VkBuffer indexBuffer,
+                VkDescriptorSet sceneDescriptorSet,
                 const Culling::GPUCullingPass& cullingPass,
                 const Culling::IndexedIndirectDrawCount& indirectDraw,
                 std::uint32_t objectCount) const;

@@ -4,6 +4,7 @@
 #include "Engine/Renderer/Culling/GPUCullingPass.h"
 #include "Engine/Renderer/Culling/IndexedIndirectDrawCount.h"
 #include "Engine/Renderer/Geometry/Vertex.h"
+#include "Engine/Renderer/Materials/MaterialBuffer.h"
 #include "Engine/Renderer/shader_loader.h"
 
 #include <glm/glm.hpp>
@@ -24,6 +25,7 @@ ShadowPass::~ShadowPass() {
 void ShadowPass::create(const VkPhysicalDevice physicalDevice, const VkDevice device,
                         const std::vector<VkBuffer>& uniformBuffers,
                         const std::vector<VkBuffer>& materialBuffers,
+                        const std::vector<VkDescriptorImageInfo>& materialTextures,
                         const VkDeviceSize uniformBufferRange,
                         Assets::AssetManager& assets) {
     destroy();
@@ -32,20 +34,23 @@ void ShadowPass::create(const VkPhysicalDevice physicalDevice, const VkDevice de
     try {
         shadowMap_.create(physicalDevice, device_);
 
-        if (materialBuffers.size() != uniformBuffers.size()) {
-            throw std::invalid_argument("Material and uniform frame counts must match");
+        if (materialBuffers.size() != uniformBuffers.size() ||
+            materialTextures.size() != MaxMaterialTextures) {
+            throw std::invalid_argument("Invalid material descriptor resources");
         }
 
-        VkDescriptorSetLayoutBinding bindings[3]{};
+        VkDescriptorSetLayoutBinding bindings[4]{};
         bindings[0] = {0, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1,
                        VK_SHADER_STAGE_FRAGMENT_BIT, nullptr};
         bindings[1] = {1, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1,
                        VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, nullptr};
         bindings[2] = {2, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1,
                        VK_SHADER_STAGE_FRAGMENT_BIT, nullptr};
+        bindings[3] = {3, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, MaxMaterialTextures,
+                       VK_SHADER_STAGE_FRAGMENT_BIT, nullptr};
         const VkDescriptorSetLayoutCreateInfo layoutInfo{
             VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO, nullptr, 0,
-            3, bindings};
+            4, bindings};
         if (vkCreateDescriptorSetLayout(device_, &layoutInfo, nullptr,
                                         &descriptorSetLayout_) != VK_SUCCESS) {
             throw std::runtime_error("Could not create shadow descriptor-set layout");
@@ -56,6 +61,7 @@ void ShadowPass::create(const VkPhysicalDevice physicalDevice, const VkDevice de
             {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, frameCount},
             {VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, frameCount},
             {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, frameCount},
+            {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, frameCount * MaxMaterialTextures},
         };
         VkDescriptorPoolCreateInfo poolInfo{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
         poolInfo.maxSets = frameCount;
@@ -83,7 +89,7 @@ void ShadowPass::create(const VkPhysicalDevice physicalDevice, const VkDevice de
                 uniformBuffers[frame], 0, uniformBufferRange};
             const VkDescriptorBufferInfo materialInfo{
                 materialBuffers[frame], 0, VK_WHOLE_SIZE};
-            VkWriteDescriptorSet writes[3]{};
+            VkWriteDescriptorSet writes[4]{};
             writes[0] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr,
                          descriptorSets_[frame], 0, 0, 1,
                          VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &imageInfo, nullptr, nullptr};
@@ -93,17 +99,26 @@ void ShadowPass::create(const VkPhysicalDevice physicalDevice, const VkDevice de
             writes[2] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr,
                          descriptorSets_[frame], 2, 0, 1,
                          VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, nullptr, &materialInfo, nullptr};
+            writes[3] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr,
+                         descriptorSets_[frame], 3, 0, MaxMaterialTextures,
+                         VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, materialTextures.data(), nullptr};
             vkUpdateDescriptorSets(device_, std::size(writes), writes, 0, nullptr);
         }
 
-        const auto shader = vkutil::loadShaderModule(device_, assets, "shaders/shadow.vert.spv");
-        const VkPipelineShaderStageCreateInfo stage{
-            VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO, nullptr, 0,
-            VK_SHADER_STAGE_VERTEX_BIT, shader.get(), "main", nullptr};
+        const auto vertexShader = vkutil::loadShaderModule(device_, assets, "shaders/shadow.vert.spv");
+        const auto fragmentShader = vkutil::loadShaderModule(device_, assets, "shaders/shadow.frag.spv");
+        const std::array stages{
+            VkPipelineShaderStageCreateInfo{VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO, nullptr, 0,
+                VK_SHADER_STAGE_VERTEX_BIT, vertexShader.get(), "main", nullptr},
+            VkPipelineShaderStageCreateInfo{VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO, nullptr, 0,
+                VK_SHADER_STAGE_FRAGMENT_BIT, fragmentShader.get(), "main", nullptr},
+        };
         const VkPushConstantRange pushConstantRange{
             VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(glm::mat4)};
         VkPipelineLayoutCreateInfo pipelineLayoutInfo{
             VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
+        pipelineLayoutInfo.setLayoutCount = 1;
+        pipelineLayoutInfo.pSetLayouts = &descriptorSetLayout_;
         pipelineLayoutInfo.pushConstantRangeCount = 1;
         pipelineLayoutInfo.pPushConstantRanges = &pushConstantRange;
         if (vkCreatePipelineLayout(device_, &pipelineLayoutInfo, nullptr,
@@ -117,6 +132,8 @@ void ShadowPass::create(const VkPhysicalDevice physicalDevice, const VkDevice de
         };
         const VkVertexInputAttributeDescription attributes[] = {
             {0, 0, VK_FORMAT_R32G32B32_SFLOAT, offsetof(Vertex, position)},
+            {2, 0, VK_FORMAT_R32G32_SFLOAT, offsetof(Vertex, texCoord)},
+            {8, 0, VK_FORMAT_R32_UINT, offsetof(Vertex, materialIndex)},
             {4, 1, VK_FORMAT_R32G32B32A32_SFLOAT, 0},
             {5, 1, VK_FORMAT_R32G32B32A32_SFLOAT, sizeof(glm::vec4)},
             {6, 1, VK_FORMAT_R32G32B32A32_SFLOAT, sizeof(glm::vec4) * 2},
@@ -138,7 +155,10 @@ void ShadowPass::create(const VkPhysicalDevice physicalDevice, const VkDevice de
         VkPipelineRasterizationStateCreateInfo rasterizer{
             VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO};
         rasterizer.polygonMode = VK_POLYGON_MODE_FILL;
-        rasterizer.cullMode = VK_CULL_MODE_BACK_BIT;
+        // The main pass renders glTF double-sided foliage. Its transparent
+        // pixels are already discarded by shadow.frag, so it must also cast
+        // a shadow when the light sees the back of a leaf card.
+        rasterizer.cullMode = VK_CULL_MODE_NONE;
         rasterizer.frontFace = VK_FRONT_FACE_CLOCKWISE;
         rasterizer.lineWidth = 1.0f;
         rasterizer.depthBiasEnable = VK_TRUE;
@@ -159,8 +179,8 @@ void ShadowPass::create(const VkPhysicalDevice physicalDevice, const VkDevice de
         dynamic.pDynamicStates = dynamicStates;
         VkGraphicsPipelineCreateInfo pipelineInfo{
             VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO};
-        pipelineInfo.stageCount = 1;
-        pipelineInfo.pStages = &stage;
+        pipelineInfo.stageCount = std::size(stages);
+        pipelineInfo.pStages = stages.data();
         pipelineInfo.pVertexInputState = &vertexInput;
         pipelineInfo.pInputAssemblyState = &assembly;
         pipelineInfo.pViewportState = &viewport;
@@ -202,7 +222,7 @@ VkDescriptorSet ShadowPass::descriptorSet(const std::uint32_t frameIndex) const 
 
 void ShadowPass::record(const VkCommandBuffer commandBuffer, const Mat4& lightSpace,
                         const VkBuffer vertexBuffer, const VkBuffer instanceBuffer,
-                        const VkBuffer indexBuffer,
+                        const VkBuffer indexBuffer, const VkDescriptorSet sceneDescriptorSet,
                         const Culling::GPUCullingPass& cullingPass,
                         const Culling::IndexedIndirectDrawCount& indirectDraw,
                         const std::uint32_t objectCount) const {
@@ -220,6 +240,8 @@ void ShadowPass::record(const VkCommandBuffer commandBuffer, const Mat4& lightSp
     passInfo.pClearValues = &clear;
     vkCmdBeginRenderPass(commandBuffer, &passInfo, VK_SUBPASS_CONTENTS_INLINE);
     vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline_);
+    vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS,
+                            pipelineLayout_, 0, 1, &sceneDescriptorSet, 0, nullptr);
     const VkBuffer vertexBuffers[] = {vertexBuffer, instanceBuffer};
     constexpr VkDeviceSize offsets[] = {0, 0};
     vkCmdBindVertexBuffers(commandBuffer, 0, 2, vertexBuffers, offsets);

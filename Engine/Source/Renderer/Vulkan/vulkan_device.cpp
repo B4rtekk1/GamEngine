@@ -143,7 +143,8 @@ bool VulkanDevice::isSuitable(VkPhysicalDevice candidate) const {
     vkGetPhysicalDeviceFeatures2(candidate, &features2);
     if (features13.synchronization2 != VK_TRUE ||
         features12.drawIndirectCount != VK_TRUE ||
-        features2.features.multiDrawIndirect != VK_TRUE) {
+        features2.features.multiDrawIndirect != VK_TRUE ||
+        features2.features.shaderSampledImageArrayDynamicIndexing != VK_TRUE) {
         return false;
     }
     if (!findQueueFamilies(candidate).complete()) {
@@ -255,6 +256,7 @@ void VulkanDevice::createLogicalDevice() {
     features12.pNext = &features13;
     VkPhysicalDeviceFeatures2 features2{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2};
     features2.features.multiDrawIndirect = VK_TRUE;
+    features2.features.shaderSampledImageArrayDynamicIndexing = VK_TRUE;
     features2.pNext = &features12;
 
     VkDeviceCreateInfo createInfo{};

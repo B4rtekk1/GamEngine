@@ -5,20 +5,24 @@ layout(location = 1) in vec4 fragLightSpacePosition;
 layout(location = 2) in vec3 fragWorldPosition;
 layout(location = 3) in vec3 fragNormal;
 layout(location = 4) flat in uint fragMaterialIndex;
+layout(location = 5) in vec2 fragTexCoord;
+layout(location = 6) in vec4 fragTangent;
 layout(location = 0) out vec4 outColor;
 
 layout(binding = 0) uniform sampler2D shadowMap;
 layout(binding = 1) uniform FrameData {
     mat4 view; mat4 projection; mat4 lightSpace;
-    vec4 cameraPosition; vec4 lightDirectionIntensity;
+    vec4 cameraPosition; vec4 lightDirectionIntensity; vec4 lightColor;
 } frame;
 struct MaterialData {
     vec4 baseColorMetallic;
     vec4 roughnessAmbientOcclusion;
+    ivec4 textureIndices;
 };
 layout(std430, binding = 2) readonly buffer MaterialBuffer {
     MaterialData materials[];
 };
+layout(binding = 3) uniform sampler2D materialTextures[16];
 
 const float PI = 3.14159265359;
 const float MIN_SHADOW_BIAS = 0.0025;
@@ -52,10 +56,41 @@ vec3 fresnelSchlick(float cosTheta, vec3 f0) { return f0 + (1.0 - f0) * pow(1.0 
 
 void main() {
     MaterialData material = materials[fragMaterialIndex];
-    vec3 albedo = pow(fragColor * material.baseColorMetallic.rgb, vec3(2.2));
-    float metallic = clamp(material.baseColorMetallic.a, 0.0, 1.0);
-    float roughness = clamp(material.roughnessAmbientOcclusion.x, 0.045, 1.0);
+    vec4 baseColor = vec4(fragColor * material.baseColorMetallic.rgb, 1.0);
+    if (material.textureIndices.x >= 0)
+        baseColor *= texture(materialTextures[material.textureIndices.x], fragTexCoord);
+    // This renderer combines all primitives in one draw, so it cannot sort
+    // glTF BLEND foliage cards back-to-front. Treat their alpha as a cutout:
+    // this preserves correct depth for overlapping leaves and avoids their
+    // rectangular cards becoming visible. Opaque materials keep alpha 1.
+    const bool doubleSided = (material.textureIndices.w & 1) != 0;
+    const bool alphaBlend = (material.textureIndices.w & 2) != 0;
+    if (alphaBlend) {
+        if (baseColor.a < material.roughnessAmbientOcclusion.z) discard;
+        baseColor.a = 1.0;
+    } else if (baseColor.a <= 0.01) discard;
+    // Base-colour textures are uploaded as VK_FORMAT_*_SRGB and are already
+    // converted to linear space by sampling. Converting them again here made
+    // Blender foliage unnaturally dark.
+    vec3 albedo = baseColor.rgb;
+    float metallic = material.baseColorMetallic.a;
+    float roughness = material.roughnessAmbientOcclusion.x;
+    if (material.textureIndices.y >= 0) {
+        vec4 metallicRoughness = texture(materialTextures[material.textureIndices.y], fragTexCoord);
+        metallic *= metallicRoughness.b;
+        roughness *= metallicRoughness.g;
+    }
+    metallic = clamp(metallic, 0.0, 1.0);
+    roughness = clamp(roughness, 0.045, 1.0);
     vec3 n = normalize(fragNormal);
+    if (doubleSided && !gl_FrontFacing) n = -n;
+    if (material.textureIndices.z >= 0 && abs(material.roughnessAmbientOcclusion.w) > 1e-6) {
+        vec3 tangent = normalize(fragTangent.xyz - n * dot(n, fragTangent.xyz));
+        vec3 bitangent = normalize(cross(n, tangent)) * fragTangent.w;
+        vec3 mappedNormal = texture(materialTextures[material.textureIndices.z], fragTexCoord).xyz * 2.0 - 1.0;
+        mappedNormal.xy *= material.roughnessAmbientOcclusion.w;
+        n = normalize(mat3(tangent, bitangent, n) * mappedNormal);
+    }
     vec3 v = normalize(frame.cameraPosition.xyz - fragWorldPosition);
     vec3 l = normalize(-frame.lightDirectionIntensity.xyz);
     vec3 h = normalize(v + l);
@@ -65,9 +100,9 @@ void main() {
     float geometry = geometrySchlickGGX(nDotV, roughness) * geometrySchlickGGX(nDotL, roughness);
     vec3 specular = distributionGGX(n, h, roughness) * geometry * f / max(4.0 * nDotV * nDotL, 0.0001);
     vec3 diffuse = (vec3(1.0) - f) * (1.0 - metallic) * albedo / PI;
-    vec3 direct = (diffuse + specular) * frame.lightDirectionIntensity.w * nDotL * (1.0 - calculateShadow());
+    vec3 direct = (diffuse + specular) * frame.lightDirectionIntensity.w * frame.lightColor.rgb * nDotL * (1.0 - calculateShadow());
     vec3 color = vec3(0.035) * albedo * clamp(material.roughnessAmbientOcclusion.y, 0.0, 1.0) + direct;
     // Keep lighting in linear HDR space. Display mapping is performed once,
     // after the complete scene (including the skybox) has been rendered.
-    outColor = vec4(color, 1.0);
+    outColor = vec4(color, baseColor.a);
 }

@@ -19,7 +19,14 @@ void ForwardPass::create(const VkDevice device, const VkFormat colorFormat,
     options.vertexShader = "shaders/pbr.vert.spv";
     options.fragmentShader = "shaders/pbr.frag.spv";
     options.assetManager = &assets;
-    options.cullMode = VK_CULL_MODE_BACK_BIT;
+    // One combined draw contains both opaque solids and glTF double-sided
+    // foliage cards. Per-material culling would require splitting the draw;
+    // keep both faces and let the shader flip only double-sided materials.
+    options.cullMode = VK_CULL_MODE_NONE;
+    // GLB may combine opaque and alpha-blended primitives in one mesh buffer.
+    // Opaque fragments still carry alpha 1, so enabling the standard blend state
+    // keeps them unchanged while allowing leaf cards to show through.
+    options.alphaBlendEnable = VK_TRUE;
     options.descriptorSetLayouts = {sceneLayout};
     options.vertexBindings = {
         {0, sizeof(Vertex), VK_VERTEX_INPUT_RATE_VERTEX},
@@ -28,11 +35,14 @@ void ForwardPass::create(const VkDevice device, const VkFormat colorFormat,
     options.vertexAttributes = {
         {0, 0, VK_FORMAT_R32G32B32_SFLOAT, offsetof(Vertex, position)},
         {1, 0, VK_FORMAT_R32G32B32_SFLOAT, offsetof(Vertex, color)},
+        {2, 0, VK_FORMAT_R32G32_SFLOAT, offsetof(Vertex, texCoord)},
         {3, 0, VK_FORMAT_R32G32B32_SFLOAT, offsetof(Vertex, normal)},
         {4, 1, VK_FORMAT_R32G32B32A32_SFLOAT, 0},
         {5, 1, VK_FORMAT_R32G32B32A32_SFLOAT, sizeof(glm::vec4)},
         {6, 1, VK_FORMAT_R32G32B32A32_SFLOAT, sizeof(glm::vec4) * 2},
         {7, 1, VK_FORMAT_R32G32B32A32_SFLOAT, sizeof(glm::vec4) * 3},
+        {8, 0, VK_FORMAT_R32_UINT, offsetof(Vertex, materialIndex)},
+        {9, 0, VK_FORMAT_R32G32B32A32_SFLOAT, offsetof(Vertex, tangent)},
     };
     pipeline_.create(device, options);
 }

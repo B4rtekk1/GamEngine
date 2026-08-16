@@ -4,10 +4,12 @@
 #include <cstdlib>
 #include <exception>
 #include <iostream>
+#include <string_view>
 
-int main() {
+int main(int argc, char** argv) {
     try {
-        Engine::Scene scene;
+        const bool treeScene = argc > 1 && std::string_view{argv[1]} == "--tree";
+        Engine::Scene scene(treeScene ? Engine::SceneType::Tree : Engine::SceneType::Cubes);
         Engine::Renderer renderer;
         renderer.run(scene);
     } catch (const std::exception& exception) {
