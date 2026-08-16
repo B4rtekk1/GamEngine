@@ -47,7 +47,7 @@ namespace Engine::Culling {
 
         std::uint32_t cameraCut;
         std::uint32_t shadowPass;
-        std::uint32_t padding1;
+        std::uint32_t enableFrustumCulling;
         std::uint32_t padding2;
     };
 }

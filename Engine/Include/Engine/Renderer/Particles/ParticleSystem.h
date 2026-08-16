@@ -1,6 +1,7 @@
 #pragma once
 
 #include <vulkan/vulkan.h>
+#include <array>
 #include <cstdint>
 #include <vector>
 
@@ -39,23 +40,27 @@ namespace Engine::Particles {
 
     class ParticleSystem {
     public:
+        static constexpr uint32_t FramesInFlight = 2;
+
         ParticleSystem(VkDevice device, VkPhysicalDevice physicalDevice,
                        VkQueue computeQueue, VkCommandPool commandPool,
                        uint32_t maxParticles);
         ~ParticleSystem();
         void update(float deltaTime);
         void setEmitter(const ParticleEmitter& emitter) { emitter_ = emitter; }
-        void recordCompute(VkCommandBuffer commandBuffer, float deltaTime);
+        // Kept in the frame recording API for renderer ordering; simulation is
+        // CPU-authoritative so no device-wide wait is needed before uploads.
+        void recordCompute(VkCommandBuffer commandBuffer, float deltaTime) const;
         void recordRender(VkCommandBuffer commandBuffer,
                           const ParticleFrameData& frameData,
-                          VkPipeline pipeline, VkPipelineLayout pipelineLayout);
+                          VkPipeline pipeline, VkPipelineLayout pipelineLayout,
+                          uint32_t frameIndex);
         [[nodiscard]] VkDescriptorSetLayout descriptorSetLayout() const noexcept {
             return descriptorSetLayout_;
         }
     private:
         void createBuffers();
         void createDescriptorResources();
-        void createComputePipeline();
         void createQuadBuffer();
         void uploadInitialParticles();
         void spawnParticles(float deltaTime);
@@ -65,22 +70,26 @@ namespace Engine::Particles {
         VkPhysicalDevice physicalDevice_{};
         VkQueue computeQueue_{};
         VkCommandPool commandPool_{};
-        VkBuffer particleBuffer_{};
-        VkDeviceMemory particleMemory_{};
-        VkBuffer frameBuffer_{};
-        VkDeviceMemory frameMemory_{};
+        std::array<VkBuffer, FramesInFlight> particleBuffers_{};
+        std::array<VkDeviceMemory, FramesInFlight> particleMemories_{};
+        std::array<VkBuffer, FramesInFlight> frameBuffers_{};
+        std::array<VkDeviceMemory, FramesInFlight> frameMemories_{};
+        std::array<VkBuffer, FramesInFlight> indirectBuffers_{};
+        std::array<VkDeviceMemory, FramesInFlight> indirectMemories_{};
         VkBuffer quadBuffer_{};
         VkDeviceMemory quadMemory_{};
         VkDescriptorSetLayout descriptorSetLayout_{};
         VkDescriptorPool descriptorPool_{};
-        VkDescriptorSet descriptorSet_{};
-        VkPipeline computePipeline_{};
-        VkPipelineLayout computePipelineLayout_{};
+        std::array<VkDescriptorSet, FramesInFlight> descriptorSets_{};
         uint32_t maxParticles_ = 0;
         ParticleEmitter emitter_{};
-        void* particleMapped_ = nullptr;
-        void* frameMapped_ = nullptr;
+        std::vector<Particle> particles_;
+        std::vector<Particle> renderParticles_;
+        std::array<void*, FramesInFlight> particleMapped_{};
+        std::array<void*, FramesInFlight> frameMapped_{};
+        std::array<void*, FramesInFlight> indirectMapped_{};
         void* quadMapped_ = nullptr;
         uint32_t nextSpawnIndex_ = 0;
+        uint32_t activeParticles_ = 0;
     };
 }

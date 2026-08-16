@@ -59,7 +59,7 @@ layout(std140, set = 0, binding = 4) uniform CullingData
 
     uint cameraCut;
     uint shadowPass;
-    uint padding1;
+    uint enableFrustumCulling;
     uint padding2;
 } culling;
 
@@ -297,6 +297,12 @@ void main()
 
     if (culling.shadowPass != 0u && objectData.castShadow == 0u)
     {
+        return;
+    }
+
+    if (culling.enableFrustumCulling == 0u)
+    {
+        appendDraw(objectIndex, objectData);
         return;
     }
 

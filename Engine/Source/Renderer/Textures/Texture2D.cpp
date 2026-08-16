@@ -138,10 +138,6 @@ Texture2D &Texture2D::operator=(Texture2D &&other) noexcept {
             }
             imageInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
             imageInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-            if (vkCreateImage(device_, &imageInfo, nullptr, &image_) != VK_SUCCESS) {
-                throw std::runtime_error("Could not create Texture2D image");
-            }
-
             if (allocator_ == VK_NULL_HANDLE) {
                 throw std::invalid_argument("Texture2D requires a VMA allocator");
             }

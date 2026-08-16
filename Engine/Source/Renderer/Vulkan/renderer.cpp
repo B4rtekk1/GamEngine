@@ -980,6 +980,7 @@ namespace {
             // Never reject objects using an uninitialized hierarchy.
             data.cameraCut = hiZValid ? 0u : 1u;
             data.shadowPass = 0;
+            data.enableFrustumCulling = optimizationFeatures.gpuCulling ? 1u : 0u;
             cullingUniformBuffers[frame].update(&data, sizeof(data));
         }
 
@@ -995,6 +996,7 @@ namespace {
             data.aabbExpansion = 0.01f;
             data.cameraCut = 1;
             data.shadowPass = 1;
+            data.enableFrustumCulling = optimizationFeatures.gpuCulling ? 1u : 0u;
             shadowCullingUniformBuffers[frame].update(&data, sizeof(data));
         }
 
@@ -1359,8 +1361,10 @@ namespace {
             // culling uniform's cameraCut flag disables occlusion testing for
             // this frame, so an undefined image contents is acceptable after
             // this layout transition.
+            const bool hizEnabled = optimizationFeatures.gpuCulling &&
+                                    optimizationFeatures.occlusionCulling;
             const bool hadPreviousHiZ = hiZValid;
-            if (!hadPreviousHiZ) {
+            if (hizEnabled && !hadPreviousHiZ) {
                 VkImageMemoryBarrier2 hiZInitialBarrier{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2};
                 hiZInitialBarrier.srcStageMask = VK_PIPELINE_STAGE_2_NONE;
                 hiZInitialBarrier.srcAccessMask = 0;
@@ -1378,9 +1382,8 @@ namespace {
                 vkCmdPipelineBarrier2(commandBuffer, &hiZInitialDependency);
             }
 
-            if (particleSystem) {
-                particleSystem->recordCompute(commandBuffer, static_cast<float>(Time::deltaTime()));
-            }
+            // ParticleSystem uses a CPU-authoritative simulation and uploads to
+            // the current frame's private buffer during recordRender.
 
             shadowPass.record(
                 commandBuffer, lightSpaceMatrix(), vertexBuffer.handle(),
@@ -1410,28 +1413,31 @@ namespace {
                     0.0f,
                 };
                 particleSystem->recordRender(commandBuffer, particleFrame,
-                                             particlePipeline.handle(), particlePipeline.layout());
+                                             particlePipeline.handle(), particlePipeline.layout(),
+                                             currentFrame);
             }
             forwardPass.end(commandBuffer);
 
-            VkImageMemoryBarrier2 depthReady{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2};
-            depthReady.srcStageMask = VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT;
-            depthReady.srcAccessMask = VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
-            depthReady.dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
-            depthReady.dstAccessMask = VK_ACCESS_2_SHADER_SAMPLED_READ_BIT;
-            depthReady.oldLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL;
-            depthReady.newLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL;
-            depthReady.image = depthBuffer.image();
-            depthReady.subresourceRange = {VK_IMAGE_ASPECT_DEPTH_BIT, 0, 1, 0, 1};
-            VkDependencyInfo depthDependency{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
-            depthDependency.imageMemoryBarrierCount = 1;
-            depthDependency.pImageMemoryBarriers = &depthReady;
-            vkCmdPipelineBarrier2(commandBuffer, &depthDependency);
-            // The first-frame initialization above establishes a valid image
-            // layout, so HiZPass must transition from SHADER_READ_ONLY rather
-            // than from UNDEFINED when it builds the first hierarchy.
-            hiZPass.record(commandBuffer, hiZBuffer, true);
-            hiZValid = true;
+            if (hizEnabled) {
+                VkImageMemoryBarrier2 depthReady{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2};
+                depthReady.srcStageMask = VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT;
+                depthReady.srcAccessMask = VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
+                depthReady.dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+                depthReady.dstAccessMask = VK_ACCESS_2_SHADER_SAMPLED_READ_BIT;
+                depthReady.oldLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL;
+                depthReady.newLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL;
+                depthReady.image = depthBuffer.image();
+                depthReady.subresourceRange = {VK_IMAGE_ASPECT_DEPTH_BIT, 0, 1, 0, 1};
+                VkDependencyInfo depthDependency{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
+                depthDependency.imageMemoryBarrierCount = 1;
+                depthDependency.pImageMemoryBarriers = &depthReady;
+                vkCmdPipelineBarrier2(commandBuffer, &depthDependency);
+                // The first-frame initialization above establishes a valid image
+                // layout, so HiZPass must transition from SHADER_READ_ONLY rather
+                // than from UNDEFINED when it builds the first hierarchy.
+                hiZPass.record(commandBuffer, hiZBuffer, true);
+                hiZValid = true;
+            }
 
             tonemapPass.record(commandBuffer, imageIndex, swapchain.extent());
             canvasRenderer.record(scene.uiCanvas(), commandBuffer, imageIndex, currentFrame,
@@ -1566,11 +1572,6 @@ namespace {
             updateUniformBuffer(currentFrame);
             updateRenderableBuffers();
             if (particleSystem) {
-                // ParticleSystem currently owns one host-visible particle
-                // buffer. Wait until all previous frames have finished before
-                // the CPU overwrites it; otherwise the GPU can observe a
-                // partially-written particle (including a black color).
-                vkDeviceWaitIdle(device);
                 particleSystem->update(static_cast<float>(Time::deltaTime()));
             }
             updateCullingUniformBuffer(currentFrame);
