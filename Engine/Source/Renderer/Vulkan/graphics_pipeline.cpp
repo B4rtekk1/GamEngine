@@ -23,7 +23,13 @@ void GraphicsPipeline::create(VkDevice device, const GraphicsPipelineOptions& op
     destroy();
     device_ = device;
     try {
-        createRenderPass(options);
+        if (options.existingRenderPass != VK_NULL_HANDLE) {
+            renderPass_ = options.existingRenderPass;
+            ownsRenderPass_ = false;
+        } else {
+            createRenderPass(options);
+            ownsRenderPass_ = true;
+        }
         createPipelineLayout(options);
         createGraphicsPipeline(options);
     } catch (...) {
@@ -40,13 +46,14 @@ void GraphicsPipeline::destroy() noexcept {
         if (layout_ != VK_NULL_HANDLE) {
             vkDestroyPipelineLayout(device_, layout_, nullptr);
         }
-        if (renderPass_ != VK_NULL_HANDLE) {
+        if (ownsRenderPass_ && renderPass_ != VK_NULL_HANDLE) {
             vkDestroyRenderPass(device_, renderPass_, nullptr);
         }
     }
     pipeline_ = VK_NULL_HANDLE;
     layout_ = VK_NULL_HANDLE;
-    renderPass_ = VK_NULL_HANDLE;
+        renderPass_ = VK_NULL_HANDLE;
+        ownsRenderPass_ = false;
     device_ = VK_NULL_HANDLE;
 }
 

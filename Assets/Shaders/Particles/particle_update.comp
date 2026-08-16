@@ -1,0 +1,26 @@
+#version 450
+
+layout(local_size_x = 256) in;
+
+struct Particle {
+    vec4 positionLife;
+    vec4 velocitySize;
+    vec4 color;
+};
+
+layout(std430, set = 0, binding = 0) buffer Particles { Particle particles[]; };
+layout(push_constant) uniform Simulation { float deltaTime; } sim;
+
+void main() {
+    uint id = gl_GlobalInvocationID.x;
+    Particle p = particles[id];
+    float dt = min(sim.deltaTime, 0.1);
+
+    if (p.positionLife.w > 0.0) {
+        p.velocitySize.xyz += vec3(0.0, -9.81, 0.0) * dt;
+        p.positionLife.xyz += p.velocitySize.xyz * dt;
+        p.positionLife.w -= dt;
+        p.color.a = clamp(p.positionLife.w, 0.0, 1.0);
+    }
+    particles[id] = p;
+}

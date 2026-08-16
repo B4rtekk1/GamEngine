@@ -1,6 +1,7 @@
 #include "Engine/Renderer/Vulkan/buffer.h"
 
 #include <cstring>
+#include <string>
 #include <stdexcept>
 
 namespace Engine {
@@ -60,11 +61,19 @@ void Buffer::createDeviceLocal(VkPhysicalDevice physicalDevice, VkDevice device,
     VkSubmitInfo submitInfo{VK_STRUCTURE_TYPE_SUBMIT_INFO};
     submitInfo.commandBufferCount = 1;
     submitInfo.pCommandBuffers = &commandBuffer;
-    if (vkQueueSubmit(queue, 1, &submitInfo, uploadFence) != VK_SUCCESS ||
-        vkWaitForFences(device, 1, &uploadFence, VK_TRUE, UINT64_MAX) != VK_SUCCESS) {
+    const VkResult submitResult = vkQueueSubmit(queue, 1, &submitInfo, uploadFence);
+    if (submitResult != VK_SUCCESS) {
         vkDestroyFence(device, uploadFence, nullptr);
         vkFreeCommandBuffers(device, commandPool, 1, &commandBuffer);
-        throw std::runtime_error("Could not submit buffer copy command buffer");
+        throw std::runtime_error("Could not submit buffer copy command buffer (vkQueueSubmit VkResult " +
+                                 std::to_string(submitResult) + ")");
+    }
+    const VkResult waitResult = vkWaitForFences(device, 1, &uploadFence, VK_TRUE, UINT64_MAX);
+    if (waitResult != VK_SUCCESS) {
+        vkDestroyFence(device, uploadFence, nullptr);
+        vkFreeCommandBuffers(device, commandPool, 1, &commandBuffer);
+        throw std::runtime_error("Buffer copy command buffer failed while waiting for fence (VkResult " +
+                                 std::to_string(waitResult) + ")");
     }
 
     vkDestroyFence(device, uploadFence, nullptr);

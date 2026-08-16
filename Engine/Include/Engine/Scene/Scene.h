@@ -3,6 +3,7 @@
 #include "Engine/Renderer/Geometry/Cube.h"
 #include "Engine/Renderer/Geometry/Plane.h"
 #include "Engine/Renderer/MeshRenderer.h"
+#include "Engine/Renderer/Particles/ParticleSystem.h"
 #include "Engine/Assets/AssetManager.h"
 #include "Engine/Core/Transform.h"
 #include "Engine/ECS/Registry.h"
@@ -28,6 +29,7 @@ namespace Engine {
 enum class SceneType {
     Cubes,
     Tree,
+    Particles,
 };
 
 class Scene final {
@@ -44,9 +46,12 @@ public:
     Entity plane{NullEntity};
     Entity camera{NullEntity};
     Entity tree{NullEntity};
+    Particles::ParticleEmitter particleEmitter{};
+    [[nodiscard]] bool isParticleScene() const noexcept { return particleScene_; }
     std::array<Entity, CubeCount> cubes{};
 
 private:
+    bool particleScene_ = false;
     std::shared_ptr<const Mesh> planeMesh;
     std::shared_ptr<const Mesh> cubeMesh;
     std::shared_ptr<const Mesh> treeMesh;
@@ -56,6 +61,8 @@ public:
 
     explicit Scene(const SceneType sceneType = SceneType::Cubes) {
         const bool treeScene = sceneType == SceneType::Tree;
+        const bool particleScene = sceneType == SceneType::Particles;
+        particleScene_ = particleScene;
 
         planeMesh = std::make_shared<Mesh>(Plane::createMesh());
         cubeMesh = std::make_shared<Mesh>(Cube::createMesh());
@@ -79,6 +86,18 @@ public:
                 throw std::runtime_error("Could not load tree GLB: " + treePath->string());
             }
             treeMesh = loadedTree.shared();
+        }
+
+        if (particleScene) {
+            particleEmitter.position = {0.0f, 0.25f, 0.0f};
+            particleEmitter.minVelocity = {-0.8f, 5.5f, -0.8f};
+            particleEmitter.maxVelocity = {0.8f, 9.0f, 0.8f};
+            particleEmitter.color = {1.0f, 0.05f, 0.02f, 1.0f};
+            particleEmitter.minLifeTime = 1.2f;
+            particleEmitter.maxLifeTime = 3.4f;
+            particleEmitter.minSize = 0.06f;
+            particleEmitter.maxSize = 0.16f;
+            particleEmitter.spawnRate = 900.0f;
         }
 
         plane = registry.create();
@@ -121,10 +140,11 @@ public:
         }
 
         camera = registry.create();
-        const float cameraTargetY = treeScene ? 4.2f
+        const float cameraTargetY = treeScene ? 4.2f : particleScene ? 3.0f
                                               : (CubesPerAxis - 1) * CubeSpacing * 0.5f + 0.5f;
         const Vec3 cameraPosition = treeScene
             ? Vec3{8.0f, 6.5f, 10.0f}
+            : particleScene ? Vec3{6.0f, 5.8f, 8.0f}
             : Vec3{GridHalfExtent * 2.9f,
                    cameraTargetY + GridHalfExtent * 2.6f,
                    GridHalfExtent * 3.9f};
@@ -192,7 +212,7 @@ public:
         panel->addChild(std::move(textElement));
         static_cast<void>(canvas.addElement(std::move(panel)));
 
-        if (treeScene) {
+        if (treeScene || particleScene) {
             return;
         }
 

@@ -14,6 +14,7 @@
 #include "Engine/Renderer/Vulkan/hdr_buffer.h"
 #include "Engine/Renderer/shader_loader.h"
 #include "Engine/Renderer/Vulkan/buffer.h"
+#include "Engine/Renderer/Vulkan/graphics_pipeline.h"
 #include "Engine/Renderer/Vulkan/vulkan_device.h"
 #include "Engine/Renderer/Vulkan/swapchain.h"
 #include "Engine/Renderer/Textures/Texture2D.h"
@@ -41,6 +42,7 @@
 #include "Engine/Renderer/Culling/HiZPass.h"
 #include "Engine/Renderer/Materials/MaterialBuffer.h"
 #include "Engine/Renderer/MeshRenderer.h"
+#include "Engine/Renderer/Particles/ParticleSystem.h"
 #include "Engine/Input/Input.h"
 #include "Engine/UI/Canvas.h"
 #include "Engine/UI/CanvasRenderer.h"
@@ -61,6 +63,7 @@
 #include <vector>
 #include <filesystem>
 #include <optional>
+#include <memory>
 
 namespace Engine {
 
@@ -125,6 +128,8 @@ namespace {
         HdrBuffer hdrBuffer;
 
         ForwardPass forwardPass;
+        GraphicsPipeline particlePipeline;
+        std::unique_ptr<Particles::ParticleSystem> particleSystem;
         SkyPass skyPass;
         TonemapPass tonemapPass;
         UI::CanvasRenderer canvasRenderer;
@@ -289,6 +294,7 @@ namespace {
             createUniformBuffers();
             createShadowPass();
             createForwardPass();
+            createParticleResources();
             createCullingResources();
             createSkyPass();
             createFramebuffers();
@@ -459,6 +465,36 @@ namespace {
         void createForwardPass() {
             forwardPass.create(device, HdrBuffer::Format, depthBuffer.format(),
                                msaa.sampleCount(), shadowPass.descriptorSetLayout(), assetManager);
+        }
+
+        void createParticleResources() {
+            if (!scene.isParticleScene()) {
+                return;
+            }
+
+            particleSystem = std::make_unique<Particles::ParticleSystem>(
+                device, vulkanDevice.physical(), vulkanDevice.graphicsQueue(), commandPool, 8192);
+            particleSystem->setEmitter(scene.particleEmitter);
+
+            GraphicsPipelineOptions options{};
+            options.colorFormat = HdrBuffer::Format;
+            options.depthFormat = depthBuffer.format();
+            options.samples = msaa.sampleCount();
+            options.existingRenderPass = forwardPass.renderPass();
+            options.vertexShader = "shaders/particle.vert.spv";
+            options.fragmentShader = "shaders/particle.frag.spv";
+            options.assetManager = &assetManager;
+            options.cullMode = VK_CULL_MODE_NONE;
+            options.depthWriteEnable = VK_FALSE;
+            options.depthTestEnable = VK_TRUE;
+            options.alphaBlendEnable = VK_TRUE;
+            options.descriptorSetLayouts = {particleSystem->descriptorSetLayout()};
+            options.vertexBindings = {{0, sizeof(float) * 4, VK_VERTEX_INPUT_RATE_VERTEX}};
+            options.vertexAttributes = {
+                {0, 0, VK_FORMAT_R32G32_SFLOAT, 0},
+                {1, 0, VK_FORMAT_R32G32_SFLOAT, sizeof(float) * 2},
+            };
+            particlePipeline.create(device, options);
         }
 
         void createSkyPass() {
@@ -1316,6 +1352,36 @@ namespace {
             if (vkBeginCommandBuffer(commandBuffer, &beginInfo) != VK_SUCCESS) {
                 throw std::runtime_error("Could not begin command buffer");
             }
+            // Culling runs before this frame's depth pass, so it consumes the
+            // Hi-Z result from the previous frame. On the first frame there is
+            // no previous result, but the descriptor is still bound and the
+            // image must be in the layout declared in that descriptor. The
+            // culling uniform's cameraCut flag disables occlusion testing for
+            // this frame, so an undefined image contents is acceptable after
+            // this layout transition.
+            const bool hadPreviousHiZ = hiZValid;
+            if (!hadPreviousHiZ) {
+                VkImageMemoryBarrier2 hiZInitialBarrier{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2};
+                hiZInitialBarrier.srcStageMask = VK_PIPELINE_STAGE_2_NONE;
+                hiZInitialBarrier.srcAccessMask = 0;
+                hiZInitialBarrier.dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+                hiZInitialBarrier.dstAccessMask = VK_ACCESS_2_SHADER_SAMPLED_READ_BIT;
+                hiZInitialBarrier.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+                hiZInitialBarrier.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+                hiZInitialBarrier.image = hiZBuffer.image();
+                hiZInitialBarrier.subresourceRange = {
+                    VK_IMAGE_ASPECT_COLOR_BIT, 0, hiZBuffer.mipCount(), 0, 1};
+
+                VkDependencyInfo hiZInitialDependency{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
+                hiZInitialDependency.imageMemoryBarrierCount = 1;
+                hiZInitialDependency.pImageMemoryBarriers = &hiZInitialBarrier;
+                vkCmdPipelineBarrier2(commandBuffer, &hiZInitialDependency);
+            }
+
+            if (particleSystem) {
+                particleSystem->recordCompute(commandBuffer, static_cast<float>(Time::deltaTime()));
+            }
+
             shadowPass.record(
                 commandBuffer, lightSpaceMatrix(), vertexBuffer.handle(),
                 shadowInstanceBuffers[currentFrame].handle(), indexBuffer.handle(),
@@ -1332,7 +1398,20 @@ namespace {
                 shadowPass.descriptorSet(currentFrame), vertexBuffer.handle(),
                 instanceBuffers[currentFrame].handle(), indexBuffer.handle());
             forwardPass.draw(commandBuffer, indirectDraws[currentFrame]);
+            // Fill the background before drawing particles. Otherwise the
+            // skybox can overwrite transparent particle fragments in the sky.
             skyPass.record(commandBuffer, currentFrame);
+            if (particleSystem && camera) {
+                const Particles::ParticleFrameData particleFrame{
+                    camera->projectionMatrix() * camera->viewMatrix(),
+                    camera->right(),
+                    0.0f,
+                    camera->up(),
+                    0.0f,
+                };
+                particleSystem->recordRender(commandBuffer, particleFrame,
+                                             particlePipeline.handle(), particlePipeline.layout());
+            }
             forwardPass.end(commandBuffer);
 
             VkImageMemoryBarrier2 depthReady{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2};
@@ -1348,7 +1427,10 @@ namespace {
             depthDependency.imageMemoryBarrierCount = 1;
             depthDependency.pImageMemoryBarriers = &depthReady;
             vkCmdPipelineBarrier2(commandBuffer, &depthDependency);
-            hiZPass.record(commandBuffer, hiZBuffer, hiZValid);
+            // The first-frame initialization above establishes a valid image
+            // layout, so HiZPass must transition from SHADER_READ_ONLY rather
+            // than from UNDEFINED when it builds the first hierarchy.
+            hiZPass.record(commandBuffer, hiZBuffer, true);
             hiZValid = true;
 
             tonemapPass.record(commandBuffer, imageIndex, swapchain.extent());
@@ -1483,6 +1565,14 @@ namespace {
             vkResetCommandBuffer(commandBuffers[currentFrame], 0);
             updateUniformBuffer(currentFrame);
             updateRenderableBuffers();
+            if (particleSystem) {
+                // ParticleSystem currently owns one host-visible particle
+                // buffer. Wait until all previous frames have finished before
+                // the CPU overwrites it; otherwise the GPU can observe a
+                // partially-written particle (including a black color).
+                vkDeviceWaitIdle(device);
+                particleSystem->update(static_cast<float>(Time::deltaTime()));
+            }
             updateCullingUniformBuffer(currentFrame);
             updateShadowCullingUniformBuffer(currentFrame);
             recordCommandBuffer(commandBuffers[currentFrame], imageIndex);
@@ -1589,6 +1679,8 @@ namespace {
                 cleanupSwapChain();
 
                 skyPass.destroy();
+                particlePipeline.destroy();
+                particleSystem.reset();
                 forwardPass.destroy();
                 shadowPass.destroy();
                 destroyCullingResources();

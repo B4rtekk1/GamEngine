@@ -12,7 +12,7 @@
 #include <stdexcept>
 #include <string_view>
 
-namespace Engine::Math {
+namespace Engine {
     /**
      * @brief Represents an RGBA color using normalized floating-point channels.
      *
@@ -295,5 +295,10 @@ namespace Engine::Math {
      */
     [[nodiscard]] constexpr Color operator*(float scalar, const Color& color) noexcept {
         return color * scalar;
+    }
+
+    // Backwards-compatible namespace used by the renderer and scene APIs.
+    namespace Math {
+        using Color = ::Engine::Color;
     }
 }

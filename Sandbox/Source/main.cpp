@@ -8,8 +8,12 @@
 
 int main(int argc, char** argv) {
     try {
-        const bool treeScene = argc > 1 && std::string_view{argv[1]} == "--tree";
-        Engine::Scene scene(treeScene ? Engine::SceneType::Tree : Engine::SceneType::Cubes);
+        const std::string_view argument = argc > 1 ? std::string_view{argv[1]} : "";
+        const Engine::SceneType sceneType = argument == "--tree"
+            ? Engine::SceneType::Tree
+            : argument == "--particles" ? Engine::SceneType::Particles
+            : Engine::SceneType::Cubes;
+        Engine::Scene scene(sceneType);
         Engine::Renderer renderer;
         renderer.run(scene);
     } catch (const std::exception& exception) {

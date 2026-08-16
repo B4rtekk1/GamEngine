@@ -12,6 +12,7 @@ namespace Assets { class AssetManager; }
 
 struct GraphicsPipelineOptions {
     VkFormat colorFormat = VK_FORMAT_UNDEFINED;
+    VkRenderPass existingRenderPass = VK_NULL_HANDLE;
     VkFormat depthFormat = VK_FORMAT_UNDEFINED;
     VkSampleCountFlagBits samples = VK_SAMPLE_COUNT_1_BIT;
     VkAttachmentLoadOp colorLoadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
@@ -69,6 +70,7 @@ private:
     VkRenderPass renderPass_ = VK_NULL_HANDLE;
     VkPipelineLayout layout_ = VK_NULL_HANDLE;
     VkPipeline pipeline_ = VK_NULL_HANDLE;
+    bool ownsRenderPass_ = false;
 
     void createRenderPass(const GraphicsPipelineOptions& options);
     void createPipelineLayout(const GraphicsPipelineOptions& options);
