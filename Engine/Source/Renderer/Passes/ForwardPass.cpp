@@ -6,10 +6,10 @@
 
 namespace Engine {
 
-void ForwardPass::create(const VkDevice device, const VkFormat colorFormat,
+void ForwardPass::create(VkDevice device, const VkFormat colorFormat,
                          const VkFormat depthFormat,
                          const VkSampleCountFlagBits samples,
-                         const VkDescriptorSetLayout sceneLayout,
+                         VkDescriptorSetLayout sceneLayout,
                          Assets::AssetManager& assets) {
     GraphicsPipelineOptions options{};
     options.colorFormat = colorFormat;
@@ -51,11 +51,11 @@ void ForwardPass::destroy() noexcept {
     pipeline_.destroy();
 }
 
-void ForwardPass::begin(const VkCommandBuffer commandBuffer,
-                        const VkFramebuffer framebuffer, const VkExtent2D extent,
-                        const VkDescriptorSet sceneDescriptorSet,
-                        const VkBuffer vertexBuffer, const VkBuffer instanceBuffer,
-                        const VkBuffer indexBuffer) const {
+void ForwardPass::begin(VkCommandBuffer commandBuffer,
+                        VkFramebuffer framebuffer, const VkExtent2D extent,
+                        VkDescriptorSet sceneDescriptorSet,
+                        VkBuffer vertexBuffer, VkBuffer instanceBuffer,
+                        VkBuffer indexBuffer) const {
     VkRenderPassBeginInfo passInfo{VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO};
     passInfo.renderPass = pipeline_.renderPass();
     passInfo.framebuffer = framebuffer;
@@ -81,14 +81,14 @@ void ForwardPass::begin(const VkCommandBuffer commandBuffer,
     vkCmdSetScissor(commandBuffer, 0, 1, &scissor);
 }
 
-void ForwardPass::draw(const VkCommandBuffer commandBuffer,
-                       const Culling::IndexedIndirectDrawCount& indirectDraw) const {
+void ForwardPass::draw(VkCommandBuffer commandBuffer,
+                       const Culling::IndexedIndirectDrawCount& indirectDraw) {
     if (indirectDraw.valid()) {
         indirectDraw.record(commandBuffer);
     }
 }
 
-void ForwardPass::end(const VkCommandBuffer commandBuffer) const {
+void ForwardPass::end(VkCommandBuffer commandBuffer) {
     vkCmdEndRenderPass(commandBuffer);
 }
 

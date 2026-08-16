@@ -24,9 +24,11 @@ public:
                VkExtent2D extent, VkDescriptorSet sceneDescriptorSet,
                VkBuffer vertexBuffer, VkBuffer instanceBuffer,
                VkBuffer indexBuffer) const;
-    void draw(VkCommandBuffer commandBuffer,
-              const Culling::IndexedIndirectDrawCount& indirectDraw) const;
-    void end(VkCommandBuffer commandBuffer) const;
+
+    static void draw(VkCommandBuffer commandBuffer,
+                     const Culling::IndexedIndirectDrawCount& indirectDraw);
+
+    static void end(VkCommandBuffer commandBuffer);
 
     [[nodiscard]] VkRenderPass renderPass() const noexcept {
         return pipeline_.renderPass();

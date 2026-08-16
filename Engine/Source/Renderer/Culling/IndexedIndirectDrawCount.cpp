@@ -5,8 +5,8 @@
 namespace Engine::Culling {
 
 void IndexedIndirectDrawCount::create(
-    const VkBuffer commandBuffer,
-    const VkBuffer countBuffer,
+    VkBuffer commandBuffer,
+    VkBuffer countBuffer,
     const std::uint32_t maxDrawCount,
     const VkDeviceSize commandOffset,
     const VkDeviceSize countOffset,
@@ -41,7 +41,7 @@ void IndexedIndirectDrawCount::destroy() noexcept {
     stride_ = sizeof(VkDrawIndexedIndirectCommand);
 }
 
-void IndexedIndirectDrawCount::record(const VkCommandBuffer commandBuffer) const {
+void IndexedIndirectDrawCount::record(VkCommandBuffer commandBuffer) const {
     if (commandBuffer == VK_NULL_HANDLE) {
         throw std::invalid_argument("Command buffer cannot be null");
     }

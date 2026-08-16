@@ -22,7 +22,7 @@ ShadowPass::~ShadowPass() {
     destroy();
 }
 
-void ShadowPass::create(const VkPhysicalDevice physicalDevice, const VkDevice device,
+void ShadowPass::create(VkPhysicalDevice physicalDevice, VkDevice device,
                         const std::vector<VkBuffer>& uniformBuffers,
                         const std::vector<VkBuffer>& materialBuffers,
                         const std::vector<VkDescriptorImageInfo>& materialTextures,
