@@ -33,7 +33,8 @@ namespace Engine {
         GameObject(GameObject&& other) noexcept
             : m_registry(other.m_registry),
               m_entity(std::exchange(other.m_entity, NullEntity)),
-              m_spawned(std::exchange(other.m_spawned, false)) {
+              m_spawned(std::exchange(other.m_spawned, false)),
+              m_isClone(std::exchange(other.m_isClone, false)) {
         }
 
         GameObject& operator=(GameObject&& other) noexcept {
@@ -41,16 +42,23 @@ namespace Engine {
                 return *this;
             }
 
+            if (m_isClone) {
+                OnCloneDestroy();
+            }
             releaseEntity();
             m_registry = other.m_registry;
             m_entity = std::exchange(other.m_entity, NullEntity);
             m_spawned = std::exchange(other.m_spawned, false);
+            m_isClone = std::exchange(other.m_isClone, false);
             return *this;
         }
 
         virtual ~GameObject() {
             // Destruction from the C++ destructor does not invoke OnDestroy;
             // explicit destroy() is the lifecycle-aware operation.
+            if (m_isClone) {
+                GameObject::OnCloneDestroy();
+            }
             releaseEntity();
         }
 
@@ -75,6 +83,9 @@ namespace Engine {
             }
 
             OnDestroy();
+            if (m_isClone) {
+                OnCloneDestroy();
+            }
             releaseEntity();
         }
 
@@ -85,6 +96,29 @@ namespace Engine {
         /** @brief Returns this object's entity identifier. */
         [[nodiscard]] Entity entity() const noexcept {
             return m_entity;
+        }
+
+        /**
+         * @brief Creates an independent GameObject with copied components.
+         *
+         * The clone uses the same Registry and receives copies of every
+         * component attached to this object. Mesh resources remain shared via
+         * their std::shared_ptr, while per-object state is copied.
+         * An unspawned object produces another unspawned object.
+         */
+        [[nodiscard]] GameObject clone() const {
+            GameObject result(*m_registry);
+            if (!isSpawned()) {
+                return result;
+            }
+
+            result.m_entity = m_registry->clone(m_entity);
+            result.m_spawned = result.m_entity != NullEntity;
+            result.m_isClone = result.m_spawned;
+            if (result.m_isClone) {
+                result.OnClone();
+            }
+            return result;
         }
 
         /** @brief Returns the registry containing this object's entity. */
@@ -120,7 +154,7 @@ namespace Engine {
         }
 
         template<typename T>
-        const T& get() const {
+        [[nodiscard]] const T& get() const {
             assert(isSpawned() && "Cannot get a component from an unspawned GameObject");
             return m_registry->get<T>(m_entity);
         }
@@ -149,6 +183,12 @@ namespace Engine {
         virtual void OnSpawn() {}
         virtual void OnDestroy() {}
 
+        /** @brief Called on the newly created clone after its components copy. */
+        virtual void OnClone() {}
+
+        /** @brief Called when a cloned object is being destroyed. */
+        virtual void OnCloneDestroy() {}
+
     private:
         void releaseEntity() noexcept {
             if (m_spawned && m_registry->valid(m_entity)) {
@@ -156,11 +196,13 @@ namespace Engine {
             }
             m_entity = NullEntity;
             m_spawned = false;
+            m_isClone = false;
         }
 
         Registry* m_registry;
         Entity m_entity{NullEntity};
         bool m_spawned{false};
+        bool m_isClone{false};
     };
 
 }

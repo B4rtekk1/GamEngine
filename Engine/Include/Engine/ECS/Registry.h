@@ -70,6 +70,33 @@ public:
     }
 
     /**
+     * @brief Creates an entity with a copy of all components from @p source.
+     *
+     * Component pools are traversed once and components are copied directly
+     * into their dense storage. Shared resources, such as mesh data, retain
+     * their normal copy semantics (and therefore remain shared).
+     *
+     * @param source Entity to copy.
+     * @return A new entity, or @ref NullEntity when @p source is invalid.
+     */
+    [[nodiscard]] Entity clone(Entity source) {
+        if (!valid(source)) {
+            return NullEntity;
+        }
+
+        const Entity target = create();
+        try {
+            for (auto& pool : m_componentPools | std::views::values) {
+                pool->clone(source, target);
+            }
+        } catch (...) {
+            destroy(target);
+            throw;
+        }
+        return target;
+    }
+
+    /**
      * @brief Checks whether an entity is currently alive.
      *
      * @param entity Entity identifier to validate.

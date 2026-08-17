@@ -1,4 +1,5 @@
 #include <Engine/ECS/Registry.h>
+#include <Engine/ECS/GameObject.h>
 #include <Engine/ECS/Components/MeshRendererComponent.h>
 #include <Engine/Renderer/Geometry/Cube.h>
 
@@ -11,6 +12,10 @@ struct Common {
 };
 
 struct Rare {
+    int value = 0;
+};
+
+struct CloneOnly {
     int value = 0;
 };
 }
@@ -74,5 +79,31 @@ int main()
             ++constMatches;
         }
     });
-    return constMatches == 1 ? 0 : 3;
+    if (constMatches != 1) {
+        return 3;
+    }
+
+    Engine::GameObject source(registry);
+    source.spawn();
+    source.transform().position.setX(12.0f);
+    source.meshRenderer().mesh = std::make_shared<Engine::Mesh>(Engine::Cube::createMesh());
+    source.add<CloneOnly>(73);
+
+    auto copy = source.clone();
+    if (!copy.isSpawned() || copy.entity() == source.entity() ||
+        registry.size() != 1'004 || !copy.has<CloneOnly>() ||
+        copy.get<CloneOnly>().value != 73 ||
+        copy.transform().position.x() != 12.0f ||
+        copy.meshRenderer().mesh != source.meshRenderer().mesh) {
+        return 5;
+    }
+
+    copy.transform().position.setX(99.0f);
+    copy.get<CloneOnly>().value = 11;
+    if (source.transform().position.x() != 12.0f ||
+        source.get<CloneOnly>().value != 73) {
+        return 6;
+    }
+
+    return 0;
 }

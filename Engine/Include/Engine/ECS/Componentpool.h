@@ -32,6 +32,14 @@ public:
     virtual void remove(Entity entity) = 0;
 
     /**
+     * @brief Copies a component from one entity to another in this pool.
+     *
+     * The operation is a no-op when the source entity does not own a
+     * component from this pool.
+     */
+    virtual void clone(Entity source, Entity target) = 0;
+
+    /**
      * @brief Checks whether an entity owns a component in this pool.
      *
      * @param entity Entity to check.
@@ -109,6 +117,12 @@ public:
         m_components.pop_back();
         m_entities.pop_back();
         m_sparse[entityIndex(entity)] = InvalidIndex;
+    }
+
+    void clone(Entity source, Entity target) override {
+        if (has(source)) {
+            add(target, get(source));
+        }
     }
 
     /**
