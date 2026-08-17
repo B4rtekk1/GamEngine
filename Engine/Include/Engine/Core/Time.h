@@ -28,6 +28,13 @@ public:
     /** @brief Returns the configured fixed simulation step, in seconds. */
     static double fixedDeltaTime();
 
+    /**
+     * @brief Consumes one fixed simulation step when enough time has accumulated.
+     *
+     * Run one physics update for every true result, using fixedDeltaTime().
+     */
+    static bool consumeFixedStep();
+
     /** @brief Sets the multiplier applied to unscaled frame time. */
     static  void setTimeScale(double scale);
     /** @brief Returns the current time-scale multiplier. */
@@ -43,6 +50,7 @@ private:
 
     static double s_timeScale;
     static double s_fixedDeltaTime;
+    static double s_fixedAccumulator;
 
     static std::chrono::steady_clock::time_point s_lastFrame;
 };

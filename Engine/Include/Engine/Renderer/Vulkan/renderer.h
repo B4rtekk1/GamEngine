@@ -2,6 +2,10 @@
 
 #include "Engine/Assets/AssetManager.h"
 #include "Engine/Renderer/Passes/ForwardPass.h"
+#include "Engine/Renderer/Passes/SkyPass.h"
+#include "Engine/Renderer/Passes/TonemapPass.h"
+#include "Engine/Renderer/Vulkan/graphics_pipeline.h"
+#include "Engine/UI/CanvasRenderer.h"
 
 namespace Engine {
 
@@ -47,6 +51,14 @@ private:
     Assets::AssetManager assetManager_{};
     // The forward pipeline is renderer infrastructure shared by scenes.
     ForwardPass forwardPass_{};
+    // The sky pass is also renderer infrastructure, not scene ECS state.
+    SkyPass skyPass_{};
+    // Tonemapping presents the renderer output and is shared by scenes.
+    TonemapPass tonemapPass_{};
+    // The particle pipeline is reusable GPU infrastructure; simulation data is scene-owned.
+    GraphicsPipeline particlePipeline_{};
+    // UI rendering infrastructure is shared; each scene supplies its Canvas.
+    UI::CanvasRenderer canvasRenderer_{};
 };
 
 } // namespace Engine

@@ -101,12 +101,20 @@ namespace {
         explicit RenderApp(Scene& scene,
                            const RenderOptimizationFeatures& optimizationFeatures,
                            Assets::AssetManager& assetManager,
-                           ForwardPass& forwardPass)
+                           ForwardPass& forwardPass,
+                           SkyPass& skyPass,
+                           TonemapPass& tonemapPass,
+                           GraphicsPipeline& particlePipeline,
+                           UI::CanvasRenderer& canvasRenderer)
             : scene(scene),
               registry(scene.registry),
               optimizationFeatures(optimizationFeatures),
               assetManager(assetManager),
-              forwardPass(forwardPass) {}
+              forwardPass(forwardPass),
+              skyPass(skyPass),
+              tonemapPass(tonemapPass),
+              particlePipeline(particlePipeline),
+              canvasRenderer(canvasRenderer) {}
 
         ~RenderApp() {
             cleanup();
@@ -136,11 +144,11 @@ namespace {
         HdrBuffer hdrBuffer;
 
         ForwardPass& forwardPass;
-        GraphicsPipeline particlePipeline;
+        GraphicsPipeline& particlePipeline;
         std::unique_ptr<Particles::ParticleSystem> particleSystem;
-        SkyPass skyPass;
-        TonemapPass tonemapPass;
-        UI::CanvasRenderer canvasRenderer;
+        SkyPass& skyPass;
+        TonemapPass& tonemapPass;
+        UI::CanvasRenderer& canvasRenderer;
         Texture2D fpsFontTexture;
         Texture2D fallbackMaterialTexture;
         std::vector<Texture2D> materialTextures;
@@ -1857,7 +1865,8 @@ namespace {
 } // namespace
 
 void Renderer::run(Scene& scene) {
-    RenderApp app{scene, optimizationFeatures_, assetManager_, forwardPass_};
+    RenderApp app{scene, optimizationFeatures_, assetManager_, forwardPass_, skyPass_,
+                  tonemapPass_, particlePipeline_, canvasRenderer_};
     app.run();
 }
 
