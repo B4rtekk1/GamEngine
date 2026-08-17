@@ -9,6 +9,27 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 find_package(Vulkan 1.4 REQUIRED)
 set(SDL3_DIR "$ENV{VULKAN_SDK}/cmake")
 find_package(SDL3 CONFIG REQUIRED)
+
+include(FetchContent)
+FetchContent_Declare(
+        DearImGui
+        GIT_REPOSITORY https://github.com/ocornut/imgui.git
+        GIT_TAG docking
+        GIT_SHALLOW TRUE)
+FetchContent_MakeAvailable(DearImGui)
+
+add_library(DearImGui STATIC
+        ${dearimgui_SOURCE_DIR}/imgui.cpp
+        ${dearimgui_SOURCE_DIR}/imgui_demo.cpp
+        ${dearimgui_SOURCE_DIR}/imgui_draw.cpp
+        ${dearimgui_SOURCE_DIR}/imgui_tables.cpp
+        ${dearimgui_SOURCE_DIR}/imgui_widgets.cpp
+        ${dearimgui_SOURCE_DIR}/backends/imgui_impl_sdl3.cpp
+        ${dearimgui_SOURCE_DIR}/backends/imgui_impl_sdlrenderer3.cpp)
+target_include_directories(DearImGui PUBLIC
+        ${dearimgui_SOURCE_DIR}
+        ${dearimgui_SOURCE_DIR}/backends)
+target_link_libraries(DearImGui PUBLIC SDL3::SDL3)
 find_path(GLM_INCLUDE_DIR NAMES glm/glm.hpp HINTS "$ENV{VULKAN_SDK}/Include" REQUIRED)
 find_path(VMA_INCLUDE_DIR NAMES vk_mem_alloc.h HINTS "$ENV{VULKAN_SDK}/Include/vma" REQUIRED)
 
@@ -69,6 +90,10 @@ target_include_directories(Engine
 
 add_executable(GamEngine Sandbox/Source/main.cpp)
 target_link_libraries(GamEngine PRIVATE Engine)
+
+add_executable(Editor
+        Editor/Source/main.cpp)
+target_link_libraries(Editor PRIVATE DearImGui SDL3::SDL3)
 
 find_program(GLSLANG_VALIDATOR NAMES glslangValidator)
 find_program(GLSLC NAMES glslc)
