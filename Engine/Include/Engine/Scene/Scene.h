@@ -9,6 +9,7 @@
 #include "Engine/ECS/Registry.h"
 #include "Engine/ECS/Components/CameraComponent.h"
 #include "Engine/Scene/Components/LightComponent.h"
+#include "Engine/Scene/SceneBuilder.h"
 #include "Engine/UI/Canvas.h"
 #include "Engine/UI/PanelElement.h"
 #include "Engine/UI/TextElement.h"
@@ -63,6 +64,75 @@ private:
     std::shared_ptr<const Mesh> treeMesh;
     UI::TextElement* fpsTextElement = nullptr;
 
+    void configureParticleScene() noexcept {
+        particleEmitter.position = {0.0f, 0.25f, 0.0f};
+        particleEmitter.minVelocity = {-0.8f, 5.5f, -0.8f};
+        particleEmitter.maxVelocity = {0.8f, 9.0f, 0.8f};
+        particleEmitter.color = {1.0f, 0.05f, 0.02f, 1.0f};
+        particleEmitter.minLifeTime = 1.2f;
+        particleEmitter.maxLifeTime = 3.4f;
+        particleEmitter.minSize = 0.06f;
+        particleEmitter.maxSize = 0.16f;
+        particleEmitter.spawnRate = 900.0f;
+    }
+
+    void buildTreeScene(SceneBuilder& builder) {
+        tree = builder.createMeshEntity(
+            treeMesh,
+            Transform{.position = {3.0f, 0.0f, 1.0f}},
+            PBRMaterial{.baseColor = {0.20f, 0.48f, 0.08f},
+                        .metallic = 0.0f,
+                        .roughness = 0.82f});
+
+        static_cast<void>(builder.createLight(
+            Transform{.rotation = {35.0f, -35.0f, 0.0f}},
+            LightComponent{
+                .type = LightType::Directional,
+                .color = Math::Color::white(),
+                .intensity = 4.0f,
+                .enabled = true,
+                .castShadows = true,
+            }));
+    }
+
+    void buildCubeScene(SceneBuilder& builder) {
+        constexpr float halfGridWidth = (CubesPerAxis - 1) * CubeSpacing * 0.5f;
+
+        for (std::size_t layerBlock = 0; layerBlock < CubeBatchesPerAxis; ++layerBlock) {
+            for (std::size_t rowBlock = 0; rowBlock < CubeBatchesPerAxis; ++rowBlock) {
+                for (std::size_t columnBlock = 0; columnBlock < CubeBatchesPerAxis; ++columnBlock) {
+                    const auto cullingBatch = static_cast<std::uint32_t>(
+                        1 + (layerBlock * CubeBatchesPerAxis + rowBlock) * CubeBatchesPerAxis + columnBlock);
+                    for (std::size_t layer = layerBlock * CubesPerBatchAxis;
+                         layer < (layerBlock + 1) * CubesPerBatchAxis; ++layer) {
+                        for (std::size_t row = rowBlock * CubesPerBatchAxis;
+                             row < (rowBlock + 1) * CubesPerBatchAxis; ++row) {
+                            for (std::size_t column = columnBlock * CubesPerBatchAxis;
+                                 column < (columnBlock + 1) * CubesPerBatchAxis; ++column) {
+                                const std::size_t index =
+                                    (layer * CubesPerAxis + row) * CubesPerAxis + column;
+                                cubes[index] = builder.createMeshEntity(
+                                    cubeMesh,
+                                    Transform{.position = {
+                                        static_cast<float>(column) * CubeSpacing - halfGridWidth,
+                                        static_cast<float>(layer) * CubeSpacing + 0.5f,
+                                        static_cast<float>(row) * CubeSpacing - halfGridWidth,
+                                    }},
+                                    PBRMaterial{
+                                        .baseColor = {0.72f, 0.72f, 0.72f},
+                                        .metallic = 0.05f,
+                                        .roughness = 0.62f,
+                                    },
+                                    false,
+                                    cullingBatch);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
 public:
 
     explicit Scene(const SceneType sceneType = SceneType::Cubes) {
@@ -94,61 +164,25 @@ public:
             treeMesh = loadedTree.shared();
         }
 
-        if (particleScene) {
-            particleEmitter.position = {0.0f, 0.25f, 0.0f};
-            particleEmitter.minVelocity = {-0.8f, 5.5f, -0.8f};
-            particleEmitter.maxVelocity = {0.8f, 9.0f, 0.8f};
-            particleEmitter.color = {1.0f, 0.05f, 0.02f, 1.0f};
-            particleEmitter.minLifeTime = 1.2f;
-            particleEmitter.maxLifeTime = 3.4f;
-            particleEmitter.minSize = 0.06f;
-            particleEmitter.maxSize = 0.16f;
-            particleEmitter.spawnRate = 900.0f;
-        }
+        if (particleScene) configureParticleScene();
 
-        plane = registry.create();
-        registry.add<Transform>(plane, Transform{
-            .scale = treeScene ? Vec3{10.0f, 1.0f, 10.0f}
-                               : Vec3{GridHalfExtent * 2.0f + 4.0f, 1.0f,
-                                      GridHalfExtent * 2.0f + 4.0f},
-        });
-        MeshRenderer planeRenderer{.mesh = planeMesh};
+        SceneBuilder builder{registry};
+        plane = builder.createMeshEntity(
+            planeMesh,
+            Transform{.scale = treeScene ? Vec3{10.0f, 1.0f, 10.0f}
+                                         : Vec3{GridHalfExtent * 2.0f + 4.0f, 1.0f,
+                                                GridHalfExtent * 2.0f + 4.0f}},
+            treeScene ? PBRMaterial{.baseColor = {0.24f, 0.16f, 0.08f},
+                                    .metallic = 0.0f,
+                                    .roughness = 0.9f}
+                      : PBRMaterial{},
+            false);
         // The ground receives shadows but never needs to cast one itself.
         // The default cube scene has no shadow casters, so its fragment shader
         // can skip the expensive shadow-map sampling path.
-        planeRenderer.castShadow = false;
-        if (treeScene) {
-            planeRenderer.material = {.baseColor = {0.24f, 0.16f, 0.08f},
-                                       .metallic = 0.0f,
-                                       .roughness = 0.9f};
-        }
-        registry.add<MeshRenderer>(plane, planeRenderer);
 
-        if (treeScene) {
-            tree = registry.create();
-            registry.add<Transform>(tree, Transform{.position = {3.0f, 0.0f, 1.0f}});
-            registry.add<MeshRenderer>(tree, MeshRenderer{
-                .mesh = treeMesh,
-                .material = {.baseColor = {0.20f, 0.48f, 0.08f},
-                             .metallic = 0.0f,
-                             .roughness = 0.82f},
-                .castShadow = true,
-            });
+        if (treeScene) buildTreeScene(builder);
 
-            const Entity sun = registry.create();
-            registry.add<Transform>(sun, Transform{
-                .rotation = {35.0f, -35.0f, 0.0f},
-            });
-            registry.add<LightComponent>(sun, LightComponent{
-                .type = LightType::Directional,
-                .color = Math::Color::white(),
-                .intensity = 4.0f,
-                .enabled = true,
-                .castShadows = true,
-            });
-        }
-
-        camera = registry.create();
         const float cameraTargetY = treeScene ? 4.2f : particleScene ? 3.0f
                                               : (CubesPerAxis - 1) * CubeSpacing * 0.5f + 0.5f;
         const Vec3 cameraPosition = treeScene
@@ -159,20 +193,21 @@ public:
                    GridHalfExtent * 3.9f};
         const Vec3 cameraDirection = Vec3{0.0f, cameraTargetY, 0.0f} - cameraPosition;
         const float horizontalDistance = Vec2{cameraDirection.x(), cameraDirection.z()}.length();
-        registry.add<Transform>(camera, Transform{
-            .position = cameraPosition,
-            .rotation = {
+        camera = builder.createCamera(
+            Transform{
+                .position = cameraPosition,
+                .rotation = {
                 Degrees{Radians{std::atan2(cameraDirection.y(), horizontalDistance)}}.value(),
                 Degrees{Radians{std::atan2(cameraDirection.z(), cameraDirection.x())}}.value(),
                 0.0f,
+                },
             },
-        });
-        registry.add<CameraComponent>(camera, CameraComponent{
+            CameraComponent{
             .fieldOfView = 45.0f,
             .nearClip = 0.1f,
             .farClip = 100'000.0f,
             .aspectRatio = 800.0f / 600.0f,
-        });
+            });
 
         const std::array<std::filesystem::path, 5> fontCandidates{
             std::filesystem::path{"C:/Windows/Fonts/segoeui.ttf"},
@@ -225,50 +260,8 @@ public:
             return;
         }
 
-        constexpr float halfGridWidth = (CubesPerAxis - 1) * CubeSpacing * 0.5f;
-
-        // Create spatially adjacent cubes consecutively. The renderer keeps
-        // each block in its own indirect draw, allowing GPU frustum culling
-        // to reject whole blocks instead of one giant 27k-instance batch.
-        for (std::size_t layerBlock = 0; layerBlock < CubeBatchesPerAxis; ++layerBlock) {
-            for (std::size_t rowBlock = 0; rowBlock < CubeBatchesPerAxis; ++rowBlock) {
-                for (std::size_t columnBlock = 0; columnBlock < CubeBatchesPerAxis; ++columnBlock) {
-                    const auto cullingBatch = static_cast<std::uint32_t>(
-                        1 + (layerBlock * CubeBatchesPerAxis + rowBlock) * CubeBatchesPerAxis + columnBlock);
-                    for (std::size_t layer = layerBlock * CubesPerBatchAxis;
-                         layer < (layerBlock + 1) * CubesPerBatchAxis; ++layer) {
-                        for (std::size_t row = rowBlock * CubesPerBatchAxis;
-                             row < (rowBlock + 1) * CubesPerBatchAxis; ++row) {
-                            for (std::size_t column = columnBlock * CubesPerBatchAxis;
-                                 column < (columnBlock + 1) * CubesPerBatchAxis; ++column) {
-                    const std::size_t index =
-                        (layer * CubesPerAxis + row) * CubesPerAxis + column;
-                    const Entity cube = registry.create();
-                    cubes[index] = cube;
-
-                    registry.add<Transform>(cube, Transform{
-                        .position = {
-                            static_cast<float>(column) * CubeSpacing - halfGridWidth,
-                            static_cast<float>(layer) * CubeSpacing + 0.5f,
-                            static_cast<float>(row) * CubeSpacing - halfGridWidth,
-                        },
-                    });
-                    registry.add<MeshRenderer>(cube, MeshRenderer{
-                        .mesh = cubeMesh,
-                        .material = {
-                            .baseColor = {0.72f, 0.72f, 0.72f},
-                            .metallic = 0.05f,
-                            .roughness = 0.62f,
-                        },
-                        .castShadow = false,
-                        .cullingBatch = cullingBatch,
-                    });
-                            }
-                        }
-                    }
-                }
-            }
-        }
+        // Cube benchmark geometry is assembled by its dedicated preset.
+        buildCubeScene(builder);
     }
 
     [[nodiscard]] UI::Canvas& uiCanvas() noexcept { return canvas; }
