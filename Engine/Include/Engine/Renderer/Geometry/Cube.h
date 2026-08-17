@@ -1,11 +1,17 @@
 #pragma once
 
-#include "Engine/Renderer/Geometry/Mesh.h"
+#include "Engine/ECS/GameObject.h"
 
 namespace Engine {
 
-class Cube final {
+class Cube final : public GameObject {
 public:
+    /** @brief Creates and spawns a cube-backed game object. */
+    explicit Cube(Registry& registry)
+        : GameObject(registry) {
+        spawn();
+    }
+
     [[nodiscard]] static Mesh createMesh() {
         return {
             .vertices = {
@@ -22,6 +28,11 @@ public:
                 16, 17, 18, 18, 19, 16, 20, 21, 22, 22, 23, 20,
             },
         };
+    }
+
+protected:
+    void OnSpawn() override {
+        meshRenderer().mesh = std::make_shared<Mesh>(createMesh());
     }
 };
 
