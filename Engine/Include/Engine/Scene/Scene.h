@@ -35,6 +35,12 @@ enum class SceneType {
 class Scene final {
 public:
     static constexpr std::size_t CubesPerAxis = 30;
+    // The default camera sees most of the grid. Splitting it into many
+    // culling batches makes the GPU run many more AABB tests without
+    // meaningfully reducing the rendered geometry. Keep one batch here;
+    // smaller batches are useful only for heavily occluded views.
+    static constexpr std::size_t CubesPerBatchAxis = CubesPerAxis;
+    static constexpr std::size_t CubeBatchesPerAxis = CubesPerAxis / CubesPerBatchAxis;
     static constexpr std::size_t CubeCount = CubesPerAxis * CubesPerAxis * CubesPerAxis;
     static constexpr float CubeSpacing = 1.25f;
     static constexpr float GridHalfExtent =
@@ -107,11 +113,14 @@ public:
                                       GridHalfExtent * 2.0f + 4.0f},
         });
         MeshRenderer planeRenderer{.mesh = planeMesh};
+        // The ground receives shadows but never needs to cast one itself.
+        // The default cube scene has no shadow casters, so its fragment shader
+        // can skip the expensive shadow-map sampling path.
+        planeRenderer.castShadow = false;
         if (treeScene) {
             planeRenderer.material = {.baseColor = {0.24f, 0.16f, 0.08f},
                                        .metallic = 0.0f,
                                        .roughness = 0.9f};
-            planeRenderer.castShadow = false;
         }
         registry.add<MeshRenderer>(plane, planeRenderer);
 
@@ -218,9 +227,20 @@ public:
 
         constexpr float halfGridWidth = (CubesPerAxis - 1) * CubeSpacing * 0.5f;
 
-        for (std::size_t layer = 0; layer < CubesPerAxis; ++layer) {
-            for (std::size_t row = 0; row < CubesPerAxis; ++row) {
-                for (std::size_t column = 0; column < CubesPerAxis; ++column) {
+        // Create spatially adjacent cubes consecutively. The renderer keeps
+        // each block in its own indirect draw, allowing GPU frustum culling
+        // to reject whole blocks instead of one giant 27k-instance batch.
+        for (std::size_t layerBlock = 0; layerBlock < CubeBatchesPerAxis; ++layerBlock) {
+            for (std::size_t rowBlock = 0; rowBlock < CubeBatchesPerAxis; ++rowBlock) {
+                for (std::size_t columnBlock = 0; columnBlock < CubeBatchesPerAxis; ++columnBlock) {
+                    const auto cullingBatch = static_cast<std::uint32_t>(
+                        1 + (layerBlock * CubeBatchesPerAxis + rowBlock) * CubeBatchesPerAxis + columnBlock);
+                    for (std::size_t layer = layerBlock * CubesPerBatchAxis;
+                         layer < (layerBlock + 1) * CubesPerBatchAxis; ++layer) {
+                        for (std::size_t row = rowBlock * CubesPerBatchAxis;
+                             row < (rowBlock + 1) * CubesPerBatchAxis; ++row) {
+                            for (std::size_t column = columnBlock * CubesPerBatchAxis;
+                                 column < (columnBlock + 1) * CubesPerBatchAxis; ++column) {
                     const std::size_t index =
                         (layer * CubesPerAxis + row) * CubesPerAxis + column;
                     const Entity cube = registry.create();
@@ -241,7 +261,11 @@ public:
                             .roughness = 0.62f,
                         },
                         .castShadow = false,
+                        .cullingBatch = cullingBatch,
                     });
+                            }
+                        }
+                    }
                 }
             }
         }

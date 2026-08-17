@@ -26,6 +26,10 @@ struct MeshRendererComponent final {
     /// Whether this mesh contributes to the shadow map.
     bool castShadow{true};
 
+    /// Optional spatial batch identifier used by GPU culling. Objects with
+    /// the same mesh, shadow flag and identifier share one indirect draw.
+    uint32_t cullingBatch{0};
+
     /// Offset into the renderer's shared index buffer; assigned during upload.
     uint32_t firstIndex{0};
 

@@ -13,6 +13,7 @@ layout(binding = 0) uniform sampler2D shadowMap;
 layout(binding = 1) uniform FrameData {
     mat4 view; mat4 projection; mat4 lightSpace;
     vec4 cameraPosition; vec4 lightDirectionIntensity; vec4 lightColor;
+    uint shadowEnabled;
 } frame;
 struct MaterialData {
     vec4 baseColorMetallic;
@@ -100,7 +101,10 @@ void main() {
     float geometry = geometrySchlickGGX(nDotV, roughness) * geometrySchlickGGX(nDotL, roughness);
     vec3 specular = distributionGGX(n, h, roughness) * geometry * f / max(4.0 * nDotV * nDotL, 0.0001);
     vec3 diffuse = (vec3(1.0) - f) * (1.0 - metallic) * albedo / PI;
-    vec3 direct = (diffuse + specular) * frame.lightDirectionIntensity.w * frame.lightColor.rgb * nDotL * (1.0 - calculateShadow());
+    // The default 27k-cube stress scene has no shadow casters. Avoid the
+    // 3x3 PCF texture fetches for every shaded fragment in that case.
+    float shadow = frame.shadowEnabled != 0u ? calculateShadow() : 0.0;
+    vec3 direct = (diffuse + specular) * frame.lightDirectionIntensity.w * frame.lightColor.rgb * nDotL * (1.0 - shadow);
     vec3 color = vec3(0.035) * albedo * clamp(material.roughnessAmbientOcclusion.y, 0.0, 1.0) + direct;
     // Keep lighting in linear HDR space. Display mapping is performed once,
     // after the complete scene (including the skybox) has been rendered.

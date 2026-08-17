@@ -79,8 +79,9 @@ namespace {
         glm::vec4 cameraPosition;
         glm::vec4 lightDirectionIntensity;
         glm::vec4 lightColor;
+        std::uint32_t shadowEnabled{0};
         std::uint32_t materialSlots{1};
-        std::array<std::uint32_t, 3> materialSlotsPadding{};
+        std::array<std::uint32_t, 2> materialSlotsPadding{};
     };
 }
 
@@ -176,6 +177,8 @@ namespace {
         VkPipeline cullingPipeline = VK_NULL_HANDLE;
         std::vector<Culling::GPUObjectData> gpuObjects;
         bool hiZValid = false;
+        bool cameraMouseLookActive = false;
+        bool hasShadowCasters = false;
         struct RenderableRecord {
             Entity entity{NullEntity};
             AABB localBounds{};
@@ -596,15 +599,18 @@ namespace {
             struct BatchKey {
                 const Mesh* mesh;
                 bool castShadow;
+                uint32_t cullingBatch;
 
                 bool operator==(const BatchKey& other) const noexcept {
-                    return mesh == other.mesh && castShadow == other.castShadow;
+                    return mesh == other.mesh && castShadow == other.castShadow &&
+                           cullingBatch == other.cullingBatch;
                 }
             };
             struct BatchKeyHash {
                 std::size_t operator()(const BatchKey& key) const noexcept {
                     const auto meshHash = std::hash<const Mesh*>{}(key.mesh);
-                    return meshHash ^ (static_cast<std::size_t>(key.castShadow) +
+                    const auto batchHash = std::hash<uint32_t>{}(key.cullingBatch);
+                    return meshHash ^ (batchHash + static_cast<std::size_t>(key.castShadow) +
                                        0x9e3779b9u + (meshHash << 6u) + (meshHash >> 2u));
                 }
             };
@@ -707,7 +713,7 @@ namespace {
                     const AABB worldBounds =
                         localBounds.transformed(transform.matrix().native());
                     const bool castShadow = renderer.castShadow;
-                    const BatchKey batchKey{mesh, castShadow};
+                    const BatchKey batchKey{mesh, castShadow, renderer.cullingBatch};
                     const auto [batchIt, inserted] = optimizationFeatures.instancedRendering
                         ? batchIndices.try_emplace(batchKey, instanceBatches.size())
                         : std::pair{batchIndices.end(), true};
@@ -745,6 +751,14 @@ namespace {
 
             if (sceneMesh.empty()) {
                 throw std::runtime_error("Scene contains no renderable geometry");
+            }
+
+            hasShadowCasters = false;
+            for (const InstanceBatch& batch : instanceBatches) {
+                if (batch.castShadow) {
+                    hasShadowCasters = true;
+                    break;
+                }
             }
 
             const glm::vec3 center = (sceneMinimum + sceneMaximum) * 0.5f;
@@ -1343,6 +1357,7 @@ namespace {
                 glm::vec4{camera->position().native(), 1.0f},
                 glm::vec4{light.direction.native(), light.intensity},
                 glm::vec4{light.color.r(), light.color.g(), light.color.b(), 1.0f},
+                hasShadowCasters ? 1u : 0u,
                 materialSlots};
             uniformBuffers[frame].update(&data, sizeof(data));
         }
@@ -1553,6 +1568,80 @@ namespace {
 
         // ---------- MAIN LOOP ----------
 
+        void updateCameraInput() {
+            CameraComponent* activeCameraComponent = nullptr;
+            Transform* activeCameraTransform = nullptr;
+            registry.view<CameraComponent, Transform>(
+                [&](const Entity, CameraComponent& component, Transform& transform) {
+                    if (activeCameraComponent == nullptr && component.primary) {
+                        activeCameraComponent = &component;
+                        activeCameraTransform = &transform;
+                    }
+                });
+
+            if (activeCameraComponent == nullptr) {
+                if (cameraMouseLookActive) {
+                    SDLInput::setRelativeMouseMode(window, false);
+                    cameraMouseLookActive = false;
+                }
+                return;
+            }
+
+            // Do not call Registry::get here: its mutable overload advances the
+            // global scene revision. Camera movement changes only view uniforms,
+            // not any renderable instance data; advancing that revision made
+            // updateRenderableBuffers scan all 27,000 cubes every frame.
+            const CameraComponent& cameraComponent = *activeCameraComponent;
+            Transform& transform = *activeCameraTransform;
+            Camera controlledCamera(
+                Degrees{cameraComponent.fieldOfView}, cameraComponent.aspectRatio,
+                cameraComponent.nearClip, cameraComponent.farClip);
+            controlledCamera.setRotation(Degrees{transform.rotation.y()},
+                                          Degrees{transform.rotation.x()});
+
+            Vec3 movement{};
+            const Vec3 forward = controlledCamera.forward();
+            const Vec3 horizontalForward{forward.x(), 0.0f, forward.z()};
+            if (horizontalForward.length() > 0.0f) {
+                const Vec3 flatForward = horizontalForward.normalized();
+                if (Input::keyDown(KeyCode::W)) movement += flatForward;
+                if (Input::keyDown(KeyCode::S)) movement -= flatForward;
+            }
+            const Vec3 right = controlledCamera.right();
+            if (Input::keyDown(KeyCode::D)) movement += right;
+            if (Input::keyDown(KeyCode::A)) movement -= right;
+
+            constexpr float MOVE_SPEED = 10.0f;
+            if (movement.length() > 0.0f) {
+                transform.position += movement.normalized() *
+                    (MOVE_SPEED * static_cast<float>(Time::deltaTime()));
+            }
+
+            constexpr float ZOOM_SPEED = 2.0f;
+            const float wheel = Input::mouseWheel();
+            if (wheel != 0.0f) {
+                transform.position += controlledCamera.forward() * (wheel * ZOOM_SPEED);
+            }
+
+            constexpr float MOUSE_SENSITIVITY = 0.1f;
+            if (Input::mouseDown(MouseButton::Right)) {
+                if (!cameraMouseLookActive) {
+                    SDLInput::setRelativeMouseMode(window, true);
+                    cameraMouseLookActive = true;
+                }
+
+                const Vec2 mouseDelta = Input::mouseDelta();
+                transform.rotation.setY(transform.rotation.y() +
+                                        mouseDelta.x() * MOUSE_SENSITIVITY);
+                transform.rotation.setX(std::clamp(
+                    transform.rotation.x() - mouseDelta.y() * MOUSE_SENSITIVITY,
+                    -89.0f, 89.0f));
+            } else if (cameraMouseLookActive) {
+                SDLInput::setRelativeMouseMode(window, false);
+                cameraMouseLookActive = false;
+            }
+        }
+
         void drawFrame() {
             vkWaitForFences(device, 1, &inFlightFences[currentFrame], VK_TRUE, UINT64_MAX);
             uint32_t imageIndex;
@@ -1661,8 +1750,13 @@ namespace {
                 }
 
                 Time::update();
+                updateCameraInput();
                 updateFpsCounter();
                 drawFrame();
+            }
+            if (cameraMouseLookActive) {
+                SDLInput::setRelativeMouseMode(window, false);
+                cameraMouseLookActive = false;
             }
             vkDeviceWaitIdle(device);
         }

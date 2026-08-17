@@ -19,14 +19,8 @@ void ForwardPass::create(VkDevice device, const VkFormat colorFormat,
     options.vertexShader = "shaders/pbr.vert.spv";
     options.fragmentShader = "shaders/pbr.frag.spv";
     options.assetManager = &assets;
-    // One combined draw contains both opaque solids and glTF double-sided
-    // foliage cards. Per-material culling would require splitting the draw;
-    // keep both faces and let the shader flip only double-sided materials.
-    options.cullMode = VK_CULL_MODE_NONE;
-    // GLB may combine opaque and alpha-blended primitives in one mesh buffer.
-    // Opaque fragments still carry alpha 1, so enabling the standard blend state
-    // keeps them unchanged while allowing leaf cards to show through.
-    options.alphaBlendEnable = VK_TRUE;
+    options.cullMode = VK_CULL_MODE_BACK_BIT;
+    options.alphaBlendEnable = VK_FALSE;
     options.descriptorSetLayouts = {sceneLayout};
     options.vertexBindings = {
         {0, sizeof(Vertex), VK_VERTEX_INPUT_RATE_VERTEX},

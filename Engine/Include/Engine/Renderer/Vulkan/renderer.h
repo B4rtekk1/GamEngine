@@ -18,7 +18,7 @@ struct RenderOptimizationFeatures final {
     bool transformCaching = true;
     bool materialCaching = true;
     bool gpuCulling = true;
-    bool occlusionCulling = true;
+    bool occlusionCulling = false;
 };
 
 // Owns and runs the Vulkan rendering loop.
