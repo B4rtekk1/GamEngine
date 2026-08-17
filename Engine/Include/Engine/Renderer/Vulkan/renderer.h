@@ -1,5 +1,8 @@
 #pragma once
 
+#include "Engine/Assets/AssetManager.h"
+#include "Engine/Renderer/Passes/ForwardPass.h"
+
 namespace Engine {
 
 class Registry;
@@ -40,6 +43,10 @@ public:
 
 private:
     RenderOptimizationFeatures optimizationFeatures_{};
+    // Asset cache belongs to the renderer lifetime, not to one Scene.
+    Assets::AssetManager assetManager_{};
+    // The forward pipeline is renderer infrastructure shared by scenes.
+    ForwardPass forwardPass_{};
 };
 
 } // namespace Engine

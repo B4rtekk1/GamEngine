@@ -98,8 +98,15 @@ const std::vector<const char*> validationLayers = {
 namespace {
     class RenderApp {
     public:
-        explicit RenderApp(Scene& scene, const RenderOptimizationFeatures& optimizationFeatures)
-            : scene(scene), registry(scene.registry), optimizationFeatures(optimizationFeatures) {}
+        explicit RenderApp(Scene& scene,
+                           const RenderOptimizationFeatures& optimizationFeatures,
+                           Assets::AssetManager& assetManager,
+                           ForwardPass& forwardPass)
+            : scene(scene),
+              registry(scene.registry),
+              optimizationFeatures(optimizationFeatures),
+              assetManager(assetManager),
+              forwardPass(forwardPass) {}
 
         ~RenderApp() {
             cleanup();
@@ -128,7 +135,7 @@ namespace {
         MsaaResources msaa;
         HdrBuffer hdrBuffer;
 
-        ForwardPass forwardPass;
+        ForwardPass& forwardPass;
         GraphicsPipeline particlePipeline;
         std::unique_ptr<Particles::ParticleSystem> particleSystem;
         SkyPass skyPass;
@@ -144,7 +151,7 @@ namespace {
         Scene& scene;
         Registry& registry;
         const RenderOptimizationFeatures& optimizationFeatures;
-        Assets::AssetManager assetManager;
+        Assets::AssetManager& assetManager;
         std::optional<Camera> camera;
         Buffer vertexBuffer;
         Buffer indexBuffer;
@@ -1850,7 +1857,7 @@ namespace {
 } // namespace
 
 void Renderer::run(Scene& scene) {
-    RenderApp app{scene, optimizationFeatures_};
+    RenderApp app{scene, optimizationFeatures_, assetManager_, forwardPass_};
     app.run();
 }
 
