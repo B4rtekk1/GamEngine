@@ -1,5 +1,10 @@
 #pragma once
 
+/**
+ * @file GPUCullingPass.h
+ * @brief Declares the Vulkan command-recording wrapper for GPU culling.
+ */
+
 #include "Engine/Renderer/Culling/HiZBuffer.h"
 
 #include <vulkan/vulkan.h>
@@ -8,9 +13,26 @@
 
 namespace Engine::Culling
 {
+    /**
+     * @brief Records a compute pass that generates indirect draw commands.
+     *
+     * The pass uses a culling pipeline and descriptor set supplied by the
+     * renderer. Its output consists of an indirect draw buffer and a draw
+     * count buffer suitable for indirect-count rendering.
+     */
     class GPUCullingPass
     {
     public:
+        /**
+         * @brief Configures the pass and its output buffers.
+         * @param device Logical Vulkan device.
+         * @param pipeline Compute or graphics pipeline used for culling.
+         * @param pipelineLayout Pipeline layout associated with @p pipeline.
+         * @param descriptorSet Descriptor set containing culling resources.
+         * @param indirectBuffer Buffer receiving generated draw commands.
+         * @param drawCountBuffer Buffer receiving the generated command count.
+         * @param maxDrawCount Maximum number of draw commands that can be emitted.
+         */
         void create(
             VkDevice device,
             VkPipeline pipeline,
@@ -21,21 +43,29 @@ namespace Engine::Culling
             std::uint32_t maxDrawCount
         );
 
+        /**
+         * @brief Records the culling dispatch into a command buffer.
+         * @param commandBuffer Command buffer that receives the dispatch.
+         * @param objectCount Number of objects to process.
+         */
         void record(
             VkCommandBuffer commandBuffer,
             std::uint32_t objectCount
         ) const;
 
+        /** @brief Returns the generated indirect draw-command buffer. */
         [[nodiscard]] VkBuffer indirectBuffer() const noexcept
         {
             return m_indirectBuffer;
         }
 
+        /** @brief Returns the generated draw-count buffer. */
         [[nodiscard]] VkBuffer drawCountBuffer() const noexcept
         {
             return m_drawCountBuffer;
         }
 
+        /** @brief Returns the maximum number of generated draw commands. */
         [[nodiscard]] std::uint32_t maxDrawCount() const noexcept
         {
             return m_maxDrawCount;
