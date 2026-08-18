@@ -10,24 +10,82 @@
 #include <cstdint>
 #include <algorithm>
 #include <cstdio>
+#include <cstring>
 #include <stdexcept>
 #include <thread>
 
 namespace {
 
+void configureEditorStyle() {
+    ImGui::StyleColorsDark();
+    ImGuiStyle& style = ImGui::GetStyle();
+    style.WindowPadding = {12.0f, 10.0f};
+    style.FramePadding = {9.0f, 6.0f};
+    style.ItemSpacing = {8.0f, 7.0f};
+    style.ItemInnerSpacing = {6.0f, 5.0f};
+    style.ScrollbarSize = 12.0f;
+    style.GrabMinSize = 10.0f;
+    style.WindowBorderSize = 0.0f;
+    style.ChildBorderSize = 1.0f;
+    style.FrameBorderSize = 0.0f;
+    style.WindowRounding = 0.0f;
+    style.ChildRounding = 5.0f;
+    style.FrameRounding = 4.0f;
+    style.PopupRounding = 5.0f;
+    style.ScrollbarRounding = 6.0f;
+    style.GrabRounding = 4.0f;
+    style.TabRounding = 4.0f;
+
+    ImVec4* colors = style.Colors;
+    colors[ImGuiCol_WindowBg] = {0.055f, 0.068f, 0.090f, 1.0f};
+    colors[ImGuiCol_ChildBg] = {0.043f, 0.054f, 0.073f, 1.0f};
+    colors[ImGuiCol_PopupBg] = {0.075f, 0.090f, 0.120f, 0.98f};
+    colors[ImGuiCol_MenuBarBg] = {0.035f, 0.045f, 0.063f, 1.0f};
+    colors[ImGuiCol_Header] = {0.10f, 0.24f, 0.29f, 0.70f};
+    colors[ImGuiCol_HeaderHovered] = {0.10f, 0.48f, 0.56f, 0.55f};
+    colors[ImGuiCol_HeaderActive] = {0.08f, 0.62f, 0.70f, 0.75f};
+    colors[ImGuiCol_Button] = {0.09f, 0.15f, 0.20f, 1.0f};
+    colors[ImGuiCol_ButtonHovered] = {0.10f, 0.39f, 0.47f, 1.0f};
+    colors[ImGuiCol_ButtonActive] = {0.08f, 0.55f, 0.63f, 1.0f};
+    colors[ImGuiCol_FrameBg] = {0.08f, 0.11f, 0.15f, 1.0f};
+    colors[ImGuiCol_FrameBgHovered] = {0.11f, 0.20f, 0.25f, 1.0f};
+    colors[ImGuiCol_FrameBgActive] = {0.10f, 0.29f, 0.34f, 1.0f};
+    colors[ImGuiCol_Border] = {0.13f, 0.19f, 0.24f, 1.0f};
+    colors[ImGuiCol_Separator] = {0.13f, 0.20f, 0.25f, 1.0f};
+    colors[ImGuiCol_Text] = {0.86f, 0.91f, 0.96f, 1.0f};
+    colors[ImGuiCol_TextDisabled] = {0.45f, 0.53f, 0.61f, 1.0f};
+    colors[ImGuiCol_CheckMark] = {0.20f, 0.82f, 0.90f, 1.0f};
+    colors[ImGuiCol_SliderGrab] = {0.13f, 0.65f, 0.74f, 1.0f};
+    colors[ImGuiCol_SliderGrabActive] = {0.25f, 0.87f, 0.93f, 1.0f};
+    colors[ImGuiCol_Tab] = {0.07f, 0.12f, 0.16f, 1.0f};
+    colors[ImGuiCol_TabHovered] = {0.10f, 0.45f, 0.53f, 1.0f};
+    colors[ImGuiCol_TabActive] = {0.09f, 0.27f, 0.32f, 1.0f};
+    colors[ImGuiCol_DockingPreview] = {0.12f, 0.70f, 0.80f, 0.50f};
+}
+
+const char* entityName(const Engine::Scene& scene, const Engine::Entity entity) {
+    if (entity == scene.plane) return "Plane";
+    if (entity == scene.camera) return "Camera";
+    if (entity == scene.tree) return "Tree";
+    return "Entity";
+}
+
 bool drawViewport(VkDescriptorSet gameDescriptor, VkDescriptorSet sceneDescriptor) {
     static bool showGameView = false;
     const VkDescriptorSet descriptor = showGameView ? gameDescriptor : sceneDescriptor;
 
-    ImGui::Begin("Viewport");
-    if (ImGui::Button(showGameView ? "Show Scene View" : "Show Game View")) {
+    ImGui::Begin("Viewport", nullptr, ImGuiWindowFlags_NoScrollbar);
+    ImGui::PushStyleColor(ImGuiCol_Text, {0.28f, 0.84f, 0.91f, 1.0f});
+    ImGui::TextUnformatted("VIEWPORT");
+    ImGui::PopStyleColor();
+    ImGui::SameLine();
+    ImGui::TextDisabled(showGameView ? "GAME CAMERA" : "SCENE CAMERA");
+    ImGui::SameLine(ImGui::GetWindowWidth() - 180.0f);
+    if (ImGui::Button(showGameView ? "Scene View" : "Game View")) {
         showGameView = !showGameView;
     }
-    ImGui::SameLine();
-    ImGui::TextUnformatted(showGameView ? "Game camera" : "Scene camera");
-    ImGui::SameLine();
-    ImGui::TextDisabled("shared renderer | shadows disabled");
-    const bool sceneCameraInput = !showGameView && ImGui::IsWindowHovered();
+    ImGui::Separator();
+    const bool sceneCameraInput = !showGameView && ImGui::IsWindowHovered(ImGuiHoveredFlags_AllowWhenBlockedByActiveItem);
     const ImVec2 size = ImGui::GetContentRegionAvail();
     if (descriptor != VK_NULL_HANDLE && size.x > 1.0f && size.y > 1.0f) {
         ImVec2 imageSize = size;
@@ -49,10 +107,20 @@ bool drawViewport(VkDescriptorSet gameDescriptor, VkDescriptorSet sceneDescripto
 Engine::Entity drawHierarchy(const Engine::Scene& scene, const Engine::Entity selected) {
     Engine::Entity clicked = Engine::NullEntity;
     ImGui::Begin("Hierarchy");
+    ImGui::PushStyleColor(ImGuiCol_Text, {0.28f, 0.84f, 0.91f, 1.0f});
+    ImGui::TextUnformatted("SCENE HIERARCHY");
+    ImGui::PopStyleColor();
+    ImGui::SameLine(ImGui::GetWindowWidth() - 45.0f);
+    ImGui::TextDisabled("%zu", scene.registry.size());
+    static char filter[64] = {};
+    ImGui::SetNextItemWidth(-1.0f);
+    ImGui::InputTextWithHint("##hierarchy-filter", "  Search objects...", filter, sizeof(filter));
+    ImGui::Spacing();
 
     if (ImGui::TreeNodeEx("Scene", ImGuiTreeNodeFlags_DefaultOpen | ImGuiTreeNodeFlags_SpanAvailWidth)) {
         const auto entityLabel = [&](const char* name, const Engine::Entity entity) {
             if (entity != Engine::NullEntity) {
+                if (filter[0] != '\0' && std::strstr(name, filter) == nullptr) return;
                 char label[64];
                 std::snprintf(label, sizeof(label), "%s  (%u)", name,
                               Engine::entityIndex(entity));
@@ -68,12 +136,66 @@ Engine::Entity drawHierarchy(const Engine::Scene& scene, const Engine::Entity se
         if (scene.tree != Engine::NullEntity) {
             entityLabel("Tree", scene.tree);
         }
-        ImGui::TextDisabled("Entities: %zu", scene.registry.size());
         ImGui::TreePop();
     }
 
     ImGui::End();
     return clicked;
+}
+
+void drawInspector(const Engine::Scene& scene, const Engine::Entity selected) {
+    ImGui::Begin("Inspector");
+    ImGui::PushStyleColor(ImGuiCol_Text, {0.28f, 0.84f, 0.91f, 1.0f});
+    ImGui::TextUnformatted("INSPECTOR");
+    ImGui::PopStyleColor();
+    ImGui::Separator();
+    if (selected == Engine::NullEntity) {
+        ImGui::Spacing();
+        ImGui::TextDisabled("Nothing selected");
+        ImGui::TextWrapped("Select an object in the Scene Hierarchy to inspect it.");
+        ImGui::End();
+        return;
+    }
+
+    ImGui::TextColored({0.92f, 0.95f, 1.0f, 1.0f}, "%s", entityName(scene, selected));
+    ImGui::SameLine();
+    ImGui::TextDisabled("Entity %u", Engine::entityIndex(selected));
+    ImGui::Spacing();
+    if (ImGui::CollapsingHeader("Transform", ImGuiTreeNodeFlags_DefaultOpen)) {
+        ImGui::TextDisabled("Position");
+        ImGui::SetNextItemWidth(-1.0f);
+        float position[3] = {0.0f, 0.0f, 0.0f};
+        ImGui::DragFloat3("##position", position, 0.05f, 0.0f, 0.0f, "%.2f", ImGuiSliderFlags_ReadOnly);
+        ImGui::TextDisabled("Rotation");
+        ImGui::SetNextItemWidth(-1.0f);
+        float rotation[3] = {0.0f, 0.0f, 0.0f};
+        ImGui::DragFloat3("##rotation", rotation, 0.5f, 0.0f, 0.0f, "%.1f", ImGuiSliderFlags_ReadOnly);
+        ImGui::TextDisabled("Scale");
+        ImGui::SetNextItemWidth(-1.0f);
+        float scale[3] = {1.0f, 1.0f, 1.0f};
+        ImGui::DragFloat3("##scale", scale, 0.01f, 0.0f, 0.0f, "%.2f", ImGuiSliderFlags_ReadOnly);
+    }
+    if (ImGui::CollapsingHeader("Components", ImGuiTreeNodeFlags_DefaultOpen)) {
+        ImGui::BulletText("Transform");
+        if (selected == scene.camera) ImGui::BulletText("Camera");
+        if (selected == scene.plane || selected == scene.tree) ImGui::BulletText("Mesh Renderer");
+    }
+    ImGui::End();
+}
+
+void drawStatusBar(const Engine::Scene& scene, const Engine::Entity selected) {
+    ImGuiViewport* viewport = ImGui::GetMainViewport();
+    ImGui::SetNextWindowPos({viewport->WorkPos.x, viewport->WorkPos.y + viewport->WorkSize.y - 27.0f});
+    ImGui::SetNextWindowSize({viewport->WorkSize.x, 27.0f});
+    ImGui::Begin("##status-bar", nullptr, ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoDocking |
+        ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoNav);
+    ImGui::TextColored({0.25f, 0.80f, 0.87f, 1.0f}, "●");
+    ImGui::SameLine();
+    ImGui::TextUnformatted("Ready");
+    ImGui::SameLine();
+    ImGui::TextDisabled("|  Particle scene  |  Entities: %zu  |  Selected: %s",
+                        scene.registry.size(), selected == Engine::NullEntity ? "None" : entityName(scene, selected));
+    ImGui::End();
 }
 
 void configureEditorDockLayout() {
@@ -86,10 +208,12 @@ void configureEditorDockLayout() {
     ImGui::DockBuilderSetNodeSize(dockspaceId, ImGui::GetMainViewport()->WorkSize);
 
     ImGuiID hierarchyId = 0;
-    const ImGuiID viewportId = ImGui::DockBuilderSplitNode(
-        dockspaceId, ImGuiDir_Left, 0.22f, &hierarchyId, nullptr);
+    ImGuiID rightId = 0;
+    ImGuiID viewportId = ImGui::DockBuilderSplitNode(dockspaceId, ImGuiDir_Left, 0.20f, &hierarchyId, nullptr);
+    const ImGuiID centerId = ImGui::DockBuilderSplitNode(viewportId, ImGuiDir_Right, 0.22f, &rightId, &viewportId);
     ImGui::DockBuilderDockWindow("Hierarchy", hierarchyId);
-    ImGui::DockBuilderDockWindow("Viewport", viewportId);
+    ImGui::DockBuilderDockWindow("Viewport", centerId);
+    ImGui::DockBuilderDockWindow("Inspector", rightId);
     ImGui::DockBuilderFinish(dockspaceId);
     configured = true;
 }
@@ -156,7 +280,7 @@ int main() {
         IMGUI_CHECKVERSION();
         ImGui::CreateContext();
         ImGui::GetIO().ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard | ImGuiConfigFlags_DockingEnable;
-        ImGui::StyleColorsDark();
+        configureEditorStyle();
 
         Engine::Scene scene(Engine::SceneType::Particles);
         Engine::Renderer renderer;
@@ -189,6 +313,8 @@ int main() {
             }
             const bool sceneCameraInput = drawViewport(
                 renderer.gameViewportDescriptor(), renderer.sceneViewportDescriptor());
+            drawInspector(scene, selectedEntity);
+            drawStatusBar(scene, selectedEntity);
             renderer.setEditorSceneCameraInput(sceneCameraInput);
             ImGui::Render();
             renderer.renderFrame();
