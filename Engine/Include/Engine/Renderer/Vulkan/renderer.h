@@ -6,6 +6,7 @@
 #include "Engine/Renderer/Passes/TonemapPass.h"
 #include "Engine/Renderer/Vulkan/graphics_pipeline.h"
 #include "Engine/UI/CanvasRenderer.h"
+#include "Engine/ECS/Entity.h"
 
 #include <SDL3/SDL.h>
 
@@ -61,6 +62,9 @@ public:
     /** Starts the SDL3/Vulkan Dear ImGui frame owned by this renderer. */
     void beginEditorUiFrame();
     void processEvent(const SDL_Event& event);
+    /** Enables mouse/keyboard navigation for the editor's Scene View. */
+    void setEditorSceneCameraInput(bool active);
+    void setEditorSelection(Entity entity);
     void renderFrame();
     [[nodiscard]] VkDescriptorSet gameViewportDescriptor() const noexcept;
     [[nodiscard]] VkDescriptorSet sceneViewportDescriptor() const noexcept;

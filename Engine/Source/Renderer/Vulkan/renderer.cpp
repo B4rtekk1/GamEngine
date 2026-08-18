@@ -88,7 +88,8 @@ namespace {
         glm::vec4 lightColor;
         std::uint32_t shadowEnabled{0};
         std::uint32_t materialSlots{1};
-        std::array<std::uint32_t, 2> materialSlotsPadding{};
+        std::uint32_t selectedInstance{std::numeric_limits<std::uint32_t>::max()};
+        std::uint32_t materialSlotsPadding{};
     };
 }
 
@@ -151,6 +152,39 @@ class Renderer::Backend {
                 event.type == SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED) {
                 framebufferResized = true;
             }
+        }
+
+        void setEditorSceneCameraInput(const bool active) {
+            editorSceneCameraInput = active;
+        }
+
+        void setEditorSelection(const Entity entity) {
+            editorSelectedEntity = entity;
+            editorSelectedRenderable = std::numeric_limits<std::uint32_t>::max();
+            for (std::size_t index = 0; index < renderables.size(); ++index) {
+                if (renderables[index].entity == entity) {
+                    editorSelectedRenderable = static_cast<std::uint32_t>(index);
+                    break;
+                }
+            }
+
+            if (!registry.has<Transform>(entity)) return;
+            Vec3 target = registry.get<Transform>(entity).position;
+            float radius = 1.0f;
+            if (editorSelectedRenderable != std::numeric_limits<std::uint32_t>::max()) {
+                const RenderableRecord& record = renderables[editorSelectedRenderable];
+                const AABB bounds = record.localBounds.transformed(
+                    registry.get<Transform>(entity).matrix().native());
+                target = Vec3{(bounds.min.native() + bounds.max.native()) * 0.5f};
+                radius = std::max(glm::length(bounds.max.native() - bounds.min.native()) * 0.5f,
+                                  1.0f);
+            }
+
+            Camera sceneCamera{Degrees{60.0f}, 1.0f, 0.1f, 1000.0f};
+            sceneCamera.setPosition(editorSceneCameraPosition);
+            sceneCamera.setRotation(Degrees{editorSceneCameraYaw},
+                                    Degrees{editorSceneCameraPitch});
+            editorSceneCameraPosition = target - sceneCamera.forward() * (radius * 3.0f);
         }
 
         void renderFrame() {
@@ -241,6 +275,15 @@ class Renderer::Backend {
         std::vector<Culling::GPUObjectData> gpuObjects;
         bool hiZValid = false;
         bool cameraMouseLookActive = false;
+        bool editorSceneCameraInput = false;
+        Entity editorSelectedEntity = NullEntity;
+        std::uint32_t editorSelectedRenderable = std::numeric_limits<std::uint32_t>::max();
+        bool editorParticleFrameCaptured = false;
+        Vec3 editorSceneCameraPosition{8.0f, 6.0f, 8.0f};
+        float editorSceneCameraYaw = -135.0f;
+        // Aim at the ground-level scene center instead of looking too far above
+        // it; otherwise the finite ground plane reads like a rotated V-shaped wall.
+        float editorSceneCameraPitch = -28.0f;
         bool hasShadowCasters = false;
         struct RenderableRecord {
             Entity entity{NullEntity};
@@ -1548,21 +1591,24 @@ class Renderer::Backend {
                 glm::vec4{light.direction.native(), light.intensity},
                 glm::vec4{light.color.r(), light.color.g(), light.color.b(), 1.0f},
                 (optimizationFeatures.shadows && hasShadowCasters) ? 1u : 0u,
-                materialSlots};
+                materialSlots, editorSelectedRenderable};
             uniformBuffers[frame].update(&data, sizeof(data));
         }
 
         void updateSceneViewportUniformBuffer(const uint32_t frame) {
             const float aspect = static_cast<float>(sceneViewportTarget.extent().width) /
                                  static_cast<float>(sceneViewportTarget.extent().height);
-            const ViewportCamera sceneCamera = ViewportCamera::scene(aspect);
+            Camera sceneCamera{Degrees{60.0f}, aspect, 0.1f, 1000.0f};
+            sceneCamera.setPosition(editorSceneCameraPosition);
+            sceneCamera.setRotation(Degrees{editorSceneCameraYaw},
+                                    Degrees{editorSceneCameraPitch});
             const DirectionalLight light = directionalLight();
             const UniformBufferObject data{
-                sceneCamera.camera.viewMatrix(), sceneCamera.camera.projectionMatrix(), lightSpaceMatrix(),
-                glm::vec4{sceneCamera.camera.position().native(), 1.0f},
+                sceneCamera.viewMatrix(), sceneCamera.projectionMatrix(), lightSpaceMatrix(),
+                glm::vec4{sceneCamera.position().native(), 1.0f},
                 glm::vec4{light.direction.native(), light.intensity},
                 glm::vec4{light.color.r(), light.color.g(), light.color.b(), 1.0f},
-                0u, materialSlots};
+                0u, materialSlots, editorSelectedRenderable};
             sceneUniformBuffers[frame].update(&data, sizeof(data));
         }
 
@@ -1635,7 +1681,7 @@ class Renderer::Backend {
                 };
                 particleSystem->recordRender(commandBuffer, particleFrame,
                                              particlePipeline.handle(), particlePipeline.layout(),
-                                             currentFrame);
+                                             currentFrame, false);
             }
             forwardPass.end(commandBuffer);
 
@@ -1650,6 +1696,25 @@ class Renderer::Backend {
                 instanceBuffers[currentFrame].handle(), indexBuffer.handle());
             forwardPass.draw(commandBuffer, indirectDraws[currentFrame]);
             sceneSkyPass.record(commandBuffer, currentFrame);
+            if (particleSystem) {
+                Camera sceneCamera{Degrees{60.0f},
+                                   static_cast<float>(sceneViewportTarget.extent().width) /
+                                       static_cast<float>(sceneViewportTarget.extent().height),
+                                   0.1f, 1000.0f};
+                sceneCamera.setPosition(editorSceneCameraPosition);
+                sceneCamera.setRotation(Degrees{editorSceneCameraYaw},
+                                        Degrees{editorSceneCameraPitch});
+                const Particles::ParticleFrameData particleFrame{
+                    sceneCamera.projectionMatrix() * sceneCamera.viewMatrix(),
+                    sceneCamera.right(),
+                    0.0f,
+                    sceneCamera.up(),
+                    0.0f,
+                };
+                particleSystem->recordRender(commandBuffer, particleFrame,
+                                             particlePipeline.handle(), particlePipeline.layout(),
+                                             currentFrame, true);
+            }
             forwardPass.end(commandBuffer);
 
             if (hizEnabled) {
@@ -1807,6 +1872,16 @@ class Renderer::Backend {
         // ---------- MAIN LOOP ----------
 
         void updateCameraInput() {
+            if (editorUiActive) {
+                if (editorSceneCameraInput) {
+                    updateEditorSceneCameraInput();
+                } else if (cameraMouseLookActive) {
+                    SDLInput::setRelativeMouseMode(window, false);
+                    cameraMouseLookActive = false;
+                }
+                return;
+            }
+
             CameraComponent* activeCameraComponent = nullptr;
             Transform* activeCameraTransform = nullptr;
             registry.view<CameraComponent, Transform>(
@@ -1880,6 +1955,58 @@ class Renderer::Backend {
             }
         }
 
+        void updateEditorSceneCameraInput() {
+            Camera sceneCamera{Degrees{60.0f}, 1.0f, 0.1f, 1000.0f};
+            sceneCamera.setRotation(Degrees{editorSceneCameraYaw},
+                                    Degrees{editorSceneCameraPitch});
+
+            Vec3 movement{};
+            const Vec3 forward = sceneCamera.forward();
+            const Vec3 horizontalForward{forward.x(), 0.0f, forward.z()};
+            if (horizontalForward.length() > 0.0f) {
+                const Vec3 flatForward = horizontalForward.normalized();
+                if (Input::keyDown(KeyCode::W)) movement += flatForward;
+                if (Input::keyDown(KeyCode::S)) movement -= flatForward;
+            }
+            if (Input::keyDown(KeyCode::D)) movement += sceneCamera.right();
+            if (Input::keyDown(KeyCode::A)) movement -= sceneCamera.right();
+
+            if (Input::mouseDown(MouseButton::Middle)) {
+                const Vec2 mouseDelta = Input::mouseDelta();
+                constexpr float panSensitivity = 0.03f;
+                editorSceneCameraPosition -= sceneCamera.right() *
+                    (mouseDelta.x() * panSensitivity);
+                editorSceneCameraPosition += sceneCamera.up() *
+                    (mouseDelta.y() * panSensitivity);
+            }
+
+            constexpr float moveSpeed = 10.0f;
+            if (movement.length() > 0.0f) {
+                editorSceneCameraPosition += movement.normalized() *
+                    (moveSpeed * static_cast<float>(Time::deltaTime()));
+            }
+
+            constexpr float zoomSpeed = 2.0f;
+            editorSceneCameraPosition += sceneCamera.forward() *
+                (Input::mouseWheel() * zoomSpeed);
+
+            constexpr float mouseSensitivity = 0.1f;
+            if (Input::mouseDown(MouseButton::Right)) {
+                if (!cameraMouseLookActive) {
+                    SDLInput::setRelativeMouseMode(window, true);
+                    cameraMouseLookActive = true;
+                }
+                const Vec2 mouseDelta = Input::mouseDelta();
+                editorSceneCameraYaw += mouseDelta.x() * mouseSensitivity;
+                editorSceneCameraPitch = std::clamp(
+                    editorSceneCameraPitch - mouseDelta.y() * mouseSensitivity,
+                    -89.0f, 89.0f);
+            } else if (cameraMouseLookActive) {
+                SDLInput::setRelativeMouseMode(window, false);
+                cameraMouseLookActive = false;
+            }
+        }
+
         void drawFrame() {
             vkWaitForFences(device, 1, &inFlightFences[currentFrame], VK_TRUE, UINT64_MAX);
             uint32_t imageIndex;
@@ -1900,7 +2027,17 @@ class Renderer::Backend {
             updateSceneViewportUniformBuffer(currentFrame);
             updateRenderableBuffers();
             if (particleSystem) {
-                particleSystem->update(static_cast<float>(Time::deltaTime()));
+                if (editorUiActive) {
+                    if (!editorParticleFrameCaptured) {
+                        // Capture a warmed-up frame for Scene View only. The
+                        // live Game View continues to advance below.
+                        particleSystem->captureSceneSnapshot(1.5f);
+                        editorParticleFrameCaptured = true;
+                    }
+                    particleSystem->update(static_cast<float>(Time::deltaTime()));
+                } else {
+                    particleSystem->update(static_cast<float>(Time::deltaTime()));
+                }
             }
             updateCullingUniformBuffer(currentFrame);
             if (optimizationFeatures.shadows) {
@@ -2071,6 +2208,13 @@ void Renderer::initialize(Scene& scene, SDL_Window* window) {
 void Renderer::beginFrame() { backend_->beginFrame(); }
 void Renderer::beginEditorUiFrame() { backend_->beginEditorUiFrame(); }
 void Renderer::processEvent(const SDL_Event& event) { backend_->processEvent(event); }
+
+void Renderer::setEditorSceneCameraInput(const bool active) {
+    if (backend_) backend_->setEditorSceneCameraInput(active);
+}
+void Renderer::setEditorSelection(const Entity entity) {
+    if (backend_) backend_->setEditorSelection(entity);
+}
 void Renderer::renderFrame() { backend_->renderFrame(); }
 VkDescriptorSet Renderer::gameViewportDescriptor() const noexcept {
     return backend_ ? backend_->gameViewportTexture() : VK_NULL_HANDLE;

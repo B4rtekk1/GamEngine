@@ -7,13 +7,14 @@ layout(location = 3) in vec3 fragNormal;
 layout(location = 4) flat in uint fragMaterialIndex;
 layout(location = 5) in vec2 fragTexCoord;
 layout(location = 6) in vec4 fragTangent;
+layout(location = 7) flat in uint fragInstanceIndex;
 layout(location = 0) out vec4 outColor;
 
 layout(binding = 0) uniform sampler2D shadowMap;
 layout(binding = 1) uniform FrameData {
     mat4 view; mat4 projection; mat4 lightSpace;
     vec4 cameraPosition; vec4 lightDirectionIntensity; vec4 lightColor;
-    uint shadowEnabled;
+    uint shadowEnabled; uint materialSlots; uint selectedInstance; uint materialSlotsPadding;
 } frame;
 struct MaterialData {
     vec4 baseColorMetallic;
@@ -74,6 +75,8 @@ void main() {
     // converted to linear space by sampling. Converting them again here made
     // Blender foliage unnaturally dark.
     vec3 albedo = baseColor.rgb;
+    const bool selected = fragInstanceIndex == frame.selectedInstance;
+    if (selected) albedo = mix(albedo, vec3(1.0, 0.65, 0.05), 0.7);
     float metallic = material.baseColorMetallic.a;
     float roughness = material.roughnessAmbientOcclusion.x;
     if (material.textureIndices.y >= 0) {
@@ -108,5 +111,6 @@ void main() {
     vec3 color = vec3(0.035) * albedo * clamp(material.roughnessAmbientOcclusion.y, 0.0, 1.0) + direct;
     // Keep lighting in linear HDR space. Display mapping is performed once,
     // after the complete scene (including the skybox) has been rendered.
+    if (selected) color += vec3(0.8, 0.35, 0.02);
     outColor = vec4(color, baseColor.a);
 }

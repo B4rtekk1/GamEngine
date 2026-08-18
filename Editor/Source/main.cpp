@@ -1,4 +1,5 @@
 #include "imgui.h"
+#include "imgui_internal.h"
 
 #include "Engine/Renderer/Vulkan/renderer.h"
 #include "Engine/Scene/Scene.h"
@@ -14,7 +15,7 @@
 
 namespace {
 
-void drawViewport(VkDescriptorSet gameDescriptor, VkDescriptorSet sceneDescriptor) {
+bool drawViewport(VkDescriptorSet gameDescriptor, VkDescriptorSet sceneDescriptor) {
     static bool showGameView = false;
     const VkDescriptorSet descriptor = showGameView ? gameDescriptor : sceneDescriptor;
 
@@ -26,6 +27,7 @@ void drawViewport(VkDescriptorSet gameDescriptor, VkDescriptorSet sceneDescripto
     ImGui::TextUnformatted(showGameView ? "Game camera" : "Scene camera");
     ImGui::SameLine();
     ImGui::TextDisabled("shared renderer | shadows disabled");
+    const bool sceneCameraInput = !showGameView && ImGui::IsWindowHovered();
     const ImVec2 size = ImGui::GetContentRegionAvail();
     if (descriptor != VK_NULL_HANDLE && size.x > 1.0f && size.y > 1.0f) {
         ImVec2 imageSize = size;
@@ -38,9 +40,58 @@ void drawViewport(VkDescriptorSet gameDescriptor, VkDescriptorSet sceneDescripto
             ImGui::SetCursorPosY(ImGui::GetCursorPosY() + (size.y - imageSize.y) * 0.5f);
         }
         ImGui::Image(ImTextureRef{static_cast<ImTextureID>(reinterpret_cast<uintptr_t>(descriptor))},
-                     imageSize, {0, 1}, {1, 0});
+                     imageSize, {0, 0}, {1, 1});
     }
     ImGui::End();
+    return sceneCameraInput;
+}
+
+Engine::Entity drawHierarchy(const Engine::Scene& scene, const Engine::Entity selected) {
+    Engine::Entity clicked = Engine::NullEntity;
+    ImGui::Begin("Hierarchy");
+
+    if (ImGui::TreeNodeEx("Scene", ImGuiTreeNodeFlags_DefaultOpen | ImGuiTreeNodeFlags_SpanAvailWidth)) {
+        const auto entityLabel = [&](const char* name, const Engine::Entity entity) {
+            if (entity != Engine::NullEntity) {
+                char label[64];
+                std::snprintf(label, sizeof(label), "%s  (%u)", name,
+                              Engine::entityIndex(entity));
+                if (ImGui::Selectable(label, selected == entity)) clicked = entity;
+            }
+        };
+
+        entityLabel("Plane", scene.plane);
+        entityLabel("Camera", scene.camera);
+        if (scene.isParticleScene()) {
+            ImGui::BulletText("Particle Emitter");
+        }
+        if (scene.tree != Engine::NullEntity) {
+            entityLabel("Tree", scene.tree);
+        }
+        ImGui::TextDisabled("Entities: %zu", scene.registry.size());
+        ImGui::TreePop();
+    }
+
+    ImGui::End();
+    return clicked;
+}
+
+void configureEditorDockLayout() {
+    static bool configured = false;
+    if (configured) return;
+
+    const ImGuiID dockspaceId = ImGui::GetMainViewport()->ID;
+    ImGui::DockBuilderRemoveNode(dockspaceId);
+    ImGui::DockBuilderAddNode(dockspaceId, ImGuiDockNodeFlags_DockSpace);
+    ImGui::DockBuilderSetNodeSize(dockspaceId, ImGui::GetMainViewport()->WorkSize);
+
+    ImGuiID hierarchyId = 0;
+    const ImGuiID viewportId = ImGui::DockBuilderSplitNode(
+        dockspaceId, ImGuiDir_Left, 0.22f, &hierarchyId, nullptr);
+    ImGui::DockBuilderDockWindow("Hierarchy", hierarchyId);
+    ImGui::DockBuilderDockWindow("Viewport", viewportId);
+    ImGui::DockBuilderFinish(dockspaceId);
+    configured = true;
 }
 
 } // namespace
@@ -48,7 +99,7 @@ void drawViewport(VkDescriptorSet gameDescriptor, VkDescriptorSet sceneDescripto
 int main() {
     try {
         if (!SDL_Init(SDL_INIT_VIDEO | SDL_INIT_EVENTS)) throw std::runtime_error(SDL_GetError());
-        SDL_Window* window = SDL_CreateWindow("GamEngine Editor", 1280, 720,
+        SDL_Window* window = SDL_CreateWindow("GamEngine Editor - Particles", 1280, 720,
                                               SDL_WINDOW_VULKAN | SDL_WINDOW_RESIZABLE);
         if (!window) throw std::runtime_error(SDL_GetError());
 
@@ -57,9 +108,10 @@ int main() {
         ImGui::GetIO().ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard | ImGuiConfigFlags_DockingEnable;
         ImGui::StyleColorsDark();
 
-        Engine::Scene scene;
+        Engine::Scene scene(Engine::SceneType::Particles);
         Engine::Renderer renderer;
         renderer.initialize(scene, window);
+        Engine::Entity selectedEntity = Engine::NullEntity;
         constexpr auto targetFrame = std::chrono::microseconds{16'667};
         bool running = true;
         while (running) {
@@ -75,8 +127,18 @@ int main() {
             if (!running) break;
 
             renderer.beginEditorUiFrame();
-            ImGui::DockSpaceOverViewport(0, ImGui::GetMainViewport(), ImGuiDockNodeFlags_PassthruCentralNode);
-            drawViewport(renderer.gameViewportDescriptor(), renderer.sceneViewportDescriptor());
+            const ImGuiID dockspaceId = ImGui::GetMainViewport()->ID;
+            ImGui::DockSpaceOverViewport(dockspaceId, ImGui::GetMainViewport(),
+                                         ImGuiDockNodeFlags_PassthruCentralNode);
+            configureEditorDockLayout();
+            if (const Engine::Entity clicked = drawHierarchy(scene, selectedEntity);
+                clicked != Engine::NullEntity) {
+                selectedEntity = clicked;
+                renderer.setEditorSelection(selectedEntity);
+            }
+            const bool sceneCameraInput = drawViewport(
+                renderer.gameViewportDescriptor(), renderer.sceneViewportDescriptor());
+            renderer.setEditorSceneCameraInput(sceneCameraInput);
             ImGui::Render();
             renderer.renderFrame();
 

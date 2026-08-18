@@ -54,7 +54,9 @@ namespace Engine::Particles {
         void recordRender(VkCommandBuffer commandBuffer,
                           const ParticleFrameData& frameData,
                           VkPipeline pipeline, VkPipelineLayout pipelineLayout,
-                          uint32_t frameIndex) const;
+                          uint32_t frameIndex, bool sceneView = false) const;
+        /** Captures a warmed-up, static preview for the editor Scene View. */
+        void captureSceneSnapshot(float simulationTime);
         [[nodiscard]] VkDescriptorSetLayout descriptorSetLayout() const noexcept {
             return descriptorSetLayout_;
         }
@@ -70,26 +72,28 @@ namespace Engine::Particles {
         VkPhysicalDevice physicalDevice_{};
         VkQueue computeQueue_{};
         VkCommandPool commandPool_{};
-        std::array<VkBuffer, FramesInFlight> particleBuffers_{};
-        std::array<VkDeviceMemory, FramesInFlight> particleMemories_{};
-        std::array<VkBuffer, FramesInFlight> frameBuffers_{};
-        std::array<VkDeviceMemory, FramesInFlight> frameMemories_{};
-        std::array<VkBuffer, FramesInFlight> indirectBuffers_{};
-        std::array<VkDeviceMemory, FramesInFlight> indirectMemories_{};
+        static constexpr uint32_t RenderTargets = 2;
+        std::array<std::array<VkBuffer, FramesInFlight>, RenderTargets> particleBuffers_{};
+        std::array<std::array<VkDeviceMemory, FramesInFlight>, RenderTargets> particleMemories_{};
+        std::array<std::array<VkBuffer, FramesInFlight>, RenderTargets> frameBuffers_{};
+        std::array<std::array<VkDeviceMemory, FramesInFlight>, RenderTargets> frameMemories_{};
+        std::array<std::array<VkBuffer, FramesInFlight>, RenderTargets> indirectBuffers_{};
+        std::array<std::array<VkDeviceMemory, FramesInFlight>, RenderTargets> indirectMemories_{};
         VkBuffer quadBuffer_{};
         VkDeviceMemory quadMemory_{};
         VkDescriptorSetLayout descriptorSetLayout_{};
         VkDescriptorPool descriptorPool_{};
-        std::array<VkDescriptorSet, FramesInFlight> descriptorSets_{};
+        std::array<std::array<VkDescriptorSet, FramesInFlight>, RenderTargets> descriptorSets_{};
         uint32_t maxParticles_ = 0;
         ParticleEmitter emitter_{};
         std::vector<Particle> particles_;
         std::vector<Particle> renderParticles_;
-        std::array<void*, FramesInFlight> particleMapped_{};
-        std::array<void*, FramesInFlight> frameMapped_{};
-        std::array<void*, FramesInFlight> indirectMapped_{};
+        std::array<std::array<void*, FramesInFlight>, RenderTargets> particleMapped_{};
+        std::array<std::array<void*, FramesInFlight>, RenderTargets> frameMapped_{};
+        std::array<std::array<void*, FramesInFlight>, RenderTargets> indirectMapped_{};
         void* quadMapped_ = nullptr;
         uint32_t nextSpawnIndex_ = 0;
         uint32_t activeParticles_ = 0;
+        std::vector<Particle> sceneSnapshot_;
     };
 }

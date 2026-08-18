@@ -15,6 +15,7 @@ layout(location = 3) out vec3 fragNormal;
 layout(location = 4) flat out uint fragMaterialIndex;
 layout(location = 5) out vec2 fragTexCoord;
 layout(location = 6) out vec4 fragTangent;
+layout(location = 7) flat out uint fragInstanceIndex;
 
 layout(binding = 1) uniform FrameData {
     mat4 view;
@@ -24,9 +25,8 @@ layout(binding = 1) uniform FrameData {
     vec4 lightDirectionIntensity;
     vec4 lightColor;
     uint materialSlots;
-    uint materialSlotsPadding0;
-    uint materialSlotsPadding1;
-    uint materialSlotsPadding2;
+    uint selectedInstance;
+    uint materialSlotsPadding;
 } frame;
 
 void main() {
@@ -39,4 +39,5 @@ void main() {
     fragMaterialIndex = gl_InstanceIndex * frame.materialSlots + inMaterialIndex;
     fragTexCoord = inTexCoord;
     fragTangent = vec4(mat3(transpose(inverse(instanceModel))) * inTangent.xyz, inTangent.w);
+    fragInstanceIndex = gl_InstanceIndex;
 }
