@@ -12,6 +12,14 @@ namespace Engine {
      */
     using Entity = std::uint64_t;
 
+    /**
+     * @brief Stable identifier owned by a GameObject.
+     *
+     * Unlike Entity, an ObjectId is not recycled when the object's ECS
+     * entity is destroyed.
+     */
+    using ObjectId = std::uint64_t;
+
     constexpr std::uint32_t entityIndex(const Entity entity) noexcept {
         return static_cast<std::uint32_t>(entity);
     }
@@ -29,5 +37,7 @@ namespace Engine {
      * @brief Sentinel representing an invalid or absent entity.
      */
     constexpr Entity NullEntity = 0;
+
+    constexpr ObjectId NullObjectId = 0;
 
 }

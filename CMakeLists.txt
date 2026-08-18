@@ -93,7 +93,7 @@ target_link_libraries(GamEngine PRIVATE Engine)
 
 add_executable(Editor
         Editor/Source/main.cpp)
-target_link_libraries(Editor PRIVATE DearImGui SDL3::SDL3)
+target_link_libraries(Editor PRIVATE DearImGui Engine SDL3::SDL3)
 
 find_program(GLSLANG_VALIDATOR NAMES glslangValidator)
 find_program(GLSLC NAMES glslc)

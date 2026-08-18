@@ -6,6 +6,7 @@
 #include "Engine/ECS/Registry.h"
 
 #include <cassert>
+#include <atomic>
 #include <memory>
 #include <utility>
 
@@ -24,7 +25,8 @@ namespace Engine {
     class GameObject {
     public:
         explicit GameObject(Registry& registry) noexcept
-            : m_registry(&registry) {
+            : m_registry(&registry),
+              m_objectId(nextObjectId()) {
         }
 
         GameObject(const GameObject&) = delete;
@@ -32,6 +34,7 @@ namespace Engine {
 
         GameObject(GameObject&& other) noexcept
             : m_registry(other.m_registry),
+              m_objectId(std::exchange(other.m_objectId, NullObjectId)),
               m_entity(std::exchange(other.m_entity, NullEntity)),
               m_spawned(std::exchange(other.m_spawned, false)),
               m_isClone(std::exchange(other.m_isClone, false)) {
@@ -47,6 +50,7 @@ namespace Engine {
             }
             releaseEntity();
             m_registry = other.m_registry;
+            m_objectId = std::exchange(other.m_objectId, NullObjectId);
             m_entity = std::exchange(other.m_entity, NullEntity);
             m_spawned = std::exchange(other.m_spawned, false);
             m_isClone = std::exchange(other.m_isClone, false);
@@ -96,6 +100,11 @@ namespace Engine {
         /** @brief Returns this object's entity identifier. */
         [[nodiscard]] Entity entity() const noexcept {
             return m_entity;
+        }
+
+        /** @brief Returns this object's stable identifier. */
+        [[nodiscard]] ObjectId objectId() const noexcept {
+            return m_objectId;
         }
 
         /**
@@ -190,6 +199,10 @@ namespace Engine {
         virtual void OnCloneDestroy() {}
 
     private:
+        static ObjectId nextObjectId() noexcept {
+            return s_nextObjectId.fetch_add(1, std::memory_order_relaxed);
+        }
+
         void releaseEntity() noexcept {
             if (m_spawned && m_registry->valid(m_entity)) {
                 m_registry->destroy(m_entity);
@@ -199,7 +212,9 @@ namespace Engine {
             m_isClone = false;
         }
 
+        inline static std::atomic<ObjectId> s_nextObjectId{1};
         Registry* m_registry;
+        ObjectId m_objectId{NullObjectId};
         Entity m_entity{NullEntity};
         bool m_spawned{false};
         bool m_isClone{false};
