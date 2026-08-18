@@ -3,7 +3,8 @@
 /** @file Frustum.h View-frustum intersection utilities. */
 
 
-#include "Engine/Math/Math.h"
+#include "Engine/Math/AABB.h"
+#include "Engine/Math/Mat4.h"
 
 #include <algorithm>
 #include <array>
