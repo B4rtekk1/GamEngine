@@ -7,6 +7,10 @@
 #include "Engine/Renderer/Vulkan/graphics_pipeline.h"
 #include "Engine/UI/CanvasRenderer.h"
 
+#include <SDL3/SDL.h>
+
+#include <memory>
+
 namespace Engine {
 
 class Registry;
@@ -20,6 +24,9 @@ class Scene;
  * GPU culling are renderer features shared by every scene.
  */
 struct RenderOptimizationFeatures final {
+    // The editor/preview renderer deliberately defaults to unshadowed lighting.
+    // It avoids both the shadow-map draw pass and its culling dispatch.
+    bool shadows = false;
     bool instancedRendering = true;
     bool meshDeduplication = true;
     bool transformCaching = true;
@@ -31,8 +38,7 @@ struct RenderOptimizationFeatures final {
 // Owns and runs the Vulkan rendering loop.
 class Renderer final {
 public:
-    explicit Renderer(RenderOptimizationFeatures features = {})
-        : optimizationFeatures_(features) {}
+    explicit Renderer(RenderOptimizationFeatures features = {});
 
     void setOptimizationFeatures(RenderOptimizationFeatures features) noexcept {
         optimizationFeatures_ = features;
@@ -42,10 +48,26 @@ public:
         return optimizationFeatures_;
     }
 
-    /** @brief Runs the renderer using every renderable entity in registry. */
-    void run(Scene& scene);
+    ~Renderer();
+
+    Renderer(const Renderer&) = delete;
+    Renderer& operator=(const Renderer&) = delete;
+    Renderer(Renderer&&) = delete;
+    Renderer& operator=(Renderer&&) = delete;
+
+    /** Initializes graphics resources for an SDL window owned by the application. */
+    void initialize(Scene& scene, SDL_Window* window);
+    void beginFrame();
+    /** Starts the SDL3/Vulkan Dear ImGui frame owned by this renderer. */
+    void beginEditorUiFrame();
+    void processEvent(const SDL_Event& event);
+    void renderFrame();
+    [[nodiscard]] VkDescriptorSet gameViewportDescriptor() const noexcept;
+    [[nodiscard]] VkDescriptorSet sceneViewportDescriptor() const noexcept;
+    void shutdown() noexcept;
 
 private:
+    class Backend;
     RenderOptimizationFeatures optimizationFeatures_{};
     // Asset cache belongs to the renderer lifetime, not to one Scene.
     Assets::AssetManager assetManager_{};
@@ -59,6 +81,7 @@ private:
     GraphicsPipeline particlePipeline_{};
     // UI rendering infrastructure is shared; each scene supplies its Canvas.
     UI::CanvasRenderer canvasRenderer_{};
+    std::unique_ptr<Backend> backend_{};
 };
 
 } // namespace Engine

@@ -1,6 +1,6 @@
 #pragma once
 
-#include "Engine/Math/Radians.h"
+#include "Engine/Math/Angle.h"
 #include "Engine/Math/Quat.h"
 #include "Engine/Math/Vec3.h"
 #include "Engine/Math/Vec4.h"

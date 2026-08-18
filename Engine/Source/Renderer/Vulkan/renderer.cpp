@@ -4,6 +4,9 @@
 #include <SDL3/SDL.h>
 #include <SDL3/SDL_vulkan.h>
 #include <vulkan/vulkan.h>
+#include "backends/imgui_impl_sdl3.h"
+#include "backends/imgui_impl_vulkan.h"
+#include "imgui.h"
 
 #define GLM_FORCE_RADIANS
 #define GLM_FORCE_DEPTH_ZERO_TO_ONE
@@ -12,6 +15,8 @@
 #include "Engine/Renderer/Vulkan/msaa.h"
 #include "Engine/Renderer/Vulkan/depth_buffer.h"
 #include "Engine/Renderer/Vulkan/hdr_buffer.h"
+#include "Engine/Renderer/Vulkan/ViewportRenderTarget.h"
+#include "Engine/Renderer/ViewportCamera.h"
 #include "Engine/Renderer/shader_loader.h"
 #include "Engine/Renderer/Vulkan/buffer.h"
 #include "Engine/Renderer/Vulkan/graphics_pipeline.h"
@@ -51,6 +56,7 @@
 
 #include <cstdint>
 #include <array>
+#include <chrono>
 #include <cmath>
 #include <cstdio>
 #include <cstring>
@@ -58,6 +64,7 @@
 #include <limits>
 #include <stdexcept>
 #include <string>
+#include <thread>
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
@@ -95,10 +102,9 @@ const std::vector<const char*> validationLayers = {
     "VK_LAYER_KHRONOS_validation"
 };
 
-namespace {
-    class RenderApp {
+class Renderer::Backend {
     public:
-        explicit RenderApp(Scene& scene,
+        explicit Backend(Scene& scene, SDL_Window* window,
                            const RenderOptimizationFeatures& optimizationFeatures,
                            Assets::AssetManager& assetManager,
                            ForwardPass& forwardPass,
@@ -106,7 +112,7 @@ namespace {
                            TonemapPass& tonemapPass,
                            GraphicsPipeline& particlePipeline,
                            UI::CanvasRenderer& canvasRenderer)
-            : scene(scene),
+            : window(window), scene(scene),
               registry(scene.registry),
               optimizationFeatures(optimizationFeatures),
               assetManager(assetManager),
@@ -116,15 +122,42 @@ namespace {
               particlePipeline(particlePipeline),
               canvasRenderer(canvasRenderer) {}
 
-        ~RenderApp() {
+        ~Backend() {
             cleanup();
         }
 
-        void run() {
+        void initialize() {
             initWindow();
             initVulkan();
-            mainLoop();
-            cleanup();
+            Time::init();
+        }
+
+        void beginFrame() { Input::beginFrame(); }
+
+        void beginEditorUiFrame() {
+            if (!editorUiActive) throw std::logic_error("Renderer was initialized without an ImGui context");
+            ImGui_ImplVulkan_NewFrame();
+            ImGui_ImplSDL3_NewFrame();
+            ImGui::NewFrame();
+        }
+
+        [[nodiscard]] VkDescriptorSet gameViewportTexture() const noexcept { return gameViewportDescriptor; }
+        [[nodiscard]] VkDescriptorSet sceneViewportTexture() const noexcept { return sceneViewportDescriptor; }
+
+        void processEvent(const SDL_Event& event) {
+            if (editorUiActive) ImGui_ImplSDL3_ProcessEvent(&event);
+            SDLInput::processEvent(event);
+            if (event.type == SDL_EVENT_WINDOW_RESIZED ||
+                event.type == SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED) {
+                framebufferResized = true;
+            }
+        }
+
+        void renderFrame() {
+            Time::update();
+            updateCameraInput();
+            updateFpsCounter();
+            drawFrame();
         }
 
     private:
@@ -139,6 +172,16 @@ namespace {
 
         Swapchain swapchain;
         VkFramebuffer hdrFramebuffer = VK_NULL_HANDLE;
+        // The editor's Scene View uses this actual render output rather than a
+        // UI-only placeholder. It has the same attachment formats as the game
+        // path, so both views share the forward/sky/particle pipelines.
+        ViewportRenderTarget sceneViewportTarget;
+        VkFramebuffer sceneViewportFramebuffer = VK_NULL_HANDLE;
+        VkRenderPass editorUiRenderPass = VK_NULL_HANDLE;
+        std::vector<VkFramebuffer> editorUiFramebuffers;
+        VkDescriptorSet gameViewportDescriptor = VK_NULL_HANDLE;
+        VkDescriptorSet sceneViewportDescriptor = VK_NULL_HANDLE;
+        bool editorUiActive = false;
 
         MsaaResources msaa;
         HdrBuffer hdrBuffer;
@@ -156,6 +199,10 @@ namespace {
         std::unordered_map<const Mesh*, std::uint32_t> meshTextureOffsets;
         DepthBuffer depthBuffer;
         ShadowPass shadowPass;
+        // A descriptor-compatible pass for Scene View. It owns an independent
+        // per-frame camera UBO while reusing the exact forward material layout.
+        ShadowPass sceneDescriptorPass;
+        SkyPass sceneSkyPass;
         Scene& scene;
         Registry& registry;
         const RenderOptimizationFeatures& optimizationFeatures;
@@ -167,6 +214,7 @@ namespace {
         std::array<Buffer, MAX_FRAMES_IN_FLIGHT> shadowInstanceBuffers;
         std::array<Buffer, MAX_FRAMES_IN_FLIGHT> materialBuffers;
         std::array<Buffer, MAX_FRAMES_IN_FLIGHT> uniformBuffers;
+        std::array<Buffer, MAX_FRAMES_IN_FLIGHT> sceneUniformBuffers;
         std::array<Buffer, MAX_FRAMES_IN_FLIGHT> cullingObjectBuffers;
         std::array<Buffer, MAX_FRAMES_IN_FLIGHT> cullingUniformBuffers;
         std::array<Buffer, MAX_FRAMES_IN_FLIGHT> shadowCullingUniformBuffers;
@@ -274,16 +322,8 @@ namespace {
 
 
         void initWindow() {
-            if (!SDL_Init(SDL_INIT_VIDEO)) {
-                throw std::runtime_error(std::string("SDL_Init error: ") + SDL_GetError());
-            }
-            window = SDL_CreateWindow(
-            "Vulkan + SDL3 - Cube",
-                WIDTH, HEIGHT,
-                SDL_WINDOW_VULKAN | SDL_WINDOW_RESIZABLE
-            );
             if (!window) {
-                throw std::runtime_error(std::string("SDL_CreateWindow error: ") + SDL_GetError());
+                throw std::invalid_argument("Renderer requires an application-owned SDL window");
             }
         }
 
@@ -310,16 +350,21 @@ namespace {
             createMeshBuffers();
             createInstanceBuffer();
             createUniformBuffers();
+            createSceneUniformBuffers();
             createShadowPass();
+            createSceneDescriptorPass();
             createForwardPass();
             createParticleResources();
             createCullingResources();
             createSkyPass();
+            createSceneSkyPass();
             createFramebuffers();
+            createSceneViewportResources();
             createTonemapPass();
             createUIResources();
             createCommandBuffers();
             createSyncObjects();
+            createEditorUiResources();
             // Shader modules no longer need their source text after pipeline
             // creation. Release cache-only asset records before the main loop.
             assetManager.unload_unused();
@@ -480,6 +525,18 @@ namespace {
                               sizeof(UniformBufferObject), assetManager);
         }
 
+        void createSceneDescriptorPass() {
+            std::vector<VkBuffer> buffers;
+            std::vector<VkBuffer> gpuMaterialBuffers;
+            buffers.reserve(sceneUniformBuffers.size());
+            gpuMaterialBuffers.reserve(materialBuffers.size());
+            for (const Buffer& buffer : sceneUniformBuffers) buffers.push_back(buffer.handle());
+            for (const Buffer& buffer : materialBuffers) gpuMaterialBuffers.push_back(buffer.handle());
+            sceneDescriptorPass.create(vulkanDevice.physical(), device, buffers,
+                                       gpuMaterialBuffers, materialTextureDescriptors,
+                                       sizeof(UniformBufferObject), assetManager);
+        }
+
         void createForwardPass() {
             forwardPass.create(device, HdrBuffer::Format, depthBuffer.format(),
                                msaa.sampleCount(), shadowPass.descriptorSetLayout(), assetManager);
@@ -528,6 +585,17 @@ namespace {
                            vulkanDevice.allocator());
         }
 
+        void createSceneSkyPass() {
+            std::vector<VkBuffer> buffers;
+            buffers.reserve(sceneUniformBuffers.size());
+            for (const Buffer& buffer : sceneUniformBuffers) buffers.push_back(buffer.handle());
+            sceneSkyPass.create(vulkanDevice.physical(), device, commandPool,
+                                vulkanDevice.graphicsQueue(), forwardPass.renderPass(),
+                                HdrBuffer::Format, msaa.sampleCount(), buffers,
+                                sizeof(UniformBufferObject), assetManager,
+                                vulkanDevice.allocator());
+        }
+
         void createTonemapPass() {
             tonemapPass.create(device, swapchain.format(), swapchain.extent(),
                                swapchain.imageViews(), hdrBuffer.imageView(),
@@ -551,6 +619,74 @@ namespace {
                 swapchain.imageViews(), MAX_FRAMES_IN_FLIGHT, assetManager,
                 fpsFontTexture.imageView(), fpsFontTexture.sampler(),
                 vulkanDevice.allocator());
+        }
+
+        void createEditorUiResources() {
+            if (ImGui::GetCurrentContext() == nullptr) return;
+            VkAttachmentDescription color{};
+            color.format = swapchain.format(); color.samples = VK_SAMPLE_COUNT_1_BIT;
+            // In editor mode the swapchain is UI background, not a second
+            // full-screen Game View. The selected viewport is sampled only by
+            // ImGui::Image, so clear the presentation image before drawing UI.
+            color.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR; color.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+            color.initialLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
+            color.finalLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
+            VkAttachmentReference reference{0, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL};
+            VkSubpassDescription subpass{};
+            subpass.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
+            subpass.colorAttachmentCount = 1; subpass.pColorAttachments = &reference;
+            VkSubpassDependency dependency{};
+            dependency.srcSubpass = VK_SUBPASS_EXTERNAL; dependency.dstSubpass = 0;
+            dependency.srcStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+            dependency.dstStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+            dependency.srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+            dependency.dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_READ_BIT | VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+            VkRenderPassCreateInfo passInfo{VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO};
+            passInfo.attachmentCount = 1; passInfo.pAttachments = &color;
+            passInfo.subpassCount = 1; passInfo.pSubpasses = &subpass;
+            passInfo.dependencyCount = 1; passInfo.pDependencies = &dependency;
+            if (vkCreateRenderPass(device, &passInfo, nullptr, &editorUiRenderPass) != VK_SUCCESS) {
+                throw std::runtime_error("Could not create ImGui render pass");
+            }
+            editorUiFramebuffers.resize(swapchain.imageCount());
+            for (std::size_t index = 0; index < editorUiFramebuffers.size(); ++index) {
+                const VkImageView view = swapchain.imageViews()[index];
+                VkFramebufferCreateInfo framebuffer{VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO};
+                framebuffer.renderPass = editorUiRenderPass; framebuffer.attachmentCount = 1;
+                framebuffer.pAttachments = &view; framebuffer.width = swapchain.extent().width;
+                framebuffer.height = swapchain.extent().height; framebuffer.layers = 1;
+                if (vkCreateFramebuffer(device, &framebuffer, nullptr, &editorUiFramebuffers[index]) != VK_SUCCESS) {
+                    throw std::runtime_error("Could not create ImGui framebuffer");
+                }
+            }
+            ImGui_ImplSDL3_InitForVulkan(window);
+            ImGui_ImplVulkan_InitInfo info{};
+            info.ApiVersion = VK_API_VERSION_1_3; info.Instance = instance;
+            info.PhysicalDevice = vulkanDevice.physical(); info.Device = device;
+            info.QueueFamily = vulkanDevice.graphicsQueueFamily(); info.Queue = vulkanDevice.graphicsQueue();
+            info.DescriptorPoolSize = 128; info.MinImageCount = 2;
+            info.ImageCount = static_cast<uint32_t>(swapchain.imageCount());
+            info.PipelineInfoMain.RenderPass = editorUiRenderPass;
+            info.PipelineInfoMain.MSAASamples = VK_SAMPLE_COUNT_1_BIT;
+            if (!ImGui_ImplVulkan_Init(&info)) throw std::runtime_error("Could not initialize ImGui Vulkan backend");
+            gameViewportDescriptor = ImGui_ImplVulkan_AddTexture(hdrBuffer.imageView(), VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+            sceneViewportDescriptor = ImGui_ImplVulkan_AddTexture(sceneViewportTarget.color().imageView(), VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+            editorUiActive = true;
+        }
+
+        void destroyEditorUiResources() noexcept {
+            if (editorUiActive) {
+                if (gameViewportDescriptor != VK_NULL_HANDLE) ImGui_ImplVulkan_RemoveTexture(gameViewportDescriptor);
+                if (sceneViewportDescriptor != VK_NULL_HANDLE) ImGui_ImplVulkan_RemoveTexture(sceneViewportDescriptor);
+                ImGui_ImplVulkan_Shutdown();
+                ImGui_ImplSDL3_Shutdown();
+            }
+            gameViewportDescriptor = sceneViewportDescriptor = VK_NULL_HANDLE;
+            editorUiActive = false;
+            for (VkFramebuffer framebuffer : editorUiFramebuffers) if (framebuffer != VK_NULL_HANDLE) vkDestroyFramebuffer(device, framebuffer, nullptr);
+            editorUiFramebuffers.clear();
+            if (editorUiRenderPass != VK_NULL_HANDLE) vkDestroyRenderPass(device, editorUiRenderPass, nullptr);
+            editorUiRenderPass = VK_NULL_HANDLE;
         }
 
         void createMaterialTextures() {
@@ -1036,6 +1172,13 @@ namespace {
             }
         }
 
+        void createSceneUniformBuffers() {
+            for (Buffer& buffer : sceneUniformBuffers) {
+                buffer.createHostVisible(vulkanDevice.physical(), device, sizeof(UniformBufferObject),
+                                         VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT, vulkanDevice.allocator());
+            }
+        }
+
         VkPipeline createComputePipeline(const char* shaderPath, VkPipelineLayout layout) {
             const auto shader = vkutil::loadShaderModule(device, assetManager, shaderPath);
             VkPipelineShaderStageCreateInfo stage{VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO};
@@ -1277,6 +1420,35 @@ namespace {
             }
         }
 
+        void createSceneViewportResources() {
+            // Start with the drawable extent. The editor will later supply its
+            // panel extent through the renderer viewport API; creating it here
+            // also makes the off-screen lifecycle valid for non-editor users.
+            sceneViewportTarget.create(vulkanDevice.physical(), device, swapchain.extent(),
+                                       msaa.sampleCount());
+            VkImageView attachments[] = {
+                sceneViewportTarget.color().imageView(), sceneViewportTarget.depth().imageView()};
+            VkFramebufferCreateInfo info{VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO};
+            info.renderPass = forwardPass.renderPass();
+            info.attachmentCount = 2;
+            info.pAttachments = attachments;
+            info.width = sceneViewportTarget.extent().width;
+            info.height = sceneViewportTarget.extent().height;
+            info.layers = 1;
+            if (vkCreateFramebuffer(device, &info, nullptr, &sceneViewportFramebuffer) != VK_SUCCESS) {
+                sceneViewportTarget.destroy();
+                throw std::runtime_error("Could not create Scene View framebuffer");
+            }
+        }
+
+        void destroySceneViewportResources() noexcept {
+            if (sceneViewportFramebuffer != VK_NULL_HANDLE) {
+                vkDestroyFramebuffer(device, sceneViewportFramebuffer, nullptr);
+                sceneViewportFramebuffer = VK_NULL_HANDLE;
+            }
+            sceneViewportTarget.destroy();
+        }
+
         void createCommandPool() {
             VkCommandPoolCreateInfo poolInfo{};
             poolInfo.sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
@@ -1360,7 +1532,10 @@ namespace {
                 throw std::runtime_error("Primary CameraComponent has unsupported settings");
             }
 
-            camera.emplace(Degrees{component.fieldOfView}, component.aspectRatio,
+            // Game View is presented in a fixed 16:9 editor frame. Keep the
+            // projection in that aspect too, independently of dock layout.
+            const float gameAspect = editorUiActive ? (16.0f / 9.0f) : component.aspectRatio;
+            camera.emplace(Degrees{component.fieldOfView}, gameAspect,
                            component.nearClip, component.farClip);
             camera->setPosition(transform.position);
             camera->setRotation(Degrees{transform.rotation.y()},
@@ -1372,9 +1547,23 @@ namespace {
                 glm::vec4{camera->position().native(), 1.0f},
                 glm::vec4{light.direction.native(), light.intensity},
                 glm::vec4{light.color.r(), light.color.g(), light.color.b(), 1.0f},
-                hasShadowCasters ? 1u : 0u,
+                (optimizationFeatures.shadows && hasShadowCasters) ? 1u : 0u,
                 materialSlots};
             uniformBuffers[frame].update(&data, sizeof(data));
+        }
+
+        void updateSceneViewportUniformBuffer(const uint32_t frame) {
+            const float aspect = static_cast<float>(sceneViewportTarget.extent().width) /
+                                 static_cast<float>(sceneViewportTarget.extent().height);
+            const ViewportCamera sceneCamera = ViewportCamera::scene(aspect);
+            const DirectionalLight light = directionalLight();
+            const UniformBufferObject data{
+                sceneCamera.camera.viewMatrix(), sceneCamera.camera.projectionMatrix(), lightSpaceMatrix(),
+                glm::vec4{sceneCamera.camera.position().native(), 1.0f},
+                glm::vec4{light.direction.native(), light.intensity},
+                glm::vec4{light.color.r(), light.color.g(), light.color.b(), 1.0f},
+                0u, materialSlots};
+            sceneUniformBuffers[frame].update(&data, sizeof(data));
         }
 
         void recordCommandBuffer(VkCommandBuffer commandBuffer, uint32_t imageIndex) {
@@ -1415,13 +1604,15 @@ namespace {
             // ParticleSystem uses a CPU-authoritative simulation and uploads to
             // the current frame's private buffer during recordRender.
 
-            shadowPass.record(
-                commandBuffer, lightSpaceMatrix(), vertexBuffer.handle(),
-                shadowInstanceBuffers[currentFrame].handle(), indexBuffer.handle(),
-                shadowPass.descriptorSet(currentFrame),
-                shadowCullingPasses[currentFrame],
-                shadowIndirectDraws[currentFrame],
-                static_cast<std::uint32_t>(gpuObjects.size()));
+            if (optimizationFeatures.shadows) {
+                shadowPass.record(
+                    commandBuffer, lightSpaceMatrix(), vertexBuffer.handle(),
+                    shadowInstanceBuffers[currentFrame].handle(), indexBuffer.handle(),
+                    shadowPass.descriptorSet(currentFrame),
+                    shadowCullingPasses[currentFrame],
+                    shadowIndirectDraws[currentFrame],
+                    static_cast<std::uint32_t>(gpuObjects.size()));
+            }
 
             gpuCullingPasses[currentFrame].record(
                 commandBuffer, static_cast<std::uint32_t>(gpuObjects.size()));
@@ -1448,6 +1639,19 @@ namespace {
             }
             forwardPass.end(commandBuffer);
 
+            // Render the scene into an off-screen image with the very same
+            // scene data and draw infrastructure as Game View. At this stage
+            // the scene camera descriptor is still wired in the following
+            // change; keeping the pass here gives the target a real render
+            // lifecycle immediately instead of merely clearing an image.
+            forwardPass.begin(
+                commandBuffer, sceneViewportFramebuffer, sceneViewportTarget.extent(),
+                sceneDescriptorPass.descriptorSet(currentFrame), vertexBuffer.handle(),
+                instanceBuffers[currentFrame].handle(), indexBuffer.handle());
+            forwardPass.draw(commandBuffer, indirectDraws[currentFrame]);
+            sceneSkyPass.record(commandBuffer, currentFrame);
+            forwardPass.end(commandBuffer);
+
             if (hizEnabled) {
                 VkImageMemoryBarrier2 depthReady{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2};
                 depthReady.srcStageMask = VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT;
@@ -1469,9 +1673,23 @@ namespace {
                 hiZValid = true;
             }
 
-            tonemapPass.record(commandBuffer, imageIndex, swapchain.extent());
-            canvasRenderer.record(scene.uiCanvas(), commandBuffer, imageIndex, currentFrame,
-                                  swapchain.extent());
+            if (editorUiActive) {
+                VkRenderPassBeginInfo pass{VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO};
+                pass.renderPass = editorUiRenderPass;
+                pass.framebuffer = editorUiFramebuffers.at(imageIndex);
+                pass.renderArea.extent = swapchain.extent();
+                VkClearValue clear{};
+                clear.color = {{0.06f, 0.07f, 0.09f, 1.0f}};
+                pass.clearValueCount = 1;
+                pass.pClearValues = &clear;
+                vkCmdBeginRenderPass(commandBuffer, &pass, VK_SUBPASS_CONTENTS_INLINE);
+                ImGui_ImplVulkan_RenderDrawData(ImGui::GetDrawData(), commandBuffer);
+                vkCmdEndRenderPass(commandBuffer);
+            } else {
+                tonemapPass.record(commandBuffer, imageIndex, swapchain.extent());
+                canvasRenderer.record(scene.uiCanvas(), commandBuffer, imageIndex, currentFrame,
+                                      swapchain.extent());
+            }
 
             if (vkEndCommandBuffer(commandBuffer) != VK_SUCCESS) {
                 throw std::runtime_error("Could not end command buffer");
@@ -1503,12 +1721,14 @@ namespace {
         // ---------- SWAPCHAIN RECREATE ----------
 
         void cleanupSwapChain() {
+            destroyEditorUiResources();
             canvasRenderer.destroy();
             tonemapPass.destroy();
             if (hdrFramebuffer != VK_NULL_HANDLE) {
                 vkDestroyFramebuffer(device, hdrFramebuffer, nullptr);
                 hdrFramebuffer = VK_NULL_HANDLE;
             }
+            destroySceneViewportResources();
 
             msaa.destroy();
             hdrBuffer.destroy();
@@ -1558,6 +1778,7 @@ namespace {
                 vkDestroyFramebuffer(device, hdrFramebuffer, nullptr);
                 hdrFramebuffer = VK_NULL_HANDLE;
             }
+            destroySceneViewportResources();
             msaa.destroy();
             hdrBuffer.destroy();
             destroyDepthResources();
@@ -1576,8 +1797,10 @@ namespace {
             createRenderFinishedSemaphores();
 
             createFramebuffers();
+            createSceneViewportResources();
             createTonemapPass();
             createUIResources();
+            createEditorUiResources();
             createCullingResources();
         }
 
@@ -1674,12 +1897,15 @@ namespace {
 
             vkResetCommandBuffer(commandBuffers[currentFrame], 0);
             updateUniformBuffer(currentFrame);
+            updateSceneViewportUniformBuffer(currentFrame);
             updateRenderableBuffers();
             if (particleSystem) {
                 particleSystem->update(static_cast<float>(Time::deltaTime()));
             }
             updateCullingUniformBuffer(currentFrame);
-            updateShadowCullingUniformBuffer(currentFrame);
+            if (optimizationFeatures.shadows) {
+                updateShadowCullingUniformBuffer(currentFrame);
+            }
             recordCommandBuffer(commandBuffers[currentFrame], imageIndex);
 
             VkSubmitInfo submitInfo{};
@@ -1742,40 +1968,6 @@ namespace {
             }
         }
 
-        void mainLoop() {
-            bool running = true;
-            SDL_Event event;
-            Time::init();
-            while (running) {
-                Input::beginFrame();
-                while (SDL_PollEvent(&event)) {
-                    SDLInput::processEvent(event);
-                    if (event.type == SDL_EVENT_QUIT) {
-                        running = false;
-                    } else if (event.type == SDL_EVENT_WINDOW_RESIZED ||
-                               event.type == SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED) {
-                        framebufferResized = true;
-                               } else if (event.type == SDL_EVENT_KEY_DOWN) {
-                                   if (event.key.key == SDLK_ESCAPE) running = false;
-                               }
-                }
-
-                if (!running) {
-                    break;
-                }
-
-                Time::update();
-                updateCameraInput();
-                updateFpsCounter();
-                drawFrame();
-            }
-            if (cameraMouseLookActive) {
-                SDLInput::setRelativeMouseMode(window, false);
-                cameraMouseLookActive = false;
-            }
-            vkDeviceWaitIdle(device);
-        }
-
         // ---------- CLEANUP ----------
 
         void cleanup() {
@@ -1789,10 +1981,12 @@ namespace {
                 cleanupSwapChain();
 
                 skyPass.destroy();
+                sceneSkyPass.destroy();
                 particlePipeline.destroy();
                 particleSystem.reset();
                 forwardPass.destroy();
                 shadowPass.destroy();
+                sceneDescriptorPass.destroy();
                 destroyCullingResources();
                 indexBuffer.destroy();
                 vertexBuffer.destroy();
@@ -1806,6 +2000,9 @@ namespace {
                     buffer.destroy();
                 }
                 for (Buffer& uniformBuffer : uniformBuffers) {
+                    uniformBuffer.destroy();
+                }
+                for (Buffer& uniformBuffer : sceneUniformBuffers) {
                     uniformBuffer.destroy();
                 }
                 fpsFontTexture.destroy();
@@ -1854,20 +2051,33 @@ namespace {
                 instance = VK_NULL_HANDLE;
             }
 
-            if (window != nullptr) {
-                SDL_DestroyWindow(window);
-                window = nullptr;
-            }
-            SDL_Quit();
+            // The application, not the renderer, owns the SDL window and SDL lifetime.
+            window = nullptr;
         }
     };
 
-} // namespace
+Renderer::~Renderer() = default;
+Renderer::Renderer(RenderOptimizationFeatures features)
+    : optimizationFeatures_(features) {}
 
-void Renderer::run(Scene& scene) {
-    RenderApp app{scene, optimizationFeatures_, assetManager_, forwardPass_, skyPass_,
-                  tonemapPass_, particlePipeline_, canvasRenderer_};
-    app.run();
+void Renderer::initialize(Scene& scene, SDL_Window* window) {
+    if (backend_) throw std::logic_error("Renderer is already initialized");
+    backend_ = std::make_unique<Backend>(scene, window, optimizationFeatures_, assetManager_,
+                                         forwardPass_, skyPass_, tonemapPass_, particlePipeline_,
+                                         canvasRenderer_);
+    backend_->initialize();
 }
+
+void Renderer::beginFrame() { backend_->beginFrame(); }
+void Renderer::beginEditorUiFrame() { backend_->beginEditorUiFrame(); }
+void Renderer::processEvent(const SDL_Event& event) { backend_->processEvent(event); }
+void Renderer::renderFrame() { backend_->renderFrame(); }
+VkDescriptorSet Renderer::gameViewportDescriptor() const noexcept {
+    return backend_ ? backend_->gameViewportTexture() : VK_NULL_HANDLE;
+}
+VkDescriptorSet Renderer::sceneViewportDescriptor() const noexcept {
+    return backend_ ? backend_->sceneViewportTexture() : VK_NULL_HANDLE;
+}
+void Renderer::shutdown() noexcept { backend_.reset(); }
 
 } // namespace Engine

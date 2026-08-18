@@ -25,11 +25,11 @@ add_library(DearImGui STATIC
         ${dearimgui_SOURCE_DIR}/imgui_tables.cpp
         ${dearimgui_SOURCE_DIR}/imgui_widgets.cpp
         ${dearimgui_SOURCE_DIR}/backends/imgui_impl_sdl3.cpp
-        ${dearimgui_SOURCE_DIR}/backends/imgui_impl_sdlrenderer3.cpp)
+        ${dearimgui_SOURCE_DIR}/backends/imgui_impl_vulkan.cpp)
 target_include_directories(DearImGui PUBLIC
         ${dearimgui_SOURCE_DIR}
         ${dearimgui_SOURCE_DIR}/backends)
-target_link_libraries(DearImGui PUBLIC SDL3::SDL3)
+target_link_libraries(DearImGui PUBLIC SDL3::SDL3 Vulkan::Vulkan)
 find_path(GLM_INCLUDE_DIR NAMES glm/glm.hpp HINTS "$ENV{VULKAN_SDK}/Include" REQUIRED)
 find_path(VMA_INCLUDE_DIR NAMES vk_mem_alloc.h HINTS "$ENV{VULKAN_SDK}/Include/vma" REQUIRED)
 
@@ -68,6 +68,7 @@ add_library(Engine
         Engine/Source/Renderer/Vulkan/hdr_buffer.cpp
         Engine/Source/Renderer/Vulkan/msaa.cpp
         Engine/Source/Renderer/Vulkan/renderer.cpp
+        Engine/Source/Renderer/Vulkan/ViewportRenderTarget.cpp
         Engine/Source/Renderer/Vulkan/shadow_map.cpp
         Engine/Source/Renderer/Vulkan/swapchain.cpp
         Engine/Source/Renderer/Vulkan/vulkan_device.cpp
@@ -76,7 +77,7 @@ add_library(Engine
         Platform/SDL/SDLInput.cpp
 )
 
-target_link_libraries(Engine PUBLIC SDL3::SDL3 Vulkan::Vulkan)
+target_link_libraries(Engine PUBLIC SDL3::SDL3 Vulkan::Vulkan PRIVATE DearImGui)
 target_include_directories(Engine
         PUBLIC
             $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/Engine/Include>
@@ -93,7 +94,7 @@ target_link_libraries(GamEngine PRIVATE Engine)
 
 add_executable(Editor
         Editor/Source/main.cpp)
-target_link_libraries(Editor PRIVATE DearImGui Engine SDL3::SDL3)
+target_link_libraries(Editor PRIVATE DearImGui Engine SDL3::SDL3 Vulkan::Vulkan)
 
 find_program(GLSLANG_VALIDATOR NAMES glslangValidator)
 find_program(GLSLC NAMES glslc)
