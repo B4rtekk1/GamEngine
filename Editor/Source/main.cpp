@@ -94,6 +94,56 @@ void configureEditorDockLayout() {
     configured = true;
 }
 
+void drawEditorMenuBar() {
+    static bool showShortcuts = false;
+    static bool showAbout = false;
+
+    if (!ImGui::BeginMainMenuBar()) return;
+
+    if (ImGui::BeginMenu("Edit")) {
+        // The editor does not yet have a command history, so keep these
+        // commands visible and disabled until the corresponding systems exist.
+        ImGui::MenuItem("Undo", "Ctrl+Z", false, false);
+        ImGui::MenuItem("Redo", "Ctrl+Y", false, false);
+        ImGui::Separator();
+        ImGui::MenuItem("Cut", "Ctrl+X", false, false);
+        ImGui::MenuItem("Copy", "Ctrl+C", false, false);
+        ImGui::MenuItem("Paste", "Ctrl+V", false, false);
+        ImGui::MenuItem("Duplicate", "Ctrl+D", false, false);
+        ImGui::Separator();
+        ImGui::MenuItem("Select All", "Ctrl+A", false, false);
+        ImGui::EndMenu();
+    }
+
+    if (ImGui::BeginMenu("Help")) {
+        if (ImGui::MenuItem("Keyboard Shortcuts")) showShortcuts = true;
+        ImGui::Separator();
+        if (ImGui::MenuItem("About GamEngine Editor")) showAbout = true;
+        ImGui::EndMenu();
+    }
+
+    ImGui::EndMainMenuBar();
+
+    if (showShortcuts) {
+        ImGui::Begin("Keyboard Shortcuts", &showShortcuts);
+        ImGui::TextUnformatted("Editor shortcuts");
+        ImGui::Separator();
+        ImGui::BulletText("WASD + mouse: move and look in Scene View");
+        ImGui::BulletText("Ctrl+D: duplicate selected object (coming soon)");
+        ImGui::BulletText("Ctrl+Z / Ctrl+Y: undo / redo (coming soon)");
+        ImGui::End();
+    }
+
+    if (showAbout) {
+        ImGui::Begin("About GamEngine Editor", &showAbout);
+        ImGui::TextUnformatted("GamEngine Editor");
+        ImGui::TextUnformatted("A lightweight scene and particle editor.");
+        ImGui::Separator();
+        ImGui::TextUnformatted("Unity-inspired workspace");
+        ImGui::End();
+    }
+}
+
 } // namespace
 
 int main() {
@@ -127,6 +177,7 @@ int main() {
             if (!running) break;
 
             renderer.beginEditorUiFrame();
+            drawEditorMenuBar();
             const ImGuiID dockspaceId = ImGui::GetMainViewport()->ID;
             ImGui::DockSpaceOverViewport(dockspaceId, ImGui::GetMainViewport(),
                                          ImGuiDockNodeFlags_PassthruCentralNode);
