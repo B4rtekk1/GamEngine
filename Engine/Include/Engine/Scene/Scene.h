@@ -24,6 +24,7 @@
 #include <memory>
 #include <stdexcept>
 #include <string>
+#include <vector>
 
 namespace Engine {
 
@@ -53,6 +54,9 @@ public:
     Entity plane{NullEntity};
     Entity camera{NullEntity};
     Entity tree{NullEntity};
+    std::vector<Entity> editorGameObjects;
+    std::vector<Entity> editorCubes;
+    std::vector<Entity> editorPlanes;
     Particles::ParticleEmitter particleEmitter{};
     [[nodiscard]] bool isParticleScene() const noexcept { return particleScene_; }
     std::array<Entity, CubeCount> cubes{};
@@ -134,6 +138,36 @@ private:
     }
 
 public:
+
+    /** Creates an empty editor GameObject with the standard base components. */
+    [[nodiscard]] Entity createGameObject() {
+        const Entity entity = registry.create();
+        registry.add<Transform>(entity);
+        registry.add<MeshRenderer>(entity);
+        editorGameObjects.push_back(entity);
+        return entity;
+    }
+
+    /** Creates a cube-backed GameObject for the editor. */
+    [[nodiscard]] Entity createCube() {
+        SceneBuilder builder{registry};
+        const Entity entity = builder.createMeshEntity(
+            cubeMesh, Transform{.position = {0.0f, 0.5f, 0.0f}},
+            PBRMaterial{.baseColor = {0.72f, 0.72f, 0.72f},
+                        .metallic = 0.05f, .roughness = 0.62f});
+        editorCubes.push_back(entity);
+        return entity;
+    }
+
+    /** Creates a plane-backed GameObject for the editor. */
+    [[nodiscard]] Entity createPlane() {
+        SceneBuilder builder{registry};
+        const Entity entity = builder.createMeshEntity(
+            planeMesh, Transform{.scale = {2.0f, 1.0f, 2.0f}});
+        editorPlanes.push_back(entity);
+        return entity;
+    }
+
 
     explicit Scene(const SceneType sceneType = SceneType::Cubes) {
         const bool treeScene = sceneType == SceneType::Tree;

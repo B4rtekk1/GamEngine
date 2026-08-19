@@ -67,6 +67,15 @@ const char* entityName(const Engine::Scene& scene, const Engine::Entity entity) 
     if (entity == scene.plane) return "Plane";
     if (entity == scene.camera) return "Camera";
     if (entity == scene.tree) return "Tree";
+    for (const Engine::Entity editorCube : scene.editorCubes) {
+        if (editorCube == entity) return "Cube";
+    }
+    for (const Engine::Entity editorPlane : scene.editorPlanes) {
+        if (editorPlane == entity) return "Plane";
+    }
+    for (std::size_t index = 0; index < scene.editorGameObjects.size(); ++index) {
+        if (scene.editorGameObjects[index] == entity) return "GameObject";
+    }
     return "Entity";
 }
 
@@ -104,12 +113,14 @@ bool drawViewport(VkDescriptorSet gameDescriptor, VkDescriptorSet sceneDescripto
     return sceneCameraInput;
 }
 
-Engine::Entity drawHierarchy(const Engine::Scene& scene, const Engine::Entity selected) {
+Engine::Entity drawHierarchy(Engine::Scene& scene, const Engine::Entity selected) {
     Engine::Entity clicked = Engine::NullEntity;
     ImGui::Begin("Hierarchy");
     ImGui::PushStyleColor(ImGuiCol_Text, {0.28f, 0.84f, 0.91f, 1.0f});
     ImGui::TextUnformatted("SCENE HIERARCHY");
     ImGui::PopStyleColor();
+    ImGui::SameLine(ImGui::GetWindowWidth() - 75.0f);
+    if (ImGui::SmallButton("+")) clicked = scene.createGameObject();
     ImGui::SameLine(ImGui::GetWindowWidth() - 45.0f);
     ImGui::TextDisabled("%zu", scene.registry.size());
     static char filter[64] = {};
@@ -135,6 +146,15 @@ Engine::Entity drawHierarchy(const Engine::Scene& scene, const Engine::Entity se
         }
         if (scene.tree != Engine::NullEntity) {
             entityLabel("Tree", scene.tree);
+        }
+        for (const Engine::Entity entity : scene.editorGameObjects) {
+            entityLabel("GameObject", entity);
+        }
+        for (const Engine::Entity entity : scene.editorCubes) {
+            entityLabel("Cube", entity);
+        }
+        for (const Engine::Entity entity : scene.editorPlanes) {
+            entityLabel("Plane", entity);
         }
         ImGui::TreePop();
     }
@@ -218,11 +238,25 @@ void configureEditorDockLayout() {
     configured = true;
 }
 
-void drawEditorMenuBar() {
+Engine::Entity drawEditorMenuBar(Engine::Scene& scene) {
     static bool showShortcuts = false;
     static bool showAbout = false;
+    Engine::Entity createdEntity = Engine::NullEntity;
 
-    if (!ImGui::BeginMainMenuBar()) return;
+    if (!ImGui::BeginMainMenuBar()) return Engine::NullEntity;
+
+    if (ImGui::BeginMenu("GameObject")) {
+        if (ImGui::MenuItem("Create Empty", "Ctrl+Shift+N")) {
+            createdEntity = scene.createGameObject();
+        }
+        if (ImGui::MenuItem("Create Cube")) {
+            createdEntity = scene.createCube();
+        }
+        if (ImGui::MenuItem("Create Plane")) {
+            createdEntity = scene.createPlane();
+        }
+        ImGui::EndMenu();
+    }
 
     if (ImGui::BeginMenu("Edit")) {
         // The editor does not yet have a command history, so keep these
@@ -266,6 +300,8 @@ void drawEditorMenuBar() {
         ImGui::TextUnformatted("Unity-inspired workspace");
         ImGui::End();
     }
+
+    return createdEntity;
 }
 
 } // namespace
@@ -301,7 +337,11 @@ int main() {
             if (!running) break;
 
             renderer.beginEditorUiFrame();
-            drawEditorMenuBar();
+            if (const Engine::Entity created = drawEditorMenuBar(scene);
+                created != Engine::NullEntity) {
+                selectedEntity = created;
+                renderer.setEditorSelection(selectedEntity);
+            }
             const ImGuiID dockspaceId = ImGui::GetMainViewport()->ID;
             ImGui::DockSpaceOverViewport(dockspaceId, ImGui::GetMainViewport(),
                                          ImGuiDockNodeFlags_PassthruCentralNode);
