@@ -1,7 +1,7 @@
 #pragma once
 
 #include "Engine/Renderer/Geometry/Mesh.h"
-#include "Engine/Renderer/Materials/PBRMateial.h"
+#include "Engine/Renderer/Materials/PBRMaterial.h"
 
 #include <cstdint>
 #include <limits>

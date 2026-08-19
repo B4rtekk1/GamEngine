@@ -4,7 +4,7 @@
 #include "Engine/ECS/Registry.h"
 #include "Engine/ECS/Components/CameraComponent.h"
 #include "Engine/Renderer/MeshRenderer.h"
-#include "Engine/Renderer/Materials/PBRMateial.h"
+#include "Engine/Renderer/Materials/PBRMaterial.h"
 #include "Engine/Scene/Components/LightComponent.h"
 
 #include <cstdint>
