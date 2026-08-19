@@ -44,6 +44,7 @@ public:
         const Entity entity = makeEntity(index, m_generations[index]);
         m_entities.insert(entity);
         ++m_mutationRevision;
+        ++m_structuralRevision;
         return entity;
     }
 
@@ -67,6 +68,7 @@ public:
         ++m_generations[index];
         m_freeEntities.push_back(index);
         ++m_mutationRevision;
+        ++m_structuralRevision;
     }
 
     /**
@@ -117,6 +119,11 @@ public:
         return m_mutationRevision;
     }
 
+    /** @brief Revision for changes that invalidate renderer component pools. */
+    [[nodiscard]] std::uint64_t structuralRevision() const noexcept {
+        return m_structuralRevision;
+    }
+
     /**
      * @brief Adds and constructs a component for an entity.
      *
@@ -137,6 +144,7 @@ public:
         assert(valid(entity) && "Cannot add a component to an invalid entity");
         T& component = getOrCreatePool<T>().add(entity, std::forward<Args>(args)...);
         ++m_mutationRevision;
+        ++m_structuralRevision;
         return component;
     }
 
@@ -158,6 +166,7 @@ public:
         if (auto *pool = findPool<T>()) {
             pool->remove(entity);
             ++m_mutationRevision;
+            ++m_structuralRevision;
         }
     }
 
@@ -393,6 +402,7 @@ private:
     > m_componentPools;
 
     std::uint64_t m_mutationRevision = 0;
+    std::uint64_t m_structuralRevision = 0;
 };
 
 }

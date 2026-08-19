@@ -79,6 +79,20 @@ const char* entityName(const Engine::Scene& scene, const Engine::Entity entity) 
     return "Entity";
 }
 
+bool dragFloat3WithWheel(const char* label, float values[3], const float speed,
+                         const char* format) {
+    bool changed = ImGui::DragFloat3(label, values, speed, 0.0f, 0.0f, format);
+    if (!ImGui::IsItemHovered() || ImGui::GetIO().MouseWheel == 0.0f) return changed;
+
+    const ImVec2 min = ImGui::GetItemRectMin();
+    const ImVec2 max = ImGui::GetItemRectMax();
+    const float fieldWidth = (max.x - min.x) / 3.0f;
+    const int field = std::clamp(
+        static_cast<int>((ImGui::GetIO().MousePos.x - min.x) / fieldWidth), 0, 2);
+    values[field] += ImGui::GetIO().MouseWheel * speed;
+    return true;
+}
+
 bool drawViewport(VkDescriptorSet gameDescriptor, VkDescriptorSet sceneDescriptor) {
     static bool showGameView = false;
     const VkDescriptorSet descriptor = showGameView ? gameDescriptor : sceneDescriptor;
@@ -194,7 +208,7 @@ void drawInspector(Engine::Scene& scene, const Engine::Entity selected) {
         float position[3] = {transform.position.x(), transform.position.y(), transform.position.z()};
         ImGui::TextDisabled("Position (X, Y, Z)");
         ImGui::SetNextItemWidth(-1.0f);
-        if (ImGui::InputFloat3("##position", position, "%.2f")) {
+        if (dragFloat3WithWheel("##position", position, 0.05f, "%.2f")) {
             scene.registry.get<Engine::Transform>(selected).position =
                 Engine::Vec3{position[0], position[1], position[2]};
         }
@@ -202,7 +216,7 @@ void drawInspector(Engine::Scene& scene, const Engine::Entity selected) {
         float rotation[3] = {transform.rotation.x(), transform.rotation.y(), transform.rotation.z()};
         ImGui::TextDisabled("Rotation (X, Y, Z)");
         ImGui::SetNextItemWidth(-1.0f);
-        if (ImGui::InputFloat3("##rotation", rotation, "%.1f")) {
+        if (dragFloat3WithWheel("##rotation", rotation, 0.5f, "%.1f")) {
             scene.registry.get<Engine::Transform>(selected).rotation =
                 Engine::Vec3{rotation[0], rotation[1], rotation[2]};
         }
@@ -210,16 +224,13 @@ void drawInspector(Engine::Scene& scene, const Engine::Entity selected) {
         float scale[3] = {transform.scale.x(), transform.scale.y(), transform.scale.z()};
         ImGui::TextDisabled("Scale (X, Y, Z)");
         ImGui::SetNextItemWidth(-1.0f);
-        if (ImGui::InputFloat3("##scale", scale, "%.2f")) {
+        if (dragFloat3WithWheel("##scale", scale, 0.01f, "%.2f")) {
             scene.registry.get<Engine::Transform>(selected).scale =
                 Engine::Vec3{scale[0], scale[1], scale[2]};
         }
     }
-    if (ImGui::CollapsingHeader("Components", ImGuiTreeNodeFlags_DefaultOpen)) {
-        ImGui::BulletText("Transform");
-        if (selected == scene.camera) ImGui::BulletText("Camera");
-        if (selected == scene.plane || selected == scene.tree) ImGui::BulletText("Mesh Renderer");
-    }
+    ImGui::SetNextItemWidth(-1.0f);
+    ImGui::Button("New Component", {-1.0f, 0.0f});
     ImGui::End();
 }
 
@@ -452,7 +463,7 @@ int main() {
                 rendererReloadPending = false;
             }
 
-            const std::uint64_t sceneRevisionBeforeUi = scene.registry.mutationRevision();
+            const std::uint64_t sceneStructureBeforeUi = scene.registry.structuralRevision();
             renderer.beginEditorUiFrame();
             bool antialiasingChanged = false;
             if (const Engine::Entity created = drawEditorMenuBar(scene, renderer,
@@ -479,8 +490,9 @@ int main() {
 
             if (antialiasingChanged) rendererReloadPending = true;
 
-            const bool sceneChanged = scene.registry.mutationRevision() != sceneRevisionBeforeUi;
-            if (sceneChanged) {
+            const bool sceneStructureChanged =
+                scene.registry.structuralRevision() != sceneStructureBeforeUi;
+            if (sceneStructureChanged) {
                 // The current Backend still owns buffers built from the old
                 // registry snapshot. Rebuild it before submitting another
                 // frame instead of letting update/render observe mixed state.

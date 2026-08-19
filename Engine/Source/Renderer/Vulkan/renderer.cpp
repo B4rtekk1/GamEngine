@@ -689,7 +689,10 @@ class Renderer::Backend {
             // full-screen Game View. The selected viewport is sampled only by
             // ImGui::Image, so clear the presentation image before drawing UI.
             color.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR; color.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
-            color.initialLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
+            // The first acquired swapchain image is still UNDEFINED. The
+            // pass clears it, so preserving PRESENT_SRC_KHR is unnecessary
+            // and makes the first submit use an invalid old layout.
+            color.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
             color.finalLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
             VkAttachmentReference reference{0, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL};
             VkSubpassDescription subpass{};
@@ -1654,22 +1657,38 @@ class Renderer::Backend {
             const bool hizEnabled = optimizationFeatures.gpuCulling &&
                                     optimizationFeatures.occlusionCulling;
             const bool hadPreviousHiZ = hiZValid;
-            if (hizEnabled && !hadPreviousHiZ) {
-                VkImageMemoryBarrier2 hiZInitialBarrier{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2};
-                hiZInitialBarrier.srcStageMask = VK_PIPELINE_STAGE_2_NONE;
-                hiZInitialBarrier.srcAccessMask = 0;
-                hiZInitialBarrier.dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
-                hiZInitialBarrier.dstAccessMask = VK_ACCESS_2_SHADER_SAMPLED_READ_BIT;
-                hiZInitialBarrier.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-                hiZInitialBarrier.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-                hiZInitialBarrier.image = hiZBuffer.image();
-                hiZInitialBarrier.subresourceRange = {
-                    VK_IMAGE_ASPECT_COLOR_BIT, 0, hiZBuffer.mipCount(), 0, 1};
+            // The culling descriptor set always contains the Hi-Z image, even
+            // when occlusion culling is disabled.  It therefore still needs
+            // the layout declared in the descriptor before the compute pass
+            // is dispatched; otherwise the validation layer reports an
+            // undefined image at vkQueueSubmit and some drivers lose the
+            // device (VK_ERROR_DEVICE_LOST).
+            if (optimizationFeatures.gpuCulling && !hadPreviousHiZ) {
+                VkImageMemoryBarrier2 initialBarriers[3] = {
+                    VkImageMemoryBarrier2{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2},
+                    VkImageMemoryBarrier2{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2},
+                    VkImageMemoryBarrier2{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2}
+                };
+                for (VkImageMemoryBarrier2& barrier : initialBarriers) {
+                    barrier.srcStageMask = VK_PIPELINE_STAGE_2_NONE;
+                    barrier.srcAccessMask = 0;
+                    barrier.dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+                    barrier.dstAccessMask = VK_ACCESS_2_SHADER_SAMPLED_READ_BIT;
+                    barrier.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+                    barrier.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+                    barrier.subresourceRange = {VK_IMAGE_ASPECT_DEPTH_BIT, 0, 1, 0, 1};
+                }
+                initialBarriers[0].image = depthBuffer.image();
+                initialBarriers[1].image = sceneViewportTarget.depth().image();
+                initialBarriers[2].image = hiZBuffer.image();
+                initialBarriers[2].subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+                initialBarriers[2].subresourceRange.levelCount = hiZBuffer.mipCount();
+                initialBarriers[2].newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
 
-                VkDependencyInfo hiZInitialDependency{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
-                hiZInitialDependency.imageMemoryBarrierCount = 1;
-                hiZInitialDependency.pImageMemoryBarriers = &hiZInitialBarrier;
-                vkCmdPipelineBarrier2(commandBuffer, &hiZInitialDependency);
+                VkDependencyInfo initialDependency{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
+                initialDependency.imageMemoryBarrierCount = 3;
+                initialDependency.pImageMemoryBarriers = initialBarriers;
+                vkCmdPipelineBarrier2(commandBuffer, &initialDependency);
             }
 
             // ParticleSystem uses a CPU-authoritative simulation and uploads to

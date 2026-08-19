@@ -33,8 +33,15 @@ VkSampleCountFlagBits MsaaResources::chooseSampleCount(
     VkPhysicalDeviceProperties properties{};
     vkGetPhysicalDeviceProperties(physicalDevice, &properties);
 
+    // Every attachment in the forward render pass must support the same
+    // sample count.  Checking only the color limit can select 4x on GPUs
+    // whose depth attachment supports only 1x/2x.  The resulting framebuffer
+    // is invalid and, on some drivers, the first submission loses the device;
+    // the next renderer reload then reports VK_ERROR_DEVICE_LOST from
+    // vkCreateDevice.
     const VkSampleCountFlags supported =
-        properties.limits.framebufferColorSampleCounts;
+        properties.limits.framebufferColorSampleCounts &
+        properties.limits.framebufferDepthSampleCounts;
 
     for (const VkSampleCountFlagBits count : kSampleCountsDescending) {
         if (count <= preferredSamples && (supported & count) != 0) {

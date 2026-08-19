@@ -98,7 +98,7 @@ namespace Engine::Culling
             .sampler = depthSampler,
             .imageView = depthImageView,
             .imageLayout =
-                VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL
+            VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL
         };
 
         VkDescriptorImageInfo destinationMipInfo{
@@ -235,7 +235,7 @@ namespace Engine::Culling
             .sampler = depthSampler,
             .imageView = depthImageView,
             .imageLayout =
-                VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL
+            VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL
         };
 
         VkWriteDescriptorSet write{
