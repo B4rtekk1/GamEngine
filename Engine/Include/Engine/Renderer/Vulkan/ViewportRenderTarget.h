@@ -2,6 +2,7 @@
 
 #include "Engine/Renderer/Vulkan/depth_buffer.h"
 #include "Engine/Renderer/Vulkan/hdr_buffer.h"
+#include "Engine/Renderer/Vulkan/msaa.h"
 
 namespace Engine {
 
@@ -22,6 +23,9 @@ public:
 
     [[nodiscard]] VkExtent2D extent() const noexcept { return extent_; }
     [[nodiscard]] const HdrBuffer& color() const noexcept { return color_; }
+    [[nodiscard]] VkImageView msaaColorImageView() const noexcept {
+        return msaaColor_.colorImageView();
+    }
     [[nodiscard]] const DepthBuffer& depth() const noexcept { return depth_; }
     [[nodiscard]] VkDescriptorImageInfo colorDescriptor() const noexcept;
 
@@ -31,6 +35,7 @@ private:
     VkSampleCountFlagBits samples_ = VK_SAMPLE_COUNT_1_BIT;
     VkExtent2D extent_{};
     HdrBuffer color_{};
+    MsaaResources msaaColor_{};
     DepthBuffer depth_{};
 };
 

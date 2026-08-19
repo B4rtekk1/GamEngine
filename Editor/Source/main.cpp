@@ -97,17 +97,19 @@ bool drawViewport(VkDescriptorSet gameDescriptor, VkDescriptorSet sceneDescripto
     const bool sceneCameraInput = !showGameView && ImGui::IsWindowHovered(ImGuiHoveredFlags_AllowWhenBlockedByActiveItem);
     const ImVec2 size = ImGui::GetContentRegionAvail();
     if (descriptor != VK_NULL_HANDLE && size.x > 1.0f && size.y > 1.0f) {
-        ImVec2 imageSize = size;
-        if (showGameView) {
-            constexpr float gameAspect = 16.0f / 9.0f;
-            imageSize.x = std::min(size.x, size.y * gameAspect);
-            imageSize.y = imageSize.x / gameAspect;
-            // Keep unused space as letterboxing around the fixed game frame.
-            ImGui::SetCursorPosX(ImGui::GetCursorPosX() + (size.x - imageSize.x) * 0.5f);
-            ImGui::SetCursorPosY(ImGui::GetCursorPosY() + (size.y - imageSize.y) * 0.5f);
-        }
+        constexpr float viewportAspect = 16.0f / 9.0f;
+        // Keep the rendered view at a fixed aspect ratio. The child clips the
+        // image when the panel is wider than 16:9, so the excess is removed
+        // symmetrically from the top and bottom instead of distorting it.
+        ImGui::BeginChild("##viewport-frame", size, false,
+                          ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
+        const ImVec2 frameSize = ImGui::GetContentRegionAvail();
+        const float imageHeight = frameSize.x / viewportAspect;
+        const float verticalOffset = (frameSize.y - imageHeight) * 0.5f;
+        ImGui::SetCursorPosY(ImGui::GetCursorPosY() + verticalOffset);
         ImGui::Image(ImTextureRef{static_cast<ImTextureID>(reinterpret_cast<uintptr_t>(descriptor))},
-                     imageSize, {0, 0}, {1, 1});
+                     {frameSize.x, imageHeight}, {0, 0}, {1, 1});
+        ImGui::EndChild();
     }
     ImGui::End();
     return sceneCameraInput;
@@ -246,9 +248,13 @@ void configureEditorDockLayout() {
     configured = true;
 }
 
-Engine::Entity drawEditorMenuBar(Engine::Scene& scene) {
+Engine::Entity drawEditorMenuBar(Engine::Scene& scene, Engine::Renderer& renderer,
+                                 bool& antialiasingChanged) {
     static bool showShortcuts = false;
     static bool showAbout = false;
+    static bool openSceneSettings = false;
+    static int antialiasingType = -1;
+    static int msaaSamples = -1;
     Engine::Entity createdEntity = Engine::NullEntity;
 
     if (!ImGui::BeginMainMenuBar()) return Engine::NullEntity;
@@ -263,6 +269,11 @@ Engine::Entity drawEditorMenuBar(Engine::Scene& scene) {
         if (ImGui::MenuItem("Create Plane")) {
             createdEntity = scene.createPlane();
         }
+        ImGui::EndMenu();
+    }
+
+    if (ImGui::BeginMenu("Scene")) {
+        if (ImGui::MenuItem("Antialiasing...")) openSceneSettings = true;
         ImGui::EndMenu();
     }
 
@@ -289,6 +300,76 @@ Engine::Entity drawEditorMenuBar(Engine::Scene& scene) {
     }
 
     ImGui::EndMainMenuBar();
+
+    if (openSceneSettings) {
+        if (antialiasingType < 0) {
+            antialiasingType = renderer.antialiasingLevel() == Engine::AntialiasingLevel::Off ? 0 : 1;
+            msaaSamples = renderer.antialiasingLevel() == Engine::AntialiasingLevel::MSAA2x ? 2 : 4;
+        }
+        ImGui::OpenPopup("Scene Settings");
+        openSceneSettings = false;
+    }
+
+    if (ImGui::BeginPopupModal("Scene Settings", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
+        constexpr const char* typeLabels[] = {"None", "MSAA", "FXAA (placeholder)", "TAA (placeholder)"};
+        constexpr const char* sampleLabels[] = {"2x", "4x"};
+
+        ImGui::TextUnformatted("Antialiasing");
+        ImGui::Separator();
+        ImGui::SetNextItemWidth(230.0f);
+        if (ImGui::BeginCombo("Type", typeLabels[antialiasingType])) {
+            for (int index = 0; index < 4; ++index) {
+                const bool isSelected = antialiasingType == index;
+                if (ImGui::Selectable(typeLabels[index], isSelected)) {
+                    antialiasingType = index;
+                    if (antialiasingType == 0) {
+                        renderer.setAntialiasingLevel(Engine::AntialiasingLevel::Off);
+                        antialiasingChanged = true;
+                    } else if (antialiasingType == 1) {
+                        renderer.setAntialiasingLevel(msaaSamples == 2
+                            ? Engine::AntialiasingLevel::MSAA2x
+                            : Engine::AntialiasingLevel::MSAA4x);
+                        antialiasingChanged = true;
+                    }
+                }
+                if (isSelected) ImGui::SetItemDefaultFocus();
+            }
+            ImGui::EndCombo();
+        }
+
+        ImGui::Spacing();
+        if (antialiasingType == 1) {
+            ImGui::SetNextItemWidth(230.0f);
+            if (ImGui::BeginCombo("Samples", msaaSamples == 2 ? sampleLabels[0] : sampleLabels[1])) {
+                for (const int samples : {2, 4}) {
+                    const bool isSelected = msaaSamples == samples;
+                    if (ImGui::Selectable(samples == 2 ? sampleLabels[0] : sampleLabels[1], isSelected)) {
+                        msaaSamples = samples;
+                        renderer.setAntialiasingLevel(samples == 2
+                            ? Engine::AntialiasingLevel::MSAA2x
+                            : Engine::AntialiasingLevel::MSAA4x);
+                        antialiasingChanged = true;
+                    }
+                    if (isSelected) ImGui::SetItemDefaultFocus();
+                }
+                ImGui::EndCombo();
+            }
+            ImGui::TextDisabled("MSAA is currently supported by the renderer.");
+        } else if (antialiasingType == 2 || antialiasingType == 3) {
+            ImGui::BeginDisabled();
+            float placeholderValue = 1.0f;
+            ImGui::SliderFloat("Quality", &placeholderValue, 0.0f, 1.0f);
+            ImGui::EndDisabled();
+            ImGui::TextDisabled("Placeholder: this antialiasing type is not implemented yet.");
+        } else {
+            ImGui::TextDisabled("Antialiasing is disabled.");
+        }
+
+        ImGui::Separator();
+        ImGui::TextDisabled("Changes are applied after reloading the scene.");
+        if (ImGui::Button("Close")) ImGui::CloseCurrentPopup();
+        ImGui::EndPopup();
+    }
 
     if (showShortcuts) {
         ImGui::Begin("Keyboard Shortcuts", &showShortcuts);
@@ -355,7 +436,9 @@ int main() {
 
             const std::uint64_t sceneRevisionBeforeUi = scene.registry.mutationRevision();
             renderer.beginEditorUiFrame();
-            if (const Engine::Entity created = drawEditorMenuBar(scene);
+            bool antialiasingChanged = false;
+            if (const Engine::Entity created = drawEditorMenuBar(scene, renderer,
+                                                                  antialiasingChanged);
                 created != Engine::NullEntity) {
                 selectedEntity = created;
                 renderer.setEditorSelection(selectedEntity);
@@ -375,6 +458,8 @@ int main() {
             drawStatusBar(scene, selectedEntity);
             renderer.setEditorSceneCameraInput(sceneCameraInput);
             ImGui::Render();
+
+            if (antialiasingChanged) rendererReloadPending = true;
 
             const bool sceneChanged = scene.registry.mutationRevision() != sceneRevisionBeforeUi;
             if (sceneChanged) {
@@ -396,6 +481,8 @@ int main() {
         return 0;
     } catch (const std::exception& error) {
         std::fprintf(stderr, "Editor error: %s\n", error.what());
+        SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, "GamEngine Editor error",
+                                 error.what(), nullptr);
         return 1;
     }
 }

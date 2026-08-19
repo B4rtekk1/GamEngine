@@ -10,9 +10,16 @@
 
 #include <SDL3/SDL.h>
 
+#include <cstdint>
 #include <memory>
 
 namespace Engine {
+
+enum class AntialiasingLevel : std::uint32_t {
+    Off,
+    MSAA2x,
+    MSAA4x
+};
 
 class Registry;
 class Scene;
@@ -49,6 +56,14 @@ public:
         return optimizationFeatures_;
     }
 
+    void setAntialiasingLevel(AntialiasingLevel level) noexcept {
+        antialiasingLevel_ = level;
+    }
+
+    [[nodiscard]] AntialiasingLevel antialiasingLevel() const noexcept {
+        return antialiasingLevel_;
+    }
+
     ~Renderer();
 
     Renderer(const Renderer&) = delete;
@@ -75,6 +90,7 @@ public:
 private:
     class Backend;
     RenderOptimizationFeatures optimizationFeatures_{};
+    AntialiasingLevel antialiasingLevel_ = AntialiasingLevel::Off;
     // Asset cache belongs to the renderer lifetime, not to one Scene.
     Assets::AssetManager assetManager_{};
     // The forward pipeline is renderer infrastructure shared by scenes.

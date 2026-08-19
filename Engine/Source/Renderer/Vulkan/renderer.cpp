@@ -107,6 +107,7 @@ class Renderer::Backend {
     public:
         explicit Backend(Scene& scene, SDL_Window* window,
                            const RenderOptimizationFeatures& optimizationFeatures,
+                           const AntialiasingLevel antialiasingLevel,
                            Assets::AssetManager& assetManager,
                            ForwardPass& forwardPass,
                            SkyPass& skyPass,
@@ -116,6 +117,7 @@ class Renderer::Backend {
             : window(window), scene(scene),
               registry(scene.registry),
               optimizationFeatures(optimizationFeatures),
+              antialiasingLevel(antialiasingLevel),
               assetManager(assetManager),
               forwardPass(forwardPass),
               skyPass(skyPass),
@@ -168,13 +170,17 @@ class Renderer::Backend {
                 }
             }
 
-            if (!registry.has<Transform>(entity)) return;
-            Vec3 target = registry.get<Transform>(entity).position;
+            // Selection is a read-only editor operation. Use a const view of
+            // the registry so Registry::get() does not advance the scene
+            // mutation revision and trigger a full renderer reload.
+            const Registry& readRegistry = registry;
+            if (!readRegistry.has<Transform>(entity)) return;
+            Vec3 target = readRegistry.get<Transform>(entity).position;
             float radius = 1.0f;
             if (editorSelectedRenderable != std::numeric_limits<std::uint32_t>::max()) {
                 const RenderableRecord& record = renderables[editorSelectedRenderable];
                 const AABB bounds = record.localBounds.transformed(
-                    registry.get<Transform>(entity).matrix().native());
+                    readRegistry.get<Transform>(entity).matrix().native());
                 target = Vec3{(bounds.min.native() + bounds.max.native()) * 0.5f};
                 radius = std::max(glm::length(bounds.max.native() - bounds.min.native()) * 0.5f,
                                   1.0f);
@@ -246,6 +252,7 @@ class Renderer::Backend {
         Scene& scene;
         Registry& registry;
         const RenderOptimizationFeatures& optimizationFeatures;
+        const AntialiasingLevel antialiasingLevel;
         Assets::AssetManager& assetManager;
         std::optional<Camera> camera;
         Buffer vertexBuffer;
@@ -389,7 +396,11 @@ class Renderer::Backend {
             depthBuffer.initialize(vulkanDevice.physical(), device);
             // Hi-Z samples the completed depth attachment directly; a single-sample
             // depth buffer keeps that path portable without a depth-resolve pass.
-            msaa.initialize(vulkanDevice.physical(), device, VK_SAMPLE_COUNT_1_BIT);
+            const VkSampleCountFlagBits requestedSamples =
+                antialiasingLevel == AntialiasingLevel::MSAA4x ? VK_SAMPLE_COUNT_4_BIT :
+                antialiasingLevel == AntialiasingLevel::MSAA2x ? VK_SAMPLE_COUNT_2_BIT :
+                VK_SAMPLE_COUNT_1_BIT;
+            msaa.initialize(vulkanDevice.physical(), device, requestedSamples);
             createSwapChain();
             hdrBuffer.create(vulkanDevice.physical(), device, swapchain.extent());
             msaa.create(swapchain.extent(), HdrBuffer::Format);
@@ -1475,12 +1486,20 @@ class Renderer::Backend {
             // also makes the off-screen lifecycle valid for non-editor users.
             sceneViewportTarget.create(vulkanDevice.physical(), device, swapchain.extent(),
                                        msaa.sampleCount());
-            VkImageView attachments[] = {
+            // The forward render pass uses the same MSAA attachment layout for
+            // Game View and Scene View: multisampled color, multisampled depth,
+            // then a single-sample resolve target. The Scene View used to bind
+            // only its single-sample color and depth images here, which made
+            // the framebuffer incompatible as soon as MSAA was enabled.
+            VkImageView msaaAttachments[] = {
+                sceneViewportTarget.msaaColorImageView(), sceneViewportTarget.depth().imageView(),
+                sceneViewportTarget.color().imageView()};
+            VkImageView directAttachments[] = {
                 sceneViewportTarget.color().imageView(), sceneViewportTarget.depth().imageView()};
             VkFramebufferCreateInfo info{VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO};
             info.renderPass = forwardPass.renderPass();
-            info.attachmentCount = 2;
-            info.pAttachments = attachments;
+            info.attachmentCount = msaa.enabled() ? 3u : 2u;
+            info.pAttachments = msaa.enabled() ? msaaAttachments : directAttachments;
             info.width = sceneViewportTarget.extent().width;
             info.height = sceneViewportTarget.extent().height;
             info.layers = 1;
@@ -2066,9 +2085,12 @@ class Renderer::Backend {
             submitInfo.signalSemaphoreCount = 1;
             submitInfo.pSignalSemaphores = signalSemaphores;
 
-            if (vkQueueSubmit(vulkanDevice.graphicsQueue(), 1, &submitInfo,
-                              inFlightFences[currentFrame]) != VK_SUCCESS) {
-                throw std::runtime_error("Could not submit command buffer to queue");
+            const VkResult submitResult = vkQueueSubmit(
+                vulkanDevice.graphicsQueue(), 1, &submitInfo, inFlightFences[currentFrame]);
+            if (submitResult != VK_SUCCESS) {
+                throw std::runtime_error(
+                    "Could not submit command buffer to queue (VkResult " +
+                    std::to_string(static_cast<int>(submitResult)) + ")");
             }
             VkPresentInfoKHR presentInfo{};
             presentInfo.sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR;
@@ -2205,7 +2227,7 @@ Renderer::Renderer(RenderOptimizationFeatures features)
 
 void Renderer::initialize(Scene& scene, SDL_Window* window) {
     if (backend_) throw std::logic_error("Renderer is already initialized");
-    backend_ = std::make_unique<Backend>(scene, window, optimizationFeatures_, assetManager_,
+    backend_ = std::make_unique<Backend>(scene, window, optimizationFeatures_, antialiasingLevel_, assetManager_,
                                          forwardPass_, skyPass_, tonemapPass_, particlePipeline_,
                                          canvasRenderer_);
     backend_->initialize();
