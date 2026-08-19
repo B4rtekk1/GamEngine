@@ -324,6 +324,7 @@ int main() {
         Engine::Entity selectedEntity = Engine::NullEntity;
         constexpr auto targetFrame = std::chrono::microseconds{16'667};
         bool running = true;
+        bool rendererReloadPending = false;
         while (running) {
             const auto start = std::chrono::steady_clock::now();
             renderer.beginFrame();
@@ -336,6 +337,15 @@ int main() {
             }
             if (!running) break;
 
+            // Do not tear down/recreate Vulkan while a close event is waiting
+            // to be handled. This is especially important after an editor
+            // scene mutation, which schedules a renderer reload.
+            if (rendererReloadPending) {
+                renderer.reloadScene(scene, window);
+                rendererReloadPending = false;
+            }
+
+            const std::uint64_t sceneRevisionBeforeUi = scene.registry.mutationRevision();
             renderer.beginEditorUiFrame();
             if (const Engine::Entity created = drawEditorMenuBar(scene);
                 created != Engine::NullEntity) {
@@ -357,7 +367,16 @@ int main() {
             drawStatusBar(scene, selectedEntity);
             renderer.setEditorSceneCameraInput(sceneCameraInput);
             ImGui::Render();
-            renderer.renderFrame();
+
+            const bool sceneChanged = scene.registry.mutationRevision() != sceneRevisionBeforeUi;
+            if (sceneChanged) {
+                // The current Backend still owns buffers built from the old
+                // registry snapshot. Rebuild it before submitting another
+                // frame instead of letting update/render observe mixed state.
+                rendererReloadPending = true;
+            } else {
+                renderer.renderFrame();
+            }
 
             const auto elapsed = std::chrono::steady_clock::now() - start;
             if (elapsed < targetFrame) std::this_thread::sleep_for(targetFrame - elapsed);

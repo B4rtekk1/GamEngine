@@ -194,6 +194,12 @@ class Renderer::Backend {
             drawFrame();
         }
 
+        void waitIdle() const {
+            if (device != VK_NULL_HANDLE) {
+                vkDeviceWaitIdle(device);
+            }
+        }
+
     private:
         SDL_Window* window = nullptr;
 
@@ -2216,6 +2222,14 @@ void Renderer::setEditorSelection(const Entity entity) {
     if (backend_) backend_->setEditorSelection(entity);
 }
 void Renderer::renderFrame() { backend_->renderFrame(); }
+void Renderer::reloadScene(Scene& scene, SDL_Window* window) {
+    // The scene buffers and synchronization objects may still be referenced by
+    // the just-submitted frame. Backend cleanup also waits, but doing it here
+    // makes the lifetime boundary explicit before tearing down Vulkan state.
+    if (backend_) backend_->waitIdle();
+    shutdown();
+    initialize(scene, window);
+}
 VkDescriptorSet Renderer::gameViewportDescriptor() const noexcept {
     return backend_ ? backend_->gameViewportTexture() : VK_NULL_HANDLE;
 }

@@ -66,6 +66,8 @@ public:
     void setEditorSceneCameraInput(bool active);
     void setEditorSelection(Entity entity);
     void renderFrame();
+    /** Rebuilds renderer resources after editor scene geometry changes. */
+    void reloadScene(Scene& scene, SDL_Window* window);
     [[nodiscard]] VkDescriptorSet gameViewportDescriptor() const noexcept;
     [[nodiscard]] VkDescriptorSet sceneViewportDescriptor() const noexcept;
     void shutdown() noexcept;
