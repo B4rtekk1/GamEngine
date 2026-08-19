@@ -18,13 +18,16 @@ void ViewportRenderTarget::create(const VkPhysicalDevice physicalDevice, const V
     try {
         color_.create(physicalDevice_, device_, extent_);
         msaaColor_.initialize(physicalDevice_, device_, samples_);
+        // MsaaResources may fall back (for example, from 4x to 2x) when the
+        // selected GPU cannot multisample both color and depth at the
+        // requested rate.  The depth image must use that *effective* rate as
+        // well; otherwise the Scene View framebuffer contains attachments
+        // with different sample counts.  Some drivers report that only at
+        // submission time as VK_ERROR_DEVICE_LOST.
+        samples_ = msaaColor_.sampleCount();
         msaaColor_.create(extent_, HdrBuffer::Format);
         depth_.initialize(physicalDevice_, device_);
         depth_.create(extent_, samples_);
-        resolvedDepth_.initialize(physicalDevice_, device_);
-        if (samples_ != VK_SAMPLE_COUNT_1_BIT) {
-            resolvedDepth_.create(extent_, VK_SAMPLE_COUNT_1_BIT, depth_.format());
-        }
     } catch (...) {
         destroy();
         throw;
@@ -40,7 +43,6 @@ void ViewportRenderTarget::resize(const VkExtent2D extent) {
 
 void ViewportRenderTarget::destroy() noexcept {
     depth_.destroy();
-    resolvedDepth_.destroy();
     msaaColor_.destroy();
     color_.destroy();
     physicalDevice_ = VK_NULL_HANDLE;

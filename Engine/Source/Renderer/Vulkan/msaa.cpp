@@ -77,6 +77,27 @@ void MsaaResources::create(VkExtent2D extent, VkFormat colorFormat) {
 
     destroy();
 
+    // framebufferColorSampleCounts is only a device-wide upper bound.  A
+    // specific format can support fewer samples for the exact image usage we
+    // need here.  Creating a framebuffer from the broader limit is invalid;
+    // several drivers defer reporting that error until vkQueueSubmit and may
+    // report VK_ERROR_DEVICE_LOST.  Select the effective rate from the
+    // format-specific capabilities before creating any attachment.
+    VkImageFormatProperties formatProperties{};
+    const VkResult formatResult = vkGetPhysicalDeviceImageFormatProperties(
+        physicalDevice_, colorFormat, VK_IMAGE_TYPE_2D, VK_IMAGE_TILING_OPTIMAL,
+        VK_IMAGE_USAGE_TRANSIENT_ATTACHMENT_BIT | VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT,
+        0, &formatProperties);
+    if (formatResult != VK_SUCCESS) {
+        throw std::runtime_error("GPU does not support the MSAA color image format");
+    }
+    for (const VkSampleCountFlagBits count : kSampleCountsDescending) {
+        if (count <= sampleCount_ && (formatProperties.sampleCounts & count) != 0) {
+            sampleCount_ = count;
+            break;
+        }
+    }
+
     if (!enabled()) {
         return;
     }

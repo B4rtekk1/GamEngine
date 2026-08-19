@@ -231,8 +231,11 @@ class Renderer::Backend {
 
         MsaaResources msaa;
         HdrBuffer hdrBuffer;
-        DepthBuffer resolvedDepthBuffer;
-        VkResolveModeFlagBits depthResolveMode = VK_RESOLVE_MODE_NONE;
+        // A single-sample depth target used exclusively to generate Hi-Z when
+        // the visible geometry is rendered with MSAA.
+        DepthBuffer hiZDepthBuffer;
+        ForwardPass hiZDepthPrepass;
+        VkFramebuffer hiZDepthPrepassFramebuffer = VK_NULL_HANDLE;
 
         ForwardPass& forwardPass;
         GraphicsPipeline& particlePipeline;
@@ -401,19 +404,7 @@ class Renderer::Backend {
                 antialiasingLevel == AntialiasingLevel::MSAA2x ? VK_SAMPLE_COUNT_2_BIT :
                 VK_SAMPLE_COUNT_1_BIT;
             msaa.initialize(vulkanDevice.physical(), device, requestedSamples);
-            if (msaa.enabled()) {
-                VkPhysicalDeviceDepthStencilResolveProperties resolveProperties{
-                    VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DEPTH_STENCIL_RESOLVE_PROPERTIES};
-                VkPhysicalDeviceProperties2 properties{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2};
-                properties.pNext = &resolveProperties;
-                vkGetPhysicalDeviceProperties2(vulkanDevice.physical(), &properties);
-                const VkResolveModeFlags supported = resolveProperties.supportedDepthResolveModes;
-                depthResolveMode = (supported & VK_RESOLVE_MODE_MIN_BIT) != 0
-                    ? VK_RESOLVE_MODE_MIN_BIT : VK_RESOLVE_MODE_SAMPLE_ZERO_BIT;
-                if ((supported & depthResolveMode) == 0) {
-                    throw std::runtime_error("GPU does not support depth resolve required for MSAA Hi-Z");
-                }
-            }
+            waitForDrawableExtent();
             createSwapChain();
             hdrBuffer.create(vulkanDevice.physical(), device, swapchain.extent());
             msaa.create(swapchain.extent(), HdrBuffer::Format);
@@ -573,18 +564,29 @@ class Renderer::Backend {
             swapchain.create(window, surface, vulkanDevice);
         }
 
+        void waitForDrawableExtent() const {
+            int width = 0;
+            int height = 0;
+            SDL_GetWindowSizeInPixels(window, &width, &height);
+            while (width <= 0 || height <= 0) {
+                SDL_Event event;
+                SDL_WaitEvent(&event);
+                SDL_GetWindowSizeInPixels(window, &width, &height);
+            }
+        }
+
 
     void createDepthResources() {
         depthBuffer.create(swapchain.extent(), msaa.sampleCount());
-        resolvedDepthBuffer.initialize(vulkanDevice.physical(), device);
+        hiZDepthBuffer.initialize(vulkanDevice.physical(), device);
         if (msaa.enabled()) {
-            resolvedDepthBuffer.create(swapchain.extent(), VK_SAMPLE_COUNT_1_BIT,
-                                       depthBuffer.format());
+            hiZDepthBuffer.create(swapchain.extent(), VK_SAMPLE_COUNT_1_BIT,
+                                  depthBuffer.format());
         }
     }
 
     void destroyDepthResources() {
-        resolvedDepthBuffer.destroy();
+        hiZDepthBuffer.destroy();
         depthBuffer.destroy();
     }
 
@@ -618,8 +620,13 @@ class Renderer::Backend {
 
         void createForwardPass() {
             forwardPass.create(device, HdrBuffer::Format, depthBuffer.format(),
-                               msaa.sampleCount(), depthResolveMode,
+                               msaa.sampleCount(),
                                shadowPass.descriptorSetLayout(), assetManager);
+            if (msaa.enabled()) {
+                hiZDepthPrepass.create(device, HdrBuffer::Format, hiZDepthBuffer.format(),
+                                       VK_SAMPLE_COUNT_1_BIT,
+                                       shadowPass.descriptorSetLayout(), assetManager);
+            }
         }
 
         void createParticleResources() {
@@ -1092,9 +1099,35 @@ class Renderer::Backend {
             indices.clear();
         }
 
+        // Each frame in flight owns a separate GPU buffer.  A scene mutation
+        // must therefore be uploaded once per buffer, even after the registry
+        // revision itself has stopped changing.
+        void uploadPendingRenderableBuffers() {
+            if (instanceBuffers[currentFrame].handle() == VK_NULL_HANDLE) return;
+
+            const uint8_t bit = frameBit(currentFrame);
+            uploadDirtyIndices(instanceBuffers[currentFrame], instanceModels,
+                               &RenderableRecord::transformDirtyFrames,
+                               dirtyTransforms[currentFrame]);
+            uploadDirtyIndices(shadowInstanceBuffers[currentFrame], shadowInstanceModels,
+                               &RenderableRecord::transformDirtyFrames,
+                               dirtyTransforms[currentFrame]);
+            clearDirtyIndices(&RenderableRecord::transformDirtyFrames,
+                              dirtyTransforms[currentFrame], bit);
+            for (const std::size_t index : dirtyMaterials[currentFrame]) {
+                materialBuffers[currentFrame].update(
+                    materials.data() + index * materialSlots,
+                    sizeof(GPUMaterialData) * materialSlots,
+                    sizeof(GPUMaterialData) * index * materialSlots);
+            }
+            clearDirtyIndices(&RenderableRecord::materialDirtyFrames,
+                              dirtyMaterials[currentFrame], bit);
+        }
+
         void updateRenderableBuffers() {
             const std::uint64_t revision = registry.mutationRevision();
             if (revision == lastRenderableRevision) {
+                uploadPendingRenderableBuffers();
                 return;
             }
 
@@ -1187,25 +1220,7 @@ class Renderer::Backend {
                     }
                 }
             }
-            if (instanceBuffers[currentFrame].handle() != VK_NULL_HANDLE) {
-                const uint8_t bit = frameBit(currentFrame);
-                uploadDirtyIndices(instanceBuffers[currentFrame], instanceModels,
-                                   &RenderableRecord::transformDirtyFrames,
-                                   dirtyTransforms[currentFrame]);
-                uploadDirtyIndices(shadowInstanceBuffers[currentFrame], shadowInstanceModels,
-                                   &RenderableRecord::transformDirtyFrames,
-                                   dirtyTransforms[currentFrame]);
-                clearDirtyIndices(&RenderableRecord::transformDirtyFrames,
-                                  dirtyTransforms[currentFrame], bit);
-                for (const std::size_t index : dirtyMaterials[currentFrame]) {
-                    materialBuffers[currentFrame].update(
-                        materials.data() + index * materialSlots,
-                        sizeof(GPUMaterialData) * materialSlots,
-                        sizeof(GPUMaterialData) * index * materialSlots);
-                }
-                clearDirtyIndices(&RenderableRecord::materialDirtyFrames,
-                                  dirtyMaterials[currentFrame], bit);
-            }
+            uploadPendingRenderableBuffers();
             lastRenderableRevision = revision;
         }
 
@@ -1402,8 +1417,8 @@ class Renderer::Backend {
             hiZPass.create(device, cullingDescriptorPool, hiZCopyPipeline, hiZCopyPipelineLayout,
                 hiZCopyDescriptorSetLayout, hiZReducePipeline, hiZReducePipelineLayout,
                 hiZReduceDescriptorSetLayout, hiZBuffer,
-                msaa.enabled() ? resolvedDepthBuffer.imageView() : depthBuffer.imageView(),
-                msaa.enabled() ? resolvedDepthBuffer.sampler() : depthBuffer.sampler());
+                msaa.enabled() ? hiZDepthBuffer.imageView() : depthBuffer.imageView(),
+                msaa.enabled() ? hiZDepthBuffer.sampler() : depthBuffer.sampler());
 
             std::array<VkDescriptorSetLayout, MAX_FRAMES_IN_FLIGHT * 2> cullLayouts{};
             cullLayouts.fill(cullingDescriptorSetLayout);
@@ -1486,8 +1501,7 @@ class Renderer::Backend {
         void createFramebuffers() {
             const VkExtent2D extent = swapchain.extent();
             VkImageView msaaAttachments[] = {
-                msaa.colorImageView(), depthBuffer.imageView(), hdrBuffer.imageView(),
-                resolvedDepthBuffer.imageView()
+                msaa.colorImageView(), depthBuffer.imageView(), hdrBuffer.imageView()
             };
             VkImageView directAttachments[] = {
                 hdrBuffer.imageView(), depthBuffer.imageView()
@@ -1495,7 +1509,7 @@ class Renderer::Backend {
 
             VkFramebufferCreateInfo framebufferInfo{VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO};
             framebufferInfo.renderPass = forwardPass.renderPass();
-            framebufferInfo.attachmentCount = msaa.enabled() ? 4u : 2u;
+            framebufferInfo.attachmentCount = msaa.enabled() ? 3u : 2u;
             framebufferInfo.pAttachments = msaa.enabled()
                 ? msaaAttachments
                 : directAttachments;
@@ -1506,6 +1520,22 @@ class Renderer::Backend {
             if (vkCreateFramebuffer(device, &framebufferInfo, nullptr,
                                     &hdrFramebuffer) != VK_SUCCESS) {
                 throw std::runtime_error("Could not create HDR framebuffer");
+            }
+
+            if (msaa.enabled()) {
+                const VkImageView prepassAttachments[] = {
+                    hdrBuffer.imageView(), hiZDepthBuffer.imageView()};
+                VkFramebufferCreateInfo prepassInfo{VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO};
+                prepassInfo.renderPass = hiZDepthPrepass.renderPass();
+                prepassInfo.attachmentCount = 2;
+                prepassInfo.pAttachments = prepassAttachments;
+                prepassInfo.width = extent.width;
+                prepassInfo.height = extent.height;
+                prepassInfo.layers = 1;
+                if (vkCreateFramebuffer(device, &prepassInfo, nullptr,
+                                        &hiZDepthPrepassFramebuffer) != VK_SUCCESS) {
+                    throw std::runtime_error("Could not create Hi-Z depth prepass framebuffer");
+                }
             }
         }
 
@@ -1522,13 +1552,12 @@ class Renderer::Backend {
             // the framebuffer incompatible as soon as MSAA was enabled.
             VkImageView msaaAttachments[] = {
                 sceneViewportTarget.msaaColorImageView(), sceneViewportTarget.depth().imageView(),
-                sceneViewportTarget.color().imageView(),
-                sceneViewportTarget.resolvedDepth().imageView()};
+                sceneViewportTarget.color().imageView()};
             VkImageView directAttachments[] = {
                 sceneViewportTarget.color().imageView(), sceneViewportTarget.depth().imageView()};
             VkFramebufferCreateInfo info{VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO};
             info.renderPass = forwardPass.renderPass();
-            info.attachmentCount = msaa.enabled() ? 4u : 2u;
+            info.attachmentCount = msaa.enabled() ? 3u : 2u;
             info.pAttachments = msaa.enabled() ? msaaAttachments : directAttachments;
             info.width = sceneViewportTarget.extent().width;
             info.height = sceneViewportTarget.extent().height;
@@ -1719,6 +1748,35 @@ class Renderer::Backend {
             gpuCullingPasses[currentFrame].record(
                 commandBuffer, static_cast<std::uint32_t>(gpuObjects.size()));
 
+            // Never sample or resolve the multisampled depth attachment for
+            // Hi-Z.  A separate 1x prepass gives the hierarchy a conventional
+            // sampler2D source, then the main forward pass can use MSAA solely
+            // for the visible rasterization.
+            if (hizEnabled && msaa.enabled()) {
+                hiZDepthPrepass.begin(
+                    commandBuffer, hiZDepthPrepassFramebuffer, swapchain.extent(),
+                    shadowPass.descriptorSet(currentFrame), vertexBuffer.handle(),
+                    instanceBuffers[currentFrame].handle(), indexBuffer.handle());
+                hiZDepthPrepass.draw(commandBuffer, indirectDraws[currentFrame]);
+                hiZDepthPrepass.end(commandBuffer);
+
+                VkImageMemoryBarrier2 depthReady{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2};
+                depthReady.srcStageMask = VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT;
+                depthReady.srcAccessMask = VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
+                depthReady.dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+                depthReady.dstAccessMask = VK_ACCESS_2_SHADER_SAMPLED_READ_BIT;
+                depthReady.oldLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL;
+                depthReady.newLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL;
+                depthReady.image = hiZDepthBuffer.image();
+                depthReady.subresourceRange = {VK_IMAGE_ASPECT_DEPTH_BIT, 0, 1, 0, 1};
+                VkDependencyInfo depthDependency{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
+                depthDependency.imageMemoryBarrierCount = 1;
+                depthDependency.pImageMemoryBarriers = &depthReady;
+                vkCmdPipelineBarrier2(commandBuffer, &depthDependency);
+                hiZPass.record(commandBuffer, hiZBuffer, true);
+                hiZValid = true;
+            }
+
             forwardPass.begin(
                 commandBuffer, hdrFramebuffer, swapchain.extent(),
                 shadowPass.descriptorSet(currentFrame), vertexBuffer.handle(),
@@ -1773,7 +1831,7 @@ class Renderer::Backend {
             }
             forwardPass.end(commandBuffer);
 
-            if (hizEnabled) {
+            if (hizEnabled && !msaa.enabled()) {
                 VkImageMemoryBarrier2 depthReady{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2};
                 depthReady.srcStageMask = VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT;
                 depthReady.srcAccessMask = VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
@@ -1781,7 +1839,7 @@ class Renderer::Backend {
                 depthReady.dstAccessMask = VK_ACCESS_2_SHADER_SAMPLED_READ_BIT;
                 depthReady.oldLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL;
                 depthReady.newLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL;
-                depthReady.image = msaa.enabled() ? resolvedDepthBuffer.image() : depthBuffer.image();
+                depthReady.image = depthBuffer.image();
                 depthReady.subresourceRange = {VK_IMAGE_ASPECT_DEPTH_BIT, 0, 1, 0, 1};
                 VkDependencyInfo depthDependency{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
                 depthDependency.imageMemoryBarrierCount = 1;
@@ -1845,6 +1903,10 @@ class Renderer::Backend {
             destroyEditorUiResources();
             canvasRenderer.destroy();
             tonemapPass.destroy();
+            if (hiZDepthPrepassFramebuffer != VK_NULL_HANDLE) {
+                vkDestroyFramebuffer(device, hiZDepthPrepassFramebuffer, nullptr);
+                hiZDepthPrepassFramebuffer = VK_NULL_HANDLE;
+            }
             if (hdrFramebuffer != VK_NULL_HANDLE) {
                 vkDestroyFramebuffer(device, hdrFramebuffer, nullptr);
                 hdrFramebuffer = VK_NULL_HANDLE;
@@ -1881,16 +1943,14 @@ class Renderer::Backend {
         }
 
         void recreateSwapChain() {
-            int w = 0, h = 0;
-            SDL_GetWindowSizeInPixels(window, &w, &h);
-            while (w == 0 || h == 0) {
-                SDL_Event e;
-                SDL_WaitEvent(&e);
-                SDL_GetWindowSizeInPixels(window, &w, &h);
-            }
+            waitForDrawableExtent();
 
             vkDeviceWaitIdle(device);
 
+            if (hiZDepthPrepassFramebuffer != VK_NULL_HANDLE) {
+                vkDestroyFramebuffer(device, hiZDepthPrepassFramebuffer, nullptr);
+                hiZDepthPrepassFramebuffer = VK_NULL_HANDLE;
+            }
             destroyCullingResources();
 
             canvasRenderer.destroy();
@@ -2181,6 +2241,7 @@ class Renderer::Backend {
                 particlePipeline.destroy();
                 particleSystem.reset();
                 forwardPass.destroy();
+                hiZDepthPrepass.destroy();
                 shadowPass.destroy();
                 sceneDescriptorPass.destroy();
                 destroyCullingResources();

@@ -182,7 +182,7 @@ Engine::Entity drawHierarchy(Engine::Scene& scene, const Engine::Entity selected
     return clicked;
 }
 
-void drawInspector(Engine::Scene& scene, const Engine::Entity selected) {
+bool drawInspector(Engine::Scene& scene, const Engine::Entity selected) {
     ImGui::Begin("Inspector");
     ImGui::PushStyleColor(ImGuiCol_Text, {0.28f, 0.84f, 0.91f, 1.0f});
     ImGui::TextUnformatted("INSPECTOR");
@@ -192,8 +192,10 @@ void drawInspector(Engine::Scene& scene, const Engine::Entity selected) {
         ImGui::Spacing();
         ImGui::TextDisabled("Nothing selected");
         ImGui::TextWrapped("Select an object in the Scene Hierarchy to inspect it.");
+        const bool consumesMouseWheel = ImGui::IsWindowHovered(
+            ImGuiHoveredFlags_AllowWhenBlockedByActiveItem) && ImGui::GetIO().MouseWheel != 0.0f;
         ImGui::End();
-        return;
+        return consumesMouseWheel;
     }
 
     ImGui::TextColored({0.92f, 0.95f, 1.0f, 1.0f}, "%s", entityName(scene, selected));
@@ -231,7 +233,10 @@ void drawInspector(Engine::Scene& scene, const Engine::Entity selected) {
     }
     ImGui::SetNextItemWidth(-1.0f);
     ImGui::Button("New Component", {-1.0f, 0.0f});
+    const bool consumesMouseWheel = ImGui::IsWindowHovered(
+        ImGuiHoveredFlags_AllowWhenBlockedByActiveItem) && ImGui::GetIO().MouseWheel != 0.0f;
     ImGui::End();
+    return consumesMouseWheel;
 }
 
 void drawStatusBar(const Engine::Scene& scene, const Engine::Entity selected) {
@@ -483,9 +488,10 @@ int main() {
             }
             const bool sceneCameraInput = drawViewport(
                 renderer.gameViewportDescriptor(), renderer.sceneViewportDescriptor());
-            drawInspector(scene, selectedEntity);
+            const bool inspectorConsumesMouseWheel = drawInspector(scene, selectedEntity);
             drawStatusBar(scene, selectedEntity);
-            renderer.setEditorSceneCameraInput(sceneCameraInput);
+            renderer.setEditorSceneCameraInput(
+                sceneCameraInput && !inspectorConsumesMouseWheel);
             ImGui::Render();
 
             if (antialiasingChanged) rendererReloadPending = true;
