@@ -227,13 +227,21 @@ void configureEditorDockLayout() {
     ImGui::DockBuilderAddNode(dockspaceId, ImGuiDockNodeFlags_DockSpace);
     ImGui::DockBuilderSetNodeSize(dockspaceId, ImGui::GetMainViewport()->WorkSize);
 
+    // Keep the center node as the "remaining" node after each split. This
+    // makes the intended layout explicit and guarantees that Viewport gets
+    // all space left between the two side panels.
     ImGuiID hierarchyId = 0;
-    ImGuiID rightId = 0;
-    ImGuiID viewportId = ImGui::DockBuilderSplitNode(dockspaceId, ImGuiDir_Left, 0.20f, &hierarchyId, nullptr);
-    const ImGuiID centerId = ImGui::DockBuilderSplitNode(viewportId, ImGuiDir_Right, 0.22f, &rightId, &viewportId);
+    ImGuiID centerId = 0;
+    ImGui::DockBuilderSplitNode(dockspaceId, ImGuiDir_Left, 0.20f,
+                                &hierarchyId, &centerId);
+
+    ImGuiID inspectorId = 0;
+    ImGui::DockBuilderSplitNode(centerId, ImGuiDir_Right, 0.22f,
+                                &inspectorId, &centerId);
+
     ImGui::DockBuilderDockWindow("Hierarchy", hierarchyId);
     ImGui::DockBuilderDockWindow("Viewport", centerId);
-    ImGui::DockBuilderDockWindow("Inspector", rightId);
+    ImGui::DockBuilderDockWindow("Inspector", inspectorId);
     ImGui::DockBuilderFinish(dockspaceId);
     configured = true;
 }
