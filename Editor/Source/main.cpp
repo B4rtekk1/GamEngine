@@ -192,25 +192,25 @@ void drawInspector(Engine::Scene& scene, const Engine::Entity selected) {
         const Engine::Transform& transform = readRegistry.get<Engine::Transform>(selected);
 
         float position[3] = {transform.position.x(), transform.position.y(), transform.position.z()};
-        ImGui::TextDisabled("Position");
+        ImGui::TextDisabled("Position (X, Y, Z)");
         ImGui::SetNextItemWidth(-1.0f);
-        if (ImGui::DragFloat3("##position", position, 0.05f, 0.0f, 0.0f, "%.2f")) {
+        if (ImGui::InputFloat3("##position", position, "%.2f")) {
             scene.registry.get<Engine::Transform>(selected).position =
                 Engine::Vec3{position[0], position[1], position[2]};
         }
 
         float rotation[3] = {transform.rotation.x(), transform.rotation.y(), transform.rotation.z()};
-        ImGui::TextDisabled("Rotation");
+        ImGui::TextDisabled("Rotation (X, Y, Z)");
         ImGui::SetNextItemWidth(-1.0f);
-        if (ImGui::DragFloat3("##rotation", rotation, 0.5f, 0.0f, 0.0f, "%.1f")) {
+        if (ImGui::InputFloat3("##rotation", rotation, "%.1f")) {
             scene.registry.get<Engine::Transform>(selected).rotation =
                 Engine::Vec3{rotation[0], rotation[1], rotation[2]};
         }
 
         float scale[3] = {transform.scale.x(), transform.scale.y(), transform.scale.z()};
-        ImGui::TextDisabled("Scale");
+        ImGui::TextDisabled("Scale (X, Y, Z)");
         ImGui::SetNextItemWidth(-1.0f);
-        if (ImGui::DragFloat3("##scale", scale, 0.01f, 0.0f, 0.0f, "%.2f")) {
+        if (ImGui::InputFloat3("##scale", scale, "%.2f")) {
             scene.registry.get<Engine::Transform>(selected).scale =
                 Engine::Vec3{scale[0], scale[1], scale[2]};
         }
