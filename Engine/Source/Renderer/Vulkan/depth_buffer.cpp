@@ -95,7 +95,8 @@ bool DepthBuffer::hasStencilComponent(VkFormat format) noexcept {
 
 void DepthBuffer::create(
     VkExtent2D extent,
-    VkSampleCountFlagBits samples) {
+    VkSampleCountFlagBits samples,
+    VkFormat requiredFormat) {
     if (physicalDevice_ == VK_NULL_HANDLE || device_ == VK_NULL_HANDLE) {
         throw std::logic_error("DepthBuffer has not been initialized");
     }
@@ -103,7 +104,7 @@ void DepthBuffer::create(
         throw std::invalid_argument("Depth buffer size cannot be zero");
     }
     destroy();
-    format_ = findSupportedFormat(samples);
+    format_ = requiredFormat == VK_FORMAT_UNDEFINED ? findSupportedFormat(samples) : requiredFormat;
 
     VkImageCreateInfo imageInfo{};
     imageInfo.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;

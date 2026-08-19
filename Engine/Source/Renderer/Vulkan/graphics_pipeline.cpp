@@ -60,6 +60,8 @@ void GraphicsPipeline::destroy() noexcept {
 void GraphicsPipeline::createRenderPass(const GraphicsPipelineOptions& options) {
     const bool usesMsaa = options.samples != VK_SAMPLE_COUNT_1_BIT;
     const bool usesDepth = options.depthFormat != VK_FORMAT_UNDEFINED;
+    const bool usesDepthResolve = usesMsaa && usesDepth &&
+                                  options.depthResolveMode != VK_RESOLVE_MODE_NONE;
 
     VkAttachmentDescription color{};
     color.format = options.colorFormat;
@@ -95,6 +97,7 @@ void GraphicsPipeline::createRenderPass(const GraphicsPipelineOptions& options) 
     subpass.pResolveAttachments = usesMsaa ? &resolveRef : nullptr;
     subpass.pDepthStencilAttachment = usesDepth ? &depthRef : nullptr;
 
+
     VkSubpassDependency dependency{};
     dependency.srcSubpass = VK_SUBPASS_EXTERNAL;
     dependency.dstSubpass = 0;
@@ -125,6 +128,18 @@ void GraphicsPipeline::createRenderPass(const GraphicsPipelineOptions& options) 
         resolve.finalLayout = options.colorFinalLayout;
         attachments.push_back(resolve);
     }
+    if (usesDepthResolve) {
+        VkAttachmentDescription depthResolved{};
+        depthResolved.format = options.depthFormat;
+        depthResolved.samples = VK_SAMPLE_COUNT_1_BIT;
+        depthResolved.loadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+        depthResolved.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+        depthResolved.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+        depthResolved.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+        depthResolved.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+        depthResolved.finalLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        attachments.push_back(depthResolved);
+    }
 
     VkSubpassDependency sampledDependency{};
     sampledDependency.srcSubpass = 0;
@@ -138,14 +153,54 @@ void GraphicsPipeline::createRenderPass(const GraphicsPipelineOptions& options) 
     const bool sampledAfterPass =
         options.colorFinalLayout == VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
 
-    VkRenderPassCreateInfo info{VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO};
-    info.attachmentCount = static_cast<uint32_t>(attachments.size());
-    info.pAttachments = attachments.data();
-    info.subpassCount = 1;
-    info.pSubpasses = &subpass;
-    info.dependencyCount = sampledAfterPass ? 2u : 1u;
-    info.pDependencies = dependencies.data();
-    if (vkCreateRenderPass(device_, &info, nullptr, &renderPass_) != VK_SUCCESS) {
+    VkResult result = VK_SUCCESS;
+    if (usesDepthResolve) {
+        std::vector<VkAttachmentDescription2> attachmentDescriptions;
+        attachmentDescriptions.reserve(attachments.size());
+        for (const VkAttachmentDescription& attachment : attachments) {
+            attachmentDescriptions.push_back({VK_STRUCTURE_TYPE_ATTACHMENT_DESCRIPTION_2, nullptr,
+                                              attachment.flags, attachment.format, attachment.samples,
+                                              attachment.loadOp, attachment.storeOp, attachment.stencilLoadOp,
+                                              attachment.stencilStoreOp, attachment.initialLayout,
+                                              attachment.finalLayout});
+        }
+        const VkAttachmentReference2 colorReference{VK_STRUCTURE_TYPE_ATTACHMENT_REFERENCE_2, nullptr,
+                                                     colorRef.attachment, colorRef.layout, 0};
+        const VkAttachmentReference2 depthReference{VK_STRUCTURE_TYPE_ATTACHMENT_REFERENCE_2, nullptr,
+                                                     depthRef.attachment, depthRef.layout, 0};
+        const VkAttachmentReference2 colorResolveReference{VK_STRUCTURE_TYPE_ATTACHMENT_REFERENCE_2, nullptr,
+                                                            resolveRef.attachment, resolveRef.layout, 0};
+        const VkAttachmentReference2 depthResolveReference{VK_STRUCTURE_TYPE_ATTACHMENT_REFERENCE_2, nullptr,
+                                                            3, VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL, 0};
+        const VkSubpassDescriptionDepthStencilResolve depthResolve{
+            VK_STRUCTURE_TYPE_SUBPASS_DESCRIPTION_DEPTH_STENCIL_RESOLVE, nullptr,
+            options.depthResolveMode, VK_RESOLVE_MODE_NONE, &depthResolveReference};
+        const VkSubpassDescription2 subpass2{VK_STRUCTURE_TYPE_SUBPASS_DESCRIPTION_2, &depthResolve,
+            0, VK_PIPELINE_BIND_POINT_GRAPHICS, 0, 0, nullptr, 1, &colorReference,
+            &colorResolveReference, &depthReference, 0, nullptr};
+        std::array<VkSubpassDependency2, 2> dependencies2{};
+        for (std::size_t i = 0; i < dependencies.size(); ++i) {
+            dependencies2[i] = {VK_STRUCTURE_TYPE_SUBPASS_DEPENDENCY_2, nullptr,
+                dependencies[i].srcSubpass, dependencies[i].dstSubpass,
+                dependencies[i].srcStageMask, dependencies[i].dstStageMask,
+                dependencies[i].srcAccessMask, dependencies[i].dstAccessMask,
+                dependencies[i].dependencyFlags, 0};
+        }
+        const VkRenderPassCreateInfo2 info{VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO_2, nullptr, 0,
+            static_cast<uint32_t>(attachmentDescriptions.size()), attachmentDescriptions.data(), 1,
+            &subpass2, sampledAfterPass ? 2u : 1u, dependencies2.data(), 0, nullptr};
+        result = vkCreateRenderPass2(device_, &info, nullptr, &renderPass_);
+    } else {
+        VkRenderPassCreateInfo info{VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO};
+        info.attachmentCount = static_cast<uint32_t>(attachments.size());
+        info.pAttachments = attachments.data();
+        info.subpassCount = 1;
+        info.pSubpasses = &subpass;
+        info.dependencyCount = sampledAfterPass ? 2u : 1u;
+        info.pDependencies = dependencies.data();
+        result = vkCreateRenderPass(device_, &info, nullptr, &renderPass_);
+    }
+    if (result != VK_SUCCESS) {
         throw std::runtime_error("Could not create render pass");
     }
 }

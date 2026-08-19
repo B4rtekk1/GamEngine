@@ -49,7 +49,8 @@ public:
      * @param extent Width and height of the depth image.
      * @param samples Multisample count required by the render target.
      */
-    void create(VkExtent2D extent, VkSampleCountFlagBits samples);
+    void create(VkExtent2D extent, VkSampleCountFlagBits samples,
+                VkFormat requiredFormat = VK_FORMAT_UNDEFINED);
 
     /// Releases the depth image, view, sampler and allocated memory.
     void destroy() noexcept;

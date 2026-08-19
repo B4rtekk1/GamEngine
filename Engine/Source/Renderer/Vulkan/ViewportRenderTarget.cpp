@@ -21,6 +21,10 @@ void ViewportRenderTarget::create(const VkPhysicalDevice physicalDevice, const V
         msaaColor_.create(extent_, HdrBuffer::Format);
         depth_.initialize(physicalDevice_, device_);
         depth_.create(extent_, samples_);
+        resolvedDepth_.initialize(physicalDevice_, device_);
+        if (samples_ != VK_SAMPLE_COUNT_1_BIT) {
+            resolvedDepth_.create(extent_, VK_SAMPLE_COUNT_1_BIT, depth_.format());
+        }
     } catch (...) {
         destroy();
         throw;
@@ -36,6 +40,7 @@ void ViewportRenderTarget::resize(const VkExtent2D extent) {
 
 void ViewportRenderTarget::destroy() noexcept {
     depth_.destroy();
+    resolvedDepth_.destroy();
     msaaColor_.destroy();
     color_.destroy();
     physicalDevice_ = VK_NULL_HANDLE;

@@ -16,7 +16,8 @@ class IndexedIndirectDrawCount;
 class ForwardPass final {
 public:
     void create(VkDevice device, VkFormat colorFormat, VkFormat depthFormat,
-                VkSampleCountFlagBits samples, VkDescriptorSetLayout sceneLayout,
+                VkSampleCountFlagBits samples, VkResolveModeFlagBits depthResolveMode,
+                VkDescriptorSetLayout sceneLayout,
                 Assets::AssetManager& assets);
     void destroy() noexcept;
 

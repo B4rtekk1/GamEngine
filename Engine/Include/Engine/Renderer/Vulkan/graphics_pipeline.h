@@ -27,6 +27,8 @@ struct GraphicsPipelineOptions {
     VkFormat depthFormat = VK_FORMAT_UNDEFINED;
     /// Multisample count used by the color and depth attachments.
     VkSampleCountFlagBits samples = VK_SAMPLE_COUNT_1_BIT;
+    /// Resolve mode for a multisampled depth attachment. Ignored at 1x.
+    VkResolveModeFlagBits depthResolveMode = VK_RESOLVE_MODE_NONE;
     /// Load operation for the color attachment.
     VkAttachmentLoadOp colorLoadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
     /// Layout expected when the color attachment is first used.

@@ -231,6 +231,8 @@ class Renderer::Backend {
 
         MsaaResources msaa;
         HdrBuffer hdrBuffer;
+        DepthBuffer resolvedDepthBuffer;
+        VkResolveModeFlagBits depthResolveMode = VK_RESOLVE_MODE_NONE;
 
         ForwardPass& forwardPass;
         GraphicsPipeline& particlePipeline;
@@ -394,13 +396,24 @@ class Renderer::Backend {
             vulkanDevice.create(instance, surface);
             device = vulkanDevice.logical();
             depthBuffer.initialize(vulkanDevice.physical(), device);
-            // Hi-Z samples the completed depth attachment directly; a single-sample
-            // depth buffer keeps that path portable without a depth-resolve pass.
             const VkSampleCountFlagBits requestedSamples =
                 antialiasingLevel == AntialiasingLevel::MSAA4x ? VK_SAMPLE_COUNT_4_BIT :
                 antialiasingLevel == AntialiasingLevel::MSAA2x ? VK_SAMPLE_COUNT_2_BIT :
                 VK_SAMPLE_COUNT_1_BIT;
             msaa.initialize(vulkanDevice.physical(), device, requestedSamples);
+            if (msaa.enabled()) {
+                VkPhysicalDeviceDepthStencilResolveProperties resolveProperties{
+                    VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DEPTH_STENCIL_RESOLVE_PROPERTIES};
+                VkPhysicalDeviceProperties2 properties{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2};
+                properties.pNext = &resolveProperties;
+                vkGetPhysicalDeviceProperties2(vulkanDevice.physical(), &properties);
+                const VkResolveModeFlags supported = resolveProperties.supportedDepthResolveModes;
+                depthResolveMode = (supported & VK_RESOLVE_MODE_MIN_BIT) != 0
+                    ? VK_RESOLVE_MODE_MIN_BIT : VK_RESOLVE_MODE_SAMPLE_ZERO_BIT;
+                if ((supported & depthResolveMode) == 0) {
+                    throw std::runtime_error("GPU does not support depth resolve required for MSAA Hi-Z");
+                }
+            }
             createSwapChain();
             hdrBuffer.create(vulkanDevice.physical(), device, swapchain.extent());
             msaa.create(swapchain.extent(), HdrBuffer::Format);
@@ -563,9 +576,15 @@ class Renderer::Backend {
 
     void createDepthResources() {
         depthBuffer.create(swapchain.extent(), msaa.sampleCount());
+        resolvedDepthBuffer.initialize(vulkanDevice.physical(), device);
+        if (msaa.enabled()) {
+            resolvedDepthBuffer.create(swapchain.extent(), VK_SAMPLE_COUNT_1_BIT,
+                                       depthBuffer.format());
+        }
     }
 
     void destroyDepthResources() {
+        resolvedDepthBuffer.destroy();
         depthBuffer.destroy();
     }
 
@@ -599,7 +618,8 @@ class Renderer::Backend {
 
         void createForwardPass() {
             forwardPass.create(device, HdrBuffer::Format, depthBuffer.format(),
-                               msaa.sampleCount(), shadowPass.descriptorSetLayout(), assetManager);
+                               msaa.sampleCount(), depthResolveMode,
+                               shadowPass.descriptorSetLayout(), assetManager);
         }
 
         void createParticleResources() {
@@ -1189,6 +1209,10 @@ class Renderer::Backend {
             lastRenderableRevision = revision;
         }
 
+        [[nodiscard]] bool canUseHiZOcclusionCulling() const noexcept {
+            return optimizationFeatures.gpuCulling && optimizationFeatures.occlusionCulling;
+        }
+
         void updateCullingUniformBuffer(const uint32_t frame) const {
             Culling::CullingUniformData data{};
             if (!camera) {
@@ -1199,8 +1223,7 @@ class Renderer::Backend {
             data.objectCount = static_cast<uint32_t>(gpuObjects.size());
             data.maxDrawCount = data.objectCount;
             data.hizMipCount = hiZBuffer.mipCount();
-            data.enableOcclusionCulling = (optimizationFeatures.gpuCulling &&
-                                           optimizationFeatures.occlusionCulling) ? 1u : 0u;
+            data.enableOcclusionCulling = canUseHiZOcclusionCulling() ? 1u : 0u;
             data.viewportWidth = static_cast<float>(swapchain.extent().width);
             data.viewportHeight = static_cast<float>(swapchain.extent().height);
             data.depthBias = 0.0025f;
@@ -1378,7 +1401,9 @@ class Renderer::Backend {
             }
             hiZPass.create(device, cullingDescriptorPool, hiZCopyPipeline, hiZCopyPipelineLayout,
                 hiZCopyDescriptorSetLayout, hiZReducePipeline, hiZReducePipelineLayout,
-                hiZReduceDescriptorSetLayout, hiZBuffer, depthBuffer.imageView(), depthBuffer.sampler());
+                hiZReduceDescriptorSetLayout, hiZBuffer,
+                msaa.enabled() ? resolvedDepthBuffer.imageView() : depthBuffer.imageView(),
+                msaa.enabled() ? resolvedDepthBuffer.sampler() : depthBuffer.sampler());
 
             std::array<VkDescriptorSetLayout, MAX_FRAMES_IN_FLIGHT * 2> cullLayouts{};
             cullLayouts.fill(cullingDescriptorSetLayout);
@@ -1461,7 +1486,8 @@ class Renderer::Backend {
         void createFramebuffers() {
             const VkExtent2D extent = swapchain.extent();
             VkImageView msaaAttachments[] = {
-                msaa.colorImageView(), depthBuffer.imageView(), hdrBuffer.imageView()
+                msaa.colorImageView(), depthBuffer.imageView(), hdrBuffer.imageView(),
+                resolvedDepthBuffer.imageView()
             };
             VkImageView directAttachments[] = {
                 hdrBuffer.imageView(), depthBuffer.imageView()
@@ -1469,7 +1495,7 @@ class Renderer::Backend {
 
             VkFramebufferCreateInfo framebufferInfo{VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO};
             framebufferInfo.renderPass = forwardPass.renderPass();
-            framebufferInfo.attachmentCount = msaa.enabled() ? 3u : 2u;
+            framebufferInfo.attachmentCount = msaa.enabled() ? 4u : 2u;
             framebufferInfo.pAttachments = msaa.enabled()
                 ? msaaAttachments
                 : directAttachments;
@@ -1496,12 +1522,13 @@ class Renderer::Backend {
             // the framebuffer incompatible as soon as MSAA was enabled.
             VkImageView msaaAttachments[] = {
                 sceneViewportTarget.msaaColorImageView(), sceneViewportTarget.depth().imageView(),
-                sceneViewportTarget.color().imageView()};
+                sceneViewportTarget.color().imageView(),
+                sceneViewportTarget.resolvedDepth().imageView()};
             VkImageView directAttachments[] = {
                 sceneViewportTarget.color().imageView(), sceneViewportTarget.depth().imageView()};
             VkFramebufferCreateInfo info{VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO};
             info.renderPass = forwardPass.renderPass();
-            info.attachmentCount = msaa.enabled() ? 3u : 2u;
+            info.attachmentCount = msaa.enabled() ? 4u : 2u;
             info.pAttachments = msaa.enabled() ? msaaAttachments : directAttachments;
             info.width = sceneViewportTarget.extent().width;
             info.height = sceneViewportTarget.extent().height;
@@ -1654,40 +1681,25 @@ class Renderer::Backend {
             // culling uniform's cameraCut flag disables occlusion testing for
             // this frame, so an undefined image contents is acceptable after
             // this layout transition.
-            const bool hizEnabled = optimizationFeatures.gpuCulling &&
-                                    optimizationFeatures.occlusionCulling;
+            const bool hizEnabled = canUseHiZOcclusionCulling();
             const bool hadPreviousHiZ = hiZValid;
-            // The culling descriptor set always contains the Hi-Z image, even
-            // when occlusion culling is disabled.  It therefore still needs
-            // the layout declared in the descriptor before the compute pass
-            // is dispatched; otherwise the validation layer reports an
-            // undefined image at vkQueueSubmit and some drivers lose the
-            // device (VK_ERROR_DEVICE_LOST).
+            // The culling descriptor set always contains the Hi-Z image. Keep
+            // its layout valid before the compute culling dispatch, even when
+            // that dispatch skips occlusion testing.
             if (optimizationFeatures.gpuCulling && !hadPreviousHiZ) {
-                VkImageMemoryBarrier2 initialBarriers[3] = {
-                    VkImageMemoryBarrier2{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2},
-                    VkImageMemoryBarrier2{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2},
-                    VkImageMemoryBarrier2{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2}
-                };
-                for (VkImageMemoryBarrier2& barrier : initialBarriers) {
-                    barrier.srcStageMask = VK_PIPELINE_STAGE_2_NONE;
-                    barrier.srcAccessMask = 0;
-                    barrier.dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
-                    barrier.dstAccessMask = VK_ACCESS_2_SHADER_SAMPLED_READ_BIT;
-                    barrier.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-                    barrier.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-                    barrier.subresourceRange = {VK_IMAGE_ASPECT_DEPTH_BIT, 0, 1, 0, 1};
-                }
-                initialBarriers[0].image = depthBuffer.image();
-                initialBarriers[1].image = sceneViewportTarget.depth().image();
-                initialBarriers[2].image = hiZBuffer.image();
-                initialBarriers[2].subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-                initialBarriers[2].subresourceRange.levelCount = hiZBuffer.mipCount();
-                initialBarriers[2].newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+                VkImageMemoryBarrier2 initialBarrier{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2};
+                initialBarrier.srcStageMask = VK_PIPELINE_STAGE_2_NONE;
+                initialBarrier.dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+                initialBarrier.dstAccessMask = VK_ACCESS_2_SHADER_SAMPLED_READ_BIT;
+                initialBarrier.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+                initialBarrier.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+                initialBarrier.image = hiZBuffer.image();
+                initialBarrier.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0,
+                                                   hiZBuffer.mipCount(), 0, 1};
 
                 VkDependencyInfo initialDependency{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
-                initialDependency.imageMemoryBarrierCount = 3;
-                initialDependency.pImageMemoryBarriers = initialBarriers;
+                initialDependency.imageMemoryBarrierCount = 1;
+                initialDependency.pImageMemoryBarriers = &initialBarrier;
                 vkCmdPipelineBarrier2(commandBuffer, &initialDependency);
             }
 
@@ -1769,7 +1781,7 @@ class Renderer::Backend {
                 depthReady.dstAccessMask = VK_ACCESS_2_SHADER_SAMPLED_READ_BIT;
                 depthReady.oldLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL;
                 depthReady.newLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL;
-                depthReady.image = depthBuffer.image();
+                depthReady.image = msaa.enabled() ? resolvedDepthBuffer.image() : depthBuffer.image();
                 depthReady.subresourceRange = {VK_IMAGE_ASPECT_DEPTH_BIT, 0, 1, 0, 1};
                 VkDependencyInfo depthDependency{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
                 depthDependency.imageMemoryBarrierCount = 1;
