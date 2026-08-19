@@ -4,6 +4,7 @@
 #include <cstring>
 #include <limits>
 #include <set>
+#include <string>
 #include <stdexcept>
 #include <vector>
 
@@ -34,7 +35,7 @@ void VulkanDevice::create(VkInstance instance, VkSurfaceKHR surface) {
         createLogicalDevice();
 
         VmaAllocatorCreateInfo allocatorInfo{};
-        allocatorInfo.vulkanApiVersion = VK_API_VERSION_1_4;
+        allocatorInfo.vulkanApiVersion = VK_API_VERSION_1_3;
         allocatorInfo.physicalDevice = physicalDevice_;
         allocatorInfo.device = device_;
         allocatorInfo.instance = instance;
@@ -132,7 +133,7 @@ bool VulkanDevice::supportsRequiredExtensions(
 bool VulkanDevice::isSuitable(VkPhysicalDevice candidate) const {
     VkPhysicalDeviceProperties properties{};
     vkGetPhysicalDeviceProperties(candidate, &properties);
-    if (properties.apiVersion < VK_API_VERSION_1_4) {
+    if (properties.apiVersion < VK_API_VERSION_1_3) {
         return false;
     }
     VkPhysicalDeviceVulkan13Features features13{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES};
@@ -269,12 +270,15 @@ void VulkanDevice::createLogicalDevice() {
         static_cast<uint32_t>(kRequiredDeviceExtensions.size());
     createInfo.ppEnabledExtensionNames = kRequiredDeviceExtensions.data();
 
-    if (vkCreateDevice(
+    const VkResult result = vkCreateDevice(
             physicalDevice_,
             &createInfo,
             nullptr,
-            &device_) != VK_SUCCESS) {
-        throw std::runtime_error("GPU does not support the requested logical device creation");
+            &device_);
+    if (result != VK_SUCCESS) {
+        throw std::runtime_error(
+            "GPU does not support the requested logical device creation (VkResult " +
+            std::to_string(static_cast<int>(result)) + ")");
     }
 
     vkGetDeviceQueue(

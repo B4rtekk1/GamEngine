@@ -94,7 +94,7 @@ bool drawViewport(VkDescriptorSet gameDescriptor, VkDescriptorSet sceneDescripto
         showGameView = !showGameView;
     }
     ImGui::Separator();
-    const bool sceneCameraInput = !showGameView && ImGui::IsWindowHovered(ImGuiHoveredFlags_AllowWhenBlockedByActiveItem);
+    bool viewportHovered = ImGui::IsWindowHovered(ImGuiHoveredFlags_AllowWhenBlockedByActiveItem);
     const ImVec2 size = ImGui::GetContentRegionAvail();
     if (descriptor != VK_NULL_HANDLE && size.x > 1.0f && size.y > 1.0f) {
         constexpr float viewportAspect = 16.0f / 9.0f;
@@ -109,10 +109,13 @@ bool drawViewport(VkDescriptorSet gameDescriptor, VkDescriptorSet sceneDescripto
         ImGui::SetCursorPosY(ImGui::GetCursorPosY() + verticalOffset);
         ImGui::Image(ImTextureRef{static_cast<ImTextureID>(reinterpret_cast<uintptr_t>(descriptor))},
                      {frameSize.x, imageHeight}, {0, 0}, {1, 1});
+        viewportHovered = ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenBlockedByActiveItem);
         ImGui::EndChild();
     }
     ImGui::End();
-    return sceneCameraInput;
+    return !showGameView &&
+           (viewportHovered || ImGui::IsMouseDown(ImGuiMouseButton_Right) ||
+            ImGui::IsMouseDown(ImGuiMouseButton_Middle));
 }
 
 Engine::Entity drawHierarchy(Engine::Scene& scene, const Engine::Entity selected) {
@@ -165,7 +168,7 @@ Engine::Entity drawHierarchy(Engine::Scene& scene, const Engine::Entity selected
     return clicked;
 }
 
-void drawInspector(const Engine::Scene& scene, const Engine::Entity selected) {
+void drawInspector(Engine::Scene& scene, const Engine::Entity selected) {
     ImGui::Begin("Inspector");
     ImGui::PushStyleColor(ImGuiCol_Text, {0.28f, 0.84f, 0.91f, 1.0f});
     ImGui::TextUnformatted("INSPECTOR");
@@ -183,19 +186,34 @@ void drawInspector(const Engine::Scene& scene, const Engine::Entity selected) {
     ImGui::SameLine();
     ImGui::TextDisabled("Entity %u", Engine::entityIndex(selected));
     ImGui::Spacing();
-    if (ImGui::CollapsingHeader("Transform", ImGuiTreeNodeFlags_DefaultOpen)) {
+    if (ImGui::CollapsingHeader("Transform", ImGuiTreeNodeFlags_DefaultOpen) &&
+        scene.registry.valid(selected) && scene.registry.has<Engine::Transform>(selected)) {
+        const Engine::Registry& readRegistry = scene.registry;
+        const Engine::Transform& transform = readRegistry.get<Engine::Transform>(selected);
+
+        float position[3] = {transform.position.x(), transform.position.y(), transform.position.z()};
         ImGui::TextDisabled("Position");
         ImGui::SetNextItemWidth(-1.0f);
-        float position[3] = {0.0f, 0.0f, 0.0f};
-        ImGui::DragFloat3("##position", position, 0.05f, 0.0f, 0.0f, "%.2f", ImGuiSliderFlags_ReadOnly);
+        if (ImGui::DragFloat3("##position", position, 0.05f, 0.0f, 0.0f, "%.2f")) {
+            scene.registry.get<Engine::Transform>(selected).position =
+                Engine::Vec3{position[0], position[1], position[2]};
+        }
+
+        float rotation[3] = {transform.rotation.x(), transform.rotation.y(), transform.rotation.z()};
         ImGui::TextDisabled("Rotation");
         ImGui::SetNextItemWidth(-1.0f);
-        float rotation[3] = {0.0f, 0.0f, 0.0f};
-        ImGui::DragFloat3("##rotation", rotation, 0.5f, 0.0f, 0.0f, "%.1f", ImGuiSliderFlags_ReadOnly);
+        if (ImGui::DragFloat3("##rotation", rotation, 0.5f, 0.0f, 0.0f, "%.1f")) {
+            scene.registry.get<Engine::Transform>(selected).rotation =
+                Engine::Vec3{rotation[0], rotation[1], rotation[2]};
+        }
+
+        float scale[3] = {transform.scale.x(), transform.scale.y(), transform.scale.z()};
         ImGui::TextDisabled("Scale");
         ImGui::SetNextItemWidth(-1.0f);
-        float scale[3] = {1.0f, 1.0f, 1.0f};
-        ImGui::DragFloat3("##scale", scale, 0.01f, 0.0f, 0.0f, "%.2f", ImGuiSliderFlags_ReadOnly);
+        if (ImGui::DragFloat3("##scale", scale, 0.01f, 0.0f, 0.0f, "%.2f")) {
+            scene.registry.get<Engine::Transform>(selected).scale =
+                Engine::Vec3{scale[0], scale[1], scale[2]};
+        }
     }
     if (ImGui::CollapsingHeader("Components", ImGuiTreeNodeFlags_DefaultOpen)) {
         ImGui::BulletText("Transform");
