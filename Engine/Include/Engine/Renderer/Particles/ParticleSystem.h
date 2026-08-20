@@ -2,8 +2,8 @@
 
 #include <vulkan/vulkan.h>
 #include <array>
+#include <cstddef>
 #include <cstdint>
-#include <vector>
 
 #include "Engine/Math/Color.h"
 #include "Engine/Math/Vec3.h"
@@ -38,6 +38,24 @@ namespace Engine::Particles {
         float _pad1 = 0.0f;
     };
 
+    /** Parameters consumed by particle_update.comp.  Keep this layout in sync
+     * with the push-constant block in that shader. */
+    struct alignas(16) ParticleSimulationData {
+        float deltaTime = 0.0f;
+        uint32_t spawnStart = 0;
+        uint32_t spawnCount = 0;
+        uint32_t maxParticles = 0;
+        uint32_t spawnSeed = 0;
+        float padding[3]{};
+        float emitterPositionMinLife[4]{};
+        float minVelocityMinSize[4]{};
+        float maxVelocity[4]{};
+        float color[4]{};
+        float maxLifeMaxSize[4]{};
+    };
+    static_assert(sizeof(ParticleSimulationData) == 112);
+    static_assert(offsetof(ParticleSimulationData, emitterPositionMinLife) == 32);
+
     class ParticleSystem {
     public:
         static constexpr uint32_t FramesInFlight = 2;
@@ -48,15 +66,13 @@ namespace Engine::Particles {
         ~ParticleSystem();
         void update(float deltaTime);
         void setEmitter(const ParticleEmitter& emitter) { emitter_ = emitter; }
-        // Kept in the frame recording API for renderer ordering; simulation is
-        // CPU-authoritative so no device-wide wait is needed before uploads.
-        static void recordCompute(VkCommandBuffer commandBuffer, float deltaTime);
+        /** Records the GPU simulation and makes its writes visible to rendering. */
+        void recordCompute(VkCommandBuffer commandBuffer, VkPipeline pipeline,
+                           VkPipelineLayout pipelineLayout, uint32_t frameIndex) const;
         void recordRender(VkCommandBuffer commandBuffer,
                           const ParticleFrameData& frameData,
                           VkPipeline pipeline, VkPipelineLayout pipelineLayout,
                           uint32_t frameIndex, bool sceneView = false) const;
-        /** Captures a warmed-up, static preview for the editor Scene View. */
-        void captureSceneSnapshot(float simulationTime);
         [[nodiscard]] VkDescriptorSetLayout descriptorSetLayout() const noexcept {
             return descriptorSetLayout_;
         }
@@ -65,7 +81,6 @@ namespace Engine::Particles {
         void createDescriptorResources();
         void createQuadBuffer();
         void uploadInitialParticles();
-        void spawnParticles(float deltaTime);
         void destroy();
 
         VkDevice device_{};
@@ -73,12 +88,10 @@ namespace Engine::Particles {
         VkQueue computeQueue_{};
         VkCommandPool commandPool_{};
         static constexpr uint32_t RenderTargets = 2;
-        std::array<std::array<VkBuffer, FramesInFlight>, RenderTargets> particleBuffers_{};
-        std::array<std::array<VkDeviceMemory, FramesInFlight>, RenderTargets> particleMemories_{};
+        VkBuffer particleBuffer_{};
+        VkDeviceMemory particleMemory_{};
         std::array<std::array<VkBuffer, FramesInFlight>, RenderTargets> frameBuffers_{};
         std::array<std::array<VkDeviceMemory, FramesInFlight>, RenderTargets> frameMemories_{};
-        std::array<std::array<VkBuffer, FramesInFlight>, RenderTargets> indirectBuffers_{};
-        std::array<std::array<VkDeviceMemory, FramesInFlight>, RenderTargets> indirectMemories_{};
         VkBuffer quadBuffer_{};
         VkDeviceMemory quadMemory_{};
         VkDescriptorSetLayout descriptorSetLayout_{};
@@ -86,14 +99,10 @@ namespace Engine::Particles {
         std::array<std::array<VkDescriptorSet, FramesInFlight>, RenderTargets> descriptorSets_{};
         uint32_t maxParticles_ = 0;
         ParticleEmitter emitter_{};
-        std::vector<Particle> particles_;
-        std::vector<Particle> renderParticles_;
-        std::array<std::array<void*, FramesInFlight>, RenderTargets> particleMapped_{};
+        ParticleSimulationData simulation_{};
         std::array<std::array<void*, FramesInFlight>, RenderTargets> frameMapped_{};
-        std::array<std::array<void*, FramesInFlight>, RenderTargets> indirectMapped_{};
         void* quadMapped_ = nullptr;
         uint32_t nextSpawnIndex_ = 0;
-        uint32_t activeParticles_ = 0;
-        std::vector<Particle> sceneSnapshot_;
+        uint32_t spawnSeed_ = 0;
     };
 }

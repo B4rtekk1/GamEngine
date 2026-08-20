@@ -240,6 +240,8 @@ class Renderer::Backend {
         ForwardPass& forwardPass;
         GraphicsPipeline& particlePipeline;
         std::unique_ptr<Particles::ParticleSystem> particleSystem;
+        VkPipelineLayout particleComputePipelineLayout = VK_NULL_HANDLE;
+        VkPipeline particleComputePipeline = VK_NULL_HANDLE;
         SkyPass& skyPass;
         TonemapPass& tonemapPass;
         UI::CanvasRenderer& canvasRenderer;
@@ -296,7 +298,6 @@ class Renderer::Backend {
         bool editorSceneCameraInput = false;
         Entity editorSelectedEntity = NullEntity;
         std::uint32_t editorSelectedRenderable = std::numeric_limits<std::uint32_t>::max();
-        bool editorParticleFrameCaptured = false;
         Vec3 editorSceneCameraPosition{8.0f, 6.0f, 8.0f};
         float editorSceneCameraYaw = -135.0f;
         // Aim at the ground-level scene center instead of looking too far above
@@ -659,6 +660,24 @@ class Renderer::Backend {
                 {1, 0, VK_FORMAT_R32G32_SFLOAT, sizeof(float) * 2},
             };
             particlePipeline.create(device, options);
+
+            if (particleComputePipeline == VK_NULL_HANDLE) {
+                VkPushConstantRange pushConstants{};
+                pushConstants.stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+                pushConstants.offset = 0;
+                pushConstants.size = sizeof(Particles::ParticleSimulationData);
+                VkPipelineLayoutCreateInfo layout{VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
+                const VkDescriptorSetLayout descriptorSetLayout = particleSystem->descriptorSetLayout();
+                layout.setLayoutCount = 1;
+                layout.pSetLayouts = &descriptorSetLayout;
+                layout.pushConstantRangeCount = 1;
+                layout.pPushConstantRanges = &pushConstants;
+                if (vkCreatePipelineLayout(device, &layout, nullptr, &particleComputePipelineLayout) != VK_SUCCESS) {
+                    throw std::runtime_error("Could not create particle compute pipeline layout");
+                }
+                particleComputePipeline = createComputePipeline(
+                    "shaders/particle_update.comp.spv", particleComputePipelineLayout);
+            }
         }
 
         void reconfigureAntialiasing() {
@@ -1807,8 +1826,10 @@ class Renderer::Backend {
                 vkCmdPipelineBarrier2(commandBuffer, &initialDependency);
             }
 
-            // ParticleSystem uses a CPU-authoritative simulation and uploads to
-            // the current frame's private buffer during recordRender.
+            if (particleSystem) {
+                particleSystem->recordCompute(commandBuffer, particleComputePipeline,
+                                              particleComputePipelineLayout, currentFrame);
+            }
 
             // The forward descriptor layout always contains the shadow-map
             // sampler. Even when shadows are disabled, run an empty shadow
@@ -1877,7 +1898,7 @@ class Renderer::Backend {
                 };
                 particleSystem->recordRender(commandBuffer, particleFrame,
                                              particlePipeline.handle(), particlePipeline.layout(),
-                                             currentFrame, false);
+                                              currentFrame, false);
             }
             forwardPass.end(commandBuffer);
 
@@ -1909,7 +1930,7 @@ class Renderer::Backend {
                 };
                 particleSystem->recordRender(commandBuffer, particleFrame,
                                              particlePipeline.handle(), particlePipeline.layout(),
-                                             currentFrame, true);
+                                              currentFrame, true);
             }
             forwardPass.end(commandBuffer);
 
@@ -2236,17 +2257,7 @@ class Renderer::Backend {
             updateSceneViewportUniformBuffer(currentFrame);
             updateRenderableBuffers();
             if (particleSystem) {
-                if (editorUiActive) {
-                    if (!editorParticleFrameCaptured) {
-                        // Capture a warmed-up frame for Scene View only. The
-                        // live Game View continues to advance below.
-                        particleSystem->captureSceneSnapshot(1.5f);
-                        editorParticleFrameCaptured = true;
-                    }
-                    particleSystem->update(static_cast<float>(Time::deltaTime()));
-                } else {
-                    particleSystem->update(static_cast<float>(Time::deltaTime()));
-                }
+                particleSystem->update(static_cast<float>(Time::deltaTime()));
             }
             updateCullingUniformBuffer(currentFrame);
             if (optimizationFeatures.shadows) {
@@ -2332,6 +2343,10 @@ class Renderer::Backend {
                 skyPass.destroy();
                 sceneSkyPass.destroy();
                 particlePipeline.destroy();
+                vkDestroyPipeline(device, particleComputePipeline, nullptr);
+                vkDestroyPipelineLayout(device, particleComputePipelineLayout, nullptr);
+                particleComputePipeline = VK_NULL_HANDLE;
+                particleComputePipelineLayout = VK_NULL_HANDLE;
                 particleSystem.reset();
                 forwardPass.destroy();
                 hiZDepthPrepass.destroy();

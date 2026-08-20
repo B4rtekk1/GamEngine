@@ -9,10 +9,39 @@ struct Particle {
 };
 
 layout(std430, set = 0, binding = 0) buffer Particles { Particle particles[]; };
-layout(push_constant) uniform Simulation { float deltaTime; } sim;
+layout(push_constant) uniform Simulation {
+    float deltaTime;
+    uint spawnStart;
+    uint spawnCount;
+    uint maxParticles;
+    uint spawnSeed;
+    float _padding0;
+    float _padding1;
+    float _padding2;
+    vec4 emitterPositionMinLife;
+    vec4 minVelocityMinSize;
+    vec4 maxVelocity;
+    vec4 color;
+    vec4 maxLifeMaxSize;
+} sim;
+
+uint hash(uint value) {
+    value ^= value >> 16u;
+    value *= 0x7feb352du;
+    value ^= value >> 15u;
+    value *= 0x846ca68bu;
+    value ^= value >> 16u;
+    return value;
+}
+
+float random(inout uint state) {
+    state = hash(state);
+    return float(state) * (1.0 / 4294967296.0);
+}
 
 void main() {
     uint id = gl_GlobalInvocationID.x;
+    if (id >= sim.maxParticles) return;
     Particle p = particles[id];
     float dt = min(sim.deltaTime, 0.1);
 
@@ -21,6 +50,19 @@ void main() {
         p.positionLife.xyz += p.velocitySize.xyz * dt;
         p.positionLife.w -= dt;
         p.color.a = clamp(p.positionLife.w, 0.0, 1.0);
+    }
+
+    // The CPU supplies only the range of slots emitted this frame. Random
+    // particle attributes are generated deterministically on the GPU.
+    uint relative = (id + sim.maxParticles - sim.spawnStart) % sim.maxParticles;
+    if (relative < sim.spawnCount) {
+        uint state = sim.spawnSeed + relative;
+        p.positionLife = vec4(sim.emitterPositionMinLife.xyz,
+                              mix(sim.emitterPositionMinLife.w, sim.maxLifeMaxSize.x, random(state)));
+        p.velocitySize = vec4(
+            mix(sim.minVelocityMinSize.xyz, sim.maxVelocity.xyz, vec3(random(state), random(state), random(state))),
+            mix(sim.minVelocityMinSize.w, sim.maxLifeMaxSize.y, random(state)));
+        p.color = sim.color;
     }
     particles[id] = p;
 }

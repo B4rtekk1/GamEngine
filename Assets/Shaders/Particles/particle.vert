@@ -17,6 +17,12 @@ layout(location = 1) out vec4 color;
 
 void main() {
     Particle p = particles[gl_InstanceIndex];
+    if (p.positionLife.w <= 0.0) {
+        gl_Position = vec4(2.0, 2.0, 2.0, 1.0);
+        uv = inUv;
+        color = vec4(0.0);
+        return;
+    }
     vec3 world = p.positionLife.xyz +
     (cameraRight * inPosition.x + cameraUp * inPosition.y) * p.velocitySize.w;
     gl_Position = viewProjection * vec4(world, 1.0);

@@ -2,11 +2,9 @@
 #include "Engine/Scene/Scene.h"
 
 #include <cstdlib>
-#include <chrono>
 #include <exception>
 #include <iostream>
 #include <string_view>
-#include <thread>
 
 #include <SDL3/SDL.h>
 
@@ -27,10 +25,8 @@ int main(int argc, char** argv) {
         if (window == nullptr) throw std::runtime_error(SDL_GetError());
 
         renderer.initialize(scene, window);
-        constexpr auto targetFrameTime = std::chrono::microseconds{16'667};
         bool running = true;
         while (running) {
-            const auto frameStart = std::chrono::steady_clock::now();
             renderer.beginFrame();
             SDL_Event event;
             while (SDL_PollEvent(&event)) {
@@ -41,8 +37,6 @@ int main(int argc, char** argv) {
                 }
             }
             if (running) renderer.renderFrame();
-            const auto elapsed = std::chrono::steady_clock::now() - frameStart;
-            if (elapsed < targetFrameTime) std::this_thread::sleep_for(targetFrameTime - elapsed);
         }
         renderer.shutdown();
         SDL_DestroyWindow(window);
