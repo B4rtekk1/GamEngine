@@ -148,7 +148,6 @@ class Renderer::Backend {
         [[nodiscard]] VkDescriptorSet sceneViewportTexture() const noexcept { return sceneViewportDescriptor; }
 
         void processEvent(const SDL_Event& event) {
-            if (editorUiActive) ImGui_ImplSDL3_ProcessEvent(&event);
             SDLInput::processEvent(event);
             if (event.type == SDL_EVENT_WINDOW_RESIZED ||
                 event.type == SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED) {
@@ -207,6 +206,7 @@ class Renderer::Backend {
         }
 
     private:
+        friend class Renderer;
         SDL_Window* window = nullptr;
 
         VkInstance instance{};
@@ -257,7 +257,7 @@ class Renderer::Backend {
         Scene& scene;
         Registry& registry;
         const RenderOptimizationFeatures& optimizationFeatures;
-        const AntialiasingLevel antialiasingLevel;
+        AntialiasingLevel antialiasingLevel;
         Assets::AssetManager& assetManager;
         std::optional<Camera> camera;
         Buffer vertexBuffer;
@@ -576,19 +576,19 @@ class Renderer::Backend {
         }
 
 
-    void createDepthResources() {
-        depthBuffer.create(swapchain.extent(), msaa.sampleCount());
-        hiZDepthBuffer.initialize(vulkanDevice.physical(), device);
-        if (msaa.enabled()) {
-            hiZDepthBuffer.create(swapchain.extent(), VK_SAMPLE_COUNT_1_BIT,
-                                  depthBuffer.format());
+        void createDepthResources() {
+            depthBuffer.create(swapchain.extent(), msaa.sampleCount());
+            hiZDepthBuffer.initialize(vulkanDevice.physical(), device);
+            if (msaa.enabled()) {
+                hiZDepthBuffer.create(swapchain.extent(), VK_SAMPLE_COUNT_1_BIT,
+                                      depthBuffer.format());
+            }
         }
-    }
 
-    void destroyDepthResources() {
-        hiZDepthBuffer.destroy();
-        depthBuffer.destroy();
-    }
+        void destroyDepthResources() {
+            hiZDepthBuffer.destroy();
+            depthBuffer.destroy();
+        }
 
         void createShadowPass() {
             std::vector<VkBuffer> buffers;
@@ -634,9 +634,11 @@ class Renderer::Backend {
                 return;
             }
 
-            particleSystem = std::make_unique<Particles::ParticleSystem>(
-                device, vulkanDevice.physical(), vulkanDevice.graphicsQueue(), commandPool, 8192);
-            particleSystem->setEmitter(scene.particleEmitter);
+            if (!particleSystem) {
+                particleSystem = std::make_unique<Particles::ParticleSystem>(
+                    device, vulkanDevice.physical(), vulkanDevice.graphicsQueue(), commandPool, 8192);
+                particleSystem->setEmitter(scene.particleEmitter);
+            }
 
             GraphicsPipelineOptions options{};
             options.colorFormat = HdrBuffer::Format;
@@ -657,6 +659,60 @@ class Renderer::Backend {
                 {1, 0, VK_FORMAT_R32G32_SFLOAT, sizeof(float) * 2},
             };
             particlePipeline.create(device, options);
+        }
+
+        void reconfigureAntialiasing() {
+            if (device == VK_NULL_HANDLE) return;
+
+            // Nothing may reference the old render passes or attachments while
+            // they are being replaced. This also guarantees that the old
+            // command buffers have finished before their pipelines disappear.
+            vkDeviceWaitIdle(device);
+
+            destroyCullingResources();
+            destroyEditorUiResources();
+            canvasRenderer.destroy();
+            tonemapPass.destroy();
+
+            if (hiZDepthPrepassFramebuffer != VK_NULL_HANDLE) {
+                vkDestroyFramebuffer(device, hiZDepthPrepassFramebuffer, nullptr);
+                hiZDepthPrepassFramebuffer = VK_NULL_HANDLE;
+            }
+            if (hdrFramebuffer != VK_NULL_HANDLE) {
+                vkDestroyFramebuffer(device, hdrFramebuffer, nullptr);
+                hdrFramebuffer = VK_NULL_HANDLE;
+            }
+            destroySceneViewportResources();
+
+            particlePipeline.destroy();
+            skyPass.destroy();
+            sceneSkyPass.destroy();
+            forwardPass.destroy();
+            hiZDepthPrepass.destroy();
+
+            msaa.destroy();
+            hdrBuffer.destroy();
+            destroyDepthResources();
+
+            const VkSampleCountFlagBits requestedSamples =
+                antialiasingLevel == AntialiasingLevel::MSAA4x ? VK_SAMPLE_COUNT_4_BIT :
+                antialiasingLevel == AntialiasingLevel::MSAA2x ? VK_SAMPLE_COUNT_2_BIT :
+                VK_SAMPLE_COUNT_1_BIT;
+            msaa.initialize(vulkanDevice.physical(), device, requestedSamples);
+            hdrBuffer.create(vulkanDevice.physical(), device, swapchain.extent());
+            msaa.create(swapchain.extent(), HdrBuffer::Format);
+            createDepthResources();
+
+            createForwardPass();
+            createParticleResources();
+            createSkyPass();
+            createSceneSkyPass();
+            createFramebuffers();
+            createSceneViewportResources();
+            createTonemapPass();
+            createUIResources();
+            createEditorUiResources();
+            createCullingResources();
         }
 
         void createSkyPass() {
@@ -749,7 +805,13 @@ class Renderer::Backend {
                     throw std::runtime_error("Could not create ImGui framebuffer");
                 }
             }
-            ImGui_ImplSDL3_InitForVulkan(window);
+            // ImGui_ImplVulkan_Shutdown() destroys platform windows as part of
+            // its viewport cleanup. The SDL backend therefore has to be
+            // initialized again after every Vulkan-backend rebuild; otherwise
+            // its stale state rejects all events for the main SDL window.
+            if (!ImGui_ImplSDL3_InitForVulkan(window)) {
+                throw std::runtime_error("Could not initialize ImGui SDL backend");
+            }
             ImGui_ImplVulkan_InitInfo info{};
             info.ApiVersion = VK_API_VERSION_1_3; info.Instance = instance;
             info.PhysicalDevice = vulkanDevice.physical(); info.Device = device;
@@ -768,7 +830,19 @@ class Renderer::Backend {
             if (editorUiActive) {
                 if (gameViewportDescriptor != VK_NULL_HANDLE) ImGui_ImplVulkan_RemoveTexture(gameViewportDescriptor);
                 if (sceneViewportDescriptor != VK_NULL_HANDLE) ImGui_ImplVulkan_RemoveTexture(sceneViewportDescriptor);
+            }
+            // Do not rely only on editorUiActive here. If initialization failed
+            // halfway through, ImGui can still own a renderer backend and the
+            // next Vulkan rebuild would assert in ImGui_ImplVulkan_Init.
+            if (ImGui::GetCurrentContext() != nullptr &&
+                ImGui::GetIO().BackendRendererUserData != nullptr) {
                 ImGui_ImplVulkan_Shutdown();
+            }
+            // Vulkan shutdown clears the main viewport's PlatformHandle.
+            // Shut down SDL too so createEditorUiResources() can register the
+            // application window again on the next renderer rebuild.
+            if (ImGui::GetCurrentContext() != nullptr &&
+                ImGui::GetIO().BackendPlatformUserData != nullptr) {
                 ImGui_ImplSDL3_Shutdown();
             }
             gameViewportDescriptor = sceneViewportDescriptor = VK_NULL_HANDLE;
@@ -1297,6 +1371,7 @@ class Renderer::Backend {
         }
 
         void createCullingResources() {
+            hiZValid = false;
             const auto objectCount = static_cast<uint32_t>(instanceBatches.size());
             if (objectCount == 0) return;
 
@@ -1735,15 +1810,19 @@ class Renderer::Backend {
             // ParticleSystem uses a CPU-authoritative simulation and uploads to
             // the current frame's private buffer during recordRender.
 
-            if (optimizationFeatures.shadows) {
-                shadowPass.record(
-                    commandBuffer, lightSpaceMatrix(), vertexBuffer.handle(),
-                    shadowInstanceBuffers[currentFrame].handle(), indexBuffer.handle(),
-                    shadowPass.descriptorSet(currentFrame),
-                    shadowCullingPasses[currentFrame],
-                    shadowIndirectDraws[currentFrame],
-                    static_cast<std::uint32_t>(gpuObjects.size()));
-            }
+            // The forward descriptor layout always contains the shadow-map
+            // sampler. Even when shadows are disabled, run an empty shadow
+            // pass so its image is transitioned from UNDEFINED to
+            // SHADER_READ_ONLY_OPTIMAL before the descriptor is used.
+            shadowPass.record(
+                commandBuffer, lightSpaceMatrix(), vertexBuffer.handle(),
+                shadowInstanceBuffers[currentFrame].handle(), indexBuffer.handle(),
+                shadowPass.descriptorSet(currentFrame),
+                shadowCullingPasses[currentFrame],
+                shadowIndirectDraws[currentFrame],
+                optimizationFeatures.shadows
+                    ? static_cast<std::uint32_t>(gpuObjects.size())
+                    : 0u);
 
             gpuCullingPasses[currentFrame].record(
                 commandBuffer, static_cast<std::uint32_t>(gpuObjects.size()));
@@ -1765,6 +1844,9 @@ class Renderer::Backend {
                 depthReady.srcAccessMask = VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
                 depthReady.dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
                 depthReady.dstAccessMask = VK_ACCESS_2_SHADER_SAMPLED_READ_BIT;
+                // ForwardPass's render pass transitions the depth attachment
+                // to READ_ONLY on exit, including its first use. Keep the
+                // layout unchanged here and only add the visibility barrier.
                 depthReady.oldLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL;
                 depthReady.newLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL;
                 depthReady.image = hiZDepthBuffer.image();
@@ -1837,6 +1919,9 @@ class Renderer::Backend {
                 depthReady.srcAccessMask = VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
                 depthReady.dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
                 depthReady.dstAccessMask = VK_ACCESS_2_SHADER_SAMPLED_READ_BIT;
+                // The forward render pass already leaves depth in READ_ONLY.
+                // This barrier supplies visibility for the following compute
+                // pass without inventing an UNDEFINED transition.
                 depthReady.oldLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL;
                 depthReady.newLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL;
                 depthReady.image = depthBuffer.image();
@@ -1946,6 +2031,11 @@ class Renderer::Backend {
             waitForDrawableExtent();
 
             vkDeviceWaitIdle(device);
+
+            // The ImGui Vulkan backend owns swapchain-dependent render data.
+            // Tear down both ImGui backends before recreating the presentation
+            // resources, then register the SDL window again below.
+            destroyEditorUiResources();
 
             if (hiZDepthPrepassFramebuffer != VK_NULL_HANDLE) {
                 vkDestroyFramebuffer(device, hiZDepthPrepassFramebuffer, nullptr);
@@ -2072,6 +2162,16 @@ class Renderer::Backend {
         }
 
         void updateEditorSceneCameraInput() {
+            // Relative mouse mode belongs to gameplay. In the editor it can
+            // keep SDL's pointer capture after a Scene View drag, preventing
+            // Dear ImGui controls from receiving later clicks. Keep normal
+            // mouse coordinates here; right-drag still supplies deltas for
+            // camera rotation without taking ownership of the cursor.
+            if (cameraMouseLookActive) {
+                SDLInput::setRelativeMouseMode(window, false);
+                cameraMouseLookActive = false;
+            }
+
             Camera sceneCamera{Degrees{60.0f}, 1.0f, 0.1f, 1000.0f};
             sceneCamera.setRotation(Degrees{editorSceneCameraYaw},
                                     Degrees{editorSceneCameraPitch});
@@ -2108,18 +2208,11 @@ class Renderer::Backend {
 
             constexpr float mouseSensitivity = 0.1f;
             if (Input::mouseDown(MouseButton::Right)) {
-                if (!cameraMouseLookActive) {
-                    SDLInput::setRelativeMouseMode(window, true);
-                    cameraMouseLookActive = true;
-                }
                 const Vec2 mouseDelta = Input::mouseDelta();
                 editorSceneCameraYaw += mouseDelta.x() * mouseSensitivity;
                 editorSceneCameraPitch = std::clamp(
                     editorSceneCameraPitch - mouseDelta.y() * mouseSensitivity,
                     -89.0f, 89.0f);
-            } else if (cameraMouseLookActive) {
-                SDLInput::setRelativeMouseMode(window, false);
-                cameraMouseLookActive = false;
             }
         }
 
@@ -2341,8 +2434,12 @@ void Renderer::reloadScene(Scene& scene, SDL_Window* window) {
     // the just-submitted frame. Backend cleanup also waits, but doing it here
     // makes the lifetime boundary explicit before tearing down Vulkan state.
     if (backend_) backend_->waitIdle();
-    shutdown();
+    backend_.reset();
     initialize(scene, window);
+}
+void Renderer::reconfigureAntialiasing() {
+    if (!backend_) return;
+    backend_->reconfigureAntialiasing();
 }
 VkDescriptorSet Renderer::gameViewportDescriptor() const noexcept {
     return backend_ ? backend_->gameViewportTexture() : VK_NULL_HANDLE;
@@ -2350,6 +2447,12 @@ VkDescriptorSet Renderer::gameViewportDescriptor() const noexcept {
 VkDescriptorSet Renderer::sceneViewportDescriptor() const noexcept {
     return backend_ ? backend_->sceneViewportTexture() : VK_NULL_HANDLE;
 }
-void Renderer::shutdown() noexcept { backend_.reset(); }
+void Renderer::shutdown() noexcept {
+    backend_.reset();
+    if (ImGui::GetCurrentContext() != nullptr &&
+        ImGui::GetIO().BackendPlatformUserData != nullptr) {
+        ImGui_ImplSDL3_Shutdown();
+    }
+}
 
 } // namespace Engine

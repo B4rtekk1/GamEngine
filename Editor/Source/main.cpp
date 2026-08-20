@@ -1,5 +1,6 @@
 #include "imgui.h"
 #include "imgui_internal.h"
+#include "imgui_impl_sdl3.h"
 
 #include "Engine/Renderer/Vulkan/renderer.h"
 #include "Engine/Scene/Scene.h"
@@ -127,9 +128,11 @@ bool drawViewport(VkDescriptorSet gameDescriptor, VkDescriptorSet sceneDescripto
         ImGui::EndChild();
     }
     ImGui::End();
-    return !showGameView &&
-           (viewportHovered || ImGui::IsMouseDown(ImGuiMouseButton_Right) ||
-            ImGui::IsMouseDown(ImGuiMouseButton_Middle));
+    // Do not enable camera navigation just because a mouse button is held
+    // elsewhere in the editor. The previous global button check captured the
+    // cursor after right- or middle-clicking menus and side panels, leaving
+    // ImGui unable to receive subsequent clicks.
+    return !showGameView && viewportHovered;
 }
 
 Engine::Entity drawHierarchy(Engine::Scene& scene, const Engine::Entity selected) {
@@ -453,6 +456,10 @@ int main() {
             renderer.beginFrame();
             SDL_Event event;
             while (SDL_PollEvent(&event)) {
+                // The editor owns Dear ImGui's platform event stream. Feed it
+                // directly before the renderer handles engine input, so UI
+                // controls never depend on renderer-internal state.
+                ImGui_ImplSDL3_ProcessEvent(&event);
                 renderer.processEvent(event);
                 if (event.type == SDL_EVENT_QUIT ||
                     (event.type == SDL_EVENT_WINDOW_CLOSE_REQUESTED &&

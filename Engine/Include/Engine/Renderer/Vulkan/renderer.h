@@ -83,6 +83,8 @@ public:
     void renderFrame();
     /** Rebuilds renderer resources after editor scene geometry changes. */
     void reloadScene(Scene& scene, SDL_Window* window);
+    /** Rebuilds only resources affected by the MSAA sample count. */
+    void reconfigureAntialiasing();
     [[nodiscard]] VkDescriptorSet gameViewportDescriptor() const noexcept;
     [[nodiscard]] VkDescriptorSet sceneViewportDescriptor() const noexcept;
     void shutdown() noexcept;
