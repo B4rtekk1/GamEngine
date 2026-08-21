@@ -205,6 +205,53 @@ class Renderer::Backend {
             }
         }
 
+        // Rebuild only registry-derived GPU data. The instance, device,
+        // swapchain and ImGui backend survive ordinary editor scene changes.
+        void reloadSceneResources(Scene& updatedScene) {
+            if (&updatedScene != &scene) {
+                throw std::invalid_argument("Renderer cannot switch Scene instances while initialized");
+            }
+            if (device == VK_NULL_HANDLE) return;
+            if (!inFlightFences.empty() && vkWaitForFences(device,
+                    static_cast<uint32_t>(inFlightFences.size()), inFlightFences.data(), VK_TRUE,
+                    UINT64_MAX) != VK_SUCCESS) {
+                throw std::runtime_error("Could not synchronize frames for scene reload");
+            }
+
+            destroyCullingResources();
+            if (hiZDepthPrepassFramebuffer != VK_NULL_HANDLE) vkDestroyFramebuffer(device, hiZDepthPrepassFramebuffer, nullptr);
+            hiZDepthPrepassFramebuffer = VK_NULL_HANDLE;
+            if (hdrFramebuffer != VK_NULL_HANDLE) vkDestroyFramebuffer(device, hdrFramebuffer, nullptr);
+            hdrFramebuffer = VK_NULL_HANDLE;
+            destroySceneViewportResources();
+            particlePipeline.destroy();
+            skyPass.destroy(); sceneSkyPass.destroy(); forwardPass.destroy(); hiZDepthPrepass.destroy();
+            shadowPass.destroy(); sceneDescriptorPass.destroy();
+            indexBuffer.destroy(); vertexBuffer.destroy();
+            for (Buffer& buffer : instanceBuffers) buffer.destroy();
+            for (Buffer& buffer : shadowInstanceBuffers) buffer.destroy();
+            for (Buffer& buffer : materialBuffers) buffer.destroy();
+            for (Buffer& buffer : uniformBuffers) buffer.destroy();
+            for (Buffer& buffer : sceneUniformBuffers) buffer.destroy();
+            for (Texture2D& texture : materialTextures) texture.destroy();
+            materialTextures.clear(); materialTextureDescriptors.clear(); meshTextureOffsets.clear();
+            fallbackMaterialTexture.destroy();
+            renderables.clear(); instanceBatches.clear(); instanceModels.clear();
+            shadowInstanceModels.clear(); materials.clear();
+            for (auto& indices : dirtyTransforms) indices.clear();
+            for (auto& indices : dirtyMaterials) indices.clear();
+            for (auto& indices : dirtyCullingObjects) indices.clear();
+            lastRenderableRevision = std::numeric_limits<std::uint64_t>::max();
+            hiZValid = false;
+
+            createMaterialTextures(); createMeshBuffers(); createInstanceBuffer();
+            createUniformBuffers(); createSceneUniformBuffers(); createShadowPass();
+            createSceneDescriptorPass(); createForwardPass(); createParticleResources();
+            createCullingResources(); createSkyPass(); createSceneSkyPass();
+            createFramebuffers(); createSceneViewportResources();
+            assetManager.unload_unused();
+        }
+
     private:
         friend class Renderer;
         SDL_Window* window = nullptr;
@@ -638,7 +685,7 @@ class Renderer::Backend {
             if (!particleSystem) {
                 particleSystem = std::make_unique<Particles::ParticleSystem>(
                     device, vulkanDevice.physical(), vulkanDevice.graphicsQueue(), commandPool, 8192);
-                particleSystem->setEmitter(scene.particleEmitter);
+                particleSystem->setEmitter(scene.particleEmitter());
             }
 
             GraphicsPipelineOptions options{};
@@ -2324,7 +2371,6 @@ class Renderer::Backend {
 
                 fpsFrameCount = 0;
                 fpsElapsedTime = 0.0;
-                scene.setFps(fps);
             }
         }
 
@@ -2445,12 +2491,9 @@ void Renderer::setEditorSelection(const Entity entity) {
 }
 void Renderer::renderFrame() { backend_->renderFrame(); }
 void Renderer::reloadScene(Scene& scene, SDL_Window* window) {
-    // The scene buffers and synchronization objects may still be referenced by
-    // the just-submitted frame. Backend cleanup also waits, but doing it here
-    // makes the lifetime boundary explicit before tearing down Vulkan state.
-    if (backend_) backend_->waitIdle();
-    backend_.reset();
-    initialize(scene, window);
+    static_cast<void>(window); // The live backend keeps the application window.
+    if (backend_) backend_->reloadSceneResources(scene);
+    else initialize(scene, window);
 }
 void Renderer::reconfigureAntialiasing() {
     if (!backend_) return;

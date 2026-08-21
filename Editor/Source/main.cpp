@@ -3,7 +3,8 @@
 #include "imgui_impl_sdl3.h"
 
 #include "Engine/Renderer/Vulkan/renderer.h"
-#include "Engine/Scene/Scene.h"
+#include "Engine/Scene/ScenePresets.h"
+#include "Engine/Core/Transform.h"
 
 #include <SDL3/SDL.h>
 
@@ -64,7 +65,7 @@ void configureEditorStyle() {
     colors[ImGuiCol_DockingPreview] = {0.12f, 0.70f, 0.80f, 0.50f};
 }
 
-const char* entityName(const Engine::Scene& scene, const Engine::Entity entity) {
+const char* entityName(const Engine::ScenePreset& scene, const Engine::Entity entity) {
     if (entity == scene.plane) return "Plane";
     if (entity == scene.camera) return "Camera";
     if (entity == scene.tree) return "Tree";
@@ -135,7 +136,7 @@ bool drawViewport(VkDescriptorSet gameDescriptor, VkDescriptorSet sceneDescripto
     return !showGameView && viewportHovered;
 }
 
-Engine::Entity drawHierarchy(Engine::Scene& scene, const Engine::Entity selected) {
+Engine::Entity drawHierarchy(Engine::ScenePreset& scene, const Engine::Entity selected) {
     Engine::Entity clicked = Engine::NullEntity;
     ImGui::Begin("Hierarchy");
     ImGui::PushStyleColor(ImGuiCol_Text, {0.28f, 0.84f, 0.91f, 1.0f});
@@ -185,7 +186,7 @@ Engine::Entity drawHierarchy(Engine::Scene& scene, const Engine::Entity selected
     return clicked;
 }
 
-bool drawInspector(Engine::Scene& scene, const Engine::Entity selected) {
+bool drawInspector(Engine::ScenePreset& scene, const Engine::Entity selected) {
     ImGui::Begin("Inspector");
     ImGui::PushStyleColor(ImGuiCol_Text, {0.28f, 0.84f, 0.91f, 1.0f});
     ImGui::TextUnformatted("INSPECTOR");
@@ -242,7 +243,7 @@ bool drawInspector(Engine::Scene& scene, const Engine::Entity selected) {
     return consumesMouseWheel;
 }
 
-void drawStatusBar(const Engine::Scene& scene, const Engine::Entity selected) {
+void drawStatusBar(const Engine::ScenePreset& scene, const Engine::Entity selected) {
     ImGuiViewport* viewport = ImGui::GetMainViewport();
     ImGui::SetNextWindowPos({viewport->WorkPos.x, viewport->WorkPos.y + viewport->WorkSize.y - 27.0f});
     ImGui::SetNextWindowSize({viewport->WorkSize.x, 27.0f});
@@ -285,7 +286,7 @@ void configureEditorDockLayout() {
     configured = true;
 }
 
-Engine::Entity drawEditorMenuBar(Engine::Scene& scene, Engine::Renderer& renderer,
+Engine::Entity drawEditorMenuBar(Engine::ScenePreset& scene, Engine::Renderer& renderer,
                                  bool& antialiasingChanged) {
     static bool showShortcuts = false;
     static bool showAbout = false;
@@ -444,7 +445,7 @@ int main() {
         ImGui::GetIO().ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard | ImGuiConfigFlags_DockingEnable;
         configureEditorStyle();
 
-        Engine::Scene scene(Engine::SceneType::Particles);
+        Engine::ScenePreset scene(Engine::SceneType::Particles);
         Engine::Renderer renderer;
         renderer.initialize(scene, window);
         Engine::Entity selectedEntity = Engine::NullEntity;
@@ -476,7 +477,6 @@ int main() {
             }
 
             const std::uint64_t sceneStructureBeforeUi = scene.registry.structuralRevision();
-            const std::uint64_t sceneRenderRevisionBeforeUi = scene.renderRevision();
             renderer.beginEditorUiFrame();
             bool antialiasingChanged = false;
             if (const Engine::Entity created = drawEditorMenuBar(scene, renderer,
@@ -506,9 +506,7 @@ int main() {
 
             const bool sceneStructureChanged =
                 scene.registry.structuralRevision() != sceneStructureBeforeUi;
-            const bool sceneRenderablesChanged =
-                scene.renderRevision() != sceneRenderRevisionBeforeUi;
-            if (sceneStructureChanged && sceneRenderablesChanged) {
+            if (sceneStructureChanged) {
                 // The current Backend still owns buffers built from the old
                 // registry snapshot. Rebuild it before submitting another
                 // frame instead of letting update/render observe mixed state.

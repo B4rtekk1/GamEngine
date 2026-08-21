@@ -1,323 +1,39 @@
 #pragma once
 
-#include "Engine/Renderer/Geometry/Cube.h"
-#include "Engine/Renderer/Geometry/Plane.h"
-#include "Engine/Renderer/MeshRenderer.h"
-#include "Engine/Renderer/Particles/ParticleSystem.h"
-#include "Engine/Assets/AssetManager.h"
-#include "Engine/Core/Transform.h"
 #include "Engine/ECS/Registry.h"
-#include "Engine/ECS/Components/CameraComponent.h"
-#include "Engine/Scene/Components/LightComponent.h"
-#include "Engine/Scene/SceneBuilder.h"
+#include "Engine/Renderer/Particles/ParticleSystem.h"
 #include "Engine/UI/Canvas.h"
-#include "Engine/UI/PanelElement.h"
-#include "Engine/UI/TextElement.h"
 #include "Engine/UI/Vulkan/UIFontAtlas.h"
-
-#include <array>
-#include <algorithm>
-#include <cmath>
-#include <cstdio>
-#include <filesystem>
-#include <iostream>
-#include <memory>
-#include <stdexcept>
-#include <string>
-#include <vector>
 
 namespace Engine {
 
-enum class SceneType {
-    Cubes,
-    Tree,
-    Particles,
-};
-
-class Scene final {
+// Runtime scene data. Content creation belongs to ScenePresets (or to the
+// application), rather than to this data container.
+class Scene {
 public:
-    static constexpr std::size_t CubesPerAxis = 30;
-    // The default camera sees most of the grid. Splitting it into many
-    // culling batches makes the GPU run many more AABB tests without
-    // meaningfully reducing the rendered geometry. Keep one batch here;
-    // smaller batches are useful only for heavily occluded views.
-    static constexpr std::size_t CubesPerBatchAxis = CubesPerAxis;
-    static constexpr std::size_t CubeBatchesPerAxis = CubesPerAxis / CubesPerBatchAxis;
-    static constexpr std::size_t CubeCount = CubesPerAxis * CubesPerAxis * CubesPerAxis;
-    static constexpr float CubeSpacing = 1.25f;
-    static constexpr float GridHalfExtent =
-        ((CubesPerAxis - 1) * CubeSpacing + 1.0f) * 0.5f;
-
     Registry registry;
-    UI::Canvas canvas{800, 600};
-    UI::UIFontAtlas fontAtlas;
-    Entity plane{NullEntity};
-    Entity camera{NullEntity};
-    Entity tree{NullEntity};
-    std::vector<Entity> editorGameObjects;
-    std::vector<Entity> editorCubes;
-    std::vector<Entity> editorPlanes;
-    Particles::ParticleEmitter particleEmitter{};
+
+    [[nodiscard]] UI::Canvas& uiCanvas() noexcept { return canvas_; }
+    [[nodiscard]] const UI::Canvas& uiCanvas() const noexcept { return canvas_; }
+    [[nodiscard]] const UI::UIFontAtlas& uiFontAtlas() const noexcept { return fontAtlas_; }
+    [[nodiscard]] UI::UIFontAtlas& uiFontAtlas() noexcept { return fontAtlas_; }
+
     [[nodiscard]] bool isParticleScene() const noexcept { return particleScene_; }
-    std::array<Entity, CubeCount> cubes{};
+    [[nodiscard]] const Particles::ParticleEmitter& particleEmitter() const noexcept {
+        return particleEmitter_;
+    }
+
+protected:
+    void setParticleEmitter(Particles::ParticleEmitter emitter) noexcept {
+        particleEmitter_ = emitter;
+        particleScene_ = true;
+    }
 
 private:
+    UI::Canvas canvas_{800, 600};
+    UI::UIFontAtlas fontAtlas_{};
+    Particles::ParticleEmitter particleEmitter_{};
     bool particleScene_ = false;
-    // Changes to empty/editor-only entities do not invalidate the renderer's
-    // baked geometry buffers. Keep this separate from Registry's structural
-    // revision so the editor can avoid a full Vulkan rebuild for those edits.
-    std::uint64_t renderRevision_ = 0;
-    std::shared_ptr<const Mesh> planeMesh;
-    std::shared_ptr<const Mesh> cubeMesh;
-    std::shared_ptr<const Mesh> treeMesh;
-    UI::TextElement* fpsTextElement = nullptr;
-
-    void configureParticleScene() noexcept {
-        particleEmitter.position = {0.0f, 0.25f, 0.0f};
-        particleEmitter.minVelocity = {-0.8f, 5.5f, -0.8f};
-        particleEmitter.maxVelocity = {0.8f, 9.0f, 0.8f};
-        particleEmitter.color = {1.0f, 0.05f, 0.02f, 1.0f};
-        particleEmitter.minLifeTime = 1.2f;
-        particleEmitter.maxLifeTime = 3.4f;
-        particleEmitter.minSize = 0.06f;
-        particleEmitter.maxSize = 0.16f;
-        particleEmitter.spawnRate = 900.0f;
-    }
-
-    void buildTreeScene(SceneBuilder& builder) {
-        tree = builder.createMeshEntity(
-            treeMesh,
-            Transform{.position = {3.0f, 0.0f, 1.0f}},
-            PBRMaterial{.baseColor = {0.20f, 0.48f, 0.08f},
-                        .metallic = 0.0f,
-                        .roughness = 0.82f});
-
-        static_cast<void>(builder.createLight(
-            Transform{.rotation = {35.0f, -35.0f, 0.0f}},
-            LightComponent{
-                .type = LightType::Directional,
-                .color = Math::Color::white(),
-                .intensity = 4.0f,
-                .enabled = true,
-                .castShadows = true,
-            }));
-    }
-
-    void buildCubeScene(SceneBuilder& builder) {
-        constexpr float halfGridWidth = (CubesPerAxis - 1) * CubeSpacing * 0.5f;
-
-        for (std::size_t layerBlock = 0; layerBlock < CubeBatchesPerAxis; ++layerBlock) {
-            for (std::size_t rowBlock = 0; rowBlock < CubeBatchesPerAxis; ++rowBlock) {
-                for (std::size_t columnBlock = 0; columnBlock < CubeBatchesPerAxis; ++columnBlock) {
-                    const auto cullingBatch = static_cast<std::uint32_t>(
-                        1 + (layerBlock * CubeBatchesPerAxis + rowBlock) * CubeBatchesPerAxis + columnBlock);
-                    for (std::size_t layer = layerBlock * CubesPerBatchAxis;
-                         layer < (layerBlock + 1) * CubesPerBatchAxis; ++layer) {
-                        for (std::size_t row = rowBlock * CubesPerBatchAxis;
-                             row < (rowBlock + 1) * CubesPerBatchAxis; ++row) {
-                            for (std::size_t column = columnBlock * CubesPerBatchAxis;
-                                 column < (columnBlock + 1) * CubesPerBatchAxis; ++column) {
-                                const std::size_t index =
-                                    (layer * CubesPerAxis + row) * CubesPerAxis + column;
-                                cubes[index] = builder.createMeshEntity(
-                                    cubeMesh,
-                                    Transform{.position = {
-                                        static_cast<float>(column) * CubeSpacing - halfGridWidth,
-                                        static_cast<float>(layer) * CubeSpacing + 0.5f,
-                                        static_cast<float>(row) * CubeSpacing - halfGridWidth,
-                                    }},
-                                    PBRMaterial{
-                                        .baseColor = {0.72f, 0.72f, 0.72f},
-                                        .metallic = 0.05f,
-                                        .roughness = 0.62f,
-                                    },
-                                    false,
-                                    cullingBatch);
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-public:
-
-    /** Creates an empty editor GameObject with the standard base components. */
-    [[nodiscard]] Entity createGameObject() {
-        const Entity entity = registry.create();
-        registry.add<Transform>(entity);
-        registry.add<MeshRenderer>(entity);
-        editorGameObjects.push_back(entity);
-        return entity;
-    }
-
-    /** Creates a cube-backed GameObject for the editor. */
-    [[nodiscard]] Entity createCube() {
-        SceneBuilder builder{registry};
-        const Entity entity = builder.createMeshEntity(
-            cubeMesh, Transform{.position = {0.0f, 0.5f, 0.0f}},
-            PBRMaterial{.baseColor = {0.72f, 0.72f, 0.72f},
-                        .metallic = 0.05f, .roughness = 0.62f});
-        editorCubes.push_back(entity);
-        ++renderRevision_;
-        return entity;
-    }
-
-    /** Creates a plane-backed GameObject for the editor. */
-    [[nodiscard]] Entity createPlane() {
-        SceneBuilder builder{registry};
-        const Entity entity = builder.createMeshEntity(
-            planeMesh, Transform{.scale = {2.0f, 1.0f, 2.0f}});
-        editorPlanes.push_back(entity);
-        ++renderRevision_;
-        return entity;
-    }
-
-    /** Revision for changes that require rebuilding renderer geometry. */
-    [[nodiscard]] std::uint64_t renderRevision() const noexcept {
-        return renderRevision_;
-    }
-
-
-    explicit Scene(const SceneType sceneType = SceneType::Cubes) {
-        const bool treeScene = sceneType == SceneType::Tree;
-        const bool particleScene = sceneType == SceneType::Particles;
-        particleScene_ = particleScene;
-
-        planeMesh = std::make_shared<Mesh>(Plane::createMesh());
-        cubeMesh = std::make_shared<Mesh>(Cube::createMesh());
-
-        if (treeScene) {
-            Assets::AssetManager assets;
-            Assets::register_default_asset_loaders(assets);
-            const std::array<std::filesystem::path, 2> treeCandidates{
-                std::filesystem::path{"Assets/Models/tree.glb"},
-                std::filesystem::path{"Models/tree.glb"},
-            };
-            const auto treePath = std::ranges::find_if(
-                treeCandidates, [](const auto& candidate) {
-                    return std::filesystem::is_regular_file(candidate);
-                });
-            if (treePath == treeCandidates.end()) {
-                throw std::runtime_error("Could not find Assets/Models/tree.glb");
-            }
-            const auto loadedTree = assets.load<Mesh>(*treePath, Assets::AssetType::Mesh);
-            if (!loadedTree) {
-                throw std::runtime_error("Could not load tree GLB: " + treePath->string());
-            }
-            treeMesh = loadedTree.shared();
-        }
-
-        if (particleScene) configureParticleScene();
-
-        SceneBuilder builder{registry};
-        plane = builder.createMeshEntity(
-            planeMesh,
-            Transform{.scale = treeScene ? Vec3{10.0f, 1.0f, 10.0f}
-                                         : Vec3{GridHalfExtent * 2.0f + 4.0f, 1.0f,
-                                                GridHalfExtent * 2.0f + 4.0f}},
-            treeScene ? PBRMaterial{.baseColor = {0.24f, 0.16f, 0.08f},
-                                    .metallic = 0.0f,
-                                    .roughness = 0.9f}
-                      : PBRMaterial{},
-            false);
-        // The ground receives shadows but never needs to cast one itself.
-        // The default cube scene has no shadow casters, so its fragment shader
-        // can skip the expensive shadow-map sampling path.
-
-        if (treeScene) buildTreeScene(builder);
-
-        const float cameraTargetY = treeScene ? 4.2f : particleScene ? 3.0f
-                                              : (CubesPerAxis - 1) * CubeSpacing * 0.5f + 0.5f;
-        const Vec3 cameraPosition = treeScene
-            ? Vec3{8.0f, 6.5f, 10.0f}
-            : particleScene ? Vec3{6.0f, 5.8f, 8.0f}
-            : Vec3{GridHalfExtent * 2.9f,
-                   cameraTargetY + GridHalfExtent * 2.6f,
-                   GridHalfExtent * 3.9f};
-        const Vec3 cameraDirection = Vec3{0.0f, cameraTargetY, 0.0f} - cameraPosition;
-        const float horizontalDistance = Vec2{cameraDirection.x(), cameraDirection.z()}.length();
-        camera = builder.createCamera(
-            Transform{
-                .position = cameraPosition,
-                .rotation = {
-                Degrees{Radians{std::atan2(cameraDirection.y(), horizontalDistance)}}.value(),
-                Degrees{Radians{std::atan2(cameraDirection.z(), cameraDirection.x())}}.value(),
-                0.0f,
-                },
-            },
-            CameraComponent{
-            .fieldOfView = 45.0f,
-            .nearClip = 0.1f,
-            .farClip = 100'000.0f,
-            .aspectRatio = 800.0f / 600.0f,
-            });
-
-        const std::array<std::filesystem::path, 5> fontCandidates{
-            std::filesystem::path{"C:/Windows/Fonts/segoeui.ttf"},
-            std::filesystem::path{"C:/Windows/Fonts/arial.ttf"},
-            std::filesystem::path{"C:/Windows/Fonts/consola.ttf"},
-            std::filesystem::path{"/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"},
-            std::filesystem::path{"/usr/share/fonts/truetype/liberation2/LiberationSans-Regular.ttf"}
-        };
-        const auto font = std::ranges::find_if(fontCandidates,
-                                               [](const auto& candidate) {
-                                                   return std::filesystem::exists(candidate);
-                                               });
-        if (font == fontCandidates.end()) {
-            throw std::runtime_error("Could not find a system TrueType font for the FPS HUD");
-        }
-        if (const std::string error = fontAtlas.build(font->string(), 24, 32, 126);
-            !error.empty()) {
-            throw std::runtime_error("Could not build FPS font atlas: " + error);
-        }
-
-        auto panel = std::make_unique<UI::PanelElement>(
-            Math::Color{0.025f, 0.035f, 0.055f, 0.82f});
-        panel->rectTransform.anchorMin = {0.0f, 0.0f};
-        panel->rectTransform.anchorMax = {0.0f, 0.0f};
-        panel->rectTransform.offsetMin = {20.0f, 20.0f};
-        panel->rectTransform.offsetMax = {300.0f, 110.0f};
-
-        auto accent = std::make_unique<UI::PanelElement>(
-            Math::Color{0.10f, 0.75f, 0.90f, 1.0f});
-        accent->rectTransform.anchorMin = {0.0f, 0.0f};
-        accent->rectTransform.anchorMax = {0.0f, 1.0f};
-        accent->rectTransform.offsetMin = {0.0f, 0.0f};
-        accent->rectTransform.offsetMax = {4.0f, 0.0f};
-        panel->addChild(std::move(accent));
-
-        TextComponent fpsText;
-        fpsText.text = "FPS: --";
-        fpsText.fontSize = 24.0f;
-        fpsText.color = Math::Color{0.90f, 0.96f, 1.0f, 1.0f};
-        auto textElement = std::make_unique<UI::TextElement>(fpsText, fontAtlas);
-        fpsTextElement = textElement.get();
-        textElement->rectTransform.anchorMin = {0.0f, 0.0f};
-        textElement->rectTransform.anchorMax = {1.0f, 1.0f};
-        textElement->rectTransform.offsetMin = {14.0f, 12.0f};
-        textElement->rectTransform.offsetMax = {-8.0f, -8.0f};
-        panel->addChild(std::move(textElement));
-        static_cast<void>(canvas.addElement(std::move(panel)));
-
-        if (treeScene || particleScene) {
-            return;
-        }
-
-        // Cube benchmark geometry is assembled by its dedicated preset.
-        buildCubeScene(builder);
-    }
-
-    [[nodiscard]] UI::Canvas& uiCanvas() noexcept { return canvas; }
-    [[nodiscard]] const UI::UIFontAtlas& uiFontAtlas() const noexcept { return fontAtlas; }
-
-    void setFps(const double fps) {
-        if (fpsTextElement == nullptr) return;
-        char text[64];
-        std::snprintf(text, sizeof(text), "FPS: %.1f", fps);
-        fpsTextElement->text.text = text;
-    }
 };
 
 } // namespace Engine

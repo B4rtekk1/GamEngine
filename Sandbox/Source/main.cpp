@@ -1,5 +1,5 @@
 #include "Engine/Renderer/Vulkan/renderer.h"
-#include "Engine/Scene/Scene.h"
+#include "Engine/Scene/ScenePresets.h"
 
 #include <cstdlib>
 #include <exception>
@@ -15,7 +15,7 @@ int main(int argc, char** argv) {
             ? Engine::SceneType::Tree
             : argument == "--particles" ? Engine::SceneType::Particles
             : Engine::SceneType::Cubes;
-        Engine::Scene scene(sceneType);
+        Engine::ScenePreset scene(sceneType);
         Engine::Renderer renderer;
         if (!SDL_Init(SDL_INIT_VIDEO | SDL_INIT_EVENTS)) {
             throw std::runtime_error(SDL_GetError());
