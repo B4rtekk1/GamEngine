@@ -1,5 +1,6 @@
 #include <Engine/Core/Transform.h>
 #include <Engine/ECS/Registry.h>
+#include <Engine/ECS/Components/ScriptComponent.h>
 #include <Engine/Renderer/Geometry/Cube.h>
 #include <Engine/Renderer/MeshRenderer.h>
 #include <Engine/Scene/Components/LightComponent.h>
@@ -63,6 +64,10 @@ int main() {
         .enabled = false,
         .castShadows = true,
     });
+    source.add<ScriptComponent>(first, ScriptComponent{
+        .scriptPath = "Scripts/player controller.lua",
+        .enabled = false,
+    });
 
     const Entity second = source.create();
     source.add<MeshRenderer>(second, MeshRenderer{.mesh = sharedCube});
@@ -70,7 +75,7 @@ int main() {
 
     std::stringstream serialized;
     SceneSerializer::save(source, serialized);
-    if (serialized.str().find("GAMENGINE_SCENE 2") == std::string::npos ||
+    if (serialized.str().find("GAMENGINE_SCENE 3") == std::string::npos ||
         serialized.str().find("MESHES 1") == std::string::npos ||
         serialized.str().find("ENTITIES 3") == std::string::npos) {
         return 1;
@@ -83,6 +88,7 @@ int main() {
     loaded.view<>([&entities](const Entity entity) { entities.push_back(entity); });
     if (entities.size() != 3 || !loaded.has<Transform>(1) ||
         !loaded.has<MeshRenderer>(1) || !loaded.has<LightComponent>(1) ||
+        !loaded.has<ScriptComponent>(1) ||
         loaded.has<Transform>(2) || !loaded.has<MeshRenderer>(2) ||
         loaded.has<Transform>(3) || loaded.has<MeshRenderer>(3)) {
         return 2;
@@ -120,6 +126,11 @@ int main() {
     if (light.type != LightType::Spot || !equal(light.color, {0.7f, 0.6f, 0.5f}) ||
         light.intensity != 12.5f || light.enabled || !light.castShadows) {
         return 5;
+    }
+
+    const ScriptComponent& script = loaded.get<ScriptComponent>(1);
+    if (script.scriptPath != "Scripts/player controller.lua" || script.enabled) {
+        return 9;
     }
 
     Registry unchangedAfterFailure;

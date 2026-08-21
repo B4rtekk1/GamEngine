@@ -2,6 +2,7 @@
 
 #include "Engine/Core/Transform.h"
 #include "Engine/ECS/Components/CameraComponent.h"
+#include "Engine/ECS/Components/ScriptComponent.h"
 #include "Engine/ECS/Registry.h"
 #include "Engine/Renderer/MeshRenderer.h"
 #include "Engine/Scene/Components/LightComponent.h"
@@ -249,6 +250,11 @@ void SceneSerializer::save(const Registry& registry, std::ostream& output) {
                        << camera.nearClip << ' ' << camera.farClip << ' '
                        << camera.aspectRatio << ' ' << static_cast<int>(camera.primary) << '\n';
         }
+        if (registry.has<ScriptComponent>(entity)) {
+            const auto& script = registry.get<ScriptComponent>(entity);
+            serialized << "SCRIPT " << std::quoted(script.scriptPath) << ' '
+                       << static_cast<int>(script.enabled) << '\n';
+        }
         serialized << "END_ENTITY\n";
     }
     serialized << "END_SCENE\n";
@@ -355,6 +361,7 @@ void SceneSerializer::load(Registry& registry, std::istream& input) {
         bool hasRenderer = false;
         bool hasLight = false;
         bool hasCamera = false;
+        bool hasScript = false;
 
         while (true) {
             const auto component = read<std::string>(input, "component name");
@@ -428,6 +435,17 @@ void SceneSerializer::load(Registry& registry, std::istream& input) {
                     invalidScene("camera settings are invalid");
                 }
                 loaded.add<CameraComponent>(entity, camera);
+            } else if (component == "SCRIPT") {
+                if (hasScript) {
+                    invalidScene("entity contains more than one ScriptComponent");
+                }
+                hasScript = true;
+                ScriptComponent script;
+                if (!(input >> std::quoted(script.scriptPath))) {
+                    invalidScene("could not read script path");
+                }
+                script.enabled = readBool(input, "script enabled flag");
+                loaded.add<ScriptComponent>(entity, std::move(script));
             } else {
                 invalidScene("unknown component '" + component + "'");
             }

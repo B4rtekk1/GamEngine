@@ -5,6 +5,7 @@
 #include "Engine/Renderer/Vulkan/renderer.h"
 #include "Engine/Scene/ScenePresets.h"
 #include "Engine/Core/Transform.h"
+#include "Engine/ECS/Components/ScriptComponent.h"
 
 #include <SDL3/SDL.h>
 
@@ -238,8 +239,39 @@ bool drawInspector(Engine::ScenePreset& scene, const Engine::Entity selected) {
             });
         }
     }
+    if (scene.registry.valid(selected) && scene.registry.has<Engine::ScriptComponent>(selected) &&
+        ImGui::CollapsingHeader("Script", ImGuiTreeNodeFlags_DefaultOpen)) {
+        const Engine::Registry& readRegistry = scene.registry;
+        const Engine::ScriptComponent& script = readRegistry.get<Engine::ScriptComponent>(selected);
+        char scriptPath[260]{};
+        std::snprintf(scriptPath, sizeof(scriptPath), "%s", script.scriptPath.c_str());
+        ImGui::TextDisabled("Script path");
+        ImGui::SetNextItemWidth(-1.0f);
+        if (ImGui::InputText("##script-path", scriptPath, sizeof(scriptPath))) {
+            scene.registry.modify<Engine::ScriptComponent>(selected, [&](auto& value) {
+                value.scriptPath = scriptPath;
+            });
+        }
+        bool enabled = script.enabled;
+        if (ImGui::Checkbox("Enabled##script", &enabled)) {
+            scene.registry.modify<Engine::ScriptComponent>(selected, [&](auto& value) {
+                value.enabled = enabled;
+            });
+        }
+    }
     ImGui::SetNextItemWidth(-1.0f);
-    ImGui::Button("New Component", {-1.0f, 0.0f});
+    if (ImGui::Button("New Component", {-1.0f, 0.0f})) {
+        ImGui::OpenPopup("Add Component");
+    }
+    if (ImGui::BeginPopup("Add Component")) {
+        const bool hasScript = scene.registry.has<Engine::ScriptComponent>(selected);
+        if (ImGui::MenuItem("Script", nullptr, false, !hasScript)) {
+            scene.registry.add<Engine::ScriptComponent>(selected);
+            ImGui::CloseCurrentPopup();
+        }
+        if (hasScript) ImGui::TextDisabled("Script component already added");
+        ImGui::EndPopup();
+    }
     const bool consumesMouseWheel = ImGui::IsWindowHovered(
         ImGuiHoveredFlags_AllowWhenBlockedByActiveItem) && ImGui::GetIO().MouseWheel != 0.0f;
     ImGui::End();
