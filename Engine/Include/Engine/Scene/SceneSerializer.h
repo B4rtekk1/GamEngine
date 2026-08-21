@@ -16,7 +16,9 @@ class Registry;
  */
 class SceneSerializer final {
 public:
-    static constexpr unsigned FormatVersion = 1;
+    // Version 2 stores complete CPU mesh data: tangent frames, materials and
+    // embedded images, plus every MeshRenderer material setting.
+    static constexpr unsigned FormatVersion = 2;
 
     /** @brief Writes a scene to a text file. */
     static void save(const Registry& registry, const std::filesystem::path& path);

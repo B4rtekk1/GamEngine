@@ -86,12 +86,48 @@ Math::Color readColor(std::istream& input, const std::string_view description) {
     return Math::Color::from_rgb(red, green, blue);
 }
 
+Math::Color readColorRgba(std::istream& input, const std::string_view description) {
+    return {readFloat(input, std::string(description) + " red"),
+            readFloat(input, std::string(description) + " green"),
+            readFloat(input, std::string(description) + " blue"),
+            readFloat(input, std::string(description) + " alpha")};
+}
+
 void writeVec3(std::ostream& output, const Vec3& value) {
     output << value.x() << ' ' << value.y() << ' ' << value.z();
 }
 
 void writeColor(std::ostream& output, const Math::Color& value) {
     output << value.r() << ' ' << value.g() << ' ' << value.b();
+}
+
+void writeColorRgba(std::ostream& output, const Math::Color& value) {
+    output << value.r() << ' ' << value.g() << ' ' << value.b() << ' ' << value.a();
+}
+
+void writeMaterial(std::ostream& output, const PBRMaterial& material) {
+    writeColorRgba(output, material.baseColor);
+    output << ' ' << material.metallic << ' ' << material.roughness << ' '
+           << material.ambientOcclusion << ' ' << material.baseColorTexture << ' '
+           << material.metallicRoughnessTexture << ' ' << material.normalTexture << ' '
+           << material.normalScale << ' ' << static_cast<int>(material.alphaBlend) << ' '
+           << static_cast<int>(material.doubleSided) << ' ' << material.alphaCutoff;
+}
+
+PBRMaterial readMaterial(std::istream& input) {
+    PBRMaterial material;
+    material.baseColor = readColorRgba(input, "material base color");
+    material.metallic = readFloat(input, "material metallic");
+    material.roughness = readFloat(input, "material roughness");
+    material.ambientOcclusion = readFloat(input, "material ambient occlusion");
+    material.baseColorTexture = read<std::int32_t>(input, "base-color texture index");
+    material.metallicRoughnessTexture = read<std::int32_t>(input, "metallic-roughness texture index");
+    material.normalTexture = read<std::int32_t>(input, "normal texture index");
+    material.normalScale = readFloat(input, "normal scale");
+    material.alphaBlend = readBool(input, "alpha-blend flag");
+    material.doubleSided = readBool(input, "double-sided flag");
+    material.alphaCutoff = readFloat(input, "alpha cutoff");
+    return material;
 }
 
 std::vector<Entity> sortedEntities(const Registry& registry) {
@@ -143,7 +179,8 @@ void SceneSerializer::save(const Registry& registry, std::ostream& output) {
     for (std::size_t meshId = 0; meshId < meshes.size(); ++meshId) {
         const Mesh& mesh = *meshes[meshId];
         serialized << "MESH " << meshId << ' ' << mesh.vertices.size() << ' '
-                   << mesh.indices.size() << '\n';
+                   << mesh.indices.size() << ' ' << mesh.materials.size() << ' '
+                   << mesh.images.size() << '\n';
         for (const Vertex& vertex : mesh.vertices) {
             serialized << "VERTEX ";
             writeVec3(serialized, vertex.position);
@@ -151,6 +188,9 @@ void SceneSerializer::save(const Registry& registry, std::ostream& output) {
             writeVec3(serialized, vertex.color);
             serialized << ' ' << vertex.texCoord.x() << ' ' << vertex.texCoord.y() << ' ';
             writeVec3(serialized, vertex.normal);
+            serialized << ' ' << vertex.tangent.x() << ' ' << vertex.tangent.y() << ' '
+                       << vertex.tangent.z() << ' ' << vertex.tangent.w() << ' '
+                       << vertex.materialIndex;
             serialized << '\n';
         }
         serialized << "INDICES";
@@ -158,6 +198,17 @@ void SceneSerializer::save(const Registry& registry, std::ostream& output) {
             serialized << ' ' << index;
         }
         serialized << '\n';
+        for (const PBRMaterial& material : mesh.materials) {
+            serialized << "MATERIAL ";
+            writeMaterial(serialized, material);
+            serialized << '\n';
+        }
+        for (const Mesh::Image& image : mesh.images) {
+            serialized << "IMAGE " << image.width << ' ' << image.height << ' '
+                       << image.rgbaPixels.size() << '\n' << "PIXELS";
+            for (const std::uint8_t pixel : image.rgbaPixels) serialized << ' ' << static_cast<unsigned>(pixel);
+            serialized << '\n';
+        }
     }
 
     serialized << "ENTITIES " << entities.size() << '\n';
@@ -179,11 +230,9 @@ void SceneSerializer::save(const Registry& registry, std::ostream& output) {
                 ? static_cast<long long>(meshIds.at(renderer.mesh.get()))
                 : -1;
             serialized << "MESH_RENDERER " << meshId << ' ';
-            writeColor(serialized, renderer.material.baseColor);
-            serialized << ' ' << renderer.material.metallic << ' '
-                       << renderer.material.roughness << ' '
-                       << renderer.material.ambientOcclusion << ' '
-                       << static_cast<int>(renderer.castShadow) << '\n';
+            writeMaterial(serialized, renderer.material);
+            serialized << ' ' << static_cast<int>(renderer.castShadow) << ' '
+                       << renderer.cullingBatch << '\n';
         }
         if (registry.has<LightComponent>(entity)) {
             const auto& light = registry.get<LightComponent>(entity);
@@ -239,6 +288,8 @@ void SceneSerializer::load(Registry& registry, std::istream& input) {
         }
         const std::size_t vertexCount = readCount(input, "vertex count", MaxVertices);
         const std::size_t indexCount = readCount(input, "index count", MaxIndices);
+        const std::size_t materialCount = readCount(input, "material count", MaxMeshes);
+        const std::size_t imageCount = readCount(input, "image count", MaxMeshes);
 
         auto mesh = std::make_shared<Mesh>();
         mesh->vertices.reserve(vertexCount);
@@ -252,6 +303,9 @@ void SceneSerializer::load(Registry& registry, std::istream& input) {
                 readFloat(input, "texture coordinate"),
             };
             vertex.normal = readVec3(input, "vertex normal");
+            vertex.tangent = {readFloat(input, "tangent x"), readFloat(input, "tangent y"),
+                               readFloat(input, "tangent z"), readFloat(input, "tangent handedness")};
+            vertex.materialIndex = read<std::uint32_t>(input, "vertex material index");
             mesh->vertices.push_back(vertex);
         }
         expect(input, "INDICES");
@@ -263,6 +317,30 @@ void SceneSerializer::load(Registry& registry, std::istream& input) {
                 invalidScene("mesh index is outside the vertex array");
             }
             mesh->indices.push_back(static_cast<std::uint32_t>(value));
+        }
+        mesh->materials.reserve(materialCount);
+        for (std::size_t material = 0; material < materialCount; ++material) {
+            expect(input, "MATERIAL");
+            mesh->materials.push_back(readMaterial(input));
+        }
+        mesh->images.reserve(imageCount);
+        for (std::size_t image = 0; image < imageCount; ++image) {
+            expect(input, "IMAGE");
+            Mesh::Image value;
+            value.width = read<std::uint32_t>(input, "image width");
+            value.height = read<std::uint32_t>(input, "image height");
+            const std::size_t pixelCount = readCount(input, "image pixel count", MaxIndices * 4);
+            if (value.width == 0 || value.height == 0 || pixelCount != static_cast<std::size_t>(value.width) * value.height * 4) {
+                invalidScene("image dimensions do not match RGBA pixel data");
+            }
+            expect(input, "PIXELS");
+            value.rgbaPixels.reserve(pixelCount);
+            for (std::size_t pixel = 0; pixel < pixelCount; ++pixel) {
+                const auto byte = read<unsigned>(input, "image pixel");
+                if (byte > 255) invalidScene("image pixel is outside byte range");
+                value.rgbaPixels.push_back(static_cast<std::uint8_t>(byte));
+            }
+            mesh->images.push_back(std::move(value));
         }
         meshes.push_back(std::move(mesh));
     }
@@ -307,12 +385,9 @@ void SceneSerializer::load(Registry& registry, std::istream& input) {
                 if (meshId >= 0) {
                     renderer.mesh = meshes[static_cast<std::size_t>(meshId)];
                 }
-                renderer.material.baseColor = readColor(input, "material base color");
-                renderer.material.metallic = readFloat(input, "material metallic");
-                renderer.material.roughness = readFloat(input, "material roughness");
-                renderer.material.ambientOcclusion =
-                    readFloat(input, "material ambient occlusion");
+                renderer.material = readMaterial(input);
                 renderer.castShadow = readBool(input, "cast-shadow flag");
+                renderer.cullingBatch = read<std::uint32_t>(input, "culling batch");
                 loaded.add<MeshRenderer>(entity, std::move(renderer));
             } else if (component == "LIGHT") {
                 if (hasLight) {

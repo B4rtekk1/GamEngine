@@ -729,8 +729,13 @@ class Renderer::Backend {
             }
         }
 
-        void reconfigureAntialiasing() {
+        void reconfigureAntialiasing(const AntialiasingLevel requestedLevel) {
             if (device == VK_NULL_HANDLE) return;
+
+            // A minimized window reports a zero drawable extent. Waiting here
+            // prevents recreating HDR attachments with that transient size.
+            waitForDrawableExtent();
+            antialiasingLevel = requestedLevel;
 
             // Nothing may reference the old render passes or attachments while
             // they are being replaced. This also guarantees that the old
@@ -2497,12 +2502,17 @@ void Renderer::setEditorSelection(const Entity entity) {
 void Renderer::renderFrame() { backend_->renderFrame(); }
 void Renderer::reloadScene(Scene& scene, SDL_Window* window) {
     static_cast<void>(window); // The live backend keeps the application window.
-    if (backend_) backend_->reloadSceneResources(scene);
+    if (backend_) {
+        if (backend_->antialiasingLevel != antialiasingLevel_) {
+            backend_->reconfigureAntialiasing(antialiasingLevel_);
+        }
+        backend_->reloadSceneResources(scene);
+    }
     else initialize(scene, window);
 }
 void Renderer::reconfigureAntialiasing() {
     if (!backend_) return;
-    backend_->reconfigureAntialiasing();
+    backend_->reconfigureAntialiasing(antialiasingLevel_);
 }
 VkDescriptorSet Renderer::gameViewportDescriptor() const noexcept {
     return backend_ ? backend_->gameViewportTexture() : VK_NULL_HANDLE;
