@@ -212,6 +212,12 @@ class Renderer::Backend {
                 throw std::invalid_argument("Renderer cannot switch Scene instances while initialized");
             }
             if (device == VK_NULL_HANDLE) return;
+            // Scene loading replaces every registry-derived GPU resource.
+            // Fence completion alone does not cover presentation or auxiliary
+            // queue work, so wait for the entire device before destroying it.
+            if (vkDeviceWaitIdle(device) != VK_SUCCESS) {
+                throw std::runtime_error("Could not idle the device for scene reload");
+            }
             if (!inFlightFences.empty() && vkWaitForFences(device,
                     static_cast<uint32_t>(inFlightFences.size()), inFlightFences.data(), VK_TRUE,
                     UINT64_MAX) != VK_SUCCESS) {
@@ -250,6 +256,7 @@ class Renderer::Backend {
             createSceneDescriptorPass(); createForwardPass(); createParticleResources();
             createCullingResources(); createSkyPass(); createSceneSkyPass();
             createFramebuffers(); createSceneViewportResources();
+            refreshEditorViewportTextures();
             assetManager.unload_unused();
         }
 
@@ -975,6 +982,22 @@ class Renderer::Backend {
             editorUiFramebuffers.clear();
             if (editorUiRenderPass != VK_NULL_HANDLE) vkDestroyRenderPass(device, editorUiRenderPass, nullptr);
             editorUiRenderPass = VK_NULL_HANDLE;
+        }
+
+        // Scene reload replaces the images displayed by ImGui::Image. Rebind
+        // its descriptors before the next UI command buffer is recorded.
+        void refreshEditorViewportTextures() {
+            if (!editorUiActive) return;
+            if (gameViewportDescriptor != VK_NULL_HANDLE) {
+                ImGui_ImplVulkan_RemoveTexture(gameViewportDescriptor);
+            }
+            if (sceneViewportDescriptor != VK_NULL_HANDLE) {
+                ImGui_ImplVulkan_RemoveTexture(sceneViewportDescriptor);
+            }
+            gameViewportDescriptor = ImGui_ImplVulkan_AddTexture(
+                hdrBuffer.imageView(), VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+            sceneViewportDescriptor = ImGui_ImplVulkan_AddTexture(
+                sceneViewportTarget.color().imageView(), VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
         }
 
         void createMaterialTextures() {

@@ -64,10 +64,7 @@ int main() {
         .enabled = false,
         .castShadows = true,
     });
-    source.add<ScriptComponent>(first, ScriptComponent{
-        .scriptPath = "Scripts/player controller.lua",
-        .enabled = false,
-    });
+    source.add<ScriptComponent>(first, ScriptComponent{"PlayerController", false});
 
     const Entity second = source.create();
     source.add<MeshRenderer>(second, MeshRenderer{.mesh = sharedCube});
@@ -129,7 +126,7 @@ int main() {
     }
 
     const ScriptComponent& script = loaded.get<ScriptComponent>(1);
-    if (script.scriptPath != "Scripts/player controller.lua" || script.enabled) {
+    if (script.className != "PlayerController" || script.enabled) {
         return 9;
     }
 

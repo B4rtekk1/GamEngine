@@ -252,7 +252,7 @@ void SceneSerializer::save(const Registry& registry, std::ostream& output) {
         }
         if (registry.has<ScriptComponent>(entity)) {
             const auto& script = registry.get<ScriptComponent>(entity);
-            serialized << "SCRIPT " << std::quoted(script.scriptPath) << ' '
+            serialized << "SCRIPT " << std::quoted(script.className) << ' '
                        << static_cast<int>(script.enabled) << '\n';
         }
         serialized << "END_ENTITY\n";
@@ -441,8 +441,8 @@ void SceneSerializer::load(Registry& registry, std::istream& input) {
                 }
                 hasScript = true;
                 ScriptComponent script;
-                if (!(input >> std::quoted(script.scriptPath))) {
-                    invalidScene("could not read script path");
+                if (!(input >> std::quoted(script.className))) {
+                    invalidScene("could not read script class name");
                 }
                 script.enabled = readBool(input, "script enabled flag");
                 loaded.add<ScriptComponent>(entity, std::move(script));

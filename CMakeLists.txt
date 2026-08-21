@@ -42,6 +42,7 @@ add_library(Engine
         Engine/Source/Input/Input.cpp
         Engine/Source/Scene/SceneSerializer.cpp
         Engine/Source/Scene/ScenePresets.cpp
+        Engine/Source/Scripting/ScriptSystem.cpp
         Engine/Source/UI/Canvas.cpp
         Engine/Source/UI/CanvasRenderer.cpp
         Engine/Source/UI/UIBatch.cpp
@@ -90,12 +91,10 @@ target_include_directories(Engine
             ${CMAKE_CURRENT_SOURCE_DIR}/ThridParty/stb
 )
 
-add_executable(GamEngine Sandbox/Source/main.cpp)
-target_link_libraries(GamEngine PRIVATE Engine)
-
 add_executable(Editor
         Editor/Source/main.cpp)
 target_link_libraries(Editor PRIVATE DearImGui Engine SDL3::SDL3 Vulkan::Vulkan)
+target_compile_definitions(Editor PRIVATE GAMEENGINE_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
 
 find_program(GLSLANG_VALIDATOR NAMES glslangValidator)
 find_program(GLSLC NAMES glslc)
@@ -136,16 +135,11 @@ foreach(SHADER_SOURCE IN LISTS SHADER_SOURCES)
     endif()
 endforeach()
 
-add_custom_target(Shaders DEPENDS ${SHADER_OUT_DIR}/pbr.vert.spv ${SHADER_OUT_DIR}/pbr.frag.spv ${SHADER_OUT_DIR}/shadow.vert.spv ${SHADER_OUT_DIR}/shadow.frag.spv ${SHADER_OUT_DIR}/skybox.vert.spv ${SHADER_OUT_DIR}/skybox.frag.spv ${SHADER_OUT_DIR}/tonemap.vert.spv ${SHADER_OUT_DIR}/tonemap.frag.spv ${SHADER_OUT_DIR}/hiz_copy.comp.spv ${SHADER_OUT_DIR}/hiz_reduce.comp.spv ${SHADER_OUT_DIR}/hiz_cull.comp.spv ${SHADER_OUT_DIR}/particle_update.comp.spv ${SHADER_OUT_DIR}/particle.vert.spv ${SHADER_OUT_DIR}/particle.frag.spv ${SHADER_OUT_DIR}/ui.vert.spv ${SHADER_OUT_DIR}/ui.frag.spv)
-add_dependencies(GamEngine Shaders)
-add_custom_command(TARGET GamEngine POST_BUILD
-        COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_FILE_DIR:GamEngine>/shaders"
-        COMMAND ${CMAKE_COMMAND} -E copy_directory "${SHADER_OUT_DIR}" "$<TARGET_FILE_DIR:GamEngine>/shaders"
-        COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_FILE_DIR:GamEngine>/Assets/Models"
-        COMMAND ${CMAKE_COMMAND} -E copy_directory "${CMAKE_SOURCE_DIR}/Assets/Models" "$<TARGET_FILE_DIR:GamEngine>/Assets/Models"
-        COMMENT "Copying SPIR-V shaders beside GamEngine"
-)
-
+add_custom_target(Shaders DEPENDS ${SHADER_OUT_DIR}/pbr.vert.spv ${SHADER_OUT_DIR}/pbr.frag.spv ${SHADER_OUT_DIR}/shadow.vert.spv ${SHADER_OUT_DIR}/shadow.frag.spv ${SHADER_OUT_DIR}/tonemap.vert.spv ${SHADER_OUT_DIR}/tonemap.frag.spv ${SHADER_OUT_DIR}/hiz_copy.comp.spv ${SHADER_OUT_DIR}/hiz_reduce.comp.spv ${SHADER_OUT_DIR}/hiz_cull.comp.spv ${SHADER_OUT_DIR}/particle_update.comp.spv ${SHADER_OUT_DIR}/particle.vert.spv ${SHADER_OUT_DIR}/particle.frag.spv ${SHADER_OUT_DIR}/ui.vert.spv ${SHADER_OUT_DIR}/ui.frag.spv)
+add_subdirectory(Sandbox)
+# Play in the editor starts this executable.  Keeping it as a build dependency
+# means an Editor build always leaves a runnable game beside its assets.
+add_dependencies(Editor GamEngine)
 if(BUILD_TESTING)
     add_executable(CanvasTests Tests/CanvasTests.cpp)
     target_link_libraries(CanvasTests PRIVATE Engine)
@@ -162,4 +156,8 @@ if(BUILD_TESTING)
     add_executable(AssetManagerTests Tests/AssetManagerTests.cpp)
     target_link_libraries(AssetManagerTests PRIVATE Engine)
     add_test(NAME AssetManagerTests COMMAND AssetManagerTests)
+
+    add_executable(ScriptSystemTests Tests/ScriptSystemTests.cpp)
+    target_link_libraries(ScriptSystemTests PRIVATE Engine)
+    add_test(NAME ScriptSystemTests COMMAND ScriptSystemTests)
 endif()

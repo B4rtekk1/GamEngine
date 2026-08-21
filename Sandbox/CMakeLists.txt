@@ -1,0 +1,23 @@
+# Playable scene module. Add gameplay C++ scripts under Source/Scripts/.
+# CMake reconfigures automatically when a generated script source is added.
+file(GLOB_RECURSE GAME_SCRIPT_SOURCES CONFIGURE_DEPENDS
+        "${CMAKE_CURRENT_SOURCE_DIR}/Source/Scripts/*.cpp")
+
+add_executable(GamEngine
+        Source/main.cpp
+        ${GAME_SCRIPT_SOURCES})
+target_link_libraries(GamEngine PRIVATE Engine)
+target_compile_definitions(GamEngine PRIVATE GAMEENGINE_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
+add_dependencies(GamEngine Shaders)
+
+# Game View executes the same native behaviours as the standalone game.  The
+# editor therefore needs the gameplay translation units too, so their static
+# registrations populate ScriptRegistry in the editor process.
+target_sources(Editor PRIVATE ${GAME_SCRIPT_SOURCES})
+
+add_custom_command(TARGET GamEngine POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_FILE_DIR:GamEngine>/shaders"
+        COMMAND ${CMAKE_COMMAND} -E copy_directory "${SHADER_OUT_DIR}" "$<TARGET_FILE_DIR:GamEngine>/shaders"
+        COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_FILE_DIR:GamEngine>/Assets/Models"
+        COMMAND ${CMAKE_COMMAND} -E copy_directory "${CMAKE_SOURCE_DIR}/Assets/Models" "$<TARGET_FILE_DIR:GamEngine>/Assets/Models"
+        COMMENT "Copying scene assets and shaders beside GamEngine")
