@@ -1,17 +1,11 @@
 #pragma once
 
-#include "Engine/ECS/GameObject.h"
+#include "Engine/Renderer/Geometry/Mesh.h"
 
 namespace Engine {
 
-class Plane final : public GameObject {
+class Plane final {
 public:
-    /** @brief Creates and spawns a plane-backed game object. */
-    explicit Plane(Registry& registry)
-        : GameObject(registry) {
-        spawn();
-    }
-
     [[nodiscard]] static Mesh createMesh() {
         return {
             .vertices = {
@@ -22,11 +16,6 @@ public:
             },
             .indices = {0, 1, 2, 2, 3, 0},
         };
-    }
-
-protected:
-    void OnSpawn() override {
-        meshRenderer().mesh = std::make_shared<Mesh>(createMesh());
     }
 };
 

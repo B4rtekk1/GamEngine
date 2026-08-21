@@ -548,7 +548,9 @@ AssetId AssetManager::make_id(std::string_view value) noexcept {
 std::size_t AssetManager::CacheKeyHash::operator()(const CacheKey& key) const noexcept {
     const auto a = std::hash<AssetId>{}(key.id);
     const auto b = key.type.hash_code();
-    return a ^ (b + 0x9e3779b9u + (a << 6u) + (a >> 2u));
+    const auto c = std::hash<std::string>{}(key.path);
+    return (a ^ (b + 0x9e3779b9u + (a << 6u) + (a >> 2u))) ^
+           (c + 0x9e3779b9u + (a << 6u) + (a >> 2u));
 }
 
 void AssetManager::report(const std::string& message) const {
@@ -575,7 +577,9 @@ void AssetManager::clear() {
 
 bool AssetManager::contains(AssetId id, std::type_index type) const {
     std::scoped_lock lock(mutex_);
-    return cache_.contains(CacheKey{id, type});
+    return std::ranges::any_of(cache_, [id, type](const auto& entry) {
+        return entry.first.id == id && entry.first.type == type;
+    });
 }
 
 std::size_t AssetManager::size() const {

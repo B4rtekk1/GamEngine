@@ -84,13 +84,14 @@ public:
 
         {
             std::scoped_lock lock(mutex_);
-            if (const auto it = cache_.find(CacheKey{id, type_index}); it != cache_.end()) {
+            if (const auto it = cache_.find(CacheKey{id, type_index, key}); it != cache_.end()) {
                 return AssetHandle<T>(id, std::static_pointer_cast<const T>(it->second.value));
             }
         }
 
         const auto absolute_path = resolve(path);
-        if (!std::filesystem::is_regular_file(absolute_path)) {
+        std::error_code filesystemError;
+        if (!std::filesystem::is_regular_file(absolute_path, filesystemError)) {
             report("Asset does not exist: " + absolute_path.string());
             return {};
         }
@@ -99,8 +100,12 @@ public:
         metadata.id = id;
         metadata.type = type;
         metadata.source_path = absolute_path;
-        metadata.last_write_time = std::filesystem::last_write_time(absolute_path);
-        metadata.source_size = std::filesystem::file_size(absolute_path);
+        metadata.last_write_time = std::filesystem::last_write_time(absolute_path, filesystemError);
+        metadata.source_size = std::filesystem::file_size(absolute_path, filesystemError);
+        if (filesystemError) {
+            report("Could not read asset metadata: " + absolute_path.string());
+            return {};
+        }
 
         LoaderErased loader;
         bool loader_missing = false;
@@ -127,8 +132,9 @@ public:
 
         {
             std::scoped_lock lock(mutex_);
-            cache_[CacheKey{id, type_index}] = Record{std::move(value), std::move(metadata)};
-            return AssetHandle<T>(id, std::static_pointer_cast<const T>(cache_[CacheKey{id, type_index}].value));
+            const CacheKey cacheKey{id, type_index, key};
+            cache_[cacheKey] = Record{std::move(value), std::move(metadata)};
+            return AssetHandle<T>(id, std::static_pointer_cast<const T>(cache_[cacheKey].value));
         }
     }
 
@@ -145,9 +151,16 @@ public:
         const AssetId id = make_id(key);
         const auto type_index = std::type_index(typeid(T));
         std::unique_lock lock(mutex_);
-        const auto it = cache_.find(CacheKey{id, type_index});
+        const CacheKey cacheKey{id, type_index, key};
+        const auto it = cache_.find(cacheKey);
         if (it != cache_.end()) {
-            const auto current = std::filesystem::last_write_time(resolve(path));
+            std::error_code error;
+            const auto current = std::filesystem::last_write_time(resolve(path), error);
+            if (error) {
+                lock.unlock();
+                report("Could not inspect asset: " + resolve(path).string());
+                return {};
+            }
             if (current == it->second.metadata.last_write_time) {
                 auto value = std::static_pointer_cast<const T>(it->second.value);
                 lock.unlock();
@@ -166,7 +179,10 @@ public:
     template <typename T>
     void unload(AssetId id) {
         std::scoped_lock lock(mutex_);
-        cache_.erase(CacheKey{id, std::type_index(typeid(T))});
+        const auto type = std::type_index(typeid(T));
+        std::erase_if(cache_, [id, type](const auto& entry) {
+            return entry.first.id == id && entry.first.type == type;
+        });
     }
 
     /// Removes cached records that are no longer externally referenced.
@@ -194,9 +210,11 @@ private:
     struct CacheKey {
         AssetId id;
         std::type_index type;
-        CacheKey(AssetId asset_id, std::type_index asset_type) : id(asset_id), type(asset_type) {}
+        std::string path;
+        CacheKey(AssetId asset_id, std::type_index asset_type, std::string asset_path = {})
+            : id(asset_id), type(asset_type), path(std::move(asset_path)) {}
         bool operator==(const CacheKey& other) const noexcept {
-            return id == other.id && type == other.type;
+            return id == other.id && type == other.type && path == other.path;
         }
     };
     struct CacheKeyHash {
