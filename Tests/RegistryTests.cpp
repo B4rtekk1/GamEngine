@@ -5,6 +5,7 @@
 
 #include <cstddef>
 #include <memory>
+#include <stdexcept>
 
 namespace {
 struct Common {
@@ -49,6 +50,40 @@ int main()
         return 1;
     }
 
+    const auto commonRevision = registry.componentRevision<Common>();
+    static_cast<void>(registry.get<Common>(matching));
+    if (registry.componentRevision<Common>() != commonRevision) {
+        return 7;
+    }
+    registry.modify<Common>(matching, [](Common& component) { component.value = 715; });
+    if (registry.componentRevision<Common>() != commonRevision + 1 ||
+        registry.get<Common>(matching).value != 715) {
+        return 8;
+    }
+
+    try {
+        static_cast<void>(registry.get<Rare>(Engine::NullEntity));
+        return 9;
+    } catch (const std::out_of_range&) {
+    }
+    try {
+        registry.add<Common>(matching, 1);
+        return 10;
+    } catch (const std::logic_error&) {
+    }
+
+    bool blockedStructuralMutation = false;
+    registry.view<Common>([&](Entity, Common&) {
+        try {
+            static_cast<void>(registry.create());
+        } catch (const std::logic_error&) {
+            blockedStructuralMutation = true;
+        }
+    });
+    if (!blockedStructuralMutation) {
+        return 11;
+    }
+
     const Entity recycled = registry.create();
     registry.add<Common>(recycled, 1);
     registry.destroy(recycled);
@@ -75,7 +110,7 @@ int main()
     std::size_t constMatches = 0;
     constRegistry.view<Rare, Common>([&](Entity entity, const Rare& rare,
                                          const Common& common) {
-        if (entity == matching && rare.value == 42 && common.value == 714) {
+        if (entity == matching && rare.value == 42 && common.value == 715) {
             ++constMatches;
         }
     });

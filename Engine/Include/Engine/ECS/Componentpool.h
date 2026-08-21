@@ -6,6 +6,7 @@
 #include <limits>
 #include <utility>
 #include <vector>
+#include <stdexcept>
 
 namespace Engine {
 
@@ -72,9 +73,8 @@ public:
      */
     template<typename... Args>
     T &add(Entity entity, Args &&... args) {
-        assert(!has(entity) && "Component already exists for this entity");
         if (has(entity)) {
-            return get(entity);
+            throw std::logic_error("Component already exists for this entity");
         }
 
         ensureSparseCapacity(entity);
@@ -148,7 +148,7 @@ public:
      * @pre The entity has a component of type @p T.
      */
     T& get(Entity entity) {
-        assert(has(entity) && "Component does not exist for this entity");
+        if (!has(entity)) throw std::out_of_range("Component does not exist for this entity");
         return m_components[m_sparse[entityIndex(entity)]];
     }
 
@@ -161,7 +161,7 @@ public:
      * @pre The entity has a component of type @p T.
      */
     const T& get(Entity entity) const {
-        assert(has(entity) && "Component does not exist for this entity");
+        if (!has(entity)) throw std::out_of_range("Component does not exist for this entity");
         return m_components[m_sparse[entityIndex(entity)]];
     }
 

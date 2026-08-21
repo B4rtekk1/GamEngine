@@ -13,6 +13,7 @@
 #include <tuple>
 #include <utility>
 #include <vector>
+#include <stdexcept>
 
 namespace Engine {
 
@@ -33,6 +34,7 @@ public:
      * @return Identifier of the newly created entity.
      */
     Entity create() {
+        ensureStructuralMutationAllowed();
         std::uint32_t index;
         if (!m_freeEntities.empty()) {
             index = m_freeEntities.back();
@@ -57,6 +59,7 @@ public:
      * @param entity Entity to destroy.
      */
     void destroy(Entity entity) {
+        ensureStructuralMutationAllowed();
         if (!m_entities.erase(entity)) {
             return;
         }
@@ -114,7 +117,7 @@ public:
         return m_entities.size();
     }
 
-    /** @brief Monotonically increasing revision for mutable ECS operations. */
+    /** @brief Monotonically increasing revision for explicit ECS changes. */
     [[nodiscard]] std::uint64_t mutationRevision() const noexcept {
         return m_mutationRevision;
     }
@@ -122,6 +125,13 @@ public:
     /** @brief Revision for changes that invalidate renderer component pools. */
     [[nodiscard]] std::uint64_t structuralRevision() const noexcept {
         return m_structuralRevision;
+    }
+
+    /** Returns the revision of one concrete component type. */
+    template<typename T>
+    [[nodiscard]] std::uint64_t componentRevision() const noexcept {
+        const auto it = m_componentRevisions.find(typeid(T));
+        return it == m_componentRevisions.end() ? 0 : it->second;
     }
 
     /**
@@ -141,10 +151,13 @@ public:
      */
     template<typename T, typename... Args>
     T &add(Entity entity, Args &&... args) {
-        assert(valid(entity) && "Cannot add a component to an invalid entity");
+        ensureStructuralMutationAllowed();
+        if (!valid(entity)) throw std::invalid_argument("Cannot add a component to an invalid entity");
+        if (has<T>(entity)) throw std::logic_error("Component already exists for this entity");
         T& component = getOrCreatePool<T>().add(entity, std::forward<Args>(args)...);
         ++m_mutationRevision;
         ++m_structuralRevision;
+        bumpComponentRevision<T>();
         return component;
     }
 
@@ -161,13 +174,31 @@ public:
      */
     template<typename T>
     void remove(Entity entity) {
-        assert(valid(entity) && "Cannot remove a component from an invalid entity");
+        ensureStructuralMutationAllowed();
+        if (!valid(entity)) throw std::invalid_argument("Cannot remove a component from an invalid entity");
 
-        if (auto *pool = findPool<T>()) {
+        if (auto *pool = findPool<T>(); pool != nullptr && pool->has(entity)) {
             pool->remove(entity);
             ++m_mutationRevision;
             ++m_structuralRevision;
+            bumpComponentRevision<T>();
         }
+    }
+
+    /** Marks a component changed after modifying a retained reference. */
+    template<typename T>
+    void markChanged(Entity entity) {
+        if (!has<T>(entity)) throw std::out_of_range("Cannot mark a missing component as changed");
+        ++m_mutationRevision;
+        bumpComponentRevision<T>();
+    }
+
+    /** Applies a mutation and records it for systems observing this component. */
+    template<typename T, typename Func>
+    void modify(Entity entity, Func&& func) {
+        if (!has<T>(entity)) throw std::out_of_range("Cannot modify a missing component");
+        std::invoke(std::forward<Func>(func), get<T>(entity));
+        markChanged<T>(entity);
     }
 
     /**
@@ -200,11 +231,10 @@ public:
      */
     template<typename T>
     T &get(Entity entity) {
-        assert(valid(entity) && "Cannot get a component from an invalid entity");
+        if (!valid(entity)) throw std::out_of_range("Cannot get a component from an invalid entity");
 
         auto *pool = findPool<T>();
-        assert(pool != nullptr && "Component type is not registered");
-        ++m_mutationRevision;
+        if (pool == nullptr || !pool->has(entity)) throw std::out_of_range("Component does not exist for this entity");
         return pool->get(entity);
     }
 
@@ -220,10 +250,10 @@ public:
      */
     template<typename T>
     const T &get(Entity entity) const {
-        assert(valid(entity) && "Cannot get a component from an invalid entity");
+        if (!valid(entity)) throw std::out_of_range("Cannot get a component from an invalid entity");
 
         const auto *pool = findPool<T>();
-        assert(pool != nullptr && "Component type is not registered");
+        if (pool == nullptr || !pool->has(entity)) throw std::out_of_range("Component does not exist for this entity");
         return pool->get(entity);
     }
 
@@ -248,6 +278,7 @@ public:
      */
     template<typename... Components, typename Func>
     void view(Func &&func) {
+        ViewIterationGuard guard{*this};
         if constexpr (sizeof...(Components) == 0) {
             for (const Entity entity : m_entities) {
                 std::invoke(func, entity);
@@ -286,6 +317,27 @@ public:
     }
 
 private:
+    class ViewIterationGuard {
+    public:
+        explicit ViewIterationGuard(Registry& registry) noexcept : registry_(registry) {
+            ++registry_.m_mutableViewDepth;
+        }
+        ~ViewIterationGuard() { --registry_.m_mutableViewDepth; }
+    private:
+        Registry& registry_;
+    };
+
+    void ensureStructuralMutationAllowed() const {
+        if (m_mutableViewDepth != 0) {
+            throw std::logic_error("Cannot change ECS structure while iterating a mutable Registry view");
+        }
+    }
+
+    template<typename T>
+    void bumpComponentRevision() {
+        ++m_componentRevisions[std::type_index(typeid(T))];
+    }
+
     template<typename Pools>
     [[nodiscard]] static bool allPoolsExist(const Pools& pools) {
         return std::apply([](auto*... pool) {
@@ -401,8 +453,11 @@ private:
         std::unique_ptr<IComponentPool>
     > m_componentPools;
 
+    std::unordered_map<std::type_index, std::uint64_t> m_componentRevisions;
+
     std::uint64_t m_mutationRevision = 0;
     std::uint64_t m_structuralRevision = 0;
+    std::uint32_t m_mutableViewDepth = 0;
 };
 
 }

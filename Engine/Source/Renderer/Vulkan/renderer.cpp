@@ -241,7 +241,8 @@ class Renderer::Backend {
             for (auto& indices : dirtyTransforms) indices.clear();
             for (auto& indices : dirtyMaterials) indices.clear();
             for (auto& indices : dirtyCullingObjects) indices.clear();
-            lastRenderableRevision = std::numeric_limits<std::uint64_t>::max();
+            lastTransformRevision = std::numeric_limits<std::uint64_t>::max();
+            lastMeshRendererRevision = std::numeric_limits<std::uint64_t>::max();
             hiZValid = false;
 
             createMaterialTextures(); createMeshBuffers(); createInstanceBuffer();
@@ -378,7 +379,8 @@ class Renderer::Backend {
         std::vector<glm::mat4> shadowInstanceModels;
         std::vector<GPUMaterialData> materials;
         std::uint32_t materialSlots{1};
-        std::uint64_t lastRenderableRevision = std::numeric_limits<std::uint64_t>::max();
+        std::uint64_t lastTransformRevision = std::numeric_limits<std::uint64_t>::max();
+        std::uint64_t lastMeshRendererRevision = std::numeric_limits<std::uint64_t>::max();
         std::array<std::vector<std::size_t>, MAX_FRAMES_IN_FLIGHT> dirtyTransforms;
         std::array<std::vector<std::size_t>, MAX_FRAMES_IN_FLIGHT> dirtyMaterials;
         std::array<std::vector<std::size_t>, MAX_FRAMES_IN_FLIGHT> dirtyCullingObjects;
@@ -1265,8 +1267,10 @@ class Renderer::Backend {
         }
 
         void updateRenderableBuffers() {
-            const std::uint64_t revision = registry.mutationRevision();
-            if (revision == lastRenderableRevision) {
+            const std::uint64_t transformRevision = registry.componentRevision<Transform>();
+            const std::uint64_t meshRendererRevision = registry.componentRevision<MeshRenderer>();
+            if (transformRevision == lastTransformRevision &&
+                meshRendererRevision == lastMeshRendererRevision) {
                 uploadPendingRenderableBuffers();
                 return;
             }
@@ -1361,7 +1365,8 @@ class Renderer::Backend {
                 }
             }
             uploadPendingRenderableBuffers();
-            lastRenderableRevision = revision;
+            lastTransformRevision = transformRevision;
+            lastMeshRendererRevision = meshRendererRevision;
         }
 
         [[nodiscard]] bool canUseHiZOcclusionCulling() const noexcept {
