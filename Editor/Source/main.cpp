@@ -476,6 +476,7 @@ int main() {
             }
 
             const std::uint64_t sceneStructureBeforeUi = scene.registry.structuralRevision();
+            const std::uint64_t sceneRenderRevisionBeforeUi = scene.renderRevision();
             renderer.beginEditorUiFrame();
             bool antialiasingChanged = false;
             if (const Engine::Entity created = drawEditorMenuBar(scene, renderer,
@@ -505,7 +506,9 @@ int main() {
 
             const bool sceneStructureChanged =
                 scene.registry.structuralRevision() != sceneStructureBeforeUi;
-            if (sceneStructureChanged) {
+            const bool sceneRenderablesChanged =
+                scene.renderRevision() != sceneRenderRevisionBeforeUi;
+            if (sceneStructureChanged && sceneRenderablesChanged) {
                 // The current Backend still owns buffers built from the old
                 // registry snapshot. Rebuild it before submitting another
                 // frame instead of letting update/render observe mixed state.

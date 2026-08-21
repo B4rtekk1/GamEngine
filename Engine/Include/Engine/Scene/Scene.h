@@ -63,6 +63,10 @@ public:
 
 private:
     bool particleScene_ = false;
+    // Changes to empty/editor-only entities do not invalidate the renderer's
+    // baked geometry buffers. Keep this separate from Registry's structural
+    // revision so the editor can avoid a full Vulkan rebuild for those edits.
+    std::uint64_t renderRevision_ = 0;
     std::shared_ptr<const Mesh> planeMesh;
     std::shared_ptr<const Mesh> cubeMesh;
     std::shared_ptr<const Mesh> treeMesh;
@@ -156,6 +160,7 @@ public:
             PBRMaterial{.baseColor = {0.72f, 0.72f, 0.72f},
                         .metallic = 0.05f, .roughness = 0.62f});
         editorCubes.push_back(entity);
+        ++renderRevision_;
         return entity;
     }
 
@@ -165,7 +170,13 @@ public:
         const Entity entity = builder.createMeshEntity(
             planeMesh, Transform{.scale = {2.0f, 1.0f, 2.0f}});
         editorPlanes.push_back(entity);
+        ++renderRevision_;
         return entity;
+    }
+
+    /** Revision for changes that require rebuilding renderer geometry. */
+    [[nodiscard]] std::uint64_t renderRevision() const noexcept {
+        return renderRevision_;
     }
 
 
