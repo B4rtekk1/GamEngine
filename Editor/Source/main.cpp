@@ -471,9 +471,9 @@ int main() {
             }
             if (!running) break;
 
-            // Do not tear down/recreate Vulkan while a close event is waiting
-            // to be handled. This is especially important after an editor
-            // scene mutation, which schedules a renderer reload.
+            // Antialiasing changes recreate render-target resources. Ordinary
+            // scene edits are synchronized below without rebuilding the UI or
+            // swapchain.
             if (rendererReloadPending) {
                 renderer.reloadScene(scene, window);
                 rendererReloadPending = false;
@@ -509,14 +509,8 @@ int main() {
 
             const bool sceneStructureChanged =
                 scene.registry.structuralRevision() != sceneStructureBeforeUi;
-            if (sceneStructureChanged) {
-                // The current Backend still owns buffers built from the old
-                // registry snapshot. Rebuild it before submitting another
-                // frame instead of letting update/render observe mixed state.
-                rendererReloadPending = true;
-            } else {
-                renderer.renderFrame();
-            }
+            if (sceneStructureChanged) renderer.synchronizeScene(scene);
+            renderer.renderFrame();
 
             const auto elapsed = std::chrono::steady_clock::now() - start;
             if (elapsed < targetFrame) std::this_thread::sleep_for(targetFrame - elapsed);

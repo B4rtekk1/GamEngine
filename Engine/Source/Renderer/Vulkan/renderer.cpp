@@ -253,6 +253,57 @@ class Renderer::Backend {
             assetManager.unload_unused();
         }
 
+        // Recreate only data derived from renderable ECS components.  In
+        // particular, preserve the Vulkan instance/device, swapchain, ImGui
+        // backend and Scene View images: adding an object must not look like a
+        // complete scene reload to the editor.
+        void synchronizeSceneResources(Scene& updatedScene) {
+            if (&updatedScene != &scene) {
+                throw std::invalid_argument("Renderer cannot switch Scene instances while initialized");
+            }
+            if (device == VK_NULL_HANDLE) return;
+            if (!inFlightFences.empty() && vkWaitForFences(device,
+                    static_cast<uint32_t>(inFlightFences.size()), inFlightFences.data(), VK_TRUE,
+                    UINT64_MAX) != VK_SUCCESS) {
+                throw std::runtime_error("Could not synchronize frames for scene update");
+            }
+
+            destroyCullingResources();
+            if (hiZDepthPrepassFramebuffer != VK_NULL_HANDLE) {
+                vkDestroyFramebuffer(device, hiZDepthPrepassFramebuffer, nullptr);
+                hiZDepthPrepassFramebuffer = VK_NULL_HANDLE;
+            }
+            if (hdrFramebuffer != VK_NULL_HANDLE) {
+                vkDestroyFramebuffer(device, hdrFramebuffer, nullptr);
+                hdrFramebuffer = VK_NULL_HANDLE;
+            }
+            destroySceneViewportFramebuffer();
+            particlePipeline.destroy();
+            skyPass.destroy(); sceneSkyPass.destroy(); forwardPass.destroy(); hiZDepthPrepass.destroy();
+            shadowPass.destroy(); sceneDescriptorPass.destroy();
+            indexBuffer.destroy(); vertexBuffer.destroy();
+            for (Buffer& buffer : instanceBuffers) buffer.destroy();
+            for (Buffer& buffer : shadowInstanceBuffers) buffer.destroy();
+            for (Buffer& buffer : materialBuffers) buffer.destroy();
+            for (Texture2D& texture : materialTextures) texture.destroy();
+            materialTextures.clear(); materialTextureDescriptors.clear(); meshTextureOffsets.clear();
+            fallbackMaterialTexture.destroy();
+            renderables.clear(); instanceBatches.clear(); instanceModels.clear();
+            shadowInstanceModels.clear(); materials.clear();
+            for (auto& indices : dirtyTransforms) indices.clear();
+            for (auto& indices : dirtyMaterials) indices.clear();
+            for (auto& indices : dirtyCullingObjects) indices.clear();
+            lastTransformRevision = std::numeric_limits<std::uint64_t>::max();
+            lastMeshRendererRevision = std::numeric_limits<std::uint64_t>::max();
+            hiZValid = false;
+
+            createMaterialTextures(); createMeshBuffers(); createInstanceBuffer();
+            createShadowPass(); createSceneDescriptorPass(); createForwardPass();
+            createParticleResources(); createCullingResources(); createSkyPass(); createSceneSkyPass();
+            createFramebuffers(); createSceneViewportFramebuffer();
+            assetManager.unload_unused();
+        }
+
     private:
         friend class Renderer;
         SDL_Window* window = nullptr;
@@ -1696,6 +1747,10 @@ class Renderer::Backend {
             // also makes the off-screen lifecycle valid for non-editor users.
             sceneViewportTarget.create(vulkanDevice.physical(), device, swapchain.extent(),
                                        msaa.sampleCount());
+            createSceneViewportFramebuffer();
+        }
+
+        void createSceneViewportFramebuffer() {
             // The forward render pass uses the same MSAA attachment layout for
             // Game View and Scene View: multisampled color, multisampled depth,
             // then a single-sample resolve target. The Scene View used to bind
@@ -1720,11 +1775,15 @@ class Renderer::Backend {
         }
 
         void destroySceneViewportResources() noexcept {
+            destroySceneViewportFramebuffer();
+            sceneViewportTarget.destroy();
+        }
+
+        void destroySceneViewportFramebuffer() noexcept {
             if (sceneViewportFramebuffer != VK_NULL_HANDLE) {
                 vkDestroyFramebuffer(device, sceneViewportFramebuffer, nullptr);
                 sceneViewportFramebuffer = VK_NULL_HANDLE;
             }
-            sceneViewportTarget.destroy();
         }
 
         void createCommandPool() {
@@ -2500,6 +2559,9 @@ void Renderer::setEditorSelection(const Entity entity) {
     if (backend_) backend_->setEditorSelection(entity);
 }
 void Renderer::renderFrame() { backend_->renderFrame(); }
+void Renderer::synchronizeScene(Scene& scene) {
+    if (backend_) backend_->synchronizeSceneResources(scene);
+}
 void Renderer::reloadScene(Scene& scene, SDL_Window* window) {
     static_cast<void>(window); // The live backend keeps the application window.
     if (backend_) {

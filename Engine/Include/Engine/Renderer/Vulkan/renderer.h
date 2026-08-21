@@ -81,6 +81,8 @@ public:
     void setEditorSceneCameraInput(bool active);
     void setEditorSelection(Entity entity);
     void renderFrame();
+    /** Synchronizes changed ECS geometry without recreating the window, swapchain or editor UI. */
+    void synchronizeScene(Scene& scene);
     /** Rebuilds renderer resources after editor scene geometry changes. */
     void reloadScene(Scene& scene, SDL_Window* window);
     /** Rebuilds only resources affected by the MSAA sample count. */
