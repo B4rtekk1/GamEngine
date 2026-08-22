@@ -1,9 +1,14 @@
 #include "Engine/Scripting/ScriptSystem.h"
+#include "Engine/Scene/Scene.h"
 
 #include "Engine/ECS/Components/ScriptComponent.h"
 #include "Engine/Core/Transform.h"
 
 namespace Engine {
+
+void ScriptSystem::update(Scene& scene, const float deltaTime) {
+    update(scene.registry, deltaTime);
+}
 
 void ScriptSystem::update(Registry& registry, const float deltaTime) {
     registry.view<ScriptComponent>([&](const Entity entity, ScriptComponent& component) {

@@ -155,6 +155,25 @@ class Renderer::Backend {
 
         static void beginFrame() { Input::beginFrame(); }
 
+        EditorEventState pollEditorEvents() {
+            EditorEventState result{};
+            SDL_Event event;
+            while (SDL_PollEvent(&event)) {
+                if (editorUiActive) ImGui_ImplSDL3_ProcessEvent(&event);
+                processEvent(event);
+                if (event.type == SDL_EVENT_QUIT ||
+                    (event.type == SDL_EVENT_WINDOW_CLOSE_REQUESTED &&
+                     event.window.windowID == SDL_GetWindowID(window))) {
+                    result.quitRequested = true;
+                }
+                if (event.type == SDL_EVENT_KEY_DOWN && !ImGui::GetIO().WantTextInput) {
+                    if (event.key.key == SDLK_F5) result.togglePlay = true;
+                    if (event.key.key == SDLK_F6) result.togglePause = true;
+                }
+            }
+            return result;
+        }
+
         void beginEditorUiFrame() const {
             if (!editorUiActive) throw std::logic_error("Renderer was initialized without an ImGui context");
             ImGui_ImplVulkan_NewFrame();
@@ -2521,6 +2540,9 @@ void Renderer::initialize(Scene& scene, SDL_Window* window) {
 }
 
 void Renderer::beginFrame() const { backend_->beginFrame(); }
+EditorEventState Renderer::pollEditorEvents() const {
+    return backend_ ? backend_->pollEditorEvents() : EditorEventState{};
+}
 void Renderer::beginEditorUiFrame() const { backend_->beginEditorUiFrame(); }
 void Renderer::processEvent(const SDL_Event& event) const { backend_->processEvent(event); }
 
@@ -2548,11 +2570,11 @@ void Renderer::reconfigureAntialiasing() const {
     if (!backend_) return;
     backend_->reconfigureAntialiasing(antialiasingLevel_);
 }
-VkDescriptorSet Renderer::gameViewportDescriptor() const noexcept {
-    return backend_ ? backend_->gameViewportTexture() : VK_NULL_HANDLE;
+ViewportHandle Renderer::gameViewport() const noexcept {
+    return {reinterpret_cast<std::uintptr_t>(backend_ ? backend_->gameViewportTexture() : VK_NULL_HANDLE)};
 }
-VkDescriptorSet Renderer::sceneViewportDescriptor() const noexcept {
-    return backend_ ? backend_->sceneViewportTexture() : VK_NULL_HANDLE;
+ViewportHandle Renderer::sceneViewport() const noexcept {
+    return {reinterpret_cast<std::uintptr_t>(backend_ ? backend_->sceneViewportTexture() : VK_NULL_HANDLE)};
 }
 void Renderer::shutdown() noexcept {
     backend_.reset();

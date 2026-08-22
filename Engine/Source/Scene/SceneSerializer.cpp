@@ -203,16 +203,36 @@ void SceneSerializer::save(const Scene& scene, const std::filesystem::path& path
     save(scene.registry, path);
 }
 
+void SceneSerializer::save(const Scene& scene, const std::filesystem::path& path,
+                           const std::uint32_t msaaSamples) {
+    save(scene.registry, path, msaaSamples);
+}
+
 void SceneSerializer::save(const Scene& scene, std::ostream& output) {
     save(scene.registry, output);
+}
+
+void SceneSerializer::save(const Scene& scene, std::ostream& output,
+                           const std::uint32_t msaaSamples) {
+    save(scene.registry, output, msaaSamples);
 }
 
 void SceneSerializer::load(Scene& scene, const std::filesystem::path& path) {
     load(scene.registry, path);
 }
 
+void SceneSerializer::load(Scene& scene, const std::filesystem::path& path,
+                           std::optional<std::uint32_t>& msaaSamples) {
+    load(scene.registry, path, msaaSamples);
+}
+
 void SceneSerializer::load(Scene& scene, std::istream& input) {
     load(scene.registry, input);
+}
+
+void SceneSerializer::load(Scene& scene, std::istream& input,
+                           std::optional<std::uint32_t>& msaaSamples) {
+    load(scene.registry, input, msaaSamples);
 }
 
 void SceneSerializer::save(const Registry& registry,

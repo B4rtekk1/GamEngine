@@ -99,13 +99,13 @@ void drawPanelHeader(const char* title, const char* subtitle = nullptr) {
 }
 
 const char* entityName(const Engine::ScenePreset& scene, const Engine::Entity entity) {
-    if (scene.registry.has<Engine::NameComponent>(entity)) {
-        return scene.registry.get<Engine::NameComponent>(entity).value.c_str();
+    if (scene.editor().has<Engine::NameComponent>(entity)) {
+        return scene.editor().get<Engine::NameComponent>(entity).value.c_str();
     }
     // A mesh can also be driven by a script. Keep the controller identity
     // visible in the hierarchy and inspector instead of hiding it behind the
     // generic GameObject label.
-    if (scene.registry.has<Engine::ScriptComponent>(entity)) return "Controller";
+    if (scene.editor().has<Engine::ScriptComponent>(entity)) return "Controller";
     if (entity == scene.plane) return "Plane";
     if (entity == scene.camera) return "Camera";
     if (entity == scene.tree) return "Tree";
@@ -135,11 +135,11 @@ bool setPlayMode(const bool play, Engine::ScenePreset& scene, std::string& snaps
     try {
         if (play) {
             std::ostringstream output;
-            Engine::SceneSerializer::save(scene.registry, output, msaaSamples);
+            Engine::SceneSerializer::save(scene, output, msaaSamples);
             snapshot = std::move(output).str();
         } else {
             std::istringstream input{snapshot};
-            Engine::SceneSerializer::load(scene.registry, input);
+            Engine::SceneSerializer::load(scene, input);
             snapshot.clear();
         }
         error.clear();
@@ -169,10 +169,10 @@ bool createCppScript(const std::string_view name, std::string& error) {
     return static_cast<bool>(h) && static_cast<bool>(cpp);
 }
 
-bool drawViewport(VkDescriptorSet gameDescriptor, VkDescriptorSet sceneDescriptor,
+bool drawViewport(Engine::ViewportHandle gameDescriptor, Engine::ViewportHandle sceneDescriptor,
                   bool& showGameView, const bool playing) {
     if (playing) showGameView = true;
-    const VkDescriptorSet descriptor = showGameView ? gameDescriptor : sceneDescriptor;
+    const Engine::ViewportHandle descriptor = showGameView ? gameDescriptor : sceneDescriptor;
 
     ImGui::Begin("Viewport", nullptr, ImGuiWindowFlags_NoScrollbar);
     drawPanelHeader("VIEWPORT", playing ? "PLAYING  /  GAME CAMERA" :
@@ -185,7 +185,7 @@ bool drawViewport(VkDescriptorSet gameDescriptor, VkDescriptorSet sceneDescripto
     }
     bool viewportHovered = ImGui::IsWindowHovered(ImGuiHoveredFlags_AllowWhenBlockedByActiveItem);
     const ImVec2 size = ImGui::GetContentRegionAvail();
-    if (descriptor != VK_NULL_HANDLE && size.x > 1.0f && size.y > 1.0f) {
+    if (descriptor && size.x > 1.0f && size.y > 1.0f) {
         constexpr float viewportAspect = 16.0f / 9.0f;
         // Keep the rendered view at a fixed aspect ratio. The child clips the
         // image when the panel is wider than 16:9, so the excess is removed
@@ -197,7 +197,7 @@ bool drawViewport(VkDescriptorSet gameDescriptor, VkDescriptorSet sceneDescripto
         const float imageHeight = frameSize.x / viewportAspect;
         const float verticalOffset = (frameSize.y - imageHeight) * 0.5f;
         ImGui::SetCursorPosY(ImGui::GetCursorPosY() + verticalOffset);
-        ImGui::Image(ImTextureRef{static_cast<ImTextureID>(reinterpret_cast<uintptr_t>(descriptor))},
+        ImGui::Image(ImTextureRef{static_cast<ImTextureID>(descriptor.value)},
                      {frameSize.x, imageHeight}, {0, 0}, {1, 1});
         viewportHovered = ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenBlockedByActiveItem);
         ImGui::EndChild();
@@ -218,7 +218,7 @@ Engine::Entity drawHierarchy(Engine::ScenePreset& scene, const Engine::Entity se
     ImGui::SameLine(ImGui::GetWindowWidth() - 75.0f);
     if (EditorButton("+").drawSmall()) clicked = scene.createGameObject();
     ImGui::SameLine(ImGui::GetWindowWidth() - 45.0f);
-    ImGui::TextDisabled("%zu", scene.registry.size());
+    ImGui::TextDisabled("%zu", scene.editor().size());
     static char filter[64] = {};
     ImGui::SetNextItemWidth(-1.0f);
     ImGui::InputTextWithHint("##hierarchy-filter", "  Search objects...", filter, sizeof(filter));
@@ -240,11 +240,11 @@ Engine::Entity drawHierarchy(Engine::ScenePreset& scene, const Engine::Entity se
         // This makes the hierarchy survive save/load and entity reallocation.
         std::unordered_map<Engine::UUID, Engine::Entity> byUuid;
         std::vector<Engine::Entity> entities;
-        entities.reserve(scene.registry.size());
-        scene.registry.view<>([&](const Engine::Entity entity) {
+        entities.reserve(scene.editor().size());
+        scene.editor().view<>([&](const Engine::Entity entity) {
             entities.push_back(entity);
-            if (scene.registry.has<Engine::UUIDComponent>(entity)) {
-                byUuid.emplace(scene.registry.get<Engine::UUIDComponent>(entity).value, entity);
+            if (scene.editor().has<Engine::UUIDComponent>(entity)) {
+                byUuid.emplace(scene.editor().get<Engine::UUIDComponent>(entity).value, entity);
             }
         });
         std::ranges::sort(entities);
@@ -252,8 +252,8 @@ Engine::Entity drawHierarchy(Engine::ScenePreset& scene, const Engine::Entity se
         std::unordered_map<Engine::Entity, std::vector<Engine::Entity>> children;
         std::vector<Engine::Entity> roots;
         for (const Engine::Entity entity : entities) {
-            if (scene.registry.has<Engine::ParentComponent>(entity)) {
-                const Engine::UUID parent = scene.registry.get<Engine::ParentComponent>(entity).parent;
+            if (scene.editor().has<Engine::ParentComponent>(entity)) {
+                const Engine::UUID parent = scene.editor().get<Engine::ParentComponent>(entity).parent;
                 if (const auto found = byUuid.find(parent); found != byUuid.end()) {
                     children[found->second].push_back(entity);
                     continue;
@@ -311,38 +311,38 @@ bool drawInspector(Engine::ScenePreset& scene, const Engine::Entity selected) {
     ImGui::TextColored({0.92f, 0.95f, 1.0f, 1.0f}, "%s", entityName(scene, selected));
     ImGui::SameLine();
     ImGui::TextDisabled("Entity %u", Engine::entityIndex(selected));
-    if (scene.registry.valid(selected) && scene.registry.has<Engine::NameComponent>(selected)) {
-        const Engine::Registry& readRegistry = scene.registry;
-        const auto& name = readRegistry.get<Engine::NameComponent>(selected).value;
+    if (scene.editor().valid(selected) && scene.editor().has<Engine::NameComponent>(selected)) {
+        const auto readScene = scene.editor();
+        const auto& name = readScene.get<Engine::NameComponent>(selected).value;
         char editableName[260]{};
         std::snprintf(editableName, sizeof(editableName), "%s", name.c_str());
         ImGui::SetNextItemWidth(-1.0f);
         if (ImGui::InputTextWithHint("##object-name", "Object name", editableName, sizeof(editableName)) &&
             editableName[0] != '\0') {
-            scene.registry.modify<Engine::NameComponent>(selected, [&](auto& value) {
+            scene.editor().modify<Engine::NameComponent>(selected, [&](auto& value) {
                 value.value = editableName;
             });
         }
     }
     ImGui::Spacing();
     if (ImGui::CollapsingHeader("Transform", ImGuiTreeNodeFlags_DefaultOpen) &&
-        scene.registry.valid(selected) && scene.registry.has<Engine::Transform>(selected)) {
-        TransformFields{scene.registry, selected}.draw();
+        scene.editor().valid(selected) && scene.editor().has<Engine::Transform>(selected)) {
+        TransformFields{scene.editor(), selected}.draw();
     }
-    if (scene.registry.valid(selected) &&
-        scene.registry.has<Engine::ParticleEmitterComponent>(selected) &&
+    if (scene.editor().valid(selected) &&
+        scene.editor().has<Engine::ParticleEmitterComponent>(selected) &&
         ImGui::CollapsingHeader("Particle Emitter", ImGuiTreeNodeFlags_DefaultOpen)) {
         // Keep the UI editing a temporary copy. The component is committed
         // once, after all controls have been drawn, so observers receive one
         // coherent change notification per frame.
-        const Engine::Registry& readRegistry = scene.registry;
+        const auto readScene = scene.editor();
         const auto& source =
-            readRegistry.get<Engine::ParticleEmitterComponent>(selected).emitter;
+            readScene.get<Engine::ParticleEmitterComponent>(selected).emitter;
         auto emitter = source;
         const bool hasColorPicker =
-            readRegistry.has<Engine::ColorPickerComponent>(selected);
+            readScene.has<Engine::ColorPickerComponent>(selected);
         if (hasColorPicker) {
-            emitter.color = readRegistry.get<Engine::ColorPickerComponent>(selected).color;
+            emitter.color = readScene.get<Engine::ColorPickerComponent>(selected).color;
         }
 
         bool changed = false;
@@ -406,47 +406,47 @@ bool drawInspector(Engine::ScenePreset& scene, const Engine::Entity selected) {
         emitter.spawnRate = std::max(0.0f, emitter.spawnRate);
 
         if (changed) {
-            scene.registry.modify<Engine::ParticleEmitterComponent>(selected,
+            scene.editor().modify<Engine::ParticleEmitterComponent>(selected,
                 [&](auto& component) {
                     component.emitter = emitter;
                 });
             if (colorChanged && hasColorPicker) {
-                scene.registry.modify<Engine::ColorPickerComponent>(selected,
+                scene.editor().modify<Engine::ColorPickerComponent>(selected,
                     [&](auto& component) {
                         component.color = emitter.color;
                     });
             }
         }
     }
-    if (scene.registry.valid(selected) && scene.registry.has<Engine::ScriptComponent>(selected) &&
+    if (scene.editor().valid(selected) && scene.editor().has<Engine::ScriptComponent>(selected) &&
         ImGui::CollapsingHeader("Script", ImGuiTreeNodeFlags_DefaultOpen)) {
-        const Engine::Registry& readRegistry = scene.registry;
-        const Engine::ScriptComponent& script = readRegistry.get<Engine::ScriptComponent>(selected);
+        const auto readScene = scene.editor();
+        const Engine::ScriptComponent& script = readScene.get<Engine::ScriptComponent>(selected);
         char className[260]{};
         std::snprintf(className, sizeof(className), "%s", script.className.c_str());
         ImGui::TextDisabled("C++ script class");
         ImGui::SetNextItemWidth(-1.0f);
         if (ImGui::InputText("##script-class", className, sizeof(className))) {
-            scene.registry.modify<Engine::ScriptComponent>(selected, [&](auto& value) {
+            scene.editor().modify<Engine::ScriptComponent>(selected, [&](auto& value) {
                 value.className = className;
                 value.reset();
             });
         }
         bool enabled = script.enabled;
         if (ImGui::Checkbox("Enabled##script", &enabled)) {
-            scene.registry.modify<Engine::ScriptComponent>(selected, [&](auto& value) {
+            scene.editor().modify<Engine::ScriptComponent>(selected, [&](auto& value) {
                 value.enabled = enabled;
             });
         }
     }
-    if (scene.registry.valid(selected) && scene.registry.has<Engine::ColorPickerComponent>(selected) &&
+    if (scene.editor().valid(selected) && scene.editor().has<Engine::ColorPickerComponent>(selected) &&
         ImGui::CollapsingHeader("Color Picker", ImGuiTreeNodeFlags_DefaultOpen)) {
-        const Engine::Registry& readRegistry = scene.registry;
+        const auto readScene = scene.editor();
         const Engine::ColorPickerComponent& picker =
-            readRegistry.get<Engine::ColorPickerComponent>(selected);
+            readScene.get<Engine::ColorPickerComponent>(selected);
         float rgba[4] = {picker.color.r(), picker.color.g(), picker.color.b(), picker.color.a()};
         if (ImGui::ColorEdit4("Color", rgba, ImGuiColorEditFlags_AlphaBar)) {
-            scene.registry.modify<Engine::ColorPickerComponent>(selected, [&](auto& component) {
+            scene.editor().modify<Engine::ColorPickerComponent>(selected, [&](auto& component) {
                 component.color = Engine::Color{rgba[0], rgba[1], rgba[2], rgba[3]};
             });
         }
@@ -458,15 +458,15 @@ bool drawInspector(Engine::ScenePreset& scene, const Engine::Entity selected) {
         ImGui::OpenPopup("Add Component");
     }
     if (ImGui::BeginPopup("Add Component")) {
-        const bool hasScript = scene.registry.has<Engine::ScriptComponent>(selected);
-        const bool hasColorPicker = scene.registry.has<Engine::ColorPickerComponent>(selected);
+        const bool hasScript = scene.editor().has<Engine::ScriptComponent>(selected);
+        const bool hasColorPicker = scene.editor().has<Engine::ColorPickerComponent>(selected);
         if (ImGui::MenuItem("Script", nullptr, false, !hasScript)) {
-            scene.registry.add<Engine::ScriptComponent>(selected);
+            scene.editor().add<Engine::ScriptComponent>(selected);
             ImGui::CloseCurrentPopup();
         }
         if (hasScript) ImGui::TextDisabled("Script component already added");
         if (ImGui::MenuItem("Color Picker", nullptr, false, !hasColorPicker)) {
-            scene.registry.add<Engine::ColorPickerComponent>(selected);
+            scene.editor().add<Engine::ColorPickerComponent>(selected);
             ImGui::CloseCurrentPopup();
         }
         if (hasColorPicker) ImGui::TextDisabled("Color Picker component already added");
@@ -479,10 +479,10 @@ bool drawInspector(Engine::ScenePreset& scene, const Engine::Entity selected) {
         ImGui::InputTextWithHint("Class name", "CubeMovement", attachedClassName, sizeof(attachedClassName));
         const bool validName = attachedClassName[0] != '\0';
         if (EditorButton("Attach", {100.0f, 0.0f}).draw() && validName) {
-            if (!scene.registry.has<Engine::ScriptComponent>(selected)) {
-                scene.registry.add<Engine::ScriptComponent>(selected);
+            if (!scene.editor().has<Engine::ScriptComponent>(selected)) {
+                scene.editor().add<Engine::ScriptComponent>(selected);
             }
-            scene.registry.modify<Engine::ScriptComponent>(selected, [&](auto& script) {
+            scene.editor().modify<Engine::ScriptComponent>(selected, [&](auto& script) {
                 script.className = attachedClassName;
                 script.enabled = true;
                 script.reset();
@@ -504,8 +504,8 @@ bool drawInspector(Engine::ScenePreset& scene, const Engine::Entity selected) {
         ImGui::InputTextWithHint("Class name", "PlayerController", name, sizeof(name));
         if (!error.empty()) ImGui::TextColored({1, .3f, .3f, 1}, "%s", error.c_str());
         if (EditorButton("Create").draw() && createCppScript(name, error)) {
-            if (!scene.registry.has<Engine::ScriptComponent>(selected)) scene.registry.add<Engine::ScriptComponent>(selected);
-            scene.registry.modify<Engine::ScriptComponent>(selected, [&](auto& script) { script.className = name; script.reset(); });
+            if (!scene.editor().has<Engine::ScriptComponent>(selected)) scene.editor().add<Engine::ScriptComponent>(selected);
+            scene.editor().modify<Engine::ScriptComponent>(selected, [&](auto& script) { script.className = name; script.reset(); });
             name[0] = '\0'; error.clear(); ImGui::CloseCurrentPopup();
         }
         ImGui::SameLine(); if (EditorButton("Cancel").draw()) { name[0] = '\0'; error.clear(); ImGui::CloseCurrentPopup(); }
@@ -529,7 +529,7 @@ void drawStatusBar(const Engine::ScenePreset& scene, const Engine::Entity select
     ImGui::TextUnformatted(playing ? (paused ? "Paused" : "Playing") : "Ready");
     ImGui::SameLine();
     ImGui::TextDisabled("|  Particle scene  |  Entities: %zu  |  Selected: %s",
-                        scene.registry.size(), selected == Engine::NullEntity ? "None" : entityName(scene, selected));
+                        scene.editor().size(), selected == Engine::NullEntity ? "None" : entityName(scene, selected));
     ImGui::End();
 }
 
@@ -590,14 +590,14 @@ Engine::Entity drawEditorMenuBar(Engine::ScenePreset& scene, Engine::Renderer& r
                 std::filesystem::create_directories(scenePath.parent_path());
                 const auto samples = renderer.antialiasingLevel() == Engine::AntialiasingLevel::MSAA2x ? 2u :
                     renderer.antialiasingLevel() == Engine::AntialiasingLevel::MSAA4x ? 4u : 0u;
-                Engine::SceneSerializer::save(scene.registry, scenePath, samples);
+                Engine::SceneSerializer::save(scene, scenePath, samples);
                 sceneFileError.clear();
             } catch (const std::exception& error) { sceneFileError = error.what(); }
         }
         if (ImGui::MenuItem("Load Scene", "Ctrl+O")) {
             try {
                 std::optional<std::uint32_t> samples;
-                Engine::SceneSerializer::load(scene.registry, scenePath, samples);
+                Engine::SceneSerializer::load(scene, scenePath, samples);
                 if (samples) {
                     renderer.setAntialiasingLevel(*samples == 2 ? Engine::AntialiasingLevel::MSAA2x :
                         *samples == 4 ? Engine::AntialiasingLevel::MSAA4x : Engine::AntialiasingLevel::Off);
@@ -803,18 +803,9 @@ int main() {
         while (running) {
             const auto start = std::chrono::steady_clock::now();
             renderer.beginFrame();
-            SDL_Event event;
-            while (SDL_PollEvent(&event)) {
-                // The editor owns Dear ImGui's platform event stream. Feed it
-                // directly before the renderer handles engine input, so UI
-                // controls never depend on renderer-internal state.
-                ImGui_ImplSDL3_ProcessEvent(&event);
-                renderer.processEvent(event);
-                if (event.type == SDL_EVENT_QUIT ||
-                    (event.type == SDL_EVENT_WINDOW_CLOSE_REQUESTED &&
-                     event.window.windowID == SDL_GetWindowID(window))) running = false;
-                if (event.type == SDL_EVENT_KEY_DOWN && event.key.key == SDLK_F5 &&
-                    !ImGui::GetIO().WantTextInput) {
+            const Engine::EditorEventState events = renderer.pollEditorEvents();
+            if (events.quitRequested) running = false;
+            if (events.togglePlay) {
                 if (setPlayMode(!playing, scene, playSceneSnapshot, playModeError,
                                 msaaSampleCount(renderer))) {
                         playing = !playing;
@@ -822,12 +813,8 @@ int main() {
                         showGameView = playing;
                         rendererReloadPending = !playing;
                     }
-                }
-                if (event.type == SDL_EVENT_KEY_DOWN && event.key.key == SDLK_F6 && playing &&
-                    !ImGui::GetIO().WantTextInput) {
-                    paused = !paused;
-                }
             }
+            if (events.togglePause && playing) paused = !paused;
             if (!running) break;
 
             // Antialiasing changes recreate render-target resources. Ordinary
@@ -838,7 +825,7 @@ int main() {
                 rendererReloadPending = false;
             }
 
-            const std::uint64_t sceneStructureBeforeUi = scene.registry.structuralRevision();
+            const std::uint64_t sceneStructureBeforeUi = scene.editor().structuralRevision();
             renderer.beginEditorUiFrame();
             bool antialiasingChanged = false;
             bool sceneLoaded = false;
@@ -882,7 +869,7 @@ int main() {
                 renderer.setEditorSelection(selectedEntity);
             }
             const bool sceneCameraInput = drawViewport(
-                renderer.gameViewportDescriptor(), renderer.sceneViewportDescriptor(), showGameView, playing);
+                renderer.gameViewport(), renderer.sceneViewport(), showGameView, playing);
             const bool inspectorConsumesMouseWheel = drawInspector(scene, selectedEntity);
             drawStatusBar(scene, selectedEntity, playing, paused);
             renderer.setEditorSceneCameraInput(
@@ -891,10 +878,10 @@ int main() {
 
             if (antialiasingChanged) rendererReloadPending = true;
             const bool sceneStructureChanged = !sceneLoaded &&
-                scene.registry.structuralRevision() != sceneStructureBeforeUi;
+                scene.editor().structuralRevision() != sceneStructureBeforeUi;
             if (sceneStructureChanged) renderer.synchronizeScene(scene);
             if (playing && !paused) {
-                scriptSystem.update(scene.registry, static_cast<float>(Engine::Time::deltaTime()));
+                scriptSystem.update(scene, static_cast<float>(Engine::Time::deltaTime()));
             }
             renderer.renderFrame();
 

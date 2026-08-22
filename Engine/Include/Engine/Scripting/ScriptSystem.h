@@ -5,12 +5,15 @@
 
 namespace Engine {
 
+class Scene;
+
 /** Creates and executes native C++ scripts registered in ScriptRegistry. */
 class ScriptSystem final {
 public:
     explicit ScriptSystem(ScriptRegistry& scripts) noexcept : scripts_(scripts) {}
 
     void update(Registry& registry, float deltaTime);
+    void update(Scene& scene, float deltaTime);
 
 private:
     ScriptRegistry& scripts_;

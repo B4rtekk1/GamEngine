@@ -61,6 +61,8 @@ public:
     /** Initializes graphics resources for an SDL window owned by the application. */
     void initialize(Scene& scene, SDL_Window* window);
     void beginFrame() const;
+    /** Polls platform events and forwards them to input and editor UI. */
+    [[nodiscard]] EditorEventState pollEditorEvents() const;
     /** Starts the SDL3/Vulkan Dear ImGui frame owned by this renderer. */
     void beginEditorUiFrame() const;
     void processEvent(const SDL_Event& event) const;
@@ -74,8 +76,8 @@ public:
     void reloadScene(Scene& scene, SDL_Window* window);
     /** Rebuilds only resources affected by the MSAA sample count. */
     void reconfigureAntialiasing() const;
-    [[nodiscard]] VkDescriptorSet gameViewportDescriptor() const noexcept;
-    [[nodiscard]] VkDescriptorSet sceneViewportDescriptor() const noexcept;
+    [[nodiscard]] ViewportHandle gameViewport() const noexcept;
+    [[nodiscard]] ViewportHandle sceneViewport() const noexcept;
     void shutdown() noexcept;
 
 private:

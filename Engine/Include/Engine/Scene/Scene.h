@@ -8,6 +8,7 @@
 #include "Engine/UI/Canvas.h"
 #include "Engine/UI/Vulkan/UIFontAtlas.h"
 #include "Engine/Scene/Components/IdentityComponents.h"
+#include "Engine/Scene/SceneEditor.h"
 #include "Engine/Renderer/Geometry/Mesh.h"
 #include "Engine/Renderer/Materials/PBRMaterial.h"
 
@@ -65,6 +66,10 @@ public:
         if (it == names_.end()) return nullptr;
         return find(it->second);
     }
+
+    /** Returns the restricted API used by editor tooling. */
+    [[nodiscard]] SceneEditor editor() noexcept { return SceneEditor{registry}; }
+    [[nodiscard]] SceneEditor editor() const noexcept { return SceneEditor{registry}; }
 
     /** Finds an object by its stable object identifier. */
     [[nodiscard]] GameObject* find(const ObjectId objectId) noexcept {

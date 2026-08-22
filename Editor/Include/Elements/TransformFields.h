@@ -15,8 +15,8 @@ public:
     void draw() const {
         if (!registry().valid(entity()) || !registry().has<Engine::Transform>(entity())) return;
 
-        const Engine::Registry& readRegistry = registry();
-        const Engine::Transform& transform = readRegistry.get<Engine::Transform>(entity());
+        const Engine::SceneEditor& readScene = registry();
+        const Engine::Transform& transform = readScene.get<Engine::Transform>(entity());
         drawVec3Field("Position (X, Y, Z)", "##position", transform.position, 0.05f, "%.2f",
             [this](const Engine::Vec3& value) { updateTransform([&](auto& t) { t.position = value; }); });
         drawVec3Field("Rotation (X, Y, Z)", "##rotation", transform.rotation, 0.5f, "%.1f",

@@ -26,4 +26,16 @@ struct RenderConfig final {
     AntialiasingLevel antialiasing = AntialiasingLevel::Off;
 };
 
+/** Opaque viewport texture handle used by editor integrations. */
+struct ViewportHandle final {
+    std::uintptr_t value{};
+    [[nodiscard]] explicit operator bool() const noexcept { return value != 0; }
+};
+
+struct EditorEventState final {
+    bool quitRequested = false;
+    bool togglePlay = false;
+    bool togglePause = false;
+};
+
 } // namespace Engine

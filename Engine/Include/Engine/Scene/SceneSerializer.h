@@ -38,7 +38,10 @@ public:
 
     // High-level scene API. These overloads keep Registry out of application code.
     static void save(const Scene& scene, const std::filesystem::path& path);
+    static void save(const Scene& scene, const std::filesystem::path& path,
+                     std::uint32_t msaaSamples);
     static void save(const Scene& scene, std::ostream& output);
+    static void save(const Scene& scene, std::ostream& output, std::uint32_t msaaSamples);
 
     /**
      * @brief Replaces registry with the scene read from a text file.
@@ -55,7 +58,10 @@ public:
                      std::optional<std::uint32_t>& msaaSamples);
 
     static void load(Scene& scene, const std::filesystem::path& path);
+    static void load(Scene& scene, const std::filesystem::path& path,
+                     std::optional<std::uint32_t>& msaaSamples);
     static void load(Scene& scene, std::istream& input);
+    static void load(Scene& scene, std::istream& input, std::optional<std::uint32_t>& msaaSamples);
 };
 
 } // namespace Engine

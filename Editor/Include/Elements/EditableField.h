@@ -2,7 +2,7 @@
 
 #include "imgui.h"
 
-#include "Engine/ECS/Registry.h"
+#include "Engine/Scene/SceneEditor.h"
 #include "Engine/Math/Vec3.h"
 
 #include <algorithm>
@@ -10,7 +10,7 @@
 
 class EditableField {
 public:
-    EditableField(Engine::Registry& registry, const Engine::Entity entity) noexcept
+    EditableField(Engine::SceneEditor registry, const Engine::Entity entity) noexcept
         : registry_(registry), entity_(entity) {}
 
 protected:
@@ -26,7 +26,7 @@ protected:
         update(Engine::Vec3{values[0], values[1], values[2]});
     }
 
-    [[nodiscard]] Engine::Registry& registry() const noexcept { return registry_; }
+    [[nodiscard]] Engine::SceneEditor& registry() const noexcept { return registry_; }
     [[nodiscard]] Engine::Entity entity() const noexcept { return entity_; }
 
 private:
@@ -44,6 +44,6 @@ private:
         return true;
     }
 
-    Engine::Registry& registry_;
+    mutable Engine::SceneEditor registry_;
     Engine::Entity entity_;
 };
