@@ -20,10 +20,5 @@ layout(binding = 3) uniform sampler2D materialTextures[16];
 
 void main() {
     if (fragInstanceIndex != frame.selectedInstance) discard;
-    MaterialData material = materials[fragMaterialIndex];
-    vec3 textureColor = material.baseColorMetallic.rgb;
-    if (material.textureIndices.x >= 0)
-        textureColor *= texture(materialTextures[material.textureIndices.x], fragTexCoord).rgb;
-    float luma = dot(textureColor, vec3(0.299, 0.587, 0.114));
-    outColor = vec4(luma > 0.5 ? vec3(0.02) : vec3(1.0), 1.0);
+    outColor = vec4(1.0);
 }

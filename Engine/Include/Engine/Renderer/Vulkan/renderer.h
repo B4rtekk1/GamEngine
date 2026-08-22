@@ -4,6 +4,7 @@
 #include "Engine/Renderer/Passes/ForwardPass.h"
 #include "Engine/Renderer/Passes/SkyPass.h"
 #include "Engine/Renderer/Passes/TonemapPass.h"
+#include "Engine/Renderer/RenderConfig.h"
 #include "Engine/Renderer/Vulkan/graphics_pipeline.h"
 #include "Engine/UI/CanvasRenderer.h"
 #include "Engine/ECS/Entity.h"
@@ -15,12 +16,6 @@
 
 namespace Engine {
 
-enum class AntialiasingLevel : std::uint32_t {
-    Off,
-    MSAA2x,
-    MSAA4x
-};
-
 class Registry;
 class Scene;
 
@@ -31,22 +26,14 @@ class Scene;
  * A scene only provides ECS data; batching, transform/material caching and
  * GPU culling are renderer features shared by every scene.
  */
-struct RenderOptimizationFeatures final {
-    // The editor/preview renderer deliberately defaults to unshadowed lighting.
-    // It avoids both the shadow-map draw pass and its culling dispatch.
-    bool shadows = false;
-    bool instancedRendering = true;
-    bool meshDeduplication = true;
-    bool transformCaching = true;
-    bool materialCaching = true;
-    bool gpuCulling = true;
-    bool occlusionCulling = false;
-};
+using RenderOptimizationFeatures = RenderFeatures;
 
 // Owns and runs the Vulkan rendering loop.
 class Renderer final {
 public:
-    explicit Renderer(RenderOptimizationFeatures features = {});
+    explicit Renderer(RenderConfig config = {});
+    explicit Renderer(RenderOptimizationFeatures features)
+        : Renderer(RenderConfig{.features = features}) {}
 
     void setOptimizationFeatures(RenderOptimizationFeatures features) noexcept {
         optimizationFeatures_ = features;

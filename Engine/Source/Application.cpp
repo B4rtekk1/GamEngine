@@ -12,6 +12,7 @@ namespace Engine {
 
 class Application::Impl final {
 public:
+    explicit Impl(const RenderConfig& renderConfig) : renderer(renderConfig) {}
     Renderer renderer;
     SDL_Window* window = nullptr;
     bool initialized = false;
@@ -20,7 +21,7 @@ public:
 };
 
 Application::Application(ApplicationConfig config)
-    : config_(std::move(config)), impl_(std::make_unique<Impl>()) {}
+    : config_(std::move(config)), impl_(std::make_unique<Impl>(config_.render)) {}
 
 Application::~Application() {
     if (impl_->initialized) impl_->renderer.shutdown();

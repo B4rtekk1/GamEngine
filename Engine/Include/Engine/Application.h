@@ -1,6 +1,7 @@
 #pragma once
 
 #include "Engine/Scene/Scene.h"
+#include "Engine/Renderer/RenderConfig.h"
 
 #include <cstdint>
 #include <functional>
@@ -14,6 +15,7 @@ struct ApplicationConfig final {
     std::int32_t width = 1280;
     std::int32_t height = 720;
     bool closeOnEscape = true;
+    RenderConfig render{};
 };
 
 /** High-level application entry point. Owns the window and the render loop. */

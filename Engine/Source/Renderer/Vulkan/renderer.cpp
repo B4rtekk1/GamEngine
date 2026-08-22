@@ -2509,8 +2509,8 @@ class Renderer::Backend {
     };
 
 Renderer::~Renderer() = default;
-Renderer::Renderer(RenderOptimizationFeatures features)
-    : optimizationFeatures_(features) {}
+Renderer::Renderer(RenderConfig config)
+    : optimizationFeatures_(config.features), antialiasingLevel_(config.antialiasing) {}
 
 void Renderer::initialize(Scene& scene, SDL_Window* window) {
     if (backend_) throw std::logic_error("Renderer is already initialized");
