@@ -9,8 +9,8 @@
 #include "Engine/Scene/Components/IdentityComponents.h"
 
 #include <algorithm>
+#include <charconv>
 #include <fstream>
-#include <iomanip>
 #include <limits>
 #include <locale>
 #include <memory>
@@ -96,25 +96,44 @@ Math::Color readColorRgba(std::istream& input, const std::string_view descriptio
             readFloat(input, std::string(description) + " alpha")};
 }
 
+void writeFloat(std::ostream& output, const float value) {
+    char buffer[32];
+    const auto result = std::to_chars(std::begin(buffer), std::end(buffer), value);
+    if (result.ec != std::errc{}) {
+        throw std::runtime_error("Could not format scene float");
+    }
+    output.write(buffer, result.ptr - buffer);
+}
+
 void writeVec3(std::ostream& output, const Vec3& value) {
-    output << value.x() << ' ' << value.y() << ' ' << value.z();
+    writeFloat(output, value.x()); output << ' ';
+    writeFloat(output, value.y()); output << ' ';
+    writeFloat(output, value.z());
 }
 
 void writeColor(std::ostream& output, const Math::Color& value) {
-    output << value.r() << ' ' << value.g() << ' ' << value.b();
+    writeFloat(output, value.r()); output << ' ';
+    writeFloat(output, value.g()); output << ' ';
+    writeFloat(output, value.b());
 }
 
 void writeColorRgba(std::ostream& output, const Math::Color& value) {
-    output << value.r() << ' ' << value.g() << ' ' << value.b() << ' ' << value.a();
+    writeFloat(output, value.r()); output << ' ';
+    writeFloat(output, value.g()); output << ' ';
+    writeFloat(output, value.b()); output << ' ';
+    writeFloat(output, value.a());
 }
 
 void writeMaterial(std::ostream& output, const PBRMaterial& material) {
     writeColorRgba(output, material.baseColor);
-    output << ' ' << material.metallic << ' ' << material.roughness << ' '
-           << material.ambientOcclusion << ' ' << material.baseColorTexture << ' '
-           << material.metallicRoughnessTexture << ' ' << material.normalTexture << ' '
-           << material.normalScale << ' ' << static_cast<int>(material.alphaBlend) << ' '
-           << static_cast<int>(material.doubleSided) << ' ' << material.alphaCutoff;
+    output << ' '; writeFloat(output, material.metallic); output << ' ';
+    writeFloat(output, material.roughness); output << ' ';
+    writeFloat(output, material.ambientOcclusion); output << ' ' << material.baseColorTexture << ' '
+           << material.metallicRoughnessTexture << ' ' << material.normalTexture << ' ';
+    writeFloat(output, material.normalScale);
+    output << ' ' << static_cast<int>(material.alphaBlend) << ' '
+           << static_cast<int>(material.doubleSided) << ' ';
+    writeFloat(output, material.alphaCutoff);
 }
 
 PBRMaterial readMaterial(std::istream& input) {
@@ -160,8 +179,6 @@ void SceneSerializer::save(const Registry& registry,
 void SceneSerializer::save(const Registry& registry, std::ostream& output) {
     std::ostringstream serialized;
     serialized.imbue(std::locale::classic());
-    serialized << std::setprecision(std::numeric_limits<float>::max_digits10);
-
     const std::vector<Entity> entities = sortedEntities(registry);
     std::vector<std::shared_ptr<const Mesh>> meshes;
     std::unordered_map<const Mesh*, std::size_t> meshIds;
@@ -189,11 +206,14 @@ void SceneSerializer::save(const Registry& registry, std::ostream& output) {
             writeVec3(serialized, vertex.position);
             serialized << ' ';
             writeVec3(serialized, vertex.color);
-            serialized << ' ' << vertex.texCoord.x() << ' ' << vertex.texCoord.y() << ' ';
+            serialized << ' '; writeFloat(serialized, vertex.texCoord.x()); serialized << ' ';
+            writeFloat(serialized, vertex.texCoord.y()); serialized << ' ';
             writeVec3(serialized, vertex.normal);
-            serialized << ' ' << vertex.tangent.x() << ' ' << vertex.tangent.y() << ' '
-                       << vertex.tangent.z() << ' ' << vertex.tangent.w() << ' '
-                       << vertex.materialIndex;
+            serialized << ' '; writeFloat(serialized, vertex.tangent.x()); serialized << ' ';
+            writeFloat(serialized, vertex.tangent.y()); serialized << ' ';
+            writeFloat(serialized, vertex.tangent.z()); serialized << ' ';
+            writeFloat(serialized, vertex.tangent.w());
+            serialized << ' ' << vertex.materialIndex;
             serialized << '\n';
         }
         serialized << "INDICES";
@@ -250,16 +270,19 @@ void SceneSerializer::save(const Registry& registry, std::ostream& output) {
             const auto& light = registry.get<LightComponent>(entity);
             serialized << "LIGHT " << static_cast<int>(light.type) << ' ';
             writeColor(serialized, light.color);
-            serialized << ' ' << light.intensity << ' '
-                       << static_cast<int>(light.enabled) << ' '
+            serialized << ' '; writeFloat(serialized, light.intensity);
+            serialized << ' ' << static_cast<int>(light.enabled) << ' '
                        << static_cast<int>(light.castShadows) << '\n';
         }
         if (registry.has<CameraComponent>(entity)) {
             const auto& camera = registry.get<CameraComponent>(entity);
-            serialized << "CAMERA " << static_cast<int>(camera.projection) << ' '
-                       << camera.fieldOfView << ' ' << camera.orthographicSize << ' '
-                       << camera.nearClip << ' ' << camera.farClip << ' '
-                       << camera.aspectRatio << ' ' << static_cast<int>(camera.primary) << '\n';
+            serialized << "CAMERA " << static_cast<int>(camera.projection) << ' ';
+            writeFloat(serialized, camera.fieldOfView); serialized << ' ';
+            writeFloat(serialized, camera.orthographicSize); serialized << ' ';
+            writeFloat(serialized, camera.nearClip); serialized << ' ';
+            writeFloat(serialized, camera.farClip); serialized << ' ';
+            writeFloat(serialized, camera.aspectRatio);
+            serialized << ' ' << static_cast<int>(camera.primary) << '\n';
         }
         if (registry.has<ScriptComponent>(entity)) {
             const auto& script = registry.get<ScriptComponent>(entity);
