@@ -34,16 +34,16 @@ namespace {
 void configureEditorStyle() {
     ImGui::StyleColorsDark();
     ImGuiStyle& style = ImGui::GetStyle();
-    style.WindowPadding = {12.0f, 10.0f};
-    style.FramePadding = {9.0f, 6.0f};
-    style.ItemSpacing = {8.0f, 7.0f};
+    style.WindowPadding = {14.0f, 11.0f};
+    style.FramePadding = {9.0f, 7.0f};
+    style.ItemSpacing = {8.0f, 8.0f};
     style.ItemInnerSpacing = {6.0f, 5.0f};
     style.ScrollbarSize = 12.0f;
     style.GrabMinSize = 10.0f;
-    style.WindowBorderSize = 0.0f;
+    style.WindowBorderSize = 1.0f;
     style.ChildBorderSize = 1.0f;
     style.FrameBorderSize = 0.0f;
-    style.WindowRounding = 0.0f;
+    style.WindowRounding = 6.0f;
     style.ChildRounding = 5.0f;
     style.FrameRounding = 4.0f;
     style.PopupRounding = 5.0f;
@@ -56,6 +56,9 @@ void configureEditorStyle() {
     colors[ImGuiCol_ChildBg] = {0.043f, 0.054f, 0.073f, 1.0f};
     colors[ImGuiCol_PopupBg] = {0.075f, 0.090f, 0.120f, 0.98f};
     colors[ImGuiCol_MenuBarBg] = {0.035f, 0.045f, 0.063f, 1.0f};
+    colors[ImGuiCol_TitleBg] = {0.045f, 0.060f, 0.080f, 1.0f};
+    colors[ImGuiCol_TitleBgActive] = {0.060f, 0.095f, 0.120f, 1.0f};
+    colors[ImGuiCol_TitleBgCollapsed] = {0.035f, 0.045f, 0.063f, 1.0f};
     colors[ImGuiCol_Header] = {0.10f, 0.24f, 0.29f, 0.70f};
     colors[ImGuiCol_HeaderHovered] = {0.10f, 0.48f, 0.56f, 0.55f};
     colors[ImGuiCol_HeaderActive] = {0.08f, 0.62f, 0.70f, 0.75f};
@@ -76,6 +79,21 @@ void configureEditorStyle() {
     colors[ImGuiCol_TabHovered] = {0.10f, 0.45f, 0.53f, 1.0f};
     colors[ImGuiCol_TabActive] = {0.09f, 0.27f, 0.32f, 1.0f};
     colors[ImGuiCol_DockingPreview] = {0.12f, 0.70f, 0.80f, 0.50f};
+    colors[ImGuiCol_DockingEmptyBg] = {0.035f, 0.045f, 0.063f, 1.0f};
+    colors[ImGuiCol_ResizeGrip] = {0.12f, 0.55f, 0.64f, 0.25f};
+    colors[ImGuiCol_ResizeGripHovered] = {0.20f, 0.78f, 0.86f, 0.70f};
+    colors[ImGuiCol_ResizeGripActive] = {0.25f, 0.87f, 0.93f, 0.90f};
+}
+
+void drawPanelHeader(const char* title, const char* subtitle = nullptr) {
+    ImGui::PushStyleColor(ImGuiCol_Text, {0.33f, 0.86f, 0.92f, 1.0f});
+    ImGui::TextUnformatted(title);
+    ImGui::PopStyleColor();
+    if (subtitle != nullptr) {
+        ImGui::SameLine();
+        ImGui::TextDisabled("%s", subtitle);
+    }
+    ImGui::Separator();
 }
 
 const char* entityName(const Engine::ScenePreset& scene, const Engine::Entity entity) {
@@ -150,19 +168,14 @@ bool drawViewport(VkDescriptorSet gameDescriptor, VkDescriptorSet sceneDescripto
     const VkDescriptorSet descriptor = showGameView ? gameDescriptor : sceneDescriptor;
 
     ImGui::Begin("Viewport", nullptr, ImGuiWindowFlags_NoScrollbar);
-    ImGui::PushStyleColor(ImGuiCol_Text, {0.28f, 0.84f, 0.91f, 1.0f});
-    ImGui::TextUnformatted("VIEWPORT");
-    ImGui::PopStyleColor();
-    ImGui::SameLine();
-    ImGui::TextDisabled(playing ? "PLAYING  |  GAME CAMERA" :
+    drawPanelHeader("VIEWPORT", playing ? "PLAYING  /  GAME CAMERA" :
                                   showGameView ? "GAME CAMERA" : "SCENE CAMERA");
     if (!playing) {
-        ImGui::SameLine(ImGui::GetWindowWidth() - 180.0f);
+        ImGui::SameLine(ImGui::GetWindowWidth() - 154.0f);
     }
     if (!playing && EditorButton(showGameView ? "Scene View" : "Game View").draw()) {
         showGameView = !showGameView;
     }
-    ImGui::Separator();
     bool viewportHovered = ImGui::IsWindowHovered(ImGuiHoveredFlags_AllowWhenBlockedByActiveItem);
     const ImVec2 size = ImGui::GetContentRegionAvail();
     if (descriptor != VK_NULL_HANDLE && size.x > 1.0f && size.y > 1.0f) {
@@ -170,7 +183,8 @@ bool drawViewport(VkDescriptorSet gameDescriptor, VkDescriptorSet sceneDescripto
         // Keep the rendered view at a fixed aspect ratio. The child clips the
         // image when the panel is wider than 16:9, so the excess is removed
         // symmetrically from the top and bottom instead of distorting it.
-        ImGui::BeginChild("##viewport-frame", size, false,
+        ImGui::PushStyleColor(ImGuiCol_ChildBg, {0.018f, 0.024f, 0.034f, 1.0f});
+        ImGui::BeginChild("##viewport-frame", size, true,
                           ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
         const ImVec2 frameSize = ImGui::GetContentRegionAvail();
         const float imageHeight = frameSize.x / viewportAspect;
@@ -180,6 +194,7 @@ bool drawViewport(VkDescriptorSet gameDescriptor, VkDescriptorSet sceneDescripto
                      {frameSize.x, imageHeight}, {0, 0}, {1, 1});
         viewportHovered = ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenBlockedByActiveItem);
         ImGui::EndChild();
+        ImGui::PopStyleColor();
     }
     ImGui::End();
     // Do not enable camera navigation just because a mouse button is held
@@ -192,9 +207,7 @@ bool drawViewport(VkDescriptorSet gameDescriptor, VkDescriptorSet sceneDescripto
 Engine::Entity drawHierarchy(Engine::ScenePreset& scene, const Engine::Entity selected) {
     Engine::Entity clicked = Engine::NullEntity;
     ImGui::Begin("Hierarchy");
-    ImGui::PushStyleColor(ImGuiCol_Text, {0.28f, 0.84f, 0.91f, 1.0f});
-    ImGui::TextUnformatted("SCENE HIERARCHY");
-    ImGui::PopStyleColor();
+    drawPanelHeader("SCENE HIERARCHY");
     ImGui::SameLine(ImGui::GetWindowWidth() - 75.0f);
     if (EditorButton("+").drawSmall()) clicked = scene.createGameObject();
     ImGui::SameLine(ImGui::GetWindowWidth() - 45.0f);
@@ -203,6 +216,7 @@ Engine::Entity drawHierarchy(Engine::ScenePreset& scene, const Engine::Entity se
     ImGui::SetNextItemWidth(-1.0f);
     ImGui::InputTextWithHint("##hierarchy-filter", "  Search objects...", filter, sizeof(filter));
     ImGui::Spacing();
+    ImGui::TextDisabled("OBJECTS");
 
     if (ImGui::TreeNodeEx("Scene", ImGuiTreeNodeFlags_DefaultOpen | ImGuiTreeNodeFlags_SpanAvailWidth)) {
         const auto entityLabel = [&](const char* name, const Engine::Entity entity) {
@@ -273,13 +287,13 @@ Engine::Entity drawHierarchy(Engine::ScenePreset& scene, const Engine::Entity se
 
 bool drawInspector(Engine::ScenePreset& scene, const Engine::Entity selected) {
     ImGui::Begin("Inspector");
-    ImGui::PushStyleColor(ImGuiCol_Text, {0.28f, 0.84f, 0.91f, 1.0f});
-    ImGui::TextUnformatted("INSPECTOR");
-    ImGui::PopStyleColor();
-    ImGui::Separator();
+    drawPanelHeader("INSPECTOR", selected == Engine::NullEntity ? "NO SELECTION" : "ENTITY");
     if (selected == Engine::NullEntity) {
         ImGui::Spacing();
+        ImGui::TextColored({0.33f, 0.86f, 0.92f, 1.0f}, "  ◇");
+        ImGui::SameLine();
         ImGui::TextDisabled("Nothing selected");
+        ImGui::Spacing();
         ImGui::TextWrapped("Select an object in the Scene Hierarchy to inspect it.");
         const bool consumesMouseWheel = ImGui::IsWindowHovered(
             ImGuiHoveredFlags_AllowWhenBlockedByActiveItem) && ImGui::GetIO().MouseWheel != 0.0f;
@@ -329,6 +343,8 @@ bool drawInspector(Engine::ScenePreset& scene, const Engine::Entity selected) {
             });
         }
     }
+    ImGui::TextDisabled("COMPONENTS");
+    ImGui::Spacing();
     ImGui::SetNextItemWidth(-1.0f);
     if (EditorButton("New Component", {-1.0f, 0.0f}).draw()) {
         ImGui::OpenPopup("Add Component");
@@ -417,11 +433,11 @@ void configureEditorDockLayout() {
     // all space left between the two side panels.
     ImGuiID hierarchyId = 0;
     ImGuiID centerId = 0;
-    ImGui::DockBuilderSplitNode(dockspaceId, ImGuiDir_Left, 0.20f,
+    ImGui::DockBuilderSplitNode(dockspaceId, ImGuiDir_Left, 0.22f,
                                 &hierarchyId, &centerId);
 
     ImGuiID inspectorId = 0;
-    ImGui::DockBuilderSplitNode(centerId, ImGuiDir_Right, 0.22f,
+    ImGui::DockBuilderSplitNode(centerId, ImGuiDir_Right, 0.24f,
                                 &inspectorId, &centerId);
 
     ImGui::DockBuilderDockWindow("Hierarchy", hierarchyId);
@@ -444,6 +460,14 @@ Engine::Entity drawEditorMenuBar(Engine::ScenePreset& scene, Engine::Renderer& r
     Engine::Entity createdEntity = Engine::NullEntity;
 
     if (!ImGui::BeginMainMenuBar()) return Engine::NullEntity;
+
+    ImGui::PushStyleColor(ImGuiCol_Text, {0.34f, 0.87f, 0.93f, 1.0f});
+    ImGui::TextUnformatted("GAMENGINE");
+    ImGui::PopStyleColor();
+    ImGui::SameLine();
+    ImGui::TextDisabled("EDITOR");
+    ImGui::SameLine();
+    ImGui::TextDisabled("|");
 
     if (ImGui::BeginMenu("File")) {
         const std::filesystem::path scenePath = editorScenePath();
