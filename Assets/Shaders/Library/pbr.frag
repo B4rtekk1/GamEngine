@@ -76,7 +76,6 @@ void main() {
     // Blender foliage unnaturally dark.
     vec3 albedo = baseColor.rgb;
     const bool selected = fragInstanceIndex == frame.selectedInstance;
-    if (selected) albedo = mix(albedo, vec3(1.0, 0.65, 0.05), 0.7);
     float metallic = material.baseColorMetallic.a;
     float roughness = material.roughnessAmbientOcclusion.x;
     if (material.textureIndices.y >= 0) {
@@ -111,6 +110,5 @@ void main() {
     vec3 color = vec3(0.035) * albedo * clamp(material.roughnessAmbientOcclusion.y, 0.0, 1.0) + direct;
     // Keep lighting in linear HDR space. Display mapping is performed once,
     // after the complete scene (including the skybox) has been rendered.
-    if (selected) color += vec3(0.8, 0.35, 0.02);
     outColor = vec4(color, baseColor.a);
 }

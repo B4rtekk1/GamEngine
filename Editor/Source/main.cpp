@@ -27,6 +27,7 @@
 #include <sstream>
 #include <stdexcept>
 #include <thread>
+#include <optional>
 #include <unordered_map>
 #include <unordered_set>
 
@@ -124,12 +125,17 @@ std::filesystem::path editorScenePath() {
     return std::filesystem::path{GAMEENGINE_SOURCE_DIR} / "Assets" / "Scenes" / "Editor.scene";
 }
 
+std::uint32_t msaaSampleCount(const Engine::Renderer& renderer) {
+    return renderer.antialiasingLevel() == Engine::AntialiasingLevel::MSAA2x ? 2u :
+        renderer.antialiasingLevel() == Engine::AntialiasingLevel::MSAA4x ? 4u : 0u;
+}
+
 bool setPlayMode(const bool play, Engine::ScenePreset& scene, std::string& snapshot,
-                 std::string& error) {
+                 std::string& error, const std::uint32_t msaaSamples) {
     try {
         if (play) {
             std::ostringstream output;
-            Engine::SceneSerializer::save(scene.registry, output);
+            Engine::SceneSerializer::save(scene.registry, output, msaaSamples);
             snapshot = std::move(output).str();
         } else {
             std::istringstream input{snapshot};
@@ -493,13 +499,21 @@ Engine::Entity drawEditorMenuBar(Engine::ScenePreset& scene, Engine::Renderer& r
         if (ImGui::MenuItem("Save Scene", "Ctrl+S")) {
             try {
                 std::filesystem::create_directories(scenePath.parent_path());
-                Engine::SceneSerializer::save(scene.registry, scenePath);
+                const auto samples = renderer.antialiasingLevel() == Engine::AntialiasingLevel::MSAA2x ? 2u :
+                    renderer.antialiasingLevel() == Engine::AntialiasingLevel::MSAA4x ? 4u : 0u;
+                Engine::SceneSerializer::save(scene.registry, scenePath, samples);
                 sceneFileError.clear();
             } catch (const std::exception& error) { sceneFileError = error.what(); }
         }
         if (ImGui::MenuItem("Load Scene", "Ctrl+O")) {
             try {
-                Engine::SceneSerializer::load(scene.registry, scenePath);
+                std::optional<std::uint32_t> samples;
+                Engine::SceneSerializer::load(scene.registry, scenePath, samples);
+                if (samples) {
+                    renderer.setAntialiasingLevel(*samples == 2 ? Engine::AntialiasingLevel::MSAA2x :
+                        *samples == 4 ? Engine::AntialiasingLevel::MSAA4x : Engine::AntialiasingLevel::Off);
+                    antialiasingChanged = true;
+                }
                 sceneLoaded = true;
                 sceneFileError.clear();
             } catch (const std::exception& error) { sceneFileError = error.what(); }
@@ -712,7 +726,8 @@ int main() {
                      event.window.windowID == SDL_GetWindowID(window))) running = false;
                 if (event.type == SDL_EVENT_KEY_DOWN && event.key.key == SDLK_F5 &&
                     !ImGui::GetIO().WantTextInput) {
-                    if (setPlayMode(!playing, scene, playSceneSnapshot, playModeError)) {
+                if (setPlayMode(!playing, scene, playSceneSnapshot, playModeError,
+                                msaaSampleCount(renderer))) {
                         playing = !playing;
                         paused = false;
                         showGameView = playing;
@@ -748,7 +763,16 @@ int main() {
                 selectedEntity = created;
                 renderer.setEditorSelection(selectedEntity);
             }
-            if (playToggleRequested && setPlayMode(!playing, scene, playSceneSnapshot, playModeError)) {
+            if (sceneLoaded) {
+                // Loading replaces the registry, so any selection from the
+                // previous scene is stale before the hierarchy/inspector are
+                // drawn for this frame.
+                selectedEntity = Engine::NullEntity;
+                renderer.setEditorSelection(selectedEntity);
+                rendererReloadPending = true;
+            }
+            if (playToggleRequested && setPlayMode(!playing, scene, playSceneSnapshot, playModeError,
+                                                   msaaSampleCount(renderer))) {
                 playing = !playing;
                 paused = false;
                 showGameView = playing;
@@ -777,12 +801,6 @@ int main() {
             ImGui::Render();
 
             if (antialiasingChanged) rendererReloadPending = true;
-            if (sceneLoaded) {
-                selectedEntity = Engine::NullEntity;
-                renderer.setEditorSelection(selectedEntity);
-                rendererReloadPending = true;
-            }
-
             const bool sceneStructureChanged = !sceneLoaded &&
                 scene.registry.structuralRevision() != sceneStructureBeforeUi;
             if (sceneStructureChanged) renderer.synchronizeScene(scene);

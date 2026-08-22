@@ -39,9 +39,19 @@ void ForwardPass::create(VkDevice device, const VkFormat colorFormat,
         {9, 0, VK_FORMAT_R32G32B32A32_SFLOAT, offsetof(Vertex, tangent)},
     };
     pipeline_.create(device, options);
+
+    GraphicsPipelineOptions outlineOptions = options;
+    outlineOptions.vertexShader = "shaders/outline.vert.spv";
+    outlineOptions.fragmentShader = "shaders/outline.frag.spv";
+    outlineOptions.existingRenderPass = pipeline_.renderPass();
+    outlineOptions.cullMode = VK_CULL_MODE_FRONT_BIT;
+    outlineOptions.depthWriteEnable = VK_FALSE;
+    outlineOptions.depthCompareOp = VK_COMPARE_OP_LESS_OR_EQUAL;
+    outlinePipeline_.create(device, outlineOptions);
 }
 
 void ForwardPass::destroy() noexcept {
+    outlinePipeline_.destroy();
     pipeline_.destroy();
 }
 
@@ -84,6 +94,15 @@ void ForwardPass::draw(VkCommandBuffer commandBuffer,
 
 void ForwardPass::end(VkCommandBuffer commandBuffer) {
     vkCmdEndRenderPass(commandBuffer);
+}
+
+void ForwardPass::drawOutline(
+    VkCommandBuffer commandBuffer,
+    const Culling::IndexedIndirectDrawCount& indirectDraw) const {
+    if (!indirectDraw.valid()) return;
+    vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS,
+                      outlinePipeline_.handle());
+    indirectDraw.record(commandBuffer);
 }
 
 } // namespace Engine

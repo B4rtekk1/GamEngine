@@ -2,6 +2,8 @@
 
 #include <filesystem>
 #include <iosfwd>
+#include <optional>
+#include <cstdint>
 
 namespace Engine {
 
@@ -25,9 +27,13 @@ public:
 
     /** @brief Writes a scene to a text file. */
     static void save(const Registry& registry, const std::filesystem::path& path);
+    static void save(const Registry& registry, const std::filesystem::path& path,
+                     std::uint32_t msaaSamples);
 
     /** @brief Writes a scene to an existing stream. */
     static void save(const Registry& registry, std::ostream& output);
+    static void save(const Registry& registry, std::ostream& output,
+                     std::uint32_t msaaSamples);
 
     /**
      * @brief Replaces registry with the scene read from a text file.
@@ -35,9 +41,13 @@ public:
      * The registry is changed only after the whole scene has been validated.
      */
     static void load(Registry& registry, const std::filesystem::path& path);
+    static void load(Registry& registry, const std::filesystem::path& path,
+                     std::optional<std::uint32_t>& msaaSamples);
 
     /** @brief Replaces registry with the scene read from a stream. */
     static void load(Registry& registry, std::istream& input);
+    static void load(Registry& registry, std::istream& input,
+                     std::optional<std::uint32_t>& msaaSamples);
 };
 
 } // namespace Engine

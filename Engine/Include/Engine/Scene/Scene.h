@@ -70,8 +70,24 @@ public:
     [[nodiscard]] const UI::UIFontAtlas& uiFontAtlas() const noexcept { return fontAtlas_; }
     [[nodiscard]] UI::UIFontAtlas& uiFontAtlas() noexcept { return fontAtlas_; }
 
-    [[nodiscard]] bool isParticleScene() const noexcept { return particleScene_; }
-    [[nodiscard]] Entity particleEntity() const noexcept { return particleEntity_; }
+    // Preset metadata can outlive a registry replacement performed by the
+    // scene serializer. Resolve particle state from the current registry so
+    // loading a non-particle scene cannot address an old entity id.
+    [[nodiscard]] Entity particleEntity() const noexcept {
+        if (particleEntity_ != NullEntity &&
+            registry.has<ParticleEmitterComponent>(particleEntity_)) {
+            return particleEntity_;
+        }
+        Entity found = NullEntity;
+        registry.view<ParticleEmitterComponent>([&](const Entity entity,
+                                                     const ParticleEmitterComponent&) {
+            if (found == NullEntity) found = entity;
+        });
+        return found;
+    }
+    [[nodiscard]] bool isParticleScene() const noexcept {
+        return particleEntity() != NullEntity;
+    }
     [[nodiscard]] const Particles::ParticleEmitter& particleEmitter() const noexcept {
         return particleEmitter_;
     }

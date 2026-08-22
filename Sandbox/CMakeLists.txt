@@ -15,9 +15,14 @@ add_dependencies(GamEngine Shaders)
 # registrations populate ScriptRegistry in the editor process.
 target_sources(Editor PRIVATE ${GAME_SCRIPT_SOURCES})
 
-add_custom_command(TARGET GamEngine POST_BUILD
+add_custom_target(GamEngineAssets ALL
+        DEPENDS ${SHADER_OUTPUTS}
         COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_FILE_DIR:GamEngine>/shaders"
         COMMAND ${CMAKE_COMMAND} -E copy_directory "${SHADER_OUT_DIR}" "$<TARGET_FILE_DIR:GamEngine>/shaders"
+        COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_FILE_DIR:Editor>/shaders"
+        COMMAND ${CMAKE_COMMAND} -E copy_directory "${SHADER_OUT_DIR}" "$<TARGET_FILE_DIR:Editor>/shaders"
         COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_FILE_DIR:GamEngine>/Assets/Models"
         COMMAND ${CMAKE_COMMAND} -E copy_directory "${CMAKE_SOURCE_DIR}/Assets/Models" "$<TARGET_FILE_DIR:GamEngine>/Assets/Models"
         COMMENT "Copying scene assets and shaders beside GamEngine")
+add_dependencies(GamEngineAssets Shaders)
+add_dependencies(GamEngine GamEngineAssets)

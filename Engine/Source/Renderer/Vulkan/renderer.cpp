@@ -269,6 +269,19 @@ class Renderer::Backend {
             lastMeshRendererRevision = std::numeric_limits<std::uint64_t>::max();
             hiZValid = false;
 
+            // The previous scene may have owned a particle system. Its GPU
+            // resources must not survive a registry replacement into a scene
+            // without a ParticleEmitterComponent.
+            particleSystem.reset();
+            if (particleComputePipeline != VK_NULL_HANDLE) {
+                vkDestroyPipeline(device, particleComputePipeline, nullptr);
+                particleComputePipeline = VK_NULL_HANDLE;
+            }
+            if (particleComputePipelineLayout != VK_NULL_HANDLE) {
+                vkDestroyPipelineLayout(device, particleComputePipelineLayout, nullptr);
+                particleComputePipelineLayout = VK_NULL_HANDLE;
+            }
+
             createMaterialTextures(); createMeshBuffers(); createInstanceBuffer();
             createUniformBuffers(); createSceneUniformBuffers(); createShadowPass();
             createSceneDescriptorPass(); createForwardPass(); createParticleResources();
@@ -2088,6 +2101,7 @@ class Renderer::Backend {
                                              particlePipeline.handle(), particlePipeline.layout(),
                                               currentFrame, false);
             }
+            forwardPass.drawOutline(commandBuffer, indirectDraws[currentFrame]);
             ForwardPass::end(commandBuffer);
 
             // Render the scene into an off-screen image with the very same
@@ -2120,6 +2134,7 @@ class Renderer::Backend {
                                              particlePipeline.handle(), particlePipeline.layout(),
                                               currentFrame, true);
             }
+            forwardPass.drawOutline(commandBuffer, indirectDraws[currentFrame]);
             ForwardPass::end(commandBuffer);
 
             if (hizEnabled && !msaa.enabled()) {

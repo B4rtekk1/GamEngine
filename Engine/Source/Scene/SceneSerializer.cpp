@@ -4,6 +4,7 @@
 #include "Engine/ECS/Components/CameraComponent.h"
 #include "Engine/ECS/Components/ScriptComponent.h"
 #include "Engine/ECS/Components/ColorPickerComponent.h"
+#include "Engine/ECS/Components/ParticleEmitterComponent.h"
 #include "Engine/ECS/Registry.h"
 #include "Engine/Renderer/MeshRenderer.h"
 #include "Engine/Scene/Components/LightComponent.h"
@@ -153,6 +154,38 @@ PBRMaterial readMaterial(std::istream& input) {
     return material;
 }
 
+void writeParticleEmitter(std::ostream& output, const Particles::ParticleEmitter& emitter) {
+    writeVec3(output, emitter.position); output << ' ';
+    writeVec3(output, emitter.minVelocity); output << ' ';
+    writeVec3(output, emitter.maxVelocity); output << ' ';
+    writeColorRgba(output, emitter.color); output << ' ';
+    writeFloat(output, emitter.minLifeTime); output << ' ';
+    writeFloat(output, emitter.maxLifeTime); output << ' ';
+    writeFloat(output, emitter.minSize); output << ' ';
+    writeFloat(output, emitter.maxSize); output << ' ';
+    writeFloat(output, emitter.spawnRate);
+}
+
+Particles::ParticleEmitter readParticleEmitter(std::istream& input) {
+    Particles::ParticleEmitter emitter;
+    emitter.position = readVec3(input, "particle emitter position");
+    emitter.minVelocity = readVec3(input, "particle emitter minimum velocity");
+    emitter.maxVelocity = readVec3(input, "particle emitter maximum velocity");
+    emitter.color = readColorRgba(input, "particle emitter color");
+    emitter.minLifeTime = readFloat(input, "particle emitter minimum lifetime");
+    emitter.maxLifeTime = readFloat(input, "particle emitter maximum lifetime");
+    emitter.minSize = readFloat(input, "particle emitter minimum size");
+    emitter.maxSize = readFloat(input, "particle emitter maximum size");
+    emitter.spawnRate = readFloat(input, "particle emitter spawn rate");
+    emitter.accumulator = 0.0f;
+    if (emitter.minLifeTime < 0.0f || emitter.maxLifeTime < emitter.minLifeTime ||
+        emitter.minSize < 0.0f || emitter.maxSize < emitter.minSize ||
+        emitter.spawnRate < 0.0f) {
+        invalidScene("particle emitter settings are invalid");
+    }
+    return emitter;
+}
+
 std::vector<Entity> sortedEntities(const Registry& registry) {
     std::vector<Entity> entities;
     entities.reserve(registry.size());
@@ -167,17 +200,28 @@ std::vector<Entity> sortedEntities(const Registry& registry) {
 
 void SceneSerializer::save(const Registry& registry,
                            const std::filesystem::path& path) {
+    save(registry, path, 0);
+}
+
+void SceneSerializer::save(const Registry& registry,
+                           const std::filesystem::path& path,
+                           const std::uint32_t msaaSamples) {
     std::ofstream output(path);
     if (!output) {
         throw std::runtime_error("Could not open scene for writing: " + path.string());
     }
-    save(registry, output);
+    save(registry, output, msaaSamples);
     if (!output) {
         throw std::runtime_error("Could not finish writing scene: " + path.string());
     }
 }
 
 void SceneSerializer::save(const Registry& registry, std::ostream& output) {
+    save(registry, output, 0);
+}
+
+void SceneSerializer::save(const Registry& registry, std::ostream& output,
+                           const std::uint32_t msaaSamples) {
     std::ostringstream serialized;
     serialized.imbue(std::locale::classic());
     const std::vector<Entity> entities = sortedEntities(registry);
@@ -195,7 +239,11 @@ void SceneSerializer::save(const Registry& registry, std::ostream& output) {
         }
     }
 
+    if (msaaSamples != 0 && msaaSamples != 2 && msaaSamples != 4) {
+        throw std::invalid_argument("MSAA samples must be 0, 2 or 4");
+    }
     serialized << "GAMENGINE_SCENE " << FormatVersion << '\n';
+    serialized << "SETTINGS MSAA " << msaaSamples << '\n';
     serialized << "MESHES " << meshes.size() << '\n';
     for (std::size_t meshId = 0; meshId < meshes.size(); ++meshId) {
         const Mesh& mesh = *meshes[meshId];
@@ -290,6 +338,12 @@ void SceneSerializer::save(const Registry& registry, std::ostream& output) {
             writeColorRgba(serialized, registry.get<ColorPickerComponent>(entity).color);
             serialized << '\n';
         }
+        if (registry.has<ParticleEmitterComponent>(entity)) {
+            serialized << "PARTICLE_EMITTER ";
+            writeParticleEmitter(serialized,
+                                 registry.get<ParticleEmitterComponent>(entity).emitter);
+            serialized << '\n';
+        }
         if (registry.has<ScriptComponent>(entity)) {
             const auto& script = registry.get<ScriptComponent>(entity);
             serialized << "SCRIPT " << std::quoted(script.className) << ' '
@@ -307,14 +361,28 @@ void SceneSerializer::save(const Registry& registry, std::ostream& output) {
 
 void SceneSerializer::load(Registry& registry,
                            const std::filesystem::path& path) {
+    std::optional<std::uint32_t> ignoredMsaa;
+    load(registry, path, ignoredMsaa);
+}
+
+void SceneSerializer::load(Registry& registry,
+                           const std::filesystem::path& path,
+                           std::optional<std::uint32_t>& msaaSamples) {
     std::ifstream input(path);
     if (!input) {
         throw std::runtime_error("Could not open scene for reading: " + path.string());
     }
-    load(registry, input);
+    load(registry, input, msaaSamples);
 }
 
 void SceneSerializer::load(Registry& registry, std::istream& input) {
+    std::optional<std::uint32_t> ignoredMsaa;
+    load(registry, input, ignoredMsaa);
+}
+
+void SceneSerializer::load(Registry& registry, std::istream& input,
+                           std::optional<std::uint32_t>& msaaSamples) {
+    msaaSamples.reset();
     input.imbue(std::locale::classic());
     expect(input, "GAMENGINE_SCENE");
     const auto version = read<unsigned>(input, "format version");
@@ -322,7 +390,19 @@ void SceneSerializer::load(Registry& registry, std::istream& input) {
         invalidScene("unsupported format version " + std::to_string(version));
     }
 
-    expect(input, "MESHES");
+    std::string section;
+    if (!(input >> section)) invalidScene("expected 'MESHES'");
+    if (section == "SETTINGS") {
+        expect(input, "MSAA");
+        const auto samples = read<unsigned>(input, "MSAA sample count");
+        if (samples != 0 && samples != 2 && samples != 4) {
+            invalidScene("MSAA sample count must be 0, 2 or 4");
+        }
+        msaaSamples = samples;
+        expect(input, "MESHES");
+    } else if (section != "MESHES") {
+        invalidScene("expected 'MESHES'");
+    }
     const std::size_t meshCount = readCount(input, "mesh count", MaxMeshes);
     std::vector<std::shared_ptr<const Mesh>> meshes;
     meshes.reserve(meshCount);
@@ -403,6 +483,7 @@ void SceneSerializer::load(Registry& registry, std::istream& input) {
         bool hasCamera = false;
         bool hasScript = false;
         bool hasColorPicker = false;
+        bool hasParticleEmitter = false;
         bool hasIdentity = false;
         bool hasParent = false;
 
@@ -519,6 +600,13 @@ void SceneSerializer::load(Registry& registry, std::istream& input) {
                 hasColorPicker = true;
                 loaded.add<ColorPickerComponent>(entity, ColorPickerComponent{
                     .color = readColorRgba(input, "color picker color")});
+            } else if (component == "PARTICLE_EMITTER") {
+                if (hasParticleEmitter) {
+                    invalidScene("entity contains more than one ParticleEmitterComponent");
+                }
+                hasParticleEmitter = true;
+                loaded.add<ParticleEmitterComponent>(entity,
+                    ParticleEmitterComponent{.emitter = readParticleEmitter(input)});
             } else {
                 invalidScene("unknown component '" + component + "'");
             }
@@ -529,6 +617,33 @@ void SceneSerializer::load(Registry& registry, std::istream& input) {
         if (version == 3) {
             loaded.add<UUIDComponent>(entity, UUIDComponent{.value = createUUID()});
             loaded.add<NameComponent>(entity, NameComponent{.value = "Entity " + std::to_string(Engine::entityIndex(entity))});
+        }
+        // Scenes written before ParticleEmitterComponent was serialized may
+        // still contain the preset's "Particle System" entity. Reconstruct
+        // its emitter from the entity's existing transform and color picker.
+        // New scenes always take the PARTICLE_EMITTER branch above.
+        if (!hasParticleEmitter && loaded.has<NameComponent>(entity) &&
+            loaded.get<NameComponent>(entity).value == "Particle System") {
+            Particles::ParticleEmitter emitter;
+            // These are the original Particle Scene preset values. Older
+            // scene files did not serialize the emitter at all, so using the
+            // generic ParticleEmitter defaults would noticeably shrink and
+            // thin the restored effect.
+            emitter.minVelocity = {-0.8f, 5.5f, -0.8f};
+            emitter.maxVelocity = {0.8f, 9.0f, 0.8f};
+            emitter.minLifeTime = 1.2f;
+            emitter.maxLifeTime = 3.4f;
+            emitter.minSize = 0.06f;
+            emitter.maxSize = 0.16f;
+            emitter.spawnRate = 900.0f;
+            if (loaded.has<Transform>(entity)) {
+                emitter.position = loaded.get<Transform>(entity).position;
+            }
+            if (loaded.has<ColorPickerComponent>(entity)) {
+                emitter.color = loaded.get<ColorPickerComponent>(entity).color;
+            }
+            loaded.add<ParticleEmitterComponent>(entity,
+                ParticleEmitterComponent{.emitter = emitter});
         }
     }
 

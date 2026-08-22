@@ -104,10 +104,13 @@ find_program(GLSLC NAMES glslc)
 
 set(SHADER_OUT_DIR ${CMAKE_BINARY_DIR}/shaders)
 file(MAKE_DIRECTORY ${SHADER_OUT_DIR})
+set(SHADER_OUTPUTS)
 
 set(SHADER_SOURCES
         Assets/Shaders/Library/pbr.vert
         Assets/Shaders/Library/pbr.frag
+        Assets/Shaders/Library/outline.vert
+        Assets/Shaders/Library/outline.frag
         Assets/Shaders/shadow.vert
         Assets/Shaders/shadow.frag
         Assets/Shaders/skybox.vert
@@ -125,6 +128,7 @@ list(APPEND SHADER_SOURCES
         Assets/Shaders/UI/ui.frag)
 foreach(SHADER_SOURCE IN LISTS SHADER_SOURCES)
     get_filename_component(SHADER_NAME ${SHADER_SOURCE} NAME)
+    list(APPEND SHADER_OUTPUTS ${SHADER_OUT_DIR}/${SHADER_NAME}.spv)
     if(GLSLC)
         add_custom_command(OUTPUT ${SHADER_OUT_DIR}/${SHADER_NAME}.spv
                 COMMAND ${GLSLC} ${CMAKE_SOURCE_DIR}/${SHADER_SOURCE} -o ${SHADER_OUT_DIR}/${SHADER_NAME}.spv
@@ -138,7 +142,7 @@ foreach(SHADER_SOURCE IN LISTS SHADER_SOURCES)
     endif()
 endforeach()
 
-add_custom_target(Shaders DEPENDS ${SHADER_OUT_DIR}/pbr.vert.spv ${SHADER_OUT_DIR}/pbr.frag.spv ${SHADER_OUT_DIR}/shadow.vert.spv ${SHADER_OUT_DIR}/shadow.frag.spv ${SHADER_OUT_DIR}/tonemap.vert.spv ${SHADER_OUT_DIR}/tonemap.frag.spv ${SHADER_OUT_DIR}/hiz_copy.comp.spv ${SHADER_OUT_DIR}/hiz_reduce.comp.spv ${SHADER_OUT_DIR}/hiz_cull.comp.spv ${SHADER_OUT_DIR}/particle_update.comp.spv ${SHADER_OUT_DIR}/particle.vert.spv ${SHADER_OUT_DIR}/particle.frag.spv ${SHADER_OUT_DIR}/ui.vert.spv ${SHADER_OUT_DIR}/ui.frag.spv)
+add_custom_target(Shaders DEPENDS ${SHADER_OUTPUTS})
 add_subdirectory(Sandbox)
 # Play in the editor starts this executable.  Keeping it as a build dependency
 # means an Editor build always leaves a runnable game beside its assets.

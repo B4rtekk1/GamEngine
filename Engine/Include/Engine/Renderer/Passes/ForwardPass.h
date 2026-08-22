@@ -29,6 +29,9 @@ public:
     static void draw(VkCommandBuffer commandBuffer,
                      const Culling::IndexedIndirectDrawCount& indirectDraw);
 
+    void drawOutline(VkCommandBuffer commandBuffer,
+                     const Culling::IndexedIndirectDrawCount& indirectDraw) const;
+
     static void end(VkCommandBuffer commandBuffer);
 
     [[nodiscard]] VkRenderPass renderPass() const noexcept {
@@ -37,6 +40,7 @@ public:
 
 private:
     GraphicsPipeline pipeline_;
+    GraphicsPipeline outlinePipeline_;
 };
 
 } // namespace Engine
