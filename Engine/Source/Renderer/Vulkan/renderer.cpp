@@ -135,9 +135,9 @@ class Renderer::Backend {
             Time::init();
         }
 
-        void beginFrame() { Input::beginFrame(); }
+        static void beginFrame() { Input::beginFrame(); }
 
-        void beginEditorUiFrame() {
+        void beginEditorUiFrame() const {
             if (!editorUiActive) throw std::logic_error("Renderer was initialized without an ImGui context");
             ImGui_ImplVulkan_NewFrame();
             ImGui_ImplSDL3_NewFrame();
@@ -264,7 +264,7 @@ class Renderer::Backend {
         // particular, preserve the Vulkan instance/device, swapchain, ImGui
         // backend and Scene View images: adding an object must not look like a
         // complete scene reload to the editor.
-        void synchronizeSceneResources(Scene& updatedScene) {
+        void synchronizeSceneResources(const Scene& updatedScene) {
             if (&updatedScene != &scene) {
                 throw std::invalid_argument("Renderer cannot switch Scene instances while initialized");
             }
@@ -476,6 +476,22 @@ class Renderer::Backend {
                    sameVector(lhs.scale, rhs.scale);
         }
 
+        [[nodiscard]] static bool sameMaterial(const GPUMaterialData& lhs,
+                                               const GPUMaterialData& rhs) noexcept {
+            return lhs.baseColorMetallic.x == rhs.baseColorMetallic.x &&
+                   lhs.baseColorMetallic.y == rhs.baseColorMetallic.y &&
+                   lhs.baseColorMetallic.z == rhs.baseColorMetallic.z &&
+                   lhs.baseColorMetallic.w == rhs.baseColorMetallic.w &&
+                   lhs.roughnessAmbientOcclusion.x == rhs.roughnessAmbientOcclusion.x &&
+                   lhs.roughnessAmbientOcclusion.y == rhs.roughnessAmbientOcclusion.y &&
+                   lhs.roughnessAmbientOcclusion.z == rhs.roughnessAmbientOcclusion.z &&
+                   lhs.roughnessAmbientOcclusion.w == rhs.roughnessAmbientOcclusion.w &&
+                   lhs.textureIndices.x == rhs.textureIndices.x &&
+                   lhs.textureIndices.y == rhs.textureIndices.y &&
+                   lhs.textureIndices.z == rhs.textureIndices.z &&
+                   lhs.textureIndices.w == rhs.textureIndices.w;
+        }
+
         void markDirty(const std::size_t index,
                        uint8_t RenderableRecord::* dirtyFrames,
                        std::array<std::vector<std::size_t>, MAX_FRAMES_IN_FLIGHT>& dirtyIndices) {
@@ -490,7 +506,7 @@ class Renderer::Backend {
         }
 
 
-        void initWindow() {
+        void initWindow() const {
             if (!window) {
                 throw std::invalid_argument("Renderer requires an application-owned SDL window");
             }
@@ -601,9 +617,9 @@ class Renderer::Backend {
         }
 
         void createInstance() {
-            const bool useValidation = enableValidationLayers && checkValidationLayerSupport();
+            const bool useValidation = checkValidationLayerSupport();
 
-            if (enableValidationLayers && !useValidation) {
+            if (!useValidation) {
                 std::cerr << "Validation layers are incorrect\n";
             }
 
@@ -774,7 +790,7 @@ class Renderer::Backend {
                 pushConstants.offset = 0;
                 pushConstants.size = sizeof(Particles::ParticleSimulationData);
                 VkPipelineLayoutCreateInfo layout{VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
-                const VkDescriptorSetLayout descriptorSetLayout = particleSystem->descriptorSetLayout();
+                const auto descriptorSetLayout = particleSystem->descriptorSetLayout();
                 layout.setLayoutCount = 1;
                 layout.pSetLayouts = &descriptorSetLayout;
                 layout.pushConstantRangeCount = 1;
@@ -846,7 +862,7 @@ class Renderer::Backend {
             createCullingResources();
         }
 
-        void createSkyPass() {
+        void createSkyPass() const {
             std::vector<VkBuffer> buffers;
             buffers.reserve(uniformBuffers.size());
             for (const Buffer& buffer : uniformBuffers) {
@@ -870,7 +886,7 @@ class Renderer::Backend {
                                 vulkanDevice.allocator());
         }
 
-        void createTonemapPass() {
+        void createTonemapPass() const {
             tonemapPass.create(device, swapchain.format(), swapchain.extent(),
                                swapchain.imageViews(), hdrBuffer.imageView(),
                                hdrBuffer.sampler(), assetManager);
@@ -927,7 +943,7 @@ class Renderer::Backend {
             }
             editorUiFramebuffers.resize(swapchain.imageCount());
             for (std::size_t index = 0; index < editorUiFramebuffers.size(); ++index) {
-                const VkImageView view = swapchain.imageViews()[index];
+                const auto view = swapchain.imageViews()[index];
                 VkFramebufferCreateInfo framebuffer{VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO};
                 framebuffer.renderPass = editorUiRenderPass; framebuffer.attachmentCount = 1;
                 framebuffer.pAttachments = &view; framebuffer.width = swapchain.extent().width;
@@ -1014,7 +1030,7 @@ class Renderer::Backend {
             registry.view<MeshRenderer>([&](const Entity, const MeshRenderer& renderer) {
                 if (!renderer.hasMesh() || !uploaded.insert(renderer.mesh.get()).second) return;
                 const Mesh& mesh = *renderer.mesh;
-                const std::uint32_t offset = static_cast<std::uint32_t>(materialTextures.size() + 1);
+                const auto offset = static_cast<std::uint32_t>(materialTextures.size() + 1);
                 if (mesh.images.size() > MaxMaterialTextures - offset) {
                     throw std::runtime_error("GLB scene exceeds the material texture limit");
                 }
@@ -1295,9 +1311,9 @@ class Renderer::Backend {
         }
 
         template <typename T>
-        void uploadDirtyIndices(const Buffer& buffer, const std::vector<T>& data,
-                                uint8_t RenderableRecord::* dirtyFrames,
-                                const std::vector<std::size_t>& indices) const {
+        static void uploadDirtyIndices(const Buffer& buffer, const std::vector<T>& data,
+                                       uint8_t RenderableRecord::* dirtyFrames,
+                                       const std::vector<std::size_t>& indices) {
             std::size_t rangeStart = 0;
             while (rangeStart < indices.size()) {
                 std::size_t rangeEnd = rangeStart + 1;
@@ -1357,8 +1373,8 @@ class Renderer::Backend {
             const Registry& readRegistry = registry;
             for (std::size_t index = 0; index < renderables.size(); ++index) {
                 const Entity entity = renderables[index].entity;
-                const Transform& transform = readRegistry.get<Transform>(entity);
-                const MeshRenderer& renderer = readRegistry.get<MeshRenderer>(entity);
+                const auto& transform = readRegistry.get<Transform>(entity);
+                const auto& renderer = readRegistry.get<MeshRenderer>(entity);
                 RenderableRecord& record = renderables[index];
                 if (!optimizationFeatures.transformCaching ||
                     !record.hasCachedTransform || !sameTransform(record.cachedTransform, transform)) {
@@ -1394,7 +1410,7 @@ class Renderer::Backend {
                     };
                     GPUMaterialData& destination = materials[index * materialSlots + slot];
                     if (!optimizationFeatures.materialCaching ||
-                        std::memcmp(&destination, &material, sizeof(material)) != 0) {
+                        !sameMaterial(destination, material)) {
                         destination = material;
                         materialChanged = true;
                     }
@@ -1408,7 +1424,7 @@ class Renderer::Backend {
                 std::vector<bool> initialized(instanceBatches.size(), false);
                 for (std::size_t index = 0; index < renderables.size(); ++index) {
                     const RenderableRecord& record = renderables[index];
-                    const Transform& transform = readRegistry.get<Transform>(record.entity);
+                    const auto& transform = readRegistry.get<Transform>(record.entity);
                     const AABB worldBounds =
                         record.localBounds.transformed(transform.matrix().native());
                     AABB& bounds = batchBounds[record.batchIndex];
@@ -1504,7 +1520,7 @@ class Renderer::Backend {
             }
         }
 
-        VkPipeline createComputePipeline(const char* shaderPath, VkPipelineLayout layout) {
+        VkPipeline createComputePipeline(const char* shaderPath, VkPipelineLayout layout) const {
             const auto shader = vkutil::loadShaderModule(device, assetManager, shaderPath);
             VkPipelineShaderStageCreateInfo stage{VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO};
             stage.stage = VK_SHADER_STAGE_COMPUTE_BIT;
@@ -1834,7 +1850,7 @@ class Renderer::Backend {
             }
         }
 
-        Mat4 lightSpaceMatrix() const {
+        [[nodiscard]] Mat4 lightSpaceMatrix() const {
             const auto light = directionalLight();
             const float extent = sceneRadius;
             const Vec3 lightTarget = sceneCenter;
@@ -1886,8 +1902,8 @@ class Renderer::Backend {
                 throw std::runtime_error("Scene has no primary CameraComponent with Transform");
             }
 
-            const CameraComponent& component = readRegistry.get<CameraComponent>(activeCamera);
-            const Transform& transform = readRegistry.get<Transform>(activeCamera);
+            const auto& component = readRegistry.get<CameraComponent>(activeCamera);
+            const auto& transform = readRegistry.get<Transform>(activeCamera);
             if (!component.isPerspective() || !component.isValid()) {
                 throw std::runtime_error("Primary CameraComponent has unsupported settings");
             }
@@ -1912,7 +1928,7 @@ class Renderer::Backend {
             uniformBuffers[frame].update(&data, sizeof(data));
         }
 
-        void updateSceneViewportUniformBuffer(const uint32_t frame) {
+        void updateSceneViewportUniformBuffer(const uint32_t frame) const {
             const float aspect = static_cast<float>(sceneViewportTarget.extent().width) /
                                  static_cast<float>(sceneViewportTarget.extent().height);
             Camera sceneCamera{Degrees{60.0f}, aspect, 0.1f, 1000.0f};
@@ -1996,8 +2012,8 @@ class Renderer::Backend {
                     commandBuffer, hiZDepthPrepassFramebuffer, swapchain.extent(),
                     shadowPass.descriptorSet(currentFrame), vertexBuffer.handle(),
                     instanceBuffers[currentFrame].handle(), indexBuffer.handle());
-                hiZDepthPrepass.draw(commandBuffer, indirectDraws[currentFrame]);
-                hiZDepthPrepass.end(commandBuffer);
+                ForwardPass::draw(commandBuffer, indirectDraws[currentFrame]);
+                ForwardPass::end(commandBuffer);
 
                 VkImageMemoryBarrier2 depthReady{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2};
                 depthReady.srcStageMask = VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT;
@@ -2023,7 +2039,7 @@ class Renderer::Backend {
                 commandBuffer, hdrFramebuffer, swapchain.extent(),
                 shadowPass.descriptorSet(currentFrame), vertexBuffer.handle(),
                 instanceBuffers[currentFrame].handle(), indexBuffer.handle());
-            forwardPass.draw(commandBuffer, indirectDraws[currentFrame]);
+            ForwardPass::draw(commandBuffer, indirectDraws[currentFrame]);
             // Fill the background before drawing particles. Otherwise the
             // skybox can overwrite transparent particle fragments in the sky.
             skyPass.record(commandBuffer, currentFrame);
@@ -2039,7 +2055,7 @@ class Renderer::Backend {
                                              particlePipeline.handle(), particlePipeline.layout(),
                                               currentFrame, false);
             }
-            forwardPass.end(commandBuffer);
+            ForwardPass::end(commandBuffer);
 
             // Render the scene into an off-screen image with the very same
             // scene data and draw infrastructure as Game View. At this stage
@@ -2050,7 +2066,7 @@ class Renderer::Backend {
                 commandBuffer, sceneViewportFramebuffer, sceneViewportTarget.extent(),
                 sceneDescriptorPass.descriptorSet(currentFrame), vertexBuffer.handle(),
                 instanceBuffers[currentFrame].handle(), indexBuffer.handle());
-            forwardPass.draw(commandBuffer, indirectDraws[currentFrame]);
+            ForwardPass::draw(commandBuffer, indirectDraws[currentFrame]);
             sceneSkyPass.record(commandBuffer, currentFrame);
             if (particleSystem) {
                 Camera sceneCamera{Degrees{60.0f},
@@ -2071,7 +2087,7 @@ class Renderer::Backend {
                                              particlePipeline.handle(), particlePipeline.layout(),
                                               currentFrame, true);
             }
-            forwardPass.end(commandBuffer);
+            ForwardPass::end(commandBuffer);
 
             if (hizEnabled && !msaa.enabled()) {
                 VkImageMemoryBarrier2 depthReady{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2};
@@ -2302,8 +2318,8 @@ class Renderer::Backend {
                 transform.position += controlledCamera.forward() * (wheel * ZOOM_SPEED);
             }
 
-            constexpr float MOUSE_SENSITIVITY = 0.1f;
             if (Input::mouseDown(MouseButton::Right)) {
+                constexpr float MOUSE_SENSITIVITY = 0.1f;
                 if (!cameraMouseLookActive) {
                     SDLInput::setRelativeMouseMode(window, true);
                     cameraMouseLookActive = true;
@@ -2356,8 +2372,8 @@ class Renderer::Backend {
                     (mouseDelta.y() * panSensitivity);
             }
 
-            constexpr float moveSpeed = 10.0f;
             if (movement.length() > 0.0f) {
+                constexpr float moveSpeed = 10.0f;
                 editorSceneCameraPosition += movement.normalized() *
                     (moveSpeed * static_cast<float>(Time::deltaTime()));
             }
@@ -2366,8 +2382,8 @@ class Renderer::Backend {
             editorSceneCameraPosition += sceneCamera.forward() *
                 (Input::mouseWheel() * zoomSpeed);
 
-            constexpr float mouseSensitivity = 0.1f;
             if (Input::mouseDown(MouseButton::Right)) {
+                constexpr float mouseSensitivity = 0.1f;
                 const Vec2 mouseDelta = Input::mouseDelta();
                 editorSceneCameraYaw += mouseDelta.x() * mouseSensitivity;
                 editorSceneCameraPitch = std::clamp(
@@ -2571,18 +2587,18 @@ void Renderer::initialize(Scene& scene, SDL_Window* window) {
     backend_->initialize();
 }
 
-void Renderer::beginFrame() { backend_->beginFrame(); }
-void Renderer::beginEditorUiFrame() { backend_->beginEditorUiFrame(); }
-void Renderer::processEvent(const SDL_Event& event) { backend_->processEvent(event); }
+void Renderer::beginFrame() const { backend_->beginFrame(); }
+void Renderer::beginEditorUiFrame() const { backend_->beginEditorUiFrame(); }
+void Renderer::processEvent(const SDL_Event& event) const { backend_->processEvent(event); }
 
-void Renderer::setEditorSceneCameraInput(const bool active) {
+void Renderer::setEditorSceneCameraInput(const bool active) const {
     if (backend_) backend_->setEditorSceneCameraInput(active);
 }
-void Renderer::setEditorSelection(const Entity entity) {
+void Renderer::setEditorSelection(const Entity entity) const {
     if (backend_) backend_->setEditorSelection(entity);
 }
-void Renderer::renderFrame() { backend_->renderFrame(); }
-void Renderer::synchronizeScene(Scene& scene) {
+void Renderer::renderFrame() const { backend_->renderFrame(); }
+void Renderer::synchronizeScene(Scene& scene) const {
     if (backend_) backend_->synchronizeSceneResources(scene);
 }
 void Renderer::reloadScene(Scene& scene, SDL_Window* window) {
@@ -2595,7 +2611,7 @@ void Renderer::reloadScene(Scene& scene, SDL_Window* window) {
     }
     else initialize(scene, window);
 }
-void Renderer::reconfigureAntialiasing() {
+void Renderer::reconfigureAntialiasing() const {
     if (!backend_) return;
     backend_->reconfigureAntialiasing(antialiasingLevel_);
 }

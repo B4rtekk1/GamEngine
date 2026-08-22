@@ -73,20 +73,20 @@ public:
 
     /** Initializes graphics resources for an SDL window owned by the application. */
     void initialize(Scene& scene, SDL_Window* window);
-    void beginFrame();
+    void beginFrame() const;
     /** Starts the SDL3/Vulkan Dear ImGui frame owned by this renderer. */
-    void beginEditorUiFrame();
-    void processEvent(const SDL_Event& event);
+    void beginEditorUiFrame() const;
+    void processEvent(const SDL_Event& event) const;
     /** Enables mouse/keyboard navigation for the editor's Scene View. */
-    void setEditorSceneCameraInput(bool active);
-    void setEditorSelection(Entity entity);
-    void renderFrame();
+    void setEditorSceneCameraInput(bool active) const;
+    void setEditorSelection(Entity entity) const;
+    void renderFrame() const;
     /** Synchronizes changed ECS geometry without recreating the window, swapchain or editor UI. */
-    void synchronizeScene(Scene& scene);
+    void synchronizeScene(Scene& scene) const;
     /** Rebuilds renderer resources after editor scene geometry changes. */
     void reloadScene(Scene& scene, SDL_Window* window);
     /** Rebuilds only resources affected by the MSAA sample count. */
-    void reconfigureAntialiasing();
+    void reconfigureAntialiasing() const;
     [[nodiscard]] VkDescriptorSet gameViewportDescriptor() const noexcept;
     [[nodiscard]] VkDescriptorSet sceneViewportDescriptor() const noexcept;
     void shutdown() noexcept;
