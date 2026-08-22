@@ -3,6 +3,7 @@
 #include "Engine/ECS/GameObject.h"
 #include "Engine/ECS/Registry.h"
 #include "Engine/Renderer/Particles/ParticleSystem.h"
+#include "Engine/ECS/Components/ParticleEmitterComponent.h"
 #include "Engine/UI/Canvas.h"
 #include "Engine/UI/Vulkan/UIFontAtlas.h"
 #include "Engine/Scene/Components/IdentityComponents.h"
@@ -69,11 +70,14 @@ public:
     [[nodiscard]] UI::UIFontAtlas& uiFontAtlas() noexcept { return fontAtlas_; }
 
     [[nodiscard]] bool isParticleScene() const noexcept { return particleScene_; }
+    [[nodiscard]] Entity particleEntity() const noexcept { return particleEntity_; }
     [[nodiscard]] const Particles::ParticleEmitter& particleEmitter() const noexcept {
         return particleEmitter_;
     }
 
 protected:
+    void setParticleEntity(const Entity entity) noexcept { particleEntity_ = entity; }
+
     void setParticleEmitter(Particles::ParticleEmitter emitter) noexcept {
         particleEmitter_ = emitter;
         particleScene_ = true;
@@ -85,6 +89,7 @@ private:
     UI::Canvas canvas_{800, 600};
     UI::UIFontAtlas fontAtlas_{};
     Particles::ParticleEmitter particleEmitter_{};
+    Entity particleEntity_{NullEntity};
     bool particleScene_ = false;
 };
 

@@ -22,6 +22,7 @@ public:
 
     Entity plane{NullEntity};
     Entity camera{NullEntity};
+    Entity particleSystem{NullEntity};
     Entity tree{NullEntity};
     std::vector<Entity> editorGameObjects;
     std::vector<Entity> editorCubes;

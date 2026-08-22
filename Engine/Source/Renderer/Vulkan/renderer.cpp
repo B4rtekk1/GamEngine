@@ -30,6 +30,7 @@
 #include "Engine/ECS/Registry.h"
 #include "Engine/Scene/Scene.h"
 #include "Engine/ECS/Components/CameraComponent.h"
+#include "Engine/ECS/Components/ParticleEmitterComponent.h"
 #include "Engine/Scene/Components/LightComponent.h"
 #include "Engine/Core/Transform.h"
 #include "Engine/Core/Camera.h"
@@ -746,14 +747,19 @@ class Renderer::Backend {
         }
 
         void createParticleResources() {
-            if (!scene.isParticleScene()) {
+            if (!scene.isParticleScene() || scene.particleEntity() == NullEntity ||
+                !registry.has<ParticleEmitterComponent>(scene.particleEntity())) {
                 return;
             }
 
             if (!particleSystem) {
                 particleSystem = std::make_unique<Particles::ParticleSystem>(
                     device, vulkanDevice.physical(), vulkanDevice.graphicsQueue(), commandPool, 8192);
-                particleSystem->setEmitter(scene.particleEmitter());
+                auto emitter = registry.get<ParticleEmitterComponent>(scene.particleEntity()).emitter;
+                if (registry.has<Transform>(scene.particleEntity())) {
+                    emitter.position = registry.get<Transform>(scene.particleEntity()).position;
+                }
+                particleSystem->setEmitter(emitter);
             }
 
             GraphicsPipelineOptions options{};
@@ -2288,6 +2294,14 @@ class Renderer::Backend {
             updateSceneViewportUniformBuffer(currentFrame);
             updateRenderableBuffers();
             if (particleSystem) {
+                if (scene.particleEntity() != NullEntity &&
+                    registry.has<ParticleEmitterComponent>(scene.particleEntity())) {
+                    auto emitter = registry.get<ParticleEmitterComponent>(scene.particleEntity()).emitter;
+                    if (registry.has<Transform>(scene.particleEntity())) {
+                        emitter.position = registry.get<Transform>(scene.particleEntity()).position;
+                    }
+                    particleSystem->setEmitter(emitter);
+                }
                 particleSystem->update(static_cast<float>(Time::deltaTime()));
             }
             updateCullingUniformBuffer(currentFrame);

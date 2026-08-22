@@ -3,6 +3,7 @@
 #include "Engine/Assets/AssetManager.h"
 #include "Engine/Core/Transform.h"
 #include "Engine/ECS/Components/CameraComponent.h"
+#include "Engine/ECS/Components/ParticleEmitterComponent.h"
 #include "Engine/Renderer/Geometry/Cube.h"
 #include "Engine/Renderer/Geometry/Plane.h"
 #include "Engine/Renderer/MeshRenderer.h"
@@ -39,6 +40,7 @@ ScenePreset::ScenePreset(const SceneType type) {
     planeMesh_ = std::make_shared<Mesh>(Plane::createMesh());
     cubeMesh_ = std::make_shared<Mesh>(Cube::createMesh());
     buildFont(uiFontAtlas());
+    SceneBuilder builder{registry};
 
     if (type == SceneType::Particles) {
         setParticleEmitter(Particles::ParticleEmitter{
@@ -46,6 +48,12 @@ ScenePreset::ScenePreset(const SceneType type) {
             .maxVelocity = {0.8f, 9.0f, 0.8f}, .color = {1.0f, 0.05f, 0.02f, 1.0f},
             .minLifeTime = 1.2f, .maxLifeTime = 3.4f, .minSize = 0.06f,
             .maxSize = 0.16f, .spawnRate = 900.0f});
+        particleSystem = builder.createEntity("Particle System");
+        setParticleEntity(particleSystem);
+        registry.add<Transform>(particleSystem,
+                                Transform{.position = particleEmitter().position});
+        registry.add<ParticleEmitterComponent>(particleSystem,
+                                               ParticleEmitterComponent{particleEmitter()});
     }
 
     const bool treeScene = type == SceneType::Tree;
@@ -57,7 +65,6 @@ ScenePreset::ScenePreset(const SceneType type) {
         treeMesh_ = loaded.shared();
     }
 
-    SceneBuilder builder{registry};
     const float halfExtent = ((CubesPerAxis - 1) * CubeSpacing + 1.0f) * 0.5f;
     plane = builder.createMeshEntity(planeMesh_, Transform{.scale = treeScene ? Vec3{10, 1, 10} : Vec3{halfExtent * 2 + 4, 1, halfExtent * 2 + 4}},
         treeScene ? PBRMaterial{.baseColor = {0.24f, 0.16f, 0.08f}, .roughness = 0.9f} : PBRMaterial{}, false, 0, "Plane");
