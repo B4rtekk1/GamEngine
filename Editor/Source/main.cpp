@@ -11,6 +11,7 @@
 #include "Engine/Renderer/MeshRenderer.h"
 #include "Engine/Scene/SceneSerializer.h"
 #include "Engine/Scripting/ScriptSystem.h"
+#include "Elements/EditorButton.h"
 
 #include <SDL3/SDL.h>
 
@@ -166,7 +167,7 @@ bool drawViewport(VkDescriptorSet gameDescriptor, VkDescriptorSet sceneDescripto
     if (!playing) {
         ImGui::SameLine(ImGui::GetWindowWidth() - 180.0f);
     }
-    if (!playing && ImGui::Button(showGameView ? "Scene View" : "Game View")) {
+    if (!playing && EditorButton(showGameView ? "Scene View" : "Game View").draw()) {
         showGameView = !showGameView;
     }
     ImGui::Separator();
@@ -203,7 +204,7 @@ Engine::Entity drawHierarchy(Engine::ScenePreset& scene, const Engine::Entity se
     ImGui::TextUnformatted("SCENE HIERARCHY");
     ImGui::PopStyleColor();
     ImGui::SameLine(ImGui::GetWindowWidth() - 75.0f);
-    if (ImGui::SmallButton("+")) clicked = scene.createGameObject();
+    if (EditorButton("+").drawSmall()) clicked = scene.createGameObject();
     ImGui::SameLine(ImGui::GetWindowWidth() - 45.0f);
     ImGui::TextDisabled("%zu", scene.registry.size());
     static char filter[64] = {};
@@ -317,7 +318,7 @@ bool drawInspector(Engine::ScenePreset& scene, const Engine::Entity selected) {
         }
     }
     ImGui::SetNextItemWidth(-1.0f);
-    if (ImGui::Button("New Component", {-1.0f, 0.0f})) {
+    if (EditorButton("New Component", {-1.0f, 0.0f}).draw()) {
         ImGui::OpenPopup("Add Component");
     }
     if (ImGui::BeginPopup("Add Component")) {
@@ -329,13 +330,13 @@ bool drawInspector(Engine::ScenePreset& scene, const Engine::Entity selected) {
         if (hasScript) ImGui::TextDisabled("Script component already added");
         ImGui::EndPopup();
     }
-    if (ImGui::Button("Attach C++ Script", {-1.0f, 0.0f})) ImGui::OpenPopup("Attach C++ Script");
+    if (EditorButton("Attach C++ Script", {-1.0f, 0.0f}).draw()) ImGui::OpenPopup("Attach C++ Script");
     if (ImGui::BeginPopupModal("Attach C++ Script", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
         static char attachedClassName[128]{};
         ImGui::TextUnformatted("Enter the registered C++ script class name.");
         ImGui::InputTextWithHint("Class name", "CubeMovement", attachedClassName, sizeof(attachedClassName));
         const bool validName = attachedClassName[0] != '\0';
-        if (ImGui::Button("Attach", {100.0f, 0.0f}) && validName) {
+        if (EditorButton("Attach", {100.0f, 0.0f}).draw() && validName) {
             if (!scene.registry.has<Engine::ScriptComponent>(selected)) {
                 scene.registry.add<Engine::ScriptComponent>(selected);
             }
@@ -348,24 +349,24 @@ bool drawInspector(Engine::ScenePreset& scene, const Engine::Entity selected) {
             ImGui::CloseCurrentPopup();
         }
         ImGui::SameLine();
-        if (ImGui::Button("Cancel", {100.0f, 0.0f})) {
+        if (EditorButton("Cancel", {100.0f, 0.0f}).draw()) {
             attachedClassName[0] = '\0';
             ImGui::CloseCurrentPopup();
         }
         ImGui::EndPopup();
     }
-    if (ImGui::Button("Create C++ Script", {-1.0f, 0.0f})) ImGui::OpenPopup("Create C++ Script");
+    if (EditorButton("Create C++ Script", {-1.0f, 0.0f}).draw()) ImGui::OpenPopup("Create C++ Script");
     if (ImGui::BeginPopupModal("Create C++ Script", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
         static char name[128]{}; static std::string error;
         ImGui::TextUnformatted("Creates Sandbox/Source/Scripts/<Name>.h and .cpp");
         ImGui::InputTextWithHint("Class name", "PlayerController", name, sizeof(name));
         if (!error.empty()) ImGui::TextColored({1, .3f, .3f, 1}, "%s", error.c_str());
-        if (ImGui::Button("Create") && createCppScript(name, error)) {
+        if (EditorButton("Create").draw() && createCppScript(name, error)) {
             if (!scene.registry.has<Engine::ScriptComponent>(selected)) scene.registry.add<Engine::ScriptComponent>(selected);
             scene.registry.modify<Engine::ScriptComponent>(selected, [&](auto& script) { script.className = name; script.reset(); });
             name[0] = '\0'; error.clear(); ImGui::CloseCurrentPopup();
         }
-        ImGui::SameLine(); if (ImGui::Button("Cancel")) { name[0] = '\0'; error.clear(); ImGui::CloseCurrentPopup(); }
+        ImGui::SameLine(); if (EditorButton("Cancel").draw()) { name[0] = '\0'; error.clear(); ImGui::CloseCurrentPopup(); }
         ImGui::EndPopup();
     }
     const bool consumesMouseWheel = ImGui::IsWindowHovered(
@@ -475,7 +476,7 @@ Engine::Entity drawEditorMenuBar(Engine::ScenePreset& scene, Engine::Renderer& r
     // Keep the most common action visible even when the File menu is closed.
     ImGui::SameLine();
     ImGui::PushStyleColor(ImGuiCol_Button, {0.08f, 0.42f, 0.29f, 1.0f});
-    if (ImGui::Button(playing ? "  Stop  " : "  Play  ")) {
+    if (EditorButton(playing ? "  Stop  " : "  Play  ").draw()) {
         playToggleRequested = true;
     }
     ImGui::PopStyleColor();
@@ -485,7 +486,7 @@ Engine::Entity drawEditorMenuBar(Engine::ScenePreset& scene, Engine::Renderer& r
     }
     ImGui::SameLine();
     ImGui::BeginDisabled(!playing);
-    if (ImGui::Button(paused ? "  Resume  " : "  Pause  ")) {
+    if (EditorButton(paused ? "  Resume  " : "  Pause  ").draw()) {
         pauseToggleRequested = true;
     }
     ImGui::EndDisabled();
@@ -588,7 +589,7 @@ Engine::Entity drawEditorMenuBar(Engine::ScenePreset& scene, Engine::Renderer& r
 
         ImGui::Separator();
         ImGui::TextDisabled("Changes are applied after reloading the scene.");
-        if (ImGui::Button("Close")) ImGui::CloseCurrentPopup();
+        if (EditorButton("Close").draw()) ImGui::CloseCurrentPopup();
         ImGui::EndPopup();
     }
 

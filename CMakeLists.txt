@@ -93,6 +93,7 @@ target_include_directories(Engine
 
 add_executable(Editor
         Editor/Source/main.cpp)
+target_include_directories(Editor PRIVATE Editor/Include)
 target_link_libraries(Editor PRIVATE DearImGui Engine SDL3::SDL3 Vulkan::Vulkan)
 target_compile_definitions(Editor PRIVATE GAMEENGINE_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
 
