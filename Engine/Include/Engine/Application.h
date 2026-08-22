@@ -13,6 +13,7 @@ struct ApplicationConfig final {
     std::string title = "GamEngine Application";
     std::int32_t width = 1280;
     std::int32_t height = 720;
+    bool closeOnEscape = true;
 };
 
 /** High-level application entry point. Owns the window and the render loop. */
@@ -31,6 +32,10 @@ public:
     void setUpdateCallback(std::function<void(Scene&, float)> callback) {
         updateCallback_ = std::move(callback);
     }
+
+    /** Requests that the main loop exits after the current frame. */
+    void stop() noexcept;
+    [[nodiscard]] bool isRunning() const noexcept;
 
     /** Starts the main loop and returns after the window is closed. */
     void run();

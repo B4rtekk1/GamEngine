@@ -6,9 +6,11 @@
 #include "Engine/Renderer/MeshRenderer.h"
 #include "Engine/Renderer/Materials/PBRMaterial.h"
 #include "Engine/Scene/Components/LightComponent.h"
+#include "Engine/Scene/Components/IdentityComponents.h"
 
 #include <cstdint>
 #include <memory>
+#include <string>
 #include <utility>
 
 namespace Engine {
@@ -24,8 +26,11 @@ public:
     explicit SceneBuilder(Registry& registry) noexcept
         : registry_(registry) {}
 
-    [[nodiscard]] Entity createEntity() {
-        return registry_.create();
+    [[nodiscard]] Entity createEntity(std::string name = "GameObject") {
+        const Entity entity = registry_.create();
+        registry_.add<NameComponent>(entity, NameComponent{.value = std::move(name)});
+        registry_.add<UUIDComponent>(entity, UUIDComponent{.value = createUUID()});
+        return entity;
     }
 
     [[nodiscard]] Entity createMeshEntity(
@@ -33,8 +38,9 @@ public:
         Transform transform = {},
         PBRMaterial material = {},
         bool castShadow = true,
-        std::uint32_t cullingBatch = 0) {
-        const Entity entity = createEntity();
+        std::uint32_t cullingBatch = 0,
+        std::string name = "GameObject") {
+        const Entity entity = createEntity(std::move(name));
         registry_.add<Transform>(entity, std::move(transform));
         registry_.add<MeshRenderer>(entity, MeshRenderer{
             .mesh = std::move(mesh),
@@ -47,8 +53,9 @@ public:
 
     [[nodiscard]] Entity createCamera(
         Transform transform,
-        CameraComponent camera = {}) {
-        const Entity entity = createEntity();
+        CameraComponent camera = {},
+        std::string name = "Camera") {
+        const Entity entity = createEntity(std::move(name));
         registry_.add<Transform>(entity, std::move(transform));
         registry_.add<CameraComponent>(entity, std::move(camera));
         return entity;
@@ -56,8 +63,9 @@ public:
 
     [[nodiscard]] Entity createLight(
         Transform transform,
-        LightComponent light = {}) {
-        const Entity entity = createEntity();
+        LightComponent light = {},
+        std::string name = "Light") {
+        const Entity entity = createEntity(std::move(name));
         registry_.add<Transform>(entity, std::move(transform));
         registry_.add<LightComponent>(entity, std::move(light));
         return entity;

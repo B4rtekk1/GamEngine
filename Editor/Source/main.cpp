@@ -26,6 +26,8 @@
 #include <sstream>
 #include <stdexcept>
 #include <thread>
+#include <unordered_map>
+#include <unordered_set>
 
 namespace {
 
@@ -77,6 +79,9 @@ void configureEditorStyle() {
 }
 
 const char* entityName(const Engine::ScenePreset& scene, const Engine::Entity entity) {
+    if (scene.registry.has<Engine::NameComponent>(entity)) {
+        return scene.registry.get<Engine::NameComponent>(entity).value.c_str();
+    }
     // A mesh can also be driven by a script. Keep the controller identity
     // visible in the hierarchy and inspector instead of hiding it behind the
     // generic GameObject label.
@@ -210,20 +215,55 @@ Engine::Entity drawHierarchy(Engine::ScenePreset& scene, const Engine::Entity se
             }
         };
 
-        // The registry is the source of truth. ScenePreset's convenience
-        // lists describe only its initial sample content and become stale
-        // after loading a serialized scene.
+        // Parent links use persistent UUIDs, rather than recyclable ECS ids.
+        // This makes the hierarchy survive save/load and entity reallocation.
+        std::unordered_map<Engine::UUID, Engine::Entity> byUuid;
         std::vector<Engine::Entity> entities;
         entities.reserve(scene.registry.size());
-        scene.registry.view<>([&](const Engine::Entity entity) { entities.push_back(entity); });
+        scene.registry.view<>([&](const Engine::Entity entity) {
+            entities.push_back(entity);
+            if (scene.registry.has<Engine::UUIDComponent>(entity)) {
+                byUuid.emplace(scene.registry.get<Engine::UUIDComponent>(entity).value, entity);
+            }
+        });
         std::ranges::sort(entities);
+
+        std::unordered_map<Engine::Entity, std::vector<Engine::Entity>> children;
+        std::vector<Engine::Entity> roots;
         for (const Engine::Entity entity : entities) {
-            const char* name = scene.registry.has<Engine::CameraComponent>(entity)
-                ? "Camera"
-                : scene.registry.has<Engine::ScriptComponent>(entity) ? "Controller"
-                : scene.registry.has<Engine::MeshRenderer>(entity) ? "GameObject" : "Entity";
-            entityLabel(name, entity);
+            if (scene.registry.has<Engine::ParentComponent>(entity)) {
+                const Engine::UUID parent = scene.registry.get<Engine::ParentComponent>(entity).parent;
+                if (const auto found = byUuid.find(parent); found != byUuid.end()) {
+                    children[found->second].push_back(entity);
+                    continue;
+                }
+            }
+            roots.push_back(entity);
         }
+
+        std::unordered_set<Engine::Entity> visited;
+        const auto drawNode = [&](auto&& self, const Engine::Entity entity) -> void {
+            if (!visited.insert(entity).second) return;
+            const char* name = entityName(scene, entity);
+            if (filter[0] != '\0' && std::strstr(name, filter) == nullptr) return;
+            const auto childIt = children.find(entity);
+            const bool hasChildren = childIt != children.end() && !childIt->second.empty();
+            char label[128];
+            std::snprintf(label, sizeof(label), "%s##%u", name, Engine::entityIndex(entity));
+            if (!hasChildren) {
+                if (ImGui::Selectable(label, selected == entity)) clicked = entity;
+                return;
+            }
+            const ImGuiTreeNodeFlags flags = ImGuiTreeNodeFlags_SpanAvailWidth |
+                (selected == entity ? ImGuiTreeNodeFlags_Selected : 0);
+            const bool open = ImGui::TreeNodeEx(label, flags);
+            if (ImGui::IsItemClicked()) clicked = entity;
+            if (open) {
+                for (const Engine::Entity child : childIt->second) self(self, child);
+                ImGui::TreePop();
+            }
+        };
+        for (const Engine::Entity entity : roots) drawNode(drawNode, entity);
         ImGui::TreePop();
     }
 
@@ -250,6 +290,19 @@ bool drawInspector(Engine::ScenePreset& scene, const Engine::Entity selected) {
     ImGui::TextColored({0.92f, 0.95f, 1.0f, 1.0f}, "%s", entityName(scene, selected));
     ImGui::SameLine();
     ImGui::TextDisabled("Entity %u", Engine::entityIndex(selected));
+    if (scene.registry.valid(selected) && scene.registry.has<Engine::NameComponent>(selected)) {
+        const Engine::Registry& readRegistry = scene.registry;
+        const auto& name = readRegistry.get<Engine::NameComponent>(selected).value;
+        char editableName[260]{};
+        std::snprintf(editableName, sizeof(editableName), "%s", name.c_str());
+        ImGui::SetNextItemWidth(-1.0f);
+        if (ImGui::InputTextWithHint("##object-name", "Object name", editableName, sizeof(editableName)) &&
+            editableName[0] != '\0') {
+            scene.registry.modify<Engine::NameComponent>(selected, [&](auto& value) {
+                value.value = editableName;
+            });
+        }
+    }
     ImGui::Spacing();
     if (ImGui::CollapsingHeader("Transform", ImGuiTreeNodeFlags_DefaultOpen) &&
         scene.registry.valid(selected) && scene.registry.has<Engine::Transform>(selected)) {

@@ -2,6 +2,7 @@
 
 #include "Engine/Core/Time.h"
 #include "Engine/Renderer/Vulkan/renderer.h"
+#include "Engine/Scripting/ScriptSystem.h"
 
 #include <SDL3/SDL.h>
 
@@ -14,6 +15,8 @@ public:
     Renderer renderer;
     SDL_Window* window = nullptr;
     bool initialized = false;
+    bool running = false;
+    ScriptSystem scripts{ScriptRegistry::instance()};
 };
 
 Application::Application(ApplicationConfig config)
@@ -23,6 +26,14 @@ Application::~Application() {
     if (impl_->initialized) impl_->renderer.shutdown();
     if (impl_->window != nullptr) SDL_DestroyWindow(impl_->window);
     if (impl_->initialized) SDL_Quit();
+}
+
+void Application::stop() noexcept {
+    impl_->running = false;
+}
+
+bool Application::isRunning() const noexcept {
+    return impl_->running;
 }
 
 void Application::run() {
@@ -38,23 +49,26 @@ void Application::run() {
     if (impl_->window == nullptr) throw std::runtime_error(SDL_GetError());
 
     impl_->renderer.initialize(scene_, impl_->window);
-    bool running = true;
-    while (running) {
+    impl_->running = true;
+    while (impl_->running) {
         impl_->renderer.beginFrame();
         SDL_Event event;
         while (SDL_PollEvent(&event)) {
             impl_->renderer.processEvent(event);
             if (event.type == SDL_EVENT_QUIT ||
-                (event.type == SDL_EVENT_KEY_DOWN && event.key.key == SDLK_ESCAPE)) {
-                running = false;
+                (config_.closeOnEscape && event.type == SDL_EVENT_KEY_DOWN &&
+                 event.key.key == SDLK_ESCAPE)) {
+                impl_->running = false;
             }
         }
-        if (running) {
+        if (impl_->running) {
             if (updateCallback_) updateCallback_(scene_, static_cast<float>(Time::deltaTime()));
+            impl_->scripts.update(scene_.registry, static_cast<float>(Time::deltaTime()));
             impl_->renderer.renderFrame();
         }
     }
     impl_->renderer.shutdown();
+    impl_->initialized = false;
 }
 
 } // namespace Engine

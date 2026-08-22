@@ -4,6 +4,7 @@
 #include <Engine/Renderer/Geometry/Cube.h>
 #include <Engine/Renderer/MeshRenderer.h>
 #include <Engine/Scene/Components/LightComponent.h>
+#include <Engine/Scene/Components/IdentityComponents.h>
 #include <Engine/Scene/SceneSerializer.h>
 
 #include <memory>
@@ -42,6 +43,8 @@ int main() {
                                                .rgbaPixels = {10, 20, 30, 40}});
 
     const Entity first = source.create();
+    source.add<NameComponent>(first, NameComponent{.value = "Root"});
+    source.add<UUIDComponent>(first, UUIDComponent{.value = 100});
     source.add<Transform>(first, Transform{
         .position = {1.25f, -2.5f, 3.75f},
         .rotation = {10.0f, 20.0f, 30.0f},
@@ -67,12 +70,15 @@ int main() {
     source.add<ScriptComponent>(first, ScriptComponent{"PlayerController", false});
 
     const Entity second = source.create();
+    source.add<NameComponent>(second, NameComponent{.value = "Child"});
+    source.add<UUIDComponent>(second, UUIDComponent{.value = 101});
+    source.add<ParentComponent>(second, ParentComponent{.parent = 100});
     source.add<MeshRenderer>(second, MeshRenderer{.mesh = sharedCube});
     static_cast<void>(source.create()); // Entities without components are preserved.
 
     std::stringstream serialized;
     SceneSerializer::save(source, serialized);
-    if (serialized.str().find("GAMENGINE_SCENE 3") == std::string::npos ||
+    if (serialized.str().find("GAMENGINE_SCENE 4") == std::string::npos ||
         serialized.str().find("MESHES 1") == std::string::npos ||
         serialized.str().find("ENTITIES 3") == std::string::npos) {
         return 1;
@@ -89,6 +95,15 @@ int main() {
         loaded.has<Transform>(2) || !loaded.has<MeshRenderer>(2) ||
         loaded.has<Transform>(3) || loaded.has<MeshRenderer>(3)) {
         return 2;
+    }
+    if (!loaded.has<NameComponent>(1) || !loaded.has<UUIDComponent>(1) ||
+        loaded.get<NameComponent>(1).value != "Root" ||
+        loaded.get<UUIDComponent>(1).value != 100 ||
+        !loaded.has<ParentComponent>(2) ||
+        loaded.get<NameComponent>(2).value != "Child" ||
+        loaded.get<UUIDComponent>(2).value != 101 ||
+        loaded.get<ParentComponent>(2).parent != 100) {
+        return 10;
     }
 
     const Transform& transform = loaded.get<Transform>(1);

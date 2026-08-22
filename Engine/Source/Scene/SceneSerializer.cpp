@@ -6,6 +6,7 @@
 #include "Engine/ECS/Registry.h"
 #include "Engine/Renderer/MeshRenderer.h"
 #include "Engine/Scene/Components/LightComponent.h"
+#include "Engine/Scene/Components/IdentityComponents.h"
 
 #include <algorithm>
 #include <fstream>
@@ -17,6 +18,7 @@
 #include <stdexcept>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 namespace Engine {
@@ -215,6 +217,15 @@ void SceneSerializer::save(const Registry& registry, std::ostream& output) {
     serialized << "ENTITIES " << entities.size() << '\n';
     for (const Entity entity : entities) {
         serialized << "ENTITY\n";
+        const UUID uuid = registry.has<UUIDComponent>(entity)
+            ? registry.get<UUIDComponent>(entity).value : entity;
+        const std::string name = registry.has<NameComponent>(entity)
+            ? registry.get<NameComponent>(entity).value
+            : "Entity " + std::to_string(entityIndex(entity));
+        serialized << "IDENTITY " << uuid << ' ' << std::quoted(name) << '\n';
+        if (registry.has<ParentComponent>(entity)) {
+            serialized << "PARENT " << registry.get<ParentComponent>(entity).parent << '\n';
+        }
         if (registry.has<Transform>(entity)) {
             const auto& transform = registry.get<Transform>(entity);
             serialized << "TRANSFORM ";
@@ -278,7 +289,7 @@ void SceneSerializer::load(Registry& registry, std::istream& input) {
     input.imbue(std::locale::classic());
     expect(input, "GAMENGINE_SCENE");
     const auto version = read<unsigned>(input, "format version");
-    if (version != FormatVersion) {
+    if (version != 3 && version != FormatVersion) {
         invalidScene("unsupported format version " + std::to_string(version));
     }
 
@@ -362,13 +373,38 @@ void SceneSerializer::load(Registry& registry, std::istream& input) {
         bool hasLight = false;
         bool hasCamera = false;
         bool hasScript = false;
+        bool hasIdentity = false;
+        bool hasParent = false;
 
         while (true) {
             const auto component = read<std::string>(input, "component name");
             if (component == "END_ENTITY") {
                 break;
             }
-            if (component == "TRANSFORM") {
+            if (component == "IDENTITY") {
+                if (version < 4 || hasIdentity) {
+                    invalidScene("entity contains an invalid IDENTITY component");
+                }
+                UUIDComponent uuid;
+                uuid.value = read<UUID>(input, "object UUID");
+                if (uuid.value == NullUUID) invalidScene("object UUID cannot be zero");
+                NameComponent name;
+                if (!(input >> std::quoted(name.value)) || name.value.empty()) {
+                    invalidScene("could not read a non-empty object name");
+                }
+                loaded.add<UUIDComponent>(entity, uuid);
+                loaded.add<NameComponent>(entity, std::move(name));
+                reserveUUID(uuid.value);
+                hasIdentity = true;
+            } else if (component == "PARENT") {
+                if (version < 4 || hasParent) {
+                    invalidScene("entity contains an invalid PARENT component");
+                }
+                const UUID parent = read<UUID>(input, "parent UUID");
+                if (parent == NullUUID) invalidScene("parent UUID cannot be zero");
+                loaded.add<ParentComponent>(entity, ParentComponent{.parent = parent});
+                hasParent = true;
+            } else if (component == "TRANSFORM") {
                 if (hasTransform) {
                     invalidScene("entity contains more than one Transform");
                 }
@@ -450,12 +486,45 @@ void SceneSerializer::load(Registry& registry, std::istream& input) {
                 invalidScene("unknown component '" + component + "'");
             }
         }
+        if (version >= 4 && !hasIdentity) {
+            invalidScene("entity is missing IDENTITY");
+        }
+        if (version == 3) {
+            loaded.add<UUIDComponent>(entity, UUIDComponent{.value = createUUID()});
+            loaded.add<NameComponent>(entity, NameComponent{.value = "Entity " + std::to_string(Engine::entityIndex(entity))});
+        }
     }
 
     expect(input, "END_SCENE");
     std::string trailing;
     if (input >> trailing) {
         invalidScene("unexpected data after END_SCENE");
+    }
+
+    std::unordered_map<UUID, Entity> entitiesByUuid;
+    std::unordered_map<UUID, UUID> parentsByUuid;
+    loaded.view<UUIDComponent>([&](const Entity entity, const UUIDComponent& uuid) {
+        if (!entitiesByUuid.emplace(uuid.value, entity).second) {
+            invalidScene("object UUID is duplicated");
+        }
+        if (loaded.has<ParentComponent>(entity)) {
+            const UUID parent = loaded.get<ParentComponent>(entity).parent;
+            if (parent == uuid.value) invalidScene("object cannot be its own parent");
+            parentsByUuid.emplace(uuid.value, parent);
+        }
+    });
+    for (const auto& [child, parent] : parentsByUuid) {
+        if (!entitiesByUuid.contains(parent)) {
+            invalidScene("parent UUID does not refer to an object in this scene");
+        }
+        std::unordered_set<UUID> visited;
+        UUID current = child;
+        auto parentIt = parentsByUuid.find(current);
+        while (parentIt != parentsByUuid.end()) {
+            current = parentIt->second;
+            if (!visited.insert(current).second) invalidScene("parent hierarchy contains a cycle");
+            parentIt = parentsByUuid.find(current);
+        }
     }
 
     registry = std::move(loaded);

@@ -5,6 +5,7 @@
 #include "Engine/Renderer/Particles/ParticleSystem.h"
 #include "Engine/UI/Canvas.h"
 #include "Engine/UI/Vulkan/UIFontAtlas.h"
+#include "Engine/Scene/Components/IdentityComponents.h"
 
 #include <memory>
 #include <stdexcept>
@@ -30,9 +31,16 @@ public:
         auto object = std::make_unique<GameObject>(registry, name);
         object->spawn();
         GameObject& result = *object;
+        registry.add<NameComponent>(result.entity(), NameComponent{.value = name});
+        registry.add<UUIDComponent>(result.entity(), UUIDComponent{.value = createUUID()});
         names_[result.name()] = result.objectId();
         objects_.push_back(std::move(object));
         return result;
+    }
+
+    /** Preferred spelling for application code. */
+    [[nodiscard]] GameObject& createGameObject(std::string name) {
+        return create(std::move(name));
     }
 
     /** Finds a named object, or returns nullptr when it does not exist. */
