@@ -12,6 +12,7 @@
 #include "Engine/Scene/SceneSerializer.h"
 #include "Engine/Scripting/ScriptSystem.h"
 #include "Elements/EditorButton.h"
+#include "Elements/TransformFields.h"
 
 #include <SDL3/SDL.h>
 
@@ -117,20 +118,6 @@ bool setPlayMode(const bool play, Engine::ScenePreset& scene, std::string& snaps
         error = exception.what();
         return false;
     }
-}
-
-bool dragFloat3WithWheel(const char* label, float values[3], const float speed,
-                         const char* format) {
-    bool changed = ImGui::DragFloat3(label, values, speed, 0.0f, 0.0f, format);
-    if (!ImGui::IsItemHovered() || ImGui::GetIO().MouseWheel == 0.0f) return changed;
-
-    const ImVec2 min = ImGui::GetItemRectMin();
-    const ImVec2 max = ImGui::GetItemRectMax();
-    const float fieldWidth = (max.x - min.x) / 3.0f;
-    const int field = std::clamp(
-        static_cast<int>((ImGui::GetIO().MousePos.x - min.x) / fieldWidth), 0, 2);
-    values[field] += ImGui::GetIO().MouseWheel * speed;
-    return true;
 }
 
 bool createCppScript(const std::string_view name, std::string& error) {
@@ -266,35 +253,7 @@ bool drawInspector(Engine::ScenePreset& scene, const Engine::Entity selected) {
     ImGui::Spacing();
     if (ImGui::CollapsingHeader("Transform", ImGuiTreeNodeFlags_DefaultOpen) &&
         scene.registry.valid(selected) && scene.registry.has<Engine::Transform>(selected)) {
-        const Engine::Registry& readRegistry = scene.registry;
-        const Engine::Transform& transform = readRegistry.get<Engine::Transform>(selected);
-
-        float position[3] = {transform.position.x(), transform.position.y(), transform.position.z()};
-        ImGui::TextDisabled("Position (X, Y, Z)");
-        ImGui::SetNextItemWidth(-1.0f);
-        if (dragFloat3WithWheel("##position", position, 0.05f, "%.2f")) {
-            scene.registry.modify<Engine::Transform>(selected, [&](auto& value) {
-                value.position = Engine::Vec3{position[0], position[1], position[2]};
-            });
-        }
-
-        float rotation[3] = {transform.rotation.x(), transform.rotation.y(), transform.rotation.z()};
-        ImGui::TextDisabled("Rotation (X, Y, Z)");
-        ImGui::SetNextItemWidth(-1.0f);
-        if (dragFloat3WithWheel("##rotation", rotation, 0.5f, "%.1f")) {
-            scene.registry.modify<Engine::Transform>(selected, [&](auto& value) {
-                value.rotation = Engine::Vec3{rotation[0], rotation[1], rotation[2]};
-            });
-        }
-
-        float scale[3] = {transform.scale.x(), transform.scale.y(), transform.scale.z()};
-        ImGui::TextDisabled("Scale (X, Y, Z)");
-        ImGui::SetNextItemWidth(-1.0f);
-        if (dragFloat3WithWheel("##scale", scale, 0.01f, "%.2f")) {
-            scene.registry.modify<Engine::Transform>(selected, [&](auto& value) {
-                value.scale = Engine::Vec3{scale[0], scale[1], scale[2]};
-            });
-        }
+        TransformFields{scene.registry, selected}.draw();
     }
     if (scene.registry.valid(selected) && scene.registry.has<Engine::ScriptComponent>(selected) &&
         ImGui::CollapsingHeader("Script", ImGuiTreeNodeFlags_DefaultOpen)) {
