@@ -1,5 +1,4 @@
 #include <Engine/Engine.h>
-#include "Engine/Scene/SceneSerializer.h"
 
 #include <cstdlib>
 #include <exception>
@@ -21,7 +20,7 @@ int main(int argc, char** argv) {
             }
         }
         if (std::filesystem::is_regular_file(scenePath)) {
-            Engine::SceneSerializer::load(app.scene().registry, scenePath);
+            app.scene().load(scenePath);
         } else if (argc > 1) {
             throw std::runtime_error("Scene file does not exist: " + scenePath.string());
         }

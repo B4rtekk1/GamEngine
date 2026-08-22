@@ -7,6 +7,7 @@
 #include "Engine/ECS/Components/ParticleEmitterComponent.h"
 #include "Engine/ECS/Registry.h"
 #include "Engine/Renderer/MeshRenderer.h"
+#include "Engine/Scene/Scene.h"
 #include "Engine/Scene/Components/LightComponent.h"
 #include "Engine/Scene/Components/IdentityComponents.h"
 
@@ -197,6 +198,22 @@ std::vector<Entity> sortedEntities(const Registry& registry) {
 }
 
 } // namespace
+
+void SceneSerializer::save(const Scene& scene, const std::filesystem::path& path) {
+    save(scene.registry, path);
+}
+
+void SceneSerializer::save(const Scene& scene, std::ostream& output) {
+    save(scene.registry, output);
+}
+
+void SceneSerializer::load(Scene& scene, const std::filesystem::path& path) {
+    load(scene.registry, path);
+}
+
+void SceneSerializer::load(Scene& scene, std::istream& input) {
+    load(scene.registry, input);
+}
 
 void SceneSerializer::save(const Registry& registry,
                            const std::filesystem::path& path) {

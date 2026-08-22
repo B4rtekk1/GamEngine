@@ -8,12 +8,17 @@
 #include "Engine/UI/Canvas.h"
 #include "Engine/UI/Vulkan/UIFontAtlas.h"
 #include "Engine/Scene/Components/IdentityComponents.h"
+#include "Engine/Renderer/Geometry/Mesh.h"
+#include "Engine/Renderer/Materials/PBRMaterial.h"
 
 #include <memory>
+#include <filesystem>
 #include <stdexcept>
 #include <string>
 #include <unordered_map>
 #include <vector>
+
+namespace Engine { class SceneSerializer; }
 
 namespace Engine {
 
@@ -44,6 +49,15 @@ public:
     [[nodiscard]] GameObject& createGameObject(std::string name) {
         return create(std::move(name));
     }
+
+    /** Creates a renderable object without exposing Registry or component wiring. */
+    [[nodiscard]] GameObject& createMeshObject(std::string name,
+                                                std::shared_ptr<const Mesh> mesh,
+                                                PBRMaterial material = {});
+
+    /** High-level scene persistence helpers. */
+    void save(const std::filesystem::path& path) const;
+    void load(const std::filesystem::path& path);
 
     /** Finds a named object, or returns nullptr when it does not exist. */
     [[nodiscard]] GameObject* find(const std::string& name) noexcept {

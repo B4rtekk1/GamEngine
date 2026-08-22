@@ -85,6 +85,19 @@ public:
     [[nodiscard]] const TransformComponent& transform() const { return get<TransformComponent>(); }
     [[nodiscard]] MeshRendererComponent& meshRenderer() { return get<MeshRendererComponent>(); }
     [[nodiscard]] const MeshRendererComponent& meshRenderer() const { return get<MeshRendererComponent>(); }
+    /** High-level mesh assignment; callers do not need to edit the component. */
+    void setMesh(std::shared_ptr<const Mesh> mesh) {
+        meshRenderer().mesh = std::move(mesh);
+        registry_->markChanged<MeshRendererComponent>(entity_);
+    }
+    /** High-level material assignment; callers do not need to edit the component. */
+    void setMaterial(PBRMaterial material) {
+        meshRenderer().material = std::move(material);
+        registry_->markChanged<MeshRendererComponent>(entity_);
+    }
+    [[nodiscard]] bool isRenderable() const noexcept {
+        return isSpawned() && meshRenderer().hasMesh();
+    }
     [[nodiscard]] Mat4 modelMatrix() const noexcept { return transform().matrix(); }
 
 private:
