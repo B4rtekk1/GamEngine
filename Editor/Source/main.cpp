@@ -8,6 +8,7 @@
 #include "Engine/Core/Transform.h"
 #include "Engine/ECS/Components/ScriptComponent.h"
 #include "Engine/ECS/Components/CameraComponent.h"
+#include "Engine/ECS/Components/ColorPickerComponent.h"
 #include "Engine/Renderer/MeshRenderer.h"
 #include "Engine/Scene/SceneSerializer.h"
 #include "Engine/Scripting/ScriptSystem.h"
@@ -343,6 +344,18 @@ bool drawInspector(Engine::ScenePreset& scene, const Engine::Entity selected) {
             });
         }
     }
+    if (scene.registry.valid(selected) && scene.registry.has<Engine::ColorPickerComponent>(selected) &&
+        ImGui::CollapsingHeader("Color Picker", ImGuiTreeNodeFlags_DefaultOpen)) {
+        const Engine::Registry& readRegistry = scene.registry;
+        const Engine::ColorPickerComponent& picker =
+            readRegistry.get<Engine::ColorPickerComponent>(selected);
+        float rgba[4] = {picker.color.r(), picker.color.g(), picker.color.b(), picker.color.a()};
+        if (ImGui::ColorEdit4("Color", rgba, ImGuiColorEditFlags_AlphaBar)) {
+            scene.registry.modify<Engine::ColorPickerComponent>(selected, [&](auto& component) {
+                component.color = Engine::Color{rgba[0], rgba[1], rgba[2], rgba[3]};
+            });
+        }
+    }
     ImGui::TextDisabled("COMPONENTS");
     ImGui::Spacing();
     ImGui::SetNextItemWidth(-1.0f);
@@ -351,11 +364,17 @@ bool drawInspector(Engine::ScenePreset& scene, const Engine::Entity selected) {
     }
     if (ImGui::BeginPopup("Add Component")) {
         const bool hasScript = scene.registry.has<Engine::ScriptComponent>(selected);
+        const bool hasColorPicker = scene.registry.has<Engine::ColorPickerComponent>(selected);
         if (ImGui::MenuItem("Script", nullptr, false, !hasScript)) {
             scene.registry.add<Engine::ScriptComponent>(selected);
             ImGui::CloseCurrentPopup();
         }
         if (hasScript) ImGui::TextDisabled("Script component already added");
+        if (ImGui::MenuItem("Color Picker", nullptr, false, !hasColorPicker)) {
+            scene.registry.add<Engine::ColorPickerComponent>(selected);
+            ImGui::CloseCurrentPopup();
+        }
+        if (hasColorPicker) ImGui::TextDisabled("Color Picker component already added");
         ImGui::EndPopup();
     }
     if (EditorButton("Attach C++ Script", {-1.0f, 0.0f}).draw()) ImGui::OpenPopup("Attach C++ Script");

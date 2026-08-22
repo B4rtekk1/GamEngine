@@ -4,6 +4,7 @@
 #include "Engine/Core/Transform.h"
 #include "Engine/ECS/Components/CameraComponent.h"
 #include "Engine/ECS/Components/ParticleEmitterComponent.h"
+#include "Engine/ECS/Components/ColorPickerComponent.h"
 #include "Engine/Renderer/Geometry/Cube.h"
 #include "Engine/Renderer/Geometry/Plane.h"
 #include "Engine/Renderer/MeshRenderer.h"
@@ -54,6 +55,8 @@ ScenePreset::ScenePreset(const SceneType type) {
                                 Transform{.position = particleEmitter().position});
         registry.add<ParticleEmitterComponent>(particleSystem,
                                                ParticleEmitterComponent{particleEmitter()});
+        registry.add<ColorPickerComponent>(particleSystem,
+                                           ColorPickerComponent{particleEmitter().color});
     }
 
     const bool treeScene = type == SceneType::Tree;

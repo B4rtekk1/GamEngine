@@ -4,6 +4,7 @@
 #include "Engine/ECS/Registry.h"
 #include "Engine/Renderer/Particles/ParticleSystem.h"
 #include "Engine/ECS/Components/ParticleEmitterComponent.h"
+#include "Engine/ECS/Components/ColorPickerComponent.h"
 #include "Engine/UI/Canvas.h"
 #include "Engine/UI/Vulkan/UIFontAtlas.h"
 #include "Engine/Scene/Components/IdentityComponents.h"

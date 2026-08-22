@@ -31,6 +31,7 @@
 #include "Engine/Scene/Scene.h"
 #include "Engine/ECS/Components/CameraComponent.h"
 #include "Engine/ECS/Components/ParticleEmitterComponent.h"
+#include "Engine/ECS/Components/ColorPickerComponent.h"
 #include "Engine/Scene/Components/LightComponent.h"
 #include "Engine/Core/Transform.h"
 #include "Engine/Core/Camera.h"
@@ -681,14 +682,31 @@ class Renderer::Backend {
             swapchain.create(window, surface, vulkanDevice);
         }
 
-        void waitForDrawableExtent() const {
+        [[nodiscard]] bool hasDrawableExtent() const {
             int width = 0;
             int height = 0;
-            SDL_GetWindowSizeInPixels(window, &width, &height);
-            while (width <= 0 || height <= 0) {
+            if (!SDL_GetWindowSizeInPixels(window, &width, &height) ||
+                width <= 0 || height <= 0) {
+                return false;
+            }
+
+            // During minimization SDL and the Vulkan surface can be briefly
+            // out of sync.  The surface's currentExtent is authoritative;
+            // it may be zero even while SDL still reports the old size.
+            VkSurfaceCapabilitiesKHR capabilities{};
+            if (vkGetPhysicalDeviceSurfaceCapabilitiesKHR(
+                    vulkanDevice.physical(), surface, &capabilities) != VK_SUCCESS) {
+                return false;
+            }
+            return capabilities.currentExtent.width == UINT32_MAX ||
+                   (capabilities.currentExtent.width > 0 &&
+                    capabilities.currentExtent.height > 0);
+        }
+
+        void waitForDrawableExtent() const {
+            while (!hasDrawableExtent()) {
                 SDL_Event event;
                 SDL_WaitEvent(&event);
-                SDL_GetWindowSizeInPixels(window, &width, &height);
             }
         }
 
@@ -758,6 +776,9 @@ class Renderer::Backend {
                 auto emitter = registry.get<ParticleEmitterComponent>(scene.particleEntity()).emitter;
                 if (registry.has<Transform>(scene.particleEntity())) {
                     emitter.position = registry.get<Transform>(scene.particleEntity()).position;
+                }
+                if (registry.has<ColorPickerComponent>(scene.particleEntity())) {
+                    emitter.color = registry.get<ColorPickerComponent>(scene.particleEntity()).color;
                 }
                 particleSystem->setEmitter(emitter);
             }
@@ -2275,6 +2296,10 @@ class Renderer::Backend {
         }
 
         void drawFrame() {
+            // A minimized window has no presentable Vulkan extent.  Do not
+            // acquire or recreate resources until it becomes drawable again.
+            if (!hasDrawableExtent()) return;
+
             vkWaitForFences(device, 1, &inFlightFences[currentFrame], VK_TRUE, UINT64_MAX);
             uint32_t imageIndex;
             VkResult result = vkAcquireNextImageKHR(device, swapchain.handle(), UINT64_MAX,
@@ -2299,6 +2324,9 @@ class Renderer::Backend {
                     auto emitter = registry.get<ParticleEmitterComponent>(scene.particleEntity()).emitter;
                     if (registry.has<Transform>(scene.particleEntity())) {
                         emitter.position = registry.get<Transform>(scene.particleEntity()).position;
+                    }
+                    if (registry.has<ColorPickerComponent>(scene.particleEntity())) {
+                        emitter.color = registry.get<ColorPickerComponent>(scene.particleEntity()).color;
                     }
                     particleSystem->setEmitter(emitter);
                 }

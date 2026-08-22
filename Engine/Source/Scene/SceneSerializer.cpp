@@ -3,6 +3,7 @@
 #include "Engine/Core/Transform.h"
 #include "Engine/ECS/Components/CameraComponent.h"
 #include "Engine/ECS/Components/ScriptComponent.h"
+#include "Engine/ECS/Components/ColorPickerComponent.h"
 #include "Engine/ECS/Registry.h"
 #include "Engine/Renderer/MeshRenderer.h"
 #include "Engine/Scene/Components/LightComponent.h"
@@ -284,6 +285,11 @@ void SceneSerializer::save(const Registry& registry, std::ostream& output) {
             writeFloat(serialized, camera.aspectRatio);
             serialized << ' ' << static_cast<int>(camera.primary) << '\n';
         }
+        if (registry.has<ColorPickerComponent>(entity)) {
+            serialized << "COLOR_PICKER ";
+            writeColorRgba(serialized, registry.get<ColorPickerComponent>(entity).color);
+            serialized << '\n';
+        }
         if (registry.has<ScriptComponent>(entity)) {
             const auto& script = registry.get<ScriptComponent>(entity);
             serialized << "SCRIPT " << std::quoted(script.className) << ' '
@@ -396,6 +402,7 @@ void SceneSerializer::load(Registry& registry, std::istream& input) {
         bool hasLight = false;
         bool hasCamera = false;
         bool hasScript = false;
+        bool hasColorPicker = false;
         bool hasIdentity = false;
         bool hasParent = false;
 
@@ -505,6 +512,13 @@ void SceneSerializer::load(Registry& registry, std::istream& input) {
                 }
                 script.enabled = readBool(input, "script enabled flag");
                 loaded.add<ScriptComponent>(entity, std::move(script));
+            } else if (component == "COLOR_PICKER") {
+                if (hasColorPicker) {
+                    invalidScene("entity contains more than one ColorPickerComponent");
+                }
+                hasColorPicker = true;
+                loaded.add<ColorPickerComponent>(entity, ColorPickerComponent{
+                    .color = readColorRgba(input, "color picker color")});
             } else {
                 invalidScene("unknown component '" + component + "'");
             }
