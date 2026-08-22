@@ -75,6 +75,10 @@ void configureEditorStyle() {
 }
 
 const char* entityName(const Engine::ScenePreset& scene, const Engine::Entity entity) {
+    // A mesh can also be driven by a script. Keep the controller identity
+    // visible in the hierarchy and inspector instead of hiding it behind the
+    // generic GameObject label.
+    if (scene.registry.has<Engine::ScriptComponent>(entity)) return "Controller";
     if (entity == scene.plane) return "Plane";
     if (entity == scene.camera) return "Camera";
     if (entity == scene.tree) return "Tree";
@@ -228,6 +232,7 @@ Engine::Entity drawHierarchy(Engine::ScenePreset& scene, const Engine::Entity se
         for (const Engine::Entity entity : entities) {
             const char* name = scene.registry.has<Engine::CameraComponent>(entity)
                 ? "Camera"
+                : scene.registry.has<Engine::ScriptComponent>(entity) ? "Controller"
                 : scene.registry.has<Engine::MeshRenderer>(entity) ? "GameObject" : "Entity";
             entityLabel(name, entity);
         }
