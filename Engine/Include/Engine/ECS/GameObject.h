@@ -6,6 +6,8 @@
 #include "Engine/ECS/Registry.h"
 
 #include <atomic>
+#include <string>
+#include <string_view>
 #include <stdexcept>
 #include <utility>
 
@@ -20,20 +22,21 @@ namespace Engine {
  */
 class GameObject final {
 public:
-    explicit GameObject(Registry& registry) noexcept
-        : registry_(&registry), objectId_(nextObjectId()) {}
+    explicit GameObject(Registry& registry, std::string_view name = {})
+        : registry_(&registry), objectId_(nextObjectId()), name_(name) {}
 
     GameObject(const GameObject&) = delete;
     GameObject& operator=(const GameObject&) = delete;
     GameObject(GameObject&& other) noexcept
         : registry_(other.registry_), objectId_(std::exchange(other.objectId_, NullObjectId)),
-          entity_(std::exchange(other.entity_, NullEntity)) {}
+          entity_(std::exchange(other.entity_, NullEntity)), name_(std::move(other.name_)) {}
     GameObject& operator=(GameObject&& other) noexcept {
         if (this != &other) {
             release();
             registry_ = other.registry_;
             objectId_ = std::exchange(other.objectId_, NullObjectId);
             entity_ = std::exchange(other.entity_, NullEntity);
+            name_ = std::move(other.name_);
         }
         return *this;
     }
@@ -53,11 +56,13 @@ public:
     }
     [[nodiscard]] Entity entity() const noexcept { return entity_; }
     [[nodiscard]] ObjectId objectId() const noexcept { return objectId_; }
+    [[nodiscard]] const std::string& name() const noexcept { return name_; }
+    void setName(std::string name) { name_ = std::move(name); }
     [[nodiscard]] Registry& registry() noexcept { return *registry_; }
     [[nodiscard]] const Registry& registry() const noexcept { return *registry_; }
 
     [[nodiscard]] GameObject clone() const {
-        GameObject result(*registry_);
+        GameObject result(*registry_, name_);
         if (isSpawned()) result.entity_ = registry_->clone(entity_);
         return result;
     }
@@ -96,6 +101,7 @@ private:
     Registry* registry_{};
     ObjectId objectId_{NullObjectId};
     Entity entity_{NullEntity};
+    std::string name_;
 };
 
 } // namespace Engine

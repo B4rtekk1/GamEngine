@@ -34,6 +34,7 @@ find_path(GLM_INCLUDE_DIR NAMES glm/glm.hpp HINTS "$ENV{VULKAN_SDK}/Include" REQ
 find_path(VMA_INCLUDE_DIR NAMES vk_mem_alloc.h HINTS "$ENV{VULKAN_SDK}/Include/vma" REQUIRED)
 
 add_library(Engine
+        Engine/Source/Application.cpp
         Engine/Source/Assets/StbImage.cpp
         Engine/Source/Assets/AssetManager.cpp
         Engine/Source/Core/camera.cpp

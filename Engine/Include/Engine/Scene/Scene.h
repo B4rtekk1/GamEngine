@@ -1,9 +1,16 @@
 #pragma once
 
+#include "Engine/ECS/GameObject.h"
 #include "Engine/ECS/Registry.h"
 #include "Engine/Renderer/Particles/ParticleSystem.h"
 #include "Engine/UI/Canvas.h"
 #include "Engine/UI/Vulkan/UIFontAtlas.h"
+
+#include <memory>
+#include <stdexcept>
+#include <string>
+#include <unordered_map>
+#include <vector>
 
 namespace Engine {
 
@@ -11,6 +18,41 @@ namespace Engine {
 // application), rather than to this data container.
 class Scene {
 public:
+    /** Creates a named game object with the standard transform and renderer components. */
+    [[nodiscard]] GameObject& create(std::string name) {
+        if (name.empty()) {
+            throw std::invalid_argument("Scene object name cannot be empty");
+        }
+        if (find(name) != nullptr) {
+            throw std::invalid_argument("Scene object already exists: " + name);
+        }
+
+        auto object = std::make_unique<GameObject>(registry, name);
+        object->spawn();
+        GameObject& result = *object;
+        names_[result.name()] = result.objectId();
+        objects_.push_back(std::move(object));
+        return result;
+    }
+
+    /** Finds a named object, or returns nullptr when it does not exist. */
+    [[nodiscard]] GameObject* find(const std::string& name) noexcept {
+        const auto it = names_.find(name);
+        if (it == names_.end()) return nullptr;
+        return find(it->second);
+    }
+
+    /** Finds an object by its stable object identifier. */
+    [[nodiscard]] GameObject* find(const ObjectId objectId) noexcept {
+        for (const auto& object : objects_) {
+            if (object->objectId() == objectId) return object.get();
+        }
+        return nullptr;
+    }
+
+    /** Number of objects created through the high-level Scene API. */
+    [[nodiscard]] std::size_t objectCount() const noexcept { return objects_.size(); }
+
     Registry registry;
 
     [[nodiscard]] UI::Canvas& uiCanvas() noexcept { return canvas_; }
@@ -30,6 +72,8 @@ protected:
     }
 
 private:
+    std::vector<std::unique_ptr<GameObject>> objects_;
+    std::unordered_map<std::string, ObjectId> names_;
     UI::Canvas canvas_{800, 600};
     UI::UIFontAtlas fontAtlas_{};
     Particles::ParticleEmitter particleEmitter_{};
