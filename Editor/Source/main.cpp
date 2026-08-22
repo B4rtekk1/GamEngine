@@ -347,18 +347,30 @@ bool drawInspector(Engine::ScenePreset& scene, const Engine::Entity selected) {
 
         bool changed = false;
         bool colorChanged = false;
-        changed |= ImGui::DragFloat("Spawn Rate", &emitter.spawnRate,
-                                    1.0f, 0.0f, 5000.0f,
-                                    "%.0f particles/s");
+        const auto drawParticleFloat = [](const char* label, const char* id,
+                                          float* value, const float speed,
+                                          const float min, const float max,
+                                          const char* format) {
+            ImGui::TextDisabled("%s", label);
+            ImGui::SetNextItemWidth(-1.0f);
+            return ImGui::DragFloat(id, value, speed, min, max, format);
+        };
 
-        changed |= ImGui::DragFloatRange2("Lifetime", &emitter.minLifeTime,
-                                          &emitter.maxLifeTime, 0.01f,
-                                          0.0f, 60.0f, "Min %.2f s",
-                                          "Max %.2f s");
-        changed |= ImGui::DragFloatRange2("Size", &emitter.minSize,
-                                          &emitter.maxSize, 0.01f,
-                                          0.0f, 10.0f, "Min %.2f",
-                                          "Max %.2f");
+        changed |= drawParticleFloat("Spawn Rate", "##particle-spawn-rate",
+                                     &emitter.spawnRate, 1.0f, 0.0f, 5000.0f,
+                                     "%.0f particles/s");
+        changed |= drawParticleFloat("Minimum Lifetime", "##particle-min-lifetime",
+                                     &emitter.minLifeTime, 0.01f, 0.0f, 60.0f,
+                                     "%.2f s");
+        changed |= drawParticleFloat("Maximum Lifetime", "##particle-max-lifetime",
+                                     &emitter.maxLifeTime, 0.01f, 0.0f, 60.0f,
+                                     "%.2f s");
+        changed |= drawParticleFloat("Minimum Size", "##particle-min-size",
+                                     &emitter.minSize, 0.01f, 0.0f, 10.0f,
+                                     "%.2f");
+        changed |= drawParticleFloat("Maximum Size", "##particle-max-size",
+                                     &emitter.maxSize, 0.01f, 0.0f, 10.0f,
+                                     "%.2f");
 
         float minVelocity[3] = {
             emitter.minVelocity.x(), emitter.minVelocity.y(), emitter.minVelocity.z()
@@ -378,7 +390,9 @@ bool drawInspector(Engine::ScenePreset& scene, const Engine::Entity selected) {
         float color[4] = {
             emitter.color.r(), emitter.color.g(), emitter.color.b(), emitter.color.a()
         };
-        if (ImGui::ColorEdit4("Color", color, ImGuiColorEditFlags_AlphaBar)) {
+        ImGui::TextDisabled("Color");
+        ImGui::SetNextItemWidth(-1.0f);
+        if (ImGui::ColorEdit4("##particle-color", color, ImGuiColorEditFlags_AlphaBar)) {
             emitter.color = Engine::Color{color[0], color[1], color[2], color[3]};
             changed = true;
             colorChanged = true;
@@ -537,7 +551,7 @@ void configureEditorDockLayout() {
                                 &hierarchyId, &centerId);
 
     ImGuiID inspectorId = 0;
-    ImGui::DockBuilderSplitNode(centerId, ImGuiDir_Right, 0.24f,
+    ImGui::DockBuilderSplitNode(centerId, ImGuiDir_Right, 0.28f,
                                 &inspectorId, &centerId);
 
     ImGui::DockBuilderDockWindow("Hierarchy", hierarchyId);
