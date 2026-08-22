@@ -329,6 +329,81 @@ bool drawInspector(Engine::ScenePreset& scene, const Engine::Entity selected) {
         scene.registry.valid(selected) && scene.registry.has<Engine::Transform>(selected)) {
         TransformFields{scene.registry, selected}.draw();
     }
+    if (scene.registry.valid(selected) &&
+        scene.registry.has<Engine::ParticleEmitterComponent>(selected) &&
+        ImGui::CollapsingHeader("Particle Emitter", ImGuiTreeNodeFlags_DefaultOpen)) {
+        // Keep the UI editing a temporary copy. The component is committed
+        // once, after all controls have been drawn, so observers receive one
+        // coherent change notification per frame.
+        const Engine::Registry& readRegistry = scene.registry;
+        const auto& source =
+            readRegistry.get<Engine::ParticleEmitterComponent>(selected).emitter;
+        auto emitter = source;
+        const bool hasColorPicker =
+            readRegistry.has<Engine::ColorPickerComponent>(selected);
+        if (hasColorPicker) {
+            emitter.color = readRegistry.get<Engine::ColorPickerComponent>(selected).color;
+        }
+
+        bool changed = false;
+        bool colorChanged = false;
+        changed |= ImGui::DragFloat("Spawn Rate", &emitter.spawnRate,
+                                    1.0f, 0.0f, 5000.0f,
+                                    "%.0f particles/s");
+
+        changed |= ImGui::DragFloatRange2("Lifetime", &emitter.minLifeTime,
+                                          &emitter.maxLifeTime, 0.01f,
+                                          0.0f, 60.0f, "Min %.2f s",
+                                          "Max %.2f s");
+        changed |= ImGui::DragFloatRange2("Size", &emitter.minSize,
+                                          &emitter.maxSize, 0.01f,
+                                          0.0f, 10.0f, "Min %.2f",
+                                          "Max %.2f");
+
+        float minVelocity[3] = {
+            emitter.minVelocity.x(), emitter.minVelocity.y(), emitter.minVelocity.z()
+        };
+        float maxVelocity[3] = {
+            emitter.maxVelocity.x(), emitter.maxVelocity.y(), emitter.maxVelocity.z()
+        };
+        if (ImGui::DragFloat3("Min Velocity", minVelocity, 0.05f, -100.0f, 100.0f)) {
+            emitter.minVelocity = {minVelocity[0], minVelocity[1], minVelocity[2]};
+            changed = true;
+        }
+        if (ImGui::DragFloat3("Max Velocity", maxVelocity, 0.05f, -100.0f, 100.0f)) {
+            emitter.maxVelocity = {maxVelocity[0], maxVelocity[1], maxVelocity[2]};
+            changed = true;
+        }
+
+        float color[4] = {
+            emitter.color.r(), emitter.color.g(), emitter.color.b(), emitter.color.a()
+        };
+        if (ImGui::ColorEdit4("Color", color, ImGuiColorEditFlags_AlphaBar)) {
+            emitter.color = Engine::Color{color[0], color[1], color[2], color[3]};
+            changed = true;
+            colorChanged = true;
+        }
+
+        // Enforce valid ranges even when values are entered from the keyboard.
+        emitter.minLifeTime = std::max(0.0f, emitter.minLifeTime);
+        emitter.maxLifeTime = std::max(emitter.minLifeTime, emitter.maxLifeTime);
+        emitter.minSize = std::max(0.0f, emitter.minSize);
+        emitter.maxSize = std::max(emitter.minSize, emitter.maxSize);
+        emitter.spawnRate = std::max(0.0f, emitter.spawnRate);
+
+        if (changed) {
+            scene.registry.modify<Engine::ParticleEmitterComponent>(selected,
+                [&](auto& component) {
+                    component.emitter = emitter;
+                });
+            if (colorChanged && hasColorPicker) {
+                scene.registry.modify<Engine::ColorPickerComponent>(selected,
+                    [&](auto& component) {
+                        component.color = emitter.color;
+                    });
+            }
+        }
+    }
     if (scene.registry.valid(selected) && scene.registry.has<Engine::ScriptComponent>(selected) &&
         ImGui::CollapsingHeader("Script", ImGuiTreeNodeFlags_DefaultOpen)) {
         const Engine::Registry& readRegistry = scene.registry;
