@@ -1,4 +1,6 @@
 #include "Engine/Renderer/Vulkan/renderer.h"
+#include "Engine/Renderer/Vulkan/CameraController.h"
+#include "Engine/Renderer/Vulkan/SceneGpuResources.h"
 
 #define SDL_MAIN_HANDLED
 #include <SDL3/SDL.h>
@@ -123,7 +125,21 @@ class Renderer::Backend {
               skyPass(skyPass),
               tonemapPass(tonemapPass),
               particlePipeline(particlePipeline),
-              canvasRenderer(canvasRenderer) {}
+              canvasRenderer(canvasRenderer),
+              renderables(sceneGpu.renderables),
+              instanceBatches(sceneGpu.instanceBatches),
+              instanceModels(sceneGpu.instanceModels),
+              shadowInstanceModels(sceneGpu.shadowInstanceModels),
+              materials(sceneGpu.materials),
+              materialSlots(sceneGpu.materialSlots),
+              lastTransformRevision(sceneGpu.lastTransformRevision),
+              lastMeshRendererRevision(sceneGpu.lastMeshRendererRevision),
+              dirtyTransforms(sceneGpu.dirtyTransforms),
+              dirtyMaterials(sceneGpu.dirtyMaterials),
+              dirtyCullingObjects(sceneGpu.dirtyCullingObjects),
+              sceneCenter(sceneGpu.sceneCenter),
+              sceneRadius(sceneGpu.sceneRadius),
+              hasShadowCasters(sceneGpu.hasShadowCasters) {}
 
         ~Backend() {
             cleanup();
@@ -156,7 +172,7 @@ class Renderer::Backend {
         }
 
         void setEditorSceneCameraInput(const bool active) {
-            editorSceneCameraInput = active;
+            cameraController.setEditorInputEnabled(active);
         }
 
         void setEditorSelection(const Entity entity) {
@@ -186,10 +202,10 @@ class Renderer::Backend {
             }
 
             Camera sceneCamera{Degrees{60.0f}, 1.0f, 0.1f, 1000.0f};
-            sceneCamera.setPosition(editorSceneCameraPosition);
-            sceneCamera.setRotation(Degrees{editorSceneCameraYaw},
-                                    Degrees{editorSceneCameraPitch});
-            editorSceneCameraPosition = target - sceneCamera.forward() * (radius * 3.0f);
+            sceneCamera.setPosition(cameraController.editorPosition());
+            sceneCamera.setRotation(Degrees{cameraController.editorYaw()},
+                                    Degrees{cameraController.editorPitch()});
+            cameraController.setEditorPosition(target - sceneCamera.forward() * (radius * 3.0f));
         }
 
         void renderFrame() {
@@ -367,7 +383,24 @@ class Renderer::Backend {
         const RenderOptimizationFeatures& optimizationFeatures;
         AntialiasingLevel antialiasingLevel;
         Assets::AssetManager& assetManager;
-        std::optional<Camera> camera;
+        SceneGpuResources sceneGpu;
+        CameraController cameraController;
+        using RenderableRecord = SceneGpuResources::RenderableRecord;
+        using InstanceBatch = SceneGpuResources::InstanceBatch;
+        std::vector<RenderableRecord>& renderables;
+        std::vector<InstanceBatch>& instanceBatches;
+        std::vector<glm::mat4>& instanceModels;
+        std::vector<glm::mat4>& shadowInstanceModels;
+        std::vector<GPUMaterialData>& materials;
+        std::uint32_t& materialSlots;
+        std::uint64_t& lastTransformRevision;
+        std::uint64_t& lastMeshRendererRevision;
+        std::array<std::vector<std::size_t>, MAX_FRAMES_IN_FLIGHT>& dirtyTransforms;
+        std::array<std::vector<std::size_t>, MAX_FRAMES_IN_FLIGHT>& dirtyMaterials;
+        std::array<std::vector<std::size_t>, MAX_FRAMES_IN_FLIGHT>& dirtyCullingObjects;
+        Vec3& sceneCenter;
+        float& sceneRadius;
+        bool& hasShadowCasters;
         Buffer vertexBuffer;
         Buffer indexBuffer;
         std::array<Buffer, MAX_FRAMES_IN_FLIGHT> instanceBuffers;
@@ -400,50 +433,8 @@ class Renderer::Backend {
         VkPipeline cullingPipeline = VK_NULL_HANDLE;
         std::vector<Culling::GPUObjectData> gpuObjects;
         bool hiZValid = false;
-        bool cameraMouseLookActive = false;
-        bool editorSceneCameraInput = false;
         Entity editorSelectedEntity = NullEntity;
         std::uint32_t editorSelectedRenderable = std::numeric_limits<std::uint32_t>::max();
-        Vec3 editorSceneCameraPosition{8.0f, 6.0f, 8.0f};
-        float editorSceneCameraYaw = -135.0f;
-        // Aim at the ground-level scene center instead of looking too far above
-        // it; otherwise the finite ground plane reads like a rotated V-shaped wall.
-        float editorSceneCameraPitch = -28.0f;
-        bool hasShadowCasters = false;
-        struct RenderableRecord {
-            Entity entity{NullEntity};
-            AABB localBounds{};
-            std::size_t batchIndex{0};
-            Transform cachedTransform{};
-            bool hasCachedTransform{false};
-            // A change must reach every frame-in-flight buffer before its bit
-            // can be discarded; otherwise the next frame could render stale data.
-            uint8_t transformDirtyFrames{0};
-            uint8_t materialDirtyFrames{0};
-            uint8_t cullingDirtyFrames{0};
-        };
-        struct InstanceBatch {
-            const Mesh* mesh{nullptr};
-            uint32_t firstIndex{0};
-            uint32_t indexCount{0};
-            uint32_t firstInstance{0};
-            uint32_t instanceCount{0};
-            bool castShadow{true};
-            AABB worldBounds{};
-        };
-        std::vector<RenderableRecord> renderables;
-        std::vector<InstanceBatch> instanceBatches;
-        std::vector<glm::mat4> instanceModels;
-        std::vector<glm::mat4> shadowInstanceModels;
-        std::vector<GPUMaterialData> materials;
-        std::uint32_t materialSlots{1};
-        std::uint64_t lastTransformRevision = std::numeric_limits<std::uint64_t>::max();
-        std::uint64_t lastMeshRendererRevision = std::numeric_limits<std::uint64_t>::max();
-        std::array<std::vector<std::size_t>, MAX_FRAMES_IN_FLIGHT> dirtyTransforms;
-        std::array<std::vector<std::size_t>, MAX_FRAMES_IN_FLIGHT> dirtyMaterials;
-        std::array<std::vector<std::size_t>, MAX_FRAMES_IN_FLIGHT> dirtyCullingObjects;
-        Vec3 sceneCenter{};
-        float sceneRadius{1.0f};
 
         VkCommandPool commandPool{};
         std::vector<VkCommandBuffer> commandBuffers;
@@ -560,7 +551,7 @@ class Renderer::Backend {
 
         // ---------- INSTANCE / DEBUG ----------
 
-        static std::vector<const char*> getRequiredExtensions() {
+        static std::vector<const char*> getRequiredExtensions(const bool useValidation) {
             Uint32 sdlExtensionCount = 0;
             const char * const *sdlExtensions = SDL_Vulkan_GetInstanceExtensions(&sdlExtensionCount);
             if (!sdlExtensions) {
@@ -568,7 +559,7 @@ class Renderer::Backend {
             }
             std::vector<const char*> extensions(sdlExtensions, sdlExtensions + sdlExtensionCount);
 
-            if (enableValidationLayers) {
+            if (useValidation) {
                 extensions.push_back(VK_EXT_DEBUG_UTILS_EXTENSION_NAME);
             }
             return extensions;
@@ -617,9 +608,10 @@ class Renderer::Backend {
         }
 
         void createInstance() {
-            const bool useValidation = checkValidationLayerSupport();
+            const bool validationSupported = checkValidationLayerSupport();
+            const bool useValidation = enableValidationLayers && validationSupported;
 
-            if (!useValidation) {
+            if (enableValidationLayers && !validationSupported) {
                 std::cerr << "Validation layers are incorrect\n";
             }
 
@@ -635,7 +627,7 @@ class Renderer::Backend {
             createInfo.sType = VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO;
             createInfo.pApplicationInfo = &appInfo;
 
-            const auto extensions = getRequiredExtensions();
+            const auto extensions = getRequiredExtensions(useValidation);
             createInfo.enabledExtensionCount = static_cast<uint32_t>(extensions.size());
             createInfo.ppEnabledExtensionNames = extensions.data();
 
@@ -1470,10 +1462,10 @@ class Renderer::Backend {
 
         void updateCullingUniformBuffer(const uint32_t frame) const {
             Culling::CullingUniformData data{};
-            if (!camera) {
+            if (!cameraController.camera()) {
                 throw std::runtime_error("Camera must be initialized before culling");
             }
-            const glm::mat4 viewProjection = camera->projectionMatrix().native() * camera->viewMatrix().native();
+            const glm::mat4 viewProjection = cameraController.camera()->projectionMatrix().native() * cameraController.camera()->viewMatrix().native();
             std::memcpy(data.viewProjection.data, &viewProjection, sizeof(viewProjection));
             data.objectCount = static_cast<uint32_t>(gpuObjects.size());
             data.maxDrawCount = data.objectCount;
@@ -1911,16 +1903,16 @@ class Renderer::Backend {
             // Game View is presented in a fixed 16:9 editor frame. Keep the
             // projection in that aspect too, independently of dock layout.
             const float gameAspect = editorUiActive ? (16.0f / 9.0f) : component.aspectRatio;
-            camera.emplace(Degrees{component.fieldOfView}, gameAspect,
-                           component.nearClip, component.farClip);
-            camera->setPosition(transform.position);
-            camera->setRotation(Degrees{transform.rotation.y()},
-                                Degrees{transform.rotation.x()});
+            cameraController.camera().emplace(Degrees{component.fieldOfView}, gameAspect,
+                                               component.nearClip, component.farClip);
+            cameraController.camera()->setPosition(transform.position);
+            cameraController.camera()->setRotation(Degrees{transform.rotation.y()},
+                                                    Degrees{transform.rotation.x()});
 
             const DirectionalLight light = directionalLight();
             const UniformBufferObject data{
-                camera->viewMatrix(), camera->projectionMatrix(), lightSpaceMatrix(),
-                glm::vec4{camera->position().native(), 1.0f},
+                cameraController.camera()->viewMatrix(), cameraController.camera()->projectionMatrix(), lightSpaceMatrix(),
+                glm::vec4{cameraController.camera()->position().native(), 1.0f},
                 glm::vec4{light.direction.native(), light.intensity},
                 glm::vec4{light.color.r(), light.color.g(), light.color.b(), 1.0f},
                 (optimizationFeatures.shadows && hasShadowCasters) ? 1u : 0u,
@@ -1932,9 +1924,9 @@ class Renderer::Backend {
             const float aspect = static_cast<float>(sceneViewportTarget.extent().width) /
                                  static_cast<float>(sceneViewportTarget.extent().height);
             Camera sceneCamera{Degrees{60.0f}, aspect, 0.1f, 1000.0f};
-            sceneCamera.setPosition(editorSceneCameraPosition);
-            sceneCamera.setRotation(Degrees{editorSceneCameraYaw},
-                                    Degrees{editorSceneCameraPitch});
+            sceneCamera.setPosition(cameraController.editorPosition());
+            sceneCamera.setRotation(Degrees{cameraController.editorYaw()},
+                                    Degrees{cameraController.editorPitch()});
             const DirectionalLight light = directionalLight();
             const UniformBufferObject data{
                 sceneCamera.viewMatrix(), sceneCamera.projectionMatrix(), lightSpaceMatrix(),
@@ -2000,6 +1992,20 @@ class Renderer::Backend {
                     ? static_cast<std::uint32_t>(gpuObjects.size())
                     : 0u);
 
+            // Scene View has its own descriptor pass and therefore its own
+            // shadow-map image. It must be transitioned as well, even when
+            // shadows are disabled, because the forward fragment shader still
+            // samples the shadow binding declared by the shared pipeline.
+            sceneDescriptorPass.record(
+                commandBuffer, lightSpaceMatrix(), vertexBuffer.handle(),
+                shadowInstanceBuffers[currentFrame].handle(), indexBuffer.handle(),
+                sceneDescriptorPass.descriptorSet(currentFrame),
+                shadowCullingPasses[currentFrame],
+                shadowIndirectDraws[currentFrame],
+                optimizationFeatures.shadows
+                    ? static_cast<std::uint32_t>(gpuObjects.size())
+                    : 0u);
+
             gpuCullingPasses[currentFrame].record(
                 commandBuffer, static_cast<std::uint32_t>(gpuObjects.size()));
 
@@ -2043,12 +2049,12 @@ class Renderer::Backend {
             // Fill the background before drawing particles. Otherwise the
             // skybox can overwrite transparent particle fragments in the sky.
             skyPass.record(commandBuffer, currentFrame);
-            if (particleSystem && camera) {
+            if (particleSystem && cameraController.camera()) {
                 const Particles::ParticleFrameData particleFrame{
-                    camera->projectionMatrix() * camera->viewMatrix(),
-                    camera->right(),
+                    cameraController.camera()->projectionMatrix() * cameraController.camera()->viewMatrix(),
+                    cameraController.camera()->right(),
                     0.0f,
-                    camera->up(),
+                    cameraController.camera()->up(),
                     0.0f,
                 };
                 particleSystem->recordRender(commandBuffer, particleFrame,
@@ -2073,9 +2079,9 @@ class Renderer::Backend {
                                    static_cast<float>(sceneViewportTarget.extent().width) /
                                        static_cast<float>(sceneViewportTarget.extent().height),
                                    0.1f, 1000.0f};
-                sceneCamera.setPosition(editorSceneCameraPosition);
-                sceneCamera.setRotation(Degrees{editorSceneCameraYaw},
-                                        Degrees{editorSceneCameraPitch});
+                sceneCamera.setPosition(cameraController.editorPosition());
+                sceneCamera.setRotation(Degrees{cameraController.editorYaw()},
+                                        Degrees{cameraController.editorPitch()});
                 const Particles::ParticleFrameData particleFrame{
                     sceneCamera.projectionMatrix() * sceneCamera.viewMatrix(),
                     sceneCamera.right(),
@@ -2254,142 +2260,12 @@ class Renderer::Backend {
         // ---------- MAIN LOOP ----------
 
         void updateCameraInput() {
-            if (editorUiActive) {
-                if (editorSceneCameraInput) {
-                    updateEditorSceneCameraInput();
-                } else if (cameraMouseLookActive) {
-                    SDLInput::setRelativeMouseMode(window, false);
-                    cameraMouseLookActive = false;
-                }
-                return;
-            }
-
-            CameraComponent* activeCameraComponent = nullptr;
-            Transform* activeCameraTransform = nullptr;
-            registry.view<CameraComponent, Transform>(
-                [&](const Entity, CameraComponent& component, Transform& transform) {
-                    if (activeCameraComponent == nullptr && component.primary) {
-                        activeCameraComponent = &component;
-                        activeCameraTransform = &transform;
-                    }
-                });
-
-            if (activeCameraComponent == nullptr) {
-                if (cameraMouseLookActive) {
-                    SDLInput::setRelativeMouseMode(window, false);
-                    cameraMouseLookActive = false;
-                }
-                return;
-            }
-
-            // Do not call Registry::get here: its mutable overload advances the
-            // global scene revision. Camera movement changes only view uniforms,
-            // not any renderable instance data; advancing that revision made
-            // updateRenderableBuffers scan all 27,000 cubes every frame.
-            const CameraComponent& cameraComponent = *activeCameraComponent;
-            Transform& transform = *activeCameraTransform;
-            Camera controlledCamera(
-                Degrees{cameraComponent.fieldOfView}, cameraComponent.aspectRatio,
-                cameraComponent.nearClip, cameraComponent.farClip);
-            controlledCamera.setRotation(Degrees{transform.rotation.y()},
-                                          Degrees{transform.rotation.x()});
-
-            Vec3 movement{};
-            const Vec3 forward = controlledCamera.forward();
-            const Vec3 horizontalForward{forward.x(), 0.0f, forward.z()};
-            if (horizontalForward.length() > 0.0f) {
-                const Vec3 flatForward = horizontalForward.normalized();
-                if (Input::keyDown(KeyCode::W)) movement += flatForward;
-                if (Input::keyDown(KeyCode::S)) movement -= flatForward;
-            }
-            const Vec3 right = controlledCamera.right();
-            if (Input::keyDown(KeyCode::D)) movement += right;
-            if (Input::keyDown(KeyCode::A)) movement -= right;
-
-            constexpr float MOVE_SPEED = 10.0f;
-            if (movement.length() > 0.0f) {
-                transform.position += movement.normalized() *
-                    (MOVE_SPEED * static_cast<float>(Time::deltaTime()));
-            }
-
-            constexpr float ZOOM_SPEED = 2.0f;
-            const float wheel = Input::mouseWheel();
-            if (wheel != 0.0f) {
-                transform.position += controlledCamera.forward() * (wheel * ZOOM_SPEED);
-            }
-
-            if (Input::mouseDown(MouseButton::Right)) {
-                constexpr float MOUSE_SENSITIVITY = 0.1f;
-                if (!cameraMouseLookActive) {
-                    SDLInput::setRelativeMouseMode(window, true);
-                    cameraMouseLookActive = true;
-                }
-
-                const Vec2 mouseDelta = Input::mouseDelta();
-                transform.rotation.setY(transform.rotation.y() +
-                                        mouseDelta.x() * MOUSE_SENSITIVITY);
-                transform.rotation.setX(std::clamp(
-                    transform.rotation.x() - mouseDelta.y() * MOUSE_SENSITIVITY,
-                    -89.0f, 89.0f));
-            } else if (cameraMouseLookActive) {
-                SDLInput::setRelativeMouseMode(window, false);
-                cameraMouseLookActive = false;
-            }
+            if (editorUiActive && !cameraController.editorInputEnabled()) return;
+            cameraController.update(window, registry);
         }
 
         void updateEditorSceneCameraInput() {
-            // Relative mouse mode belongs to gameplay. In the editor it can
-            // keep SDL's pointer capture after a Scene View drag, preventing
-            // Dear ImGui controls from receiving later clicks. Keep normal
-            // mouse coordinates here; right-drag still supplies deltas for
-            // camera rotation without taking ownership of the cursor.
-            if (cameraMouseLookActive) {
-                SDLInput::setRelativeMouseMode(window, false);
-                cameraMouseLookActive = false;
-            }
-
-            Camera sceneCamera{Degrees{60.0f}, 1.0f, 0.1f, 1000.0f};
-            sceneCamera.setRotation(Degrees{editorSceneCameraYaw},
-                                    Degrees{editorSceneCameraPitch});
-
-            Vec3 movement{};
-            const Vec3 forward = sceneCamera.forward();
-            const Vec3 horizontalForward{forward.x(), 0.0f, forward.z()};
-            if (horizontalForward.length() > 0.0f) {
-                const Vec3 flatForward = horizontalForward.normalized();
-                if (Input::keyDown(KeyCode::W)) movement += flatForward;
-                if (Input::keyDown(KeyCode::S)) movement -= flatForward;
-            }
-            if (Input::keyDown(KeyCode::D)) movement += sceneCamera.right();
-            if (Input::keyDown(KeyCode::A)) movement -= sceneCamera.right();
-
-            if (Input::mouseDown(MouseButton::Middle)) {
-                const Vec2 mouseDelta = Input::mouseDelta();
-                constexpr float panSensitivity = 0.03f;
-                editorSceneCameraPosition -= sceneCamera.right() *
-                    (mouseDelta.x() * panSensitivity);
-                editorSceneCameraPosition += sceneCamera.up() *
-                    (mouseDelta.y() * panSensitivity);
-            }
-
-            if (movement.length() > 0.0f) {
-                constexpr float moveSpeed = 10.0f;
-                editorSceneCameraPosition += movement.normalized() *
-                    (moveSpeed * static_cast<float>(Time::deltaTime()));
-            }
-
-            constexpr float zoomSpeed = 2.0f;
-            editorSceneCameraPosition += sceneCamera.forward() *
-                (Input::mouseWheel() * zoomSpeed);
-
-            if (Input::mouseDown(MouseButton::Right)) {
-                constexpr float mouseSensitivity = 0.1f;
-                const Vec2 mouseDelta = Input::mouseDelta();
-                editorSceneCameraYaw += mouseDelta.x() * mouseSensitivity;
-                editorSceneCameraPitch = std::clamp(
-                    editorSceneCameraPitch - mouseDelta.y() * mouseSensitivity,
-                    -89.0f, 89.0f);
-            }
+            cameraController.updateEditor(window);
         }
 
         void drawFrame() {

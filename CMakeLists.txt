@@ -71,6 +71,7 @@ add_library(Engine
         Engine/Source/Renderer/Vulkan/hdr_buffer.cpp
         Engine/Source/Renderer/Vulkan/msaa.cpp
         Engine/Source/Renderer/Vulkan/renderer.cpp
+        Engine/Source/Renderer/Vulkan/CameraController.cpp
         Engine/Source/Renderer/Vulkan/ViewportRenderTarget.cpp
         Engine/Source/Renderer/Vulkan/shadow_map.cpp
         Engine/Source/Renderer/Vulkan/swapchain.cpp
