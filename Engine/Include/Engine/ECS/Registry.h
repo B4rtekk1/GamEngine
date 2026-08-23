@@ -134,6 +134,21 @@ public:
         return it == m_componentRevisions.end() ? 0 : it->second;
     }
 
+    /** Returns entities whose component changed after the supplied revision. */
+    template<typename T>
+    [[nodiscard]] std::vector<Entity> componentEntitiesChangedSince(
+        const std::uint64_t revision) const {
+        const auto it = m_componentChangeEntities.find(std::type_index(typeid(T)));
+        if (it == m_componentChangeEntities.end()) return {};
+
+        std::vector<Entity> changed;
+        changed.reserve(it->second.size());
+        for (const auto& [entity, changedRevision] : it->second) {
+            if (changedRevision > revision) changed.push_back(entity);
+        }
+        return changed;
+    }
+
     /**
      * @brief Adds and constructs a component for an entity.
      *
@@ -157,7 +172,7 @@ public:
         T& component = getOrCreatePool<T>().add(entity, std::forward<Args>(args)...);
         ++m_mutationRevision;
         ++m_structuralRevision;
-        bumpComponentRevision<T>();
+        bumpComponentRevision<T>(entity);
         return component;
     }
 
@@ -181,7 +196,7 @@ public:
             pool->remove(entity);
             ++m_mutationRevision;
             ++m_structuralRevision;
-            bumpComponentRevision<T>();
+            bumpComponentRevision<T>(entity);
         }
     }
 
@@ -190,7 +205,7 @@ public:
     void markChanged(Entity entity) {
         if (!has<T>(entity)) throw std::out_of_range("Cannot mark a missing component as changed");
         ++m_mutationRevision;
-        bumpComponentRevision<T>();
+        bumpComponentRevision<T>(entity);
     }
 
     /** Applies a mutation and records it for systems observing this component. */
@@ -334,8 +349,10 @@ private:
     }
 
     template<typename T>
-    void bumpComponentRevision() {
-        ++m_componentRevisions[std::type_index(typeid(T))];
+    void bumpComponentRevision(const Entity entity) {
+        const auto type = std::type_index(typeid(T));
+        const auto revision = ++m_componentRevisions[type];
+        m_componentChangeEntities[type][entity] = revision;
     }
 
     template<typename Pools>
@@ -454,6 +471,8 @@ private:
     > m_componentPools;
 
     std::unordered_map<std::type_index, std::uint64_t> m_componentRevisions;
+    std::unordered_map<std::type_index, std::unordered_map<Entity, std::uint64_t>>
+        m_componentChangeEntities;
 
     std::uint64_t m_mutationRevision = 0;
     std::uint64_t m_structuralRevision = 0;

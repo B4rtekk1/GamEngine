@@ -9,6 +9,8 @@ struct Particle {
 };
 
 layout(std430, set = 0, binding = 0) buffer Particles { Particle particles[]; };
+layout(std430, set = 0, binding = 2) buffer ActiveIndices { uint activeIndices[]; };
+layout(std430, set = 0, binding = 3) buffer DrawCommand { uint vertexCount; uint instanceCount; uint firstVertex; uint firstInstance; } drawCommand;
 layout(push_constant) uniform Simulation {
     float deltaTime;
     uint spawnStart;
@@ -65,4 +67,8 @@ void main() {
         p.color = sim.color;
     }
     particles[id] = p;
+    if (p.positionLife.w > 0.0) {
+        const uint compactIndex = atomicAdd(drawCommand.instanceCount, 1u);
+        activeIndices[compactIndex] = id;
+    }
 }

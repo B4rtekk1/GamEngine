@@ -92,6 +92,10 @@ namespace Engine::Particles {
         VkDeviceMemory particleMemory_{};
         std::array<std::array<VkBuffer, FramesInFlight>, RenderTargets> frameBuffers_{};
         std::array<std::array<VkDeviceMemory, FramesInFlight>, RenderTargets> frameMemories_{};
+        std::array<VkBuffer, FramesInFlight> activeIndexBuffers_{};
+        std::array<VkDeviceMemory, FramesInFlight> activeIndexMemories_{};
+        std::array<VkBuffer, FramesInFlight> drawBuffers_{};
+        std::array<VkDeviceMemory, FramesInFlight> drawMemories_{};
         VkBuffer quadBuffer_{};
         VkDeviceMemory quadMemory_{};
         VkDescriptorSetLayout descriptorSetLayout_{};

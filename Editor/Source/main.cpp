@@ -8,6 +8,7 @@
 #include "Engine/Core/Transform.h"
 #include "Engine/ECS/Components/ScriptComponent.h"
 #include "Engine/ECS/Components/CameraComponent.h"
+#include "Engine/ECS/Components/ColliderComponent.h"
 #include "Engine/ECS/Components/ColorPickerComponent.h"
 #include "Engine/Renderer/MeshRenderer.h"
 #include "Engine/Scene/SceneSerializer.h"
@@ -439,6 +440,53 @@ bool drawInspector(Engine::ScenePreset& scene, const Engine::Entity selected) {
             });
         }
     }
+    if (scene.editor().valid(selected) && scene.editor().has<Engine::ColliderComponent>(selected) &&
+        ImGui::CollapsingHeader("Collider", ImGuiTreeNodeFlags_DefaultOpen)) {
+        const auto collider = scene.editor().get<Engine::ColliderComponent>(selected);
+        int shape = static_cast<int>(collider.shape.index());
+        const char* shapeNames[] = {"Box", "Sphere", "Capsule"};
+        bool changed = false;
+        if (ImGui::BeginCombo("Shape##collider", shapeNames[shape])) {
+            for (int index = 0; index < 3; ++index) {
+                if (ImGui::Selectable(shapeNames[index], shape == index)) { shape = index; changed = true; }
+            }
+            ImGui::EndCombo();
+        }
+        auto value = collider;
+        if (shape != static_cast<int>(value.shape.index())) {
+            value.shape = shape == 0 ? Engine::ColliderShape{Engine::BoxCollider{}} :
+                shape == 1 ? Engine::ColliderShape{Engine::SphereCollider{}} :
+                             Engine::ColliderShape{Engine::CapsuleCollider{}};
+        }
+        float offset[3] = {value.offset.x(), value.offset.y(), value.offset.z()};
+        if (ImGui::DragFloat3("Offset##collider", offset, 0.05f)) {
+            value.offset = {offset[0], offset[1], offset[2]}; changed = true;
+        }
+        std::visit([&](auto& colliderShape) {
+            using Shape = std::decay_t<decltype(colliderShape)>;
+            if constexpr (std::is_same_v<Shape, Engine::BoxCollider>) {
+                float extents[3] = {colliderShape.halfExtents.x(), colliderShape.halfExtents.y(), colliderShape.halfExtents.z()};
+                if (ImGui::DragFloat3("Half Extents##collider", extents, 0.05f, 0.001f, 1000.0f)) {
+                    colliderShape.halfExtents = {std::max(0.001f, extents[0]), std::max(0.001f, extents[1]), std::max(0.001f, extents[2])}; changed = true;
+                }
+            } else if constexpr (std::is_same_v<Shape, Engine::SphereCollider>) {
+                changed |= ImGui::DragFloat("Radius##collider", &colliderShape.radius, 0.05f, 0.001f, 1000.0f);
+                colliderShape.radius = std::max(0.001f, colliderShape.radius);
+            } else {
+                changed |= ImGui::DragFloat("Radius##collider", &colliderShape.radius, 0.05f, 0.001f, 1000.0f);
+                changed |= ImGui::DragFloat("Height##collider", &colliderShape.height, 0.05f, 0.001f, 1000.0f);
+                colliderShape.radius = std::max(0.001f, colliderShape.radius);
+                colliderShape.height = std::max(0.001f, colliderShape.height);
+            }
+        }, value.shape);
+        changed |= ImGui::Checkbox("Is Trigger##collider", &value.isTrigger);
+        changed |= ImGui::DragFloat("Friction##collider", &value.friction, 0.01f, 0.0f, 10.0f);
+        changed |= ImGui::SliderFloat("Restitution##collider", &value.restitution, 0.0f, 1.0f);
+        value.friction = std::max(0.0f, value.friction);
+        value.restitution = std::clamp(value.restitution, 0.0f, 1.0f);
+        if (changed) scene.editor().modify<Engine::ColliderComponent>(selected,
+            [&](auto& component) { component = value; });
+    }
     if (scene.editor().valid(selected) && scene.editor().has<Engine::ColorPickerComponent>(selected) &&
         ImGui::CollapsingHeader("Color Picker", ImGuiTreeNodeFlags_DefaultOpen)) {
         const auto readScene = scene.editor();
@@ -460,6 +508,7 @@ bool drawInspector(Engine::ScenePreset& scene, const Engine::Entity selected) {
     if (ImGui::BeginPopup("Add Component")) {
         const bool hasScript = scene.editor().has<Engine::ScriptComponent>(selected);
         const bool hasColorPicker = scene.editor().has<Engine::ColorPickerComponent>(selected);
+        const bool hasCollider = scene.editor().has<Engine::ColliderComponent>(selected);
         if (ImGui::MenuItem("Script", nullptr, false, !hasScript)) {
             scene.editor().add<Engine::ScriptComponent>(selected);
             ImGui::CloseCurrentPopup();
@@ -470,6 +519,11 @@ bool drawInspector(Engine::ScenePreset& scene, const Engine::Entity selected) {
             ImGui::CloseCurrentPopup();
         }
         if (hasColorPicker) ImGui::TextDisabled("Color Picker component already added");
+        if (ImGui::MenuItem("Collider", nullptr, false, !hasCollider)) {
+            scene.editor().add<Engine::ColliderComponent>(selected);
+            ImGui::CloseCurrentPopup();
+        }
+        if (hasCollider) ImGui::TextDisabled("Collider component already added");
         ImGui::EndPopup();
     }
     if (EditorButton("Attach C++ Script", {-1.0f, 0.0f}).draw()) ImGui::OpenPopup("Attach C++ Script");
@@ -885,8 +939,7 @@ int main() {
             }
             renderer.renderFrame();
 
-            const auto elapsed = std::chrono::steady_clock::now() - start;
-            if (elapsed < targetFrame) std::this_thread::sleep_for(targetFrame - elapsed);
+            if (const auto elapsed = std::chrono::steady_clock::now() - start; elapsed < targetFrame) std::this_thread::sleep_for(targetFrame - elapsed);
         }
         renderer.shutdown();
         ImGui::DestroyContext();

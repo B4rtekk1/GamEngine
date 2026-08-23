@@ -259,12 +259,10 @@ class Renderer::Backend {
                 throw std::invalid_argument("Renderer cannot switch Scene instances while initialized");
             }
             if (device == VK_NULL_HANDLE) return;
-            // Scene loading replaces every registry-derived GPU resource.
-            // Fence completion alone does not cover presentation or auxiliary
-            // queue work, so wait for the entire device before destroying it.
-            if (vkDeviceWaitIdle(device) != VK_SUCCESS) {
-                throw std::runtime_error("Could not idle the device for scene reload");
-            }
+            // All scene work is submitted through the graphics queue and each
+            // frame has its own fence. Waiting for every in-flight frame is
+            // sufficient before destroying scene-owned resources; idling the
+            // whole device here needlessly stalls unrelated queue work.
             if (!inFlightFences.empty() && vkWaitForFences(device,
                     static_cast<uint32_t>(inFlightFences.size()), inFlightFences.data(), VK_TRUE,
                     UINT64_MAX) != VK_SUCCESS) {
@@ -1126,7 +1124,10 @@ class Renderer::Backend {
             renderables.reserve(registry.size());
             renderables.clear();
             instanceBatches.clear();
+            sceneGpu.batchRenderableIndices.clear();
+            sceneGpu.renderableIndices.clear();
             instanceBatches.reserve(registry.size());
+            sceneGpu.batchRenderableIndices.reserve(registry.size());
             glm::vec3 sceneMinimum{std::numeric_limits<float>::max()};
             glm::vec3 sceneMaximum{std::numeric_limits<float>::lowest()};
             // Each MeshRenderer retains its own draw range, but identical
@@ -1268,6 +1269,7 @@ class Renderer::Backend {
                             .castShadow = castShadow,
                             .worldBounds = worldBounds,
                         });
+                        sceneGpu.batchRenderableIndices.emplace_back();
                     }
                     InstanceBatch& batch = instanceBatches[batchIndex];
                     if (batch.instanceCount == 0) {
@@ -1284,6 +1286,9 @@ class Renderer::Backend {
                     }
                     ++batch.instanceCount;
                     renderables.push_back({entity, localBounds, batchIndex});
+                    const std::size_t renderableIndex = renderables.size() - 1;
+                    sceneGpu.batchRenderableIndices[batchIndex].push_back(renderableIndex);
+                    sceneGpu.renderableIndices[entity] = renderableIndex;
                     sceneMinimum = glm::min(sceneMinimum, worldBounds.min.native());
                     sceneMaximum = glm::max(sceneMaximum, worldBounds.max.native());
                 });
@@ -1431,9 +1436,40 @@ class Renderer::Backend {
                 return;
             }
 
+            std::vector<std::size_t> changedIndices;
+            changedIndices.reserve(renderables.size());
+            if (lastTransformRevision == std::numeric_limits<std::uint64_t>::max() ||
+                lastMeshRendererRevision == std::numeric_limits<std::uint64_t>::max()) {
+                for (std::size_t index = 0; index < renderables.size(); ++index) {
+                    changedIndices.push_back(index);
+                }
+            } else {
+                std::unordered_set<std::size_t> uniqueIndices;
+                const auto addChangedEntities = [&](const auto entities, const auto revision) {
+                    if (revision == 0) return;
+                    for (const Entity entity : entities) {
+                        const auto it = sceneGpu.renderableIndices.find(entity);
+                        if (it != sceneGpu.renderableIndices.end()) uniqueIndices.insert(it->second);
+                    }
+                };
+                addChangedEntities(
+                    registry.componentEntitiesChangedSince<Transform>(lastTransformRevision),
+                    transformRevision);
+                addChangedEntities(
+                    registry.componentEntitiesChangedSince<MeshRenderer>(lastMeshRendererRevision),
+                    meshRendererRevision);
+                changedIndices.assign(uniqueIndices.begin(), uniqueIndices.end());
+                std::ranges::sort(changedIndices);
+            }
+
             const Registry& readRegistry = registry;
-            for (std::size_t index = 0; index < renderables.size(); ++index) {
+            std::vector<std::size_t> changedBatches;
+            changedBatches.reserve(changedIndices.size());
+            for (const std::size_t index : changedIndices) {
                 const Entity entity = renderables[index].entity;
+                if (!readRegistry.has<Transform>(entity) || !readRegistry.has<MeshRenderer>(entity)) {
+                    continue;
+                }
                 const auto& transform = readRegistry.get<Transform>(entity);
                 const auto& renderer = readRegistry.get<MeshRenderer>(entity);
                 RenderableRecord& record = renderables[index];
@@ -1446,6 +1482,7 @@ class Renderer::Backend {
                     record.hasCachedTransform = true;
                     markDirty(index, &RenderableRecord::transformDirtyFrames, dirtyTransforms);
                     markDirty(index, &RenderableRecord::cullingDirtyFrames, dirtyCullingObjects);
+                    changedBatches.push_back(record.batchIndex);
                 }
                 const Mesh& mesh = *renderer.mesh;
                 bool materialChanged = false;
@@ -1480,34 +1517,35 @@ class Renderer::Backend {
                     markDirty(index, &RenderableRecord::materialDirtyFrames, dirtyMaterials);
                 }
             }
-            if (gpuObjects.size() == instanceBatches.size()) {
-                std::vector<AABB> batchBounds(instanceBatches.size());
-                std::vector<bool> initialized(instanceBatches.size(), false);
-                for (std::size_t index = 0; index < renderables.size(); ++index) {
-                    const RenderableRecord& record = renderables[index];
-                    const auto& transform = readRegistry.get<Transform>(record.entity);
-                    const AABB worldBounds =
-                        record.localBounds.transformed(transform.matrix().native());
-                    AABB& bounds = batchBounds[record.batchIndex];
-                    if (!initialized[record.batchIndex]) {
-                        bounds = worldBounds;
-                        initialized[record.batchIndex] = true;
-                    } else {
-                        bounds.min = Vec3{
-                            std::min(bounds.min.x(), worldBounds.min.x()),
-                            std::min(bounds.min.y(), worldBounds.min.y()),
-                            std::min(bounds.min.z(), worldBounds.min.z())};
-                        bounds.max = Vec3{
-                            std::max(bounds.max.x(), worldBounds.max.x()),
-                            std::max(bounds.max.y(), worldBounds.max.y()),
-                            std::max(bounds.max.z(), worldBounds.max.z())};
+            if (gpuObjects.size() == instanceBatches.size() && !changedBatches.empty()) {
+                std::ranges::sort(changedBatches);
+                changedBatches.erase(std::ranges::unique(changedBatches).begin(), changedBatches.end());
+                for (const std::size_t batchIndex : changedBatches) {
+                    if (batchIndex >= sceneGpu.batchRenderableIndices.size()) continue;
+                    AABB bounds{};
+                    bool initialized = false;
+                    for (const std::size_t index : sceneGpu.batchRenderableIndices[batchIndex]) {
+                        const RenderableRecord& record = renderables[index];
+                        if (!readRegistry.has<Transform>(record.entity)) continue;
+                        const AABB worldBounds = record.localBounds.transformed(
+                            readRegistry.get<Transform>(record.entity).matrix().native());
+                        if (!initialized) {
+                            bounds = worldBounds;
+                            initialized = true;
+                        } else {
+                            bounds.min = Vec3{std::min(bounds.min.x(), worldBounds.min.x()),
+                                              std::min(bounds.min.y(), worldBounds.min.y()),
+                                              std::min(bounds.min.z(), worldBounds.min.z())};
+                            bounds.max = Vec3{std::max(bounds.max.x(), worldBounds.max.x()),
+                                              std::max(bounds.max.y(), worldBounds.max.y()),
+                                              std::max(bounds.max.z(), worldBounds.max.z())};
+                        }
                     }
-                }
-                for (std::size_t batchIndex = 0; batchIndex < instanceBatches.size(); ++batchIndex) {
-                    instanceBatches[batchIndex].worldBounds = batchBounds[batchIndex];
+                    if (!initialized) continue;
+                    instanceBatches[batchIndex].worldBounds = bounds;
                     auto& object = gpuObjects[batchIndex];
-                    object.localAabbMin = {batchBounds[batchIndex].min.x(), batchBounds[batchIndex].min.y(), batchBounds[batchIndex].min.z(), 0.0f};
-                    object.localAabbMax = {batchBounds[batchIndex].max.x(), batchBounds[batchIndex].max.y(), batchBounds[batchIndex].max.z(), 0.0f};
+                    object.localAabbMin = {bounds.min.x(), bounds.min.y(), bounds.min.z(), 0.0f};
+                    object.localAabbMax = {bounds.max.x(), bounds.max.y(), bounds.max.z(), 0.0f};
                     object.model = {};
                     object.model.data[0] = 1.0f;
                     object.model.data[5] = 1.0f;
@@ -1515,8 +1553,17 @@ class Renderer::Backend {
                     object.model.data[15] = 1.0f;
                 }
                 for (Buffer& buffer : cullingObjectBuffers) {
-                    if (buffer.handle() != VK_NULL_HANDLE) {
-                        buffer.update(gpuObjects.data(), sizeof(Culling::GPUObjectData) * gpuObjects.size());
+                    if (buffer.handle() == VK_NULL_HANDLE) continue;
+                    std::size_t rangeStart = 0;
+                    while (rangeStart < changedBatches.size()) {
+                        std::size_t rangeEnd = rangeStart + 1;
+                        while (rangeEnd < changedBatches.size() &&
+                               changedBatches[rangeEnd] == changedBatches[rangeEnd - 1] + 1) ++rangeEnd;
+                        const std::size_t first = changedBatches[rangeStart];
+                        buffer.update(gpuObjects.data() + first,
+                                      sizeof(Culling::GPUObjectData) * (rangeEnd - rangeStart),
+                                      sizeof(Culling::GPUObjectData) * first);
+                        rangeStart = rangeEnd;
                     }
                 }
             }

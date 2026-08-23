@@ -2,6 +2,7 @@
 
 #include "Engine/Core/Transform.h"
 #include "Engine/ECS/Components/CameraComponent.h"
+#include "Engine/ECS/Components/ColliderComponent.h"
 #include "Engine/ECS/Components/ScriptComponent.h"
 #include "Engine/ECS/Components/ColorPickerComponent.h"
 #include "Engine/ECS/Components/ParticleEmitterComponent.h"
@@ -165,6 +166,57 @@ void writeParticleEmitter(std::ostream& output, const Particles::ParticleEmitter
     writeFloat(output, emitter.minSize); output << ' ';
     writeFloat(output, emitter.maxSize); output << ' ';
     writeFloat(output, emitter.spawnRate);
+}
+
+void writeCollider(std::ostream& output, const ColliderComponent& collider) {
+    output << static_cast<int>(collider.shape.index()) << ' ';
+    writeVec3(output, collider.offset);
+    output << ' ' << static_cast<int>(collider.isTrigger) << ' ';
+    writeFloat(output, collider.friction);
+    output << ' ';
+    writeFloat(output, collider.restitution);
+    std::visit([&output](const auto& shape) {
+        using Shape = std::decay_t<decltype(shape)>;
+        if constexpr (std::is_same_v<Shape, BoxCollider>) {
+            output << ' '; writeVec3(output, shape.halfExtents);
+        } else if constexpr (std::is_same_v<Shape, SphereCollider>) {
+            output << ' '; writeFloat(output, shape.radius);
+        } else {
+            output << ' '; writeFloat(output, shape.radius);
+            output << ' '; writeFloat(output, shape.height);
+        }
+    }, collider.shape);
+    output << '\n';
+}
+
+ColliderComponent readCollider(std::istream& input) {
+    const int type = read<int>(input, "collider shape");
+    if (type < 0 || type > 2) invalidScene("unknown collider shape");
+    ColliderComponent collider;
+    collider.offset = readVec3(input, "collider offset");
+    collider.isTrigger = readBool(input, "collider trigger flag");
+    collider.friction = readFloat(input, "collider friction");
+    collider.restitution = readFloat(input, "collider restitution");
+    if (collider.friction < 0.0f || collider.restitution < 0.0f || collider.restitution > 1.0f) {
+        invalidScene("collider material values are invalid");
+    }
+    if (type == 0) {
+        collider.shape = BoxCollider{readVec3(input, "box collider half extents")};
+        if (std::get<BoxCollider>(collider.shape).halfExtents.x() <= 0.0f ||
+            std::get<BoxCollider>(collider.shape).halfExtents.y() <= 0.0f ||
+            std::get<BoxCollider>(collider.shape).halfExtents.z() <= 0.0f) {
+            invalidScene("box collider half extents must be positive");
+        }
+    } else if (type == 1) {
+        collider.shape = SphereCollider{readFloat(input, "sphere collider radius")};
+        if (std::get<SphereCollider>(collider.shape).radius <= 0.0f) invalidScene("sphere collider radius must be positive");
+    } else {
+        collider.shape = CapsuleCollider{readFloat(input, "capsule collider radius"),
+                                          readFloat(input, "capsule collider height")};
+        const auto& capsule = std::get<CapsuleCollider>(collider.shape);
+        if (capsule.radius <= 0.0f || capsule.height <= 0.0f) invalidScene("capsule collider dimensions must be positive");
+    }
+    return collider;
 }
 
 Particles::ParticleEmitter readParticleEmitter(std::istream& input) {
@@ -342,6 +394,10 @@ void SceneSerializer::save(const Registry& registry, std::ostream& output,
             writeVec3(serialized, transform.scale);
             serialized << '\n';
         }
+        if (registry.has<ColliderComponent>(entity)) {
+            serialized << "COLLIDER ";
+            writeCollider(serialized, registry.get<ColliderComponent>(entity));
+        }
         if (registry.has<MeshRenderer>(entity)) {
             const auto& renderer = registry.get<MeshRenderer>(entity);
             const long long meshId = renderer.mesh
@@ -423,7 +479,7 @@ void SceneSerializer::load(Registry& registry, std::istream& input,
     input.imbue(std::locale::classic());
     expect(input, "GAMENGINE_SCENE");
     const auto version = read<unsigned>(input, "format version");
-    if (version != 3 && version != FormatVersion) {
+    if (version != 3 && version != 4 && version != FormatVersion) {
         invalidScene("unsupported format version " + std::to_string(version));
     }
 
@@ -521,6 +577,7 @@ void SceneSerializer::load(Registry& registry, std::istream& input,
         bool hasScript = false;
         bool hasColorPicker = false;
         bool hasParticleEmitter = false;
+        bool hasCollider = false;
         bool hasIdentity = false;
         bool hasParent = false;
 
@@ -562,6 +619,10 @@ void SceneSerializer::load(Registry& registry, std::istream& input,
                     .rotation = readVec3(input, "transform rotation"),
                     .scale = readVec3(input, "transform scale"),
                 });
+            } else if (component == "COLLIDER") {
+                if (version < 5 || hasCollider) invalidScene("entity contains an invalid ColliderComponent");
+                hasCollider = true;
+                loaded.add<ColliderComponent>(entity, readCollider(input));
             } else if (component == "MESH_RENDERER") {
                 if (hasRenderer) {
                     invalidScene("entity contains more than one MeshRenderer");

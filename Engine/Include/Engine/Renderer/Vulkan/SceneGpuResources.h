@@ -10,6 +10,7 @@
 #include <cstdint>
 #include <limits>
 #include <vector>
+#include <unordered_map>
 
 namespace Engine {
 
@@ -39,6 +40,8 @@ public:
 
     std::vector<RenderableRecord> renderables;
     std::vector<InstanceBatch> instanceBatches;
+    std::vector<std::vector<std::size_t>> batchRenderableIndices;
+    std::unordered_map<Entity, std::size_t> renderableIndices;
     std::vector<glm::mat4> instanceModels;
     std::vector<glm::mat4> shadowInstanceModels;
     std::vector<GPUMaterialData> materials;

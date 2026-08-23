@@ -98,6 +98,21 @@ void ParticleSystem::update(float deltaTime) {
 void ParticleSystem::recordCompute(VkCommandBuffer commandBuffer, VkPipeline pipeline,
                                    VkPipelineLayout pipelineLayout, uint32_t frameIndex) const {
     const uint32_t frame = frameIndex % FramesInFlight;
+    vkCmdFillBuffer(commandBuffer, drawBuffers_[frame], sizeof(std::uint32_t),
+                    sizeof(std::uint32_t), 0);
+    VkBufferMemoryBarrier2 resetBarrier{VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER_2};
+    resetBarrier.srcStageMask = VK_PIPELINE_STAGE_2_TRANSFER_BIT;
+    resetBarrier.srcAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT;
+    resetBarrier.dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+    resetBarrier.dstAccessMask = VK_ACCESS_2_SHADER_STORAGE_READ_BIT |
+                                 VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
+    resetBarrier.buffer = drawBuffers_[frame];
+    resetBarrier.offset = sizeof(std::uint32_t);
+    resetBarrier.size = sizeof(std::uint32_t);
+    VkDependencyInfo resetDependency{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
+    resetDependency.bufferMemoryBarrierCount = 1;
+    resetDependency.pBufferMemoryBarriers = &resetBarrier;
+    vkCmdPipelineBarrier2(commandBuffer, &resetDependency);
     // The previous frame may still be reading this shared buffer in its vertex
     // stage. Serialize that read before this frame overwrites particle state.
     VkBufferMemoryBarrier2 previousRender{VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER_2};
@@ -126,9 +141,24 @@ void ParticleSystem::recordCompute(VkCommandBuffer commandBuffer, VkPipeline pip
     barrier.dstAccessMask = VK_ACCESS_2_SHADER_STORAGE_READ_BIT;
     barrier.buffer = particleBuffer_;
     barrier.size = VK_WHOLE_SIZE;
+    VkBufferMemoryBarrier2 indirectBarrier{VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER_2};
+    indirectBarrier.srcStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+    indirectBarrier.srcAccessMask = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
+    indirectBarrier.dstStageMask = VK_PIPELINE_STAGE_2_DRAW_INDIRECT_BIT;
+    indirectBarrier.dstAccessMask = VK_ACCESS_2_INDIRECT_COMMAND_READ_BIT;
+    indirectBarrier.buffer = drawBuffers_[frame];
+    indirectBarrier.size = sizeof(VkDrawIndirectCommand);
+    VkBufferMemoryBarrier2 activeIndexBarrier{VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER_2};
+    activeIndexBarrier.srcStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+    activeIndexBarrier.srcAccessMask = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
+    activeIndexBarrier.dstStageMask = VK_PIPELINE_STAGE_2_VERTEX_SHADER_BIT;
+    activeIndexBarrier.dstAccessMask = VK_ACCESS_2_SHADER_STORAGE_READ_BIT;
+    activeIndexBarrier.buffer = activeIndexBuffers_[frame];
+    activeIndexBarrier.size = VK_WHOLE_SIZE;
     VkDependencyInfo dependency{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
-    dependency.bufferMemoryBarrierCount = 1;
-    dependency.pBufferMemoryBarriers = &barrier;
+    VkBufferMemoryBarrier2 barriers[] = {barrier, indirectBarrier, activeIndexBarrier};
+    dependency.bufferMemoryBarrierCount = std::size(barriers);
+    dependency.pBufferMemoryBarriers = barriers;
     vkCmdPipelineBarrier2(commandBuffer, &dependency);
 }
 
@@ -143,8 +173,8 @@ void ParticleSystem::recordRender(VkCommandBuffer commandBuffer, const ParticleF
                             0, 1, &descriptorSets_[target][frame], 0, nullptr);
     VkDeviceSize offset = 0;
     vkCmdBindVertexBuffers(commandBuffer, 0, 1, &quadBuffer_, &offset);
-    // Dead particles are rejected by the vertex shader; this avoids CPU readback and compaction.
-    vkCmdDraw(commandBuffer, 6, maxParticles_, 0, 0);
+    vkCmdDrawIndirect(commandBuffer, drawBuffers_[frame], 0, 1,
+                      sizeof(VkDrawIndirectCommand));
 }
 
 void ParticleSystem::createBuffers() {
@@ -157,6 +187,53 @@ void ParticleSystem::createBuffers() {
                        frameBuffers_[target][frame], frameMemories_[target][frame], &frameMapped_[target][frame]);
         }
     }
+    for (uint32_t frame = 0; frame < FramesInFlight; ++frame) {
+        makeBuffer(device_, physicalDevice_, sizeof(std::uint32_t) * maxParticles_,
+                   VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+                   activeIndexBuffers_[frame], activeIndexMemories_[frame], nullptr,
+                   VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+        constexpr VkDrawIndirectCommand initialDraw{6, 0, 0, 0};
+        makeBuffer(device_, physicalDevice_, sizeof(initialDraw),
+                   VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT |
+                   VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+                   drawBuffers_[frame], drawMemories_[frame], nullptr,
+                   VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+        // The initial command is uploaded by the same one-time path used for
+        // the particle buffer below; its instance count is reset every frame.
+        VkBuffer staging = VK_NULL_HANDLE;
+        VkDeviceMemory stagingMemory = VK_NULL_HANDLE;
+        void* mapped = nullptr;
+        makeBuffer(device_, physicalDevice_, sizeof(initialDraw), VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+                   staging, stagingMemory, &mapped);
+        std::memcpy(mapped, &initialDraw, sizeof(initialDraw));
+        VkCommandBufferAllocateInfo allocation{VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO};
+        allocation.commandPool = commandPool_;
+        allocation.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+        allocation.commandBufferCount = 1;
+        VkCommandBuffer commandBuffer = VK_NULL_HANDLE;
+        if (vkAllocateCommandBuffers(device_, &allocation, &commandBuffer) != VK_SUCCESS) {
+            throw std::runtime_error("ParticleSystem: draw command allocation failed");
+        }
+        VkCommandBufferBeginInfo begin{VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
+        begin.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+        vkBeginCommandBuffer(commandBuffer, &begin);
+        VkBufferCopy copy{0, 0, sizeof(initialDraw)};
+        vkCmdCopyBuffer(commandBuffer, staging, drawBuffers_[frame], 1, &copy);
+        vkEndCommandBuffer(commandBuffer);
+        VkFenceCreateInfo fenceInfo{VK_STRUCTURE_TYPE_FENCE_CREATE_INFO};
+        VkFence fence = VK_NULL_HANDLE;
+        vkCreateFence(device_, &fenceInfo, nullptr, &fence);
+        VkSubmitInfo submit{VK_STRUCTURE_TYPE_SUBMIT_INFO};
+        submit.commandBufferCount = 1;
+        submit.pCommandBuffers = &commandBuffer;
+        vkQueueSubmit(computeQueue_, 1, &submit, fence);
+        vkWaitForFences(device_, 1, &fence, VK_TRUE, UINT64_MAX);
+        vkDestroyFence(device_, fence, nullptr);
+        vkFreeCommandBuffers(device_, commandPool_, 1, &commandBuffer);
+        vkUnmapMemory(device_, stagingMemory);
+        vkDestroyBuffer(device_, staging, nullptr);
+        vkFreeMemory(device_, stagingMemory, nullptr);
+    }
 }
 
 void ParticleSystem::createDescriptorResources() {
@@ -164,6 +241,10 @@ void ParticleSystem::createDescriptorResources() {
         {0, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1,
          VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
         {1, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1, VK_SHADER_STAGE_VERTEX_BIT, nullptr}
+        ,{2, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1,
+          VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_COMPUTE_BIT, nullptr}
+        ,{3, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1,
+          VK_SHADER_STAGE_COMPUTE_BIT, nullptr}
     };
     VkDescriptorSetLayoutCreateInfo layout{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
     layout.bindingCount = std::size(bindings);
@@ -172,8 +253,8 @@ void ParticleSystem::createDescriptorResources() {
         throw std::runtime_error("ParticleSystem: descriptor layout creation failed");
     }
     constexpr VkDescriptorPoolSize sizes[] = {
-        {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, RenderTargets * FramesInFlight},
-        {VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, RenderTargets * FramesInFlight}
+        {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, RenderTargets * FramesInFlight * 3},
+        {VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, RenderTargets * FramesInFlight},
     };
     VkDescriptorPoolCreateInfo pool{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
     pool.maxSets = RenderTargets * FramesInFlight;
@@ -197,11 +278,19 @@ void ParticleSystem::createDescriptorResources() {
             descriptorSets_[target][frame] = flatSets[target * FramesInFlight + frame];
             VkDescriptorBufferInfo particles{particleBuffer_, 0, sizeof(Particle) * maxParticles_};
             VkDescriptorBufferInfo uniform{frameBuffers_[target][frame], 0, sizeof(ParticleFrameData)};
+            VkDescriptorBufferInfo activeIndices{activeIndexBuffers_[frame], 0,
+                                                 sizeof(std::uint32_t) * maxParticles_};
+            VkDescriptorBufferInfo drawCommand{drawBuffers_[frame], 0,
+                                               sizeof(VkDrawIndirectCommand)};
             VkWriteDescriptorSet writes[] = {
                 {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr, descriptorSets_[target][frame], 0, 0, 1,
                  VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, nullptr, &particles, nullptr},
                 {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr, descriptorSets_[target][frame], 1, 0, 1,
                  VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, nullptr, &uniform, nullptr}
+                ,{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr, descriptorSets_[target][frame], 2, 0, 1,
+                 VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, nullptr, &activeIndices, nullptr}
+                ,{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr, descriptorSets_[target][frame], 3, 0, 1,
+                 VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, nullptr, &drawCommand, nullptr}
             };
             vkUpdateDescriptorSets(device_, std::size(writes), writes, 0, nullptr);
         }
@@ -276,6 +365,16 @@ void ParticleSystem::destroy() {
         }
     }
     if (quadMapped_) vkUnmapMemory(device_, quadMemory_);
+    for (uint32_t frame = 0; frame < FramesInFlight; ++frame) {
+        vkDestroyBuffer(device_, activeIndexBuffers_[frame], nullptr);
+        vkFreeMemory(device_, activeIndexMemories_[frame], nullptr);
+        vkDestroyBuffer(device_, drawBuffers_[frame], nullptr);
+        vkFreeMemory(device_, drawMemories_[frame], nullptr);
+        activeIndexBuffers_[frame] = VK_NULL_HANDLE;
+        activeIndexMemories_[frame] = VK_NULL_HANDLE;
+        drawBuffers_[frame] = VK_NULL_HANDLE;
+        drawMemories_[frame] = VK_NULL_HANDLE;
+    }
     vkDestroyDescriptorPool(device_, descriptorPool_, nullptr);
     vkDestroyDescriptorSetLayout(device_, descriptorSetLayout_, nullptr);
     vkDestroyBuffer(device_, particleBuffer_, nullptr);

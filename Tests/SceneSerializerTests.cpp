@@ -1,6 +1,7 @@
 #include <Engine/Core/Transform.h>
 #include <Engine/ECS/Registry.h>
 #include <Engine/ECS/Components/ScriptComponent.h>
+#include <Engine/ECS/Components/ColliderComponent.h>
 #include <Engine/Renderer/Geometry/Cube.h>
 #include <Engine/Renderer/MeshRenderer.h>
 #include <Engine/Scene/Components/LightComponent.h>
@@ -68,6 +69,9 @@ int main() {
         .castShadows = true,
     });
     source.add<ScriptComponent>(first, ScriptComponent{"PlayerController", false});
+    source.add<ColliderComponent>(first, ColliderComponent{
+        .shape = CapsuleCollider{0.35f, 1.8f}, .offset = {0.0f, 0.9f, 0.0f},
+        .isTrigger = true, .friction = 0.25f, .restitution = 0.6f});
 
     const Entity second = source.create();
     source.add<NameComponent>(second, NameComponent{.value = "Child"});
@@ -78,7 +82,7 @@ int main() {
 
     std::stringstream serialized;
     SceneSerializer::save(source, serialized);
-    if (serialized.str().find("GAMENGINE_SCENE 4") == std::string::npos ||
+    if (serialized.str().find("GAMENGINE_SCENE 5") == std::string::npos ||
         serialized.str().find("MESHES 1") == std::string::npos ||
         serialized.str().find("ENTITIES 3") == std::string::npos) {
         return 1;
@@ -92,10 +96,16 @@ int main() {
     if (entities.size() != 3 || !loaded.has<Transform>(1) ||
         !loaded.has<MeshRenderer>(1) || !loaded.has<LightComponent>(1) ||
         !loaded.has<ScriptComponent>(1) ||
+        !loaded.has<ColliderComponent>(1) ||
         loaded.has<Transform>(2) || !loaded.has<MeshRenderer>(2) ||
         loaded.has<Transform>(3) || loaded.has<MeshRenderer>(3)) {
         return 2;
     }
+    const auto& collider = loaded.get<ColliderComponent>(1);
+    const auto& capsule = std::get<CapsuleCollider>(collider.shape);
+    if (!collider.isTrigger || !equal(collider.offset, {0.0f, 0.9f, 0.0f}) ||
+        capsule.radius != 0.35f || capsule.height != 1.8f ||
+        collider.friction != 0.25f || collider.restitution != 0.6f) return 11;
     if (!loaded.has<NameComponent>(1) || !loaded.has<UUIDComponent>(1) ||
         loaded.get<NameComponent>(1).value != "Root" ||
         loaded.get<UUIDComponent>(1).value != 100 ||
