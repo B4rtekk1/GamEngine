@@ -10,6 +10,8 @@
 #include "Engine/UI/Canvas.h"
 #include "Engine/UI/Vulkan/UIFontAtlas.h"
 #include "Engine/Scene/Components/IdentityComponents.h"
+#include "Engine/Scene/Prefab.h"
+#include "Engine/UI/Interface.h"
 #include "Engine/ECS/Components/CameraComponent.h"
 #include "Engine/Scene/Components/LightComponent.h"
 #include "Engine/Renderer/Geometry/Mesh.h"
@@ -103,6 +105,9 @@ public:
     [[nodiscard]] Actor createModel(std::string name,
                                     std::filesystem::path path,
                                     Assets::Content& content);
+
+    [[nodiscard]] Actor createCube(std::string name, PBRMaterial material = {});
+    [[nodiscard]] Actor createPrefab(std::string name, const Prefab& prefab);
 
     [[nodiscard]] Actor findActor(const std::string& name) noexcept {
         auto* object = find(name);
@@ -222,6 +227,7 @@ public:
     [[nodiscard]] const UI::Canvas& uiCanvas() const noexcept { return canvas_; }
     [[nodiscard]] const UI::UIFontAtlas& uiFontAtlas() const noexcept { return fontAtlas_; }
     [[nodiscard]] UI::UIFontAtlas& uiFontAtlas() noexcept { return fontAtlas_; }
+    [[nodiscard]] UI::Interface ui() noexcept { return UI::Interface{canvas_, fontAtlas_}; }
 
     // Preset metadata can outlive a registry replacement performed by the
     // scene serializer. Resolve particle state from the current registry so

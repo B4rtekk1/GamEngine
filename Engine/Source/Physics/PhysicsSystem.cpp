@@ -7,6 +7,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <optional>
 #include <vector>
 
 namespace Engine {
@@ -96,6 +97,56 @@ void PhysicsSystem::update(Registry& registry, const float deltaTime) const {
             }
             registry.markChanged<Transform>(entity);
         });
+}
+
+std::optional<RaycastHit> PhysicsSystem::raycast(
+    Scene& scene, const Vec3 origin, Vec3 direction, const float maxDistance) const {
+    const float directionLength = direction.length();
+    if (directionLength <= 0.0f || maxDistance <= 0.0f) return std::nullopt;
+    direction *= 1.0f / directionLength;
+
+    std::optional<RaycastHit> result;
+    float nearest = maxDistance;
+    scene.registry().view<ColliderComponent, Transform>(
+        [&](const Entity entity, const ColliderComponent& collider, const Transform& transform) {
+            const Aabb bounds = worldAabb(transform, collider);
+            float nearHit = 0.0f;
+            float farHit = nearest;
+            int hitAxis = -1;
+            float hitSign = 0.0f;
+            const float origins[3]{origin.x(), origin.y(), origin.z()};
+            const float directions[3]{direction.x(), direction.y(), direction.z()};
+            const float centers[3]{bounds.center.x(), bounds.center.y(), bounds.center.z()};
+            const float extents[3]{bounds.extents.x(), bounds.extents.y(), bounds.extents.z()};
+
+            for (int axis = 0; axis < 3; ++axis) {
+                if (std::abs(directions[axis]) < 1e-6f) {
+                    if (origins[axis] < centers[axis] - extents[axis] ||
+                        origins[axis] > centers[axis] + extents[axis]) return;
+                    continue;
+                }
+                const float inv = 1.0f / directions[axis];
+                float t0 = (centers[axis] - extents[axis] - origins[axis]) * inv;
+                float t1 = (centers[axis] + extents[axis] - origins[axis]) * inv;
+                const float sign = directions[axis] > 0.0f ? -1.0f : 1.0f;
+                if (t0 > t1) std::swap(t0, t1);
+                if (t0 > nearHit) { nearHit = t0; hitAxis = axis; hitSign = sign; }
+                farHit = std::min(farHit, t1);
+                if (nearHit > farHit) return;
+            }
+            if (farHit < 0.0f || nearHit >= nearest) return;
+            if (nearHit < 0.0f) nearHit = 0.0f;
+            const Vec3 point = origin + direction * nearHit;
+            Vec3 normal{};
+            if (hitAxis == 0) normal = {hitSign, 0, 0};
+            else if (hitAxis == 1) normal = {0, hitSign, 0};
+            else if (hitAxis == 2) normal = {0, 0, hitSign};
+            if (auto* object = scene.findByEntity(entity)) {
+                nearest = nearHit;
+                result = RaycastHit{Actor{scene, object->objectId()}, point, normal, nearHit};
+            }
+        });
+    return result;
 }
 
 } // namespace Engine

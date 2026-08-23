@@ -33,6 +33,15 @@ void Actor::setMaterial(PBRMaterial material) { object().setMaterial(std::move(m
 void Actor::setCastShadow(const bool enabled) { object().setCastShadow(enabled); }
 void Actor::setCullingBatch(const std::uint32_t batch) { object().setCullingBatch(batch); }
 void Actor::addRigidbody(RigidbodyComponent body) { object().addRigidbody(std::move(body)); }
+void Actor::addBoxCollider(Vec3 halfExtents) {
+    object().add<ColliderComponent>(ColliderComponent{.shape = BoxCollider{halfExtents}});
+}
+void Actor::addSphereCollider(const float radius) {
+    object().add<ColliderComponent>(ColliderComponent{.shape = SphereCollider{radius}});
+}
+void Actor::addCapsuleCollider(const float radius, const float height) {
+    object().add<ColliderComponent>(ColliderComponent{.shape = CapsuleCollider{radius, height}});
+}
 void Actor::addScript(std::string className, const bool enabled) {
     object().addScript(std::move(className), enabled);
 }

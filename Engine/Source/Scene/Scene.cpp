@@ -2,6 +2,7 @@
 
 #include "Engine/Scene/SceneSerializer.h"
 #include "Engine/Assets/Content.h"
+#include "Engine/Renderer/Geometry/Cube.h"
 
 #include <stdexcept>
 #include <utility>
@@ -22,6 +23,19 @@ Actor Scene::createModel(std::string name, std::filesystem::path path,
     auto mesh = content.mesh(std::move(path));
     if (!mesh) throw std::runtime_error("Could not load model for actor '" + name + "'");
     auto& object = createMeshObject(std::move(name), std::move(mesh));
+    return Actor{*this, object.objectId()};
+}
+
+Actor Scene::createCube(std::string name, PBRMaterial material) {
+    const auto prefab = Prefab::cube(std::move(material));
+    return createPrefab(std::move(name), prefab);
+}
+
+Actor Scene::createPrefab(std::string name, const Prefab& prefab) {
+    if (!prefab.mesh()) throw std::invalid_argument("Cannot instantiate an empty prefab");
+    auto& object = createMeshObject(std::move(name), prefab.mesh(), prefab.material());
+    object.setCastShadow(prefab.castShadow());
+    object.setCullingBatch(prefab.cullingBatch());
     return Actor{*this, object.objectId()};
 }
 

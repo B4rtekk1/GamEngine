@@ -45,6 +45,7 @@ add_library(Engine
         Engine/Source/Scene/SceneSerializer.cpp
         Engine/Source/Scene/Scene.cpp
         Engine/Source/Scene/Actor.cpp
+        Engine/Source/Scene/Prefab.cpp
         Engine/Source/Scene/ScenePresets.cpp
         Engine/Source/Physics/PhysicsSystem.cpp
         Engine/Source/Scripting/ScriptSystem.cpp

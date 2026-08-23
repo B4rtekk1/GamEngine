@@ -5,8 +5,10 @@
 #include <functional>
 #include <concepts>
 #include <memory>
+#include <optional>
 #include <string>
 #include <string_view>
+#include <typeindex>
 #include <unordered_map>
 #include <vector>
 
@@ -24,7 +26,17 @@ public:
     template<typename T>
     void registerClass(std::string name) {
         static_assert(std::derived_from<T, Script>);
-        factories_.insert_or_assign(std::move(name), [] { return std::make_unique<T>(); });
+        const std::string className = name;
+        factories_.insert_or_assign(className, [] { return std::make_unique<T>(); });
+        typeNames_.insert_or_assign(std::type_index(typeid(T)), std::move(name));
+    }
+
+    template<typename T>
+    [[nodiscard]] std::optional<std::string> className() const {
+        static_assert(std::derived_from<T, Script>);
+        const auto found = typeNames_.find(std::type_index(typeid(T)));
+        if (found == typeNames_.end()) return std::nullopt;
+        return found->second;
     }
 
     [[nodiscard]] std::unique_ptr<Script> create(const std::string_view name) const {
@@ -44,6 +56,7 @@ public:
 
 private:
     std::unordered_map<std::string, Factory> factories_;
+    std::unordered_map<std::type_index, std::string> typeNames_;
 };
 
 template<typename T> class ScriptRegistration final {

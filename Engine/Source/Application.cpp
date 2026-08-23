@@ -66,6 +66,7 @@ void Application::run() {
             }
         }
         if (impl_->running) {
+            scene_.ui().update();
             if (updateCallback_) updateCallback_(scene_, static_cast<float>(Time::deltaTime()));
             impl_->physics.update(scene_, static_cast<float>(Time::deltaTime()));
             impl_->scripts.update(scene_, static_cast<float>(Time::deltaTime()));
