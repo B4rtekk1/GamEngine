@@ -442,7 +442,7 @@ bool drawInspector(Engine::ScenePreset& scene, const Engine::Entity selected) {
     if (scene.editor().valid(selected) && scene.editor().has<Engine::ColorPickerComponent>(selected) &&
         ImGui::CollapsingHeader("Color Picker", ImGuiTreeNodeFlags_DefaultOpen)) {
         const auto readScene = scene.editor();
-        const Engine::ColorPickerComponent& picker =
+        const auto& picker =
             readScene.get<Engine::ColorPickerComponent>(selected);
         float rgba[4] = {picker.color.r(), picker.color.g(), picker.color.b(), picker.color.a()};
         if (ImGui::ColorEdit4("Color", rgba, ImGuiColorEditFlags_AlphaBar)) {
