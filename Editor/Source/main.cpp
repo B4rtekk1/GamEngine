@@ -28,6 +28,7 @@
 #include <chrono>
 #include <cstdint>
 #include <algorithm>
+#include <cmath>
 #include <cstdio>
 #include <cstring>
 #include <filesystem>
@@ -80,7 +81,36 @@ const char* entityName(const Engine::ScenePreset& scene, const Engine::Entity en
 }
 
 
+void drawSceneOrientationGizmo(const ImVec2 imageMin, const ImVec2 imageMax,
+                               const float yawDegrees, const float pitchDegrees) {
+    constexpr float pi = 3.14159265358979323846f;
+    constexpr float radius = 40.0f;
+    constexpr float axisLength = 32.0f;
+    const float yaw = yawDegrees * pi / 180.0f;
+    const float pitch = pitchDegrees * pi / 180.0f;
+
+    // Express world axes in the Scene View camera's screen-space basis.
+    const float right[3]{-std::sin(yaw), 0.0f, std::cos(yaw)};
+    const float up[3]{-std::cos(yaw) * std::sin(pitch), std::cos(pitch),
+                      -std::sin(yaw) * std::sin(pitch)};
+    const ImVec2 center{imageMax.x - radius - 12.0f, imageMax.y - radius - 12.0f};
+    const ImU32 colors[3]{IM_COL32(255, 45, 45, 255), IM_COL32(36, 245, 79, 255),
+                          IM_COL32(45, 135, 255, 255)};
+    constexpr const char* labels[3]{"X", "Y", "Z"};
+
+    ImDrawList* drawList = ImGui::GetWindowDrawList();
+    for (int axis = 0; axis < 3; ++axis) {
+        const ImVec2 end{center.x + right[axis] * axisLength,
+                         center.y - up[axis] * axisLength};
+        drawList->AddLine(center, end, colors[axis], 4.0f);
+        drawList->AddCircleFilled(end, 5.0f, colors[axis]);
+        drawList->AddText({end.x + 5.0f, end.y - 7.0f}, colors[axis], labels[axis]);
+    }
+    drawList->AddCircleFilled(center, 4.0f, IM_COL32(255, 255, 255, 255));
+}
+
 bool drawViewport(Engine::ViewportHandle gameDescriptor, Engine::ViewportHandle sceneDescriptor,
+                  const float sceneCameraYaw, const float sceneCameraPitch,
                   bool& showGameView, const bool playing) {
     if (playing) showGameView = true;
     const Engine::ViewportHandle descriptor = showGameView ? gameDescriptor : sceneDescriptor;
@@ -111,6 +141,10 @@ bool drawViewport(Engine::ViewportHandle gameDescriptor, Engine::ViewportHandle 
         ImGui::Image(ImTextureRef{static_cast<ImTextureID>(descriptor.value)},
                      {frameSize.x, imageHeight}, {0, 0}, {1, 1});
         viewportHovered = ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenBlockedByActiveItem);
+        if (!showGameView && !playing) {
+            drawSceneOrientationGizmo(ImGui::GetItemRectMin(), ImGui::GetItemRectMax(),
+                                      sceneCameraYaw, sceneCameraPitch);
+        }
         ImGui::EndChild();
         ImGui::PopStyleColor();
     }
@@ -860,7 +894,8 @@ int main() {
                 renderer.setEditorSelection(selectedEntity);
             }
             const bool sceneCameraInput = drawViewport(
-                renderer.gameViewport(), renderer.sceneViewport(), showGameView, playing);
+                renderer.gameViewport(), renderer.sceneViewport(), renderer.editorCameraYaw(),
+                renderer.editorCameraPitch(), showGameView, playing);
             const bool inspectorConsumesMouseWheel = ComponentsPanel::draw(scene, selectedEntity);
             drawStatusBar(scene, selectedEntity, playing, paused);
             renderer.setEditorSceneCameraInput(

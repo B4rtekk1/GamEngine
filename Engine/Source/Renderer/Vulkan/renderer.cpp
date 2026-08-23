@@ -215,6 +215,8 @@ class Renderer::Backend {
 
         [[nodiscard]] VkDescriptorSet gameViewportTexture() const noexcept { return gameViewportDescriptor; }
         [[nodiscard]] VkDescriptorSet sceneViewportTexture() const noexcept { return sceneViewportDescriptor; }
+        [[nodiscard]] float editorCameraYaw() const noexcept { return cameraController.editorYaw(); }
+        [[nodiscard]] float editorCameraPitch() const noexcept { return cameraController.editorPitch(); }
 
         void processEvent(const SDL_Event& event) {
             SDLInput::processEvent(event);
@@ -2687,6 +2689,12 @@ ViewportHandle Renderer::gameViewport() const noexcept {
 }
 ViewportHandle Renderer::sceneViewport() const noexcept {
     return {reinterpret_cast<std::uintptr_t>(backend_ ? backend_->sceneViewportTexture() : VK_NULL_HANDLE)};
+}
+float Renderer::editorCameraYaw() const noexcept {
+    return backend_ ? backend_->editorCameraYaw() : 0.0f;
+}
+float Renderer::editorCameraPitch() const noexcept {
+    return backend_ ? backend_->editorCameraPitch() : 0.0f;
 }
 void Renderer::shutdown() noexcept {
     backend_.reset();

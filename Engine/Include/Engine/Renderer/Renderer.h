@@ -44,6 +44,9 @@ public:
     void reconfigureAntialiasing() const;
     [[nodiscard]] ViewportHandle gameViewport() const noexcept;
     [[nodiscard]] ViewportHandle sceneViewport() const noexcept;
+    /** Current Scene View camera orientation, in degrees. */
+    [[nodiscard]] float editorCameraYaw() const noexcept;
+    [[nodiscard]] float editorCameraPitch() const noexcept;
     void shutdown() noexcept;
 
 private:
