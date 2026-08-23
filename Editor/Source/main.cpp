@@ -15,6 +15,10 @@
 #include "Engine/Scripting/ScriptSystem.h"
 #include "Elements/EditorButton.h"
 #include "Elements/TransformFields.h"
+#include "Editor/Panels/EditorSceneSession.h"
+#include "Editor/Panels/EditorStyle.h"
+#include "Editor/Panels/HierarchyPanel.h"
+#include "Editor/Panels/ComponentsPanel.h"
 
 #include <SDL3/SDL.h>
 
@@ -31,62 +35,6 @@
 #include <optional>
 #include <unordered_map>
 #include <unordered_set>
-
-namespace {
-
-void configureEditorStyle() {
-    ImGui::StyleColorsDark();
-    ImGuiStyle& style = ImGui::GetStyle();
-    style.WindowPadding = {14.0f, 11.0f};
-    style.FramePadding = {9.0f, 7.0f};
-    style.ItemSpacing = {8.0f, 8.0f};
-    style.ItemInnerSpacing = {6.0f, 5.0f};
-    style.ScrollbarSize = 12.0f;
-    style.GrabMinSize = 10.0f;
-    style.WindowBorderSize = 1.0f;
-    style.ChildBorderSize = 1.0f;
-    style.FrameBorderSize = 0.0f;
-    style.WindowRounding = 6.0f;
-    style.ChildRounding = 5.0f;
-    style.FrameRounding = 4.0f;
-    style.PopupRounding = 5.0f;
-    style.ScrollbarRounding = 6.0f;
-    style.GrabRounding = 4.0f;
-    style.TabRounding = 4.0f;
-
-    ImVec4* colors = style.Colors;
-    colors[ImGuiCol_WindowBg] = {0.055f, 0.068f, 0.090f, 1.0f};
-    colors[ImGuiCol_ChildBg] = {0.043f, 0.054f, 0.073f, 1.0f};
-    colors[ImGuiCol_PopupBg] = {0.075f, 0.090f, 0.120f, 0.98f};
-    colors[ImGuiCol_MenuBarBg] = {0.035f, 0.045f, 0.063f, 1.0f};
-    colors[ImGuiCol_TitleBg] = {0.045f, 0.060f, 0.080f, 1.0f};
-    colors[ImGuiCol_TitleBgActive] = {0.060f, 0.095f, 0.120f, 1.0f};
-    colors[ImGuiCol_TitleBgCollapsed] = {0.035f, 0.045f, 0.063f, 1.0f};
-    colors[ImGuiCol_Header] = {0.10f, 0.24f, 0.29f, 0.70f};
-    colors[ImGuiCol_HeaderHovered] = {0.10f, 0.48f, 0.56f, 0.55f};
-    colors[ImGuiCol_HeaderActive] = {0.08f, 0.62f, 0.70f, 0.75f};
-    colors[ImGuiCol_Button] = {0.09f, 0.15f, 0.20f, 1.0f};
-    colors[ImGuiCol_ButtonHovered] = {0.10f, 0.39f, 0.47f, 1.0f};
-    colors[ImGuiCol_ButtonActive] = {0.08f, 0.55f, 0.63f, 1.0f};
-    colors[ImGuiCol_FrameBg] = {0.08f, 0.11f, 0.15f, 1.0f};
-    colors[ImGuiCol_FrameBgHovered] = {0.11f, 0.20f, 0.25f, 1.0f};
-    colors[ImGuiCol_FrameBgActive] = {0.10f, 0.29f, 0.34f, 1.0f};
-    colors[ImGuiCol_Border] = {0.13f, 0.19f, 0.24f, 1.0f};
-    colors[ImGuiCol_Separator] = {0.13f, 0.20f, 0.25f, 1.0f};
-    colors[ImGuiCol_Text] = {0.86f, 0.91f, 0.96f, 1.0f};
-    colors[ImGuiCol_TextDisabled] = {0.45f, 0.53f, 0.61f, 1.0f};
-    colors[ImGuiCol_CheckMark] = {0.20f, 0.82f, 0.90f, 1.0f};
-    colors[ImGuiCol_SliderGrab] = {0.13f, 0.65f, 0.74f, 1.0f};
-    colors[ImGuiCol_SliderGrabActive] = {0.25f, 0.87f, 0.93f, 1.0f};
-    colors[ImGuiCol_Tab] = {0.07f, 0.12f, 0.16f, 1.0f};
-    colors[ImGuiCol_TabHovered] = {0.10f, 0.45f, 0.53f, 1.0f};
-    colors[ImGuiCol_TabActive] = {0.09f, 0.27f, 0.32f, 1.0f};
-    colors[ImGuiCol_DockingPreview] = {0.12f, 0.70f, 0.80f, 0.50f};
-    colors[ImGuiCol_DockingEmptyBg] = {0.035f, 0.045f, 0.063f, 1.0f};
-    colors[ImGuiCol_ResizeGrip] = {0.12f, 0.55f, 0.64f, 0.25f};
-    colors[ImGuiCol_ResizeGripHovered] = {0.20f, 0.78f, 0.86f, 0.70f};
-    colors[ImGuiCol_ResizeGripActive] = {0.25f, 0.87f, 0.93f, 0.90f};
-}
 
 void drawPanelHeader(const char* title, const char* subtitle = nullptr) {
     ImGui::PushStyleColor(ImGuiCol_Text, {0.33f, 0.86f, 0.92f, 1.0f});
@@ -122,53 +70,6 @@ const char* entityName(const Engine::ScenePreset& scene, const Engine::Entity en
     return "Entity";
 }
 
-std::filesystem::path editorScenePath() {
-    return std::filesystem::path{GAMEENGINE_SOURCE_DIR} / "Assets" / "Scenes" / "Editor.scene";
-}
-
-std::uint32_t msaaSampleCount(const Engine::Renderer& renderer) {
-    return renderer.antialiasingLevel() == Engine::AntialiasingLevel::MSAA2x ? 2u :
-        renderer.antialiasingLevel() == Engine::AntialiasingLevel::MSAA4x ? 4u : 0u;
-}
-
-bool setPlayMode(const bool play, Engine::ScenePreset& scene, std::string& snapshot,
-                 std::string& error, const std::uint32_t msaaSamples) {
-    try {
-        if (play) {
-            std::ostringstream output;
-            Engine::SceneSerializer::save(scene, output, msaaSamples);
-            snapshot = std::move(output).str();
-        } else {
-            std::istringstream input{snapshot};
-            Engine::SceneSerializer::load(scene, input);
-            snapshot.clear();
-        }
-        error.clear();
-        return true;
-    } catch (const std::exception& exception) {
-        error = exception.what();
-        return false;
-    }
-}
-
-bool createCppScript(const std::string_view name, std::string& error) {
-    if (name.empty() || !std::isalpha(static_cast<unsigned char>(name.front())) ||
-        !std::ranges::all_of(name, [](char c) { return std::isalnum(static_cast<unsigned char>(c)) || c == '_'; })) {
-        error = "Use a valid C++ class name."; return false;
-    }
-    const auto dir = std::filesystem::path{GAMEENGINE_SOURCE_DIR} / "Sandbox/Source/Scripts";
-    const auto header = dir / (std::string{name} + ".h");
-    const auto source = dir / (std::string{name} + ".cpp");
-    if (std::filesystem::exists(header) || std::filesystem::exists(source)) { error = "Script already exists."; return false; }
-    std::filesystem::create_directories(dir);
-    std::ofstream h{header}, cpp{source};
-    if (!h || !cpp) { error = "Could not create script files."; return false; }
-    h << "// Generated by GamEngine. You can safely edit this script.\n"
-      << "#pragma once\n#include <Engine/Scripting/Script.h>\n\nclass " << name << " final : public Engine::Script {\npublic:\n    void onCreate() override {}\n    void onUpdate(float deltaTime) override { (void)deltaTime; }\n};\n";
-    cpp << "// Generated by GamEngine. You can safely edit this script.\n"
-        << "#include \"" << name << ".h\"\n#include <Engine/Scripting/ScriptRegistry.h>\n\nENGINE_REGISTER_SCRIPT(" << name << ");\n";
-    return static_cast<bool>(h) && static_cast<bool>(cpp);
-}
 
 bool drawViewport(Engine::ViewportHandle gameDescriptor, Engine::ViewportHandle sceneDescriptor,
                   bool& showGameView, const bool playing) {
@@ -212,7 +113,7 @@ bool drawViewport(Engine::ViewportHandle gameDescriptor, Engine::ViewportHandle 
     return !playing && !showGameView && viewportHovered;
 }
 
-Engine::Entity drawHierarchy(Engine::ScenePreset& scene, const Engine::Entity selected) {
+Engine::Entity HierarchyPanel::draw(Engine::ScenePreset& scene, const Engine::Entity selected) {
     Engine::Entity clicked = Engine::NullEntity;
     ImGui::Begin("Hierarchy");
     drawPanelHeader("SCENE HIERARCHY");
@@ -293,7 +194,7 @@ Engine::Entity drawHierarchy(Engine::ScenePreset& scene, const Engine::Entity se
     return clicked;
 }
 
-bool drawInspector(Engine::ScenePreset& scene, const Engine::Entity selected) {
+bool ComponentsPanel::draw(Engine::ScenePreset& scene, const Engine::Entity selected) {
     ImGui::Begin("Inspector");
     drawPanelHeader("INSPECTOR", selected == Engine::NullEntity ? "NO SELECTION" : "ENTITY");
     if (selected == Engine::NullEntity) {
@@ -557,7 +458,7 @@ bool drawInspector(Engine::ScenePreset& scene, const Engine::Entity selected) {
         ImGui::TextUnformatted("Creates Sandbox/Source/Scripts/<Name>.h and .cpp");
         ImGui::InputTextWithHint("Class name", "PlayerController", name, sizeof(name));
         if (!error.empty()) ImGui::TextColored({1, .3f, .3f, 1}, "%s", error.c_str());
-        if (EditorButton("Create").draw() && createCppScript(name, error)) {
+        if (EditorButton("Create").draw() && EditorSceneSession::createCppScript(name, error)) {
             if (!scene.editor().has<Engine::ScriptComponent>(selected)) scene.editor().add<Engine::ScriptComponent>(selected);
             scene.editor().modify<Engine::ScriptComponent>(selected, [&](auto& script) { script.className = name; script.reset(); });
             name[0] = '\0'; error.clear(); ImGui::CloseCurrentPopup();
@@ -587,34 +488,6 @@ void drawStatusBar(const Engine::ScenePreset& scene, const Engine::Entity select
     ImGui::End();
 }
 
-void configureEditorDockLayout() {
-    static bool configured = false;
-    if (configured) return;
-
-    const ImGuiID dockspaceId = ImGui::GetMainViewport()->ID;
-    ImGui::DockBuilderRemoveNode(dockspaceId);
-    ImGui::DockBuilderAddNode(dockspaceId, ImGuiDockNodeFlags_DockSpace);
-    ImGui::DockBuilderSetNodeSize(dockspaceId, ImGui::GetMainViewport()->WorkSize);
-
-    // Keep the center node as the "remaining" node after each split. This
-    // makes the intended layout explicit and guarantees that Viewport gets
-    // all space left between the two side panels.
-    ImGuiID hierarchyId = 0;
-    ImGuiID centerId = 0;
-    ImGui::DockBuilderSplitNode(dockspaceId, ImGuiDir_Left, 0.22f,
-                                &hierarchyId, &centerId);
-
-    ImGuiID inspectorId = 0;
-    ImGui::DockBuilderSplitNode(centerId, ImGuiDir_Right, 0.28f,
-                                &inspectorId, &centerId);
-
-    ImGui::DockBuilderDockWindow("Hierarchy", hierarchyId);
-    ImGui::DockBuilderDockWindow("Viewport", centerId);
-    ImGui::DockBuilderDockWindow("Inspector", inspectorId);
-    ImGui::DockBuilderFinish(dockspaceId);
-    configured = true;
-}
-
 Engine::Entity drawEditorMenuBar(Engine::ScenePreset& scene, Engine::Renderer& renderer,
                                  bool& antialiasingChanged, bool& sceneLoaded,
                                  const bool playing, const bool paused, bool& playToggleRequested,
@@ -638,7 +511,7 @@ Engine::Entity drawEditorMenuBar(Engine::ScenePreset& scene, Engine::Renderer& r
     ImGui::TextDisabled("|");
 
     if (ImGui::BeginMenu("File")) {
-        const std::filesystem::path scenePath = editorScenePath();
+        const std::filesystem::path scenePath = EditorSceneSession::scenePath();
         if (ImGui::MenuItem("Save Scene", "Ctrl+S")) {
             try {
                 std::filesystem::create_directories(scenePath.parent_path());
@@ -827,8 +700,6 @@ Engine::Entity drawEditorMenuBar(Engine::ScenePreset& scene, Engine::Renderer& r
     return createdEntity;
 }
 
-} // namespace
-
 int main() {
     try {
         if (!SDL_Init(SDL_INIT_VIDEO | SDL_INIT_EVENTS)) throw std::runtime_error(SDL_GetError());
@@ -839,7 +710,7 @@ int main() {
         IMGUI_CHECKVERSION();
         ImGui::CreateContext();
         ImGui::GetIO().ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard | ImGuiConfigFlags_DockingEnable;
-        configureEditorStyle();
+        EditorStyle::apply();
 
         Engine::ScenePreset scene(Engine::SceneType::Particles);
         Engine::ScriptSystem scriptSystem{Engine::ScriptRegistry::instance()};
@@ -860,8 +731,8 @@ int main() {
             const Engine::EditorEventState events = renderer.pollEditorEvents();
             if (events.quitRequested) running = false;
             if (events.togglePlay) {
-                if (setPlayMode(!playing, scene, playSceneSnapshot, playModeError,
-                                msaaSampleCount(renderer))) {
+                if (EditorSceneSession::setPlayMode(!playing, scene, playSceneSnapshot, playModeError,
+                                EditorSceneSession::msaaSampleCount(renderer))) {
                         playing = !playing;
                         paused = false;
                         showGameView = playing;
@@ -901,8 +772,8 @@ int main() {
                 renderer.setEditorSelection(selectedEntity);
                 rendererReloadPending = true;
             }
-            if (playToggleRequested && setPlayMode(!playing, scene, playSceneSnapshot, playModeError,
-                                                   msaaSampleCount(renderer))) {
+            if (playToggleRequested && EditorSceneSession::setPlayMode(!playing, scene, playSceneSnapshot, playModeError,
+                                                   EditorSceneSession::msaaSampleCount(renderer))) {
                 playing = !playing;
                 paused = false;
                 showGameView = playing;
@@ -916,15 +787,15 @@ int main() {
             const ImGuiID dockspaceId = ImGui::GetMainViewport()->ID;
             ImGui::DockSpaceOverViewport(dockspaceId, ImGui::GetMainViewport(),
                                          ImGuiDockNodeFlags_PassthruCentralNode);
-            configureEditorDockLayout();
-            if (const Engine::Entity clicked = drawHierarchy(scene, selectedEntity);
+            EditorStyle::configureDockLayout();
+            if (const Engine::Entity clicked = HierarchyPanel::draw(scene, selectedEntity);
                 clicked != Engine::NullEntity) {
                 selectedEntity = clicked;
                 renderer.setEditorSelection(selectedEntity);
             }
             const bool sceneCameraInput = drawViewport(
                 renderer.gameViewport(), renderer.sceneViewport(), showGameView, playing);
-            const bool inspectorConsumesMouseWheel = drawInspector(scene, selectedEntity);
+            const bool inspectorConsumesMouseWheel = ComponentsPanel::draw(scene, selectedEntity);
             drawStatusBar(scene, selectedEntity, playing, paused);
             renderer.setEditorSceneCameraInput(
                 sceneCameraInput && !inspectorConsumesMouseWheel);
