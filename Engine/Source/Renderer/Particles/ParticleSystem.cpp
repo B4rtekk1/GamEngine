@@ -64,7 +64,7 @@ ParticleSystem::~ParticleSystem() { destroy(); }
 void ParticleSystem::update(float deltaTime) {
     const float dt = std::clamp(deltaTime, 0.0f, 0.1f);
     emitter_.accumulator += dt * std::max(0.0f, emitter_.spawnRate);
-    const uint32_t requested = static_cast<uint32_t>(emitter_.accumulator);
+    const auto requested = static_cast<uint32_t>(emitter_.accumulator);
     emitter_.accumulator -= static_cast<float>(requested);
     const uint32_t spawnCount = std::min(requested, maxParticles_);
 

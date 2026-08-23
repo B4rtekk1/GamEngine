@@ -371,6 +371,19 @@ class Renderer::Backend {
             }
             destroySceneViewportFramebuffer();
             particlePipeline.destroy();
+            // A particle emitter may have been removed from the scene.  The
+            // compute/render pipelines and the ParticleSystem must share the
+            // same lifetime; otherwise the next frame records commands with
+            // destroyed pipeline handles.
+            particleSystem.reset();
+            if (particleComputePipeline != VK_NULL_HANDLE) {
+                vkDestroyPipeline(device, particleComputePipeline, nullptr);
+                particleComputePipeline = VK_NULL_HANDLE;
+            }
+            if (particleComputePipelineLayout != VK_NULL_HANDLE) {
+                vkDestroyPipelineLayout(device, particleComputePipelineLayout, nullptr);
+                particleComputePipelineLayout = VK_NULL_HANDLE;
+            }
             skyPass.destroy(); sceneSkyPass.destroy(); forwardPass.destroy(); hiZDepthPrepass.destroy();
             shadowPass.destroy(); sceneDescriptorPass.destroy();
             indexBuffer.destroy(); vertexBuffer.destroy();
@@ -1325,8 +1338,26 @@ class Renderer::Backend {
                     sceneMaximum = glm::max(sceneMaximum, worldBounds.max.native());
                 });
 
+            // An editor scene is allowed to be empty.  Render passes still
+            // bind vertex/index/instance/material buffers even when there are
+            // no draw calls, so keep one harmless dummy element in each GPU
+            // buffer instead of failing scene synchronization after deleting
+            // the final mesh object.
             if (sceneMesh.empty()) {
-                throw std::runtime_error("Scene contains no renderable geometry");
+                const Vertex dummyVertex{};
+                const std::uint32_t dummyIndex = 0;
+                hasShadowCasters = false;
+                sceneCenter = Vec3{};
+                sceneRadius = 1.0f;
+                vertexBuffer.createDeviceLocal(
+                    vulkanDevice.physical(), device, &dummyVertex, sizeof(dummyVertex),
+                    VK_BUFFER_USAGE_VERTEX_BUFFER_BIT, commandPool,
+                    vulkanDevice.graphicsQueue(), vulkanDevice.allocator());
+                indexBuffer.createDeviceLocal(
+                    vulkanDevice.physical(), device, &dummyIndex, sizeof(dummyIndex),
+                    VK_BUFFER_USAGE_INDEX_BUFFER_BIT, commandPool,
+                    vulkanDevice.graphicsQueue(), vulkanDevice.allocator());
+                return;
             }
 
             hasShadowCasters = false;
@@ -1357,21 +1388,30 @@ class Renderer::Backend {
             updateRenderableBuffers();
             for (Buffer& buffer : instanceBuffers) {
                 buffer.createHostVisible(vulkanDevice.physical(), device,
-                    sizeof(glm::mat4) * instanceModels.size(), VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
+                    sizeof(glm::mat4) * std::max<std::size_t>(1, instanceModels.size()),
+                    VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
                     vulkanDevice.allocator());
-                buffer.update(instanceModels.data(), sizeof(glm::mat4) * instanceModels.size());
+                if (!instanceModels.empty()) {
+                    buffer.update(instanceModels.data(), sizeof(glm::mat4) * instanceModels.size());
+                }
             }
             for (Buffer& buffer : shadowInstanceBuffers) {
                 buffer.createHostVisible(vulkanDevice.physical(), device,
-                    sizeof(glm::mat4) * shadowInstanceModels.size(), VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
+                    sizeof(glm::mat4) * std::max<std::size_t>(1, shadowInstanceModels.size()),
+                    VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
                     vulkanDevice.allocator());
-                buffer.update(shadowInstanceModels.data(), sizeof(glm::mat4) * shadowInstanceModels.size());
+                if (!shadowInstanceModels.empty()) {
+                    buffer.update(shadowInstanceModels.data(),
+                                  sizeof(glm::mat4) * shadowInstanceModels.size());
+                }
             }
             for (Buffer& buffer : materialBuffers) {
                 buffer.createHostVisible(vulkanDevice.physical(), device,
-                    sizeof(GPUMaterialData) * materials.size(),
+                    sizeof(GPUMaterialData) * std::max<std::size_t>(1, materials.size()),
                     VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, vulkanDevice.allocator());
-                buffer.update(materials.data(), sizeof(GPUMaterialData) * materials.size());
+                if (!materials.empty()) {
+                    buffer.update(materials.data(), sizeof(GPUMaterialData) * materials.size());
+                }
             }
 
             // Every instance/material buffer has just received the complete

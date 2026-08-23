@@ -179,8 +179,11 @@ bool drawViewport(Engine::Renderer& renderer, Engine::ViewportHandle gameDescrip
     return !playing && !showGameView && viewportHovered;
 }
 
-Engine::Entity HierarchyPanel::draw(Engine::ScenePreset& scene, const Engine::Entity selected) {
+Engine::Entity HierarchyPanel::draw(Engine::ScenePreset& scene, const Engine::Entity selected,
+                                    Action& action, Engine::Entity& actionEntity) {
     Engine::Entity clicked = Engine::NullEntity;
+    action = Action::None;
+    actionEntity = Engine::NullEntity;
     ImGui::Begin("Hierarchy");
     drawPanelHeader("SCENE HIERARCHY");
     ImGui::SameLine(ImGui::GetWindowWidth() - 75.0f);
@@ -239,14 +242,28 @@ Engine::Entity HierarchyPanel::draw(Engine::ScenePreset& scene, const Engine::En
             const bool hasChildren = childIt != children.end() && !childIt->second.empty();
             char label[128];
             std::snprintf(label, sizeof(label), "%s##%u", name, Engine::entityIndex(entity));
+            const auto drawContextMenu = [&] {
+                if (!ImGui::BeginPopupContextItem()) return;
+                if (ImGui::MenuItem("Copy")) {
+                    action = Action::Duplicate;
+                    actionEntity = entity;
+                }
+                if (ImGui::MenuItem("Delete")) {
+                    action = Action::Delete;
+                    actionEntity = entity;
+                }
+                ImGui::EndPopup();
+            };
             if (!hasChildren) {
                 if (ImGui::Selectable(label, selected == entity)) clicked = entity;
+                drawContextMenu();
                 return;
             }
             const ImGuiTreeNodeFlags flags = ImGuiTreeNodeFlags_SpanAvailWidth |
                 (selected == entity ? ImGuiTreeNodeFlags_Selected : 0);
             const bool open = ImGui::TreeNodeEx(label, flags);
             if (ImGui::IsItemClicked()) clicked = entity;
+            drawContextMenu();
             if (open) {
                 for (const Engine::Entity child : childIt->second) self(self, child);
                 ImGui::TreePop();
@@ -912,10 +929,26 @@ int main() {
             ImGui::DockSpaceOverViewport(dockspaceId, ImGui::GetMainViewport(),
                                          ImGuiDockNodeFlags_PassthruCentralNode);
             EditorStyle::configureDockLayout();
-            if (const Engine::Entity clicked = HierarchyPanel::draw(scene, selectedEntity);
+            HierarchyPanel::Action hierarchyAction = HierarchyPanel::Action::None;
+            Engine::Entity hierarchyActionEntity = Engine::NullEntity;
+            if (const Engine::Entity clicked = HierarchyPanel::draw(
+                    scene, selectedEntity, hierarchyAction, hierarchyActionEntity);
                 clicked != Engine::NullEntity) {
                 selectedEntity = clicked;
                 renderer.setEditorSelection(selectedEntity);
+            }
+            if (!playing && hierarchyActionEntity != Engine::NullEntity &&
+                scene.editor().valid(hierarchyActionEntity)) {
+                if (hierarchyAction == HierarchyPanel::Action::Delete) {
+                    scene.editor().destroy(hierarchyActionEntity);
+                    if (selectedEntity == hierarchyActionEntity) {
+                        selectedEntity = Engine::NullEntity;
+                        renderer.setEditorSelection(selectedEntity);
+                    }
+                } else if (hierarchyAction == HierarchyPanel::Action::Duplicate) {
+                    selectedEntity = scene.editor().duplicate(hierarchyActionEntity);
+                    renderer.setEditorSelection(selectedEntity);
+                }
             }
             const bool sceneCameraInput = drawViewport(
                 renderer, renderer.gameViewport(), renderer.sceneViewport(), renderer.editorCameraYaw(),

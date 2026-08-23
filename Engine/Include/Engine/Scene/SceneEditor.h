@@ -16,6 +16,7 @@ public:
     [[nodiscard]] std::size_t size() const noexcept { return scene_->objectCount(); }
     [[nodiscard]] bool valid(Entity entity) const { return scene_->valid(entity); }
     void destroy(Entity entity) { scene_->destroy(entity); }
+    [[nodiscard]] Entity duplicate(Entity entity) { return scene_->duplicate(entity).entity(); }
     [[nodiscard]] std::uint64_t structuralRevision() const noexcept {
         return scene_->structuralRevision();
     }

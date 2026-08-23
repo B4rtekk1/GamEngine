@@ -59,6 +59,27 @@ public:
         return create(std::move(name));
     }
 
+    /** Creates a copy of an existing object with a fresh name and UUID. */
+    [[nodiscard]] GameObject& duplicate(const Entity entity) {
+        GameObject* source = findByEntity(entity);
+        if (source == nullptr) throw std::out_of_range("Scene entity is not a GameObject");
+
+        std::string name = source->name();
+        if (registry_.has<NameComponent>(entity)) name = registry_.get<NameComponent>(entity).value;
+        const std::string baseName = name;
+        std::size_t suffix = 2;
+        while (find(name) != nullptr) name = baseName + " " + std::to_string(suffix++);
+
+        auto object = std::make_unique<GameObject>(source->clone());
+        object->setName(name);
+        const Entity copiedEntity = object->entity();
+        registry_.modify<NameComponent>(copiedEntity, [&](auto& value) { value.value = name; });
+        registry_.modify<UUIDComponent>(copiedEntity, [&](auto& value) { value.value = createUUID(); });
+        names_[name] = object->objectId();
+        objects_.push_back(std::move(object));
+        return *objects_.back();
+    }
+
     /** Creates a renderable object without exposing Registry or component wiring. */
     [[nodiscard]] GameObject& createMeshObject(std::string name,
                                                 std::shared_ptr<const Mesh> mesh,
@@ -141,8 +162,24 @@ public:
         const auto it = std::find_if(objects_.begin(), objects_.end(),
             [entity](const auto& object) { return object->entity() == entity; });
         if (it == objects_.end()) return;
+
+        // The renderer requires one primary camera every frame. Deleting the
+        // only one would leave the scene in an invalid state and make the
+        // next frame fail while building the camera uniforms.
+        if (registry_.has<CameraComponent>(entity) &&
+            registry_.get<CameraComponent>(entity).primary) {
+            std::size_t primaryCameraCount = 0;
+            registry_.view<CameraComponent>([&](const Entity, const CameraComponent& camera) {
+                if (camera.primary) ++primaryCameraCount;
+            });
+            if (primaryCameraCount <= 1) return;
+        }
+
         names_.erase((*it)->name());
-        (*it)->detach();
+        // Destroy the ECS entity before removing its owning wrapper. Merely
+        // detaching it would make it disappear from the hierarchy while the
+        // renderer could still find and draw the live registry entity.
+        (*it)->destroy();
         objects_.erase(it);
     }
 
