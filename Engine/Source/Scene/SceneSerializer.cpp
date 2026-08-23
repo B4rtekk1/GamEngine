@@ -192,6 +192,8 @@ void writeCollider(std::ostream& output, const ColliderComponent& collider) {
             output << ' '; writeVec3(output, shape.halfExtents);
         } else if constexpr (std::is_same_v<Shape, SphereCollider>) {
             output << ' '; writeFloat(output, shape.radius);
+        } else if constexpr (std::is_same_v<Shape, RampCollider>) {
+            output << ' '; writeVec3(output, shape.halfExtents);
         } else {
             output << ' '; writeFloat(output, shape.radius);
             output << ' '; writeFloat(output, shape.height);
@@ -235,7 +237,7 @@ RigidbodyComponent readRigidbody(std::istream& input) {
 
 ColliderComponent readCollider(std::istream& input) {
     const int type = read<int>(input, "collider shape");
-    if (type < 0 || type > 2) invalidScene("unknown collider shape");
+    if (type < 0 || type > 3) invalidScene("unknown collider shape");
     ColliderComponent collider;
     collider.offset = readVec3(input, "collider offset");
     collider.isTrigger = readBool(input, "collider trigger flag");
@@ -254,11 +256,17 @@ ColliderComponent readCollider(std::istream& input) {
     } else if (type == 1) {
         collider.shape = SphereCollider{readFloat(input, "sphere collider radius")};
         if (std::get<SphereCollider>(collider.shape).radius <= 0.0f) invalidScene("sphere collider radius must be positive");
-    } else {
+    } else if (type == 2) {
         collider.shape = CapsuleCollider{readFloat(input, "capsule collider radius"),
                                           readFloat(input, "capsule collider height")};
         const auto& capsule = std::get<CapsuleCollider>(collider.shape);
         if (capsule.radius <= 0.0f || capsule.height <= 0.0f) invalidScene("capsule collider dimensions must be positive");
+    } else {
+        collider.shape = RampCollider{readVec3(input, "ramp collider half extents")};
+        const auto& ramp = std::get<RampCollider>(collider.shape);
+        if (ramp.halfExtents.x() <= 0.0f || ramp.halfExtents.y() <= 0.0f || ramp.halfExtents.z() <= 0.0f) {
+            invalidScene("ramp collider half extents must be positive");
+        }
     }
     return collider;
 }

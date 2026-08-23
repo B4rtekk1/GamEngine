@@ -39,10 +39,15 @@ namespace Engine {
         float height = 1.0f;
     };
 
+    /** @brief Collision shape for the unit ramp mesh (a sloped prism). */
+    struct RampCollider {
+        Vec3 halfExtents{0.5f, 0.5f, 0.5f};
+    };
+
     /**
      * @brief Variant containing every collider shape supported by the engine.
      */
-    using ColliderShape = std::variant<BoxCollider, SphereCollider, CapsuleCollider>;
+    using ColliderShape = std::variant<BoxCollider, SphereCollider, CapsuleCollider, RampCollider>;
 
     /**
      * @brief Physics collision properties attached to an entity.

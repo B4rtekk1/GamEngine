@@ -24,6 +24,8 @@ Vec3 colliderExtents(const ColliderComponent& collider) {
             return shape.halfExtents;
         } else if constexpr (std::is_same_v<Shape, SphereCollider>) {
             return Vec3{shape.radius, shape.radius, shape.radius};
+        } else if constexpr (std::is_same_v<Shape, RampCollider>) {
+            return shape.halfExtents;
         } else {
             return Vec3{shape.radius, shape.height * 0.5f, shape.radius};
         }
@@ -42,6 +44,11 @@ Aabb worldAabb(const Transform& transform, const ColliderComponent& collider) {
 bool overlapsHorizontally(const Aabb& lhs, const Aabb& rhs) {
     return std::abs(lhs.center.x() - rhs.center.x()) <= lhs.extents.x() + rhs.extents.x() &&
            std::abs(lhs.center.z() - rhs.center.z()) <= lhs.extents.z() + rhs.extents.z();
+}
+
+float rampTopAt(const Aabb& ramp, const float bodyZ) {
+    const float localZ = bodyZ - ramp.center.z();
+    return ramp.center.y() + localZ * ramp.extents.y() / ramp.extents.z();
 }
 } // namespace
 
@@ -76,7 +83,10 @@ void PhysicsSystem::update(Registry& registry, const float deltaTime) const {
                 for (const StaticCollider& other : colliders) {
                     if (other.entity == entity || !overlapsHorizontally(bodyBounds, other.bounds)) continue;
                     const float bodyBottom = bodyBounds.center.y() - bodyBounds.extents.y();
-                    const float otherTop = other.bounds.center.y() + other.bounds.extents.y();
+                    const auto& otherCollider = registry.get<ColliderComponent>(other.entity);
+                    const float otherTop = std::holds_alternative<RampCollider>(otherCollider.shape)
+                        ? rampTopAt(other.bounds, bodyBounds.center.z())
+                        : other.bounds.center.y() + other.bounds.extents.y();
                     if (bodyBottom < otherTop && body.linearVelocity.y() <= 0.0f) {
                         transform.position.setY(transform.position.y() + otherTop - bodyBottom);
                         body.linearVelocity.setY(0.0f);

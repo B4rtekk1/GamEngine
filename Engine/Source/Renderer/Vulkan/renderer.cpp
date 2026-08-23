@@ -95,6 +95,7 @@ namespace {
                 using Shape = std::decay_t<decltype(shape)>;
                 if constexpr (std::is_same_v<Shape, BoxCollider>) return shape.halfExtents;
                 else if constexpr (std::is_same_v<Shape, SphereCollider>) return Vec3{shape.radius, shape.radius, shape.radius};
+                else if constexpr (std::is_same_v<Shape, RampCollider>) return shape.halfExtents;
                 else return Vec3{shape.radius, shape.height * 0.5f, shape.radius};
             }, collider.shape) * scale;
             const Vec3 center = transform.position + collider.offset * scale;

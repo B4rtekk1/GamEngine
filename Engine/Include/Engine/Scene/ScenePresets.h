@@ -19,6 +19,8 @@ public:
     [[nodiscard]] Entity createGameObject();
     [[nodiscard]] Entity createCube();
     [[nodiscard]] Entity createPlane();
+    [[nodiscard]] Entity createSphere();
+    [[nodiscard]] Entity createRamp();
 
     Entity plane{NullEntity};
     Entity camera{NullEntity};
@@ -27,10 +29,14 @@ public:
     std::vector<Entity> editorGameObjects;
     std::vector<Entity> editorCubes;
     std::vector<Entity> editorPlanes;
+    std::vector<Entity> editorSpheres;
+    std::vector<Entity> editorRamps;
 
 private:
     std::shared_ptr<const Mesh> planeMesh_;
     std::shared_ptr<const Mesh> cubeMesh_;
+    std::shared_ptr<const Mesh> sphereMesh_;
+    std::shared_ptr<const Mesh> rampMesh_;
     std::shared_ptr<const Mesh> treeMesh_;
 };
 

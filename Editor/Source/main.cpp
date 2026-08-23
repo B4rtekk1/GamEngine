@@ -67,6 +67,12 @@ const char* entityName(const Engine::ScenePreset& scene, const Engine::Entity en
     for (const Engine::Entity editorPlane : scene.editorPlanes) {
         if (editorPlane == entity) return "Plane";
     }
+    for (const Engine::Entity editorSphere : scene.editorSpheres) {
+        if (editorSphere == entity) return "Sphere";
+    }
+    for (const Engine::Entity editorRamp : scene.editorRamps) {
+        if (editorRamp == entity) return "Ramp";
+    }
     for (std::size_t index = 0; index < scene.editorGameObjects.size(); ++index) {
         if (scene.editorGameObjects[index] == entity) return "GameObject";
     }
@@ -364,10 +370,10 @@ bool ComponentsPanel::draw(Engine::ScenePreset& scene, const Engine::Entity sele
         ImGui::CollapsingHeader("Collider", ImGuiTreeNodeFlags_DefaultOpen)) {
         const auto collider = scene.editor().get<Engine::ColliderComponent>(selected);
         int shape = static_cast<int>(collider.shape.index());
-        const char* shapeNames[] = {"Box", "Sphere", "Capsule"};
+        const char* shapeNames[] = {"Box", "Sphere", "Capsule", "Ramp"};
         bool changed = false;
         if (ImGui::BeginCombo("Shape##collider", shapeNames[shape])) {
-            for (int index = 0; index < 3; ++index) {
+            for (int index = 0; index < 4; ++index) {
                 if (ImGui::Selectable(shapeNames[index], shape == index)) { shape = index; changed = true; }
             }
             ImGui::EndCombo();
@@ -376,7 +382,8 @@ bool ComponentsPanel::draw(Engine::ScenePreset& scene, const Engine::Entity sele
         if (shape != static_cast<int>(value.shape.index())) {
             value.shape = shape == 0 ? Engine::ColliderShape{Engine::BoxCollider{}} :
                 shape == 1 ? Engine::ColliderShape{Engine::SphereCollider{}} :
-                             Engine::ColliderShape{Engine::CapsuleCollider{}};
+                shape == 2 ? Engine::ColliderShape{Engine::CapsuleCollider{}} :
+                             Engine::ColliderShape{Engine::RampCollider{}};
         }
         float offset[3] = {value.offset.x(), value.offset.y(), value.offset.z()};
         if (ImGui::DragFloat3("Offset##collider", offset, 0.05f)) {
@@ -392,7 +399,7 @@ bool ComponentsPanel::draw(Engine::ScenePreset& scene, const Engine::Entity sele
             } else if constexpr (std::is_same_v<Shape, Engine::SphereCollider>) {
                 changed |= ImGui::DragFloat("Radius##collider", &colliderShape.radius, 0.05f, 0.001f, 1000.0f);
                 colliderShape.radius = std::max(0.001f, colliderShape.radius);
-            } else {
+            } else if constexpr (std::is_same_v<Shape, Engine::CapsuleCollider>) {
                 changed |= ImGui::DragFloat("Radius##collider", &colliderShape.radius, 0.05f, 0.001f, 1000.0f);
                 changed |= ImGui::DragFloat("Height##collider", &colliderShape.height, 0.05f, 0.001f, 1000.0f);
                 colliderShape.radius = std::max(0.001f, colliderShape.radius);
@@ -606,6 +613,12 @@ Engine::Entity drawEditorMenuBar(Engine::ScenePreset& scene, Engine::Renderer& r
         }
         if (ImGui::MenuItem("Create Plane")) {
             createdEntity = scene.createPlane();
+        }
+        if (ImGui::MenuItem("Create Sphere")) {
+            createdEntity = scene.createSphere();
+        }
+        if (ImGui::MenuItem("Create Ramp")) {
+            createdEntity = scene.createRamp();
         }
         ImGui::EndMenu();
     }

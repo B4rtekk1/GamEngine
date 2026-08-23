@@ -8,6 +8,8 @@
 #include "Engine/ECS/Components/ColliderComponent.h"
 #include "Engine/Renderer/Geometry/Cube.h"
 #include "Engine/Renderer/Geometry/Plane.h"
+#include "Engine/Renderer/Geometry/Ramp.h"
+#include "Engine/Renderer/Geometry/Sphere.h"
 #include "Engine/Renderer/MeshRenderer.h"
 #include "Engine/Scene/Components/LightComponent.h"
 #include "Engine/Scene/SceneBuilder.h"
@@ -41,6 +43,8 @@ void buildFont(UI::UIFontAtlas& atlas) {
 ScenePreset::ScenePreset(const SceneType type) {
     planeMesh_ = std::make_shared<Mesh>(Plane::createMesh());
     cubeMesh_ = std::make_shared<Mesh>(Cube::createMesh());
+    sphereMesh_ = std::make_shared<Mesh>(Sphere::createMesh());
+    rampMesh_ = std::make_shared<Mesh>(Ramp::createMesh());
     buildFont(uiFontAtlas());
     SceneBuilder builder{registry()};
 
@@ -115,6 +119,22 @@ Entity ScenePreset::createCube() {
 Entity ScenePreset::createPlane() {
     const Entity entity = SceneBuilder{registry()}.createMeshEntity(planeMesh_, Transform{.scale = {2, 1, 2}}, {}, true, 0, "Plane");
     editorPlanes.push_back(entity);
+    return entity;
+}
+
+Entity ScenePreset::createSphere() {
+    const Entity entity = SceneBuilder{registry()}.createMeshEntity(sphereMesh_, Transform{.position = {0, 0.5f, 0}},
+        PBRMaterial{.baseColor = {0.35f, 0.65f, 0.95f}, .metallic = 0.1f, .roughness = 0.42f}, true, 0, "Sphere");
+    registry().add<ColliderComponent>(entity, ColliderComponent{.shape = SphereCollider{.radius = 0.5f}});
+    editorSpheres.push_back(entity);
+    return entity;
+}
+
+Entity ScenePreset::createRamp() {
+    const Entity entity = SceneBuilder{registry()}.createMeshEntity(rampMesh_, Transform{.position = {0, 2.0f, 0}},
+        PBRMaterial{.baseColor = {0.95f, 0.62f, 0.25f}, .metallic = 0.0f, .roughness = 0.72f}, true, 0, "Ramp");
+    registry().add<ColliderComponent>(entity, ColliderComponent{.shape = RampCollider{.halfExtents = Ramp::halfExtents()}});
+    editorRamps.push_back(entity);
     return entity;
 }
 
