@@ -1,7 +1,9 @@
 #include "Engine/Scene/Scene.h"
 
 #include "Engine/Scene/SceneSerializer.h"
+#include "Engine/Assets/Content.h"
 
+#include <stdexcept>
 #include <utility>
 
 namespace Engine {
@@ -13,6 +15,14 @@ GameObject& Scene::createMeshObject(std::string name,
     object.setMesh(std::move(mesh));
     object.setMaterial(std::move(material));
     return object;
+}
+
+Actor Scene::createModel(std::string name, std::filesystem::path path,
+                         Assets::Content& content) {
+    auto mesh = content.mesh(std::move(path));
+    if (!mesh) throw std::runtime_error("Could not load model for actor '" + name + "'");
+    auto& object = createMeshObject(std::move(name), std::move(mesh));
+    return Actor{*this, object.objectId()};
 }
 
 void Scene::save(const std::filesystem::path& path) const {

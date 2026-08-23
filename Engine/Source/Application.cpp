@@ -23,7 +23,8 @@ public:
 };
 
 Application::Application(ApplicationConfig config)
-    : config_(std::move(config)), impl_(std::make_unique<Impl>(config_.render)) {}
+    : config_(std::move(config)), content_(config_.assetRoot),
+      impl_(std::make_unique<Impl>(config_.render)) {}
 
 Application::~Application() {
     if (impl_->initialized) impl_->renderer.shutdown();

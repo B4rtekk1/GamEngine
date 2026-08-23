@@ -1,6 +1,7 @@
 #pragma once
 
 #include "Engine/ECS/GameObject.h"
+#include "Engine/ECS/Actor.h"
 #include "Engine/ECS/Registry.h"
 #include "Engine/Renderer/Particles/ParticleSystem.h"
 #include "Engine/ECS/Components/ParticleEmitterComponent.h"
@@ -23,6 +24,7 @@
 #include <vector>
 
 namespace Engine { class SceneSerializer; }
+namespace Engine::Assets { class Content; }
 
 namespace Engine {
 
@@ -59,6 +61,12 @@ public:
         return create(std::move(name));
     }
 
+    /** High-level actor creation without exposing the ECS entity handle. */
+    [[nodiscard]] Actor createActor(std::string name) {
+        auto& object = create(std::move(name));
+        return Actor{*this, object.objectId()};
+    }
+
     /** Creates a copy of an existing object with a fresh name and UUID. */
     [[nodiscard]] GameObject& duplicate(const Entity entity) {
         GameObject* source = findByEntity(entity);
@@ -89,6 +97,16 @@ public:
                                           std::shared_ptr<const Mesh> mesh,
                                           PBRMaterial material = {}) {
         return createMeshObject(std::move(name), std::move(mesh), std::move(material));
+    }
+
+    /** Loads a model through Content and creates an actor in one operation. */
+    [[nodiscard]] Actor createModel(std::string name,
+                                    std::filesystem::path path,
+                                    Assets::Content& content);
+
+    [[nodiscard]] Actor findActor(const std::string& name) noexcept {
+        auto* object = find(name);
+        return object == nullptr ? Actor{} : Actor{*this, object->objectId()};
     }
 
     [[nodiscard]] GameObject& createCamera(std::string name, CameraComponent camera = {}) {

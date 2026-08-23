@@ -37,12 +37,14 @@ add_library(Engine
         Engine/Source/Application.cpp
         Engine/Source/Assets/StbImage.cpp
         Engine/Source/Assets/AssetManager.cpp
+        Engine/Source/Assets/Content.cpp
         Engine/Source/Core/camera.cpp
         Engine/Source/Core/time.cpp
         Engine/Source/ECS/Registry.cpp
         Engine/Source/Input/Input.cpp
         Engine/Source/Scene/SceneSerializer.cpp
         Engine/Source/Scene/Scene.cpp
+        Engine/Source/Scene/Actor.cpp
         Engine/Source/Scene/ScenePresets.cpp
         Engine/Source/Physics/PhysicsSystem.cpp
         Engine/Source/Scripting/ScriptSystem.cpp

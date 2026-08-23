@@ -1,0 +1,45 @@
+#include "Engine/ECS/Actor.h"
+
+#include "Engine/ECS/GameObject.h"
+#include "Engine/Scene/Scene.h"
+
+#include <stdexcept>
+#include <utility>
+
+namespace Engine {
+
+GameObject& Actor::object() const {
+    if (scene_ == nullptr) throw std::logic_error("Actor is not attached to a Scene");
+    auto* object = scene_->find(objectId_);
+    if (object == nullptr) throw std::logic_error("Actor no longer refers to a live object");
+    return *object;
+}
+
+bool Actor::valid() const noexcept {
+    return scene_ != nullptr && scene_->find(objectId_) != nullptr;
+}
+
+std::string Actor::name() const { return object().name(); }
+
+void Actor::setName(std::string name) { object().setName(std::move(name)); }
+void Actor::setPosition(Vec3 position) { object().setPosition(position); }
+void Actor::setRotation(Vec3 rotation) { object().setRotation(rotation); }
+void Actor::setScale(Vec3 scale) { object().setScale(scale); }
+Vec3 Actor::position() const { return object().position(); }
+Vec3 Actor::rotation() const { return object().rotation(); }
+Vec3 Actor::scale() const { return object().scale(); }
+void Actor::setMesh(std::shared_ptr<const Mesh> mesh) { object().setMesh(std::move(mesh)); }
+void Actor::setMaterial(PBRMaterial material) { object().setMaterial(std::move(material)); }
+void Actor::setCastShadow(const bool enabled) { object().setCastShadow(enabled); }
+void Actor::setCullingBatch(const std::uint32_t batch) { object().setCullingBatch(batch); }
+void Actor::addRigidbody(RigidbodyComponent body) { object().addRigidbody(std::move(body)); }
+void Actor::addScript(std::string className, const bool enabled) {
+    object().addScript(std::move(className), enabled);
+}
+void Actor::destroy() {
+    if (scene_ != nullptr) scene_->destroy(object().entity());
+    scene_ = nullptr;
+    objectId_ = NullObjectId;
+}
+
+} // namespace Engine

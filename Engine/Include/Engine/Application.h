@@ -2,6 +2,7 @@
 
 #include "Engine/Scene/Scene.h"
 #include "Engine/Renderer/RenderConfig.h"
+#include "Engine/Assets/Content.h"
 
 #include <cstdint>
 #include <functional>
@@ -15,6 +16,7 @@ struct ApplicationConfig final {
     std::int32_t width = 1280;
     std::int32_t height = 720;
     bool closeOnEscape = true;
+    std::filesystem::path assetRoot{};
     RenderConfig render{};
 };
 
@@ -29,6 +31,8 @@ public:
 
     [[nodiscard]] Scene& scene() noexcept { return scene_; }
     [[nodiscard]] const Scene& scene() const noexcept { return scene_; }
+    [[nodiscard]] Assets::Content& content() noexcept { return content_; }
+    [[nodiscard]] const Assets::Content& content() const noexcept { return content_; }
 
     /** Called once per frame before rendering, when provided. */
     void setUpdateCallback(std::function<void(Scene&, float)> callback) {
@@ -46,6 +50,7 @@ private:
     class Impl;
     ApplicationConfig config_;
     Scene scene_;
+    Assets::Content content_;
     std::function<void(Scene&, float)> updateCallback_;
     std::unique_ptr<Impl> impl_;
 };
