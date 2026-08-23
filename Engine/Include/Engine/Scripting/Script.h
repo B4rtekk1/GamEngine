@@ -1,10 +1,13 @@
 #pragma once
 
 #include "Engine/Core/Transform.h"
+#include "Engine/ECS/Actor.h"
 #include "Engine/ECS/Entity.h"
 #include "Engine/ECS/Registry.h"
 
 namespace Engine {
+
+class Scene;
 
 /** Base class for native C++ behaviours attached to entities. */
 class Script {
@@ -14,6 +17,10 @@ public:
     [[nodiscard]] Entity entity() const noexcept { return entity_; }
     [[nodiscard]] Registry& registry() const noexcept { return *registry_; }
     [[nodiscard]] Transform& transform() const { return registry().get<Transform>(entity_); }
+    /** Returns the high-level actor controlled by this script. */
+    [[nodiscard]] Actor actor() const;
+    /** Returns the scene containing the scripted actor. */
+    [[nodiscard]] Scene& scene() const;
 
     /** Called once, immediately before the first update. */
     virtual void onCreate() {}
@@ -25,10 +32,18 @@ public:
 private:
     friend class ScriptSystem;
     void attach(Registry& registry, Entity entity) noexcept {
+        scene_ = nullptr;
         registry_ = &registry;
         entity_ = entity;
     }
 
+    void attach(Scene& scene, Registry& registry, Entity entity) noexcept {
+        scene_ = &scene;
+        registry_ = &registry;
+        entity_ = entity;
+    }
+
+    Scene* scene_{};
     Registry* registry_{};
     Entity entity_{NullEntity};
 };

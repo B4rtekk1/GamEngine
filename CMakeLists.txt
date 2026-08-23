@@ -49,6 +49,8 @@ add_library(Engine
         Engine/Source/Scene/ScenePresets.cpp
         Engine/Source/Physics/PhysicsSystem.cpp
         Engine/Source/Scripting/ScriptSystem.cpp
+        Engine/Source/Scripting/Script.cpp
+        Engine/Source/Scripting/ScriptRegistry.cpp
         Engine/Source/UI/Canvas.cpp
         Engine/Source/UI/CanvasRenderer.cpp
         Engine/Source/UI/UIBatch.cpp

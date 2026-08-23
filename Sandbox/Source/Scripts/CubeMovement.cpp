@@ -6,6 +6,5 @@ ENGINE_REGISTER_SCRIPT(CubeMovement);
 
 void CubeMovement::onUpdate(const float deltaTime) {
     constexpr float speed = 2.0f;
-    auto& position = transform().position;
-    position.setX(position.x() + speed * deltaTime);
+    actor().move({speed * deltaTime, 0.0f, 0.0f});
 }

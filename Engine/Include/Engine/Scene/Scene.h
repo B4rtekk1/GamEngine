@@ -69,6 +69,13 @@ public:
         return Actor{*this, object.objectId()};
     }
 
+    /** Duplicates an actor without exposing its ECS entity identifier. */
+    [[nodiscard]] Actor duplicate(const Actor& actor) {
+        if (!actor.valid()) return {};
+        auto& object = duplicate(actor.object().entity());
+        return Actor{*this, object.objectId()};
+    }
+
     /** Creates a copy of an existing object with a fresh name and UUID. */
     [[nodiscard]] GameObject& duplicate(const Entity entity) {
         GameObject* source = findByEntity(entity);
@@ -112,6 +119,12 @@ public:
     [[nodiscard]] Actor findActor(const std::string& name) noexcept {
         auto* object = find(name);
         return object == nullptr ? Actor{} : Actor{*this, object->objectId()};
+    }
+
+    /** Destroys an actor through the high-level runtime API. */
+    void destroy(const Actor& actor) noexcept {
+        if (actor.scene_ != this || actor.objectId_ == NullObjectId) return;
+        if (auto* object = find(actor.objectId_)) destroy(object->entity());
     }
 
     [[nodiscard]] GameObject& createCamera(std::string name, CameraComponent camera = {}) {

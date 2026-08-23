@@ -18,6 +18,7 @@ public:
     SDL_Window* window = nullptr;
     bool initialized = false;
     bool running = false;
+    float fixedAccumulator = 0.0f;
     ScriptSystem scripts{ScriptRegistry::instance()};
     PhysicsSystem physics{};
 };
@@ -53,6 +54,7 @@ void Application::run() {
     if (impl_->window == nullptr) throw std::runtime_error(SDL_GetError());
 
     impl_->renderer.initialize(scene_, impl_->window);
+    if (game_ != nullptr) game_->onStart(scene_);
     impl_->running = true;
     while (impl_->running) {
         impl_->renderer.beginFrame();
@@ -66,13 +68,26 @@ void Application::run() {
             }
         }
         if (impl_->running) {
+            const float deltaTime = static_cast<float>(Time::deltaTime());
             scene_.ui().update();
-            if (updateCallback_) updateCallback_(scene_, static_cast<float>(Time::deltaTime()));
-            impl_->physics.update(scene_, static_cast<float>(Time::deltaTime()));
-            impl_->scripts.update(scene_, static_cast<float>(Time::deltaTime()));
+            if (game_ != nullptr) game_->onUpdate(scene_, deltaTime);
+            if (updateCallback_) updateCallback_(scene_, deltaTime);
+
+            if (config_.fixedDeltaTime > 0.0f) {
+                impl_->fixedAccumulator += deltaTime;
+                while (impl_->fixedAccumulator >= config_.fixedDeltaTime) {
+                    if (game_ != nullptr) game_->onFixedUpdate(scene_, config_.fixedDeltaTime);
+                    impl_->physics.update(scene_, config_.fixedDeltaTime);
+                    impl_->fixedAccumulator -= config_.fixedDeltaTime;
+                }
+            } else {
+                impl_->physics.update(scene_, deltaTime);
+            }
+            impl_->scripts.update(scene_, deltaTime);
             impl_->renderer.renderFrame();
         }
     }
+    if (game_ != nullptr) game_->onShutdown(scene_);
     impl_->renderer.shutdown();
     impl_->initialized = false;
 }

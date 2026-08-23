@@ -25,6 +25,8 @@ void Actor::setName(std::string name) { object().setName(std::move(name)); }
 void Actor::setPosition(Vec3 position) { object().setPosition(position); }
 void Actor::setRotation(Vec3 rotation) { object().setRotation(rotation); }
 void Actor::setScale(Vec3 scale) { object().setScale(scale); }
+void Actor::translate(const Vec3 offset) { object().setPosition(object().position() + offset); }
+void Actor::move(const Vec3 offset) { translate(offset); }
 Vec3 Actor::position() const { return object().position(); }
 Vec3 Actor::rotation() const { return object().rotation(); }
 Vec3 Actor::scale() const { return object().scale(); }
@@ -42,11 +44,13 @@ void Actor::addSphereCollider(const float radius) {
 void Actor::addCapsuleCollider(const float radius, const float height) {
     object().add<ColliderComponent>(ColliderComponent{.shape = CapsuleCollider{radius, height}});
 }
+void Actor::addCamera(CameraComponent camera) { object().addCamera(std::move(camera)); }
+void Actor::addLight(LightComponent light) { object().addLight(std::move(light)); }
 void Actor::addScript(std::string className, const bool enabled) {
     object().addScript(std::move(className), enabled);
 }
 void Actor::destroy() {
-    if (scene_ != nullptr) scene_->destroy(object().entity());
+    if (scene_ != nullptr && valid()) scene_->destroy(*this);
     scene_ = nullptr;
     objectId_ = NullObjectId;
 }

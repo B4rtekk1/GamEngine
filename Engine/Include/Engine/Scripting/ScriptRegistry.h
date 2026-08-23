@@ -1,7 +1,5 @@
 #pragma once
 
-#include "Engine/Scripting/Script.h"
-
 #include <functional>
 #include <concepts>
 #include <memory>
@@ -13,6 +11,8 @@
 #include <vector>
 
 namespace Engine {
+
+class Script;
 
 /** Registry of C++ script classes available to ScriptComponent. */
 class ScriptRegistry final {
@@ -39,10 +39,7 @@ public:
         return found->second;
     }
 
-    [[nodiscard]] std::unique_ptr<Script> create(const std::string_view name) const {
-        const auto found = factories_.find(std::string{name});
-        return found == factories_.end() ? nullptr : found->second();
-    }
+    [[nodiscard]] std::unique_ptr<Script> create(std::string_view name) const;
 
     [[nodiscard]] std::vector<std::string> classNames() const {
         std::vector<std::string> names;
