@@ -3,7 +3,7 @@
 #include "Engine/Assets/AssetManager.h"
 #include "Engine/Core/Transform.h"
 #include "Engine/ECS/Components/CameraComponent.h"
-#include "Engine/ECS/Components/SmokeEmitterComponent.h"
+#include "Engine/ECS/Components/ParticleEmitterComponent.h"
 #include "Engine/ECS/Components/ColorPickerComponent.h"
 #include "Engine/ECS/Components/ColliderComponent.h"
 #include "Engine/Renderer/Geometry/Cube.h"
@@ -45,15 +45,15 @@ ScenePreset::ScenePreset(const SceneType type) {
     SceneBuilder builder{registry()};
 
     if (type == SceneType::Particles) {
-        Particles::SmokeEmitter smokeEmitter;
-        smokeEmitter.position = {0.0f, 0.25f, 0.0f};
-        setSmokeEmitter(smokeEmitter);
+        Particles::ParticleEmitter emitter;
+        emitter.position = {0.0f, 0.25f, 0.0f};
+        setParticleEmitter(emitter);
         particleSystem = builder.createEntity("Particle System");
         setParticleEntity(particleSystem);
         registry().add<Transform>(particleSystem,
                                 Transform{.position = particleEmitter().position});
-        registry().add<SmokeEmitterComponent>(particleSystem,
-                                               SmokeEmitterComponent{smokeEmitter});
+        registry().add<ParticleEmitterComponent>(particleSystem,
+                                                  ParticleEmitterComponent{emitter});
         registry().add<ColorPickerComponent>(particleSystem,
                                            ColorPickerComponent{particleEmitter().color});
     }

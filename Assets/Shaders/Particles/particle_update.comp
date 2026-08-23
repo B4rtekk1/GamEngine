@@ -6,6 +6,7 @@ struct Particle {
     vec4 positionLife;
     vec4 velocitySize;
     vec4 color;
+    vec4 spawnData;
 };
 
 layout(std430, set = 0, binding = 0) buffer Particles { Particle particles[]; };
@@ -44,6 +45,18 @@ float random(inout uint state) {
     return float(state) * (1.0 / 4294967296.0);
 }
 
+// A divergence-free field is considerably more convincing than independent
+// per-particle jitter: neighbouring particles keep forming the same rolling
+// billows while the plume rises.
+vec3 curlNoise(vec3 p) {
+    const float a = 1.73;
+    const float b = 2.31;
+    const float c = 2.87;
+    return vec3(cos(p.z * c) * c - cos(p.y * b) * b,
+                cos(p.x * a) * a - cos(p.z * c) * c,
+                cos(p.y * b) * b - cos(p.x * a) * a);
+}
+
 // Signed distance and outward normal for the expanded obstacle.  Unlike a
 // boolean overlap test, this lets the flow react before it reaches a wall.
 float aabbDistance(vec3 point, vec3 center, vec3 extents, out vec3 normal) {
@@ -74,12 +87,17 @@ void main() {
     float dt = min(sim.deltaTime, 0.1);
 
     if (p.positionLife.w > 0.0) {
-        // A continuous spatial flow field produces coherent curls, rather
-        // than per-frame random jitter.
-        float phase = float(id) * 0.618 + p.positionLife.w * 1.7;
-        vec3 swirl = vec3(sin(p.positionLife.y * 2.1 + phase),
-                          sin(p.positionLife.z * 1.7 - phase * 1.3),
-                          sin(p.positionLife.x * 1.9 + phase * 0.7));
+        float age = clamp(1.0 - p.positionLife.w / max(p.spawnData.z, 0.001), 0.0, 1.0);
+        // Fast enough to feel alive at the source, then gradually swelling
+        // into a broad cloud.  The cubic curve avoids a mechanical scale-up.
+        float expansion = 1.0 - pow(1.0 - age, 2.4);
+        p.velocitySize.w = mix(p.spawnData.x, p.spawnData.y, expansion);
+        // Keep lateral turbulence deliberately subtle. The previous curl
+        // field plus radial expansion produced a symmetric V-shaped split;
+        // real smoke initially rises as one column and only then meanders.
+        vec3 swirl = curlNoise(p.positionLife.xyz * 0.72 + vec3(2.1, 0.0, 4.6)) * 0.18 +
+                     curlNoise(p.positionLife.xyz * 1.63 + vec3(8.3, 3.7, 1.2)) * 0.06;
+        swirl.y *= 0.35;
         p.velocitySize.xyz += (vec3(0.0, sim.smokeDynamics.x, 0.0) +
                                swirl * sim.smokeDynamics.z) * dt;
         p.velocitySize.xyz *= exp(-sim.smokeDynamics.y * dt);
@@ -133,7 +151,11 @@ void main() {
         }
         p.positionLife.xyz = nextPosition;
         p.positionLife.w -= dt;
-        p.color.a = clamp(p.positionLife.w, 0.0, 1.0);
+        // Preserve the artist-selected opacity; only the final part of life
+        // dissipates.  The fragment shader supplies the soft, noisy edge.
+        float fadeIn = smoothstep(0.0, 0.12, age);
+        float fadeOut = smoothstep(0.0, 1.15, p.positionLife.w);
+        p.color.a = p.spawnData.w * fadeIn * fadeOut;
     }
 
     // The CPU supplies only the range of slots emitted this frame. Random
@@ -141,12 +163,22 @@ void main() {
     uint relative = (id + sim.maxParticles - sim.spawnStart) % sim.maxParticles;
     if (relative < sim.spawnCount) {
         uint state = sim.spawnSeed + relative;
-        p.positionLife = vec4(sim.emitterPositionMinLife.xyz,
-                              mix(sim.emitterPositionMinLife.w, sim.maxLifeMaxSize.x, random(state)));
+        // Emit from a small disk rather than a mathematical point. This keeps
+        // the base of the plume dense while avoiding a visible needle shape.
+        float angle = random(state) * 6.28318530718;
+        float radius = sqrt(random(state)) * max(sim.minVelocityMinSize.w, 0.08) * 1.35;
+        vec3 spawnOffset = vec3(cos(angle) * radius,
+                                random(state) * radius * 0.22,
+                                sin(angle) * radius);
+        float lifetime = mix(sim.emitterPositionMinLife.w, sim.maxLifeMaxSize.x, random(state));
+        float initialSize = mix(sim.minVelocityMinSize.w, sim.maxLifeMaxSize.y, random(state));
+        float finalSize = initialSize * mix(1.65, 2.35, random(state));
+        p.positionLife = vec4(sim.emitterPositionMinLife.xyz + spawnOffset, lifetime);
         p.velocitySize = vec4(
             mix(sim.minVelocityMinSize.xyz, sim.maxVelocity.xyz, vec3(random(state), random(state), random(state))),
-            mix(sim.minVelocityMinSize.w, sim.maxLifeMaxSize.y, random(state)));
+            initialSize);
         p.color = sim.color;
+        p.spawnData = vec4(initialSize, finalSize, lifetime, sim.color.a);
     }
     particles[id] = p;
     if (p.positionLife.w > 0.0) {

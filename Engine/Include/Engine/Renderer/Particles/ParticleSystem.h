@@ -16,6 +16,8 @@ namespace Engine::Particles {
         Vec4 positionLife;
         Vec4 velocitySize;
         Color color;
+        // initial size, final size, total lifetime, authored opacity
+        Vec4 spawnData;
     };
 
     struct ParticleEmitter {
@@ -37,20 +39,22 @@ namespace Engine::Particles {
      * while a smoke simulation also receives its fluid-like parameters.
      */
     struct SmokeEmitter final : ParticleEmitter {
-        float buoyancy = 5.5f;
-        float drag = 1.35f;
-        float turbulence = 1.1f;
+        float buoyancy = 2.25f;
+        float drag = 0.68f;
+        float turbulence = 0.30f;
         float collisionRadius = 0.10f;
 
         SmokeEmitter() {
-            minVelocity = {-0.30f, 0.65f, -0.30f};
-            maxVelocity = {0.30f, 1.35f, 0.30f};
-            color = {0.30f, 0.32f, 0.35f, 0.30f};
-            minLifeTime = 4.0f;
-            maxLifeTime = 7.0f;
-            minSize = 0.16f;
-            maxSize = 0.42f;
-            spawnRate = 180.0f;
+            minVelocity = {-0.24f, 0.45f, -0.24f};
+            maxVelocity = {0.24f, 1.05f, 0.24f};
+            color = {0.18f, 0.20f, 0.23f, 0.19f};
+            minLifeTime = 5.5f;
+            maxLifeTime = 9.0f;
+            // A substantial initial puff, followed by a slow expansion,
+            // reads as smoke leaving a hot source rather than point sprites.
+            minSize = 0.28f;
+            maxSize = 0.88f;
+            spawnRate = 260.0f;
         }
     };
 
