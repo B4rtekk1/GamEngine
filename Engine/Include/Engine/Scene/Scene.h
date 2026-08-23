@@ -11,11 +11,11 @@
 #include "Engine/Scene/Components/IdentityComponents.h"
 #include "Engine/ECS/Components/CameraComponent.h"
 #include "Engine/Scene/Components/LightComponent.h"
-#include "Engine/Scene/SceneEditor.h"
 #include "Engine/Renderer/Geometry/Mesh.h"
 #include "Engine/Renderer/Materials/PBRMaterial.h"
 
 #include <memory>
+#include <algorithm>
 #include <filesystem>
 #include <stdexcept>
 #include <string>
@@ -29,6 +29,7 @@ namespace Engine {
 class Renderer;
 class ScriptSystem;
 class PhysicsSystem;
+class SceneEditor;
 
 // Runtime scene data. Content creation belongs to ScenePresets (or to the
 // application), rather than to this data container.
@@ -39,9 +40,9 @@ public:
         if (name.empty()) {
             throw std::invalid_argument("Scene object name cannot be empty");
         }
-        if (find(name) != nullptr) {
-            throw std::invalid_argument("Scene object already exists: " + name);
-        }
+        const std::string baseName = name;
+        std::size_t suffix = 2;
+        while (find(name) != nullptr) name = baseName + " " + std::to_string(suffix++);
 
         auto object = std::make_unique<GameObject>(registry_, name);
         object->spawn();
@@ -85,6 +86,10 @@ public:
     void save(const std::filesystem::path& path) const;
     void load(const std::filesystem::path& path);
 
+    /** High-level editor facade; it does not expose the underlying Registry. */
+    [[nodiscard]] SceneEditor editor() noexcept;
+    [[nodiscard]] SceneEditor editor() const noexcept;
+
     /** Finds a named object, or returns nullptr when it does not exist. */
     [[nodiscard]] GameObject* find(const std::string& name) noexcept {
         const auto it = names_.find(name);
@@ -92,16 +97,67 @@ public:
         return find(it->second);
     }
 
-    /** Returns the restricted API used by editor tooling. */
-    [[nodiscard]] SceneEditor editor() noexcept { return SceneEditor{registry_}; }
-    [[nodiscard]] SceneEditor editor() const noexcept { return SceneEditor{registry_}; }
-
     /** Finds an object by its stable object identifier. */
     [[nodiscard]] GameObject* find(const ObjectId objectId) noexcept {
         for (const auto& object : objects_) {
             if (object->objectId() == objectId) return object.get();
         }
         return nullptr;
+    }
+
+    /** Finds the high-level object represented by an ECS entity. */
+    [[nodiscard]] GameObject* findByEntity(const Entity entity) noexcept {
+        for (const auto& object : objects_) {
+            if (object->entity() == entity) return object.get();
+        }
+        return nullptr;
+    }
+
+    [[nodiscard]] const GameObject* findByEntity(const Entity entity) const noexcept {
+        for (const auto& object : objects_) {
+            if (object->entity() == entity) return object.get();
+        }
+        return nullptr;
+    }
+
+    /** Returns a high-level object for editor/runtime code. */
+    [[nodiscard]] GameObject& edit(const Entity entity) {
+        auto* object = findByEntity(entity);
+        if (object == nullptr) throw std::out_of_range("Scene entity is not a GameObject");
+        return *object;
+    }
+
+    [[nodiscard]] const GameObject& edit(const Entity entity) const {
+        const auto* object = findByEntity(entity);
+        if (object == nullptr) throw std::out_of_range("Scene entity is not a GameObject");
+        return *object;
+    }
+
+    [[nodiscard]] bool valid(const Entity entity) const noexcept {
+        return findByEntity(entity) != nullptr;
+    }
+
+    void destroy(const Entity entity) noexcept {
+        const auto it = std::find_if(objects_.begin(), objects_.end(),
+            [entity](const auto& object) { return object->entity() == entity; });
+        if (it == objects_.end()) return;
+        names_.erase((*it)->name());
+        (*it)->detach();
+        objects_.erase(it);
+    }
+
+    [[nodiscard]] std::uint64_t structuralRevision() const noexcept {
+        return registry_.structuralRevision();
+    }
+
+    template<typename Func>
+    void eachObject(Func&& func) {
+        for (const auto& object : objects_) func(*object);
+    }
+
+    template<typename Func>
+    void eachObject(Func&& func) const {
+        for (const auto& object : objects_) func(*object);
     }
 
     /** Number of objects created through the high-level Scene API. */
@@ -162,6 +218,13 @@ private:
     friend class ScriptSystem;
     friend class PhysicsSystem;
 
+    void rebuildObjectHandles();
+    void detachObjectHandles() noexcept {
+        for (const auto& object : objects_) object->detach();
+        objects_.clear();
+        names_.clear();
+    }
+
     Registry registry_;
     std::vector<std::unique_ptr<GameObject>> objects_;
     std::unordered_map<std::string, ObjectId> names_;
@@ -173,3 +236,10 @@ private:
 };
 
 } // namespace Engine
+
+#include "Engine/Scene/SceneEditor.h"
+
+namespace Engine {
+inline SceneEditor Scene::editor() noexcept { return SceneEditor{*this}; }
+inline SceneEditor Scene::editor() const noexcept { return SceneEditor{*this}; }
+}

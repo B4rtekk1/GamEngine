@@ -35,6 +35,7 @@ namespace Engine {
         Enter,
         Tab,
         Backspace,
+        Delete,
 
         /// Modifier keys.
         LeftShift,

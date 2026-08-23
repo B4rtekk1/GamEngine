@@ -12,7 +12,6 @@
 #include "Engine/Renderer/Geometry/Sphere.h"
 #include "Engine/Renderer/MeshRenderer.h"
 #include "Engine/Scene/Components/LightComponent.h"
-#include "Engine/Scene/SceneBuilder.h"
 
 #include <array>
 #include <cmath>
@@ -46,20 +45,16 @@ ScenePreset::ScenePreset(const SceneType type) {
     sphereMesh_ = std::make_shared<Mesh>(Sphere::createMesh());
     rampMesh_ = std::make_shared<Mesh>(Ramp::createMesh());
     buildFont(uiFontAtlas());
-    SceneBuilder builder{registry()};
-
     if (type == SceneType::Particles) {
         Particles::ParticleEmitter emitter;
         emitter.position = {0.0f, 0.25f, 0.0f};
         setParticleEmitter(emitter);
-        particleSystem = builder.createEntity("Particle System");
+        auto& particleObject = Scene::createGameObject("Particle System");
+        particleSystem = particleObject.entity();
         setParticleEntity(particleSystem);
-        registry().add<Transform>(particleSystem,
-                                Transform{.position = particleEmitter().position});
-        registry().add<ParticleEmitterComponent>(particleSystem,
-                                                  ParticleEmitterComponent{emitter});
-        registry().add<ColorPickerComponent>(particleSystem,
-                                           ColorPickerComponent{particleEmitter().color});
+        particleObject.setPosition(particleEmitter().position);
+        particleObject.add<ParticleEmitterComponent>(ParticleEmitterComponent{emitter});
+        particleObject.add<ColorPickerComponent>(ColorPickerComponent{particleEmitter().color});
     }
 
     const bool treeScene = type == SceneType::Tree;
@@ -72,68 +67,90 @@ ScenePreset::ScenePreset(const SceneType type) {
     }
 
     const float halfExtent = ((CubesPerAxis - 1) * CubeSpacing + 1.0f) * 0.5f;
-    plane = builder.createMeshEntity(planeMesh_, Transform{.scale = treeScene ? Vec3{10, 1, 10} : Vec3{halfExtent * 2 + 4, 1, halfExtent * 2 + 4}},
-        treeScene ? PBRMaterial{.baseColor = {0.24f, 0.16f, 0.08f}, .roughness = 0.9f} : PBRMaterial{}, false, 0, "Plane");
-    registry().add<ColliderComponent>(plane, ColliderComponent{
+    auto& planeObject = createMeshObject("Plane", planeMesh_,
+        treeScene ? PBRMaterial{.baseColor = {0.24f, 0.16f, 0.08f}, .roughness = 0.9f} : PBRMaterial{});
+    planeObject.setScale(treeScene ? Vec3{10, 1, 10} : Vec3{halfExtent * 2 + 4, 1, halfExtent * 2 + 4});
+    planeObject.setCastShadow(false);
+    plane = planeObject.entity();
+    planeObject.add<ColliderComponent>(ColliderComponent{
         .shape = BoxCollider{.halfExtents = {0.5f, 0.05f, 0.5f}},
         .offset = {0.0f, -0.05f, 0.0f}});
 
     if (treeScene) {
-        tree = builder.createMeshEntity(treeMesh_, Transform{.position = {3, 0, 1}},
-            PBRMaterial{.baseColor = {0.20f, 0.48f, 0.08f}, .roughness = 0.82f}, true, 0, "Tree");
-        static_cast<void>(builder.createLight(Transform{.rotation = {35, -35, 0}}, LightComponent{.type = LightType::Directional, .intensity = 4.0f}, "Directional Light"));
+        auto& treeObject = createMeshObject("Tree", treeMesh_,
+            PBRMaterial{.baseColor = {0.20f, 0.48f, 0.08f}, .roughness = 0.82f});
+        treeObject.setPosition({3, 0, 1});
+        tree = treeObject.entity();
+        auto& light = createLight("Directional Light",
+            LightComponent{.type = LightType::Directional, .intensity = 4.0f});
+        light.setRotation({35, -35, 0});
     } else if (type == SceneType::Cubes) {
         constexpr float halfGrid = (CubesPerAxis - 1) * CubeSpacing * 0.5f;
         for (std::size_t y = 0; y < CubesPerAxis; ++y) for (std::size_t z = 0; z < CubesPerAxis; ++z)
             for (std::size_t x = 0; x < CubesPerAxis; ++x) {
-                static_cast<void>(builder.createMeshEntity(cubeMesh_, Transform{.position = {x * CubeSpacing - halfGrid, y * CubeSpacing + 0.5f, z * CubeSpacing - halfGrid}},
-                    PBRMaterial{.baseColor = {0.72f, 0.72f, 0.72f}, .metallic = 0.05f, .roughness = 0.62f}, false, 1, "Cube"));
+                auto& cube = createMeshObject("Cube " + std::to_string(x) + " " +
+                    std::to_string(y) + " " + std::to_string(z), cubeMesh_,
+                    PBRMaterial{.baseColor = {0.72f, 0.72f, 0.72f}, .metallic = 0.05f, .roughness = 0.62f});
+                cube.setPosition({x * CubeSpacing - halfGrid, y * CubeSpacing + 0.5f,
+                                  z * CubeSpacing - halfGrid});
+                cube.setCastShadow(false);
+                cube.setCullingBatch(1);
             }
     }
 
     const float targetY = treeScene ? 4.2f : isParticleScene() ? 3.0f : halfExtent;
     const Vec3 position = treeScene ? Vec3{8, 6.5f, 10} : isParticleScene() ? Vec3{6, 5.8f, 8} : Vec3{halfExtent * 2.9f, targetY + halfExtent * 2.6f, halfExtent * 3.9f};
     const Vec3 direction = Vec3{0, targetY, 0} - position;
-    camera = builder.createCamera(Transform{.position = position, .rotation = {
+    auto& cameraObject = createCamera("Camera", CameraComponent{
+        .fieldOfView = 45, .nearClip = 0.1f, .farClip = 100000,
+        .aspectRatio = 800.0f / 600.0f});
+    cameraObject.setPosition(position);
+    cameraObject.setRotation({
         Degrees{Radians{std::atan2(direction.y(), Vec2{direction.x(), direction.z()}.length())}}.value(),
-        Degrees{Radians{std::atan2(direction.z(), direction.x())}}.value(), 0}},
-        CameraComponent{.fieldOfView = 45, .nearClip = 0.1f, .farClip = 100000, .aspectRatio = 800.0f / 600.0f}, "Camera");
+        Degrees{Radians{std::atan2(direction.z(), direction.x())}}.value(), 0});
+    camera = cameraObject.entity();
 }
 
 Entity ScenePreset::createGameObject() {
-    const Entity entity = SceneBuilder{registry()}.createEntity("GameObject");
-    registry().add<Transform>(entity);
-    registry().add<MeshRenderer>(entity);
+    const Entity entity = Scene::createGameObject("GameObject").entity();
     editorGameObjects.push_back(entity);
     return entity;
 }
 
 Entity ScenePreset::createCube() {
-    const Entity entity = SceneBuilder{registry()}.createMeshEntity(cubeMesh_, Transform{.position = {0, 0.5f, 0}},
-        PBRMaterial{.baseColor = {0.72f, 0.72f, 0.72f}, .metallic = 0.05f, .roughness = 0.62f}, true, 0, "Cube");
-    registry().add<ColliderComponent>(entity);
+    auto& object = createMeshObject("Cube", cubeMesh_,
+        PBRMaterial{.baseColor = {0.72f, 0.72f, 0.72f}, .metallic = 0.05f, .roughness = 0.62f});
+    object.setPosition({0, 0.5f, 0});
+    const Entity entity = object.entity();
+    object.add<ColliderComponent>();
     editorCubes.push_back(entity);
     return entity;
 }
 
 Entity ScenePreset::createPlane() {
-    const Entity entity = SceneBuilder{registry()}.createMeshEntity(planeMesh_, Transform{.scale = {2, 1, 2}}, {}, true, 0, "Plane");
+    auto& object = createMeshObject("Plane", planeMesh_);
+    object.setScale({2, 1, 2});
+    const Entity entity = object.entity();
     editorPlanes.push_back(entity);
     return entity;
 }
 
 Entity ScenePreset::createSphere() {
-    const Entity entity = SceneBuilder{registry()}.createMeshEntity(sphereMesh_, Transform{.position = {0, 0.5f, 0}},
-        PBRMaterial{.baseColor = {0.35f, 0.65f, 0.95f}, .metallic = 0.1f, .roughness = 0.42f}, true, 0, "Sphere");
-    registry().add<ColliderComponent>(entity, ColliderComponent{.shape = SphereCollider{.radius = 0.5f}});
+    auto& object = createMeshObject("Sphere", sphereMesh_,
+        PBRMaterial{.baseColor = {0.35f, 0.65f, 0.95f}, .metallic = 0.1f, .roughness = 0.42f});
+    object.setPosition({0, 0.5f, 0});
+    const Entity entity = object.entity();
+    object.add<ColliderComponent>(ColliderComponent{.shape = SphereCollider{.radius = 0.5f}});
     editorSpheres.push_back(entity);
     return entity;
 }
 
 Entity ScenePreset::createRamp() {
-    const Entity entity = SceneBuilder{registry()}.createMeshEntity(rampMesh_, Transform{.position = {0, 2.0f, 0}},
-        PBRMaterial{.baseColor = {0.95f, 0.62f, 0.25f}, .metallic = 0.0f, .roughness = 0.72f}, true, 0, "Ramp");
-    registry().add<ColliderComponent>(entity, ColliderComponent{.shape = RampCollider{.halfExtents = Ramp::halfExtents()}});
+    auto& object = createMeshObject("Ramp", rampMesh_,
+        PBRMaterial{.baseColor = {0.95f, 0.62f, 0.25f}, .metallic = 0.0f, .roughness = 0.72f});
+    object.setPosition({0, 2.0f, 0});
+    const Entity entity = object.entity();
+    object.add<ColliderComponent>(ColliderComponent{.shape = RampCollider{.halfExtents = Ramp::halfExtents()}});
     editorRamps.push_back(entity);
     return entity;
 }

@@ -60,6 +60,9 @@ namespace Engine {
             case SDL_SCANCODE_BACKSPACE:
                 return KeyCode::Backspace;
 
+            case SDL_SCANCODE_DELETE:
+                return KeyCode::Delete;
+
             case SDL_SCANCODE_LSHIFT:
                 return KeyCode::LeftShift;
 

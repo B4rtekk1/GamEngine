@@ -1,6 +1,6 @@
 #pragma once
 
-#include "Engine/ECS/Registry.h"
+#include "Engine/Scene/Scene.h"
 
 #include <utility>
 
@@ -9,31 +9,38 @@ namespace Engine {
 /** Narrow editor-facing scene access. Keeps Registry out of editor code. */
 class SceneEditor final {
 public:
-    explicit SceneEditor(Registry& registry) noexcept : registry_(&registry) {}
-    explicit SceneEditor(const Registry& registry) noexcept
-        : registry_(const_cast<Registry*>(&registry)) {}
+    explicit SceneEditor(Scene& scene) noexcept : scene_(&scene) {}
+    explicit SceneEditor(const Scene& scene) noexcept
+        : scene_(const_cast<Scene*>(&scene)) {}
 
-    [[nodiscard]] std::size_t size() const noexcept { return registry_->size(); }
-    [[nodiscard]] bool valid(Entity entity) const { return registry_->valid(entity); }
+    [[nodiscard]] std::size_t size() const noexcept { return scene_->objectCount(); }
+    [[nodiscard]] bool valid(Entity entity) const { return scene_->valid(entity); }
+    void destroy(Entity entity) { scene_->destroy(entity); }
     [[nodiscard]] std::uint64_t structuralRevision() const noexcept {
-        return registry_->structuralRevision();
+        return scene_->structuralRevision();
     }
 
-    template<typename T> [[nodiscard]] bool has(Entity entity) const { return registry_->has<T>(entity); }
-    template<typename T> T& get(Entity entity) { return registry_->get<T>(entity); }
-    template<typename T> const T& get(Entity entity) const { return registry_->get<T>(entity); }
+    template<typename T> [[nodiscard]] bool has(Entity entity) const { return scene_->edit(entity).has<T>(); }
+    template<typename T> T& get(Entity entity) { return scene_->edit(entity).get<T>(); }
+    template<typename T> const T& get(Entity entity) const { return scene_->edit(entity).get<T>(); }
     template<typename T, typename... Args> T& add(Entity entity, Args&&... args) {
-        return registry_->add<T>(entity, std::forward<Args>(args)...);
+        return scene_->edit(entity).add<T>(std::forward<Args>(args)...);
     }
     template<typename T, typename Func> void modify(Entity entity, Func&& func) {
-        registry_->modify<T>(entity, std::forward<Func>(func));
+        scene_->edit(entity).modify<T>(std::forward<Func>(func));
     }
     template<typename... Components, typename Func> void view(Func&& func) {
-        registry_->view<Components...>(std::forward<Func>(func));
+        scene_->eachObject([&](const GameObject& object) {
+            if constexpr (sizeof...(Components) == 0) {
+                func(object.entity());
+            } else if ((object.template has<Components>() && ...)) {
+                func(object.entity(), object.template get<Components>()...);
+            }
+        });
     }
 
 private:
-    Registry* registry_;
+    Scene* scene_;
 };
 
 } // namespace Engine

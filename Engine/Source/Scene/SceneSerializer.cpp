@@ -336,21 +336,29 @@ void SceneSerializer::save(const Scene& scene, std::ostream& output,
 }
 
 void SceneSerializer::load(Scene& scene, const std::filesystem::path& path) {
+    scene.detachObjectHandles();
     load(scene.registry(), path);
+    scene.rebuildObjectHandles();
 }
 
 void SceneSerializer::load(Scene& scene, const std::filesystem::path& path,
                            std::optional<std::uint32_t>& msaaSamples) {
+    scene.detachObjectHandles();
     load(scene.registry(), path, msaaSamples);
+    scene.rebuildObjectHandles();
 }
 
 void SceneSerializer::load(Scene& scene, std::istream& input) {
+    scene.detachObjectHandles();
     load(scene.registry(), input);
+    scene.rebuildObjectHandles();
 }
 
 void SceneSerializer::load(Scene& scene, std::istream& input,
                            std::optional<std::uint32_t>& msaaSamples) {
+    scene.detachObjectHandles();
     load(scene.registry(), input, msaaSamples);
+    scene.rebuildObjectHandles();
 }
 
 void SceneSerializer::save(const Registry& registry,

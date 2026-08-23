@@ -390,7 +390,8 @@ class Renderer::Backend {
             hiZValid = false;
 
             createMaterialTextures(); createMeshBuffers(); createInstanceBuffer();
-            createShadowPass(); createSceneDescriptorPass(); createForwardPass();
+            createUniformBuffers(); createSceneUniformBuffers(); createShadowPass();
+            createSceneDescriptorPass(); createForwardPass();
             createParticleResources(); createCullingResources(); createSkyPass(); createSceneSkyPass();
             createFramebuffers(); createSceneViewportFramebuffer();
             assetManager.unload_unused();

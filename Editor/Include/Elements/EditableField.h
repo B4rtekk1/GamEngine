@@ -2,7 +2,7 @@
 
 #include "imgui.h"
 
-#include "Engine/Scene/SceneEditor.h"
+#include "Engine/ECS/GameObject.h"
 #include "Engine/Math/Vec3.h"
 
 #include <algorithm>
@@ -10,8 +10,7 @@
 
 class EditableField {
 public:
-    EditableField(Engine::SceneEditor registry, const Engine::Entity entity) noexcept
-        : registry_(registry), entity_(entity) {}
+    explicit EditableField(Engine::GameObject& object) noexcept : object_(&object) {}
 
 protected:
     ~EditableField() = default;
@@ -26,8 +25,7 @@ protected:
         update(Engine::Vec3{values[0], values[1], values[2]});
     }
 
-    [[nodiscard]] Engine::SceneEditor& registry() const noexcept { return registry_; }
-    [[nodiscard]] Engine::Entity entity() const noexcept { return entity_; }
+    [[nodiscard]] Engine::GameObject& object() const noexcept { return *object_; }
 
 private:
     static bool dragFloat3WithWheel(const char* label, float values[3], const float speed,
@@ -44,6 +42,5 @@ private:
         return true;
     }
 
-    mutable Engine::SceneEditor registry_;
-    Engine::Entity entity_;
+    Engine::GameObject* object_;
 };

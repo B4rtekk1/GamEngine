@@ -295,7 +295,7 @@ bool ComponentsPanel::draw(Engine::ScenePreset& scene, const Engine::Entity sele
     ImGui::Spacing();
     if (ImGui::CollapsingHeader("Transform", ImGuiTreeNodeFlags_DefaultOpen) &&
         scene.editor().valid(selected) && scene.editor().has<Engine::Transform>(selected)) {
-        TransformFields{scene.editor(), selected}.draw();
+        TransformFields{scene.edit(selected)}.draw();
     }
     if (scene.editor().valid(selected) &&
         scene.editor().has<Engine::SmokeEmitterComponent>(selected) &&
@@ -805,6 +805,7 @@ Engine::Entity drawEditorMenuBar(Engine::ScenePreset& scene, Engine::Renderer& r
         ImGui::TextUnformatted("Editor shortcuts");
         ImGui::Separator();
         ImGui::BulletText("WASD + mouse: move and look in Scene View");
+        ImGui::BulletText("Delete: remove selected object");
         ImGui::BulletText("Ctrl+D: duplicate selected object (coming soon)");
         ImGui::BulletText("Ctrl+Z / Ctrl+Y: undo / redo (coming soon)");
         ImGui::End();
@@ -921,6 +922,13 @@ int main() {
                 renderer.editorCameraPitch(), showGameView, playing);
             const bool inspectorConsumesMouseWheel = ComponentsPanel::draw(scene, selectedEntity);
             drawStatusBar(scene, selectedEntity, playing, paused);
+            if (!playing && selectedEntity != Engine::NullEntity &&
+                scene.editor().valid(selectedEntity) && !ImGui::GetIO().WantTextInput &&
+                ImGui::IsKeyPressed(ImGuiKey_Delete)) {
+                scene.editor().destroy(selectedEntity);
+                selectedEntity = Engine::NullEntity;
+                renderer.setEditorSelection(selectedEntity);
+            }
             renderer.setEditorSceneCameraInput(
                 sceneCameraInput && !inspectorConsumesMouseWheel);
             ImGui::Render();

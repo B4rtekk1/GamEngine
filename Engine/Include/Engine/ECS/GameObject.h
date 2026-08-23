@@ -80,6 +80,11 @@ public:
     }
     template<typename T>
     void remove() { requireSpawned(); registry_->remove<T>(entity_); }
+    template<typename T, typename Func>
+    void modify(Func&& func) {
+        requireSpawned();
+        registry_->modify<T>(entity_, std::forward<Func>(func));
+    }
     template<typename T>
     [[nodiscard]] bool has() const { return isSpawned() && registry_->has<T>(entity_); }
     template<typename T>
@@ -166,6 +171,15 @@ public:
     [[nodiscard]] Mat4 modelMatrix() const noexcept { return transform().matrix(); }
 
 private:
+    friend class Scene;
+
+    GameObject(Registry& registry, const Entity entity, const ObjectId objectId,
+               std::string name)
+        : registry_(&registry), objectId_(objectId), entity_(entity), name_(std::move(name)) {}
+
+    /** Detaches a scene-owned wrapper before its Registry is replaced. */
+    void detach() noexcept { entity_ = NullEntity; }
+
     template<typename Func>
     void modifyTransform(Func&& func) {
         requireSpawned();
