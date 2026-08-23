@@ -11,6 +11,7 @@
 #include "Engine/ECS/Components/ColliderComponent.h"
 #include "Engine/ECS/Components/RigidbodyComponent.h"
 #include "Engine/ECS/Components/ColorPickerComponent.h"
+#include "Engine/ECS/Components/SmokeEmitterComponent.h"
 #include "Engine/Renderer/MeshRenderer.h"
 #include "Engine/Scene/SceneSerializer.h"
 #include "Engine/Scripting/ScriptSystem.h"
@@ -234,14 +235,14 @@ bool ComponentsPanel::draw(Engine::ScenePreset& scene, const Engine::Entity sele
         TransformFields{scene.editor(), selected}.draw();
     }
     if (scene.editor().valid(selected) &&
-        scene.editor().has<Engine::ParticleEmitterComponent>(selected) &&
-        ImGui::CollapsingHeader("Particle Emitter", ImGuiTreeNodeFlags_DefaultOpen)) {
+        scene.editor().has<Engine::SmokeEmitterComponent>(selected) &&
+        ImGui::CollapsingHeader("Smoke Emitter", ImGuiTreeNodeFlags_DefaultOpen)) {
         // Keep the UI editing a temporary copy. The component is committed
         // once, after all controls have been drawn, so observers receive one
         // coherent change notification per frame.
         const auto readScene = scene.editor();
         const auto& source =
-            readScene.get<Engine::ParticleEmitterComponent>(selected).emitter;
+            readScene.get<Engine::SmokeEmitterComponent>(selected).emitter;
         auto emitter = source;
         const bool hasColorPicker =
             readScene.has<Engine::ColorPickerComponent>(selected);
@@ -275,6 +276,18 @@ bool ComponentsPanel::draw(Engine::ScenePreset& scene, const Engine::Entity sele
         changed |= drawParticleFloat("Maximum Size", "##particle-max-size",
                                      &emitter.maxSize, 0.01f, 0.0f, 10.0f,
                                      "%.2f");
+        changed |= drawParticleFloat("Buoyancy", "##smoke-buoyancy",
+                                     &emitter.buoyancy, 0.05f, 0.0f, 30.0f,
+                                     "%.2f");
+        changed |= drawParticleFloat("Air Drag", "##smoke-drag",
+                                     &emitter.drag, 0.02f, 0.0f, 10.0f,
+                                     "%.2f");
+        changed |= drawParticleFloat("Turbulence", "##smoke-turbulence",
+                                     &emitter.turbulence, 0.02f, 0.0f, 10.0f,
+                                     "%.2f");
+        changed |= drawParticleFloat("Collision Radius", "##smoke-collision-radius",
+                                     &emitter.collisionRadius, 0.005f, 0.0f, 2.0f,
+                                     "%.3f");
 
         float minVelocity[3] = {
             emitter.minVelocity.x(), emitter.minVelocity.y(), emitter.minVelocity.z()
@@ -308,9 +321,13 @@ bool ComponentsPanel::draw(Engine::ScenePreset& scene, const Engine::Entity sele
         emitter.minSize = std::max(0.0f, emitter.minSize);
         emitter.maxSize = std::max(emitter.minSize, emitter.maxSize);
         emitter.spawnRate = std::max(0.0f, emitter.spawnRate);
+        emitter.buoyancy = std::max(0.0f, emitter.buoyancy);
+        emitter.drag = std::max(0.0f, emitter.drag);
+        emitter.turbulence = std::max(0.0f, emitter.turbulence);
+        emitter.collisionRadius = std::max(0.0f, emitter.collisionRadius);
 
         if (changed) {
-            scene.editor().modify<Engine::ParticleEmitterComponent>(selected,
+            scene.editor().modify<Engine::SmokeEmitterComponent>(selected,
                 [&](auto& component) {
                     component.emitter = emitter;
                 });
@@ -434,6 +451,7 @@ bool ComponentsPanel::draw(Engine::ScenePreset& scene, const Engine::Entity sele
         const bool hasColorPicker = scene.editor().has<Engine::ColorPickerComponent>(selected);
         const bool hasCollider = scene.editor().has<Engine::ColliderComponent>(selected);
         const bool hasRigidbody = scene.editor().has<Engine::RigidbodyComponent>(selected);
+        const bool hasSmokeEmitter = scene.editor().has<Engine::SmokeEmitterComponent>(selected);
         if (ImGui::MenuItem("Script", nullptr, false, !hasScript)) {
             scene.editor().add<Engine::ScriptComponent>(selected);
             ImGui::CloseCurrentPopup();
@@ -454,6 +472,11 @@ bool ComponentsPanel::draw(Engine::ScenePreset& scene, const Engine::Entity sele
             ImGui::CloseCurrentPopup();
         }
         if (hasRigidbody) ImGui::TextDisabled("Rigidbody component already added");
+        if (ImGui::MenuItem("Smoke Emitter", nullptr, false, !hasSmokeEmitter)) {
+            scene.editor().add<Engine::SmokeEmitterComponent>(selected);
+            ImGui::CloseCurrentPopup();
+        }
+        if (hasSmokeEmitter) ImGui::TextDisabled("Smoke Emitter component already added");
         ImGui::EndPopup();
     }
     if (EditorButton("Attach C++ Script", {-1.0f, 0.0f}).draw()) ImGui::OpenPopup("Attach C++ Script");

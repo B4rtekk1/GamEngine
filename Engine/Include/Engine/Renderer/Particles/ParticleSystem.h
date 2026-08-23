@@ -4,6 +4,7 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <vector>
 
 #include "Engine/Math/Color.h"
 #include "Engine/Math/Vec3.h"
@@ -30,12 +31,41 @@ namespace Engine::Particles {
         float accumulator = 0.0f;
     };
 
+    /**
+     * A particle emitter tuned for smoke.  It deliberately extends the
+     * generic emitter so code accepting ParticleEmitter can still use it,
+     * while a smoke simulation also receives its fluid-like parameters.
+     */
+    struct SmokeEmitter final : ParticleEmitter {
+        float buoyancy = 5.5f;
+        float drag = 1.35f;
+        float turbulence = 1.1f;
+        float collisionRadius = 0.10f;
+
+        SmokeEmitter() {
+            minVelocity = {-0.30f, 0.65f, -0.30f};
+            maxVelocity = {0.30f, 1.35f, 0.30f};
+            color = {0.30f, 0.32f, 0.35f, 0.30f};
+            minLifeTime = 4.0f;
+            maxLifeTime = 7.0f;
+            minSize = 0.16f;
+            maxSize = 0.42f;
+            spawnRate = 180.0f;
+        }
+    };
+
     struct ParticleFrameData {
         Mat4 viewProjection;
         Vec3 cameraRight{1.0f, 0.0f, 0.0f};
         float _pad0 = 0.0f;
         Vec3 cameraUp{0.0f, 1.0f, 0.0f};
         float _pad1 = 0.0f;
+    };
+
+    /** World-space axis-aligned obstacle used by the smoke simulation. */
+    struct ParticleCollider {
+        Vec4 center{};
+        Vec4 halfExtents{};
     };
 
     /** Parameters consumed by particle_update.comp.  Keep this layout in sync
@@ -46,14 +76,16 @@ namespace Engine::Particles {
         uint32_t spawnCount = 0;
         uint32_t maxParticles = 0;
         uint32_t spawnSeed = 0;
-        float padding[3]{};
+        uint32_t colliderCount = 0;
+        float padding[2]{};
         float emitterPositionMinLife[4]{};
         float minVelocityMinSize[4]{};
         float maxVelocity[4]{};
         float color[4]{};
         float maxLifeMaxSize[4]{};
+        float smokeDynamics[4]{}; // buoyancy, drag, turbulence, collision radius
     };
-    static_assert(sizeof(ParticleSimulationData) == 112);
+    static_assert(sizeof(ParticleSimulationData) == 128);
     static_assert(offsetof(ParticleSimulationData, emitterPositionMinLife) == 32);
 
     class ParticleSystem {
@@ -66,6 +98,11 @@ namespace Engine::Particles {
         ~ParticleSystem();
         void update(float deltaTime);
         void setEmitter(const ParticleEmitter& emitter) { emitter_ = emitter; }
+        void setEmitter(const SmokeEmitter& emitter) {
+            emitter_ = emitter;
+            smoke_ = emitter;
+        }
+        void setColliders(const std::vector<ParticleCollider>& colliders) { colliders_ = colliders; }
         /** Records the GPU simulation and makes its writes visible to rendering. */
         void recordCompute(VkCommandBuffer commandBuffer, VkPipeline pipeline,
                            VkPipelineLayout pipelineLayout, uint32_t frameIndex) const;
@@ -81,6 +118,7 @@ namespace Engine::Particles {
         void createDescriptorResources();
         void createQuadBuffer();
         void uploadInitialParticles();
+        void uploadColliders();
         void destroy();
 
         VkDevice device_{};
@@ -103,10 +141,16 @@ namespace Engine::Particles {
         std::array<std::array<VkDescriptorSet, FramesInFlight>, RenderTargets> descriptorSets_{};
         uint32_t maxParticles_ = 0;
         ParticleEmitter emitter_{};
+        SmokeEmitter smoke_{};
         ParticleSimulationData simulation_{};
         std::array<std::array<void*, FramesInFlight>, RenderTargets> frameMapped_{};
         void* quadMapped_ = nullptr;
         uint32_t nextSpawnIndex_ = 0;
         uint32_t spawnSeed_ = 0;
+        static constexpr uint32_t MaxColliders = 64;
+        VkBuffer colliderBuffer_{};
+        VkDeviceMemory colliderMemory_{};
+        void* colliderMapped_ = nullptr;
+        std::vector<ParticleCollider> colliders_;
     };
 }

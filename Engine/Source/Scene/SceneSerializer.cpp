@@ -7,6 +7,7 @@
 #include "Engine/ECS/Components/ScriptComponent.h"
 #include "Engine/ECS/Components/ColorPickerComponent.h"
 #include "Engine/ECS/Components/ParticleEmitterComponent.h"
+#include "Engine/ECS/Components/SmokeEmitterComponent.h"
 #include "Engine/ECS/Registry.h"
 #include "Engine/Renderer/MeshRenderer.h"
 #include "Engine/Scene/Scene.h"
@@ -169,6 +170,15 @@ void writeParticleEmitter(std::ostream& output, const Particles::ParticleEmitter
     writeFloat(output, emitter.spawnRate);
 }
 
+void writeSmokeEmitter(std::ostream& output, const Particles::SmokeEmitter& emitter) {
+    writeParticleEmitter(output, emitter);
+    output << ' ';
+    writeFloat(output, emitter.buoyancy); output << ' ';
+    writeFloat(output, emitter.drag); output << ' ';
+    writeFloat(output, emitter.turbulence); output << ' ';
+    writeFloat(output, emitter.collisionRadius);
+}
+
 void writeCollider(std::ostream& output, const ColliderComponent& collider) {
     output << static_cast<int>(collider.shape.index()) << ' ';
     writeVec3(output, collider.offset);
@@ -269,6 +279,20 @@ Particles::ParticleEmitter readParticleEmitter(std::istream& input) {
         emitter.minSize < 0.0f || emitter.maxSize < emitter.minSize ||
         emitter.spawnRate < 0.0f) {
         invalidScene("particle emitter settings are invalid");
+    }
+    return emitter;
+}
+
+Particles::SmokeEmitter readSmokeEmitter(std::istream& input) {
+    Particles::SmokeEmitter emitter;
+    static_cast<Particles::ParticleEmitter&>(emitter) = readParticleEmitter(input);
+    emitter.buoyancy = readFloat(input, "smoke buoyancy");
+    emitter.drag = readFloat(input, "smoke drag");
+    emitter.turbulence = readFloat(input, "smoke turbulence");
+    emitter.collisionRadius = readFloat(input, "smoke collision radius");
+    if (emitter.buoyancy < 0.0f || emitter.drag < 0.0f || emitter.turbulence < 0.0f ||
+        emitter.collisionRadius < 0.0f) {
+        invalidScene("smoke emitter settings are invalid");
     }
     return emitter;
 }
@@ -475,6 +499,12 @@ void SceneSerializer::save(const Registry& registry, std::ostream& output,
                                  registry.get<ParticleEmitterComponent>(entity).emitter);
             serialized << '\n';
         }
+        if (registry.has<SmokeEmitterComponent>(entity)) {
+            serialized << "SMOKE_EMITTER ";
+            writeSmokeEmitter(serialized,
+                              registry.get<SmokeEmitterComponent>(entity).emitter);
+            serialized << '\n';
+        }
         if (registry.has<ScriptComponent>(entity)) {
             const auto& script = registry.get<ScriptComponent>(entity);
             serialized << "SCRIPT " << std::quoted(script.className) << ' '
@@ -517,7 +547,8 @@ void SceneSerializer::load(Registry& registry, std::istream& input,
     input.imbue(std::locale::classic());
     expect(input, "GAMENGINE_SCENE");
     const auto version = read<unsigned>(input, "format version");
-    if (version != 3 && version != 4 && version != 5 && version != FormatVersion) {
+    if (version != 3 && version != 4 && version != 5 && version != 6 &&
+        version != FormatVersion) {
         invalidScene("unsupported format version " + std::to_string(version));
     }
 
@@ -615,6 +646,7 @@ void SceneSerializer::load(Registry& registry, std::istream& input,
         bool hasScript = false;
         bool hasColorPicker = false;
         bool hasParticleEmitter = false;
+        bool hasSmokeEmitter = false;
         bool hasCollider = false;
         bool hasRigidbody = false;
         bool hasIdentity = false;
@@ -748,6 +780,13 @@ void SceneSerializer::load(Registry& registry, std::istream& input,
                 hasParticleEmitter = true;
                 loaded.add<ParticleEmitterComponent>(entity,
                     ParticleEmitterComponent{.emitter = readParticleEmitter(input)});
+            } else if (component == "SMOKE_EMITTER") {
+                if (version < 7 || hasSmokeEmitter || hasParticleEmitter) {
+                    invalidScene("entity contains an invalid SmokeEmitterComponent");
+                }
+                hasSmokeEmitter = true;
+                loaded.add<SmokeEmitterComponent>(entity,
+                    SmokeEmitterComponent{.emitter = readSmokeEmitter(input)});
             } else {
                 invalidScene("unknown component '" + component + "'");
             }
@@ -763,7 +802,7 @@ void SceneSerializer::load(Registry& registry, std::istream& input,
         // still contain the preset's "Particle System" entity. Reconstruct
         // its emitter from the entity's existing transform and color picker.
         // New scenes always take the PARTICLE_EMITTER branch above.
-        if (!hasParticleEmitter && loaded.has<NameComponent>(entity) &&
+        if (!hasParticleEmitter && !hasSmokeEmitter && loaded.has<NameComponent>(entity) &&
             loaded.get<NameComponent>(entity).value == "Particle System") {
             Particles::ParticleEmitter emitter;
             // These are the original Particle Scene preset values. Older

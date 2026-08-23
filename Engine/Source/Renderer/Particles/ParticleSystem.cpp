@@ -91,6 +91,12 @@ void ParticleSystem::update(float deltaTime) {
     simulation_.color[3] = emitter_.color.a();
     simulation_.maxLifeMaxSize[0] = emitter_.maxLifeTime;
     simulation_.maxLifeMaxSize[1] = emitter_.maxSize;
+    simulation_.smokeDynamics[0] = smoke_.buoyancy;
+    simulation_.smokeDynamics[1] = smoke_.drag;
+    simulation_.smokeDynamics[2] = smoke_.turbulence;
+    simulation_.smokeDynamics[3] = smoke_.collisionRadius;
+    simulation_.colliderCount = static_cast<uint32_t>(std::min<std::size_t>(colliders_.size(), MaxColliders));
+    uploadColliders();
     nextSpawnIndex_ = (nextSpawnIndex_ + spawnCount) % maxParticles_;
     spawnSeed_ += spawnCount;
 }
@@ -181,6 +187,9 @@ void ParticleSystem::createBuffers() {
     makeBuffer(device_, physicalDevice_, sizeof(Particle) * maxParticles_,
                VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
                particleBuffer_, particleMemory_, nullptr, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+    makeBuffer(device_, physicalDevice_, sizeof(ParticleCollider) * MaxColliders,
+               VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, colliderBuffer_, colliderMemory_,
+               &colliderMapped_);
     for (uint32_t target = 0; target < RenderTargets; ++target) {
         for (uint32_t frame = 0; frame < FramesInFlight; ++frame) {
             makeBuffer(device_, physicalDevice_, sizeof(ParticleFrameData), VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
@@ -245,6 +254,8 @@ void ParticleSystem::createDescriptorResources() {
           VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_COMPUTE_BIT, nullptr}
         ,{3, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1,
           VK_SHADER_STAGE_COMPUTE_BIT, nullptr}
+        ,{4, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1,
+          VK_SHADER_STAGE_COMPUTE_BIT, nullptr}
     };
     VkDescriptorSetLayoutCreateInfo layout{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
     layout.bindingCount = std::size(bindings);
@@ -253,7 +264,7 @@ void ParticleSystem::createDescriptorResources() {
         throw std::runtime_error("ParticleSystem: descriptor layout creation failed");
     }
     constexpr VkDescriptorPoolSize sizes[] = {
-        {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, RenderTargets * FramesInFlight * 3},
+        {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, RenderTargets * FramesInFlight * 4},
         {VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, RenderTargets * FramesInFlight},
     };
     VkDescriptorPoolCreateInfo pool{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
@@ -291,10 +302,21 @@ void ParticleSystem::createDescriptorResources() {
                  VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, nullptr, &activeIndices, nullptr}
                 ,{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr, descriptorSets_[target][frame], 3, 0, 1,
                  VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, nullptr, &drawCommand, nullptr}
+                ,{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr, descriptorSets_[target][frame], 4, 0, 1,
+                 VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, nullptr,
+                 new VkDescriptorBufferInfo{colliderBuffer_, 0, sizeof(ParticleCollider) * MaxColliders}, nullptr}
             };
             vkUpdateDescriptorSets(device_, std::size(writes), writes, 0, nullptr);
+            delete writes[4].pBufferInfo;
         }
     }
+}
+
+void ParticleSystem::uploadColliders() {
+    if (!colliderMapped_) return;
+    const auto count = std::min<std::size_t>(colliders_.size(), MaxColliders);
+    std::memset(colliderMapped_, 0, sizeof(ParticleCollider) * MaxColliders);
+    std::memcpy(colliderMapped_, colliders_.data(), sizeof(ParticleCollider) * count);
 }
 
 void ParticleSystem::createQuadBuffer() {
@@ -365,6 +387,9 @@ void ParticleSystem::destroy() {
         }
     }
     if (quadMapped_) vkUnmapMemory(device_, quadMemory_);
+    if (colliderMapped_) vkUnmapMemory(device_, colliderMemory_);
+    vkDestroyBuffer(device_, colliderBuffer_, nullptr);
+    vkFreeMemory(device_, colliderMemory_, nullptr);
     for (uint32_t frame = 0; frame < FramesInFlight; ++frame) {
         vkDestroyBuffer(device_, activeIndexBuffers_[frame], nullptr);
         vkFreeMemory(device_, activeIndexMemories_[frame], nullptr);

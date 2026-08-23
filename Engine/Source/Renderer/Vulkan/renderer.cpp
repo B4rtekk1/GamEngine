@@ -31,7 +31,9 @@
 #include "Engine/Scene/Scene.h"
 #include "Engine/ECS/Components/CameraComponent.h"
 #include "Engine/ECS/Components/ParticleEmitterComponent.h"
+#include "Engine/ECS/Components/SmokeEmitterComponent.h"
 #include "Engine/ECS/Components/ColorPickerComponent.h"
+#include "Engine/ECS/Components/ColliderComponent.h"
 #include "Engine/Scene/Components/LightComponent.h"
 #include "Engine/Core/Transform.h"
 #include "Engine/Core/Camera.h"
@@ -83,6 +85,25 @@ constexpr uint32_t HEIGHT = 600;
 constexpr int MAX_FRAMES_IN_FLIGHT = 2;
 
 namespace {
+    std::vector<Particles::ParticleCollider> particleColliders(const Registry& registry) {
+        std::vector<Particles::ParticleCollider> result;
+        registry.view<ColliderComponent, Transform>([&](const Entity, const ColliderComponent& collider,
+                                                        const Transform& transform) {
+            const Vec3 scale{std::abs(transform.scale.x()), std::abs(transform.scale.y()),
+                             std::abs(transform.scale.z())};
+            const Vec3 extents = std::visit([](const auto& shape) {
+                using Shape = std::decay_t<decltype(shape)>;
+                if constexpr (std::is_same_v<Shape, BoxCollider>) return shape.halfExtents;
+                else if constexpr (std::is_same_v<Shape, SphereCollider>) return Vec3{shape.radius, shape.radius, shape.radius};
+                else return Vec3{shape.radius, shape.height * 0.5f, shape.radius};
+            }, collider.shape) * scale;
+            const Vec3 center = transform.position + collider.offset * scale;
+            result.push_back({Vec4{center.x(), center.y(), center.z(), 0.0f},
+                              Vec4{extents.x(), extents.y(), extents.z(), 0.0f}});
+        });
+        return result;
+    }
+
     struct UniformBufferObject {
         Mat4 view;
         Mat4 projection;
@@ -806,21 +827,25 @@ class Renderer::Backend {
 
         void createParticleResources() {
             if (!scene.isParticleScene() || scene.particleEntity() == NullEntity ||
-                !registry.has<ParticleEmitterComponent>(scene.particleEntity())) {
+                (!registry.has<ParticleEmitterComponent>(scene.particleEntity()) &&
+                 !registry.has<SmokeEmitterComponent>(scene.particleEntity()))) {
                 return;
             }
 
             if (!particleSystem) {
                 particleSystem = std::make_unique<Particles::ParticleSystem>(
                     device, vulkanDevice.physical(), vulkanDevice.graphicsQueue(), commandPool, 8192);
-                auto emitter = registry.get<ParticleEmitterComponent>(scene.particleEntity()).emitter;
-                if (registry.has<Transform>(scene.particleEntity())) {
-                    emitter.position = registry.get<Transform>(scene.particleEntity()).position;
+                if (registry.has<SmokeEmitterComponent>(scene.particleEntity())) {
+                    auto emitter = registry.get<SmokeEmitterComponent>(scene.particleEntity()).emitter;
+                    if (registry.has<Transform>(scene.particleEntity())) emitter.position = registry.get<Transform>(scene.particleEntity()).position;
+                    if (registry.has<ColorPickerComponent>(scene.particleEntity())) emitter.color = registry.get<ColorPickerComponent>(scene.particleEntity()).color;
+                    particleSystem->setEmitter(emitter);
+                } else {
+                    auto emitter = registry.get<ParticleEmitterComponent>(scene.particleEntity()).emitter;
+                    if (registry.has<Transform>(scene.particleEntity())) emitter.position = registry.get<Transform>(scene.particleEntity()).position;
+                    if (registry.has<ColorPickerComponent>(scene.particleEntity())) emitter.color = registry.get<ColorPickerComponent>(scene.particleEntity()).color;
+                    particleSystem->setEmitter(emitter);
                 }
-                if (registry.has<ColorPickerComponent>(scene.particleEntity())) {
-                    emitter.color = registry.get<ColorPickerComponent>(scene.particleEntity()).color;
-                }
-                particleSystem->setEmitter(emitter);
             }
 
             GraphicsPipelineOptions options{};
@@ -2411,8 +2436,9 @@ class Renderer::Backend {
             updateRenderableBuffers();
             if (particleSystem) {
                 if (scene.particleEntity() != NullEntity &&
-                    registry.has<ParticleEmitterComponent>(scene.particleEntity())) {
-                    auto emitter = registry.get<ParticleEmitterComponent>(scene.particleEntity()).emitter;
+                    (registry.has<ParticleEmitterComponent>(scene.particleEntity()) || registry.has<SmokeEmitterComponent>(scene.particleEntity()))) {
+                    if (registry.has<SmokeEmitterComponent>(scene.particleEntity())) {
+                    auto emitter = registry.get<SmokeEmitterComponent>(scene.particleEntity()).emitter;
                     if (registry.has<Transform>(scene.particleEntity())) {
                         emitter.position = registry.get<Transform>(scene.particleEntity()).position;
                     }
@@ -2420,7 +2446,14 @@ class Renderer::Backend {
                         emitter.color = registry.get<ColorPickerComponent>(scene.particleEntity()).color;
                     }
                     particleSystem->setEmitter(emitter);
+                    } else {
+                    auto emitter = registry.get<ParticleEmitterComponent>(scene.particleEntity()).emitter;
+                    if (registry.has<Transform>(scene.particleEntity())) emitter.position = registry.get<Transform>(scene.particleEntity()).position;
+                    if (registry.has<ColorPickerComponent>(scene.particleEntity())) emitter.color = registry.get<ColorPickerComponent>(scene.particleEntity()).color;
+                    particleSystem->setEmitter(emitter);
+                    }
                 }
+                particleSystem->setColliders(particleColliders(registry));
                 particleSystem->update(static_cast<float>(Time::deltaTime()));
             }
             updateCullingUniformBuffer(currentFrame);

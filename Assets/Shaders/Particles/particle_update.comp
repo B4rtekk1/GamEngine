@@ -11,13 +11,15 @@ struct Particle {
 layout(std430, set = 0, binding = 0) buffer Particles { Particle particles[]; };
 layout(std430, set = 0, binding = 2) buffer ActiveIndices { uint activeIndices[]; };
 layout(std430, set = 0, binding = 3) buffer DrawCommand { uint vertexCount; uint instanceCount; uint firstVertex; uint firstInstance; } drawCommand;
+struct Collider { vec4 center; vec4 halfExtents; };
+layout(std430, set = 0, binding = 4) readonly buffer Colliders { Collider colliders[]; };
 layout(push_constant) uniform Simulation {
     float deltaTime;
     uint spawnStart;
     uint spawnCount;
     uint maxParticles;
     uint spawnSeed;
-    float _padding0;
+    uint colliderCount;
     float _padding1;
     float _padding2;
     vec4 emitterPositionMinLife;
@@ -25,6 +27,7 @@ layout(push_constant) uniform Simulation {
     vec4 maxVelocity;
     vec4 color;
     vec4 maxLifeMaxSize;
+    vec4 smokeDynamics;
 } sim;
 
 uint hash(uint value) {
@@ -41,6 +44,29 @@ float random(inout uint state) {
     return float(state) * (1.0 / 4294967296.0);
 }
 
+// Signed distance and outward normal for the expanded obstacle.  Unlike a
+// boolean overlap test, this lets the flow react before it reaches a wall.
+float aabbDistance(vec3 point, vec3 center, vec3 extents, out vec3 normal) {
+    vec3 relative = point - center;
+    vec3 q = abs(relative) - extents;
+    vec3 outside = max(q, vec3(0.0));
+    float outsideLength = length(outside);
+    if (outsideLength > 0.0001) {
+        normal = sign(relative) * outside / outsideLength;
+        return outsideLength;
+    }
+
+    // The point is inside. Choose the closest face so it can be pushed out.
+    if (q.x >= q.y && q.x >= q.z) {
+        normal = vec3(relative.x >= 0.0 ? 1.0 : -1.0, 0.0, 0.0);
+    } else if (q.y >= q.z) {
+        normal = vec3(0.0, relative.y >= 0.0 ? 1.0 : -1.0, 0.0);
+    } else {
+        normal = vec3(0.0, 0.0, relative.z >= 0.0 ? 1.0 : -1.0);
+    }
+    return max(q.x, max(q.y, q.z));
+}
+
 void main() {
     uint id = gl_GlobalInvocationID.x;
     if (id >= sim.maxParticles) return;
@@ -48,8 +74,64 @@ void main() {
     float dt = min(sim.deltaTime, 0.1);
 
     if (p.positionLife.w > 0.0) {
-        p.velocitySize.xyz += vec3(0.0, -9.81, 0.0) * dt;
-        p.positionLife.xyz += p.velocitySize.xyz * dt;
+        // A continuous spatial flow field produces coherent curls, rather
+        // than per-frame random jitter.
+        float phase = float(id) * 0.618 + p.positionLife.w * 1.7;
+        vec3 swirl = vec3(sin(p.positionLife.y * 2.1 + phase),
+                          sin(p.positionLife.z * 1.7 - phase * 1.3),
+                          sin(p.positionLife.x * 1.9 + phase * 0.7));
+        p.velocitySize.xyz += (vec3(0.0, sim.smokeDynamics.x, 0.0) +
+                               swirl * sim.smokeDynamics.z) * dt;
+        p.velocitySize.xyz *= exp(-sim.smokeDynamics.y * dt);
+
+        // In the approach zone the stream is split into two tangential paths
+        // and gently lifted.  It starts this turn before contact, which is
+        // what makes smoke visibly wrap around an obstacle instead of simply
+        // bouncing from it.
+        for (uint c = 0u; c < uint(sim.colliderCount); ++c) {
+            vec3 center = colliders[c].center.xyz;
+            vec3 extents = colliders[c].halfExtents.xyz +
+                           vec3(max(sim.smokeDynamics.w, p.velocitySize.w * 0.35));
+            vec3 normal;
+            float distance = aabbDistance(p.positionLife.xyz, center, extents, normal);
+            float flowRange = max(0.85, p.velocitySize.w * 4.0);
+            float proximity = 1.0 - smoothstep(0.0, flowRange, max(distance, 0.0));
+            if (proximity <= 0.0) continue;
+
+            vec3 side = cross(vec3(0.0, 1.0, 0.0), normal);
+            if (dot(side, side) < 0.001) side = cross(normal, vec3(1.0, 0.0, 0.0));
+            side = normalize(side);
+            float branch = (hash(id + c * 1664525u) & 1u) == 0u ? -1.0 : 1.0;
+            vec3 around = normalize(side * branch + vec3(0.0, 0.38, 0.0));
+            float incoming = max(0.0, -dot(p.velocitySize.xyz, normal));
+            float flowStrength = (2.4 + 3.0 * length(p.velocitySize.xyz));
+            p.velocitySize.xyz += (normal * incoming * 2.0 + around * flowStrength) *
+                                  proximity * dt;
+        }
+        vec3 nextPosition = p.positionLife.xyz + p.velocitySize.xyz * dt;
+
+        // Resolve against the *predicted* position, using an expanded AABB.
+        // This prevents smoke from crossing thin obstacles during one frame;
+        // removing the normal component then makes it slide around a wall.
+        for (uint c = 0u; c < uint(sim.colliderCount); ++c) {
+            vec3 center = colliders[c].center.xyz;
+            vec3 extents = colliders[c].halfExtents.xyz +
+                           vec3(max(sim.smokeDynamics.w, p.velocitySize.w * 0.35));
+            vec3 relative = nextPosition - center;
+            if (all(lessThan(abs(relative), extents))) {
+                vec3 margin = extents - abs(relative);
+                vec3 normal = (margin.x <= margin.y && margin.x <= margin.z)
+                    ? vec3(relative.x >= 0.0 ? 1.0 : -1.0, 0.0, 0.0)
+                    : (margin.y <= margin.z ? vec3(0.0, relative.y >= 0.0 ? 1.0 : -1.0, 0.0)
+                                             : vec3(0.0, 0.0, relative.z >= 0.0 ? 1.0 : -1.0));
+                float penetration = min(min(margin.x, margin.y), margin.z);
+                nextPosition += normal * (penetration + 0.001);
+                float intoSurface = dot(p.velocitySize.xyz, normal);
+                if (intoSurface < 0.0) p.velocitySize.xyz -= normal * intoSurface;
+                p.velocitySize.xyz *= 0.82;
+            }
+        }
+        p.positionLife.xyz = nextPosition;
         p.positionLife.w -= dt;
         p.color.a = clamp(p.positionLife.w, 0.0, 1.0);
     }

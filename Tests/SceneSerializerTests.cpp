@@ -3,6 +3,7 @@
 #include <Engine/ECS/Components/ScriptComponent.h>
 #include <Engine/ECS/Components/ColliderComponent.h>
 #include <Engine/ECS/Components/RigidbodyComponent.h>
+#include <Engine/ECS/Components/SmokeEmitterComponent.h>
 #include <Engine/Renderer/Geometry/Cube.h>
 #include <Engine/Renderer/MeshRenderer.h>
 #include <Engine/Scene/Components/LightComponent.h>
@@ -82,11 +83,17 @@ int main() {
     source.add<UUIDComponent>(second, UUIDComponent{.value = 101});
     source.add<ParentComponent>(second, ParentComponent{.parent = 100});
     source.add<MeshRenderer>(second, MeshRenderer{.mesh = sharedCube});
+    Particles::SmokeEmitter smoke;
+    smoke.buoyancy = 7.25f;
+    smoke.drag = 0.8f;
+    smoke.turbulence = 1.6f;
+    smoke.collisionRadius = 0.18f;
+    source.add<SmokeEmitterComponent>(second, SmokeEmitterComponent{.emitter = smoke});
     static_cast<void>(source.create()); // Entities without components are preserved.
 
     std::stringstream serialized;
     SceneSerializer::save(source, serialized);
-    if (serialized.str().find("GAMENGINE_SCENE 6") == std::string::npos ||
+    if (serialized.str().find("GAMENGINE_SCENE 7") == std::string::npos ||
         serialized.str().find("MESHES 1") == std::string::npos ||
         serialized.str().find("ENTITIES 3") == std::string::npos) {
         return 1;
@@ -102,6 +109,7 @@ int main() {
         !loaded.has<ScriptComponent>(1) ||
         !loaded.has<ColliderComponent>(1) ||
         !loaded.has<RigidbodyComponent>(1) ||
+        !loaded.has<SmokeEmitterComponent>(2) ||
         loaded.has<Transform>(2) || !loaded.has<MeshRenderer>(2) ||
         loaded.has<Transform>(3) || loaded.has<MeshRenderer>(3)) {
         return 2;
@@ -122,6 +130,11 @@ int main() {
         loaded.get<UUIDComponent>(2).value != 101 ||
         loaded.get<ParentComponent>(2).parent != 100) {
         return 10;
+    }
+    const auto& loadedSmoke = loaded.get<SmokeEmitterComponent>(2).emitter;
+    if (loadedSmoke.buoyancy != 7.25f || loadedSmoke.drag != 0.8f ||
+        loadedSmoke.turbulence != 1.6f || loadedSmoke.collisionRadius != 0.18f) {
+        return 13;
     }
 
     const Transform& transform = loaded.get<Transform>(1);

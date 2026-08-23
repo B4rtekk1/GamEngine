@@ -4,6 +4,7 @@
 #include "Engine/ECS/Registry.h"
 #include "Engine/Renderer/Particles/ParticleSystem.h"
 #include "Engine/ECS/Components/ParticleEmitterComponent.h"
+#include "Engine/ECS/Components/SmokeEmitterComponent.h"
 #include "Engine/ECS/Components/ColorPickerComponent.h"
 #include "Engine/UI/Canvas.h"
 #include "Engine/UI/Vulkan/UIFontAtlas.h"
@@ -116,10 +117,15 @@ public:
     // loading a non-particle scene cannot address an old entity id.
     [[nodiscard]] Entity particleEntity() const noexcept {
         if (particleEntity_ != NullEntity &&
-            registry_.has<ParticleEmitterComponent>(particleEntity_)) {
+            (registry_.has<ParticleEmitterComponent>(particleEntity_) ||
+             registry_.has<SmokeEmitterComponent>(particleEntity_))) {
             return particleEntity_;
         }
         Entity found = NullEntity;
+        registry_.view<SmokeEmitterComponent>([&](const Entity entity,
+                                                  const SmokeEmitterComponent&) {
+            if (found == NullEntity) found = entity;
+        });
         registry_.view<ParticleEmitterComponent>([&](const Entity entity,
                                                      const ParticleEmitterComponent&) {
             if (found == NullEntity) found = entity;
@@ -141,6 +147,11 @@ protected:
     void setParticleEntity(const Entity entity) noexcept { particleEntity_ = entity; }
 
     void setParticleEmitter(Particles::ParticleEmitter emitter) noexcept {
+        particleEmitter_ = emitter;
+        particleScene_ = true;
+    }
+
+    void setSmokeEmitter(Particles::SmokeEmitter emitter) noexcept {
         particleEmitter_ = emitter;
         particleScene_ = true;
     }
