@@ -107,6 +107,16 @@ const std::vector<const char*> validationLayers = {
     "VK_LAYER_KHRONOS_validation"
 };
 
+class Renderer::State {
+public:
+    Assets::AssetManager assetManager{};
+    ForwardPass forwardPass{};
+    SkyPass skyPass{};
+    TonemapPass tonemapPass{};
+    GraphicsPipeline particlePipeline{};
+    UI::CanvasRenderer canvasRenderer{};
+};
+
 class Renderer::Backend {
     public:
         explicit Backend(Scene& scene, SDL_Window* window,
@@ -119,7 +129,7 @@ class Renderer::Backend {
                            GraphicsPipeline& particlePipeline,
                            UI::CanvasRenderer& canvasRenderer)
             : window(window), scene(scene),
-              registry(scene.registry),
+              registry(scene.registry()),
               optimizationFeatures(optimizationFeatures),
               antialiasingLevel(antialiasingLevel),
               assetManager(assetManager),
@@ -2529,13 +2539,32 @@ class Renderer::Backend {
 
 Renderer::~Renderer() = default;
 Renderer::Renderer(RenderConfig config)
-    : optimizationFeatures_(config.features), antialiasingLevel_(config.antialiasing) {}
+    : optimizationFeatures_(config.features), antialiasingLevel_(config.antialiasing),
+      state_(std::make_unique<State>()) {}
 
-void Renderer::initialize(Scene& scene, SDL_Window* window) {
+void Renderer::setOptimizationFeatures(RenderOptimizationFeatures features) noexcept {
+    optimizationFeatures_ = features;
+}
+
+const RenderOptimizationFeatures& Renderer::optimizationFeatures() const noexcept {
+    return optimizationFeatures_;
+}
+
+void Renderer::setAntialiasingLevel(AntialiasingLevel level) noexcept {
+    antialiasingLevel_ = level;
+}
+
+AntialiasingLevel Renderer::antialiasingLevel() const noexcept {
+    return antialiasingLevel_;
+}
+
+void Renderer::initialize(Scene& scene, void* nativeWindow) {
+    auto* window = static_cast<SDL_Window*>(nativeWindow);
     if (backend_) throw std::logic_error("Renderer is already initialized");
-    backend_ = std::make_unique<Backend>(scene, window, optimizationFeatures_, antialiasingLevel_, assetManager_,
-                                         forwardPass_, skyPass_, tonemapPass_, particlePipeline_,
-                                         canvasRenderer_);
+    backend_ = std::make_unique<Backend>(scene, window, optimizationFeatures_, antialiasingLevel_,
+                                         state_->assetManager, state_->forwardPass, state_->skyPass,
+                                         state_->tonemapPass, state_->particlePipeline,
+                                         state_->canvasRenderer);
     backend_->initialize();
 }
 
@@ -2544,7 +2573,9 @@ EditorEventState Renderer::pollEditorEvents() const {
     return backend_ ? backend_->pollEditorEvents() : EditorEventState{};
 }
 void Renderer::beginEditorUiFrame() const { backend_->beginEditorUiFrame(); }
-void Renderer::processEvent(const SDL_Event& event) const { backend_->processEvent(event); }
+void Renderer::processEvent(const void* nativeEvent) const {
+    if (backend_) backend_->processEvent(*static_cast<const SDL_Event*>(nativeEvent));
+}
 
 void Renderer::setEditorSceneCameraInput(const bool active) const {
     if (backend_) backend_->setEditorSceneCameraInput(active);
@@ -2556,15 +2587,15 @@ void Renderer::renderFrame() const { backend_->renderFrame(); }
 void Renderer::synchronizeScene(Scene& scene) const {
     if (backend_) backend_->synchronizeSceneResources(scene);
 }
-void Renderer::reloadScene(Scene& scene, SDL_Window* window) {
-    static_cast<void>(window); // The live backend keeps the application window.
+void Renderer::reloadScene(Scene& scene, void* nativeWindow) {
+    static_cast<void>(nativeWindow); // The live backend keeps the application window.
     if (backend_) {
         if (backend_->antialiasingLevel != antialiasingLevel_) {
             backend_->reconfigureAntialiasing(antialiasingLevel_);
         }
         backend_->reloadSceneResources(scene);
     }
-    else initialize(scene, window);
+    else initialize(scene, nativeWindow);
 }
 void Renderer::reconfigureAntialiasing() const {
     if (!backend_) return;

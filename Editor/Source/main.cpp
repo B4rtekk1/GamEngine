@@ -2,7 +2,7 @@
 #include "imgui_internal.h"
 #include "imgui_impl_sdl3.h"
 
-#include "Engine/Renderer/Vulkan/renderer.h"
+#include "Engine/Renderer/Renderer.h"
 #include "Engine/Scene/ScenePresets.h"
 #include "Engine/Core/Time.h"
 #include "Engine/Core/Transform.h"
@@ -421,7 +421,7 @@ bool drawInspector(Engine::ScenePreset& scene, const Engine::Entity selected) {
     if (scene.editor().valid(selected) && scene.editor().has<Engine::ScriptComponent>(selected) &&
         ImGui::CollapsingHeader("Script", ImGuiTreeNodeFlags_DefaultOpen)) {
         const auto readScene = scene.editor();
-        const Engine::ScriptComponent& script = readScene.get<Engine::ScriptComponent>(selected);
+        const auto& script = readScene.get<Engine::ScriptComponent>(selected);
         char className[260]{};
         std::snprintf(className, sizeof(className), "%s", script.className.c_str());
         ImGui::TextDisabled("C++ script class");

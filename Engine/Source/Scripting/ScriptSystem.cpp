@@ -7,7 +7,7 @@
 namespace Engine {
 
 void ScriptSystem::update(Scene& scene, const float deltaTime) {
-    update(scene.registry, deltaTime);
+    update(scene.registry(), deltaTime);
 }
 
 void ScriptSystem::update(Registry& registry, const float deltaTime) {

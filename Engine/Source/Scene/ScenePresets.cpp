@@ -41,7 +41,7 @@ ScenePreset::ScenePreset(const SceneType type) {
     planeMesh_ = std::make_shared<Mesh>(Plane::createMesh());
     cubeMesh_ = std::make_shared<Mesh>(Cube::createMesh());
     buildFont(uiFontAtlas());
-    SceneBuilder builder{registry};
+    SceneBuilder builder{registry()};
 
     if (type == SceneType::Particles) {
         setParticleEmitter(Particles::ParticleEmitter{
@@ -51,11 +51,11 @@ ScenePreset::ScenePreset(const SceneType type) {
             .maxSize = 0.16f, .spawnRate = 900.0f});
         particleSystem = builder.createEntity("Particle System");
         setParticleEntity(particleSystem);
-        registry.add<Transform>(particleSystem,
+        registry().add<Transform>(particleSystem,
                                 Transform{.position = particleEmitter().position});
-        registry.add<ParticleEmitterComponent>(particleSystem,
+        registry().add<ParticleEmitterComponent>(particleSystem,
                                                ParticleEmitterComponent{particleEmitter()});
-        registry.add<ColorPickerComponent>(particleSystem,
+        registry().add<ColorPickerComponent>(particleSystem,
                                            ColorPickerComponent{particleEmitter().color});
     }
 
@@ -95,22 +95,22 @@ ScenePreset::ScenePreset(const SceneType type) {
 }
 
 Entity ScenePreset::createGameObject() {
-    const Entity entity = SceneBuilder{registry}.createEntity("GameObject");
-    registry.add<Transform>(entity);
-    registry.add<MeshRenderer>(entity);
+    const Entity entity = SceneBuilder{registry()}.createEntity("GameObject");
+    registry().add<Transform>(entity);
+    registry().add<MeshRenderer>(entity);
     editorGameObjects.push_back(entity);
     return entity;
 }
 
 Entity ScenePreset::createCube() {
-    const Entity entity = SceneBuilder{registry}.createMeshEntity(cubeMesh_, Transform{.position = {0, 0.5f, 0}},
+    const Entity entity = SceneBuilder{registry()}.createMeshEntity(cubeMesh_, Transform{.position = {0, 0.5f, 0}},
         PBRMaterial{.baseColor = {0.72f, 0.72f, 0.72f}, .metallic = 0.05f, .roughness = 0.62f}, true, 0, "Cube");
     editorCubes.push_back(entity);
     return entity;
 }
 
 Entity ScenePreset::createPlane() {
-    const Entity entity = SceneBuilder{registry}.createMeshEntity(planeMesh_, Transform{.scale = {2, 1, 2}}, {}, true, 0, "Plane");
+    const Entity entity = SceneBuilder{registry()}.createMeshEntity(planeMesh_, Transform{.scale = {2, 1, 2}}, {}, true, 0, "Plane");
     editorPlanes.push_back(entity);
     return entity;
 }

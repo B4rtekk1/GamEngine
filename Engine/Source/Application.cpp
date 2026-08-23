@@ -1,7 +1,7 @@
 #include "Engine/Application.h"
 
 #include "Engine/Core/Time.h"
-#include "Engine/Renderer/Vulkan/renderer.h"
+#include "Engine/Renderer/Renderer.h"
 #include "Engine/Scripting/ScriptSystem.h"
 
 #include <SDL3/SDL.h>
@@ -55,7 +55,7 @@ void Application::run() {
         impl_->renderer.beginFrame();
         SDL_Event event;
         while (SDL_PollEvent(&event)) {
-            impl_->renderer.processEvent(event);
+            impl_->renderer.processEvent(&event);
             if (event.type == SDL_EVENT_QUIT ||
                 (config_.closeOnEscape && event.type == SDL_EVENT_KEY_DOWN &&
                  event.key.key == SDLK_ESCAPE)) {
@@ -64,7 +64,7 @@ void Application::run() {
         }
         if (impl_->running) {
             if (updateCallback_) updateCallback_(scene_, static_cast<float>(Time::deltaTime()));
-            impl_->scripts.update(scene_.registry, static_cast<float>(Time::deltaTime()));
+            impl_->scripts.update(scene_, static_cast<float>(Time::deltaTime()));
             impl_->renderer.renderFrame();
         }
     }

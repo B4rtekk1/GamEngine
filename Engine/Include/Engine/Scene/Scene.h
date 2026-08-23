@@ -23,6 +23,9 @@ namespace Engine { class SceneSerializer; }
 
 namespace Engine {
 
+class Renderer;
+class ScriptSystem;
+
 // Runtime scene data. Content creation belongs to ScenePresets (or to the
 // application), rather than to this data container.
 class Scene {
@@ -36,11 +39,11 @@ public:
             throw std::invalid_argument("Scene object already exists: " + name);
         }
 
-        auto object = std::make_unique<GameObject>(registry, name);
+        auto object = std::make_unique<GameObject>(registry_, name);
         object->spawn();
         GameObject& result = *object;
-        registry.add<NameComponent>(result.entity(), NameComponent{.value = name});
-        registry.add<UUIDComponent>(result.entity(), UUIDComponent{.value = createUUID()});
+        registry_.add<NameComponent>(result.entity(), NameComponent{.value = name});
+        registry_.add<UUIDComponent>(result.entity(), UUIDComponent{.value = createUUID()});
         names_[result.name()] = result.objectId();
         objects_.push_back(std::move(object));
         return result;
@@ -68,8 +71,8 @@ public:
     }
 
     /** Returns the restricted API used by editor tooling. */
-    [[nodiscard]] SceneEditor editor() noexcept { return SceneEditor{registry}; }
-    [[nodiscard]] SceneEditor editor() const noexcept { return SceneEditor{registry}; }
+    [[nodiscard]] SceneEditor editor() noexcept { return SceneEditor{registry_}; }
+    [[nodiscard]] SceneEditor editor() const noexcept { return SceneEditor{registry_}; }
 
     /** Finds an object by its stable object identifier. */
     [[nodiscard]] GameObject* find(const ObjectId objectId) noexcept {
@@ -82,8 +85,6 @@ public:
     /** Number of objects created through the high-level Scene API. */
     [[nodiscard]] std::size_t objectCount() const noexcept { return objects_.size(); }
 
-    Registry registry;
-
     [[nodiscard]] UI::Canvas& uiCanvas() noexcept { return canvas_; }
     [[nodiscard]] const UI::Canvas& uiCanvas() const noexcept { return canvas_; }
     [[nodiscard]] const UI::UIFontAtlas& uiFontAtlas() const noexcept { return fontAtlas_; }
@@ -94,11 +95,11 @@ public:
     // loading a non-particle scene cannot address an old entity id.
     [[nodiscard]] Entity particleEntity() const noexcept {
         if (particleEntity_ != NullEntity &&
-            registry.has<ParticleEmitterComponent>(particleEntity_)) {
+            registry_.has<ParticleEmitterComponent>(particleEntity_)) {
             return particleEntity_;
         }
         Entity found = NullEntity;
-        registry.view<ParticleEmitterComponent>([&](const Entity entity,
+        registry_.view<ParticleEmitterComponent>([&](const Entity entity,
                                                      const ParticleEmitterComponent&) {
             if (found == NullEntity) found = entity;
         });
@@ -112,6 +113,10 @@ public:
     }
 
 protected:
+    // Scene subclasses are engine-owned content layers. They may assemble
+    // entities, while application code uses GameObject instead.
+    [[nodiscard]] Registry& registry() noexcept { return registry_; }
+    [[nodiscard]] const Registry& registry() const noexcept { return registry_; }
     void setParticleEntity(const Entity entity) noexcept { particleEntity_ = entity; }
 
     void setParticleEmitter(Particles::ParticleEmitter emitter) noexcept {
@@ -120,6 +125,11 @@ protected:
     }
 
 private:
+    friend class SceneSerializer;
+    friend class Renderer;
+    friend class ScriptSystem;
+
+    Registry registry_;
     std::vector<std::unique_ptr<GameObject>> objects_;
     std::unordered_map<std::string, ObjectId> names_;
     UI::Canvas canvas_{800, 600};
