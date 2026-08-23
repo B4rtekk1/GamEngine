@@ -81,8 +81,8 @@ const char* entityName(const Engine::ScenePreset& scene, const Engine::Entity en
 }
 
 
-void drawSceneOrientationGizmo(const ImVec2 imageMin, const ImVec2 imageMax,
-                               const float yawDegrees, const float pitchDegrees) {
+int drawSceneOrientationGizmo(const ImVec2 imageMin, const ImVec2 imageMax,
+                              const float yawDegrees, const float pitchDegrees) {
     constexpr float pi = 3.14159265358979323846f;
     constexpr float radius = 40.0f;
     constexpr float axisLength = 32.0f;
@@ -99,17 +99,35 @@ void drawSceneOrientationGizmo(const ImVec2 imageMin, const ImVec2 imageMax,
     constexpr const char* labels[3]{"X", "Y", "Z"};
 
     ImDrawList* drawList = ImGui::GetWindowDrawList();
+    int hoveredAxis = -1;
+    const bool mouseInsideImage = ImGui::IsMouseHoveringRect(imageMin, imageMax);
+    const ImVec2 mouse = ImGui::GetIO().MousePos;
     for (int axis = 0; axis < 3; ++axis) {
         const ImVec2 end{center.x + right[axis] * axisLength,
                          center.y - up[axis] * axisLength};
+        const ImVec2 direction{end.x - center.x, end.y - center.y};
+        const ImVec2 offset{mouse.x - center.x, mouse.y - center.y};
+        const float lengthSquared = direction.x * direction.x + direction.y * direction.y;
+        const float projection = std::clamp(
+            (offset.x * direction.x + offset.y * direction.y) / lengthSquared, 0.0f, 1.0f);
+        const ImVec2 closest{center.x + direction.x * projection, center.y + direction.y * projection};
+        const float distanceX = mouse.x - closest.x;
+        const float distanceY = mouse.y - closest.y;
+        if (mouseInsideImage && distanceX * distanceX + distanceY * distanceY <= 100.0f) hoveredAxis = axis;
         drawList->AddLine(center, end, colors[axis], 4.0f);
         drawList->AddCircleFilled(end, 5.0f, colors[axis]);
         drawList->AddText({end.x + 5.0f, end.y - 7.0f}, colors[axis], labels[axis]);
     }
     drawList->AddCircleFilled(center, 4.0f, IM_COL32(255, 255, 255, 255));
+    if (hoveredAxis >= 0) {
+        ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
+        if (ImGui::IsMouseClicked(ImGuiMouseButton_Left)) return hoveredAxis;
+    }
+    return -1;
 }
 
-bool drawViewport(Engine::ViewportHandle gameDescriptor, Engine::ViewportHandle sceneDescriptor,
+bool drawViewport(Engine::Renderer& renderer, Engine::ViewportHandle gameDescriptor,
+                  Engine::ViewportHandle sceneDescriptor,
                   const float sceneCameraYaw, const float sceneCameraPitch,
                   bool& showGameView, const bool playing) {
     if (playing) showGameView = true;
@@ -142,8 +160,13 @@ bool drawViewport(Engine::ViewportHandle gameDescriptor, Engine::ViewportHandle 
                      {frameSize.x, imageHeight}, {0, 0}, {1, 1});
         viewportHovered = ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenBlockedByActiveItem);
         if (!showGameView && !playing) {
-            drawSceneOrientationGizmo(ImGui::GetItemRectMin(), ImGui::GetItemRectMax(),
-                                      sceneCameraYaw, sceneCameraPitch);
+            switch (drawSceneOrientationGizmo(ImGui::GetItemRectMin(), ImGui::GetItemRectMax(),
+                                              sceneCameraYaw, sceneCameraPitch)) {
+                case 0: renderer.setEditorCameraRotation(180.0f, 0.0f); break; // +X view
+                case 1: renderer.setEditorCameraRotation(0.0f, -89.0f); break; // +Y view
+                case 2: renderer.setEditorCameraRotation(-90.0f, 0.0f); break; // +Z view
+                default: break;
+            }
         }
         ImGui::EndChild();
         ImGui::PopStyleColor();
@@ -894,7 +917,7 @@ int main() {
                 renderer.setEditorSelection(selectedEntity);
             }
             const bool sceneCameraInput = drawViewport(
-                renderer.gameViewport(), renderer.sceneViewport(), renderer.editorCameraYaw(),
+                renderer, renderer.gameViewport(), renderer.sceneViewport(), renderer.editorCameraYaw(),
                 renderer.editorCameraPitch(), showGameView, playing);
             const bool inspectorConsumesMouseWheel = ComponentsPanel::draw(scene, selectedEntity);
             drawStatusBar(scene, selectedEntity, playing, paused);

@@ -217,6 +217,9 @@ class Renderer::Backend {
         [[nodiscard]] VkDescriptorSet sceneViewportTexture() const noexcept { return sceneViewportDescriptor; }
         [[nodiscard]] float editorCameraYaw() const noexcept { return cameraController.editorYaw(); }
         [[nodiscard]] float editorCameraPitch() const noexcept { return cameraController.editorPitch(); }
+        void setEditorCameraRotation(const float yaw, const float pitch) noexcept {
+            cameraController.setEditorRotation(yaw, pitch);
+        }
 
         void processEvent(const SDL_Event& event) {
             SDLInput::processEvent(event);
@@ -2695,6 +2698,9 @@ float Renderer::editorCameraYaw() const noexcept {
 }
 float Renderer::editorCameraPitch() const noexcept {
     return backend_ ? backend_->editorCameraPitch() : 0.0f;
+}
+void Renderer::setEditorCameraRotation(const float yaw, const float pitch) const noexcept {
+    if (backend_) backend_->setEditorCameraRotation(yaw, pitch);
 }
 void Renderer::shutdown() noexcept {
     backend_.reset();

@@ -47,6 +47,8 @@ public:
     /** Current Scene View camera orientation, in degrees. */
     [[nodiscard]] float editorCameraYaw() const noexcept;
     [[nodiscard]] float editorCameraPitch() const noexcept;
+    /** Rotates the Scene View camera without changing its position. */
+    void setEditorCameraRotation(float yaw, float pitch) const noexcept;
     void shutdown() noexcept;
 
 private:

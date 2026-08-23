@@ -24,6 +24,10 @@ public:
     [[nodiscard]] float editorYaw() const noexcept { return editorYaw_; }
     [[nodiscard]] float editorPitch() const noexcept { return editorPitch_; }
     void setEditorPosition(const Vec3& position) noexcept { editorPosition_ = position; }
+    void setEditorRotation(float yaw, float pitch) noexcept {
+        editorYaw_ = yaw;
+        editorPitch_ = pitch;
+    }
 
 private:
     void disableRelativeMouseMode(SDL_Window* window);
