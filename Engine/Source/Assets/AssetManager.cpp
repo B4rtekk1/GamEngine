@@ -19,6 +19,7 @@
 #include <string_view>
 #include <unordered_map>
 #include <variant>
+#include <array>
 
 namespace Engine::Assets {
 
@@ -507,7 +508,9 @@ std::shared_ptr<const Mesh> load_glb_mesh(const std::filesystem::path& path) {
 
 } // namespace
 
-AssetManager::AssetManager(std::filesystem::path asset_root) : asset_root_(std::move(asset_root)) {}
+AssetManager::AssetManager(std::filesystem::path asset_root) : asset_root_(std::move(asset_root)) {
+    register_default_asset_loaders(*this);
+}
 
 void AssetManager::set_asset_root(std::filesystem::path root) {
     std::scoped_lock lock(mutex_);
@@ -615,6 +618,35 @@ void register_default_asset_loaders(AssetManager& manager) {
         return std::make_shared<const ShaderAsset>(ShaderAsset{text->text, "main"});
     });
     manager.register_loader<BinaryAsset>(AssetType::Binary, binary_loader);
+    manager.register_loader<TextureAsset>(AssetType::Texture2D, [](const auto& path, const auto&) {
+        int width{}, height{}, channels{};
+        stbi_uc* pixels = stbi_load(path.string().c_str(), &width, &height, &channels, STBI_rgb_alpha);
+        if (!pixels || width <= 0 || height <= 0) {
+            stbi_image_free(pixels);
+            return std::shared_ptr<const TextureAsset>{};
+        }
+        TextureAsset texture;
+        texture.width = static_cast<std::uint32_t>(width);
+        texture.height = static_cast<std::uint32_t>(height);
+        texture.rgbaPixels.assign(pixels, pixels + static_cast<std::size_t>(width) * height * STBI_rgb_alpha);
+        stbi_image_free(pixels);
+        return std::make_shared<const TextureAsset>(std::move(texture));
+    });
+    manager.register_loader<PBRMaterial>(AssetType::Material, [](const auto& path, const auto&) {
+        std::ifstream file(path);
+        if (!file) return std::shared_ptr<const PBRMaterial>{};
+        PBRMaterial material{};
+        float red{}, green{}, blue{}, alpha{};
+        if (!(file >> red >> green >> blue >> alpha
+                    >> material.metallic >> material.roughness >> material.ambientOcclusion
+                    >> material.baseColorTexture >> material.metallicRoughnessTexture
+                    >> material.normalTexture >> material.normalScale
+                    >> material.alphaBlend >> material.doubleSided >> material.alphaCutoff)) {
+            return std::shared_ptr<const PBRMaterial>{};
+        }
+        material.baseColor = Math::Color{red, green, blue, alpha};
+        return std::make_shared<const PBRMaterial>(std::move(material));
+    });
     manager.register_loader<Mesh>(AssetType::Mesh, [](const auto& path, const auto&) {
         const auto extension = path.extension().string();
         if (extension == ".obj" || extension == ".OBJ") return load_obj_mesh(path);

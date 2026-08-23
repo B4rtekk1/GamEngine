@@ -2,13 +2,18 @@
 
 #include "Engine/ECS/Components/MeshRendererComponent.h"
 #include "Engine/ECS/Components/TransformComponent.h"
+#include "Engine/ECS/Components/CameraComponent.h"
+#include "Engine/ECS/Components/ScriptComponent.h"
 #include "Engine/ECS/Entity.h"
 #include "Engine/ECS/Registry.h"
+#include "Engine/Scene/Components/LightComponent.h"
 
 #include <atomic>
+#include <cstdint>
 #include <string>
 #include <string_view>
 #include <stdexcept>
+#include <type_traits>
 #include <utility>
 
 namespace Engine {
@@ -85,6 +90,17 @@ public:
     [[nodiscard]] const TransformComponent& transform() const { return get<TransformComponent>(); }
     [[nodiscard]] MeshRendererComponent& meshRenderer() { return get<MeshRendererComponent>(); }
     [[nodiscard]] const MeshRendererComponent& meshRenderer() const { return get<MeshRendererComponent>(); }
+
+    void setTransform(TransformComponent transformValue) {
+        transform() = std::move(transformValue);
+        registry_->markChanged<TransformComponent>(entity_);
+    }
+    void setPosition(Vec3 value) { modifyTransform([&](auto& t) { t.position = value; }); }
+    void setRotation(Vec3 value) { modifyTransform([&](auto& t) { t.rotation = value; }); }
+    void setScale(Vec3 value) { modifyTransform([&](auto& t) { t.scale = value; }); }
+    [[nodiscard]] const Vec3& position() const { return transform().position; }
+    [[nodiscard]] const Vec3& rotation() const { return transform().rotation; }
+    [[nodiscard]] const Vec3& scale() const { return transform().scale; }
     /** High-level mesh assignment; callers do not need to edit the component. */
     void setMesh(std::shared_ptr<const Mesh> mesh) {
         meshRenderer().mesh = std::move(mesh);
@@ -95,12 +111,55 @@ public:
         meshRenderer().material = std::move(material);
         registry_->markChanged<MeshRendererComponent>(entity_);
     }
+    void setCastShadow(bool enabled) {
+        meshRenderer().castShadow = enabled;
+        registry_->markChanged<MeshRendererComponent>(entity_);
+    }
+    void setCullingBatch(std::uint32_t batch) {
+        meshRenderer().cullingBatch = batch;
+        registry_->markChanged<MeshRendererComponent>(entity_);
+    }
+
+    CameraComponent& addCamera(CameraComponent camera = {}) {
+        if (has<CameraComponent>()) {
+            registry_->modify<CameraComponent>(entity_, [&](auto& value) { value = std::move(camera); });
+            return get<CameraComponent>();
+        }
+        return add<CameraComponent>(std::move(camera));
+    }
+    [[nodiscard]] CameraComponent& camera() { return get<CameraComponent>(); }
+    [[nodiscard]] const CameraComponent& camera() const { return get<CameraComponent>(); }
+    LightComponent& addLight(LightComponent light = {}) {
+        if (has<LightComponent>()) {
+            registry_->modify<LightComponent>(entity_, [&](auto& value) { value = std::move(light); });
+            return get<LightComponent>();
+        }
+        return add<LightComponent>(std::move(light));
+    }
+    [[nodiscard]] LightComponent& light() { return get<LightComponent>(); }
+    [[nodiscard]] const LightComponent& light() const { return get<LightComponent>(); }
+
+    ScriptComponent& addScript(std::string className, bool enabled = true) {
+        if (has<ScriptComponent>()) {
+            registry_->modify<ScriptComponent>(entity_, [&](auto& value) {
+                value.className = std::move(className);
+                value.enabled = enabled;
+            });
+            return get<ScriptComponent>();
+        }
+        return add<ScriptComponent>(ScriptComponent{std::move(className), enabled});
+    }
     [[nodiscard]] bool isRenderable() const noexcept {
         return isSpawned() && meshRenderer().hasMesh();
     }
     [[nodiscard]] Mat4 modelMatrix() const noexcept { return transform().matrix(); }
 
 private:
+    template<typename Func>
+    void modifyTransform(Func&& func) {
+        requireSpawned();
+        registry_->modify<TransformComponent>(entity_, std::forward<Func>(func));
+    }
     static ObjectId nextObjectId() noexcept { return nextObjectId_.fetch_add(1, std::memory_order_relaxed); }
     void requireSpawned() const {
         if (!isSpawned()) throw std::logic_error("GameObject does not own a live entity");

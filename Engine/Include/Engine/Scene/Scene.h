@@ -8,6 +8,8 @@
 #include "Engine/UI/Canvas.h"
 #include "Engine/UI/Vulkan/UIFontAtlas.h"
 #include "Engine/Scene/Components/IdentityComponents.h"
+#include "Engine/ECS/Components/CameraComponent.h"
+#include "Engine/Scene/Components/LightComponent.h"
 #include "Engine/Scene/SceneEditor.h"
 #include "Engine/Renderer/Geometry/Mesh.h"
 #include "Engine/Renderer/Materials/PBRMaterial.h"
@@ -58,6 +60,24 @@ public:
     [[nodiscard]] GameObject& createMeshObject(std::string name,
                                                 std::shared_ptr<const Mesh> mesh,
                                                 PBRMaterial material = {});
+
+    [[nodiscard]] GameObject& createMesh(std::string name,
+                                          std::shared_ptr<const Mesh> mesh,
+                                          PBRMaterial material = {}) {
+        return createMeshObject(std::move(name), std::move(mesh), std::move(material));
+    }
+
+    [[nodiscard]] GameObject& createCamera(std::string name, CameraComponent camera = {}) {
+        auto& object = create(std::move(name));
+        object.addCamera(std::move(camera));
+        return object;
+    }
+
+    [[nodiscard]] GameObject& createLight(std::string name, LightComponent light = {}) {
+        auto& object = create(std::move(name));
+        object.addLight(std::move(light));
+        return object;
+    }
 
     /** High-level scene persistence helpers. */
     void save(const std::filesystem::path& path) const;

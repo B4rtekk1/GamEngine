@@ -21,6 +21,10 @@ void Scene::save(const std::filesystem::path& path) const {
 
 void Scene::load(const std::filesystem::path& path) {
     SceneSerializer::load(*this, path);
+    // The serializer replaces the registry. Existing GameObjects refer to the
+    // previous entity storage, so discard those wrappers after a successful load.
+    objects_.clear();
+    names_.clear();
 }
 
 } // namespace Engine

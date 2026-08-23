@@ -51,6 +51,13 @@ namespace Engine::Assets {
         std::vector<std::byte> bytes;
     };
 
+    /** CPU-side decoded RGBA texture. The renderer uploads it when needed. */
+    struct TextureAsset {
+        std::uint32_t width{};
+        std::uint32_t height{};
+        std::vector<std::uint8_t> rgbaPixels;
+    };
+
     /** @brief Text contents of an asset file. */
     struct TextAsset {
         /// Text read from the source file.

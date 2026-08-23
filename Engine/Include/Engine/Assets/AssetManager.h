@@ -6,6 +6,8 @@
  */
 
 #include "AssetHandle.h"
+#include "Engine/Renderer/Materials/PBRMaterial.h"
+#include "Engine/Renderer/Geometry/Mesh.h"
 
 #include <functional>
 #include <mutex>
@@ -46,6 +48,20 @@ public:
     [[nodiscard]] const std::filesystem::path& asset_root() const noexcept { return asset_root_; }
     /** @brief Sets the callback used to receive error messages. */
     void set_error_handler(ErrorHandler handler);
+
+    /** Convenient typed loaders for application code. */
+    [[nodiscard]] AssetHandle<::Engine::Mesh> loadMesh(std::filesystem::path path) {
+        return load<::Engine::Mesh>(std::move(path), AssetType::Mesh);
+    }
+    [[nodiscard]] AssetHandle<TextureAsset> loadTexture(std::filesystem::path path) {
+        return load<TextureAsset>(std::move(path), AssetType::Texture2D);
+    }
+    [[nodiscard]] AssetHandle<PBRMaterial> loadMaterial(std::filesystem::path path) {
+        return load<PBRMaterial>(std::move(path), AssetType::Material);
+    }
+    [[nodiscard]] AssetHandle<TextAsset> loadText(std::filesystem::path path) {
+        return load<TextAsset>(std::move(path), AssetType::Text);
+    }
 
     /**
      * @brief Function type used to load one asset value.
