@@ -51,11 +51,37 @@ public:
     void setCullingBatch(std::uint32_t batch);
 
     void addRigidbody(RigidbodyComponent body = {});
+    [[nodiscard]] bool hasRigidbody() const;
+    void setBodyType(RigidbodyType type);
+    void setMass(float mass);
+    void setGravityEnabled(bool enabled);
+    void setVelocity(Vec3 velocity);
+    [[nodiscard]] Vec3 velocity() const;
+
     void addBoxCollider(Vec3 halfExtents = {0.5f, 0.5f, 0.5f});
     void addSphereCollider(float radius = 0.5f);
     void addCapsuleCollider(float radius = 0.5f, float height = 1.0f);
+    [[nodiscard]] bool hasCollider() const;
+    void setColliderTrigger(bool enabled);
+    void setColliderMaterial(float friction, float restitution);
+
     void addCamera(CameraComponent camera = {});
+    [[nodiscard]] bool hasCamera() const;
+    void setPerspectiveCamera(float fieldOfView, float nearClip = 0.1f,
+                              float farClip = 1000.0f);
+    void setOrthographicCamera(float size, float nearClip = 0.1f,
+                               float farClip = 1000.0f);
+    void setPrimaryCamera(bool primary);
+    void setCameraAspectRatio(float width, float height);
+
     void addLight(LightComponent light = {});
+    [[nodiscard]] bool hasLight() const;
+    void setLightType(LightType type);
+    void setLightColor(Math::Color color);
+    void setLightIntensity(float intensity);
+    void setLightEnabled(bool enabled);
+    void setLightCastShadows(bool enabled);
+
     void addScript(std::string className, bool enabled = true);
 
     template<typename T>

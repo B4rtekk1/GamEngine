@@ -1,6 +1,5 @@
 #include "Engine/Scene/ScenePresets.h"
 
-#include "Engine/Assets/AssetManager.h"
 #include "Engine/Core/Transform.h"
 #include "Engine/ECS/Components/CameraComponent.h"
 #include "Engine/ECS/Components/ParticleEmitterComponent.h"
@@ -59,11 +58,8 @@ ScenePreset::ScenePreset(const SceneType type) {
 
     const bool treeScene = type == SceneType::Tree;
     if (treeScene) {
-        Assets::AssetManager assets;
-        Assets::register_default_asset_loaders(assets);
-        const auto loaded = assets.load<Mesh>("Assets/Models/tree.glb", Assets::AssetType::Mesh);
-        if (!loaded) throw std::runtime_error("Could not load Assets/Models/tree.glb");
-        treeMesh_ = loaded.shared();
+        treeMesh_ = content_.mesh("Assets/Models/tree.glb");
+        if (!treeMesh_) throw std::runtime_error("Could not load Assets/Models/tree.glb");
     }
 
     const float halfExtent = ((CubesPerAxis - 1) * CubeSpacing + 1.0f) * 0.5f;

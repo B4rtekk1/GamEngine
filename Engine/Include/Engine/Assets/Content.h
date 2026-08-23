@@ -1,12 +1,18 @@
 #pragma once
 
-#include "Engine/Assets/AssetManager.h"
+#include "Engine/Renderer/Geometry/Mesh.h"
+#include "Engine/Renderer/Materials/PBRMaterial.h"
 
 #include <filesystem>
 #include <functional>
 #include <memory>
+#include <string>
 
 namespace Engine::Assets {
+
+class AssetManager;
+struct TextureAsset;
+struct TextAsset;
 
 /**
  * High-level content facade for game code.
@@ -17,7 +23,10 @@ namespace Engine::Assets {
  */
 class Content final {
 public:
+    using ErrorHandler = std::function<void(const std::string&)>;
+
     explicit Content(std::filesystem::path assetRoot = {});
+    ~Content();
 
     Content(const Content&) = delete;
     Content& operator=(const Content&) = delete;
@@ -29,7 +38,7 @@ public:
 
     void setAssetRoot(std::filesystem::path root);
     [[nodiscard]] const std::filesystem::path& assetRoot() const noexcept;
-    void setErrorHandler(AssetManager::ErrorHandler handler);
+    void setErrorHandler(ErrorHandler handler);
 
     /// Releases cached values that are no longer used by the application.
     void unloadUnused();
@@ -37,7 +46,7 @@ public:
     void clear();
 
 private:
-    mutable AssetManager manager_;
+    std::unique_ptr<AssetManager> manager_;
 };
 
 } // namespace Engine::Assets

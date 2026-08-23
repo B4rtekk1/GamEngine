@@ -1,5 +1,5 @@
 #include <Engine/ECS/Registry.h>
-#include <Engine/ECS/GameObject.h>
+#include <Engine/ECS/Components/TransformComponent.h>
 #include <Engine/ECS/Components/MeshRendererComponent.h>
 #include <Engine/Renderer/Geometry/Cube.h>
 
@@ -118,25 +118,28 @@ int main()
         return 3;
     }
 
-    Engine::GameObject source(registry);
-    source.spawn();
-    source.transform().position.setX(12.0f);
-    source.meshRenderer().mesh = std::make_shared<Engine::Mesh>(Engine::Cube::createMesh());
-    source.add<CloneOnly>(73);
+    const Entity source = registry.create();
+    registry.add<Engine::TransformComponent>(source).position.setX(12.0f);
+    registry.add<Engine::MeshRendererComponent>(source,
+        Engine::MeshRendererComponent{
+            .mesh = std::make_shared<Engine::Mesh>(Engine::Cube::createMesh())});
+    registry.add<CloneOnly>(source, 73);
 
-    auto copy = source.clone();
-    if (!copy.isSpawned() || copy.entity() == source.entity() ||
-        registry.size() != 1'004 || !copy.has<CloneOnly>() ||
-        copy.get<CloneOnly>().value != 73 ||
-        copy.transform().position.x() != 12.0f ||
-        copy.meshRenderer().mesh != source.meshRenderer().mesh) {
+    const Entity copy = registry.clone(source);
+    if (copy == source || registry.size() != 1'004 || !registry.has<CloneOnly>(copy) ||
+        registry.get<CloneOnly>(copy).value != 73 ||
+        registry.get<Engine::TransformComponent>(copy).position.x() != 12.0f ||
+        registry.get<Engine::MeshRendererComponent>(copy).mesh !=
+            registry.get<Engine::MeshRendererComponent>(source).mesh) {
         return 5;
     }
 
-    copy.transform().position.setX(99.0f);
-    copy.get<CloneOnly>().value = 11;
-    if (source.transform().position.x() != 12.0f ||
-        source.get<CloneOnly>().value != 73) {
+    registry.modify<Engine::TransformComponent>(copy, [](auto& transform) {
+        transform.position.setX(99.0f);
+    });
+    registry.get<CloneOnly>(copy).value = 11;
+    if (registry.get<Engine::TransformComponent>(source).position.x() != 12.0f ||
+        registry.get<CloneOnly>(source).value != 73) {
         return 6;
     }
 

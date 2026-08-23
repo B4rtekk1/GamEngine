@@ -49,7 +49,7 @@ public:
         std::size_t suffix = 2;
         while (find(name) != nullptr) name = baseName + " " + std::to_string(suffix++);
 
-        auto object = std::make_unique<GameObject>(registry_, name);
+        auto object = std::unique_ptr<GameObject>(new GameObject(registry_, name));
         object->spawn();
         GameObject& result = *object;
         registry_.add<NameComponent>(result.entity(), NameComponent{.value = name});

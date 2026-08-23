@@ -19,6 +19,13 @@
 
 namespace Engine {
 
+class Actor;
+class Scene;
+class SceneEditor;
+class ScenePreset;
+class PhysicsSystem;
+class Script;
+
 /**
  * @brief Move-only owner for one ECS entity.
  *
@@ -28,9 +35,6 @@ namespace Engine {
  */
 class GameObject final {
 public:
-    explicit GameObject(Registry& registry, std::string_view name = {})
-        : registry_(&registry), objectId_(nextObjectId()), name_(name) {}
-
     GameObject(const GameObject&) = delete;
     GameObject& operator=(const GameObject&) = delete;
     GameObject(GameObject&& other) noexcept
@@ -48,49 +52,9 @@ public:
     }
     ~GameObject() { release(); }
 
-    /** Creates the entity with the conventional transform and mesh components. */
-    void spawn() {
-        if (isSpawned()) return;
-        entity_ = registry_->create();
-        registry_->add<TransformComponent>(entity_);
-        registry_->add<MeshRendererComponent>(entity_);
-    }
-
-    void destroy() noexcept { release(); }
     [[nodiscard]] bool isSpawned() const noexcept {
         return entity_ != NullEntity && registry_ != nullptr && registry_->valid(entity_);
     }
-    [[nodiscard]] Entity entity() const noexcept { return entity_; }
-    [[nodiscard]] ObjectId objectId() const noexcept { return objectId_; }
-    [[nodiscard]] const std::string& name() const noexcept { return name_; }
-    void setName(std::string name) { name_ = std::move(name); }
-    [[nodiscard]] Registry& registry() noexcept { return *registry_; }
-    [[nodiscard]] const Registry& registry() const noexcept { return *registry_; }
-
-    [[nodiscard]] GameObject clone() const {
-        GameObject result(*registry_, name_);
-        if (isSpawned()) result.entity_ = registry_->clone(entity_);
-        return result;
-    }
-
-    template<typename T, typename... Args>
-    T& add(Args&&... args) {
-        requireSpawned();
-        return registry_->add<T>(entity_, std::forward<Args>(args)...);
-    }
-    template<typename T>
-    void remove() { requireSpawned(); registry_->remove<T>(entity_); }
-    template<typename T, typename Func>
-    void modify(Func&& func) {
-        requireSpawned();
-        registry_->modify<T>(entity_, std::forward<Func>(func));
-    }
-    template<typename T>
-    [[nodiscard]] bool has() const { return isSpawned() && registry_->has<T>(entity_); }
-    template<typename T>
-    T& get() { requireSpawned(); return registry_->get<T>(entity_); }
-    template<typename T>
-    [[nodiscard]] const T& get() const { requireSpawned(); return registry_->get<T>(entity_); }
 
     [[nodiscard]] TransformComponent& transform() { return get<TransformComponent>(); }
     [[nodiscard]] const TransformComponent& transform() const { return get<TransformComponent>(); }
@@ -171,7 +135,56 @@ public:
     [[nodiscard]] Mat4 modelMatrix() const noexcept { return transform().matrix(); }
 
 private:
+    friend class Actor;
     friend class Scene;
+    friend class SceneEditor;
+    friend class ScenePreset;
+    friend class PhysicsSystem;
+    friend class Script;
+
+    explicit GameObject(Registry& registry, std::string_view name = {})
+        : registry_(&registry), objectId_(nextObjectId()), name_(name) {}
+
+    /** Creates the entity with the conventional transform and mesh components. */
+    void spawn() {
+        if (isSpawned()) return;
+        entity_ = registry_->create();
+        registry_->add<TransformComponent>(entity_);
+        registry_->add<MeshRendererComponent>(entity_);
+    }
+
+    void destroy() noexcept { release(); }
+    [[nodiscard]] Entity entity() const noexcept { return entity_; }
+    [[nodiscard]] ObjectId objectId() const noexcept { return objectId_; }
+    [[nodiscard]] const std::string& name() const noexcept { return name_; }
+    void setName(std::string name) { name_ = std::move(name); }
+    [[nodiscard]] Registry& registry() noexcept { return *registry_; }
+    [[nodiscard]] const Registry& registry() const noexcept { return *registry_; }
+
+    [[nodiscard]] GameObject clone() const {
+        GameObject result(*registry_, name_);
+        if (isSpawned()) result.entity_ = registry_->clone(entity_);
+        return result;
+    }
+
+    template<typename T, typename... Args>
+    T& add(Args&&... args) {
+        requireSpawned();
+        return registry_->add<T>(entity_, std::forward<Args>(args)...);
+    }
+    template<typename T>
+    void remove() { requireSpawned(); registry_->remove<T>(entity_); }
+    template<typename T, typename Func>
+    void modify(Func&& func) {
+        requireSpawned();
+        registry_->modify<T>(entity_, std::forward<Func>(func));
+    }
+    template<typename T>
+    [[nodiscard]] bool has() const { return isSpawned() && registry_->has<T>(entity_); }
+    template<typename T>
+    T& get() { requireSpawned(); return registry_->get<T>(entity_); }
+    template<typename T>
+    [[nodiscard]] const T& get() const { requireSpawned(); return registry_->get<T>(entity_); }
 
     GameObject(Registry& registry, const Entity entity, const ObjectId objectId,
                std::string name)

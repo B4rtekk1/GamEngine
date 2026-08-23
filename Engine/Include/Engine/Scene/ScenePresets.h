@@ -1,6 +1,7 @@
 #pragma once
 
 #include "Engine/Scene/Scene.h"
+#include "Engine/Assets/Content.h"
 #include "Engine/Renderer/Geometry/Mesh.h"
 
 #include <memory>
@@ -38,6 +39,7 @@ private:
     std::shared_ptr<const Mesh> sphereMesh_;
     std::shared_ptr<const Mesh> rampMesh_;
     std::shared_ptr<const Mesh> treeMesh_;
+    Assets::Content content_;
 };
 
 } // namespace Engine

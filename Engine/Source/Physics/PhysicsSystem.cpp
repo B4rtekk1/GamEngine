@@ -54,10 +54,7 @@ float rampTopAt(const Aabb& ramp, const float bodyZ) {
 } // namespace
 
 void PhysicsSystem::update(Scene& scene, const float deltaTime) const {
-    update(scene.registry(), deltaTime);
-}
-
-void PhysicsSystem::update(Registry& registry, const float deltaTime) const {
+    Registry& registry = scene.registry();
     const float dt = std::max(deltaTime, 0.0f);
     if (dt == 0.0f) return;
 

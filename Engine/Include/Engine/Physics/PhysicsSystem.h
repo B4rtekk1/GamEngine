@@ -28,8 +28,7 @@ public:
     explicit PhysicsSystem(Vec3 gravity = {0.0f, -9.81f, 0.0f}) noexcept
         : gravity_(gravity) {}
 
-    /** Advances dynamic rigid bodies by one simulation step. */
-    void update(Registry& registry, float deltaTime) const;
+    /** Advances dynamic rigid bodies in a scene by one simulation step. */
     void update(Scene& scene, float deltaTime) const;
 
     [[nodiscard]] Vec3 gravity() const noexcept { return gravity_; }
