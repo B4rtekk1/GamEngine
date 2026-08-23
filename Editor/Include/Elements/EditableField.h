@@ -19,7 +19,9 @@ protected:
                        const float speed, const char* format,
                        const std::function<void(const Engine::Vec3&)>& update) const {
         float values[3] = {current.x(), current.y(), current.z()};
-        ImGui::TextDisabled("%s", label);
+        ImGui::TextColored({0.62f, 0.75f, 0.80f, 1.0f}, "%s", label);
+        ImGui::SameLine();
+        ImGui::TextDisabled("  Scroll over a value to adjust");
         ImGui::SetNextItemWidth(-1.0f);
         if (!dragFloat3WithWheel(id, values, speed, format)) return;
         update(Engine::Vec3{values[0], values[1], values[2]});

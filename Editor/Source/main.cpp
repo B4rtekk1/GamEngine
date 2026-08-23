@@ -41,14 +41,20 @@
 #include <unordered_set>
 
 void drawPanelHeader(const char* title, const char* subtitle = nullptr) {
-    ImGui::PushStyleColor(ImGuiCol_Text, {0.33f, 0.86f, 0.92f, 1.0f});
+    ImGui::PushStyleColor(ImGuiCol_Text, {0.30f, 0.90f, 0.86f, 1.0f});
+    ImGui::TextUnformatted("●");
+    ImGui::PopStyleColor();
+    ImGui::SameLine(0.0f, 7.0f);
+    ImGui::PushStyleColor(ImGuiCol_Text, {0.92f, 0.95f, 0.98f, 1.0f});
     ImGui::TextUnformatted(title);
     ImGui::PopStyleColor();
     if (subtitle != nullptr) {
-        ImGui::SameLine();
+        ImGui::SameLine(0.0f, 9.0f);
         ImGui::TextDisabled("%s", subtitle);
     }
+    ImGui::Spacing();
     ImGui::Separator();
+    ImGui::Spacing();
 }
 
 const char* entityName(const Engine::ScenePreset& scene, const Engine::Entity entity) {
@@ -194,7 +200,7 @@ Engine::Entity HierarchyPanel::draw(Engine::ScenePreset& scene, const Engine::En
     ImGui::SetNextItemWidth(-1.0f);
     ImGui::InputTextWithHint("##hierarchy-filter", "  Search objects...", filter, sizeof(filter));
     ImGui::Spacing();
-    ImGui::TextDisabled("OBJECTS");
+    ImGui::TextDisabled("OBJECTS  •  Right-click for actions");
 
     if (ImGui::TreeNodeEx("Scene", ImGuiTreeNodeFlags_DefaultOpen | ImGuiTreeNodeFlags_SpanAvailWidth)) {
         const auto entityLabel = [&](const char* name, const Engine::Entity entity) {
@@ -282,7 +288,7 @@ bool ComponentsPanel::draw(Engine::ScenePreset& scene, const Engine::Entity sele
     drawPanelHeader("INSPECTOR", selected == Engine::NullEntity ? "NO SELECTION" : "ENTITY");
     if (selected == Engine::NullEntity) {
         ImGui::Spacing();
-        ImGui::TextColored({0.33f, 0.86f, 0.92f, 1.0f}, "  ◇");
+        ImGui::TextColored({0.30f, 0.90f, 0.86f, 1.0f}, "◇");
         ImGui::SameLine();
         ImGui::TextDisabled("Nothing selected");
         ImGui::Spacing();
@@ -309,6 +315,7 @@ bool ComponentsPanel::draw(Engine::ScenePreset& scene, const Engine::Entity sele
             });
         }
     }
+    ImGui::TextDisabled("Rename this object below, then edit its components.");
     ImGui::Spacing();
     if (ImGui::CollapsingHeader("Transform", ImGuiTreeNodeFlags_DefaultOpen) &&
         scene.editor().valid(selected) && scene.editor().has<Engine::Transform>(selected)) {
@@ -612,11 +619,13 @@ void drawStatusBar(const Engine::ScenePreset& scene, const Engine::Entity select
     ImGui::SetNextWindowSize({viewport->WorkSize.x, 27.0f});
     ImGui::Begin("##status-bar", nullptr, ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoDocking |
         ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoNav);
-    ImGui::TextColored({0.25f, 0.80f, 0.87f, 1.0f}, "●");
+    ImGui::TextColored(playing ? (paused ? ImVec4{0.95f, 0.68f, 0.24f, 1.0f}
+                                          : ImVec4{0.30f, 0.90f, 0.60f, 1.0f})
+                                : ImVec4{0.30f, 0.90f, 0.86f, 1.0f}, "●");
     ImGui::SameLine();
     ImGui::TextUnformatted(playing ? (paused ? "Paused" : "Playing") : "Ready");
     ImGui::SameLine();
-    ImGui::TextDisabled("|  Particle scene  |  Entities: %zu  |  Selected: %s",
+    ImGui::TextDisabled("•  Particle scene  •  Entities: %zu  •  Selected: %s",
                         scene.editor().size(), selected == Engine::NullEntity ? "None" : entityName(scene, selected));
     ImGui::End();
 }
@@ -635,7 +644,7 @@ Engine::Entity drawEditorMenuBar(Engine::ScenePreset& scene, Engine::Renderer& r
 
     if (!ImGui::BeginMainMenuBar()) return Engine::NullEntity;
 
-    ImGui::PushStyleColor(ImGuiCol_Text, {0.34f, 0.87f, 0.93f, 1.0f});
+    ImGui::PushStyleColor(ImGuiCol_Text, {0.30f, 0.90f, 0.86f, 1.0f});
     ImGui::TextUnformatted("GAMENGINE");
     ImGui::PopStyleColor();
     ImGui::SameLine();
