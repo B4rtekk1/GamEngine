@@ -5,6 +5,7 @@
 #include "Engine/ECS/Components/CameraComponent.h"
 #include "Engine/ECS/Components/ParticleEmitterComponent.h"
 #include "Engine/ECS/Components/ColorPickerComponent.h"
+#include "Engine/ECS/Components/ColliderComponent.h"
 #include "Engine/Renderer/Geometry/Cube.h"
 #include "Engine/Renderer/Geometry/Plane.h"
 #include "Engine/Renderer/MeshRenderer.h"
@@ -71,6 +72,9 @@ ScenePreset::ScenePreset(const SceneType type) {
     const float halfExtent = ((CubesPerAxis - 1) * CubeSpacing + 1.0f) * 0.5f;
     plane = builder.createMeshEntity(planeMesh_, Transform{.scale = treeScene ? Vec3{10, 1, 10} : Vec3{halfExtent * 2 + 4, 1, halfExtent * 2 + 4}},
         treeScene ? PBRMaterial{.baseColor = {0.24f, 0.16f, 0.08f}, .roughness = 0.9f} : PBRMaterial{}, false, 0, "Plane");
+    registry().add<ColliderComponent>(plane, ColliderComponent{
+        .shape = BoxCollider{.halfExtents = {0.5f, 0.05f, 0.5f}},
+        .offset = {0.0f, -0.05f, 0.0f}});
 
     if (treeScene) {
         tree = builder.createMeshEntity(treeMesh_, Transform{.position = {3, 0, 1}},
@@ -105,6 +109,7 @@ Entity ScenePreset::createGameObject() {
 Entity ScenePreset::createCube() {
     const Entity entity = SceneBuilder{registry()}.createMeshEntity(cubeMesh_, Transform{.position = {0, 0.5f, 0}},
         PBRMaterial{.baseColor = {0.72f, 0.72f, 0.72f}, .metallic = 0.05f, .roughness = 0.62f}, true, 0, "Cube");
+    registry().add<ColliderComponent>(entity);
     editorCubes.push_back(entity);
     return entity;
 }

@@ -3,6 +3,7 @@
 #include "Engine/Core/Time.h"
 #include "Engine/Renderer/Renderer.h"
 #include "Engine/Scripting/ScriptSystem.h"
+#include "Engine/Physics/PhysicsSystem.h"
 
 #include <SDL3/SDL.h>
 
@@ -18,6 +19,7 @@ public:
     bool initialized = false;
     bool running = false;
     ScriptSystem scripts{ScriptRegistry::instance()};
+    PhysicsSystem physics{};
 };
 
 Application::Application(ApplicationConfig config)
@@ -29,7 +31,7 @@ Application::~Application() {
     if (impl_->initialized) SDL_Quit();
 }
 
-void Application::stop() noexcept {
+void Application::stop() const noexcept {
     impl_->running = false;
 }
 
@@ -64,6 +66,7 @@ void Application::run() {
         }
         if (impl_->running) {
             if (updateCallback_) updateCallback_(scene_, static_cast<float>(Time::deltaTime()));
+            impl_->physics.update(scene_, static_cast<float>(Time::deltaTime()));
             impl_->scripts.update(scene_, static_cast<float>(Time::deltaTime()));
             impl_->renderer.renderFrame();
         }

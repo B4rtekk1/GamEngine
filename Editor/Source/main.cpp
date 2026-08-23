@@ -9,10 +9,12 @@
 #include "Engine/ECS/Components/ScriptComponent.h"
 #include "Engine/ECS/Components/CameraComponent.h"
 #include "Engine/ECS/Components/ColliderComponent.h"
+#include "Engine/ECS/Components/RigidbodyComponent.h"
 #include "Engine/ECS/Components/ColorPickerComponent.h"
 #include "Engine/Renderer/MeshRenderer.h"
 #include "Engine/Scene/SceneSerializer.h"
 #include "Engine/Scripting/ScriptSystem.h"
+#include "Engine/Physics/PhysicsSystem.h"
 #include "Elements/EditorButton.h"
 #include "Elements/TransformFields.h"
 #include "Editor/Panels/EditorSceneSession.h"
@@ -388,6 +390,27 @@ bool ComponentsPanel::draw(Engine::ScenePreset& scene, const Engine::Entity sele
         if (changed) scene.editor().modify<Engine::ColliderComponent>(selected,
             [&](auto& component) { component = value; });
     }
+    if (scene.editor().valid(selected) && scene.editor().has<Engine::RigidbodyComponent>(selected) &&
+        ImGui::CollapsingHeader("Rigidbody", ImGuiTreeNodeFlags_DefaultOpen)) {
+        const auto rigidbody = scene.editor().get<Engine::RigidbodyComponent>(selected);
+        auto value = rigidbody;
+        int type = static_cast<int>(value.type);
+        const char* typeNames[] = {"Static", "Dynamic", "Kinematic"};
+        if (ImGui::BeginCombo("Type##rigidbody", typeNames[type])) {
+            for (int index = 0; index < 3; ++index) {
+                if (ImGui::Selectable(typeNames[index], type == index)) type = index;
+            }
+            ImGui::EndCombo();
+        }
+        value.type = static_cast<Engine::RigidbodyType>(type);
+        bool changed = ImGui::Checkbox("Use Gravity##rigidbody", &value.useGravity);
+        changed |= ImGui::DragFloat("Mass##rigidbody", &value.mass, 0.05f, 0.001f, 100000.0f);
+        value.mass = std::max(0.001f, value.mass);
+        if (changed || value.type != rigidbody.type) {
+            scene.editor().modify<Engine::RigidbodyComponent>(selected,
+                [&](auto& component) { component = value; });
+        }
+    }
     if (scene.editor().valid(selected) && scene.editor().has<Engine::ColorPickerComponent>(selected) &&
         ImGui::CollapsingHeader("Color Picker", ImGuiTreeNodeFlags_DefaultOpen)) {
         const auto readScene = scene.editor();
@@ -410,6 +433,7 @@ bool ComponentsPanel::draw(Engine::ScenePreset& scene, const Engine::Entity sele
         const bool hasScript = scene.editor().has<Engine::ScriptComponent>(selected);
         const bool hasColorPicker = scene.editor().has<Engine::ColorPickerComponent>(selected);
         const bool hasCollider = scene.editor().has<Engine::ColliderComponent>(selected);
+        const bool hasRigidbody = scene.editor().has<Engine::RigidbodyComponent>(selected);
         if (ImGui::MenuItem("Script", nullptr, false, !hasScript)) {
             scene.editor().add<Engine::ScriptComponent>(selected);
             ImGui::CloseCurrentPopup();
@@ -425,6 +449,11 @@ bool ComponentsPanel::draw(Engine::ScenePreset& scene, const Engine::Entity sele
             ImGui::CloseCurrentPopup();
         }
         if (hasCollider) ImGui::TextDisabled("Collider component already added");
+        if (ImGui::MenuItem("Rigidbody", nullptr, false, !hasRigidbody)) {
+            scene.editor().add<Engine::RigidbodyComponent>(selected);
+            ImGui::CloseCurrentPopup();
+        }
+        if (hasRigidbody) ImGui::TextDisabled("Rigidbody component already added");
         ImGui::EndPopup();
     }
     if (EditorButton("Attach C++ Script", {-1.0f, 0.0f}).draw()) ImGui::OpenPopup("Attach C++ Script");
@@ -714,6 +743,7 @@ int main() {
 
         Engine::ScenePreset scene(Engine::SceneType::Particles);
         Engine::ScriptSystem scriptSystem{Engine::ScriptRegistry::instance()};
+        Engine::PhysicsSystem physicsSystem{};
         Engine::Renderer renderer;
         renderer.initialize(scene, window);
         Engine::Entity selectedEntity = Engine::NullEntity;
@@ -806,6 +836,7 @@ int main() {
                 scene.editor().structuralRevision() != sceneStructureBeforeUi;
             if (sceneStructureChanged) renderer.synchronizeScene(scene);
             if (playing && !paused) {
+                physicsSystem.update(scene, static_cast<float>(Engine::Time::deltaTime()));
                 scriptSystem.update(scene, static_cast<float>(Engine::Time::deltaTime()));
             }
             renderer.renderFrame();

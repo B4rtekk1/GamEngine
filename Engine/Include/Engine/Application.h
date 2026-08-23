@@ -36,7 +36,7 @@ public:
     }
 
     /** Requests that the main loop exits after the current frame. */
-    void stop() noexcept;
+    void stop() const noexcept;
     [[nodiscard]] bool isRunning() const noexcept;
 
     /** Starts the main loop and returns after the window is closed. */

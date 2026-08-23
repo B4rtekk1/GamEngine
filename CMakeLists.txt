@@ -44,6 +44,7 @@ add_library(Engine
         Engine/Source/Scene/SceneSerializer.cpp
         Engine/Source/Scene/Scene.cpp
         Engine/Source/Scene/ScenePresets.cpp
+        Engine/Source/Physics/PhysicsSystem.cpp
         Engine/Source/Scripting/ScriptSystem.cpp
         Engine/Source/UI/Canvas.cpp
         Engine/Source/UI/CanvasRenderer.cpp
@@ -170,4 +171,8 @@ if(BUILD_TESTING)
     add_executable(ScriptSystemTests Tests/ScriptSystemTests.cpp)
     target_link_libraries(ScriptSystemTests PRIVATE Engine)
     add_test(NAME ScriptSystemTests COMMAND ScriptSystemTests)
+
+    add_executable(PhysicsSystemTests Tests/PhysicsSystemTests.cpp)
+    target_link_libraries(PhysicsSystemTests PRIVATE Engine)
+    add_test(NAME PhysicsSystemTests COMMAND PhysicsSystemTests)
 endif()

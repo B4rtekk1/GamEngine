@@ -4,6 +4,7 @@
 #include "Engine/ECS/Components/TransformComponent.h"
 #include "Engine/ECS/Components/CameraComponent.h"
 #include "Engine/ECS/Components/ScriptComponent.h"
+#include "Engine/ECS/Components/RigidbodyComponent.h"
 #include "Engine/ECS/Entity.h"
 #include "Engine/ECS/Registry.h"
 #include "Engine/Scene/Components/LightComponent.h"
@@ -90,6 +91,16 @@ public:
     [[nodiscard]] const TransformComponent& transform() const { return get<TransformComponent>(); }
     [[nodiscard]] MeshRendererComponent& meshRenderer() { return get<MeshRendererComponent>(); }
     [[nodiscard]] const MeshRendererComponent& meshRenderer() const { return get<MeshRendererComponent>(); }
+
+    RigidbodyComponent& addRigidbody(RigidbodyComponent rigidbody = {}) {
+        if (has<RigidbodyComponent>()) {
+            registry_->modify<RigidbodyComponent>(entity_, [&](auto& value) { value = rigidbody; });
+            return get<RigidbodyComponent>();
+        }
+        return add<RigidbodyComponent>(std::move(rigidbody));
+    }
+    [[nodiscard]] RigidbodyComponent& rigidbody() { return get<RigidbodyComponent>(); }
+    [[nodiscard]] const RigidbodyComponent& rigidbody() const { return get<RigidbodyComponent>(); }
 
     void setTransform(TransformComponent transformValue) {
         transform() = std::move(transformValue);

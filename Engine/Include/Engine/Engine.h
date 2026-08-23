@@ -14,5 +14,7 @@
 #include "Engine/Scene/Components/LightComponent.h"
 #include "Engine/Scene/Components/IdentityComponents.h"
 #include "Engine/ECS/Components/ScriptComponent.h"
+#include "Engine/ECS/Components/RigidbodyComponent.h"
+#include "Engine/Physics/PhysicsSystem.h"
 #include "Engine/Scripting/Script.h"
 #include "Engine/Scripting/ScriptRegistry.h"

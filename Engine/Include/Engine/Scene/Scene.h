@@ -27,6 +27,7 @@ namespace Engine {
 
 class Renderer;
 class ScriptSystem;
+class PhysicsSystem;
 
 // Runtime scene data. Content creation belongs to ScenePresets (or to the
 // application), rather than to this data container.
@@ -148,6 +149,7 @@ private:
     friend class SceneSerializer;
     friend class Renderer;
     friend class ScriptSystem;
+    friend class PhysicsSystem;
 
     Registry registry_;
     std::vector<std::unique_ptr<GameObject>> objects_;

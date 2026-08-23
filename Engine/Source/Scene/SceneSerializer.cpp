@@ -3,6 +3,7 @@
 #include "Engine/Core/Transform.h"
 #include "Engine/ECS/Components/CameraComponent.h"
 #include "Engine/ECS/Components/ColliderComponent.h"
+#include "Engine/ECS/Components/RigidbodyComponent.h"
 #include "Engine/ECS/Components/ScriptComponent.h"
 #include "Engine/ECS/Components/ColorPickerComponent.h"
 #include "Engine/ECS/Components/ParticleEmitterComponent.h"
@@ -187,6 +188,39 @@ void writeCollider(std::ostream& output, const ColliderComponent& collider) {
         }
     }, collider.shape);
     output << '\n';
+}
+
+void writeRigidbody(std::ostream& output, const RigidbodyComponent& body) {
+    output << static_cast<int>(body.type) << ' ';
+    writeFloat(output, body.mass); output << ' ';
+    writeFloat(output, body.linearDamping); output << ' ';
+    writeFloat(output, body.angularDamping); output << ' ';
+    output << static_cast<int>(body.useGravity) << ' '
+           << static_cast<int>(body.fixedRotation) << ' ';
+    writeVec3(output, body.linearVelocity); output << ' ';
+    writeVec3(output, body.angularVelocity);
+    output << '\n';
+}
+
+RigidbodyComponent readRigidbody(std::istream& input) {
+    RigidbodyComponent body;
+    const int type = read<int>(input, "rigidbody type");
+    if (type < static_cast<int>(RigidbodyType::Static) ||
+        type > static_cast<int>(RigidbodyType::Kinematic)) {
+        invalidScene("unknown rigidbody type");
+    }
+    body.type = static_cast<RigidbodyType>(type);
+    body.mass = readFloat(input, "rigidbody mass");
+    body.linearDamping = readFloat(input, "rigidbody linear damping");
+    body.angularDamping = readFloat(input, "rigidbody angular damping");
+    body.useGravity = readBool(input, "rigidbody gravity flag");
+    body.fixedRotation = readBool(input, "rigidbody fixed-rotation flag");
+    body.linearVelocity = readVec3(input, "rigidbody linear velocity");
+    body.angularVelocity = readVec3(input, "rigidbody angular velocity");
+    if (body.mass <= 0.0f || body.linearDamping < 0.0f || body.angularDamping < 0.0f) {
+        invalidScene("rigidbody values are invalid");
+    }
+    return body;
 }
 
 ColliderComponent readCollider(std::istream& input) {
@@ -398,6 +432,10 @@ void SceneSerializer::save(const Registry& registry, std::ostream& output,
             serialized << "COLLIDER ";
             writeCollider(serialized, registry.get<ColliderComponent>(entity));
         }
+        if (registry.has<RigidbodyComponent>(entity)) {
+            serialized << "RIGIDBODY ";
+            writeRigidbody(serialized, registry.get<RigidbodyComponent>(entity));
+        }
         if (registry.has<MeshRenderer>(entity)) {
             const auto& renderer = registry.get<MeshRenderer>(entity);
             const long long meshId = renderer.mesh
@@ -479,7 +517,7 @@ void SceneSerializer::load(Registry& registry, std::istream& input,
     input.imbue(std::locale::classic());
     expect(input, "GAMENGINE_SCENE");
     const auto version = read<unsigned>(input, "format version");
-    if (version != 3 && version != 4 && version != FormatVersion) {
+    if (version != 3 && version != 4 && version != 5 && version != FormatVersion) {
         invalidScene("unsupported format version " + std::to_string(version));
     }
 
@@ -578,6 +616,7 @@ void SceneSerializer::load(Registry& registry, std::istream& input,
         bool hasColorPicker = false;
         bool hasParticleEmitter = false;
         bool hasCollider = false;
+        bool hasRigidbody = false;
         bool hasIdentity = false;
         bool hasParent = false;
 
@@ -623,6 +662,10 @@ void SceneSerializer::load(Registry& registry, std::istream& input,
                 if (version < 5 || hasCollider) invalidScene("entity contains an invalid ColliderComponent");
                 hasCollider = true;
                 loaded.add<ColliderComponent>(entity, readCollider(input));
+            } else if (component == "RIGIDBODY") {
+                if (version < 6 || hasRigidbody) invalidScene("entity contains an invalid RigidbodyComponent");
+                hasRigidbody = true;
+                loaded.add<RigidbodyComponent>(entity, readRigidbody(input));
             } else if (component == "MESH_RENDERER") {
                 if (hasRenderer) {
                     invalidScene("entity contains more than one MeshRenderer");
