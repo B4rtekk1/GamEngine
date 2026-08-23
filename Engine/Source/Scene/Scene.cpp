@@ -26,6 +26,22 @@ Actor Scene::createModel(std::string name, std::filesystem::path path,
     return Actor{*this, object.objectId()};
 }
 
+Actor Scene::createModel(std::string name, std::filesystem::path path) {
+    if (content_ == nullptr) {
+        throw std::logic_error("Scene has no Content service attached");
+    }
+    return createModel(std::move(name), std::move(path), *content_);
+}
+
+Actor Scene::createPrefab(std::string name, std::filesystem::path path,
+                          PBRMaterial material) {
+    if (content_ == nullptr) {
+        throw std::logic_error("Scene has no Content service attached");
+    }
+    return createPrefab(std::move(name), Prefab::model(*content_, std::move(path),
+                                                       std::move(material)));
+}
+
 Actor Scene::createCube(std::string name, PBRMaterial material) {
     const auto prefab = Prefab::cube(std::move(material));
     return createPrefab(std::move(name), prefab);

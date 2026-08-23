@@ -21,7 +21,9 @@ bool Actor::valid() const noexcept {
 
 std::string Actor::name() const { return object().name(); }
 
-void Actor::setName(std::string name) { object().setName(std::move(name)); }
+void Actor::setName(std::string name) {
+    if (scene_ != nullptr) scene_->rename(*this, std::move(name));
+}
 void Actor::setPosition(Vec3 position) { object().setPosition(position); }
 void Actor::setRotation(Vec3 rotation) { object().setRotation(rotation); }
 void Actor::setScale(Vec3 scale) { object().setScale(scale); }

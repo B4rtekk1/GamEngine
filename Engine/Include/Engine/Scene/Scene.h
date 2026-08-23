@@ -34,6 +34,7 @@ class Renderer;
 class ScriptSystem;
 class PhysicsSystem;
 class SceneEditor;
+class Application;
 
 // Runtime scene data. Content creation belongs to ScenePresets (or to the
 // application), rather than to this data container.
@@ -71,7 +72,7 @@ public:
 
     /** Duplicates an actor without exposing its ECS entity identifier. */
     [[nodiscard]] Actor duplicate(const Actor& actor) {
-        if (!actor.valid()) return {};
+        if (actor.scene_ != this || !actor.valid()) return {};
         auto& object = duplicate(actor.object().entity());
         return Actor{*this, object.objectId()};
     }
@@ -113,12 +114,45 @@ public:
                                     std::filesystem::path path,
                                     Assets::Content& content);
 
+    /** Loads a model using the Content service attached to this scene. */
+    [[nodiscard]] Actor createModel(std::string name, std::filesystem::path path);
+
+    /** Loads a model prefab and instantiates it in one operation. */
+    [[nodiscard]] Actor createPrefab(std::string name,
+                                     std::filesystem::path path,
+                                     PBRMaterial material = {});
+
     [[nodiscard]] Actor createCube(std::string name, PBRMaterial material = {});
     [[nodiscard]] Actor createPrefab(std::string name, const Prefab& prefab);
 
     [[nodiscard]] Actor findActor(const std::string& name) noexcept {
         auto* object = find(name);
         return object == nullptr ? Actor{} : Actor{*this, object->objectId()};
+    }
+
+    [[nodiscard]] Actor createCameraActor(std::string name, CameraComponent camera = {}) {
+        auto& object = create(std::move(name));
+        object.addCamera(std::move(camera));
+        return Actor{*this, object.objectId()};
+    }
+
+    [[nodiscard]] Actor createLightActor(std::string name, LightComponent light = {}) {
+        auto& object = create(std::move(name));
+        object.addLight(std::move(light));
+        return Actor{*this, object.objectId()};
+    }
+
+    /** Renames an actor while keeping name lookup consistent. */
+    void rename(const Actor& actor, std::string name) {
+        if (actor.scene_ != this || !actor.valid()) return;
+        if (name.empty()) throw std::invalid_argument("Scene object name cannot be empty");
+        if (auto* existing = find(name); existing != nullptr && existing->objectId() != actor.objectId_) {
+            throw std::invalid_argument("Scene object name is already in use: " + name);
+        }
+        auto* object = find(actor.objectId_);
+        names_.erase(object->name());
+        object->setName(std::move(name));
+        names_[object->name()] = object->objectId();
     }
 
     /** Destroys an actor through the high-level runtime API. */
@@ -233,6 +267,11 @@ public:
         for (const auto& object : objects_) func(*object);
     }
 
+    template<typename Func>
+    void eachActor(Func&& func) {
+        for (const auto& object : objects_) func(Actor{*this, object->objectId()});
+    }
+
     /** Number of objects created through the high-level Scene API. */
     [[nodiscard]] std::size_t objectCount() const noexcept { return objects_.size(); }
 
@@ -287,12 +326,14 @@ protected:
     }
 
 private:
+    friend class Application;
     friend class SceneSerializer;
     friend class Renderer;
     friend class ScriptSystem;
     friend class PhysicsSystem;
 
     void rebuildObjectHandles();
+    void setContent(Assets::Content& content) noexcept { content_ = &content; }
     void detachObjectHandles() noexcept {
         for (const auto& object : objects_) object->detach();
         objects_.clear();
@@ -306,6 +347,7 @@ private:
     UI::UIFontAtlas fontAtlas_{};
     Particles::ParticleEmitter particleEmitter_{};
     Entity particleEntity_{NullEntity};
+    Assets::Content* content_{};
     bool particleScene_ = false;
 };
 
