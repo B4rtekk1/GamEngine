@@ -28,6 +28,7 @@
 #include <chrono>
 #include <cstdint>
 #include <algorithm>
+#include <cctype>
 #include <cmath>
 #include <cstdio>
 #include <cstring>
@@ -56,6 +57,31 @@ void drawPanelHeader(const char* title, const char* subtitle = nullptr) {
     ImGui::Spacing();
     ImGui::Separator();
     ImGui::Spacing();
+}
+
+void drawSearchIcon(const ImVec2 min, const ImVec2 max) {
+    const ImVec2 center{min.x + 12.0f, (min.y + max.y) * 0.5f - 1.0f};
+    ImDrawList* drawList = ImGui::GetWindowDrawList();
+    const ImU32 color = ImGui::GetColorU32(ImGuiCol_TextDisabled);
+    drawList->AddCircle(center, 4.5f, color, 16, 1.6f);
+    drawList->AddLine({center.x + 3.2f, center.y + 3.2f},
+                      {center.x + 7.0f, center.y + 7.0f}, color, 1.6f);
+}
+
+bool containsCaseInsensitive(const char* text, const char* query) {
+    if (*query == '\0') return true;
+    for (; *text != '\0'; ++text) {
+        const char* textIt = text;
+        const char* queryIt = query;
+        while (*textIt != '\0' && *queryIt != '\0' &&
+               std::tolower(static_cast<unsigned char>(*textIt)) ==
+                   std::tolower(static_cast<unsigned char>(*queryIt))) {
+            ++textIt;
+            ++queryIt;
+        }
+        if (*queryIt == '\0') return true;
+    }
+    return false;
 }
 
 const char* entityName(const Engine::ScenePreset& scene, const Engine::Entity entity) {
@@ -187,7 +213,7 @@ bool drawViewport(Engine::Renderer& renderer, Engine::ViewportHandle gameDescrip
 }
 
 Engine::Entity HierarchyPanel::draw(Engine::ScenePreset& scene, const Engine::Entity selected,
-                                    Action& action, Engine::Entity& actionEntity) {
+                                    Action& action, Engine::Entity& actionEntity, const bool canPaste) {
     Engine::Entity clicked = Engine::NullEntity;
     action = Action::None;
     actionEntity = Engine::NullEntity;
@@ -199,14 +225,20 @@ Engine::Entity HierarchyPanel::draw(Engine::ScenePreset& scene, const Engine::En
     ImGui::TextDisabled("%zu", scene.editor().size());
     static char filter[64] = {};
     ImGui::SetNextItemWidth(-1.0f);
-    ImGui::InputTextWithHint("##hierarchy-filter", "  Search objects...", filter, sizeof(filter));
+    const ImVec2 framePadding = ImGui::GetStyle().FramePadding;
+    ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, {framePadding.x + 18.0f, framePadding.y});
+    ImGui::InputTextWithHint("##hierarchy-filter", "Search objects...", filter, sizeof(filter));
+    const ImVec2 searchMin = ImGui::GetItemRectMin();
+    const ImVec2 searchMax = ImGui::GetItemRectMax();
+    ImGui::PopStyleVar();
+    drawSearchIcon(searchMin, searchMax);
     ImGui::Spacing();
     ImGui::TextDisabled("OBJECTS  •  Right-click for actions");
 
     if (ImGui::TreeNodeEx("Scene", ImGuiTreeNodeFlags_DefaultOpen | ImGuiTreeNodeFlags_SpanAvailWidth)) {
         const auto entityLabel = [&](const char* name, const Engine::Entity entity) {
             if (entity != Engine::NullEntity) {
-                if (filter[0] != '\0' && std::strstr(name, filter) == nullptr) return;
+                if (!containsCaseInsensitive(name, filter)) return;
                 char label[64];
                 std::snprintf(label, sizeof(label), "%s  (%u)", name,
                               Engine::entityIndex(entity));
@@ -244,7 +276,7 @@ Engine::Entity HierarchyPanel::draw(Engine::ScenePreset& scene, const Engine::En
         const auto drawNode = [&](auto&& self, const Engine::Entity entity) -> void {
             if (!visited.insert(entity).second) return;
             const char* name = entityName(scene, entity);
-            if (filter[0] != '\0' && std::strstr(name, filter) == nullptr) return;
+            if (!containsCaseInsensitive(name, filter)) return;
             const auto childIt = children.find(entity);
             const bool hasChildren = childIt != children.end() && !childIt->second.empty();
             char label[128];
@@ -253,6 +285,10 @@ Engine::Entity HierarchyPanel::draw(Engine::ScenePreset& scene, const Engine::En
                 if (!ImGui::BeginPopupContextItem()) return;
                 if (ImGui::MenuItem("Copy")) {
                     action = Action::Copy;
+                    actionEntity = entity;
+                }
+                if (ImGui::MenuItem("Paste", nullptr, false, canPaste)) {
+                    action = Action::Paste;
                     actionEntity = entity;
                 }
                 if (ImGui::MenuItem("Duplicate")) {
@@ -282,6 +318,15 @@ Engine::Entity HierarchyPanel::draw(Engine::ScenePreset& scene, const Engine::En
         };
         for (const Engine::Entity entity : roots) drawNode(drawNode, entity);
         ImGui::TreePop();
+    }
+
+    // Allow pasting from empty space in the hierarchy, without requiring an
+    // object to be selected or right-clicked first.
+    if (ImGui::BeginPopupContextWindow("##hierarchy-context", ImGuiPopupFlags_NoOpenOverItems)) {
+        if (ImGui::MenuItem("Paste", nullptr, false, canPaste)) {
+            action = Action::Paste;
+        }
+        ImGui::EndPopup();
     }
 
     ImGui::End();
@@ -1060,13 +1105,17 @@ int main() {
             HierarchyPanel::Action hierarchyAction = HierarchyPanel::Action::None;
             Engine::Entity hierarchyActionEntity = Engine::NullEntity;
             if (const Engine::Entity clicked = HierarchyPanel::draw(
-                    scene, selectedEntity, hierarchyAction, hierarchyActionEntity);
+                    scene, selectedEntity, hierarchyAction, hierarchyActionEntity,
+                    clipboard.canPaste(scene));
                 clicked != Engine::NullEntity) {
                 selectedEntity = clicked;
                 renderer.setEditorSelection(selectedEntity);
             }
-            if (!playing && hierarchyActionEntity != Engine::NullEntity &&
-                scene.editor().valid(hierarchyActionEntity)) {
+            if (!playing && hierarchyAction == HierarchyPanel::Action::Paste) {
+                selectedEntity = clipboard.paste(scene);
+                renderer.setEditorSelection(selectedEntity);
+            } else if (!playing && hierarchyActionEntity != Engine::NullEntity &&
+                       scene.editor().valid(hierarchyActionEntity)) {
                 if (hierarchyAction == HierarchyPanel::Action::Delete) {
                     scene.editor().destroy(hierarchyActionEntity);
                     if (selectedEntity == hierarchyActionEntity) {

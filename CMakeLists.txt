@@ -280,4 +280,36 @@ if(BUILD_TESTING)
     add_executable(ParticleSceneTests Tests/ParticleSceneTests.cpp)
     target_link_libraries(ParticleSceneTests PRIVATE Engine)
     add_test(NAME ParticleSceneTests COMMAND ParticleSceneTests)
+
+    add_executable(CameraTests Tests/CameraTests.cpp)
+    target_link_libraries(CameraTests PRIVATE Engine)
+    add_test(NAME CameraTests COMMAND CameraTests)
+
+    add_executable(TimeTests Tests/TimeTests.cpp)
+    target_link_libraries(TimeTests PRIVATE Engine)
+    add_test(NAME TimeTests COMMAND TimeTests)
+
+    add_executable(ComponentPoolTests Tests/ComponentPoolTests.cpp)
+    target_link_libraries(ComponentPoolTests PRIVATE Engine)
+    add_test(NAME ComponentPoolTests COMMAND ComponentPoolTests)
+
+    add_executable(CameraComponentTests Tests/CameraComponentTests.cpp)
+    target_link_libraries(CameraComponentTests PRIVATE Engine)
+    add_test(NAME CameraComponentTests COMMAND CameraComponentTests)
+
+    add_executable(ViewportCameraTests Tests/ViewportCameraTests.cpp)
+    target_link_libraries(ViewportCameraTests PRIVATE Engine)
+    add_test(NAME ViewportCameraTests COMMAND ViewportCameraTests)
+
+    add_executable(RenderConfigTests Tests/RenderConfigTests.cpp)
+    target_link_libraries(RenderConfigTests PRIVATE Engine)
+    add_test(NAME RenderConfigTests COMMAND RenderConfigTests)
+
+    add_executable(CullingTypesTests Tests/CullingTypesTests.cpp)
+    target_link_libraries(CullingTypesTests PRIVATE Engine)
+    add_test(NAME CullingTypesTests COMMAND CullingTypesTests)
+
+    add_executable(TrigonometryTests Tests/TrigonometryTests.cpp)
+    target_link_libraries(TrigonometryTests PRIVATE Engine)
+    add_test(NAME TrigonometryTests COMMAND TrigonometryTests)
 endif()
