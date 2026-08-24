@@ -21,7 +21,7 @@ struct RaycastHit final {
  * @brief Advances dynamic rigidbodies and rolls grounded spheres.
  *
  * Dynamic sphere colliders derive their angular velocity from horizontal
- * movement while in contact with a static surface.
+ * movement while in contact with a collider surface.
  */
 class PhysicsSystem final {
 public:

@@ -147,5 +147,86 @@ int main() {
         return 8;
     }
 
+    Scene allCollidersScene;
+    auto movingSphere = allCollidersScene.createActor("Collider-testing sphere");
+    movingSphere.setPosition({-1.4f, 0.0f, 0.0f});
+    movingSphere.addRigidbody(RigidbodyComponent{
+        .useGravity = false, .linearVelocity = {5.0f, 0.0f, 0.0f}
+    });
+    movingSphere.addSphereCollider(0.5f);
+    auto boxWithoutBody = allCollidersScene.createActor("Box without rigidbody");
+    boxWithoutBody.addBoxCollider({0.5f, 0.5f, 0.5f});
+
+    physics.update(allCollidersScene, 0.1f);
+    if (movingSphere.position().x() > -0.999f ||
+        std::abs(movingSphere.velocity().x() + 0.75f) > 0.001f) {
+        return 9;
+    }
+
+    Scene sphereColliderScene;
+    auto firstSphere = sphereColliderScene.createActor("Moving sphere");
+    firstSphere.setPosition({-1.4f, 0.0f, 0.0f});
+    firstSphere.addRigidbody(RigidbodyComponent{
+        .useGravity = false, .linearVelocity = {5.0f, 0.0f, 0.0f}
+    });
+    firstSphere.addSphereCollider(0.5f);
+    auto staticSphere = sphereColliderScene.createActor("Static sphere collider");
+    staticSphere.addSphereCollider(0.5f);
+
+    physics.update(sphereColliderScene, 0.1f);
+    if (firstSphere.position().x() > -0.999f || firstSphere.velocity().x() > 0.001f) {
+        return 10;
+    }
+
+    Scene capsuleColliderScene;
+    auto capsuleTestSphere = capsuleColliderScene.createActor("Moving sphere");
+    capsuleTestSphere.setPosition({-1.4f, 0.0f, 0.0f});
+    capsuleTestSphere.addRigidbody(RigidbodyComponent{
+        .useGravity = false, .linearVelocity = {5.0f, 0.0f, 0.0f}
+    });
+    capsuleTestSphere.addSphereCollider(0.5f);
+    auto capsule = capsuleColliderScene.createActor("Capsule collider");
+    capsule.addCapsuleCollider(0.5f, 2.0f);
+
+    physics.update(capsuleColliderScene, 0.1f);
+    if (capsuleTestSphere.position().x() > -0.999f ||
+        capsuleTestSphere.velocity().x() > 0.001f) {
+        return 11;
+    }
+
+    Scene kinematicColliderScene;
+    auto kinematicTestSphere = kinematicColliderScene.createActor("Moving sphere");
+    kinematicTestSphere.setPosition({-1.4f, 0.0f, 0.0f});
+    kinematicTestSphere.addRigidbody(RigidbodyComponent{
+        .useGravity = false, .linearVelocity = {5.0f, 0.0f, 0.0f}
+    });
+    kinematicTestSphere.addSphereCollider(0.5f);
+    auto kinematicBox = kinematicColliderScene.createActor("Kinematic box");
+    kinematicBox.addRigidbody(RigidbodyComponent{.type = RigidbodyType::Kinematic});
+    kinematicBox.addBoxCollider({0.5f, 0.5f, 0.5f});
+
+    physics.update(kinematicColliderScene, 0.1f);
+    if (kinematicTestSphere.position().x() > -0.999f ||
+        kinematicTestSphere.velocity().x() > 0.001f) {
+        return 12;
+    }
+
+    Scene dynamicColliderScene;
+    auto dynamicTestSphere = dynamicColliderScene.createActor("Moving sphere");
+    dynamicTestSphere.setPosition({-1.4f, 0.0f, 0.0f});
+    dynamicTestSphere.addRigidbody(RigidbodyComponent{
+        .useGravity = false, .linearVelocity = {5.0f, 0.0f, 0.0f}
+    });
+    dynamicTestSphere.addSphereCollider(0.5f);
+    auto dynamicBox = dynamicColliderScene.createActor("Dynamic box");
+    dynamicBox.addRigidbody(RigidbodyComponent{.useGravity = false});
+    dynamicBox.addBoxCollider({0.5f, 0.5f, 0.5f});
+
+    physics.update(dynamicColliderScene, 0.1f);
+    if (dynamicTestSphere.position().x() > -0.999f ||
+        dynamicTestSphere.velocity().x() > 0.001f) {
+        return 13;
+    }
+
     return 0;
 }

@@ -19,6 +19,10 @@ constexpr float SolidSphereInertiaFactor = 0.4f;
 // factor maps the collider friction coefficient to a practical rolling
 // resistance coefficient for rigid spheres.
 constexpr float RollingResistanceScale = 0.05f;
+// A perfectly inelastic side contact makes a rolling sphere appear glued to
+// a wall. Keep a subtle rebound on near-vertical surfaces while allowing
+// restitution-free floor contacts to remain stable.
+constexpr float MinimumSphereWallRestitution = 0.15f;
 
 struct Aabb {
     Vec3 center;
@@ -88,6 +92,90 @@ struct SphereRampContact {
     float penetration;
 };
 
+using SphereContact = SphereRampContact;
+
+std::optional<SphereContact> sphereBoxContact(
+    const Vec3& sphereCenter, const float sphereRadius, const Aabb& box) {
+    const Vec3 closest{
+        std::clamp(sphereCenter.x(), box.center.x() - box.extents.x(),
+                   box.center.x() + box.extents.x()),
+        std::clamp(sphereCenter.y(), box.center.y() - box.extents.y(),
+                   box.center.y() + box.extents.y()),
+        std::clamp(sphereCenter.z(), box.center.z() - box.extents.z(),
+                   box.center.z() + box.extents.z())};
+    const Vec3 separation = sphereCenter - closest;
+    const float distance = separation.length();
+    if (distance > 1e-6f) {
+        if (distance >= sphereRadius) return std::nullopt;
+        return SphereContact{separation * (1.0f / distance), sphereRadius - distance};
+    }
+
+    // The sphere center is inside the box. Push it through the nearest face;
+    // using only the closest-point test would leave it trapped there.
+    const Vec3 local = sphereCenter - box.center;
+    const float xDistance = box.extents.x() - std::abs(local.x());
+    const float yDistance = box.extents.y() - std::abs(local.y());
+    const float zDistance = box.extents.z() - std::abs(local.z());
+    if (xDistance <= yDistance && xDistance <= zDistance) {
+        return SphereContact{{local.x() < 0.0f ? -1.0f : 1.0f, 0.0f, 0.0f},
+                             sphereRadius + xDistance};
+    }
+    if (yDistance <= zDistance) {
+        return SphereContact{{0.0f, local.y() < 0.0f ? -1.0f : 1.0f, 0.0f},
+                             sphereRadius + yDistance};
+    }
+    return SphereContact{{0.0f, 0.0f, local.z() < 0.0f ? -1.0f : 1.0f},
+                         sphereRadius + zDistance};
+}
+
+std::optional<SphereContact> sphereSphereContact(
+    const Vec3& center, const float radius, const Aabb& other) {
+    const float otherRadius = std::max({other.extents.x(), other.extents.y(), other.extents.z()});
+    const Vec3 separation = center - other.center;
+    const float distance = separation.length();
+    const float combinedRadius = radius + otherRadius;
+    if (distance >= combinedRadius) return std::nullopt;
+    const Vec3 normal = distance > 1e-6f
+        ? separation * (1.0f / distance)
+        : Vec3{0.0f, 1.0f, 0.0f};
+    return SphereContact{normal, combinedRadius - distance};
+}
+
+std::optional<SphereContact> sphereCapsuleContact(
+    const Vec3& center, const float radius, const Aabb& capsule) {
+    const float capsuleRadius = std::max(capsule.extents.x(), capsule.extents.z());
+    const float segmentHalfHeight = std::max(0.0f, capsule.extents.y() - capsuleRadius);
+    const Vec3 closest{capsule.center.x(),
+        std::clamp(center.y(), capsule.center.y() - segmentHalfHeight,
+                   capsule.center.y() + segmentHalfHeight),
+        capsule.center.z()};
+    const Vec3 separation = center - closest;
+    const float distance = separation.length();
+    const float combinedRadius = radius + capsuleRadius;
+    if (distance >= combinedRadius) return std::nullopt;
+    const Vec3 normal = distance > 1e-6f
+        ? separation * (1.0f / distance)
+        : Vec3{0.0f, 1.0f, 0.0f};
+    return SphereContact{normal, combinedRadius - distance};
+}
+
+std::optional<SphereContact> sphereColliderContact(
+    const Vec3& center, const float radius, const Aabb& other,
+    const ColliderComponent& otherCollider) {
+    return std::visit([&](const auto& shape) -> std::optional<SphereContact> {
+        using Shape = std::decay_t<decltype(shape)>;
+        if constexpr (std::is_same_v<Shape, BoxCollider>) {
+            return sphereBoxContact(center, radius, other);
+        } else if constexpr (std::is_same_v<Shape, SphereCollider>) {
+            return sphereSphereContact(center, radius, other);
+        } else if constexpr (std::is_same_v<Shape, CapsuleCollider>) {
+            return sphereCapsuleContact(center, radius, other);
+        } else {
+            return std::nullopt;
+        }
+    }, otherCollider.shape);
+}
+
 std::optional<SphereRampContact> sphereRampContact(
     const Aabb& ramp, const Vec3& sphereCenter, const float radius,
     const Vec3& previousCenter, const float yawRadians) {
@@ -135,15 +223,14 @@ void PhysicsSystem::update(Scene& scene, const float deltaTime) const {
     const float dt = std::max(deltaTime, 0.0f);
     if (dt == 0.0f) return;
 
-    struct StaticCollider { Entity entity; Aabb bounds; float yawRadians; };
-    std::vector<StaticCollider> colliders;
+    struct SceneCollider { Entity entity; Aabb bounds; float yawRadians; bool dynamic; };
+    std::vector<SceneCollider> colliders;
     registry.view<ColliderComponent, Transform>(
         [&](const Entity entity, const ColliderComponent& collider, const Transform& transform) {
-            if (!registry.has<RigidbodyComponent>(entity) ||
-                registry.get<RigidbodyComponent>(entity).type == RigidbodyType::Static) {
-                colliders.push_back({entity, worldAabb(transform, collider),
-                    transform.rotation.y() * 0.01745329251994329577f});
-            }
+            const bool dynamic = registry.has<RigidbodyComponent>(entity) &&
+                registry.get<RigidbodyComponent>(entity).type == RigidbodyType::Dynamic;
+            colliders.push_back({entity, worldAabb(transform, collider),
+                transform.rotation.y() * 0.01745329251994329577f, dynamic});
         });
 
     registry.view<RigidbodyComponent, Transform>(
@@ -151,7 +238,13 @@ void PhysicsSystem::update(Scene& scene, const float deltaTime) const {
             if (body.type != RigidbodyType::Dynamic) return;
 
             const Vec3 previousPosition = transform.position;
-            if (body.useGravity) body.linearVelocity += gravity_ * dt;
+            const float inverseMass = body.mass > 0.0f ? 1.0f / body.mass : 0.0f;
+            Vec3 acceleration = body.force * inverseMass;
+            if (body.useGravity) acceleration += gravity_;
+            body.linearVelocity += acceleration * dt;
+            if (!body.fixedRotation) {
+                body.angularVelocity += body.torque * inverseMass * dt;
+            }
             transform.position += body.linearVelocity * dt;
 
             bool touchesSurface = false;
@@ -168,9 +261,14 @@ void PhysicsSystem::update(Scene& scene, const float deltaTime) const {
                 Vec3 rampNormal{0.0f, 1.0f, 0.0f};
                 float rampFriction = 0.0f;
                 float rampPenetration = 0.0f;
-                for (const StaticCollider& other : colliders) {
+                for (const SceneCollider& other : colliders) {
                     if (other.entity == entity || !overlapsHorizontally(bodyBounds, other.bounds)) continue;
                     const auto& otherCollider = registry.get<ColliderComponent>(other.entity);
+                    if (collider.isTrigger || otherCollider.isTrigger) continue;
+                    // The generic box solver still handles only immovable
+                    // surfaces. Sphere contacts below support every collider
+                    // in the scene, including colliders on dynamic entities.
+                    if (other.dynamic && !isSphere) continue;
                     const bool isRamp = std::holds_alternative<RampCollider>(otherCollider.shape);
                     if (isRamp && isSphere) {
                         const Vec3 previousCenter = previousPosition +
@@ -188,6 +286,32 @@ void PhysicsSystem::update(Scene& scene, const float deltaTime) const {
                                 collider.friction * otherCollider.friction));
                         }
                         continue;
+                    }
+                    if (isSphere && !isRamp) {
+                        if (const auto contact = sphereColliderContact(
+                                bodyBounds.center, bodyBounds.extents.y(), other.bounds,
+                                otherCollider)) {
+                            transform.position += contact->normal * contact->penetration;
+                            bodyBounds = worldAabb(transform, collider);
+                            const float inwardVelocity = dot(body.linearVelocity, contact->normal);
+                            if (inwardVelocity < 0.0f) {
+                                float restitution = std::max(
+                                    collider.restitution, otherCollider.restitution);
+                                if (std::abs(contact->normal.y()) < 0.5f) {
+                                    restitution = std::max(
+                                        restitution, MinimumSphereWallRestitution);
+                                }
+                                body.linearVelocity -= contact->normal *
+                                    ((1.0f + restitution) * inwardVelocity);
+                            }
+                            if (contact->normal.y() > 1e-4f) {
+                                touchesSurface = true;
+                                surfaceNormal = contact->normal;
+                                contactFriction = std::sqrt(std::max(
+                                    0.0f, collider.friction * otherCollider.friction));
+                            }
+                            continue;
+                        }
                     }
                     if (isRamp) {
                         const Vec3 localPosition = rampLocalPosition(other.bounds, bodyBounds.center,
@@ -304,6 +428,9 @@ void PhysicsSystem::update(Scene& scene, const float deltaTime) const {
             if (!body.fixedRotation) {
                 transform.rotation += body.angularVelocity * dt;
             }
+            // addForce/addTorque are frame-step inputs. A script that wants a
+            // persistent force should add it again each frame.
+            body.zeroForces();
             registry.markChanged<Transform>(entity);
         });
 }
