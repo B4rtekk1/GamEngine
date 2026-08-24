@@ -365,6 +365,12 @@ int main() {
         maximumCubeSpeed > 2.2f || maximumCubeAngularSpeed > 140.0f) {
         return 20;
     }
+    const auto& settledCubeBody =
+        editorPhysicsScene.find(editorCube.id())->rigidbody();
+    if (std::abs(settledCubeBody.linearVelocity.y()) > 0.01f ||
+        settledCubeBody.angularVelocity.length() > 0.01f) {
+        return 21;
+    }
 
     return 0;
 }

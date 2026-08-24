@@ -24,6 +24,9 @@ constexpr float RollingResistanceScale = 0.05f;
 // a wall. Keep a subtle rebound on near-vertical surfaces while allowing
 // restitution-free floor contacts to remain stable.
 constexpr float MinimumSphereWallRestitution = 0.15f;
+constexpr float RestingBoxNormalSpeed = 0.2f;
+constexpr float RestingBoxTangentialSpeed = 0.1f;
+constexpr float RestingBoxAngularSpeedDegrees = 5.0f;
 
 struct Aabb {
     Vec3 center;
@@ -898,6 +901,27 @@ void PhysicsSystem::update(Scene& scene, const float deltaTime) const {
                                 surfaceNormal * dot(body.linearVelocity, surfaceNormal);
                             body.angularVelocity = cross(surfaceNormal, tangentialVelocity) *
                                                    (RadiansToDegrees / radius);
+                        }
+                    }
+                }
+
+                if (touchesSurface &&
+                    std::holds_alternative<BoxCollider>(collider.shape)) {
+                    const float normalSpeed = dot(body.linearVelocity, surfaceNormal);
+                    const Vec3 tangentialVelocity =
+                        body.linearVelocity - surfaceNormal * normalSpeed;
+                    const bool nearlyStationary =
+                        std::abs(normalSpeed) < RestingBoxNormalSpeed &&
+                        tangentialVelocity.length() < RestingBoxTangentialSpeed;
+                    if (nearlyStationary) {
+                        // Remove the tiny into/out-of-surface oscillation left
+                        // by alternating corner contacts. Preserve tangential
+                        // motion so boxes can still slide down a ramp.
+                        body.linearVelocity = tangentialVelocity;
+                        if (!body.fixedRotation &&
+                            body.angularVelocity.length() <
+                                RestingBoxAngularSpeedDegrees) {
+                            body.angularVelocity = {};
                         }
                     }
                 }
