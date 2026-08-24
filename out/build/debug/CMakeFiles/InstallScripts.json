@@ -1,8 +1,0 @@
-{
-	"InstallScripts" : 
-	[
-		"C:/Users/Bartosz Kasyna/CLionProjects/GamEngine/out/build/debug/cmake_install.cmake",
-		"C:/Users/Bartosz Kasyna/CLionProjects/GamEngine/out/build/debug/Sandbox/cmake_install.cmake"
-	],
-	"Parallel" : false
-}

@@ -71,6 +71,56 @@ Vec3 rampLocalPosition(const Aabb& ramp, const Vec3& point, const float yawRadia
             std::sin(yawRadians) * deltaX + std::cos(yawRadians) * deltaZ};
 }
 
+Vec3 rampWorldDirection(const Vec3& localDirection, const float yawRadians) {
+    return {std::cos(yawRadians) * localDirection.x() +
+                std::sin(yawRadians) * localDirection.z(),
+            localDirection.y(),
+            -std::sin(yawRadians) * localDirection.x() +
+                std::cos(yawRadians) * localDirection.z()};
+}
+
+struct SphereRampContact {
+    Vec3 normal;
+    float penetration;
+};
+
+std::optional<SphereRampContact> sphereRampContact(
+    const Aabb& ramp, const Vec3& sphereCenter, const float radius,
+    const Vec3& previousCenter, const float yawRadians) {
+    if (radius <= 0.0f || ramp.extents.z() <= 0.0f) return std::nullopt;
+
+    const Vec3 local = rampLocalPosition(ramp, sphereCenter, yawRadians);
+    const Vec3 previousLocal = rampLocalPosition(ramp, previousCenter, yawRadians);
+    const float slope = ramp.extents.y() / ramp.extents.z();
+
+    // Ignore contacts entered through the solid underside. A small amount of
+    // penetration is allowed so that discrete time steps do not lose a valid
+    // contact with the sloped face.
+    const float planeScale = std::sqrt(1.0f + slope * slope);
+    const float previousPlaneDistance =
+        (previousLocal.y() - slope * previousLocal.z()) / planeScale;
+    if (previousPlaneDistance < -radius) return std::nullopt;
+
+    const float closestX = std::clamp(local.x(), -ramp.extents.x(), ramp.extents.x());
+    const float closestZ = std::clamp(
+        (local.z() + slope * local.y()) / (1.0f + slope * slope),
+        -ramp.extents.z(), ramp.extents.z());
+    const Vec3 closestPoint{closestX, slope * closestZ, closestZ};
+    const Vec3 separation = local - closestPoint;
+    const float distance = separation.length();
+    if (distance >= radius) return std::nullopt;
+
+    const Vec3 localNormal = distance > 1e-6f
+        ? separation * (1.0f / distance)
+        : Vec3{0.0f, 1.0f, -slope}.normalized();
+    if (localNormal.y() <= 0.0f) return std::nullopt;
+
+    return SphereRampContact{
+        rampWorldDirection(localNormal, yawRadians).normalized(),
+        radius - distance
+    };
+}
+
 float dot(const Vec3& lhs, const Vec3& rhs) {
     return lhs.x() * rhs.x() + lhs.y() * rhs.y() + lhs.z() * rhs.z();
 }
@@ -110,10 +160,29 @@ void PhysicsSystem::update(Scene& scene, const float deltaTime) const {
                 float contactHeight = -INFINITY;
                 Vec3 contactNormal{0.0f, 1.0f, 0.0f};
                 float selectedFriction = 0.0f;
+                Vec3 rampCorrection{};
+                float rampPenetration = 0.0f;
                 for (const StaticCollider& other : colliders) {
                     if (other.entity == entity || !overlapsHorizontally(bodyBounds, other.bounds)) continue;
                     const auto& otherCollider = registry.get<ColliderComponent>(other.entity);
                     const bool isRamp = std::holds_alternative<RampCollider>(otherCollider.shape);
+                    if (isRamp && isSphere) {
+                        const Vec3 previousCenter = previousPosition +
+                            collider.offset * Vec3{std::abs(transform.scale.x()),
+                                                   std::abs(transform.scale.y()),
+                                                   std::abs(transform.scale.z())};
+                        const auto contact = sphereRampContact(
+                            other.bounds, bodyBounds.center, bodyBounds.extents.y(),
+                            previousCenter, other.yawRadians);
+                        if (contact && contact->penetration > rampPenetration) {
+                            rampPenetration = contact->penetration;
+                            rampCorrection = contact->normal * contact->penetration;
+                            contactNormal = contact->normal;
+                            selectedFriction = std::sqrt(std::max(0.0f,
+                                collider.friction * otherCollider.friction));
+                        }
+                        continue;
+                    }
                     if (isRamp) {
                         const Vec3 localPosition = rampLocalPosition(other.bounds, bodyBounds.center,
                                                                      other.yawRadians);
@@ -150,7 +219,17 @@ void PhysicsSystem::update(Scene& scene, const float deltaTime) const {
                     }
                 }
 
-                if (contactHeight > -INFINITY) {
+                if (rampPenetration > 0.0f) {
+                    transform.position += rampCorrection;
+                    bodyBounds = worldAabb(transform, collider);
+                    const float inwardVelocity = dot(body.linearVelocity, contactNormal);
+                    if (inwardVelocity < 0.0f) {
+                        body.linearVelocity -= contactNormal * inwardVelocity;
+                    }
+                    touchesSurface = true;
+                    surfaceNormal = contactNormal;
+                    contactFriction = selectedFriction;
+                } else if (contactHeight > -INFINITY) {
                     if (transform.position.y() < contactHeight) {
                         transform.position.setY(contactHeight);
                         bodyBounds = worldAabb(transform, collider);

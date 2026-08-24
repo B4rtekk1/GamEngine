@@ -87,5 +87,27 @@ int main() {
         return 5;
     }
 
+    Scene rampEntryScene;
+    auto entryGround = rampEntryScene.createActor("Ground");
+    entryGround.addRigidbody(RigidbodyComponent{.type = RigidbodyType::Static});
+    entryGround.addBoxCollider({10.0f, 0.05f, 10.0f});
+    auto entryRamp = rampEntryScene.createActor("Ramp");
+    entryRamp.setPosition({0.0f, 2.05f, 0.0f});
+    entryRamp.addRigidbody(RigidbodyComponent{.type = RigidbodyType::Static});
+    entryRamp.addRampCollider({3.0f, 2.0f, 2.0f});
+    auto enteringSphere = rampEntryScene.createActor("Entering sphere");
+    enteringSphere.setPosition({0.0f, 0.55f, -2.5f});
+    enteringSphere.addRigidbody(RigidbodyComponent{
+        .linearVelocity = {0.0f, 0.0f, 4.0f}
+    });
+    enteringSphere.addSphereCollider(0.5f);
+
+    for (int step = 0; step < 40; ++step) physics.update(rampEntryScene, 0.01f);
+    if (enteringSphere.position().z() <= -1.9f ||
+        enteringSphere.position().y() <= 0.65f ||
+        enteringSphere.velocity().y() <= 0.0f) {
+        return 6;
+    }
+
     return 0;
 }

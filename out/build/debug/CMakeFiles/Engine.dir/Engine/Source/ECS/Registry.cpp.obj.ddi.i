@@ -1,5 +1,0 @@
-# 0 "C:/Users/Bartosz Kasyna/CLionProjects/GamEngine/Engine/Source/ECS/Registry.cpp"
-# 1 "C:\\Users\\Bartosz Kasyna\\CLionProjects\\GamEngine\\out\\build\\debug//"
-# 0 "<built-in>"
-# 0 "<command-line>"
-# 1 "C:/Users/Bartosz Kasyna/CLionProjects/GamEngine/Engine/Source/ECS/Registry.cpp"
