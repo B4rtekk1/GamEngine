@@ -236,4 +236,44 @@ if(BUILD_TESTING)
     add_executable(InterfaceTests Tests/InterfaceTests.cpp)
     target_link_libraries(InterfaceTests PRIVATE Engine)
     add_test(NAME InterfaceTests COMMAND InterfaceTests)
+
+    add_executable(EntityTests Tests/EntityTests.cpp)
+    target_link_libraries(EntityTests PRIVATE Engine)
+    add_test(NAME EntityTests COMMAND EntityTests)
+
+    add_executable(FrustumTests Tests/FrustumTests.cpp)
+    target_link_libraries(FrustumTests PRIVATE Engine)
+    add_test(NAME FrustumTests COMMAND FrustumTests)
+
+    add_executable(RendererComponentTests Tests/RendererComponentTests.cpp)
+    target_link_libraries(RendererComponentTests PRIVATE Engine)
+    add_test(NAME RendererComponentTests COMMAND RendererComponentTests)
+
+    add_executable(TextTests Tests/TextTests.cpp)
+    target_link_libraries(TextTests PRIVATE Engine)
+    add_test(NAME TextTests COMMAND TextTests)
+
+    add_executable(FontAtlasTests Tests/FontAtlasTests.cpp)
+    target_link_libraries(FontAtlasTests PRIVATE Engine)
+    add_test(NAME FontAtlasTests COMMAND FontAtlasTests)
+
+    add_executable(ParticleComponentTests Tests/ParticleComponentTests.cpp)
+    target_link_libraries(ParticleComponentTests PRIVATE Engine)
+    add_test(NAME ParticleComponentTests COMMAND ParticleComponentTests)
+
+    add_executable(ComponentDefaultsTests Tests/ComponentDefaultsTests.cpp)
+    target_link_libraries(ComponentDefaultsTests PRIVATE Engine)
+    add_test(NAME ComponentDefaultsTests COMMAND ComponentDefaultsTests)
+
+    add_executable(UUIDTests Tests/UUIDTests.cpp)
+    target_link_libraries(UUIDTests PRIVATE Engine)
+    add_test(NAME UUIDTests COMMAND UUIDTests)
+
+    add_executable(VectorTests Tests/VectorTests.cpp)
+    target_link_libraries(VectorTests PRIVATE Engine)
+    add_test(NAME VectorTests COMMAND VectorTests)
+
+    add_executable(SceneEditorTests Tests/SceneEditorTests.cpp)
+    target_link_libraries(SceneEditorTests PRIVATE Engine)
+    add_test(NAME SceneEditorTests COMMAND SceneEditorTests)
 endif()
