@@ -184,4 +184,32 @@ if(BUILD_TESTING)
     add_executable(ActorTests Tests/ActorTests.cpp)
     target_link_libraries(ActorTests PRIVATE Engine)
     add_test(NAME ActorTests COMMAND ActorTests)
+
+    add_executable(MathTests Tests/MathTests.cpp)
+    target_link_libraries(MathTests PRIVATE Engine)
+    add_test(NAME MathTests COMMAND MathTests)
+
+    add_executable(GeometryTests Tests/GeometryTests.cpp)
+    target_link_libraries(GeometryTests PRIVATE Engine)
+    add_test(NAME GeometryTests COMMAND GeometryTests)
+
+    add_executable(UITests Tests/UITests.cpp)
+    target_link_libraries(UITests PRIVATE Engine)
+    add_test(NAME UITests COMMAND UITests)
+
+    add_executable(SceneTests Tests/SceneTests.cpp)
+    target_link_libraries(SceneTests PRIVATE Engine)
+    add_test(NAME SceneTests COMMAND SceneTests)
+
+    add_executable(AssetCacheTests Tests/AssetCacheTests.cpp)
+    target_link_libraries(AssetCacheTests PRIVATE Engine)
+    add_test(NAME AssetCacheTests COMMAND AssetCacheTests)
+
+    add_executable(ScriptRegistryTests Tests/ScriptRegistryTests.cpp)
+    target_link_libraries(ScriptRegistryTests PRIVATE Engine)
+    add_test(NAME ScriptRegistryTests COMMAND ScriptRegistryTests)
+
+    add_executable(PhysicsEdgeTests Tests/PhysicsEdgeTests.cpp)
+    target_link_libraries(PhysicsEdgeTests PRIVATE Engine)
+    add_test(NAME PhysicsEdgeTests COMMAND PhysicsEdgeTests)
 endif()
