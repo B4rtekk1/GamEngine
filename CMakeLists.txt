@@ -276,4 +276,8 @@ if(BUILD_TESTING)
     add_executable(SceneEditorTests Tests/SceneEditorTests.cpp)
     target_link_libraries(SceneEditorTests PRIVATE Engine)
     add_test(NAME SceneEditorTests COMMAND SceneEditorTests)
+
+    add_executable(ParticleSceneTests Tests/ParticleSceneTests.cpp)
+    target_link_libraries(ParticleSceneTests PRIVATE Engine)
+    add_test(NAME ParticleSceneTests COMMAND ParticleSceneTests)
 endif()
