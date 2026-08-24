@@ -2121,7 +2121,8 @@ class Renderer::Backend {
                 glm::vec4{sceneCamera.position().native(), 1.0f},
                 glm::vec4{light.direction.native(), light.intensity},
                 glm::vec4{light.color.r(), light.color.g(), light.color.b(), 1.0f},
-                0u, materialSlots, editorSelectedRenderable};
+                (optimizationFeatures.shadows && hasShadowCasters) ? 1u : 0u,
+                materialSlots, editorSelectedRenderable};
             sceneUniformBuffers[frame].update(&data, sizeof(data));
         }
 

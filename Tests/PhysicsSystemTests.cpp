@@ -228,5 +228,58 @@ int main() {
         return 13;
     }
 
+    Scene boxCollisionScene;
+    auto movingBox = boxCollisionScene.createActor("Moving box");
+    movingBox.setPosition({-1.4f, 0.0f, 0.0f});
+    movingBox.addRigidbody(RigidbodyComponent{
+        .useGravity = false, .linearVelocity = {5.0f, 0.0f, 0.0f}
+    });
+    movingBox.addBoxCollider({0.5f, 0.5f, 0.5f});
+    auto boxWall = boxCollisionScene.createActor("Box wall");
+    boxWall.addBoxCollider({0.5f, 2.0f, 2.0f});
+
+    physics.update(boxCollisionScene, 0.1f);
+    if (movingBox.position().x() > -0.999f || movingBox.velocity().x() > 0.001f) {
+        return 14;
+    }
+
+    Scene slidingBoxScene;
+    auto boxGround = slidingBoxScene.createActor("Ground");
+    boxGround.addBoxCollider({10.0f, 0.05f, 10.0f});
+    auto slidingBox = slidingBoxScene.createActor("Sliding box");
+    slidingBox.setPosition({0.0f, 0.55f, 0.0f});
+    slidingBox.addRigidbody(RigidbodyComponent{
+        .linearVelocity = {2.0f, 0.0f, 0.0f}
+    });
+    slidingBox.addBoxCollider();
+
+    physics.update(slidingBoxScene, 0.1f);
+    if (slidingBox.velocity().x() >= 2.0f || slidingBox.position().y() < 0.549f ||
+        slidingBox.rotation().z() >= -0.001f) {
+        return 15;
+    }
+
+    Scene rampBoxScene;
+    auto boxRamp = rampBoxScene.createActor("Ramp");
+    boxRamp.addRampCollider({3.0f, 2.0f, 2.0f});
+    auto rampBox = rampBoxScene.createActor("Ramp box");
+    rampBox.setPosition({0.0f, 1.0f, 0.0f});
+    rampBox.addRigidbody();
+    rampBox.addBoxCollider();
+
+    physics.update(rampBoxScene, 0.1f);
+    const auto& rampBoxBody = rampBoxScene.find(rampBox.id())->rigidbody();
+    if (rampBox.rotation().x() >= -0.001f || rampBox.rotation().x() <= -44.999f ||
+        rampBoxBody.angularVelocity.x() >= -0.001f ||
+        std::abs(rampBox.position().y() - 1.0f) > 0.001f) {
+        return 16;
+    }
+    const float firstRampBoxAngle = rampBox.rotation().x();
+    for (int step = 0; step < 10; ++step) physics.update(rampBoxScene, 0.02f);
+    if (!std::isfinite(rampBox.rotation().x()) || !std::isfinite(rampBox.position().y()) ||
+        std::abs(rampBox.rotation().x() - firstRampBoxAngle) < 0.01f) {
+        return 17;
+    }
+
     return 0;
 }
