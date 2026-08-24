@@ -152,6 +152,9 @@ public:
         auto* object = find(actor.objectId_);
         names_.erase(object->name());
         object->setName(std::move(name));
+        registry_.modify<NameComponent>(object->entity(), [&](auto& component) {
+            component.value = object->name();
+        });
         names_[object->name()] = object->objectId();
     }
 

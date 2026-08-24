@@ -180,4 +180,8 @@ if(BUILD_TESTING)
     add_executable(PhysicsSystemTests Tests/PhysicsSystemTests.cpp)
     target_link_libraries(PhysicsSystemTests PRIVATE Engine)
     add_test(NAME PhysicsSystemTests COMMAND PhysicsSystemTests)
+
+    add_executable(ActorTests Tests/ActorTests.cpp)
+    target_link_libraries(ActorTests PRIVATE Engine)
+    add_test(NAME ActorTests COMMAND ActorTests)
 endif()
