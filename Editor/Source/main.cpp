@@ -39,6 +39,7 @@
 #include <optional>
 #include <unordered_map>
 #include <unordered_set>
+#include <vector>
 
 void drawPanelHeader(const char* title, const char* subtitle = nullptr) {
     ImGui::PushStyleColor(ImGuiCol_Text, {0.30f, 0.90f, 0.86f, 1.0f});
@@ -251,6 +252,10 @@ Engine::Entity HierarchyPanel::draw(Engine::ScenePreset& scene, const Engine::En
             const auto drawContextMenu = [&] {
                 if (!ImGui::BeginPopupContextItem()) return;
                 if (ImGui::MenuItem("Copy")) {
+                    action = Action::Copy;
+                    actionEntity = entity;
+                }
+                if (ImGui::MenuItem("Duplicate")) {
                     action = Action::Duplicate;
                     actionEntity = entity;
                 }
@@ -612,6 +617,84 @@ bool ComponentsPanel::draw(Engine::ScenePreset& scene, const Engine::Entity sele
     return consumesMouseWheel;
 }
 
+std::string serializeScene(const Engine::ScenePreset& scene) {
+    std::ostringstream output;
+    Engine::SceneSerializer::save(scene, output);
+    return output.str();
+}
+
+class SceneHistory final {
+public:
+    void reset(const Engine::ScenePreset& scene) {
+        baseline_ = serializeScene(scene);
+        undo_.clear();
+        redo_.clear();
+    }
+
+    void capture(const Engine::ScenePreset& scene) {
+        const std::string current = serializeScene(scene);
+        if (current == baseline_) return;
+        undo_.push_back(std::move(baseline_));
+        baseline_ = current;
+        redo_.clear();
+    }
+
+    [[nodiscard]] bool canUndo() const noexcept { return !undo_.empty(); }
+    [[nodiscard]] bool canRedo() const noexcept { return !redo_.empty(); }
+
+    bool undo(Engine::ScenePreset& scene) { return restore(scene, undo_, redo_); }
+    bool redo(Engine::ScenePreset& scene) { return restore(scene, redo_, undo_); }
+
+private:
+    bool restore(Engine::ScenePreset& scene, std::vector<std::string>& from,
+                 std::vector<std::string>& to) {
+        if (from.empty()) return false;
+        to.push_back(std::move(baseline_));
+        baseline_ = std::move(from.back());
+        from.pop_back();
+        std::istringstream input{baseline_};
+        Engine::SceneSerializer::load(scene, input);
+        return true;
+    }
+
+    std::string baseline_;
+    std::vector<std::string> undo_;
+    std::vector<std::string> redo_;
+};
+
+class EntityClipboard final {
+public:
+    void copy(const Engine::ScenePreset& scene, const Engine::Entity entity) {
+        if (!scene.editor().valid(entity) ||
+            !scene.editor().has<Engine::UUIDComponent>(entity)) return;
+        source_ = scene.editor().get<Engine::UUIDComponent>(entity).value;
+    }
+
+    [[nodiscard]] bool canPaste(const Engine::ScenePreset& scene) const {
+        return findSource(scene) != Engine::NullEntity;
+    }
+
+    [[nodiscard]] Engine::Entity paste(Engine::ScenePreset& scene) const {
+        const Engine::Entity source = findSource(scene);
+        return source == Engine::NullEntity ? Engine::NullEntity : scene.editor().duplicate(source);
+    }
+
+private:
+    [[nodiscard]] Engine::Entity findSource(const Engine::ScenePreset& scene) const {
+        if (!source_) return Engine::NullEntity;
+        Engine::Entity found = Engine::NullEntity;
+        scene.editor().view<>([&](const Engine::Entity entity) {
+            if (scene.editor().has<Engine::UUIDComponent>(entity) &&
+                scene.editor().get<Engine::UUIDComponent>(entity).value == *source_) {
+                found = entity;
+            }
+        });
+        return found;
+    }
+
+    std::optional<Engine::UUID> source_;
+};
+
 void drawStatusBar(const Engine::ScenePreset& scene, const Engine::Entity selected,
                    const bool playing, const bool paused) {
     ImGuiViewport* viewport = ImGui::GetMainViewport();
@@ -633,7 +716,11 @@ void drawStatusBar(const Engine::ScenePreset& scene, const Engine::Entity select
 Engine::Entity drawEditorMenuBar(Engine::ScenePreset& scene, Engine::Renderer& renderer,
                                  bool& antialiasingChanged, bool& sceneLoaded,
                                  const bool playing, const bool paused, bool& playToggleRequested,
-                                 bool& pauseToggleRequested) {
+                                 bool& pauseToggleRequested, const bool canUndo,
+                                 const bool canRedo, const bool canPaste,
+                                 bool& undoRequested, bool& redoRequested,
+                                 bool& copyRequested, bool& pasteRequested,
+                                 bool& duplicateRequested, bool& resetHistoryRequested) {
     static bool showShortcuts = false;
     static bool showAbout = false;
     static bool openSceneSettings = false;
@@ -673,6 +760,7 @@ Engine::Entity drawEditorMenuBar(Engine::ScenePreset& scene, Engine::Renderer& r
                     antialiasingChanged = true;
                 }
                 sceneLoaded = true;
+                resetHistoryRequested = true;
                 sceneFileError.clear();
             } catch (const std::exception& error) { sceneFileError = error.what(); }
         }
@@ -733,15 +821,13 @@ Engine::Entity drawEditorMenuBar(Engine::ScenePreset& scene, Engine::Renderer& r
     }
 
     if (ImGui::BeginMenu("Edit")) {
-        // The editor does not yet have a command history, so keep these
-        // commands visible and disabled until the corresponding systems exist.
-        ImGui::MenuItem("Undo", "Ctrl+Z", false, false);
-        ImGui::MenuItem("Redo", "Ctrl+Y", false, false);
+        if (ImGui::MenuItem("Undo", "Ctrl+Z", false, canUndo)) undoRequested = true;
+        if (ImGui::MenuItem("Redo", "Ctrl+Y", false, canRedo)) redoRequested = true;
         ImGui::Separator();
         ImGui::MenuItem("Cut", "Ctrl+X", false, false);
-        ImGui::MenuItem("Copy", "Ctrl+C", false, false);
-        ImGui::MenuItem("Paste", "Ctrl+V", false, false);
-        ImGui::MenuItem("Duplicate", "Ctrl+D", false, false);
+        if (ImGui::MenuItem("Copy", "Ctrl+C")) copyRequested = true;
+        if (ImGui::MenuItem("Paste", "Ctrl+V", false, canPaste)) pasteRequested = true;
+        if (ImGui::MenuItem("Duplicate", "Ctrl+D")) duplicateRequested = true;
         ImGui::Separator();
         ImGui::MenuItem("Select All", "Ctrl+A", false, false);
         ImGui::EndMenu();
@@ -832,8 +918,9 @@ Engine::Entity drawEditorMenuBar(Engine::ScenePreset& scene, Engine::Renderer& r
         ImGui::Separator();
         ImGui::BulletText("WASD + mouse: move and look in Scene View");
         ImGui::BulletText("Delete: remove selected object");
-        ImGui::BulletText("Ctrl+D: duplicate selected object (coming soon)");
-        ImGui::BulletText("Ctrl+Z / Ctrl+Y: undo / redo (coming soon)");
+        ImGui::BulletText("Ctrl+C / Ctrl+V: copy and paste selected object");
+        ImGui::BulletText("Ctrl+D: duplicate selected object");
+        ImGui::BulletText("Ctrl+Z / Ctrl+Y: undo / redo scene edits");
         ImGui::End();
     }
 
@@ -866,6 +953,9 @@ int main() {
         Engine::PhysicsSystem physicsSystem{};
         Engine::Renderer renderer;
         renderer.initialize(scene, window);
+        SceneHistory history;
+        history.reset(scene);
+        EntityClipboard clipboard;
         Engine::Entity selectedEntity = Engine::NullEntity;
         constexpr auto targetFrame = std::chrono::microseconds{16'667};
         bool running = true;
@@ -906,13 +996,30 @@ int main() {
             bool sceneLoaded = false;
             bool playToggleRequested = false;
             bool pauseToggleRequested = false;
+            bool undoRequested = false;
+            bool redoRequested = false;
+            bool copyRequested = false;
+            bool pasteRequested = false;
+            bool duplicateRequested = false;
+            bool resetHistoryRequested = false;
             if (const Engine::Entity created = drawEditorMenuBar(scene, renderer,
                                                                   antialiasingChanged, sceneLoaded,
                                                                   playing, paused, playToggleRequested,
-                                                                  pauseToggleRequested);
+                                                                  pauseToggleRequested, history.canUndo(),
+                                                                  history.canRedo(), clipboard.canPaste(scene),
+                                                                  undoRequested, redoRequested, copyRequested,
+                                                                  pasteRequested, duplicateRequested,
+                                                                  resetHistoryRequested);
                 created != Engine::NullEntity) {
                 selectedEntity = created;
                 renderer.setEditorSelection(selectedEntity);
+            }
+            if (resetHistoryRequested) history.reset(scene);
+            if (!playing && undoRequested && history.undo(scene)) {
+                sceneLoaded = true;
+            }
+            if (!playing && redoRequested && history.redo(scene)) {
+                sceneLoaded = true;
             }
             if (sceneLoaded) {
                 // Loading replaces the registry, so any selection from the
@@ -921,6 +1028,18 @@ int main() {
                 selectedEntity = Engine::NullEntity;
                 renderer.setEditorSelection(selectedEntity);
                 rendererReloadPending = true;
+            }
+            if (!playing && selectedEntity != Engine::NullEntity &&
+                scene.editor().valid(selectedEntity)) {
+                if (copyRequested) clipboard.copy(scene, selectedEntity);
+                if (pasteRequested) {
+                    selectedEntity = clipboard.paste(scene);
+                    renderer.setEditorSelection(selectedEntity);
+                }
+                if (duplicateRequested) {
+                    selectedEntity = scene.editor().duplicate(selectedEntity);
+                    renderer.setEditorSelection(selectedEntity);
+                }
             }
             if (playToggleRequested && EditorSceneSession::setPlayMode(!playing, scene, playSceneSnapshot, playModeError,
                                                    EditorSceneSession::msaaSampleCount(renderer))) {
@@ -957,6 +1076,8 @@ int main() {
                 } else if (hierarchyAction == HierarchyPanel::Action::Duplicate) {
                     selectedEntity = scene.editor().duplicate(hierarchyActionEntity);
                     renderer.setEditorSelection(selectedEntity);
+                } else if (hierarchyAction == HierarchyPanel::Action::Copy) {
+                    clipboard.copy(scene, hierarchyActionEntity);
                 }
             }
             const bool sceneCameraInput = drawViewport(
@@ -971,6 +1092,27 @@ int main() {
                 selectedEntity = Engine::NullEntity;
                 renderer.setEditorSelection(selectedEntity);
             }
+            if (!playing && !ImGui::GetIO().WantTextInput &&
+                ImGui::GetIO().KeyCtrl) {
+                if (ImGui::IsKeyPressed(ImGuiKey_Z) && history.undo(scene)) sceneLoaded = true;
+                if (ImGui::IsKeyPressed(ImGuiKey_Y) && history.redo(scene)) sceneLoaded = true;
+                if (selectedEntity != Engine::NullEntity && scene.editor().valid(selectedEntity)) {
+                    if (ImGui::IsKeyPressed(ImGuiKey_C)) clipboard.copy(scene, selectedEntity);
+                    if (ImGui::IsKeyPressed(ImGuiKey_D)) {
+                        selectedEntity = scene.editor().duplicate(selectedEntity);
+                        renderer.setEditorSelection(selectedEntity);
+                    }
+                    if (ImGui::IsKeyPressed(ImGuiKey_V)) {
+                        selectedEntity = clipboard.paste(scene);
+                        renderer.setEditorSelection(selectedEntity);
+                    }
+                }
+                if (sceneLoaded) {
+                    selectedEntity = Engine::NullEntity;
+                    renderer.setEditorSelection(selectedEntity);
+                    rendererReloadPending = true;
+                }
+            }
             renderer.setEditorSceneCameraInput(
                 sceneCameraInput && !inspectorConsumesMouseWheel);
             ImGui::Render();
@@ -979,6 +1121,7 @@ int main() {
             const bool sceneStructureChanged = !sceneLoaded &&
                 scene.editor().structuralRevision() != sceneStructureBeforeUi;
             if (sceneStructureChanged) renderer.synchronizeScene(scene);
+            if (!playing && !sceneLoaded) history.capture(scene);
             if (playing && !paused) {
                 physicsSystem.update(scene, static_cast<float>(Engine::Time::deltaTime()));
                 scriptSystem.update(scene, static_cast<float>(Engine::Time::deltaTime()));

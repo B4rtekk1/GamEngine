@@ -72,6 +72,12 @@ void Actor::addCapsuleCollider(const float radius, const float height) {
     if (object.has<ColliderComponent>()) object.modify<ColliderComponent>([&](auto& collider) { collider = value; });
     else object.add<ColliderComponent>(value);
 }
+void Actor::addRampCollider(Vec3 halfExtents) {
+    auto& object = this->object();
+    const ColliderComponent value{.shape = RampCollider{halfExtents}};
+    if (object.has<ColliderComponent>()) object.modify<ColliderComponent>([&](auto& collider) { collider = value; });
+    else object.add<ColliderComponent>(value);
+}
 bool Actor::hasCollider() const { return object().has<ColliderComponent>(); }
 void Actor::setColliderTrigger(const bool enabled) {
     object().modify<ColliderComponent>([&](auto& collider) { collider.isTrigger = enabled; });

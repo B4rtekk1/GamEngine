@@ -5,6 +5,7 @@
 #include "Engine/ECS/Components/ParticleEmitterComponent.h"
 #include "Engine/ECS/Components/ColorPickerComponent.h"
 #include "Engine/ECS/Components/ColliderComponent.h"
+#include "Engine/ECS/Components/RigidbodyComponent.h"
 #include "Engine/Renderer/Geometry/Cube.h"
 #include "Engine/Renderer/Geometry/Plane.h"
 #include "Engine/Renderer/Geometry/Ramp.h"
@@ -137,6 +138,7 @@ Entity ScenePreset::createSphere() {
     object.setPosition({0, 0.5f, 0});
     const Entity entity = object.entity();
     object.add<ColliderComponent>(ColliderComponent{.shape = SphereCollider{.radius = 0.5f}});
+    object.add<RigidbodyComponent>();
     editorSpheres.push_back(entity);
     return entity;
 }

@@ -1,0 +1,11 @@
+{
+"rules": [
+{
+"primary-output": "CMakeFiles/Engine.dir/Platform/SDL/SDLInput.cpp.o",
+"requires": [
+]
+}
+],
+"version": 0,
+"revision": 0
+}

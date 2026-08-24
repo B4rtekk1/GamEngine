@@ -1,0 +1,11 @@
+{
+"rules": [
+{
+"primary-output": "CMakeFiles/DearImGui.dir/_deps/dearimgui-src/backends/imgui_impl_vulkan.cpp.o",
+"requires": [
+]
+}
+],
+"version": 0,
+"revision": 0
+}

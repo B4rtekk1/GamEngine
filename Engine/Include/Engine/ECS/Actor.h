@@ -61,6 +61,7 @@ public:
     void addBoxCollider(Vec3 halfExtents = {0.5f, 0.5f, 0.5f});
     void addSphereCollider(float radius = 0.5f);
     void addCapsuleCollider(float radius = 0.5f, float height = 1.0f);
+    void addRampCollider(Vec3 halfExtents = {0.5f, 0.5f, 0.5f});
     [[nodiscard]] bool hasCollider() const;
     void setColliderTrigger(bool enabled);
     void setColliderMaterial(float friction, float restitution);

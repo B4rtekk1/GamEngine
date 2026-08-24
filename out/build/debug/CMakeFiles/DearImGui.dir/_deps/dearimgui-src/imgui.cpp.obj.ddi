@@ -1,0 +1,11 @@
+{
+"rules": [
+{
+"primary-output": "CMakeFiles\\DearImGui.dir\\_deps\\dearimgui-src\\imgui.cpp.obj",
+"requires": [
+]
+}
+],
+"version": 0,
+"revision": 0
+}

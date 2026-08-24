@@ -13,6 +13,9 @@
 namespace Engine {
 
 namespace {
+constexpr float RadiansToDegrees = 57.29577951308232f;
+constexpr float SolidSphereInertiaFactor = 0.4f;
+
 struct Aabb {
     Vec3 center;
     Vec3 extents;
@@ -47,9 +50,29 @@ bool overlapsHorizontally(const Aabb& lhs, const Aabb& rhs) {
            std::abs(lhs.center.z() - rhs.center.z()) <= lhs.extents.z() + rhs.extents.z();
 }
 
-float rampTopAt(const Aabb& ramp, const float bodyZ) {
-    const float localZ = bodyZ - ramp.center.z();
+float rampTopAt(const Aabb& ramp, const Vec3& point, const float yawRadians) {
+    const float deltaX = point.x() - ramp.center.x();
+    const float deltaZ = point.z() - ramp.center.z();
+    const float localZ = std::sin(yawRadians) * deltaX + std::cos(yawRadians) * deltaZ;
     return ramp.center.y() + localZ * ramp.extents.y() / ramp.extents.z();
+}
+
+Vec3 rampSurfaceNormal(const Aabb& ramp, const float yawRadians) {
+    const float localZ = -ramp.extents.y() / ramp.extents.z();
+    return Vec3{std::sin(yawRadians) * localZ, 1.0f,
+                std::cos(yawRadians) * localZ}.normalized();
+}
+
+Vec3 rampLocalPosition(const Aabb& ramp, const Vec3& point, const float yawRadians) {
+    const float deltaX = point.x() - ramp.center.x();
+    const float deltaZ = point.z() - ramp.center.z();
+    return {std::cos(yawRadians) * deltaX - std::sin(yawRadians) * deltaZ,
+            point.y() - ramp.center.y(),
+            std::sin(yawRadians) * deltaX + std::cos(yawRadians) * deltaZ};
+}
+
+float dot(const Vec3& lhs, const Vec3& rhs) {
+    return lhs.x() * rhs.x() + lhs.y() * rhs.y() + lhs.z() * rhs.z();
 }
 } // namespace
 
@@ -58,39 +81,123 @@ void PhysicsSystem::update(Scene& scene, const float deltaTime) const {
     const float dt = std::max(deltaTime, 0.0f);
     if (dt == 0.0f) return;
 
-    struct StaticCollider { Entity entity; Aabb bounds; };
+    struct StaticCollider { Entity entity; Aabb bounds; float yawRadians; };
     std::vector<StaticCollider> colliders;
     registry.view<ColliderComponent, Transform>(
         [&](const Entity entity, const ColliderComponent& collider, const Transform& transform) {
             if (!registry.has<RigidbodyComponent>(entity) ||
                 registry.get<RigidbodyComponent>(entity).type == RigidbodyType::Static) {
-                colliders.push_back({entity, worldAabb(transform, collider)});
+                colliders.push_back({entity, worldAabb(transform, collider),
+                    transform.rotation.y() * 0.01745329251994329577f});
             }
         });
 
     registry.view<RigidbodyComponent, Transform>(
         [&](const Entity entity, RigidbodyComponent& body, Transform& transform) {
-            if (body.type != RigidbodyType::Dynamic || !body.useGravity) return;
+            if (body.type != RigidbodyType::Dynamic) return;
 
-            body.linearVelocity += gravity_ * dt;
+            const Vec3 previousPosition = transform.position;
+            if (body.useGravity) body.linearVelocity += gravity_ * dt;
             transform.position += body.linearVelocity * dt;
 
+            bool touchesSurface = false;
+            Vec3 surfaceNormal{0.0f, 1.0f, 0.0f};
+            float contactFriction = 0.0f;
             if (registry.has<ColliderComponent>(entity)) {
                 const auto& collider = registry.get<ColliderComponent>(entity);
+                const bool isSphere = std::holds_alternative<SphereCollider>(collider.shape);
                 Aabb bodyBounds = worldAabb(transform, collider);
+                float contactHeight = -INFINITY;
+                Vec3 contactNormal{0.0f, 1.0f, 0.0f};
+                float selectedFriction = 0.0f;
                 for (const StaticCollider& other : colliders) {
                     if (other.entity == entity || !overlapsHorizontally(bodyBounds, other.bounds)) continue;
-                    const float bodyBottom = bodyBounds.center.y() - bodyBounds.extents.y();
                     const auto& otherCollider = registry.get<ColliderComponent>(other.entity);
-                    const float otherTop = std::holds_alternative<RampCollider>(otherCollider.shape)
-                        ? rampTopAt(other.bounds, bodyBounds.center.z())
+                    const bool isRamp = std::holds_alternative<RampCollider>(otherCollider.shape);
+                    if (isRamp) {
+                        const Vec3 localPosition = rampLocalPosition(other.bounds, bodyBounds.center,
+                                                                     other.yawRadians);
+                        if (std::abs(localPosition.x()) > other.bounds.extents.x() ||
+                            std::abs(localPosition.z()) > other.bounds.extents.z()) {
+                            continue;
+                        }
+                    }
+                    const float otherTop = isRamp
+                        ? rampTopAt(other.bounds, bodyBounds.center, other.yawRadians)
                         : other.bounds.center.y() + other.bounds.extents.y();
-                    if (bodyBottom < otherTop && body.linearVelocity.y() <= 0.0f) {
-                        transform.position.setY(transform.position.y() + otherTop - bodyBottom);
-                        body.linearVelocity.setY(0.0f);
-                        bodyBounds = worldAabb(transform, collider);
+                    const Vec3 normal = isRamp ? rampSurfaceNormal(other.bounds, other.yawRadians)
+                                               : Vec3{0.0f, 1.0f, 0.0f};
+                    const float targetCenterY = isSphere
+                        ? otherTop + bodyBounds.extents.y() / normal.y()
+                        : otherTop + bodyBounds.extents.y();
+                    const float previousTop = isRamp
+                        ? rampTopAt(other.bounds, previousPosition, other.yawRadians)
+                        : other.bounds.center.y() + other.bounds.extents.y();
+                    const float previousTargetY = isSphere
+                        ? previousTop + bodyBounds.extents.y() / normal.y()
+                        : previousTop + bodyBounds.extents.y();
+                    if (transform.position.y() <= targetCenterY + 1e-4f &&
+                        previousPosition.y() >= previousTargetY - 1e-4f &&
+                        dot(body.linearVelocity, normal) <= 1e-4f &&
+                        targetCenterY > contactHeight) {
+                        // Resolve only the highest eligible surface. Resolving
+                        // each ramp immediately could let a later, lower
+                        // contact pull the sphere through an adjacent ramp.
+                        contactHeight = targetCenterY;
+                        contactNormal = normal;
+                        selectedFriction = std::sqrt(std::max(0.0f,
+                            collider.friction * otherCollider.friction));
                     }
                 }
+
+                if (contactHeight > -INFINITY) {
+                    if (transform.position.y() < contactHeight) {
+                        transform.position.setY(contactHeight);
+                        bodyBounds = worldAabb(transform, collider);
+                    }
+                    const float inwardVelocity = dot(body.linearVelocity, contactNormal);
+                    if (inwardVelocity < 0.0f) {
+                        body.linearVelocity -= contactNormal * inwardVelocity;
+                    }
+                    touchesSurface = true;
+                    surfaceNormal = contactNormal;
+                    contactFriction = selectedFriction;
+                }
+
+                if (touchesSurface && std::holds_alternative<SphereCollider>(collider.shape) &&
+                    !body.fixedRotation) {
+                    const float radius = bodyBounds.extents.y();
+                    if (radius > 0.0f) {
+                        const Vec3 gravityParallel = body.useGravity
+                            ? gravity_ - surfaceNormal * dot(gravity_, surfaceNormal)
+                            : Vec3{};
+                        // A solid sphere rolls without slipping if static
+                        // friction can provide the required tangential force.
+                        // I = 2/5 mr^2, hence a = g_parallel / (1 + I/mr^2)
+                        // = 5/7 g_parallel.
+                        const float requiredFriction =
+                            SolidSphereInertiaFactor / (1.0f + SolidSphereInertiaFactor) *
+                            gravityParallel.length();
+                        const float availableFriction = contactFriction *
+                            std::abs(dot(gravity_, surfaceNormal));
+                        const bool rollsWithoutSlipping = contactFriction > 1e-5f &&
+                            availableFriction + 1e-5f >= requiredFriction;
+                        if (rollsWithoutSlipping && body.useGravity) {
+                            body.linearVelocity -= gravityParallel *
+                                (SolidSphereInertiaFactor / (1.0f + SolidSphereInertiaFactor) * dt);
+                        }
+                        if (rollsWithoutSlipping) {
+                            const Vec3 tangentialVelocity = body.linearVelocity -
+                                surfaceNormal * dot(body.linearVelocity, surfaceNormal);
+                            body.angularVelocity = cross(surfaceNormal, tangentialVelocity) *
+                                                   (RadiansToDegrees / radius);
+                        }
+                    }
+                }
+            }
+
+            if (!body.fixedRotation) {
+                transform.rotation += body.angularVelocity * dt;
             }
             registry.markChanged<Transform>(entity);
         });

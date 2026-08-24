@@ -32,7 +32,8 @@ public:
     // nativeWindow and nativeEvent are opaque platform handles. Applications
     // do not need to include graphics-backend headers to use the renderer.
     void initialize(Scene& scene, void* nativeWindow);
-    void beginFrame() const;
+
+    static void beginFrame();
     [[nodiscard]] EditorEventState pollEditorEvents() const;
     void beginEditorUiFrame() const;
     void processEvent(const void* nativeEvent) const;

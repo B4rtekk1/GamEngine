@@ -38,8 +38,8 @@ add_library(Engine
         Engine/Source/Assets/StbImage.cpp
         Engine/Source/Assets/AssetManager.cpp
         Engine/Source/Assets/Content.cpp
-        Engine/Source/Core/camera.cpp
-        Engine/Source/Core/time.cpp
+        Engine/Source/Core/Camera.cpp
+        Engine/Source/Core/Time.cpp
         Engine/Source/ECS/Registry.cpp
         Engine/Source/Input/Input.cpp
         Engine/Source/Scene/SceneSerializer.cpp

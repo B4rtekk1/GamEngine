@@ -91,8 +91,8 @@ namespace {
                                                         const Transform& transform) {
             const Vec3 scale{std::abs(transform.scale.x()), std::abs(transform.scale.y()),
                              std::abs(transform.scale.z())};
-            const Vec3 extents = std::visit([](const auto& shape) {
-                using Shape = std::decay_t<decltype(shape)>;
+            const Vec3 extents = std::visit([]<typename T0>(const T0& shape) {
+                using Shape = std::decay_t<T0>;
                 if constexpr (std::is_same_v<Shape, BoxCollider>) return shape.halfExtents;
                 else if constexpr (std::is_same_v<Shape, SphereCollider>) return Vec3{shape.radius, shape.radius, shape.radius};
                 else if constexpr (std::is_same_v<Shape, RampCollider>) return shape.halfExtents;
@@ -150,16 +150,16 @@ class Renderer::Backend {
                            TonemapPass& tonemapPass,
                            GraphicsPipeline& particlePipeline,
                            UI::CanvasRenderer& canvasRenderer)
-            : window(window), scene(scene),
+            : window(window), forwardPass(forwardPass),
+              particlePipeline(particlePipeline),
+              skyPass(skyPass),
+              tonemapPass(tonemapPass),
+              canvasRenderer(canvasRenderer),
+              scene(scene),
               registry(scene.registry()),
               optimizationFeatures(optimizationFeatures),
               antialiasingLevel(antialiasingLevel),
               assetManager(assetManager),
-              forwardPass(forwardPass),
-              skyPass(skyPass),
-              tonemapPass(tonemapPass),
-              particlePipeline(particlePipeline),
-              canvasRenderer(canvasRenderer),
               renderables(sceneGpu.renderables),
               instanceBatches(sceneGpu.instanceBatches),
               instanceModels(sceneGpu.instanceModels),
@@ -281,7 +281,7 @@ class Renderer::Backend {
 
         // Rebuild only registry-derived GPU data. The instance, device,
         // swapchain and ImGui backend survive ordinary editor scene changes.
-        void reloadSceneResources(Scene& updatedScene) {
+        void reloadSceneResources(const Scene& updatedScene) {
             if (&updatedScene != &scene) {
                 throw std::invalid_argument("Renderer cannot switch Scene instances while initialized");
             }
@@ -692,9 +692,9 @@ class Renderer::Backend {
 
         void createInstance() {
             const bool validationSupported = checkValidationLayerSupport();
-            const bool useValidation = enableValidationLayers && validationSupported;
+            const bool useValidation = validationSupported;
 
-            if (enableValidationLayers && !validationSupported) {
+            if (!validationSupported) {
                 std::cerr << "Validation layers are incorrect\n";
             }
 
@@ -1517,7 +1517,7 @@ class Renderer::Backend {
                 }
             } else {
                 std::unordered_set<std::size_t> uniqueIndices;
-                const auto addChangedEntities = [&](const auto entities, const auto revision) {
+                const auto addChangedEntities = [&](const auto& entities, const auto revision) {
                     if (revision == 0) return;
                     for (const Entity entity : entities) {
                         const auto it = sceneGpu.renderableIndices.find(entity);
@@ -2249,7 +2249,8 @@ class Renderer::Backend {
                                              particlePipeline.handle(), particlePipeline.layout(),
                                               currentFrame, false);
             }
-            forwardPass.drawOutline(commandBuffer, indirectDraws[currentFrame]);
+            forwardPass.drawOutline(commandBuffer, shadowPass.descriptorSet(currentFrame),
+                                    indirectDraws[currentFrame]);
             ForwardPass::end(commandBuffer);
 
             // Render the scene into an off-screen image with the very same
@@ -2282,7 +2283,8 @@ class Renderer::Backend {
                                              particlePipeline.handle(), particlePipeline.layout(),
                                               currentFrame, true);
             }
-            forwardPass.drawOutline(commandBuffer, indirectDraws[currentFrame]);
+            forwardPass.drawOutline(commandBuffer, sceneDescriptorPass.descriptorSet(currentFrame),
+                                    indirectDraws[currentFrame]);
             ForwardPass::end(commandBuffer);
 
             if (hizEnabled && !msaa.enabled()) {
@@ -2695,7 +2697,7 @@ void Renderer::initialize(Scene& scene, void* nativeWindow) {
     backend_->initialize();
 }
 
-void Renderer::beginFrame() const { backend_->beginFrame(); }
+void Renderer::beginFrame() { Backend::beginFrame(); }
 EditorEventState Renderer::pollEditorEvents() const {
     return backend_ ? backend_->pollEditorEvents() : EditorEventState{};
 }

@@ -18,10 +18,10 @@ struct RaycastHit final {
 };
 
 /**
- * @brief Applies the first, minimal part of rigidbody simulation.
+ * @brief Advances dynamic rigidbodies and rolls grounded spheres.
  *
- * The system currently integrates gravity only. Collision detection,
- * constraints and angular motion are intentionally left for later.
+ * Dynamic sphere colliders derive their angular velocity from horizontal
+ * movement while in contact with a static surface.
  */
 class PhysicsSystem final {
 public:

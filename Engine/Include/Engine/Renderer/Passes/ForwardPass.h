@@ -30,6 +30,7 @@ public:
                      const Culling::IndexedIndirectDrawCount& indirectDraw);
 
     void drawOutline(VkCommandBuffer commandBuffer,
+                     VkDescriptorSet sceneDescriptorSet,
                      const Culling::IndexedIndirectDrawCount& indirectDraw) const;
 
     static void end(VkCommandBuffer commandBuffer);

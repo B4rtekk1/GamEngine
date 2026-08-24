@@ -98,10 +98,16 @@ void ForwardPass::end(VkCommandBuffer commandBuffer) {
 
 void ForwardPass::drawOutline(
     VkCommandBuffer commandBuffer,
+    const VkDescriptorSet sceneDescriptorSet,
     const Culling::IndexedIndirectDrawCount& indirectDraw) const {
     if (!indirectDraw.valid()) return;
     vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS,
                       outlinePipeline_.handle());
+    // Sky and particle draws bind their own descriptor sets. Bind the scene
+    // set again because the outline pipeline uses the forward-pass layout.
+    vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS,
+                            outlinePipeline_.layout(), 0, 1,
+                            &sceneDescriptorSet, 0, nullptr);
     indirectDraw.record(commandBuffer);
 }
 

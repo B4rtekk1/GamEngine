@@ -1,0 +1,38 @@
+{
+	"bmi-installation" : null,
+	"compiler-frontend-variant" : "GNU",
+	"compiler-id" : "GNU",
+	"compiler-simulate-id" : "",
+	"config" : "Debug",
+	"cxx-modules" : {},
+	"database-info" : null,
+	"dir-cur-bld" : "C:/Users/Bartosz Kasyna/CLionProjects/GamEngine/out/build/debug/Sandbox",
+	"dir-cur-src" : "C:/Users/Bartosz Kasyna/CLionProjects/GamEngine/Sandbox",
+	"dir-top-bld" : "C:/Users/Bartosz Kasyna/CLionProjects/GamEngine/out/build/debug",
+	"dir-top-src" : "C:/Users/Bartosz Kasyna/CLionProjects/GamEngine",
+	"exports" : [],
+	"forward-modules-from-target-dirs" : [],
+	"include-dirs" : 
+	[
+		"C:\\Users\\Bartosz Kasyna\\CLionProjects\\GamEngine\\Engine\\Include",
+		"C:\\VulkanSDK\\1.4.357.0\\Include",
+		"C:\\VulkanSDK\\1.4.357.0\\Include\\vma",
+		"C:\\VulkanSDK\\1.4.357.0\\include"
+	],
+	"language" : "CXX",
+	"linked-target-dirs" : [],
+	"module-dir" : "C:/Users/Bartosz Kasyna/CLionProjects/GamEngine/out/build/debug/Sandbox/CMakeFiles/GamEngine.dir",
+	"sources" : 
+	{
+		"Sandbox/CMakeFiles/GamEngine.dir/Source/Scripts/CubeMovement.cpp.obj" : 
+		{
+			"language" : "CXX",
+			"source" : "C:/Users/Bartosz Kasyna/CLionProjects/GamEngine/Sandbox/Source/Scripts/CubeMovement.cpp"
+		},
+		"Sandbox/CMakeFiles/GamEngine.dir/Source/main.cpp.obj" : 
+		{
+			"language" : "CXX",
+			"source" : "C:/Users/Bartosz Kasyna/CLionProjects/GamEngine/Sandbox/Source/main.cpp"
+		}
+	}
+}

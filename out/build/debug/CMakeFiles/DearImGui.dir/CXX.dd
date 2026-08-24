@@ -1,0 +1,15 @@
+ninja_dyndep_version = 1.0
+build CMakeFiles/DearImGui.dir/_deps/dearimgui-src/imgui.cpp.obj: dyndep
+
+build CMakeFiles/DearImGui.dir/_deps/dearimgui-src/imgui_demo.cpp.obj: dyndep
+
+build CMakeFiles/DearImGui.dir/_deps/dearimgui-src/imgui_draw.cpp.obj: dyndep
+
+build CMakeFiles/DearImGui.dir/_deps/dearimgui-src/imgui_tables.cpp.obj: dyndep
+
+build CMakeFiles/DearImGui.dir/_deps/dearimgui-src/imgui_widgets.cpp.obj: dyndep
+
+build CMakeFiles/DearImGui.dir/_deps/dearimgui-src/backends/imgui_impl_sdl3.cpp.obj: dyndep
+
+build CMakeFiles/DearImGui.dir/_deps/dearimgui-src/backends/imgui_impl_vulkan.cpp.obj: dyndep
+
