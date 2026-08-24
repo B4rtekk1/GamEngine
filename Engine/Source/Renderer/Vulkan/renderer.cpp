@@ -217,6 +217,7 @@ class Renderer::Backend {
         [[nodiscard]] VkDescriptorSet sceneViewportTexture() const noexcept { return sceneViewportDescriptor; }
         [[nodiscard]] float editorCameraYaw() const noexcept { return cameraController.editorYaw(); }
         [[nodiscard]] float editorCameraPitch() const noexcept { return cameraController.editorPitch(); }
+        [[nodiscard]] Vec3 editorCameraPosition() const noexcept { return cameraController.editorPosition(); }
         void setEditorCameraRotation(const float yaw, const float pitch) noexcept {
             cameraController.setEditorRotation(yaw, pitch);
         }
@@ -744,7 +745,7 @@ class Renderer::Backend {
         }
 
         void setupDebugMessenger() {
-            if (!enableValidationLayers || !checkValidationLayerSupport()) return;
+            if (!checkValidationLayerSupport()) return;
             VkDebugUtilsMessengerCreateInfoEXT createInfo;
             populateDebugMessengerCreateInfo(createInfo);
             if (CreateDebugUtilsMessengerEXT(instance, &createInfo, nullptr, &debugMessenger) != VK_SUCCESS) {
@@ -1344,8 +1345,8 @@ class Renderer::Backend {
             // buffer instead of failing scene synchronization after deleting
             // the final mesh object.
             if (sceneMesh.empty()) {
-                const Vertex dummyVertex{};
-                const std::uint32_t dummyIndex = 0;
+                constexpr Vertex dummyVertex{};
+                constexpr std::uint32_t dummyIndex = 0;
                 hasShadowCasters = false;
                 sceneCenter = Vec3{};
                 sceneRadius = 1.0f;
@@ -1467,7 +1468,7 @@ class Renderer::Backend {
         }
 
         void clearDirtyIndices(uint8_t RenderableRecord::* dirtyFrames,
-                               std::vector<std::size_t>& indices, const uint8_t bit) {
+                               std::vector<std::size_t>& indices, const uint8_t bit) const {
             for (const std::size_t index : indices) {
                 renderables[index].*dirtyFrames &= static_cast<uint8_t>(~bit);
             }
@@ -2742,6 +2743,9 @@ float Renderer::editorCameraYaw() const noexcept {
 }
 float Renderer::editorCameraPitch() const noexcept {
     return backend_ ? backend_->editorCameraPitch() : 0.0f;
+}
+Vec3 Renderer::editorCameraPosition() const noexcept {
+    return backend_ ? backend_->editorCameraPosition() : Vec3{};
 }
 void Renderer::setEditorCameraRotation(const float yaw, const float pitch) const noexcept {
     if (backend_) backend_->setEditorCameraRotation(yaw, pitch);

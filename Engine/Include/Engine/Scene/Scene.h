@@ -199,6 +199,13 @@ public:
         return nullptr;
     }
 
+    [[nodiscard]] Entity findEntity(const ObjectId objectId) const noexcept {
+        for (const auto& object : objects_) {
+            if (object->objectId() == objectId) return object->entity();
+        }
+        return NullEntity;
+    }
+
     /** Finds the high-level object represented by an ECS entity. */
     [[nodiscard]] GameObject* findByEntity(const Entity entity) noexcept {
         for (const auto& object : objects_) {

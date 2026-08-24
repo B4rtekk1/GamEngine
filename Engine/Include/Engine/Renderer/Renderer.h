@@ -2,6 +2,7 @@
 
 #include "Engine/Renderer/RenderConfig.h"
 #include "Engine/ECS/Entity.h"
+#include "Engine/Math/Vec3.h"
 
 #include <cstdint>
 #include <memory>
@@ -48,6 +49,7 @@ public:
     /** Current Scene View camera orientation, in degrees. */
     [[nodiscard]] float editorCameraYaw() const noexcept;
     [[nodiscard]] float editorCameraPitch() const noexcept;
+    [[nodiscard]] Vec3 editorCameraPosition() const noexcept;
     /** Rotates the Scene View camera without changing its position. */
     void setEditorCameraRotation(float yaw, float pitch) const noexcept;
     void shutdown() noexcept;

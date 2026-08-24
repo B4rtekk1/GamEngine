@@ -2,6 +2,7 @@
 
 #include "Engine/Renderer/Culling/IndexedIndirectDrawCount.h"
 #include "Engine/Renderer/Geometry/Vertex.h"
+#include <algorithm>
 #include <cstddef>
 
 namespace Engine {
@@ -47,6 +48,13 @@ void ForwardPass::create(VkDevice device, const VkFormat colorFormat,
     outlineOptions.cullMode = VK_CULL_MODE_FRONT_BIT;
     outlineOptions.depthWriteEnable = VK_FALSE;
     outlineOptions.depthCompareOp = VK_COMPARE_OP_LESS_OR_EQUAL;
+    outlineOptions.vertexAttributes.erase(
+        std::remove_if(outlineOptions.vertexAttributes.begin(),
+                       outlineOptions.vertexAttributes.end(),
+                       [](const VkVertexInputAttributeDescription& attribute) {
+                           return attribute.location == 9;
+                       }),
+        outlineOptions.vertexAttributes.end());
     outlinePipeline_.create(device, outlineOptions);
 }
 

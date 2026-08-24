@@ -197,8 +197,8 @@ void applySphereBoxImpulse(RigidbodyComponent& sphereBody,
 }
 
 Vec3 colliderExtents(const ColliderComponent& collider) {
-    return std::visit([](const auto& shape) {
-        using Shape = std::decay_t<decltype(shape)>;
+    return std::visit([]<typename T>(const T& shape) {
+        using Shape = std::decay_t<T>;
         if constexpr (std::is_same_v<Shape, BoxCollider>) {
             return shape.halfExtents;
         } else if constexpr (std::is_same_v<Shape, SphereCollider>) {
@@ -538,8 +538,8 @@ std::optional<SphereContact> sphereCapsuleContact(
 std::optional<SphereContact> sphereColliderContact(
     const Vec3& center, const float radius, const Aabb& other,
     const ColliderComponent& otherCollider) {
-    return std::visit([&](const auto& shape) -> std::optional<SphereContact> {
-        using Shape = std::decay_t<decltype(shape)>;
+    return std::visit([&]<typename T>([[maybe_unused]] const T& shape) -> std::optional<SphereContact> {
+        using Shape = std::decay_t<T>;
         if constexpr (std::is_same_v<Shape, BoxCollider>) {
             return sphereBoxContact(center, radius, other);
         } else if constexpr (std::is_same_v<Shape, SphereCollider>) {

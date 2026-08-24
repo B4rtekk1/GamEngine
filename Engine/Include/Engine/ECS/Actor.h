@@ -96,7 +96,7 @@ private:
     friend class Script;
     Actor(Scene& scene, ObjectId objectId) noexcept : scene_(&scene), objectId_(objectId) {}
 
-    GameObject& object() const;
+    [[nodiscard]] GameObject& object() const;
 
     Scene* scene_{};
     ObjectId objectId_{NullObjectId};
