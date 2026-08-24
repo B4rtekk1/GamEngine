@@ -15,6 +15,10 @@ namespace Engine {
 namespace {
 constexpr float RadiansToDegrees = 57.29577951308232f;
 constexpr float SolidSphereInertiaFactor = 0.4f;
+// Rolling resistance is much weaker than sliding Coulomb friction. This
+// factor maps the collider friction coefficient to a practical rolling
+// resistance coefficient for rigid spheres.
+constexpr float RollingResistanceScale = 0.05f;
 
 struct Aabb {
     Vec3 center;
@@ -161,6 +165,8 @@ void PhysicsSystem::update(Scene& scene, const float deltaTime) const {
                 Vec3 contactNormal{0.0f, 1.0f, 0.0f};
                 float selectedFriction = 0.0f;
                 Vec3 rampCorrection{};
+                Vec3 rampNormal{0.0f, 1.0f, 0.0f};
+                float rampFriction = 0.0f;
                 float rampPenetration = 0.0f;
                 for (const StaticCollider& other : colliders) {
                     if (other.entity == entity || !overlapsHorizontally(bodyBounds, other.bounds)) continue;
@@ -177,8 +183,8 @@ void PhysicsSystem::update(Scene& scene, const float deltaTime) const {
                         if (contact && contact->penetration > rampPenetration) {
                             rampPenetration = contact->penetration;
                             rampCorrection = contact->normal * contact->penetration;
-                            contactNormal = contact->normal;
-                            selectedFriction = std::sqrt(std::max(0.0f,
+                            rampNormal = contact->normal;
+                            rampFriction = std::sqrt(std::max(0.0f,
                                 collider.friction * otherCollider.friction));
                         }
                         continue;
@@ -222,14 +228,20 @@ void PhysicsSystem::update(Scene& scene, const float deltaTime) const {
                 if (rampPenetration > 0.0f) {
                     transform.position += rampCorrection;
                     bodyBounds = worldAabb(transform, collider);
-                    const float inwardVelocity = dot(body.linearVelocity, contactNormal);
+                    const float inwardVelocity = dot(body.linearVelocity, rampNormal);
                     if (inwardVelocity < 0.0f) {
-                        body.linearVelocity -= contactNormal * inwardVelocity;
+                        body.linearVelocity -= rampNormal * inwardVelocity;
                     }
                     touchesSurface = true;
-                    surfaceNormal = contactNormal;
-                    contactFriction = selectedFriction;
-                } else if (contactHeight > -INFINITY) {
+                    surfaceNormal = rampNormal;
+                    contactFriction = rampFriction;
+                }
+
+                // A sphere can touch the ramp and the ground at the same
+                // time near the ramp's lower edge. Resolve both contacts;
+                // otherwise the ramp contact can mask the ground for one
+                // frame and let the sphere tunnel below it.
+                if (contactHeight > -INFINITY) {
                     if (transform.position.y() < contactHeight) {
                         transform.position.setY(contactHeight);
                         bodyBounds = worldAabb(transform, collider);
@@ -264,6 +276,20 @@ void PhysicsSystem::update(Scene& scene, const float deltaTime) const {
                         if (rollsWithoutSlipping && body.useGravity) {
                             body.linearVelocity -= gravityParallel *
                                 (SolidSphereInertiaFactor / (1.0f + SolidSphereInertiaFactor) * dt);
+
+                            Vec3 tangentialVelocity = body.linearVelocity -
+                                surfaceNormal * dot(body.linearVelocity, surfaceNormal);
+                            const float tangentialSpeed = tangentialVelocity.length();
+                            if (tangentialSpeed > 1e-6f) {
+                                const float normalAcceleration =
+                                    std::abs(dot(gravity_, surfaceNormal));
+                                const float speedLoss = std::min(
+                                    tangentialSpeed,
+                                    contactFriction * RollingResistanceScale *
+                                        normalAcceleration * dt);
+                                body.linearVelocity -= tangentialVelocity *
+                                    (speedLoss / tangentialSpeed);
+                            }
                         }
                         if (rollsWithoutSlipping) {
                             const Vec3 tangentialVelocity = body.linearVelocity -

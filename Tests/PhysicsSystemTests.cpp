@@ -109,5 +109,43 @@ int main() {
         return 6;
     }
 
+    Scene rampExitScene;
+    auto exitGround = rampExitScene.createActor("Ground");
+    exitGround.addRigidbody(RigidbodyComponent{.type = RigidbodyType::Static});
+    exitGround.addBoxCollider({10.0f, 0.05f, 10.0f});
+    auto exitRamp = rampExitScene.createActor("Ramp");
+    exitRamp.setPosition({0.0f, 2.05f, 0.0f});
+    exitRamp.addRigidbody(RigidbodyComponent{.type = RigidbodyType::Static});
+    exitRamp.addRampCollider({3.0f, 2.0f, 2.0f});
+    auto exitingSphere = rampExitScene.createActor("Exiting sphere");
+    exitingSphere.setPosition({0.0f, 1.05f + 0.7071068f, -1.0f});
+    exitingSphere.addRigidbody();
+    exitingSphere.addSphereCollider(0.5f);
+
+    for (int step = 0; step < 120; ++step) physics.update(rampExitScene, 0.01f);
+    if (exitingSphere.position().z() >= -2.5f ||
+        exitingSphere.position().y() < 0.549f) {
+        return 7;
+    }
+
+    Scene rollingResistanceScene;
+    auto resistanceGround = rollingResistanceScene.createActor("Ground");
+    resistanceGround.addRigidbody(RigidbodyComponent{.type = RigidbodyType::Static});
+    resistanceGround.addBoxCollider({20.0f, 0.05f, 20.0f});
+    auto slowingSphere = rollingResistanceScene.createActor("Slowing sphere");
+    slowingSphere.setPosition({0.0f, 0.55f, 0.0f});
+    slowingSphere.addRigidbody(RigidbodyComponent{
+        .linearVelocity = {2.0f, 0.0f, 0.0f}
+    });
+    slowingSphere.addSphereCollider(0.5f);
+
+    physics.update(rollingResistanceScene, 0.1f);
+    const float speedAfterFirstStep = slowingSphere.velocity().x();
+    for (int step = 0; step < 100; ++step) physics.update(rollingResistanceScene, 0.1f);
+    if (speedAfterFirstStep >= 2.0f || slowingSphere.velocity().length() > 0.001f ||
+        slowingSphere.position().y() < 0.549f) {
+        return 8;
+    }
+
     return 0;
 }
