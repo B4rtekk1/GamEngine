@@ -212,4 +212,28 @@ if(BUILD_TESTING)
     add_executable(PhysicsEdgeTests Tests/PhysicsEdgeTests.cpp)
     target_link_libraries(PhysicsEdgeTests PRIVATE Engine)
     add_test(NAME PhysicsEdgeTests COMMAND PhysicsEdgeTests)
+
+    add_executable(SceneIOTests Tests/SceneIOTests.cpp)
+    target_link_libraries(SceneIOTests PRIVATE Engine)
+    add_test(NAME SceneIOTests COMMAND SceneIOTests)
+
+    add_executable(ContentTests Tests/ContentTests.cpp)
+    target_link_libraries(ContentTests PRIVATE Engine)
+    add_test(NAME ContentTests COMMAND ContentTests)
+
+    add_executable(InputTests Tests/InputTests.cpp)
+    target_link_libraries(InputTests PRIVATE Engine)
+    add_test(NAME InputTests COMMAND InputTests)
+
+    add_executable(PrefabTests Tests/PrefabTests.cpp)
+    target_link_libraries(PrefabTests PRIVATE Engine)
+    add_test(NAME PrefabTests COMMAND PrefabTests)
+
+    add_executable(TransformTests Tests/TransformTests.cpp)
+    target_link_libraries(TransformTests PRIVATE Engine)
+    add_test(NAME TransformTests COMMAND TransformTests)
+
+    add_executable(InterfaceTests Tests/InterfaceTests.cpp)
+    target_link_libraries(InterfaceTests PRIVATE Engine)
+    add_test(NAME InterfaceTests COMMAND InterfaceTests)
 endif()
