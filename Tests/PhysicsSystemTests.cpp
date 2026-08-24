@@ -159,7 +159,8 @@ int main() {
 
     physics.update(allCollidersScene, 0.1f);
     if (movingSphere.position().x() > -0.999f ||
-        std::abs(movingSphere.velocity().x() + 0.75f) > 0.001f) {
+        std::abs(movingSphere.velocity().x() +
+                 0.75f * std::exp(-0.05f * 0.1f)) > 0.001f) {
         return 9;
     }
 
@@ -213,7 +214,7 @@ int main() {
 
     Scene dynamicColliderScene;
     auto dynamicTestSphere = dynamicColliderScene.createActor("Moving sphere");
-    dynamicTestSphere.setPosition({-1.4f, 0.0f, 0.0f});
+    dynamicTestSphere.setPosition({-1.4f, 0.35f, 0.0f});
     dynamicTestSphere.addRigidbody(RigidbodyComponent{
         .useGravity = false, .linearVelocity = {5.0f, 0.0f, 0.0f}
     });
@@ -223,8 +224,9 @@ int main() {
     dynamicBox.addBoxCollider({0.5f, 0.5f, 0.5f});
 
     physics.update(dynamicColliderScene, 0.1f);
-    if (dynamicTestSphere.position().x() > -0.999f ||
-        dynamicTestSphere.velocity().x() > 0.001f) {
+    if (dynamicTestSphere.velocity().x() >= 5.0f ||
+        dynamicBox.velocity().x() <= 0.001f ||
+        dynamicColliderScene.find(dynamicBox.id())->rigidbody().angularVelocity.z() >= -0.001f) {
         return 13;
     }
 
@@ -271,7 +273,7 @@ int main() {
     const auto& rampBoxBody = rampBoxScene.find(rampBox.id())->rigidbody();
     if (rampBox.rotation().x() >= -0.001f || rampBox.rotation().x() <= -44.999f ||
         rampBoxBody.angularVelocity.x() >= -0.001f ||
-        std::abs(rampBox.position().y() - 1.0f) > 0.001f) {
+        std::abs(rampBox.position().y() - rampBox.position().z() - 1.0f) > 0.001f) {
         return 16;
     }
     const float firstRampBoxAngle = rampBox.rotation().x();
@@ -279,6 +281,89 @@ int main() {
     if (!std::isfinite(rampBox.rotation().x()) || !std::isfinite(rampBox.position().y()) ||
         std::abs(rampBox.rotation().x() - firstRampBoxAngle) < 0.01f) {
         return 17;
+    }
+
+    Scene topplingScene;
+    auto topplingGround = topplingScene.createActor("Ground");
+    topplingGround.addBoxCollider({100.0f, 0.05f, 100.0f});
+    auto topplingSphere = topplingScene.createActor("Heavy sphere");
+    topplingSphere.setPosition({0.0f, 0.55f, 1.5f});
+    topplingSphere.addRigidbody(RigidbodyComponent{
+        .mass = 10.0f, .linearVelocity = {0.0f, 0.0f, -10.0f}
+    });
+    topplingSphere.addSphereCollider(0.5f);
+    auto thinBox = topplingScene.createActor("Tall thin box");
+    thinBox.setPosition({0.0f, 1.55f, 0.0f});
+    thinBox.addRigidbody();
+    thinBox.addBoxCollider({1.5f, 1.5f, 0.15f});
+
+    for (int step = 0; step < 400; ++step) {
+        physics.update(topplingScene, 0.005f);
+    }
+    if (topplingSphere.position().y() < 0.499f ||
+        !std::isfinite(thinBox.position().y()) || thinBox.position().y() > 3.0f ||
+        std::abs(thinBox.rotation().x()) < 1.0f) {
+        return 18;
+    }
+
+    Scene rampEdgeScene;
+    auto solidRamp = rampEdgeScene.createActor("Ramp");
+    solidRamp.addRampCollider({3.0f, 2.0f, 2.0f});
+    auto edgeBox = rampEdgeScene.createActor("Box entering ramp end");
+    edgeBox.setPosition({0.0f, 0.0f, 2.6f});
+    edgeBox.addRigidbody(RigidbodyComponent{
+        .useGravity = false, .linearVelocity = {0.0f, 0.0f, -3.0f}
+    });
+    edgeBox.addBoxCollider();
+
+    physics.update(rampEdgeScene, 0.1f);
+    if (edgeBox.position().z() < 2.499f || edgeBox.velocity().z() < -0.001f) {
+        return 19;
+    }
+
+    Scene editorPhysicsScene;
+    auto editorGround = editorPhysicsScene.createActor("Ground");
+    editorGround.addBoxCollider({20.625f, 0.05f, 20.625f});
+    auto firstEditorRamp = editorPhysicsScene.createActor("Ramp");
+    firstEditorRamp.setPosition({0.0f, 2.0f, 0.0f});
+    firstEditorRamp.addRampCollider({3.0f, 2.0f, 2.0f});
+    auto secondEditorRamp = editorPhysicsScene.createActor("Ramp 2");
+    secondEditorRamp.setPosition({0.0f, 2.0f, -10.0f});
+    secondEditorRamp.setRotation({0.0f, 180.0f, 0.0f});
+    secondEditorRamp.addRampCollider({3.0f, 2.0f, 2.0f});
+    auto editorSphere = editorPhysicsScene.createActor("Sphere");
+    editorSphere.setPosition({1.2f, 6.0f, 0.0f});
+    editorSphere.addRigidbody(RigidbodyComponent{.mass = 10.0f});
+    editorSphere.addSphereCollider(0.5f);
+    auto editorCube = editorPhysicsScene.createActor("Cube");
+    editorCube.setPosition({0.0f, 0.5f, -7.0f});
+    editorCube.setScale({3.0f, 3.0f, 0.3f});
+    editorCube.addRigidbody(RigidbodyComponent{
+        .mass = 10.0f, .linearDamping = 0.5f, .angularDamping = 2.0f
+    });
+    editorCube.addBoxCollider();
+
+    float maximumCubeSpeed = 0.0f;
+    float maximumCubeAngularSpeed = 0.0f;
+    int maximumCubeSpeedStep = 0;
+    int maximumCubeAngularSpeedStep = 0;
+    for (int step = 0; step < 1200; ++step) {
+        physics.update(editorPhysicsScene, 1.0f / 120.0f);
+        const float cubeSpeed = editorCube.velocity().length();
+        const float cubeAngularSpeed =
+            editorPhysicsScene.find(editorCube.id())->rigidbody().angularVelocity.length();
+        if (cubeSpeed > maximumCubeSpeed) {
+            maximumCubeSpeed = cubeSpeed;
+            maximumCubeSpeedStep = step;
+        }
+        if (cubeAngularSpeed > maximumCubeAngularSpeed) {
+            maximumCubeAngularSpeed = cubeAngularSpeed;
+            maximumCubeAngularSpeedStep = step;
+        }
+    }
+    if (!std::isfinite(maximumCubeSpeed) || !std::isfinite(maximumCubeAngularSpeed) ||
+        maximumCubeSpeed > 2.2f || maximumCubeAngularSpeed > 140.0f) {
+        return 20;
     }
 
     return 0;
