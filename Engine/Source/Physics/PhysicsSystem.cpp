@@ -9,6 +9,8 @@
 #include <array>
 #include <cmath>
 #include <optional>
+#include <cstdint>
+#include <unordered_map>
 #include <vector>
 
 namespace Engine {
@@ -31,6 +33,63 @@ constexpr float RestingBoxAngularSpeedDegrees = 5.0f;
 struct Aabb {
     Vec3 center;
     Vec3 extents;
+};
+
+struct SceneCollider {
+    Entity entity;
+    ColliderComponent collider;
+    Transform transform;
+    Aabb bounds;
+    float yawRadians;
+    bool dynamic;
+};
+
+constexpr float BroadPhaseCellSize = 4.0f;
+
+struct Grid final {
+    std::unordered_map<std::int64_t, std::vector<std::size_t>> cells;
+
+    static std::int64_t key(const int x, const int z) noexcept {
+        return static_cast<std::int64_t>(
+            (static_cast<std::uint64_t>(static_cast<std::uint32_t>(x)) << 32u) |
+            static_cast<std::uint32_t>(z));
+    }
+
+    static int coordinate(const float value) noexcept {
+        return static_cast<int>(std::floor(value / BroadPhaseCellSize));
+    }
+
+    void insert(const Aabb& bounds, const std::size_t index) {
+        const int minX = coordinate(bounds.center.x() - bounds.extents.x());
+        const int maxX = coordinate(bounds.center.x() + bounds.extents.x());
+        const int minZ = coordinate(bounds.center.z() - bounds.extents.z());
+        const int maxZ = coordinate(bounds.center.z() + bounds.extents.z());
+        for (int x = minX; x <= maxX; ++x) {
+            for (int z = minZ; z <= maxZ; ++z) {
+                cells[key(x, z)].push_back(index);
+            }
+        }
+    }
+
+    void query(const Aabb& bounds, std::vector<std::size_t>& result,
+               std::vector<std::uint32_t>& seen, const std::uint32_t stamp) const {
+        const int minX = coordinate(bounds.center.x() - bounds.extents.x());
+        const int maxX = coordinate(bounds.center.x() + bounds.extents.x());
+        const int minZ = coordinate(bounds.center.z() - bounds.extents.z());
+        const int maxZ = coordinate(bounds.center.z() + bounds.extents.z());
+        for (int x = minX; x <= maxX; ++x) {
+            for (int z = minZ; z <= maxZ; ++z) {
+                const auto it = cells.find(key(x, z));
+                if (it == cells.end()) continue;
+                for (const std::size_t index : it->second) {
+                    if (seen[index] != stamp) {
+                        seen[index] = stamp;
+                        result.push_back(index);
+                    }
+                }
+            }
+        }
+    }
 };
 
 float dot(const Vec3& lhs, const Vec3& rhs) {
@@ -591,20 +650,77 @@ std::optional<SphereRampContact> sphereRampContact(
 
 } // namespace
 
+struct PhysicsSystem::BroadPhaseCache {
+    const Registry* registry = nullptr;
+    std::uint64_t structuralRevision = 0;
+    std::uint64_t colliderRevision = 0;
+    std::uint64_t transformRevision = 0;
+    std::uint64_t rigidbodyRevision = 0;
+    std::vector<SceneCollider> staticColliders;
+};
+
 void PhysicsSystem::update(Scene& scene, const float deltaTime) const {
     Registry& registry = scene.registry();
     const float dt = std::max(deltaTime, 0.0f);
     if (dt == 0.0f) return;
 
-    struct SceneCollider { Entity entity; Aabb bounds; float yawRadians; bool dynamic; };
     std::vector<SceneCollider> colliders;
+
+    if (!broadPhaseCache_) broadPhaseCache_ = std::make_shared<BroadPhaseCache>();
+    BroadPhaseCache& cache = *broadPhaseCache_;
+    const auto staticEntityChanged = [&](const auto changedSince) {
+        return std::ranges::any_of(changedSince, [&](const Entity entity) {
+            return std::ranges::any_of(cache.staticColliders,
+                [&](const SceneCollider& collider) { return collider.entity == entity; });
+        });
+    };
+    const bool staticColliderChanged = staticEntityChanged(
+        registry.componentEntitiesChangedSince<ColliderComponent>(cache.colliderRevision));
+    const bool staticTransformChanged = staticEntityChanged(
+        registry.componentEntitiesChangedSince<Transform>(cache.transformRevision));
+    const bool cacheInvalid = cache.registry != &registry ||
+        cache.structuralRevision != registry.structuralRevision() ||
+        staticColliderChanged || staticTransformChanged ||
+        cache.rigidbodyRevision != registry.componentRevision<RigidbodyComponent>();
+    if (cacheInvalid) {
+        cache.registry = &registry;
+        cache.structuralRevision = registry.structuralRevision();
+        cache.colliderRevision = registry.componentRevision<ColliderComponent>();
+        cache.transformRevision = registry.componentRevision<Transform>();
+        cache.rigidbodyRevision = registry.componentRevision<RigidbodyComponent>();
+        cache.staticColliders.clear();
+        registry.view<ColliderComponent, Transform>(
+            [&](const Entity entity, const ColliderComponent& collider, const Transform& transform) {
+                const bool dynamic = registry.has<RigidbodyComponent>(entity) &&
+                    registry.get<RigidbodyComponent>(entity).type == RigidbodyType::Dynamic;
+                if (dynamic) return;
+                cache.staticColliders.push_back({entity, collider, transform,
+                    worldAabb(transform, collider),
+                    transform.rotation.y() * 0.01745329251994329577f, false});
+            });
+    } else {
+        // Dynamic bodies are allowed to mark their transforms as changed during
+        // contact resolution. Those changes must not rebuild the static cache.
+        cache.colliderRevision = registry.componentRevision<ColliderComponent>();
+        cache.transformRevision = registry.componentRevision<Transform>();
+    }
+
+    colliders = cache.staticColliders;
     registry.view<ColliderComponent, Transform>(
         [&](const Entity entity, const ColliderComponent& collider, const Transform& transform) {
-            const bool dynamic = registry.has<RigidbodyComponent>(entity) &&
-                registry.get<RigidbodyComponent>(entity).type == RigidbodyType::Dynamic;
-            colliders.push_back({entity, worldAabb(transform, collider),
-                transform.rotation.y() * 0.01745329251994329577f, dynamic});
+            if (!registry.has<RigidbodyComponent>(entity) ||
+                registry.get<RigidbodyComponent>(entity).type != RigidbodyType::Dynamic) return;
+            colliders.push_back({entity, collider, transform, worldAabb(transform, collider),
+                transform.rotation.y() * 0.01745329251994329577f, true});
         });
+
+    Grid broadPhase;
+    broadPhase.cells.reserve(colliders.size() * 2);
+    for (std::size_t index = 0; index < colliders.size(); ++index) {
+        broadPhase.insert(colliders[index].bounds, index);
+    }
+    std::vector<std::uint32_t> seen(colliders.size(), 0);
+    std::uint32_t queryStamp = 0;
 
     registry.view<RigidbodyComponent, Transform>(
         [&](const Entity entity, RigidbodyComponent& body, Transform& transform) {
@@ -637,9 +753,17 @@ void PhysicsSystem::update(Scene& scene, const float deltaTime) const {
                 Vec3 rampNormal{0.0f, 1.0f, 0.0f};
                 float rampFriction = 0.0f;
                 float rampPenetration = 0.0f;
-                for (const SceneCollider& other : colliders) {
+                std::vector<std::size_t> candidates;
+                ++queryStamp;
+                if (queryStamp == 0) {
+                    std::fill(seen.begin(), seen.end(), 0);
+                    queryStamp = 1;
+                }
+                broadPhase.query(bodyBounds, candidates, seen, queryStamp);
+                for (const std::size_t candidateIndex : candidates) {
+                    const SceneCollider& other = colliders[candidateIndex];
                     if (other.entity == entity || !overlapsHorizontally(bodyBounds, other.bounds)) continue;
-                    const auto& otherCollider = registry.get<ColliderComponent>(other.entity);
+                    const auto& otherCollider = other.collider;
                     if (collider.isTrigger || otherCollider.isTrigger) continue;
                     // The generic box solver still handles only immovable
                     // surfaces. Sphere contacts below support every collider
@@ -708,8 +832,7 @@ void PhysicsSystem::update(Scene& scene, const float deltaTime) const {
                         continue;
                     }
                     if (isSphere && !isRamp) {
-                        const auto& otherTransform =
-                            registry.get<Transform>(other.entity);
+                        const auto& otherTransform = other.transform;
                         std::optional<SphereContact> contact;
                         std::optional<OrientedBox> contactedBox;
                         if (std::holds_alternative<BoxCollider>(otherCollider.shape)) {

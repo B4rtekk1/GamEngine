@@ -5,6 +5,7 @@
 #include "Engine/Math/Vec3.h"
 
 #include <optional>
+#include <memory>
 
 namespace Engine {
 
@@ -38,7 +39,10 @@ public:
         Scene& scene, Vec3 origin, Vec3 direction, float maxDistance = 1000.0f) const;
 
 private:
+    struct BroadPhaseCache;
+
     Vec3 gravity_;
+    mutable std::shared_ptr<BroadPhaseCache> broadPhaseCache_;
 };
 
 } // namespace Engine
