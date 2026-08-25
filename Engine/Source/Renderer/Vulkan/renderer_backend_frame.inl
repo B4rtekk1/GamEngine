@@ -1,0 +1,619 @@
+        struct DirectionalLight final {
+            Vec3 direction{-0.45f, -0.80f, -0.35f};
+            Math::Color color = Math::Color::white();
+            float intensity{4.0f};
+        };
+
+        [[nodiscard]] DirectionalLight directionalLight() const {
+            DirectionalLight result;
+            const Registry& readRegistry = registry;
+            bool found = false;
+            readRegistry.view<Transform, LightComponent>(
+                [&](const Entity, const Transform& transform, const LightComponent& light) {
+                    if (found || !light.enabled || light.type != LightType::Directional) return;
+                    const glm::vec3 direction = glm::vec3(transform.matrix().native() *
+                                                          glm::vec4{0.0f, 0.0f, -1.0f, 0.0f});
+                    if (glm::length(direction) <= 1e-6f) return;
+                    result.direction = Vec3{glm::normalize(direction)};
+                    result.color = light.color;
+                    result.intensity = std::max(0.0f, light.intensity);
+                    found = true;
+                });
+            return result;
+        }
+
+        void updateUniformBuffer(const uint32_t frame) {
+            Entity activeCamera = NullEntity;
+            const Registry& readRegistry = registry;
+            readRegistry.view<CameraComponent, Transform>(
+                [&](const Entity entity, const CameraComponent& component, const Transform&) {
+                    if (activeCamera == NullEntity && component.primary) {
+                        activeCamera = entity;
+                    }
+                });
+            if (activeCamera == NullEntity) {
+                throw std::runtime_error("Scene has no primary CameraComponent with Transform");
+            }
+
+            const auto& component = readRegistry.get<CameraComponent>(activeCamera);
+            const auto& transform = readRegistry.get<Transform>(activeCamera);
+            if (!component.isPerspective() || !component.isValid()) {
+                throw std::runtime_error("Primary CameraComponent has unsupported settings");
+            }
+
+            // Game View is presented in a fixed 16:9 editor frame. Keep the
+            // projection in that aspect too, independently of dock layout.
+            const float gameAspect = editorUiActive ? (16.0f / 9.0f) : component.aspectRatio;
+            cameraController.camera().emplace(Degrees{component.fieldOfView}, gameAspect,
+                                               component.nearClip, component.farClip);
+            cameraController.camera()->setPosition(transform.position);
+            cameraController.camera()->setRotation(Degrees{transform.rotation.y()},
+                                                    Degrees{transform.rotation.x()});
+
+            const DirectionalLight light = directionalLight();
+            const UniformBufferObject data{
+                cameraController.camera()->viewMatrix(), cameraController.camera()->projectionMatrix(), lightSpaceMatrix(),
+                glm::vec4{cameraController.camera()->position().native(), 1.0f},
+                glm::vec4{light.direction.native(), light.intensity},
+                glm::vec4{light.color.r(), light.color.g(), light.color.b(), 1.0f},
+                (optimizationFeatures.shadows && hasShadowCasters) ? 1u : 0u,
+                materialSlots, editorSelectedRenderable};
+            uniformBuffers[frame].update(&data, sizeof(data));
+        }
+
+        void updateSceneViewportUniformBuffer(const uint32_t frame) const {
+            const float aspect = static_cast<float>(sceneViewportTarget.extent().width) /
+                                 static_cast<float>(sceneViewportTarget.extent().height);
+            Camera sceneCamera{Degrees{60.0f}, aspect, 0.1f, 1000.0f};
+            sceneCamera.setPosition(cameraController.editorPosition());
+            sceneCamera.setRotation(Degrees{cameraController.editorYaw()},
+                                    Degrees{cameraController.editorPitch()});
+            const DirectionalLight light = directionalLight();
+            const UniformBufferObject data{
+                sceneCamera.viewMatrix(), sceneCamera.projectionMatrix(), lightSpaceMatrix(),
+                glm::vec4{sceneCamera.position().native(), 1.0f},
+                glm::vec4{light.direction.native(), light.intensity},
+                glm::vec4{light.color.r(), light.color.g(), light.color.b(), 1.0f},
+                (optimizationFeatures.shadows && hasShadowCasters) ? 1u : 0u,
+                materialSlots, editorSelectedRenderable};
+            sceneUniformBuffers[frame].update(&data, sizeof(data));
+        }
+
+        void recordCommandBuffer(VkCommandBuffer commandBuffer, uint32_t imageIndex) {
+            VkCommandBufferBeginInfo beginInfo{};
+            beginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+
+            if (vkBeginCommandBuffer(commandBuffer, &beginInfo) != VK_SUCCESS) {
+                throw std::runtime_error("Could not begin command buffer");
+            }
+            // Culling runs before this frame's depth pass, so it consumes the
+            // Hi-Z result from the previous frame. On the first frame there is
+            // no previous result, but the descriptor is still bound and the
+            // image must be in the layout declared in that descriptor. The
+            // culling uniform's cameraCut flag disables occlusion testing for
+            // this frame, so an undefined image contents is acceptable after
+            // this layout transition.
+            const bool hizEnabled = canUseHiZOcclusionCulling();
+            const bool hadPreviousHiZ = hiZValid;
+            // The culling descriptor set always contains the Hi-Z image. Keep
+            // its layout valid before the compute culling dispatch, even when
+            // that dispatch skips occlusion testing.
+            if (optimizationFeatures.gpuCulling && !hadPreviousHiZ) {
+                VkImageMemoryBarrier2 initialBarrier{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2};
+                initialBarrier.srcStageMask = VK_PIPELINE_STAGE_2_NONE;
+                initialBarrier.dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+                initialBarrier.dstAccessMask = VK_ACCESS_2_SHADER_SAMPLED_READ_BIT;
+                initialBarrier.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+                initialBarrier.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+                initialBarrier.image = hiZBuffer.image();
+                initialBarrier.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0,
+                                                   hiZBuffer.mipCount(), 0, 1};
+
+                VkDependencyInfo initialDependency{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
+                initialDependency.imageMemoryBarrierCount = 1;
+                initialDependency.pImageMemoryBarriers = &initialBarrier;
+                vkCmdPipelineBarrier2(commandBuffer, &initialDependency);
+            }
+
+            if (particleSystem) {
+                particleSystem->recordCompute(commandBuffer, particleComputePipeline,
+                                              particleComputePipelineLayout, currentFrame);
+            }
+
+            // The forward descriptor layout always contains the shadow-map
+            // sampler. Even when shadows are disabled, run an empty shadow
+            // pass so its image is transitioned from UNDEFINED to
+            // SHADER_READ_ONLY_OPTIMAL before the descriptor is used.
+            shadowPass.record(
+                commandBuffer, lightSpaceMatrix(), vertexBuffer.handle(),
+                shadowInstanceBuffers[currentFrame].handle(), indexBuffer.handle(),
+                shadowPass.descriptorSet(currentFrame),
+                shadowCullingPasses[currentFrame],
+                shadowIndirectDraws[currentFrame],
+                optimizationFeatures.shadows
+                    ? static_cast<std::uint32_t>(gpuObjects.size())
+                    : 0u);
+
+            // Scene View has its own descriptor pass and therefore its own
+            // shadow-map image. It must be transitioned as well, even when
+            // shadows are disabled, because the forward fragment shader still
+            // samples the shadow binding declared by the shared pipeline.
+            sceneDescriptorPass.record(
+                commandBuffer, lightSpaceMatrix(), vertexBuffer.handle(),
+                shadowInstanceBuffers[currentFrame].handle(), indexBuffer.handle(),
+                sceneDescriptorPass.descriptorSet(currentFrame),
+                shadowCullingPasses[currentFrame],
+                shadowIndirectDraws[currentFrame],
+                optimizationFeatures.shadows
+                    ? static_cast<std::uint32_t>(gpuObjects.size())
+                    : 0u);
+
+            gpuCullingPasses[currentFrame].record(
+                commandBuffer, static_cast<std::uint32_t>(gpuObjects.size()));
+
+            // Never sample or resolve the multisampled depth attachment for
+            // Hi-Z.  A separate 1x prepass gives the hierarchy a conventional
+            // sampler2D source, then the main forward pass can use MSAA solely
+            // for the visible rasterization.
+            if (hizEnabled && msaa.enabled()) {
+                hiZDepthPrepass.begin(
+                    commandBuffer, hiZDepthPrepassFramebuffer, swapchain.extent(),
+                    shadowPass.descriptorSet(currentFrame), vertexBuffer.handle(),
+                    instanceBuffers[currentFrame].handle(), indexBuffer.handle());
+                ForwardPass::draw(commandBuffer, indirectDraws[currentFrame]);
+                ForwardPass::end(commandBuffer);
+
+                VkImageMemoryBarrier2 depthReady{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2};
+                depthReady.srcStageMask = VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT;
+                depthReady.srcAccessMask = VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
+                depthReady.dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+                depthReady.dstAccessMask = VK_ACCESS_2_SHADER_SAMPLED_READ_BIT;
+                // ForwardPass's render pass transitions the depth attachment
+                // to READ_ONLY on exit, including its first use. Keep the
+                // layout unchanged here and only add the visibility barrier.
+                depthReady.oldLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL;
+                depthReady.newLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL;
+                depthReady.image = hiZDepthBuffer.image();
+                depthReady.subresourceRange = {VK_IMAGE_ASPECT_DEPTH_BIT, 0, 1, 0, 1};
+                VkDependencyInfo depthDependency{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
+                depthDependency.imageMemoryBarrierCount = 1;
+                depthDependency.pImageMemoryBarriers = &depthReady;
+                vkCmdPipelineBarrier2(commandBuffer, &depthDependency);
+                hiZPass.record(commandBuffer, hiZBuffer, true);
+                hiZValid = true;
+            }
+
+            forwardPass.begin(
+                commandBuffer, hdrFramebuffer, swapchain.extent(),
+                shadowPass.descriptorSet(currentFrame), vertexBuffer.handle(),
+                instanceBuffers[currentFrame].handle(), indexBuffer.handle());
+            ForwardPass::draw(commandBuffer, indirectDraws[currentFrame]);
+            // Fill the background before drawing particles. Otherwise the
+            // skybox can overwrite transparent particle fragments in the sky.
+            skyPass.record(commandBuffer, currentFrame);
+            if (particleSystem && cameraController.camera()) {
+                const Particles::ParticleFrameData particleFrame{
+                    cameraController.camera()->projectionMatrix() * cameraController.camera()->viewMatrix(),
+                    cameraController.camera()->right(),
+                    0.0f,
+                    cameraController.camera()->up(),
+                    0.0f,
+                };
+                particleSystem->recordRender(commandBuffer, particleFrame,
+                                             particlePipeline.handle(), particlePipeline.layout(),
+                                              currentFrame, false);
+            }
+            forwardPass.drawOutline(commandBuffer, shadowPass.descriptorSet(currentFrame),
+                                    indirectDraws[currentFrame]);
+            ForwardPass::end(commandBuffer);
+
+            // Render the scene into an off-screen image with the very same
+            // scene data and draw infrastructure as Game View. At this stage
+            // the scene camera descriptor is still wired in the following
+            // change; keeping the pass here gives the target a real render
+            // lifecycle immediately instead of merely clearing an image.
+            forwardPass.begin(
+                commandBuffer, sceneViewportFramebuffer, sceneViewportTarget.extent(),
+                sceneDescriptorPass.descriptorSet(currentFrame), vertexBuffer.handle(),
+                instanceBuffers[currentFrame].handle(), indexBuffer.handle());
+            ForwardPass::draw(commandBuffer, indirectDraws[currentFrame]);
+            sceneSkyPass.record(commandBuffer, currentFrame);
+            if (particleSystem) {
+                Camera sceneCamera{Degrees{60.0f},
+                                   static_cast<float>(sceneViewportTarget.extent().width) /
+                                       static_cast<float>(sceneViewportTarget.extent().height),
+                                   0.1f, 1000.0f};
+                sceneCamera.setPosition(cameraController.editorPosition());
+                sceneCamera.setRotation(Degrees{cameraController.editorYaw()},
+                                        Degrees{cameraController.editorPitch()});
+                const Particles::ParticleFrameData particleFrame{
+                    sceneCamera.projectionMatrix() * sceneCamera.viewMatrix(),
+                    sceneCamera.right(),
+                    0.0f,
+                    sceneCamera.up(),
+                    0.0f,
+                };
+                particleSystem->recordRender(commandBuffer, particleFrame,
+                                             particlePipeline.handle(), particlePipeline.layout(),
+                                              currentFrame, true);
+            }
+            forwardPass.drawOutline(commandBuffer, sceneDescriptorPass.descriptorSet(currentFrame),
+                                    indirectDraws[currentFrame]);
+            ForwardPass::end(commandBuffer);
+
+            if (hizEnabled && !msaa.enabled()) {
+                VkImageMemoryBarrier2 depthReady{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2};
+                depthReady.srcStageMask = VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT;
+                depthReady.srcAccessMask = VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
+                depthReady.dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+                depthReady.dstAccessMask = VK_ACCESS_2_SHADER_SAMPLED_READ_BIT;
+                // The forward render pass already leaves depth in READ_ONLY.
+                // This barrier supplies visibility for the following compute
+                // pass without inventing an UNDEFINED transition.
+                depthReady.oldLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL;
+                depthReady.newLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL;
+                depthReady.image = depthBuffer.image();
+                depthReady.subresourceRange = {VK_IMAGE_ASPECT_DEPTH_BIT, 0, 1, 0, 1};
+                VkDependencyInfo depthDependency{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
+                depthDependency.imageMemoryBarrierCount = 1;
+                depthDependency.pImageMemoryBarriers = &depthReady;
+                vkCmdPipelineBarrier2(commandBuffer, &depthDependency);
+                // The first-frame initialization above establishes a valid image
+                // layout, so HiZPass must transition from SHADER_READ_ONLY rather
+                // than from UNDEFINED when it builds the first hierarchy.
+                hiZPass.record(commandBuffer, hiZBuffer, true);
+                hiZValid = true;
+            }
+
+            if (editorUiActive) {
+                VkRenderPassBeginInfo pass{VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO};
+                pass.renderPass = editorUiRenderPass;
+                pass.framebuffer = editorUiFramebuffers.at(imageIndex);
+                pass.renderArea.extent = swapchain.extent();
+                VkClearValue clear{};
+                clear.color = {{0.06f, 0.07f, 0.09f, 1.0f}};
+                pass.clearValueCount = 1;
+                pass.pClearValues = &clear;
+                vkCmdBeginRenderPass(commandBuffer, &pass, VK_SUBPASS_CONTENTS_INLINE);
+                ImGui_ImplVulkan_RenderDrawData(ImGui::GetDrawData(), commandBuffer);
+                vkCmdEndRenderPass(commandBuffer);
+            } else {
+                tonemapPass.record(commandBuffer, imageIndex, swapchain.extent());
+                canvasRenderer.record(scene.uiCanvas(), commandBuffer, imageIndex, currentFrame,
+                                      swapchain.extent());
+            }
+
+            if (vkEndCommandBuffer(commandBuffer) != VK_SUCCESS) {
+                throw std::runtime_error("Could not end command buffer");
+            }
+        }
+
+        void createSyncObjects() {
+            imageAvailableSemaphores.resize(MAX_FRAMES_IN_FLIGHT);
+            renderFinishedSemaphores.resize(swapchain.imageCount());
+            inFlightFences.resize(MAX_FRAMES_IN_FLIGHT);
+
+            VkSemaphoreCreateInfo semaphoreInfo{};
+            semaphoreInfo.sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO;
+
+            VkFenceCreateInfo fenceInfo{};
+            fenceInfo.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
+            fenceInfo.flags = VK_FENCE_CREATE_SIGNALED_BIT;
+
+            for (int i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
+                if (vkCreateSemaphore(device, &semaphoreInfo, nullptr, &imageAvailableSemaphores[i]) != VK_SUCCESS ||
+                    vkCreateFence(device, &fenceInfo, nullptr, &inFlightFences[i]) != VK_SUCCESS) {
+                    throw std::runtime_error("Could not create synchronization objects");
+                    }
+            }
+
+            createRenderFinishedSemaphores();
+        }
+
+        // ---------- SWAPCHAIN RECREATE ----------
+
+        void cleanupSwapChain() {
+            destroyEditorUiResources();
+            canvasRenderer.destroy();
+            tonemapPass.destroy();
+            if (hiZDepthPrepassFramebuffer != VK_NULL_HANDLE) {
+                vkDestroyFramebuffer(device, hiZDepthPrepassFramebuffer, nullptr);
+                hiZDepthPrepassFramebuffer = VK_NULL_HANDLE;
+            }
+            if (hdrFramebuffer != VK_NULL_HANDLE) {
+                vkDestroyFramebuffer(device, hdrFramebuffer, nullptr);
+                hdrFramebuffer = VK_NULL_HANDLE;
+            }
+            destroySceneViewportResources();
+
+            msaa.destroy();
+            hdrBuffer.destroy();
+            destroyDepthResources();
+            destroyRenderFinishedSemaphores();
+            swapchain.destroy();
+        }
+
+        void destroyRenderFinishedSemaphores() noexcept {
+            for (VkSemaphore semaphore : renderFinishedSemaphores) {
+                if (semaphore != VK_NULL_HANDLE) {
+                    vkDestroySemaphore(device, semaphore, nullptr);
+                }
+            }
+            renderFinishedSemaphores.clear();
+        }
+
+        void createRenderFinishedSemaphores() {
+            renderFinishedSemaphores.resize(swapchain.imageCount());
+
+            VkSemaphoreCreateInfo semaphoreInfo{};
+            semaphoreInfo.sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO;
+            for (VkSemaphore& semaphore : renderFinishedSemaphores) {
+                if (vkCreateSemaphore(device, &semaphoreInfo, nullptr, &semaphore) != VK_SUCCESS) {
+                    destroyRenderFinishedSemaphores();
+                    throw std::runtime_error("Could not create render-finished semaphore");
+                }
+            }
+        }
+
+        void recreateSwapChain() {
+            waitForDrawableExtent();
+
+            vkDeviceWaitIdle(device);
+
+            // The ImGui Vulkan backend owns swapchain-dependent render data.
+            // Tear down both ImGui backends before recreating the presentation
+            // resources, then register the SDL window again below.
+            destroyEditorUiResources();
+
+            if (hiZDepthPrepassFramebuffer != VK_NULL_HANDLE) {
+                vkDestroyFramebuffer(device, hiZDepthPrepassFramebuffer, nullptr);
+                hiZDepthPrepassFramebuffer = VK_NULL_HANDLE;
+            }
+            destroyCullingResources();
+
+            canvasRenderer.destroy();
+            tonemapPass.destroy();
+            if (hdrFramebuffer != VK_NULL_HANDLE) {
+                vkDestroyFramebuffer(device, hdrFramebuffer, nullptr);
+                hdrFramebuffer = VK_NULL_HANDLE;
+            }
+            destroySceneViewportResources();
+            msaa.destroy();
+            hdrBuffer.destroy();
+            destroyDepthResources();
+            destroyRenderFinishedSemaphores();
+
+            swapchain.recreate();
+            registry.view<CameraComponent>([&](const Entity, CameraComponent& component) {
+                if (component.primary) {
+                    component.setAspectRatio(static_cast<float>(swapchain.extent().width),
+                                             static_cast<float>(swapchain.extent().height));
+                }
+            });
+            hdrBuffer.create(vulkanDevice.physical(), device, swapchain.extent());
+            msaa.create(swapchain.extent(), HdrBuffer::Format);
+            createDepthResources();
+            createRenderFinishedSemaphores();
+
+            createFramebuffers();
+            createSceneViewportResources();
+            createTonemapPass();
+            createUIResources();
+            createEditorUiResources();
+            createCullingResources();
+        }
+
+        // ---------- MAIN LOOP ----------
+
+        void updateCameraInput() {
+            if (editorUiActive && !cameraController.editorInputEnabled()) return;
+            cameraController.update(window, registry);
+        }
+
+        void updateEditorSceneCameraInput() {
+            if (cameraController.editorInputEnabled()) cameraController.updateEditor(window);
+        }
+
+        void rebuildParticleColliderCache() {
+            cachedParticleColliders.clear();
+            particleColliderEntities.clear();
+            particleColliderIndices.clear();
+            cachedParticleColliders.reserve(registry.size());
+            particleColliderEntities.reserve(registry.size());
+            particleColliderIndices.reserve(registry.size());
+            const Registry& readRegistry = registry;
+            readRegistry.view<ColliderComponent, Transform>(
+                [&](const Entity entity, const ColliderComponent& collider, const Transform& transform) {
+                    particleColliderIndices.emplace(entity, cachedParticleColliders.size());
+                    cachedParticleColliders.push_back(RendererSceneHelpers::makeParticleCollider(collider, transform));
+                    particleColliderEntities.push_back(entity);
+                });
+        }
+
+        void removeParticleCollider(const Entity entity) {
+            const auto it = particleColliderIndices.find(entity);
+            if (it == particleColliderIndices.end()) return;
+            const std::size_t index = it->second;
+            const std::size_t last = cachedParticleColliders.size() - 1;
+            if (index != last) {
+                cachedParticleColliders[index] = cachedParticleColliders[last];
+                const Entity movedEntity = particleColliderEntities[last];
+                particleColliderEntities[index] = movedEntity;
+                particleColliderIndices[movedEntity] = index;
+            }
+            cachedParticleColliders.pop_back();
+            particleColliderEntities.pop_back();
+            particleColliderIndices.erase(it);
+        }
+
+        [[nodiscard]] bool synchronizeParticleColliders() {
+            const std::uint64_t structuralRevision = registry.structuralRevision();
+            const std::uint64_t colliderRevision = registry.componentRevision<ColliderComponent>();
+            const std::uint64_t transformRevision = registry.componentRevision<Transform>();
+            const bool rebuild = particleColliderRegistry != &registry ||
+                particleColliderStructuralRevision != structuralRevision;
+            bool cacheChanged = false;
+
+            if (rebuild) {
+                rebuildParticleColliderCache();
+                cacheChanged = true;
+            } else if (particleColliderComponentRevision != colliderRevision ||
+                       particleColliderTransformRevision != transformRevision) {
+                std::unordered_set<Entity> changed;
+                const auto addChanged = [&](const auto& entities) {
+                    changed.insert(entities.begin(), entities.end());
+                };
+                addChanged(registry.componentEntitiesChangedSince<ColliderComponent>(
+                    particleColliderComponentRevision));
+                addChanged(registry.componentEntitiesChangedSince<Transform>(
+                    particleColliderTransformRevision));
+
+                const Registry& readRegistry = registry;
+                for (const Entity entity : changed) {
+                    if (!readRegistry.valid(entity) ||
+                        !readRegistry.has<ColliderComponent>(entity) ||
+                        !readRegistry.has<Transform>(entity)) {
+                        removeParticleCollider(entity);
+                        cacheChanged = true;
+                        continue;
+                    }
+                    const Particles::ParticleCollider value = RendererSceneHelpers::makeParticleCollider(
+                        readRegistry.get<ColliderComponent>(entity),
+                        readRegistry.get<Transform>(entity));
+                    if (const auto it = particleColliderIndices.find(entity);
+                        it != particleColliderIndices.end()) {
+                        cachedParticleColliders[it->second] = value;
+                    } else {
+                        particleColliderIndices.emplace(entity, cachedParticleColliders.size());
+                        cachedParticleColliders.push_back(value);
+                        particleColliderEntities.push_back(entity);
+                    }
+                    cacheChanged = true;
+                }
+            }
+
+            particleColliderRegistry = &registry;
+            particleColliderStructuralRevision = structuralRevision;
+            particleColliderComponentRevision = colliderRevision;
+            particleColliderTransformRevision = transformRevision;
+            return cacheChanged;
+        }
+
+        void drawFrame() {
+            // A minimized window has no presentable Vulkan extent.  Do not
+            // acquire or recreate resources until it becomes drawable again.
+            if (!hasDrawableExtent()) return;
+
+            vkWaitForFences(device, 1, &inFlightFences[currentFrame], VK_TRUE, UINT64_MAX);
+            uint32_t imageIndex;
+            VkResult result = vkAcquireNextImageKHR(device, swapchain.handle(), UINT64_MAX,
+                imageAvailableSemaphores[currentFrame], VK_NULL_HANDLE, &imageIndex);
+
+            if (result == VK_ERROR_OUT_OF_DATE_KHR) {
+                recreateSwapChain();
+                return;
+            } else if (result != VK_SUCCESS && result != VK_SUBOPTIMAL_KHR) {
+                throw std::runtime_error("Could not acquire swap chain image");
+            }
+
+            vkResetFences(device, 1, &inFlightFences[currentFrame]);
+
+            vkResetCommandBuffer(commandBuffers[currentFrame], 0);
+            updateUniformBuffer(currentFrame);
+            updateSceneViewportUniformBuffer(currentFrame);
+            updateRenderableBuffers();
+            if (particleSystem) {
+                if (scene.particleEntity() != NullEntity &&
+                    (registry.has<ParticleEmitterComponent>(scene.particleEntity()) || registry.has<SmokeEmitterComponent>(scene.particleEntity()))) {
+                    if (registry.has<SmokeEmitterComponent>(scene.particleEntity())) {
+                    auto emitter = registry.get<SmokeEmitterComponent>(scene.particleEntity()).emitter;
+                    if (registry.has<Transform>(scene.particleEntity())) {
+                        emitter.position = registry.get<Transform>(scene.particleEntity()).position;
+                    }
+                    if (registry.has<ColorPickerComponent>(scene.particleEntity())) {
+                        emitter.color = registry.get<ColorPickerComponent>(scene.particleEntity()).color;
+                    }
+                    particleSystem->setEmitter(emitter);
+                    } else {
+                    auto emitter = registry.get<ParticleEmitterComponent>(scene.particleEntity()).emitter;
+                    if (registry.has<Transform>(scene.particleEntity())) emitter.position = registry.get<Transform>(scene.particleEntity()).position;
+                    if (registry.has<ColorPickerComponent>(scene.particleEntity())) emitter.color = registry.get<ColorPickerComponent>(scene.particleEntity()).color;
+                    particleSystem->setEmitter(emitter);
+                    }
+                }
+                if (synchronizeParticleColliders()) {
+                    particleSystem->setColliders(cachedParticleColliders);
+                }
+                particleSystem->update(static_cast<float>(Time::deltaTime()));
+            }
+            updateCullingUniformBuffer(currentFrame);
+            if (optimizationFeatures.shadows) {
+                updateShadowCullingUniformBuffer(currentFrame);
+            }
+            recordCommandBuffer(commandBuffers[currentFrame], imageIndex);
+
+            VkSubmitInfo submitInfo{};
+            submitInfo.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+
+            VkSemaphore waitSemaphores[] = {imageAvailableSemaphores[currentFrame]};
+            VkPipelineStageFlags waitStages[] = {VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT};
+            submitInfo.waitSemaphoreCount = 1;
+            submitInfo.pWaitSemaphores = waitSemaphores;
+            submitInfo.pWaitDstStageMask = waitStages;
+            submitInfo.commandBufferCount = 1;
+            submitInfo.pCommandBuffers = &commandBuffers[currentFrame];
+
+            VkSemaphore signalSemaphores[] = {renderFinishedSemaphores[imageIndex]};
+            submitInfo.signalSemaphoreCount = 1;
+            submitInfo.pSignalSemaphores = signalSemaphores;
+
+            const VkResult submitResult = vkQueueSubmit(
+                vulkanDevice.graphicsQueue(), 1, &submitInfo, inFlightFences[currentFrame]);
+            if (submitResult != VK_SUCCESS) {
+                throw std::runtime_error(
+                    "Could not submit command buffer to queue (VkResult " +
+                    std::to_string(static_cast<int>(submitResult)) + ")");
+            }
+            VkPresentInfoKHR presentInfo{};
+            presentInfo.sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR;
+            presentInfo.waitSemaphoreCount = 1;
+            presentInfo.pWaitSemaphores = signalSemaphores;
+
+            VkSwapchainKHR swapChains[] = {swapchain.handle()};
+            presentInfo.swapchainCount = 1;
+            presentInfo.pSwapchains = swapChains;
+            presentInfo.pImageIndices = &imageIndex;
+
+            result = vkQueuePresentKHR(vulkanDevice.presentQueue(), &presentInfo);
+
+            if (result == VK_ERROR_OUT_OF_DATE_KHR || result == VK_SUBOPTIMAL_KHR || framebufferResized) {
+                framebufferResized = false;
+                recreateSwapChain();
+            } else if (result != VK_SUCCESS) {
+                throw std::runtime_error("Could not present image");
+            }
+
+            currentFrame = (currentFrame + 1) % MAX_FRAMES_IN_FLIGHT;
+        }
+
+        void updateFpsCounter() {
+            fpsFrameCount++;
+            fpsElapsedTime += Time::unscaledDeltaTime();
+
+            if (fpsElapsedTime >= 1.0) {
+                const double fps = fpsFrameCount / fpsElapsedTime;
+
+                char title[128];
+                snprintf(title, sizeof(title),
+                         "GamEngine | FPS: %.1f | Renderables: %zu",
+                         fps, renderables.size());
+                SDL_SetWindowTitle(window, title);
+
+                fpsFrameCount = 0;
+                fpsElapsedTime = 0.0;
+            }
+        }
+
+        // ---------- CLEANUP ----------
+
+
