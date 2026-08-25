@@ -63,10 +63,10 @@ ScenePreset::ScenePreset(const SceneType type) {
         if (!treeMesh_) throw std::runtime_error("Could not load Assets/Models/tree.glb");
     }
 
-    const float halfExtent = ((CubesPerAxis - 1) * CubeSpacing + 1.0f) * 0.5f;
+    constexpr float halfExtent = (((CubesPerAxis - 1) * CubeSpacing) + 1.0F) * 0.5f;
     auto& planeObject = createMeshObject("Plane", planeMesh_,
         treeScene ? PBRMaterial{.baseColor = {0.24f, 0.16f, 0.08f}, .roughness = 0.9f} : PBRMaterial{});
-    planeObject.setScale(treeScene ? Vec3{10, 1, 10} : Vec3{halfExtent * 2 + 4, 1, halfExtent * 2 + 4});
+    planeObject.setScale(treeScene ? Vec3{10, 1, 10} : Vec3{(halfExtent * 2) + 4, 1, (halfExtent * 2) + 4});
     planeObject.setCastShadow(false);
     plane = planeObject.entity();
     planeObject.add<ColliderComponent>(ColliderComponent{
