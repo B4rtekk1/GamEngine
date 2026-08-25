@@ -8,6 +8,7 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 option(GAMEENGINE_ENABLE_WARNINGS "Enable strict compiler warnings" ON)
 option(GAMEENGINE_WARNINGS_AS_ERRORS "Treat compiler warnings as errors" OFF)
+option(GAMEENGINE_ENABLE_SANITIZERS "Enable AddressSanitizer and UndefinedBehaviorSanitizer where supported" OFF)
 
 function(gameengine_enable_warnings target)
     if(NOT GAMEENGINE_ENABLE_WARNINGS)
@@ -23,6 +24,28 @@ function(gameengine_enable_warnings target)
         target_compile_options(${target} PRIVATE -Wall -Wextra -Wpedantic)
         if(GAMEENGINE_WARNINGS_AS_ERRORS)
             target_compile_options(${target} PRIVATE -Werror)
+        endif()
+    endif()
+endfunction()
+
+function(gameengine_enable_sanitizers target)
+    if(NOT GAMEENGINE_ENABLE_SANITIZERS)
+        return()
+    endif()
+
+    get_target_property(target_type ${target} TYPE)
+
+    if(MSVC)
+        target_compile_options(${target} PRIVATE /fsanitize=address)
+        if(NOT target_type STREQUAL "STATIC_LIBRARY")
+            target_link_options(${target} PRIVATE /INFERASANLIBS)
+        endif()
+    elseif(CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU")
+        target_compile_options(${target} PRIVATE
+            -fsanitize=address,undefined
+            -fno-omit-frame-pointer)
+        if(NOT target_type STREQUAL "STATIC_LIBRARY")
+            target_link_options(${target} PRIVATE -fsanitize=address,undefined)
         endif()
     endif()
 endfunction()
@@ -112,6 +135,7 @@ add_library(Engine
         Platform/SDL/SDLInput.cpp
 )
 gameengine_enable_warnings(Engine)
+gameengine_enable_sanitizers(Engine)
 
 target_link_libraries(Engine PUBLIC SDL3::SDL3 Vulkan::Vulkan PRIVATE DearImGui)
 target_include_directories(Engine
@@ -130,6 +154,7 @@ add_executable(Editor
         Editor/Source/Panels/EditorStyle.cpp
         Editor/Source/Panels/EditorSceneSession.cpp)
 gameengine_enable_warnings(Editor)
+gameengine_enable_sanitizers(Editor)
 target_include_directories(Editor PRIVATE Editor/Include)
 target_link_libraries(Editor PRIVATE DearImGui Engine SDL3::SDL3 Vulkan::Vulkan)
 target_compile_definitions(Editor PRIVATE GAMEENGINE_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
@@ -353,5 +378,7 @@ if(BUILD_TESTING)
         RenderConfigTests CullingTypesTests TrigonometryTests)
     foreach(test_target IN LISTS GAMEENGINE_TEST_TARGETS)
         gameengine_enable_warnings(${test_target})
+        gameengine_enable_sanitizers(${test_target})
     endforeach()
+    set_tests_properties(${GAMEENGINE_TEST_TARGETS} PROPERTIES LABELS "unit")
 endif()

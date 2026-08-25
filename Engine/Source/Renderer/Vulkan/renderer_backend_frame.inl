@@ -1,7 +1,8 @@
         struct DirectionalLight final {
+            static constexpr float defaultIntensity{4.0F};
             Vec3 direction{-0.45f, -0.80f, -0.35f};
             Math::Color color = Math::Color::white();
-            float intensity{4.0f};
+            float intensity{defaultIntensity};
         };
 
         [[nodiscard]] DirectionalLight directionalLight() const {
@@ -79,7 +80,11 @@
             sceneUniformBuffers[frame].update(&data, sizeof(data));
         }
 
-        void recordCommandBuffer(VkCommandBuffer commandBuffer, uint32_t imageIndex) {
+        struct SwapchainImageIndex final {
+            uint32_t value;
+        };
+
+        void recordCommandBuffer(VkCommandBuffer commandBuffer, const SwapchainImageIndex imageIndex) {
             VkCommandBufferBeginInfo beginInfo{};
             beginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
 
@@ -229,9 +234,9 @@
                 const Particles::ParticleFrameData particleFrame{
                     sceneCamera.projectionMatrix() * sceneCamera.viewMatrix(),
                     sceneCamera.right(),
-                    0.0f,
+                    0.0F,
                     sceneCamera.up(),
-                    0.0f,
+                    0.0F,
                 };
                 particleSystem->recordRender(commandBuffer, particleFrame,
                                              particlePipeline.handle(), particlePipeline.layout(),
@@ -268,18 +273,21 @@
             if (editorUiActive) {
                 VkRenderPassBeginInfo pass{VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO};
                 pass.renderPass = editorUiRenderPass;
-                pass.framebuffer = editorUiFramebuffers.at(imageIndex);
+                pass.framebuffer = editorUiFramebuffers.at(imageIndex.value);
                 pass.renderArea.extent = swapchain.extent();
+                constexpr float editorClearRed{0.06F};
+                constexpr float editorClearGreen{0.07F};
+                constexpr float editorClearBlue{0.09F};
                 VkClearValue clear{};
-                clear.color = {{0.06f, 0.07f, 0.09f, 1.0f}};
+                clear.color = {{editorClearRed, editorClearGreen, editorClearBlue, 1.0F}};
                 pass.clearValueCount = 1;
                 pass.pClearValues = &clear;
                 vkCmdBeginRenderPass(commandBuffer, &pass, VK_SUBPASS_CONTENTS_INLINE);
                 ImGui_ImplVulkan_RenderDrawData(ImGui::GetDrawData(), commandBuffer);
                 vkCmdEndRenderPass(commandBuffer);
             } else {
-                tonemapPass.record(commandBuffer, imageIndex, swapchain.extent());
-                canvasRenderer.record(scene.uiCanvas(), commandBuffer, imageIndex, currentFrame,
+                tonemapPass.record(commandBuffer, imageIndex.value, swapchain.extent());
+                canvasRenderer.record(scene.uiCanvas(), commandBuffer, imageIndex.value, currentFrame,
                                       swapchain.extent());
             }
 
@@ -406,7 +414,7 @@
         // ---------- MAIN LOOP ----------
 
         void updateCameraInput() {
-            if (editorUiActive && !cameraController.editorInputEnabled()) return;
+            if (editorUiActive && !cameraController.editorInputEnabled()) { return; }
             cameraController.update(window, registry);
         }
 
@@ -431,9 +439,9 @@
         }
 
         void removeParticleCollider(const Entity entity) {
-            const auto it = particleColliderIndices.find(entity);
-            if (it == particleColliderIndices.end()) return;
-            const std::size_t index = it->second;
+            const auto colliderIterator = particleColliderIndices.find(entity);
+            if (colliderIterator == particleColliderIndices.end()) { return; }
+            const std::size_t index = colliderIterator->second;
             const std::size_t last = cachedParticleColliders.size() - 1;
             if (index != last) {
                 cachedParticleColliders[index] = cachedParticleColliders[last];
@@ -443,7 +451,7 @@
             }
             cachedParticleColliders.pop_back();
             particleColliderEntities.pop_back();
-            particleColliderIndices.erase(it);
+            particleColliderIndices.erase(colliderIterator);
         }
 
         [[nodiscard]] bool synchronizeParticleColliders() {
@@ -480,9 +488,9 @@
                     const Particles::ParticleCollider value = RendererSceneHelpers::makeParticleCollider(
                         readRegistry.get<ColliderComponent>(entity),
                         readRegistry.get<Transform>(entity));
-                    if (const auto it = particleColliderIndices.find(entity);
-                        it != particleColliderIndices.end()) {
-                        cachedParticleColliders[it->second] = value;
+                    if (const auto colliderIterator = particleColliderIndices.find(entity);
+                        colliderIterator != particleColliderIndices.end()) {
+                        cachedParticleColliders[colliderIterator->second] = value;
                     } else {
                         particleColliderIndices.emplace(entity, cachedParticleColliders.size());
                         cachedParticleColliders.push_back(value);
@@ -499,59 +507,57 @@
             return cacheChanged;
         }
 
-        void drawFrame() {
-            // A minimized window has no presentable Vulkan extent.  Do not
-            // acquire or recreate resources until it becomes drawable again.
-            if (!hasDrawableExtent()) return;
-
+        [[nodiscard]] bool acquireFrameImage(uint32_t& imageIndex) {
             vkWaitForFences(device, 1, &inFlightFences[currentFrame], VK_TRUE, UINT64_MAX);
-            uint32_t imageIndex;
-            VkResult result = vkAcquireNextImageKHR(device, swapchain.handle(), UINT64_MAX,
+            const VkResult result = vkAcquireNextImageKHR(device, swapchain.handle(), UINT64_MAX,
                 imageAvailableSemaphores[currentFrame], VK_NULL_HANDLE, &imageIndex);
 
             if (result == VK_ERROR_OUT_OF_DATE_KHR) {
                 recreateSwapChain();
-                return;
-            } else if (result != VK_SUCCESS && result != VK_SUBOPTIMAL_KHR) {
+                return false;
+            } if (result != VK_SUCCESS && result != VK_SUBOPTIMAL_KHR) {
                 throw std::runtime_error("Could not acquire swap chain image");
             }
 
             vkResetFences(device, 1, &inFlightFences[currentFrame]);
+            return true;
+        }
 
-            vkResetCommandBuffer(commandBuffers[currentFrame], 0);
-            updateUniformBuffer(currentFrame);
-            updateSceneViewportUniformBuffer(currentFrame);
-            updateRenderableBuffers();
-            if (particleSystem) {
-                if (scene.particleEntity() != NullEntity &&
-                    (registry.has<ParticleEmitterComponent>(scene.particleEntity()) || registry.has<SmokeEmitterComponent>(scene.particleEntity()))) {
-                    if (registry.has<SmokeEmitterComponent>(scene.particleEntity())) {
-                    auto emitter = registry.get<SmokeEmitterComponent>(scene.particleEntity()).emitter;
-                    if (registry.has<Transform>(scene.particleEntity())) {
-                        emitter.position = registry.get<Transform>(scene.particleEntity()).position;
+        void updateParticleSystemForFrame() {
+            if (!particleSystem) { return; }
+
+            const Entity particleEntity = scene.particleEntity();
+            const bool hasEmitter = particleEntity != NullEntity &&
+                (registry.has<ParticleEmitterComponent>(particleEntity) ||
+                 registry.has<SmokeEmitterComponent>(particleEntity));
+            if (hasEmitter) {
+                if (registry.has<SmokeEmitterComponent>(particleEntity)) {
+                    auto emitter = registry.get<SmokeEmitterComponent>(particleEntity).emitter;
+                    if (registry.has<Transform>(particleEntity)) {
+                        emitter.position = registry.get<Transform>(particleEntity).position;
                     }
-                    if (registry.has<ColorPickerComponent>(scene.particleEntity())) {
-                        emitter.color = registry.get<ColorPickerComponent>(scene.particleEntity()).color;
+                    if (registry.has<ColorPickerComponent>(particleEntity)) {
+                        emitter.color = registry.get<ColorPickerComponent>(particleEntity).color;
                     }
                     particleSystem->setEmitter(emitter);
-                    } else {
-                    auto emitter = registry.get<ParticleEmitterComponent>(scene.particleEntity()).emitter;
-                    if (registry.has<Transform>(scene.particleEntity())) emitter.position = registry.get<Transform>(scene.particleEntity()).position;
-                    if (registry.has<ColorPickerComponent>(scene.particleEntity())) emitter.color = registry.get<ColorPickerComponent>(scene.particleEntity()).color;
-                    particleSystem->setEmitter(emitter);
+                } else {
+                    auto emitter = registry.get<ParticleEmitterComponent>(particleEntity).emitter;
+                    if (registry.has<Transform>(particleEntity)) {
+                        emitter.position = registry.get<Transform>(particleEntity).position;
                     }
+                    if (registry.has<ColorPickerComponent>(particleEntity)) {
+                        emitter.color = registry.get<ColorPickerComponent>(particleEntity).color;
+                    }
+                    particleSystem->setEmitter(emitter);
                 }
-                if (synchronizeParticleColliders()) {
-                    particleSystem->setColliders(cachedParticleColliders);
-                }
-                particleSystem->update(static_cast<float>(Time::deltaTime()));
             }
-            updateCullingUniformBuffer(currentFrame);
-            if (optimizationFeatures.shadows) {
-                updateShadowCullingUniformBuffer(currentFrame);
+            if (synchronizeParticleColliders()) {
+                particleSystem->setColliders(cachedParticleColliders);
             }
-            recordCommandBuffer(commandBuffers[currentFrame], imageIndex);
+            particleSystem->update(static_cast<float>(Time::deltaTime()));
+        }
 
+        void submitAndPresentFrame(const uint32_t imageIndex) {
             VkSubmitInfo submitInfo{};
             submitInfo.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
 
@@ -584,7 +590,7 @@
             presentInfo.pSwapchains = swapChains;
             presentInfo.pImageIndices = &imageIndex;
 
-            result = vkQueuePresentKHR(vulkanDevice.presentQueue(), &presentInfo);
+            const VkResult result = vkQueuePresentKHR(vulkanDevice.presentQueue(), &presentInfo);
 
             if (result == VK_ERROR_OUT_OF_DATE_KHR || result == VK_SUBOPTIMAL_KHR || framebufferResized) {
                 framebufferResized = false;
@@ -592,6 +598,28 @@
             } else if (result != VK_SUCCESS) {
                 throw std::runtime_error("Could not present image");
             }
+
+        }
+
+        void drawFrame() {
+            // A minimized window has no presentable Vulkan extent.  Do not
+            // acquire or recreate resources until it becomes drawable again.
+            if (!hasDrawableExtent()) { return; }
+
+            uint32_t imageIndex;
+            if (!acquireFrameImage(imageIndex)) { return; }
+
+            vkResetCommandBuffer(commandBuffers[currentFrame], 0);
+            updateUniformBuffer(currentFrame);
+            updateSceneViewportUniformBuffer(currentFrame);
+            updateRenderableBuffers();
+            updateParticleSystemForFrame();
+            updateCullingUniformBuffer(currentFrame);
+            if (optimizationFeatures.shadows) {
+                updateShadowCullingUniformBuffer(currentFrame);
+            }
+            recordCommandBuffer(commandBuffers[currentFrame], SwapchainImageIndex{imageIndex});
+            submitAndPresentFrame(imageIndex);
 
             currentFrame = (currentFrame + 1) % MAX_FRAMES_IN_FLIGHT;
         }
@@ -603,7 +631,8 @@
             if (fpsElapsedTime >= 1.0) {
                 const double fps = fpsFrameCount / fpsElapsedTime;
 
-                char title[128];
+                constexpr std::size_t windowTitleBufferSize{128};
+                char title[windowTitleBufferSize];
                 snprintf(title, sizeof(title),
                          "GamEngine | FPS: %.1f | Renderables: %zu",
                          fps, renderables.size());
@@ -615,5 +644,3 @@
         }
 
         // ---------- CLEANUP ----------
-
-
