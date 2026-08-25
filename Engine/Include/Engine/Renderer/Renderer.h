@@ -39,6 +39,8 @@ public:
     void beginEditorUiFrame() const;
     void processEvent(const void* nativeEvent) const;
     void setEditorSceneCameraInput(bool active) const;
+    /** Updates Scene View navigation before its UI overlays are drawn. */
+    void updateEditorSceneCameraInput() const;
     void setEditorSelection(Entity entity) const;
     void renderFrame() const;
     void synchronizeScene(Scene& scene) const;
@@ -50,6 +52,8 @@ public:
     [[nodiscard]] float editorCameraYaw() const noexcept;
     [[nodiscard]] float editorCameraPitch() const noexcept;
     [[nodiscard]] Vec3 editorCameraPosition() const noexcept;
+    /** World-space center of an entity's rendered bounds, or its transform position. */
+    [[nodiscard]] Vec3 editorGizmoPosition(Entity entity) const noexcept;
     /** Rotates the Scene View camera without changing its position. */
     void setEditorCameraRotation(float yaw, float pitch) const noexcept;
     void shutdown() noexcept;

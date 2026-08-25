@@ -195,6 +195,37 @@ float distanceToLineSegment(const ImVec2 point, const ImVec2 start, const ImVec2
     return std::hypot(point.x - closest.x, point.y - closest.y);
 }
 
+Engine::Vec3 viewportRayDirection(const Engine::Camera& camera, const ImVec2 mouse,
+                                  const ImVec2 min, const ImVec2 max) {
+    constexpr float halfFovTangent = 0.57735026919f; // tan(60° / 2)
+    const float aspect = (max.x - min.x) / std::max(max.y - min.y, 1.0f);
+    const float normalizedX = ((mouse.x - min.x) / (max.x - min.x)) * 2.0f - 1.0f;
+    const float normalizedY = ((mouse.y - min.y) / (max.y - min.y)) * 2.0f - 1.0f;
+    return (camera.forward() + camera.right() * (normalizedX * aspect * halfFovTangent) -
+            camera.up() * (normalizedY * halfFovTangent)).normalized();
+}
+
+bool intersectRayPlane(const Engine::Vec3& rayOrigin, const Engine::Vec3& rayDirection,
+                       const Engine::Vec3& planeOrigin, const Engine::Vec3& planeNormal,
+                       Engine::Vec3& intersection) {
+    const float denominator = dotProduct(rayDirection, planeNormal);
+    if (std::abs(denominator) < 0.0001f) return false;
+    const float distance = dotProduct(planeOrigin - rayOrigin, planeNormal) / denominator;
+    if (distance < 0.0f) return false;
+    intersection = rayOrigin + rayDirection * distance;
+    return true;
+}
+
+float gizmoWorldSize(const Engine::Camera& camera, const Engine::Vec3& origin,
+                     const ImVec2 min, const ImVec2 max) {
+    constexpr float halfFovTangent = 0.57735026919f; // tan(60° / 2)
+    constexpr float desiredPixels = 112.0f;
+    const float depth = std::max(dotProduct(origin - camera.position(), camera.forward()), 0.1f);
+    return std::clamp(depth * 2.0f * halfFovTangent * desiredPixels /
+                          std::max(max.y - min.y, 1.0f),
+                      0.15f, 100.0f);
+}
+
 bool drawTranslationGizmo(Engine::ScenePreset& scene, const Engine::Entity selected,
                           const Engine::Renderer& renderer, const ImVec2 min, const ImVec2 max) {
     if (selected == Engine::NullEntity || !scene.editor().valid(selected) ||
@@ -204,25 +235,21 @@ bool drawTranslationGizmo(Engine::ScenePreset& scene, const Engine::Entity selec
     camera.setPosition(renderer.editorCameraPosition());
     camera.setRotation(Engine::Degrees{renderer.editorCameraYaw()},
                        Engine::Degrees{renderer.editorCameraPitch()});
-    const Engine::Vec3 origin = scene.editor().get<Engine::Transform>(selected).position;
+    Engine::Vec3 origin = renderer.editorGizmoPosition(selected);
+    float gizmoSize = gizmoWorldSize(camera, origin, min, max);
     const Engine::Vec3 axes[3]{{1.0f, 0.0f, 0.0f}, {0.0f, 1.0f, 0.0f}, {0.0f, 0.0f, 1.0f}};
     const ImU32 colors[3]{IM_COL32(235, 70, 70, 255), IM_COL32(70, 235, 100, 255),
                           IM_COL32(70, 130, 245, 255)};
     const ImVec2 mouse = ImGui::GetIO().MousePos;
     ImDrawList* drawList = ImGui::GetWindowDrawList();
-    const ImVec2 originScreen = projectGizmoPoint(camera, origin, min, max);
+    ImVec2 originScreen = projectGizmoPoint(camera, origin, min, max);
     int hoveredAxis = -1;
     ImVec2 axisEnds[3]{};
     for (int axis = 0; axis < 3; ++axis) {
-        axisEnds[axis] = projectGizmoPoint(camera, origin + axes[axis] * 1.5f, min, max);
+        axisEnds[axis] = projectGizmoPoint(camera, origin + axes[axis] * gizmoSize, min, max);
         if (distanceToLineSegment(mouse, originScreen, axisEnds[axis]) < 9.0f &&
             ImGui::IsMouseHoveringRect(min, max)) hoveredAxis = axis;
-        drawList->AddLine(originScreen, axisEnds[axis], colors[axis], hoveredAxis == axis ? 8.0f : 5.0f);
-        drawList->AddCircleFilled(axisEnds[axis], hoveredAxis == axis ? 9.0f : 7.0f, colors[axis]);
-        drawList->AddText({axisEnds[axis].x + 7.0f, axisEnds[axis].y - 8.0f}, colors[axis],
-                          axis == 0 ? "X" : axis == 1 ? "Y" : "Z");
     }
-    drawList->AddCircleFilled(originScreen, 8.0f, IM_COL32(245, 245, 245, 255));
 
     struct DragState final {
         Engine::Entity entity{Engine::NullEntity};
@@ -231,25 +258,129 @@ bool drawTranslationGizmo(Engine::ScenePreset& scene, const Engine::Entity selec
         ImVec2 startMouse{};
         ImVec2 startAxisDirection{};
         float startAxisLength{};
+        float startWorldSize{};
     };
     static DragState drag;
+    bool dragging = false;
     if (ImGui::IsMouseClicked(ImGuiMouseButton_Left) && hoveredAxis >= 0) {
         const ImVec2 axisDirection{axisEnds[hoveredAxis].x - originScreen.x,
                                    axisEnds[hoveredAxis].y - originScreen.y};
-        drag = {selected, hoveredAxis, origin, mouse, axisDirection,
-                std::max(std::hypot(axisDirection.x, axisDirection.y), 1.0f)};
-        ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
-        return true;
+        drag = {selected, hoveredAxis,
+                scene.editor().get<Engine::Transform>(selected).position,
+                mouse, axisDirection,
+                std::max(std::hypot(axisDirection.x, axisDirection.y), 1.0f), gizmoSize};
     }
     if (drag.entity == selected && drag.axis >= 0 && ImGui::IsMouseDown(ImGuiMouseButton_Left)) {
         const ImVec2 delta{mouse.x - drag.startMouse.x, mouse.y - drag.startMouse.y};
         const float pixels = (delta.x * drag.startAxisDirection.x +
                               delta.y * drag.startAxisDirection.y) / drag.startAxisLength;
-        // The projected gizmo axis is 1.5 world units long. Convert the
-        // mouse movement back using its on-screen length; multiplying by
-        // 1.5 directly made the gizmo hundreds of times too sensitive.
-        const float worldDistance = pixels * (1.5f / drag.startAxisLength);
+        float worldDistance = pixels * (drag.startWorldSize / drag.startAxisLength);
+        if (ImGui::GetIO().KeyCtrl) worldDistance = std::round(worldDistance / 0.25f) * 0.25f;
         scene.edit(selected).setPosition(drag.startPosition + axes[drag.axis] * worldDistance);
+        // The scene image is rendered later in this frame. Re-project the
+        // overlay from the updated transform so it does not trail the object
+        // by one frame while dragging.
+        origin = renderer.editorGizmoPosition(selected);
+        gizmoSize = gizmoWorldSize(camera, origin, min, max);
+        originScreen = projectGizmoPoint(camera, origin, min, max);
+        for (int axis = 0; axis < 3; ++axis) {
+            axisEnds[axis] = projectGizmoPoint(camera, origin + axes[axis] * gizmoSize, min, max);
+        }
+        dragging = true;
+        ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
+    }
+    if (drag.axis >= 0 && !ImGui::IsMouseDown(ImGuiMouseButton_Left)) drag = {};
+    for (int axis = 0; axis < 3; ++axis) {
+        drawList->AddLine(originScreen, axisEnds[axis], colors[axis], hoveredAxis == axis ? 8.0f : 5.0f);
+        drawList->AddCircleFilled(axisEnds[axis], hoveredAxis == axis ? 9.0f : 7.0f, colors[axis]);
+        drawList->AddText({axisEnds[axis].x + 7.0f, axisEnds[axis].y - 8.0f}, colors[axis],
+                          axis == 0 ? "X" : axis == 1 ? "Y" : "Z");
+    }
+    drawList->AddCircleFilled(originScreen, 8.0f, IM_COL32(245, 245, 245, 255));
+    return dragging || hoveredAxis >= 0;
+}
+
+enum class GizmoMode { Translate, Rotate };
+
+bool drawRotationGizmo(Engine::ScenePreset& scene, const Engine::Entity selected,
+                       const Engine::Renderer& renderer, const ImVec2 min, const ImVec2 max) {
+    if (selected == Engine::NullEntity || !scene.editor().valid(selected) ||
+        !scene.editor().has<Engine::Transform>(selected)) return false;
+
+    Engine::Camera camera{Engine::Degrees{60.0f}, (max.x - min.x) / (max.y - min.y), 0.1f, 1000.0f};
+    camera.setPosition(renderer.editorCameraPosition());
+    camera.setRotation(Engine::Degrees{renderer.editorCameraYaw()},
+                       Engine::Degrees{renderer.editorCameraPitch()});
+    const Engine::Vec3 origin = renderer.editorGizmoPosition(selected);
+    const Engine::Vec3 ringBasisA[3]{{0.0f, 1.0f, 0.0f}, {1.0f, 0.0f, 0.0f}, {1.0f, 0.0f, 0.0f}};
+    const Engine::Vec3 ringBasisB[3]{{0.0f, 0.0f, 1.0f}, {0.0f, 0.0f, 1.0f}, {0.0f, 1.0f, 0.0f}};
+    const ImU32 colors[3]{IM_COL32(235, 70, 70, 255), IM_COL32(70, 235, 100, 255),
+                          IM_COL32(70, 130, 245, 255)};
+    constexpr float pi = 3.14159265358979323846f;
+    constexpr int segments = 64;
+    const float radius = gizmoWorldSize(camera, origin, min, max);
+    const ImVec2 mouse = ImGui::GetIO().MousePos;
+    ImDrawList* drawList = ImGui::GetWindowDrawList();
+    const ImVec2 originScreen = projectGizmoPoint(camera, origin, min, max);
+    int hoveredAxis = -1;
+    ImVec2 ringPoints[3][segments + 1]{};
+    for (int axis = 0; axis < 3; ++axis) {
+        for (int segment = 0; segment <= segments; ++segment) {
+            const float angle = 2.0f * pi * static_cast<float>(segment) / segments;
+            const Engine::Vec3 point = origin + radius *
+                (ringBasisA[axis] * std::cos(angle) + ringBasisB[axis] * std::sin(angle));
+            ringPoints[axis][segment] = projectGizmoPoint(camera, point, min, max);
+            if (segment > 0 && ImGui::IsMouseHoveringRect(min, max) &&
+                distanceToLineSegment(mouse, ringPoints[axis][segment - 1], ringPoints[axis][segment]) < 9.0f) {
+                hoveredAxis = axis;
+            }
+        }
+        for (int segment = 1; segment <= segments; ++segment) {
+            drawList->AddLine(ringPoints[axis][segment - 1], ringPoints[axis][segment], colors[axis],
+                              hoveredAxis == axis ? 5.0f : 3.0f);
+        }
+    }
+    drawList->AddCircleFilled(originScreen, 7.0f, IM_COL32(245, 245, 245, 255));
+
+    struct DragState final {
+        Engine::Entity entity{Engine::NullEntity};
+        int axis{-1};
+        Engine::Vec3 startRotation{};
+        Engine::Vec3 lastDirection{};
+        float accumulatedRadians{};
+    };
+    static DragState drag;
+    if (ImGui::IsMouseClicked(ImGuiMouseButton_Left) && hoveredAxis >= 0) {
+        Engine::Vec3 hitPoint{};
+        const Engine::Vec3 axis = hoveredAxis == 0 ? Engine::Vec3{1.0f, 0.0f, 0.0f}
+                                  : hoveredAxis == 1 ? Engine::Vec3{0.0f, 1.0f, 0.0f}
+                                                     : Engine::Vec3{0.0f, 0.0f, 1.0f};
+        if (!intersectRayPlane(camera.position(), viewportRayDirection(camera, mouse, min, max),
+                               origin, axis, hitPoint)) return true;
+        drag = {selected, hoveredAxis, scene.editor().get<Engine::Transform>(selected).rotation,
+                (hitPoint - origin).normalized()};
+        ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
+        return true;
+    }
+    if (drag.entity == selected && drag.axis >= 0 && ImGui::IsMouseDown(ImGuiMouseButton_Left)) {
+        const Engine::Vec3 axis = drag.axis == 0 ? Engine::Vec3{1.0f, 0.0f, 0.0f}
+                                  : drag.axis == 1 ? Engine::Vec3{0.0f, 1.0f, 0.0f}
+                                                   : Engine::Vec3{0.0f, 0.0f, 1.0f};
+        Engine::Vec3 hitPoint{};
+        if (!intersectRayPlane(camera.position(), viewportRayDirection(camera, mouse, min, max),
+                               origin, axis, hitPoint)) return true;
+        const Engine::Vec3 currentDirection = (hitPoint - origin).normalized();
+        drag.accumulatedRadians += std::atan2(
+            dotProduct(axis, Engine::cross(drag.lastDirection, currentDirection)),
+            dotProduct(drag.lastDirection, currentDirection));
+        drag.lastDirection = currentDirection;
+        Engine::Vec3 rotation = drag.startRotation;
+        float degrees = drag.accumulatedRadians * 180.0f / pi;
+        if (ImGui::GetIO().KeyCtrl) degrees = std::round(degrees / 15.0f) * 15.0f;
+        if (drag.axis == 0) rotation.setX(drag.startRotation.x() + degrees);
+        else if (drag.axis == 1) rotation.setY(drag.startRotation.y() + degrees);
+        else rotation.setZ(drag.startRotation.z() + degrees);
+        scene.edit(selected).setRotation(rotation);
         ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
         return true;
     }
@@ -261,7 +392,7 @@ ViewportInteraction drawViewport(Engine::ScenePreset& scene, const Engine::Entit
                   Engine::Renderer& renderer, Engine::ViewportHandle gameDescriptor,
                   Engine::ViewportHandle sceneDescriptor,
                   const float sceneCameraYaw, const float sceneCameraPitch,
-                  bool& showGameView, const bool playing,
+                  bool& showGameView, GizmoMode& gizmoMode, const bool playing,
                   const bool blueprintEnabled) {
     if (playing) showGameView = true;
     const Engine::ViewportHandle descriptor = showGameView ? gameDescriptor : sceneDescriptor;
@@ -271,6 +402,12 @@ ViewportInteraction drawViewport(Engine::ScenePreset& scene, const Engine::Entit
                                   showGameView ? "GAME CAMERA" : "SCENE CAMERA");
     if (!playing) {
         ImGui::SameLine(ImGui::GetWindowWidth() - 154.0f);
+    }
+    if (!playing) {
+        if (EditorButton("Move (W)").drawSmall()) gizmoMode = GizmoMode::Translate;
+        ImGui::SameLine(0.0f, 4.0f);
+        if (EditorButton("Rotate (E)").drawSmall()) gizmoMode = GizmoMode::Rotate;
+        ImGui::SameLine(0.0f, 8.0f);
     }
     if (!playing && EditorButton(showGameView ? "Scene View" : "Game View").draw()) {
         showGameView = !showGameView;
@@ -297,8 +434,11 @@ ViewportInteraction drawViewport(Engine::ScenePreset& scene, const Engine::Entit
             Editor::drawBlueprintOverlay(renderer, ImGui::GetItemRectMin(), ImGui::GetItemRectMax());
         }
         const bool gizmoConsumesClick = !showGameView && !playing &&
-            drawTranslationGizmo(scene, selected, renderer, ImGui::GetItemRectMin(),
-                                 ImGui::GetItemRectMax());
+            (gizmoMode == GizmoMode::Translate
+                 ? drawTranslationGizmo(scene, selected, renderer, ImGui::GetItemRectMin(),
+                                        ImGui::GetItemRectMax())
+                 : drawRotationGizmo(scene, selected, renderer, ImGui::GetItemRectMin(),
+                                     ImGui::GetItemRectMax()));
         int gizmoAction = -1;
         if (!showGameView && !playing) {
             gizmoAction = drawSceneOrientationGizmo(ImGui::GetItemRectMin(), ImGui::GetItemRectMax(),
@@ -417,7 +557,11 @@ Engine::Entity HierarchyPanel::draw(Engine::ScenePreset& scene, const Engine::En
             const auto childIt = children.find(entity);
             const bool hasChildren = childIt != children.end() && !childIt->second.empty();
             char label[128];
-            std::snprintf(label, sizeof(label), "%s##%u", name, Engine::entityIndex(entity));
+            // Use the complete ECS handle for ImGui's hidden ID. The index
+            // alone is not a stable identity because Registry recycles slots
+            // and distinguishes them by generation.
+            std::snprintf(label, sizeof(label), "%s##%llu", name,
+                          static_cast<unsigned long long>(entity));
             const auto drawContextMenu = [&] {
                 if (!ImGui::BeginPopupContextItem()) return;
                 if (ImGui::MenuItem("Copy")) {
@@ -657,8 +801,8 @@ bool ComponentsPanel::draw(Engine::ScenePreset& scene, const Engine::Entity sele
         if (ImGui::DragFloat3("Offset##collider", offset, 0.05f)) {
             value.offset = {offset[0], offset[1], offset[2]}; changed = true;
         }
-        std::visit([&](auto& colliderShape) {
-            using Shape = std::decay_t<decltype(colliderShape)>;
+        std::visit([&]<typename T>(T& colliderShape) {
+            using Shape = std::decay_t<T>;
             if constexpr (std::is_same_v<Shape, Engine::BoxCollider>) {
                 float extents[3] = {colliderShape.halfExtents.x(), colliderShape.halfExtents.y(), colliderShape.halfExtents.z()};
                 if (ImGui::DragFloat3("Half Extents##collider", extents, 0.05f, 0.001f, 1000.0f)) {
@@ -1149,6 +1293,7 @@ int main() {
         bool playing = false;
         bool paused = false;
         bool showGameView = false;
+        GizmoMode gizmoMode = GizmoMode::Translate;
         bool blueprintEnabled = true;
         std::string playSceneSnapshot;
         std::string playModeError;
@@ -1157,6 +1302,9 @@ int main() {
             renderer.beginFrame();
             const Engine::EditorEventState events = renderer.pollEditorEvents();
             if (events.quitRequested) running = false;
+            // Apply Scene View navigation before drawing its gizmo. Rendering
+            // later in this frame then uses this exact same camera transform.
+            renderer.updateEditorSceneCameraInput();
             if (events.togglePlay) {
                 if (EditorSceneSession::setPlayMode(!playing, scene, playSceneSnapshot, playModeError,
                                 EditorSceneSession::msaaSampleCount(renderer))) {
@@ -1271,9 +1419,13 @@ int main() {
                     clipboard.copy(scene, hierarchyActionEntity);
                 }
             }
+            if (!playing && !ImGui::GetIO().WantTextInput) {
+                if (ImGui::IsKeyPressed(ImGuiKey_W)) gizmoMode = GizmoMode::Translate;
+                if (ImGui::IsKeyPressed(ImGuiKey_E)) gizmoMode = GizmoMode::Rotate;
+            }
             const ViewportInteraction viewportInteraction = drawViewport(
                 scene, selectedEntity, renderer, renderer.gameViewport(), renderer.sceneViewport(), renderer.editorCameraYaw(),
-                renderer.editorCameraPitch(), showGameView, playing, blueprintEnabled);
+                renderer.editorCameraPitch(), showGameView, gizmoMode, playing, blueprintEnabled);
             if (!playing && viewportInteraction.sceneClicked) {
                 constexpr float viewportAspect = 16.0f / 9.0f;
                 selectedEntity = pickSceneEntity(scene, physicsSystem, renderer,

@@ -218,6 +218,18 @@ class Renderer::Backend {
         [[nodiscard]] float editorCameraYaw() const noexcept { return cameraController.editorYaw(); }
         [[nodiscard]] float editorCameraPitch() const noexcept { return cameraController.editorPitch(); }
         [[nodiscard]] Vec3 editorCameraPosition() const noexcept { return cameraController.editorPosition(); }
+        [[nodiscard]] Vec3 editorGizmoPosition(const Entity entity) const noexcept {
+            const Registry& readRegistry = registry;
+            if (!readRegistry.valid(entity) || !readRegistry.has<Transform>(entity)) return {};
+
+            const Transform& transform = readRegistry.get<Transform>(entity);
+            for (const RenderableRecord& record : renderables) {
+                if (record.entity != entity) continue;
+                const AABB bounds = record.localBounds.transformed(transform.matrix().native());
+                return Vec3{(bounds.min.native() + bounds.max.native()) * 0.5f};
+            }
+            return transform.position;
+        }
         void setEditorCameraRotation(const float yaw, const float pitch) noexcept {
             cameraController.setEditorRotation(yaw, pitch);
         }
@@ -269,7 +281,10 @@ class Renderer::Backend {
 
         void renderFrame() {
             Time::update();
-            updateCameraInput();
+            // Scene View navigation is updated before the editor UI so its
+            // rendered image and gizmo overlay use the same camera state.
+            // The game camera remains a render-frame concern.
+            if (!cameraController.editorInputEnabled()) updateCameraInput();
             updateFpsCounter();
             drawFrame();
         }
@@ -2459,7 +2474,7 @@ class Renderer::Backend {
         }
 
         void updateEditorSceneCameraInput() {
-            cameraController.updateEditor(window);
+            if (cameraController.editorInputEnabled()) cameraController.updateEditor(window);
         }
 
         void drawFrame() {
@@ -2711,6 +2726,9 @@ void Renderer::processEvent(const void* nativeEvent) const {
 void Renderer::setEditorSceneCameraInput(const bool active) const {
     if (backend_) backend_->setEditorSceneCameraInput(active);
 }
+void Renderer::updateEditorSceneCameraInput() const {
+    if (backend_) backend_->updateEditorSceneCameraInput();
+}
 void Renderer::setEditorSelection(const Entity entity) const {
     if (backend_) backend_->setEditorSelection(entity);
 }
@@ -2746,6 +2764,9 @@ float Renderer::editorCameraPitch() const noexcept {
 }
 Vec3 Renderer::editorCameraPosition() const noexcept {
     return backend_ ? backend_->editorCameraPosition() : Vec3{};
+}
+Vec3 Renderer::editorGizmoPosition(const Entity entity) const noexcept {
+    return backend_ ? backend_->editorGizmoPosition(entity) : Vec3{};
 }
 void Renderer::setEditorCameraRotation(const float yaw, const float pitch) const noexcept {
     if (backend_) backend_->setEditorCameraRotation(yaw, pitch);
