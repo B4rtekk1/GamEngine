@@ -35,58 +35,58 @@ public:
     [[nodiscard]] ObjectId id() const noexcept { return objectId_; }
     [[nodiscard]] std::string name() const;
 
-    void setName(std::string name);
-    void setPosition(Vec3 position);
-    void setRotation(Vec3 rotation);
-    void setScale(Vec3 scale);
-    void translate(Vec3 offset);
-    void move(Vec3 offset);
+    void setName(std::string name) const;
+    void setPosition(Vec3 position) const;
+    void setRotation(Vec3 rotation) const;
+    void setScale(Vec3 scale) const;
+    void translate(Vec3 offset) const;
+    void move(Vec3 offset) const;
     [[nodiscard]] Vec3 position() const;
     [[nodiscard]] Vec3 rotation() const;
     [[nodiscard]] Vec3 scale() const;
 
-    void setMesh(std::shared_ptr<const Mesh> mesh);
-    void setMaterial(PBRMaterial material);
-    void setCastShadow(bool enabled);
-    void setCullingBatch(std::uint32_t batch);
+    void setMesh(std::shared_ptr<const Mesh> mesh) const;
+    void setMaterial(const PBRMaterial& material) const;
+    void setCastShadow(bool enabled) const;
+    void setCullingBatch(std::uint32_t batch) const;
 
-    void addRigidbody(RigidbodyComponent body = {});
+    void addRigidbody(const RigidbodyComponent& body = {}) const;
     [[nodiscard]] bool hasRigidbody() const;
-    void setBodyType(RigidbodyType type);
-    void setMass(float mass);
-    void setGravityEnabled(bool enabled);
-    void setVelocity(Vec3 velocity);
+    void setBodyType(RigidbodyType type) const;
+    void setMass(float mass) const;
+    void setGravityEnabled(bool enabled) const;
+    void setVelocity(Vec3 velocity) const;
     [[nodiscard]] Vec3 velocity() const;
 
-    void addBoxCollider(Vec3 halfExtents = {0.5f, 0.5f, 0.5f});
-    void addSphereCollider(float radius = 0.5f);
-    void addCapsuleCollider(float radius = 0.5f, float height = 1.0f);
-    void addRampCollider(Vec3 halfExtents = {0.5f, 0.5f, 0.5f});
+    void addBoxCollider(Vec3 halfExtents = {0.5f, 0.5f, 0.5f}) const;
+    void addSphereCollider(float radius = 0.5f) const;
+    void addCapsuleCollider(float radius = 0.5f, float height = 1.0f) const;
+    void addRampCollider(Vec3 halfExtents = {0.5f, 0.5f, 0.5f}) const;
     [[nodiscard]] bool hasCollider() const;
-    void setColliderTrigger(bool enabled);
-    void setColliderMaterial(float friction, float restitution);
+    void setColliderTrigger(bool enabled) const;
+    void setColliderMaterial(float friction, float restitution) const;
 
-    void addCamera(CameraComponent camera = {});
+    void addCamera(const CameraComponent& camera = {}) const;
     [[nodiscard]] bool hasCamera() const;
     void setPerspectiveCamera(float fieldOfView, float nearClip = 0.1f,
-                              float farClip = 1000.0f);
+                              float farClip = 1000.0f) const;
     void setOrthographicCamera(float size, float nearClip = 0.1f,
-                               float farClip = 1000.0f);
-    void setPrimaryCamera(bool primary);
-    void setCameraAspectRatio(float width, float height);
+                               float farClip = 1000.0f) const;
+    void setPrimaryCamera(bool primary) const;
+    void setCameraAspectRatio(float width, float height) const;
 
-    void addLight(LightComponent light = {});
+    void addLight(const LightComponent& light = {}) const;
     [[nodiscard]] bool hasLight() const;
-    void setLightType(LightType type);
-    void setLightColor(Math::Color color);
-    void setLightIntensity(float intensity);
-    void setLightEnabled(bool enabled);
-    void setLightCastShadows(bool enabled);
+    void setLightType(LightType type) const;
+    void setLightColor(Math::Color color) const;
+    void setLightIntensity(float intensity) const;
+    void setLightEnabled(bool enabled) const;
+    void setLightCastShadows(bool enabled) const;
 
-    void addScript(std::string className, bool enabled = true);
+    void addScript(std::string className, bool enabled = true) const;
 
     template<typename T>
-    void attach(bool enabled = true);
+    void attach(bool enabled = true) const;
 
     void destroy();
 
@@ -109,7 +109,7 @@ private:
 namespace Engine {
 
 template<typename T>
-void Actor::attach(const bool enabled) {
+void Actor::attach(const bool enabled) const {
     const auto className = ScriptRegistry::instance().className<T>();
     if (!className) {
         throw std::logic_error("Script type is not registered; use ENGINE_REGISTER_SCRIPT first");
