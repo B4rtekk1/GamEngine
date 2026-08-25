@@ -62,6 +62,11 @@ public:
     void run();
 
 private:
+    void initializeRuntime();
+    void processEvents() const;
+    void updateFrame(float deltaTime);
+    void updatePhysics(float deltaTime);
+
     class Impl;
     ApplicationConfig config_;
     Scene scene_;
