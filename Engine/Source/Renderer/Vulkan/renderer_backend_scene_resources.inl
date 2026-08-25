@@ -45,7 +45,10 @@
         [[nodiscard]] std::uint64_t currentRenderableTopologySignature() const {
             // Commutative mixing makes the value independent of dense-pool
             // ordering, which can change after an unrelated ECS removal.
-            std::uint64_t signature = 14695981039346656037ull;
+            constexpr std::uint64_t topologySignatureSeed = 14695981039346656037ULL;
+            constexpr std::uint64_t hashCombineConstant = 0x9e3779b97f4a7c15ULL;
+            constexpr std::uint32_t hashCombineLeftShift = 6U;
+            std::uint64_t signature = topologySignatureSeed;
             std::size_t count = 0;
             const Registry& readRegistry = registry;
             readRegistry.view<Transform, MeshRenderer>(
@@ -53,13 +56,13 @@
                     if (!renderer.hasMesh()) return;
                     std::uint64_t value = static_cast<std::uint64_t>(entity);
                     value ^= static_cast<std::uint64_t>(reinterpret_cast<std::uintptr_t>(renderer.mesh.get())) +
-                        0x9e3779b97f4a7c15ull + (value << 6u) + (value >> 2u);
+                        hashCombineConstant + (value << hashCombineLeftShift) + (value >> 2u);
                     value ^= static_cast<std::uint64_t>(renderer.cullingBatch) << 1u;
                     value ^= static_cast<std::uint64_t>(renderer.castShadow) << 63u;
-                    signature ^= value * 0x9e3779b97f4a7c15ull;
+                    signature ^= value * hashCombineConstant;
                     ++count;
                 });
-            return signature ^ (static_cast<std::uint64_t>(count) * 0x9e3779b97f4a7c15ull);
+            return signature ^ (static_cast<std::uint64_t>(count) * hashCombineConstant);
         }
 
         void createMeshBuffers() {
@@ -91,10 +94,13 @@
             };
             struct BatchKeyHash {
                 std::size_t operator()(const BatchKey& key) const noexcept {
+                    constexpr std::uint32_t hashCombineConstant = 0x9e3779b9U;
+                    constexpr std::uint32_t hashCombineLeftShift = 6U;
                     const auto meshHash = std::hash<const Mesh*>{}(key.mesh);
                     const auto batchHash = std::hash<uint32_t>{}(key.cullingBatch);
                     return meshHash ^ (batchHash + static_cast<std::size_t>(key.castShadow) +
-                                       0x9e3779b9u + (meshHash << 6u) + (meshHash >> 2u));
+                                       hashCombineConstant + (meshHash << hashCombineLeftShift) +
+                                       (meshHash >> 2U));
                 }
             };
             std::unordered_map<const Mesh*, MeshUploadRecord> uploadedMeshes;
@@ -266,10 +272,10 @@
                 }
             }
 
-            const glm::vec3 center = (sceneMinimum + sceneMaximum) * 0.5f;
-            const glm::vec3 halfExtent = (sceneMaximum - sceneMinimum) * 0.5f;
+            const glm::vec3 center = (sceneMinimum + sceneMaximum) * 0.5F;
+            const glm::vec3 halfExtent = (sceneMaximum - sceneMinimum) * 0.5F;
             sceneCenter = Vec3{center};
-            sceneRadius = std::max({halfExtent.x, halfExtent.y, halfExtent.z, 1.0f});
+            sceneRadius = std::max({halfExtent.x, halfExtent.y, halfExtent.z, 1.0F});
 
             vertexBuffer.createDeviceLocal(vulkanDevice.physical(), device, sceneMesh.vertices.data(),
                 sizeof(Vertex) * sceneMesh.vertices.size(), VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
@@ -323,22 +329,28 @@
         }
 
         template <typename T>
-        void uploadDirtyRanges(const Buffer& buffer, const std::vector<T>& data,
-                               uint8_t RenderableRecord::* dirtyFrames,
-                               const uint8_t bit) const {
+        struct DirtyRangeUploadRequest {
+            const Buffer& buffer;
+            const std::vector<T>& data;
+            uint8_t RenderableRecord::* dirtyFrames;
+            uint8_t bit;
+        };
+
+        template <typename T>
+        void uploadDirtyRanges(const DirtyRangeUploadRequest<T>& request) const {
             std::size_t rangeBegin = 0;
             while (rangeBegin < renderables.size()) {
                 while (rangeBegin < renderables.size() &&
-                       (renderables[rangeBegin].*dirtyFrames & bit) == 0) {
+                       (renderables[rangeBegin].*request.dirtyFrames & request.bit) == 0) {
                     ++rangeBegin;
                 }
                 std::size_t rangeEnd = rangeBegin;
                 while (rangeEnd < renderables.size() &&
-                       (renderables[rangeEnd].*dirtyFrames & bit) != 0) {
+                       (renderables[rangeEnd].*request.dirtyFrames & request.bit) != 0) {
                     ++rangeEnd;
                 }
                 if (rangeBegin != rangeEnd) {
-                    buffer.update(data.data() + rangeBegin,
+                    request.buffer.update(request.data.data() + rangeBegin,
                                   sizeof(T) * (rangeEnd - rangeBegin),
                                   sizeof(T) * rangeBegin);
                 }
@@ -347,18 +359,25 @@
         }
 
         template <typename T>
-        static void uploadDirtyIndices(const Buffer& buffer, const std::vector<T>& data,
-                                       uint8_t RenderableRecord::* dirtyFrames,
-                                       const std::vector<std::size_t>& indices) {
+        struct DirtyIndexUploadRequest {
+            const Buffer& buffer;
+            const std::vector<T>& data;
+            uint8_t RenderableRecord::* dirtyFrames;
+            const std::vector<std::size_t>& indices;
+        };
+
+        template <typename T>
+        static void uploadDirtyIndices(const DirtyIndexUploadRequest<T>& request) {
             std::size_t rangeStart = 0;
-            while (rangeStart < indices.size()) {
+            while (rangeStart < request.indices.size()) {
                 std::size_t rangeEnd = rangeStart + 1;
-                while (rangeEnd < indices.size() &&
-                       indices[rangeEnd] == indices[rangeEnd - 1] + 1) {
+                while (rangeEnd < request.indices.size() &&
+                       request.indices[rangeEnd] == request.indices[rangeEnd - 1] + 1) {
                     ++rangeEnd;
                 }
-                const std::size_t first = indices[rangeStart];
-                buffer.update(data.data() + first, sizeof(T) * (rangeEnd - rangeStart),
+                const std::size_t first = request.indices[rangeStart];
+                request.buffer.update(request.data.data() + first,
+                              sizeof(T) * (rangeEnd - rangeStart),
                               sizeof(T) * first);
                 rangeStart = rangeEnd;
             }
@@ -376,15 +395,16 @@
         // must therefore be uploaded once per buffer, even after the registry
         // revision itself has stopped changing.
         void uploadPendingRenderableBuffers() {
-            if (instanceBuffers[currentFrame].handle() == VK_NULL_HANDLE) return;
+            if (instanceBuffers[currentFrame].handle() == VK_NULL_HANDLE) { return;
+}
 
             const uint8_t bit = frameBit(currentFrame);
-            uploadDirtyIndices(instanceBuffers[currentFrame], instanceModels,
-                               &RenderableRecord::transformDirtyFrames,
-                               dirtyTransforms[currentFrame]);
-            uploadDirtyIndices(shadowInstanceBuffers[currentFrame], shadowInstanceModels,
-                               &RenderableRecord::transformDirtyFrames,
-                               dirtyTransforms[currentFrame]);
+            uploadDirtyIndices(DirtyIndexUploadRequest<glm::mat4>{
+                instanceBuffers[currentFrame], instanceModels,
+                &RenderableRecord::transformDirtyFrames, dirtyTransforms[currentFrame]});
+            uploadDirtyIndices(DirtyIndexUploadRequest<glm::mat4>{
+                shadowInstanceBuffers[currentFrame], shadowInstanceModels,
+                &RenderableRecord::transformDirtyFrames, dirtyTransforms[currentFrame]});
             clearDirtyIndices(&RenderableRecord::transformDirtyFrames,
                               dirtyTransforms[currentFrame], bit);
             for (const std::size_t index : dirtyMaterials[currentFrame]) {
@@ -416,7 +436,8 @@
             } else {
                 std::unordered_set<std::size_t> uniqueIndices;
                 const auto addChangedEntities = [&](const auto& entities, const auto revision) {
-                    if (revision == 0) return;
+                    if (revision == 0) { return;
+}
                     for (const Entity entity : entities) {
                         const auto it = sceneGpu.renderableIndices.find(entity);
                         if (it != sceneGpu.renderableIndices.end()) uniqueIndices.insert(it->second);
@@ -547,6 +568,8 @@
         }
 
         void updateCullingUniformBuffer(const uint32_t frame) const {
+            constexpr float hizDepthBias = 0.0025F;
+            constexpr float hizAabbExpansion = 0.01F;
             Culling::CullingUniformData data{};
             if (!cameraController.camera()) {
                 throw std::runtime_error("Camera must be initialized before culling");
@@ -556,11 +579,11 @@
             data.objectCount = static_cast<uint32_t>(gpuObjects.size());
             data.maxDrawCount = data.objectCount;
             data.hizMipCount = hiZBuffer.mipCount();
-            data.enableOcclusionCulling = canUseHiZOcclusionCulling() ? 1u : 0u;
+            data.enableOcclusionCulling = canUseHiZOcclusionCulling() ? 1U : 0U;
             data.viewportWidth = static_cast<float>(swapchain.extent().width);
             data.viewportHeight = static_cast<float>(swapchain.extent().height);
-            data.depthBias = 0.0025f;
-            data.aabbExpansion = 0.01f;
+            data.depthBias = hizDepthBias;
+            data.aabbExpansion = hizAabbExpansion;
             // Never reject objects using an uninitialized hierarchy.
             data.cameraCut = hiZValid ? 0u : 1u;
             data.shadowPass = 0;
@@ -569,6 +592,7 @@
         }
 
         void updateShadowCullingUniformBuffer(const uint32_t frame) const {
+            constexpr float hizAabbExpansion = 0.01F;
             Culling::CullingUniformData data{};
             const glm::mat4 lightViewProjection = lightSpaceMatrix().native();
             std::memcpy(data.viewProjection.data, &lightViewProjection, sizeof(lightViewProjection));
@@ -577,7 +601,7 @@
             // Shadow culling uses only the light frustum. Camera Hi-Z cannot safely
             // reject casters which are invisible to the camera but visible to the light.
             data.enableOcclusionCulling = 0;
-            data.aabbExpansion = 0.01f;
+            data.aabbExpansion = hizAabbExpansion;
             data.cameraCut = 1;
             data.shadowPass = 1;
             data.enableFrustumCulling = optimizationFeatures.gpuCulling ? 1u : 0u;
@@ -613,5 +637,3 @@
             }
             return pipeline;
         }
-
-

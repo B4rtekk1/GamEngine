@@ -135,11 +135,12 @@
             static_cast<uint8_t>((1u << MAX_FRAMES_IN_FLIGHT) - 1u);
 
         [[nodiscard]] static uint8_t frameBit(const uint32_t frame) noexcept {
-            return static_cast<uint8_t>(1u << frame);
+            return static_cast<uint8_t>(1U << frame);
         }
 
         [[nodiscard]] static bool sameTransform(const Transform& lhs,
                                                 const Transform& rhs) noexcept {
+            // NOLINTNEXTLINE(readability-identifier-length)
             const auto sameVector = [](const Vec3& a, const Vec3& b) {
                 return a.x() == b.x() && a.y() == b.y() && a.z() == b.z();
             };
@@ -166,7 +167,7 @@
 
         void markDirty(const std::size_t index,
                        uint8_t RenderableRecord::* dirtyFrames,
-                       std::array<std::vector<std::size_t>, MAX_FRAMES_IN_FLIGHT>& dirtyIndices) {
+                       std::array<std::vector<std::size_t>, MAX_FRAMES_IN_FLIGHT>& dirtyIndices) { // NOLINT(readability-named-parameter)
             RenderableRecord& record = renderables[index];
             for (uint32_t frame = 0; frame < MAX_FRAMES_IN_FLIGHT; ++frame) {
                 const uint8_t bit = frameBit(frame);
@@ -176,6 +177,3 @@
             }
             record.*dirtyFrames |= allFrameBits;
         }
-
-
-

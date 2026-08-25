@@ -437,7 +437,7 @@ std::shared_ptr<const Mesh> load_glb_mesh(const std::filesystem::path& path) {
         }
         const auto* mode_value = primitive.find("mode");
         const auto mode = mode_value && mode_value->number() ? static_cast<std::uint32_t>(*mode_value->number()) : 4u;
-        const auto add_triangle = [&](const std::uint32_t a, const std::uint32_t b, const std::uint32_t c) {
+        const auto add_triangle = [&](const std::uint32_t a, const std::uint32_t b, const std::uint32_t c) { // NOLINT(readability-identifier-length)
             if (determinant < 0.0f) mesh.indices.insert(mesh.indices.end(), {base + a, base + c, base + b});
             else mesh.indices.insert(mesh.indices.end(), {base + a, base + b, base + c});
         };

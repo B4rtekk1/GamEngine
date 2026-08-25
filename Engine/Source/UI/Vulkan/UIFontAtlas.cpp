@@ -107,7 +107,9 @@ private:
 std::vector<Point> flatten(const std::vector<Point>& in) {
     std::vector<Point> result;
     if (in.empty()) return result;
-    const auto midpoint = [](const Point& a, const Point& b) { return Point{(a.x + b.x) * .5, (a.y + b.y) * .5, true}; };
+    const auto midpoint = [](const Point& a, const Point& b) { // NOLINT(readability-identifier-length)
+        return Point{(a.x + b.x) * .5, (a.y + b.y) * .5, true};
+    };
     const std::size_t n = in.size();
     Point current = in[0].onCurve ? in[0] : (in[n - 1].onCurve ? in[n - 1] : midpoint(in[n - 1], in[0]));
     result.push_back(current);
