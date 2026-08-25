@@ -6,8 +6,31 @@ include(CTest)
 set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
+option(GAMEENGINE_ENABLE_WARNINGS "Enable strict compiler warnings" ON)
+option(GAMEENGINE_WARNINGS_AS_ERRORS "Treat compiler warnings as errors" OFF)
+
+function(gameengine_enable_warnings target)
+    if(NOT GAMEENGINE_ENABLE_WARNINGS)
+        return()
+    endif()
+
+    if(MSVC)
+        target_compile_options(${target} PRIVATE /W4 /permissive-)
+        if(GAMEENGINE_WARNINGS_AS_ERRORS)
+            target_compile_options(${target} PRIVATE /WX)
+        endif()
+    elseif(CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU")
+        target_compile_options(${target} PRIVATE -Wall -Wextra -Wpedantic)
+        if(GAMEENGINE_WARNINGS_AS_ERRORS)
+            target_compile_options(${target} PRIVATE -Werror)
+        endif()
+    endif()
+endfunction()
+
 find_package(Vulkan 1.4 REQUIRED)
-set(SDL3_DIR "$ENV{VULKAN_SDK}/cmake")
+if(DEFINED ENV{VULKAN_SDK} AND NOT "$ENV{VULKAN_SDK}" STREQUAL "")
+    set(SDL3_DIR "$ENV{VULKAN_SDK}/cmake")
+endif()
 find_package(SDL3 CONFIG REQUIRED)
 
 include(FetchContent)
@@ -88,6 +111,7 @@ add_library(Engine
         Engine/Source/Renderer/Particles/ParticleSystem.cpp
         Platform/SDL/SDLInput.cpp
 )
+gameengine_enable_warnings(Engine)
 
 target_link_libraries(Engine PUBLIC SDL3::SDL3 Vulkan::Vulkan PRIVATE DearImGui)
 target_include_directories(Engine
@@ -105,6 +129,7 @@ add_executable(Editor
         Editor/Source/main.cpp
         Editor/Source/Panels/EditorStyle.cpp
         Editor/Source/Panels/EditorSceneSession.cpp)
+gameengine_enable_warnings(Editor)
 target_include_directories(Editor PRIVATE Editor/Include)
 target_link_libraries(Editor PRIVATE DearImGui Engine SDL3::SDL3 Vulkan::Vulkan)
 target_compile_definitions(Editor PRIVATE GAMEENGINE_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
@@ -313,4 +338,20 @@ if(BUILD_TESTING)
     add_executable(TrigonometryTests Tests/TrigonometryTests.cpp)
     target_link_libraries(TrigonometryTests PRIVATE Engine)
     add_test(NAME TrigonometryTests COMMAND TrigonometryTests)
+endif()
+
+if(BUILD_TESTING)
+    set(GAMEENGINE_TEST_TARGETS
+        CanvasTests SceneSerializerTests RegistryTests AssetManagerTests
+        ScriptSystemTests PhysicsSystemTests ActorTests MathTests GeometryTests
+        UITests SceneTests AssetCacheTests ScriptRegistryTests PhysicsEdgeTests
+        SceneIOTests ContentTests InputTests PrefabTests TransformTests
+        InterfaceTests EntityTests FrustumTests RendererComponentTests TextTests
+        FontAtlasTests ParticleComponentTests ComponentDefaultsTests UUIDTests
+        VectorTests SceneEditorTests ParticleSceneTests CameraTests TimeTests
+        ComponentPoolTests CameraComponentTests ViewportCameraTests
+        RenderConfigTests CullingTypesTests TrigonometryTests)
+    foreach(test_target IN LISTS GAMEENGINE_TEST_TARGETS)
+        gameengine_enable_warnings(${test_target})
+    endforeach()
 endif()
