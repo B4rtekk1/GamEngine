@@ -56,7 +56,7 @@
         static std::vector<const char*> getRequiredExtensions(const bool useValidation) {
             Uint32 sdlExtensionCount = 0;
             const char * const *sdlExtensions = SDL_Vulkan_GetInstanceExtensions(&sdlExtensionCount);
-            if (!sdlExtensions) {
+            if (sdlExtensions == nullptr) {
                 throw std::runtime_error(std::string("SDL_Vulkan_GetInstanceExtensions error: ") + SDL_GetError());
             }
             std::vector<const char*> extensions(sdlExtensions, sdlExtensions + sdlExtensionCount);
@@ -149,21 +149,27 @@
             }
         }
 
+        // These parameters mirror the Vulkan extension function signature.
+        // NOLINTBEGIN(bugprone-easily-swappable-parameters)
         static VkResult CreateDebugUtilsMessengerEXT(VkInstance instance,
             const VkDebugUtilsMessengerCreateInfoEXT* pCreateInfo,
             const VkAllocationCallbacks* pAllocator,
             VkDebugUtilsMessengerEXT* pDebugMessenger) {
             auto func = reinterpret_cast<PFN_vkCreateDebugUtilsMessengerEXT>(vkGetInstanceProcAddr(instance, "vkCreateDebugUtilsMessengerEXT"));
-            if (func != nullptr) return func(instance, pCreateInfo, pAllocator, pDebugMessenger);
+            if (func != nullptr) { return func(instance, pCreateInfo, pAllocator, pDebugMessenger); }
             return VK_ERROR_EXTENSION_NOT_PRESENT;
         }
+        // NOLINTEND(bugprone-easily-swappable-parameters)
 
+        // These parameters mirror the Vulkan extension function signature.
+        // NOLINTBEGIN(bugprone-easily-swappable-parameters)
         static void DestroyDebugUtilsMessengerEXT(VkInstance instance, VkDebugUtilsMessengerEXT debugMessenger, const VkAllocationCallbacks* pAllocator) {
-            if (const auto func = reinterpret_cast<PFN_vkDestroyDebugUtilsMessengerEXT>(vkGetInstanceProcAddr(instance, "vkDestroyDebugUtilsMessengerEXT")); func != nullptr) func(instance, debugMessenger, pAllocator);
+            if (const auto func = reinterpret_cast<PFN_vkDestroyDebugUtilsMessengerEXT>(vkGetInstanceProcAddr(instance, "vkDestroyDebugUtilsMessengerEXT")); func != nullptr) { func(instance, debugMessenger, pAllocator); }
         }
+        // NOLINTEND(bugprone-easily-swappable-parameters)
 
         void setupDebugMessenger() {
-            if (!checkValidationLayerSupport()) return;
+            if (!checkValidationLayerSupport()) { return; }
             VkDebugUtilsMessengerCreateInfoEXT createInfo;
             populateDebugMessengerCreateInfo(createInfo);
             if (CreateDebugUtilsMessengerEXT(instance, &createInfo, nullptr, &debugMessenger) != VK_SUCCESS) {
@@ -276,13 +282,17 @@
                     device, vulkanDevice.physical(), vulkanDevice.graphicsQueue(), commandPool, 8192);
                 if (registry.has<SmokeEmitterComponent>(scene.particleEntity())) {
                     auto emitter = registry.get<SmokeEmitterComponent>(scene.particleEntity()).emitter;
-                    if (registry.has<Transform>(scene.particleEntity())) emitter.position = registry.get<Transform>(scene.particleEntity()).position;
-                    if (registry.has<ColorPickerComponent>(scene.particleEntity())) emitter.color = registry.get<ColorPickerComponent>(scene.particleEntity()).color;
+                    if (registry.has<Transform>(scene.particleEntity())) { emitter.position = registry.get<Transform>(scene.particleEntity()).position;
+}
+                    if (registry.has<ColorPickerComponent>(scene.particleEntity())) { emitter.color = registry.get<ColorPickerComponent>(scene.particleEntity()).color;
+}
                     particleSystem->setEmitter(emitter);
                 } else {
                     auto emitter = registry.get<ParticleEmitterComponent>(scene.particleEntity()).emitter;
-                    if (registry.has<Transform>(scene.particleEntity())) emitter.position = registry.get<Transform>(scene.particleEntity()).position;
-                    if (registry.has<ColorPickerComponent>(scene.particleEntity())) emitter.color = registry.get<ColorPickerComponent>(scene.particleEntity()).color;
+                    if (registry.has<Transform>(scene.particleEntity())) { emitter.position = registry.get<Transform>(scene.particleEntity()).position;
+}
+                    if (registry.has<ColorPickerComponent>(scene.particleEntity())) { emitter.color = registry.get<ColorPickerComponent>(scene.particleEntity()).color;
+}
                     particleSystem->setEmitter(emitter);
                 }
             }
@@ -327,7 +337,8 @@
         }
 
         void reconfigureAntialiasing(const AntialiasingLevel requestedLevel) {
-            if (device == VK_NULL_HANDLE) return;
+            if (device == VK_NULL_HANDLE) { return;
+}
 
             // A minimized window reports a zero drawable extent. Waiting here
             // prevents recreating HDR attachments with that transient size.
@@ -435,7 +446,7 @@
         }
 
         void createEditorUiResources() {
-            if (ImGui::GetCurrentContext() == nullptr) return;
+            if (ImGui::GetCurrentContext() == nullptr) { return; }
             VkAttachmentDescription color{};
             color.format = swapchain.format(); color.samples = VK_SAMPLE_COUNT_1_BIT;
             // In editor mode the swapchain is UI background, not a second
@@ -486,7 +497,8 @@
             info.ApiVersion = VK_API_VERSION_1_3; info.Instance = instance;
             info.PhysicalDevice = vulkanDevice.physical(); info.Device = device;
             info.QueueFamily = vulkanDevice.graphicsQueueFamily(); info.Queue = vulkanDevice.graphicsQueue();
-            info.DescriptorPoolSize = 128; info.MinImageCount = 2;
+            constexpr uint32_t imguiDescriptorPoolSize{128};
+            info.DescriptorPoolSize = imguiDescriptorPoolSize; info.MinImageCount = 2;
             info.ImageCount = static_cast<uint32_t>(swapchain.imageCount());
             info.PipelineInfoMain.RenderPass = editorUiRenderPass;
             info.PipelineInfoMain.MSAASamples = VK_SAMPLE_COUNT_1_BIT;
@@ -498,8 +510,10 @@
 
         void destroyEditorUiResources() noexcept {
             if (editorUiActive) {
-                if (gameViewportDescriptor != VK_NULL_HANDLE) ImGui_ImplVulkan_RemoveTexture(gameViewportDescriptor);
-                if (sceneViewportDescriptor != VK_NULL_HANDLE) ImGui_ImplVulkan_RemoveTexture(sceneViewportDescriptor);
+                if (gameViewportDescriptor != VK_NULL_HANDLE) { ImGui_ImplVulkan_RemoveTexture(gameViewportDescriptor);
+}
+                if (sceneViewportDescriptor != VK_NULL_HANDLE) { ImGui_ImplVulkan_RemoveTexture(sceneViewportDescriptor);
+}
             }
             // Do not rely only on editorUiActive here. If initialization failed
             // halfway through, ImGui can still own a renderer backend and the
@@ -519,14 +533,16 @@
             editorUiActive = false;
             for (VkFramebuffer framebuffer : editorUiFramebuffers) if (framebuffer != VK_NULL_HANDLE) vkDestroyFramebuffer(device, framebuffer, nullptr);
             editorUiFramebuffers.clear();
-            if (editorUiRenderPass != VK_NULL_HANDLE) vkDestroyRenderPass(device, editorUiRenderPass, nullptr);
+            if (editorUiRenderPass != VK_NULL_HANDLE) { vkDestroyRenderPass(device, editorUiRenderPass, nullptr);
+}
             editorUiRenderPass = VK_NULL_HANDLE;
         }
 
         // Scene reload replaces the images displayed by ImGui::Image. Rebind
         // its descriptors before the next UI command buffer is recorded.
         void refreshEditorViewportTextures() {
-            if (!editorUiActive) return;
+            if (!editorUiActive) { return;
+}
             if (gameViewportDescriptor != VK_NULL_HANDLE) {
                 ImGui_ImplVulkan_RemoveTexture(gameViewportDescriptor);
             }
@@ -538,5 +554,3 @@
             sceneViewportDescriptor = ImGui_ImplVulkan_AddTexture(
                 sceneViewportTarget.color().imageView(), VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
         }
-
-

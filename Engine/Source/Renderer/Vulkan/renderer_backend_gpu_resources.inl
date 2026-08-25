@@ -1,7 +1,11 @@
         void createCullingResources() {
+            constexpr std::size_t modelDiagonalStride = 5;
+            constexpr std::size_t cullingDescriptorBindingCount = 5;
+
             hiZValid = false;
             const auto objectCount = static_cast<uint32_t>(instanceBatches.size());
-            if (objectCount == 0) return;
+            if (objectCount == 0) { return;
+}
 
             hiZBuffer.create(vulkanDevice.physical(), device, swapchain.extent().width, swapchain.extent().height);
 
@@ -47,21 +51,21 @@
                 const InstanceBatch& batch = instanceBatches[i];
                 auto& object = gpuObjects[i];
                 object.model = {};
-                object.model.data[0] = 1.0f;
-                object.model.data[5] = 1.0f;
-                object.model.data[10] = 1.0f;
-                object.model.data[15] = 1.0f;
+                object.model.data[0] = 1.0F;
+                object.model.data[modelDiagonalStride] = 1.0F;
+                object.model.data[modelDiagonalStride * 2] = 1.0F;
+                object.model.data[modelDiagonalStride * 3] = 1.0F;
                 const AABB& bounds = batch.worldBounds;
                 object.localAabbMin = {
-                    bounds.min.x(), bounds.min.y(), bounds.min.z(), 0.0f};
+                    bounds.min.x(), bounds.min.y(), bounds.min.z(), 0.0F, };
                 object.localAabbMax = {
-                    bounds.max.x(), bounds.max.y(), bounds.max.z(), 0.0f};
+                    bounds.max.x(), bounds.max.y(), bounds.max.z(), 0.0F, };
                 object.indexCount = batch.indexCount;
                 object.instanceCount = batch.instanceCount;
                 object.firstIndex = batch.firstIndex;
                 object.vertexOffset = 0;
                 object.firstInstance = batch.firstInstance;
-                object.castShadow = batch.castShadow ? 1u : 0u;
+                object.castShadow = batch.castShadow ? 1U : 0U;
             }
             for (Buffer& buffer : cullingObjectBuffers) {
                 buffer.createHostVisible(
@@ -135,17 +139,22 @@
             }
             for (uint32_t frame = 0; frame < MAX_FRAMES_IN_FLIGHT; ++frame) {
                 const VkDescriptorImageInfo hiZInfo{hiZBuffer.sampler(), hiZBuffer.fullView(), VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
-                const auto updateCullingSet = [&](VkDescriptorSet set, const Buffer& indirectBuffer,
-                                                  const Buffer& countBuffer, const Buffer& uniformBuffer) {
+                struct CullingSetUpdate {
+                    VkDescriptorSet set;
+                    const Buffer& indirectBuffer;
+                    const Buffer& countBuffer;
+                    const Buffer& uniformBuffer;
+                };
+                const auto updateCullingSet = [&](const CullingSetUpdate& update) {
                     const VkDescriptorBufferInfo objectInfo{
                         cullingObjectBuffers[frame].handle(), 0, VK_WHOLE_SIZE};
-                    const VkDescriptorBufferInfo indirectInfo{indirectBuffer.handle(), 0, VK_WHOLE_SIZE};
-                    const VkDescriptorBufferInfo countInfo{countBuffer.handle(), 0, sizeof(uint32_t)};
-                    const VkDescriptorBufferInfo uniformInfo{uniformBuffer.handle(), 0, sizeof(Culling::CullingUniformData)};
-                    VkWriteDescriptorSet writes[5]{};
-                    for (uint32_t i = 0; i < 5; ++i) {
+                    const VkDescriptorBufferInfo indirectInfo{update.indirectBuffer.handle(), 0, VK_WHOLE_SIZE};
+                    const VkDescriptorBufferInfo countInfo{update.countBuffer.handle(), 0, sizeof(uint32_t)};
+                    const VkDescriptorBufferInfo uniformInfo{update.uniformBuffer.handle(), 0, sizeof(Culling::CullingUniformData)};
+                    std::array<VkWriteDescriptorSet, cullingDescriptorBindingCount> writes{};
+                    for (uint32_t i = 0; i < writes.size(); ++i) {
                         writes[i].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-                        writes[i].dstSet = set;
+                        writes[i].dstSet = update.set;
                         writes[i].dstBinding = i;
                         writes[i].descriptorCount = 1;
                     }
@@ -154,14 +163,14 @@
                     writes[2].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER; writes[2].pBufferInfo = &countInfo;
                     writes[3].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER; writes[3].pImageInfo = &hiZInfo;
                     writes[4].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER; writes[4].pBufferInfo = &uniformInfo;
-                    vkUpdateDescriptorSets(device, std::size(writes), writes, 0, nullptr);
+                    vkUpdateDescriptorSets(device, static_cast<uint32_t>(writes.size()), writes.data(), 0, nullptr);
                 };
                 VkDescriptorSet cameraCullSet = cullSets[frame];
                 VkDescriptorSet shadowCullSet = cullSets[MAX_FRAMES_IN_FLIGHT + frame];
-                updateCullingSet(cameraCullSet, indirectBuffers[frame], drawCountBuffers[frame],
-                                 cullingUniformBuffers[frame]);
-                updateCullingSet(shadowCullSet, shadowIndirectBuffers[frame], shadowDrawCountBuffers[frame],
-                                 shadowCullingUniformBuffers[frame]);
+                updateCullingSet({cameraCullSet, indirectBuffers[frame], drawCountBuffers[frame],
+                                  cullingUniformBuffers[frame]});
+                updateCullingSet({shadowCullSet, shadowIndirectBuffers[frame], shadowDrawCountBuffers[frame],
+                                  shadowCullingUniformBuffers[frame]});
                 gpuCullingPasses[frame].create(device, cullingPipeline, cullingPipelineLayout, cullSets[frame],
                     indirectBuffers[frame].handle(), drawCountBuffers[frame].handle(), objectCount);
                 indirectDraws[frame].create(
@@ -185,16 +194,26 @@
             for (Buffer& buffer : drawCountBuffers) buffer.destroy();
             for (Buffer& buffer : shadowDrawCountBuffers) buffer.destroy();
             for (Buffer& buffer : cullingObjectBuffers) buffer.destroy();
-            if (cullingDescriptorPool != VK_NULL_HANDLE) vkDestroyDescriptorPool(device, cullingDescriptorPool, nullptr);
-            if (hiZCopyPipeline != VK_NULL_HANDLE) vkDestroyPipeline(device, hiZCopyPipeline, nullptr);
-            if (hiZReducePipeline != VK_NULL_HANDLE) vkDestroyPipeline(device, hiZReducePipeline, nullptr);
-            if (cullingPipeline != VK_NULL_HANDLE) vkDestroyPipeline(device, cullingPipeline, nullptr);
-            if (hiZCopyPipelineLayout != VK_NULL_HANDLE) vkDestroyPipelineLayout(device, hiZCopyPipelineLayout, nullptr);
-            if (hiZReducePipelineLayout != VK_NULL_HANDLE) vkDestroyPipelineLayout(device, hiZReducePipelineLayout, nullptr);
-            if (cullingPipelineLayout != VK_NULL_HANDLE) vkDestroyPipelineLayout(device, cullingPipelineLayout, nullptr);
-            if (hiZCopyDescriptorSetLayout != VK_NULL_HANDLE) vkDestroyDescriptorSetLayout(device, hiZCopyDescriptorSetLayout, nullptr);
-            if (hiZReduceDescriptorSetLayout != VK_NULL_HANDLE) vkDestroyDescriptorSetLayout(device, hiZReduceDescriptorSetLayout, nullptr);
-            if (cullingDescriptorSetLayout != VK_NULL_HANDLE) vkDestroyDescriptorSetLayout(device, cullingDescriptorSetLayout, nullptr);
+            if (cullingDescriptorPool != VK_NULL_HANDLE) { vkDestroyDescriptorPool(device, cullingDescriptorPool, nullptr);
+}
+            if (hiZCopyPipeline != VK_NULL_HANDLE) { vkDestroyPipeline(device, hiZCopyPipeline, nullptr);
+}
+            if (hiZReducePipeline != VK_NULL_HANDLE) { vkDestroyPipeline(device, hiZReducePipeline, nullptr);
+}
+            if (cullingPipeline != VK_NULL_HANDLE) { vkDestroyPipeline(device, cullingPipeline, nullptr);
+}
+            if (hiZCopyPipelineLayout != VK_NULL_HANDLE) { vkDestroyPipelineLayout(device, hiZCopyPipelineLayout, nullptr);
+}
+            if (hiZReducePipelineLayout != VK_NULL_HANDLE) { vkDestroyPipelineLayout(device, hiZReducePipelineLayout, nullptr);
+}
+            if (cullingPipelineLayout != VK_NULL_HANDLE) { vkDestroyPipelineLayout(device, cullingPipelineLayout, nullptr);
+}
+            if (hiZCopyDescriptorSetLayout != VK_NULL_HANDLE) { vkDestroyDescriptorSetLayout(device, hiZCopyDescriptorSetLayout, nullptr);
+}
+            if (hiZReduceDescriptorSetLayout != VK_NULL_HANDLE) { vkDestroyDescriptorSetLayout(device, hiZReduceDescriptorSetLayout, nullptr);
+}
+            if (cullingDescriptorSetLayout != VK_NULL_HANDLE) { vkDestroyDescriptorSetLayout(device, cullingDescriptorSetLayout, nullptr);
+}
             cullingDescriptorPool = VK_NULL_HANDLE; hiZCopyPipeline = hiZReducePipeline = cullingPipeline = VK_NULL_HANDLE;
             hiZCopyPipelineLayout = hiZReducePipelineLayout = cullingPipelineLayout = VK_NULL_HANDLE;
             hiZCopyDescriptorSetLayout = hiZReduceDescriptorSetLayout = cullingDescriptorSetLayout = VK_NULL_HANDLE;
@@ -316,8 +335,8 @@
             const auto light = directionalLight();
             const float extent = sceneRadius;
             const Vec3 lightTarget = sceneCenter;
-            const Vec3 lightPosition = lightTarget - light.direction * (extent * 5.0f);
-            constexpr Vec3 worldUp{0.0f, 1.0f, 0.0f};
+            const Vec3 lightPosition = lightTarget - (light.direction * (extent * 5.0F));
+            constexpr Vec3 worldUp{0.0F, 1.0F, 0.0F};
             const Mat4 lightView = Mat4::lookAt(lightPosition, lightTarget, worldUp);
             const Mat4 lightProjection = Mat4::scale(
                 Mat4::ortho(-extent * 2.25f, extent * 2.25f,
@@ -326,7 +345,5 @@
                 Vec3{1.0f, -1.0f, 1.0f});
             return lightProjection * lightView;
         }
-
-
 
 

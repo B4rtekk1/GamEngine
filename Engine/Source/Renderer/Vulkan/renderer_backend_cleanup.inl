@@ -87,4 +87,3 @@
             // The application, not the renderer, owns the SDL window and SDL lifetime.
             window = nullptr;
         }
-
