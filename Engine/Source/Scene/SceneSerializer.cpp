@@ -308,9 +308,10 @@ namespace Engine {
                     readFloat(input, "capsule collider height"),
                 };
                 const auto &capsule = std::get<CapsuleCollider>(collider.shape);
-                if (capsule.radius <= 0.0F || capsule.height <= 0.0F) { invalidScene(
-                    "capsule collider dimensions must be positive");
-}
+                if (capsule.radius <= 0.0F || capsule.height <= 0.0F) {
+                    invalidScene(
+                        "capsule collider dimensions must be positive");
+                }
             } else {
                 collider.shape = RampCollider{readVec3(input, "ramp collider half extents")};
                 const auto &ramp = std::get<RampCollider>(collider.shape);
@@ -500,8 +501,9 @@ namespace Engine {
             for (const auto &[width, height, rgbaPixels]: mesh.images) {
                 serialized << "IMAGE " << width << ' ' << height << ' '
                         << rgbaPixels.size() << '\n' << "PIXELS";
-                for (const std::uint8_t pixel: rgbaPixels) { serialized << ' ' << static_cast<unsigned>(pixel);
-}
+                for (const std::uint8_t pixel: rgbaPixels) {
+                    serialized << ' ' << static_cast<unsigned>(pixel);
+                }
                 serialized << '\n';
             }
         }
@@ -643,8 +645,9 @@ namespace Engine {
 
         std::string section;
         input >> section;
-        if (!input) { invalidScene("expected 'MESHES'");
-}
+        if (!input) {
+            invalidScene("expected 'MESHES'");
+        }
         if (section == "SETTINGS") {
             expect(input, "MSAA");
             const auto samples = read<unsigned>(input, "MSAA sample count");
@@ -759,7 +762,8 @@ namespace Engine {
                     }
                     UUIDComponent uuid;
                     uuid.value = read<UUID>(input, "object UUID");
-                    if (uuid.value == NullUUID) { invalidScene("object UUID cannot be zero");
+                    if (uuid.value == NullUUID) {
+                        invalidScene("object UUID cannot be zero");
                     }
                     NameComponent name;
                     input >> std::quoted(name.value);
@@ -775,8 +779,9 @@ namespace Engine {
                         invalidScene("entity contains an invalid PARENT component");
                     }
                     const UUID parent = read<UUID>(input, "parent UUID");
-                    if (parent == NullUUID) { invalidScene("parent UUID cannot be zero");
-}
+                    if (parent == NullUUID) {
+                        invalidScene("parent UUID cannot be zero");
+                    }
                     loaded.add<ParentComponent>(entity, ParentComponent{.parent = parent});
                     hasParent = true;
                 } else if (component == "TRANSFORM") {
@@ -792,13 +797,13 @@ namespace Engine {
                 } else if (component == "COLLIDER") {
                     if (version < ColliderFormatVersion || hasCollider) {
                         invalidScene("entity contains an invalid ColliderComponent");
-}
+                    }
                     hasCollider = true;
                     loaded.add<ColliderComponent>(entity, readCollider(input));
                 } else if (component == "RIGIDBODY") {
                     if (version < RigidbodyFormatVersion || hasRigidbody) {
                         invalidScene("entity contains an invalid RigidbodyComponent");
-}
+                    }
                     hasRigidbody = true;
                     loaded.add<RigidbodyComponent>(entity, readRigidbody(input));
                 } else if (component == "MESH_RENDERER") {
@@ -918,10 +923,14 @@ namespace Engine {
                 // scene files did not serialize the emitter at all, so using the
                 // generic ParticleEmitter defaults would noticeably shrink and
                 // thin the restored effect.
-                emitter.minVelocity = {-LegacyParticleMinVelocity, LegacyParticleMinVelocityY,
-                                        -LegacyParticleMinVelocity};
-                emitter.maxVelocity = {LegacyParticleMinVelocity, LegacyParticleMaxVelocityY,
-                                        LegacyParticleMinVelocity};
+                emitter.minVelocity = {
+                    -LegacyParticleMinVelocity, LegacyParticleMinVelocityY,
+                    -LegacyParticleMinVelocity
+                };
+                emitter.maxVelocity = {
+                    LegacyParticleMinVelocity, LegacyParticleMaxVelocityY,
+                    LegacyParticleMinVelocity
+                };
                 emitter.minLifeTime = LegacyParticleMinLifetime;
                 emitter.maxLifeTime = LegacyParticleMaxLifetime;
                 emitter.minSize = LegacyParticleMinSize;
@@ -952,8 +961,9 @@ namespace Engine {
             }
             if (loaded.has<ParentComponent>(entity)) {
                 const UUID parent = loaded.get<ParentComponent>(entity).parent;
-                if (parent == uuid.value) { invalidScene("object cannot be its own parent");
-}
+                if (parent == uuid.value) {
+                    invalidScene("object cannot be its own parent");
+                }
                 parentsByUuid.emplace(uuid.value, parent);
             }
         });

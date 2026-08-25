@@ -112,7 +112,7 @@ public:
     /** Loads a model through Content and creates an actor in one operation. */
     [[nodiscard]] Actor createModel(std::string name,
                                     std::filesystem::path path,
-                                    Assets::Content& content);
+                                    const Assets::Content& content);
 
     /** Loads a model using the Content service attached to this scene. */
     [[nodiscard]] Actor createModel(std::string name, std::filesystem::path path);
@@ -122,7 +122,7 @@ public:
                                      std::filesystem::path path,
                                      PBRMaterial material = {});
 
-    [[nodiscard]] Actor createCube(std::string name, PBRMaterial material = {});
+    [[nodiscard]] Actor createCube(std::string name, const PBRMaterial &material = {});
     [[nodiscard]] Actor createPrefab(std::string name, const Prefab& prefab);
 
     [[nodiscard]] Actor findActor(const std::string& name) noexcept {
