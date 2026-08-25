@@ -1,4 +1,6 @@
 #include "Engine/Renderer/Vulkan/renderer.h"
+#include "Engine/Renderer/Vulkan/renderer_scene_helpers.h"
+#include "Engine/Renderer/Vulkan/renderer_types.h"
 #include "Engine/Renderer/Vulkan/CameraController.h"
 #include "Engine/Renderer/Vulkan/SceneGpuResources.h"
 
@@ -80,40 +82,11 @@
 
 namespace Engine {
 
+using UniformBufferObject = RendererUniformBufferObject;
+
 constexpr uint32_t WIDTH = 800;
 constexpr uint32_t HEIGHT = 600;
 constexpr int MAX_FRAMES_IN_FLIGHT = 2;
-
-namespace {
-    Particles::ParticleCollider makeParticleCollider(const ColliderComponent& collider,
-                                                     const Transform& transform) {
-            const Vec3 scale{std::abs(transform.scale.x()), std::abs(transform.scale.y()),
-                             std::abs(transform.scale.z())};
-            const Vec3 extents = std::visit([]<typename T0>(const T0& shape) {
-                using Shape = std::decay_t<T0>;
-                if constexpr (std::is_same_v<Shape, BoxCollider>) return shape.halfExtents;
-                else if constexpr (std::is_same_v<Shape, SphereCollider>) return Vec3{shape.radius, shape.radius, shape.radius};
-                else if constexpr (std::is_same_v<Shape, RampCollider>) return shape.halfExtents;
-                else return Vec3{shape.radius, shape.height * 0.5f, shape.radius};
-            }, collider.shape) * scale;
-            const Vec3 center = transform.position + collider.offset * scale;
-            return {Vec4{center.x(), center.y(), center.z(), 0.0f},
-                    Vec4{extents.x(), extents.y(), extents.z(), 0.0f}};
-    }
-
-    struct UniformBufferObject {
-        Mat4 view;
-        Mat4 projection;
-        Mat4 lightSpace;
-        glm::vec4 cameraPosition;
-        glm::vec4 lightDirectionIntensity;
-        glm::vec4 lightColor;
-        std::uint32_t shadowEnabled{0};
-        std::uint32_t materialSlots{1};
-        std::uint32_t selectedInstance{std::numeric_limits<std::uint32_t>::max()};
-        std::uint32_t materialSlotsPadding{};
-    };
-}
 
 #ifdef NDEBUG
 constexpr bool enableValidationLayers = false;
@@ -2524,7 +2497,7 @@ class Renderer::Backend {
             readRegistry.view<ColliderComponent, Transform>(
                 [&](const Entity entity, const ColliderComponent& collider, const Transform& transform) {
                     particleColliderIndices.emplace(entity, cachedParticleColliders.size());
-                    cachedParticleColliders.push_back(makeParticleCollider(collider, transform));
+                    cachedParticleColliders.push_back(RendererSceneHelpers::makeParticleCollider(collider, transform));
                     particleColliderEntities.push_back(entity);
                 });
         }
@@ -2576,7 +2549,7 @@ class Renderer::Backend {
                         cacheChanged = true;
                         continue;
                     }
-                    const Particles::ParticleCollider value = makeParticleCollider(
+                    const Particles::ParticleCollider value = RendererSceneHelpers::makeParticleCollider(
                         readRegistry.get<ColliderComponent>(entity),
                         readRegistry.get<Transform>(entity));
                     if (const auto it = particleColliderIndices.find(entity);
@@ -2806,100 +2779,6 @@ class Renderer::Backend {
         }
     };
 
-Renderer::~Renderer() = default;
-Renderer::Renderer(RenderConfig config)
-    : optimizationFeatures_(config.features), antialiasingLevel_(config.antialiasing),
-      state_(std::make_unique<State>()) {}
-
-void Renderer::setOptimizationFeatures(RenderOptimizationFeatures features) noexcept {
-    optimizationFeatures_ = features;
-}
-
-const RenderOptimizationFeatures& Renderer::optimizationFeatures() const noexcept {
-    return optimizationFeatures_;
-}
-
-void Renderer::setAntialiasingLevel(AntialiasingLevel level) noexcept {
-    antialiasingLevel_ = level;
-}
-
-AntialiasingLevel Renderer::antialiasingLevel() const noexcept {
-    return antialiasingLevel_;
-}
-
-void Renderer::initialize(Scene& scene, void* nativeWindow) {
-    auto* window = static_cast<SDL_Window*>(nativeWindow);
-    if (backend_) throw std::logic_error("Renderer is already initialized");
-    backend_ = std::make_unique<Backend>(scene, window, optimizationFeatures_, antialiasingLevel_,
-                                         state_->assetManager, state_->forwardPass, state_->skyPass,
-                                         state_->tonemapPass, state_->particlePipeline,
-                                         state_->canvasRenderer);
-    backend_->initialize();
-}
-
-void Renderer::beginFrame() { Backend::beginFrame(); }
-EditorEventState Renderer::pollEditorEvents() const {
-    return backend_ ? backend_->pollEditorEvents() : EditorEventState{};
-}
-void Renderer::beginEditorUiFrame() const { backend_->beginEditorUiFrame(); }
-void Renderer::processEvent(const void* nativeEvent) const {
-    if (backend_) backend_->processEvent(*static_cast<const SDL_Event*>(nativeEvent));
-}
-
-void Renderer::setEditorSceneCameraInput(const bool active) const {
-    if (backend_) backend_->setEditorSceneCameraInput(active);
-}
-void Renderer::updateEditorSceneCameraInput() const {
-    if (backend_) backend_->updateEditorSceneCameraInput();
-}
-void Renderer::setEditorSelection(const Entity entity) const {
-    if (backend_) backend_->setEditorSelection(entity);
-}
-void Renderer::renderFrame() const { backend_->renderFrame(); }
-void Renderer::synchronizeScene(Scene& scene) const {
-    if (backend_) backend_->synchronizeSceneResources(scene);
-}
-void Renderer::reloadScene(Scene& scene, void* nativeWindow) {
-    static_cast<void>(nativeWindow); // The live backend keeps the application window.
-    if (backend_) {
-        if (backend_->antialiasingLevel != antialiasingLevel_) {
-            backend_->reconfigureAntialiasing(antialiasingLevel_);
-        }
-        backend_->reloadSceneResources(scene);
-    }
-    else initialize(scene, nativeWindow);
-}
-void Renderer::reconfigureAntialiasing() const {
-    if (!backend_) return;
-    backend_->reconfigureAntialiasing(antialiasingLevel_);
-}
-ViewportHandle Renderer::gameViewport() const noexcept {
-    return {reinterpret_cast<std::uintptr_t>(backend_ ? backend_->gameViewportTexture() : VK_NULL_HANDLE)};
-}
-ViewportHandle Renderer::sceneViewport() const noexcept {
-    return {reinterpret_cast<std::uintptr_t>(backend_ ? backend_->sceneViewportTexture() : VK_NULL_HANDLE)};
-}
-float Renderer::editorCameraYaw() const noexcept {
-    return backend_ ? backend_->editorCameraYaw() : 0.0f;
-}
-float Renderer::editorCameraPitch() const noexcept {
-    return backend_ ? backend_->editorCameraPitch() : 0.0f;
-}
-Vec3 Renderer::editorCameraPosition() const noexcept {
-    return backend_ ? backend_->editorCameraPosition() : Vec3{};
-}
-Vec3 Renderer::editorGizmoPosition(const Entity entity) const noexcept {
-    return backend_ ? backend_->editorGizmoPosition(entity) : Vec3{};
-}
-void Renderer::setEditorCameraRotation(const float yaw, const float pitch) const noexcept {
-    if (backend_) backend_->setEditorCameraRotation(yaw, pitch);
-}
-void Renderer::shutdown() noexcept {
-    backend_.reset();
-    if (ImGui::GetCurrentContext() != nullptr &&
-        ImGui::GetIO().BackendPlatformUserData != nullptr) {
-        ImGui_ImplSDL3_Shutdown();
-    }
-}
+#include "renderer_api.inl"
 
 } // namespace Engine

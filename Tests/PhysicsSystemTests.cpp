@@ -339,12 +339,13 @@ int main() {
     editorCube.setPosition({0.0f, 0.5f, -7.0f});
     editorCube.setScale({3.0f, 3.0f, 0.3f});
     editorCube.addRigidbody(RigidbodyComponent{
-        .mass = 10.0f, .linearDamping = 0.5f, .angularDamping = 2.0f
+        .mass = 52.0f, .linearDamping = 0.5f, .angularDamping = 2.0f
     });
     editorCube.addBoxCollider();
 
     float maximumCubeSpeed = 0.0f;
     float maximumCubeAngularSpeed = 0.0f;
+    float minimumCubeZ = editorCube.position().z();
     int maximumCubeSpeedStep = 0;
     int maximumCubeAngularSpeedStep = 0;
     for (int step = 0; step < 1200; ++step) {
@@ -352,6 +353,7 @@ int main() {
         const float cubeSpeed = editorCube.velocity().length();
         const float cubeAngularSpeed =
             editorPhysicsScene.find(editorCube.id())->rigidbody().angularVelocity.length();
+        minimumCubeZ = std::min(minimumCubeZ, editorCube.position().z());
         if (cubeSpeed > maximumCubeSpeed) {
             maximumCubeSpeed = cubeSpeed;
             maximumCubeSpeedStep = step;
@@ -370,6 +372,63 @@ int main() {
     if (std::abs(settledCubeBody.linearVelocity.y()) > 0.01f ||
         settledCubeBody.angularVelocity.length() > 0.01f) {
         return 21;
+    }
+    if (minimumCubeZ < -7.3f) return 24;
+
+    // Dynamic-vs-dynamic response must not depend on a sphere-specific path.
+    // Two boxes use the same mass-weighted correction and impulse solver as
+    // every other supported collider pair.
+    Scene dynamicBoxesScene;
+    auto strikingBox = dynamicBoxesScene.createActor("Striking box");
+    strikingBox.setPosition({-1.4f, 0.0f, 0.0f});
+    strikingBox.addRigidbody(RigidbodyComponent{
+        .linearDamping = 0.0f,
+        .angularDamping = 0.0f,
+        .useGravity = false,
+        .linearVelocity = {5.0f, 0.0f, 0.0f}
+    });
+    strikingBox.addBoxCollider();
+    auto struckBox = dynamicBoxesScene.createActor("Struck box");
+    struckBox.addRigidbody(RigidbodyComponent{
+        .linearDamping = 0.0f,
+        .angularDamping = 0.0f,
+        .useGravity = false
+    });
+    struckBox.addBoxCollider();
+
+    physics.update(dynamicBoxesScene, 0.1f);
+    if (strikingBox.velocity().x() >= 4.999f ||
+        struckBox.velocity().x() <= 0.001f ||
+        strikingBox.position().x() + 0.5f > struckBox.position().x() - 0.5f) {
+        return 22;
+    }
+
+    // Regression for Editor.scene: Cube 2 has a lower entity id than
+    // Sphere 2. Collision ownership must therefore be based on supported
+    // shape pairs, not simply on entity ordering.
+    Scene laterSphereScene;
+    auto earlierBox = laterSphereScene.createActor("Earlier dynamic box");
+    earlierBox.addRigidbody(RigidbodyComponent{
+        .linearDamping = 0.0f,
+        .angularDamping = 0.0f,
+        .useGravity = false
+    });
+    earlierBox.addBoxCollider();
+    auto laterSphere = laterSphereScene.createActor("Later dynamic sphere");
+    laterSphere.setPosition({0.0f, 1.4f, 0.0f});
+    laterSphere.addRigidbody(RigidbodyComponent{
+        .linearDamping = 0.0f,
+        .angularDamping = 0.0f,
+        .useGravity = false,
+        .linearVelocity = {0.0f, -5.0f, 0.0f}
+    });
+    laterSphere.addSphereCollider(0.5f);
+
+    physics.update(laterSphereScene, 0.1f);
+    if (laterSphere.velocity().y() <= -4.999f ||
+        earlierBox.velocity().y() >= -0.001f ||
+        laterSphere.position().y() - 0.5f < earlierBox.position().y() + 0.5f) {
+        return 23;
     }
 
     return 0;
