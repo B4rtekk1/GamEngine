@@ -156,5 +156,6 @@ namespace Engine::Particles {
         VkDeviceMemory colliderMemory_{};
         void* colliderMapped_ = nullptr;
         std::vector<ParticleCollider> colliders_;
+        std::vector<ParticleCollider> activeColliders_;
     };
 }

@@ -721,6 +721,11 @@ void PhysicsSystem::update(Scene& scene, const float deltaTime) const {
     }
     std::vector<std::uint32_t> seen(colliders.size(), 0);
     std::uint32_t queryStamp = 0;
+    // Reuse one query buffer for the entire simulation step. Creating this
+    // vector inside the body loop used to allocate repeatedly as the number
+    // of dynamic bodies grew.
+    std::vector<std::size_t> candidates;
+    candidates.reserve(colliders.size());
 
     registry.view<RigidbodyComponent, Transform>(
         [&](const Entity entity, RigidbodyComponent& body, Transform& transform) {
@@ -753,7 +758,7 @@ void PhysicsSystem::update(Scene& scene, const float deltaTime) const {
                 Vec3 rampNormal{0.0f, 1.0f, 0.0f};
                 float rampFriction = 0.0f;
                 float rampPenetration = 0.0f;
-                std::vector<std::size_t> candidates;
+                candidates.clear();
                 ++queryStamp;
                 if (queryStamp == 0) {
                     std::fill(seen.begin(), seen.end(), 0);

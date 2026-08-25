@@ -90,22 +90,24 @@ void main() {
         float age = clamp(1.0 - p.positionLife.w / max(p.spawnData.z, 0.001), 0.0, 1.0);
         // Fast enough to feel alive at the source, then gradually swelling
         // into a broad cloud.  The cubic curve avoids a mechanical scale-up.
-        float expansion = 1.0 - pow(1.0 - age, 2.4);
+        float expansionAge = 1.0 - age;
+        float expansion = 1.0 - expansionAge * expansionAge *
+                          (0.6 + 0.4 * expansionAge);
         p.velocitySize.w = mix(p.spawnData.x, p.spawnData.y, expansion);
         // Keep lateral turbulence deliberately subtle. The previous curl
         // field plus radial expansion produced a symmetric V-shaped split;
         // real smoke initially rises as one column and only then meanders.
-        vec3 swirl = curlNoise(p.positionLife.xyz * 0.72 + vec3(2.1, 0.0, 4.6)) * 0.18 +
-                     curlNoise(p.positionLife.xyz * 1.63 + vec3(8.3, 3.7, 1.2)) * 0.06;
+        vec3 swirl = curlNoise(p.positionLife.xyz * 0.72 + vec3(2.1, 0.0, 4.6)) * 0.20;
         swirl.y *= 0.35;
         p.velocitySize.xyz += (vec3(0.0, sim.smokeDynamics.x, 0.0) +
                                swirl * sim.smokeDynamics.z) * dt;
-        p.velocitySize.xyz *= exp(-sim.smokeDynamics.y * dt);
+        p.velocitySize.xyz *= 1.0 / (1.0 + sim.smokeDynamics.y * dt);
 
         // In the approach zone the stream is split into two tangential paths
         // and gently lifted.  It starts this turn before contact, which is
         // what makes smoke visibly wrap around an obstacle instead of simply
         // bouncing from it.
+        vec3 nextPosition = p.positionLife.xyz + p.velocitySize.xyz * dt;
         for (uint c = 0u; c < uint(sim.colliderCount); ++c) {
             vec3 center = colliders[c].center.xyz;
             vec3 extents = colliders[c].halfExtents.xyz +
@@ -125,16 +127,10 @@ void main() {
             float flowStrength = (2.4 + 3.0 * length(p.velocitySize.xyz));
             p.velocitySize.xyz += (normal * incoming * 2.0 + around * flowStrength) *
                                   proximity * dt;
-        }
-        vec3 nextPosition = p.positionLife.xyz + p.velocitySize.xyz * dt;
-
-        // Resolve against the *predicted* position, using an expanded AABB.
-        // This prevents smoke from crossing thin obstacles during one frame;
-        // removing the normal component then makes it slide around a wall.
-        for (uint c = 0u; c < uint(sim.colliderCount); ++c) {
-            vec3 center = colliders[c].center.xyz;
-            vec3 extents = colliders[c].halfExtents.xyz +
-                           vec3(max(sim.smokeDynamics.w, p.velocitySize.w * 0.35));
+            // Resolve the predicted position in the same pass.  This keeps
+            // the approach force and exact penetration test at one collider
+            // traversal per particle.
+            nextPosition = p.positionLife.xyz + p.velocitySize.xyz * dt;
             vec3 relative = nextPosition - center;
             if (all(lessThan(abs(relative), extents))) {
                 vec3 margin = extents - abs(relative);

@@ -85,10 +85,8 @@ constexpr uint32_t HEIGHT = 600;
 constexpr int MAX_FRAMES_IN_FLIGHT = 2;
 
 namespace {
-    std::vector<Particles::ParticleCollider> particleColliders(const Registry& registry) {
-        std::vector<Particles::ParticleCollider> result;
-        registry.view<ColliderComponent, Transform>([&](const Entity, const ColliderComponent& collider,
-                                                        const Transform& transform) {
+    Particles::ParticleCollider makeParticleCollider(const ColliderComponent& collider,
+                                                     const Transform& transform) {
             const Vec3 scale{std::abs(transform.scale.x()), std::abs(transform.scale.y()),
                              std::abs(transform.scale.z())};
             const Vec3 extents = std::visit([]<typename T0>(const T0& shape) {
@@ -99,10 +97,8 @@ namespace {
                 else return Vec3{shape.radius, shape.height * 0.5f, shape.radius};
             }, collider.shape) * scale;
             const Vec3 center = transform.position + collider.offset * scale;
-            result.push_back({Vec4{center.x(), center.y(), center.z(), 0.0f},
-                              Vec4{extents.x(), extents.y(), extents.z(), 0.0f}});
-        });
-        return result;
+            return {Vec4{center.x(), center.y(), center.z(), 0.0f},
+                    Vec4{extents.x(), extents.y(), extents.z(), 0.0f}};
     }
 
     struct UniformBufferObject {
@@ -531,6 +527,15 @@ class Renderer::Backend {
         VkPipeline hiZReducePipeline = VK_NULL_HANDLE;
         VkPipeline cullingPipeline = VK_NULL_HANDLE;
         std::vector<Culling::GPUObjectData> gpuObjects;
+        // CPU-side cache for particle obstacles.  ParticleSystem receives
+        // this vector only when collider-related ECS data actually changed.
+        std::vector<Particles::ParticleCollider> cachedParticleColliders;
+        std::vector<Entity> particleColliderEntities;
+        std::unordered_map<Entity, std::size_t> particleColliderIndices;
+        const Registry* particleColliderRegistry = nullptr;
+        std::uint64_t particleColliderStructuralRevision = 0;
+        std::uint64_t particleColliderComponentRevision = 0;
+        std::uint64_t particleColliderTransformRevision = 0;
         bool hiZValid = false;
         Entity editorSelectedEntity = NullEntity;
         std::uint32_t editorSelectedRenderable = std::numeric_limits<std::uint32_t>::max();
@@ -2477,6 +2482,91 @@ class Renderer::Backend {
             if (cameraController.editorInputEnabled()) cameraController.updateEditor(window);
         }
 
+        void rebuildParticleColliderCache() {
+            cachedParticleColliders.clear();
+            particleColliderEntities.clear();
+            particleColliderIndices.clear();
+            cachedParticleColliders.reserve(registry.size());
+            particleColliderEntities.reserve(registry.size());
+            particleColliderIndices.reserve(registry.size());
+            const Registry& readRegistry = registry;
+            readRegistry.view<ColliderComponent, Transform>(
+                [&](const Entity entity, const ColliderComponent& collider, const Transform& transform) {
+                    particleColliderIndices.emplace(entity, cachedParticleColliders.size());
+                    cachedParticleColliders.push_back(makeParticleCollider(collider, transform));
+                    particleColliderEntities.push_back(entity);
+                });
+        }
+
+        void removeParticleCollider(const Entity entity) {
+            const auto it = particleColliderIndices.find(entity);
+            if (it == particleColliderIndices.end()) return;
+            const std::size_t index = it->second;
+            const std::size_t last = cachedParticleColliders.size() - 1;
+            if (index != last) {
+                cachedParticleColliders[index] = cachedParticleColliders[last];
+                const Entity movedEntity = particleColliderEntities[last];
+                particleColliderEntities[index] = movedEntity;
+                particleColliderIndices[movedEntity] = index;
+            }
+            cachedParticleColliders.pop_back();
+            particleColliderEntities.pop_back();
+            particleColliderIndices.erase(it);
+        }
+
+        [[nodiscard]] bool synchronizeParticleColliders() {
+            const std::uint64_t structuralRevision = registry.structuralRevision();
+            const std::uint64_t colliderRevision = registry.componentRevision<ColliderComponent>();
+            const std::uint64_t transformRevision = registry.componentRevision<Transform>();
+            const bool rebuild = particleColliderRegistry != &registry ||
+                particleColliderStructuralRevision != structuralRevision;
+            bool cacheChanged = false;
+
+            if (rebuild) {
+                rebuildParticleColliderCache();
+                cacheChanged = true;
+            } else if (particleColliderComponentRevision != colliderRevision ||
+                       particleColliderTransformRevision != transformRevision) {
+                std::unordered_set<Entity> changed;
+                const auto addChanged = [&](const auto& entities) {
+                    changed.insert(entities.begin(), entities.end());
+                };
+                addChanged(registry.componentEntitiesChangedSince<ColliderComponent>(
+                    particleColliderComponentRevision));
+                addChanged(registry.componentEntitiesChangedSince<Transform>(
+                    particleColliderTransformRevision));
+
+                const Registry& readRegistry = registry;
+                for (const Entity entity : changed) {
+                    if (!readRegistry.valid(entity) ||
+                        !readRegistry.has<ColliderComponent>(entity) ||
+                        !readRegistry.has<Transform>(entity)) {
+                        removeParticleCollider(entity);
+                        cacheChanged = true;
+                        continue;
+                    }
+                    const Particles::ParticleCollider value = makeParticleCollider(
+                        readRegistry.get<ColliderComponent>(entity),
+                        readRegistry.get<Transform>(entity));
+                    if (const auto it = particleColliderIndices.find(entity);
+                        it != particleColliderIndices.end()) {
+                        cachedParticleColliders[it->second] = value;
+                    } else {
+                        particleColliderIndices.emplace(entity, cachedParticleColliders.size());
+                        cachedParticleColliders.push_back(value);
+                        particleColliderEntities.push_back(entity);
+                    }
+                    cacheChanged = true;
+                }
+            }
+
+            particleColliderRegistry = &registry;
+            particleColliderStructuralRevision = structuralRevision;
+            particleColliderComponentRevision = colliderRevision;
+            particleColliderTransformRevision = transformRevision;
+            return cacheChanged;
+        }
+
         void drawFrame() {
             // A minimized window has no presentable Vulkan extent.  Do not
             // acquire or recreate resources until it becomes drawable again.
@@ -2519,7 +2609,9 @@ class Renderer::Backend {
                     particleSystem->setEmitter(emitter);
                     }
                 }
-                particleSystem->setColliders(particleColliders(registry));
+                if (synchronizeParticleColliders()) {
+                    particleSystem->setColliders(cachedParticleColliders);
+                }
                 particleSystem->update(static_cast<float>(Time::deltaTime()));
             }
             updateCullingUniformBuffer(currentFrame);

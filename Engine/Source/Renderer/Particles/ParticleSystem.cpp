@@ -1,6 +1,7 @@
 #include "Engine/Renderer/Particles/ParticleSystem.h"
 
 #include <algorithm>
+#include <cmath>
 #include <cstring>
 #include <stdexcept>
 
@@ -95,7 +96,30 @@ void ParticleSystem::update(float deltaTime) {
     simulation_.smokeDynamics[1] = smoke_.drag;
     simulation_.smokeDynamics[2] = smoke_.turbulence;
     simulation_.smokeDynamics[3] = smoke_.collisionRadius;
-    simulation_.colliderCount = static_cast<uint32_t>(std::min<std::size_t>(colliders_.size(), MaxColliders));
+    // Keep the GPU list local to this emitter.  The radius is conservative:
+    // it covers the furthest possible particle travel plus a small visual
+    // margin, while avoiding an O(particles * all scene colliders) shader
+    // workload for unrelated parts of the scene.
+    const float maxVelocity = std::max(emitter_.minVelocity.length(), emitter_.maxVelocity.length());
+    const float interactionRange = std::max(2.0f,
+        emitter_.maxLifeTime * maxVelocity + emitter_.maxSize * 2.0f + 1.0f);
+    const float interactionRangeSquared = interactionRange * interactionRange;
+    activeColliders_.clear();
+    activeColliders_.reserve(std::min<std::size_t>(colliders_.size(), MaxColliders));
+    for (const ParticleCollider& collider : colliders_) {
+        const Vec3 center{collider.center.x(), collider.center.y(), collider.center.z()};
+        const Vec3 extents{std::abs(collider.halfExtents.x()), std::abs(collider.halfExtents.y()),
+                           std::abs(collider.halfExtents.z())};
+        const Vec3 delta{std::max(std::abs(emitter_.position.x() - center.x()) - extents.x(), 0.0f),
+                         std::max(std::abs(emitter_.position.y() - center.y()) - extents.y(), 0.0f),
+                         std::max(std::abs(emitter_.position.z() - center.z()) - extents.z(), 0.0f)};
+        const float deltaSquared = delta.x() * delta.x() + delta.y() * delta.y() + delta.z() * delta.z();
+        if (deltaSquared <= interactionRangeSquared) {
+            activeColliders_.push_back(collider);
+            if (activeColliders_.size() == MaxColliders) break;
+        }
+    }
+    simulation_.colliderCount = static_cast<uint32_t>(activeColliders_.size());
     uploadColliders();
     nextSpawnIndex_ = (nextSpawnIndex_ + spawnCount) % maxParticles_;
     spawnSeed_ += spawnCount;
@@ -314,9 +338,9 @@ void ParticleSystem::createDescriptorResources() {
 
 void ParticleSystem::uploadColliders() {
     if (!colliderMapped_) return;
-    const auto count = std::min<std::size_t>(colliders_.size(), MaxColliders);
+    const auto count = std::min<std::size_t>(activeColliders_.size(), MaxColliders);
     std::memset(colliderMapped_, 0, sizeof(ParticleCollider) * MaxColliders);
-    std::memcpy(colliderMapped_, colliders_.data(), sizeof(ParticleCollider) * count);
+    std::memcpy(colliderMapped_, activeColliders_.data(), sizeof(ParticleCollider) * count);
 }
 
 void ParticleSystem::createQuadBuffer() {
