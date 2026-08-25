@@ -21,7 +21,6 @@
 #include "Elements/TransformFields.h"
 #include "Editor/Panels/EditorSceneSession.h"
 #include "Editor/Panels/EditorStyle.h"
-#include "Editor/Panels/BlueprintOverlay.h"
 #include "Editor/Panels/HierarchyPanel.h"
 #include "Editor/Panels/ComponentsPanel.h"
 
@@ -44,7 +43,7 @@
 #include <unordered_set>
 #include <vector>
 
-void drawPanelHeader(const char* title, const char* subtitle = nullptr) {
+void drawPanelHeader(const char *title, const char *subtitle = nullptr) {
     ImGui::PushStyleColor(ImGuiCol_Text, {0.30f, 0.90f, 0.86f, 1.0f});
     ImGui::TextUnformatted("●");
     ImGui::PopStyleColor();
@@ -63,21 +62,21 @@ void drawPanelHeader(const char* title, const char* subtitle = nullptr) {
 
 void drawSearchIcon(const ImVec2 min, const ImVec2 max) {
     const ImVec2 center{min.x + 12.0f, (min.y + max.y) * 0.5f - 1.0f};
-    ImDrawList* drawList = ImGui::GetWindowDrawList();
+    ImDrawList *drawList = ImGui::GetWindowDrawList();
     const ImU32 color = ImGui::GetColorU32(ImGuiCol_TextDisabled);
     drawList->AddCircle(center, 4.5f, color, 16, 1.6f);
     drawList->AddLine({center.x + 3.2f, center.y + 3.2f},
                       {center.x + 7.0f, center.y + 7.0f}, color, 1.6f);
 }
 
-bool containsCaseInsensitive(const char* text, const char* query) {
+bool containsCaseInsensitive(const char *text, const char *query) {
     if (*query == '\0') return true;
     for (; *text != '\0'; ++text) {
-        const char* textIt = text;
-        const char* queryIt = query;
+        const char *textIt = text;
+        const char *queryIt = query;
         while (*textIt != '\0' && *queryIt != '\0' &&
                std::tolower(static_cast<unsigned char>(*textIt)) ==
-                   std::tolower(static_cast<unsigned char>(*queryIt))) {
+               std::tolower(static_cast<unsigned char>(*queryIt))) {
             ++textIt;
             ++queryIt;
         }
@@ -86,7 +85,7 @@ bool containsCaseInsensitive(const char* text, const char* query) {
     return false;
 }
 
-const char* entityName(const Engine::ScenePreset& scene, const Engine::Entity entity) {
+const char *entityName(const Engine::ScenePreset &scene, const Engine::Entity entity) {
     if (scene.editor().has<Engine::NameComponent>(entity)) {
         return scene.editor().get<Engine::NameComponent>(entity).value.c_str();
     }
@@ -97,16 +96,16 @@ const char* entityName(const Engine::ScenePreset& scene, const Engine::Entity en
     if (entity == scene.plane) return "Plane";
     if (entity == scene.camera) return "Camera";
     if (entity == scene.tree) return "Tree";
-    for (const Engine::Entity editorCube : scene.editorCubes) {
+    for (const Engine::Entity editorCube: scene.editorCubes) {
         if (editorCube == entity) return "Cube";
     }
-    for (const Engine::Entity editorPlane : scene.editorPlanes) {
+    for (const Engine::Entity editorPlane: scene.editorPlanes) {
         if (editorPlane == entity) return "Plane";
     }
-    for (const Engine::Entity editorSphere : scene.editorSpheres) {
+    for (const Engine::Entity editorSphere: scene.editorSpheres) {
         if (editorSphere == entity) return "Sphere";
     }
-    for (const Engine::Entity editorRamp : scene.editorRamps) {
+    for (const Engine::Entity editorRamp: scene.editorRamps) {
         if (editorRamp == entity) return "Ramp";
     }
     for (std::size_t index = 0; index < scene.editorGameObjects.size(); ++index) {
@@ -126,20 +125,26 @@ int drawSceneOrientationGizmo(const ImVec2 imageMin, const ImVec2 imageMax,
 
     // Express world axes in the Scene View camera's screen-space basis.
     const float right[3]{-std::sin(yaw), 0.0f, std::cos(yaw)};
-    const float up[3]{-std::cos(yaw) * std::sin(pitch), std::cos(pitch),
-                      -std::sin(yaw) * std::sin(pitch)};
+    const float up[3]{
+        -std::cos(yaw) * std::sin(pitch), std::cos(pitch),
+        -std::sin(yaw) * std::sin(pitch)
+    };
     const ImVec2 center{imageMax.x - radius - 12.0f, imageMax.y - radius - 12.0f};
-    const ImU32 colors[3]{IM_COL32(255, 45, 45, 255), IM_COL32(36, 245, 79, 255),
-                          IM_COL32(45, 135, 255, 255)};
-    constexpr const char* labels[3]{"X", "Y", "Z"};
+    const ImU32 colors[3]{
+        IM_COL32(255, 45, 45, 255), IM_COL32(36, 245, 79, 255),
+        IM_COL32(45, 135, 255, 255)
+    };
+    constexpr const char *labels[3]{"X", "Y", "Z"};
 
-    ImDrawList* drawList = ImGui::GetWindowDrawList();
+    ImDrawList *drawList = ImGui::GetWindowDrawList();
     int hoveredAxis = -1;
     const bool mouseInsideImage = ImGui::IsMouseHoveringRect(imageMin, imageMax);
     const ImVec2 mouse = ImGui::GetIO().MousePos;
     for (int axis = 0; axis < 3; ++axis) {
-        const ImVec2 end{center.x + right[axis] * axisLength,
-                         center.y - up[axis] * axisLength};
+        const ImVec2 end{
+            center.x + right[axis] * axisLength,
+            center.y - up[axis] * axisLength
+        };
         const ImVec2 direction{end.x - center.x, end.y - center.y};
         const ImVec2 offset{mouse.x - center.x, mouse.y - center.y};
         const float lengthSquared = direction.x * direction.x + direction.y * direction.y;
@@ -168,11 +173,11 @@ struct ViewportInteraction final {
     float normalizedY{};
 };
 
-float dotProduct(const Engine::Vec3& lhs, const Engine::Vec3& rhs) {
+float dotProduct(const Engine::Vec3 &lhs, const Engine::Vec3 &rhs) {
     return lhs.x() * rhs.x() + lhs.y() * rhs.y() + lhs.z() * rhs.z();
 }
 
-ImVec2 projectGizmoPoint(const Engine::Camera& camera, const Engine::Vec3& point,
+ImVec2 projectGizmoPoint(const Engine::Camera &camera, const Engine::Vec3 &point,
                          const ImVec2 min, const ImVec2 max) {
     const Engine::Vec3 relative = point - camera.position();
     const float depth = dotProduct(relative, camera.forward());
@@ -181,8 +186,10 @@ ImVec2 projectGizmoPoint(const Engine::Camera& camera, const Engine::Vec3& point
     const float aspect = (max.x - min.x) / (max.y - min.y);
     const float ndcX = dotProduct(relative, camera.right()) / (depth * halfFovTangent * aspect);
     const float ndcY = dotProduct(relative, camera.up()) / (depth * halfFovTangent);
-    return {(min.x + max.x) * 0.5f + ndcX * (max.x - min.x) * 0.5f,
-            (min.y + max.y) * 0.5f - ndcY * (max.y - min.y) * 0.5f};
+    return {
+        (min.x + max.x) * 0.5f + ndcX * (max.x - min.x) * 0.5f,
+        (min.y + max.y) * 0.5f - ndcY * (max.y - min.y) * 0.5f
+    };
 }
 
 float distanceToLineSegment(const ImVec2 point, const ImVec2 start, const ImVec2 end) {
@@ -190,12 +197,12 @@ float distanceToLineSegment(const ImVec2 point, const ImVec2 start, const ImVec2
     const ImVec2 offset{point.x - start.x, point.y - start.y};
     const float lengthSquared = direction.x * direction.x + direction.y * direction.y;
     const float t = std::clamp((offset.x * direction.x + offset.y * direction.y) /
-                                   std::max(lengthSquared, 1.0f), 0.0f, 1.0f);
+                               std::max(lengthSquared, 1.0f), 0.0f, 1.0f);
     const ImVec2 closest{start.x + direction.x * t, start.y + direction.y * t};
     return std::hypot(point.x - closest.x, point.y - closest.y);
 }
 
-Engine::Vec3 viewportRayDirection(const Engine::Camera& camera, const ImVec2 mouse,
+Engine::Vec3 viewportRayDirection(const Engine::Camera &camera, const ImVec2 mouse,
                                   const ImVec2 min, const ImVec2 max) {
     constexpr float halfFovTangent = 0.57735026919f; // tan(60° / 2)
     const float aspect = (max.x - min.x) / std::max(max.y - min.y, 1.0f);
@@ -205,9 +212,9 @@ Engine::Vec3 viewportRayDirection(const Engine::Camera& camera, const ImVec2 mou
             camera.up() * (normalizedY * halfFovTangent)).normalized();
 }
 
-bool intersectRayPlane(const Engine::Vec3& rayOrigin, const Engine::Vec3& rayDirection,
-                       const Engine::Vec3& planeOrigin, const Engine::Vec3& planeNormal,
-                       Engine::Vec3& intersection) {
+bool intersectRayPlane(const Engine::Vec3 &rayOrigin, const Engine::Vec3 &rayDirection,
+                       const Engine::Vec3 &planeOrigin, const Engine::Vec3 &planeNormal,
+                       Engine::Vec3 &intersection) {
     const float denominator = dotProduct(rayDirection, planeNormal);
     if (std::abs(denominator) < 0.0001f) return false;
     const float distance = dotProduct(planeOrigin - rayOrigin, planeNormal) / denominator;
@@ -216,20 +223,21 @@ bool intersectRayPlane(const Engine::Vec3& rayOrigin, const Engine::Vec3& rayDir
     return true;
 }
 
-float gizmoWorldSize(const Engine::Camera& camera, const Engine::Vec3& origin,
+float gizmoWorldSize(const Engine::Camera &camera, const Engine::Vec3 &origin,
                      const ImVec2 min, const ImVec2 max) {
     constexpr float halfFovTangent = 0.57735026919f; // tan(60° / 2)
     constexpr float desiredPixels = 112.0f;
     const float depth = std::max(dotProduct(origin - camera.position(), camera.forward()), 0.1f);
     return std::clamp(depth * 2.0f * halfFovTangent * desiredPixels /
-                          std::max(max.y - min.y, 1.0f),
+                      std::max(max.y - min.y, 1.0f),
                       0.15f, 100.0f);
 }
 
-bool drawTranslationGizmo(Engine::ScenePreset& scene, const Engine::Entity selected,
-                          const Engine::Renderer& renderer, const ImVec2 min, const ImVec2 max) {
+bool drawTranslationGizmo(Engine::ScenePreset &scene, const Engine::Entity selected,
+                          const Engine::Renderer &renderer, const ImVec2 min, const ImVec2 max) {
     if (selected == Engine::NullEntity || !scene.editor().valid(selected) ||
-        !scene.editor().has<Engine::Transform>(selected)) return false;
+        !scene.editor().has<Engine::Transform>(selected))
+        return false;
 
     Engine::Camera camera{Engine::Degrees{60.0f}, (max.x - min.x) / (max.y - min.y), 0.1f, 1000.0f};
     camera.setPosition(renderer.editorCameraPosition());
@@ -238,17 +246,20 @@ bool drawTranslationGizmo(Engine::ScenePreset& scene, const Engine::Entity selec
     Engine::Vec3 origin = renderer.editorGizmoPosition(selected);
     float gizmoSize = gizmoWorldSize(camera, origin, min, max);
     const Engine::Vec3 axes[3]{{1.0f, 0.0f, 0.0f}, {0.0f, 1.0f, 0.0f}, {0.0f, 0.0f, 1.0f}};
-    const ImU32 colors[3]{IM_COL32(235, 70, 70, 255), IM_COL32(70, 235, 100, 255),
-                          IM_COL32(70, 130, 245, 255)};
+    const ImU32 colors[3]{
+        IM_COL32(235, 70, 70, 255), IM_COL32(70, 235, 100, 255),
+        IM_COL32(70, 130, 245, 255)
+    };
     const ImVec2 mouse = ImGui::GetIO().MousePos;
-    ImDrawList* drawList = ImGui::GetWindowDrawList();
+    ImDrawList *drawList = ImGui::GetWindowDrawList();
     ImVec2 originScreen = projectGizmoPoint(camera, origin, min, max);
     int hoveredAxis = -1;
     ImVec2 axisEnds[3]{};
     for (int axis = 0; axis < 3; ++axis) {
         axisEnds[axis] = projectGizmoPoint(camera, origin + axes[axis] * gizmoSize, min, max);
         if (distanceToLineSegment(mouse, originScreen, axisEnds[axis]) < 9.0f &&
-            ImGui::IsMouseHoveringRect(min, max)) hoveredAxis = axis;
+            ImGui::IsMouseHoveringRect(min, max))
+            hoveredAxis = axis;
     }
 
     struct DragState final {
@@ -263,12 +274,16 @@ bool drawTranslationGizmo(Engine::ScenePreset& scene, const Engine::Entity selec
     static DragState drag;
     bool dragging = false;
     if (ImGui::IsMouseClicked(ImGuiMouseButton_Left) && hoveredAxis >= 0) {
-        const ImVec2 axisDirection{axisEnds[hoveredAxis].x - originScreen.x,
-                                   axisEnds[hoveredAxis].y - originScreen.y};
-        drag = {selected, hoveredAxis,
-                scene.editor().get<Engine::Transform>(selected).position,
-                mouse, axisDirection,
-                std::max(std::hypot(axisDirection.x, axisDirection.y), 1.0f), gizmoSize};
+        const ImVec2 axisDirection{
+            axisEnds[hoveredAxis].x - originScreen.x,
+            axisEnds[hoveredAxis].y - originScreen.y
+        };
+        drag = {
+            selected, hoveredAxis,
+            scene.editor().get<Engine::Transform>(selected).position,
+            mouse, axisDirection,
+            std::max(std::hypot(axisDirection.x, axisDirection.y), 1.0f), gizmoSize
+        };
     }
     if (drag.entity == selected && drag.axis >= 0 && ImGui::IsMouseDown(ImGuiMouseButton_Left)) {
         const ImVec2 delta{mouse.x - drag.startMouse.x, mouse.y - drag.startMouse.y};
@@ -302,10 +317,11 @@ bool drawTranslationGizmo(Engine::ScenePreset& scene, const Engine::Entity selec
 
 enum class GizmoMode { Translate, Rotate };
 
-bool drawRotationGizmo(Engine::ScenePreset& scene, const Engine::Entity selected,
-                       const Engine::Renderer& renderer, const ImVec2 min, const ImVec2 max) {
+bool drawRotationGizmo(Engine::ScenePreset &scene, const Engine::Entity selected,
+                       const Engine::Renderer &renderer, const ImVec2 min, const ImVec2 max) {
     if (selected == Engine::NullEntity || !scene.editor().valid(selected) ||
-        !scene.editor().has<Engine::Transform>(selected)) return false;
+        !scene.editor().has<Engine::Transform>(selected))
+        return false;
 
     Engine::Camera camera{Engine::Degrees{60.0f}, (max.x - min.x) / (max.y - min.y), 0.1f, 1000.0f};
     camera.setPosition(renderer.editorCameraPosition());
@@ -314,13 +330,15 @@ bool drawRotationGizmo(Engine::ScenePreset& scene, const Engine::Entity selected
     const Engine::Vec3 origin = renderer.editorGizmoPosition(selected);
     const Engine::Vec3 ringBasisA[3]{{0.0f, 1.0f, 0.0f}, {1.0f, 0.0f, 0.0f}, {1.0f, 0.0f, 0.0f}};
     const Engine::Vec3 ringBasisB[3]{{0.0f, 0.0f, 1.0f}, {0.0f, 0.0f, 1.0f}, {0.0f, 1.0f, 0.0f}};
-    const ImU32 colors[3]{IM_COL32(235, 70, 70, 255), IM_COL32(70, 235, 100, 255),
-                          IM_COL32(70, 130, 245, 255)};
+    const ImU32 colors[3]{
+        IM_COL32(235, 70, 70, 255), IM_COL32(70, 235, 100, 255),
+        IM_COL32(70, 130, 245, 255)
+    };
     constexpr float pi = 3.14159265358979323846f;
     constexpr int segments = 64;
     const float radius = gizmoWorldSize(camera, origin, min, max);
     const ImVec2 mouse = ImGui::GetIO().MousePos;
-    ImDrawList* drawList = ImGui::GetWindowDrawList();
+    ImDrawList *drawList = ImGui::GetWindowDrawList();
     const ImVec2 originScreen = projectGizmoPoint(camera, origin, min, max);
     int hoveredAxis = -1;
     ImVec2 ringPoints[3][segments + 1]{};
@@ -328,7 +346,7 @@ bool drawRotationGizmo(Engine::ScenePreset& scene, const Engine::Entity selected
         for (int segment = 0; segment <= segments; ++segment) {
             const float angle = 2.0f * pi * static_cast<float>(segment) / segments;
             const Engine::Vec3 point = origin + radius *
-                (ringBasisA[axis] * std::cos(angle) + ringBasisB[axis] * std::sin(angle));
+                                       (ringBasisA[axis] * std::cos(angle) + ringBasisB[axis] * std::sin(angle));
             ringPoints[axis][segment] = projectGizmoPoint(camera, point, min, max);
             if (segment > 0 && ImGui::IsMouseHoveringRect(min, max) &&
                 distanceToLineSegment(mouse, ringPoints[axis][segment - 1], ringPoints[axis][segment]) < 9.0f) {
@@ -352,23 +370,31 @@ bool drawRotationGizmo(Engine::ScenePreset& scene, const Engine::Entity selected
     static DragState drag;
     if (ImGui::IsMouseClicked(ImGuiMouseButton_Left) && hoveredAxis >= 0) {
         Engine::Vec3 hitPoint{};
-        const Engine::Vec3 axis = hoveredAxis == 0 ? Engine::Vec3{1.0f, 0.0f, 0.0f}
-                                  : hoveredAxis == 1 ? Engine::Vec3{0.0f, 1.0f, 0.0f}
-                                                     : Engine::Vec3{0.0f, 0.0f, 1.0f};
+        const Engine::Vec3 axis = hoveredAxis == 0
+                                      ? Engine::Vec3{1.0f, 0.0f, 0.0f}
+                                      : hoveredAxis == 1
+                                            ? Engine::Vec3{0.0f, 1.0f, 0.0f}
+                                            : Engine::Vec3{0.0f, 0.0f, 1.0f};
         if (!intersectRayPlane(camera.position(), viewportRayDirection(camera, mouse, min, max),
-                               origin, axis, hitPoint)) return true;
-        drag = {selected, hoveredAxis, scene.editor().get<Engine::Transform>(selected).rotation,
-                (hitPoint - origin).normalized()};
+                               origin, axis, hitPoint))
+            return true;
+        drag = {
+            selected, hoveredAxis, scene.editor().get<Engine::Transform>(selected).rotation,
+            (hitPoint - origin).normalized()
+        };
         ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
         return true;
     }
     if (drag.entity == selected && drag.axis >= 0 && ImGui::IsMouseDown(ImGuiMouseButton_Left)) {
-        const Engine::Vec3 axis = drag.axis == 0 ? Engine::Vec3{1.0f, 0.0f, 0.0f}
-                                  : drag.axis == 1 ? Engine::Vec3{0.0f, 1.0f, 0.0f}
-                                                   : Engine::Vec3{0.0f, 0.0f, 1.0f};
+        const Engine::Vec3 axis = drag.axis == 0
+                                      ? Engine::Vec3{1.0f, 0.0f, 0.0f}
+                                      : drag.axis == 1
+                                            ? Engine::Vec3{0.0f, 1.0f, 0.0f}
+                                            : Engine::Vec3{0.0f, 0.0f, 1.0f};
         Engine::Vec3 hitPoint{};
         if (!intersectRayPlane(camera.position(), viewportRayDirection(camera, mouse, min, max),
-                               origin, axis, hitPoint)) return true;
+                               origin, axis, hitPoint))
+            return true;
         const Engine::Vec3 currentDirection = (hitPoint - origin).normalized();
         drag.accumulatedRadians += std::atan2(
             dotProduct(axis, Engine::cross(drag.lastDirection, currentDirection)),
@@ -388,18 +414,16 @@ bool drawRotationGizmo(Engine::ScenePreset& scene, const Engine::Entity selected
     return hoveredAxis >= 0;
 }
 
-ViewportInteraction drawViewport(Engine::ScenePreset& scene, const Engine::Entity selected,
-                  Engine::Renderer& renderer, Engine::ViewportHandle gameDescriptor,
-                  Engine::ViewportHandle sceneDescriptor,
-                  const float sceneCameraYaw, const float sceneCameraPitch,
-                  bool& showGameView, GizmoMode& gizmoMode, const bool playing,
-                  const bool blueprintEnabled) {
+ViewportInteraction drawViewport(Engine::ScenePreset &scene, const Engine::Entity selected,
+                                 Engine::Renderer &renderer, Engine::ViewportHandle gameDescriptor,
+                                 Engine::ViewportHandle sceneDescriptor,
+                                 const float sceneCameraYaw, const float sceneCameraPitch,
+                                 bool &showGameView, GizmoMode &gizmoMode, const bool playing) {
     if (playing) showGameView = true;
     const Engine::ViewportHandle descriptor = showGameView ? gameDescriptor : sceneDescriptor;
 
     ImGui::Begin("Viewport", nullptr, ImGuiWindowFlags_NoScrollbar);
-    drawPanelHeader("VIEWPORT", playing ? "PLAYING  /  GAME CAMERA" :
-                                  showGameView ? "GAME CAMERA" : "SCENE CAMERA");
+    drawPanelHeader("VIEWPORT", playing ? "PLAYING  /  GAME CAMERA" : showGameView ? "GAME CAMERA" : "SCENE CAMERA");
     if (!playing) {
         ImGui::SameLine(ImGui::GetWindowWidth() - 154.0f);
     }
@@ -430,23 +454,23 @@ ViewportInteraction drawViewport(Engine::ScenePreset& scene, const Engine::Entit
         ImGui::Image(ImTextureRef{static_cast<ImTextureID>(descriptor.value)},
                      {frameSize.x, imageHeight}, {0, 0}, {1, 1});
         viewportHovered = ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenBlockedByActiveItem);
-        if (!showGameView && !playing && blueprintEnabled) {
-            Editor::drawBlueprintOverlay(renderer, ImGui::GetItemRectMin(), ImGui::GetItemRectMax());
-        }
         const bool gizmoConsumesClick = !showGameView && !playing &&
-            (gizmoMode == GizmoMode::Translate
-                 ? drawTranslationGizmo(scene, selected, renderer, ImGui::GetItemRectMin(),
-                                        ImGui::GetItemRectMax())
-                 : drawRotationGizmo(scene, selected, renderer, ImGui::GetItemRectMin(),
-                                     ImGui::GetItemRectMax()));
+                                        (gizmoMode == GizmoMode::Translate
+                                             ? drawTranslationGizmo(scene, selected, renderer, ImGui::GetItemRectMin(),
+                                                                    ImGui::GetItemRectMax())
+                                             : drawRotationGizmo(scene, selected, renderer, ImGui::GetItemRectMin(),
+                                                                 ImGui::GetItemRectMax()));
         int gizmoAction = -1;
         if (!showGameView && !playing) {
             gizmoAction = drawSceneOrientationGizmo(ImGui::GetItemRectMin(), ImGui::GetItemRectMax(),
-                                              sceneCameraYaw, sceneCameraPitch);
+                                                    sceneCameraYaw, sceneCameraPitch);
             switch (gizmoAction) {
-                case 0: renderer.setEditorCameraRotation(180.0f, 0.0f); break; // +X view
-                case 1: renderer.setEditorCameraRotation(0.0f, -89.0f); break; // +Y view
-                case 2: renderer.setEditorCameraRotation(-90.0f, 0.0f); break; // +Z view
+                case 0: renderer.setEditorCameraRotation(180.0f, 0.0f);
+                    break; // +X view
+                case 1: renderer.setEditorCameraRotation(0.0f, -89.0f);
+                    break; // +Y view
+                case 2: renderer.setEditorCameraRotation(-90.0f, 0.0f);
+                    break; // +Z view
                 default: break;
             }
         }
@@ -471,8 +495,8 @@ ViewportInteraction drawViewport(Engine::ScenePreset& scene, const Engine::Entit
     return interaction;
 }
 
-Engine::Entity pickSceneEntity(Engine::ScenePreset& scene, Engine::PhysicsSystem& physics,
-                               const Engine::Renderer& renderer, const float normalizedX,
+Engine::Entity pickSceneEntity(Engine::ScenePreset &scene, Engine::PhysicsSystem &physics,
+                               const Engine::Renderer &renderer, const float normalizedX,
                                const float normalizedY, const float aspect) {
     Engine::Camera camera{Engine::Degrees{60.0f}, aspect, 0.1f, 1000.0f};
     camera.setPosition(renderer.editorCameraPosition());
@@ -481,16 +505,16 @@ Engine::Entity pickSceneEntity(Engine::ScenePreset& scene, Engine::PhysicsSystem
     constexpr float pi = 3.14159265358979323846f;
     const float scale = std::tan(30.0f * pi / 180.0f);
     const Engine::Vec3 direction = (camera.forward() +
-        camera.right() * (normalizedX * aspect * scale) -
-        camera.up() * (normalizedY * scale)).normalized();
+                                    camera.right() * (normalizedX * aspect * scale) -
+                                    camera.up() * (normalizedY * scale)).normalized();
     if (const auto hit = physics.raycast(scene, camera.position(), direction)) {
         return scene.findEntity(hit->actor.id());
     }
     return Engine::NullEntity;
 }
 
-Engine::Entity HierarchyPanel::draw(Engine::ScenePreset& scene, const Engine::Entity selected,
-                                    Action& action, Engine::Entity& actionEntity, const bool canPaste) {
+Engine::Entity HierarchyPanel::draw(Engine::ScenePreset &scene, const Engine::Entity selected,
+                                    Action &action, Engine::Entity &actionEntity, const bool canPaste) {
     Engine::Entity clicked = Engine::NullEntity;
     action = Action::None;
     actionEntity = Engine::NullEntity;
@@ -513,7 +537,7 @@ Engine::Entity HierarchyPanel::draw(Engine::ScenePreset& scene, const Engine::En
     ImGui::TextDisabled("OBJECTS  •  Right-click for actions");
 
     if (ImGui::TreeNodeEx("Scene", ImGuiTreeNodeFlags_DefaultOpen | ImGuiTreeNodeFlags_SpanAvailWidth)) {
-        const auto entityLabel = [&](const char* name, const Engine::Entity entity) {
+        const auto entityLabel = [&](const char *name, const Engine::Entity entity) {
             if (entity != Engine::NullEntity) {
                 if (!containsCaseInsensitive(name, filter)) return;
                 char label[64];
@@ -536,9 +560,9 @@ Engine::Entity HierarchyPanel::draw(Engine::ScenePreset& scene, const Engine::En
         });
         std::ranges::sort(entities);
 
-        std::unordered_map<Engine::Entity, std::vector<Engine::Entity>> children;
+        std::unordered_map<Engine::Entity, std::vector<Engine::Entity> > children;
         std::vector<Engine::Entity> roots;
-        for (const Engine::Entity entity : entities) {
+        for (const Engine::Entity entity: entities) {
             if (scene.editor().has<Engine::ParentComponent>(entity)) {
                 const Engine::UUID parent = scene.editor().get<Engine::ParentComponent>(entity).parent;
                 if (const auto found = byUuid.find(parent); found != byUuid.end()) {
@@ -550,9 +574,9 @@ Engine::Entity HierarchyPanel::draw(Engine::ScenePreset& scene, const Engine::En
         }
 
         std::unordered_set<Engine::Entity> visited;
-        const auto drawNode = [&](auto&& self, const Engine::Entity entity) -> void {
+        const auto drawNode = [&](auto &&self, const Engine::Entity entity) -> void {
             if (!visited.insert(entity).second) return;
-            const char* name = entityName(scene, entity);
+            const char *name = entityName(scene, entity);
             if (!containsCaseInsensitive(name, filter)) return;
             const auto childIt = children.find(entity);
             const bool hasChildren = childIt != children.end() && !childIt->second.empty();
@@ -588,16 +612,16 @@ Engine::Entity HierarchyPanel::draw(Engine::ScenePreset& scene, const Engine::En
                 return;
             }
             const ImGuiTreeNodeFlags flags = ImGuiTreeNodeFlags_SpanAvailWidth |
-                (selected == entity ? ImGuiTreeNodeFlags_Selected : 0);
+                                             (selected == entity ? ImGuiTreeNodeFlags_Selected : 0);
             const bool open = ImGui::TreeNodeEx(label, flags);
             if (ImGui::IsItemClicked()) clicked = entity;
             drawContextMenu();
             if (open) {
-                for (const Engine::Entity child : childIt->second) self(self, child);
+                for (const Engine::Entity child: childIt->second) self(self, child);
                 ImGui::TreePop();
             }
         };
-        for (const Engine::Entity entity : roots) drawNode(drawNode, entity);
+        for (const Engine::Entity entity: roots) drawNode(drawNode, entity);
         ImGui::TreePop();
     }
 
@@ -614,7 +638,7 @@ Engine::Entity HierarchyPanel::draw(Engine::ScenePreset& scene, const Engine::En
     return clicked;
 }
 
-bool ComponentsPanel::draw(Engine::ScenePreset& scene, const Engine::Entity selected) {
+bool ComponentsPanel::draw(Engine::ScenePreset &scene, const Engine::Entity selected) {
     ImGui::Begin("Inspector");
     drawPanelHeader("INSPECTOR", selected == Engine::NullEntity ? "NO SELECTION" : "ENTITY");
     if (selected == Engine::NullEntity) {
@@ -625,23 +649,29 @@ bool ComponentsPanel::draw(Engine::ScenePreset& scene, const Engine::Entity sele
         ImGui::Spacing();
         ImGui::TextWrapped("Select an object in the Scene Hierarchy to inspect it.");
         const bool consumesMouseWheel = ImGui::IsWindowHovered(
-            ImGuiHoveredFlags_AllowWhenBlockedByActiveItem) && ImGui::GetIO().MouseWheel != 0.0f;
+                                            ImGuiHoveredFlags_AllowWhenBlockedByActiveItem) && ImGui::GetIO().MouseWheel
+                                        != 0.0f;
         ImGui::End();
         return consumesMouseWheel;
     }
 
+    // Every inspector control has a stable label, so scope their ImGui IDs to
+    // the selected entity. Without this, an active text/drag control from the
+    // source object is reused when a duplicate becomes selected in the same
+    // panel, making the inspector appear to keep editing the original.
+    ImGui::PushID(reinterpret_cast<const void*>(static_cast<std::uintptr_t>(selected)));
     ImGui::TextColored({0.92f, 0.95f, 1.0f, 1.0f}, "%s", entityName(scene, selected));
     ImGui::SameLine();
     ImGui::TextDisabled("Entity %u", Engine::entityIndex(selected));
     if (scene.editor().valid(selected) && scene.editor().has<Engine::NameComponent>(selected)) {
         const auto readScene = scene.editor();
-        const auto& name = readScene.get<Engine::NameComponent>(selected).value;
+        const auto &name = readScene.get<Engine::NameComponent>(selected).value;
         char editableName[260]{};
         std::snprintf(editableName, sizeof(editableName), "%s", name.c_str());
         ImGui::SetNextItemWidth(-1.0f);
         if (ImGui::InputTextWithHint("##object-name", "Object name", editableName, sizeof(editableName)) &&
             editableName[0] != '\0') {
-            scene.editor().modify<Engine::NameComponent>(selected, [&](auto& value) {
+            scene.editor().modify<Engine::NameComponent>(selected, [&](auto &value) {
                 value.value = editableName;
             });
         }
@@ -659,21 +689,21 @@ bool ComponentsPanel::draw(Engine::ScenePreset& scene, const Engine::Entity sele
         // once, after all controls have been drawn, so observers receive one
         // coherent change notification per frame.
         const auto readScene = scene.editor();
-        const auto& source =
-            readScene.get<Engine::SmokeEmitterComponent>(selected).emitter;
+        const auto &source =
+                readScene.get<Engine::SmokeEmitterComponent>(selected).emitter;
         auto emitter = source;
         const bool hasColorPicker =
-            readScene.has<Engine::ColorPickerComponent>(selected);
+                readScene.has<Engine::ColorPickerComponent>(selected);
         if (hasColorPicker) {
             emitter.color = readScene.get<Engine::ColorPickerComponent>(selected).color;
         }
 
         bool changed = false;
         bool colorChanged = false;
-        const auto drawParticleFloat = [](const char* label, const char* id,
-                                          float* value, const float speed,
+        const auto drawParticleFloat = [](const char *label, const char *id,
+                                          float *value, const float speed,
                                           const float min, const float max,
-                                          const char* format) {
+                                          const char *format) {
             ImGui::TextDisabled("%s", label);
             ImGui::SetNextItemWidth(-1.0f);
             return ImGui::DragFloat(id, value, speed, min, max, format);
@@ -746,34 +776,34 @@ bool ComponentsPanel::draw(Engine::ScenePreset& scene, const Engine::Entity sele
 
         if (changed) {
             scene.editor().modify<Engine::SmokeEmitterComponent>(selected,
-                [&](auto& component) {
-                    component.emitter = emitter;
-                });
+                                                                 [&](auto &component) {
+                                                                     component.emitter = emitter;
+                                                                 });
             if (colorChanged && hasColorPicker) {
                 scene.editor().modify<Engine::ColorPickerComponent>(selected,
-                    [&](auto& component) {
-                        component.color = emitter.color;
-                    });
+                                                                    [&](auto &component) {
+                                                                        component.color = emitter.color;
+                                                                    });
             }
         }
     }
     if (scene.editor().valid(selected) && scene.editor().has<Engine::ScriptComponent>(selected) &&
         ImGui::CollapsingHeader("Script", ImGuiTreeNodeFlags_DefaultOpen)) {
         const auto readScene = scene.editor();
-        const auto& script = readScene.get<Engine::ScriptComponent>(selected);
+        const auto &script = readScene.get<Engine::ScriptComponent>(selected);
         char className[260]{};
         std::snprintf(className, sizeof(className), "%s", script.className.c_str());
         ImGui::TextDisabled("C++ script class");
         ImGui::SetNextItemWidth(-1.0f);
         if (ImGui::InputText("##script-class", className, sizeof(className))) {
-            scene.editor().modify<Engine::ScriptComponent>(selected, [&](auto& value) {
+            scene.editor().modify<Engine::ScriptComponent>(selected, [&](auto &value) {
                 value.className = className;
                 value.reset();
             });
         }
         bool enabled = script.enabled;
         if (ImGui::Checkbox("Enabled##script", &enabled)) {
-            scene.editor().modify<Engine::ScriptComponent>(selected, [&](auto& value) {
+            scene.editor().modify<Engine::ScriptComponent>(selected, [&](auto &value) {
                 value.enabled = enabled;
             });
         }
@@ -782,31 +812,43 @@ bool ComponentsPanel::draw(Engine::ScenePreset& scene, const Engine::Entity sele
         ImGui::CollapsingHeader("Collider", ImGuiTreeNodeFlags_DefaultOpen)) {
         const auto collider = scene.editor().get<Engine::ColliderComponent>(selected);
         int shape = static_cast<int>(collider.shape.index());
-        const char* shapeNames[] = {"Box", "Sphere", "Capsule", "Ramp"};
+        const char *shapeNames[] = {"Box", "Sphere", "Capsule", "Ramp"};
         bool changed = false;
         if (ImGui::BeginCombo("Shape##collider", shapeNames[shape])) {
             for (int index = 0; index < 4; ++index) {
-                if (ImGui::Selectable(shapeNames[index], shape == index)) { shape = index; changed = true; }
+                if (ImGui::Selectable(shapeNames[index], shape == index)) {
+                    shape = index;
+                    changed = true;
+                }
             }
             ImGui::EndCombo();
         }
         auto value = collider;
         if (shape != static_cast<int>(value.shape.index())) {
-            value.shape = shape == 0 ? Engine::ColliderShape{Engine::BoxCollider{}} :
-                shape == 1 ? Engine::ColliderShape{Engine::SphereCollider{}} :
-                shape == 2 ? Engine::ColliderShape{Engine::CapsuleCollider{}} :
-                             Engine::ColliderShape{Engine::RampCollider{}};
+            value.shape = shape == 0
+                              ? Engine::ColliderShape{Engine::BoxCollider{}}
+                              : shape == 1
+                                    ? Engine::ColliderShape{Engine::SphereCollider{}}
+                                    : shape == 2
+                                          ? Engine::ColliderShape{Engine::CapsuleCollider{}}
+                                          : Engine::ColliderShape{Engine::RampCollider{}};
         }
         float offset[3] = {value.offset.x(), value.offset.y(), value.offset.z()};
         if (ImGui::DragFloat3("Offset##collider", offset, 0.05f)) {
-            value.offset = {offset[0], offset[1], offset[2]}; changed = true;
+            value.offset = {offset[0], offset[1], offset[2]};
+            changed = true;
         }
-        std::visit([&]<typename T>(T& colliderShape) {
+        std::visit([&]<typename T>(T &colliderShape) {
             using Shape = std::decay_t<T>;
             if constexpr (std::is_same_v<Shape, Engine::BoxCollider>) {
-                float extents[3] = {colliderShape.halfExtents.x(), colliderShape.halfExtents.y(), colliderShape.halfExtents.z()};
+                float extents[3] = {
+                    colliderShape.halfExtents.x(), colliderShape.halfExtents.y(), colliderShape.halfExtents.z()
+                };
                 if (ImGui::DragFloat3("Half Extents##collider", extents, 0.05f, 0.001f, 1000.0f)) {
-                    colliderShape.halfExtents = {std::max(0.001f, extents[0]), std::max(0.001f, extents[1]), std::max(0.001f, extents[2])}; changed = true;
+                    colliderShape.halfExtents = {
+                        std::max(0.001f, extents[0]), std::max(0.001f, extents[1]), std::max(0.001f, extents[2])
+                    };
+                    changed = true;
                 }
             } else if constexpr (std::is_same_v<Shape, Engine::SphereCollider>) {
                 changed |= ImGui::DragFloat("Radius##collider", &colliderShape.radius, 0.05f, 0.001f, 1000.0f);
@@ -823,15 +865,16 @@ bool ComponentsPanel::draw(Engine::ScenePreset& scene, const Engine::Entity sele
         changed |= ImGui::SliderFloat("Restitution##collider", &value.restitution, 0.0f, 1.0f);
         value.friction = std::max(0.0f, value.friction);
         value.restitution = std::clamp(value.restitution, 0.0f, 1.0f);
-        if (changed) scene.editor().modify<Engine::ColliderComponent>(selected,
-            [&](auto& component) { component = value; });
+        if (changed)
+            scene.editor().modify<Engine::ColliderComponent>(selected,
+                                                             [&](auto &component) { component = value; });
     }
     if (scene.editor().valid(selected) && scene.editor().has<Engine::RigidbodyComponent>(selected) &&
         ImGui::CollapsingHeader("Rigidbody", ImGuiTreeNodeFlags_DefaultOpen)) {
         const auto rigidbody = scene.editor().get<Engine::RigidbodyComponent>(selected);
         auto value = rigidbody;
         int type = static_cast<int>(value.type);
-        const char* typeNames[] = {"Static", "Dynamic", "Kinematic"};
+        const char *typeNames[] = {"Static", "Dynamic", "Kinematic"};
         if (ImGui::BeginCombo("Type##rigidbody", typeNames[type])) {
             for (int index = 0; index < 3; ++index) {
                 if (ImGui::Selectable(typeNames[index], type == index)) type = index;
@@ -844,17 +887,17 @@ bool ComponentsPanel::draw(Engine::ScenePreset& scene, const Engine::Entity sele
         value.mass = std::max(0.001f, value.mass);
         if (changed || value.type != rigidbody.type) {
             scene.editor().modify<Engine::RigidbodyComponent>(selected,
-                [&](auto& component) { component = value; });
+                                                              [&](auto &component) { component = value; });
         }
     }
     if (scene.editor().valid(selected) && scene.editor().has<Engine::ColorPickerComponent>(selected) &&
         ImGui::CollapsingHeader("Color Picker", ImGuiTreeNodeFlags_DefaultOpen)) {
         const auto readScene = scene.editor();
-        const auto& picker =
-            readScene.get<Engine::ColorPickerComponent>(selected);
+        const auto &picker =
+                readScene.get<Engine::ColorPickerComponent>(selected);
         float rgba[4] = {picker.color.r(), picker.color.g(), picker.color.b(), picker.color.a()};
         if (ImGui::ColorEdit4("Color", rgba, ImGuiColorEditFlags_AlphaBar)) {
-            scene.editor().modify<Engine::ColorPickerComponent>(selected, [&](auto& component) {
+            scene.editor().modify<Engine::ColorPickerComponent>(selected, [&](auto &component) {
                 component.color = Engine::Color{rgba[0], rgba[1], rgba[2], rgba[3]};
             });
         }
@@ -908,7 +951,7 @@ bool ComponentsPanel::draw(Engine::ScenePreset& scene, const Engine::Entity sele
             if (!scene.editor().has<Engine::ScriptComponent>(selected)) {
                 scene.editor().add<Engine::ScriptComponent>(selected);
             }
-            scene.editor().modify<Engine::ScriptComponent>(selected, [&](auto& script) {
+            scene.editor().modify<Engine::ScriptComponent>(selected, [&](auto &script) {
                 script.className = attachedClassName;
                 script.enabled = true;
                 script.reset();
@@ -925,25 +968,39 @@ bool ComponentsPanel::draw(Engine::ScenePreset& scene, const Engine::Entity sele
     }
     if (EditorButton("Create C++ Script", {-1.0f, 0.0f}).draw()) ImGui::OpenPopup("Create C++ Script");
     if (ImGui::BeginPopupModal("Create C++ Script", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
-        static char name[128]{}; static std::string error;
+        static char name[128]{};
+        static std::string error;
         ImGui::TextUnformatted("Creates Sandbox/Source/Scripts/<Name>.h and .cpp");
         ImGui::InputTextWithHint("Class name", "PlayerController", name, sizeof(name));
         if (!error.empty()) ImGui::TextColored({1, .3f, .3f, 1}, "%s", error.c_str());
         if (EditorButton("Create").draw() && EditorSceneSession::createCppScript(name, error)) {
-            if (!scene.editor().has<Engine::ScriptComponent>(selected)) scene.editor().add<Engine::ScriptComponent>(selected);
-            scene.editor().modify<Engine::ScriptComponent>(selected, [&](auto& script) { script.className = name; script.reset(); });
-            name[0] = '\0'; error.clear(); ImGui::CloseCurrentPopup();
+            if (!scene.editor().has<Engine::ScriptComponent>(selected)) scene.editor().add<
+                Engine::ScriptComponent>(selected);
+            scene.editor().modify<Engine::ScriptComponent>(selected, [&](auto &script) {
+                script.className = name;
+                script.reset();
+            });
+            name[0] = '\0';
+            error.clear();
+            ImGui::CloseCurrentPopup();
         }
-        ImGui::SameLine(); if (EditorButton("Cancel").draw()) { name[0] = '\0'; error.clear(); ImGui::CloseCurrentPopup(); }
+        ImGui::SameLine();
+        if (EditorButton("Cancel").draw()) {
+            name[0] = '\0';
+            error.clear();
+            ImGui::CloseCurrentPopup();
+        }
         ImGui::EndPopup();
     }
+    ImGui::PopID();
     const bool consumesMouseWheel = ImGui::IsWindowHovered(
-        ImGuiHoveredFlags_AllowWhenBlockedByActiveItem) && ImGui::GetIO().MouseWheel != 0.0f;
+                                        ImGuiHoveredFlags_AllowWhenBlockedByActiveItem) && ImGui::GetIO().MouseWheel !=
+                                    0.0f;
     ImGui::End();
     return consumesMouseWheel;
 }
 
-std::string serializeScene(const Engine::ScenePreset& scene) {
+std::string serializeScene(const Engine::ScenePreset &scene) {
     std::ostringstream output;
     Engine::SceneSerializer::save(scene, output);
     return output.str();
@@ -951,13 +1008,13 @@ std::string serializeScene(const Engine::ScenePreset& scene) {
 
 class SceneHistory final {
 public:
-    void reset(const Engine::ScenePreset& scene) {
+    void reset(const Engine::ScenePreset &scene) {
         baseline_ = serializeScene(scene);
         undo_.clear();
         redo_.clear();
     }
 
-    void capture(const Engine::ScenePreset& scene) {
+    void capture(const Engine::ScenePreset &scene) {
         const std::string current = serializeScene(scene);
         if (current == baseline_) return;
         undo_.push_back(std::move(baseline_));
@@ -968,12 +1025,12 @@ public:
     [[nodiscard]] bool canUndo() const noexcept { return !undo_.empty(); }
     [[nodiscard]] bool canRedo() const noexcept { return !redo_.empty(); }
 
-    bool undo(Engine::ScenePreset& scene) { return restore(scene, undo_, redo_); }
-    bool redo(Engine::ScenePreset& scene) { return restore(scene, redo_, undo_); }
+    bool undo(Engine::ScenePreset &scene) { return restore(scene, undo_, redo_); }
+    bool redo(Engine::ScenePreset &scene) { return restore(scene, redo_, undo_); }
 
 private:
-    bool restore(Engine::ScenePreset& scene, std::vector<std::string>& from,
-                 std::vector<std::string>& to) {
+    bool restore(Engine::ScenePreset &scene, std::vector<std::string> &from,
+                 std::vector<std::string> &to) {
         if (from.empty()) return false;
         to.push_back(std::move(baseline_));
         baseline_ = std::move(from.back());
@@ -990,23 +1047,24 @@ private:
 
 class EntityClipboard final {
 public:
-    void copy(const Engine::ScenePreset& scene, const Engine::Entity entity) {
+    void copy(const Engine::ScenePreset &scene, const Engine::Entity entity) {
         if (!scene.editor().valid(entity) ||
-            !scene.editor().has<Engine::UUIDComponent>(entity)) return;
+            !scene.editor().has<Engine::UUIDComponent>(entity))
+            return;
         source_ = scene.editor().get<Engine::UUIDComponent>(entity).value;
     }
 
-    [[nodiscard]] bool canPaste(const Engine::ScenePreset& scene) const {
+    [[nodiscard]] bool canPaste(const Engine::ScenePreset &scene) const {
         return findSource(scene) != Engine::NullEntity;
     }
 
-    [[nodiscard]] Engine::Entity paste(Engine::ScenePreset& scene) const {
+    [[nodiscard]] Engine::Entity paste(Engine::ScenePreset &scene) const {
         const Engine::Entity source = findSource(scene);
         return source == Engine::NullEntity ? Engine::NullEntity : scene.editor().duplicate(source);
     }
 
 private:
-    [[nodiscard]] Engine::Entity findSource(const Engine::ScenePreset& scene) const {
+    [[nodiscard]] Engine::Entity findSource(const Engine::ScenePreset &scene) const {
         if (!source_) return Engine::NullEntity;
         Engine::Entity found = Engine::NullEntity;
         scene.editor().view<>([&](const Engine::Entity entity) {
@@ -1021,16 +1079,19 @@ private:
     std::optional<Engine::UUID> source_;
 };
 
-void drawStatusBar(const Engine::ScenePreset& scene, const Engine::Entity selected,
+void drawStatusBar(const Engine::ScenePreset &scene, const Engine::Entity selected,
                    const bool playing, const bool paused) {
-    ImGuiViewport* viewport = ImGui::GetMainViewport();
+    ImGuiViewport *viewport = ImGui::GetMainViewport();
     ImGui::SetNextWindowPos({viewport->WorkPos.x, viewport->WorkPos.y + viewport->WorkSize.y - 27.0f});
     ImGui::SetNextWindowSize({viewport->WorkSize.x, 27.0f});
     ImGui::Begin("##status-bar", nullptr, ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoDocking |
-        ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoNav);
-    ImGui::TextColored(playing ? (paused ? ImVec4{0.95f, 0.68f, 0.24f, 1.0f}
-                                          : ImVec4{0.30f, 0.90f, 0.60f, 1.0f})
-                                : ImVec4{0.30f, 0.90f, 0.86f, 1.0f}, "●");
+                                          ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoMove |
+                                          ImGuiWindowFlags_NoNav);
+    ImGui::TextColored(playing
+                           ? (paused
+                                  ? ImVec4{0.95f, 0.68f, 0.24f, 1.0f}
+                                  : ImVec4{0.30f, 0.90f, 0.60f, 1.0f})
+                           : ImVec4{0.30f, 0.90f, 0.86f, 1.0f}, "●");
     ImGui::SameLine();
     ImGui::TextUnformatted(playing ? (paused ? "Paused" : "Playing") : "Ready");
     ImGui::SameLine();
@@ -1039,15 +1100,14 @@ void drawStatusBar(const Engine::ScenePreset& scene, const Engine::Entity select
     ImGui::End();
 }
 
-Engine::Entity drawEditorMenuBar(Engine::ScenePreset& scene, Engine::Renderer& renderer,
-                                 bool& antialiasingChanged, bool& sceneLoaded,
-                                 const bool playing, const bool paused, bool& playToggleRequested,
-                                 bool& pauseToggleRequested, const bool canUndo,
+Engine::Entity drawEditorMenuBar(Engine::ScenePreset &scene, Engine::Renderer &renderer,
+                                 bool &antialiasingChanged, bool &sceneLoaded,
+                                 const bool playing, const bool paused, bool &playToggleRequested,
+                                 bool &pauseToggleRequested, const bool canUndo,
                                  const bool canRedo, const bool canPaste,
-                                 bool& undoRequested, bool& redoRequested,
-                                 bool& copyRequested, bool& pasteRequested,
-                                 bool& duplicateRequested, bool& resetHistoryRequested,
-                                 bool& blueprintEnabled) {
+                                 bool &undoRequested, bool &redoRequested,
+                                 bool &copyRequested, bool &pasteRequested,
+                                 bool &duplicateRequested, bool &resetHistoryRequested) {
     static bool showShortcuts = false;
     static bool showAbout = false;
     static bool openSceneSettings = false;
@@ -1071,25 +1131,31 @@ Engine::Entity drawEditorMenuBar(Engine::ScenePreset& scene, Engine::Renderer& r
         if (ImGui::MenuItem("Save Scene", "Ctrl+S")) {
             try {
                 std::filesystem::create_directories(scenePath.parent_path());
-                const auto samples = renderer.antialiasingLevel() == Engine::AntialiasingLevel::MSAA2x ? 2u :
-                    renderer.antialiasingLevel() == Engine::AntialiasingLevel::MSAA4x ? 4u : 0u;
+                const auto samples = renderer.antialiasingLevel() == Engine::AntialiasingLevel::MSAA2x
+                                         ? 2u
+                                         : renderer.antialiasingLevel() == Engine::AntialiasingLevel::MSAA4x
+                                               ? 4u
+                                               : 0u;
                 Engine::SceneSerializer::save(scene, scenePath, samples);
                 sceneFileError.clear();
-            } catch (const std::exception& error) { sceneFileError = error.what(); }
+            } catch (const std::exception &error) { sceneFileError = error.what(); }
         }
         if (ImGui::MenuItem("Load Scene", "Ctrl+O")) {
             try {
                 std::optional<std::uint32_t> samples;
                 Engine::SceneSerializer::load(scene, scenePath, samples);
                 if (samples) {
-                    renderer.setAntialiasingLevel(*samples == 2 ? Engine::AntialiasingLevel::MSAA2x :
-                        *samples == 4 ? Engine::AntialiasingLevel::MSAA4x : Engine::AntialiasingLevel::Off);
+                    renderer.setAntialiasingLevel(*samples == 2
+                                                      ? Engine::AntialiasingLevel::MSAA2x
+                                                      : *samples == 4
+                                                            ? Engine::AntialiasingLevel::MSAA4x
+                                                            : Engine::AntialiasingLevel::Off);
                     antialiasingChanged = true;
                 }
                 sceneLoaded = true;
                 resetHistoryRequested = true;
                 sceneFileError.clear();
-            } catch (const std::exception& error) { sceneFileError = error.what(); }
+            } catch (const std::exception &error) { sceneFileError = error.what(); }
         }
         ImGui::Separator();
         if (ImGui::MenuItem(playing ? "Stop" : "Play", "F5")) {
@@ -1129,8 +1195,9 @@ Engine::Entity drawEditorMenuBar(Engine::ScenePreset& scene, Engine::Renderer& r
     }
     ImGui::PopStyleColor();
     if (ImGui::IsItemHovered()) {
-        ImGui::SetTooltip(playing ? "Stop play mode and restore the editor scene (F5)"
-                                  : "Run the current scene in Game View (F5)");
+        ImGui::SetTooltip(playing
+                              ? "Stop play mode and restore the editor scene (F5)"
+                              : "Run the current scene in Game View (F5)");
     }
     ImGui::SameLine();
     ImGui::BeginDisabled(!playing);
@@ -1179,8 +1246,8 @@ Engine::Entity drawEditorMenuBar(Engine::ScenePreset& scene, Engine::Renderer& r
     }
 
     if (ImGui::BeginPopupModal("Scene Settings", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
-        constexpr const char* typeLabels[] = {"None", "MSAA", "FXAA (placeholder)", "TAA (placeholder)"};
-        constexpr const char* sampleLabels[] = {"2x", "4x"};
+        constexpr const char *typeLabels[] = {"None", "MSAA", "FXAA (placeholder)", "TAA (placeholder)"};
+        constexpr const char *sampleLabels[] = {"2x", "4x"};
 
         ImGui::TextUnformatted("Antialiasing");
         ImGui::Separator();
@@ -1195,8 +1262,8 @@ Engine::Entity drawEditorMenuBar(Engine::ScenePreset& scene, Engine::Renderer& r
                         antialiasingChanged = true;
                     } else if (antialiasingType == 1) {
                         renderer.setAntialiasingLevel(msaaSamples == 2
-                            ? Engine::AntialiasingLevel::MSAA2x
-                            : Engine::AntialiasingLevel::MSAA4x);
+                                                          ? Engine::AntialiasingLevel::MSAA2x
+                                                          : Engine::AntialiasingLevel::MSAA4x);
                         antialiasingChanged = true;
                     }
                 }
@@ -1209,13 +1276,13 @@ Engine::Entity drawEditorMenuBar(Engine::ScenePreset& scene, Engine::Renderer& r
         if (antialiasingType == 1) {
             ImGui::SetNextItemWidth(230.0f);
             if (ImGui::BeginCombo("Samples", msaaSamples == 2 ? sampleLabels[0] : sampleLabels[1])) {
-                for (const int samples : {2, 4}) {
+                for (const int samples: {2, 4}) {
                     const bool isSelected = msaaSamples == samples;
                     if (ImGui::Selectable(samples == 2 ? sampleLabels[0] : sampleLabels[1], isSelected)) {
                         msaaSamples = samples;
                         renderer.setAntialiasingLevel(samples == 2
-                            ? Engine::AntialiasingLevel::MSAA2x
-                            : Engine::AntialiasingLevel::MSAA4x);
+                                                          ? Engine::AntialiasingLevel::MSAA2x
+                                                          : Engine::AntialiasingLevel::MSAA4x);
                         antialiasingChanged = true;
                     }
                     if (isSelected) ImGui::SetItemDefaultFocus();
@@ -1232,9 +1299,6 @@ Engine::Entity drawEditorMenuBar(Engine::ScenePreset& scene, Engine::Renderer& r
         } else {
             ImGui::TextDisabled("Antialiasing is disabled.");
         }
-
-        ImGui::Separator();
-        ImGui::Checkbox("Show Blueprint Grid", &blueprintEnabled);
 
         ImGui::Separator();
         ImGui::TextDisabled("Changes are applied after reloading the scene.");
@@ -1269,7 +1333,7 @@ Engine::Entity drawEditorMenuBar(Engine::ScenePreset& scene, Engine::Renderer& r
 int main() {
     try {
         if (!SDL_Init(SDL_INIT_VIDEO | SDL_INIT_EVENTS)) throw std::runtime_error(SDL_GetError());
-        SDL_Window* window = SDL_CreateWindow("GamEngine Editor - Particles", 1280, 720,
+        SDL_Window *window = SDL_CreateWindow("GamEngine Editor - Particles", 1280, 720,
                                               SDL_WINDOW_VULKAN | SDL_WINDOW_RESIZABLE);
         if (!window) throw std::runtime_error(SDL_GetError());
 
@@ -1294,7 +1358,6 @@ int main() {
         bool paused = false;
         bool showGameView = false;
         GizmoMode gizmoMode = GizmoMode::Translate;
-        bool blueprintEnabled = true;
         std::string playSceneSnapshot;
         std::string playModeError;
         while (running) {
@@ -1307,12 +1370,12 @@ int main() {
             renderer.updateEditorSceneCameraInput();
             if (events.togglePlay) {
                 if (EditorSceneSession::setPlayMode(!playing, scene, playSceneSnapshot, playModeError,
-                                EditorSceneSession::msaaSampleCount(renderer))) {
-                        playing = !playing;
-                        paused = false;
-                        showGameView = playing;
-                        rendererReloadPending = !playing;
-                    }
+                                                    EditorSceneSession::msaaSampleCount(renderer))) {
+                    playing = !playing;
+                    paused = false;
+                    showGameView = playing;
+                    rendererReloadPending = !playing;
+                }
             }
             if (events.togglePause && playing) paused = !paused;
             if (!running) break;
@@ -1338,13 +1401,13 @@ int main() {
             bool duplicateRequested = false;
             bool resetHistoryRequested = false;
             if (const Engine::Entity created = drawEditorMenuBar(scene, renderer,
-                                                                  antialiasingChanged, sceneLoaded,
-                                                                  playing, paused, playToggleRequested,
-                                                                  pauseToggleRequested, history.canUndo(),
-                                                                  history.canRedo(), clipboard.canPaste(scene),
-                                                                  undoRequested, redoRequested, copyRequested,
-                                                                  pasteRequested, duplicateRequested,
-                                                                  resetHistoryRequested, blueprintEnabled);
+                                                                 antialiasingChanged, sceneLoaded,
+                                                                 playing, paused, playToggleRequested,
+                                                                 pauseToggleRequested, history.canUndo(),
+                                                                 history.canRedo(), clipboard.canPaste(scene),
+                                                                 undoRequested, redoRequested, copyRequested,
+                                                                 pasteRequested, duplicateRequested,
+                                                                 resetHistoryRequested);
                 created != Engine::NullEntity) {
                 selectedEntity = created;
                 renderer.setEditorSelection(selectedEntity);
@@ -1376,8 +1439,9 @@ int main() {
                     renderer.setEditorSelection(selectedEntity);
                 }
             }
-            if (playToggleRequested && EditorSceneSession::setPlayMode(!playing, scene, playSceneSnapshot, playModeError,
-                                                   EditorSceneSession::msaaSampleCount(renderer))) {
+            if (playToggleRequested && EditorSceneSession::setPlayMode(!playing, scene, playSceneSnapshot,
+                                                                       playModeError,
+                                                                       EditorSceneSession::msaaSampleCount(renderer))) {
                 playing = !playing;
                 paused = false;
                 showGameView = playing;
@@ -1424,8 +1488,9 @@ int main() {
                 if (ImGui::IsKeyPressed(ImGuiKey_E)) gizmoMode = GizmoMode::Rotate;
             }
             const ViewportInteraction viewportInteraction = drawViewport(
-                scene, selectedEntity, renderer, renderer.gameViewport(), renderer.sceneViewport(), renderer.editorCameraYaw(),
-                renderer.editorCameraPitch(), showGameView, gizmoMode, playing, blueprintEnabled);
+                scene, selectedEntity, renderer, renderer.gameViewport(), renderer.sceneViewport(),
+                renderer.editorCameraYaw(),
+                renderer.editorCameraPitch(), showGameView, gizmoMode, playing);
             if (!playing && viewportInteraction.sceneClicked) {
                 constexpr float viewportAspect = 16.0f / 9.0f;
                 selectedEntity = pickSceneEntity(scene, physicsSystem, renderer,
@@ -1469,8 +1534,15 @@ int main() {
 
             if (antialiasingChanged) rendererReloadPending = true;
             const bool sceneStructureChanged = !sceneLoaded &&
-                scene.editor().structuralRevision() != sceneStructureBeforeUi;
-            if (sceneStructureChanged) renderer.synchronizeScene(scene);
+                                               scene.editor().structuralRevision() != sceneStructureBeforeUi;
+            if (sceneStructureChanged) {
+                renderer.synchronizeScene(scene);
+                // Duplicated objects do not exist in the renderer's cached
+                // renderable list until synchronization completes. Reapply
+                // the selection afterwards so the new copy can be outlined
+                // and selected in the Scene View immediately.
+                renderer.setEditorSelection(selectedEntity);
+            }
             if (!playing && !sceneLoaded) history.capture(scene);
             if (playing && !paused) {
                 physicsSystem.update(scene, static_cast<float>(Engine::Time::deltaTime()));
@@ -1478,14 +1550,15 @@ int main() {
             }
             renderer.renderFrame();
 
-            if (const auto elapsed = std::chrono::steady_clock::now() - start; elapsed < targetFrame) std::this_thread::sleep_for(targetFrame - elapsed);
+            if (const auto elapsed = std::chrono::steady_clock::now() - start; elapsed < targetFrame)
+                std::this_thread::sleep_for(targetFrame - elapsed);
         }
         renderer.shutdown();
         ImGui::DestroyContext();
         SDL_DestroyWindow(window);
         SDL_Quit();
         return 0;
-    } catch (const std::exception& error) {
+    } catch (const std::exception &error) {
         std::fprintf(stderr, "Editor error: %s\n", error.what());
         SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, "GamEngine Editor error",
                                  error.what(), nullptr);

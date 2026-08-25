@@ -31,10 +31,18 @@ int main() {
     if (!editor.valid(copy) || editor.size() != 3 || copy == entities[0] ||
         editor.get<Transform>(copy).position.z() != 9.0f ||
         !editor.has<ColliderComponent>(copy)) return 5;
+    if (!editor.has<UUIDComponent>(copy) ||
+        editor.get<UUIDComponent>(copy).value == editor.get<UUIDComponent>(entities[0]).value)
+        return 6;
+    editor.modify<Transform>(copy, [](auto& transform) {
+        transform.position.setX(42.0f);
+    });
+    if (editor.get<Transform>(copy).position.x() != 42.0f ||
+        editor.get<Transform>(entities[0]).position.x() != 7.0f) return 7;
 
     editor.destroy(entities[1]);
-    if (editor.valid(entities[1]) || editor.size() != 2) return 6;
+    if (editor.valid(entities[1]) || editor.size() != 2) return 8;
     editor.destroy(entities[1]);
-    if (editor.size() != 2) return 7;
+    if (editor.size() != 2) return 9;
     return 0;
 }

@@ -102,7 +102,6 @@ target_include_directories(Engine
 
 add_executable(Editor
         Editor/Source/main.cpp
-        Editor/Source/Panels/BlueprintOverlay.cpp
         Editor/Source/Panels/EditorStyle.cpp
         Editor/Source/Panels/EditorSceneSession.cpp)
 target_include_directories(Editor PRIVATE Editor/Include)
