@@ -11,9 +11,16 @@
 namespace Engine {
 
 namespace {
-    constexpr std::array<const char*, 1> kRequiredDeviceExtensions = {
+    constexpr std::size_t kRequiredDeviceExtensionCount = 1;
+    constexpr std::array<const char*, kRequiredDeviceExtensionCount> kRequiredDeviceExtensions = {
         VK_KHR_SWAPCHAIN_EXTENSION_NAME
     };
+
+    constexpr int kDiscreteGpuScoreBonus = 10'000;
+    constexpr int kIntegratedGpuScoreBonus = 1'000;
+    constexpr float kQueuePriority = 1.0F;
+    constexpr uint32_t kQueueCount = 1;
+    constexpr uint32_t kFirstQueueIndex = 0;
 }
 
 VulkanDevice::~VulkanDevice() { destroy();}
@@ -76,7 +83,8 @@ QueueFamilyIndices VulkanDevice::findQueueFamilies(VkPhysicalDevice candidate) c
     vkGetPhysicalDeviceQueueFamilyProperties(candidate, &queueFamilyCount, families.data());
 
     for (uint32_t i = 0; i < queueFamilyCount; i++) {
-        if (families[i].queueCount > 0 && (families[i].queueFlags & VK_QUEUE_GRAPHICS_BIT) != 0) {
+        if (families[i].queueCount > 0 &&
+            (families[i].queueFlags & static_cast<VkQueueFlags>(VK_QUEUE_GRAPHICS_BIT)) != 0) {
             indices.graphics = i;
         }
 
@@ -179,9 +187,9 @@ int VulkanDevice::scoreDevice(VkPhysicalDevice candidate) {
     int score = 0;
 
     if (properties.deviceType == VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU) {
-        score += 10'000;
+        score += kDiscreteGpuScoreBonus;
     } else if (properties.deviceType == VK_PHYSICAL_DEVICE_TYPE_INTEGRATED_GPU) {
-        score += 1'000;
+        score += kIntegratedGpuScoreBonus;
     }
 
     score += static_cast<int>(properties.limits.maxImageDimension2D);
@@ -234,10 +242,9 @@ void VulkanDevice::createLogicalDevice() {
 
     const std::set<uint32_t> uniqueFamilies = {
         queueFamilies_.graphics.value(),
-        queueFamilies_.present.value()
+        queueFamilies_.present.value(),
     };
 
-    constexpr float queuePriority = 1.0f;
     std::vector<VkDeviceQueueCreateInfo> queueCreateInfos;
     queueCreateInfos.reserve(uniqueFamilies.size());
 
@@ -245,8 +252,8 @@ void VulkanDevice::createLogicalDevice() {
         VkDeviceQueueCreateInfo queueInfo{};
         queueInfo.sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO;
         queueInfo.queueFamilyIndex = family;
-        queueInfo.queueCount = 1;
-        queueInfo.pQueuePriorities = &queuePriority;
+        queueInfo.queueCount = kQueueCount;
+        queueInfo.pQueuePriorities = &kQueuePriority;
         queueCreateInfos.push_back(queueInfo);
     }
 
@@ -284,13 +291,13 @@ void VulkanDevice::createLogicalDevice() {
     vkGetDeviceQueue(
         device_,
         queueFamilies_.graphics.value(),
-        0,
+        kFirstQueueIndex,
         &graphicsQueue_);
 
     vkGetDeviceQueue(
         device_,
         queueFamilies_.present.value(),
-        0,
+        kFirstQueueIndex,
         &presentQueue_);
 }
 
