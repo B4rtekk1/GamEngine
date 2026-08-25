@@ -63,8 +63,8 @@ ParticleSystem::ParticleSystem(VkDevice device, VkPhysicalDevice physicalDevice,
 ParticleSystem::~ParticleSystem() { destroy(); }
 
 void ParticleSystem::update(float deltaTime) {
-    const float dt = std::clamp(deltaTime, 0.0f, 0.1f);
-    emitter_.accumulator += dt * std::max(0.0f, emitter_.spawnRate);
+    const float dt = std::clamp(deltaTime, 0.0F, 0.1F);
+    emitter_.accumulator += dt * std::max(0.0F, emitter_.spawnRate);
     const auto requested = static_cast<uint32_t>(emitter_.accumulator);
     emitter_.accumulator -= static_cast<float>(requested);
     const uint32_t spawnCount = std::min(requested, maxParticles_);
@@ -101,8 +101,8 @@ void ParticleSystem::update(float deltaTime) {
     // margin, while avoiding an O(particles * all scene colliders) shader
     // workload for unrelated parts of the scene.
     const float maxVelocity = std::max(emitter_.minVelocity.length(), emitter_.maxVelocity.length());
-    const float interactionRange = std::max(2.0f,
-        emitter_.maxLifeTime * maxVelocity + emitter_.maxSize * 2.0f + 1.0f);
+    const float interactionRange = std::max(2.0F,
+        emitter_.maxLifeTime * maxVelocity + emitter_.maxSize * 2.0F + 1.0F);
     const float interactionRangeSquared = interactionRange * interactionRange;
     activeColliders_.clear();
     activeColliders_.reserve(std::min<std::size_t>(colliders_.size(), MaxColliders));
@@ -110,9 +110,9 @@ void ParticleSystem::update(float deltaTime) {
         const Vec3 center{collider.center.x(), collider.center.y(), collider.center.z()};
         const Vec3 extents{std::abs(collider.halfExtents.x()), std::abs(collider.halfExtents.y()),
                            std::abs(collider.halfExtents.z())};
-        const Vec3 delta{std::max(std::abs(emitter_.position.x() - center.x()) - extents.x(), 0.0f),
-                         std::max(std::abs(emitter_.position.y() - center.y()) - extents.y(), 0.0f),
-                         std::max(std::abs(emitter_.position.z() - center.z()) - extents.z(), 0.0f)};
+        const Vec3 delta{std::max(std::abs(emitter_.position.x() - center.x()) - extents.x(), 0.0F),
+                         std::max(std::abs(emitter_.position.y() - center.y()) - extents.y(), 0.0F),
+                         std::max(std::abs(emitter_.position.z() - center.z()) - extents.z(), 0.0F)};
         const float deltaSquared = delta.x() * delta.x() + delta.y() * delta.y() + delta.z() * delta.z();
         if (deltaSquared <= interactionRangeSquared) {
             activeColliders_.push_back(collider);

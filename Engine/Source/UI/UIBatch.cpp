@@ -75,24 +75,24 @@ namespace Engine::UI
             const float x1 = x0 + glyph->width * scale * text.horizontalScale;
             const float y1 = y0 + glyph->height * scale;
 
-            appendQuad(vertices, indices, x0, y0, x1, y1, *glyph, text.color, 1.0f);
+            appendQuad(vertices, indices, x0, y0, x1, y1, *glyph, text.color, 1.0F);
             penX += glyph->advance * scale * text.horizontalScale;
         }
     }
 
     void UIBatch::addQuad(const Rect& rect, const Math::Color& color)
     {
-        if (rect.width <= 0.0f || rect.height <= 0.0f)
+        if (rect.width <= 0.0F || rect.height <= 0.0F)
             return;
 
         const auto base = static_cast<std::uint32_t>(vertices.size());
         const float right = rect.x + rect.width;
         const float bottom = rect.y + rect.height;
         vertices.insert(vertices.end(), {
-            {{rect.x, rect.y}, {0.0f, 0.0f}, color, 0.0f},
-            {{right, rect.y}, {1.0f, 0.0f}, color, 0.0f},
-            {{right, bottom}, {1.0f, 1.0f}, color, 0.0f},
-            {{rect.x, bottom}, {0.0f, 1.0f}, color, 0.0f},
+            {{rect.x, rect.y}, {0.0F, 0.0F}, color, 0.0F},
+            {{right, rect.y}, {1.0F, 0.0F}, color, 0.0F},
+            {{right, bottom}, {1.0F, 1.0F}, color, 0.0F},
+            {{rect.x, bottom}, {0.0F, 1.0F}, color, 0.0F},
         });
         indices.insert(indices.end(), {base, base + 1, base + 2,
                                        base, base + 2, base + 3});

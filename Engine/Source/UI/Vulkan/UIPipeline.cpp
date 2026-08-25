@@ -172,12 +172,12 @@ void UIPipeline::record(const VkCommandBuffer commandBuffer,
         vkCmdBindVertexBuffers(commandBuffer, 0, 1, &vertexBuffer, &offset);
         vkCmdBindIndexBuffer(commandBuffer, indexBuffer, 0, VK_INDEX_TYPE_UINT32);
         const ScreenData screen{
-            1.0f / static_cast<float>(extent.width),
-            1.0f / static_cast<float>(extent.height)};
+            1.0F / static_cast<float>(extent.width),
+            1.0F / static_cast<float>(extent.height)};
         vkCmdPushConstants(commandBuffer, pipeline_.layout(),
                            VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(screen), &screen);
-        const VkViewport viewport{0.0f, 0.0f, static_cast<float>(extent.width),
-                                  static_cast<float>(extent.height), 0.0f, 1.0f};
+        const VkViewport viewport{0.0F, 0.0F, static_cast<float>(extent.width),
+                                  static_cast<float>(extent.height), 0.0F, 1.0F};
         const VkRect2D scissor{{0, 0}, extent};
         vkCmdSetViewport(commandBuffer, 0, 1, &viewport);
         vkCmdSetScissor(commandBuffer, 0, 1, &scissor);

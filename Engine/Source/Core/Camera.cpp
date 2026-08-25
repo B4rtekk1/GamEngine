@@ -12,9 +12,9 @@
 namespace Engine {
 
 namespace {
-    constexpr float MIN_PITCH = -89.0f;
-    constexpr float MAX_PITCH = 89.0f;
-    constexpr Vec3 WORLD_UP{0.0f, 1.0f, 0.0f};
+    constexpr float MIN_PITCH = -89.0F;
+    constexpr float MAX_PITCH = 89.0F;
+    constexpr Vec3 WORLD_UP{0.0F, 1.0F, 0.0F};
 }
 
 Camera::Camera(const Degrees fov, const float aspectRatio, const float nearPlane, const float farPlane)
@@ -22,13 +22,13 @@ Camera::Camera(const Degrees fov, const float aspectRatio, const float nearPlane
       m_aspectRatio(aspectRatio),
       m_nearPlane(nearPlane),
       m_farPlane(farPlane) {
-    if (fov.value() <= 0.0f || fov.value() >= 180.0f) {
+    if (fov.value() <= 0.0F || fov.value() >= 180.0F) {
         throw std::invalid_argument("Camera field of view must be between 0 and 180 degrees");
     }
-    if (aspectRatio <= 0.0f) {
+    if (aspectRatio <= 0.0F) {
         throw std::invalid_argument("Camera aspect ratio must be greater than zero");
     }
-    if (nearPlane <= 0.0f || farPlane <= nearPlane) {
+    if (nearPlane <= 0.0F || farPlane <= nearPlane) {
         throw std::invalid_argument("Camera clipping planes are invalid");
     }
 }
@@ -59,7 +59,7 @@ Mat4 Camera::projectionMatrix() const {
     );
 
     // Vulkan's viewport has its Y axis pointing down.
-    projection.native()[1][1] *= -1.0f;
+    projection.native()[1][1] *= -1.0F;
     return projection;
 }
 
@@ -83,7 +83,7 @@ Vec3 Camera::up() const {
 }
 
 void Camera::setAspectRatio(const float aspectRatio) {
-    if (aspectRatio <= 0.0f) {
+    if (aspectRatio <= 0.0F) {
         throw std::invalid_argument("Camera aspect ratio must be greater than zero");
     }
     m_aspectRatio = aspectRatio;

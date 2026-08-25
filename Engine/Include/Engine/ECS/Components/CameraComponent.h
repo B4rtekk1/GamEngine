@@ -37,19 +37,19 @@ namespace Engine
         CameraProjection projection = CameraProjection::Perspective;
 
         /// Vertical field of view for perspective projection, in degrees.
-        float fieldOfView = 60.0f;
+        float fieldOfView = 60.0F;
 
         /// Visible height for orthographic projection, in world units.
-        float orthographicSize = 10.0f;
+        float orthographicSize = 10.0F;
 
         /// Distance to the near clipping plane. Must be greater than zero.
-        float nearClip = 0.1f;
+        float nearClip = 0.1F;
 
         /// Distance to the far clipping plane. Must be greater than @ref nearClip.
-        float farClip = 1000.0f;
+        float farClip = 1000.0F;
 
         /// Render-target width-to-height ratio.
-        float aspectRatio = 16.0f / 9.0f;
+        float aspectRatio = 16.0F / 9.0F;
 
         /// Whether this camera is selected as the primary scene camera.
         bool primary = true;
@@ -82,9 +82,9 @@ namespace Engine
         void setPerspective(float fovDegrees, float nearPlane, float farPlane) noexcept
         {
             projection = CameraProjection::Perspective;
-            fieldOfView = std::clamp(fovDegrees, 1.0f, 179.0f);
-            nearClip = std::max(0.0001f, nearPlane);
-            farClip = std::max(nearClip + 0.0001f, farPlane);
+            fieldOfView = std::clamp(fovDegrees, 1.0F, 179.0F);
+            nearClip = std::max(0.0001F, nearPlane);
+            farClip = std::max(nearClip + 0.0001F, farPlane);
         }
 
         /**
@@ -96,9 +96,9 @@ namespace Engine
         void setOrthographic(float height, float nearPlane, float farPlane) noexcept
         {
             projection = CameraProjection::Orthographic;
-            orthographicSize = std::max(0.0001f, height);
-            nearClip = std::max(0.0001f, nearPlane);
-            farClip = std::max(nearClip + 0.0001f, farPlane);
+            orthographicSize = std::max(0.0001F, height);
+            nearClip = std::max(0.0001F, nearPlane);
+            farClip = std::max(nearClip + 0.0001F, farPlane);
         }
 
         /**
@@ -110,7 +110,7 @@ namespace Engine
          */
         void setAspectRatio(float width, float height) noexcept
         {
-            if (width > 0.0f && height > 0.0f)
+            if (width > 0.0F && height > 0.0F)
                 aspectRatio = width / height;
         }
 
@@ -122,7 +122,7 @@ namespace Engine
          */
         void setAspectRatio(float ratio) noexcept
         {
-            if (ratio > 0.0f)
+            if (ratio > 0.0F)
                 aspectRatio = ratio;
         }
 
@@ -133,13 +133,13 @@ namespace Engine
          */
         [[nodiscard]] bool isValid() const noexcept
         {
-            if (!(aspectRatio > 0.0f) || !(nearClip > 0.0f) || !(farClip > nearClip))
+            if (!(aspectRatio > 0.0F) || !(nearClip > 0.0F) || !(farClip > nearClip))
                 return false;
 
             if (isPerspective())
-                return fieldOfView > 0.0f && fieldOfView < 180.0f;
+                return fieldOfView > 0.0F && fieldOfView < 180.0F;
 
-            return orthographicSize > 0.0f;
+            return orthographicSize > 0.0F;
         }
 
         /**

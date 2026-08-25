@@ -25,24 +25,24 @@ int main()
 
     Canvas canvas{800, 600};
     if (canvas.width() != 800 || canvas.height() != 600 || !canvas.empty() ||
-        !equal(canvas.rect(), Rect{0.0f, 0.0f, 800.0f, 600.0f})) {
+        !equal(canvas.rect(), Rect{0.0F, 0.0F, 800.0F, 600.0F})) {
         return 1;
     }
 
     auto root = std::make_unique<UIElement>();
-    root->rectTransform.anchorMin = {0.0f, 0.0f};
-    root->rectTransform.anchorMax = {1.0f, 1.0f};
-    root->rectTransform.offsetMin = {10.0f, 20.0f};
-    root->rectTransform.offsetMax = {-30.0f, -40.0f};
+    root->rectTransform.anchorMin = {0.0F, 0.0F};
+    root->rectTransform.anchorMax = {1.0F, 1.0F};
+    root->rectTransform.offsetMin = {10.0F, 20.0F};
+    root->rectTransform.offsetMax = {-30.0F, -40.0F};
 
     UIElement& added = canvas.addElement(std::move(root));
     if (canvas.size() != 1 ||
-        !equal(added.rectTransform.calculatedRect, Rect{10.0f, 20.0f, 760.0f, 540.0f})) {
+        !equal(added.rectTransform.calculatedRect, Rect{10.0F, 20.0F, 760.0F, 540.0F})) {
         return 2;
     }
 
     canvas.resize(400, 300);
-    if (!equal(added.rectTransform.calculatedRect, Rect{10.0f, 20.0f, 360.0f, 240.0f})) {
+    if (!equal(added.rectTransform.calculatedRect, Rect{10.0F, 20.0F, 360.0F, 240.0F})) {
         return 3;
     }
 
@@ -63,8 +63,8 @@ int main()
         return 6;
     }
 
-    PanelElement panel{{0.1f, 0.2f, 0.3f, 0.5f}};
-    panel.rectTransform.calculatedRect = {10.0f, 20.0f, 100.0f, 50.0f};
+    PanelElement panel{{0.1F, 0.2F, 0.3F, 0.5F}};
+    panel.rectTransform.calculatedRect = {10.0F, 20.0F, 100.0F, 50.0F};
     UIBatch batch;
     panel.buildGeometry(batch);
     if (batch.vertices.size() != 4 || batch.indices.size() != 6 ||

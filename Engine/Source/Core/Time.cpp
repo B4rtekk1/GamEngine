@@ -7,12 +7,18 @@
 
 namespace Engine {
 
+namespace {
+constexpr double DefaultTimeScale = 1.0;
+constexpr double DefaultFixedDeltaTime = 1.0 / 60.0;
+constexpr double MaximumFrameDeltaTime = 0.1;
+}
+
 double Time::s_deltaTime = 0.0;
 double Time::s_unscaledDeltaTime = 0.0;
 double Time::s_elapsedTime = 0.0;
 
-double Time::s_timeScale = 1.0;
-double Time::s_fixedDeltaTime = 1.0 / 60.0;
+double Time::s_timeScale = DefaultTimeScale;
+double Time::s_fixedDeltaTime = DefaultFixedDeltaTime;
 double Time::s_fixedAccumulator = 0.0;
 
 std::chrono::steady_clock::time_point Time::s_lastFrame;
@@ -33,8 +39,7 @@ void Time::update() {
 
     s_unscaledDeltaTime = elapsed.count();
 
-    constexpr double maxDelta = 0.1;
-    s_unscaledDeltaTime = std::min(s_unscaledDeltaTime, maxDelta);
+    s_unscaledDeltaTime = std::min(s_unscaledDeltaTime, MaximumFrameDeltaTime);
     s_deltaTime = s_unscaledDeltaTime * s_timeScale;
     s_elapsedTime += s_deltaTime;
     s_fixedAccumulator += s_deltaTime;

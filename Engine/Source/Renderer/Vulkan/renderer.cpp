@@ -81,44 +81,50 @@
 #include <memory>
 
 namespace Engine {
+    using UniformBufferObject = RendererUniformBufferObject;
 
-using UniformBufferObject = RendererUniformBufferObject;
-
-constexpr uint32_t WIDTH = 800;
-constexpr uint32_t HEIGHT = 600;
-constexpr int MAX_FRAMES_IN_FLIGHT = 2;
+    constexpr uint32_t WIDTH = 800;
+    constexpr uint32_t HEIGHT = 600;
+    constexpr int MAX_FRAMES_IN_FLIGHT = 2;
+    constexpr float HALF_EXTENT_FACTOR = 0.5F;
+    constexpr float DEFAULT_SELECTION_RADIUS = 1.0F;
+    constexpr float SCENE_CAMERA_FOV_DEGREES = 60.0F;
+    constexpr float SCENE_CAMERA_ASPECT_RATIO = 1.0F;
+    constexpr float SCENE_CAMERA_NEAR_CLIP = 0.1F;
+    constexpr float SCENE_CAMERA_FAR_CLIP = 1000.0F;
+    constexpr float EDITOR_CAMERA_DISTANCE_MULTIPLIER = 3.0F;
 
 #ifdef NDEBUG
-constexpr bool enableValidationLayers = false;
+    constexpr bool enableValidationLayers = false;
 #else
-constexpr bool enableValidationLayers = true;
+    constexpr bool enableValidationLayers = true;
 #endif
 
-const std::vector<const char*> validationLayers = {
-    "VK_LAYER_KHRONOS_validation"
-};
+    constexpr std::array<const char *, 1> validationLayers = {
+        "VK_LAYER_KHRONOS_validation",
+    };
 
-class Renderer::State {
-public:
-    Assets::AssetManager assetManager{};
-    ForwardPass forwardPass{};
-    SkyPass skyPass{};
-    TonemapPass tonemapPass{};
-    GraphicsPipeline particlePipeline{};
-    UI::CanvasRenderer canvasRenderer{};
-};
-
-class Renderer::Backend {
+    class Renderer::State {
     public:
-        explicit Backend(Scene& scene, SDL_Window* window,
-                           const RenderOptimizationFeatures& optimizationFeatures,
-                           const AntialiasingLevel antialiasingLevel,
-                           Assets::AssetManager& assetManager,
-                           ForwardPass& forwardPass,
-                           SkyPass& skyPass,
-                           TonemapPass& tonemapPass,
-                           GraphicsPipeline& particlePipeline,
-                           UI::CanvasRenderer& canvasRenderer)
+        Assets::AssetManager assetManager{};
+        ForwardPass forwardPass{};
+        SkyPass skyPass;
+        TonemapPass tonemapPass;
+        GraphicsPipeline particlePipeline;
+        UI::CanvasRenderer canvasRenderer;
+    };
+
+    class Renderer::Backend {
+    public:
+        explicit Backend(Scene &scene, SDL_Window *window,
+                         const RenderOptimizationFeatures &optimizationFeatures,
+                         const AntialiasingLevel antialiasingLevel,
+                         Assets::AssetManager &assetManager,
+                         ForwardPass &forwardPass,
+                         SkyPass &skyPass,
+                         TonemapPass &tonemapPass,
+                         GraphicsPipeline &particlePipeline,
+                         UI::CanvasRenderer &canvasRenderer)
             : window(window), forwardPass(forwardPass),
               particlePipeline(particlePipeline),
               skyPass(skyPass),
@@ -142,7 +148,8 @@ class Renderer::Backend {
               dirtyCullingObjects(sceneGpu.dirtyCullingObjects),
               sceneCenter(sceneGpu.sceneCenter),
               sceneRadius(sceneGpu.sceneRadius),
-              hasShadowCasters(sceneGpu.hasShadowCasters) {}
+              hasShadowCasters(sceneGpu.hasShadowCasters) {
+        }
 
         ~Backend() {
             cleanup();
@@ -160,7 +167,9 @@ class Renderer::Backend {
             EditorEventState result{};
             SDL_Event event;
             while (SDL_PollEvent(&event)) {
-                if (editorUiActive) ImGui_ImplSDL3_ProcessEvent(&event);
+                if (editorUiActive) {
+                    ImGui_ImplSDL3_ProcessEvent(&event);
+                }
                 processEvent(event);
                 if (event.type == SDL_EVENT_QUIT ||
                     (event.type == SDL_EVENT_WINDOW_CLOSE_REQUESTED &&
@@ -168,15 +177,21 @@ class Renderer::Backend {
                     result.quitRequested = true;
                 }
                 if (event.type == SDL_EVENT_KEY_DOWN && !ImGui::GetIO().WantTextInput) {
-                    if (event.key.key == SDLK_F5) result.togglePlay = true;
-                    if (event.key.key == SDLK_F6) result.togglePause = true;
+                    if (event.key.key == SDLK_F5) {
+                        result.togglePlay = true;
+                    }
+                    if (event.key.key == SDLK_F6) {
+                        result.togglePause = true;
+                    }
                 }
             }
             return result;
         }
 
         void beginEditorUiFrame() const {
-            if (!editorUiActive) throw std::logic_error("Renderer was initialized without an ImGui context");
+            if (!editorUiActive) {
+                throw std::logic_error("Renderer was initialized without an ImGui context");
+            }
             ImGui_ImplVulkan_NewFrame();
             ImGui_ImplSDL3_NewFrame();
             ImGui::NewFrame();
@@ -187,23 +202,33 @@ class Renderer::Backend {
         [[nodiscard]] float editorCameraYaw() const noexcept { return cameraController.editorYaw(); }
         [[nodiscard]] float editorCameraPitch() const noexcept { return cameraController.editorPitch(); }
         [[nodiscard]] Vec3 editorCameraPosition() const noexcept { return cameraController.editorPosition(); }
-        [[nodiscard]] Vec3 editorGizmoPosition(const Entity entity) const noexcept {
-            const Registry& readRegistry = registry;
-            if (!readRegistry.valid(entity) || !readRegistry.has<Transform>(entity)) return {};
 
-            const Transform& transform = readRegistry.get<Transform>(entity);
-            for (const RenderableRecord& record : renderables) {
-                if (record.entity != entity) continue;
-                const AABB bounds = record.localBounds.transformed(transform.matrix().native());
-                return Vec3{(bounds.min.native() + bounds.max.native()) * 0.5f};
+        [[nodiscard]] Vec3 editorGizmoPosition(const Entity entity) const noexcept {
+            const Registry &readRegistry = registry;
+            if (!readRegistry.valid(entity) || !readRegistry.has<Transform>(entity)) {
+                return {};
             }
-            return transform.position;
+
+            try {
+                const auto &transform = readRegistry.get<Transform>(entity);
+                for (const RenderableRecord &record: renderables) {
+                    if (record.entity != entity) {
+                        continue;
+                    }
+                    const AABB bounds = record.localBounds.transformed(transform.matrix().native());
+                    return Vec3{bounds.min.native() + bounds.max.native() * HALF_EXTENT_FACTOR};
+                }
+                return transform.position;
+            } catch (const std::out_of_range &) {
+                return {};
+            }
         }
+
         void setEditorCameraRotation(const float yaw, const float pitch) noexcept {
             cameraController.setEditorRotation(yaw, pitch);
         }
 
-        void processEvent(const SDL_Event& event) {
+        void processEvent(const SDL_Event &event) {
             SDLInput::processEvent(event);
             if (event.type == SDL_EVENT_WINDOW_RESIZED ||
                 event.type == SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED) {
@@ -228,24 +253,28 @@ class Renderer::Backend {
             // Selection is a read-only editor operation. Use a const view of
             // the registry so Registry::get() does not advance the scene
             // mutation revision and trigger a full renderer reload.
-            const Registry& readRegistry = registry;
-            if (!readRegistry.has<Transform>(entity)) return;
+            const Registry &readRegistry = registry;
+            if (!readRegistry.has<Transform>(entity)) { return; }
             Vec3 target = readRegistry.get<Transform>(entity).position;
-            float radius = 1.0f;
+            float radius = DEFAULT_SELECTION_RADIUS;
             if (editorSelectedRenderable != std::numeric_limits<std::uint32_t>::max()) {
-                const RenderableRecord& record = renderables[editorSelectedRenderable];
+                const RenderableRecord &record = renderables[editorSelectedRenderable];
                 const AABB bounds = record.localBounds.transformed(
                     readRegistry.get<Transform>(entity).matrix().native());
-                target = Vec3{(bounds.min.native() + bounds.max.native()) * 0.5f};
-                radius = std::max(glm::length(bounds.max.native() - bounds.min.native()) * 0.5f,
-                                  1.0f);
+                target = Vec3{bounds.min.native() + bounds.max.native() * HALF_EXTENT_FACTOR};
+                radius = std::max(glm::length(bounds.max.native() - bounds.min.native()) * HALF_EXTENT_FACTOR,
+                                  DEFAULT_SELECTION_RADIUS);
             }
 
-            Camera sceneCamera{Degrees{60.0f}, 1.0f, 0.1f, 1000.0f};
+            Camera sceneCamera{
+                Degrees{SCENE_CAMERA_FOV_DEGREES}, SCENE_CAMERA_ASPECT_RATIO,
+                SCENE_CAMERA_NEAR_CLIP, SCENE_CAMERA_FAR_CLIP
+            };
             sceneCamera.setPosition(cameraController.editorPosition());
             sceneCamera.setRotation(Degrees{cameraController.editorYaw()},
                                     Degrees{cameraController.editorPitch()});
-            cameraController.setEditorPosition(target - sceneCamera.forward() * (radius * 3.0f));
+            cameraController.setEditorPosition(
+                target - sceneCamera.forward() * (radius * EDITOR_CAMERA_DISTANCE_MULTIPLIER));
         }
 
         void renderFrame() {
@@ -253,7 +282,9 @@ class Renderer::Backend {
             // Scene View navigation is updated before the editor UI so its
             // rendered image and gizmo overlay use the same camera state.
             // The game camera remains a render-frame concern.
-            if (!cameraController.editorInputEnabled()) updateCameraInput();
+            if (!cameraController.editorInputEnabled()) {
+                updateCameraInput();
+            }
             updateFpsCounter();
             drawFrame();
         }
@@ -266,44 +297,79 @@ class Renderer::Backend {
 
         // Rebuild only registry-derived GPU data. The instance, device,
         // swapchain and ImGui backend survive ordinary editor scene changes.
-        void reloadSceneResources(const Scene& updatedScene) {
+        void reloadSceneResources(const Scene &updatedScene) {
             if (&updatedScene != &scene) {
                 throw std::invalid_argument("Renderer cannot switch Scene instances while initialized");
             }
-            if (device == VK_NULL_HANDLE) return;
+            if (device == VK_NULL_HANDLE) {
+                return;
+            }
             // All scene work is submitted through the graphics queue and each
             // frame has its own fence. Waiting for every in-flight frame is
             // sufficient before destroying scene-owned resources; idling the
             // whole device here needlessly stalls unrelated queue work.
             if (!inFlightFences.empty() && vkWaitForFences(device,
-                    static_cast<uint32_t>(inFlightFences.size()), inFlightFences.data(), VK_TRUE,
-                    UINT64_MAX) != VK_SUCCESS) {
+                                                           static_cast<uint32_t>(inFlightFences.size()),
+                                                           inFlightFences.data(), VK_TRUE,
+                                                           UINT64_MAX) != VK_SUCCESS) {
                 throw std::runtime_error("Could not synchronize frames for scene reload");
             }
 
             destroyCullingResources();
-            if (hiZDepthPrepassFramebuffer != VK_NULL_HANDLE) vkDestroyFramebuffer(device, hiZDepthPrepassFramebuffer, nullptr);
+            if (hiZDepthPrepassFramebuffer != VK_NULL_HANDLE) {
+                vkDestroyFramebuffer(device, hiZDepthPrepassFramebuffer, nullptr);
+            }
             hiZDepthPrepassFramebuffer = VK_NULL_HANDLE;
-            if (hdrFramebuffer != VK_NULL_HANDLE) vkDestroyFramebuffer(device, hdrFramebuffer, nullptr);
+            if (hdrFramebuffer != VK_NULL_HANDLE) {
+                vkDestroyFramebuffer(device, hdrFramebuffer, nullptr);
+            }
             hdrFramebuffer = VK_NULL_HANDLE;
             destroySceneViewportResources();
             particlePipeline.destroy();
-            skyPass.destroy(); sceneSkyPass.destroy(); forwardPass.destroy(); hiZDepthPrepass.destroy();
-            shadowPass.destroy(); sceneDescriptorPass.destroy();
-            indexBuffer.destroy(); vertexBuffer.destroy();
-            for (Buffer& buffer : instanceBuffers) buffer.destroy();
-            for (Buffer& buffer : shadowInstanceBuffers) buffer.destroy();
-            for (Buffer& buffer : materialBuffers) buffer.destroy();
-            for (Buffer& buffer : uniformBuffers) buffer.destroy();
-            for (Buffer& buffer : sceneUniformBuffers) buffer.destroy();
-            for (Texture2D& texture : materialTextures) texture.destroy();
-            materialTextures.clear(); materialTextureDescriptors.clear(); meshTextureOffsets.clear();
+            skyPass.destroy();
+            sceneSkyPass.destroy();
+            forwardPass.destroy();
+            hiZDepthPrepass.destroy();
+            shadowPass.destroy();
+            sceneDescriptorPass.destroy();
+            indexBuffer.destroy();
+            vertexBuffer.destroy();
+            for (Buffer &buffer: instanceBuffers) {
+                buffer.destroy();
+            }
+            for (Buffer &buffer: shadowInstanceBuffers) {
+                buffer.destroy();
+            }
+            for (Buffer &buffer: materialBuffers) {
+                buffer.destroy();
+            }
+            for (Buffer &buffer: uniformBuffers) {
+                buffer.destroy();
+            }
+            for (Buffer &buffer: sceneUniformBuffers) {
+                buffer.destroy();
+            }
+            for (Texture2D &texture: materialTextures) {
+                texture.destroy();
+            }
+            materialTextures.clear();
+            materialTextureDescriptors.clear();
+            meshTextureOffsets.clear();
             fallbackMaterialTexture.destroy();
-            renderables.clear(); instanceBatches.clear(); instanceModels.clear();
-            shadowInstanceModels.clear(); materials.clear();
-            for (auto& indices : dirtyTransforms) indices.clear();
-            for (auto& indices : dirtyMaterials) indices.clear();
-            for (auto& indices : dirtyCullingObjects) indices.clear();
+            renderables.clear();
+            instanceBatches.clear();
+            instanceModels.clear();
+            shadowInstanceModels.clear();
+            materials.clear();
+            for (auto &indices: dirtyTransforms) {
+                indices.clear();
+            }
+            for (auto &indices: dirtyMaterials) {
+                indices.clear();
+            }
+            for (auto &indices: dirtyCullingObjects) {
+                indices.clear();
+            }
             lastTransformRevision = std::numeric_limits<std::uint64_t>::max();
             lastMeshRendererRevision = std::numeric_limits<std::uint64_t>::max();
             hiZValid = false;
@@ -321,12 +387,21 @@ class Renderer::Backend {
                 particleComputePipelineLayout = VK_NULL_HANDLE;
             }
 
-            createMaterialTextures(); createMeshBuffers(); createInstanceBuffer();
+            createMaterialTextures();
+            createMeshBuffers();
+            createInstanceBuffer();
             renderableTopologySignature = currentRenderableTopologySignature();
-            createUniformBuffers(); createSceneUniformBuffers(); createShadowPass();
-            createSceneDescriptorPass(); createForwardPass(); createParticleResources();
-            createCullingResources(); createSkyPass(); createSceneSkyPass();
-            createFramebuffers(); createSceneViewportResources();
+            createUniformBuffers();
+            createSceneUniformBuffers();
+            createShadowPass();
+            createSceneDescriptorPass();
+            createForwardPass();
+            createParticleResources();
+            createCullingResources();
+            createSkyPass();
+            createSceneSkyPass();
+            createFramebuffers();
+            createSceneViewportResources();
             refreshEditorViewportTextures();
             assetManager.unload_unused();
         }
@@ -335,20 +410,25 @@ class Renderer::Backend {
         // particular, preserve the Vulkan instance/device, swapchain, ImGui
         // backend and Scene View images: adding an object must not look like a
         // complete scene reload to the editor.
-        void synchronizeSceneResources(const Scene& updatedScene) {
+        void synchronizeSceneResources(const Scene &updatedScene) {
             if (&updatedScene != &scene) {
                 throw std::invalid_argument("Renderer cannot switch Scene instances while initialized");
             }
-            if (device == VK_NULL_HANDLE) return;
+            if (device == VK_NULL_HANDLE) {
+                return;
+            }
             // The editor reports every ECS structural change here, including
             // hierarchy, scripts and colliders. Avoid stalling the GPU and
             // recreating render resources unless the renderable topology
             // itself changed.
             const std::uint64_t updatedTopology = currentRenderableTopologySignature();
-            if (updatedTopology == renderableTopologySignature) return;
+            if (updatedTopology == renderableTopologySignature) {
+                return;
+            }
             if (!inFlightFences.empty() && vkWaitForFences(device,
-                    static_cast<uint32_t>(inFlightFences.size()), inFlightFences.data(), VK_TRUE,
-                    UINT64_MAX) != VK_SUCCESS) {
+                                                           static_cast<uint32_t>(inFlightFences.size()),
+                                                           inFlightFences.data(), VK_TRUE,
+                                                           UINT64_MAX) != VK_SUCCESS) {
                 throw std::runtime_error("Could not synchronize frames for scene update");
             }
 
@@ -376,40 +456,58 @@ class Renderer::Backend {
                 vkDestroyPipelineLayout(device, particleComputePipelineLayout, nullptr);
                 particleComputePipelineLayout = VK_NULL_HANDLE;
             }
-            skyPass.destroy(); sceneSkyPass.destroy(); forwardPass.destroy(); hiZDepthPrepass.destroy();
-            shadowPass.destroy(); sceneDescriptorPass.destroy();
-            indexBuffer.destroy(); vertexBuffer.destroy();
-            for (Buffer& buffer : instanceBuffers) buffer.destroy();
-            for (Buffer& buffer : shadowInstanceBuffers) buffer.destroy();
-            for (Buffer& buffer : materialBuffers) buffer.destroy();
-            for (Texture2D& texture : materialTextures) texture.destroy();
-            materialTextures.clear(); materialTextureDescriptors.clear(); meshTextureOffsets.clear();
+            skyPass.destroy();
+            sceneSkyPass.destroy();
+            forwardPass.destroy();
+            hiZDepthPrepass.destroy();
+            shadowPass.destroy();
+            sceneDescriptorPass.destroy();
+            indexBuffer.destroy();
+            vertexBuffer.destroy();
+            for (Buffer &buffer: instanceBuffers) { buffer.destroy(); }
+            for (Buffer &buffer: shadowInstanceBuffers) { buffer.destroy(); }
+            for (Buffer &buffer: materialBuffers) { buffer.destroy(); }
+            for (Texture2D &texture: materialTextures) { texture.destroy(); }
+            materialTextures.clear();
+            materialTextureDescriptors.clear();
+            meshTextureOffsets.clear();
             fallbackMaterialTexture.destroy();
-            renderables.clear(); instanceBatches.clear(); instanceModels.clear();
-            shadowInstanceModels.clear(); materials.clear();
-            for (auto& indices : dirtyTransforms) indices.clear();
-            for (auto& indices : dirtyMaterials) indices.clear();
-            for (auto& indices : dirtyCullingObjects) indices.clear();
+            renderables.clear();
+            instanceBatches.clear();
+            instanceModels.clear();
+            shadowInstanceModels.clear();
+            materials.clear();
+            for (auto &indices: dirtyTransforms) { indices.clear(); }
+            for (auto &indices: dirtyMaterials) { indices.clear(); }
+            for (auto &indices: dirtyCullingObjects) { indices.clear(); }
             lastTransformRevision = std::numeric_limits<std::uint64_t>::max();
             lastMeshRendererRevision = std::numeric_limits<std::uint64_t>::max();
             hiZValid = false;
 
-            createMaterialTextures(); createMeshBuffers(); createInstanceBuffer();
+            createMaterialTextures();
+            createMeshBuffers();
+            createInstanceBuffer();
             renderableTopologySignature = currentRenderableTopologySignature();
-            createUniformBuffers(); createSceneUniformBuffers(); createShadowPass();
-            createSceneDescriptorPass(); createForwardPass();
-            createParticleResources(); createCullingResources(); createSkyPass(); createSceneSkyPass();
-            createFramebuffers(); createSceneViewportFramebuffer();
+            createUniformBuffers();
+            createSceneUniformBuffers();
+            createShadowPass();
+            createSceneDescriptorPass();
+            createForwardPass();
+            createParticleResources();
+            createCullingResources();
+            createSkyPass();
+            createSceneSkyPass();
+            createFramebuffers();
+            createSceneViewportFramebuffer();
             renderableTopologySignature = updatedTopology;
             assetManager.unload_unused();
         }
 
 #include "renderer_backend_state.inl"
-        #include "renderer_backend_resources.inl"
-        #include "renderer_backend_frame.inl"
+#include "renderer_backend_resources.inl"
+#include "renderer_backend_frame.inl"
 #include "renderer_backend_cleanup.inl"
     };
 
 #include "renderer_api.inl"
-
 } // namespace Engine

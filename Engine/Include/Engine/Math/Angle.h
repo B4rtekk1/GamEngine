@@ -65,8 +65,8 @@ namespace Engine {
         float m_value{};
     };
 
-    inline constexpr float kRadiansPerDegree = 0.01745329251994329577f;
-    inline constexpr float kDegreesPerRadian = 57.29577951308232088f;
+    inline constexpr float kRadiansPerDegree = 0.01745329251994329577F;
+    inline constexpr float kDegreesPerRadian = 57.29577951308232088F;
 
     constexpr Radians::Radians(const Degrees value) noexcept : m_value(value.value() * kRadiansPerDegree) {
     }

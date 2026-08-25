@@ -80,8 +80,8 @@ namespace Engine::UI {
     Rect Canvas::rect() const noexcept
     {
         return {
-            0.0f,
-            0.0f,
+            0.0F,
+            0.0F,
             static_cast<float>(m_width),
             static_cast<float>(m_height)
         };

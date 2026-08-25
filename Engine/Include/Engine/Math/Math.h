@@ -13,13 +13,13 @@
 namespace Engine {
 
     /** @brief Mathematical constant π as a single-precision value. */
-    inline constexpr float Pi = 3.14159265358979323846f;
+    inline constexpr float Pi = 3.14159265358979323846F;
 
     /** @brief Mathematical constant 2π as a single-precision value. */
-    inline constexpr float Tau = 6.28318530717958647692f;
+    inline constexpr float Tau = 6.28318530717958647692F;
 
     /** @brief Half of π. */
-    inline constexpr float HalfPi = 1.57079632679489661923f;
+    inline constexpr float HalfPi = 1.57079632679489661923F;
 
 /** @brief Returns the scalar product of two three-dimensional vectors. */
 template <typename T>

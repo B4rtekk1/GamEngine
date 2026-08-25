@@ -100,7 +100,7 @@ void Cubemap::create(VkPhysicalDevice physicalDevice, VkDevice device, VkCommand
         sampler.magFilter = VK_FILTER_LINEAR; sampler.minFilter = VK_FILTER_LINEAR;
         sampler.mipmapMode = VK_SAMPLER_MIPMAP_MODE_LINEAR; sampler.addressModeU = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
         sampler.addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE; sampler.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
-        sampler.maxLod = 1.0f;
+        sampler.maxLod = 1.0F;
         if (vkCreateSampler(device_, &sampler, nullptr, &sampler_) != VK_SUCCESS) throw std::runtime_error("Could not create cubemap sampler");
         vkDestroyBuffer(device_, staging, nullptr); vkFreeMemory(device_, stagingMemory, nullptr);
     } catch (...) {

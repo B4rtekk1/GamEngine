@@ -19,10 +19,10 @@ protected:
                        const float speed, const char* format,
                        const std::function<void(const Engine::Vec3&)>& update) const {
         float values[3] = {current.x(), current.y(), current.z()};
-        ImGui::TextColored({0.62f, 0.75f, 0.80f, 1.0f}, "%s", label);
+        ImGui::TextColored({0.62F, 0.75F, 0.80F, 1.0F}, "%s", label);
         ImGui::SameLine();
         ImGui::TextDisabled("  Scroll over a value to adjust");
-        ImGui::SetNextItemWidth(-1.0f);
+        ImGui::SetNextItemWidth(-1.0F);
         if (!dragFloat3WithWheel(id, values, speed, format)) return;
         update(Engine::Vec3{values[0], values[1], values[2]});
     }
@@ -32,12 +32,12 @@ protected:
 private:
     static bool dragFloat3WithWheel(const char* label, float values[3], const float speed,
                                     const char* format) {
-        bool changed = ImGui::DragFloat3(label, values, speed, 0.0f, 0.0f, format);
-        if (!ImGui::IsItemHovered() || ImGui::GetIO().MouseWheel == 0.0f) return changed;
+        bool changed = ImGui::DragFloat3(label, values, speed, 0.0F, 0.0F, format);
+        if (!ImGui::IsItemHovered() || ImGui::GetIO().MouseWheel == 0.0F) return changed;
 
         const ImVec2 min = ImGui::GetItemRectMin();
         const ImVec2 max = ImGui::GetItemRectMax();
-        const float fieldWidth = (max.x - min.x) / 3.0f;
+        const float fieldWidth = (max.x - min.x) / 3.0F;
         const int field = std::clamp(
             static_cast<int>((ImGui::GetIO().MousePos.x - min.x) / fieldWidth), 0, 2);
         values[field] += ImGui::GetIO().MouseWheel * speed;

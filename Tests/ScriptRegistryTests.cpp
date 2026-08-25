@@ -48,22 +48,22 @@ int main() {
     entities.add<Transform>(entity);
     entities.add<ScriptComponent>(entity, ScriptComponent{"First"});
     ScriptSystem system{registry};
-    system.update(entities, 0.25f);
+    system.update(entities, 0.25F);
     if (FirstScript::created != 1 || FirstScript::updated != 1 ||
-        FirstScript::lastDelta != 0.25f) return 4;
+        FirstScript::lastDelta != 0.25F) return 4;
 
     entities.modify<ScriptComponent>(entity, [](auto& component) { component.className = "Second"; });
-    system.update(entities, 0.5f);
+    system.update(entities, 0.5F);
     if (FirstScript::destroyed != 1 || SecondScript::created != 1 || SecondScript::updated != 1) return 5;
 
     entities.modify<ScriptComponent>(entity, [](auto& component) { component.enabled = false; });
-    system.update(entities, 1.0f);
+    system.update(entities, 1.0F);
     if (SecondScript::updated != 1) return 6;
     entities.modify<ScriptComponent>(entity, [](auto& component) {
         component.enabled = true;
         component.className.clear();
     });
-    system.update(entities, 1.0f);
+    system.update(entities, 1.0F);
     if (SecondScript::updated != 1) return 7;
 
     return 0;

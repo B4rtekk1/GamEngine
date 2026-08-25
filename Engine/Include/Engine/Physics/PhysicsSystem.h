@@ -26,7 +26,7 @@ struct RaycastHit final {
  */
 class PhysicsSystem final {
 public:
-    explicit PhysicsSystem(Vec3 gravity = {0.0f, -9.81f, 0.0f}) noexcept
+    explicit PhysicsSystem(Vec3 gravity = {0.0F, -9.81F, 0.0F}) noexcept
         : gravity_(gravity) {}
 
     /** Advances dynamic rigid bodies in a scene by one simulation step. */
@@ -36,7 +36,7 @@ public:
     void setGravity(Vec3 gravity) noexcept { gravity_ = gravity; }
 
     [[nodiscard]] std::optional<RaycastHit> raycast(
-        Scene& scene, Vec3 origin, Vec3 direction, float maxDistance = 1000.0f) const;
+        Scene& scene, Vec3 origin, Vec3 direction, float maxDistance = 1000.0F) const;
 
 private:
     struct BroadPhaseCache;

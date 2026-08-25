@@ -252,7 +252,7 @@
                 constexpr std::uint32_t dummyIndex = 0;
                 hasShadowCasters = false;
                 sceneCenter = Vec3{};
-                sceneRadius = 1.0f;
+                sceneRadius = 1.0F;
                 vertexBuffer.createDeviceLocal(
                     vulkanDevice.physical(), device, &dummyVertex, sizeof(dummyVertex),
                     VK_BUFFER_USAGE_VERTEX_BUFFER_BIT, commandPool,
@@ -535,13 +535,13 @@
                     if (!initialized) continue;
                     instanceBatches[batchIndex].worldBounds = bounds;
                     auto& object = gpuObjects[batchIndex];
-                    object.localAabbMin = {bounds.min.x(), bounds.min.y(), bounds.min.z(), 0.0f};
-                    object.localAabbMax = {bounds.max.x(), bounds.max.y(), bounds.max.z(), 0.0f};
+                    object.localAabbMin = {bounds.min.x(), bounds.min.y(), bounds.min.z(), 0.0F};
+                    object.localAabbMax = {bounds.max.x(), bounds.max.y(), bounds.max.z(), 0.0F};
                     object.model = {};
-                    object.model.data[0] = 1.0f;
-                    object.model.data[5] = 1.0f;
-                    object.model.data[10] = 1.0f;
-                    object.model.data[15] = 1.0f;
+                    object.model.data[0] = 1.0F;
+                    object.model.data[5] = 1.0F;
+                    object.model.data[10] = 1.0F;
+                    object.model.data[15] = 1.0F;
                 }
                 for (Buffer& buffer : cullingObjectBuffers) {
                     if (buffer.handle() == VK_NULL_HANDLE) continue;

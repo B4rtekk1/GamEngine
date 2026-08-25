@@ -22,9 +22,9 @@ struct ViewportCamera final {
     }
 
     static ViewportCamera scene(float aspectRatio) {
-        Camera result{Degrees{60.0f}, aspectRatio, 0.1f, 1000.0f};
-        result.setPosition(Vec3{8.0f, 6.0f, 8.0f});
-        result.setRotation(Degrees{-135.0f}, Degrees{-22.0f});
+        Camera result{Degrees{60.0F}, aspectRatio, 0.1F, 1000.0F};
+        result.setPosition(Vec3{8.0F, 6.0F, 8.0F});
+        result.setRotation(Degrees{-135.0F}, Degrees{-22.0F});
         return {ViewportCameraType::Scene, result};
     }
 };

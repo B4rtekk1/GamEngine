@@ -17,19 +17,19 @@ int main() {
 
     const Entity smokeEntity = scene.registry().create();
     Particles::SmokeEmitter smoke;
-    smoke.spawnRate = 6.0f;
+    smoke.spawnRate = 6.0F;
     scene.registry().add<SmokeEmitterComponent>(smokeEntity, SmokeEmitterComponent{.emitter = smoke});
     scene.setParticleEntity(smokeEntity);
     scene.setParticleEmitter(smoke);
     if (!scene.isParticleScene() || scene.particleEntity() != smokeEntity ||
-        scene.particleEmitter().spawnRate != 6.0f) return 2;
+        scene.particleEmitter().spawnRate != 6.0F) return 2;
 
     scene.registry().destroy(smokeEntity);
     if (scene.particleEntity() != NullEntity || scene.isParticleScene()) return 3;
 
     const Entity genericEntity = scene.registry().create();
     Particles::ParticleEmitter emitter;
-    emitter.spawnRate = 42.0f;
+    emitter.spawnRate = 42.0F;
     scene.registry().add<ParticleEmitterComponent>(genericEntity,
         ParticleEmitterComponent{.emitter = emitter});
     if (scene.particleEntity() != genericEntity || !scene.isParticleScene()) return 4;

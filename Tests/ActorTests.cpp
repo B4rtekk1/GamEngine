@@ -17,7 +17,7 @@ public:
     Engine::Registry& registryForTest() noexcept { return registry(); }
 };
 
-bool near(const float lhs, const float rhs, const float epsilon = 0.0001f) {
+bool near(const float lhs, const float rhs, const float epsilon = 0.0001F) {
     return std::abs(lhs - rhs) <= epsilon;
 }
 
@@ -35,27 +35,27 @@ int main() {
     if (!actor.valid() || actor.name() != "Player" || scene.objectCount() != 1 ||
         !scene.find("Player") || !scene.find("Player")->isSpawned()) return 1;
 
-    actor.setPosition({1.0f, 2.0f, 3.0f});
-    actor.translate({2.0f, -1.0f, 0.5f});
-    actor.move({-1.0f, 1.0f, -0.5f});
-    actor.setRotation({10.0f, 20.0f, 30.0f});
-    actor.setScale({2.0f, 3.0f, 4.0f});
-    if (!equal(actor.position(), {2.0f, 2.0f, 3.0f}) ||
-        !equal(actor.rotation(), {10.0f, 20.0f, 30.0f}) ||
-        !equal(actor.scale(), {2.0f, 3.0f, 4.0f})) return 2;
+    actor.setPosition({1.0F, 2.0F, 3.0F});
+    actor.translate({2.0F, -1.0F, 0.5F});
+    actor.move({-1.0F, 1.0F, -0.5F});
+    actor.setRotation({10.0F, 20.0F, 30.0F});
+    actor.setScale({2.0F, 3.0F, 4.0F});
+    if (!equal(actor.position(), {2.0F, 2.0F, 3.0F}) ||
+        !equal(actor.rotation(), {10.0F, 20.0F, 30.0F}) ||
+        !equal(actor.scale(), {2.0F, 3.0F, 4.0F})) return 2;
 
     actor.addRigidbody();
     actor.setBodyType(RigidbodyType::Kinematic);
-    actor.setMass(4.0f);
+    actor.setMass(4.0F);
     actor.setGravityEnabled(false);
-    actor.setVelocity({3.0f, 4.0f, 5.0f});
+    actor.setVelocity({3.0F, 4.0F, 5.0F});
     const auto& body = scene.find(actor.id())->rigidbody();
     if (!actor.hasRigidbody() || body.type != RigidbodyType::Kinematic ||
-        !near(body.mass, 4.0f) || body.useGravity || !equal(actor.velocity(), {3.0f, 4.0f, 5.0f})) return 3;
+        !near(body.mass, 4.0F) || body.useGravity || !equal(actor.velocity(), {3.0F, 4.0F, 5.0F})) return 3;
 
-    actor.addBoxCollider({1.0f, 2.0f, 3.0f});
+    actor.addBoxCollider({1.0F, 2.0F, 3.0F});
     actor.setColliderTrigger(true);
-    actor.setColliderMaterial(0.25f, 0.75f);
+    actor.setColliderMaterial(0.25F, 0.75F);
     const auto collider = [&] {
         const ColliderComponent* result = nullptr;
         scene.registryForTest().view<ColliderComponent>([&](const Entity, const ColliderComponent& value) {
@@ -64,11 +64,11 @@ int main() {
         return result;
     }();
     const auto& box = std::get<BoxCollider>(collider->shape);
-    if (!actor.hasCollider() || !equal(box.halfExtents, {1.0f, 2.0f, 3.0f}) ||
-        !collider->isTrigger || !near(collider->friction, 0.25f) ||
-        !near(collider->restitution, 0.75f)) return 4;
+    if (!actor.hasCollider() || !equal(box.halfExtents, {1.0F, 2.0F, 3.0F}) ||
+        !collider->isTrigger || !near(collider->friction, 0.25F) ||
+        !near(collider->restitution, 0.75F)) return 4;
 
-    actor.addSphereCollider(2.0f);
+    actor.addSphereCollider(2.0F);
     const auto sphere = [&] {
         const ColliderComponent* result = nullptr;
         scene.registryForTest().view<ColliderComponent>([&](const Entity, const ColliderComponent& value) {
@@ -76,8 +76,8 @@ int main() {
         });
         return result;
     }();
-    if (!near(std::get<SphereCollider>(sphere->shape).radius, 2.0f)) return 5;
-    actor.addCapsuleCollider(0.4f, 1.8f);
+    if (!near(std::get<SphereCollider>(sphere->shape).radius, 2.0F)) return 5;
+    actor.addCapsuleCollider(0.4F, 1.8F);
     const auto capsuleComponent = [&] {
         const ColliderComponent* result = nullptr;
         scene.registryForTest().view<ColliderComponent>([&](const Entity, const ColliderComponent& value) {
@@ -86,29 +86,29 @@ int main() {
         return result;
     }();
     const auto& capsule = std::get<CapsuleCollider>(capsuleComponent->shape);
-    if (!near(capsule.radius, 0.4f) || !near(capsule.height, 1.8f)) return 6;
+    if (!near(capsule.radius, 0.4F) || !near(capsule.height, 1.8F)) return 6;
 
-    actor.setPerspectiveCamera(200.0f, -1.0f, 0.01f);
-    actor.setCameraAspectRatio(1920.0f, 1080.0f);
+    actor.setPerspectiveCamera(200.0F, -1.0F, 0.01F);
+    actor.setCameraAspectRatio(1920.0F, 1080.0F);
     const auto& camera = scene.find(actor.id())->camera();
-    if (!actor.hasCamera() || !camera.isPerspective() || !near(camera.fieldOfView, 179.0f) ||
-        !near(camera.nearClip, 0.0001f) || camera.farClip <= camera.nearClip ||
-        !near(camera.aspectRatio, 16.0f / 9.0f)) return 7;
-    actor.setOrthographicCamera(-2.0f, 5.0f, 1.0f);
+    if (!actor.hasCamera() || !camera.isPerspective() || !near(camera.fieldOfView, 179.0F) ||
+        !near(camera.nearClip, 0.0001F) || camera.farClip <= camera.nearClip ||
+        !near(camera.aspectRatio, 16.0F / 9.0F)) return 7;
+    actor.setOrthographicCamera(-2.0F, 5.0F, 1.0F);
     actor.setPrimaryCamera(false);
     const auto& orthographic = scene.find(actor.id())->camera();
-    if (!orthographic.isOrthographic() || !near(orthographic.orthographicSize, 0.0001f) ||
-        !near(orthographic.nearClip, 5.0f) || orthographic.farClip <= orthographic.nearClip || orthographic.primary) return 8;
+    if (!orthographic.isOrthographic() || !near(orthographic.orthographicSize, 0.0001F) ||
+        !near(orthographic.nearClip, 5.0F) || orthographic.farClip <= orthographic.nearClip || orthographic.primary) return 8;
 
     actor.addLight();
     actor.setLightType(LightType::Spot);
-    actor.setLightColor({0.1f, 0.2f, 0.3f, 1.0f});
-    actor.setLightIntensity(12.0f);
+    actor.setLightColor({0.1F, 0.2F, 0.3F, 1.0F});
+    actor.setLightIntensity(12.0F);
     actor.setLightEnabled(false);
     actor.setLightCastShadows(false);
     const auto& light = scene.find(actor.id())->light();
-    if (!actor.hasLight() || light.type != LightType::Spot || !near(light.color.r(), 0.1f) ||
-        !near(light.color.g(), 0.2f) || !near(light.color.b(), 0.3f) || !near(light.intensity, 12.0f) ||
+    if (!actor.hasLight() || light.type != LightType::Spot || !near(light.color.r(), 0.1F) ||
+        !near(light.color.g(), 0.2F) || !near(light.color.b(), 0.3F) || !near(light.intensity, 12.0F) ||
         light.enabled || light.castShadows) return 9;
 
     actor.setName("Hero");

@@ -73,8 +73,8 @@ void ForwardPass::begin(VkCommandBuffer commandBuffer,
     passInfo.framebuffer = framebuffer;
     passInfo.renderArea.extent = extent;
     VkClearValue clearValues[2]{};
-    clearValues[0].color = {{0.02f, 0.02f, 0.05f, 1.0f}};
-    clearValues[1].depthStencil = {1.0f, 0};
+    clearValues[0].color = {{0.02F, 0.02F, 0.05F, 1.0F}};
+    clearValues[1].depthStencil = {1.0F, 0};
     passInfo.clearValueCount = std::size(clearValues);
     passInfo.pClearValues = clearValues;
     vkCmdBeginRenderPass(commandBuffer, &passInfo, VK_SUBPASS_CONTENTS_INLINE);
@@ -86,8 +86,8 @@ void ForwardPass::begin(VkCommandBuffer commandBuffer,
     constexpr VkDeviceSize offsets[] = {0, 0};
     vkCmdBindVertexBuffers(commandBuffer, 0, 2, vertexBuffers, offsets);
     vkCmdBindIndexBuffer(commandBuffer, indexBuffer, 0, VK_INDEX_TYPE_UINT32);
-    const VkViewport viewport{0.0f, 0.0f, static_cast<float>(extent.width),
-                              static_cast<float>(extent.height), 0.0f, 1.0f};
+    const VkViewport viewport{0.0F, 0.0F, static_cast<float>(extent.width),
+                              static_cast<float>(extent.height), 0.0F, 1.0F};
     const VkRect2D scissor{{0, 0}, extent};
     vkCmdSetViewport(commandBuffer, 0, 1, &viewport);
     vkCmdSetScissor(commandBuffer, 0, 1, &scissor);

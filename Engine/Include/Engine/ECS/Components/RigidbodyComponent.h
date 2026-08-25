@@ -13,9 +13,9 @@ namespace Engine {
     struct RigidbodyComponent {
         RigidbodyType type = RigidbodyType::Dynamic;
 
-        float mass = 1.0f;
-        float linearDamping = 0.05f;
-        float angularDamping = 0.05f;
+        float mass = 1.0F;
+        float linearDamping = 0.05F;
+        float angularDamping = 0.05F;
 
         bool useGravity = true;
         bool fixedRotation = false;
@@ -37,12 +37,12 @@ namespace Engine {
 
         /** Applies an instantaneous linear impulse to the body. */
         void addImpulse(const Vec3& impulse) noexcept {
-            if (mass > 0.0f) linearVelocity += impulse * (1.0f / mass);
+            if (mass > 0.0F) linearVelocity += impulse * (1.0F / mass);
         }
 
         /** Applies an instantaneous angular impulse to the body. */
         void addAngularImpulse(const Vec3& impulse) noexcept {
-            if (mass > 0.0f) angularVelocity += impulse * (1.0f / mass);
+            if (mass > 0.0F) angularVelocity += impulse * (1.0F / mass);
         }
 
         /** Removes all accumulated linear force. */

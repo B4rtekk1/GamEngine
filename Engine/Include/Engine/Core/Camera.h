@@ -50,9 +50,9 @@ public:
     void setAspectRatio(float aspectRatio);
 
 private:
-    Vec3 m_position{0.0f, 0.0f, 3.0f};
+    Vec3 m_position{0.0F, 0.0F, 3.0F};
 
-    Degrees m_yaw{Degrees{-90.0f}};
+    Degrees m_yaw{Degrees{-90.0F}};
     Degrees m_pitch{};
 
     Degrees m_fov;

@@ -5,7 +5,7 @@
 int main() {
     Engine::UI::UIFontAtlas atlas;
     if (atlas.width() != 0 || atlas.height() != 0 || atlas.pixelSize() != 0 ||
-        atlas.ascent() != 0.0f || atlas.lineHeight() != 0.0f ||
+        atlas.ascent() != 0.0F || atlas.lineHeight() != 0.0F ||
         atlas.glyph('A') != nullptr || !atlas.pixels().empty()) return 1;
 
     if (atlas.build("", 16) != "Invalid font atlas parameters" ||

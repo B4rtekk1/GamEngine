@@ -17,7 +17,7 @@ namespace Engine {
      */
     struct BoxCollider {
         /// Half-width, half-height and half-depth in local units.
-        Vec3 halfExtents{0.5f, 0.5f, 0.5f};
+        Vec3 halfExtents{0.5F, 0.5F, 0.5F};
     };
 
     /**
@@ -25,7 +25,7 @@ namespace Engine {
      */
     struct SphereCollider {
         /// Sphere radius in local units.
-        float radius = 0.5f;
+        float radius = 0.5F;
     };
 
     /**
@@ -33,15 +33,15 @@ namespace Engine {
      */
     struct CapsuleCollider {
         /// Radius of the capsule's cylindrical section and hemispherical ends.
-        float radius = 0.5f;
+        float radius = 0.5F;
 
         /// Total capsule height in local units.
-        float height = 1.0f;
+        float height = 1.0F;
     };
 
     /** @brief Collision shape for the unit ramp mesh (a sloped prism). */
     struct RampCollider {
-        Vec3 halfExtents{0.5f, 0.5f, 0.5f};
+        Vec3 halfExtents{0.5F, 0.5F, 0.5F};
     };
 
     /**
@@ -66,9 +66,9 @@ namespace Engine {
         bool isTrigger = false;
 
         /// Friction coefficient used by the physics solver.
-        float friction = 0.5f;
+        float friction = 0.5F;
 
         /// Bounciness coefficient used by the physics solver.
-        float restitution = 0.0f;
+        float restitution = 0.0F;
     };
 }

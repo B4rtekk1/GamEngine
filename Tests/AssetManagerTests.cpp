@@ -26,7 +26,7 @@ int main() {
     assert(mesh);
     assert(mesh->vertices.size() == 4);
     assert(mesh->indices.size() == 6);
-    assert(mesh->vertices.front().normal.z() > 0.99f);
+    assert(mesh->vertices.front().normal.z() > 0.99F);
 
     const auto glb_path = std::filesystem::temp_directory_path() / "gamengine_triangle.glb";
     // A Blender export places geometry through scene nodes; the second node is
@@ -47,21 +47,21 @@ int main() {
     { std::ofstream file(glb_path, std::ios::binary); file.write(reinterpret_cast<const char*>(glb.data()), static_cast<std::streamsize>(glb.size())); }
     const auto glb_mesh = assets.load<Engine::Mesh>(glb_path, Engine::Assets::AssetType::Mesh);
     assert(glb_mesh && glb_mesh->vertices.size() == 3 && glb_mesh->indices.size() == 3);
-    assert(glb_mesh->vertices[0].position.x() == 3.0f && glb_mesh->vertices[0].position.y() == 2.0f);
-    assert(glb_mesh->vertices[1].position.x() == 5.0f);
+    assert(glb_mesh->vertices[0].position.x() == 3.0F && glb_mesh->vertices[0].position.y() == 2.0F);
+    assert(glb_mesh->vertices[1].position.x() == 5.0F);
 
     const auto treePath = std::filesystem::path{__FILE__}.parent_path().parent_path() / "Assets/Models/tree.glb";
     const auto tree = assets.load<Engine::Mesh>(treePath, Engine::Assets::AssetType::Mesh);
     assert(tree && tree->materials.size() == 2);
     assert(tree->vertices.size() > 3716);
     assert(tree->vertices.front().materialIndex == 0);
-    assert(tree->vertices.front().tangent.length() > 0.99f);
+    assert(tree->vertices.front().tangent.length() > 0.99F);
     assert(tree->vertices[3716].materialIndex == 1);
     assert(tree->images.size() == 3);
     assert(tree->images.front().width > 0 && !tree->images.front().rgbaPixels.empty());
     assert(tree->materials[1].baseColorTexture == 2);
     assert(tree->materials[1].normalTexture == 1);
-    assert(tree->materials[1].normalScale == 0.0f);
+    assert(tree->materials[1].normalScale == 0.0F);
     assert(tree->materials[1].alphaBlend);
     assert(tree->materials[1].doubleSided);
 

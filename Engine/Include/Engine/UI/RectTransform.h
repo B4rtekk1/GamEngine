@@ -12,13 +12,13 @@ namespace Engine::UI {
     };
 
     struct RectTransform {
-        Vec2 anchorMin{0.0f, 0.0f};
-        Vec2 anchorMax{0.0f, 0.0f};
+        Vec2 anchorMin{0.0F, 0.0F};
+        Vec2 anchorMax{0.0F, 0.0F};
 
-        Vec2 pivot{0.5f, 0.5f};
+        Vec2 pivot{0.5F, 0.5F};
 
-        Vec2 offsetMin{0.0f, 0.0f};
-        Vec2 offsetMax{100.0f, 100.0f};
+        Vec2 offsetMin{0.0F, 0.0F};
+        Vec2 offsetMax{100.0F, 100.0F};
 
         Rect calculatedRect{};
 

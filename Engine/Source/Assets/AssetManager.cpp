@@ -92,7 +92,7 @@ std::shared_ptr<const Mesh> load_obj_mesh(const std::filesystem::path& path) {
         if (const auto found = vertices.find(resolved); found != vertices.end()) return found->second;
         Vertex vertex;
         vertex.position = positions[resolved.position];
-        vertex.color = Vec3{1.0f, 1.0f, 1.0f};
+        vertex.color = Vec3{1.0F, 1.0F, 1.0F};
         if (resolved.tex_coord >= 0) vertex.texCoord = tex_coords[resolved.tex_coord];
         if (resolved.normal >= 0) vertex.normal = normals[resolved.normal];
         else has_normals = false;
@@ -148,8 +148,8 @@ std::shared_ptr<const Mesh> load_obj_mesh(const std::filesystem::path& path) {
             c.normal += normal;
         }
         for (auto& vertex : mesh.vertices) {
-            if (vertex.normal.length() > 0.0f) vertex.normal = vertex.normal.normalized();
-            else vertex.normal = Vec3{0.0f, 1.0f, 0.0f};
+            if (vertex.normal.length() > 0.0F) vertex.normal = vertex.normal.normalized();
+            else vertex.normal = Vec3{0.0F, 1.0F, 0.0F};
         }
     }
     return std::make_shared<const Mesh>(std::move(mesh));
@@ -263,8 +263,8 @@ void generate_missing_tangents(Mesh& mesh) {
         const glm::vec2 deltaUv1 = b.texCoord.native() - a.texCoord.native();
         const glm::vec2 deltaUv2 = c.texCoord.native() - a.texCoord.native();
         const float determinant = deltaUv1.x * deltaUv2.y - deltaUv1.y * deltaUv2.x;
-        if (std::abs(determinant) < 1e-8f) continue;
-        const float reciprocal = 1.0f / determinant;
+        if (std::abs(determinant) < 1e-8F) continue;
+        const float reciprocal = 1.0F / determinant;
         const glm::vec3 tangent = reciprocal * (deltaUv2.y * edge1 - deltaUv1.y * edge2);
         const glm::vec3 bitangent = reciprocal * (-deltaUv2.x * edge1 + deltaUv1.x * edge2);
         tangentSums[ia] += tangent; tangentSums[ib] += tangent; tangentSums[ic] += tangent;
@@ -272,15 +272,15 @@ void generate_missing_tangents(Mesh& mesh) {
     }
     for (std::size_t i = 0; i < mesh.vertices.size(); ++i) {
         Vertex& vertex = mesh.vertices[i];
-        if (glm::length(glm::vec3(vertex.tangent.native())) > 1e-6f) continue;
+        if (glm::length(glm::vec3(vertex.tangent.native())) > 1e-6F) continue;
         const glm::vec3 normal = glm::normalize(vertex.normal.native());
         glm::vec3 tangent = tangentSums[i] - normal * glm::dot(normal, tangentSums[i]);
-        if (glm::length(tangent) < 1e-6f) {
-            const glm::vec3 axis = std::abs(normal.y) < 0.999f ? glm::vec3{0, 1, 0} : glm::vec3{1, 0, 0};
+        if (glm::length(tangent) < 1e-6F) {
+            const glm::vec3 axis = std::abs(normal.y) < 0.999F ? glm::vec3{0, 1, 0} : glm::vec3{1, 0, 0};
             tangent = glm::cross(axis, normal);
         }
         tangent = glm::normalize(tangent);
-        const float handedness = glm::dot(glm::cross(normal, tangent), bitangentSums[i]) < 0.0f ? -1.0f : 1.0f;
+        const float handedness = glm::dot(glm::cross(normal, tangent), bitangentSums[i]) < 0.0F ? -1.0F : 1.0F;
         vertex.tangent = Vec4{tangent.x, tangent.y, tangent.z, handedness};
     }
 }
@@ -345,8 +345,8 @@ std::shared_ptr<const Mesh> load_glb_mesh(const std::filesystem::path& path) {
                         return value.number().has_value() ? static_cast<float>(*value.number()) : fallback;
                     };
                     material.baseColor = Math::Color{
-                        number(values[0], 1.0f), number(values[1], 1.0f),
-                        number(values[2], 1.0f), values.size() > 3 ? number(values[3], 1.0f) : 1.0f};
+                        number(values[0], 1.0F), number(values[1], 1.0F),
+                        number(values[2], 1.0F), values.size() > 3 ? number(values[3], 1.0F) : 1.0F};
                 }
                 if (const auto* factor = pbr->find("metallicFactor"); factor && factor->number()) material.metallic = static_cast<float>(*factor->number());
                 if (const auto* factor = pbr->find("roughnessFactor"); factor && factor->number()) material.roughness = static_cast<float>(*factor->number());
@@ -397,10 +397,10 @@ std::shared_ptr<const Mesh> load_glb_mesh(const std::filesystem::path& path) {
             const auto* p = buffer.data() + begin + i * step + c * component_size;
             float value{};
             if (component_type == 5126) std::memcpy(&value, p, sizeof(value));
-            else if (component_type == 5120) { std::int8_t integer{}; std::memcpy(&integer, p, sizeof(integer)); value = normalized ? std::max(static_cast<float>(integer) / 127.0f, -1.0f) : static_cast<float>(integer); }
-            else if (component_type == 5121) { const auto integer = *p; value = normalized ? static_cast<float>(integer) / 255.0f : static_cast<float>(integer); }
-            else if (component_type == 5122) { std::int16_t integer{}; std::memcpy(&integer, p, sizeof(integer)); value = normalized ? std::max(static_cast<float>(integer) / 32767.0f, -1.0f) : static_cast<float>(integer); }
-            else if (component_type == 5123) { std::uint16_t integer{}; std::memcpy(&integer, p, sizeof(integer)); value = normalized ? static_cast<float>(integer) / 65535.0f : static_cast<float>(integer); }
+            else if (component_type == 5120) { std::int8_t integer{}; std::memcpy(&integer, p, sizeof(integer)); value = normalized ? std::max(static_cast<float>(integer) / 127.0F, -1.0F) : static_cast<float>(integer); }
+            else if (component_type == 5121) { const auto integer = *p; value = normalized ? static_cast<float>(integer) / 255.0F : static_cast<float>(integer); }
+            else if (component_type == 5122) { std::int16_t integer{}; std::memcpy(&integer, p, sizeof(integer)); value = normalized ? std::max(static_cast<float>(integer) / 32767.0F, -1.0F) : static_cast<float>(integer); }
+            else if (component_type == 5123) { std::uint16_t integer{}; std::memcpy(&integer, p, sizeof(integer)); value = normalized ? static_cast<float>(integer) / 65535.0F : static_cast<float>(integer); }
             else { std::uint32_t integer{}; std::memcpy(&integer, p, sizeof(integer)); value = static_cast<float>(integer); }
             output[i * components + c] = value;
         }
@@ -412,7 +412,7 @@ std::shared_ptr<const Mesh> load_glb_mesh(const std::filesystem::path& path) {
     const auto append_mesh = [&](const std::size_t mesh_index, const glm::mat4& world) -> bool {
         if (mesh_index >= mesh_list.size()) return false;
         const float determinant = glm::determinant(glm::mat3(world));
-        if (std::abs(determinant) < 1e-8f) return false;
+        if (std::abs(determinant) < 1e-8F) return false;
         const glm::mat3 normal_matrix = glm::transpose(glm::inverse(glm::mat3(world)));
         const auto& mesh_value = mesh_list[mesh_index]; const auto* primitives = mesh_value.find("primitives"); if (!primitives || !primitives->array()) return true; for (const auto& primitive : *primitives->array()) {
         const auto* attributes = primitive.find("attributes"); if (!attributes) continue; const auto* position = attributes->find("POSITION"); if (!position || !position->number()) return {};
@@ -421,14 +421,14 @@ std::shared_ptr<const Mesh> load_glb_mesh(const std::filesystem::path& path) {
             ? static_cast<std::uint32_t>(*primitive_material->number()) : 0u;
         if (!mesh.materials.empty() && material_index >= mesh.materials.size()) return {};
         std::vector<float> positions, normals, texcoords, tangents; if (!accessor_bytes(*position->number(), 3, positions)) return {}; const auto* normal = attributes->find("NORMAL"); const auto* texcoord = attributes->find("TEXCOORD_0"); const auto* tangent = attributes->find("TANGENT"); if (normal && normal->number()) accessor_bytes(*normal->number(), 3, normals); if (texcoord && texcoord->number()) accessor_bytes(*texcoord->number(), 2, texcoords); if (tangent && tangent->number()) accessor_bytes(*tangent->number(), 4, tangents);
-        const auto base = static_cast<std::uint32_t>(mesh.vertices.size()); for (std::size_t i = 0; i < positions.size() / 3; ++i) { Vertex vertex; const glm::vec3 position_value{positions[i*3], positions[i*3+1], positions[i*3+2]}; vertex.position = Vec3{glm::vec3(world * glm::vec4(position_value, 1.0f))}; vertex.color = {1,1,1}; vertex.materialIndex = material_index; if (i*3+2 < normals.size()) vertex.normal = Vec3{glm::normalize(normal_matrix * glm::vec3{normals[i*3], normals[i*3+1], normals[i*3+2]})}; if (i*2+1 < texcoords.size()) vertex.texCoord = {texcoords[i*2], texcoords[i*2+1]}; if (i*4+3 < tangents.size()) { const auto tangent_value = glm::normalize(glm::mat3(world) * glm::vec3{tangents[i*4], tangents[i*4+1], tangents[i*4+2]}); vertex.tangent = {tangent_value.x, tangent_value.y, tangent_value.z, tangents[i*4+3] * (determinant < 0.0f ? -1.0f : 1.0f)}; } mesh.vertices.push_back(vertex); }
+        const auto base = static_cast<std::uint32_t>(mesh.vertices.size()); for (std::size_t i = 0; i < positions.size() / 3; ++i) { Vertex vertex; const glm::vec3 position_value{positions[i*3], positions[i*3+1], positions[i*3+2]}; vertex.position = Vec3{glm::vec3(world * glm::vec4(position_value, 1.0F))}; vertex.color = {1,1,1}; vertex.materialIndex = material_index; if (i*3+2 < normals.size()) vertex.normal = Vec3{glm::normalize(normal_matrix * glm::vec3{normals[i*3], normals[i*3+1], normals[i*3+2]})}; if (i*2+1 < texcoords.size()) vertex.texCoord = {texcoords[i*2], texcoords[i*2+1]}; if (i*4+3 < tangents.size()) { const auto tangent_value = glm::normalize(glm::mat3(world) * glm::vec3{tangents[i*4], tangents[i*4+1], tangents[i*4+2]}); vertex.tangent = {tangent_value.x, tangent_value.y, tangent_value.z, tangents[i*4+3] * (determinant < 0.0F ? -1.0F : 1.0F)}; } mesh.vertices.push_back(vertex); }
         std::vector<std::uint32_t> primitive_indices;
         const auto* indices = primitive.find("indices");
         if (indices && indices->number()) {
             std::vector<float> values; if (!accessor_bytes(*indices->number(), 1, values)) return {};
             primitive_indices.reserve(values.size());
             for (const float value : values) {
-                if (value < 0.0f || value != std::floor(value) || value >= positions.size() / 3) return {};
+                if (value < 0.0F || value != std::floor(value) || value >= positions.size() / 3) return {};
                 primitive_indices.push_back(static_cast<std::uint32_t>(value));
             }
         } else {
@@ -438,7 +438,7 @@ std::shared_ptr<const Mesh> load_glb_mesh(const std::filesystem::path& path) {
         const auto* mode_value = primitive.find("mode");
         const auto mode = mode_value && mode_value->number() ? static_cast<std::uint32_t>(*mode_value->number()) : 4u;
         const auto add_triangle = [&](const std::uint32_t a, const std::uint32_t b, const std::uint32_t c) { // NOLINT(readability-identifier-length)
-            if (determinant < 0.0f) mesh.indices.insert(mesh.indices.end(), {base + a, base + c, base + b});
+            if (determinant < 0.0F) mesh.indices.insert(mesh.indices.end(), {base + a, base + c, base + b});
             else mesh.indices.insert(mesh.indices.end(), {base + a, base + b, base + c});
         };
         if (mode == 4u) {
@@ -453,17 +453,17 @@ std::shared_ptr<const Mesh> load_glb_mesh(const std::filesystem::path& path) {
         } else return false;
     } return true; };
     const auto node_transform = [](const JsonValue& node, glm::mat4& transform) -> bool {
-        transform = glm::mat4{1.0f};
+        transform = glm::mat4{1.0F};
         if (const auto* matrix = node.find("matrix")) {
             if (!matrix->array() || matrix->array()->size() != 16) return false;
             for (std::size_t i = 0; i < 16; ++i) { const auto value = (*matrix->array())[i].number(); if (!value) return false; transform[i / 4][i % 4] = static_cast<float>(*value); }
             return true;
         }
-        glm::vec3 translation{}; glm::vec3 scale{1.0f}; glm::quat rotation{1.0f, 0.0f, 0.0f, 0.0f};
+        glm::vec3 translation{}; glm::vec3 scale{1.0F}; glm::quat rotation{1.0F, 0.0F, 0.0F, 0.0F};
         const auto read_vec = [](const JsonValue* value, const std::size_t size, float* output) -> bool { if (!value) return true; if (!value->array() || value->array()->size() != size) return false; for (std::size_t i = 0; i < size; ++i) { const auto number = (*value->array())[i].number(); if (!number) return false; output[i] = static_cast<float>(*number); } return true; };
         if (!read_vec(node.find("translation"), 3, &translation.x) || !read_vec(node.find("scale"), 3, &scale.x) || !read_vec(node.find("rotation"), 4, &rotation.x)) return false;
         rotation = glm::normalize(rotation);
-        transform = glm::translate(glm::mat4{1.0f}, translation) * glm::mat4_cast(rotation) * glm::scale(glm::mat4{1.0f}, scale);
+        transform = glm::translate(glm::mat4{1.0F}, translation) * glm::mat4_cast(rotation) * glm::scale(glm::mat4{1.0F}, scale);
         return true;
     };
     const auto* nodes = document->find("nodes");
@@ -485,13 +485,13 @@ std::shared_ptr<const Mesh> load_glb_mesh(const std::filesystem::path& path) {
             if (scene_index >= scenes->array()->size()) return {};
             const auto* roots = (*scenes->array())[scene_index].find("nodes"); if (!roots || !roots->array()) return {};
             std::vector<bool> visiting(node_list.size());
-            for (const auto& root : *roots->array()) { const auto root_index = root.number(); if (!root_index || *root_index < 0.0 || !append_node(append_node, static_cast<std::size_t>(*root_index), glm::mat4{1.0f}, visiting)) return {}; }
+            for (const auto& root : *roots->array()) { const auto root_index = root.number(); if (!root_index || *root_index < 0.0 || !append_node(append_node, static_cast<std::size_t>(*root_index), glm::mat4{1.0F}, visiting)) return {}; }
             imported_scene = true;
         }
     }
     // Some tools generate mesh-only GLBs. Keep that useful subset as a
     // compatibility fallback when no scene graph is supplied.
-    if (!imported_scene) for (std::size_t i = 0; i < mesh_list.size(); ++i) if (!append_mesh(i, glm::mat4{1.0f})) return {};
+    if (!imported_scene) for (std::size_t i = 0; i < mesh_list.size(); ++i) if (!append_mesh(i, glm::mat4{1.0F})) return {};
     if (mesh.empty()) return {};
     for (std::size_t i = 0; i + 2 < mesh.indices.size(); i += 3) {
         auto& a = mesh.vertices[mesh.indices[i]];

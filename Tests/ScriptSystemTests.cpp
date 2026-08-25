@@ -29,13 +29,13 @@ int main() {
     ScriptRegistry scriptRegistry;
     scriptRegistry.registerClass<MoveRight>("MoveRight");
     ScriptSystem scripts{scriptRegistry};
-    scripts.update(registry, 0.25f);
-    scripts.update(registry, 0.75f);
+    scripts.update(registry, 0.25F);
+    scripts.update(registry, 0.75F);
 
     if (MoveRight::created != 1 || MoveRight::updated != 2 ||
-        registry.get<Transform>(entity).position.x() != 1.0f) return 1;
+        registry.get<Transform>(entity).position.x() != 1.0F) return 1;
 
     registry.modify<ScriptComponent>(entity, [](auto& script) { script.enabled = false; });
-    scripts.update(registry, 1.0f);
+    scripts.update(registry, 1.0F);
     return MoveRight::updated == 2 ? 0 : 2;
 }

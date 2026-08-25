@@ -22,15 +22,15 @@ namespace Engine::Particles {
 
     struct ParticleEmitter {
         Vec3 position{};
-        Vec3 minVelocity{-1.0f, 1.0f, -1.0f};
-        Vec3 maxVelocity{1.0f, 4.0f, 1.0f};
-        Color color{1.0f, 1.0f, 1.0f, 1.0f};
-        float minLifeTime = 1.0f;
-        float maxLifeTime = 2.0f;
-        float minSize = 0.04f;
-        float maxSize = 0.12f;
-        float spawnRate = 200.0f;
-        float accumulator = 0.0f;
+        Vec3 minVelocity{-1.0F, 1.0F, -1.0F};
+        Vec3 maxVelocity{1.0F, 4.0F, 1.0F};
+        Color color{1.0F, 1.0F, 1.0F, 1.0F};
+        float minLifeTime = 1.0F;
+        float maxLifeTime = 2.0F;
+        float minSize = 0.04F;
+        float maxSize = 0.12F;
+        float spawnRate = 200.0F;
+        float accumulator = 0.0F;
     };
 
     /**
@@ -39,31 +39,31 @@ namespace Engine::Particles {
      * while a smoke simulation also receives its fluid-like parameters.
      */
     struct SmokeEmitter final : ParticleEmitter {
-        float buoyancy = 2.25f;
-        float drag = 0.68f;
-        float turbulence = 0.30f;
-        float collisionRadius = 0.10f;
+        float buoyancy = 2.25F;
+        float drag = 0.68F;
+        float turbulence = 0.30F;
+        float collisionRadius = 0.10F;
 
         SmokeEmitter() {
-            minVelocity = {-0.24f, 0.45f, -0.24f};
-            maxVelocity = {0.24f, 1.05f, 0.24f};
-            color = {0.18f, 0.20f, 0.23f, 0.19f};
-            minLifeTime = 5.5f;
-            maxLifeTime = 9.0f;
+            minVelocity = {-0.24F, 0.45F, -0.24F};
+            maxVelocity = {0.24F, 1.05F, 0.24F};
+            color = {0.18F, 0.20F, 0.23F, 0.19F};
+            minLifeTime = 5.5F;
+            maxLifeTime = 9.0F;
             // A substantial initial puff, followed by a slow expansion,
             // reads as smoke leaving a hot source rather than point sprites.
-            minSize = 0.28f;
-            maxSize = 0.88f;
-            spawnRate = 260.0f;
+            minSize = 0.28F;
+            maxSize = 0.88F;
+            spawnRate = 260.0F;
         }
     };
 
     struct ParticleFrameData {
         Mat4 viewProjection;
-        Vec3 cameraRight{1.0f, 0.0f, 0.0f};
-        float _pad0 = 0.0f;
-        Vec3 cameraUp{0.0f, 1.0f, 0.0f};
-        float _pad1 = 0.0f;
+        Vec3 cameraRight{1.0F, 0.0F, 0.0F};
+        float _pad0 = 0.0F;
+        Vec3 cameraUp{0.0F, 1.0F, 0.0F};
+        float _pad1 = 0.0F;
     };
 
     /** World-space axis-aligned obstacle used by the smoke simulation. */
@@ -75,7 +75,7 @@ namespace Engine::Particles {
     /** Parameters consumed by particle_update.comp.  Keep this layout in sync
      * with the push-constant block in that shader. */
     struct alignas(16) ParticleSimulationData {
-        float deltaTime = 0.0f;
+        float deltaTime = 0.0F;
         uint32_t spawnStart = 0;
         uint32_t spawnCount = 0;
         uint32_t maxParticles = 0;

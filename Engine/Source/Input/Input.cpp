@@ -26,15 +26,15 @@ namespace Engine {
         Vec2 currentMousePosition{};
         Vec2 frameMouseDelta{};
 
-        float frameMouseWheel = 0.0f;
+        float frameMouseWheel = 0.0F;
     }
 
     void Input::beginFrame() {
         previousKeys = currentKeys;
         previousMouseButtons = currentMouseButtons;
 
-        frameMouseDelta = {0.0f, 0.0f};
-        frameMouseWheel = 0.0f;
+        frameMouseDelta = {0.0F, 0.0F};
+        frameMouseWheel = 0.0F;
     }
 
     bool Input::keyDown(KeyCode key) {

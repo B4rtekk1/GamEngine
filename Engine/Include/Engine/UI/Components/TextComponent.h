@@ -21,13 +21,13 @@ namespace Engine {
         float fontSize = 16;
 
         /** @brief RGBA text color. */
-        Math::Color color{1.0f, 1.0f, 1.0f, 1.0f};
+        Math::Color color{1.0F, 1.0F, 1.0F, 1.0F};
 
         /** @brief Additional line spacing in pixels. */
-        float lineSpacing = 0.0f;
+        float lineSpacing = 0.0F;
 
         /** @brief Horizontal scale applied while laying out glyphs. */
-        float horizontalScale = 1.0f;
+        float horizontalScale = 1.0F;
 
         /** @brief Enables or disables text rendering. */
         bool visible = true;
@@ -37,7 +37,7 @@ namespace Engine {
          * @return True if the component is visible and contains text.
          */
         [[nodiscard]] bool isRenderable() const noexcept {
-            return visible && !text.empty() && fontSize > 0.0f && horizontalScale > 0.0f;
+            return visible && !text.empty() && fontSize > 0.0F && horizontalScale > 0.0F;
         }
     };
 }

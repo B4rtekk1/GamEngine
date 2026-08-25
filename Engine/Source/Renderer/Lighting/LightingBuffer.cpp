@@ -206,9 +206,9 @@ void LightingBuffer::update(Registry& registry) const {
     DirectionalLightGPU gpuData{};
 
     gpuData.directionIntensity =
-        Vec4{0.0f, -1.0f, 0.0f, 0.0f};
+        Vec4{0.0F, -1.0F, 0.0F, 0.0F};
 
-    gpuData.color = Math::Color::white().with_alpha(0.0f);
+    gpuData.color = Math::Color::white().with_alpha(0.0F);
 
     bool foundDirectionalLight = false;
 
@@ -235,7 +235,7 @@ void LightingBuffer::update(Registry& registry) const {
 
             const Vec4 rotatedDirection{
                 transform.matrix().native() *
-                Vec4{0.0f, 0.0f, -1.0f, 0.0f}.native()
+                Vec4{0.0F, 0.0F, -1.0F, 0.0F}.native()
             };
 
             const Vec3 direction = Vec3{
@@ -252,7 +252,7 @@ void LightingBuffer::update(Registry& registry) const {
                     light.intensity
                 };
 
-            gpuData.color = light.color.with_alpha(0.0f);
+            gpuData.color = light.color.with_alpha(0.0F);
 
             foundDirectionalLight = true;
         }

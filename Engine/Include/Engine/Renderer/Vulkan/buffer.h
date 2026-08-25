@@ -85,6 +85,14 @@ public:
     [[nodiscard]] VkBuffer handle() const noexcept { return buffer_; }
 
 private:
+    struct CreateParameters {
+        VkDevice device;
+        VkDeviceSize size;
+        VkBufferUsageFlags usage;
+        VkMemoryPropertyFlags properties;
+        VmaAllocator allocator;
+    };
+
     VkDevice device_ = VK_NULL_HANDLE;
     VkBuffer buffer_ = VK_NULL_HANDLE;
     VkDeviceMemory memory_ = VK_NULL_HANDLE;
@@ -102,13 +110,7 @@ private:
      * @param properties Required Vulkan memory property flags.
      * @param allocator VMA allocator used for the allocation.
      */
-    void create(
-        VkPhysicalDevice physicalDevice,
-        VkDevice device,
-        VkDeviceSize size,
-        VkBufferUsageFlags usage,
-        VkMemoryPropertyFlags properties,
-        VmaAllocator allocator);
+    void create(const CreateParameters &parameters);
 
     /**
      * @brief Finds a compatible physical-device memory type.

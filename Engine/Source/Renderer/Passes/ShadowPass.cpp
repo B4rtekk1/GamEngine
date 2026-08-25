@@ -14,8 +14,8 @@
 
 namespace Engine {
 namespace {
-constexpr float DepthBiasConstant = 0.15f;
-constexpr float DepthBiasSlope = 0.35f;
+constexpr float DepthBiasConstant = 0.15F;
+constexpr float DepthBiasSlope = 0.35F;
 }
 
 ShadowPass::~ShadowPass() {
@@ -160,7 +160,7 @@ void ShadowPass::create(VkPhysicalDevice physicalDevice, VkDevice device,
         // a shadow when the light sees the back of a leaf card.
         rasterizer.cullMode = VK_CULL_MODE_NONE;
         rasterizer.frontFace = VK_FRONT_FACE_CLOCKWISE;
-        rasterizer.lineWidth = 1.0f;
+        rasterizer.lineWidth = 1.0F;
         rasterizer.depthBiasEnable = VK_TRUE;
         VkPipelineMultisampleStateCreateInfo multisampling{
             VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO};
@@ -235,7 +235,7 @@ void ShadowPass::record(const VkCommandBuffer commandBuffer, const Mat4& lightSp
     passInfo.framebuffer = shadowMap_.framebuffer();
     passInfo.renderArea.extent = {ShadowMap::Resolution, ShadowMap::Resolution};
     VkClearValue clear{};
-    clear.depthStencil = {1.0f, 0};
+    clear.depthStencil = {1.0F, 0};
     passInfo.clearValueCount = 1;
     passInfo.pClearValues = &clear;
     vkCmdBeginRenderPass(commandBuffer, &passInfo, VK_SUBPASS_CONTENTS_INLINE);
@@ -246,13 +246,13 @@ void ShadowPass::record(const VkCommandBuffer commandBuffer, const Mat4& lightSp
     constexpr VkDeviceSize offsets[] = {0, 0};
     vkCmdBindVertexBuffers(commandBuffer, 0, 2, vertexBuffers, offsets);
     vkCmdBindIndexBuffer(commandBuffer, indexBuffer, 0, VK_INDEX_TYPE_UINT32);
-    const VkViewport viewport{0.0f, 0.0f,
+    const VkViewport viewport{0.0F, 0.0F,
         static_cast<float>(ShadowMap::Resolution), static_cast<float>(ShadowMap::Resolution),
-        0.0f, 1.0f};
+        0.0F, 1.0F};
     const VkRect2D scissor{{0, 0}, {ShadowMap::Resolution, ShadowMap::Resolution}};
     vkCmdSetViewport(commandBuffer, 0, 1, &viewport);
     vkCmdSetScissor(commandBuffer, 0, 1, &scissor);
-    vkCmdSetDepthBias(commandBuffer, DepthBiasConstant, 0.0f, DepthBiasSlope);
+    vkCmdSetDepthBias(commandBuffer, DepthBiasConstant, 0.0F, DepthBiasSlope);
     vkCmdPushConstants(commandBuffer, pipelineLayout_, VK_SHADER_STAGE_VERTEX_BIT,
                        0, sizeof(lightSpace), &lightSpace);
 

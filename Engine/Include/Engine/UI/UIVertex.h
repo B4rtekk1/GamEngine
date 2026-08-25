@@ -18,7 +18,7 @@ namespace Engine::UI {
         Math::Color color;
 
         /** @brief 1 for font glyphs, 0 for solid UI geometry. */
-        float textSample = 0.0f;
+        float textSample = 0.0F;
 
         [[nodiscard]] static constexpr std::size_t size() noexcept {
             return sizeof(UIVertex);

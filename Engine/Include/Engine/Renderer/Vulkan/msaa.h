@@ -36,7 +36,9 @@ private:
         VkPhysicalDevice physicalDevice,
         VkSampleCountFlagBits preferredSamples);
 
-    [[nodiscard]] uint32_t findMemoryType(uint32_t typeFilter, VkMemoryPropertyFlags properties) const;
+    [[nodiscard]] uint32_t findMemoryType(
+        const VkMemoryRequirements& memoryRequirements,
+        VkMemoryPropertyFlags requiredProperties) const;
 };
 
 } // namespace Engine

@@ -42,7 +42,7 @@ namespace Engine {
          * @return A color with alpha equal to 1.
          */
         [[nodiscard]] static constexpr Color from_rgb(float red, float green, float blue) noexcept {
-            return {red, green, blue, 1.0f};
+            return {red, green, blue, 1.0F};
         }
 
         /**
@@ -64,10 +64,10 @@ namespace Engine {
          */
         [[nodiscard]] static constexpr Color from_rgba8(std::uint32_t value) noexcept {
             return {
-                static_cast<float>((value >> 24) & 0xffu) / 255.0f,
-                static_cast<float>((value >> 16) & 0xffu) / 255.0f,
-                static_cast<float>((value >> 8) & 0xffu) / 255.0f,
-                static_cast<float>((value) & 0xffu) / 255.0f,
+                static_cast<float>((value >> 24) & 0xffu) / 255.0F,
+                static_cast<float>((value >> 16) & 0xffu) / 255.0F,
+                static_cast<float>((value >> 8) & 0xffu) / 255.0F,
+                static_cast<float>((value) & 0xffu) / 255.0F,
             };
         }
 
@@ -82,10 +82,10 @@ namespace Engine {
          */
         [[nodiscard]] static constexpr Color from_a2b10g10r10(std::uint32_t value) noexcept {
             return {
-                static_cast<float>(value & 0x3ffu) / 1023.0f,
-                static_cast<float>((value >> 10u) & 0x3ffu) / 1023.0f,
-                static_cast<float>((value >> 20u) & 0x3ffu) / 1023.0f,
-                static_cast<float>((value >> 30u) & 0x3u) / 3.0f,
+                static_cast<float>(value & 0x3ffu) / 1023.0F,
+                static_cast<float>((value >> 10u) & 0x3ffu) / 1023.0F,
+                static_cast<float>((value >> 20u) & 0x3ffu) / 1023.0F,
+                static_cast<float>((value >> 30u) & 0x3u) / 3.0F,
             };
         }
 
@@ -102,10 +102,10 @@ namespace Engine {
                                                          std::uint16_t blue,
                                                          std::uint8_t alpha = 3) noexcept {
             return {
-                static_cast<float>(red & 0x3ffu) / 1023.0f,
-                static_cast<float>(green & 0x3ffu) / 1023.0f,
-                static_cast<float>(blue & 0x3ffu) / 1023.0f,
-                static_cast<float>(alpha & 0x3u) / 3.0f,
+                static_cast<float>(red & 0x3ffu) / 1023.0F,
+                static_cast<float>(green & 0x3ffu) / 1023.0F,
+                static_cast<float>(blue & 0x3ffu) / 1023.0F,
+                static_cast<float>(alpha & 0x3u) / 3.0F,
             };
         }
 
@@ -119,10 +119,10 @@ namespace Engine {
             const auto quantize = [](const float value, const float maximum) {
                 return static_cast<std::uint32_t>(std::lround(value * maximum));
             };
-            return quantize(normalized.r_, 1023.0f) |
-                   (quantize(normalized.g_, 1023.0f) << 10u) |
-                   (quantize(normalized.b_, 1023.0f) << 20u) |
-                   (quantize(normalized.a_, 3.0f) << 30u);
+            return quantize(normalized.r_, 1023.0F) |
+                   (quantize(normalized.g_, 1023.0F) << 10u) |
+                   (quantize(normalized.b_, 1023.0F) << 20u) |
+                   (quantize(normalized.a_, 3.0F) << 30u);
         }
 
         /**
@@ -204,10 +204,10 @@ namespace Engine {
          */
         [[nodiscard]] Color clamped() const noexcept {
             return {
-                std::clamp(r_, 0.f, 1.f),
-                std::clamp(g_, 0.f, 1.f),
-                std::clamp(b_, 0.f, 1.f),
-                std::clamp(a_, 0.f, 1.f)
+                std::clamp(r_, 0.F, 1.F),
+                std::clamp(g_, 0.F, 1.F),
+                std::clamp(b_, 0.F, 1.F),
+                std::clamp(a_, 0.F, 1.F)
             };
         }
 
@@ -258,7 +258,7 @@ namespace Engine {
          * @return Interpolated color.
          */
         [[nodiscard]] static Color lerp(const Color& first, const Color& second, float factor) noexcept {
-            factor = std::clamp(factor, 0.0f, 1.0f);
+            factor = std::clamp(factor, 0.0F, 1.0F);
             return {
                 first.r_ + (second.r_ - first.r_) * factor,
                 first.g_ + (second.g_ - first.g_) * factor,
@@ -268,23 +268,23 @@ namespace Engine {
         }
 
         /** @return Opaque white. */
-        [[nodiscard]] static constexpr Color white() noexcept { return {1.0f, 1.0f, 1.0f, 1.0f}; }
+        [[nodiscard]] static constexpr Color white() noexcept { return {1.0F, 1.0F, 1.0F, 1.0F}; }
         /** @return Opaque black. */
-        [[nodiscard]] static constexpr Color black() noexcept { return {0.0f, 0.0f, 0.0f, 1.0f}; }
+        [[nodiscard]] static constexpr Color black() noexcept { return {0.0F, 0.0F, 0.0F, 1.0F}; }
         /** @return Opaque red. */
-        [[nodiscard]] static constexpr Color red() noexcept { return {1.0f, 0.0f, 0.0f, 1.0f}; }
+        [[nodiscard]] static constexpr Color red() noexcept { return {1.0F, 0.0F, 0.0F, 1.0F}; }
         /** @return Opaque green. */
-        [[nodiscard]] static constexpr Color green() noexcept { return {0.0f, 1.0f, 0.0f, 1.0f}; }
+        [[nodiscard]] static constexpr Color green() noexcept { return {0.0F, 1.0F, 0.0F, 1.0F}; }
         /** @return Opaque blue. */
-        [[nodiscard]] static constexpr Color blue() noexcept { return {0.0f, 0.0f, 1.0f, 1.0f}; }
+        [[nodiscard]] static constexpr Color blue() noexcept { return {0.0F, 0.0F, 1.0F, 1.0F}; }
         /** @return Fully transparent black. */
-        [[nodiscard]] static constexpr Color transparent() noexcept { return {0.0f, 0.0f, 0.0f, 0.0f}; }
+        [[nodiscard]] static constexpr Color transparent() noexcept { return {0.0F, 0.0F, 0.0F, 0.0F}; }
 
     private:
-        float r_{0.0f};
-        float g_{0.0f};
-        float b_{0.0f};
-        float a_{1.0f};
+        float r_{0.0F};
+        float g_{0.0F};
+        float b_{0.0F};
+        float a_{1.0F};
     };
 
     /**

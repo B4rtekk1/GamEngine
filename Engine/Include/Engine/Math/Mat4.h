@@ -19,7 +19,7 @@ namespace Engine {
 
         /** @brief Returns an identity matrix translated by position. */
         [[nodiscard]] static Mat4 translate(const Vec3 &position) noexcept {
-            return Mat4{glm::translate(glm::mat4{1.0f}, position.native())};
+            return Mat4{glm::translate(glm::mat4{1.0F}, position.native())};
         }
 
         /**
@@ -94,6 +94,6 @@ namespace Engine {
         }
 
     private:
-        glm::mat4 m_value{1.0f};
+        glm::mat4 m_value{1.0F};
     };
 } // namespace Engine

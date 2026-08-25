@@ -32,11 +32,11 @@ int main() {
     if (!text || !sameText || text != sameText || text->text != "content facade") return 2;
 
     const auto material = content.material("material.mat");
-    if (!material || material->baseColor.r() != 0.1f || material->baseColor.a() != 0.4f ||
-        material->metallic != 0.8f || material->roughness != 0.25f ||
-        material->ambientOcclusion != 0.9f || material->baseColorTexture != 3 ||
-        material->normalTexture != 5 || material->normalScale != 0.7f ||
-        !material->alphaBlend || !material->doubleSided || material->alphaCutoff != 0.35f) return 3;
+    if (!material || material->baseColor.r() != 0.1F || material->baseColor.a() != 0.4F ||
+        material->metallic != 0.8F || material->roughness != 0.25F ||
+        material->ambientOcclusion != 0.9F || material->baseColorTexture != 3 ||
+        material->normalTexture != 5 || material->normalScale != 0.7F ||
+        !material->alphaBlend || !material->doubleSided || material->alphaCutoff != 0.35F) return 3;
 
     if (content.text("missing.txt") || errors.empty()) return 4;
     content.setAssetRoot(alternate);

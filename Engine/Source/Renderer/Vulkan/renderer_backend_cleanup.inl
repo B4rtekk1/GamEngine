@@ -1,8 +1,8 @@
         void cleanup() {
-            if (cleanedUp) {
+            if (this->cleanedUp) {
                 return;
             }
-            cleanedUp = true;
+            this->cleanedUp = true;
 
             if (device != VK_NULL_HANDLE) {
                 vkDeviceWaitIdle(device);

@@ -136,7 +136,7 @@ std::vector<Point> flatten(const std::vector<Point>& in) {
 }
 
 float coverage(const std::vector<std::vector<Point>>& contours, double x, double y) {
-    bool inside=false; for(const auto& contour:contours){auto poly=flatten(contour); for(std::size_t i=0,j=poly.size()-1;i<poly.size();j=i++){const auto&a=poly[i];const auto&b=poly[j];if(((a.y>y)!=(b.y>y))&&(x<(b.x-a.x)*(y-a.y)/(b.y-a.y)+a.x))inside=!inside;}} return inside?1.0f:0.0f;
+    bool inside=false; for(const auto& contour:contours){auto poly=flatten(contour); for(std::size_t i=0,j=poly.size()-1;i<poly.size();j=i++){const auto&a=poly[i];const auto&b=poly[j];if(((a.y>y)!=(b.y>y))&&(x<(b.x-a.x)*(y-a.y)/(b.y-a.y)+a.x))inside=!inside;}} return inside?1.0F:0.0F;
 }
 
 } // namespace

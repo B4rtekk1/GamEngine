@@ -20,11 +20,11 @@ namespace Engine::UI
     struct Glyph final
     {
         GlyphUV uv;
-        float width = 0.0f;
-        float height = 0.0f;
-        float bearingX = 0.0f;
-        float bearingY = 0.0f;
-        float advance = 0.0f;
+        float width = 0.0F;
+        float height = 0.0F;
+        float bearingX = 0.0F;
+        float bearingY = 0.0F;
+        float advance = 0.0F;
     };
 
     /**
@@ -96,8 +96,8 @@ namespace Engine::UI
         std::uint32_t m_width = 0;
         std::uint32_t m_height = 0;
         std::uint32_t m_pixelSize = 0;
-        float m_ascent = 0.0f;
-        float m_lineHeight = 0.0f;
+        float m_ascent = 0.0F;
+        float m_lineHeight = 0.0F;
         std::vector<std::uint8_t> m_pixels;
         std::unordered_map<std::uint32_t, Glyph> m_glyphs;
     };

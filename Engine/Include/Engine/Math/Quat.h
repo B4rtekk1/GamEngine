@@ -16,7 +16,7 @@ namespace Engine {
     class Quat {
     public:
         /** @brief Constructs the identity rotation. */
-        constexpr Quat() : m_value(1.0f, 0.0f, 0.0f, 0.0f) {
+        constexpr Quat() : m_value(1.0F, 0.0F, 0.0F, 0.0F) {
         }
 
         /** @brief Constructs a quaternion from its scalar and vector components. */

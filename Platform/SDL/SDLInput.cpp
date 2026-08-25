@@ -134,7 +134,7 @@ namespace Engine {
                 break;
 
             case SDL_EVENT_MOUSE_WHEEL: {
-                const float direction = event.wheel.direction == SDL_MOUSEWHEEL_FLIPPED ? -1.0f : 1.0f;
+                const float direction = event.wheel.direction == SDL_MOUSEWHEEL_FLIPPED ? -1.0F : 1.0F;
                 Input::addMouseWheel(event.wheel.y * direction);
                 break;
             }

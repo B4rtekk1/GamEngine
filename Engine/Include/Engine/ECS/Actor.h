@@ -58,20 +58,20 @@ public:
     void setVelocity(Vec3 velocity) const;
     [[nodiscard]] Vec3 velocity() const;
 
-    void addBoxCollider(Vec3 halfExtents = {0.5f, 0.5f, 0.5f}) const;
-    void addSphereCollider(float radius = 0.5f) const;
-    void addCapsuleCollider(float radius = 0.5f, float height = 1.0f) const;
-    void addRampCollider(Vec3 halfExtents = {0.5f, 0.5f, 0.5f}) const;
+    void addBoxCollider(Vec3 halfExtents = {0.5F, 0.5F, 0.5F}) const;
+    void addSphereCollider(float radius = 0.5F) const;
+    void addCapsuleCollider(float radius = 0.5F, float height = 1.0F) const;
+    void addRampCollider(Vec3 halfExtents = {0.5F, 0.5F, 0.5F}) const;
     [[nodiscard]] bool hasCollider() const;
     void setColliderTrigger(bool enabled) const;
     void setColliderMaterial(float friction, float restitution) const;
 
     void addCamera(const CameraComponent& camera = {}) const;
     [[nodiscard]] bool hasCamera() const;
-    void setPerspectiveCamera(float fieldOfView, float nearClip = 0.1f,
-                              float farClip = 1000.0f) const;
-    void setOrthographicCamera(float size, float nearClip = 0.1f,
-                               float farClip = 1000.0f) const;
+    void setPerspectiveCamera(float fieldOfView, float nearClip = 0.1F,
+                              float farClip = 1000.0F) const;
+    void setOrthographicCamera(float size, float nearClip = 0.1F,
+                               float farClip = 1000.0F) const;
     void setPrimaryCamera(bool primary) const;
     void setCameraAspectRatio(float width, float height) const;
 

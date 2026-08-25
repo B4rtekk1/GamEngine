@@ -19,26 +19,26 @@ int main() {
         !editor.has<Transform>(entities[0])) return 2;
 
     const auto revisionBeforeAdd = editor.structuralRevision();
-    editor.add<ColliderComponent>(entities[0], ColliderComponent{.shape = SphereCollider{1.5f}});
+    editor.add<ColliderComponent>(entities[0], ColliderComponent{.shape = SphereCollider{1.5F}});
     if (!editor.has<ColliderComponent>(entities[0]) ||
         editor.structuralRevision() <= revisionBeforeAdd) return 3;
     editor.modify<Transform>(entities[0], [](auto& transform) {
-        transform.position = {7.0f, 8.0f, 9.0f};
+        transform.position = {7.0F, 8.0F, 9.0F};
     });
-    if (editor.get<Transform>(entities[0]).position.x() != 7.0f) return 4;
+    if (editor.get<Transform>(entities[0]).position.x() != 7.0F) return 4;
 
     const Entity copy = editor.duplicate(entities[0]);
     if (!editor.valid(copy) || editor.size() != 3 || copy == entities[0] ||
-        editor.get<Transform>(copy).position.z() != 9.0f ||
+        editor.get<Transform>(copy).position.z() != 9.0F ||
         !editor.has<ColliderComponent>(copy)) return 5;
     if (!editor.has<UUIDComponent>(copy) ||
         editor.get<UUIDComponent>(copy).value == editor.get<UUIDComponent>(entities[0]).value)
         return 6;
     editor.modify<Transform>(copy, [](auto& transform) {
-        transform.position.setX(42.0f);
+        transform.position.setX(42.0F);
     });
-    if (editor.get<Transform>(copy).position.x() != 42.0f ||
-        editor.get<Transform>(entities[0]).position.x() != 7.0f) return 7;
+    if (editor.get<Transform>(copy).position.x() != 42.0F ||
+        editor.get<Transform>(entities[0]).position.x() != 7.0F) return 7;
 
     editor.destroy(entities[1]);
     if (editor.valid(entities[1]) || editor.size() != 2) return 8;

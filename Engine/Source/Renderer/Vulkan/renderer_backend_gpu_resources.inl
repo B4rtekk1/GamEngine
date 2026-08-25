@@ -339,11 +339,10 @@
             constexpr Vec3 worldUp{0.0F, 1.0F, 0.0F};
             const Mat4 lightView = Mat4::lookAt(lightPosition, lightTarget, worldUp);
             const Mat4 lightProjection = Mat4::scale(
-                Mat4::ortho(-extent * 2.25f, extent * 2.25f,
-                            -extent * 2.25f, extent * 2.25f,
-                            0.1f, extent * 8.0f),
-                Vec3{1.0f, -1.0f, 1.0f});
+                Mat4::ortho(-extent * 2.25F, extent * 2.25F,
+                            -extent * 2.25F, extent * 2.25F,
+                            0.1F, extent * 8.0F),
+                Vec3{1.0F, -1.0F, 1.0F});
             return lightProjection * lightView;
         }
-
 

@@ -142,7 +142,7 @@ void TonemapPass::record(const VkCommandBuffer commandBuffer,
     passInfo.framebuffer = framebuffers_.at(imageIndex);
     passInfo.renderArea.extent = extent;
     VkClearValue clear{};
-    clear.color = {{0.0f, 0.0f, 0.0f, 1.0f}};
+    clear.color = {{0.0F, 0.0F, 0.0F, 1.0F}};
     passInfo.clearValueCount = 1;
     passInfo.pClearValues = &clear;
     vkCmdBeginRenderPass(commandBuffer, &passInfo, VK_SUBPASS_CONTENTS_INLINE);
@@ -150,11 +150,11 @@ void TonemapPass::record(const VkCommandBuffer commandBuffer,
     vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline_.handle());
     vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS,
                             pipeline_.layout(), 0, 1, &descriptorSet_, 0, nullptr);
-    const TonemapSettings settings{exposure, manualGamma_ ? 1.0f : 0.0f};
+    const TonemapSettings settings{exposure, manualGamma_ ? 1.0F : 0.0F};
     vkCmdPushConstants(commandBuffer, pipeline_.layout(), VK_SHADER_STAGE_FRAGMENT_BIT,
                        0, sizeof(settings), &settings);
-    const VkViewport viewport{0.0f, 0.0f, static_cast<float>(extent.width),
-                              static_cast<float>(extent.height), 0.0f, 1.0f};
+    const VkViewport viewport{0.0F, 0.0F, static_cast<float>(extent.width),
+                              static_cast<float>(extent.height), 0.0F, 1.0F};
     const VkRect2D scissor{{0, 0}, extent};
     vkCmdSetViewport(commandBuffer, 0, 1, &viewport);
     vkCmdSetScissor(commandBuffer, 0, 1, &scissor);

@@ -27,7 +27,7 @@ struct ApplicationConfig final {
     std::int32_t width = 1280;
     std::int32_t height = 720;
     bool closeOnEscape = true;
-    float fixedDeltaTime = 1.0f / 60.0f;
+    float fixedDeltaTime = 1.0F / 60.0F;
     std::filesystem::path assetRoot{};
     RenderConfig render{};
 };

@@ -12,8 +12,8 @@ namespace Engine {
     struct LightComponent {
         LightType type = LightType::Directional;
 
-        Math::Color color{1.0f, 1.0f, 1.0f};
-        float intensity = 1.0f;
+        Math::Color color{1.0F, 1.0F, 1.0F};
+        float intensity = 1.0F;
 
         bool enabled = true;
         bool castShadows = true;

@@ -48,15 +48,15 @@ using Editor::SceneHistory;
 #include <vector>
 
 void drawPanelHeader(const char *title, const char *subtitle = nullptr) {
-    ImGui::PushStyleColor(ImGuiCol_Text, {0.30f, 0.90f, 0.86f, 1.0f});
+    ImGui::PushStyleColor(ImGuiCol_Text, {0.30F, 0.90F, 0.86F, 1.0F});
     ImGui::TextUnformatted("●");
     ImGui::PopStyleColor();
-    ImGui::SameLine(0.0f, 7.0f);
-    ImGui::PushStyleColor(ImGuiCol_Text, {0.92f, 0.95f, 0.98f, 1.0f});
+    ImGui::SameLine(0.0F, 7.0F);
+    ImGui::PushStyleColor(ImGuiCol_Text, {0.92F, 0.95F, 0.98F, 1.0F});
     ImGui::TextUnformatted(title);
     ImGui::PopStyleColor();
     if (subtitle != nullptr) {
-        ImGui::SameLine(0.0f, 9.0f);
+        ImGui::SameLine(0.0F, 9.0F);
         ImGui::TextDisabled("%s", subtitle);
     }
     ImGui::Spacing();
@@ -65,12 +65,12 @@ void drawPanelHeader(const char *title, const char *subtitle = nullptr) {
 }
 
 void drawSearchIcon(const ImVec2 min, const ImVec2 max) {
-    const ImVec2 center{min.x + 12.0f, (min.y + max.y) * 0.5f - 1.0f};
+    const ImVec2 center{min.x + 12.0F, (min.y + max.y) * 0.5F - 1.0F};
     ImDrawList *drawList = ImGui::GetWindowDrawList();
     const ImU32 color = ImGui::GetColorU32(ImGuiCol_TextDisabled);
-    drawList->AddCircle(center, 4.5f, color, 16, 1.6f);
-    drawList->AddLine({center.x + 3.2f, center.y + 3.2f},
-                      {center.x + 7.0f, center.y + 7.0f}, color, 1.6f);
+    drawList->AddCircle(center, 4.5F, color, 16, 1.6F);
+    drawList->AddLine({center.x + 3.2F, center.y + 3.2F},
+                      {center.x + 7.0F, center.y + 7.0F}, color, 1.6F);
 }
 
 bool containsCaseInsensitive(const char *text, const char *query) {
@@ -121,19 +121,19 @@ const char *entityName(const Engine::ScenePreset &scene, const Engine::Entity en
 
 int drawSceneOrientationGizmo(const ImVec2 imageMin, const ImVec2 imageMax,
                               const float yawDegrees, const float pitchDegrees) {
-    constexpr float pi = 3.14159265358979323846f;
-    constexpr float radius = 40.0f;
-    constexpr float axisLength = 32.0f;
-    const float yaw = yawDegrees * pi / 180.0f;
-    const float pitch = pitchDegrees * pi / 180.0f;
+    constexpr float pi = 3.14159265358979323846F;
+    constexpr float radius = 40.0F;
+    constexpr float axisLength = 32.0F;
+    const float yaw = yawDegrees * pi / 180.0F;
+    const float pitch = pitchDegrees * pi / 180.0F;
 
     // Express world axes in the Scene View camera's screen-space basis.
-    const float right[3]{-std::sin(yaw), 0.0f, std::cos(yaw)};
+    const float right[3]{-std::sin(yaw), 0.0F, std::cos(yaw)};
     const float up[3]{
         -std::cos(yaw) * std::sin(pitch), std::cos(pitch),
         -std::sin(yaw) * std::sin(pitch)
     };
-    const ImVec2 center{imageMax.x - radius - 12.0f, imageMax.y - radius - 12.0f};
+    const ImVec2 center{imageMax.x - radius - 12.0F, imageMax.y - radius - 12.0F};
     const ImU32 colors[3]{
         IM_COL32(255, 45, 45, 255), IM_COL32(36, 245, 79, 255),
         IM_COL32(45, 135, 255, 255)
@@ -153,16 +153,16 @@ int drawSceneOrientationGizmo(const ImVec2 imageMin, const ImVec2 imageMax,
         const ImVec2 offset{mouse.x - center.x, mouse.y - center.y};
         const float lengthSquared = direction.x * direction.x + direction.y * direction.y;
         const float projection = std::clamp(
-            (offset.x * direction.x + offset.y * direction.y) / lengthSquared, 0.0f, 1.0f);
+            (offset.x * direction.x + offset.y * direction.y) / lengthSquared, 0.0F, 1.0F);
         const ImVec2 closest{center.x + direction.x * projection, center.y + direction.y * projection};
         const float distanceX = mouse.x - closest.x;
         const float distanceY = mouse.y - closest.y;
-        if (mouseInsideImage && distanceX * distanceX + distanceY * distanceY <= 100.0f) hoveredAxis = axis;
-        drawList->AddLine(center, end, colors[axis], 4.0f);
-        drawList->AddCircleFilled(end, 5.0f, colors[axis]);
-        drawList->AddText({end.x + 5.0f, end.y - 7.0f}, colors[axis], labels[axis]);
+        if (mouseInsideImage && distanceX * distanceX + distanceY * distanceY <= 100.0F) hoveredAxis = axis;
+        drawList->AddLine(center, end, colors[axis], 4.0F);
+        drawList->AddCircleFilled(end, 5.0F, colors[axis]);
+        drawList->AddText({end.x + 5.0F, end.y - 7.0F}, colors[axis], labels[axis]);
     }
-    drawList->AddCircleFilled(center, 4.0f, IM_COL32(255, 255, 255, 255));
+    drawList->AddCircleFilled(center, 4.0F, IM_COL32(255, 255, 255, 255));
     if (hoveredAxis >= 0) {
         ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
         if (ImGui::IsMouseClicked(ImGuiMouseButton_Left)) return hoveredAxis;
@@ -185,14 +185,14 @@ ImVec2 projectGizmoPoint(const Engine::Camera &camera, const Engine::Vec3 &point
                          const ImVec2 min, const ImVec2 max) {
     const Engine::Vec3 relative = point - camera.position();
     const float depth = dotProduct(relative, camera.forward());
-    if (depth <= 0.01f) return {-10000.0f, -10000.0f};
-    constexpr float halfFovTangent = 0.57735026919f; // tan(60° / 2)
+    if (depth <= 0.01F) return {-10000.0F, -10000.0F};
+    constexpr float halfFovTangent = 0.57735026919F; // tan(60° / 2)
     const float aspect = (max.x - min.x) / (max.y - min.y);
     const float ndcX = dotProduct(relative, camera.right()) / (depth * halfFovTangent * aspect);
     const float ndcY = dotProduct(relative, camera.up()) / (depth * halfFovTangent);
     return {
-        (min.x + max.x) * 0.5f + ndcX * (max.x - min.x) * 0.5f,
-        (min.y + max.y) * 0.5f - ndcY * (max.y - min.y) * 0.5f
+        (min.x + max.x) * 0.5F + ndcX * (max.x - min.x) * 0.5F,
+        (min.y + max.y) * 0.5F - ndcY * (max.y - min.y) * 0.5F
     };
 }
 
@@ -201,17 +201,17 @@ float distanceToLineSegment(const ImVec2 point, const ImVec2 start, const ImVec2
     const ImVec2 offset{point.x - start.x, point.y - start.y};
     const float lengthSquared = direction.x * direction.x + direction.y * direction.y;
     const float t = std::clamp((offset.x * direction.x + offset.y * direction.y) /
-                               std::max(lengthSquared, 1.0f), 0.0f, 1.0f);
+                               std::max(lengthSquared, 1.0F), 0.0F, 1.0F);
     const ImVec2 closest{start.x + direction.x * t, start.y + direction.y * t};
     return std::hypot(point.x - closest.x, point.y - closest.y);
 }
 
 Engine::Vec3 viewportRayDirection(const Engine::Camera &camera, const ImVec2 mouse,
                                   const ImVec2 min, const ImVec2 max) {
-    constexpr float halfFovTangent = 0.57735026919f; // tan(60° / 2)
-    const float aspect = (max.x - min.x) / std::max(max.y - min.y, 1.0f);
-    const float normalizedX = ((mouse.x - min.x) / (max.x - min.x)) * 2.0f - 1.0f;
-    const float normalizedY = ((mouse.y - min.y) / (max.y - min.y)) * 2.0f - 1.0f;
+    constexpr float halfFovTangent = 0.57735026919F; // tan(60° / 2)
+    const float aspect = (max.x - min.x) / std::max(max.y - min.y, 1.0F);
+    const float normalizedX = ((mouse.x - min.x) / (max.x - min.x)) * 2.0F - 1.0F;
+    const float normalizedY = ((mouse.y - min.y) / (max.y - min.y)) * 2.0F - 1.0F;
     return (camera.forward() + camera.right() * (normalizedX * aspect * halfFovTangent) -
             camera.up() * (normalizedY * halfFovTangent)).normalized();
 }
@@ -220,21 +220,21 @@ bool intersectRayPlane(const Engine::Vec3 &rayOrigin, const Engine::Vec3 &rayDir
                        const Engine::Vec3 &planeOrigin, const Engine::Vec3 &planeNormal,
                        Engine::Vec3 &intersection) {
     const float denominator = dotProduct(rayDirection, planeNormal);
-    if (std::abs(denominator) < 0.0001f) return false;
+    if (std::abs(denominator) < 0.0001F) return false;
     const float distance = dotProduct(planeOrigin - rayOrigin, planeNormal) / denominator;
-    if (distance < 0.0f) return false;
+    if (distance < 0.0F) return false;
     intersection = rayOrigin + rayDirection * distance;
     return true;
 }
 
 float gizmoWorldSize(const Engine::Camera &camera, const Engine::Vec3 &origin,
                      const ImVec2 min, const ImVec2 max) {
-    constexpr float halfFovTangent = 0.57735026919f; // tan(60° / 2)
-    constexpr float desiredPixels = 112.0f;
-    const float depth = std::max(dotProduct(origin - camera.position(), camera.forward()), 0.1f);
-    return std::clamp(depth * 2.0f * halfFovTangent * desiredPixels /
-                      std::max(max.y - min.y, 1.0f),
-                      0.15f, 100.0f);
+    constexpr float halfFovTangent = 0.57735026919F; // tan(60° / 2)
+    constexpr float desiredPixels = 112.0F;
+    const float depth = std::max(dotProduct(origin - camera.position(), camera.forward()), 0.1F);
+    return std::clamp(depth * 2.0F * halfFovTangent * desiredPixels /
+                      std::max(max.y - min.y, 1.0F),
+                      0.15F, 100.0F);
 }
 
 bool drawTranslationGizmo(Engine::ScenePreset &scene, const Engine::Entity selected,
@@ -243,13 +243,13 @@ bool drawTranslationGizmo(Engine::ScenePreset &scene, const Engine::Entity selec
         !scene.editor().has<Engine::Transform>(selected))
         return false;
 
-    Engine::Camera camera{Engine::Degrees{60.0f}, (max.x - min.x) / (max.y - min.y), 0.1f, 1000.0f};
+    Engine::Camera camera{Engine::Degrees{60.0F}, (max.x - min.x) / (max.y - min.y), 0.1F, 1000.0F};
     camera.setPosition(renderer.editorCameraPosition());
     camera.setRotation(Engine::Degrees{renderer.editorCameraYaw()},
                        Engine::Degrees{renderer.editorCameraPitch()});
     Engine::Vec3 origin = renderer.editorGizmoPosition(selected);
     float gizmoSize = gizmoWorldSize(camera, origin, min, max);
-    const Engine::Vec3 axes[3]{{1.0f, 0.0f, 0.0f}, {0.0f, 1.0f, 0.0f}, {0.0f, 0.0f, 1.0f}};
+    const Engine::Vec3 axes[3]{{1.0F, 0.0F, 0.0F}, {0.0F, 1.0F, 0.0F}, {0.0F, 0.0F, 1.0F}};
     const ImU32 colors[3]{
         IM_COL32(235, 70, 70, 255), IM_COL32(70, 235, 100, 255),
         IM_COL32(70, 130, 245, 255)
@@ -261,7 +261,7 @@ bool drawTranslationGizmo(Engine::ScenePreset &scene, const Engine::Entity selec
     ImVec2 axisEnds[3]{};
     for (int axis = 0; axis < 3; ++axis) {
         axisEnds[axis] = projectGizmoPoint(camera, origin + axes[axis] * gizmoSize, min, max);
-        if (distanceToLineSegment(mouse, originScreen, axisEnds[axis]) < 9.0f &&
+        if (distanceToLineSegment(mouse, originScreen, axisEnds[axis]) < 9.0F &&
             ImGui::IsMouseHoveringRect(min, max))
             hoveredAxis = axis;
     }
@@ -286,7 +286,7 @@ bool drawTranslationGizmo(Engine::ScenePreset &scene, const Engine::Entity selec
             selected, hoveredAxis,
             scene.editor().get<Engine::Transform>(selected).position,
             mouse, axisDirection,
-            std::max(std::hypot(axisDirection.x, axisDirection.y), 1.0f), gizmoSize
+            std::max(std::hypot(axisDirection.x, axisDirection.y), 1.0F), gizmoSize
         };
     }
     if (drag.entity == selected && drag.axis >= 0 && ImGui::IsMouseDown(ImGuiMouseButton_Left)) {
@@ -294,7 +294,7 @@ bool drawTranslationGizmo(Engine::ScenePreset &scene, const Engine::Entity selec
         const float pixels = (delta.x * drag.startAxisDirection.x +
                               delta.y * drag.startAxisDirection.y) / drag.startAxisLength;
         float worldDistance = pixels * (drag.startWorldSize / drag.startAxisLength);
-        if (ImGui::GetIO().KeyCtrl) worldDistance = std::round(worldDistance / 0.25f) * 0.25f;
+        if (ImGui::GetIO().KeyCtrl) worldDistance = std::round(worldDistance / 0.25F) * 0.25F;
         scene.edit(selected).setPosition(drag.startPosition + axes[drag.axis] * worldDistance);
         // The scene image is rendered later in this frame. Re-project the
         // overlay from the updated transform so it does not trail the object
@@ -310,12 +310,12 @@ bool drawTranslationGizmo(Engine::ScenePreset &scene, const Engine::Entity selec
     }
     if (drag.axis >= 0 && !ImGui::IsMouseDown(ImGuiMouseButton_Left)) drag = {};
     for (int axis = 0; axis < 3; ++axis) {
-        drawList->AddLine(originScreen, axisEnds[axis], colors[axis], hoveredAxis == axis ? 8.0f : 5.0f);
-        drawList->AddCircleFilled(axisEnds[axis], hoveredAxis == axis ? 9.0f : 7.0f, colors[axis]);
-        drawList->AddText({axisEnds[axis].x + 7.0f, axisEnds[axis].y - 8.0f}, colors[axis],
+        drawList->AddLine(originScreen, axisEnds[axis], colors[axis], hoveredAxis == axis ? 8.0F : 5.0F);
+        drawList->AddCircleFilled(axisEnds[axis], hoveredAxis == axis ? 9.0F : 7.0F, colors[axis]);
+        drawList->AddText({axisEnds[axis].x + 7.0F, axisEnds[axis].y - 8.0F}, colors[axis],
                           axis == 0 ? "X" : axis == 1 ? "Y" : "Z");
     }
-    drawList->AddCircleFilled(originScreen, 8.0f, IM_COL32(245, 245, 245, 255));
+    drawList->AddCircleFilled(originScreen, 8.0F, IM_COL32(245, 245, 245, 255));
     return dragging || hoveredAxis >= 0;
 }
 
@@ -327,18 +327,18 @@ bool drawRotationGizmo(Engine::ScenePreset &scene, const Engine::Entity selected
         !scene.editor().has<Engine::Transform>(selected))
         return false;
 
-    Engine::Camera camera{Engine::Degrees{60.0f}, (max.x - min.x) / (max.y - min.y), 0.1f, 1000.0f};
+    Engine::Camera camera{Engine::Degrees{60.0F}, (max.x - min.x) / (max.y - min.y), 0.1F, 1000.0F};
     camera.setPosition(renderer.editorCameraPosition());
     camera.setRotation(Engine::Degrees{renderer.editorCameraYaw()},
                        Engine::Degrees{renderer.editorCameraPitch()});
     const Engine::Vec3 origin = renderer.editorGizmoPosition(selected);
-    const Engine::Vec3 ringBasisA[3]{{0.0f, 1.0f, 0.0f}, {1.0f, 0.0f, 0.0f}, {1.0f, 0.0f, 0.0f}};
-    const Engine::Vec3 ringBasisB[3]{{0.0f, 0.0f, 1.0f}, {0.0f, 0.0f, 1.0f}, {0.0f, 1.0f, 0.0f}};
+    const Engine::Vec3 ringBasisA[3]{{0.0F, 1.0F, 0.0F}, {1.0F, 0.0F, 0.0F}, {1.0F, 0.0F, 0.0F}};
+    const Engine::Vec3 ringBasisB[3]{{0.0F, 0.0F, 1.0F}, {0.0F, 0.0F, 1.0F}, {0.0F, 1.0F, 0.0F}};
     const ImU32 colors[3]{
         IM_COL32(235, 70, 70, 255), IM_COL32(70, 235, 100, 255),
         IM_COL32(70, 130, 245, 255)
     };
-    constexpr float pi = 3.14159265358979323846f;
+    constexpr float pi = 3.14159265358979323846F;
     constexpr int segments = 64;
     const float radius = gizmoWorldSize(camera, origin, min, max);
     const ImVec2 mouse = ImGui::GetIO().MousePos;
@@ -348,21 +348,21 @@ bool drawRotationGizmo(Engine::ScenePreset &scene, const Engine::Entity selected
     ImVec2 ringPoints[3][segments + 1]{};
     for (int axis = 0; axis < 3; ++axis) {
         for (int segment = 0; segment <= segments; ++segment) {
-            const float angle = 2.0f * pi * static_cast<float>(segment) / segments;
+            const float angle = 2.0F * pi * static_cast<float>(segment) / segments;
             const Engine::Vec3 point = origin + radius *
                                        (ringBasisA[axis] * std::cos(angle) + ringBasisB[axis] * std::sin(angle));
             ringPoints[axis][segment] = projectGizmoPoint(camera, point, min, max);
             if (segment > 0 && ImGui::IsMouseHoveringRect(min, max) &&
-                distanceToLineSegment(mouse, ringPoints[axis][segment - 1], ringPoints[axis][segment]) < 9.0f) {
+                distanceToLineSegment(mouse, ringPoints[axis][segment - 1], ringPoints[axis][segment]) < 9.0F) {
                 hoveredAxis = axis;
             }
         }
         for (int segment = 1; segment <= segments; ++segment) {
             drawList->AddLine(ringPoints[axis][segment - 1], ringPoints[axis][segment], colors[axis],
-                              hoveredAxis == axis ? 5.0f : 3.0f);
+                              hoveredAxis == axis ? 5.0F : 3.0F);
         }
     }
-    drawList->AddCircleFilled(originScreen, 7.0f, IM_COL32(245, 245, 245, 255));
+    drawList->AddCircleFilled(originScreen, 7.0F, IM_COL32(245, 245, 245, 255));
 
     struct DragState final {
         Engine::Entity entity{Engine::NullEntity};
@@ -375,10 +375,10 @@ bool drawRotationGizmo(Engine::ScenePreset &scene, const Engine::Entity selected
     if (ImGui::IsMouseClicked(ImGuiMouseButton_Left) && hoveredAxis >= 0) {
         Engine::Vec3 hitPoint{};
         const Engine::Vec3 axis = hoveredAxis == 0
-                                      ? Engine::Vec3{1.0f, 0.0f, 0.0f}
+                                      ? Engine::Vec3{1.0F, 0.0F, 0.0F}
                                       : hoveredAxis == 1
-                                            ? Engine::Vec3{0.0f, 1.0f, 0.0f}
-                                            : Engine::Vec3{0.0f, 0.0f, 1.0f};
+                                            ? Engine::Vec3{0.0F, 1.0F, 0.0F}
+                                            : Engine::Vec3{0.0F, 0.0F, 1.0F};
         if (!intersectRayPlane(camera.position(), viewportRayDirection(camera, mouse, min, max),
                                origin, axis, hitPoint))
             return true;
@@ -391,10 +391,10 @@ bool drawRotationGizmo(Engine::ScenePreset &scene, const Engine::Entity selected
     }
     if (drag.entity == selected && drag.axis >= 0 && ImGui::IsMouseDown(ImGuiMouseButton_Left)) {
         const Engine::Vec3 axis = drag.axis == 0
-                                      ? Engine::Vec3{1.0f, 0.0f, 0.0f}
+                                      ? Engine::Vec3{1.0F, 0.0F, 0.0F}
                                       : drag.axis == 1
-                                            ? Engine::Vec3{0.0f, 1.0f, 0.0f}
-                                            : Engine::Vec3{0.0f, 0.0f, 1.0f};
+                                            ? Engine::Vec3{0.0F, 1.0F, 0.0F}
+                                            : Engine::Vec3{0.0F, 0.0F, 1.0F};
         Engine::Vec3 hitPoint{};
         if (!intersectRayPlane(camera.position(), viewportRayDirection(camera, mouse, min, max),
                                origin, axis, hitPoint))
@@ -405,8 +405,8 @@ bool drawRotationGizmo(Engine::ScenePreset &scene, const Engine::Entity selected
             dotProduct(drag.lastDirection, currentDirection));
         drag.lastDirection = currentDirection;
         Engine::Vec3 rotation = drag.startRotation;
-        float degrees = drag.accumulatedRadians * 180.0f / pi;
-        if (ImGui::GetIO().KeyCtrl) degrees = std::round(degrees / 15.0f) * 15.0f;
+        float degrees = drag.accumulatedRadians * 180.0F / pi;
+        if (ImGui::GetIO().KeyCtrl) degrees = std::round(degrees / 15.0F) * 15.0F;
         if (drag.axis == 0) rotation.setX(drag.startRotation.x() + degrees);
         else if (drag.axis == 1) rotation.setY(drag.startRotation.y() + degrees);
         else rotation.setZ(drag.startRotation.z() + degrees);
@@ -429,13 +429,13 @@ ViewportInteraction drawViewport(Engine::ScenePreset &scene, const Engine::Entit
     ImGui::Begin("Viewport", nullptr, ImGuiWindowFlags_NoScrollbar);
     drawPanelHeader("VIEWPORT", playing ? "PLAYING  /  GAME CAMERA" : showGameView ? "GAME CAMERA" : "SCENE CAMERA");
     if (!playing) {
-        ImGui::SameLine(ImGui::GetWindowWidth() - 154.0f);
+        ImGui::SameLine(ImGui::GetWindowWidth() - 154.0F);
     }
     if (!playing) {
         if (EditorButton("Move (W)").drawSmall()) gizmoMode = GizmoMode::Translate;
-        ImGui::SameLine(0.0f, 4.0f);
+        ImGui::SameLine(0.0F, 4.0F);
         if (EditorButton("Rotate (E)").drawSmall()) gizmoMode = GizmoMode::Rotate;
-        ImGui::SameLine(0.0f, 8.0f);
+        ImGui::SameLine(0.0F, 8.0F);
     }
     if (!playing && EditorButton(showGameView ? "Scene View" : "Game View").draw()) {
         showGameView = !showGameView;
@@ -443,17 +443,17 @@ ViewportInteraction drawViewport(Engine::ScenePreset &scene, const Engine::Entit
     bool viewportHovered = ImGui::IsWindowHovered(ImGuiHoveredFlags_AllowWhenBlockedByActiveItem);
     const ImVec2 size = ImGui::GetContentRegionAvail();
     ViewportInteraction interaction{};
-    if (descriptor && size.x > 1.0f && size.y > 1.0f) {
-        constexpr float viewportAspect = 16.0f / 9.0f;
+    if (descriptor && size.x > 1.0F && size.y > 1.0F) {
+        constexpr float viewportAspect = 16.0F / 9.0F;
         // Keep the rendered view at a fixed aspect ratio. The child clips the
         // image when the panel is wider than 16:9, so the excess is removed
         // symmetrically from the top and bottom instead of distorting it.
-        ImGui::PushStyleColor(ImGuiCol_ChildBg, {0.018f, 0.024f, 0.034f, 1.0f});
+        ImGui::PushStyleColor(ImGuiCol_ChildBg, {0.018F, 0.024F, 0.034F, 1.0F});
         ImGui::BeginChild("##viewport-frame", size, true,
                           ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
         const ImVec2 frameSize = ImGui::GetContentRegionAvail();
         const float imageHeight = frameSize.x / viewportAspect;
-        const float verticalOffset = (frameSize.y - imageHeight) * 0.5f;
+        const float verticalOffset = (frameSize.y - imageHeight) * 0.5F;
         ImGui::SetCursorPosY(ImGui::GetCursorPosY() + verticalOffset);
         ImGui::Image(ImTextureRef{static_cast<ImTextureID>(descriptor.value)},
                      {frameSize.x, imageHeight}, {0, 0}, {1, 1});
@@ -469,11 +469,11 @@ ViewportInteraction drawViewport(Engine::ScenePreset &scene, const Engine::Entit
             gizmoAction = drawSceneOrientationGizmo(ImGui::GetItemRectMin(), ImGui::GetItemRectMax(),
                                                     sceneCameraYaw, sceneCameraPitch);
             switch (gizmoAction) {
-                case 0: renderer.setEditorCameraRotation(180.0f, 0.0f);
+                case 0: renderer.setEditorCameraRotation(180.0F, 0.0F);
                     break; // +X view
-                case 1: renderer.setEditorCameraRotation(0.0f, -89.0f);
+                case 1: renderer.setEditorCameraRotation(0.0F, -89.0F);
                     break; // +Y view
-                case 2: renderer.setEditorCameraRotation(-90.0f, 0.0f);
+                case 2: renderer.setEditorCameraRotation(-90.0F, 0.0F);
                     break; // +Z view
                 default: break;
             }
@@ -484,8 +484,8 @@ ViewportInteraction drawViewport(Engine::ScenePreset &scene, const Engine::Entit
             const ImVec2 max = ImGui::GetItemRectMax();
             const ImVec2 mouse = ImGui::GetIO().MousePos;
             interaction.sceneClicked = true;
-            interaction.normalizedX = ((mouse.x - min.x) / (max.x - min.x)) * 2.0f - 1.0f;
-            interaction.normalizedY = ((mouse.y - min.y) / (max.y - min.y)) * 2.0f - 1.0f;
+            interaction.normalizedX = ((mouse.x - min.x) / (max.x - min.x)) * 2.0F - 1.0F;
+            interaction.normalizedY = ((mouse.y - min.y) / (max.y - min.y)) * 2.0F - 1.0F;
         }
         ImGui::EndChild();
         ImGui::PopStyleColor();
@@ -502,12 +502,12 @@ ViewportInteraction drawViewport(Engine::ScenePreset &scene, const Engine::Entit
 Engine::Entity pickSceneEntity(Engine::ScenePreset &scene, Engine::PhysicsSystem &physics,
                                const Engine::Renderer &renderer, const float normalizedX,
                                const float normalizedY, const float aspect) {
-    Engine::Camera camera{Engine::Degrees{60.0f}, aspect, 0.1f, 1000.0f};
+    Engine::Camera camera{Engine::Degrees{60.0F}, aspect, 0.1F, 1000.0F};
     camera.setPosition(renderer.editorCameraPosition());
     camera.setRotation(Engine::Degrees{renderer.editorCameraYaw()},
                        Engine::Degrees{renderer.editorCameraPitch()});
-    constexpr float pi = 3.14159265358979323846f;
-    const float scale = std::tan(30.0f * pi / 180.0f);
+    constexpr float pi = 3.14159265358979323846F;
+    const float scale = std::tan(30.0F * pi / 180.0F);
     const Engine::Vec3 direction = (camera.forward() +
                                     camera.right() * (normalizedX * aspect * scale) -
                                     camera.up() * (normalizedY * scale)).normalized();
@@ -524,14 +524,14 @@ Engine::Entity HierarchyPanel::draw(Engine::ScenePreset &scene, const Engine::En
     actionEntity = Engine::NullEntity;
     ImGui::Begin("Hierarchy");
     drawPanelHeader("SCENE HIERARCHY");
-    ImGui::SameLine(ImGui::GetWindowWidth() - 75.0f);
+    ImGui::SameLine(ImGui::GetWindowWidth() - 75.0F);
     if (EditorButton("+").drawSmall()) clicked = scene.createGameObject();
-    ImGui::SameLine(ImGui::GetWindowWidth() - 45.0f);
+    ImGui::SameLine(ImGui::GetWindowWidth() - 45.0F);
     ImGui::TextDisabled("%zu", scene.editor().size());
     static char filter[64] = {};
-    ImGui::SetNextItemWidth(-1.0f);
+    ImGui::SetNextItemWidth(-1.0F);
     const ImVec2 framePadding = ImGui::GetStyle().FramePadding;
-    ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, {framePadding.x + 18.0f, framePadding.y});
+    ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, {framePadding.x + 18.0F, framePadding.y});
     ImGui::InputTextWithHint("##hierarchy-filter", "Search objects...", filter, sizeof(filter));
     const ImVec2 searchMin = ImGui::GetItemRectMin();
     const ImVec2 searchMax = ImGui::GetItemRectMax();
@@ -647,14 +647,14 @@ bool ComponentsPanel::draw(Engine::ScenePreset &scene, const Engine::Entity sele
     drawPanelHeader("INSPECTOR", selected == Engine::NullEntity ? "NO SELECTION" : "ENTITY");
     if (selected == Engine::NullEntity) {
         ImGui::Spacing();
-        ImGui::TextColored({0.30f, 0.90f, 0.86f, 1.0f}, "◇");
+        ImGui::TextColored({0.30F, 0.90F, 0.86F, 1.0F}, "◇");
         ImGui::SameLine();
         ImGui::TextDisabled("Nothing selected");
         ImGui::Spacing();
         ImGui::TextWrapped("Select an object in the Scene Hierarchy to inspect it.");
         const bool consumesMouseWheel = ImGui::IsWindowHovered(
                                             ImGuiHoveredFlags_AllowWhenBlockedByActiveItem) && ImGui::GetIO().MouseWheel
-                                        != 0.0f;
+                                        != 0.0F;
         ImGui::End();
         return consumesMouseWheel;
     }
@@ -664,7 +664,7 @@ bool ComponentsPanel::draw(Engine::ScenePreset &scene, const Engine::Entity sele
     // source object is reused when a duplicate becomes selected in the same
     // panel, making the inspector appear to keep editing the original.
     ImGui::PushID(reinterpret_cast<const void*>(static_cast<std::uintptr_t>(selected)));
-    ImGui::TextColored({0.92f, 0.95f, 1.0f, 1.0f}, "%s", entityName(scene, selected));
+    ImGui::TextColored({0.92F, 0.95F, 1.0F, 1.0F}, "%s", entityName(scene, selected));
     ImGui::SameLine();
     ImGui::TextDisabled("Entity %u", Engine::entityIndex(selected));
     if (scene.editor().valid(selected) && scene.editor().has<Engine::NameComponent>(selected)) {
@@ -672,7 +672,7 @@ bool ComponentsPanel::draw(Engine::ScenePreset &scene, const Engine::Entity sele
         const auto &name = readScene.get<Engine::NameComponent>(selected).value;
         char editableName[260]{};
         std::snprintf(editableName, sizeof(editableName), "%s", name.c_str());
-        ImGui::SetNextItemWidth(-1.0f);
+        ImGui::SetNextItemWidth(-1.0F);
         if (ImGui::InputTextWithHint("##object-name", "Object name", editableName, sizeof(editableName)) &&
             editableName[0] != '\0') {
             scene.editor().modify<Engine::NameComponent>(selected, [&](auto &value) {
@@ -709,37 +709,37 @@ bool ComponentsPanel::draw(Engine::ScenePreset &scene, const Engine::Entity sele
                                           const float min, const float max,
                                           const char *format) {
             ImGui::TextDisabled("%s", label);
-            ImGui::SetNextItemWidth(-1.0f);
+            ImGui::SetNextItemWidth(-1.0F);
             return ImGui::DragFloat(id, value, speed, min, max, format);
         };
 
         changed |= drawParticleFloat("Spawn Rate", "##particle-spawn-rate",
-                                     &emitter.spawnRate, 1.0f, 0.0f, 5000.0f,
-                                     "%.0f particles/s");
+                                     &emitter.spawnRate, 1.0F, 0.0F, 5000.0F,
+                                     "%.0F particles/s");
         changed |= drawParticleFloat("Minimum Lifetime", "##particle-min-lifetime",
-                                     &emitter.minLifeTime, 0.01f, 0.0f, 60.0f,
-                                     "%.2f s");
+                                     &emitter.minLifeTime, 0.01F, 0.0F, 60.0F,
+                                     "%.2F s");
         changed |= drawParticleFloat("Maximum Lifetime", "##particle-max-lifetime",
-                                     &emitter.maxLifeTime, 0.01f, 0.0f, 60.0f,
-                                     "%.2f s");
+                                     &emitter.maxLifeTime, 0.01F, 0.0F, 60.0F,
+                                     "%.2F s");
         changed |= drawParticleFloat("Minimum Size", "##particle-min-size",
-                                     &emitter.minSize, 0.01f, 0.0f, 10.0f,
-                                     "%.2f");
+                                     &emitter.minSize, 0.01F, 0.0F, 10.0F,
+                                     "%.2F");
         changed |= drawParticleFloat("Maximum Size", "##particle-max-size",
-                                     &emitter.maxSize, 0.01f, 0.0f, 10.0f,
-                                     "%.2f");
+                                     &emitter.maxSize, 0.01F, 0.0F, 10.0F,
+                                     "%.2F");
         changed |= drawParticleFloat("Buoyancy", "##smoke-buoyancy",
-                                     &emitter.buoyancy, 0.05f, 0.0f, 30.0f,
-                                     "%.2f");
+                                     &emitter.buoyancy, 0.05F, 0.0F, 30.0F,
+                                     "%.2F");
         changed |= drawParticleFloat("Air Drag", "##smoke-drag",
-                                     &emitter.drag, 0.02f, 0.0f, 10.0f,
-                                     "%.2f");
+                                     &emitter.drag, 0.02F, 0.0F, 10.0F,
+                                     "%.2F");
         changed |= drawParticleFloat("Turbulence", "##smoke-turbulence",
-                                     &emitter.turbulence, 0.02f, 0.0f, 10.0f,
-                                     "%.2f");
+                                     &emitter.turbulence, 0.02F, 0.0F, 10.0F,
+                                     "%.2F");
         changed |= drawParticleFloat("Collision Radius", "##smoke-collision-radius",
-                                     &emitter.collisionRadius, 0.005f, 0.0f, 2.0f,
-                                     "%.3f");
+                                     &emitter.collisionRadius, 0.005F, 0.0F, 2.0F,
+                                     "%.3F");
 
         float minVelocity[3] = {
             emitter.minVelocity.x(), emitter.minVelocity.y(), emitter.minVelocity.z()
@@ -747,11 +747,11 @@ bool ComponentsPanel::draw(Engine::ScenePreset &scene, const Engine::Entity sele
         float maxVelocity[3] = {
             emitter.maxVelocity.x(), emitter.maxVelocity.y(), emitter.maxVelocity.z()
         };
-        if (ImGui::DragFloat3("Min Velocity", minVelocity, 0.05f, -100.0f, 100.0f)) {
+        if (ImGui::DragFloat3("Min Velocity", minVelocity, 0.05F, -100.0F, 100.0F)) {
             emitter.minVelocity = {minVelocity[0], minVelocity[1], minVelocity[2]};
             changed = true;
         }
-        if (ImGui::DragFloat3("Max Velocity", maxVelocity, 0.05f, -100.0f, 100.0f)) {
+        if (ImGui::DragFloat3("Max Velocity", maxVelocity, 0.05F, -100.0F, 100.0F)) {
             emitter.maxVelocity = {maxVelocity[0], maxVelocity[1], maxVelocity[2]};
             changed = true;
         }
@@ -760,7 +760,7 @@ bool ComponentsPanel::draw(Engine::ScenePreset &scene, const Engine::Entity sele
             emitter.color.r(), emitter.color.g(), emitter.color.b(), emitter.color.a()
         };
         ImGui::TextDisabled("Color");
-        ImGui::SetNextItemWidth(-1.0f);
+        ImGui::SetNextItemWidth(-1.0F);
         if (ImGui::ColorEdit4("##particle-color", color, ImGuiColorEditFlags_AlphaBar)) {
             emitter.color = Engine::Color{color[0], color[1], color[2], color[3]};
             changed = true;
@@ -768,15 +768,15 @@ bool ComponentsPanel::draw(Engine::ScenePreset &scene, const Engine::Entity sele
         }
 
         // Enforce valid ranges even when values are entered from the keyboard.
-        emitter.minLifeTime = std::max(0.0f, emitter.minLifeTime);
+        emitter.minLifeTime = std::max(0.0F, emitter.minLifeTime);
         emitter.maxLifeTime = std::max(emitter.minLifeTime, emitter.maxLifeTime);
-        emitter.minSize = std::max(0.0f, emitter.minSize);
+        emitter.minSize = std::max(0.0F, emitter.minSize);
         emitter.maxSize = std::max(emitter.minSize, emitter.maxSize);
-        emitter.spawnRate = std::max(0.0f, emitter.spawnRate);
-        emitter.buoyancy = std::max(0.0f, emitter.buoyancy);
-        emitter.drag = std::max(0.0f, emitter.drag);
-        emitter.turbulence = std::max(0.0f, emitter.turbulence);
-        emitter.collisionRadius = std::max(0.0f, emitter.collisionRadius);
+        emitter.spawnRate = std::max(0.0F, emitter.spawnRate);
+        emitter.buoyancy = std::max(0.0F, emitter.buoyancy);
+        emitter.drag = std::max(0.0F, emitter.drag);
+        emitter.turbulence = std::max(0.0F, emitter.turbulence);
+        emitter.collisionRadius = std::max(0.0F, emitter.collisionRadius);
 
         if (changed) {
             scene.editor().modify<Engine::SmokeEmitterComponent>(selected,
@@ -798,7 +798,7 @@ bool ComponentsPanel::draw(Engine::ScenePreset &scene, const Engine::Entity sele
         char className[260]{};
         std::snprintf(className, sizeof(className), "%s", script.className.c_str());
         ImGui::TextDisabled("C++ script class");
-        ImGui::SetNextItemWidth(-1.0f);
+        ImGui::SetNextItemWidth(-1.0F);
         if (ImGui::InputText("##script-class", className, sizeof(className))) {
             scene.editor().modify<Engine::ScriptComponent>(selected, [&](auto &value) {
                 value.className = className;
@@ -838,7 +838,7 @@ bool ComponentsPanel::draw(Engine::ScenePreset &scene, const Engine::Entity sele
                                           : Engine::ColliderShape{Engine::RampCollider{}};
         }
         float offset[3] = {value.offset.x(), value.offset.y(), value.offset.z()};
-        if (ImGui::DragFloat3("Offset##collider", offset, 0.05f)) {
+        if (ImGui::DragFloat3("Offset##collider", offset, 0.05F)) {
             value.offset = {offset[0], offset[1], offset[2]};
             changed = true;
         }
@@ -848,27 +848,27 @@ bool ComponentsPanel::draw(Engine::ScenePreset &scene, const Engine::Entity sele
                 float extents[3] = {
                     colliderShape.halfExtents.x(), colliderShape.halfExtents.y(), colliderShape.halfExtents.z()
                 };
-                if (ImGui::DragFloat3("Half Extents##collider", extents, 0.05f, 0.001f, 1000.0f)) {
+                if (ImGui::DragFloat3("Half Extents##collider", extents, 0.05F, 0.001F, 1000.0F)) {
                     colliderShape.halfExtents = {
-                        std::max(0.001f, extents[0]), std::max(0.001f, extents[1]), std::max(0.001f, extents[2])
+                        std::max(0.001F, extents[0]), std::max(0.001F, extents[1]), std::max(0.001F, extents[2])
                     };
                     changed = true;
                 }
             } else if constexpr (std::is_same_v<Shape, Engine::SphereCollider>) {
-                changed |= ImGui::DragFloat("Radius##collider", &colliderShape.radius, 0.05f, 0.001f, 1000.0f);
-                colliderShape.radius = std::max(0.001f, colliderShape.radius);
+                changed |= ImGui::DragFloat("Radius##collider", &colliderShape.radius, 0.05F, 0.001F, 1000.0F);
+                colliderShape.radius = std::max(0.001F, colliderShape.radius);
             } else if constexpr (std::is_same_v<Shape, Engine::CapsuleCollider>) {
-                changed |= ImGui::DragFloat("Radius##collider", &colliderShape.radius, 0.05f, 0.001f, 1000.0f);
-                changed |= ImGui::DragFloat("Height##collider", &colliderShape.height, 0.05f, 0.001f, 1000.0f);
-                colliderShape.radius = std::max(0.001f, colliderShape.radius);
-                colliderShape.height = std::max(0.001f, colliderShape.height);
+                changed |= ImGui::DragFloat("Radius##collider", &colliderShape.radius, 0.05F, 0.001F, 1000.0F);
+                changed |= ImGui::DragFloat("Height##collider", &colliderShape.height, 0.05F, 0.001F, 1000.0F);
+                colliderShape.radius = std::max(0.001F, colliderShape.radius);
+                colliderShape.height = std::max(0.001F, colliderShape.height);
             }
         }, value.shape);
         changed |= ImGui::Checkbox("Is Trigger##collider", &value.isTrigger);
-        changed |= ImGui::DragFloat("Friction##collider", &value.friction, 0.01f, 0.0f, 10.0f);
-        changed |= ImGui::SliderFloat("Restitution##collider", &value.restitution, 0.0f, 1.0f);
-        value.friction = std::max(0.0f, value.friction);
-        value.restitution = std::clamp(value.restitution, 0.0f, 1.0f);
+        changed |= ImGui::DragFloat("Friction##collider", &value.friction, 0.01F, 0.0F, 10.0F);
+        changed |= ImGui::SliderFloat("Restitution##collider", &value.restitution, 0.0F, 1.0F);
+        value.friction = std::max(0.0F, value.friction);
+        value.restitution = std::clamp(value.restitution, 0.0F, 1.0F);
         if (changed)
             scene.editor().modify<Engine::ColliderComponent>(selected,
                                                              [&](auto &component) { component = value; });
@@ -887,8 +887,8 @@ bool ComponentsPanel::draw(Engine::ScenePreset &scene, const Engine::Entity sele
         }
         value.type = static_cast<Engine::RigidbodyType>(type);
         bool changed = ImGui::Checkbox("Use Gravity##rigidbody", &value.useGravity);
-        changed |= ImGui::DragFloat("Mass##rigidbody", &value.mass, 0.05f, 0.001f, 100000.0f);
-        value.mass = std::max(0.001f, value.mass);
+        changed |= ImGui::DragFloat("Mass##rigidbody", &value.mass, 0.05F, 0.001F, 100000.0F);
+        value.mass = std::max(0.001F, value.mass);
         if (changed || value.type != rigidbody.type) {
             scene.editor().modify<Engine::RigidbodyComponent>(selected,
                                                               [&](auto &component) { component = value; });
@@ -908,8 +908,8 @@ bool ComponentsPanel::draw(Engine::ScenePreset &scene, const Engine::Entity sele
     }
     ImGui::TextDisabled("COMPONENTS");
     ImGui::Spacing();
-    ImGui::SetNextItemWidth(-1.0f);
-    if (EditorButton("New Component", {-1.0f, 0.0f}).draw()) {
+    ImGui::SetNextItemWidth(-1.0F);
+    if (EditorButton("New Component", {-1.0F, 0.0F}).draw()) {
         ImGui::OpenPopup("Add Component");
     }
     if (ImGui::BeginPopup("Add Component")) {
@@ -945,13 +945,13 @@ bool ComponentsPanel::draw(Engine::ScenePreset &scene, const Engine::Entity sele
         if (hasSmokeEmitter) ImGui::TextDisabled("Smoke Emitter component already added");
         ImGui::EndPopup();
     }
-    if (EditorButton("Attach C++ Script", {-1.0f, 0.0f}).draw()) ImGui::OpenPopup("Attach C++ Script");
+    if (EditorButton("Attach C++ Script", {-1.0F, 0.0F}).draw()) ImGui::OpenPopup("Attach C++ Script");
     if (ImGui::BeginPopupModal("Attach C++ Script", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
         static char attachedClassName[128]{};
         ImGui::TextUnformatted("Enter the registered C++ script class name.");
         ImGui::InputTextWithHint("Class name", "CubeMovement", attachedClassName, sizeof(attachedClassName));
         const bool validName = attachedClassName[0] != '\0';
-        if (EditorButton("Attach", {100.0f, 0.0f}).draw() && validName) {
+        if (EditorButton("Attach", {100.0F, 0.0F}).draw() && validName) {
             if (!scene.editor().has<Engine::ScriptComponent>(selected)) {
                 scene.editor().add<Engine::ScriptComponent>(selected);
             }
@@ -964,19 +964,19 @@ bool ComponentsPanel::draw(Engine::ScenePreset &scene, const Engine::Entity sele
             ImGui::CloseCurrentPopup();
         }
         ImGui::SameLine();
-        if (EditorButton("Cancel", {100.0f, 0.0f}).draw()) {
+        if (EditorButton("Cancel", {100.0F, 0.0F}).draw()) {
             attachedClassName[0] = '\0';
             ImGui::CloseCurrentPopup();
         }
         ImGui::EndPopup();
     }
-    if (EditorButton("Create C++ Script", {-1.0f, 0.0f}).draw()) ImGui::OpenPopup("Create C++ Script");
+    if (EditorButton("Create C++ Script", {-1.0F, 0.0F}).draw()) ImGui::OpenPopup("Create C++ Script");
     if (ImGui::BeginPopupModal("Create C++ Script", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
         static char name[128]{};
         static std::string error;
         ImGui::TextUnformatted("Creates Sandbox/Source/Scripts/<Name>.h and .cpp");
         ImGui::InputTextWithHint("Class name", "PlayerController", name, sizeof(name));
-        if (!error.empty()) ImGui::TextColored({1, .3f, .3f, 1}, "%s", error.c_str());
+        if (!error.empty()) ImGui::TextColored({1, .3F, .3F, 1}, "%s", error.c_str());
         if (EditorButton("Create").draw() && EditorSceneSession::createCppScript(name, error)) {
             if (!scene.editor().has<Engine::ScriptComponent>(selected)) scene.editor().add<
                 Engine::ScriptComponent>(selected);
@@ -999,7 +999,7 @@ bool ComponentsPanel::draw(Engine::ScenePreset &scene, const Engine::Entity sele
     ImGui::PopID();
     const bool consumesMouseWheel = ImGui::IsWindowHovered(
                                         ImGuiHoveredFlags_AllowWhenBlockedByActiveItem) && ImGui::GetIO().MouseWheel !=
-                                    0.0f;
+                                    0.0F;
     ImGui::End();
     return consumesMouseWheel;
 }
@@ -1007,16 +1007,16 @@ bool ComponentsPanel::draw(Engine::ScenePreset &scene, const Engine::Entity sele
 void drawStatusBar(const Engine::ScenePreset &scene, const Engine::Entity selected,
                    const bool playing, const bool paused) {
     ImGuiViewport *viewport = ImGui::GetMainViewport();
-    ImGui::SetNextWindowPos({viewport->WorkPos.x, viewport->WorkPos.y + viewport->WorkSize.y - 27.0f});
-    ImGui::SetNextWindowSize({viewport->WorkSize.x, 27.0f});
+    ImGui::SetNextWindowPos({viewport->WorkPos.x, viewport->WorkPos.y + viewport->WorkSize.y - 27.0F});
+    ImGui::SetNextWindowSize({viewport->WorkSize.x, 27.0F});
     ImGui::Begin("##status-bar", nullptr, ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoDocking |
                                           ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoMove |
                                           ImGuiWindowFlags_NoNav);
     ImGui::TextColored(playing
                            ? (paused
-                                  ? ImVec4{0.95f, 0.68f, 0.24f, 1.0f}
-                                  : ImVec4{0.30f, 0.90f, 0.60f, 1.0f})
-                           : ImVec4{0.30f, 0.90f, 0.86f, 1.0f}, "●");
+                                  ? ImVec4{0.95F, 0.68F, 0.24F, 1.0F}
+                                  : ImVec4{0.30F, 0.90F, 0.60F, 1.0F})
+                           : ImVec4{0.30F, 0.90F, 0.86F, 1.0F}, "●");
     ImGui::SameLine();
     ImGui::TextUnformatted(playing ? (paused ? "Paused" : "Playing") : "Ready");
     ImGui::SameLine();
@@ -1043,7 +1043,7 @@ Engine::Entity drawEditorMenuBar(Engine::ScenePreset &scene, Engine::Renderer &r
 
     if (!ImGui::BeginMainMenuBar()) return Engine::NullEntity;
 
-    ImGui::PushStyleColor(ImGuiCol_Text, {0.30f, 0.90f, 0.86f, 1.0f});
+    ImGui::PushStyleColor(ImGuiCol_Text, {0.30F, 0.90F, 0.86F, 1.0F});
     ImGui::TextUnformatted("GAMENGINE");
     ImGui::PopStyleColor();
     ImGui::SameLine();
@@ -1114,7 +1114,7 @@ Engine::Entity drawEditorMenuBar(Engine::ScenePreset &scene, Engine::Renderer &r
 
     // Keep the most common action visible even when the File menu is closed.
     ImGui::SameLine();
-    ImGui::PushStyleColor(ImGuiCol_Button, {0.08f, 0.42f, 0.29f, 1.0f});
+    ImGui::PushStyleColor(ImGuiCol_Button, {0.08F, 0.42F, 0.29F, 1.0F});
     if (EditorButton(playing ? "  Stop  " : "  Play  ").draw()) {
         playToggleRequested = true;
     }
@@ -1176,7 +1176,7 @@ Engine::Entity drawEditorMenuBar(Engine::ScenePreset &scene, Engine::Renderer &r
 
         ImGui::TextUnformatted("Antialiasing");
         ImGui::Separator();
-        ImGui::SetNextItemWidth(230.0f);
+        ImGui::SetNextItemWidth(230.0F);
         if (ImGui::BeginCombo("Type", typeLabels[antialiasingType])) {
             for (int index = 0; index < 4; ++index) {
                 const bool isSelected = antialiasingType == index;
@@ -1199,7 +1199,7 @@ Engine::Entity drawEditorMenuBar(Engine::ScenePreset &scene, Engine::Renderer &r
 
         ImGui::Spacing();
         if (antialiasingType == 1) {
-            ImGui::SetNextItemWidth(230.0f);
+            ImGui::SetNextItemWidth(230.0F);
             if (ImGui::BeginCombo("Samples", msaaSamples == 2 ? sampleLabels[0] : sampleLabels[1])) {
                 for (const int samples: {2, 4}) {
                     const bool isSelected = msaaSamples == samples;
@@ -1217,8 +1217,8 @@ Engine::Entity drawEditorMenuBar(Engine::ScenePreset &scene, Engine::Renderer &r
             ImGui::TextDisabled("MSAA is currently supported by the renderer.");
         } else if (antialiasingType == 2 || antialiasingType == 3) {
             ImGui::BeginDisabled();
-            float placeholderValue = 1.0f;
-            ImGui::SliderFloat("Quality", &placeholderValue, 0.0f, 1.0f);
+            float placeholderValue = 1.0F;
+            ImGui::SliderFloat("Quality", &placeholderValue, 0.0F, 1.0F);
             ImGui::EndDisabled();
             ImGui::TextDisabled("Placeholder: this antialiasing type is not implemented yet.");
         } else {
@@ -1417,7 +1417,7 @@ int main() {
                 renderer.editorCameraYaw(),
                 renderer.editorCameraPitch(), showGameView, gizmoMode, playing);
             if (!playing && viewportInteraction.sceneClicked) {
-                constexpr float viewportAspect = 16.0f / 9.0f;
+                constexpr float viewportAspect = 16.0F / 9.0F;
                 selectedEntity = pickSceneEntity(scene, physicsSystem, renderer,
                                                  viewportInteraction.normalizedX,
                                                  viewportInteraction.normalizedY, viewportAspect);

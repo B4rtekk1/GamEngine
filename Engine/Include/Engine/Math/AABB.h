@@ -15,7 +15,7 @@ struct AABB {
     Vec3 max{};
 
     [[nodiscard]] static constexpr AABB unitCube() noexcept {
-        return {{-0.5f, -0.5f, -0.5f}, {0.5f, 0.5f, 0.5f}};
+        return {{-0.5F, -0.5F, -0.5F}, {0.5F, 0.5F, 0.5F}};
     }
 
     /** @brief Returns the enclosing world-space AABB after applying @p transform. */
@@ -36,7 +36,7 @@ struct AABB {
         for (const float x : {min.x(), max.x()}) {
             for (const float y : {min.y(), max.y()}) {
                 for (const float z : {min.z(), max.z()}) {
-                    const Vec3 point{transform * glm::vec4{x, y, z, 1.0f}};
+                    const Vec3 point{transform * glm::vec4{x, y, z, 1.0F}};
                     result.min.setX(std::min(result.min.x(), point.x()));
                     result.min.setY(std::min(result.min.y(), point.y()));
                     result.min.setZ(std::min(result.min.z(), point.z()));

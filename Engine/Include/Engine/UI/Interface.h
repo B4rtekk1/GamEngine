@@ -12,7 +12,7 @@
 namespace Engine::UI {
 
 struct ElementOptions {
-    Rect rect{0.0f, 0.0f, 100.0f, 100.0f};
+    Rect rect{0.0F, 0.0F, 100.0F, 100.0F};
     Math::Color color = Math::Color::white();
 };
 
@@ -68,7 +68,7 @@ inline ButtonElement& Interface::button(std::string_view text,
     caption.text = text;
     caption.color = Math::Color::white();
     auto textElement = std::make_unique<TextElement>(caption, *atlas_);
-    textElement->rectTransform.offsetMin = {0.0f, 0.0f};
+    textElement->rectTransform.offsetMin = {0.0F, 0.0F};
     textElement->rectTransform.offsetMax = {options.rect.width, options.rect.height};
     result.addChild(std::move(textElement));
     return result;

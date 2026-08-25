@@ -16,19 +16,19 @@
 namespace Engine {
 
 namespace {
-constexpr float RadiansToDegrees = 57.29577951308232f;
-constexpr float SolidSphereInertiaFactor = 0.4f;
+constexpr float RadiansToDegrees = 57.29577951308232F;
+constexpr float SolidSphereInertiaFactor = 0.4F;
 // Rolling resistance is much weaker than sliding Coulomb friction. This
 // factor maps the collider friction coefficient to a practical rolling
 // resistance coefficient for rigid spheres.
-constexpr float RollingResistanceScale = 0.05f;
+constexpr float RollingResistanceScale = 0.05F;
 // A perfectly inelastic side contact makes a rolling sphere appear glued to
 // a wall. Keep a subtle rebound on near-vertical surfaces while allowing
 // restitution-free floor contacts to remain stable.
-constexpr float MinimumSphereWallRestitution = 0.15f;
-constexpr float RestingBoxNormalSpeed = 0.2f;
-constexpr float RestingBoxTangentialSpeed = 0.1f;
-constexpr float RestingBoxAngularSpeedDegrees = 5.0f;
+constexpr float MinimumSphereWallRestitution = 0.15F;
+constexpr float RestingBoxNormalSpeed = 0.2F;
+constexpr float RestingBoxTangentialSpeed = 0.1F;
+constexpr float RestingBoxAngularSpeedDegrees = 5.0F;
 
 struct Aabb {
     Vec3 center;
@@ -44,7 +44,7 @@ struct SceneCollider {
     bool dynamic;
 };
 
-constexpr float BroadPhaseCellSize = 4.0f;
+constexpr float BroadPhaseCellSize = 4.0F;
 
 struct Grid final {
     std::unordered_map<std::int64_t, std::vector<std::size_t>> cells;
@@ -105,10 +105,10 @@ struct OrientedBox {
 };
 
 Quat boxRotation(const Transform& transform) {
-    const float toRadians = 1.0f / RadiansToDegrees;
-    return Quat::angleAxis(transform.rotation.x() * toRadians, {1.0f, 0.0f, 0.0f}) *
-           Quat::angleAxis(transform.rotation.y() * toRadians, {0.0f, 1.0f, 0.0f}) *
-           Quat::angleAxis(transform.rotation.z() * toRadians, {0.0f, 0.0f, 1.0f});
+    const float toRadians = 1.0F / RadiansToDegrees;
+    return Quat::angleAxis(transform.rotation.x() * toRadians, {1.0F, 0.0F, 0.0F}) *
+           Quat::angleAxis(transform.rotation.y() * toRadians, {0.0F, 1.0F, 0.0F}) *
+           Quat::angleAxis(transform.rotation.z() * toRadians, {0.0F, 0.0F, 1.0F});
 }
 
 OrientedBox orientedBox(const Transform& transform, const ColliderComponent& collider) {
@@ -117,9 +117,9 @@ OrientedBox orientedBox(const Transform& transform, const ColliderComponent& col
                      std::abs(transform.scale.z())};
     return {
         transform.position + rotation * (collider.offset * scale),
-        rotation * Vec3{1.0f, 0.0f, 0.0f},
-        rotation * Vec3{0.0f, 1.0f, 0.0f},
-        rotation * Vec3{0.0f, 0.0f, 1.0f},
+        rotation * Vec3{1.0F, 0.0F, 0.0F},
+        rotation * Vec3{0.0F, 1.0F, 0.0F},
+        rotation * Vec3{0.0F, 0.0F, 1.0F},
         std::get<BoxCollider>(collider.shape).halfExtents * scale
     };
 }
@@ -136,8 +136,8 @@ Vec3 boxSupportPoint(const OrientedBox& box, const Vec3& direction) {
         const float projection = dot(axis, direction);
         // A zero projection means the whole edge/face is a support feature;
         // its centroid is the physically stable representative contact.
-        if (std::abs(projection) > 1e-5f) {
-            result += axis * (projection < 0.0f ? -extent : extent);
+        if (std::abs(projection) > 1e-5F) {
+            result += axis * (projection < 0.0F ? -extent : extent);
         }
     };
     addAxis(box.axisX, box.halfExtents.x());
@@ -148,26 +148,26 @@ Vec3 boxSupportPoint(const OrientedBox& box, const Vec3& direction) {
 
 Vec3 applyInverseBoxInertia(const OrientedBox& box, const float mass,
                             const Vec3& worldVector) {
-    if (mass <= 0.0f) return {};
-    const float ix = mass / 3.0f *
+    if (mass <= 0.0F) return {};
+    const float ix = mass / 3.0F *
         (box.halfExtents.y() * box.halfExtents.y() +
          box.halfExtents.z() * box.halfExtents.z());
-    const float iy = mass / 3.0f *
+    const float iy = mass / 3.0F *
         (box.halfExtents.x() * box.halfExtents.x() +
          box.halfExtents.z() * box.halfExtents.z());
-    const float iz = mass / 3.0f *
+    const float iz = mass / 3.0F *
         (box.halfExtents.x() * box.halfExtents.x() +
          box.halfExtents.y() * box.halfExtents.y());
-    return box.axisX * (dot(worldVector, box.axisX) / std::max(ix, 1e-6f)) +
-           box.axisY * (dot(worldVector, box.axisY) / std::max(iy, 1e-6f)) +
-           box.axisZ * (dot(worldVector, box.axisZ) / std::max(iz, 1e-6f));
+    return box.axisX * (dot(worldVector, box.axisX) / std::max(ix, 1e-6F)) +
+           box.axisY * (dot(worldVector, box.axisY) / std::max(iy, 1e-6F)) +
+           box.axisZ * (dot(worldVector, box.axisZ) / std::max(iz, 1e-6F));
 }
 
 struct Contact {
     // The normal always points from body B towards body A. Keeping one
     // convention lets the response solver work for every collider pair.
     Vec3 normal;
-    float penetration = 0.0f;
+    float penetration = 0.0F;
     Vec3 point;
 };
 
@@ -184,7 +184,7 @@ Vec3 applyInverseInertia(const RigidbodyComponent& body,
                          const Transform& transform,
                          const ColliderComponent& collider,
                          const Vec3& worldVector) {
-    if (body.mass <= 0.0f || body.fixedRotation) return {};
+    if (body.mass <= 0.0F || body.fixedRotation) return {};
     if (std::holds_alternative<BoxCollider>(collider.shape)) {
         return applyInverseBoxInertia(
             orientedBox(transform, collider), body.mass, worldVector);
@@ -192,7 +192,7 @@ Vec3 applyInverseInertia(const RigidbodyComponent& body,
 
     const Vec3 scale{std::abs(transform.scale.x()), std::abs(transform.scale.y()),
                      std::abs(transform.scale.z())};
-    float inertia = 0.0f;
+    float inertia = 0.0F;
     if (const auto* sphere = std::get_if<SphereCollider>(&collider.shape)) {
         const float radius = sphere->radius * std::max({scale.x(), scale.y(), scale.z()});
         inertia = SolidSphereInertiaFactor * body.mass * radius * radius;
@@ -200,24 +200,24 @@ Vec3 applyInverseInertia(const RigidbodyComponent& body,
         const Vec3 extents = std::visit([&]<typename T>(const T& shape) {
             using Shape = std::decay_t<T>;
             if constexpr (std::is_same_v<Shape, CapsuleCollider>) {
-                return Vec3{shape.radius, shape.height * 0.5f, shape.radius} * scale;
+                return Vec3{shape.radius, shape.height * 0.5F, shape.radius} * scale;
             } else if constexpr (std::is_same_v<Shape, RampCollider>) {
                 return shape.halfExtents * scale;
             } else {
-                return Vec3{0.5f, 0.5f, 0.5f} * scale;
+                return Vec3{0.5F, 0.5F, 0.5F} * scale;
             }
         }, collider.shape);
-        inertia = body.mass / 3.0f *
+        inertia = body.mass / 3.0F *
             (extents.x() * extents.x() + extents.y() * extents.y() +
              extents.z() * extents.z());
     }
-    return inertia > 1e-6f ? worldVector * (1.0f / inertia) : Vec3{};
+    return inertia > 1e-6F ? worldVector * (1.0F / inertia) : Vec3{};
 }
 
 float inverseMass(const RigidbodyComponent* body) {
-    return body != nullptr && body->type == RigidbodyType::Dynamic && body->mass > 0.0f
-        ? 1.0f / body->mass
-        : 0.0f;
+    return body != nullptr && body->type == RigidbodyType::Dynamic && body->mass > 0.0F
+        ? 1.0F / body->mass
+        : 0.0F;
 }
 
 void resolveContact(RigidbodyComponent& bodyA, Transform& transformA,
@@ -229,13 +229,13 @@ void resolveContact(RigidbodyComponent& bodyA, Transform& transformA,
     const float inverseMassA = inverseMass(&bodyA);
     const float inverseMassB = inverseMass(bodyB);
     const float inverseMassSum = inverseMassA + inverseMassB;
-    if (inverseMassSum <= 0.0f) return;
+    if (inverseMassSum <= 0.0F) return;
 
     // Positional correction is mass-weighted, so the same code supports a
     // dynamic body against a static surface and two dynamic bodies.
     transformA.position += contact.normal *
         (contact.penetration * inverseMassA / inverseMassSum);
-    if (transformB != nullptr && inverseMassB > 0.0f) {
+    if (transformB != nullptr && inverseMassB > 0.0F) {
         transformB->position -= contact.normal *
             (contact.penetration * inverseMassB / inverseMassSum);
     }
@@ -246,9 +246,9 @@ void resolveContact(RigidbodyComponent& bodyA, Transform& transformA,
         : contact.point;
     const Vec3 leverA = contact.point - centerA;
     const Vec3 leverB = contact.point - centerB;
-    Vec3 angularA = bodyA.angularVelocity * (1.0f / RadiansToDegrees);
+    Vec3 angularA = bodyA.angularVelocity * (1.0F / RadiansToDegrees);
     Vec3 angularB = bodyB != nullptr
-        ? bodyB->angularVelocity * (1.0f / RadiansToDegrees)
+        ? bodyB->angularVelocity * (1.0F / RadiansToDegrees)
         : Vec3{};
 
     const auto relativeVelocity = [&] {
@@ -259,7 +259,7 @@ void resolveContact(RigidbodyComponent& bodyA, Transform& transformA,
         return velocityA - velocityB;
     };
     const auto angularDenominator = [&](const Vec3& direction) {
-        float result = 0.0f;
+        float result = 0.0F;
         if (!bodyA.fixedRotation) {
             result += dot(direction, cross(
                 applyInverseInertia(bodyA, transformA, colliderA,
@@ -278,7 +278,7 @@ void resolveContact(RigidbodyComponent& bodyA, Transform& transformA,
             angularA += applyInverseInertia(
                 bodyA, transformA, colliderA, cross(leverA, impulse));
         }
-        if (bodyB != nullptr && transformB != nullptr && inverseMassB > 0.0f) {
+        if (bodyB != nullptr && transformB != nullptr && inverseMassB > 0.0F) {
             bodyB->linearVelocity -= impulse * inverseMassB;
             if (!bodyB->fixedRotation) {
                 angularB -= applyInverseInertia(
@@ -288,25 +288,25 @@ void resolveContact(RigidbodyComponent& bodyA, Transform& transformA,
     };
 
     const float normalSpeed = dot(relativeVelocity(), contact.normal);
-    float normalImpulseMagnitude = 0.0f;
-    if (normalSpeed < 0.0f) {
-        normalImpulseMagnitude = -(1.0f + restitution) * normalSpeed /
-            std::max(inverseMassSum + angularDenominator(contact.normal), 1e-6f);
+    float normalImpulseMagnitude = 0.0F;
+    if (normalSpeed < 0.0F) {
+        normalImpulseMagnitude = -(1.0F + restitution) * normalSpeed /
+            std::max(inverseMassSum + angularDenominator(contact.normal), 1e-6F);
         applyImpulse(contact.normal * normalImpulseMagnitude);
     }
 
     // Spheres use the rolling constraint after contact resolution. Applying
     // Coulomb friction here as well would count the same contact twice.
     const float impulseFriction =
-        std::holds_alternative<SphereCollider>(colliderA.shape) ? 0.0f : friction;
+        std::holds_alternative<SphereCollider>(colliderA.shape) ? 0.0F : friction;
     Vec3 tangent = relativeVelocity() -
         contact.normal * dot(relativeVelocity(), contact.normal);
     const float tangentSpeed = tangent.length();
-    if (tangentSpeed > 1e-6f && impulseFriction > 0.0f &&
-        normalImpulseMagnitude > 0.0f) {
-        tangent *= 1.0f / tangentSpeed;
+    if (tangentSpeed > 1e-6F && impulseFriction > 0.0F &&
+        normalImpulseMagnitude > 0.0F) {
+        tangent *= 1.0F / tangentSpeed;
         const float unconstrainedImpulse = -dot(relativeVelocity(), tangent) /
-            std::max(inverseMassSum + angularDenominator(tangent), 1e-6f);
+            std::max(inverseMassSum + angularDenominator(tangent), 1e-6F);
         const float frictionImpulse = std::clamp(
             unconstrainedImpulse,
             -impulseFriction * normalImpulseMagnitude,
@@ -332,7 +332,7 @@ Vec3 colliderExtents(const ColliderComponent& collider) {
         } else if constexpr (std::is_same_v<Shape, RampCollider>) {
             return shape.halfExtents;
         } else {
-            return Vec3{shape.radius, shape.height * 0.5f, shape.radius};
+            return Vec3{shape.radius, shape.height * 0.5F, shape.radius};
         }
     }, collider.shape);
 }
@@ -373,7 +373,7 @@ float rampTopAt(const Aabb& ramp, const Vec3& point, const float yawRadians) {
 
 Vec3 rampSurfaceNormal(const Aabb& ramp, const float yawRadians) {
     const float localZ = -ramp.extents.y() / ramp.extents.z();
-    return Vec3{std::sin(yawRadians) * localZ, 1.0f,
+    return Vec3{std::sin(yawRadians) * localZ, 1.0F,
                 std::cos(yawRadians) * localZ}.normalized();
 }
 
@@ -396,9 +396,9 @@ Vec3 rampWorldDirection(const Vec3& localDirection, const float yawRadians) {
 std::array<Vec3, 8> boxVertices(const OrientedBox& box) {
     std::array<Vec3, 8> vertices{};
     std::size_t index = 0;
-    for (const float x : {-1.0f, 1.0f}) {
-        for (const float y : {-1.0f, 1.0f}) {
-            for (const float z : {-1.0f, 1.0f}) {
+    for (const float x : {-1.0F, 1.0F}) {
+        for (const float y : {-1.0F, 1.0F}) {
+            for (const float z : {-1.0F, 1.0F}) {
                 vertices[index++] = box.center +
                     box.axisX * (x * box.halfExtents.x()) +
                     box.axisY * (y * box.halfExtents.y()) +
@@ -438,8 +438,8 @@ std::pair<float, float> projectedRange(
 
 std::optional<Contact> boxRampContact(
     const OrientedBox& box, const Aabb& ramp, const float yawRadians) {
-    if (ramp.extents.x() <= 0.0f || ramp.extents.y() <= 0.0f ||
-        ramp.extents.z() <= 0.0f) {
+    if (ramp.extents.x() <= 0.0F || ramp.extents.y() <= 0.0F ||
+        ramp.extents.z() <= 0.0F) {
         return std::nullopt;
     }
 
@@ -448,29 +448,29 @@ std::optional<Contact> boxRampContact(
     const float slope = ramp.extents.y() / ramp.extents.z();
     const std::array<Vec3, 3> boxAxes{box.axisX, box.axisY, box.axisZ};
     const std::array<Vec3, 4> rampFaceAxes{
-        rampWorldDirection({1.0f, 0.0f, 0.0f}, yawRadians),
-        rampWorldDirection({0.0f, 1.0f, 0.0f}, yawRadians),
-        rampWorldDirection({0.0f, 0.0f, 1.0f}, yawRadians),
-        rampWorldDirection({0.0f, 1.0f, -slope}, yawRadians).normalized()
+        rampWorldDirection({1.0F, 0.0F, 0.0F}, yawRadians),
+        rampWorldDirection({0.0F, 1.0F, 0.0F}, yawRadians),
+        rampWorldDirection({0.0F, 0.0F, 1.0F}, yawRadians),
+        rampWorldDirection({0.0F, 1.0F, -slope}, yawRadians).normalized()
     };
     const std::array<Vec3, 4> rampEdgeAxes{
-        rampWorldDirection({1.0f, 0.0f, 0.0f}, yawRadians),
-        rampWorldDirection({0.0f, 1.0f, 0.0f}, yawRadians),
-        rampWorldDirection({0.0f, 0.0f, 1.0f}, yawRadians),
-        rampWorldDirection({0.0f, slope, 1.0f}, yawRadians).normalized()
+        rampWorldDirection({1.0F, 0.0F, 0.0F}, yawRadians),
+        rampWorldDirection({0.0F, 1.0F, 0.0F}, yawRadians),
+        rampWorldDirection({0.0F, 0.0F, 1.0F}, yawRadians),
+        rampWorldDirection({0.0F, slope, 1.0F}, yawRadians).normalized()
     };
 
     float smallestOverlap = INFINITY;
     Vec3 smallestAxis{};
     const auto testAxis = [&](Vec3 axis) {
         const float length = axis.length();
-        if (length <= 1e-5f) return true;
-        axis *= 1.0f / length;
+        if (length <= 1e-5F) return true;
+        axis *= 1.0F / length;
         const auto [boxMinimum, boxMaximum] = projectedRange(boxPoints, axis);
         const auto [rampMinimum, rampMaximum] = projectedRange(rampPoints, axis);
         const float overlap = std::min(boxMaximum, rampMaximum) -
             std::max(boxMinimum, rampMinimum);
-        if (overlap <= 0.0f) return false;
+        if (overlap <= 0.0F) return false;
         if (overlap < smallestOverlap) {
             smallestOverlap = overlap;
             smallestAxis = axis;
@@ -486,13 +486,13 @@ std::optional<Contact> boxRampContact(
         }
     }
 
-    if (dot(smallestAxis, box.center - ramp.center) < 0.0f) {
-        smallestAxis *= -1.0f;
+    if (dot(smallestAxis, box.center - ramp.center) < 0.0F) {
+        smallestAxis *= -1.0F;
     }
     return Contact{
         smallestAxis,
         smallestOverlap,
-        boxSupportPoint(box, smallestAxis * -1.0f)
+        boxSupportPoint(box, smallestAxis * -1.0F)
     };
 }
 
@@ -503,7 +503,7 @@ std::optional<Contact> boxBoxContact(
         box.extents.x() + other.extents.x() - std::abs(separation.x()),
         box.extents.y() + other.extents.y() - std::abs(separation.y()),
         box.extents.z() + other.extents.z() - std::abs(separation.z())};
-    if (overlap.x() <= 0.0f || overlap.y() <= 0.0f || overlap.z() <= 0.0f) {
+    if (overlap.x() <= 0.0F || overlap.y() <= 0.0F || overlap.z() <= 0.0F) {
         return std::nullopt;
     }
 
@@ -536,11 +536,11 @@ std::optional<Contact> boxBoxContact(
         selectedPenetration = penetrations[selectedAxis];
     }
 
-    const float sign = current[selectedAxis] < 0.0f ? -1.0f : 1.0f;
+    const float sign = current[selectedAxis] < 0.0F ? -1.0F : 1.0F;
     Vec3 normal{};
-    if (selectedAxis == 0) normal = {sign, 0.0f, 0.0f};
-    else if (selectedAxis == 1) normal = {0.0f, sign, 0.0f};
-    else normal = {0.0f, 0.0f, sign};
+    if (selectedAxis == 0) normal = {sign, 0.0F, 0.0F};
+    else if (selectedAxis == 1) normal = {0.0F, sign, 0.0F};
+    else normal = {0.0F, 0.0F, sign};
     return Contact{normal, selectedPenetration};
 }
 
@@ -555,9 +555,9 @@ std::optional<Contact> sphereBoxContact(
                    box.center.z() + box.extents.z())};
     const Vec3 separation = sphereCenter - closest;
     const float distance = separation.length();
-    if (distance > 1e-6f) {
+    if (distance > 1e-6F) {
         if (distance >= sphereRadius) return std::nullopt;
-        return Contact{separation * (1.0f / distance), sphereRadius - distance};
+        return Contact{separation * (1.0F / distance), sphereRadius - distance};
     }
 
     // The sphere center is inside the box. Push it through the nearest face;
@@ -567,14 +567,14 @@ std::optional<Contact> sphereBoxContact(
     const float yDistance = box.extents.y() - std::abs(local.y());
     const float zDistance = box.extents.z() - std::abs(local.z());
     if (xDistance <= yDistance && xDistance <= zDistance) {
-        return Contact{{local.x() < 0.0f ? -1.0f : 1.0f, 0.0f, 0.0f},
+        return Contact{{local.x() < 0.0F ? -1.0F : 1.0F, 0.0F, 0.0F},
                        sphereRadius + xDistance};
     }
     if (yDistance <= zDistance) {
-        return Contact{{0.0f, local.y() < 0.0f ? -1.0f : 1.0f, 0.0f},
+        return Contact{{0.0F, local.y() < 0.0F ? -1.0F : 1.0F, 0.0F},
                        sphereRadius + yDistance};
     }
-    return Contact{{0.0f, 0.0f, local.z() < 0.0f ? -1.0f : 1.0f},
+    return Contact{{0.0F, 0.0F, local.z() < 0.0F ? -1.0F : 1.0F},
                    sphereRadius + zDistance};
 }
 
@@ -597,23 +597,23 @@ std::optional<Contact> sphereOrientedBoxContact(
         box.axisZ * closestLocal.z();
     const Vec3 separation = sphereCenter - closest;
     const float distance = separation.length();
-    if (distance > 1e-6f) {
+    if (distance > 1e-6F) {
         if (distance >= sphereRadius) return std::nullopt;
-        return Contact{separation * (1.0f / distance), sphereRadius - distance};
+        return Contact{separation * (1.0F / distance), sphereRadius - distance};
     }
 
     const float xDistance = box.halfExtents.x() - std::abs(local.x());
     const float yDistance = box.halfExtents.y() - std::abs(local.y());
     const float zDistance = box.halfExtents.z() - std::abs(local.z());
     if (xDistance <= yDistance && xDistance <= zDistance) {
-        return Contact{box.axisX * (local.x() < 0.0f ? -1.0f : 1.0f),
+        return Contact{box.axisX * (local.x() < 0.0F ? -1.0F : 1.0F),
                        sphereRadius + xDistance};
     }
     if (yDistance <= zDistance) {
-        return Contact{box.axisY * (local.y() < 0.0f ? -1.0f : 1.0f),
+        return Contact{box.axisY * (local.y() < 0.0F ? -1.0F : 1.0F),
                        sphereRadius + yDistance};
     }
-    return Contact{box.axisZ * (local.z() < 0.0f ? -1.0f : 1.0f),
+    return Contact{box.axisZ * (local.z() < 0.0F ? -1.0F : 1.0F),
                    sphereRadius + zDistance};
 }
 
@@ -624,16 +624,16 @@ std::optional<Contact> sphereSphereContact(
     const float distance = separation.length();
     const float combinedRadius = radius + otherRadius;
     if (distance >= combinedRadius) return std::nullopt;
-    const Vec3 normal = distance > 1e-6f
-        ? separation * (1.0f / distance)
-        : Vec3{0.0f, 1.0f, 0.0f};
+    const Vec3 normal = distance > 1e-6F
+        ? separation * (1.0F / distance)
+        : Vec3{0.0F, 1.0F, 0.0F};
     return Contact{normal, combinedRadius - distance};
 }
 
 std::optional<Contact> sphereCapsuleContact(
     const Vec3& center, const float radius, const Aabb& capsule) {
     const float capsuleRadius = std::max(capsule.extents.x(), capsule.extents.z());
-    const float segmentHalfHeight = std::max(0.0f, capsule.extents.y() - capsuleRadius);
+    const float segmentHalfHeight = std::max(0.0F, capsule.extents.y() - capsuleRadius);
     const Vec3 closest{capsule.center.x(),
         std::clamp(center.y(), capsule.center.y() - segmentHalfHeight,
                    capsule.center.y() + segmentHalfHeight),
@@ -642,9 +642,9 @@ std::optional<Contact> sphereCapsuleContact(
     const float distance = separation.length();
     const float combinedRadius = radius + capsuleRadius;
     if (distance >= combinedRadius) return std::nullopt;
-    const Vec3 normal = distance > 1e-6f
-        ? separation * (1.0f / distance)
-        : Vec3{0.0f, 1.0f, 0.0f};
+    const Vec3 normal = distance > 1e-6F
+        ? separation * (1.0F / distance)
+        : Vec3{0.0F, 1.0F, 0.0F};
     return Contact{normal, combinedRadius - distance};
 }
 
@@ -668,7 +668,7 @@ std::optional<Contact> sphereColliderContact(
 std::optional<Contact> sphereRampContact(
     const Aabb& ramp, const Vec3& sphereCenter, const float radius,
     const Vec3& previousCenter, const float yawRadians) {
-    if (radius <= 0.0f || ramp.extents.z() <= 0.0f) return std::nullopt;
+    if (radius <= 0.0F || ramp.extents.z() <= 0.0F) return std::nullopt;
 
     const Vec3 local = rampLocalPosition(ramp, sphereCenter, yawRadians);
     const Vec3 previousLocal = rampLocalPosition(ramp, previousCenter, yawRadians);
@@ -677,24 +677,24 @@ std::optional<Contact> sphereRampContact(
     // Ignore contacts entered through the solid underside. A small amount of
     // penetration is allowed so that discrete time steps do not lose a valid
     // contact with the sloped face.
-    const float planeScale = std::sqrt(1.0f + slope * slope);
+    const float planeScale = std::sqrt(1.0F + slope * slope);
     const float previousPlaneDistance =
         (previousLocal.y() - slope * previousLocal.z()) / planeScale;
     if (previousPlaneDistance < -radius) return std::nullopt;
 
     const float closestX = std::clamp(local.x(), -ramp.extents.x(), ramp.extents.x());
     const float closestZ = std::clamp(
-        (local.z() + slope * local.y()) / (1.0f + slope * slope),
+        (local.z() + slope * local.y()) / (1.0F + slope * slope),
         -ramp.extents.z(), ramp.extents.z());
     const Vec3 closestPoint{closestX, slope * closestZ, closestZ};
     const Vec3 separation = local - closestPoint;
     const float distance = separation.length();
     if (distance >= radius) return std::nullopt;
 
-    const Vec3 localNormal = distance > 1e-6f
-        ? separation * (1.0f / distance)
-        : Vec3{0.0f, 1.0f, -slope}.normalized();
-    if (localNormal.y() <= 0.0f) return std::nullopt;
+    const Vec3 localNormal = distance > 1e-6F
+        ? separation * (1.0F / distance)
+        : Vec3{0.0F, 1.0F, -slope}.normalized();
+    if (localNormal.y() <= 0.0F) return std::nullopt;
 
     return Contact{
         rampWorldDirection(localNormal, yawRadians).normalized(),
@@ -715,8 +715,8 @@ struct PhysicsSystem::BroadPhaseCache {
 
 void PhysicsSystem::update(Scene& scene, const float deltaTime) const {
     Registry& registry = scene.registry();
-    const float dt = std::max(deltaTime, 0.0f);
-    if (dt == 0.0f) return;
+    const float dt = std::max(deltaTime, 0.0F);
+    if (dt == 0.0F) return;
 
     std::vector<SceneCollider> colliders;
 
@@ -750,7 +750,7 @@ void PhysicsSystem::update(Scene& scene, const float deltaTime) const {
                 if (dynamic) return;
                 cache.staticColliders.push_back({entity, collider, transform,
                     worldAabb(transform, collider),
-                    transform.rotation.y() * 0.01745329251994329577f, false});
+                    transform.rotation.y() * 0.01745329251994329577F, false});
             });
     } else {
         // Dynamic bodies are allowed to mark their transforms as changed during
@@ -765,7 +765,7 @@ void PhysicsSystem::update(Scene& scene, const float deltaTime) const {
             if (!registry.has<RigidbodyComponent>(entity) ||
                 registry.get<RigidbodyComponent>(entity).type != RigidbodyType::Dynamic) return;
             colliders.push_back({entity, collider, transform, worldAabb(transform, collider),
-                transform.rotation.y() * 0.01745329251994329577f, true});
+                transform.rotation.y() * 0.01745329251994329577F, true});
         });
 
     Grid broadPhase;
@@ -786,7 +786,7 @@ void PhysicsSystem::update(Scene& scene, const float deltaTime) const {
             if (body.type != RigidbodyType::Dynamic) return;
 
             const Vec3 previousPosition = transform.position;
-            const float inverseMass = body.mass > 0.0f ? 1.0f / body.mass : 0.0f;
+            const float inverseMass = body.mass > 0.0F ? 1.0F / body.mass : 0.0F;
             Vec3 acceleration = body.force * inverseMass;
             if (body.useGravity) acceleration += gravity_;
             body.linearVelocity += acceleration * dt;
@@ -796,8 +796,8 @@ void PhysicsSystem::update(Scene& scene, const float deltaTime) const {
             transform.position += body.linearVelocity * dt;
 
             bool touchesSurface = false;
-            Vec3 surfaceNormal{0.0f, 1.0f, 0.0f};
-            float contactFriction = 0.0f;
+            Vec3 surfaceNormal{0.0F, 1.0F, 0.0F};
+            float contactFriction = 0.0F;
             if (registry.has<ColliderComponent>(entity)) {
                 const auto& collider = registry.get<ColliderComponent>(entity);
                 const bool isSphere = std::holds_alternative<SphereCollider>(collider.shape);
@@ -805,13 +805,13 @@ void PhysicsSystem::update(Scene& scene, const float deltaTime) const {
                 Aabb previousBodyBounds = bodyBounds;
                 previousBodyBounds.center += previousPosition - transform.position;
                 float contactHeight = -INFINITY;
-                Vec3 contactNormal{0.0f, 1.0f, 0.0f};
-                float selectedFriction = 0.0f;
-                float selectedRestitution = 0.0f;
+                Vec3 contactNormal{0.0F, 1.0F, 0.0F};
+                float selectedFriction = 0.0F;
+                float selectedRestitution = 0.0F;
                 const SceneCollider* selectedSurface = nullptr;
-                Vec3 rampNormal{0.0f, 1.0f, 0.0f};
-                float rampFriction = 0.0f;
-                float rampPenetration = 0.0f;
+                Vec3 rampNormal{0.0F, 1.0F, 0.0F};
+                float rampFriction = 0.0F;
+                float rampPenetration = 0.0F;
                 const SceneCollider* selectedRamp = nullptr;
                 candidates.clear();
                 ++queryStamp;
@@ -856,19 +856,19 @@ void PhysicsSystem::update(Scene& scene, const float deltaTime) const {
                             resolveContact(body, transform, collider,
                                 otherBody, otherTransform, otherCollider,
                                 Contact{contact->normal, contact->penetration,
-                                    boxSupportPoint(box, contact->normal * -1.0f)},
+                                    boxSupportPoint(box, contact->normal * -1.0F)},
                                 std::max(collider.restitution, otherCollider.restitution),
                                 std::sqrt(std::max(
-                                    0.0f, collider.friction * otherCollider.friction)));
+                                    0.0F, collider.friction * otherCollider.friction)));
                             if (other.dynamic) {
                                 registry.markChanged<Transform>(other.entity);
                             }
                             bodyBounds = worldAabb(transform, collider);
-                            if (contact->normal.y() > 1e-4f) {
+                            if (contact->normal.y() > 1e-4F) {
                                 touchesSurface = true;
                                 surfaceNormal = contact->normal;
                                 contactFriction = std::sqrt(std::max(
-                                    0.0f, collider.friction * otherCollider.friction));
+                                    0.0F, collider.friction * otherCollider.friction));
                             }
                             continue;
                         }
@@ -884,7 +884,7 @@ void PhysicsSystem::update(Scene& scene, const float deltaTime) const {
                         if (contact && contact->penetration > rampPenetration) {
                             rampPenetration = contact->penetration;
                             rampNormal = contact->normal;
-                            rampFriction = std::sqrt(std::max(0.0f,
+                            rampFriction = std::sqrt(std::max(0.0F,
                                 collider.friction * otherCollider.friction));
                             selectedRamp = &other;
                         }
@@ -899,13 +899,13 @@ void PhysicsSystem::update(Scene& scene, const float deltaTime) const {
                                 Contact{contact->normal, contact->penetration, contact->point},
                                 std::max(collider.restitution, otherCollider.restitution),
                                 std::sqrt(std::max(
-                                    0.0f, collider.friction * otherCollider.friction)));
+                                    0.0F, collider.friction * otherCollider.friction)));
                             bodyBounds = worldAabb(transform, collider);
-                            if (contact->normal.y() > 1e-4f) {
+                            if (contact->normal.y() > 1e-4F) {
                                 touchesSurface = true;
                                 surfaceNormal = contact->normal;
                                 contactFriction = std::sqrt(std::max(
-                                    0.0f, collider.friction * otherCollider.friction));
+                                    0.0F, collider.friction * otherCollider.friction));
                             }
                         }
                         continue;
@@ -932,7 +932,7 @@ void PhysicsSystem::update(Scene& scene, const float deltaTime) const {
                                 : nullptr;
                             float restitution = std::max(
                                 collider.restitution, otherCollider.restitution);
-                            if (!other.dynamic && std::abs(contact->normal.y()) < 0.5f) {
+                            if (!other.dynamic && std::abs(contact->normal.y()) < 0.5F) {
                                 restitution = std::max(
                                     restitution, MinimumSphereWallRestitution);
                             }
@@ -943,16 +943,16 @@ void PhysicsSystem::update(Scene& scene, const float deltaTime) const {
                                         contact->normal * bodyBounds.extents.y()},
                                 restitution,
                                 std::sqrt(std::max(
-                                    0.0f, collider.friction * otherCollider.friction)));
+                                    0.0F, collider.friction * otherCollider.friction)));
                             if (other.dynamic) {
                                 registry.markChanged<Transform>(other.entity);
                             }
                             bodyBounds = worldAabb(transform, collider);
-                            if (contact->normal.y() > 1e-4f) {
+                            if (contact->normal.y() > 1e-4F) {
                                 touchesSurface = true;
                                 surfaceNormal = contact->normal;
                                 contactFriction = std::sqrt(std::max(
-                                    0.0f, collider.friction * otherCollider.friction));
+                                    0.0F, collider.friction * otherCollider.friction));
                             }
                             continue;
                         }
@@ -969,7 +969,7 @@ void PhysicsSystem::update(Scene& scene, const float deltaTime) const {
                         ? rampTopAt(other.bounds, bodyBounds.center, other.yawRadians)
                         : other.bounds.center.y() + other.bounds.extents.y();
                     const Vec3 normal = isRamp ? rampSurfaceNormal(other.bounds, other.yawRadians)
-                                               : Vec3{0.0f, 1.0f, 0.0f};
+                                               : Vec3{0.0F, 1.0F, 0.0F};
                     const bool isBox = std::holds_alternative<BoxCollider>(collider.shape);
                     const float supportRadius = isBox
                         ? boxSupportRadius(orientedBox(transform, collider), normal)
@@ -984,18 +984,18 @@ void PhysicsSystem::update(Scene& scene, const float deltaTime) const {
                         ? previousTop + supportRadius / normal.y()
                         : previousTop + supportRadius;
                     const bool approachedFromAbove =
-                        previousPosition.y() >= previousTargetY - 1e-4f ||
+                        previousPosition.y() >= previousTargetY - 1e-4F ||
                         (isBox && previousPosition.y() >= previousTop);
-                    if (transform.position.y() <= targetCenterY + 1e-4f &&
+                    if (transform.position.y() <= targetCenterY + 1e-4F &&
                         approachedFromAbove &&
-                        dot(body.linearVelocity, normal) <= 1e-4f &&
+                        dot(body.linearVelocity, normal) <= 1e-4F &&
                         targetCenterY > contactHeight) {
                         // Resolve only the highest eligible surface. Resolving
                         // each ramp immediately could let a later, lower
                         // contact pull the sphere through an adjacent ramp.
                         contactHeight = targetCenterY;
                         contactNormal = normal;
-                        selectedFriction = std::sqrt(std::max(0.0f,
+                        selectedFriction = std::sqrt(std::max(0.0F,
                             collider.friction * otherCollider.friction));
                         selectedRestitution = std::max(
                             collider.restitution, otherCollider.restitution);
@@ -1003,7 +1003,7 @@ void PhysicsSystem::update(Scene& scene, const float deltaTime) const {
                     }
                 }
 
-                if (rampPenetration > 0.0f && selectedRamp != nullptr) {
+                if (rampPenetration > 0.0F && selectedRamp != nullptr) {
                     const Vec3 contactPoint = bodyBounds.center -
                         rampNormal * bodyBounds.extents.y();
                     resolveContact(body, transform, collider,
@@ -1024,12 +1024,12 @@ void PhysicsSystem::update(Scene& scene, const float deltaTime) const {
                 // frame and let the sphere tunnel below it.
                 if (contactHeight > -INFINITY && selectedSurface != nullptr) {
                     const float penetration = std::max(
-                        0.0f, contactHeight - transform.position.y()) /
-                        std::max(contactNormal.y(), 1e-6f);
+                        0.0F, contactHeight - transform.position.y()) /
+                        std::max(contactNormal.y(), 1e-6F);
                     const Vec3 contactPoint =
                         std::holds_alternative<BoxCollider>(collider.shape)
                             ? boxSupportPoint(orientedBox(transform, collider),
-                                contactNormal * -1.0f)
+                                contactNormal * -1.0F)
                             : bodyBounds.center -
                                 contactNormal * bodyBounds.extents.y();
                     resolveContact(body, transform, collider,
@@ -1045,7 +1045,7 @@ void PhysicsSystem::update(Scene& scene, const float deltaTime) const {
                 if (touchesSurface && std::holds_alternative<SphereCollider>(collider.shape) &&
                     !body.fixedRotation) {
                     const float radius = bodyBounds.extents.y();
-                    if (radius > 0.0f) {
+                    if (radius > 0.0F) {
                         const Vec3 gravityParallel = body.useGravity
                             ? gravity_ - surfaceNormal * dot(gravity_, surfaceNormal)
                             : Vec3{};
@@ -1054,20 +1054,20 @@ void PhysicsSystem::update(Scene& scene, const float deltaTime) const {
                         // I = 2/5 mr^2, hence a = g_parallel / (1 + I/mr^2)
                         // = 5/7 g_parallel.
                         const float requiredFriction =
-                            SolidSphereInertiaFactor / (1.0f + SolidSphereInertiaFactor) *
+                            SolidSphereInertiaFactor / (1.0F + SolidSphereInertiaFactor) *
                             gravityParallel.length();
                         const float availableFriction = contactFriction *
                             std::abs(dot(gravity_, surfaceNormal));
-                        const bool rollsWithoutSlipping = contactFriction > 1e-5f &&
-                            availableFriction + 1e-5f >= requiredFriction;
+                        const bool rollsWithoutSlipping = contactFriction > 1e-5F &&
+                            availableFriction + 1e-5F >= requiredFriction;
                         if (rollsWithoutSlipping && body.useGravity) {
                             body.linearVelocity -= gravityParallel *
-                                (SolidSphereInertiaFactor / (1.0f + SolidSphereInertiaFactor) * dt);
+                                (SolidSphereInertiaFactor / (1.0F + SolidSphereInertiaFactor) * dt);
 
                             Vec3 tangentialVelocity = body.linearVelocity -
                                 surfaceNormal * dot(body.linearVelocity, surfaceNormal);
                             const float tangentialSpeed = tangentialVelocity.length();
-                            if (tangentialSpeed > 1e-6f) {
+                            if (tangentialSpeed > 1e-6F) {
                                 const float normalAcceleration =
                                     std::abs(dot(gravity_, surfaceNormal));
                                 const float speedLoss = std::min(
@@ -1114,10 +1114,10 @@ void PhysicsSystem::update(Scene& scene, const float deltaTime) const {
             }
             // Damping is expressed per second and applied exponentially so
             // that the result remains stable when the frame rate changes.
-            body.linearVelocity *= std::exp(-std::max(body.linearDamping, 0.0f) * dt);
+            body.linearVelocity *= std::exp(-std::max(body.linearDamping, 0.0F) * dt);
             if (!body.fixedRotation) {
                 body.angularVelocity *=
-                    std::exp(-std::max(body.angularDamping, 0.0f) * dt);
+                    std::exp(-std::max(body.angularDamping, 0.0F) * dt);
             }
             // addForce/addTorque are frame-step inputs. A script that wants a
             // persistent force should add it again each frame.
@@ -1129,40 +1129,40 @@ void PhysicsSystem::update(Scene& scene, const float deltaTime) const {
 std::optional<RaycastHit> PhysicsSystem::raycast(
     Scene& scene, const Vec3 origin, Vec3 direction, const float maxDistance) const {
     const float directionLength = direction.length();
-    if (directionLength <= 0.0f || maxDistance <= 0.0f) return std::nullopt;
-    direction *= 1.0f / directionLength;
+    if (directionLength <= 0.0F || maxDistance <= 0.0F) return std::nullopt;
+    direction *= 1.0F / directionLength;
 
     std::optional<RaycastHit> result;
     float nearest = maxDistance;
     scene.registry().view<ColliderComponent, Transform>(
         [&](const Entity entity, const ColliderComponent& collider, const Transform& transform) {
             const Aabb bounds = worldAabb(transform, collider);
-            float nearHit = 0.0f;
+            float nearHit = 0.0F;
             float farHit = nearest;
             int hitAxis = -1;
-            float hitSign = 0.0f;
+            float hitSign = 0.0F;
             const float origins[3]{origin.x(), origin.y(), origin.z()};
             const float directions[3]{direction.x(), direction.y(), direction.z()};
             const float centers[3]{bounds.center.x(), bounds.center.y(), bounds.center.z()};
             const float extents[3]{bounds.extents.x(), bounds.extents.y(), bounds.extents.z()};
 
             for (int axis = 0; axis < 3; ++axis) {
-                if (std::abs(directions[axis]) < 1e-6f) {
+                if (std::abs(directions[axis]) < 1e-6F) {
                     if (origins[axis] < centers[axis] - extents[axis] ||
                         origins[axis] > centers[axis] + extents[axis]) return;
                     continue;
                 }
-                const float inv = 1.0f / directions[axis];
+                const float inv = 1.0F / directions[axis];
                 float t0 = (centers[axis] - extents[axis] - origins[axis]) * inv;
                 float t1 = (centers[axis] + extents[axis] - origins[axis]) * inv;
-                const float sign = directions[axis] > 0.0f ? -1.0f : 1.0f;
+                const float sign = directions[axis] > 0.0F ? -1.0F : 1.0F;
                 if (t0 > t1) std::swap(t0, t1);
                 if (t0 > nearHit) { nearHit = t0; hitAxis = axis; hitSign = sign; }
                 farHit = std::min(farHit, t1);
                 if (nearHit > farHit) return;
             }
-            if (farHit < 0.0f || nearHit >= nearest) return;
-            if (nearHit < 0.0f) nearHit = 0.0f;
+            if (farHit < 0.0F || nearHit >= nearest) return;
+            if (nearHit < 0.0F) nearHit = 0.0F;
             const Vec3 point = origin + direction * nearHit;
             Vec3 normal{};
             if (hitAxis == 0) normal = {hitSign, 0, 0};

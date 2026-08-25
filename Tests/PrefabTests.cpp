@@ -9,13 +9,13 @@ int main() {
     using namespace Engine;
 
     PBRMaterial material{};
-    material.baseColor = {0.2f, 0.4f, 0.6f, 1.0f};
-    material.metallic = 0.8f;
-    material.roughness = 0.3f;
+    material.baseColor = {0.2F, 0.4F, 0.6F, 1.0F};
+    material.metallic = 0.8F;
+    material.roughness = 0.3F;
 
     Prefab cube = Prefab::cube(material);
     if (!cube.mesh() || cube.mesh()->vertices.size() != 24 || cube.mesh()->indices.size() != 36 ||
-        cube.material().metallic != 0.8f || cube.material().roughness != 0.3f ||
+        cube.material().metallic != 0.8F || cube.material().roughness != 0.3F ||
         !cube.castShadow() || cube.cullingBatch() != 0) return 1;
     cube.setCastShadow(false);
     cube.setCullingBatch(7);
@@ -27,7 +27,7 @@ int main() {
     if (!actor.valid() || !object || !object->isRenderable() ||
         object->meshRenderer().mesh != cube.mesh() || object->meshRenderer().castShadow ||
         object->meshRenderer().cullingBatch != 7 ||
-        object->meshRenderer().material.baseColor.g() != 0.4f) return 3;
+        object->meshRenderer().material.baseColor.g() != 0.4F) return 3;
 
     const Actor convenience = scene.createCube("Convenience");
     if (!convenience.valid() || !scene.find("Convenience")->isRenderable() ||

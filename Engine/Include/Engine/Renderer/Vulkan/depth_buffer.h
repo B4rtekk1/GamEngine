@@ -86,6 +86,11 @@ public:
     [[nodiscard]] VkSampler sampler() const noexcept { return sampler_; }
 
 private:
+    struct MemoryTypeQuery {
+        uint32_t typeFilter;
+        VkMemoryPropertyFlags requiredProperties;
+    };
+
     VkPhysicalDevice physicalDevice_ = VK_NULL_HANDLE;
     VkDevice device_ = VK_NULL_HANDLE;
 
@@ -102,8 +107,7 @@ private:
      * @return Index of a compatible memory type.
      */
     [[nodiscard]] uint32_t findMemoryType(
-        uint32_t typeFilter,
-        VkMemoryPropertyFlags requiredProperties) const;
+        const MemoryTypeQuery& query) const;
 
     /**
      * @brief Selects a supported depth format for the requested sample count.

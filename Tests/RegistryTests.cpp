@@ -102,7 +102,7 @@ int main()
         });
     const auto& meshRenderer = registry.get<Engine::MeshRendererComponent>(renderable);
     if (!meshRenderer.hasMesh() || meshRenderer.castShadow ||
-        meshRenderer.material.roughness != 0.55f) {
+        meshRenderer.material.roughness != 0.55F) {
         return 2;
     }
 
@@ -119,7 +119,7 @@ int main()
     }
 
     const Entity source = registry.create();
-    registry.add<Engine::TransformComponent>(source).position.setX(12.0f);
+    registry.add<Engine::TransformComponent>(source).position.setX(12.0F);
     registry.add<Engine::MeshRendererComponent>(source,
         Engine::MeshRendererComponent{
             .mesh = std::make_shared<Engine::Mesh>(Engine::Cube::createMesh())});
@@ -128,17 +128,17 @@ int main()
     const Entity copy = registry.clone(source);
     if (copy == source || registry.size() != 1'004 || !registry.has<CloneOnly>(copy) ||
         registry.get<CloneOnly>(copy).value != 73 ||
-        registry.get<Engine::TransformComponent>(copy).position.x() != 12.0f ||
+        registry.get<Engine::TransformComponent>(copy).position.x() != 12.0F ||
         registry.get<Engine::MeshRendererComponent>(copy).mesh !=
             registry.get<Engine::MeshRendererComponent>(source).mesh) {
         return 5;
     }
 
     registry.modify<Engine::TransformComponent>(copy, [](auto& transform) {
-        transform.position.setX(99.0f);
+        transform.position.setX(99.0F);
     });
     registry.get<CloneOnly>(copy).value = 11;
-    if (registry.get<Engine::TransformComponent>(source).position.x() != 12.0f ||
+    if (registry.get<Engine::TransformComponent>(source).position.x() != 12.0F ||
         registry.get<CloneOnly>(source).value != 73) {
         return 6;
     }

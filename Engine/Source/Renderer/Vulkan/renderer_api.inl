@@ -1,4 +1,5 @@
 Renderer::~Renderer() = default;
+
 Renderer::Renderer(RenderConfig config)
     : optimizationFeatures_(config.features), antialiasingLevel_(config.antialiasing),
       state_(std::make_unique<State>()) {}
@@ -71,10 +72,10 @@ ViewportHandle Renderer::sceneViewport() const noexcept {
     return {reinterpret_cast<std::uintptr_t>(backend_ ? backend_->sceneViewportTexture() : VK_NULL_HANDLE)};
 }
 float Renderer::editorCameraYaw() const noexcept {
-    return backend_ ? backend_->editorCameraYaw() : 0.0f;
+    return backend_ ? backend_->editorCameraYaw() : 0.0F;
 }
 float Renderer::editorCameraPitch() const noexcept {
-    return backend_ ? backend_->editorCameraPitch() : 0.0f;
+    return backend_ ? backend_->editorCameraPitch() : 0.0F;
 }
 Vec3 Renderer::editorCameraPosition() const noexcept {
     return backend_ ? backend_->editorCameraPosition() : Vec3{};

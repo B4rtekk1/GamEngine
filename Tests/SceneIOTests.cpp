@@ -14,11 +14,11 @@ int main() {
 
     Scene source;
     Actor player = source.createActor("Player");
-    player.setPosition({4.0f, 5.0f, 6.0f});
-    player.setScale({2.0f, 3.0f, 4.0f});
-    player.addRigidbody(RigidbodyComponent{.mass = 3.0f, .useGravity = false});
-    player.addBoxCollider({0.25f, 0.5f, 0.75f});
-    player.setColliderMaterial(0.2f, 0.8f);
+    player.setPosition({4.0F, 5.0F, 6.0F});
+    player.setScale({2.0F, 3.0F, 4.0F});
+    player.addRigidbody(RigidbodyComponent{.mass = 3.0F, .useGravity = false});
+    player.addBoxCollider({0.25F, 0.5F, 0.75F});
+    player.setColliderMaterial(0.2F, 0.8F);
     player.addScript("PlayerScript", false);
     const Actor empty = source.createActor("Empty");
     source.save(scenePath);
@@ -29,8 +29,8 @@ int main() {
     if (loaded.objectCount() != 2 || !loaded.findActor("Player").valid() ||
         !loaded.findActor("Empty").valid() || loaded.findActor("Missing").valid()) return 2;
     const Actor loadedPlayer = loaded.findActor("Player");
-    if (loadedPlayer.position().x() != 4.0f || loadedPlayer.position().y() != 5.0f ||
-        loadedPlayer.position().z() != 6.0f || loadedPlayer.scale().z() != 4.0f ||
+    if (loadedPlayer.position().x() != 4.0F || loadedPlayer.position().y() != 5.0F ||
+        loadedPlayer.position().z() != 6.0F || loadedPlayer.scale().z() != 4.0F ||
         !loadedPlayer.hasRigidbody() || !loadedPlayer.hasCollider()) return 3;
 
     Scene unchanged;

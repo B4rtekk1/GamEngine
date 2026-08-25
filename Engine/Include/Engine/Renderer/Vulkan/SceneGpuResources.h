@@ -52,7 +52,7 @@ public:
     std::array<std::vector<std::size_t>, 2> dirtyMaterials;
     std::array<std::vector<std::size_t>, 2> dirtyCullingObjects;
     Vec3 sceneCenter{};
-    float sceneRadius{1.0f};
+    float sceneRadius{1.0F};
     bool hasShadowCasters{false};
 };
 

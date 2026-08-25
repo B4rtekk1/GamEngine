@@ -35,9 +35,9 @@ private:
     std::optional<Camera> camera_;
     bool mouseLookActive_{false};
     bool editorInputEnabled_{false};
-    Vec3 editorPosition_{8.0f, 6.0f, 8.0f};
-    float editorYaw_{-135.0f};
-    float editorPitch_{-28.0f};
+    Vec3 editorPosition_{8.0F, 6.0F, 8.0F};
+    float editorYaw_{-135.0F};
+    float editorPitch_{-28.0F};
 };
 
 } // namespace Engine

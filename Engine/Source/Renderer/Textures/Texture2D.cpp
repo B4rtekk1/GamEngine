@@ -253,7 +253,7 @@ Texture2D &Texture2D::operator=(Texture2D &&other) noexcept {
             samplerInfo.addressModeU = VK_SAMPLER_ADDRESS_MODE_REPEAT;
             samplerInfo.addressModeV = VK_SAMPLER_ADDRESS_MODE_REPEAT;
             samplerInfo.addressModeW = VK_SAMPLER_ADDRESS_MODE_REPEAT;
-            samplerInfo.minLod = 0.0f;
+            samplerInfo.minLod = 0.0F;
             samplerInfo.maxLod = static_cast<float>(mipLevels_ - 1);
             if (vkCreateSampler(device_, &samplerInfo, nullptr, &sampler_) != VK_SUCCESS) {
                 throw std::runtime_error("Could not create Texture2D sampler");

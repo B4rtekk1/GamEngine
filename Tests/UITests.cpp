@@ -15,26 +15,26 @@ int main() {
     using namespace Engine::UI;
 
     RectTransform transform;
-    transform.anchorMin = {0.25f, 0.5f};
-    transform.anchorMax = {0.75f, 1.0f};
-    transform.offsetMin = {10.0f, 20.0f};
-    transform.offsetMax = {-30.0f, -40.0f};
-    transform.calculate({100.0f, 50.0f, 800.0f, 600.0f});
-    if (!equal(transform.calculatedRect, {310.0f, 370.0f, 360.0f, 240.0f})) return 1;
+    transform.anchorMin = {0.25F, 0.5F};
+    transform.anchorMax = {0.75F, 1.0F};
+    transform.offsetMin = {10.0F, 20.0F};
+    transform.offsetMax = {-30.0F, -40.0F};
+    transform.calculate({100.0F, 50.0F, 800.0F, 600.0F});
+    if (!equal(transform.calculatedRect, {310.0F, 370.0F, 360.0F, 240.0F})) return 1;
 
     auto parent = std::make_unique<UIElement>();
-    parent->rectTransform.offsetMin = {20.0f, 30.0f};
-    parent->rectTransform.offsetMax = {220.0f, 230.0f};
+    parent->rectTransform.offsetMin = {20.0F, 30.0F};
+    parent->rectTransform.offsetMax = {220.0F, 230.0F};
     auto child = std::make_unique<PanelElement>(Engine::Math::Color::red());
-    child->rectTransform.anchorMin = {0.5f, 0.5f};
-    child->rectTransform.anchorMax = {1.0f, 1.0f};
-    child->rectTransform.offsetMin = {5.0f, 6.0f};
-    child->rectTransform.offsetMax = {-7.0f, -8.0f};
+    child->rectTransform.anchorMin = {0.5F, 0.5F};
+    child->rectTransform.anchorMax = {1.0F, 1.0F};
+    child->rectTransform.offsetMin = {5.0F, 6.0F};
+    child->rectTransform.offsetMax = {-7.0F, -8.0F};
     PanelElement* childPointer = child.get();
     parent->addChild(std::move(child));
-    parent->updateLayout({0.0f, 0.0f, 400.0f, 300.0f});
-    if (!equal(parent->rectTransform.calculatedRect, {20.0f, 30.0f, 200.0f, 200.0f}) ||
-        !equal(childPointer->rectTransform.calculatedRect, {125.0f, 136.0f, 88.0f, 86.0f})) return 2;
+    parent->updateLayout({0.0F, 0.0F, 400.0F, 300.0F});
+    if (!equal(parent->rectTransform.calculatedRect, {20.0F, 30.0F, 200.0F, 200.0F}) ||
+        !equal(childPointer->rectTransform.calculatedRect, {125.0F, 136.0F, 88.0F, 86.0F})) return 2;
 
     UIBatch batch;
     childPointer->buildGeometry(batch);

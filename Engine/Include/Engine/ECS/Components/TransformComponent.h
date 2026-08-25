@@ -13,14 +13,14 @@ struct TransformComponent {
     /** @brief Euler rotation in degrees. */
     Vec3 rotation{};
     /** @brief Per-axis scale. */
-    Vec3 scale{1.0f, 1.0f, 1.0f};
+    Vec3 scale{1.0F, 1.0F, 1.0F};
 
     /** @brief Builds the local-to-world transform matrix. */
     [[nodiscard]] Mat4 matrix() const noexcept {
         Mat4 result = Mat4::translate(position);
-        result = Mat4::rotate(result, Radians{Degrees{rotation.x()}}, Vec3{1.0f, 0.0f, 0.0f});
-        result = Mat4::rotate(result, Radians{Degrees{rotation.y()}}, Vec3{0.0f, 1.0f, 0.0f});
-        result = Mat4::rotate(result, Radians{Degrees{rotation.z()}}, Vec3{0.0f, 0.0f, 1.0f});
+        result = Mat4::rotate(result, Radians{Degrees{rotation.x()}}, Vec3{1.0F, 0.0F, 0.0F});
+        result = Mat4::rotate(result, Radians{Degrees{rotation.y()}}, Vec3{0.0F, 1.0F, 0.0F});
+        result = Mat4::rotate(result, Radians{Degrees{rotation.z()}}, Vec3{0.0F, 0.0F, 1.0F});
         return Mat4::scale(result, scale);
     }
 };

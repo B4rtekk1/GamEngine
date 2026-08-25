@@ -25,7 +25,7 @@ public:
     void destroy() noexcept;
 
     void record(VkCommandBuffer commandBuffer, std::uint32_t imageIndex,
-                VkExtent2D extent, float exposure = 0.0f) const;
+                VkExtent2D extent, float exposure = 0.0F) const;
 
 private:
     VkDevice device_ = VK_NULL_HANDLE;

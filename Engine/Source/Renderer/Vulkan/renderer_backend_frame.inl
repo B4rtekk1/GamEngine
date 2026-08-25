@@ -1,6 +1,6 @@
         struct DirectionalLight final {
             static constexpr float defaultIntensity{4.0F};
-            Vec3 direction{-0.45f, -0.80f, -0.35f};
+            Vec3 direction{-0.45F, -0.80F, -0.35F};
             Math::Color color = Math::Color::white();
             float intensity{defaultIntensity};
         };
@@ -13,11 +13,11 @@
                 [&](const Entity, const Transform& transform, const LightComponent& light) {
                     if (found || !light.enabled || light.type != LightType::Directional) return;
                     const glm::vec3 direction = glm::vec3(transform.matrix().native() *
-                                                          glm::vec4{0.0f, 0.0f, -1.0f, 0.0f});
-                    if (glm::length(direction) <= 1e-6f) return;
+                                                          glm::vec4{0.0F, 0.0F, -1.0F, 0.0F});
+                    if (glm::length(direction) <= 1e-6F) return;
                     result.direction = Vec3{glm::normalize(direction)};
                     result.color = light.color;
-                    result.intensity = std::max(0.0f, light.intensity);
+                    result.intensity = std::max(0.0F, light.intensity);
                     found = true;
                 });
             return result;
@@ -44,7 +44,7 @@
 
             // Game View is presented in a fixed 16:9 editor frame. Keep the
             // projection in that aspect too, independently of dock layout.
-            const float gameAspect = editorUiActive ? (16.0f / 9.0f) : component.aspectRatio;
+            const float gameAspect = editorUiActive ? (16.0F / 9.0F) : component.aspectRatio;
             cameraController.camera().emplace(Degrees{component.fieldOfView}, gameAspect,
                                                component.nearClip, component.farClip);
             cameraController.camera()->setPosition(transform.position);
@@ -54,9 +54,9 @@
             const DirectionalLight light = directionalLight();
             const UniformBufferObject data{
                 cameraController.camera()->viewMatrix(), cameraController.camera()->projectionMatrix(), lightSpaceMatrix(),
-                glm::vec4{cameraController.camera()->position().native(), 1.0f},
+                glm::vec4{cameraController.camera()->position().native(), 1.0F},
                 glm::vec4{light.direction.native(), light.intensity},
-                glm::vec4{light.color.r(), light.color.g(), light.color.b(), 1.0f},
+                glm::vec4{light.color.r(), light.color.g(), light.color.b(), 1.0F},
                 (optimizationFeatures.shadows && hasShadowCasters) ? 1u : 0u,
                 materialSlots, editorSelectedRenderable};
             uniformBuffers[frame].update(&data, sizeof(data));
@@ -65,16 +65,16 @@
         void updateSceneViewportUniformBuffer(const uint32_t frame) const {
             const float aspect = static_cast<float>(sceneViewportTarget.extent().width) /
                                  static_cast<float>(sceneViewportTarget.extent().height);
-            Camera sceneCamera{Degrees{60.0f}, aspect, 0.1f, 1000.0f};
+            Camera sceneCamera{Degrees{60.0F}, aspect, 0.1F, 1000.0F};
             sceneCamera.setPosition(cameraController.editorPosition());
             sceneCamera.setRotation(Degrees{cameraController.editorYaw()},
                                     Degrees{cameraController.editorPitch()});
             const DirectionalLight light = directionalLight();
             const UniformBufferObject data{
                 sceneCamera.viewMatrix(), sceneCamera.projectionMatrix(), lightSpaceMatrix(),
-                glm::vec4{sceneCamera.position().native(), 1.0f},
+                glm::vec4{sceneCamera.position().native(), 1.0F},
                 glm::vec4{light.direction.native(), light.intensity},
-                glm::vec4{light.color.r(), light.color.g(), light.color.b(), 1.0f},
+                glm::vec4{light.color.r(), light.color.g(), light.color.b(), 1.0F},
                 (optimizationFeatures.shadows && hasShadowCasters) ? 1u : 0u,
                 materialSlots, editorSelectedRenderable};
             sceneUniformBuffers[frame].update(&data, sizeof(data));
@@ -200,9 +200,9 @@
                 const Particles::ParticleFrameData particleFrame{
                     cameraController.camera()->projectionMatrix() * cameraController.camera()->viewMatrix(),
                     cameraController.camera()->right(),
-                    0.0f,
+                    0.0F,
                     cameraController.camera()->up(),
-                    0.0f,
+                    0.0F,
                 };
                 particleSystem->recordRender(commandBuffer, particleFrame,
                                              particlePipeline.handle(), particlePipeline.layout(),
@@ -224,10 +224,10 @@
             ForwardPass::draw(commandBuffer, indirectDraws[currentFrame]);
             sceneSkyPass.record(commandBuffer, currentFrame);
             if (particleSystem) {
-                Camera sceneCamera{Degrees{60.0f},
+                Camera sceneCamera{Degrees{60.0F},
                                    static_cast<float>(sceneViewportTarget.extent().width) /
                                        static_cast<float>(sceneViewportTarget.extent().height),
-                                   0.1f, 1000.0f};
+                                   0.1F, 1000.0F};
                 sceneCamera.setPosition(cameraController.editorPosition());
                 sceneCamera.setRotation(Degrees{cameraController.editorYaw()},
                                         Degrees{cameraController.editorPitch()});
@@ -634,7 +634,7 @@
                 constexpr std::size_t windowTitleBufferSize{128};
                 char title[windowTitleBufferSize];
                 snprintf(title, sizeof(title),
-                         "GamEngine | FPS: %.1f | Renderables: %zu",
+                         "GamEngine | FPS: %.1F | Renderables: %zu",
                          fps, renderables.size());
                 SDL_SetWindowTitle(window, title);
 

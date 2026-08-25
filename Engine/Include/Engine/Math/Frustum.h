@@ -28,14 +28,14 @@ public:
     [[nodiscard]] bool intersects(const AABB& bounds) const noexcept {
         return std::ranges::all_of(m_planes, [&bounds](const Vec4& plane) {
             const Vec3 positiveVertex{
-                plane.x() >= 0.0f ? bounds.max.x() : bounds.min.x(),
-                plane.y() >= 0.0f ? bounds.max.y() : bounds.min.y(),
-                plane.z() >= 0.0f ? bounds.max.z() : bounds.min.z(),
+                plane.x() >= 0.0F ? bounds.max.x() : bounds.min.x(),
+                plane.y() >= 0.0F ? bounds.max.y() : bounds.min.y(),
+                plane.z() >= 0.0F ? bounds.max.z() : bounds.min.z(),
             };
             const float distance = plane.x() * positiveVertex.x() +
                                    plane.y() * positiveVertex.y() +
                                    plane.z() * positiveVertex.z() + plane.w();
-            return distance >= 0.0f;
+            return distance >= 0.0F;
         });
     }
 
@@ -47,7 +47,7 @@ private:
 
     static Vec4 normalizedPlane(const Vec4& plane) noexcept {
         const float length = Vec3{plane.x(), plane.y(), plane.z()}.length();
-        return length > 0.0f ? plane / length : plane;
+        return length > 0.0F ? plane / length : plane;
     }
 
     std::array<Vec4, 6> m_planes;

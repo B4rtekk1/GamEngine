@@ -78,7 +78,7 @@ namespace Engine {
 
     /** @brief Returns the cotangent of an angle expressed in radians. */
     [[nodiscard]] inline float cot(const Radians angle) noexcept {
-        return 1.0f / tan(angle);
+        return 1.0F / tan(angle);
     }
 
     /** @brief Returns the cotangent of an angle expressed in degrees. */
@@ -88,7 +88,7 @@ namespace Engine {
 
     /** @brief Returns the secant of an angle expressed in radians. */
     [[nodiscard]] inline float sec(const Radians angle) noexcept {
-        return 1.0f / cos(angle);
+        return 1.0F / cos(angle);
     }
 
     /** @brief Returns the secant of an angle expressed in degrees. */
@@ -98,7 +98,7 @@ namespace Engine {
 
     /** @brief Returns the cosecant of an angle expressed in radians. */
     [[nodiscard]] inline float csc(const Radians angle) noexcept {
-        return 1.0f / sin(angle);
+        return 1.0F / sin(angle);
     }
 
     /** @brief Returns the cosecant of an angle expressed in degrees. */
@@ -106,4 +106,3 @@ namespace Engine {
         return csc(angle.toRadians());
     }
 }
-
