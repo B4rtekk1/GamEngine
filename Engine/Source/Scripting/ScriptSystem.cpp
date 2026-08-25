@@ -6,10 +6,10 @@
 
 namespace Engine {
 
-void ScriptSystem::update(Scene& scene, const float deltaTime) {
+void ScriptSystem::update(Scene& scene, const float deltaTime) const {
     auto& registry = scene.registry();
     registry.view<ScriptComponent>([&](const Entity entity, ScriptComponent& component) {
-        if (!component.enabled || component.className.empty()) return;
+        if (!component.enabled || component.className.empty()) { return; }
 
         if (component.runtime && component.runtimeClassName != component.className) {
             component.runtime->onDestroy();
@@ -18,18 +18,18 @@ void ScriptSystem::update(Scene& scene, const float deltaTime) {
         if (!component.runtime) {
             component.runtime = scripts_.create(component.className);
             component.runtimeClassName = component.className;
-            if (!component.runtime) return;
+            if (!component.runtime) { return; }
             component.runtime->attach(scene, registry, entity);
             component.runtime->onCreate();
         }
         component.runtime->onUpdate(deltaTime);
-        if (registry.has<Transform>(entity)) registry.markChanged<Transform>(entity);
+        if (registry.has<Transform>(entity)) { registry.markChanged<Transform>(entity); }
     });
 }
 
-void ScriptSystem::update(Registry& registry, const float deltaTime) {
+void ScriptSystem::update(Registry& registry, const float deltaTime) const {
     registry.view<ScriptComponent>([&](const Entity entity, ScriptComponent& component) {
-        if (!component.enabled || component.className.empty()) return;
+        if (!component.enabled || component.className.empty()) { return; }
 
         if (component.runtime && component.runtimeClassName != component.className) {
             component.runtime->onDestroy();
@@ -38,7 +38,7 @@ void ScriptSystem::update(Registry& registry, const float deltaTime) {
         if (!component.runtime) {
             component.runtime = scripts_.create(component.className);
             component.runtimeClassName = component.className;
-            if (!component.runtime) return;
+            if (!component.runtime) { return; }
             component.runtime->attach(registry, entity);
             component.runtime->onCreate();
         }

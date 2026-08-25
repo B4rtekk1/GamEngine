@@ -12,8 +12,8 @@ class ScriptSystem final {
 public:
     explicit ScriptSystem(ScriptRegistry& scripts) noexcept : scripts_(scripts) {}
 
-    void update(Registry& registry, float deltaTime);
-    void update(Scene& scene, float deltaTime);
+    void update(Registry& registry, float deltaTime) const;
+    void update(Scene& scene, float deltaTime) const;
 
 private:
     ScriptRegistry& scripts_;

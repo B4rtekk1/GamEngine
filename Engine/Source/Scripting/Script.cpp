@@ -12,12 +12,12 @@ Actor Script::actor() const {
         throw std::logic_error("Script is not attached to a live actor");
     }
     const auto* object = scene_->findByEntity(entity_);
-    if (object == nullptr) throw std::logic_error("Script actor no longer exists");
+    if (object == nullptr) { throw std::logic_error("Script actor no longer exists"); }
     return Actor{*scene_, object->objectId()};
 }
 
 Scene& Script::scene() const {
-    if (scene_ == nullptr) throw std::logic_error("Script is not attached to a scene");
+    if (scene_ == nullptr) { throw std::logic_error("Script is not attached to a scene"); }
     return *scene_;
 }
 
