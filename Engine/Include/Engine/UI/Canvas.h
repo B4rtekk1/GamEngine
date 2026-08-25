@@ -37,6 +37,14 @@ namespace Engine::UI {
         [[nodiscard]] std::size_t size() const noexcept { return m_elements.size(); }
         [[nodiscard]] bool empty() const noexcept { return m_elements.empty(); }
         [[nodiscard]] Rect rect() const noexcept;
+        /**
+         * Marks externally mutated element data as changed. Call this after
+         * directly changing public element state such as text, colour,
+         * visibility, or sorting order.
+         */
+        void invalidate() noexcept;
+        /** Monotonically increasing revision used by the UI renderer cache. */
+        [[nodiscard]] std::uint64_t revision() const noexcept { return m_revision; }
 
         CanvasRenderMode renderMode{
             CanvasRenderMode::ScreenSpaceOverlay
@@ -49,5 +57,8 @@ namespace Engine::UI {
         std::uint32_t m_height{};
 
         ElementContainer m_elements;
+        std::uint64_t m_revision{1};
+
+        void bumpRevision() noexcept;
     };
 } // namespace Engine::UI

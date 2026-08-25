@@ -51,8 +51,6 @@ private:
     [[nodiscard]] const std::vector<const UIElement*>& sortedChildren(const UIElement& element);
     void sortIfNeeded(const std::vector<const UIElement*>& source,
                       std::vector<const UIElement*>& cache);
-    [[nodiscard]] std::uint64_t canvasRevision(const Canvas& canvas) const noexcept;
-    [[nodiscard]] std::uint64_t elementRevision(const UIElement& element) const noexcept;
     [[nodiscard]] bool ensureCapacity(FrameResources& frame);
 
     VkPhysicalDevice physicalDevice_ = VK_NULL_HANDLE;

@@ -13,6 +13,7 @@ namespace Engine::UI {
 
     void Canvas::resize(const std::uint32_t width, const std::uint32_t height)
     {
+        if (m_width == width && m_height == height) return;
         m_width = width;
         m_height = height;
         updateLayout();
@@ -25,6 +26,7 @@ namespace Engine::UI {
         for (auto& element : m_elements) {
             element->updateLayout(canvasRect);
         }
+        bumpRevision();
     }
 
     UIElement& Canvas::addElement(std::unique_ptr<UIElement> element)
@@ -36,6 +38,7 @@ namespace Engine::UI {
         element->updateLayout(rect());
         UIElement& addedElement = *element;
         m_elements.emplace_back(std::move(element));
+        bumpRevision();
         return addedElement;
     }
 
@@ -52,12 +55,26 @@ namespace Engine::UI {
 
         auto removed = std::move(*position);
         m_elements.erase(position);
+        bumpRevision();
         return removed;
     }
 
     void Canvas::clear() noexcept
     {
+        if (m_elements.empty()) return;
         m_elements.clear();
+        bumpRevision();
+    }
+
+    void Canvas::invalidate() noexcept
+    {
+        bumpRevision();
+    }
+
+    void Canvas::bumpRevision() noexcept
+    {
+        ++m_revision;
+        if (m_revision == 0) ++m_revision;
     }
 
     Rect Canvas::rect() const noexcept

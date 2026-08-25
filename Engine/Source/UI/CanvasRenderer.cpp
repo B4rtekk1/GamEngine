@@ -5,7 +5,6 @@
 #include <Engine/UI/UIElement.h>
 
 #include <algorithm>
-#include <bit>
 #include <stdexcept>
 
 namespace Engine::UI {
@@ -116,48 +115,6 @@ CanvasRenderer::sortedChildren(const UIElement& element) {
     return source;
 }
 
-namespace {
-constexpr std::uint64_t FnvOffset = 14695981039346656037ull;
-constexpr std::uint64_t FnvPrime = 1099511628211ull;
-
-void hashValue(std::uint64_t& hash, const std::uint64_t value) noexcept {
-    hash ^= value;
-    hash *= FnvPrime;
-}
-
-void hashFloat(std::uint64_t& hash, const float value) noexcept {
-    hashValue(hash, std::bit_cast<std::uint32_t>(value));
-}
-}
-
-std::uint64_t CanvasRenderer::elementRevision(const UIElement& element) const noexcept {
-    std::uint64_t hash = FnvOffset;
-    hashValue(hash, reinterpret_cast<std::uintptr_t>(&element));
-    hashValue(hash, element.visible);
-    hashValue(hash, static_cast<std::uint64_t>(static_cast<std::int64_t>(element.sortingOrder)));
-    const Rect& rect = element.rectTransform.calculatedRect;
-    hashFloat(hash, rect.x);
-    hashFloat(hash, rect.y);
-    hashFloat(hash, rect.width);
-    hashFloat(hash, rect.height);
-    hashValue(hash, element.geometryRevision());
-    for (const auto& child : element.children()) {
-        hashValue(hash, elementRevision(*child));
-    }
-    return hash;
-}
-
-std::uint64_t CanvasRenderer::canvasRevision(const Canvas& canvas) const noexcept {
-    std::uint64_t hash = FnvOffset;
-    hashValue(hash, canvas.width());
-    hashValue(hash, canvas.height());
-    hashValue(hash, static_cast<std::uint64_t>(static_cast<std::int64_t>(canvas.sortingOrder)));
-    for (const auto& element : canvas.elements()) {
-        hashValue(hash, elementRevision(*element));
-    }
-    return hash;
-}
-
 void CanvasRenderer::appendElement(const UIElement& element) {
     if (!element.visible) {
         return;
@@ -201,7 +158,7 @@ void CanvasRenderer::record(const Canvas& canvas,
                             const std::uint32_t imageIndex,
                             const std::uint32_t frameIndex,
                             const VkExtent2D extent) {
-    const std::uint64_t revision = canvasRevision(canvas);
+    const std::uint64_t revision = canvas.revision();
     if (batchDirty_ || revision != cachedCanvasRevision_) {
         batch_.clear();
 

@@ -349,6 +349,7 @@ class Renderer::Backend {
             }
 
             createMaterialTextures(); createMeshBuffers(); createInstanceBuffer();
+            renderableTopologySignature = currentRenderableTopologySignature();
             createUniformBuffers(); createSceneUniformBuffers(); createShadowPass();
             createSceneDescriptorPass(); createForwardPass(); createParticleResources();
             createCullingResources(); createSkyPass(); createSceneSkyPass();
@@ -366,6 +367,12 @@ class Renderer::Backend {
                 throw std::invalid_argument("Renderer cannot switch Scene instances while initialized");
             }
             if (device == VK_NULL_HANDLE) return;
+            // The editor reports every ECS structural change here, including
+            // hierarchy, scripts and colliders. Avoid stalling the GPU and
+            // recreating render resources unless the renderable topology
+            // itself changed.
+            const std::uint64_t updatedTopology = currentRenderableTopologySignature();
+            if (updatedTopology == renderableTopologySignature) return;
             if (!inFlightFences.empty() && vkWaitForFences(device,
                     static_cast<uint32_t>(inFlightFences.size()), inFlightFences.data(), VK_TRUE,
                     UINT64_MAX) != VK_SUCCESS) {
@@ -415,10 +422,12 @@ class Renderer::Backend {
             hiZValid = false;
 
             createMaterialTextures(); createMeshBuffers(); createInstanceBuffer();
+            renderableTopologySignature = currentRenderableTopologySignature();
             createUniformBuffers(); createSceneUniformBuffers(); createShadowPass();
             createSceneDescriptorPass(); createForwardPass();
             createParticleResources(); createCullingResources(); createSkyPass(); createSceneSkyPass();
             createFramebuffers(); createSceneViewportFramebuffer();
+            renderableTopologySignature = updatedTopology;
             assetManager.unload_unused();
         }
 
@@ -536,6 +545,7 @@ class Renderer::Backend {
         std::uint64_t particleColliderStructuralRevision = 0;
         std::uint64_t particleColliderComponentRevision = 0;
         std::uint64_t particleColliderTransformRevision = 0;
+        std::uint64_t renderableTopologySignature = 0;
         bool hiZValid = false;
         Entity editorSelectedEntity = NullEntity;
         std::uint32_t editorSelectedRenderable = std::numeric_limits<std::uint32_t>::max();
@@ -631,6 +641,7 @@ class Renderer::Backend {
             createCommandPool();
             createMaterialTextures();
             createMeshBuffers();
+            renderableTopologySignature = currentRenderableTopologySignature();
             createInstanceBuffer();
             createUniformBuffers();
             createSceneUniformBuffers();
@@ -1183,6 +1194,26 @@ class Renderer::Backend {
                     materialTextures.push_back(std::move(texture));
                 }
             });
+        }
+
+        [[nodiscard]] std::uint64_t currentRenderableTopologySignature() const {
+            // Commutative mixing makes the value independent of dense-pool
+            // ordering, which can change after an unrelated ECS removal.
+            std::uint64_t signature = 14695981039346656037ull;
+            std::size_t count = 0;
+            const Registry& readRegistry = registry;
+            readRegistry.view<Transform, MeshRenderer>(
+                [&](const Entity entity, const Transform&, const MeshRenderer& renderer) {
+                    if (!renderer.hasMesh()) return;
+                    std::uint64_t value = static_cast<std::uint64_t>(entity);
+                    value ^= static_cast<std::uint64_t>(reinterpret_cast<std::uintptr_t>(renderer.mesh.get())) +
+                        0x9e3779b97f4a7c15ull + (value << 6u) + (value >> 2u);
+                    value ^= static_cast<std::uint64_t>(renderer.cullingBatch) << 1u;
+                    value ^= static_cast<std::uint64_t>(renderer.castShadow) << 63u;
+                    signature ^= value * 0x9e3779b97f4a7c15ull;
+                    ++count;
+                });
+            return signature ^ (static_cast<std::uint64_t>(count) * 0x9e3779b97f4a7c15ull);
         }
 
         void createMeshBuffers() {
