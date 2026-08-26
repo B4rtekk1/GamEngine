@@ -870,6 +870,26 @@ void PhysicsSystem::update(Scene& scene, const float deltaTime) const {
                     : body.angularImpulse * inverseMass;
                 body.angularVelocity +=
                     (angularAcceleration * dt + angularVelocityChange) * RadiansToDegrees;
+
+                // Integrate orientation together with position, before any
+                // collision geometry is built. Resolving contacts against the
+                // previous orientation and rotating the body afterwards made
+                // OBB contacts appear one frame late and could create a large
+                // positional correction on the following step.
+                const float angularSpeedDegrees = body.angularVelocity.length();
+                if (angularSpeedDegrees > 1e-6F) {
+                    const Vec3 angularAxis =
+                        body.angularVelocity * (1.0F / angularSpeedDegrees);
+                    const Quat delta = Quat::angleAxis(
+                        angularSpeedDegrees * dt / RadiansToDegrees, angularAxis);
+                    transform.rotation = eulerDegrees(
+                        (delta * transformRotation(transform)).normalized());
+                    transform.rotation = {
+                        wrapDegrees(transform.rotation.x()),
+                        wrapDegrees(transform.rotation.y()),
+                        wrapDegrees(transform.rotation.z())
+                    };
+                }
             }
             transform.position += body.linearVelocity * dt;
         });
@@ -1227,22 +1247,6 @@ void PhysicsSystem::update(Scene& scene, const float deltaTime) const {
                 }
             }
 
-            if (!body.fixedRotation) {
-                const float angularSpeedDegrees = body.angularVelocity.length();
-                if (angularSpeedDegrees > 1e-6F) {
-                    const Vec3 angularAxis =
-                        body.angularVelocity * (1.0F / angularSpeedDegrees);
-                    const Quat delta = Quat::angleAxis(
-                        angularSpeedDegrees * dt / RadiansToDegrees, angularAxis);
-                    transform.rotation = eulerDegrees(
-                        (delta * transformRotation(transform)).normalized());
-                    transform.rotation = {
-                        wrapDegrees(transform.rotation.x()),
-                        wrapDegrees(transform.rotation.y()),
-                        wrapDegrees(transform.rotation.z())
-                    };
-                }
-            }
             // Damping is expressed per second and applied exponentially so
             // that the result remains stable when the frame rate changes.
             body.linearVelocity *= std::exp(-std::max(body.linearDamping, 0.0F) * dt);

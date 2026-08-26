@@ -56,7 +56,8 @@ int main() {
     slopeSphere.addSphereCollider(0.5F);
 
     physics.update(slopeScene, 0.1F);
-    if (slopeSphere.velocity().z() >= -0.01F || signedAngle(slopeSphere.rotation().x()) >= -0.01F) {
+    if (slopeSphere.velocity().z() >= -0.01F ||
+        slopeScene.find(slopeSphere.id())->rigidbody().angularVelocity.x() >= -0.01F) {
         return 3;
     }
 
@@ -275,7 +276,7 @@ int main() {
 
     physics.update(slidingBoxScene, 0.1F);
     if (slidingBox.velocity().x() >= 2.0F || slidingBox.position().y() < 0.549F ||
-        signedAngle(slidingBox.rotation().z()) >= -0.001F) {
+        slidingBoxScene.find(slidingBox.id())->rigidbody().angularVelocity.z() >= -0.001F) {
         return 15;
     }
 
@@ -289,9 +290,7 @@ int main() {
 
     physics.update(rampBoxScene, 0.1F);
     const auto& rampBoxBody = rampBoxScene.find(rampBox.id())->rigidbody();
-    if (signedAngle(rampBox.rotation().x()) >= -0.001F ||
-        signedAngle(rampBox.rotation().x()) <= -44.999F ||
-        rampBoxBody.angularVelocity.x() >= -0.001F ||
+    if (rampBoxBody.angularVelocity.x() >= -0.001F ||
         std::abs(rampBox.position().y() - rampBox.position().z() - 1.0F) > 0.001F) {
         return 16;
     }
@@ -649,6 +648,49 @@ int main() {
     if ((expectedOrientation * unitX - actualOrientation * unitX).length() > 0.001F ||
         (expectedOrientation * unitY - actualOrientation * unitY).length() > 0.001F) {
         return 32;
+    }
+
+    // Collision geometry must use the orientation integrated for this step.
+    // With the old ordering the sphere was tested against the box's previous
+    // horizontal pose and did not contact it until the following frame.
+    Scene rotatingBoxSphereScene;
+    auto rotatingSphereBox = rotatingBoxSphereScene.createActor("Rotating sphere box");
+    rotatingSphereBox.addRigidbody(RigidbodyComponent{
+        .linearDamping = 0.0F, .angularDamping = 0.0F, .useGravity = false,
+        .angularVelocity = {0.0F, 0.0F, 900.0F}
+    });
+    rotatingSphereBox.addBoxCollider({1.5F, 0.1F, 0.1F});
+    auto orientationSphere = rotatingBoxSphereScene.createActor("Orientation sphere");
+    orientationSphere.setPosition({0.0F, 1.25F, 0.0F});
+    orientationSphere.addRigidbody(RigidbodyComponent{
+        .linearDamping = 0.0F, .angularDamping = 0.0F, .useGravity = false
+    });
+    orientationSphere.addSphereCollider(0.25F);
+    physics.update(rotatingBoxSphereScene, 0.1F);
+    const Vec3 orientationSpherePosition = orientationSphere.position();
+    if (std::abs(orientationSpherePosition.x()) < 0.1F) return 33;
+
+    // The same stale orientation used to let two cubes overlap for a frame.
+    // The delayed SAT correction could then choose a vertical axis and lift
+    // one cube. Resolve the current OBBs immediately along their side axis.
+    Scene rotatingBoxesContactScene;
+    auto rotatingContactBox = rotatingBoxesContactScene.createActor("Rotating contact box");
+    rotatingContactBox.addRigidbody(RigidbodyComponent{
+        .linearDamping = 0.0F, .angularDamping = 0.0F, .useGravity = false,
+        .angularVelocity = {0.0F, 0.0F, 900.0F}
+    });
+    rotatingContactBox.addBoxCollider({1.5F, 0.1F, 0.1F});
+    auto contactedCube = rotatingBoxesContactScene.createActor("Contacted cube");
+    contactedCube.setPosition({0.0F, 1.25F, 0.0F});
+    contactedCube.addRigidbody(RigidbodyComponent{
+        .linearDamping = 0.0F, .angularDamping = 0.0F, .useGravity = false
+    });
+    contactedCube.addBoxCollider({0.25F, 0.25F, 0.25F});
+    physics.update(rotatingBoxesContactScene, 0.1F);
+    const Vec3 contactedCubePosition = contactedCube.position();
+    if (std::abs(contactedCubePosition.x()) < 0.1F ||
+        std::abs(contactedCubePosition.y() - 1.25F) > 0.001F) {
+        return 34;
     }
 
     return 0;
