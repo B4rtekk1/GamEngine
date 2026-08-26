@@ -1,3 +1,9 @@
+**
+ * @file EditorSceneSession.cpp
+ * @brief Implements editor-scene persistence, play-mode transitions and C++
+ *        script generation.
+ */
+
 #include "Editor/Panels/EditorSceneSession.h"
 
 #include "Engine/Renderer/Renderer.h"
@@ -8,10 +14,25 @@
 #include <fstream>
 #include <sstream>
 
+/**
+ * @brief Returns the path of the scene used by the editor session.
+ *
+ * @return Absolute or source-root-relative filesystem path to
+ *         `Assets/Scenes/Editor.scene`, depending on the value of
+ *         `GAMEENGINE_SOURCE_DIR`.
+ */
 std::filesystem::path EditorSceneSession::scenePath() {
     return std::filesystem::path{GAMEENGINE_SOURCE_DIR} / "Assets" / "Scenes" / "Editor.scene";
 }
 
+/**
+ * @brief Converts the renderer's MSAA level to a numeric sample count.
+ *
+ * @param renderer Renderer whose antialiasing configuration is queried.
+ *
+ * @return `2` for MSAA 2x, `4` for MSAA 4x, or `0` when neither supported
+ *         MSAA mode is active.
+ */
 std::uint32_t EditorSceneSession::msaaSampleCount(const Engine::Renderer &renderer) {
     return renderer.antialiasingLevel() == Engine::AntialiasingLevel::MSAA2x
                ? 2U
@@ -20,6 +41,25 @@ std::uint32_t EditorSceneSession::msaaSampleCount(const Engine::Renderer &render
                      : 0U;
 }
 
+/**
+ * @brief Enters or leaves play mode while preserving the editable scene.
+ *
+ * When @p play is `true`, the current scene is serialized into @p snapshot.
+ * When @p play is `false`, the scene is restored from @p snapshot and the
+ * snapshot string is cleared.
+ *
+ * @param play `true` to capture the scene before entering play mode; `false`
+ *             to restore the captured scene when leaving play mode.
+ * @param scene Scene that is serialized or restored.
+ * @param snapshot Storage for the serialized editor-scene state.
+ * @param error Receives an exception message on failure and is cleared on
+ *              success.
+ * @param samples MSAA sample count forwarded to the scene serializer while
+ *                capturing the scene.
+ *
+ * @retval true The scene was captured or restored successfully.
+ * @retval false Serialization or deserialization threw an exception.
+ */
 bool EditorSceneSession::setPlayMode(const bool play, Engine::ScenePreset &scene,
                                      std::string &snapshot, std::string &error, const std::uint32_t samples) {
     try {
@@ -40,6 +80,20 @@ bool EditorSceneSession::setPlayMode(const bool play, Engine::ScenePreset &scene
     }
 }
 
+/**
+ * @brief Generates a C++ script class and registers it with the engine.
+ *
+ * The class name must begin with an alphabetic character and may otherwise
+ * contain only alphanumeric characters and underscores. On success, a header
+ * and source file are created in `Sandbox/Source/Scripts`.
+ *
+ * @param name Name of the generated C++ class and the base name of both files.
+ * @param error Receives a human-readable failure description.
+ *
+ * @retval true Both generated files were written successfully.
+ * @retval false The class name is invalid, either output file already exists,
+ *               or the files could not be created or written.
+ */
 bool EditorSceneSession::createCppScript(const std::string_view name, std::string &error) {
     if (name.empty() || !std::isalpha(static_cast<unsigned char>(name.front())) ||
         !std::ranges::all_of(name, [](const char c) {

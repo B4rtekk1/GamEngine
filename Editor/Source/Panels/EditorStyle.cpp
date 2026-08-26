@@ -1,34 +1,59 @@
+/**
+ * @file EditorStyle.cpp
+ * @brief Implements the visual theme and default docking layout of the editor.
+ */
+
 #include "Editor/Panels/EditorStyle.h"
 
 #include "imgui.h"
 #include "imgui_internal.h"
 
 namespace {
-    constexpr float kWindowPaddingX = 16.0F;
-    constexpr float kWindowPaddingY = 14.0F;
-    constexpr float kFramePaddingX = 10.0F;
-    constexpr float kFramePaddingY = 8.0F;
-    constexpr float kItemSpacingX = 10.0F;
-    constexpr float kItemSpacingY = 10.0F;
-    constexpr float kItemInnerSpacingX = 8.0F;
-    constexpr float kItemInnerSpacingY = 6.0F;
-    constexpr float kScrollbarSize = 13.0F;
-    constexpr float kGrabMinSize = 12.0F;
-    constexpr float kBorderSize = 1.0F;
-    constexpr float kFrameBorderSize = 0.0F;
-    constexpr float kWindowRounding = 8.0F;
-    constexpr float kChildRounding = 7.0F;
-    constexpr float kFrameRounding = 6.0F;
-    constexpr float kPopupRounding = 7.0F;
-    constexpr float kScrollbarRounding = 8.0F;
-    constexpr float kGrabRounding = 6.0F;
-    constexpr float kTabRounding = 6.0F;
+    /** @name Editor geometry and spacing
+     *  Constants controlling padding, spacing, border thickness and rounding.
+     *  @{
+     */
+    constexpr float kWindowPaddingX = 16.0F;     ///< Horizontal window padding, in pixels.
+    constexpr float kWindowPaddingY = 14.0F;     ///< Vertical window padding, in pixels.
+    constexpr float kFramePaddingX = 10.0F;      ///< Horizontal frame padding, in pixels.
+    constexpr float kFramePaddingY = 8.0F;       ///< Vertical frame padding, in pixels.
+    constexpr float kItemSpacingX = 10.0F;       ///< Horizontal spacing between widgets, in pixels.
+    constexpr float kItemSpacingY = 10.0F;       ///< Vertical spacing between widgets, in pixels.
+    constexpr float kItemInnerSpacingX = 8.0F;   ///< Horizontal spacing inside compound widgets, in pixels.
+    constexpr float kItemInnerSpacingY = 6.0F;   ///< Vertical spacing inside compound widgets, in pixels.
+    constexpr float kScrollbarSize = 13.0F;      ///< Scrollbar width, in pixels.
+    constexpr float kGrabMinSize = 12.0F;        ///< Minimum slider and scrollbar grab size, in pixels.
+    constexpr float kBorderSize = 1.0F;          ///< Window and child border thickness, in pixels.
+    constexpr float kFrameBorderSize = 0.0F;     ///< Frame border thickness, in pixels.
+    constexpr float kWindowRounding = 8.0F;      ///< Window corner radius, in pixels.
+    constexpr float kChildRounding = 7.0F;       ///< Child-window corner radius, in pixels.
+    constexpr float kFrameRounding = 6.0F;       ///< Widget frame corner radius, in pixels.
+    constexpr float kPopupRounding = 7.0F;       ///< Popup corner radius, in pixels.
+    constexpr float kScrollbarRounding = 8.0F;   ///< Scrollbar corner radius, in pixels.
+    constexpr float kGrabRounding = 6.0F;        ///< Slider and scrollbar grab corner radius, in pixels.
+    constexpr float kTabRounding = 6.0F;         ///< Tab corner radius, in pixels.
+    /** @} */
 
-    constexpr ImGuiID kEmptyDockNodeId = 0;
-    constexpr float kHierarchyWidthRatio = 0.22F;
-    constexpr float kInspectorWidthRatio = 0.28F;
+    /** @name Default docking layout
+     *  Constants used to construct the initial editor workspace.
+     *  @{
+     */
+    constexpr ImGuiID kEmptyDockNodeId = 0;       ///< Initial value for dock-node identifiers.
+    constexpr float kHierarchyWidthRatio = 0.22F; ///< Fraction of the viewport assigned to the hierarchy panel.
+    constexpr float kInspectorWidthRatio = 0.28F; ///< Fraction of the remaining center area assigned to the inspector.
+    /** @} */
 }
 
+/**
+ * @brief Applies the editor's global ImGui visual style.
+ *
+ * Resets ImGui to its dark theme and then configures editor-specific spacing,
+ * border sizes, corner rounding and colors for windows, widgets, tabs, docking
+ * previews and resize grips.
+ *
+ * @note The function modifies the global ImGuiStyle instance returned by
+ *       ImGui::GetStyle().
+ */
 void EditorStyle::apply() {
     constexpr ImVec4 kWindowBackground = {0.075F, 0.086F, 0.110F, 1.0F};
     constexpr ImVec4 kChildBackground = {0.060F, 0.070F, 0.092F, 1.0F};
@@ -115,6 +140,19 @@ void EditorStyle::apply() {
     colors[ImGuiCol_ResizeGripActive] = kActiveResizeGrip;
 }
 
+/**
+ * @brief Creates the default editor docking layout once.
+ *
+ * Rebuilds the main viewport dock space and assigns the Hierarchy panel to the
+ * left, the Viewport to the center and the Inspector to the right. Subsequent
+ * calls return immediately so that user changes to the docking layout are not
+ * overwritten during later frames.
+ *
+ * @pre An active ImGui context and main viewport must exist.
+ *
+ * @note The layout is configured once per process by means of a function-local
+ *       static flag.
+ */
 void EditorStyle::configureDockLayout() {
     static bool configured = false;
     if (configured) {
