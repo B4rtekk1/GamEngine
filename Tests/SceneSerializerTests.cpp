@@ -94,7 +94,7 @@ int main() {
 
     std::stringstream serialized;
     SceneSerializer::save(source, serialized);
-    if (serialized.str().find("GAMENGINE_SCENE 7") == std::string::npos ||
+    if (serialized.str().find("GAMENGINE_SCENE 8") == std::string::npos ||
         serialized.str().find("MESHES 1") == std::string::npos ||
         serialized.str().find("ENTITIES 3") == std::string::npos) {
         return 1;

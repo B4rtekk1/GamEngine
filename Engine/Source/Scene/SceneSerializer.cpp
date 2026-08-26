@@ -1,5 +1,6 @@
 #include "Engine/Scene/SceneSerializer.h"
 
+#include "Engine/Assets/AssetManager.h"
 #include "Engine/Core/Transform.h"
 #include "Engine/ECS/Components/CameraComponent.h"
 #include "Engine/ECS/Components/ColliderComponent.h"
@@ -463,6 +464,11 @@ namespace Engine {
         serialized << "MESHES " << meshes.size() << '\n';
         for (std::size_t meshId = 0; meshId < meshes.size(); ++meshId) {
             const Mesh &mesh = *meshes[meshId];
+            if (!mesh.sourcePath.empty()) {
+                serialized << "MESH_ASSET " << meshId << ' '
+                           << std::quoted(mesh.sourcePath.lexically_normal().generic_string()) << '\n';
+                continue;
+            }
             serialized << "MESH " << meshId << ' ' << mesh.vertices.size() << ' '
                     << mesh.indices.size() << ' ' << mesh.materials.size() << ' '
                     << mesh.images.size() << '\n';
@@ -662,11 +668,31 @@ namespace Engine {
         const std::size_t meshCount = readCount(input, "mesh count", MaxMeshes);
         std::vector<std::shared_ptr<const Mesh> > meshes;
         meshes.reserve(meshCount);
+        Assets::AssetManager assetManager;
         for (std::size_t meshIndex = 0; meshIndex < meshCount; ++meshIndex) {
-            expect(input, "MESH");
+            const auto recordType = read<std::string>(input, "mesh record type");
+            if (recordType != "MESH" && recordType != "MESH_ASSET") {
+                invalidScene("expected 'MESH' or 'MESH_ASSET'");
+            }
             const std::size_t serializedId = readCount(input, "mesh id", MaxMeshes);
             if (serializedId != meshIndex) {
                 invalidScene("mesh identifiers must be contiguous");
+            }
+            if (recordType == "MESH_ASSET") {
+                if (version < FormatVersion) {
+                    invalidScene("asset mesh references require scene format version 8");
+                }
+                std::string sourcePath;
+                input >> std::quoted(sourcePath);
+                if (!input || sourcePath.empty()) {
+                    invalidScene("could not read mesh asset path");
+                }
+                auto mesh = assetManager.loadMesh(std::filesystem::path{sourcePath}).shared();
+                if (!mesh) {
+                    invalidScene("could not load mesh asset '" + sourcePath + "'");
+                }
+                meshes.push_back(std::move(mesh));
+                continue;
             }
             const std::size_t vertexCount = readCount(input, "vertex count", MaxVertices);
             const std::size_t indexCount = readCount(input, "index count", MaxIndices);
@@ -685,10 +711,14 @@ namespace Engine {
                     readFloat(input, "texture coordinate"),
                 };
                 vertex.normal = readVec3(input, "vertex normal");
-                vertex.tangent = {
-                    readFloat(input, "tangent x"), readFloat(input, "tangent y"),
-                    readFloat(input, "tangent z"), readFloat(input, "tangent handedness")
-                };
+                // Read sequentially before construction. MSVC may evaluate the
+                // conversion used by braced assignment right-to-left, which
+                // swapped tangent.x with tangent.w during scene round-trips.
+                const float tangentX = readFloat(input, "tangent x");
+                const float tangentY = readFloat(input, "tangent y");
+                const float tangentZ = readFloat(input, "tangent z");
+                const float tangentW = readFloat(input, "tangent handedness");
+                vertex.tangent = Vec4{tangentX, tangentY, tangentZ, tangentW};
                 vertex.materialIndex = read<std::uint32_t>(input, "vertex material index");
                 mesh->vertices.push_back(vertex);
             }

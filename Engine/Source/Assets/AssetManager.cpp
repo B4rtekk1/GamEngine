@@ -1,5 +1,6 @@
 #include "Engine/Assets/AssetManager.h"
 
+#include "GlbLoader.h"
 #include "Engine/Renderer/Geometry/Mesh.h"
 
 #include <stb_image.h>
@@ -128,6 +129,7 @@ std::shared_ptr<const Mesh> load_obj_mesh(const std::filesystem::path& path) {
     }
 
     if (mesh.empty()) return {};
+    mesh.sourcePath = path;
     if (!has_normals) {
         for (std::size_t i = 0; i + 2 < mesh.indices.size(); i += 3) {
             auto& a = mesh.vertices[mesh.indices[i]];
@@ -290,6 +292,8 @@ void register_default_asset_loaders(AssetManager& manager) {
     manager.register_loader<Mesh>(AssetType::Mesh, [](const auto& path, const auto&) {
         const auto extension = path.extension().string();
         if (extension == ".obj" || extension == ".OBJ") return load_obj_mesh(path);
+        if (extension == ".glb" || extension == ".GLB" ||
+            extension == ".gltf" || extension == ".GLTF") return load_gltf_mesh(path);
         return std::shared_ptr<const Mesh>{};
     });
 }

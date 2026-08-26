@@ -20,6 +20,9 @@ public:
     [[nodiscard]] std::uint64_t structuralRevision() const noexcept {
         return scene_->structuralRevision();
     }
+    [[nodiscard]] std::uint64_t mutationRevision() const noexcept {
+        return scene_->mutationRevision();
+    }
 
     template<typename T> [[nodiscard]] bool has(Entity entity) const { return scene_->edit(entity).has<T>(); }
     template<typename T> T& get(Entity entity) { return scene_->edit(entity).get<T>(); }

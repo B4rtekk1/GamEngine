@@ -24,6 +24,7 @@ layout(binding = 1) uniform FrameData {
     vec4 cameraPosition;
     vec4 lightDirectionIntensity;
     vec4 lightColor;
+    uint shadowEnabled;
     uint materialSlots;
     uint selectedInstance;
     uint materialSlotsPadding;

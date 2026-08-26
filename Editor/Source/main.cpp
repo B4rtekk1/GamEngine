@@ -3,6 +3,7 @@
 #include "imgui_impl_sdl3.h"
 
 #include "Engine/Renderer/Renderer.h"
+#include "Engine/Assets/Content.h"
 #include "Engine/Scene/ScenePresets.h"
 #include "Engine/Core/Time.h"
 #include "Engine/Core/Transform.h"
@@ -1570,6 +1571,9 @@ int main() {
         EditorStyle::apply();
 
         Engine::ScenePreset scene(Engine::SceneType::Particles);
+        Engine::Assets::Content content{
+            std::filesystem::path{GAMEENGINE_SOURCE_DIR} / "Assets"};
+        static_cast<void>(scene.createModel("Tree", "Models/glTF/CommonTree_2.gltf", content));
         Engine::ScriptSystem scriptSystem{Engine::ScriptRegistry::instance()};
         Engine::PhysicsSystem physicsSystem{};
         Engine::Renderer renderer;
@@ -1800,8 +1804,14 @@ int main() {
                 // and selected in the Scene View immediately.
                 renderer.setEditorSelection(selectedEntity);
             }
-            if (!playing && !sceneLoaded) {
-                history.capture(scene);
+            // A history snapshot serializes the complete scene, including
+            // decoded GLB image pixels. Capture only after an actual mutation
+            // and once an interactive edit has finished; SceneHistory performs
+            // the revision check before touching the serializer.
+            const bool editingScene = ImGui::IsAnyItemActive() ||
+                                      ImGui::IsMouseDown(ImGuiMouseButton_Left);
+            if (!playing && !sceneLoaded && !editingScene) {
+                static_cast<void>(history.capture(scene));
             }
             if (playing && !paused) {
                 physicsAccumulator += Engine::Time::deltaTime();

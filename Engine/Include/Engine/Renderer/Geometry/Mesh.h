@@ -4,6 +4,7 @@
 #include "Engine/Renderer/Materials/PBRMaterial.h"
 
 #include <cstdint>
+#include <filesystem>
 #include <vector>
 
 /**
@@ -48,6 +49,14 @@ public:
 
     /** @brief Images embedded in or associated with the mesh. */
     std::vector<Image> images;
+
+    /**
+     * @brief Source asset used to create this mesh, when one exists.
+     *
+     * Scene persistence stores this reference instead of expanding imported
+     * geometry and decoded textures into the text scene format.
+     */
+    std::filesystem::path sourcePath;
 
     /**
      * @brief Checks whether the mesh lacks either vertices or indices.

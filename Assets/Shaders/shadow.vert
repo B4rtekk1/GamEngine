@@ -12,10 +12,10 @@ layout(binding = 1) uniform FrameData {
     mat4 view; mat4 projection; mat4 lightSpaceUnused;
     vec4 cameraPosition; vec4 lightDirectionIntensity;
     vec4 lightColor;
+    uint shadowEnabled;
     uint materialSlots;
-    uint materialSlotsPadding0;
-    uint materialSlotsPadding1;
-    uint materialSlotsPadding2;
+    uint selectedInstance;
+    uint materialSlotsPadding;
 } frame;
 
 layout(push_constant) uniform PushConstants {

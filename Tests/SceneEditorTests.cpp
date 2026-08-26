@@ -11,7 +11,8 @@ int main() {
     static_cast<void>(scene.createActor("One"));
     static_cast<void>(scene.createActor("Two"));
     SceneEditor editor = scene.editor();
-    if (editor.size() != 2 || editor.structuralRevision() == 0) return 1;
+    if (editor.size() != 2 || editor.structuralRevision() == 0 ||
+        editor.mutationRevision() == 0) return 1;
 
     std::vector<Entity> entities;
     editor.view<>([&](const Entity entity) { entities.push_back(entity); });
@@ -19,13 +20,19 @@ int main() {
         !editor.has<Transform>(entities[0])) return 2;
 
     const auto revisionBeforeAdd = editor.structuralRevision();
+    const auto mutationBeforeAdd = editor.mutationRevision();
     editor.add<ColliderComponent>(entities[0], ColliderComponent{.shape = SphereCollider{1.5F}});
     if (!editor.has<ColliderComponent>(entities[0]) ||
-        editor.structuralRevision() <= revisionBeforeAdd) return 3;
+        editor.structuralRevision() <= revisionBeforeAdd ||
+        editor.mutationRevision() <= mutationBeforeAdd) return 3;
+    const auto mutationBeforeRead = editor.mutationRevision();
+    static_cast<void>(editor.get<Transform>(entities[0]));
+    if (editor.mutationRevision() != mutationBeforeRead) return 10;
     editor.modify<Transform>(entities[0], [](auto& transform) {
         transform.position = {7.0F, 8.0F, 9.0F};
     });
-    if (editor.get<Transform>(entities[0]).position.x() != 7.0F) return 4;
+    if (editor.get<Transform>(entities[0]).position.x() != 7.0F ||
+        editor.mutationRevision() <= mutationBeforeRead) return 4;
 
     const Entity copy = editor.duplicate(entities[0]);
     if (!editor.valid(copy) || editor.size() != 3 || copy == entities[0] ||

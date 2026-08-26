@@ -4,6 +4,7 @@
 #include "Engine/Scene/SceneSerializer.h"
 
 #include <optional>
+#include <cstdint>
 #include <sstream>
 #include <string>
 #include <utility>
@@ -21,16 +22,21 @@ class SceneHistory final {
 public:
     void reset(const Engine::ScenePreset &scene) {
         baseline_ = serializeScene(scene);
+        observedRevision_ = scene.editor().mutationRevision();
         undo_.clear();
         redo_.clear();
     }
 
-    void capture(const Engine::ScenePreset &scene) {
+    [[nodiscard]] bool capture(const Engine::ScenePreset &scene) {
+        const std::uint64_t revision = scene.editor().mutationRevision();
+        if (revision == observedRevision_) return false;
         const std::string current = serializeScene(scene);
-        if (current == baseline_) return;
+        observedRevision_ = revision;
+        if (current == baseline_) return false;
         undo_.push_back(std::move(baseline_));
         baseline_ = current;
         redo_.clear();
+        return true;
     }
 
     [[nodiscard]] bool canUndo() const noexcept { return !undo_.empty(); }
@@ -48,12 +54,14 @@ private:
         from.pop_back();
         std::istringstream input{baseline_};
         Engine::SceneSerializer::load(scene, input);
+        observedRevision_ = scene.editor().mutationRevision();
         return true;
     }
 
     std::string baseline_;
     std::vector<std::string> undo_;
     std::vector<std::string> redo_;
+    std::uint64_t observedRevision_{};
 };
 
 class EntityClipboard final {

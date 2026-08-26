@@ -267,6 +267,11 @@ public:
         return registry_.structuralRevision();
     }
 
+    /** Monotonic revision advanced by every explicit ECS mutation. */
+    [[nodiscard]] std::uint64_t mutationRevision() const noexcept {
+        return registry_.mutationRevision();
+    }
+
     template<typename Func>
     void eachObject(Func&& func) {
         for (const auto& object : objects_) func(*object);

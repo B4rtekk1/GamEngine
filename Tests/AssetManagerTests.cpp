@@ -28,4 +28,22 @@ int main() {
     assert(mesh->vertices.front().normal.z() > 0.99F);
 
     std::filesystem::remove(path);
+
+    const auto treePath = std::filesystem::path{GAMEENGINE_SOURCE_DIR} /
+                          "Assets" / "Models" / "glTF" / "CommonTree_2.gltf";
+    const auto tree = assets.loadMesh(treePath);
+    assert(tree);
+    assert(!tree->vertices.empty());
+    assert(!tree->indices.empty() && tree->indices.size() % 3 == 0);
+    assert(tree->materials.size() == 3); // Two authored materials plus glTF's default.
+    assert(tree->images.size() == 3);
+    assert(tree->materials[0].baseColorTexture == 1);
+    assert(tree->materials[0].normalTexture == 0);
+    assert(tree->materials[1].baseColorTexture == 2);
+    assert(tree->materials[1].normalTexture == -1);
+    assert(tree->materials[0].alphaBlend && tree->materials[1].alphaBlend);
+    assert(tree->materials[0].alphaCutoff == 0.2F && tree->materials[1].alphaCutoff == 0.2F);
+    assert(tree->materials[0].doubleSided && tree->materials[1].doubleSided);
+    assert(tree->sourcePath == treePath);
+    return 0;
 }

@@ -40,3 +40,4 @@ project-ascii-tree.txt
 # Doxygen generated documentation
 /docs/
 out/
+Assets/Models/glTF/

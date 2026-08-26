@@ -83,6 +83,7 @@ add_library(Engine
         Engine/Source/Application.cpp
         Engine/Source/Assets/StbImage.cpp
         Engine/Source/Assets/AssetManager.cpp
+        Engine/Source/Assets/GlbLoader.cpp
         Engine/Source/Assets/Content.cpp
         Engine/Source/Core/Camera.cpp
         Engine/Source/Core/Time.cpp
@@ -228,8 +229,10 @@ if(BUILD_TESTING)
         set_source_files_properties("${source}" PROPERTIES
                 COMPILE_DEFINITIONS "main=${legacy_main}")
         add_executable(${test_target} Tests/GTestAdapter.cpp "${source}")
+        target_include_directories(${test_target} PRIVATE Editor/Include)
         target_compile_definitions(${test_target} PRIVATE
-                GAMEENGINE_LEGACY_TEST_FUNCTION=${legacy_main})
+                GAMEENGINE_LEGACY_TEST_FUNCTION=${legacy_main}
+                GAMEENGINE_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
         target_link_libraries(${test_target} PRIVATE Engine GTest::gtest_main)
         gameengine_enable_warnings(${test_target})
         gameengine_enable_sanitizers(${test_target})
