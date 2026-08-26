@@ -11,7 +11,7 @@
 
 namespace Engine {
     /**
-     * @brief Axis-aligned box collider shape.
+     * @brief Box collider shape aligned with the owning transform's local axes.
      *
      * The extents are measured from the collider's center to each face.
      */

@@ -28,6 +28,7 @@ namespace Engine {
         std::uint64_t runtimeBody = 0;
         Vec3 force{};
         Vec3 torque{};
+        Vec3 angularImpulse{};
 
         /** Adds a continuous force, applied during the next physics step. */
         void addForce(const Vec3& value) noexcept { force += value; }
@@ -40,9 +41,9 @@ namespace Engine {
             if (mass > 0.0F) linearVelocity += impulse * (1.0F / mass);
         }
 
-        /** Applies an instantaneous angular impulse to the body. */
+        /** Queues an instantaneous angular impulse for the next physics step. */
         void addAngularImpulse(const Vec3& impulse) noexcept {
-            if (mass > 0.0F) angularVelocity += impulse * (1.0F / mass);
+            angularImpulse += impulse;
         }
 
         /** Removes all accumulated linear force. */
@@ -51,19 +52,27 @@ namespace Engine {
         /** Removes all accumulated torque. */
         void zeroTorque() noexcept { torque = {}; }
 
+        /** Removes the queued angular impulse. */
+        void zeroAngularImpulse() noexcept { angularImpulse = {}; }
+
         /** Removes all accumulated forces and torques. */
         void zeroForces() noexcept {
             zeroForce();
             zeroTorque();
+            zeroAngularImpulse();
         }
 
         /** Stops linear and angular movement immediately. */
         void stop() noexcept {
             linearVelocity = {};
             angularVelocity = {};
+            angularImpulse = {};
         }
 
         [[nodiscard]] const Vec3& accumulatedForce() const noexcept { return force; }
         [[nodiscard]] const Vec3& accumulatedTorque() const noexcept { return torque; }
+        [[nodiscard]] const Vec3& accumulatedAngularImpulse() const noexcept {
+            return angularImpulse;
+        }
     };
 }

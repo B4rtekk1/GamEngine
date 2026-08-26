@@ -59,6 +59,9 @@ namespace EditorConstants {
     constexpr float eight = 8.0F;
     constexpr float nine = 9.0F;
     constexpr float hitTestRadius = 9.0F;
+    constexpr float rotationHitTestRadius = 12.0F;
+    constexpr float rotationRingThickness = 6.0F;
+    constexpr float hoveredRotationRingThickness = 9.0F;
     constexpr float twelve = 12.0F;
     constexpr float thirtyTwo = 32.0F;
     constexpr float fifteen = 15.0F;
@@ -82,6 +85,8 @@ namespace EditorConstants {
     constexpr int axisCount = 3;
     constexpr int orientationSegmentCount = 16;
     constexpr int rotationSegmentCount = 64;
+    constexpr double physicsStep = 1.0 / 120.0;
+    constexpr int maximumPhysicsStepsPerFrame = 12;
     constexpr int colorAlpha = 255;
     constexpr int windowWidth = 1280;
     constexpr int windowHeight = 720;
@@ -437,6 +442,7 @@ bool drawRotationGizmo(Engine::ScenePreset &scene, const Engine::Entity selected
     ImDrawList *drawList = ImGui::GetWindowDrawList();
     const ImVec2 originScreen = projectGizmoPoint(camera, origin, min, max);
     int hoveredAxis = -1;
+    float closestRingDistance = EditorConstants::rotationHitTestRadius;
     ImVec2 ringPoints[3][segments + 1]{};
     for (int axis = 0; axis < 3; ++axis) {
         for (int segment = 0; segment <= segments; ++segment) {
@@ -444,15 +450,21 @@ bool drawRotationGizmo(Engine::ScenePreset &scene, const Engine::Entity selected
             const Engine::Vec3 point = origin + radius *
                                        (ringBasisA[axis] * std::cos(angle) + ringBasisB[axis] * std::sin(angle));
             ringPoints[axis][segment] = projectGizmoPoint(camera, point, min, max);
-            if (segment > 0 && ImGui::IsMouseHoveringRect(min, max) &&
-                distanceToLineSegment(mouse, ringPoints[axis][segment - 1], ringPoints[axis][segment]) <
-                EditorConstants::hitTestRadius) {
-                hoveredAxis = axis;
+            if (segment > 0 && ImGui::IsMouseHoveringRect(min, max)) {
+                const float distance = distanceToLineSegment(
+                    mouse, ringPoints[axis][segment - 1], ringPoints[axis][segment]);
+                if (distance < closestRingDistance) {
+                    closestRingDistance = distance;
+                    hoveredAxis = axis;
+                }
             }
         }
+    }
+    for (int axis = 0; axis < 3; ++axis) {
         for (int segment = 1; segment <= segments; ++segment) {
             drawList->AddLine(ringPoints[axis][segment - 1], ringPoints[axis][segment], colors[axis],
-                              hoveredAxis == axis ? 5.0F : 3.0F);
+                              hoveredAxis == axis ? EditorConstants::hoveredRotationRingThickness
+                                                  : EditorConstants::rotationRingThickness);
         }
     }
     drawList->AddCircleFilled(originScreen, 7.0F, IM_COL32(245, 245, 245, 255));
@@ -462,22 +474,36 @@ bool drawRotationGizmo(Engine::ScenePreset &scene, const Engine::Entity selected
         int axis{-1};
         Engine::Vec3 startRotation{};
         Engine::Vec3 lastDirection{};
+        ImVec2 lastScreenDirection{};
         float accumulatedRadians{};
+        float screenRotationSign{1.0F};
+        bool useScreenSpace{};
     };
     static DragState drag;
     if (ImGui::IsMouseClicked(ImGuiMouseButton_Left) && hoveredAxis >= 0) {
-        Engine::Vec3 hitPoint{};
         const Engine::Vec3 axis = hoveredAxis == 0
                                       ? Engine::Vec3{1.0F, 0.0F, 0.0F}
                                       : hoveredAxis == 1
                                             ? Engine::Vec3{0.0F, 1.0F, 0.0F}
                                             : Engine::Vec3{0.0F, 0.0F, 1.0F};
-        if (!intersectRayPlane(camera.position(), viewportRayDirection(camera, mouse, min, max),
-                               origin, axis, hitPoint))
+        // A ring seen almost edge-on has a plane nearly parallel to the view
+        // ray. Ray-plane rotation then becomes excessively sensitive, so use
+        // its on-screen angular motion for that singular view instead.
+        const bool useScreenSpace = std::abs(dotProduct(camera.forward(), axis)) < 0.15F;
+        Engine::Vec3 hitPoint{};
+        if (!useScreenSpace && !intersectRayPlane(camera.position(), viewportRayDirection(camera, mouse, min, max),
+                                                   origin, axis, hitPoint))
             return true;
+        const ImVec2 screenDirection{mouse.x - originScreen.x, mouse.y - originScreen.y};
+        const ImVec2 projectedA{ringPoints[hoveredAxis][0].x - originScreen.x,
+                                ringPoints[hoveredAxis][0].y - originScreen.y};
+        const ImVec2 projectedB{ringPoints[hoveredAxis][segments / 4].x - originScreen.x,
+                                ringPoints[hoveredAxis][segments / 4].y - originScreen.y};
+        const float screenCross = projectedA.x * projectedB.y - projectedA.y * projectedB.x;
         drag = {
             selected, hoveredAxis, scene.editor().get<Engine::Transform>(selected).rotation,
-            (hitPoint - origin).normalized()
+            useScreenSpace ? Engine::Vec3{} : (hitPoint - origin).normalized(), screenDirection,
+            0.0F, screenCross < 0.0F ? -1.0F : 1.0F, useScreenSpace
         };
         ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
         return true;
@@ -488,15 +514,29 @@ bool drawRotationGizmo(Engine::ScenePreset &scene, const Engine::Entity selected
                                       : drag.axis == 1
                                             ? Engine::Vec3{0.0F, 1.0F, 0.0F}
                                             : Engine::Vec3{0.0F, 0.0F, 1.0F};
-        Engine::Vec3 hitPoint{};
-        if (!intersectRayPlane(camera.position(), viewportRayDirection(camera, mouse, min, max),
-                               origin, axis, hitPoint))
-            return true;
-        const Engine::Vec3 currentDirection = (hitPoint - origin).normalized();
-        drag.accumulatedRadians += std::atan2(
-            dotProduct(axis, Engine::cross(drag.lastDirection, currentDirection)),
-            dotProduct(drag.lastDirection, currentDirection));
-        drag.lastDirection = currentDirection;
+        if (drag.useScreenSpace) {
+            const ImVec2 currentDirection{mouse.x - originScreen.x, mouse.y - originScreen.y};
+            const float currentLength = std::hypot(currentDirection.x, currentDirection.y);
+            const float previousLength = std::hypot(drag.lastScreenDirection.x, drag.lastScreenDirection.y);
+            if (currentLength > EditorConstants::epsilon && previousLength > EditorConstants::epsilon) {
+                const float cross = drag.lastScreenDirection.x * currentDirection.y -
+                                    drag.lastScreenDirection.y * currentDirection.x;
+                const float dot = drag.lastScreenDirection.x * currentDirection.x +
+                                  drag.lastScreenDirection.y * currentDirection.y;
+                drag.accumulatedRadians += drag.screenRotationSign * std::atan2(cross, dot);
+            }
+            drag.lastScreenDirection = currentDirection;
+        } else {
+            Engine::Vec3 hitPoint{};
+            if (!intersectRayPlane(camera.position(), viewportRayDirection(camera, mouse, min, max),
+                                   origin, axis, hitPoint))
+                return true;
+            const Engine::Vec3 currentDirection = (hitPoint - origin).normalized();
+            drag.accumulatedRadians += std::atan2(
+                dotProduct(axis, Engine::cross(drag.lastDirection, currentDirection)),
+                dotProduct(drag.lastDirection, currentDirection));
+            drag.lastDirection = currentDirection;
+        }
         Engine::Vec3 rotation = drag.startRotation;
         float degrees = drag.accumulatedRadians * EditorConstants::degreesPerRadian;
         if (ImGui::GetIO().KeyCtrl) {
@@ -1471,6 +1511,7 @@ int main() {
         bool rendererReloadPending = false;
         bool playing = false;
         bool paused = false;
+        double physicsAccumulator = 0.0;
         bool showGameView = false;
         GizmoMode gizmoMode = GizmoMode::Translate;
         std::string playSceneSnapshot;
@@ -1490,12 +1531,14 @@ int main() {
                                                     EditorSceneSession::msaaSampleCount(renderer))) {
                     playing = !playing;
                     paused = false;
+                    physicsAccumulator = 0.0;
                     showGameView = playing;
                     rendererReloadPending = !playing;
                 }
             }
             if (events.togglePause && playing) {
                 paused = !paused;
+                physicsAccumulator = 0.0;
             }
             if (!running) {
                 break;
@@ -1569,6 +1612,7 @@ int main() {
                                                                        EditorSceneSession::msaaSampleCount(renderer))) {
                 playing = !playing;
                 paused = false;
+                physicsAccumulator = 0.0;
                 showGameView = playing;
                 if (!playing) {
                     selectedEntity = Engine::NullEntity;
@@ -1578,6 +1622,7 @@ int main() {
             }
             if (pauseToggleRequested && playing) {
                 paused = !paused;
+                physicsAccumulator = 0.0;
             }
             const ImGuiID dockspaceId = ImGui::GetMainViewport()->ID;
             ImGui::DockSpaceOverViewport(dockspaceId, ImGui::GetMainViewport(),
@@ -1687,7 +1732,14 @@ int main() {
                 history.capture(scene);
             }
             if (playing && !paused) {
-                physicsSystem.update(scene, static_cast<float>(Engine::Time::deltaTime()));
+                physicsAccumulator += Engine::Time::deltaTime();
+                int physicsSteps = 0;
+                while (physicsAccumulator >= EditorConstants::physicsStep &&
+                       physicsSteps < EditorConstants::maximumPhysicsStepsPerFrame) {
+                    physicsSystem.update(scene, static_cast<float>(EditorConstants::physicsStep));
+                    physicsAccumulator -= EditorConstants::physicsStep;
+                    ++physicsSteps;
+                }
                 scriptSystem.update(scene, static_cast<float>(Engine::Time::deltaTime()));
             }
             renderer.renderFrame();
