@@ -1,4 +1,4 @@
-**
+/**
  * @file EditorSceneSession.cpp
  * @brief Implements editor-scene persistence, play-mode transitions and C++
  *        script generation.

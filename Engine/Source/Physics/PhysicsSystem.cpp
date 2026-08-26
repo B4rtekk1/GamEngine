@@ -366,7 +366,8 @@ void resolveContact(RigidbodyComponent& bodyA, Transform& transformA,
             // A face contact is a set of constraints, not a single constraint
             // at the centroid. Keeping all support points lets a broad box
             // develop the stabilising normal impulses that resist spurious
-            // tipping and yaw.
+            // tipping and yaw. Sequential updates of relative velocity inside
+            // the point loop prevent the old "N full impulses" explosion.
             for (std::size_t pointIndex = 0; pointIndex < points.size(); ++pointIndex) {
                 Contact manifoldContact = contact;
                 manifoldContact.point = points[pointIndex];
@@ -1020,18 +1021,29 @@ void PhysicsSystem::update(Scene& scene, const float deltaTime) const {
                         const OrientedBox box = orientedBox(transform, collider);
                         const OrientedBox otherBox = orientedBox(other.transform, otherCollider);
                         if (const auto contact = boxBoxContact(box, otherBox)) {
-                            const std::vector<Vec3> contactPoints =
-                                boxSupportFeaturePoints(box, contact->normal * -1.0F);
                             RigidbodyComponent* otherBody = other.dynamic
                                 ? &registry.get<RigidbodyComponent>(other.entity)
                                 : nullptr;
                             Transform* otherTransform = other.dynamic
                                 ? &registry.get<Transform>(other.entity)
                                 : nullptr;
+                            // Dynamic pairs use a single contact point. A face
+                            // manifold on the heavy editor cube applied corner
+                            // torques that flipped it, while scaling those
+                            // impulses down let the lighter cube sink in and
+                            // then rebound. Static surfaces still use the
+                            // manifold so resting boxes keep anti-tip support.
+                            // The SAT midpoint is the stable single-point
+                            // location; A's face support alone biases levers.
+                            const std::vector<Vec3> contactPoints = other.dynamic
+                                ? std::vector<Vec3>{}
+                                : boxSupportFeaturePoints(box, contact->normal * -1.0F);
+                            const Vec3 contactPoint = other.dynamic
+                                ? contact->point
+                                : boxSupportPoint(box, contact->normal * -1.0F);
                             resolveContact(body, transform, collider,
                                 otherBody, otherTransform, otherCollider,
-                                Contact{contact->normal, contact->penetration,
-                                    boxSupportPoint(box, contact->normal * -1.0F)},
+                                Contact{contact->normal, contact->penetration, contactPoint},
                                 std::max(collider.restitution, otherCollider.restitution),
                                 std::sqrt(std::max(
                                     0.0F, collider.friction * otherCollider.friction)),
@@ -1135,6 +1147,18 @@ void PhysicsSystem::update(Scene& scene, const float deltaTime) const {
                             continue;
                         }
                     }
+                    // Height-field snap is only for static floors/ramps. Using
+                    // it against another dynamic box (e.g. after SAT reports no
+                    // penetration while AABBs still overlap) teleports the
+                    // active body onto that box's AABB top — which is exactly
+                    // how the heavy editor cube jumps when it meets Cube 2.
+                    // Box-vs-box is already handled by SAT above; do not fall
+                    // through into a vertical snap for those pairs either.
+                    if (other.dynamic ||
+                        (!isSphere && std::holds_alternative<BoxCollider>(collider.shape) &&
+                         std::holds_alternative<BoxCollider>(otherCollider.shape))) {
+                        continue;
+                    }
                     if (isRamp) {
                         const Vec3 localPosition = rampLocalPosition(other.bounds, bodyBounds.center,
                                                                      other.yawRadians);
@@ -1161,9 +1185,12 @@ void PhysicsSystem::update(Scene& scene, const float deltaTime) const {
                     const float previousTargetY = isSphere || isBox
                         ? previousTop + supportRadius / normal.y()
                         : previousTop + supportRadius;
+                    // Boxes must approach from above the resting height, not
+                    // merely clear the surface AABB top — otherwise a tilting
+                    // OBB that dips under its new support height is snapped
+                    // upward in one frame.
                     const bool approachedFromAbove =
-                        previousPosition.y() >= previousTargetY - 1e-4F ||
-                        (isBox && previousPosition.y() >= previousTop);
+                        previousPosition.y() >= previousTargetY - 1e-4F;
                     if (transform.position.y() <= targetCenterY + 1e-4F &&
                         approachedFromAbove &&
                         dot(body.linearVelocity, normal) <= 1e-4F &&

@@ -693,5 +693,39 @@ int main() {
         return 34;
     }
 
+    // Regression: the heavy editor cube must not teleport upward when struck
+    // by a lighter dynamic cube. Manifold over-impulse plus AABB height-snap
+    // previously flipped the heavy body and snapped it onto the contactee.
+    Scene heavyCubeStrikeScene;
+    auto heavyGround = heavyCubeStrikeScene.createActor("Ground");
+    heavyGround.addBoxCollider({20.0F, 0.05F, 20.0F});
+    auto heavyCube = heavyCubeStrikeScene.createActor("Heavy cube");
+    heavyCube.setPosition({0.0F, 1.55F, 0.0F});
+    heavyCube.setScale({3.0F, 3.0F, 0.3F});
+    heavyCube.addRigidbody(RigidbodyComponent{
+        .mass = 52.0F, .linearDamping = 0.5F, .angularDamping = 2.0F
+    });
+    heavyCube.addBoxCollider();
+    auto lightStriker = heavyCubeStrikeScene.createActor("Light striker");
+    lightStriker.setPosition({0.0F, 1.55F, 2.0F});
+    lightStriker.addRigidbody(RigidbodyComponent{
+        .mass = 1.0F, .linearVelocity = {0.0F, 0.0F, -8.0F}
+    });
+    lightStriker.addBoxCollider();
+    for (int settle = 0; settle < 30; ++settle) {
+        physics.update(heavyCubeStrikeScene, 1.0F / 120.0F);
+    }
+    const float settledHeavyY = heavyCube.position().y();
+    float maximumHeavyY = settledHeavyY;
+    for (int step = 0; step < 180; ++step) {
+        physics.update(heavyCubeStrikeScene, 1.0F / 120.0F);
+        maximumHeavyY = std::max(maximumHeavyY, heavyCube.position().y());
+        if (!std::isfinite(heavyCube.position().y()) ||
+            heavyCube.position().y() > settledHeavyY + 1.0F) {
+            return 35;
+        }
+    }
+    if (maximumHeavyY > settledHeavyY + 0.75F) return 35;
+
     return 0;
 }
