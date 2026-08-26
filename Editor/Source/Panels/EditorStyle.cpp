@@ -13,90 +13,94 @@ namespace {
      *  Constants controlling padding, spacing, border thickness and rounding.
      *  @{
      */
-    constexpr float kWindowPaddingX = 16.0F;     ///< Horizontal window padding, in pixels.
-    constexpr float kWindowPaddingY = 14.0F;     ///< Vertical window padding, in pixels.
-    constexpr float kFramePaddingX = 10.0F;      ///< Horizontal frame padding, in pixels.
-    constexpr float kFramePaddingY = 8.0F;       ///< Vertical frame padding, in pixels.
-    constexpr float kItemSpacingX = 10.0F;       ///< Horizontal spacing between widgets, in pixels.
-    constexpr float kItemSpacingY = 10.0F;       ///< Vertical spacing between widgets, in pixels.
-    constexpr float kItemInnerSpacingX = 8.0F;   ///< Horizontal spacing inside compound widgets, in pixels.
-    constexpr float kItemInnerSpacingY = 6.0F;   ///< Vertical spacing inside compound widgets, in pixels.
-    constexpr float kScrollbarSize = 13.0F;      ///< Scrollbar width, in pixels.
-    constexpr float kGrabMinSize = 12.0F;        ///< Minimum slider and scrollbar grab size, in pixels.
-    constexpr float kBorderSize = 1.0F;          ///< Window and child border thickness, in pixels.
-    constexpr float kFrameBorderSize = 0.0F;     ///< Frame border thickness, in pixels.
-    constexpr float kWindowRounding = 8.0F;      ///< Window corner radius, in pixels.
-    constexpr float kChildRounding = 7.0F;       ///< Child-window corner radius, in pixels.
-    constexpr float kFrameRounding = 6.0F;       ///< Widget frame corner radius, in pixels.
-    constexpr float kPopupRounding = 7.0F;       ///< Popup corner radius, in pixels.
-    constexpr float kScrollbarRounding = 8.0F;   ///< Scrollbar corner radius, in pixels.
-    constexpr float kGrabRounding = 6.0F;        ///< Slider and scrollbar grab corner radius, in pixels.
-    constexpr float kTabRounding = 6.0F;         ///< Tab corner radius, in pixels.
+    constexpr float kWindowPaddingX = 14.0F;
+    constexpr float kWindowPaddingY = 12.0F;
+    constexpr float kFramePaddingX = 10.0F;
+    constexpr float kFramePaddingY = 7.0F;
+    constexpr float kItemSpacingX = 8.0F;
+    constexpr float kItemSpacingY = 8.0F;
+    constexpr float kItemInnerSpacingX = 8.0F;
+    constexpr float kItemInnerSpacingY = 5.0F;
+    constexpr float kIndentSpacing = 18.0F;
+    constexpr float kScrollbarSize = 12.0F;
+    constexpr float kGrabMinSize = 10.0F;
+    constexpr float kBorderSize = 1.0F;
+    constexpr float kFrameBorderSize = 0.0F;
+    constexpr float kWindowRounding = 6.0F;
+    constexpr float kChildRounding = 5.0F;
+    constexpr float kFrameRounding = 5.0F;
+    constexpr float kPopupRounding = 6.0F;
+    constexpr float kScrollbarRounding = 8.0F;
+    constexpr float kGrabRounding = 4.0F;
+    constexpr float kTabRounding = 4.0F;
     /** @} */
 
     /** @name Default docking layout
-     *  Constants used to construct the initial editor workspace.
      *  @{
      */
-    constexpr ImGuiID kEmptyDockNodeId = 0;       ///< Initial value for dock-node identifiers.
-    constexpr float kHierarchyWidthRatio = 0.22F; ///< Fraction of the viewport assigned to the hierarchy panel.
-    constexpr float kInspectorWidthRatio = 0.28F; ///< Fraction of the remaining center area assigned to the inspector.
+    constexpr ImGuiID kEmptyDockNodeId = 0;
+    constexpr float kHierarchyWidthRatio = 0.22F;
+    constexpr float kInspectorWidthRatio = 0.28F;
     /** @} */
 }
 
 /**
  * @brief Applies the editor's global ImGui visual style.
  *
- * Resets ImGui to its dark theme and then configures editor-specific spacing,
- * border sizes, corner rounding and colors for windows, widgets, tabs, docking
- * previews and resize grips.
- *
- * @note The function modifies the global ImGuiStyle instance returned by
- *       ImGui::GetStyle().
+ * Soft charcoal surfaces with a calm sky accent keep long editing sessions
+ * comfortable while selected controls remain easy to spot.
  */
 void EditorStyle::apply() {
-    constexpr ImVec4 kWindowBackground = {0.075F, 0.086F, 0.110F, 1.0F};
-    constexpr ImVec4 kChildBackground = {0.060F, 0.070F, 0.092F, 1.0F};
-    constexpr ImVec4 kPopupBackground = {0.105F, 0.120F, 0.150F, 0.99F};
-    constexpr ImVec4 kMenuBarBackground = {0.047F, 0.055F, 0.074F, 1.0F};
-    constexpr ImVec4 kTitleBackground = {0.062F, 0.073F, 0.096F, 1.0F};
-    constexpr ImVec4 kActiveTitleBackground = {0.092F, 0.128F, 0.150F, 1.0F};
-    constexpr ImVec4 kHeader = {0.12F, 0.35F, 0.40F, 0.65F};
-    constexpr ImVec4 kHoveredHeader = {0.13F, 0.55F, 0.62F, 0.62F};
-    constexpr ImVec4 kActiveHeader = {0.10F, 0.68F, 0.75F, 0.82F};
-    constexpr ImVec4 kButton = {0.115F, 0.155F, 0.205F, 1.0F};
-    constexpr ImVec4 kHoveredButton = {0.15F, 0.43F, 0.50F, 1.0F};
-    constexpr ImVec4 kActiveButton = {0.11F, 0.61F, 0.68F, 1.0F};
-    constexpr ImVec4 kFrameBackground = {0.105F, 0.125F, 0.160F, 1.0F};
-    constexpr ImVec4 kHoveredFrameBackground = {0.14F, 0.215F, 0.260F, 1.0F};
-    constexpr ImVec4 kActiveFrameBackground = {0.12F, 0.33F, 0.38F, 1.0F};
-    constexpr ImVec4 kBorder = {0.18F, 0.225F, 0.275F, 1.0F};
-    constexpr ImVec4 kSeparator = {0.18F, 0.245F, 0.290F, 1.0F};
-    constexpr ImVec4 kText = {0.91F, 0.94F, 0.98F, 1.0F};
-    constexpr ImVec4 kDisabledText = {0.55F, 0.62F, 0.70F, 1.0F};
-    constexpr ImVec4 kCheckMark = {0.30F, 0.90F, 0.86F, 1.0F};
-    constexpr ImVec4 kSliderGrab = {0.20F, 0.72F, 0.76F, 1.0F};
-    constexpr ImVec4 kActiveSliderGrab = {0.38F, 0.94F, 0.89F, 1.0F};
-    constexpr ImVec4 kTab = {0.080F, 0.105F, 0.140F, 1.0F};
-    constexpr ImVec4 kHoveredTab = {0.14F, 0.50F, 0.57F, 1.0F};
-    constexpr ImVec4 kActiveTab = {0.12F, 0.31F, 0.37F, 1.0F};
-    constexpr ImVec4 kDockingPreview = {0.20F, 0.82F, 0.86F, 0.55F};
-    constexpr ImVec4 kResizeGrip = {0.18F, 0.65F, 0.70F, 0.30F};
-    constexpr ImVec4 kHoveredResizeGrip = {0.28F, 0.84F, 0.85F, 0.75F};
-    constexpr ImVec4 kActiveResizeGrip = {0.38F, 0.94F, 0.89F, 0.95F};
+    // Warm charcoal surfaces — easier on the eyes than cold blue-black.
+    constexpr ImVec4 kWindowBackground = {0.118F, 0.122F, 0.145F, 1.0F};
+    constexpr ImVec4 kChildBackground = {0.098F, 0.102F, 0.122F, 1.0F};
+    constexpr ImVec4 kPopupBackground = {0.145F, 0.150F, 0.175F, 0.98F};
+    constexpr ImVec4 kMenuBarBackground = {0.086F, 0.090F, 0.110F, 1.0F};
+    constexpr ImVec4 kTitleBackground = {0.098F, 0.102F, 0.122F, 1.0F};
+    constexpr ImVec4 kActiveTitleBackground = {0.130F, 0.145F, 0.180F, 1.0F};
+    // Soft sky accent for selection and interactive feedback.
+    constexpr ImVec4 kHeader = {0.22F, 0.42F, 0.58F, 0.55F};
+    constexpr ImVec4 kHoveredHeader = {0.28F, 0.52F, 0.70F, 0.70F};
+    constexpr ImVec4 kActiveHeader = {0.32F, 0.58F, 0.78F, 0.90F};
+    constexpr ImVec4 kButton = {0.165F, 0.175F, 0.210F, 1.0F};
+    constexpr ImVec4 kHoveredButton = {0.26F, 0.48F, 0.66F, 1.0F};
+    constexpr ImVec4 kActiveButton = {0.30F, 0.56F, 0.76F, 1.0F};
+    constexpr ImVec4 kFrameBackground = {0.145F, 0.152F, 0.185F, 1.0F};
+    constexpr ImVec4 kHoveredFrameBackground = {0.175F, 0.195F, 0.240F, 1.0F};
+    constexpr ImVec4 kActiveFrameBackground = {0.200F, 0.280F, 0.360F, 1.0F};
+    constexpr ImVec4 kBorder = {0.220F, 0.235F, 0.280F, 0.85F};
+    constexpr ImVec4 kSeparator = {0.210F, 0.225F, 0.270F, 1.0F};
+    constexpr ImVec4 kText = {0.93F, 0.94F, 0.96F, 1.0F};
+    constexpr ImVec4 kDisabledText = {0.58F, 0.62F, 0.70F, 1.0F};
+    constexpr ImVec4 kCheckMark = {0.55F, 0.82F, 1.0F, 1.0F};
+    constexpr ImVec4 kSliderGrab = {0.42F, 0.68F, 0.90F, 1.0F};
+    constexpr ImVec4 kActiveSliderGrab = {0.55F, 0.80F, 1.0F, 1.0F};
+    constexpr ImVec4 kTab = {0.110F, 0.115F, 0.140F, 1.0F};
+    constexpr ImVec4 kHoveredTab = {0.24F, 0.42F, 0.58F, 1.0F};
+    constexpr ImVec4 kActiveTab = {0.165F, 0.195F, 0.255F, 1.0F};
+    constexpr ImVec4 kUnfocusedTab = {0.100F, 0.105F, 0.128F, 1.0F};
+    constexpr ImVec4 kUnfocusedTabActive = {0.130F, 0.140F, 0.175F, 1.0F};
+    constexpr ImVec4 kDockingPreview = {0.40F, 0.70F, 0.95F, 0.45F};
+    constexpr ImVec4 kResizeGrip = {0.35F, 0.55F, 0.75F, 0.25F};
+    constexpr ImVec4 kHoveredResizeGrip = {0.45F, 0.70F, 0.92F, 0.70F};
+    constexpr ImVec4 kActiveResizeGrip = {0.55F, 0.80F, 1.0F, 0.95F};
+    constexpr ImVec4 kScrollbarBg = {0.080F, 0.084F, 0.100F, 0.60F};
+    constexpr ImVec4 kScrollbarGrab = {0.28F, 0.32F, 0.40F, 1.0F};
+    constexpr ImVec4 kScrollbarGrabHovered = {0.38F, 0.48F, 0.62F, 1.0F};
+    constexpr ImVec4 kScrollbarGrabActive = {0.45F, 0.60F, 0.78F, 1.0F};
 
     ImGui::StyleColorsDark();
     ImGuiStyle &style = ImGui::GetStyle();
-    // Generous spacing and distinct interaction states make dense editor
-    // panels easier to scan and more comfortable to use for long sessions.
     style.WindowPadding = {kWindowPaddingX, kWindowPaddingY};
     style.FramePadding = {kFramePaddingX, kFramePaddingY};
     style.ItemSpacing = {kItemSpacingX, kItemSpacingY};
     style.ItemInnerSpacing = {kItemInnerSpacingX, kItemInnerSpacingY};
+    style.IndentSpacing = kIndentSpacing;
     style.ScrollbarSize = kScrollbarSize;
     style.GrabMinSize = kGrabMinSize;
     style.WindowBorderSize = kBorderSize;
     style.ChildBorderSize = kBorderSize;
+    style.PopupBorderSize = kBorderSize;
     style.FrameBorderSize = kFrameBorderSize;
     style.WindowRounding = kWindowRounding;
     style.ChildRounding = kChildRounding;
@@ -105,6 +109,9 @@ void EditorStyle::apply() {
     style.ScrollbarRounding = kScrollbarRounding;
     style.GrabRounding = kGrabRounding;
     style.TabRounding = kTabRounding;
+    style.WindowTitleAlign = {0.0F, 0.5F};
+    style.ButtonTextAlign = {0.5F, 0.5F};
+    style.SelectableTextAlign = {0.0F, 0.5F};
 
     ImVec4 *colors = style.Colors;
     colors[ImGuiCol_WindowBg] = kWindowBackground;
@@ -124,7 +131,10 @@ void EditorStyle::apply() {
     colors[ImGuiCol_FrameBgHovered] = kHoveredFrameBackground;
     colors[ImGuiCol_FrameBgActive] = kActiveFrameBackground;
     colors[ImGuiCol_Border] = kBorder;
+    colors[ImGuiCol_BorderShadow] = {0.0F, 0.0F, 0.0F, 0.0F};
     colors[ImGuiCol_Separator] = kSeparator;
+    colors[ImGuiCol_SeparatorHovered] = kHoveredHeader;
+    colors[ImGuiCol_SeparatorActive] = kActiveHeader;
     colors[ImGuiCol_Text] = kText;
     colors[ImGuiCol_TextDisabled] = kDisabledText;
     colors[ImGuiCol_CheckMark] = kCheckMark;
@@ -133,25 +143,25 @@ void EditorStyle::apply() {
     colors[ImGuiCol_Tab] = kTab;
     colors[ImGuiCol_TabHovered] = kHoveredTab;
     colors[ImGuiCol_TabActive] = kActiveTab;
+    colors[ImGuiCol_TabUnfocused] = kUnfocusedTab;
+    colors[ImGuiCol_TabUnfocusedActive] = kUnfocusedTabActive;
     colors[ImGuiCol_DockingPreview] = kDockingPreview;
     colors[ImGuiCol_DockingEmptyBg] = kMenuBarBackground;
     colors[ImGuiCol_ResizeGrip] = kResizeGrip;
     colors[ImGuiCol_ResizeGripHovered] = kHoveredResizeGrip;
     colors[ImGuiCol_ResizeGripActive] = kActiveResizeGrip;
+    colors[ImGuiCol_ScrollbarBg] = kScrollbarBg;
+    colors[ImGuiCol_ScrollbarGrab] = kScrollbarGrab;
+    colors[ImGuiCol_ScrollbarGrabHovered] = kScrollbarGrabHovered;
+    colors[ImGuiCol_ScrollbarGrabActive] = kScrollbarGrabActive;
+    colors[ImGuiCol_PlotHistogram] = kSliderGrab;
+    colors[ImGuiCol_PlotLines] = kCheckMark;
+    colors[ImGuiCol_NavHighlight] = kActiveHeader;
+    colors[ImGuiCol_ModalWindowDimBg] = {0.04F, 0.045F, 0.06F, 0.55F};
 }
 
 /**
  * @brief Creates the default editor docking layout once.
- *
- * Rebuilds the main viewport dock space and assigns the Hierarchy panel to the
- * left, the Viewport to the center and the Inspector to the right. Subsequent
- * calls return immediately so that user changes to the docking layout are not
- * overwritten during later frames.
- *
- * @pre An active ImGui context and main viewport must exist.
- *
- * @note The layout is configured once per process by means of a function-local
- *       static flag.
  */
 void EditorStyle::configureDockLayout() {
     static bool configured = false;

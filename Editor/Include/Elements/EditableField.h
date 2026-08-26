@@ -5,7 +5,7 @@
 #include "Engine/ECS/GameObject.h"
 #include "Engine/Math/Vec3.h"
 
-#include <algorithm>
+#include <cstdio>
 #include <functional>
 
 /**
@@ -19,19 +19,19 @@
  *       valid for the entire lifetime of the EditableField instance.
  */
 class EditableField {
-    static constexpr int ComponentCount = 3;                  ///< Number of components in an Engine::Vec3.
-    static constexpr int FirstComponent = 0;                  ///< Index of the first editable component.
-    static constexpr int LastComponent = ComponentCount - 1; ///< Index of the last editable component.
-    static constexpr int XIndex = 0;                          ///< Index of the X component.
-    static constexpr int YIndex = 1;                          ///< Index of the Y component.
-    static constexpr int ZIndex = 2;                          ///< Index of the Z component.
-    static constexpr float LabelRed = 0.62F;                  ///< Red component of the field label color.
-    static constexpr float LabelGreen = 0.75F;                ///< Green component of the field label color.
-    static constexpr float LabelBlue = 0.80F;                 ///< Blue component of the field label color.
-    static constexpr float FullOpacity = 1.0F;                ///< Fully opaque alpha value.
-    static constexpr float FullWidth = -1.0F;                 ///< ImGui value requesting all available width.
-    static constexpr float NoDragLimit = 0.0F;                ///< ImGui value disabling a drag boundary.
-    static constexpr float NoMouseWheel = 0.0F;               ///< Mouse-wheel delta representing no scrolling.
+    static constexpr int ComponentCount = 3;
+    static constexpr int FirstComponent = 0;
+    static constexpr int XIndex = 0;
+    static constexpr int YIndex = 1;
+    static constexpr int ZIndex = 2;
+    static constexpr float LabelRed = 0.72F;
+    static constexpr float LabelGreen = 0.78F;
+    static constexpr float LabelBlue = 0.86F;
+    static constexpr float FullOpacity = 1.0F;
+    static constexpr float NoDragLimit = 0.0F;
+    static constexpr float NoMouseWheel = 0.0F;
+    static constexpr float AxisBadgeWidth = 18.0F;
+    static constexpr float AxisFieldGap = 4.0F;
 
 public:
     /**
@@ -48,14 +48,10 @@ protected:
     ~EditableField() = default;
 
     /**
-     * @brief Draws an editable three-component vector field.
+     * @brief Draws an editable three-component vector field with colored XYZ badges.
      *
-     * Displays a colored label followed by an ImGui drag widget. When the value
-     * changes, the supplied callback is invoked with the updated vector.
-     * Individual components may also be adjusted using the mouse wheel.
-     *
-     * @param label Text displayed next to the field.
-     * @param widgetId Unique ImGui identifier used by the drag widget.
+     * @param label Text displayed above the field.
+     * @param widgetId Unique ImGui identifier used by the drag widgets.
      * @param current Current vector value displayed by the field.
      * @param speed Amount by which dragging or one mouse-wheel step changes a component.
      * @param format printf-style format used to display component values.
@@ -68,12 +64,51 @@ protected:
         float values[ComponentCount] = {current.x(), current.y(), current.z()};
         ImGui::TextColored({LabelRed, LabelGreen, LabelBlue, FullOpacity}, "%s", label);
         ImGui::SameLine();
-        ImGui::TextDisabled("  Scroll over a value to adjust");
-        ImGui::SetNextItemWidth(FullWidth);
-        if (!dragFloat3WithWheel(widgetId, values, speed, format)) {
-            return;
+        ImGui::TextDisabled("(scroll to nudge)");
+
+        constexpr ImVec4 axisColors[ComponentCount] = {
+            {0.92F, 0.38F, 0.38F, 1.0F},
+            {0.42F, 0.78F, 0.45F, 1.0F},
+            {0.40F, 0.62F, 0.95F, 1.0F},
+        };
+        constexpr const char* axisLabels[ComponentCount] = {"X", "Y", "Z"};
+
+        const float available = ImGui::GetContentRegionAvail().x;
+        const float fieldWidth =
+            (available - AxisBadgeWidth * static_cast<float>(ComponentCount) -
+             AxisFieldGap * static_cast<float>(ComponentCount - 1) -
+             ImGui::GetStyle().ItemInnerSpacing.x * static_cast<float>(ComponentCount)) /
+            static_cast<float>(ComponentCount);
+
+        bool changed = false;
+        ImGui::PushID(widgetId);
+        for (int index = FirstComponent; index < ComponentCount; ++index) {
+            if (index > FirstComponent) {
+                ImGui::SameLine(0.0F, AxisFieldGap);
+            }
+            ImGui::PushStyleColor(ImGuiCol_Button, axisColors[index]);
+            ImGui::PushStyleColor(ImGuiCol_ButtonHovered, axisColors[index]);
+            ImGui::PushStyleColor(ImGuiCol_ButtonActive, axisColors[index]);
+            ImGui::PushStyleColor(ImGuiCol_Text, {1.0F, 1.0F, 1.0F, 1.0F});
+            ImGui::Button(axisLabels[index], {AxisBadgeWidth, 0.0F});
+            ImGui::PopStyleColor(4);
+            ImGui::SameLine(0.0F, ImGui::GetStyle().ItemInnerSpacing.x);
+            ImGui::SetNextItemWidth(fieldWidth);
+            char id[16];
+            std::snprintf(id, sizeof(id), "##%d", index);
+            if (ImGui::DragFloat(id, &values[index], speed, NoDragLimit, NoDragLimit, format)) {
+                changed = true;
+            }
+            if (ImGui::IsItemHovered() && ImGui::GetIO().MouseWheel != NoMouseWheel) {
+                values[index] += ImGui::GetIO().MouseWheel * speed;
+                changed = true;
+            }
         }
-        update(Engine::Vec3{values[XIndex], values[YIndex], values[ZIndex]});
+        ImGui::PopID();
+
+        if (changed) {
+            update(Engine::Vec3{values[XIndex], values[YIndex], values[ZIndex]});
+        }
     }
 
     /**
@@ -84,35 +119,5 @@ protected:
     [[nodiscard]] Engine::GameObject& object() const noexcept { return *object_; }
 
 private:
-    /**
-     * @brief Draws a three-component drag widget with mouse-wheel support.
-     *
-     * The component under the mouse cursor is incremented or decremented when
-     * the user scrolls over the widget.
-     *
-     * @param label ImGui label or unique widget identifier.
-     * @param values Array containing the three editable component values.
-     * @param speed Drag speed and mouse-wheel increment.
-     * @param format printf-style format used to display component values.
-     *
-     * @return true if dragging or mouse-wheel input changed a value;
-     *         otherwise false.
-     */
-    static bool dragFloat3WithWheel(const char* label, float values[ComponentCount], const float speed,
-                                    const char* format) {
-        bool changed = ImGui::DragFloat3(label, values, speed, NoDragLimit, NoDragLimit, format);
-        if (!ImGui::IsItemHovered() || ImGui::GetIO().MouseWheel == NoMouseWheel) {
-            return changed;
-        }
-
-        const ImVec2 min = ImGui::GetItemRectMin();
-        const ImVec2 max = ImGui::GetItemRectMax();
-        const float fieldWidth = (max.x - min.x) / static_cast<float>(ComponentCount);
-        const int field = std::clamp(
-            static_cast<int>((ImGui::GetIO().MousePos.x - min.x) / fieldWidth), FirstComponent, LastComponent);
-        values[field] += ImGui::GetIO().MouseWheel * speed;
-        return true;
-    }
-
     Engine::GameObject* object_; ///< Non-owning pointer to the associated game object.
 };
