@@ -208,177 +208,38 @@ add_subdirectory(Sandbox)
 # means an Editor build always leaves a runnable game beside its assets.
 add_dependencies(Editor GamEngine)
 if(BUILD_TESTING)
-    add_executable(CanvasTests Tests/CanvasTests.cpp)
-    target_link_libraries(CanvasTests PRIVATE Engine)
-    add_test(NAME CanvasTests COMMAND CanvasTests)
+    include(FetchContent)
+    FetchContent_Declare(
+            googletest
+            GIT_REPOSITORY https://github.com/google/googletest.git
+            GIT_TAG v1.17.0
+            GIT_SHALLOW TRUE)
+    FetchContent_MakeAvailable(googletest)
 
-    add_executable(SceneSerializerTests Tests/SceneSerializerTests.cpp)
-    target_link_libraries(SceneSerializerTests PRIVATE Engine)
-    add_test(NAME SceneSerializerTests COMMAND SceneSerializerTests)
+    include(GoogleTest)
 
-    add_executable(RegistryTests Tests/RegistryTests.cpp)
-    target_link_libraries(RegistryTests PRIVATE Engine)
-    add_test(NAME RegistryTests COMMAND RegistryTests)
+    function(gameengine_add_test source)
+        get_filename_component(test_target "${source}" NAME_WE)
+        string(MAKE_C_IDENTIFIER "gameengine_${test_target}_legacy_main" legacy_main)
 
-    add_executable(AssetManagerTests Tests/AssetManagerTests.cpp)
-    target_link_libraries(AssetManagerTests PRIVATE Engine)
-    add_test(NAME AssetManagerTests COMMAND AssetManagerTests)
-
-    add_executable(ScriptSystemTests Tests/ScriptSystemTests.cpp)
-    target_link_libraries(ScriptSystemTests PRIVATE Engine)
-    add_test(NAME ScriptSystemTests COMMAND ScriptSystemTests)
-
-    add_executable(PhysicsSystemTests Tests/PhysicsSystemTests.cpp)
-    target_link_libraries(PhysicsSystemTests PRIVATE Engine)
-    add_test(NAME PhysicsSystemTests COMMAND PhysicsSystemTests)
-
-    add_executable(ActorTests Tests/ActorTests.cpp)
-    target_link_libraries(ActorTests PRIVATE Engine)
-    add_test(NAME ActorTests COMMAND ActorTests)
-
-    add_executable(MathTests Tests/MathTests.cpp)
-    target_link_libraries(MathTests PRIVATE Engine)
-    add_test(NAME MathTests COMMAND MathTests)
-
-    add_executable(GeometryTests Tests/GeometryTests.cpp)
-    target_link_libraries(GeometryTests PRIVATE Engine)
-    add_test(NAME GeometryTests COMMAND GeometryTests)
-
-    add_executable(UITests Tests/UITests.cpp)
-    target_link_libraries(UITests PRIVATE Engine)
-    add_test(NAME UITests COMMAND UITests)
-
-    add_executable(SceneTests Tests/SceneTests.cpp)
-    target_link_libraries(SceneTests PRIVATE Engine)
-    add_test(NAME SceneTests COMMAND SceneTests)
-
-    add_executable(AssetCacheTests Tests/AssetCacheTests.cpp)
-    target_link_libraries(AssetCacheTests PRIVATE Engine)
-    add_test(NAME AssetCacheTests COMMAND AssetCacheTests)
-
-    add_executable(ScriptRegistryTests Tests/ScriptRegistryTests.cpp)
-    target_link_libraries(ScriptRegistryTests PRIVATE Engine)
-    add_test(NAME ScriptRegistryTests COMMAND ScriptRegistryTests)
-
-    add_executable(PhysicsEdgeTests Tests/PhysicsEdgeTests.cpp)
-    target_link_libraries(PhysicsEdgeTests PRIVATE Engine)
-    add_test(NAME PhysicsEdgeTests COMMAND PhysicsEdgeTests)
-
-    add_executable(SceneIOTests Tests/SceneIOTests.cpp)
-    target_link_libraries(SceneIOTests PRIVATE Engine)
-    add_test(NAME SceneIOTests COMMAND SceneIOTests)
-
-    add_executable(ContentTests Tests/ContentTests.cpp)
-    target_link_libraries(ContentTests PRIVATE Engine)
-    add_test(NAME ContentTests COMMAND ContentTests)
-
-    add_executable(InputTests Tests/InputTests.cpp)
-    target_link_libraries(InputTests PRIVATE Engine)
-    add_test(NAME InputTests COMMAND InputTests)
-
-    add_executable(PrefabTests Tests/PrefabTests.cpp)
-    target_link_libraries(PrefabTests PRIVATE Engine)
-    add_test(NAME PrefabTests COMMAND PrefabTests)
-
-    add_executable(TransformTests Tests/TransformTests.cpp)
-    target_link_libraries(TransformTests PRIVATE Engine)
-    add_test(NAME TransformTests COMMAND TransformTests)
-
-    add_executable(InterfaceTests Tests/InterfaceTests.cpp)
-    target_link_libraries(InterfaceTests PRIVATE Engine)
-    add_test(NAME InterfaceTests COMMAND InterfaceTests)
-
-    add_executable(EntityTests Tests/EntityTests.cpp)
-    target_link_libraries(EntityTests PRIVATE Engine)
-    add_test(NAME EntityTests COMMAND EntityTests)
-
-    add_executable(FrustumTests Tests/FrustumTests.cpp)
-    target_link_libraries(FrustumTests PRIVATE Engine)
-    add_test(NAME FrustumTests COMMAND FrustumTests)
-
-    add_executable(RendererComponentTests Tests/RendererComponentTests.cpp)
-    target_link_libraries(RendererComponentTests PRIVATE Engine)
-    add_test(NAME RendererComponentTests COMMAND RendererComponentTests)
-
-    add_executable(TextTests Tests/TextTests.cpp)
-    target_link_libraries(TextTests PRIVATE Engine)
-    add_test(NAME TextTests COMMAND TextTests)
-
-    add_executable(FontAtlasTests Tests/FontAtlasTests.cpp)
-    target_link_libraries(FontAtlasTests PRIVATE Engine)
-    add_test(NAME FontAtlasTests COMMAND FontAtlasTests)
-
-    add_executable(ParticleComponentTests Tests/ParticleComponentTests.cpp)
-    target_link_libraries(ParticleComponentTests PRIVATE Engine)
-    add_test(NAME ParticleComponentTests COMMAND ParticleComponentTests)
-
-    add_executable(ComponentDefaultsTests Tests/ComponentDefaultsTests.cpp)
-    target_link_libraries(ComponentDefaultsTests PRIVATE Engine)
-    add_test(NAME ComponentDefaultsTests COMMAND ComponentDefaultsTests)
-
-    add_executable(UUIDTests Tests/UUIDTests.cpp)
-    target_link_libraries(UUIDTests PRIVATE Engine)
-    add_test(NAME UUIDTests COMMAND UUIDTests)
-
-    add_executable(VectorTests Tests/VectorTests.cpp)
-    target_link_libraries(VectorTests PRIVATE Engine)
-    add_test(NAME VectorTests COMMAND VectorTests)
-
-    add_executable(SceneEditorTests Tests/SceneEditorTests.cpp)
-    target_link_libraries(SceneEditorTests PRIVATE Engine)
-    add_test(NAME SceneEditorTests COMMAND SceneEditorTests)
-
-    add_executable(ParticleSceneTests Tests/ParticleSceneTests.cpp)
-    target_link_libraries(ParticleSceneTests PRIVATE Engine)
-    add_test(NAME ParticleSceneTests COMMAND ParticleSceneTests)
-
-    add_executable(CameraTests Tests/CameraTests.cpp)
-    target_link_libraries(CameraTests PRIVATE Engine)
-    add_test(NAME CameraTests COMMAND CameraTests)
-
-    add_executable(TimeTests Tests/TimeTests.cpp)
-    target_link_libraries(TimeTests PRIVATE Engine)
-    add_test(NAME TimeTests COMMAND TimeTests)
-
-    add_executable(ComponentPoolTests Tests/ComponentPoolTests.cpp)
-    target_link_libraries(ComponentPoolTests PRIVATE Engine)
-    add_test(NAME ComponentPoolTests COMMAND ComponentPoolTests)
-
-    add_executable(CameraComponentTests Tests/CameraComponentTests.cpp)
-    target_link_libraries(CameraComponentTests PRIVATE Engine)
-    add_test(NAME CameraComponentTests COMMAND CameraComponentTests)
-
-    add_executable(ViewportCameraTests Tests/ViewportCameraTests.cpp)
-    target_link_libraries(ViewportCameraTests PRIVATE Engine)
-    add_test(NAME ViewportCameraTests COMMAND ViewportCameraTests)
-
-    add_executable(RenderConfigTests Tests/RenderConfigTests.cpp)
-    target_link_libraries(RenderConfigTests PRIVATE Engine)
-    add_test(NAME RenderConfigTests COMMAND RenderConfigTests)
-
-    add_executable(CullingTypesTests Tests/CullingTypesTests.cpp)
-    target_link_libraries(CullingTypesTests PRIVATE Engine)
-    add_test(NAME CullingTypesTests COMMAND CullingTypesTests)
-
-    add_executable(TrigonometryTests Tests/TrigonometryTests.cpp)
-    target_link_libraries(TrigonometryTests PRIVATE Engine)
-    add_test(NAME TrigonometryTests COMMAND TrigonometryTests)
-endif()
-
-if(BUILD_TESTING)
-    set(GAMEENGINE_TEST_TARGETS
-        CanvasTests SceneSerializerTests RegistryTests AssetManagerTests
-        ScriptSystemTests PhysicsSystemTests ActorTests MathTests GeometryTests
-        UITests SceneTests AssetCacheTests ScriptRegistryTests PhysicsEdgeTests
-        SceneIOTests ContentTests InputTests PrefabTests TransformTests
-        InterfaceTests EntityTests FrustumTests RendererComponentTests TextTests
-        FontAtlasTests ParticleComponentTests ComponentDefaultsTests UUIDTests
-        VectorTests SceneEditorTests ParticleSceneTests CameraTests TimeTests
-        ComponentPoolTests CameraComponentTests ViewportCameraTests
-        RenderConfigTests CullingTypesTests TrigonometryTests)
-    foreach(test_target IN LISTS GAMEENGINE_TEST_TARGETS)
+        # Existing test sources expose an int main() and use its exit code for
+        # failure reporting. Compile that entry point under a distinct name and
+        # invoke it from one GoogleTest case, preserving its test logic.
+        set_source_files_properties("${source}" PROPERTIES
+                COMPILE_DEFINITIONS "main=${legacy_main}")
+        add_executable(${test_target} Tests/GTestAdapter.cpp "${source}")
+        target_compile_definitions(${test_target} PRIVATE
+                GAMEENGINE_LEGACY_TEST_FUNCTION=${legacy_main})
+        target_link_libraries(${test_target} PRIVATE Engine GTest::gtest_main)
         gameengine_enable_warnings(${test_target})
         gameengine_enable_sanitizers(${test_target})
+        gtest_discover_tests(${test_target}
+                TEST_PREFIX "${test_target}."
+                PROPERTIES LABELS "unit")
+    endfunction()
+
+    file(GLOB GAMEENGINE_TEST_SOURCES CONFIGURE_DEPENDS Tests/*Tests.cpp)
+    foreach(test_source IN LISTS GAMEENGINE_TEST_SOURCES)
+        gameengine_add_test("${test_source}")
     endforeach()
-    set_tests_properties(${GAMEENGINE_TEST_TARGETS} PROPERTIES LABELS "unit")
 endif()

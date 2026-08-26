@@ -15,6 +15,7 @@
 #include <stdexcept>
 #include <string>
 #include <vector>
+#include <iostream>
 
 namespace {
 
@@ -155,13 +156,24 @@ int main() {
         firstRenderer.material.ambientOcclusion != 0.9F) {
         return 4;
     }
+    const auto &loadedMaterial = firstRenderer.mesh->materials.front();
     if (firstRenderer.mesh->materials.size() != 1 || firstRenderer.mesh->images.size() != 1 ||
         firstRenderer.mesh->images.front().rgbaPixels != std::vector<std::uint8_t>{10, 20, 30, 40} ||
         firstRenderer.mesh->vertices.front().tangent.w() != -1.0F ||
         firstRenderer.mesh->vertices.front().materialIndex != 0 ||
-        !firstRenderer.mesh->materials.front().alphaBlend ||
-        !firstRenderer.mesh->materials.front().doubleSided ||
-        firstRenderer.mesh->materials.front().baseColor.a() != 0.5F) {
+        !loadedMaterial.alphaBlend || !loadedMaterial.doubleSided ||
+        loadedMaterial.baseColor.a() != 0.5F) {
+        std::cerr << "mesh material/image round-trip failed: materials="
+                  << firstRenderer.mesh->materials.size() << " images="
+                  << firstRenderer.mesh->images.size() << " alphaBlend="
+                  << loadedMaterial.alphaBlend << " doubleSided="
+                  << loadedMaterial.doubleSided << " alpha="
+                  << loadedMaterial.baseColor.a() << " pixels="
+                  << firstRenderer.mesh->images.front().rgbaPixels.size()
+                  << " tangentW=" << firstRenderer.mesh->vertices.front().tangent.w()
+                  << " materialIndex=" << firstRenderer.mesh->vertices.front().materialIndex
+                  << " pixel0=" << static_cast<int>(firstRenderer.mesh->images.front().rgbaPixels.front())
+                  << '\n';
         return 8;
     }
 

@@ -11,8 +11,11 @@ public:
     [[nodiscard]] static Mesh createMesh(const unsigned int rings = 32, const unsigned int segments = 48) {
         Mesh mesh;
         constexpr float pi = 3.14159265358979323846F;
-        mesh.vertices.reserve((rings + 1) * (segments + 1));
-        mesh.indices.reserve(rings * segments * 6);
+        using VertexSize = decltype(mesh.vertices)::size_type;
+        using IndexSize = decltype(mesh.indices)::size_type;
+        mesh.vertices.reserve((static_cast<VertexSize>(rings) + 1U) *
+                              (static_cast<VertexSize>(segments) + 1U));
+        mesh.indices.reserve(static_cast<IndexSize>(rings) * static_cast<IndexSize>(segments) * 6U);
 
         for (unsigned int ring = 0; ring <= rings; ++ring) {
             const float v = static_cast<float>(ring) / static_cast<float>(rings);
