@@ -766,6 +766,17 @@ Engine::Entity HierarchyPanel::draw(Engine::ScenePreset &scene, const Engine::En
     return clicked;
 }
 
+static bool drawRemovableComponentHeader(const char *label, const char *id, bool &remove) {
+    const bool open = ImGui::CollapsingHeader(label, ImGuiTreeNodeFlags_DefaultOpen);
+    ImGui::SameLine(ImGui::GetWindowContentRegionMax().x - ImGui::CalcTextSize("Remove").x -
+                    ImGui::GetStyle().FramePadding.x * 2.0F);
+    ImGui::PushID(id);
+    remove = ImGui::SmallButton("Remove");
+    if (ImGui::IsItemHovered()) ImGui::SetTooltip("Remove this component");
+    ImGui::PopID();
+    return open;
+}
+
 bool ComponentsPanel::draw(Engine::ScenePreset &scene, const Engine::Entity selected) {
     ImGui::Begin("Inspector");
     drawPanelHeader("INSPECTOR", selected == Engine::NullEntity ? "NO SELECTION" : "ENTITY");
@@ -811,8 +822,12 @@ bool ComponentsPanel::draw(Engine::ScenePreset &scene, const Engine::Entity sele
         TransformFields{scene.edit(selected)}.draw();
     }
     if (scene.editor().valid(selected) &&
-        scene.editor().has<Engine::SmokeEmitterComponent>(selected) &&
-        ImGui::CollapsingHeader("Smoke Emitter", ImGuiTreeNodeFlags_DefaultOpen)) {
+        scene.editor().has<Engine::SmokeEmitterComponent>(selected)) {
+        bool remove = false;
+        const bool open = drawRemovableComponentHeader("Smoke Emitter", "smoke-emitter", remove);
+        if (remove) {
+            scene.editor().remove<Engine::SmokeEmitterComponent>(selected);
+        } else if (open) {
         // Keep the UI editing a temporary copy. The component is committed
         // once, after all controls have been drawn, so observers receive one
         // coherent change notification per frame.
@@ -914,9 +929,14 @@ bool ComponentsPanel::draw(Engine::ScenePreset &scene, const Engine::Entity sele
                                                                     });
             }
         }
+        }
     }
-    if (scene.editor().valid(selected) && scene.editor().has<Engine::ScriptComponent>(selected) &&
-        ImGui::CollapsingHeader("Script", ImGuiTreeNodeFlags_DefaultOpen)) {
+    if (scene.editor().valid(selected) && scene.editor().has<Engine::ScriptComponent>(selected)) {
+        bool remove = false;
+        const bool open = drawRemovableComponentHeader("Script", "script", remove);
+        if (remove) {
+            scene.editor().remove<Engine::ScriptComponent>(selected);
+        } else if (open) {
         const auto readScene = scene.editor();
         const auto &script = readScene.get<Engine::ScriptComponent>(selected);
         char className[260]{};
@@ -935,9 +955,14 @@ bool ComponentsPanel::draw(Engine::ScenePreset &scene, const Engine::Entity sele
                 value.enabled = enabled;
             });
         }
+        }
     }
-    if (scene.editor().valid(selected) && scene.editor().has<Engine::ColliderComponent>(selected) &&
-        ImGui::CollapsingHeader("Collider", ImGuiTreeNodeFlags_DefaultOpen)) {
+    if (scene.editor().valid(selected) && scene.editor().has<Engine::ColliderComponent>(selected)) {
+        bool remove = false;
+        const bool open = drawRemovableComponentHeader("Collider", "collider", remove);
+        if (remove) {
+            scene.editor().remove<Engine::ColliderComponent>(selected);
+        } else if (open) {
         const auto collider = scene.editor().get<Engine::ColliderComponent>(selected);
         int shape = static_cast<int>(collider.shape.index());
         const char *shapeNames[] = {"Box", "Sphere", "Capsule", "Ramp"};
@@ -996,9 +1021,14 @@ bool ComponentsPanel::draw(Engine::ScenePreset &scene, const Engine::Entity sele
         if (changed)
             scene.editor().modify<Engine::ColliderComponent>(selected,
                                                              [&](auto &component) { component = value; });
+        }
     }
-    if (scene.editor().valid(selected) && scene.editor().has<Engine::RigidbodyComponent>(selected) &&
-        ImGui::CollapsingHeader("Rigidbody", ImGuiTreeNodeFlags_DefaultOpen)) {
+    if (scene.editor().valid(selected) && scene.editor().has<Engine::RigidbodyComponent>(selected)) {
+        bool remove = false;
+        const bool open = drawRemovableComponentHeader("Rigidbody", "rigidbody", remove);
+        if (remove) {
+            scene.editor().remove<Engine::RigidbodyComponent>(selected);
+        } else if (open) {
         const auto rigidbody = scene.editor().get<Engine::RigidbodyComponent>(selected);
         auto value = rigidbody;
         int type = static_cast<int>(value.type);
@@ -1017,9 +1047,14 @@ bool ComponentsPanel::draw(Engine::ScenePreset &scene, const Engine::Entity sele
             scene.editor().modify<Engine::RigidbodyComponent>(selected,
                                                               [&](auto &component) { component = value; });
         }
+        }
     }
-    if (scene.editor().valid(selected) && scene.editor().has<Engine::ColorPickerComponent>(selected) &&
-        ImGui::CollapsingHeader("Color Picker", ImGuiTreeNodeFlags_DefaultOpen)) {
+    if (scene.editor().valid(selected) && scene.editor().has<Engine::ColorPickerComponent>(selected)) {
+        bool remove = false;
+        const bool open = drawRemovableComponentHeader("Color Picker", "color-picker", remove);
+        if (remove) {
+            scene.editor().remove<Engine::ColorPickerComponent>(selected);
+        } else if (open) {
         const auto readScene = scene.editor();
         const auto &picker =
                 readScene.get<Engine::ColorPickerComponent>(selected);
@@ -1028,6 +1063,7 @@ bool ComponentsPanel::draw(Engine::ScenePreset &scene, const Engine::Entity sele
             scene.editor().modify<Engine::ColorPickerComponent>(selected, [&](auto &component) {
                 component.color = Engine::Color{rgba[0], rgba[1], rgba[2], rgba[3]};
             });
+        }
         }
     }
     ImGui::TextDisabled("COMPONENTS");

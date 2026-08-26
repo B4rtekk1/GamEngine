@@ -27,6 +27,7 @@ public:
     template<typename T, typename... Args> T& add(Entity entity, Args&&... args) {
         return scene_->edit(entity).add<T>(std::forward<Args>(args)...);
     }
+    template<typename T> void remove(Entity entity) { scene_->edit(entity).remove<T>(); }
     template<typename T, typename Func> void modify(Entity entity, Func&& func) {
         scene_->edit(entity).modify<T>(std::forward<Func>(func));
     }
