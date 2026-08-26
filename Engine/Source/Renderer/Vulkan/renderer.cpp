@@ -216,7 +216,7 @@ namespace Engine {
                         continue;
                     }
                     const AABB bounds = record.localBounds.transformed(transform.matrix().native());
-                    return Vec3{bounds.min.native() + bounds.max.native() * HALF_EXTENT_FACTOR};
+                    return Vec3{(bounds.min.native() + bounds.max.native()) * HALF_EXTENT_FACTOR};
                 }
                 return transform.position;
             } catch (const std::out_of_range &) {
@@ -261,7 +261,7 @@ namespace Engine {
                 const RenderableRecord &record = renderables[editorSelectedRenderable];
                 const AABB bounds = record.localBounds.transformed(
                     readRegistry.get<Transform>(entity).matrix().native());
-                target = Vec3{bounds.min.native() + bounds.max.native() * HALF_EXTENT_FACTOR};
+                target = Vec3{(bounds.min.native() + bounds.max.native()) * HALF_EXTENT_FACTOR};
                 radius = std::max(glm::length(bounds.max.native() - bounds.min.native()) * HALF_EXTENT_FACTOR,
                                   DEFAULT_SELECTION_RADIUS);
             }

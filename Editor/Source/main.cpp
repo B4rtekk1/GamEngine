@@ -258,16 +258,17 @@ float dotProduct(const Engine::Vec3 &lhs, const Engine::Vec3 &rhs) {
 
 ImVec2 projectGizmoPoint(const Engine::Camera &camera, const Engine::Vec3 &point,
                          const ImVec2 min, const ImVec2 max) {
-    const Engine::Vec3 relative = point - camera.position();
-    const float depth = dotProduct(relative, camera.forward());
-    if (depth <= EditorConstants::minimumDepth) return {-10000.0F, -10000.0F};
-    constexpr float halfFovTangent = EditorConstants::halfFovTangent;
-    const float aspect = (max.x - min.x) / (max.y - min.y);
-    const float ndcX = dotProduct(relative, camera.right()) / (depth * halfFovTangent * aspect);
-    const float ndcY = dotProduct(relative, camera.up()) / (depth * halfFovTangent);
+    // Use the renderer's view/projection path instead of duplicating its
+    // camera math here. This keeps the overlay locked to geometry while the
+    // Scene View camera moves or rotates.
+    const glm::vec4 clip = camera.projectionMatrix().native() * camera.viewMatrix().native() *
+                           glm::vec4{point.native(), 1.0F};
+    if (clip.w <= EditorConstants::minimumDepth) return {-10000.0F, -10000.0F};
+    const float ndcX = clip.x / clip.w;
+    const float ndcY = clip.y / clip.w;
     return {
-        (min.x + max.x) * 0.5F + ndcX * (max.x - min.x) * 0.5F,
-        (min.y + max.y) * 0.5F - ndcY * (max.y - min.y) * 0.5F
+        min.x + (ndcX + EditorConstants::one) * (max.x - min.x) * EditorConstants::half,
+        min.y + (ndcY + EditorConstants::one) * (max.y - min.y) * EditorConstants::half
     };
 }
 
