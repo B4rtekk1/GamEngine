@@ -4,7 +4,7 @@
 
 class HierarchyPanel final {
 public:
-    enum class Action { None, Delete, Copy, Paste, Duplicate };
+    enum class Action:uint8_t { None, Delete, Copy, Paste, Duplicate };
 
     [[nodiscard]] static Engine::Entity draw(Engine::ScenePreset& scene,
                                                Engine::Entity selected,
