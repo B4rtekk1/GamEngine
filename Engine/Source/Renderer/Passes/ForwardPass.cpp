@@ -20,7 +20,10 @@ void ForwardPass::create(VkDevice device, const VkFormat colorFormat,
     options.vertexShader = "shaders/pbr.vert.spv";
     options.fragmentShader = "shaders/pbr.frag.spv";
     options.assetManager = &assets;
-    options.cullMode = VK_CULL_MODE_BACK_BIT;
+    // Temporary: imported glTF vegetation uses double-sided geometry. The
+    // renderer currently batches materials into one draw, so culling cannot
+    // yet be selected per material.
+    options.cullMode = VK_CULL_MODE_NONE;
     options.alphaBlendEnable = VK_FALSE;
     options.descriptorSetLayouts = {sceneLayout};
     options.vertexBindings = {

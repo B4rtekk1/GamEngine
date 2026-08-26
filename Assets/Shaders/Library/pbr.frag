@@ -107,7 +107,7 @@ void main() {
     // 3x3 PCF texture fetches for every shaded fragment in that case.
     float shadow = frame.shadowEnabled != 0u ? calculateShadow() : 0.0;
     vec3 direct = (diffuse + specular) * frame.lightDirectionIntensity.w * frame.lightColor.rgb * nDotL * (1.0 - shadow);
-    vec3 color = vec3(0.035) * albedo * clamp(material.roughnessAmbientOcclusion.y, 0.0, 1.0) + direct;
+    vec3 color = vec3(0.9) * albedo * clamp(material.roughnessAmbientOcclusion.y, 0.0, 1.0) + direct;
     // Keep lighting in linear HDR space. Display mapping is performed once,
     // after the complete scene (including the skybox) has been rendered.
     outColor = vec4(color, baseColor.a);
