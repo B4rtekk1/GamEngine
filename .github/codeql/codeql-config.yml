@@ -1,0 +1,11 @@
+name: GamEngine CodeQL configuration
+
+# Third-party and generated code that should not be analyzed.
+paths-ignore:
+  - ThridParty
+  - '**/third_party'
+  - '**/vendor'
+  - '**/external'
+  - '**/node_modules'
+  - '**/build'
+  - '**/cmake-build-*'
