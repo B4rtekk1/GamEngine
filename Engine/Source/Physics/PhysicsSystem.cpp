@@ -22,6 +22,10 @@ constexpr float RestingNormalSpeed = 0.2F;
 constexpr float RestingTangentialSpeed = 0.1F;
 constexpr float RestingAngularSpeedDegrees = 5.0F;
 constexpr float ContactSlop = 0.0001F;
+// Keep dynamic objects just clear of the visible ramp mesh.  Without this
+// small contact skin, an exact tangency can be perceived as clipping when
+// the slope is viewed from its low side.
+constexpr float RampContactOffset = 0.005F;
 constexpr float PositionCorrectionPercent = 1.0F;
 constexpr int SolverIterations = 4;
 
@@ -538,6 +542,8 @@ std::optional<Contact> boxRampContact(
     const auto boxPoints = boxVertices(box);
     const auto rampPoints = rampVertices(ramp, yawRadians);
     const float slope = ramp.extents.y() / ramp.extents.z();
+    const Vec3 topNormal = rampWorldDirection({0.0F, 1.0F, -slope}, yawRadians)
+        .normalized();
     const std::array<Vec3, 3> boxAxes{box.axisX, box.axisY, box.axisZ};
     const std::array<Vec3, 4> rampFaceAxes{
         rampWorldDirection({1.0F, 0.0F, 0.0F}, yawRadians),
@@ -560,8 +566,12 @@ std::optional<Contact> boxRampContact(
         axis *= 1.0F / length;
         const auto [boxMinimum, boxMaximum] = projectedRange(boxPoints, axis);
         const auto [rampMinimum, rampMaximum] = projectedRange(rampPoints, axis);
-        const float overlap = std::min(boxMaximum, rampMaximum) -
-            std::max(boxMinimum, rampMinimum);
+        // Expand the ramp only by its small visual contact skin.  Projecting
+        // it onto every SAT axis keeps the separation test consistent for
+        // rotated boxes as well as axis-aligned ones.
+        const float skinOnAxis = RampContactOffset * std::abs(dot(axis, topNormal));
+        const float overlap = std::min(boxMaximum, rampMaximum + skinOnAxis) -
+            std::max(boxMinimum, rampMinimum - skinOnAxis);
         if (overlap <= 0.0F) return false;
         if (overlap < smallestOverlap) {
             smallestOverlap = overlap;
@@ -816,7 +826,7 @@ std::optional<Contact> sphereRampContact(
     const Vec3 closestPoint{closestX, slope * closestZ, closestZ};
     const Vec3 separation = local - closestPoint;
     const float distance = separation.length();
-    if (distance >= radius) return std::nullopt;
+    if (distance >= radius + RampContactOffset) return std::nullopt;
 
     const Vec3 localNormal = distance > 1e-6F
         ? separation * (1.0F / distance)
@@ -825,7 +835,7 @@ std::optional<Contact> sphereRampContact(
 
     return Contact{
         rampWorldDirection(localNormal, yawRadians).normalized(),
-        radius - distance
+        radius + RampContactOffset - distance
     };
 }
 

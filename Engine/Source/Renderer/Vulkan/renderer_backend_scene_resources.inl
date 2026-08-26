@@ -62,6 +62,18 @@
                     signature ^= value * hashCombineConstant;
                     ++count;
                 });
+
+            // Particle resources are derived from the emitter entity, but do
+            // not participate in the regular renderable list above. Include
+            // them in the signature so removing an emitter cannot leave the
+            // old ParticleSystem alive on the GPU.
+            const Entity particleEntity = scene.particleEntity();
+            std::uint64_t particleValue = static_cast<std::uint64_t>(particleEntity);
+            particleValue ^= static_cast<std::uint64_t>(
+                readRegistry.has<SmokeEmitterComponent>(particleEntity)) << 1u;
+            particleValue ^= static_cast<std::uint64_t>(
+                readRegistry.has<ParticleEmitterComponent>(particleEntity)) << 2u;
+            signature ^= particleValue * hashCombineConstant;
             return signature ^ (static_cast<std::uint64_t>(count) * hashCombineConstant);
         }
 
