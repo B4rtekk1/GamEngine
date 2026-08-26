@@ -1,7 +1,6 @@
 #pragma once
 
 #include "Engine/Scene/Scene.h"
-#include "Engine/Assets/Content.h"
 #include "Engine/Renderer/Geometry/Mesh.h"
 
 #include <memory>
@@ -9,7 +8,7 @@
 
 namespace Engine {
 
-enum class SceneType { Cubes, Tree, Particles };
+enum class SceneType { Cubes, Particles };
 
 // Explicit sample-content layer. Applications can use Scene directly and do
 // not inherit benchmark geometry, asset paths, or editor labels.
@@ -26,7 +25,6 @@ public:
     Entity plane{NullEntity};
     Entity camera{NullEntity};
     Entity particleSystem{NullEntity};
-    Entity tree{NullEntity};
     std::vector<Entity> editorGameObjects;
     std::vector<Entity> editorCubes;
     std::vector<Entity> editorPlanes;
@@ -38,8 +36,6 @@ private:
     std::shared_ptr<const Mesh> cubeMesh_;
     std::shared_ptr<const Mesh> sphereMesh_;
     std::shared_ptr<const Mesh> rampMesh_;
-    std::shared_ptr<const Mesh> treeMesh_;
-    Assets::Content content_;
 };
 
 } // namespace Engine

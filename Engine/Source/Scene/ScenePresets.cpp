@@ -32,11 +32,6 @@ namespace Engine {
         constexpr float GroundPlanePadding = 4.0F;
         constexpr float GroundColliderHalfHeight = 0.05F;
         constexpr float GroundColliderOffsetY = -0.05F;
-        constexpr float TreeGroundScale = 10.0F;
-        constexpr float TreePositionX = 3.0F;
-        constexpr float TreePositionZ = 1.0F;
-        constexpr float TreeLightIntensity = 4.0F;
-        constexpr float TreeLightRotation = 35.0F;
 
         constexpr float CubeHalfHeight = 0.5F;
         constexpr float CubeColor = 0.72F;
@@ -48,11 +43,7 @@ namespace Engine {
         constexpr float CameraFarClip = 100000.0F;
         constexpr float CameraViewportWidth = 800.0F;
         constexpr float CameraViewportHeight = 600.0F;
-        constexpr float TreeCameraTargetY = 4.2F;
         constexpr float ParticleCameraTargetY = 3.0F;
-        constexpr float TreeCameraX = 8.0F;
-        constexpr float TreeCameraY = 6.5F;
-        constexpr float TreeCameraZ = 10.0F;
         constexpr float ParticleCameraX = 6.0F;
         constexpr float ParticleCameraY = 5.8F;
         constexpr float ParticleCameraZ = 8.0F;
@@ -70,10 +61,6 @@ namespace Engine {
         constexpr float GroundColorGreen = 0.16F;
         constexpr float GroundColorBlue = 0.08F;
         constexpr float GroundRoughness = 0.9F;
-        constexpr float TreeColorRed = 0.20F;
-        constexpr float TreeColorGreen = 0.48F;
-        constexpr float TreeColorBlue = 0.08F;
-        constexpr float TreeRoughness = 0.82F;
         constexpr float SphereColorRed = 0.35F;
         constexpr float SphereColorGreen = 0.65F;
         constexpr float SphereColorBlue = 0.95F;
@@ -123,27 +110,12 @@ namespace Engine {
             particleObject.add<ColorPickerComponent>(ColorPickerComponent{particleEmitter().color});
         }
 
-        const bool treeScene = type == SceneType::Tree;
-        if (treeScene) {
-            treeMesh_ = content_.mesh("Assets/Models/tree.glb");
-            if (!treeMesh_) {
-                throw std::runtime_error("Could not load Assets/Models/tree.glb");
-            }
-        }
-
         constexpr float halfExtent = (((CubesPerAxis - 1) * CubeSpacing) + 1.0F) * 0.5F;
         auto &planeObject = createMeshObject("Plane", planeMesh_,
-                                             treeScene
-                                                 ? PBRMaterial{
-                                                     .baseColor = {GroundColorRed, GroundColorGreen, GroundColorBlue},
-                                                     .roughness = GroundRoughness,
-                                                 }
-                                                 : PBRMaterial{});
-        planeObject.setScale(treeScene
-                                 ? Vec3{TreeGroundScale, 1, TreeGroundScale}
-                                 : Vec3{
-                                     (halfExtent * 2) + GroundPlanePadding, 1, (halfExtent * 2) + GroundPlanePadding
-                                 });
+                                             PBRMaterial{});
+        planeObject.setScale({
+            (halfExtent * 2) + GroundPlanePadding, 1, (halfExtent * 2) + GroundPlanePadding
+        });
         planeObject.setCastShadow(false);
         plane = planeObject.entity();
         planeObject.add<ColliderComponent>(ColliderComponent{
@@ -151,18 +123,7 @@ namespace Engine {
             .offset = {0.0F, GroundColliderOffsetY, 0.0F},
         });
 
-        if (treeScene) {
-            auto &treeObject = createMeshObject("Tree", treeMesh_,
-                                                PBRMaterial{
-                                                    .baseColor = {TreeColorRed, TreeColorGreen, TreeColorBlue},
-                                                    .roughness = TreeRoughness,
-                                                });
-            treeObject.setPosition({TreePositionX, 0, TreePositionZ});
-            tree = treeObject.entity();
-            auto &light = createLight("Directional Light",
-                                      LightComponent{.type = LightType::Directional, .intensity = TreeLightIntensity});
-            light.setRotation({TreeLightRotation, -TreeLightRotation, 0});
-        } else if (type == SceneType::Cubes) {
+        if (type == SceneType::Cubes) {
             constexpr float halfGrid = (CubesPerAxis - 1) * CubeSpacing * 0.5F;
             for (std::size_t y = 0; y < CubesPerAxis; ++y) { // NOLINT(readability-identifier-length)
                 for (std::size_t z = 0; z < CubesPerAxis; ++z) { // NOLINT(readability-identifier-length)
@@ -189,10 +150,7 @@ namespace Engine {
         const bool particleScene = isParticleScene();
         float targetY = halfExtent;
         Vec3 position{};
-        if (treeScene) {
-            targetY = TreeCameraTargetY;
-            position = {TreeCameraX, TreeCameraY, TreeCameraZ};
-        } else if (particleScene) {
+        if (particleScene) {
             targetY = ParticleCameraTargetY;
             position = {ParticleCameraX, ParticleCameraY, ParticleCameraZ};
         } else {

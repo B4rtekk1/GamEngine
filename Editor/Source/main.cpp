@@ -178,9 +178,6 @@ const char *entityName(const Engine::ScenePreset &scene, const Engine::Entity en
     if (entity == scene.camera) {
         return "Camera";
     }
-    if (entity == scene.tree) {
-        return "Tree";
-    }
     for (const Engine::Entity editorCube: scene.editorCubes) {
         if (editorCube == entity) {
             return "Cube";
