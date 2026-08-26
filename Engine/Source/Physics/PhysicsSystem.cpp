@@ -44,9 +44,9 @@ constexpr float BroadPhaseCellSize = 4.0F;
 struct Grid final {
     std::unordered_map<std::int64_t, std::vector<std::size_t>> cells;
 
-    static std::int64_t key(const int x, const int z) noexcept {
+    static std::int64_t key(const int x, const int z) noexcept { // NOLINT(readability-identifier-length)
         return static_cast<std::int64_t>(
-            (static_cast<std::uint64_t>(static_cast<std::uint32_t>(x)) << 32u) |
+            (static_cast<std::uint64_t>(static_cast<std::uint32_t>(x)) << 32U) |
             static_cast<std::uint32_t>(z));
     }
 
@@ -896,7 +896,8 @@ void PhysicsSystem::update(Scene& scene, const float deltaTime) const {
 
     std::vector<SceneCollider> colliders;
 
-    if (!broadPhaseCache_) broadPhaseCache_ = std::make_shared<BroadPhaseCache>();
+    if (!broadPhaseCache_) { broadPhaseCache_ = std::make_shared<BroadPhaseCache>();
+}
     BroadPhaseCache& cache = *broadPhaseCache_;
     const auto staticEntityChanged = [&](const auto changedSince) {
         return std::ranges::any_of(changedSince, [&](const Entity entity) {
