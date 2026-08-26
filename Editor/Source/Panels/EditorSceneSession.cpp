@@ -2,7 +2,6 @@
 
 #include "Engine/Renderer/Renderer.h"
 #include "Engine/Scene/SceneSerializer.h"
-#include "Engine/Scripting/ScriptRegistry.h"
 
 #include <algorithm>
 #include <cctype>
@@ -14,8 +13,8 @@ std::filesystem::path EditorSceneSession::scenePath() {
 }
 
 std::uint32_t EditorSceneSession::msaaSampleCount(const Engine::Renderer& renderer) {
-    return renderer.antialiasingLevel() == Engine::AntialiasingLevel::MSAA2x ? 2u :
-        renderer.antialiasingLevel() == Engine::AntialiasingLevel::MSAA4x ? 4u : 0u;
+    return renderer.antialiasingLevel() == Engine::AntialiasingLevel::MSAA2x ? 2U :
+        renderer.antialiasingLevel() == Engine::AntialiasingLevel::MSAA4x ? 4U : 0U;
 }
 
 bool EditorSceneSession::setPlayMode(const bool play, Engine::ScenePreset& scene,
