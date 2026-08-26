@@ -4,33 +4,33 @@
 #include "imgui_internal.h"
 
 namespace {
-constexpr float kWindowPaddingX = 16.0F;
-constexpr float kWindowPaddingY = 14.0F;
-constexpr float kFramePaddingX = 10.0F;
-constexpr float kFramePaddingY = 8.0F;
-constexpr float kItemSpacingX = 10.0F;
-constexpr float kItemSpacingY = 10.0F;
-constexpr float kItemInnerSpacingX = 8.0F;
-constexpr float kItemInnerSpacingY = 6.0F;
-constexpr float kScrollbarSize = 13.0F;
-constexpr float kGrabMinSize = 12.0F;
-constexpr float kBorderSize = 1.0F;
-constexpr float kFrameBorderSize = 0.0F;
-constexpr float kWindowRounding = 8.0F;
-constexpr float kChildRounding = 7.0F;
-constexpr float kFrameRounding = 6.0F;
-constexpr float kPopupRounding = 7.0F;
-constexpr float kScrollbarRounding = 8.0F;
-constexpr float kGrabRounding = 6.0F;
-constexpr float kTabRounding = 6.0F;
+    constexpr float kWindowPaddingX = 16.0F;
+    constexpr float kWindowPaddingY = 14.0F;
+    constexpr float kFramePaddingX = 10.0F;
+    constexpr float kFramePaddingY = 8.0F;
+    constexpr float kItemSpacingX = 10.0F;
+    constexpr float kItemSpacingY = 10.0F;
+    constexpr float kItemInnerSpacingX = 8.0F;
+    constexpr float kItemInnerSpacingY = 6.0F;
+    constexpr float kScrollbarSize = 13.0F;
+    constexpr float kGrabMinSize = 12.0F;
+    constexpr float kBorderSize = 1.0F;
+    constexpr float kFrameBorderSize = 0.0F;
+    constexpr float kWindowRounding = 8.0F;
+    constexpr float kChildRounding = 7.0F;
+    constexpr float kFrameRounding = 6.0F;
+    constexpr float kPopupRounding = 7.0F;
+    constexpr float kScrollbarRounding = 8.0F;
+    constexpr float kGrabRounding = 6.0F;
+    constexpr float kTabRounding = 6.0F;
 
-constexpr ImGuiID kEmptyDockNodeId = 0;
-constexpr float kHierarchyWidthRatio = 0.22F;
-constexpr float kInspectorWidthRatio = 0.28F;
+    constexpr ImGuiID kEmptyDockNodeId = 0;
+    constexpr float kHierarchyWidthRatio = 0.22F;
+    constexpr float kInspectorWidthRatio = 0.28F;
 }
 
 void EditorStyle::apply() {
-    constexpr  ImVec4 kWindowBackground = {0.075F, 0.086F, 0.110F, 1.0F};
+    constexpr ImVec4 kWindowBackground = {0.075F, 0.086F, 0.110F, 1.0F};
     constexpr ImVec4 kChildBackground = {0.060F, 0.070F, 0.092F, 1.0F};
     constexpr ImVec4 kPopupBackground = {0.105F, 0.120F, 0.150F, 0.99F};
     constexpr ImVec4 kMenuBarBackground = {0.047F, 0.055F, 0.074F, 1.0F};
@@ -61,7 +61,7 @@ void EditorStyle::apply() {
     constexpr ImVec4 kActiveResizeGrip = {0.38F, 0.94F, 0.89F, 0.95F};
 
     ImGui::StyleColorsDark();
-    ImGuiStyle& style = ImGui::GetStyle();
+    ImGuiStyle &style = ImGui::GetStyle();
     // Generous spacing and distinct interaction states make dense editor
     // panels easier to scan and more comfortable to use for long sessions.
     style.WindowPadding = {kWindowPaddingX, kWindowPaddingY};
@@ -81,7 +81,7 @@ void EditorStyle::apply() {
     style.GrabRounding = kGrabRounding;
     style.TabRounding = kTabRounding;
 
-    ImVec4* colors = style.Colors;
+    ImVec4 *colors = style.Colors;
     colors[ImGuiCol_WindowBg] = kWindowBackground;
     colors[ImGuiCol_ChildBg] = kChildBackground;
     colors[ImGuiCol_PopupBg] = kPopupBackground;
@@ -117,8 +117,9 @@ void EditorStyle::apply() {
 
 void EditorStyle::configureDockLayout() {
     static bool configured = false;
-    if (configured) { return;
-}
+    if (configured) {
+        return;
+    }
     const ImGuiID root = ImGui::GetMainViewport()->ID;
     ImGui::DockBuilderRemoveNode(root);
     ImGui::DockBuilderAddNode(root, ImGuiDockNodeFlags_DockSpace);
