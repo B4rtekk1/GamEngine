@@ -227,4 +227,11 @@ namespace Engine {
         editorRamps.push_back(entity);
         return entity;
     }
+
+    Entity ScenePreset::createTerrain() {
+        const Actor actor = Scene::createTerrain("Terrain");
+        const Entity entity = findEntity(actor.id());
+        editorTerrains.push_back(entity);
+        return entity;
+    }
 } // namespace Engine

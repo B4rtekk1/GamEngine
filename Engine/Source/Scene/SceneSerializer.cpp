@@ -9,6 +9,7 @@
 #include "Engine/ECS/Components/ColorPickerComponent.h"
 #include "Engine/ECS/Components/ParticleEmitterComponent.h"
 #include "Engine/ECS/Components/SmokeEmitterComponent.h"
+#include "Engine/ECS/Components/TerrainComponent.h"
 #include "Engine/ECS/Registry.h"
 #include "Engine/Renderer/MeshRenderer.h"
 #include "Engine/Scene/Scene.h"
@@ -353,6 +354,47 @@ namespace Engine {
             return emitter;
         }
 
+        void writeTerrain(std::ostream& output, const TerrainComponent& terrain) {
+            output << terrain.resolution << ' ';
+            writeFloat(output, terrain.width);
+            output << ' ';
+            writeFloat(output, terrain.depth);
+            output << ' ';
+            writeFloat(output, terrain.minimumHeight);
+            output << ' ';
+            writeFloat(output, terrain.maximumHeight);
+            output << ' ' << terrain.heights.size();
+            for (const float height : terrain.heights) {
+                output << ' ';
+                writeFloat(output, height);
+            }
+            output << '\n';
+        }
+
+        TerrainComponent readTerrain(std::istream& input) {
+            const auto resolution = read<std::uint32_t>(input, "terrain resolution");
+            const float width = readFloat(input, "terrain width");
+            const float depth = readFloat(input, "terrain depth");
+            const float minimumHeight = readFloat(input, "terrain minimum height");
+            const float maximumHeight = readFloat(input, "terrain maximum height");
+            if (resolution < TerrainComponent::MinimumResolution ||
+                resolution > TerrainComponent::MaximumResolution) {
+                invalidScene("terrain resolution is outside the supported range");
+            }
+            TerrainComponent terrain{resolution, width, depth, minimumHeight, maximumHeight};
+            const std::size_t count = readCount(input, "terrain height count",
+                static_cast<std::size_t>(TerrainComponent::MaximumResolution) *
+                TerrainComponent::MaximumResolution);
+            if (count != terrain.sampleCount()) {
+                invalidScene("terrain height count does not match its resolution");
+            }
+            for (float& height : terrain.heights) {
+                height = readFloat(input, "terrain height");
+            }
+            if (!terrain.valid()) invalidScene("terrain data is invalid");
+            return terrain;
+        }
+
         std::vector<Entity> sortedEntities(const Registry &registry) {
             std::vector<Entity> entities;
             entities.reserve(registry.size());
@@ -468,6 +510,9 @@ namespace Engine {
             if (!registry.has<MeshRenderer>(entity)) {
                 continue;
             }
+            // Terrain geometry is deterministic from its compact heightmap and
+            // is rebuilt while loading instead of being duplicated in MESHES.
+            if (registry.has<TerrainComponent>(entity)) continue;
             const auto &renderer = registry.get<MeshRenderer>(entity);
             if (renderer.mesh && !meshIds.contains(renderer.mesh.get())) {
                 meshIds.emplace(renderer.mesh.get(), meshes.size());
@@ -564,9 +609,13 @@ namespace Engine {
                 serialized << "RIGIDBODY ";
                 writeRigidbody(serialized, registry.get<RigidbodyComponent>(entity));
             }
+            if (registry.has<TerrainComponent>(entity)) {
+                serialized << "TERRAIN ";
+                writeTerrain(serialized, registry.get<TerrainComponent>(entity));
+            }
             if (registry.has<MeshRenderer>(entity)) {
                 const auto &renderer = registry.get<MeshRenderer>(entity);
-                const long long meshId = renderer.mesh
+                const long long meshId = renderer.mesh && !registry.has<TerrainComponent>(entity)
                                              ? static_cast<long long>(meshIds.at(renderer.mesh.get()))
                                              : -1;
                 serialized << "MESH_RENDERER " << meshId << ' ';
@@ -792,6 +841,7 @@ namespace Engine {
             bool hasSmokeEmitter = false;
             bool hasCollider = false;
             bool hasRigidbody = false;
+            bool hasTerrain = false;
             bool hasIdentity = false;
             bool hasParent = false;
 
@@ -850,6 +900,12 @@ namespace Engine {
                     }
                     hasRigidbody = true;
                     loaded.add<RigidbodyComponent>(entity, readRigidbody(input));
+                } else if (component == "TERRAIN") {
+                    if (hasTerrain) {
+                        invalidScene("entity contains more than one TerrainComponent");
+                    }
+                    hasTerrain = true;
+                    loaded.add<TerrainComponent>(entity, readTerrain(input));
                 } else if (component == "MESH_RENDERER") {
                     if (hasRenderer) {
                         invalidScene("entity contains more than one MeshRenderer");
@@ -949,6 +1005,17 @@ namespace Engine {
             }
             if (!hasIdentity) {
                 invalidScene("entity is missing IDENTITY");
+            }
+            if (hasTerrain) {
+                if (!hasRenderer) invalidScene("terrain entity is missing MeshRenderer");
+                const auto mesh = std::make_shared<Mesh>(loaded.get<TerrainComponent>(entity).createMesh());
+                loaded.get<MeshRenderer>(entity).mesh = mesh;
+                if (hasCollider) {
+                    if (auto* meshCollider = std::get_if<MeshCollider>(
+                            &loaded.get<ColliderComponent>(entity).shape)) {
+                        meshCollider->mesh = mesh;
+                    }
+                }
             }
         }
 

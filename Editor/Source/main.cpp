@@ -28,6 +28,7 @@
 #include "Editor/EditorState.h"
 #include "Editor/EditorConstants.h"
 #include "Editor/EditorUi.h"
+#include "Editor/TerrainSculptState.h"
 
 using Editor::EntityClipboard;
 using Editor::SceneHistory;
@@ -98,6 +99,7 @@ int main() {
         double physicsAccumulator = 0.0;
         bool showGameView = false;
         GizmoMode gizmoMode = GizmoMode::Translate;
+        TerrainSculptState terrainSculpt;
         std::string playSceneSnapshot;
         std::string playModeError;
         while (running) {
@@ -265,7 +267,7 @@ int main() {
             const ViewportInteraction viewportInteraction = drawViewport(
                 scene, selectedEntity, renderer, renderer.gameViewport(), renderer.sceneViewport(),
                 renderer.editorCameraYaw(),
-                renderer.editorCameraPitch(), showGameView, gizmoMode, playing);
+                renderer.editorCameraPitch(), showGameView, gizmoMode, terrainSculpt, playing);
             if (!playing && viewportInteraction.sceneClicked) {
                 constexpr float viewportAspect = EditorConstants::viewportWidthRatio /
                                                  EditorConstants::viewportHeightRatio;
@@ -331,6 +333,8 @@ int main() {
                 // the selection afterwards so the new copy can be outlined
                 // and selected in the Scene View immediately.
                 renderer.setEditorSelection(selectedEntity);
+            } else if (viewportInteraction.terrainGeometryChanged) {
+                renderer.updateMeshGeometry(selectedEntity);
             }
             // A history snapshot serializes the complete scene, including
             // decoded GLB image pixels. Capture only after an actual mutation

@@ -6,6 +6,7 @@
 #include "Engine/ECS/Components/ScriptComponent.h"
 #include "Engine/ECS/Components/RigidbodyComponent.h"
 #include "Engine/ECS/Components/ColliderComponent.h"
+#include "Engine/ECS/Components/TerrainComponent.h"
 #include "Engine/ECS/Entity.h"
 #include "Engine/ECS/Registry.h"
 #include "Engine/Scene/Components/LightComponent.h"
@@ -62,6 +63,16 @@ public:
     [[nodiscard]] const TransformComponent& transform() const { return get<TransformComponent>(); }
     [[nodiscard]] MeshRendererComponent& meshRenderer() { return get<MeshRendererComponent>(); }
     [[nodiscard]] const MeshRendererComponent& meshRenderer() const { return get<MeshRendererComponent>(); }
+
+    TerrainComponent& addTerrain(TerrainComponent terrain = {}) {
+        if (has<TerrainComponent>()) {
+            registry_->modify<TerrainComponent>(entity_, [&](auto& value) { value = std::move(terrain); });
+            return get<TerrainComponent>();
+        }
+        return add<TerrainComponent>(std::move(terrain));
+    }
+    [[nodiscard]] TerrainComponent& terrain() { return get<TerrainComponent>(); }
+    [[nodiscard]] const TerrainComponent& terrain() const { return get<TerrainComponent>(); }
 
     RigidbodyComponent& addRigidbody(RigidbodyComponent rigidbody = {}) {
         if (has<RigidbodyComponent>()) {

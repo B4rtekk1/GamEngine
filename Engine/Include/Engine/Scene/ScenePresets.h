@@ -21,6 +21,7 @@ public:
     [[nodiscard]] Entity createPlane();
     [[nodiscard]] Entity createSphere();
     [[nodiscard]] Entity createRamp();
+    [[nodiscard]] Entity createTerrain();
 
     Entity plane{NullEntity};
     Entity camera{NullEntity};
@@ -30,6 +31,7 @@ public:
     std::vector<Entity> editorPlanes;
     std::vector<Entity> editorSpheres;
     std::vector<Entity> editorRamps;
+    std::vector<Entity> editorTerrains;
 
 private:
     std::shared_ptr<const Mesh> planeMesh_;

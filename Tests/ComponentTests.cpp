@@ -5,6 +5,7 @@
 #include "Engine/ECS/Components/MeshRendererComponent.h"
 #include "Engine/ECS/Components/RigidbodyComponent.h"
 #include "Engine/ECS/Components/ScriptComponent.h"
+#include "Engine/ECS/Components/TerrainComponent.h"
 #include "Engine/Renderer/Lighting/DirectionalLightData.h"
 #include "Engine/Renderer/Materials/PBRMaterial.h"
 #include "Engine/Renderer/RenderConfig.h"
@@ -146,6 +147,22 @@ TEST(MeshRendererComponent, RequiresNonEmptySharedMeshToBeRenderable) {
     EXPECT_TRUE(renderer.castShadow);
     EXPECT_EQ(renderer.cullingBatch, 0u);
     EXPECT_EQ(renderer.occlusionQueryIndex, std::numeric_limits<std::uint32_t>::max());
+}
+
+TEST(TerrainComponent, BuildsCheckerboardGridAndSculptsHeightmap) {
+    Engine::TerrainComponent terrain{5, 4.0F, 4.0F, -2.0F, 2.0F};
+    ASSERT_TRUE(terrain.valid());
+    const Engine::Mesh flatMesh = terrain.createMesh();
+    EXPECT_EQ(flatMesh.vertices.size(), 64u);
+    EXPECT_EQ(flatMesh.indices.size(), 96u);
+    EXPECT_NE(flatMesh.vertices[0].color.x(), flatMesh.vertices[4].color.x());
+
+    EXPECT_TRUE(terrain.sculpt(0.0F, 0.0F, 1.5F, 0.5F,
+                               Engine::TerrainSculptMode::Raise));
+    EXPECT_GT(terrain.height(2, 2), 0.0F);
+    EXPECT_FLOAT_EQ(terrain.height(0, 0), 0.0F);
+    const Engine::Mesh sculptedMesh = terrain.createMesh();
+    EXPECT_GT(sculptedMesh.vertices[10].normal.length(), 0.99F);
 }
 
 TEST(ScriptComponent, CopiesConfigurationWithoutSharingRuntimeState) {

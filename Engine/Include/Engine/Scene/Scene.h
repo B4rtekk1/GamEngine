@@ -13,6 +13,7 @@
 #include "Engine/Scene/Prefab.h"
 #include "Engine/UI/Interface.h"
 #include "Engine/ECS/Components/CameraComponent.h"
+#include "Engine/ECS/Components/TerrainComponent.h"
 #include "Engine/Scene/Components/LightComponent.h"
 #include "Engine/Renderer/Geometry/Mesh.h"
 #include "Engine/Renderer/Materials/PBRMaterial.h"
@@ -124,6 +125,9 @@ public:
 
     [[nodiscard]] Actor createCube(std::string name, const PBRMaterial &material = {});
     [[nodiscard]] Actor createPrefab(std::string name, const Prefab& prefab);
+
+    /** Creates a checkerboard terrain backed by an editable heightmap. */
+    [[nodiscard]] Actor createTerrain(std::string name, TerrainComponent terrain = {});
 
     [[nodiscard]] Actor findActor(const std::string& name) noexcept {
         auto* object = find(name);

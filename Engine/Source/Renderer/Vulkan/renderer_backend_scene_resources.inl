@@ -92,6 +92,7 @@
             // meshes contribute their geometry to the GPU buffers only once.
             struct MeshUploadRecord {
                 uint32_t firstIndex;
+                uint32_t firstVertex;
                 AABB localBounds;
             };
             struct BatchKey {
@@ -143,10 +144,12 @@
 
                     const Mesh* const mesh = renderer.mesh.get();
                     AABB localBounds;
+                    std::uint32_t firstVertex = 0;
                     if (optimizationFeatures.meshDeduplication) {
                         const auto existing = uploadedMeshes.find(mesh);
                         if (existing != uploadedMeshes.end()) {
                         renderer.firstIndex = existing->second.firstIndex;
+                        firstVertex = existing->second.firstVertex;
                         localBounds = existing->second.localBounds;
                         } else {
                             if (sceneMesh.vertices.size() + mesh->vertices.size() >
@@ -156,6 +159,7 @@
                                 throw std::runtime_error("Scene geometry exceeds 32-bit draw limits");
                             }
                             const uint32_t vertexOffset = sceneMesh.vertexCount();
+                            firstVertex = vertexOffset;
                             renderer.firstIndex = sceneMesh.indexCount();
                             sceneMesh.vertices.insert(sceneMesh.vertices.end(),
                                                       mesh->vertices.begin(), mesh->vertices.end());
@@ -178,7 +182,8 @@
                                 localBounds.max.setY(std::max(localBounds.max.y(), vertex.position.y()));
                                 localBounds.max.setZ(std::max(localBounds.max.z(), vertex.position.z()));
                             }
-                            uploadedMeshes.emplace(mesh, MeshUploadRecord{renderer.firstIndex, localBounds});
+                            uploadedMeshes.emplace(mesh, MeshUploadRecord{
+                                renderer.firstIndex, firstVertex, localBounds});
                         }
                     } else {
                         if (sceneMesh.vertices.size() + mesh->vertices.size() >
@@ -188,6 +193,7 @@
                             throw std::runtime_error("Scene geometry exceeds 32-bit draw limits");
                         }
                         const uint32_t vertexOffset = sceneMesh.vertexCount();
+                        firstVertex = vertexOffset;
                         renderer.firstIndex = sceneMesh.indexCount();
                         sceneMesh.vertices.insert(sceneMesh.vertices.end(),
                                                   mesh->vertices.begin(), mesh->vertices.end());
@@ -246,7 +252,8 @@
                             std::max(batch.worldBounds.max.z(), worldBounds.max.z())};
                     }
                     ++batch.instanceCount;
-                    renderables.push_back({entity, localBounds, batchIndex});
+                    renderables.push_back({entity, localBounds, batchIndex,
+                                           firstVertex, mesh->vertexCount()});
                     const std::size_t renderableIndex = renderables.size() - 1;
                     sceneGpu.batchRenderableIndices[batchIndex].push_back(renderableIndex);
                     sceneGpu.renderableIndices[entity] = renderableIndex;

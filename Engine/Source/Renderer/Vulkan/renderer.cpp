@@ -503,6 +503,86 @@ namespace Engine {
             assetManager.unload_unused();
         }
 
+        void updateMeshGeometry(const Entity entity) {
+            const auto recordIt = sceneGpu.renderableIndices.find(entity);
+            if (recordIt == sceneGpu.renderableIndices.end() ||
+                !registry.has<MeshRenderer>(entity) || !registry.has<Transform>(entity)) return;
+            const auto& renderer = registry.get<MeshRenderer>(entity);
+            RenderableRecord& record = renderables[recordIt->second];
+            if (!renderer.hasMesh() || renderer.mesh->vertexCount() != record.vertexCount ||
+                record.batchIndex >= instanceBatches.size()) {
+                synchronizeSceneResources(scene);
+                return;
+            }
+            if (!inFlightFences.empty() && vkWaitForFences(
+                    device, static_cast<uint32_t>(inFlightFences.size()), inFlightFences.data(),
+                    VK_TRUE, UINT64_MAX) != VK_SUCCESS) {
+                throw std::runtime_error("Could not synchronize frames for mesh update");
+            }
+            vertexBuffer.uploadDeviceLocal(
+                renderer.mesh->vertices.data(), sizeof(Vertex) * renderer.mesh->vertices.size(),
+                sizeof(Vertex) * record.firstVertex, commandPool,
+                vulkanDevice.graphicsQueue());
+
+            AABB localBounds{
+                .min = Vec3{std::numeric_limits<float>::max(), std::numeric_limits<float>::max(),
+                            std::numeric_limits<float>::max()},
+                .max = Vec3{std::numeric_limits<float>::lowest(), std::numeric_limits<float>::lowest(),
+                            std::numeric_limits<float>::lowest()},
+            };
+            for (const Vertex& vertex : renderer.mesh->vertices) {
+                localBounds.min.setX(std::min(localBounds.min.x(), vertex.position.x()));
+                localBounds.min.setY(std::min(localBounds.min.y(), vertex.position.y()));
+                localBounds.min.setZ(std::min(localBounds.min.z(), vertex.position.z()));
+                localBounds.max.setX(std::max(localBounds.max.x(), vertex.position.x()));
+                localBounds.max.setY(std::max(localBounds.max.y(), vertex.position.y()));
+                localBounds.max.setZ(std::max(localBounds.max.z(), vertex.position.z()));
+            }
+            record.localBounds = localBounds;
+            InstanceBatch& changedBatch = instanceBatches[record.batchIndex];
+            changedBatch.mesh = renderer.mesh.get();
+
+            glm::vec3 sceneMinimum{std::numeric_limits<float>::max()};
+            glm::vec3 sceneMaximum{std::numeric_limits<float>::lowest()};
+            for (std::size_t batchIndex = 0; batchIndex < instanceBatches.size(); ++batchIndex) {
+                bool first = true;
+                AABB batchBounds{};
+                for (const RenderableRecord& item : renderables) {
+                    if (item.batchIndex != batchIndex || !registry.has<Transform>(item.entity)) continue;
+                    const AABB world = item.localBounds.transformed(
+                        registry.get<Transform>(item.entity).matrix().native());
+                    if (first) {
+                        batchBounds = world;
+                        first = false;
+                    } else {
+                        batchBounds.min = Vec3{glm::min(batchBounds.min.native(), world.min.native())};
+                        batchBounds.max = Vec3{glm::max(batchBounds.max.native(), world.max.native())};
+                    }
+                }
+                if (first) continue;
+                instanceBatches[batchIndex].worldBounds = batchBounds;
+                sceneMinimum = glm::min(sceneMinimum, batchBounds.min.native());
+                sceneMaximum = glm::max(sceneMaximum, batchBounds.max.native());
+                if (batchIndex < gpuObjects.size()) {
+                    gpuObjects[batchIndex].localAabbMin = {
+                        batchBounds.min.x(), batchBounds.min.y(), batchBounds.min.z(), 0.0F};
+                    gpuObjects[batchIndex].localAabbMax = {
+                        batchBounds.max.x(), batchBounds.max.y(), batchBounds.max.z(), 0.0F};
+                }
+            }
+            if (!gpuObjects.empty()) {
+                for (Buffer& buffer : cullingObjectBuffers) {
+                    buffer.update(gpuObjects.data(), sizeof(Culling::GPUObjectData) * gpuObjects.size());
+                }
+                const glm::vec3 center = (sceneMinimum + sceneMaximum) * 0.5F;
+                const glm::vec3 halfExtent = (sceneMaximum - sceneMinimum) * 0.5F;
+                sceneCenter = Vec3{center};
+                sceneRadius = std::max({halfExtent.x, halfExtent.y, halfExtent.z, 1.0F});
+            }
+            renderableTopologySignature = currentRenderableTopologySignature();
+            hiZValid = false;
+        }
+
 #include "renderer_backend_state.inl"
 #include "renderer_backend_resources.inl"
 #include "renderer_backend_frame.inl"

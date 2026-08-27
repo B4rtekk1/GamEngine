@@ -75,6 +75,10 @@ public:
      */
     void update(const void* data, VkDeviceSize size, VkDeviceSize offset = 0) const;
 
+    /** Uploads a subrange into an existing device-local buffer. */
+    void uploadDeviceLocal(const void* data, VkDeviceSize size, VkDeviceSize offset,
+                           VkCommandPool commandPool, VkQueue queue) const;
+
     /// Releases the buffer, allocation and associated resources if present.
     void destroy() noexcept;
 

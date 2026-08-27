@@ -64,6 +64,16 @@ bool ComponentsPanel::draw(Engine::ScenePreset &scene, const Engine::Entity sele
         TransformFields{scene.edit(selected)}.draw();
     }
     if (scene.editor().valid(selected) &&
+        scene.editor().has<Engine::TerrainComponent>(selected) &&
+        ImGui::CollapsingHeader("Terrain", ImGuiTreeNodeFlags_DefaultOpen)) {
+        const auto& terrain = scene.editor().get<Engine::TerrainComponent>(selected);
+        ImGui::Text("Heightmap: %u x %u", terrain.resolution, terrain.resolution);
+        ImGui::Text("Size: %.1f x %.1f", terrain.width, terrain.depth);
+        ImGui::Text("Height range: %.1f to %.1f", terrain.minimumHeight, terrain.maximumHeight);
+        ImGui::Spacing();
+        ImGui::TextWrapped("Use Sculpt in the Scene View toolbar, then drag the left mouse button over the terrain.");
+    }
+    if (scene.editor().valid(selected) &&
         scene.editor().has<Engine::SmokeEmitterComponent>(selected)) {
         bool remove = false;
         const bool open = drawRemovableComponentHeader("Smoke Emitter", "smoke-emitter", remove);
@@ -420,4 +430,3 @@ bool ComponentsPanel::draw(Engine::ScenePreset &scene, const Engine::Entity sele
     ImGui::End();
     return consumesMouseWheel;
 }
-

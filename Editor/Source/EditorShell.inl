@@ -120,6 +120,9 @@ Engine::Entity drawEditorMenuBar(Engine::ScenePreset &scene, Engine::Renderer &r
         if (ImGui::MenuItem("Create Ramp")) {
             createdEntity = scene.createRamp();
         }
+        if (ImGui::MenuItem("Create Terrain")) {
+            createdEntity = scene.createTerrain();
+        }
         ImGui::EndMenu();
     }
 
@@ -301,4 +304,3 @@ Engine::Entity drawEditorMenuBar(Engine::ScenePreset &scene, Engine::Renderer &r
 
     return createdEntity;
 }
-

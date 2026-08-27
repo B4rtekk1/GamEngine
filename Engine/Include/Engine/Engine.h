@@ -7,6 +7,7 @@
 #include "Engine/Renderer/RenderConfig.h"
 #include "Engine/Scene/Scene.h"
 #include "Engine/Scene/Prefab.h"
+#include "Engine/ECS/Components/TerrainComponent.h"
 #include "Engine/ECS/Actor.h"
 #include "Engine/Physics/PhysicsSystem.h"
 #include "Engine/UI/Interface.h"

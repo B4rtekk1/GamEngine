@@ -44,6 +44,8 @@ public:
     void setEditorSelection(Entity entity) const;
     void renderFrame() const;
     void synchronizeScene(Scene& scene) const;
+    /** Uploads changed vertices for an existing fixed-topology mesh. */
+    void updateMeshGeometry(Entity entity) const;
     void reloadScene(Scene& scene, void* nativeWindow);
     void reconfigureAntialiasing() const;
     [[nodiscard]] ViewportHandle gameViewport() const noexcept;

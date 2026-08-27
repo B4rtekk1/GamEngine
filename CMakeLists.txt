@@ -133,6 +133,7 @@ add_library(Engine
         Engine/Source/Renderer/Vulkan/vulkan_device.cpp
         Engine/Source/Renderer/Vulkan/vma_impl.cpp
         Engine/Source/Renderer/Particles/ParticleSystem.cpp
+        Engine/Source/Renderer/Geometry/Terrain.cpp
         Platform/SDL/SDLInput.cpp
 )
 gameengine_enable_warnings(Engine)
@@ -226,6 +227,7 @@ if(BUILD_TESTING)
             Tests/SceneBuilderTests.cpp
             Engine/Source/Core/Camera.cpp
             Engine/Source/Core/Time.cpp
+            Engine/Source/Renderer/Geometry/Terrain.cpp
             Engine/Source/UI/RectTransform.cpp)
     target_link_libraries(GamEngineTests PRIVATE GTest::gtest_main)
     target_include_directories(GamEngineTests PRIVATE

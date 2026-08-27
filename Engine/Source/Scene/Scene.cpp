@@ -72,6 +72,18 @@ namespace Engine {
         return Actor{*this, object.objectId()};
     }
 
+    Actor Scene::createTerrain(std::string name, TerrainComponent terrain) {
+        auto mesh = std::make_shared<Mesh>(terrain.createMesh());
+        auto& object = createMeshObject(std::move(name), mesh, PBRMaterial{
+            .baseColor = {0.74F, 0.78F, 0.70F},
+            .metallic = 0.0F,
+            .roughness = 0.92F,
+        });
+        object.addTerrain(std::move(terrain));
+        object.addMeshCollider();
+        return Actor{*this, object.objectId()};
+    }
+
     void Scene::save(const std::filesystem::path &path) const {
         SceneSerializer::save(*this, path);
     }

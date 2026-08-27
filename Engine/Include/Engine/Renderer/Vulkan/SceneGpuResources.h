@@ -21,6 +21,8 @@ public:
         Entity entity{NullEntity};
         AABB localBounds{};
         std::size_t batchIndex{0};
+        std::uint32_t firstVertex{0};
+        std::uint32_t vertexCount{0};
         Transform cachedTransform{};
         bool hasCachedTransform{false};
         std::uint8_t transformDirtyFrames{0};

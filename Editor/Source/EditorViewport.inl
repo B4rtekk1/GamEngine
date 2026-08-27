@@ -58,9 +58,23 @@ int drawSceneOrientationGizmo(const ImVec2 imageMin, const ImVec2 imageMax,
 struct ViewportInteraction final {
     bool cameraInput{};
     bool sceneClicked{};
+    bool terrainGeometryChanged{};
     float normalizedX{};
     float normalizedY{};
 };
+
+Engine::Camera sceneViewCamera(const Engine::Renderer& renderer, const ImVec2 min,
+                               const ImVec2 max) {
+    Engine::Camera camera{
+        Engine::Degrees{EditorConstants::cameraFieldOfView},
+        (max.x - min.x) / std::max(max.y - min.y, EditorConstants::one),
+        EditorConstants::cameraNearPlane, EditorConstants::cameraFarPlane
+    };
+    camera.setPosition(renderer.editorCameraPosition());
+    camera.setRotation(Engine::Degrees{renderer.editorCameraYaw()},
+                       Engine::Degrees{renderer.editorCameraPitch()});
+    return camera;
+}
 
 float dotProduct(const Engine::Vec3 &lhs, const Engine::Vec3 &rhs) {
     return lhs.x() * rhs.x() + lhs.y() * rhs.y() + lhs.z() * rhs.z();
@@ -362,11 +376,141 @@ bool drawRotationGizmo(Engine::ScenePreset &scene, const Engine::Entity selected
     return hoveredAxis >= 0;
 }
 
+Engine::Vec3 terrainLocalPoint(const Engine::Transform& transform,
+                               const Engine::Vec3& worldPoint) {
+    const glm::vec4 local = glm::inverse(transform.matrix().native()) *
+                            glm::vec4{worldPoint.native(), 1.0F};
+    return Engine::Vec3{glm::vec3{local}};
+}
+
+Engine::Vec3 terrainWorldPoint(const Engine::Transform& transform,
+                               const Engine::Vec3& localPoint) {
+    const glm::vec4 world = transform.matrix().native() * glm::vec4{localPoint.native(), 1.0F};
+    return Engine::Vec3{glm::vec3{world}};
+}
+
+std::optional<Engine::Vec3> raycastTerrain(const Engine::Mesh& mesh,
+                                           const Engine::Transform& transform,
+                                           const Engine::Vec3& origin,
+                                           const Engine::Vec3& direction) {
+    float nearest = EditorConstants::cameraFarPlane;
+    std::optional<Engine::Vec3> point;
+    for (std::size_t index = 0; index + 2 < mesh.indices.size(); index += 3) {
+        const Engine::Vec3 a = terrainWorldPoint(transform, mesh.vertices[mesh.indices[index]].position);
+        const Engine::Vec3 b = terrainWorldPoint(transform, mesh.vertices[mesh.indices[index + 1]].position);
+        const Engine::Vec3 c = terrainWorldPoint(transform, mesh.vertices[mesh.indices[index + 2]].position);
+        const Engine::Vec3 edgeAB = b - a;
+        const Engine::Vec3 edgeAC = c - a;
+        const Engine::Vec3 p = Engine::cross(direction, edgeAC);
+        const float determinant = dotProduct(edgeAB, p);
+        if (std::abs(determinant) <= EditorConstants::epsilon) continue;
+        const float inverseDeterminant = 1.0F / determinant;
+        const Engine::Vec3 fromA = origin - a;
+        const float u = dotProduct(fromA, p) * inverseDeterminant;
+        if (u < 0.0F || u > 1.0F) continue;
+        const Engine::Vec3 q = Engine::cross(fromA, edgeAB);
+        const float v = dotProduct(direction, q) * inverseDeterminant;
+        if (v < 0.0F || u + v > 1.0F) continue;
+        const float distance = dotProduct(edgeAC, q) * inverseDeterminant;
+        if (distance < 0.0F || distance >= nearest) continue;
+        nearest = distance;
+        point = origin + direction * distance;
+    }
+    return point;
+}
+
+bool applyTerrainBrush(Engine::ScenePreset& scene, const Engine::Entity entity,
+                       const Engine::Vec3& localPoint, TerrainSculptState& state) {
+    auto terrain = scene.editor().get<Engine::TerrainComponent>(entity);
+    const float deltaTime = std::clamp(static_cast<float>(Engine::Time::deltaTime()),
+                                       1.0F / 240.0F, 1.0F / 20.0F);
+    if (!terrain.sculpt(localPoint.x(), localPoint.z(), state.radius,
+                        state.strength * deltaTime, state.mode, state.flattenHeight)) {
+        return false;
+    }
+
+    auto mesh = std::make_shared<Engine::Mesh>(terrain.createMesh());
+    scene.editor().modify<Engine::TerrainComponent>(entity,
+        [&](auto& component) { component = std::move(terrain); });
+    scene.editor().modify<Engine::MeshRenderer>(entity,
+        [&](auto& renderer) { renderer.mesh = mesh; });
+    if (scene.editor().has<Engine::ColliderComponent>(entity)) {
+        scene.editor().modify<Engine::ColliderComponent>(entity, [&](auto& collider) {
+            if (auto* meshCollider = std::get_if<Engine::MeshCollider>(&collider.shape)) {
+                meshCollider->mesh = mesh;
+            }
+        });
+    }
+    return true;
+}
+
+bool drawTerrainSculpt(Engine::ScenePreset& scene, const Engine::Entity selected,
+                       const Engine::Renderer& renderer,
+                       const ImVec2 min, const ImVec2 max, TerrainSculptState& state,
+                       bool& geometryChanged) {
+    if (!state.enabled || selected == Engine::NullEntity || !scene.editor().valid(selected) ||
+        !scene.editor().has<Engine::TerrainComponent>(selected) ||
+        !scene.editor().has<Engine::MeshRenderer>(selected) ||
+        !scene.editor().has<Engine::Transform>(selected)) return false;
+
+    const bool hovered = ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenBlockedByActiveItem);
+    const ImVec2 mouse = ImGui::GetIO().MousePos;
+    const Engine::Camera camera = sceneViewCamera(renderer, min, max);
+    const Engine::Vec3 rayDirection = viewportRayDirection(camera, mouse, min, max);
+
+    const auto& transform = scene.editor().get<Engine::Transform>(selected);
+    const auto& terrain = scene.editor().get<Engine::TerrainComponent>(selected);
+    const auto& rendererComponent = scene.editor().get<Engine::MeshRenderer>(selected);
+    const auto hit = hovered && rendererComponent.hasMesh()
+                         ? raycastTerrain(*rendererComponent.mesh, transform, camera.position(), rayDirection)
+                             : std::nullopt;
+    const bool hitsSelected = hit.has_value();
+    Engine::Vec3 localHit{};
+    if (hitsSelected) {
+        localHit = terrainLocalPoint(transform, *hit);
+        constexpr int segments = 48;
+        constexpr float pi = 3.14159265358979323846F;
+        ImDrawList* drawList = ImGui::GetWindowDrawList();
+        ImVec2 previous{};
+        for (int segment = 0; segment <= segments; ++segment) {
+            const float angle = 2.0F * pi * static_cast<float>(segment) / segments;
+            const float x = localHit.x() + std::cos(angle) * state.radius;
+            const float z = localHit.z() + std::sin(angle) * state.radius;
+            const float y = terrain.sampleHeight(x, z) + 0.035F;
+            const ImVec2 point = projectGizmoPoint(
+                camera, terrainWorldPoint(transform, {x, y, z}), min, max);
+            if (segment > 0) {
+                drawList->AddLine(previous, point, IM_COL32(70, 220, 125, 245), 2.5F);
+            }
+            previous = point;
+        }
+        const ImVec2 center = projectGizmoPoint(camera, *hit, min, max);
+        drawList->AddCircleFilled(center, 4.0F, IM_COL32(235, 250, 238, 255));
+    }
+
+    if (hovered && hitsSelected && ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
+        state.strokeActive = true;
+        state.strokeEntity = selected;
+        state.flattenHeight = localHit.y();
+    }
+    if (state.strokeActive && state.strokeEntity == selected &&
+        ImGui::IsMouseDown(ImGuiMouseButton_Left) && hitsSelected) {
+        geometryChanged |= applyTerrainBrush(scene, selected, localHit, state);
+        ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
+    }
+    if (!ImGui::IsMouseDown(ImGuiMouseButton_Left)) {
+        state.strokeActive = false;
+        state.strokeEntity = Engine::NullEntity;
+    }
+    return true;
+}
+
 ViewportInteraction drawViewport(Engine::ScenePreset &scene, const Engine::Entity selected,
                                  Engine::Renderer &renderer, Engine::ViewportHandle gameDescriptor,
                                  Engine::ViewportHandle sceneDescriptor,
                                  const float sceneCameraYaw, const float sceneCameraPitch,
-                                 bool &showGameView, GizmoMode &gizmoMode, const bool playing) {
+                                 bool &showGameView, GizmoMode &gizmoMode,
+                                 TerrainSculptState& terrainSculpt, const bool playing) {
     if (playing) {
         showGameView = true;
     }
@@ -387,6 +531,32 @@ ViewportInteraction drawViewport(Engine::ScenePreset &scene, const Engine::Entit
         }
         if (ImGui::IsItemHovered()) {
             ImGui::SetTooltip("Rotate gizmo (E)");
+        }
+        const bool terrainSelected = selected != Engine::NullEntity && scene.editor().valid(selected) &&
+                                     scene.editor().has<Engine::TerrainComponent>(selected);
+        if (terrainSelected) {
+            ImGui::SameLine(0.0F, 4.0F);
+            if (drawToolbarToggle(" Sculpt ", terrainSculpt.enabled)) {
+                terrainSculpt.enabled = !terrainSculpt.enabled;
+            }
+            if (terrainSculpt.enabled) {
+                ImGui::SameLine(0.0F, 6.0F);
+                constexpr const char* modes[]{"Raise", "Lower", "Smooth", "Flatten"};
+                int mode = static_cast<int>(terrainSculpt.mode);
+                ImGui::SetNextItemWidth(92.0F);
+                if (ImGui::Combo("##terrain-mode", &mode, modes, 4)) {
+                    terrainSculpt.mode = static_cast<Engine::TerrainSculptMode>(mode);
+                }
+                ImGui::SameLine(0.0F, 6.0F);
+                ImGui::SetNextItemWidth(105.0F);
+                ImGui::SliderFloat("Radius##terrain", &terrainSculpt.radius, 0.25F, 8.0F, "R %.1f");
+                ImGui::SameLine(0.0F, 6.0F);
+                ImGui::SetNextItemWidth(105.0F);
+                ImGui::SliderFloat("Strength##terrain", &terrainSculpt.strength, 0.1F, 12.0F, "S %.1f");
+            }
+        } else {
+            terrainSculpt.enabled = false;
+            terrainSculpt.strokeActive = false;
         }
         ImGui::SameLine(0.0F, 8.0F);
         if (EditorButton(showGameView ? " Scene View " : " Game View ").drawSmall()) {
@@ -415,12 +585,6 @@ ViewportInteraction drawViewport(Engine::ScenePreset &scene, const Engine::Entit
         ImGui::Image(ImTextureRef{static_cast<ImTextureID>(descriptor.value)},
                      {frameSize.x, imageHeight}, {0, 0}, {1, 1});
         viewportHovered = ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenBlockedByActiveItem);
-        const bool gizmoConsumesClick = !showGameView && !playing &&
-                                        (gizmoMode == GizmoMode::Translate
-                                             ? drawTranslationGizmo(scene, selected, renderer, ImGui::GetItemRectMin(),
-                                                                    ImGui::GetItemRectMax())
-                                             : drawRotationGizmo(scene, selected, renderer, ImGui::GetItemRectMin(),
-                                                                 ImGui::GetItemRectMax()));
         int gizmoAction = -1;
         if (!showGameView && !playing) {
             gizmoAction = drawSceneOrientationGizmo(ImGui::GetItemRectMin(), ImGui::GetItemRectMax(),
@@ -435,6 +599,16 @@ ViewportInteraction drawViewport(Engine::ScenePreset &scene, const Engine::Entit
                 default: break;
             }
         }
+        const bool sculptConsumesClick = gizmoAction < 0 && !showGameView && !playing &&
+            drawTerrainSculpt(scene, selected, renderer, ImGui::GetItemRectMin(),
+                              ImGui::GetItemRectMax(), terrainSculpt,
+                              interaction.terrainGeometryChanged);
+        const bool gizmoConsumesClick = sculptConsumesClick || (gizmoAction < 0 && !showGameView && !playing &&
+                                        (gizmoMode == GizmoMode::Translate
+                                             ? drawTranslationGizmo(scene, selected, renderer, ImGui::GetItemRectMin(),
+                                                                    ImGui::GetItemRectMax())
+                                             : drawRotationGizmo(scene, selected, renderer, ImGui::GetItemRectMin(),
+                                                                 ImGui::GetItemRectMax())));
         if (!showGameView && !playing && gizmoAction < 0 && !gizmoConsumesClick && ImGui::IsItemHovered() &&
             ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
             const ImVec2 min = ImGui::GetItemRectMin();
@@ -477,4 +651,3 @@ Engine::Entity pickSceneEntity(Engine::ScenePreset &scene, Engine::PhysicsSystem
     }
     return Engine::NullEntity;
 }
-

@@ -113,6 +113,61 @@ namespace Engine {
         std::memcpy(static_cast<char *>(mapped_) + offset, data, static_cast<size_t>(size));
     }
 
+    void Buffer::uploadDeviceLocal(const void* data, const VkDeviceSize size,
+                                   const VkDeviceSize offset, const VkCommandPool commandPool,
+                                   const VkQueue queue) const {
+        if (data == nullptr || size == 0 || offset > size_ || size > size_ - offset ||
+            device_ == VK_NULL_HANDLE || allocator_ == VK_NULL_HANDLE) {
+            throw std::invalid_argument("Device-local buffer update is out of bounds");
+        }
+        Buffer staging;
+        staging.create({
+            device_, size, VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+            VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+            allocator_,
+        });
+        staging.update(data, size);
+
+        VkCommandBufferAllocateInfo allocateInfo{VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO};
+        allocateInfo.commandPool = commandPool;
+        allocateInfo.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+        allocateInfo.commandBufferCount = 1;
+        VkCommandBuffer commandBuffer = VK_NULL_HANDLE;
+        if (vkAllocateCommandBuffers(device_, &allocateInfo, &commandBuffer) != VK_SUCCESS) {
+            throw std::runtime_error("Could not allocate device-local update command buffer");
+        }
+        VkCommandBufferBeginInfo beginInfo{VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
+        beginInfo.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+        if (vkBeginCommandBuffer(commandBuffer, &beginInfo) != VK_SUCCESS) {
+            vkFreeCommandBuffers(device_, commandPool, 1, &commandBuffer);
+            throw std::runtime_error("Could not begin device-local buffer update");
+        }
+        const VkBufferCopy copy{.srcOffset = 0, .dstOffset = offset, .size = size};
+        vkCmdCopyBuffer(commandBuffer, staging.buffer_, buffer_, 1, &copy);
+        if (vkEndCommandBuffer(commandBuffer) != VK_SUCCESS) {
+            vkFreeCommandBuffers(device_, commandPool, 1, &commandBuffer);
+            throw std::runtime_error("Could not finish device-local buffer update");
+        }
+        VkFenceCreateInfo fenceInfo{VK_STRUCTURE_TYPE_FENCE_CREATE_INFO};
+        VkFence fence = VK_NULL_HANDLE;
+        if (vkCreateFence(device_, &fenceInfo, nullptr, &fence) != VK_SUCCESS) {
+            vkFreeCommandBuffers(device_, commandPool, 1, &commandBuffer);
+            throw std::runtime_error("Could not create device-local update fence");
+        }
+        VkSubmitInfo submitInfo{VK_STRUCTURE_TYPE_SUBMIT_INFO};
+        submitInfo.commandBufferCount = 1;
+        submitInfo.pCommandBuffers = &commandBuffer;
+        const VkResult submit = vkQueueSubmit(queue, 1, &submitInfo, fence);
+        const VkResult wait = submit == VK_SUCCESS
+                                  ? vkWaitForFences(device_, 1, &fence, VK_TRUE, UINT64_MAX)
+                                  : submit;
+        vkDestroyFence(device_, fence, nullptr);
+        vkFreeCommandBuffers(device_, commandPool, 1, &commandBuffer);
+        if (submit != VK_SUCCESS || wait != VK_SUCCESS) {
+            throw std::runtime_error("Could not upload device-local buffer update");
+        }
+    }
+
     void Buffer::destroy() noexcept {
         if (device_ != VK_NULL_HANDLE) {
             if (buffer_ != VK_NULL_HANDLE) {
