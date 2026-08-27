@@ -152,6 +152,7 @@ target_include_directories(Engine
 
 add_executable(Editor
         Editor/Source/main.cpp
+        Editor/Source/EditorUi.cpp
         Editor/Source/Panels/EditorStyle.cpp
         Editor/Source/Panels/EditorSceneSession.cpp
         Editor/Source/Panels/AssetManagerPanel.cpp)

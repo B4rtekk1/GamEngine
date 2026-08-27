@@ -1,0 +1,423 @@
+static bool drawRemovableComponentHeader(const char *label, const char *id, bool &remove) {
+    const bool open = ImGui::CollapsingHeader(label, ImGuiTreeNodeFlags_DefaultOpen);
+    ImGui::SameLine(ImGui::GetWindowContentRegionMax().x - ImGui::CalcTextSize("Remove").x -
+                    ImGui::GetStyle().FramePadding.x * 2.0F);
+    ImGui::PushID(id);
+    remove = ImGui::SmallButton("Remove");
+    if (ImGui::IsItemHovered()) ImGui::SetTooltip("Remove this component");
+    ImGui::PopID();
+    return open;
+}
+
+bool ComponentsPanel::draw(Engine::ScenePreset &scene, const Engine::Entity selected) {
+    ImGui::Begin("Inspector");
+    drawPanelHeader("Inspector", selected == Engine::NullEntity ? "No selection" : "Selected entity");
+    if (selected == Engine::NullEntity) {
+        ImGui::Spacing();
+        ImGui::Spacing();
+        const float avail = ImGui::GetContentRegionAvail().x;
+        ImGui::PushStyleColor(ImGuiCol_Text, {0.42F, 0.68F, 0.92F, 1.0F});
+        const char *hintIcon = "◇";
+        ImGui::SetCursorPosX((avail - ImGui::CalcTextSize(hintIcon).x) * 0.5F);
+        ImGui::TextUnformatted(hintIcon);
+        ImGui::PopStyleColor();
+        ImGui::Spacing();
+        const char *title = "Nothing selected";
+        ImGui::SetCursorPosX((avail - ImGui::CalcTextSize(title).x) * 0.5F);
+        ImGui::TextDisabled("%s", title);
+        ImGui::Spacing();
+        ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + avail);
+        ImGui::TextWrapped("Pick an object in the Hierarchy or click it in the Scene View to edit its properties here.");
+        ImGui::PopTextWrapPos();
+        const bool consumesMouseWheel = ImGui::IsWindowHovered(
+                                            ImGuiHoveredFlags_AllowWhenBlockedByActiveItem) && ImGui::GetIO().MouseWheel
+                                        != 0.0F;
+        ImGui::End();
+        return consumesMouseWheel;
+    }
+
+    // Every inspector control has a stable label, so scope their ImGui IDs to
+    // the selected entity. Without this, an active text/drag control from the
+    // source object is reused when a duplicate becomes selected in the same
+    // panel, making the inspector appear to keep editing the original.
+    ImGui::PushID(reinterpret_cast<const void *>(static_cast<std::uintptr_t>(selected)));
+    ImGui::TextColored({0.94F, 0.95F, 0.98F, 1.0F}, "%s", entityName(scene, selected));
+    ImGui::SameLine();
+    ImGui::TextDisabled("· Entity %u", Engine::entityIndex(selected));
+    if (scene.editor().valid(selected) && scene.editor().has<Engine::NameComponent>(selected)) {
+        const auto readScene = scene.editor();
+        const auto &name = readScene.get<Engine::NameComponent>(selected).value;
+        char editableName[260]{};
+        std::snprintf(editableName, sizeof(editableName), "%s", name.c_str());
+        ImGui::SetNextItemWidth(-1.0F);
+        if (ImGui::InputTextWithHint("##object-name", "Object name", editableName, sizeof(editableName)) &&
+            editableName[0] != '\0') {
+            scene.editor().modify<Engine::NameComponent>(selected, [&](auto &value) {
+                value.value = editableName;
+            });
+        }
+    }
+    ImGui::TextDisabled("Rename the object, then tweak its components below.");
+    ImGui::Spacing();
+    if (ImGui::CollapsingHeader("Transform", ImGuiTreeNodeFlags_DefaultOpen) &&
+        scene.editor().valid(selected) && scene.editor().has<Engine::Transform>(selected)) {
+        TransformFields{scene.edit(selected)}.draw();
+    }
+    if (scene.editor().valid(selected) &&
+        scene.editor().has<Engine::SmokeEmitterComponent>(selected)) {
+        bool remove = false;
+        const bool open = drawRemovableComponentHeader("Smoke Emitter", "smoke-emitter", remove);
+        if (remove) {
+            scene.editor().remove<Engine::SmokeEmitterComponent>(selected);
+        } else if (open) {
+        // Keep the UI editing a temporary copy. The component is committed
+        // once, after all controls have been drawn, so observers receive one
+        // coherent change notification per frame.
+        const auto readScene = scene.editor();
+        const auto &source =
+                readScene.get<Engine::SmokeEmitterComponent>(selected).emitter;
+        auto emitter = source;
+        const bool hasColorPicker =
+                readScene.has<Engine::ColorPickerComponent>(selected);
+        if (hasColorPicker) {
+            emitter.color = readScene.get<Engine::ColorPickerComponent>(selected).color;
+        }
+
+        bool changed = false;
+        bool colorChanged = false;
+        const auto drawParticleFloat = [](const char *label, const char *id,
+                                          float *value, const float speed,
+                                          const float min, const float max,
+                                          const char *format) {
+            ImGui::TextDisabled("%s", label);
+            ImGui::SetNextItemWidth(-1.0F);
+            return ImGui::DragFloat(id, value, speed, min, max, format);
+        };
+
+        changed |= drawParticleFloat("Spawn Rate", "##particle-spawn-rate",
+                                     &emitter.spawnRate, 1.0F, 0.0F, 5000.0F,
+                                     "%.0F particles/s");
+        changed |= drawParticleFloat("Minimum Lifetime", "##particle-min-lifetime",
+                                     &emitter.minLifeTime, 0.01F, 0.0F, 60.0F,
+                                     "%.2F s");
+        changed |= drawParticleFloat("Maximum Lifetime", "##particle-max-lifetime",
+                                     &emitter.maxLifeTime, 0.01F, 0.0F, 60.0F,
+                                     "%.2F s");
+        changed |= drawParticleFloat("Minimum Size", "##particle-min-size",
+                                     &emitter.minSize, 0.01F, 0.0F, 10.0F,
+                                     "%.2F");
+        changed |= drawParticleFloat("Maximum Size", "##particle-max-size",
+                                     &emitter.maxSize, 0.01F, 0.0F, 10.0F,
+                                     "%.2F");
+        changed |= drawParticleFloat("Buoyancy", "##smoke-buoyancy",
+                                     &emitter.buoyancy, 0.05F, 0.0F, 30.0F,
+                                     "%.2F");
+        changed |= drawParticleFloat("Air Drag", "##smoke-drag",
+                                     &emitter.drag, 0.02F, 0.0F, 10.0F,
+                                     "%.2F");
+        changed |= drawParticleFloat("Turbulence", "##smoke-turbulence",
+                                     &emitter.turbulence, 0.02F, 0.0F, 10.0F,
+                                     "%.2F");
+        changed |= drawParticleFloat("Collision Radius", "##smoke-collision-radius",
+                                     &emitter.collisionRadius, 0.005F, 0.0F, 2.0F,
+                                     "%.3F");
+
+        float minVelocity[3] = {
+            emitter.minVelocity.x(), emitter.minVelocity.y(), emitter.minVelocity.z()
+        };
+        float maxVelocity[3] = {
+            emitter.maxVelocity.x(), emitter.maxVelocity.y(), emitter.maxVelocity.z()
+        };
+        if (ImGui::DragFloat3("Min Velocity", minVelocity, 0.05F, -100.0F, 100.0F)) {
+            emitter.minVelocity = {minVelocity[0], minVelocity[1], minVelocity[2]};
+            changed = true;
+        }
+        if (ImGui::DragFloat3("Max Velocity", maxVelocity, 0.05F, -100.0F, 100.0F)) {
+            emitter.maxVelocity = {maxVelocity[0], maxVelocity[1], maxVelocity[2]};
+            changed = true;
+        }
+
+        float color[4] = {
+            emitter.color.r(), emitter.color.g(), emitter.color.b(), emitter.color.a()
+        };
+        ImGui::TextDisabled("Color");
+        ImGui::SetNextItemWidth(-1.0F);
+        if (ImGui::ColorEdit4("##particle-color", color, ImGuiColorEditFlags_AlphaBar)) {
+            emitter.color = Engine::Color{color[0], color[1], color[2], color[3]};
+            changed = true;
+            colorChanged = true;
+        }
+
+        // Enforce valid ranges even when values are entered from the keyboard.
+        emitter.minLifeTime = std::max(0.0F, emitter.minLifeTime);
+        emitter.maxLifeTime = std::max(emitter.minLifeTime, emitter.maxLifeTime);
+        emitter.minSize = std::max(0.0F, emitter.minSize);
+        emitter.maxSize = std::max(emitter.minSize, emitter.maxSize);
+        emitter.spawnRate = std::max(0.0F, emitter.spawnRate);
+        emitter.buoyancy = std::max(0.0F, emitter.buoyancy);
+        emitter.drag = std::max(0.0F, emitter.drag);
+        emitter.turbulence = std::max(0.0F, emitter.turbulence);
+        emitter.collisionRadius = std::max(0.0F, emitter.collisionRadius);
+
+        if (changed) {
+            scene.editor().modify<Engine::SmokeEmitterComponent>(selected,
+                                                                 [&](auto &component) {
+                                                                     component.emitter = emitter;
+                                                                 });
+            if (colorChanged && hasColorPicker) {
+                scene.editor().modify<Engine::ColorPickerComponent>(selected,
+                                                                    [&](auto &component) {
+                                                                        component.color = emitter.color;
+                                                                    });
+            }
+        }
+        }
+    }
+    if (scene.editor().valid(selected) && scene.editor().has<Engine::ScriptComponent>(selected)) {
+        bool remove = false;
+        const bool open = drawRemovableComponentHeader("Script", "script", remove);
+        if (remove) {
+            scene.editor().remove<Engine::ScriptComponent>(selected);
+        } else if (open) {
+        const auto readScene = scene.editor();
+        const auto &script = readScene.get<Engine::ScriptComponent>(selected);
+        char className[260]{};
+        std::snprintf(className, sizeof(className), "%s", script.className.c_str());
+        ImGui::TextDisabled("C++ script class");
+        ImGui::SetNextItemWidth(-1.0F);
+        if (ImGui::InputText("##script-class", className, sizeof(className))) {
+            scene.editor().modify<Engine::ScriptComponent>(selected, [&](auto &value) {
+                value.className = className;
+                value.reset();
+            });
+        }
+        bool enabled = script.enabled;
+        if (ImGui::Checkbox("Enabled##script", &enabled)) {
+            scene.editor().modify<Engine::ScriptComponent>(selected, [&](auto &value) {
+                value.enabled = enabled;
+            });
+        }
+        }
+    }
+    if (scene.editor().valid(selected) && scene.editor().has<Engine::ColliderComponent>(selected)) {
+        bool remove = false;
+        const bool open = drawRemovableComponentHeader("Collider", "collider", remove);
+        if (remove) {
+            scene.editor().remove<Engine::ColliderComponent>(selected);
+        } else if (open) {
+        const auto collider = scene.editor().get<Engine::ColliderComponent>(selected);
+        int shape = static_cast<int>(collider.shape.index());
+        const char *shapeNames[] = {"Box", "Sphere", "Capsule", "Ramp", "Mesh"};
+        const bool hasMesh = scene.editor().has<Engine::MeshRenderer>(selected) &&
+            scene.editor().get<Engine::MeshRenderer>(selected).hasMesh();
+        bool changed = false;
+        if (ImGui::BeginCombo("Shape##collider", shapeNames[shape])) {
+            for (int index = 0; index < 5; ++index) {
+                const bool unavailable = index == 4 && !hasMesh;
+                if (unavailable) ImGui::BeginDisabled();
+                if (ImGui::Selectable(shapeNames[index], shape == index)) {
+                    shape = index;
+                    changed = true;
+                }
+                if (unavailable) ImGui::EndDisabled();
+            }
+            ImGui::EndCombo();
+        }
+        auto value = collider;
+        if (shape != static_cast<int>(value.shape.index())) {
+            value.shape = shape == 0
+                              ? Engine::ColliderShape{Engine::BoxCollider{}}
+                              : shape == 1
+                                    ? Engine::ColliderShape{Engine::SphereCollider{}}
+                                    : shape == 2
+                                          ? Engine::ColliderShape{Engine::CapsuleCollider{}}
+                                          : shape == 3
+                                              ? Engine::ColliderShape{Engine::RampCollider{}}
+                                              : Engine::ColliderShape{Engine::MeshCollider{
+                                                  scene.editor().get<Engine::MeshRenderer>(selected).mesh}};
+        }
+        float offset[3] = {value.offset.x(), value.offset.y(), value.offset.z()};
+        if (ImGui::DragFloat3("Offset##collider", offset, 0.05F)) {
+            value.offset = {offset[0], offset[1], offset[2]};
+            changed = true;
+        }
+        std::visit([&]<typename T>(T &colliderShape) {
+            using Shape = std::decay_t<T>;
+            if constexpr (std::is_same_v<Shape, Engine::BoxCollider>) {
+                float extents[3] = {
+                    colliderShape.halfExtents.x(), colliderShape.halfExtents.y(), colliderShape.halfExtents.z()
+                };
+                if (ImGui::DragFloat3("Half Extents##collider", extents, 0.05F, 0.001F, 1000.0F)) {
+                    colliderShape.halfExtents = {
+                        std::max(0.001F, extents[0]), std::max(0.001F, extents[1]), std::max(0.001F, extents[2])
+                    };
+                    changed = true;
+                }
+            } else if constexpr (std::is_same_v<Shape, Engine::SphereCollider>) {
+                changed |= ImGui::DragFloat("Radius##collider", &colliderShape.radius, 0.05F, 0.001F, 1000.0F);
+                colliderShape.radius = std::max(0.001F, colliderShape.radius);
+            } else if constexpr (std::is_same_v<Shape, Engine::CapsuleCollider>) {
+                changed |= ImGui::DragFloat("Radius##collider", &colliderShape.radius, 0.05F, 0.001F, 1000.0F);
+                changed |= ImGui::DragFloat("Height##collider", &colliderShape.height, 0.05F, 0.001F, 1000.0F);
+                colliderShape.radius = std::max(0.001F, colliderShape.radius);
+                colliderShape.height = std::max(0.001F, colliderShape.height);
+            } else if constexpr (std::is_same_v<Shape, Engine::MeshCollider>) {
+                ImGui::TextDisabled("Triangle geometry from the assigned mesh");
+            }
+        }, value.shape);
+        changed |= ImGui::Checkbox("Is Trigger##collider", &value.isTrigger);
+        changed |= ImGui::DragFloat("Friction##collider", &value.friction, 0.01F, 0.0F, 10.0F);
+        changed |= ImGui::SliderFloat("Restitution##collider", &value.restitution, 0.0F, 1.0F);
+        value.friction = std::max(0.0F, value.friction);
+        value.restitution = std::clamp(value.restitution, 0.0F, 1.0F);
+        if (changed)
+            scene.editor().modify<Engine::ColliderComponent>(selected,
+                                                             [&](auto &component) { component = value; });
+        }
+    }
+    if (scene.editor().valid(selected) && scene.editor().has<Engine::RigidbodyComponent>(selected)) {
+        bool remove = false;
+        const bool open = drawRemovableComponentHeader("Rigidbody", "rigidbody", remove);
+        if (remove) {
+            scene.editor().remove<Engine::RigidbodyComponent>(selected);
+        } else if (open) {
+        const auto rigidbody = scene.editor().get<Engine::RigidbodyComponent>(selected);
+        auto value = rigidbody;
+        int type = static_cast<int>(value.type);
+        const char *typeNames[] = {"Static", "Dynamic", "Kinematic"};
+        if (ImGui::BeginCombo("Type##rigidbody", typeNames[type])) {
+            for (int index = 0; index < 3; ++index) {
+                if (ImGui::Selectable(typeNames[index], type == index)) type = index;
+            }
+            ImGui::EndCombo();
+        }
+        value.type = static_cast<Engine::RigidbodyType>(type);
+        bool changed = ImGui::Checkbox("Use Gravity##rigidbody", &value.useGravity);
+        changed |= ImGui::DragFloat("Mass##rigidbody", &value.mass, 0.05F, 0.001F, 100000.0F);
+        value.mass = std::max(0.001F, value.mass);
+        if (changed || value.type != rigidbody.type) {
+            scene.editor().modify<Engine::RigidbodyComponent>(selected,
+                                                              [&](auto &component) { component = value; });
+        }
+        }
+    }
+    if (scene.editor().valid(selected) && scene.editor().has<Engine::ColorPickerComponent>(selected)) {
+        bool remove = false;
+        const bool open = drawRemovableComponentHeader("Color Picker", "color-picker", remove);
+        if (remove) {
+            scene.editor().remove<Engine::ColorPickerComponent>(selected);
+        } else if (open) {
+        const auto readScene = scene.editor();
+        const auto &picker =
+                readScene.get<Engine::ColorPickerComponent>(selected);
+        float rgba[4] = {picker.color.r(), picker.color.g(), picker.color.b(), picker.color.a()};
+        if (ImGui::ColorEdit4("Color", rgba, ImGuiColorEditFlags_AlphaBar)) {
+            scene.editor().modify<Engine::ColorPickerComponent>(selected, [&](auto &component) {
+                component.color = Engine::Color{rgba[0], rgba[1], rgba[2], rgba[3]};
+            });
+        }
+        }
+    }
+    ImGui::TextDisabled("COMPONENTS");
+    ImGui::Spacing();
+    ImGui::SetNextItemWidth(-1.0F);
+    ImGui::PushStyleColor(ImGuiCol_Button, {0.20F, 0.36F, 0.52F, 1.0F});
+    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, {0.28F, 0.48F, 0.68F, 1.0F});
+    ImGui::PushStyleColor(ImGuiCol_ButtonActive, {0.16F, 0.30F, 0.44F, 1.0F});
+    if (EditorButton("+  Add Component", {-1.0F, 0.0F}).draw()) {
+        ImGui::OpenPopup("Add Component");
+    }
+    ImGui::PopStyleColor(3);
+    if (ImGui::BeginPopup("Add Component")) {
+        const bool hasScript = scene.editor().has<Engine::ScriptComponent>(selected);
+        const bool hasColorPicker = scene.editor().has<Engine::ColorPickerComponent>(selected);
+        const bool hasCollider = scene.editor().has<Engine::ColliderComponent>(selected);
+        const bool hasRigidbody = scene.editor().has<Engine::RigidbodyComponent>(selected);
+        const bool hasSmokeEmitter = scene.editor().has<Engine::SmokeEmitterComponent>(selected);
+        if (ImGui::MenuItem("Script", nullptr, false, !hasScript)) {
+            scene.editor().add<Engine::ScriptComponent>(selected);
+            ImGui::CloseCurrentPopup();
+        }
+        if (hasScript) ImGui::TextDisabled("Script component already added");
+        if (ImGui::MenuItem("Color Picker", nullptr, false, !hasColorPicker)) {
+            scene.editor().add<Engine::ColorPickerComponent>(selected);
+            ImGui::CloseCurrentPopup();
+        }
+        if (hasColorPicker) ImGui::TextDisabled("Color Picker component already added");
+        if (ImGui::MenuItem("Collider", nullptr, false, !hasCollider)) {
+            scene.editor().add<Engine::ColliderComponent>(selected);
+            ImGui::CloseCurrentPopup();
+        }
+        if (hasCollider) ImGui::TextDisabled("Collider component already added");
+        if (ImGui::MenuItem("Rigidbody", nullptr, false, !hasRigidbody)) {
+            scene.editor().add<Engine::RigidbodyComponent>(selected);
+            ImGui::CloseCurrentPopup();
+        }
+        if (hasRigidbody) ImGui::TextDisabled("Rigidbody component already added");
+        if (ImGui::MenuItem("Smoke Emitter", nullptr, false, !hasSmokeEmitter)) {
+            scene.editor().add<Engine::SmokeEmitterComponent>(selected);
+            ImGui::CloseCurrentPopup();
+        }
+        if (hasSmokeEmitter) ImGui::TextDisabled("Smoke Emitter component already added");
+        ImGui::EndPopup();
+    }
+    if (EditorButton("Attach C++ Script", {-1.0F, 0.0F}).draw()) ImGui::OpenPopup("Attach C++ Script");
+    if (ImGui::BeginPopupModal("Attach C++ Script", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
+        static char attachedClassName[128]{};
+        ImGui::TextUnformatted("Enter the registered C++ script class name.");
+        ImGui::InputTextWithHint("Class name", "CubeMovement", attachedClassName, sizeof(attachedClassName));
+        const bool validName = attachedClassName[0] != '\0';
+        if (EditorButton("Attach", {100.0F, 0.0F}).draw() && validName) {
+            if (!scene.editor().has<Engine::ScriptComponent>(selected)) {
+                scene.editor().add<Engine::ScriptComponent>(selected);
+            }
+            scene.editor().modify<Engine::ScriptComponent>(selected, [&](auto &script) {
+                script.className = attachedClassName;
+                script.enabled = true;
+                script.reset();
+            });
+            attachedClassName[0] = '\0';
+            ImGui::CloseCurrentPopup();
+        }
+        ImGui::SameLine();
+        if (EditorButton("Cancel", {100.0F, 0.0F}).draw()) {
+            attachedClassName[0] = '\0';
+            ImGui::CloseCurrentPopup();
+        }
+        ImGui::EndPopup();
+    }
+    if (EditorButton("Create C++ Script", {-1.0F, 0.0F}).draw()) ImGui::OpenPopup("Create C++ Script");
+    if (ImGui::BeginPopupModal("Create C++ Script", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
+        static char name[128]{};
+        static std::string error;
+        ImGui::TextUnformatted("Creates Sandbox/Source/Scripts/<Name>.h and .cpp");
+        ImGui::InputTextWithHint("Class name", "PlayerController", name, sizeof(name));
+        if (!error.empty()) ImGui::TextColored({1, .3F, .3F, 1}, "%s", error.c_str());
+        if (EditorButton("Create").draw() && EditorSceneSession::createCppScript(name, error)) {
+            if (!scene.editor().has<Engine::ScriptComponent>(selected))
+                scene.editor().add<
+                    Engine::ScriptComponent>(selected);
+            scene.editor().modify<Engine::ScriptComponent>(selected, [&](auto &script) {
+                script.className = name;
+                script.reset();
+            });
+            name[0] = '\0';
+            error.clear();
+            ImGui::CloseCurrentPopup();
+        }
+        ImGui::SameLine();
+        if (EditorButton("Cancel").draw()) {
+            name[0] = '\0';
+            error.clear();
+            ImGui::CloseCurrentPopup();
+        }
+        ImGui::EndPopup();
+    }
+    ImGui::PopID();
+    const bool consumesMouseWheel = ImGui::IsWindowHovered(
+                                        ImGuiHoveredFlags_AllowWhenBlockedByActiveItem) && ImGui::GetIO().MouseWheel !=
+                                    0.0F;
+    ImGui::End();
+    return consumesMouseWheel;
+}
+
