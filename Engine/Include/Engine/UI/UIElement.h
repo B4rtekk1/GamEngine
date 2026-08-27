@@ -18,8 +18,8 @@ namespace Engine::UI {
             m_children.emplace_back(std::move(child));
         }
 
-        virtual void update(float deltaTime) {}
-        virtual void buildGeometry(UIBatch& batch) const {}
+        virtual void update(float) {}
+        virtual void buildGeometry(UIBatch&) const {}
 
         /// Returns a value that changes whenever subclass-owned visual data changes.
         /// The renderer combines it with hierarchy, visibility and layout state to

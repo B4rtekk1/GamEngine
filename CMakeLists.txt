@@ -205,6 +205,38 @@ foreach(SHADER_SOURCE IN LISTS SHADER_SOURCES)
 endforeach()
 
 add_custom_target(Shaders DEPENDS ${SHADER_OUTPUTS})
+
+if(BUILD_TESTING)
+    include(FetchContent)
+    FetchContent_Declare(
+            googletest
+            GIT_REPOSITORY https://github.com/google/googletest.git
+            GIT_TAG v1.17.0
+            GIT_SHALLOW TRUE)
+    FetchContent_MakeAvailable(googletest)
+
+    add_executable(GamEngineTests
+            Tests/MathTests.cpp
+            Tests/EcsTests.cpp
+            Tests/GeneralTests.cpp
+            Tests/ComponentTests.cpp
+            Tests/UiAndLayoutTests.cpp
+            Tests/TimeTests.cpp
+            Tests/SceneBuilderTests.cpp
+            Engine/Source/Core/Camera.cpp
+            Engine/Source/Core/Time.cpp
+            Engine/Source/UI/RectTransform.cpp)
+    target_link_libraries(GamEngineTests PRIVATE GTest::gtest_main)
+    target_include_directories(GamEngineTests PRIVATE
+            ${CMAKE_CURRENT_SOURCE_DIR}/Engine/Include
+            ${GLM_INCLUDE_DIR})
+    gameengine_enable_warnings(GamEngineTests)
+    gameengine_enable_sanitizers(GamEngineTests)
+
+    include(GoogleTest)
+    gtest_discover_tests(GamEngineTests)
+endif()
+
 add_subdirectory(Sandbox)
 # Play in the editor starts this executable.  Keeping it as a build dependency
 # means an Editor build always leaves a runnable game beside its assets.

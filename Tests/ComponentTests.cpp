@@ -1,0 +1,179 @@
+#include <gtest/gtest.h>
+
+#include "Engine/ECS/Components/ColliderComponent.h"
+#include "Engine/ECS/Components/ColorPickerComponent.h"
+#include "Engine/ECS/Components/MeshRendererComponent.h"
+#include "Engine/ECS/Components/RigidbodyComponent.h"
+#include "Engine/ECS/Components/ScriptComponent.h"
+#include "Engine/Renderer/Lighting/DirectionalLightData.h"
+#include "Engine/Renderer/Materials/PBRMaterial.h"
+#include "Engine/Renderer/RenderConfig.h"
+#include "Engine/Scene/Components/IdentityComponents.h"
+#include "Engine/Scene/Components/LightComponent.h"
+#include "Engine/UI/Components/TextComponent.h"
+#include "Engine/UI/UIVertex.h"
+
+#include <limits>
+#include <memory>
+#include <type_traits>
+#include <variant>
+
+namespace {
+
+void ExpectVec3Near(const Engine::Vec3& value, float x, float y, float z) {
+    EXPECT_NEAR(value.x(), x, 1.0e-5F);
+    EXPECT_NEAR(value.y(), y, 1.0e-5F);
+    EXPECT_NEAR(value.z(), z, 1.0e-5F);
+}
+
+TEST(RigidbodyComponent, AccumulatesAndClearsForcesAndImpulses) {
+    Engine::RigidbodyComponent body;
+    body.mass = 2.0F;
+    body.addForce({1.0F, 2.0F, 3.0F});
+    body.addForce({-1.0F, 4.0F, -2.0F});
+    body.addTorque({5.0F, 6.0F, 7.0F});
+    body.addAngularImpulse({2.0F, 3.0F, 4.0F});
+    body.addImpulse({4.0F, -2.0F, 6.0F});
+    ExpectVec3Near(body.accumulatedForce(), 0.0F, 6.0F, 1.0F);
+    ExpectVec3Near(body.accumulatedTorque(), 5.0F, 6.0F, 7.0F);
+    ExpectVec3Near(body.accumulatedAngularImpulse(), 2.0F, 3.0F, 4.0F);
+    ExpectVec3Near(body.linearVelocity, 2.0F, -1.0F, 3.0F);
+    body.zeroForces();
+    ExpectVec3Near(body.accumulatedForce(), 0.0F, 0.0F, 0.0F);
+    ExpectVec3Near(body.accumulatedTorque(), 0.0F, 0.0F, 0.0F);
+    ExpectVec3Near(body.accumulatedAngularImpulse(), 0.0F, 0.0F, 0.0F);
+}
+
+TEST(RigidbodyComponent, IgnoresLinearImpulseForNonPositiveMassAndStops) {
+    Engine::RigidbodyComponent body;
+    body.mass = 0.0F;
+    body.addImpulse({1.0F, 2.0F, 3.0F});
+    ExpectVec3Near(body.linearVelocity, 0.0F, 0.0F, 0.0F);
+    body.linearVelocity = {1.0F, 2.0F, 3.0F};
+    body.angularVelocity = {4.0F, 5.0F, 6.0F};
+    body.addAngularImpulse({7.0F, 8.0F, 9.0F});
+    body.stop();
+    ExpectVec3Near(body.linearVelocity, 0.0F, 0.0F, 0.0F);
+    ExpectVec3Near(body.angularVelocity, 0.0F, 0.0F, 0.0F);
+    ExpectVec3Near(body.accumulatedAngularImpulse(), 0.0F, 0.0F, 0.0F);
+}
+
+TEST(ColliderComponent, DefaultsToBoxAndSupportsAllValueShapes) {
+    Engine::ColliderComponent collider;
+    ASSERT_TRUE(std::holds_alternative<Engine::BoxCollider>(collider.shape));
+    const auto& box = std::get<Engine::BoxCollider>(collider.shape);
+    ExpectVec3Near(box.halfExtents, 0.5F, 0.5F, 0.5F);
+    EXPECT_FALSE(collider.isTrigger);
+    EXPECT_FLOAT_EQ(collider.friction, 0.5F);
+    collider.shape = Engine::SphereCollider{2.0F};
+    EXPECT_FLOAT_EQ(std::get<Engine::SphereCollider>(collider.shape).radius, 2.0F);
+    collider.shape = Engine::CapsuleCollider{0.5F, 3.0F};
+    EXPECT_FLOAT_EQ(std::get<Engine::CapsuleCollider>(collider.shape).height, 3.0F);
+    collider.shape = Engine::RampCollider{{1.0F, 2.0F, 3.0F}};
+    ExpectVec3Near(std::get<Engine::RampCollider>(collider.shape).halfExtents, 1.0F, 2.0F, 3.0F);
+}
+
+TEST(SceneComponents, ProvideExpectedDefaults) {
+    const Engine::LightComponent light;
+    EXPECT_EQ(light.type, Engine::LightType::Directional);
+    EXPECT_FLOAT_EQ(light.color.r(), 1.0F);
+    EXPECT_TRUE(light.enabled);
+    EXPECT_TRUE(light.castShadows);
+    const Engine::ColorPickerComponent picker;
+    EXPECT_FLOAT_EQ(picker.color.a(), 1.0F);
+    const Engine::PBRMaterial material;
+    EXPECT_FLOAT_EQ(material.roughness, 0.55F);
+    EXPECT_EQ(material.baseColorTexture, -1);
+    EXPECT_FALSE(material.alphaBlend);
+}
+
+TEST(IdentityComponents, GenerateAndReserveMonotonicUniqueIdentifiers) {
+    const auto first = Engine::createUUID();
+    const auto second = Engine::createUUID();
+    EXPECT_NE(first, Engine::NullUUID);
+    EXPECT_GT(second, first);
+    Engine::reserveUUID(second + 100);
+    EXPECT_GT(Engine::createUUID(), second + 100);
+    const Engine::NameComponent name;
+    EXPECT_EQ(name.value, "GameObject");
+    EXPECT_EQ(Engine::ParentComponent{}.parent, Engine::NullUUID);
+}
+
+TEST(TextComponent, IsRenderableOnlyWithVisibleNonEmptyPositiveLayout) {
+    Engine::TextComponent text;
+    EXPECT_FALSE(text.isRenderable());
+    text.text = "Hello";
+    EXPECT_TRUE(text.isRenderable());
+    text.visible = false;
+    EXPECT_FALSE(text.isRenderable());
+    text.visible = true;
+    text.fontSize = 0.0F;
+    EXPECT_FALSE(text.isRenderable());
+    text.fontSize = 16.0F;
+    text.horizontalScale = -1.0F;
+    EXPECT_FALSE(text.isRenderable());
+}
+
+TEST(RenderTypes, ExposeStableDefaultsAndHandles) {
+    const Engine::RenderConfig config;
+    EXPECT_TRUE(config.features.instancedRendering);
+    EXPECT_TRUE(config.features.gpuCulling);
+    EXPECT_FALSE(config.features.shadows);
+    EXPECT_EQ(config.antialiasing, Engine::AntialiasingLevel::Off);
+    EXPECT_FALSE(Engine::ViewportHandle{});
+    EXPECT_TRUE((Engine::ViewportHandle{123}));
+    const Engine::EditorEventState events;
+    EXPECT_FALSE(events.quitRequested);
+    EXPECT_FALSE(events.togglePlay);
+}
+
+TEST(RenderDataLayouts, MatchExpectedGpuFriendlySizes) {
+    EXPECT_EQ(Engine::UI::UIVertex::size(), sizeof(Engine::UI::UIVertex));
+    EXPECT_EQ(sizeof(Engine::DirectionalLightGPU), 32u);
+    EXPECT_TRUE((std::is_standard_layout_v<Engine::DirectionalLightGPU>));
+}
+
+TEST(MeshRendererComponent, RequiresNonEmptySharedMeshToBeRenderable) {
+    Engine::MeshRendererComponent renderer;
+    EXPECT_FALSE(renderer.hasMesh());
+    renderer.mesh = std::make_shared<const Engine::Mesh>();
+    EXPECT_FALSE(renderer.hasMesh());
+    auto populatedMesh = std::make_shared<Engine::Mesh>();
+    populatedMesh->vertices.resize(3);
+    populatedMesh->indices = {0, 1, 2};
+    renderer.mesh = populatedMesh;
+    EXPECT_TRUE(renderer.hasMesh());
+    EXPECT_TRUE(renderer.castShadow);
+    EXPECT_EQ(renderer.cullingBatch, 0u);
+    EXPECT_EQ(renderer.occlusionQueryIndex, std::numeric_limits<std::uint32_t>::max());
+}
+
+TEST(ScriptComponent, CopiesConfigurationWithoutSharingRuntimeState) {
+    Engine::ScriptComponent script{"PlayerController", false};
+    Engine::ScriptComponent copy{script};
+    EXPECT_EQ(copy.className, "PlayerController");
+    EXPECT_FALSE(copy.enabled);
+    copy.className = "CameraController";
+    copy.enabled = true;
+    script = copy;
+    EXPECT_EQ(script.className, "CameraController");
+    EXPECT_TRUE(script.enabled);
+    script.reset();
+    EXPECT_EQ(script.className, "CameraController");
+}
+
+TEST(RenderTypes, AllowFeatureAndEventConfiguration) {
+    Engine::RenderConfig config;
+    config.features.shadows = true;
+    config.features.occlusionCulling = true;
+    config.antialiasing = Engine::AntialiasingLevel::MSAA4x;
+    EXPECT_TRUE(config.features.shadows);
+    EXPECT_TRUE(config.features.occlusionCulling);
+    EXPECT_EQ(config.antialiasing, Engine::AntialiasingLevel::MSAA4x);
+    Engine::EditorEventState events{.quitRequested = true, .togglePlay = true};
+    EXPECT_TRUE(events.quitRequested);
+    EXPECT_TRUE(events.togglePlay);
+    EXPECT_FALSE(events.togglePause);
+}
+
+} // namespace
