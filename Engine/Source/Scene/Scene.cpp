@@ -4,10 +4,22 @@
 #include "Engine/Assets/Content.h"
 #include "Engine/Renderer/Geometry/Cube.h"
 
+#include <cctype>
 #include <stdexcept>
 #include <utility>
 
 namespace Engine {
+    namespace {
+        [[nodiscard]] bool isGltfPath(const std::filesystem::path& path) {
+            std::string extension = path.extension().string();
+            std::transform(extension.begin(), extension.end(), extension.begin(),
+                           [](const unsigned char character) {
+                               return static_cast<char>(std::tolower(character));
+                           });
+            return extension == ".gltf" || extension == ".glb";
+        }
+    }
+
     GameObject &Scene::createMeshObject(std::string name,
                                         std::shared_ptr<const Mesh> mesh,
                                         PBRMaterial material) {
@@ -19,12 +31,14 @@ namespace Engine {
 
     Actor Scene::createModel(std::string name, std::filesystem::path path,
                              const Assets::Content &content) {
-        auto mesh = content.mesh(std::move(path));
+        auto mesh = content.mesh(path);
         if (!mesh) {
             throw std::runtime_error("Could not load model for actor '" + name + "'");
         }
         auto &object = createMeshObject(std::move(name), std::move(mesh));
-        return Actor{*this, object.objectId()};
+        Actor actor{*this, object.objectId()};
+        if (isGltfPath(path)) actor.addMeshCollider();
+        return actor;
     }
 
     Actor Scene::createModel(std::string name, std::filesystem::path path) {

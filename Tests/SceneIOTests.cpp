@@ -40,7 +40,14 @@ int main() {
         return 4;
     } catch (const std::runtime_error&) {
     }
-    (void)existing;
+    // A failed load must leave the previously usable scene connected to its
+    // GameObject wrappers; otherwise the editor crashes on its next UI frame.
+    if (!unchanged.findActor("Existing").valid() ||
+        unchanged.findActor("Existing").name() != "Existing") return 5;
+
+    Scene editorScene;
+    editorScene.load(std::filesystem::path{GAMEENGINE_SOURCE_DIR} / "Assets/Scenes/Editor.scene");
+    if (editorScene.objectCount() != 8 || !editorScene.findActor("Tree").valid()) return 6;
 
     std::filesystem::remove_all(directory);
     return 0;

@@ -104,29 +104,32 @@ namespace EditorConstants {
 void drawPanelHeader(const char *title, const char *subtitle = nullptr) {
     const ImVec2 cursor = ImGui::GetCursorScreenPos();
     const float width = ImGui::GetContentRegionAvail().x;
-    const float height = ImGui::GetTextLineHeight() + ImGui::GetStyle().FramePadding.y * 2.0F + 4.0F;
+    const float height = ImGui::GetTextLineHeight() + ImGui::GetStyle().FramePadding.y * 2.0F + 6.0F;
     ImDrawList *drawList = ImGui::GetWindowDrawList();
     drawList->AddRectFilled(cursor, {cursor.x + width, cursor.y + height},
-                            ImGui::GetColorU32(ImVec4{0.145F, 0.155F, 0.190F, 1.0F}), 4.0F);
-    drawList->AddRectFilled(cursor, {cursor.x + 3.0F, cursor.y + height},
-                            ImGui::GetColorU32(ImVec4{0.42F, 0.68F, 0.92F, 1.0F}), 2.0F);
-    ImGui::SetCursorScreenPos({cursor.x + 12.0F, cursor.y + ImGui::GetStyle().FramePadding.y + 2.0F});
-    ImGui::PushStyleColor(ImGuiCol_Text, {0.94F, 0.95F, 0.98F, 1.0F});
+                            ImGui::GetColorU32(ImVec4{0.070F, 0.086F, 0.112F, 1.0F}), 6.0F);
+    drawList->AddRectFilled(cursor, {cursor.x + 4.0F, cursor.y + height},
+                            ImGui::GetColorU32(ImVec4{0.18F, 0.86F, 0.84F, 1.0F}), 3.0F);
+    drawList->AddLine({cursor.x + 4.0F, cursor.y + height - 1.0F},
+                      {cursor.x + width - 8.0F, cursor.y + height - 1.0F},
+                      ImGui::GetColorU32(ImVec4{0.16F, 0.23F, 0.29F, 0.75F}));
+    ImGui::SetCursorScreenPos({cursor.x + 14.0F, cursor.y + ImGui::GetStyle().FramePadding.y + 3.0F});
+    ImGui::PushStyleColor(ImGuiCol_Text, {0.93F, 0.97F, 0.99F, 1.0F});
     ImGui::TextUnformatted(title);
     ImGui::PopStyleColor();
     if (subtitle != nullptr) {
         ImGui::SameLine(0.0F, 10.0F);
         ImGui::TextDisabled("%s", subtitle);
     }
-    ImGui::SetCursorScreenPos({cursor.x, cursor.y + height + 8.0F});
+    ImGui::SetCursorScreenPos({cursor.x, cursor.y + height + 9.0F});
     ImGui::Dummy({0.0F, 0.0F});
 }
 
 bool drawToolbarToggle(const char *label, const bool active) {
     if (active) {
-        ImGui::PushStyleColor(ImGuiCol_Button, {0.28F, 0.50F, 0.70F, 1.0F});
-        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, {0.34F, 0.58F, 0.80F, 1.0F});
-        ImGui::PushStyleColor(ImGuiCol_ButtonActive, {0.24F, 0.45F, 0.64F, 1.0F});
+        ImGui::PushStyleColor(ImGuiCol_Button, {0.06F, 0.48F, 0.59F, 1.0F});
+        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, {0.10F, 0.62F, 0.70F, 1.0F});
+        ImGui::PushStyleColor(ImGuiCol_ButtonActive, {0.05F, 0.38F, 0.48F, 1.0F});
     }
     const bool pressed = ImGui::SmallButton(label);
     if (active) {
@@ -1046,14 +1049,19 @@ bool ComponentsPanel::draw(Engine::ScenePreset &scene, const Engine::Entity sele
         } else if (open) {
         const auto collider = scene.editor().get<Engine::ColliderComponent>(selected);
         int shape = static_cast<int>(collider.shape.index());
-        const char *shapeNames[] = {"Box", "Sphere", "Capsule", "Ramp"};
+        const char *shapeNames[] = {"Box", "Sphere", "Capsule", "Ramp", "Mesh"};
+        const bool hasMesh = scene.editor().has<Engine::MeshRenderer>(selected) &&
+            scene.editor().get<Engine::MeshRenderer>(selected).hasMesh();
         bool changed = false;
         if (ImGui::BeginCombo("Shape##collider", shapeNames[shape])) {
-            for (int index = 0; index < 4; ++index) {
+            for (int index = 0; index < 5; ++index) {
+                const bool unavailable = index == 4 && !hasMesh;
+                if (unavailable) ImGui::BeginDisabled();
                 if (ImGui::Selectable(shapeNames[index], shape == index)) {
                     shape = index;
                     changed = true;
                 }
+                if (unavailable) ImGui::EndDisabled();
             }
             ImGui::EndCombo();
         }
@@ -1065,7 +1073,10 @@ bool ComponentsPanel::draw(Engine::ScenePreset &scene, const Engine::Entity sele
                                     ? Engine::ColliderShape{Engine::SphereCollider{}}
                                     : shape == 2
                                           ? Engine::ColliderShape{Engine::CapsuleCollider{}}
-                                          : Engine::ColliderShape{Engine::RampCollider{}};
+                                          : shape == 3
+                                              ? Engine::ColliderShape{Engine::RampCollider{}}
+                                              : Engine::ColliderShape{Engine::MeshCollider{
+                                                  scene.editor().get<Engine::MeshRenderer>(selected).mesh}};
         }
         float offset[3] = {value.offset.x(), value.offset.y(), value.offset.z()};
         if (ImGui::DragFloat3("Offset##collider", offset, 0.05F)) {
@@ -1092,6 +1103,8 @@ bool ComponentsPanel::draw(Engine::ScenePreset &scene, const Engine::Entity sele
                 changed |= ImGui::DragFloat("Height##collider", &colliderShape.height, 0.05F, 0.001F, 1000.0F);
                 colliderShape.radius = std::max(0.001F, colliderShape.radius);
                 colliderShape.height = std::max(0.001F, colliderShape.height);
+            } else if constexpr (std::is_same_v<Shape, Engine::MeshCollider>) {
+                ImGui::TextDisabled("Triangle geometry from the assigned mesh");
             }
         }, value.shape);
         changed |= ImGui::Checkbox("Is Trigger##collider", &value.isTrigger);

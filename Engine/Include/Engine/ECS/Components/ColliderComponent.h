@@ -7,9 +7,11 @@
 
 #include "Engine/Math/Vec3.h"
 
+#include <memory>
 #include <variant>
 
 namespace Engine {
+    class Mesh;
     /**
      * @brief Box collider shape aligned with the owning transform's local axes.
      *
@@ -45,9 +47,19 @@ namespace Engine {
     };
 
     /**
+     * @brief Triangle collider using the exact indexed geometry of a mesh.
+     *
+     * The mesh is shared with the renderer and remains immutable while it is
+     * used for collision detection.
+     */
+    struct MeshCollider {
+        std::shared_ptr<const Mesh> mesh;
+    };
+
+    /**
      * @brief Variant containing every collider shape supported by the engine.
      */
-    using ColliderShape = std::variant<BoxCollider, SphereCollider, CapsuleCollider, RampCollider>;
+    using ColliderShape = std::variant<BoxCollider, SphereCollider, CapsuleCollider, RampCollider, MeshCollider>;
 
     /**
      * @brief Physics collision properties attached to an entity.

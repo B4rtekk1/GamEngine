@@ -38,6 +38,7 @@ namespace Engine {
         constexpr unsigned ColliderFormatVersion = 5;
         constexpr unsigned RigidbodyFormatVersion = 6;
         constexpr unsigned SmokeEmitterFormatVersion = 7;
+        constexpr unsigned AssetMeshFormatVersion = 8;
         constexpr float LegacyParticleMinVelocity = 0.8F;
         constexpr float LegacyParticleMinVelocityY = 5.5F;
         constexpr float LegacyParticleMaxVelocityY = 9.0F;
@@ -233,7 +234,7 @@ namespace Engine {
                 } else if constexpr (std::is_same_v<Shape, SphereCollider>) {
                     output << ' ';
                     writeFloat(output, shape.radius);
-                } else {
+                } else if constexpr (std::is_same_v<Shape, CapsuleCollider>) {
                     output << ' ';
                     writeFloat(output, shape.radius);
                     output << ' ';
@@ -280,9 +281,11 @@ namespace Engine {
             return body;
         }
 
-        ColliderComponent readCollider(std::istream &input) {
+        ColliderComponent readCollider(std::istream &input, const unsigned version) {
             const int type = read<int>(input, "collider shape");
-            if (type < 0 || type > 3) { invalidScene("unknown collider shape"); }
+            if (type < 0 || type > 4 || (type == 4 && version < SceneSerializer::FormatVersion)) {
+                invalidScene("unknown collider shape");
+            }
             ColliderComponent collider;
             collider.offset = readVec3(input, "collider offset");
             collider.isTrigger = readBool(input, "collider trigger flag");
@@ -313,12 +316,17 @@ namespace Engine {
                     invalidScene(
                         "capsule collider dimensions must be positive");
                 }
-            } else {
+            } else if (type == 3) {
                 collider.shape = RampCollider{readVec3(input, "ramp collider half extents")};
                 const auto &ramp = std::get<RampCollider>(collider.shape);
                 if (ramp.halfExtents.x() <= 0.0F || ramp.halfExtents.y() <= 0.0F || ramp.halfExtents.z() <= 0.0F) {
                     invalidScene("ramp collider half extents must be positive");
                 }
+            } else {
+                // The renderer mesh is assigned after all entity components
+                // have been decoded, so its shared geometry is not duplicated
+                // in the collider record.
+                collider.shape = MeshCollider{};
             }
             return collider;
         }
@@ -388,27 +396,50 @@ namespace Engine {
 
     void SceneSerializer::load(Scene &scene, const std::filesystem::path &path) {
         scene.detachObjectHandles();
-        load(scene.registry(), path);
+        try {
+            load(scene.registry(), path);
+        } catch (...) {
+            // Registry loading is transactional. Reconnect the still-valid
+            // previous registry to its GameObject wrappers before propagating
+            // the actual load error to the editor.
+            scene.rebuildObjectHandles();
+            throw;
+        }
         scene.rebuildObjectHandles();
     }
 
     void SceneSerializer::load(Scene &scene, const std::filesystem::path &path,
                                std::optional<std::uint32_t> &msaaSamples) {
         scene.detachObjectHandles();
-        load(scene.registry(), path, msaaSamples);
+        try {
+            load(scene.registry(), path, msaaSamples);
+        } catch (...) {
+            scene.rebuildObjectHandles();
+            throw;
+        }
         scene.rebuildObjectHandles();
     }
 
     void SceneSerializer::load(Scene &scene, std::istream &input) {
         scene.detachObjectHandles();
-        load(scene.registry(), input);
+        try {
+            load(scene.registry(), input);
+        } catch (...) {
+            scene.rebuildObjectHandles();
+            throw;
+        }
         scene.rebuildObjectHandles();
     }
 
     void SceneSerializer::load(Scene &scene, std::istream &input,
                                std::optional<std::uint32_t> &msaaSamples) {
         scene.detachObjectHandles();
-        load(scene.registry(), input, msaaSamples);
+        try {
+            load(scene.registry(), input, msaaSamples);
+        } catch (...) {
+            scene.rebuildObjectHandles();
+            throw;
+        }
         scene.rebuildObjectHandles();
     }
 
@@ -645,6 +676,7 @@ namespace Engine {
         const auto version = read<unsigned>(input, "format version");
         if (version != 3 && version != 4 && version != ColliderFormatVersion &&
             version != RigidbodyFormatVersion &&
+            version != 8 &&
             version != FormatVersion) {
             invalidScene("unsupported format version " + std::to_string(version));
         }
@@ -679,7 +711,7 @@ namespace Engine {
                 invalidScene("mesh identifiers must be contiguous");
             }
             if (recordType == "MESH_ASSET") {
-                if (version < FormatVersion) {
+                if (version < AssetMeshFormatVersion) {
                     invalidScene("asset mesh references require scene format version 8");
                 }
                 std::string sourcePath;
@@ -829,7 +861,7 @@ namespace Engine {
                         invalidScene("entity contains an invalid ColliderComponent");
                     }
                     hasCollider = true;
-                    loaded.add<ColliderComponent>(entity, readCollider(input));
+                    loaded.add<ColliderComponent>(entity, readCollider(input, version));
                 } else if (component == "RIGIDBODY") {
                     if (version < RigidbodyFormatVersion || hasRigidbody) {
                         invalidScene("entity contains an invalid RigidbodyComponent");
@@ -1011,6 +1043,13 @@ namespace Engine {
             }
         }
 
+        loaded.view<ColliderComponent, MeshRenderer>([](const Entity,
+                                                         ColliderComponent& collider,
+                                                         const MeshRenderer& renderer) {
+            if (auto* meshCollider = std::get_if<MeshCollider>(&collider.shape)) {
+                meshCollider->mesh = renderer.mesh;
+            }
+        });
         registry = std::move(loaded);
     }
 } // namespace Engine

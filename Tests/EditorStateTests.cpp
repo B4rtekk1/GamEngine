@@ -1,14 +1,14 @@
 #include <Editor/EditorState.h>
 
 #include <Engine/Assets/Content.h>
-
 #include <filesystem>
 
 int main() {
     Engine::ScenePreset scene{Engine::SceneType::Particles};
     Engine::Assets::Content content{
         std::filesystem::path{GAMEENGINE_SOURCE_DIR} / "Assets"};
-    static_cast<void>(scene.createModel("Tree", "Models/tree.glb", content));
+    const auto treeActor = scene.createModel("Tree", "Models/tree.glb", content);
+    if (!treeActor.hasCollider()) return 5;
 
     const std::string serialized = Editor::serializeScene(scene);
     if (serialized.find("MESH_ASSET") == std::string::npos ||

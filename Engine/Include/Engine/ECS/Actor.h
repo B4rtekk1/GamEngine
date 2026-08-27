@@ -62,6 +62,8 @@ public:
     void addSphereCollider(float radius = 0.5F) const;
     void addCapsuleCollider(float radius = 0.5F, float height = 1.0F) const;
     void addRampCollider(Vec3 halfExtents = {0.5F, 0.5F, 0.5F}) const;
+    /** Adds an exact triangle collider from the actor's assigned mesh. */
+    void addMeshCollider() const;
     [[nodiscard]] bool hasCollider() const;
     void setColliderTrigger(bool enabled) const;
     void setColliderMaterial(float friction, float restitution) const;

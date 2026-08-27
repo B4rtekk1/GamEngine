@@ -5,10 +5,12 @@
 #include "Engine/ECS/Components/CameraComponent.h"
 #include "Engine/ECS/Components/ScriptComponent.h"
 #include "Engine/ECS/Components/RigidbodyComponent.h"
+#include "Engine/ECS/Components/ColliderComponent.h"
 #include "Engine/ECS/Entity.h"
 #include "Engine/ECS/Registry.h"
 #include "Engine/Scene/Components/LightComponent.h"
 
+#include <algorithm>
 #include <atomic>
 #include <cstdint>
 #include <string>
@@ -98,6 +100,21 @@ public:
     void setCullingBatch(std::uint32_t batch) {
         meshRenderer().cullingBatch = batch;
         registry_->markChanged<MeshRendererComponent>(entity_);
+    }
+
+    /** Creates a triangle collider from this object's indexed mesh geometry. */
+    ColliderComponent& addMeshCollider() {
+        const auto& mesh = meshRenderer().mesh;
+        if (mesh == nullptr || mesh->empty()) {
+            throw std::logic_error("Cannot create a mesh collider without mesh vertices");
+        }
+        const ColliderComponent collider{.shape = MeshCollider{mesh}};
+        if (has<ColliderComponent>()) {
+            modify<ColliderComponent>([&](auto& value) { value = collider; });
+        } else {
+            add<ColliderComponent>(collider);
+        }
+        return get<ColliderComponent>();
     }
 
     CameraComponent& addCamera(CameraComponent camera = {}) {

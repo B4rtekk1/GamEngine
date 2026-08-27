@@ -3,6 +3,7 @@
 #include "Engine/Core/Transform.h"
 #include "Engine/ECS/Components/ColliderComponent.h"
 #include "Engine/ECS/Components/RigidbodyComponent.h"
+#include "Engine/Renderer/Geometry/Mesh.h"
 #include "Engine/Scene/Scene.h"
 
 #include <algorithm>
@@ -21,6 +22,7 @@ constexpr float SolidSphereInertiaFactor = 0.4F;
 constexpr float RestingNormalSpeed = 0.2F;
 constexpr float RestingTangentialSpeed = 0.1F;
 constexpr float RestingAngularSpeedDegrees = 5.0F;
+constexpr float RestingFlatSurfaceNormalY = 0.999F;
 constexpr float ContactSlop = 0.0001F;
 // Keep dynamic objects just clear of the visible ramp mesh.  Without this
 // small contact skin, an exact tangency can be perceived as clipping when
@@ -93,6 +95,35 @@ struct Grid final {
 
 float dot(const Vec3& lhs, const Vec3& rhs) {
     return lhs.x() * rhs.x() + lhs.y() * rhs.y() + lhs.z() * rhs.z();
+}
+
+Vec3 worldPoint(const Transform& transform, const Vec3& localPoint) {
+    const glm::vec4 point = transform.matrix().native() * glm::vec4{
+        localPoint.x(), localPoint.y(), localPoint.z(), 1.0F};
+    return {point.x, point.y, point.z};
+}
+
+Vec3 worldPoint(const glm::mat4& matrix, const Vec3& localPoint) {
+    const glm::vec4 point = matrix * glm::vec4{
+        localPoint.x(), localPoint.y(), localPoint.z(), 1.0F};
+    return {point.x, point.y, point.z};
+}
+
+std::optional<Aabb> meshWorldAabb(const Transform& transform,
+                                  const ColliderComponent& collider) {
+    const auto* meshCollider = std::get_if<MeshCollider>(&collider.shape);
+    if (meshCollider == nullptr || meshCollider->mesh == nullptr ||
+        meshCollider->mesh->vertices.empty()) return std::nullopt;
+    Vec3 minimum = worldPoint(transform, meshCollider->mesh->vertices.front().position + collider.offset);
+    Vec3 maximum = minimum;
+    for (const Vertex& vertex : meshCollider->mesh->vertices) {
+        const Vec3 point = worldPoint(transform, vertex.position + collider.offset);
+        minimum = {std::min(minimum.x(), point.x()), std::min(minimum.y(), point.y()),
+                   std::min(minimum.z(), point.z())};
+        maximum = {std::max(maximum.x(), point.x()), std::max(maximum.y(), point.y()),
+                   std::max(maximum.z(), point.z())};
+    }
+    return Aabb{(minimum + maximum) * 0.5F, (maximum - minimum) * 0.5F};
 }
 
 float wrapDegrees(const float angle) {
@@ -411,6 +442,8 @@ Vec3 colliderExtents(const ColliderComponent& collider) {
             return Vec3{shape.radius, shape.radius, shape.radius};
         } else if constexpr (std::is_same_v<Shape, RampCollider>) {
             return shape.halfExtents;
+        } else if constexpr (std::is_same_v<Shape, MeshCollider>) {
+            return Vec3{};
         } else {
             return Vec3{shape.radius, shape.height * 0.5F, shape.radius};
         }
@@ -418,6 +451,7 @@ Vec3 colliderExtents(const ColliderComponent& collider) {
 }
 
 Aabb worldAabb(const Transform& transform, const ColliderComponent& collider) {
+    if (const auto meshBounds = meshWorldAabb(transform, collider)) return *meshBounds;
     const Vec3 scale{std::abs(transform.scale.x()), std::abs(transform.scale.y()),
                      std::abs(transform.scale.z())};
     if (std::holds_alternative<BoxCollider>(collider.shape)) {
@@ -441,6 +475,172 @@ Aabb worldAabb(const Transform& transform, const ColliderComponent& collider) {
         transform.position + collider.offset * scale,
         colliderExtents(collider) * scale
     };
+}
+
+Vec3 closestPointOnTriangle(const Vec3& point, const Vec3& a, const Vec3& b, const Vec3& c) {
+    const Vec3 ab = b - a;
+    const Vec3 ac = c - a;
+    const Vec3 ap = point - a;
+    const float d1 = dot(ab, ap);
+    const float d2 = dot(ac, ap);
+    if (d1 <= 0.0F && d2 <= 0.0F) return a;
+    const Vec3 bp = point - b;
+    const float d3 = dot(ab, bp);
+    const float d4 = dot(ac, bp);
+    if (d3 >= 0.0F && d4 <= d3) return b;
+    const float vc = d1 * d4 - d3 * d2;
+    if (vc <= 0.0F && d1 >= 0.0F && d3 <= 0.0F) return a + ab * (d1 / (d1 - d3));
+    const Vec3 cp = point - c;
+    const float d5 = dot(ab, cp);
+    const float d6 = dot(ac, cp);
+    if (d6 >= 0.0F && d5 <= d6) return c;
+    const float vb = d5 * d2 - d1 * d6;
+    if (vb <= 0.0F && d2 >= 0.0F && d6 <= 0.0F) return a + ac * (d2 / (d2 - d6));
+    const float va = d3 * d6 - d5 * d4;
+    if (va <= 0.0F && (d4 - d3) >= 0.0F && (d5 - d6) >= 0.0F) {
+        return b + (c - b) * ((d4 - d3) / ((d4 - d3) + (d5 - d6)));
+    }
+    const float denominator = 1.0F / (va + vb + vc);
+    return a + ab * (vb * denominator) + ac * (vc * denominator);
+}
+
+std::optional<Contact> sphereMeshContact(const Vec3& center, const float radius,
+                                         const Transform& transform,
+                                         const ColliderComponent& collider) {
+    const auto* meshCollider = std::get_if<MeshCollider>(&collider.shape);
+    if (meshCollider == nullptr || meshCollider->mesh == nullptr) return std::nullopt;
+    const Mesh& mesh = *meshCollider->mesh;
+    std::optional<Contact> result;
+    for (std::size_t index = 0; index + 2 < mesh.indices.size(); index += 3) {
+        const std::uint32_t ia = mesh.indices[index];
+        const std::uint32_t ib = mesh.indices[index + 1];
+        const std::uint32_t ic = mesh.indices[index + 2];
+        if (ia >= mesh.vertices.size() || ib >= mesh.vertices.size() || ic >= mesh.vertices.size()) continue;
+        const Vec3 a = worldPoint(transform, mesh.vertices[ia].position + collider.offset);
+        const Vec3 b = worldPoint(transform, mesh.vertices[ib].position + collider.offset);
+        const Vec3 c = worldPoint(transform, mesh.vertices[ic].position + collider.offset);
+        const Vec3 closest = closestPointOnTriangle(center, a, b, c);
+        const Vec3 separation = center - closest;
+        const float distance = separation.length();
+        if (distance >= radius) continue;
+        Vec3 normal = distance > 1e-6F ? separation * (1.0F / distance) : cross(b - a, c - a).normalized();
+        if (normal.length() <= 1e-6F) continue;
+        if (distance <= 1e-6F && dot(normal, center - a) < 0.0F) normal *= -1.0F;
+        const Contact contact{normal, radius - distance + ContactSlop, closest};
+        if (!result || contact.penetration > result->penetration) result = contact;
+    }
+    return result;
+}
+
+std::optional<Contact> boxTriangleContact(const OrientedBox& box,
+                                          const Vec3& a, const Vec3& b,
+                                          const Vec3& c) {
+    const std::array<Vec3, 3> edges{b - a, c - b, a - c};
+    const std::array<Vec3, 3> boxAxes{box.axisX, box.axisY, box.axisZ};
+    std::array<Vec3, 13> axes{};
+    axes[0] = box.axisX;
+    axes[1] = box.axisY;
+    axes[2] = box.axisZ;
+    axes[3] = cross(edges[0], edges[1]);
+    std::size_t axisIndex = 4;
+    for (const Vec3& edge : edges) {
+        for (const Vec3& boxAxis : boxAxes) {
+            axes[axisIndex++] = cross(edge, boxAxis);
+        }
+    }
+
+    float minimumPenetration = INFINITY;
+    Vec3 minimumAxis{};
+    const Vec3 triangleCenter = (a + b + c) * (1.0F / 3.0F);
+    for (Vec3 axis : axes) {
+        const float axisLength = axis.length();
+        if (axisLength <= 1e-6F) continue;
+        axis *= 1.0F / axisLength;
+
+        const float boxCenterProjection = dot(box.center, axis);
+        const float boxRadius = boxSupportRadius(box, axis);
+        const float boxMinimum = boxCenterProjection - boxRadius;
+        const float boxMaximum = boxCenterProjection + boxRadius;
+        const float projectionA = dot(a, axis);
+        const float projectionB = dot(b, axis);
+        const float projectionC = dot(c, axis);
+        const float triangleMinimum = std::min({projectionA, projectionB, projectionC});
+        const float triangleMaximum = std::max({projectionA, projectionB, projectionC});
+        if (boxMaximum < triangleMinimum || triangleMaximum < boxMinimum) {
+            return std::nullopt;
+        }
+
+        // A triangle has no thickness, so the ordinary interval-overlap
+        // length is zero on its face normal.  The smaller distance required
+        // to move the box to either side is the useful penetration depth.
+        const float penetration = std::min(
+            boxMaximum - triangleMinimum, triangleMaximum - boxMinimum);
+        if (penetration < minimumPenetration) {
+            minimumPenetration = penetration;
+            minimumAxis = dot(box.center - triangleCenter, axis) >= 0.0F
+                ? axis
+                : axis * -1.0F;
+        }
+    }
+
+    if (!std::isfinite(minimumPenetration) || minimumAxis.length() <= 1e-6F) {
+        return std::nullopt;
+    }
+    const Vec3 boxPoint = boxSupportPoint(box, minimumAxis * -1.0F);
+    return Contact{minimumAxis, minimumPenetration + ContactSlop,
+                   closestPointOnTriangle(boxPoint, a, b, c)};
+}
+
+std::optional<Contact> boxMeshContact(const OrientedBox& box,
+                                      const Transform& transform,
+                                      const ColliderComponent& collider) {
+    const auto* meshCollider = std::get_if<MeshCollider>(&collider.shape);
+    if (meshCollider == nullptr || meshCollider->mesh == nullptr) return std::nullopt;
+    const Mesh& mesh = *meshCollider->mesh;
+    const glm::mat4 meshTransform = transform.matrix().native();
+    const Vec3 boxAabbExtents{
+        std::abs(box.axisX.x()) * box.halfExtents.x() +
+            std::abs(box.axisY.x()) * box.halfExtents.y() +
+            std::abs(box.axisZ.x()) * box.halfExtents.z(),
+        std::abs(box.axisX.y()) * box.halfExtents.x() +
+            std::abs(box.axisY.y()) * box.halfExtents.y() +
+            std::abs(box.axisZ.y()) * box.halfExtents.z(),
+        std::abs(box.axisX.z()) * box.halfExtents.x() +
+            std::abs(box.axisY.z()) * box.halfExtents.y() +
+            std::abs(box.axisZ.z()) * box.halfExtents.z()
+    };
+    const Vec3 boxMinimum = box.center - boxAabbExtents;
+    const Vec3 boxMaximum = box.center + boxAabbExtents;
+    std::optional<Contact> result;
+    for (std::size_t index = 0; index + 2 < mesh.indices.size(); index += 3) {
+        const std::uint32_t ia = mesh.indices[index];
+        const std::uint32_t ib = mesh.indices[index + 1];
+        const std::uint32_t ic = mesh.indices[index + 2];
+        if (ia >= mesh.vertices.size() || ib >= mesh.vertices.size() ||
+            ic >= mesh.vertices.size()) continue;
+        const Vec3 a = worldPoint(meshTransform, mesh.vertices[ia].position + collider.offset);
+        const Vec3 b = worldPoint(meshTransform, mesh.vertices[ib].position + collider.offset);
+        const Vec3 c = worldPoint(meshTransform, mesh.vertices[ic].position + collider.offset);
+        const Vec3 triangleMinimum{
+            std::min({a.x(), b.x(), c.x()}), std::min({a.y(), b.y(), c.y()}),
+            std::min({a.z(), b.z(), c.z()})};
+        const Vec3 triangleMaximum{
+            std::max({a.x(), b.x(), c.x()}), std::max({a.y(), b.y(), c.y()}),
+            std::max({a.z(), b.z(), c.z()})};
+        if (triangleMaximum.x() < boxMinimum.x() ||
+            triangleMinimum.x() > boxMaximum.x() ||
+            triangleMaximum.y() < boxMinimum.y() ||
+            triangleMinimum.y() > boxMaximum.y() ||
+            triangleMaximum.z() < boxMinimum.z() ||
+            triangleMinimum.z() > boxMaximum.z()) {
+            continue;
+        }
+        const auto contact = boxTriangleContact(box, a, b, c);
+        if (contact && (!result || contact->penetration > result->penetration)) {
+            result = contact;
+        }
+    }
+    return result;
 }
 
 Aabb mergedAabb(const Aabb& first, const Aabb& second) {
@@ -1025,6 +1225,67 @@ void PhysicsSystem::update(Scene& scene, const float deltaTime) const {
                             continue;
                         }
                     }
+                    if (isSphere && std::holds_alternative<MeshCollider>(otherCollider.shape)) {
+                        if (const auto contact = sphereMeshContact(
+                                bodyBounds.center, bodyBounds.extents.y(),
+                                other.transform, otherCollider)) {
+                            RigidbodyComponent* otherBody = other.dynamic
+                                ? &registry.get<RigidbodyComponent>(other.entity)
+                                : nullptr;
+                            Transform* otherTransform = other.dynamic
+                                ? &registry.get<Transform>(other.entity)
+                                : nullptr;
+                            resolveContact(body, transform, collider,
+                                otherBody, otherTransform, otherCollider, *contact,
+                                std::max(collider.restitution, otherCollider.restitution),
+                                std::sqrt(std::max(0.0F,
+                                    collider.friction * otherCollider.friction)));
+                            if (other.dynamic) {
+                                registry.markChanged<Transform>(other.entity);
+                                other.transform = *otherTransform;
+                                other.bounds = worldAabb(*otherTransform, otherCollider);
+                            }
+                            bodyBounds = worldAabb(transform, collider);
+                            if (contact->normal.y() > 1e-4F) {
+                                touchesSurface = true;
+                                surfaceNormal = contact->normal;
+                            }
+                        }
+                        continue;
+                    }
+                    if (std::holds_alternative<BoxCollider>(collider.shape) &&
+                        std::holds_alternative<MeshCollider>(otherCollider.shape)) {
+                        const OrientedBox box = orientedBox(transform, collider);
+                        if (const auto contact = boxMeshContact(
+                                box, other.transform, otherCollider)) {
+                            RigidbodyComponent* otherBody = other.dynamic
+                                ? &registry.get<RigidbodyComponent>(other.entity)
+                                : nullptr;
+                            Transform* otherTransform = other.dynamic
+                                ? &registry.get<Transform>(other.entity)
+                                : nullptr;
+                            const std::vector<Vec3> contactPoints = other.dynamic
+                                ? std::vector<Vec3>{}
+                                : boxSupportFeaturePoints(box, contact->normal * -1.0F);
+                            resolveContact(body, transform, collider,
+                                otherBody, otherTransform, otherCollider, *contact,
+                                std::max(collider.restitution, otherCollider.restitution),
+                                std::sqrt(std::max(0.0F,
+                                    collider.friction * otherCollider.friction)),
+                                contactPoints);
+                            if (other.dynamic) {
+                                registry.markChanged<Transform>(other.entity);
+                                other.transform = *otherTransform;
+                                other.bounds = worldAabb(*otherTransform, otherCollider);
+                            }
+                            bodyBounds = worldAabb(transform, collider);
+                            if (contact->normal.y() > 1e-4F) {
+                                touchesSurface = true;
+                                surfaceNormal = contact->normal;
+                            }
+                        }
+                        continue;
+                    }
                     const bool isRamp = std::holds_alternative<RampCollider>(otherCollider.shape);
                     if (!isSphere && std::holds_alternative<BoxCollider>(collider.shape) &&
                         std::holds_alternative<BoxCollider>(otherCollider.shape)) {
@@ -1272,10 +1533,13 @@ void PhysicsSystem::update(Scene& scene, const float deltaTime) const {
                         std::abs(normalSpeed) < RestingNormalSpeed &&
                         tangentialVelocity.length() < RestingTangentialSpeed;
                     if (nearlyStationary) {
-                        // Remove the tiny into/out-of-surface oscillation left
-                        // by alternating corner contacts. Preserve tangential
-                        // motion so boxes can still slide down a ramp.
-                        body.linearVelocity = tangentialVelocity;
+                        // Remove the tiny oscillation left by alternating
+                        // corner contacts. Flat surfaces also apply static
+                        // friction; slopes preserve tangent motion so gravity
+                        // can keep bodies moving downhill.
+                        body.linearVelocity = surfaceNormal.y() >= RestingFlatSurfaceNormalY
+                            ? Vec3{}
+                            : tangentialVelocity;
                         if (!body.fixedRotation &&
                             body.angularVelocity.length() <
                                 RestingAngularSpeedDegrees) {
@@ -1306,6 +1570,45 @@ void PhysicsSystem::update(Scene& scene, const float deltaTime) const {
         });
 }
 
+std::optional<std::pair<float, Vec3>> raycastMesh(const Vec3& origin, const Vec3& direction,
+                                                   const float maxDistance,
+                                                   const Transform& transform,
+                                                   const ColliderComponent& collider) {
+    const auto* meshCollider = std::get_if<MeshCollider>(&collider.shape);
+    if (meshCollider == nullptr || meshCollider->mesh == nullptr) return std::nullopt;
+    const Mesh& mesh = *meshCollider->mesh;
+    std::optional<std::pair<float, Vec3>> result;
+    for (std::size_t index = 0; index + 2 < mesh.indices.size(); index += 3) {
+        const std::uint32_t ia = mesh.indices[index];
+        const std::uint32_t ib = mesh.indices[index + 1];
+        const std::uint32_t ic = mesh.indices[index + 2];
+        if (ia >= mesh.vertices.size() || ib >= mesh.vertices.size() || ic >= mesh.vertices.size()) continue;
+        const Vec3 a = worldPoint(transform, mesh.vertices[ia].position + collider.offset);
+        const Vec3 b = worldPoint(transform, mesh.vertices[ib].position + collider.offset);
+        const Vec3 c = worldPoint(transform, mesh.vertices[ic].position + collider.offset);
+        const Vec3 edgeAB = b - a;
+        const Vec3 edgeAC = c - a;
+        const Vec3 p = cross(direction, edgeAC);
+        const float determinant = dot(edgeAB, p);
+        if (std::abs(determinant) <= 1e-7F) continue;
+        const float inverseDeterminant = 1.0F / determinant;
+        const Vec3 fromA = origin - a;
+        const float u = dot(fromA, p) * inverseDeterminant;
+        if (u < 0.0F || u > 1.0F) continue;
+        const Vec3 q = cross(fromA, edgeAB);
+        const float v = dot(direction, q) * inverseDeterminant;
+        if (v < 0.0F || u + v > 1.0F) continue;
+        const float distance = dot(edgeAC, q) * inverseDeterminant;
+        if (distance < 0.0F || distance >= maxDistance ||
+            (result && distance >= result->first)) continue;
+        Vec3 normal = cross(edgeAB, edgeAC).normalized();
+        if (normal.length() <= 1e-6F) continue;
+        if (dot(normal, direction) > 0.0F) normal *= -1.0F;
+        result = std::pair{distance, normal};
+    }
+    return result;
+}
+
 std::optional<RaycastHit> PhysicsSystem::raycast(
     Scene& scene, const Vec3 origin, Vec3 direction, const float maxDistance) const {
     const float directionLength = direction.length();
@@ -1317,6 +1620,17 @@ std::optional<RaycastHit> PhysicsSystem::raycast(
     scene.registry().view<ColliderComponent, Transform>(
         [&](const Entity entity, const ColliderComponent& collider, const Transform& transform) {
             const Aabb bounds = worldAabb(transform, collider);
+            if (std::holds_alternative<MeshCollider>(collider.shape)) {
+                const auto hit = raycastMesh(origin, direction, nearest, transform, collider);
+                if (hit) {
+                    if (auto* object = scene.findByEntity(entity)) {
+                        nearest = hit->first;
+                        result = RaycastHit{Actor{scene, object->objectId()},
+                                            origin + direction * hit->first, hit->second, hit->first};
+                    }
+                }
+                return;
+            }
             float nearHit = 0.0F;
             float farHit = nearest;
             int hitAxis = -1;

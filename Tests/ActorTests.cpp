@@ -88,6 +88,24 @@ int main() {
     const auto& capsule = std::get<CapsuleCollider>(capsuleComponent->shape);
     if (!near(capsule.radius, 0.4F) || !near(capsule.height, 1.8F)) return 6;
 
+    auto mesh = std::make_shared<Mesh>();
+    mesh->vertices = {
+        {.position = {-3.0F, 0.0F, 0.0F}},
+        {.position = {2.0F, 0.0F, 0.0F}},
+        {.position = {0.0F, 1.0F, 0.0F}},
+    };
+    mesh->indices = {0, 1, 2};
+    actor.setMesh(mesh);
+    actor.addMeshCollider();
+    const auto& meshCollider = std::get<MeshCollider>([&] {
+        const ColliderComponent* result = nullptr;
+        scene.registryForTest().view<ColliderComponent>([&](const Entity, const ColliderComponent& value) {
+            result = &value;
+        });
+        return result->shape;
+    }());
+    if (meshCollider.mesh != mesh || meshCollider.mesh->indices.size() != 3) return 7;
+
     actor.setPerspectiveCamera(200.0F, -1.0F, 0.01F);
     actor.setCameraAspectRatio(1920.0F, 1080.0F);
     const auto& camera = scene.find(actor.id())->camera();

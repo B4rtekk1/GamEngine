@@ -105,6 +105,8 @@ namespace Engine {
 }
     }
 
+    void Actor::addMeshCollider() const { object().addMeshCollider(); }
+
     bool Actor::hasCollider() const { return object().has<ColliderComponent>(); }
 
     void Actor::setColliderTrigger(const bool enabled) const {
