@@ -62,6 +62,7 @@ Engine::Entity drawEditorMenuBar(Engine::ScenePreset &scene, Engine::Renderer &r
     ImGui::SameLine(0.0F, 4.0F);
     if (ImGui::BeginMenu("File")) {
         const std::filesystem::path scenePath = EditorSceneSession::scenePath();
+        ImGui::BeginDisabled(playing);
         if (ImGui::MenuItem("Save Scene", "Ctrl+S")) {
             try {
                 std::filesystem::create_directories(scenePath.parent_path());
@@ -91,6 +92,7 @@ Engine::Entity drawEditorMenuBar(Engine::ScenePreset &scene, Engine::Renderer &r
                 sceneFileError.clear();
             } catch (const std::exception &error) { sceneFileError = error.what(); }
         }
+        ImGui::EndDisabled();
         ImGui::Separator();
         if (ImGui::MenuItem(playing ? "Stop" : "Play", "F5")) {
             playToggleRequested = true;

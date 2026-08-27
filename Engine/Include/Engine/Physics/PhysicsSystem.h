@@ -19,7 +19,7 @@ struct RaycastHit final {
 };
 
 /**
- * @brief Advances dynamic rigidbodies and resolves collider contacts.
+ * @brief NVIDIA PhysX-backed rigid-body simulation and scene queries.
  */
 class PhysicsSystem final {
 public:

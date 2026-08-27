@@ -1,4 +1,14 @@
 cmake_minimum_required(VERSION 4.4)
+
+# Use the configured vcpkg installation automatically when no toolchain was
+# selected by the caller. PhysX is distributed to this project through vcpkg.
+if(WIN32 AND NOT DEFINED CMAKE_TOOLCHAIN_FILE AND
+        DEFINED ENV{VCPKG_ROOT} AND
+        EXISTS "$ENV{VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake")
+    set(CMAKE_TOOLCHAIN_FILE "$ENV{VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake"
+        CACHE FILEPATH "vcpkg toolchain file")
+endif()
+
 project(GamEngine)
 
 include(CTest)
@@ -50,11 +60,32 @@ function(gameengine_enable_sanitizers target)
     endif()
 endfunction()
 
+function(gameengine_copy_runtime_dependencies target)
+    if(WIN32)
+        add_custom_command(TARGET ${target} POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                    $<TARGET_RUNTIME_DLLS:${target}> $<TARGET_FILE_DIR:${target}>
+            COMMAND_EXPAND_LISTS)
+        # The vcpkg PhysX package describes its DLL imports as UNKNOWN targets
+        # whose TARGET_FILE is the import library. Copy the actual CPU DLLs.
+        foreach(physx_dll PhysX_64.dll PhysXCooking_64.dll
+                          PhysXCommon_64.dll PhysXFoundation_64.dll)
+            if(DEFINED OMNIVERSE-PHYSX-SDK_DEBUG_BIN_DIR)
+                add_custom_command(TARGET ${target} POST_BUILD
+                    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                        "$<IF:$<CONFIG:Debug>,${OMNIVERSE-PHYSX-SDK_DEBUG_BIN_DIR}/${physx_dll},${OMNIVERSE-PHYSX-SDK_RELEASE_BIN_DIR}/${physx_dll}>"
+                        $<TARGET_FILE_DIR:${target}>)
+            endif()
+        endforeach()
+    endif()
+endfunction()
+
 find_package(Vulkan 1.4 REQUIRED)
 if(DEFINED ENV{VULKAN_SDK} AND NOT "$ENV{VULKAN_SDK}" STREQUAL "")
     set(SDL3_DIR "$ENV{VULKAN_SDK}/cmake")
 endif()
 find_package(SDL3 CONFIG REQUIRED)
+find_package(unofficial-omniverse-physx-sdk CONFIG REQUIRED)
 
 include(FetchContent)
 FetchContent_Declare(
@@ -94,7 +125,7 @@ add_library(Engine
         Engine/Source/Scene/Actor.cpp
         Engine/Source/Scene/Prefab.cpp
         Engine/Source/Scene/ScenePresets.cpp
-        Engine/Source/Physics/PhysicsSystem.cpp
+        Engine/Source/Physics/PhysXPhysicsSystem.cpp
         Engine/Source/Scripting/ScriptSystem.cpp
         Engine/Source/Scripting/Script.cpp
         Engine/Source/Scripting/ScriptRegistry.cpp
@@ -139,7 +170,9 @@ add_library(Engine
 gameengine_enable_warnings(Engine)
 gameengine_enable_sanitizers(Engine)
 
-target_link_libraries(Engine PUBLIC SDL3::SDL3 Vulkan::Vulkan PRIVATE DearImGui)
+target_link_libraries(Engine
+        PUBLIC SDL3::SDL3 Vulkan::Vulkan
+        PRIVATE DearImGui unofficial::omniverse-physx-sdk::sdk)
 target_include_directories(Engine
         PUBLIC
             $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/Engine/Include>
@@ -161,6 +194,7 @@ gameengine_enable_warnings(Editor)
 gameengine_enable_sanitizers(Editor)
 target_include_directories(Editor PRIVATE Editor/Include)
 target_link_libraries(Editor PRIVATE DearImGui Engine SDL3::SDL3 Vulkan::Vulkan)
+gameengine_copy_runtime_dependencies(Editor)
 target_compile_definitions(Editor PRIVATE GAMEENGINE_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
 
 find_program(GLSLANG_VALIDATOR NAMES glslangValidator)
@@ -238,6 +272,15 @@ if(BUILD_TESTING)
 
     include(GoogleTest)
     gtest_discover_tests(GamEngineTests)
+
+    add_executable(PhysicsMeshTests
+            Tests/PhysicsMeshTests.cpp
+            Tests/PhysXPhysicsTests.cpp)
+    target_link_libraries(PhysicsMeshTests PRIVATE Engine GTest::gtest_main)
+    gameengine_enable_warnings(PhysicsMeshTests)
+    gameengine_enable_sanitizers(PhysicsMeshTests)
+    gameengine_copy_runtime_dependencies(PhysicsMeshTests)
+    gtest_discover_tests(PhysicsMeshTests)
 endif()
 
 add_subdirectory(Sandbox)

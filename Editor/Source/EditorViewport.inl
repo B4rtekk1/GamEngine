@@ -699,7 +699,6 @@ ViewportInteraction drawViewport(Engine::ScenePreset &scene, const Engine::Entit
     const Engine::ViewportHandle descriptor = showGameView ? gameDescriptor : sceneDescriptor;
 
     ImGui::Begin("Viewport", nullptr, ImGuiWindowFlags_NoScrollbar);
-    drawPanelHeader("Viewport", playing ? "Playing · Game Camera" : showGameView ? "Game Camera" : "Scene Camera");
     if (!playing) {
         const bool terrainSelected = selected != Engine::NullEntity && scene.editor().valid(selected) &&
                                      scene.editor().has<Engine::TerrainComponent>(selected);

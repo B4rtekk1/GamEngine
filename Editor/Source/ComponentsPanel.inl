@@ -11,7 +11,6 @@ static bool drawRemovableComponentHeader(const char *label, const char *id, bool
 
 bool ComponentsPanel::draw(Engine::ScenePreset &scene, const Engine::Entity selected) {
     ImGui::Begin("Inspector");
-    drawPanelHeader("Inspector", selected == Engine::NullEntity ? "No selection" : "Selected entity");
     if (selected == Engine::NullEntity) {
         ImGui::Spacing();
         ImGui::Spacing();
@@ -62,6 +61,74 @@ bool ComponentsPanel::draw(Engine::ScenePreset &scene, const Engine::Entity sele
     if (ImGui::CollapsingHeader("Transform", ImGuiTreeNodeFlags_DefaultOpen) &&
         scene.editor().valid(selected) && scene.editor().has<Engine::Transform>(selected)) {
         TransformFields{scene.edit(selected)}.draw();
+    }
+    if (scene.editor().valid(selected) &&
+        scene.editor().has<Engine::MeshRenderer>(selected) &&
+        ImGui::CollapsingHeader("Mesh Renderer", ImGuiTreeNodeFlags_DefaultOpen)) {
+        const auto readScene = scene.editor();
+        const auto &source = readScene.get<Engine::MeshRenderer>(selected);
+        auto renderer = source;
+        bool changed = false;
+
+        ImGui::TextDisabled("Mesh");
+        if (renderer.mesh && !renderer.mesh->empty()) {
+            const auto path = renderer.mesh->sourcePath.generic_string();
+            ImGui::TextWrapped("%s", path.empty() ? "Generated geometry" : path.c_str());
+            ImGui::TextDisabled("%u vertices · %u triangles · %zu textures",
+                                renderer.mesh->vertexCount(), renderer.mesh->indexCount() / 3,
+                                renderer.mesh->images.size());
+            ImGui::TextDisabled("%zu source materials", renderer.mesh->materials.size());
+        } else {
+            ImGui::TextColored({0.95F, 0.40F, 0.35F, 1.0F}, "Missing mesh");
+        }
+
+        ImGui::Separator();
+        ImGui::TextDisabled("Material override");
+        float baseColor[4] = {
+            renderer.material.baseColor.r(), renderer.material.baseColor.g(),
+            renderer.material.baseColor.b(), renderer.material.baseColor.a()
+        };
+        if (ImGui::ColorEdit4("Base Color##mesh-material", baseColor,
+                              ImGuiColorEditFlags_AlphaBar | ImGuiColorEditFlags_Float)) {
+            renderer.material.baseColor = Engine::Color{baseColor[0], baseColor[1],
+                                                         baseColor[2], baseColor[3]}.clamped();
+            changed = true;
+        }
+        changed |= ImGui::SliderFloat("Metallic##mesh-material", &renderer.material.metallic,
+                                      0.0F, 1.0F, "%.2f");
+        changed |= ImGui::SliderFloat("Roughness##mesh-material", &renderer.material.roughness,
+                                      0.0F, 1.0F, "%.2f");
+        changed |= ImGui::SliderFloat("Ambient Occlusion##mesh-material",
+                                      &renderer.material.ambientOcclusion, 0.0F, 1.0F, "%.2f");
+        changed |= ImGui::DragFloat("Normal Scale##mesh-material", &renderer.material.normalScale,
+                                    0.01F, 0.0F, 10.0F, "%.2f");
+        renderer.material.metallic = std::clamp(renderer.material.metallic, 0.0F, 1.0F);
+        renderer.material.roughness = std::clamp(renderer.material.roughness, 0.0F, 1.0F);
+        renderer.material.ambientOcclusion = std::clamp(renderer.material.ambientOcclusion, 0.0F, 1.0F);
+        renderer.material.normalScale = std::max(0.0F, renderer.material.normalScale);
+
+        changed |= ImGui::Checkbox("Alpha Blend##mesh-material", &renderer.material.alphaBlend);
+        changed |= ImGui::Checkbox("Double Sided##mesh-material", &renderer.material.doubleSided);
+        if (!renderer.material.alphaBlend) {
+            changed |= ImGui::SliderFloat("Alpha Cutoff##mesh-material", &renderer.material.alphaCutoff,
+                                          0.0F, 1.0F, "%.2f");
+            renderer.material.alphaCutoff = std::clamp(renderer.material.alphaCutoff, 0.0F, 1.0F);
+        }
+
+        ImGui::Separator();
+        ImGui::TextDisabled("Rendering");
+        changed |= ImGui::Checkbox("Cast Shadows##mesh-renderer", &renderer.castShadow);
+        int cullingBatch = static_cast<int>(renderer.cullingBatch);
+        if (ImGui::DragInt("Culling Batch##mesh-renderer", &cullingBatch, 1.0F, 0, 0,
+                           "%d")) {
+            renderer.cullingBatch = static_cast<std::uint32_t>(std::max(0, cullingBatch));
+            changed = true;
+        }
+
+        if (changed) {
+            scene.editor().modify<Engine::MeshRenderer>(selected,
+                [&](auto &component) { component = renderer; });
+        }
     }
     if (scene.editor().valid(selected) &&
         scene.editor().has<Engine::TerrainComponent>(selected) &&

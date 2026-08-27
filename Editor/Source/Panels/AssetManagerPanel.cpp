@@ -200,17 +200,6 @@ Engine::Entity AssetManagerPanel::draw(Engine::ScenePreset& scene,
     }
 
     ImGui::Begin("Asset Manager");
-    const ImVec2 header = ImGui::GetCursorScreenPos();
-    const float headerWidth = ImGui::GetContentRegionAvail().x;
-    const float headerHeight = ImGui::GetTextLineHeight() + ImGui::GetStyle().FramePadding.y * 2.0F + 4.0F;
-    ImGui::GetWindowDrawList()->AddRectFilled(header, {header.x + headerWidth, header.y + headerHeight},
-                                               ImGui::GetColorU32(ImVec4{0.145F, 0.155F, 0.190F, 1.0F}), 4.0F);
-    ImGui::SetCursorPosY(ImGui::GetCursorPosY() + 4.0F);
-    ImGui::TextUnformatted("Asset Manager");
-    ImGui::SameLine();
-    ImGui::TextDisabled("Assets / glTF");
-    ImGui::Spacing();
-
     char filterBuffer[256]{};
     std::snprintf(filterBuffer, sizeof(filterBuffer), "%s", filter.c_str());
     ImGui::SetNextItemWidth(170.0F);

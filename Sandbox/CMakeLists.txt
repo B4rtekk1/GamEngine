@@ -9,6 +9,7 @@ add_executable(GamEngine
 gameengine_enable_warnings(GamEngine)
 gameengine_enable_sanitizers(GamEngine)
 target_link_libraries(GamEngine PRIVATE Engine)
+gameengine_copy_runtime_dependencies(GamEngine)
 target_compile_definitions(GamEngine PRIVATE GAMEENGINE_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
 add_dependencies(GamEngine Shaders)
 

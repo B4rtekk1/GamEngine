@@ -4,9 +4,6 @@ Engine::Entity HierarchyPanel::draw(Engine::ScenePreset &scene, const Engine::En
     action = Action::None;
     actionEntity = Engine::NullEntity;
     ImGui::Begin("Hierarchy");
-    char hierarchySubtitle[48];
-    std::snprintf(hierarchySubtitle, sizeof(hierarchySubtitle), "%zu objects", scene.editor().size());
-    drawPanelHeader("Hierarchy", hierarchySubtitle);
     if (EditorButton("+  New Object", {-1.0F, 0.0F}).draw()) {
         clicked = scene.createGameObject();
     }
@@ -145,4 +142,3 @@ Engine::Entity HierarchyPanel::draw(Engine::ScenePreset &scene, const Engine::En
     ImGui::End();
     return clicked;
 }
-
