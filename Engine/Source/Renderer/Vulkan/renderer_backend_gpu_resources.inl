@@ -84,11 +84,18 @@
                 cullingUniformBuffers[frame].createHostVisible(vulkanDevice.physical(), device,
                     sizeof(Culling::CullingUniformData), VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
                     vulkanDevice.allocator());
+                sceneCullingUniformBuffers[frame].createHostVisible(vulkanDevice.physical(), device,
+                    sizeof(Culling::CullingUniformData), VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
+                    vulkanDevice.allocator());
                 shadowCullingUniformBuffers[frame].createHostVisible(vulkanDevice.physical(), device,
                     sizeof(Culling::CullingUniformData), VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
                     vulkanDevice.allocator());
                 std::vector<VkDrawIndexedIndirectCommand> emptyCommands(objectCount);
                 indirectBuffers[frame].createDeviceLocal(vulkanDevice.physical(), device, emptyCommands.data(),
+                    sizeof(VkDrawIndexedIndirectCommand) * objectCount,
+                    VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+                    commandPool, vulkanDevice.graphicsQueue(), vulkanDevice.allocator());
+                sceneIndirectBuffers[frame].createDeviceLocal(vulkanDevice.physical(), device, emptyCommands.data(),
                     sizeof(VkDrawIndexedIndirectCommand) * objectCount,
                     VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
                     commandPool, vulkanDevice.graphicsQueue(), vulkanDevice.allocator());
@@ -101,13 +108,17 @@
                     VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT |
                     VK_BUFFER_USAGE_TRANSFER_DST_BIT,
                     commandPool, vulkanDevice.graphicsQueue(), vulkanDevice.allocator());
+                sceneDrawCountBuffers[frame].createDeviceLocal(vulkanDevice.physical(), device, &zero, sizeof(zero),
+                    VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT |
+                    VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+                    commandPool, vulkanDevice.graphicsQueue(), vulkanDevice.allocator());
                 shadowDrawCountBuffers[frame].createDeviceLocal(vulkanDevice.physical(), device, &zero, sizeof(zero),
                     VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT |
                     VK_BUFFER_USAGE_TRANSFER_DST_BIT,
                     commandPool, vulkanDevice.graphicsQueue(), vulkanDevice.allocator());
             }
 
-            constexpr uint32_t cullingSetCount = MAX_FRAMES_IN_FLIGHT * 2;
+            constexpr uint32_t cullingSetCount = MAX_FRAMES_IN_FLIGHT * 3;
             const uint32_t imageDescriptors = hiZBuffer.mipCount() + cullingSetCount;
             const VkDescriptorPoolSize poolSizes[] = {
                 {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, imageDescriptors},
@@ -127,9 +138,9 @@
                 msaa.enabled() ? hiZDepthBuffer.imageView() : depthBuffer.imageView(),
                 msaa.enabled() ? hiZDepthBuffer.sampler() : depthBuffer.sampler());
 
-            std::array<VkDescriptorSetLayout, MAX_FRAMES_IN_FLIGHT * 2> cullLayouts{};
+            std::array<VkDescriptorSetLayout, MAX_FRAMES_IN_FLIGHT * 3> cullLayouts{};
             cullLayouts.fill(cullingDescriptorSetLayout);
-            std::array<VkDescriptorSet, MAX_FRAMES_IN_FLIGHT * 2> cullSets{};
+            std::array<VkDescriptorSet, MAX_FRAMES_IN_FLIGHT * 3> cullSets{};
             VkDescriptorSetAllocateInfo allocateInfo{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};
             allocateInfo.descriptorPool = cullingDescriptorPool;
             allocateInfo.descriptorSetCount = static_cast<uint32_t>(cullSets.size());
@@ -166,15 +177,22 @@
                     vkUpdateDescriptorSets(device, static_cast<uint32_t>(writes.size()), writes.data(), 0, nullptr);
                 };
                 VkDescriptorSet cameraCullSet = cullSets[frame];
-                VkDescriptorSet shadowCullSet = cullSets[MAX_FRAMES_IN_FLIGHT + frame];
+                VkDescriptorSet sceneCullSet = cullSets[MAX_FRAMES_IN_FLIGHT + frame];
+                VkDescriptorSet shadowCullSet = cullSets[MAX_FRAMES_IN_FLIGHT * 2 + frame];
                 updateCullingSet({cameraCullSet, indirectBuffers[frame], drawCountBuffers[frame],
                                   cullingUniformBuffers[frame]});
                 updateCullingSet({shadowCullSet, shadowIndirectBuffers[frame], shadowDrawCountBuffers[frame],
                                   shadowCullingUniformBuffers[frame]});
+                updateCullingSet({sceneCullSet, sceneIndirectBuffers[frame], sceneDrawCountBuffers[frame],
+                                  sceneCullingUniformBuffers[frame]});
                 gpuCullingPasses[frame].create(device, cullingPipeline, cullingPipelineLayout, cullSets[frame],
                     indirectBuffers[frame].handle(), drawCountBuffers[frame].handle(), objectCount);
                 indirectDraws[frame].create(
                     indirectBuffers[frame].handle(), drawCountBuffers[frame].handle(), objectCount);
+                sceneGpuCullingPasses[frame].create(device, cullingPipeline, cullingPipelineLayout, sceneCullSet,
+                    sceneIndirectBuffers[frame].handle(), sceneDrawCountBuffers[frame].handle(), objectCount);
+                sceneIndirectDraws[frame].create(
+                    sceneIndirectBuffers[frame].handle(), sceneDrawCountBuffers[frame].handle(), objectCount);
                 shadowCullingPasses[frame].create(device, cullingPipeline, cullingPipelineLayout, shadowCullSet,
                     shadowIndirectBuffers[frame].handle(), shadowDrawCountBuffers[frame].handle(), objectCount);
                 shadowIndirectDraws[frame].create(
@@ -186,12 +204,16 @@
         void destroyCullingResources() noexcept {
             hiZPass.destroy();
             for (auto& draw : indirectDraws) draw.destroy();
+            for (auto& draw : sceneIndirectDraws) draw.destroy();
             for (auto& draw : shadowIndirectDraws) draw.destroy();
             for (Buffer& buffer : cullingUniformBuffers) buffer.destroy();
+            for (Buffer& buffer : sceneCullingUniformBuffers) buffer.destroy();
             for (Buffer& buffer : shadowCullingUniformBuffers) buffer.destroy();
             for (Buffer& buffer : indirectBuffers) buffer.destroy();
+            for (Buffer& buffer : sceneIndirectBuffers) buffer.destroy();
             for (Buffer& buffer : shadowIndirectBuffers) buffer.destroy();
             for (Buffer& buffer : drawCountBuffers) buffer.destroy();
+            for (Buffer& buffer : sceneDrawCountBuffers) buffer.destroy();
             for (Buffer& buffer : shadowDrawCountBuffers) buffer.destroy();
             for (Buffer& buffer : cullingObjectBuffers) buffer.destroy();
             if (cullingDescriptorPool != VK_NULL_HANDLE) { vkDestroyDescriptorPool(device, cullingDescriptorPool, nullptr);
@@ -345,4 +367,3 @@
                 Vec3{1.0F, -1.0F, 1.0F});
             return lightProjection * lightView;
         }
-

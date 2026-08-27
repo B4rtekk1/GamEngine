@@ -82,7 +82,6 @@ int main() {
         Engine::ScenePreset scene(Engine::SceneType::Particles);
         Engine::Assets::Content content{
             std::filesystem::path{GAMEENGINE_SOURCE_DIR} / "Assets"};
-        static_cast<void>(scene.createModel("Tree", "Models/glTF/CommonTree_2.gltf", content));
         Engine::ScriptSystem scriptSystem{Engine::ScriptRegistry::instance()};
         Engine::PhysicsSystem physicsSystem{};
         Engine::Renderer renderer;

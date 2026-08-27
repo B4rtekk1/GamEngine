@@ -603,6 +603,25 @@
             cullingUniformBuffers[frame].update(&data, sizeof(data));
         }
 
+        void updateSceneCullingUniformBuffer(const uint32_t frame) const {
+            Culling::CullingUniformData data{};
+            const float aspect = static_cast<float>(sceneViewportTarget.extent().width) /
+                                 static_cast<float>(sceneViewportTarget.extent().height);
+            Camera sceneCamera{Degrees{60.0F}, aspect, 0.1F, 1000.0F};
+            sceneCamera.setPosition(cameraController.editorPosition());
+            sceneCamera.setRotation(Degrees{cameraController.editorYaw()},
+                                    Degrees{cameraController.editorPitch()});
+            const glm::mat4 viewProjection = sceneCamera.projectionMatrix().native() * sceneCamera.viewMatrix().native();
+            std::memcpy(data.viewProjection.data, &viewProjection, sizeof(viewProjection));
+            data.objectCount = static_cast<uint32_t>(gpuObjects.size());
+            data.maxDrawCount = data.objectCount;
+            data.enableOcclusionCulling = 0;
+            data.enableFrustumCulling = optimizationFeatures.gpuCulling ? 1U : 0U;
+            data.cameraCut = 1;
+            data.shadowPass = 0;
+            sceneCullingUniformBuffers[frame].update(&data, sizeof(data));
+        }
+
         void updateShadowCullingUniformBuffer(const uint32_t frame) const {
             constexpr float hizAabbExpansion = 0.01F;
             Culling::CullingUniformData data{};

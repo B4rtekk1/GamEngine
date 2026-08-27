@@ -212,6 +212,12 @@
                                     indirectDraws[currentFrame]);
             ForwardPass::end(commandBuffer);
 
+            // Scene View has a separate frustum and therefore needs its own
+            // indirect list. The game camera's list must not hide objects
+            // which are visible from the editor camera.
+            sceneGpuCullingPasses[currentFrame].record(
+                commandBuffer, static_cast<std::uint32_t>(gpuObjects.size()));
+
             // Render the scene into an off-screen image with the very same
             // scene data and draw infrastructure as Game View. At this stage
             // the scene camera descriptor is still wired in the following
@@ -221,7 +227,7 @@
                 commandBuffer, sceneViewportFramebuffer, sceneViewportTarget.extent(),
                 sceneDescriptorPass.descriptorSet(currentFrame), vertexBuffer.handle(),
                 instanceBuffers[currentFrame].handle(), indexBuffer.handle());
-            ForwardPass::draw(commandBuffer, indirectDraws[currentFrame]);
+            ForwardPass::draw(commandBuffer, sceneIndirectDraws[currentFrame]);
             sceneSkyPass.record(commandBuffer, currentFrame);
             if (particleSystem) {
                 Camera sceneCamera{Degrees{60.0F},
@@ -615,6 +621,7 @@
             updateRenderableBuffers();
             updateParticleSystemForFrame();
             updateCullingUniformBuffer(currentFrame);
+            updateSceneCullingUniformBuffer(currentFrame);
             if (optimizationFeatures.shadows) {
                 updateShadowCullingUniformBuffer(currentFrame);
             }
