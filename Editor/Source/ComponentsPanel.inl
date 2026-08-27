@@ -278,104 +278,181 @@ bool ComponentsPanel::draw(Engine::ScenePreset &scene, const Engine::Entity sele
     }
     if (scene.editor().valid(selected) && scene.editor().has<Engine::ColliderComponent>(selected)) {
         bool remove = false;
-        const bool open = drawRemovableComponentHeader("Collider", "collider", remove);
+        const bool open = drawRemovableComponentHeader("PhysX Collider", "collider", remove);
         if (remove) {
             scene.editor().remove<Engine::ColliderComponent>(selected);
         } else if (open) {
-        const auto collider = scene.editor().get<Engine::ColliderComponent>(selected);
-        int shape = static_cast<int>(collider.shape.index());
-        const char *shapeNames[] = {"Box", "Sphere", "Capsule", "Ramp", "Mesh"};
-        const bool hasMesh = scene.editor().has<Engine::MeshRenderer>(selected) &&
-            scene.editor().get<Engine::MeshRenderer>(selected).hasMesh();
-        bool changed = false;
-        if (ImGui::BeginCombo("Shape##collider", shapeNames[shape])) {
-            for (int index = 0; index < 5; ++index) {
-                const bool unavailable = index == 4 && !hasMesh;
-                if (unavailable) ImGui::BeginDisabled();
-                if (ImGui::Selectable(shapeNames[index], shape == index)) {
-                    shape = index;
-                    changed = true;
+            const auto collider = scene.editor().get<Engine::ColliderComponent>(selected);
+            int shape = static_cast<int>(collider.shape.index());
+            const char *shapeNames[] = {"Box", "Sphere", "Capsule", "Ramp", "Mesh"};
+            const bool hasMesh = scene.editor().has<Engine::MeshRenderer>(selected) &&
+                scene.editor().get<Engine::MeshRenderer>(selected).hasMesh();
+            const bool hasBody = scene.editor().has<Engine::RigidbodyComponent>(selected);
+            const Engine::RigidbodyType bodyType = hasBody
+                ? scene.editor().get<Engine::RigidbodyComponent>(selected).type
+                : Engine::RigidbodyType::Static;
+            bool changed = false;
+
+            ImGui::TextDisabled("Geometry");
+            ImGui::SetNextItemWidth(-1.0F);
+            if (ImGui::BeginCombo("Shape##collider", shapeNames[shape])) {
+                for (int index = 0; index < 5; ++index) {
+                    const bool unavailable = index == 4 && !hasMesh;
+                    if (unavailable) ImGui::BeginDisabled();
+                    if (ImGui::Selectable(shapeNames[index], shape == index)) {
+                        shape = index;
+                        changed = true;
+                    }
+                    if (unavailable) ImGui::EndDisabled();
                 }
-                if (unavailable) ImGui::EndDisabled();
+                ImGui::EndCombo();
             }
-            ImGui::EndCombo();
-        }
-        auto value = collider;
-        if (shape != static_cast<int>(value.shape.index())) {
-            value.shape = shape == 0
-                              ? Engine::ColliderShape{Engine::BoxCollider{}}
-                              : shape == 1
-                                    ? Engine::ColliderShape{Engine::SphereCollider{}}
-                                    : shape == 2
-                                          ? Engine::ColliderShape{Engine::CapsuleCollider{}}
-                                          : shape == 3
-                                              ? Engine::ColliderShape{Engine::RampCollider{}}
-                                              : Engine::ColliderShape{Engine::MeshCollider{
-                                                  scene.editor().get<Engine::MeshRenderer>(selected).mesh}};
-        }
-        float offset[3] = {value.offset.x(), value.offset.y(), value.offset.z()};
-        if (ImGui::DragFloat3("Offset##collider", offset, 0.05F)) {
-            value.offset = {offset[0], offset[1], offset[2]};
-            changed = true;
-        }
-        std::visit([&]<typename T>(T &colliderShape) {
-            using Shape = std::decay_t<T>;
-            if constexpr (std::is_same_v<Shape, Engine::BoxCollider>) {
-                float extents[3] = {
-                    colliderShape.halfExtents.x(), colliderShape.halfExtents.y(), colliderShape.halfExtents.z()
-                };
-                if (ImGui::DragFloat3("Half Extents##collider", extents, 0.05F, 0.001F, 1000.0F)) {
-                    colliderShape.halfExtents = {
-                        std::max(0.001F, extents[0]), std::max(0.001F, extents[1]), std::max(0.001F, extents[2])
-                    };
-                    changed = true;
+
+            auto value = collider;
+            if (shape != static_cast<int>(value.shape.index())) {
+                value.shape = shape == 0
+                                  ? Engine::ColliderShape{Engine::BoxCollider{}}
+                                  : shape == 1
+                                        ? Engine::ColliderShape{Engine::SphereCollider{}}
+                                        : shape == 2
+                                              ? Engine::ColliderShape{Engine::CapsuleCollider{}}
+                                              : shape == 3
+                                                    ? Engine::ColliderShape{Engine::RampCollider{}}
+                                                    : Engine::ColliderShape{Engine::MeshCollider{
+                                                        scene.editor().get<Engine::MeshRenderer>(selected).mesh}};
+            }
+
+            ImGui::TextDisabled("Local offset");
+            float offset[3] = {value.offset.x(), value.offset.y(), value.offset.z()};
+            ImGui::SetNextItemWidth(-1.0F);
+            if (ImGui::DragFloat3("Offset##collider", offset, 0.05F)) {
+                value.offset = {offset[0], offset[1], offset[2]};
+                changed = true;
+            }
+            std::visit([&]<typename T>(T &colliderShape) {
+                using Shape = std::decay_t<T>;
+                if constexpr (std::is_same_v<Shape, Engine::BoxCollider> ||
+                              std::is_same_v<Shape, Engine::RampCollider>) {
+                    float extents[3] = {
+                        colliderShape.halfExtents.x(), colliderShape.halfExtents.y(),
+                        colliderShape.halfExtents.z()};
+                    ImGui::TextDisabled("Half extents");
+                    ImGui::SetNextItemWidth(-1.0F);
+                    if (ImGui::DragFloat3("##collider-half-extents", extents, 0.05F,
+                                          0.001F, 1000.0F)) {
+                        colliderShape.halfExtents = {
+                            std::max(0.001F, extents[0]), std::max(0.001F, extents[1]),
+                            std::max(0.001F, extents[2])};
+                        changed = true;
+                    }
+                    if constexpr (std::is_same_v<Shape, Engine::RampCollider>) {
+                        ImGui::TextDisabled("Slope rises along local +Z.");
+                    }
+                } else if constexpr (std::is_same_v<Shape, Engine::SphereCollider>) {
+                    changed |= ImGui::DragFloat("Radius##collider", &colliderShape.radius,
+                                                0.05F, 0.001F, 1000.0F);
+                    colliderShape.radius = std::max(0.001F, colliderShape.radius);
+                } else if constexpr (std::is_same_v<Shape, Engine::CapsuleCollider>) {
+                    changed |= ImGui::DragFloat("Radius##collider", &colliderShape.radius,
+                                                0.05F, 0.001F, 1000.0F);
+                    changed |= ImGui::DragFloat("Total Height##collider", &colliderShape.height,
+                                                0.05F, 0.001F, 1000.0F);
+                    colliderShape.radius = std::max(0.001F, colliderShape.radius);
+                    colliderShape.height = std::max(colliderShape.radius * 2.0F,
+                                                    colliderShape.height);
+                } else if constexpr (std::is_same_v<Shape, Engine::MeshCollider>) {
+                    const char *mode = bodyType == Engine::RigidbodyType::Dynamic
+                        ? "Dynamic body: convex hull (bounds fallback)."
+                        : "Static body: exact triangle mesh.";
+                    ImGui::TextDisabled("%s", mode);
                 }
-            } else if constexpr (std::is_same_v<Shape, Engine::SphereCollider>) {
-                changed |= ImGui::DragFloat("Radius##collider", &colliderShape.radius, 0.05F, 0.001F, 1000.0F);
-                colliderShape.radius = std::max(0.001F, colliderShape.radius);
-            } else if constexpr (std::is_same_v<Shape, Engine::CapsuleCollider>) {
-                changed |= ImGui::DragFloat("Radius##collider", &colliderShape.radius, 0.05F, 0.001F, 1000.0F);
-                changed |= ImGui::DragFloat("Height##collider", &colliderShape.height, 0.05F, 0.001F, 1000.0F);
-                colliderShape.radius = std::max(0.001F, colliderShape.radius);
-                colliderShape.height = std::max(0.001F, colliderShape.height);
-            } else if constexpr (std::is_same_v<Shape, Engine::MeshCollider>) {
-                ImGui::TextDisabled("Triangle geometry from the assigned mesh");
+            }, value.shape);
+
+            ImGui::Separator();
+            ImGui::TextDisabled("Simulation");
+            changed |= ImGui::Checkbox("Trigger (query only)##collider", &value.isTrigger);
+            if (value.isTrigger) {
+                ImGui::TextDisabled("Triggers receive queries but do not block bodies.");
             }
-        }, value.shape);
-        changed |= ImGui::Checkbox("Is Trigger##collider", &value.isTrigger);
-        changed |= ImGui::DragFloat("Friction##collider", &value.friction, 0.01F, 0.0F, 10.0F);
-        changed |= ImGui::SliderFloat("Restitution##collider", &value.restitution, 0.0F, 1.0F);
-        value.friction = std::max(0.0F, value.friction);
-        value.restitution = std::clamp(value.restitution, 0.0F, 1.0F);
-        if (changed)
-            scene.editor().modify<Engine::ColliderComponent>(selected,
-                                                             [&](auto &component) { component = value; });
+
+            ImGui::Separator();
+            ImGui::TextDisabled("Material");
+            changed |= ImGui::DragFloat("Static / dynamic friction##collider", &value.friction,
+                                        0.01F, 0.0F, 10.0F, "%.2f");
+            changed |= ImGui::SliderFloat("Restitution##collider", &value.restitution,
+                                          0.0F, 1.0F, "%.2f");
+            value.friction = std::max(0.0F, value.friction);
+            value.restitution = std::clamp(value.restitution, 0.0F, 1.0F);
+            if (changed) {
+                scene.editor().modify<Engine::ColliderComponent>(selected,
+                    [&](auto &component) { component = value; });
+            }
         }
     }
     if (scene.editor().valid(selected) && scene.editor().has<Engine::RigidbodyComponent>(selected)) {
         bool remove = false;
-        const bool open = drawRemovableComponentHeader("Rigidbody", "rigidbody", remove);
+        const bool open = drawRemovableComponentHeader("PhysX Rigidbody", "rigidbody", remove);
         if (remove) {
             scene.editor().remove<Engine::RigidbodyComponent>(selected);
         } else if (open) {
-        const auto rigidbody = scene.editor().get<Engine::RigidbodyComponent>(selected);
-        auto value = rigidbody;
-        int type = static_cast<int>(value.type);
-        const char *typeNames[] = {"Static", "Dynamic", "Kinematic"};
-        if (ImGui::BeginCombo("Type##rigidbody", typeNames[type])) {
-            for (int index = 0; index < 3; ++index) {
-                if (ImGui::Selectable(typeNames[index], type == index)) type = index;
+            const auto rigidbody = scene.editor().get<Engine::RigidbodyComponent>(selected);
+            auto value = rigidbody;
+            int type = static_cast<int>(value.type);
+            const char *typeNames[] = {"Static", "Dynamic", "Kinematic"};
+            ImGui::TextDisabled("Body type");
+            ImGui::SetNextItemWidth(-1.0F);
+            if (ImGui::BeginCombo("Type##rigidbody", typeNames[type])) {
+                for (int index = 0; index < 3; ++index) {
+                    if (ImGui::Selectable(typeNames[index], type == index)) type = index;
+                }
+                ImGui::EndCombo();
             }
-            ImGui::EndCombo();
-        }
-        value.type = static_cast<Engine::RigidbodyType>(type);
-        bool changed = ImGui::Checkbox("Use Gravity##rigidbody", &value.useGravity);
-        changed |= ImGui::DragFloat("Mass##rigidbody", &value.mass, 0.05F, 0.001F, 100000.0F);
-        value.mass = std::max(0.001F, value.mass);
-        if (changed || value.type != rigidbody.type) {
-            scene.editor().modify<Engine::RigidbodyComponent>(selected,
-                                                              [&](auto &component) { component = value; });
-        }
+            value.type = static_cast<Engine::RigidbodyType>(type);
+            bool changed = value.type != rigidbody.type;
+            const bool dynamic = value.type == Engine::RigidbodyType::Dynamic;
+            const bool kinematic = value.type == Engine::RigidbodyType::Kinematic;
+            ImGui::TextDisabled(dynamic ? "Simulated by PhysX." :
+                                kinematic ? "Driven by Transform; pushes dynamic bodies." :
+                                            "Fixed collision geometry.");
+
+            ImGui::Separator();
+            ImGui::TextDisabled("Motion");
+            if (!dynamic) ImGui::BeginDisabled();
+            changed |= ImGui::Checkbox("Use Gravity##rigidbody", &value.useGravity);
+            changed |= ImGui::DragFloat("Mass##rigidbody", &value.mass, 0.05F, 0.001F,
+                                        100000.0F, "%.3f kg");
+            changed |= ImGui::DragFloat("Linear Damping##rigidbody", &value.linearDamping,
+                                        0.01F, 0.0F, 100.0F, "%.3f");
+            changed |= ImGui::DragFloat("Angular Damping##rigidbody", &value.angularDamping,
+                                        0.01F, 0.0F, 100.0F, "%.3f");
+            changed |= ImGui::Checkbox("Lock Rotation##rigidbody", &value.fixedRotation);
+            if (!dynamic) ImGui::EndDisabled();
+
+            if (dynamic) {
+                ImGui::Separator();
+                ImGui::TextDisabled("Initial / overridden velocity");
+                float linearVelocity[3] = {value.linearVelocity.x(), value.linearVelocity.y(),
+                                           value.linearVelocity.z()};
+                float angularVelocity[3] = {value.angularVelocity.x(), value.angularVelocity.y(),
+                                            value.angularVelocity.z()};
+                if (ImGui::DragFloat3("Linear Velocity##rigidbody", linearVelocity, 0.05F,
+                                      -1000.0F, 1000.0F)) {
+                    value.linearVelocity = {linearVelocity[0], linearVelocity[1], linearVelocity[2]};
+                    changed = true;
+                }
+                if (ImGui::DragFloat3("Angular Velocity##rigidbody", angularVelocity, 1.0F,
+                                      -10000.0F, 10000.0F, "%.1f deg/s")) {
+                    value.angularVelocity = {angularVelocity[0], angularVelocity[1], angularVelocity[2]};
+                    changed = true;
+                }
+            }
+            value.mass = std::max(0.001F, value.mass);
+            value.linearDamping = std::max(0.0F, value.linearDamping);
+            value.angularDamping = std::max(0.0F, value.angularDamping);
+            if (changed) {
+                scene.editor().modify<Engine::RigidbodyComponent>(selected,
+                    [&](auto &component) { component = value; });
+            }
         }
     }
     if (scene.editor().valid(selected) && scene.editor().has<Engine::ColorPickerComponent>(selected)) {

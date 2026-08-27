@@ -248,8 +248,8 @@ struct PhysicsSystem::BroadPhaseCache final {
                        std::max(maximum.y(), vertex.position.y()),
                        std::max(maximum.z(), vertex.position.z())};
         }
-        const Vec3 center = (minimum + maximum) * 0.5F;
-        const Vec3 extents = (maximum - minimum) * 0.5F * scale;
+        const Vec3 center = minimum + maximum * 0.5F;
+        const Vec3 extents = maximum - minimum * 0.5F * scale;
         const physx::PxBoxGeometry geometry{
             std::max(extents.x(), MinimumDimension),
             std::max(extents.y(), MinimumDimension),
@@ -398,11 +398,8 @@ struct PhysicsSystem::BroadPhaseCache final {
             }
             rigid.setLinearVelocity(toPhysX(body->linearVelocity));
             rigid.setAngularVelocity(toPhysX(body->angularVelocity * DegreesToRadians));
-            body->runtimeBody = reinterpret_cast<std::uintptr_t>(actor);
             record.lastLinearVelocity = body->linearVelocity;
             record.lastAngularVelocity = body->angularVelocity;
-        } else if (body != nullptr) {
-            body->runtimeBody = reinterpret_cast<std::uintptr_t>(actor);
         }
         physicsScene->addActor(*actor);
         return record;
@@ -460,7 +457,6 @@ struct PhysicsSystem::BroadPhaseCache final {
                 owner.get<RigidbodyComponent>(entity).type == RigidbodyType::Static) continue;
             auto& body = owner.get<RigidbodyComponent>(entity);
             auto& rigid = *static_cast<PxRigidDynamic*>(record.actor);
-            body.runtimeBody = reinterpret_cast<std::uintptr_t>(record.actor);
             if (!same(body.linearVelocity, record.lastLinearVelocity)) {
                 rigid.setLinearVelocity(toPhysX(body.linearVelocity));
             }

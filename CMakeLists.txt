@@ -1,14 +1,5 @@
 cmake_minimum_required(VERSION 4.4)
 
-# Use the configured vcpkg installation automatically when no toolchain was
-# selected by the caller. PhysX is distributed to this project through vcpkg.
-if(WIN32 AND NOT DEFINED CMAKE_TOOLCHAIN_FILE AND
-        DEFINED ENV{VCPKG_ROOT} AND
-        EXISTS "$ENV{VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake")
-    set(CMAKE_TOOLCHAIN_FILE "$ENV{VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake"
-        CACHE FILEPATH "vcpkg toolchain file")
-endif()
-
 project(GamEngine)
 
 include(CTest)
@@ -66,17 +57,6 @@ function(gameengine_copy_runtime_dependencies target)
             COMMAND ${CMAKE_COMMAND} -E copy_if_different
                     $<TARGET_RUNTIME_DLLS:${target}> $<TARGET_FILE_DIR:${target}>
             COMMAND_EXPAND_LISTS)
-        # The vcpkg PhysX package describes its DLL imports as UNKNOWN targets
-        # whose TARGET_FILE is the import library. Copy the actual CPU DLLs.
-        foreach(physx_dll PhysX_64.dll PhysXCooking_64.dll
-                          PhysXCommon_64.dll PhysXFoundation_64.dll)
-            if(DEFINED OMNIVERSE-PHYSX-SDK_DEBUG_BIN_DIR)
-                add_custom_command(TARGET ${target} POST_BUILD
-                    COMMAND ${CMAKE_COMMAND} -E copy_if_different
-                        "$<IF:$<CONFIG:Debug>,${OMNIVERSE-PHYSX-SDK_DEBUG_BIN_DIR}/${physx_dll},${OMNIVERSE-PHYSX-SDK_RELEASE_BIN_DIR}/${physx_dll}>"
-                        $<TARGET_FILE_DIR:${target}>)
-            endif()
-        endforeach()
     endif()
 endfunction()
 
@@ -85,9 +65,53 @@ if(DEFINED ENV{VULKAN_SDK} AND NOT "$ENV{VULKAN_SDK}" STREQUAL "")
     set(SDL3_DIR "$ENV{VULKAN_SDK}/cmake")
 endif()
 find_package(SDL3 CONFIG REQUIRED)
-find_package(unofficial-omniverse-physx-sdk CONFIG REQUIRED)
 
 include(FetchContent)
+
+# Official NVIDIA PhysX 5.10.0.  It is added as a CMake subproject rather
+# than imported from vcpkg, so the engine always uses this exact SDK version.
+# CPU-only/static avoids a CUDA dependency and removes PhysX runtime DLLs.
+set(PX_GENERATE_GPU_PROJECTS OFF CACHE BOOL "Build PhysX GPU projects" FORCE)
+set(PX_GENERATE_STATIC_LIBRARIES ON CACHE BOOL "Build PhysX static libraries" FORCE)
+set(PX_BUILDSNIPPETS OFF CACHE BOOL "Build PhysX snippets" FORCE)
+set(PX_BUILDPVDRUNTIME OFF CACHE BOOL "Build PhysX PVD runtime" FORCE)
+# PhysX defaults this internal output label to x86 on Windows when no XML
+# preset is used.  Keep the subproject's CPU-only static setup and correctly
+# label a 64-bit Visual Studio build without letting a shared-library preset
+# override those options.
+if(WIN32 AND CMAKE_SIZEOF_VOID_P EQUAL 8)
+    set(PX_OUTPUT_ARCH "x64" CACHE INTERNAL "PhysX output architecture" FORCE)
+endif()
+FetchContent_Declare(
+        NVIDIA_PhysX
+        GIT_REPOSITORY https://github.com/NVIDIA-Omniverse/PhysX.git
+        GIT_TAG 3ca45ad36e9755f7c8c5bea9f7c57d308d9f0c54 # ovphysx-0.5.10
+        GIT_SHALLOW TRUE
+        SOURCE_SUBDIR physx)
+FetchContent_MakeAvailable(NVIDIA_PhysX)
+
+# PhysX 5.10 enables /WX for its own sources.  MSVC 19.44 introduced the
+# C5054/C5055 enum-migration warnings for existing PhysX expressions.  Use
+# Microsoft's compatibility warning wave for third-party targets only;
+# GameEngine targets retain their normal warning policy.
+if(MSVC)
+    function(gameengine_suppress_physx_c5054 directory)
+        get_property(physx_targets DIRECTORY "${directory}" PROPERTY BUILDSYSTEM_TARGETS)
+        foreach(physx_target IN LISTS physx_targets)
+            get_target_property(physx_target_type ${physx_target} TYPE)
+            if(NOT physx_target_type STREQUAL "INTERFACE_LIBRARY")
+                target_compile_options(${physx_target} PRIVATE /Wv:18)
+            endif()
+        endforeach()
+
+        get_property(physx_subdirectories DIRECTORY "${directory}" PROPERTY SUBDIRECTORIES)
+        foreach(physx_subdirectory IN LISTS physx_subdirectories)
+            gameengine_suppress_physx_c5054("${physx_subdirectory}")
+        endforeach()
+    endfunction()
+    gameengine_suppress_physx_c5054("${nvidia_physx_SOURCE_DIR}/physx")
+endif()
+
 FetchContent_Declare(
         DearImGui
         GIT_REPOSITORY https://github.com/ocornut/imgui.git
@@ -172,7 +196,7 @@ gameengine_enable_sanitizers(Engine)
 
 target_link_libraries(Engine
         PUBLIC SDL3::SDL3 Vulkan::Vulkan
-        PRIVATE DearImGui unofficial::omniverse-physx-sdk::sdk)
+        PRIVATE DearImGui physx_lib)
 target_include_directories(Engine
         PUBLIC
             $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/Engine/Include>

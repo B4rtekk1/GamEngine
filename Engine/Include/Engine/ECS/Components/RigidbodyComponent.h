@@ -25,7 +25,6 @@ namespace Engine {
 
         // Forces and torques are accumulated until the next physics step.
         // They are intentionally not serialized: these are transient inputs.
-        std::uint64_t runtimeBody = 0;
         Vec3 force{};
         Vec3 torque{};
         Vec3 angularImpulse{};
