@@ -8,13 +8,13 @@
 
 namespace Engine {
 
-enum class SceneType { Cubes, Particles };
+enum class SceneType { Empty, Cubes, Particles };
 
 // Explicit sample-content layer. Applications can use Scene directly and do
 // not inherit benchmark geometry, asset paths, or editor labels.
 class ScenePreset final : public Scene {
 public:
-    explicit ScenePreset(SceneType type = SceneType::Cubes);
+    explicit ScenePreset(SceneType type = SceneType::Empty);
 
     [[nodiscard]] Entity createGameObject();
     [[nodiscard]] Entity createCube();

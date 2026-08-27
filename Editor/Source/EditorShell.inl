@@ -18,7 +18,7 @@ void drawStatusBar(const Engine::ScenePreset &scene, const Engine::Entity select
     ImGui::SameLine(0.0F, 8.0F);
     ImGui::TextUnformatted(playing ? (paused ? "Paused" : "Playing") : "Ready");
     ImGui::SameLine(0.0F, 12.0F);
-    ImGui::TextDisabled("Particle scene");
+    ImGui::TextDisabled("Scene editor");
     ImGui::SameLine(0.0F, 10.0F);
     ImGui::TextDisabled("·");
     ImGui::SameLine(0.0F, 10.0F);

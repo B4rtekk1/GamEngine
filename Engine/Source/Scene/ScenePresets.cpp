@@ -93,6 +93,8 @@ namespace Engine {
     } // namespace
 
     ScenePreset::ScenePreset(const SceneType type) {
+        // These meshes back the editor's GameObject menu.  Initializing them
+        // is independent from adding sample objects to the new scene.
         planeMesh_ = std::make_shared<Mesh>(Plane::createMesh());
         cubeMesh_ = std::make_shared<Mesh>(Cube::createMesh());
         sphereMesh_ = std::make_shared<Mesh>(Sphere::createMesh());
@@ -111,17 +113,19 @@ namespace Engine {
         }
 
         constexpr float halfExtent = (((CubesPerAxis - 1) * CubeSpacing) + 1.0F) * 0.5F;
-        auto &planeObject = createMeshObject("Plane", planeMesh_,
-                                             PBRMaterial{});
-        planeObject.setScale({
-            (halfExtent * 2) + GroundPlanePadding, 1, (halfExtent * 2) + GroundPlanePadding
-        });
-        planeObject.setCastShadow(false);
-        plane = planeObject.entity();
-        planeObject.add<ColliderComponent>(ColliderComponent{
-            .shape = BoxCollider{.halfExtents = {CubeHalfHeight, GroundColliderHalfHeight, CubeHalfHeight}},
-            .offset = {0.0F, GroundColliderOffsetY, 0.0F},
-        });
+        if (type != SceneType::Empty) {
+            auto &planeObject = createMeshObject("Plane", planeMesh_,
+                                                 PBRMaterial{});
+            planeObject.setScale({
+                (halfExtent * 2) + GroundPlanePadding, 1, (halfExtent * 2) + GroundPlanePadding
+            });
+            planeObject.setCastShadow(false);
+            plane = planeObject.entity();
+            planeObject.add<ColliderComponent>(ColliderComponent{
+                .shape = BoxCollider{.halfExtents = {CubeHalfHeight, GroundColliderHalfHeight, CubeHalfHeight}},
+                .offset = {0.0F, GroundColliderOffsetY, 0.0F},
+            });
+        }
 
         if (type == SceneType::Cubes) {
             constexpr float halfGrid = (CubesPerAxis - 1) * CubeSpacing * 0.5F;
@@ -153,7 +157,7 @@ namespace Engine {
         if (particleScene) {
             targetY = ParticleCameraTargetY;
             position = {ParticleCameraX, ParticleCameraY, ParticleCameraZ};
-        } else {
+        } else if (type == SceneType::Cubes) {
             position = {
                 static_cast<float>(halfExtent) * CubeCameraXScale,
                 targetY + (static_cast<float>(halfExtent) * CubeCameraYScale),
@@ -165,12 +169,14 @@ namespace Engine {
                                               .fieldOfView = CameraFieldOfView, .nearClip = CameraNearClip,
                                               .farClip = CameraFarClip,
                                               .aspectRatio = CameraViewportWidth / CameraViewportHeight,
-                                          });
-        cameraObject.setPosition(position);
-        cameraObject.setRotation({
-            Degrees{Radians{std::atan2(direction.y(), Vec2{direction.x(), direction.z()}.length())}}.value(),
-            Degrees{Radians{std::atan2(direction.z(), direction.x())}}.value(), 0
         });
+        cameraObject.setPosition(position);
+        if (type != SceneType::Empty) {
+            cameraObject.setRotation({
+                Degrees{Radians{std::atan2(direction.y(), Vec2{direction.x(), direction.z()}.length())}}.value(),
+                Degrees{Radians{std::atan2(direction.z(), direction.x())}}.value(), 0
+            });
+        }
         camera = cameraObject.entity();
     }
 

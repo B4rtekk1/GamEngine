@@ -85,7 +85,7 @@ int main() {
         if (!SDL_Init(SDL_INIT_VIDEO | SDL_INIT_EVENTS)) {
             throw std::runtime_error(SDL_GetError());
         }
-        SDL_Window *window = SDL_CreateWindow("GamEngine Editor - Particles",
+        SDL_Window *window = SDL_CreateWindow("GamEngine Editor",
                                               EditorConstants::windowWidth,
                                               EditorConstants::windowHeight,
                                               SDL_WINDOW_VULKAN | SDL_WINDOW_RESIZABLE);
@@ -103,7 +103,7 @@ int main() {
         }
         EditorStyle::apply();
 
-        Engine::ScenePreset scene(Engine::SceneType::Particles);
+        Engine::ScenePreset scene;
         Engine::Assets::Content content{
             std::filesystem::path{GAMEENGINE_SOURCE_DIR} / "Assets"};
         Engine::ScriptSystem scriptSystem{Engine::ScriptRegistry::instance()};
