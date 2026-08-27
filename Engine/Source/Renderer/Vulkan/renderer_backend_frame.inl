@@ -98,12 +98,16 @@
             // culling uniform's cameraCut flag disables occlusion testing for
             // this frame, so an undefined image contents is acceptable after
             // this layout transition.
-            const bool hizEnabled = canUseHiZOcclusionCulling();
+            // Empty scenes do not allocate culling/Hi-Z resources. Keep the
+            // frame path disabled for them so no barrier references the null
+            // image handle left by the intentionally skipped allocation.
+            const bool hasHiZResources = hiZBuffer.image() != VK_NULL_HANDLE;
+            const bool hizEnabled = canUseHiZOcclusionCulling() && hasHiZResources;
             const bool hadPreviousHiZ = hiZValid;
             // The culling descriptor set always contains the Hi-Z image. Keep
             // its layout valid before the compute culling dispatch, even when
             // that dispatch skips occlusion testing.
-            if (optimizationFeatures.gpuCulling && !hadPreviousHiZ) {
+            if (hasHiZResources && !hadPreviousHiZ) {
                 VkImageMemoryBarrier2 initialBarrier{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2};
                 initialBarrier.srcStageMask = VK_PIPELINE_STAGE_2_NONE;
                 initialBarrier.dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;

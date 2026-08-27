@@ -587,6 +587,10 @@
         }
 
         void updateCullingUniformBuffer(const uint32_t frame) const {
+            // Empty editor scenes intentionally do not allocate culling
+            // resources. The render passes already skip zero-object draws,
+            // so there is no uniform buffer to update in that case.
+            if (cullingUniformBuffers[frame].handle() == VK_NULL_HANDLE) return;
             constexpr float hizDepthBias = 0.0025F;
             constexpr float hizAabbExpansion = 0.01F;
             Culling::CullingUniformData data{};
@@ -611,6 +615,7 @@
         }
 
         void updateSceneCullingUniformBuffer(const uint32_t frame) const {
+            if (sceneCullingUniformBuffers[frame].handle() == VK_NULL_HANDLE) return;
             Culling::CullingUniformData data{};
             const float aspect = static_cast<float>(sceneViewportTarget.extent().width) /
                                  static_cast<float>(sceneViewportTarget.extent().height);
@@ -630,6 +635,7 @@
         }
 
         void updateShadowCullingUniformBuffer(const uint32_t frame) const {
+            if (shadowCullingUniformBuffers[frame].handle() == VK_NULL_HANDLE) return;
             constexpr float hizAabbExpansion = 0.01F;
             Culling::CullingUniformData data{};
             const glm::mat4 lightViewProjection = lightSpaceMatrix().native();
