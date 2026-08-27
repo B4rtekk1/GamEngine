@@ -191,6 +191,18 @@ add_library(Engine
         Engine/Source/Renderer/Geometry/Terrain.cpp
         Platform/SDL/SDLInput.cpp
 )
+
+# Associate the public headers with Engine. This preserves the Visual Studio
+# build while giving CMake IDE integrations the Engine include context for an
+# open header.
+file(GLOB_RECURSE ENGINE_PUBLIC_HEADERS CONFIGURE_DEPENDS
+        "${CMAKE_CURRENT_SOURCE_DIR}/Engine/Include/*.h"
+        "${CMAKE_CURRENT_SOURCE_DIR}/Engine/Include/*.hpp")
+target_sources(Engine PRIVATE
+        FILE_SET engine_public_headers TYPE HEADERS
+        BASE_DIRS "${CMAKE_CURRENT_SOURCE_DIR}/Engine/Include"
+        FILES ${ENGINE_PUBLIC_HEADERS})
+
 gameengine_enable_warnings(Engine)
 gameengine_enable_sanitizers(Engine)
 
