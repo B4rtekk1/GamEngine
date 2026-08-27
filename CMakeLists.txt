@@ -197,6 +197,10 @@ gameengine_enable_sanitizers(Engine)
 target_link_libraries(Engine
         PUBLIC SDL3::SDL3 Vulkan::Vulkan
         PRIVATE DearImGui physx_lib)
+# PhysX's public umbrella headers do not include its generated PxConfig.h.
+# Keep the consumer ABI consistent with PX_GENERATE_STATIC_LIBRARIES so their
+# APIs are not declared __declspec(dllimport) in Engine object files.
+target_compile_definitions(Engine PRIVATE PX_PHYSX_STATIC_LIB)
 target_include_directories(Engine
         PUBLIC
             $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/Engine/Include>

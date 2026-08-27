@@ -49,8 +49,6 @@ Engine::Entity HierarchyPanel::draw(Engine::ScenePreset &scene, const Engine::En
                 byUuid.emplace(scene.editor().get<Engine::UUIDComponent>(entity).value, entity);
             }
         });
-        std::ranges::sort(entities);
-
         std::unordered_map<Engine::Entity, std::vector<Engine::Entity> > children;
         std::vector<Engine::Entity> roots;
         for (const Engine::Entity entity: entities) {
@@ -63,6 +61,52 @@ Engine::Entity HierarchyPanel::draw(Engine::ScenePreset &scene, const Engine::En
             }
             roots.push_back(entity);
         }
+
+        const auto sortByHierarchyOrder = [&](std::vector<Engine::Entity>& siblings) {
+            std::ranges::sort(siblings, [&](const Engine::Entity left, const Engine::Entity right) {
+                const auto orderOf = [&](const Engine::Entity entity) {
+                    return scene.editor().has<Engine::HierarchyOrderComponent>(entity)
+                               ? scene.editor().get<Engine::HierarchyOrderComponent>(entity).value
+                               : std::numeric_limits<std::uint32_t>::max();
+                };
+                const std::uint32_t leftOrder = orderOf(left);
+                const std::uint32_t rightOrder = orderOf(right);
+                return leftOrder == rightOrder ? left < right : leftOrder < rightOrder;
+            });
+        };
+        sortByHierarchyOrder(roots);
+        for (auto& [parent, siblings] : children) {
+            sortByHierarchyOrder(siblings);
+        }
+
+        const auto reorderBefore = [&](std::vector<Engine::Entity>& siblings,
+                                       const Engine::Entity moved,
+                                       const Engine::Entity before) {
+            if (moved == before) return;
+            const auto movedIt = std::ranges::find(siblings, moved);
+            const auto beforeIt = std::ranges::find(siblings, before);
+            if (movedIt == siblings.end() || beforeIt == siblings.end()) return;
+            siblings.erase(movedIt);
+            const auto insertAt = std::ranges::find(siblings, before);
+            siblings.insert(insertAt, moved);
+            for (std::uint32_t index = 0; index < siblings.size(); ++index) {
+                const Engine::Entity sibling = siblings[index];
+                if (scene.editor().has<Engine::HierarchyOrderComponent>(sibling)) {
+                    scene.editor().modify<Engine::HierarchyOrderComponent>(
+                        sibling, [&](auto& order) { order.value = index; });
+                } else {
+                    scene.editor().add<Engine::HierarchyOrderComponent>(
+                        sibling, Engine::HierarchyOrderComponent{.value = index});
+                }
+            }
+        };
+
+        Engine::Entity reorderSource = Engine::NullEntity;
+        Engine::Entity reorderTarget = Engine::NullEntity;
+        const auto requestReorder = [&](const Engine::Entity moved, const Engine::Entity before) {
+            reorderSource = moved;
+            reorderTarget = before;
+        };
 
         std::unordered_set<Engine::Entity> visited;
         const auto drawNode = [&](auto &&self, const Engine::Entity entity) -> void {
@@ -107,6 +151,18 @@ Engine::Entity HierarchyPanel::draw(Engine::ScenePreset &scene, const Engine::En
                 if (ImGui::Selectable(label, selected == entity)) {
                     clicked = entity;
                 }
+                if (ImGui::BeginDragDropSource()) {
+                    ImGui::SetDragDropPayload("HIERARCHY_REORDER", &entity, sizeof(entity));
+                    ImGui::TextUnformatted(name);
+                    ImGui::EndDragDropSource();
+                }
+                if (ImGui::BeginDragDropTarget()) {
+                    if (const ImGuiPayload* payload = ImGui::AcceptDragDropPayload("HIERARCHY_REORDER")) {
+                        const auto moved = *static_cast<const Engine::Entity*>(payload->Data);
+                        requestReorder(moved, entity);
+                    }
+                    ImGui::EndDragDropTarget();
+                }
                 drawContextMenu();
                 return;
             }
@@ -115,6 +171,18 @@ Engine::Entity HierarchyPanel::draw(Engine::ScenePreset &scene, const Engine::En
             const bool open = ImGui::TreeNodeEx(label, flags);
             if (ImGui::IsItemClicked()) {
                 clicked = entity;
+            }
+            if (ImGui::BeginDragDropSource()) {
+                ImGui::SetDragDropPayload("HIERARCHY_REORDER", &entity, sizeof(entity));
+                ImGui::TextUnformatted(name);
+                ImGui::EndDragDropSource();
+            }
+            if (ImGui::BeginDragDropTarget()) {
+                if (const ImGuiPayload* payload = ImGui::AcceptDragDropPayload("HIERARCHY_REORDER")) {
+                    const auto moved = *static_cast<const Engine::Entity*>(payload->Data);
+                    requestReorder(moved, entity);
+                }
+                ImGui::EndDragDropTarget();
             }
             drawContextMenu();
             if (open) {
@@ -126,6 +194,12 @@ Engine::Entity HierarchyPanel::draw(Engine::ScenePreset &scene, const Engine::En
         };
         for (const Engine::Entity entity: roots) {
             drawNode(drawNode, entity);
+        }
+        if (reorderSource != Engine::NullEntity && reorderTarget != Engine::NullEntity) {
+            reorderBefore(roots, reorderSource, reorderTarget);
+            for (auto& [parent, siblings] : children) {
+                reorderBefore(siblings, reorderSource, reorderTarget);
+            }
         }
         ImGui::TreePop();
     }

@@ -45,6 +45,7 @@ using Editor::SceneHistory;
 #include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <limits>
 #include <sstream>
 #include <stdexcept>
 #include <thread>

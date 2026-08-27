@@ -591,6 +591,10 @@ namespace Engine {
             if (registry.has<ParentComponent>(entity)) {
                 serialized << "PARENT " << registry.get<ParentComponent>(entity).parent << '\n';
             }
+            if (registry.has<HierarchyOrderComponent>(entity)) {
+                serialized << "HIERARCHY_ORDER "
+                           << registry.get<HierarchyOrderComponent>(entity).value << '\n';
+            }
             if (registry.has<Transform>(entity)) {
                 const auto &transform = registry.get<Transform>(entity);
                 serialized << "TRANSFORM ";
@@ -844,6 +848,7 @@ namespace Engine {
             bool hasTerrain = false;
             bool hasIdentity = false;
             bool hasParent = false;
+            bool hasHierarchyOrder = false;
 
             while (true) {
                 const auto component = read<std::string>(input, "component name");
@@ -878,6 +883,13 @@ namespace Engine {
                     }
                     loaded.add<ParentComponent>(entity, ParentComponent{.parent = parent});
                     hasParent = true;
+                } else if (component == "HIERARCHY_ORDER") {
+                    if (hasHierarchyOrder) {
+                        invalidScene("entity contains an invalid HIERARCHY_ORDER component");
+                    }
+                    loaded.add<HierarchyOrderComponent>(
+                        entity, HierarchyOrderComponent{.value = read<std::uint32_t>(input, "hierarchy order")});
+                    hasHierarchyOrder = true;
                 } else if (component == "TRANSFORM") {
                     if (hasTransform) {
                         invalidScene("entity contains more than one Transform");

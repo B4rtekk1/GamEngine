@@ -3,6 +3,7 @@
 #include "Engine/ECS/Entity.h"
 
 #include <atomic>
+#include <cstdint>
 #include <string>
 #include <utility>
 
@@ -26,6 +27,11 @@ struct UUIDComponent final {
 /** Optional link to the UUID of this object's parent. */
 struct ParentComponent final {
     UUID parent{NullUUID};
+};
+
+/** Display position among objects with the same parent in the editor hierarchy. */
+struct HierarchyOrderComponent final {
+    std::uint32_t value{};
 };
 
 inline std::atomic<UUID>& uuidCounter() noexcept {
