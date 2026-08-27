@@ -22,8 +22,8 @@ struct TerrainComponent final {
     static constexpr std::uint32_t MaximumResolution = 513;
 
     std::uint32_t resolution{DefaultResolution};
-    float width{20.0F};
-    float depth{20.0F};
+    float width{100.0F};
+    float depth{100.0F};
     float minimumHeight{-10.0F};
     float maximumHeight{10.0F};
     std::vector<float> heights;

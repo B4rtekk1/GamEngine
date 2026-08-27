@@ -142,6 +142,101 @@ float gizmoWorldSize(const Engine::Camera &camera, const Engine::Vec3 &origin,
                       EditorConstants::gizmoMinimumSize, EditorConstants::gizmoMaximumSize);
 }
 
+void drawProjectedCameraLine(ImDrawList *drawList, const Engine::Camera &viewCamera,
+                             const Engine::Vec3 &start, const Engine::Vec3 &end,
+                             const ImVec2 min, const ImVec2 max, const ImU32 color,
+                             const float thickness) {
+    const ImVec2 projectedStart = projectGizmoPoint(viewCamera, start, min, max);
+    const ImVec2 projectedEnd = projectGizmoPoint(viewCamera, end, min, max);
+    if (projectedStart.x < -9000.0F || projectedEnd.x < -9000.0F) return;
+    drawList->AddLine(projectedStart, projectedEnd, color, thickness);
+}
+
+void drawCameraGizmos(const Engine::ScenePreset &scene, const Engine::Entity selected,
+                      const Engine::Renderer &renderer, const ImVec2 min, const ImVec2 max) {
+    const Engine::Camera viewCamera = sceneViewCamera(renderer, min, max);
+    ImDrawList *drawList = ImGui::GetWindowDrawList();
+    scene.editor().view<Engine::CameraComponent, Engine::Transform>(
+        [&](const Engine::Entity entity, const Engine::CameraComponent &component,
+            const Engine::Transform &transform) {
+            // Use the same orientation convention as the runtime camera:
+            // Transform X is pitch and Y is yaw.
+            Engine::Camera camera{
+                Engine::Degrees{component.isPerspective() ? component.fieldOfView : 45.0F},
+                std::max(component.aspectRatio, 0.01F),
+                std::max(component.nearClip, 0.0001F),
+                std::max(component.farClip, component.nearClip + 0.001F)
+            };
+            camera.setPosition(transform.position);
+            camera.setRotation(Engine::Degrees{transform.rotation.y()},
+                               Engine::Degrees{transform.rotation.x()});
+
+            const float size = gizmoWorldSize(viewCamera, transform.position, min, max) * 0.72F;
+            const Engine::Vec3 forward = camera.forward();
+            const Engine::Vec3 right = camera.right();
+            const Engine::Vec3 up = camera.up();
+            const Engine::Vec3 position = transform.position;
+            const Engine::Vec3 bodyCenter = position - forward * (size * 0.08F);
+            const Engine::Vec3 bodyFront = bodyCenter + forward * (size * 0.22F);
+            const Engine::Vec3 bodyBack = bodyCenter - forward * (size * 0.22F);
+            const float bodyHalfWidth = size * 0.25F;
+            const float bodyHalfHeight = size * 0.17F;
+            const Engine::Vec3 bodyCorners[8]{
+                bodyBack - right * bodyHalfWidth - up * bodyHalfHeight,
+                bodyBack + right * bodyHalfWidth - up * bodyHalfHeight,
+                bodyBack + right * bodyHalfWidth + up * bodyHalfHeight,
+                bodyBack - right * bodyHalfWidth + up * bodyHalfHeight,
+                bodyFront - right * bodyHalfWidth - up * bodyHalfHeight,
+                bodyFront + right * bodyHalfWidth - up * bodyHalfHeight,
+                bodyFront + right * bodyHalfWidth + up * bodyHalfHeight,
+                bodyFront - right * bodyHalfWidth + up * bodyHalfHeight,
+            };
+
+            const ImU32 color = entity == selected ? IM_COL32(80, 230, 235, 255)
+                                                    : IM_COL32(245, 190, 75, 235);
+            const float thickness = entity == selected ? 2.5F : 1.8F;
+            constexpr int bodyEdges[12][2]{
+                {0, 1}, {1, 2}, {2, 3}, {3, 0}, {4, 5}, {5, 6},
+                {6, 7}, {7, 4}, {0, 4}, {1, 5}, {2, 6}, {3, 7}
+            };
+            for (const auto &edge : bodyEdges) {
+                drawProjectedCameraLine(drawList, viewCamera, bodyCorners[edge[0]],
+                                         bodyCorners[edge[1]], min, max, color, thickness);
+            }
+
+            // The pyramid is the camera's visible direction and makes the
+            // icon useful even when the camera body is viewed edge-on.
+            const float frustumDepth = size * 1.35F;
+            const float halfHeight = component.isPerspective()
+                                         ? std::tan(component.fieldOfView *
+                                                    EditorConstants::radiansPerDegree * 0.5F) * frustumDepth
+                                         : size * 0.42F;
+            const float halfWidth = halfHeight * std::max(component.aspectRatio, 0.01F);
+            const Engine::Vec3 frustumCenter = position + forward * frustumDepth;
+            const Engine::Vec3 frustumCorners[4]{
+                frustumCenter - right * halfWidth - up * halfHeight,
+                frustumCenter + right * halfWidth - up * halfHeight,
+                frustumCenter + right * halfWidth + up * halfHeight,
+                frustumCenter - right * halfWidth + up * halfHeight
+            };
+            for (const Engine::Vec3 &corner : frustumCorners) {
+                drawProjectedCameraLine(drawList, viewCamera, position, corner,
+                                         min, max, color, thickness);
+            }
+            for (int corner = 0; corner < 4; ++corner) {
+                drawProjectedCameraLine(drawList, viewCamera, frustumCorners[corner],
+                                         frustumCorners[(corner + 1) % 4], min, max, color, thickness);
+            }
+
+            const ImVec2 labelPosition = projectGizmoPoint(viewCamera, position, min, max);
+            if (labelPosition.x >= min.x && labelPosition.x <= max.x &&
+                labelPosition.y >= min.y && labelPosition.y <= max.y) {
+                drawList->AddText({labelPosition.x + 8.0F, labelPosition.y - 8.0F},
+                                  color, entityName(scene, entity));
+            }
+        });
+}
+
 bool drawTranslationGizmo(Engine::ScenePreset &scene, const Engine::Entity selected,
                           const Engine::Renderer &renderer, const ImVec2 min, const ImVec2 max) {
     if (selected == Engine::NullEntity || !scene.editor().valid(selected) ||
@@ -598,6 +693,8 @@ ViewportInteraction drawViewport(Engine::ScenePreset &scene, const Engine::Entit
                     break; // +Z view
                 default: break;
             }
+            drawCameraGizmos(scene, selected, renderer, ImGui::GetItemRectMin(),
+                             ImGui::GetItemRectMax());
         }
         const bool sculptConsumesClick = gizmoAction < 0 && !showGameView && !playing &&
             drawTerrainSculpt(scene, selected, renderer, ImGui::GetItemRectMin(),
