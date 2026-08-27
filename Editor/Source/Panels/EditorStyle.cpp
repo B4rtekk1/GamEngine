@@ -163,7 +163,7 @@ void EditorStyle::apply() {
 /**
  * @brief Creates the default editor docking layout once.
  */
-void EditorStyle::configureDockLayout() {
+void EditorStyle::configureDockLayout(const ImVec2 dockSize) {
     static bool configured = false;
     if (configured) {
         return;
@@ -171,13 +171,17 @@ void EditorStyle::configureDockLayout() {
     const ImGuiID root = ImGui::GetMainViewport()->ID;
     ImGui::DockBuilderRemoveNode(root);
     ImGui::DockBuilderAddNode(root, ImGuiDockNodeFlags_DockSpace);
-    ImGui::DockBuilderSetNodeSize(root, ImGui::GetMainViewport()->WorkSize);
+    ImGui::DockBuilderSetNodeSize(root, dockSize);
+    ImGuiID assetManager = kEmptyDockNodeId;
+    ImGuiID workspace = kEmptyDockNodeId;
+    ImGui::DockBuilderSplitNode(root, ImGuiDir_Down, 0.30F, &assetManager, &workspace);
     ImGuiID hierarchy = kEmptyDockNodeId;
     ImGuiID center = kEmptyDockNodeId;
-    ImGui::DockBuilderSplitNode(root, ImGuiDir_Left, kHierarchyWidthRatio, &hierarchy, &center);
+    ImGui::DockBuilderSplitNode(workspace, ImGuiDir_Left, kHierarchyWidthRatio, &hierarchy, &center);
     ImGuiID inspector = kEmptyDockNodeId;
     ImGui::DockBuilderSplitNode(center, ImGuiDir_Right, kInspectorWidthRatio, &inspector, &center);
     ImGui::DockBuilderDockWindow("Hierarchy", hierarchy);
+    ImGui::DockBuilderDockWindow("Asset Manager", assetManager);
     ImGui::DockBuilderDockWindow("Viewport", center);
     ImGui::DockBuilderDockWindow("Inspector", inspector);
     ImGui::DockBuilderFinish(root);

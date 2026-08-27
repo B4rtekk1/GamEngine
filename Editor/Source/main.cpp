@@ -24,6 +24,7 @@
 #include "Editor/Panels/EditorStyle.h"
 #include "Editor/Panels/HierarchyPanel.h"
 #include "Editor/Panels/ComponentsPanel.h"
+#include "Editor/Panels/AssetManagerPanel.h"
 #include "Editor/EditorState.h"
 
 using Editor::EntityClipboard;
@@ -1300,7 +1301,8 @@ Engine::Entity drawEditorMenuBar(Engine::ScenePreset &scene, Engine::Renderer &r
     static std::string sceneFileError;
     Engine::Entity createdEntity = Engine::NullEntity;
 
-    if (!ImGui::BeginMainMenuBar()) return Engine::NullEntity;
+    if (!ImGui::BeginMainMenuBar()) { return Engine::NullEntity;
+}
 
     ImGui::PushStyleColor(ImGuiCol_Text, {0.55F, 0.80F, 1.0F, 1.0F});
     ImGui::TextUnformatted("GamEngine");
@@ -1700,10 +1702,25 @@ int main() {
                 paused = !paused;
                 physicsAccumulator = 0.0;
             }
-            const ImGuiID dockspaceId = ImGui::GetMainViewport()->ID;
-            ImGui::DockSpaceOverViewport(dockspaceId, ImGui::GetMainViewport(),
-                                         ImGuiDockNodeFlags_PassthruCentralNode);
-            EditorStyle::configureDockLayout();
+            const ImGuiViewport *viewport = ImGui::GetMainViewport();
+            const ImVec2 dockSize{viewport->WorkSize.x,
+                                  std::max(0.0F, viewport->WorkSize.y -
+                                                    static_cast<float>(EditorConstants::statusBarHeight))};
+            // Keep the status bar outside the dockspace. DockSpaceOverViewport
+            // uses the complete work area, which allowed docked panels to
+            // continue underneath the status bar.
+            ImGui::SetNextWindowPos(viewport->WorkPos);
+            ImGui::SetNextWindowSize(dockSize);
+            ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, {0.0F, 0.0F});
+            ImGui::Begin("##editor-dockspace", nullptr,
+                         ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoDocking |
+                         ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoBringToFrontOnFocus |
+                         ImGuiWindowFlags_NoNavFocus | ImGuiWindowFlags_NoBackground);
+            const ImGuiID dockspaceId = viewport->ID;
+            ImGui::DockSpace(dockspaceId, {0.0F, 0.0F}, ImGuiDockNodeFlags_PassthruCentralNode);
+            EditorStyle::configureDockLayout(dockSize);
+            ImGui::End();
+            ImGui::PopStyleVar();
             HierarchyPanel::Action hierarchyAction = HierarchyPanel::Action::None;
             Engine::Entity hierarchyActionEntity = Engine::NullEntity;
             if (const Engine::Entity clicked = HierarchyPanel::draw(
@@ -1752,6 +1769,11 @@ int main() {
                 renderer.setEditorSelection(selectedEntity);
             }
             const bool inspectorConsumesMouseWheel = ComponentsPanel::draw(scene, selectedEntity);
+            if (const Engine::Entity created = AssetManagerPanel::draw(scene, content, playing);
+                created != Engine::NullEntity) {
+                selectedEntity = created;
+                renderer.setEditorSelection(selectedEntity);
+            }
             drawStatusBar(scene, selectedEntity, playing, paused);
             if (!playing && selectedEntity != Engine::NullEntity &&
                 scene.editor().valid(selectedEntity) && !ImGui::GetIO().WantTextInput &&

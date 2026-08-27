@@ -153,7 +153,8 @@ target_include_directories(Engine
 add_executable(Editor
         Editor/Source/main.cpp
         Editor/Source/Panels/EditorStyle.cpp
-        Editor/Source/Panels/EditorSceneSession.cpp)
+        Editor/Source/Panels/EditorSceneSession.cpp
+        Editor/Source/Panels/AssetManagerPanel.cpp)
 gameengine_enable_warnings(Editor)
 gameengine_enable_sanitizers(Editor)
 target_include_directories(Editor PRIVATE Editor/Include)
