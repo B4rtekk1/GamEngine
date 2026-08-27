@@ -534,7 +534,7 @@
                     if (batchIndex >= sceneGpu.batchRenderableIndices.size()) continue;
                     AABB bounds{};
                     bool initialized = false;
-                    for (jak std::size_t index : sceneGpu.batchRenderableIndices[batchIndex]) {
+                    for (std::size_t index : sceneGpu.batchRenderableIndices[batchIndex]) {
                         const RenderableRecord& record = renderables[index];
                         if (!readRegistry.has<Transform>(record.entity)) continue;
                         const AABB worldBounds = record.localBounds.transformed(

@@ -327,6 +327,93 @@ bool drawTranslationGizmo(Engine::ScenePreset &scene, const Engine::Entity selec
 
 enum class GizmoMode { Translate, Rotate };
 
+bool drawViewportGizmoTools(const ImVec2 imageMin, const ImVec2 visibleMin, GizmoMode &gizmoMode) {
+    constexpr float buttonSize = 34.0F;
+    constexpr float gap = 6.0F;
+    const ImVec2 toolbarMin{std::max(imageMin.x + 12.0F, visibleMin.x + 12.0F),
+                            std::max(imageMin.y + 12.0F, visibleMin.y + 12.0F)};
+    ImDrawList *drawList = ImGui::GetWindowDrawList();
+    bool consumedClick = false;
+
+    for (int index = 0; index < 2; ++index) {
+        const bool active = (index == 0 && gizmoMode == GizmoMode::Translate) ||
+                            (index == 1 && gizmoMode == GizmoMode::Rotate);
+        const ImVec2 min{toolbarMin.x + static_cast<float>(index) * (buttonSize + gap), toolbarMin.y};
+        const ImVec2 max{min.x + buttonSize, min.y + buttonSize};
+
+        ImGui::SetCursorScreenPos(min);
+        ImGui::PushID(index);
+        const bool clicked = ImGui::InvisibleButton("##gizmo-tool", {buttonSize, buttonSize});
+        const bool hovered = ImGui::IsItemHovered();
+        ImGui::PopID();
+
+        const ImU32 background = ImGui::GetColorU32(active
+                                                        ? ImVec4{0.06F, 0.48F, 0.59F, 0.96F}
+                                                        : hovered
+                                                              ? ImVec4{0.12F, 0.20F, 0.25F, 0.96F}
+                                                              : ImVec4{0.07F, 0.11F, 0.15F, 0.92F});
+        const ImU32 border = ImGui::GetColorU32(active
+                                                    ? ImVec4{0.20F, 0.86F, 0.84F, 1.0F}
+                                                    : ImVec4{0.25F, 0.34F, 0.40F, 1.0F});
+        const ImU32 icon = ImGui::GetColorU32(ImVec4{0.93F, 0.97F, 0.99F, 1.0F});
+        drawList->AddRectFilled(min, max, background, 6.0F);
+        drawList->AddRect(min, max, border, 6.0F, 0, 1.0F);
+
+        const ImVec2 center{(min.x + max.x) * 0.5F, (min.y + max.y) * 0.5F};
+        if (index == 0) {
+            constexpr float arm = 9.0F;
+            constexpr float head = 4.0F;
+            drawList->AddRectFilled({center.x - 3.0F, center.y - 3.0F},
+                                    {center.x + 3.0F, center.y + 3.0F}, icon, 1.5F);
+            drawList->AddLine({center.x - arm, center.y}, {center.x + arm, center.y}, icon, 2.0F);
+            drawList->AddLine({center.x, center.y - arm}, {center.x, center.y + arm}, icon, 2.0F);
+            drawList->AddTriangleFilled({center.x - arm - head, center.y},
+                                        {center.x - arm + 1.0F, center.y - head},
+                                        {center.x - arm + 1.0F, center.y + head}, icon);
+            drawList->AddTriangleFilled({center.x + arm + head, center.y},
+                                        {center.x + arm - 1.0F, center.y - head},
+                                        {center.x + arm - 1.0F, center.y + head}, icon);
+            drawList->AddTriangleFilled({center.x, center.y - arm - head},
+                                        {center.x - head, center.y - arm + 1.0F},
+                                        {center.x + head, center.y - arm + 1.0F}, icon);
+            drawList->AddTriangleFilled({center.x, center.y + arm + head},
+                                        {center.x - head, center.y + arm - 1.0F},
+                                        {center.x + head, center.y + arm - 1.0F}, icon);
+        } else {
+            constexpr float arcStart = 0.55F;
+            constexpr float arcEnd = 5.55F;
+            constexpr int arcSegments = 20;
+            ImVec2 arcPoints[arcSegments + 1];
+            for (int point = 0; point <= arcSegments; ++point) {
+                const float angle = arcStart + (arcEnd - arcStart) *
+                    static_cast<float>(point) / static_cast<float>(arcSegments);
+                arcPoints[point] = {center.x + std::cos(angle) * 9.0F,
+                                    center.y + std::sin(angle) * 9.0F};
+            }
+            drawList->AddPolyline(arcPoints, arcSegments + 1, icon, ImDrawFlags_None, 2.0F);
+
+            const ImVec2 tip = arcPoints[arcSegments];
+            const float tangentX = -std::sin(arcEnd);
+            const float tangentY = std::cos(arcEnd);
+            const float normalX = std::cos(arcEnd);
+            const float normalY = std::sin(arcEnd);
+            drawList->AddTriangleFilled(
+                {tip.x + tangentX * 3.5F, tip.y + tangentY * 3.5F},
+                {tip.x - tangentX * 2.0F + normalX * 3.5F,
+                 tip.y - tangentY * 2.0F + normalY * 3.5F},
+                {tip.x - tangentX * 2.0F - normalX * 3.5F,
+                 tip.y - tangentY * 2.0F - normalY * 3.5F}, icon);
+        }
+
+        if (hovered) ImGui::SetTooltip(index == 0 ? "Move gizmo (W)" : "Rotate gizmo (E)");
+        if (clicked) {
+            gizmoMode = index == 0 ? GizmoMode::Translate : GizmoMode::Rotate;
+            consumedClick = true;
+        }
+    }
+    return consumedClick;
+}
+
 bool drawRotationGizmo(Engine::ScenePreset &scene, const Engine::Entity selected,
                        const Engine::Renderer &renderer, const ImVec2 min, const ImVec2 max) {
     if (selected == Engine::NullEntity || !scene.editor().valid(selected) ||
@@ -614,19 +701,6 @@ ViewportInteraction drawViewport(Engine::ScenePreset &scene, const Engine::Entit
     ImGui::Begin("Viewport", nullptr, ImGuiWindowFlags_NoScrollbar);
     drawPanelHeader("Viewport", playing ? "Playing · Game Camera" : showGameView ? "Game Camera" : "Scene Camera");
     if (!playing) {
-        if (drawToolbarToggle(" Move ", gizmoMode == GizmoMode::Translate)) {
-            gizmoMode = GizmoMode::Translate;
-        }
-        if (ImGui::IsItemHovered()) {
-            ImGui::SetTooltip("Translate gizmo (W)");
-        }
-        ImGui::SameLine(0.0F, 4.0F);
-        if (drawToolbarToggle(" Rotate ", gizmoMode == GizmoMode::Rotate)) {
-            gizmoMode = GizmoMode::Rotate;
-        }
-        if (ImGui::IsItemHovered()) {
-            ImGui::SetTooltip("Rotate gizmo (E)");
-        }
         const bool terrainSelected = selected != Engine::NullEntity && scene.editor().valid(selected) &&
                                      scene.editor().has<Engine::TerrainComponent>(selected);
         if (terrainSelected) {
@@ -679,10 +753,15 @@ ViewportInteraction drawViewport(Engine::ScenePreset &scene, const Engine::Entit
         ImGui::SetCursorPosY(ImGui::GetCursorPosY() + verticalOffset);
         ImGui::Image(ImTextureRef{static_cast<ImTextureID>(descriptor.value)},
                      {frameSize.x, imageHeight}, {0, 0}, {1, 1});
-        viewportHovered = ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenBlockedByActiveItem);
+        const ImVec2 imageMin = ImGui::GetItemRectMin();
+        const ImVec2 imageMax = ImGui::GetItemRectMax();
+        const bool imageHovered = ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenBlockedByActiveItem);
+        viewportHovered = imageHovered;
         int gizmoAction = -1;
+        bool gizmoToolsConsumeClick = false;
         if (!showGameView && !playing) {
-            gizmoAction = drawSceneOrientationGizmo(ImGui::GetItemRectMin(), ImGui::GetItemRectMax(),
+            gizmoToolsConsumeClick = drawViewportGizmoTools(imageMin, ImGui::GetWindowPos(), gizmoMode);
+            gizmoAction = drawSceneOrientationGizmo(imageMin, imageMax,
                                                     sceneCameraYaw, sceneCameraPitch);
             switch (gizmoAction) {
                 case 0: renderer.setEditorCameraRotation(180.0F, 0.0F);
@@ -693,27 +772,22 @@ ViewportInteraction drawViewport(Engine::ScenePreset &scene, const Engine::Entit
                     break; // +Z view
                 default: break;
             }
-            drawCameraGizmos(scene, selected, renderer, ImGui::GetItemRectMin(),
-                             ImGui::GetItemRectMax());
+            drawCameraGizmos(scene, selected, renderer, imageMin, imageMax);
         }
         const bool sculptConsumesClick = gizmoAction < 0 && !showGameView && !playing &&
-            drawTerrainSculpt(scene, selected, renderer, ImGui::GetItemRectMin(),
-                              ImGui::GetItemRectMax(), terrainSculpt,
+            drawTerrainSculpt(scene, selected, renderer, imageMin, imageMax, terrainSculpt,
                               interaction.terrainGeometryChanged);
-        const bool gizmoConsumesClick = sculptConsumesClick || (gizmoAction < 0 && !showGameView && !playing &&
+        const bool gizmoConsumesClick = gizmoToolsConsumeClick || sculptConsumesClick ||
+            (gizmoAction < 0 && !showGameView && !playing &&
                                         (gizmoMode == GizmoMode::Translate
-                                             ? drawTranslationGizmo(scene, selected, renderer, ImGui::GetItemRectMin(),
-                                                                    ImGui::GetItemRectMax())
-                                             : drawRotationGizmo(scene, selected, renderer, ImGui::GetItemRectMin(),
-                                                                 ImGui::GetItemRectMax())));
-        if (!showGameView && !playing && gizmoAction < 0 && !gizmoConsumesClick && ImGui::IsItemHovered() &&
+                                             ? drawTranslationGizmo(scene, selected, renderer, imageMin, imageMax)
+                                             : drawRotationGizmo(scene, selected, renderer, imageMin, imageMax)));
+        if (!showGameView && !playing && gizmoAction < 0 && !gizmoConsumesClick && imageHovered &&
             ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
-            const ImVec2 min = ImGui::GetItemRectMin();
-            const ImVec2 max = ImGui::GetItemRectMax();
             const ImVec2 mouse = ImGui::GetIO().MousePos;
             interaction.sceneClicked = true;
-            interaction.normalizedX = ((mouse.x - min.x) / (max.x - min.x)) * 2.0F - 1.0F;
-            interaction.normalizedY = ((mouse.y - min.y) / (max.y - min.y)) * 2.0F - 1.0F;
+            interaction.normalizedX = ((mouse.x - imageMin.x) / (imageMax.x - imageMin.x)) * 2.0F - 1.0F;
+            interaction.normalizedY = ((mouse.y - imageMin.y) / (imageMax.y - imageMin.y)) * 2.0F - 1.0F;
         }
         ImGui::EndChild();
         ImGui::PopStyleVar(2);

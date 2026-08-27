@@ -38,6 +38,7 @@ using Editor::SceneHistory;
 #include <chrono>
 #include <cstdint>
 #include <algorithm>
+#include <array>
 #include <cctype>
 #include <cmath>
 #include <cstdio>
@@ -62,6 +63,23 @@ using Editor::SceneHistory;
 
 #include "EditorShell.inl"
 
+namespace {
+    std::filesystem::path findDefaultUiFont() {
+        constexpr std::array<const char *, 5> candidates{
+            "C:/Windows/Fonts/segoeui.ttf", "C:/Windows/Fonts/arial.ttf",
+            "C:/Windows/Fonts/consola.ttf", "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+            "/usr/share/fonts/truetype/liberation2/LiberationSans-Regular.ttf",
+        };
+        const auto font = std::ranges::find_if(candidates, [](const char *path) {
+            return std::filesystem::is_regular_file(path);
+        });
+        if (font == candidates.end()) {
+            throw std::runtime_error("No default TrueType font found for ImGui");
+        }
+        return *font;
+    }
+}
+
 int main() {
     try {
         if (!SDL_Init(SDL_INIT_VIDEO | SDL_INIT_EVENTS)) {
@@ -77,7 +95,12 @@ int main() {
 
         IMGUI_CHECKVERSION();
         ImGui::CreateContext();
-        ImGui::GetIO().ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard | ImGuiConfigFlags_DockingEnable;
+        ImGuiIO &imguiIo = ImGui::GetIO();
+        imguiIo.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard | ImGuiConfigFlags_DockingEnable;
+        const std::filesystem::path uiFont = findDefaultUiFont();
+        if (imguiIo.Fonts->AddFontFromFileTTF(uiFont.string().c_str(), 16.0F) == nullptr) {
+            throw std::runtime_error("Could not load ImGui font: " + uiFont.string());
+        }
         EditorStyle::apply();
 
         Engine::ScenePreset scene(Engine::SceneType::Particles);
