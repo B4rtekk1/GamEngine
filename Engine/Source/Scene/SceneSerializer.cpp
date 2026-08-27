@@ -35,18 +35,6 @@ namespace Engine {
         constexpr std::size_t MaxIndices = 150'000'000;
         constexpr std::size_t MaxEntities = 10'000'000;
         constexpr std::size_t FloatBufferSize = 32;
-        constexpr unsigned ColliderFormatVersion = 5;
-        constexpr unsigned RigidbodyFormatVersion = 6;
-        constexpr unsigned SmokeEmitterFormatVersion = 7;
-        constexpr unsigned AssetMeshFormatVersion = 8;
-        constexpr float LegacyParticleMinVelocity = 0.8F;
-        constexpr float LegacyParticleMinVelocityY = 5.5F;
-        constexpr float LegacyParticleMaxVelocityY = 9.0F;
-        constexpr float LegacyParticleMinLifetime = 1.2F;
-        constexpr float LegacyParticleMaxLifetime = 3.4F;
-        constexpr float LegacyParticleMinSize = 0.06F;
-        constexpr float LegacyParticleMaxSize = 0.16F;
-        constexpr float LegacyParticleSpawnRate = 900.0F;
 
         [[noreturn]] void invalidScene(const std::string &message) {
             throw std::runtime_error("Invalid scene: " + message);
@@ -281,9 +269,9 @@ namespace Engine {
             return body;
         }
 
-        ColliderComponent readCollider(std::istream &input, const unsigned version) {
+        ColliderComponent readCollider(std::istream &input) {
             const int type = read<int>(input, "collider shape");
-            if (type < 0 || type > 4 || (type == 4 && version < SceneSerializer::FormatVersion)) {
+            if (type < 0 || type > 4) {
                 invalidScene("unknown collider shape");
             }
             ColliderComponent collider;
@@ -674,10 +662,7 @@ namespace Engine {
         input.imbue(std::locale::classic());
         expect(input, "GAMENGINE_SCENE");
         const auto version = read<unsigned>(input, "format version");
-        if (version != 3 && version != 4 && version != ColliderFormatVersion &&
-            version != RigidbodyFormatVersion &&
-            version != 8 &&
-            version != FormatVersion) {
+        if (version != FormatVersion) {
             invalidScene("unsupported format version " + std::to_string(version));
         }
 
@@ -711,9 +696,6 @@ namespace Engine {
                 invalidScene("mesh identifiers must be contiguous");
             }
             if (recordType == "MESH_ASSET") {
-                if (version < AssetMeshFormatVersion) {
-                    invalidScene("asset mesh references require scene format version 8");
-                }
                 std::string sourcePath;
                 input >> std::quoted(sourcePath);
                 if (!input || sourcePath.empty()) {
@@ -819,7 +801,7 @@ namespace Engine {
                     break;
                 }
                 if (component == "IDENTITY") {
-                    if (version < 4 || hasIdentity) {
+                    if (hasIdentity) {
                         invalidScene("entity contains an invalid IDENTITY component");
                     }
                     UUIDComponent uuid;
@@ -837,7 +819,7 @@ namespace Engine {
                     reserveUUID(uuid.value);
                     hasIdentity = true;
                 } else if (component == "PARENT") {
-                    if (version < 4 || hasParent) {
+                    if (hasParent) {
                         invalidScene("entity contains an invalid PARENT component");
                     }
                     const UUID parent = read<UUID>(input, "parent UUID");
@@ -857,13 +839,13 @@ namespace Engine {
                                               .scale = readVec3(input, "transform scale"),
                                           });
                 } else if (component == "COLLIDER") {
-                    if (version < ColliderFormatVersion || hasCollider) {
+                    if (hasCollider) {
                         invalidScene("entity contains an invalid ColliderComponent");
                     }
                     hasCollider = true;
-                    loaded.add<ColliderComponent>(entity, readCollider(input, version));
+                    loaded.add<ColliderComponent>(entity, readCollider(input));
                 } else if (component == "RIGIDBODY") {
-                    if (version < RigidbodyFormatVersion || hasRigidbody) {
+                    if (hasRigidbody) {
                         invalidScene("entity contains an invalid RigidbodyComponent");
                     }
                     hasRigidbody = true;
@@ -955,7 +937,7 @@ namespace Engine {
                                                              .emitter = readParticleEmitter(input),
                                                          });
                 } else if (component == "SMOKE_EMITTER") {
-                    if (version < SmokeEmitterFormatVersion || hasSmokeEmitter || hasParticleEmitter) {
+                    if (hasSmokeEmitter || hasParticleEmitter) {
                         invalidScene("entity contains an invalid SmokeEmitterComponent");
                     }
                     hasSmokeEmitter = true;
@@ -965,47 +947,8 @@ namespace Engine {
                     invalidScene("unknown component '" + component + "'");
                 }
             }
-            if (version >= 4 && !hasIdentity) {
+            if (!hasIdentity) {
                 invalidScene("entity is missing IDENTITY");
-            }
-            if (version == 3) {
-                loaded.add<UUIDComponent>(entity, UUIDComponent{.value = createUUID()});
-                loaded.add<NameComponent>(entity, NameComponent{
-                                              .value = "Entity " + std::to_string(Engine::entityIndex(entity)),
-                                          });
-            }
-            // Scenes written before ParticleEmitterComponent was serialized may
-            // still contain the preset's "Particle System" entity. Reconstruct
-            // its emitter from the entity's existing transform and color picker.
-            // New scenes always take the PARTICLE_EMITTER branch above.
-            if (!hasParticleEmitter && !hasSmokeEmitter && loaded.has<NameComponent>(entity) &&
-                loaded.get<NameComponent>(entity).value == "Particle System") {
-                Particles::ParticleEmitter emitter;
-                // These are the original Particle Scene preset values. Older
-                // scene files did not serialize the emitter at all, so using the
-                // generic ParticleEmitter defaults would noticeably shrink and
-                // thin the restored effect.
-                emitter.minVelocity = {
-                    -LegacyParticleMinVelocity, LegacyParticleMinVelocityY,
-                    -LegacyParticleMinVelocity
-                };
-                emitter.maxVelocity = {
-                    LegacyParticleMinVelocity, LegacyParticleMaxVelocityY,
-                    LegacyParticleMinVelocity
-                };
-                emitter.minLifeTime = LegacyParticleMinLifetime;
-                emitter.maxLifeTime = LegacyParticleMaxLifetime;
-                emitter.minSize = LegacyParticleMinSize;
-                emitter.maxSize = LegacyParticleMaxSize;
-                emitter.spawnRate = LegacyParticleSpawnRate;
-                if (loaded.has<Transform>(entity)) {
-                    emitter.position = loaded.get<Transform>(entity).position;
-                }
-                if (loaded.has<ColorPickerComponent>(entity)) {
-                    emitter.color = loaded.get<ColorPickerComponent>(entity).color;
-                }
-                loaded.add<ParticleEmitterComponent>(entity,
-                                                     ParticleEmitterComponent{.emitter = emitter});
             }
         }
 
