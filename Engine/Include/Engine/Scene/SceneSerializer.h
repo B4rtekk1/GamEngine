@@ -19,18 +19,9 @@ namespace Engine {
      */
     class SceneSerializer final {
     public:
-        // Version 10 adds heightmap-backed TerrainComponent records.
-        // Version 8 stores imported meshes as source-asset references.
-        // Version 7 adds SmokeEmitterComponent.
-        // Version 6 adds RigidbodyComponent.
-        // Version 5 adds ColliderComponent.
-        // Version 4 adds persistent object UUIDs, names and parent links.
-        // Version 9 adds MeshCollider records, which reconnect to MeshRenderer
-        // geometry while loading.
-        // Version 3 adds ScriptComponent references and their enabled state.
-        // Version 2 stores complete CPU mesh data: tangent frames, materials and
-        // embedded images, plus every MeshRenderer material setting.
-        static constexpr unsigned FormatVersion = 10;
+        // This serializer intentionally supports only the current on-disk
+        // format. Files with any other version are rejected while loading.
+        static constexpr std::uint32_t FormatVersion = 10;
 
         /** @brief Writes a scene to a text file. */
         static void save(const Registry &registry, const std::filesystem::path &path);
