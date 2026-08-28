@@ -6,46 +6,50 @@
 #include "Engine/ECS/Registry.h"
 
 namespace Engine {
+    class Scene;
 
-class Scene;
+    /** Base class for native C++ behaviours attached to entities. */
+    class Script {
+    public:
+        virtual ~Script() = default;
 
-/** Base class for native C++ behaviours attached to entities. */
-class Script {
-public:
-    virtual ~Script() = default;
+        [[nodiscard]] Entity entity() const noexcept { return entity_; }
+        [[nodiscard]] Registry &registry() const noexcept { return *registry_; }
+        [[nodiscard]] Transform &transform() const { return registry().get<Transform>(entity_); }
 
-    [[nodiscard]] Entity entity() const noexcept { return entity_; }
-    [[nodiscard]] Registry& registry() const noexcept { return *registry_; }
-    [[nodiscard]] Transform& transform() const { return registry().get<Transform>(entity_); }
-    /** Returns the high-level actor controlled by this script. */
-    [[nodiscard]] Actor actor() const;
-    /** Returns the scene containing the scripted actor. */
-    [[nodiscard]] Scene& scene() const;
+        /** Returns the high-level actor controlled by this script. */
+        [[nodiscard]] Actor actor() const;
 
-    /** Called once, immediately before the first update. */
-    virtual void onCreate() {}
-    /** Called once per frame while the ScriptComponent is enabled. */
-    virtual void onUpdate(float deltaTime) { (void)deltaTime; }
-    /** Called when the runtime instance is removed. */
-    virtual void onDestroy() {}
+        /** Returns the scene containing the scripted actor. */
+        [[nodiscard]] Scene &scene() const;
 
-private:
-    friend class ScriptSystem;
-    void attach(Registry& registry, Entity entity) noexcept {
-        scene_ = nullptr;
-        registry_ = &registry;
-        entity_ = entity;
-    }
+        /** Called once, immediately before the first update. */
+        virtual void onCreate() {
+        }
 
-    void attach(Scene& scene, Registry& registry, Entity entity) noexcept {
-        scene_ = &scene;
-        registry_ = &registry;
-        entity_ = entity;
-    }
+        /** Called once per frame while the ScriptComponent is enabled. */
+        virtual void onUpdate(float deltaTime) { (void) deltaTime; }
+        /** Called when the runtime instance is removed. */
+        virtual void onDestroy() {
+        }
 
-    Scene* scene_{};
-    Registry* registry_{};
-    Entity entity_{NullEntity};
-};
+    private:
+        friend class ScriptSystem;
 
+        void attach(Registry &registry, Entity entity) noexcept {
+            scene_ = nullptr;
+            registry_ = &registry;
+            entity_ = entity;
+        }
+
+        void attach(Scene &scene, Registry &registry, Entity entity) noexcept {
+            scene_ = &scene;
+            registry_ = &registry;
+            entity_ = entity;
+        }
+
+        Scene *scene_{};
+        Registry *registry_{};
+        Entity entity_{NullEntity};
+    };
 } // namespace Engine
