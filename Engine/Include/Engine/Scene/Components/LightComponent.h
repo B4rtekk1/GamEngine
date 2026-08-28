@@ -1,9 +1,9 @@
 #pragma once
 
 #include "Engine/Math/Math.h"
-namespace Engine {
 
-    enum class LightType {
+namespace Engine {
+    enum class LightType:uint8_t {
         Directional,
         Point,
         Spot,
