@@ -28,6 +28,13 @@ public:
     template<typename T> T& get(Entity entity) { return scene_->edit(entity).get<T>(); }
     template<typename T> const T& get(Entity entity) const { return scene_->edit(entity).get<T>(); }
     template<typename T, typename... Args> T& add(Entity entity, Args&&... args) {
+        if constexpr (std::is_same_v<T, LightComponent>) {
+            return scene_->edit(entity).addLight(std::forward<Args>(args)...);
+        } else if constexpr (std::is_same_v<T, MeshRendererComponent>) {
+            if (scene_->edit(entity).has<LightComponent>()) {
+                throw std::logic_error("A LightComponent cannot have a MeshRenderer");
+            }
+        }
         return scene_->edit(entity).add<T>(std::forward<Args>(args)...);
     }
     template<typename T> void remove(Entity entity) { scene_->edit(entity).remove<T>(); }

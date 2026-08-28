@@ -3,6 +3,7 @@
 #include "Engine/ECS/Components/MeshRendererComponent.h"
 #include "Engine/ECS/Components/TransformComponent.h"
 #include "Engine/ECS/Components/CameraComponent.h"
+#include "Engine/ECS/Components/ColorPickerComponent.h"
 #include "Engine/ECS/Components/ScriptComponent.h"
 #include "Engine/ECS/Components/RigidbodyComponent.h"
 #include "Engine/ECS/Components/ColliderComponent.h"
@@ -96,11 +97,17 @@ public:
     [[nodiscard]] const Vec3& scale() const { return transform().scale; }
     /** High-level mesh assignment; callers do not need to edit the component. */
     void setMesh(std::shared_ptr<const Mesh> mesh) {
+        if (has<LightComponent>()) {
+            throw std::logic_error("A LightComponent cannot have a MeshRenderer");
+        }
         meshRenderer().mesh = std::move(mesh);
         registry_->markChanged<MeshRendererComponent>(entity_);
     }
     /** High-level material assignment; callers do not need to edit the component. */
     void setMaterial(PBRMaterial material) {
+        if (has<LightComponent>()) {
+            throw std::logic_error("A LightComponent cannot have a MeshRenderer");
+        }
         meshRenderer().material = std::move(material);
         registry_->markChanged<MeshRendererComponent>(entity_);
     }
@@ -138,6 +145,14 @@ public:
     [[nodiscard]] CameraComponent& camera() { return get<CameraComponent>(); }
     [[nodiscard]] const CameraComponent& camera() const { return get<CameraComponent>(); }
     LightComponent& addLight(LightComponent light = {}) {
+        // GameObject::spawn creates a MeshRenderer by default. A light is an
+        // editor-visible scene object, not renderable geometry.
+        if (has<MeshRendererComponent>()) remove<MeshRendererComponent>();
+        if (has<ColorPickerComponent>()) {
+            light.color = get<ColorPickerComponent>().color;
+        } else {
+            add<ColorPickerComponent>(ColorPickerComponent{.color = light.color});
+        }
         if (has<LightComponent>()) {
             registry_->modify<LightComponent>(entity_, [&](auto& value) { value = std::move(light); });
             return get<LightComponent>();

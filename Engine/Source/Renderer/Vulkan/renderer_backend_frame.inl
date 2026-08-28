@@ -10,13 +10,15 @@
             const Registry& readRegistry = registry;
             bool found = false;
             readRegistry.view<Transform, LightComponent>(
-                [&](const Entity, const Transform& transform, const LightComponent& light) {
+                [&](const Entity entity, const Transform& transform, const LightComponent& light) {
                     if (found || !light.enabled || light.type != LightType::Directional) return;
                     const glm::vec3 direction = glm::vec3(transform.matrix().native() *
                                                           glm::vec4{0.0F, 0.0F, -1.0F, 0.0F});
                     if (glm::length(direction) <= 1e-6F) return;
                     result.direction = Vec3{glm::normalize(direction)};
-                    result.color = light.color;
+                    result.color = readRegistry.has<ColorPickerComponent>(entity)
+                                       ? readRegistry.get<ColorPickerComponent>(entity).color
+                                       : light.color;
                     result.intensity = std::max(0.0F, light.intensity);
                     found = true;
                 });

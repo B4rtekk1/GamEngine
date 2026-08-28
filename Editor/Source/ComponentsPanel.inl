@@ -149,6 +149,10 @@ bool ComponentsPanel::draw(Engine::ScenePreset &scene, const Engine::Entity sele
         } else if (open) {
             const auto source = scene.editor().get<Engine::LightComponent>(selected);
             auto light = source;
+            const bool hasColorPicker = scene.editor().has<Engine::ColorPickerComponent>(selected);
+            if (hasColorPicker) {
+                light.color = scene.editor().get<Engine::ColorPickerComponent>(selected).color;
+            }
             constexpr const char *typeNames[] = {"Directional", "Point", "Spot"};
             int type = static_cast<int>(light.type);
             bool changed = false;
@@ -179,6 +183,10 @@ bool ComponentsPanel::draw(Engine::ScenePreset &scene, const Engine::Entity sele
             if (changed) {
                 scene.editor().modify<Engine::LightComponent>(selected,
                     [&](auto &component) { component = light; });
+                if (hasColorPicker) {
+                    scene.editor().modify<Engine::ColorPickerComponent>(selected,
+                        [&](auto &component) { component.color = light.color; });
+                }
             }
         }
     }
@@ -508,9 +516,15 @@ bool ComponentsPanel::draw(Engine::ScenePreset &scene, const Engine::Entity sele
                 readScene.get<Engine::ColorPickerComponent>(selected);
         float rgba[4] = {picker.color.r(), picker.color.g(), picker.color.b(), picker.color.a()};
         if (ImGui::ColorEdit4("Color", rgba, ImGuiColorEditFlags_AlphaBar)) {
+            const Engine::Color color{rgba[0], rgba[1], rgba[2], rgba[3]};
             scene.editor().modify<Engine::ColorPickerComponent>(selected, [&](auto &component) {
-                component.color = Engine::Color{rgba[0], rgba[1], rgba[2], rgba[3]};
+                component.color = color;
             });
+            if (scene.editor().has<Engine::LightComponent>(selected)) {
+                scene.editor().modify<Engine::LightComponent>(selected, [&](auto &component) {
+                    component.color = color;
+                });
+            }
         }
         }
     }

@@ -922,6 +922,9 @@ namespace Engine {
                     if (hasRenderer) {
                         invalidScene("entity contains more than one MeshRenderer");
                     }
+                    if (hasLight) {
+                        invalidScene("a LightComponent cannot have a MeshRenderer");
+                    }
                     hasRenderer = true;
                     const auto meshId = read<long long>(input, "mesh reference");
                     if (meshId < -1 || (meshId >= 0 &&
@@ -939,6 +942,9 @@ namespace Engine {
                 } else if (component == "LIGHT") {
                     if (hasLight) {
                         invalidScene("entity contains more than one LightComponent");
+                    }
+                    if (hasRenderer) {
+                        invalidScene("a LightComponent cannot have a MeshRenderer");
                     }
                     hasLight = true;
                     const int type = read<int>(input, "light type");

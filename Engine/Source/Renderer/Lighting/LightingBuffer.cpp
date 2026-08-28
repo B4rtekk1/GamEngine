@@ -2,6 +2,7 @@
 
 #include "Engine/ECS/Registry.h"
 #include "Engine/Scene/Components/LightComponent.h"
+#include "Engine/ECS/Components/ColorPickerComponent.h"
 #include "Engine/ECS/Components/TransformComponent.h"
 
 #include <cstring>
@@ -217,7 +218,7 @@ void LightingBuffer::update(Registry& registry) const {
         LightComponent
     >(
         [&](
-            Entity,
+            const Entity entity,
             const TransformComponent& transform,
             const LightComponent& light
         ) {
@@ -252,7 +253,9 @@ void LightingBuffer::update(Registry& registry) const {
                     light.intensity
                 };
 
-            gpuData.color = light.color.with_alpha(0.0F);
+            gpuData.color = (registry.has<ColorPickerComponent>(entity)
+                                 ? registry.get<ColorPickerComponent>(entity).color
+                                 : light.color).with_alpha(0.0F);
 
             foundDirectionalLight = true;
         }
