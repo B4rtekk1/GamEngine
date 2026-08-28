@@ -34,6 +34,11 @@ const char *entityName(const Engine::ScenePreset &scene, const Engine::Entity en
             return "Ramp";
         }
     }
+    for (const Engine::Entity editorLight: scene.editorLights) {
+        if (editorLight == entity) {
+            return "Light";
+        }
+    }
     for (std::size_t index = 0; index < scene.editorGameObjects.size(); ++index) {
         if (scene.editorGameObjects[index] == entity) {
             return "GameObject";
@@ -41,5 +46,4 @@ const char *entityName(const Engine::ScenePreset &scene, const Engine::Entity en
     }
     return "Entity";
 }
-
 

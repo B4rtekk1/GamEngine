@@ -21,6 +21,7 @@ public:
     [[nodiscard]] Entity createPlane();
     [[nodiscard]] Entity createSphere();
     [[nodiscard]] Entity createRamp();
+    [[nodiscard]] Entity createLight();
     [[nodiscard]] Entity createTerrain();
 
     Entity plane{NullEntity};
@@ -31,6 +32,7 @@ public:
     std::vector<Entity> editorPlanes;
     std::vector<Entity> editorSpheres;
     std::vector<Entity> editorRamps;
+    std::vector<Entity> editorLights;
     std::vector<Entity> editorTerrains;
 
 private:

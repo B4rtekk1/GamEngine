@@ -14,6 +14,7 @@
 #include "Engine/ECS/Components/RigidbodyComponent.h"
 #include "Engine/ECS/Components/ColorPickerComponent.h"
 #include "Engine/ECS/Components/SmokeEmitterComponent.h"
+#include "Engine/Scene/Components/LightComponent.h"
 #include "Engine/Renderer/MeshRenderer.h"
 #include "Engine/Scene/SceneSerializer.h"
 #include "Engine/Scripting/ScriptSystem.h"

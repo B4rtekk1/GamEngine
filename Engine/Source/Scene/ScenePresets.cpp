@@ -178,6 +178,11 @@ namespace Engine {
             });
         }
         camera = cameraObject.entity();
+
+        // Every editor scene starts with an explicit directional light.  This
+        // keeps illumination editable and visible in the hierarchy instead of
+        // relying on the renderer's fallback light.
+        static_cast<void>(createLight());
     }
 
     Entity ScenePreset::createGameObject() {
@@ -231,6 +236,17 @@ namespace Engine {
         const Entity entity = object.entity();
         object.add<ColliderComponent>(ColliderComponent{.shape = RampCollider{.halfExtents = Ramp::halfExtents()}});
         editorRamps.push_back(entity);
+        return entity;
+    }
+
+    Entity ScenePreset::createLight() {
+        LightComponent light;
+        light.intensity = 4.0F;
+        auto &object = Scene::createLight("Light", light);
+        object.setPosition({3.0F, 5.0F, -3.0F});
+        object.setRotation({-55.0F, 35.0F, 0.0F});
+        const Entity entity = object.entity();
+        editorLights.push_back(entity);
         return entity;
     }
 

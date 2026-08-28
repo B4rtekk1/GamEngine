@@ -246,6 +246,58 @@ void drawCameraGizmos(const Engine::ScenePreset &scene, const Engine::Entity sel
         });
 }
 
+void drawLightGizmos(const Engine::ScenePreset &scene, const Engine::Entity selected,
+                     const Engine::Renderer &renderer, const ImVec2 min, const ImVec2 max) {
+    const Engine::Camera viewCamera = sceneViewCamera(renderer, min, max);
+    ImDrawList *drawList = ImGui::GetWindowDrawList();
+    scene.editor().view<Engine::LightComponent, Engine::Transform>(
+        [&](const Engine::Entity entity, const Engine::LightComponent &light,
+            const Engine::Transform &transform) {
+            const ImVec2 center = projectGizmoPoint(viewCamera, transform.position, min, max);
+            if (center.x < min.x || center.x > max.x || center.y < min.y || center.y > max.y) return;
+
+            const bool selectedLight = entity == selected;
+            const ImU32 color = !light.enabled ? IM_COL32(125, 125, 125, 210)
+                                : selectedLight ? IM_COL32(80, 230, 235, 255)
+                                                : IM_COL32(255, 210, 70, 255);
+            const float radius = selectedLight ? 9.0F : 7.0F;
+            constexpr int rayCount = 8;
+            for (int ray = 0; ray < rayCount; ++ray) {
+                const float angle = static_cast<float>(ray) * 2.0F * 3.14159265F / rayCount;
+                const ImVec2 start{center.x + std::cos(angle) * (radius + 2.0F),
+                                   center.y + std::sin(angle) * (radius + 2.0F)};
+                const ImVec2 end{center.x + std::cos(angle) * (radius + 6.0F),
+                                 center.y + std::sin(angle) * (radius + 6.0F)};
+                drawList->AddLine(start, end, color, selectedLight ? 2.5F : 2.0F);
+            }
+            drawList->AddCircleFilled(center, radius, color);
+            drawList->AddCircle(center, radius, IM_COL32(255, 255, 255, 220), 0, 1.2F);
+
+            // Directional lights illuminate along their local -Z axis.  The
+            // arrow makes the light's orientation readable in Scene View.
+            const glm::vec3 rawDirection = glm::vec3(transform.matrix().native() *
+                                                       glm::vec4{0.0F, 0.0F, -1.0F, 0.0F});
+            if (glm::length(rawDirection) > 1e-6F) {
+                const Engine::Vec3 direction{glm::normalize(rawDirection)};
+                const float size = gizmoWorldSize(viewCamera, transform.position, min, max);
+                const ImVec2 tip = projectGizmoPoint(viewCamera,
+                    transform.position + direction * (size * 2.0F), min, max);
+                if (tip.x >= min.x && tip.x <= max.x && tip.y >= min.y && tip.y <= max.y) {
+                    drawList->AddLine(center, tip, color, selectedLight ? 2.5F : 2.0F);
+                    const float angle = std::atan2(tip.y - center.y, tip.x - center.x);
+                    constexpr float arrowLength = 8.0F;
+                    const ImVec2 left{tip.x - std::cos(angle - 0.55F) * arrowLength,
+                                      tip.y - std::sin(angle - 0.55F) * arrowLength};
+                    const ImVec2 right{tip.x - std::cos(angle + 0.55F) * arrowLength,
+                                       tip.y - std::sin(angle + 0.55F) * arrowLength};
+                    drawList->AddTriangleFilled(tip, left, right, color);
+                }
+            }
+            drawList->AddText({center.x + radius + 8.0F, center.y - radius}, color,
+                              entityName(scene, entity));
+        });
+}
+
 bool drawTranslationGizmo(Engine::ScenePreset &scene, const Engine::Entity selected,
                           const Engine::Renderer &renderer, const ImVec2 min, const ImVec2 max) {
     if (selected == Engine::NullEntity || !scene.editor().valid(selected) ||
@@ -830,6 +882,7 @@ ViewportInteraction drawViewport(Engine::ScenePreset &scene, Engine::Assets::Con
                 default: break;
             }
             drawCameraGizmos(scene, selected, renderer, imageMin, imageMax);
+            drawLightGizmos(scene, selected, renderer, imageMin, imageMax);
         }
         const bool sculptConsumesClick = gizmoAction < 0 && !showGameView && !playing &&
             drawTerrainSculpt(scene, selected, renderer, imageMin, imageMax, terrainSculpt,

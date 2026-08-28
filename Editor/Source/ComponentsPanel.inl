@@ -141,6 +141,48 @@ bool ComponentsPanel::draw(Engine::ScenePreset &scene, const Engine::Entity sele
         ImGui::TextWrapped("Use Sculpt in the Scene View toolbar, then drag the left mouse button over the terrain.");
     }
     if (scene.editor().valid(selected) &&
+        scene.editor().has<Engine::LightComponent>(selected)) {
+        bool remove = false;
+        const bool open = drawRemovableComponentHeader("Light", "light", remove);
+        if (remove) {
+            scene.editor().remove<Engine::LightComponent>(selected);
+        } else if (open) {
+            const auto source = scene.editor().get<Engine::LightComponent>(selected);
+            auto light = source;
+            constexpr const char *typeNames[] = {"Directional", "Point", "Spot"};
+            int type = static_cast<int>(light.type);
+            bool changed = false;
+
+            ImGui::SetNextItemWidth(-1.0F);
+            if (ImGui::BeginCombo("Type##light", typeNames[type])) {
+                for (int index = 0; index < std::size(typeNames); ++index) {
+                    if (ImGui::Selectable(typeNames[index], type == index)) {
+                        type = index;
+                        changed = true;
+                    }
+                }
+                ImGui::EndCombo();
+            }
+            light.type = static_cast<Engine::LightType>(type);
+
+            float color[3] = {light.color.r(), light.color.g(), light.color.b()};
+            if (ImGui::ColorEdit3("Color##light", color, ImGuiColorEditFlags_Float)) {
+                light.color = Engine::Color{color[0], color[1], color[2]}.clamped();
+                changed = true;
+            }
+            changed |= ImGui::DragFloat("Intensity##light", &light.intensity, 0.05F,
+                                        0.0F, 1000.0F, "%.2f");
+            changed |= ImGui::Checkbox("Enabled##light", &light.enabled);
+            changed |= ImGui::Checkbox("Cast Shadows##light", &light.castShadows);
+            light.intensity = std::max(0.0F, light.intensity);
+
+            if (changed) {
+                scene.editor().modify<Engine::LightComponent>(selected,
+                    [&](auto &component) { component = light; });
+            }
+        }
+    }
+    if (scene.editor().valid(selected) &&
         scene.editor().has<Engine::SmokeEmitterComponent>(selected)) {
         bool remove = false;
         const bool open = drawRemovableComponentHeader("Smoke Emitter", "smoke-emitter", remove);
@@ -488,6 +530,7 @@ bool ComponentsPanel::draw(Engine::ScenePreset &scene, const Engine::Entity sele
         const bool hasCollider = scene.editor().has<Engine::ColliderComponent>(selected);
         const bool hasRigidbody = scene.editor().has<Engine::RigidbodyComponent>(selected);
         const bool hasSmokeEmitter = scene.editor().has<Engine::SmokeEmitterComponent>(selected);
+        const bool hasLight = scene.editor().has<Engine::LightComponent>(selected);
         if (ImGui::MenuItem("Script", nullptr, false, !hasScript)) {
             scene.editor().add<Engine::ScriptComponent>(selected);
             ImGui::CloseCurrentPopup();
@@ -513,6 +556,11 @@ bool ComponentsPanel::draw(Engine::ScenePreset &scene, const Engine::Entity sele
             ImGui::CloseCurrentPopup();
         }
         if (hasSmokeEmitter) ImGui::TextDisabled("Smoke Emitter component already added");
+        if (ImGui::MenuItem("Light", nullptr, false, !hasLight)) {
+            scene.editor().add<Engine::LightComponent>(selected);
+            ImGui::CloseCurrentPopup();
+        }
+        if (hasLight) ImGui::TextDisabled("Light component already added");
         ImGui::EndPopup();
     }
     if (EditorButton("Attach C++ Script", {-1.0F, 0.0F}).draw()) ImGui::OpenPopup("Attach C++ Script");
