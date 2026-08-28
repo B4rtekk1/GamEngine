@@ -94,6 +94,7 @@
             if (vkBeginCommandBuffer(commandBuffer, &beginInfo) != VK_SUCCESS) {
                 throw std::runtime_error("Could not begin command buffer");
             }
+            const bool renderSceneViewport = editorUiActive && sceneViewportActive;
             // Culling runs before this frame's depth pass, so it consumes the
             // Hi-Z result from the previous frame. On the first frame there is
             // no previous result, but the descriptor is still bound and the
@@ -150,15 +151,17 @@
             // shadow-map image. It must be transitioned as well, even when
             // shadows are disabled, because the forward fragment shader still
             // samples the shadow binding declared by the shared pipeline.
-            sceneDescriptorPass.record(
-                commandBuffer, lightSpaceMatrix(), vertexBuffer.handle(),
-                shadowInstanceBuffers[currentFrame].handle(), indexBuffer.handle(),
-                sceneDescriptorPass.descriptorSet(currentFrame),
-                shadowCullingPasses[currentFrame],
-                shadowIndirectDraws[currentFrame],
-                optimizationFeatures.shadows
-                    ? static_cast<std::uint32_t>(gpuObjects.size())
-                    : 0u);
+            if (renderSceneViewport) {
+                sceneDescriptorPass.record(
+                    commandBuffer, lightSpaceMatrix(), vertexBuffer.handle(),
+                    shadowInstanceBuffers[currentFrame].handle(), indexBuffer.handle(),
+                    sceneDescriptorPass.descriptorSet(currentFrame),
+                    shadowCullingPasses[currentFrame],
+                    shadowIndirectDraws[currentFrame],
+                    optimizationFeatures.shadows
+                        ? static_cast<std::uint32_t>(gpuObjects.size())
+                        : 0u);
+            }
 
             gpuCullingPasses[currentFrame].record(
                 commandBuffer, static_cast<std::uint32_t>(gpuObjects.size()));
@@ -219,45 +222,42 @@
                                     indirectDraws[currentFrame]);
             ForwardPass::end(commandBuffer);
 
-            // Scene View has a separate frustum and therefore needs its own
-            // indirect list. The game camera's list must not hide objects
-            // which are visible from the editor camera.
-            sceneGpuCullingPasses[currentFrame].record(
-                commandBuffer, static_cast<std::uint32_t>(gpuObjects.size()));
+            if (renderSceneViewport) {
+                // Scene View has a separate frustum and therefore needs its own
+                // indirect list. The game camera's list must not hide objects
+                // which are visible from the editor camera.
+                sceneGpuCullingPasses[currentFrame].record(
+                    commandBuffer, static_cast<std::uint32_t>(gpuObjects.size()));
 
-            // Render the scene into an off-screen image with the very same
-            // scene data and draw infrastructure as Game View. At this stage
-            // the scene camera descriptor is still wired in the following
-            // change; keeping the pass here gives the target a real render
-            // lifecycle immediately instead of merely clearing an image.
-            forwardPass.begin(
-                commandBuffer, sceneViewportFramebuffer, sceneViewportTarget.extent(),
-                sceneDescriptorPass.descriptorSet(currentFrame), vertexBuffer.handle(),
-                instanceBuffers[currentFrame].handle(), indexBuffer.handle());
-            ForwardPass::draw(commandBuffer, sceneIndirectDraws[currentFrame]);
-            sceneSkyPass.record(commandBuffer, currentFrame);
-            if (particleSystem) {
-                Camera sceneCamera{Degrees{60.0F},
-                                   static_cast<float>(sceneViewportTarget.extent().width) /
-                                       static_cast<float>(sceneViewportTarget.extent().height),
-                                   0.1F, 1000.0F};
-                sceneCamera.setPosition(cameraController.editorPosition());
-                sceneCamera.setRotation(Degrees{cameraController.editorYaw()},
-                                        Degrees{cameraController.editorPitch()});
-                const Particles::ParticleFrameData particleFrame{
-                    sceneCamera.projectionMatrix() * sceneCamera.viewMatrix(),
-                    sceneCamera.right(),
-                    0.0F,
-                    sceneCamera.up(),
-                    0.0F,
-                };
-                particleSystem->recordRender(commandBuffer, particleFrame,
-                                             particlePipeline.handle(), particlePipeline.layout(),
-                                              currentFrame, true);
+                forwardPass.begin(
+                    commandBuffer, sceneViewportFramebuffer, sceneViewportTarget.extent(),
+                    sceneDescriptorPass.descriptorSet(currentFrame), vertexBuffer.handle(),
+                    instanceBuffers[currentFrame].handle(), indexBuffer.handle());
+                ForwardPass::draw(commandBuffer, sceneIndirectDraws[currentFrame]);
+                sceneSkyPass.record(commandBuffer, currentFrame);
+                if (particleSystem) {
+                    Camera sceneCamera{Degrees{60.0F},
+                                       static_cast<float>(sceneViewportTarget.extent().width) /
+                                           static_cast<float>(sceneViewportTarget.extent().height),
+                                       0.1F, 1000.0F};
+                    sceneCamera.setPosition(cameraController.editorPosition());
+                    sceneCamera.setRotation(Degrees{cameraController.editorYaw()},
+                                            Degrees{cameraController.editorPitch()});
+                    const Particles::ParticleFrameData particleFrame{
+                        sceneCamera.projectionMatrix() * sceneCamera.viewMatrix(),
+                        sceneCamera.right(),
+                        0.0F,
+                        sceneCamera.up(),
+                        0.0F,
+                    };
+                    particleSystem->recordRender(commandBuffer, particleFrame,
+                                                 particlePipeline.handle(), particlePipeline.layout(),
+                                                 currentFrame, true);
+                }
+                forwardPass.drawOutline(commandBuffer, sceneDescriptorPass.descriptorSet(currentFrame),
+                                        sceneIndirectDraws[currentFrame]);
+                ForwardPass::end(commandBuffer);
             }
-            forwardPass.drawOutline(commandBuffer, sceneDescriptorPass.descriptorSet(currentFrame),
-                                    indirectDraws[currentFrame]);
-            ForwardPass::end(commandBuffer);
 
             if (hizEnabled && !msaa.enabled()) {
                 VkImageMemoryBarrier2 depthReady{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2};
@@ -624,11 +624,15 @@
 
             vkResetCommandBuffer(commandBuffers[currentFrame], 0);
             updateUniformBuffer(currentFrame);
-            updateSceneViewportUniformBuffer(currentFrame);
+            if (sceneViewportActive) {
+                updateSceneViewportUniformBuffer(currentFrame);
+            }
             updateRenderableBuffers();
             updateParticleSystemForFrame();
             updateCullingUniformBuffer(currentFrame);
-            updateSceneCullingUniformBuffer(currentFrame);
+            if (sceneViewportActive) {
+                updateSceneCullingUniformBuffer(currentFrame);
+            }
             if (optimizationFeatures.shadows) {
                 updateShadowCullingUniformBuffer(currentFrame);
             }

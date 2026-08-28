@@ -53,6 +53,9 @@ namespace Engine {
 
         void setEditorSceneCameraInput(bool active) const;
 
+        /** Enables the off-screen Scene View render path for the current editor frame. */
+        void setSceneViewportActive(bool active) const;
+
         /** Updates Scene View navigation before its UI overlays are drawn. */
         void updateEditorSceneCameraInput() const;
 

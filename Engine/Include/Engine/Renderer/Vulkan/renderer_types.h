@@ -20,4 +20,12 @@ namespace Engine {
         std::uint32_t selectedInstance{std::numeric_limits<std::uint32_t>::max()};
         std::uint32_t materialSlotsPadding{};
     };
+
+    /** Per-instance vertex data for the forward pipelines. */
+    struct RendererInstanceData {
+        glm::mat4 model{1.0F};
+        glm::vec4 normalColumn0{1.0F, 0.0F, 0.0F, 0.0F};
+        glm::vec4 normalColumn1{0.0F, 1.0F, 0.0F, 0.0F};
+        glm::vec4 normalColumn2{0.0F, 0.0F, 1.0F, 0.0F};
+    };
 } // namespace Engine

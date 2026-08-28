@@ -42,6 +42,9 @@ void Renderer::processEvent(const void* nativeEvent) const {
 void Renderer::setEditorSceneCameraInput(const bool active) const {
     if (backend_) backend_->setEditorSceneCameraInput(active);
 }
+void Renderer::setSceneViewportActive(const bool active) const {
+    if (backend_) backend_->sceneViewportActive = active;
+}
 void Renderer::updateEditorSceneCameraInput() const {
     if (backend_) backend_->updateEditorSceneCameraInput();
 }

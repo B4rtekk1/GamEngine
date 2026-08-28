@@ -5,6 +5,7 @@
 #include "Engine/Renderer/Culling/CullingTypes.h"
 #include "Engine/Renderer/Materials/MaterialBuffer.h"
 #include "Engine/Renderer/Geometry/Mesh.h"
+#include "Engine/Renderer/Vulkan/renderer_types.h"
 
 #include <array>
 #include <cstdint>
@@ -43,7 +44,7 @@ namespace Engine {
         std::vector<InstanceBatch> instanceBatches;
         std::vector<std::vector<std::size_t> > batchRenderableIndices;
         std::unordered_map<Entity, std::size_t> renderableIndices;
-        std::vector<glm::mat4> instanceModels;
+        std::vector<RendererInstanceData> instanceModels;
         std::vector<glm::mat4> shadowInstanceModels;
         std::vector<GPUMaterialData> materials;
         std::uint32_t materialSlots{1};

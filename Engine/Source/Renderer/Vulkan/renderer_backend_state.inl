@@ -60,7 +60,7 @@
         using InstanceBatch = SceneGpuResources::InstanceBatch;
         std::vector<RenderableRecord>& renderables;
         std::vector<InstanceBatch>& instanceBatches;
-        std::vector<glm::mat4>& instanceModels;
+        std::vector<RendererInstanceData>& instanceModels;
         std::vector<glm::mat4>& shadowInstanceModels;
         std::vector<GPUMaterialData>& materials;
         std::uint32_t& materialSlots;
@@ -119,6 +119,7 @@
         std::uint64_t particleColliderTransformRevision = 0;
         std::uint64_t renderableTopologySignature = 0;
         bool hiZValid = false;
+        bool sceneViewportActive = false;
         Entity editorSelectedEntity = NullEntity;
         std::uint32_t editorSelectedRenderable = std::numeric_limits<std::uint32_t>::max();
 

@@ -2,6 +2,7 @@
 
 #include "Engine/Renderer/Culling/IndexedIndirectDrawCount.h"
 #include "Engine/Renderer/Geometry/Vertex.h"
+#include "Engine/Renderer/Vulkan/renderer_types.h"
 #include <algorithm>
 #include <cstddef>
 
@@ -28,7 +29,7 @@ void ForwardPass::create(VkDevice device, const VkFormat colorFormat,
     options.descriptorSetLayouts = {sceneLayout};
     options.vertexBindings = {
         {0, sizeof(Vertex), VK_VERTEX_INPUT_RATE_VERTEX},
-        {1, sizeof(glm::mat4), VK_VERTEX_INPUT_RATE_INSTANCE},
+        {1, sizeof(RendererInstanceData), VK_VERTEX_INPUT_RATE_INSTANCE},
     };
     options.vertexAttributes = {
         {0, 0, VK_FORMAT_R32G32B32_SFLOAT, offsetof(Vertex, position)},
@@ -41,6 +42,9 @@ void ForwardPass::create(VkDevice device, const VkFormat colorFormat,
         {7, 1, VK_FORMAT_R32G32B32A32_SFLOAT, sizeof(glm::vec4) * 3},
         {8, 0, VK_FORMAT_R32_UINT, offsetof(Vertex, materialIndex)},
         {9, 0, VK_FORMAT_R32G32B32A32_SFLOAT, offsetof(Vertex, tangent)},
+        {10, 1, VK_FORMAT_R32G32B32_SFLOAT, offsetof(RendererInstanceData, normalColumn0)},
+        {11, 1, VK_FORMAT_R32G32B32_SFLOAT, offsetof(RendererInstanceData, normalColumn1)},
+        {12, 1, VK_FORMAT_R32G32B32_SFLOAT, offsetof(RendererInstanceData, normalColumn2)},
     };
     pipeline_.create(device, options);
 

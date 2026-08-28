@@ -311,11 +311,12 @@
             updateRenderableBuffers();
             for (Buffer& buffer : instanceBuffers) {
                 buffer.createHostVisible(vulkanDevice.physical(), device,
-                    sizeof(glm::mat4) * std::max<std::size_t>(1, instanceModels.size()),
+                    sizeof(RendererInstanceData) * std::max<std::size_t>(1, instanceModels.size()),
                     VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
                     vulkanDevice.allocator());
                 if (!instanceModels.empty()) {
-                    buffer.update(instanceModels.data(), sizeof(glm::mat4) * instanceModels.size());
+                    buffer.update(instanceModels.data(),
+                                  sizeof(RendererInstanceData) * instanceModels.size());
                 }
             }
             for (Buffer& buffer : shadowInstanceBuffers) {
@@ -418,7 +419,7 @@
 }
 
             const uint8_t bit = frameBit(currentFrame);
-            uploadDirtyIndices(DirtyIndexUploadRequest<glm::mat4>{
+            uploadDirtyIndices(DirtyIndexUploadRequest<RendererInstanceData>{
                 instanceBuffers[currentFrame], instanceModels,
                 &RenderableRecord::transformDirtyFrames, dirtyTransforms[currentFrame]});
             uploadDirtyIndices(DirtyIndexUploadRequest<glm::mat4>{
@@ -487,7 +488,11 @@
                     !record.hasCachedTransform || !sameTransform(record.cachedTransform, transform)) {
                     const glm::mat4 model = transform.matrix().native();
                     shadowInstanceModels[index] = model;
-                    instanceModels[index] = model;
+                    instanceModels[index].model = model;
+                    const glm::mat3 normalMatrix = glm::transpose(glm::inverse(glm::mat3{model}));
+                    instanceModels[index].normalColumn0 = glm::vec4{normalMatrix[0], 0.0F};
+                    instanceModels[index].normalColumn1 = glm::vec4{normalMatrix[1], 0.0F};
+                    instanceModels[index].normalColumn2 = glm::vec4{normalMatrix[2], 0.0F};
                     record.cachedTransform = transform;
                     record.hasCachedTransform = true;
                     markDirty(index, &RenderableRecord::transformDirtyFrames, dirtyTransforms);

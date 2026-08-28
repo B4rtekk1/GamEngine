@@ -371,6 +371,7 @@ int main() {
             }
             renderer.setEditorSceneCameraInput(
                 viewportInteraction.cameraInput && !inspectorConsumesMouseWheel);
+            renderer.setSceneViewportActive(showViewport && !showGameView && !playing);
             ImGui::Render();
 
             if (antialiasingChanged) {

@@ -7,6 +7,9 @@ layout(location = 3) in vec3 inNormal;
 layout(location = 4) in mat4 instanceModel;
 layout(location = 8) in uint inMaterialIndex;
 layout(location = 9) in vec4 inTangent;
+layout(location = 10) in vec3 inNormalColumn0;
+layout(location = 11) in vec3 inNormalColumn1;
+layout(location = 12) in vec3 inNormalColumn2;
 
 layout(location = 0) out vec3 fragColor;
 layout(location = 1) out vec4 fragLightSpacePosition;
@@ -32,13 +35,14 @@ layout(binding = 1) uniform FrameData {
 
 void main() {
     vec4 worldPosition = instanceModel * vec4(inPosition, 1.0);
+    mat3 normalMatrix = mat3(inNormalColumn0, inNormalColumn1, inNormalColumn2);
     gl_Position = frame.projection * frame.view * worldPosition;
     fragColor = inColor;
     fragWorldPosition = worldPosition.xyz;
-    fragNormal = mat3(transpose(inverse(instanceModel))) * inNormal;
+    fragNormal = normalMatrix * inNormal;
     fragLightSpacePosition = frame.lightSpace * worldPosition;
     fragMaterialIndex = gl_InstanceIndex * frame.materialSlots + inMaterialIndex;
     fragTexCoord = inTexCoord;
-    fragTangent = vec4(mat3(transpose(inverse(instanceModel))) * inTangent.xyz, inTangent.w);
+    fragTangent = vec4(normalMatrix * inTangent.xyz, inTangent.w);
     fragInstanceIndex = gl_InstanceIndex;
 }
