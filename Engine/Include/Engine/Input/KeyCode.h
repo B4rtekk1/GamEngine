@@ -8,14 +8,13 @@
 #include <cstdint>
 
 namespace Engine {
-
     /**
      * @brief Identifies a keyboard key supported by the input system.
      *
      * The values are engine-level identifiers and are independent of the
      * platform-specific key codes reported by the windowing backend.
      */
-    enum class KeyCode : std::uint16_t {
+    enum class KeyCode : std::uint8_t {
         /// Invalid or unsupported key.
         Unknown = 0,
 
@@ -54,7 +53,6 @@ namespace Engine {
         Right,
 
         /// Number of defined key identifiers.
-        Count
+        Count,
     };
-
 }

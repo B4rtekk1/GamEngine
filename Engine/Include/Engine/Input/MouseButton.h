@@ -8,7 +8,6 @@
 #include <cstdint>
 
 namespace Engine {
-
     /**
      * @brief Identifies a mouse button supported by the input system.
      *
@@ -28,7 +27,6 @@ namespace Engine {
         X2,
 
         /// Number of defined mouse button identifiers.
-        Count
+        Count,
     };
-
 }
