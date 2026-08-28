@@ -10,7 +10,6 @@
 #include <set>
 #include <string>
 #include <string_view>
-#include <memory>
 #include <vector>
 
 namespace {
@@ -90,47 +89,6 @@ std::vector<AssetEntry> scan_assets(const std::filesystem::path& root) {
     return result;
 }
 
-void draw_preview(const Engine::Mesh& mesh, const ImVec2 size) {
-    const ImVec2 origin = ImGui::GetCursorScreenPos();
-    ImGui::InvisibleButton("##model-preview", size);
-    const ImVec2 center{origin.x + size.x * 0.5F, origin.y + size.y * 0.52F};
-    auto* drawList = ImGui::GetWindowDrawList();
-    drawList->AddRectFilled(origin, {origin.x + size.x, origin.y + size.y},
-                            ImGui::GetColorU32(ImVec4{0.055F, 0.065F, 0.085F, 1.0F}), 5.0F);
-    drawList->AddRect(origin, {origin.x + size.x, origin.y + size.y},
-                      ImGui::GetColorU32(ImVec4{0.25F, 0.32F, 0.42F, 1.0F}), 5.0F);
-    if (mesh.vertices.empty()) return;
-
-    Engine::Vec3 minimum = mesh.vertices.front().position;
-    Engine::Vec3 maximum = minimum;
-    for (const auto& vertex : mesh.vertices) {
-        minimum = {std::min(minimum.x(), vertex.position.x()), std::min(minimum.y(), vertex.position.y()),
-                   std::min(minimum.z(), vertex.position.z())};
-        maximum = {std::max(maximum.x(), vertex.position.x()), std::max(maximum.y(), vertex.position.y()),
-                   std::max(maximum.z(), vertex.position.z())};
-    }
-    const Engine::Vec3 extent = maximum - minimum;
-    const float scale = 0.72F * std::min(size.x, size.y) /
-                        std::max({extent.x(), extent.y(), extent.z(), 0.001F});
-    const Engine::Vec3 midpoint = (minimum + maximum) * 0.5F;
-    const auto project = [&](const Engine::Vec3& point) {
-        const Engine::Vec3 value = point - midpoint;
-        return ImVec2{center.x + (value.x() - value.z() * 0.35F) * scale,
-                      center.y - (value.y() + value.z() * 0.18F) * scale};
-    };
-    const ImU32 lineColor = ImGui::GetColorU32(ImVec4{0.45F, 0.75F, 0.98F, 0.85F});
-    const std::size_t edgeCount = std::min<std::size_t>(mesh.indices.size() / 3, 700);
-    for (std::size_t triangle = 0; triangle < edgeCount; ++triangle) {
-        const auto base = triangle * 3;
-        const auto& a = project(mesh.vertices[mesh.indices[base]].position);
-        const auto& b = project(mesh.vertices[mesh.indices[base + 1]].position);
-        const auto& c = project(mesh.vertices[mesh.indices[base + 2]].position);
-        drawList->AddLine(a, b, lineColor, 1.0F);
-        drawList->AddLine(b, c, lineColor, 1.0F);
-        drawList->AddLine(c, a, lineColor, 1.0F);
-    }
-}
-
 void draw_folder_tree(const std::filesystem::path& folder,
                       const std::vector<AssetEntry>& assets,
                       std::filesystem::path& selectedFolder,
@@ -184,7 +142,6 @@ Engine::Entity AssetManagerPanel::draw(Engine::ScenePreset& scene,
     static std::vector<AssetEntry> assets;
     static std::filesystem::path scannedRoot;
     static std::string error;
-    static std::shared_ptr<const Engine::Mesh> previewMesh;
     Engine::Entity created = Engine::NullEntity;
 
     // Store paths relative to the content root. This is important: Content
@@ -196,7 +153,6 @@ Engine::Entity AssetManagerPanel::draw(Engine::ScenePreset& scene,
         assets = scan_assets(root);
         selected.clear();
         selectedFolder.clear();
-        previewMesh.reset();
     }
 
     ImGui::Begin("Asset Manager");
@@ -214,7 +170,6 @@ Engine::Entity AssetManagerPanel::draw(Engine::ScenePreset& scene,
             })) {
             selected.clear();
             selectedFolder.clear();
-            previewMesh.reset();
         }
     }
     ImGui::SameLine();
@@ -225,13 +180,11 @@ Engine::Entity AssetManagerPanel::draw(Engine::ScenePreset& scene,
     if (ImGui::Selectable("Assets", selectedFolder.empty())) {
         selectedFolder.clear();
         selected.clear();
-        previewMesh.reset();
         error.clear();
     }
     draw_folder_tree({}, assets, selectedFolder, selected);
     if (selectedFolder != folderBeforeTree) {
         selected.clear();
-        previewMesh.reset();
         error.clear();
     }
     ImGui::EndChild();
@@ -249,7 +202,6 @@ Engine::Entity AssetManagerPanel::draw(Engine::ScenePreset& scene,
             const ImVec2 cardSize{ImGui::GetContentRegionAvail().x - 4.0F, 78.0F};
             if (ImGui::Selectable("##asset-card", isSelected, 0, cardSize)) {
                 selected = asset.relative;
-                previewMesh.reset();
                 error.clear();
             }
             const ImVec2 cardMin = ImGui::GetItemRectMin();
@@ -274,20 +226,10 @@ Engine::Entity AssetManagerPanel::draw(Engine::ScenePreset& scene,
     if (!selected.empty()) {
         const auto selectedAbsolute = root / selected;
         ImGui::Separator();
-        ImGui::TextUnformatted("Preview");
+        ImGui::TextUnformatted("Selected asset");
         ImGui::SameLine();
         ImGui::TextDisabled("%s", selected.generic_string().c_str());
         if (is_model(selected)) {
-            if (!previewMesh) {
-                previewMesh = content.mesh(selected);
-                if (!previewMesh) error = "Nie mozna zaladowac modelu lub jego zaleznosci.";
-            }
-            if (previewMesh) {
-                draw_preview(*previewMesh, {ImGui::GetContentRegionAvail().x, 104.0F});
-            }
-            ImGui::TextDisabled("%zu vertices · %zu triangles · %zu materials", previewMesh ? previewMesh->vertices.size() : 0,
-                                previewMesh ? previewMesh->indices.size() / 3 : 0,
-                                previewMesh ? previewMesh->materials.size() : 0);
             const auto dependencies = gltf_dependencies(selectedAbsolute);
             ImGui::TextDisabled("Dependencies: %zu", dependencies.size());
             for (const auto& dependency : dependencies) {
@@ -298,9 +240,10 @@ Engine::Entity AssetManagerPanel::draw(Engine::ScenePreset& scene,
                                  "%s %s", exists ? "OK" : "!", dependency.generic_string().c_str());
             }
             ImGui::BeginDisabled(disabled || !error.empty());
-            if (ImGui::Button("Add to Scene", {-1.0F, 0.0F})) {
+            if (ImGui::Button("Add Prefab to Scene", {-1.0F, 0.0F})) {
                 try {
-                    const auto actor = scene.createModel(selected.stem().string(), selected, content);
+                    const auto prefab = Engine::Prefab::model(content, selected);
+                    const auto actor = scene.createPrefab(selected.stem().string(), prefab);
                     scene.editor().view<Engine::NameComponent>([&](const Engine::Entity entity,
                                                                     const Engine::NameComponent& name) {
                         if (name.value == actor.name()) created = entity;
