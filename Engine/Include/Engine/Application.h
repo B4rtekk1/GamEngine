@@ -16,18 +16,18 @@ class Game {
 public:
     virtual ~Game() = default;
 
-    virtual void onStart(Scene&) {}
-    virtual void onUpdate(Scene&, float) {}
-    virtual void onFixedUpdate(Scene&, float) {}
-    virtual void onShutdown(Scene&) {}
+    virtual void onStart(Scene& scene) {}
+    virtual void onUpdate(Scene& scene, float deltaTime) {}
+    virtual void onFixedUpdate(Scene& scene, float deltaTime) {}
+    virtual void onShutdown(Scene& scene) {}
 };
 
 struct ApplicationConfig final {
     std::string title = "GamEngine Application";
-    std::int32_t width = 1280;
-    std::int32_t height = 720;
+    std::int32_t width = 1280; //NOLINT
+    std::int32_t height = 720; //NOLINT
     bool closeOnEscape = true;
-    float fixedDeltaTime = 1.0F / 60.0F;
+    float fixedDeltaTime = 1.0F / 60.0F; //NOLINT
     std::filesystem::path assetRoot{};
     RenderConfig render{};
 };
