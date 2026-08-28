@@ -2,6 +2,10 @@
 
 #include "Engine/Scene/ScenePresets.h"
 #include "Engine/Scene/SceneSerializer.h"
+#include "Engine/ECS/Components/ColliderComponent.h"
+#include "Engine/ECS/Components/MeshRendererComponent.h"
+#include "Engine/ECS/Components/TerrainComponent.h"
+#include "Engine/Scene/Components/IdentityComponents.h"
 
 #include <optional>
 #include <cstdint>
@@ -9,6 +13,7 @@
 #include <string>
 #include <utility>
 #include <vector>
+#include <variant>
 
 namespace Editor {
 
@@ -33,8 +38,40 @@ public:
         const std::string current = serializeScene(scene);
         observedRevision_ = revision;
         if (current == baseline_) return false;
-        undo_.push_back(std::move(baseline_));
+        undo_.emplace_back(std::move(baseline_));
         baseline_ = current;
+        redo_.clear();
+        return true;
+    }
+
+    [[nodiscard]] bool captureTerrainStroke(const Engine::ScenePreset& scene,
+                                            const Engine::Entity entity,
+                                            const std::vector<float>& before,
+                                            const Engine::TerrainRegion& region) {
+        if (!region.valid || !scene.editor().valid(entity) ||
+            !scene.editor().has<Engine::TerrainComponent>(entity) ||
+            !scene.editor().has<Engine::UUIDComponent>(entity)) return false;
+        const auto& terrain = scene.editor().get<Engine::TerrainComponent>(entity);
+        if (before.size() != terrain.heights.size()) return false;
+        TerrainEdit edit;
+        edit.entity = scene.editor().get<Engine::UUIDComponent>(entity).value;
+        edit.resolution = terrain.resolution;
+        edit.region = region;
+        const std::size_t width = region.maximumX - region.minimumX + 1;
+        const std::size_t height = region.maximumZ - region.minimumZ + 1;
+        edit.before.reserve(width * height);
+        edit.after.reserve(width * height);
+        for (std::uint32_t z = region.minimumZ; z <= region.maximumZ; ++z) {
+            for (std::uint32_t x = region.minimumX; x <= region.maximumX; ++x) {
+                const std::size_t index = static_cast<std::size_t>(z) * terrain.resolution + x;
+                edit.before.push_back(before[index]);
+                edit.after.push_back(terrain.heights[index]);
+            }
+        }
+        if (edit.before == edit.after) return false;
+        undo_.emplace_back(std::move(edit));
+        baseline_ = serializeScene(scene);
+        observedRevision_ = scene.editor().mutationRevision();
         redo_.clear();
         return true;
     }
@@ -42,25 +79,71 @@ public:
     [[nodiscard]] bool canUndo() const noexcept { return !undo_.empty(); }
     [[nodiscard]] bool canRedo() const noexcept { return !redo_.empty(); }
 
-    bool undo(Engine::ScenePreset &scene) { return restore(scene, undo_, redo_); }
-    bool redo(Engine::ScenePreset &scene) { return restore(scene, redo_, undo_); }
+    bool undo(Engine::ScenePreset &scene) { return restore(scene, undo_, redo_, false); }
+    bool redo(Engine::ScenePreset &scene) { return restore(scene, redo_, undo_, true); }
 
 private:
-    bool restore(Engine::ScenePreset &scene, std::vector<std::string> &from,
-                 std::vector<std::string> &to) {
+    struct TerrainEdit final {
+        Engine::UUID entity;
+        std::uint32_t resolution{};
+        Engine::TerrainRegion region{};
+        std::vector<float> before;
+        std::vector<float> after;
+    };
+    using Entry = std::variant<std::string, TerrainEdit>;
+
+    bool restore(Engine::ScenePreset &scene, std::vector<Entry> &from,
+                 std::vector<Entry> &to, const bool forward) {
         if (from.empty()) return false;
-        to.push_back(std::move(baseline_));
-        baseline_ = std::move(from.back());
+        Entry entry = std::move(from.back());
         from.pop_back();
-        std::istringstream input{baseline_};
-        Engine::SceneSerializer::load(scene, input);
+        if (auto* snapshot = std::get_if<std::string>(&entry)) {
+            to.emplace_back(std::move(baseline_));
+            baseline_ = std::move(*snapshot);
+            std::istringstream input{baseline_};
+            Engine::SceneSerializer::load(scene, input);
+        } else {
+            const TerrainEdit& edit = std::get<TerrainEdit>(entry);
+            Engine::Entity found = Engine::NullEntity;
+            scene.editor().view<>([&](const Engine::Entity candidate) {
+                if (found == Engine::NullEntity && scene.editor().has<Engine::UUIDComponent>(candidate) &&
+                    scene.editor().get<Engine::UUIDComponent>(candidate).value == edit.entity) found = candidate;
+            });
+            if (found == Engine::NullEntity || !scene.editor().has<Engine::TerrainComponent>(found)) {
+                from.push_back(std::move(entry));
+                return false;
+            }
+            const std::vector<float>& values = forward ? edit.after : edit.before;
+            scene.editor().modify<Engine::TerrainComponent>(found, [&](auto& terrain) {
+                if (terrain.resolution != edit.resolution) return;
+                std::size_t source = 0;
+                for (std::uint32_t z = edit.region.minimumZ; z <= edit.region.maximumZ; ++z) {
+                    for (std::uint32_t x = edit.region.minimumX; x <= edit.region.maximumX; ++x) {
+                        terrain.heights[static_cast<std::size_t>(z) * terrain.resolution + x] = values[source++];
+                    }
+                }
+            });
+            const auto& terrain = scene.editor().get<Engine::TerrainComponent>(found);
+            auto mesh = std::make_shared<Engine::Mesh>(terrain.createMesh());
+            if (scene.editor().has<Engine::MeshRendererComponent>(found)) {
+                scene.editor().modify<Engine::MeshRendererComponent>(found,
+                    [&](auto& renderer) { renderer.mesh = mesh; });
+            }
+            if (scene.editor().has<Engine::ColliderComponent>(found)) {
+                scene.editor().modify<Engine::ColliderComponent>(found, [&](auto& collider) {
+                    if (auto* shape = std::get_if<Engine::MeshCollider>(&collider.shape)) shape->mesh = mesh;
+                });
+            }
+            to.push_back(std::move(entry));
+            baseline_ = serializeScene(scene);
+        }
         observedRevision_ = scene.editor().mutationRevision();
         return true;
     }
 
     std::string baseline_;
-    std::vector<std::string> undo_;
-    std::vector<std::string> redo_;
+    std::vector<Entry> undo_;
+    std::vector<Entry> redo_;
     std::uint64_t observedRevision_{};
 };
 

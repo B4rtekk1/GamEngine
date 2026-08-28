@@ -385,7 +385,17 @@ int main() {
                 // and selected in the Scene View immediately.
                 renderer.setEditorSelection(selectedEntity);
             } else if (viewportInteraction.terrainGeometryChanged) {
-                renderer.updateMeshGeometry(selectedEntity);
+                renderer.updateMeshGeometry(selectedEntity, viewportInteraction.terrainFirstVertex,
+                                            viewportInteraction.terrainVertexCount);
+            }
+            if (terrainSculpt.strokeCompleted) {
+                static_cast<void>(history.captureTerrainStroke(
+                    scene, terrainSculpt.completedEntity, terrainSculpt.heightsBeforeStroke,
+                    terrainSculpt.completedDirty));
+                terrainSculpt.strokeCompleted = false;
+                terrainSculpt.completedEntity = Engine::NullEntity;
+                terrainSculpt.completedDirty = {};
+                terrainSculpt.heightsBeforeStroke.clear();
             }
             // A history snapshot serializes the complete scene, including
             // decoded GLB image pixels. Capture only after an actual mutation

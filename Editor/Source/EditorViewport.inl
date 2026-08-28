@@ -67,6 +67,8 @@ struct ViewportInteraction final {
     bool cameraInput{};
     bool sceneClicked{};
     bool terrainGeometryChanged{};
+    std::uint32_t terrainFirstVertex{};
+    std::uint32_t terrainVertexCount{std::numeric_limits<std::uint32_t>::max()};
     Engine::Entity createdEntity{Engine::NullEntity};
     float normalizedX{};
     float normalizedY{};
@@ -639,65 +641,103 @@ Engine::Vec3 terrainWorldPoint(const Engine::Transform& transform,
     return Engine::Vec3{glm::vec3{world}};
 }
 
-std::optional<Engine::Vec3> raycastTerrain(const Engine::Mesh& mesh,
+std::optional<Engine::Vec3> raycastTerrain(const Engine::TerrainComponent& terrain,
                                            const Engine::Transform& transform,
                                            const Engine::Vec3& origin,
                                            const Engine::Vec3& direction) {
-    float nearest = EditorConstants::cameraFarPlane;
-    std::optional<Engine::Vec3> point;
-    for (std::size_t index = 0; index + 2 < mesh.indices.size(); index += 3) {
-        const Engine::Vec3 a = terrainWorldPoint(transform, mesh.vertices[mesh.indices[index]].position);
-        const Engine::Vec3 b = terrainWorldPoint(transform, mesh.vertices[mesh.indices[index + 1]].position);
-        const Engine::Vec3 c = terrainWorldPoint(transform, mesh.vertices[mesh.indices[index + 2]].position);
-        const Engine::Vec3 edgeAB = b - a;
-        const Engine::Vec3 edgeAC = c - a;
-        const Engine::Vec3 p = Engine::cross(direction, edgeAC);
-        const float determinant = dotProduct(edgeAB, p);
-        if (std::abs(determinant) <= EditorConstants::epsilon) continue;
-        const float inverseDeterminant = 1.0F / determinant;
-        const Engine::Vec3 fromA = origin - a;
-        const float u = dotProduct(fromA, p) * inverseDeterminant;
-        if (u < 0.0F || u > 1.0F) continue;
-        const Engine::Vec3 q = Engine::cross(fromA, edgeAB);
-        const float v = dotProduct(direction, q) * inverseDeterminant;
-        if (v < 0.0F || u + v > 1.0F) continue;
-        const float distance = dotProduct(edgeAC, q) * inverseDeterminant;
-        if (distance < 0.0F || distance >= nearest) continue;
-        nearest = distance;
-        point = origin + direction * distance;
+    const glm::mat4 inverse = glm::inverse(transform.matrix().native());
+    const Engine::Vec3 localOrigin{glm::vec3{inverse * glm::vec4{origin.native(), 1.0F}}};
+    const Engine::Vec3 localDirection{glm::vec3{inverse * glm::vec4{direction.native(), 0.0F}}};
+    float entry = 0.0F;
+    float exit = EditorConstants::cameraFarPlane;
+    const auto clipAxis = [&](const float rayOrigin, const float rayDirection,
+                              const float minimum, const float maximum) {
+        if (std::abs(rayDirection) <= EditorConstants::epsilon) {
+            return rayOrigin >= minimum && rayOrigin <= maximum;
+        }
+        float near = (minimum - rayOrigin) / rayDirection;
+        float far = (maximum - rayOrigin) / rayDirection;
+        if (near > far) std::swap(near, far);
+        entry = std::max(entry, near);
+        exit = std::min(exit, far);
+        return entry <= exit;
+    };
+    if (!clipAxis(localOrigin.x(), localDirection.x(), -terrain.width * 0.5F, terrain.width * 0.5F) ||
+        !clipAxis(localOrigin.z(), localDirection.z(), -terrain.depth * 0.5F, terrain.depth * 0.5F) ||
+        !clipAxis(localOrigin.y(), localDirection.y(), terrain.minimumHeight, terrain.maximumHeight)) {
+        return std::nullopt;
     }
-    return point;
+    const float horizontalSpeed = std::hypot(localDirection.x(), localDirection.z());
+    const float sampleSpacing = std::min(terrain.width, terrain.depth) /
+                                static_cast<float>(terrain.resolution - 1);
+    const float step = horizontalSpeed > EditorConstants::epsilon
+                           ? std::max(sampleSpacing * 0.35F / horizontalSpeed, 1.0e-4F)
+                           : std::max((exit - entry) / 256.0F, 1.0e-4F);
+    const auto signedHeight = [&](const float distance) {
+        const Engine::Vec3 point = localOrigin + localDirection * distance;
+        return point.y() - terrain.sampleHeight(point.x(), point.z());
+    };
+    float previousDistance = entry;
+    float previousHeight = signedHeight(entry);
+    for (float distance = std::min(entry + step, exit); distance <= exit; distance = std::min(distance + step, exit)) {
+        const float currentHeight = signedHeight(distance);
+        if (previousHeight >= 0.0F && currentHeight <= 0.0F) {
+            float low = previousDistance;
+            float high = distance;
+            for (int iteration = 0; iteration < 10; ++iteration) {
+                const float middle = (low + high) * 0.5F;
+                if (signedHeight(middle) > 0.0F) low = middle;
+                else high = middle;
+            }
+            return terrainWorldPoint(transform, localOrigin + localDirection * ((low + high) * 0.5F));
+        }
+        if (distance >= exit) break;
+        previousDistance = distance;
+        previousHeight = currentHeight;
+    }
+    return std::nullopt;
 }
 
 bool applyTerrainBrush(Engine::ScenePreset& scene, const Engine::Entity entity,
-                       const Engine::Vec3& localPoint, TerrainSculptState& state) {
-    auto terrain = scene.editor().get<Engine::TerrainComponent>(entity);
-    const float deltaTime = std::clamp(static_cast<float>(Engine::Time::deltaTime()),
-                                       1.0F / 240.0F, 1.0F / 20.0F);
-    if (!terrain.sculpt(localPoint.x(), localPoint.z(), state.radius,
-                        state.strength * deltaTime, state.mode, state.flattenHeight)) {
-        return false;
-    }
+                       const Engine::Vec3& localPoint, const float amount,
+                       TerrainSculptState& state, Engine::TerrainRegion& dirty) {
+    bool changed = false;
+    scene.editor().modify<Engine::TerrainComponent>(entity, [&](auto& terrain) {
+        changed = terrain.sculpt(localPoint.x(), localPoint.z(), state.radius, amount,
+                                 state.mode, state.flattenHeight, state.falloff, &dirty);
+        if (changed && state.workingMesh) terrain.updateMeshRegion(*state.workingMesh, dirty);
+    });
+    return changed;
+}
 
-    auto mesh = std::make_shared<Engine::Mesh>(terrain.createMesh());
-    scene.editor().modify<Engine::TerrainComponent>(entity,
-        [&](auto& component) { component = std::move(terrain); });
-    scene.editor().modify<Engine::MeshRenderer>(entity,
-        [&](auto& renderer) { renderer.mesh = mesh; });
-    if (scene.editor().has<Engine::ColliderComponent>(entity)) {
-        scene.editor().modify<Engine::ColliderComponent>(entity, [&](auto& collider) {
+void finishTerrainStroke(Engine::ScenePreset& scene, TerrainSculptState& state) {
+    if (state.strokeEntity != Engine::NullEntity && state.workingMesh &&
+        scene.editor().valid(state.strokeEntity) &&
+        scene.editor().has<Engine::ColliderComponent>(state.strokeEntity)) {
+        scene.editor().modify<Engine::ColliderComponent>(state.strokeEntity, [&](auto& collider) {
             if (auto* meshCollider = std::get_if<Engine::MeshCollider>(&collider.shape)) {
-                meshCollider->mesh = mesh;
+                meshCollider->mesh = state.workingMesh;
             }
         });
     }
-    return true;
+    if (state.strokeDirty.valid) {
+        state.strokeCompleted = true;
+        state.completedEntity = state.strokeEntity;
+        state.completedDirty = state.strokeDirty;
+    } else {
+        state.heightsBeforeStroke.clear();
+    }
+    state.strokeActive = false;
+    state.strokeEntity = Engine::NullEntity;
+    state.hasPreviousPoint = false;
+    state.workingMesh.reset();
+    state.strokeDirty = {};
 }
 
 bool drawTerrainSculpt(Engine::ScenePreset& scene, const Engine::Entity selected,
                        const Engine::Renderer& renderer,
                        const ImVec2 min, const ImVec2 max, TerrainSculptState& state,
-                       const bool imageHovered, bool& geometryChanged) {
+                       const bool imageHovered, ViewportInteraction& interaction) {
     if (!state.enabled || selected == Engine::NullEntity || !scene.editor().valid(selected) ||
         !scene.editor().has<Engine::TerrainComponent>(selected) ||
         !scene.editor().has<Engine::MeshRenderer>(selected) ||
@@ -715,7 +755,7 @@ bool drawTerrainSculpt(Engine::ScenePreset& scene, const Engine::Entity selected
     const auto& terrain = scene.editor().get<Engine::TerrainComponent>(selected);
     const auto& rendererComponent = scene.editor().get<Engine::MeshRenderer>(selected);
     const auto hit = hovered && rendererComponent.hasMesh()
-                         ? raycastTerrain(*rendererComponent.mesh, transform, camera.position(), rayDirection)
+                         ? raycastTerrain(terrain, transform, camera.position(), rayDirection)
                              : std::nullopt;
     const bool hitsSelected = hit.has_value();
     Engine::Vec3 localHit{};
@@ -745,15 +785,69 @@ bool drawTerrainSculpt(Engine::ScenePreset& scene, const Engine::Entity selected
         state.strokeActive = true;
         state.strokeEntity = selected;
         state.flattenHeight = localHit.y();
+        state.hasPreviousPoint = false;
+        state.workingMesh = std::make_shared<Engine::Mesh>(*rendererComponent.mesh);
+        state.heightsBeforeStroke = terrain.heights;
+        state.strokeDirty = {};
+        scene.editor().modify<Engine::MeshRenderer>(selected, [&](auto& component) {
+            component.mesh = state.workingMesh;
+        });
     }
     if (state.strokeActive && state.strokeEntity == selected &&
         ImGui::IsMouseDown(ImGuiMouseButton_Left) && hitsSelected) {
-        geometryChanged |= applyTerrainBrush(scene, selected, localHit, state);
+        const ImGuiIO& io = ImGui::GetIO();
+        if (io.KeyCtrl) state.flattenHeight = localHit.y();
+        Engine::TerrainSculptMode strokeMode = state.mode;
+        if (io.KeyShift && strokeMode == Engine::TerrainSculptMode::Raise) strokeMode = Engine::TerrainSculptMode::Lower;
+        else if (io.KeyShift && strokeMode == Engine::TerrainSculptMode::Lower) strokeMode = Engine::TerrainSculptMode::Raise;
+        const Engine::TerrainSculptMode configuredMode = state.mode;
+        state.mode = strokeMode;
+        const float deltaTime = std::clamp(static_cast<float>(Engine::Time::deltaTime()),
+                                           1.0F / 240.0F, 1.0F / 20.0F);
+        const float distance = state.hasPreviousPoint ? (localHit - state.previousPoint).length() : 0.0F;
+        const float interval = std::max(state.radius * state.spacing, 0.01F);
+        const int sampleCount = state.hasPreviousPoint
+                                    ? std::max(1, static_cast<int>(std::ceil(distance / interval))) : 1;
+        for (int sample = 1; sample <= sampleCount; ++sample) {
+            const float t = static_cast<float>(sample) / static_cast<float>(sampleCount);
+            const Engine::Vec3 point = state.hasPreviousPoint
+                                           ? state.previousPoint + (localHit - state.previousPoint) * t : localHit;
+            Engine::TerrainRegion dirty;
+            if (!applyTerrainBrush(scene, selected, point, state.strength * deltaTime /
+                                   static_cast<float>(sampleCount), state, dirty)) continue;
+            if (!state.strokeDirty.valid) state.strokeDirty = dirty;
+            else {
+                state.strokeDirty.minimumX = std::min(state.strokeDirty.minimumX, dirty.minimumX);
+                state.strokeDirty.minimumZ = std::min(state.strokeDirty.minimumZ, dirty.minimumZ);
+                state.strokeDirty.maximumX = std::max(state.strokeDirty.maximumX, dirty.maximumX);
+                state.strokeDirty.maximumZ = std::max(state.strokeDirty.maximumZ, dirty.maximumZ);
+            }
+            interaction.terrainGeometryChanged = true;
+            const auto& changedTerrain = scene.editor().get<Engine::TerrainComponent>(selected);
+            const std::uint32_t minX = dirty.minimumX == 0 ? 0 : dirty.minimumX - 1;
+            const std::uint32_t minZ = dirty.minimumZ == 0 ? 0 : dirty.minimumZ - 1;
+            const std::uint32_t maxX = std::min(dirty.maximumX + 1, changedTerrain.resolution - 1);
+            const std::uint32_t maxZ = std::min(dirty.maximumZ + 1, changedTerrain.resolution - 1);
+            const std::uint32_t first = minZ * changedTerrain.resolution + minX;
+            const std::uint32_t last = maxZ * changedTerrain.resolution + maxX;
+            if (interaction.terrainVertexCount == std::numeric_limits<std::uint32_t>::max()) {
+                interaction.terrainFirstVertex = first;
+                interaction.terrainVertexCount = last - first + 1;
+            } else {
+                const std::uint32_t combinedFirst = std::min(interaction.terrainFirstVertex, first);
+                const std::uint32_t combinedLast = std::max(
+                    interaction.terrainFirstVertex + interaction.terrainVertexCount - 1, last);
+                interaction.terrainFirstVertex = combinedFirst;
+                interaction.terrainVertexCount = combinedLast - combinedFirst + 1;
+            }
+        }
+        state.mode = configuredMode;
+        state.previousPoint = localHit;
+        state.hasPreviousPoint = true;
         ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
     }
     if (!ImGui::IsMouseDown(ImGuiMouseButton_Left)) {
-        state.strokeActive = false;
-        state.strokeEntity = Engine::NullEntity;
+        finishTerrainStroke(scene, state);
     }
     return true;
 }
@@ -780,6 +874,12 @@ ViewportInteraction drawViewport(Engine::ScenePreset &scene, Engine::Assets::Con
             ImGui::SameLine(0.0F, 4.0F);
             if (drawToolbarToggle(" Sculpt ", terrainSculpt.enabled)) {
                 terrainSculpt.enabled = !terrainSculpt.enabled;
+                const auto& terrain = scene.editor().get<Engine::TerrainComponent>(selected);
+                auto mesh = std::make_shared<Engine::Mesh>(
+                    terrain.createMesh(terrainSculpt.enabled ? 0U : terrainSculpt.previewLod));
+                scene.editor().modify<Engine::MeshRenderer>(selected,
+                    [&](auto& component) { component.mesh = std::move(mesh); });
+                renderer.synchronizeScene(scene);
             }
             if (terrainSculpt.enabled) {
                 ImGui::SameLine(0.0F, 6.0F);
@@ -795,10 +895,35 @@ ViewportInteraction drawViewport(Engine::ScenePreset &scene, Engine::Assets::Con
                 ImGui::SameLine(0.0F, 6.0F);
                 ImGui::SetNextItemWidth(105.0F);
                 ImGui::SliderFloat("Strength##terrain", &terrainSculpt.strength, 0.1F, 12.0F, "S %.1f");
+                ImGui::SameLine(0.0F, 6.0F);
+                constexpr const char* falloffs[]{"Smooth", "Linear", "Sharp"};
+                int falloff = static_cast<int>(terrainSculpt.falloff);
+                ImGui::SetNextItemWidth(82.0F);
+                if (ImGui::Combo("##terrain-falloff", &falloff, falloffs, 3)) {
+                    terrainSculpt.falloff = static_cast<Engine::TerrainBrushFalloff>(falloff);
+                }
+                ImGui::SameLine(0.0F, 6.0F);
+                ImGui::SetNextItemWidth(96.0F);
+                ImGui::SliderFloat("Spacing##terrain", &terrainSculpt.spacing, 0.05F, 1.0F, "Sp %.2f");
+                if (ImGui::IsItemHovered()) {
+                    ImGui::SetTooltip("Shift: invert Raise/Lower | Ctrl: pick flatten height");
+                }
+            } else {
+                ImGui::SameLine(0.0F, 6.0F);
+                int lod = static_cast<int>(terrainSculpt.previewLod);
+                ImGui::SetNextItemWidth(92.0F);
+                if (ImGui::SliderInt("LOD##terrain", &lod, 0, 5, "LOD %d")) {
+                    terrainSculpt.previewLod = static_cast<std::uint32_t>(lod);
+                    const auto& terrain = scene.editor().get<Engine::TerrainComponent>(selected);
+                    auto mesh = std::make_shared<Engine::Mesh>(terrain.createMesh(terrainSculpt.previewLod));
+                    scene.editor().modify<Engine::MeshRenderer>(selected,
+                        [&](auto& component) { component.mesh = std::move(mesh); });
+                    renderer.synchronizeScene(scene);
+                }
             }
         } else {
+            if (terrainSculpt.strokeActive) finishTerrainStroke(scene, terrainSculpt);
             terrainSculpt.enabled = false;
-            terrainSculpt.strokeActive = false;
         }
         ImGui::SameLine(0.0F, 8.0F);
         if (EditorButton(showGameView ? " Scene View " : " Game View ").drawSmall()) {
@@ -886,7 +1011,7 @@ ViewportInteraction drawViewport(Engine::ScenePreset &scene, Engine::Assets::Con
         }
         const bool sculptConsumesClick = gizmoAction < 0 && !showGameView && !playing &&
             drawTerrainSculpt(scene, selected, renderer, imageMin, imageMax, terrainSculpt,
-                              imageHovered, interaction.terrainGeometryChanged);
+                              imageHovered, interaction);
         const bool gizmoConsumesClick = gizmoToolsConsumeClick || orientationGizmoConsumesClick ||
             sculptConsumesClick ||
             (gizmoAction < 0 && !showGameView && !playing &&

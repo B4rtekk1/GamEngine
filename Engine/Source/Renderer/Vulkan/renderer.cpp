@@ -503,7 +503,8 @@ namespace Engine {
             assetManager.unload_unused();
         }
 
-        void updateMeshGeometry(const Entity entity) {
+        void updateMeshGeometry(const Entity entity, const std::uint32_t firstVertex,
+                                const std::uint32_t requestedVertexCount) {
             const auto recordIt = sceneGpu.renderableIndices.find(entity);
             if (recordIt == sceneGpu.renderableIndices.end() ||
                 !registry.has<MeshRenderer>(entity) || !registry.has<Transform>(entity)) return;
@@ -514,14 +515,18 @@ namespace Engine {
                 synchronizeSceneResources(scene);
                 return;
             }
+            if (firstVertex >= renderer.mesh->vertexCount()) return;
+            const std::uint32_t vertexCount = std::min(
+                requestedVertexCount, renderer.mesh->vertexCount() - firstVertex);
+            if (vertexCount == 0) return;
             if (!inFlightFences.empty() && vkWaitForFences(
                     device, static_cast<uint32_t>(inFlightFences.size()), inFlightFences.data(),
                     VK_TRUE, UINT64_MAX) != VK_SUCCESS) {
                 throw std::runtime_error("Could not synchronize frames for mesh update");
             }
             vertexBuffer.uploadDeviceLocal(
-                renderer.mesh->vertices.data(), sizeof(Vertex) * renderer.mesh->vertices.size(),
-                sizeof(Vertex) * record.firstVertex, commandPool,
+                renderer.mesh->vertices.data() + firstVertex, sizeof(Vertex) * vertexCount,
+                sizeof(Vertex) * (record.firstVertex + firstVertex), commandPool,
                 vulkanDevice.graphicsQueue());
 
             AABB localBounds{

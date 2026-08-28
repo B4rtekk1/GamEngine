@@ -5,6 +5,7 @@
 #include "Engine/Math/Vec3.h"
 
 #include <cstdint>
+#include <limits>
 #include <memory>
 
 namespace Engine {
@@ -45,7 +46,8 @@ public:
     void renderFrame() const;
     void synchronizeScene(Scene& scene) const;
     /** Uploads changed vertices for an existing fixed-topology mesh. */
-    void updateMeshGeometry(Entity entity) const;
+    void updateMeshGeometry(Entity entity, std::uint32_t firstVertex = 0,
+                            std::uint32_t vertexCount = std::numeric_limits<std::uint32_t>::max()) const;
     void reloadScene(Scene& scene, void* nativeWindow);
     void reconfigureAntialiasing() const;
     [[nodiscard]] ViewportHandle gameViewport() const noexcept;

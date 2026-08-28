@@ -52,8 +52,9 @@ void Renderer::renderFrame() const { backend_->renderFrame(); }
 void Renderer::synchronizeScene(Scene& scene) const {
     if (backend_) backend_->synchronizeSceneResources(scene);
 }
-void Renderer::updateMeshGeometry(const Entity entity) const {
-    if (backend_) backend_->updateMeshGeometry(entity);
+void Renderer::updateMeshGeometry(const Entity entity, const std::uint32_t firstVertex,
+                                  const std::uint32_t vertexCount) const {
+    if (backend_) backend_->updateMeshGeometry(entity, firstVertex, vertexCount);
 }
 void Renderer::reloadScene(Scene& scene, void* nativeWindow) {
     static_cast<void>(nativeWindow);

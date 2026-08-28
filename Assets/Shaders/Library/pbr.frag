@@ -58,7 +58,15 @@ vec3 fresnelSchlick(float cosTheta, vec3 f0) { return f0 + (1.0 - f0) * pow(1.0 
 
 void main() {
     MaterialData material = materials[fragMaterialIndex];
-    vec4 baseColor = vec4(fragColor * material.baseColorMetallic.rgb, 1.0);
+    vec3 vertexColor = fragColor;
+    if (fragColor.r < 0.0) {
+        float cellCount = max(fragColor.g, 1.0);
+        ivec2 cell = ivec2(clamp(floor(fragTexCoord * cellCount),
+                                 vec2(0.0), vec2(cellCount - 1.0)));
+        float shade = ((cell.x + cell.y) & 1) == 0 ? 0.82 : 0.52;
+        vertexColor = vec3(shade);
+    }
+    vec4 baseColor = vec4(vertexColor * material.baseColorMetallic.rgb, 1.0);
     if (material.textureIndices.x >= 0)
         baseColor *= texture(materialTextures[material.textureIndices.x], fragTexCoord);
     // This renderer combines all primitives in one draw, so it cannot sort

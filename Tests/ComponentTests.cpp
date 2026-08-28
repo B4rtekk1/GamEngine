@@ -153,16 +153,24 @@ TEST(TerrainComponent, BuildsCheckerboardGridAndSculptsHeightmap) {
     Engine::TerrainComponent terrain{5, 4.0F, 4.0F, -2.0F, 2.0F};
     ASSERT_TRUE(terrain.valid());
     const Engine::Mesh flatMesh = terrain.createMesh();
-    EXPECT_EQ(flatMesh.vertices.size(), 64u);
+    EXPECT_EQ(flatMesh.vertices.size(), 25u);
     EXPECT_EQ(flatMesh.indices.size(), 96u);
-    EXPECT_NE(flatMesh.vertices[0].color.x(), flatMesh.vertices[4].color.x());
+    EXPECT_LT(flatMesh.vertices[0].color.x(), 0.0F);
+    EXPECT_FLOAT_EQ(flatMesh.vertices[0].color.y(), 4.0F);
 
     EXPECT_TRUE(terrain.sculpt(0.0F, 0.0F, 1.5F, 0.5F,
                                Engine::TerrainSculptMode::Raise));
     EXPECT_GT(terrain.height(2, 2), 0.0F);
     EXPECT_FLOAT_EQ(terrain.height(0, 0), 0.0F);
-    const Engine::Mesh sculptedMesh = terrain.createMesh();
-    EXPECT_GT(sculptedMesh.vertices[10].normal.length(), 0.99F);
+    Engine::Mesh sculptedMesh = flatMesh;
+    Engine::TerrainRegion center{2, 2, 2, 2, true};
+    EXPECT_TRUE(terrain.updateMeshRegion(sculptedMesh, center));
+    EXPECT_GT(sculptedMesh.vertices[12].position.y(), 0.0F);
+    EXPECT_GT(sculptedMesh.vertices[12].normal.length(), 0.99F);
+
+    const Engine::Mesh lodMesh = terrain.createMesh(1);
+    EXPECT_EQ(lodMesh.vertices.size(), 9u);
+    EXPECT_EQ(lodMesh.indices.size(), 24u);
 }
 
 TEST(ScriptComponent, CopiesConfigurationWithoutSharingRuntimeState) {

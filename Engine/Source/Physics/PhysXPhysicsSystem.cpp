@@ -193,11 +193,11 @@ namespace Engine {
             actors.clear();
         }
 
-        physx::PxShape *attachGeometry(physx::PxRigidActor &actor,
+        static physx::PxShape *attachGeometry(physx::PxRigidActor &actor,
                                        const physx::PxGeometry &geometry,
                                        physx::PxMaterial &material,
                                        const physx::PxTransform &localPose,
-                                       const bool trigger) const {
+                                       const bool trigger) {
             physx::PxShape *shape = physx::PxRigidActorExt::createExclusiveShape(
                 actor, geometry, material);
             if (shape == nullptr) {
