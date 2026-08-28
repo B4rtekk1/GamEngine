@@ -280,12 +280,20 @@ int main() {
                     clipboard.copy(scene, hierarchyActionEntity);
                 }
             }
-            if (!playing && !ImGui::GetIO().WantTextInput) {
+            if (!playing && !ImGui::GetIO().WantTextInput &&
+                !ImGui::IsMouseDown(ImGuiMouseButton_Right)) {
+                bool gizmoModeChanged = false;
                 if (ImGui::IsKeyPressed(ImGuiKey_W)) {
                     gizmoMode = GizmoMode::Translate;
+                    gizmoModeChanged = true;
                 }
                 if (ImGui::IsKeyPressed(ImGuiKey_E)) {
                     gizmoMode = GizmoMode::Rotate;
+                    gizmoModeChanged = true;
+                }
+                if (gizmoModeChanged && selectedEntity != Engine::NullEntity &&
+                    scene.editor().valid(selectedEntity)) {
+                    renderer.setEditorSelection(selectedEntity);
                 }
             }
             const ViewportInteraction viewportInteraction = drawViewport(

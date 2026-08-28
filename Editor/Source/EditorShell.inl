@@ -287,7 +287,8 @@ Engine::Entity drawEditorMenuBar(Engine::ScenePreset &scene, Engine::Renderer &r
         ImGui::Begin("Keyboard Shortcuts", &showShortcuts);
         ImGui::TextUnformatted("Editor shortcuts");
         ImGui::Separator();
-        ImGui::BulletText("WASD + mouse: move and look in Scene View");
+        ImGui::BulletText("Scene View: hold RMB to look; RMB + WASD moves");
+        ImGui::BulletText("Scene View: Q / E down/up, Shift speeds up, MMB pans, wheel zooms");
         ImGui::BulletText("Delete: remove selected object");
         ImGui::BulletText("Ctrl+C / Ctrl+V: copy and paste selected object");
         ImGui::BulletText("Ctrl+D: duplicate selected object");

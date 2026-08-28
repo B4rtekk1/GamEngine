@@ -22,6 +22,7 @@ namespace Engine {
         constexpr float EditorCameraNearClip = 0.1F;
         constexpr float EditorCameraFarClip = 1000.0F;
         constexpr float EditorPanSpeed = 0.03F;
+        constexpr float EditorFastMovementMultiplier = 4.0F;
     } // namespace
 
     void CameraController::disableRelativeMouseMode(SDL_Window *window) {
@@ -106,27 +107,36 @@ namespace Engine {
         };
         sceneCamera.setRotation(Degrees{editorYaw_}, Degrees{editorPitch_});
 
+        // Scene View navigation deliberately has an explicit activation
+        // gesture.  Without it, merely hovering the viewport made WASD move
+        // the camera and clashed with the editor's transform shortcuts.
+        const bool flyMode = Input::mouseDown(MouseButton::Right);
+        const bool moveFast = Input::keyDown(KeyCode::LeftShift) ||
+                              Input::keyDown(KeyCode::RightShift);
         Vec3 movement{};
         const Vec3 forward = sceneCamera.forward();
         const Vec3 horizontalForward{forward.x(), Zero, forward.z()};
-        if (horizontalForward.length() > Zero) {
+        if (flyMode && horizontalForward.length() > Zero) {
             const Vec3 flatForward = horizontalForward.normalized();
             if (Input::keyDown(KeyCode::W)) { movement += flatForward; }
             if (Input::keyDown(KeyCode::S)) { movement -= flatForward; }
         }
-        if (Input::keyDown(KeyCode::D)) { movement += sceneCamera.right(); }
-        if (Input::keyDown(KeyCode::A)) { movement -= sceneCamera.right(); }
+        if (flyMode && Input::keyDown(KeyCode::D)) { movement += sceneCamera.right(); }
+        if (flyMode && Input::keyDown(KeyCode::A)) { movement -= sceneCamera.right(); }
+        if (flyMode && Input::keyDown(KeyCode::E)) { movement += sceneCamera.up(); }
+        if (flyMode && Input::keyDown(KeyCode::Q)) { movement -= sceneCamera.up(); }
         if (Input::mouseDown(MouseButton::Middle)) {
             const Vec2 delta = Input::mouseDelta();
             editorPosition_ -= sceneCamera.right() * (delta.x() * EditorPanSpeed);
             editorPosition_ += sceneCamera.up() * (delta.y() * EditorPanSpeed);
         }
         if (movement.length() > Zero) {
+            const float speed = MovementSpeed * (moveFast ? EditorFastMovementMultiplier : 1.0F);
             editorPosition_ += movement.normalized() *
-                    (MovementSpeed * static_cast<float>(Time::deltaTime()));
+                    (speed * static_cast<float>(Time::deltaTime()));
         }
         editorPosition_ += sceneCamera.forward() * (Input::mouseWheel() * MouseWheelSpeed);
-        if (Input::mouseDown(MouseButton::Right)) {
+        if (flyMode) {
             const Vec2 delta = Input::mouseDelta();
             editorYaw_ += (delta.x() * MouseSensitivity);
             editorPitch_ = std::clamp(editorPitch_ - (delta.y() * MouseSensitivity),

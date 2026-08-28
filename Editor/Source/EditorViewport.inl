@@ -1,5 +1,6 @@
 int drawSceneOrientationGizmo(const ImVec2 imageMin, const ImVec2 imageMax,
-                              const float yawDegrees, const float pitchDegrees) {
+                              const float yawDegrees, const float pitchDegrees,
+                              bool& consumesClick) {
     constexpr float radius = EditorConstants::forty;
     constexpr float axisLength = EditorConstants::thirtyTwo;
     const float yaw = yawDegrees * EditorConstants::radiansPerDegree;
@@ -46,9 +47,17 @@ int drawSceneOrientationGizmo(const ImVec2 imageMin, const ImVec2 imageMax,
         drawList->AddText({end.x + 5.0F, end.y - 7.0F}, colors[axis], labels[axis]);
     }
     drawList->AddCircleFilled(center, 4.0F, IM_COL32(255, 255, 255, 255));
+    const float centerDistance = std::hypot(mouse.x - center.x, mouse.y - center.y);
+    if (mouseInsideImage && centerDistance <= 10.0F && ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
+        // The centre is a visual part of the navigation gizmo.  It has no
+        // orientation action, but it must still not fall through to scene
+        // picking and clear the current object selection.
+        consumesClick = true;
+    }
     if (hoveredAxis >= 0) {
         ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
         if (ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
+            consumesClick = true;
             return hoveredAxis;
         }
     }
@@ -261,6 +270,8 @@ bool drawTranslationGizmo(Engine::ScenePreset &scene, const Engine::Entity selec
     const ImVec2 mouse = ImGui::GetIO().MousePos;
     ImDrawList *drawList = ImGui::GetWindowDrawList();
     ImVec2 originScreen = projectGizmoPoint(camera, origin, min, max);
+    const bool hoveringOrigin = ImGui::IsMouseHoveringRect(min, max) &&
+        std::hypot(mouse.x - originScreen.x, mouse.y - originScreen.y) <= 14.0F;
     int hoveredAxis = -1;
     ImVec2 axisEnds[3]{};
     for (int axis = 0; axis < 3; ++axis) {
@@ -322,7 +333,9 @@ bool drawTranslationGizmo(Engine::ScenePreset &scene, const Engine::Entity selec
                           axis == 0 ? "X" : axis == 1 ? "Y" : "Z");
     }
     drawList->AddCircleFilled(originScreen, 8.0F, IM_COL32(245, 245, 245, 255));
-    return dragging || hoveredAxis >= 0;
+    // The centre is part of the manipulator too.  Consume a click there so a
+    // missed axis never deselects the object being edited.
+    return dragging || hoveredAxis >= 0 || hoveringOrigin;
 }
 
 enum class GizmoMode { Translate, Rotate };
@@ -407,7 +420,8 @@ bool drawViewportGizmoTools(const ImVec2 imageMin, const ImVec2 visibleMin, Gizm
 
         if (hovered) ImGui::SetTooltip(index == 0 ? "Move gizmo (W)" : "Rotate gizmo (E)");
         if (clicked) {
-            gizmoMode = index == 0 ? GizmoMode::Translate : GizmoMode::Rotate;
+            const GizmoMode requestedMode = index == 0 ? GizmoMode::Translate : GizmoMode::Rotate;
+            gizmoMode = requestedMode;
             consumedClick = true;
         }
     }
@@ -442,6 +456,8 @@ bool drawRotationGizmo(Engine::ScenePreset &scene, const Engine::Entity selected
     const ImVec2 mouse = ImGui::GetIO().MousePos;
     ImDrawList *drawList = ImGui::GetWindowDrawList();
     const ImVec2 originScreen = projectGizmoPoint(camera, origin, min, max);
+    const bool hoveringOrigin = ImGui::IsMouseHoveringRect(min, max) &&
+        std::hypot(mouse.x - originScreen.x, mouse.y - originScreen.y) <= 14.0F;
     int hoveredAxis = -1;
     float closestRingDistance = EditorConstants::rotationHitTestRadius;
     ImVec2 ringPoints[3][segments + 1]{};
@@ -555,7 +571,7 @@ bool drawRotationGizmo(Engine::ScenePreset &scene, const Engine::Entity selected
         return true;
     }
     if (drag.axis >= 0 && !ImGui::IsMouseDown(ImGuiMouseButton_Left)) drag = {};
-    return hoveredAxis >= 0;
+    return hoveredAxis >= 0 || hoveringOrigin;
 }
 
 Engine::Vec3 terrainLocalPoint(const Engine::Transform& transform,
@@ -629,13 +645,16 @@ bool applyTerrainBrush(Engine::ScenePreset& scene, const Engine::Entity entity,
 bool drawTerrainSculpt(Engine::ScenePreset& scene, const Engine::Entity selected,
                        const Engine::Renderer& renderer,
                        const ImVec2 min, const ImVec2 max, TerrainSculptState& state,
-                       bool& geometryChanged) {
+                       const bool imageHovered, bool& geometryChanged) {
     if (!state.enabled || selected == Engine::NullEntity || !scene.editor().valid(selected) ||
         !scene.editor().has<Engine::TerrainComponent>(selected) ||
         !scene.editor().has<Engine::MeshRenderer>(selected) ||
         !scene.editor().has<Engine::Transform>(selected)) return false;
 
-    const bool hovered = ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenBlockedByActiveItem);
+    // The Scene View image is no longer ImGui's last item here: drawing the
+    // viewport gizmo toolbar creates invisible buttons after it.  Keep using
+    // the hover state captured directly after ImGui::Image instead.
+    const bool hovered = imageHovered;
     const ImVec2 mouse = ImGui::GetIO().MousePos;
     const Engine::Camera camera = sceneViewCamera(renderer, min, max);
     const Engine::Vec3 rayDirection = viewportRayDirection(camera, mouse, min, max);
@@ -700,6 +719,7 @@ ViewportInteraction drawViewport(Engine::ScenePreset &scene, const Engine::Entit
 
     ImGui::Begin("Viewport", nullptr, ImGuiWindowFlags_NoScrollbar);
     if (!playing) {
+        ImGui::TextDisabled("Navigate: RMB + WASD/QE  |  Shift: faster  |  MMB: pan  |  Wheel: zoom");
         const bool terrainSelected = selected != Engine::NullEntity && scene.editor().valid(selected) &&
                                      scene.editor().has<Engine::TerrainComponent>(selected);
         if (terrainSelected) {
@@ -758,10 +778,20 @@ ViewportInteraction drawViewport(Engine::ScenePreset &scene, const Engine::Entit
         viewportHovered = imageHovered;
         int gizmoAction = -1;
         bool gizmoToolsConsumeClick = false;
+        bool orientationGizmoConsumesClick = false;
         if (!showGameView && !playing) {
             gizmoToolsConsumeClick = drawViewportGizmoTools(imageMin, ImGui::GetWindowPos(), gizmoMode);
+            // A gizmo-tool button belongs to the currently selected object.
+            // Reapply the renderer selection explicitly, so changing tools
+            // cannot make its outline/focus disappear even if ImGui moves
+            // keyboard focus to the toolbar button.
+            if (gizmoToolsConsumeClick && selected != Engine::NullEntity &&
+                scene.editor().valid(selected)) {
+                renderer.setEditorSelection(selected);
+            }
             gizmoAction = drawSceneOrientationGizmo(imageMin, imageMax,
-                                                    sceneCameraYaw, sceneCameraPitch);
+                                                    sceneCameraYaw, sceneCameraPitch,
+                                                    orientationGizmoConsumesClick);
             switch (gizmoAction) {
                 case 0: renderer.setEditorCameraRotation(180.0F, 0.0F);
                     break; // +X view
@@ -775,8 +805,9 @@ ViewportInteraction drawViewport(Engine::ScenePreset &scene, const Engine::Entit
         }
         const bool sculptConsumesClick = gizmoAction < 0 && !showGameView && !playing &&
             drawTerrainSculpt(scene, selected, renderer, imageMin, imageMax, terrainSculpt,
-                              interaction.terrainGeometryChanged);
-        const bool gizmoConsumesClick = gizmoToolsConsumeClick || sculptConsumesClick ||
+                              imageHovered, interaction.terrainGeometryChanged);
+        const bool gizmoConsumesClick = gizmoToolsConsumeClick || orientationGizmoConsumesClick ||
+            sculptConsumesClick ||
             (gizmoAction < 0 && !showGameView && !playing &&
                                         (gizmoMode == GizmoMode::Translate
                                              ? drawTranslationGizmo(scene, selected, renderer, imageMin, imageMax)

@@ -59,12 +59,12 @@ Vec3 eulerDegrees(const Quat& rotation) {
     const Vec3 axisX = rotation * Vec3{1.0F, 0.0F, 0.0F};
     const Vec3 axisY = rotation * Vec3{0.0F, 1.0F, 0.0F};
     const Vec3 axisZ = rotation * Vec3{0.0F, 0.0F, 1.0F};
-    const float y = std::asin(std::clamp(axisZ.x(), -1.0F, 1.0F));
+    const float y = std::asin(std::clamp(axisZ.x(), -1.0F, 1.0F)); //NOLINT
     const float cosY = std::cos(y);
-    const float x = std::abs(cosY) > 1.0e-5F
+    const float x = std::abs(cosY) > 1.0e-5F //NOLINT
         ? std::atan2(-axisZ.y(), axisZ.z())
         : std::atan2(axisY.z(), axisY.y());
-    const float z = std::abs(cosY) > 1.0e-5F
+    const float z = std::abs(cosY) > 1.0e-5F //NOLINT
         ? std::atan2(-axisY.x(), axisX.x())
         : 0.0F;
     return {x * RadiansToDegrees, y * RadiansToDegrees, z * RadiansToDegrees};
