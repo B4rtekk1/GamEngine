@@ -85,7 +85,7 @@ endif()
 FetchContent_Declare(
         NVIDIA_PhysX
         GIT_REPOSITORY https://github.com/NVIDIA-Omniverse/PhysX.git
-        GIT_TAG 3ca45ad36e9755f7c8c5bea9f7c57d308d9f0c54 # ovphysx-0.5.10
+        GIT_TAG 4f2103c # ovphysx-0.5.11
         GIT_SHALLOW TRUE
         SOURCE_SUBDIR physx)
 FetchContent_MakeAvailable(NVIDIA_PhysX)
