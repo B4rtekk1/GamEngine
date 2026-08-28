@@ -21,7 +21,7 @@ namespace Engine::Particles {
     };
 
     struct ParticleEmitter {
-        Vec3 position{};
+        Vec3 position;
         Vec3 minVelocity{-1.0F, 1.0F, -1.0F};
         Vec3 maxVelocity{1.0F, 4.0F, 1.0F};
         Color color{1.0F, 1.0F, 1.0F, 1.0F};
@@ -33,13 +33,16 @@ namespace Engine::Particles {
         float accumulator = 0.0F;
     };
 
+    inline constexpr float DefaultSmokeBuoyancy = 2.25F;
+
+    // NOLINTBEGIN(readability-magic-numbers)
     /**
      * A particle emitter tuned for smoke.  It deliberately extends the
      * generic emitter so code accepting ParticleEmitter can still use it,
      * while a smoke simulation also receives its fluid-like parameters.
      */
     struct SmokeEmitter final : ParticleEmitter {
-        float buoyancy = 2.25F;
+        float buoyancy = DefaultSmokeBuoyancy;
         float drag = 0.68F;
         float turbulence = 0.30F;
         float collisionRadius = 0.10F;
@@ -68,8 +71,8 @@ namespace Engine::Particles {
 
     /** World-space axis-aligned obstacle used by the smoke simulation. */
     struct ParticleCollider {
-        Vec4 center{};
-        Vec4 halfExtents{};
+        Vec4 center;
+        Vec4 halfExtents;
     };
 
     /** Parameters consumed by particle_update.comp.  Keep this layout in sync
@@ -89,6 +92,7 @@ namespace Engine::Particles {
         float maxLifeMaxSize[4]{};
         float smokeDynamics[4]{}; // buoyancy, drag, turbulence, collision radius
     };
+
     static_assert(sizeof(ParticleSimulationData) == 128);
     static_assert(offsetof(ParticleSimulationData, emitterPositionMinLife) == 32);
 
@@ -99,30 +103,44 @@ namespace Engine::Particles {
         ParticleSystem(VkDevice device, VkPhysicalDevice physicalDevice,
                        VkQueue computeQueue, VkCommandPool commandPool,
                        uint32_t maxParticles);
+
         ~ParticleSystem();
+
         void update(float deltaTime);
-        void setEmitter(const ParticleEmitter& emitter) { emitter_ = emitter; }
-        void setEmitter(const SmokeEmitter& emitter) {
-            emitter_ = emitter;
+
+        void setEmitter(const ParticleEmitter &emitter) { emitter_ = emitter; }
+
+        void setEmitter(const SmokeEmitter &emitter) {
+            emitter_ = static_cast<ParticleEmitter>(emitter);
             smoke_ = emitter;
         }
-        void setColliders(const std::vector<ParticleCollider>& colliders) { colliders_ = colliders; }
+
+        void setColliders(const std::vector<ParticleCollider> &colliders) { colliders_ = colliders; }
+
         /** Records the GPU simulation and makes its writes visible to rendering. */
         void recordCompute(VkCommandBuffer commandBuffer, VkPipeline pipeline,
                            VkPipelineLayout pipelineLayout, uint32_t frameIndex) const;
+
         void recordRender(VkCommandBuffer commandBuffer,
-                          const ParticleFrameData& frameData,
+                          const ParticleFrameData &frameData,
                           VkPipeline pipeline, VkPipelineLayout pipelineLayout,
                           uint32_t frameIndex, bool sceneView = false) const;
+
         [[nodiscard]] VkDescriptorSetLayout descriptorSetLayout() const noexcept {
             return descriptorSetLayout_;
         }
+
     private:
         void createBuffers();
+
         void createDescriptorResources();
+
         void createQuadBuffer();
+
         void uploadInitialParticles();
+
         void uploadColliders();
+
         void destroy();
 
         VkDevice device_{};
@@ -145,17 +163,19 @@ namespace Engine::Particles {
         std::array<std::array<VkDescriptorSet, FramesInFlight>, RenderTargets> descriptorSets_{};
         uint32_t maxParticles_ = 0;
         ParticleEmitter emitter_{};
-        SmokeEmitter smoke_{};
+        SmokeEmitter smoke_;
         ParticleSimulationData simulation_{};
-        std::array<std::array<void*, FramesInFlight>, RenderTargets> frameMapped_{};
-        void* quadMapped_ = nullptr;
+        std::array<std::array<void *, FramesInFlight>, RenderTargets> frameMapped_{};
+        void *quadMapped_ = nullptr;
         uint32_t nextSpawnIndex_ = 0;
         uint32_t spawnSeed_ = 0;
         static constexpr uint32_t MaxColliders = 64;
         VkBuffer colliderBuffer_{};
         VkDeviceMemory colliderMemory_{};
-        void* colliderMapped_ = nullptr;
+        void *colliderMapped_ = nullptr;
         std::vector<ParticleCollider> colliders_;
         std::vector<ParticleCollider> activeColliders_;
     };
+    // NOLINTEND(readability-magic-numbers)
+
 }
