@@ -12,4 +12,4 @@ HeaderFilterRegex: 'Engine/(Include|Source)/.*'
 FormatStyle: file
 CheckOptions:
   - key: readability-identifier-naming.NamespaceCase
-    value: lower_case
+    value: CamelCase

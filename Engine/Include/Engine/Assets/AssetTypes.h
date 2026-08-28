@@ -22,7 +22,7 @@ namespace Engine::Assets {
         Text,
         Shader,
         Texture2D,
-        Cubemap,
+        Cubemap, //NOLINT
         Mesh,
         Material,
         Scene,
@@ -40,7 +40,7 @@ namespace Engine::Assets {
         /// Absolute or resolved path of the source file.
         std::filesystem::path source_path;
         /// Last recorded modification time of the source file.
-        std::filesystem::file_time_type last_write_time{};
+        std::filesystem::file_time_type last_write_time;
         /// Source-file size in bytes.
         std::uintmax_t source_size{};
     };
@@ -77,7 +77,7 @@ namespace Engine::Assets {
      * @param type Asset type to convert.
      * @return Null-terminated name of the asset type.
      */
-    inline constexpr std::string_view to_string(AssetType type) noexcept {
+    constexpr std::string_view to_string(AssetType type) noexcept {
         switch (type) {
             case AssetType::Binary: return "Binary";
             case AssetType::Text: return "Text";
