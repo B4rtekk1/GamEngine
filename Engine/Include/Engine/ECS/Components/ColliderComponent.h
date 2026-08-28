@@ -11,6 +11,7 @@
 #include <variant>
 
 namespace Engine {
+    // NOLINTBEGIN(readability-magic-numbers)
     class Mesh;
     /**
      * @brief Box collider shape aligned with the owning transform's local axes.
@@ -72,7 +73,7 @@ namespace Engine {
         ColliderShape shape = BoxCollider{};
 
         /// Local-space offset of the collider relative to the entity transform.
-        Vec3 offset{};
+        Vec3 offset;
 
         /// Whether the collider reports overlaps without generating contacts.
         bool isTrigger = false;
@@ -83,4 +84,5 @@ namespace Engine {
         /// Bounciness coefficient used by the physics solver.
         float restitution = 0.0F;
     };
+    // NOLINTEND(readability-magic-numbers)
 }

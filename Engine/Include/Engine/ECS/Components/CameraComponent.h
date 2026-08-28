@@ -8,15 +8,14 @@
 #include <algorithm>
 #include <cassert>
 
-namespace Engine
-{
+namespace Engine {
+    // NOLINTBEGIN(readability-magic-numbers)
     /**
      * @brief Projection mode used by a camera.
      */
-    enum class CameraProjection : unsigned char
-    {
+    enum class CameraProjection : unsigned char {
         Perspective,
-        Orthographic
+        Orthographic,
     };
 
     /**
@@ -31,8 +30,7 @@ namespace Engine
      * them to radians when building the projection matrix and for applying the
      * Vulkan Y-axis correction required by its graphics API.
      */
-    struct CameraComponent final
-    {
+    struct CameraComponent final {
         /// Projection used to construct the camera projection matrix.
         CameraProjection projection = CameraProjection::Perspective;
 
@@ -58,8 +56,7 @@ namespace Engine
          * @brief Checks whether perspective projection is active.
          * @return True when @ref projection is Perspective.
          */
-        [[nodiscard]] bool isPerspective() const noexcept
-        {
+        [[nodiscard]] bool isPerspective() const noexcept {
             return projection == CameraProjection::Perspective;
         }
 
@@ -67,8 +64,7 @@ namespace Engine
          * @brief Checks whether orthographic projection is active.
          * @return True when @ref projection is Orthographic.
          */
-        [[nodiscard]] bool isOrthographic() const noexcept
-        {
+        [[nodiscard]] bool isOrthographic() const noexcept {
             return projection == CameraProjection::Orthographic;
         }
 
@@ -79,8 +75,8 @@ namespace Engine
          * @param nearPlane Requested near clipping-plane distance.
          * @param farPlane Requested far clipping-plane distance.
          */
-        void setPerspective(float fovDegrees, float nearPlane, float farPlane) noexcept
-        {
+        // NOLINTNEXTLINE(bugprone-easily-swappable-parameters): projection parameters are distinct scalar API inputs.
+        void setPerspective(float fovDegrees, float nearPlane, float farPlane) noexcept {
             projection = CameraProjection::Perspective;
             fieldOfView = std::clamp(fovDegrees, 1.0F, 179.0F);
             nearClip = std::max(0.0001F, nearPlane);
@@ -93,8 +89,7 @@ namespace Engine
          * @param nearPlane Requested near clipping-plane distance.
          * @param farPlane Requested far clipping-plane distance.
          */
-        void setOrthographic(float height, float nearPlane, float farPlane) noexcept
-        {
+        void setOrthographic(float height, float nearPlane, float farPlane) noexcept {
             projection = CameraProjection::Orthographic;
             orthographicSize = std::max(0.0001F, height);
             nearClip = std::max(0.0001F, nearPlane);
@@ -108,10 +103,10 @@ namespace Engine
          *
          * The ratio is not changed when either dimension is non-positive.
          */
-        void setAspectRatio(float width, float height) noexcept
-        {
-            if (width > 0.0F && height > 0.0F)
+        void setAspectRatio(float width, float height) noexcept {
+            if (width > 0.0F && height > 0.0F) {
                 aspectRatio = width / height;
+            }
         }
 
         /**
@@ -120,10 +115,10 @@ namespace Engine
          *
          * The ratio is not changed when the supplied value is non-positive.
          */
-        void setAspectRatio(float ratio) noexcept
-        {
-            if (ratio > 0.0F)
+        void setAspectRatio(float ratio) noexcept {
+            if (ratio > 0.0F) {
                 aspectRatio = ratio;
+            }
         }
 
         /**
@@ -131,13 +126,14 @@ namespace Engine
          * @return True when the clipping planes, aspect ratio and active
          *         projection settings are valid.
          */
-        [[nodiscard]] bool isValid() const noexcept
-        {
-            if (!(aspectRatio > 0.0F) || !(nearClip > 0.0F) || !(farClip > nearClip))
+        [[nodiscard]] bool isValid() const noexcept {
+            if (!(aspectRatio > 0.0F) || !(nearClip > 0.0F) || !(farClip > nearClip)) {
                 return false;
+            }
 
-            if (isPerspective())
+            if (isPerspective()) {
                 return fieldOfView > 0.0F && fieldOfView < 180.0F;
+            }
 
             return orthographicSize > 0.0F;
         }
@@ -148,9 +144,10 @@ namespace Engine
          * Setters already clamp values, but this is useful after deserializing
          * a scene file. In release builds, assertions may be disabled.
          */
-        void validate() const noexcept
-        {
+        void validate() const noexcept {
             assert(isValid());
         }
     };
+
+    // NOLINTEND(readability-magic-numbers)
 }
