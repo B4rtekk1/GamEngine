@@ -606,7 +606,7 @@ namespace Engine {
         }
         return RaycastHit{
             Actor{scene, object->objectId()}, fromPhysX(hit.block.position),
-            fromPhysX(hit.block.normal), hit.block.distance
+            fromPhysX(hit.block.normal), hit.block.distance,
         };
     }
 } // namespace Engine

@@ -119,8 +119,8 @@ Mesh TerrainComponent::createMesh() const {
             addVertex(x + 1, z + 1);
             addVertex(x, z + 1);
             mesh.indices.insert(mesh.indices.end(), {
-                first, first + 1, first + 2,
-                first + 2, first + 3, first,
+                first, first + 2, first + 1,
+                first + 2, first, first + 3,
             });
         }
     }
