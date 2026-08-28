@@ -8,14 +8,14 @@
 
 namespace Engine {
 
-enum class TextureColorSpace {
+enum class TextureColorSpace:uint8_t {
     Linear,
-    SRGB
+    SRGB,
 };
 
-enum class TexturePixelFormat {
+enum class TexturePixelFormat:uint8_t {
     RGBA8,
-    R8
+    R8,
 };
 
 // Owns an RGBA8 image uploaded to device-local memory and ready for sampling.

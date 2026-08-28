@@ -9,31 +9,37 @@
 #include <vector>
 
 namespace Engine {
-namespace Assets { class AssetManager; }
+    namespace Assets {
+        class AssetManager;
+    }
 
-class Skybox final {
-public:
-    ~Skybox();
-    Skybox() = default;
-    Skybox(const Skybox&) = delete;
-    Skybox& operator=(const Skybox&) = delete;
+    class Skybox final {
+    public:
+        ~Skybox();
 
-    void create(VkPhysicalDevice physicalDevice, VkDevice device, VkCommandPool commandPool,
-                VkQueue queue, VkRenderPass renderPass, VkFormat colorFormat,
-                VkSampleCountFlagBits samples, VkDescriptorSetLayout descriptorSetLayout,
-                const std::vector<VkBuffer>& uniformBuffers, VkDeviceSize uniformBufferRange,
-                Assets::AssetManager& assets, VmaAllocator allocator);
-    void draw(VkCommandBuffer commandBuffer, uint32_t frameIndex) const;
-    void destroy() noexcept;
+        Skybox() = default;
 
-private:
-    Buffer vertexBuffer_;
-    Cubemap cubemap_;
-    SkyboxPipeline pipeline_;
-    VkDevice device_ = VK_NULL_HANDLE;
-    VkDescriptorPool descriptorPool_ = VK_NULL_HANDLE;
-    VkDescriptorSetLayout descriptorSetLayout_ = VK_NULL_HANDLE;
-    std::vector<VkDescriptorSet> descriptorSets_;
-};
+        Skybox(const Skybox &) = delete;
 
+        Skybox &operator=(const Skybox &) = delete;
+
+        void create(VkPhysicalDevice physicalDevice, VkDevice device, VkCommandPool commandPool,
+                    VkQueue queue, VkRenderPass renderPass, VkFormat colorFormat,
+                    VkSampleCountFlagBits samples, VkDescriptorSetLayout descriptorSetLayout,
+                    const std::vector<VkBuffer> &uniformBuffers, VkDeviceSize uniformBufferRange,
+                    Assets::AssetManager &assets, VmaAllocator allocator);
+
+        void draw(VkCommandBuffer commandBuffer, uint32_t frameIndex) const;
+
+        void destroy() noexcept;
+
+    private:
+        Buffer vertexBuffer_;
+        Cubemap cubemap_;
+        SkyboxPipeline pipeline_;
+        VkDevice device_ = VK_NULL_HANDLE;
+        VkDescriptorPool descriptorPool_ = VK_NULL_HANDLE;
+        VkDescriptorSetLayout descriptorSetLayout_ = VK_NULL_HANDLE;
+        std::vector<VkDescriptorSet> descriptorSets_;
+    };
 } // namespace Engine

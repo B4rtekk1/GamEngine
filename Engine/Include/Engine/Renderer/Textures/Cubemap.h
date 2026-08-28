@@ -18,7 +18,7 @@ public:
     Cubemap& operator=(const Cubemap&) = delete;
 
     void create(VkPhysicalDevice physicalDevice, VkDevice device, VkCommandPool commandPool,
-                VkQueue queue, const std::array<std::array<uint8_t, 4>, 6>& faceColours);
+                VkQueue queue, const std::array<std::array<uint8_t, 4>, 6>& faceColours); //NOLINT
     void destroy() noexcept;
 
     [[nodiscard]] VkImageView imageView() const noexcept { return imageView_; }
