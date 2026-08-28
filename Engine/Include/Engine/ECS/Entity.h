@@ -3,7 +3,6 @@
 #include <cstdint>
 
 namespace Engine {
-
     /**
      * @brief Unique identifier used by the entity-component system.
      *
@@ -25,12 +24,12 @@ namespace Engine {
     }
 
     constexpr std::uint32_t entityGeneration(const Entity entity) noexcept {
-        return static_cast<std::uint32_t>(entity >> 32u);
+        return static_cast<std::uint32_t>(entity >> 32U); //NOLINT
     }
 
     constexpr Entity makeEntity(const std::uint32_t index,
                                 const std::uint32_t generation) noexcept {
-        return (static_cast<Entity>(generation) << 32u) | index;
+        return (static_cast<Entity>(generation) << 32U) | index; //NOLINT
     }
 
     /**
@@ -39,5 +38,4 @@ namespace Engine {
     constexpr Entity NullEntity = 0;
 
     constexpr ObjectId NullObjectId = 0;
-
 }

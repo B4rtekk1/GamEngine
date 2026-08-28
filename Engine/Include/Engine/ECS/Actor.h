@@ -1,5 +1,7 @@
 #pragma once
 
+// NOLINTBEGIN(readability-magic-numbers)
+
 #include "Engine/Core/Transform.h"
 #include "Engine/ECS/Entity.h"
 #include "Engine/ECS/Components/RigidbodyComponent.h"
@@ -15,108 +17,145 @@
 #include <stdexcept>
 
 namespace Engine {
+    class Scene;
+    class GameObject;
+    class PhysicsSystem;
+    class Script;
 
-class Scene;
-class GameObject;
-class PhysicsSystem;
-class Script;
+    /**
+     * High-level, non-owning handle to an object in a Scene.
+     *
+     * Actor intentionally does not expose Registry or generic component access.
+     * It is safe to copy and is resolved through the scene's stable ObjectId.
+     */
+    class Actor final {
+    public:
+        Actor() = default;
 
-/**
- * High-level, non-owning handle to an object in a Scene.
- *
- * Actor intentionally does not expose Registry or generic component access.
- * It is safe to copy and is resolved through the scene's stable ObjectId.
- */
-class Actor final {
-public:
-    Actor() = default;
+        [[nodiscard]] bool valid() const noexcept;
 
-    [[nodiscard]] bool valid() const noexcept;
-    [[nodiscard]] ObjectId id() const noexcept { return objectId_; }
-    [[nodiscard]] std::string name() const;
+        [[nodiscard]] ObjectId id() const noexcept { return objectId_; }
 
-    void setName(std::string name) const;
-    void setPosition(Vec3 position) const;
-    void setRotation(Vec3 rotation) const;
-    void setScale(Vec3 scale) const;
-    void translate(Vec3 offset) const;
-    void move(Vec3 offset) const;
-    [[nodiscard]] Vec3 position() const;
-    [[nodiscard]] Vec3 rotation() const;
-    [[nodiscard]] Vec3 scale() const;
+        [[nodiscard]] std::string name() const;
 
-    void setMesh(std::shared_ptr<const Mesh> mesh) const;
-    void setMaterial(const PBRMaterial& material) const;
-    void setCastShadow(bool enabled) const;
-    void setCullingBatch(std::uint32_t batch) const;
+        void setName(std::string name) const;
 
-    void addRigidbody(const RigidbodyComponent& body = {}) const;
-    [[nodiscard]] bool hasRigidbody() const;
-    void setBodyType(RigidbodyType type) const;
-    void setMass(float mass) const;
-    void setGravityEnabled(bool enabled) const;
-    void setVelocity(Vec3 velocity) const;
-    [[nodiscard]] Vec3 velocity() const;
+        void setPosition(Vec3 position) const;
 
-    void addBoxCollider(Vec3 halfExtents = {0.5F, 0.5F, 0.5F}) const;
-    void addSphereCollider(float radius = 0.5F) const;
-    void addCapsuleCollider(float radius = 0.5F, float height = 1.0F) const;
-    void addRampCollider(Vec3 halfExtents = {0.5F, 0.5F, 0.5F}) const;
-    /** Adds an exact triangle collider from the actor's assigned mesh. */
-    void addMeshCollider() const;
-    [[nodiscard]] bool hasCollider() const;
-    void setColliderTrigger(bool enabled) const;
-    void setColliderMaterial(float friction, float restitution) const;
+        void setRotation(Vec3 rotation) const;
 
-    void addCamera(const CameraComponent& camera = {}) const;
-    [[nodiscard]] bool hasCamera() const;
-    void setPerspectiveCamera(float fieldOfView, float nearClip = 0.1F,
-                              float farClip = 1000.0F) const;
-    void setOrthographicCamera(float size, float nearClip = 0.1F,
-                               float farClip = 1000.0F) const;
-    void setPrimaryCamera(bool primary) const;
-    void setCameraAspectRatio(float width, float height) const;
+        void setScale(Vec3 scale) const;
 
-    void addLight(const LightComponent& light = {}) const;
-    [[nodiscard]] bool hasLight() const;
-    void setLightType(LightType type) const;
-    void setLightColor(Math::Color color) const;
-    void setLightIntensity(float intensity) const;
-    void setLightEnabled(bool enabled) const;
-    void setLightCastShadows(bool enabled) const;
+        void translate(Vec3 offset) const;
 
-    void addScript(std::string className, bool enabled = true) const;
+        void move(Vec3 offset) const;
 
-    template<typename T>
-    void attach(bool enabled = true) const;
+        [[nodiscard]] Vec3 position() const;
 
-    void destroy();
+        [[nodiscard]] Vec3 rotation() const;
 
-private:
-    friend class Scene;
-    friend class PhysicsSystem;
-    friend class Script;
-    Actor(Scene& scene, ObjectId objectId) noexcept : scene_(&scene), objectId_(objectId) {}
+        [[nodiscard]] Vec3 scale() const;
 
-    [[nodiscard]] GameObject& object() const;
+        void setMesh(std::shared_ptr<const Mesh> mesh) const;
 
-    Scene* scene_{};
-    ObjectId objectId_{NullObjectId};
-};
+        void setMaterial(const PBRMaterial &material) const;
 
+        void setCastShadow(bool enabled) const;
+
+        void setCullingBatch(std::uint32_t batch) const;
+
+        void addRigidbody(const RigidbodyComponent &body = {}) const;
+
+        [[nodiscard]] bool hasRigidbody() const;
+
+        void setBodyType(RigidbodyType type) const;
+
+        void setMass(float mass) const;
+
+        void setGravityEnabled(bool enabled) const;
+
+        void setVelocity(Vec3 velocity) const;
+
+        [[nodiscard]] Vec3 velocity() const;
+
+        void addBoxCollider(Vec3 halfExtents = {0.5F, 0.5F, 0.5F}) const;
+
+        void addSphereCollider(float radius = 0.5F) const;
+
+        void addCapsuleCollider(float radius = 0.5F, float height = 1.0F) const;
+
+        void addRampCollider(Vec3 halfExtents = {0.5F, 0.5F, 0.5F}) const;
+
+        /** Adds an exact triangle collider from the actor's assigned mesh. */
+        void addMeshCollider() const;
+
+        [[nodiscard]] bool hasCollider() const;
+
+        void setColliderTrigger(bool enabled) const;
+
+        void setColliderMaterial(float friction, float restitution) const;
+
+        void addCamera(const CameraComponent &camera = {}) const;
+
+        [[nodiscard]] bool hasCamera() const;
+
+        void setPerspectiveCamera(float fieldOfView, float nearClip = 0.1F,
+                                  float farClip = 1000.0F) const;
+
+        void setOrthographicCamera(float size, float nearClip = 0.1F,
+                                   float farClip = 1000.0F) const;
+
+        void setPrimaryCamera(bool primary) const;
+
+        void setCameraAspectRatio(float width, float height) const;
+
+        void addLight(const LightComponent &light = {}) const;
+
+        [[nodiscard]] bool hasLight() const;
+
+        void setLightType(LightType type) const;
+
+        void setLightColor(Math::Color color) const;
+
+        void setLightIntensity(float intensity) const;
+
+        void setLightEnabled(bool enabled) const;
+
+        void setLightCastShadows(bool enabled) const;
+
+        void addScript(std::string className, bool enabled = true) const;
+
+        template<typename T>
+        void attach(bool enabled = true) const;
+
+        void destroy();
+
+    private:
+        friend class Scene;
+        friend class PhysicsSystem;
+        friend class Script;
+
+        Actor(Scene &scene, ObjectId objectId) noexcept : scene_(&scene), objectId_(objectId) {
+        }
+
+        [[nodiscard]] GameObject &object() const;
+
+        Scene *scene_{};
+        ObjectId objectId_{NullObjectId};
+    };
 } // namespace Engine
 
 #include "Engine/Scripting/ScriptRegistry.h"
 
 namespace Engine {
-
-template<typename T>
-void Actor::attach(const bool enabled) const {
-    const auto className = ScriptRegistry::instance().className<T>();
-    if (!className) {
-        throw std::logic_error("Script type is not registered; use ENGINE_REGISTER_SCRIPT first");
+    template<typename T>
+    void Actor::attach(const bool enabled) const {
+        const auto className = ScriptRegistry::instance().className<T>();
+        if (!className) {
+            throw std::logic_error("Script type is not registered; use ENGINE_REGISTER_SCRIPT first");
+        }
+        addScript(*className, enabled);
     }
-    addScript(*className, enabled);
-}
-
 } // namespace Engine
+
+// NOLINTEND(readability-magic-numbers)
