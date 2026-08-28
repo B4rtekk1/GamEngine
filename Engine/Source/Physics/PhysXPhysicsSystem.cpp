@@ -355,7 +355,8 @@ struct PhysicsSystem::BroadPhaseCache final {
         PxRigidActor* actor = dynamic
             ? static_cast<PxRigidActor*>(physics->createRigidDynamic(toPhysX(transform)))
             : static_cast<PxRigidActor*>(physics->createRigidStatic(toPhysX(transform)));
-        if (actor == nullptr) throw std::runtime_error("PhysX rigid actor creation failed");
+        if (actor == nullptr) { throw std::runtime_error("PhysX rigid actor creation failed");
+}
         actor->userData = reinterpret_cast<void*>(static_cast<std::uintptr_t>(entity));
 
         if (owner.has<ColliderComponent>(entity)) {
@@ -409,7 +410,8 @@ struct PhysicsSystem::BroadPhaseCache final {
         registry = &owner;
         owner.view<Transform>([&](const Entity entity, Transform& transform) {
             if (!owner.has<ColliderComponent>(entity) &&
-                !owner.has<RigidbodyComponent>(entity)) return;
+                !owner.has<RigidbodyComponent>(entity)) { return;
+}
             actors.emplace(entity, createActor(entity, owner, transform));
         });
         structuralRevision = owner.structuralRevision();
