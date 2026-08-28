@@ -16,7 +16,7 @@ namespace Engine {
         constexpr Vec4() = default;
 
         /** @brief Constructs a vector from its four components. */
-        constexpr Vec4(float x, float y, float z, float w) : m_value(x, y, z, w) {
+        constexpr Vec4(float x, float y, float z, float w) : m_value(x, y, z, w) { //NOLINT
         }
 
         /** @brief Constructs a vector from its native GLM representation. */

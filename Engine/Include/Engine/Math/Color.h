@@ -13,6 +13,7 @@
 #include <string_view>
 
 namespace Engine {
+    // NOLINTBEGIN(readability-magic-numbers)
     /**
      * @brief Represents an RGBA color using normalized floating-point channels.
      *
@@ -32,7 +33,11 @@ namespace Engine {
          * @param blue Blue channel in normalized floating-point form.
          * @param alpha Alpha channel in normalized floating-point form.
          */
-        constexpr Color(float red, float green, float blue, float alpha = 1.0) noexcept : r_(red), g_(green), b_(blue), a_(alpha) {}
+        // The four same-typed parameters are the established RGBA channel order.
+        // NOLINTNEXTLINE(bugprone-easily-swappable-parameters)
+        constexpr Color(float red, float green, float blue, float alpha = 1.0F) noexcept : r_(red), g_(green), b_(blue),
+            a_(alpha) {
+        }
 
         /**
          * @brief Creates an opaque color from RGB channels.
@@ -64,10 +69,10 @@ namespace Engine {
          */
         [[nodiscard]] static constexpr Color from_rgba8(std::uint32_t value) noexcept {
             return {
-                static_cast<float>((value >> 24) & 0xffu) / 255.0F,
-                static_cast<float>((value >> 16) & 0xffu) / 255.0F,
-                static_cast<float>((value >> 8) & 0xffu) / 255.0F,
-                static_cast<float>((value) & 0xffu) / 255.0F,
+                static_cast<float>((value >> 24U) & 0xffU) / 255.0F,
+                static_cast<float>((value >> 16U) & 0xffU) / 255.0F,
+                static_cast<float>((value >> 8U) & 0xffU) / 255.0F,
+                static_cast<float>(value & 0xffU) / 255.0F,
             };
         }
 
@@ -82,10 +87,10 @@ namespace Engine {
          */
         [[nodiscard]] static constexpr Color from_a2b10g10r10(std::uint32_t value) noexcept {
             return {
-                static_cast<float>(value & 0x3ffu) / 1023.0F,
-                static_cast<float>((value >> 10u) & 0x3ffu) / 1023.0F,
-                static_cast<float>((value >> 20u) & 0x3ffu) / 1023.0F,
-                static_cast<float>((value >> 30u) & 0x3u) / 3.0F,
+                static_cast<float>(value & 0x3ffU) / 1023.0F,
+                static_cast<float>((value >> 10U) & 0x3ffU) / 1023.0F,
+                static_cast<float>((value >> 20U) & 0x3ffU) / 1023.0F,
+                static_cast<float>((value >> 30U) & 0x3U) / 3.0F,
             };
         }
 
@@ -98,14 +103,14 @@ namespace Engine {
          * @return Color with normalized channels.
          */
         [[nodiscard]] static constexpr Color from_rgb10(std::uint16_t red,
-                                                         std::uint16_t green,
-                                                         std::uint16_t blue,
-                                                         std::uint8_t alpha = 3) noexcept {
+                                                        std::uint16_t green,
+                                                        std::uint16_t blue,
+                                                        std::uint8_t alpha = 3) noexcept {
             return {
-                static_cast<float>(red & 0x3ffu) / 1023.0F,
-                static_cast<float>(green & 0x3ffu) / 1023.0F,
-                static_cast<float>(blue & 0x3ffu) / 1023.0F,
-                static_cast<float>(alpha & 0x3u) / 3.0F,
+                static_cast<float>(red & 0x3ffU) / 1023.0F,
+                static_cast<float>(green & 0x3ffU) / 1023.0F,
+                static_cast<float>(blue & 0x3ffU) / 1023.0F,
+                static_cast<float>(alpha & 0x3U) / 3.0F,
             };
         }
 
@@ -120,9 +125,9 @@ namespace Engine {
                 return static_cast<std::uint32_t>(std::lround(value * maximum));
             };
             return quantize(normalized.r_, 1023.0F) |
-                   (quantize(normalized.g_, 1023.0F) << 10u) |
-                   (quantize(normalized.b_, 1023.0F) << 20u) |
-                   (quantize(normalized.a_, 3.0F) << 30u);
+                   (quantize(normalized.g_, 1023.0F) << 10U) |
+                   (quantize(normalized.b_, 1023.0F) << 20U) |
+                   (quantize(normalized.a_, 3.0F) << 30U);
         }
 
         /**
@@ -132,26 +137,34 @@ namespace Engine {
          * @throws std::invalid_argument If the length or a hexadecimal digit is invalid.
          */
         [[nodiscard]] static Color from_hex(std::string_view hex) {
-            if (!hex.empty() && hex.front() == '#') hex.remove_prefix(1);
+            if (!hex.empty() && hex.front() == '#') {
+                hex.remove_prefix(1);
+            }
             if (hex.size() != 6 && hex.size() != 8) {
                 throw std::invalid_argument("Color hex value must contain 6 or 8 digits");
             }
 
-            const auto digit = [](char c) -> std::uint32_t {
-                if (c >= '0' && c <= '9') return static_cast<std::uint32_t>(c - '0');
-                if (c >= 'a' && c <= 'f') return static_cast<std::uint32_t>(c - 'a' + 10);
-                if (c >= 'A' && c <= 'F') return static_cast<std::uint32_t>(c - 'A' + 10);
+            const auto digit = [](char c) -> std::uint32_t { //NOLINT
+                if (c >= '0' && c <= '9') {
+                    return static_cast<std::uint32_t>(c - '0');
+                }
+                if (c >= 'a' && c <= 'f') {
+                    return static_cast<std::uint32_t>(c - 'a' + 10);
+                }
+                if (c >= 'A' && c <= 'F') {
+                    return static_cast<std::uint32_t>(c - 'A' + 10);
+                }
                 throw std::invalid_argument("Color hex value contains invalid character");
             };
             const auto byte = [&](std::size_t offset) {
-                return (digit(hex[offset]) << 4u) | digit(hex[offset + 1]);
+                return (digit(hex[offset]) << 4U) | digit(hex[offset + 1]);
             };
 
             const auto red = byte(0);
             const auto green = byte(2);
             const auto blue = byte(4);
-            const auto alpha = hex.size() == 8 ? byte(6) : 255u;
-            return from_rgba8((red << 24u) | (green << 16u) | (blue << 8u) | alpha);
+            const auto alpha = hex.size() == 8 ? byte(6) : 255U;
+            return from_rgba8((red << 24U) | (green << 16U) | (blue << 8U) | alpha);
         }
 
         /**
@@ -167,7 +180,7 @@ namespace Engine {
          * @param vec Vector containing red, green, blue and alpha channels.
          * @return Constructed color.
          */
-        [[nodiscard]]  static constexpr Color from_vec4(const Vec4& vec) noexcept {
+        [[nodiscard]] static constexpr Color from_vec4(const Vec4 &vec) noexcept {
             return {vec.x(), vec.y(), vec.z(), vec.w()};
         }
 
@@ -225,15 +238,16 @@ namespace Engine {
          * @param other Right-hand color.
          * @return Component-wise product.
          */
-        [[nodiscard]] constexpr Color operator*(const Color& other) const noexcept {
+        [[nodiscard]] constexpr Color operator*(const Color &other) const noexcept {
             return {r_ * other.r_, g_ * other.g_, b_ * other.b_, a_ * other.a_};
         }
+
         /**
          * @brief Adds color channels component-wise.
          * @param other Right-hand color.
          * @return Component-wise sum.
          */
-        [[nodiscard]] constexpr Color operator+(const Color& other) const noexcept {
+        [[nodiscard]] constexpr Color operator+(const Color &other) const noexcept {
             return {r_ + other.r_, g_ + other.g_, b_ + other.b_, a_ + other.a_};
         }
 
@@ -243,7 +257,7 @@ namespace Engine {
          * @return Reference to this color.
          * @note The alpha channel is intentionally unchanged.
          */
-        constexpr Color& operator*=(float scalar) noexcept {
+        constexpr Color &operator*=(float scalar) noexcept {
             r_ *= scalar;
             g_ *= scalar;
             b_ *= scalar;
@@ -257,13 +271,13 @@ namespace Engine {
          * @param factor Interpolation factor, clamped to [0, 1].
          * @return Interpolated color.
          */
-        [[nodiscard]] static Color lerp(const Color& first, const Color& second, float factor) noexcept {
+        [[nodiscard]] static Color lerp(const Color &first, const Color &second, float factor) noexcept {
             factor = std::clamp(factor, 0.0F, 1.0F);
             return {
-                first.r_ + (second.r_ - first.r_) * factor,
-                first.g_ + (second.g_ - first.g_) * factor,
-                first.b_ + (second.b_ - first.b_) * factor,
-                first.a_ + (second.a_ - first.a_) * factor,
+                first.r_ + (second.r_ - first.r_) * factor, //NOLINT
+                first.g_ + (second.g_ - first.g_) * factor, //NOLINT
+                first.b_ + (second.b_ - first.b_) * factor, //NOLINT
+                first.a_ + (second.a_ - first.a_) * factor, //NOLINT
             };
         }
 
@@ -293,12 +307,14 @@ namespace Engine {
      * @param color Color to scale.
      * @return Scaled color.
      */
-    [[nodiscard]] constexpr Color operator*(float scalar, const Color& color) noexcept {
+    [[nodiscard]] constexpr Color operator*(float scalar, const Color &color) noexcept {
         return color * scalar;
     }
 
     // Backwards-compatible namespace used by the renderer and scene APIs.
     namespace Math {
-        using Color = ::Engine::Color;
+        using ::Engine::Color;
     }
+
+    // NOLINTEND(readability-magic-numbers)
 }

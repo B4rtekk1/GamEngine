@@ -20,7 +20,7 @@ namespace Engine {
         }
 
         /** @brief Constructs a quaternion from its scalar and vector components. */
-        constexpr Quat(float w, float x, float y, float z) : m_value(w, x, y, z) {
+        constexpr Quat(float w, float x, float y, float z) : m_value(w, x, y, z) { //NOLINT
         }
 
         /** @brief Constructs a quaternion from GLM's native representation. */

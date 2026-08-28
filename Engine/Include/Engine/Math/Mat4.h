@@ -28,7 +28,7 @@ namespace Engine {
          * @param center Point the camera looks at.
          * @param up World-space up direction.
          */
-        [[nodiscard]] static Mat4 lookAt(const Vec3 &eye, const Vec3 &center, const Vec3 &up) noexcept {
+        [[nodiscard]] static Mat4 lookAt(const Vec3 &eye, const Vec3 &center, const Vec3 &up) noexcept { //NOLINT
             return Mat4{glm::lookAt(eye.native(), center.native(), up.native())};
         }
 

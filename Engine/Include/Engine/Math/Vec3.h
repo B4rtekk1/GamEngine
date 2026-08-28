@@ -19,7 +19,7 @@ namespace Engine {
         constexpr Vec3() = default;
 
         /** @brief Constructs a vector from its three components. */
-        constexpr Vec3(const float x, const float y, const float z) : m_value(x, y, z) {
+        constexpr Vec3(const float x, const float y, const float z) : m_value(x, y, z) { //NOLINT
         }
 
         /** @brief Constructs a vector from its native GLM representation. */
@@ -71,14 +71,14 @@ namespace Engine {
     };
 
     /** @brief Returns a vector multiplied by a scalar. */
-    constexpr Vec3 operator*(float scalar, const Vec3 &value) noexcept { return value * scalar; }
+    constexpr Vec3 operator*(const float scalar, const Vec3 &value) noexcept { return value * scalar; }
 
     /** @brief Returns the cross product of two three-dimensional vectors. */
     [[nodiscard]] constexpr Vec3 cross(const Vec3 &lhs, const Vec3 &rhs) noexcept {
         return Vec3{
-            lhs.y() * rhs.z() - lhs.z() * rhs.y(),
-            lhs.z() * rhs.x() - lhs.x() * rhs.z(),
-            lhs.x() * rhs.y() - lhs.y() * rhs.x()
+            (lhs.y() * rhs.z()) - (lhs.z() * rhs.y()),
+            (lhs.z() * rhs.x()) - (lhs.x() * rhs.z()),
+            (lhs.x() * rhs.y()) - (lhs.y() * rhs.x())
         };
     }
 } // namespace Engine

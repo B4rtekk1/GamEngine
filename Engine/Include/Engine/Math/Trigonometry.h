@@ -10,7 +10,6 @@
 #include <cmath>
 
 namespace Engine {
-
     /** @brief Returns the sine of a value interpreted as radians. */
     [[nodiscard]] inline float sin(const float angleRadians) noexcept {
         return std::sin(angleRadians);
@@ -72,7 +71,7 @@ namespace Engine {
     }
 
     /** @brief Returns the arctangent of @p y / @p x as a radians angle. */
-    [[nodiscard]] inline Radians atan2(const float y, const float x) noexcept {
+    [[nodiscard]] inline Radians atan2(const float y, const float x) noexcept { //NOLINT
         return Radians{std::atan2(y, x)};
     }
 

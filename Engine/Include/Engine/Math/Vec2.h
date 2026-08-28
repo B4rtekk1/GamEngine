@@ -14,7 +14,7 @@ namespace Engine {
         constexpr Vec2() = default;
 
         /** @brief Constructs a vector from its two components. */
-        constexpr Vec2(float x, float y) : m_value(x, y) {
+        constexpr Vec2(float x, float y) : m_value(x, y) { //NOLINT
         }
 
         /** @brief Constructs a vector from its native GLM representation. */
