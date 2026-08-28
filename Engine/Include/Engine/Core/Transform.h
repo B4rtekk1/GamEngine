@@ -5,8 +5,6 @@
 #include "Engine/ECS/Components/TransformComponent.h"
 
 namespace Engine {
-
-/** @brief Compatibility alias for TransformComponent. */
-using Transform = TransformComponent;
-
+    /** @brief Compatibility alias for TransformComponent. */
+    using Transform = TransformComponent;
 } // namespace Engine
