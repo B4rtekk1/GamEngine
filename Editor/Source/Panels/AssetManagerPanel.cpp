@@ -1,5 +1,6 @@
 #include "Editor/Panels/AssetManagerPanel.h"
 
+#include "Editor/Panels/AssetDragDrop.h"
 #include "imgui.h"
 
 #include <algorithm>
@@ -300,13 +301,7 @@ Engine::Entity AssetManagerPanel::draw(Engine::ScenePreset& scene, Engine::Asset
         if (selected.empty() || !is_model(selected))
             return;
         try {
-            const auto prefab = Engine::Prefab::model(content, selected);
-            const auto actor = scene.createPrefab(selected.stem().string(), prefab);
-            scene.editor().view<Engine::NameComponent>(
-                [&](const Engine::Entity entity, const Engine::NameComponent& name) {
-                    if (name.value == actor.name())
-                        created = entity;
-                });
+            created = Editor::AssetDragDrop::instantiateModel(scene, content, selected);
             error.clear();
         } catch (const std::exception& exception) {
             error = exception.what();
@@ -416,6 +411,13 @@ Engine::Entity AssetManagerPanel::draw(Engine::ScenePreset& scene, Engine::Asset
                     selected = asset.relative;
                     error.clear();
                 }
+                if (is_model(asset.relative) && ImGui::BeginDragDropSource()) {
+                    selected = asset.relative;
+                    Editor::AssetDragDrop::setModelPayload(asset.relative);
+                    ImGui::TextUnformatted("Add model to scene");
+                    ImGui::TextDisabled("%s", asset.relative.filename().string().c_str());
+                    ImGui::EndDragDropSource();
+                }
                 const bool doubleClicked = ImGui::IsItemHovered() && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left);
                 const auto min = ImGui::GetItemRectMin();
                 const float iconSize = tileSize * 0.62F;
@@ -426,7 +428,7 @@ Engine::Entity AssetManagerPanel::draw(Engine::ScenePreset& scene, Engine::Asset
                                                     ImGui::GetColorU32(ImGuiCol_Text), name.c_str());
                 ImGui::GetWindowDrawList()->AddText({min.x + 6.0F, min.y + tileSize + 24.0F},
                                                     ImGui::GetColorU32(ImGuiCol_TextDisabled), ext.c_str());
-                if (doubleClicked && is_model(asset.relative) && !disabled)
+                if (doubleClicked && is_model(asset.relative))
                     instantiate();
                 if (ImGui::BeginPopupContextItem("##context")) {
                     ImGui::TextDisabled("%s", asset.relative.filename().string().c_str());
@@ -435,7 +437,7 @@ Engine::Entity AssetManagerPanel::draw(Engine::ScenePreset& scene, Engine::Asset
                         selected = asset.relative;
                         showInspector = true;
                     }
-                    ImGui::BeginDisabled(!is_model(asset.relative) || disabled);
+                    ImGui::BeginDisabled(!is_model(asset.relative));
                     if (ImGui::MenuItem("Add to scene")) {
                         selected = asset.relative;
                         instantiate();
@@ -482,8 +484,15 @@ Engine::Entity AssetManagerPanel::draw(Engine::ScenePreset& scene, Engine::Asset
                                   ImGuiSelectableFlags_SpanAllColumns | ImGuiSelectableFlags_AllowDoubleClick)) {
                 selected = asset.relative;
                 error.clear();
-                if (ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left) && is_model(asset.relative) && !disabled)
+                if (ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left) && is_model(asset.relative))
                     instantiate();
+            }
+            if (is_model(asset.relative) && ImGui::BeginDragDropSource()) {
+                selected = asset.relative;
+                Editor::AssetDragDrop::setModelPayload(asset.relative);
+                ImGui::TextUnformatted("Add model to scene");
+                ImGui::TextDisabled("%s", asset.relative.filename().string().c_str());
+                ImGui::EndDragDropSource();
             }
             ImGui::PopID();
             ImGui::TableSetColumnIndex(1);
@@ -535,10 +544,8 @@ Engine::Entity AssetManagerPanel::draw(Engine::ScenePreset& scene, Engine::Asset
                     }
                     ImGui::TreePop();
                 }
-                ImGui::BeginDisabled(disabled);
                 if (ImGui::Button("Add to scene", {-1.0F, 0.0F}))
                     instantiate();
-                ImGui::EndDisabled();
             } else {
                 ImGui::Spacing();
                 ImGui::TextDisabled("Preview/import settings are not available for this asset type yet.");
@@ -556,6 +563,10 @@ Engine::Entity AssetManagerPanel::draw(Engine::ScenePreset& scene, Engine::Asset
     if (!error.empty()) {
         ImGui::SameLine();
         ImGui::TextColored({0.95F, 0.40F, 0.35F, 1.0F}, "  |  %s", error.c_str());
+    }
+    if (disabled) {
+        ImGui::SameLine();
+        ImGui::TextColored({0.95F, 0.68F, 0.28F, 1.0F}, "  |  Play Mode: additions are temporary");
     }
     ImGui::End();
     return created;

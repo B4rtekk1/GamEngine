@@ -63,11 +63,11 @@ int drawSceneOrientationGizmo(const ImVec2 imageMin, const ImVec2 imageMax,
     }
     return -1;
 }
-
 struct ViewportInteraction final {
     bool cameraInput{};
     bool sceneClicked{};
     bool terrainGeometryChanged{};
+    Engine::Entity createdEntity{Engine::NullEntity};
     float normalizedX{};
     float normalizedY{};
 };
@@ -706,12 +706,14 @@ bool drawTerrainSculpt(Engine::ScenePreset& scene, const Engine::Entity selected
     return true;
 }
 
-ViewportInteraction drawViewport(Engine::ScenePreset &scene, const Engine::Entity selected,
-                                 Engine::Renderer &renderer, Engine::ViewportHandle gameDescriptor,
+ViewportInteraction drawViewport(Engine::ScenePreset &scene, Engine::Assets::Content& content,
+                                 const Engine::Entity selected, Engine::Renderer &renderer,
+                                 Engine::ViewportHandle gameDescriptor,
                                  Engine::ViewportHandle sceneDescriptor,
                                  const float sceneCameraYaw, const float sceneCameraPitch,
                                  bool &showGameView, GizmoMode &gizmoMode,
                                  TerrainSculptState& terrainSculpt, const bool playing) {
+    static std::string assetDropError;
     if (playing) {
         showGameView = true;
     }
@@ -774,7 +776,33 @@ ViewportInteraction drawViewport(Engine::ScenePreset &scene, const Engine::Entit
                      {frameSize.x, imageHeight}, {0, 0}, {1, 1});
         const ImVec2 imageMin = ImGui::GetItemRectMin();
         const ImVec2 imageMax = ImGui::GetItemRectMax();
+        if (ImGui::BeginDragDropTarget()) {
+            if (const ImGuiPayload* payload =
+                    ImGui::AcceptDragDropPayload(Editor::AssetDragDrop::modelPayload)) {
+                try {
+                    Engine::Vec3 position{};
+                    if (!showGameView) {
+                        const Engine::Camera camera = sceneViewCamera(renderer, imageMin, imageMax);
+                        const Engine::Vec3 direction = viewportRayDirection(
+                            camera, ImGui::GetIO().MousePos, imageMin, imageMax);
+                        if (!intersectRayPlane(camera.position(), direction, Engine::Vec3{},
+                                               Engine::Vec3{0.0F, 1.0F, 0.0F}, position)) {
+                            position = camera.position() + direction * 5.0F;
+                        }
+                    }
+                    interaction.createdEntity = Editor::AssetDragDrop::instantiateModel(
+                        scene, content, Editor::AssetDragDrop::modelPath(*payload), position);
+                    assetDropError.clear();
+                } catch (const std::exception& exception) {
+                    assetDropError = exception.what();
+                }
+            }
+            ImGui::EndDragDropTarget();
+        }
         const bool imageHovered = ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenBlockedByActiveItem);
+        if (imageHovered && !assetDropError.empty()) {
+            ImGui::SetTooltip("Could not add model: %s", assetDropError.c_str());
+        }
         viewportHovered = imageHovered;
         int gizmoAction = -1;
         bool gizmoToolsConsumeClick = false;

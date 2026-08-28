@@ -1,8 +1,35 @@
-Engine::Entity HierarchyPanel::draw(Engine::ScenePreset &scene, const Engine::Entity selected,
-                                    Action &action, Engine::Entity &actionEntity, const bool canPaste) {
+Engine::Entity HierarchyPanel::draw(Engine::ScenePreset &scene, Engine::Assets::Content& content,
+                                    const Engine::Entity selected, Action &action,
+                                    Engine::Entity &actionEntity, const bool canPaste) {
     Engine::Entity clicked = Engine::NullEntity;
+    static std::string assetDropError;
     action = Action::None;
     actionEntity = Engine::NullEntity;
+    const auto acceptModelDrop = [&](const Engine::Entity parent = Engine::NullEntity) {
+        if (const ImGuiPayload* payload =
+                ImGui::AcceptDragDropPayload(Editor::AssetDragDrop::modelPayload)) {
+            try {
+                clicked = Editor::AssetDragDrop::instantiateModel(
+                    scene, content, Editor::AssetDragDrop::modelPath(*payload));
+                if (parent != Engine::NullEntity && clicked != Engine::NullEntity &&
+                    scene.editor().valid(parent) && scene.editor().valid(clicked) &&
+                    scene.editor().has<Engine::UUIDComponent>(parent)) {
+                    const Engine::ParentComponent link{
+                        .parent = scene.editor().get<Engine::UUIDComponent>(parent).value
+                    };
+                    if (scene.editor().has<Engine::ParentComponent>(clicked)) {
+                        scene.editor().modify<Engine::ParentComponent>(
+                            clicked, [&](auto& component) { component = link; });
+                    } else {
+                        scene.editor().add<Engine::ParentComponent>(clicked, link);
+                    }
+                }
+                assetDropError.clear();
+            } catch (const std::exception& exception) {
+                assetDropError = exception.what();
+            }
+        }
+    };
     ImGui::Begin("Hierarchy");
     if (EditorButton("+  New Object", {-1.0F, 0.0F}).draw()) {
         clicked = scene.createGameObject();
@@ -23,7 +50,13 @@ Engine::Entity HierarchyPanel::draw(Engine::ScenePreset &scene, const Engine::En
     ImGui::TextDisabled("Right-click an object for more actions");
     ImGui::Spacing();
 
-    if (ImGui::TreeNodeEx("Scene", ImGuiTreeNodeFlags_DefaultOpen | ImGuiTreeNodeFlags_SpanAvailWidth)) {
+    const bool sceneOpen = ImGui::TreeNodeEx(
+        "Scene", ImGuiTreeNodeFlags_DefaultOpen | ImGuiTreeNodeFlags_SpanAvailWidth);
+    if (ImGui::BeginDragDropTarget()) {
+        acceptModelDrop();
+        ImGui::EndDragDropTarget();
+    }
+    if (sceneOpen) {
         const auto entityLabel = [&](const char *name, const Engine::Entity entity) {
             if (entity != Engine::NullEntity) {
                 if (!containsCaseInsensitive(name, filter)) {
@@ -161,6 +194,7 @@ Engine::Entity HierarchyPanel::draw(Engine::ScenePreset &scene, const Engine::En
                         const auto moved = *static_cast<const Engine::Entity*>(payload->Data);
                         requestReorder(moved, entity);
                     }
+                    acceptModelDrop(entity);
                     ImGui::EndDragDropTarget();
                 }
                 drawContextMenu();
@@ -182,6 +216,7 @@ Engine::Entity HierarchyPanel::draw(Engine::ScenePreset &scene, const Engine::En
                     const auto moved = *static_cast<const Engine::Entity*>(payload->Data);
                     requestReorder(moved, entity);
                 }
+                acceptModelDrop(entity);
                 ImGui::EndDragDropTarget();
             }
             drawContextMenu();
@@ -202,6 +237,20 @@ Engine::Entity HierarchyPanel::draw(Engine::ScenePreset &scene, const Engine::En
             }
         }
         ImGui::TreePop();
+    }
+
+    // The remaining hierarchy area is a root-level drop target, matching the
+    // behaviour of the Scene row without obscuring entity items.
+    const ImVec2 dropArea = ImGui::GetContentRegionAvail();
+    const ImVec2 dropMin = ImGui::GetCursorScreenPos();
+    const ImRect dropRect{dropMin, {dropMin.x + dropArea.x,
+                                   dropMin.y + std::max(dropArea.y, 28.0F)}};
+    if (ImGui::BeginDragDropTargetCustom(dropRect, ImGui::GetID("##hierarchy-asset-drop"))) {
+        acceptModelDrop();
+        ImGui::EndDragDropTarget();
+    }
+    if (!assetDropError.empty()) {
+        ImGui::TextColored({0.95F, 0.40F, 0.35F, 1.0F}, "%s", assetDropError.c_str());
     }
 
     // Allow pasting from empty space in the hierarchy, without requiring an

@@ -25,6 +25,7 @@
 #include "Editor/Panels/HierarchyPanel.h"
 #include "Editor/Panels/ComponentsPanel.h"
 #include "Editor/Panels/AssetManagerPanel.h"
+#include "Editor/Panels/AssetDragDrop.h"
 #include "Editor/EditorState.h"
 #include "Editor/EditorConstants.h"
 #include "Editor/EditorUi.h"
@@ -80,7 +81,6 @@ namespace {
         return *font;
     }
 }
-
 int main() {
     try {
         if (!SDL_Init(SDL_INIT_VIDEO | SDL_INIT_EVENTS)) {
@@ -256,7 +256,7 @@ int main() {
             HierarchyPanel::Action hierarchyAction = HierarchyPanel::Action::None;
             Engine::Entity hierarchyActionEntity = Engine::NullEntity;
             if (const Engine::Entity clicked = HierarchyPanel::draw(
-                    scene, selectedEntity, hierarchyAction, hierarchyActionEntity,
+                    scene, content, selectedEntity, hierarchyAction, hierarchyActionEntity,
                     clipboard.canPaste(scene));
                 clicked != Engine::NullEntity) {
                 selectedEntity = clicked;
@@ -297,9 +297,13 @@ int main() {
                 }
             }
             const ViewportInteraction viewportInteraction = drawViewport(
-                scene, selectedEntity, renderer, renderer.gameViewport(), renderer.sceneViewport(),
+                scene, content, selectedEntity, renderer, renderer.gameViewport(), renderer.sceneViewport(),
                 renderer.editorCameraYaw(),
                 renderer.editorCameraPitch(), showGameView, gizmoMode, terrainSculpt, playing);
+            if (viewportInteraction.createdEntity != Engine::NullEntity) {
+                selectedEntity = viewportInteraction.createdEntity;
+                renderer.setEditorSelection(selectedEntity);
+            }
             if (!playing && viewportInteraction.sceneClicked) {
                 constexpr float viewportAspect = EditorConstants::viewportWidthRatio /
                                                  EditorConstants::viewportHeightRatio;
