@@ -13,5 +13,6 @@ public:
                                                Engine::Entity selected,
                                                Action& action,
                                                Engine::Entity& actionEntity,
-                                               bool canPaste);
+                                               bool canPaste,
+                                               bool& isOpen);
 };

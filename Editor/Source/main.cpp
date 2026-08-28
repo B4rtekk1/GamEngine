@@ -120,6 +120,10 @@ int main() {
         bool rendererReloadPending = false;
         bool playing = false;
         bool paused = false;
+        bool showHierarchy = true;
+        bool showViewport = true;
+        bool showInspector = true;
+        bool showAssetManager = true;
         double physicsAccumulator = 0.0;
         bool showGameView = false;
         GizmoMode gizmoMode = GizmoMode::Translate;
@@ -181,7 +185,8 @@ int main() {
                                                                  history.canRedo(), clipboard.canPaste(scene),
                                                                  undoRequested, redoRequested, copyRequested,
                                                                  pasteRequested, duplicateRequested,
-                                                                 resetHistoryRequested);
+                                                                 resetHistoryRequested, showHierarchy,
+                                                                 showViewport, showInspector, showAssetManager);
                 created != Engine::NullEntity) {
                 selectedEntity = created;
                 renderer.setEditorSelection(selectedEntity);
@@ -255,12 +260,14 @@ int main() {
             ImGui::PopStyleVar();
             HierarchyPanel::Action hierarchyAction = HierarchyPanel::Action::None;
             Engine::Entity hierarchyActionEntity = Engine::NullEntity;
-            if (const Engine::Entity clicked = HierarchyPanel::draw(
-                    scene, content, selectedEntity, hierarchyAction, hierarchyActionEntity,
-                    clipboard.canPaste(scene));
-                clicked != Engine::NullEntity) {
-                selectedEntity = clicked;
-                renderer.setEditorSelection(selectedEntity);
+            if (showHierarchy) {
+                if (const Engine::Entity clicked = HierarchyPanel::draw(
+                        scene, content, selectedEntity, hierarchyAction, hierarchyActionEntity,
+                        clipboard.canPaste(scene), showHierarchy);
+                    clicked != Engine::NullEntity) {
+                    selectedEntity = clicked;
+                    renderer.setEditorSelection(selectedEntity);
+                }
             }
             if (!playing && hierarchyAction == HierarchyPanel::Action::Paste) {
                 selectedEntity = clipboard.paste(scene);
@@ -296,10 +303,13 @@ int main() {
                     renderer.setEditorSelection(selectedEntity);
                 }
             }
-            const ViewportInteraction viewportInteraction = drawViewport(
-                scene, content, selectedEntity, renderer, renderer.gameViewport(), renderer.sceneViewport(),
-                renderer.editorCameraYaw(),
-                renderer.editorCameraPitch(), showGameView, gizmoMode, terrainSculpt, playing);
+            ViewportInteraction viewportInteraction{};
+            if (showViewport) {
+                viewportInteraction = drawViewport(
+                    scene, content, selectedEntity, renderer, renderer.gameViewport(), renderer.sceneViewport(),
+                    renderer.editorCameraYaw(), renderer.editorCameraPitch(), showGameView, gizmoMode,
+                    terrainSculpt, playing, showViewport);
+            }
             if (viewportInteraction.createdEntity != Engine::NullEntity) {
                 selectedEntity = viewportInteraction.createdEntity;
                 renderer.setEditorSelection(selectedEntity);
@@ -312,11 +322,15 @@ int main() {
                                                  viewportInteraction.normalizedY, viewportAspect);
                 renderer.setEditorSelection(selectedEntity);
             }
-            const bool inspectorConsumesMouseWheel = ComponentsPanel::draw(scene, selectedEntity);
-            if (const Engine::Entity created = AssetManagerPanel::draw(scene, content, playing);
-                created != Engine::NullEntity) {
-                selectedEntity = created;
-                renderer.setEditorSelection(selectedEntity);
+            const bool inspectorConsumesMouseWheel = showInspector &&
+                ComponentsPanel::draw(scene, selectedEntity, showInspector);
+            if (showAssetManager) {
+                if (const Engine::Entity created =
+                        AssetManagerPanel::draw(scene, content, playing, showAssetManager);
+                    created != Engine::NullEntity) {
+                    selectedEntity = created;
+                    renderer.setEditorSelection(selectedEntity);
+                }
             }
             drawStatusBar(scene, selectedEntity, playing, paused);
             if (!playing && selectedEntity != Engine::NullEntity &&

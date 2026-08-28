@@ -9,8 +9,8 @@ static bool drawRemovableComponentHeader(const char *label, const char *id, bool
     return open;
 }
 
-bool ComponentsPanel::draw(Engine::ScenePreset &scene, const Engine::Entity selected) {
-    ImGui::Begin("Inspector");
+bool ComponentsPanel::draw(Engine::ScenePreset &scene, const Engine::Entity selected, bool& isOpen) {
+    ImGui::Begin("Inspector", &isOpen);
     if (selected == Engine::NullEntity) {
         ImGui::Spacing();
         ImGui::Spacing();

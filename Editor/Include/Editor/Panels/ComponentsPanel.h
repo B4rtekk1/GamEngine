@@ -5,5 +5,6 @@
 class ComponentsPanel final {
 public:
     [[nodiscard]] static bool draw(Engine::ScenePreset& scene,
-                                   Engine::Entity selected);
+                                   Engine::Entity selected,
+                                   bool& isOpen);
 };

@@ -712,14 +712,14 @@ ViewportInteraction drawViewport(Engine::ScenePreset &scene, Engine::Assets::Con
                                  Engine::ViewportHandle sceneDescriptor,
                                  const float sceneCameraYaw, const float sceneCameraPitch,
                                  bool &showGameView, GizmoMode &gizmoMode,
-                                 TerrainSculptState& terrainSculpt, const bool playing) {
+                                 TerrainSculptState& terrainSculpt, const bool playing, bool& isOpen) {
     static std::string assetDropError;
     if (playing) {
         showGameView = true;
     }
     const Engine::ViewportHandle descriptor = showGameView ? gameDescriptor : sceneDescriptor;
 
-    ImGui::Begin("Viewport", nullptr, ImGuiWindowFlags_NoScrollbar);
+    ImGui::Begin("Viewport", &isOpen, ImGuiWindowFlags_NoScrollbar);
     if (!playing) {
         ImGui::TextDisabled("Navigate: RMB + WASD/QE  |  Shift: faster  |  MMB: pan  |  Wheel: zoom");
         const bool terrainSelected = selected != Engine::NullEntity && scene.editor().valid(selected) &&

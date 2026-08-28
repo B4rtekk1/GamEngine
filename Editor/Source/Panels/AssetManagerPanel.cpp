@@ -269,7 +269,7 @@ void draw_breadcrumbs(std::filesystem::path& folder, std::filesystem::path& sele
 } // namespace
 
 Engine::Entity AssetManagerPanel::draw(Engine::ScenePreset& scene, Engine::Assets::Content& content,
-                                       const bool disabled) {
+                                       const bool disabled, bool& isOpen) {
     static std::filesystem::path selected;
     static std::filesystem::path selectedFolder;
     static std::filesystem::path scannedRoot;
@@ -308,7 +308,7 @@ Engine::Entity AssetManagerPanel::draw(Engine::ScenePreset& scene, Engine::Asset
         }
     };
 
-    ImGui::Begin("Asset Manager");
+    ImGui::Begin("Asset Manager", &isOpen);
     ImGui::BeginDisabled(selectedFolder.empty());
     if (ImGui::Button("<##asset-up")) {
         selectedFolder = selectedFolder.parent_path();

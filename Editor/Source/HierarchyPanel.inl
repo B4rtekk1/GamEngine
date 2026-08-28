@@ -1,6 +1,6 @@
 Engine::Entity HierarchyPanel::draw(Engine::ScenePreset &scene, Engine::Assets::Content& content,
                                     const Engine::Entity selected, Action &action,
-                                    Engine::Entity &actionEntity, const bool canPaste) {
+                                    Engine::Entity &actionEntity, const bool canPaste, bool& isOpen) {
     Engine::Entity clicked = Engine::NullEntity;
     static std::string assetDropError;
     action = Action::None;
@@ -30,7 +30,7 @@ Engine::Entity HierarchyPanel::draw(Engine::ScenePreset &scene, Engine::Assets::
             }
         }
     };
-    ImGui::Begin("Hierarchy");
+    ImGui::Begin("Hierarchy", &isOpen);
     if (EditorButton("+  New Object", {-1.0F, 0.0F}).draw()) {
         clicked = scene.createGameObject();
     }

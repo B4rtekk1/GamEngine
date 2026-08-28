@@ -40,7 +40,9 @@ Engine::Entity drawEditorMenuBar(Engine::ScenePreset &scene, Engine::Renderer &r
                                  const bool canRedo, const bool canPaste,
                                  bool &undoRequested, bool &redoRequested,
                                  bool &copyRequested, bool &pasteRequested,
-                                 bool &duplicateRequested, bool &resetHistoryRequested) {
+                                 bool &duplicateRequested, bool &resetHistoryRequested,
+                                 bool &showHierarchy, bool &showViewport,
+                                 bool &showInspector, bool &showAssetManager) {
     static bool showShortcuts = false;
     static bool showAbout = false;
     static bool openSceneSettings = false;
@@ -170,6 +172,14 @@ Engine::Entity drawEditorMenuBar(Engine::ScenePreset &scene, Engine::Renderer &r
         if (ImGui::MenuItem("Antialiasing...")) {
             openSceneSettings = true;
         }
+        ImGui::EndMenu();
+    }
+
+    if (ImGui::BeginMenu("View")) {
+        ImGui::MenuItem("Hierarchy", nullptr, &showHierarchy);
+        ImGui::MenuItem("Viewport", nullptr, &showViewport);
+        ImGui::MenuItem("Inspector", nullptr, &showInspector);
+        ImGui::MenuItem("Asset Manager", nullptr, &showAssetManager);
         ImGui::EndMenu();
     }
 
