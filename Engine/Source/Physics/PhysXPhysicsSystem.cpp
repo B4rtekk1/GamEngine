@@ -605,8 +605,8 @@ namespace Engine {
             return std::nullopt;
         }
         return RaycastHit{
-            Actor{scene, object->objectId()}, fromPhysX(hit.block.position),
-            fromPhysX(hit.block.normal), hit.block.distance,
+            .actor = Actor{scene, object->objectId()}, .point = fromPhysX(hit.block.position),
+            .normal = fromPhysX(hit.block.normal), .distance = hit.block.distance,
         };
     }
 } // namespace Engine

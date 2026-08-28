@@ -328,7 +328,7 @@ bool ComponentsPanel::draw(Engine::ScenePreset &scene, const Engine::Entity sele
     }
     if (scene.editor().valid(selected) && scene.editor().has<Engine::ColliderComponent>(selected)) {
         bool remove = false;
-        const bool open = drawRemovableComponentHeader("PhysX Collider", "collider", remove);
+        const bool open = drawRemovableComponentHeader("Collider", "collider", remove);
         if (remove) {
             scene.editor().remove<Engine::ColliderComponent>(selected);
         } else if (open) {
@@ -441,7 +441,7 @@ bool ComponentsPanel::draw(Engine::ScenePreset &scene, const Engine::Entity sele
     }
     if (scene.editor().valid(selected) && scene.editor().has<Engine::RigidbodyComponent>(selected)) {
         bool remove = false;
-        const bool open = drawRemovableComponentHeader("PhysX Rigidbody", "rigidbody", remove);
+        const bool open = drawRemovableComponentHeader("Rigidbody", "rigidbody", remove);
         if (remove) {
             scene.editor().remove<Engine::RigidbodyComponent>(selected);
         } else if (open) {
@@ -461,7 +461,7 @@ bool ComponentsPanel::draw(Engine::ScenePreset &scene, const Engine::Entity sele
             bool changed = value.type != rigidbody.type;
             const bool dynamic = value.type == Engine::RigidbodyType::Dynamic;
             const bool kinematic = value.type == Engine::RigidbodyType::Kinematic;
-            ImGui::TextDisabled(dynamic ? "Simulated by PhysX." :
+            ImGui::TextDisabled(dynamic ? "Simulated by the physics system." :
                                 kinematic ? "Driven by Transform; pushes dynamic bodies." :
                                             "Fixed collision geometry.");
 
