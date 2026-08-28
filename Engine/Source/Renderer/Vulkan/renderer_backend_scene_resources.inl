@@ -667,7 +667,7 @@
         }
 
         VkPipeline createComputePipeline(const char* shaderPath, VkPipelineLayout layout) const {
-            const auto shader = vkutil::loadShaderModule(device, assetManager, shaderPath);
+            const auto shader = Vkutil::loadShaderModule(device, assetManager, shaderPath);
             VkPipelineShaderStageCreateInfo stage{VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO};
             stage.stage = VK_SHADER_STAGE_COMPUTE_BIT;
             stage.module = shader.get();

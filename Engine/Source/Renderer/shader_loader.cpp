@@ -16,7 +16,7 @@
 
 namespace Engine {
 
-namespace vkutil {
+namespace Vkutil {
 
 /**
  * @brief Takes ownership of a Vulkan shader module.

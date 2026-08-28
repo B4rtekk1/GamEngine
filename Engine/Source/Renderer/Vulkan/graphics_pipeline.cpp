@@ -180,12 +180,12 @@ namespace Engine {
 
     void GraphicsPipeline::createGraphicsPipeline(const GraphicsPipelineOptions &options) {
         const auto vertexShader = (options.assetManager != nullptr)
-                                      ? vkutil::loadShaderModule(device_, *options.assetManager, options.vertexShader)
-                                      : vkutil::loadShaderModule(device_, options.vertexShader);
+                                      ? Vkutil::loadShaderModule(device_, *options.assetManager, options.vertexShader)
+                                      : Vkutil::loadShaderModule(device_, options.vertexShader);
         const auto fragmentShader = (options.assetManager != nullptr)
-                                        ? vkutil::loadShaderModule(device_, *options.assetManager,
+                                        ? Vkutil::loadShaderModule(device_, *options.assetManager,
                                                                    options.fragmentShader)
-                                        : vkutil::loadShaderModule(device_, options.fragmentShader);
+                                        : Vkutil::loadShaderModule(device_, options.fragmentShader);
         const std::array stages{
             VkPipelineShaderStageCreateInfo{
                 VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO, nullptr, 0, VK_SHADER_STAGE_VERTEX_BIT,

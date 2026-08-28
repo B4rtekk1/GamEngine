@@ -105,8 +105,8 @@ void ShadowPass::create(VkPhysicalDevice physicalDevice, VkDevice device,
             vkUpdateDescriptorSets(device_, std::size(writes), writes, 0, nullptr);
         }
 
-        const auto vertexShader = vkutil::loadShaderModule(device_, assets, "shaders/shadow.vert.spv");
-        const auto fragmentShader = vkutil::loadShaderModule(device_, assets, "shaders/shadow.frag.spv");
+        const auto vertexShader = Vkutil::loadShaderModule(device_, assets, "shaders/shadow.vert.spv");
+        const auto fragmentShader = Vkutil::loadShaderModule(device_, assets, "shaders/shadow.frag.spv");
         const std::array stages{
             VkPipelineShaderStageCreateInfo{VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO, nullptr, 0,
                 VK_SHADER_STAGE_VERTEX_BIT, vertexShader.get(), "main", nullptr},
