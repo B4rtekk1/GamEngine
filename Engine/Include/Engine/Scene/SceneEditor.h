@@ -56,3 +56,8 @@ private:
 };
 
 } // namespace Engine
+
+namespace Engine {
+inline SceneEditor Scene::editor() noexcept { return SceneEditor{*this}; }
+inline SceneEditor Scene::editor() const noexcept { return SceneEditor{*this}; }
+} // namespace Engine

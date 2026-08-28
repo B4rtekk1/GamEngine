@@ -7,39 +7,43 @@
 #include <vector>
 
 namespace Engine {
+    enum class SceneType:uint8_t { Empty, Cubes, Particles };
 
-enum class SceneType { Empty, Cubes, Particles };
+    // Explicit sample-content layer. Applications can use Scene directly and do
+    // not inherit benchmark geometry, asset paths, or editor labels.
+    class ScenePreset final : public Scene {
+    public:
+        explicit ScenePreset(SceneType type = SceneType::Empty);
 
-// Explicit sample-content layer. Applications can use Scene directly and do
-// not inherit benchmark geometry, asset paths, or editor labels.
-class ScenePreset final : public Scene {
-public:
-    explicit ScenePreset(SceneType type = SceneType::Empty);
+        [[nodiscard]] Entity createGameObject();
 
-    [[nodiscard]] Entity createGameObject();
-    [[nodiscard]] Entity createCube();
-    [[nodiscard]] Entity createPlane();
-    [[nodiscard]] Entity createSphere();
-    [[nodiscard]] Entity createRamp();
-    [[nodiscard]] Entity createLight();
-    [[nodiscard]] Entity createTerrain();
+        [[nodiscard]] Entity createCube();
 
-    Entity plane{NullEntity};
-    Entity camera{NullEntity};
-    Entity particleSystem{NullEntity};
-    std::vector<Entity> editorGameObjects;
-    std::vector<Entity> editorCubes;
-    std::vector<Entity> editorPlanes;
-    std::vector<Entity> editorSpheres;
-    std::vector<Entity> editorRamps;
-    std::vector<Entity> editorLights;
-    std::vector<Entity> editorTerrains;
+        [[nodiscard]] Entity createPlane();
 
-private:
-    std::shared_ptr<const Mesh> planeMesh_;
-    std::shared_ptr<const Mesh> cubeMesh_;
-    std::shared_ptr<const Mesh> sphereMesh_;
-    std::shared_ptr<const Mesh> rampMesh_;
-};
+        [[nodiscard]] Entity createSphere();
 
+        [[nodiscard]] Entity createRamp();
+
+        [[nodiscard]] Entity createLight();
+
+        [[nodiscard]] Entity createTerrain();
+
+        Entity plane{NullEntity};
+        Entity camera{NullEntity};
+        Entity particleSystem{NullEntity};
+        std::vector<Entity> editorGameObjects;
+        std::vector<Entity> editorCubes;
+        std::vector<Entity> editorPlanes;
+        std::vector<Entity> editorSpheres;
+        std::vector<Entity> editorRamps;
+        std::vector<Entity> editorLights;
+        std::vector<Entity> editorTerrains;
+
+    private:
+        std::shared_ptr<const Mesh> planeMesh_;
+        std::shared_ptr<const Mesh> cubeMesh_;
+        std::shared_ptr<const Mesh> sphereMesh_;
+        std::shared_ptr<const Mesh> rampMesh_;
+    };
 } // namespace Engine

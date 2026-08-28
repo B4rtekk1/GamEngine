@@ -1,6 +1,7 @@
 #pragma once
 
 #include "Engine/Scene/ScenePresets.h"
+#include "Engine/Scene/SceneEditor.h"
 #include "Engine/Scene/SceneSerializer.h"
 #include "Engine/ECS/Components/ColliderComponent.h"
 #include "Engine/ECS/Components/MeshRendererComponent.h"

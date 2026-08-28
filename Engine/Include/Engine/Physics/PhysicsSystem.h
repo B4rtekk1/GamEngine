@@ -8,38 +8,37 @@
 #include <memory>
 
 namespace Engine {
+    class Scene;
 
-class Scene;
+    struct RaycastHit final {
+        Actor actor;
+        Vec3 point;
+        Vec3 normal;
+        float distance{};
+    };
 
-struct RaycastHit final {
-    Actor actor;
-    Vec3 point{};
-    Vec3 normal{};
-    float distance{};
-};
+    /**
+     * @brief NVIDIA PhysX-backed rigid-body simulation and scene queries.
+     */
+    class PhysicsSystem final {
+    public:
+        explicit PhysicsSystem(Vec3 gravity = {0.0F, -9.81F, 0.0F}) noexcept //NOLINT g = 9.81
+            : gravity_(gravity) {
+        }
 
-/**
- * @brief NVIDIA PhysX-backed rigid-body simulation and scene queries.
- */
-class PhysicsSystem final {
-public:
-    explicit PhysicsSystem(Vec3 gravity = {0.0F, -9.81F, 0.0F}) noexcept
-        : gravity_(gravity) {}
+        /** Advances dynamic rigid bodies in a scene by one simulation step. */
+        void update(Scene &scene, float deltaTime) const;
 
-    /** Advances dynamic rigid bodies in a scene by one simulation step. */
-    void update(Scene& scene, float deltaTime) const;
+        [[nodiscard]] Vec3 gravity() const noexcept { return gravity_; }
+        void setGravity(Vec3 gravity) noexcept { gravity_ = gravity; }
 
-    [[nodiscard]] Vec3 gravity() const noexcept { return gravity_; }
-    void setGravity(Vec3 gravity) noexcept { gravity_ = gravity; }
+        [[nodiscard]] std::optional<RaycastHit> raycast(
+            Scene &scene, Vec3 origin, Vec3 direction, float maxDistance = 1000.0F) const; //NOLINT
 
-    [[nodiscard]] std::optional<RaycastHit> raycast(
-        Scene& scene, Vec3 origin, Vec3 direction, float maxDistance = 1000.0F) const;
+    private:
+        struct BroadPhaseCache;
 
-private:
-    struct BroadPhaseCache;
-
-    Vec3 gravity_;
-    mutable std::shared_ptr<BroadPhaseCache> broadPhaseCache_;
-};
-
+        Vec3 gravity_;
+        mutable std::shared_ptr<BroadPhaseCache> broadPhaseCache_;
+    };
 } // namespace Engine
