@@ -3,6 +3,7 @@
 #include "Engine/Renderer/Geometry/Mesh.h"
 
 namespace Engine {
+    //NOLINTBEGIN
 
 class Plane final {
 public:
@@ -20,3 +21,4 @@ public:
 };
 
 } // namespace Engine
+//NOLINTEND

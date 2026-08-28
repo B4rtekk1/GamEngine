@@ -12,7 +12,6 @@
  */
 
 namespace Engine {
-
     /**
      * @brief API-independent vertex data used by meshes throughout the renderer.
      *
@@ -48,5 +47,4 @@ namespace Engine {
          */
         std::uint32_t materialIndex{0};
     };
-
 } // namespace Engine

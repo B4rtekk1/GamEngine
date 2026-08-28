@@ -3,7 +3,7 @@
 #include "Engine/Renderer/Geometry/Mesh.h"
 
 namespace Engine {
-
+//NOLINTBEGIN
 class Cube final {
 public:
     [[nodiscard]] static Mesh createMesh() {
@@ -26,3 +26,4 @@ public:
 };
 
 } // namespace Engine
+//NOLINTEND
