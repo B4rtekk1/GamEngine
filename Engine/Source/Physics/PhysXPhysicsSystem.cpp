@@ -16,6 +16,7 @@
 #include <cmath>
 #include <cstdint>
 #include <ranges>
+#include <optional>
 #include <stdexcept>
 #include <type_traits>
 #include <unordered_map>
@@ -27,6 +28,10 @@ namespace Engine {
         constexpr float DegreesToRadians = 0.01745329251994329577F;
         constexpr float RadiansToDegrees = 57.295779513082320876F;
         constexpr float MinimumDimension = 1.0e-4F;
+        constexpr physx::PxU32 PhysXVersion =
+            (static_cast<physx::PxU32>(PX_PHYSICS_VERSION_MAJOR) << 24U) +
+            (static_cast<physx::PxU32>(PX_PHYSICS_VERSION_MINOR) << 16U) +
+            (static_cast<physx::PxU32>(PX_PHYSICS_VERSION_BUGFIX) << 8U);
 
         physx::PxVec3 toPhysX(const Vec3 &value) noexcept {
             return {value.x(), value.y(), value.z()};
@@ -97,8 +102,8 @@ namespace Engine {
             const ColliderComponent *colliderAddress{};
             const RigidbodyComponent *bodyAddress{};
             Transform lastTransform{};
-            Vec3 lastLinearVelocity{};
-            Vec3 lastAngularVelocity{};
+            Vec3 lastLinearVelocity;
+            Vec3 lastAngularVelocity;
         };
 
         physx::PxDefaultAllocator allocator;
@@ -116,15 +121,15 @@ namespace Engine {
 
         BroadPhaseCache() {
             using namespace physx;
-            foundation = PxCreateFoundation(PX_PHYSICS_VERSION, allocator, errorCallback);
+            foundation = PxCreateFoundation(PhysXVersion, allocator, errorCallback);
             if (foundation == nullptr) {
                 fail("PxCreateFoundation failed");
             }
 
             PxTolerancesScale scale;
             scale.length = 1.0F;
-            scale.speed = 9.81F;
-            physics = PxCreatePhysics(PX_PHYSICS_VERSION, *foundation, scale, true, nullptr);
+            scale.speed = 9.81F; // NOLINT g=9.81
+            physics = PxCreatePhysics(PhysXVersion, *foundation, scale, true, nullptr);
             if (physics == nullptr) {
                 fail("PxCreatePhysics failed");
             }
@@ -134,7 +139,7 @@ namespace Engine {
 
             cookingParameters = PxCookingParams{scale};
             cookingParameters.meshPreprocessParams |= PxMeshPreprocessingFlag::eWELD_VERTICES;
-            cookingParameters.meshWeldTolerance = 1.0e-4F;
+            cookingParameters.meshWeldTolerance = 1.0e-4F; //NOLINT
 
             dispatcher = PxDefaultCpuDispatcherCreate(2);
             if (dispatcher == nullptr) {
@@ -142,7 +147,7 @@ namespace Engine {
             }
 
             PxSceneDesc sceneDescription{scale};
-            sceneDescription.gravity = {0.0F, -9.81F, 0.0F};
+            sceneDescription.gravity = {0.0F, -9.81F, 0.0F}; // NOLINT g=9.81
             sceneDescription.cpuDispatcher = dispatcher;
             sceneDescription.filterShader = PxDefaultSimulationFilterShader;
             sceneDescription.flags |= PxSceneFlag::eENABLE_ACTIVE_ACTORS;
@@ -193,9 +198,18 @@ namespace Engine {
             actors.clear();
         }
 
+        [[nodiscard]] std::optional<Entity> entityForActor(const physx::PxRigidActor *actor) const {
+            for (const auto &[entity, record] : actors) {
+                if (record.actor == actor) {
+                    return entity;
+                }
+            }
+            return std::nullopt;
+        }
+
         static physx::PxShape *attachGeometry(physx::PxRigidActor &actor,
                                        const physx::PxGeometry &geometry,
-                                       physx::PxMaterial &material,
+                                       const physx::PxMaterial &material,
                                        const physx::PxTransform &localPose,
                                        const bool trigger) {
             physx::PxShape *shape = physx::PxRigidActorExt::createExclusiveShape(
@@ -218,7 +232,7 @@ namespace Engine {
             description.points.stride = sizeof(physx::PxVec3);
             description.points.data = points.data();
             description.flags = physx::PxConvexFlag::eCOMPUTE_CONVEX;
-            description.vertexLimit = 255;
+            description.vertexLimit = 255; //NOLINT uint8_t
 
             physx::PxDefaultMemoryOutputStream output;
             if (!PxCookConvexMesh(cookingParameters, description, output)) {
@@ -256,9 +270,9 @@ namespace Engine {
             return physics->createTriangleMesh(input);
         }
 
-        bool attachBoundsFallback(physx::PxRigidActor &actor, const Mesh &mesh,
+        static bool attachBoundsFallback(physx::PxRigidActor &actor, const Mesh &mesh,
                                   const Vec3 &scale, const ColliderComponent &collider,
-                                  physx::PxMaterial &material) const {
+                                  physx::PxMaterial &material) {
             if (mesh.vertices.empty()) {
                 return false;
             }
@@ -288,6 +302,7 @@ namespace Engine {
                                   collider.isTrigger) != nullptr;
         }
 
+        // NOLINTNEXTLINE(readability-function-cognitive-complexity)
         bool attachCollider(physx::PxRigidActor &actor, const ColliderComponent &collider,
                             const Transform &transform, const bool dynamic) const {
             using namespace physx;
@@ -320,7 +335,7 @@ namespace Engine {
                 } else if constexpr (std::is_same_v<Shape, CapsuleCollider>) {
                     const float radius = shape.radius * std::max(scale.x(), scale.z());
                     const float totalHeight = shape.height * scale.y();
-                    const float halfHeight = std::max(totalHeight * 0.5F - radius, MinimumDimension);
+                    const float halfHeight = std::max((totalHeight * 0.5F) - radius, MinimumDimension);
                     const PxCapsuleGeometry geometry{
                         std::max(radius, MinimumDimension), halfHeight
                     };
@@ -338,7 +353,7 @@ namespace Engine {
                         {-extent.x(), -extent.y(), extent.z()},
                         {extent.x(), -extent.y(), extent.z()},
                         {-extent.x(), extent.y(), extent.z()},
-                        {extent.x(), extent.y(), extent.z()}
+                        {extent.x(), extent.y(), extent.z()},
                     };
                     PxConvexMesh *mesh = cookConvex(points);
                     if (mesh == nullptr) {
@@ -401,8 +416,6 @@ namespace Engine {
             if (actor == nullptr) {
                 throw std::runtime_error("PhysX rigid actor creation failed");
             }
-            actor->userData = reinterpret_cast<void *>(static_cast<std::uintptr_t>(entity));
-
             if (owner.has<ColliderComponent>(entity)) {
                 const ColliderComponent &collider = owner.get<ColliderComponent>(entity);
                 if (!attachCollider(*actor, collider, transform, dynamic)) {
@@ -418,7 +431,7 @@ namespace Engine {
                                        ? &owner.get<ColliderComponent>(entity)
                                        : nullptr,
                 .bodyAddress = body,
-                .lastTransform = transform
+                .lastTransform = transform,
             };
             if (dynamic) {
                 auto &rigid = *static_cast<PxRigidDynamic *>(actor);
@@ -598,9 +611,11 @@ namespace Engine {
             return std::nullopt;
         }
 
-        const Entity entity = static_cast<Entity>(
-            reinterpret_cast<std::uintptr_t>(hit.block.actor->userData));
-        GameObject *object = scene.findByEntity(entity);
+        const std::optional<Entity> entity = runtime.entityForActor(hit.block.actor);
+        if (!entity.has_value()) {
+            return std::nullopt;
+        }
+        GameObject *object = scene.findByEntity(*entity);
         if (object == nullptr) {
             return std::nullopt;
         }
