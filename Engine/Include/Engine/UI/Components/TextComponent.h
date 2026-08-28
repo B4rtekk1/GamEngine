@@ -18,7 +18,7 @@ namespace Engine {
         std::uint64_t fontAtlasId = 0;
 
         /** @brief Requested font size in pixels. */
-        float fontSize = 16;
+        float fontSize = 16; //NOLINT
 
         /** @brief RGBA text color. */
         Math::Color color{1.0F, 1.0F, 1.0F, 1.0F};

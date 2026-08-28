@@ -5,11 +5,9 @@
 #include <unordered_map>
 #include <vector>
 
-namespace Engine::UI
-{
+namespace Engine::UI {
     /** @brief Rectangle in normalized texture coordinates. */
-    struct GlyphUV final
-    {
+    struct GlyphUV final {
         float min[2]{};
         float max[2]{};
     };
@@ -17,8 +15,7 @@ namespace Engine::UI
     /**
      * @brief Rasterized metrics and atlas coordinates for one glyph.
      */
-    struct Glyph final
-    {
+    struct Glyph final {
         GlyphUV uv;
         float width = 0.0F;
         float height = 0.0F;
@@ -34,8 +31,7 @@ namespace Engine::UI
      * existing Texture2D abstraction. The class deliberately does not own a
      * Vulkan image or sampler.
      */
-    class UIFontAtlas final
-    {
+    class UIFontAtlas final {
     public:
         /** @brief Creates an empty atlas. */
         UIFontAtlas() = default;
@@ -43,10 +39,13 @@ namespace Engine::UI
         /** @brief Releases atlas memory. */
         ~UIFontAtlas() = default;
 
-        UIFontAtlas(const UIFontAtlas&) = delete;
-        UIFontAtlas& operator=(const UIFontAtlas&) = delete;
-        UIFontAtlas(UIFontAtlas&&) noexcept = default;
-        UIFontAtlas& operator=(UIFontAtlas&&) noexcept = default;
+        UIFontAtlas(const UIFontAtlas &) = delete;
+
+        UIFontAtlas &operator=(const UIFontAtlas &) = delete;
+
+        UIFontAtlas(UIFontAtlas &&) noexcept = default;
+
+        UIFontAtlas &operator=(UIFontAtlas &&) noexcept = default;
 
         /**
          * @brief Builds an atlas from a TrueType-outline font.
@@ -56,10 +55,10 @@ namespace Engine::UI
          * @param lastCodepoint Last codepoint included in the atlas.
          * @return Empty string on success, otherwise an error message.
          */
-        [[nodiscard]] std::string build(const std::string& fontPath,
-                                         std::uint32_t pixelSize,
-                                         std::uint32_t firstCodepoint = 32,
-                                         std::uint32_t lastCodepoint = 126);
+        [[nodiscard]] std::string build(const std::string &fontPath,
+                                        std::uint32_t pixelSize,
+                                        std::uint32_t firstCodepoint = 32, //NOLINT
+                                        std::uint32_t lastCodepoint = 126); //NOLINT
 
         /** @return Atlas width in pixels. */
         [[nodiscard]] std::uint32_t width() const noexcept { return m_width; }
@@ -68,8 +67,7 @@ namespace Engine::UI
         [[nodiscard]] std::uint32_t height() const noexcept { return m_height; }
 
         /** @return Rasterized R8_UNORM atlas pixels. */
-        [[nodiscard]] const std::vector<std::uint8_t>& pixels() const noexcept
-        {
+        [[nodiscard]] const std::vector<std::uint8_t> &pixels() const noexcept {
             return m_pixels;
         }
 
@@ -84,11 +82,10 @@ namespace Engine::UI
          * @param codepoint Unicode codepoint.
          * @return Glyph pointer, or nullptr when not present.
          */
-        [[nodiscard]] const Glyph* glyph(std::uint32_t codepoint) const noexcept;
+        [[nodiscard]] const Glyph *glyph(std::uint32_t codepoint) const noexcept;
 
         /** @brief Returns the configured rasterization size. */
-        [[nodiscard]] std::uint32_t pixelSize() const noexcept
-        {
+        [[nodiscard]] std::uint32_t pixelSize() const noexcept {
             return m_pixelSize;
         }
 
