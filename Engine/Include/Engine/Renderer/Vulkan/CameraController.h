@@ -7,7 +7,7 @@
 #include <optional>
 
 namespace Engine {
-
+//NOLINTBEGIN
 class Registry;
 
 /** Owns gameplay and editor Scene View camera state and input handling. */
@@ -24,7 +24,7 @@ public:
     [[nodiscard]] float editorYaw() const noexcept { return editorYaw_; }
     [[nodiscard]] float editorPitch() const noexcept { return editorPitch_; }
     void setEditorPosition(const Vec3& position) noexcept { editorPosition_ = position; }
-    void setEditorRotation(float yaw, float pitch) noexcept {
+    void setEditorRotation(const float yaw, const float pitch) noexcept {
         editorYaw_ = yaw;
         editorPitch_ = pitch;
     }
@@ -41,3 +41,4 @@ private:
 };
 
 } // namespace Engine
+//NOLINTEND

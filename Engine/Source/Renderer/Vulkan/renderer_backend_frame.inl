@@ -56,9 +56,10 @@
             const DirectionalLight light = directionalLight();
             const UniformBufferObject data{
                 cameraController.camera()->viewMatrix(), cameraController.camera()->projectionMatrix(), lightSpaceMatrix(),
-                glm::vec4{cameraController.camera()->position().native(), 1.0F},
-                glm::vec4{light.direction.native(), light.intensity},
-                glm::vec4{light.color.r(), light.color.g(), light.color.b(), 1.0F},
+                Vec4{cameraController.camera()->position().x(), cameraController.camera()->position().y(),
+                     cameraController.camera()->position().z(), 1.0F},
+                Vec4{light.direction.x(), light.direction.y(), light.direction.z(), light.intensity},
+                Vec4{light.color.r(), light.color.g(), light.color.b(), 1.0F},
                 (optimizationFeatures.shadows && hasShadowCasters) ? 1u : 0u,
                 materialSlots, editorSelectedRenderable};
             uniformBuffers[frame].update(&data, sizeof(data));
@@ -74,9 +75,9 @@
             const DirectionalLight light = directionalLight();
             const UniformBufferObject data{
                 sceneCamera.viewMatrix(), sceneCamera.projectionMatrix(), lightSpaceMatrix(),
-                glm::vec4{sceneCamera.position().native(), 1.0F},
-                glm::vec4{light.direction.native(), light.intensity},
-                glm::vec4{light.color.r(), light.color.g(), light.color.b(), 1.0F},
+                Vec4{sceneCamera.position().x(), sceneCamera.position().y(), sceneCamera.position().z(), 1.0F},
+                Vec4{light.direction.x(), light.direction.y(), light.direction.z(), light.intensity},
+                Vec4{light.color.r(), light.color.g(), light.color.b(), 1.0F},
                 (optimizationFeatures.shadows && hasShadowCasters) ? 1u : 0u,
                 materialSlots, editorSelectedRenderable};
             sceneUniformBuffers[frame].update(&data, sizeof(data));

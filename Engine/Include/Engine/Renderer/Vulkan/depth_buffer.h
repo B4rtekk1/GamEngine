@@ -1,7 +1,7 @@
 #pragma once
 
 /**
- * @file depth_buffer(1).h
+ * @file depth_buffer.h
  * @brief Declares the Vulkan depth-stencil buffer wrapper.
  */
 
@@ -48,6 +48,7 @@ public:
      * @brief Creates or recreates the depth resources for a render target.
      * @param extent Width and height of the depth image.
      * @param samples Multisample count required by the render target.
+     * @param requiredFormat Optional Vulkan format to use for the depth image. If VK_FORMAT_UNDEFINED, a supported format is selected automatically.
      */
     void create(VkExtent2D extent, VkSampleCountFlagBits samples,
                 VkFormat requiredFormat = VK_FORMAT_UNDEFINED);
@@ -102,8 +103,7 @@ private:
 
     /**
      * @brief Finds a compatible physical-device memory type.
-     * @param typeFilter Bit mask of candidate memory types.
-     * @param requiredProperties Required Vulkan memory property flags.
+     * @param query Query parameters for the memory type search.
      * @return Index of a compatible memory type.
      */
     [[nodiscard]] uint32_t findMemoryType(

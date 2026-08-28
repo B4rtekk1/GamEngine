@@ -7,78 +7,86 @@
 #include <optional>
 
 namespace Engine {
+    struct QueueFamilyIndices {
+        std::optional<uint32_t> graphics;
+        std::optional<uint32_t> present;
 
-struct QueueFamilyIndices {
-    std::optional<uint32_t> graphics;
-    std::optional<uint32_t> present;
+        [[nodiscard]] bool complete() const noexcept {
+            return graphics.has_value() && present.has_value();
+        }
+    };
 
-    [[nodiscard]] bool complete() const noexcept {
-        return graphics.has_value() && present.has_value();
-    }
-};
+    class VulkanDevice final {
+    public:
+        VulkanDevice() = default;
 
-class VulkanDevice final {
-public:
-    VulkanDevice() = default;
-    ~VulkanDevice();
+        ~VulkanDevice();
 
-    VulkanDevice(const VulkanDevice&) = delete;
-    VulkanDevice& operator=(const VulkanDevice&) = delete;
-    VulkanDevice(VulkanDevice&&) = delete;
-    VulkanDevice& operator=(VulkanDevice&&) = delete;
+        VulkanDevice(const VulkanDevice &) = delete;
 
-    void create(VkInstance instance, VkSurfaceKHR surface);
-    void destroy() noexcept;
+        VulkanDevice &operator=(const VulkanDevice &) = delete;
 
-    [[nodiscard]] VkPhysicalDevice physical() const noexcept {
-        return physicalDevice_;
-    }
+        VulkanDevice(VulkanDevice &&) = delete;
 
-    [[nodiscard]] VkDevice logical() const noexcept {
-        return device_;
-    }
+        VulkanDevice &operator=(VulkanDevice &&) = delete;
 
-    [[nodiscard]] VkQueue graphicsQueue() const noexcept {
-        return graphicsQueue_;
-    }
+        void create(VkInstance instance, VkSurfaceKHR surface);
 
-    [[nodiscard]] VkQueue presentQueue() const noexcept {
-        return presentQueue_;
-    }
+        void destroy() noexcept;
 
-    [[nodiscard]] const QueueFamilyIndices& queueFamilies() const noexcept {
-        return queueFamilies_;
-    }
+        [[nodiscard]] VkPhysicalDevice physical() const noexcept {
+            return physicalDevice_;
+        }
 
-    [[nodiscard]] uint32_t graphicsQueueFamily() const {
-        return queueFamilies_.graphics.value();
-    }
+        [[nodiscard]] VkDevice logical() const noexcept {
+            return device_;
+        }
 
-    [[nodiscard]] uint32_t presentQueueFamily() const {
-        return queueFamilies_.present.value();
-    }
+        [[nodiscard]] VkQueue graphicsQueue() const noexcept {
+            return graphicsQueue_;
+        }
 
-    [[nodiscard]] VmaAllocator allocator() const noexcept {
-        return allocator_;
-    }
+        [[nodiscard]] VkQueue presentQueue() const noexcept {
+            return presentQueue_;
+        }
 
-private:
-    VkSurfaceKHR surface_ = VK_NULL_HANDLE;
-    VkPhysicalDevice physicalDevice_ = VK_NULL_HANDLE;
-    VkDevice device_ = VK_NULL_HANDLE;
-    VkQueue graphicsQueue_ = VK_NULL_HANDLE;
-    VkQueue presentQueue_ = VK_NULL_HANDLE;
-    QueueFamilyIndices queueFamilies_{};
-    VmaAllocator allocator_ = VK_NULL_HANDLE;
+        [[nodiscard]] const QueueFamilyIndices &queueFamilies() const noexcept {
+            return queueFamilies_;
+        }
 
-    [[nodiscard]] QueueFamilyIndices findQueueFamilies(VkPhysicalDevice candidate) const;
-    [[nodiscard]] static bool supportsRequiredExtensions(VkPhysicalDevice candidate) ;
-    [[nodiscard]] bool hasAdequateSwapchain(VkPhysicalDevice candidate) const;
-    [[nodiscard]] bool isSuitable(VkPhysicalDevice candidate) const;
-    [[nodiscard]] static int scoreDevice(VkPhysicalDevice candidate) ;
+        [[nodiscard]] uint32_t graphicsQueueFamily() const {
+            return queueFamilies_.graphics.value();
+        }
 
-    void selectPhysicalDevice(VkInstance candidate);
-    void createLogicalDevice();
-};
+        [[nodiscard]] uint32_t presentQueueFamily() const {
+            return queueFamilies_.present.value();
+        }
 
+        [[nodiscard]] VmaAllocator allocator() const noexcept {
+            return allocator_;
+        }
+
+    private:
+        VkSurfaceKHR surface_ = VK_NULL_HANDLE;
+        VkPhysicalDevice physicalDevice_ = VK_NULL_HANDLE;
+        VkDevice device_ = VK_NULL_HANDLE;
+        VkQueue graphicsQueue_ = VK_NULL_HANDLE;
+        VkQueue presentQueue_ = VK_NULL_HANDLE;
+        QueueFamilyIndices queueFamilies_{};
+        VmaAllocator allocator_ = VK_NULL_HANDLE;
+
+        [[nodiscard]] QueueFamilyIndices findQueueFamilies(VkPhysicalDevice candidate) const;
+
+        [[nodiscard]] static bool supportsRequiredExtensions(VkPhysicalDevice candidate);
+
+        [[nodiscard]] bool hasAdequateSwapchain(VkPhysicalDevice candidate) const;
+
+        [[nodiscard]] bool isSuitable(VkPhysicalDevice candidate) const;
+
+        [[nodiscard]] static int scoreDevice(VkPhysicalDevice candidate);
+
+        void selectPhysicalDevice(VkInstance candidate);
+
+        void createLogicalDevice();
+    };
 } // namespace Engine

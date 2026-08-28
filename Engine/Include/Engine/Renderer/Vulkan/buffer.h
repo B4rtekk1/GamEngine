@@ -107,12 +107,8 @@ private:
 
     /**
      * @brief Creates a buffer with the requested memory properties.
-     * @param physicalDevice Vulkan physical device used to select memory.
-     * @param device Logical Vulkan device that owns the buffer.
-     * @param size Buffer size in bytes.
-     * @param usage Vulkan buffer usage flags.
-     * @param properties Required Vulkan memory property flags.
-     * @param allocator VMA allocator used for the allocation.
+     * @param parameters Buffer creation parameters, including the logical
+     * device, size, usage flags, memory properties and VMA allocator.
      */
     void create(const CreateParameters &parameters);
 

@@ -9,62 +9,66 @@
 #include <vector>
 
 namespace Engine {
+    class Swapchain final {
+    public:
+        Swapchain() = default;
 
-class Swapchain final {
-public:
-    Swapchain() = default;
-    ~Swapchain();
+        ~Swapchain();
 
-    Swapchain(const Swapchain&) = delete;
-    Swapchain& operator=(const Swapchain&) = delete;
-    Swapchain(Swapchain&&) = delete;
-    Swapchain& operator=(Swapchain&&) = delete;
+        Swapchain(const Swapchain &) = delete;
 
-    void create(
-        SDL_Window* window,
-        VkSurfaceKHR surface,
-        const VulkanDevice& device);
+        Swapchain &operator=(const Swapchain &) = delete;
 
-    void recreate();
-    void destroy() noexcept;
+        Swapchain(Swapchain &&) = delete;
 
-    [[nodiscard]] VkSwapchainKHR handle() const noexcept {
-        return swapchain_;
-    }
+        Swapchain &operator=(Swapchain &&) = delete;
 
-    [[nodiscard]] VkFormat format() const noexcept {
-        return imageFormat_;
-    }
+        void create(
+            SDL_Window *window,
+            VkSurfaceKHR surface,
+            const VulkanDevice &device);
 
-    [[nodiscard]] VkExtent2D extent() const noexcept {
-        return extent_;
-    }
+        void recreate();
 
-    [[nodiscard]] const std::vector<VkImage>& images() const noexcept {
-        return images_;
-    }
+        void destroy() noexcept;
 
-    [[nodiscard]] const std::vector<VkImageView>& imageViews() const noexcept {
-        return imageViews_;
-    }
+        [[nodiscard]] VkSwapchainKHR handle() const noexcept {
+            return swapchain_;
+        }
 
-    [[nodiscard]] std::size_t imageCount() const noexcept {
-        return images_.size();
-    }
+        [[nodiscard]] VkFormat format() const noexcept {
+            return imageFormat_;
+        }
 
-private:
-    SDL_Window* window_ = nullptr;
-    VkSurfaceKHR surface_ = VK_NULL_HANDLE;
-    const VulkanDevice* device_ = nullptr;
+        [[nodiscard]] VkExtent2D extent() const noexcept {
+            return extent_;
+        }
 
-    VkSwapchainKHR swapchain_ = VK_NULL_HANDLE;
-    VkFormat imageFormat_ = VK_FORMAT_UNDEFINED;
-    VkExtent2D extent_{};
-    std::vector<VkImage> images_;
-    std::vector<VkImageView> imageViews_;
+        [[nodiscard]] const std::vector<VkImage> &images() const noexcept {
+            return images_;
+        }
 
-    void createResources(VkSwapchainKHR oldSwapchain);
-    void destroyImageViews() noexcept;
-};
+        [[nodiscard]] const std::vector<VkImageView> &imageViews() const noexcept {
+            return imageViews_;
+        }
 
+        [[nodiscard]] std::size_t imageCount() const noexcept {
+            return images_.size();
+        }
+
+    private:
+        SDL_Window *window_ = nullptr;
+        VkSurfaceKHR surface_ = VK_NULL_HANDLE;
+        const VulkanDevice *device_ = nullptr;
+
+        VkSwapchainKHR swapchain_ = VK_NULL_HANDLE;
+        VkFormat imageFormat_ = VK_FORMAT_UNDEFINED;
+        VkExtent2D extent_{};
+        std::vector<VkImage> images_;
+        std::vector<VkImageView> imageViews_;
+
+        void createResources(VkSwapchainKHR oldSwapchain);
+
+        void destroyImageViews() noexcept;
+    };
 } // namespace Engine
