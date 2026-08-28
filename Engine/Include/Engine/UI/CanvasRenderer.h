@@ -13,58 +13,65 @@
 #include <vector>
 
 namespace Engine {
-class Buffer;
-namespace Assets { class AssetManager; }
+    class Buffer;
+
+    namespace Assets {
+        class AssetManager;
+    }
 }
 
 namespace Engine::UI {
+    class Canvas;
+    class UIElement;
 
-class Canvas;
-class UIElement;
+    class CanvasRenderer final {
+    public:
+        ~CanvasRenderer();
 
-class CanvasRenderer final {
-public:
-    ~CanvasRenderer();
+        CanvasRenderer();
 
-    CanvasRenderer();
-    CanvasRenderer(const CanvasRenderer&) = delete;
-    CanvasRenderer& operator=(const CanvasRenderer&) = delete;
+        CanvasRenderer(const CanvasRenderer &) = delete;
 
-    void create(VkPhysicalDevice physicalDevice, VkDevice device,
-                VkFormat colorFormat, VkExtent2D extent,
-                const std::vector<VkImageView>& imageViews,
-                std::uint32_t framesInFlight,
-                Assets::AssetManager& assets,
-                VkImageView fontAtlasView = VK_NULL_HANDLE,
-                VkSampler fontAtlasSampler = VK_NULL_HANDLE,
-                VmaAllocator allocator = VK_NULL_HANDLE);
-    void destroy() noexcept;
+        CanvasRenderer &operator=(const CanvasRenderer &) = delete;
 
-    void record(const Canvas& canvas, VkCommandBuffer commandBuffer,
-                std::uint32_t imageIndex, std::uint32_t frameIndex,
-                VkExtent2D extent);
+        void create(VkPhysicalDevice physicalDevice, VkDevice device,
+                    VkFormat colorFormat, VkExtent2D extent,
+                    const std::vector<VkImageView> &imageViews,
+                    std::uint32_t framesInFlight,
+                    Assets::AssetManager &assets,
+                    VkImageView fontAtlasView = VK_NULL_HANDLE,
+                    VkSampler fontAtlasSampler = VK_NULL_HANDLE,
+                    VmaAllocator allocator = VK_NULL_HANDLE);
 
-private:
-    struct FrameResources;
+        void destroy() noexcept;
 
-    void appendElement(const UIElement& element);
-    [[nodiscard]] const std::vector<const UIElement*>& sortedChildren(const UIElement& element);
-    void sortIfNeeded(const std::vector<const UIElement*>& source,
-                      std::vector<const UIElement*>& cache);
-    [[nodiscard]] bool ensureCapacity(FrameResources& frame);
+        void record(const Canvas &canvas, VkCommandBuffer commandBuffer,
+                    std::uint32_t imageIndex, std::uint32_t frameIndex,
+                    VkExtent2D extent);
 
-    VkPhysicalDevice physicalDevice_ = VK_NULL_HANDLE;
-    VkDevice device_ = VK_NULL_HANDLE;
-    VmaAllocator allocator_ = VK_NULL_HANDLE;
-    UIPipeline pipeline_;
-    UIBatch batch_;
-    std::vector<std::unique_ptr<FrameResources>> frames_;
-    std::vector<const UIElement*> sortedRootElements_;
-    std::vector<const UIElement*> rootElementsSource_;
-    std::unordered_map<const UIElement*, std::vector<const UIElement*>> sortedChildren_;
-    std::uint64_t cachedCanvasRevision_{};
-    bool batchDirty_{true};
-    std::uint64_t pendingFrameUploads_{};
-};
+    private:
+        struct FrameResources;
 
+        void appendElement(const UIElement &element);
+
+        [[nodiscard]] const std::vector<const UIElement *> &sortedChildren(const UIElement &element);
+
+        void sortIfNeeded(const std::vector<const UIElement *> &source,
+                          std::vector<const UIElement *> &cache);
+
+        [[nodiscard]] bool ensureCapacity(FrameResources &frame);
+
+        VkPhysicalDevice physicalDevice_ = VK_NULL_HANDLE;
+        VkDevice device_ = VK_NULL_HANDLE;
+        VmaAllocator allocator_ = VK_NULL_HANDLE;
+        UIPipeline pipeline_;
+        UIBatch batch_;
+        std::vector<std::unique_ptr<FrameResources> > frames_;
+        std::vector<const UIElement *> sortedRootElements_;
+        std::vector<const UIElement *> rootElementsSource_;
+        std::unordered_map<const UIElement *, std::vector<const UIElement *> > sortedChildren_;
+        std::uint64_t cachedCanvasRevision_{};
+        bool batchDirty_{true};
+        std::uint64_t pendingFrameUploads_{};
+    };
 } // namespace Engine::UI

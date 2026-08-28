@@ -8,17 +8,14 @@
 #include <cstdint>
 #include <vector>
 
-namespace Engine::UI
-{
+namespace Engine::UI {
     /**
      * @brief CPU-side batch of vertices and indices for UI text.
      */
-    class UIBatch final
-    {
+    class UIBatch final {
     public:
         /** @brief Removes all previously generated geometry. */
-        void clear() noexcept
-        {
+        void clear() noexcept {
             vertices.clear();
             indices.clear();
         }
@@ -30,12 +27,12 @@ namespace Engine::UI
          * @param originX Baseline origin in UI coordinates.
          * @param originY Baseline origin in UI coordinates.
          */
-        void appendText(const TextComponent& text,
-                        const UIFontAtlas& atlas,
+        void appendText(const TextComponent &text,
+                        const UIFontAtlas &atlas,
                         float originX,
                         float originY);
 
-        void addQuad(const Rect& rect, const Math::Color& color);
+        void addQuad(const Rect &rect, const Math::Color &color);
 
         [[nodiscard]] bool empty() const noexcept { return indices.empty(); }
 
