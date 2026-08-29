@@ -2,6 +2,8 @@
 
 #include "Engine/Physics/PhysicsSystem.h"
 #include "Engine/Scene/Scene.h"
+#include "Engine/Scene/SceneEditor.h"
+#include "Engine/ECS/Components/TerrainGrassComponent.h"
 
 namespace {
 
@@ -54,6 +56,34 @@ TEST(PhysXPhysics, RaycastReturnsPhysXHitDataAndActor) {
     EXPECT_NEAR(hit->distance, 3.0F, 1.0e-4F);
     EXPECT_NEAR(hit->point.y(), 2.0F, 1.0e-4F);
     EXPECT_NEAR(hit->normal.y(), 1.0F, 1.0e-4F);
+}
+
+TEST(PhysXPhysics, SpherePermanentlyTramplesNearbyTerrainGrass) {
+    Engine::Scene scene;
+    const Engine::Actor terrain = scene.createTerrain(
+        "Terrain", Engine::TerrainComponent{5, 4.0F, 4.0F, -1.0F, 1.0F});
+    Engine::TerrainGrassComponent grass;
+    grass.instances.push_back({.position = {0.0F, 0.0F, 0.0F}});
+    scene.editor().add<Engine::TerrainGrassComponent>(scene.findEntity(terrain.id()), grass);
+
+    const Engine::Actor sphere = scene.createActor("Trampling sphere");
+    sphere.setPosition({0.0F, 0.5F, 0.0F});
+    sphere.addSphereCollider(0.5F);
+    sphere.addRigidbody();
+    sphere.setVelocity({5.0F, 0.0F, 0.0F});
+
+    Engine::PhysicsSystem physics;
+    physics.update(scene, 1.0F / 60.0F);
+    const auto entity = scene.findEntity(terrain.id());
+    const float trampled = scene.editor().get<Engine::TerrainGrassComponent>(entity)
+                                .instances.front().trampled;
+    EXPECT_GT(trampled, 0.5F);
+    EXPECT_LT(sphere.velocity().x(), 5.0F);
+
+    sphere.setPosition({10.0F, 0.5F, 0.0F});
+    physics.update(scene, 1.0F / 60.0F);
+    EXPECT_FLOAT_EQ(scene.editor().get<Engine::TerrainGrassComponent>(entity)
+                        .instances.front().trampled, trampled);
 }
 
 } // namespace

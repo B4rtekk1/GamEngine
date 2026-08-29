@@ -65,8 +65,10 @@ int drawSceneOrientationGizmo(const ImVec2 imageMin, const ImVec2 imageMax,
 }
 struct ViewportInteraction final {
     bool cameraInput{};
+    bool gameCameraInput{};
     bool sceneClicked{};
     bool terrainGeometryChanged{};
+    bool terrainGrassChanged{};
     std::uint32_t terrainFirstVertex{};
     std::uint32_t terrainVertexCount{std::numeric_limits<std::uint32_t>::max()};
     Engine::Entity createdEntity{Engine::NullEntity};
@@ -721,6 +723,16 @@ void finishTerrainStroke(Engine::ScenePreset& scene, TerrainSculptState& state) 
         });
     }
     if (state.strokeDirty.valid) {
+        if (scene.editor().valid(state.strokeEntity) &&
+            scene.editor().has<Engine::TerrainComponent>(state.strokeEntity) &&
+            scene.editor().has<Engine::TerrainGrassComponent>(state.strokeEntity)) {
+            const auto& terrain = scene.editor().get<Engine::TerrainComponent>(state.strokeEntity);
+            scene.editor().modify<Engine::TerrainGrassComponent>(state.strokeEntity, [&](auto& grass) {
+                for (auto& instance : grass.instances)
+                    instance.position.setY(terrain.sampleHeight(instance.position.x(), instance.position.z()));
+                grass.allInstancesDirty = true;
+            });
+        }
         state.strokeCompleted = true;
         state.completedEntity = state.strokeEntity;
         state.completedDirty = state.strokeDirty;
@@ -848,8 +860,115 @@ bool drawTerrainSculpt(Engine::ScenePreset& scene, const Engine::Entity selected
     }
     if (!ImGui::IsMouseDown(ImGuiMouseButton_Left)) {
         finishTerrainStroke(scene, state);
+        if (state.strokeCompleted && scene.editor().has<Engine::TerrainGrassComponent>(selected))
+            interaction.terrainGrassChanged = true;
     }
     return true;
+}
+
+bool drawTerrainGrass(Engine::ScenePreset& scene, const Engine::Entity selected,
+                      const Engine::Renderer& renderer, const ImVec2 min, const ImVec2 max,
+                      TerrainSculptState& state, const bool imageHovered,
+                      ViewportInteraction& interaction) {
+    if (!state.grassEnabled || selected == Engine::NullEntity || !scene.editor().valid(selected) ||
+        !scene.editor().has<Engine::TerrainComponent>(selected) ||
+        !scene.editor().has<Engine::Transform>(selected)) return false;
+
+    const auto& terrain = scene.editor().get<Engine::TerrainComponent>(selected);
+    const auto& transform = scene.editor().get<Engine::Transform>(selected);
+    const ImVec2 mouse = ImGui::GetIO().MousePos;
+    const Engine::Camera camera = sceneViewCamera(renderer, min, max);
+    const auto hit = imageHovered
+        ? raycastTerrain(terrain, transform, camera.position(), viewportRayDirection(camera, mouse, min, max))
+        : std::nullopt;
+    Engine::Vec3 localHit{};
+    if (hit) {
+        localHit = terrainLocalPoint(transform, *hit);
+        constexpr int segments = 48;
+        constexpr float pi = 3.14159265358979323846F;
+        ImDrawList* drawList = ImGui::GetWindowDrawList();
+        ImVec2 previous{};
+        for (int segment = 0; segment <= segments; ++segment) {
+            const float angle = 2.0F * pi * static_cast<float>(segment) / segments;
+            const float x = localHit.x() + std::cos(angle) * state.radius;
+            const float z = localHit.z() + std::sin(angle) * state.radius;
+            const ImVec2 point = projectGizmoPoint(camera, terrainWorldPoint(
+                transform, {x, terrain.sampleHeight(x, z) + 0.04F, z}), min, max);
+            if (segment > 0) drawList->AddLine(previous, point,
+                state.grassErase ? IM_COL32(240, 90, 90, 245) : IM_COL32(80, 225, 115, 245), 2.5F);
+            previous = point;
+        }
+    }
+
+    if (imageHovered && hit && ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
+        state.grassStrokeActive = true;
+        state.grassStrokeChanged = false;
+        state.grassHasPreviousPoint = false;
+    }
+    if (state.grassStrokeActive && hit && ImGui::IsMouseDown(ImGuiMouseButton_Left)) {
+        const float interval = std::max(state.radius * 0.65F, 0.1F);
+        const float distance = state.grassHasPreviousPoint
+            ? std::hypot(localHit.x() - state.grassPreviousPoint.x(),
+                         localHit.z() - state.grassPreviousPoint.z()) : interval;
+        if (distance >= interval || !state.grassHasPreviousPoint) {
+            bool changed = false;
+            if (scene.editor().has<Engine::TerrainGrassComponent>(selected)) {
+                scene.editor().modify<Engine::TerrainGrassComponent>(selected, [&](auto& grass) {
+                    if (state.grassErase) {
+                        const auto oldSize = grass.instances.size();
+                        std::erase_if(grass.instances, [&](const auto& instance) {
+                            return std::hypot(instance.position.x() - localHit.x(),
+                                              instance.position.z() - localHit.z()) <= state.radius;
+                        });
+                        changed = oldSize != grass.instances.size();
+                        return;
+                    }
+                    if (!grass.hasPrefab() ||
+                        grass.instances.size() >= Engine::TerrainGrassComponent::MaximumInstances) return;
+                    constexpr float pi = 3.14159265358979323846F;
+                    const std::size_t wanted = static_cast<std::size_t>(std::clamp(
+                        static_cast<float>(std::ceil(state.grassDensity * pi * state.radius * state.radius)),
+                        1.0F, 256.0F));
+                    const std::size_t available = Engine::TerrainGrassComponent::MaximumInstances -
+                                                  grass.instances.size();
+                    const std::size_t count = std::min(wanted, available);
+                    auto random01 = [&]() {
+                        state.grassRandomState ^= state.grassRandomState << 13U;
+                        state.grassRandomState ^= state.grassRandomState >> 17U;
+                        state.grassRandomState ^= state.grassRandomState << 5U;
+                        return static_cast<float>(state.grassRandomState & 0x00ffffffU) /
+                               static_cast<float>(0x01000000U);
+                    };
+                    for (std::size_t i = 0; i < count; ++i) {
+                        const float angle = random01() * 2.0F * pi;
+                        const float radial = std::sqrt(random01()) * state.radius;
+                        const float x = localHit.x() + std::cos(angle) * radial;
+                        const float z = localHit.z() + std::sin(angle) * radial;
+                        if (x < -terrain.width * 0.5F || x > terrain.width * 0.5F ||
+                            z < -terrain.depth * 0.5F || z > terrain.depth * 0.5F) continue;
+                        const float scale = state.grassMinimumScale + random01() *
+                            (state.grassMaximumScale - state.grassMinimumScale);
+                        grass.instances.push_back({.position = {x, terrain.sampleHeight(x, z), z},
+                            .yaw = state.grassRandomYaw ? random01() * 360.0F : 0.0F,
+                            .scale = scale});
+                        changed = true;
+                    }
+                });
+            }
+            if (changed) state.grassStrokeChanged = true;
+            state.grassPreviousPoint = localHit;
+            state.grassHasPreviousPoint = true;
+        }
+        ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
+    }
+    if (!ImGui::IsMouseDown(ImGuiMouseButton_Left)) {
+        if (state.grassStrokeActive && state.grassStrokeChanged)
+            interaction.terrainGrassChanged = true;
+        state.grassStrokeActive = false;
+        state.grassStrokeChanged = false;
+        state.grassHasPreviousPoint = false;
+    }
+    return hit.has_value();
 }
 
 ViewportInteraction drawViewport(Engine::ScenePreset &scene, Engine::Assets::Content& content,
@@ -867,19 +986,27 @@ ViewportInteraction drawViewport(Engine::ScenePreset &scene, Engine::Assets::Con
 
     ImGui::Begin("Viewport", &isOpen, ImGuiWindowFlags_NoScrollbar);
     if (!playing) {
-        ImGui::TextDisabled("Navigate: RMB + WASD/QE  |  Shift: faster  |  MMB: pan  |  Wheel: zoom");
+        ImGui::TextDisabled(showGameView
+            ? "Game camera: RMB + WASD/QE  |  Shift: faster  |  Wheel: zoom"
+            : "Navigate: RMB + WASD/QE  |  Shift: faster  |  MMB: pan  |  Wheel: zoom");
         const bool terrainSelected = selected != Engine::NullEntity && scene.editor().valid(selected) &&
                                      scene.editor().has<Engine::TerrainComponent>(selected);
         if (terrainSelected) {
             ImGui::SameLine(0.0F, 4.0F);
             if (drawToolbarToggle(" Sculpt ", terrainSculpt.enabled)) {
                 terrainSculpt.enabled = !terrainSculpt.enabled;
+                if (terrainSculpt.enabled) terrainSculpt.grassEnabled = false;
                 const auto& terrain = scene.editor().get<Engine::TerrainComponent>(selected);
                 auto mesh = std::make_shared<Engine::Mesh>(
                     terrain.createMesh(terrainSculpt.enabled ? 0U : terrainSculpt.previewLod));
                 scene.editor().modify<Engine::MeshRenderer>(selected,
                     [&](auto& component) { component.mesh = std::move(mesh); });
                 renderer.synchronizeScene(scene);
+            }
+            ImGui::SameLine(0.0F, 4.0F);
+            if (drawToolbarToggle(" Grass ", terrainSculpt.grassEnabled)) {
+                terrainSculpt.grassEnabled = !terrainSculpt.grassEnabled;
+                if (terrainSculpt.grassEnabled) terrainSculpt.enabled = false;
             }
             if (terrainSculpt.enabled) {
                 ImGui::SameLine(0.0F, 6.0F);
@@ -908,6 +1035,48 @@ ViewportInteraction drawViewport(Engine::ScenePreset &scene, Engine::Assets::Con
                 if (ImGui::IsItemHovered()) {
                     ImGui::SetTooltip("Shift: invert Raise/Lower | Ctrl: pick flatten height");
                 }
+            } else if (terrainSculpt.grassEnabled) {
+                ImGui::SameLine(0.0F, 6.0F);
+                ImGui::Checkbox("Erase##grass", &terrainSculpt.grassErase);
+                ImGui::SameLine(0.0F, 6.0F);
+                ImGui::SetNextItemWidth(100.0F);
+                ImGui::SliderFloat("Density##grass", &terrainSculpt.grassDensity, 0.1F, 12.0F, "D %.1f");
+                ImGui::SameLine(0.0F, 6.0F);
+                ImGui::SetNextItemWidth(92.0F);
+                ImGui::SliderFloat("Min scale##grass", &terrainSculpt.grassMinimumScale, 0.05F, 4.0F, "Min %.2f");
+                ImGui::SameLine(0.0F, 6.0F);
+                ImGui::SetNextItemWidth(92.0F);
+                ImGui::SliderFloat("Max scale##grass", &terrainSculpt.grassMaximumScale,
+                                   terrainSculpt.grassMinimumScale, 4.0F, "Max %.2f");
+                ImGui::SameLine(0.0F, 6.0F);
+                ImGui::Checkbox("Random yaw##grass", &terrainSculpt.grassRandomYaw);
+                ImGui::SameLine(0.0F, 8.0F);
+                const bool hasGrass = scene.editor().has<Engine::TerrainGrassComponent>(selected) &&
+                    scene.editor().get<Engine::TerrainGrassComponent>(selected).hasPrefab();
+                std::string grassPrefabLabel = " Drop grass prefab here ";
+                if (hasGrass) {
+                    const auto& grass = scene.editor().get<Engine::TerrainGrassComponent>(selected);
+                    const std::string name = grass.mesh->sourcePath.filename().string();
+                    grassPrefabLabel = " Grass: " + (name.empty() ? std::string{"custom mesh"} : name) + " ";
+                }
+                ImGui::Button(grassPrefabLabel.c_str());
+                if (ImGui::BeginDragDropTarget()) {
+                    if (const ImGuiPayload* payload = ImGui::AcceptDragDropPayload(
+                            Editor::AssetDragDrop::modelPayload)) {
+                        const auto path = Editor::AssetDragDrop::modelPath(*payload);
+                        const auto prefab = Engine::Prefab::model(content, path);
+                        Engine::TerrainGrassComponent component;
+                        if (scene.editor().has<Engine::TerrainGrassComponent>(selected))
+                            component = scene.editor().get<Engine::TerrainGrassComponent>(selected);
+                        component.mesh = prefab.mesh();
+                        component.material = prefab.material();
+                        component.castShadow = false;
+                        if (scene.editor().has<Engine::TerrainGrassComponent>(selected))
+                            scene.editor().remove<Engine::TerrainGrassComponent>(selected);
+                        scene.editor().add<Engine::TerrainGrassComponent>(selected, std::move(component));
+                    }
+                    ImGui::EndDragDropTarget();
+                }
             } else {
                 ImGui::SameLine(0.0F, 6.0F);
                 int lod = static_cast<int>(terrainSculpt.previewLod);
@@ -924,6 +1093,7 @@ ViewportInteraction drawViewport(Engine::ScenePreset &scene, Engine::Assets::Con
         } else {
             if (terrainSculpt.strokeActive) finishTerrainStroke(scene, terrainSculpt);
             terrainSculpt.enabled = false;
+            terrainSculpt.grassEnabled = false;
         }
         ImGui::SameLine(0.0F, 8.0F);
         if (EditorButton(showGameView ? " Scene View " : " Game View ").drawSmall()) {
@@ -1009,11 +1179,14 @@ ViewportInteraction drawViewport(Engine::ScenePreset &scene, Engine::Assets::Con
             drawCameraGizmos(scene, selected, renderer, imageMin, imageMax);
             drawLightGizmos(scene, selected, renderer, imageMin, imageMax);
         }
-        const bool sculptConsumesClick = gizmoAction < 0 && !showGameView && !playing &&
+        const bool grassConsumesClick = gizmoAction < 0 && !showGameView && !playing &&
+            drawTerrainGrass(scene, selected, renderer, imageMin, imageMax, terrainSculpt,
+                             imageHovered, interaction);
+        const bool sculptConsumesClick = !grassConsumesClick && gizmoAction < 0 && !showGameView && !playing &&
             drawTerrainSculpt(scene, selected, renderer, imageMin, imageMax, terrainSculpt,
                               imageHovered, interaction);
         const bool gizmoConsumesClick = gizmoToolsConsumeClick || orientationGizmoConsumesClick ||
-            sculptConsumesClick ||
+            sculptConsumesClick || grassConsumesClick ||
             (gizmoAction < 0 && !showGameView && !playing &&
                                         (gizmoMode == GizmoMode::Translate
                                              ? drawTranslationGizmo(scene, selected, renderer, imageMin, imageMax)
@@ -1035,6 +1208,7 @@ ViewportInteraction drawViewport(Engine::ScenePreset &scene, Engine::Assets::Con
     // cursor after right- or middle-clicking menus and side panels, leaving
     // ImGui unable to receive subsequent clicks.
     interaction.cameraInput = !playing && !showGameView && viewportHovered;
+    interaction.gameCameraInput = showGameView && viewportHovered && !ImGui::GetIO().WantTextInput;
     return interaction;
 }
 

@@ -6,6 +6,7 @@
 #include "Engine/ECS/Components/RigidbodyComponent.h"
 #include "Engine/ECS/Components/ScriptComponent.h"
 #include "Engine/ECS/Components/TerrainComponent.h"
+#include "Engine/ECS/Components/TerrainGrassComponent.h"
 #include "Engine/Renderer/Lighting/DirectionalLightData.h"
 #include "Engine/Renderer/Materials/PBRMaterial.h"
 #include "Engine/Renderer/RenderConfig.h"
@@ -171,6 +172,25 @@ TEST(TerrainComponent, BuildsCheckerboardGridAndSculptsHeightmap) {
     const Engine::Mesh lodMesh = terrain.createMesh(1);
     EXPECT_EQ(lodMesh.vertices.size(), 9u);
     EXPECT_EQ(lodMesh.indices.size(), 24u);
+}
+
+TEST(TerrainGrassComponent, StoresCompactInstancesWithoutEntities) {
+    Engine::TerrainGrassComponent grass;
+    auto mesh = std::make_shared<Engine::Mesh>();
+    mesh->vertices.resize(3);
+    mesh->indices = {0, 1, 2};
+    grass.mesh = mesh;
+    grass.castShadow = false;
+    grass.instances = {
+        {.position = {1.0F, 0.25F, -1.0F}, .yaw = 42.0F, .scale = 0.8F},
+        {.position = {-1.0F, 0.0F, 1.0F}, .yaw = 180.0F, .scale = 1.2F},
+    };
+    ASSERT_TRUE(grass.hasPrefab());
+    ASSERT_EQ(grass.instances.size(), 2u);
+    EXPECT_FLOAT_EQ(grass.instances[0].position.x(), 1.0F);
+    EXPECT_FLOAT_EQ(grass.instances[0].yaw, 42.0F);
+    EXPECT_FLOAT_EQ(grass.instances[1].scale, 1.2F);
+    EXPECT_FALSE(grass.castShadow);
 }
 
 TEST(ScriptComponent, CopiesConfigurationWithoutSharingRuntimeState) {

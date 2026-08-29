@@ -6,6 +6,7 @@
 #include "Engine/ECS/Components/ColliderComponent.h"
 #include "Engine/ECS/Components/MeshRendererComponent.h"
 #include "Engine/ECS/Components/TerrainComponent.h"
+#include "Engine/ECS/Components/TerrainGrassComponent.h"
 #include "Engine/Scene/Components/IdentityComponents.h"
 
 #include <optional>
@@ -133,6 +134,13 @@ private:
             if (scene.editor().has<Engine::ColliderComponent>(found)) {
                 scene.editor().modify<Engine::ColliderComponent>(found, [&](auto& collider) {
                     if (auto* shape = std::get_if<Engine::MeshCollider>(&collider.shape)) shape->mesh = mesh;
+                });
+            }
+            if (scene.editor().has<Engine::TerrainGrassComponent>(found)) {
+                scene.editor().modify<Engine::TerrainGrassComponent>(found, [&](auto& grass) {
+                    for (auto& instance : grass.instances)
+                        instance.position.setY(terrain.sampleHeight(instance.position.x(), instance.position.z()));
+                    grass.allInstancesDirty = true;
                 });
             }
             to.push_back(std::move(entry));

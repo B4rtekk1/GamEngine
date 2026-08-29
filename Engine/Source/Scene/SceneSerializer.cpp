@@ -10,6 +10,7 @@
 #include "Engine/ECS/Components/ParticleEmitterComponent.h"
 #include "Engine/ECS/Components/SmokeEmitterComponent.h"
 #include "Engine/ECS/Components/TerrainComponent.h"
+#include "Engine/ECS/Components/TerrainGrassComponent.h"
 #include "Engine/ECS/Registry.h"
 #include "Engine/Renderer/MeshRenderer.h"
 #include "Engine/Scene/Scene.h"
@@ -395,6 +396,28 @@ namespace Engine {
             return terrain;
         }
 
+        void writeTerrainGrass(std::ostream& output, const TerrainGrassComponent& grass,
+                               const std::size_t meshId) {
+            output << meshId << ' ';
+            writeMaterial(output, grass.material);
+            output << ' ' << static_cast<int>(grass.castShadow) << ' ' << grass.instances.size();
+            for (const auto& instance : grass.instances) {
+                output << ' ';
+                writeVec3(output, instance.position);
+                output << ' ';
+                writeFloat(output, instance.yaw);
+                output << ' ';
+                writeFloat(output, instance.scale);
+                output << ' ';
+                writeFloat(output, instance.bendX);
+                output << ' ';
+                writeFloat(output, instance.bendZ);
+                output << ' ';
+                writeFloat(output, instance.trampled);
+            }
+            output << '\n';
+        }
+
         std::vector<Entity> sortedEntities(const Registry &registry) {
             std::vector<Entity> entities;
             entities.reserve(registry.size());
@@ -519,6 +542,14 @@ namespace Engine {
                 meshes.push_back(renderer.mesh);
             }
         }
+        for (const Entity entity : entities) {
+            if (!registry.has<TerrainGrassComponent>(entity)) continue;
+            const auto& grass = registry.get<TerrainGrassComponent>(entity);
+            if (grass.mesh && !meshIds.contains(grass.mesh.get())) {
+                meshIds.emplace(grass.mesh.get(), meshes.size());
+                meshes.push_back(grass.mesh);
+            }
+        }
 
         if (msaaSamples != 0 && msaaSamples != 2 && msaaSamples != 4) {
             throw std::invalid_argument("MSAA samples must be 0, 2 or 4");
@@ -616,6 +647,13 @@ namespace Engine {
             if (registry.has<TerrainComponent>(entity)) {
                 serialized << "TERRAIN ";
                 writeTerrain(serialized, registry.get<TerrainComponent>(entity));
+            }
+            if (registry.has<TerrainGrassComponent>(entity)) {
+                const auto& grass = registry.get<TerrainGrassComponent>(entity);
+                if (grass.mesh) {
+                    serialized << "TERRAIN_GRASS_V2 ";
+                    writeTerrainGrass(serialized, grass, meshIds.at(grass.mesh.get()));
+                }
             }
             if (registry.has<MeshRenderer>(entity)) {
                 const auto &renderer = registry.get<MeshRenderer>(entity);
@@ -846,6 +884,7 @@ namespace Engine {
             bool hasCollider = false;
             bool hasRigidbody = false;
             bool hasTerrain = false;
+            bool hasTerrainGrass = false;
             bool hasIdentity = false;
             bool hasParent = false;
             bool hasHierarchyOrder = false;
@@ -918,6 +957,36 @@ namespace Engine {
                     }
                     hasTerrain = true;
                     loaded.add<TerrainComponent>(entity, readTerrain(input));
+                } else if (component == "TERRAIN_GRASS" || component == "TERRAIN_GRASS_V2") {
+                    if (hasTerrainGrass) invalidScene("entity contains more than one TerrainGrassComponent");
+                    hasTerrainGrass = true;
+                    const std::size_t meshId = readCount(input, "grass mesh reference", meshes.size());
+                    if (meshId >= meshes.size()) invalidScene("grass references an unknown mesh");
+                    TerrainGrassComponent grass;
+                    grass.mesh = meshes[meshId];
+                    grass.material = readMaterial(input);
+                    grass.castShadow = readBool(input, "grass cast-shadow flag");
+                    const std::size_t count = readCount(input, "grass instance count",
+                                                        TerrainGrassComponent::MaximumInstances);
+                    grass.instances.reserve(count);
+                    for (std::size_t i = 0; i < count; ++i) {
+                        TerrainGrassInstance instance;
+                        instance.position = readVec3(input, "grass instance position");
+                        instance.yaw = readFloat(input, "grass instance yaw");
+                        instance.scale = readFloat(input, "grass instance scale");
+                        if (component == "TERRAIN_GRASS_V2") {
+                            instance.bendX = readFloat(input, "grass instance bend x");
+                            instance.bendZ = readFloat(input, "grass instance bend z");
+                            instance.trampled = readFloat(input, "grass instance trample amount");
+                        }
+                        if (instance.scale <= 0.0F || instance.trampled < 0.0F ||
+                            instance.trampled > 1.0F ||
+                            std::hypot(instance.bendX, instance.bendZ) > 1.001F) {
+                            invalidScene("grass instance deformation is invalid");
+                        }
+                        grass.instances.push_back(instance);
+                    }
+                    loaded.add<TerrainGrassComponent>(entity, std::move(grass));
                 } else if (component == "MESH_RENDERER") {
                     if (hasRenderer) {
                         invalidScene("entity contains more than one MeshRenderer");
@@ -1034,6 +1103,9 @@ namespace Engine {
                         meshCollider->mesh = mesh;
                     }
                 }
+            }
+            if (hasTerrainGrass && !hasTerrain) {
+                invalidScene("TerrainGrassComponent requires TerrainComponent");
             }
         }
 

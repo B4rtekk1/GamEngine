@@ -13,6 +13,7 @@
 #include "Engine/ECS/Components/CameraComponent.h"
 #include "Engine/ECS/Components/ColliderComponent.h"
 #include "Engine/ECS/Components/RigidbodyComponent.h"
+#include "Engine/ECS/Components/TerrainGrassComponent.h"
 #include "Engine/ECS/Components/ColorPickerComponent.h"
 #include "Engine/ECS/Components/SmokeEmitterComponent.h"
 #include "Engine/Scene/Components/LightComponent.h"
@@ -371,6 +372,7 @@ int main() {
             }
             renderer.setEditorSceneCameraInput(
                 viewportInteraction.cameraInput && !inspectorConsumesMouseWheel);
+            renderer.setGameCameraInput(viewportInteraction.gameCameraInput);
             renderer.setSceneViewportActive(showViewport && !showGameView && !playing);
             ImGui::Render();
 
@@ -386,6 +388,8 @@ int main() {
                 // the selection afterwards so the new copy can be outlined
                 // and selected in the Scene View immediately.
                 renderer.setEditorSelection(selectedEntity);
+            } else if (viewportInteraction.terrainGrassChanged) {
+                renderer.synchronizeScene(scene);
             } else if (viewportInteraction.terrainGeometryChanged) {
                 renderer.updateMeshGeometry(selectedEntity, viewportInteraction.terrainFirstVertex,
                                             viewportInteraction.terrainVertexCount);

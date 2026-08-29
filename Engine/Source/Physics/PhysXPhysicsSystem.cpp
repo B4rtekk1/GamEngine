@@ -2,6 +2,7 @@
 #include "Engine/Core/Transform.h"
 #include "Engine/ECS/Components/ColliderComponent.h"
 #include "Engine/ECS/Components/RigidbodyComponent.h"
+#include "Engine/ECS/Components/TerrainGrassComponent.h"
 #include "Engine/Renderer/Geometry/Mesh.h"
 #include "Engine/Scene/Scene.h"
 
@@ -39,6 +40,124 @@ namespace Engine {
 
         Vec3 fromPhysX(const physx::PxVec3 &value) noexcept {
             return {value.x, value.y, value.z};
+        }
+
+        struct GrassSphere final {
+            Entity entity{NullEntity};
+            Vec3 center;
+            Vec3 velocity;
+            float radius{};
+        };
+
+        void trampleTerrainGrass(Registry& registry, const float deltaTime) {
+            std::vector<GrassSphere> spheres;
+            registry.view<Transform, ColliderComponent>(
+                [&](const Entity entity, const Transform& transform, const ColliderComponent& collider) {
+                    const auto* sphere = std::get_if<SphereCollider>(&collider.shape);
+                    if (sphere == nullptr) return;
+                    const glm::vec3 center = glm::vec3{transform.matrix().native() *
+                        glm::vec4{collider.offset.native(), 1.0F}};
+                    const float scale = std::max({std::abs(transform.scale.x()),
+                                                  std::abs(transform.scale.y()),
+                                                  std::abs(transform.scale.z())});
+                    const Vec3 velocity = registry.has<RigidbodyComponent>(entity)
+                        ? registry.get<RigidbodyComponent>(entity).linearVelocity : Vec3{};
+                    spheres.push_back({entity, Vec3{center}, velocity, sphere->radius * scale});
+                });
+            if (spheres.empty()) return;
+            std::vector<float> grassCoverage(spheres.size());
+
+            std::vector<Entity> changedTerrains;
+            registry.view<Transform, TerrainGrassComponent>(
+                [&](const Entity entity, const Transform& terrainTransform, TerrainGrassComponent& grass) {
+                    if (grass.instances.empty()) return;
+                    grass.rebuildSpatialIndex();
+                    const glm::mat4 terrainMatrix = terrainTransform.matrix().native();
+                    const glm::mat4 inverseTerrain = glm::inverse(terrainMatrix);
+                    const float terrainScale = std::max(0.001F, std::min(
+                        std::abs(terrainTransform.scale.x()), std::abs(terrainTransform.scale.z())));
+                    bool changed = false;
+                    for (std::size_t sphereIndex = 0; sphereIndex < spheres.size(); ++sphereIndex) {
+                        const GrassSphere& sphere = spheres[sphereIndex];
+                        constexpr float grassReach = 0.45F;
+                        const Vec3 localCenter{glm::vec3{inverseTerrain *
+                            glm::vec4{sphere.center.native(), 1.0F}}};
+                        const float localRadius = (sphere.radius + grassReach) / terrainScale;
+                        const auto minimumX = static_cast<std::int32_t>(std::floor(
+                            (localCenter.x() - localRadius) / TerrainGrassComponent::SpatialCellSize));
+                        const auto maximumX = static_cast<std::int32_t>(std::floor(
+                            (localCenter.x() + localRadius) / TerrainGrassComponent::SpatialCellSize));
+                        const auto minimumZ = static_cast<std::int32_t>(std::floor(
+                            (localCenter.z() - localRadius) / TerrainGrassComponent::SpatialCellSize));
+                        const auto maximumZ = static_cast<std::int32_t>(std::floor(
+                            (localCenter.z() + localRadius) / TerrainGrassComponent::SpatialCellSize));
+                        for (std::int32_t cellX = minimumX; cellX <= maximumX; ++cellX) {
+                            for (std::int32_t cellZ = minimumZ; cellZ <= maximumZ; ++cellZ) {
+                                const auto cell = grass.spatialCells.find(
+                                    TerrainGrassComponent::spatialKey(cellX, cellZ));
+                                if (cell == grass.spatialCells.end()) continue;
+                                for (const std::size_t index : cell->second) {
+                                    auto& instance = grass.instances[index];
+                                    const Vec3 worldPosition{glm::vec3{terrainMatrix *
+                                        glm::vec4{instance.position.native(), 1.0F}}};
+                                    const float distance = (worldPosition - sphere.center).length();
+                                    const float influence = sphere.radius + grassReach;
+                                    if (distance >= influence) continue;
+                                    const float target = std::clamp(
+                                        (1.0F - distance / influence) * 1.35F, 0.0F, 1.0F);
+                                    grassCoverage[sphereIndex] += target;
+                                    if (target <= instance.trampled + 1.0e-4F) continue;
+
+                                    float directionX = instance.position.x() - localCenter.x();
+                                    float directionZ = instance.position.z() - localCenter.z();
+                                    float directionLength = std::hypot(directionX, directionZ);
+                                    if (directionLength < 1.0e-4F && sphere.velocity.length() > 1.0e-4F) {
+                                        const glm::vec3 localVelocity = glm::vec3{inverseTerrain *
+                                            glm::vec4{sphere.velocity.native(), 0.0F}};
+                                        directionX = localVelocity.x;
+                                        directionZ = localVelocity.z;
+                                        directionLength = std::hypot(directionX, directionZ);
+                                    }
+                                    if (directionLength < 1.0e-4F) {
+                                        directionX = 1.0F;
+                                        directionZ = 0.0F;
+                                    } else {
+                                        directionX /= directionLength;
+                                        directionZ /= directionLength;
+                                    }
+                                    instance.bendX = directionX;
+                                    instance.bendZ = directionZ;
+                                    instance.trampled = target;
+                                    grass.dirtyInstances.push_back(index);
+                                    changed = true;
+                                }
+                            }
+                        }
+                    }
+                    if (changed) {
+                        std::ranges::sort(grass.dirtyInstances);
+                        grass.dirtyInstances.erase(std::ranges::unique(grass.dirtyInstances).begin(),
+                                                   grass.dirtyInstances.end());
+                        changedTerrains.push_back(entity);
+                    }
+                });
+            for (const Entity entity : changedTerrains)
+                registry.markChanged<TerrainGrassComponent>(entity);
+
+            // Grass applies rolling resistance only in the horizontal plane:
+            // falling, jumping, and gravity must retain their normal response.
+            constexpr float grassDragPerSecond = 1.2F;
+            for (std::size_t i = 0; i < spheres.size(); ++i) {
+                const float coverage = std::min(grassCoverage[i], 1.0F);
+                if (coverage <= 0.0F || !registry.has<RigidbodyComponent>(spheres[i].entity)) continue;
+                registry.modify<RigidbodyComponent>(spheres[i].entity, [&](auto& body) {
+                    if (body.type != RigidbodyType::Dynamic) return;
+                    const float damping = std::exp(-grassDragPerSecond * coverage * deltaTime);
+                    body.linearVelocity.setX(body.linearVelocity.x() * damping);
+                    body.linearVelocity.setZ(body.linearVelocity.z() * damping);
+                    body.angularVelocity *= damping;
+                });
+            }
         }
 
         Quat transformRotation(const Transform &transform) {
@@ -584,6 +703,7 @@ namespace Engine {
         runtime.physicsScene->simulate(deltaTime);
         runtime.physicsScene->fetchResults(true);
         runtime.pullPhysXState(registry);
+        trampleTerrainGrass(registry, deltaTime);
     }
 
     std::optional<RaycastHit> PhysicsSystem::raycast(

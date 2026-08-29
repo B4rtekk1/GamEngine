@@ -42,9 +42,10 @@ void ForwardPass::create(VkDevice device, const VkFormat colorFormat,
         {7, 1, VK_FORMAT_R32G32B32A32_SFLOAT, sizeof(glm::vec4) * 3},
         {8, 0, VK_FORMAT_R32_UINT, offsetof(Vertex, materialIndex)},
         {9, 0, VK_FORMAT_R32G32B32A32_SFLOAT, offsetof(Vertex, tangent)},
-        {10, 1, VK_FORMAT_R32G32B32_SFLOAT, offsetof(RendererInstanceData, normalColumn0)},
-        {11, 1, VK_FORMAT_R32G32B32_SFLOAT, offsetof(RendererInstanceData, normalColumn1)},
-        {12, 1, VK_FORMAT_R32G32B32_SFLOAT, offsetof(RendererInstanceData, normalColumn2)},
+        {10, 1, VK_FORMAT_R32G32B32A32_SFLOAT, offsetof(RendererInstanceData, normalColumn0)},
+        {11, 1, VK_FORMAT_R32G32B32A32_SFLOAT, offsetof(RendererInstanceData, normalColumn1)},
+        {12, 1, VK_FORMAT_R32G32B32A32_SFLOAT, offsetof(RendererInstanceData, normalColumn2)},
+        {13, 1, VK_FORMAT_R32G32B32A32_SFLOAT, offsetof(RendererInstanceData, grassDeformation)},
     };
     pipeline_.create(device, options);
 
@@ -59,7 +60,10 @@ void ForwardPass::create(VkDevice device, const VkFormat colorFormat,
         std::remove_if(outlineOptions.vertexAttributes.begin(),
                        outlineOptions.vertexAttributes.end(),
                        [](const VkVertexInputAttributeDescription& attribute) {
-                           return attribute.location == 9;
+                           // The outline shader consumes the base vertex data,
+                           // instance model (4-7), and material index (8), but
+                           // not the PBR-only tangent/normal-matrix inputs.
+                           return attribute.location >= 9;
                        }),
         outlineOptions.vertexAttributes.end());
     outlinePipeline_.create(device, outlineOptions);

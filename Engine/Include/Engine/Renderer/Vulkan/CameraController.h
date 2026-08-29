@@ -15,6 +15,7 @@ class CameraController final {
 public:
     void setEditorInputEnabled(bool enabled) noexcept { editorInputEnabled_ = enabled; }
     [[nodiscard]] bool editorInputEnabled() const noexcept { return editorInputEnabled_; }
+    void setGameInputEnabled(bool enabled) noexcept { gameInputEnabled_ = enabled; }
     void update(SDL_Window* window, Registry& registry);
     void updateEditor(SDL_Window* window);
 
@@ -35,6 +36,7 @@ private:
     std::optional<Camera> camera_;
     bool mouseLookActive_{false};
     bool editorInputEnabled_{false};
+    bool gameInputEnabled_{true};
     Vec3 editorPosition_{8.0F, 6.0F, 8.0F};
     float editorYaw_{-135.0F};
     float editorPitch_{-28.0F};

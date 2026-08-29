@@ -27,5 +27,7 @@ namespace Engine {
         glm::vec4 normalColumn0{1.0F, 0.0F, 0.0F, 0.0F};
         glm::vec4 normalColumn1{0.0F, 1.0F, 0.0F, 0.0F};
         glm::vec4 normalColumn2{0.0F, 0.0F, 1.0F, 0.0F};
+        // xy: local bend direction, z: permanent trample amount.
+        glm::vec4 grassDeformation{};
     };
 } // namespace Engine

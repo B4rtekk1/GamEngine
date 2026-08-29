@@ -5,6 +5,7 @@
 
 #include <unordered_map>
 #include <unordered_set>
+#include <algorithm>
 #include <typeindex>
 #include <memory>
 #include <cassert>
@@ -65,6 +66,9 @@ namespace Engine {
 
             for (auto &pool: m_componentPools | std::views::values) {
                 pool->remove(entity);
+            }
+            for (auto& changes : m_componentChangeEntities | std::views::values) {
+                changes.erase(entity);
             }
             const std::uint32_t index = entityIndex(entity);
             ++m_generations[index];
@@ -133,21 +137,44 @@ namespace Engine {
             return it == m_componentRevisions.end() ? 0 : it->second;
         }
 
-        /** Returns entities whose component changed after the supplied revision. */
+        /**
+         * Returns distinct entities whose component changed after the supplied
+         * revision. Recent revisions are served from an append-only delta log;
+         * an old observer transparently falls back to the current-state map.
+         */
         template<typename T>
         [[nodiscard]] std::vector<Entity> componentEntitiesChangedSince(
             const std::uint64_t revision) const {
-            const auto it = m_componentChangeEntities.find(std::type_index(typeid(T))); //NOLINT
-            if (it == m_componentChangeEntities.end()) {
+            const auto type = std::type_index(typeid(T)); //NOLINT
+            const auto current = m_componentChangeEntities.find(type);
+            if (current == m_componentChangeEntities.end()) {
                 return {};
             }
 
             std::vector<Entity> changed;
-            changed.reserve(it->second.size());
-            for (const auto &[entity, changedRevision]: it->second) {
-                if (changedRevision > revision) {
-                    changed.push_back(entity);
+            const auto log = m_componentChangeLogs.find(type);
+            if (log != m_componentChangeLogs.end() && !log->second.records.empty() &&
+                revision >= log->second.firstRevision - 1) {
+                const auto first = std::upper_bound(log->second.records.begin(),
+                                                    log->second.records.end(), revision,
+                                                    [](const std::uint64_t value,
+                                                       const ComponentChange& change) {
+                                                        return value < change.revision;
+                                                    });
+                std::unordered_set<Entity> unique;
+                unique.reserve(static_cast<std::size_t>(log->second.records.end() - first));
+                for (auto entry = first; entry != log->second.records.end(); ++entry) {
+                    unique.insert(entry->entity);
                 }
+                changed.assign(unique.begin(), unique.end());
+                return changed;
+            }
+
+            // The observer predates the bounded delta log. This slower path
+            // remains correct and is used only after a long pause.
+            changed.reserve(current->second.size());
+            for (const auto& [entity, changedRevision] : current->second) {
+                if (changedRevision > revision) changed.push_back(entity);
             }
             return changed;
         }
@@ -378,6 +405,14 @@ namespace Engine {
             const auto type = std::type_index(typeid(T));
             const auto revision = ++m_componentRevisions[type];
             m_componentChangeEntities[type][entity] = revision;
+            ComponentChangeLog& log = m_componentChangeLogs[type];
+            log.records.push_back({entity, revision});
+            if (log.records.size() == 1) log.firstRevision = revision;
+            if (log.records.size() > MaxComponentChangeLogSize) {
+                const auto retained = log.records.end() - MaxComponentChangeLogSize;
+                log.records.erase(log.records.begin(), retained);
+                log.firstRevision = log.records.front().revision;
+            }
         }
 
         template<typename Pools>
@@ -495,8 +530,18 @@ namespace Engine {
         > m_componentPools;
 
         std::unordered_map<std::type_index, std::uint64_t> m_componentRevisions;
+        struct ComponentChange {
+            Entity entity{NullEntity};
+            std::uint64_t revision{0};
+        };
+        struct ComponentChangeLog {
+            std::uint64_t firstRevision{0};
+            std::vector<ComponentChange> records;
+        };
+        static constexpr std::size_t MaxComponentChangeLogSize = 4096;
         std::unordered_map<std::type_index, std::unordered_map<Entity, std::uint64_t> >
         m_componentChangeEntities;
+        std::unordered_map<std::type_index, ComponentChangeLog> m_componentChangeLogs;
 
         std::uint64_t m_mutationRevision = 0;
         std::uint64_t m_structuralRevision = 0;

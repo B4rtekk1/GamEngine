@@ -139,6 +139,30 @@ bool ComponentsPanel::draw(Engine::ScenePreset &scene, const Engine::Entity sele
         ImGui::Text("Height range: %.1f to %.1f", terrain.minimumHeight, terrain.maximumHeight);
         ImGui::Spacing();
         ImGui::TextWrapped("Use Sculpt in the Scene View toolbar, then drag the left mouse button over the terrain.");
+        if (scene.editor().has<Engine::TerrainGrassComponent>(selected)) {
+            const auto& grass = scene.editor().get<Engine::TerrainGrassComponent>(selected);
+            ImGui::Text("Grass instances: %zu", grass.instances.size());
+            if (!grass.instances.empty() && ImGui::Button("Clear grass")) {
+                auto cleared = grass;
+                cleared.instances.clear();
+                scene.editor().remove<Engine::TerrainGrassComponent>(selected);
+                scene.editor().add<Engine::TerrainGrassComponent>(selected, std::move(cleared));
+            }
+            ImGui::SameLine();
+            ImGui::TextDisabled("GPU instanced, shadows off by default");
+            if (!grass.instances.empty() && ImGui::Button("Reset trampled grass")) {
+                scene.editor().modify<Engine::TerrainGrassComponent>(selected, [](auto& component) {
+                    for (auto& instance : component.instances) {
+                        instance.bendX = 0.0F;
+                        instance.bendZ = 0.0F;
+                        instance.trampled = 0.0F;
+                    }
+                    component.allInstancesDirty = true;
+                });
+            }
+        } else {
+            ImGui::TextDisabled("Grass: choose Grass in Scene View and drop a model prefab.");
+        }
     }
     if (scene.editor().valid(selected) &&
         scene.editor().has<Engine::LightComponent>(selected)) {

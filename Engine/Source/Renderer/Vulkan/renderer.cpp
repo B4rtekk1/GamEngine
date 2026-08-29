@@ -36,6 +36,7 @@
 #include "Engine/ECS/Components/SmokeEmitterComponent.h"
 #include "Engine/ECS/Components/ColorPickerComponent.h"
 #include "Engine/ECS/Components/ColliderComponent.h"
+#include "Engine/ECS/Components/TerrainGrassComponent.h"
 #include "Engine/Scene/Components/LightComponent.h"
 #include "Engine/Core/Transform.h"
 #include "Engine/Core/Camera.h"
@@ -143,6 +144,7 @@ namespace Engine {
               materialSlots(sceneGpu.materialSlots),
               lastTransformRevision(sceneGpu.lastTransformRevision),
               lastMeshRendererRevision(sceneGpu.lastMeshRendererRevision),
+              lastTerrainGrassRevision(sceneGpu.lastTerrainGrassRevision),
               dirtyTransforms(sceneGpu.dirtyTransforms),
               dirtyMaterials(sceneGpu.dirtyMaterials),
               dirtyCullingObjects(sceneGpu.dirtyCullingObjects),
@@ -238,6 +240,10 @@ namespace Engine {
 
         void setEditorSceneCameraInput(const bool active) {
             cameraController.setEditorInputEnabled(active);
+        }
+
+        void setGameCameraInput(const bool active) {
+            cameraController.setGameInputEnabled(active);
         }
 
         void setEditorSelection(const Entity entity) {
@@ -372,6 +378,7 @@ namespace Engine {
             }
             lastTransformRevision = std::numeric_limits<std::uint64_t>::max();
             lastMeshRendererRevision = std::numeric_limits<std::uint64_t>::max();
+            lastTerrainGrassRevision = std::numeric_limits<std::uint64_t>::max();
             hiZValid = false;
 
             // The previous scene may have owned a particle system. Its GPU
@@ -482,6 +489,7 @@ namespace Engine {
             for (auto &indices: dirtyCullingObjects) { indices.clear(); }
             lastTransformRevision = std::numeric_limits<std::uint64_t>::max();
             lastMeshRendererRevision = std::numeric_limits<std::uint64_t>::max();
+            lastTerrainGrassRevision = std::numeric_limits<std::uint64_t>::max();
             hiZValid = false;
 
             createMaterialTextures();
@@ -519,11 +527,9 @@ namespace Engine {
             const std::uint32_t vertexCount = std::min(
                 requestedVertexCount, renderer.mesh->vertexCount() - firstVertex);
             if (vertexCount == 0) return;
-            if (!inFlightFences.empty() && vkWaitForFences(
-                    device, static_cast<uint32_t>(inFlightFences.size()), inFlightFences.data(),
-                    VK_TRUE, UINT64_MAX) != VK_SUCCESS) {
-                throw std::runtime_error("Could not synchronize frames for mesh update");
-            }
+            // uploadDeviceLocal submits the copy after all graphics work already
+            // queued on this queue. Avoid waiting for every frame in flight here:
+            // that global stall made terrain sculpting block on unrelated frames.
             vertexBuffer.uploadDeviceLocal(
                 renderer.mesh->vertices.data() + firstVertex, sizeof(Vertex) * vertexCount,
                 sizeof(Vertex) * (record.firstVertex + firstVertex), commandPool,
@@ -547,37 +553,36 @@ namespace Engine {
             InstanceBatch& changedBatch = instanceBatches[record.batchIndex];
             changedBatch.mesh = renderer.mesh.get();
 
-            glm::vec3 sceneMinimum{std::numeric_limits<float>::max()};
-            glm::vec3 sceneMaximum{std::numeric_limits<float>::lowest()};
-            for (std::size_t batchIndex = 0; batchIndex < instanceBatches.size(); ++batchIndex) {
-                bool first = true;
-                AABB batchBounds{};
-                for (const RenderableRecord& item : renderables) {
-                    if (item.batchIndex != batchIndex || !registry.has<Transform>(item.entity)) continue;
-                    const AABB world = item.localBounds.transformed(
-                        registry.get<Transform>(item.entity).matrix().native());
-                    if (first) {
-                        batchBounds = world;
-                        first = false;
-                    } else {
-                        batchBounds.min = Vec3{glm::min(batchBounds.min.native(), world.min.native())};
-                        batchBounds.max = Vec3{glm::max(batchBounds.max.native(), world.max.native())};
-                    }
-                }
-                if (first) continue;
-                instanceBatches[batchIndex].worldBounds = batchBounds;
-                sceneMinimum = glm::min(sceneMinimum, batchBounds.min.native());
-                sceneMaximum = glm::max(sceneMaximum, batchBounds.max.native());
-                if (batchIndex < gpuObjects.size()) {
-                    gpuObjects[batchIndex].localAabbMin = {
-                        batchBounds.min.x(), batchBounds.min.y(), batchBounds.min.z(), 0.0F};
-                    gpuObjects[batchIndex].localAabbMax = {
-                        batchBounds.max.x(), batchBounds.max.y(), batchBounds.max.z(), 0.0F};
+            bool first = true;
+            AABB batchBounds{};
+            for (const std::size_t index : sceneGpu.batchRenderableIndices[record.batchIndex]) {
+                const RenderableRecord& item = renderables[index];
+                if (!registry.has<Transform>(item.entity)) continue;
+                const AABB world = item.localBounds.transformed(
+                    registry.get<Transform>(item.entity).matrix().native());
+                if (first) {
+                    batchBounds = world;
+                    first = false;
+                } else {
+                    batchBounds.min = Vec3{glm::min(batchBounds.min.native(), world.min.native())};
+                    batchBounds.max = Vec3{glm::max(batchBounds.max.native(), world.max.native())};
                 }
             }
-            if (!gpuObjects.empty()) {
+            if (!first && record.batchIndex < gpuObjects.size()) {
+                changedBatch.worldBounds = batchBounds;
+                auto& gpuObject = gpuObjects[record.batchIndex];
+                gpuObject.localAabbMin = {batchBounds.min.x(), batchBounds.min.y(), batchBounds.min.z(), 0.0F};
+                gpuObject.localAabbMax = {batchBounds.max.x(), batchBounds.max.y(), batchBounds.max.z(), 0.0F};
                 for (Buffer& buffer : cullingObjectBuffers) {
-                    buffer.update(gpuObjects.data(), sizeof(Culling::GPUObjectData) * gpuObjects.size());
+                    buffer.update(&gpuObject, sizeof(gpuObject),
+                                  sizeof(Culling::GPUObjectData) * record.batchIndex);
+                }
+
+                glm::vec3 sceneMinimum{std::numeric_limits<float>::max()};
+                glm::vec3 sceneMaximum{std::numeric_limits<float>::lowest()};
+                for (const InstanceBatch& batch : instanceBatches) {
+                    sceneMinimum = glm::min(sceneMinimum, batch.worldBounds.min.native());
+                    sceneMaximum = glm::max(sceneMaximum, batch.worldBounds.max.native());
                 }
                 const glm::vec3 center = (sceneMinimum + sceneMaximum) * 0.5F;
                 const glm::vec3 halfExtent = (sceneMaximum - sceneMinimum) * 0.5F;

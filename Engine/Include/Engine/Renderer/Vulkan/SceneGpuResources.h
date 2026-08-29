@@ -23,6 +23,8 @@ namespace Engine {
             std::size_t batchIndex{0};
             std::uint32_t firstVertex{0};
             std::uint32_t vertexCount{0};
+            // Non-max means this record is a compact terrain-grass instance.
+            std::size_t grassInstance{std::numeric_limits<std::size_t>::max()};
             Transform cachedTransform{};
             bool hasCachedTransform{false};
             std::uint8_t transformDirtyFrames{0};
@@ -44,12 +46,14 @@ namespace Engine {
         std::vector<InstanceBatch> instanceBatches;
         std::vector<std::vector<std::size_t> > batchRenderableIndices;
         std::unordered_map<Entity, std::size_t> renderableIndices;
+        std::unordered_map<Entity, std::vector<std::size_t>> grassRenderableIndices;
         std::vector<RendererInstanceData> instanceModels;
         std::vector<glm::mat4> shadowInstanceModels;
         std::vector<GPUMaterialData> materials;
         std::uint32_t materialSlots{1};
         std::uint64_t lastTransformRevision = std::numeric_limits<std::uint64_t>::max();
         std::uint64_t lastMeshRendererRevision = std::numeric_limits<std::uint64_t>::max();
+        std::uint64_t lastTerrainGrassRevision = std::numeric_limits<std::uint64_t>::max();
         std::array<std::vector<std::size_t>, 2> dirtyTransforms;
         std::array<std::vector<std::size_t>, 2> dirtyMaterials;
         std::array<std::vector<std::size_t>, 2> dirtyCullingObjects;

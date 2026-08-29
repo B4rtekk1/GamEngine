@@ -42,6 +42,10 @@ void Renderer::processEvent(const void* nativeEvent) const {
 void Renderer::setEditorSceneCameraInput(const bool active) const {
     if (backend_) backend_->setEditorSceneCameraInput(active);
 }
+
+void Renderer::setGameCameraInput(const bool active) const {
+    if (backend_) backend_->setGameCameraInput(active);
+}
 void Renderer::setSceneViewportActive(const bool active) const {
     if (backend_) backend_->sceneViewportActive = active;
 }

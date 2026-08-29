@@ -38,6 +38,10 @@ namespace Engine {
             updateEditor(window);
             return;
         }
+        if (!gameInputEnabled_) {
+            disableRelativeMouseMode(window);
+            return;
+        }
 
         CameraComponent *activeCamera = nullptr;
         Transform *activeTransform = nullptr;
@@ -61,10 +65,13 @@ namespace Engine {
                         component.nearClip, component.farClip);
         camera_->setRotation(Degrees{transform.rotation.y()}, Degrees{transform.rotation.x()});
 
+        const bool flyMode = Input::mouseDown(MouseButton::Right);
+        const bool moveFast = Input::keyDown(KeyCode::LeftShift) ||
+                              Input::keyDown(KeyCode::RightShift);
         Vec3 movement{};
         const Vec3 forward = camera_->forward();
         const Vec3 horizontalForward{forward.x(), Zero, forward.z()};
-        if (horizontalForward.length() > Zero) {
+        if (flyMode && horizontalForward.length() > Zero) {
             const Vec3 flatForward = horizontalForward.normalized();
             if (Input::keyDown(KeyCode::W)) {
                 movement += flatForward;
@@ -73,19 +80,28 @@ namespace Engine {
                 movement -= flatForward;
             }
         }
-        if (Input::keyDown(KeyCode::D)) {
+        if (flyMode && Input::keyDown(KeyCode::D)) {
             movement += camera_->right();
         }
-        if (Input::keyDown(KeyCode::A)) {
+        if (flyMode && Input::keyDown(KeyCode::A)) {
             movement -= camera_->right();
+        }
+        if (flyMode && Input::keyDown(KeyCode::E)) {
+            movement += camera_->up();
+        }
+        if (flyMode && Input::keyDown(KeyCode::Q)) {
+            movement -= camera_->up();
         }
         if (movement.length() > Zero) {
             transform.position += movement.normalized() *
-                    (MovementSpeed * static_cast<float>(Time::deltaTime()));
+                    (MovementSpeed * (moveFast ? EditorFastMovementMultiplier : 1.0F) *
+                     static_cast<float>(Time::deltaTime()));
         }
-        transform.position += camera_->forward() * (Input::mouseWheel() * MouseWheelSpeed);
+        if (flyMode) {
+            transform.position += camera_->forward() * (Input::mouseWheel() * MouseWheelSpeed);
+        }
 
-        if (Input::mouseDown(MouseButton::Right)) {
+        if (flyMode) {
             if (!mouseLookActive_) {
                 SDLInput::setRelativeMouseMode(window, true);
                 mouseLookActive_ = true;
