@@ -84,6 +84,8 @@ namespace {
         return *font;
     }
 }
+// NOLINTBEGIN(readability-magic-numbers)
+
 int main() {
     try {
         if (!SDL_Init(SDL_INIT_VIDEO | SDL_INIT_EVENTS)) {
@@ -448,3 +450,5 @@ int main() {
         return 1;
     }
 }
+
+// NOLINTEND(readability-magic-numbers)

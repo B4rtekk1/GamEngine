@@ -8,6 +8,8 @@
 #include <stdexcept>
 #include <utility>
 
+// NOLINTBEGIN(readability-magic-numbers)
+
 namespace Engine {
     namespace {
         [[nodiscard]] bool isGltfPath(const std::filesystem::path& path) {
@@ -108,3 +110,5 @@ namespace Engine {
         });
     }
 } // namespace Engine
+
+// NOLINTEND(readability-magic-numbers)

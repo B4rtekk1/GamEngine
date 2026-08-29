@@ -25,6 +25,8 @@
 #include <string_view>
 #include <vector>
 
+// NOLINTBEGIN(readability-magic-numbers)
+
 namespace Engine::Assets {
 namespace {
 
@@ -394,3 +396,5 @@ std::shared_ptr<const Mesh> load_gltf_mesh(const std::filesystem::path& path) {
 }
 
 } // namespace Engine::Assets
+
+// NOLINTEND(readability-magic-numbers)

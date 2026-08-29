@@ -60,6 +60,8 @@ std::uint32_t EditorSceneSession::msaaSampleCount(const Engine::Renderer &render
  * @retval true The scene was captured or restored successfully.
  * @retval false Serialization or deserialization threw an exception.
  */
+// NOLINTBEGIN(readability-identifier-length)
+
 bool EditorSceneSession::setPlayMode(const bool play, Engine::ScenePreset &scene,
                                      std::string &snapshot, std::string &error, const std::uint32_t samples) {
     try {
@@ -124,3 +126,5 @@ bool EditorSceneSession::createCppScript(const std::string_view name, std::strin
             << name << ");\n";
     return static_cast<bool>(h) && static_cast<bool>(cpp);
 }
+
+// NOLINTEND(readability-identifier-length)

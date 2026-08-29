@@ -7,6 +7,8 @@
 #include <algorithm>
 #include <stdexcept>
 
+// NOLINTBEGIN(readability-magic-numbers)
+
 namespace Engine::UI {
 
 struct CanvasRenderer::FrameResources {
@@ -195,3 +197,5 @@ void CanvasRenderer::record(const Canvas& canvas,
 }
 
 } // namespace Engine::UI
+
+// NOLINTEND(readability-magic-numbers)

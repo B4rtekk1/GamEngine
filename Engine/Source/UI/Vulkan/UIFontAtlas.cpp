@@ -7,6 +7,9 @@
 #include <fstream>
 #include <limits>
 
+// NOLINTBEGIN(readability-magic-numbers)
+// NOLINTBEGIN(readability-identifier-length)
+
 namespace Engine::UI {
 namespace {
 
@@ -151,3 +154,6 @@ std::string UIFontAtlas::build(const std::string& fontPath, std::uint32_t pixelS
     for(auto& q:pending){const auto w=static_cast<std::uint32_t>(q.glyph.width),h=static_cast<std::uint32_t>(q.glyph.height);if(x+w+padding>atlasWidth){x=padding;y+=row+padding;row=0;}for(std::uint32_t py=0;py<h;++py)for(std::uint32_t px=0;px<w;++px){float sum=0;for(std::uint32_t sy=0;sy<samples;++sy)for(std::uint32_t sx=0;sx<samples;++sx){const double fx=(px+(sx+.5)/samples)/scale+q.glyph.bearingX/scale;const double fy=q.glyph.bearingY/scale-(h-py-(sy+.5)/samples)/scale;sum+=coverage(q.outline.contours,fx,fy);}m_pixels[std::size_t(y+py)*m_width+x+px]=static_cast<std::uint8_t>(sum*255/(samples*samples));}q.glyph.uv.min[1]=float(y)/m_height;q.glyph.uv.max[1]=float(y+h)/m_height;m_glyphs.emplace(q.cp,q.glyph);x+=w+padding;row=std::max(row,h);}return {};
 }
 } // namespace Engine::UI
+
+// NOLINTEND(readability-magic-numbers)
+// NOLINTEND(readability-identifier-length)

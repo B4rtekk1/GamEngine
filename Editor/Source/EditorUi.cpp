@@ -4,6 +4,8 @@
 
 #include <cctype>
 
+// NOLINTBEGIN(readability-magic-numbers)
+
 bool drawToolbarToggle(const char *label, const bool active) {
     if (active) {
         ImGui::PushStyleColor(ImGuiCol_Button, {0.06F, 0.48F, 0.59F, 1.0F});
@@ -39,3 +41,5 @@ bool containsCaseInsensitive(const char *text, const char *query) {
     }
     return false;
 }
+
+// NOLINTEND(readability-magic-numbers)

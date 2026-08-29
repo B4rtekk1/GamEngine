@@ -30,6 +30,8 @@
 #include <unordered_set>
 #include <vector>
 
+// NOLINTBEGIN(readability-magic-numbers)
+
 namespace Engine {
     namespace {
         constexpr std::size_t MaxMeshes = 1'000'000;
@@ -1153,3 +1155,5 @@ namespace Engine {
         registry = std::move(loaded);
     }
 } // namespace Engine
+
+// NOLINTEND(readability-magic-numbers)

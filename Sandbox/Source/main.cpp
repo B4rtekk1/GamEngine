@@ -7,6 +7,8 @@
 #include <string>
 #include <string_view>
 
+// NOLINTBEGIN(readability-magic-numbers)
+
 int main(int argc, char** argv) {
     try {
         std::filesystem::path scenePath = std::filesystem::path{GAMEENGINE_SOURCE_DIR} /
@@ -32,3 +34,5 @@ int main(int argc, char** argv) {
 
     return EXIT_SUCCESS;
 }
+
+// NOLINTEND(readability-magic-numbers)

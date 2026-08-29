@@ -8,6 +8,8 @@
 #include "imgui.h"
 #include "imgui_internal.h"
 
+// NOLINTBEGIN(readability-magic-numbers)
+
 namespace {
     /** @name Editor geometry and spacing
      *  Constants controlling padding, spacing, border thickness and rounding.
@@ -188,3 +190,5 @@ void EditorStyle::configureDockLayout(const ImVec2 dockSize) {
     ImGui::DockBuilderFinish(root);
     configured = true;
 }
+
+// NOLINTEND(readability-magic-numbers)

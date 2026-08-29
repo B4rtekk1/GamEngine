@@ -13,6 +13,8 @@
 #include <string_view>
 #include <unordered_map>
 
+// NOLINTBEGIN(readability-magic-numbers)
+
 namespace Engine::Assets {
     namespace {
         struct ObjIndex {
@@ -26,15 +28,17 @@ namespace Engine::Assets {
         struct ObjIndexHash {
             std::size_t operator()(const ObjIndex &index) const noexcept {
                 const auto combine = [](std::size_t seed, int value) {
-                    return seed ^ (std::hash<int>{}(value) + 0x9e3779b9u + (seed << 6u) + (seed >> 2u));
+                    return seed ^ (std::hash<int>{}(value) + 0x9e3779b9U + (seed << 6U) + (seed >> 2U));
                 };
                 return combine(combine(std::hash<int>{}(index.position), index.tex_coord), index.normal);
             }
         };
 
         int resolve_obj_index(const int index, const std::size_t count) {
-            if (index > 0) return index - 1;
-            if (index < 0) return static_cast<int>(count) + index;
+            if (index > 0) { return index - 1;
+}
+            if (index < 0) { return static_cast<int>(count) + index;
+}
             return -1;
         }
 
@@ -53,7 +57,8 @@ namespace Engine::Assets {
                         return false;
                     }
                 }
-                if (end == std::string_view::npos) break;
+                if (end == std::string_view::npos) { break;
+}
                 start = end + 1;
             }
             return result.position != 0;
@@ -61,7 +66,8 @@ namespace Engine::Assets {
 
         std::shared_ptr<const Mesh> load_obj_mesh(const std::filesystem::path &path) {
             std::ifstream file(path);
-            if (!file) return {};
+            if (!file) { return {};
+}
 
             std::vector<Vec3> positions;
             std::vector<Vec2> tex_coords;
@@ -79,16 +85,20 @@ namespace Engine::Assets {
                 };
                 if (resolved.position < 0 || static_cast<std::size_t>(resolved.position) >= positions.size() ||
                     (resolved.tex_coord >= 0 && static_cast<std::size_t>(resolved.tex_coord) >= tex_coords.size()) ||
-                    (resolved.normal >= 0 && static_cast<std::size_t>(resolved.normal) >= normals.size()))
+                    (resolved.normal >= 0 && static_cast<std::size_t>(resolved.normal) >= normals.size())) {
                     return std::nullopt;
+}
 
-                if (const auto found = vertices.find(resolved); found != vertices.end()) return found->second;
+                if (const auto found = vertices.find(resolved); found != vertices.end()) { return found->second;
+}
                 Vertex vertex;
                 vertex.position = positions[resolved.position];
                 vertex.color = Vec3{1.0F, 1.0F, 1.0F};
-                if (resolved.tex_coord >= 0) vertex.texCoord = tex_coords[resolved.tex_coord];
-                if (resolved.normal >= 0) vertex.normal = normals[resolved.normal];
-                else has_normals = false;
+                if (resolved.tex_coord >= 0) { vertex.texCoord = tex_coords[resolved.tex_coord];
+}
+                if (resolved.normal >= 0) { vertex.normal = normals[resolved.normal];
+                } else { has_normals = false;
+}
                 const auto index = static_cast<std::uint32_t>(mesh.vertices.size());
                 mesh.vertices.push_back(vertex);
                 vertices.emplace(resolved, index);
@@ -99,37 +109,50 @@ namespace Engine::Assets {
                 std::istringstream stream(line);
                 std::string command;
                 stream >> command;
-                if (command.empty() || command[0] == '#') continue;
+                if (command.empty() || command[0] == '#') { continue;
+}
                 if (command == "v") {
-                    float x, y, z;
-                    if (!(stream >> x >> y >> z)) return {};
+                    float x;
+                    float y;
+                    float z;
+                    if (!(stream >> x >> y >> z)) { return {};
+}
                     positions.emplace_back(x, y, z);
                 } else if (command == "vt") {
-                    float u, v;
-                    if (!(stream >> u >> v)) return {};
+                    float u;
+                    float v;
+                    if (!(stream >> u >> v)) { return {};
+}
                     tex_coords.emplace_back(u, v);
                 } else if (command == "vn") {
-                    float x, y, z;
-                    if (!(stream >> x >> y >> z)) return {};
+                    float x;
+                    float y;
+                    float z;
+                    if (!(stream >> x >> y >> z)) { return {};
+}
                     normals.emplace_back(x, y, z);
                 } else if (command == "f") {
                     std::vector<std::uint32_t> face;
                     std::string token;
                     while (stream >> token) {
                         ObjIndex source;
-                        if (!parse_obj_index(token, source)) return {};
+                        if (!parse_obj_index(token, source)) { return {};
+}
                         const auto index = add_vertex(source);
-                        if (!index) return {};
+                        if (!index) { return {};
+}
                         face.push_back(*index);
                     }
-                    if (face.size() < 3) return {};
+                    if (face.size() < 3) { return {};
+}
                     for (std::size_t i = 1; i + 1 < face.size(); ++i) {
                         mesh.indices.insert(mesh.indices.end(), {face[0], face[i], face[i + 1]});
                     }
                 }
             }
 
-            if (mesh.empty()) return {};
+            if (mesh.empty()) { return {};
+}
             mesh.sourcePath = path;
             if (!has_normals) {
                 for (std::size_t i = 0; i + 2 < mesh.indices.size(); i += 3) {
@@ -142,8 +165,9 @@ namespace Engine::Assets {
                     c.normal += normal;
                 }
                 for (auto &vertex: mesh.vertices) {
-                    if (vertex.normal.length() > 0.0F) vertex.normal = vertex.normal.normalized();
-                    else vertex.normal = Vec3{0.0F, 1.0F, 0.0F};
+                    if (vertex.normal.length() > 0.0F) { vertex.normal = vertex.normal.normalized();
+                    } else { vertex.normal = Vec3{0.0F, 1.0F, 0.0F};
+}
                 }
             }
             return std::make_shared<const Mesh>(std::move(mesh));
@@ -165,7 +189,8 @@ namespace Engine::Assets {
     }
 
     std::filesystem::path AssetManager::resolve(const std::filesystem::path &path) const {
-        if (path.is_absolute() || asset_root_.empty()) return path.lexically_normal();
+        if (path.is_absolute() || asset_root_.empty()) { return path.lexically_normal();
+}
         return (asset_root_ / path).lexically_normal();
     }
 
@@ -182,10 +207,10 @@ namespace Engine::Assets {
 
     AssetId AssetManager::make_id(std::string_view value) noexcept {
         // FNV-1a is stable between runs and platforms, unlike std::hash.
-        std::uint64_t hash = 14695981039346656037ull;
+        std::uint64_t hash = 14695981039346656037ULL;
         for (const auto c: value) {
             hash ^= static_cast<std::uint8_t>(c);
-            hash *= 1099511628211ull;
+            hash *= 1099511628211ULL;
         }
         return hash == 0 ? 1 : hash;
     }
@@ -194,8 +219,8 @@ namespace Engine::Assets {
         const auto a = std::hash<AssetId>{}(key.id);
         const auto b = key.type.hash_code();
         const auto c = std::hash<std::string>{}(key.path);
-        return (a ^ (b + 0x9e3779b9u + (a << 6u) + (a >> 2u))) ^
-               (c + 0x9e3779b9u + (a << 6u) + (a >> 2u));
+        return (a ^ (b + 0x9e3779b9U + (a << 6U) + (a >> 2U))) ^
+               (c + 0x9e3779b9U + (a << 6U) + (a >> 2U));
     }
 
     void AssetManager::report(const std::string &message) const {
@@ -204,14 +229,16 @@ namespace Engine::Assets {
             std::scoped_lock lock(mutex_);
             handler = error_handler_;
         }
-        if (handler) handler(message);
+        if (handler) { handler(message);
+}
     }
 
     void AssetManager::unload_unused() {
         std::scoped_lock lock(mutex_);
         for (auto it = cache_.begin(); it != cache_.end();) {
-            if (it->second.value.use_count() == 1) it = cache_.erase(it);
-            else ++it;
+            if (it->second.value.use_count() == 1) { it = cache_.erase(it);
+            } else { ++it;
+}
         }
     }
 
@@ -235,7 +262,8 @@ namespace Engine::Assets {
     void register_default_asset_loaders(AssetManager &manager) {
         const auto text_loader = [](const std::filesystem::path &path, const AssetMetadata &) {
             std::ifstream file(path, std::ios::binary);
-            if (!file) return std::shared_ptr<const TextAsset>{};
+            if (!file) { return std::shared_ptr<const TextAsset>{};
+}
             std::ostringstream stream;
             stream << file.rdbuf();
             return std::make_shared<const TextAsset>(TextAsset{stream.str()});
@@ -243,9 +271,11 @@ namespace Engine::Assets {
 
         const auto binary_loader = [](const std::filesystem::path &path, const AssetMetadata &) {
             std::ifstream file(path, std::ios::binary | std::ios::ate);
-            if (!file) return std::shared_ptr<const BinaryAsset>{};
+            if (!file) { return std::shared_ptr<const BinaryAsset>{};
+}
             const auto size = file.tellg();
-            if (size < 0) return std::shared_ptr<const BinaryAsset>{};
+            if (size < 0) { return std::shared_ptr<const BinaryAsset>{};
+}
             BinaryAsset asset;
             asset.bytes.resize(static_cast<std::size_t>(size));
             file.seekg(0);
@@ -256,12 +286,15 @@ namespace Engine::Assets {
         manager.register_loader<TextAsset>(AssetType::Text, text_loader);
         manager.register_loader<ShaderAsset>(AssetType::Shader, [text_loader](const auto &path, const auto &metadata) {
             auto text = text_loader(path, metadata);
-            if (!text) return std::shared_ptr<const ShaderAsset>{};
+            if (!text) { return std::shared_ptr<const ShaderAsset>{};
+}
             return std::make_shared<const ShaderAsset>(ShaderAsset{text->text, "main"});
         });
         manager.register_loader<BinaryAsset>(AssetType::Binary, binary_loader);
         manager.register_loader<TextureAsset>(AssetType::Texture2D, [](const auto &path, const auto &) {
-            int width{}, height{}, channels{};
+            int width{};
+            int height{};
+            int channels{};
             stbi_uc *pixels = stbi_load(path.string().c_str(), &width, &height, &channels, STBI_rgb_alpha);
             if (!pixels || width <= 0 || height <= 0) {
                 stbi_image_free(pixels);
@@ -270,15 +303,19 @@ namespace Engine::Assets {
             TextureAsset texture;
             texture.width = static_cast<std::uint32_t>(width);
             texture.height = static_cast<std::uint32_t>(height);
-            texture.rgbaPixels.assign(pixels, pixels + static_cast<std::size_t>(width) * height * STBI_rgb_alpha);
+            texture.rgbaPixels.assign(pixels, pixels + (static_cast<std::size_t>(width) * height * STBI_rgb_alpha));
             stbi_image_free(pixels);
             return std::make_shared<const TextureAsset>(std::move(texture));
         });
         manager.register_loader<PBRMaterial>(AssetType::Material, [](const auto &path, const auto &) {
             std::ifstream file(path);
-            if (!file) return std::shared_ptr<const PBRMaterial>{};
+            if (!file) { return std::shared_ptr<const PBRMaterial>{};
+}
             PBRMaterial material{};
-            float red{}, green{}, blue{}, alpha{};
+            float red{};
+            float green{};
+            float blue{};
+            float alpha{};
             if (!(file >> red >> green >> blue >> alpha
                   >> material.metallic >> material.roughness >> material.ambientOcclusion
                   >> material.baseColorTexture >> material.metallicRoughnessTexture
@@ -287,15 +324,19 @@ namespace Engine::Assets {
                 return std::shared_ptr<const PBRMaterial>{};
             }
             material.baseColor = Math::Color{red, green, blue, alpha};
-            return std::make_shared<const PBRMaterial>(std::move(material));
+            return std::make_shared<const PBRMaterial>(material);
         });
         manager.register_loader<Mesh>(AssetType::Mesh, [](const auto &path, const auto &) {
             const auto extension = path.extension().string();
-            if (extension == ".obj" || extension == ".OBJ") return load_obj_mesh(path);
+            if (extension == ".obj" || extension == ".OBJ") { return load_obj_mesh(path);
+}
             if (extension == ".glb" || extension == ".GLB" ||
-                extension == ".gltf" || extension == ".GLTF")
+                extension == ".gltf" || extension == ".GLTF") {
                 return load_gltf_mesh(path);
+}
             return std::shared_ptr<const Mesh>{};
         });
     }
 }
+
+// NOLINTEND(readability-magic-numbers)

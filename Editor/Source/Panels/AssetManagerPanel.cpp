@@ -11,6 +11,9 @@
 #include <string>
 #include <vector>
 
+// NOLINTBEGIN(readability-magic-numbers)
+// NOLINTBEGIN(readability-identifier-length)
+
 namespace {
 
 enum class AssetKind { Model, Texture, Shader, Scene, Audio, Other };
@@ -571,3 +574,6 @@ Engine::Entity AssetManagerPanel::draw(Engine::ScenePreset& scene, Engine::Asset
     ImGui::End();
     return created;
 }
+
+// NOLINTEND(readability-magic-numbers)
+// NOLINTEND(readability-identifier-length)

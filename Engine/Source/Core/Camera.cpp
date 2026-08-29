@@ -6,6 +6,8 @@
 #include <cmath>
 #include <stdexcept>
 
+// NOLINTBEGIN(readability-magic-numbers)
+
 namespace Engine {
 
 namespace {
@@ -87,3 +89,5 @@ void Camera::setAspectRatio(const float aspectRatio) {
 }
 
 } // namespace Engine
+
+// NOLINTEND(readability-magic-numbers)

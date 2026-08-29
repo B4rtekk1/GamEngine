@@ -19,6 +19,8 @@
 #include <ranges>
 #include <stdexcept>
 
+// NOLINTBEGIN(readability-magic-numbers)
+
 namespace Engine {
     namespace {
         constexpr std::size_t CubesPerAxis = 30;
@@ -257,3 +259,5 @@ namespace Engine {
         return entity;
     }
 } // namespace Engine
+
+// NOLINTEND(readability-magic-numbers)

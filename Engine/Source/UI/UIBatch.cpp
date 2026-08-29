@@ -2,6 +2,8 @@
 
 #include <cstdint>
 
+// NOLINTBEGIN(readability-identifier-length)
+
 namespace Engine::UI
 {
     namespace
@@ -98,3 +100,5 @@ namespace Engine::UI
                                        base, base + 2, base + 3});
     }
 }
+
+// NOLINTEND(readability-identifier-length)

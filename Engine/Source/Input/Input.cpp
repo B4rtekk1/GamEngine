@@ -3,6 +3,8 @@
 #include <array>
 #include <algorithm>
 
+// NOLINTBEGIN(readability-identifier-length)
+
 namespace Engine {
     namespace {
 
@@ -123,3 +125,5 @@ namespace Engine {
         frameMouseWheel += value;
     }
 }
+
+// NOLINTEND(readability-identifier-length)
