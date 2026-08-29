@@ -9,6 +9,8 @@ namespace Engine {
         static constexpr uint32_t PageResolution = 256;
         static constexpr uint32_t VirtualPagesPerAxis = 32;
         static constexpr uint32_t PhysicalPagesPerAxis = 16;
+        /// Maximum number of virtual pages refreshed in a single frame.
+        static constexpr uint32_t MaxPageUpdatesPerFrame = 48;
         static constexpr uint32_t VirtualResolution =
             PageResolution * VirtualPagesPerAxis;
         static constexpr uint32_t Resolution =

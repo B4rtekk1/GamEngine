@@ -77,6 +77,7 @@ namespace Engine {
             std::uint16_t virtualY{};
             std::uint8_t level{};
             bool allocated{};
+            bool dirty{};
             std::uint64_t lastUsed{};
         };
 

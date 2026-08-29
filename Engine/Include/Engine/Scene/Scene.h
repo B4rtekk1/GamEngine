@@ -158,6 +158,9 @@ namespace Engine {
         [[nodiscard]] Actor createLightActor(std::string name, const LightComponent &light = {}) {
             auto &object = create(std::move(name));
             object.addLight(light);
+            if (light.type == LightType::Directional && light.enabled) {
+                setActiveDirectionalLight(object.entity());
+            }
             return Actor{*this, object.objectId()};
         }
 
@@ -200,7 +203,30 @@ namespace Engine {
         [[nodiscard]] GameObject &createLight(std::string name, const LightComponent &light = {}) {
             auto &object = create(std::move(name));
             object.addLight(light);
+            if (light.type == LightType::Directional && light.enabled) {
+                setActiveDirectionalLight(object.entity());
+            }
             return object;
+        }
+
+        /**
+         * Makes @p entity the sole enabled directional light in this scene.
+         * Point and spot components remain untouched until those light paths
+         * are implemented by the renderer.
+         */
+        void setActiveDirectionalLight(const Entity entity) {
+            if (!registry_.valid(entity) || !registry_.has<LightComponent>(entity) ||
+                registry_.get<LightComponent>(entity).type != LightType::Directional) {
+                throw std::invalid_argument("Active light must be a directional LightComponent");
+            }
+            registry_.view<LightComponent>([&](const Entity candidate, LightComponent& light) {
+                if (light.type != LightType::Directional) return;
+                const bool enabled = candidate == entity;
+                if (light.enabled != enabled) {
+                    light.enabled = enabled;
+                    registry_.markChanged<LightComponent>(candidate);
+                }
+            });
         }
 
         /** High-level scene persistence helpers. */

@@ -6,6 +6,7 @@
  */
 
 #include "Engine/Renderer/Culling/HiZBuffer.h"
+#include "Engine/Math/Mat4.h"
 
 #include <vulkan/vulkan.h>
 
@@ -50,7 +51,9 @@ namespace Engine::Culling
          */
         void record(
             VkCommandBuffer commandBuffer,
-            std::uint32_t objectCount
+            std::uint32_t objectCount,
+            const Mat4* viewProjectionOverride = nullptr,
+            std::uint32_t drawSlot = 0
         ) const;
 
         /** @brief Returns the generated indirect draw-command buffer. */

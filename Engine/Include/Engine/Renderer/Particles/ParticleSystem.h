@@ -175,6 +175,7 @@ namespace Engine::Particles {
         void *colliderMapped_ = nullptr;
         std::vector<ParticleCollider> colliders_;
         std::vector<ParticleCollider> activeColliders_;
+        std::vector<ParticleCollider> uploadedColliders_;
     };
     // NOLINTEND(readability-magic-numbers)
 

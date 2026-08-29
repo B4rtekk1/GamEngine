@@ -120,7 +120,15 @@ void ParticleSystem::update(float deltaTime) {
         }
     }
     simulation_.colliderCount = static_cast<uint32_t>(activeColliders_.size());
-    uploadColliders();
+    // Collider data is host visible. Avoid rewriting the complete fixed-size
+    // GPU buffer when the emitter remains in the same local obstacle set.
+    const bool colliderSetChanged = activeColliders_.size() != uploadedColliders_.size() ||
+        (!activeColliders_.empty() && std::memcmp(activeColliders_.data(), uploadedColliders_.data(),
+            activeColliders_.size() * sizeof(ParticleCollider)) != 0);
+    if (colliderSetChanged) {
+        uploadColliders();
+        uploadedColliders_ = activeColliders_;
+    }
     nextSpawnIndex_ = (nextSpawnIndex_ + spawnCount) % maxParticles_;
     spawnSeed_ += spawnCount;
 }
@@ -226,46 +234,13 @@ void ParticleSystem::createBuffers() {
                    activeIndexBuffers_[frame], activeIndexMemories_[frame], nullptr,
                    VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
         constexpr VkDrawIndirectCommand initialDraw{6, 0, 0, 0};
+        void* drawMapped = nullptr;
         makeBuffer(device_, physicalDevice_, sizeof(initialDraw),
                    VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT |
                    VK_BUFFER_USAGE_TRANSFER_DST_BIT,
-                   drawBuffers_[frame], drawMemories_[frame], nullptr,
-                   VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
-        // The initial command is uploaded by the same one-time path used for
-        // the particle buffer below; its instance count is reset every frame.
-        VkBuffer staging = VK_NULL_HANDLE;
-        VkDeviceMemory stagingMemory = VK_NULL_HANDLE;
-        void* mapped = nullptr;
-        makeBuffer(device_, physicalDevice_, sizeof(initialDraw), VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
-                   staging, stagingMemory, &mapped);
-        std::memcpy(mapped, &initialDraw, sizeof(initialDraw));
-        VkCommandBufferAllocateInfo allocation{VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO};
-        allocation.commandPool = commandPool_;
-        allocation.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
-        allocation.commandBufferCount = 1;
-        VkCommandBuffer commandBuffer = VK_NULL_HANDLE;
-        if (vkAllocateCommandBuffers(device_, &allocation, &commandBuffer) != VK_SUCCESS) {
-            throw std::runtime_error("ParticleSystem: draw command allocation failed");
-        }
-        VkCommandBufferBeginInfo begin{VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
-        begin.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
-        vkBeginCommandBuffer(commandBuffer, &begin);
-        VkBufferCopy copy{0, 0, sizeof(initialDraw)};
-        vkCmdCopyBuffer(commandBuffer, staging, drawBuffers_[frame], 1, &copy);
-        vkEndCommandBuffer(commandBuffer);
-        VkFenceCreateInfo fenceInfo{VK_STRUCTURE_TYPE_FENCE_CREATE_INFO};
-        VkFence fence = VK_NULL_HANDLE;
-        vkCreateFence(device_, &fenceInfo, nullptr, &fence);
-        VkSubmitInfo submit{VK_STRUCTURE_TYPE_SUBMIT_INFO};
-        submit.commandBufferCount = 1;
-        submit.pCommandBuffers = &commandBuffer;
-        vkQueueSubmit(computeQueue_, 1, &submit, fence);
-        vkWaitForFences(device_, 1, &fence, VK_TRUE, UINT64_MAX);
-        vkDestroyFence(device_, fence, nullptr);
-        vkFreeCommandBuffers(device_, commandPool_, 1, &commandBuffer);
-        vkUnmapMemory(device_, stagingMemory);
-        vkDestroyBuffer(device_, staging, nullptr);
-        vkFreeMemory(device_, stagingMemory, nullptr);
+                   drawBuffers_[frame], drawMemories_[frame], &drawMapped);
+        std::memcpy(drawMapped, &initialDraw, sizeof(initialDraw));
+        vkUnmapMemory(device_, drawMemories_[frame]);
     }
 }
 
@@ -380,11 +355,20 @@ void ParticleSystem::uploadInitialParticles() {
         if (vkEndCommandBuffer(commandBuffer) != VK_SUCCESS) {
             throw std::runtime_error("ParticleSystem: initial upload command end failed");
         }
+        VkFenceCreateInfo fenceInfo{VK_STRUCTURE_TYPE_FENCE_CREATE_INFO};
+        VkFence uploadFence = VK_NULL_HANDLE;
+        if (vkCreateFence(device_, &fenceInfo, nullptr, &uploadFence) != VK_SUCCESS) {
+            throw std::runtime_error("ParticleSystem: initial upload fence creation failed");
+        }
         VkSubmitInfo submit{VK_STRUCTURE_TYPE_SUBMIT_INFO};
         submit.commandBufferCount = 1;
         submit.pCommandBuffers = &commandBuffer;
-        if (vkQueueSubmit(computeQueue_, 1, &submit, VK_NULL_HANDLE) != VK_SUCCESS ||
-            vkQueueWaitIdle(computeQueue_) != VK_SUCCESS) {
+        const VkResult submitResult = vkQueueSubmit(computeQueue_, 1, &submit, uploadFence);
+        const VkResult waitResult = submitResult == VK_SUCCESS
+            ? vkWaitForFences(device_, 1, &uploadFence, VK_TRUE, UINT64_MAX)
+            : submitResult;
+        vkDestroyFence(device_, uploadFence, nullptr);
+        if (waitResult != VK_SUCCESS) {
             throw std::runtime_error("ParticleSystem: initial particle upload failed");
         }
     } catch (...) {

@@ -43,7 +43,9 @@ public:
      * @brief Records the counted indexed indirect draw command.
      * @param commandBuffer Command buffer into which the draw is recorded.
      */
-    void record(VkCommandBuffer commandBuffer) const;
+    void record(VkCommandBuffer commandBuffer,
+                VkDeviceSize commandOffset = 0,
+                VkDeviceSize countOffset = 0) const;
 
     /** @brief Returns whether the operation has valid command and count buffers. */
     [[nodiscard]] bool valid() const noexcept;

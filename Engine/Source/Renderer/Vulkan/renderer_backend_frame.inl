@@ -11,6 +11,9 @@
             bool found = false;
             readRegistry.view<Transform, LightComponent>(
                 [&](const Entity entity, const Transform& transform, const LightComponent& light) {
+                    // SceneEditor guarantees that only one directional
+                    // LightComponent is enabled. The guard keeps the runtime
+                    // path deterministic even for externally constructed scenes.
                     if (found || !light.enabled || light.type != LightType::Directional) return;
                     const glm::vec3 direction = glm::vec3(transform.matrix().native() *
                                                           glm::vec4{0.0F, 0.0F, -1.0F, 0.0F});

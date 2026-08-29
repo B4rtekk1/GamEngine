@@ -9,6 +9,7 @@
 #include <typeindex>
 #include <memory>
 #include <cassert>
+#include <deque>
 #include <functional>
 #include <ranges>
 #include <tuple>
@@ -42,9 +43,11 @@ namespace Engine {
             } else {
                 index = m_nextEntity++;
                 m_generations.push_back(0);
+                m_entityPositions.push_back(InvalidEntityIndex);
             }
             const Entity entity = makeEntity(index, m_generations[index]);
-            m_entities.insert(entity);
+            m_entityPositions[index] = static_cast<std::uint32_t>(m_entities.size());
+            m_entities.push_back(entity);
             ++m_mutationRevision;
             ++m_structuralRevision;
             return entity;
@@ -60,7 +63,7 @@ namespace Engine {
          */
         void destroy(Entity entity) {
             ensureStructuralMutationAllowed();
-            if (static_cast<long long>(m_entities.erase(entity)) == 0) {
+            if (!valid(entity)) {
                 return;
             }
 
@@ -71,6 +74,12 @@ namespace Engine {
                 changes.erase(entity);
             }
             const std::uint32_t index = entityIndex(entity);
+            const std::uint32_t denseIndex = m_entityPositions[index];
+            const Entity movedEntity = m_entities.back();
+            m_entities[denseIndex] = movedEntity;
+            m_entityPositions[entityIndex(movedEntity)] = denseIndex;
+            m_entities.pop_back();
+            m_entityPositions[index] = InvalidEntityIndex;
             ++m_generations[index];
             m_freeEntities.push_back(index);
             ++m_mutationRevision;
@@ -112,7 +121,11 @@ namespace Engine {
          */
         [[nodiscard]]
         bool valid(Entity entity) const {
-            return entity != NullEntity && m_entities.contains(entity);
+            const std::uint32_t index = entityIndex(entity);
+            return entity != NullEntity && index < m_entityPositions.size() &&
+                   m_entityPositions[index] != InvalidEntityIndex &&
+                   m_entityPositions[index] < m_entities.size() &&
+                   m_entities[m_entityPositions[index]] == entity;
         }
 
         /** Returns the number of live entities. */
@@ -155,16 +168,10 @@ namespace Engine {
             const auto log = m_componentChangeLogs.find(type);
             if (log != m_componentChangeLogs.end() && !log->second.records.empty() &&
                 revision >= log->second.firstRevision - 1) {
-                const auto first = std::upper_bound(log->second.records.begin(),
-                                                    log->second.records.end(), revision,
-                                                    [](const std::uint64_t value,
-                                                       const ComponentChange& change) {
-                                                        return value < change.revision;
-                                                    });
                 std::unordered_set<Entity> unique;
-                unique.reserve(static_cast<std::size_t>(log->second.records.end() - first));
-                for (auto entry = first; entry != log->second.records.end(); ++entry) {
-                    unique.insert(entry->entity);
+                unique.reserve(log->second.records.size());
+                for (const ComponentChange& entry : log->second.records) {
+                    if (entry.revision > revision) unique.insert(entry.entity);
                 }
                 changed.assign(unique.begin(), unique.end());
                 return changed;
@@ -407,12 +414,8 @@ namespace Engine {
             m_componentChangeEntities[type][entity] = revision;
             ComponentChangeLog& log = m_componentChangeLogs[type];
             log.records.push_back({entity, revision});
-            if (log.records.size() == 1) log.firstRevision = revision;
-            if (log.records.size() > MaxComponentChangeLogSize) {
-                const auto retained = log.records.end() - MaxComponentChangeLogSize;
-                log.records.erase(log.records.begin(), retained);
-                log.firstRevision = log.records.front().revision;
-            }
+            if (log.records.size() > MaxComponentChangeLogSize) log.records.pop_front();
+            log.firstRevision = log.records.front().revision;
         }
 
         template<typename Pools>
@@ -516,10 +519,12 @@ namespace Engine {
         /** Reusable sparse-set indices released by destroy(). */
         std::vector<std::uint32_t> m_freeEntities;
 
-        /**
-         * @brief Set of currently alive entities.
-         */
-        std::unordered_set<Entity> m_entities;
+        static constexpr std::uint32_t InvalidEntityIndex =
+            std::numeric_limits<std::uint32_t>::max();
+
+        /** Dense live-entity list and sparse index for O(1) validation/removal. */
+        std::vector<Entity> m_entities;
+        std::vector<std::uint32_t> m_entityPositions{InvalidEntityIndex};
 
         /**
          * @brief Type-erased component pools indexed by component type.
@@ -536,7 +541,7 @@ namespace Engine {
         };
         struct ComponentChangeLog {
             std::uint64_t firstRevision{0};
-            std::vector<ComponentChange> records;
+            std::deque<ComponentChange> records;
         };
         static constexpr std::size_t MaxComponentChangeLogSize = 4096;
         std::unordered_map<std::type_index, std::unordered_map<Entity, std::uint64_t> >

@@ -41,7 +41,9 @@ void IndexedIndirectDrawCount::destroy() noexcept {
     stride_ = sizeof(VkDrawIndexedIndirectCommand);
 }
 
-void IndexedIndirectDrawCount::record(VkCommandBuffer commandBuffer) const {
+void IndexedIndirectDrawCount::record(const VkCommandBuffer commandBuffer,
+                                      const VkDeviceSize commandOffset,
+                                      const VkDeviceSize countOffset) const {
     if (commandBuffer == VK_NULL_HANDLE) {
         throw std::invalid_argument("Command buffer cannot be null");
     }
@@ -52,9 +54,9 @@ void IndexedIndirectDrawCount::record(VkCommandBuffer commandBuffer) const {
     vkCmdDrawIndexedIndirectCount(
         commandBuffer,
         commandBuffer_,
-        commandOffset_,
+        commandOffset_ + commandOffset,
         countBuffer_,
-        countOffset_,
+        countOffset_ + countOffset,
         maxDrawCount_,
         stride_);
 }

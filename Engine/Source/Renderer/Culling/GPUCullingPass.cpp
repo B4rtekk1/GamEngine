@@ -2,6 +2,15 @@
 
 #include <stdexcept>
 
+namespace {
+struct CullingPushConstants {
+    glm::mat4 viewProjectionOverride{1.0F};
+    std::uint32_t drawSlot{};
+    std::uint32_t padding[3]{};
+};
+static_assert(sizeof(CullingPushConstants) == 80);
+}
+
 namespace Engine::Culling
 {
     void GPUCullingPass::create(
@@ -40,7 +49,9 @@ namespace Engine::Culling
 
     void GPUCullingPass::record(
         const VkCommandBuffer commandBuffer,
-        const std::uint32_t objectCount
+        const std::uint32_t objectCount,
+        const Mat4* const viewProjectionOverride,
+        const std::uint32_t drawSlot
     ) const
     {
         if (objectCount == 0)
@@ -51,7 +62,7 @@ namespace Engine::Culling
         vkCmdFillBuffer(
             commandBuffer,
             m_drawCountBuffer,
-            0,
+            sizeof(std::uint32_t) * drawSlot,
             sizeof(std::uint32_t),
             0
         );
@@ -69,7 +80,7 @@ namespace Engine::Culling
                 VK_ACCESS_2_SHADER_STORAGE_READ_BIT |
                 VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT,
             .buffer = m_drawCountBuffer,
-            .offset = 0,
+            .offset = sizeof(std::uint32_t) * drawSlot,
             .size = sizeof(std::uint32_t)
         };
 
@@ -101,6 +112,14 @@ namespace Engine::Culling
             nullptr
         );
 
+        CullingPushConstants pushConstants{};
+        if (viewProjectionOverride != nullptr)
+            pushConstants.viewProjectionOverride = viewProjectionOverride->native();
+        pushConstants.drawSlot = drawSlot;
+        vkCmdPushConstants(commandBuffer, m_pipelineLayout,
+                           VK_SHADER_STAGE_COMPUTE_BIT, 0,
+                           sizeof(pushConstants), &pushConstants);
+
         constexpr std::uint32_t workgroupSize = 64;
 
         const std::uint32_t groupCount =
@@ -127,7 +146,7 @@ namespace Engine::Culling
                 .dstAccessMask =
                     VK_ACCESS_2_INDIRECT_COMMAND_READ_BIT,
                 .buffer = m_indirectBuffer,
-                .offset = 0,
+            .offset = sizeof(std::uint32_t) * drawSlot,
                 .size = VK_WHOLE_SIZE
             },
             {

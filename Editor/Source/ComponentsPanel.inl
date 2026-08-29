@@ -205,7 +205,18 @@ bool ComponentsPanel::draw(Engine::ScenePreset &scene, const Engine::Entity sele
             }
             changed |= ImGui::DragFloat("Intensity##light", &light.intensity, 0.05F,
                                         0.0F, 1000.0F, "%.2f");
-            changed |= ImGui::Checkbox("Enabled##light", &light.enabled);
+            if (light.type == Engine::LightType::Directional) {
+                const bool wasEnabled = light.enabled;
+                if (ImGui::Checkbox("Active Directional Light##light", &light.enabled)) {
+                    changed = true;
+                    if (light.enabled && !wasEnabled) {
+                        scene.editor().setActiveDirectionalLight(selected);
+                    }
+                }
+                ImGui::TextDisabled("Only one directional light can be active.");
+            } else {
+                ImGui::TextDisabled("Point and spot lights are not rendered yet.");
+            }
             changed |= ImGui::Checkbox("Cast Shadows##light", &light.castShadows);
             light.intensity = std::max(0.0F, light.intensity);
 

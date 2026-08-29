@@ -28,7 +28,7 @@ bool virtualShadowAtlasUv(float2 virtualPixel, uint level,
     return true;
 }
 
-float sampleVirtualShadowLevel(Sampler2D shadowMap, float3 worldPosition,
+float sampleVirtualShadowLevel(Sampler2DShadow shadowMap, float3 worldPosition,
                                float4x4 lightSpace, uint level,
                                StructuredBuffer<uint4> pageTable, out bool resident)
 {
@@ -36,7 +36,7 @@ float sampleVirtualShadowLevel(Sampler2D shadowMap, float3 worldPosition,
     float3 projected = lightSpacePosition.xyz / lightSpacePosition.w;
     float2 uv = projected.xy * 0.5 + 0.5;
     float currentDepth = projected.z;
-    float2 centerAtlasUv;
+    float2 centerAtlasUv = 0.0;
     resident = currentDepth > 0.0 && currentDepth < 1.0 &&
                virtualShadowAtlasUv(uv * VIRTUAL_RESOLUTION, level,
                                     pageTable, centerAtlasUv);
@@ -45,25 +45,22 @@ float sampleVirtualShadowLevel(Sampler2D shadowMap, float3 worldPosition,
 
     float depthSlope = max(abs(ddx(currentDepth)), abs(ddy(currentDepth)));
     float bias = max(MIN_SHADOW_BIAS, SLOPE_SHADOW_BIAS * depthSlope);
-    float occlusion = 0.0;
-    float samples = 0.0;
-    float2 virtualPixel = uv * VIRTUAL_RESOLUTION;
-    for (int x = -1; x <= 1; ++x)
-    {
-        for (int y = -1; y <= 1; ++y)
-        {
-            float2 atlasUv;
-            if (!virtualShadowAtlasUv(virtualPixel + float2(x, y), level,
-                                      pageTable, atlasUv))
-                continue;
-            occlusion += currentDepth - bias > shadowMap.Sample(atlasUv).r ? 1.0 : 0.0;
-            samples += 1.0;
-        }
-    }
-    return samples > 0.0 ? occlusion / samples : 0.0;
+    // Hardware PCF is bilinear and could otherwise blend with an unrelated
+    // physical page stored next to this tile in the atlas. Clamp the lookup
+    // to a one-texel guard band; the duplicated edge texel is preferable to
+    // temporal noise from the page cache.
+    const float atlasResolution = float(PHYSICAL_PAGES_PER_AXIS * PAGE_RESOLUTION);
+    float2 atlasPixel = centerAtlasUv * atlasResolution - 0.5;
+    float2 pageOrigin = floor(atlasPixel / float(PAGE_RESOLUTION)) * float(PAGE_RESOLUTION);
+    atlasPixel = clamp(atlasPixel, pageOrigin + 1.0,
+                       pageOrigin + float(PAGE_RESOLUTION - 2));
+    centerAtlasUv = (atlasPixel + 0.5) / atlasResolution;
+    // Vulkan's comparison sampler now performs the 2x2 PCF in fixed-function
+    // hardware, replacing the former nine manual depth reads.
+    return 1.0 - shadowMap.SampleCmpLevelZero(centerAtlasUv, currentDepth - bias);
 }
 
-float sampleVirtualShadow(Sampler2D shadowMap, float3 worldPosition,
+float sampleVirtualShadow(Sampler2DShadow shadowMap, float3 worldPosition,
                           float4x4 clipMatrices[4], StructuredBuffer<uint4> pageTable)
 {
     bool resident;
@@ -80,23 +77,14 @@ float sampleVirtualShadow(Sampler2D shadowMap, float3 worldPosition,
 }
 
 // Compatibility path for the standalone sample shader.
-float samplePcfShadow(Sampler2D shadowMap, float4 lightSpacePosition)
+float samplePcfShadow(Sampler2DShadow shadowMap, float4 lightSpacePosition)
 {
     float3 projected = lightSpacePosition.xyz / lightSpacePosition.w;
     float2 uv = projected.xy * 0.5 + 0.5;
     float currentDepth = projected.z;
     if (any(uv <= 0.0) || any(uv >= 1.0) || currentDepth <= 0.0 || currentDepth >= 1.0)
         return 0.0;
-    uint width;
-    uint height;
-    shadowMap.GetDimensions(width, height);
-    float2 texel = 1.0 / float2(width, height);
     float bias = max(MIN_SHADOW_BIAS,
                      SLOPE_SHADOW_BIAS * max(abs(ddx(currentDepth)), abs(ddy(currentDepth))));
-    float occlusion = 0.0;
-    for (int x = -1; x <= 1; ++x)
-        for (int y = -1; y <= 1; ++y)
-            occlusion += currentDepth - bias > shadowMap.Sample(uv + float2(x, y) * texel).r
-                ? 1.0 : 0.0;
-    return occlusion / 9.0;
+    return 1.0 - shadowMap.SampleCmpLevelZero(uv, currentDepth - bias);
 }

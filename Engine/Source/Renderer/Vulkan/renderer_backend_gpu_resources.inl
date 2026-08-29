@@ -32,16 +32,25 @@
             if (vkCreateDescriptorSetLayout(device, &layoutInfo, nullptr, &cullingDescriptorSetLayout) != VK_SUCCESS) {
                 throw std::runtime_error("Could not create culling descriptor-set layout");
             }
-            const auto createLayout = [&](VkDescriptorSetLayout setLayout, VkPipelineLayout& pipelineLayout) {
+            const auto createLayout = [&](VkDescriptorSetLayout setLayout, VkPipelineLayout& pipelineLayout,
+                                          const VkPushConstantRange* pushConstantRange = nullptr) {
                 VkPipelineLayoutCreateInfo info{VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
                 info.setLayoutCount = 1; info.pSetLayouts = &setLayout;
+                if (pushConstantRange != nullptr) {
+                    info.pushConstantRangeCount = 1;
+                    info.pPushConstantRanges = pushConstantRange;
+                }
                 if (vkCreatePipelineLayout(device, &info, nullptr, &pipelineLayout) != VK_SUCCESS) {
                     throw std::runtime_error("Could not create Hi-Z pipeline layout");
                 }
             };
             createLayout(hiZCopyDescriptorSetLayout, hiZCopyPipelineLayout);
             createLayout(hiZReduceDescriptorSetLayout, hiZReducePipelineLayout);
-            createLayout(cullingDescriptorSetLayout, cullingPipelineLayout);
+            // mat4 plus draw-slot index, rounded to a 16-byte block by Slang.
+            const VkPushConstantRange cullingPushConstants{
+                VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(Mat4) + 16};
+            createLayout(cullingDescriptorSetLayout, cullingPipelineLayout,
+                         &cullingPushConstants);
             hiZCopyPipeline = createComputePipeline("shaders/hiz_initialize.spv", hiZCopyPipelineLayout);
             hiZReducePipeline = createComputePipeline("shaders/hiz_reduce.spv", hiZReducePipelineLayout);
             cullingPipeline = createComputePipeline("shaders/gpu_culling.spv", cullingPipelineLayout);
@@ -118,8 +127,10 @@
                     sizeof(VkDrawIndexedIndirectCommand) * objectCount,
                     VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
                     commandPool, vulkanDevice.graphicsQueue(), vulkanDevice.allocator());
-                shadowIndirectBuffers[frame].createDeviceLocal(vulkanDevice.physical(), device, emptyCommands.data(),
-                    sizeof(VkDrawIndexedIndirectCommand) * objectCount,
+                std::vector<VkDrawIndexedIndirectCommand> emptyShadowCommands(
+                    objectCount * ShadowMap::MaxPageUpdatesPerFrame);
+                shadowIndirectBuffers[frame].createDeviceLocal(vulkanDevice.physical(), device, emptyShadowCommands.data(),
+                    sizeof(VkDrawIndexedIndirectCommand) * emptyShadowCommands.size(),
                     VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
                     commandPool, vulkanDevice.graphicsQueue(), vulkanDevice.allocator());
                 constexpr uint32_t zero = 0;
@@ -139,7 +150,9 @@
                     VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT |
                     VK_BUFFER_USAGE_TRANSFER_DST_BIT,
                     commandPool, vulkanDevice.graphicsQueue(), vulkanDevice.allocator());
-                shadowDrawCountBuffers[frame].createDeviceLocal(vulkanDevice.physical(), device, &zero, sizeof(zero),
+                std::array<std::uint32_t, ShadowMap::MaxPageUpdatesPerFrame> zeroShadowCounts{};
+                shadowDrawCountBuffers[frame].createDeviceLocal(vulkanDevice.physical(), device,
+                    zeroShadowCounts.data(), sizeof(zeroShadowCounts),
                     VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT |
                     VK_BUFFER_USAGE_TRANSFER_DST_BIT,
                     commandPool, vulkanDevice.graphicsQueue(), vulkanDevice.allocator());
@@ -187,7 +200,7 @@
                     const VkDescriptorBufferInfo objectInfo{
                         cullingObjectBuffers[frame].handle(), 0, VK_WHOLE_SIZE};
                     const VkDescriptorBufferInfo indirectInfo{update.indirectBuffer.handle(), 0, VK_WHOLE_SIZE};
-                    const VkDescriptorBufferInfo countInfo{update.countBuffer.handle(), 0, sizeof(uint32_t)};
+                    const VkDescriptorBufferInfo countInfo{update.countBuffer.handle(), 0, VK_WHOLE_SIZE};
                     const VkDescriptorBufferInfo uniformInfo{update.uniformBuffer.handle(), 0, sizeof(Culling::CullingUniformData)};
                     std::array<VkWriteDescriptorSet, cullingDescriptorBindingCount> writes{};
                     for (uint32_t i = 0; i < writes.size(); ++i) {

@@ -310,9 +310,9 @@ void ShadowPass::preparePages(
 
     // Dynamic transforms used to invalidate the whole virtual atlas. In play
     // mode even a single rigid body therefore redrew every cached terrain and
-    // grass page on every physics tick. Evict only pages touched by the old or
-    // new batch bounds; the request pass below immediately redraws those that
-    // are visible for this camera.
+    // grass page on every physics tick. Mark only pages touched by the old or
+    // new batch bounds. Their previous contents remain sampleable until the
+    // bounded refresh below has rendered the replacement.
     constexpr glm::vec3 unitCorners[8] = {
         {0, 0, 0}, {1, 0, 0}, {0, 1, 0}, {1, 1, 0},
         {0, 0, 1}, {1, 0, 1}, {0, 1, 1}, {1, 1, 1},
@@ -357,8 +357,7 @@ void ShadowPass::preparePages(
                             level, static_cast<std::uint32_t>(x), static_cast<std::uint32_t>(y));
                         const std::uint32_t physical = pageTable_[key];
                         if (physical == ShadowMap::InvalidPage) continue;
-                        pageTable_[key] = ShadowMap::InvalidPage;
-                        physicalPages_[physical] = {};
+                        physicalPages_[physical].dirty = true;
                     }
                 }
             }
@@ -530,6 +529,9 @@ void ShadowPass::preparePages(
     for (const std::uint32_t key : requests) {
         std::uint32_t physical = pageTable_[key];
         if (physical == ShadowMap::InvalidPage) {
+            // Do not map a page until it can be rendered. Otherwise the
+            // sampling shader could observe stale atlas contents.
+            if (pagesToRender_.size() >= ShadowMap::MaxPageUpdatesPerFrame) continue;
             physical = ShadowMap::InvalidPage;
             for (std::uint32_t slot = 0; slot < physicalPages_.size(); ++slot) {
                 if (!physicalPages_[slot].allocated) { physical = slot; break; }
@@ -557,11 +559,16 @@ void ShadowPass::preparePages(
             physicalPages_[physical] = PhysicalPage{
                 static_cast<std::uint16_t>(local % ShadowMap::VirtualPagesPerAxis),
                 static_cast<std::uint16_t>(local / ShadowMap::VirtualPagesPerAxis),
-                static_cast<std::uint8_t>(level), true, cacheClock_};
+                static_cast<std::uint8_t>(level), true, false, cacheClock_};
             pageTable_[key] = physical;
             pagesToRender_.push_back(physical);
         } else {
             physicalPages_[physical].lastUsed = cacheClock_;
+            if (physicalPages_[physical].dirty &&
+                pagesToRender_.size() < ShadowMap::MaxPageUpdatesPerFrame) {
+                physicalPages_[physical].dirty = false;
+                pagesToRender_.push_back(physical);
+            }
         }
     }
     pageTableBuffers_.at(frameIndex)->update(pageTable_.data(),
@@ -585,8 +592,22 @@ void ShadowPass::record(const VkCommandBuffer commandBuffer,
     // Avoid opening a 4096x4096 LOAD render pass when every requested page is
     // cached; this is the steady state for both editor and play mode.
     if (atlasInitialized_ && pagesToRender_.empty()) return;
-    if (objectCount != 0 && !pagesToRender_.empty()) {
-        cullingPass.record(commandBuffer, objectCount);
+    // Compute all page-specific indirect lists before the render pass:
+    // dispatches, fills and their barriers are invalid inside a render pass.
+    if (objectCount != 0) {
+        for (std::size_t pageIndex = 0; pageIndex < pagesToRender_.size(); ++pageIndex) {
+            const PhysicalPage& page = physicalPages_[pagesToRender_[pageIndex]];
+            glm::mat4 pageTransform{1.0F};
+            pageTransform[0][0] = static_cast<float>(ShadowMap::VirtualPagesPerAxis);
+            pageTransform[1][1] = static_cast<float>(ShadowMap::VirtualPagesPerAxis);
+            pageTransform[3][0] = static_cast<float>(ShadowMap::VirtualPagesPerAxis) -
+                                  2.0F * static_cast<float>(page.virtualX) - 1.0F;
+            pageTransform[3][1] = static_cast<float>(ShadowMap::VirtualPagesPerAxis) -
+                                  2.0F * static_cast<float>(page.virtualY) - 1.0F;
+            const Mat4 pageMatrix{pageTransform * clipMatrices[page.level].native()};
+            cullingPass.record(commandBuffer, objectCount, &pageMatrix,
+                               static_cast<std::uint32_t>(pageIndex));
+        }
     }
 
     VkImageMemoryBarrier2 atlasBarrier{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2};
@@ -619,7 +640,8 @@ void ShadowPass::record(const VkCommandBuffer commandBuffer,
     vkCmdBindVertexBuffers(commandBuffer, 0, 2, vertexBuffers, offsets);
     vkCmdBindIndexBuffer(commandBuffer, indexBuffer, 0, VK_INDEX_TYPE_UINT32);
     vkCmdSetDepthBias(commandBuffer, DepthBiasConstant, 0.0F, DepthBiasSlope);
-    for (const std::uint32_t physical : pagesToRender_) {
+    for (std::size_t pageIndex = 0; pageIndex < pagesToRender_.size(); ++pageIndex) {
+        const std::uint32_t physical = pagesToRender_[pageIndex];
         const PhysicalPage& page = physicalPages_[physical];
         const std::int32_t x = static_cast<std::int32_t>(
             (physical % ShadowMap::PhysicalPagesPerAxis) * ShadowMap::PageResolution);
@@ -644,7 +666,11 @@ void ShadowPass::record(const VkCommandBuffer commandBuffer,
         const Mat4 pageMatrix{pageTransform * clipMatrices[page.level].native()};
         vkCmdPushConstants(commandBuffer, pipelineLayout_, VK_SHADER_STAGE_VERTEX_BIT,
                            0, sizeof(Mat4), &pageMatrix);
-        if (objectCount != 0 && indirectDraw.valid()) indirectDraw.record(commandBuffer);
+        if (objectCount != 0 && indirectDraw.valid()) {
+            indirectDraw.record(commandBuffer,
+                sizeof(VkDrawIndexedIndirectCommand) * objectCount * pageIndex,
+                sizeof(std::uint32_t) * pageIndex);
+        }
     }
     vkCmdEndRenderPass(commandBuffer);
     atlasInitialized_ = true;

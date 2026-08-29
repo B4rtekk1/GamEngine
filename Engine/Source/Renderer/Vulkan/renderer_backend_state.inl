@@ -141,6 +141,9 @@
         std::uint64_t particleColliderStructuralRevision = 0;
         std::uint64_t particleColliderComponentRevision = 0;
         std::uint64_t particleColliderTransformRevision = 0;
+        // Reused frame-stamped deduplication storage for changed renderables.
+        std::vector<std::uint32_t> renderableChangeMarks;
+        std::uint32_t renderableChangeEpoch = 0;
         std::uint64_t renderableTopologySignature = 0;
         bool hiZValid = false;
         bool sceneViewportActive = false;

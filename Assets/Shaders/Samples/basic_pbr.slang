@@ -61,7 +61,7 @@ BasicPbrVertexOutput vertexMain(BasicPbrVertexInput input)
     return output;
 }
 
-[[vk::binding(0, 0)]] Sampler2D shadowMap;
+[[vk::binding(0, 0)]] Sampler2DShadow shadowMap;
 
 struct BasicPbrFragmentInput
 {

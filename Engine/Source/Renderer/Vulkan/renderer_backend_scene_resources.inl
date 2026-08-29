@@ -623,16 +623,30 @@
                     changedIndices.push_back(index);
                 }
             } else {
-                std::unordered_set<std::size_t> uniqueIndices;
+                if (renderableChangeMarks.size() != renderables.size()) {
+                    renderableChangeMarks.assign(renderables.size(), 0);
+                    renderableChangeEpoch = 0;
+                }
+                ++renderableChangeEpoch;
+                if (renderableChangeEpoch == 0) {
+                    std::fill(renderableChangeMarks.begin(), renderableChangeMarks.end(), 0);
+                    renderableChangeEpoch = 1;
+                }
+                const auto addIndex = [&](const std::size_t index) {
+                    if (renderableChangeMarks[index] != renderableChangeEpoch) {
+                        renderableChangeMarks[index] = renderableChangeEpoch;
+                        changedIndices.push_back(index);
+                    }
+                };
                 const auto addChangedEntities = [&](const auto& entities, const auto revision) {
                     if (revision == 0) { return;
 }
                     for (const Entity entity : entities) {
                         const auto it = sceneGpu.renderableIndices.find(entity);
-                        if (it != sceneGpu.renderableIndices.end()) uniqueIndices.insert(it->second);
+                        if (it != sceneGpu.renderableIndices.end()) addIndex(it->second);
                         const auto grass = sceneGpu.grassRenderableIndices.find(entity);
                         if (grass != sceneGpu.grassRenderableIndices.end()) {
-                            uniqueIndices.insert(grass->second.begin(), grass->second.end());
+                            for (const std::size_t index : grass->second) addIndex(index);
                         }
                     }
                 };
@@ -649,16 +663,14 @@
                         !registry.has<TerrainGrassComponent>(entity)) continue;
                     const auto& grass = registry.get<TerrainGrassComponent>(entity);
                     if (grass.allInstancesDirty || grass.dirtyInstances.empty()) {
-                        uniqueIndices.insert(mapped->second.begin(), mapped->second.end());
+                        for (const std::size_t index : mapped->second) addIndex(index);
                     } else {
                         for (const std::size_t grassIndex : grass.dirtyInstances) {
                             if (grassIndex < mapped->second.size())
-                                uniqueIndices.insert(mapped->second[grassIndex]);
+                                addIndex(mapped->second[grassIndex]);
                         }
                     }
                 }
-                changedIndices.assign(uniqueIndices.begin(), uniqueIndices.end());
-                std::ranges::sort(changedIndices);
             }
 
             const Registry& readRegistry = registry;
@@ -710,15 +722,28 @@
                     glm::vec3 decomposedScale{};
                     glm::quat decomposedRotation{};
                     glm::vec3 decomposedTranslation{};
-                    glm::vec3 skew{};
-                    glm::vec4 perspective{};
-                    if (!glm::decompose(model, decomposedScale, decomposedRotation,
-                                        decomposedTranslation, skew, perspective)) {
-                        decomposedScale = {1.0F, 1.0F, 1.0F};
-                        decomposedRotation = {};
-                        decomposedTranslation = glm::vec3{model[3]};
+                    if (grassInstance) {
+                        // Parent non-uniform scale combined with grass yaw can
+                        // introduce shear, so retain the exact fallback here.
+                        glm::vec3 skew{};
+                        glm::vec4 perspective{};
+                        if (!glm::decompose(model, decomposedScale, decomposedRotation,
+                                            decomposedTranslation, skew, perspective)) {
+                            decomposedScale = {1.0F, 1.0F, 1.0F};
+                            decomposedRotation = {};
+                            decomposedTranslation = glm::vec3{model[3]};
+                        }
+                        decomposedRotation = glm::normalize(decomposedRotation);
+                    } else {
+                        const auto radians = [](const float degrees) {
+                            return glm::radians(degrees);
+                        };
+                        decomposedTranslation = transform.position.native();
+                        decomposedScale = transform.scale.native();
+                        decomposedRotation = glm::angleAxis(radians(transform.rotation.x()), glm::vec3{1, 0, 0}) *
+                                             glm::angleAxis(radians(transform.rotation.y()), glm::vec3{0, 1, 0}) *
+                                             glm::angleAxis(radians(transform.rotation.z()), glm::vec3{0, 0, 1});
                     }
-                    decomposedRotation = glm::normalize(decomposedRotation);
                     const float meshHeight = record.localBounds.max.y() - record.localBounds.min.y();
                     instanceModels[index].positionMaterial = glm::vec4{
                         decomposedTranslation, std::bit_cast<float>(static_cast<std::uint32_t>(index * materialSlots))};

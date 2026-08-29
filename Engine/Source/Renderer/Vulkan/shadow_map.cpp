@@ -29,7 +29,9 @@ namespace Engine {
                 if ((properties.optimalTilingFeatures & static_cast<VkFormatFeatureFlags>(
                          VK_FORMAT_FEATURE_DEPTH_STENCIL_ATTACHMENT_BIT)) != 0 &&
                     (properties.optimalTilingFeatures & static_cast<VkFormatFeatureFlags>(
-                         VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT)) != 0) {
+                         VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT)) != 0 &&
+                    (properties.optimalTilingFeatures & static_cast<VkFormatFeatureFlags>(
+                         VK_FORMAT_FEATURE_SAMPLED_IMAGE_FILTER_LINEAR_BIT)) != 0) {
                     return format;
                 }
             }
@@ -90,13 +92,15 @@ namespace Engine {
             }
 
             VkSamplerCreateInfo sampler{VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO};
-            sampler.magFilter = VK_FILTER_NEAREST;
-            sampler.minFilter = VK_FILTER_NEAREST;
+            sampler.magFilter = VK_FILTER_LINEAR;
+            sampler.minFilter = VK_FILTER_LINEAR;
             sampler.addressModeU = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_BORDER;
             sampler.addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_BORDER;
             sampler.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_BORDER;
             sampler.borderColor = VK_BORDER_COLOR_FLOAT_OPAQUE_WHITE;
             sampler.maxLod = 1.0F;
+            sampler.compareEnable = VK_TRUE;
+            sampler.compareOp = VK_COMPARE_OP_LESS_OR_EQUAL;
             if (vkCreateSampler(device_, &sampler, nullptr, &sampler_) != VK_SUCCESS) {
                 throw std::runtime_error(
                     "Could not create shadow map sampler");

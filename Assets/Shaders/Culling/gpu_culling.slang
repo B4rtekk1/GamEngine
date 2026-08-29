@@ -6,10 +6,18 @@ import Culling.CullingTypes;
 [[vk::binding(3, 0)]] Sampler2D hiZTexture;
 [[vk::binding(4, 0)]] ConstantBuffer<CullingUniformData> culling;
 
+struct CullingPushConstants
+{
+    float4x4 viewProjectionOverride;
+    uint drawSlot;
+};
+
+[[vk::push_constant]] ConstantBuffer<CullingPushConstants> pushConstants;
+
 void appendDraw(CullingObjectData objectData)
 {
     uint destinationIndex;
-    InterlockedAdd(drawCounts[0], 1, destinationIndex);
+    InterlockedAdd(drawCounts[pushConstants.drawSlot], 1, destinationIndex);
     if (destinationIndex >= culling.maxDrawCount)
         return;
 
@@ -28,7 +36,7 @@ void appendDraw(CullingObjectData objectData)
     command.firstIndex = objectData.firstIndex;
     command.vertexOffset = int(objectData.vertexOffset);
     command.firstInstance = objectData.firstInstance;
-    commands[destinationIndex] = command;
+    commands[pushConstants.drawSlot * culling.maxDrawCount + destinationIndex] = command;
 }
 
 bool outsideFrustum(float4 clipPositions[8])
@@ -136,7 +144,9 @@ void main(uint3 dispatchThreadId : SV_DispatchThreadID)
     {
         float3 localPosition = lerp(localMinimum, localMaximum, UNIT_AABB_CORNERS[i]);
         float4 worldPosition = mul(float4(localPosition, 1.0), objectData.model);
-        clipPositions[i] = mul(worldPosition, culling.viewProjection);
+        float4x4 viewProjection = culling.shadowPass != 0
+            ? pushConstants.viewProjectionOverride : culling.viewProjection;
+        clipPositions[i] = mul(worldPosition, viewProjection);
     }
 
     if (outsideFrustum(clipPositions))

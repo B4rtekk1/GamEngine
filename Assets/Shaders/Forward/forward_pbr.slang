@@ -66,7 +66,7 @@ ForwardVertexOutput vertexMain(ForwardVertexInput input, uint instanceIndex : SV
     return output;
 }
 
-[[vk::binding(0, 0)]] Sampler2D shadowMap;
+[[vk::binding(0, 0)]] Sampler2DShadow shadowMap;
 [[vk::binding(2, 0)]] StructuredBuffer<MaterialData> materials;
 [[vk::binding(3, 0)]] Sampler2D materialTextures[16];
 [[vk::binding(4, 0)]] StructuredBuffer<uint4> shadowPageTable;
