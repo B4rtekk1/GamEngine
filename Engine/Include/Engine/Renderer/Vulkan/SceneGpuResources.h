@@ -36,9 +36,16 @@ namespace Engine {
             const Mesh *mesh{nullptr};
             std::uint32_t firstIndex{0};
             std::uint32_t indexCount{0};
+            std::uint32_t lod1IndexCount{0};
+            std::uint32_t lod2IndexCount{0};
+            float lod1Distance{28.0F};
+            float lod2Distance{60.0F};
             std::uint32_t firstInstance{0};
             std::uint32_t instanceCount{0};
             bool castShadow{true};
+            /// True for masked/double-sided vegetation that needs its own raster pipeline.
+            bool twoSided{false};
+            bool grass{false};
             AABB worldBounds{};
         };
 

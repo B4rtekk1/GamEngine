@@ -129,8 +129,11 @@ Mesh TerrainComponent::createMesh(const std::uint32_t lodLevel) const {
         for (std::uint32_t x = 0; x + 1 < meshResolution; ++x) {
             const std::uint32_t first = z * meshResolution + x;
             mesh.indices.insert(mesh.indices.end(), {
-                first, first + meshResolution + 1, first + 1,
-                first + meshResolution + 1, first, first + meshResolution,
+                // Match Plane's clockwise winding. The forward pipeline culls
+                // back faces, so the opposite order makes a terrain vanish
+                // when viewed from above.
+                first, first + 1, first + meshResolution + 1,
+                first + meshResolution + 1, first + meshResolution, first,
             });
         }
     }

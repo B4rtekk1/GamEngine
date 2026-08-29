@@ -244,7 +244,7 @@
             }
             shadowPass.create(vulkanDevice.physical(), device, buffers,
                               gpuMaterialBuffers, materialTextureDescriptors,
-                              sizeof(UniformBufferObject), assetManager);
+                              sizeof(UniformBufferObject), vulkanDevice.allocator(), assetManager);
         }
 
         void createSceneDescriptorPass() {
@@ -256,7 +256,7 @@
             for (const Buffer& buffer : materialBuffers) gpuMaterialBuffers.push_back(buffer.handle());
             sceneDescriptorPass.create(vulkanDevice.physical(), device, buffers,
                                        gpuMaterialBuffers, materialTextureDescriptors,
-                                       sizeof(UniformBufferObject), assetManager);
+                                       sizeof(UniformBufferObject), vulkanDevice.allocator(), assetManager);
         }
 
         void createForwardPass() {

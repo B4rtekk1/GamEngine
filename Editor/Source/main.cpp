@@ -429,7 +429,10 @@ int main() {
             }
             renderer.renderFrame();
 
-            if (const auto elapsed = std::chrono::steady_clock::now() - start; elapsed < targetFrame) {
+            // Keep the editor UI responsive without unnecessarily throttling
+            // the game simulation while Play Mode is active.
+            if (const auto elapsed = std::chrono::steady_clock::now() - start;
+                !playing && elapsed < targetFrame) {
                 std::this_thread::sleep_for(targetFrame - elapsed);
             }
         }

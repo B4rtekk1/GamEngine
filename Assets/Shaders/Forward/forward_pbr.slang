@@ -10,12 +10,11 @@ struct ForwardVertexInput
     [[vk::location(1)]] float3 color : COLOR0;
     [[vk::location(2)]] float2 texCoord : TEXCOORD0;
     [[vk::location(3)]] float3 normal : NORMAL;
-    [[vk::location(4)]] float4x4 instanceModel : INSTANCE_MODEL;
+    [[vk::location(4)]] float4 positionMaterial : INSTANCE_POSITION_MATERIAL;
+    [[vk::location(5)]] float4 instanceRotation : INSTANCE_ROTATION;
+    [[vk::location(6)]] float4 scaleBase : INSTANCE_SCALE_BASE;
     [[vk::location(8)]] uint materialIndex : MATERIAL_INDEX;
     [[vk::location(9)]] float4 tangent : TANGENT;
-    [[vk::location(10)]] float4 normalColumn0 : NORMAL_COLUMN0;
-    [[vk::location(11)]] float4 normalColumn1 : NORMAL_COLUMN1;
-    [[vk::location(12)]] float4 normalColumn2 : NORMAL_COLUMN2;
     [[vk::location(13)]] float4 grassDeformation : GRASS_DEFORMATION;
 };
 
@@ -35,27 +34,33 @@ ForwardVertexOutput vertexMain(ForwardVertexInput input, uint instanceIndex : SV
 {
     float3 localPosition = input.position;
     float3 localNormal = input.normal;
-    float normalizedHeight = clamp((input.position.y - input.normalColumn0.w) *
-                                   input.normalColumn1.w, 0.0, 1.0);
+    float normalizedHeight = clamp((input.position.y - input.scaleBase.w) *
+                                   input.grassDeformation.w, 0.0, 1.0);
     float bendWeight = normalizedHeight * normalizedHeight * input.grassDeformation.z;
-    float grassHeight = input.normalColumn1.w > 0.0 ? 1.0 / input.normalColumn1.w : 0.0;
+    float grassHeight = input.grassDeformation.w > 0.0 ? 1.0 / input.grassDeformation.w : 0.0;
     localPosition.xz += input.grassDeformation.xy * bendWeight * grassHeight * 0.8;
     localPosition.y -= bendWeight * normalizedHeight * grassHeight * 0.55;
     localNormal = normalize(localNormal + float3(-input.grassDeformation.x * bendWeight,
                                                 0.0,
                                                -input.grassDeformation.y * bendWeight));
 
-    float4 worldPosition = mul(float4(localPosition, 1.0), input.instanceModel);
-    float3x3 normalMatrix = float3x3(input.normalColumn0.xyz,
-                                     input.normalColumn1.xyz,
-                                     input.normalColumn2.xyz);
+    float4 q = input.instanceRotation;
+    float3x3 rotationMatrix = float3x3(
+        1.0 - 2.0 * (q.y * q.y + q.z * q.z), 2.0 * (q.x * q.y + q.z * q.w), 2.0 * (q.x * q.z - q.y * q.w),
+        2.0 * (q.x * q.y - q.z * q.w), 1.0 - 2.0 * (q.x * q.x + q.z * q.z), 2.0 * (q.y * q.z + q.x * q.w),
+        2.0 * (q.x * q.z + q.y * q.w), 2.0 * (q.y * q.z - q.x * q.w), 1.0 - 2.0 * (q.x * q.x + q.y * q.y));
+    float3 worldPosition3 = mul(localPosition * input.scaleBase.xyz, rotationMatrix) + input.positionMaterial.xyz;
+    float4 worldPosition = float4(worldPosition3, 1.0);
+    float3x3 normalMatrix = float3x3(rotationMatrix[0] / input.scaleBase.x,
+                                     rotationMatrix[1] / input.scaleBase.y,
+                                     rotationMatrix[2] / input.scaleBase.z);
 
     ForwardVertexOutput output;
     output.position = mul(mul(worldPosition, frame.view), frame.projection);
     output.color = input.color;
     output.worldPosition = worldPosition.xyz;
     output.normal = mul(localNormal, normalMatrix);
-    output.materialIndex = instanceIndex * frame.materialSlots + input.materialIndex;
+    output.materialIndex = asuint(input.positionMaterial.w) + input.materialIndex;
     output.texCoord = input.texCoord;
     output.tangent = float4(mul(input.tangent.xyz, normalMatrix), input.tangent.w);
     return output;
@@ -64,6 +69,7 @@ ForwardVertexOutput vertexMain(ForwardVertexInput input, uint instanceIndex : SV
 [[vk::binding(0, 0)]] Sampler2D shadowMap;
 [[vk::binding(2, 0)]] StructuredBuffer<MaterialData> materials;
 [[vk::binding(3, 0)]] Sampler2D materialTextures[16];
+[[vk::binding(4, 0)]] StructuredBuffer<uint4> shadowPageTable;
 
 struct ForwardFragmentInput
 {
@@ -152,7 +158,8 @@ ForwardFragmentOutput fragmentMain(ForwardFragmentInput input)
                       max(4.0 * nDotV * nDotL, 0.0001);
     float3 diffuse = (1.0 - fresnel) * (1.0 - metallic) * albedo / PBR_PI;
     float shadow = frame.shadowEnabled != 0
-        ? sampleVirtualShadow(shadowMap, input.worldPosition, frame.shadowClipMatrices) : 0.0;
+        ? sampleVirtualShadow(shadowMap, input.worldPosition, frame.shadowClipMatrices,
+                              shadowPageTable) : 0.0;
     float3 direct = (diffuse + specular) * frame.lightDirectionIntensity.w *
                     frame.lightColor.rgb * nDotL * (1.0 - shadow);
     float3 color = 0.9 * albedo *

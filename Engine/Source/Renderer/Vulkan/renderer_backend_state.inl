@@ -91,19 +91,29 @@
         std::array<Buffer, MAX_FRAMES_IN_FLIGHT> sceneUniformBuffers;
         std::array<Buffer, MAX_FRAMES_IN_FLIGHT> cullingObjectBuffers;
         std::array<Buffer, MAX_FRAMES_IN_FLIGHT> cullingUniformBuffers;
+        std::array<Buffer, MAX_FRAMES_IN_FLIGHT> foliageCullingUniformBuffers;
         std::array<Buffer, MAX_FRAMES_IN_FLIGHT> sceneCullingUniformBuffers;
+        std::array<Buffer, MAX_FRAMES_IN_FLIGHT> sceneFoliageCullingUniformBuffers;
         std::array<Buffer, MAX_FRAMES_IN_FLIGHT> shadowCullingUniformBuffers;
         std::array<Buffer, MAX_FRAMES_IN_FLIGHT> indirectBuffers;
+        std::array<Buffer, MAX_FRAMES_IN_FLIGHT> foliageIndirectBuffers;
         std::array<Buffer, MAX_FRAMES_IN_FLIGHT> sceneIndirectBuffers;
+        std::array<Buffer, MAX_FRAMES_IN_FLIGHT> sceneFoliageIndirectBuffers;
         std::array<Buffer, MAX_FRAMES_IN_FLIGHT> shadowIndirectBuffers;
         std::array<Buffer, MAX_FRAMES_IN_FLIGHT> drawCountBuffers;
+        std::array<Buffer, MAX_FRAMES_IN_FLIGHT> foliageDrawCountBuffers;
         std::array<Buffer, MAX_FRAMES_IN_FLIGHT> sceneDrawCountBuffers;
+        std::array<Buffer, MAX_FRAMES_IN_FLIGHT> sceneFoliageDrawCountBuffers;
         std::array<Buffer, MAX_FRAMES_IN_FLIGHT> shadowDrawCountBuffers;
         std::array<Culling::GPUCullingPass, MAX_FRAMES_IN_FLIGHT> gpuCullingPasses;
+        std::array<Culling::GPUCullingPass, MAX_FRAMES_IN_FLIGHT> foliageGpuCullingPasses;
         std::array<Culling::GPUCullingPass, MAX_FRAMES_IN_FLIGHT> sceneGpuCullingPasses;
+        std::array<Culling::GPUCullingPass, MAX_FRAMES_IN_FLIGHT> sceneFoliageGpuCullingPasses;
         std::array<Culling::GPUCullingPass, MAX_FRAMES_IN_FLIGHT> shadowCullingPasses;
         std::array<Culling::IndexedIndirectDrawCount, MAX_FRAMES_IN_FLIGHT> indirectDraws;
+        std::array<Culling::IndexedIndirectDrawCount, MAX_FRAMES_IN_FLIGHT> foliageIndirectDraws;
         std::array<Culling::IndexedIndirectDrawCount, MAX_FRAMES_IN_FLIGHT> sceneIndirectDraws;
+        std::array<Culling::IndexedIndirectDrawCount, MAX_FRAMES_IN_FLIGHT> sceneFoliageIndirectDraws;
         std::array<Culling::IndexedIndirectDrawCount, MAX_FRAMES_IN_FLIGHT> shadowIndirectDraws;
         Culling::HiZBuffer hiZBuffer;
         Culling::HiZPass hiZPass;
@@ -118,6 +128,10 @@
         VkPipeline hiZReducePipeline = VK_NULL_HANDLE;
         VkPipeline cullingPipeline = VK_NULL_HANDLE;
         std::vector<Culling::GPUObjectData> gpuObjects;
+        // Old and new bounds of renderables whose shadow contribution changed
+        // in this frame. ShadowPass evicts only overlapping virtual pages
+        // instead of rebuilding the complete atlas for one moving body/blade.
+        std::vector<Culling::GPUObjectData> dirtyShadowObjects;
         // CPU-side cache for particle obstacles.  ParticleSystem receives
         // this vector only when collider-related ECS data actually changed.
         std::vector<Particles::ParticleCollider> cachedParticleColliders;

@@ -20,10 +20,7 @@ void ForwardPass::create(VkDevice device, const VkFormat colorFormat,
     options.colorFinalLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
     options.shader = "shaders/forward_pbr.spv";
     options.assetManager = &assets;
-    // Temporary: imported glTF vegetation uses double-sided geometry. The
-    // renderer currently batches materials into one draw, so culling cannot
-    // yet be selected per material.
-    options.cullMode = VK_CULL_MODE_NONE;
+    options.cullMode = VK_CULL_MODE_BACK_BIT;
     options.alphaBlendEnable = VK_FALSE;
     options.descriptorSetLayouts = {sceneLayout};
     options.vertexBindings = {
@@ -35,18 +32,19 @@ void ForwardPass::create(VkDevice device, const VkFormat colorFormat,
         {1, 0, VK_FORMAT_R32G32B32_SFLOAT, offsetof(Vertex, color)},
         {2, 0, VK_FORMAT_R32G32_SFLOAT, offsetof(Vertex, texCoord)},
         {3, 0, VK_FORMAT_R32G32B32_SFLOAT, offsetof(Vertex, normal)},
-        {4, 1, VK_FORMAT_R32G32B32A32_SFLOAT, 0},
-        {5, 1, VK_FORMAT_R32G32B32A32_SFLOAT, sizeof(glm::vec4)},
-        {6, 1, VK_FORMAT_R32G32B32A32_SFLOAT, sizeof(glm::vec4) * 2},
-        {7, 1, VK_FORMAT_R32G32B32A32_SFLOAT, sizeof(glm::vec4) * 3},
+        {4, 1, VK_FORMAT_R32G32B32A32_SFLOAT, offsetof(RendererInstanceData, positionMaterial)},
+        {5, 1, VK_FORMAT_R32G32B32A32_SFLOAT, offsetof(RendererInstanceData, rotation)},
+        {6, 1, VK_FORMAT_R32G32B32A32_SFLOAT, offsetof(RendererInstanceData, scaleBase)},
         {8, 0, VK_FORMAT_R32_UINT, offsetof(Vertex, materialIndex)},
         {9, 0, VK_FORMAT_R32G32B32A32_SFLOAT, offsetof(Vertex, tangent)},
-        {10, 1, VK_FORMAT_R32G32B32A32_SFLOAT, offsetof(RendererInstanceData, normalColumn0)},
-        {11, 1, VK_FORMAT_R32G32B32A32_SFLOAT, offsetof(RendererInstanceData, normalColumn1)},
-        {12, 1, VK_FORMAT_R32G32B32A32_SFLOAT, offsetof(RendererInstanceData, normalColumn2)},
         {13, 1, VK_FORMAT_R32G32B32A32_SFLOAT, offsetof(RendererInstanceData, grassDeformation)},
     };
     pipeline_.create(device, options);
+
+    GraphicsPipelineOptions foliageOptions = options;
+    foliageOptions.existingRenderPass = pipeline_.renderPass();
+    foliageOptions.cullMode = VK_CULL_MODE_NONE;
+    foliagePipeline_.create(device, foliageOptions);
 
     GraphicsPipelineOptions outlineOptions = options;
     outlineOptions.shader = "shaders/selection_outline.spv";
@@ -71,6 +69,7 @@ void ForwardPass::create(VkDevice device, const VkFormat colorFormat,
 
 void ForwardPass::destroy() noexcept {
     outlinePipeline_.destroy();
+    foliagePipeline_.destroy();
     pipeline_.destroy();
 }
 
@@ -109,6 +108,16 @@ void ForwardPass::draw(VkCommandBuffer commandBuffer,
     if (indirectDraw.valid()) {
         indirectDraw.record(commandBuffer);
     }
+}
+
+void ForwardPass::drawFoliage(
+    VkCommandBuffer commandBuffer, const VkDescriptorSet sceneDescriptorSet,
+    const Culling::IndexedIndirectDrawCount& indirectDraw) const {
+    if (!indirectDraw.valid()) return;
+    vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, foliagePipeline_.handle());
+    vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS,
+                            foliagePipeline_.layout(), 0, 1, &sceneDescriptorSet, 0, nullptr);
+    indirectDraw.record(commandBuffer);
 }
 
 void ForwardPass::end(VkCommandBuffer commandBuffer) {

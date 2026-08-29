@@ -7,12 +7,13 @@
 #include <glm/glm.hpp>
 
 #include "Engine/Core/Camera.h"
+#include "Engine/Renderer/Vulkan/shadow_map.h"
 
 namespace Engine {
     struct RendererUniformBufferObject {
         Mat4 view;
         Mat4 projection;
-        // Camera-centred directional-light clipmaps packed into a 2x2 atlas.
+        // Camera-centred directional-light virtual clipmaps.
         std::array<Mat4, 4> shadowClipMatrices{};
         Vec4 cameraPosition;
         Vec4 lightDirectionIntensity;
@@ -23,13 +24,19 @@ namespace Engine {
         std::uint32_t materialSlotsPadding{};
     };
 
-    /** Per-instance vertex data for the forward pipelines. */
+    /**
+     * Compact per-instance data.  Position, rotation and scale reconstruct
+     * the model and normal transforms in the vertex shader; this halves the
+     * old matrix-plus-normal representation (128 B -> 64 B).
+     */
     struct RendererInstanceData {
-        glm::mat4 model{1.0F};
-        glm::vec4 normalColumn0{1.0F, 0.0F, 0.0F, 0.0F};
-        glm::vec4 normalColumn1{0.0F, 1.0F, 0.0F, 0.0F};
-        glm::vec4 normalColumn2{0.0F, 0.0F, 1.0F, 0.0F};
-        // xy: local bend direction, z: permanent trample amount.
+        // xyz: world position, w: bit-cast material-table base index.
+        glm::vec4 positionMaterial{};
+        // Quaternion stored as xyzw.
+        glm::vec4 rotation{0.0F, 0.0F, 0.0F, 1.0F};
+        // xyz: non-uniform scale, w: local mesh minimum Y for grass bending.
+        glm::vec4 scaleBase{1.0F, 1.0F, 1.0F, 0.0F};
+        // xyz: bend X, bend Z, trample; w: reciprocal grass mesh height.
         glm::vec4 grassDeformation{};
     };
 } // namespace Engine

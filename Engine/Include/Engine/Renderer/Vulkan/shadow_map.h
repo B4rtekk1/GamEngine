@@ -5,10 +5,19 @@
 namespace Engine {
     class ShadowMap final {
     public:
-        static constexpr uint32_t TileResolution = 1024;
-        static constexpr uint32_t TilesPerAxis = 2;
         static constexpr uint32_t ClipLevelCount = 4;
-        static constexpr uint32_t Resolution = TileResolution * TilesPerAxis;
+        static constexpr uint32_t PageResolution = 256;
+        static constexpr uint32_t VirtualPagesPerAxis = 32;
+        static constexpr uint32_t PhysicalPagesPerAxis = 16;
+        static constexpr uint32_t VirtualResolution =
+            PageResolution * VirtualPagesPerAxis;
+        static constexpr uint32_t Resolution =
+            PageResolution * PhysicalPagesPerAxis;
+        static constexpr uint32_t VirtualPageCount = ClipLevelCount *
+            VirtualPagesPerAxis * VirtualPagesPerAxis;
+        static constexpr uint32_t PhysicalPageCount =
+            PhysicalPagesPerAxis * PhysicalPagesPerAxis;
+        static constexpr uint32_t InvalidPage = 0xffffffffu;
 
         ~ShadowMap();
 

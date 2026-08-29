@@ -41,6 +41,23 @@ TEST(PhysXPhysics, TriggerDoesNotStopDynamicBody) {
     EXPECT_LT(sphere.position().y(), -2.0F);
 }
 
+TEST(PhysXPhysics, DynamicSphereRestsOnTerrainMesh) {
+    Engine::Scene scene;
+    static_cast<void>(scene.createTerrain(
+        "Terrain", Engine::TerrainComponent{33, 100.0F, 100.0F, -10.0F, 10.0F}));
+
+    const Engine::Actor sphere = scene.createActor("Sphere");
+    sphere.setPosition({0.0F, 3.0F, 0.0F});
+    sphere.addSphereCollider(0.5F);
+    sphere.addRigidbody();
+
+    Engine::PhysicsSystem physics;
+    for (int step = 0; step < 240; ++step) physics.update(scene, 1.0F / 60.0F);
+
+    EXPECT_NEAR(sphere.position().y(), 0.5F, 0.03F);
+    EXPECT_LT(sphere.velocity().length(), 0.05F);
+}
+
 TEST(PhysXPhysics, RaycastReturnsPhysXHitDataAndActor) {
     Engine::Scene scene;
     const Engine::Actor target = scene.createActor("Ray target");

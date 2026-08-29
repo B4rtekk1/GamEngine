@@ -66,6 +66,11 @@
                 object.vertexOffset = 0;
                 object.firstInstance = batch.firstInstance;
                 object.castShadow = batch.castShadow ? 1U : 0U;
+                object.twoSided = batch.twoSided ? 1U : 0U;
+                object.lod1IndexCount = batch.lod1IndexCount;
+                object.lod2IndexCount = batch.lod2IndexCount;
+                object.lod1Distance = batch.lod1Distance;
+                object.lod2Distance = batch.lod2Distance;
             }
             for (Buffer& buffer : cullingObjectBuffers) {
                 buffer.createHostVisible(
@@ -84,7 +89,13 @@
                 cullingUniformBuffers[frame].createHostVisible(vulkanDevice.physical(), device,
                     sizeof(Culling::CullingUniformData), VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
                     vulkanDevice.allocator());
+                foliageCullingUniformBuffers[frame].createHostVisible(vulkanDevice.physical(), device,
+                    sizeof(Culling::CullingUniformData), VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
+                    vulkanDevice.allocator());
                 sceneCullingUniformBuffers[frame].createHostVisible(vulkanDevice.physical(), device,
+                    sizeof(Culling::CullingUniformData), VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
+                    vulkanDevice.allocator());
+                sceneFoliageCullingUniformBuffers[frame].createHostVisible(vulkanDevice.physical(), device,
                     sizeof(Culling::CullingUniformData), VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
                     vulkanDevice.allocator());
                 shadowCullingUniformBuffers[frame].createHostVisible(vulkanDevice.physical(), device,
@@ -95,7 +106,15 @@
                     sizeof(VkDrawIndexedIndirectCommand) * objectCount,
                     VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
                     commandPool, vulkanDevice.graphicsQueue(), vulkanDevice.allocator());
+                foliageIndirectBuffers[frame].createDeviceLocal(vulkanDevice.physical(), device, emptyCommands.data(),
+                    sizeof(VkDrawIndexedIndirectCommand) * objectCount,
+                    VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+                    commandPool, vulkanDevice.graphicsQueue(), vulkanDevice.allocator());
                 sceneIndirectBuffers[frame].createDeviceLocal(vulkanDevice.physical(), device, emptyCommands.data(),
+                    sizeof(VkDrawIndexedIndirectCommand) * objectCount,
+                    VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+                    commandPool, vulkanDevice.graphicsQueue(), vulkanDevice.allocator());
+                sceneFoliageIndirectBuffers[frame].createDeviceLocal(vulkanDevice.physical(), device, emptyCommands.data(),
                     sizeof(VkDrawIndexedIndirectCommand) * objectCount,
                     VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
                     commandPool, vulkanDevice.graphicsQueue(), vulkanDevice.allocator());
@@ -108,7 +127,15 @@
                     VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT |
                     VK_BUFFER_USAGE_TRANSFER_DST_BIT,
                     commandPool, vulkanDevice.graphicsQueue(), vulkanDevice.allocator());
+                foliageDrawCountBuffers[frame].createDeviceLocal(vulkanDevice.physical(), device, &zero, sizeof(zero),
+                    VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT |
+                    VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+                    commandPool, vulkanDevice.graphicsQueue(), vulkanDevice.allocator());
                 sceneDrawCountBuffers[frame].createDeviceLocal(vulkanDevice.physical(), device, &zero, sizeof(zero),
+                    VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT |
+                    VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+                    commandPool, vulkanDevice.graphicsQueue(), vulkanDevice.allocator());
+                sceneFoliageDrawCountBuffers[frame].createDeviceLocal(vulkanDevice.physical(), device, &zero, sizeof(zero),
                     VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT |
                     VK_BUFFER_USAGE_TRANSFER_DST_BIT,
                     commandPool, vulkanDevice.graphicsQueue(), vulkanDevice.allocator());
@@ -118,7 +145,7 @@
                     commandPool, vulkanDevice.graphicsQueue(), vulkanDevice.allocator());
             }
 
-            constexpr uint32_t cullingSetCount = MAX_FRAMES_IN_FLIGHT * 3;
+            constexpr uint32_t cullingSetCount = MAX_FRAMES_IN_FLIGHT * 5;
             const uint32_t imageDescriptors = hiZBuffer.mipCount() + cullingSetCount;
             const VkDescriptorPoolSize poolSizes[] = {
                 {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, imageDescriptors},
@@ -138,9 +165,9 @@
                 msaa.enabled() ? hiZDepthBuffer.imageView() : depthBuffer.imageView(),
                 msaa.enabled() ? hiZDepthBuffer.sampler() : depthBuffer.sampler());
 
-            std::array<VkDescriptorSetLayout, MAX_FRAMES_IN_FLIGHT * 3> cullLayouts{};
+            std::array<VkDescriptorSetLayout, MAX_FRAMES_IN_FLIGHT * 5> cullLayouts{};
             cullLayouts.fill(cullingDescriptorSetLayout);
-            std::array<VkDescriptorSet, MAX_FRAMES_IN_FLIGHT * 3> cullSets{};
+            std::array<VkDescriptorSet, MAX_FRAMES_IN_FLIGHT * 5> cullSets{};
             VkDescriptorSetAllocateInfo allocateInfo{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};
             allocateInfo.descriptorPool = cullingDescriptorPool;
             allocateInfo.descriptorSetCount = static_cast<uint32_t>(cullSets.size());
@@ -177,22 +204,36 @@
                     vkUpdateDescriptorSets(device, static_cast<uint32_t>(writes.size()), writes.data(), 0, nullptr);
                 };
                 VkDescriptorSet cameraCullSet = cullSets[frame];
-                VkDescriptorSet sceneCullSet = cullSets[MAX_FRAMES_IN_FLIGHT + frame];
-                VkDescriptorSet shadowCullSet = cullSets[MAX_FRAMES_IN_FLIGHT * 2 + frame];
+                VkDescriptorSet foliageCullSet = cullSets[MAX_FRAMES_IN_FLIGHT + frame];
+                VkDescriptorSet sceneCullSet = cullSets[MAX_FRAMES_IN_FLIGHT * 2 + frame];
+                VkDescriptorSet sceneFoliageCullSet = cullSets[MAX_FRAMES_IN_FLIGHT * 3 + frame];
+                VkDescriptorSet shadowCullSet = cullSets[MAX_FRAMES_IN_FLIGHT * 4 + frame];
                 updateCullingSet({cameraCullSet, indirectBuffers[frame], drawCountBuffers[frame],
                                   cullingUniformBuffers[frame]});
+                updateCullingSet({foliageCullSet, foliageIndirectBuffers[frame], foliageDrawCountBuffers[frame],
+                                  foliageCullingUniformBuffers[frame]});
                 updateCullingSet({shadowCullSet, shadowIndirectBuffers[frame], shadowDrawCountBuffers[frame],
                                   shadowCullingUniformBuffers[frame]});
                 updateCullingSet({sceneCullSet, sceneIndirectBuffers[frame], sceneDrawCountBuffers[frame],
                                   sceneCullingUniformBuffers[frame]});
+                updateCullingSet({sceneFoliageCullSet, sceneFoliageIndirectBuffers[frame], sceneFoliageDrawCountBuffers[frame],
+                                  sceneFoliageCullingUniformBuffers[frame]});
                 gpuCullingPasses[frame].create(device, cullingPipeline, cullingPipelineLayout, cullSets[frame],
                     indirectBuffers[frame].handle(), drawCountBuffers[frame].handle(), objectCount);
                 indirectDraws[frame].create(
                     indirectBuffers[frame].handle(), drawCountBuffers[frame].handle(), objectCount);
+                foliageGpuCullingPasses[frame].create(device, cullingPipeline, cullingPipelineLayout, foliageCullSet,
+                    foliageIndirectBuffers[frame].handle(), foliageDrawCountBuffers[frame].handle(), objectCount);
+                foliageIndirectDraws[frame].create(
+                    foliageIndirectBuffers[frame].handle(), foliageDrawCountBuffers[frame].handle(), objectCount);
                 sceneGpuCullingPasses[frame].create(device, cullingPipeline, cullingPipelineLayout, sceneCullSet,
                     sceneIndirectBuffers[frame].handle(), sceneDrawCountBuffers[frame].handle(), objectCount);
                 sceneIndirectDraws[frame].create(
                     sceneIndirectBuffers[frame].handle(), sceneDrawCountBuffers[frame].handle(), objectCount);
+                sceneFoliageGpuCullingPasses[frame].create(device, cullingPipeline, cullingPipelineLayout, sceneFoliageCullSet,
+                    sceneFoliageIndirectBuffers[frame].handle(), sceneFoliageDrawCountBuffers[frame].handle(), objectCount);
+                sceneFoliageIndirectDraws[frame].create(
+                    sceneFoliageIndirectBuffers[frame].handle(), sceneFoliageDrawCountBuffers[frame].handle(), objectCount);
                 shadowCullingPasses[frame].create(device, cullingPipeline, cullingPipelineLayout, shadowCullSet,
                     shadowIndirectBuffers[frame].handle(), shadowDrawCountBuffers[frame].handle(), objectCount);
                 shadowIndirectDraws[frame].create(
@@ -207,13 +248,19 @@
             for (auto& draw : sceneIndirectDraws) draw.destroy();
             for (auto& draw : shadowIndirectDraws) draw.destroy();
             for (Buffer& buffer : cullingUniformBuffers) buffer.destroy();
+            for (Buffer& buffer : foliageCullingUniformBuffers) buffer.destroy();
             for (Buffer& buffer : sceneCullingUniformBuffers) buffer.destroy();
+            for (Buffer& buffer : sceneFoliageCullingUniformBuffers) buffer.destroy();
             for (Buffer& buffer : shadowCullingUniformBuffers) buffer.destroy();
             for (Buffer& buffer : indirectBuffers) buffer.destroy();
+            for (Buffer& buffer : foliageIndirectBuffers) buffer.destroy();
             for (Buffer& buffer : sceneIndirectBuffers) buffer.destroy();
+            for (Buffer& buffer : sceneFoliageIndirectBuffers) buffer.destroy();
             for (Buffer& buffer : shadowIndirectBuffers) buffer.destroy();
             for (Buffer& buffer : drawCountBuffers) buffer.destroy();
+            for (Buffer& buffer : foliageDrawCountBuffers) buffer.destroy();
             for (Buffer& buffer : sceneDrawCountBuffers) buffer.destroy();
+            for (Buffer& buffer : sceneFoliageDrawCountBuffers) buffer.destroy();
             for (Buffer& buffer : shadowDrawCountBuffers) buffer.destroy();
             for (Buffer& buffer : cullingObjectBuffers) buffer.destroy();
             if (cullingDescriptorPool != VK_NULL_HANDLE) { vkDestroyDescriptorPool(device, cullingDescriptorPool, nullptr);
@@ -401,18 +448,18 @@
             for (std::uint32_t level = 0; level < ShadowMap::ClipLevelCount; ++level) {
                 if ((updateMask & (1u << level)) == 0) continue;
                 const float extent = level < baseExtents.size() ? baseExtents[level] : farExtent;
-                const float worldUnitsPerTexel = extent * 2.0F /
-                    static_cast<float>(ShadowMap::TileResolution);
-                // Quantize the complete light-space origin.  Leaving the
-                // coordinate along the light direction unsnapped changes the
-                // depth encoding whenever the camera moves, which makes the
-                // sampled shadow silhouette appear to deform with the camera.
-                const float snappedX = std::round(dot(cameraPosition, right) / worldUnitsPerTexel) *
-                                       worldUnitsPerTexel;
-                const float snappedY = std::round(dot(cameraPosition, lightUp) / worldUnitsPerTexel) *
-                                       worldUnitsPerTexel;
-                const float alongLight = std::round(dot(cameraPosition, direction) / worldUnitsPerTexel) *
-                                         worldUnitsPerTexel;
+                // Page-sized snapping makes the virtual address space stable
+                // while the camera moves inside a page. Cached physical pages
+                // therefore survive ordinary sub-page camera motion.
+                const float worldUnitsPerPage = extent * 2.0F /
+                    static_cast<float>(ShadowMap::VirtualPagesPerAxis);
+                const float snappedX = std::round(dot(cameraPosition, right) / worldUnitsPerPage) *
+                                       worldUnitsPerPage;
+                const float snappedY = std::round(dot(cameraPosition, lightUp) / worldUnitsPerPage) *
+                                       worldUnitsPerPage;
+                // Keep depth encoding independent of the camera so pages can
+                // be remapped when the clipmap scrolls without being redrawn.
+                const float alongLight = dot(sceneCenter, direction);
                 const Vec3 target = right * snappedX + lightUp * snappedY + direction * alongLight;
                 const float lightDistance = sceneRadius * 2.0F + extent;
                 const Mat4 lightView = Mat4::lookAt(target - direction * lightDistance,

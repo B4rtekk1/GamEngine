@@ -13,6 +13,8 @@
 #include "imgui.h"
 
 #include <glm/glm.hpp>
+#define GLM_ENABLE_EXPERIMENTAL
+#include <glm/gtx/matrix_decompose.hpp>
 
 #include "Engine/Renderer/Vulkan/msaa.h"
 #include "Engine/Renderer/Vulkan/depth_buffer.h"
@@ -63,6 +65,7 @@
 
 #include <cstdint>
 #include <array>
+#include <bit>
 #include <chrono>
 #include <cmath>
 #include <cstdio>
@@ -582,6 +585,13 @@ namespace Engine {
             }
             renderableTopologySignature = currentRenderableTopologySignature();
             hiZValid = false;
+            // Vertex edits can change every depth sample inside the previous
+            // and current bounds. They are interactive and infrequent, so a
+            // full shadow refresh is preferable to retaining stale terrain.
+            if (changedBatch.castShadow) {
+                shadowPass.invalidateCache();
+                sceneDescriptorPass.invalidateCache();
+            }
         }
 
 #include "renderer_backend_state.inl"

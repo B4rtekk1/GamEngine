@@ -12,10 +12,10 @@ struct ShadowVertexInput
 {
     [[vk::location(0)]] float3 position : POSITION;
     [[vk::location(2)]] float2 texCoord : TEXCOORD0;
-    [[vk::location(4)]] float4x4 instanceModel : INSTANCE_MODEL;
+    [[vk::location(4)]] float4 positionMaterial : INSTANCE_POSITION_MATERIAL;
+    [[vk::location(5)]] float4 instanceRotation : INSTANCE_ROTATION;
+    [[vk::location(6)]] float4 scaleBase : INSTANCE_SCALE_BASE;
     [[vk::location(8)]] uint materialIndex : MATERIAL_INDEX;
-    [[vk::location(10)]] float4 normalColumn0 : NORMAL_COLUMN0;
-    [[vk::location(11)]] float4 normalColumn1 : NORMAL_COLUMN1;
     [[vk::location(13)]] float4 grassDeformation : GRASS_DEFORMATION;
 };
 
@@ -31,16 +31,22 @@ ShadowVertexOutput vertexMain(ShadowVertexInput input, uint instanceIndex : SV_I
 {
     ShadowVertexOutput output;
     float3 localPosition = input.position;
-    float normalizedHeight = clamp((input.position.y - input.normalColumn0.w) *
-                                   input.normalColumn1.w, 0.0, 1.0);
+    float normalizedHeight = clamp((input.position.y - input.scaleBase.w) *
+                                   input.grassDeformation.w, 0.0, 1.0);
     float bendWeight = normalizedHeight * normalizedHeight * input.grassDeformation.z;
-    float grassHeight = input.normalColumn1.w > 0.0 ? 1.0 / input.normalColumn1.w : 0.0;
+    float grassHeight = input.grassDeformation.w > 0.0 ? 1.0 / input.grassDeformation.w : 0.0;
     localPosition.xz += input.grassDeformation.xy * bendWeight * grassHeight * 0.8;
     localPosition.y -= bendWeight * normalizedHeight * grassHeight * 0.55;
-    output.position = mul(mul(float4(localPosition, 1.0), input.instanceModel),
-                          pushConstants.lightSpace);
+    float4 q = input.instanceRotation;
+    float3x3 rotationMatrix = float3x3(
+        1.0 - 2.0 * (q.y * q.y + q.z * q.z), 2.0 * (q.x * q.y + q.z * q.w), 2.0 * (q.x * q.z - q.y * q.w),
+        2.0 * (q.x * q.y - q.z * q.w), 1.0 - 2.0 * (q.x * q.x + q.z * q.z), 2.0 * (q.y * q.z + q.x * q.w),
+        2.0 * (q.x * q.z + q.y * q.w), 2.0 * (q.y * q.z - q.x * q.w), 1.0 - 2.0 * (q.x * q.x + q.y * q.y));
+    float4 worldPosition = float4(mul(localPosition * input.scaleBase.xyz, rotationMatrix) +
+                                  input.positionMaterial.xyz, 1.0);
+    output.position = mul(worldPosition, pushConstants.lightSpace);
     output.texCoord = input.texCoord;
-    output.materialIndex = instanceIndex * frame.materialSlots + input.materialIndex;
+    output.materialIndex = asuint(input.positionMaterial.w) + input.materialIndex;
     return output;
 }
 

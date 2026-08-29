@@ -373,13 +373,25 @@ namespace Engine {
                                     vertex.position.z() * scale.z());
             }
 
+            // Vulkan render meshes are authored with clockwise front faces,
+            // whereas PhysX derives collision normals from counter-clockwise
+            // triangle winding.  Supply the same surface with its winding
+            // reversed so contacts are generated on the visible/top side.
+            std::vector<std::uint32_t> indices;
+            indices.reserve(mesh.indices.size());
+            for (std::size_t index = 0; index < mesh.indices.size(); index += 3) {
+                indices.push_back(mesh.indices[index]);
+                indices.push_back(mesh.indices[index + 2]);
+                indices.push_back(mesh.indices[index + 1]);
+            }
+
             physx::PxTriangleMeshDesc description;
             description.points.count = static_cast<physx::PxU32>(points.size());
             description.points.stride = sizeof(physx::PxVec3);
             description.points.data = points.data();
             description.triangles.count = static_cast<physx::PxU32>(mesh.indices.size() / 3);
             description.triangles.stride = sizeof(std::uint32_t) * 3;
-            description.triangles.data = mesh.indices.data();
+            description.triangles.data = indices.data();
 
             physx::PxDefaultMemoryOutputStream output;
             if (!PxCookTriangleMesh(cookingParameters, description, output)) {
@@ -511,7 +523,12 @@ namespace Engine {
                     if (mesh == nullptr) {
                         return false;
                     }
-                    const PxTriangleMeshGeometry geometry{mesh};
+                    PxTriangleMeshGeometry geometry{mesh};
+                    // Render meshes use Vulkan's front-face convention, which
+                    // need not match PhysX's one-sided triangle convention.
+                    // Static mesh colliders must receive contacts from either
+                    // side (notably for generated terrain).
+                    geometry.meshFlags |= PxMeshGeometryFlag::eDOUBLE_SIDED;
                     const bool result = attachGeometry(actor, geometry, *material, localOffset,
                                                        collider.isTrigger) != nullptr;
                     mesh->release();

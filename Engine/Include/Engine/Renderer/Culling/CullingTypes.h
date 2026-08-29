@@ -50,6 +50,12 @@ namespace Engine::Culling {
         std::uint32_t firstInstance;
         /// Non-zero when the object should be included in shadow rendering.
         std::uint32_t castShadow;
+        /// Non-zero when the object requires double-sided rasterization.
+        std::uint32_t twoSided;
+        std::uint32_t lod1IndexCount;
+        std::uint32_t lod2IndexCount;
+        float lod1Distance;
+        float lod2Distance;
     };
 
     /**
@@ -59,6 +65,7 @@ namespace Engine::Culling {
     {
         /// Combined view and projection matrix of the active camera.
         GPUMat4 viewProjection;
+        GPUVec4 cameraPosition;
 
         /// Number of objects available to the culling dispatch.
         std::uint32_t objectCount;
@@ -84,7 +91,7 @@ namespace Engine::Culling {
         std::uint32_t shadowPass;
         /// Non-zero when frustum culling is enabled.
         std::uint32_t enableFrustumCulling;
-        /// Padding reserved for alignment.
-        std::uint32_t padding2;
+        /// 0: opaque-only, 1: double-sided-only, 2: all objects (shadow pass).
+        std::uint32_t drawCategory;
     };
 }

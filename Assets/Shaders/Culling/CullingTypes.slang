@@ -9,6 +9,11 @@ struct CullingObjectData
     uint vertexOffset;
     uint firstInstance;
     uint castShadow;
+    uint twoSided;
+    uint lod1IndexCount;
+    uint lod2IndexCount;
+    float lod1Distance;
+    float lod2Distance;
 };
 
 struct IndexedDrawCommand
@@ -23,6 +28,7 @@ struct IndexedDrawCommand
 struct CullingUniformData
 {
     float4x4 viewProjection;
+    float4 cameraPosition;
     uint objectCount;
     uint maxDrawCount;
     uint hiZMipCount;
@@ -34,7 +40,7 @@ struct CullingUniformData
     uint cameraCut;
     uint shadowPass;
     uint enableFrustumCulling;
-    uint padding2;
+    uint drawCategory;
 };
 
 static const float3 UNIT_AABB_CORNERS[8] =

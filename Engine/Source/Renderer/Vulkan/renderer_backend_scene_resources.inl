@@ -278,9 +278,14 @@
                             .mesh = mesh,
                             .firstIndex = renderer.firstIndex,
                             .indexCount = mesh->indexCount(),
+                            .lod1IndexCount = 0,
+                            .lod2IndexCount = 0,
                             .firstInstance = static_cast<uint32_t>(renderables.size()),
                             .instanceCount = 0,
                             .castShadow = castShadow,
+                            .twoSided = std::ranges::any_of(mesh->materials, [](const PBRMaterial& material) {
+                                return material.doubleSided;
+                            }),
                             .worldBounds = worldBounds,
                         });
                         sceneGpu.batchRenderableIndices.emplace_back();
@@ -308,8 +313,12 @@
                     sceneMaximum = glm::max(sceneMaximum, worldBounds.max.native());
                 });
 
-            // Painted grass stays compact in the ECS and is expanded straight
-            // into a contiguous GPU instance batch per terrain.
+            // Painted grass stays compact in the ECS and is expanded into
+            // spatially-local GPU batches.  A single terrain-wide batch has
+            // an AABB as large as the whole terrain, so frustum culling can
+            // never reject it: every blade is drawn even when most grass is
+            // behind the camera.  Small contiguous clusters retain instanced
+            // draws while giving the GPU culler useful bounds.
             registry.view<Transform, TerrainGrassComponent>(
                 [&](const Entity entity, const Transform& terrainTransform,
                     const TerrainGrassComponent& grass) {
@@ -343,48 +352,70 @@
                         uploadedMeshes.emplace(mesh, upload);
                     }
 
-                    const std::size_t batchIndex = instanceBatches.size();
-                    const std::uint32_t firstInstance = static_cast<std::uint32_t>(renderables.size());
-                    std::vector<std::size_t> grassIndices;
-                    grassIndices.reserve(grass.instances.size());
-                    AABB batchBounds{};
-                    bool firstBounds = true;
-                    for (std::size_t i = 0; i < grass.instances.size(); ++i) {
-                        const auto& item = grass.instances[i];
-                        const Transform local{.position = item.position,
-                                              .rotation = Vec3{0.0F, item.yaw, 0.0F},
-                                              .scale = Vec3{item.scale, item.scale, item.scale}};
-                        const glm::mat4 model = terrainTransform.matrix().native() * local.matrix().native();
-                        const AABB world = upload.localBounds.transformed(model);
-                        if (firstBounds) { batchBounds = world; firstBounds = false; }
-                        else {
-                            batchBounds.min = Vec3{glm::min(batchBounds.min.native(), world.min.native())};
-                            batchBounds.max = Vec3{glm::max(batchBounds.max.native(), world.max.native())};
-                        }
-                        renderables.push_back({entity, upload.localBounds, batchIndex,
-                                               upload.firstVertex, mesh->vertexCount(), i});
-                        const std::size_t renderableIndex = renderables.size() - 1;
-                        grassIndices.push_back(renderableIndex);
+                    constexpr float grassClusterSize = 8.0F;
+                    std::unordered_map<std::int64_t, std::vector<std::size_t>> clusters;
+                    clusters.reserve(grass.instances.size() / 32u + 1u);
+                    for (std::size_t index = 0; index < grass.instances.size(); ++index) {
+                        const Vec3& position = grass.instances[index].position;
+                        const auto cellX = static_cast<std::int32_t>(std::floor(position.x() / grassClusterSize));
+                        const auto cellZ = static_cast<std::int32_t>(std::floor(position.z() / grassClusterSize));
+                        clusters[TerrainGrassComponent::spatialKey(cellX, cellZ)].push_back(index);
                     }
-                    const auto largestInstance = std::ranges::max_element(
-                        grass.instances, {}, &TerrainGrassInstance::scale);
+
+                    std::vector<std::size_t> grassIndices(grass.instances.size());
                     const float horizontalTerrainScale = std::max(
                         std::abs(terrainTransform.scale.x()), std::abs(terrainTransform.scale.z()));
-                    const float bendExpansion = (upload.localBounds.max.y() - upload.localBounds.min.y()) *
-                        largestInstance->scale * horizontalTerrainScale * 0.8F;
-                    batchBounds.min.setX(batchBounds.min.x() - bendExpansion);
-                    batchBounds.min.setZ(batchBounds.min.z() - bendExpansion);
-                    batchBounds.max.setX(batchBounds.max.x() + bendExpansion);
-                    batchBounds.max.setZ(batchBounds.max.z() + bendExpansion);
+                    const float meshHeight = upload.localBounds.max.y() - upload.localBounds.min.y();
+                    for (const auto& clusterEntry : clusters) {
+                        const auto& cluster = clusterEntry.second;
+                        const std::size_t batchIndex = instanceBatches.size();
+                        const std::uint32_t firstInstance = static_cast<std::uint32_t>(renderables.size());
+                        std::vector<std::size_t> batchIndices;
+                        batchIndices.reserve(cluster.size());
+                        AABB batchBounds{};
+                        float largestScale = 0.0F;
+                        bool firstBounds = true;
+                        for (const std::size_t grassIndex : cluster) {
+                            const auto& item = grass.instances[grassIndex];
+                            const Transform local{.position = item.position,
+                                                  .rotation = Vec3{0.0F, item.yaw, 0.0F},
+                                                  .scale = Vec3{item.scale, item.scale, item.scale}};
+                            const glm::mat4 model = terrainTransform.matrix().native() * local.matrix().native();
+                            const AABB world = upload.localBounds.transformed(model);
+                            if (firstBounds) { batchBounds = world; firstBounds = false; }
+                            else {
+                                batchBounds.min = Vec3{glm::min(batchBounds.min.native(), world.min.native())};
+                                batchBounds.max = Vec3{glm::max(batchBounds.max.native(), world.max.native())};
+                            }
+                            largestScale = std::max(largestScale, item.scale);
+                            renderables.push_back({entity, upload.localBounds, batchIndex,
+                                                   upload.firstVertex, mesh->vertexCount(), grassIndex});
+                            const std::size_t renderableIndex = renderables.size() - 1;
+                            grassIndices[grassIndex] = renderableIndex;
+                            batchIndices.push_back(renderableIndex);
+                        }
+                        const float bendExpansion = meshHeight * largestScale * horizontalTerrainScale * 0.8F;
+                        batchBounds.min.setX(batchBounds.min.x() - bendExpansion);
+                        batchBounds.min.setZ(batchBounds.min.z() - bendExpansion);
+                        batchBounds.max.setX(batchBounds.max.x() + bendExpansion);
+                        batchBounds.max.setZ(batchBounds.max.z() + bendExpansion);
+                        sceneGpu.batchRenderableIndices.push_back(std::move(batchIndices));
+                        instanceBatches.push_back(InstanceBatch{.mesh = mesh,
+                            .firstIndex = upload.firstIndex, .indexCount = mesh->indexCount(),
+                            .lod1IndexCount = static_cast<std::uint32_t>((mesh->indexCount() / 2U / 3U) * 3U),
+                            .lod2IndexCount = static_cast<std::uint32_t>((mesh->indexCount() / 8U / 3U) * 3U),
+                            .firstInstance = firstInstance,
+                            .instanceCount = static_cast<std::uint32_t>(cluster.size()),
+                            .castShadow = grass.castShadow,
+                            .twoSided = std::ranges::any_of(mesh->materials, [](const PBRMaterial& material) {
+                                return material.doubleSided;
+                            }),
+                            .grass = true,
+                            .worldBounds = batchBounds});
+                        sceneMinimum = glm::min(sceneMinimum, batchBounds.min.native());
+                        sceneMaximum = glm::max(sceneMaximum, batchBounds.max.native());
+                    }
                     sceneGpu.grassRenderableIndices[entity] = grassIndices;
-                    sceneGpu.batchRenderableIndices.push_back(std::move(grassIndices));
-                    instanceBatches.push_back(InstanceBatch{.mesh = mesh,
-                        .firstIndex = upload.firstIndex, .indexCount = mesh->indexCount(),
-                        .firstInstance = firstInstance,
-                        .instanceCount = static_cast<std::uint32_t>(grass.instances.size()),
-                        .castShadow = grass.castShadow, .worldBounds = batchBounds});
-                    sceneMinimum = glm::min(sceneMinimum, batchBounds.min.native());
-                    sceneMaximum = glm::max(sceneMaximum, batchBounds.max.native());
                 });
 
             // An editor scene is allowed to be empty.  Render passes still
@@ -550,6 +581,30 @@
         }
 
         void updateRenderableBuffers() {
+            const auto modelFromInstance = [](const RendererInstanceData& instance) {
+                const glm::quat rotation{instance.rotation.w, instance.rotation.x,
+                                         instance.rotation.y, instance.rotation.z};
+                glm::mat4 model = glm::translate(glm::mat4{1.0F},
+                                                 glm::vec3{instance.positionMaterial});
+                model *= glm::mat4_cast(rotation);
+                return glm::scale(model, glm::vec3{instance.scaleBase});
+            };
+            dirtyShadowObjects.clear();
+            const bool shadowCacheCanContainGeometry =
+                lastTransformRevision != std::numeric_limits<std::uint64_t>::max() &&
+                lastMeshRendererRevision != std::numeric_limits<std::uint64_t>::max() &&
+                lastTerrainGrassRevision != std::numeric_limits<std::uint64_t>::max();
+            const auto appendDirtyShadowBounds = [&](const AABB& bounds) {
+                if (!shadowCacheCanContainGeometry) return;
+                Culling::GPUObjectData object{};
+                object.localAabbMin = {bounds.min.x(), bounds.min.y(), bounds.min.z(), 0.0F};
+                object.localAabbMax = {bounds.max.x(), bounds.max.y(), bounds.max.z(), 0.0F};
+                object.model.data[0] = 1.0F;
+                object.model.data[5] = 1.0F;
+                object.model.data[10] = 1.0F;
+                object.model.data[15] = 1.0F;
+                dirtyShadowObjects.push_back(object);
+            };
             const std::uint64_t transformRevision = registry.componentRevision<Transform>();
             const std::uint64_t meshRendererRevision = registry.componentRevision<MeshRenderer>();
             const std::uint64_t terrainGrassRevision = registry.componentRevision<TerrainGrassComponent>();
@@ -632,25 +687,58 @@
                         .scale = Vec3{item.scale, item.scale, item.scale}};
                     model *= effectiveTransform.matrix().native();
                 }
+                const auto shadowBounds = [&](const glm::mat4& instanceModel) {
+                    AABB bounds = record.localBounds.transformed(instanceModel);
+                    if (grassInstance) {
+                        const float scale = std::max(glm::length(glm::vec3{instanceModel[0]}),
+                                                     glm::length(glm::vec3{instanceModel[2]}));
+                        const float expansion = (record.localBounds.max.y() - record.localBounds.min.y()) *
+                                                scale * 0.8F;
+                        bounds.min.setX(bounds.min.x() - expansion);
+                        bounds.min.setZ(bounds.min.z() - expansion);
+                        bounds.max.setX(bounds.max.x() + expansion);
+                        bounds.max.setZ(bounds.max.z() + expansion);
+                    }
+                    return bounds;
+                };
                 if (!optimizationFeatures.transformCaching ||
                     !record.hasCachedTransform || !sameTransform(record.cachedTransform, effectiveTransform) ||
                     grassInstance) {
-                    instanceModels[index].model = model;
-                    const glm::mat3 normalMatrix = glm::transpose(glm::inverse(glm::mat3{model}));
+                    const bool hadCachedTransform = record.hasCachedTransform;
+                    const AABB previousShadowBounds = hadCachedTransform
+                        ? shadowBounds(modelFromInstance(instanceModels[index])) : AABB{};
+                    glm::vec3 decomposedScale{};
+                    glm::quat decomposedRotation{};
+                    glm::vec3 decomposedTranslation{};
+                    glm::vec3 skew{};
+                    glm::vec4 perspective{};
+                    if (!glm::decompose(model, decomposedScale, decomposedRotation,
+                                        decomposedTranslation, skew, perspective)) {
+                        decomposedScale = {1.0F, 1.0F, 1.0F};
+                        decomposedRotation = {};
+                        decomposedTranslation = glm::vec3{model[3]};
+                    }
+                    decomposedRotation = glm::normalize(decomposedRotation);
                     const float meshHeight = record.localBounds.max.y() - record.localBounds.min.y();
-                    instanceModels[index].normalColumn0 = glm::vec4{
-                        normalMatrix[0], grassInstance ? record.localBounds.min.y() : 0.0F};
-                    instanceModels[index].normalColumn1 = glm::vec4{
-                        normalMatrix[1], grassInstance && meshHeight > 1.0e-5F ? 1.0F / meshHeight : 0.0F};
-                    instanceModels[index].normalColumn2 = glm::vec4{normalMatrix[2], 0.0F};
+                    instanceModels[index].positionMaterial = glm::vec4{
+                        decomposedTranslation, std::bit_cast<float>(static_cast<std::uint32_t>(index * materialSlots))};
+                    instanceModels[index].rotation = glm::vec4{decomposedRotation.x, decomposedRotation.y,
+                                                               decomposedRotation.z, decomposedRotation.w};
+                    instanceModels[index].scaleBase = glm::vec4{
+                        decomposedScale, grassInstance ? record.localBounds.min.y() : 0.0F};
                     instanceModels[index].grassDeformation = grassInstance
                         ? glm::vec4{grass->instances[record.grassInstance].bendX,
                                     grass->instances[record.grassInstance].bendZ,
                                     grass->instances[record.grassInstance].trampled,
-                                    0.0F}
+                                    meshHeight > 1.0e-5F ? 1.0F / meshHeight : 0.0F}
                         : glm::vec4{};
                     record.cachedTransform = effectiveTransform;
                     record.hasCachedTransform = true;
+                    if (record.batchIndex < instanceBatches.size() &&
+                        instanceBatches[record.batchIndex].castShadow) {
+                        if (hadCachedTransform) appendDirtyShadowBounds(previousShadowBounds);
+                        appendDirtyShadowBounds(shadowBounds(model));
+                    }
                     markDirty(index, &RenderableRecord::transformDirtyFrames, dirtyTransforms);
                     markDirty(index, &RenderableRecord::cullingDirtyFrames, dirtyCullingObjects);
                     changedBatches.push_back(record.batchIndex);
@@ -685,6 +773,10 @@
                     }
                 }
                 if (materialChanged) {
+                    if (record.batchIndex < instanceBatches.size() &&
+                        instanceBatches[record.batchIndex].castShadow) {
+                        appendDirtyShadowBounds(shadowBounds(model));
+                    }
                     markDirty(index, &RenderableRecord::materialDirtyFrames, dirtyMaterials);
                 }
             }
@@ -699,9 +791,10 @@
                     for (std::size_t index : sceneGpu.batchRenderableIndices[batchIndex]) {
                         const RenderableRecord& record = renderables[index];
                         if (!readRegistry.has<Transform>(record.entity)) continue;
-                        const AABB worldBounds = record.localBounds.transformed(instanceModels[index].model);
+                        const glm::mat4 instanceModel = modelFromInstance(instanceModels[index]);
+                        const AABB worldBounds = record.localBounds.transformed(instanceModel);
                         if (record.grassInstance != std::numeric_limits<std::size_t>::max()) {
-                            const glm::mat4& model = instanceModels[index].model;
+                            const glm::mat4& model = instanceModel;
                             const float scale = std::max(glm::length(glm::vec3{model[0]}),
                                                          glm::length(glm::vec3{model[2]}));
                             deformationExpansion = std::max(deformationExpansion,
@@ -776,6 +869,8 @@
             }
             const glm::mat4 viewProjection = cameraController.camera()->projectionMatrix().native() * cameraController.camera()->viewMatrix().native();
             std::memcpy(data.viewProjection.data, &viewProjection, sizeof(viewProjection));
+            data.cameraPosition = {cameraController.camera()->position().x(), cameraController.camera()->position().y(),
+                                   cameraController.camera()->position().z(), 1.0F};
             data.objectCount = static_cast<uint32_t>(gpuObjects.size());
             data.maxDrawCount = data.objectCount;
             data.hizMipCount = hiZBuffer.mipCount();
@@ -788,7 +883,10 @@
             data.cameraCut = hiZValid ? 0u : 1u;
             data.shadowPass = 0;
             data.enableFrustumCulling = optimizationFeatures.gpuCulling ? 1u : 0u;
+            data.drawCategory = 0;
             cullingUniformBuffers[frame].update(&data, sizeof(data));
+            data.drawCategory = 1;
+            foliageCullingUniformBuffers[frame].update(&data, sizeof(data));
         }
 
         void updateSceneCullingUniformBuffer(const uint32_t frame) const {
@@ -802,13 +900,17 @@
                                     Degrees{cameraController.editorPitch()});
             const glm::mat4 viewProjection = sceneCamera.projectionMatrix().native() * sceneCamera.viewMatrix().native();
             std::memcpy(data.viewProjection.data, &viewProjection, sizeof(viewProjection));
+            data.cameraPosition = {sceneCamera.position().x(), sceneCamera.position().y(), sceneCamera.position().z(), 1.0F};
             data.objectCount = static_cast<uint32_t>(gpuObjects.size());
             data.maxDrawCount = data.objectCount;
             data.enableOcclusionCulling = 0;
             data.enableFrustumCulling = optimizationFeatures.gpuCulling ? 1U : 0U;
             data.cameraCut = 1;
             data.shadowPass = 0;
+            data.drawCategory = 0;
             sceneCullingUniformBuffers[frame].update(&data, sizeof(data));
+            data.drawCategory = 1;
+            sceneFoliageCullingUniformBuffers[frame].update(&data, sizeof(data));
         }
 
         void updateShadowCullingUniformBuffer(const uint32_t frame) const {
@@ -817,6 +919,7 @@
             Culling::CullingUniformData data{};
             const glm::mat4 lightViewProjection = lightSpaceMatrix().native();
             std::memcpy(data.viewProjection.data, &lightViewProjection, sizeof(lightViewProjection));
+            data.cameraPosition = {0.0F, 0.0F, 0.0F, 1.0F};
             data.objectCount = static_cast<uint32_t>(gpuObjects.size());
             data.maxDrawCount = data.objectCount;
             // Shadow culling uses only the light frustum. Camera Hi-Z cannot safely
@@ -826,6 +929,7 @@
             data.cameraCut = 1;
             data.shadowPass = 1;
             data.enableFrustumCulling = optimizationFeatures.gpuCulling ? 1u : 0u;
+            data.drawCategory = 2;
             shadowCullingUniformBuffers[frame].update(&data, sizeof(data));
         }
 

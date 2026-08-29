@@ -15,6 +15,15 @@ void appendDraw(CullingObjectData objectData)
 
     IndexedDrawCommand command;
     command.indexCount = objectData.indexCount;
+    if (culling.shadowPass == 0 && objectData.lod1IndexCount != 0)
+    {
+        float3 center = (objectData.localAabbMin.xyz + objectData.localAabbMax.xyz) * 0.5;
+        float distanceToCamera = length(center - culling.cameraPosition.xyz);
+        if (distanceToCamera >= objectData.lod2Distance && objectData.lod2IndexCount != 0)
+            command.indexCount = objectData.lod2IndexCount;
+        else if (distanceToCamera >= objectData.lod1Distance)
+            command.indexCount = objectData.lod1IndexCount;
+    }
     command.instanceCount = objectData.instanceCount;
     command.firstIndex = objectData.firstIndex;
     command.vertexOffset = int(objectData.vertexOffset);
@@ -111,6 +120,8 @@ void main(uint3 dispatchThreadId : SV_DispatchThreadID)
 
     CullingObjectData objectData = objects[objectIndex];
     if (culling.shadowPass != 0 && objectData.castShadow == 0)
+        return;
+    if (culling.drawCategory != 2 && objectData.twoSided != culling.drawCategory)
         return;
     if (culling.enableFrustumCulling == 0)
     {

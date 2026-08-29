@@ -32,7 +32,7 @@ namespace Engine {
         std::shared_ptr<const Mesh> mesh;
         PBRMaterial material{};
         std::vector<TerrainGrassInstance> instances;
-        bool castShadow{false};
+        bool castShadow{true};
 
         // Runtime-only acceleration structure used for sphere/grass overlap.
         mutable std::unordered_map<std::int64_t, std::vector<std::size_t>> spatialCells;

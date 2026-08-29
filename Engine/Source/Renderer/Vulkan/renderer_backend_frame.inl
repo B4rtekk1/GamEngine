@@ -57,6 +57,15 @@
             shadowClipUpdateMask = updateVirtualShadowClipmaps(
                 cameraController.camera()->position(), shadowClipMatrices,
                 lastShadowCameraPosition, lastShadowLightDirection, shadowClipmapsValid);
+            if (optimizationFeatures.shadows && hasShadowCasters) {
+                shadowPass.preparePages(
+                    shadowClipMatrices,
+                    cameraController.camera()->projectionMatrix() *
+                        cameraController.camera()->viewMatrix(),
+                    gpuObjects, dirtyShadowObjects, currentFrame);
+            } else {
+                shadowPass.invalidateCache();
+            }
             const UniformBufferObject data{
                 cameraController.camera()->viewMatrix(), cameraController.camera()->projectionMatrix(),
                 shadowClipMatrices,
@@ -81,6 +90,14 @@
                 sceneCamera.position(), sceneShadowClipMatrices,
                 lastSceneShadowCameraPosition, lastSceneShadowLightDirection,
                 sceneShadowClipmapsValid);
+            if (optimizationFeatures.shadows && hasShadowCasters) {
+                sceneDescriptorPass.preparePages(
+                    sceneShadowClipMatrices,
+                    sceneCamera.projectionMatrix() * sceneCamera.viewMatrix(),
+                    gpuObjects, dirtyShadowObjects, currentFrame);
+            } else {
+                sceneDescriptorPass.invalidateCache();
+            }
             const UniformBufferObject data{
                 sceneCamera.viewMatrix(), sceneCamera.projectionMatrix(),
                 sceneShadowClipMatrices,
@@ -152,7 +169,7 @@
                 shadowPass.descriptorSet(currentFrame),
                 shadowCullingPasses[currentFrame],
                 shadowIndirectDraws[currentFrame],
-                optimizationFeatures.shadows
+                optimizationFeatures.shadows && hasShadowCasters
                     ? static_cast<std::uint32_t>(gpuObjects.size())
                     : 0u);
 
@@ -167,12 +184,14 @@
                     sceneDescriptorPass.descriptorSet(currentFrame),
                     shadowCullingPasses[currentFrame],
                     shadowIndirectDraws[currentFrame],
-                    optimizationFeatures.shadows
+                    optimizationFeatures.shadows && hasShadowCasters
                         ? static_cast<std::uint32_t>(gpuObjects.size())
                         : 0u);
             }
 
             gpuCullingPasses[currentFrame].record(
+                commandBuffer, static_cast<std::uint32_t>(gpuObjects.size()));
+            foliageGpuCullingPasses[currentFrame].record(
                 commandBuffer, static_cast<std::uint32_t>(gpuObjects.size()));
 
             // Never sample or resolve the multisampled depth attachment for
@@ -185,6 +204,8 @@
                     shadowPass.descriptorSet(currentFrame), vertexBuffer.handle(),
                     instanceBuffers[currentFrame].handle(), indexBuffer.handle());
                 ForwardPass::draw(commandBuffer, indirectDraws[currentFrame]);
+                hiZDepthPrepass.drawFoliage(commandBuffer, shadowPass.descriptorSet(currentFrame),
+                                             foliageIndirectDraws[currentFrame]);
                 ForwardPass::end(commandBuffer);
 
                 VkImageMemoryBarrier2 depthReady{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2};
@@ -212,6 +233,8 @@
                 shadowPass.descriptorSet(currentFrame), vertexBuffer.handle(),
                 instanceBuffers[currentFrame].handle(), indexBuffer.handle());
             ForwardPass::draw(commandBuffer, indirectDraws[currentFrame]);
+            forwardPass.drawFoliage(commandBuffer, shadowPass.descriptorSet(currentFrame),
+                                    foliageIndirectDraws[currentFrame]);
             // Fill the background before drawing particles. Otherwise the
             // skybox can overwrite transparent particle fragments in the sky.
             skyPass.record(commandBuffer, currentFrame);
@@ -237,12 +260,16 @@
                 // which are visible from the editor camera.
                 sceneGpuCullingPasses[currentFrame].record(
                     commandBuffer, static_cast<std::uint32_t>(gpuObjects.size()));
+                sceneFoliageGpuCullingPasses[currentFrame].record(
+                    commandBuffer, static_cast<std::uint32_t>(gpuObjects.size()));
 
                 forwardPass.begin(
                     commandBuffer, sceneViewportFramebuffer, sceneViewportTarget.extent(),
                     sceneDescriptorPass.descriptorSet(currentFrame), vertexBuffer.handle(),
                     instanceBuffers[currentFrame].handle(), indexBuffer.handle());
                 ForwardPass::draw(commandBuffer, sceneIndirectDraws[currentFrame]);
+                forwardPass.drawFoliage(commandBuffer, sceneDescriptorPass.descriptorSet(currentFrame),
+                                        sceneFoliageIndirectDraws[currentFrame]);
                 sceneSkyPass.record(commandBuffer, currentFrame);
                 if (particleSystem) {
                     Camera sceneCamera{Degrees{60.0F},
@@ -632,11 +659,17 @@
             if (!acquireFrameImage(imageIndex)) { return; }
 
             vkResetCommandBuffer(commandBuffers[currentFrame], 0);
+            updateRenderableBuffers();
+            // Scene View is deliberately not rendered in play mode. Its cache
+            // cannot consume this frame's dirty list, so discard it lazily;
+            // the active game-view cache is updated page-by-page below.
+            if (!sceneViewportActive && !dirtyShadowObjects.empty()) {
+                sceneDescriptorPass.invalidateCache();
+            }
             updateUniformBuffer(currentFrame);
             if (sceneViewportActive) {
                 updateSceneViewportUniformBuffer(currentFrame);
             }
-            updateRenderableBuffers();
             updateParticleSystemForFrame();
             updateCullingUniformBuffer(currentFrame);
             if (sceneViewportActive) {
