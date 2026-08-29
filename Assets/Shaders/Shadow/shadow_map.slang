@@ -14,6 +14,9 @@ struct ShadowVertexInput
     [[vk::location(2)]] float2 texCoord : TEXCOORD0;
     [[vk::location(4)]] float4x4 instanceModel : INSTANCE_MODEL;
     [[vk::location(8)]] uint materialIndex : MATERIAL_INDEX;
+    [[vk::location(10)]] float4 normalColumn0 : NORMAL_COLUMN0;
+    [[vk::location(11)]] float4 normalColumn1 : NORMAL_COLUMN1;
+    [[vk::location(13)]] float4 grassDeformation : GRASS_DEFORMATION;
 };
 
 struct ShadowVertexOutput
@@ -27,7 +30,14 @@ struct ShadowVertexOutput
 ShadowVertexOutput vertexMain(ShadowVertexInput input, uint instanceIndex : SV_InstanceID)
 {
     ShadowVertexOutput output;
-    output.position = mul(mul(float4(input.position, 1.0), input.instanceModel),
+    float3 localPosition = input.position;
+    float normalizedHeight = clamp((input.position.y - input.normalColumn0.w) *
+                                   input.normalColumn1.w, 0.0, 1.0);
+    float bendWeight = normalizedHeight * normalizedHeight * input.grassDeformation.z;
+    float grassHeight = input.normalColumn1.w > 0.0 ? 1.0 / input.normalColumn1.w : 0.0;
+    localPosition.xz += input.grassDeformation.xy * bendWeight * grassHeight * 0.8;
+    localPosition.y -= bendWeight * normalizedHeight * grassHeight * 0.55;
+    output.position = mul(mul(float4(localPosition, 1.0), input.instanceModel),
                           pushConstants.lightSpace);
     output.texCoord = input.texCoord;
     output.materialIndex = instanceIndex * frame.materialSlots + input.materialIndex;

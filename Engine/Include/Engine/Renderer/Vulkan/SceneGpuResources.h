@@ -48,7 +48,6 @@ namespace Engine {
         std::unordered_map<Entity, std::size_t> renderableIndices;
         std::unordered_map<Entity, std::vector<std::size_t>> grassRenderableIndices;
         std::vector<RendererInstanceData> instanceModels;
-        std::vector<glm::mat4> shadowInstanceModels;
         std::vector<GPUMaterialData> materials;
         std::uint32_t materialSlots{1};
         std::uint64_t lastTransformRevision = std::numeric_limits<std::uint64_t>::max();

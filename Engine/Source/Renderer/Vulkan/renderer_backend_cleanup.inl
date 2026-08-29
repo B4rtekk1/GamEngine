@@ -26,9 +26,6 @@
                 for (Buffer& buffer : instanceBuffers) {
                     buffer.destroy();
                 }
-                for (Buffer& buffer : shadowInstanceBuffers) {
-                    buffer.destroy();
-                }
                 for (Buffer& buffer : materialBuffers) {
                     buffer.destroy();
                 }

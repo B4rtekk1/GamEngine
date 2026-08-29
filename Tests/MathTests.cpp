@@ -127,6 +127,15 @@ TEST(Mat4AndQuat, BuildAndApplyTransforms) {
     ExpectVec4Near(transform * Engine::Vec4{1.0F, 1.0F, 1.0F, 1.0F}, 3.0F, 3.0F, 4.0F, 1.0F);
 }
 
+TEST(Mat4, UsesVulkanZeroToOneDepthRange) {
+    const auto projection = Engine::Mat4::ortho(-1.0F, 1.0F, -1.0F, 1.0F,
+                                                 1.0F, 11.0F);
+    const auto nearPoint = projection * Engine::Vec4{0.0F, 0.0F, -1.0F, 1.0F};
+    const auto farPoint = projection * Engine::Vec4{0.0F, 0.0F, -11.0F, 1.0F};
+    EXPECT_NEAR(nearPoint.z() / nearPoint.w(), 0.0F, 1.0e-5F);
+    EXPECT_NEAR(farPoint.z() / farPoint.w(), 1.0F, 1.0e-5F);
+}
+
 TEST(TransformAndBounds, ProduceExpectedMatricesAndBounds) {
     Engine::Transform transform{};
     transform.position = {10.0F, -2.0F, 5.0F};

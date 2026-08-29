@@ -12,8 +12,6 @@
 #include "backends/imgui_impl_vulkan.h"
 #include "imgui.h"
 
-#define GLM_FORCE_RADIANS
-#define GLM_FORCE_DEPTH_ZERO_TO_ONE
 #include <glm/glm.hpp>
 
 #include "Engine/Renderer/Vulkan/msaa.h"
@@ -139,7 +137,6 @@ namespace Engine {
               renderables(sceneGpu.renderables),
               instanceBatches(sceneGpu.instanceBatches),
               instanceModels(sceneGpu.instanceModels),
-              shadowInstanceModels(sceneGpu.shadowInstanceModels),
               materials(sceneGpu.materials),
               materialSlots(sceneGpu.materialSlots),
               lastTransformRevision(sceneGpu.lastTransformRevision),
@@ -343,9 +340,6 @@ namespace Engine {
             for (Buffer &buffer: instanceBuffers) {
                 buffer.destroy();
             }
-            for (Buffer &buffer: shadowInstanceBuffers) {
-                buffer.destroy();
-            }
             for (Buffer &buffer: materialBuffers) {
                 buffer.destroy();
             }
@@ -365,7 +359,6 @@ namespace Engine {
             renderables.clear();
             instanceBatches.clear();
             instanceModels.clear();
-            shadowInstanceModels.clear();
             materials.clear();
             for (auto &indices: dirtyTransforms) {
                 indices.clear();
@@ -472,7 +465,6 @@ namespace Engine {
             indexBuffer.destroy();
             vertexBuffer.destroy();
             for (Buffer &buffer: instanceBuffers) { buffer.destroy(); }
-            for (Buffer &buffer: shadowInstanceBuffers) { buffer.destroy(); }
             for (Buffer &buffer: materialBuffers) { buffer.destroy(); }
             for (Texture2D &texture: materialTextures) { texture.destroy(); }
             materialTextures.clear();
@@ -482,7 +474,6 @@ namespace Engine {
             renderables.clear();
             instanceBatches.clear();
             instanceModels.clear();
-            shadowInstanceModels.clear();
             materials.clear();
             for (auto &indices: dirtyTransforms) { indices.clear(); }
             for (auto &indices: dirtyMaterials) { indices.clear(); }

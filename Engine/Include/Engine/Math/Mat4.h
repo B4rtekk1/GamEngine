@@ -35,27 +35,25 @@ namespace Engine {
         /**
          * @brief Returns a right-handed orthographic projection matrix.
          *
-         * The depth range follows the GLM configuration in effect when this header
-         * is included (use @c GLM_FORCE_DEPTH_ZERO_TO_ONE for Vulkan).
+         * Uses Vulkan's right-handed zero-to-one clip-space depth range.
          */
         [[nodiscard]] static Mat4 ortho(const float left, const float right,
                                         const float bottom, const float top,
                                         const float nearPlane, const float farPlane) noexcept {
-            return Mat4{glm::ortho(left, right, bottom, top, nearPlane, farPlane)};
+            return Mat4{glm::orthoRH_ZO(left, right, bottom, top, nearPlane, farPlane)};
         }
 
         /**
          * @brief Returns a perspective projection matrix.
          *
-         * The depth range follows the GLM configuration in effect when this header
-         * is included (use @c GLM_FORCE_DEPTH_ZERO_TO_ONE for Vulkan).
+         * Uses Vulkan's right-handed zero-to-one clip-space depth range.
          */
         [[nodiscard]] static Mat4 perspective(const Radians verticalFov,
                                               const float aspectRatio,
                                               const float nearPlane,
                                               const float farPlane) noexcept {
             return Mat4{
-                glm::perspective(
+                glm::perspectiveRH_ZO(
                     verticalFov.value(), aspectRatio, nearPlane, farPlane)
             };
         }

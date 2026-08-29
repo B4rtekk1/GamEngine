@@ -142,6 +142,11 @@ bool ComponentsPanel::draw(Engine::ScenePreset &scene, const Engine::Entity sele
         if (scene.editor().has<Engine::TerrainGrassComponent>(selected)) {
             const auto& grass = scene.editor().get<Engine::TerrainGrassComponent>(selected);
             ImGui::Text("Grass instances: %zu", grass.instances.size());
+            bool castGrassShadow = grass.castShadow;
+            if (ImGui::Checkbox("Cast Shadows##terrain-grass", &castGrassShadow)) {
+                scene.editor().modify<Engine::TerrainGrassComponent>(selected,
+                    [&](auto& component) { component.castShadow = castGrassShadow; });
+            }
             if (!grass.instances.empty() && ImGui::Button("Clear grass")) {
                 auto cleared = grass;
                 cleared.instances.clear();
@@ -149,7 +154,7 @@ bool ComponentsPanel::draw(Engine::ScenePreset &scene, const Engine::Entity sele
                 scene.editor().add<Engine::TerrainGrassComponent>(selected, std::move(cleared));
             }
             ImGui::SameLine();
-            ImGui::TextDisabled("GPU instanced, shadows off by default");
+            ImGui::TextDisabled("GPU instanced virtual shadows");
             if (!grass.instances.empty() && ImGui::Button("Reset trampled grass")) {
                 scene.editor().modify<Engine::TerrainGrassComponent>(selected, [](auto& component) {
                     for (auto& instance : component.instances) {

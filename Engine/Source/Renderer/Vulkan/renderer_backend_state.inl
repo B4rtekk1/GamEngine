@@ -48,6 +48,17 @@
         // A descriptor-compatible pass for Scene View. It owns an independent
         // per-frame camera UBO while reusing the exact forward material layout.
         ShadowPass sceneDescriptorPass;
+        std::array<Mat4, ShadowMap::ClipLevelCount> shadowClipMatrices{};
+        std::array<Mat4, ShadowMap::ClipLevelCount> sceneShadowClipMatrices{};
+        Vec3 lastShadowCameraPosition{};
+        Vec3 lastSceneShadowCameraPosition{};
+        Vec3 lastShadowLightDirection{};
+        Vec3 lastSceneShadowLightDirection{};
+        std::uint32_t shadowClipUpdateMask{0xFu};
+        std::uint32_t sceneShadowClipUpdateMask{0xFu};
+        std::uint64_t shadowClipFrameIndex{0};
+        bool shadowClipmapsValid{false};
+        bool sceneShadowClipmapsValid{false};
         SkyPass sceneSkyPass;
         Scene& scene;
         Registry& registry;
@@ -61,7 +72,6 @@
         std::vector<RenderableRecord>& renderables;
         std::vector<InstanceBatch>& instanceBatches;
         std::vector<RendererInstanceData>& instanceModels;
-        std::vector<glm::mat4>& shadowInstanceModels;
         std::vector<GPUMaterialData>& materials;
         std::uint32_t& materialSlots;
         std::uint64_t& lastTransformRevision;
@@ -76,7 +86,6 @@
         Buffer vertexBuffer;
         Buffer indexBuffer;
         std::array<Buffer, MAX_FRAMES_IN_FLIGHT> instanceBuffers;
-        std::array<Buffer, MAX_FRAMES_IN_FLIGHT> shadowInstanceBuffers;
         std::array<Buffer, MAX_FRAMES_IN_FLIGHT> materialBuffers;
         std::array<Buffer, MAX_FRAMES_IN_FLIGHT> uniformBuffers;
         std::array<Buffer, MAX_FRAMES_IN_FLIGHT> sceneUniformBuffers;

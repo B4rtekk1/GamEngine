@@ -54,8 +54,12 @@
                                                     Degrees{transform.rotation.x()});
 
             const DirectionalLight light = directionalLight();
+            shadowClipUpdateMask = updateVirtualShadowClipmaps(
+                cameraController.camera()->position(), shadowClipMatrices,
+                lastShadowCameraPosition, lastShadowLightDirection, shadowClipmapsValid);
             const UniformBufferObject data{
-                cameraController.camera()->viewMatrix(), cameraController.camera()->projectionMatrix(), lightSpaceMatrix(),
+                cameraController.camera()->viewMatrix(), cameraController.camera()->projectionMatrix(),
+                shadowClipMatrices,
                 Vec4{cameraController.camera()->position().x(), cameraController.camera()->position().y(),
                      cameraController.camera()->position().z(), 1.0F},
                 Vec4{light.direction.x(), light.direction.y(), light.direction.z(), light.intensity},
@@ -65,7 +69,7 @@
             uniformBuffers[frame].update(&data, sizeof(data));
         }
 
-        void updateSceneViewportUniformBuffer(const uint32_t frame) const {
+        void updateSceneViewportUniformBuffer(const uint32_t frame) {
             const float aspect = static_cast<float>(sceneViewportTarget.extent().width) /
                                  static_cast<float>(sceneViewportTarget.extent().height);
             Camera sceneCamera{Degrees{60.0F}, aspect, 0.1F, 1000.0F};
@@ -73,8 +77,13 @@
             sceneCamera.setRotation(Degrees{cameraController.editorYaw()},
                                     Degrees{cameraController.editorPitch()});
             const DirectionalLight light = directionalLight();
+            sceneShadowClipUpdateMask = updateVirtualShadowClipmaps(
+                sceneCamera.position(), sceneShadowClipMatrices,
+                lastSceneShadowCameraPosition, lastSceneShadowLightDirection,
+                sceneShadowClipmapsValid);
             const UniformBufferObject data{
-                sceneCamera.viewMatrix(), sceneCamera.projectionMatrix(), lightSpaceMatrix(),
+                sceneCamera.viewMatrix(), sceneCamera.projectionMatrix(),
+                sceneShadowClipMatrices,
                 Vec4{sceneCamera.position().x(), sceneCamera.position().y(), sceneCamera.position().z(), 1.0F},
                 Vec4{light.direction.x(), light.direction.y(), light.direction.z(), light.intensity},
                 Vec4{light.color.r(), light.color.g(), light.color.b(), 1.0F},
@@ -138,8 +147,8 @@
             // pass so its image is transitioned from UNDEFINED to
             // SHADER_READ_ONLY_OPTIMAL before the descriptor is used.
             shadowPass.record(
-                commandBuffer, lightSpaceMatrix(), vertexBuffer.handle(),
-                shadowInstanceBuffers[currentFrame].handle(), indexBuffer.handle(),
+                commandBuffer, shadowClipMatrices, shadowClipUpdateMask, vertexBuffer.handle(),
+                instanceBuffers[currentFrame].handle(), indexBuffer.handle(),
                 shadowPass.descriptorSet(currentFrame),
                 shadowCullingPasses[currentFrame],
                 shadowIndirectDraws[currentFrame],
@@ -153,8 +162,8 @@
             // samples the shadow binding declared by the shared pipeline.
             if (renderSceneViewport) {
                 sceneDescriptorPass.record(
-                    commandBuffer, lightSpaceMatrix(), vertexBuffer.handle(),
-                    shadowInstanceBuffers[currentFrame].handle(), indexBuffer.handle(),
+                    commandBuffer, sceneShadowClipMatrices, sceneShadowClipUpdateMask,
+                    vertexBuffer.handle(), instanceBuffers[currentFrame].handle(), indexBuffer.handle(),
                     sceneDescriptorPass.descriptorSet(currentFrame),
                     shadowCullingPasses[currentFrame],
                     shadowIndirectDraws[currentFrame],
@@ -640,6 +649,7 @@
             submitAndPresentFrame(imageIndex);
 
             currentFrame = (currentFrame + 1) % MAX_FRAMES_IN_FLIGHT;
+            ++shadowClipFrameIndex;
         }
 
         void updateFpsCounter() {

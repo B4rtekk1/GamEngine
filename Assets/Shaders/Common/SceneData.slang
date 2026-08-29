@@ -2,7 +2,7 @@ struct RendererFrameData
 {
     float4x4 view;
     float4x4 projection;
-    float4x4 lightSpace;
+    float4x4 shadowClipMatrices[4];
     float4 cameraPosition;
     float4 lightDirectionIntensity;
     float4 lightColor;

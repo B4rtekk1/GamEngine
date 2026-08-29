@@ -2,6 +2,7 @@
 
 #include <cstdint>
 #include <limits>
+#include <array>
 
 #include <glm/glm.hpp>
 
@@ -11,7 +12,8 @@ namespace Engine {
     struct RendererUniformBufferObject {
         Mat4 view;
         Mat4 projection;
-        Mat4 lightSpace;
+        // Camera-centred directional-light clipmaps packed into a 2x2 atlas.
+        std::array<Mat4, 4> shadowClipMatrices{};
         Vec4 cameraPosition;
         Vec4 lightDirectionIntensity;
         Vec4 lightColor;

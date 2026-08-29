@@ -367,3 +367,64 @@
                 Vec3{1.0F, -1.0F, 1.0F});
             return lightProjection * lightView;
         }
+
+        std::uint32_t updateVirtualShadowClipmaps(
+            const Vec3& cameraPosition,
+            std::array<Mat4, ShadowMap::ClipLevelCount>& matrices,
+            Vec3& previousCameraPosition, Vec3& previousLightDirection,
+            bool& valid) const {
+            const DirectionalLight light = directionalLight();
+            const float cameraJump = valid
+                ? (cameraPosition - previousCameraPosition).length()
+                : std::numeric_limits<float>::max();
+            const float lightAgreement = valid
+                ? dot(light.direction, previousLightDirection)
+                : -1.0F;
+            const bool invalidate = !valid || cameraJump > 8.0F || lightAgreement < 0.9995F;
+            std::uint32_t updateMask = invalidate ? 0xFu : 0x1u;
+            if (!invalidate) {
+                if ((shadowClipFrameIndex & 1u) == 0) updateMask |= 0x2u;
+                if ((shadowClipFrameIndex & 3u) == 0) updateMask |= 0x4u;
+                if ((shadowClipFrameIndex & 7u) == 0) updateMask |= 0x8u;
+            }
+
+            constexpr std::array<float, 3> baseExtents{12.0F, 36.0F, 108.0F};
+            const float cameraSceneDistance = (cameraPosition - sceneCenter).length();
+            const float farExtent = std::max(324.0F,
+                (cameraSceneDistance + sceneRadius) * 1.1F);
+            const Vec3 direction = light.direction.normalized();
+            Vec3 up{0.0F, 1.0F, 0.0F};
+            if (std::abs(dot(direction, up)) > 0.98F) up = Vec3{0.0F, 0.0F, 1.0F};
+            const Vec3 right = cross(direction, up).normalized();
+            const Vec3 lightUp = cross(right, direction).normalized();
+
+            for (std::uint32_t level = 0; level < ShadowMap::ClipLevelCount; ++level) {
+                if ((updateMask & (1u << level)) == 0) continue;
+                const float extent = level < baseExtents.size() ? baseExtents[level] : farExtent;
+                const float worldUnitsPerTexel = extent * 2.0F /
+                    static_cast<float>(ShadowMap::TileResolution);
+                // Quantize the complete light-space origin.  Leaving the
+                // coordinate along the light direction unsnapped changes the
+                // depth encoding whenever the camera moves, which makes the
+                // sampled shadow silhouette appear to deform with the camera.
+                const float snappedX = std::round(dot(cameraPosition, right) / worldUnitsPerTexel) *
+                                       worldUnitsPerTexel;
+                const float snappedY = std::round(dot(cameraPosition, lightUp) / worldUnitsPerTexel) *
+                                       worldUnitsPerTexel;
+                const float alongLight = std::round(dot(cameraPosition, direction) / worldUnitsPerTexel) *
+                                         worldUnitsPerTexel;
+                const Vec3 target = right * snappedX + lightUp * snappedY + direction * alongLight;
+                const float lightDistance = sceneRadius * 2.0F + extent;
+                const Mat4 lightView = Mat4::lookAt(target - direction * lightDistance,
+                                                    target, lightUp);
+                const Mat4 lightProjection = Mat4::scale(
+                    Mat4::ortho(-extent, extent, -extent, extent, 0.1F,
+                                sceneRadius * 4.0F + extent * 2.0F),
+                    Vec3{1.0F, -1.0F, 1.0F});
+                matrices[level] = lightProjection * lightView;
+            }
+            previousCameraPosition = cameraPosition;
+            previousLightDirection = light.direction;
+            valid = true;
+            return updateMask;
+        }

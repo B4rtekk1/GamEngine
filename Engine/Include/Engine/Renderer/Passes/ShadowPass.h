@@ -1,10 +1,12 @@
 #pragma once
 
 #include "Engine/Renderer/Vulkan/shadow_map.h"
+#include "Engine/Math/Mat4.h"
 
 #include <vulkan/vulkan.h>
 
 #include <cstdint>
+#include <array>
 #include <vector>
 
 namespace Engine {
@@ -38,7 +40,9 @@ namespace Engine {
 
         void destroy() noexcept;
 
-        void record(VkCommandBuffer commandBuffer, const Mat4 &lightSpace,
+        void record(VkCommandBuffer commandBuffer,
+                    const std::array<Mat4, ShadowMap::ClipLevelCount> &clipMatrices,
+                    std::uint32_t updateMask,
                     VkBuffer vertexBuffer, VkBuffer instanceBuffer, VkBuffer indexBuffer,
                     VkDescriptorSet sceneDescriptorSet,
                     const Culling::GPUCullingPass &cullingPass,
@@ -52,6 +56,8 @@ namespace Engine {
         [[nodiscard]] VkDescriptorSet descriptorSet(std::uint32_t frameIndex) const;
 
     private:
+        mutable bool atlasInitialized_{false};
+        mutable bool atlasContentValid_{false};
         VkDevice device_{VK_NULL_HANDLE};
         ShadowMap shadowMap_;
         VkDescriptorSetLayout descriptorSetLayout_{VK_NULL_HANDLE};

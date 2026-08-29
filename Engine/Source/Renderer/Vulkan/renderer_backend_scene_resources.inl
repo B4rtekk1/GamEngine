@@ -432,7 +432,6 @@
 
         void createInstanceBuffer() {
             instanceModels.resize(renderables.size());
-            shadowInstanceModels.resize(renderables.size());
             materials.resize(renderables.size() * materialSlots);
             updateRenderableBuffers();
             for (Buffer& buffer : instanceBuffers) {
@@ -443,16 +442,6 @@
                 if (!instanceModels.empty()) {
                     buffer.update(instanceModels.data(),
                                   sizeof(RendererInstanceData) * instanceModels.size());
-                }
-            }
-            for (Buffer& buffer : shadowInstanceBuffers) {
-                buffer.createHostVisible(vulkanDevice.physical(), device,
-                    sizeof(glm::mat4) * std::max<std::size_t>(1, shadowInstanceModels.size()),
-                    VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
-                    vulkanDevice.allocator());
-                if (!shadowInstanceModels.empty()) {
-                    buffer.update(shadowInstanceModels.data(),
-                                  sizeof(glm::mat4) * shadowInstanceModels.size());
                 }
             }
             for (Buffer& buffer : materialBuffers) {
@@ -547,9 +536,6 @@
             const uint8_t bit = frameBit(currentFrame);
             uploadDirtyIndices(DirtyIndexUploadRequest<RendererInstanceData>{
                 instanceBuffers[currentFrame], instanceModels,
-                &RenderableRecord::transformDirtyFrames, dirtyTransforms[currentFrame]});
-            uploadDirtyIndices(DirtyIndexUploadRequest<glm::mat4>{
-                shadowInstanceBuffers[currentFrame], shadowInstanceModels,
                 &RenderableRecord::transformDirtyFrames, dirtyTransforms[currentFrame]});
             clearDirtyIndices(&RenderableRecord::transformDirtyFrames,
                               dirtyTransforms[currentFrame], bit);
@@ -649,7 +635,6 @@
                 if (!optimizationFeatures.transformCaching ||
                     !record.hasCachedTransform || !sameTransform(record.cachedTransform, effectiveTransform) ||
                     grassInstance) {
-                    shadowInstanceModels[index] = model;
                     instanceModels[index].model = model;
                     const glm::mat3 normalMatrix = glm::transpose(glm::inverse(glm::mat3{model}));
                     const float meshHeight = record.localBounds.max.y() - record.localBounds.min.y();

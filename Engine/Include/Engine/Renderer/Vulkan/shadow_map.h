@@ -5,7 +5,10 @@
 namespace Engine {
     class ShadowMap final {
     public:
-        static constexpr uint32_t Resolution = 2048;
+        static constexpr uint32_t TileResolution = 1024;
+        static constexpr uint32_t TilesPerAxis = 2;
+        static constexpr uint32_t ClipLevelCount = 4;
+        static constexpr uint32_t Resolution = TileResolution * TilesPerAxis;
 
         ~ShadowMap();
 
@@ -20,6 +23,7 @@ namespace Engine {
         void destroy() noexcept;
 
         [[nodiscard]] VkFormat format() const noexcept { return format_; }
+        [[nodiscard]] VkImage image() const noexcept { return image_; }
         [[nodiscard]] VkImageView imageView() const noexcept { return imageView_; }
         [[nodiscard]] VkSampler sampler() const noexcept { return sampler_; }
         [[nodiscard]] VkRenderPass renderPass() const noexcept { return renderPass_; }

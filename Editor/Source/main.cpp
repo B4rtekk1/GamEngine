@@ -112,7 +112,11 @@ int main() {
             std::filesystem::path{GAMEENGINE_SOURCE_DIR} / "Assets"};
         Engine::ScriptSystem scriptSystem{Engine::ScriptRegistry::instance()};
         Engine::PhysicsSystem physicsSystem{};
-        Engine::Renderer renderer;
+        // The editor is the visual authoring path, so shadows must be active
+        // by default. The engine-level default stays conservative for clients
+        // which explicitly optimize for an unshadowed renderer.
+        Engine::Renderer renderer{Engine::RenderConfig{
+            .features = Engine::RenderFeatures{.shadows = true}}};
         renderer.initialize(scene, window);
         SceneHistory history;
         history.reset(scene);

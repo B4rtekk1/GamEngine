@@ -6,6 +6,7 @@
 #include "Engine/Renderer/Geometry/Vertex.h"
 #include "Engine/Renderer/Materials/MaterialBuffer.h"
 #include "Engine/Renderer/shader_loader.h"
+#include "Engine/Renderer/Vulkan/renderer_types.h"
 
 #include <glm/glm.hpp>
 
@@ -127,7 +128,7 @@ void ShadowPass::create(VkPhysicalDevice physicalDevice, VkDevice device,
 
         const VkVertexInputBindingDescription vertexBindings[] = {
             {0, sizeof(Vertex), VK_VERTEX_INPUT_RATE_VERTEX},
-            {1, sizeof(glm::mat4), VK_VERTEX_INPUT_RATE_INSTANCE},
+            {1, sizeof(RendererInstanceData), VK_VERTEX_INPUT_RATE_INSTANCE},
         };
         const VkVertexInputAttributeDescription attributes[] = {
             {0, 0, VK_FORMAT_R32G32B32_SFLOAT, offsetof(Vertex, position)},
@@ -137,6 +138,9 @@ void ShadowPass::create(VkPhysicalDevice physicalDevice, VkDevice device,
             {5, 1, VK_FORMAT_R32G32B32A32_SFLOAT, sizeof(glm::vec4)},
             {6, 1, VK_FORMAT_R32G32B32A32_SFLOAT, sizeof(glm::vec4) * 2},
             {7, 1, VK_FORMAT_R32G32B32A32_SFLOAT, sizeof(glm::vec4) * 3},
+            {10, 1, VK_FORMAT_R32G32B32A32_SFLOAT, offsetof(RendererInstanceData, normalColumn0)},
+            {11, 1, VK_FORMAT_R32G32B32A32_SFLOAT, offsetof(RendererInstanceData, normalColumn1)},
+            {13, 1, VK_FORMAT_R32G32B32A32_SFLOAT, offsetof(RendererInstanceData, grassDeformation)},
         };
         VkPipelineVertexInputStateCreateInfo vertexInput{
             VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO};
@@ -212,6 +216,8 @@ void ShadowPass::destroy() noexcept {
     descriptorSetLayout_ = VK_NULL_HANDLE;
     descriptorSets_.clear();
     shadowMap_.destroy();
+    atlasInitialized_ = false;
+    atlasContentValid_ = false;
     device_ = VK_NULL_HANDLE;
 }
 
@@ -219,24 +225,45 @@ VkDescriptorSet ShadowPass::descriptorSet(const std::uint32_t frameIndex) const 
     return descriptorSets_.at(frameIndex);
 }
 
-void ShadowPass::record(const VkCommandBuffer commandBuffer, const Mat4& lightSpace,
+void ShadowPass::record(const VkCommandBuffer commandBuffer,
+                        const std::array<Mat4, ShadowMap::ClipLevelCount>& clipMatrices,
+                        std::uint32_t updateMask,
                         const VkBuffer vertexBuffer, const VkBuffer instanceBuffer,
                         const VkBuffer indexBuffer, const VkDescriptorSet sceneDescriptorSet,
                         const Culling::GPUCullingPass& cullingPass,
                         const Culling::IndexedIndirectDrawCount& indirectDraw,
                         const std::uint32_t objectCount) const {
-    if (objectCount != 0) {
+    if (objectCount == 0) {
+        updateMask = 0;
+        atlasContentValid_ = false;
+    } else if (!atlasContentValid_) {
+        updateMask = (1u << ShadowMap::ClipLevelCount) - 1u;
+    }
+    if (objectCount != 0 && updateMask != 0) {
         cullingPass.record(commandBuffer, objectCount);
     }
+
+    VkImageMemoryBarrier2 atlasBarrier{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2};
+    atlasBarrier.srcStageMask = atlasInitialized_ ? VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT
+                                                  : VK_PIPELINE_STAGE_2_NONE;
+    atlasBarrier.srcAccessMask = atlasInitialized_ ? VK_ACCESS_2_SHADER_SAMPLED_READ_BIT : 0;
+    atlasBarrier.dstStageMask = VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT;
+    atlasBarrier.dstAccessMask = VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_READ_BIT |
+                                 VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
+    atlasBarrier.oldLayout = atlasInitialized_ ? VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL
+                                               : VK_IMAGE_LAYOUT_UNDEFINED;
+    atlasBarrier.newLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+    atlasBarrier.image = shadowMap_.image();
+    atlasBarrier.subresourceRange = {VK_IMAGE_ASPECT_DEPTH_BIT, 0, 1, 0, 1};
+    VkDependencyInfo atlasDependency{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
+    atlasDependency.imageMemoryBarrierCount = 1;
+    atlasDependency.pImageMemoryBarriers = &atlasBarrier;
+    vkCmdPipelineBarrier2(commandBuffer, &atlasDependency);
 
     VkRenderPassBeginInfo passInfo{VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO};
     passInfo.renderPass = shadowMap_.renderPass();
     passInfo.framebuffer = shadowMap_.framebuffer();
     passInfo.renderArea.extent = {ShadowMap::Resolution, ShadowMap::Resolution};
-    VkClearValue clear{};
-    clear.depthStencil = {1.0F, 0};
-    passInfo.clearValueCount = 1;
-    passInfo.pClearValues = &clear;
     vkCmdBeginRenderPass(commandBuffer, &passInfo, VK_SUBPASS_CONTENTS_INLINE);
     vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline_);
     vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS,
@@ -245,20 +272,27 @@ void ShadowPass::record(const VkCommandBuffer commandBuffer, const Mat4& lightSp
     constexpr VkDeviceSize offsets[] = {0, 0};
     vkCmdBindVertexBuffers(commandBuffer, 0, 2, vertexBuffers, offsets);
     vkCmdBindIndexBuffer(commandBuffer, indexBuffer, 0, VK_INDEX_TYPE_UINT32);
-    const VkViewport viewport{0.0F, 0.0F,
-        static_cast<float>(ShadowMap::Resolution), static_cast<float>(ShadowMap::Resolution),
-        0.0F, 1.0F};
-    const VkRect2D scissor{{0, 0}, {ShadowMap::Resolution, ShadowMap::Resolution}};
-    vkCmdSetViewport(commandBuffer, 0, 1, &viewport);
-    vkCmdSetScissor(commandBuffer, 0, 1, &scissor);
     vkCmdSetDepthBias(commandBuffer, DepthBiasConstant, 0.0F, DepthBiasSlope);
-    vkCmdPushConstants(commandBuffer, pipelineLayout_, VK_SHADER_STAGE_VERTEX_BIT,
-                       0, sizeof(lightSpace), &lightSpace);
-
-    if (objectCount != 0 && indirectDraw.valid()) {
-        indirectDraw.record(commandBuffer);
+    for (std::uint32_t level = 0; level < ShadowMap::ClipLevelCount; ++level) {
+        if ((updateMask & (1u << level)) == 0) continue;
+        const std::int32_t x = static_cast<std::int32_t>((level & 1u) * ShadowMap::TileResolution);
+        const std::int32_t y = static_cast<std::int32_t>(((level >> 1u) & 1u) * ShadowMap::TileResolution);
+        const VkRect2D tile{{x, y}, {ShadowMap::TileResolution, ShadowMap::TileResolution}};
+        const VkClearAttachment clear{VK_IMAGE_ASPECT_DEPTH_BIT, 0, {.depthStencil = {1.0F, 0}}};
+        const VkClearRect clearRect{tile, 0, 1};
+        vkCmdClearAttachments(commandBuffer, 1, &clear, 1, &clearRect);
+        const VkViewport viewport{static_cast<float>(x), static_cast<float>(y),
+            static_cast<float>(ShadowMap::TileResolution), static_cast<float>(ShadowMap::TileResolution),
+            0.0F, 1.0F};
+        vkCmdSetViewport(commandBuffer, 0, 1, &viewport);
+        vkCmdSetScissor(commandBuffer, 0, 1, &tile);
+        vkCmdPushConstants(commandBuffer, pipelineLayout_, VK_SHADER_STAGE_VERTEX_BIT,
+                           0, sizeof(Mat4), &clipMatrices[level]);
+        if (objectCount != 0 && indirectDraw.valid()) indirectDraw.record(commandBuffer);
     }
     vkCmdEndRenderPass(commandBuffer);
+    atlasInitialized_ = true;
+    if (objectCount != 0) atlasContentValid_ = true;
 }
 
 } // namespace Engine

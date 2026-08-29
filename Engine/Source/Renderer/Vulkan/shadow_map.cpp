@@ -19,6 +19,9 @@ namespace Engine {
         }
 
         VkFormat findDepthFormat(VkPhysicalDevice physicalDevice) {
+            // The light-space depth range shifts with the clipmap origin.
+            // D32 keeps comparisons stable while the camera moves; D16 can
+            // visibly quantize the shadow edge as that origin is rebased.
             constexpr std::array formats{VK_FORMAT_D32_SFLOAT, VK_FORMAT_D16_UNORM};
             for (const VkFormat format: formats) {
                 VkFormatProperties properties{};
@@ -101,11 +104,11 @@ namespace Engine {
 
             VkAttachmentDescription depth{.samples = VK_SAMPLE_COUNT_1_BIT};
             depth.format = format_;
-            depth.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+            depth.loadOp = VK_ATTACHMENT_LOAD_OP_LOAD;
             depth.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
             depth.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
             depth.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
-            depth.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+            depth.initialLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
             depth.finalLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
             VkAttachmentReference depthRef{0, VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL};
             VkSubpassDescription subpass{};

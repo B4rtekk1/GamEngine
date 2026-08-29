@@ -23,12 +23,11 @@ struct ForwardVertexOutput
 {
     float4 position : SV_Position;
     [[vk::location(0)]] float3 color;
-    [[vk::location(1)]] float4 lightSpacePosition;
-    [[vk::location(2)]] float3 worldPosition;
-    [[vk::location(3)]] float3 normal;
-    [[vk::location(4)]] nointerpolation uint materialIndex;
-    [[vk::location(5)]] float2 texCoord;
-    [[vk::location(6)]] float4 tangent;
+    [[vk::location(1)]] float3 worldPosition;
+    [[vk::location(2)]] float3 normal;
+    [[vk::location(3)]] nointerpolation uint materialIndex;
+    [[vk::location(4)]] float2 texCoord;
+    [[vk::location(5)]] float4 tangent;
 };
 
 [shader("vertex")]
@@ -56,7 +55,6 @@ ForwardVertexOutput vertexMain(ForwardVertexInput input, uint instanceIndex : SV
     output.color = input.color;
     output.worldPosition = worldPosition.xyz;
     output.normal = mul(localNormal, normalMatrix);
-    output.lightSpacePosition = mul(worldPosition, frame.lightSpace);
     output.materialIndex = instanceIndex * frame.materialSlots + input.materialIndex;
     output.texCoord = input.texCoord;
     output.tangent = float4(mul(input.tangent.xyz, normalMatrix), input.tangent.w);
@@ -70,12 +68,11 @@ ForwardVertexOutput vertexMain(ForwardVertexInput input, uint instanceIndex : SV
 struct ForwardFragmentInput
 {
     [[vk::location(0)]] float3 color;
-    [[vk::location(1)]] float4 lightSpacePosition;
-    [[vk::location(2)]] float3 worldPosition;
-    [[vk::location(3)]] float3 normal;
-    [[vk::location(4)]] nointerpolation uint materialIndex;
-    [[vk::location(5)]] float2 texCoord;
-    [[vk::location(6)]] float4 tangent;
+    [[vk::location(1)]] float3 worldPosition;
+    [[vk::location(2)]] float3 normal;
+    [[vk::location(3)]] nointerpolation uint materialIndex;
+    [[vk::location(4)]] float2 texCoord;
+    [[vk::location(5)]] float4 tangent;
     bool isFrontFace : SV_IsFrontFace;
 };
 
@@ -155,7 +152,7 @@ ForwardFragmentOutput fragmentMain(ForwardFragmentInput input)
                       max(4.0 * nDotV * nDotL, 0.0001);
     float3 diffuse = (1.0 - fresnel) * (1.0 - metallic) * albedo / PBR_PI;
     float shadow = frame.shadowEnabled != 0
-        ? samplePcfShadow(shadowMap, input.lightSpacePosition) : 0.0;
+        ? sampleVirtualShadow(shadowMap, input.worldPosition, frame.shadowClipMatrices) : 0.0;
     float3 direct = (diffuse + specular) * frame.lightDirectionIntensity.w *
                     frame.lightColor.rgb * nDotL * (1.0 - shadow);
     float3 color = 0.9 * albedo *
