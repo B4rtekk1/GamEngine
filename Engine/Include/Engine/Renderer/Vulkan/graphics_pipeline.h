@@ -35,10 +35,8 @@ namespace Engine {
         /// Layout required after rendering completes.
         VkImageLayout colorFinalLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
 
-        /// Vertex shader source path.
-        std::filesystem::path vertexShader;
-        /// Fragment shader source path.
-        std::filesystem::path fragmentShader;
+        /// SPIR-V module containing both vertexMain and fragmentMain.
+        std::filesystem::path shader;
         /// Optional asset manager used to load shader sources.
         Assets::AssetManager *assetManager = nullptr;
 

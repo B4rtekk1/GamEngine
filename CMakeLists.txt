@@ -237,47 +237,58 @@ target_link_libraries(Editor PRIVATE DearImGui Engine SDL3::SDL3 Vulkan::Vulkan)
 gameengine_copy_runtime_dependencies(Editor)
 target_compile_definitions(Editor PRIVATE GAMEENGINE_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
 
-find_program(GLSLANG_VALIDATOR NAMES glslangValidator)
-find_program(GLSLC NAMES glslc)
+find_program(SLANGC NAMES slangc)
 
 set(SHADER_OUT_DIR ${CMAKE_BINARY_DIR}/shaders)
 file(MAKE_DIRECTORY ${SHADER_OUT_DIR})
 set(SHADER_OUTPUTS)
 
-set(SHADER_SOURCES
-        Assets/Shaders/Library/pbr.vert
-        Assets/Shaders/Library/pbr.frag
-        Assets/Shaders/Library/outline.vert
-        Assets/Shaders/Library/outline.frag
-        Assets/Shaders/shadow.vert
-        Assets/Shaders/shadow.frag
-        Assets/Shaders/skybox.vert
-        Assets/Shaders/skybox.frag
-        Assets/Shaders/tonemap.vert
-        Assets/Shaders/tonemap.frag
-        Assets/Shaders/Culling/hiz_copy.comp
-        Assets/Shaders/Culling/hiz_reduce.comp
-        Assets/Shaders/Culling/hiz_cull.comp)
-list(APPEND SHADER_SOURCES
-        Assets/Shaders/Particles/particle_update.comp
-        Assets/Shaders/Particles/particle.vert
-        Assets/Shaders/Particles/particle.frag
-        Assets/Shaders/UI/ui.vert
-        Assets/Shaders/UI/ui.frag)
-foreach(SHADER_SOURCE IN LISTS SHADER_SOURCES)
-    get_filename_component(SHADER_NAME ${SHADER_SOURCE} NAME)
-    list(APPEND SHADER_OUTPUTS ${SHADER_OUT_DIR}/${SHADER_NAME}.spv)
-    if(GLSLC)
-        add_custom_command(OUTPUT ${SHADER_OUT_DIR}/${SHADER_NAME}.spv
-                COMMAND ${GLSLC} ${CMAKE_SOURCE_DIR}/${SHADER_SOURCE} -o ${SHADER_OUT_DIR}/${SHADER_NAME}.spv
-                DEPENDS ${CMAKE_SOURCE_DIR}/${SHADER_SOURCE})
-    elseif(GLSLANG_VALIDATOR)
-        add_custom_command(OUTPUT ${SHADER_OUT_DIR}/${SHADER_NAME}.spv
-                COMMAND ${GLSLANG_VALIDATOR} -V ${CMAKE_SOURCE_DIR}/${SHADER_SOURCE} -o ${SHADER_OUT_DIR}/${SHADER_NAME}.spv
-                DEPENDS ${CMAKE_SOURCE_DIR}/${SHADER_SOURCE})
-    else()
-        message(FATAL_ERROR "glslc not found install Vulkan SDK.")
+# Each graphics pipeline and compute pass has one source file. Graphics files
+# expose `vertexMain` and `fragmentMain` from the same SPIR-V module.
+set(SLANG_SHADER_SOURCES
+        Assets/Shaders/Culling/gpu_culling.slang
+        Assets/Shaders/Culling/hiz_initialize.slang
+        Assets/Shaders/Culling/hiz_reduce.slang
+        Assets/Shaders/Environment/skybox.slang
+        Assets/Shaders/Forward/forward_pbr.slang
+        Assets/Shaders/Forward/selection_outline.slang
+        Assets/Shaders/Particles/particle_billboard.slang
+        Assets/Shaders/Particles/particle_simulation.slang
+        Assets/Shaders/PostProcess/aces_tonemap.slang
+        Assets/Shaders/Samples/basic_pbr.slang
+        Assets/Shaders/Shadow/shadow_map.slang
+        Assets/Shaders/UI/canvas.slang)
+file(GLOB_RECURSE SLANG_MODULE_SOURCES CONFIGURE_DEPENDS
+        RELATIVE ${CMAKE_SOURCE_DIR}
+        Assets/Shaders/*.slang)
+list(REMOVE_ITEM SLANG_MODULE_SOURCES ${SLANG_SHADER_SOURCES})
+list(TRANSFORM SLANG_MODULE_SOURCES PREPEND "${CMAKE_SOURCE_DIR}/")
+
+foreach(SLANG_SHADER_SOURCE IN LISTS SLANG_SHADER_SOURCES)
+    get_filename_component(SLANG_SHADER_FILE ${SLANG_SHADER_SOURCE} NAME)
+    string(REGEX REPLACE "\\.slang$" "" SLANG_SHADER_NAME ${SLANG_SHADER_FILE})
+    set(SLANG_SHADER_OUTPUT ${SHADER_OUT_DIR}/${SLANG_SHADER_NAME}.spv)
+
+    if(NOT SLANGC)
+        message(FATAL_ERROR
+                "slangc is required to compile the engine shaders. Install the Slang compiler or Vulkan SDK with Slang support.")
     endif()
+
+    list(APPEND SHADER_OUTPUTS ${SLANG_SHADER_OUTPUT})
+    add_custom_command(OUTPUT ${SLANG_SHADER_OUTPUT}
+            COMMAND ${SLANGC}
+                    ${CMAKE_SOURCE_DIR}/${SLANG_SHADER_SOURCE}
+                    -target spirv
+                    -profile glsl_460
+                    -emit-spirv-directly
+                    -matrix-layout-row-major
+                    -I ${CMAKE_SOURCE_DIR}/Assets/Shaders
+                    -o ${SLANG_SHADER_OUTPUT}
+            DEPENDS
+                    ${CMAKE_SOURCE_DIR}/${SLANG_SHADER_SOURCE}
+                    ${SLANG_MODULE_SOURCES}
+            COMMENT "Compiling Slang shader ${SLANG_SHADER_SOURCE}"
+            VERBATIM)
 endforeach()
 
 add_custom_target(Shaders DEPENDS ${SHADER_OUTPUTS})

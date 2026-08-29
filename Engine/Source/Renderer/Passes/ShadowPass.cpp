@@ -105,13 +105,12 @@ void ShadowPass::create(VkPhysicalDevice physicalDevice, VkDevice device,
             vkUpdateDescriptorSets(device_, std::size(writes), writes, 0, nullptr);
         }
 
-        const auto vertexShader = Vkutil::loadShaderModule(device_, assets, "shaders/shadow.vert.spv");
-        const auto fragmentShader = Vkutil::loadShaderModule(device_, assets, "shaders/shadow.frag.spv");
+        const auto shader = Vkutil::loadShaderModule(device_, assets, "shaders/shadow_map.spv");
         const std::array stages{
             VkPipelineShaderStageCreateInfo{VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO, nullptr, 0,
-                VK_SHADER_STAGE_VERTEX_BIT, vertexShader.get(), "main", nullptr},
+                VK_SHADER_STAGE_VERTEX_BIT, shader.get(), "vertexMain", nullptr},
             VkPipelineShaderStageCreateInfo{VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO, nullptr, 0,
-                VK_SHADER_STAGE_FRAGMENT_BIT, fragmentShader.get(), "main", nullptr},
+                VK_SHADER_STAGE_FRAGMENT_BIT, shader.get(), "fragmentMain", nullptr},
         };
         const VkPushConstantRange pushConstantRange{
             VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(glm::mat4)};
@@ -156,7 +155,7 @@ void ShadowPass::create(VkPhysicalDevice physicalDevice, VkDevice device,
             VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO};
         rasterizer.polygonMode = VK_POLYGON_MODE_FILL;
         // The main pass renders glTF double-sided foliage. Its transparent
-        // pixels are already discarded by shadow.frag, so it must also cast
+        // pixels are already discarded by shadow_map::fragmentMain, so it must also cast
         // a shadow when the light sees the back of a leaf card.
         rasterizer.cullMode = VK_CULL_MODE_NONE;
         rasterizer.frontFace = VK_FRONT_FACE_CLOCKWISE;

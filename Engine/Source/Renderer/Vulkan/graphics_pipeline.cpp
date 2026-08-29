@@ -179,21 +179,17 @@ namespace Engine {
     }
 
     void GraphicsPipeline::createGraphicsPipeline(const GraphicsPipelineOptions &options) {
-        const auto vertexShader = (options.assetManager != nullptr)
-                                      ? Vkutil::loadShaderModule(device_, *options.assetManager, options.vertexShader)
-                                      : Vkutil::loadShaderModule(device_, options.vertexShader);
-        const auto fragmentShader = (options.assetManager != nullptr)
-                                        ? Vkutil::loadShaderModule(device_, *options.assetManager,
-                                                                   options.fragmentShader)
-                                        : Vkutil::loadShaderModule(device_, options.fragmentShader);
+        const auto shader = (options.assetManager != nullptr)
+                                ? Vkutil::loadShaderModule(device_, *options.assetManager, options.shader)
+                                : Vkutil::loadShaderModule(device_, options.shader);
         const std::array stages{
             VkPipelineShaderStageCreateInfo{
                 VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO, nullptr, 0, VK_SHADER_STAGE_VERTEX_BIT,
-                vertexShader.get(), "main",
+                shader.get(), "vertexMain",
             },
             VkPipelineShaderStageCreateInfo{
                 VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO, nullptr, 0, VK_SHADER_STAGE_FRAGMENT_BIT,
-                fragmentShader.get(), "main",
+                shader.get(), "fragmentMain",
             },
         };
 

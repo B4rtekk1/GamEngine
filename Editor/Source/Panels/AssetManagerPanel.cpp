@@ -43,7 +43,7 @@ AssetKind asset_kind(const std::filesystem::path& path) {
         return AssetKind::Model;
     if (ext == ".png" || ext == ".jpg" || ext == ".jpeg" || ext == ".tga" || ext == ".bmp" || ext == ".hdr")
         return AssetKind::Texture;
-    if (ext == ".vert" || ext == ".frag" || ext == ".comp" || ext == ".glsl" || ext == ".spv")
+    if (ext == ".vert" || ext == ".frag" || ext == ".comp" || ext == ".glsl" || ext == ".slang" || ext == ".spv")
         return AssetKind::Shader;
     if (ext == ".scene")
         return AssetKind::Scene;

@@ -95,8 +95,7 @@ void UIPipeline::create(const VkDevice device, const VkFormat colorFormat,
         options.colorLoadOp = VK_ATTACHMENT_LOAD_OP_LOAD;
         options.colorInitialLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
         options.colorFinalLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
-        options.vertexShader = "shaders/ui.vert.spv";
-        options.fragmentShader = "shaders/ui.frag.spv";
+        options.shader = "shaders/canvas.spv";
         options.assetManager = &assets;
         options.pushConstantSize = sizeof(ScreenData);
         options.pushConstantStages = VK_SHADER_STAGE_VERTEX_BIT;

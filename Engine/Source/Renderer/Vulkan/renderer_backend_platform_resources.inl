@@ -302,8 +302,7 @@
             options.depthFormat = depthBuffer.format();
             options.samples = msaa.sampleCount();
             options.existingRenderPass = forwardPass.renderPass();
-            options.vertexShader = "shaders/particle.vert.spv";
-            options.fragmentShader = "shaders/particle.frag.spv";
+            options.shader = "shaders/particle_billboard.spv";
             options.assetManager = &assetManager;
             options.cullMode = VK_CULL_MODE_NONE;
             options.depthWriteEnable = VK_FALSE;
@@ -332,7 +331,7 @@
                     throw std::runtime_error("Could not create particle compute pipeline layout");
                 }
                 particleComputePipeline = createComputePipeline(
-                    "shaders/particle_update.comp.spv", particleComputePipelineLayout);
+                    "shaders/particle_simulation.spv", particleComputePipelineLayout);
             }
         }
 

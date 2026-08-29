@@ -54,8 +54,7 @@ void TonemapPass::create(const VkDevice device, const VkFormat swapchainFormat,
         options.colorFormat = swapchainFormat;
         // The UI pass loads this result before transitioning the image for presentation.
         options.colorFinalLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
-        options.vertexShader = "shaders/tonemap.vert.spv";
-        options.fragmentShader = "shaders/tonemap.frag.spv";
+        options.shader = "shaders/aces_tonemap.spv";
         options.assetManager = &assets;
         options.pushConstantSize = sizeof(TonemapSettings);
         options.pushConstantStages = VK_SHADER_STAGE_FRAGMENT_BIT;

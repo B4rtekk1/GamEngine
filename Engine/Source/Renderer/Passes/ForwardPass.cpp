@@ -18,8 +18,7 @@ void ForwardPass::create(VkDevice device, const VkFormat colorFormat,
     options.depthFormat = depthFormat;
     options.samples = samples;
     options.colorFinalLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-    options.vertexShader = "shaders/pbr.vert.spv";
-    options.fragmentShader = "shaders/pbr.frag.spv";
+    options.shader = "shaders/forward_pbr.spv";
     options.assetManager = &assets;
     // Temporary: imported glTF vegetation uses double-sided geometry. The
     // renderer currently batches materials into one draw, so culling cannot
@@ -50,8 +49,7 @@ void ForwardPass::create(VkDevice device, const VkFormat colorFormat,
     pipeline_.create(device, options);
 
     GraphicsPipelineOptions outlineOptions = options;
-    outlineOptions.vertexShader = "shaders/outline.vert.spv";
-    outlineOptions.fragmentShader = "shaders/outline.frag.spv";
+    outlineOptions.shader = "shaders/selection_outline.spv";
     outlineOptions.existingRenderPass = pipeline_.renderPass();
     outlineOptions.cullMode = VK_CULL_MODE_FRONT_BIT;
     outlineOptions.depthWriteEnable = VK_FALSE;
@@ -60,10 +58,12 @@ void ForwardPass::create(VkDevice device, const VkFormat colorFormat,
         std::remove_if(outlineOptions.vertexAttributes.begin(),
                        outlineOptions.vertexAttributes.end(),
                        [](const VkVertexInputAttributeDescription& attribute) {
-                           // The outline shader consumes the base vertex data,
-                           // instance model (4-7), and material index (8), but
-                           // not the PBR-only tangent/normal-matrix inputs.
-                           return attribute.location >= 9;
+                           // The outline only needs position (0), normal (3),
+                           // and the instance model columns (4-7).
+                           return attribute.location == 1 ||
+                                  attribute.location == 2 ||
+                                  attribute.location == 8 ||
+                                  attribute.location >= 9;
                        }),
         outlineOptions.vertexAttributes.end());
     outlinePipeline_.create(device, outlineOptions);

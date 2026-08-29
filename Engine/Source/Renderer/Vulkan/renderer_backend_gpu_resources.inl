@@ -42,9 +42,9 @@
             createLayout(hiZCopyDescriptorSetLayout, hiZCopyPipelineLayout);
             createLayout(hiZReduceDescriptorSetLayout, hiZReducePipelineLayout);
             createLayout(cullingDescriptorSetLayout, cullingPipelineLayout);
-            hiZCopyPipeline = createComputePipeline("shaders/hiz_copy.comp.spv", hiZCopyPipelineLayout);
-            hiZReducePipeline = createComputePipeline("shaders/hiz_reduce.comp.spv", hiZReducePipelineLayout);
-            cullingPipeline = createComputePipeline("shaders/hiz_cull.comp.spv", cullingPipelineLayout);
+            hiZCopyPipeline = createComputePipeline("shaders/hiz_initialize.spv", hiZCopyPipelineLayout);
+            hiZReducePipeline = createComputePipeline("shaders/hiz_reduce.spv", hiZReducePipelineLayout);
+            cullingPipeline = createComputePipeline("shaders/gpu_culling.spv", cullingPipelineLayout);
 
             gpuObjects.resize(objectCount);
             for (uint32_t i = 0; i < objectCount; ++i) {

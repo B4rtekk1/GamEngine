@@ -75,7 +75,7 @@ namespace Engine::Particles {
         Vec4 halfExtents;
     };
 
-    /** Parameters consumed by particle_update.comp.  Keep this layout in sync
+    /** Parameters consumed by particle_simulation::main. Keep this layout in sync
      * with the push-constant block in that shader. */
     struct alignas(16) ParticleSimulationData {
         float deltaTime = 0.0F;
