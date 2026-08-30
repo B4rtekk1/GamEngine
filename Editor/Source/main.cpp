@@ -377,7 +377,8 @@ int main(int argc, char** argv) {
             ViewportInteraction viewportInteraction{};
             if (showViewport) {
                 viewportInteraction = drawViewport(
-                    scene, content, selectedEntity, renderer, renderer.gameViewport(), renderer.sceneViewport(),
+                    scene, content, selectedEntity, selectedEntities, renderer,
+                    renderer.gameViewport(), renderer.sceneViewport(),
                     renderer.editorCameraYaw(), renderer.editorCameraPitch(), showGameView, gizmoMode,
                     selectionTool, terrainSculpt, playing, showViewport);
             }

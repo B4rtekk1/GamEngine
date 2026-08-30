@@ -446,6 +446,7 @@ float clampedScale(const float value) {
 }
 
 bool drawTranslationGizmo(Engine::ScenePreset &scene, const Engine::Entity selected,
+                          const std::vector<Engine::Entity>& selection,
                           const Engine::Renderer &renderer, const ImVec2 min, const ImVec2 max) {
     if (selected == Engine::NullEntity || !scene.editor().valid(selected) ||
         !scene.editor().has<Engine::Transform>(selected))
@@ -483,7 +484,7 @@ bool drawTranslationGizmo(Engine::ScenePreset &scene, const Engine::Entity selec
     struct DragState final {
         Engine::Entity entity{Engine::NullEntity};
         int axis{-1};
-        Engine::Vec3 startPosition{};
+        std::vector<std::pair<Engine::Entity, Engine::Vec3>> startPositions;
         ImVec2 startMouse{};
         ImVec2 startAxisDirection{};
         float startAxisLength{};
@@ -497,18 +498,21 @@ bool drawTranslationGizmo(Engine::ScenePreset &scene, const Engine::Entity selec
             axisEnds[hoveredAxis].y - originScreen.y,
         };
         drag = {
-            selected, hoveredAxis,
-            scene.editor().get<Engine::Transform>(selected).position,
-            mouse, axisDirection,
+            selected, hoveredAxis, {}, mouse, axisDirection,
             std::max(std::hypot(axisDirection.x, axisDirection.y), 1.0F), gizmoSize
         };
+        drag.startPositions.emplace_back(selected, scene.editor().get<Engine::Transform>(selected).position);
+        for (const Engine::Entity entity : selection) {
+            if (entity != selected && scene.editor().valid(entity) && scene.editor().has<Engine::Transform>(entity))
+                drag.startPositions.emplace_back(entity, scene.editor().get<Engine::Transform>(entity).position);
+        }
     }
     if (drag.entity == selected && drag.axis >= 0 && ImGui::IsMouseDown(ImGuiMouseButton_Left)) {
         const ImVec2 delta{mouse.x - drag.startMouse.x, mouse.y - drag.startMouse.y};
         const float pixels = (delta.x * drag.startAxisDirection.x +
                               delta.y * drag.startAxisDirection.y) / drag.startAxisLength;
         float worldDistance = pixels * (drag.startWorldSize / drag.startAxisLength);
-        Engine::Vec3 position = drag.startPosition + axes[drag.axis] * worldDistance;
+        Engine::Vec3 position = drag.startPositions.front().second + axes[drag.axis] * worldDistance;
         if (ImGui::GetIO().KeyCtrl) {
             if (drag.axis == 0) position.setX(snapValue(position.x(), EditorConstants::snapTranslation));
             else if (drag.axis == 1) position.setY(snapValue(position.y(), EditorConstants::snapTranslation));
@@ -517,7 +521,9 @@ bool drawTranslationGizmo(Engine::ScenePreset &scene, const Engine::Entity selec
                 position = snapTranslationToObjects(scene, selected, position, drag.axis);
             }
         }
-        scene.edit(selected).setPosition(position);
+        const Engine::Vec3 offset = position - drag.startPositions.front().second;
+        for (const auto& [entity, startPosition] : drag.startPositions)
+            scene.edit(entity).setPosition(startPosition + offset);
         // The scene image is rendered later in this frame. Re-project the
         // overlay from the updated transform so it does not trail the object
         // by one frame while dragging.
@@ -544,6 +550,7 @@ bool drawTranslationGizmo(Engine::ScenePreset &scene, const Engine::Entity selec
 }
 
 bool drawScaleGizmo(Engine::ScenePreset &scene, const Engine::Entity selected,
+                    const std::vector<Engine::Entity>& selection,
                     const Engine::Renderer &renderer, const ImVec2 min, const ImVec2 max) {
     if (selected == Engine::NullEntity || !scene.editor().valid(selected) ||
         !scene.editor().has<Engine::Transform>(selected)) return false;
@@ -572,7 +579,7 @@ bool drawScaleGizmo(Engine::ScenePreset &scene, const Engine::Entity selected,
     struct DragState final {
         Engine::Entity entity{Engine::NullEntity};
         int axis{-1}; // 0..2: axis scale; 3: uniform scale.
-        Engine::Vec3 startScale{};
+        std::vector<std::pair<Engine::Entity, Engine::Vec3>> startScales;
         ImVec2 startMouse{};
         ImVec2 screenDirection{};
         float screenLength{};
@@ -583,8 +590,13 @@ bool drawScaleGizmo(Engine::ScenePreset &scene, const Engine::Entity selected,
         const ImVec2 direction = axis < 3
             ? ImVec2{axisEnds[axis].x - originScreen.x, axisEnds[axis].y - originScreen.y}
             : ImVec2{1.0F, -1.0F};
-        drag = {selected, axis, scene.editor().get<Engine::Transform>(selected).scale, mouse, direction,
+        drag = {selected, axis, {}, mouse, direction,
                 std::max(std::hypot(direction.x, direction.y), 1.0F)};
+        drag.startScales.emplace_back(selected, scene.editor().get<Engine::Transform>(selected).scale);
+        for (const Engine::Entity entity : selection) {
+            if (entity != selected && scene.editor().valid(entity) && scene.editor().has<Engine::Transform>(entity))
+                drag.startScales.emplace_back(entity, scene.editor().get<Engine::Transform>(entity).scale);
+        }
     }
     bool dragging = false;
     if (drag.entity == selected && drag.axis >= 0 && ImGui::IsMouseDown(ImGuiMouseButton_Left)) {
@@ -593,20 +605,22 @@ bool drawScaleGizmo(Engine::ScenePreset &scene, const Engine::Entity selected,
                              drag.screenLength;
         const float factor = std::max(EditorConstants::minimumScale,
                                       EditorConstants::one + pixels / EditorConstants::gizmoDesiredPixels);
-        Engine::Vec3 scale = drag.startScale;
         auto scaleAxis = [&](const float value) {
             float result = value * factor;
             if (ImGui::GetIO().KeyCtrl) result = snapValue(result, EditorConstants::snapScale);
             return clampedScale(result);
         };
-        if (drag.axis == 3) {
-            scale.setX(scaleAxis(drag.startScale.x()));
-            scale.setY(scaleAxis(drag.startScale.y()));
-            scale.setZ(scaleAxis(drag.startScale.z()));
-        } else if (drag.axis == 0) scale.setX(scaleAxis(drag.startScale.x()));
-        else if (drag.axis == 1) scale.setY(scaleAxis(drag.startScale.y()));
-        else scale.setZ(scaleAxis(drag.startScale.z()));
-        scene.edit(selected).setScale(scale);
+        for (const auto& [entity, startScale] : drag.startScales) {
+            Engine::Vec3 scale = startScale;
+            if (drag.axis == 3) {
+                scale.setX(scaleAxis(startScale.x()));
+                scale.setY(scaleAxis(startScale.y()));
+                scale.setZ(scaleAxis(startScale.z()));
+            } else if (drag.axis == 0) scale.setX(scaleAxis(startScale.x()));
+            else if (drag.axis == 1) scale.setY(scaleAxis(startScale.y()));
+            else scale.setZ(scaleAxis(startScale.z()));
+            scene.edit(entity).setScale(scale);
+        }
         dragging = true;
         ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
     }
@@ -756,6 +770,7 @@ bool drawViewportGizmoTools(const ImVec2 imageMin, const ImVec2 visibleMin, Gizm
 }
 
 bool drawRotationGizmo(Engine::ScenePreset &scene, const Engine::Entity selected,
+                       const std::vector<Engine::Entity>& selection,
                        const Engine::Renderer &renderer, const ImVec2 min, const ImVec2 max) {
     if (selected == Engine::NullEntity || !scene.editor().valid(selected) ||
         !scene.editor().has<Engine::Transform>(selected)) {
@@ -816,7 +831,7 @@ bool drawRotationGizmo(Engine::ScenePreset &scene, const Engine::Entity selected
     struct DragState final {
         Engine::Entity entity{Engine::NullEntity};
         int axis{-1};
-        Engine::Vec3 startRotation{};
+        std::vector<std::pair<Engine::Entity, Engine::Vec3>> startRotations;
         Engine::Vec3 lastDirection{};
         ImVec2 lastScreenDirection{};
         float accumulatedRadians{};
@@ -845,10 +860,15 @@ bool drawRotationGizmo(Engine::ScenePreset &scene, const Engine::Entity selected
                                 ringPoints[hoveredAxis][segments / 4].y - originScreen.y};
         const float screenCross = projectedA.x * projectedB.y - projectedA.y * projectedB.x;
         drag = {
-            selected, hoveredAxis, scene.editor().get<Engine::Transform>(selected).rotation,
+            selected, hoveredAxis, {},
             useScreenSpace ? Engine::Vec3{} : (hitPoint - origin).normalized(), screenDirection,
             0.0F, screenCross < 0.0F ? -1.0F : 1.0F, useScreenSpace
         };
+        drag.startRotations.emplace_back(selected, scene.editor().get<Engine::Transform>(selected).rotation);
+        for (const Engine::Entity entity : selection) {
+            if (entity != selected && scene.editor().valid(entity) && scene.editor().has<Engine::Transform>(entity))
+                drag.startRotations.emplace_back(entity, scene.editor().get<Engine::Transform>(entity).rotation);
+        }
         ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
         return true;
     }
@@ -881,19 +901,17 @@ bool drawRotationGizmo(Engine::ScenePreset &scene, const Engine::Entity selected
                 dotProduct(drag.lastDirection, currentDirection));
             drag.lastDirection = currentDirection;
         }
-        Engine::Vec3 rotation = drag.startRotation;
         float degrees = drag.accumulatedRadians * EditorConstants::degreesPerRadian;
         if (ImGui::GetIO().KeyCtrl) {
             degrees = snapValue(degrees, EditorConstants::snapRotation);
         }
-        if (drag.axis == 0) {
-            rotation.setX(drag.startRotation.x() + degrees);
-        } else if (drag.axis == 1) {
-            rotation.setY(drag.startRotation.y() + degrees);
-        } else {
-            rotation.setZ(drag.startRotation.z() + degrees);
+        for (const auto& [entity, startRotation] : drag.startRotations) {
+            Engine::Vec3 rotation = startRotation;
+            if (drag.axis == 0) rotation.setX(startRotation.x() + degrees);
+            else if (drag.axis == 1) rotation.setY(startRotation.y() + degrees);
+            else rotation.setZ(startRotation.z() + degrees);
+            scene.edit(entity).setRotation(rotation);
         }
-        scene.edit(selected).setRotation(rotation);
         ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
         return true;
     }
@@ -1401,7 +1419,9 @@ void frameAllSceneView(const Engine::ScenePreset& scene, Engine::Renderer& rende
 }
 
 ViewportInteraction drawViewport(Engine::ScenePreset &scene, Engine::Assets::Content& content,
-                                 const Engine::Entity selected, Engine::Renderer &renderer,
+                                 const Engine::Entity selected,
+                                 const std::vector<Engine::Entity>& selection,
+                                 Engine::Renderer &renderer,
                                  Engine::ViewportHandle gameDescriptor,
                                  Engine::ViewportHandle sceneDescriptor,
                                  const float sceneCameraYaw, const float sceneCameraPitch,
@@ -1629,10 +1649,10 @@ ViewportInteraction drawViewport(Engine::ScenePreset &scene, Engine::Assets::Con
         // exact frame in which the gizmo mode is changed.
         const bool transformGizmoConsumesClick = gizmoAction < 0 && !showGameView && !playing &&
             (gizmoMode == GizmoMode::Translate
-                 ? drawTranslationGizmo(scene, selected, renderer, imageMin, imageMax)
+                 ? drawTranslationGizmo(scene, selected, selection, renderer, imageMin, imageMax)
                  : gizmoMode == GizmoMode::Rotate
-                       ? drawRotationGizmo(scene, selected, renderer, imageMin, imageMax)
-                       : drawScaleGizmo(scene, selected, renderer, imageMin, imageMax));
+                       ? drawRotationGizmo(scene, selected, selection, renderer, imageMin, imageMax)
+                       : drawScaleGizmo(scene, selected, selection, renderer, imageMin, imageMax));
         const bool gizmoConsumesClick = gizmoToolsConsumeClick || orientationGizmoConsumesClick ||
             sculptConsumesClick || paintConsumesClick || grassConsumesClick ||
             transformGizmoConsumesClick;

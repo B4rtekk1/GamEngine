@@ -61,9 +61,11 @@ bool ComponentsPanel::draw(Engine::ScenePreset &scene, const std::vector<Engine:
         ImGui::SetNextItemWidth(-1.0F);
         if (ImGui::InputTextWithHint("##object-name", "Object name", editableName, sizeof(editableName)) &&
             editableName[0] != '\0') {
-            scene.editor().modify<Engine::NameComponent>(selected, [&](auto &value) {
-                value.value = editableName;
-            });
+            try {
+                scene.editor().rename(selected, editableName);
+            } catch (const std::invalid_argument&) {
+                // Keep the previous name until a unique, non-empty value is entered.
+            }
         }
     }
     ImGui::TextDisabled("Rename the object, then tweak its components below.");

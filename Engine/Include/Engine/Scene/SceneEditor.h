@@ -17,6 +17,7 @@ public:
     [[nodiscard]] bool valid(Entity entity) const { return scene_->valid(entity); }
     void destroy(Entity entity) { scene_->destroy(entity); }
     [[nodiscard]] Entity duplicate(Entity entity) { return scene_->duplicate(entity).entity(); }
+    void rename(Entity entity, std::string name) { scene_->rename(entity, std::move(name)); }
     [[nodiscard]] std::uint64_t structuralRevision() const noexcept {
         return scene_->structuralRevision();
     }

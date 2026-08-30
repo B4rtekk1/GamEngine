@@ -7,6 +7,11 @@ Engine::Entity HierarchyPanel::draw(Engine::ScenePreset &scene, Engine::Assets::
         return std::ranges::find(selection, entity) != selection.end();
     };
     static std::string assetDropError;
+    static Engine::Entity renameEntity = Engine::NullEntity;
+    static std::string renameValue;
+    static std::string renameError;
+    static bool focusRenameInput = false;
+    bool openRenamePopup = false;
     Engine::Entity droppedHierarchyEntity = Engine::NullEntity;
     Engine::Entity hierarchyDropParent = Engine::NullEntity;
     action = Action::None;
@@ -173,6 +178,16 @@ Engine::Entity HierarchyPanel::draw(Engine::ScenePreset &scene, Engine::Assets::
                     action = Action::Copy;
                     actionEntity = entity;
                 }
+                if (ImGui::MenuItem("Rename", nullptr, false, !disabled)) {
+                    renameEntity = entity;
+                    renameValue = name;
+                    renameError.clear();
+                    focusRenameInput = true;
+                    // The context menu is scoped to this hierarchy row's ID.
+                    // Open the modal after leaving that scope so both calls
+                    // resolve to the same ImGui popup ID.
+                    openRenamePopup = true;
+                }
                 if (ImGui::MenuItem("Paste", nullptr, false, canPaste)) {
                     action = Action::Paste;
                     actionEntity = entity;
@@ -274,6 +289,45 @@ Engine::Entity HierarchyPanel::draw(Engine::ScenePreset &scene, Engine::Assets::
             }
         }
         ImGui::TreePop();
+    }
+
+    if (openRenamePopup) {
+        ImGui::OpenPopup("Rename GameObject");
+    }
+    if (ImGui::BeginPopupModal("Rename GameObject", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
+        if (renameEntity == Engine::NullEntity || !scene.editor().valid(renameEntity)) {
+            renameEntity = Engine::NullEntity;
+            ImGui::CloseCurrentPopup();
+        } else {
+            char nameBuffer[260]{};
+            std::snprintf(nameBuffer, sizeof(nameBuffer), "%s", renameValue.c_str());
+            if (focusRenameInput) {
+                ImGui::SetKeyboardFocusHere();
+                focusRenameInput = false;
+            }
+            const bool submitted = ImGui::InputText("Name", nameBuffer, sizeof(nameBuffer),
+                                                    ImGuiInputTextFlags_EnterReturnsTrue);
+            renameValue = nameBuffer;
+            if (!renameError.empty()) {
+                ImGui::TextColored({0.95F, 0.40F, 0.35F, 1.0F}, "%s", renameError.c_str());
+            }
+            if ((submitted || ImGui::Button("Rename")) && !renameValue.empty()) {
+                try {
+                    scene.editor().rename(renameEntity, renameValue);
+                    clicked = renameEntity;
+                    renameEntity = Engine::NullEntity;
+                    ImGui::CloseCurrentPopup();
+                } catch (const std::exception& exception) {
+                    renameError = exception.what();
+                }
+            }
+            ImGui::SameLine();
+            if (ImGui::Button("Cancel")) {
+                renameEntity = Engine::NullEntity;
+                ImGui::CloseCurrentPopup();
+            }
+        }
+        ImGui::EndPopup();
     }
 
     // The remaining hierarchy area is a root-level drop target, matching the

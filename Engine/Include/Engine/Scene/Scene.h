@@ -196,13 +196,21 @@ namespace Engine {
             if (actor.scene_ != this || !actor.valid()) {
                 return;
             }
+            rename(actor.object().entity(), std::move(name));
+        }
+
+        /** Renames an editor entity while keeping object and name lookup state consistent. */
+        void rename(const Entity entity, std::string name) {
+            auto *object = findByEntity(entity);
+            if (object == nullptr) {
+                throw std::out_of_range("Scene entity is not a GameObject");
+            }
             if (name.empty()) {
                 throw std::invalid_argument("Scene object name cannot be empty");
             }
-            if (auto *existing = find(name); existing != nullptr && existing->objectId() != actor.objectId_) {
+            if (auto *existing = find(name); existing != nullptr && existing != object) {
                 throw std::invalid_argument("Scene object name is already in use: " + name);
             }
-            auto *object = find(actor.objectId_);
             names_.erase(object->name());
             object->setName(std::move(name));
             registry_.modify<NameComponent>(object->entity(), [&](auto &component) {
