@@ -45,19 +45,34 @@ float sampleVirtualShadowLevel(Sampler2DShadow shadowMap, float3 worldPosition,
 
     float depthSlope = max(abs(ddx(currentDepth)), abs(ddy(currentDepth)));
     float bias = max(MIN_SHADOW_BIAS, SLOPE_SHADOW_BIAS * depthSlope);
-    // Hardware PCF is bilinear and could otherwise blend with an unrelated
-    // physical page stored next to this tile in the atlas. Clamp the lookup
-    // to a one-texel guard band; the duplicated edge texel is preferable to
-    // temporal noise from the page cache.
-    const float atlasResolution = float(PHYSICAL_PAGES_PER_AXIS * PAGE_RESOLUTION);
-    float2 atlasPixel = centerAtlasUv * atlasResolution - 0.5;
-    float2 pageOrigin = floor(atlasPixel / float(PAGE_RESOLUTION)) * float(PAGE_RESOLUTION);
-    atlasPixel = clamp(atlasPixel, pageOrigin + 1.0,
-                       pageOrigin + float(PAGE_RESOLUTION - 2));
-    centerAtlasUv = (atlasPixel + 0.5) / atlasResolution;
-    // Vulkan's comparison sampler now performs the 2x2 PCF in fixed-function
-    // hardware, replacing the former nine manual depth reads.
-    return 1.0 - shadowMap.SampleCmpLevelZero(centerAtlasUv, currentDepth - bias);
+    // A single comparison lookup uses only hardware 2x2 PCF. That leaves the
+    // projected texel grid visible on thin casters (grass, railings) and at
+    // oblique angles. Filter in virtual-map coordinates, resolving every tap
+    // through the page table. This is important at a page boundary: neighbouring
+    // texels are not necessarily neighbours in the physical atlas.
+    static const float kernel[3] = {1.0, 2.0, 1.0};
+    float filteredShadow = 0.0;
+    float totalWeight = 0.0;
+    const float2 virtualPixel = uv * float(VIRTUAL_RESOLUTION);
+    [unroll]
+    for (int y = -1; y <= 1; ++y)
+    {
+        [unroll]
+        for (int x = -1; x <= 1; ++x)
+        {
+            float2 tapAtlasUv;
+            // Outside the resident clip region, replicate the centre sample
+            // instead of accidentally reading an unrelated atlas tile.
+            if (!virtualShadowAtlasUv(virtualPixel + float2(x, y), level,
+                                      pageTable, tapAtlasUv))
+                tapAtlasUv = centerAtlasUv;
+            const float weight = kernel[x + 1] * kernel[y + 1];
+            filteredShadow += (1.0 - shadowMap.SampleCmpLevelZero(
+                tapAtlasUv, currentDepth - bias)) * weight;
+            totalWeight += weight;
+        }
+    }
+    return filteredShadow / totalWeight;
 }
 
 float sampleVirtualShadow(Sampler2DShadow shadowMap, float3 worldPosition,
