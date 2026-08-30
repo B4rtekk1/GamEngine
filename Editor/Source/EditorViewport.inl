@@ -542,7 +542,11 @@ bool drawViewportGizmoTools(const ImVec2 imageMin, const ImVec2 visibleMin, Gizm
 
         ImGui::SetCursorScreenPos(min);
         ImGui::PushID(index);
-        const bool clicked = ImGui::InvisibleButton("##gizmo-tool", {buttonSize, buttonSize});
+        // These are viewport overlays, not editor controls.  In particular,
+        // do not let a tool switch take ImGui navigation focus away from the
+        // selected object in the Scene View.
+        const bool clicked = ImGui::InvisibleButton(
+            "##gizmo-tool", {buttonSize, buttonSize}, ImGuiButtonFlags_NoNavFocus);
         const bool hovered = ImGui::IsItemHovered();
         ImGui::PopID();
 
@@ -1289,12 +1293,16 @@ ViewportInteraction drawViewport(Engine::ScenePreset &scene, Engine::Assets::Con
                               imageHovered, interaction);
         const bool paintConsumesClick = !grassConsumesClick && !sculptConsumesClick && gizmoAction < 0 && !showGameView && !playing &&
             drawTerrainPaint(scene, selected, renderer, imageMin, imageMax, terrainSculpt, imageHovered, interaction);
+        // Draw the active transform gizmo independently of the toolbar click.
+        // Otherwise short-circuit evaluation below skips this call on the
+        // exact frame in which the gizmo mode is changed.
+        const bool transformGizmoConsumesClick = gizmoAction < 0 && !showGameView && !playing &&
+            (gizmoMode == GizmoMode::Translate
+                 ? drawTranslationGizmo(scene, selected, renderer, imageMin, imageMax)
+                 : drawRotationGizmo(scene, selected, renderer, imageMin, imageMax));
         const bool gizmoConsumesClick = gizmoToolsConsumeClick || orientationGizmoConsumesClick ||
             sculptConsumesClick || paintConsumesClick || grassConsumesClick ||
-            (gizmoAction < 0 && !showGameView && !playing &&
-                                        (gizmoMode == GizmoMode::Translate
-                                             ? drawTranslationGizmo(scene, selected, renderer, imageMin, imageMax)
-                                             : drawRotationGizmo(scene, selected, renderer, imageMin, imageMax)));
+            transformGizmoConsumesClick;
         if (!showGameView && !playing && gizmoAction < 0 && !gizmoConsumesClick && imageHovered &&
             ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
             const ImVec2 mouse = ImGui::GetIO().MousePos;
