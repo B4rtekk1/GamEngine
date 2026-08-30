@@ -1,6 +1,8 @@
 #include "Engine/Renderer/Vulkan/buffer.h"
 
 #include <cstring>
+#include <algorithm>
+#include <memory>
 #include <string>
 #include <stdexcept>
 
@@ -120,13 +122,15 @@ namespace Engine {
             device_ == VK_NULL_HANDLE || allocator_ == VK_NULL_HANDLE) {
             throw std::invalid_argument("Device-local buffer update is out of bounds");
         }
-        Buffer staging;
-        staging.create({
+        reapCompletedUploads();
+
+        auto staging = std::make_unique<Buffer>();
+        staging->create({
             device_, size, VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
             VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
             allocator_,
         });
-        staging.update(data, size);
+        staging->update(data, size);
 
         VkCommandBufferAllocateInfo allocateInfo{VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO};
         allocateInfo.commandPool = commandPool;
@@ -143,7 +147,7 @@ namespace Engine {
             throw std::runtime_error("Could not begin device-local buffer update");
         }
         const VkBufferCopy copy{.srcOffset = 0, .dstOffset = offset, .size = size};
-        vkCmdCopyBuffer(commandBuffer, staging.buffer_, buffer_, 1, &copy);
+        vkCmdCopyBuffer(commandBuffer, staging->buffer_, buffer_, 1, &copy);
         if (vkEndCommandBuffer(commandBuffer) != VK_SUCCESS) {
             vkFreeCommandBuffers(device_, commandPool, 1, &commandBuffer);
             throw std::runtime_error("Could not finish device-local buffer update");
@@ -157,18 +161,40 @@ namespace Engine {
         VkSubmitInfo submitInfo{VK_STRUCTURE_TYPE_SUBMIT_INFO};
         submitInfo.commandBufferCount = 1;
         submitInfo.pCommandBuffers = &commandBuffer;
-        const VkResult submit = vkQueueSubmit(queue, 1, &submitInfo, fence);
-        const VkResult wait = submit == VK_SUCCESS
-                                  ? vkWaitForFences(device_, 1, &fence, VK_TRUE, UINT64_MAX)
-                                  : submit;
-        vkDestroyFence(device_, fence, nullptr);
-        vkFreeCommandBuffers(device_, commandPool, 1, &commandBuffer);
-        if (submit != VK_SUCCESS || wait != VK_SUCCESS) {
+        if (vkQueueSubmit(queue, 1, &submitInfo, fence) != VK_SUCCESS) {
+            vkDestroyFence(device_, fence, nullptr);
+            vkFreeCommandBuffers(device_, commandPool, 1, &commandBuffer);
             throw std::runtime_error("Could not upload device-local buffer update");
         }
+
+        pendingUploads_.push_back({std::move(staging), commandPool, commandBuffer, fence});
+    }
+
+    void Buffer::reapCompletedUploads() const noexcept {
+        if (device_ == VK_NULL_HANDLE) return;
+        std::erase_if(pendingUploads_, [this](PendingUpload& upload) {
+            if (vkGetFenceStatus(device_, upload.fence) != VK_SUCCESS) return false;
+            vkDestroyFence(device_, upload.fence, nullptr);
+            vkFreeCommandBuffers(device_, upload.commandPool, 1, &upload.commandBuffer);
+            return true;
+        });
+    }
+
+    void Buffer::finishPendingUploads() noexcept {
+        for (PendingUpload& upload : pendingUploads_) {
+            if (upload.fence != VK_NULL_HANDLE) {
+                vkWaitForFences(device_, 1, &upload.fence, VK_TRUE, UINT64_MAX);
+                vkDestroyFence(device_, upload.fence, nullptr);
+            }
+            if (upload.commandBuffer != VK_NULL_HANDLE) {
+                vkFreeCommandBuffers(device_, upload.commandPool, 1, &upload.commandBuffer);
+            }
+        }
+        pendingUploads_.clear();
     }
 
     void Buffer::destroy() noexcept {
+        finishPendingUploads();
         if (device_ != VK_NULL_HANDLE) {
             if (buffer_ != VK_NULL_HANDLE) {
                 vmaDestroyBuffer(allocator_, buffer_, allocation_);

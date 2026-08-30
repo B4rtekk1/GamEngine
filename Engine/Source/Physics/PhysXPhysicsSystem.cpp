@@ -217,12 +217,32 @@ namespace Engine {
     struct PhysicsSystem::BroadPhaseCache final {
         struct ActorRecord final {
             physx::PxRigidActor *actor{};
-            const Transform *transformAddress{};
-            const ColliderComponent *colliderAddress{};
-            const RigidbodyComponent *bodyAddress{};
             Transform lastTransform{};
+            RigidbodyType bodyType{RigidbodyType::Static};
             Vec3 lastLinearVelocity;
             Vec3 lastAngularVelocity;
+        };
+
+        struct CookedMeshKey final {
+            const Mesh* mesh{};
+            Vec3 scale{};
+
+            [[nodiscard]] bool operator==(const CookedMeshKey& other) const noexcept {
+                return mesh == other.mesh && scale.x() == other.scale.x() &&
+                       scale.y() == other.scale.y() && scale.z() == other.scale.z();
+            }
+        };
+
+        struct CookedMeshKeyHash final {
+            [[nodiscard]] std::size_t operator()(const CookedMeshKey& key) const noexcept {
+                const auto combine = [](std::size_t seed, const std::size_t value) {
+                    return seed ^ (value + 0x9e3779b9U + (seed << 6U) + (seed >> 2U));
+                };
+                std::size_t result = std::hash<const Mesh*>{}(key.mesh);
+                result = combine(result, std::hash<float>{}(key.scale.x()));
+                result = combine(result, std::hash<float>{}(key.scale.y()));
+                return combine(result, std::hash<float>{}(key.scale.z()));
+            }
         };
 
         physx::PxDefaultAllocator allocator;
@@ -237,6 +257,8 @@ namespace Engine {
         std::uint64_t colliderRevision{};
         std::uint64_t rigidbodyRevision{};
         std::unordered_map<Entity, ActorRecord> actors;
+        std::unordered_map<CookedMeshKey, physx::PxConvexMesh*, CookedMeshKeyHash> convexMeshes;
+        std::unordered_map<CookedMeshKey, physx::PxTriangleMesh*, CookedMeshKeyHash> triangleMeshes;
 
         BroadPhaseCache() {
             using namespace physx;
@@ -289,6 +311,7 @@ namespace Engine {
 
         void shutdown() noexcept {
             releaseActors();
+            releaseCookedMeshes();
             if (physicsScene != nullptr) {
                 physicsScene->release();
                 physicsScene = nullptr;
@@ -315,6 +338,17 @@ namespace Engine {
                 }
             }
             actors.clear();
+        }
+
+        void releaseCookedMeshes() noexcept {
+            for (const auto& mesh : convexMeshes | std::views::values) {
+                if (mesh != nullptr) mesh->release();
+            }
+            convexMeshes.clear();
+            for (const auto& mesh : triangleMeshes | std::views::values) {
+                if (mesh != nullptr) mesh->release();
+            }
+            triangleMeshes.clear();
         }
 
         [[nodiscard]] std::optional<Entity> entityForActor(const physx::PxRigidActor *actor) const {
@@ -401,6 +435,32 @@ namespace Engine {
             return physics->createTriangleMesh(input);
         }
 
+        physx::PxConvexMesh* cachedConvexMesh(const Mesh& mesh, const Vec3& scale) {
+            const CookedMeshKey key{&mesh, scale};
+            if (const auto existing = convexMeshes.find(key); existing != convexMeshes.end()) {
+                return existing->second;
+            }
+            std::vector<physx::PxVec3> points;
+            points.reserve(mesh.vertices.size());
+            for (const Vertex& vertex : mesh.vertices) {
+                points.emplace_back(vertex.position.x() * scale.x(), vertex.position.y() * scale.y(),
+                                    vertex.position.z() * scale.z());
+            }
+            physx::PxConvexMesh* cooked = cookConvex(points);
+            if (cooked != nullptr) convexMeshes.emplace(key, cooked);
+            return cooked;
+        }
+
+        physx::PxTriangleMesh* cachedTriangleMesh(const Mesh& mesh, const Vec3& scale) {
+            const CookedMeshKey key{&mesh, scale};
+            if (const auto existing = triangleMeshes.find(key); existing != triangleMeshes.end()) {
+                return existing->second;
+            }
+            physx::PxTriangleMesh* cooked = cookTriangleMesh(mesh, scale);
+            if (cooked != nullptr) triangleMeshes.emplace(key, cooked);
+            return cooked;
+        }
+
         static bool attachBoundsFallback(physx::PxRigidActor &actor, const Mesh &mesh,
                                   const Vec3 &scale, const ColliderComponent &collider,
                                   physx::PxMaterial &material) {
@@ -435,7 +495,7 @@ namespace Engine {
 
         // NOLINTNEXTLINE(readability-function-cognitive-complexity)
         bool attachCollider(physx::PxRigidActor &actor, const ColliderComponent &collider,
-                            const Transform &transform, const bool dynamic) const {
+                            const Transform &transform, const bool dynamic) {
             using namespace physx;
             PxMaterial *material = physics->createMaterial(
                 std::max(collider.friction, 0.0F), std::max(collider.friction, 0.0F),
@@ -500,26 +560,18 @@ namespace Engine {
                         return false;
                     }
                     if (dynamic) {
-                        std::vector<PxVec3> points;
-                        points.reserve(shape.mesh->vertices.size());
-                        for (const Vertex &vertex: shape.mesh->vertices) {
-                            points.emplace_back(vertex.position.x() * scale.x(),
-                                                vertex.position.y() * scale.y(),
-                                                vertex.position.z() * scale.z());
-                        }
-                        if (PxConvexMesh *mesh = cookConvex(points); mesh != nullptr) {
+                        if (PxConvexMesh *mesh = cachedConvexMesh(*shape.mesh, scale); mesh != nullptr) {
                             const PxConvexMeshGeometry geometry{mesh};
                             const bool result = attachGeometry(
                                                     actor, geometry, *material, localOffset,
                                                     collider.isTrigger) != nullptr;
-                            mesh->release();
                             return result;
                         }
                         return attachBoundsFallback(
                             actor, *shape.mesh, scale, collider, *material);
                     }
 
-                    PxTriangleMesh *mesh = cookTriangleMesh(*shape.mesh, scale);
+                    PxTriangleMesh *mesh = cachedTriangleMesh(*shape.mesh, scale);
                     if (mesh == nullptr) {
                         return false;
                     }
@@ -531,7 +583,6 @@ namespace Engine {
                     geometry.meshFlags |= PxMeshGeometryFlag::eDOUBLE_SIDED;
                     const bool result = attachGeometry(actor, geometry, *material, localOffset,
                                                        collider.isTrigger) != nullptr;
-                    mesh->release();
                     return result;
                 }
             }, collider.shape);
@@ -539,7 +590,32 @@ namespace Engine {
             return attached;
         }
 
-        ActorRecord createActor(const Entity entity, Registry &owner, Transform &transform) const {
+        static void configureRigidBody(physx::PxRigidDynamic& rigid,
+                                       const RigidbodyComponent& body) {
+            using namespace physx;
+            rigid.setRigidBodyFlag(PxRigidBodyFlag::eKINEMATIC,
+                                   body.type == RigidbodyType::Kinematic);
+            rigid.setActorFlag(PxActorFlag::eDISABLE_GRAVITY, !body.useGravity);
+            rigid.setLinearDamping(std::max(body.linearDamping, 0.0F));
+            rigid.setAngularDamping(std::max(body.angularDamping, 0.0F));
+            PxRigidDynamicLockFlags locks;
+            if (body.fixedRotation) {
+                locks |= PxRigidDynamicLockFlag::eLOCK_ANGULAR_X;
+                locks |= PxRigidDynamicLockFlag::eLOCK_ANGULAR_Y;
+                locks |= PxRigidDynamicLockFlag::eLOCK_ANGULAR_Z;
+            }
+            rigid.setRigidDynamicLockFlags(locks);
+            if (rigid.getNbShapes() == 0) {
+                rigid.setMass(std::max(body.mass, MinimumDimension));
+                rigid.setMassSpaceInertiaTensor({1.0F, 1.0F, 1.0F});
+            } else {
+                PxRigidBodyExt::setMassAndUpdateInertia(rigid, std::max(body.mass, MinimumDimension));
+            }
+            rigid.setLinearVelocity(toPhysX(body.linearVelocity));
+            rigid.setAngularVelocity(toPhysX(body.angularVelocity * DegreesToRadians));
+        }
+
+        ActorRecord createActor(const Entity entity, Registry &owner, Transform &transform) {
             using namespace physx;
             RigidbodyComponent *body = owner.has<RigidbodyComponent>(entity)
                                            ? &owner.get<RigidbodyComponent>(entity)
@@ -562,36 +638,12 @@ namespace Engine {
 
             ActorRecord record{
                 .actor = actor,
-                .transformAddress = &transform,
-                .colliderAddress = owner.has<ColliderComponent>(entity)
-                                       ? &owner.get<ColliderComponent>(entity)
-                                       : nullptr,
-                .bodyAddress = body,
                 .lastTransform = transform,
+                .bodyType = body == nullptr ? RigidbodyType::Static : body->type,
             };
             if (dynamic) {
                 auto &rigid = *static_cast<PxRigidDynamic *>(actor);
-                const bool kinematic = body->type == RigidbodyType::Kinematic;
-                rigid.setRigidBodyFlag(PxRigidBodyFlag::eKINEMATIC, kinematic);
-                rigid.setActorFlag(PxActorFlag::eDISABLE_GRAVITY, !body->useGravity);
-                rigid.setLinearDamping(std::max(body->linearDamping, 0.0F));
-                rigid.setAngularDamping(std::max(body->angularDamping, 0.0F));
-                PxRigidDynamicLockFlags locks;
-                if (body->fixedRotation) {
-                    locks |= PxRigidDynamicLockFlag::eLOCK_ANGULAR_X;
-                    locks |= PxRigidDynamicLockFlag::eLOCK_ANGULAR_Y;
-                    locks |= PxRigidDynamicLockFlag::eLOCK_ANGULAR_Z;
-                }
-                rigid.setRigidDynamicLockFlags(locks);
-                if (rigid.getNbShapes() == 0) {
-                    rigid.setMass(std::max(body->mass, MinimumDimension));
-                    rigid.setMassSpaceInertiaTensor({1.0F, 1.0F, 1.0F});
-                } else {
-                    PxRigidBodyExt::setMassAndUpdateInertia(
-                        rigid, std::max(body->mass, MinimumDimension));
-                }
-                rigid.setLinearVelocity(toPhysX(body->linearVelocity));
-                rigid.setAngularVelocity(toPhysX(body->angularVelocity * DegreesToRadians));
+                configureRigidBody(rigid, *body);
                 record.lastLinearVelocity = body->linearVelocity;
                 record.lastAngularVelocity = body->angularVelocity;
             }
@@ -614,32 +666,81 @@ namespace Engine {
             rigidbodyRevision = owner.componentRevision<RigidbodyComponent>();
         }
 
-        void ensureWorld(Registry &owner) {
-            bool needsRebuild = registry != &owner ||
-                                structuralRevision != owner.structuralRevision() ||
-                                colliderRevision != owner.componentRevision<ColliderComponent>() ||
-                                rigidbodyRevision != owner.componentRevision<RigidbodyComponent>();
-            if (!needsRebuild) {
-                for (const auto &[entity, record]: actors) {
-                    if (!owner.valid(entity) || !owner.has<Transform>(entity) ||
-                        record.transformAddress != &owner.get<Transform>(entity) ||
-                        record.colliderAddress !=
-                        (owner.has<ColliderComponent>(entity)
-                             ? &owner.get<ColliderComponent>(entity)
-                             : nullptr) ||
-                        record.bodyAddress !=
-                        (owner.has<RigidbodyComponent>(entity)
-                             ? &owner.get<RigidbodyComponent>(entity)
-                             : nullptr) ||
-                        !same(record.lastTransform.scale, owner.get<Transform>(entity).scale)) {
-                        needsRebuild = true;
-                        break;
-                    }
+        void removeActor(const Entity entity) noexcept {
+            const auto record = actors.find(entity);
+            if (record == actors.end()) return;
+            if (record->second.actor != nullptr) record->second.actor->release();
+            actors.erase(record);
+        }
+
+        void synchronizeActor(Registry& owner, const Entity entity) {
+            if (!owner.valid(entity) || !owner.has<Transform>(entity) ||
+                (!owner.has<ColliderComponent>(entity) && !owner.has<RigidbodyComponent>(entity))) {
+                removeActor(entity);
+                return;
+            }
+            removeActor(entity);
+            Transform& transform = owner.get<Transform>(entity);
+            actors.emplace(entity, createActor(entity, owner, transform));
+        }
+
+        void reconcileStructure(Registry& owner) {
+            std::vector<Entity> stale;
+            stale.reserve(actors.size());
+            for (const auto& [entity, record] : actors) {
+                if (!owner.valid(entity) || !owner.has<Transform>(entity) ||
+                    (!owner.has<ColliderComponent>(entity) && !owner.has<RigidbodyComponent>(entity))) {
+                    stale.push_back(entity);
                 }
             }
-            if (needsRebuild) {
+            for (const Entity entity : stale) removeActor(entity);
+            owner.view<Transform>([&](const Entity entity, Transform& transform) {
+                if (actors.contains(entity) ||
+                    (!owner.has<ColliderComponent>(entity) && !owner.has<RigidbodyComponent>(entity))) return;
+                actors.emplace(entity, createActor(entity, owner, transform));
+            });
+        }
+
+        void ensureWorld(Registry &owner) {
+            if (registry != &owner) {
                 rebuild(owner);
+                return;
             }
+
+            if (structuralRevision != owner.structuralRevision()) {
+                reconcileStructure(owner);
+                structuralRevision = owner.structuralRevision();
+            }
+            if (colliderRevision != owner.componentRevision<ColliderComponent>()) {
+                for (const Entity entity : owner.componentEntitiesChangedSince<ColliderComponent>(colliderRevision)) {
+                    synchronizeActor(owner, entity);
+                }
+                colliderRevision = owner.componentRevision<ColliderComponent>();
+            }
+            if (rigidbodyRevision != owner.componentRevision<RigidbodyComponent>()) {
+                for (const Entity entity : owner.componentEntitiesChangedSince<RigidbodyComponent>(rigidbodyRevision)) {
+                    const auto record = actors.find(entity);
+                    if (!owner.valid(entity) || !owner.has<RigidbodyComponent>(entity) ||
+                        record == actors.end() ||
+                        record->second.bodyType != owner.get<RigidbodyComponent>(entity).type) {
+                        synchronizeActor(owner, entity);
+                    } else if (record->second.bodyType != RigidbodyType::Static) {
+                        const RigidbodyComponent& body = owner.get<RigidbodyComponent>(entity);
+                        configureRigidBody(*static_cast<physx::PxRigidDynamic*>(record->second.actor), body);
+                        record->second.lastLinearVelocity = body.linearVelocity;
+                        record->second.lastAngularVelocity = body.angularVelocity;
+                    }
+                }
+                rigidbodyRevision = owner.componentRevision<RigidbodyComponent>();
+            }
+
+            std::vector<Entity> scaleChanged;
+            for (const auto& [entity, record] : actors) {
+                if (!same(record.lastTransform.scale, owner.get<Transform>(entity).scale)) {
+                    scaleChanged.push_back(entity);
+                }
+            }
+            for (const Entity entity : scaleChanged) synchronizeActor(owner, entity);
         }
 
         void pushEcsState(Registry &owner) {
