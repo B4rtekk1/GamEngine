@@ -110,7 +110,10 @@ ForwardFragmentOutput fragmentMain(ForwardFragmentInput input)
         float4 layers = float4(weights.x, weights.y, weights.z, fourthWeight);
         // Terrain UVs cover the complete heightmap. Repeat each layer so an
         // albedo map reads as ground detail rather than one giant decal.
-        float2 terrainUv = input.texCoord * 8.0;
+        // A denser repeat keeps brush-painted material layers at a usable
+        // ground-detail scale instead of spreading one oversized texture
+        // across a large section of the terrain.
+        float2 terrainUv = input.texCoord * 16.0;
         int2 cell = int2(floor(input.texCoord * 32.0));
         float checkerShade = ((cell.x + cell.y) & 1) == 0 ? 0.82 : 0.52;
         float4 checker = float4(checkerShade * material.baseColorMetallic.rgb, 1.0);
