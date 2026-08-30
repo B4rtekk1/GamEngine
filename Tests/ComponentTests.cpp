@@ -7,6 +7,8 @@
 #include "Engine/ECS/Components/ScriptComponent.h"
 #include "Engine/ECS/Components/TerrainComponent.h"
 #include "Engine/ECS/Components/TerrainGrassComponent.h"
+#include "Engine/ECS/Components/ProceduralCloudComponent.h"
+#include "Engine/Renderer/Geometry/ProceduralCloud.h"
 #include "Engine/Renderer/Lighting/DirectionalLightData.h"
 #include "Engine/Renderer/Materials/PBRMaterial.h"
 #include "Engine/Renderer/Materials/MaterialBuffer.h"
@@ -46,6 +48,22 @@ TEST(RigidbodyComponent, AccumulatesAndClearsForcesAndImpulses) {
     ExpectVec3Near(body.accumulatedForce(), 0.0F, 0.0F, 0.0F);
     ExpectVec3Near(body.accumulatedTorque(), 0.0F, 0.0F, 0.0F);
     ExpectVec3Near(body.accumulatedAngularImpulse(), 0.0F, 0.0F, 0.0F);
+}
+
+TEST(ProceduralCloud, ProducesDeterministicThreeDimensionalMesh) {
+    Engine::ProceduralCloudComponent settings;
+    settings.seed = 42U;
+    settings.puffCount = 8U;
+    settings.dimensions = {10.0F, 3.0F, 6.0F};
+    const Engine::Mesh first = Engine::ProceduralCloud::createMesh(settings);
+    const Engine::Mesh second = Engine::ProceduralCloud::createMesh(settings);
+
+    ASSERT_FALSE(first.empty());
+    EXPECT_EQ(first.vertices.size(), second.vertices.size());
+    EXPECT_EQ(first.indices, second.indices);
+    EXPECT_FLOAT_EQ(first.vertices.front().position.x(), second.vertices.front().position.x());
+    EXPECT_FLOAT_EQ(first.vertices.front().position.y(), second.vertices.front().position.y());
+    EXPECT_FLOAT_EQ(first.vertices.front().position.z(), second.vertices.front().position.z());
 }
 
 TEST(RigidbodyComponent, IgnoresLinearImpulseForNonPositiveMassAndStops) {

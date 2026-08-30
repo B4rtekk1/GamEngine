@@ -140,6 +140,9 @@ Engine::Entity drawEditorMenuBar(Engine::ScenePreset &scene, Engine::Renderer &r
         if (ImGui::MenuItem("Create Terrain")) {
             createdEntity = scene.createTerrain();
         }
+        if (ImGui::MenuItem("Create Procedural Cloud")) {
+            createdEntity = scene.createProceduralCloud();
+        }
         ImGui::EndDisabled();
         ImGui::EndMenu();
     }

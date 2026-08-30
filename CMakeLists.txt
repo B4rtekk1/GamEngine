@@ -191,6 +191,7 @@ add_library(Engine
         Engine/Source/Renderer/Vulkan/vma_impl.cpp
         Engine/Source/Renderer/Particles/ParticleSystem.cpp
         Engine/Source/Renderer/Geometry/Terrain.cpp
+        Engine/Source/Renderer/Geometry/ProceduralCloud.cpp
         Platform/SDL/SDLInput.cpp
 )
 
@@ -319,6 +320,7 @@ if(BUILD_TESTING)
             Engine/Source/Core/Time.cpp
             Engine/Source/Project.cpp
             Engine/Source/Renderer/Geometry/Terrain.cpp
+            Engine/Source/Renderer/Geometry/ProceduralCloud.cpp
             Engine/Source/UI/Canvas.cpp
             Engine/Source/UI/RectTransform.cpp
             Engine/Source/UI/UIBatch.cpp

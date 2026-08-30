@@ -9,6 +9,7 @@
 #include "Engine/ECS/Components/ColorPickerComponent.h"
 #include "Engine/ECS/Components/ParticleEmitterComponent.h"
 #include "Engine/ECS/Components/SmokeEmitterComponent.h"
+#include "Engine/ECS/Components/ProceduralCloudComponent.h"
 #include "Engine/ECS/Components/TerrainComponent.h"
 #include "Engine/ECS/Components/TerrainGrassComponent.h"
 #include "Engine/ECS/Registry.h"
@@ -355,6 +356,26 @@ namespace Engine {
                 invalidScene("smoke emitter settings are invalid");
             }
             return emitter;
+        }
+
+        void writeProceduralCloud(std::ostream& output, const ProceduralCloudComponent& cloud) {
+            output << cloud.seed << ' ' << cloud.puffCount << ' ';
+            writeVec3(output, cloud.dimensions);
+            output << ' ';
+            writeFloat(output, cloud.puffRadius);
+        }
+
+        ProceduralCloudComponent readProceduralCloud(std::istream& input) {
+            ProceduralCloudComponent cloud;
+            cloud.seed = read<std::uint32_t>(input, "cloud seed");
+            cloud.puffCount = read<std::uint32_t>(input, "cloud puff count");
+            cloud.dimensions = readVec3(input, "cloud dimensions");
+            cloud.puffRadius = readFloat(input, "cloud puff radius");
+            if (cloud.puffCount == 0U || cloud.puffCount > 128U || cloud.dimensions.x() <= 0.0F ||
+                cloud.dimensions.y() <= 0.0F || cloud.dimensions.z() <= 0.0F || cloud.puffRadius <= 0.0F) {
+                invalidScene("procedural cloud settings are invalid");
+            }
+            return cloud;
         }
 
         void writeTerrain(std::ostream& output, const TerrainComponent& terrain) {
@@ -723,6 +744,11 @@ namespace Engine {
                                   registry.get<SmokeEmitterComponent>(entity).emitter);
                 serialized << '\n';
             }
+            if (registry.has<ProceduralCloudComponent>(entity)) {
+                serialized << "PROCEDURAL_CLOUD ";
+                writeProceduralCloud(serialized, registry.get<ProceduralCloudComponent>(entity));
+                serialized << '\n';
+            }
             if (registry.has<ScriptComponent>(entity)) {
                 const auto &script = registry.get<ScriptComponent>(entity);
                 serialized << "SCRIPT " << std::quoted(script.className) << ' '
@@ -899,6 +925,7 @@ namespace Engine {
             bool hasColorPicker = false;
             bool hasParticleEmitter = false;
             bool hasSmokeEmitter = false;
+            bool hasProceduralCloud = false;
             bool hasCollider = false;
             bool hasRigidbody = false;
             bool hasTerrain = false;
@@ -1114,6 +1141,12 @@ namespace Engine {
                     hasSmokeEmitter = true;
                     loaded.add<SmokeEmitterComponent>(entity,
                                                       SmokeEmitterComponent{.emitter = readSmokeEmitter(input)});
+                } else if (component == "PROCEDURAL_CLOUD") {
+                    if (hasProceduralCloud) {
+                        invalidScene("entity contains more than one ProceduralCloudComponent");
+                    }
+                    hasProceduralCloud = true;
+                    loaded.add<ProceduralCloudComponent>(entity, readProceduralCloud(input));
                 } else {
                     invalidScene("unknown component '" + component + "'");
                 }

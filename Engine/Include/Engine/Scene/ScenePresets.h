@@ -29,6 +29,9 @@ namespace Engine {
 
         [[nodiscard]] Entity createTerrain();
 
+        /** Creates an editable cloud assembled from deterministic 3D puffs. */
+        [[nodiscard]] Entity createProceduralCloud();
+
         Entity plane{NullEntity};
         Entity camera{NullEntity};
         Entity particleSystem{NullEntity};
@@ -39,6 +42,7 @@ namespace Engine {
         std::vector<Entity> editorRamps;
         std::vector<Entity> editorLights;
         std::vector<Entity> editorTerrains;
+        std::vector<Entity> editorClouds;
 
     private:
         std::shared_ptr<const Mesh> planeMesh_;

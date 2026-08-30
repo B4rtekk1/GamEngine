@@ -18,6 +18,8 @@
 #include "Engine/ECS/Components/TerrainGrassComponent.h"
 #include "Engine/ECS/Components/ColorPickerComponent.h"
 #include "Engine/ECS/Components/SmokeEmitterComponent.h"
+#include "Engine/ECS/Components/ProceduralCloudComponent.h"
+#include "Engine/Renderer/Geometry/ProceduralCloud.h"
 #include "Engine/Scene/Components/LightComponent.h"
 #include "Engine/Renderer/MeshRenderer.h"
 #include "Engine/Scene/SceneSerializer.h"

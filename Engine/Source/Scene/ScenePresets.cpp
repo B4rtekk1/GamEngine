@@ -6,8 +6,10 @@
 #include "Engine/ECS/Components/ColorPickerComponent.h"
 #include "Engine/ECS/Components/ColliderComponent.h"
 #include "Engine/ECS/Components/RigidbodyComponent.h"
+#include "Engine/ECS/Components/ProceduralCloudComponent.h"
 #include "Engine/Renderer/Geometry/Cube.h"
 #include "Engine/Renderer/Geometry/Plane.h"
+#include "Engine/Renderer/Geometry/ProceduralCloud.h"
 #include "Engine/Renderer/Geometry/Ramp.h"
 #include "Engine/Renderer/Geometry/Sphere.h"
 #include "Engine/Renderer/MeshRenderer.h"
@@ -256,6 +258,23 @@ namespace Engine {
         const Actor actor = Scene::createTerrain("Terrain");
         const Entity entity = findEntity(actor.id());
         editorTerrains.push_back(entity);
+        return entity;
+    }
+
+    Entity ScenePreset::createProceduralCloud() {
+        ProceduralCloudComponent cloud;
+        auto& object = createMeshObject("Procedural Cloud",
+                                        std::make_shared<Mesh>(ProceduralCloud::createMesh(cloud)),
+                                        PBRMaterial{
+                                            .baseColor = {0.94F, 0.96F, 1.0F},
+                                            .metallic = 0.0F,
+                                            .roughness = 0.92F,
+                                        });
+        object.setPosition({0.0F, 12.0F, 0.0F});
+        object.setCastShadow(false);
+        object.add<ProceduralCloudComponent>(cloud);
+        const Entity entity = object.entity();
+        editorClouds.push_back(entity);
         return entity;
     }
 } // namespace Engine

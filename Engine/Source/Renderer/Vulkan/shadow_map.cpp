@@ -1,4 +1,4 @@
-#include "Engine/Renderer/Vulkan/shadow_map.h"
+﻿#include "Engine/Renderer/Vulkan/shadow_map.h"
 
 #include <array>
 #include <stdexcept>
@@ -82,8 +82,8 @@ namespace Engine {
             }
 
             VkAttachmentDescription depth{.samples = VK_SAMPLE_COUNT_1_BIT};
-            depth.format = format_;
-            depth.loadOp = VK_ATTACHMENT_LOAD_OP_LOAD;
+                depth.format = format_;
+                depth.loadOp = VK_ATTACHMENT_LOAD_OP_LOAD;
             depth.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
             depth.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
             depth.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;

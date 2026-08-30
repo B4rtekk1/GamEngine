@@ -395,6 +395,38 @@ bool ComponentsPanel::draw(Engine::ScenePreset &scene, const std::vector<Engine:
         }
         }
     }
+    if (scene.editor().valid(selected) &&
+        scene.editor().has<Engine::ProceduralCloudComponent>(selected)) {
+        bool remove = false;
+        const bool open = drawRemovableComponentHeader("Procedural Cloud", "procedural-cloud", remove);
+        if (remove) {
+            scene.editor().remove<Engine::ProceduralCloudComponent>(selected);
+        } else if (open) {
+            const auto readScene = scene.editor();
+            auto cloud = readScene.get<Engine::ProceduralCloudComponent>(selected);
+            bool changed = false;
+            int seed = static_cast<int>(cloud.seed);
+            int puffCount = static_cast<int>(cloud.puffCount);
+            changed |= ImGui::DragInt("Seed", &seed, 1.0F, 1, 2'000'000'000);
+            changed |= ImGui::SliderInt("Puff Count", &puffCount, 1, 128);
+            float dimensions[3] = {cloud.dimensions.x(), cloud.dimensions.y(), cloud.dimensions.z()};
+            changed |= ImGui::DragFloat3("Dimensions", dimensions, 0.1F, 0.1F, 200.0F, "%.1f");
+            changed |= ImGui::DragFloat("Puff Radius", &cloud.puffRadius, 0.02F, 0.05F, 20.0F, "%.2f");
+            ImGui::TextDisabled("Regenerated deterministically after each change.");
+            if (changed) {
+                cloud.seed = static_cast<std::uint32_t>(std::max(seed, 1));
+                cloud.puffCount = static_cast<std::uint32_t>(std::clamp(puffCount, 1, 128));
+                cloud.dimensions = {std::max(dimensions[0], 0.1F), std::max(dimensions[1], 0.1F),
+                                    std::max(dimensions[2], 0.1F)};
+                cloud.puffRadius = std::max(cloud.puffRadius, 0.05F);
+                scene.editor().modify<Engine::ProceduralCloudComponent>(selected,
+                    [&](auto& component) { component = cloud; });
+                scene.editor().modify<Engine::MeshRenderer>(selected, [&](auto& renderer) {
+                    renderer.mesh = std::make_shared<Engine::Mesh>(Engine::ProceduralCloud::createMesh(cloud));
+                });
+            }
+        }
+    }
     if (scene.editor().valid(selected) && scene.editor().has<Engine::ScriptComponent>(selected)) {
         bool remove = false;
         const bool open = drawRemovableComponentHeader("Script", "script", remove);
