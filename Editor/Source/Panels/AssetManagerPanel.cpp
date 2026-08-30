@@ -254,8 +254,12 @@ void draw_breadcrumbs(std::filesystem::path& folder, std::filesystem::path& sele
         folder.clear();
         selectedAsset.clear();
     }
+    // A breadcrumb click assigns to `folder`. Iterate a stable snapshot: a
+    // range-for over `folder` itself would retain invalid path iterators after
+    // that assignment and crash while advancing to the next segment.
+    const std::filesystem::path displayedFolder = folder;
     std::filesystem::path accumulated;
-    for (const auto& part : folder) {
+    for (const auto& part : displayedFolder) {
         accumulated /= part;
         ImGui::SameLine(0.0F, 4.0F);
         ImGui::TextDisabled(">");

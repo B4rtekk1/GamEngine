@@ -1148,6 +1148,7 @@ ViewportInteraction drawViewport(Engine::ScenePreset &scene, Engine::Assets::Con
                 ImGui::SameLine(0.0F, 6.0F);
                 ImGui::SetNextItemWidth(110.0F);
                 ImGui::SliderFloat("Opacity##terrain-paint", &terrainSculpt.paintOpacity, 0.02F, 1.0F, "O %.2f");
+                if (ImGui::IsItemHovered()) ImGui::SetTooltip("Lower values blend with existing layers; 1.0 replaces them.");
                 ImGui::SameLine(0.0F, 6.0F);
                 ImGui::SetNextItemWidth(105.0F);
                 ImGui::SliderFloat("Radius##terrain-paint", &terrainSculpt.radius, 0.25F, 8.0F, "R %.1f");

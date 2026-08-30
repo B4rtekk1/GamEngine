@@ -15,7 +15,8 @@ struct TerrainSculptState final {
     Engine::TerrainBrushFalloff falloff{Engine::TerrainBrushFalloff::Smooth};
     float radius{2.0F};
     float strength{3.0F};
-    float paintOpacity{1.0F};
+    // A soft default preserves already painted layers; 1.0 deliberately replaces them.
+    float paintOpacity{0.35F};
     int paintLayer{};
     float spacing{0.2F};
     float grassDensity{2.0F};
