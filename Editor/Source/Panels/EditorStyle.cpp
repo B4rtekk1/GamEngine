@@ -183,10 +183,14 @@ void EditorStyle::configureDockLayout(const ImVec2 dockSize) {
     ImGui::DockBuilderSplitNode(workspace, ImGuiDir_Left, kHierarchyWidthRatio, &hierarchy, &center);
     ImGuiID inspector = kEmptyDockNodeId;
     ImGui::DockBuilderSplitNode(center, ImGuiDir_Right, kInspectorWidthRatio, &inspector, &center);
+    ImGuiID terrainTools = kEmptyDockNodeId;
+    ImGuiID inspectorTop = kEmptyDockNodeId;
+    ImGui::DockBuilderSplitNode(inspector, ImGuiDir_Down, 0.52F, &terrainTools, &inspectorTop);
     ImGui::DockBuilderDockWindow("Hierarchy", hierarchy);
     ImGui::DockBuilderDockWindow("Asset Manager", assetManager);
     ImGui::DockBuilderDockWindow("Viewport", center);
-    ImGui::DockBuilderDockWindow("Inspector", inspector);
+    ImGui::DockBuilderDockWindow("Inspector", inspectorTop);
+    ImGui::DockBuilderDockWindow("Terrain Tools", terrainTools);
     ImGui::DockBuilderFinish(root);
     configured = true;
 }

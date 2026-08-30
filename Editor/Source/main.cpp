@@ -63,6 +63,8 @@ using Editor::SceneHistory;
 
 #include "EditorViewport.inl"
 
+#include "TerrainToolsPanel.inl"
+
 #include "HierarchyPanel.inl"
 
 #include "ComponentsPanel.inl"
@@ -134,6 +136,7 @@ int main() {
         bool showViewport = true;
         bool showInspector = true;
         bool showAssetManager = true;
+        bool showTerrainTools = true;
         double physicsAccumulator = 0.0;
         bool showGameView = false;
         GizmoMode gizmoMode = GizmoMode::Translate;
@@ -196,7 +199,8 @@ int main() {
                                                                  undoRequested, redoRequested, copyRequested,
                                                                  pasteRequested, duplicateRequested,
                                                                  resetHistoryRequested, showHierarchy,
-                                                                 showViewport, showInspector, showAssetManager);
+                                                                 showViewport, showInspector, showAssetManager,
+                                                                 showTerrainTools);
                 created != Engine::NullEntity) {
                 selectedEntity = created;
                 renderer.setEditorSelection(selectedEntity);
@@ -319,6 +323,10 @@ int main() {
                     scene, content, selectedEntity, renderer, renderer.gameViewport(), renderer.sceneViewport(),
                     renderer.editorCameraYaw(), renderer.editorCameraPitch(), showGameView, gizmoMode,
                     terrainSculpt, playing, showViewport);
+            }
+            if (showTerrainTools) {
+                drawTerrainToolsPanel(scene, content, selectedEntity, renderer, terrainSculpt,
+                                      playing, showTerrainTools);
             }
             if (viewportInteraction.createdEntity != Engine::NullEntity) {
                 selectedEntity = viewportInteraction.createdEntity;
