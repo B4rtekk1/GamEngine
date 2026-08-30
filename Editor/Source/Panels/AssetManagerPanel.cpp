@@ -1,6 +1,7 @@
 #include "Editor/Panels/AssetManagerPanel.h"
 
 #include "Editor/Panels/AssetDragDrop.h"
+#include "Elements/NumericControl.h"
 #include "imgui.h"
 
 #include <algorithm>
@@ -340,7 +341,7 @@ Engine::Entity AssetManagerPanel::draw(Engine::ScenePreset& scene, Engine::Asset
         gridView = !gridView;
     ImGui::SameLine();
     ImGui::SetNextItemWidth(82.0F);
-    ImGui::SliderFloat("##asset-size", &tileSize, 72.0F, 136.0F, "", ImGuiSliderFlags_NoInput);
+    Editor::Controls::sliderFloat("##asset-size", &tileSize, 72.0F, 136.0F, "");
     ImGui::SameLine();
     if (ImGui::SmallButton(showInspector ? "Info on" : "Info off"))
         showInspector = !showInspector;

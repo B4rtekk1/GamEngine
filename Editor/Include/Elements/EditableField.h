@@ -1,6 +1,7 @@
 #pragma once
 
 #include "imgui.h"
+#include "NumericControl.h"
 
 #include "Engine/ECS/GameObject.h"
 #include "Engine/Math/Vec3.h"
@@ -102,7 +103,7 @@ protected:
             ImGui::SetNextItemWidth(fieldWidth);
             char id[16];
             std::snprintf(id, sizeof(id), "##%d", index);
-            if (ImGui::DragFloat(id, &values[index], speed, NoDragLimit, NoDragLimit, format)) {
+            if (Editor::Controls::dragFloat(id, &values[index], speed, NoDragLimit, NoDragLimit, format)) {
                 changed = true;
             }
             if (ImGui::IsItemHovered() && ImGui::GetIO().MouseWheel != NoMouseWheel) {

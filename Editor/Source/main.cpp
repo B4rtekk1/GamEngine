@@ -25,6 +25,7 @@
 #include "Engine/Physics/PhysicsSystem.h"
 #include "Engine/Project.h"
 #include "Elements/EditorButton.h"
+#include "Elements/NumericControl.h"
 #include "Elements/TransformFields.h"
 #include "Editor/Panels/EditorSceneSession.h"
 #include "Editor/Panels/EditorStyle.h"

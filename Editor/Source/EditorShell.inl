@@ -296,7 +296,7 @@ Engine::Entity drawEditorMenuBar(Engine::ScenePreset &scene, Engine::Renderer &r
         } else if (antialiasingType == 2 || antialiasingType == 3) {
             ImGui::BeginDisabled();
             float placeholderValue = 1.0F;
-            ImGui::SliderFloat("Quality", &placeholderValue, 0.0F, 1.0F);
+            Editor::Controls::sliderFloat("Quality", &placeholderValue, 0.0F, 1.0F);
             ImGui::EndDisabled();
             ImGui::TextDisabled("Placeholder: this antialiasing type is not implemented yet.");
         } else {

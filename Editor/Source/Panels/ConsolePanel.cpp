@@ -1,4 +1,5 @@
 #include "Editor/Panels/ConsolePanel.h"
+#include "Elements/NumericControl.h"
 
 #include "imgui.h"
 
@@ -105,7 +106,8 @@ void ConsolePanel::draw(bool& isOpen) {
     ImGui::Checkbox("Auto-scroll", &autoScroll);
     ImGui::SameLine();
     ImGui::SetNextItemWidth(130.0F);
-    ImGui::SliderFloat("Text size", &textScale, 0.75F, 2.0F, "x%.2f", ImGuiSliderFlags_AlwaysClamp);
+    Editor::Controls::sliderFloat("Text size", &textScale, 0.75F, 2.0F, "x%.2f",
+                                  ImGuiSliderFlags_AlwaysClamp);
     if (ImGui::IsItemHovered()) ImGui::SetTooltip("Changes the size of log entries.");
     ImGui::SameLine();
     ImGui::SetNextItemWidth(-1.0F);

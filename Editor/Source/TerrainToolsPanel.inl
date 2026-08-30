@@ -38,7 +38,7 @@ namespace {
                          const float maximum, const char* format) {
         ImGui::TextDisabled("%s", label);
         ImGui::SetNextItemWidth(-1.0F);
-        ImGui::SliderFloat((std::string{"##"} + label).c_str(), value, minimum, maximum, format);
+        Editor::Controls::sliderFloat((std::string{"##"} + label).c_str(), value, minimum, maximum, format);
     }
 
     void drawSculptSettings(TerrainSculptState& state) {
@@ -250,7 +250,7 @@ void drawTerrainToolsPanel(Engine::ScenePreset& scene, Engine::Assets::Content& 
         int lod = static_cast<int>(state.previewLod);
         ImGui::TextDisabled("Level of detail");
         ImGui::SetNextItemWidth(-1.0F);
-        if (ImGui::SliderInt("##terrain-preview-lod", &lod, 0, 5, "%d")) {
+        if (Editor::Controls::sliderInt("##terrain-preview-lod", &lod, 0, 5, "%d")) {
             state.previewLod = static_cast<std::uint32_t>(lod);
             auto mesh = std::make_shared<Engine::Mesh>(terrain.createMesh(state.previewLod));
             scene.editor().modify<Engine::MeshRenderer>(selected,
