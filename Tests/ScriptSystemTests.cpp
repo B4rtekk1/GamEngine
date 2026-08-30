@@ -1,6 +1,7 @@
 #include <gtest/gtest.h>
 
 #include "Engine/Core/Transform.h"
+#include "Engine/Core/Diagnostics.h"
 #include "Engine/ECS/Components/ScriptComponent.h"
 #include "Engine/ECS/Registry.h"
 #include "Engine/Scripting/Script.h"
@@ -9,6 +10,7 @@
 #include "Engine/Scene/Scene.h"
 
 #include <string>
+#include <stdexcept>
 
 namespace {
 
@@ -54,6 +56,11 @@ public:
     }
 };
 
+class ThrowingTestScript final : public Engine::Script {
+public:
+    void onUpdate(float) override { throw std::runtime_error{"test failure"}; }
+};
+
 TEST(ScriptSystem, ManagesRuntimeLifecycleAndTransformChanges) {
     LifecycleTestScript::reset();
     auto& scripts = Engine::ScriptRegistry::instance();
@@ -97,6 +104,45 @@ TEST(ScriptSystem, SkipsDisabledAndEmptyScriptComponents) {
     system.update(registry, 0.1F);
     EXPECT_EQ(LifecycleTestScript::created, 0);
     EXPECT_EQ(LifecycleTestScript::updated, 0);
+}
+
+TEST(ScriptSystem, ReportsMissingScriptWithContextOnlyOnce) {
+    Engine::Diagnostics::instance().clear();
+    Engine::Registry registry;
+    const auto entity = registry.create();
+    registry.add<Engine::ScriptComponent>(entity, Engine::ScriptComponent{"PlayerController"});
+    Engine::ScriptSystem system{Engine::ScriptRegistry::instance()};
+
+    system.update(registry, 0.1F);
+    system.update(registry, 0.1F);
+
+    const auto diagnostics = Engine::Diagnostics::instance().entries();
+    ASSERT_EQ(diagnostics.size(), 1U);
+    EXPECT_EQ(diagnostics.front().severity, Engine::DiagnosticSeverity::Warning);
+    EXPECT_EQ(diagnostics.front().context.component, "ScriptComponent");
+    EXPECT_EQ(diagnostics.front().context.object, "Entity " + std::to_string(entity));
+    EXPECT_EQ(diagnostics.front().message,
+              "Brak skryptu PlayerController; zarejestruj go lub usuń komponent.");
+    EXPECT_FALSE(diagnostics.front().context.suggestedAction.empty());
+}
+
+TEST(ScriptSystem, ReportsRuntimeScriptExceptionsInsteadOfPropagatingThem) {
+    Engine::Diagnostics::instance().clear();
+    auto &scripts = Engine::ScriptRegistry::instance();
+    scripts.registerClass<ThrowingTestScript>("ThrowingTestScript", "Tests/ScriptSystemTests.cpp");
+    Engine::Scene scene;
+    const auto actor = scene.createActor("Broken controller");
+    actor.addScript("ThrowingTestScript");
+
+    Engine::ScriptSystem{scripts}.update(scene, 0.1F);
+
+    const auto diagnostics = Engine::Diagnostics::instance().entries();
+    ASSERT_EQ(diagnostics.size(), 1U);
+    EXPECT_EQ(diagnostics.front().severity, Engine::DiagnosticSeverity::Error);
+    EXPECT_EQ(diagnostics.front().context.object, "Broken controller");
+    EXPECT_EQ(diagnostics.front().context.component, "ScriptComponent");
+    EXPECT_EQ(diagnostics.front().context.file, "Tests/ScriptSystemTests.cpp");
+    EXPECT_NE(diagnostics.front().message.find("test failure"), std::string::npos);
 }
 
 TEST(ScriptSystem, AttachesSceneAwareScriptsToTheirActor) {

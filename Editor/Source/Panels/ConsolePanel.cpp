@@ -1,5 +1,6 @@
 #include "Editor/Panels/ConsolePanel.h"
 #include "Elements/NumericControl.h"
+#include "Engine/Core/Diagnostics.h"
 
 #include "imgui.h"
 
@@ -23,6 +24,29 @@ struct LogEntry final {
 std::mutex logMutex;
 std::vector<LogEntry> entries;
 constexpr std::size_t maximumEntries = 2'000;
+std::size_t consumedDiagnostics = 0;
+
+Editor::LogLevel toLogLevel(const Engine::DiagnosticSeverity level) {
+    switch (level) {
+    case Engine::DiagnosticSeverity::Info: return Editor::LogLevel::Info;
+    case Engine::DiagnosticSeverity::Warning: return Editor::LogLevel::Warning;
+    case Engine::DiagnosticSeverity::Error: return Editor::LogLevel::Error;
+    }
+    return Editor::LogLevel::Error;
+}
+
+std::string formatDiagnostic(const Engine::Diagnostic &diagnostic) {
+    std::string result = diagnostic.message;
+    const auto append = [&](const char *label, const std::string &value) {
+        if (!value.empty()) result += " | " + std::string{label} + ": " + value;
+    };
+    append("System", diagnostic.context.subsystem);
+    append("Obiekt", diagnostic.context.object);
+    append("Komponent", diagnostic.context.component);
+    append("Plik", diagnostic.context.file);
+    append("Działanie", diagnostic.context.suggestedAction);
+    return result;
+}
 
 const char* levelName(const Editor::LogLevel level) {
     switch (level) {
@@ -69,9 +93,14 @@ std::string currentTime() {
 namespace Editor {
 
 void ConsolePanel::add(const LogLevel level, const std::string_view message) {
+    const auto severity = level == LogLevel::Info ? Engine::DiagnosticSeverity::Info
+                        : level == LogLevel::Warning ? Engine::DiagnosticSeverity::Warning
+                                                     : Engine::DiagnosticSeverity::Error;
+    Engine::Diagnostics::instance().report(severity, std::string{message}, {.subsystem = "Editor"});
     std::scoped_lock lock{logMutex};
     if (entries.size() == maximumEntries) entries.erase(entries.begin());
     entries.push_back({.level = level, .time = currentTime(), .message = std::string{message}});
+    consumedDiagnostics = Engine::Diagnostics::instance().entries().size();
 }
 
 void ConsolePanel::info(const std::string_view message) { add(LogLevel::Info, message); }
@@ -79,14 +108,28 @@ void ConsolePanel::warning(const std::string_view message) { add(LogLevel::Warni
 void ConsolePanel::error(const std::string_view message) { add(LogLevel::Error, message); }
 
 void ConsolePanel::clear() {
+    Engine::Diagnostics::instance().clear();
     std::scoped_lock lock{logMutex};
     entries.clear();
+    consumedDiagnostics = 0;
 }
 
 void ConsolePanel::draw(bool& isOpen) {
     if (!ImGui::Begin("Console", &isOpen)) {
         ImGui::End();
         return;
+    }
+
+    const auto diagnostics = Engine::Diagnostics::instance().entries();
+    {
+        std::scoped_lock lock{logMutex};
+        if (consumedDiagnostics > diagnostics.size()) consumedDiagnostics = 0;
+        for (std::size_t index = consumedDiagnostics; index < diagnostics.size(); ++index) {
+            if (entries.size() == maximumEntries) entries.erase(entries.begin());
+            entries.push_back({.level = toLogLevel(diagnostics[index].severity), .time = currentTime(),
+                               .message = formatDiagnostic(diagnostics[index])});
+        }
+        consumedDiagnostics = diagnostics.size();
     }
 
     static bool showInfo = true;

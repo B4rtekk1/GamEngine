@@ -50,5 +50,6 @@ namespace Engine {
         friend class ScriptSystem;
         std::unique_ptr<Script> runtime;
         std::string runtimeClassName;
+        std::string lastDiagnosticKey;
     };
 } // namespace Engine

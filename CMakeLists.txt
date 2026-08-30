@@ -142,6 +142,7 @@ add_library(Engine
         Engine/Source/Assets/GlbLoader.cpp
         Engine/Source/Assets/Content.cpp
         Engine/Source/Core/Camera.cpp
+        Engine/Source/Core/Diagnostics.cpp
         Engine/Source/Core/Time.cpp
         Engine/Source/ECS/Registry.cpp
         Engine/Source/Input/Input.cpp
