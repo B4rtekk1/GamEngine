@@ -51,7 +51,7 @@ namespace {
             state.mode = static_cast<Engine::TerrainSculptMode>(mode);
 
         fullWidthSlider("Brush size", &state.radius, 0.25F, 8.0F, "%.1f m");
-        fullWidthSlider("Strength", &state.strength, 0.1F, 12.0F, "%.1f");
+        fullWidthSlider("Strength", &state.strength, 0.1F, 100.0F, "%.1f");
 
         constexpr const char* falloffs[]{"Smooth", "Linear", "Sharp"};
         int falloff = static_cast<int>(state.falloff);

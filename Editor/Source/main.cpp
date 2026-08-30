@@ -482,13 +482,11 @@ int main(int argc, char** argv) {
             } else if (viewportInteraction.terrainGrassChanged) {
                 renderer.synchronizeScene(scene);
             } else if (viewportInteraction.terrainGeometryChanged) {
-                renderer.updateMeshGeometry(selectedEntity, viewportInteraction.terrainFirstVertex,
-                                            viewportInteraction.terrainVertexCount);
+                for (const Engine::Entity terrain : viewportInteraction.terrainGeometryEntities)
+                    renderer.updateMeshGeometry(terrain);
             }
             if (terrainSculpt.strokeCompleted) {
-                static_cast<void>(history.captureTerrainStroke(
-                    scene, terrainSculpt.completedEntity, terrainSculpt.heightsBeforeStroke,
-                    terrainSculpt.completedDirty));
+                static_cast<void>(history.capture(scene));
                 terrainSculpt.strokeCompleted = false;
                 terrainSculpt.completedEntity = Engine::NullEntity;
                 terrainSculpt.completedDirty = {};

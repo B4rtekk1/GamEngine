@@ -6,6 +6,12 @@
 #include <memory>
 #include <vector>
 
+struct TerrainStrokeTarget final {
+    Engine::Entity entity{Engine::NullEntity};
+    std::shared_ptr<Engine::Mesh> workingMesh;
+    Engine::TerrainRegion dirty{};
+};
+
 struct TerrainSculptState final {
     bool enabled{};
     bool paintEnabled{};
@@ -34,7 +40,12 @@ struct TerrainSculptState final {
     float flattenHeight{};
     bool hasPreviousPoint{};
     Engine::Vec3 previousPoint{};
+    bool hasPreviousSculptWorldPoint{};
+    Engine::Vec3 previousSculptWorldPoint{};
     std::shared_ptr<Engine::Mesh> workingMesh;
+    // Sculpting operates on every terrain intersected by the brush.  Paint
+    // and detail tools retain the single-terrain state above.
+    std::vector<TerrainStrokeTarget> sculptTargets;
     std::vector<float> heightsBeforeStroke;
     Engine::TerrainRegion strokeDirty{};
     bool strokeCompleted{};
