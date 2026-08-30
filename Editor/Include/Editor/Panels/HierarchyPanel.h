@@ -14,5 +14,6 @@ public:
                                                Action& action,
                                                Engine::Entity& actionEntity,
                                                bool canPaste,
+                                               bool disabled,
                                                bool& isOpen);
 };

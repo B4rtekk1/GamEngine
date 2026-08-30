@@ -298,7 +298,7 @@ int main(int argc, char** argv) {
             if (showHierarchy) {
                 if (const Engine::Entity clicked = HierarchyPanel::draw(
                         scene, content, selectedEntity, hierarchyAction, hierarchyActionEntity,
-                        clipboard.canPaste(scene), showHierarchy);
+                        clipboard.canPaste(scene), playing, showHierarchy);
                     clicked != Engine::NullEntity) {
                     selectedEntity = clicked;
                     renderer.setEditorSelection(selectedEntity);
@@ -381,6 +381,10 @@ int main(int argc, char** argv) {
             }
             if (!playing && !ImGui::GetIO().WantTextInput &&
                 ImGui::GetIO().KeyCtrl) {
+                if (ImGui::GetIO().KeyShift && ImGui::IsKeyPressed(ImGuiKey_N)) {
+                    selectedEntity = scene.createGameObject();
+                    renderer.setEditorSelection(selectedEntity);
+                }
                 if (ImGui::IsKeyPressed(ImGuiKey_Z) && history.undo(scene)) {
                     sceneLoaded = true;
                 }

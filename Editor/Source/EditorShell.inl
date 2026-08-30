@@ -110,6 +110,7 @@ Engine::Entity drawEditorMenuBar(Engine::ScenePreset &scene, Engine::Renderer &r
     }
 
     if (ImGui::BeginMenu("GameObject")) {
+        ImGui::BeginDisabled(playing);
         if (ImGui::MenuItem("Create Empty", "Ctrl+Shift+N")) {
             createdEntity = scene.createGameObject();
         }
@@ -131,6 +132,7 @@ Engine::Entity drawEditorMenuBar(Engine::ScenePreset &scene, Engine::Renderer &r
         if (ImGui::MenuItem("Create Terrain")) {
             createdEntity = scene.createTerrain();
         }
+        ImGui::EndDisabled();
         ImGui::EndMenu();
     }
 

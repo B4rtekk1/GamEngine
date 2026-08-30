@@ -1,11 +1,26 @@
 Engine::Entity HierarchyPanel::draw(Engine::ScenePreset &scene, Engine::Assets::Content& content,
                                     const Engine::Entity selected, Action &action,
-                                    Engine::Entity &actionEntity, const bool canPaste, bool& isOpen) {
+                                    Engine::Entity &actionEntity, const bool canPaste,
+                                    const bool disabled, bool& isOpen) {
     Engine::Entity clicked = Engine::NullEntity;
     static std::string assetDropError;
     action = Action::None;
     actionEntity = Engine::NullEntity;
+    const auto createObjectMenu = [&] {
+        if (ImGui::MenuItem("Empty Game Object", "Ctrl+Shift+N")) {
+            clicked = scene.createGameObject();
+        }
+        ImGui::Separator();
+        if (ImGui::MenuItem("3D Object/Cube")) clicked = scene.createCube();
+        if (ImGui::MenuItem("3D Object/Sphere")) clicked = scene.createSphere();
+        if (ImGui::MenuItem("3D Object/Plane")) clicked = scene.createPlane();
+        if (ImGui::MenuItem("3D Object/Ramp")) clicked = scene.createRamp();
+        ImGui::Separator();
+        if (ImGui::MenuItem("Light/Directional Light")) clicked = scene.createLight();
+        if (ImGui::MenuItem("Terrain")) clicked = scene.createTerrain();
+    };
     const auto acceptModelDrop = [&](const Engine::Entity parent = Engine::NullEntity) {
+        if (disabled) return;
         if (const ImGuiPayload* payload =
                 ImGui::AcceptDragDropPayload(Editor::AssetDragDrop::modelPayload)) {
             try {
@@ -31,12 +46,18 @@ Engine::Entity HierarchyPanel::draw(Engine::ScenePreset &scene, Engine::Assets::
         }
     };
     ImGui::Begin("Hierarchy", &isOpen);
-    if (EditorButton("+  New Object", {-1.0F, 0.0F}).draw()) {
-        clicked = scene.createGameObject();
+    ImGui::BeginDisabled(disabled);
+    if (EditorButton("+  New Object...", {-1.0F, 0.0F}).draw()) {
+        ImGui::OpenPopup("Create Object");
     }
     if (ImGui::IsItemHovered()) {
-        ImGui::SetTooltip("Create an empty game object");
+        ImGui::SetTooltip("Create an object in the scene");
     }
+    if (ImGui::BeginPopup("Create Object")) {
+        createObjectMenu();
+        ImGui::EndPopup();
+    }
+    ImGui::EndDisabled();
     static char filter[64] = {};
     ImGui::SetNextItemWidth(-1.0F);
     const ImVec2 framePadding = ImGui::GetStyle().FramePadding;
@@ -256,6 +277,13 @@ Engine::Entity HierarchyPanel::draw(Engine::ScenePreset &scene, Engine::Assets::
     // Allow pasting from empty space in the hierarchy, without requiring an
     // object to be selected or right-clicked first.
     if (ImGui::BeginPopupContextWindow("##hierarchy-context", ImGuiPopupFlags_NoOpenOverItems)) {
+        ImGui::BeginDisabled(disabled);
+        if (ImGui::BeginMenu("Create Object")) {
+            createObjectMenu();
+            ImGui::EndMenu();
+        }
+        ImGui::EndDisabled();
+        ImGui::Separator();
         if (ImGui::MenuItem("Paste", nullptr, false, canPaste)) {
             action = Action::Paste;
         }
