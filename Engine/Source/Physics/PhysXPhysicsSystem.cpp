@@ -128,18 +128,13 @@ namespace Engine {
                                     instance.bendX = directionX;
                                     instance.bendZ = directionZ;
                                     instance.trampled = target;
-                                    grass.dirtyInstances.push_back(index);
+                                    grass.markInstanceDirty(index);
                                     changed = true;
                                 }
                             }
                         }
                     }
-                    if (changed) {
-                        std::ranges::sort(grass.dirtyInstances);
-                        grass.dirtyInstances.erase(std::ranges::unique(grass.dirtyInstances).begin(),
-                                                   grass.dirtyInstances.end());
-                        changedTerrains.push_back(entity);
-                    }
+                    if (changed) changedTerrains.push_back(entity);
                 });
             for (const Entity entity : changedTerrains)
                 registry.markChanged<TerrainGrassComponent>(entity);

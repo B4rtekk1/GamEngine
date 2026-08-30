@@ -58,7 +58,7 @@ void CanvasRenderer::create(const VkPhysicalDevice physicalDevice,
 void CanvasRenderer::destroy() noexcept {
     frames_.clear();
     batch_.clear();
-    sortedRootElements_.clear();
+    rootElements_ = {};
     rootElementsSource_.clear();
     sortedChildren_.clear();
     pipeline_.destroy();
@@ -71,50 +71,35 @@ void CanvasRenderer::destroy() noexcept {
 }
 
 void CanvasRenderer::sortIfNeeded(const std::vector<const UIElement*>& source,
-                                  std::vector<const UIElement*>& cache) {
-    bool valid = cache.size() == source.size();
-    if (valid) {
-        std::unordered_map<const UIElement*, std::size_t> sourceIndices;
-        sourceIndices.reserve(source.size());
-        for (std::size_t index = 0; index < source.size(); ++index) {
-            sourceIndices.emplace(source[index], index);
-        }
+                                  SortCache& cache) {
+    const bool unchanged = cache.source.size() == source.size() &&
+        std::ranges::equal(cache.source, source, [](const UIElement* previous,
+                                                    const UIElement* current) {
+            return previous == current && previous->sortingOrder == current->sortingOrder;
+        });
+    if (unchanged) return;
 
-        for (std::size_t index = 0; index < cache.size() && valid; ++index) {
-            const auto sourceIndex = sourceIndices.find(cache[index]);
-            valid = sourceIndex != sourceIndices.end();
-            if (!valid) {
-                break;
-            }
-            if (index > 0) {
-                const UIElement* const previous = cache[index - 1];
-                const UIElement* const current = cache[index];
-                valid = previous->sortingOrder < current->sortingOrder ||
-                        (previous->sortingOrder == current->sortingOrder &&
-                         sourceIndices.at(previous) < sourceIndex->second);
-            }
-        }
-    }
-
-    if (!valid) {
-        cache = source;
-        std::stable_sort(cache.begin(), cache.end(),
+    // Keep a lightweight snapshot of the hierarchy and its order values.
+    // Geometry-only canvas invalidations now reuse the sorted child lists
+    // without allocating a temporary hash map or sorting again.
+    cache.source = source;
+    cache.sorted = source;
+    std::stable_sort(cache.sorted.begin(), cache.sorted.end(),
                          [](const UIElement* lhs, const UIElement* rhs) {
                              return lhs->sortingOrder < rhs->sortingOrder;
                          });
-    }
 }
 
 const std::vector<const UIElement*>&
 CanvasRenderer::sortedChildren(const UIElement& element) {
-    auto& source = sortedChildren_[&element];
+    auto& cache = sortedChildren_[&element];
     std::vector<const UIElement*> current;
     current.reserve(element.children().size());
     for (const auto& child : element.children()) {
         current.push_back(child.get());
     }
-    sortIfNeeded(current, source);
-    return source;
+    sortIfNeeded(current, cache);
+    return cache.sorted;
 }
 
 void CanvasRenderer::appendElement(const UIElement& element) {
@@ -169,8 +154,8 @@ void CanvasRenderer::record(const Canvas& canvas,
         for (const auto& element : canvas.elements()) {
             rootElementsSource_.push_back(element.get());
         }
-        sortIfNeeded(rootElementsSource_, sortedRootElements_);
-        for (const UIElement* element : sortedRootElements_) {
+        sortIfNeeded(rootElementsSource_, rootElements_);
+        for (const UIElement* element : rootElements_.sorted) {
             appendElement(*element);
         }
         cachedCanvasRevision_ = revision;

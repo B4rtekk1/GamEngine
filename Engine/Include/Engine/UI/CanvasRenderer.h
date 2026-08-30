@@ -51,13 +51,17 @@ namespace Engine::UI {
 
     private:
         struct FrameResources;
+        struct SortCache final {
+            std::vector<const UIElement*> source;
+            std::vector<const UIElement*> sorted;
+        };
 
         void appendElement(const UIElement &element);
 
         [[nodiscard]] const std::vector<const UIElement *> &sortedChildren(const UIElement &element);
 
         void sortIfNeeded(const std::vector<const UIElement *> &source,
-                          std::vector<const UIElement *> &cache);
+                          SortCache &cache);
 
         [[nodiscard]] bool ensureCapacity(FrameResources &frame);
 
@@ -67,9 +71,9 @@ namespace Engine::UI {
         UIPipeline pipeline_;
         UIBatch batch_;
         std::vector<std::unique_ptr<FrameResources> > frames_;
-        std::vector<const UIElement *> sortedRootElements_;
+        SortCache rootElements_;
         std::vector<const UIElement *> rootElementsSource_;
-        std::unordered_map<const UIElement *, std::vector<const UIElement *> > sortedChildren_;
+        std::unordered_map<const UIElement *, SortCache> sortedChildren_;
         std::uint64_t cachedCanvasRevision_{};
         bool batchDirty_{true};
         std::uint64_t pendingFrameUploads_{};

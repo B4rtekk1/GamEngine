@@ -38,6 +38,10 @@ namespace Engine {
         mutable std::unordered_map<std::int64_t, std::vector<std::size_t>> spatialCells;
         mutable std::size_t spatialInstanceCount{};
         mutable std::vector<std::size_t> dirtyInstances;
+        // A generation stamp makes repeated writes to one instance O(1),
+        // avoiding a sort/unique pass for every physics update.
+        mutable std::vector<std::uint32_t> dirtyInstanceStamps;
+        mutable std::uint32_t dirtyInstanceGeneration{1};
         mutable bool allInstancesDirty{true};
         static constexpr float SpatialCellSize = 2.0F;
 
@@ -54,6 +58,8 @@ namespace Engine {
             spatialCells.clear();
             spatialInstanceCount = 0;
             dirtyInstances.clear();
+            dirtyInstanceStamps.clear();
+            dirtyInstanceGeneration = 1;
             allInstancesDirty = true;
             return *this;
         }
@@ -77,6 +83,25 @@ namespace Engine {
                 spatialCells[spatialKey(x, z)].push_back(i);
             }
             spatialInstanceCount = instances.size();
+        }
+
+        void markInstanceDirty(const std::size_t index) const {
+            if (index >= instances.size()) return;
+            if (dirtyInstanceStamps.size() != instances.size()) {
+                dirtyInstanceStamps.assign(instances.size(), 0);
+            }
+            if (dirtyInstanceStamps[index] == dirtyInstanceGeneration) return;
+            dirtyInstanceStamps[index] = dirtyInstanceGeneration;
+            dirtyInstances.push_back(index);
+        }
+
+        void clearDirtyInstances() const {
+            dirtyInstances.clear();
+            ++dirtyInstanceGeneration;
+            if (dirtyInstanceGeneration == 0) {
+                std::fill(dirtyInstanceStamps.begin(), dirtyInstanceStamps.end(), 0);
+                dirtyInstanceGeneration = 1;
+            }
         }
 
         [[nodiscard]] bool hasPrefab() const noexcept {

@@ -869,7 +869,7 @@
             }
             uploadPendingRenderableBuffers();
             registry.view<TerrainGrassComponent>([](const Entity, const TerrainGrassComponent& grass) {
-                grass.dirtyInstances.clear();
+                grass.clearDirtyInstances();
                 grass.allInstancesDirty = false;
             });
             lastTransformRevision = transformRevision;
