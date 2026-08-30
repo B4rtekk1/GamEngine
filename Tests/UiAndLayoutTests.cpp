@@ -5,9 +5,15 @@
 #include "Engine/Input/MouseButton.h"
 #include "Engine/UI/UIElement.h"
 #include "Engine/UI/UIVertex.h"
+#include "Engine/UI/Canvas.h"
+#include "Engine/UI/ButtonElement.h"
+#include "Engine/UI/PanelElement.h"
+#include "Engine/UI/TextElement.h"
+#include "Engine/UI/Vulkan/UIFontAtlas.h"
 
 #include <cstdint>
 #include <memory>
+#include <stdexcept>
 
 namespace {
 
@@ -50,6 +56,117 @@ TEST(UIElement, StoresVisualStateAndOwnsChildren) {
     EXPECT_FALSE(element.visible);
     EXPECT_EQ(element.sortingOrder, 42);
     EXPECT_EQ(element.children().size(), 1u);
+}
+
+TEST(Canvas, LaysOutElementsAndTracksStructuralChanges) {
+    Engine::UI::Canvas canvas{200, 100};
+    EXPECT_TRUE(canvas.empty());
+    EXPECT_EQ(canvas.revision(), 1u);
+
+    auto panel = std::make_unique<Engine::UI::PanelElement>();
+    panel->rectTransform.offsetMin = {10.0F, 20.0F};
+    panel->rectTransform.offsetMax = {60.0F, 50.0F};
+    auto& added = canvas.addElement(std::move(panel));
+    EXPECT_EQ(canvas.size(), 1u);
+    EXPECT_FLOAT_EQ(added.rectTransform.calculatedRect.x, 10.0F);
+    EXPECT_FLOAT_EQ(added.rectTransform.calculatedRect.height, 30.0F);
+    const auto afterAdd = canvas.revision();
+
+    canvas.resize(300, 150);
+    EXPECT_FLOAT_EQ(added.rectTransform.calculatedRect.width, 50.0F);
+    EXPECT_GT(canvas.revision(), afterAdd);
+    const auto afterResize = canvas.revision();
+    canvas.resize(300, 150);
+    EXPECT_EQ(canvas.revision(), afterResize);
+
+    auto removed = canvas.removeElement(&added);
+    ASSERT_NE(removed, nullptr);
+    EXPECT_TRUE(canvas.empty());
+    const auto absent = canvas.removeElement(removed.get());
+    EXPECT_EQ(absent, nullptr);
+    const auto afterRemove = canvas.revision();
+    canvas.clear();
+    EXPECT_EQ(canvas.revision(), afterRemove);
+    EXPECT_THROW(static_cast<void>(canvas.addElement(nullptr)), std::invalid_argument);
+}
+
+TEST(UIBatch, AppendsQuadsWithContiguousVerticesAndIndices) {
+    Engine::UI::UIBatch batch;
+    const auto color = Engine::Color::red();
+    batch.addQuad({10.0F, 20.0F, 30.0F, 40.0F}, color);
+    batch.addQuad({0.0F, 0.0F, 5.0F, 6.0F}, Engine::Color::blue());
+    ASSERT_EQ(batch.vertices.size(), 8u);
+    ASSERT_EQ(batch.indices.size(), 12u);
+    EXPECT_FLOAT_EQ(batch.vertices[0].position.x(), 10.0F);
+    EXPECT_FLOAT_EQ(batch.vertices[2].position.y(), 60.0F);
+    EXPECT_FLOAT_EQ(batch.vertices[3].uv.x(), 0.0F);
+    EXPECT_FLOAT_EQ(batch.vertices[3].uv.y(), 1.0F);
+    EXPECT_EQ(batch.indices[6], 4u);
+    EXPECT_EQ(batch.indices[11], 7u);
+    EXPECT_FLOAT_EQ(batch.vertices[0].textSample, 0.0F);
+
+    batch.addQuad({0.0F, 0.0F, 0.0F, 1.0F}, color);
+    batch.addQuad({0.0F, 0.0F, 1.0F, -1.0F}, color);
+    EXPECT_EQ(batch.vertices.size(), 8u);
+    batch.clear();
+    EXPECT_TRUE(batch.empty());
+    EXPECT_TRUE(batch.vertices.empty());
+}
+
+TEST(PanelAndButtonElements, BuildGeometryAndReflectVisualState) {
+    Engine::UI::PanelElement panel{Engine::Color::green()};
+    panel.rectTransform.calculatedRect = {1.0F, 2.0F, 3.0F, 4.0F};
+    Engine::UI::UIBatch batch;
+    panel.buildGeometry(batch);
+    EXPECT_EQ(batch.indices.size(), 6u);
+    const auto panelRevision = panel.geometryRevision();
+    panel.color = Engine::Color::blue();
+    EXPECT_NE(panel.geometryRevision(), panelRevision);
+
+    Engine::UI::ButtonElement button;
+    int clicks = 0;
+    button.onClick = [&clicks] { ++clicks; };
+    button.click();
+    EXPECT_EQ(clicks, 1);
+    button.rectTransform.calculatedRect = {0.0F, 0.0F, 2.0F, 2.0F};
+    button.buildGeometry(batch);
+    EXPECT_EQ(batch.indices.size(), 12u);
+    const auto buttonRevision = button.geometryRevision();
+    button.color = Engine::Color::red();
+    EXPECT_NE(button.geometryRevision(), buttonRevision);
+}
+
+TEST(UIFontAtlas, StartsEmptyAndRejectsInvalidBuildRequests) {
+    Engine::UI::UIFontAtlas atlas;
+    EXPECT_EQ(atlas.width(), 0u);
+    EXPECT_EQ(atlas.height(), 0u);
+    EXPECT_EQ(atlas.pixelSize(), 0u);
+    EXPECT_TRUE(atlas.pixels().empty());
+    EXPECT_EQ(atlas.glyph('A'), nullptr);
+
+    EXPECT_EQ(atlas.build({}, 16), "Invalid font atlas parameters");
+    EXPECT_EQ(atlas.build("font.ttf", 0), "Invalid font atlas parameters");
+    EXPECT_EQ(atlas.build("font.ttf", 16, 127, 126), "Invalid font atlas parameters");
+    EXPECT_FALSE(atlas.build("missing-font.ttf", 16).empty());
+    EXPECT_EQ(atlas.pixelSize(), 0u);
+    EXPECT_TRUE(atlas.pixels().empty());
+}
+
+TEST(TextElement, SkipsGeometryForAnEmptyAtlasAndTracksTextChanges) {
+    Engine::UI::UIFontAtlas atlas;
+    Engine::TextComponent text;
+    text.text = "Hello";
+    Engine::UI::TextElement element{text, atlas};
+    element.rectTransform.calculatedRect = {10.0F, 20.0F, 100.0F, 30.0F};
+    Engine::UI::UIBatch batch;
+    element.buildGeometry(batch);
+    EXPECT_TRUE(batch.empty());
+    const auto revision = element.geometryRevision();
+    element.text.text = "World";
+    EXPECT_NE(element.geometryRevision(), revision);
+    element.text.visible = false;
+    element.buildGeometry(batch);
+    EXPECT_TRUE(batch.empty());
 }
 
 TEST(UIVertex, StoresDataAndReportsItsOwnBinarySize) {

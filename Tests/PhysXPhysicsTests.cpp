@@ -3,7 +3,10 @@
 #include "Engine/Physics/PhysicsSystem.h"
 #include "Engine/Scene/Scene.h"
 #include "Engine/Scene/SceneEditor.h"
+#include "Engine/Scene/Prefab.h"
 #include "Engine/ECS/Components/TerrainGrassComponent.h"
+#include "Engine/ECS/Components/MeshRendererComponent.h"
+#include "Engine/Scene/Components/IdentityComponents.h"
 
 namespace {
 
@@ -101,6 +104,60 @@ TEST(PhysXPhysics, SpherePermanentlyTramplesNearbyTerrainGrass) {
     physics.update(scene, 1.0F / 60.0F);
     EXPECT_FLOAT_EQ(scene.editor().get<Engine::TerrainGrassComponent>(entity)
                         .instances.front().trampled, trampled);
+}
+
+TEST(Prefab, CubePreservesRenderSettingsWhenInstantiatedInScene) {
+    Engine::PBRMaterial material;
+    material.metallic = 0.7F;
+    material.roughness = 0.2F;
+    auto prefab = Engine::Prefab::cube(material);
+    prefab.setCastShadow(false);
+    prefab.setCullingBatch(9);
+    ASSERT_NE(prefab.mesh(), nullptr);
+    EXPECT_EQ(prefab.mesh()->vertices.size(), 24u);
+    EXPECT_EQ(prefab.mesh()->indices.size(), 36u);
+
+    Engine::Scene scene;
+    const auto actor = scene.createPrefab("Prefab cube", prefab);
+    ASSERT_TRUE(actor.valid());
+    EXPECT_EQ(actor.name(), "Prefab cube");
+    const auto entity = scene.findEntity(actor.id());
+    ASSERT_NE(entity, Engine::NullEntity);
+    const auto& renderer = scene.editor().get<Engine::MeshRendererComponent>(entity);
+    EXPECT_EQ(renderer.mesh, prefab.mesh());
+    EXPECT_FLOAT_EQ(renderer.material.metallic, 0.7F);
+    EXPECT_FLOAT_EQ(renderer.material.roughness, 0.2F);
+    EXPECT_FALSE(renderer.castShadow);
+    EXPECT_EQ(renderer.cullingBatch, 9u);
+}
+
+TEST(Scene, MaintainsUniqueNamesAndFreshIdentityAcrossDuplication) {
+    Engine::Scene scene;
+    const auto first = scene.createActor("Player");
+    auto second = scene.createActor("Player");
+    ASSERT_TRUE(first.valid());
+    ASSERT_TRUE(second.valid());
+    EXPECT_EQ(first.name(), "Player");
+    EXPECT_EQ(second.name(), "Player 2");
+
+    second.setName("Enemy");
+    EXPECT_EQ(second.name(), "Enemy");
+    EXPECT_TRUE(scene.findActor("Player").valid());
+    EXPECT_TRUE(scene.findActor("Enemy").valid());
+
+    const auto firstEntity = scene.findEntity(first.id());
+    const auto originalUuid = scene.editor().get<Engine::UUIDComponent>(firstEntity).value;
+    const auto copy = scene.duplicate(first);
+    ASSERT_TRUE(copy.valid());
+    EXPECT_EQ(copy.name(), "Player 2");
+    const auto copyEntity = scene.findEntity(copy.id());
+    EXPECT_NE(scene.editor().get<Engine::UUIDComponent>(copyEntity).value, originalUuid);
+
+    second.destroy();
+    EXPECT_FALSE(second.valid());
+    EXPECT_FALSE(scene.findActor("Enemy").valid());
+    EXPECT_TRUE(first.valid());
+    EXPECT_TRUE(copy.valid());
 }
 
 } // namespace

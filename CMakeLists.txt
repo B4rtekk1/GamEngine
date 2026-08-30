@@ -310,10 +310,16 @@ if(BUILD_TESTING)
             Tests/UiAndLayoutTests.cpp
             Tests/TimeTests.cpp
             Tests/SceneBuilderTests.cpp
+            Tests/ScriptRegistryTests.cpp
             Engine/Source/Core/Camera.cpp
             Engine/Source/Core/Time.cpp
             Engine/Source/Renderer/Geometry/Terrain.cpp
-            Engine/Source/UI/RectTransform.cpp)
+            Engine/Source/UI/Canvas.cpp
+            Engine/Source/UI/RectTransform.cpp
+            Engine/Source/UI/UIBatch.cpp
+            Engine/Source/UI/Vulkan/UIFontAtlas.cpp
+            Engine/Source/UI/Vulkan/UIFontAtlasRuntime.cpp
+            Engine/Source/Scripting/ScriptRegistry.cpp)
     target_link_libraries(GamEngineTests PRIVATE GTest::gtest_main)
     target_include_directories(GamEngineTests PRIVATE
             ${CMAKE_CURRENT_SOURCE_DIR}/Engine/Include

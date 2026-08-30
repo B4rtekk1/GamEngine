@@ -3,7 +3,12 @@
 #include "Engine/Assets/AssetHandle.h"
 #include "Engine/Core/Camera.h"
 #include "Engine/ECS/Components/CameraComponent.h"
+#include "Engine/Renderer/Geometry/Cube.h"
 #include "Engine/Renderer/Geometry/Mesh.h"
+#include "Engine/Renderer/Geometry/Plane.h"
+#include "Engine/Renderer/Geometry/Ramp.h"
+#include "Engine/Renderer/Geometry/Sphere.h"
+#include "Engine/Renderer/ViewportCamera.h"
 #include "Engine/UI/RectTransform.h"
 
 #include <memory>
@@ -15,6 +20,14 @@ void ExpectVec3Near(const Engine::Vec3& value, float x, float y, float z) {
     EXPECT_NEAR(value.x(), x, 1.0e-5F);
     EXPECT_NEAR(value.y(), y, 1.0e-5F);
     EXPECT_NEAR(value.z(), z, 1.0e-5F);
+}
+
+void ExpectMat4Near(const Engine::Mat4& value, const Engine::Mat4& expected) {
+    for (int column = 0; column < 4; ++column) {
+        for (int row = 0; row < 4; ++row) {
+            EXPECT_NEAR(value.native()[column][row], expected.native()[column][row], 1.0e-5F);
+        }
+    }
 }
 
 TEST(CameraComponent, DefaultsAreValidPerspectiveSettings) {
@@ -132,6 +145,87 @@ TEST(Mesh, ReportsEmptyStateAndCounts) {
     EXPECT_FALSE(mesh.empty());
     EXPECT_EQ(mesh.vertexCount(), 3u);
     EXPECT_EQ(mesh.indexCount(), 3u);
+}
+
+TEST(PrimitiveMeshes, CubeAndPlaneHaveExpectedTopologyAndBounds) {
+    const auto cube = Engine::Cube::createMesh();
+    EXPECT_EQ(cube.vertices.size(), 24u);
+    EXPECT_EQ(cube.indices.size(), 36u);
+    for (const auto index : cube.indices) {
+        EXPECT_LT(index, cube.vertices.size());
+    }
+    for (const auto& vertex : cube.vertices) {
+        EXPECT_NEAR(vertex.position.length(), 0.8660254F, 1.0e-5F);
+        EXPECT_NEAR(vertex.normal.length(), 1.0F, 1.0e-5F);
+    }
+
+    const auto plane = Engine::Plane::createMesh();
+    ASSERT_EQ(plane.vertices.size(), 4u);
+    EXPECT_EQ(plane.indices.size(), 6u);
+    EXPECT_FLOAT_EQ(plane.vertices[0].position.y(), 0.0F);
+    EXPECT_FLOAT_EQ(plane.vertices[0].position.x(), -0.5F);
+    EXPECT_FLOAT_EQ(plane.vertices[2].position.z(), 0.5F);
+    for (const auto& vertex : plane.vertices) {
+        ExpectVec3Near(vertex.normal, 0.0F, 1.0F, 0.0F);
+    }
+}
+
+TEST(PrimitiveMeshes, SphereRespectsRequestedResolutionAndUnitNormals) {
+    constexpr unsigned int rings = 3;
+    constexpr unsigned int segments = 4;
+    const auto sphere = Engine::Sphere::createMesh(rings, segments);
+    EXPECT_EQ(sphere.vertices.size(), (rings + 1U) * (segments + 1U));
+    EXPECT_EQ(sphere.indices.size(), rings * segments * 6U);
+    for (const auto index : sphere.indices) {
+        EXPECT_LT(index, sphere.vertices.size());
+    }
+    for (const auto& vertex : sphere.vertices) {
+        EXPECT_NEAR(vertex.position.length(), 0.5F, 1.0e-5F);
+        EXPECT_NEAR(vertex.normal.length(), 1.0F, 1.0e-5F);
+    }
+}
+
+TEST(PrimitiveMeshes, RampExposesExpectedDimensionsAndValidTriangles) {
+    const auto extent = Engine::Ramp::halfExtents();
+    ExpectVec3Near(extent, 3.0F, 2.0F, 2.0F);
+    const auto ramp = Engine::Ramp::createMesh();
+    EXPECT_EQ(ramp.vertices.size(), 18u);
+    EXPECT_EQ(ramp.indices.size(), 30u);
+    for (const auto index : ramp.indices) {
+        EXPECT_LT(index, ramp.vertices.size());
+    }
+    EXPECT_FLOAT_EQ(ramp.vertices[0].position.y(), -extent.y());
+    EXPECT_FLOAT_EQ(ramp.vertices[6].position.y(), extent.y());
+    EXPECT_FLOAT_EQ(ramp.vertices[6].position.z(), extent.z());
+}
+
+TEST(ViewportCamera, BuildsGameCameraFromComponentAndTransform) {
+    Engine::CameraComponent component;
+    component.setPerspective(75.0F, 0.25F, 500.0F);
+    Engine::Transform transform;
+    transform.position = {1.0F, 2.0F, 3.0F};
+    transform.rotation = {15.0F, 90.0F, 0.0F};
+
+    const auto viewport = Engine::ViewportCamera::game(component, transform, 16.0F / 9.0F);
+    EXPECT_EQ(viewport.type, Engine::ViewportCameraType::Game);
+    ExpectVec3Near(viewport.camera.position(), 1.0F, 2.0F, 3.0F);
+    auto expectedProjection = Engine::Mat4::perspective(
+        Engine::Radians{Engine::Degrees{75.0F}}, 16.0F / 9.0F, 0.25F, 500.0F);
+    expectedProjection.native()[1][1] *= -1.0F;
+    ExpectMat4Near(viewport.camera.projectionMatrix(), expectedProjection);
+    EXPECT_GT(viewport.camera.forward().z(), 0.9F);
+    EXPECT_GT(viewport.camera.forward().y(), 0.2F);
+}
+
+TEST(ViewportCamera, BuildsStableSceneCameraDefaults) {
+    const auto viewport = Engine::ViewportCamera::scene(4.0F / 3.0F);
+    EXPECT_EQ(viewport.type, Engine::ViewportCameraType::Scene);
+    ExpectVec3Near(viewport.camera.position(), 8.0F, 6.0F, 8.0F);
+    auto expectedProjection = Engine::Mat4::perspective(
+        Engine::Radians{Engine::Degrees{60.0F}}, 4.0F / 3.0F, 0.1F, 1000.0F);
+    expectedProjection.native()[1][1] *= -1.0F;
+    ExpectMat4Near(viewport.camera.projectionMatrix(), expectedProjection);
+    EXPECT_NEAR(viewport.camera.forward().length(), 1.0F, 1.0e-5F);
 }
 
 } // namespace
