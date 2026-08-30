@@ -230,6 +230,10 @@ namespace Engine {
             cameraController.setEditorRotation(yaw, pitch);
         }
 
+        void setEditorCameraPosition(const Vec3 position) noexcept {
+            cameraController.setEditorPosition(position);
+        }
+
         void processEvent(const SDL_Event &event) {
             SDLInput::processEvent(event);
             if (event.type == SDL_EVENT_WINDOW_RESIZED ||

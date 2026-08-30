@@ -526,6 +526,22 @@ void ShadowPass::preparePages(
 
     constexpr std::uint32_t pagesPerLevel =
         ShadowMap::VirtualPagesPerAxis * ShadowMap::VirtualPagesPerAxis;
+
+    // A moving caster invalidates both its old and new footprint.  The old
+    // footprint is not necessarily requested by the camera this frame, but
+    // it can still be sampled through an existing page-table entry. Refresh
+    // dirty resident pages before serving new requests so clearing the tile
+    // removes the caster's previous shadow instead of leaving it in the
+    // atlas until that page happens to be requested again.
+    for (std::uint32_t physical = 0; physical < physicalPages_.size() &&
+                                      pagesToRender_.size() < ShadowMap::MaxPageUpdatesPerFrame;
+         ++physical) {
+        PhysicalPage& page = physicalPages_[physical];
+        if (!page.allocated || !page.dirty) continue;
+        page.dirty = false;
+        pagesToRender_.push_back(physical);
+    }
+
     for (const std::uint32_t key : requests) {
         std::uint32_t physical = pageTable_[key];
         if (physical == ShadowMap::InvalidPage) {

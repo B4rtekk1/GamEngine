@@ -93,6 +93,9 @@ namespace Engine {
         /** Rotates the Scene View camera without changing its position. */
         void setEditorCameraRotation(float yaw, float pitch) const noexcept;
 
+        /** Moves the Scene View camera without changing its orientation. */
+        void setEditorCameraPosition(Vec3 position) const noexcept;
+
         void shutdown() noexcept;
 
     private:

@@ -97,6 +97,9 @@ Vec3 Renderer::editorGizmoPosition(const Entity entity) const noexcept {
 void Renderer::setEditorCameraRotation(const float yaw, const float pitch) const noexcept {
     if (backend_) backend_->setEditorCameraRotation(yaw, pitch);
 }
+void Renderer::setEditorCameraPosition(const Vec3 position) const noexcept {
+    if (backend_) backend_->setEditorCameraPosition(position);
+}
 void Renderer::shutdown() noexcept {
     backend_.reset();
     if (ImGui::GetCurrentContext() != nullptr &&

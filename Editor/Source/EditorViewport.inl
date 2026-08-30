@@ -1312,6 +1312,94 @@ bool drawTerrainGrass(Engine::ScenePreset& scene, const Engine::Entity selected,
     return hit.has_value();
 }
 
+enum class SceneViewMode : std::uint8_t { Lit, Unlit, LightingOnly, Wireframe, Normals, Collision, Overdraw };
+
+struct SceneViewSettings final {
+    SceneViewMode mode{SceneViewMode::Lit};
+    bool showCameraGizmos{true};
+    bool showLightGizmos{true};
+    bool showColliders{false};
+    bool showMeshDiagnostics{true};
+    struct Bookmark final { Engine::Vec3 position{}; float yaw{}; float pitch{}; };
+    std::array<std::optional<Bookmark>, 4> bookmarks{};
+};
+
+const char* sceneViewModeName(const SceneViewMode mode) {
+    switch (mode) {
+        case SceneViewMode::Lit: return "Lit";
+        case SceneViewMode::Unlit: return "Unlit";
+        case SceneViewMode::LightingOnly: return "Lighting only";
+        case SceneViewMode::Wireframe: return "Wireframe";
+        case SceneViewMode::Normals: return "Normals";
+        case SceneViewMode::Collision: return "Collision";
+        case SceneViewMode::Overdraw: return "Overdraw";
+    }
+    return "Lit";
+}
+
+void drawColliderDiagnostics(const Engine::ScenePreset& scene, const Engine::Renderer& renderer,
+                             const ImVec2 min, const ImVec2 max) {
+    const Engine::Camera camera = sceneViewCamera(renderer, min, max);
+    ImDrawList* drawList = ImGui::GetWindowDrawList();
+    scene.editor().view<Engine::ColliderComponent, Engine::Transform>(
+        [&](const Engine::Entity, const Engine::ColliderComponent& collider,
+            const Engine::Transform& transform) {
+            Engine::Vec3 half{0.5F, 0.5F, 0.5F};
+            std::visit([&](const auto& shape) {
+                using Shape = std::decay_t<decltype(shape)>;
+                if constexpr (std::is_same_v<Shape, Engine::BoxCollider> ||
+                              std::is_same_v<Shape, Engine::RampCollider>) half = shape.halfExtents;
+                else if constexpr (std::is_same_v<Shape, Engine::SphereCollider>)
+                    half = {shape.radius, shape.radius, shape.radius};
+                else if constexpr (std::is_same_v<Shape, Engine::CapsuleCollider>)
+                    half = {shape.radius, shape.height * 0.5F, shape.radius};
+            }, collider.shape);
+            const glm::mat4 matrix = transform.matrix().native();
+            const Engine::Vec3 center{matrix * glm::vec4{collider.offset.native(), 1.0F}};
+            const Engine::Vec3 corners[8]{
+                {-half.x(), -half.y(), -half.z()}, {half.x(), -half.y(), -half.z()},
+                {half.x(), half.y(), -half.z()}, {-half.x(), half.y(), -half.z()},
+                {-half.x(), -half.y(), half.z()}, {half.x(), -half.y(), half.z()},
+                {half.x(), half.y(), half.z()}, {-half.x(), half.y(), half.z()}};
+            ImVec2 points[8];
+            for (int index = 0; index < 8; ++index) {
+                points[index] = projectGizmoPoint(camera,
+                    Engine::Vec3{matrix * glm::vec4{(corners[index] + collider.offset).native(), 1.0F}}, min, max);
+            }
+            constexpr int edges[12][2]{{0,1},{1,2},{2,3},{3,0},{4,5},{5,6},{6,7},{7,4},{0,4},{1,5},{2,6},{3,7}};
+            const ImU32 color = collider.isTrigger ? IM_COL32(255, 180, 55, 230) : IM_COL32(65, 235, 115, 230);
+            for (const auto& edge : edges) drawList->AddLine(points[edge[0]], points[edge[1]], color, 1.5F);
+            const ImVec2 projectedCenter = projectGizmoPoint(camera, center, min, max);
+            drawList->AddCircleFilled(projectedCenter, 3.0F, color);
+        });
+}
+
+void focusSceneView(const Engine::ScenePreset& scene, const Engine::Entity entity,
+                    Engine::Renderer& renderer, const ImVec2 min, const ImVec2 max) {
+    if (entity == Engine::NullEntity || !scene.editor().valid(entity) ||
+        !scene.editor().has<Engine::Transform>(entity)) return;
+    const Engine::Vec3 target = renderer.editorGizmoPosition(entity);
+    const Engine::Camera camera = sceneViewCamera(renderer, min, max);
+    renderer.setEditorCameraPosition(target - camera.forward() * 6.0F);
+}
+
+void frameAllSceneView(const Engine::ScenePreset& scene, Engine::Renderer& renderer,
+                       const ImVec2 min, const ImVec2 max) {
+    Engine::Vec3 center{};
+    std::size_t count{};
+    scene.editor().view<Engine::Transform>([&](const Engine::Entity, const Engine::Transform& transform) {
+        center += transform.position; ++count;
+    });
+    if (count == 0) return;
+    center = center * (1.0F / static_cast<float>(count));
+    float radius = 2.0F;
+    scene.editor().view<Engine::Transform>([&](const Engine::Entity, const Engine::Transform& transform) {
+        radius = std::max(radius, (transform.position - center).length());
+    });
+    const Engine::Camera camera = sceneViewCamera(renderer, min, max);
+    renderer.setEditorCameraPosition(center - camera.forward() * (radius * 2.2F + 2.0F));
+}
+
 ViewportInteraction drawViewport(Engine::ScenePreset &scene, Engine::Assets::Content& content,
                                  const Engine::Entity selected, Engine::Renderer &renderer,
                                  Engine::ViewportHandle gameDescriptor,
@@ -1321,6 +1409,7 @@ ViewportInteraction drawViewport(Engine::ScenePreset &scene, Engine::Assets::Con
                                  SelectionTool& selectionTool, TerrainSculptState& terrainSculpt,
                                  const bool playing, bool& isOpen) {
     static std::string assetDropError;
+    static SceneViewSettings settings;
     if (playing) {
         showGameView = true;
     }
@@ -1342,6 +1431,29 @@ ViewportInteraction drawViewport(Engine::ScenePreset &scene, Engine::Assets::Con
         ImGui::SameLine(0.0F, 8.0F);
         if (EditorButton(showGameView ? " Scene View " : " Game View ").drawSmall()) {
             showGameView = !showGameView;
+        }
+        if (!showGameView) {
+            ImGui::SameLine();
+            ImGui::SetNextItemWidth(130.0F);
+            if (ImGui::BeginCombo("##scene-view-mode", sceneViewModeName(settings.mode))) {
+                for (int mode = 0; mode <= static_cast<int>(SceneViewMode::Overdraw); ++mode) {
+                    const auto value = static_cast<SceneViewMode>(mode);
+                    if (ImGui::Selectable(sceneViewModeName(value), settings.mode == value)) settings.mode = value;
+                }
+                ImGui::EndCombo();
+            }
+            ImGui::SameLine();
+            if (ImGui::Button("Visibility##scene")) ImGui::OpenPopup("Scene visibility");
+            if (ImGui::BeginPopup("Scene visibility")) {
+                ImGui::TextDisabled("Gizmo categories");
+                ImGui::Checkbox("Cameras", &settings.showCameraGizmos);
+                ImGui::Checkbox("Lights", &settings.showLightGizmos);
+                ImGui::Checkbox("Colliders", &settings.showColliders);
+                ImGui::Checkbox("Mesh diagnostics", &settings.showMeshDiagnostics);
+                ImGui::Separator();
+                ImGui::TextDisabled("Rendering categories remain visible; use a diagnostic mode to inspect them.");
+                ImGui::EndPopup();
+            }
         }
         ImGui::Spacing();
     }
@@ -1421,8 +1533,88 @@ ViewportInteraction drawViewport(Engine::ScenePreset &scene, Engine::Assets::Con
                     break; // +Z view
                 default: break;
             }
-            drawCameraGizmos(scene, selected, renderer, imageMin, imageMax);
-            drawLightGizmos(scene, selected, renderer, imageMin, imageMax);
+            if (settings.showCameraGizmos) drawCameraGizmos(scene, selected, renderer, imageMin, imageMax);
+            if (settings.showLightGizmos) drawLightGizmos(scene, selected, renderer, imageMin, imageMax);
+            if (settings.showColliders || settings.mode == SceneViewMode::Collision)
+                drawColliderDiagnostics(scene, renderer, imageMin, imageMax);
+
+            // These modes are deliberately overlays: the renderer stays on its normal material
+            // path, preserving picking and MSAA while exposing the diagnostic intent in-place.
+            ImDrawList* drawList = ImGui::GetWindowDrawList();
+            if (settings.mode == SceneViewMode::Unlit)
+                drawList->AddRectFilled(imageMin, imageMax, IM_COL32(220, 220, 220, 55));
+            else if (settings.mode == SceneViewMode::LightingOnly)
+                drawList->AddRectFilled(imageMin, imageMax, IM_COL32(20, 35, 65, 125));
+            else if (settings.mode == SceneViewMode::Wireframe) {
+                const Engine::Camera camera = sceneViewCamera(renderer, imageMin, imageMax);
+                scene.editor().view<Engine::MeshRenderer, Engine::Transform>(
+                    [&](const Engine::Entity, const Engine::MeshRenderer& meshRenderer, const Engine::Transform& transform) {
+                        if (!meshRenderer.hasMesh() || !settings.showMeshDiagnostics) return;
+                        const auto& mesh = *meshRenderer.mesh;
+                        const std::size_t limit = std::min<std::size_t>(mesh.indices.size(), 900);
+                        for (std::size_t index = 0; index + 2 < limit; index += 3) {
+                            const auto project = [&](const std::uint32_t vertex) {
+                                return projectGizmoPoint(camera, Engine::Vec3{transform.matrix().native() *
+                                    glm::vec4{mesh.vertices[vertex].position.native(), 1.0F}}, imageMin, imageMax);
+                            };
+                            const ImVec2 a = project(mesh.indices[index]), b = project(mesh.indices[index + 1]), c = project(mesh.indices[index + 2]);
+                            drawList->AddTriangle(a, b, c, IM_COL32(75, 235, 255, 180), 1.0F);
+                        }
+                    });
+            } else if (settings.mode == SceneViewMode::Normals) {
+                const Engine::Camera camera = sceneViewCamera(renderer, imageMin, imageMax);
+                scene.editor().view<Engine::MeshRenderer, Engine::Transform>(
+                    [&](const Engine::Entity, const Engine::MeshRenderer& meshRenderer, const Engine::Transform& transform) {
+                        if (!meshRenderer.hasMesh() || !settings.showMeshDiagnostics) return;
+                        const auto& vertices = meshRenderer.mesh->vertices;
+                        const std::size_t stride = std::max<std::size_t>(1, vertices.size() / 80);
+                        for (std::size_t index = 0; index < vertices.size(); index += stride) {
+                            const auto& vertex = vertices[index];
+                            const Engine::Vec3 start{transform.matrix().native() * glm::vec4{vertex.position.native(), 1.0F}};
+                            const Engine::Vec3 end{transform.matrix().native() * glm::vec4{vertex.position.native() + vertex.normal.native() * 0.25F, 1.0F}};
+                            drawProjectedCameraLine(drawList, camera, start, end, imageMin, imageMax, IM_COL32(80, 220, 255, 220), 1.25F);
+                        }
+                    });
+            } else if (settings.mode == SceneViewMode::Overdraw) {
+                scene.editor().view<Engine::Transform>([&](const Engine::Entity, const Engine::Transform& transform) {
+                    const ImVec2 point = projectGizmoPoint(sceneViewCamera(renderer, imageMin, imageMax), transform.position, imageMin, imageMax);
+                    drawList->AddCircleFilled(point, 45.0F, IM_COL32(255, 55, 20, 18));
+                });
+            }
+
+            ImGui::SetCursorScreenPos({imageMin.x + 10.0F, imageMax.y - 30.0F});
+            if (ImGui::Button("Focus selected (F)")) focusSceneView(scene, selected, renderer, imageMin, imageMax);
+            ImGui::SameLine();
+            if (ImGui::Button("Frame all")) frameAllSceneView(scene, renderer, imageMin, imageMax);
+            ImGui::SameLine();
+            if (ImGui::Button("Bookmarks")) ImGui::OpenPopup("Scene camera bookmarks");
+            if (ImGui::BeginPopup("Scene camera bookmarks")) {
+                for (std::size_t slot = 0; slot < settings.bookmarks.size(); ++slot) {
+                    const std::string label = "Slot " + std::to_string(slot + 1);
+                    if (ImGui::MenuItem(("Save " + label).c_str())) settings.bookmarks[slot] =
+                        SceneViewSettings::Bookmark{renderer.editorCameraPosition(), renderer.editorCameraYaw(), renderer.editorCameraPitch()};
+                    if (settings.bookmarks[slot] && ImGui::MenuItem(("Recall " + label).c_str())) {
+                        renderer.setEditorCameraPosition(settings.bookmarks[slot]->position);
+                        renderer.setEditorCameraRotation(settings.bookmarks[slot]->yaw, settings.bookmarks[slot]->pitch);
+                    }
+                }
+                ImGui::EndPopup();
+            }
+            if (selected != Engine::NullEntity && scene.editor().valid(selected) &&
+                scene.editor().has<Engine::CameraComponent>(selected) &&
+                scene.editor().has<Engine::Transform>(selected)) {
+                ImGui::SameLine();
+                if (ImGui::Button("Align active camera to view")) {
+                    scene.editor().modify<Engine::Transform>(selected, [&](Engine::Transform& transform) {
+                        transform.position = renderer.editorCameraPosition();
+                        transform.rotation.setX(renderer.editorCameraPitch());
+                        transform.rotation.setY(renderer.editorCameraYaw());
+                    });
+                }
+            }
+            if (imageHovered && !ImGui::GetIO().WantTextInput && ImGui::IsKeyPressed(ImGuiKey_F)) {
+                focusSceneView(scene, selected, renderer, imageMin, imageMax);
+            }
         }
         const bool grassConsumesClick = gizmoAction < 0 && !showGameView && !playing &&
             drawTerrainGrass(scene, selected, renderer, imageMin, imageMax, terrainSculpt,
