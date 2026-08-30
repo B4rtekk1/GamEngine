@@ -10,12 +10,22 @@
 #include "Engine/Scene/SceneSerializer.h"
 
 #include <algorithm>
+#include <array>
 #include <cctype>
 #include <fstream>
 #include <sstream>
 
+#ifdef _WIN32
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+#include <commdlg.h>
+#endif
+
 namespace {
 std::filesystem::path activeScenePath;
+bool sceneHasBeenSaved = false;
 }
 
 /**
@@ -32,6 +42,40 @@ std::filesystem::path EditorSceneSession::scenePath() {
 
 void EditorSceneSession::setScenePath(std::filesystem::path path) {
     activeScenePath = std::move(path);
+    sceneHasBeenSaved = false;
+}
+
+bool EditorSceneSession::hasSavedScene() {
+    return sceneHasBeenSaved;
+}
+
+std::optional<std::filesystem::path> EditorSceneSession::chooseSaveScenePath() {
+#ifdef _WIN32
+    std::array<wchar_t, 32768> selectedPath{};
+    const std::wstring initialFilename = scenePath().filename().wstring();
+    const std::size_t copyLength = std::min(initialFilename.size(), selectedPath.size() - 1);
+    std::copy_n(initialFilename.begin(), copyLength, selectedPath.begin());
+
+    const std::filesystem::path initialDirectory = scenePath().parent_path();
+    const std::wstring initialDirectoryString = initialDirectory.wstring();
+    OPENFILENAMEW dialog{};
+    dialog.lStructSize = sizeof(dialog);
+    dialog.lpstrFilter = L"GamEngine Scene (*.scene)\0*.scene\0All Files (*.*)\0*.*\0\0";
+    dialog.lpstrFile = selectedPath.data();
+    dialog.nMaxFile = static_cast<DWORD>(selectedPath.size());
+    dialog.lpstrInitialDir = initialDirectoryString.empty() ? nullptr : initialDirectoryString.c_str();
+    dialog.lpstrDefExt = L"scene";
+    dialog.Flags = OFN_OVERWRITEPROMPT | OFN_PATHMUSTEXIST | OFN_NOCHANGEDIR;
+    if (!GetSaveFileNameW(&dialog)) return std::nullopt;
+    return std::filesystem::path{selectedPath.data()};
+#else
+    return std::nullopt;
+#endif
+}
+
+void EditorSceneSession::markSceneSaved(std::filesystem::path path) {
+    activeScenePath = std::move(path);
+    sceneHasBeenSaved = true;
 }
 
 /**

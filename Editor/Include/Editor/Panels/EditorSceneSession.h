@@ -4,6 +4,7 @@
 
 #include <cstdint>
 #include <filesystem>
+#include <optional>
 #include <string>
 #include <string_view>
 
@@ -14,6 +15,11 @@ public:
     /** Sets the project startup scene used by the Save and Load menu actions. */
     static void setScenePath(std::filesystem::path path);
     [[nodiscard]] static std::filesystem::path scenePath();
+    [[nodiscard]] static bool hasSavedScene();
+    /** Opens the platform Save As dialog for a scene file. */
+    [[nodiscard]] static std::optional<std::filesystem::path> chooseSaveScenePath();
+    /** Marks the current scene as persisted at @p path. */
+    static void markSceneSaved(std::filesystem::path path);
     [[nodiscard]] static std::uint32_t msaaSampleCount(const Engine::Renderer& renderer);
 
     static bool setPlayMode(bool play, Engine::ScenePreset& scene, std::string& snapshot,

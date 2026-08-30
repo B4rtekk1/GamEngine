@@ -52,6 +52,31 @@ Engine::Entity drawEditorMenuBar(Engine::ScenePreset &scene, Engine::Renderer &r
     static std::string sceneFileError;
     Engine::Entity createdEntity = Engine::NullEntity;
 
+    const auto saveScene = [&](const std::filesystem::path &path) {
+        if (!path.parent_path().empty()) {
+            std::filesystem::create_directories(path.parent_path());
+        }
+        const auto samples = renderer.antialiasingLevel() == Engine::AntialiasingLevel::MSAA2x
+                                 ? 2u
+                                 : renderer.antialiasingLevel() == Engine::AntialiasingLevel::MSAA4x
+                                       ? 4u
+                                       : 0u;
+        Engine::SceneSerializer::save(scene, path, samples);
+        EditorSceneSession::markSceneSaved(path);
+        sceneFileError.clear();
+        Editor::ConsolePanel::info("Saved scene: " + path.string());
+    };
+    const auto saveSceneAs = [&] {
+        if (const auto path = EditorSceneSession::chooseSaveScenePath()) {
+            try {
+                saveScene(*path);
+            } catch (const std::exception &error) {
+                sceneFileError = error.what();
+                Editor::ConsolePanel::error("Could not save scene: " + sceneFileError);
+            }
+        }
+    };
+
     if (!ImGui::BeginMainMenuBar()) { return Engine::NullEntity;
 }
 
@@ -68,24 +93,24 @@ Engine::Entity drawEditorMenuBar(Engine::ScenePreset &scene, Engine::Renderer &r
         ImGui::BeginDisabled(playing);
         if (ImGui::MenuItem("Save Scene", "Ctrl+S")) {
             try {
-                std::filesystem::create_directories(scenePath.parent_path());
-                const auto samples = renderer.antialiasingLevel() == Engine::AntialiasingLevel::MSAA2x
-                                         ? 2u
-                                         : renderer.antialiasingLevel() == Engine::AntialiasingLevel::MSAA4x
-                                               ? 4u
-                                               : 0u;
-                Engine::SceneSerializer::save(scene, scenePath, samples);
-                sceneFileError.clear();
-                Editor::ConsolePanel::info("Saved scene: " + scenePath.string());
+                if (EditorSceneSession::hasSavedScene()) {
+                    saveScene(scenePath);
+                } else {
+                    saveSceneAs();
+                }
             } catch (const std::exception &error) {
                 sceneFileError = error.what();
                 Editor::ConsolePanel::error("Could not save scene: " + sceneFileError);
             }
         }
+        if (ImGui::MenuItem("Save Scene As...", "Ctrl+Shift+S")) {
+            saveSceneAs();
+        }
         if (ImGui::MenuItem("Load Scene", "Ctrl+O")) {
             try {
                 std::optional<std::uint32_t> samples;
                 Engine::SceneSerializer::load(scene, scenePath, samples);
+                EditorSceneSession::markSceneSaved(scenePath);
                 if (samples) {
                     renderer.setAntialiasingLevel(*samples == 2
                                                       ? Engine::AntialiasingLevel::MSAA2x
