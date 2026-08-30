@@ -28,6 +28,34 @@
             return result;
         }
 
+        [[nodiscard]] std::pair<std::array<LocalLightGPU, MaxLocalLights>, std::uint32_t>
+        localLights() const {
+            std::array<LocalLightGPU, MaxLocalLights> result{};
+            std::uint32_t count{};
+            const Registry& readRegistry = registry;
+            readRegistry.view<Transform, LightComponent>(
+                [&](const Entity entity, const Transform& transform, const LightComponent& light) {
+                    if (!light.enabled || light.type == LightType::Directional ||
+                        count == MaxLocalLights || light.range <= 0.0F) return;
+                    const glm::vec3 direction = glm::vec3(transform.matrix().native() *
+                                                          glm::vec4{0.0F, 0.0F, -1.0F, 0.0F});
+                    const Math::Color color = readRegistry.has<ColorPickerComponent>(entity)
+                                                  ? readRegistry.get<ColorPickerComponent>(entity).color
+                                                  : light.color;
+                    constexpr float pi = 3.14159265358979323846F;
+                    const float outerRadians = light.outerConeAngle * pi / 180.0F;
+                    const float innerRadians = light.innerConeAngle * pi / 180.0F;
+                    auto& gpu = result[count++];
+                    gpu.positionRange = {transform.position.x(), transform.position.y(),
+                                         transform.position.z(), light.range};
+                    gpu.directionOuterCos = {glm::normalize(direction), std::cos(outerRadians)};
+                    gpu.colorIntensity = {color.r(), color.g(), color.b(), std::max(0.0F, light.intensity)};
+                    gpu.parameters = {std::cos(innerRadians), static_cast<float>(light.type),
+                                      light.castShadows ? 1.0F : 0.0F, 0.0F};
+                });
+            return {result, count};
+        }
+
         void updateUniformBuffer(const uint32_t frame) {
             Entity activeCamera = NullEntity;
             const Registry& readRegistry = registry;
@@ -57,6 +85,7 @@
                                                     Degrees{transform.rotation.x()});
 
             const DirectionalLight light = directionalLight();
+            const auto [lights, localLightCount] = localLights();
             shadowClipUpdateMask = updateVirtualShadowClipmaps(
                 cameraController.camera()->position(), shadowClipMatrices,
                 lastShadowCameraPosition, lastShadowLightDirection, shadowClipmapsValid);
@@ -77,7 +106,7 @@
                 Vec4{light.direction.x(), light.direction.y(), light.direction.z(), light.intensity},
                 Vec4{light.color.r(), light.color.g(), light.color.b(), 1.0F},
                 (optimizationFeatures.shadows && hasShadowCasters) ? 1u : 0u,
-                materialSlots, editorSelectedRenderable};
+                materialSlots, editorSelectedRenderable, 0u, localLightCount, lights};
             uniformBuffers[frame].update(&data, sizeof(data));
         }
 
@@ -89,6 +118,7 @@
             sceneCamera.setRotation(Degrees{cameraController.editorYaw()},
                                     Degrees{cameraController.editorPitch()});
             const DirectionalLight light = directionalLight();
+            const auto [lights, localLightCount] = localLights();
             sceneShadowClipUpdateMask = updateVirtualShadowClipmaps(
                 sceneCamera.position(), sceneShadowClipMatrices,
                 lastSceneShadowCameraPosition, lastSceneShadowLightDirection,
@@ -108,7 +138,7 @@
                 Vec4{light.direction.x(), light.direction.y(), light.direction.z(), light.intensity},
                 Vec4{light.color.r(), light.color.g(), light.color.b(), 1.0F},
                 (optimizationFeatures.shadows && hasShadowCasters) ? 1u : 0u,
-                materialSlots, editorSelectedRenderable};
+                materialSlots, editorSelectedRenderable, 0u, localLightCount, lights};
             sceneUniformBuffers[frame].update(&data, sizeof(data));
         }
 

@@ -10,6 +10,17 @@
 #include "Engine/Renderer/Vulkan/shadow_map.h"
 
 namespace Engine {
+    inline constexpr std::uint32_t MaxLocalLights = 32;
+
+    /** GPU-friendly record for point and spot lights. */
+    struct alignas(16) LocalLightGPU {
+        glm::vec4 positionRange{};
+        glm::vec4 directionOuterCos{};
+        glm::vec4 colorIntensity{};
+        // x: inner cone cosine, y: LightType, z: casts local shadow.
+        glm::vec4 parameters{};
+    };
+
     struct RendererUniformBufferObject {
         Mat4 view;
         Mat4 projection;
@@ -22,6 +33,8 @@ namespace Engine {
         std::uint32_t materialSlots{1};
         std::uint32_t selectedInstance{std::numeric_limits<std::uint32_t>::max()};
         std::uint32_t materialSlotsPadding{};
+        std::uint32_t localLightCount{};
+        std::array<LocalLightGPU, MaxLocalLights> localLights{};
     };
 
     /**

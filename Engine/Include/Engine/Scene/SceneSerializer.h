@@ -21,7 +21,7 @@ namespace Engine {
     public:
         // This serializer intentionally supports only the current on-disk
         // format. Files with any other version are rejected while loading.
-        static constexpr std::uint32_t FormatVersion = 10;
+        static constexpr std::uint32_t FormatVersion = 11;
 
         /** @brief Writes a scene to a text file. */
         static void save(const Registry &registry, const std::filesystem::path &path);

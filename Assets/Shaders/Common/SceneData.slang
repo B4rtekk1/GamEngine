@@ -1,3 +1,11 @@
+struct LocalLightData
+{
+    float4 positionRange;
+    float4 directionOuterCos;
+    float4 colorIntensity;
+    float4 parameters;
+};
+
 struct RendererFrameData
 {
     float4x4 view;
@@ -10,6 +18,8 @@ struct RendererFrameData
     uint materialSlots;
     uint selectedInstance;
     uint materialSlotsPadding;
+    uint localLightCount;
+    LocalLightData localLights[32];
 };
 
 struct MaterialData

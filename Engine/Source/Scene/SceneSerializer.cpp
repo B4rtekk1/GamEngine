@@ -673,6 +673,12 @@ namespace Engine {
                 writeColor(serialized, light.color);
                 serialized << ' ';
                 writeFloat(serialized, light.intensity);
+                serialized << ' ';
+                writeFloat(serialized, light.range);
+                serialized << ' ';
+                writeFloat(serialized, light.innerConeAngle);
+                serialized << ' ';
+                writeFloat(serialized, light.outerConeAngle);
                 serialized << ' ' << static_cast<int>(light.enabled) << ' '
                         << static_cast<int>(light.castShadows) << '\n';
             }
@@ -1027,8 +1033,17 @@ namespace Engine {
                     light.type = static_cast<LightType>(type);
                     light.color = readColor(input, "light color");
                     light.intensity = readFloat(input, "light intensity");
+                    light.range = readFloat(input, "light range");
+                    light.innerConeAngle = readFloat(input, "spot inner cone angle");
+                    light.outerConeAngle = readFloat(input, "spot outer cone angle");
                     light.enabled = readBool(input, "light enabled flag");
                     light.castShadows = readBool(input, "light cast-shadows flag");
+                    if (light.range <= 0.0F || light.innerConeAngle < 0.0F ||
+                        light.outerConeAngle <= 0.0F ||
+                        light.innerConeAngle > light.outerConeAngle ||
+                        light.outerConeAngle >= 90.0F) {
+                        invalidScene("local light settings are invalid");
+                    }
                     loaded.add<LightComponent>(entity, light);
                 } else if (component == "CAMERA") {
                     if (hasCamera) {

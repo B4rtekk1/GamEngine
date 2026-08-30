@@ -162,6 +162,33 @@ ForwardFragmentOutput fragmentMain(ForwardFragmentInput input)
                               shadowPageTable) : 0.0;
     float3 direct = (diffuse + specular) * frame.lightDirectionIntensity.w *
                     frame.lightColor.rgb * nDotL * (1.0 - shadow);
+    for (uint lightIndex = 0; lightIndex < frame.localLightCount; ++lightIndex)
+    {
+        LocalLightData local = frame.localLights[lightIndex];
+        float3 toLight = local.positionRange.xyz - input.worldPosition;
+        float distanceToLight = length(toLight);
+        if (distanceToLight <= 1e-4 || distanceToLight >= local.positionRange.w)
+            continue;
+        float3 localDirection = toLight / distanceToLight;
+        float rangeFactor = saturate(1.0 - distanceToLight / local.positionRange.w);
+        float attenuation = rangeFactor * rangeFactor /
+                            max(distanceToLight * distanceToLight, 0.01);
+        if (local.parameters.y > 1.5) // Spot
+        {
+            float cone = dot(normalize(-local.directionOuterCos.xyz), localDirection);
+            attenuation *= smoothstep(local.directionOuterCos.w, local.parameters.x, cone);
+        }
+        float localNDotL = max(dot(normal, localDirection), 0.0);
+        float3 localHalfway = normalize(viewDirection + localDirection);
+        float3 localFresnel = fresnelSchlick(max(dot(localHalfway, viewDirection), 0.0), f0);
+        float localGeometry = geometrySchlickGGX(nDotV, roughness) *
+                              geometrySchlickGGX(localNDotL, roughness);
+        float3 localSpecular = distributionGGX(normal, localHalfway, roughness) * localGeometry *
+                               localFresnel / max(4.0 * nDotV * localNDotL, 0.0001);
+        float3 localDiffuse = (1.0 - localFresnel) * (1.0 - metallic) * albedo / PBR_PI;
+        direct += (localDiffuse + localSpecular) * local.colorIntensity.rgb *
+                  local.colorIntensity.w * localNDotL * attenuation;
+    }
     float3 color = 0.9 * albedo *
                    clamp(material.roughnessAmbientOcclusion.y, 0.0, 1.0) + direct;
 

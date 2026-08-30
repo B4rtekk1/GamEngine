@@ -215,10 +215,21 @@ bool ComponentsPanel::draw(Engine::ScenePreset &scene, const Engine::Entity sele
                 }
                 ImGui::TextDisabled("Only one directional light can be active.");
             } else {
-                ImGui::TextDisabled("Point and spot lights are not rendered yet.");
+                changed |= ImGui::DragFloat("Range##light", &light.range, 0.1F, 0.1F,
+                                            1000.0F, "%.2f");
+                if (light.type == Engine::LightType::Spot) {
+                    changed |= ImGui::DragFloat("Inner cone##light", &light.innerConeAngle,
+                                                0.25F, 0.0F, 89.0F, "%.1f deg");
+                    changed |= ImGui::DragFloat("Outer cone##light", &light.outerConeAngle,
+                                                0.25F, light.innerConeAngle, 89.9F, "%.1f deg");
+                }
             }
             changed |= ImGui::Checkbox("Cast Shadows##light", &light.castShadows);
             light.intensity = std::max(0.0F, light.intensity);
+            light.range = std::max(0.1F, light.range);
+            light.innerConeAngle = std::clamp(light.innerConeAngle, 0.0F, 89.0F);
+            light.outerConeAngle = std::clamp(light.outerConeAngle, light.innerConeAngle + 0.1F,
+                                               89.9F);
 
             if (changed) {
                 scene.editor().modify<Engine::LightComponent>(selected,
