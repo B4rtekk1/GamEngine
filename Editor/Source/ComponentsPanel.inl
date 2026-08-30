@@ -30,6 +30,12 @@ bool ComponentsPanel::draw(Engine::ScenePreset &scene, const std::vector<Engine:
         ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + avail);
         ImGui::TextWrapped("Pick an object in the Hierarchy or click it in the Scene View to edit its properties here.");
         ImGui::PopTextWrapPos();
+        if (!scene.hasUsablePrimaryCamera()) {
+            ImGui::Spacing();
+            ImGui::TextColored({0.96F, 0.72F, 0.28F, 1.0F},
+                               "! Scene problem: no usable primary camera");
+            ImGui::TextDisabled("The runtime is rendering with its fallback camera.");
+        }
         const bool consumesMouseWheel = ImGui::IsWindowHovered(
                                             ImGuiHoveredFlags_AllowWhenBlockedByActiveItem) && ImGui::GetIO().MouseWheel
                                         != 0.0F;
@@ -61,6 +67,13 @@ bool ComponentsPanel::draw(Engine::ScenePreset &scene, const std::vector<Engine:
         }
     }
     ImGui::TextDisabled("Rename the object, then tweak its components below.");
+    if (!scene.hasUsablePrimaryCamera()) {
+        ImGui::Spacing();
+        ImGui::TextColored({0.96F, 0.72F, 0.28F, 1.0F},
+                           "! Scene problem: no usable primary camera");
+        ImGui::TextDisabled("The runtime is rendering with its fallback camera.");
+        ImGui::TextDisabled("Add or repair a perspective camera with Transform, then mark it Primary.");
+    }
     ImGui::Spacing();
     if (ImGui::CollapsingHeader("Transform", ImGuiTreeNodeFlags_DefaultOpen) &&
         scene.editor().valid(selected) && scene.editor().has<Engine::Transform>(selected)) {

@@ -309,27 +309,27 @@ namespace Engine {
             return findByEntity(entity) != nullptr;
         }
 
+        /**
+         * Returns whether the scene has a camera that can drive the game view.
+         *
+         * A primary camera must also have a Transform and supported,
+         * perspective settings.  The renderer can fall back safely when this
+         * is false, while editor UI can expose the scene-authoring problem.
+         */
+        [[nodiscard]] bool hasUsablePrimaryCamera() const {
+            bool found = false;
+            registry_.view<CameraComponent, Transform>(
+                [&](const Entity, const CameraComponent& camera, const Transform&) {
+                    found = found || (camera.primary && camera.isPerspective() && camera.isValid());
+                });
+            return found;
+        }
+
         void destroy(const Entity entity) {
             const auto it = std::ranges::find_if(objects_, //NOLINT
                                                  [entity](const auto &object) { return object->entity() == entity; });
             if (it == objects_.end()) {
                 return;
-            }
-
-            // The renderer requires one primary camera every frame. Deleting the
-            // only one would leave the scene in an invalid state and make the
-            // next frame fail while building the camera uniforms.
-            if (registry_.has<CameraComponent>(entity) &&
-                registry_.get<CameraComponent>(entity).primary) {
-                std::size_t primaryCameraCount = 0;
-                registry_.view<CameraComponent>([&](const Entity, const CameraComponent &camera) {
-                    if (camera.primary) {
-                        ++primaryCameraCount;
-                    }
-                });
-                if (primaryCameraCount <= 1) {
-                    return;
-                }
             }
 
             names_.erase((*it)->name()); //NOLINT

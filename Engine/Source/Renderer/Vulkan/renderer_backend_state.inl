@@ -59,6 +59,7 @@
         std::uint64_t shadowClipFrameIndex{0};
         bool shadowClipmapsValid{false};
         bool sceneShadowClipmapsValid{false};
+        bool fallbackCameraWarningReported{false};
         SkyPass sceneSkyPass;
         Scene& scene;
         Registry& registry;

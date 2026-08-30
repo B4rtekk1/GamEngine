@@ -61,28 +61,43 @@
             const Registry& readRegistry = registry;
             readRegistry.view<CameraComponent, Transform>(
                 [&](const Entity entity, const CameraComponent& component, const Transform&) {
-                    if (activeCamera == NullEntity && component.primary) {
+                    if (activeCamera == NullEntity && component.primary && component.isPerspective() &&
+                        component.isValid()) {
                         activeCamera = entity;
                     }
                 });
             if (activeCamera == NullEntity) {
-                throw std::runtime_error("Scene has no primary CameraComponent with Transform");
-            }
+                // A malformed or incomplete scene must not stop rendering. Use
+                // the editor camera as a predictable, controllable fallback
+                // until the author adds or repairs a primary perspective camera.
+                if (!fallbackCameraWarningReported) {
+                    Diagnostics::instance().report(
+                        DiagnosticSeverity::Warning,
+                        "No usable primary camera; rendering with the fallback camera.",
+                        {.subsystem = "Renderer", .component = "CameraComponent",
+                         .suggestedAction = "Add a perspective camera with Transform and mark it Primary."});
+                    fallbackCameraWarningReported = true;
+                }
+                cameraController.camera().emplace(
+                    Degrees{SCENE_CAMERA_FOV_DEGREES}, 16.0F / 9.0F,
+                    SCENE_CAMERA_NEAR_CLIP, SCENE_CAMERA_FAR_CLIP);
+                cameraController.camera()->setPosition(cameraController.editorPosition());
+                cameraController.camera()->setRotation(Degrees{cameraController.editorYaw()},
+                                                        Degrees{cameraController.editorPitch()});
+            } else {
+                fallbackCameraWarningReported = false;
+                const auto& component = readRegistry.get<CameraComponent>(activeCamera);
+                const auto& transform = readRegistry.get<Transform>(activeCamera);
 
-            const auto& component = readRegistry.get<CameraComponent>(activeCamera);
-            const auto& transform = readRegistry.get<Transform>(activeCamera);
-            if (!component.isPerspective() || !component.isValid()) {
-                throw std::runtime_error("Primary CameraComponent has unsupported settings");
+                // Game View is presented in a fixed 16:9 editor frame. Keep the
+                // projection in that aspect too, independently of dock layout.
+                const float gameAspect = editorUiActive ? (16.0F / 9.0F) : component.aspectRatio;
+                cameraController.camera().emplace(Degrees{component.fieldOfView}, gameAspect,
+                                                   component.nearClip, component.farClip);
+                cameraController.camera()->setPosition(transform.position);
+                cameraController.camera()->setRotation(Degrees{transform.rotation.y()},
+                                                        Degrees{transform.rotation.x()});
             }
-
-            // Game View is presented in a fixed 16:9 editor frame. Keep the
-            // projection in that aspect too, independently of dock layout.
-            const float gameAspect = editorUiActive ? (16.0F / 9.0F) : component.aspectRatio;
-            cameraController.camera().emplace(Degrees{component.fieldOfView}, gameAspect,
-                                               component.nearClip, component.farClip);
-            cameraController.camera()->setPosition(transform.position);
-            cameraController.camera()->setRotation(Degrees{transform.rotation.y()},
-                                                    Degrees{transform.rotation.x()});
 
             const DirectionalLight light = directionalLight();
             const auto [lights, localLightCount] = localLights();

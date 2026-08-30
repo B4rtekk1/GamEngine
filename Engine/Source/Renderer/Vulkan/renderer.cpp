@@ -40,6 +40,7 @@
 #include "Engine/Scene/Components/LightComponent.h"
 #include "Engine/Core/Transform.h"
 #include "Engine/Core/Camera.h"
+#include "Engine/Core/Diagnostics.h"
 #include "Engine/Math/AABB.h"
 #include "Engine/Math/Frustum.h"
 #include "Engine/Math/Math.h"

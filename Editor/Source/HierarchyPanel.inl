@@ -72,6 +72,13 @@ Engine::Entity HierarchyPanel::draw(Engine::ScenePreset &scene, Engine::Assets::
     drawSearchIcon(searchMin, searchMax);
     ImGui::Spacing();
     ImGui::TextDisabled("Right-click an object for more actions");
+    if (!scene.hasUsablePrimaryCamera()) {
+        ImGui::TextColored({0.96F, 0.72F, 0.28F, 1.0F},
+                           "! No usable primary camera — fallback camera is active");
+        if (ImGui::IsItemHovered()) {
+            ImGui::SetTooltip("Add a perspective CameraComponent with Transform and mark it Primary.");
+        }
+    }
     ImGui::Spacing();
 
     const bool sceneOpen = ImGui::TreeNodeEx(
