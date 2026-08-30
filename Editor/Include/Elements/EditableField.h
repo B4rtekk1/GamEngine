@@ -41,6 +41,12 @@ public:
      */
     explicit EditableField(Engine::GameObject& object) noexcept : object_(&object) {}
 
+    static void drawSharedVec3Field(const char* label, const char* widgetId, const Engine::Vec3& current,
+                                    const float speed, const char* format,
+                                    const std::function<void(const Engine::Vec3&)>& update) {
+        drawVec3Field(label, widgetId, current, speed, format, update);
+    }
+
 protected:
     /**
      * @brief Destroys the editable field.

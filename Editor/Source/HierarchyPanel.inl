@@ -1,8 +1,11 @@
 Engine::Entity HierarchyPanel::draw(Engine::ScenePreset &scene, Engine::Assets::Content& content,
-                                    const Engine::Entity selected, Action &action,
+                                    const std::vector<Engine::Entity>& selection, Action &action,
                                     Engine::Entity &actionEntity, const bool canPaste,
                                     const bool disabled, bool& isOpen) {
     Engine::Entity clicked = Engine::NullEntity;
+    const auto selected = [&](const Engine::Entity entity) {
+        return std::ranges::find(selection, entity) != selection.end();
+    };
     static std::string assetDropError;
     action = Action::None;
     actionEntity = Engine::NullEntity;
@@ -86,7 +89,7 @@ Engine::Entity HierarchyPanel::draw(Engine::ScenePreset &scene, Engine::Assets::
                 char label[64];
                 std::snprintf(label, sizeof(label), "%s  (%u)", name,
                               Engine::entityIndex(entity));
-                if (ImGui::Selectable(label, selected == entity)) {
+                if (ImGui::Selectable(label, selected(entity))) {
                     clicked = entity;
                 }
             }
@@ -202,7 +205,7 @@ Engine::Entity HierarchyPanel::draw(Engine::ScenePreset &scene, Engine::Assets::
                 ImGui::EndPopup();
             };
             if (!hasChildren) {
-                if (ImGui::Selectable(label, selected == entity)) {
+                if (ImGui::Selectable(label, selected(entity))) {
                     clicked = entity;
                 }
                 if (ImGui::BeginDragDropSource()) {
@@ -222,7 +225,7 @@ Engine::Entity HierarchyPanel::draw(Engine::ScenePreset &scene, Engine::Assets::
                 return;
             }
             const ImGuiTreeNodeFlags flags = ImGuiTreeNodeFlags_SpanAvailWidth |
-                                             (selected == entity ? ImGuiTreeNodeFlags_Selected : 0);
+                                             (selected(entity) ? ImGuiTreeNodeFlags_Selected : 0);
             const bool open = ImGui::TreeNodeEx(label, flags);
             if (ImGui::IsItemClicked()) {
                 clicked = entity;

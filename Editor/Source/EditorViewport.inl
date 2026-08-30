@@ -72,6 +72,8 @@ struct ViewportInteraction final {
     std::uint32_t terrainFirstVertex{};
     std::uint32_t terrainVertexCount{std::numeric_limits<std::uint32_t>::max()};
     Engine::Entity createdEntity{Engine::NullEntity};
+    std::vector<Engine::Entity> selectedEntities;
+    bool selectionCommitted{};
     float normalizedX{};
     float normalizedY{};
 };
@@ -626,6 +628,29 @@ bool drawScaleGizmo(Engine::ScenePreset &scene, const Engine::Entity selected,
 }
 
 enum class GizmoMode { Translate, Rotate, Scale };
+enum class SelectionTool { Rectangle, Lasso };
+
+bool pointInLasso(const ImVec2 point, const std::vector<ImVec2>& polygon) {
+    bool inside = false;
+    for (std::size_t i = 0, j = polygon.size() - 1; i < polygon.size(); j = i++) {
+        const ImVec2& a = polygon[i]; const ImVec2& b = polygon[j];
+        if ((a.y > point.y) != (b.y > point.y) &&
+            point.x < (b.x - a.x) * (point.y - a.y) / (b.y - a.y) + a.x) inside = !inside;
+    }
+    return inside;
+}
+
+void drawSelectionTools(const ImVec2 imageMin, SelectionTool& tool) {
+    const ImVec2 start{imageMin.x + 132.0F, imageMin.y + 12.0F};
+    for (int index = 0; index < 2; ++index) {
+        ImGui::SetCursorScreenPos({start.x + index * 72.0F, start.y});
+        const bool active = (index == 0) == (tool == SelectionTool::Rectangle);
+        if (active) ImGui::PushStyleColor(ImGuiCol_Button, {0.06F, 0.48F, 0.59F, 0.96F});
+        if (ImGui::SmallButton(index == 0 ? "Box" : "Lasso")) tool = index == 0 ? SelectionTool::Rectangle : SelectionTool::Lasso;
+        if (active) ImGui::PopStyleColor();
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip(index == 0 ? "Rectangle select" : "Lasso select");
+    }
+}
 
 bool drawViewportGizmoTools(const ImVec2 imageMin, const ImVec2 visibleMin, GizmoMode &gizmoMode) {
     constexpr float buttonSize = 34.0F;
@@ -1293,7 +1318,8 @@ ViewportInteraction drawViewport(Engine::ScenePreset &scene, Engine::Assets::Con
                                  Engine::ViewportHandle sceneDescriptor,
                                  const float sceneCameraYaw, const float sceneCameraPitch,
                                  bool &showGameView, GizmoMode &gizmoMode,
-                                 TerrainSculptState& terrainSculpt, const bool playing, bool& isOpen) {
+                                 SelectionTool& selectionTool, TerrainSculptState& terrainSculpt,
+                                 const bool playing, bool& isOpen) {
     static std::string assetDropError;
     if (playing) {
         showGameView = true;
@@ -1374,6 +1400,7 @@ ViewportInteraction drawViewport(Engine::ScenePreset &scene, Engine::Assets::Con
         bool orientationGizmoConsumesClick = false;
         if (!showGameView && !playing) {
             gizmoToolsConsumeClick = drawViewportGizmoTools(imageMin, ImGui::GetWindowPos(), gizmoMode);
+            drawSelectionTools(imageMin, selectionTool);
             // A gizmo-tool button belongs to the currently selected object.
             // Reapply the renderer selection explicitly, so changing tools
             // cannot make its outline/focus disappear even if ImGui moves
@@ -1417,12 +1444,43 @@ ViewportInteraction drawViewport(Engine::ScenePreset &scene, Engine::Assets::Con
         const bool gizmoConsumesClick = gizmoToolsConsumeClick || orientationGizmoConsumesClick ||
             sculptConsumesClick || paintConsumesClick || grassConsumesClick ||
             transformGizmoConsumesClick;
+        static bool selectionDrag = false;
+        static ImVec2 selectionStart{};
+        static std::vector<ImVec2> lasso;
+        const ImVec2 mouse = ImGui::GetIO().MousePos;
         if (!showGameView && !playing && gizmoAction < 0 && !gizmoConsumesClick && imageHovered &&
             ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
-            const ImVec2 mouse = ImGui::GetIO().MousePos;
+            selectionDrag = true;
+            selectionStart = mouse;
+            lasso = {mouse};
+        }
+        if (selectionDrag && ImGui::IsMouseDown(ImGuiMouseButton_Left)) {
+            if (selectionTool == SelectionTool::Lasso &&
+                (lasso.empty() || std::hypot(mouse.x - lasso.back().x, mouse.y - lasso.back().y) > 4.0F)) lasso.push_back(mouse);
+            ImDrawList* drawList = ImGui::GetWindowDrawList();
+            if (selectionTool == SelectionTool::Rectangle) {
+                drawList->AddRect(selectionStart, mouse, IM_COL32(70, 205, 235, 255), 0.0F, 0, 1.5F);
+            } else if (lasso.size() > 1) drawList->AddPolyline(lasso.data(), static_cast<int>(lasso.size()), IM_COL32(70, 205, 235, 255), ImDrawFlags_None, 1.5F);
+        }
+        if (selectionDrag && ImGui::IsMouseReleased(ImGuiMouseButton_Left)) {
+            selectionDrag = false;
+            const bool dragMeaningful = std::hypot(mouse.x - selectionStart.x, mouse.y - selectionStart.y) > 6.0F;
+            if (dragMeaningful) {
+                const Engine::Camera camera = sceneViewCamera(renderer, imageMin, imageMax);
+                const float left = std::min(selectionStart.x, mouse.x), right = std::max(selectionStart.x, mouse.x);
+                const float top = std::min(selectionStart.y, mouse.y), bottom = std::max(selectionStart.y, mouse.y);
+                scene.editor().view<Engine::Transform>([&](const Engine::Entity entity, const Engine::Transform& transform) {
+                    const ImVec2 point = projectGizmoPoint(camera, transform.position, imageMin, imageMax);
+                    const bool inRectangle = point.x >= left && point.x <= right && point.y >= top && point.y <= bottom;
+                    if ((selectionTool == SelectionTool::Rectangle ? inRectangle : lasso.size() > 2 && pointInLasso(point, lasso)))
+                        interaction.selectedEntities.push_back(entity);
+                });
+                interaction.selectionCommitted = true;
+            } else {
             interaction.sceneClicked = true;
             interaction.normalizedX = ((mouse.x - imageMin.x) / (imageMax.x - imageMin.x)) * 2.0F - 1.0F;
             interaction.normalizedY = ((mouse.y - imageMin.y) / (imageMax.y - imageMin.y)) * 2.0F - 1.0F;
+            }
         }
         ImGui::EndChild();
         ImGui::PopStyleVar(2);

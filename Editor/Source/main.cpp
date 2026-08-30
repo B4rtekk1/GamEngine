@@ -148,6 +148,25 @@ int main(int argc, char** argv) {
         history.reset(scene);
         EntityClipboard clipboard;
         Engine::Entity selectedEntity = Engine::NullEntity;
+        std::vector<Engine::Entity> selectedEntities;
+        const auto setSelection = [&](const Engine::Entity entity) {
+            selectedEntities.clear();
+            if (entity != Engine::NullEntity) selectedEntities.push_back(entity);
+            selectedEntity = entity;
+            renderer.setEditorSelection(selectedEntity);
+        };
+        const auto toggleSelection = [&](const Engine::Entity entity) {
+            if (const auto found = std::ranges::find(selectedEntities, entity);
+                found != selectedEntities.end()) {
+                selectedEntities.erase(found);
+                if (selectedEntity == entity)
+                    selectedEntity = selectedEntities.empty() ? Engine::NullEntity : selectedEntities.back();
+            } else {
+                selectedEntities.push_back(entity);
+                selectedEntity = entity;
+            }
+            renderer.setEditorSelection(selectedEntity);
+        };
         constexpr auto targetFrame = EditorConstants::targetFrameMicroseconds;
         bool running = true;
         bool rendererReloadPending = false;
@@ -161,6 +180,7 @@ int main(int argc, char** argv) {
         double physicsAccumulator = 0.0;
         bool showGameView = false;
         GizmoMode gizmoMode = GizmoMode::Translate;
+        SelectionTool selectionTool = SelectionTool::Rectangle;
         TerrainSculptState terrainSculpt;
         std::string playSceneSnapshot;
         std::string playModeError;
@@ -223,8 +243,7 @@ int main(int argc, char** argv) {
                                                                  showViewport, showInspector, showAssetManager,
                                                                  showTerrainTools);
                 created != Engine::NullEntity) {
-                selectedEntity = created;
-                renderer.setEditorSelection(selectedEntity);
+                setSelection(created);
             }
             if (resetHistoryRequested) {
                 history.reset(scene);
@@ -239,8 +258,7 @@ int main(int argc, char** argv) {
                 // Loading replaces the registry, so any selection from the
                 // previous scene is stale before the hierarchy/inspector are
                 // drawn for this frame.
-                selectedEntity = Engine::NullEntity;
-                renderer.setEditorSelection(selectedEntity);
+                setSelection(Engine::NullEntity);
                 rendererReloadPending = true;
             }
             if (!playing && selectedEntity != Engine::NullEntity &&
@@ -249,12 +267,10 @@ int main(int argc, char** argv) {
                     clipboard.copy(scene, selectedEntity);
                 }
                 if (pasteRequested) {
-                    selectedEntity = clipboard.paste(scene);
-                    renderer.setEditorSelection(selectedEntity);
+                    setSelection(clipboard.paste(scene));
                 }
                 if (duplicateRequested) {
-                    selectedEntity = scene.editor().duplicate(selectedEntity);
-                    renderer.setEditorSelection(selectedEntity);
+                    setSelection(scene.editor().duplicate(selectedEntity));
                 }
             }
             if (playToggleRequested && EditorSceneSession::setPlayMode(!playing, scene, playSceneSnapshot,
@@ -265,8 +281,7 @@ int main(int argc, char** argv) {
                 physicsAccumulator = 0.0;
                 showGameView = playing;
                 if (!playing) {
-                    selectedEntity = Engine::NullEntity;
-                    renderer.setEditorSelection(selectedEntity);
+                    setSelection(Engine::NullEntity);
                     rendererReloadPending = true;
                 }
             }
@@ -297,27 +312,31 @@ int main(int argc, char** argv) {
             Engine::Entity hierarchyActionEntity = Engine::NullEntity;
             if (showHierarchy) {
                 if (const Engine::Entity clicked = HierarchyPanel::draw(
-                        scene, content, selectedEntity, hierarchyAction, hierarchyActionEntity,
+                        scene, content, selectedEntities, hierarchyAction, hierarchyActionEntity,
                         clipboard.canPaste(scene), playing, showHierarchy);
                     clicked != Engine::NullEntity) {
-                    selectedEntity = clicked;
-                    renderer.setEditorSelection(selectedEntity);
+                    // Ctrl toggles individual rows; Shift extends the set.
+                    // The last clicked object remains the active inspector/gizmo target.
+                    if (ImGui::GetIO().KeyCtrl) toggleSelection(clicked);
+                    else if (ImGui::GetIO().KeyShift) {
+                        if (std::ranges::find(selectedEntities, clicked) == selectedEntities.end())
+                            selectedEntities.push_back(clicked);
+                        selectedEntity = clicked;
+                        renderer.setEditorSelection(selectedEntity);
+                    } else setSelection(clicked);
                 }
             }
             if (!playing && hierarchyAction == HierarchyPanel::Action::Paste) {
-                selectedEntity = clipboard.paste(scene);
-                renderer.setEditorSelection(selectedEntity);
+                setSelection(clipboard.paste(scene));
             } else if (!playing && hierarchyActionEntity != Engine::NullEntity &&
                        scene.editor().valid(hierarchyActionEntity)) {
                 if (hierarchyAction == HierarchyPanel::Action::Delete) {
                     scene.editor().destroy(hierarchyActionEntity);
                     if (selectedEntity == hierarchyActionEntity) {
-                        selectedEntity = Engine::NullEntity;
-                        renderer.setEditorSelection(selectedEntity);
+                        setSelection(Engine::NullEntity);
                     }
                 } else if (hierarchyAction == HierarchyPanel::Action::Duplicate) {
-                    selectedEntity = scene.editor().duplicate(hierarchyActionEntity);
-                    renderer.setEditorSelection(selectedEntity);
+                    setSelection(scene.editor().duplicate(hierarchyActionEntity));
                 } else if (hierarchyAction == HierarchyPanel::Action::Copy) {
                     clipboard.copy(scene, hierarchyActionEntity);
                 }
@@ -347,32 +366,49 @@ int main(int argc, char** argv) {
                 viewportInteraction = drawViewport(
                     scene, content, selectedEntity, renderer, renderer.gameViewport(), renderer.sceneViewport(),
                     renderer.editorCameraYaw(), renderer.editorCameraPitch(), showGameView, gizmoMode,
-                    terrainSculpt, playing, showViewport);
+                    selectionTool, terrainSculpt, playing, showViewport);
             }
             if (showTerrainTools) {
                 drawTerrainToolsPanel(scene, content, selectedEntity, renderer, terrainSculpt,
                                       playing, showTerrainTools);
             }
             if (viewportInteraction.createdEntity != Engine::NullEntity) {
-                selectedEntity = viewportInteraction.createdEntity;
-                renderer.setEditorSelection(selectedEntity);
+                setSelection(viewportInteraction.createdEntity);
             }
             if (!playing && viewportInteraction.sceneClicked) {
                 constexpr float viewportAspect = EditorConstants::viewportWidthRatio /
                                                  EditorConstants::viewportHeightRatio;
-                selectedEntity = pickSceneEntity(scene, physicsSystem, renderer,
-                                                 viewportInteraction.normalizedX,
-                                                 viewportInteraction.normalizedY, viewportAspect);
-                renderer.setEditorSelection(selectedEntity);
+                const Engine::Entity hit = pickSceneEntity(scene, physicsSystem, renderer,
+                                                           viewportInteraction.normalizedX,
+                                                           viewportInteraction.normalizedY, viewportAspect);
+                if (ImGui::GetIO().KeyCtrl && hit != Engine::NullEntity) toggleSelection(hit);
+                else if (ImGui::GetIO().KeyShift && hit != Engine::NullEntity) {
+                    if (std::ranges::find(selectedEntities, hit) == selectedEntities.end()) selectedEntities.push_back(hit);
+                    selectedEntity = hit;
+                    renderer.setEditorSelection(selectedEntity);
+                } else setSelection(hit);
+            }
+            if (!playing && viewportInteraction.selectionCommitted) {
+                if (ImGui::GetIO().KeyCtrl || ImGui::GetIO().KeyShift) {
+                    for (const Engine::Entity entity : viewportInteraction.selectedEntities) {
+                        if (std::ranges::find(selectedEntities, entity) == selectedEntities.end())
+                            selectedEntities.push_back(entity);
+                    }
+                    if (!selectedEntities.empty()) selectedEntity = selectedEntities.back();
+                    renderer.setEditorSelection(selectedEntity);
+                } else {
+                    selectedEntities = std::move(viewportInteraction.selectedEntities);
+                    selectedEntity = selectedEntities.empty() ? Engine::NullEntity : selectedEntities.back();
+                    renderer.setEditorSelection(selectedEntity);
+                }
             }
             const bool inspectorConsumesMouseWheel = showInspector &&
-                ComponentsPanel::draw(scene, selectedEntity, showInspector);
+                ComponentsPanel::draw(scene, selectedEntities, selectedEntity, showInspector);
             if (showAssetManager) {
                 if (const Engine::Entity created =
                         AssetManagerPanel::draw(scene, content, playing, showAssetManager);
                     created != Engine::NullEntity) {
-                    selectedEntity = created;
-                    renderer.setEditorSelection(selectedEntity);
+                    setSelection(created);
                 }
             }
             drawStatusBar(scene, selectedEntity, playing, paused);
@@ -380,8 +416,7 @@ int main(int argc, char** argv) {
                 scene.editor().valid(selectedEntity) && !ImGui::GetIO().WantTextInput &&
                 ImGui::IsKeyPressed(ImGuiKey_Delete)) {
                 scene.editor().destroy(selectedEntity);
-                selectedEntity = Engine::NullEntity;
-                renderer.setEditorSelection(selectedEntity);
+                setSelection(Engine::NullEntity);
             }
             if (!playing && !ImGui::GetIO().WantTextInput &&
                 ImGui::GetIO().KeyCtrl) {
@@ -400,17 +435,14 @@ int main(int argc, char** argv) {
                         clipboard.copy(scene, selectedEntity);
                     }
                     if (ImGui::IsKeyPressed(ImGuiKey_D)) {
-                        selectedEntity = scene.editor().duplicate(selectedEntity);
-                        renderer.setEditorSelection(selectedEntity);
+                        setSelection(scene.editor().duplicate(selectedEntity));
                     }
                     if (ImGui::IsKeyPressed(ImGuiKey_V)) {
-                        selectedEntity = clipboard.paste(scene);
-                        renderer.setEditorSelection(selectedEntity);
+                        setSelection(clipboard.paste(scene));
                     }
                 }
                 if (sceneLoaded) {
-                    selectedEntity = Engine::NullEntity;
-                    renderer.setEditorSelection(selectedEntity);
+                    setSelection(Engine::NullEntity);
                     rendererReloadPending = true;
                 }
             }

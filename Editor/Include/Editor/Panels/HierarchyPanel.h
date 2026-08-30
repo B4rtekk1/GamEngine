@@ -2,6 +2,8 @@
 
 #include "Engine/Scene/ScenePresets.h"
 
+#include <vector>
+
 namespace Engine::Assets { class Content; }
 
 class HierarchyPanel final {
@@ -10,7 +12,7 @@ public:
 
     [[nodiscard]] static Engine::Entity draw(Engine::ScenePreset& scene,
                                                Engine::Assets::Content& content,
-                                               Engine::Entity selected,
+                                               const std::vector<Engine::Entity>& selection,
                                                Action& action,
                                                Engine::Entity& actionEntity,
                                                bool canPaste,

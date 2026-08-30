@@ -9,9 +9,11 @@ static bool drawRemovableComponentHeader(const char *label, const char *id, bool
     return open;
 }
 
-bool ComponentsPanel::draw(Engine::ScenePreset &scene, const Engine::Entity selected, bool& isOpen) {
+bool ComponentsPanel::draw(Engine::ScenePreset &scene, const std::vector<Engine::Entity>& selection,
+                           const Engine::Entity active, bool& isOpen) {
+    const Engine::Entity selected = active;
     ImGui::Begin("Inspector", &isOpen);
-    if (selected == Engine::NullEntity) {
+    if (selected == Engine::NullEntity || selection.empty()) {
         ImGui::Spacing();
         ImGui::Spacing();
         const float avail = ImGui::GetContentRegionAvail().x;
@@ -43,7 +45,9 @@ bool ComponentsPanel::draw(Engine::ScenePreset &scene, const Engine::Entity sele
     ImGui::TextColored({0.94F, 0.95F, 0.98F, 1.0F}, "%s", entityName(scene, selected));
     ImGui::SameLine();
     ImGui::TextDisabled("· Entity %u", Engine::entityIndex(selected));
-    if (scene.editor().valid(selected) && scene.editor().has<Engine::NameComponent>(selected)) {
+    const bool multiSelection = selection.size() > 1;
+    if (multiSelection) ImGui::TextDisabled("%zu objects selected · editing common Transform", selection.size());
+    if (!multiSelection && scene.editor().valid(selected) && scene.editor().has<Engine::NameComponent>(selected)) {
         const auto readScene = scene.editor();
         const auto &name = readScene.get<Engine::NameComponent>(selected).value;
         char editableName[260]{};
@@ -60,7 +64,34 @@ bool ComponentsPanel::draw(Engine::ScenePreset &scene, const Engine::Entity sele
     ImGui::Spacing();
     if (ImGui::CollapsingHeader("Transform", ImGuiTreeNodeFlags_DefaultOpen) &&
         scene.editor().valid(selected) && scene.editor().has<Engine::Transform>(selected)) {
-        TransformFields{scene.edit(selected)}.draw();
+        if (!multiSelection) {
+            TransformFields{scene.edit(selected)}.draw();
+        } else {
+            const auto transform = scene.editor().get<Engine::Transform>(selected);
+            const auto apply = [&](const auto setter, const Engine::Vec3& value) {
+                for (const Engine::Entity entity : selection) {
+                    if (scene.editor().valid(entity) && scene.editor().has<Engine::Transform>(entity)) {
+                        (scene.edit(entity).*setter)(value);
+                    }
+                }
+            };
+            ImGui::TextDisabled("Values apply to every selected object.");
+            EditableField::drawSharedVec3Field("Position", "##multi-position", transform.position, 0.05F, "%.2F",
+                [&](const Engine::Vec3& value) { apply(&Engine::GameObject::setPosition, value); });
+            EditableField::drawSharedVec3Field("Rotation", "##multi-rotation", transform.rotation, 0.5F, "%.1F°",
+                [&](const Engine::Vec3& value) { apply(&Engine::GameObject::setRotation, value); });
+            EditableField::drawSharedVec3Field("Scale", "##multi-scale", transform.scale, 0.01F, "%.2F",
+                [&](const Engine::Vec3& value) { apply(&Engine::GameObject::setScale, value); });
+        }
+    }
+    if (multiSelection) {
+        ImGui::Separator();
+        ImGui::TextDisabled("Other components are shown for one object at a time.");
+        const bool consumesMouseWheel = ImGui::IsWindowHovered(ImGuiHoveredFlags_AllowWhenBlockedByActiveItem) &&
+            ImGui::GetIO().MouseWheel != 0.0F;
+        ImGui::PopID();
+        ImGui::End();
+        return consumesMouseWheel;
     }
     if (scene.editor().valid(selected) &&
         scene.editor().has<Engine::MeshRenderer>(selected) &&
