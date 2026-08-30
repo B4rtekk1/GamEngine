@@ -9,7 +9,9 @@
 #include "Engine/ECS/Components/TerrainGrassComponent.h"
 #include "Engine/Renderer/Lighting/DirectionalLightData.h"
 #include "Engine/Renderer/Materials/PBRMaterial.h"
+#include "Engine/Renderer/Materials/MaterialBuffer.h"
 #include "Engine/Renderer/RenderConfig.h"
+#include "Engine/Renderer/Particles/ParticleSystem.h"
 #include "Engine/Scene/Components/IdentityComponents.h"
 #include "Engine/Scene/Components/LightComponent.h"
 #include "Engine/UI/Components/TextComponent.h"
@@ -219,6 +221,54 @@ TEST(RenderTypes, AllowFeatureAndEventConfiguration) {
     EXPECT_TRUE(events.quitRequested);
     EXPECT_TRUE(events.togglePlay);
     EXPECT_FALSE(events.togglePause);
+}
+
+TEST(ParticleTypes, SmokeEmitterProvidesStableSimulationDefaults) {
+    const Engine::Particles::ParticleEmitter emitter;
+    EXPECT_FLOAT_EQ(emitter.spawnRate, 200.0F);
+    EXPECT_FLOAT_EQ(emitter.minLifeTime, 1.0F);
+    EXPECT_FLOAT_EQ(emitter.maxLifeTime, 2.0F);
+    EXPECT_FLOAT_EQ(emitter.accumulator, 0.0F);
+
+    const Engine::Particles::SmokeEmitter smoke;
+    EXPECT_FLOAT_EQ(smoke.buoyancy, Engine::Particles::DefaultSmokeBuoyancy);
+    EXPECT_FLOAT_EQ(smoke.drag, 0.68F);
+    EXPECT_FLOAT_EQ(smoke.turbulence, 0.30F);
+    EXPECT_FLOAT_EQ(smoke.collisionRadius, 0.10F);
+    EXPECT_FLOAT_EQ(smoke.minVelocity.y(), 0.45F);
+    EXPECT_FLOAT_EQ(smoke.maxVelocity.y(), 1.05F);
+    EXPECT_FLOAT_EQ(smoke.minLifeTime, 5.5F);
+    EXPECT_FLOAT_EQ(smoke.maxLifeTime, 9.0F);
+    EXPECT_FLOAT_EQ(smoke.spawnRate, 260.0F);
+    EXPECT_LT(smoke.color.a(), 0.2F);
+
+    const Engine::Particles::ParticleCollider collider{
+        .center = {1.0F, 2.0F, 3.0F, 0.0F},
+        .halfExtents = {4.0F, 5.0F, 6.0F, 0.0F},
+    };
+    EXPECT_FLOAT_EQ(collider.center.z(), 3.0F);
+    EXPECT_FLOAT_EQ(collider.halfExtents.y(), 5.0F);
+}
+
+TEST(MaterialTypes, ExposeGpuFriendlyDefaultsAndLayerConfiguration) {
+    EXPECT_EQ(Engine::MaxMaterialTextures, 16u);
+    EXPECT_EQ(alignof(Engine::GPUMaterialData), 16u);
+    EXPECT_EQ(sizeof(Engine::GPUMaterialData), 64u);
+    const Engine::GPUMaterialData gpuMaterial;
+    EXPECT_EQ(gpuMaterial.textureIndices[0], -1);
+    EXPECT_EQ(gpuMaterial.textureIndices[3], -1);
+    EXPECT_EQ(gpuMaterial.terrainLayerTextures[0], -1);
+    EXPECT_EQ(gpuMaterial.terrainLayerTextures[3], -1);
+
+    Engine::PBRMaterial material;
+    material.doubleSided = true;
+    material.terrainLayered = true;
+    material.terrainLayerTextures = {2, 3, 5, 7};
+    material.normalScale = 0.0F;
+    EXPECT_TRUE(material.doubleSided);
+    EXPECT_TRUE(material.terrainLayered);
+    EXPECT_EQ(material.terrainLayerTextures[2], 5);
+    EXPECT_FLOAT_EQ(material.normalScale, 0.0F);
 }
 
 } // namespace

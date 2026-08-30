@@ -332,7 +332,8 @@ if(BUILD_TESTING)
 
     add_executable(PhysicsMeshTests
             Tests/PhysicsMeshTests.cpp
-            Tests/PhysXPhysicsTests.cpp)
+            Tests/PhysXPhysicsTests.cpp
+            Tests/ScriptSystemTests.cpp)
     target_link_libraries(PhysicsMeshTests PRIVATE Engine GTest::gtest_main)
     gameengine_enable_warnings(PhysicsMeshTests)
     gameengine_enable_sanitizers(PhysicsMeshTests)
