@@ -38,6 +38,38 @@ namespace Engine {
     Vec3 Actor::position() const { return object().position(); }
     Vec3 Actor::rotation() const { return object().rotation(); }
     Vec3 Actor::scale() const { return object().scale(); }
+    Transform &Actor::transform() const { return object().transform(); }
+
+    Actor Actor::createChild(std::string name) const {
+        if (scene_ == nullptr) {
+            throw std::logic_error("Actor is not attached to a Scene");
+        }
+        return scene_->createChild(*this, std::move(name));
+    }
+
+    void Actor::setParent(const Actor &parent) const {
+        if (scene_ == nullptr) {
+            throw std::logic_error("Actor is not attached to a Scene");
+        }
+        scene_->setParent(*this, parent);
+    }
+
+    void Actor::clearParent() const {
+        if (scene_ == nullptr) {
+            throw std::logic_error("Actor is not attached to a Scene");
+        }
+        scene_->clearParent(*this);
+    }
+
+    Actor Actor::parent() const {
+        return scene_ == nullptr ? Actor{} : scene_->parentOf(*this);
+    }
+
+    std::vector<Actor> Actor::children() const {
+        return scene_ == nullptr ? std::vector<Actor>{} : scene_->childrenOf(*this);
+    }
+
+    std::size_t Actor::childCount() const { return children().size(); }
     void Actor::setMesh(std::shared_ptr<const Mesh> mesh) const { object().setMesh(std::move(mesh)); }
     void Actor::setMaterial(const PBRMaterial& material) const { object().setMaterial(material); }
     void Actor::setCastShadow(const bool enabled) const { object().setCastShadow(enabled); }

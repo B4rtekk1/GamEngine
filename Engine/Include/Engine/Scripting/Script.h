@@ -5,6 +5,8 @@
 #include "Engine/ECS/Entity.h"
 #include "Engine/ECS/Registry.h"
 
+#include <vector>
+
 namespace Engine {
     class Scene;
 
@@ -19,6 +21,12 @@ namespace Engine {
 
         /** Returns the high-level actor controlled by this script. */
         [[nodiscard]] Actor actor() const;
+
+        /** Returns this script actor's parent, or an invalid Actor for a root actor. */
+        [[nodiscard]] Actor parent() const;
+
+        /** Returns this script actor's direct children. */
+        [[nodiscard]] std::vector<Actor> children() const;
 
         /** Returns the scene containing the scripted actor. */
         [[nodiscard]] Scene &scene() const;

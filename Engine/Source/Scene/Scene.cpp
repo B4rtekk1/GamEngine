@@ -37,6 +37,73 @@ namespace Engine {
         return Actor{*this, object.objectId()};
     }
 
+    void Scene::setParent(const Actor &child, const Actor &parent) {
+        if (child.scene_ != this || parent.scene_ != this || !child.valid() || !parent.valid()) {
+            throw std::invalid_argument("Parent and child must be live actors in this Scene");
+        }
+        if (child.objectId_ == parent.objectId_) {
+            throw std::invalid_argument("An actor cannot be its own parent");
+        }
+
+        // Walking from the proposed parent to the root catches every cycle.
+        for (Actor ancestor = parent; ancestor.valid(); ancestor = parentOf(ancestor)) {
+            if (ancestor.objectId_ == child.objectId_) {
+                throw std::invalid_argument("Parent relationship would create a cycle");
+            }
+        }
+
+        const Entity childEntity = findEntity(child.objectId_);
+        const Entity parentEntity = findEntity(parent.objectId_);
+        const UUID parentUuid = registry_.get<UUIDComponent>(parentEntity).value;
+        if (registry_.has<ParentComponent>(childEntity)) {
+            registry_.modify<ParentComponent>(childEntity, [parentUuid](ParentComponent &link) {
+                link.parent = parentUuid;
+            });
+        } else {
+            registry_.add<ParentComponent>(childEntity, ParentComponent{.parent = parentUuid});
+        }
+    }
+
+    void Scene::clearParent(const Actor &child) {
+        if (child.scene_ != this || !child.valid()) {
+            throw std::invalid_argument("Child must be a live actor in this Scene");
+        }
+        const Entity childEntity = findEntity(child.objectId_);
+        if (registry_.has<ParentComponent>(childEntity)) {
+            registry_.remove<ParentComponent>(childEntity);
+        }
+    }
+
+    Actor Scene::parentOf(const Actor &child) const noexcept {
+        if (child.scene_ != this || !child.valid()) return {};
+        const Entity childEntity = findEntity(child.objectId_);
+        if (!registry_.has<ParentComponent>(childEntity)) return {};
+        const UUID parentUuid = registry_.get<ParentComponent>(childEntity).parent;
+        for (const auto &object : objects_) {
+            const Entity entity = object->entity();
+            if (registry_.has<UUIDComponent>(entity) &&
+                registry_.get<UUIDComponent>(entity).value == parentUuid) {
+                return Actor{const_cast<Scene &>(*this), object->objectId()};
+            }
+        }
+        return {};
+    }
+
+    std::vector<Actor> Scene::childrenOf(const Actor &parent) const {
+        std::vector<Actor> result;
+        if (parent.scene_ != this || !parent.valid()) return result;
+        const Entity parentEntity = findEntity(parent.objectId_);
+        const UUID parentUuid = registry_.get<UUIDComponent>(parentEntity).value;
+        for (const auto &object : objects_) {
+            const Entity entity = object->entity();
+            if (registry_.has<ParentComponent>(entity) &&
+                registry_.get<ParentComponent>(entity).parent == parentUuid) {
+                result.push_back(Actor{const_cast<Scene &>(*this), object->objectId()});
+            }
+        }
+        return result;
+    }
+
     Actor Scene::createModel(std::string name, std::filesystem::path path,
                              const Assets::Content &content) {
         auto mesh = content.mesh(path);

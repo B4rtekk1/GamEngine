@@ -51,8 +51,9 @@ namespace Engine {
             VmaAllocationCreateInfo allocationInfo{};
             allocationInfo.usage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE;
             if (vmaCreateImage(allocator_, &imageInfo, &allocationInfo, &image_,
-                               &allocation_, nullptr) != VK_SUCCESS)
+                               &allocation_, nullptr) != VK_SUCCESS) {
                 throw std::runtime_error("Could not allocate shadow map memory");
+}
 
             VkImageViewCreateInfo view{VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
             view.image = image_;

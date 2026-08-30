@@ -15,6 +15,7 @@
 #include <memory>
 #include <string>
 #include <stdexcept>
+#include <vector>
 
 namespace Engine {
     class Scene;
@@ -55,6 +56,26 @@ namespace Engine {
         [[nodiscard]] Vec3 rotation() const;
 
         [[nodiscard]] Vec3 scale() const;
+
+        /** Returns this actor's local transform component. */
+        [[nodiscard]] Transform &transform() const;
+
+        /** Creates an actor and attaches it as a child of this actor. */
+        [[nodiscard]] Actor createChild(std::string name) const;
+
+        /** Attaches this actor to @p parent. Both actors must belong to one scene. */
+        void setParent(const Actor &parent) const;
+
+        /** Removes this actor from its current parent, making it a root actor. */
+        void clearParent() const;
+
+        /** Returns this actor's parent, or an invalid Actor when it is a root. */
+        [[nodiscard]] Actor parent() const;
+
+        /** Returns the current direct children of this actor. */
+        [[nodiscard]] std::vector<Actor> children() const;
+
+        [[nodiscard]] std::size_t childCount() const;
 
         void setMesh(std::shared_ptr<const Mesh> mesh) const;
 

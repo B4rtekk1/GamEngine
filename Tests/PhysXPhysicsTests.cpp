@@ -273,6 +273,30 @@ TEST(SceneSerializer, RejectsInvalidFilesWithoutChangingTheScene) {
     EXPECT_TRUE(scene.findActor("Existing actor").valid());
 }
 
+TEST(Scene, ManagesActorParentChildRelationships) {
+    Engine::Scene scene;
+    const auto parent = scene.createActor("Parent");
+    const auto child = parent.createChild("Child");
+    const auto grandchild = scene.createChild(child, "Grandchild");
+
+    ASSERT_TRUE(child.parent().valid());
+    EXPECT_EQ(child.parent().id(), parent.id());
+    ASSERT_EQ(parent.children().size(), 1U);
+    EXPECT_EQ(parent.children().front().id(), child.id());
+    EXPECT_EQ(child.childCount(), 1U);
+    EXPECT_EQ(grandchild.parent().id(), child.id());
+    EXPECT_THROW(parent.setParent(grandchild), std::invalid_argument);
+
+    child.clearParent();
+    EXPECT_FALSE(child.parent().valid());
+    EXPECT_TRUE(parent.children().empty());
+
+    auto ownedParent = scene.createActor("Owned parent");
+    const auto ownedChild = ownedParent.createChild("Owned child");
+    ownedParent.destroy();
+    EXPECT_FALSE(ownedChild.valid());
+}
+
 TEST(SceneSerializer, RoundTripsParentRelationshipAndHierarchyOrder) {
     const auto path = std::filesystem::temp_directory_path() / "gameengine-hierarchy-roundtrip-test.scene";
     std::error_code error;

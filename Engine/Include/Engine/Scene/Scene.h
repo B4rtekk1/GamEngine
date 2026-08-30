@@ -88,6 +88,16 @@ namespace Engine {
             return Actor{*this, object.objectId()};
         }
 
+        /** Creates a new actor and immediately attaches it below @p parent. */
+        [[nodiscard]] Actor createChild(const Actor &parent, std::string name) {
+            if (parent.scene_ != this || !parent.valid()) {
+                throw std::invalid_argument("Parent actor must belong to this Scene");
+            }
+            Actor child = createActor(std::move(name));
+            setParent(child, parent);
+            return child;
+        }
+
         /** Duplicates an actor without exposing its ECS entity identifier. */
         [[nodiscard]] Actor duplicate(const Actor &actor) {
             if (actor.scene_ != this || !actor.valid()) {
@@ -211,6 +221,16 @@ namespace Engine {
             }
         }
 
+        /** Attaches @p child below @p parent, rejecting self-parenting and cycles. */
+        void setParent(const Actor &child, const Actor &parent);
+
+        /** Removes @p child's parent link. */
+        void clearParent(const Actor &child);
+
+        [[nodiscard]] Actor parentOf(const Actor &child) const noexcept;
+
+        [[nodiscard]] std::vector<Actor> childrenOf(const Actor &parent) const;
+
         /**
          * Makes @p entity the sole enabled directional light in this scene.
          * Point and spot components remain untouched until those light paths
@@ -332,12 +352,25 @@ namespace Engine {
                 return;
             }
 
-            names_.erase((*it)->name()); //NOLINT
+            // A parent owns the lifetime of its descendants. Work on a copy as
+            // destroy() erases entries from objects_.
+            const ObjectId objectId = (*it)->objectId();
+            for (const Actor &child : childrenOf(Actor{*this, objectId})) {
+                destroy(child);
+            }
+
+            // Recursive destruction can reallocate objects_, invalidating it.
+            const auto owner = std::ranges::find_if(objects_, [objectId](const auto &object) {
+                return object->objectId() == objectId;
+            });
+            if (owner == objects_.end()) return;
+
+            names_.erase((*owner)->name()); //NOLINT
             // Destroy the ECS entity before removing its owning wrapper. Merely
             // detaching it would make it disappear from the hierarchy while the
             // renderer could still find and draw the live registry entity.
-            (*it)->destroy(); //NOLINT
-            objects_.erase(it);
+            (*owner)->destroy(); //NOLINT
+            objects_.erase(owner);
         }
 
         [[nodiscard]] std::uint64_t structuralRevision() const noexcept {

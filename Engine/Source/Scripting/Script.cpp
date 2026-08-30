@@ -15,6 +15,10 @@ namespace Engine {
         return Actor{*scene_, object->objectId()};
     }
 
+    Actor Script::parent() const { return actor().parent(); }
+
+    std::vector<Actor> Script::children() const { return actor().children(); }
+
     Scene &Script::scene() const {
         if (scene_ == nullptr) { throw std::logic_error("Script is not attached to a scene"); }
         return *scene_;
