@@ -31,6 +31,7 @@
 #include "Editor/Panels/HierarchyPanel.h"
 #include "Editor/Panels/ComponentsPanel.h"
 #include "Editor/Panels/AssetManagerPanel.h"
+#include "Editor/Panels/ConsolePanel.h"
 #include "Editor/Panels/AssetDragDrop.h"
 #include "Editor/EditorState.h"
 #include "Editor/EditorConstants.h"
@@ -135,6 +136,10 @@ int main(int argc, char** argv) {
 
         Engine::ScenePreset scene;
         Engine::Assets::Content content{project.assetRoot()};
+        content.setErrorHandler([](const std::string& message) {
+            Editor::ConsolePanel::error("Asset: " + message);
+        });
+        Editor::ConsolePanel::info("Editor started for project '" + project.name() + "'.");
         EditorSceneSession::setScenePath(project.startupScene());
         Engine::ScriptSystem scriptSystem{Engine::ScriptRegistry::instance()};
         Engine::PhysicsSystem physicsSystem{};
@@ -177,6 +182,7 @@ int main(int argc, char** argv) {
         bool showInspector = true;
         bool showAssetManager = true;
         bool showTerrainTools = true;
+        bool showConsole = true;
         double physicsAccumulator = 0.0;
         bool showGameView = false;
         GizmoMode gizmoMode = GizmoMode::Translate;
@@ -202,7 +208,8 @@ int main(int argc, char** argv) {
                     physicsAccumulator = 0.0;
                     showGameView = playing;
                     rendererReloadPending = !playing;
-                }
+                    Editor::ConsolePanel::info(playing ? "Entered Play mode." : "Stopped Play mode.");
+                } else Editor::ConsolePanel::error("Could not change Play mode: " + playModeError);
             }
             if (events.togglePause && playing) {
                 paused = !paused;
@@ -241,7 +248,7 @@ int main(int argc, char** argv) {
                                                                  pasteRequested, duplicateRequested,
                                                                  resetHistoryRequested, showHierarchy,
                                                                  showViewport, showInspector, showAssetManager,
-                                                                 showTerrainTools);
+                                                                 showTerrainTools, showConsole);
                 created != Engine::NullEntity) {
                 setSelection(created);
             }
@@ -284,6 +291,9 @@ int main(int argc, char** argv) {
                     setSelection(Engine::NullEntity);
                     rendererReloadPending = true;
                 }
+                Editor::ConsolePanel::info(playing ? "Entered Play mode." : "Stopped Play mode.");
+            } else if (playToggleRequested) {
+                Editor::ConsolePanel::error("Could not change Play mode: " + playModeError);
             }
             if (pauseToggleRequested && playing) {
                 paused = !paused;
@@ -411,6 +421,7 @@ int main(int argc, char** argv) {
                     setSelection(created);
                 }
             }
+            if (showConsole) Editor::ConsolePanel::draw(showConsole);
             drawStatusBar(scene, selectedEntity, playing, paused);
             if (!playing && selectedEntity != Engine::NullEntity &&
                 scene.editor().valid(selectedEntity) && !ImGui::GetIO().WantTextInput &&

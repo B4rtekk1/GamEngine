@@ -43,7 +43,7 @@ Engine::Entity drawEditorMenuBar(Engine::ScenePreset &scene, Engine::Renderer &r
                                  bool &duplicateRequested, bool &resetHistoryRequested,
                                  bool &showHierarchy, bool &showViewport,
                                  bool &showInspector, bool &showAssetManager,
-                                 bool &showTerrainTools) {
+                                 bool &showTerrainTools, bool &showConsole) {
     static bool showShortcuts = false;
     static bool showAbout = false;
     static bool openSceneSettings = false;
@@ -76,7 +76,11 @@ Engine::Entity drawEditorMenuBar(Engine::ScenePreset &scene, Engine::Renderer &r
                                                : 0u;
                 Engine::SceneSerializer::save(scene, scenePath, samples);
                 sceneFileError.clear();
-            } catch (const std::exception &error) { sceneFileError = error.what(); }
+                Editor::ConsolePanel::info("Saved scene: " + scenePath.string());
+            } catch (const std::exception &error) {
+                sceneFileError = error.what();
+                Editor::ConsolePanel::error("Could not save scene: " + sceneFileError);
+            }
         }
         if (ImGui::MenuItem("Load Scene", "Ctrl+O")) {
             try {
@@ -93,7 +97,11 @@ Engine::Entity drawEditorMenuBar(Engine::ScenePreset &scene, Engine::Renderer &r
                 sceneLoaded = true;
                 resetHistoryRequested = true;
                 sceneFileError.clear();
-            } catch (const std::exception &error) { sceneFileError = error.what(); }
+                Editor::ConsolePanel::info("Loaded scene: " + scenePath.string());
+            } catch (const std::exception &error) {
+                sceneFileError = error.what();
+                Editor::ConsolePanel::error("Could not load scene: " + sceneFileError);
+            }
         }
         ImGui::EndDisabled();
         ImGui::Separator();
@@ -187,6 +195,7 @@ Engine::Entity drawEditorMenuBar(Engine::ScenePreset &scene, Engine::Renderer &r
         ImGui::MenuItem("Inspector", nullptr, &showInspector);
         ImGui::MenuItem("Asset Manager", nullptr, &showAssetManager);
         ImGui::MenuItem("Terrain Tools", nullptr, &showTerrainTools);
+        ImGui::MenuItem("Console", nullptr, &showConsole);
         ImGui::EndMenu();
     }
 
