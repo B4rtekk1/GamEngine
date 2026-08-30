@@ -788,7 +788,12 @@
                         glm::ivec4{textureIndex(source.baseColorTexture),
                                    textureIndex(source.metallicRoughnessTexture),
                                    textureIndex(source.normalTexture),
-                                   (source.doubleSided ? 1 : 0) | (source.alphaBlend ? 2 : 0)},
+                                   (source.doubleSided ? 1 : 0) | (source.alphaBlend ? 2 : 0) |
+                                   (source.terrainLayered ? 4 : 0)},
+                        glm::ivec4{textureIndex(source.terrainLayerTextures[0]),
+                                   textureIndex(source.terrainLayerTextures[1]),
+                                   textureIndex(source.terrainLayerTextures[2]),
+                                   textureIndex(source.terrainLayerTextures[3])},
                     };
                     GPUMaterialData& destination = materials[index * materialSlots + slot];
                     if (!optimizationFeatures.materialCaching ||

@@ -42,6 +42,8 @@ namespace Engine {
         float minimumHeight{-10.0F};
         float maximumHeight{10.0F};
         std::vector<float> heights;
+        /** Per-heightmap-sample tint, painted by the terrain brush. */
+        std::vector<Vec3> colors;
 
         TerrainComponent();
 
@@ -68,5 +70,10 @@ namespace Engine {
                     TerrainSculptMode mode, float flattenHeight = 0.0F,
                     TerrainBrushFalloff falloff = TerrainBrushFalloff::Smooth,
                     TerrainRegion *changedRegion = nullptr);
+
+        /** Blends a colour into one brush sample in local terrain space. */
+        bool paint(float localX, float localZ, float radius, const Vec3& color, float opacity,
+                   TerrainBrushFalloff falloff = TerrainBrushFalloff::Smooth,
+                   TerrainRegion *changedRegion = nullptr);
     };
 } // namespace Engine

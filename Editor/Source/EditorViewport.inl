@@ -712,6 +712,21 @@ bool applyTerrainBrush(Engine::ScenePreset& scene, const Engine::Entity entity,
     return changed;
 }
 
+bool applyTerrainPaintBrush(Engine::ScenePreset& scene, const Engine::Entity entity,
+                            const Engine::Vec3& localPoint, TerrainSculptState& state,
+                            Engine::TerrainRegion& dirty) {
+    bool changed = false;
+    scene.editor().modify<Engine::TerrainComponent>(entity, [&](auto& terrain) {
+        changed = terrain.paint(localPoint.x(), localPoint.z(), state.radius,
+                                state.paintLayer == 0 ? Engine::Vec3{1.0F, 0.0F, 0.0F} :
+                                state.paintLayer == 1 ? Engine::Vec3{0.0F, 1.0F, 0.0F} :
+                                state.paintLayer == 2 ? Engine::Vec3{0.0F, 0.0F, 1.0F} : Engine::Vec3{},
+                                state.paintOpacity, state.falloff, &dirty);
+        if (changed && state.workingMesh) terrain.updateMeshRegion(*state.workingMesh, dirty);
+    });
+    return changed;
+}
+
 void finishTerrainStroke(Engine::ScenePreset& scene, TerrainSculptState& state) {
     if (state.strokeEntity != Engine::NullEntity && state.workingMesh &&
         scene.editor().valid(state.strokeEntity) &&
@@ -866,6 +881,61 @@ bool drawTerrainSculpt(Engine::ScenePreset& scene, const Engine::Entity selected
     return true;
 }
 
+bool drawTerrainPaint(Engine::ScenePreset& scene, const Engine::Entity selected,
+                      const Engine::Renderer& renderer, const ImVec2 min, const ImVec2 max,
+                      TerrainSculptState& state, const bool imageHovered,
+                      ViewportInteraction& interaction) {
+    if (!state.paintEnabled || selected == Engine::NullEntity || !scene.editor().valid(selected) ||
+        !scene.editor().has<Engine::TerrainComponent>(selected) ||
+        !scene.editor().has<Engine::MeshRenderer>(selected) || !scene.editor().has<Engine::Transform>(selected)) return false;
+    const auto& terrain = scene.editor().get<Engine::TerrainComponent>(selected);
+    const auto& transform = scene.editor().get<Engine::Transform>(selected);
+    const auto& meshRenderer = scene.editor().get<Engine::MeshRenderer>(selected);
+    const Engine::Camera camera = sceneViewCamera(renderer, min, max);
+    const auto hit = imageHovered && meshRenderer.hasMesh() ? raycastTerrain(terrain, transform, camera.position(),
+        viewportRayDirection(camera, ImGui::GetIO().MousePos, min, max)) : std::nullopt;
+    if (hit) {
+        const Engine::Vec3 localHit = terrainLocalPoint(transform, *hit);
+        ImDrawList* drawList = ImGui::GetWindowDrawList();
+        constexpr float pi = 3.14159265358979323846F;
+        ImVec2 previous{};
+        for (int i = 0; i <= 48; ++i) {
+            const float angle = 2.0F * pi * static_cast<float>(i) / 48.0F;
+            const float x = localHit.x() + std::cos(angle) * state.radius;
+            const float z = localHit.z() + std::sin(angle) * state.radius;
+            const ImVec2 point = projectGizmoPoint(camera, terrainWorldPoint(transform,
+                {x, terrain.sampleHeight(x, z) + 0.04F, z}), min, max);
+            if (i > 0) drawList->AddLine(previous, point, IM_COL32(245, 180, 65, 245), 2.5F);
+            previous = point;
+        }
+    }
+    if (imageHovered && hit && ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
+        state.strokeActive = true; state.strokeEntity = selected; state.hasPreviousPoint = false;
+        state.workingMesh = std::make_shared<Engine::Mesh>(*meshRenderer.mesh);
+        state.heightsBeforeStroke = terrain.heights; state.strokeDirty = {};
+        scene.editor().modify<Engine::MeshRenderer>(selected, [&](auto& component) { component.mesh = state.workingMesh; });
+    }
+    if (state.strokeActive && state.strokeEntity == selected && hit && ImGui::IsMouseDown(ImGuiMouseButton_Left)) {
+        const Engine::Vec3 localHit = terrainLocalPoint(transform, *hit);
+        const float distance = state.hasPreviousPoint ? (localHit - state.previousPoint).length() : 0.0F;
+        const int count = state.hasPreviousPoint ? std::max(1, static_cast<int>(std::ceil(distance /
+            std::max(state.radius * state.spacing, 0.01F)))) : 1;
+        for (int i = 1; i <= count; ++i) {
+            const float t = static_cast<float>(i) / static_cast<float>(count);
+            const Engine::Vec3 point = state.hasPreviousPoint ? state.previousPoint + (localHit - state.previousPoint) * t : localHit;
+            Engine::TerrainRegion dirty;
+            if (!applyTerrainPaintBrush(scene, selected, point, state, dirty)) continue;
+            if (!state.strokeDirty.valid) state.strokeDirty = dirty;
+            else { state.strokeDirty.minimumX = std::min(state.strokeDirty.minimumX, dirty.minimumX); state.strokeDirty.minimumZ = std::min(state.strokeDirty.minimumZ, dirty.minimumZ); state.strokeDirty.maximumX = std::max(state.strokeDirty.maximumX, dirty.maximumX); state.strokeDirty.maximumZ = std::max(state.strokeDirty.maximumZ, dirty.maximumZ); }
+            interaction.terrainGeometryChanged = true;
+        }
+        state.previousPoint = localHit; state.hasPreviousPoint = true;
+        ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
+    }
+    if (!ImGui::IsMouseDown(ImGuiMouseButton_Left)) finishTerrainStroke(scene, state);
+    return true;
+}
+
 bool drawTerrainGrass(Engine::ScenePreset& scene, const Engine::Entity selected,
                       const Engine::Renderer& renderer, const ImVec2 min, const ImVec2 max,
                       TerrainSculptState& state, const bool imageHovered,
@@ -995,7 +1065,7 @@ ViewportInteraction drawViewport(Engine::ScenePreset &scene, Engine::Assets::Con
             ImGui::SameLine(0.0F, 4.0F);
             if (drawToolbarToggle(" Sculpt ", terrainSculpt.enabled)) {
                 terrainSculpt.enabled = !terrainSculpt.enabled;
-                if (terrainSculpt.enabled) terrainSculpt.grassEnabled = false;
+                if (terrainSculpt.enabled) { terrainSculpt.grassEnabled = false; terrainSculpt.paintEnabled = false; }
                 const auto& terrain = scene.editor().get<Engine::TerrainComponent>(selected);
                 auto mesh = std::make_shared<Engine::Mesh>(
                     terrain.createMesh(terrainSculpt.enabled ? 0U : terrainSculpt.previewLod));
@@ -1004,9 +1074,14 @@ ViewportInteraction drawViewport(Engine::ScenePreset &scene, Engine::Assets::Con
                 renderer.synchronizeScene(scene);
             }
             ImGui::SameLine(0.0F, 4.0F);
+            if (drawToolbarToggle(" Paint ", terrainSculpt.paintEnabled)) {
+                terrainSculpt.paintEnabled = !terrainSculpt.paintEnabled;
+                if (terrainSculpt.paintEnabled) { terrainSculpt.enabled = false; terrainSculpt.grassEnabled = false; }
+            }
+            ImGui::SameLine(0.0F, 4.0F);
             if (drawToolbarToggle(" Grass ", terrainSculpt.grassEnabled)) {
                 terrainSculpt.grassEnabled = !terrainSculpt.grassEnabled;
-                if (terrainSculpt.grassEnabled) terrainSculpt.enabled = false;
+                if (terrainSculpt.grassEnabled) { terrainSculpt.enabled = false; terrainSculpt.paintEnabled = false; }
             }
             if (terrainSculpt.enabled) {
                 ImGui::SameLine(0.0F, 6.0F);
@@ -1035,6 +1110,47 @@ ViewportInteraction drawViewport(Engine::ScenePreset &scene, Engine::Assets::Con
                 if (ImGui::IsItemHovered()) {
                     ImGui::SetTooltip("Shift: invert Raise/Lower | Ctrl: pick flatten height");
                 }
+            } else if (terrainSculpt.paintEnabled) {
+                ImGui::SameLine(0.0F, 6.0F);
+                constexpr const char* layers[]{"Layer 1", "Layer 2", "Layer 3", "Base layer"};
+                ImGui::SetNextItemWidth(110.0F);
+                ImGui::Combo("##terrain-paint-layer", &terrainSculpt.paintLayer, layers, 4);
+                if (ImGui::IsItemHovered()) ImGui::SetTooltip("Base layer fills the unpainted terrain; Layers 1-3 are brush-painted.");
+                ImGui::SameLine(0.0F, 6.0F);
+                std::string textureLabel = " Drop texture ";
+                if (const auto& terrainRenderer = scene.editor().get<Engine::MeshRenderer>(selected);
+                    terrainRenderer.mesh && terrainRenderer.mesh->images.size() >
+                    static_cast<std::size_t>(terrainSculpt.paintLayer)) {
+                    textureLabel = " Texture " + std::to_string(terrainSculpt.paintLayer + 1) + " ";
+                }
+                ImGui::Button(textureLabel.c_str());
+                if (ImGui::BeginDragDropTarget()) {
+                    if (const ImGuiPayload* payload = ImGui::AcceptDragDropPayload(Editor::AssetDragDrop::texturePayload)) {
+                        const auto texture = content.texture(Editor::AssetDragDrop::texturePath(*payload));
+                        if (texture && texture->width > 0 && texture->height > 0 && !texture->rgbaPixels.empty()) {
+                            const auto& source = scene.editor().get<Engine::MeshRenderer>(selected);
+                            auto mesh = std::make_shared<Engine::Mesh>(*source.mesh);
+                            mesh->images.resize(std::max(mesh->images.size(),
+                                static_cast<std::size_t>(terrainSculpt.paintLayer + 1)));
+                            mesh->images[terrainSculpt.paintLayer] = {texture->width, texture->height, texture->rgbaPixels};
+                            scene.editor().modify<Engine::MeshRenderer>(selected, [&](auto& component) {
+                                component.mesh = mesh;
+                                for (int layer = 0; layer < 4; ++layer)
+                                    component.material.terrainLayerTextures[layer] =
+                                        layer < static_cast<int>(mesh->images.size()) ? layer : -1;
+                                component.material.terrainLayered = true;
+                            });
+                            renderer.synchronizeScene(scene);
+                        }
+                    }
+                    ImGui::EndDragDropTarget();
+                }
+                ImGui::SameLine(0.0F, 6.0F);
+                ImGui::SetNextItemWidth(110.0F);
+                ImGui::SliderFloat("Opacity##terrain-paint", &terrainSculpt.paintOpacity, 0.02F, 1.0F, "O %.2f");
+                ImGui::SameLine(0.0F, 6.0F);
+                ImGui::SetNextItemWidth(105.0F);
+                ImGui::SliderFloat("Radius##terrain-paint", &terrainSculpt.radius, 0.25F, 8.0F, "R %.1f");
             } else if (terrainSculpt.grassEnabled) {
                 ImGui::SameLine(0.0F, 6.0F);
                 ImGui::Checkbox("Erase##grass", &terrainSculpt.grassErase);
@@ -1093,6 +1209,7 @@ ViewportInteraction drawViewport(Engine::ScenePreset &scene, Engine::Assets::Con
         } else {
             if (terrainSculpt.strokeActive) finishTerrainStroke(scene, terrainSculpt);
             terrainSculpt.enabled = false;
+            terrainSculpt.paintEnabled = false;
             terrainSculpt.grassEnabled = false;
         }
         ImGui::SameLine(0.0F, 8.0F);
@@ -1185,8 +1302,10 @@ ViewportInteraction drawViewport(Engine::ScenePreset &scene, Engine::Assets::Con
         const bool sculptConsumesClick = !grassConsumesClick && gizmoAction < 0 && !showGameView && !playing &&
             drawTerrainSculpt(scene, selected, renderer, imageMin, imageMax, terrainSculpt,
                               imageHovered, interaction);
+        const bool paintConsumesClick = !grassConsumesClick && !sculptConsumesClick && gizmoAction < 0 && !showGameView && !playing &&
+            drawTerrainPaint(scene, selected, renderer, imageMin, imageMax, terrainSculpt, imageHovered, interaction);
         const bool gizmoConsumesClick = gizmoToolsConsumeClick || orientationGizmoConsumesClick ||
-            sculptConsumesClick || grassConsumesClick ||
+            sculptConsumesClick || paintConsumesClick || grassConsumesClick ||
             (gizmoAction < 0 && !showGameView && !playing &&
                                         (gizmoMode == GizmoMode::Translate
                                              ? drawTranslationGizmo(scene, selected, renderer, imageMin, imageMax)

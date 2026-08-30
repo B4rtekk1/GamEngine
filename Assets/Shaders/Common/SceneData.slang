@@ -27,4 +27,5 @@ struct MaterialData
     float4 baseColorMetallic;
     float4 roughnessAmbientOcclusion;
     int4 textureIndices;
+    int4 terrainLayerTextures;
 };

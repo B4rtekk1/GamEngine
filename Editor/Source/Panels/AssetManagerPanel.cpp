@@ -414,9 +414,10 @@ Engine::Entity AssetManagerPanel::draw(Engine::ScenePreset& scene, Engine::Asset
                     selected = asset.relative;
                     error.clear();
                 }
-                if (is_model(asset.relative) && ImGui::BeginDragDropSource()) {
+                if ((is_model(asset.relative) || asset.kind == AssetKind::Texture) && ImGui::BeginDragDropSource()) {
                     selected = asset.relative;
-                    Editor::AssetDragDrop::setModelPayload(asset.relative);
+                    if (is_model(asset.relative)) Editor::AssetDragDrop::setModelPayload(asset.relative);
+                    else Editor::AssetDragDrop::setTexturePayload(asset.relative);
                     ImGui::TextUnformatted("Add model to scene");
                     ImGui::TextDisabled("%s", asset.relative.filename().string().c_str());
                     ImGui::EndDragDropSource();
@@ -490,9 +491,10 @@ Engine::Entity AssetManagerPanel::draw(Engine::ScenePreset& scene, Engine::Asset
                 if (ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left) && is_model(asset.relative))
                     instantiate();
             }
-            if (is_model(asset.relative) && ImGui::BeginDragDropSource()) {
+            if ((is_model(asset.relative) || asset.kind == AssetKind::Texture) && ImGui::BeginDragDropSource()) {
                 selected = asset.relative;
-                Editor::AssetDragDrop::setModelPayload(asset.relative);
+                if (is_model(asset.relative)) Editor::AssetDragDrop::setModelPayload(asset.relative);
+                else Editor::AssetDragDrop::setTexturePayload(asset.relative);
                 ImGui::TextUnformatted("Add model to scene");
                 ImGui::TextDisabled("%s", asset.relative.filename().string().c_str());
                 ImGui::EndDragDropSource();

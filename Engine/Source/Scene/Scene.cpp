@@ -80,6 +80,7 @@ namespace Engine {
             .baseColor = {0.74F, 0.78F, 0.70F},
             .metallic = 0.0F,
             .roughness = 0.92F,
+            .terrainLayered = true,
         });
         object.addTerrain(std::move(terrain));
         object.addMeshCollider();

@@ -102,7 +102,31 @@ ForwardFragmentOutput fragmentMain(ForwardFragmentInput input)
     }
 
     float4 baseColor = float4(vertexColor * material.baseColorMetallic.rgb, 1.0);
-    if (material.textureIndices.x >= 0)
+    if ((material.textureIndices.w & 4) != 0)
+    {
+        baseColor = float4(material.baseColorMetallic.rgb, 1.0);
+        float3 weights = saturate(input.color);
+        float fourthWeight = saturate(1.0 - weights.x - weights.y - weights.z);
+        float4 layers = float4(weights.x, weights.y, weights.z, fourthWeight);
+        // Terrain UVs cover the complete heightmap. Repeat each layer so an
+        // albedo map reads as ground detail rather than one giant decal.
+        float2 terrainUv = input.texCoord * 8.0;
+        int2 cell = int2(floor(input.texCoord * 32.0));
+        float checkerShade = ((cell.x + cell.y) & 1) == 0 ? 0.82 : 0.52;
+        float4 checker = float4(checkerShade * material.baseColorMetallic.rgb, 1.0);
+        baseColor = 0.0;
+        float appliedWeight = 0.0;
+        if (material.terrainLayerTextures.x >= 0) { baseColor += materialTextures[material.terrainLayerTextures.x].Sample(terrainUv) * layers.x; appliedWeight += layers.x; }
+        if (material.terrainLayerTextures.y >= 0) { baseColor += materialTextures[material.terrainLayerTextures.y].Sample(terrainUv) * layers.y; appliedWeight += layers.y; }
+        if (material.terrainLayerTextures.z >= 0) { baseColor += materialTextures[material.terrainLayerTextures.z].Sample(terrainUv) * layers.z; appliedWeight += layers.z; }
+        if (material.terrainLayerTextures.w >= 0) { baseColor += materialTextures[material.terrainLayerTextures.w].Sample(terrainUv) * layers.w; appliedWeight += layers.w; }
+        // Blend the unpainted part into the grid instead of leaving it with
+        // a zero alpha/colour, which exposed the blue clear colour at edges.
+        baseColor = baseColor * float4(material.baseColorMetallic.rgb, 1.0) +
+                    checker * (1.0 - saturate(appliedWeight));
+        baseColor.a = 1.0;
+    }
+    else if (material.textureIndices.x >= 0)
         baseColor *= materialTextures[material.textureIndices.x].Sample(input.texCoord);
 
     const bool doubleSided = (material.textureIndices.w & 1) != 0;

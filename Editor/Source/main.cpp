@@ -4,6 +4,7 @@
 
 #include "Engine/Renderer/Renderer.h"
 #include "Engine/Assets/Content.h"
+#include "Engine/Assets/AssetTypes.h"
 #include "Engine/Scene/ScenePresets.h"
 #include "Engine/Scene/SceneEditor.h"
 #include "Engine/Core/Time.h"

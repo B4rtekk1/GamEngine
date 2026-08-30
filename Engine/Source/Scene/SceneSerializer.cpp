@@ -371,10 +371,15 @@ namespace Engine {
                 output << ' ';
                 writeFloat(output, height);
             }
+            output << ' ' << terrain.colors.size();
+            for (const Vec3& color : terrain.colors) {
+                output << ' ';
+                writeVec3(output, color);
+            }
             output << '\n';
         }
 
-        TerrainComponent readTerrain(std::istream& input) {
+        TerrainComponent readTerrain(std::istream& input, const bool hasColors) {
             const auto resolution = read<std::uint32_t>(input, "terrain resolution");
             const float width = readFloat(input, "terrain width");
             const float depth = readFloat(input, "terrain depth");
@@ -393,6 +398,11 @@ namespace Engine {
             }
             for (float& height : terrain.heights) {
                 height = readFloat(input, "terrain height");
+            }
+            if (hasColors) {
+                const std::size_t colorCount = readCount(input, "terrain colour count", terrain.sampleCount());
+                if (colorCount != terrain.sampleCount()) invalidScene("terrain colour count does not match its resolution");
+                for (Vec3& color : terrain.colors) color = readVec3(input, "terrain colour");
             }
             if (!terrain.valid()) invalidScene("terrain data is invalid");
             return terrain;
@@ -647,7 +657,7 @@ namespace Engine {
                 writeRigidbody(serialized, registry.get<RigidbodyComponent>(entity));
             }
             if (registry.has<TerrainComponent>(entity)) {
-                serialized << "TERRAIN ";
+                serialized << "TERRAIN_V2 ";
                 writeTerrain(serialized, registry.get<TerrainComponent>(entity));
             }
             if (registry.has<TerrainGrassComponent>(entity)) {
@@ -959,12 +969,13 @@ namespace Engine {
                     }
                     hasRigidbody = true;
                     loaded.add<RigidbodyComponent>(entity, readRigidbody(input));
-                } else if (component == "TERRAIN") {
+                } else if (component == "TERRAIN" || component == "TERRAIN_V2") {
                     if (hasTerrain) {
                         invalidScene("entity contains more than one TerrainComponent");
                     }
                     hasTerrain = true;
-                    loaded.add<TerrainComponent>(entity, readTerrain(input));
+                    TerrainComponent terrain = readTerrain(input, component == "TERRAIN_V2");
+                    loaded.add<TerrainComponent>(entity, std::move(terrain));
                 } else if (component == "TERRAIN_GRASS" || component == "TERRAIN_GRASS_V2") {
                     if (hasTerrainGrass) invalidScene("entity contains more than one TerrainGrassComponent");
                     hasTerrainGrass = true;
@@ -1114,6 +1125,7 @@ namespace Engine {
                 if (!hasRenderer) invalidScene("terrain entity is missing MeshRenderer");
                 const auto mesh = std::make_shared<Mesh>(loaded.get<TerrainComponent>(entity).createMesh());
                 loaded.get<MeshRenderer>(entity).mesh = mesh;
+                loaded.get<MeshRenderer>(entity).material.terrainLayered = true;
                 if (hasCollider) {
                     if (auto* meshCollider = std::get_if<MeshCollider>(
                             &loaded.get<ColliderComponent>(entity).shape)) {

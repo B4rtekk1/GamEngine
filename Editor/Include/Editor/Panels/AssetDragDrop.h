@@ -12,10 +12,16 @@
 namespace Editor::AssetDragDrop {
 
 inline constexpr const char* modelPayload = "EDITOR_MODEL_ASSET";
+inline constexpr const char* texturePayload = "EDITOR_TEXTURE_ASSET";
 
 inline void setModelPayload(const std::filesystem::path& relativePath) {
     const std::string value = relativePath.generic_string();
     ImGui::SetDragDropPayload(modelPayload, value.c_str(), value.size() + 1);
+}
+
+inline void setTexturePayload(const std::filesystem::path& relativePath) {
+    const std::string value = relativePath.generic_string();
+    ImGui::SetDragDropPayload(texturePayload, value.c_str(), value.size() + 1);
 }
 
 inline std::filesystem::path modelPath(const ImGuiPayload& payload) {
@@ -23,6 +29,8 @@ inline std::filesystem::path modelPath(const ImGuiPayload& payload) {
         return {};
     return std::filesystem::path{static_cast<const char*>(payload.Data)};
 }
+
+inline std::filesystem::path texturePath(const ImGuiPayload& payload) { return modelPath(payload); }
 
 inline Engine::Entity instantiateModel(Engine::ScenePreset& scene, Engine::Assets::Content& content,
                                        const std::filesystem::path& relativePath,

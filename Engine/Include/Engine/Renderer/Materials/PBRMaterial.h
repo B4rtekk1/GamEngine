@@ -3,6 +3,7 @@
 #include "Engine/Math/Color.h"
 
 #include <cstdint>
+#include <array>
 
 namespace Engine {
     // Values follow the metallic/roughness workflow used by glTF.
@@ -21,5 +22,8 @@ namespace Engine {
         // either side. The fragment shader flips their shading normal per face.
         bool doubleSided{false};
         float alphaCutoff{0.5F}; //NOLINT
+        // Terrain uses four albedo layers blended by the vertex splat weights.
+        std::array<std::int32_t, 4> terrainLayerTextures{-1, -1, -1, -1};
+        bool terrainLayered{false};
     };
 } // namespace Engine

@@ -8,12 +8,15 @@
 
 struct TerrainSculptState final {
     bool enabled{};
+    bool paintEnabled{};
     bool grassEnabled{};
     bool grassErase{};
     Engine::TerrainSculptMode mode{Engine::TerrainSculptMode::Raise};
     Engine::TerrainBrushFalloff falloff{Engine::TerrainBrushFalloff::Smooth};
     float radius{2.0F};
     float strength{3.0F};
+    float paintOpacity{1.0F};
+    int paintLayer{};
     float spacing{0.2F};
     float grassDensity{2.0F};
     float grassMinimumScale{0.8F};

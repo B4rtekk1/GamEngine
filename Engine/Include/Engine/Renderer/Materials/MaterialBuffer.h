@@ -12,5 +12,6 @@ namespace Engine {
         glm::vec4 baseColorMetallic{};
         glm::vec4 roughnessAmbientOcclusion{};
         glm::ivec4 textureIndices{-1};
+        glm::ivec4 terrainLayerTextures{-1};
     };
 } // namespace Engine
