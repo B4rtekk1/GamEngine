@@ -16,10 +16,14 @@
 //NOLINTBEGIN
 namespace Engine {
     /**
-     * @brief Small, fluent-friendly helper for constructing ECS scene entities.
+     * @brief Advanced ECS-only helper for constructing scene entities.
      *
      * SceneBuilder owns no entities or assets. It only hides the repetitive
-     * Registry create/add sequence used when assembling a scene.
+     * Registry create/add sequence used by engine internals. Game code should
+     * use Scene::createActor(), Scene::createModel() and Actor instead; that
+     * API keeps Entity and Registry implementation details out of projects.
+     * Include this header explicitly only for engine extensions that genuinely
+     * need ECS-level entity construction.
      */
     class SceneBuilder final {
     public:

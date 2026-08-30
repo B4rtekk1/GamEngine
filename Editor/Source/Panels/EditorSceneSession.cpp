@@ -14,6 +14,10 @@
 #include <fstream>
 #include <sstream>
 
+namespace {
+std::filesystem::path activeScenePath;
+}
+
 /**
  * @brief Returns the path of the scene used by the editor session.
  *
@@ -22,7 +26,12 @@
  *         `GAMEENGINE_SOURCE_DIR`.
  */
 std::filesystem::path EditorSceneSession::scenePath() {
+    if (!activeScenePath.empty()) return activeScenePath;
     return std::filesystem::path{GAMEENGINE_SOURCE_DIR} / "Assets" / "Scenes" / "Editor.scene";
+}
+
+void EditorSceneSession::setScenePath(std::filesystem::path path) {
+    activeScenePath = std::move(path);
 }
 
 /**

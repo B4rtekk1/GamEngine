@@ -136,6 +136,7 @@ find_path(VMA_INCLUDE_DIR NAMES vk_mem_alloc.h HINTS "$ENV{VULKAN_SDK}/Include/v
 
 add_library(Engine
         Engine/Source/Application.cpp
+        Engine/Source/Project.cpp
         Engine/Source/Assets/StbImage.cpp
         Engine/Source/Assets/AssetManager.cpp
         Engine/Source/Assets/GlbLoader.cpp
@@ -311,8 +312,10 @@ if(BUILD_TESTING)
             Tests/TimeTests.cpp
             Tests/SceneBuilderTests.cpp
             Tests/ScriptRegistryTests.cpp
+            Tests/ProjectTests.cpp
             Engine/Source/Core/Camera.cpp
             Engine/Source/Core/Time.cpp
+            Engine/Source/Project.cpp
             Engine/Source/Renderer/Geometry/Terrain.cpp
             Engine/Source/UI/Canvas.cpp
             Engine/Source/UI/RectTransform.cpp

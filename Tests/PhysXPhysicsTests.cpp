@@ -367,4 +367,17 @@ TEST(Actor, UpdatesPhysicsAndCameraComponentsThroughHighLevelApi) {
     EXPECT_FLOAT_EQ(camera.farClip, 200.0F);
 }
 
+TEST(Scene, StandardFactoriesReturnActors) {
+    Engine::Scene scene;
+    auto mesh = std::make_shared<Engine::Mesh>();
+    const auto model = scene.createMesh("Model", mesh);
+    const auto camera = scene.createCamera("Camera");
+    const auto light = scene.createLight("Light");
+
+    EXPECT_TRUE(model.valid());
+    EXPECT_TRUE(camera.hasCamera());
+    EXPECT_TRUE(light.hasLight());
+    EXPECT_EQ(scene.findActor("Model").id(), model.id());
+}
+
 } // namespace

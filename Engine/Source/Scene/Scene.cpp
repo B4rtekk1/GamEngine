@@ -31,6 +31,12 @@ namespace Engine {
         return object;
     }
 
+    Actor Scene::createMesh(std::string name, std::shared_ptr<const Mesh> mesh,
+                            PBRMaterial material) {
+        auto &object = createMeshObject(std::move(name), std::move(mesh), material);
+        return Actor{*this, object.objectId()};
+    }
+
     Actor Scene::createModel(std::string name, std::filesystem::path path,
                              const Assets::Content &content) {
         auto mesh = content.mesh(path);

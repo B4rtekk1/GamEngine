@@ -11,6 +11,8 @@ namespace Engine { class Renderer; }
 
 class EditorSceneSession final {
 public:
+    /** Sets the project startup scene used by the Save and Load menu actions. */
+    static void setScenePath(std::filesystem::path path);
     [[nodiscard]] static std::filesystem::path scenePath();
     [[nodiscard]] static std::uint32_t msaaSampleCount(const Engine::Renderer& renderer);
 

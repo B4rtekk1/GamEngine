@@ -167,19 +167,19 @@ namespace Engine {
             };
         }
         const Vec3 direction = Vec3{0, targetY, 0} - position;
-        auto &cameraObject = createCamera("Camera", CameraComponent{
+        const Actor cameraActor = createCamera("Camera", CameraComponent{
                                               .fieldOfView = CameraFieldOfView, .nearClip = CameraNearClip,
                                               .farClip = CameraFarClip,
                                               .aspectRatio = CameraViewportWidth / CameraViewportHeight,
         });
-        cameraObject.setPosition(position);
+        cameraActor.setPosition(position);
         if (type != SceneType::Empty) {
-            cameraObject.setRotation({
+            cameraActor.setRotation({
                 Degrees{Radians{std::atan2(direction.y(), Vec2{direction.x(), direction.z()}.length())}}.value(),
                 Degrees{Radians{std::atan2(direction.z(), direction.x())}}.value(), 0
             });
         }
-        camera = cameraObject.entity();
+        camera = findEntity(cameraActor.id());
 
         // Every editor scene starts with an explicit directional light.  This
         // keeps illumination editable and visible in the hierarchy instead of
@@ -244,10 +244,10 @@ namespace Engine {
     Entity ScenePreset::createLight() {
         LightComponent light;
         light.intensity = 4.0F;
-        auto &object = Scene::createLight("Light", light);
+        const Actor object = Scene::createLight("Light", light);
         object.setPosition({3.0F, 5.0F, -3.0F});
         object.setRotation({-55.0F, 35.0F, 0.0F});
-        const Entity entity = object.entity();
+        const Entity entity = findEntity(object.id());
         editorLights.push_back(entity);
         return entity;
     }

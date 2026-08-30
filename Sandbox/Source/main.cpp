@@ -4,6 +4,7 @@
 #include <exception>
 #include <filesystem>
 #include <iostream>
+#include <optional>
 #include <string>
 #include <string_view>
 
@@ -11,19 +12,39 @@
 
 int main(int argc, char** argv) {
     try {
-        std::filesystem::path scenePath = std::filesystem::path{GAMEENGINE_SOURCE_DIR} /
-                                          "Assets" / "Scenes" / "Editor.scene";
-        Engine::Application app{{.title = "GamEngine", .width = 800, .height = 600}};
+        std::optional<std::filesystem::path> projectPath;
+        std::optional<std::filesystem::path> sceneOverride;
         for (int index = 1; index < argc; ++index) {
             const std::string_view argument{argv[index]};
+            if (argument == "--project") {
+                if (++index == argc) throw std::runtime_error("--project requires a file path");
+                projectPath = argv[index];
+                continue;
+            }
             if (argument == "--scene") {
                 if (++index == argc) throw std::runtime_error("--scene requires a file path");
-                scenePath = argv[index];
+                sceneOverride = std::filesystem::path{argv[index]};
             }
         }
+        const Engine::Project project = projectPath
+                                            ? Engine::Project::load(*projectPath)
+                                            : [&] {
+                                                  try {
+                                                      return Engine::Project::discover(
+                                                          std::filesystem::current_path());
+                                                  } catch (const std::runtime_error&) {
+                                                      return Engine::Project::defaults(
+                                                          std::filesystem::path{GAMEENGINE_SOURCE_DIR});
+                                                  }
+                                              }();
+        const std::filesystem::path scenePath = sceneOverride
+                                                    ? project.resolve(*sceneOverride)
+                                                    : project.startupScene();
+        Engine::Application app{{.title = project.name(), .width = 800, .height = 600,
+                                 .assetRoot = project.assetRoot()}};
         if (std::filesystem::is_regular_file(scenePath)) {
             app.scene().load(scenePath);
-        } else if (argc > 1) {
+        } else {
             throw std::runtime_error("Scene file does not exist: " + scenePath.string());
         }
         app.run();

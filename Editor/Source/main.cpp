@@ -22,6 +22,7 @@
 #include "Engine/Scene/SceneSerializer.h"
 #include "Engine/Scripting/ScriptSystem.h"
 #include "Engine/Physics/PhysicsSystem.h"
+#include "Engine/Project.h"
 #include "Elements/EditorButton.h"
 #include "Elements/TransformFields.h"
 #include "Editor/Panels/EditorSceneSession.h"
@@ -53,6 +54,7 @@ using Editor::SceneHistory;
 #include <limits>
 #include <sstream>
 #include <stdexcept>
+#include <string_view>
 #include <thread>
 #include <optional>
 #include <unordered_map>
@@ -89,12 +91,30 @@ namespace {
 }
 // NOLINTBEGIN(readability-magic-numbers)
 
-int main() {
+int main(int argc, char** argv) {
     try {
+        std::optional<std::filesystem::path> projectPath;
+        for (int index = 1; index < argc; ++index) {
+            if (std::string_view{argv[index]} == "--project") {
+                if (++index == argc) throw std::runtime_error("--project requires a file path");
+                projectPath = argv[index];
+            }
+        }
+        const Engine::Project project = projectPath
+                                            ? Engine::Project::load(*projectPath)
+                                            : [&] {
+                                                  try {
+                                                      return Engine::Project::discover(
+                                                          std::filesystem::current_path());
+                                                  } catch (const std::runtime_error&) {
+                                                      return Engine::Project::defaults(
+                                                          std::filesystem::path{GAMEENGINE_SOURCE_DIR});
+                                                  }
+                                              }();
         if (!SDL_Init(SDL_INIT_VIDEO | SDL_INIT_EVENTS)) {
             throw std::runtime_error(SDL_GetError());
         }
-        SDL_Window *window = SDL_CreateWindow("GamEngine Editor",
+        SDL_Window *window = SDL_CreateWindow((project.name() + " Editor").c_str(),
                                               EditorConstants::windowWidth,
                                               EditorConstants::windowHeight,
                                               SDL_WINDOW_VULKAN | SDL_WINDOW_RESIZABLE);
@@ -113,8 +133,8 @@ int main() {
         EditorStyle::apply();
 
         Engine::ScenePreset scene;
-        Engine::Assets::Content content{
-            std::filesystem::path{GAMEENGINE_SOURCE_DIR} / "Assets"};
+        Engine::Assets::Content content{project.assetRoot()};
+        EditorSceneSession::setScenePath(project.startupScene());
         Engine::ScriptSystem scriptSystem{Engine::ScriptRegistry::instance()};
         Engine::PhysicsSystem physicsSystem{};
         // The editor is the visual authoring path, so shadows must be active

@@ -45,7 +45,12 @@ namespace Engine {
     // application), rather than to this data container.
     class Scene {
     public:
-        /** Creates a named game object with the standard transform and renderer components. */
+        /**
+         * Advanced component-oriented creation API.
+         *
+         * Prefer createActor() for gameplay code. This overload is retained
+         * for engine and editor code that needs a GameObject's component API.
+         */
         [[nodiscard]] GameObject &create(std::string name) {
             if (name.empty()) {
                 throw std::invalid_argument("Scene object name cannot be empty");
@@ -66,7 +71,13 @@ namespace Engine {
             return result;
         }
 
-        /** Preferred spelling for application code. */
+        /**
+         * Advanced component-oriented creation API.
+         *
+         * New game code should prefer createActor() and the other Actor-returning
+         * factories below.  This remains available for editor and engine code
+         * that needs direct component access.
+         */
         [[nodiscard]] GameObject &createGameObject(std::string name) {
             return create(std::move(name));
         }
@@ -113,16 +124,10 @@ namespace Engine {
             return *objects_.back();
         }
 
-        /** Creates a renderable object without exposing Registry or component wiring. */
-        [[nodiscard]] GameObject &createMeshObject(std::string name,
-                                                   std::shared_ptr<const Mesh> mesh,
-                                                   PBRMaterial material = {});
-
-        [[nodiscard]] GameObject &createMesh(std::string name,
-                                             std::shared_ptr<const Mesh> mesh,
-                                             const PBRMaterial &material = {}) {
-            return createMeshObject(std::move(name), std::move(mesh), material);
-        }
+        /** Creates a renderable actor from an already-loaded mesh. */
+        [[nodiscard]] Actor createMesh(std::string name,
+                                       std::shared_ptr<const Mesh> mesh,
+                                       PBRMaterial material = {});
 
         /** Loads a model through Content and creates an actor in one operation. */
         [[nodiscard]] Actor createModel(std::string name,
@@ -149,19 +154,31 @@ namespace Engine {
             return object == nullptr ? Actor{} : Actor{*this, object->objectId()};
         }
 
-        [[nodiscard]] Actor createCameraActor(std::string name, const CameraComponent &camera = {}) {
+        /** Creates a camera actor. */
+        [[nodiscard]] Actor createCamera(std::string name, const CameraComponent &camera = {}) {
             auto &object = create(std::move(name));
             object.addCamera(camera);
             return Actor{*this, object.objectId()};
         }
 
-        [[nodiscard]] Actor createLightActor(std::string name, const LightComponent &light = {}) {
+        /** Creates a light actor. */
+        [[nodiscard]] Actor createLight(std::string name, const LightComponent &light = {}) {
             auto &object = create(std::move(name));
             object.addLight(light);
             if (light.type == LightType::Directional && light.enabled) {
                 setActiveDirectionalLight(object.entity());
             }
             return Actor{*this, object.objectId()};
+        }
+
+        /** Compatibility spelling; use createCamera(). */
+        [[nodiscard]] Actor createCameraActor(std::string name, const CameraComponent &camera = {}) {
+            return createCamera(std::move(name), camera);
+        }
+
+        /** Compatibility spelling; use createLight(). */
+        [[nodiscard]] Actor createLightActor(std::string name, const LightComponent &light = {}) {
+            return createLight(std::move(name), light);
         }
 
         /** Renames an actor while keeping name lookup consistent. */
@@ -192,21 +209,6 @@ namespace Engine {
             if (auto *object = find(actor.objectId_)) {
                 destroy(object->entity());
             }
-        }
-
-        [[nodiscard]] GameObject &createCamera(std::string name, const CameraComponent &camera = {}) {
-            auto &object = create(std::move(name));
-            object.addCamera(camera);
-            return object;
-        }
-
-        [[nodiscard]] GameObject &createLight(std::string name, const LightComponent &light = {}) {
-            auto &object = create(std::move(name));
-            object.addLight(light);
-            if (light.type == LightType::Directional && light.enabled) {
-                setActiveDirectionalLight(object.entity());
-            }
-            return object;
         }
 
         /**
@@ -411,8 +413,13 @@ namespace Engine {
         }
 
     protected:
+        /** Engine-only mesh creation primitive for scene presets. */
+        [[nodiscard]] GameObject &createMeshObject(std::string name,
+                                                    std::shared_ptr<const Mesh> mesh,
+                                                    PBRMaterial material = {});
+
         // Scene subclasses are engine-owned content layers. They may assemble
-        // entities, while application code uses GameObject instead.
+        // entities directly; application code uses Actor instead.
         [[nodiscard]] Registry &registry() noexcept { return registry_; }
         [[nodiscard]] const Registry &registry() const noexcept { return registry_; }
         void setParticleEntity(const Entity entity) noexcept { particleEntity_ = entity; }
