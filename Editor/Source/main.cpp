@@ -333,6 +333,10 @@ int main(int argc, char** argv) {
                     gizmoMode = GizmoMode::Rotate;
                     gizmoModeChanged = true;
                 }
+                if (ImGui::IsKeyPressed(ImGuiKey_R)) {
+                    gizmoMode = GizmoMode::Scale;
+                    gizmoModeChanged = true;
+                }
                 if (gizmoModeChanged && selectedEntity != Engine::NullEntity &&
                     scene.editor().valid(selectedEntity)) {
                     renderer.setEditorSelection(selectedEntity);

@@ -431,6 +431,18 @@ Engine::Vec3 snapTranslationToObjects(Engine::ScenePreset &scene, const Engine::
     return snapped;
 }
 
+float snapValue(const float value, const float increment) {
+    return std::round(value / increment) * increment;
+}
+
+float clampedScale(const float value) {
+    // A zero scale makes the model matrix singular and breaks picking,
+    // normal transforms, and later object snapping.  Keep its sign so
+    // intentionally mirrored meshes remain mirrored.
+    if (std::abs(value) >= EditorConstants::minimumScale) return value;
+    return value < 0.0F ? -EditorConstants::minimumScale : EditorConstants::minimumScale;
+}
+
 bool drawTranslationGizmo(Engine::ScenePreset &scene, const Engine::Entity selected,
                           const Engine::Renderer &renderer, const ImVec2 min, const ImVec2 max) {
     if (selected == Engine::NullEntity || !scene.editor().valid(selected) ||
@@ -495,8 +507,13 @@ bool drawTranslationGizmo(Engine::ScenePreset &scene, const Engine::Entity selec
                               delta.y * drag.startAxisDirection.y) / drag.startAxisLength;
         float worldDistance = pixels * (drag.startWorldSize / drag.startAxisLength);
         Engine::Vec3 position = drag.startPosition + axes[drag.axis] * worldDistance;
-        if (ImGui::GetIO().KeyCtrl && scene.editor().has<Engine::MeshRenderer>(selected)) {
-            position = snapTranslationToObjects(scene, selected, position, drag.axis);
+        if (ImGui::GetIO().KeyCtrl) {
+            if (drag.axis == 0) position.setX(snapValue(position.x(), EditorConstants::snapTranslation));
+            else if (drag.axis == 1) position.setY(snapValue(position.y(), EditorConstants::snapTranslation));
+            else position.setZ(snapValue(position.z(), EditorConstants::snapTranslation));
+            if (scene.editor().has<Engine::MeshRenderer>(selected)) {
+                position = snapTranslationToObjects(scene, selected, position, drag.axis);
+            }
         }
         scene.edit(selected).setPosition(position);
         // The scene image is rendered later in this frame. Re-project the
@@ -524,7 +541,91 @@ bool drawTranslationGizmo(Engine::ScenePreset &scene, const Engine::Entity selec
     return dragging || hoveredAxis >= 0 || hoveringOrigin;
 }
 
-enum class GizmoMode { Translate, Rotate };
+bool drawScaleGizmo(Engine::ScenePreset &scene, const Engine::Entity selected,
+                    const Engine::Renderer &renderer, const ImVec2 min, const ImVec2 max) {
+    if (selected == Engine::NullEntity || !scene.editor().valid(selected) ||
+        !scene.editor().has<Engine::Transform>(selected)) return false;
+
+    const Engine::Camera camera = sceneViewCamera(renderer, min, max);
+    const Engine::Vec3 origin = renderer.editorGizmoPosition(selected);
+    const float gizmoSize = gizmoWorldSize(camera, origin, min, max);
+    const Engine::Vec3 axes[3]{{1.0F, 0.0F, 0.0F}, {0.0F, 1.0F, 0.0F}, {0.0F, 0.0F, 1.0F}};
+    const ImU32 colors[3]{IM_COL32(235, 70, 70, 255), IM_COL32(70, 235, 100, 255),
+                          IM_COL32(70, 130, 245, 255)};
+    const ImVec2 mouse = ImGui::GetIO().MousePos;
+    ImDrawList *drawList = ImGui::GetWindowDrawList();
+    const ImVec2 originScreen = projectGizmoPoint(camera, origin, min, max);
+    ImVec2 axisEnds[3]{};
+    int hoveredAxis = -1;
+    for (int axis = 0; axis < 3; ++axis) {
+        axisEnds[axis] = projectGizmoPoint(camera, origin + axes[axis] * gizmoSize, min, max);
+        if (ImGui::IsMouseHoveringRect(min, max) &&
+            distanceToLineSegment(mouse, originScreen, axisEnds[axis]) < EditorConstants::hitTestRadius) {
+            hoveredAxis = axis;
+        }
+    }
+    const bool hoveringUniform = ImGui::IsMouseHoveringRect(min, max) &&
+        std::hypot(mouse.x - originScreen.x, mouse.y - originScreen.y) <= 12.0F;
+
+    struct DragState final {
+        Engine::Entity entity{Engine::NullEntity};
+        int axis{-1}; // 0..2: axis scale; 3: uniform scale.
+        Engine::Vec3 startScale{};
+        ImVec2 startMouse{};
+        ImVec2 screenDirection{};
+        float screenLength{};
+    };
+    static DragState drag;
+    if (ImGui::IsMouseClicked(ImGuiMouseButton_Left) && (hoveredAxis >= 0 || hoveringUniform)) {
+        const int axis = hoveredAxis >= 0 ? hoveredAxis : 3;
+        const ImVec2 direction = axis < 3
+            ? ImVec2{axisEnds[axis].x - originScreen.x, axisEnds[axis].y - originScreen.y}
+            : ImVec2{1.0F, -1.0F};
+        drag = {selected, axis, scene.editor().get<Engine::Transform>(selected).scale, mouse, direction,
+                std::max(std::hypot(direction.x, direction.y), 1.0F)};
+    }
+    bool dragging = false;
+    if (drag.entity == selected && drag.axis >= 0 && ImGui::IsMouseDown(ImGuiMouseButton_Left)) {
+        const ImVec2 delta{mouse.x - drag.startMouse.x, mouse.y - drag.startMouse.y};
+        const float pixels = (delta.x * drag.screenDirection.x + delta.y * drag.screenDirection.y) /
+                             drag.screenLength;
+        const float factor = std::max(EditorConstants::minimumScale,
+                                      EditorConstants::one + pixels / EditorConstants::gizmoDesiredPixels);
+        Engine::Vec3 scale = drag.startScale;
+        auto scaleAxis = [&](const float value) {
+            float result = value * factor;
+            if (ImGui::GetIO().KeyCtrl) result = snapValue(result, EditorConstants::snapScale);
+            return clampedScale(result);
+        };
+        if (drag.axis == 3) {
+            scale.setX(scaleAxis(drag.startScale.x()));
+            scale.setY(scaleAxis(drag.startScale.y()));
+            scale.setZ(scaleAxis(drag.startScale.z()));
+        } else if (drag.axis == 0) scale.setX(scaleAxis(drag.startScale.x()));
+        else if (drag.axis == 1) scale.setY(scaleAxis(drag.startScale.y()));
+        else scale.setZ(scaleAxis(drag.startScale.z()));
+        scene.edit(selected).setScale(scale);
+        dragging = true;
+        ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
+    }
+    if (drag.axis >= 0 && !ImGui::IsMouseDown(ImGuiMouseButton_Left)) drag = {};
+
+    for (int axis = 0; axis < 3; ++axis) {
+        drawList->AddLine(originScreen, axisEnds[axis], colors[axis], hoveredAxis == axis ? 8.0F : 5.0F);
+        const float cube = hoveredAxis == axis ? 8.0F : 6.0F;
+        drawList->AddRectFilled({axisEnds[axis].x - cube, axisEnds[axis].y - cube},
+                                {axisEnds[axis].x + cube, axisEnds[axis].y + cube}, colors[axis], 1.5F);
+        drawList->AddText({axisEnds[axis].x + 8.0F, axisEnds[axis].y - 8.0F}, colors[axis],
+                          axis == 0 ? "X" : axis == 1 ? "Y" : "Z");
+    }
+    const float centerSize = hoveringUniform ? 9.0F : 7.0F;
+    drawList->AddRectFilled({originScreen.x - centerSize, originScreen.y - centerSize},
+                            {originScreen.x + centerSize, originScreen.y + centerSize},
+                            IM_COL32(245, 245, 245, 255), 1.5F);
+    return dragging || hoveredAxis >= 0 || hoveringUniform;
+}
+
+enum class GizmoMode { Translate, Rotate, Scale };
 
 bool drawViewportGizmoTools(const ImVec2 imageMin, const ImVec2 visibleMin, GizmoMode &gizmoMode) {
     constexpr float buttonSize = 34.0F;
@@ -534,9 +635,10 @@ bool drawViewportGizmoTools(const ImVec2 imageMin, const ImVec2 visibleMin, Gizm
     ImDrawList *drawList = ImGui::GetWindowDrawList();
     bool consumedClick = false;
 
-    for (int index = 0; index < 2; ++index) {
+    for (int index = 0; index < 3; ++index) {
         const bool active = (index == 0 && gizmoMode == GizmoMode::Translate) ||
-                            (index == 1 && gizmoMode == GizmoMode::Rotate);
+                            (index == 1 && gizmoMode == GizmoMode::Rotate) ||
+                            (index == 2 && gizmoMode == GizmoMode::Scale);
         const ImVec2 min{toolbarMin.x + static_cast<float>(index) * (buttonSize + gap), toolbarMin.y};
         const ImVec2 max{min.x + buttonSize, min.y + buttonSize};
 
@@ -582,7 +684,7 @@ bool drawViewportGizmoTools(const ImVec2 imageMin, const ImVec2 visibleMin, Gizm
             drawList->AddTriangleFilled({center.x, center.y + arm + head},
                                         {center.x - head, center.y + arm - 1.0F},
                                         {center.x + head, center.y + arm - 1.0F}, icon);
-        } else {
+        } else if (index == 1) {
             constexpr float arcStart = 0.55F;
             constexpr float arcEnd = 5.55F;
             constexpr int arcSegments = 20;
@@ -606,11 +708,21 @@ bool drawViewportGizmoTools(const ImVec2 imageMin, const ImVec2 visibleMin, Gizm
                  tip.y - tangentY * 2.0F + normalY * 3.5F},
                 {tip.x - tangentX * 2.0F - normalX * 3.5F,
                  tip.y - tangentY * 2.0F - normalY * 3.5F}, icon);
+        } else {
+            constexpr float extent = 8.0F;
+            drawList->AddRect({center.x - extent, center.y - extent},
+                              {center.x + extent, center.y + extent}, icon, 1.5F, 0, 2.0F);
+            drawList->AddLine({center.x - 4.0F, center.y - 4.0F},
+                              {center.x + 4.0F, center.y + 4.0F}, icon, 1.5F);
+            drawList->AddLine({center.x + 4.0F, center.y - 4.0F},
+                              {center.x - 4.0F, center.y + 4.0F}, icon, 1.5F);
         }
 
-        if (hovered) ImGui::SetTooltip(index == 0 ? "Move gizmo (W)" : "Rotate gizmo (E)");
+        if (hovered) ImGui::SetTooltip(index == 0 ? "Move gizmo (W)" :
+                                       index == 1 ? "Rotate gizmo (E)" : "Scale gizmo (R)");
         if (clicked) {
-            const GizmoMode requestedMode = index == 0 ? GizmoMode::Translate : GizmoMode::Rotate;
+            const GizmoMode requestedMode = index == 0 ? GizmoMode::Translate :
+                                            index == 1 ? GizmoMode::Rotate : GizmoMode::Scale;
             gizmoMode = requestedMode;
             consumedClick = true;
         }
@@ -747,7 +859,7 @@ bool drawRotationGizmo(Engine::ScenePreset &scene, const Engine::Entity selected
         Engine::Vec3 rotation = drag.startRotation;
         float degrees = drag.accumulatedRadians * EditorConstants::degreesPerRadian;
         if (ImGui::GetIO().KeyCtrl) {
-            degrees = std::round(degrees / 15.0F) * 15.0F;
+            degrees = snapValue(degrees, EditorConstants::snapRotation);
         }
         if (drag.axis == 0) {
             rotation.setX(drag.startRotation.x() + degrees);
@@ -1299,7 +1411,9 @@ ViewportInteraction drawViewport(Engine::ScenePreset &scene, Engine::Assets::Con
         const bool transformGizmoConsumesClick = gizmoAction < 0 && !showGameView && !playing &&
             (gizmoMode == GizmoMode::Translate
                  ? drawTranslationGizmo(scene, selected, renderer, imageMin, imageMax)
-                 : drawRotationGizmo(scene, selected, renderer, imageMin, imageMax));
+                 : gizmoMode == GizmoMode::Rotate
+                       ? drawRotationGizmo(scene, selected, renderer, imageMin, imageMax)
+                       : drawScaleGizmo(scene, selected, renderer, imageMin, imageMax));
         const bool gizmoConsumesClick = gizmoToolsConsumeClick || orientationGizmoConsumesClick ||
             sculptConsumesClick || paintConsumesClick || grassConsumesClick ||
             transformGizmoConsumesClick;
