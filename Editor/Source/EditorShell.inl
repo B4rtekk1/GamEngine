@@ -304,6 +304,7 @@ Engine::Entity drawEditorMenuBar(Engine::ScenePreset &scene, Engine::Renderer &r
         ImGui::Separator();
         ImGui::BulletText("Scene View: hold RMB to look; RMB + WASD moves");
         ImGui::BulletText("Scene View: Q / E down/up, Shift speeds up, MMB pans, wheel zooms");
+        ImGui::BulletText("Scene View: hold Ctrl while moving to snap object faces together");
         ImGui::BulletText("Delete: remove selected object");
         ImGui::BulletText("Ctrl+C / Ctrl+V: copy and paste selected object");
         ImGui::BulletText("Ctrl+D: duplicate selected object");

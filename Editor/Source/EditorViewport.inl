@@ -302,6 +302,135 @@ void drawLightGizmos(const Engine::ScenePreset &scene, const Engine::Entity sele
         });
 }
 
+std::optional<Engine::AABB> meshWorldBounds(const Engine::MeshRenderer &renderer,
+                                            const Engine::Transform &transform) {
+    if (!renderer.hasMesh()) return std::nullopt;
+
+    const auto &vertices = renderer.mesh->vertices;
+    Engine::AABB localBounds{
+        .min = vertices.front().position,
+        .max = vertices.front().position,
+    };
+    for (const Engine::Vertex &vertex : vertices) {
+        localBounds.min.setX(std::min(localBounds.min.x(), vertex.position.x()));
+        localBounds.min.setY(std::min(localBounds.min.y(), vertex.position.y()));
+        localBounds.min.setZ(std::min(localBounds.min.z(), vertex.position.z()));
+        localBounds.max.setX(std::max(localBounds.max.x(), vertex.position.x()));
+        localBounds.max.setY(std::max(localBounds.max.y(), vertex.position.y()));
+        localBounds.max.setZ(std::max(localBounds.max.z(), vertex.position.z()));
+    }
+    return localBounds.transformed(transform.matrix().native());
+}
+
+bool boundsOverlapOnOtherAxes(const Engine::AABB &lhs, const Engine::AABB &rhs,
+                              const int movementAxis) {
+    for (int axis = 0; axis < EditorConstants::axisCount; ++axis) {
+        if (axis == movementAxis) continue;
+        const float lhsMin = axis == 0 ? lhs.min.x() : axis == 1 ? lhs.min.y() : lhs.min.z();
+        const float lhsMax = axis == 0 ? lhs.max.x() : axis == 1 ? lhs.max.y() : lhs.max.z();
+        const float rhsMin = axis == 0 ? rhs.min.x() : axis == 1 ? rhs.min.y() : rhs.min.z();
+        const float rhsMax = axis == 0 ? rhs.max.x() : axis == 1 ? rhs.max.y() : rhs.max.z();
+        if (lhsMax < rhsMin || rhsMax < lhsMin) return false;
+    }
+    return true;
+}
+
+std::optional<Engine::Vec3> snapMeshVerticesTogether(
+    const Engine::MeshRenderer &movingRenderer, const Engine::Transform &movingTransform,
+    const Engine::MeshRenderer &targetRenderer, const Engine::Transform &targetTransform) {
+    if (!movingRenderer.hasMesh() || !targetRenderer.hasMesh()) return std::nullopt;
+
+    // Most editor primitives (including fence segments) have relatively few
+    // vertices.  Sampling large imported meshes keeps Ctrl-drag responsive,
+    // while still retaining all vertices of the common low-poly editor assets.
+    constexpr std::size_t maximumSamplesPerMesh = 128;
+    const auto &movingVertices = movingRenderer.mesh->vertices;
+    const auto &targetVertices = targetRenderer.mesh->vertices;
+    const std::size_t movingStep = std::max<std::size_t>(
+        1, movingVertices.size() / maximumSamplesPerMesh);
+    const std::size_t targetStep = std::max<std::size_t>(
+        1, targetVertices.size() / maximumSamplesPerMesh);
+    const glm::mat4 movingMatrix = movingTransform.matrix().native();
+    const glm::mat4 targetMatrix = targetTransform.matrix().native();
+
+    float shortestDistance = EditorConstants::snapTranslation;
+    std::optional<Engine::Vec3> bestOffset;
+    for (std::size_t movingIndex = 0; movingIndex < movingVertices.size();
+         movingIndex += movingStep) {
+        const Engine::Vec3 movingPoint{movingMatrix * glm::vec4{
+            movingVertices[movingIndex].position.native(), 1.0F}};
+        for (std::size_t targetIndex = 0; targetIndex < targetVertices.size();
+             targetIndex += targetStep) {
+            const Engine::Vec3 targetPoint{targetMatrix * glm::vec4{
+                targetVertices[targetIndex].position.native(), 1.0F}};
+            const Engine::Vec3 offset = targetPoint - movingPoint;
+            const float distance = offset.length();
+            if (distance > EditorConstants::epsilon && distance <= shortestDistance) {
+                shortestDistance = distance;
+                bestOffset = offset;
+            }
+        }
+    }
+    return bestOffset;
+}
+
+Engine::Vec3 snapTranslationToObjects(Engine::ScenePreset &scene, const Engine::Entity selected,
+                                      const Engine::Vec3 &candidatePosition, const int axis) {
+    const auto &selectedRenderer = scene.editor().get<Engine::MeshRenderer>(selected);
+    Engine::Transform candidateTransform = scene.editor().get<Engine::Transform>(selected);
+    candidateTransform.position = candidatePosition;
+    const auto candidateBounds = meshWorldBounds(selectedRenderer, candidateTransform);
+    if (!candidateBounds) return candidatePosition;
+
+    float closestOffset = EditorConstants::snapTranslation;
+    bool foundSnap = false;
+    float closestVertexDistance = EditorConstants::snapTranslation;
+    std::optional<Engine::Vec3> vertexOffset;
+    scene.editor().view<Engine::MeshRenderer, Engine::Transform>(
+        [&](const Engine::Entity entity, const Engine::MeshRenderer &renderer,
+            const Engine::Transform &transform) {
+            if (entity == selected) return;
+            const auto targetBounds = meshWorldBounds(renderer, transform);
+            if (!targetBounds) return;
+
+            // Aligning real mesh vertices lets the ends of angled elements,
+            // such as diagonal fence arms, meet exactly.  AABB-only snapping
+            // cannot represent those endpoints after rotation.
+            if (const auto offset = snapMeshVerticesTogether(
+                    selectedRenderer, candidateTransform, renderer, transform);
+                offset && offset->length() < closestVertexDistance) {
+                closestVertexDistance = offset->length();
+                vertexOffset = offset;
+            }
+
+            if (!boundsOverlapOnOtherAxes(*candidateBounds, *targetBounds, axis)) return;
+
+            const float movingMin = axis == 0 ? candidateBounds->min.x()
+                                  : axis == 1 ? candidateBounds->min.y() : candidateBounds->min.z();
+            const float movingMax = axis == 0 ? candidateBounds->max.x()
+                                  : axis == 1 ? candidateBounds->max.y() : candidateBounds->max.z();
+            const float targetMin = axis == 0 ? targetBounds->min.x()
+                                  : axis == 1 ? targetBounds->min.y() : targetBounds->min.z();
+            const float targetMax = axis == 0 ? targetBounds->max.x()
+                                  : axis == 1 ? targetBounds->max.y() : targetBounds->max.z();
+            for (const float offset : {targetMin - movingMax, targetMax - movingMin}) {
+                if (std::abs(offset) <= EditorConstants::snapTranslation &&
+                    (!foundSnap || std::abs(offset) < std::abs(closestOffset))) {
+                    closestOffset = offset;
+                    foundSnap = true;
+                }
+            }
+        });
+    if (vertexOffset) return candidatePosition + *vertexOffset;
+    if (!foundSnap) return candidatePosition;
+
+    Engine::Vec3 snapped = candidatePosition;
+    if (axis == 0) snapped.setX(snapped.x() + closestOffset);
+    else if (axis == 1) snapped.setY(snapped.y() + closestOffset);
+    else snapped.setZ(snapped.z() + closestOffset);
+    return snapped;
+}
+
 bool drawTranslationGizmo(Engine::ScenePreset &scene, const Engine::Entity selected,
                           const Engine::Renderer &renderer, const ImVec2 min, const ImVec2 max) {
     if (selected == Engine::NullEntity || !scene.editor().valid(selected) ||
@@ -365,10 +494,11 @@ bool drawTranslationGizmo(Engine::ScenePreset &scene, const Engine::Entity selec
         const float pixels = (delta.x * drag.startAxisDirection.x +
                               delta.y * drag.startAxisDirection.y) / drag.startAxisLength;
         float worldDistance = pixels * (drag.startWorldSize / drag.startAxisLength);
-        if (ImGui::GetIO().KeyCtrl) {
-            worldDistance = std::round(worldDistance / 0.25F) * 0.25F;
+        Engine::Vec3 position = drag.startPosition + axes[drag.axis] * worldDistance;
+        if (ImGui::GetIO().KeyCtrl && scene.editor().has<Engine::MeshRenderer>(selected)) {
+            position = snapTranslationToObjects(scene, selected, position, drag.axis);
         }
-        scene.edit(selected).setPosition(drag.startPosition + axes[drag.axis] * worldDistance);
+        scene.edit(selected).setPosition(position);
         // The scene image is rendered later in this frame. Re-project the
         // overlay from the updated transform so it does not trail the object
         // by one frame while dragging.
