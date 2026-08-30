@@ -18,6 +18,8 @@ public:
     [[nodiscard]] static bool hasSavedScene();
     /** Opens the platform Save As dialog for a scene file. */
     [[nodiscard]] static std::optional<std::filesystem::path> chooseSaveScenePath();
+    /** Opens the platform file picker for an existing scene file. */
+    [[nodiscard]] static std::optional<std::filesystem::path> chooseLoadScenePath();
     /** Marks the current scene as persisted at @p path. */
     static void markSceneSaved(std::filesystem::path path);
     [[nodiscard]] static std::uint32_t msaaSampleCount(const Engine::Renderer& renderer);

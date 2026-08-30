@@ -107,25 +107,27 @@ Engine::Entity drawEditorMenuBar(Engine::ScenePreset &scene, Engine::Renderer &r
             saveSceneAs();
         }
         if (ImGui::MenuItem("Load Scene", "Ctrl+O")) {
-            try {
-                std::optional<std::uint32_t> samples;
-                Engine::SceneSerializer::load(scene, scenePath, samples);
-                EditorSceneSession::markSceneSaved(scenePath);
-                if (samples) {
-                    renderer.setAntialiasingLevel(*samples == 2
-                                                      ? Engine::AntialiasingLevel::MSAA2x
-                                                      : *samples == 4
-                                                            ? Engine::AntialiasingLevel::MSAA4x
-                                                            : Engine::AntialiasingLevel::Off);
-                    antialiasingChanged = true;
+            if (const auto selectedPath = EditorSceneSession::chooseLoadScenePath()) {
+                try {
+                    std::optional<std::uint32_t> samples;
+                    Engine::SceneSerializer::load(scene, *selectedPath, samples);
+                    EditorSceneSession::markSceneSaved(*selectedPath);
+                    if (samples) {
+                        renderer.setAntialiasingLevel(*samples == 2
+                                                          ? Engine::AntialiasingLevel::MSAA2x
+                                                          : *samples == 4
+                                                                ? Engine::AntialiasingLevel::MSAA4x
+                                                                : Engine::AntialiasingLevel::Off);
+                        antialiasingChanged = true;
+                    }
+                    sceneLoaded = true;
+                    resetHistoryRequested = true;
+                    sceneFileError.clear();
+                    Editor::ConsolePanel::info("Loaded scene: " + selectedPath->string());
+                } catch (const std::exception &error) {
+                    sceneFileError = error.what();
+                    Editor::ConsolePanel::error("Could not load scene: " + sceneFileError);
                 }
-                sceneLoaded = true;
-                resetHistoryRequested = true;
-                sceneFileError.clear();
-                Editor::ConsolePanel::info("Loaded scene: " + scenePath.string());
-            } catch (const std::exception &error) {
-                sceneFileError = error.what();
-                Editor::ConsolePanel::error("Could not load scene: " + sceneFileError);
             }
         }
         ImGui::EndDisabled();
