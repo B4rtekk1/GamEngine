@@ -1,6 +1,7 @@
 #pragma once
 
 #include <vulkan/vulkan.h>
+#include <vk_mem_alloc.h>
 
 namespace Engine {
     class ShadowMap final {
@@ -29,7 +30,7 @@ namespace Engine {
 
         ShadowMap &operator=(const ShadowMap &) = delete;
 
-        void create(VkPhysicalDevice physicalDevice, VkDevice device);
+        void create(VkPhysicalDevice physicalDevice, VkDevice device, VmaAllocator allocator);
 
         void destroy() noexcept;
 
@@ -43,7 +44,8 @@ namespace Engine {
     private:
         VkDevice device_ = VK_NULL_HANDLE;
         VkImage image_ = VK_NULL_HANDLE;
-        VkDeviceMemory memory_ = VK_NULL_HANDLE;
+        VmaAllocation allocation_ = VK_NULL_HANDLE;
+        VmaAllocator allocator_ = VK_NULL_HANDLE;
         VkImageView imageView_ = VK_NULL_HANDLE;
         VkSampler sampler_ = VK_NULL_HANDLE;
         VkRenderPass renderPass_ = VK_NULL_HANDLE;

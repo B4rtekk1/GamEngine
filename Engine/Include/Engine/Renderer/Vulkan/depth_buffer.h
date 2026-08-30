@@ -6,6 +6,7 @@
  */
 
 #include <vulkan/vulkan.h>
+#include <vk_mem_alloc.h>
 
 #include <cstdint>
 
@@ -42,7 +43,7 @@ public:
      * @param physicalDevice Physical device used for format and memory queries.
      * @param device Logical device used to create and destroy resources.
      */
-    void initialize(VkPhysicalDevice physicalDevice, VkDevice device);
+    void initialize(VkPhysicalDevice physicalDevice, VkDevice device, VmaAllocator allocator);
 
     /**
      * @brief Creates or recreates the depth resources for a render target.
@@ -87,16 +88,12 @@ public:
     [[nodiscard]] VkSampler sampler() const noexcept { return sampler_; }
 
 private:
-    struct MemoryTypeQuery {
-        uint32_t typeFilter;
-        VkMemoryPropertyFlags requiredProperties;
-    };
-
     VkPhysicalDevice physicalDevice_ = VK_NULL_HANDLE;
     VkDevice device_ = VK_NULL_HANDLE;
 
     VkImage image_ = VK_NULL_HANDLE;
-    VkDeviceMemory memory_ = VK_NULL_HANDLE;
+    VmaAllocation allocation_ = VK_NULL_HANDLE;
+    VmaAllocator allocator_ = VK_NULL_HANDLE;
     VkImageView imageView_ = VK_NULL_HANDLE;
     VkSampler sampler_ = VK_NULL_HANDLE;
     VkFormat format_ = VK_FORMAT_UNDEFINED;
@@ -106,9 +103,6 @@ private:
      * @param query Query parameters for the memory type search.
      * @return Index of a compatible memory type.
      */
-    [[nodiscard]] uint32_t findMemoryType(
-        const MemoryTypeQuery& query) const;
-
     /**
      * @brief Selects a supported depth format for the requested sample count.
      * @param samples Multisample count required by the depth image.

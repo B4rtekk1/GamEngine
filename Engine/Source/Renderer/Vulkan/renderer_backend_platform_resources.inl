@@ -14,15 +14,15 @@
             createSurface();
             vulkanDevice.create(instance, surface);
             device = vulkanDevice.logical();
-            depthBuffer.initialize(vulkanDevice.physical(), device);
+            depthBuffer.initialize(vulkanDevice.physical(), device, vulkanDevice.allocator());
             const VkSampleCountFlagBits requestedSamples =
                 antialiasingLevel == AntialiasingLevel::MSAA4x ? VK_SAMPLE_COUNT_4_BIT :
                 antialiasingLevel == AntialiasingLevel::MSAA2x ? VK_SAMPLE_COUNT_2_BIT :
                 VK_SAMPLE_COUNT_1_BIT;
-            msaa.initialize(vulkanDevice.physical(), device, requestedSamples);
+            msaa.initialize(vulkanDevice.physical(), device, requestedSamples, vulkanDevice.allocator());
             waitForDrawableExtent();
             createSwapChain();
-            hdrBuffer.create(vulkanDevice.physical(), device, swapchain.extent());
+            hdrBuffer.create(vulkanDevice.physical(), device, swapchain.extent(), vulkanDevice.allocator());
             msaa.create(swapchain.extent(), HdrBuffer::Format);
             createDepthResources();
             createCommandPool();
@@ -219,7 +219,7 @@
 
         void createDepthResources() {
             depthBuffer.create(swapchain.extent(), msaa.sampleCount());
-            hiZDepthBuffer.initialize(vulkanDevice.physical(), device);
+            hiZDepthBuffer.initialize(vulkanDevice.physical(), device, vulkanDevice.allocator());
             if (msaa.enabled()) {
                 hiZDepthBuffer.create(swapchain.extent(), VK_SAMPLE_COUNT_1_BIT,
                                       depthBuffer.format());
@@ -378,8 +378,8 @@
                 antialiasingLevel == AntialiasingLevel::MSAA4x ? VK_SAMPLE_COUNT_4_BIT :
                 antialiasingLevel == AntialiasingLevel::MSAA2x ? VK_SAMPLE_COUNT_2_BIT :
                 VK_SAMPLE_COUNT_1_BIT;
-            msaa.initialize(vulkanDevice.physical(), device, requestedSamples);
-            hdrBuffer.create(vulkanDevice.physical(), device, swapchain.extent());
+            msaa.initialize(vulkanDevice.physical(), device, requestedSamples, vulkanDevice.allocator());
+            hdrBuffer.create(vulkanDevice.physical(), device, swapchain.extent(), vulkanDevice.allocator());
             msaa.create(swapchain.extent(), HdrBuffer::Format);
             createDepthResources();
 

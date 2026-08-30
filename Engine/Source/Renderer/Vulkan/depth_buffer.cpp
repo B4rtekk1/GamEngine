@@ -10,17 +10,18 @@ namespace Engine {
 
     void DepthBuffer::initialize(
         VkPhysicalDevice physicalDevice,
-        VkDevice device) {
+        VkDevice device, VmaAllocator allocator) {
         if (physicalDevice == VK_NULL_HANDLE) {
             throw std::invalid_argument("VkPhysicalDevice cannot be null");
         }
-        if (device == VK_NULL_HANDLE) {
+        if (device == VK_NULL_HANDLE || allocator == VK_NULL_HANDLE) {
             throw std::invalid_argument("VkDevice cannot be null");
         }
 
         destroy();
         physicalDevice_ = physicalDevice;
         device_ = device;
+        allocator_ = allocator;
         format_ = VK_FORMAT_UNDEFINED;
     }
 
@@ -65,28 +66,6 @@ namespace Engine {
             "GPU does not support the requested depth/stencil format for the selected MSAA sample count");
     }
 
-    uint32_t DepthBuffer::findMemoryType(
-        const MemoryTypeQuery &query) const {
-        VkPhysicalDeviceMemoryProperties memoryProperties{};
-        vkGetPhysicalDeviceMemoryProperties(
-            physicalDevice_,
-            &memoryProperties);
-
-        for (uint32_t i = 0; i < memoryProperties.memoryTypeCount; ++i) {
-            const bool typeSupported = (query.typeFilter & (1U << i)) != 0;
-            const bool propertiesSupported =
-                    (memoryProperties.memoryTypes[i].propertyFlags & query.requiredProperties) ==
-                    query.requiredProperties;
-
-            if (typeSupported && propertiesSupported) {
-                return i;
-            }
-        }
-
-        throw std::runtime_error(
-            "GPU does not support the requested memory type for the depth buffer");
-    }
-
     bool DepthBuffer::hasStencilComponent(VkFormat format) noexcept {
         return format == VK_FORMAT_D32_SFLOAT_S8_UINT ||
                format == VK_FORMAT_D24_UNORM_S8_UINT;
@@ -124,33 +103,10 @@ namespace Engine {
             VK_IMAGE_LAYOUT_UNDEFINED,
         };
 
-        if (vkCreateImage(device_, &imageInfo, nullptr, &image_) != VK_SUCCESS) {
-            throw std::runtime_error("GPU does not support the requested image format for the depth buffer");
-        }
-
         try {
-            VkMemoryRequirements memoryRequirements{};
-            vkGetImageMemoryRequirements(device_, image_, &memoryRequirements);
-
-            VkMemoryAllocateInfo allocationInfo{};
-            allocationInfo.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
-            allocationInfo.allocationSize = memoryRequirements.size;
-            allocationInfo.memoryTypeIndex = findMemoryType(
-                {
-                    memoryRequirements.memoryTypeBits,
-                    static_cast<VkMemoryPropertyFlags>(VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT),
-                });
-
-            if (vkAllocateMemory(
-                    device_,
-                    &allocationInfo,
-                    nullptr,
-                    &memory_) != VK_SUCCESS) {
-                throw std::runtime_error(
-                    "GPU does not support the requested memory type for the depth buffer");
-            }
-
-            if (vkBindImageMemory(device_, image_, memory_, 0) != VK_SUCCESS) {
+            VmaAllocationCreateInfo allocationInfo{};
+            allocationInfo.usage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE;
+            if (vmaCreateImage(allocator_, &imageInfo, &allocationInfo, &image_, &allocation_, nullptr) != VK_SUCCESS) {
                 throw std::runtime_error(
                     "GPU does not support the requested memory type for the depth buffer");
             }
@@ -207,14 +163,9 @@ namespace Engine {
             vkDestroyImageView(device_, imageView_, nullptr);
             imageView_ = VK_NULL_HANDLE;
         }
-        if (image_ != VK_NULL_HANDLE) {
-            vkDestroyImage(device_, image_, nullptr);
-            image_ = VK_NULL_HANDLE;
-        }
-        if (memory_ != VK_NULL_HANDLE) {
-            vkFreeMemory(device_, memory_, nullptr);
-            memory_ = VK_NULL_HANDLE;
-        }
+        if (image_ != VK_NULL_HANDLE) vmaDestroyImage(allocator_, image_, allocation_);
+        image_ = VK_NULL_HANDLE;
+        allocation_ = VK_NULL_HANDLE;
         if (sampler_ != VK_NULL_HANDLE) {
             vkDestroySampler(device_, sampler_, nullptr);
             sampler_ = VK_NULL_HANDLE;

@@ -7,7 +7,8 @@
             if (objectCount == 0) { return;
 }
 
-            hiZBuffer.create(vulkanDevice.physical(), device, swapchain.extent().width, swapchain.extent().height);
+            hiZBuffer.create(vulkanDevice.physical(), device, swapchain.extent().width, swapchain.extent().height,
+                             vulkanDevice.allocator());
 
             constexpr VkDescriptorSetLayoutBinding copyBindings[] = {
                 {0, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
@@ -348,7 +349,7 @@
             // panel extent through the renderer viewport API; creating it here
             // also makes the off-screen lifecycle valid for non-editor users.
             sceneViewportTarget.create(vulkanDevice.physical(), device, swapchain.extent(),
-                                       msaa.sampleCount());
+                                       msaa.sampleCount(), vulkanDevice.allocator());
             createSceneViewportFramebuffer();
         }
 

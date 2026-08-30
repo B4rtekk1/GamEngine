@@ -5,19 +5,6 @@
 
 namespace Engine {
     namespace {
-        uint32_t findMemoryType(VkPhysicalDevice physicalDevice, uint32_t typeBits) {
-            VkPhysicalDeviceMemoryProperties properties{};
-            vkGetPhysicalDeviceMemoryProperties(physicalDevice, &properties);
-            for (uint32_t i = 0; i < properties.memoryTypeCount; ++i) {
-                if ((typeBits & (1U << i)) != 0 &&
-                    (properties.memoryTypes[i].propertyFlags & static_cast<VkMemoryPropertyFlags>(
-                         VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT)) != 0) {
-                    return i;
-                }
-            }
-            throw std::runtime_error("Could not find device-local memory for shadow map");
-        }
-
         VkFormat findDepthFormat(VkPhysicalDevice physicalDevice) {
             // The light-space depth range shifts with the clipmap origin.
             // D32 keeps comparisons stable while the camera moves; D16 can
@@ -41,9 +28,10 @@ namespace Engine {
 
     ShadowMap::~ShadowMap() { destroy(); }
 
-    void ShadowMap::create(VkPhysicalDevice physicalDevice, VkDevice device) {
+    void ShadowMap::create(VkPhysicalDevice physicalDevice, VkDevice device, VmaAllocator allocator) {
         destroy();
         device_ = device;
+        allocator_ = allocator;
         format_ = findDepthFormat(physicalDevice);
         try {
             VkImageCreateInfo imageInfo{
@@ -60,24 +48,11 @@ namespace Engine {
                 .sharingMode = VK_SHARING_MODE_EXCLUSIVE,
                 .initialLayout = VK_IMAGE_LAYOUT_UNDEFINED,
             };
-            if (vkCreateImage(device_, &imageInfo, nullptr, &image_) != VK_SUCCESS) {
-                throw std::runtime_error(
-                    "Could not create shadow map image");
-            }
-
-            VkMemoryRequirements requirements{};
-            vkGetImageMemoryRequirements(device_, image_, &requirements);
-            VkMemoryAllocateInfo allocation{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO};
-            allocation.allocationSize = requirements.size;
-            allocation.memoryTypeIndex = findMemoryType(physicalDevice, requirements.memoryTypeBits);
-            if (vkAllocateMemory(device_, &allocation, nullptr, &memory_) != VK_SUCCESS) {
-                throw std::runtime_error(
-                    "Could not allocate shadow map memory");
-            }
-            if (vkBindImageMemory(device_, image_, memory_, 0) != VK_SUCCESS) {
-                throw std::runtime_error(
-                    "Could not bind shadow map memory");
-            }
+            VmaAllocationCreateInfo allocationInfo{};
+            allocationInfo.usage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE;
+            if (vmaCreateImage(allocator_, &imageInfo, &allocationInfo, &image_,
+                               &allocation_, nullptr) != VK_SUCCESS)
+                throw std::runtime_error("Could not allocate shadow map memory");
 
             VkImageViewCreateInfo view{VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
             view.image = image_;
@@ -174,18 +149,14 @@ namespace Engine {
         if (imageView_ != nullptr) {
             vkDestroyImageView(device_, imageView_, nullptr);
         }
-        if (image_ != nullptr) {
-            vkDestroyImage(device_, image_, nullptr);
-        }
-        if (memory_ != nullptr) {
-            vkFreeMemory(device_, memory_, nullptr);
-        }
+        if (image_ != nullptr) vmaDestroyImage(allocator_, image_, allocation_);
         framebuffer_ = VK_NULL_HANDLE;
         renderPass_ = VK_NULL_HANDLE;
         sampler_ = VK_NULL_HANDLE;
         imageView_ = VK_NULL_HANDLE;
         image_ = VK_NULL_HANDLE;
-        memory_ = VK_NULL_HANDLE;
+        allocation_ = VK_NULL_HANDLE;
+        allocator_ = VK_NULL_HANDLE;
         format_ = VK_FORMAT_UNDEFINED;
         device_ = VK_NULL_HANDLE;
     }

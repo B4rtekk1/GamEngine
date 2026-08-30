@@ -18,9 +18,10 @@ namespace Engine {
     void MsaaResources::initialize(
         VkPhysicalDevice physicalDevice,
         VkDevice device,
-        VkSampleCountFlagBits preferredSamples) {
+        VkSampleCountFlagBits preferredSamples, VmaAllocator allocator) {
         physicalDevice_ = physicalDevice;
         device_ = device;
+        allocator_ = allocator;
         sampleCount_ = chooseSampleCount(physicalDevice, preferredSamples);
     }
 
@@ -50,27 +51,8 @@ namespace Engine {
         return VK_SAMPLE_COUNT_1_BIT;
     }
 
-    uint32_t MsaaResources::findMemoryType(
-        const VkMemoryRequirements &memoryRequirements,
-        VkMemoryPropertyFlags requiredProperties) const {
-        VkPhysicalDeviceMemoryProperties memoryProperties;
-        vkGetPhysicalDeviceMemoryProperties(physicalDevice_, &memoryProperties);
-
-        for (uint32_t i = 0; i < memoryProperties.memoryTypeCount; ++i) {
-            const bool allowed = (memoryRequirements.memoryTypeBits & (1U << i)) != 0;
-            const bool hasProperties =
-                    (memoryProperties.memoryTypes[i].propertyFlags & requiredProperties) ==
-                    requiredProperties;
-            if (allowed && hasProperties) {
-                return i;
-            }
-        }
-
-        throw std::runtime_error("GPU does not support the requested memory type for MSAA");
-    }
-
     void MsaaResources::create(VkExtent2D extent, VkFormat colorFormat) {
-        if (physicalDevice_ == VK_NULL_HANDLE || device_ == VK_NULL_HANDLE) {
+        if (physicalDevice_ == VK_NULL_HANDLE || device_ == VK_NULL_HANDLE || allocator_ == VK_NULL_HANDLE) {
             throw std::runtime_error("MsaaResources not initialized");
         }
 
@@ -119,25 +101,11 @@ namespace Engine {
         imageInfo.samples = sampleCount_;
         imageInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
 
-        if (vkCreateImage(device_, &imageInfo, nullptr, &colorImage_) != VK_SUCCESS) {
-            throw std::runtime_error("GPU does not support the requested image format for MSAA");
-        }
-
         try {
-            VkMemoryRequirements memoryRequirements{};
-            vkGetImageMemoryRequirements(device_, colorImage_, &memoryRequirements);
-
-            VkMemoryAllocateInfo allocationInfo{};
-            allocationInfo.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
-            allocationInfo.allocationSize = memoryRequirements.size;
-            allocationInfo.memoryTypeIndex = findMemoryType(
-                memoryRequirements, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
-
-            if (vkAllocateMemory(device_, &allocationInfo, nullptr, &colorImageMemory_) != VK_SUCCESS) {
-                throw std::runtime_error("GPU does not support the requested memory type for MSAA");
-            }
-
-            if (vkBindImageMemory(device_, colorImage_, colorImageMemory_, 0) != VK_SUCCESS) {
+            VmaAllocationCreateInfo allocationInfo{};
+            allocationInfo.usage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE;
+            if (vmaCreateImage(allocator_, &imageInfo, &allocationInfo, &colorImage_,
+                               &colorImageAllocation_, nullptr) != VK_SUCCESS) {
                 throw std::runtime_error("GPU does not support the requested memory type for MSAA");
             }
 
@@ -170,13 +138,8 @@ namespace Engine {
             vkDestroyImageView(device_, colorImageView_, nullptr);
             colorImageView_ = VK_NULL_HANDLE;
         }
-        if (colorImage_ != VK_NULL_HANDLE) {
-            vkDestroyImage(device_, colorImage_, nullptr);
-            colorImage_ = VK_NULL_HANDLE;
-        }
-        if (colorImageMemory_ != VK_NULL_HANDLE) {
-            vkFreeMemory(device_, colorImageMemory_, nullptr);
-            colorImageMemory_ = VK_NULL_HANDLE;
-        }
+        if (colorImage_ != VK_NULL_HANDLE) vmaDestroyImage(allocator_, colorImage_, colorImageAllocation_);
+        colorImage_ = VK_NULL_HANDLE;
+        colorImageAllocation_ = VK_NULL_HANDLE;
     }
 } // namespace Engine

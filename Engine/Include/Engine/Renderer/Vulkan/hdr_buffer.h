@@ -6,6 +6,7 @@
  */
 
 #include <vulkan/vulkan.h>
+#include <vk_mem_alloc.h>
 
 namespace Engine {
     /**
@@ -37,7 +38,8 @@ namespace Engine {
          * @param device Logical Vulkan device used to create the resources.
          * @param extent Width and height of the HDR render target.
          */
-        void create(VkPhysicalDevice physicalDevice, VkDevice device, VkExtent2D extent);
+        void create(VkPhysicalDevice physicalDevice, VkDevice device, VkExtent2D extent,
+                    VmaAllocator allocator);
 
         /// Releases the HDR image, memory, view and sampler.
         void destroy() noexcept;
@@ -52,7 +54,8 @@ namespace Engine {
     private:
         VkDevice device_ = VK_NULL_HANDLE;
         VkImage image_ = VK_NULL_HANDLE;
-        VkDeviceMemory memory_ = VK_NULL_HANDLE;
+        VmaAllocation allocation_ = VK_NULL_HANDLE;
+        VmaAllocator allocator_ = VK_NULL_HANDLE;
         VkImageView imageView_ = VK_NULL_HANDLE;
         VkSampler sampler_ = VK_NULL_HANDLE;
     };

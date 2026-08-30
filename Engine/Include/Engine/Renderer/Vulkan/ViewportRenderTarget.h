@@ -3,6 +3,7 @@
 #include "Engine/Renderer/Vulkan/depth_buffer.h"
 #include "Engine/Renderer/Vulkan/hdr_buffer.h"
 #include "Engine/Renderer/Vulkan/msaa.h"
+#include <vk_mem_alloc.h>
 
 namespace Engine {
     // A resizable off-screen target. The viewport UI samples color() while the
@@ -18,7 +19,7 @@ namespace Engine {
         ViewportRenderTarget &operator=(const ViewportRenderTarget &) = delete;
 
         void create(VkPhysicalDevice physicalDevice, VkDevice device, VkExtent2D extent,
-                    VkSampleCountFlagBits samples = VK_SAMPLE_COUNT_1_BIT);
+                    VkSampleCountFlagBits samples, VmaAllocator allocator);
 
         void resize(VkExtent2D extent);
 
@@ -38,6 +39,7 @@ namespace Engine {
     private:
         VkPhysicalDevice physicalDevice_ = VK_NULL_HANDLE;
         VkDevice device_ = VK_NULL_HANDLE;
+        VmaAllocator allocator_ = VK_NULL_HANDLE;
         VkSampleCountFlagBits samples_ = VK_SAMPLE_COUNT_1_BIT;
         VkExtent2D extent_{};
         HdrBuffer color_;

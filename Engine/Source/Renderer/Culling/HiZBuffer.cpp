@@ -10,9 +10,9 @@ namespace Engine::Culling {
         const VkPhysicalDevice physicalDevice,
         const VkDevice device,
         const std::uint32_t width,
-        const std::uint32_t height
+        const std::uint32_t height, const VmaAllocator allocator
         ) {
-        create(physicalDevice, device, width, height);
+        create(physicalDevice, device, width, height, allocator);
     }
 
     HiZBuffer::~HiZBuffer() {
@@ -29,7 +29,8 @@ namespace Engine::Culling {
         m_physicalDevice = other.m_physicalDevice;
         m_device = other.m_device;
         m_image = other.m_image;
-        m_memory = other.m_memory;
+        m_allocation = other.m_allocation;
+        m_allocator = other.m_allocator;
         m_fullView = other.m_fullView;
         m_sampler = other.m_sampler;
         m_mipViews = std::move(other.m_mipViews);
@@ -40,7 +41,8 @@ namespace Engine::Culling {
         other.m_physicalDevice = VK_NULL_HANDLE;
         other.m_device = VK_NULL_HANDLE;
         other.m_image = VK_NULL_HANDLE;
-        other.m_memory = VK_NULL_HANDLE;
+        other.m_allocation = VK_NULL_HANDLE;
+        other.m_allocator = VK_NULL_HANDLE;
         other.m_fullView = VK_NULL_HANDLE;
         other.m_sampler = VK_NULL_HANDLE;
         other.m_width = 0;
@@ -54,11 +56,11 @@ namespace Engine::Culling {
         const VkPhysicalDevice physicalDevice,
         const VkDevice device,
         const std::uint32_t width,
-        const std::uint32_t height
+        const std::uint32_t height, const VmaAllocator allocator
         ) {
         destroy();
 
-        if (physicalDevice == VK_NULL_HANDLE || device == VK_NULL_HANDLE)
+        if (physicalDevice == VK_NULL_HANDLE || device == VK_NULL_HANDLE || allocator == VK_NULL_HANDLE)
         {
             throw std::invalid_argument("HiZBuffer received invalid Vulkan device");
         }
@@ -70,6 +72,7 @@ namespace Engine::Culling {
 
         m_physicalDevice = physicalDevice;
         m_device = device;
+        m_allocator = allocator;
         m_width = width;
         m_height = height;
         m_mipCount = calculateMipCount(width, height);
@@ -108,19 +111,12 @@ namespace Engine::Culling {
             m_fullView = VK_NULL_HANDLE;
         }
 
-        if (m_image != VK_NULL_HANDLE)
-        {
-            vkDestroyImage(m_device, m_image, nullptr);
-            m_image = VK_NULL_HANDLE;
-        }
-
-        if (m_memory != VK_NULL_HANDLE)
-        {
-            vkFreeMemory(m_device, m_memory, nullptr);
-            m_memory = VK_NULL_HANDLE;
-        }
+        if (m_image != VK_NULL_HANDLE) vmaDestroyImage(m_allocator, m_image, m_allocation);
+        m_image = VK_NULL_HANDLE;
+        m_allocation = VK_NULL_HANDLE;
 
         m_device = VK_NULL_HANDLE;
+        m_allocator = VK_NULL_HANDLE;
         m_physicalDevice = VK_NULL_HANDLE;
         m_width = 0;
         m_height = 0;
@@ -162,34 +158,6 @@ namespace Engine::Culling {
         ) + 1u;
     }
 
-    std::uint32_t HiZBuffer::findMemoryType(
-        const VkPhysicalDevice physicalDevice,
-        const std::uint32_t typeFilter,
-        const VkMemoryPropertyFlags properties
-    )
-    {
-        VkPhysicalDeviceMemoryProperties memoryProperties{};
-        vkGetPhysicalDeviceMemoryProperties(
-            physicalDevice,
-            &memoryProperties
-        );
-
-        for (std::uint32_t i = 0; i < memoryProperties.memoryTypeCount; ++i)
-        {
-            const bool supported = (typeFilter & (1u << i)) != 0;
-            const bool hasProperties =
-                (memoryProperties.memoryTypes[i].propertyFlags & properties) ==
-                properties;
-
-            if (supported && hasProperties)
-            {
-                return i;
-            }
-        }
-
-        throw std::runtime_error("No suitable Vulkan memory type for Hi-Z image");
-    }
-
     void HiZBuffer::createImage()
     {
         VkImageCreateInfo imageInfo{
@@ -213,47 +181,11 @@ namespace Engine::Culling {
             .initialLayout = VK_IMAGE_LAYOUT_UNDEFINED
         };
 
-        if (vkCreateImage(m_device, &imageInfo, nullptr, &m_image) != VK_SUCCESS)
-        {
-            throw std::runtime_error("Failed to create Hi-Z image");
-        }
-
-        VkMemoryRequirements memoryRequirements{};
-        vkGetImageMemoryRequirements(
-            m_device,
-            m_image,
-            &memoryRequirements
-        );
-
-        VkMemoryAllocateInfo allocationInfo{
-            .sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO,
-            .allocationSize = memoryRequirements.size,
-            .memoryTypeIndex = findMemoryType(
-                m_physicalDevice,
-                memoryRequirements.memoryTypeBits,
-                VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT
-            )
-        };
-
-        if (vkAllocateMemory(
-                m_device,
-                &allocationInfo,
-                nullptr,
-                &m_memory
-            ) != VK_SUCCESS)
-        {
+        VmaAllocationCreateInfo allocationInfo{};
+        allocationInfo.usage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE;
+        if (vmaCreateImage(m_allocator, &imageInfo, &allocationInfo, &m_image,
+                           &m_allocation, nullptr) != VK_SUCCESS)
             throw std::runtime_error("Failed to allocate Hi-Z image memory");
-        }
-
-        if (vkBindImageMemory(
-                m_device,
-                m_image,
-                m_memory,
-                0
-            ) != VK_SUCCESS)
-        {
-            throw std::runtime_error("Failed to bind Hi-Z image memory");
-        }
     }
 
     void HiZBuffer::createViews()

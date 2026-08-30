@@ -71,7 +71,7 @@ void ShadowPass::create(VkPhysicalDevice physicalDevice, VkDevice device,
     device_ = device;
 
     try {
-        shadowMap_.create(physicalDevice, device_);
+        shadowMap_.create(physicalDevice, device_, allocator);
         pageTable_.fill(ShadowMap::InvalidPage);
         pagesToRender_.reserve(ShadowMap::PhysicalPageCount);
 

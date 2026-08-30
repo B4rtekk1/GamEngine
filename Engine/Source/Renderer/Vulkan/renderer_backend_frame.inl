@@ -495,7 +495,7 @@
                                              static_cast<float>(swapchain.extent().height));
                 }
             });
-            hdrBuffer.create(vulkanDevice.physical(), device, swapchain.extent());
+            hdrBuffer.create(vulkanDevice.physical(), device, swapchain.extent(), vulkanDevice.allocator());
             msaa.create(swapchain.extent(), HdrBuffer::Format);
             createDepthResources();
             createRenderFinishedSemaphores();

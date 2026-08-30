@@ -6,6 +6,7 @@
  */
 
 #include <vulkan\vulkan.h>
+#include <vk_mem_alloc.h>
 
 #include <cstdint>
 #include <vector>
@@ -33,7 +34,8 @@ namespace Engine::Culling {
             VkPhysicalDevice physicalDevice,
             VkDevice device,
             std::uint32_t width,
-            std::uint32_t height
+            std::uint32_t height,
+            VmaAllocator allocator
         );
 
         /// Destroys the owned Vulkan image, views, sampler and memory.
@@ -62,7 +64,8 @@ namespace Engine::Culling {
             VkPhysicalDevice physicalDevice,
             VkDevice device,
             std::uint32_t width,
-            std::uint32_t height
+            std::uint32_t height,
+            VmaAllocator allocator
         );
 
         /// Releases all owned Vulkan resources.
@@ -115,12 +118,6 @@ namespace Engine::Culling {
          * @param properties Required memory properties.
          * @return Compatible memory-type index.
          */
-        static std::uint32_t findMemoryType(
-            VkPhysicalDevice physicalDevice,
-            std::uint32_t typeFilter,
-            VkMemoryPropertyFlags properties
-        );
-
         /// Creates the underlying hierarchical-Z image.
         void createImage();
 
@@ -134,7 +131,8 @@ namespace Engine::Culling {
         VkDevice m_device{VK_NULL_HANDLE};
 
         VkImage m_image{VK_NULL_HANDLE};
-        VkDeviceMemory m_memory{VK_NULL_HANDLE};
+        VmaAllocation m_allocation{VK_NULL_HANDLE};
+        VmaAllocator m_allocator{VK_NULL_HANDLE};
         VkImageView m_fullView{VK_NULL_HANDLE};
         VkSampler m_sampler{VK_NULL_HANDLE};
 

@@ -3,30 +3,14 @@
 #include <stdexcept>
 
 namespace Engine {
-    namespace {
-        uint32_t findMemoryType(const VkPhysicalDevice physicalDevice,
-                                const uint32_t typeFilter,
-                                const VkMemoryPropertyFlags properties) {
-            VkPhysicalDeviceMemoryProperties memoryProperties{};
-            vkGetPhysicalDeviceMemoryProperties(physicalDevice, &memoryProperties);
-            for (uint32_t index = 0; index < memoryProperties.memoryTypeCount; ++index) {
-                if ((typeFilter & (1U << index)) != 0 &&
-                    (memoryProperties.memoryTypes[index].propertyFlags & properties) == properties) {
-                    return index;
-                }
-            }
-            throw std::runtime_error("Could not find memory for HDR buffer");
-        }
-    } // namespace
-
     HdrBuffer::~HdrBuffer() {
         destroy();
     }
 
     void HdrBuffer::create(const VkPhysicalDevice physicalDevice, const VkDevice device,
-                           const VkExtent2D extent) {
+                           const VkExtent2D extent, const VmaAllocator allocator) {
         if (physicalDevice == VK_NULL_HANDLE || device == VK_NULL_HANDLE ||
-            extent.width == 0 || extent.height == 0) {
+            extent.width == 0 || extent.height == 0 || allocator == VK_NULL_HANDLE) {
             throw std::invalid_argument("HDR buffer requires a device and non-zero extent");
         }
 
@@ -41,6 +25,7 @@ namespace Engine {
 
         destroy();
         device_ = device;
+        allocator_ = allocator;
         try {
             const VkImageCreateInfo imageInfo{
                 .sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO,
@@ -60,18 +45,9 @@ namespace Engine {
                 .pQueueFamilyIndices = nullptr,
                 .initialLayout = VK_IMAGE_LAYOUT_UNDEFINED,
             };
-            if (vkCreateImage(device_, &imageInfo, nullptr, &image_) != VK_SUCCESS) {
-                throw std::runtime_error("Could not create HDR image");
-            }
-
-            VkMemoryRequirements requirements{};
-            vkGetImageMemoryRequirements(device_, image_, &requirements);
-            VkMemoryAllocateInfo allocation{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO};
-            allocation.allocationSize = requirements.size;
-            allocation.memoryTypeIndex = findMemoryType(
-                physicalDevice, requirements.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
-            if (vkAllocateMemory(device_, &allocation, nullptr, &memory_) != VK_SUCCESS ||
-                vkBindImageMemory(device_, image_, memory_, 0) != VK_SUCCESS) {
+            VmaAllocationCreateInfo allocationInfo{};
+            allocationInfo.usage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE;
+            if (vmaCreateImage(allocator_, &imageInfo, &allocationInfo, &image_, &allocation_, nullptr) != VK_SUCCESS) {
                 throw std::runtime_error("Could not allocate HDR image memory");
             }
 
@@ -107,13 +83,13 @@ namespace Engine {
                 vkDestroySampler(device_, sampler_, nullptr);
             }
             if (imageView_ != VK_NULL_HANDLE) { vkDestroyImageView(device_, imageView_, nullptr); }
-            if (image_ != VK_NULL_HANDLE) { vkDestroyImage(device_, image_, nullptr); }
-            if (memory_ != VK_NULL_HANDLE) { vkFreeMemory(device_, memory_, nullptr); }
+            if (image_ != VK_NULL_HANDLE) { vmaDestroyImage(allocator_, image_, allocation_); }
         }
         sampler_ = VK_NULL_HANDLE;
         imageView_ = VK_NULL_HANDLE;
         image_ = VK_NULL_HANDLE;
-        memory_ = VK_NULL_HANDLE;
+        allocation_ = VK_NULL_HANDLE;
+        allocator_ = VK_NULL_HANDLE;
         device_ = VK_NULL_HANDLE;
     }
 } // namespace Engine
