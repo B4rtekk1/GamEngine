@@ -317,7 +317,7 @@ void draw_breadcrumbs(std::filesystem::path& folder, std::filesystem::path& sele
 } // namespace
 
 Engine::Entity AssetManagerPanel::draw(Engine::ScenePreset& scene, Engine::Assets::Content& content,
-                                       const bool disabled, bool& isOpen) {
+                                       const bool disabled, bool& isOpen, const bool projectIsOpen) {
     static std::filesystem::path selected;
     static std::filesystem::path selectedFolder;
     static std::filesystem::path scannedRoot;
@@ -371,6 +371,7 @@ Engine::Entity AssetManagerPanel::draw(Engine::ScenePreset& scene, Engine::Asset
     if (ImGui::IsItemHovered())
     ImGui::SetTooltip("Refresh assets");
     ImGui::SameLine();
+    ImGui::BeginDisabled(!projectIsOpen);
     if (ImGui::Button("Import...##asset-import"))
         ImGui::OpenPopup("##asset-import-menu");
     if (ImGui::BeginPopup("##asset-import-menu")) {
@@ -392,6 +393,7 @@ Engine::Entity AssetManagerPanel::draw(Engine::ScenePreset& scene, Engine::Asset
 #endif
         ImGui::EndPopup();
     }
+    ImGui::EndDisabled();
     ImGui::SameLine();
     char filterBuffer[256]{};
     std::snprintf(filterBuffer, sizeof(filterBuffer), "%s", filter.c_str());
@@ -639,6 +641,11 @@ Engine::Entity AssetManagerPanel::draw(Engine::ScenePreset& scene, Engine::Asset
     if (disabled) {
         ImGui::SameLine();
         ImGui::TextColored({0.95F, 0.68F, 0.28F, 1.0F}, "  |  Play Mode: additions are temporary");
+    }
+    if (!projectIsOpen) {
+        ImGui::SameLine();
+        ImGui::TextColored({0.95F, 0.68F, 0.28F, 1.0F},
+                           "  |  Open or create a project before importing assets");
     }
     ImGui::End();
     return created;

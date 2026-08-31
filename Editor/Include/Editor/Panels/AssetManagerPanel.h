@@ -9,5 +9,6 @@ public:
     [[nodiscard]] static Engine::Entity draw(Engine::ScenePreset& scene,
                                                Engine::Assets::Content& content,
                                                bool disabled,
-                                               bool& isOpen);
+                                               bool& isOpen,
+                                               bool projectIsOpen);
 };

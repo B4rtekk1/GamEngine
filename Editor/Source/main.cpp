@@ -37,6 +37,7 @@
 #include "Editor/Panels/ConsolePanel.h"
 #include "Editor/Panels/AssetDragDrop.h"
 #include "Editor/EditorState.h"
+#include "Editor/EditorPreferences.h"
 #include "Editor/EditorConstants.h"
 #include "Editor/EditorUi.h"
 #include "Editor/TerrainSculptState.h"
@@ -112,10 +113,13 @@ int main(int argc, char** argv) {
         if (projectPath && createProjectPath) {
             throw std::runtime_error("Use either --project or --create-project, not both");
         }
+        const Editor::EditorSession previousSession = Editor::loadSession();
         Engine::Project project = createProjectPath
                                             ? Engine::Project::create(*createProjectPath)
                                             : projectPath
                                             ? Engine::Project::load(*projectPath)
+                                            : std::filesystem::is_regular_file(previousSession.projectManifest)
+                                            ? Engine::Project::load(previousSession.projectManifest)
                                             : [&] {
                                                   try {
                                                       return Engine::Project::discover(
@@ -139,6 +143,10 @@ int main(int argc, char** argv) {
         IMGUI_CHECKVERSION();
         ImGui::CreateContext();
         ImGuiIO &imguiIo = ImGui::GetIO();
+        const std::filesystem::path preferencesPath = Editor::preferencesDirectory();
+        std::filesystem::create_directories(preferencesPath);
+        const std::string imguiIniPath = (preferencesPath / "imgui.ini").string();
+        imguiIo.IniFilename = imguiIniPath.c_str();
         imguiIo.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard | ImGuiConfigFlags_DockingEnable;
         const std::filesystem::path uiFont = findDefaultUiFont();
         if (imguiIo.Fonts->AddFontFromFileTTF(uiFont.string().c_str(), 16.0F) == nullptr) {
@@ -152,7 +160,15 @@ int main(int argc, char** argv) {
             Editor::ConsolePanel::error("Asset: " + message);
         });
         Editor::ConsolePanel::info("Editor started for project '" + project.name() + "'.");
-        EditorSceneSession::setScenePath(project.startupScene());
+        const bool restoreScene = !projectPath && !createProjectPath &&
+                                  std::filesystem::is_regular_file(previousSession.scenePath);
+        const auto initialScene = restoreScene
+                                      ? previousSession.scenePath
+                                      : project.startupScene();
+        if (std::filesystem::is_regular_file(initialScene)) {
+            Engine::SceneSerializer::load(scene, initialScene);
+        }
+        EditorSceneSession::setScenePath(initialScene);
         Engine::ScriptSystem scriptSystem{Engine::ScriptRegistry::instance()};
         Engine::PhysicsSystem physicsSystem{};
         // The editor is the visual authoring path, so shadows must be active
@@ -429,7 +445,8 @@ int main(int argc, char** argv) {
                 ComponentsPanel::draw(scene, selectedEntities, selectedEntity, showInspector);
             if (showAssetManager) {
                 if (const Engine::Entity created =
-                        AssetManagerPanel::draw(scene, content, playing, showAssetManager);
+                        AssetManagerPanel::draw(scene, content, playing, showAssetManager,
+                                                !project.manifestPath().empty());
                     created != Engine::NullEntity) {
                     setSelection(created);
                 }
@@ -530,6 +547,8 @@ int main(int argc, char** argv) {
                 std::this_thread::sleep_for(targetFrame - elapsed);
             }
         }
+        Editor::saveSession({.projectManifest = project.manifestPath(),
+                             .scenePath = EditorSceneSession::scenePath()});
         renderer.shutdown();
         ImGui::DestroyContext();
         SDL_DestroyWindow(window);
