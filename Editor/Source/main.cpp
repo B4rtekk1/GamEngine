@@ -507,7 +507,6 @@ int main(int argc, char** argv) {
                 viewportInteraction.cameraInput && !inspectorConsumesMouseWheel);
             renderer.setGameCameraInput(viewportInteraction.gameCameraInput);
             renderer.setSceneViewportActive(showViewport && !showGameView && !playing);
-            ImGui::Render();
 
             if (antialiasingChanged) {
                 rendererReloadPending = true;
@@ -577,6 +576,11 @@ int main(int argc, char** argv) {
                 }
                 scriptSystem.update(scene, static_cast<float>(Engine::Time::deltaTime()));
             }
+            // Scene synchronization can rebuild the descriptor sets used by
+            // ImGui::Image. Finalize the draw list only after it completes;
+            // otherwise this frame would retain descriptor handles that were
+            // just released during a model import or other scene edit.
+            ImGui::Render();
             renderer.renderFrame();
 
             // Keep the editor UI responsive without unnecessarily throttling
