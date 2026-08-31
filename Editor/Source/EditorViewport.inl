@@ -222,7 +222,9 @@ void drawCameraGizmos(const Engine::ScenePreset &scene, const Engine::Entity sel
 
             // The pyramid is the camera's visible direction and makes the
             // icon useful even when the camera body is viewed edge-on.
-            const float frustumDepth = size * 1.35F;
+            // Keep the editor-only field-of-view indicator comfortably larger
+            // than the camera body, without affecting the runtime camera FOV.
+            const float frustumDepth = size * 3.0F;
             const float halfHeight = component.isPerspective()
                                          ? std::tan(component.fieldOfView *
                                                     EditorConstants::radiansPerDegree * 0.5F) * frustumDepth
