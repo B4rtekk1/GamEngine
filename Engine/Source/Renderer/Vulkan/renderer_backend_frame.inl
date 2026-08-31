@@ -99,6 +99,28 @@
                                                         Degrees{transform.rotation.x()});
             }
 
+            taaJitterX = 0.0F;
+            taaJitterY = 0.0F;
+            if (antialiasingLevel == AntialiasingLevel::TAA && !editorUiActive) {
+                const auto halton = [](std::uint64_t index, const std::uint32_t base) {
+                    float result = 0.0F;
+                    float factor = 1.0F;
+                    while (index > 0) {
+                        factor /= static_cast<float>(base);
+                        result += factor * static_cast<float>(index % base);
+                        index /= base;
+                    }
+                    return result;
+                };
+                const VkExtent2D extent = swapchain.extent();
+                taaJitterX = (halton(taaSampleIndex + 1, 2) - 0.5F) * 2.0F /
+                             static_cast<float>(extent.width);
+                taaJitterY = (halton(taaSampleIndex + 1, 3) - 0.5F) * 2.0F /
+                             static_cast<float>(extent.height);
+                ++taaSampleIndex;
+                cameraController.camera()->setProjectionJitter(taaJitterX, taaJitterY);
+            }
+
             const DirectionalLight light = directionalLight();
             const auto [lights, localLightCount] = localLights();
             shadowClipUpdateMask = updateVirtualShadowClipmaps(
@@ -383,7 +405,13 @@
                 ImGui_ImplVulkan_RenderDrawData(ImGui::GetDrawData(), commandBuffer);
                 vkCmdEndRenderPass(commandBuffer);
             } else {
-                tonemapPass.record(commandBuffer, imageIndex.value, swapchain.extent());
+                if (antialiasingLevel == AntialiasingLevel::TAA) {
+                    temporalAaPass.record(commandBuffer, swapchain.extent(), taaJitterX, taaJitterY);
+                    tonemapPass.record(commandBuffer, imageIndex.value, swapchain.extent(), 0.0F,
+                                       1U + temporalAaPass.resolvedIndex());
+                } else {
+                    tonemapPass.record(commandBuffer, imageIndex.value, swapchain.extent());
+                }
                 canvasRenderer.record(scene.uiCanvas(), commandBuffer, imageIndex.value, currentFrame,
                                       swapchain.extent());
             }
@@ -421,6 +449,7 @@
             destroyEditorUiResources();
             canvasRenderer.destroy();
             tonemapPass.destroy();
+            temporalAaPass.destroy();
             if (hiZDepthPrepassFramebuffer != VK_NULL_HANDLE) {
                 vkDestroyFramebuffer(device, hiZDepthPrepassFramebuffer, nullptr);
                 hiZDepthPrepassFramebuffer = VK_NULL_HANDLE;
@@ -478,6 +507,7 @@
 
             canvasRenderer.destroy();
             tonemapPass.destroy();
+            temporalAaPass.destroy();
             if (hdrFramebuffer != VK_NULL_HANDLE) {
                 vkDestroyFramebuffer(device, hdrFramebuffer, nullptr);
                 hdrFramebuffer = VK_NULL_HANDLE;
@@ -502,6 +532,7 @@
 
             createFramebuffers();
             createSceneViewportResources();
+            createTemporalAaPass();
             createTonemapPass();
             createUIResources();
             createEditorUiResources();

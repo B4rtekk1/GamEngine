@@ -41,6 +41,7 @@
             createSceneSkyPass();
             createFramebuffers();
             createSceneViewportResources();
+            createTemporalAaPass();
             createTonemapPass();
             createUIResources();
             createCommandBuffers();
@@ -343,6 +344,7 @@
             // prevents recreating HDR attachments with that transient size.
             waitForDrawableExtent();
             antialiasingLevel = requestedLevel;
+            taaSampleIndex = 0;
 
             // Nothing may reference the old render passes or attachments while
             // they are being replaced. This also guarantees that the old
@@ -353,6 +355,7 @@
             destroyEditorUiResources();
             canvasRenderer.destroy();
             tonemapPass.destroy();
+            temporalAaPass.destroy();
 
             if (hiZDepthPrepassFramebuffer != VK_NULL_HANDLE) {
                 vkDestroyFramebuffer(device, hiZDepthPrepassFramebuffer, nullptr);
@@ -389,6 +392,7 @@
             createSceneSkyPass();
             createFramebuffers();
             createSceneViewportResources();
+            createTemporalAaPass();
             createTonemapPass();
             createUIResources();
             createEditorUiResources();
@@ -422,7 +426,14 @@
         void createTonemapPass() const {
             tonemapPass.create(device, swapchain.format(), swapchain.extent(),
                                swapchain.imageViews(), hdrBuffer.imageView(),
-                               hdrBuffer.sampler(), assetManager);
+                               hdrBuffer.sampler(), assetManager, temporalAaPass.historyViews());
+        }
+
+        void createTemporalAaPass() {
+            if (antialiasingLevel != AntialiasingLevel::TAA) return;
+            temporalAaPass.create(vulkanDevice.physical(), device, swapchain.extent(),
+                                  vulkanDevice.allocator(), hdrBuffer.imageView(),
+                                  hdrBuffer.sampler(), assetManager);
         }
 
         void createUIResources() {

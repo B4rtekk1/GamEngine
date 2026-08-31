@@ -26,7 +26,8 @@ void TonemapPass::create(const VkDevice device, const VkFormat swapchainFormat,
                          const VkExtent2D extent,
                          const std::vector<VkImageView>& swapchainViews,
                          const VkImageView hdrView, const VkSampler hdrSampler,
-                         Assets::AssetManager& assets) {
+                         Assets::AssetManager& assets,
+                         const std::array<VkImageView, 2> temporalViews) {
     if (device == VK_NULL_HANDLE || swapchainFormat == VK_FORMAT_UNDEFINED ||
         swapchainViews.empty() || hdrView == VK_NULL_HANDLE || hdrSampler == VK_NULL_HANDLE) {
         throw std::invalid_argument("Tonemap pass received incomplete resources");
@@ -79,9 +80,9 @@ void TonemapPass::create(const VkDevice device, const VkFormat swapchainFormat,
             }
         }
 
-        VkDescriptorPoolSize poolSize{VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1};
+        VkDescriptorPoolSize poolSize{VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 3};
         VkDescriptorPoolCreateInfo poolInfo{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
-        poolInfo.maxSets = 1;
+        poolInfo.maxSets = static_cast<std::uint32_t>(descriptorSets_.size());
         poolInfo.poolSizeCount = 1;
         poolInfo.pPoolSizes = &poolSize;
         if (vkCreateDescriptorPool(device_, &poolInfo, nullptr, &descriptorPool_) != VK_SUCCESS) {
@@ -90,21 +91,24 @@ void TonemapPass::create(const VkDevice device, const VkFormat swapchainFormat,
 
         VkDescriptorSetAllocateInfo allocation{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};
         allocation.descriptorPool = descriptorPool_;
-        allocation.descriptorSetCount = 1;
+        allocation.descriptorSetCount = static_cast<std::uint32_t>(descriptorSets_.size());
         allocation.pSetLayouts = &descriptorSetLayout_;
-        if (vkAllocateDescriptorSets(device_, &allocation, &descriptorSet_) != VK_SUCCESS) {
+        std::array<VkDescriptorSetLayout, 3> layouts{descriptorSetLayout_, descriptorSetLayout_, descriptorSetLayout_};
+        allocation.pSetLayouts = layouts.data();
+        if (vkAllocateDescriptorSets(device_, &allocation, descriptorSets_.data()) != VK_SUCCESS) {
             throw std::runtime_error("Could not allocate tonemap descriptor set");
         }
 
-        VkDescriptorImageInfo imageInfo{hdrSampler, hdrView,
-                                        VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
-        VkWriteDescriptorSet write{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
-        write.dstSet = descriptorSet_;
-        write.dstBinding = 0;
-        write.descriptorCount = 1;
-        write.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-        write.pImageInfo = &imageInfo;
-        vkUpdateDescriptorSets(device_, 1, &write, 0, nullptr);
+        const std::array<VkImageView, 3> sources{hdrView,
+            temporalViews[0] == VK_NULL_HANDLE ? hdrView : temporalViews[0],
+            temporalViews[1] == VK_NULL_HANDLE ? hdrView : temporalViews[1]};
+        for (std::size_t index = 0; index < descriptorSets_.size(); ++index) {
+            const VkDescriptorImageInfo imageInfo{hdrSampler, sources[index], VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
+            VkWriteDescriptorSet write{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
+            write.dstSet = descriptorSets_[index]; write.dstBinding = 0; write.descriptorCount = 1;
+            write.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER; write.pImageInfo = &imageInfo;
+            vkUpdateDescriptorSets(device_, 1, &write, 0, nullptr);
+        }
     } catch (...) {
         destroy();
         throw;
@@ -123,7 +127,7 @@ void TonemapPass::destroy() noexcept {
         }
     }
     framebuffers_.clear();
-    descriptorSet_ = VK_NULL_HANDLE;
+    descriptorSets_.fill(VK_NULL_HANDLE);
     descriptorPool_ = VK_NULL_HANDLE;
     pipeline_.destroy();
     if (device_ != VK_NULL_HANDLE && descriptorSetLayout_ != VK_NULL_HANDLE) {
@@ -135,7 +139,7 @@ void TonemapPass::destroy() noexcept {
 
 void TonemapPass::record(const VkCommandBuffer commandBuffer,
                          const std::uint32_t imageIndex, const VkExtent2D extent,
-                         const float exposure) const {
+                         const float exposure, const std::uint32_t sourceIndex) const {
     VkRenderPassBeginInfo passInfo{VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO};
     passInfo.renderPass = pipeline_.renderPass();
     passInfo.framebuffer = framebuffers_.at(imageIndex);
@@ -148,7 +152,7 @@ void TonemapPass::record(const VkCommandBuffer commandBuffer,
 
     vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline_.handle());
     vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS,
-                            pipeline_.layout(), 0, 1, &descriptorSet_, 0, nullptr);
+                            pipeline_.layout(), 0, 1, &descriptorSets_.at(sourceIndex), 0, nullptr);
     const TonemapSettings settings{exposure, manualGamma_ ? 1.0F : 0.0F};
     vkCmdPushConstants(commandBuffer, pipeline_.layout(), VK_SHADER_STAGE_FRAGMENT_BIT,
                        0, sizeof(settings), &settings);
@@ -160,5 +164,6 @@ void TonemapPass::record(const VkCommandBuffer commandBuffer,
     vkCmdDraw(commandBuffer, 3, 1, 0, 0);
     vkCmdEndRenderPass(commandBuffer);
 }
+
 
 } // namespace Engine

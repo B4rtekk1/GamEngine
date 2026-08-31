@@ -49,6 +49,7 @@
 #include "Engine/Renderer/Passes/ShadowPass.h"
 #include "Engine/Renderer/Passes/SkyPass.h"
 #include "Engine/Renderer/Passes/TonemapPass.h"
+#include "Engine/Renderer/Passes/TemporalAaPass.h"
 #include "Engine/Assets/AssetManager.h"
 #include "Engine/Renderer/Culling/CullingTypes.h"
 #include "Engine/Renderer/Culling/GPUCullingPass.h"
@@ -113,6 +114,7 @@ namespace Engine {
         ForwardPass forwardPass{};
         SkyPass skyPass;
         TonemapPass tonemapPass;
+        TemporalAaPass temporalAaPass;
         GraphicsPipeline particlePipeline;
         UI::CanvasRenderer canvasRenderer;
     };
@@ -126,12 +128,14 @@ namespace Engine {
                          ForwardPass &forwardPass,
                          SkyPass &skyPass,
                          TonemapPass &tonemapPass,
+                         TemporalAaPass &temporalAaPass,
                          GraphicsPipeline &particlePipeline,
                          UI::CanvasRenderer &canvasRenderer)
             : window(window), forwardPass(forwardPass),
               particlePipeline(particlePipeline),
               skyPass(skyPass),
               tonemapPass(tonemapPass),
+              temporalAaPass(temporalAaPass),
               canvasRenderer(canvasRenderer),
               scene(scene),
               registry(scene.registry()),

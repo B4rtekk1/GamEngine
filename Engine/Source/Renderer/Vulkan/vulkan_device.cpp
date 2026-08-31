@@ -13,7 +13,7 @@ namespace Engine {
 namespace {
     constexpr std::size_t kRequiredDeviceExtensionCount = 1;
     constexpr std::array<const char*, kRequiredDeviceExtensionCount> kRequiredDeviceExtensions = {
-        VK_KHR_SWAPCHAIN_EXTENSION_NAME
+        VK_KHR_SWAPCHAIN_EXTENSION_NAME,
     };
 
     constexpr int kDiscreteGpuScoreBonus = 10'000;

@@ -37,6 +37,7 @@
         VkPipeline particleComputePipeline = VK_NULL_HANDLE;
         SkyPass& skyPass;
         TonemapPass& tonemapPass;
+        TemporalAaPass& temporalAaPass;
         UI::CanvasRenderer& canvasRenderer;
         Texture2D fpsFontTexture;
         Texture2D fallbackMaterialTexture;
@@ -158,6 +159,9 @@
         std::vector<VkSemaphore> renderFinishedSemaphores;
         std::vector<VkFence> inFlightFences;
         uint32_t currentFrame = 0;
+        std::uint64_t taaSampleIndex = 0;
+        float taaJitterX = 0.0F;
+        float taaJitterY = 0.0F;
 
         bool framebufferResized = false;
         bool cleanedUp = false;

@@ -8,6 +8,8 @@ namespace Engine {
         Off,
         MSAA2x,
         MSAA4x,
+        /** Temporal anti-aliasing with HDR history accumulation. */
+        TAA,
     };
 
     struct RenderFeatures final {

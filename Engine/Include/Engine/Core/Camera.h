@@ -53,6 +53,9 @@ namespace Engine {
         /** @brief Updates the aspect ratio used by the projection matrix. */
         void setAspectRatio(float aspectRatio);
 
+        /** Applies a sub-pixel projection offset in Vulkan clip-space. */
+        void setProjectionJitter(float x, float y) noexcept;
+
     private:
         Vec3 m_position{0.0F, 0.0F, 3.0F}; //NOLINT
 
@@ -63,5 +66,7 @@ namespace Engine {
         float m_aspectRatio;
         float m_nearPlane;
         float m_farPlane;
+        float m_jitterX = 0.0F;
+        float m_jitterY = 0.0F;
     };
 } // namespace Engine

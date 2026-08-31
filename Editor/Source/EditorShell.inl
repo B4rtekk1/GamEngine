@@ -267,7 +267,8 @@ Engine::Entity drawEditorMenuBar(Engine::ScenePreset &scene, Engine::Renderer &r
 
     if (openSceneSettings) {
         if (antialiasingType < 0) {
-            antialiasingType = renderer.antialiasingLevel() == Engine::AntialiasingLevel::Off ? 0 : 1;
+            antialiasingType = renderer.antialiasingLevel() == Engine::AntialiasingLevel::Off ? 0 :
+                                renderer.antialiasingLevel() == Engine::AntialiasingLevel::TAA ? 3 : 1;
             msaaSamples = renderer.antialiasingLevel() == Engine::AntialiasingLevel::MSAA2x ? 2 : 4;
         }
         ImGui::OpenPopup("Scene Settings");
@@ -275,7 +276,7 @@ Engine::Entity drawEditorMenuBar(Engine::ScenePreset &scene, Engine::Renderer &r
     }
 
     if (ImGui::BeginPopupModal("Scene Settings", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
-        constexpr const char *typeLabels[] = {"None", "MSAA", "FXAA (placeholder)", "TAA (placeholder)"};
+        constexpr const char *typeLabels[] = {"None", "MSAA", "FXAA (placeholder)", "TAA"};
         constexpr const char *sampleLabels[] = {"2x", "4x"};
 
         ImGui::TextUnformatted("Antialiasing");
@@ -293,6 +294,9 @@ Engine::Entity drawEditorMenuBar(Engine::ScenePreset &scene, Engine::Renderer &r
                         renderer.setAntialiasingLevel(msaaSamples == 2
                                                           ? Engine::AntialiasingLevel::MSAA2x
                                                           : Engine::AntialiasingLevel::MSAA4x);
+                        antialiasingChanged = true;
+                    } else if (antialiasingType == 3) {
+                        renderer.setAntialiasingLevel(Engine::AntialiasingLevel::TAA);
                         antialiasingChanged = true;
                     }
                 }
@@ -323,12 +327,14 @@ Engine::Entity drawEditorMenuBar(Engine::ScenePreset &scene, Engine::Renderer &r
                 ImGui::EndCombo();
             }
             ImGui::TextDisabled("MSAA is currently supported by the renderer.");
-        } else if (antialiasingType == 2 || antialiasingType == 3) {
+        } else if (antialiasingType == 2) {
             ImGui::BeginDisabled();
             float placeholderValue = 1.0F;
             Editor::Controls::sliderFloat("Quality", &placeholderValue, 0.0F, 1.0F);
             ImGui::EndDisabled();
             ImGui::TextDisabled("Placeholder: this antialiasing type is not implemented yet.");
+        } else if (antialiasingType == 3) {
+            ImGui::TextDisabled("TAA uses jittered HDR history and resets after changes to this setting.");
         } else {
             ImGui::TextDisabled("Antialiasing is disabled.");
         }

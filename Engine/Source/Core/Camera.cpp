@@ -59,6 +59,8 @@ Mat4 Camera::projectionMatrix() const {
 
     // Vulkan's viewport has its Y axis pointing down.
     projection.native()[1][1] *= -1.0F;
+    projection.native()[2][0] += m_jitterX;
+    projection.native()[2][1] += m_jitterY;
     return projection;
 }
 
@@ -86,6 +88,11 @@ void Camera::setAspectRatio(const float aspectRatio) {
         throw std::invalid_argument("Camera aspect ratio must be greater than zero");
     }
     m_aspectRatio = aspectRatio;
+}
+
+void Camera::setProjectionJitter(const float x, const float y) noexcept {
+    m_jitterX = x;
+    m_jitterY = y;
 }
 
 } // namespace Engine
