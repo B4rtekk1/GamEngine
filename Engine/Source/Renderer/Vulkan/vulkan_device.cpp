@@ -89,8 +89,7 @@ QueueFamilyIndices VulkanDevice::findQueueFamilies(VkPhysicalDevice candidate) c
         }
 
         VkBool32 supportsPresent = VK_FALSE;
-        const VkResult result = vkGetPhysicalDeviceSurfaceSupportKHR(candidate, i, surface_, &supportsPresent);
-        if (result == VK_SUCCESS && supportsPresent == VK_TRUE) {
+        if (const VkResult result = vkGetPhysicalDeviceSurfaceSupportKHR(candidate, i, surface_, &supportsPresent); result == VK_SUCCESS && supportsPresent == VK_TRUE) {
             indices.present = i;
         }
 
@@ -124,8 +123,8 @@ bool VulkanDevice::supportsRequiredExtensions(
 
     for (const auto& requiredExtension : kRequiredDeviceExtensions) {
         bool found = false;
-        for (const auto& availableExtension : available) {
-            if (std::strcmp(availableExtension.extensionName, requiredExtension) == 0) {
+        for (const auto&[extensionName, specVersion] : available) {
+            if (std::strcmp(extensionName, requiredExtension) == 0) {
                 found = true;
                 break;
             }

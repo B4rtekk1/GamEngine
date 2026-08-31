@@ -256,6 +256,74 @@ TEST(SceneSerializer, RoundTripsCubeActorTransformAndMaterial) {
     EXPECT_TRUE(renderer.material.alphaBlend);
 }
 
+TEST(SceneSerializer, StoresTerrainSamplesInLosslessBinarySidecar) {
+    const auto path = std::filesystem::temp_directory_path() / "gameengine-terrain-sidecar-test.scene";
+    const auto sidecar = std::filesystem::path{path.string() + ".terrain"};
+    std::error_code error;
+    std::filesystem::remove(path, error);
+    std::filesystem::remove(sidecar, error);
+
+    Engine::TerrainComponent terrain{33, 64.0F, 48.0F, -20.0F, 40.0F};
+    terrain.heights[17] = 12.25F;
+    terrain.colors[17] = {0.25F, 0.5F, 0.75F};
+    Engine::Scene source;
+    static_cast<void>(source.createTerrain("Persisted terrain", terrain));
+    const auto sourceActor = source.findActor("Persisted terrain");
+    ASSERT_TRUE(sourceActor.valid());
+    const auto sourceEntity = source.findEntity(sourceActor.id());
+    ASSERT_NE(sourceEntity, Engine::NullEntity);
+    const auto& persisted = source.editor().get<Engine::TerrainComponent>(sourceEntity);
+    EXPECT_FLOAT_EQ(persisted.colors[17].x(), 0.25F);
+    EXPECT_FLOAT_EQ(persisted.colors[17].y(), 0.5F);
+    EXPECT_FLOAT_EQ(persisted.colors[17].z(), 0.75F);
+    ASSERT_NO_THROW(source.save(path));
+    ASSERT_TRUE(std::filesystem::exists(sidecar));
+    EXPECT_LT(std::filesystem::file_size(path), 4096U);
+
+    Engine::Scene loaded;
+    ASSERT_NO_THROW(loaded.load(path));
+    const auto restoredActor = loaded.findActor("Persisted terrain");
+    ASSERT_TRUE(restoredActor.valid());
+    const auto entity = loaded.findEntity(restoredActor.id());
+    ASSERT_NE(entity, Engine::NullEntity);
+    const auto& restored = loaded.editor().get<Engine::TerrainComponent>(entity);
+    EXPECT_FLOAT_EQ(restored.heights[17], 12.25F);
+    EXPECT_FLOAT_EQ(restored.colors[17].x(), 0.25F);
+    EXPECT_FLOAT_EQ(restored.colors[17].y(), 0.5F);
+    EXPECT_FLOAT_EQ(restored.colors[17].z(), 0.75F);
+
+    std::filesystem::remove(path, error);
+    std::filesystem::remove(sidecar, error);
+}
+
+TEST(SceneSerializer, StoresEmbeddedImagePixelsInBinarySidecar) {
+    const auto path = std::filesystem::temp_directory_path() / "gameengine-image-sidecar-test.scene";
+    const auto sidecar = std::filesystem::path{path.string() + ".terrain"};
+    std::error_code error;
+    std::filesystem::remove(path, error);
+    std::filesystem::remove(sidecar, error);
+
+    auto mesh = std::make_shared<Engine::Mesh>();
+    mesh->vertices.resize(3);
+    mesh->indices = {0, 1, 2};
+    mesh->images.push_back({.width = 2, .height = 1, .rgbaPixels = {1, 2, 3, 4, 250, 251, 252, 253}});
+    Engine::Scene source;
+    static_cast<void>(source.createMesh("Image mesh", mesh));
+    ASSERT_NO_THROW(source.save(path));
+
+    Engine::Scene loaded;
+    ASSERT_NO_THROW(loaded.load(path));
+    const auto actor = loaded.findActor("Image mesh");
+    ASSERT_TRUE(actor.valid());
+    const auto entity = loaded.findEntity(actor.id());
+    const auto& renderer = loaded.editor().get<Engine::MeshRendererComponent>(entity);
+    ASSERT_EQ(renderer.mesh->images.size(), 1U);
+    EXPECT_EQ(renderer.mesh->images[0].rgbaPixels, mesh->images[0].rgbaPixels);
+
+    std::filesystem::remove(path, error);
+    std::filesystem::remove(sidecar, error);
+}
+
 TEST(SceneSerializer, RejectsInvalidFilesWithoutChangingTheScene) {
     const auto path = std::filesystem::temp_directory_path() / "gameengine-invalid-scene-test.scene";
     {

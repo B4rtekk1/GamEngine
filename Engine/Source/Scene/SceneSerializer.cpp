@@ -19,6 +19,8 @@
 #include "Engine/Scene/Components/IdentityComponents.h"
 
 #include <algorithm>
+#include <array>
+#include <bit>
 #include <charconv>
 #include <fstream>
 #include <limits>
@@ -40,9 +42,75 @@ namespace Engine {
         constexpr std::size_t MaxIndices = 150'000'000;
         constexpr std::size_t MaxEntities = 10'000'000;
         constexpr std::size_t FloatBufferSize = 32;
+        constexpr std::uint32_t LegacyFormatVersion = 11;
+        constexpr std::uint32_t TerrainDataVersion = 1;
+        constexpr std::array<char, 8> TerrainDataMagic{'G', 'E', 'T', 'E', 'R', 'R', '1', '\0'};
+
+        [[nodiscard]] int terrainDataStreamSlot() {
+            static const int slot = std::ios_base::xalloc();
+            return slot;
+        }
 
         [[noreturn]] void invalidScene(const std::string &message) {
             throw std::runtime_error("Invalid scene: " + message);
+        }
+
+        [[nodiscard]] std::filesystem::path terrainDataPath(const std::filesystem::path& scenePath) {
+            return std::filesystem::path{scenePath.string() + ".terrain"};
+        }
+
+        void writeLittleEndianU32(std::ostream& output, const std::uint32_t value) {
+            const std::array<char, 4> bytes{
+                static_cast<char>(value & 0xFFU), static_cast<char>((value >> 8U) & 0xFFU),
+                static_cast<char>((value >> 16U) & 0xFFU), static_cast<char>((value >> 24U) & 0xFFU)};
+            output.write(bytes.data(), static_cast<std::streamsize>(bytes.size()));
+        }
+
+        [[nodiscard]] std::uint32_t readLittleEndianU32(std::istream& input, const std::string_view description) {
+            std::array<unsigned char, 4> bytes{};
+            input.read(reinterpret_cast<char*>(bytes.data()), static_cast<std::streamsize>(bytes.size()));
+            if (!input) invalidScene("could not read " + std::string(description));
+            return static_cast<std::uint32_t>(bytes[0]) |
+                   (static_cast<std::uint32_t>(bytes[1]) << 8U) |
+                   (static_cast<std::uint32_t>(bytes[2]) << 16U) |
+                   (static_cast<std::uint32_t>(bytes[3]) << 24U);
+        }
+
+        void writeLittleEndianU64(std::ostream& output, const std::uint64_t value) {
+            for (unsigned shift = 0; shift < 64; shift += 8) output.put(static_cast<char>((value >> shift) & 0xFFU));
+        }
+
+        [[nodiscard]] std::uint64_t readLittleEndianU64(std::istream& input, const std::string_view description) {
+            std::uint64_t value = 0;
+            for (unsigned shift = 0; shift < 64; shift += 8) {
+                const int byte = input.get();
+                if (byte == EOF) invalidScene("could not read " + std::string(description));
+                value |= static_cast<std::uint64_t>(static_cast<unsigned char>(byte)) << shift;
+            }
+            return value;
+        }
+
+        [[nodiscard]] std::uint64_t terrainChecksum(const TerrainComponent& terrain) noexcept {
+            std::uint64_t hash = 1469598103934665603ULL;
+            const auto append = [&hash](const float value) {
+                const auto bits = std::bit_cast<std::uint32_t>(value);
+                for (unsigned shift = 0; shift < 32; shift += 8) {
+                    hash ^= (bits >> shift) & 0xFFU;
+                    hash *= 1099511628211ULL;
+                }
+            };
+            for (const float value : terrain.heights) append(value);
+            for (const Vec3& color : terrain.colors) { append(color.x()); append(color.y()); append(color.z()); }
+            return hash;
+        }
+
+        [[nodiscard]] std::uint64_t byteChecksum(const std::vector<std::uint8_t>& bytes) noexcept {
+            std::uint64_t hash = 1469598103934665603ULL;
+            for (const std::uint8_t byte : bytes) {
+                hash ^= byte;
+                hash *= 1099511628211ULL;
+            }
+            return hash;
         }
 
         void expect(std::istream &input, const std::string_view expected) {
@@ -429,6 +497,95 @@ namespace Engine {
             return terrain;
         }
 
+        void writeTerrainBinary(std::ostream& scene, std::ostream& data, const TerrainComponent& terrain) {
+            const auto offset = data.tellp();
+            if (offset < 0) throw std::runtime_error("Could not determine terrain data offset");
+            const std::uint64_t byteCount = static_cast<std::uint64_t>(terrain.heights.size()) * 4ULL +
+                                            static_cast<std::uint64_t>(terrain.colors.size()) * 12ULL;
+            scene << "TERRAIN_BIN " << terrain.resolution << ' ';
+            writeFloat(scene, terrain.width); scene << ' ';
+            writeFloat(scene, terrain.depth); scene << ' ';
+            writeFloat(scene, terrain.minimumHeight); scene << ' ';
+            writeFloat(scene, terrain.maximumHeight);
+            scene << ' ' << terrain.heights.size() << ' ' << terrain.colors.size() << ' '
+                  << static_cast<std::uint64_t>(offset) << ' ' << byteCount << ' '
+                  << terrainChecksum(terrain) << '\n';
+            for (const float height : terrain.heights) writeLittleEndianU32(data, std::bit_cast<std::uint32_t>(height));
+            for (const Vec3& color : terrain.colors) {
+                writeLittleEndianU32(data, std::bit_cast<std::uint32_t>(color.x()));
+                writeLittleEndianU32(data, std::bit_cast<std::uint32_t>(color.y()));
+                writeLittleEndianU32(data, std::bit_cast<std::uint32_t>(color.z()));
+            }
+            if (!data) throw std::runtime_error("Could not write terrain data");
+        }
+
+        TerrainComponent readTerrainBinary(std::istream& scene, std::istream& data) {
+            const auto resolution = read<std::uint32_t>(scene, "terrain resolution");
+            const float width = readFloat(scene, "terrain width");
+            const float depth = readFloat(scene, "terrain depth");
+            const float minimumHeight = readFloat(scene, "terrain minimum height");
+            const float maximumHeight = readFloat(scene, "terrain maximum height");
+            if (resolution < TerrainComponent::MinimumResolution || resolution > TerrainComponent::MaximumResolution) {
+                invalidScene("terrain resolution is outside the supported range");
+            }
+            TerrainComponent terrain{resolution, width, depth, minimumHeight, maximumHeight};
+            const auto heightCount = readCount(scene, "terrain height count", terrain.sampleCount());
+            const auto colorCount = readCount(scene, "terrain colour count", terrain.sampleCount());
+            const auto offset = read<std::uint64_t>(scene, "terrain data offset");
+            const auto byteCount = read<std::uint64_t>(scene, "terrain data size");
+            const auto checksum = read<std::uint64_t>(scene, "terrain data checksum");
+            const auto expectedBytes = static_cast<std::uint64_t>(heightCount) * 4ULL +
+                                       static_cast<std::uint64_t>(colorCount) * 12ULL;
+            if (heightCount != terrain.sampleCount() || colorCount != terrain.sampleCount() || byteCount != expectedBytes) {
+                invalidScene("terrain binary data dimensions are invalid");
+            }
+            data.clear();
+            data.seekg(static_cast<std::streamoff>(offset));
+            if (!data) invalidScene("could not seek terrain data");
+            for (float& height : terrain.heights) height = std::bit_cast<float>(readLittleEndianU32(data, "terrain height"));
+            for (Vec3& color : terrain.colors) {
+                // Decode in separate statements: function-argument evaluation
+                // order must not determine the byte order of a colour.
+                const float red = std::bit_cast<float>(readLittleEndianU32(data, "terrain colour red"));
+                const float green = std::bit_cast<float>(readLittleEndianU32(data, "terrain colour green"));
+                const float blue = std::bit_cast<float>(readLittleEndianU32(data, "terrain colour blue"));
+                color = {red, green, blue};
+            }
+            if (terrainChecksum(terrain) != checksum) invalidScene("terrain binary data checksum does not match");
+            if (!terrain.valid()) invalidScene("terrain binary values are invalid");
+            return terrain;
+        }
+
+        void writeImageBinary(std::ostream& scene, std::ostream& data, const std::uint32_t width,
+                              const std::uint32_t height, const std::vector<std::uint8_t>& rgbaPixels) {
+            const auto offset = data.tellp();
+            if (offset < 0) throw std::runtime_error("Could not determine embedded image data offset");
+            scene << "IMAGE_BIN " << width << ' ' << height << ' ' << rgbaPixels.size() << ' '
+                  << static_cast<std::uint64_t>(offset) << ' ' << byteChecksum(rgbaPixels) << '\n';
+            data.write(reinterpret_cast<const char*>(rgbaPixels.data()), static_cast<std::streamsize>(rgbaPixels.size()));
+            if (!data) throw std::runtime_error("Could not write embedded image data");
+        }
+
+        Mesh::Image readImageBinary(std::istream& scene, std::istream& data) {
+            Mesh::Image image;
+            image.width = read<std::uint32_t>(scene, "image width");
+            image.height = read<std::uint32_t>(scene, "image height");
+            const auto byteCount = readCount(scene, "image byte count", MaxIndices * 4);
+            const auto offset = read<std::uint64_t>(scene, "image data offset");
+            const auto checksum = read<std::uint64_t>(scene, "image data checksum");
+            if (image.width == 0 || image.height == 0 ||
+                byteCount != static_cast<std::size_t>(image.width) * image.height * 4) {
+                invalidScene("image dimensions do not match RGBA pixel data");
+            }
+            image.rgbaPixels.resize(byteCount);
+            data.clear();
+            data.seekg(static_cast<std::streamoff>(offset));
+            if (!data) invalidScene("could not seek embedded image data");
+            data.read(reinterpret_cast<char*>(image.rgbaPixels.data()), static_cast<std::streamsize>(byteCount));
+            if (!data || byteChecksum(image.rgbaPixels) != checksum) invalidScene("embedded image data is invalid");
+            return image;
+        }
+
         void writeTerrainGrass(std::ostream& output, const TerrainGrassComponent& grass,
                                const std::size_t meshId) {
             output << meshId << ' ';
@@ -541,10 +698,18 @@ namespace Engine {
         if (!output) {
             throw std::runtime_error("Could not open scene for writing: " + path.string());
         }
+        const auto dataPath = terrainDataPath(path);
+        std::ofstream terrainData(dataPath, std::ios::binary | std::ios::trunc);
+        if (!terrainData) throw std::runtime_error("Could not open terrain data for writing: " + dataPath.string());
+        terrainData.write(TerrainDataMagic.data(), static_cast<std::streamsize>(TerrainDataMagic.size()));
+        writeLittleEndianU32(terrainData, TerrainDataVersion);
+        output.pword(terrainDataStreamSlot()) = &terrainData;
         save(registry, output, msaaSamples);
+        output.pword(terrainDataStreamSlot()) = nullptr;
         if (!output) {
             throw std::runtime_error("Could not finish writing scene: " + path.string());
         }
+        if (!terrainData) throw std::runtime_error("Could not finish writing terrain data: " + dataPath.string());
     }
 
     void SceneSerializer::save(const Registry &registry, std::ostream &output) {
@@ -556,8 +721,9 @@ namespace Engine {
     // NOLINTNEXTLINE(readability-function-cognitive-complexity)
     void SceneSerializer::save(const Registry &registry, std::ostream &output,
                                const std::uint32_t msaaSamples) {
-        std::ostringstream serialized;
-        serialized.imbue(std::locale::classic());
+        output.imbue(std::locale::classic());
+        std::ostream& serialized = output;
+        auto* terrainData = static_cast<std::ostream*>(output.pword(terrainDataStreamSlot()));
         const std::vector<Entity> entities = sortedEntities(registry);
         std::vector<std::shared_ptr<const Mesh> > meshes;
         std::unordered_map<const Mesh *, std::size_t> meshIds;
@@ -587,7 +753,7 @@ namespace Engine {
         if (msaaSamples != 0 && msaaSamples != 2 && msaaSamples != 4) {
             throw std::invalid_argument("MSAA samples must be 0, 2 or 4");
         }
-        serialized << "GAMENGINE_SCENE " << FormatVersion << '\n';
+        serialized << "GAMENGINE_SCENE " << (terrainData ? FormatVersion : LegacyFormatVersion) << '\n';
         serialized << "SETTINGS MSAA " << msaaSamples << '\n';
         serialized << "MESHES " << meshes.size() << '\n';
         for (std::size_t meshId = 0; meshId < meshes.size(); ++meshId) {
@@ -633,6 +799,10 @@ namespace Engine {
                 serialized << '\n';
             }
             for (const auto &[width, height, rgbaPixels]: mesh.images) {
+                if (terrainData) {
+                    writeImageBinary(serialized, *terrainData, width, height, rgbaPixels);
+                    continue;
+                }
                 serialized << "IMAGE " << width << ' ' << height << ' '
                         << rgbaPixels.size() << '\n' << "PIXELS";
                 for (const std::uint8_t pixel: rgbaPixels) {
@@ -678,8 +848,12 @@ namespace Engine {
                 writeRigidbody(serialized, registry.get<RigidbodyComponent>(entity));
             }
             if (registry.has<TerrainComponent>(entity)) {
-                serialized << "TERRAIN_V2 ";
-                writeTerrain(serialized, registry.get<TerrainComponent>(entity));
+                if (terrainData) {
+                    writeTerrainBinary(serialized, *terrainData, registry.get<TerrainComponent>(entity));
+                } else {
+                    serialized << "TERRAIN_V2 ";
+                    writeTerrain(serialized, registry.get<TerrainComponent>(entity));
+                }
             }
             if (registry.has<TerrainGrassComponent>(entity)) {
                 const auto& grass = registry.get<TerrainGrassComponent>(entity);
@@ -758,7 +932,6 @@ namespace Engine {
         }
         serialized << "END_SCENE\n";
 
-        output << serialized.str();
         if (!output) {
             throw std::runtime_error("Could not write serialized scene");
         }
@@ -777,7 +950,20 @@ namespace Engine {
         if (!input) {
             throw std::runtime_error("Could not open scene for reading: " + path.string());
         }
+        const auto dataPath = terrainDataPath(path);
+        std::ifstream terrainData(dataPath, std::ios::binary);
+        // A legacy scene does not need a sidecar.  The decoder below reports a
+        // precise error if a v12 terrain record is encountered without one.
+        if (terrainData) {
+            std::array<char, TerrainDataMagic.size()> magic{};
+            terrainData.read(magic.data(), static_cast<std::streamsize>(magic.size()));
+            if (magic != TerrainDataMagic || readLittleEndianU32(terrainData, "terrain data version") != TerrainDataVersion) {
+                invalidScene("unsupported terrain data sidecar");
+            }
+            input.pword(terrainDataStreamSlot()) = &terrainData;
+        }
         load(registry, input, msaaSamples);
+        input.pword(terrainDataStreamSlot()) = nullptr;
     }
 
     void SceneSerializer::load(Registry &registry, std::istream &input) {
@@ -797,9 +983,10 @@ namespace Engine {
         input.imbue(std::locale::classic());
         expect(input, "GAMENGINE_SCENE");
         const auto version = read<unsigned>(input, "format version");
-        if (version != FormatVersion) {
+        if (version != LegacyFormatVersion && version != FormatVersion) {
             invalidScene("unsupported format version " + std::to_string(version));
         }
+        auto* terrainData = static_cast<std::istream*>(input.pword(terrainDataStreamSlot()));
 
         std::string section;
         input >> section;
@@ -888,7 +1075,15 @@ namespace Engine {
             }
             mesh->images.reserve(imageCount);
             for (std::size_t image = 0; image < imageCount; ++image) {
-                expect(input, "IMAGE");
+                const auto imageRecord = read<std::string>(input, "image record type");
+                if (imageRecord == "IMAGE_BIN") {
+                    if (version != FormatVersion || terrainData == nullptr) {
+                        invalidScene("embedded image data sidecar is missing");
+                    }
+                    mesh->images.push_back(readImageBinary(input, *terrainData));
+                    continue;
+                }
+                if (imageRecord != "IMAGE") invalidScene("expected 'IMAGE' or 'IMAGE_BIN'");
                 Mesh::Image value;
                 value.width = read<std::uint32_t>(input, "image width");
                 value.height = read<std::uint32_t>(input, "image height");
@@ -996,12 +1191,20 @@ namespace Engine {
                     }
                     hasRigidbody = true;
                     loaded.add<RigidbodyComponent>(entity, readRigidbody(input));
-                } else if (component == "TERRAIN" || component == "TERRAIN_V2") {
+                } else if (component == "TERRAIN" || component == "TERRAIN_V2" || component == "TERRAIN_BIN") {
                     if (hasTerrain) {
                         invalidScene("entity contains more than one TerrainComponent");
                     }
                     hasTerrain = true;
-                    TerrainComponent terrain = readTerrain(input, component == "TERRAIN_V2");
+                    TerrainComponent terrain;
+                    if (component == "TERRAIN_BIN") {
+                        if (version != FormatVersion || terrainData == nullptr) {
+                            invalidScene("terrain binary data sidecar is missing");
+                        }
+                        terrain = readTerrainBinary(input, *terrainData);
+                    } else {
+                        terrain = readTerrain(input, component == "TERRAIN_V2");
+                    }
                     loaded.add<TerrainComponent>(entity, std::move(terrain));
                 } else if (component == "TERRAIN_GRASS" || component == "TERRAIN_GRASS_V2") {
                     if (hasTerrainGrass) invalidScene("entity contains more than one TerrainGrassComponent");
