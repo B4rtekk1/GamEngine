@@ -37,6 +37,7 @@
 #include "Engine/ECS/Components/ColorPickerComponent.h"
 #include "Engine/ECS/Components/ColliderComponent.h"
 #include "Engine/ECS/Components/TerrainGrassComponent.h"
+#include "Engine/ECS/Components/WindComponent.h"
 #include "Engine/Scene/Components/LightComponent.h"
 #include "Engine/Core/Transform.h"
 #include "Engine/Core/Camera.h"

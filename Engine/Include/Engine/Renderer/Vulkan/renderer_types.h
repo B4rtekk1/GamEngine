@@ -31,6 +31,12 @@ namespace Engine {
         Vec4 cameraPosition;
         Vec4 lightDirectionIntensity;
         Vec4 lightColor;
+        // xyz: normalized world-space direction, w: displacement strength.
+        Vec4 windDirectionStrength;
+        // xyz: source position, w: radius in world units.
+        Vec4 windSourcePositionRange;
+        // x: gust strength, y: frequency, z: current time, w: previous time.
+        Vec4 windGustFrequencyTime;
         std::uint32_t shadowEnabled{0};
         std::uint32_t materialSlots{1};
         std::uint32_t selectedInstance{std::numeric_limits<std::uint32_t>::max()};

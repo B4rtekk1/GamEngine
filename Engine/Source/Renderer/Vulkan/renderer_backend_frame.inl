@@ -28,6 +28,33 @@
             return result;
         }
 
+        struct WindFrameData final {
+            Vec4 directionStrength{};
+            Vec4 sourcePositionRange{};
+            Vec4 gustFrequencyTime{};
+        };
+
+        [[nodiscard]] WindFrameData windFrameData() const {
+            WindFrameData result;
+            const Registry& readRegistry = registry;
+            bool found = false;
+            readRegistry.view<Transform, WindComponent>([&](const Entity, const Transform& transform,
+                                                             const WindComponent& wind) {
+                if (found || !wind.enabled || wind.strength <= 0.0F || wind.range <= 0.0F) return;
+                const float length = wind.direction.length();
+                if (length <= 1.0e-4F) return;
+                const float now = static_cast<float>(Time::elapsedTime());
+                const Vec3 direction = wind.direction * (1.0F / length);
+                result.directionStrength = Vec4{direction.x(), direction.y(), direction.z(), wind.strength};
+                result.sourcePositionRange = Vec4{transform.position.x(), transform.position.y(),
+                                                  transform.position.z(), wind.range};
+                result.gustFrequencyTime = Vec4{wind.gustStrength, wind.frequency, now,
+                                                 now - static_cast<float>(Time::deltaTime())};
+                found = true;
+            });
+            return result;
+        }
+
         [[nodiscard]] std::pair<std::array<LocalLightGPU, MaxLocalLights>, std::uint32_t>
         localLights() const {
             std::array<LocalLightGPU, MaxLocalLights> result{};
@@ -133,6 +160,7 @@
             }
 
             const DirectionalLight light = directionalLight();
+            const WindFrameData wind = windFrameData();
             const auto [lights, localLightCount] = localLights();
             shadowClipUpdateMask = updateVirtualShadowClipmaps(
                 cameraController.camera()->position(), shadowClipMatrices,
@@ -170,6 +198,7 @@
                      cameraController.camera()->position().z(), 1.0F},
                 Vec4{light.direction.x(), light.direction.y(), light.direction.z(), light.intensity},
                 Vec4{light.color.r(), light.color.g(), light.color.b(), 1.0F},
+                wind.directionStrength, wind.sourcePositionRange, wind.gustFrequencyTime,
                 (optimizationFeatures.shadows && hasShadowCasters) ? 1u : 0u,
                 materialSlots, editorSelectedRenderable, 0u, localLightCount, lights};
             uniformBuffers[frame].update(&data, sizeof(data));
@@ -188,6 +217,7 @@
             sceneCamera.setRotation(Degrees{cameraController.editorYaw()},
                                     Degrees{cameraController.editorPitch()});
             const DirectionalLight light = directionalLight();
+            const WindFrameData wind = windFrameData();
             const auto [lights, localLightCount] = localLights();
             sceneShadowClipUpdateMask = updateVirtualShadowClipmaps(
                 sceneCamera.position(), sceneShadowClipMatrices,
@@ -209,6 +239,7 @@
                 Vec4{sceneCamera.position().x(), sceneCamera.position().y(), sceneCamera.position().z(), 1.0F},
                 Vec4{light.direction.x(), light.direction.y(), light.direction.z(), light.intensity},
                 Vec4{light.color.r(), light.color.g(), light.color.b(), 1.0F},
+                wind.directionStrength, wind.sourcePositionRange, wind.gustFrequencyTime,
                 (optimizationFeatures.shadows && hasShadowCasters) ? 1u : 0u,
                 materialSlots, editorSelectedRenderable, 0u, localLightCount, lights};
             sceneUniformBuffers[frame].update(&data, sizeof(data));

@@ -1,3 +1,5 @@
+#include "Engine/ECS/Components/WindComponent.h"
+
 static bool drawRemovableComponentHeader(const char *label, const char *id, bool &remove) {
     const bool open = ImGui::CollapsingHeader(label, ImGuiTreeNodeFlags_DefaultOpen);
     ImGui::SameLine(ImGui::GetWindowContentRegionMax().x - ImGui::CalcTextSize("Remove").x -
@@ -284,6 +286,31 @@ bool ComponentsPanel::draw(Engine::ScenePreset &scene, const std::vector<Engine:
                     scene.editor().modify<Engine::ColorPickerComponent>(selected,
                         [&](auto &component) { component.color = light.color; });
                 }
+            }
+        }
+    }
+
+    if (scene.editor().valid(selected) && scene.editor().has<Engine::WindComponent>(selected)) {
+        bool remove = false;
+        const bool open = drawRemovableComponentHeader("Wind", "wind", remove);
+        if (remove) {
+            scene.editor().remove<Engine::WindComponent>(selected);
+        } else if (open) {
+            auto wind = scene.editor().get<Engine::WindComponent>(selected);
+            float direction[3] = {wind.direction.x(), wind.direction.y(), wind.direction.z()};
+            bool changed = ImGui::Checkbox("Enabled##wind", &wind.enabled);
+            changed |= ImGui::DragFloat3("Direction##wind", direction, 0.02F, -1.0F, 1.0F);
+            changed |= ImGui::SliderFloat("Strength##wind", &wind.strength, 0.0F, 1.0F);
+            changed |= ImGui::SliderFloat("Gust strength##wind", &wind.gustStrength, 0.0F, 0.5F);
+            changed |= ImGui::SliderFloat("Frequency##wind", &wind.frequency, 0.0F, 4.0F);
+            changed |= ImGui::DragFloat("Range##wind", &wind.range, 0.1F, 0.1F, 500.0F, "%.1f m");
+            const Engine::Vec3 candidate{direction[0], direction[1], direction[2]};
+            if (candidate.length() <= 1.0e-4F) {
+                ImGui::TextDisabled("Direction must be non-zero");
+            } else if (changed) {
+                wind.direction = candidate;
+                scene.editor().modify<Engine::WindComponent>(selected,
+                    [&](auto& component) { component = wind; });
             }
         }
     }
@@ -674,6 +701,10 @@ bool ComponentsPanel::draw(Engine::ScenePreset &scene, const std::vector<Engine:
         const bool hasRigidbody = scene.editor().has<Engine::RigidbodyComponent>(selected);
         const bool hasSmokeEmitter = scene.editor().has<Engine::SmokeEmitterComponent>(selected);
         const bool hasLight = scene.editor().has<Engine::LightComponent>(selected);
+        bool sceneHasWind = false;
+        scene.editor().view<Engine::WindComponent>([&](Engine::Entity, const auto&) {
+            sceneHasWind = true;
+        });
         if (ImGui::MenuItem("Script", nullptr, false, !hasScript)) {
             scene.editor().add<Engine::ScriptComponent>(selected);
             ImGui::CloseCurrentPopup();
@@ -704,6 +735,11 @@ bool ComponentsPanel::draw(Engine::ScenePreset &scene, const std::vector<Engine:
             ImGui::CloseCurrentPopup();
         }
         if (hasLight) ImGui::TextDisabled("Light component already added");
+        if (ImGui::MenuItem("Wind", nullptr, false, !sceneHasWind)) {
+            scene.editor().add<Engine::WindComponent>(selected);
+            ImGui::CloseCurrentPopup();
+        }
+        if (sceneHasWind) ImGui::TextDisabled("Only one Wind source is currently supported");
         ImGui::EndPopup();
     }
     if (EditorButton("Attach C++ Script", {-1.0F, 0.0F}).draw()) ImGui::OpenPopup("Attach C++ Script");
@@ -765,3 +801,4 @@ bool ComponentsPanel::draw(Engine::ScenePreset &scene, const std::vector<Engine:
     ImGui::End();
     return consumesMouseWheel;
 }
+#include "Engine/ECS/Components/WindComponent.h"

@@ -1,6 +1,7 @@
 import Common.PbrLighting;
 import Common.SceneData;
 import Common.ShadowSampling;
+import Common.GrassWind;
 
 [[vk::binding(1, 0)]] ConstantBuffer<RendererFrameData> frame;
 
@@ -43,10 +44,24 @@ ForwardVertexOutput vertexMain(ForwardVertexInput input, uint instanceIndex : SV
     float grassHeight = input.grassDeformation.w > 0.0 ? 1.0 / input.grassDeformation.w : 0.0;
     localPosition.xz += input.grassDeformation.xy * bendWeight * grassHeight * 0.8;
     localPosition.y -= bendWeight * (0.25 + 0.30 * normalizedHeight) * grassHeight;
+    // Wind is authored in world space. Convert it into the card's local
+    // frame first, otherwise randomized blade yaw makes neighbouring grass
+    // sway in unrelated directions.
+    float4 inverseInstanceRotation = float4(-input.instanceRotation.xyz, input.instanceRotation.w);
+    float3 windOffset = grassWindDisplacement(input.positionMaterial.xz, inverseInstanceRotation,
+                                              normalizedHeight, grassHeight,
+                                              frame.windGustFrequencyTime.z,
+                                              frame.windDirectionStrength,
+                                              frame.windSourcePositionRange,
+                                              frame.windGustFrequencyTime);
+    localPosition += windOffset;
     float bendSlope = 1.6 * normalizedHeight * (1.0 - normalizedHeight) * input.grassDeformation.z;
     localNormal = normalize(localNormal + float3(-input.grassDeformation.x * bendSlope,
                                                 0.0,
                                                -input.grassDeformation.y * bendSlope));
+    float windSlope = 1.8 * normalizedHeight / max(grassHeight, 1.0e-4);
+    localNormal = normalize(localNormal + float3(-windOffset.x * windSlope, 0.0,
+                                                  -windOffset.z * windSlope));
 
     float4 q = input.instanceRotation;
     float3x3 rotationMatrix = float3x3(

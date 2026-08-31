@@ -1,4 +1,5 @@
 import Common.SceneData;
+import Common.GrassWind;
 
 [[vk::binding(1, 0)]] ConstantBuffer<RendererFrameData> frame;
 [[vk::binding(2, 0)]] StructuredBuffer<MaterialData> materials;
@@ -46,6 +47,13 @@ VertexOutput vertexMain(VertexInput input)
     float grassHeight = input.grassDeformation.w > 0.0 ? 1.0 / input.grassDeformation.w : 0.0;
     localPosition.xz += input.grassDeformation.xy * bendWeight * grassHeight * 0.8;
     localPosition.y -= bendWeight * (0.25 + 0.30 * normalizedHeight) * grassHeight;
+    float4 inverseRotation = float4(-input.rotation.xyz, input.rotation.w);
+    localPosition += grassWindDisplacement(input.positionMaterial.xz, inverseRotation,
+                                           normalizedHeight, grassHeight,
+                                           frame.windGustFrequencyTime.z,
+                                           frame.windDirectionStrength,
+                                           frame.windSourcePositionRange,
+                                           frame.windGustFrequencyTime);
 
     float3 previousLocalPosition = input.position;
     float previousNormalizedHeight = clamp((input.position.y - input.previousScale.w) *
@@ -59,6 +67,13 @@ VertexOutput vertexMain(VertexInput input)
                                 previousGrassHeight * 0.8;
     previousLocalPosition.y -= previousBendWeight * (0.25 + 0.30 * previousNormalizedHeight) *
                                previousGrassHeight;
+    float4 inversePreviousRotation = float4(-input.previousRotation.xyz, input.previousRotation.w);
+    previousLocalPosition += grassWindDisplacement(input.previousPosition.xz, inversePreviousRotation,
+                                                   previousNormalizedHeight, previousGrassHeight,
+                                                   frame.windGustFrequencyTime.w,
+                                                   frame.windDirectionStrength,
+                                                   frame.windSourcePositionRange,
+                                                   frame.windGustFrequencyTime);
 
     float4 currentWorld = float4(rotateByQuaternion(localPosition * input.scaleBase.xyz,
                                                     input.rotation) + input.positionMaterial.xyz, 1.0);

@@ -16,6 +16,9 @@ struct RendererFrameData
     float4 cameraPosition;
     float4 lightDirectionIntensity;
     float4 lightColor;
+    float4 windDirectionStrength;
+    float4 windSourcePositionRange;
+    float4 windGustFrequencyTime;
     uint shadowEnabled;
     uint materialSlots;
     uint selectedInstance;

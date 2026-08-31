@@ -12,6 +12,7 @@
 #include "Engine/ECS/Components/ProceduralCloudComponent.h"
 #include "Engine/ECS/Components/TerrainComponent.h"
 #include "Engine/ECS/Components/TerrainGrassComponent.h"
+#include "Engine/ECS/Components/WindComponent.h"
 #include "Engine/ECS/Registry.h"
 #include "Engine/Renderer/MeshRenderer.h"
 #include "Engine/Scene/Scene.h"
@@ -887,6 +888,20 @@ namespace Engine {
                 serialized << ' ' << static_cast<int>(light.enabled) << ' '
                         << static_cast<int>(light.castShadows) << '\n';
             }
+            if (registry.has<WindComponent>(entity)) {
+                const auto& wind = registry.get<WindComponent>(entity);
+                serialized << "WIND_V2 ";
+                writeVec3(serialized, wind.direction);
+                serialized << ' ';
+                writeFloat(serialized, wind.strength);
+                serialized << ' ';
+                writeFloat(serialized, wind.gustStrength);
+                serialized << ' ';
+                writeFloat(serialized, wind.frequency);
+                serialized << ' ';
+                writeFloat(serialized, wind.range);
+                serialized << ' ' << static_cast<int>(wind.enabled) << '\n';
+            }
             if (registry.has<CameraComponent>(entity)) {
                 const auto &camera = registry.get<CameraComponent>(entity);
                 serialized << "CAMERA " << static_cast<int>(camera.projection) << ' ';
@@ -1115,6 +1130,7 @@ namespace Engine {
             bool hasTransform = false;
             bool hasRenderer = false;
             bool hasLight = false;
+            bool hasWind = false;
             bool hasCamera = false;
             bool hasScript = false;
             bool hasColorPicker = false;
@@ -1257,12 +1273,22 @@ namespace Engine {
                     renderer.castShadow = readBool(input, "cast-shadow flag");
                     renderer.cullingBatch = read<std::uint32_t>(input, "culling batch");
                     loaded.add<MeshRenderer>(entity, std::move(renderer));
-                } else if (component == "WIND") {
-                    // WIND belonged to an experimental component which is no
-                    // longer part of the runtime.  Consume its old payload so
-                    // scenes saved by that editor version remain loadable.
-                    for (int value = 0; value < 7; ++value)
-                        static_cast<void>(readFloat(input, "legacy wind value"));
+                } else if (component == "WIND" || component == "WIND_V2") {
+                    if (hasWind) invalidScene("entity contains more than one WindComponent");
+                    hasWind = true;
+                    WindComponent wind;
+                    wind.direction = readVec3(input, "wind direction");
+                    wind.strength = readFloat(input, "wind strength");
+                    wind.gustStrength = readFloat(input, "wind gust strength");
+                    wind.frequency = readFloat(input, "wind frequency");
+                    if (component == "WIND_V2")
+                        wind.range = readFloat(input, "wind range");
+                    wind.enabled = readBool(input, "wind enabled flag");
+                    if (wind.direction.length() <= 1.0e-4F || wind.strength < 0.0F ||
+                        wind.gustStrength < 0.0F || wind.frequency < 0.0F || wind.range <= 0.0F) {
+                        invalidScene("wind settings are invalid");
+                    }
+                    loaded.add<WindComponent>(entity, wind);
                 } else if (component == "LIGHT") {
                     if (hasLight) {
                         invalidScene("entity contains more than one LightComponent");

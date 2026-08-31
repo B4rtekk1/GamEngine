@@ -1,4 +1,5 @@
 import Common.SceneData;
+import Common.GrassWind;
 
 struct PushConstants
 {
@@ -38,6 +39,13 @@ ShadowVertexOutput vertexMain(ShadowVertexInput input, uint instanceIndex : SV_I
     float grassHeight = input.grassDeformation.w > 0.0 ? 1.0 / input.grassDeformation.w : 0.0;
     localPosition.xz += input.grassDeformation.xy * bendWeight * grassHeight * 0.8;
     localPosition.y -= bendWeight * (0.25 + 0.30 * normalizedHeight) * grassHeight;
+    float4 inverseInstanceRotation = float4(-input.instanceRotation.xyz, input.instanceRotation.w);
+    localPosition += grassWindDisplacement(input.positionMaterial.xz, inverseInstanceRotation,
+                                           normalizedHeight, grassHeight,
+                                           frame.windGustFrequencyTime.z,
+                                           frame.windDirectionStrength,
+                                           frame.windSourcePositionRange,
+                                           frame.windGustFrequencyTime);
     float4 q = input.instanceRotation;
     float3x3 rotationMatrix = float3x3(
         1.0 - 2.0 * (q.y * q.y + q.z * q.z), 2.0 * (q.x * q.y + q.z * q.w), 2.0 * (q.x * q.z - q.y * q.w),
