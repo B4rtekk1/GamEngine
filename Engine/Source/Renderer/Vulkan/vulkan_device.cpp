@@ -146,7 +146,7 @@ bool VulkanDevice::isSuitable(VkPhysicalDevice candidate) const {
     VkPhysicalDeviceVulkan13Features features13{.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES};
     VkPhysicalDeviceVulkan12Features features12{.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES};
     VkPhysicalDeviceVulkan11Features features11{.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_1_FEATURES};
-    VkPhysicalDeviceFeatures2 features2{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2};
+    VkPhysicalDeviceFeatures2 features2{.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2};
     features2.pNext = &features11;
     features11.pNext = &features12;
     features12.pNext = &features13;
@@ -182,7 +182,7 @@ bool VulkanDevice::hasAdequateSwapchain(VkPhysicalDevice candidate) const {
            presentModeCount > 0;
 }
 
-int VulkanDevice::scoreDevice(VkPhysicalDevice candidate) {
+int VulkanDevice::scoreDevice(const VkPhysicalDevice candidate) {
     VkPhysicalDeviceProperties properties{};
     vkGetPhysicalDeviceProperties(candidate, &properties);
 
@@ -216,7 +216,7 @@ void VulkanDevice::selectPhysicalDevice(VkInstance instance) {
     int bestScore = std::numeric_limits<int>::min();
     VkPhysicalDevice bestDevice = VK_NULL_HANDLE;
 
-    for (VkPhysicalDevice candidate : candidates) {
+    for (const VkPhysicalDevice candidate : candidates) {
         if (!isSuitable(candidate)) {
             continue;
         }

@@ -26,6 +26,15 @@ public:
      */
     [[nodiscard]] static Project defaults(const std::filesystem::path& rootDirectory);
 
+    /**
+     * Creates a standalone project directory and returns its manifest-backed
+     * configuration. The directory must not already contain project files.
+     * The created project contains only game-owned files; the engine executable
+     * and its source tree remain external dependencies.
+     */
+    [[nodiscard]] static Project create(const std::filesystem::path& rootDirectory,
+                                        std::string name = {});
+
     [[nodiscard]] const std::string& name() const noexcept { return name_; }
     [[nodiscard]] const std::filesystem::path& manifestPath() const noexcept { return manifestPath_; }
     [[nodiscard]] const std::filesystem::path& rootPath() const noexcept { return rootPath_; }

@@ -99,13 +99,22 @@ namespace {
 int main(int argc, char** argv) {
     try {
         std::optional<std::filesystem::path> projectPath;
+        std::optional<std::filesystem::path> createProjectPath;
         for (int index = 1; index < argc; ++index) {
             if (std::string_view{argv[index]} == "--project") {
                 if (++index == argc) throw std::runtime_error("--project requires a file path");
                 projectPath = argv[index];
+            } else if (std::string_view{argv[index]} == "--create-project") {
+                if (++index == argc) throw std::runtime_error("--create-project requires a directory path");
+                createProjectPath = argv[index];
             }
         }
-        const Engine::Project project = projectPath
+        if (projectPath && createProjectPath) {
+            throw std::runtime_error("Use either --project or --create-project, not both");
+        }
+        const Engine::Project project = createProjectPath
+                                            ? Engine::Project::create(*createProjectPath)
+                                            : projectPath
                                             ? Engine::Project::load(*projectPath)
                                             : [&] {
                                                   try {

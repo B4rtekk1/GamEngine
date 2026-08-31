@@ -47,6 +47,23 @@ TEST(Project, UsesBuiltInPathsWithoutManifest) {
     EXPECT_EQ(project.startupScene(), directory / "Assets/Scenes/Editor.scene");
 }
 
+TEST(Project, CreatesStandaloneProjectFolder) {
+    const auto directory = std::filesystem::temp_directory_path() /
+                           ("gameengine-created-project-" + std::to_string(
+                               std::chrono::steady_clock::now().time_since_epoch().count()));
+    const Engine::Project project = Engine::Project::create(directory, "Standalone Game");
+    EXPECT_EQ(project.name(), "Standalone Game");
+    EXPECT_EQ(project.rootPath(), directory);
+    EXPECT_TRUE(std::filesystem::is_regular_file(directory / "GamEngine.project"));
+    EXPECT_TRUE(std::filesystem::is_regular_file(directory / "Assets/Scenes/Main.scene"));
+    EXPECT_TRUE(std::filesystem::is_directory(directory / "Assets/Models"));
+    EXPECT_TRUE(std::filesystem::is_directory(directory / "Assets/Textures"));
+    EXPECT_TRUE(std::filesystem::is_directory(directory / "Scripts"));
+    EXPECT_THROW(static_cast<void>(Engine::Project::create(directory)), std::runtime_error);
+    std::error_code error;
+    std::filesystem::remove_all(directory, error);
+}
+
 TEST(Project, RejectsPathOutsideProject) {
     const auto directory = std::filesystem::temp_directory_path() /
                            ("gameengine-invalid-project-" + std::to_string(

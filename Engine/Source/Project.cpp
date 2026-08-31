@@ -96,6 +96,41 @@ Project Project::defaults(const std::filesystem::path& rootDirectory) {
     return project;
 }
 
+Project Project::create(const std::filesystem::path& rootDirectory, std::string name) {
+    const auto root = std::filesystem::absolute(rootDirectory).lexically_normal();
+    if (root.empty() || (std::filesystem::exists(root) && !std::filesystem::is_empty(root))) {
+        throw std::runtime_error("Project directory must be empty: " + root.string());
+    }
+    if (name.empty()) name = root.filename().string();
+    if (name.empty()) throw std::runtime_error("Project name cannot be empty");
+
+    std::error_code error;
+    std::filesystem::create_directories(root / "Assets" / "Scenes", error);
+    if (error) throw std::runtime_error("Could not create project directories: " + error.message());
+    std::filesystem::create_directories(root / "Assets" / "Models", error);
+    if (error) throw std::runtime_error("Could not create project directories: " + error.message());
+    std::filesystem::create_directories(root / "Assets" / "Textures", error);
+    if (error) throw std::runtime_error("Could not create project directories: " + error.message());
+    std::filesystem::create_directories(root / "Scripts", error);
+    if (error) throw std::runtime_error("Could not create project directories: " + error.message());
+
+    const auto manifest = root / "GamEngine.project";
+    std::ofstream manifestOutput{manifest};
+    if (!manifestOutput) throw std::runtime_error("Could not create project manifest: " + manifest.string());
+    manifestOutput << "# GamEngine project\nname = " << name
+                   << "\nasset_root = Assets\nstartup_scene = Assets/Scenes/Main.scene\n";
+    if (!manifestOutput) throw std::runtime_error("Could not write project manifest: " + manifest.string());
+    manifestOutput.close();
+
+    const auto scene = root / "Assets" / "Scenes" / "Main.scene";
+    std::ofstream sceneOutput{scene};
+    if (!sceneOutput) throw std::runtime_error("Could not create starter scene: " + scene.string());
+    sceneOutput << "GAMENGINE_SCENE 12\nSETTINGS MSAA 0\nMESHES 0\nENTITIES 0\nEND_SCENE\n";
+    if (!sceneOutput) throw std::runtime_error("Could not write starter scene: " + scene.string());
+    sceneOutput.close();
+    return load(manifest);
+}
+
 std::filesystem::path Project::resolve(const std::filesystem::path& path) const {
     return path.is_absolute() ? path : (rootPath_ / path).lexically_normal();
 }
