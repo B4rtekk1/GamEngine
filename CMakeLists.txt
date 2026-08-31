@@ -266,6 +266,7 @@ set(SLANG_SHADER_SOURCES
         Assets/Shaders/Particles/particle_simulation.slang
         Assets/Shaders/PostProcess/aces_tonemap.slang
         Assets/Shaders/PostProcess/temporal_aa.slang
+        Assets/Shaders/PostProcess/temporal_velocity.slang
         Assets/Shaders/Samples/basic_pbr.slang
         Assets/Shaders/Shadow/shadow_map.slang
         Assets/Shaders/UI/canvas.slang)

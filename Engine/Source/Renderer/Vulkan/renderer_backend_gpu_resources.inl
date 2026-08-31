@@ -342,6 +342,70 @@
                     throw std::runtime_error("Could not create Hi-Z depth prepass framebuffer");
                 }
             }
+
+            if (antialiasingLevel == AntialiasingLevel::TAA) {
+                velocityBuffer.create(vulkanDevice.physical(), device, extent,
+                                      vulkanDevice.allocator(), VK_FILTER_NEAREST);
+                GraphicsPipelineOptions velocityOptions{};
+                velocityOptions.colorFormat = HdrBuffer::Format;
+                velocityOptions.depthFormat = depthBuffer.format();
+                velocityOptions.colorFinalLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+                velocityOptions.depthLoadOp = VK_ATTACHMENT_LOAD_OP_LOAD;
+                velocityOptions.depthInitialLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL;
+                velocityOptions.depthFinalLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL;
+                velocityOptions.shader = "shaders/temporal_velocity.spv";
+                velocityOptions.assetManager = &assetManager;
+                velocityOptions.cullMode = VK_CULL_MODE_BACK_BIT;
+                velocityOptions.depthTestEnable = VK_TRUE;
+                velocityOptions.depthWriteEnable = VK_FALSE;
+                velocityOptions.depthCompareOp = VK_COMPARE_OP_LESS_OR_EQUAL;
+                velocityOptions.descriptorSetLayouts = {shadowPass.descriptorSetLayout()};
+                velocityOptions.vertexBindings = {
+                    {0, sizeof(Vertex), VK_VERTEX_INPUT_RATE_VERTEX},
+                    {1, sizeof(RendererInstanceData), VK_VERTEX_INPUT_RATE_INSTANCE}};
+                velocityOptions.vertexAttributes = {
+                    {0, 0, VK_FORMAT_R32G32B32_SFLOAT, offsetof(Vertex, position)},
+                    {2, 0, VK_FORMAT_R32G32_SFLOAT, offsetof(Vertex, texCoord)},
+                    {8, 0, VK_FORMAT_R32_UINT, offsetof(Vertex, materialIndex)},
+                    {4, 1, VK_FORMAT_R32G32B32A32_SFLOAT, offsetof(RendererInstanceData, positionMaterial)},
+                    {5, 1, VK_FORMAT_R32G32B32A32_SFLOAT, offsetof(RendererInstanceData, rotation)},
+                    {6, 1, VK_FORMAT_R32G32B32A32_SFLOAT, offsetof(RendererInstanceData, scaleBase)},
+                    {13, 1, VK_FORMAT_R32G32B32A32_SFLOAT, offsetof(RendererInstanceData, grassDeformation)},
+                    {14, 1, VK_FORMAT_R32G32B32A32_SFLOAT, offsetof(RendererInstanceData, previousPosition)},
+                    {15, 1, VK_FORMAT_R32G32B32A32_SFLOAT, offsetof(RendererInstanceData, previousRotation)},
+                    {16, 1, VK_FORMAT_R32G32B32A32_SFLOAT, offsetof(RendererInstanceData, previousScale)},
+                    {17, 1, VK_FORMAT_R32G32B32A32_SFLOAT,
+                     offsetof(RendererInstanceData, previousGrassDeformation)}};
+                velocityPipeline.create(device, velocityOptions);
+                GraphicsPipelineOptions foliageVelocityOptions = velocityOptions;
+                foliageVelocityOptions.existingRenderPass = velocityPipeline.renderPass();
+                foliageVelocityOptions.cullMode = VK_CULL_MODE_NONE;
+                foliageVelocityPipeline.create(device, foliageVelocityOptions);
+
+                const VkImageView velocityAttachments[] = {
+                    velocityBuffer.imageView(), depthBuffer.imageView()};
+                VkFramebufferCreateInfo velocityInfo{VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO};
+                velocityInfo.renderPass = velocityPipeline.renderPass();
+                velocityInfo.attachmentCount = 2;
+                velocityInfo.pAttachments = velocityAttachments;
+                velocityInfo.width = extent.width;
+                velocityInfo.height = extent.height;
+                velocityInfo.layers = 1;
+                if (vkCreateFramebuffer(device, &velocityInfo, nullptr,
+                                        &velocityFramebuffer) != VK_SUCCESS) {
+                    throw std::runtime_error("Could not create TAA velocity framebuffer");
+                }
+            }
+        }
+
+        void destroyVelocityResources() noexcept {
+            if (velocityFramebuffer != VK_NULL_HANDLE) {
+                vkDestroyFramebuffer(device, velocityFramebuffer, nullptr);
+                velocityFramebuffer = VK_NULL_HANDLE;
+            }
+            foliageVelocityPipeline.destroy();
+            velocityPipeline.destroy();
+            velocityBuffer.destroy();
         }
 
         void createSceneViewportResources() {

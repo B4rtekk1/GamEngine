@@ -30,10 +30,13 @@ namespace Engine {
         VkSampleCountFlagBits samples = VK_SAMPLE_COUNT_1_BIT;
         /// Load operation for the color attachment.
         VkAttachmentLoadOp colorLoadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+        VkAttachmentLoadOp depthLoadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
         /// Layout expected when the color attachment is first used.
         VkImageLayout colorInitialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
         /// Layout required after rendering completes.
         VkImageLayout colorFinalLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
+        VkImageLayout depthInitialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+        VkImageLayout depthFinalLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL;
 
         /// SPIR-V module containing both vertexMain and fragmentMain.
         std::filesystem::path shader;

@@ -24,6 +24,8 @@ namespace Engine {
     struct RendererUniformBufferObject {
         Mat4 view;
         Mat4 projection;
+        Mat4 previousView;
+        Mat4 previousProjection;
         // Camera-centred directional-light virtual clipmaps.
         std::array<Mat4, 4> shadowClipMatrices{};
         Vec4 cameraPosition;
@@ -51,5 +53,9 @@ namespace Engine {
         glm::vec4 scaleBase{1.0F, 1.0F, 1.0F, 0.0F};
         // xyz: bend X, bend Z, trample; w: reciprocal grass mesh height.
         glm::vec4 grassDeformation{};
+        glm::vec4 previousGrassDeformation{};
+        glm::vec4 previousPosition{};
+        glm::vec4 previousRotation{0.0F, 0.0F, 0.0F, 1.0F};
+        glm::vec4 previousScale{1.0F};
     };
 } // namespace Engine

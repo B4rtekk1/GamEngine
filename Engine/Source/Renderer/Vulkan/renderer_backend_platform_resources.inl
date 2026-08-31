@@ -356,6 +356,7 @@
             canvasRenderer.destroy();
             tonemapPass.destroy();
             temporalAaPass.destroy();
+            destroyVelocityResources();
 
             if (hiZDepthPrepassFramebuffer != VK_NULL_HANDLE) {
                 vkDestroyFramebuffer(device, hiZDepthPrepassFramebuffer, nullptr);
@@ -433,7 +434,8 @@
             if (antialiasingLevel != AntialiasingLevel::TAA) return;
             temporalAaPass.create(vulkanDevice.physical(), device, swapchain.extent(),
                                   vulkanDevice.allocator(), hdrBuffer.imageView(),
-                                  hdrBuffer.sampler(), assetManager);
+                                  hdrBuffer.sampler(), velocityBuffer.imageView(),
+                                  velocityBuffer.sampler(), assetManager);
         }
 
         void createUIResources() {

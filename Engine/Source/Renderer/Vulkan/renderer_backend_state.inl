@@ -25,6 +25,10 @@
 
         MsaaResources msaa;
         HdrBuffer hdrBuffer;
+        HdrBuffer velocityBuffer;
+        GraphicsPipeline velocityPipeline;
+        GraphicsPipeline foliageVelocityPipeline;
+        VkFramebuffer velocityFramebuffer = VK_NULL_HANDLE;
         // A single-sample depth target used exclusively to generate Hi-Z when
         // the visible geometry is rendered with MSAA.
         DepthBuffer hiZDepthBuffer;
@@ -164,6 +168,11 @@
         float taaJitterX = 0.0F;
         float taaJitterY = 0.0F;
         bool taaResolveActive = false;
+        Mat4 previousGameView{};
+        Mat4 previousGameProjection{};
+        Vec3 previousGameCameraPosition{};
+        Vec3 previousGameCameraForward{};
+        bool previousGameCameraValid = false;
 
         bool framebufferResized = false;
         bool cleanedUp = false;

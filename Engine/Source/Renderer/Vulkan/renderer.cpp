@@ -338,6 +338,9 @@ namespace Engine {
             }
 
             destroyCullingResources();
+            tonemapPass.destroy();
+            temporalAaPass.destroy();
+            destroyVelocityResources();
             if (hiZDepthPrepassFramebuffer != VK_NULL_HANDLE) {
                 vkDestroyFramebuffer(device, hiZDepthPrepassFramebuffer, nullptr);
             }
@@ -421,6 +424,8 @@ namespace Engine {
             createSceneSkyPass();
             createFramebuffers();
             createSceneViewportResources();
+            createTemporalAaPass();
+            createTonemapPass();
             refreshEditorViewportTextures();
             assetManager.unload_unused();
         }
@@ -452,6 +457,9 @@ namespace Engine {
             }
 
             destroyCullingResources();
+            tonemapPass.destroy();
+            temporalAaPass.destroy();
+            destroyVelocityResources();
             if (hiZDepthPrepassFramebuffer != VK_NULL_HANDLE) {
                 vkDestroyFramebuffer(device, hiZDepthPrepassFramebuffer, nullptr);
                 hiZDepthPrepassFramebuffer = VK_NULL_HANDLE;
@@ -517,6 +525,9 @@ namespace Engine {
             createSceneSkyPass();
             createFramebuffers();
             createSceneViewportFramebuffer();
+            createTemporalAaPass();
+            createTonemapPass();
+            refreshEditorViewportTextures();
             renderableTopologySignature = updatedTopology;
             assetManager.unload_unused();
         }

@@ -77,16 +77,18 @@ namespace Engine {
             .flags = 0,
             .format = options.depthFormat,
             .samples = options.samples,
-            .loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR,
+            .loadOp = options.depthLoadOp,
             .storeOp = VK_ATTACHMENT_STORE_OP_STORE,
             .stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE,
             .stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE,
-            .initialLayout = VK_IMAGE_LAYOUT_UNDEFINED,
-            .finalLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL,
+            .initialLayout = options.depthInitialLayout,
+            .finalLayout = options.depthFinalLayout,
         };
 
         VkAttachmentReference colorRef{0, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL};
-        VkAttachmentReference depthRef{1, VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL};
+        VkAttachmentReference depthRef{1, options.depthWriteEnable
+                                              ? VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL
+                                              : VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL};
         VkAttachmentReference resolveRef{
             usesDepth ? 2U : 1U,
             VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
@@ -112,10 +114,15 @@ namespace Engine {
                 options.colorInitialLayout == VK_IMAGE_LAYOUT_UNDEFINED
                     ? 0
                     : VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+        if (usesDepth && options.depthInitialLayout != VK_IMAGE_LAYOUT_UNDEFINED) {
+            dependency.srcAccessMask |= VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT;
+        }
         dependency.dstAccessMask = static_cast<VkAccessFlags>(VK_ACCESS_COLOR_ATTACHMENT_READ_BIT) |
                                    static_cast<VkAccessFlags>(VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT) |
                                    (usesDepth
-                                        ? static_cast<VkAccessFlags>(VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT)
+                                        ? static_cast<VkAccessFlags>(options.depthWriteEnable
+                                              ? VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT
+                                              : VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT)
                                         : VkAccessFlags{0});
 
         std::vector<VkAttachmentDescription> attachments{color};

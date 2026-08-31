@@ -10,6 +10,8 @@ struct RendererFrameData
 {
     float4x4 view;
     float4x4 projection;
+    float4x4 previousView;
+    float4x4 previousProjection;
     float4x4 shadowClipMatrices[4];
     float4 cameraPosition;
     float4 lightDirectionIntensity;

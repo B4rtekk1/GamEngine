@@ -146,8 +146,25 @@
             } else {
                 shadowPass.invalidateCache();
             }
+            const Mat4 currentView = cameraController.camera()->viewMatrix();
+            const Mat4 currentProjection = cameraController.camera()->projectionMatrix();
+            const Vec3 currentCameraPosition = cameraController.camera()->position();
+            const Vec3 currentCameraForward = cameraController.camera()->forward();
+            // Motion vectors describe continuous motion.  Reusing history after
+            // a teleport or a large orientation jump produces unavoidable
+            // ghosting, so treat it as a camera cut instead.
+            constexpr float cameraCutDistance = 5.0F;
+            constexpr float cameraCutDirectionDot = 0.8660254F; // 30 degrees
+            const bool cameraCut = previousGameCameraValid &&
+                ((currentCameraPosition - previousGameCameraPosition).length() > cameraCutDistance ||
+                 dot(currentCameraForward, previousGameCameraForward) < cameraCutDirectionDot);
+            if (taaResolveActive && cameraCut) {
+                temporalAaPass.reset();
+            }
             const UniformBufferObject data{
-                cameraController.camera()->viewMatrix(), cameraController.camera()->projectionMatrix(),
+                currentView, currentProjection,
+                previousGameCameraValid ? previousGameView : currentView,
+                previousGameCameraValid ? previousGameProjection : currentProjection,
                 shadowClipMatrices,
                 Vec4{cameraController.camera()->position().x(), cameraController.camera()->position().y(),
                      cameraController.camera()->position().z(), 1.0F},
@@ -156,6 +173,11 @@
                 (optimizationFeatures.shadows && hasShadowCasters) ? 1u : 0u,
                 materialSlots, editorSelectedRenderable, 0u, localLightCount, lights};
             uniformBuffers[frame].update(&data, sizeof(data));
+            previousGameView = currentView;
+            previousGameProjection = currentProjection;
+            previousGameCameraPosition = currentCameraPosition;
+            previousGameCameraForward = currentCameraForward;
+            previousGameCameraValid = true;
         }
 
         void updateSceneViewportUniformBuffer(const uint32_t frame) {
@@ -179,8 +201,10 @@
             } else {
                 sceneDescriptorPass.invalidateCache();
             }
+            const Mat4 sceneView = sceneCamera.viewMatrix();
+            const Mat4 sceneProjection = sceneCamera.projectionMatrix();
             const UniformBufferObject data{
-                sceneCamera.viewMatrix(), sceneCamera.projectionMatrix(),
+                sceneView, sceneProjection, sceneView, sceneProjection,
                 sceneShadowClipMatrices,
                 Vec4{sceneCamera.position().x(), sceneCamera.position().y(), sceneCamera.position().z(), 1.0F},
                 Vec4{light.direction.x(), light.direction.y(), light.direction.z(), light.intensity},
@@ -335,6 +359,41 @@
                                     indirectDraws[currentFrame]);
             ForwardPass::end(commandBuffer);
 
+            if (taaResolveActive) {
+                VkClearValue velocityClear{};
+                VkRenderPassBeginInfo velocityPass{VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO};
+                velocityPass.renderPass = velocityPipeline.renderPass();
+                velocityPass.framebuffer = velocityFramebuffer;
+                velocityPass.renderArea.extent = swapchain.extent();
+                velocityPass.clearValueCount = 1;
+                velocityPass.pClearValues = &velocityClear;
+                vkCmdBeginRenderPass(commandBuffer, &velocityPass, VK_SUBPASS_CONTENTS_INLINE);
+                vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS,
+                                  velocityPipeline.handle());
+                const VkDescriptorSet sceneSet = shadowPass.descriptorSet(currentFrame);
+                vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS,
+                                        velocityPipeline.layout(), 0, 1, &sceneSet, 0, nullptr);
+                const VkBuffer velocityVertexBuffers[] = {
+                    vertexBuffer.handle(), instanceBuffers[currentFrame].handle()};
+                constexpr VkDeviceSize velocityOffsets[] = {0, 0};
+                vkCmdBindVertexBuffers(commandBuffer, 0, 2, velocityVertexBuffers,
+                                       velocityOffsets);
+                vkCmdBindIndexBuffer(commandBuffer, indexBuffer.handle(), 0, VK_INDEX_TYPE_UINT32);
+                const VkViewport velocityViewport{0.0F, 0.0F,
+                    static_cast<float>(swapchain.extent().width),
+                    static_cast<float>(swapchain.extent().height), 0.0F, 1.0F};
+                const VkRect2D velocityScissor{{0, 0}, swapchain.extent()};
+                vkCmdSetViewport(commandBuffer, 0, 1, &velocityViewport);
+                vkCmdSetScissor(commandBuffer, 0, 1, &velocityScissor);
+                ForwardPass::draw(commandBuffer, indirectDraws[currentFrame]);
+                vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS,
+                                  foliageVelocityPipeline.handle());
+                vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS,
+                                        foliageVelocityPipeline.layout(), 0, 1, &sceneSet, 0, nullptr);
+                ForwardPass::draw(commandBuffer, foliageIndirectDraws[currentFrame]);
+                vkCmdEndRenderPass(commandBuffer);
+            }
+
             if (renderSceneViewport) {
                 // Scene View has a separate frustum and therefore needs its own
                 // indirect list. The game camera's list must not hide objects
@@ -464,6 +523,7 @@
             canvasRenderer.destroy();
             tonemapPass.destroy();
             temporalAaPass.destroy();
+            destroyVelocityResources();
             if (hiZDepthPrepassFramebuffer != VK_NULL_HANDLE) {
                 vkDestroyFramebuffer(device, hiZDepthPrepassFramebuffer, nullptr);
                 hiZDepthPrepassFramebuffer = VK_NULL_HANDLE;
@@ -522,6 +582,7 @@
             canvasRenderer.destroy();
             tonemapPass.destroy();
             temporalAaPass.destroy();
+            destroyVelocityResources();
             if (hdrFramebuffer != VK_NULL_HANDLE) {
                 vkDestroyFramebuffer(device, hdrFramebuffer, nullptr);
                 hdrFramebuffer = VK_NULL_HANDLE;

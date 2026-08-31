@@ -19,6 +19,7 @@ namespace Engine {
 
         void create(VkPhysicalDevice physicalDevice, VkDevice device, VkExtent2D extent,
                     VmaAllocator allocator, VkImageView currentView, VkSampler sampler,
+                    VkImageView velocityView, VkSampler velocitySampler,
                     Assets::AssetManager& assets);
         void destroy() noexcept;
         void reset() noexcept;

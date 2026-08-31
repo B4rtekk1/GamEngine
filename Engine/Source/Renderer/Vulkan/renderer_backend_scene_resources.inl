@@ -465,6 +465,12 @@
             instanceModels.resize(renderables.size());
             materials.resize(renderables.size() * materialSlots);
             updateRenderableBuffers();
+            for (RendererInstanceData& model : instanceModels) {
+                model.previousPosition = glm::vec4{glm::vec3{model.positionMaterial}, 0.0F};
+                model.previousRotation = model.rotation;
+                model.previousScale = model.scaleBase;
+                model.previousGrassDeformation = model.grassDeformation;
+            }
             for (Buffer& buffer : instanceBuffers) {
                 buffer.createHostVisible(vulkanDevice.physical(), device,
                     sizeof(RendererInstanceData) * std::max<std::size_t>(1, instanceModels.size()),
@@ -565,9 +571,13 @@
 }
 
             const uint8_t bit = frameBit(currentFrame);
-            uploadDirtyIndices(DirtyIndexUploadRequest<RendererInstanceData>{
-                instanceBuffers[currentFrame], instanceModels,
-                &RenderableRecord::transformDirtyFrames, dirtyTransforms[currentFrame]});
+            // Velocity needs the immediately preceding pose, not the pose from
+            // whichever frame-in-flight last owned this buffer. Upload the
+            // compact instance table every frame, then advance the CPU history.
+            if (!instanceModels.empty()) {
+                instanceBuffers[currentFrame].update(
+                    instanceModels.data(), sizeof(RendererInstanceData) * instanceModels.size());
+            }
             clearDirtyIndices(&RenderableRecord::transformDirtyFrames,
                               dirtyTransforms[currentFrame], bit);
             for (const std::size_t index : dirtyMaterials[currentFrame]) {
@@ -578,6 +588,12 @@
             }
             clearDirtyIndices(&RenderableRecord::materialDirtyFrames,
                               dirtyMaterials[currentFrame], bit);
+            for (RendererInstanceData& model : instanceModels) {
+                model.previousPosition = glm::vec4{glm::vec3{model.positionMaterial}, 0.0F};
+                model.previousRotation = model.rotation;
+                model.previousScale = model.scaleBase;
+                model.previousGrassDeformation = model.grassDeformation;
+            }
         }
 
         void updateRenderableBuffers() {

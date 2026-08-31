@@ -8,7 +8,8 @@ namespace Engine {
     }
 
     void HdrBuffer::create(const VkPhysicalDevice physicalDevice, const VkDevice device,
-                           const VkExtent2D extent, const VmaAllocator allocator) {
+                           const VkExtent2D extent, const VmaAllocator allocator,
+                           const VkFilter filter) {
         if (physicalDevice == VK_NULL_HANDLE || device == VK_NULL_HANDLE ||
             extent.width == 0 || extent.height == 0 || allocator == VK_NULL_HANDLE) {
             throw std::invalid_argument("HDR buffer requires a device and non-zero extent");
@@ -39,7 +40,10 @@ namespace Engine {
                 .samples = VK_SAMPLE_COUNT_1_BIT,
                 .tiling = VK_IMAGE_TILING_OPTIMAL,
                 .usage = static_cast<VkImageUsageFlags>(VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT) |
-                         static_cast<VkImageUsageFlags>(VK_IMAGE_USAGE_SAMPLED_BIT),
+                         static_cast<VkImageUsageFlags>(VK_IMAGE_USAGE_SAMPLED_BIT) |
+                         // Temporal AA clears its ping-pong history before its
+                         // first use, which requires TRANSFER_DST usage.
+                         static_cast<VkImageUsageFlags>(VK_IMAGE_USAGE_TRANSFER_DST_BIT),
                 .sharingMode = VK_SHARING_MODE_EXCLUSIVE,
                 .queueFamilyIndexCount = 0,
                 .pQueueFamilyIndices = nullptr,
@@ -61,8 +65,8 @@ namespace Engine {
             }
 
             VkSamplerCreateInfo samplerInfo{VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO};
-            samplerInfo.magFilter = VK_FILTER_LINEAR;
-            samplerInfo.minFilter = VK_FILTER_LINEAR;
+            samplerInfo.magFilter = filter;
+            samplerInfo.minFilter = filter;
             samplerInfo.mipmapMode = VK_SAMPLER_MIPMAP_MODE_NEAREST;
             samplerInfo.addressModeU = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
             samplerInfo.addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
