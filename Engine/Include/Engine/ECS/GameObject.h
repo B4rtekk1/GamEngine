@@ -107,6 +107,7 @@ namespace Engine {
             if (has<LightComponent>()) {
                 throw std::logic_error("A LightComponent cannot have a MeshRenderer");
             }
+            ensureMeshRenderer();
             meshRenderer().mesh = std::move(mesh);
             registry_->markChanged<MeshRendererComponent>(entity_);
         }
@@ -116,16 +117,19 @@ namespace Engine {
             if (has<LightComponent>()) {
                 throw std::logic_error("A LightComponent cannot have a MeshRenderer");
             }
+            ensureMeshRenderer();
             meshRenderer().material = material;
             registry_->markChanged<MeshRendererComponent>(entity_);
         }
 
         void setCastShadow(bool enabled) {
+            ensureMeshRenderer();
             meshRenderer().castShadow = enabled;
             registry_->markChanged<MeshRendererComponent>(entity_);
         }
 
         void setCullingBatch(std::uint32_t batch) {
+            ensureMeshRenderer();
             meshRenderer().cullingBatch = batch;
             registry_->markChanged<MeshRendererComponent>(entity_);
         }
@@ -157,8 +161,7 @@ namespace Engine {
         [[nodiscard]] const CameraComponent &camera() const { return get<CameraComponent>(); }
 
         LightComponent &addLight(LightComponent light = {}) {
-            // GameObject::spawn creates a MeshRenderer by default. A light is an
-            // editor-visible scene object, not renderable geometry.
+            // A light is an editor-visible scene object, not renderable geometry.
             if (has<MeshRendererComponent>()) { remove<MeshRendererComponent>();
 }
             if (has<ColorPickerComponent>()) {
@@ -205,13 +208,12 @@ namespace Engine {
             : registry_(&registry), objectId_(nextObjectId()), name_(name) {
         }
 
-        /** Creates the entity with the conventional transform and mesh components. */
+        /** Creates the entity with the conventional transform component. */
         void spawn() {
             if (isSpawned()) { return;
 }
             entity_ = registry_->create();
             registry_->add<TransformComponent>(entity_);
-            registry_->add<MeshRendererComponent>(entity_);
         }
 
         void destroy() noexcept { release(); }
@@ -277,6 +279,17 @@ namespace Engine {
         void modifyTransform(Func &&func) {
             requireSpawned();
             registry_->modify<TransformComponent>(entity_, std::forward<Func>(func));
+        }
+
+        /** Adds rendering state on demand for mesh-bearing objects. */
+        void ensureMeshRenderer() {
+            requireSpawned();
+            if (has<LightComponent>()) {
+                throw std::logic_error("A LightComponent cannot have a MeshRenderer");
+            }
+            if (!has<MeshRendererComponent>()) {
+                registry_->add<MeshRendererComponent>(entity_);
+            }
         }
 
         static ObjectId nextObjectId() noexcept { return nextObjectId_.fetch_add(1, std::memory_order_relaxed); }

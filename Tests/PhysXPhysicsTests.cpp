@@ -15,6 +15,18 @@
 
 namespace {
 
+TEST(Scene, GameObjectsDoNotReceiveMeshRenderersUntilTheyBecomeMeshObjects) {
+    Engine::Scene scene;
+    static_cast<void>(scene.createGameObject("Empty"));
+    const auto editor = scene.editor();
+    EXPECT_FALSE(editor.has<Engine::MeshRendererComponent>(
+        scene.findEntity(scene.findActor("Empty").id())));
+
+    const Engine::Actor cube = scene.createCube("Cube");
+    ASSERT_TRUE(cube.valid());
+    EXPECT_TRUE(editor.has<Engine::MeshRendererComponent>(scene.findEntity(cube.id())));
+}
+
 TEST(PhysXPhysics, DynamicBoxFallsAndRestsOnStaticGround) {
     Engine::Scene scene;
     const Engine::Actor ground = scene.createActor("Ground");
