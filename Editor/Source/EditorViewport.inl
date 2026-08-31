@@ -655,8 +655,12 @@ bool pointInLasso(const ImVec2 point, const std::vector<ImVec2>& polygon) {
     return inside;
 }
 
-void drawSelectionTools(const ImVec2 imageMin, SelectionTool& tool) {
-    const ImVec2 start{imageMin.x + 132.0F, imageMin.y + 12.0F};
+void drawSelectionTools(const ImVec2 imageMin, const ImVec2 visibleMin, SelectionTool& tool) {
+    // The fixed-aspect image may extend above the child window when the
+    // viewport is wider than its aspect ratio. Anchor overlays to the clipped,
+    // visible image area so they remain available in a maximized viewport.
+    const ImVec2 start{std::max(imageMin.x + 132.0F, visibleMin.x + 132.0F),
+                       std::max(imageMin.y + 12.0F, visibleMin.y + 12.0F)};
     for (int index = 0; index < 2; ++index) {
         ImGui::SetCursorScreenPos({start.x + index * 72.0F, start.y});
         const bool active = (index == 0) == (tool == SelectionTool::Rectangle);
@@ -1695,7 +1699,7 @@ ViewportInteraction drawViewport(Engine::ScenePreset &scene, Engine::Assets::Con
         bool orientationGizmoConsumesClick = false;
         if (!showGameView && !playing) {
             gizmoToolsConsumeClick = drawViewportGizmoTools(imageMin, ImGui::GetWindowPos(), gizmoMode);
-            drawSelectionTools(imageMin, selectionTool);
+            drawSelectionTools(imageMin, ImGui::GetWindowPos(), selectionTool);
             // A gizmo-tool button belongs to the currently selected object.
             // Reapply the renderer selection explicitly, so changing tools
             // cannot make its outline/focus disappear even if ImGui moves
@@ -1845,6 +1849,11 @@ ViewportInteraction drawViewport(Engine::ScenePreset &scene, Engine::Assets::Con
                 const float left = std::min(selectionStart.x, mouse.x), right = std::max(selectionStart.x, mouse.x);
                 const float top = std::min(selectionStart.y, mouse.y), bottom = std::max(selectionStart.y, mouse.y);
                 scene.editor().view<Engine::Transform>([&](const Engine::Entity entity, const Engine::Transform& transform) {
+                    // Terrain is a surface used to frame the scene, not an object
+                    // meant for freeform lasso selection. Keep rectangle selection
+                    // unchanged so terrain can still be selected intentionally.
+                    if (selectionTool == SelectionTool::Lasso &&
+                        scene.editor().has<Engine::TerrainComponent>(entity)) return;
                     const ImVec2 point = projectGizmoPoint(camera, transform.position, imageMin, imageMax);
                     const bool inRectangle = point.x >= left && point.x <= right && point.y >= top && point.y <= bottom;
                     if ((selectionTool == SelectionTool::Rectangle ? inRectangle : lasso.size() > 2 && pointInLasso(point, lasso)))
