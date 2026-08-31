@@ -45,20 +45,20 @@ float sampleVirtualShadowLevel(Sampler2DShadow shadowMap, float3 worldPosition,
 
     float depthSlope = max(abs(ddx(currentDepth)), abs(ddy(currentDepth)));
     float bias = max(MIN_SHADOW_BIAS, SLOPE_SHADOW_BIAS * depthSlope);
-    // A single comparison lookup uses only hardware 2x2 PCF. That leaves the
-    // projected texel grid visible on thin casters (grass, railings) and at
-    // oblique angles. Filter in virtual-map coordinates, resolving every tap
-    // through the page table. This is important at a page boundary: neighbouring
-    // texels are not necessarily neighbours in the physical atlas.
-    static const float kernel[3] = {1.0, 2.0, 1.0};
+    // A single comparison lookup uses only hardware 2x2 PCF. A wider tent
+    // filter removes the stair-stepping visible on distant curved casters,
+    // while keeping the center of nearby shadows crisp. Resolve every tap in
+    // virtual-map coordinates: neighbouring texels can reside in different
+    // physical atlas pages.
+    static const float kernel[5] = {1.0, 4.0, 6.0, 4.0, 1.0};
     float filteredShadow = 0.0;
     float totalWeight = 0.0;
     const float2 virtualPixel = uv * float(VIRTUAL_RESOLUTION);
     [unroll]
-    for (int y = -1; y <= 1; ++y)
+    for (int y = -2; y <= 2; ++y)
     {
         [unroll]
-        for (int x = -1; x <= 1; ++x)
+        for (int x = -2; x <= 2; ++x)
         {
             float2 tapAtlasUv;
             // Outside the resident clip region, replicate the centre sample
@@ -66,7 +66,7 @@ float sampleVirtualShadowLevel(Sampler2DShadow shadowMap, float3 worldPosition,
             if (!virtualShadowAtlasUv(virtualPixel + float2(x, y), level,
                                       pageTable, tapAtlasUv))
                 tapAtlasUv = centerAtlasUv;
-            const float weight = kernel[x + 1] * kernel[y + 1];
+            const float weight = kernel[x + 2] * kernel[y + 2];
             filteredShadow += (1.0 - shadowMap.SampleCmpLevelZero(
                 tapAtlasUv, currentDepth - bias)) * weight;
             totalWeight += weight;
