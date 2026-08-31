@@ -42,7 +42,10 @@ std::filesystem::path EditorSceneSession::scenePath() {
 
 void EditorSceneSession::setScenePath(std::filesystem::path path) {
     activeScenePath = std::move(path);
-    sceneHasBeenSaved = false;
+    // A project-created scene already has its canonical destination
+    // (Assets/Scenes/Main.scene).  Ctrl+S must use that destination even
+    // before its first overwrite, rather than forcing an unnecessary Save As.
+    sceneHasBeenSaved = !activeScenePath.empty();
 }
 
 bool EditorSceneSession::hasSavedScene() {

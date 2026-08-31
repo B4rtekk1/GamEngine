@@ -1,0 +1,4 @@
+# GamEngine project
+name = DEMO
+asset_root = Assets
+startup_scene = Assets/Scenes/Main.scene

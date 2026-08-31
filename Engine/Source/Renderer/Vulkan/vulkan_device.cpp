@@ -198,16 +198,16 @@ int VulkanDevice::scoreDevice(const VkPhysicalDevice candidate) {
     return score;
 }
 
-void VulkanDevice::selectPhysicalDevice(VkInstance instance) {
+void VulkanDevice::selectPhysicalDevice(const VkInstance candidate) {
     uint32_t deviceCount = 0;
-    if (vkEnumeratePhysicalDevices(instance, &deviceCount, nullptr) != VK_SUCCESS ||
+    if (vkEnumeratePhysicalDevices(candidate, &deviceCount, nullptr) != VK_SUCCESS ||
         deviceCount == 0) {
         throw std::runtime_error("GPU does not support Vulkan");
     }
 
     std::vector<VkPhysicalDevice> candidates(deviceCount);
     if (vkEnumeratePhysicalDevices(
-            instance,
+            candidate,
             &deviceCount,
             candidates.data()) != VK_SUCCESS) {
         throw std::runtime_error("GPU does not support Vulkan");
@@ -221,8 +221,7 @@ void VulkanDevice::selectPhysicalDevice(VkInstance instance) {
             continue;
         }
 
-        const int score = scoreDevice(candidate);
-        if (score > bestScore) {
+        if (const int score = scoreDevice(candidate); score > bestScore) {
             bestScore = score;
             bestDevice = candidate;
         }
