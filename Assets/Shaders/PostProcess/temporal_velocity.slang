@@ -41,22 +41,24 @@ VertexOutput vertexMain(VertexInput input)
     float3 localPosition = input.position;
     float normalizedHeight = clamp((input.position.y - input.scaleBase.w) *
                                    input.grassDeformation.w, 0.0, 1.0);
-    float bendWeight = normalizedHeight * normalizedHeight * input.grassDeformation.z;
+    float bendCurve = normalizedHeight * normalizedHeight * (3.0 - 2.0 * normalizedHeight);
+    float bendWeight = bendCurve * input.grassDeformation.z;
     float grassHeight = input.grassDeformation.w > 0.0 ? 1.0 / input.grassDeformation.w : 0.0;
     localPosition.xz += input.grassDeformation.xy * bendWeight * grassHeight * 0.8;
-    localPosition.y -= bendWeight * normalizedHeight * grassHeight * 0.55;
+    localPosition.y -= bendWeight * (0.25 + 0.30 * normalizedHeight) * grassHeight;
 
     float3 previousLocalPosition = input.position;
     float previousNormalizedHeight = clamp((input.position.y - input.previousScale.w) *
                                            input.previousGrassDeformation.w, 0.0, 1.0);
-    float previousBendWeight = previousNormalizedHeight * previousNormalizedHeight *
-                               input.previousGrassDeformation.z;
+    float previousBendCurve = previousNormalizedHeight * previousNormalizedHeight *
+                              (3.0 - 2.0 * previousNormalizedHeight);
+    float previousBendWeight = previousBendCurve * input.previousGrassDeformation.z;
     float previousGrassHeight = input.previousGrassDeformation.w > 0.0
         ? 1.0 / input.previousGrassDeformation.w : 0.0;
     previousLocalPosition.xz += input.previousGrassDeformation.xy * previousBendWeight *
                                 previousGrassHeight * 0.8;
-    previousLocalPosition.y -= previousBendWeight * previousNormalizedHeight *
-                               previousGrassHeight * 0.55;
+    previousLocalPosition.y -= previousBendWeight * (0.25 + 0.30 * previousNormalizedHeight) *
+                               previousGrassHeight;
 
     float4 currentWorld = float4(rotateByQuaternion(localPosition * input.scaleBase.xyz,
                                                     input.rotation) + input.positionMaterial.xyz, 1.0);

@@ -102,7 +102,7 @@ TEST(PhysXPhysics, RaycastRejectsInvalidQueriesAndNormalizesDirection) {
     EXPECT_FALSE(physics.raycast(emptyScene, {}, {1.0F, 0.0F, 0.0F}, 10.0F).has_value());
 }
 
-TEST(PhysXPhysics, SpherePermanentlyTramplesNearbyTerrainGrass) {
+TEST(PhysXPhysics, SphereTramplesAndGrassGraduallyRecovers) {
     Engine::Scene scene;
     const Engine::Actor terrain = scene.createTerrain(
         "Terrain", Engine::TerrainComponent{5, 4.0F, 4.0F, -1.0F, 1.0F});
@@ -126,8 +126,8 @@ TEST(PhysXPhysics, SpherePermanentlyTramplesNearbyTerrainGrass) {
 
     sphere.setPosition({10.0F, 0.5F, 0.0F});
     physics.update(scene, 1.0F / 60.0F);
-    EXPECT_FLOAT_EQ(scene.editor().get<Engine::TerrainGrassComponent>(entity)
-                        .instances.front().trampled, trampled);
+    EXPECT_LT(scene.editor().get<Engine::TerrainGrassComponent>(entity)
+                  .instances.front().trampled, trampled);
 }
 
 TEST(Prefab, CubePreservesRenderSettingsWhenInstantiatedInScene) {

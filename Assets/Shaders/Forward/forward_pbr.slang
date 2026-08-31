@@ -36,13 +36,17 @@ ForwardVertexOutput vertexMain(ForwardVertexInput input, uint instanceIndex : SV
     float3 localNormal = input.normal;
     float normalizedHeight = clamp((input.position.y - input.scaleBase.w) *
                                    input.grassDeformation.w, 0.0, 1.0);
-    float bendWeight = normalizedHeight * normalizedHeight * input.grassDeformation.z;
+    // Smooth S-shaped curvature keeps the root planted and the tip relaxed,
+    // rather than making the blade look like a translated rigid card.
+    float bendCurve = normalizedHeight * normalizedHeight * (3.0 - 2.0 * normalizedHeight);
+    float bendWeight = bendCurve * input.grassDeformation.z;
     float grassHeight = input.grassDeformation.w > 0.0 ? 1.0 / input.grassDeformation.w : 0.0;
     localPosition.xz += input.grassDeformation.xy * bendWeight * grassHeight * 0.8;
-    localPosition.y -= bendWeight * normalizedHeight * grassHeight * 0.55;
-    localNormal = normalize(localNormal + float3(-input.grassDeformation.x * bendWeight,
+    localPosition.y -= bendWeight * (0.25 + 0.30 * normalizedHeight) * grassHeight;
+    float bendSlope = 1.6 * normalizedHeight * (1.0 - normalizedHeight) * input.grassDeformation.z;
+    localNormal = normalize(localNormal + float3(-input.grassDeformation.x * bendSlope,
                                                 0.0,
-                                               -input.grassDeformation.y * bendWeight));
+                                               -input.grassDeformation.y * bendSlope));
 
     float4 q = input.instanceRotation;
     float3x3 rotationMatrix = float3x3(

@@ -706,6 +706,14 @@
                 const MeshRenderer* renderer = grassInstance ? nullptr : &readRegistry.get<MeshRenderer>(entity);
                 const TerrainGrassComponent* grass = grassInstance
                     ? &readRegistry.get<TerrainGrassComponent>(entity) : nullptr;
+                const float grassMeshHeight = grassInstance
+                    ? record.localBounds.max.y() - record.localBounds.min.y() : 0.0F;
+                const glm::vec4 grassDeformation = grassInstance
+                    ? glm::vec4{grass->instances[record.grassInstance].bendX,
+                                grass->instances[record.grassInstance].bendZ,
+                                grass->instances[record.grassInstance].trampled,
+                                grassMeshHeight > 1.0e-5F ? 1.0F / grassMeshHeight : 0.0F}
+                    : glm::vec4{};
                 Transform effectiveTransform = transform;
                 glm::mat4 model = transform.matrix().native();
                 if (grassInstance) {
@@ -729,9 +737,11 @@
                     }
                     return bounds;
                 };
-                if (!optimizationFeatures.transformCaching ||
-                    !record.hasCachedTransform || !sameTransform(record.cachedTransform, effectiveTransform) ||
-                    grassInstance) {
+                const bool transformChanged = !optimizationFeatures.transformCaching ||
+                    !record.hasCachedTransform || !sameTransform(record.cachedTransform, effectiveTransform);
+                const bool deformationChanged = grassInstance &&
+                    glm::any(glm::notEqual(instanceModels[index].grassDeformation, grassDeformation));
+                if (transformChanged) {
                     const bool hadCachedTransform = record.hasCachedTransform;
                     const AABB previousShadowBounds = hadCachedTransform
                         ? shadowBounds(modelFromInstance(instanceModels[index])) : AABB{};
@@ -760,19 +770,13 @@
                                              glm::angleAxis(radians(transform.rotation.y()), glm::vec3{0, 1, 0}) *
                                              glm::angleAxis(radians(transform.rotation.z()), glm::vec3{0, 0, 1});
                     }
-                    const float meshHeight = record.localBounds.max.y() - record.localBounds.min.y();
                     instanceModels[index].positionMaterial = glm::vec4{
                         decomposedTranslation, std::bit_cast<float>(static_cast<std::uint32_t>(index * materialSlots))};
                     instanceModels[index].rotation = glm::vec4{decomposedRotation.x, decomposedRotation.y,
                                                                decomposedRotation.z, decomposedRotation.w};
                     instanceModels[index].scaleBase = glm::vec4{
                         decomposedScale, grassInstance ? record.localBounds.min.y() : 0.0F};
-                    instanceModels[index].grassDeformation = grassInstance
-                        ? glm::vec4{grass->instances[record.grassInstance].bendX,
-                                    grass->instances[record.grassInstance].bendZ,
-                                    grass->instances[record.grassInstance].trampled,
-                                    meshHeight > 1.0e-5F ? 1.0F / meshHeight : 0.0F}
-                        : glm::vec4{};
+                    instanceModels[index].grassDeformation = grassDeformation;
                     record.cachedTransform = effectiveTransform;
                     record.hasCachedTransform = true;
                     if (record.batchIndex < instanceBatches.size() &&
@@ -783,6 +787,16 @@
                     markDirty(index, &RenderableRecord::transformDirtyFrames, dirtyTransforms);
                     markDirty(index, &RenderableRecord::cullingDirtyFrames, dirtyCullingObjects);
                     changedBatches.push_back(record.batchIndex);
+                } else if (deformationChanged) {
+                    // Bending is already included in the conservative cluster
+                    // bounds. Do not decompose the transform or rebuild the
+                    // whole culling batch merely because one blade flexed.
+                    instanceModels[index].grassDeformation = grassDeformation;
+                    if (record.batchIndex < instanceBatches.size() &&
+                        instanceBatches[record.batchIndex].castShadow) {
+                        appendDirtyShadowBounds(shadowBounds(model));
+                    }
+                    markDirty(index, &RenderableRecord::transformDirtyFrames, dirtyTransforms);
                 }
                 const Mesh& mesh = grassInstance ? *grass->mesh : *renderer->mesh;
                 bool materialChanged = false;

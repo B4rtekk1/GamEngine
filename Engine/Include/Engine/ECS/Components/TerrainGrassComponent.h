@@ -43,6 +43,10 @@ namespace Engine {
         mutable std::vector<std::uint32_t> dirtyInstanceStamps;
         mutable std::uint32_t dirtyInstanceGeneration{1};
         mutable bool allInstancesDirty{true};
+        // Only blades touched recently are simulated back towards their rest
+        // pose.  This avoids an O(all grass) recovery pass every physics tick.
+        std::vector<std::size_t> recoveringInstances;
+        std::vector<std::uint8_t> recoveringInstanceMarks;
         static constexpr float SpatialCellSize = 2.0F;
 
         TerrainGrassComponent() = default;
@@ -61,6 +65,8 @@ namespace Engine {
             dirtyInstanceStamps.clear();
             dirtyInstanceGeneration = 1;
             allInstancesDirty = true;
+            recoveringInstances.clear();
+            recoveringInstanceMarks.clear();
             return *this;
         }
         TerrainGrassComponent(TerrainGrassComponent&&) noexcept = default;
@@ -102,6 +108,15 @@ namespace Engine {
                 std::fill(dirtyInstanceStamps.begin(), dirtyInstanceStamps.end(), 0);
                 dirtyInstanceGeneration = 1;
             }
+        }
+
+        void markRecovering(const std::size_t index) {
+            if (index >= instances.size()) return;
+            if (recoveringInstanceMarks.size() != instances.size())
+                recoveringInstanceMarks.assign(instances.size(), 0);
+            if (recoveringInstanceMarks[index] != 0) return;
+            recoveringInstanceMarks[index] = 1;
+            recoveringInstances.push_back(index);
         }
 
         [[nodiscard]] bool hasPrefab() const noexcept {

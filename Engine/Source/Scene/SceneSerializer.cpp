@@ -1257,6 +1257,12 @@ namespace Engine {
                     renderer.castShadow = readBool(input, "cast-shadow flag");
                     renderer.cullingBatch = read<std::uint32_t>(input, "culling batch");
                     loaded.add<MeshRenderer>(entity, std::move(renderer));
+                } else if (component == "WIND") {
+                    // WIND belonged to an experimental component which is no
+                    // longer part of the runtime.  Consume its old payload so
+                    // scenes saved by that editor version remain loadable.
+                    for (int value = 0; value < 7; ++value)
+                        static_cast<void>(readFloat(input, "legacy wind value"));
                 } else if (component == "LIGHT") {
                     if (hasLight) {
                         invalidScene("entity contains more than one LightComponent");

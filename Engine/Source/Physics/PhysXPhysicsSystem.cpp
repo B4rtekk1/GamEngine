@@ -77,6 +77,30 @@ namespace Engine {
                     const float terrainScale = std::max(0.001F, std::min(
                         std::abs(terrainTransform.scale.x()), std::abs(terrainTransform.scale.z())));
                     bool changed = false;
+
+                    // Recover only blades which were previously pressed.  The
+                    // exponential response is stable at any fixed timestep and
+                    // makes a footprint soften naturally instead of remaining a
+                    // hard, permanent decal.
+                    constexpr float recoveryPerSecond = 0.75F;
+                    const float recovery = std::exp(-recoveryPerSecond * deltaTime);
+                    std::size_t recoveredCount = 0;
+                    for (const std::size_t index : grass.recoveringInstances) {
+                        if (index >= grass.instances.size()) continue;
+                        auto& instance = grass.instances[index];
+                        instance.trampled *= recovery;
+                        if (instance.trampled <= 0.01F) {
+                            instance.trampled = 0.0F;
+                            if (index < grass.recoveringInstanceMarks.size())
+                                grass.recoveringInstanceMarks[index] = 0;
+                        } else {
+                            grass.recoveringInstances[recoveredCount++] = index;
+                        }
+                        grass.markInstanceDirty(index);
+                        changed = true;
+                    }
+                    grass.recoveringInstances.resize(recoveredCount);
+
                     for (std::size_t sphereIndex = 0; sphereIndex < spheres.size(); ++sphereIndex) {
                         const GrassSphere& sphere = spheres[sphereIndex];
                         constexpr float grassReach = 0.45F;
@@ -91,6 +115,9 @@ namespace Engine {
                             (localCenter.z() - localRadius) / TerrainGrassComponent::SpatialCellSize));
                         const auto maximumZ = static_cast<std::int32_t>(std::floor(
                             (localCenter.z() + localRadius) / TerrainGrassComponent::SpatialCellSize));
+                        const glm::vec3 localVelocity = glm::vec3{inverseTerrain *
+                            glm::vec4{sphere.velocity.native(), 0.0F}};
+                        const float localSpeed = std::hypot(localVelocity.x, localVelocity.z);
                         for (std::int32_t cellX = minimumX; cellX <= maximumX; ++cellX) {
                             for (std::int32_t cellZ = minimumZ; cellZ <= maximumZ; ++cellZ) {
                                 const auto cell = grass.spatialCells.find(
@@ -100,24 +127,25 @@ namespace Engine {
                                     auto& instance = grass.instances[index];
                                     const Vec3 worldPosition{glm::vec3{terrainMatrix *
                                         glm::vec4{instance.position.native(), 1.0F}}};
-                                    const float distance = (worldPosition - sphere.center).length();
                                     const float influence = sphere.radius + grassReach;
-                                    if (distance >= influence) continue;
+                                    const Vec3 delta = worldPosition - sphere.center;
+                                    const float horizontalDistance = std::hypot(delta.x(), delta.z());
+                                    // Project the spherical contact volume onto
+                                    // the terrain. This prevents objects high
+                                    // above the grass from creating a footprint.
+                                    const float footprintSquared = influence * influence - delta.y() * delta.y();
+                                    if (footprintSquared <= 0.0F) continue;
+                                    const float footprintRadius = std::sqrt(footprintSquared);
+                                    if (horizontalDistance >= footprintRadius) continue;
                                     const float target = std::clamp(
-                                        (1.0F - distance / influence) * 1.35F, 0.0F, 1.0F);
+                                        (1.0F - horizontalDistance / footprintRadius) * 1.35F, 0.0F, 1.0F);
                                     grassCoverage[sphereIndex] += target;
-                                    if (target <= instance.trampled + 1.0e-4F) continue;
 
-                                    float directionX = instance.position.x() - localCenter.x();
-                                    float directionZ = instance.position.z() - localCenter.z();
+                                    float directionX = localSpeed > 1.0e-4F
+                                        ? localVelocity.x : instance.position.x() - localCenter.x();
+                                    float directionZ = localSpeed > 1.0e-4F
+                                        ? localVelocity.z : instance.position.z() - localCenter.z();
                                     float directionLength = std::hypot(directionX, directionZ);
-                                    if (directionLength < 1.0e-4F && sphere.velocity.length() > 1.0e-4F) {
-                                        const glm::vec3 localVelocity = glm::vec3{inverseTerrain *
-                                            glm::vec4{sphere.velocity.native(), 0.0F}};
-                                        directionX = localVelocity.x;
-                                        directionZ = localVelocity.z;
-                                        directionLength = std::hypot(directionX, directionZ);
-                                    }
                                     if (directionLength < 1.0e-4F) {
                                         directionX = 1.0F;
                                         directionZ = 0.0F;
@@ -125,9 +153,20 @@ namespace Engine {
                                         directionX /= directionLength;
                                         directionZ /= directionLength;
                                     }
-                                    instance.bendX = directionX;
-                                    instance.bendZ = directionZ;
-                                    instance.trampled = target;
+                                    // Moving objects comb grass along their
+                                    // trajectory; stationary contacts retain a
+                                    // subtle radial response. Blend rather than
+                                    // snap to keep the trail visually stable.
+                                    const float blend = std::clamp(target * 1.5F, 0.2F, 1.0F);
+                                    directionX = instance.bendX * (1.0F - blend) + directionX * blend;
+                                    directionZ = instance.bendZ * (1.0F - blend) + directionZ * blend;
+                                    directionLength = std::hypot(directionX, directionZ);
+                                    if (directionLength > 1.0e-4F) {
+                                        instance.bendX = directionX / directionLength;
+                                        instance.bendZ = directionZ / directionLength;
+                                    }
+                                    instance.trampled = std::max(instance.trampled, target);
+                                    grass.markRecovering(index);
                                     grass.markInstanceDirty(index);
                                     changed = true;
                                 }
