@@ -33,9 +33,40 @@ void drawStatusBar(const Engine::ScenePreset &scene, const Engine::Entity select
     ImGui::PopStyleColor();
 }
 
+namespace {
+
+// The main-menu entries are navigation controls, not regular action buttons.
+// Give them a larger target and a clearly visible hover/open state while
+// keeping the rest of the editor's button styling unchanged.
+bool beginTopMenu(const char *label, const char *tooltip) {
+    ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, {11.0F, 7.0F});
+    ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, {3.0F, 0.0F});
+    ImGui::PushStyleColor(ImGuiCol_Header, {0.0F, 0.0F, 0.0F, 0.0F});
+    ImGui::PushStyleColor(ImGuiCol_HeaderHovered, {0.10F, 0.36F, 0.48F, 0.88F});
+    ImGui::PushStyleColor(ImGuiCol_HeaderActive, {0.08F, 0.52F, 0.66F, 1.0F});
+
+    const bool open = ImGui::BeginMenu(label);
+    if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort) && tooltip != nullptr) {
+        ImGui::SetTooltip("%s", tooltip);
+    }
+    if (open) return true;
+
+    ImGui::PopStyleColor(3);
+    ImGui::PopStyleVar(2);
+    return false;
+}
+
+void endTopMenu() {
+    ImGui::EndMenu();
+    ImGui::PopStyleColor(3);
+    ImGui::PopStyleVar(2);
+}
+
+} // namespace
+
 Engine::Entity drawEditorMenuBar(Engine::ScenePreset &scene, Engine::Renderer &renderer,
                                  Engine::Assets::Content& content, Engine::Project& project,
-                                 bool &antialiasingChanged, bool &sceneLoaded,
+                                 bool &antialiasingChanged, bool &sceneLoaded, bool &sceneSaved,
                                  const bool playing, const bool paused, bool &playToggleRequested,
                                  bool &pauseToggleRequested, const bool canUndo,
                                  const bool canRedo, const bool canPaste,
@@ -52,6 +83,7 @@ Engine::Entity drawEditorMenuBar(Engine::ScenePreset &scene, Engine::Renderer &r
     static int msaaSamples = -1;
     static std::string sceneFileError;
     Engine::Entity createdEntity = Engine::NullEntity;
+    sceneSaved = false;
 
     const auto saveScene = [&](const std::filesystem::path &path) {
         if (!path.parent_path().empty()) {
@@ -64,6 +96,7 @@ Engine::Entity drawEditorMenuBar(Engine::ScenePreset &scene, Engine::Renderer &r
                                        : 0u;
         Engine::SceneSerializer::save(scene, path, samples);
         EditorSceneSession::markSceneSaved(path);
+        sceneSaved = true;
         sceneFileError.clear();
         Editor::ConsolePanel::info("Saved scene: " + path.string());
     };
@@ -89,7 +122,7 @@ Engine::Entity drawEditorMenuBar(Engine::ScenePreset &scene, Engine::Renderer &r
     ImGui::SameLine(0.0F, 12.0F);
     ImGui::TextDisabled("|");
     ImGui::SameLine(0.0F, 4.0F);
-    if (ImGui::BeginMenu("File")) {
+    if (beginTopMenu("File", "Project and scene files")) {
         const std::filesystem::path scenePath = EditorSceneSession::scenePath();
         ImGui::BeginDisabled(playing);
         if (ImGui::MenuItem("Save Scene", "Ctrl+S")) {
@@ -146,10 +179,12 @@ Engine::Entity drawEditorMenuBar(Engine::ScenePreset &scene, Engine::Renderer &r
         if (!sceneFileError.empty()) {
             ImGui::TextDisabled("%s", sceneFileError.c_str());
         }
-        ImGui::EndMenu();
+        ImGui::Separator();
+        ImGui::TextDisabled("Auto-save: every 30 seconds after changes");
+        endTopMenu();
     }
 
-    if (ImGui::BeginMenu("GameObject")) {
+    if (beginTopMenu("GameObject", "Create objects in the current scene")) {
         ImGui::BeginDisabled(playing);
         if (ImGui::MenuItem("Create Empty", "Ctrl+Shift+N")) {
             createdEntity = scene.createGameObject();
@@ -176,65 +211,27 @@ Engine::Entity drawEditorMenuBar(Engine::ScenePreset &scene, Engine::Renderer &r
             createdEntity = scene.createProceduralCloud();
         }
         ImGui::EndDisabled();
-        ImGui::EndMenu();
+        endTopMenu();
     }
 
-    // Keep the most common action visible even when the File menu is closed.
-    ImGui::SameLine(0.0F, 10.0F);
-    if (playing) {
-        ImGui::PushStyleColor(ImGuiCol_Button, {0.62F, 0.24F, 0.24F, 1.0F});
-        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, {0.76F, 0.30F, 0.30F, 1.0F});
-        ImGui::PushStyleColor(ImGuiCol_ButtonActive, {0.52F, 0.18F, 0.18F, 1.0F});
-    } else {
-        ImGui::PushStyleColor(ImGuiCol_Button, {0.18F, 0.48F, 0.32F, 1.0F});
-        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, {0.24F, 0.60F, 0.40F, 1.0F});
-        ImGui::PushStyleColor(ImGuiCol_ButtonActive, {0.14F, 0.40F, 0.26F, 1.0F});
-    }
-    if (EditorButton(playing ? "  Stop  " : "  Play  ").draw()) {
-        playToggleRequested = true;
-    }
-    ImGui::PopStyleColor(3);
-    if (ImGui::IsItemHovered()) {
-        ImGui::SetTooltip(playing
-                              ? "Stop play mode and restore the editor scene (F5)"
-                              : "Run the current scene in Game View (F5)");
-    }
-    ImGui::SameLine(0.0F, 6.0F);
-    ImGui::BeginDisabled(!playing);
-    if (paused) {
-        ImGui::PushStyleColor(ImGuiCol_Button, {0.55F, 0.42F, 0.16F, 1.0F});
-        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, {0.68F, 0.52F, 0.20F, 1.0F});
-        ImGui::PushStyleColor(ImGuiCol_ButtonActive, {0.45F, 0.34F, 0.12F, 1.0F});
-    }
-    if (EditorButton(paused ? "  Resume  " : "  Pause  ").draw()) {
-        pauseToggleRequested = true;
-    }
-    if (paused) {
-        ImGui::PopStyleColor(3);
-    }
-    ImGui::EndDisabled();
-    if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
-        ImGui::SetTooltip("Pause or resume script updates (F6)");
-    }
-
-    if (ImGui::BeginMenu("Scene")) {
+    if (beginTopMenu("Scene", "Scene and rendering settings")) {
         if (ImGui::MenuItem("Antialiasing...")) {
             openSceneSettings = true;
         }
-        ImGui::EndMenu();
+        endTopMenu();
     }
 
-    if (ImGui::BeginMenu("View")) {
+    if (beginTopMenu("View", "Show, hide and arrange editor panels")) {
         ImGui::MenuItem("Hierarchy", nullptr, &showHierarchy);
         ImGui::MenuItem("Viewport", nullptr, &showViewport);
         ImGui::MenuItem("Inspector", nullptr, &showInspector);
         ImGui::MenuItem("Asset Manager", nullptr, &showAssetManager);
         ImGui::MenuItem("Terrain Tools", nullptr, &showTerrainTools);
         ImGui::MenuItem("Console", nullptr, &showConsole);
-        ImGui::EndMenu();
+        endTopMenu();
     }
 
-    if (ImGui::BeginMenu("Edit")) {
+    if (beginTopMenu("Edit", "Undo and common object actions")) {
         if (ImGui::MenuItem("Undo", "Ctrl+Z", false, canUndo)) {
             undoRequested = true;
         }
@@ -254,10 +251,10 @@ Engine::Entity drawEditorMenuBar(Engine::ScenePreset &scene, Engine::Renderer &r
         }
         ImGui::Separator();
         ImGui::MenuItem("Select All", "Ctrl+A", false, false);
-        ImGui::EndMenu();
+        endTopMenu();
     }
 
-    if (ImGui::BeginMenu("Help")) {
+    if (beginTopMenu("Help", "Shortcuts and editor information")) {
         if (ImGui::MenuItem("Keyboard Shortcuts")) {
             showShortcuts = true;
         }
@@ -265,7 +262,7 @@ Engine::Entity drawEditorMenuBar(Engine::ScenePreset &scene, Engine::Renderer &r
         if (ImGui::MenuItem("About GamEngine Editor")) {
             showAbout = true;
         }
-        ImGui::EndMenu();
+        endTopMenu();
     }
 
     ImGui::EndMainMenuBar();

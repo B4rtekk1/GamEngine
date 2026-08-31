@@ -219,6 +219,9 @@ int main(int argc, char** argv) {
         TerrainSculptState terrainSculpt;
         std::string playSceneSnapshot;
         std::string playModeError;
+        constexpr auto autoSaveInterval = std::chrono::seconds{30};
+        auto lastAutoSaveAttempt = std::chrono::steady_clock::now();
+        std::uint64_t lastPersistedSceneRevision = scene.editor().mutationRevision();
         while (running) {
             const auto start = std::chrono::steady_clock::now();
             Engine::Renderer::beginFrame();
@@ -260,6 +263,7 @@ int main(int argc, char** argv) {
             renderer.beginEditorUiFrame();
             bool antialiasingChanged = false;
             bool sceneLoaded = false;
+            bool sceneSaved = false;
             bool playToggleRequested = false;
             bool pauseToggleRequested = false;
             bool undoRequested = false;
@@ -269,7 +273,7 @@ int main(int argc, char** argv) {
             bool duplicateRequested = false;
             bool resetHistoryRequested = false;
             if (const Engine::Entity created = drawEditorMenuBar(scene, renderer, content, project,
-                                                                 antialiasingChanged, sceneLoaded,
+                                                                 antialiasingChanged, sceneLoaded, sceneSaved,
                                                                  playing, paused, playToggleRequested,
                                                                  pauseToggleRequested, history.canUndo(),
                                                                  history.canRedo(), clipboard.canPaste(scene),
@@ -527,6 +531,29 @@ int main(int argc, char** argv) {
                                       ImGui::IsMouseDown(ImGuiMouseButton_Left);
             if (!playing && !sceneLoaded && !editingScene) {
                 static_cast<void>(history.capture(scene));
+            }
+            if (sceneSaved) {
+                lastPersistedSceneRevision = scene.editor().mutationRevision();
+                lastAutoSaveAttempt = std::chrono::steady_clock::now();
+            }
+            const auto now = std::chrono::steady_clock::now();
+            const std::uint64_t currentSceneRevision = scene.editor().mutationRevision();
+            if (!playing && EditorSceneSession::hasSavedScene() &&
+                currentSceneRevision != lastPersistedSceneRevision &&
+                now - lastAutoSaveAttempt >= autoSaveInterval) {
+                lastAutoSaveAttempt = now;
+                try {
+                    const std::filesystem::path path = EditorSceneSession::scenePath();
+                    if (!path.parent_path().empty()) std::filesystem::create_directories(path.parent_path());
+                    Engine::SceneSerializer::save(scene, path,
+                                                  EditorSceneSession::msaaSampleCount(renderer));
+                    EditorSceneSession::markSceneSaved(path);
+                    lastPersistedSceneRevision = currentSceneRevision;
+                    Editor::ConsolePanel::info("Auto-saved scene: " + path.string());
+                } catch (const std::exception& error) {
+                    Editor::ConsolePanel::warning("Could not auto-save scene: " +
+                                                  std::string{error.what()});
+                }
             }
             if (playing && !paused) {
                 physicsAccumulator += Engine::Time::deltaTime();
