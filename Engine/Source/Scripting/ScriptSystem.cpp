@@ -18,8 +18,6 @@ namespace Engine {
 
     void ScriptSystem::updateOne(Registry &registry, const Entity entity, ScriptComponent &component,
                                  const float deltaTime, Scene *scene) const {
-        if (!component.enabled || component.className.empty()) return;
-
         const auto context = [&](std::string action) {
             return DiagnosticContext{.subsystem = "ScriptSystem", .object = objectName(registry, entity),
                 .component = "ScriptComponent", .file = scripts_.sourceFile(component.className).value_or(
@@ -33,6 +31,20 @@ namespace Engine {
         };
         const auto destroyRuntime = [&] {
             if (!component.runtime) return;
+            if (component.runtimeEnabled) {
+                try {
+                    component.runtime->onDisable();
+                } catch (const std::exception &error) {
+                    reportOnce("disable:" + component.runtimeClassName, DiagnosticSeverity::Error,
+                        "Skrypt " + component.runtimeClassName + " zgłosił wyjątek podczas onDisable: " + error.what(),
+                        context("Popraw onDisable lub usuń komponent skryptu."));
+                } catch (...) {
+                    reportOnce("disable:" + component.runtimeClassName, DiagnosticSeverity::Error,
+                        "Skrypt " + component.runtimeClassName + " zgłosił nieznany wyjątek podczas onDisable.",
+                        context("Popraw onDisable lub usuń komponent skryptu."));
+                }
+                component.runtimeEnabled = false;
+            }
             try {
                 component.runtime->onDestroy();
             } catch (const std::exception &error) {
@@ -49,6 +61,28 @@ namespace Engine {
         };
 
         if (component.runtime && component.runtimeClassName != component.className) destroyRuntime();
+        if (component.className.empty()) return;
+
+        // Disabling preserves a script's runtime state. It will receive
+        // onEnable on reactivation rather than being recreated.
+        if (!component.enabled) {
+            if (component.runtime && component.runtimeEnabled) {
+                try {
+                    component.runtime->onDisable();
+                    component.runtimeEnabled = false;
+                } catch (const std::exception &error) {
+                    reportOnce("disable:" + component.className, DiagnosticSeverity::Error,
+                        "Skrypt " + component.className + " zgłosił wyjątek podczas onDisable: " + error.what(),
+                        context("Popraw onDisable lub usuń komponent skryptu."));
+                } catch (...) {
+                    reportOnce("disable:" + component.className, DiagnosticSeverity::Error,
+                        "Skrypt " + component.className + " zgłosił nieznany wyjątek podczas onDisable.",
+                        context("Popraw onDisable lub usuń komponent skryptu."));
+                }
+            }
+            return;
+        }
+
         if (!component.runtime) {
             component.runtime = scripts_.create(component.className);
             if (!component.runtime) {
@@ -73,6 +107,24 @@ namespace Engine {
                 reportOnce("create:" + component.className, DiagnosticSeverity::Error,
                     "Skrypt " + component.className + " zgłosił nieznany wyjątek podczas onCreate.",
                     context("Popraw onCreate lub usuń komponent skryptu."));
+                destroyRuntime();
+                return;
+            }
+        }
+        if (!component.runtimeEnabled) {
+            try {
+                component.runtime->onEnable();
+                component.runtimeEnabled = true;
+            } catch (const std::exception &error) {
+                reportOnce("enable:" + component.className, DiagnosticSeverity::Error,
+                    "Skrypt " + component.className + " zgłosił wyjątek podczas onEnable: " + error.what(),
+                    context("Popraw onEnable lub usuń komponent skryptu."));
+                destroyRuntime();
+                return;
+            } catch (...) {
+                reportOnce("enable:" + component.className, DiagnosticSeverity::Error,
+                    "Skrypt " + component.className + " zgłosił nieznany wyjątek podczas onEnable.",
+                    context("Popraw onEnable lub usuń komponent skryptu."));
                 destroyRuntime();
                 return;
             }

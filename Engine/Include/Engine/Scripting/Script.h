@@ -35,8 +35,17 @@ namespace Engine {
         virtual void onCreate() {
         }
 
+        /** Called after creation, and whenever the ScriptComponent becomes enabled. */
+        virtual void onEnable() {
+        }
+
         /** Called once per frame while the ScriptComponent is enabled. */
         virtual void onUpdate(float deltaTime) { (void) deltaTime; }
+
+        /** Called before a live ScriptComponent is disabled or destroyed. */
+        virtual void onDisable() {
+        }
+
         /** Called when the runtime instance is removed. */
         virtual void onDestroy() {
         }

@@ -11,6 +11,13 @@ option(GAMEENGINE_ENABLE_WARNINGS "Enable strict compiler warnings" ON)
 option(GAMEENGINE_WARNINGS_AS_ERRORS "Treat compiler warnings as errors" OFF)
 option(GAMEENGINE_ENABLE_SANITIZERS "Enable AddressSanitizer and UndefinedBehaviorSanitizer where supported" OFF)
 
+# The in-tree demo keeps a fresh checkout buildable. Games can point this at
+# their own project directory during configuration.
+set(GAMEENGINE_GAME_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/DEMO" CACHE PATH
+        "Directory containing GamEngine.project and Assets")
+get_filename_component(GAMEENGINE_GAME_ROOT "${GAMEENGINE_GAME_DIRECTORY}" ABSOLUTE
+        BASE_DIR "${CMAKE_CURRENT_SOURCE_DIR}")
+
 function(gameengine_enable_warnings target)
     if(NOT GAMEENGINE_ENABLE_WARNINGS)
         return()

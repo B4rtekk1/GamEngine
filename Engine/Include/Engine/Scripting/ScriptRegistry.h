@@ -2,6 +2,7 @@
 
 #include <functional>
 #include <concepts>
+#include <algorithm>
 #include <memory>
 #include <optional>
 #include <string>
@@ -52,6 +53,7 @@ namespace Engine {
                 (void) factory;
                 names.push_back(name);
             }
+            std::sort(names.begin(), names.end());
             return names;
         }
 

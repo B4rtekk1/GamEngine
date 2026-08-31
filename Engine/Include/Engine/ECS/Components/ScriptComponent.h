@@ -40,10 +40,18 @@ namespace Engine {
 
         void reset() {
             if (runtime) {
-                runtime->onDestroy();
+                // Component removal can happen outside ScriptSystem (for example
+                // through the editor). Lifecycle callbacks must never let an
+                // exception escape a component destructor.
+                try {
+                    if (runtimeEnabled) runtime->onDisable();
+                    runtime->onDestroy();
+                } catch (...) {
+                }
             }
             runtime.reset();
             runtimeClassName.clear();
+            runtimeEnabled = false;
         }
 
     private:
@@ -51,5 +59,6 @@ namespace Engine {
         std::unique_ptr<Script> runtime;
         std::string runtimeClassName;
         std::string lastDiagnosticKey;
+        bool runtimeEnabled{false};
     };
 } // namespace Engine

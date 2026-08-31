@@ -19,12 +19,16 @@ public:
     static inline int created = 0;
     static inline int updated = 0;
     static inline int destroyed = 0;
+    static inline int enabled = 0;
+    static inline int disabled = 0;
     static inline float lastDeltaTime = 0.0F;
 
     static void reset() {
         created = 0;
         updated = 0;
         destroyed = 0;
+        enabled = 0;
+        disabled = 0;
         lastDeltaTime = 0.0F;
     }
 
@@ -34,6 +38,8 @@ public:
         lastDeltaTime = deltaTime;
     }
     void onDestroy() override { ++destroyed; }
+    void onEnable() override { ++enabled; }
+    void onDisable() override { ++disabled; }
 };
 
 class SceneAwareTestScript final : public Engine::Script {
@@ -104,6 +110,29 @@ TEST(ScriptSystem, SkipsDisabledAndEmptyScriptComponents) {
     system.update(registry, 0.1F);
     EXPECT_EQ(LifecycleTestScript::created, 0);
     EXPECT_EQ(LifecycleTestScript::updated, 0);
+}
+
+TEST(ScriptSystem, PreservesScriptStateAcrossDisableAndEnable) {
+    LifecycleTestScript::reset();
+    auto& scripts = Engine::ScriptRegistry::instance();
+    scripts.registerClass<LifecycleTestScript>("EnableDisableLifecycleTestScript");
+    Engine::ScriptSystem system{scripts};
+    Engine::Registry registry;
+    const auto entity = registry.create();
+    registry.add<Engine::ScriptComponent>(entity,
+                                          Engine::ScriptComponent{"EnableDisableLifecycleTestScript"});
+
+    system.update(registry, 0.1F);
+    auto& component = registry.get<Engine::ScriptComponent>(entity);
+    component.enabled = false;
+    system.update(registry, 0.1F);
+    component.enabled = true;
+    system.update(registry, 0.1F);
+
+    EXPECT_EQ(LifecycleTestScript::created, 1);
+    EXPECT_EQ(LifecycleTestScript::enabled, 2);
+    EXPECT_EQ(LifecycleTestScript::disabled, 1);
+    EXPECT_EQ(LifecycleTestScript::updated, 2);
 }
 
 TEST(ScriptSystem, ReportsMissingScriptWithContextOnlyOnce) {
