@@ -5,5 +5,6 @@
 class EditorStyle final {
 public:
     static void apply();
-    static void configureDockLayout(ImVec2 dockSize);
+    /** Builds the initial layout only when no persisted ImGui layout exists. */
+    static void configureDockLayout(ImVec2 dockSize, bool restorePersistedLayout);
 };

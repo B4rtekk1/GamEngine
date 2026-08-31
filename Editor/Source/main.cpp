@@ -146,6 +146,7 @@ int main(int argc, char** argv) {
         const std::filesystem::path preferencesPath = Editor::preferencesDirectory();
         std::filesystem::create_directories(preferencesPath);
         const std::string imguiIniPath = (preferencesPath / "imgui.ini").string();
+        const bool restorePersistedLayout = std::filesystem::is_regular_file(imguiIniPath);
         imguiIo.IniFilename = imguiIniPath.c_str();
         imguiIo.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard | ImGuiConfigFlags_DockingEnable;
         const std::filesystem::path uiFont = findDefaultUiFont();
@@ -343,7 +344,7 @@ int main(int argc, char** argv) {
                          ImGuiWindowFlags_NoNavFocus | ImGuiWindowFlags_NoBackground);
             const ImGuiID dockspaceId = viewport->ID;
             ImGui::DockSpace(dockspaceId, {0.0F, 0.0F}, ImGuiDockNodeFlags_PassthruCentralNode);
-            EditorStyle::configureDockLayout(dockSize);
+            EditorStyle::configureDockLayout(dockSize, restorePersistedLayout);
             ImGui::End();
             ImGui::PopStyleVar();
             HierarchyPanel::Action hierarchyAction = HierarchyPanel::Action::None;

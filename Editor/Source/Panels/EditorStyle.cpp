@@ -166,9 +166,15 @@ void EditorStyle::apply() {
 /**
  * @brief Creates the default editor docking layout once.
  */
-void EditorStyle::configureDockLayout(const ImVec2 dockSize) {
+void EditorStyle::configureDockLayout(const ImVec2 dockSize, const bool restorePersistedLayout) {
     static bool configured = false;
     if (configured) {
+        return;
+    }
+    // ImGui applies IniFilename on its first frame. Do not subsequently erase
+    // the restored dock nodes with the engine's first-run default layout.
+    if (restorePersistedLayout) {
+        configured = true;
         return;
     }
     const ImGuiID root = ImGui::GetMainViewport()->ID;
