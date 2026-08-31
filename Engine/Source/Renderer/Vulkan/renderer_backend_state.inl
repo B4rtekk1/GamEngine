@@ -19,6 +19,7 @@
         VkRenderPass editorUiRenderPass = VK_NULL_HANDLE;
         std::vector<VkFramebuffer> editorUiFramebuffers;
         VkDescriptorSet gameViewportDescriptor = VK_NULL_HANDLE;
+        std::array<VkDescriptorSet, 2> gameViewportTemporalDescriptors{};
         VkDescriptorSet sceneViewportDescriptor = VK_NULL_HANDLE;
         bool editorUiActive = false;
 
@@ -162,6 +163,7 @@
         std::uint64_t taaSampleIndex = 0;
         float taaJitterX = 0.0F;
         float taaJitterY = 0.0F;
+        bool taaResolveActive = false;
 
         bool framebufferResized = false;
         bool cleanedUp = false;

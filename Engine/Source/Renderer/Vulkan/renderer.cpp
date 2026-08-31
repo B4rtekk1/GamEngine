@@ -204,7 +204,14 @@ namespace Engine {
             ImGui::NewFrame();
         }
 
-        [[nodiscard]] VkDescriptorSet gameViewportTexture() const noexcept { return gameViewportDescriptor; }
+        [[nodiscard]] VkDescriptorSet gameViewportTexture() const noexcept {
+            if (antialiasingLevel == AntialiasingLevel::TAA) {
+                const VkDescriptorSet descriptor =
+                    gameViewportTemporalDescriptors[temporalAaPass.nextResolvedIndex()];
+                if (descriptor != VK_NULL_HANDLE) return descriptor;
+            }
+            return gameViewportDescriptor;
+        }
         [[nodiscard]] VkDescriptorSet sceneViewportTexture() const noexcept { return sceneViewportDescriptor; }
         [[nodiscard]] float editorCameraYaw() const noexcept { return cameraController.editorYaw(); }
         [[nodiscard]] float editorCameraPitch() const noexcept { return cameraController.editorPitch(); }

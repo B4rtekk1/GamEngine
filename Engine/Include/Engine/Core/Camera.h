@@ -26,8 +26,13 @@ namespace Engine {
         /** @brief Sets the camera world position. */
         void setPosition(const Vec3 &position);
 
-        /** @brief Sets yaw and pitch in degrees; pitch is clamped to [-89, 89]. */
-        void setRotation(Degrees yaw, Degrees pitch);
+        /**
+         * @brief Sets yaw, pitch and roll in degrees; pitch is clamped to [-89, 89].
+         * @param yaw Rotation around the world Y axis.
+         * @param pitch Rotation around the camera's right axis.
+         * @param roll Rotation around the camera's forward axis.
+         */
+        void setRotation(Degrees yaw, Degrees pitch, Degrees roll = Degrees{});
 
         /** @brief Translates the camera by a world-space offset. */
         void move(const Vec3 &offset);
@@ -61,6 +66,7 @@ namespace Engine {
 
         Degrees m_yaw{Degrees{-90.0F}}; //NOLINT
         Degrees m_pitch{};
+        Degrees m_roll{};
 
         Degrees m_fov;
         float m_aspectRatio;

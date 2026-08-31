@@ -514,6 +514,13 @@
             info.PipelineInfoMain.MSAASamples = VK_SAMPLE_COUNT_1_BIT;
             if (!ImGui_ImplVulkan_Init(&info)) throw std::runtime_error("Could not initialize ImGui Vulkan backend");
             gameViewportDescriptor = ImGui_ImplVulkan_AddTexture(hdrBuffer.imageView(), VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+            if (antialiasingLevel == AntialiasingLevel::TAA) {
+                const auto historyViews = temporalAaPass.historyViews();
+                for (std::size_t index = 0; index < historyViews.size(); ++index) {
+                    gameViewportTemporalDescriptors[index] = ImGui_ImplVulkan_AddTexture(
+                        historyViews[index], VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+                }
+            }
             sceneViewportDescriptor = ImGui_ImplVulkan_AddTexture(sceneViewportTarget.color().imageView(), VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
             editorUiActive = true;
         }
@@ -522,6 +529,9 @@
             if (editorUiActive) {
                 if (gameViewportDescriptor != VK_NULL_HANDLE) { ImGui_ImplVulkan_RemoveTexture(gameViewportDescriptor);
 }
+                for (const VkDescriptorSet descriptor : gameViewportTemporalDescriptors) {
+                    if (descriptor != VK_NULL_HANDLE) ImGui_ImplVulkan_RemoveTexture(descriptor);
+                }
                 if (sceneViewportDescriptor != VK_NULL_HANDLE) { ImGui_ImplVulkan_RemoveTexture(sceneViewportDescriptor);
 }
             }
@@ -540,6 +550,7 @@
                 ImGui_ImplSDL3_Shutdown();
             }
             gameViewportDescriptor = sceneViewportDescriptor = VK_NULL_HANDLE;
+            gameViewportTemporalDescriptors.fill(VK_NULL_HANDLE);
             editorUiActive = false;
             for (VkFramebuffer framebuffer : editorUiFramebuffers) if (framebuffer != VK_NULL_HANDLE) vkDestroyFramebuffer(device, framebuffer, nullptr);
             editorUiFramebuffers.clear();
@@ -556,11 +567,22 @@
             if (gameViewportDescriptor != VK_NULL_HANDLE) {
                 ImGui_ImplVulkan_RemoveTexture(gameViewportDescriptor);
             }
+            for (const VkDescriptorSet descriptor : gameViewportTemporalDescriptors) {
+                if (descriptor != VK_NULL_HANDLE) ImGui_ImplVulkan_RemoveTexture(descriptor);
+            }
+            gameViewportTemporalDescriptors.fill(VK_NULL_HANDLE);
             if (sceneViewportDescriptor != VK_NULL_HANDLE) {
                 ImGui_ImplVulkan_RemoveTexture(sceneViewportDescriptor);
             }
             gameViewportDescriptor = ImGui_ImplVulkan_AddTexture(
                 hdrBuffer.imageView(), VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+            if (antialiasingLevel == AntialiasingLevel::TAA) {
+                const auto historyViews = temporalAaPass.historyViews();
+                for (std::size_t index = 0; index < historyViews.size(); ++index) {
+                    gameViewportTemporalDescriptors[index] = ImGui_ImplVulkan_AddTexture(
+                        historyViews[index], VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+                }
+            }
             sceneViewportDescriptor = ImGui_ImplVulkan_AddTexture(
                 sceneViewportTarget.color().imageView(), VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
         }

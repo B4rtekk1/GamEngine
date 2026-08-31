@@ -313,10 +313,13 @@ int main(int argc, char** argv) {
                     setSelection(scene.editor().duplicate(selectedEntity));
                 }
             }
-            if (playToggleRequested && EditorSceneSession::setPlayMode(!playing, scene, playSceneSnapshot,
-                                                                       playModeError,
-                                                                       EditorSceneSession::msaaSampleCount(renderer))) {
-                playing = !playing;
+            const auto setPlayMode = [&](const bool enabled) {
+                if (!EditorSceneSession::setPlayMode(enabled, scene, playSceneSnapshot, playModeError,
+                                                     EditorSceneSession::msaaSampleCount(renderer))) {
+                    Editor::ConsolePanel::error("Could not change Play mode: " + playModeError);
+                    return false;
+                }
+                playing = enabled;
                 paused = false;
                 physicsAccumulator = 0.0;
                 showGameView = playing;
@@ -325,9 +328,9 @@ int main(int argc, char** argv) {
                     rendererReloadPending = true;
                 }
                 Editor::ConsolePanel::info(playing ? "Entered Play mode." : "Stopped Play mode.");
-            } else if (playToggleRequested) {
-                Editor::ConsolePanel::error("Could not change Play mode: " + playModeError);
-            }
+                return true;
+            };
+            if (playToggleRequested) static_cast<void>(setPlayMode(!playing));
             if (pauseToggleRequested && playing) {
                 paused = !paused;
                 physicsAccumulator = 0.0;
@@ -411,6 +414,14 @@ int main(int argc, char** argv) {
                     renderer.gameViewport(), renderer.sceneViewport(),
                     renderer.editorCameraYaw(), renderer.editorCameraPitch(), showGameView, gizmoMode,
                     selectionTool, terrainSculpt, playing, showViewport);
+            }
+            if (viewportInteraction.playModeAction == PlayModeAction::Start && !playing) {
+                static_cast<void>(setPlayMode(true));
+            } else if (viewportInteraction.playModeAction == PlayModeAction::Stop && playing) {
+                static_cast<void>(setPlayMode(false));
+            } else if (viewportInteraction.playModeAction == PlayModeAction::Restart && playing &&
+                       setPlayMode(false)) {
+                static_cast<void>(setPlayMode(true));
             }
             if (showTerrainTools) {
                 drawTerrainToolsPanel(scene, content, selectedEntity, renderer, terrainSculpt,

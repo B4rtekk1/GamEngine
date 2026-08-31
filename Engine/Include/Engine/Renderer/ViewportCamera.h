@@ -20,7 +20,8 @@ namespace Engine {
                 component.nearClip, component.farClip
             };
             result.setPosition(transform.position);
-            result.setRotation(Degrees{transform.rotation.y()}, Degrees{transform.rotation.x()});
+            result.setRotation(Degrees{transform.rotation.y()}, Degrees{transform.rotation.x()},
+                               Degrees{transform.rotation.z()});
             return {ViewportCameraType::Game, result};
         }
 

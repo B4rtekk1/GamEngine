@@ -26,6 +26,10 @@ namespace Engine {
                     float currentJitterX, float currentJitterY);
         [[nodiscard]] VkImageView resolvedView() const noexcept { return history_[historyIndex_].imageView(); }
         [[nodiscard]] std::uint32_t resolvedIndex() const noexcept { return historyIndex_; }
+        // The editor builds its ImGui draw data before the command buffer is
+        // recorded. This is the history image that record() will write later
+        // in that command buffer, before ImGui samples it.
+        [[nodiscard]] std::uint32_t nextResolvedIndex() const noexcept { return 1U - historyIndex_; }
         [[nodiscard]] std::array<VkImageView, 2> historyViews() const noexcept {
             return {history_[0].imageView(), history_[1].imageView()};
         }

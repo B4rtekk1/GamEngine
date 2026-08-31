@@ -63,7 +63,8 @@ namespace Engine {
         Transform &transform = *activeTransform;
         camera_.emplace(Degrees{component.fieldOfView}, component.aspectRatio,
                         component.nearClip, component.farClip);
-        camera_->setRotation(Degrees{transform.rotation.y()}, Degrees{transform.rotation.x()});
+        camera_->setRotation(Degrees{transform.rotation.y()}, Degrees{transform.rotation.x()},
+                             Degrees{transform.rotation.z()});
 
         const bool flyMode = Input::mouseDown(MouseButton::Right);
         const bool moveFast = Input::keyDown(KeyCode::LeftShift) ||

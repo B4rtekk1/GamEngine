@@ -96,12 +96,23 @@
                                                    component.nearClip, component.farClip);
                 cameraController.camera()->setPosition(transform.position);
                 cameraController.camera()->setRotation(Degrees{transform.rotation.y()},
-                                                        Degrees{transform.rotation.x()});
+                                                        Degrees{transform.rotation.x()},
+                                                        Degrees{transform.rotation.z()});
             }
 
             taaJitterX = 0.0F;
             taaJitterY = 0.0F;
-            if (antialiasingLevel == AntialiasingLevel::TAA && !editorUiActive) {
+            // The embedded Game View is also rendered before the ImGui pass.
+            // Apply TAA there, but leave the independent Scene View camera
+            // stable so editor gizmos and picking stay pixel-precise.
+            const bool temporalAaWasActive = taaResolveActive;
+            taaResolveActive = antialiasingLevel == AntialiasingLevel::TAA &&
+                (!editorUiActive || !sceneViewportActive);
+            if (taaResolveActive && !temporalAaWasActive) {
+                temporalAaPass.reset();
+                taaSampleIndex = 0;
+            }
+            if (taaResolveActive) {
                 const auto halton = [](std::uint64_t index, const std::uint32_t base) {
                     float result = 0.0F;
                     float factor = 1.0F;
@@ -389,6 +400,10 @@
                 hiZValid = true;
             }
 
+            if (taaResolveActive) {
+                temporalAaPass.record(commandBuffer, swapchain.extent(), taaJitterX, taaJitterY);
+            }
+
             if (editorUiActive) {
                 VkRenderPassBeginInfo pass{VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO};
                 pass.renderPass = editorUiRenderPass;
@@ -405,8 +420,7 @@
                 ImGui_ImplVulkan_RenderDrawData(ImGui::GetDrawData(), commandBuffer);
                 vkCmdEndRenderPass(commandBuffer);
             } else {
-                if (antialiasingLevel == AntialiasingLevel::TAA) {
-                    temporalAaPass.record(commandBuffer, swapchain.extent(), taaJitterX, taaJitterY);
+                if (taaResolveActive) {
                     tonemapPass.record(commandBuffer, imageIndex.value, swapchain.extent(), 0.0F,
                                        1U + temporalAaPass.resolvedIndex());
                 } else {

@@ -87,6 +87,15 @@ TEST(Camera, MovesAndProducesOrthonormalDirectionsWithClampedPitch) {
     EXPECT_NEAR(Engine::dot(camera.forward(), camera.right()), 0.0F, 1.0e-5F);
 }
 
+TEST(Camera, AppliesRollToTheUpAndRightDirections) {
+    Engine::Camera camera{Engine::Degrees{60.0F}, 1.0F, 0.1F, 100.0F};
+    camera.setRotation(Engine::Degrees{-90.0F}, Engine::Degrees{0.0F}, Engine::Degrees{90.0F});
+
+    ExpectVec3Near(camera.forward(), 0.0F, 0.0F, -1.0F);
+    ExpectVec3Near(camera.right(), 0.0F, 1.0F, 0.0F);
+    ExpectVec3Near(camera.up(), -1.0F, 0.0F, 0.0F);
+}
+
 TEST(RectTransform, CalculatesFixedAndStretchedRectangles) {
     const Engine::UI::Rect parent{10.0F, 20.0F, 200.0F, 100.0F};
     Engine::UI::RectTransform fixed;

@@ -36,9 +36,10 @@ void Camera::setPosition(const Vec3& position) {
     m_position = position;
 }
 
-void Camera::setRotation(const Degrees yaw, const Degrees pitch) {
+void Camera::setRotation(const Degrees yaw, const Degrees pitch, const Degrees roll) {
     m_yaw = yaw;
     m_pitch = Degrees{std::clamp(pitch.value(), MIN_PITCH, MAX_PITCH)};
+    m_roll = roll;
 }
 
 void Camera::move(const Vec3& offset) {
@@ -76,7 +77,10 @@ Vec3 Camera::forward() const {
 }
 
 Vec3 Camera::right() const {
-    return cross(forward(), WORLD_UP).normalized();
+    const Vec3 unrolledRight = cross(forward(), WORLD_UP).normalized();
+    const Vec3 unrolledUp = cross(unrolledRight, forward()).normalized();
+    const float roll = Radians{m_roll}.value();
+    return (unrolledRight * std::cos(roll) + unrolledUp * std::sin(roll)).normalized();
 }
 
 Vec3 Camera::up() const {

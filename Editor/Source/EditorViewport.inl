@@ -63,6 +63,8 @@ int drawSceneOrientationGizmo(const ImVec2 imageMin, const ImVec2 imageMax,
     }
     return -1;
 }
+enum class PlayModeAction { None, Start, Stop, Restart };
+
 struct ViewportInteraction final {
     bool cameraInput{};
     bool gameCameraInput{};
@@ -75,6 +77,7 @@ struct ViewportInteraction final {
     Engine::Entity createdEntity{Engine::NullEntity};
     std::vector<Engine::Entity> selectedEntities;
     bool selectionCommitted{};
+    PlayModeAction playModeAction{PlayModeAction::None};
     float normalizedX{};
     float normalizedY{};
 };
@@ -1605,6 +1608,30 @@ ViewportInteraction drawViewport(Engine::ScenePreset &scene, Engine::Assets::Con
     const Engine::ViewportHandle descriptor = showGameView ? gameDescriptor : sceneDescriptor;
 
     ImGui::Begin("Viewport", &isOpen, ImGuiWindowFlags_NoScrollbar);
+    ViewportInteraction interaction{};
+    if (!playing) {
+        ImGui::PushStyleColor(ImGuiCol_Button, {0.12F, 0.40F, 0.28F, 1.0F});
+        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, {0.20F, 0.56F, 0.38F, 1.0F});
+        ImGui::PushStyleColor(ImGuiCol_ButtonActive, {0.10F, 0.30F, 0.22F, 1.0F});
+        if (EditorButton(" Play Mode ").draw()) interaction.playModeAction = PlayModeAction::Start;
+        ImGui::PopStyleColor(3);
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("Start Play Mode (F5)");
+    } else {
+        ImGui::PushStyleColor(ImGuiCol_Button, {0.58F, 0.20F, 0.22F, 1.0F});
+        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, {0.74F, 0.28F, 0.30F, 1.0F});
+        ImGui::PushStyleColor(ImGuiCol_ButtonActive, {0.45F, 0.14F, 0.16F, 1.0F});
+        if (EditorButton(" Stop ").draw()) interaction.playModeAction = PlayModeAction::Stop;
+        ImGui::PopStyleColor(3);
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("Stop Play Mode and restore the editor scene (F5)");
+        ImGui::SameLine(0.0F, 6.0F);
+        ImGui::PushStyleColor(ImGuiCol_Button, {0.16F, 0.34F, 0.56F, 1.0F});
+        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, {0.24F, 0.46F, 0.72F, 1.0F});
+        ImGui::PushStyleColor(ImGuiCol_ButtonActive, {0.11F, 0.25F, 0.42F, 1.0F});
+        if (EditorButton(" Restart ").draw()) interaction.playModeAction = PlayModeAction::Restart;
+        ImGui::PopStyleColor(3);
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("Restart Play Mode from the editor scene");
+    }
+    ImGui::SameLine(0.0F, 10.0F);
     if (!playing) {
         ImGui::TextDisabled(showGameView
             ? "Game camera: RMB + WASD/QE  |  Shift: faster  |  Wheel: zoom"
@@ -1648,7 +1675,6 @@ ViewportInteraction drawViewport(Engine::ScenePreset &scene, Engine::Assets::Con
     }
     bool viewportHovered = ImGui::IsWindowHovered(ImGuiHoveredFlags_AllowWhenBlockedByActiveItem);
     const ImVec2 size = ImGui::GetContentRegionAvail();
-    ViewportInteraction interaction{};
     if (descriptor && size.x > 1.0F && size.y > 1.0F) {
         constexpr float viewportAspect = EditorConstants::viewportWidthRatio /
                                          EditorConstants::viewportHeightRatio;
