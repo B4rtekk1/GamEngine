@@ -1,16 +1,29 @@
 #include "Editor/Panels/AssetManagerPanel.h"
 
+#include "Editor/AssetImporter.h"
 #include "Editor/Panels/AssetDragDrop.h"
+#include "Editor/Panels/ConsolePanel.h"
 #include "Elements/NumericControl.h"
 #include "imgui.h"
 
 #include <algorithm>
+#include <array>
 #include <cctype>
 #include <cstdio>
 #include <fstream>
 #include <regex>
+#include <optional>
 #include <string>
 #include <vector>
+
+#ifdef _WIN32
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+#include <commdlg.h>
+#include <shlobj.h>
+#endif
 
 // NOLINTBEGIN(readability-magic-numbers)
 // NOLINTBEGIN(readability-identifier-length)
@@ -35,6 +48,33 @@ std::string lower(std::string value) {
                            [](const unsigned char c) { return static_cast<char>(std::tolower(c)); });
     return value;
 }
+
+#ifdef _WIN32
+std::optional<std::filesystem::path> chooseImportFile(const bool archiveOnly) {
+    std::array<wchar_t, 32768> path{};
+    OPENFILENAMEW dialog{};
+    dialog.lStructSize = sizeof(dialog);
+    dialog.lpstrFilter = archiveOnly ? L"ZIP archive (*.zip)\0*.zip\0\0"
+                                    : L"All files (*.*)\0*.*\0\0";
+    dialog.lpstrFile = path.data();
+    dialog.nMaxFile = static_cast<DWORD>(path.size());
+    dialog.Flags = OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST | OFN_NOCHANGEDIR;
+    if (!GetOpenFileNameW(&dialog)) return std::nullopt;
+    return std::filesystem::path{path.data()};
+}
+
+std::optional<std::filesystem::path> chooseImportFolder() {
+    BROWSEINFOW dialog{};
+    dialog.lpszTitle = L"Choose asset folder to import";
+    dialog.ulFlags = BIF_RETURNONLYFSDIRS | BIF_NEWDIALOGSTYLE;
+    PIDLIST_ABSOLUTE item = SHBrowseForFolderW(&dialog);
+    if (item == nullptr) return std::nullopt;
+    std::array<wchar_t, MAX_PATH> path{};
+    const bool resolved = SHGetPathFromIDListW(item, path.data()) != FALSE;
+    CoTaskMemFree(item);
+    return resolved ? std::optional<std::filesystem::path>{std::filesystem::path{path.data()}} : std::nullopt;
+}
+#endif
 
 bool is_model(const std::filesystem::path& path) {
     const auto ext = lower(path.extension().string());
@@ -329,7 +369,29 @@ Engine::Entity AssetManagerPanel::draw(Engine::ScenePreset& scene, Engine::Asset
     if (ImGui::Button("R##asset-refresh"))
         refresh();
     if (ImGui::IsItemHovered())
-        ImGui::SetTooltip("Refresh assets");
+    ImGui::SetTooltip("Refresh assets");
+    ImGui::SameLine();
+    if (ImGui::Button("Import...##asset-import"))
+        ImGui::OpenPopup("##asset-import-menu");
+    if (ImGui::BeginPopup("##asset-import-menu")) {
+#ifdef _WIN32
+        const auto importSelected = [&](const std::optional<std::filesystem::path>& source) {
+            if (!source) return;
+            if (Editor::AssetImporter::import(*source, root / selectedFolder, error)) {
+                refresh();
+                Editor::ConsolePanel::info("Imported asset: " + source->filename().string());
+            } else {
+                Editor::ConsolePanel::error("Could not import asset: " + error);
+            }
+        };
+        if (ImGui::MenuItem("File...")) importSelected(chooseImportFile(false));
+        if (ImGui::MenuItem("Folder...")) importSelected(chooseImportFolder());
+        if (ImGui::MenuItem("ZIP archive...")) importSelected(chooseImportFile(true));
+#else
+        ImGui::TextDisabled("Asset import dialog is available in the Windows editor.");
+#endif
+        ImGui::EndPopup();
+    }
     ImGui::SameLine();
     char filterBuffer[256]{};
     std::snprintf(filterBuffer, sizeof(filterBuffer), "%s", filter.c_str());

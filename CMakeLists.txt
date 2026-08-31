@@ -234,13 +234,14 @@ add_executable(Editor
         Editor/Source/Panels/EditorStyle.cpp
         Editor/Source/Panels/EditorSceneSession.cpp
         Editor/Source/Panels/AssetManagerPanel.cpp
+        Editor/Source/AssetImporter.cpp
         Editor/Source/Panels/ConsolePanel.cpp)
 gameengine_enable_warnings(Editor)
 gameengine_enable_sanitizers(Editor)
 target_include_directories(Editor PRIVATE Editor/Include)
 target_link_libraries(Editor PRIVATE DearImGui Engine SDL3::SDL3 Vulkan::Vulkan)
 if(WIN32)
-    target_link_libraries(Editor PRIVATE Comdlg32)
+    target_link_libraries(Editor PRIVATE Comdlg32 Shell32)
 endif()
 gameengine_copy_runtime_dependencies(Editor)
 target_compile_definitions(Editor PRIVATE GAMEENGINE_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
