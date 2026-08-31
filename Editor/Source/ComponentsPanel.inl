@@ -110,9 +110,12 @@ bool ComponentsPanel::draw(Engine::ScenePreset &scene, const std::vector<Engine:
         ImGui::End();
         return consumesMouseWheel;
     }
-    if (scene.editor().valid(selected) &&
-        scene.editor().has<Engine::MeshRenderer>(selected) &&
-        ImGui::CollapsingHeader("Mesh Renderer", ImGuiTreeNodeFlags_DefaultOpen)) {
+    if (scene.editor().valid(selected) && scene.editor().has<Engine::MeshRenderer>(selected)) {
+        bool remove = false;
+        const bool open = drawRemovableComponentHeader("Mesh Renderer", "mesh-renderer", remove);
+        if (remove) {
+            scene.editor().remove<Engine::MeshRenderer>(selected);
+        } else if (open) {
         const auto readScene = scene.editor();
         const auto &source = readScene.get<Engine::MeshRenderer>(selected);
         auto renderer = source;
@@ -177,10 +180,14 @@ bool ComponentsPanel::draw(Engine::ScenePreset &scene, const std::vector<Engine:
             scene.editor().modify<Engine::MeshRenderer>(selected,
                 [&](auto &component) { component = renderer; });
         }
+        }
     }
-    if (scene.editor().valid(selected) &&
-        scene.editor().has<Engine::TerrainComponent>(selected) &&
-        ImGui::CollapsingHeader("Terrain", ImGuiTreeNodeFlags_DefaultOpen)) {
+    if (scene.editor().valid(selected) && scene.editor().has<Engine::TerrainComponent>(selected)) {
+        bool remove = false;
+        const bool open = drawRemovableComponentHeader("Terrain", "terrain", remove);
+        if (remove) {
+            scene.editor().remove<Engine::TerrainComponent>(selected);
+        } else if (open) {
         const auto& terrain = scene.editor().get<Engine::TerrainComponent>(selected);
         ImGui::Text("Heightmap: %u x %u", terrain.resolution, terrain.resolution);
         ImGui::Text("Size: %.1f x %.1f", terrain.width, terrain.depth);
@@ -190,6 +197,10 @@ bool ComponentsPanel::draw(Engine::ScenePreset &scene, const std::vector<Engine:
         if (scene.editor().has<Engine::TerrainGrassComponent>(selected)) {
             const auto& grass = scene.editor().get<Engine::TerrainGrassComponent>(selected);
             ImGui::Text("Grass instances: %zu", grass.instances.size());
+            ImGui::SameLine();
+            if (ImGui::SmallButton("Remove##terrain-grass")) {
+                scene.editor().remove<Engine::TerrainGrassComponent>(selected);
+            } else {
             bool castGrassShadow = grass.castShadow;
             if (ImGui::Checkbox("Cast Shadows##terrain-grass", &castGrassShadow)) {
                 scene.editor().modify<Engine::TerrainGrassComponent>(selected,
@@ -213,8 +224,10 @@ bool ComponentsPanel::draw(Engine::ScenePreset &scene, const std::vector<Engine:
                     component.allInstancesDirty = true;
                 });
             }
+            }
         } else {
             ImGui::TextDisabled("Grass: choose Grass in Scene View and drop a model prefab.");
+        }
         }
     }
     if (scene.editor().valid(selected) &&
