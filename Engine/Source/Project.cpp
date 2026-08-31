@@ -105,7 +105,7 @@ Project Project::create(const std::filesystem::path& rootDirectory, std::string 
     if (name.empty()) throw std::runtime_error("Project name cannot be empty");
 
     std::error_code error;
-    std::filesystem::create_directories(root / "Assets" / "Scenes", error);
+    std::filesystem::create_directories(root / "Scenes", error);
     if (error) throw std::runtime_error("Could not create project directories: " + error.message());
     std::filesystem::create_directories(root / "Assets" / "Models", error);
     if (error) throw std::runtime_error("Could not create project directories: " + error.message());
@@ -118,11 +118,11 @@ Project Project::create(const std::filesystem::path& rootDirectory, std::string 
     std::ofstream manifestOutput{manifest};
     if (!manifestOutput) throw std::runtime_error("Could not create project manifest: " + manifest.string());
     manifestOutput << "# GamEngine project\nname = " << name
-                   << "\nasset_root = Assets\nstartup_scene = Assets/Scenes/Main.scene\n";
+                   << "\nasset_root = Assets\nstartup_scene = Scenes/Main.scene\n";
     if (!manifestOutput) throw std::runtime_error("Could not write project manifest: " + manifest.string());
     manifestOutput.close();
 
-    const auto scene = root / "Assets" / "Scenes" / "Main.scene";
+    const auto scene = root / "Scenes" / "Main.scene";
     std::ofstream sceneOutput{scene};
     if (!sceneOutput) throw std::runtime_error("Could not create starter scene: " + scene.string());
     sceneOutput << "GAMENGINE_SCENE 12\nSETTINGS MSAA 0\nMESHES 0\nENTITIES 0\nEND_SCENE\n";

@@ -216,14 +216,14 @@ void VulkanDevice::selectPhysicalDevice(const VkInstance candidate) {
     int bestScore = std::numeric_limits<int>::min();
     VkPhysicalDevice bestDevice = VK_NULL_HANDLE;
 
-    for (const VkPhysicalDevice candidate : candidates) {
-        if (!isSuitable(candidate)) {
+    for (const VkPhysicalDevice device : candidates) {
+        if (!isSuitable(device)) {
             continue;
         }
 
-        if (const int score = scoreDevice(candidate); score > bestScore) {
+        if (const int score = scoreDevice(device); score > bestScore) {
             bestScore = score;
-            bestDevice = candidate;
+            bestDevice = device;
         }
     }
 

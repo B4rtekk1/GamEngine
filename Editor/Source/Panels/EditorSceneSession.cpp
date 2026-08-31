@@ -95,6 +95,23 @@ std::optional<std::filesystem::path> EditorSceneSession::chooseLoadScenePath() {
 #endif
 }
 
+std::optional<std::filesystem::path> EditorSceneSession::chooseLoadProjectPath() {
+#ifdef _WIN32
+    std::array<wchar_t, 32768> selectedPath{};
+    OPENFILENAMEW dialog{};
+    dialog.lStructSize = sizeof(dialog);
+    dialog.lpstrFilter = L"GamEngine Project (*.project)\0*.project\0All Files (*.*)\0*.*\0\0";
+    dialog.lpstrFile = selectedPath.data();
+    dialog.nMaxFile = static_cast<DWORD>(selectedPath.size());
+    dialog.lpstrDefExt = L"project";
+    dialog.Flags = OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST | OFN_NOCHANGEDIR;
+    if (!GetOpenFileNameW(&dialog)) return std::nullopt;
+    return std::filesystem::path{selectedPath.data()};
+#else
+    return std::nullopt;
+#endif
+}
+
 void EditorSceneSession::markSceneSaved(std::filesystem::path path) {
     activeScenePath = std::move(path);
     sceneHasBeenSaved = true;

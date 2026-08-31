@@ -112,7 +112,7 @@ int main(int argc, char** argv) {
         if (projectPath && createProjectPath) {
             throw std::runtime_error("Use either --project or --create-project, not both");
         }
-        const Engine::Project project = createProjectPath
+        Engine::Project project = createProjectPath
                                             ? Engine::Project::create(*createProjectPath)
                                             : projectPath
                                             ? Engine::Project::load(*projectPath)
@@ -251,7 +251,7 @@ int main(int argc, char** argv) {
             bool pasteRequested = false;
             bool duplicateRequested = false;
             bool resetHistoryRequested = false;
-            if (const Engine::Entity created = drawEditorMenuBar(scene, renderer,
+            if (const Engine::Entity created = drawEditorMenuBar(scene, renderer, content, project,
                                                                  antialiasingChanged, sceneLoaded,
                                                                  playing, paused, playToggleRequested,
                                                                  pauseToggleRequested, history.canUndo(),

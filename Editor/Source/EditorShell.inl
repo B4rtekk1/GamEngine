@@ -34,6 +34,7 @@ void drawStatusBar(const Engine::ScenePreset &scene, const Engine::Entity select
 }
 
 Engine::Entity drawEditorMenuBar(Engine::ScenePreset &scene, Engine::Renderer &renderer,
+                                 Engine::Assets::Content& content, Engine::Project& project,
                                  bool &antialiasingChanged, bool &sceneLoaded,
                                  const bool playing, const bool paused, bool &playToggleRequested,
                                  bool &pauseToggleRequested, const bool canUndo,
@@ -106,12 +107,16 @@ Engine::Entity drawEditorMenuBar(Engine::ScenePreset &scene, Engine::Renderer &r
         if (ImGui::MenuItem("Save Scene As...", "Ctrl+Shift+S")) {
             saveSceneAs();
         }
-        if (ImGui::MenuItem("Load Scene", "Ctrl+O")) {
-            if (const auto selectedPath = EditorSceneSession::chooseLoadScenePath()) {
+        if (ImGui::MenuItem("Load Project...", "Ctrl+O")) {
+            if (const auto manifestPath = EditorSceneSession::chooseLoadProjectPath()) {
                 try {
+                    Engine::Project loadedProject = Engine::Project::load(*manifestPath);
                     std::optional<std::uint32_t> samples;
-                    Engine::SceneSerializer::load(scene, *selectedPath, samples);
-                    EditorSceneSession::markSceneSaved(*selectedPath);
+                    Engine::SceneSerializer::load(scene, loadedProject.startupScene(), samples);
+                    content.clear();
+                    content.setAssetRoot(loadedProject.assetRoot());
+                    project = std::move(loadedProject);
+                    EditorSceneSession::markSceneSaved(project.startupScene());
                     if (samples) {
                         renderer.setAntialiasingLevel(*samples == 2
                                                           ? Engine::AntialiasingLevel::MSAA2x
@@ -123,7 +128,7 @@ Engine::Entity drawEditorMenuBar(Engine::ScenePreset &scene, Engine::Renderer &r
                     sceneLoaded = true;
                     resetHistoryRequested = true;
                     sceneFileError.clear();
-                    Editor::ConsolePanel::info("Loaded scene: " + selectedPath->string());
+                    Editor::ConsolePanel::info("Loaded project: " + project.name());
                 } catch (const std::exception &error) {
                     sceneFileError = error.what();
                     Editor::ConsolePanel::error("Could not load scene: " + sceneFileError);

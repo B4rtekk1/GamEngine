@@ -55,7 +55,7 @@ TEST(Project, CreatesStandaloneProjectFolder) {
     EXPECT_EQ(project.name(), "Standalone Game");
     EXPECT_EQ(project.rootPath(), directory);
     EXPECT_TRUE(std::filesystem::is_regular_file(directory / "GamEngine.project"));
-    EXPECT_TRUE(std::filesystem::is_regular_file(directory / "Assets/Scenes/Main.scene"));
+    EXPECT_TRUE(std::filesystem::is_regular_file(directory / "Scenes/Main.scene"));
     EXPECT_TRUE(std::filesystem::is_directory(directory / "Assets/Models"));
     EXPECT_TRUE(std::filesystem::is_directory(directory / "Assets/Textures"));
     EXPECT_TRUE(std::filesystem::is_directory(directory / "Scripts"));
