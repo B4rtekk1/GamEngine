@@ -241,10 +241,20 @@ namespace Engine {
 
         void setEditorCameraRotation(const float yaw, const float pitch) noexcept {
             cameraController.setEditorRotation(yaw, pitch);
+            sceneViewportNeedsRender = true;
         }
 
         void setEditorCameraPosition(const Vec3 position) noexcept {
             cameraController.setEditorPosition(position);
+            sceneViewportNeedsRender = true;
+        }
+
+        void setSceneViewportActive(const bool active) noexcept {
+            const bool wasActive = sceneViewportActive;
+            sceneViewportActive = active;
+            // Returning to the panel must never show an uninitialized or stale
+            // cache after it was hidden while the scene changed.
+            if (active && !wasActive) sceneViewportNeedsRender = true;
         }
 
         void processEvent(const SDL_Event &event) {
@@ -264,6 +274,7 @@ namespace Engine {
         }
 
         void setEditorSelection(const Entity entity) {
+            sceneViewportNeedsRender = true;
             editorSelectedEntity = entity;
             editorSelectedRenderable = std::numeric_limits<std::uint32_t>::max();
             for (std::size_t index = 0; index < renderables.size(); ++index) {
@@ -428,6 +439,9 @@ namespace Engine {
             createTemporalAaPass();
             createTonemapPass();
             refreshEditorViewportTextures();
+            sceneViewportCacheValid = false;
+            sceneViewportImageInitialized = false;
+            sceneViewportNeedsRender = true;
             assetManager.unload_unused();
         }
 
@@ -450,6 +464,7 @@ namespace Engine {
             if (updatedTopology == renderableTopologySignature) {
                 return;
             }
+            sceneViewportNeedsRender = true;
             if (!inFlightFences.empty() && vkWaitForFences(device,
                                                            static_cast<uint32_t>(inFlightFences.size()),
                                                            inFlightFences.data(), VK_TRUE,

@@ -256,7 +256,20 @@
             if (vkBeginCommandBuffer(commandBuffer, &beginInfo) != VK_SUCCESS) {
                 throw std::runtime_error("Could not begin command buffer");
             }
-            const bool renderSceneViewport = editorUiActive && sceneViewportActive;
+            const bool renderSceneViewport = editorUiActive && sceneViewportRendered;
+            // ImGui owns a persistent descriptor for Scene View and may sample
+            // it even before the viewport receives its first deferred redraw.
+            // Use the normal render pass for a one-time clear: it also performs
+            // the exact attachment-layout transition used by a real Scene View
+            // render (including the MSAA resolve target).
+            if (!renderSceneViewport && !sceneViewportImageInitialized) {
+                forwardPass.begin(
+                    commandBuffer, sceneViewportFramebuffer, sceneViewportTarget.extent(),
+                    sceneDescriptorPass.descriptorSet(currentFrame), vertexBuffer.handle(),
+                    instanceBuffers[currentFrame].handle(), indexBuffer.handle());
+                ForwardPass::end(commandBuffer);
+                sceneViewportImageInitialized = true;
+            }
             // Culling runs before this frame's depth pass, so it consumes the
             // Hi-Z result from the previous frame. On the first frame there is
             // no previous result, but the descriptor is still bound and the
@@ -598,6 +611,9 @@
             waitForDrawableExtent();
 
             vkDeviceWaitIdle(device);
+            sceneViewportCacheValid = false;
+            sceneViewportImageInitialized = false;
+            sceneViewportNeedsRender = true;
 
             // The ImGui Vulkan backend owns swapchain-dependent render data.
             // Tear down both ImGui backends before recreating the presentation
@@ -653,7 +669,18 @@
         }
 
         void updateEditorSceneCameraInput() {
-            if (cameraController.editorInputEnabled()) cameraController.updateEditor(window);
+            if (!cameraController.editorInputEnabled()) return;
+            const Vec3 beforePosition = cameraController.editorPosition();
+            const float beforeYaw = cameraController.editorYaw();
+            const float beforePitch = cameraController.editorPitch();
+            cameraController.updateEditor(window);
+            if (beforePosition.x() != cameraController.editorPosition().x() ||
+                beforePosition.y() != cameraController.editorPosition().y() ||
+                beforePosition.z() != cameraController.editorPosition().z() ||
+                beforeYaw != cameraController.editorYaw() ||
+                beforePitch != cameraController.editorPitch()) {
+                sceneViewportNeedsRender = true;
+            }
         }
 
         void rebuildParticleColliderCache() {
@@ -845,6 +872,22 @@
 
             vkResetCommandBuffer(commandBuffers[currentFrame], 0);
             updateRenderableBuffers();
+            const Vec3 sceneCameraPosition = cameraController.editorPosition();
+            const float sceneCameraYaw = cameraController.editorYaw();
+            const float sceneCameraPitch = cameraController.editorPitch();
+            const bool sceneCameraChanged = !sceneViewportCacheValid ||
+                sceneCameraPosition.x() != renderedSceneViewportPosition.x() ||
+                sceneCameraPosition.y() != renderedSceneViewportPosition.y() ||
+                sceneCameraPosition.z() != renderedSceneViewportPosition.z() ||
+                sceneCameraYaw != renderedSceneViewportYaw ||
+                sceneCameraPitch != renderedSceneViewportPitch;
+            // The direct single-sample target is also exposed to ImGui. Keep
+            // its established every-frame render path until it has a dedicated
+            // cache-compatible render pass; MSAA uses a separate resolve image
+            // and can safely retain the deferred Scene View cache.
+            sceneViewportRendered = sceneViewportActive &&
+                (!msaa.enabled() || sceneViewportNeedsRender || sceneCameraChanged ||
+                 scene.mutationRevision() != sceneViewportRenderedRevision);
             // Scene View is deliberately not rendered in play mode. Its cache
             // cannot consume this frame's dirty list, so discard it lazily;
             // the active game-view cache is updated page-by-page below.
@@ -852,12 +895,12 @@
                 sceneDescriptorPass.invalidateCache();
             }
             updateUniformBuffer(currentFrame);
-            if (sceneViewportActive) {
+            if (sceneViewportRendered) {
                 updateSceneViewportUniformBuffer(currentFrame);
             }
             updateParticleSystemForFrame();
             updateCullingUniformBuffer(currentFrame);
-            if (sceneViewportActive) {
+            if (sceneViewportRendered) {
                 updateSceneCullingUniformBuffer(currentFrame);
             }
             if (optimizationFeatures.shadows) {
@@ -865,6 +908,15 @@
             }
             recordCommandBuffer(commandBuffers[currentFrame], SwapchainImageIndex{imageIndex});
             submitAndPresentFrame(imageIndex);
+            if (sceneViewportRendered) {
+                renderedSceneViewportPosition = sceneCameraPosition;
+                renderedSceneViewportYaw = sceneCameraYaw;
+                renderedSceneViewportPitch = sceneCameraPitch;
+                sceneViewportRenderedRevision = scene.mutationRevision();
+                sceneViewportNeedsRender = false;
+                sceneViewportCacheValid = true;
+                sceneViewportImageInitialized = true;
+            }
 
             currentFrame = (currentFrame + 1) % MAX_FRAMES_IN_FLIGHT;
             ++shadowClipFrameIndex;

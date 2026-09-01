@@ -398,6 +398,9 @@
             createUIResources();
             createEditorUiResources();
             createCullingResources();
+            sceneViewportCacheValid = false;
+            sceneViewportImageInitialized = false;
+            sceneViewportNeedsRender = true;
         }
 
         void createSkyPass() const {

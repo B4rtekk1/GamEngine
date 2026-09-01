@@ -154,6 +154,18 @@
         std::uint64_t renderableTopologySignature = 0;
         bool hiZValid = false;
         bool sceneViewportActive = false;
+        // Scene View is an off-screen cache. Redraw it only when its camera or
+        // scene data changes; the ImGui panel keeps sampling its last image.
+        bool sceneViewportNeedsRender = true;
+        bool sceneViewportCacheValid = false;
+        // Layout state is separate from cache validity: an empty cache still
+        // needs a legal layout when its ImGui descriptor is sampled.
+        bool sceneViewportImageInitialized = false;
+        bool sceneViewportRendered = false;
+        std::uint64_t sceneViewportRenderedRevision = 0;
+        Vec3 renderedSceneViewportPosition{};
+        float renderedSceneViewportYaw = 0.0F;
+        float renderedSceneViewportPitch = 0.0F;
         Entity editorSelectedEntity = NullEntity;
         std::uint32_t editorSelectedRenderable = std::numeric_limits<std::uint32_t>::max();
 
