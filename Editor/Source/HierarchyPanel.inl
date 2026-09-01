@@ -56,10 +56,21 @@ Engine::Entity HierarchyPanel::draw(Engine::ScenePreset &scene, Engine::Assets::
         }
     };
     ImGui::Begin("Hierarchy", &isOpen);
+    ImGui::TextDisabled("SCENE CONTENT");
+    ImGui::SameLine();
+    const float countWidth = ImGui::CalcTextSize("000 objects").x;
+    ImGui::SetCursorPosX(std::max(ImGui::GetCursorPosX(),
+                                  ImGui::GetWindowContentRegionMax().x - countWidth));
+    ImGui::TextDisabled("%zu objects", scene.editor().size());
+    ImGui::Separator();
     ImGui::BeginDisabled(disabled);
+    ImGui::PushStyleColor(ImGuiCol_Button, {0.075F, 0.410F, 0.570F, 1.0F});
+    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, {0.105F, 0.555F, 0.710F, 1.0F});
+    ImGui::PushStyleColor(ImGuiCol_ButtonActive, {0.060F, 0.310F, 0.450F, 1.0F});
     if (EditorButton("+  New Object...", {-1.0F, 0.0F}).draw()) {
         ImGui::OpenPopup("Create Object");
     }
+    ImGui::PopStyleColor(3);
     if (ImGui::IsItemHovered()) {
         ImGui::SetTooltip("Create an object in the scene");
     }

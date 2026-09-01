@@ -15,6 +15,12 @@ bool ComponentsPanel::draw(Engine::ScenePreset &scene, const std::vector<Engine:
                            const Engine::Entity active, bool& isOpen) {
     const Engine::Entity selected = active;
     ImGui::Begin("Inspector", &isOpen);
+    ImGui::TextDisabled("PROPERTIES");
+    if (selected != Engine::NullEntity && scene.editor().valid(selected)) {
+        ImGui::SameLine();
+        ImGui::TextDisabled("/ %s", entityName(scene, selected));
+    }
+    ImGui::Separator();
     if (selected == Engine::NullEntity || selection.empty()) {
         ImGui::Spacing();
         ImGui::Spacing();
