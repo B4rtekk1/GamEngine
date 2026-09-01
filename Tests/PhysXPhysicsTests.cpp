@@ -377,6 +377,25 @@ TEST(Scene, ManagesActorParentChildRelationships) {
     EXPECT_FALSE(ownedChild.valid());
 }
 
+TEST(Scene, CachesWorldTransformsAcrossParentChildHierarchy) {
+    Engine::Scene scene;
+    const auto parent = scene.createActor("Transform parent");
+    const auto child = parent.createChild("Transform child");
+    parent.setPosition({10.0F, 0.0F, 0.0F});
+    child.setPosition({2.0F, 3.0F, 4.0F});
+
+    const glm::vec3 firstPosition{scene.worldMatrix(child).native()[3]};
+    EXPECT_FLOAT_EQ(firstPosition.x, 12.0F);
+    EXPECT_FLOAT_EQ(firstPosition.y, 3.0F);
+    EXPECT_FLOAT_EQ(firstPosition.z, 4.0F);
+
+    parent.setPosition({20.0F, 1.0F, 0.0F});
+    const glm::vec3 secondPosition{scene.worldMatrix(child).native()[3]};
+    EXPECT_FLOAT_EQ(secondPosition.x, 22.0F);
+    EXPECT_FLOAT_EQ(secondPosition.y, 4.0F);
+    EXPECT_FLOAT_EQ(secondPosition.z, 4.0F);
+}
+
 TEST(SceneSerializer, RoundTripsParentRelationshipAndHierarchyOrder) {
     const auto path = std::filesystem::temp_directory_path() / "gameengine-hierarchy-roundtrip-test.scene";
     std::error_code error;

@@ -5,6 +5,7 @@
 #include "Engine/ECS/Components/TerrainGrassComponent.h"
 #include "Engine/Renderer/Geometry/Mesh.h"
 #include "Engine/Scene/Scene.h"
+#include "Engine/Scene/TransformSystem.h"
 
 #include <PxPhysicsAPI.h>
 #include <cooking/PxCooking.h>
@@ -52,9 +53,10 @@ namespace Engine {
         void trampleTerrainGrass(Registry& registry, const float deltaTime) {
             std::vector<GrassSphere> spheres;
             registry.view<Transform, ColliderComponent>(
-                [&](const Entity entity, const Transform& transform, const ColliderComponent& collider) {
+                [&](const Entity entity, const Transform&, const ColliderComponent& collider) {
                     const auto* sphere = std::get_if<SphereCollider>(&collider.shape);
                     if (sphere == nullptr) return;
+                    const Transform transform = TransformSystem::worldTransform(registry, entity);
                     const glm::vec3 center = glm::vec3{transform.matrix().native() *
                         glm::vec4{collider.offset.native(), 1.0F}};
                     const float scale = std::max({std::abs(transform.scale.x()),
@@ -69,8 +71,9 @@ namespace Engine {
 
             std::vector<Entity> changedTerrains;
             registry.view<Transform, TerrainGrassComponent>(
-                [&](const Entity entity, const Transform& terrainTransform, TerrainGrassComponent& grass) {
+                [&](const Entity entity, const Transform&, TerrainGrassComponent& grass) {
                     if (grass.instances.empty()) return;
+                    const Transform terrainTransform = TransformSystem::worldTransform(registry, entity);
                     grass.rebuildSpatialIndex();
                     const glm::mat4 terrainMatrix = terrainTransform.matrix().native();
                     const glm::mat4 inverseTerrain = glm::inverse(terrainMatrix);
@@ -655,6 +658,9 @@ namespace Engine {
                                            ? &owner.get<RigidbodyComponent>(entity)
                                            : nullptr;
             const bool dynamic = body != nullptr && body->type != RigidbodyType::Static;
+            if (dynamic && owner.has<ParentComponent>(entity)) {
+                throw std::logic_error("Dynamic rigid bodies cannot be parented; PhysX owns their world pose");
+            }
 
             PxRigidActor *actor = dynamic
                                       ? static_cast<PxRigidActor *>(physics->createRigidDynamic(toPhysX(transform)))
@@ -688,12 +694,13 @@ namespace Engine {
         void rebuild(Registry &owner) {
             releaseActors();
             registry = &owner;
-            owner.view<Transform>([&](const Entity entity, Transform &transform) {
+            owner.view<Transform>([&](const Entity entity, Transform &) {
                 if (!owner.has<ColliderComponent>(entity) &&
                     !owner.has<RigidbodyComponent>(entity)) {
                     return;
                 }
-                actors.emplace(entity, createActor(entity, owner, transform));
+                Transform world = TransformSystem::worldTransform(owner, entity);
+                actors.emplace(entity, createActor(entity, owner, world));
             });
             structuralRevision = owner.structuralRevision();
             colliderRevision = owner.componentRevision<ColliderComponent>();
@@ -714,8 +721,8 @@ namespace Engine {
                 return;
             }
             removeActor(entity);
-            Transform& transform = owner.get<Transform>(entity);
-            actors.emplace(entity, createActor(entity, owner, transform));
+            Transform world = TransformSystem::worldTransform(owner, entity);
+            actors.emplace(entity, createActor(entity, owner, world));
         }
 
         void reconcileStructure(Registry& owner) {
@@ -728,10 +735,11 @@ namespace Engine {
                 }
             }
             for (const Entity entity : stale) removeActor(entity);
-            owner.view<Transform>([&](const Entity entity, Transform& transform) {
+            owner.view<Transform>([&](const Entity entity, Transform&) {
                 if (actors.contains(entity) ||
                     (!owner.has<ColliderComponent>(entity) && !owner.has<RigidbodyComponent>(entity))) return;
-                actors.emplace(entity, createActor(entity, owner, transform));
+                Transform world = TransformSystem::worldTransform(owner, entity);
+                actors.emplace(entity, createActor(entity, owner, world));
             });
         }
 
@@ -770,7 +778,8 @@ namespace Engine {
 
             std::vector<Entity> scaleChanged;
             for (const auto& [entity, record] : actors) {
-                if (!same(record.lastTransform.scale, owner.get<Transform>(entity).scale)) {
+                if (!same(record.lastTransform.scale,
+                          TransformSystem::worldTransform(owner, entity).scale)) {
                     scaleChanged.push_back(entity);
                 }
             }
@@ -780,7 +789,7 @@ namespace Engine {
         void pushEcsState(Registry &owner) {
             using namespace physx;
             for (auto &[entity, record]: actors) {
-                Transform &transform = owner.get<Transform>(entity);
+                Transform transform = TransformSystem::worldTransform(owner, entity);
                 if (!samePose(transform, record.lastTransform)) {
                     record.actor->setGlobalPose(toPhysX(transform), true);
                     record.lastTransform = transform;
@@ -849,6 +858,7 @@ namespace Engine {
         }
         BroadPhaseCache &runtime = *broadPhaseCache_;
         Registry &registry = scene.registry();
+        TransformSystem::update(registry);
         runtime.ensureWorld(registry);
         runtime.physicsScene->setGravity(toPhysX(gravity_));
         runtime.pushEcsState(registry);

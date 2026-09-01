@@ -10,6 +10,7 @@
 #include "Engine/UI/Canvas.h"
 #include "Engine/UI/Vulkan/UIFontAtlas.h"
 #include "Engine/Scene/Components/IdentityComponents.h"
+#include "Engine/Scene/TransformSystem.h"
 #include "Engine/Scene/Prefab.h"
 #include "Engine/UI/Interface.h"
 #include "Engine/ECS/Components/CameraComponent.h"
@@ -238,6 +239,17 @@ namespace Engine {
         [[nodiscard]] Actor parentOf(const Actor &child) const noexcept;
 
         [[nodiscard]] std::vector<Actor> childrenOf(const Actor &parent) const;
+
+        /** Resolves local transforms and returns an actor's cached world matrix. */
+        [[nodiscard]] const Mat4 &worldMatrix(const Actor &actor) {
+            if (actor.scene_ != this || !actor.valid()) {
+                throw std::invalid_argument("Actor must be a live actor in this Scene");
+            }
+            return TransformSystem::worldMatrix(registry_, findEntity(actor.objectId_));
+        }
+
+        /** Updates the hierarchy's cached world transforms. */
+        void updateTransforms() { TransformSystem::update(registry_); }
 
         /**
          * Makes @p entity the sole enabled directional light in this scene.

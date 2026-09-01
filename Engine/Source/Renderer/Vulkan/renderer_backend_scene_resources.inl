@@ -625,6 +625,7 @@
                 dirtyShadowObjects.push_back(object);
             };
             const std::uint64_t transformRevision = registry.componentRevision<Transform>();
+            TransformSystem::update(registry);
             const std::uint64_t meshRendererRevision = registry.componentRevision<MeshRenderer>();
             const std::uint64_t terrainGrassRevision = registry.componentRevision<TerrainGrassComponent>();
             const std::uint64_t parentRevision = registry.componentRevision<ParentComponent>();
@@ -704,25 +705,8 @@
             }
 
             const Registry& readRegistry = registry;
-            std::unordered_map<UUID, Entity> entitiesByUuid;
-            entitiesByUuid.reserve(readRegistry.size());
-            readRegistry.view<UUIDComponent>([&](const Entity entity, const UUIDComponent& uuid) {
-                entitiesByUuid.emplace(uuid.value, entity);
-            });
             const auto worldModel = [&](const Entity entity) {
-                glm::mat4 model{1.0F};
-                Entity current = entity;
-                std::unordered_set<Entity> visited;
-                while (readRegistry.valid(current) && visited.insert(current).second &&
-                       readRegistry.has<Transform>(current)) {
-                    model = readRegistry.get<Transform>(current).matrix().native() * model;
-                    if (!readRegistry.has<ParentComponent>(current)) break;
-                    const UUID parent = readRegistry.get<ParentComponent>(current).parent;
-                    const auto found = entitiesByUuid.find(parent);
-                    if (found == entitiesByUuid.end()) break;
-                    current = found->second;
-                }
-                return model;
+                return readRegistry.get<Transform>(entity).worldMatrix().native();
             };
             const auto sameModel = [](const glm::mat4& left, const glm::mat4& right) {
                 constexpr float epsilon = 1.0e-5F;

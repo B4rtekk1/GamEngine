@@ -15,7 +15,8 @@
                     // LightComponent is enabled. The guard keeps the runtime
                     // path deterministic even for externally constructed scenes.
                     if (found || !light.enabled || light.type != LightType::Directional) return;
-                    const glm::vec3 direction = glm::vec3(transform.matrix().native() *
+                    const glm::mat4 world = transform.worldMatrix().native();
+                    const glm::vec3 direction = glm::vec3(world *
                                                           glm::vec4{0.0F, 0.0F, -1.0F, 0.0F});
                     if (glm::length(direction) <= 1e-6F) return;
                     result.direction = Vec3{glm::normalize(direction)};
@@ -46,8 +47,8 @@
                 const float now = static_cast<float>(Time::elapsedTime());
                 const Vec3 direction = wind.direction * (1.0F / length);
                 result.directionStrength = Vec4{direction.x(), direction.y(), direction.z(), wind.strength};
-                result.sourcePositionRange = Vec4{transform.position.x(), transform.position.y(),
-                                                  transform.position.z(), wind.range};
+                const glm::vec3 position = glm::vec3{transform.worldMatrix().native()[3]};
+                result.sourcePositionRange = Vec4{position.x, position.y, position.z, wind.range};
                 result.gustFrequencyTime = Vec4{wind.gustStrength, wind.frequency, now,
                                                  now - static_cast<float>(Time::deltaTime())};
                 found = true;
@@ -64,7 +65,8 @@
                 [&](const Entity entity, const Transform& transform, const LightComponent& light) {
                     if (!light.enabled || light.type == LightType::Directional ||
                         count == MaxLocalLights || light.range <= 0.0F) return;
-                    const glm::vec3 direction = glm::vec3(transform.matrix().native() *
+                    const glm::mat4 world = transform.worldMatrix().native();
+                    const glm::vec3 direction = glm::vec3(world *
                                                           glm::vec4{0.0F, 0.0F, -1.0F, 0.0F});
                     const Math::Color color = readRegistry.has<ColorPickerComponent>(entity)
                                                   ? readRegistry.get<ColorPickerComponent>(entity).color
@@ -73,8 +75,8 @@
                     const float outerRadians = light.outerConeAngle * pi / 180.0F;
                     const float innerRadians = light.innerConeAngle * pi / 180.0F;
                     auto& gpu = result[count++];
-                    gpu.positionRange = {transform.position.x(), transform.position.y(),
-                                         transform.position.z(), light.range};
+                    const glm::vec3 position = glm::vec3{world[3]};
+                    gpu.positionRange = {position.x, position.y, position.z, light.range};
                     gpu.directionOuterCos = {glm::normalize(direction), std::cos(outerRadians)};
                     gpu.colorIntensity = {color.r(), color.g(), color.b(), std::max(0.0F, light.intensity)};
                     gpu.parameters = {std::cos(innerRadians), static_cast<float>(light.type),

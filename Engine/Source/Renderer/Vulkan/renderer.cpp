@@ -32,6 +32,7 @@
 #include "Engine/ECS/Registry.h"
 #include "Engine/Scene/Scene.h"
 #include "Engine/Scene/Components/IdentityComponents.h"
+#include "Engine/Scene/TransformSystem.h"
 #include "Engine/ECS/Components/CameraComponent.h"
 #include "Engine/ECS/Components/ParticleEmitterComponent.h"
 #include "Engine/ECS/Components/SmokeEmitterComponent.h"
@@ -230,26 +231,7 @@ namespace Engine {
         [[nodiscard]] glm::mat4 worldModel(const Entity entity) const noexcept {
             const Registry& readRegistry = registry;
             if (!readRegistry.valid(entity) || !readRegistry.has<Transform>(entity)) return glm::mat4{1.0F};
-
-            std::unordered_map<UUID, Entity> entitiesByUuid;
-            entitiesByUuid.reserve(readRegistry.size());
-            readRegistry.view<UUIDComponent>([&](const Entity candidate, const UUIDComponent& uuid) {
-                entitiesByUuid.emplace(uuid.value, candidate);
-            });
-
-            glm::mat4 model{1.0F};
-            Entity current = entity;
-            std::unordered_set<Entity> visited;
-            while (readRegistry.valid(current) && visited.insert(current).second &&
-                   readRegistry.has<Transform>(current)) {
-                model = readRegistry.get<Transform>(current).matrix().native() * model;
-                if (!readRegistry.has<ParentComponent>(current)) break;
-                const auto parent = entitiesByUuid.find(
-                    readRegistry.get<ParentComponent>(current).parent);
-                if (parent == entitiesByUuid.end()) break;
-                current = parent->second;
-            }
-            return model;
+            return readRegistry.get<Transform>(entity).worldMatrix().native();
         }
 
         [[nodiscard]] Vec3 editorGizmoPosition(const Entity entity) const noexcept {
@@ -346,6 +328,7 @@ namespace Engine {
         }
 
         void renderFrame() {
+            TransformSystem::update(registry);
             Time::update();
             // Scene View navigation is updated before the editor UI so its
             // rendered image and gizmo overlay use the same camera state.
