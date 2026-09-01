@@ -29,6 +29,11 @@
                 for (Buffer& buffer : materialBuffers) {
                     buffer.destroy();
                 }
+                for (Buffer& buffer : gpuSceneInstanceBuffers) buffer.destroy();
+                for (Buffer& buffer : gpuSceneMeshBuffers) buffer.destroy();
+                for (Buffer& buffer : gpuSceneMaterialBuffers) buffer.destroy();
+                for (Buffer& buffer : visibleInstanceBuffers) buffer.destroy();
+                for (Buffer& buffer : visibleInstanceCountBuffers) buffer.destroy();
                 for (Buffer& uniformBuffer : uniformBuffers) {
                     uniformBuffer.destroy();
                 }

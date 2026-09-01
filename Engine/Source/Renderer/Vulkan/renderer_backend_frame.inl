@@ -365,6 +365,11 @@
 
             gpuCullingPasses[currentFrame].record(
                 commandBuffer, static_cast<std::uint32_t>(gpuObjects.size()));
+            // Produces the compact instance list consumed by the forthcoming
+            // instance-driven command generator. Legacy batch indirect draws
+            // remain active until that generator replaces them.
+            instanceCullingPasses[currentFrame].record(
+                commandBuffer, static_cast<std::uint32_t>(sceneGpu.database.instances().size()));
             foliageGpuCullingPasses[currentFrame].record(
                 commandBuffer, static_cast<std::uint32_t>(gpuObjects.size()));
 

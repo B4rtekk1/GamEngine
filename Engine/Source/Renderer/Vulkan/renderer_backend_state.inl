@@ -95,6 +95,11 @@
         Buffer indexBuffer;
         std::array<Buffer, MAX_FRAMES_IN_FLIGHT> instanceBuffers;
         std::array<Buffer, MAX_FRAMES_IN_FLIGHT> materialBuffers;
+        std::array<Buffer, MAX_FRAMES_IN_FLIGHT> gpuSceneInstanceBuffers;
+        std::array<Buffer, MAX_FRAMES_IN_FLIGHT> gpuSceneMeshBuffers;
+        std::array<Buffer, MAX_FRAMES_IN_FLIGHT> gpuSceneMaterialBuffers;
+        std::array<Buffer, MAX_FRAMES_IN_FLIGHT> visibleInstanceBuffers;
+        std::array<Buffer, MAX_FRAMES_IN_FLIGHT> visibleInstanceCountBuffers;
         std::array<Buffer, MAX_FRAMES_IN_FLIGHT> uniformBuffers;
         std::array<Buffer, MAX_FRAMES_IN_FLIGHT> sceneUniformBuffers;
         std::array<Buffer, MAX_FRAMES_IN_FLIGHT> cullingObjectBuffers;
@@ -114,6 +119,7 @@
         std::array<Buffer, MAX_FRAMES_IN_FLIGHT> sceneFoliageDrawCountBuffers;
         std::array<Buffer, MAX_FRAMES_IN_FLIGHT> shadowDrawCountBuffers;
         std::array<Culling::GPUCullingPass, MAX_FRAMES_IN_FLIGHT> gpuCullingPasses;
+        std::array<Culling::GPUInstanceCullingPass, MAX_FRAMES_IN_FLIGHT> instanceCullingPasses;
         std::array<Culling::GPUCullingPass, MAX_FRAMES_IN_FLIGHT> foliageGpuCullingPasses;
         std::array<Culling::GPUCullingPass, MAX_FRAMES_IN_FLIGHT> sceneGpuCullingPasses;
         std::array<Culling::GPUCullingPass, MAX_FRAMES_IN_FLIGHT> sceneFoliageGpuCullingPasses;
@@ -129,12 +135,15 @@
         VkDescriptorSetLayout hiZCopyDescriptorSetLayout = VK_NULL_HANDLE;
         VkDescriptorSetLayout hiZReduceDescriptorSetLayout = VK_NULL_HANDLE;
         VkDescriptorSetLayout cullingDescriptorSetLayout = VK_NULL_HANDLE;
+        VkDescriptorSetLayout instanceCullingDescriptorSetLayout = VK_NULL_HANDLE;
         VkPipelineLayout hiZCopyPipelineLayout = VK_NULL_HANDLE;
         VkPipelineLayout hiZReducePipelineLayout = VK_NULL_HANDLE;
         VkPipelineLayout cullingPipelineLayout = VK_NULL_HANDLE;
+        VkPipelineLayout instanceCullingPipelineLayout = VK_NULL_HANDLE;
         VkPipeline hiZCopyPipeline = VK_NULL_HANDLE;
         VkPipeline hiZReducePipeline = VK_NULL_HANDLE;
         VkPipeline cullingPipeline = VK_NULL_HANDLE;
+        VkPipeline instanceCullingPipeline = VK_NULL_HANDLE;
         std::vector<Culling::GPUObjectData> gpuObjects;
         // Old and new bounds of renderables whose shadow contribution changed
         // in this frame. ShadowPass evicts only overlapping virtual pages

@@ -64,4 +64,21 @@ namespace Engine {
         glm::vec4 previousRotation{0.0F, 0.0F, 0.0F, 1.0F};
         glm::vec4 previousScale{1.0F};
     };
+
+    /** std430-compatible records backing the persistent GPU Scene SSBOs. */
+    struct alignas(16) GPUSceneInstanceRecord {
+        glm::mat4 worldMatrix{1.0F};
+        glm::vec4 localBoundsMin{};
+        glm::vec4 localBoundsMax{};
+        glm::uvec4 idsAndFlags{}; // meshId, materialId, objectId, flags
+    };
+
+    struct alignas(16) GPUSceneMeshRecord {
+        glm::uvec4 draw{}; // firstIndex, indexCount, vertexOffset, lod1IndexCount
+        glm::uvec4 lod{};  // lod2IndexCount, reserved, reserved, reserved
+    };
+
+    struct alignas(16) GPUSceneMaterialRecord {
+        glm::uvec4 data{}; // material-table offset, pipeline class, flags, reserved
+    };
 } // namespace Engine

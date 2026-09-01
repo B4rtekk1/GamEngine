@@ -182,9 +182,11 @@ add_library(Engine
         Engine/Source/Renderer/Passes/TonemapPass.cpp
         Engine/Source/Renderer/Passes/TemporalAaPass.cpp
         Engine/Source/Renderer/Culling/GPUCullingPass.cpp
+        Engine/Source/Renderer/Culling/GPUInstanceCullingPass.cpp
         Engine/Source/Renderer/Culling/IndexedIndirectDrawCount.cpp
         Engine/Source/Renderer/Culling/HiZBuffer.cpp
         Engine/Source/Renderer/Culling/HiZPass.cpp
+        Engine/Source/Renderer/GPUSceneDatabase.cpp
         Engine/Source/Renderer/Vulkan/buffer.cpp
         Engine/Source/Renderer/Vulkan/depth_buffer.cpp
         Engine/Source/Renderer/Vulkan/graphics_pipeline.cpp
@@ -265,6 +267,7 @@ set(SHADER_OUTPUTS)
 # expose `vertexMain` and `fragmentMain` from the same SPIR-V module.
 set(SLANG_SHADER_SOURCES
         Assets/Shaders/Culling/gpu_culling.slang
+        Assets/Shaders/Culling/gpu_instance_culling.slang
         Assets/Shaders/Culling/hiz_initialize.slang
         Assets/Shaders/Culling/hiz_reduce.slang
         Assets/Shaders/Environment/skybox.slang
@@ -332,11 +335,13 @@ if(BUILD_TESTING)
             Tests/SceneBuilderTests.cpp
             Tests/ScriptRegistryTests.cpp
             Tests/ProjectTests.cpp
+            Tests/GPUSceneDatabaseTests.cpp
             Engine/Source/Core/Camera.cpp
             Engine/Source/Core/Time.cpp
             Engine/Source/Project.cpp
             Engine/Source/Renderer/Geometry/Terrain.cpp
             Engine/Source/Renderer/Geometry/ProceduralCloud.cpp
+            Engine/Source/Renderer/GPUSceneDatabase.cpp
             Engine/Source/UI/Canvas.cpp
             Engine/Source/UI/RectTransform.cpp
             Engine/Source/UI/UIBatch.cpp

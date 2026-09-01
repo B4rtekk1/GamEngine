@@ -56,6 +56,7 @@
 #include "Engine/Assets/AssetManager.h"
 #include "Engine/Renderer/Culling/CullingTypes.h"
 #include "Engine/Renderer/Culling/GPUCullingPass.h"
+#include "Engine/Renderer/Culling/GPUInstanceCullingPass.h"
 #include "Engine/Renderer/Culling/IndexedIndirectDrawCount.h"
 #include "Engine/Renderer/Culling/HiZBuffer.h"
 #include "Engine/Renderer/Culling/HiZPass.h"
@@ -394,6 +395,11 @@ namespace Engine {
             for (Buffer &buffer: materialBuffers) {
                 buffer.destroy();
             }
+            for (Buffer& buffer : gpuSceneInstanceBuffers) buffer.destroy();
+            for (Buffer& buffer : gpuSceneMeshBuffers) buffer.destroy();
+            for (Buffer& buffer : gpuSceneMaterialBuffers) buffer.destroy();
+            for (Buffer& buffer : visibleInstanceBuffers) buffer.destroy();
+            for (Buffer& buffer : visibleInstanceCountBuffers) buffer.destroy();
             for (Buffer &buffer: uniformBuffers) {
                 buffer.destroy();
             }
@@ -527,6 +533,11 @@ namespace Engine {
             vertexBuffer.destroy();
             for (Buffer &buffer: instanceBuffers) { buffer.destroy(); }
             for (Buffer &buffer: materialBuffers) { buffer.destroy(); }
+            for (Buffer& buffer : gpuSceneInstanceBuffers) buffer.destroy();
+            for (Buffer& buffer : gpuSceneMeshBuffers) buffer.destroy();
+            for (Buffer& buffer : gpuSceneMaterialBuffers) buffer.destroy();
+            for (Buffer& buffer : visibleInstanceBuffers) buffer.destroy();
+            for (Buffer& buffer : visibleInstanceCountBuffers) buffer.destroy();
             for (Texture2D &texture: materialTextures) { texture.destroy(); }
             materialTextures.clear();
             materialTextureDescriptors.clear();

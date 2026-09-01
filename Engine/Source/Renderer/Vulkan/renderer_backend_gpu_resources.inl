@@ -33,6 +33,18 @@
             if (vkCreateDescriptorSetLayout(device, &layoutInfo, nullptr, &cullingDescriptorSetLayout) != VK_SUCCESS) {
                 throw std::runtime_error("Could not create culling descriptor-set layout");
             }
+            const VkDescriptorSetLayoutBinding instanceCullBindings[] = {
+                {0, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
+                {1, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
+                {2, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
+                {3, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
+            };
+            layoutInfo.bindingCount = std::size(instanceCullBindings);
+            layoutInfo.pBindings = instanceCullBindings;
+            if (vkCreateDescriptorSetLayout(device, &layoutInfo, nullptr,
+                                             &instanceCullingDescriptorSetLayout) != VK_SUCCESS) {
+                throw std::runtime_error("Could not create instance-culling descriptor-set layout");
+            }
             const auto createLayout = [&](VkDescriptorSetLayout setLayout, VkPipelineLayout& pipelineLayout,
                                           const VkPushConstantRange* pushConstantRange = nullptr) {
                 VkPipelineLayoutCreateInfo info{VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
@@ -52,9 +64,12 @@
                 VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(Mat4) + 16};
             createLayout(cullingDescriptorSetLayout, cullingPipelineLayout,
                          &cullingPushConstants);
+            createLayout(instanceCullingDescriptorSetLayout, instanceCullingPipelineLayout);
             hiZCopyPipeline = createComputePipeline("shaders/hiz_initialize.spv", hiZCopyPipelineLayout);
             hiZReducePipeline = createComputePipeline("shaders/hiz_reduce.spv", hiZReducePipelineLayout);
             cullingPipeline = createComputePipeline("shaders/gpu_culling.spv", cullingPipelineLayout);
+            instanceCullingPipeline = createComputePipeline("shaders/gpu_instance_culling.spv",
+                                                             instanceCullingPipelineLayout);
 
             gpuObjects.resize(objectCount);
             for (uint32_t i = 0; i < objectCount; ++i) {
@@ -111,6 +126,16 @@
                 shadowCullingUniformBuffers[frame].createHostVisible(vulkanDevice.physical(), device,
                     sizeof(Culling::CullingUniformData), VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
                     vulkanDevice.allocator());
+                const std::uint32_t zero = 0;
+                std::vector<std::uint32_t> emptyVisibleInstances(
+                    std::max<std::size_t>(1, sceneGpu.database.instances().size()));
+                visibleInstanceBuffers[frame].createDeviceLocal(vulkanDevice.physical(), device,
+                    emptyVisibleInstances.data(), sizeof(std::uint32_t) * emptyVisibleInstances.size(),
+                    VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+                    commandPool, vulkanDevice.graphicsQueue(), vulkanDevice.allocator());
+                visibleInstanceCountBuffers[frame].createDeviceLocal(vulkanDevice.physical(), device, &zero,
+                    sizeof(zero), VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+                    commandPool, vulkanDevice.graphicsQueue(), vulkanDevice.allocator());
                 std::vector<VkDrawIndexedIndirectCommand> emptyCommands(objectCount);
                 indirectBuffers[frame].createDeviceLocal(vulkanDevice.physical(), device, emptyCommands.data(),
                     sizeof(VkDrawIndexedIndirectCommand) * objectCount,
@@ -134,7 +159,6 @@
                     sizeof(VkDrawIndexedIndirectCommand) * emptyShadowCommands.size(),
                     VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
                     commandPool, vulkanDevice.graphicsQueue(), vulkanDevice.allocator());
-                constexpr uint32_t zero = 0;
                 drawCountBuffers[frame].createDeviceLocal(vulkanDevice.physical(), device, &zero, sizeof(zero),
                     VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT |
                     VK_BUFFER_USAGE_TRANSFER_DST_BIT,
@@ -160,15 +184,16 @@
             }
 
             constexpr uint32_t cullingSetCount = MAX_FRAMES_IN_FLIGHT * 5;
+            constexpr uint32_t instanceCullSetCount = MAX_FRAMES_IN_FLIGHT;
             const uint32_t imageDescriptors = hiZBuffer.mipCount() + cullingSetCount;
             const VkDescriptorPoolSize poolSizes[] = {
                 {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, imageDescriptors},
                 {VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, hiZBuffer.mipCount()},
-                {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, cullingSetCount * 3},
+                {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, cullingSetCount * 3 + instanceCullSetCount * 3},
                 {VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, cullingSetCount},
             };
             VkDescriptorPoolCreateInfo poolInfo{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
-            poolInfo.maxSets = hiZBuffer.mipCount() + cullingSetCount;
+            poolInfo.maxSets = hiZBuffer.mipCount() + cullingSetCount + instanceCullSetCount;
             poolInfo.poolSizeCount = std::size(poolSizes); poolInfo.pPoolSizes = poolSizes;
             if (vkCreateDescriptorPool(device, &poolInfo, nullptr, &cullingDescriptorPool) != VK_SUCCESS) {
                 throw std::runtime_error("Could not create Hi-Z descriptor pool");
@@ -189,7 +214,32 @@
             if (vkAllocateDescriptorSets(device, &allocateInfo, cullSets.data()) != VK_SUCCESS) {
                 throw std::runtime_error("Could not allocate culling descriptor sets");
             }
+            std::array<VkDescriptorSetLayout, MAX_FRAMES_IN_FLIGHT> instanceCullLayouts{};
+            instanceCullLayouts.fill(instanceCullingDescriptorSetLayout);
+            std::array<VkDescriptorSet, MAX_FRAMES_IN_FLIGHT> instanceCullSets{};
+            allocateInfo.descriptorSetCount = MAX_FRAMES_IN_FLIGHT;
+            allocateInfo.pSetLayouts = instanceCullLayouts.data();
+            if (vkAllocateDescriptorSets(device, &allocateInfo, instanceCullSets.data()) != VK_SUCCESS) {
+                throw std::runtime_error("Could not allocate instance-culling descriptor sets");
+            }
             for (uint32_t frame = 0; frame < MAX_FRAMES_IN_FLIGHT; ++frame) {
+                const VkDescriptorBufferInfo sceneInstanceInfo{
+                    gpuSceneInstanceBuffers[frame].handle(), 0, VK_WHOLE_SIZE};
+                const VkDescriptorBufferInfo visibleInfo{visibleInstanceBuffers[frame].handle(), 0, VK_WHOLE_SIZE};
+                const VkDescriptorBufferInfo visibleCountInfo{visibleInstanceCountBuffers[frame].handle(), 0, VK_WHOLE_SIZE};
+                const VkDescriptorBufferInfo instanceUniformInfo{
+                    cullingUniformBuffers[frame].handle(), 0, sizeof(Culling::CullingUniformData)};
+                std::array<VkWriteDescriptorSet, 4> instanceWrites{};
+                const std::array<const VkDescriptorBufferInfo*, 4> instanceInfos{
+                    &sceneInstanceInfo, &visibleInfo, &visibleCountInfo, &instanceUniformInfo};
+                for (std::uint32_t binding = 0; binding < instanceWrites.size(); ++binding) {
+                    instanceWrites[binding] = {.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+                        .dstSet = instanceCullSets[frame], .dstBinding = binding, .descriptorCount = 1,
+                        .descriptorType = binding == 3 ? VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER : VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+                        .pBufferInfo = instanceInfos[binding]};
+                }
+                vkUpdateDescriptorSets(device, static_cast<std::uint32_t>(instanceWrites.size()),
+                                       instanceWrites.data(), 0, nullptr);
                 const VkDescriptorImageInfo hiZInfo{hiZBuffer.sampler(), hiZBuffer.fullView(), VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
                 struct CullingSetUpdate {
                     VkDescriptorSet set;
@@ -232,6 +282,9 @@
                                   sceneCullingUniformBuffers[frame]});
                 updateCullingSet({sceneFoliageCullSet, sceneFoliageIndirectBuffers[frame], sceneFoliageDrawCountBuffers[frame],
                                   sceneFoliageCullingUniformBuffers[frame]});
+                instanceCullingPasses[frame].create(instanceCullingPipeline, instanceCullingPipelineLayout,
+                    instanceCullSets[frame], visibleInstanceCountBuffers[frame].handle(),
+                    visibleInstanceBuffers[frame].handle());
                 gpuCullingPasses[frame].create(device, cullingPipeline, cullingPipelineLayout, cullSets[frame],
                     indirectBuffers[frame].handle(), drawCountBuffers[frame].handle(), objectCount);
                 indirectDraws[frame].create(
@@ -279,6 +332,8 @@
             for (Buffer& buffer : sceneFoliageDrawCountBuffers) buffer.destroy();
             for (Buffer& buffer : shadowDrawCountBuffers) buffer.destroy();
             for (Buffer& buffer : cullingObjectBuffers) buffer.destroy();
+            for (Buffer& buffer : visibleInstanceBuffers) buffer.destroy();
+            for (Buffer& buffer : visibleInstanceCountBuffers) buffer.destroy();
             if (cullingDescriptorPool != VK_NULL_HANDLE) { vkDestroyDescriptorPool(device, cullingDescriptorPool, nullptr);
 }
             if (hiZCopyPipeline != VK_NULL_HANDLE) { vkDestroyPipeline(device, hiZCopyPipeline, nullptr);
@@ -287,11 +342,15 @@
 }
             if (cullingPipeline != VK_NULL_HANDLE) { vkDestroyPipeline(device, cullingPipeline, nullptr);
 }
+            if (instanceCullingPipeline != VK_NULL_HANDLE) { vkDestroyPipeline(device, instanceCullingPipeline, nullptr);
+}
             if (hiZCopyPipelineLayout != VK_NULL_HANDLE) { vkDestroyPipelineLayout(device, hiZCopyPipelineLayout, nullptr);
 }
             if (hiZReducePipelineLayout != VK_NULL_HANDLE) { vkDestroyPipelineLayout(device, hiZReducePipelineLayout, nullptr);
 }
             if (cullingPipelineLayout != VK_NULL_HANDLE) { vkDestroyPipelineLayout(device, cullingPipelineLayout, nullptr);
+}
+            if (instanceCullingPipelineLayout != VK_NULL_HANDLE) { vkDestroyPipelineLayout(device, instanceCullingPipelineLayout, nullptr);
 }
             if (hiZCopyDescriptorSetLayout != VK_NULL_HANDLE) { vkDestroyDescriptorSetLayout(device, hiZCopyDescriptorSetLayout, nullptr);
 }
@@ -299,9 +358,14 @@
 }
             if (cullingDescriptorSetLayout != VK_NULL_HANDLE) { vkDestroyDescriptorSetLayout(device, cullingDescriptorSetLayout, nullptr);
 }
+            if (instanceCullingDescriptorSetLayout != VK_NULL_HANDLE) { vkDestroyDescriptorSetLayout(device, instanceCullingDescriptorSetLayout, nullptr);
+}
             cullingDescriptorPool = VK_NULL_HANDLE; hiZCopyPipeline = hiZReducePipeline = cullingPipeline = VK_NULL_HANDLE;
+            instanceCullingPipeline = VK_NULL_HANDLE;
             hiZCopyPipelineLayout = hiZReducePipelineLayout = cullingPipelineLayout = VK_NULL_HANDLE;
+            instanceCullingPipelineLayout = VK_NULL_HANDLE;
             hiZCopyDescriptorSetLayout = hiZReduceDescriptorSetLayout = cullingDescriptorSetLayout = VK_NULL_HANDLE;
+            instanceCullingDescriptorSetLayout = VK_NULL_HANDLE;
             hiZBuffer.destroy(); gpuObjects.clear(); hiZValid = false;
         }
 

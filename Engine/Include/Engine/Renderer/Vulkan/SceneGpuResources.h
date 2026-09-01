@@ -5,6 +5,7 @@
 #include "Engine/Renderer/Culling/CullingTypes.h"
 #include "Engine/Renderer/Materials/MaterialBuffer.h"
 #include "Engine/Renderer/Geometry/Mesh.h"
+#include "Engine/Renderer/GPUSceneDatabase.h"
 #include "Engine/Renderer/Vulkan/renderer_types.h"
 
 #include <array>
@@ -17,6 +18,8 @@ namespace Engine {
     /** ECS-derived CPU data shared by the scene upload and culling stages. */
     class SceneGpuResources final {
     public:
+        GPUSceneDatabase database;
+
         struct RenderableRecord {
             Entity entity{NullEntity};
             AABB localBounds{};
@@ -30,6 +33,7 @@ namespace Engine {
             std::uint8_t transformDirtyFrames{0};
             std::uint8_t materialDirtyFrames{0};
             std::uint8_t cullingDirtyFrames{0};
+            GPUSceneInstanceId gpuSceneInstanceId{InvalidGPUSceneInstanceId};
         };
 
         struct InstanceBatch {
@@ -64,6 +68,8 @@ namespace Engine {
         std::array<std::vector<std::size_t>, 2> dirtyTransforms;
         std::array<std::vector<std::size_t>, 2> dirtyMaterials;
         std::array<std::vector<std::size_t>, 2> dirtyCullingObjects;
+        // Changes waiting to be copied to each frame-in-flight GPU Scene SSBO.
+        std::array<GPUSceneDatabase::DirtyRanges, 2> pendingDatabaseUploads;
         Vec3 sceneCenter;
         float sceneRadius{1.0F};
         bool hasShadowCasters{false};

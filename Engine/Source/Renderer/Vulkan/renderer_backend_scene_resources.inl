@@ -118,6 +118,10 @@
 
         void createMeshBuffers() {
             Mesh sceneMesh;
+            // A topology rebuild creates a new GPU allocation layout. Clear the
+            // database only here; ordinary transform/material changes update
+            // stable records in place below.
+            sceneGpu.database.clear();
             renderables.reserve(registry.size());
             renderables.clear();
             instanceBatches.clear();
@@ -500,6 +504,134 @@
             }
             for (auto& indices : dirtyTransforms) indices.clear();
             for (auto& indices : dirtyMaterials) indices.clear();
+
+            createGPUSceneDatabaseBuffers();
+        }
+
+        [[nodiscard]] static GPUSceneInstanceRecord gpuSceneRecord(
+            const GPUSceneDatabase::GPUInstance& instance) {
+            glm::mat4 worldMatrix{1.0F};
+            for (glm::length_t column = 0; column < 4; ++column) {
+                for (glm::length_t row = 0; row < 4; ++row) {
+                    worldMatrix[column][row] = instance.worldMatrix[column * 4 + row];
+                }
+            }
+            return {
+                .worldMatrix = worldMatrix,
+                .localBoundsMin = glm::vec4{instance.localBounds.min.native(), 0.0F},
+                .localBoundsMax = glm::vec4{instance.localBounds.max.native(), 0.0F},
+                .idsAndFlags = glm::uvec4{instance.meshId, instance.materialId,
+                                          instance.objectId, instance.flags},
+            };
+        }
+
+        [[nodiscard]] static GPUSceneMeshRecord gpuSceneRecord(
+            const GPUSceneDatabase::GPUMesh& mesh) {
+            return {
+                .draw = glm::uvec4{mesh.firstIndex, mesh.indexCount,
+                                   static_cast<std::uint32_t>(mesh.vertexOffset),
+                                   mesh.lod1IndexCount},
+                .lod = glm::uvec4{mesh.lod2IndexCount, 0U, 0U, 0U},
+            };
+        }
+
+        [[nodiscard]] static GPUSceneMaterialRecord gpuSceneRecord(
+            const GPUSceneDatabase::GPUMaterial& material) {
+            return {.data = glm::uvec4{material.materialTableOffset,
+                                       material.pipelineClass, material.flags, 0U}};
+        }
+
+        template <typename Id>
+        static void appendPendingIds(std::vector<Id>& destination,
+                                     const std::vector<Id>& source) {
+            for (const Id id : source) {
+                if (std::ranges::find(destination, id) == destination.end()) {
+                    destination.push_back(id);
+                }
+            }
+        }
+
+        void collectGPUSceneDatabaseChanges() {
+            const GPUSceneDatabase::DirtyRanges& dirty = sceneGpu.database.dirty();
+            if (dirty.instances.empty() && dirty.meshes.empty() && dirty.materials.empty() &&
+                dirty.removedInstances.empty()) return;
+            for (auto& pending : sceneGpu.pendingDatabaseUploads) {
+                appendPendingIds(pending.instances, dirty.instances);
+                appendPendingIds(pending.meshes, dirty.meshes);
+                appendPendingIds(pending.materials, dirty.materials);
+                appendPendingIds(pending.removedInstances, dirty.removedInstances);
+            }
+            sceneGpu.database.clearDirty();
+        }
+
+        void createGPUSceneDatabaseBuffers() {
+            const auto& instances = sceneGpu.database.instances();
+            const auto& meshes = sceneGpu.database.meshes();
+            const auto& databaseMaterials = sceneGpu.database.materials();
+            for (std::uint32_t frame = 0; frame < MAX_FRAMES_IN_FLIGHT; ++frame) {
+                gpuSceneInstanceBuffers[frame].createHostVisible(
+                    vulkanDevice.physical(), device,
+                    sizeof(GPUSceneInstanceRecord) * std::max<std::size_t>(1, instances.size()),
+                    VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, vulkanDevice.allocator());
+                gpuSceneMeshBuffers[frame].createHostVisible(
+                    vulkanDevice.physical(), device,
+                    sizeof(GPUSceneMeshRecord) * std::max<std::size_t>(1, meshes.size()),
+                    VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, vulkanDevice.allocator());
+                gpuSceneMaterialBuffers[frame].createHostVisible(
+                    vulkanDevice.physical(), device,
+                    sizeof(GPUSceneMaterialRecord) * std::max<std::size_t>(1, databaseMaterials.size()),
+                    VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, vulkanDevice.allocator());
+                for (std::size_t id = 0; id < instances.size(); ++id) {
+                    const auto record = gpuSceneRecord(instances[id]);
+                    gpuSceneInstanceBuffers[frame].update(&record, sizeof(record),
+                        sizeof(record) * id);
+                }
+                for (std::size_t id = 0; id < meshes.size(); ++id) {
+                    const auto record = gpuSceneRecord(meshes[id]);
+                    gpuSceneMeshBuffers[frame].update(&record, sizeof(record), sizeof(record) * id);
+                }
+                for (std::size_t id = 0; id < databaseMaterials.size(); ++id) {
+                    const auto record = gpuSceneRecord(databaseMaterials[id]);
+                    gpuSceneMaterialBuffers[frame].update(&record, sizeof(record), sizeof(record) * id);
+                }
+                sceneGpu.pendingDatabaseUploads[frame] = {};
+            }
+            sceneGpu.database.clearDirty();
+        }
+
+        void uploadPendingGPUSceneDatabase(const std::uint32_t frame) {
+            if (gpuSceneInstanceBuffers[frame].handle() == VK_NULL_HANDLE ||
+                gpuSceneMeshBuffers[frame].handle() == VK_NULL_HANDLE ||
+                gpuSceneMaterialBuffers[frame].handle() == VK_NULL_HANDLE) return;
+            collectGPUSceneDatabaseChanges();
+            auto& pending = sceneGpu.pendingDatabaseUploads[frame];
+            const auto& instances = sceneGpu.database.instances();
+            for (const GPUSceneInstanceId id : pending.instances) {
+                if (id >= instances.size()) continue;
+                const auto record = gpuSceneRecord(instances[id]);
+                gpuSceneInstanceBuffers[frame].update(&record, sizeof(record), sizeof(record) * id);
+            }
+            // A removed slot retains its fixed address but becomes inert. This
+            // makes an in-flight indirect list harmless even before compaction.
+            for (const GPUSceneInstanceId id : pending.removedInstances) {
+                if (id >= instances.size()) continue;
+                auto record = gpuSceneRecord(instances[id]);
+                record.idsAndFlags.w = 0U;
+                gpuSceneInstanceBuffers[frame].update(&record, sizeof(record), sizeof(record) * id);
+            }
+            const auto& meshes = sceneGpu.database.meshes();
+            for (const GPUSceneMeshId id : pending.meshes) {
+                if (id >= meshes.size()) continue;
+                const auto record = gpuSceneRecord(meshes[id]);
+                gpuSceneMeshBuffers[frame].update(&record, sizeof(record), sizeof(record) * id);
+            }
+            const auto& databaseMaterials = sceneGpu.database.materials();
+            for (const GPUSceneMaterialId id : pending.materials) {
+                if (id >= databaseMaterials.size()) continue;
+                const auto record = gpuSceneRecord(databaseMaterials[id]);
+                gpuSceneMaterialBuffers[frame].update(&record, sizeof(record), sizeof(record) * id);
+            }
+            pending = {};
         }
 
         template <typename T>
@@ -596,6 +728,7 @@
                 model.previousScale = model.scaleBase;
                 model.previousGrassDeformation = model.grassDeformation;
             }
+            uploadPendingGPUSceneDatabase(currentFrame);
         }
 
         void updateRenderableBuffers() {
@@ -867,6 +1000,47 @@
                     }
                     markDirty(index, &RenderableRecord::materialDirtyFrames, dirtyMaterials);
                 }
+
+                // Render extraction writes a persistent GPU-scene record. The
+                // current indirect path still consumes legacy batches, but all
+                // data required by an instance-driven culler is now indexed by
+                // IDs rather than CPU addresses.
+                const InstanceBatch& batch = instanceBatches[record.batchIndex];
+                const std::uint64_t meshKey = static_cast<std::uint64_t>(
+                    reinterpret_cast<std::uintptr_t>(batch.mesh));
+                const GPUSceneMeshId meshId = sceneGpu.database.upsertMesh(meshKey, {
+                    .firstIndex = batch.firstIndex,
+                    .indexCount = batch.indexCount,
+                    .vertexOffset = 0,
+                    .lod1IndexCount = batch.lod1IndexCount,
+                    .lod2IndexCount = batch.lod2IndexCount,
+                });
+                const std::uint64_t materialKey = static_cast<std::uint64_t>(index);
+                const GPUSceneMaterialId materialId = sceneGpu.database.upsertMaterial(materialKey, {
+                    .materialTableOffset = static_cast<std::uint32_t>(index * materialSlots),
+                    .pipelineClass = batch.twoSided ? 1U : 0U,
+                    .flags = batch.castShadow ? 1U : 0U,
+                });
+                const std::uint64_t instanceKey = record.grassInstance == std::numeric_limits<std::size_t>::max()
+                    ? static_cast<std::uint64_t>(entity)
+                    : (static_cast<std::uint64_t>(entity) ^ 0x9e3779b97f4a7c15ULL ^
+                       (static_cast<std::uint64_t>(record.grassInstance) * 0xbf58476d1ce4e5b9ULL));
+                record.gpuSceneInstanceId = sceneGpu.database.upsertInstance(instanceKey, {
+                    .worldMatrix = [&model] {
+                        std::array<float, 16> matrix{};
+                        for (glm::length_t column = 0; column < 4; ++column) {
+                            for (glm::length_t row = 0; row < 4; ++row) {
+                                matrix[column * 4 + row] = model[column][row];
+                            }
+                        }
+                        return matrix;
+                    }(),
+                    .localBounds = record.localBounds,
+                    .meshId = meshId,
+                    .materialId = materialId,
+                    .objectId = static_cast<std::uint32_t>(entity),
+                    .flags = (batch.castShadow ? 1U : 0U) | (batch.twoSided ? 2U : 0U),
+                });
             }
             if (gpuObjects.size() == instanceBatches.size() && !changedBatches.empty()) {
                 std::ranges::sort(changedBatches);
