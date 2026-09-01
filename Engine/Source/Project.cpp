@@ -6,6 +6,7 @@
 #include <stdexcept>
 #include <string_view>
 #include <unordered_map>
+#include <vector>
 
 namespace Engine {
 namespace {
@@ -105,7 +106,7 @@ Project Project::create(const std::filesystem::path& rootDirectory, std::string 
     if (name.empty()) throw std::runtime_error("Project name cannot be empty");
 
     std::error_code error;
-    std::filesystem::create_directories(root / "Scenes", error);
+    std::filesystem::create_directories(root / "Assets" / "Scenes", error);
     if (error) throw std::runtime_error("Could not create project directories: " + error.message());
     std::filesystem::create_directories(root / "Assets" / "Models", error);
     if (error) throw std::runtime_error("Could not create project directories: " + error.message());
@@ -118,11 +119,11 @@ Project Project::create(const std::filesystem::path& rootDirectory, std::string 
     std::ofstream manifestOutput{manifest};
     if (!manifestOutput) throw std::runtime_error("Could not create project manifest: " + manifest.string());
     manifestOutput << "# GamEngine project\nname = " << name
-                   << "\nasset_root = Assets\nstartup_scene = Scenes/Main.scene\n";
+                   << "\nasset_root = Assets\nstartup_scene = Assets/Scenes/Main.scene\n";
     if (!manifestOutput) throw std::runtime_error("Could not write project manifest: " + manifest.string());
     manifestOutput.close();
 
-    const auto scene = root / "Scenes" / "Main.scene";
+    const auto scene = root / "Assets" / "Scenes" / "Main.scene";
     std::ofstream sceneOutput{scene};
     if (!sceneOutput) throw std::runtime_error("Could not create starter scene: " + scene.string());
     sceneOutput << "GAMENGINE_SCENE 12\nSETTINGS MSAA 0\nMESHES 0\nENTITIES 0\nEND_SCENE\n";
@@ -133,6 +134,21 @@ Project Project::create(const std::filesystem::path& rootDirectory, std::string 
 
 std::filesystem::path Project::resolve(const std::filesystem::path& path) const {
     return path.is_absolute() ? path : (rootPath_ / path).lexically_normal();
+}
+
+std::vector<std::filesystem::path> Project::scenes() const {
+    std::vector<std::filesystem::path> result;
+    const auto directory = startupScene_.parent_path();
+    std::error_code error;
+    if (!std::filesystem::is_directory(directory, error)) return result;
+
+    for (std::filesystem::recursive_directory_iterator iterator{directory, error}, end;
+         !error && iterator != end; iterator.increment(error)) {
+        if (!iterator->is_regular_file(error) || iterator->path().extension() != ".scene") continue;
+        result.push_back(iterator->path().lexically_normal());
+    }
+    std::ranges::sort(result);
+    return result;
 }
 
 } // namespace Engine

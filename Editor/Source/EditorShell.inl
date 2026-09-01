@@ -110,6 +110,52 @@ Engine::Entity drawEditorMenuBar(Engine::ScenePreset &scene, Engine::Renderer &r
             }
         }
     };
+    const auto loadScene = [&](const std::filesystem::path& path) {
+        std::optional<std::uint32_t> samples;
+        Engine::SceneSerializer::load(scene, path, samples);
+        EditorSceneSession::markSceneSaved(path);
+        if (samples) {
+            renderer.setAntialiasingLevel(*samples == 2
+                                              ? Engine::AntialiasingLevel::MSAA2x
+                                              : *samples == 4 ? Engine::AntialiasingLevel::MSAA4x
+                                                              : Engine::AntialiasingLevel::Off);
+            antialiasingChanged = true;
+        }
+        sceneLoaded = true;
+        resetHistoryRequested = true;
+        sceneFileError.clear();
+        Editor::ConsolePanel::info("Loaded scene: " + path.string());
+    };
+    const auto tryLoadScene = [&](const std::filesystem::path& path) {
+        try {
+            loadScene(path);
+        } catch (const std::exception& error) {
+            sceneFileError = error.what();
+            Editor::ConsolePanel::error("Could not load scene: " + sceneFileError);
+        }
+    };
+    const auto createScene = [&] {
+        const auto path = EditorSceneSession::chooseSaveScenePath();
+        if (!path) return;
+        try {
+            if (!path->parent_path().empty()) {
+                std::filesystem::create_directories(path->parent_path());
+            }
+            Engine::ScenePreset emptyScene;
+            Engine::SceneSerializer::save(emptyScene, *path,
+                                          EditorSceneSession::msaaSampleCount(renderer));
+            Engine::SceneSerializer::load(scene, *path);
+            EditorSceneSession::markSceneSaved(*path);
+            sceneSaved = true;
+            sceneFileError.clear();
+            sceneLoaded = true;
+            resetHistoryRequested = true;
+            Editor::ConsolePanel::info("Created scene: " + path->string());
+        } catch (const std::exception& error) {
+            sceneFileError = error.what();
+            Editor::ConsolePanel::error("Could not create scene: " + sceneFileError);
+        }
+    };
 
     if (!ImGui::BeginMainMenuBar()) { return Engine::NullEntity;
 }
@@ -122,13 +168,16 @@ Engine::Entity drawEditorMenuBar(Engine::ScenePreset &scene, Engine::Renderer &r
     ImGui::SameLine(0.0F, 12.0F);
     ImGui::TextDisabled("|");
     ImGui::SameLine(0.0F, 4.0F);
+    const std::filesystem::path activeScenePath = EditorSceneSession::scenePath();
     if (beginTopMenu("File", "Project and scene files")) {
-        const std::filesystem::path scenePath = EditorSceneSession::scenePath();
         ImGui::BeginDisabled(playing);
+        if (ImGui::MenuItem("New Scene...", "Ctrl+N")) {
+            createScene();
+        }
         if (ImGui::MenuItem("Save Scene", "Ctrl+S")) {
             try {
                 if (EditorSceneSession::hasSavedScene()) {
-                    saveScene(scenePath);
+                    saveScene(activeScenePath);
                 } else {
                     saveSceneAs();
                 }
@@ -140,27 +189,33 @@ Engine::Entity drawEditorMenuBar(Engine::ScenePreset &scene, Engine::Renderer &r
         if (ImGui::MenuItem("Save Scene As...", "Ctrl+Shift+S")) {
             saveSceneAs();
         }
+        if (ImGui::MenuItem("Open Scene...", "Ctrl+Alt+O")) {
+            if (const auto path = EditorSceneSession::chooseLoadScenePath()) {
+                tryLoadScene(*path);
+            }
+        }
+        if (ImGui::BeginMenu("Project Scenes")) {
+            const auto scenes = project.scenes();
+            if (scenes.empty()) {
+                ImGui::TextDisabled("No scenes in %s", project.startupScene().parent_path().string().c_str());
+            }
+            for (const auto& path : scenes) {
+                const std::string label = path.lexically_relative(project.rootPath()).string();
+                const bool active = path == activeScenePath;
+                if (ImGui::MenuItem(label.c_str(), nullptr, active, !active)) {
+                    tryLoadScene(path);
+                }
+            }
+            ImGui::EndMenu();
+        }
         if (ImGui::MenuItem("Load Project...", "Ctrl+O")) {
             if (const auto manifestPath = EditorSceneSession::chooseLoadProjectPath()) {
                 try {
                     Engine::Project loadedProject = Engine::Project::load(*manifestPath);
-                    std::optional<std::uint32_t> samples;
-                    Engine::SceneSerializer::load(scene, loadedProject.startupScene(), samples);
+                    loadScene(loadedProject.startupScene());
                     content.clear();
                     content.setAssetRoot(loadedProject.assetRoot());
                     project = std::move(loadedProject);
-                    EditorSceneSession::markSceneSaved(project.startupScene());
-                    if (samples) {
-                        renderer.setAntialiasingLevel(*samples == 2
-                                                          ? Engine::AntialiasingLevel::MSAA2x
-                                                          : *samples == 4
-                                                                ? Engine::AntialiasingLevel::MSAA4x
-                                                                : Engine::AntialiasingLevel::Off);
-                        antialiasingChanged = true;
-                    }
-                    sceneLoaded = true;
-                    resetHistoryRequested = true;
-                    sceneFileError.clear();
                     Editor::ConsolePanel::info("Loaded project: " + project.name());
                 } catch (const std::exception &error) {
                     sceneFileError = error.what();
@@ -182,6 +237,30 @@ Engine::Entity drawEditorMenuBar(Engine::ScenePreset &scene, Engine::Renderer &r
         ImGui::Separator();
         ImGui::TextDisabled("Auto-save: every 30 seconds after changes");
         endTopMenu();
+    }
+
+    // Keep scene navigation in the main bar: switching levels should not
+    // require opening File and then a nested project-scene menu.
+    ImGui::SameLine(0.0F, 10.0F);
+    ImGui::TextDisabled("Scene:");
+    ImGui::SameLine(0.0F, 5.0F);
+    ImGui::BeginDisabled(playing);
+    ImGui::SetNextItemWidth(240.0F);
+    const std::string activeSceneName = activeScenePath.filename().string();
+    if (ImGui::BeginCombo("##active-project-scene", activeSceneName.c_str())) {
+        for (const auto& path : project.scenes()) {
+            const std::string label = path.lexically_relative(project.rootPath()).string();
+            const bool active = path == activeScenePath;
+            if (ImGui::Selectable(label.c_str(), active) && !active) {
+                tryLoadScene(path);
+            }
+            if (active) ImGui::SetItemDefaultFocus();
+        }
+        ImGui::EndCombo();
+    }
+    ImGui::EndDisabled();
+    if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort)) {
+        ImGui::SetTooltip("Switch scenes in the current project");
     }
 
     if (beginTopMenu("GameObject", "Create objects in the current scene")) {

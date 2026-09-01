@@ -55,13 +55,25 @@ TEST(Project, CreatesStandaloneProjectFolder) {
     EXPECT_EQ(project.name(), "Standalone Game");
     EXPECT_EQ(project.rootPath(), directory);
     EXPECT_TRUE(std::filesystem::is_regular_file(directory / "GamEngine.project"));
-    EXPECT_TRUE(std::filesystem::is_regular_file(directory / "Scenes/Main.scene"));
+    EXPECT_TRUE(std::filesystem::is_regular_file(directory / "Assets/Scenes/Main.scene"));
     EXPECT_TRUE(std::filesystem::is_directory(directory / "Assets/Models"));
     EXPECT_TRUE(std::filesystem::is_directory(directory / "Assets/Textures"));
     EXPECT_TRUE(std::filesystem::is_directory(directory / "Scripts"));
     EXPECT_THROW(static_cast<void>(Engine::Project::create(directory)), std::runtime_error);
     std::error_code error;
     std::filesystem::remove_all(directory, error);
+}
+
+TEST_F(ProjectTest, ListsAllScenesInTheProjectSceneDirectory) {
+    std::ofstream{directory_ / "Assets/Scenes/Second.scene"} << "GAMENGINE_SCENE 12\n";
+    std::filesystem::create_directories(directory_ / "Assets/Scenes/Levels");
+    std::ofstream{directory_ / "Assets/Scenes/Levels/Third.scene"} << "GAMENGINE_SCENE 12\n";
+    std::ofstream{directory_ / "Assets/Scenes/NotAScene.scene1"} << "ignored";
+
+    const Engine::Project project = Engine::Project::load(directory_ / "GamEngine.project");
+    EXPECT_EQ(project.scenes(), (std::vector<std::filesystem::path>{
+                                    directory_ / "Assets/Scenes/Levels/Third.scene",
+                                    directory_ / "Assets/Scenes/Second.scene"}));
 }
 
 TEST(Project, RejectsPathOutsideProject) {

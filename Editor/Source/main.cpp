@@ -513,16 +513,12 @@ int main(int argc, char** argv) {
             }
             const bool sceneStructureChanged = !sceneLoaded &&
                                                scene.editor().structuralRevision() != sceneStructureBeforeUi;
-            if (sceneStructureChanged) {
-                renderer.synchronizeScene(scene);
-                // Duplicated objects do not exist in the renderer's cached
-                // renderable list until synchronization completes. Reapply
-                // the selection afterwards so the new copy can be outlined
-                // and selected in the Scene View immediately.
-                renderer.setEditorSelection(selectedEntity);
-            } else if (viewportInteraction.terrainGrassChanged) {
-                renderer.synchronizeScene(scene);
-            } else if (viewportInteraction.terrainGeometryChanged) {
+            // ImGui::Image has already captured this frame's viewport descriptor.
+            // Rebuilding scene resources can release that descriptor, so defer the
+            // rebuild until its draw commands have been submitted below.
+            const bool sceneResourceSyncPending = sceneStructureChanged ||
+                                                  viewportInteraction.terrainGrassChanged;
+            if (!sceneResourceSyncPending && viewportInteraction.terrainGeometryChanged) {
                 for (const Engine::Entity terrain : viewportInteraction.terrainGeometryEntities)
                     renderer.updateMeshGeometry(terrain);
             }
@@ -576,12 +572,16 @@ int main(int argc, char** argv) {
                 }
                 scriptSystem.update(scene, static_cast<float>(Engine::Time::deltaTime()));
             }
-            // Scene synchronization can rebuild the descriptor sets used by
-            // ImGui::Image. Finalize the draw list only after it completes;
-            // otherwise this frame would retain descriptor handles that were
-            // just released during a model import or other scene edit.
             ImGui::Render();
             renderer.renderFrame();
+
+            if (sceneResourceSyncPending) {
+                renderer.synchronizeScene(scene);
+                // Duplicated objects do not exist in the renderer's cached
+                // renderable list until synchronization completes. Reapply
+                // the selection so the next frame can outline it immediately.
+                if (sceneStructureChanged) renderer.setEditorSelection(selectedEntity);
+            }
 
             // Keep the editor UI responsive without unnecessarily throttling
             // the game simulation while Play Mode is active.

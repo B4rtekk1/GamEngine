@@ -2,6 +2,7 @@
 
 #include <filesystem>
 #include <string>
+#include <vector>
 
 namespace Engine {
 
@@ -40,6 +41,9 @@ public:
     [[nodiscard]] const std::filesystem::path& rootPath() const noexcept { return rootPath_; }
     [[nodiscard]] const std::filesystem::path& assetRoot() const noexcept { return assetRoot_; }
     [[nodiscard]] const std::filesystem::path& startupScene() const noexcept { return startupScene_; }
+
+    /** Returns every `.scene` file stored next to the startup scene. */
+    [[nodiscard]] std::vector<std::filesystem::path> scenes() const;
 
     /** Resolves a project-relative path; absolute paths are returned unchanged. */
     [[nodiscard]] std::filesystem::path resolve(const std::filesystem::path& path) const;

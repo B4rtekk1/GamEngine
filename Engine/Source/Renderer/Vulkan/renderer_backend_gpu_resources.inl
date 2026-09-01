@@ -259,7 +259,9 @@
         void destroyCullingResources() noexcept {
             hiZPass.destroy();
             for (auto& draw : indirectDraws) draw.destroy();
+            for (auto& draw : foliageIndirectDraws) draw.destroy();
             for (auto& draw : sceneIndirectDraws) draw.destroy();
+            for (auto& draw : sceneFoliageIndirectDraws) draw.destroy();
             for (auto& draw : shadowIndirectDraws) draw.destroy();
             for (Buffer& buffer : cullingUniformBuffers) buffer.destroy();
             for (Buffer& buffer : foliageCullingUniformBuffers) buffer.destroy();
