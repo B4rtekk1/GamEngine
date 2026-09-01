@@ -58,7 +58,7 @@ TEST(Project, CreatesStandaloneProjectFolder) {
     EXPECT_TRUE(std::filesystem::is_regular_file(directory / "Assets/Scenes/Main.scene"));
     EXPECT_TRUE(std::filesystem::is_directory(directory / "Assets/Models"));
     EXPECT_TRUE(std::filesystem::is_directory(directory / "Assets/Textures"));
-    EXPECT_TRUE(std::filesystem::is_directory(directory / "Scripts"));
+    EXPECT_TRUE(std::filesystem::is_directory(directory / "Assets/Scripts"));
     EXPECT_THROW(static_cast<void>(Engine::Project::create(directory)), std::runtime_error);
     std::error_code error;
     std::filesystem::remove_all(directory, error);

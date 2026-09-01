@@ -31,6 +31,7 @@
 #include "Engine/Renderer/Geometry/Mesh.h"
 #include "Engine/ECS/Registry.h"
 #include "Engine/Scene/Scene.h"
+#include "Engine/Scene/Components/IdentityComponents.h"
 #include "Engine/ECS/Components/CameraComponent.h"
 #include "Engine/ECS/Components/ParticleEmitterComponent.h"
 #include "Engine/ECS/Components/SmokeEmitterComponent.h"
@@ -151,6 +152,7 @@ namespace Engine {
               lastTransformRevision(sceneGpu.lastTransformRevision),
               lastMeshRendererRevision(sceneGpu.lastMeshRendererRevision),
               lastTerrainGrassRevision(sceneGpu.lastTerrainGrassRevision),
+              lastParentRevision(sceneGpu.lastParentRevision),
               dirtyTransforms(sceneGpu.dirtyTransforms),
               dirtyMaterials(sceneGpu.dirtyMaterials),
               dirtyCullingObjects(sceneGpu.dirtyCullingObjects),
@@ -218,6 +220,31 @@ namespace Engine {
         [[nodiscard]] float editorCameraPitch() const noexcept { return cameraController.editorPitch(); }
         [[nodiscard]] Vec3 editorCameraPosition() const noexcept { return cameraController.editorPosition(); }
 
+        [[nodiscard]] glm::mat4 worldModel(const Entity entity) const noexcept {
+            const Registry& readRegistry = registry;
+            if (!readRegistry.valid(entity) || !readRegistry.has<Transform>(entity)) return glm::mat4{1.0F};
+
+            std::unordered_map<UUID, Entity> entitiesByUuid;
+            entitiesByUuid.reserve(readRegistry.size());
+            readRegistry.view<UUIDComponent>([&](const Entity candidate, const UUIDComponent& uuid) {
+                entitiesByUuid.emplace(uuid.value, candidate);
+            });
+
+            glm::mat4 model{1.0F};
+            Entity current = entity;
+            std::unordered_set<Entity> visited;
+            while (readRegistry.valid(current) && visited.insert(current).second &&
+                   readRegistry.has<Transform>(current)) {
+                model = readRegistry.get<Transform>(current).matrix().native() * model;
+                if (!readRegistry.has<ParentComponent>(current)) break;
+                const auto parent = entitiesByUuid.find(
+                    readRegistry.get<ParentComponent>(current).parent);
+                if (parent == entitiesByUuid.end()) break;
+                current = parent->second;
+            }
+            return model;
+        }
+
         [[nodiscard]] Vec3 editorGizmoPosition(const Entity entity) const noexcept {
             const Registry &readRegistry = registry;
             if (!readRegistry.valid(entity) || !readRegistry.has<Transform>(entity)) {
@@ -225,15 +252,15 @@ namespace Engine {
             }
 
             try {
-                const auto &transform = readRegistry.get<Transform>(entity);
+                const glm::mat4 model = worldModel(entity);
                 for (const RenderableRecord &record: renderables) {
                     if (record.entity != entity) {
                         continue;
                     }
-                    const AABB bounds = record.localBounds.transformed(transform.matrix().native());
+                    const AABB bounds = record.localBounds.transformed(model);
                     return Vec3{(bounds.min.native() + bounds.max.native()) * HALF_EXTENT_FACTOR};
                 }
-                return transform.position;
+                return Vec3{glm::vec3{model[3]}};
             } catch (const std::out_of_range &) {
                 return {};
             }
@@ -289,12 +316,12 @@ namespace Engine {
             // mutation revision and trigger a full renderer reload.
             const Registry &readRegistry = registry;
             if (!readRegistry.has<Transform>(entity)) { return; }
-            Vec3 target = readRegistry.get<Transform>(entity).position;
+            Vec3 target = Vec3{glm::vec3{worldModel(entity)[3]}};
             float radius = DEFAULT_SELECTION_RADIUS;
             if (editorSelectedRenderable != std::numeric_limits<std::uint32_t>::max()) {
                 const RenderableRecord &record = renderables[editorSelectedRenderable];
                 const AABB bounds = record.localBounds.transformed(
-                    readRegistry.get<Transform>(entity).matrix().native());
+                    worldModel(entity));
                 target = Vec3{(bounds.min.native() + bounds.max.native()) * HALF_EXTENT_FACTOR};
                 radius = std::max(glm::length(bounds.max.native() - bounds.min.native()) * HALF_EXTENT_FACTOR,
                                   DEFAULT_SELECTION_RADIUS);
@@ -406,6 +433,7 @@ namespace Engine {
             lastTransformRevision = std::numeric_limits<std::uint64_t>::max();
             lastMeshRendererRevision = std::numeric_limits<std::uint64_t>::max();
             lastTerrainGrassRevision = std::numeric_limits<std::uint64_t>::max();
+            lastParentRevision = std::numeric_limits<std::uint64_t>::max();
             hiZValid = false;
 
             // The previous scene may have owned a particle system. Its GPU
@@ -524,6 +552,7 @@ namespace Engine {
             lastTransformRevision = std::numeric_limits<std::uint64_t>::max();
             lastMeshRendererRevision = std::numeric_limits<std::uint64_t>::max();
             lastTerrainGrassRevision = std::numeric_limits<std::uint64_t>::max();
+            lastParentRevision = std::numeric_limits<std::uint64_t>::max();
             hiZValid = false;
 
             createMaterialTextures();

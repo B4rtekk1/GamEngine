@@ -129,6 +129,7 @@ int main(int argc, char** argv) {
                                                           std::filesystem::path{GAMEENGINE_SOURCE_DIR});
                                                   }
                                               }();
+        EditorSceneSession::setProjectRoot(project.rootPath());
         if (!SDL_Init(SDL_INIT_VIDEO | SDL_INIT_EVENTS)) {
             throw std::runtime_error(SDL_GetError());
         }

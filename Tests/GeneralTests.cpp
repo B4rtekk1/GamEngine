@@ -204,6 +204,13 @@ TEST(PrimitiveMeshes, CapsuleHasExpectedBoundsAndValidTriangles) {
     const auto capsule = Engine::Capsule::createMesh(radius, height, rings, segments);
     EXPECT_EQ(capsule.vertices.size(), 2U * (rings + 1U) * (segments + 1U));
     EXPECT_EQ(capsule.indices.size(), ((2U * (rings + 1U)) - 1U) * segments * 6U);
+    const std::size_t rowWidth = segments + 1U;
+    const auto& upperEquator = capsule.vertices[rings * rowWidth];
+    const auto& lowerEquator = capsule.vertices[(rings + 1U) * rowWidth];
+    EXPECT_FLOAT_EQ(upperEquator.position.y(), (height * 0.5F) - radius);
+    EXPECT_FLOAT_EQ(lowerEquator.position.y(), radius - (height * 0.5F));
+    EXPECT_NEAR(upperEquator.position.x(), radius, 1.0e-5F);
+    EXPECT_NEAR(lowerEquator.position.x(), radius, 1.0e-5F);
     for (const auto index : capsule.indices) {
         EXPECT_LT(index, capsule.vertices.size());
     }

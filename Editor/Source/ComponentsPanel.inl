@@ -89,6 +89,19 @@ bool ComponentsPanel::draw(Engine::ScenePreset &scene, const std::vector<Engine:
         scene.editor().valid(selected) && scene.editor().has<Engine::Transform>(selected)) {
         if (!multiSelection) {
             TransformFields{scene.edit(selected)}.draw();
+            if (scene.editor().has<Engine::ParentComponent>(selected)) {
+                ImGui::Spacing();
+                if (ImGui::Button("Reset to Parent")) {
+                    scene.editor().modify<Engine::Transform>(selected, [](auto& transform) {
+                        transform.position = {0.0F, 0.0F, 0.0F};
+                        transform.rotation = {0.0F, 0.0F, 0.0F};
+                        transform.scale = {1.0F, 1.0F, 1.0F};
+                    });
+                }
+                if (ImGui::IsItemHovered()) {
+                    ImGui::SetTooltip("Set local position and rotation to zero, and local scale to one.");
+                }
+            }
         } else {
             const auto transform = scene.editor().get<Engine::Transform>(selected);
             const auto apply = [&](const auto setter, const Engine::Vec3& value) {
@@ -790,7 +803,7 @@ bool ComponentsPanel::draw(Engine::ScenePreset &scene, const std::vector<Engine:
     if (ImGui::BeginPopupModal("Create C++ Script", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
         static char name[128]{};
         static std::string error;
-        ImGui::TextUnformatted("Creates Sandbox/Source/Scripts/<Name>.h and .cpp");
+        ImGui::TextUnformatted("Creates Assets/Scripts/<Name>.h and .cpp in the current project");
         ImGui::InputTextWithHint("Class name", "PlayerController", name, sizeof(name));
         if (!error.empty()) ImGui::TextColored({1, .3F, .3F, 1}, "%s", error.c_str());
         if (EditorButton("Create").draw() && EditorSceneSession::createCppScript(name, error)) {

@@ -216,6 +216,7 @@ Engine::Entity drawEditorMenuBar(Engine::ScenePreset &scene, Engine::Renderer &r
                     content.clear();
                     content.setAssetRoot(loadedProject.assetRoot());
                     project = std::move(loadedProject);
+                    EditorSceneSession::setProjectRoot(project.rootPath());
                     Editor::ConsolePanel::info("Loaded project: " + project.name());
                 } catch (const std::exception &error) {
                     sceneFileError = error.what();

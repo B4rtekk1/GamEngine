@@ -35,7 +35,14 @@ namespace Engine {
 
             const auto addHemisphere = [&](const bool top) {
                 for (unsigned int ring = 0; ring <= rings; ++ring) {
-                    const float angle = (static_cast<float>(ring) / static_cast<float>(rings)) * (CapsulePi * 0.5F);
+                    // Vertices must be emitted from the top pole to the upper
+                    // equator, then from the lower equator to the bottom pole.
+                    // Keeping both hemispheres in the same pole-to-equator order
+                    // joined the upper equator to the lower pole, collapsing the
+                    // cylindrical section into a cone.
+                    const unsigned int hemisphereRing = top ? ring : rings - ring;
+                    const float angle = (static_cast<float>(hemisphereRing) / static_cast<float>(rings)) *
+                                        (CapsulePi * 0.5F);
                     const float radial = std::sin(angle);
                     const float vertical = std::cos(angle);
                     for (unsigned int segment = 0; segment <= sides; ++segment) {

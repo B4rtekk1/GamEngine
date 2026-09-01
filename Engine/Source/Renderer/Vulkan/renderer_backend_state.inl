@@ -84,6 +84,7 @@
         std::uint64_t& lastTransformRevision;
         std::uint64_t& lastMeshRendererRevision;
         std::uint64_t& lastTerrainGrassRevision;
+        std::uint64_t& lastParentRevision;
         std::array<std::vector<std::size_t>, MAX_FRAMES_IN_FLIGHT>& dirtyTransforms;
         std::array<std::vector<std::size_t>, MAX_FRAMES_IN_FLIGHT>& dirtyMaterials;
         std::array<std::vector<std::size_t>, MAX_FRAMES_IN_FLIGHT>& dirtyCullingObjects;

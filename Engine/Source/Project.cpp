@@ -112,7 +112,7 @@ Project Project::create(const std::filesystem::path& rootDirectory, std::string 
     if (error) throw std::runtime_error("Could not create project directories: " + error.message());
     std::filesystem::create_directories(root / "Assets" / "Textures", error);
     if (error) throw std::runtime_error("Could not create project directories: " + error.message());
-    std::filesystem::create_directories(root / "Scripts", error);
+    std::filesystem::create_directories(root / "Assets" / "Scripts", error);
     if (error) throw std::runtime_error("Could not create project directories: " + error.message());
 
     const auto manifest = root / "GamEngine.project";

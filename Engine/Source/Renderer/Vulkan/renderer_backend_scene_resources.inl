@@ -184,7 +184,7 @@
             sceneMesh.vertices.reserve(vertexCapacity);
             sceneMesh.indices.reserve(indexCapacity);
             registry.view<Transform, MeshRenderer>(
-                [&](const Entity entity, const Transform& transform, MeshRenderer& renderer) {
+                [&](const Entity entity, const Transform&, MeshRenderer& renderer) {
                     if (!renderer.hasMesh()) {
                         return;
                     }
@@ -264,8 +264,10 @@
                         localBounds.max.setZ(std::max(localBounds.max.z(), vertex.position.z()));
                         }
                     }
-                    const AABB worldBounds =
-                        localBounds.transformed(transform.matrix().native());
+                    // Culling must use the same parent-composed matrix as the
+                    // instance renderer. Otherwise a child can be rendered at
+                    // its parent's position but culled at its local position.
+                    const AABB worldBounds = localBounds.transformed(worldModel(entity));
                     const bool castShadow = renderer.castShadow;
                     const BatchKey batchKey{mesh, castShadow, renderer.cullingBatch};
                     const auto [batchIt, inserted] = optimizationFeatures.instancedRendering
@@ -609,7 +611,8 @@
             const bool shadowCacheCanContainGeometry =
                 lastTransformRevision != std::numeric_limits<std::uint64_t>::max() &&
                 lastMeshRendererRevision != std::numeric_limits<std::uint64_t>::max() &&
-                lastTerrainGrassRevision != std::numeric_limits<std::uint64_t>::max();
+                lastTerrainGrassRevision != std::numeric_limits<std::uint64_t>::max() &&
+                lastParentRevision != std::numeric_limits<std::uint64_t>::max();
             const auto appendDirtyShadowBounds = [&](const AABB& bounds) {
                 if (!shadowCacheCanContainGeometry) return;
                 Culling::GPUObjectData object{};
@@ -624,9 +627,11 @@
             const std::uint64_t transformRevision = registry.componentRevision<Transform>();
             const std::uint64_t meshRendererRevision = registry.componentRevision<MeshRenderer>();
             const std::uint64_t terrainGrassRevision = registry.componentRevision<TerrainGrassComponent>();
+            const std::uint64_t parentRevision = registry.componentRevision<ParentComponent>();
             if (transformRevision == lastTransformRevision &&
                 meshRendererRevision == lastMeshRendererRevision &&
-                terrainGrassRevision == lastTerrainGrassRevision) {
+                terrainGrassRevision == lastTerrainGrassRevision &&
+                parentRevision == lastParentRevision) {
                 uploadPendingRenderableBuffers();
                 return;
             }
@@ -634,7 +639,8 @@
             std::vector<std::size_t> changedIndices;
             changedIndices.reserve(renderables.size());
             if (lastTransformRevision == std::numeric_limits<std::uint64_t>::max() ||
-                lastMeshRendererRevision == std::numeric_limits<std::uint64_t>::max()) {
+                lastMeshRendererRevision == std::numeric_limits<std::uint64_t>::max() ||
+                parentRevision != lastParentRevision) {
                 for (std::size_t index = 0; index < renderables.size(); ++index) {
                     changedIndices.push_back(index);
                 }
@@ -687,9 +693,46 @@
                         }
                     }
                 }
+                // A changed ancestor changes every descendant's world transform.
+                // Updating all renderables here keeps hierarchy transforms correct
+                // without relying on editor code to mark each child dirty.
+                if (transformRevision != lastTransformRevision) {
+                    for (std::size_t index = 0; index < renderables.size(); ++index) {
+                        addIndex(index);
+                    }
+                }
             }
 
             const Registry& readRegistry = registry;
+            std::unordered_map<UUID, Entity> entitiesByUuid;
+            entitiesByUuid.reserve(readRegistry.size());
+            readRegistry.view<UUIDComponent>([&](const Entity entity, const UUIDComponent& uuid) {
+                entitiesByUuid.emplace(uuid.value, entity);
+            });
+            const auto worldModel = [&](const Entity entity) {
+                glm::mat4 model{1.0F};
+                Entity current = entity;
+                std::unordered_set<Entity> visited;
+                while (readRegistry.valid(current) && visited.insert(current).second &&
+                       readRegistry.has<Transform>(current)) {
+                    model = readRegistry.get<Transform>(current).matrix().native() * model;
+                    if (!readRegistry.has<ParentComponent>(current)) break;
+                    const UUID parent = readRegistry.get<ParentComponent>(current).parent;
+                    const auto found = entitiesByUuid.find(parent);
+                    if (found == entitiesByUuid.end()) break;
+                    current = found->second;
+                }
+                return model;
+            };
+            const auto sameModel = [](const glm::mat4& left, const glm::mat4& right) {
+                constexpr float epsilon = 1.0e-5F;
+                for (glm::length_t column = 0; column < 4; ++column) {
+                    for (glm::length_t row = 0; row < 4; ++row) {
+                        if (std::abs(left[column][row] - right[column][row]) > epsilon) return false;
+                    }
+                }
+                return true;
+            };
             std::vector<std::size_t> changedBatches;
             changedBatches.reserve(changedIndices.size());
             for (const std::size_t index : changedIndices) {
@@ -715,7 +758,7 @@
                                 grassMeshHeight > 1.0e-5F ? 1.0F / grassMeshHeight : 0.0F}
                     : glm::vec4{};
                 Transform effectiveTransform = transform;
-                glm::mat4 model = transform.matrix().native();
+                glm::mat4 model = worldModel(entity);
                 if (grassInstance) {
                     const auto& item = grass->instances[record.grassInstance];
                     effectiveTransform = Transform{.position = item.position,
@@ -738,7 +781,7 @@
                     return bounds;
                 };
                 const bool transformChanged = !optimizationFeatures.transformCaching ||
-                    !record.hasCachedTransform || !sameTransform(record.cachedTransform, effectiveTransform);
+                    !record.hasCachedTransform || !sameModel(model, modelFromInstance(instanceModels[index]));
                 const bool deformationChanged = grassInstance &&
                     glm::any(glm::notEqual(instanceModels[index].grassDeformation, grassDeformation));
                 if (transformChanged) {
@@ -761,14 +804,15 @@
                         }
                         decomposedRotation = glm::normalize(decomposedRotation);
                     } else {
-                        const auto radians = [](const float degrees) {
-                            return glm::radians(degrees);
-                        };
-                        decomposedTranslation = transform.position.native();
-                        decomposedScale = transform.scale.native();
-                        decomposedRotation = glm::angleAxis(radians(transform.rotation.x()), glm::vec3{1, 0, 0}) *
-                                             glm::angleAxis(radians(transform.rotation.y()), glm::vec3{0, 1, 0}) *
-                                             glm::angleAxis(radians(transform.rotation.z()), glm::vec3{0, 0, 1});
+                        glm::vec3 skew{};
+                        glm::vec4 perspective{};
+                        if (!glm::decompose(model, decomposedScale, decomposedRotation,
+                                            decomposedTranslation, skew, perspective)) {
+                            decomposedScale = {1.0F, 1.0F, 1.0F};
+                            decomposedRotation = {};
+                            decomposedTranslation = glm::vec3{model[3]};
+                        }
+                        decomposedRotation = glm::normalize(decomposedRotation);
                     }
                     instanceModels[index].positionMaterial = glm::vec4{
                         decomposedTranslation, std::bit_cast<float>(static_cast<std::uint32_t>(index * materialSlots))};
@@ -910,6 +954,7 @@
             lastTransformRevision = transformRevision;
             lastMeshRendererRevision = meshRendererRevision;
             lastTerrainGrassRevision = terrainGrassRevision;
+            lastParentRevision = parentRevision;
         }
 
         [[nodiscard]] bool canUseHiZOcclusionCulling() const noexcept {

@@ -25,7 +25,12 @@
 
 namespace {
 std::filesystem::path activeScenePath;
+std::filesystem::path activeProjectRoot;
 bool sceneHasBeenSaved = false;
+}
+
+void EditorSceneSession::setProjectRoot(std::filesystem::path path) {
+    activeProjectRoot = std::filesystem::absolute(std::move(path)).lexically_normal();
 }
 
 /**
@@ -179,7 +184,7 @@ bool EditorSceneSession::setPlayMode(const bool play, Engine::ScenePreset &scene
  *
  * The class name must begin with an alphabetic character and may otherwise
  * contain only alphanumeric characters and underscores. On success, a header
- * and source file are created in `Sandbox/Source/Scripts`.
+ * and source file are created in the active project's `Assets/Scripts` directory.
  *
  * @param name Name of the generated C++ class and the base name of both files.
  * @param error Receives a human-readable failure description.
@@ -196,7 +201,11 @@ bool EditorSceneSession::createCppScript(const std::string_view name, std::strin
         error = "Use a valid C++ class name.";
         return false;
     }
-    const auto directory = std::filesystem::path{GAMEENGINE_SOURCE_DIR} / "Sandbox/Source/Scripts";
+    if (activeProjectRoot.empty()) {
+        error = "No project is currently open.";
+        return false;
+    }
+    const auto directory = activeProjectRoot / "Assets" / "Scripts";
     const auto header = directory / (std::string{name} + ".h");
     const auto source = directory / (std::string{name} + ".cpp");
     if (std::filesystem::exists(header) || std::filesystem::exists(source)) {

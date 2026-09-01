@@ -60,6 +60,7 @@ namespace Engine {
         std::uint64_t lastTransformRevision = std::numeric_limits<std::uint64_t>::max();
         std::uint64_t lastMeshRendererRevision = std::numeric_limits<std::uint64_t>::max();
         std::uint64_t lastTerrainGrassRevision = std::numeric_limits<std::uint64_t>::max();
+        std::uint64_t lastParentRevision = std::numeric_limits<std::uint64_t>::max();
         std::array<std::vector<std::size_t>, 2> dirtyTransforms;
         std::array<std::vector<std::size_t>, 2> dirtyMaterials;
         std::array<std::vector<std::size_t>, 2> dirtyCullingObjects;
