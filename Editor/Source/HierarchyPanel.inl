@@ -23,6 +23,7 @@ Engine::Entity HierarchyPanel::draw(Engine::ScenePreset &scene, Engine::Assets::
         ImGui::Separator();
         if (ImGui::MenuItem("3D Object/Cube")) clicked = scene.createCube();
         if (ImGui::MenuItem("3D Object/Sphere")) clicked = scene.createSphere();
+        if (ImGui::MenuItem("3D Object/Capsule")) clicked = scene.createCapsule();
         if (ImGui::MenuItem("3D Object/Plane")) clicked = scene.createPlane();
         if (ImGui::MenuItem("3D Object/Ramp")) clicked = scene.createRamp();
         ImGui::Separator();

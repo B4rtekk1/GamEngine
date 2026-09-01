@@ -4,6 +4,7 @@
 #include "Engine/Core/Camera.h"
 #include "Engine/ECS/Components/CameraComponent.h"
 #include "Engine/Renderer/Geometry/Cube.h"
+#include "Engine/Renderer/Geometry/Capsule.h"
 #include "Engine/Renderer/Geometry/Mesh.h"
 #include "Engine/Renderer/Geometry/Plane.h"
 #include "Engine/Renderer/Geometry/Ramp.h"
@@ -11,6 +12,7 @@
 #include "Engine/Renderer/ViewportCamera.h"
 #include "Engine/UI/RectTransform.h"
 
+#include <algorithm>
 #include <memory>
 #include <stdexcept>
 
@@ -192,6 +194,28 @@ TEST(PrimitiveMeshes, SphereRespectsRequestedResolutionAndUnitNormals) {
         EXPECT_NEAR(vertex.position.length(), 0.5F, 1.0e-5F);
         EXPECT_NEAR(vertex.normal.length(), 1.0F, 1.0e-5F);
     }
+}
+
+TEST(PrimitiveMeshes, CapsuleHasExpectedBoundsAndValidTriangles) {
+    constexpr float radius = 0.5F;
+    constexpr float height = 2.0F;
+    constexpr unsigned int rings = 2U;
+    constexpr unsigned int segments = 4U;
+    const auto capsule = Engine::Capsule::createMesh(radius, height, rings, segments);
+    EXPECT_EQ(capsule.vertices.size(), 2U * (rings + 1U) * (segments + 1U));
+    EXPECT_EQ(capsule.indices.size(), ((2U * (rings + 1U)) - 1U) * segments * 6U);
+    for (const auto index : capsule.indices) {
+        EXPECT_LT(index, capsule.vertices.size());
+    }
+    float minimumY = capsule.vertices.front().position.y();
+    float maximumY = minimumY;
+    for (const auto& vertex : capsule.vertices) {
+        minimumY = std::min(minimumY, vertex.position.y());
+        maximumY = std::max(maximumY, vertex.position.y());
+        EXPECT_NEAR(vertex.normal.length(), 1.0F, 1.0e-5F);
+    }
+    EXPECT_FLOAT_EQ(minimumY, -height * 0.5F);
+    EXPECT_FLOAT_EQ(maximumY, height * 0.5F);
 }
 
 TEST(PrimitiveMeshes, RampExposesExpectedDimensionsAndValidTriangles) {

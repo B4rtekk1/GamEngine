@@ -29,6 +29,11 @@ const char *entityName(const Engine::ScenePreset &scene, const Engine::Entity en
             return "Sphere";
         }
     }
+    for (const Engine::Entity editorCapsule: scene.editorCapsules) {
+        if (editorCapsule == entity) {
+            return "Capsule";
+        }
+    }
     for (const Engine::Entity editorRamp: scene.editorRamps) {
         if (editorRamp == entity) {
             return "Ramp";
@@ -46,4 +51,3 @@ const char *entityName(const Engine::ScenePreset &scene, const Engine::Entity en
     }
     return "Entity";
 }
-

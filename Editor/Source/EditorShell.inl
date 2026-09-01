@@ -277,6 +277,9 @@ Engine::Entity drawEditorMenuBar(Engine::ScenePreset &scene, Engine::Renderer &r
         if (ImGui::MenuItem("Create Sphere")) {
             createdEntity = scene.createSphere();
         }
+        if (ImGui::MenuItem("Create Capsule")) {
+            createdEntity = scene.createCapsule();
+        }
         if (ImGui::MenuItem("Create Ramp")) {
             createdEntity = scene.createRamp();
         }

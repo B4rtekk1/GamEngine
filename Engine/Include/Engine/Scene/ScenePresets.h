@@ -23,6 +23,8 @@ namespace Engine {
 
         [[nodiscard]] Entity createSphere();
 
+        [[nodiscard]] Entity createCapsule();
+
         [[nodiscard]] Entity createRamp();
 
         [[nodiscard]] Entity createLight();
@@ -39,6 +41,7 @@ namespace Engine {
         std::vector<Entity> editorCubes;
         std::vector<Entity> editorPlanes;
         std::vector<Entity> editorSpheres;
+        std::vector<Entity> editorCapsules;
         std::vector<Entity> editorRamps;
         std::vector<Entity> editorLights;
         std::vector<Entity> editorTerrains;
@@ -48,6 +51,7 @@ namespace Engine {
         std::shared_ptr<const Mesh> planeMesh_;
         std::shared_ptr<const Mesh> cubeMesh_;
         std::shared_ptr<const Mesh> sphereMesh_;
+        std::shared_ptr<const Mesh> capsuleMesh_;
         std::shared_ptr<const Mesh> rampMesh_;
     };
 } // namespace Engine

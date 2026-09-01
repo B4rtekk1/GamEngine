@@ -8,6 +8,7 @@
 #include "Engine/ECS/Components/RigidbodyComponent.h"
 #include "Engine/ECS/Components/ProceduralCloudComponent.h"
 #include "Engine/Renderer/Geometry/Cube.h"
+#include "Engine/Renderer/Geometry/Capsule.h"
 #include "Engine/Renderer/Geometry/Plane.h"
 #include "Engine/Renderer/Geometry/ProceduralCloud.h"
 #include "Engine/Renderer/Geometry/Ramp.h"
@@ -59,6 +60,9 @@ namespace Engine {
         constexpr float EditorObjectHeight = 0.5F;
         constexpr float RampObjectHeight = 2.0F;
         constexpr float SphereRadius = 0.5F;
+        constexpr float CapsuleRadius = 0.5F;
+        constexpr float CapsuleHeight = 2.0F;
+        constexpr float CapsuleObjectHeight = CapsuleHeight * 0.5F;
         constexpr int DefaultCullingBatch = 1;
 
         constexpr float GroundColorRed = 0.24F;
@@ -102,6 +106,7 @@ namespace Engine {
         planeMesh_ = std::make_shared<Mesh>(Plane::createMesh());
         cubeMesh_ = std::make_shared<Mesh>(Cube::createMesh());
         sphereMesh_ = std::make_shared<Mesh>(Sphere::createMesh());
+        capsuleMesh_ = std::make_shared<Mesh>(Capsule::createMesh(CapsuleRadius, CapsuleHeight));
         rampMesh_ = std::make_shared<Mesh>(Ramp::createMesh());
         buildFont(uiFontAtlas());
         if (type == SceneType::Particles) {
@@ -227,6 +232,21 @@ namespace Engine {
         object.add<ColliderComponent>(ColliderComponent{.shape = SphereCollider{.radius = SphereRadius}});
         object.add<RigidbodyComponent>();
         editorSpheres.push_back(entity);
+        return entity;
+    }
+
+    Entity ScenePreset::createCapsule() {
+        auto &object = createMeshObject("Capsule", capsuleMesh_,
+                                        PBRMaterial{
+                                            .baseColor = {0.45F, 0.80F, 0.48F},
+                                            .metallic = SphereMetallic, .roughness = SphereRoughness,
+                                        });
+        object.setPosition({0, CapsuleObjectHeight, 0});
+        const Entity entity = object.entity();
+        object.add<ColliderComponent>(ColliderComponent{
+            .shape = CapsuleCollider{.radius = CapsuleRadius, .height = CapsuleHeight}});
+        object.add<RigidbodyComponent>();
+        editorCapsules.push_back(entity);
         return entity;
     }
 
