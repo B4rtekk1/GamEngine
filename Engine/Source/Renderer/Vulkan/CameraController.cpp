@@ -14,7 +14,7 @@ namespace Engine {
         constexpr float Zero = 0.0F;
         constexpr float MovementSpeed = 10.0F;
         constexpr float MouseWheelSpeed = 2.0F;
-        constexpr float MouseSensitivity = 0.1F;
+        constexpr float MouseSensitivity = 0.25F;
         constexpr float MaxPitchDegrees = 89.0F;
 
         constexpr float EditorCameraFovDegrees = 60.0F;
@@ -42,6 +42,12 @@ namespace Engine {
             disableRelativeMouseMode(window);
             return;
         }
+        if (Input::keyPressed(KeyCode::Escape)) {
+            gameMouseCaptureEnabled_ = false;
+            disableRelativeMouseMode(window);
+        } else if (!gameMouseCaptureEnabled_ && Input::mousePressed(MouseButton::Left)) {
+            gameMouseCaptureEnabled_ = true;
+        }
 
         CameraComponent *activeCamera = nullptr;
         Transform *activeTransform = nullptr;
@@ -66,6 +72,11 @@ namespace Engine {
         camera_->setRotation(Degrees{transform.rotation.y()}, Degrees{transform.rotation.x()},
                              Degrees{transform.rotation.z()});
 
+        // Relative mode hides the system cursor and keeps mouse-look working
+        // when the pointer reaches a window edge. Escape releases it and a
+        // left click captures it again. RMB remains the fly-camera movement
+        // modifier, so gameplay scripts can still use WASD normally.
+        const bool mouseLook = gameMouseCaptureEnabled_;
         const bool flyMode = Input::mouseDown(MouseButton::Right);
         const bool moveFast = Input::keyDown(KeyCode::LeftShift) ||
                               Input::keyDown(KeyCode::RightShift);
@@ -102,7 +113,7 @@ namespace Engine {
             transform.position += camera_->forward() * (Input::mouseWheel() * MouseWheelSpeed);
         }
 
-        if (flyMode) {
+        if (mouseLook) {
             if (!mouseLookActive_) {
                 SDLInput::setRelativeMouseMode(window, true);
                 mouseLookActive_ = true;

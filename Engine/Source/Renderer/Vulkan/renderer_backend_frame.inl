@@ -114,17 +114,40 @@
             } else {
                 fallbackCameraWarningReported = false;
                 const auto& component = readRegistry.get<CameraComponent>(activeCamera);
-                const auto& transform = readRegistry.get<Transform>(activeCamera);
 
                 // Game View is presented in a fixed 16:9 editor frame. Keep the
                 // projection in that aspect too, independently of dock layout.
                 const float gameAspect = editorUiActive ? (16.0F / 9.0F) : component.aspectRatio;
                 cameraController.camera().emplace(Degrees{component.fieldOfView}, gameAspect,
                                                    component.nearClip, component.farClip);
-                cameraController.camera()->setPosition(transform.position);
-                cameraController.camera()->setRotation(Degrees{transform.rotation.y()},
-                                                        Degrees{transform.rotation.x()},
-                                                        Degrees{transform.rotation.z()});
+                // Cameras can be parented to a player or another scene object.
+                // Use the composed transform rather than the camera's local
+                // Transform, otherwise a child camera is rendered at its local
+                // origin (usually inside the terrain).
+                const glm::mat4 model = worldModel(activeCamera);
+                // A camera's pitch is a view-space angle, not merely an X-axis
+                // model rotation. Deriving it from the model matrix made pitch
+                // depend on yaw, producing an unnatural vertical mouse look.
+                const Transform &cameraTransform = readRegistry.get<Transform>(activeCamera);
+                float yaw = cameraTransform.rotation.y();
+                float pitch = cameraTransform.rotation.x();
+                std::unordered_map<UUID, Entity> entitiesByUuid;
+                entitiesByUuid.reserve(readRegistry.size());
+                readRegistry.view<UUIDComponent>([&](const Entity entity, const UUIDComponent &uuid) {
+                    entitiesByUuid.emplace(uuid.value, entity);
+                });
+                Entity current = activeCamera;
+                while (readRegistry.has<ParentComponent>(current)) {
+                    const UUID parentUuid = readRegistry.get<ParentComponent>(current).parent;
+                    const auto parent = entitiesByUuid.find(parentUuid);
+                    if (parent == entitiesByUuid.end() || !readRegistry.has<Transform>(parent->second)) break;
+                    current = parent->second;
+                    const Transform &parentTransform = readRegistry.get<Transform>(current);
+                    yaw += parentTransform.rotation.y();
+                    pitch += parentTransform.rotation.x();
+                }
+                cameraController.camera()->setPosition(Vec3{glm::vec3{model[3]}});
+                cameraController.camera()->setRotation(Degrees{yaw}, Degrees{pitch});
             }
 
             taaJitterX = 0.0F;
@@ -664,7 +687,11 @@
         // ---------- MAIN LOOP ----------
 
         void updateCameraInput() {
-            if (editorUiActive && !cameraController.editorInputEnabled()) { return; }
+            // In the editor, Scene View and Game View are mutually exclusive.
+            // Do not skip this update merely because the Scene View controller
+            // is off: Play Mode still needs to enter SDL relative mouse mode.
+            if (editorUiActive && !cameraController.editorInputEnabled() &&
+                !cameraController.gameInputEnabled()) { return; }
             cameraController.update(window, registry);
         }
 

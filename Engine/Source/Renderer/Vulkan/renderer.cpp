@@ -177,7 +177,14 @@ namespace Engine {
             EditorEventState result{};
             SDL_Event event;
             while (SDL_PollEvent(&event)) {
-                if (editorUiActive) {
+                const bool mouseEvent = event.type == SDL_EVENT_MOUSE_MOTION ||
+                                        event.type == SDL_EVENT_MOUSE_BUTTON_DOWN ||
+                                        event.type == SDL_EVENT_MOUSE_BUTTON_UP ||
+                                        event.type == SDL_EVENT_MOUSE_WHEEL;
+                // While Play Mode owns the mouse, do not let the hidden cursor
+                // activate editor controls below it. Escape releases the capture
+                // and restores normal ImGui mouse input on the next frame.
+                if (editorUiActive && (!mouseEvent || !cameraController.gameMouseCaptured())) {
                     ImGui_ImplSDL3_ProcessEvent(&event);
                 }
                 processEvent(event);

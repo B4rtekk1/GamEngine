@@ -88,8 +88,10 @@ namespace Engine {
         scene_.ui().update();
         if (game_ != nullptr) { game_->onUpdate(scene_, deltaTime); }
         if (updateCallback_) { updateCallback_(scene_, deltaTime); }
-        updatePhysics(deltaTime);
         impl_->scripts.update(scene_, deltaTime);
+        // Apply input-driven changes before stepping PhysX so movement and
+        // jumping affect this frame rather than the next one.
+        updatePhysics(deltaTime);
         impl_->renderer.renderFrame();
     }
 

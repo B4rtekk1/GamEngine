@@ -1904,7 +1904,10 @@ ViewportInteraction drawViewport(Engine::ScenePreset &scene, Engine::Assets::Con
     // cursor after right- or middle-clicking menus and side panels, leaving
     // ImGui unable to receive subsequent clicks.
     interaction.cameraInput = !playing && !showGameView && viewportHovered;
-    interaction.gameCameraInput = showGameView && viewportHovered && !ImGui::GetIO().WantTextInput;
+    // Play Mode owns the cursor for the whole session. Requiring the Game
+    // View to be hovered let ImGui release relative mouse mode as soon as the
+    // pointer left its image, which breaks mouse-look at the window edge.
+    interaction.gameCameraInput = playing && showGameView;
     return interaction;
 }
 

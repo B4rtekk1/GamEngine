@@ -1,7 +1,7 @@
-# Playable scene module. Add gameplay C++ scripts under Source/Scripts/.
+# Playable scene module. Add gameplay C++ scripts under Assets/Scripts/.
 # CMake reconfigures automatically when a generated script source is added.
 file(GLOB_RECURSE GAME_SCRIPT_SOURCES CONFIGURE_DEPENDS
-        "${CMAKE_CURRENT_SOURCE_DIR}/Source/Scripts/*.cpp")
+        "${GAMEENGINE_GAME_ROOT}/Assets/Scripts/*.cpp")
 
 if(NOT EXISTS "${GAMEENGINE_GAME_ROOT}/GamEngine.project")
     message(FATAL_ERROR
