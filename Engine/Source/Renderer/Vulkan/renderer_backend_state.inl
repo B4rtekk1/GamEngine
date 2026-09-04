@@ -71,6 +71,7 @@
         bool shadowClipmapsValid{false};
         bool sceneShadowClipmapsValid{false};
         bool fallbackCameraWarningReported{false};
+        SceneFrameDataCache sceneFrameDataCache;
         SkyPass sceneSkyPass;
         Scene& scene;
         Registry& registry;

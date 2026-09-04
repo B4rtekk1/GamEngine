@@ -1,100 +1,132 @@
-        struct DirectionalLight final {
-            static constexpr float defaultIntensity{4.0F};
-            Vec3 direction{-0.45F, -0.80F, -0.35F};
-            Math::Color color = Math::Color::white();
-            float intensity{defaultIntensity};
-        };
-
-        [[nodiscard]] DirectionalLight directionalLight() const {
-            DirectionalLight result;
-            const Registry& readRegistry = registry;
-            bool found = false;
-            readRegistry.view<Transform, LightComponent>(
-                [&](const Entity entity, const Transform& transform, const LightComponent& light) {
-                    // SceneEditor guarantees that only one directional
-                    // LightComponent is enabled. The guard keeps the runtime
-                    // path deterministic even for externally constructed scenes.
-                    if (found || !light.enabled || light.type != LightType::Directional) return;
-                    const glm::mat4 world = transform.worldMatrix().native();
-                    const glm::vec3 direction = glm::vec3(world *
-                                                          glm::vec4{0.0F, 0.0F, -1.0F, 0.0F});
-                    if (glm::length(direction) <= 1e-6F) return;
-                    result.direction = Vec3{glm::normalize(direction)};
-                    result.color = readRegistry.has<ColorPickerComponent>(entity)
-                                       ? readRegistry.get<ColorPickerComponent>(entity).color
-                                       : light.color;
-                    result.intensity = std::max(0.0F, light.intensity);
-                    found = true;
-                });
-            return result;
+        [[nodiscard]] DirectionalLight directionalLight() const noexcept {
+            return sceneFrameDataCache.data.directionalLight;
         }
 
-        struct WindFrameData final {
-            Vec4 directionStrength{};
-            Vec4 sourcePositionRange{};
-            Vec4 gustFrequencyTime{};
-        };
-
-        [[nodiscard]] WindFrameData windFrameData() const {
-            WindFrameData result;
+        void refreshSceneFrameData() {
             const Registry& readRegistry = registry;
-            bool found = false;
-            readRegistry.view<Transform, WindComponent>([&](const Entity, const Transform& transform,
-                                                             const WindComponent& wind) {
-                if (found || !wind.enabled || wind.strength <= 0.0F || wind.range <= 0.0F) return;
-                const float length = wind.direction.length();
-                if (length <= 1.0e-4F) return;
+            const std::uint64_t transformRevision = readRegistry.componentRevision<Transform>();
+            const std::uint64_t lightRevision = readRegistry.componentRevision<LightComponent>();
+            const std::uint64_t windRevision = readRegistry.componentRevision<WindComponent>();
+            const std::uint64_t cameraRevision = readRegistry.componentRevision<CameraComponent>();
+            const std::uint64_t colorPickerRevision = readRegistry.componentRevision<ColorPickerComponent>();
+            const std::uint64_t parentRevision = readRegistry.componentRevision<ParentComponent>();
+            const std::uint64_t uuidRevision = readRegistry.componentRevision<UUIDComponent>();
+            const std::uint64_t structuralRevision = readRegistry.structuralRevision();
+            const bool uuidIndexDirty = !sceneFrameDataCache.initialized ||
+                sceneFrameDataCache.uuidRevision != uuidRevision ||
+                sceneFrameDataCache.structuralRevision != structuralRevision;
+            if (uuidIndexDirty) {
+                auto& entitiesByUuid = sceneFrameDataCache.entitiesByUuid;
+                entitiesByUuid.clear();
+                entitiesByUuid.reserve(readRegistry.size());
+                readRegistry.view<UUIDComponent>([&](const Entity entity, const UUIDComponent& uuid) {
+                    entitiesByUuid.emplace(uuid.value, entity);
+                });
+            }
+
+            const bool dataDirty = !sceneFrameDataCache.initialized ||
+                sceneFrameDataCache.transformRevision != transformRevision ||
+                sceneFrameDataCache.lightRevision != lightRevision ||
+                sceneFrameDataCache.windRevision != windRevision ||
+                sceneFrameDataCache.cameraRevision != cameraRevision ||
+                sceneFrameDataCache.colorPickerRevision != colorPickerRevision ||
+                sceneFrameDataCache.parentRevision != parentRevision ||
+                sceneFrameDataCache.uuidRevision != uuidRevision;
+            if (dataDirty) {
+                SceneFrameData data{};
+                bool directionalLightFound = false;
+                readRegistry.view<CameraComponent, Transform>(
+                    [&](const Entity entity, const CameraComponent& component, const Transform&) {
+                        if (data.primaryCamera == NullEntity && component.primary && component.isPerspective() &&
+                            component.isValid()) {
+                            data.primaryCamera = entity;
+                            sceneFrameDataCache.primaryCameraComponent = component;
+                        }
+                    });
+                readRegistry.view<Transform, LightComponent>(
+                    [&](const Entity entity, const Transform& transform, const LightComponent& light) {
+                        if (!light.enabled) return;
+                        const glm::mat4 world = transform.worldMatrix().native();
+                        const glm::vec3 direction = glm::vec3(
+                            world * glm::vec4{0.0F, 0.0F, -1.0F, 0.0F});
+                        const Math::Color color = readRegistry.has<ColorPickerComponent>(entity)
+                            ? readRegistry.get<ColorPickerComponent>(entity).color : light.color;
+                        if (light.type == LightType::Directional) {
+                            // SceneEditor guarantees one enabled directional light. Keep externally
+                            // constructed scenes deterministic too.
+                            if (!directionalLightFound && glm::length(direction) > 1e-6F) {
+                                data.directionalLight.direction = Vec3{glm::normalize(direction)};
+                                data.directionalLight.color = color;
+                                data.directionalLight.intensity = std::max(0.0F, light.intensity);
+                                directionalLightFound = true;
+                            }
+                            return;
+                        }
+                        if (data.lightCount == MaxLocalLights || light.range <= 0.0F) return;
+                        constexpr float pi = 3.14159265358979323846F;
+                        auto& gpu = data.lights[data.lightCount++];
+                        const glm::vec3 position = glm::vec3{world[3]};
+                        gpu.positionRange = {position.x, position.y, position.z, light.range};
+                        gpu.directionOuterCos = {glm::normalize(direction),
+                                                 std::cos(light.outerConeAngle * pi / 180.0F)};
+                        gpu.colorIntensity = {color.r(), color.g(), color.b(), std::max(0.0F, light.intensity)};
+                        gpu.parameters = {std::cos(light.innerConeAngle * pi / 180.0F),
+                                          static_cast<float>(light.type), light.castShadows ? 1.0F : 0.0F, 0.0F};
+                    });
+                sceneFrameDataCache.hasWind = false;
+                readRegistry.view<Transform, WindComponent>(
+                    [&](const Entity, const Transform& transform, const WindComponent& wind) {
+                        if (sceneFrameDataCache.hasWind || !wind.enabled || wind.strength <= 0.0F ||
+                            wind.range <= 0.0F) return;
+                        const float length = wind.direction.length();
+                        if (length <= 1.0e-4F) return;
+                        const Vec3 direction = wind.direction * (1.0F / length);
+                        data.wind.directionStrength = {direction.x(), direction.y(), direction.z(), wind.strength};
+                        const glm::vec3 position = glm::vec3{transform.worldMatrix().native()[3]};
+                        data.wind.sourcePositionRange = {position.x, position.y, position.z, wind.range};
+                        data.wind.gustFrequencyTime = {wind.gustStrength, wind.frequency, 0.0F, 0.0F};
+                        sceneFrameDataCache.hasWind = true;
+                    });
+                if (data.primaryCamera != NullEntity) {
+                    const Transform& cameraTransform = readRegistry.get<Transform>(data.primaryCamera);
+                    sceneFrameDataCache.primaryCameraPosition = Vec3{glm::vec3{cameraTransform.worldMatrix().native()[3]}};
+                    sceneFrameDataCache.primaryCameraYaw = cameraTransform.rotation.y();
+                    sceneFrameDataCache.primaryCameraPitch = cameraTransform.rotation.x();
+                    Entity current = data.primaryCamera;
+                    while (readRegistry.has<ParentComponent>(current)) {
+                        const UUID parentUuid = readRegistry.get<ParentComponent>(current).parentUuid;
+                        const auto parent = sceneFrameDataCache.entitiesByUuid.find(parentUuid);
+                        if (parent == sceneFrameDataCache.entitiesByUuid.end() ||
+                            !readRegistry.has<Transform>(parent->second)) break;
+                        current = parent->second;
+                        const Transform& parentTransform = readRegistry.get<Transform>(current);
+                        sceneFrameDataCache.primaryCameraYaw += parentTransform.rotation.y();
+                        sceneFrameDataCache.primaryCameraPitch += parentTransform.rotation.x();
+                    }
+                }
+                sceneFrameDataCache.data = std::move(data);
+                sceneFrameDataCache.transformRevision = transformRevision;
+                sceneFrameDataCache.lightRevision = lightRevision;
+                sceneFrameDataCache.windRevision = windRevision;
+                sceneFrameDataCache.cameraRevision = cameraRevision;
+                sceneFrameDataCache.colorPickerRevision = colorPickerRevision;
+                sceneFrameDataCache.parentRevision = parentRevision;
+            }
+            // Time is deliberately refreshed every frame, while ECS-derived wind values stay cached.
+            if (sceneFrameDataCache.hasWind) {
                 const float now = static_cast<float>(Time::elapsedTime());
-                const Vec3 direction = wind.direction * (1.0F / length);
-                result.directionStrength = Vec4{direction.x(), direction.y(), direction.z(), wind.strength};
-                const glm::vec3 position = glm::vec3{transform.worldMatrix().native()[3]};
-                result.sourcePositionRange = Vec4{position.x, position.y, position.z, wind.range};
-                result.gustFrequencyTime = Vec4{wind.gustStrength, wind.frequency, now,
-                                                 now - static_cast<float>(Time::deltaTime())};
-                found = true;
-            });
-            return result;
-        }
-
-        [[nodiscard]] std::pair<std::array<LocalLightGPU, MaxLocalLights>, std::uint32_t>
-        localLights() const {
-            std::array<LocalLightGPU, MaxLocalLights> result{};
-            std::uint32_t count{};
-            const Registry& readRegistry = registry;
-            readRegistry.view<Transform, LightComponent>(
-                [&](const Entity entity, const Transform& transform, const LightComponent& light) {
-                    if (!light.enabled || light.type == LightType::Directional ||
-                        count == MaxLocalLights || light.range <= 0.0F) return;
-                    const glm::mat4 world = transform.worldMatrix().native();
-                    const glm::vec3 direction = glm::vec3(world *
-                                                          glm::vec4{0.0F, 0.0F, -1.0F, 0.0F});
-                    const Math::Color color = readRegistry.has<ColorPickerComponent>(entity)
-                                                  ? readRegistry.get<ColorPickerComponent>(entity).color
-                                                  : light.color;
-                    constexpr float pi = 3.14159265358979323846F;
-                    const float outerRadians = light.outerConeAngle * pi / 180.0F;
-                    const float innerRadians = light.innerConeAngle * pi / 180.0F;
-                    auto& gpu = result[count++];
-                    const glm::vec3 position = glm::vec3{world[3]};
-                    gpu.positionRange = {position.x, position.y, position.z, light.range};
-                    gpu.directionOuterCos = {glm::normalize(direction), std::cos(outerRadians)};
-                    gpu.colorIntensity = {color.r(), color.g(), color.b(), std::max(0.0F, light.intensity)};
-                    gpu.parameters = {std::cos(innerRadians), static_cast<float>(light.type),
-                                      light.castShadows ? 1.0F : 0.0F, 0.0F};
-                });
-            return {result, count};
+                const Vec4& cachedWind = sceneFrameDataCache.data.wind.gustFrequencyTime;
+                sceneFrameDataCache.data.wind.gustFrequencyTime = {
+                    cachedWind.x(), cachedWind.y(), now, now - static_cast<float>(Time::deltaTime())};
+            }
+            sceneFrameDataCache.uuidRevision = uuidRevision;
+            sceneFrameDataCache.structuralRevision = structuralRevision;
+            sceneFrameDataCache.initialized = true;
         }
 
         void updateUniformBuffer(const uint32_t frame) {
-            Entity activeCamera = NullEntity;
-            const Registry& readRegistry = registry;
-            readRegistry.view<CameraComponent, Transform>(
-                [&](const Entity entity, const CameraComponent& component, const Transform&) {
-                    if (activeCamera == NullEntity && component.primary && component.isPerspective() &&
-                        component.isValid()) {
-                        activeCamera = entity;
-                    }
-                });
+            const SceneFrameData& frameData = sceneFrameDataCache.data;
+            const Entity activeCamera = frameData.primaryCamera;
             if (activeCamera == NullEntity) {
                 // A malformed or incomplete scene must not stop rendering. Use
                 // the editor camera as a predictable, controllable fallback
@@ -115,41 +147,19 @@
                                                         Degrees{cameraController.editorPitch()});
             } else {
                 fallbackCameraWarningReported = false;
-                const auto& component = readRegistry.get<CameraComponent>(activeCamera);
+                const auto& component = sceneFrameDataCache.primaryCameraComponent;
 
                 // Game View is presented in a fixed 16:9 editor frame. Keep the
                 // projection in that aspect too, independently of dock layout.
                 const float gameAspect = editorUiActive ? (16.0F / 9.0F) : component.aspectRatio;
                 cameraController.camera().emplace(Degrees{component.fieldOfView}, gameAspect,
                                                    component.nearClip, component.farClip);
-                // Cameras can be parented to a player or another scene object.
-                // Use the composed transform rather than the camera's local
-                // Transform, otherwise a child camera is rendered at its local
-                // origin (usually inside the terrain).
-                const glm::mat4 model = worldModel(activeCamera);
                 // A camera's pitch is a view-space angle, not merely an X-axis
                 // model rotation. Deriving it from the model matrix made pitch
                 // depend on yaw, producing an unnatural vertical mouse look.
-                const Transform &cameraTransform = readRegistry.get<Transform>(activeCamera);
-                float yaw = cameraTransform.rotation.y();
-                float pitch = cameraTransform.rotation.x();
-                std::unordered_map<UUID, Entity> entitiesByUuid;
-                entitiesByUuid.reserve(readRegistry.size());
-                readRegistry.view<UUIDComponent>([&](const Entity entity, const UUIDComponent &uuid) {
-                    entitiesByUuid.emplace(uuid.value, entity);
-                });
-                Entity current = activeCamera;
-                while (readRegistry.has<ParentComponent>(current)) {
-                    const UUID parentUuid = readRegistry.get<ParentComponent>(current).parentUuid;
-                    const auto parent = entitiesByUuid.find(parentUuid);
-                    if (parent == entitiesByUuid.end() || !readRegistry.has<Transform>(parent->second)) break;
-                    current = parent->second;
-                    const Transform &parentTransform = readRegistry.get<Transform>(current);
-                    yaw += parentTransform.rotation.y();
-                    pitch += parentTransform.rotation.x();
-                }
-                cameraController.camera()->setPosition(Vec3{glm::vec3{model[3]}});
-                cameraController.camera()->setRotation(Degrees{yaw}, Degrees{pitch});
+                cameraController.camera()->setPosition(sceneFrameDataCache.primaryCameraPosition);
+                cameraController.camera()->setRotation(Degrees{sceneFrameDataCache.primaryCameraYaw},
+                                                        Degrees{sceneFrameDataCache.primaryCameraPitch});
             }
 
             taaJitterX = 0.0F;
@@ -184,9 +194,6 @@
                 cameraController.camera()->setProjectionJitter(taaJitterX, taaJitterY);
             }
 
-            const DirectionalLight light = directionalLight();
-            const WindFrameData wind = windFrameData();
-            const auto [lights, localLightCount] = localLights();
             shadowClipUpdateMask = updateVirtualShadowClipmaps(
                 cameraController.camera()->position(), shadowClipMatrices,
                 lastShadowCameraPosition, lastShadowLightDirection, shadowClipmapsValid);
@@ -221,11 +228,14 @@
                 shadowClipMatrices,
                 Vec4{cameraController.camera()->position().x(), cameraController.camera()->position().y(),
                      cameraController.camera()->position().z(), 1.0F},
-                Vec4{light.direction.x(), light.direction.y(), light.direction.z(), light.intensity},
-                Vec4{light.color.r(), light.color.g(), light.color.b(), 1.0F},
-                wind.directionStrength, wind.sourcePositionRange, wind.gustFrequencyTime,
+                Vec4{frameData.directionalLight.direction.x(), frameData.directionalLight.direction.y(),
+                     frameData.directionalLight.direction.z(), frameData.directionalLight.intensity},
+                Vec4{frameData.directionalLight.color.r(), frameData.directionalLight.color.g(),
+                     frameData.directionalLight.color.b(), 1.0F},
+                frameData.wind.directionStrength, frameData.wind.sourcePositionRange,
+                frameData.wind.gustFrequencyTime,
                 (optimizationFeatures.shadows && hasShadowCasters) ? 1u : 0u,
-                materialSlots, editorSelectedRenderable, 0u, localLightCount, lights};
+                materialSlots, editorSelectedRenderable, 0u, frameData.lightCount, frameData.lights};
             uniformBuffers[frame].update(&data, sizeof(data));
             previousGameView = currentView;
             previousGameProjection = currentProjection;
@@ -235,15 +245,13 @@
         }
 
         void updateSceneViewportUniformBuffer(const uint32_t frame) {
+            const SceneFrameData& frameData = sceneFrameDataCache.data;
             const float aspect = static_cast<float>(sceneViewportTarget.extent().width) /
                                  static_cast<float>(sceneViewportTarget.extent().height);
             Camera sceneCamera{Degrees{60.0F}, aspect, 0.1F, 1000.0F};
             sceneCamera.setPosition(cameraController.editorPosition());
             sceneCamera.setRotation(Degrees{cameraController.editorYaw()},
                                     Degrees{cameraController.editorPitch()});
-            const DirectionalLight light = directionalLight();
-            const WindFrameData wind = windFrameData();
-            const auto [lights, localLightCount] = localLights();
             sceneShadowClipUpdateMask = updateVirtualShadowClipmaps(
                 sceneCamera.position(), sceneShadowClipMatrices,
                 lastSceneShadowCameraPosition, lastSceneShadowLightDirection,
@@ -262,11 +270,14 @@
                 sceneView, sceneProjection, sceneView, sceneProjection,
                 sceneShadowClipMatrices,
                 Vec4{sceneCamera.position().x(), sceneCamera.position().y(), sceneCamera.position().z(), 1.0F},
-                Vec4{light.direction.x(), light.direction.y(), light.direction.z(), light.intensity},
-                Vec4{light.color.r(), light.color.g(), light.color.b(), 1.0F},
-                wind.directionStrength, wind.sourcePositionRange, wind.gustFrequencyTime,
+                Vec4{frameData.directionalLight.direction.x(), frameData.directionalLight.direction.y(),
+                     frameData.directionalLight.direction.z(), frameData.directionalLight.intensity},
+                Vec4{frameData.directionalLight.color.r(), frameData.directionalLight.color.g(),
+                     frameData.directionalLight.color.b(), 1.0F},
+                frameData.wind.directionStrength, frameData.wind.sourcePositionRange,
+                frameData.wind.gustFrequencyTime,
                 (optimizationFeatures.shadows && hasShadowCasters) ? 1u : 0u,
-                materialSlots, editorSelectedRenderable, 0u, localLightCount, lights};
+                materialSlots, editorSelectedRenderable, 0u, frameData.lightCount, frameData.lights};
             sceneUniformBuffers[frame].update(&data, sizeof(data));
         }
 
@@ -1107,6 +1118,7 @@
             if (!acquireFrameImage(imageIndex)) { return; }
 
             vkResetCommandBuffer(commandBuffers[currentFrame], 0);
+            refreshSceneFrameData();
             updateRenderableBuffers();
             const Vec3 sceneCameraPosition = cameraController.editorPosition();
             const float sceneCameraYaw = cameraController.editorYaw();

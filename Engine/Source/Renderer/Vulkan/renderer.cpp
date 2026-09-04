@@ -94,6 +94,47 @@
 namespace Engine {
     using UniformBufferObject = RendererUniformBufferObject;
 
+    struct DirectionalLight final {
+        static constexpr float defaultIntensity{4.0F};
+        Vec3 direction{-0.45F, -0.80F, -0.35F};
+        Math::Color color = Math::Color::white();
+        float intensity{defaultIntensity};
+    };
+
+    struct WindFrameData final {
+        Vec4 directionStrength{};
+        Vec4 sourcePositionRange{};
+        Vec4 gustFrequencyTime{};
+    };
+
+    /** ECS-derived values shared by Game View and Scene View for one frame. */
+    struct SceneFrameData final {
+        Entity primaryCamera{NullEntity};
+        DirectionalLight directionalLight{};
+        WindFrameData wind{};
+        std::array<LocalLightGPU, MaxLocalLights> lights{};
+        std::uint32_t lightCount{};
+    };
+
+    struct SceneFrameDataCache final {
+        SceneFrameData data{};
+        CameraComponent primaryCameraComponent{};
+        Vec3 primaryCameraPosition{};
+        float primaryCameraYaw{};
+        float primaryCameraPitch{};
+        bool hasWind{};
+        bool initialized{};
+        std::uint64_t transformRevision{};
+        std::uint64_t lightRevision{};
+        std::uint64_t windRevision{};
+        std::uint64_t cameraRevision{};
+        std::uint64_t colorPickerRevision{};
+        std::uint64_t parentRevision{};
+        std::uint64_t uuidRevision{};
+        std::uint64_t structuralRevision{};
+        std::unordered_map<UUID, Entity> entitiesByUuid;
+    };
+
     constexpr uint32_t WIDTH = 800;
     constexpr uint32_t HEIGHT = 600;
     constexpr int MAX_FRAMES_IN_FLIGHT = 2;
