@@ -787,6 +787,12 @@
                 vkDestroyFramebuffer(device, hiZDepthPrepassFramebuffer, nullptr);
                 hiZDepthPrepassFramebuffer = VK_NULL_HANDLE;
             }
+            // Shadow/scene descriptor sets reference the packed grass
+            // buffers owned by culling resources. They cannot outlive a
+            // culling resize/rebuild.
+            forwardPass.destroy();
+            shadowPass.destroy();
+            sceneDescriptorPass.destroy();
             destroyCullingResources();
 
             canvasRenderer.destroy();
@@ -815,13 +821,16 @@
             createDepthResources();
             createRenderFinishedSemaphores();
 
+            createCullingResources();
+            createShadowPass();
+            createSceneDescriptorPass();
+            createForwardPass();
             createFramebuffers();
             createSceneViewportResources();
             createTemporalAaPass();
             createTonemapPass();
             createUIResources();
             createEditorUiResources();
-            createCullingResources();
         }
 
         // ---------- MAIN LOOP ----------

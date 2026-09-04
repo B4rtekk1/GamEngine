@@ -26,16 +26,12 @@ namespace Engine {
             std::size_t batchIndex{0};
             std::uint32_t firstVertex{0};
             std::uint32_t vertexCount{0};
-            // Non-max means this record is a compact terrain-grass instance.
-            std::size_t grassInstance{std::numeric_limits<std::size_t>::max()};
             Transform cachedTransform{};
             bool hasCachedTransform{false};
             std::uint8_t transformDirtyFrames{0};
             std::uint8_t materialDirtyFrames{0};
             std::uint8_t cullingDirtyFrames{0};
-            // Offset into the compact material table.  Grass records that
-            // belong to one TerrainGrassComponent deliberately share this
-            // value instead of allocating GPUMaterialData per blade.
+            // Offset into the compact material table.
             std::uint32_t materialTableOffset{};
             GPUSceneInstanceId gpuSceneInstanceId{InvalidGPUSceneInstanceId};
         };
@@ -53,7 +49,6 @@ namespace Engine {
             bool castShadow{true};
             /// True for masked/double-sided vegetation that needs its own raster pipeline.
             bool twoSided{false};
-            bool grass{false};
             AABB worldBounds{};
         };
 
@@ -61,7 +56,6 @@ namespace Engine {
         std::vector<InstanceBatch> instanceBatches;
         std::vector<std::vector<std::size_t> > batchRenderableIndices;
         std::unordered_map<Entity, std::size_t> renderableIndices;
-        std::unordered_map<Entity, std::vector<std::size_t>> grassRenderableIndices;
         std::vector<RendererInstanceData> instanceModels;
         // Dedicated source data for the next grass draw path. These records
         // are 16 B and cluster-relative; normal scene objects never enter it.

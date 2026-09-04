@@ -32,11 +32,11 @@
             createInstanceBuffer();
             createUniformBuffers();
             createSceneUniformBuffers();
+            createCullingResources();
             createShadowPass();
             createSceneDescriptorPass();
             createForwardPass();
             createParticleResources();
-            createCullingResources();
             createSkyPass();
             createSceneSkyPass();
             createFramebuffers();
@@ -385,6 +385,11 @@
             // command buffers have finished before their pipelines disappear.
             vkDeviceWaitIdle(device);
 
+            // These descriptor sets bind packed grass buffers, which are
+            // recreated together with culling resources below.
+            forwardPass.destroy();
+            shadowPass.destroy();
+            sceneDescriptorPass.destroy();
             destroyCullingResources();
             destroyEditorUiResources();
             canvasRenderer.destroy();
@@ -405,7 +410,6 @@
             particlePipeline.destroy();
             skyPass.destroy();
             sceneSkyPass.destroy();
-            forwardPass.destroy();
             hiZDepthPrepass.destroy();
 
             msaa.destroy();
@@ -421,6 +425,9 @@
             msaa.create(swapchain.extent(), HdrBuffer::Format);
             createDepthResources();
 
+            createCullingResources();
+            createShadowPass();
+            createSceneDescriptorPass();
             createForwardPass();
             createParticleResources();
             createSkyPass();
@@ -431,7 +438,6 @@
             createTonemapPass();
             createUIResources();
             createEditorUiResources();
-            createCullingResources();
             sceneViewportCacheValid = false;
             sceneViewportImageInitialized = false;
             sceneViewportNeedsRender = true;

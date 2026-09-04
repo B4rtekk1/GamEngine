@@ -6,8 +6,12 @@
 
             hiZValid = false;
             const auto objectCount = static_cast<uint32_t>(instanceBatches.size());
-            if (objectCount == 0) { return;
-}
+            const auto grassInstanceCount = static_cast<uint32_t>(sceneGpu.grassInstances.size());
+            if (objectCount == 0 && grassInstanceCount == 0) return;
+            // Generic descriptors remain valid in a grass-only scene, but
+            // their backing allocations need one inert element. Their draw
+            // counts stay zero because objectCount itself remains zero.
+            const auto genericCapacity = std::max(1u, objectCount);
 
             hiZBuffer.create(vulkanDevice.physical(), device, swapchain.extent().width, swapchain.extent().height,
                              vulkanDevice.allocator());
@@ -199,10 +203,11 @@
             for (Buffer& buffer : cullingObjectBuffers) {
                 buffer.createHostVisible(
                     vulkanDevice.physical(), device,
-                    sizeof(Culling::GPUObjectData) * gpuObjects.size(),
+                    sizeof(Culling::GPUObjectData) * genericCapacity,
                     VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, vulkanDevice.allocator());
-                buffer.update(gpuObjects.data(),
-                              sizeof(Culling::GPUObjectData) * gpuObjects.size());
+                const Culling::GPUObjectData emptyObject{};
+                buffer.update(objectCount == 0 ? &emptyObject : gpuObjects.data(),
+                              sizeof(Culling::GPUObjectData) * genericCapacity);
             }
             // Culling buffers were initialized in full for every frame.
             for (RenderableRecord& record : renderables) {
@@ -278,9 +283,9 @@
                 grassPrefixUniformBuffers[frame].createHostVisible(vulkanDevice.physical(), device,
                     sizeof(GrassPrefixUniformData), VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
                     vulkanDevice.allocator());
-                std::vector<VkDrawIndexedIndirectCommand> emptyCommands(objectCount);
+                std::vector<VkDrawIndexedIndirectCommand> emptyCommands(genericCapacity);
                 indirectBuffers[frame].createDeviceLocal(vulkanDevice.physical(), device, emptyCommands.data(),
-                    sizeof(VkDrawIndexedIndirectCommand) * objectCount,
+                    sizeof(VkDrawIndexedIndirectCommand) * genericCapacity,
                     VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
                     commandPool, vulkanDevice.graphicsQueue(), vulkanDevice.allocator());
                 auto& lists = grassRenderLists[frame];
@@ -306,19 +311,19 @@
                 for (Buffer* buffer : {&lists.mainDrawCount, &lists.shadowDrawCount, &lists.velocityDrawCount})
                     buffer->createDeviceLocal(vulkanDevice.physical(), device, &zero, sizeof(zero), VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT, commandPool, vulkanDevice.graphicsQueue(), vulkanDevice.allocator());
                 foliageIndirectBuffers[frame].createDeviceLocal(vulkanDevice.physical(), device, emptyCommands.data(),
-                    sizeof(VkDrawIndexedIndirectCommand) * objectCount,
+                    sizeof(VkDrawIndexedIndirectCommand) * genericCapacity,
                     VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
                     commandPool, vulkanDevice.graphicsQueue(), vulkanDevice.allocator());
                 sceneIndirectBuffers[frame].createDeviceLocal(vulkanDevice.physical(), device, emptyCommands.data(),
-                    sizeof(VkDrawIndexedIndirectCommand) * objectCount,
+                    sizeof(VkDrawIndexedIndirectCommand) * genericCapacity,
                     VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
                     commandPool, vulkanDevice.graphicsQueue(), vulkanDevice.allocator());
                 sceneFoliageIndirectBuffers[frame].createDeviceLocal(vulkanDevice.physical(), device, emptyCommands.data(),
-                    sizeof(VkDrawIndexedIndirectCommand) * objectCount,
+                    sizeof(VkDrawIndexedIndirectCommand) * genericCapacity,
                     VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
                     commandPool, vulkanDevice.graphicsQueue(), vulkanDevice.allocator());
                 std::vector<VkDrawIndexedIndirectCommand> emptyShadowCommands(
-                    objectCount * ShadowMap::MaxPageUpdatesPerFrame);
+                    genericCapacity * ShadowMap::MaxPageUpdatesPerFrame);
                 shadowIndirectBuffers[frame].createDeviceLocal(vulkanDevice.physical(), device, emptyShadowCommands.data(),
                     sizeof(VkDrawIndexedIndirectCommand) * emptyShadowCommands.size(),
                     VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,

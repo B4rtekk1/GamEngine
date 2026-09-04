@@ -454,11 +454,11 @@ namespace Engine {
             renderableTopologySignature = currentRenderableTopologySignature();
             createUniformBuffers();
             createSceneUniformBuffers();
+            createCullingResources();
             createShadowPass();
             createSceneDescriptorPass();
             createForwardPass();
             createParticleResources();
-            createCullingResources();
             createSkyPass();
             createSceneSkyPass();
             createFramebuffers();
@@ -565,11 +565,11 @@ namespace Engine {
             renderableTopologySignature = currentRenderableTopologySignature();
             createUniformBuffers();
             createSceneUniformBuffers();
+            createCullingResources();
             createShadowPass();
             createSceneDescriptorPass();
             createForwardPass();
             createParticleResources();
-            createCullingResources();
             createSkyPass();
             createSceneSkyPass();
             createFramebuffers();
