@@ -143,7 +143,8 @@ namespace Engine {
 
     /** One culling/rendering unit for a contiguous range of packed blades. */
     struct alignas(16) GPUGrassCluster {
-        // xy: world-space XZ origin; z: largest local XZ extent; w: reserved.
+        // xy: world-space XZ origin; z: largest local XZ extent; w: mesh
+        // bounding radius relative to the blade root at unit scale.
         glm::vec4 originExtent{};
         // x: first packed instance, y: count, z: material table offset, w: flags.
         glm::uvec4 instanceRange{};

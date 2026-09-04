@@ -27,7 +27,11 @@ float3 grassPackedWorldPosition(GrassPackedInstance instance,
     float2 xz = float2(grassUnorm16(instance.packedXZ),
                         grassUnorm16(instance.packedXZ >> 16u));
     float y = f16tof32(instance.packedYRotation & 0xffffu);
-    return float3(cluster.originExtent.xy + xz * cluster.originExtent.z, y);
+    // originExtent.xy stores the horizontal XZ origin.  Keep the packed
+    // half-float height on Y rather than accidentally interpreting Z as Y.
+    return float3(cluster.originExtent.x + xz.x * cluster.originExtent.z,
+                  y,
+                  cluster.originExtent.y + xz.y * cluster.originExtent.z);
 }
 
 float grassPackedYaw(GrassPackedInstance instance)

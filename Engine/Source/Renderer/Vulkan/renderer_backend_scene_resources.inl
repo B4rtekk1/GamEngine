@@ -368,6 +368,14 @@
                     const float horizontalTerrainScale = std::max(
                         std::abs(terrainTransform.scale.x()), std::abs(terrainTransform.scale.z()));
                     const float meshHeight = upload.localBounds.max.y() - upload.localBounds.min.y();
+                    // The packed renderer places vertices at root + yaw *
+                    // (localPosition * scale).  A radius about local origin,
+                    // rather than the AABB center, remains valid even for a
+                    // mesh whose root is not centered in its local bounds.
+                    const glm::vec3 maxRootExtent = glm::max(
+                        glm::abs(upload.localBounds.min.native()),
+                        glm::abs(upload.localBounds.max.native()));
+                    const float meshRootRadius = glm::length(maxRootExtent);
                     for (const GrassChunk& chunk : grass.chunks) {
                         AABB batchBounds{};
                         float largestScale = 0.0F;
@@ -432,7 +440,7 @@
                             });
                         }
                         sceneGpu.grassClusters.push_back({
-                            .originExtent = {batchBounds.min.x(), batchBounds.min.z(), extent, 0.0F},
+                            .originExtent = {batchBounds.min.x(), batchBounds.min.z(), extent, meshRootRadius},
                             .instanceRange = {packedOffset, chunk.instanceCount,
                                               0U, grass.grassType},
                             .draw = {upload.firstIndex, mesh->indexCount(), 0U, 0U},
