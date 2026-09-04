@@ -40,6 +40,8 @@ namespace Engine {
                     const std::vector<VkBuffer> &materialBuffers,
                     const std::vector<VkBuffer> &instanceBuffers,
                     const std::vector<VkBuffer> &instanceIndexBuffers,
+                    const std::vector<VkBuffer> &grassInstanceBuffers,
+                    const std::vector<VkBuffer> &grassClusterBuffers,
                     const std::vector<VkDescriptorImageInfo> &materialTextures,
                     VkDeviceSize uniformBufferRange, VmaAllocator allocator,
                     Assets::AssetManager &assets);
@@ -72,6 +74,12 @@ namespace Engine {
         }
 
         [[nodiscard]] VkDescriptorSet descriptorSet(std::uint32_t frameIndex) const;
+        [[nodiscard]] VkDescriptorSet grassDescriptorSet(std::uint32_t frameIndex) const;
+
+        // The grass shaders reserve binding 7 for GPUGrassCluster.  Keeping
+        // this explicit prevents a future grass-only descriptor set from
+        // silently using the generic seven-binding contract.
+        static constexpr std::uint32_t GrassClusterBinding = 7;
 
     private:
         struct PhysicalPage {
@@ -99,6 +107,7 @@ namespace Engine {
         VkDescriptorSetLayout descriptorSetLayout_{VK_NULL_HANDLE};
         VkDescriptorPool descriptorPool_{VK_NULL_HANDLE};
         std::vector<VkDescriptorSet> descriptorSets_;
+        std::vector<VkDescriptorSet> grassDescriptorSets_;
         std::vector<std::unique_ptr<Buffer>> pageTableBuffers_;
         VkPipelineLayout pipelineLayout_{VK_NULL_HANDLE};
         VkPipeline pipeline_{VK_NULL_HANDLE};

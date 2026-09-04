@@ -272,6 +272,8 @@ set(SLANG_SHADER_SOURCES
         Assets/Shaders/Culling/hiz_reduce.slang
         Assets/Shaders/Grass/grass_generate.slang
         Assets/Shaders/Grass/grass_cull.slang
+        Assets/Shaders/Grass/grass_forward.slang
+        Assets/Shaders/Grass/grass_shadow.slang
         Assets/Shaders/Grass/grass_build_indirect.slang
         Assets/Shaders/Grass/grass_finalize_indirect.slang
         Assets/Shaders/Grass/grass_prefix_sum.slang

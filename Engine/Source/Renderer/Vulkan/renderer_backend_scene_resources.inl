@@ -450,7 +450,10 @@
                                 .packedXZ = packedX | (packedZ << 16U),
                                 .packedYRotation = packHalf(worldPosition.y) | (packedYaw << 16U),
                                 .packedScaleSeed = packHalf(item.scale) | (seed << 16U),
-                                .flags = grass.grassType,
+                                // The shader resolves its cluster through
+                                // this field; grassType remains in the
+                                // cluster record for batching/variants.
+                                .flags = static_cast<std::uint32_t>(sceneGpu.grassClusters.size()),
                             });
                         }
                         sceneGpu.grassClusters.push_back({

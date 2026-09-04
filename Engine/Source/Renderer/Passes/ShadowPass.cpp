@@ -65,6 +65,8 @@ void ShadowPass::create(VkPhysicalDevice physicalDevice, VkDevice device,
         const std::vector<VkBuffer>& materialBuffers,
         const std::vector<VkBuffer>& instanceBuffers,
         const std::vector<VkBuffer>& instanceIndexBuffers,
+        const std::vector<VkBuffer>& grassInstanceBuffers,
+        const std::vector<VkBuffer>& grassClusterBuffers,
         const std::vector<VkDescriptorImageInfo>& materialTextures,
                         const VkDeviceSize uniformBufferRange,
                         const VmaAllocator allocator,
@@ -80,11 +82,13 @@ void ShadowPass::create(VkPhysicalDevice physicalDevice, VkDevice device,
         if (materialBuffers.size() != uniformBuffers.size() ||
             instanceBuffers.size() != uniformBuffers.size() ||
             instanceIndexBuffers.size() != uniformBuffers.size() ||
+            grassInstanceBuffers.size() != uniformBuffers.size() ||
+            grassClusterBuffers.size() != uniformBuffers.size() ||
             materialTextures.size() != MaxMaterialTextures) {
             throw std::invalid_argument("Invalid material descriptor resources");
         }
 
-        VkDescriptorSetLayoutBinding bindings[7]{};
+        VkDescriptorSetLayoutBinding bindings[8]{};
         bindings[0] = {0, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1,
                        VK_SHADER_STAGE_FRAGMENT_BIT, nullptr};
         bindings[1] = {1, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1,
@@ -99,41 +103,45 @@ void ShadowPass::create(VkPhysicalDevice physicalDevice, VkDevice device,
                        VK_SHADER_STAGE_VERTEX_BIT, nullptr};
         bindings[6] = {6, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1,
                        VK_SHADER_STAGE_VERTEX_BIT, nullptr};
+        bindings[GrassClusterBinding] = {GrassClusterBinding, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1,
+                                         VK_SHADER_STAGE_VERTEX_BIT, nullptr};
         const VkDescriptorSetLayoutCreateInfo layoutInfo{
             VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO, nullptr, 0,
-            7, bindings};
+            8, bindings};
         if (vkCreateDescriptorSetLayout(device_, &layoutInfo, nullptr,
                                         &descriptorSetLayout_) != VK_SUCCESS) {
             throw std::runtime_error("Could not create shadow descriptor-set layout");
         }
 
         const std::uint32_t frameCount = static_cast<std::uint32_t>(uniformBuffers.size());
+        // Two descriptor sets are allocated per frame. Each carries one
+        // shadow sampler, sixteen material samplers, one UBO and five SSBOs.
         const VkDescriptorPoolSize poolSizes[] = {
-            {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, frameCount},
-            {VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, frameCount},
-            {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, frameCount},
-            {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, frameCount},
-            {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, frameCount},
-            {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, frameCount * MaxMaterialTextures},
-            {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, frameCount},
+            {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, frameCount * 2U * (MaxMaterialTextures + 1U)},
+            {VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, frameCount * 2U},
+            {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, frameCount * 2U * 5U},
         };
         VkDescriptorPoolCreateInfo poolInfo{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
-        poolInfo.maxSets = frameCount;
+        poolInfo.maxSets = frameCount * 2;
         poolInfo.poolSizeCount = std::size(poolSizes);
         poolInfo.pPoolSizes = poolSizes;
         if (vkCreateDescriptorPool(device_, &poolInfo, nullptr, &descriptorPool_) != VK_SUCCESS) {
             throw std::runtime_error("Could not create shadow descriptor pool");
         }
 
-        std::vector<VkDescriptorSetLayout> layouts(frameCount, descriptorSetLayout_);
+        std::vector<VkDescriptorSetLayout> layouts(frameCount * 2, descriptorSetLayout_);
         descriptorSets_.resize(frameCount);
+        grassDescriptorSets_.resize(frameCount);
         VkDescriptorSetAllocateInfo allocateInfo{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};
         allocateInfo.descriptorPool = descriptorPool_;
-        allocateInfo.descriptorSetCount = frameCount;
+        std::vector<VkDescriptorSet> allDescriptorSets(frameCount * 2);
+        allocateInfo.descriptorSetCount = frameCount * 2;
         allocateInfo.pSetLayouts = layouts.data();
-        if (vkAllocateDescriptorSets(device_, &allocateInfo, descriptorSets_.data()) != VK_SUCCESS) {
+        if (vkAllocateDescriptorSets(device_, &allocateInfo, allDescriptorSets.data()) != VK_SUCCESS) {
             throw std::runtime_error("Could not allocate shadow descriptor sets");
         }
+        std::copy_n(allDescriptorSets.begin(), frameCount, descriptorSets_.begin());
+        std::copy_n(allDescriptorSets.begin() + frameCount, frameCount, grassDescriptorSets_.begin());
 
         pageTableBuffers_.resize(frameCount);
         for (std::unique_ptr<Buffer>& buffer : pageTableBuffers_) {
@@ -156,7 +164,9 @@ void ShadowPass::create(VkPhysicalDevice physicalDevice, VkDevice device,
                 pageTableBuffers_[frame]->handle(), 0, VK_WHOLE_SIZE};
             const VkDescriptorBufferInfo instanceInfo{instanceBuffers[frame], 0, VK_WHOLE_SIZE};
             const VkDescriptorBufferInfo instanceIndexInfo{instanceIndexBuffers[frame], 0, VK_WHOLE_SIZE};
-            VkWriteDescriptorSet writes[7]{};
+            const VkDescriptorBufferInfo grassInstanceInfo{grassInstanceBuffers[frame], 0, VK_WHOLE_SIZE};
+            const VkDescriptorBufferInfo grassClusterInfo{grassClusterBuffers[frame], 0, VK_WHOLE_SIZE};
+            VkWriteDescriptorSet writes[8]{};
             writes[0] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr,
                          descriptorSets_[frame], 0, 0, 1,
                          VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &imageInfo, nullptr, nullptr};
@@ -178,6 +188,18 @@ void ShadowPass::create(VkPhysicalDevice physicalDevice, VkDevice device,
             writes[6] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr,
                          descriptorSets_[frame], 6, 0, 1,
                          VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, nullptr, &instanceIndexInfo, nullptr};
+            writes[7] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr,
+                         descriptorSets_[frame], GrassClusterBinding, 0, 1,
+                         VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, nullptr, &grassClusterInfo, nullptr};
+            vkUpdateDescriptorSets(device_, std::size(writes), writes, 0, nullptr);
+            writes[0].dstSet = grassDescriptorSets_[frame];
+            writes[1].dstSet = grassDescriptorSets_[frame];
+            writes[2].dstSet = grassDescriptorSets_[frame];
+            writes[3].dstSet = grassDescriptorSets_[frame];
+            writes[4].dstSet = grassDescriptorSets_[frame];
+            writes[5].dstSet = grassDescriptorSets_[frame]; writes[5].pBufferInfo = &grassInstanceInfo;
+            writes[6].dstSet = grassDescriptorSets_[frame];
+            writes[7].dstSet = grassDescriptorSets_[frame];
             vkUpdateDescriptorSets(device_, std::size(writes), writes, 0, nullptr);
         }
 
@@ -292,6 +314,10 @@ void ShadowPass::destroy() noexcept {
 
 VkDescriptorSet ShadowPass::descriptorSet(const std::uint32_t frameIndex) const {
     return descriptorSets_.at(frameIndex);
+}
+
+VkDescriptorSet ShadowPass::grassDescriptorSet(const std::uint32_t frameIndex) const {
+    return grassDescriptorSets_.at(frameIndex);
 }
 
 std::uint32_t ShadowPass::virtualPageIndex(const std::uint32_t level,
