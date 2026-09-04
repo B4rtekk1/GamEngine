@@ -103,6 +103,7 @@ namespace Engine {
         class State;
         RenderOptimizationFeatures optimizationFeatures_{};
         AntialiasingLevel antialiasingLevel_ = AntialiasingLevel::Off;
+        GrassRenderSettings grassSettings_{};
         std::unique_ptr<State> state_;
         std::unique_ptr<Backend> backend_;
     };

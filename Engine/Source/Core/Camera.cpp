@@ -51,6 +51,13 @@ Mat4 Camera::viewMatrix() const {
 }
 
 Mat4 Camera::projectionMatrix() const {
+    Mat4 projection = unjitteredProjectionMatrix();
+    projection.native()[2][0] += m_jitterX;
+    projection.native()[2][1] += m_jitterY;
+    return projection;
+}
+
+Mat4 Camera::unjitteredProjectionMatrix() const {
     Mat4 projection = Mat4::perspective(
         Radians{m_fov},
         m_aspectRatio,
@@ -60,8 +67,6 @@ Mat4 Camera::projectionMatrix() const {
 
     // Vulkan's viewport has its Y axis pointing down.
     projection.native()[1][1] *= -1.0F;
-    projection.native()[2][0] += m_jitterX;
-    projection.native()[2][1] += m_jitterY;
     return projection;
 }
 

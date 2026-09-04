@@ -77,6 +77,7 @@
         Registry& registry;
         const RenderOptimizationFeatures& optimizationFeatures;
         AntialiasingLevel antialiasingLevel;
+        const GrassRenderSettings& grassSettings;
         Assets::AssetManager& assetManager;
         SceneGpuResources sceneGpu;
         CameraController cameraController;

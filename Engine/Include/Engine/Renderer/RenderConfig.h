@@ -22,9 +22,17 @@ namespace Engine {
         bool occlusionCulling = false;
     };
 
+    /** Distance limits for the GPU-driven grass visibility streams, in metres. */
+    struct GrassRenderSettings final {
+        float renderDistance = 250.0F;
+        float shadowDistance = 300.0F;
+        float velocityDistance = 250.0F;
+    };
+
     struct RenderConfig final {
         RenderFeatures features{};
         AntialiasingLevel antialiasing = AntialiasingLevel::Off;
+        GrassRenderSettings grass{};
     };
 
     /** Opaque viewport texture handle used by editor integrations. */

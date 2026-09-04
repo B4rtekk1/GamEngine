@@ -43,6 +43,9 @@ namespace Engine {
         /** @brief Returns the Vulkan-compatible perspective projection matrix. */
         [[nodiscard]] Mat4 projectionMatrix() const;
 
+        /** @brief Returns the Vulkan-compatible projection matrix without TAA jitter. */
+        [[nodiscard]] Mat4 unjitteredProjectionMatrix() const;
+
         /** @brief Returns the camera world position. */
         [[nodiscard]] Vec3 position() const { return m_position; }
 

@@ -1,3 +1,20 @@
+        static std::array<glm::vec4, 6> extractFrustumPlanes(const glm::mat4& matrix) {
+            const glm::vec4 row0{matrix[0][0], matrix[1][0], matrix[2][0], matrix[3][0]};
+            const glm::vec4 row1{matrix[0][1], matrix[1][1], matrix[2][1], matrix[3][1]};
+            const glm::vec4 row2{matrix[0][2], matrix[1][2], matrix[2][2], matrix[3][2]};
+            const glm::vec4 row3{matrix[0][3], matrix[1][3], matrix[2][3], matrix[3][3]};
+            std::array<glm::vec4, 6> planes{
+                row3 + row0, row3 - row0,
+                row3 + row1, row3 - row1,
+                row2,        row3 - row2};
+
+            for (glm::vec4& plane : planes) {
+                const float length = glm::length(glm::vec3{plane});
+                if (length > 1.0e-6F) plane /= length;
+            }
+            return planes;
+        }
+
         [[nodiscard]] DirectionalLight directionalLight() const noexcept {
             return sceneFrameDataCache.data.directionalLight;
         }
@@ -351,25 +368,15 @@
                 auto& lists = grassRenderLists[currentFrame];
                 const auto camera = cameraController.camera();
                 GrassPackedCullUniformData cullData{};
-                cullData.viewProjection = camera->projectionMatrix().native() * camera->viewMatrix().native();
+                cullData.viewProjection = camera->unjitteredProjectionMatrix().native() * camera->viewMatrix().native();
                 cullData.cameraPosition = glm::vec4{camera->position().native(), 1.0F};
                 cullData.clusterCount = static_cast<uint32_t>(sceneGpu.grassClusters.size());
-                // Shaders use row-vector multiplication, so clip-space plane
-                // coefficients live in matrix columns. Vulkan depth is [0,w].
-                const auto setGrassFrustumPlanes = [](GrassPackedCullUniformData& data) {
-                    const glm::mat4& matrix = data.viewProjection;
-                    const std::array<glm::vec4, 6> rawPlanes{
-                        matrix[3] + matrix[0], matrix[3] - matrix[0],
-                        matrix[3] + matrix[1], matrix[3] - matrix[1],
-                        matrix[2],             matrix[3] - matrix[2]};
-                    for (std::size_t index = 0; index < rawPlanes.size(); ++index) {
-                        const float normalLength = glm::length(glm::vec3{rawPlanes[index]});
-                        data.frustumPlanes[index] = rawPlanes[index] / normalLength;
-                    }
-                };
-                setGrassFrustumPlanes(cullData);
+                cullData.frustumPlanes = extractFrustumPlanes(cullData.viewProjection);
                 grassPackedCullUniformBuffers[currentFrame].update(&cullData, sizeof(cullData));
-                const GrassClassifyUniformData classifyData{120.0F, 180.0F, 120.0F, 0.0F, glm::vec4{camera->position().native(), 1.0F}};
+                const GrassClassifyUniformData classifyData{
+                    grassSettings.renderDistance, grassSettings.shadowDistance,
+                    grassSettings.velocityDistance, 0.0F,
+                    glm::vec4{camera->position().native(), 1.0F}};
                 grassClassifyUniformBuffers[currentFrame].update(&classifyData, sizeof(classifyData));
                 const GrassPackedStreamUniformData streamData{static_cast<uint32_t>(sceneGpu.grassInstances.size()), 0U, static_cast<uint32_t>(sceneGpu.grassClusters.size()), 0U};
                 for (uint32_t stream = 0; stream < 3; ++stream) { auto data = streamData; data.streamIndex = stream; grassPackedStreamUniformBuffers[currentFrame][stream].update(&data, sizeof(data)); }
@@ -418,23 +425,15 @@
                 sceneCamera.setPosition(cameraController.editorPosition());
                 sceneCamera.setRotation(Degrees{cameraController.editorYaw()}, Degrees{cameraController.editorPitch()});
                 GrassPackedCullUniformData cullData{};
-                cullData.viewProjection = sceneCamera.projectionMatrix().native() * sceneCamera.viewMatrix().native();
+                cullData.viewProjection = sceneCamera.unjitteredProjectionMatrix().native() * sceneCamera.viewMatrix().native();
                 cullData.cameraPosition = glm::vec4{sceneCamera.position().native(), 1.0F};
                 cullData.clusterCount = static_cast<uint32_t>(sceneGpu.grassClusters.size());
-                const auto setGrassFrustumPlanes = [](GrassPackedCullUniformData& data) {
-                    const glm::mat4& matrix = data.viewProjection;
-                    const std::array<glm::vec4, 6> rawPlanes{
-                        matrix[3] + matrix[0], matrix[3] - matrix[0],
-                        matrix[3] + matrix[1], matrix[3] - matrix[1],
-                        matrix[2],             matrix[3] - matrix[2]};
-                    for (std::size_t index = 0; index < rawPlanes.size(); ++index) {
-                        const float normalLength = glm::length(glm::vec3{rawPlanes[index]});
-                        data.frustumPlanes[index] = rawPlanes[index] / normalLength;
-                    }
-                };
-                setGrassFrustumPlanes(cullData);
+                cullData.frustumPlanes = extractFrustumPlanes(cullData.viewProjection);
                 sceneGrassPackedCullUniformBuffers[currentFrame].update(&cullData, sizeof(cullData));
-                const GrassClassifyUniformData classifyData{120.0F, 180.0F, 120.0F, 0.0F, glm::vec4{sceneCamera.position().native(), 1.0F}};
+                const GrassClassifyUniformData classifyData{
+                    grassSettings.renderDistance, grassSettings.shadowDistance,
+                    grassSettings.velocityDistance, 0.0F,
+                    glm::vec4{sceneCamera.position().native(), 1.0F}};
                 sceneGrassClassifyUniformBuffers[currentFrame].update(&classifyData, sizeof(classifyData));
                 const GrassPackedStreamUniformData streamData{static_cast<uint32_t>(sceneGpu.grassInstances.size()), 0U, static_cast<uint32_t>(sceneGpu.grassClusters.size()), 0U};
                 for (uint32_t stream = 0; stream < 3; ++stream) { auto data = streamData; data.streamIndex = stream; sceneGrassPackedStreamUniformBuffers[currentFrame][stream].update(&data, sizeof(data)); }

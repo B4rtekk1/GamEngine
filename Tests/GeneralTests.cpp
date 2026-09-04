@@ -98,6 +98,18 @@ TEST(Camera, AppliesRollToTheUpAndRightDirections) {
     ExpectVec3Near(camera.up(), -1.0F, 0.0F, 0.0F);
 }
 
+TEST(Camera, ExposesAnUnjitteredProjectionForCulling) {
+    Engine::Camera camera{Engine::Degrees{60.0F}, 16.0F / 9.0F, 0.1F, 100.0F};
+    const Engine::Mat4 unjittered = camera.unjitteredProjectionMatrix();
+
+    camera.setProjectionJitter(0.25F, -0.5F);
+    const Engine::Mat4 jittered = camera.projectionMatrix();
+
+    ExpectMat4Near(camera.unjitteredProjectionMatrix(), unjittered);
+    EXPECT_NEAR(jittered.native()[2][0], unjittered.native()[2][0] + 0.25F, 1.0e-5F);
+    EXPECT_NEAR(jittered.native()[2][1], unjittered.native()[2][1] - 0.5F, 1.0e-5F);
+}
+
 TEST(RectTransform, CalculatesFixedAndStretchedRectangles) {
     const Engine::UI::Rect parent{10.0F, 20.0F, 200.0F, 100.0F};
     Engine::UI::RectTransform fixed;
