@@ -111,11 +111,18 @@ namespace Engine {
     struct alignas(16) GrassPackedCullUniformData {
         glm::mat4 viewProjection{1.0F};
         glm::vec4 cameraPosition{};
-        std::uint32_t instanceCount{};
+        std::uint32_t clusterCount{};
         std::uint32_t padding0{};
         std::uint32_t padding1{};
         std::uint32_t padding2{};
     };
+    /** Vulkan DispatchIndirectCommand, written by the cluster cull pass. */
+    struct alignas(4) GrassBladeDispatchData {
+        std::uint32_t groupCountX{};
+        std::uint32_t groupCountY{};
+        std::uint32_t groupCountZ{1};
+    };
+    static_assert(sizeof(GrassBladeDispatchData) == 12);
     struct alignas(16) GrassPackedStreamUniformData {
         std::uint32_t visibleCapacity{};
         std::uint32_t streamIndex{};
@@ -148,7 +155,8 @@ namespace Engine {
         glm::vec4 originExtent{};
         // x: first packed instance, y: count, z: material table offset, w: flags.
         glm::uvec4 instanceRange{};
-        // firstIndex, indexCount, vertexOffset, LOD policy/flags.  Kept with
+        // firstIndex, indexCount, vertexOffset, packed FP16 cluster Y center
+        // and half-height. Kept with
         // the packed cluster so indirect generation never consults GPUScene.
         glm::uvec4 draw{};
     };

@@ -443,7 +443,9 @@
                             .originExtent = {batchBounds.min.x(), batchBounds.min.z(), extent, meshRootRadius},
                             .instanceRange = {packedOffset, chunk.instanceCount,
                                               0U, grass.grassType},
-                            .draw = {upload.firstIndex, mesh->indexCount(), 0U, 0U},
+                            .draw = {upload.firstIndex, mesh->indexCount(), 0U,
+                                     glm::packHalf1x16((batchBounds.min.y() + batchBounds.max.y()) * 0.5F) |
+                                         (glm::packHalf1x16((batchBounds.max.y() - batchBounds.min.y()) * 0.5F) << 16U)},
                         });
                         sceneGpu.grassClusterEntities.push_back(entity);
                         sceneMinimum = glm::min(sceneMinimum, batchBounds.min.native());

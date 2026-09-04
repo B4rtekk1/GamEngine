@@ -5,10 +5,12 @@ import Grass.GrassPackedData;
 // RendererInstanceData.
 [[vk::binding(0, 0)]] StructuredBuffer<GrassPackedInstance> instances;
 [[vk::binding(1, 0)]] StructuredBuffer<GrassPackedCluster> clusters;
-[[vk::binding(2, 0)]] RWStructuredBuffer<uint> visibleInstances;
-[[vk::binding(3, 0)]] RWStructuredBuffer<uint> visibleCount;
-struct Uniforms { float4x4 viewProjection; float4 cameraPosition; uint instanceCount; uint _pad0; uint _pad1; uint _pad2; };
-[[vk::binding(4, 0)]] ConstantBuffer<Uniforms> culling;
+[[vk::binding(2, 0)]] StructuredBuffer<uint> visibleClusters;
+[[vk::binding(3, 0)]] StructuredBuffer<uint> visibleClusterCount;
+[[vk::binding(4, 0)]] RWStructuredBuffer<uint> visibleInstances;
+[[vk::binding(5, 0)]] RWStructuredBuffer<uint> visibleCount;
+struct Uniforms { float4x4 viewProjection; float4 cameraPosition; uint clusterCount; uint _pad0; uint _pad1; uint _pad2; };
+[[vk::binding(6, 0)]] ConstantBuffer<Uniforms> culling;
 
 // Returns true only when the blade's bounding sphere is fully outside one
 // frustum plane.  The offset transforms give conservative clip-space extents
@@ -34,15 +36,19 @@ bool grassSphereOutsideFrustum(float3 center, float radius, float4x4 viewProject
 
 [numthreads(64, 1, 1)]
 [shader("compute")]
-void main(uint3 id : SV_DispatchThreadID)
+void main(uint3 id : SV_DispatchThreadID, uint3 group : SV_GroupID)
 {
-    if (id.x >= culling.instanceCount) return;
-    GrassPackedInstance instance = instances[id.x];
-    GrassPackedCluster cluster = clusters[instance.flags];
+    if (group.y >= visibleClusterCount[0]) return;
+    uint clusterId = visibleClusters[group.y];
+    if (clusterId >= culling.clusterCount) return;
+    GrassPackedCluster cluster = clusters[clusterId];
+    if (id.x >= cluster.instanceRange.y) return;
+    uint instanceId = cluster.instanceRange.x + id.x;
+    GrassPackedInstance instance = instances[instanceId];
     float3 position = grassPackedWorldPosition(instance, cluster);
     float radius = cluster.originExtent.w * grassPackedScale(instance);
     if (grassSphereOutsideFrustum(position, radius, culling.viewProjection)) return;
     uint destination;
     InterlockedAdd(visibleCount[0], 1u, destination);
-    visibleInstances[destination] = id.x;
+    visibleInstances[destination] = instanceId;
 }
