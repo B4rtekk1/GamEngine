@@ -310,6 +310,20 @@
                     buffer->createDeviceLocal(vulkanDevice.physical(), device, emptyGrassList.data(), sizeof(VkDrawIndexedIndirectCommand) * emptyGrassList.size(), VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT, commandPool, vulkanDevice.graphicsQueue(), vulkanDevice.allocator());
                 for (Buffer* buffer : {&lists.mainDrawCount, &lists.shadowDrawCount, &lists.velocityDrawCount})
                     buffer->createDeviceLocal(vulkanDevice.physical(), device, &zero, sizeof(zero), VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT, commandPool, vulkanDevice.graphicsQueue(), vulkanDevice.allocator());
+                auto& sceneLists = sceneGrassRenderLists[frame];
+                sceneLists.visibleInstances.createDeviceLocal(vulkanDevice.physical(), device, emptyVisibleGrass.data(), sizeof(std::uint32_t) * grassCapacity, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT, commandPool, vulkanDevice.graphicsQueue(), vulkanDevice.allocator());
+                sceneLists.visibleCount.createDeviceLocal(vulkanDevice.physical(), device, &zero, sizeof(zero), VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT, commandPool, vulkanDevice.graphicsQueue(), vulkanDevice.allocator());
+                for (Buffer* buffer : {&sceneLists.mainVisibleInstances, &sceneLists.shadowVisibleInstances, &sceneLists.velocityVisibleInstances}) buffer->createDeviceLocal(vulkanDevice.physical(), device, emptyVisibleGrass.data(), sizeof(std::uint32_t) * grassCapacity, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT, commandPool, vulkanDevice.graphicsQueue(), vulkanDevice.allocator());
+                sceneLists.classifyCounts.createDeviceLocal(vulkanDevice.physical(), device, zeroStreamCounts.data(), sizeof(zeroStreamCounts), VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT, commandPool, vulkanDevice.graphicsQueue(), vulkanDevice.allocator());
+                for (uint32_t stream = 0; stream < 3; ++stream) {
+                    for (Buffer* buffer : {&sceneLists.binCounts[stream], &sceneLists.binOffsets[stream], &sceneLists.binCursors[stream]}) buffer->createDeviceLocal(vulkanDevice.physical(), device, zeroBins.data(), sizeof(std::uint32_t) * clusterCapacity, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT, commandPool, vulkanDevice.graphicsQueue(), vulkanDevice.allocator());
+                    sceneLists.drawInstances[stream].createDeviceLocal(vulkanDevice.physical(), device, emptyVisibleGrass.data(), sizeof(std::uint32_t) * grassCapacity, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT, commandPool, vulkanDevice.graphicsQueue(), vulkanDevice.allocator());
+                }
+                sceneGrassClassifyUniformBuffers[frame].createHostVisible(vulkanDevice.physical(), device, sizeof(GrassClassifyUniformData), VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT, vulkanDevice.allocator());
+                sceneGrassPackedCullUniformBuffers[frame].createHostVisible(vulkanDevice.physical(), device, sizeof(GrassPackedCullUniformData), VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT, vulkanDevice.allocator());
+                for (Buffer& buffer : sceneGrassPackedStreamUniformBuffers[frame]) buffer.createHostVisible(vulkanDevice.physical(), device, sizeof(GrassPackedStreamUniformData), VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT, vulkanDevice.allocator());
+                for (Buffer* buffer : {&sceneLists.mainIndirect, &sceneLists.shadowIndirect, &sceneLists.velocityIndirect}) buffer->createDeviceLocal(vulkanDevice.physical(), device, emptyGrassList.data(), sizeof(VkDrawIndexedIndirectCommand) * emptyGrassList.size(), VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT, commandPool, vulkanDevice.graphicsQueue(), vulkanDevice.allocator());
+                for (Buffer* buffer : {&sceneLists.mainDrawCount, &sceneLists.shadowDrawCount, &sceneLists.velocityDrawCount}) buffer->createDeviceLocal(vulkanDevice.physical(), device, &zero, sizeof(zero), VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT, commandPool, vulkanDevice.graphicsQueue(), vulkanDevice.allocator());
                 foliageIndirectBuffers[frame].createDeviceLocal(vulkanDevice.physical(), device, emptyCommands.data(),
                     sizeof(VkDrawIndexedIndirectCommand) * genericCapacity,
                     VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
@@ -354,13 +368,13 @@
 
             constexpr uint32_t cullingSetCount = MAX_FRAMES_IN_FLIGHT * 5;
             constexpr uint32_t instanceCullSetCount = MAX_FRAMES_IN_FLIGHT;
-            constexpr uint32_t grassSetCount = MAX_FRAMES_IN_FLIGHT * 18;
+            constexpr uint32_t grassSetCount = MAX_FRAMES_IN_FLIGHT * 32;
             const uint32_t imageDescriptors = hiZBuffer.mipCount() + cullingSetCount;
             const VkDescriptorPoolSize poolSizes[] = {
                 {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, imageDescriptors},
                 {VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, hiZBuffer.mipCount()},
-                {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, cullingSetCount * 3 + instanceCullSetCount * 3 + MAX_FRAMES_IN_FLIGHT * 76},
-                {VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, cullingSetCount + MAX_FRAMES_IN_FLIGHT * 18},
+                {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, cullingSetCount * 3 + instanceCullSetCount * 3 + MAX_FRAMES_IN_FLIGHT * 128},
+                {VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, cullingSetCount + MAX_FRAMES_IN_FLIGHT * 24},
             };
             VkDescriptorPoolCreateInfo poolInfo{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
             poolInfo.maxSets = hiZBuffer.mipCount() + cullingSetCount + instanceCullSetCount + grassSetCount;
@@ -408,6 +422,8 @@
             allocateGrassSets(grassFinalizeDescriptorSetLayout, grassFinalizeSets);
             allocateGrassSets(grassPackedCullDescriptorSetLayout, grassPackedCullSets);
             allocateGrassSets(grassClassifyDescriptorSetLayout, grassClassifySets);
+            allocateGrassSets(grassPackedCullDescriptorSetLayout, sceneGrassPackedCullSets);
+            allocateGrassSets(grassClassifyDescriptorSetLayout, sceneGrassClassifySets);
             for (uint32_t frame = 0; frame < MAX_FRAMES_IN_FLIGHT; ++frame) {
                 for (uint32_t stream = 0; stream < 3; ++stream) {
                     const auto allocateOne = [&](VkDescriptorSetLayout layout, VkDescriptorSet& set) {
@@ -418,6 +434,10 @@
                     allocateOne(grassPrefixDescriptorSetLayout, grassPackedPrefixSets[frame][stream]);
                     allocateOne(grassPackedScatterDescriptorSetLayout, grassPackedScatterSets[frame][stream]);
                     allocateOne(grassPackedFinalizeDescriptorSetLayout, grassPackedFinalizeSets[frame][stream]);
+                    allocateOne(grassPackedBinDescriptorSetLayout, sceneGrassPackedBinSets[frame][stream]);
+                    allocateOne(grassPrefixDescriptorSetLayout, sceneGrassPackedPrefixSets[frame][stream]);
+                    allocateOne(grassPackedScatterDescriptorSetLayout, sceneGrassPackedScatterSets[frame][stream]);
+                    allocateOne(grassPackedFinalizeDescriptorSetLayout, sceneGrassPackedFinalizeSets[frame][stream]);
                 }
             }
             for (uint32_t frame = 0; frame < MAX_FRAMES_IN_FLIGHT; ++frame) {
@@ -468,6 +488,19 @@
                     updateGrassSet(grassPackedPrefixSets[frame][stream], {packedLists.binCounts[stream].handle(), packedLists.binOffsets[stream].handle()}, uniform);
                     updateGrassSet(grassPackedScatterSets[frame][stream], {generatedGrassInstanceBuffers[frame].handle(), classified[stream], packedLists.classifyCounts.handle(), packedLists.binOffsets[stream].handle(), packedLists.binCursors[stream].handle(), packedLists.drawInstances[stream].handle()}, uniform);
                     updateGrassSet(grassPackedFinalizeSets[frame][stream], {grassClusterBuffers[frame].handle(), packedLists.binCounts[stream].handle(), packedLists.binOffsets[stream].handle(), indirect[stream], drawCounts[stream]}, uniform);
+                }
+                auto& scenePackedLists = sceneGrassRenderLists[frame];
+                updateGrassSet(sceneGrassPackedCullSets[frame], {generatedGrassInstanceBuffers[frame].handle(), grassClusterBuffers[frame].handle(), scenePackedLists.visibleInstances.handle(), scenePackedLists.visibleCount.handle()}, sceneGrassPackedCullUniformBuffers[frame].handle());
+                updateGrassSet(sceneGrassClassifySets[frame], {generatedGrassInstanceBuffers[frame].handle(), grassClusterBuffers[frame].handle(), scenePackedLists.visibleInstances.handle(), scenePackedLists.mainVisibleInstances.handle(), scenePackedLists.shadowVisibleInstances.handle(), scenePackedLists.velocityVisibleInstances.handle(), scenePackedLists.classifyCounts.handle(), scenePackedLists.visibleCount.handle()}, sceneGrassClassifyUniformBuffers[frame].handle());
+                const std::array<VkBuffer, 3> sceneClassified{scenePackedLists.mainVisibleInstances.handle(), scenePackedLists.shadowVisibleInstances.handle(), scenePackedLists.velocityVisibleInstances.handle()};
+                const std::array<VkBuffer, 3> sceneIndirect{scenePackedLists.mainIndirect.handle(), scenePackedLists.shadowIndirect.handle(), scenePackedLists.velocityIndirect.handle()};
+                const std::array<VkBuffer, 3> sceneDrawCounts{scenePackedLists.mainDrawCount.handle(), scenePackedLists.shadowDrawCount.handle(), scenePackedLists.velocityDrawCount.handle()};
+                for (uint32_t stream = 0; stream < 3; ++stream) {
+                    const VkBuffer uniform = sceneGrassPackedStreamUniformBuffers[frame][stream].handle();
+                    updateGrassSet(sceneGrassPackedBinSets[frame][stream], {generatedGrassInstanceBuffers[frame].handle(), sceneClassified[stream], scenePackedLists.classifyCounts.handle(), scenePackedLists.binCounts[stream].handle()}, uniform);
+                    updateGrassSet(sceneGrassPackedPrefixSets[frame][stream], {scenePackedLists.binCounts[stream].handle(), scenePackedLists.binOffsets[stream].handle()}, uniform);
+                    updateGrassSet(sceneGrassPackedScatterSets[frame][stream], {generatedGrassInstanceBuffers[frame].handle(), sceneClassified[stream], scenePackedLists.classifyCounts.handle(), scenePackedLists.binOffsets[stream].handle(), scenePackedLists.binCursors[stream].handle(), scenePackedLists.drawInstances[stream].handle()}, uniform);
+                    updateGrassSet(sceneGrassPackedFinalizeSets[frame][stream], {grassClusterBuffers[frame].handle(), scenePackedLists.binCounts[stream].handle(), scenePackedLists.binOffsets[stream].handle(), sceneIndirect[stream], sceneDrawCounts[stream]}, uniform);
                 }
                 updateGrassSet(grassBuildSets[frame], {
                     gpuSceneInstanceBuffers[frame].handle(), visibleInstanceBuffers[frame].handle(),
@@ -596,7 +629,30 @@
             for (auto& streamUniforms : grassPackedStreamUniformBuffers) {
                 for (Buffer& buffer : streamUniforms) buffer.destroy();
             }
+            for (Buffer& buffer : sceneGrassClassifyUniformBuffers) buffer.destroy();
+            for (Buffer& buffer : sceneGrassPackedCullUniformBuffers) buffer.destroy();
+            for (auto& streamUniforms : sceneGrassPackedStreamUniformBuffers) {
+                for (Buffer& buffer : streamUniforms) buffer.destroy();
+            }
             for (GrassRenderLists& lists : grassRenderLists) {
+                lists.visibleInstances.destroy();
+                lists.visibleCount.destroy();
+                lists.mainVisibleInstances.destroy();
+                lists.shadowVisibleInstances.destroy();
+                lists.velocityVisibleInstances.destroy();
+                lists.classifyCounts.destroy();
+                for (Buffer& buffer : lists.binCounts) buffer.destroy();
+                for (Buffer& buffer : lists.binOffsets) buffer.destroy();
+                for (Buffer& buffer : lists.binCursors) buffer.destroy();
+                for (Buffer& buffer : lists.drawInstances) buffer.destroy();
+                lists.mainIndirect.destroy();
+                lists.mainDrawCount.destroy();
+                lists.shadowIndirect.destroy();
+                lists.shadowDrawCount.destroy();
+                lists.velocityIndirect.destroy();
+                lists.velocityDrawCount.destroy();
+            }
+            for (GrassRenderLists& lists : sceneGrassRenderLists) {
                 lists.visibleInstances.destroy();
                 lists.visibleCount.destroy();
                 lists.mainVisibleInstances.destroy();

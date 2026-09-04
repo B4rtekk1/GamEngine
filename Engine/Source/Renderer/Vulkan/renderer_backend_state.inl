@@ -141,11 +141,17 @@
             Buffer velocityDrawCount;
         };
         std::array<GrassRenderLists, MAX_FRAMES_IN_FLIGHT> grassRenderLists;
+        // Scene View has an independent camera, so packed grass cannot share
+        // the Game View's visibility or indirect-command buffers.
+        std::array<GrassRenderLists, MAX_FRAMES_IN_FLIGHT> sceneGrassRenderLists;
         std::array<Buffer, MAX_FRAMES_IN_FLIGHT> grassIndirectUniformBuffers;
         std::array<Buffer, MAX_FRAMES_IN_FLIGHT> grassPrefixUniformBuffers;
         std::array<Buffer, MAX_FRAMES_IN_FLIGHT> grassClassifyUniformBuffers;
         std::array<Buffer, MAX_FRAMES_IN_FLIGHT> grassPackedCullUniformBuffers;
         std::array<std::array<Buffer, 3>, MAX_FRAMES_IN_FLIGHT> grassPackedStreamUniformBuffers;
+        std::array<Buffer, MAX_FRAMES_IN_FLIGHT> sceneGrassClassifyUniformBuffers;
+        std::array<Buffer, MAX_FRAMES_IN_FLIGHT> sceneGrassPackedCullUniformBuffers;
+        std::array<std::array<Buffer, 3>, MAX_FRAMES_IN_FLIGHT> sceneGrassPackedStreamUniformBuffers;
         std::array<Buffer, MAX_FRAMES_IN_FLIGHT> uniformBuffers;
         std::array<Buffer, MAX_FRAMES_IN_FLIGHT> sceneUniformBuffers;
         std::array<Buffer, MAX_FRAMES_IN_FLIGHT> cullingObjectBuffers;
@@ -228,6 +234,12 @@
         std::array<std::array<VkDescriptorSet, 3>, MAX_FRAMES_IN_FLIGHT> grassPackedPrefixSets{};
         std::array<std::array<VkDescriptorSet, 3>, MAX_FRAMES_IN_FLIGHT> grassPackedScatterSets{};
         std::array<std::array<VkDescriptorSet, 3>, MAX_FRAMES_IN_FLIGHT> grassPackedFinalizeSets{};
+        std::array<VkDescriptorSet, MAX_FRAMES_IN_FLIGHT> sceneGrassPackedCullSets{};
+        std::array<VkDescriptorSet, MAX_FRAMES_IN_FLIGHT> sceneGrassClassifySets{};
+        std::array<std::array<VkDescriptorSet, 3>, MAX_FRAMES_IN_FLIGHT> sceneGrassPackedBinSets{};
+        std::array<std::array<VkDescriptorSet, 3>, MAX_FRAMES_IN_FLIGHT> sceneGrassPackedPrefixSets{};
+        std::array<std::array<VkDescriptorSet, 3>, MAX_FRAMES_IN_FLIGHT> sceneGrassPackedScatterSets{};
+        std::array<std::array<VkDescriptorSet, 3>, MAX_FRAMES_IN_FLIGHT> sceneGrassPackedFinalizeSets{};
         std::vector<Culling::GPUObjectData> gpuObjects;
         // Old and new bounds of renderables whose shadow contribution changed
         // in this frame. ShadowPass evicts only overlapping virtual pages
