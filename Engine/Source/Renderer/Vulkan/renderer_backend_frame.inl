@@ -365,11 +365,72 @@
 
             gpuCullingPasses[currentFrame].record(
                 commandBuffer, static_cast<std::uint32_t>(gpuObjects.size()));
-            // Produces the compact instance list consumed by the forthcoming
-            // instance-driven command generator. Legacy batch indirect draws
-            // remain active until that generator replaces them.
-            instanceCullingPasses[currentFrame].record(
-                commandBuffer, static_cast<std::uint32_t>(sceneGpu.database.instances().size()));
+            // The generic instance compaction result is not consumed by the
+            // active draw path. Do not dispatch it until it directly feeds
+            // instance-driven commands; cluster culling remains the live
+            // grass path.
+            constexpr bool enableExperimentalGpuSceneGrassCompaction = false;
+            // GPU grass: classify visible GPU-scene instances, prefix compact
+            // ranges, scatter renderer indices, then emit indirect commands.
+            const std::uint32_t grassBinCount = std::max(1u, static_cast<std::uint32_t>(
+                sceneGpu.database.meshes().size() * 3u));
+            const std::uint32_t visibleCapacity = static_cast<std::uint32_t>(
+                sceneGpu.database.instances().size());
+            if constexpr (enableExperimentalGpuSceneGrassCompaction) {
+                if (visibleCapacity != 0 && cameraController.camera()) {
+                const Vec3 cameraPosition = cameraController.camera()->position();
+                const GrassIndirectUniformData indirectData{
+                    visibleCapacity, visibleCapacity, visibleCapacity, grassBinCount,
+                    glm::vec4{cameraPosition.native(), 1.0F}};
+                const GrassPrefixUniformData prefixData{grassBinCount, visibleCapacity, 0u, 0u};
+                grassIndirectUniformBuffers[currentFrame].update(&indirectData, sizeof(indirectData));
+                grassPrefixUniformBuffers[currentFrame].update(&prefixData, sizeof(prefixData));
+                vkCmdFillBuffer(commandBuffer, grassBinCountBuffers[currentFrame].handle(), 0,
+                                VK_WHOLE_SIZE, 0);
+                vkCmdFillBuffer(commandBuffer, grassBinCursorBuffers[currentFrame].handle(), 0,
+                                VK_WHOLE_SIZE, 0);
+                vkCmdFillBuffer(commandBuffer, grassDrawCountBuffers[currentFrame].handle(), 0,
+                                sizeof(std::uint32_t), 0);
+                vkCmdFillBuffer(commandBuffer, grassIndirectBuffers[currentFrame].handle(), 0,
+                                VK_WHOLE_SIZE, 0);
+                const VkMemoryBarrier2 clearBarrier{.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER_2,
+                    .srcStageMask = VK_PIPELINE_STAGE_2_TRANSFER_BIT, .srcAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT,
+                    .dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                    .dstAccessMask = VK_ACCESS_2_SHADER_STORAGE_READ_BIT | VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT};
+                const VkDependencyInfo clearDependency{.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO,
+                    .memoryBarrierCount = 1, .pMemoryBarriers = &clearBarrier};
+                vkCmdPipelineBarrier2(commandBuffer, &clearDependency);
+                const auto dispatch = [&](const VkPipeline pipeline, const VkPipelineLayout layout,
+                                          const VkDescriptorSet set, const std::uint32_t groups) {
+                    vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, pipeline);
+                    vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, layout, 0, 1, &set, 0, nullptr);
+                    vkCmdDispatch(commandBuffer, groups, 1, 1);
+                    const VkMemoryBarrier2 barrier{.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER_2,
+                        .srcStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                        .srcAccessMask = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT,
+                        .dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                        .dstAccessMask = VK_ACCESS_2_SHADER_STORAGE_READ_BIT | VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT};
+                    const VkDependencyInfo dependency{.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO,
+                        .memoryBarrierCount = 1, .pMemoryBarriers = &barrier};
+                    vkCmdPipelineBarrier2(commandBuffer, &dependency);
+                };
+                dispatch(grassBuildPipeline, grassBuildPipelineLayout, grassBuildSets[currentFrame],
+                         (visibleCapacity + 63u) / 64u);
+                dispatch(grassPrefixPipeline, grassPrefixPipelineLayout, grassPrefixSets[currentFrame], 1u);
+                dispatch(grassScatterPipeline, grassScatterPipelineLayout, grassScatterSets[currentFrame],
+                         (visibleCapacity + 63u) / 64u);
+                dispatch(grassFinalizePipeline, grassFinalizePipelineLayout, grassFinalizeSets[currentFrame],
+                         (grassBinCount + 63u) / 64u);
+                const VkMemoryBarrier2 grassDrawBarrier{.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER_2,
+                    .srcStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                    .srcAccessMask = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT,
+                    .dstStageMask = VK_PIPELINE_STAGE_2_DRAW_INDIRECT_BIT | VK_PIPELINE_STAGE_2_VERTEX_SHADER_BIT,
+                    .dstAccessMask = VK_ACCESS_2_INDIRECT_COMMAND_READ_BIT | VK_ACCESS_2_SHADER_STORAGE_READ_BIT};
+                const VkDependencyInfo grassDrawDependency{.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO,
+                    .memoryBarrierCount = 1, .pMemoryBarriers = &grassDrawBarrier};
+                    vkCmdPipelineBarrier2(commandBuffer, &grassDrawDependency);
+                }
+            }
             foliageGpuCullingPasses[currentFrame].record(
                 commandBuffer, static_cast<std::uint32_t>(gpuObjects.size()));
 

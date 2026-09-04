@@ -33,6 +33,10 @@ namespace Engine {
             std::uint8_t transformDirtyFrames{0};
             std::uint8_t materialDirtyFrames{0};
             std::uint8_t cullingDirtyFrames{0};
+            // Offset into the compact material table.  Grass records that
+            // belong to one TerrainGrassComponent deliberately share this
+            // value instead of allocating GPUMaterialData per blade.
+            std::uint32_t materialTableOffset{};
             GPUSceneInstanceId gpuSceneInstanceId{InvalidGPUSceneInstanceId};
         };
 
@@ -59,6 +63,10 @@ namespace Engine {
         std::unordered_map<Entity, std::size_t> renderableIndices;
         std::unordered_map<Entity, std::vector<std::size_t>> grassRenderableIndices;
         std::vector<RendererInstanceData> instanceModels;
+        // Dedicated source data for the next grass draw path. These records
+        // are 16 B and cluster-relative; normal scene objects never enter it.
+        std::vector<GPUGrassInstance> grassInstances;
+        std::vector<GPUGrassCluster> grassClusters;
         std::vector<GPUMaterialData> materials;
         std::uint32_t materialSlots{1};
         std::uint64_t lastTransformRevision = std::numeric_limits<std::uint64_t>::max();

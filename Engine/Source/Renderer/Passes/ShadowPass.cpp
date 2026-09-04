@@ -61,9 +61,11 @@ ShadowPass::~ShadowPass() {
 }
 
 void ShadowPass::create(VkPhysicalDevice physicalDevice, VkDevice device,
-                        const std::vector<VkBuffer>& uniformBuffers,
-                        const std::vector<VkBuffer>& materialBuffers,
-                        const std::vector<VkDescriptorImageInfo>& materialTextures,
+        const std::vector<VkBuffer>& uniformBuffers,
+        const std::vector<VkBuffer>& materialBuffers,
+        const std::vector<VkBuffer>& instanceBuffers,
+        const std::vector<VkBuffer>& instanceIndexBuffers,
+        const std::vector<VkDescriptorImageInfo>& materialTextures,
                         const VkDeviceSize uniformBufferRange,
                         const VmaAllocator allocator,
                         Assets::AssetManager& assets) {
@@ -76,11 +78,13 @@ void ShadowPass::create(VkPhysicalDevice physicalDevice, VkDevice device,
         pagesToRender_.reserve(ShadowMap::PhysicalPageCount);
 
         if (materialBuffers.size() != uniformBuffers.size() ||
+            instanceBuffers.size() != uniformBuffers.size() ||
+            instanceIndexBuffers.size() != uniformBuffers.size() ||
             materialTextures.size() != MaxMaterialTextures) {
             throw std::invalid_argument("Invalid material descriptor resources");
         }
 
-        VkDescriptorSetLayoutBinding bindings[5]{};
+        VkDescriptorSetLayoutBinding bindings[7]{};
         bindings[0] = {0, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1,
                        VK_SHADER_STAGE_FRAGMENT_BIT, nullptr};
         bindings[1] = {1, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1,
@@ -91,9 +95,13 @@ void ShadowPass::create(VkPhysicalDevice physicalDevice, VkDevice device,
                        VK_SHADER_STAGE_FRAGMENT_BIT, nullptr};
         bindings[4] = {4, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1,
                        VK_SHADER_STAGE_FRAGMENT_BIT, nullptr};
+        bindings[5] = {5, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1,
+                       VK_SHADER_STAGE_VERTEX_BIT, nullptr};
+        bindings[6] = {6, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1,
+                       VK_SHADER_STAGE_VERTEX_BIT, nullptr};
         const VkDescriptorSetLayoutCreateInfo layoutInfo{
             VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO, nullptr, 0,
-            5, bindings};
+            7, bindings};
         if (vkCreateDescriptorSetLayout(device_, &layoutInfo, nullptr,
                                         &descriptorSetLayout_) != VK_SUCCESS) {
             throw std::runtime_error("Could not create shadow descriptor-set layout");
@@ -103,6 +111,8 @@ void ShadowPass::create(VkPhysicalDevice physicalDevice, VkDevice device,
         const VkDescriptorPoolSize poolSizes[] = {
             {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, frameCount},
             {VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, frameCount},
+            {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, frameCount},
+            {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, frameCount},
             {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, frameCount},
             {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, frameCount * MaxMaterialTextures},
             {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, frameCount},
@@ -144,7 +154,9 @@ void ShadowPass::create(VkPhysicalDevice physicalDevice, VkDevice device,
                 materialBuffers[frame], 0, VK_WHOLE_SIZE};
             const VkDescriptorBufferInfo pageTableInfo{
                 pageTableBuffers_[frame]->handle(), 0, VK_WHOLE_SIZE};
-            VkWriteDescriptorSet writes[5]{};
+            const VkDescriptorBufferInfo instanceInfo{instanceBuffers[frame], 0, VK_WHOLE_SIZE};
+            const VkDescriptorBufferInfo instanceIndexInfo{instanceIndexBuffers[frame], 0, VK_WHOLE_SIZE};
+            VkWriteDescriptorSet writes[7]{};
             writes[0] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr,
                          descriptorSets_[frame], 0, 0, 1,
                          VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &imageInfo, nullptr, nullptr};
@@ -160,6 +172,12 @@ void ShadowPass::create(VkPhysicalDevice physicalDevice, VkDevice device,
             writes[4] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr,
                          descriptorSets_[frame], 4, 0, 1,
                          VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, nullptr, &pageTableInfo, nullptr};
+            writes[5] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr,
+                         descriptorSets_[frame], 5, 0, 1,
+                         VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, nullptr, &instanceInfo, nullptr};
+            writes[6] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr,
+                         descriptorSets_[frame], 6, 0, 1,
+                         VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, nullptr, &instanceIndexInfo, nullptr};
             vkUpdateDescriptorSets(device_, std::size(writes), writes, 0, nullptr);
         }
 
@@ -185,16 +203,11 @@ void ShadowPass::create(VkPhysicalDevice physicalDevice, VkDevice device,
 
         const VkVertexInputBindingDescription vertexBindings[] = {
             {0, sizeof(Vertex), VK_VERTEX_INPUT_RATE_VERTEX},
-            {1, sizeof(RendererInstanceData), VK_VERTEX_INPUT_RATE_INSTANCE},
         };
         const VkVertexInputAttributeDescription attributes[] = {
             {0, 0, VK_FORMAT_R32G32B32_SFLOAT, offsetof(Vertex, position)},
             {2, 0, VK_FORMAT_R32G32_SFLOAT, offsetof(Vertex, texCoord)},
             {8, 0, VK_FORMAT_R32_UINT, offsetof(Vertex, materialIndex)},
-            {4, 1, VK_FORMAT_R32G32B32A32_SFLOAT, offsetof(RendererInstanceData, positionMaterial)},
-            {5, 1, VK_FORMAT_R32G32B32A32_SFLOAT, offsetof(RendererInstanceData, rotation)},
-            {6, 1, VK_FORMAT_R32G32B32A32_SFLOAT, offsetof(RendererInstanceData, scaleBase)},
-            {13, 1, VK_FORMAT_R32G32B32A32_SFLOAT, offsetof(RendererInstanceData, grassDeformation)},
         };
         VkPipelineVertexInputStateCreateInfo vertexInput{
             VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO};

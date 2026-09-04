@@ -270,6 +270,12 @@ set(SLANG_SHADER_SOURCES
         Assets/Shaders/Culling/gpu_instance_culling.slang
         Assets/Shaders/Culling/hiz_initialize.slang
         Assets/Shaders/Culling/hiz_reduce.slang
+        Assets/Shaders/Grass/grass_generate.slang
+        Assets/Shaders/Grass/grass_cull.slang
+        Assets/Shaders/Grass/grass_build_indirect.slang
+        Assets/Shaders/Grass/grass_finalize_indirect.slang
+        Assets/Shaders/Grass/grass_prefix_sum.slang
+        Assets/Shaders/Grass/grass_scatter_instances.slang
         Assets/Shaders/Environment/skybox.slang
         Assets/Shaders/Forward/forward_pbr.slang
         Assets/Shaders/Forward/selection_outline.slang

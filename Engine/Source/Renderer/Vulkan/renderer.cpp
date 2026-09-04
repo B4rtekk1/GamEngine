@@ -13,6 +13,7 @@
 #include "imgui.h"
 
 #include <glm/glm.hpp>
+#include <glm/gtc/packing.hpp>
 #define GLM_ENABLE_EXPERIMENTAL
 #include <glm/gtx/matrix_decompose.hpp>
 
@@ -39,6 +40,7 @@
 #include "Engine/ECS/Components/ColorPickerComponent.h"
 #include "Engine/ECS/Components/ColliderComponent.h"
 #include "Engine/ECS/Components/TerrainGrassComponent.h"
+#include "Engine/ECS/Components/TerrainComponent.h"
 #include "Engine/ECS/Components/WindComponent.h"
 #include "Engine/Scene/Components/LightComponent.h"
 #include "Engine/Core/Transform.h"
@@ -87,6 +89,7 @@
 #include <filesystem>
 #include <optional>
 #include <memory>
+#include <numbers>
 
 namespace Engine {
     using UniformBufferObject = RendererUniformBufferObject;

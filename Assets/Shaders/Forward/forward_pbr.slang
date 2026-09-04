@@ -4,6 +4,8 @@ import Common.ShadowSampling;
 import Common.GrassWind;
 
 [[vk::binding(1, 0)]] ConstantBuffer<RendererFrameData> frame;
+[[vk::binding(5, 0)]] StructuredBuffer<RendererInstanceData> visibleGrassInstances;
+[[vk::binding(6, 0)]] StructuredBuffer<uint> visibleGrassIndices;
 
 struct ForwardVertexInput
 {
@@ -11,12 +13,8 @@ struct ForwardVertexInput
     [[vk::location(1)]] float3 color : COLOR0;
     [[vk::location(2)]] float2 texCoord : TEXCOORD0;
     [[vk::location(3)]] float3 normal : NORMAL;
-    [[vk::location(4)]] float4 positionMaterial : INSTANCE_POSITION_MATERIAL;
-    [[vk::location(5)]] float4 instanceRotation : INSTANCE_ROTATION;
-    [[vk::location(6)]] float4 scaleBase : INSTANCE_SCALE_BASE;
     [[vk::location(8)]] uint materialIndex : MATERIAL_INDEX;
     [[vk::location(9)]] float4 tangent : TANGENT;
-    [[vk::location(13)]] float4 grassDeformation : GRASS_DEFORMATION;
 };
 
 struct ForwardVertexOutput
@@ -31,55 +29,57 @@ struct ForwardVertexOutput
 };
 
 [shader("vertex")]
-ForwardVertexOutput vertexMain(ForwardVertexInput input, uint instanceIndex : SV_InstanceID)
+ForwardVertexOutput vertexMain(ForwardVertexInput input, uint instanceIndex : SV_InstanceID,
+                               uint baseInstance : SV_StartInstanceLocation)
 {
+    RendererInstanceData instance = visibleGrassInstances[visibleGrassIndices[baseInstance + instanceIndex]];
     float3 localPosition = input.position;
     float3 localNormal = input.normal;
-    float normalizedHeight = clamp((input.position.y - input.scaleBase.w) *
-                                   input.grassDeformation.w, 0.0, 1.0);
+    float normalizedHeight = clamp((input.position.y - instance.scaleBase.w) *
+                                   instance.grassDeformation.w, 0.0, 1.0);
     // Smooth S-shaped curvature keeps the root planted and the tip relaxed,
     // rather than making the blade look like a translated rigid card.
     float bendCurve = normalizedHeight * normalizedHeight * (3.0 - 2.0 * normalizedHeight);
-    float bendWeight = bendCurve * input.grassDeformation.z;
-    float grassHeight = input.grassDeformation.w > 0.0 ? 1.0 / input.grassDeformation.w : 0.0;
-    localPosition.xz += input.grassDeformation.xy * bendWeight * grassHeight * 0.8;
+    float bendWeight = bendCurve * instance.grassDeformation.z;
+    float grassHeight = instance.grassDeformation.w > 0.0 ? 1.0 / instance.grassDeformation.w : 0.0;
+    localPosition.xz += instance.grassDeformation.xy * bendWeight * grassHeight * 0.8;
     localPosition.y -= bendWeight * (0.25 + 0.30 * normalizedHeight) * grassHeight;
     // Wind is authored in world space. Convert it into the card's local
     // frame first, otherwise randomized blade yaw makes neighbouring grass
     // sway in unrelated directions.
-    float4 inverseInstanceRotation = float4(-input.instanceRotation.xyz, input.instanceRotation.w);
-    float3 windOffset = grassWindDisplacement(input.positionMaterial.xz, inverseInstanceRotation,
+    float4 inverseInstanceRotation = float4(-instance.rotation.xyz, instance.rotation.w);
+    float3 windOffset = grassWindDisplacement(instance.positionMaterial.xz, inverseInstanceRotation,
                                               normalizedHeight, grassHeight,
                                               frame.windGustFrequencyTime.z,
                                               frame.windDirectionStrength,
                                               frame.windSourcePositionRange,
                                               frame.windGustFrequencyTime);
     localPosition += windOffset;
-    float bendSlope = 1.6 * normalizedHeight * (1.0 - normalizedHeight) * input.grassDeformation.z;
-    localNormal = normalize(localNormal + float3(-input.grassDeformation.x * bendSlope,
+    float bendSlope = 1.6 * normalizedHeight * (1.0 - normalizedHeight) * instance.grassDeformation.z;
+    localNormal = normalize(localNormal + float3(-instance.grassDeformation.x * bendSlope,
                                                 0.0,
-                                               -input.grassDeformation.y * bendSlope));
+                                               -instance.grassDeformation.y * bendSlope));
     float windSlope = 1.8 * normalizedHeight / max(grassHeight, 1.0e-4);
     localNormal = normalize(localNormal + float3(-windOffset.x * windSlope, 0.0,
                                                   -windOffset.z * windSlope));
 
-    float4 q = input.instanceRotation;
+    float4 q = instance.rotation;
     float3x3 rotationMatrix = float3x3(
         1.0 - 2.0 * (q.y * q.y + q.z * q.z), 2.0 * (q.x * q.y + q.z * q.w), 2.0 * (q.x * q.z - q.y * q.w),
         2.0 * (q.x * q.y - q.z * q.w), 1.0 - 2.0 * (q.x * q.x + q.z * q.z), 2.0 * (q.y * q.z + q.x * q.w),
         2.0 * (q.x * q.z + q.y * q.w), 2.0 * (q.y * q.z - q.x * q.w), 1.0 - 2.0 * (q.x * q.x + q.y * q.y));
-    float3 worldPosition3 = mul(localPosition * input.scaleBase.xyz, rotationMatrix) + input.positionMaterial.xyz;
+    float3 worldPosition3 = mul(localPosition * instance.scaleBase.xyz, rotationMatrix) + instance.positionMaterial.xyz;
     float4 worldPosition = float4(worldPosition3, 1.0);
-    float3x3 normalMatrix = float3x3(rotationMatrix[0] / input.scaleBase.x,
-                                     rotationMatrix[1] / input.scaleBase.y,
-                                     rotationMatrix[2] / input.scaleBase.z);
+    float3x3 normalMatrix = float3x3(rotationMatrix[0] / instance.scaleBase.x,
+                                     rotationMatrix[1] / instance.scaleBase.y,
+                                     rotationMatrix[2] / instance.scaleBase.z);
 
     ForwardVertexOutput output;
     output.position = mul(mul(worldPosition, frame.view), frame.projection);
     output.color = input.color;
     output.worldPosition = worldPosition.xyz;
     output.normal = mul(localNormal, normalMatrix);
-    output.materialIndex = asuint(input.positionMaterial.w) + input.materialIndex;
+    output.materialIndex = asuint(instance.positionMaterial.w) + input.materialIndex;
     output.texCoord = input.texCoord;
     output.tangent = float4(mul(input.tangent.xyz, normalMatrix), input.tangent.w);
     return output;

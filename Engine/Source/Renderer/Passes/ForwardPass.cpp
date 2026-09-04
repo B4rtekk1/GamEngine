@@ -25,19 +25,14 @@ void ForwardPass::create(VkDevice device, const VkFormat colorFormat,
     options.descriptorSetLayouts = {sceneLayout};
     options.vertexBindings = {
         {0, sizeof(Vertex), VK_VERTEX_INPUT_RATE_VERTEX},
-        {1, sizeof(RendererInstanceData), VK_VERTEX_INPUT_RATE_INSTANCE},
     };
     options.vertexAttributes = {
         {0, 0, VK_FORMAT_R32G32B32_SFLOAT, offsetof(Vertex, position)},
         {1, 0, VK_FORMAT_R32G32B32_SFLOAT, offsetof(Vertex, color)},
         {2, 0, VK_FORMAT_R32G32_SFLOAT, offsetof(Vertex, texCoord)},
         {3, 0, VK_FORMAT_R32G32B32_SFLOAT, offsetof(Vertex, normal)},
-        {4, 1, VK_FORMAT_R32G32B32A32_SFLOAT, offsetof(RendererInstanceData, positionMaterial)},
-        {5, 1, VK_FORMAT_R32G32B32A32_SFLOAT, offsetof(RendererInstanceData, rotation)},
-        {6, 1, VK_FORMAT_R32G32B32A32_SFLOAT, offsetof(RendererInstanceData, scaleBase)},
         {8, 0, VK_FORMAT_R32_UINT, offsetof(Vertex, materialIndex)},
         {9, 0, VK_FORMAT_R32G32B32A32_SFLOAT, offsetof(Vertex, tangent)},
-        {13, 1, VK_FORMAT_R32G32B32A32_SFLOAT, offsetof(RendererInstanceData, grassDeformation)},
     };
     pipeline_.create(device, options);
 
@@ -78,6 +73,7 @@ void ForwardPass::begin(VkCommandBuffer commandBuffer,
                         VkDescriptorSet sceneDescriptorSet,
                         VkBuffer vertexBuffer, VkBuffer instanceBuffer,
                         VkBuffer indexBuffer) const {
+    (void)instanceBuffer; // Instance data is fetched from descriptor binding 5.
     VkRenderPassBeginInfo passInfo{VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO};
     passInfo.renderPass = pipeline_.renderPass();
     passInfo.framebuffer = framebuffer;
@@ -92,9 +88,8 @@ void ForwardPass::begin(VkCommandBuffer commandBuffer,
     vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline_.handle());
     vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS,
                             pipeline_.layout(), 0, 1, &sceneDescriptorSet, 0, nullptr);
-    const VkBuffer vertexBuffers[] = {vertexBuffer, instanceBuffer};
-    constexpr VkDeviceSize offsets[] = {0, 0};
-    vkCmdBindVertexBuffers(commandBuffer, 0, 2, vertexBuffers, offsets);
+    constexpr VkDeviceSize offsets[] = {0};
+    vkCmdBindVertexBuffers(commandBuffer, 0, 1, &vertexBuffer, offsets);
     vkCmdBindIndexBuffer(commandBuffer, indexBuffer, 0, VK_INDEX_TYPE_UINT32);
     const VkViewport viewport{0.0F, 0.0F, static_cast<float>(extent.width),
                               static_cast<float>(extent.height), 0.0F, 1.0F};

@@ -46,6 +46,10 @@
         UI::CanvasRenderer& canvasRenderer;
         Texture2D fpsFontTexture;
         Texture2D fallbackMaterialTexture;
+        // Terrain height input for procedural grass generation. It is kept
+        // separate from material textures so compute can sample it directly.
+        Texture2D grassHeightTexture;
+        Texture2D grassDensityTexture;
         std::vector<Texture2D> materialTextures;
         std::vector<VkDescriptorImageInfo> materialTextureDescriptors;
         std::unordered_map<const Mesh*, std::uint32_t> meshTextureOffsets;
@@ -100,6 +104,19 @@
         std::array<Buffer, MAX_FRAMES_IN_FLIGHT> gpuSceneMaterialBuffers;
         std::array<Buffer, MAX_FRAMES_IN_FLIGHT> visibleInstanceBuffers;
         std::array<Buffer, MAX_FRAMES_IN_FLIGHT> visibleInstanceCountBuffers;
+        // GPU-driven grass compaction: count -> prefix -> scatter -> indirect.
+        std::array<Buffer, MAX_FRAMES_IN_FLIGHT> grassBinCountBuffers;
+        std::array<Buffer, MAX_FRAMES_IN_FLIGHT> grassBinOffsetBuffers;
+        std::array<Buffer, MAX_FRAMES_IN_FLIGHT> grassBinCursorBuffers;
+        std::array<Buffer, MAX_FRAMES_IN_FLIGHT> compactGrassInstanceBuffers;
+        // Source buffers for the dedicated grass renderer. They contain no
+        // RendererInstanceData or GPUScene records.
+        std::array<Buffer, MAX_FRAMES_IN_FLIGHT> grassClusterBuffers;
+        std::array<Buffer, MAX_FRAMES_IN_FLIGHT> generatedGrassInstanceBuffers;
+        std::array<Buffer, MAX_FRAMES_IN_FLIGHT> grassIndirectBuffers;
+        std::array<Buffer, MAX_FRAMES_IN_FLIGHT> grassDrawCountBuffers;
+        std::array<Buffer, MAX_FRAMES_IN_FLIGHT> grassIndirectUniformBuffers;
+        std::array<Buffer, MAX_FRAMES_IN_FLIGHT> grassPrefixUniformBuffers;
         std::array<Buffer, MAX_FRAMES_IN_FLIGHT> uniformBuffers;
         std::array<Buffer, MAX_FRAMES_IN_FLIGHT> sceneUniformBuffers;
         std::array<Buffer, MAX_FRAMES_IN_FLIGHT> cullingObjectBuffers;
@@ -136,14 +153,30 @@
         VkDescriptorSetLayout hiZReduceDescriptorSetLayout = VK_NULL_HANDLE;
         VkDescriptorSetLayout cullingDescriptorSetLayout = VK_NULL_HANDLE;
         VkDescriptorSetLayout instanceCullingDescriptorSetLayout = VK_NULL_HANDLE;
+        VkDescriptorSetLayout grassBuildDescriptorSetLayout = VK_NULL_HANDLE;
+        VkDescriptorSetLayout grassPrefixDescriptorSetLayout = VK_NULL_HANDLE;
+        VkDescriptorSetLayout grassScatterDescriptorSetLayout = VK_NULL_HANDLE;
+        VkDescriptorSetLayout grassFinalizeDescriptorSetLayout = VK_NULL_HANDLE;
         VkPipelineLayout hiZCopyPipelineLayout = VK_NULL_HANDLE;
         VkPipelineLayout hiZReducePipelineLayout = VK_NULL_HANDLE;
         VkPipelineLayout cullingPipelineLayout = VK_NULL_HANDLE;
         VkPipelineLayout instanceCullingPipelineLayout = VK_NULL_HANDLE;
+        VkPipelineLayout grassBuildPipelineLayout = VK_NULL_HANDLE;
+        VkPipelineLayout grassPrefixPipelineLayout = VK_NULL_HANDLE;
+        VkPipelineLayout grassScatterPipelineLayout = VK_NULL_HANDLE;
+        VkPipelineLayout grassFinalizePipelineLayout = VK_NULL_HANDLE;
         VkPipeline hiZCopyPipeline = VK_NULL_HANDLE;
         VkPipeline hiZReducePipeline = VK_NULL_HANDLE;
         VkPipeline cullingPipeline = VK_NULL_HANDLE;
         VkPipeline instanceCullingPipeline = VK_NULL_HANDLE;
+        VkPipeline grassBuildPipeline = VK_NULL_HANDLE;
+        VkPipeline grassPrefixPipeline = VK_NULL_HANDLE;
+        VkPipeline grassScatterPipeline = VK_NULL_HANDLE;
+        VkPipeline grassFinalizePipeline = VK_NULL_HANDLE;
+        std::array<VkDescriptorSet, MAX_FRAMES_IN_FLIGHT> grassBuildSets{};
+        std::array<VkDescriptorSet, MAX_FRAMES_IN_FLIGHT> grassPrefixSets{};
+        std::array<VkDescriptorSet, MAX_FRAMES_IN_FLIGHT> grassScatterSets{};
+        std::array<VkDescriptorSet, MAX_FRAMES_IN_FLIGHT> grassFinalizeSets{};
         std::vector<Culling::GPUObjectData> gpuObjects;
         // Old and new bounds of renderables whose shadow contribution changed
         // in this frame. ShadowPass evicts only overlapping virtual pages

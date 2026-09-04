@@ -51,6 +51,11 @@ bool outsideFrustum(float4 clipPositions[8])
     for (uint i = 0; i < 8; ++i)
     {
         float4 clip = clipPositions[i];
+        // A bound intersecting the eye/near plane cannot be classified by
+        // homogeneous clip comparisons alone. Keep it conservatively: the
+        // rasterizer will perform the exact clipping.
+        if (clip.w <= 0.00001 || clip.z <= 0.0)
+            return false;
         outsideLeft = outsideLeft && clip.x < -clip.w;
         outsideRight = outsideRight && clip.x > clip.w;
         outsideBottom = outsideBottom && clip.y < -clip.w;
@@ -137,8 +142,13 @@ void main(uint3 dispatchThreadId : SV_DispatchThreadID)
         return;
     }
 
-    float3 localMinimum = objectData.localAabbMin.xyz - culling.aabbExpansion;
-    float3 localMaximum = objectData.localAabbMax.xyz + culling.aabbExpansion;
+    // A fixed centimetre-scale padding is insufficient for large, rotated
+    // meshes at the frustum edge (for example ramps).  Keep culling
+    // conservative by scaling the guard band with the extracted AABB.
+    const float boundsPadding = max(culling.aabbExpansion,
+                                    length(objectData.localAabbMax.xyz - objectData.localAabbMin.xyz) * 0.02);
+    float3 localMinimum = objectData.localAabbMin.xyz - boundsPadding;
+    float3 localMaximum = objectData.localAabbMax.xyz + boundsPadding;
     float4 clipPositions[8];
     for (uint i = 0; i < 8; ++i)
     {
@@ -153,7 +163,11 @@ void main(uint3 dispatchThreadId : SV_DispatchThreadID)
         return;
 
     bool occluded = false;
-    if (culling.enableOcclusionCulling != 0 && culling.cameraCut == 0)
+    // Single-instance static meshes receive little benefit from Hi-Z, while
+    // their small projected rectangles are the most susceptible to false
+    // occlusion (notably ramps viewed at shallow angles).  Keep frustum
+    // culling, but reserve Hi-Z for batched geometry.
+    if (objectData.instanceCount > 1 && culling.enableOcclusionCulling != 0 && culling.cameraCut == 0)
         occluded = occlusionTest(clipPositions);
     if (!occluded)
         appendDraw(objectData);

@@ -38,6 +38,8 @@ namespace Engine {
         void create(VkPhysicalDevice physicalDevice, VkDevice device,
                     const std::vector<VkBuffer> &uniformBuffers,
                     const std::vector<VkBuffer> &materialBuffers,
+                    const std::vector<VkBuffer> &instanceBuffers,
+                    const std::vector<VkBuffer> &instanceIndexBuffers,
                     const std::vector<VkDescriptorImageInfo> &materialTextures,
                     VkDeviceSize uniformBufferRange, VmaAllocator allocator,
                     Assets::AssetManager &assets);

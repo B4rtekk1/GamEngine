@@ -46,9 +46,9 @@ namespace Engine {
     };
 
     /**
-     * Compact per-instance data.  Position, rotation and scale reconstruct
-     * the model and normal transforms in the vertex shader; this halves the
-     * old matrix-plus-normal representation (128 B -> 64 B).
+     * Generic-renderer instance data. It is intentionally kept separate from
+     * GPUGrassInstance: history and full quaternion/scale data make this a
+     * 128-byte format and it is unsuitable for dense foliage.
      */
     struct RendererInstanceData {
         // xyz: world position, w: bit-cast material-table base index.
@@ -64,6 +64,7 @@ namespace Engine {
         glm::vec4 previousRotation{0.0F, 0.0F, 0.0F, 1.0F};
         glm::vec4 previousScale{1.0F};
     };
+    static_assert(sizeof(RendererInstanceData) == 128);
 
     /** std430-compatible records backing the persistent GPU Scene SSBOs. */
     struct alignas(16) GPUSceneInstanceRecord {
@@ -81,4 +82,47 @@ namespace Engine {
     struct alignas(16) GPUSceneMaterialRecord {
         glm::uvec4 data{}; // material-table offset, pipeline class, flags, reserved
     };
+
+    /** Parameters shared by the grass count/scatter/finalize compute passes. */
+    struct alignas(16) GrassIndirectUniformData {
+        std::uint32_t visibleCapacity{};
+        std::uint32_t binCapacity{};
+        std::uint32_t compactBase{};
+        std::uint32_t maxBins{};
+        glm::vec4 cameraPosition{};
+    };
+
+    struct alignas(16) GrassPrefixUniformData {
+        std::uint32_t binCount{};
+        std::uint32_t compactBase{};
+        std::uint32_t padding0{};
+        std::uint32_t padding1{};
+    };
+
+    /**
+     * Dense-foliage instance, decoded relative to GPUGrassCluster. Keeping
+     * this independent of RendererInstanceData prevents generic transform
+     * history from leaking into the grass renderer.
+     *
+     * packedXZ: UNORM16 local X | UNORM16 local Z
+     * packedYRotation: FP16 world Y | UNORM16 yaw
+     * packedScaleSeed: FP16 uniform scale | uint16 deterministic seed
+     * flags: grass type / future interaction flags
+     */
+    struct alignas(4) GPUGrassInstance {
+        std::uint32_t packedXZ{};
+        std::uint32_t packedYRotation{};
+        std::uint32_t packedScaleSeed{};
+        std::uint32_t flags{};
+    };
+    static_assert(sizeof(GPUGrassInstance) == 16);
+
+    /** One culling/rendering unit for a contiguous range of packed blades. */
+    struct alignas(16) GPUGrassCluster {
+        // xy: world-space XZ origin; z: largest local XZ extent; w: reserved.
+        glm::vec4 originExtent{};
+        // x: first packed instance, y: count, z: material table offset, w: flags.
+        glm::uvec4 instanceRange{};
+    };
+    static_assert(sizeof(GPUGrassCluster) == 32);
 } // namespace Engine

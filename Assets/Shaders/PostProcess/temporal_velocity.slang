@@ -4,20 +4,14 @@ import Common.GrassWind;
 [[vk::binding(1, 0)]] ConstantBuffer<RendererFrameData> frame;
 [[vk::binding(2, 0)]] StructuredBuffer<MaterialData> materials;
 [[vk::binding(3, 0)]] Sampler2D materialTextures[16];
+[[vk::binding(5, 0)]] StructuredBuffer<RendererInstanceData> visibleGrassInstances;
+[[vk::binding(6, 0)]] StructuredBuffer<uint> visibleGrassIndices;
 
 struct VertexInput
 {
     [[vk::location(0)]] float3 position : POSITION;
     [[vk::location(2)]] float2 texCoord : TEXCOORD0;
-    [[vk::location(4)]] float4 positionMaterial : INSTANCE_POSITION_MATERIAL;
-    [[vk::location(5)]] float4 rotation : INSTANCE_ROTATION;
-    [[vk::location(6)]] float4 scaleBase : INSTANCE_SCALE_BASE;
-    [[vk::location(13)]] float4 grassDeformation : GRASS_DEFORMATION;
     [[vk::location(8)]] uint materialIndex : MATERIAL_INDEX;
-    [[vk::location(14)]] float4 previousPosition : PREVIOUS_POSITION;
-    [[vk::location(15)]] float4 previousRotation : PREVIOUS_ROTATION;
-    [[vk::location(16)]] float4 previousScale : PREVIOUS_SCALE;
-    [[vk::location(17)]] float4 previousGrassDeformation : PREVIOUS_GRASS_DEFORMATION;
 };
 
 float3 rotateByQuaternion(float3 value, float4 q)
@@ -37,18 +31,20 @@ struct VertexOutput
 };
 
 [shader("vertex")]
-VertexOutput vertexMain(VertexInput input)
+VertexOutput vertexMain(VertexInput input, uint instanceIndex : SV_InstanceID,
+                        uint baseInstance : SV_StartInstanceLocation)
 {
+    RendererInstanceData instance = visibleGrassInstances[visibleGrassIndices[baseInstance + instanceIndex]];
     float3 localPosition = input.position;
-    float normalizedHeight = clamp((input.position.y - input.scaleBase.w) *
-                                   input.grassDeformation.w, 0.0, 1.0);
+    float normalizedHeight = clamp((input.position.y - instance.scaleBase.w) *
+                                   instance.grassDeformation.w, 0.0, 1.0);
     float bendCurve = normalizedHeight * normalizedHeight * (3.0 - 2.0 * normalizedHeight);
-    float bendWeight = bendCurve * input.grassDeformation.z;
-    float grassHeight = input.grassDeformation.w > 0.0 ? 1.0 / input.grassDeformation.w : 0.0;
-    localPosition.xz += input.grassDeformation.xy * bendWeight * grassHeight * 0.8;
+    float bendWeight = bendCurve * instance.grassDeformation.z;
+    float grassHeight = instance.grassDeformation.w > 0.0 ? 1.0 / instance.grassDeformation.w : 0.0;
+    localPosition.xz += instance.grassDeformation.xy * bendWeight * grassHeight * 0.8;
     localPosition.y -= bendWeight * (0.25 + 0.30 * normalizedHeight) * grassHeight;
-    float4 inverseRotation = float4(-input.rotation.xyz, input.rotation.w);
-    localPosition += grassWindDisplacement(input.positionMaterial.xz, inverseRotation,
+    float4 inverseRotation = float4(-instance.rotation.xyz, instance.rotation.w);
+    localPosition += grassWindDisplacement(instance.positionMaterial.xz, inverseRotation,
                                            normalizedHeight, grassHeight,
                                            frame.windGustFrequencyTime.z,
                                            frame.windDirectionStrength,
@@ -56,29 +52,29 @@ VertexOutput vertexMain(VertexInput input)
                                            frame.windGustFrequencyTime);
 
     float3 previousLocalPosition = input.position;
-    float previousNormalizedHeight = clamp((input.position.y - input.previousScale.w) *
-                                           input.previousGrassDeformation.w, 0.0, 1.0);
+    float previousNormalizedHeight = clamp((input.position.y - instance.previousScale.w) *
+                                           instance.previousGrassDeformation.w, 0.0, 1.0);
     float previousBendCurve = previousNormalizedHeight * previousNormalizedHeight *
                               (3.0 - 2.0 * previousNormalizedHeight);
-    float previousBendWeight = previousBendCurve * input.previousGrassDeformation.z;
-    float previousGrassHeight = input.previousGrassDeformation.w > 0.0
-        ? 1.0 / input.previousGrassDeformation.w : 0.0;
-    previousLocalPosition.xz += input.previousGrassDeformation.xy * previousBendWeight *
+    float previousBendWeight = previousBendCurve * instance.previousGrassDeformation.z;
+    float previousGrassHeight = instance.previousGrassDeformation.w > 0.0
+        ? 1.0 / instance.previousGrassDeformation.w : 0.0;
+    previousLocalPosition.xz += instance.previousGrassDeformation.xy * previousBendWeight *
                                 previousGrassHeight * 0.8;
     previousLocalPosition.y -= previousBendWeight * (0.25 + 0.30 * previousNormalizedHeight) *
                                previousGrassHeight;
-    float4 inversePreviousRotation = float4(-input.previousRotation.xyz, input.previousRotation.w);
-    previousLocalPosition += grassWindDisplacement(input.previousPosition.xz, inversePreviousRotation,
+    float4 inversePreviousRotation = float4(-instance.previousRotation.xyz, instance.previousRotation.w);
+    previousLocalPosition += grassWindDisplacement(instance.previousPosition.xz, inversePreviousRotation,
                                                    previousNormalizedHeight, previousGrassHeight,
                                                    frame.windGustFrequencyTime.w,
                                                    frame.windDirectionStrength,
                                                    frame.windSourcePositionRange,
                                                    frame.windGustFrequencyTime);
 
-    float4 currentWorld = float4(rotateByQuaternion(localPosition * input.scaleBase.xyz,
-                                                    input.rotation) + input.positionMaterial.xyz, 1.0);
-    float4 previousWorld = float4(rotateByQuaternion(previousLocalPosition * input.previousScale.xyz,
-                                                     input.previousRotation) + input.previousPosition.xyz, 1.0);
+    float4 currentWorld = float4(rotateByQuaternion(localPosition * instance.scaleBase.xyz,
+                                                    instance.rotation) + instance.positionMaterial.xyz, 1.0);
+    float4 previousWorld = float4(rotateByQuaternion(previousLocalPosition * instance.previousScale.xyz,
+                                                     instance.previousRotation) + instance.previousPosition.xyz, 1.0);
 
     VertexOutput output;
     float4 currentClip = mul(mul(currentWorld, frame.view), frame.projection);
@@ -87,7 +83,7 @@ VertexOutput vertexMain(VertexInput input)
     output.currentNdc = currentClip.xy / currentClip.w;
     output.previousClip = previousClip;
     output.texCoord = input.texCoord;
-    output.materialIndex = asuint(input.positionMaterial.w) + input.materialIndex;
+    output.materialIndex = asuint(instance.positionMaterial.w) + input.materialIndex;
     return output;
 }
 

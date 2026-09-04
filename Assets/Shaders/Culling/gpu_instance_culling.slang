@@ -47,10 +47,17 @@ void main(uint3 dispatchThreadId : SV_DispatchThreadID)
         const float3 localPosition = lerp(minimum, maximum, UNIT_AABB_CORNERS[i]);
         clipPositions[i] = mul(mul(float4(localPosition, 1.0), instance.worldMatrix), culling.viewProjection);
     }
-    if (outsideFrustum(clipPositions)) return;
+    // Terrain grass is already submitted in terrain chunks.  Until the
+    // GPU-scene bounds path owns those chunk bounds, do not apply the
+    // per-blade frustum test here: a mismatched extracted bound must never
+    // make an entire grass field disappear in the game view.
+    const bool isGrass = (instance.idsAndFlags.w & 4u) != 0u;
+    if (!isGrass && culling.enableFrustumCulling != 0u && outsideFrustum(clipPositions)) return;
     uint destination;
     InterlockedAdd(visibleCount[0], 1, destination);
     uint maxVisibleInstances, visibleStride;
     visibleInstances.GetDimensions(maxVisibleInstances, visibleStride);
+    // Keep the GPU-scene ID here: the grass binning pass needs mesh/type flags
+    // before it emits the final compact renderer-instance indices.
     if (destination < maxVisibleInstances) visibleInstances[destination] = instanceId;
 }

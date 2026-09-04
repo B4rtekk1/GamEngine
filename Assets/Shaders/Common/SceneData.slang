@@ -34,3 +34,18 @@ struct MaterialData
     int4 textureIndices;
     int4 terrainLayerTextures;
 };
+
+// Mirrors Engine::RendererInstanceData.  The renderer binds this table as an
+// SSBO so instance fetch is driven by the indirect command's firstInstance,
+// not a per-instance vertex-input binding.
+struct RendererInstanceData
+{
+    float4 positionMaterial;
+    float4 rotation;
+    float4 scaleBase;
+    float4 grassDeformation;
+    float4 previousGrassDeformation;
+    float4 previousPosition;
+    float4 previousRotation;
+    float4 previousScale;
+};

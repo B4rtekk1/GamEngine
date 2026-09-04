@@ -235,28 +235,40 @@
         void createShadowPass() {
             std::vector<VkBuffer> buffers;
             std::vector<VkBuffer> gpuMaterialBuffers;
+            std::vector<VkBuffer> gpuInstanceBuffers;
+            std::vector<VkBuffer> gpuInstanceIndexBuffers;
             buffers.reserve(uniformBuffers.size());
             gpuMaterialBuffers.reserve(materialBuffers.size());
+            gpuInstanceBuffers.reserve(instanceBuffers.size());
+            gpuInstanceIndexBuffers.reserve(compactGrassInstanceBuffers.size());
             for (const Buffer& buffer : uniformBuffers) {
                 buffers.push_back(buffer.handle());
             }
             for (const Buffer& buffer : materialBuffers) {
                 gpuMaterialBuffers.push_back(buffer.handle());
             }
+            for (const Buffer& buffer : instanceBuffers) gpuInstanceBuffers.push_back(buffer.handle());
+            for (const Buffer& buffer : compactGrassInstanceBuffers) gpuInstanceIndexBuffers.push_back(buffer.handle());
             shadowPass.create(vulkanDevice.physical(), device, buffers,
-                              gpuMaterialBuffers, materialTextureDescriptors,
+                              gpuMaterialBuffers, gpuInstanceBuffers, gpuInstanceIndexBuffers, materialTextureDescriptors,
                               sizeof(UniformBufferObject), vulkanDevice.allocator(), assetManager);
         }
 
         void createSceneDescriptorPass() {
             std::vector<VkBuffer> buffers;
             std::vector<VkBuffer> gpuMaterialBuffers;
+            std::vector<VkBuffer> gpuInstanceBuffers;
+            std::vector<VkBuffer> gpuInstanceIndexBuffers;
             buffers.reserve(sceneUniformBuffers.size());
             gpuMaterialBuffers.reserve(materialBuffers.size());
+            gpuInstanceBuffers.reserve(instanceBuffers.size());
+            gpuInstanceIndexBuffers.reserve(compactGrassInstanceBuffers.size());
             for (const Buffer& buffer : sceneUniformBuffers) buffers.push_back(buffer.handle());
             for (const Buffer& buffer : materialBuffers) gpuMaterialBuffers.push_back(buffer.handle());
+            for (const Buffer& buffer : instanceBuffers) gpuInstanceBuffers.push_back(buffer.handle());
+            for (const Buffer& buffer : compactGrassInstanceBuffers) gpuInstanceIndexBuffers.push_back(buffer.handle());
             sceneDescriptorPass.create(vulkanDevice.physical(), device, buffers,
-                                       gpuMaterialBuffers, materialTextureDescriptors,
+                                       gpuMaterialBuffers, gpuInstanceBuffers, gpuInstanceIndexBuffers, materialTextureDescriptors,
                                        sizeof(UniformBufferObject), vulkanDevice.allocator(), assetManager);
         }
 

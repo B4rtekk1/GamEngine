@@ -128,6 +128,8 @@
             sceneGpu.batchRenderableIndices.clear();
             sceneGpu.renderableIndices.clear();
             sceneGpu.grassRenderableIndices.clear();
+            sceneGpu.grassInstances.clear();
+            sceneGpu.grassClusters.clear();
             instanceBatches.reserve(registry.size());
             sceneGpu.batchRenderableIndices.reserve(registry.size());
             glm::vec3 sceneMinimum{std::numeric_limits<float>::max()};
@@ -327,7 +329,7 @@
             // draws while giving the GPU culler useful bounds.
             registry.view<Transform, TerrainGrassComponent>(
                 [&](const Entity entity, const Transform& terrainTransform,
-                    const TerrainGrassComponent& grass) {
+                    TerrainGrassComponent& grass) {
                     if (!grass.hasPrefab() || grass.instances.empty()) return;
                     const Mesh* mesh = grass.mesh.get();
                     MeshUploadRecord upload{};
@@ -358,30 +360,26 @@
                         uploadedMeshes.emplace(mesh, upload);
                     }
 
-                    constexpr float grassClusterSize = 8.0F;
-                    std::unordered_map<std::int64_t, std::vector<std::size_t>> clusters;
-                    clusters.reserve(grass.instances.size() / 32u + 1u);
-                    for (std::size_t index = 0; index < grass.instances.size(); ++index) {
-                        const Vec3& position = grass.instances[index].position;
-                        const auto cellX = static_cast<std::int32_t>(std::floor(position.x() / grassClusterSize));
-                        const auto cellZ = static_cast<std::int32_t>(std::floor(position.z() / grassClusterSize));
-                        clusters[TerrainGrassComponent::spatialKey(cellX, cellZ)].push_back(index);
-                    }
+                    // Authoring changes compact legacy exceptions into fixed
+                    // terrain chunks once. Rendering no longer rebuilds a
+                    // hash table and scans the complete field every frame.
+                    grass.rebuildChunks();
 
                     std::vector<std::size_t> grassIndices(grass.instances.size());
                     const float horizontalTerrainScale = std::max(
                         std::abs(terrainTransform.scale.x()), std::abs(terrainTransform.scale.z()));
                     const float meshHeight = upload.localBounds.max.y() - upload.localBounds.min.y();
-                    for (const auto& clusterEntry : clusters) {
-                        const auto& cluster = clusterEntry.second;
+                    for (const GrassChunk& chunk : grass.chunks) {
                         const std::size_t batchIndex = instanceBatches.size();
                         const std::uint32_t firstInstance = static_cast<std::uint32_t>(renderables.size());
                         std::vector<std::size_t> batchIndices;
-                        batchIndices.reserve(cluster.size());
+                        batchIndices.reserve(chunk.instanceCount);
                         AABB batchBounds{};
                         float largestScale = 0.0F;
                         bool firstBounds = true;
-                        for (const std::size_t grassIndex : cluster) {
+                        const std::size_t end = static_cast<std::size_t>(chunk.instanceOffset) +
+                                                chunk.instanceCount;
+                        for (std::size_t grassIndex = chunk.instanceOffset; grassIndex < end; ++grassIndex) {
                             const auto& item = grass.instances[grassIndex];
                             const Transform local{.position = item.position,
                                                   .rotation = Vec3{0.0F, item.yaw, 0.0F},
@@ -411,13 +409,55 @@
                             .lod1IndexCount = static_cast<std::uint32_t>((mesh->indexCount() / 2U / 3U) * 3U),
                             .lod2IndexCount = static_cast<std::uint32_t>((mesh->indexCount() / 8U / 3U) * 3U),
                             .firstInstance = firstInstance,
-                            .instanceCount = static_cast<std::uint32_t>(cluster.size()),
+                            .instanceCount = chunk.instanceCount,
                             .castShadow = grass.castShadow,
                             .twoSided = std::ranges::any_of(mesh->materials, [](const PBRMaterial& material) {
                                 return material.doubleSided;
                             }),
                             .grass = true,
                             .worldBounds = batchBounds});
+
+                        // Keep a separate compact source table alongside the
+                        // legacy draw records. It is built only on topology
+                        // changes, never while updating transforms per frame.
+                        const std::uint32_t packedOffset = static_cast<std::uint32_t>(
+                            sceneGpu.grassInstances.size());
+                        const float extentX = std::max(batchBounds.max.x() - batchBounds.min.x(), 1.0e-4F);
+                        const float extentZ = std::max(batchBounds.max.z() - batchBounds.min.z(), 1.0e-4F);
+                        const float extent = std::max(extentX, extentZ);
+                        const auto packUnorm16 = [](const float value) {
+                            return static_cast<std::uint32_t>(std::round(
+                                std::clamp(value, 0.0F, 1.0F) * 65535.0F));
+                        };
+                        const auto packHalf = [](const float value) {
+                            return glm::packHalf1x16(value);
+                        };
+                        for (std::size_t grassIndex = chunk.instanceOffset; grassIndex < end; ++grassIndex) {
+                            const auto& item = grass.instances[grassIndex];
+                            const Transform local{.position = item.position,
+                                                  .rotation = Vec3{0.0F, item.yaw, 0.0F},
+                                                  .scale = Vec3{item.scale, item.scale, item.scale}};
+                            const glm::mat4 model = terrainTransform.matrix().native() * local.matrix().native();
+                            const glm::vec3 worldPosition{model[3]};
+                            const std::uint32_t packedX = packUnorm16(
+                                (worldPosition.x - batchBounds.min.x()) / extent);
+                            const std::uint32_t packedZ = packUnorm16(
+                                (worldPosition.z - batchBounds.min.z()) / extent);
+                            const std::uint32_t packedYaw = packUnorm16(
+                                item.yaw / (2.0F * std::numbers::pi_v<float>));
+                            const std::uint32_t seed = static_cast<std::uint32_t>(grassIndex) & 0xffffU;
+                            sceneGpu.grassInstances.push_back({
+                                .packedXZ = packedX | (packedZ << 16U),
+                                .packedYRotation = packHalf(worldPosition.y) | (packedYaw << 16U),
+                                .packedScaleSeed = packHalf(item.scale) | (seed << 16U),
+                                .flags = grass.grassType,
+                            });
+                        }
+                        sceneGpu.grassClusters.push_back({
+                            .originExtent = {batchBounds.min.x(), batchBounds.min.z(), extent, 0.0F},
+                            .instanceRange = {packedOffset, chunk.instanceCount,
+                                              0U, grass.grassType},
+                        });
                         sceneMinimum = glm::min(sceneMinimum, batchBounds.min.native());
                         sceneMaximum = glm::max(sceneMaximum, batchBounds.max.native());
                     }
@@ -465,11 +505,55 @@
             indexBuffer.createDeviceLocal(vulkanDevice.physical(), device, sceneMesh.indices.data(),
                 sizeof(uint32_t) * sceneMesh.indices.size(), VK_BUFFER_USAGE_INDEX_BUFFER_BIT,
                 commandPool, vulkanDevice.graphicsQueue(), vulkanDevice.allocator());
+
+            // Compute generation samples the same normalized height data used
+            // by TerrainComponent::sampleHeight.  The first terrain is the
+            // active grass domain; scenes with several terrains receive one
+            // grass component/renderer domain per future extension.
+            grassHeightTexture.destroy();
+            grassDensityTexture.destroy();
+            registry.view<TerrainComponent>([&](const Entity, const TerrainComponent& terrain) {
+                if (grassHeightTexture.valid() || !terrain.valid()) return;
+                std::vector<std::uint8_t> encodedHeights(terrain.sampleCount());
+                const float range = std::max(terrain.maximumHeight - terrain.minimumHeight, 1.0e-6F);
+                for (std::size_t i = 0; i < encodedHeights.size(); ++i) {
+                    const float normalized = std::clamp((terrain.heights[i] - terrain.minimumHeight) / range,
+                                                        0.0F, 1.0F);
+                    encodedHeights[i] = static_cast<std::uint8_t>(std::round(normalized * 255.0F));
+                }
+                grassHeightTexture.create(vulkanDevice.physical(), device, commandPool,
+                    vulkanDevice.graphicsQueue(), terrain.resolution, terrain.resolution, encodedHeights,
+                    TextureColorSpace::Linear, false, vulkanDevice.allocator(), TexturePixelFormat::R8);
+                // Preserve existing terrain scenes: until the editor exposes a
+                // paintable density layer, every valid terrain texel is a
+                // candidate and the compute shader's chunk density controls
+                // coverage. Roads/water can later write zero into this map.
+                std::vector<std::uint8_t> density(terrain.sampleCount(), 255U);
+                grassDensityTexture.create(vulkanDevice.physical(), device, commandPool,
+                    vulkanDevice.graphicsQueue(), terrain.resolution, terrain.resolution, density,
+                    TextureColorSpace::Linear, false, vulkanDevice.allocator(), TexturePixelFormat::R8);
+            });
         }
 
         void createInstanceBuffer() {
             instanceModels.resize(renderables.size());
-            materials.resize(renderables.size() * materialSlots);
+            // A material table is addressed by an explicit offset rather than
+            // by renderable index.  Terrain grass therefore owns one table
+            // per component/type, not one identical table for every blade.
+            std::uint32_t nextMaterialOffset = 0;
+            std::unordered_map<Entity, std::uint32_t> grassMaterialOffsets;
+            grassMaterialOffsets.reserve(sceneGpu.grassRenderableIndices.size());
+            for (RenderableRecord& record : renderables) {
+                if (record.grassInstance == std::numeric_limits<std::size_t>::max()) {
+                    record.materialTableOffset = nextMaterialOffset;
+                    nextMaterialOffset += materialSlots;
+                    continue;
+                }
+                const auto [it, inserted] = grassMaterialOffsets.emplace(record.entity, nextMaterialOffset);
+                if (inserted) nextMaterialOffset += materialSlots;
+                record.materialTableOffset = it->second;
+            }
+            materials.resize(nextMaterialOffset);
             updateRenderableBuffers();
             for (RendererInstanceData& model : instanceModels) {
                 model.previousPosition = glm::vec4{glm::vec3{model.positionMaterial}, 0.0F};
@@ -480,12 +564,25 @@
             for (Buffer& buffer : instanceBuffers) {
                 buffer.createHostVisible(vulkanDevice.physical(), device,
                     sizeof(RendererInstanceData) * std::max<std::size_t>(1, instanceModels.size()),
-                    VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
+                    VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
                     vulkanDevice.allocator());
                 if (!instanceModels.empty()) {
                     buffer.update(instanceModels.data(),
                                   sizeof(RendererInstanceData) * instanceModels.size());
                 }
+            }
+            // Binding 6 is part of the forward/shadow descriptor contract and
+            // therefore must exist before createShadowPass(). The first half
+            // is an identity map for ordinary draws; compute appends compact
+            // grass indices in the second half.
+            const std::size_t instanceCount = std::max<std::size_t>(1, instanceModels.size());
+            std::vector<std::uint32_t> instanceIndexMap(instanceCount * 2U, 0U);
+            for (std::uint32_t index = 0; index < instanceCount; ++index) instanceIndexMap[index] = index;
+            for (Buffer& buffer : compactGrassInstanceBuffers) {
+                buffer.createDeviceLocal(vulkanDevice.physical(), device, instanceIndexMap.data(),
+                    sizeof(std::uint32_t) * instanceIndexMap.size(),
+                    VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+                    commandPool, vulkanDevice.graphicsQueue(), vulkanDevice.allocator());
             }
             for (Buffer& buffer : materialBuffers) {
                 buffer.createHostVisible(vulkanDevice.physical(), device,
@@ -715,10 +812,11 @@
             clearDirtyIndices(&RenderableRecord::transformDirtyFrames,
                               dirtyTransforms[currentFrame], bit);
             for (const std::size_t index : dirtyMaterials[currentFrame]) {
+                const RenderableRecord& record = renderables[index];
                 materialBuffers[currentFrame].update(
-                    materials.data() + index * materialSlots,
+                    materials.data() + record.materialTableOffset,
                     sizeof(GPUMaterialData) * materialSlots,
-                    sizeof(GPUMaterialData) * index * materialSlots);
+                    sizeof(GPUMaterialData) * record.materialTableOffset);
             }
             clearDirtyIndices(&RenderableRecord::materialDirtyFrames,
                               dirtyMaterials[currentFrame], bit);
@@ -932,7 +1030,7 @@
                         decomposedRotation = glm::normalize(decomposedRotation);
                     }
                     instanceModels[index].positionMaterial = glm::vec4{
-                        decomposedTranslation, std::bit_cast<float>(static_cast<std::uint32_t>(index * materialSlots))};
+                        decomposedTranslation, std::bit_cast<float>(record.materialTableOffset)};
                     instanceModels[index].rotation = glm::vec4{decomposedRotation.x, decomposedRotation.y,
                                                                decomposedRotation.z, decomposedRotation.w};
                     instanceModels[index].scaleBase = glm::vec4{
@@ -986,7 +1084,7 @@
                                    textureIndex(source.terrainLayerTextures[2]),
                                    textureIndex(source.terrainLayerTextures[3])},
                     };
-                    GPUMaterialData& destination = materials[index * materialSlots + slot];
+                    GPUMaterialData& destination = materials[record.materialTableOffset + slot];
                     if (!optimizationFeatures.materialCaching ||
                         !sameMaterial(destination, material)) {
                         destination = material;
@@ -1001,46 +1099,44 @@
                     markDirty(index, &RenderableRecord::materialDirtyFrames, dirtyMaterials);
                 }
 
-                // Render extraction writes a persistent GPU-scene record. The
-                // current indirect path still consumes legacy batches, but all
-                // data required by an instance-driven culler is now indexed by
-                // IDs rather than CPU addresses.
-                const InstanceBatch& batch = instanceBatches[record.batchIndex];
-                const std::uint64_t meshKey = static_cast<std::uint64_t>(
-                    reinterpret_cast<std::uintptr_t>(batch.mesh));
-                const GPUSceneMeshId meshId = sceneGpu.database.upsertMesh(meshKey, {
-                    .firstIndex = batch.firstIndex,
-                    .indexCount = batch.indexCount,
-                    .vertexOffset = 0,
-                    .lod1IndexCount = batch.lod1IndexCount,
-                    .lod2IndexCount = batch.lod2IndexCount,
-                });
-                const std::uint64_t materialKey = static_cast<std::uint64_t>(index);
-                const GPUSceneMaterialId materialId = sceneGpu.database.upsertMaterial(materialKey, {
-                    .materialTableOffset = static_cast<std::uint32_t>(index * materialSlots),
-                    .pipelineClass = batch.twoSided ? 1U : 0U,
-                    .flags = batch.castShadow ? 1U : 0U,
-                });
-                const std::uint64_t instanceKey = record.grassInstance == std::numeric_limits<std::size_t>::max()
-                    ? static_cast<std::uint64_t>(entity)
-                    : (static_cast<std::uint64_t>(entity) ^ 0x9e3779b97f4a7c15ULL ^
-                       (static_cast<std::uint64_t>(record.grassInstance) * 0xbf58476d1ce4e5b9ULL));
-                record.gpuSceneInstanceId = sceneGpu.database.upsertInstance(instanceKey, {
-                    .worldMatrix = [&model] {
-                        std::array<float, 16> matrix{};
-                        for (glm::length_t column = 0; column < 4; ++column) {
-                            for (glm::length_t row = 0; row < 4; ++row) {
-                                matrix[column * 4 + row] = model[column][row];
-                            }
-                        }
-                        return matrix;
-                    }(),
-                    .localBounds = record.localBounds,
-                    .meshId = meshId,
-                    .materialId = materialId,
-                    .objectId = static_cast<std::uint32_t>(entity),
-                    .flags = (batch.castShadow ? 1U : 0U) | (batch.twoSided ? 2U : 0U),
-                });
+                // GPUScene is deliberately reserved for general scene
+                // objects. Grass uses the existing cluster draw path and is
+                // not expanded into a 112-byte GPUScene record per blade.
+                if (!grassInstance) {
+                    const InstanceBatch& batch = instanceBatches[record.batchIndex];
+                    const std::uint64_t meshKey = static_cast<std::uint64_t>(
+                        reinterpret_cast<std::uintptr_t>(batch.mesh));
+                    const GPUSceneMeshId meshId = sceneGpu.database.upsertMesh(meshKey, {
+                        .firstIndex = batch.firstIndex,
+                        .indexCount = batch.indexCount,
+                        .vertexOffset = 0,
+                        .lod1IndexCount = batch.lod1IndexCount,
+                        .lod2IndexCount = batch.lod2IndexCount,
+                    });
+                    const GPUSceneMaterialId materialId = sceneGpu.database.upsertMaterial(
+                        static_cast<std::uint64_t>(record.materialTableOffset), {
+                            .materialTableOffset = record.materialTableOffset,
+                            .pipelineClass = batch.twoSided ? 1U : 0U,
+                            .flags = batch.castShadow ? 1U : 0U,
+                        });
+                    record.gpuSceneInstanceId = sceneGpu.database.upsertInstance(
+                        static_cast<std::uint64_t>(entity), {
+                            .worldMatrix = [&model] {
+                                std::array<float, 16> matrix{};
+                                for (glm::length_t column = 0; column < 4; ++column) {
+                                    for (glm::length_t row = 0; row < 4; ++row) {
+                                        matrix[column * 4 + row] = model[column][row];
+                                    }
+                                }
+                                return matrix;
+                            }(),
+                            .localBounds = record.localBounds,
+                            .meshId = meshId,
+                            .materialId = materialId,
+                            .objectId = static_cast<std::uint32_t>(index),
+                            .flags = 1U | (batch.twoSided ? 2U : 0U),
+                        });
+                }
             }
             if (gpuObjects.size() == instanceBatches.size() && !changedBatches.empty()) {
                 std::ranges::sort(changedBatches);

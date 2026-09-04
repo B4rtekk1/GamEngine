@@ -26,6 +26,12 @@
                 for (Buffer& buffer : instanceBuffers) {
                     buffer.destroy();
                 }
+                for (Buffer& buffer : compactGrassInstanceBuffers) {
+                    buffer.destroy();
+                }
+                for (Buffer& buffer : grassClusterBuffers) {
+                    buffer.destroy();
+                }
                 for (Buffer& buffer : materialBuffers) {
                     buffer.destroy();
                 }
@@ -48,6 +54,8 @@
                 materialTextureDescriptors.clear();
                 meshTextureOffsets.clear();
                 fallbackMaterialTexture.destroy();
+                grassHeightTexture.destroy();
+                grassDensityTexture.destroy();
 
                 for (VkSemaphore semaphore : imageAvailableSemaphores) {
                     if (semaphore != VK_NULL_HANDLE) {
