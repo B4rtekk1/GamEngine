@@ -35,6 +35,8 @@ namespace Engine {
         void drawFoliage(VkCommandBuffer commandBuffer,
                          VkDescriptorSet sceneDescriptorSet,
                          const Culling::IndexedIndirectDrawCount &indirectDraw) const;
+        void drawGrass(VkCommandBuffer commandBuffer, VkDescriptorSet descriptorSet,
+                       const Culling::IndexedIndirectDrawCount& indirectDraw) const;
 
         void drawOutline(VkCommandBuffer commandBuffer,
                          VkDescriptorSet sceneDescriptorSet,
@@ -49,6 +51,7 @@ namespace Engine {
     private:
         GraphicsPipeline pipeline_;
         GraphicsPipeline foliagePipeline_;
+        GraphicsPipeline grassPipeline_;
         GraphicsPipeline outlinePipeline_;
     };
 } // namespace Engine

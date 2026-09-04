@@ -40,6 +40,9 @@ void ForwardPass::create(VkDevice device, const VkFormat colorFormat,
     foliageOptions.existingRenderPass = pipeline_.renderPass();
     foliageOptions.cullMode = VK_CULL_MODE_NONE;
     foliagePipeline_.create(device, foliageOptions);
+    GraphicsPipelineOptions grassOptions = foliageOptions;
+    grassOptions.shader = "shaders/grass_forward.spv";
+    grassPipeline_.create(device, grassOptions);
 
     GraphicsPipelineOptions outlineOptions = options;
     outlineOptions.shader = "shaders/selection_outline.spv";
@@ -65,7 +68,17 @@ void ForwardPass::create(VkDevice device, const VkFormat colorFormat,
 void ForwardPass::destroy() noexcept {
     outlinePipeline_.destroy();
     foliagePipeline_.destroy();
+    grassPipeline_.destroy();
     pipeline_.destroy();
+}
+
+void ForwardPass::drawGrass(VkCommandBuffer commandBuffer, VkDescriptorSet descriptorSet,
+                            const Culling::IndexedIndirectDrawCount& indirectDraw) const {
+    if (!indirectDraw.valid()) return;
+    vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, grassPipeline_.handle());
+    vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, grassPipeline_.layout(),
+                            0, 1, &descriptorSet, 0, nullptr);
+    indirectDraw.record(commandBuffer);
 }
 
 void ForwardPass::begin(VkCommandBuffer commandBuffer,

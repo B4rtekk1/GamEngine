@@ -130,6 +130,7 @@
             sceneGpu.grassRenderableIndices.clear();
             sceneGpu.grassInstances.clear();
             sceneGpu.grassClusters.clear();
+            sceneGpu.grassClusterEntities.clear();
             instanceBatches.reserve(registry.size());
             sceneGpu.batchRenderableIndices.reserve(registry.size());
             glm::vec3 sceneMinimum{std::numeric_limits<float>::max()};
@@ -443,8 +444,8 @@
                                 (worldPosition.x - batchBounds.min.x()) / extent);
                             const std::uint32_t packedZ = packUnorm16(
                                 (worldPosition.z - batchBounds.min.z()) / extent);
-                            const std::uint32_t packedYaw = packUnorm16(
-                                item.yaw / (2.0F * std::numbers::pi_v<float>));
+                            // Terrain authoring stores yaw in degrees.
+                            const std::uint32_t packedYaw = packUnorm16(item.yaw / 360.0F);
                             const std::uint32_t seed = static_cast<std::uint32_t>(grassIndex) & 0xffffU;
                             sceneGpu.grassInstances.push_back({
                                 .packedXZ = packedX | (packedZ << 16U),
@@ -461,6 +462,7 @@
                             .instanceRange = {packedOffset, chunk.instanceCount,
                                               0U, grass.grassType},
                         });
+                        sceneGpu.grassClusterEntities.push_back(entity);
                         sceneMinimum = glm::min(sceneMinimum, batchBounds.min.native());
                         sceneMaximum = glm::max(sceneMaximum, batchBounds.max.native());
                     }
@@ -557,6 +559,16 @@
                 record.materialTableOffset = it->second;
             }
             materials.resize(nextMaterialOffset);
+            // Clusters inherit the same shared material table as their
+            // owning TerrainGrassComponent. The grass shader consumes this
+            // offset directly instead of assuming material zero.
+            for (std::size_t cluster = 0; cluster < sceneGpu.grassClusters.size(); ++cluster) {
+                const Entity owner = sceneGpu.grassClusterEntities[cluster];
+                const auto records = sceneGpu.grassRenderableIndices.find(owner);
+                if (records == sceneGpu.grassRenderableIndices.end() || records->second.empty()) continue;
+                sceneGpu.grassClusters[cluster].instanceRange.z =
+                    renderables[records->second.front()].materialTableOffset;
+            }
             updateRenderableBuffers();
             for (RendererInstanceData& model : instanceModels) {
                 model.previousPosition = glm::vec4{glm::vec3{model.positionMaterial}, 0.0F};

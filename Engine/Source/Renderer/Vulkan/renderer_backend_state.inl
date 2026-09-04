@@ -115,6 +115,18 @@
         std::array<Buffer, MAX_FRAMES_IN_FLIGHT> generatedGrassInstanceBuffers;
         std::array<Buffer, MAX_FRAMES_IN_FLIGHT> grassIndirectBuffers;
         std::array<Buffer, MAX_FRAMES_IN_FLIGHT> grassDrawCountBuffers;
+        // Dedicated command streams. They must never alias generic object
+        // indirect buffers: each stream is consumed by a grass-only shader.
+        struct GrassRenderLists final {
+            Buffer visibleInstances;
+            Buffer mainIndirect;
+            Buffer mainDrawCount;
+            Buffer shadowIndirect;
+            Buffer shadowDrawCount;
+            Buffer velocityIndirect;
+            Buffer velocityDrawCount;
+        };
+        std::array<GrassRenderLists, MAX_FRAMES_IN_FLIGHT> grassRenderLists;
         std::array<Buffer, MAX_FRAMES_IN_FLIGHT> grassIndirectUniformBuffers;
         std::array<Buffer, MAX_FRAMES_IN_FLIGHT> grassPrefixUniformBuffers;
         std::array<Buffer, MAX_FRAMES_IN_FLIGHT> uniformBuffers;

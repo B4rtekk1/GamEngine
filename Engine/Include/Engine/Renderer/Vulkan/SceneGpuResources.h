@@ -67,6 +67,9 @@ namespace Engine {
         // are 16 B and cluster-relative; normal scene objects never enter it.
         std::vector<GPUGrassInstance> grassInstances;
         std::vector<GPUGrassCluster> grassClusters;
+        // Parallel ownership table used only during topology extraction to
+        // resolve the shared material table for each GPU grass cluster.
+        std::vector<Entity> grassClusterEntities;
         std::vector<GPUMaterialData> materials;
         std::uint32_t materialSlots{1};
         std::uint64_t lastTransformRevision = std::numeric_limits<std::uint64_t>::max();
