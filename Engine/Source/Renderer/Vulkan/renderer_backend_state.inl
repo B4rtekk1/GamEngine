@@ -186,6 +186,9 @@
         std::array<Buffer, MAX_FRAMES_IN_FLIGHT> sceneIndirectBuffers;
         std::array<Buffer, MAX_FRAMES_IN_FLIGHT> sceneFoliageIndirectBuffers;
         std::array<Buffer, MAX_FRAMES_IN_FLIGHT> shadowIndirectBuffers;
+        // Four compact caster-ID streams, one for each shadow clip level.
+        std::array<Buffer, MAX_FRAMES_IN_FLIGHT> shadowCandidateBuffers;
+        std::array<Buffer, MAX_FRAMES_IN_FLIGHT> shadowCandidateCountBuffers;
         std::array<Buffer, MAX_FRAMES_IN_FLIGHT> drawCountBuffers;
         std::array<Buffer, MAX_FRAMES_IN_FLIGHT> foliageDrawCountBuffers;
         std::array<Buffer, MAX_FRAMES_IN_FLIGHT> sceneDrawCountBuffers;

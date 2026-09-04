@@ -45,28 +45,75 @@ float sampleVirtualShadowLevel(Sampler2DShadow shadowMap, float3 worldPosition,
 
     float depthSlope = max(abs(ddx(currentDepth)), abs(ddy(currentDepth)));
     float bias = max(MIN_SHADOW_BIAS, SLOPE_SHADOW_BIAS * depthSlope);
-    // A single comparison lookup uses only hardware 2x2 PCF. A wider tent
-    // filter removes the stair-stepping visible on distant curved casters,
-    // while keeping the center of nearby shadows crisp. Resolve every tap in
-    // virtual-map coordinates: neighbouring texels can reside in different
-    // physical atlas pages.
-    static const float kernel[5] = {1.0, 4.0, 6.0, 4.0, 1.0};
+    // A single comparison lookup uses only hardware 2x2 PCF. The near clip
+    // levels get a 3x3 tent; distant levels use a 2x2 filter and a single
+    // comparison respectively. TAA integrates the resulting low-frequency
+    // noise while avoiding a 25-tap cost at every shaded pixel.
+    const float2 virtualPixel = uv * float(VIRTUAL_RESOLUTION);
+    const uint2 centerPixel = uint2(floor(virtualPixel));
+    const uint2 localPixel = centerPixel % PAGE_RESOLUTION;
+    const float atlasResolution = float(PHYSICAL_PAGES_PER_AXIS * PAGE_RESOLUTION);
+
+    if (level == 3)
+        return 1.0 - shadowMap.SampleCmpLevelZero(centerAtlasUv, currentDepth - bias);
+
+    if (level == 2)
+    {
+        // Centre the four taps around the projected pixel. The one-pixel
+        // border uses virtual addressing because a tap can cross a page.
+        const bool kernelFitsCenterPage = all(localPixel >= uint2(1, 1)) &&
+                                          all(localPixel < uint2(PAGE_RESOLUTION - 1,
+                                                                  PAGE_RESOLUTION - 1));
+        float filteredShadow = 0.0;
+        [unroll]
+        for (int y = 0; y < 2; ++y)
+        {
+            [unroll]
+            for (int x = 0; x < 2; ++x)
+            {
+                const float2 tapOffset = float2(x, y) - 0.5;
+                float2 tapAtlasUv;
+                if (kernelFitsCenterPage)
+                    tapAtlasUv = centerAtlasUv + tapOffset / atlasResolution;
+                else if (!virtualShadowAtlasUv(virtualPixel + tapOffset, level,
+                                               pageTable, tapAtlasUv))
+                    tapAtlasUv = centerAtlasUv;
+                filteredShadow += 1.0 - shadowMap.SampleCmpLevelZero(
+                    tapAtlasUv, currentDepth - bias);
+            }
+        }
+        return filteredShadow * 0.25;
+    }
+
+    // Levels 0 and 1 use a 3x3 tent. Usually every tap is in the centre
+    // page, so resolve that page once and offset directly in atlas space.
+    // Only a one-texel border needs the virtual-page slow path.
+    static const float kernel[3] = {1.0, 2.0, 1.0};
+    const bool kernelFitsCenterPage = all(localPixel >= uint2(1, 1)) &&
+                                      all(localPixel < uint2(PAGE_RESOLUTION - 1,
+                                                              PAGE_RESOLUTION - 1));
     float filteredShadow = 0.0;
     float totalWeight = 0.0;
-    const float2 virtualPixel = uv * float(VIRTUAL_RESOLUTION);
     [unroll]
-    for (int y = -2; y <= 2; ++y)
+    for (int y = -1; y <= 1; ++y)
     {
         [unroll]
-        for (int x = -2; x <= 2; ++x)
+        for (int x = -1; x <= 1; ++x)
         {
             float2 tapAtlasUv;
-            // Outside the resident clip region, replicate the centre sample
-            // instead of accidentally reading an unrelated atlas tile.
-            if (!virtualShadowAtlasUv(virtualPixel + float2(x, y), level,
-                                      pageTable, tapAtlasUv))
-                tapAtlasUv = centerAtlasUv;
-            const float weight = kernel[x + 2] * kernel[y + 2];
+            if (kernelFitsCenterPage)
+            {
+                tapAtlasUv = centerAtlasUv + float2(x, y) / atlasResolution;
+            }
+            else
+            {
+                // Outside the resident clip region, replicate the centre sample
+                // instead of accidentally reading an unrelated atlas tile.
+                if (!virtualShadowAtlasUv(virtualPixel + float2(x, y), level,
+                                          pageTable, tapAtlasUv))
+                    tapAtlasUv = centerAtlasUv;
+            }
+            const float weight = kernel[x + 1] * kernel[y + 1];
             filteredShadow += (1.0 - shadowMap.SampleCmpLevelZero(
                 tapAtlasUv, currentDepth - bias)) * weight;
             totalWeight += weight;

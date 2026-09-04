@@ -5,11 +5,20 @@ import Culling.CullingTypes;
 [[vk::binding(2, 0)]] RWStructuredBuffer<uint> drawCounts;
 [[vk::binding(3, 0)]] Sampler2D hiZTexture;
 [[vk::binding(4, 0)]] ConstantBuffer<CullingUniformData> culling;
+// Shadow culling uses these bindings to build one compact caster list per
+// clip level, then consumes the relevant list for each virtual page.
+[[vk::binding(5, 0)]] RWStructuredBuffer<uint> candidateObjectIndices;
+[[vk::binding(6, 0)]] RWStructuredBuffer<uint> candidateCounts;
 
 struct CullingPushConstants
 {
     float4x4 viewProjectionOverride;
     uint drawSlot;
+    uint sourceCount;
+    uint candidateLevel;
+    // 0: direct object input, 1: emit clip-level candidates,
+    // 2: consume the candidate list for a virtual-shadow page.
+    uint mode;
 };
 
 [[vk::push_constant]] ConstantBuffer<CullingPushConstants> pushConstants;
@@ -37,6 +46,14 @@ void appendDraw(CullingObjectData objectData)
     command.vertexOffset = int(objectData.vertexOffset);
     command.firstInstance = objectData.firstInstance;
     commands[pushConstants.drawSlot * culling.maxDrawCount + destinationIndex] = command;
+}
+
+void appendCandidate(uint objectIndex)
+{
+    uint destinationIndex;
+    InterlockedAdd(candidateCounts[pushConstants.candidateLevel], 1, destinationIndex);
+    if (destinationIndex < culling.maxDrawCount)
+        candidateObjectIndices[pushConstants.candidateLevel * culling.maxDrawCount + destinationIndex] = objectIndex;
 }
 
 bool outsideFrustum(float4 clipPositions[8])
@@ -127,7 +144,16 @@ bool occlusionTest(float4 clipPositions[8])
 [shader("compute")]
 void main(uint3 dispatchThreadId : SV_DispatchThreadID)
 {
-    uint objectIndex = dispatchThreadId.x;
+    const uint sourceIndex = dispatchThreadId.x;
+    uint sourceCount = pushConstants.sourceCount;
+    if (pushConstants.mode == 2)
+        sourceCount = min(sourceCount, candidateCounts[pushConstants.candidateLevel]);
+    if (sourceIndex >= sourceCount)
+        return;
+
+    const uint objectIndex = pushConstants.mode == 2
+        ? candidateObjectIndices[pushConstants.candidateLevel * culling.maxDrawCount + sourceIndex]
+        : sourceIndex;
     if (objectIndex >= culling.objectCount)
         return;
 
@@ -138,7 +164,10 @@ void main(uint3 dispatchThreadId : SV_DispatchThreadID)
         return;
     if (culling.enableFrustumCulling == 0)
     {
-        appendDraw(objectData);
+        if (pushConstants.mode == 1)
+            appendCandidate(objectIndex);
+        else
+            appendDraw(objectData);
         return;
     }
 
@@ -170,5 +199,10 @@ void main(uint3 dispatchThreadId : SV_DispatchThreadID)
     if (objectData.instanceCount > 1 && culling.enableOcclusionCulling != 0 && culling.cameraCut == 0)
         occluded = occlusionTest(clipPositions);
     if (!occluded)
-        appendDraw(objectData);
+    {
+        if (pushConstants.mode == 1)
+            appendCandidate(objectIndex);
+        else
+            appendDraw(objectData);
+    }
 }

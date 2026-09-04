@@ -546,7 +546,8 @@
             for (std::size_t cluster = 0; cluster < sceneGpu.grassClusters.size(); ++cluster) {
                 const Entity owner = sceneGpu.grassClusterEntities[cluster];
                 const auto material = grassMaterialOffsets.find(owner);
-                if (material == grassMaterialOffsets.end()) continue;
+                if (material == grassMaterialOffsets.end()) { continue;
+}
                 sceneGpu.grassClusters[cluster].instanceRange.z = material->second;
             }
             updateRenderableBuffers();
@@ -674,7 +675,8 @@
         void collectGPUSceneDatabaseChanges() {
             const GPUSceneDatabase::DirtyRanges& dirty = sceneGpu.database.dirty();
             if (dirty.instances.empty() && dirty.meshes.empty() && dirty.materials.empty() &&
-                dirty.removedInstances.empty()) return;
+                dirty.removedInstances.empty()) { return;
+}
             for (auto& pending : sceneGpu.pendingDatabaseUploads) {
                 appendPendingIds(pending.instances, dirty.instances);
                 appendPendingIds(pending.meshes, dirty.meshes);
@@ -722,7 +724,8 @@
         void uploadPendingGPUSceneDatabase(const std::uint32_t frame) {
             if (gpuSceneInstanceBuffers[frame].handle() == VK_NULL_HANDLE ||
                 gpuSceneMeshBuffers[frame].handle() == VK_NULL_HANDLE ||
-                gpuSceneMaterialBuffers[frame].handle() == VK_NULL_HANDLE) return;
+                gpuSceneMaterialBuffers[frame].handle() == VK_NULL_HANDLE) { return;
+}
             collectGPUSceneDatabaseChanges();
             auto& pending = sceneGpu.pendingDatabaseUploads[frame];
             const auto& instances = sceneGpu.database.instances();
@@ -867,7 +870,8 @@
                 lastTerrainGrassRevision != std::numeric_limits<std::uint64_t>::max() &&
                 lastParentRevision != std::numeric_limits<std::uint64_t>::max();
             const auto appendDirtyShadowBounds = [&](const AABB& bounds) {
-                if (!shadowCacheCanContainGeometry) return;
+                if (!shadowCacheCanContainGeometry) { return;
+}
                 Culling::GPUObjectData object{};
                 object.localAabbMin = {bounds.min.x(), bounds.min.y(), bounds.min.z(), 0.0F};
                 object.localAabbMax = {bounds.max.x(), bounds.max.y(), bounds.max.z(), 0.0F};
@@ -946,7 +950,8 @@
                 constexpr float epsilon = 1.0e-5F;
                 for (glm::length_t column = 0; column < 4; ++column) {
                     for (glm::length_t row = 0; row < 4; ++row) {
-                        if (std::abs(left[column][row] - right[column][row]) > epsilon) return false;
+                        if (std::abs(left[column][row] - right[column][row]) > epsilon) { return false;
+}
                     }
                 }
                 return true;

@@ -697,6 +697,18 @@ void ShadowPass::record(const VkCommandBuffer commandBuffer,
     // Compute all page-specific indirect lists before the render pass:
     // dispatches, fills and their barriers are invalid inside a render pass.
     if (objectCount != 0) {
+        std::array<bool, ShadowMap::ClipLevelCount> activeLevels{};
+        for (const std::uint32_t physical : pagesToRender_)
+            activeLevels[physicalPages_[physical].level] = true;
+
+        // Cull the full caster set once per clip level. Page culling below
+        // consumes only this compact list instead of scanning every caster.
+        for (std::uint32_t level = 0; level < ShadowMap::ClipLevelCount; ++level) {
+            if (activeLevels[level])
+                cullingPass.recordCandidates(commandBuffer, objectCount,
+                                             clipMatrices[level], level);
+        }
+        cullingPass.prepareCandidateReads(commandBuffer);
         for (std::size_t pageIndex = 0; pageIndex < pagesToRender_.size(); ++pageIndex) {
             const PhysicalPage& page = physicalPages_[pagesToRender_[pageIndex]];
             glm::mat4 pageTransform{1.0F};
@@ -707,8 +719,8 @@ void ShadowPass::record(const VkCommandBuffer commandBuffer,
             pageTransform[3][1] = static_cast<float>(ShadowMap::VirtualPagesPerAxis) -
                                   2.0F * static_cast<float>(page.virtualY) - 1.0F;
             const Mat4 pageMatrix{pageTransform * clipMatrices[page.level].native()};
-            cullingPass.record(commandBuffer, objectCount, &pageMatrix,
-                               static_cast<std::uint32_t>(pageIndex));
+            cullingPass.recordCandidatesForPage(commandBuffer, objectCount, pageMatrix,
+                                                static_cast<std::uint32_t>(pageIndex), page.level);
         }
     }
 

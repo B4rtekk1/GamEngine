@@ -41,7 +41,8 @@ namespace Engine::Culling
             VkDescriptorSet descriptorSet,
             VkBuffer indirectBuffer,
             VkBuffer drawCountBuffer,
-            std::uint32_t maxDrawCount
+            std::uint32_t maxDrawCount,
+            VkBuffer candidateCountBuffer = VK_NULL_HANDLE
         );
 
         /**
@@ -55,6 +56,18 @@ namespace Engine::Culling
             const Mat4* viewProjectionOverride = nullptr,
             std::uint32_t drawSlot = 0
         ) const;
+
+        /// Builds the caster-ID list for one shadow clip level.
+        void recordCandidates(VkCommandBuffer commandBuffer, std::uint32_t objectCount,
+                              const Mat4& clipMatrix, std::uint32_t clipLevel) const;
+
+        /// Makes all clip-level candidate streams visible to page-culling dispatches.
+        void prepareCandidateReads(VkCommandBuffer commandBuffer) const;
+
+        /// Culls one virtual page using the candidate list of @p clipLevel.
+        void recordCandidatesForPage(VkCommandBuffer commandBuffer, std::uint32_t objectCount,
+                                     const Mat4& pageMatrix, std::uint32_t drawSlot,
+                                     std::uint32_t clipLevel) const;
 
         /** @brief Returns the generated indirect draw-command buffer. */
         [[nodiscard]] VkBuffer indirectBuffer() const noexcept
@@ -83,6 +96,7 @@ namespace Engine::Culling
 
         VkBuffer m_indirectBuffer{VK_NULL_HANDLE};
         VkBuffer m_drawCountBuffer{VK_NULL_HANDLE};
+        VkBuffer m_candidateCountBuffer{VK_NULL_HANDLE};
 
         std::uint32_t m_maxDrawCount{0};
     };
