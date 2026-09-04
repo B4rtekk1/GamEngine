@@ -350,7 +350,24 @@
             if (!sceneGpu.grassInstances.empty() && cameraController.camera()) {
                 auto& lists = grassRenderLists[currentFrame];
                 const auto camera = cameraController.camera();
-                const GrassPackedCullUniformData cullData{camera->projectionMatrix().native() * camera->viewMatrix().native(), glm::vec4{camera->position().native(), 1.0F}, static_cast<uint32_t>(sceneGpu.grassClusters.size())};
+                GrassPackedCullUniformData cullData{};
+                cullData.viewProjection = camera->projectionMatrix().native() * camera->viewMatrix().native();
+                cullData.cameraPosition = glm::vec4{camera->position().native(), 1.0F};
+                cullData.clusterCount = static_cast<uint32_t>(sceneGpu.grassClusters.size());
+                // Shaders use row-vector multiplication, so clip-space plane
+                // coefficients live in matrix columns. Vulkan depth is [0,w].
+                const auto setGrassFrustumPlanes = [](GrassPackedCullUniformData& data) {
+                    const glm::mat4& matrix = data.viewProjection;
+                    const std::array<glm::vec4, 6> rawPlanes{
+                        matrix[3] + matrix[0], matrix[3] - matrix[0],
+                        matrix[3] + matrix[1], matrix[3] - matrix[1],
+                        matrix[2],             matrix[3] - matrix[2]};
+                    for (std::size_t index = 0; index < rawPlanes.size(); ++index) {
+                        const float normalLength = glm::length(glm::vec3{rawPlanes[index]});
+                        data.frustumPlanes[index] = rawPlanes[index] / normalLength;
+                    }
+                };
+                setGrassFrustumPlanes(cullData);
                 grassPackedCullUniformBuffers[currentFrame].update(&cullData, sizeof(cullData));
                 const GrassClassifyUniformData classifyData{120.0F, 180.0F, 120.0F, 0.0F, glm::vec4{camera->position().native(), 1.0F}};
                 grassClassifyUniformBuffers[currentFrame].update(&classifyData, sizeof(classifyData));
@@ -400,7 +417,22 @@
                 Camera sceneCamera{Degrees{60.0F}, aspect, 0.1F, 1000.0F};
                 sceneCamera.setPosition(cameraController.editorPosition());
                 sceneCamera.setRotation(Degrees{cameraController.editorYaw()}, Degrees{cameraController.editorPitch()});
-                const GrassPackedCullUniformData cullData{sceneCamera.projectionMatrix().native() * sceneCamera.viewMatrix().native(), glm::vec4{sceneCamera.position().native(), 1.0F}, static_cast<uint32_t>(sceneGpu.grassClusters.size())};
+                GrassPackedCullUniformData cullData{};
+                cullData.viewProjection = sceneCamera.projectionMatrix().native() * sceneCamera.viewMatrix().native();
+                cullData.cameraPosition = glm::vec4{sceneCamera.position().native(), 1.0F};
+                cullData.clusterCount = static_cast<uint32_t>(sceneGpu.grassClusters.size());
+                const auto setGrassFrustumPlanes = [](GrassPackedCullUniformData& data) {
+                    const glm::mat4& matrix = data.viewProjection;
+                    const std::array<glm::vec4, 6> rawPlanes{
+                        matrix[3] + matrix[0], matrix[3] - matrix[0],
+                        matrix[3] + matrix[1], matrix[3] - matrix[1],
+                        matrix[2],             matrix[3] - matrix[2]};
+                    for (std::size_t index = 0; index < rawPlanes.size(); ++index) {
+                        const float normalLength = glm::length(glm::vec3{rawPlanes[index]});
+                        data.frustumPlanes[index] = rawPlanes[index] / normalLength;
+                    }
+                };
+                setGrassFrustumPlanes(cullData);
                 sceneGrassPackedCullUniformBuffers[currentFrame].update(&cullData, sizeof(cullData));
                 const GrassClassifyUniformData classifyData{120.0F, 180.0F, 120.0F, 0.0F, glm::vec4{sceneCamera.position().native(), 1.0F}};
                 sceneGrassClassifyUniformBuffers[currentFrame].update(&classifyData, sizeof(classifyData));

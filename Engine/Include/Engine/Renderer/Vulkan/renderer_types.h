@@ -111,6 +111,8 @@ namespace Engine {
     struct alignas(16) GrassPackedCullUniformData {
         glm::mat4 viewProjection{1.0F};
         glm::vec4 cameraPosition{};
+        // Normalized, inward-facing left/right/bottom/top/near/far planes.
+        std::array<glm::vec4, 6> frustumPlanes{};
         std::uint32_t clusterCount{};
         std::uint32_t padding0{};
         std::uint32_t padding1{};

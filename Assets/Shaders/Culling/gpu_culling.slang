@@ -23,10 +23,19 @@ struct CullingPushConstants
 
 [[vk::push_constant]] ConstantBuffer<CullingPushConstants> pushConstants;
 
-void appendDraw(CullingObjectData objectData)
+void appendDraw(bool visible, CullingObjectData objectData)
 {
-    uint destinationIndex;
-    InterlockedAdd(drawCounts[pushConstants.drawSlot], 1, destinationIndex);
+    // Reserve one contiguous range per wave.  Calling this from every active
+    // lane is important: wave operations must not be nested in divergent flow.
+    const uint visibleInWave = WaveActiveCountBits(visible);
+    uint waveBase = 0;
+    if (WaveIsFirstLane() && visibleInWave != 0)
+        InterlockedAdd(drawCounts[pushConstants.drawSlot], visibleInWave, waveBase);
+    waveBase = WaveReadLaneFirst(waveBase);
+    if (!visible)
+        return;
+
+    const uint destinationIndex = waveBase + WavePrefixCountBits(visible);
     if (destinationIndex >= culling.maxDrawCount)
         return;
 
@@ -48,10 +57,17 @@ void appendDraw(CullingObjectData objectData)
     commands[pushConstants.drawSlot * culling.maxDrawCount + destinationIndex] = command;
 }
 
-void appendCandidate(uint objectIndex)
+void appendCandidate(bool visible, uint objectIndex)
 {
-    uint destinationIndex;
-    InterlockedAdd(candidateCounts[pushConstants.candidateLevel], 1, destinationIndex);
+    const uint visibleInWave = WaveActiveCountBits(visible);
+    uint waveBase = 0;
+    if (WaveIsFirstLane() && visibleInWave != 0)
+        InterlockedAdd(candidateCounts[pushConstants.candidateLevel], visibleInWave, waveBase);
+    waveBase = WaveReadLaneFirst(waveBase);
+    if (!visible)
+        return;
+
+    const uint destinationIndex = waveBase + WavePrefixCountBits(visible);
     if (destinationIndex < culling.maxDrawCount)
         candidateObjectIndices[pushConstants.candidateLevel * culling.maxDrawCount + destinationIndex] = objectIndex;
 }
@@ -148,28 +164,23 @@ void main(uint3 dispatchThreadId : SV_DispatchThreadID)
     uint sourceCount = pushConstants.sourceCount;
     if (pushConstants.mode == 2)
         sourceCount = min(sourceCount, candidateCounts[pushConstants.candidateLevel]);
-    if (sourceIndex >= sourceCount)
-        return;
+    bool visible = false;
+    uint objectIndex = 0;
+    CullingObjectData objectData = (CullingObjectData)0;
 
-    const uint objectIndex = pushConstants.mode == 2
-        ? candidateObjectIndices[pushConstants.candidateLevel * culling.maxDrawCount + sourceIndex]
-        : sourceIndex;
-    if (objectIndex >= culling.objectCount)
-        return;
-
-    CullingObjectData objectData = objects[objectIndex];
-    if (culling.shadowPass != 0 && objectData.castShadow == 0)
-        return;
-    if (culling.drawCategory != 2 && objectData.twoSided != culling.drawCategory)
-        return;
-    if (culling.enableFrustumCulling == 0)
-    {
-        if (pushConstants.mode == 1)
-            appendCandidate(objectIndex);
-        else
-            appendDraw(objectData);
-        return;
+    if (sourceIndex < sourceCount) {
+        objectIndex = pushConstants.mode == 2
+            ? candidateObjectIndices[pushConstants.candidateLevel * culling.maxDrawCount + sourceIndex]
+            : sourceIndex;
+        if (objectIndex < culling.objectCount) {
+            objectData = objects[objectIndex];
+            visible = !(culling.shadowPass != 0 && objectData.castShadow == 0) &&
+                      !(culling.drawCategory != 2 && objectData.twoSided != culling.drawCategory);
+        }
     }
+
+    if (visible && culling.enableFrustumCulling != 0)
+    {
 
     // A fixed centimetre-scale padding is insufficient for large, rotated
     // meshes at the frustum edge (for example ramps).  Keep culling
@@ -189,20 +200,22 @@ void main(uint3 dispatchThreadId : SV_DispatchThreadID)
     }
 
     if (outsideFrustum(clipPositions))
-        return;
+        visible = false;
 
     bool occluded = false;
     // Single-instance static meshes receive little benefit from Hi-Z, while
     // their small projected rectangles are the most susceptible to false
     // occlusion (notably ramps viewed at shallow angles).  Keep frustum
     // culling, but reserve Hi-Z for batched geometry.
-    if (objectData.instanceCount > 1 && culling.enableOcclusionCulling != 0 && culling.cameraCut == 0)
+    if (visible && objectData.instanceCount > 1 && culling.enableOcclusionCulling != 0 && culling.cameraCut == 0)
         occluded = occlusionTest(clipPositions);
-    if (!occluded)
-    {
-        if (pushConstants.mode == 1)
-            appendCandidate(objectIndex);
-        else
-            appendDraw(objectData);
+    visible = visible && !occluded;
     }
+
+    // mode is a dispatch-wide push constant, hence every active lane enters
+    // exactly one compaction routine and its wave operations stay uniform.
+    if (pushConstants.mode == 1)
+        appendCandidate(visible, objectIndex);
+    else
+        appendDraw(visible, objectData);
 }

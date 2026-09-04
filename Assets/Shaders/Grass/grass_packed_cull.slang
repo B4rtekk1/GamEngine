@@ -9,29 +9,26 @@ import Grass.GrassPackedData;
 [[vk::binding(3, 0)]] StructuredBuffer<uint> visibleClusterCount;
 [[vk::binding(4, 0)]] RWStructuredBuffer<uint> visibleInstances;
 [[vk::binding(5, 0)]] RWStructuredBuffer<uint> visibleCount;
-struct Uniforms { float4x4 viewProjection; float4 cameraPosition; uint clusterCount; uint _pad0; uint _pad1; uint _pad2; };
+struct Uniforms {
+    float4x4 viewProjection;
+    float4 cameraPosition;
+    float4 frustumPlanes[6];
+    uint clusterCount;
+    uint _pad0;
+    uint _pad1;
+    uint _pad2;
+};
 [[vk::binding(6, 0)]] ConstantBuffer<Uniforms> culling;
 
-// Returns true only when the blade's bounding sphere is fully outside one
-// frustum plane.  The offset transforms give conservative clip-space extents
-// without needing to extract and normalize world-space frustum planes.
-bool grassSphereOutsideFrustum(float3 center, float radius, float4x4 viewProjection)
+// World-space planes replace four matrix transforms per blade.
+bool grassSphereOutsideFrustum(float3 center, float radius)
 {
-    const float4 clipCenter = mul(float4(center, 1.0), viewProjection);
-    const float4 clipX = mul(float4(radius, 0.0, 0.0, 0.0), viewProjection);
-    const float4 clipY = mul(float4(0.0, radius, 0.0, 0.0), viewProjection);
-    const float4 clipZ = mul(float4(0.0, 0.0, radius, 0.0), viewProjection);
-
-    // An AABB around the sphere is deliberately used for the support values.
-    // It is slightly conservative, but cannot reject a visible blade.
-    const float4 clipExtent = abs(clipX) + abs(clipY) + abs(clipZ);
-    return
-        clipCenter.x + clipCenter.w < -(clipExtent.x + clipExtent.w) ||
-        clipCenter.w - clipCenter.x < -(clipExtent.w + clipExtent.x) ||
-        clipCenter.y + clipCenter.w < -(clipExtent.y + clipExtent.w) ||
-        clipCenter.w - clipCenter.y < -(clipExtent.w + clipExtent.y) ||
-        clipCenter.z < -clipExtent.z ||
-        clipCenter.w - clipCenter.z < -(clipExtent.w + clipExtent.z);
+    for (uint planeIndex = 0; planeIndex < 6; ++planeIndex) {
+        const float4 plane = culling.frustumPlanes[planeIndex];
+        if (dot(plane.xyz, center) + plane.w < -radius)
+            return true;
+    }
+    return false;
 }
 
 [numthreads(64, 1, 1)]
@@ -39,7 +36,9 @@ bool grassSphereOutsideFrustum(float3 center, float radius, float4x4 viewProject
 void main(uint3 id : SV_DispatchThreadID, uint3 group : SV_GroupID)
 {
     if (group.y >= visibleClusterCount[0]) return;
-    uint clusterId = visibleClusters[group.y];
+    uint clusterEntry = visibleClusters[group.y];
+    bool fullyInside = (clusterEntry & 0x80000000u) != 0u;
+    uint clusterId = clusterEntry & 0x7fffffffu;
     if (clusterId >= culling.clusterCount) return;
     GrassPackedCluster cluster = clusters[clusterId];
     if (id.x >= cluster.instanceRange.y) return;
@@ -47,7 +46,7 @@ void main(uint3 id : SV_DispatchThreadID, uint3 group : SV_GroupID)
     GrassPackedInstance instance = instances[instanceId];
     float3 position = grassPackedWorldPosition(instance, cluster);
     float radius = cluster.originExtent.w * grassPackedScale(instance);
-    if (grassSphereOutsideFrustum(position, radius, culling.viewProjection)) return;
+    if (!fullyInside && grassSphereOutsideFrustum(position, radius)) return;
     uint destination;
     InterlockedAdd(visibleCount[0], 1u, destination);
     visibleInstances[destination] = instanceId;
