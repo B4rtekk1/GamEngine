@@ -56,11 +56,13 @@ namespace Engine {
         const Entity parentEntity = findEntity(parent.objectId_);
         const UUID parentUuid = registry_.get<UUIDComponent>(parentEntity).value;
         if (registry_.has<ParentComponent>(childEntity)) {
-            registry_.modify<ParentComponent>(childEntity, [parentUuid](ParentComponent &link) {
-                link.parent = parentUuid;
+            registry_.modify<ParentComponent>(childEntity, [parentUuid, parentEntity](ParentComponent &link) {
+                link.parentUuid = parentUuid;
+                link.runtimeParent = parentEntity;
             });
         } else {
-            registry_.add<ParentComponent>(childEntity, ParentComponent{.parent = parentUuid});
+            registry_.add<ParentComponent>(childEntity, ParentComponent{.parentUuid = parentUuid,
+                                                                          .runtimeParent = parentEntity});
         }
     }
 
@@ -78,7 +80,7 @@ namespace Engine {
         if (child.scene_ != this || !child.valid()) return {};
         const Entity childEntity = findEntity(child.objectId_);
         if (!registry_.has<ParentComponent>(childEntity)) return {};
-        const UUID parentUuid = registry_.get<ParentComponent>(childEntity).parent;
+        const UUID parentUuid = registry_.get<ParentComponent>(childEntity).parentUuid;
         for (const auto &object : objects_) {
             const Entity entity = object->entity();
             if (registry_.has<UUIDComponent>(entity) &&
@@ -97,7 +99,7 @@ namespace Engine {
         for (const auto &object : objects_) {
             const Entity entity = object->entity();
             if (registry_.has<ParentComponent>(entity) &&
-                registry_.get<ParentComponent>(entity).parent == parentUuid) {
+                registry_.get<ParentComponent>(entity).parentUuid == parentUuid) {
                 result.push_back(Actor{const_cast<Scene &>(*this), object->objectId()});
             }
         }

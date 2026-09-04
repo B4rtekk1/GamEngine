@@ -140,7 +140,7 @@
                 });
                 Entity current = activeCamera;
                 while (readRegistry.has<ParentComponent>(current)) {
-                    const UUID parentUuid = readRegistry.get<ParentComponent>(current).parent;
+                    const UUID parentUuid = readRegistry.get<ParentComponent>(current).parentUuid;
                     const auto parent = entitiesByUuid.find(parentUuid);
                     if (parent == entitiesByUuid.end() || !readRegistry.has<Transform>(parent->second)) break;
                     current = parent->second;

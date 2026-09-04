@@ -23,9 +23,10 @@ namespace Engine {
         UUID value{NullUUID};
     };
 
-    /** Optional link to the UUID of this object's parent. */
+    /** Persistent UUID plus runtime-only resolved parent entity. */
     struct ParentComponent final {
-        UUID parent{NullUUID};
+        UUID parentUuid{NullUUID};
+        Entity runtimeParent{NullEntity};
     };
 
     /** Display position among objects with the same parent in the editor hierarchy. */

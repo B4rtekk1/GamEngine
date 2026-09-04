@@ -56,7 +56,7 @@ void PlayerController::onUpdate(const float deltaTime) {
                           Engine::Input::mouseDelta().x() * MouseSensitivity;
             Engine::Entity current = entity;
             while (registry().has<Engine::ParentComponent>(current)) {
-                const Engine::UUID parentUuid = registry().get<Engine::ParentComponent>(current).parent;
+                const Engine::UUID parentUuid = registry().get<Engine::ParentComponent>(current).parentUuid;
                 const auto parent = entitiesByUuid.find(parentUuid);
                 if (parent == entitiesByUuid.end() || !registry().has<Engine::Transform>(parent->second)) break;
                 current = parent->second;

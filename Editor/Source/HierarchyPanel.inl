@@ -41,7 +41,7 @@ Engine::Entity HierarchyPanel::draw(Engine::ScenePreset &scene, Engine::Assets::
                     scene.editor().valid(parent) && scene.editor().valid(clicked) &&
                     scene.editor().has<Engine::UUIDComponent>(parent)) {
                     const Engine::ParentComponent link{
-                        .parent = scene.editor().get<Engine::UUIDComponent>(parent).value
+                        .parentUuid = scene.editor().get<Engine::UUIDComponent>(parent).value
                     };
                     if (scene.editor().has<Engine::ParentComponent>(clicked)) {
                         scene.editor().modify<Engine::ParentComponent>(
@@ -139,7 +139,7 @@ Engine::Entity HierarchyPanel::draw(Engine::ScenePreset &scene, Engine::Assets::
         std::vector<Engine::Entity> roots;
         for (const Engine::Entity entity: entities) {
             if (scene.editor().has<Engine::ParentComponent>(entity)) {
-                const Engine::UUID parent = scene.editor().get<Engine::ParentComponent>(entity).parent;
+                const Engine::UUID parent = scene.editor().get<Engine::ParentComponent>(entity).parentUuid;
                 if (const auto found = byUuid.find(parent); found != byUuid.end()) {
                     children[found->second].push_back(entity);
                     continue;
@@ -285,12 +285,12 @@ Engine::Entity HierarchyPanel::draw(Engine::ScenePreset &scene, Engine::Assets::
                     break;
                 }
                 if (!scene.editor().has<Engine::ParentComponent>(ancestor)) break;
-                const Engine::UUID parentUuid = scene.editor().get<Engine::ParentComponent>(ancestor).parent;
+                const Engine::UUID parentUuid = scene.editor().get<Engine::ParentComponent>(ancestor).parentUuid;
                 const auto found = byUuid.find(parentUuid);
                 ancestor = found == byUuid.end() ? Engine::NullEntity : found->second;
             }
             if (!createsCycle) {
-                const Engine::ParentComponent link{.parent =
+                const Engine::ParentComponent link{.parentUuid =
                     scene.editor().get<Engine::UUIDComponent>(hierarchyDropParent).value};
                 if (scene.editor().has<Engine::ParentComponent>(droppedHierarchyEntity)) {
                     scene.editor().modify<Engine::ParentComponent>(

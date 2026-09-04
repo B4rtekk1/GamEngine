@@ -384,12 +384,14 @@ TEST(Scene, CachesWorldTransformsAcrossParentChildHierarchy) {
     parent.setPosition({10.0F, 0.0F, 0.0F});
     child.setPosition({2.0F, 3.0F, 4.0F});
 
+    scene.updateTransforms();
     const glm::vec3 firstPosition{scene.worldMatrix(child).native()[3]};
     EXPECT_FLOAT_EQ(firstPosition.x, 12.0F);
     EXPECT_FLOAT_EQ(firstPosition.y, 3.0F);
     EXPECT_FLOAT_EQ(firstPosition.z, 4.0F);
 
     parent.setPosition({20.0F, 1.0F, 0.0F});
+    scene.updateTransforms();
     const glm::vec3 secondPosition{scene.worldMatrix(child).native()[3]};
     EXPECT_FLOAT_EQ(secondPosition.x, 22.0F);
     EXPECT_FLOAT_EQ(secondPosition.y, 4.0F);
@@ -421,7 +423,7 @@ TEST(SceneSerializer, RoundTripsParentRelationshipAndHierarchyOrder) {
     const auto loadedParentEntity = loaded.findEntity(loadedParent.id());
     const auto loadedChildEntity = loaded.findEntity(loadedChild.id());
     auto loadedEditor = loaded.editor();
-    EXPECT_EQ(loadedEditor.get<Engine::ParentComponent>(loadedChildEntity).parent,
+    EXPECT_EQ(loadedEditor.get<Engine::ParentComponent>(loadedChildEntity).parentUuid,
               loadedEditor.get<Engine::UUIDComponent>(loadedParentEntity).value);
     EXPECT_EQ(loadedEditor.get<Engine::HierarchyOrderComponent>(loadedChildEntity).value, 7u);
 }

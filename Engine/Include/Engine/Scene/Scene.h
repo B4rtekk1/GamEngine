@@ -249,7 +249,7 @@ namespace Engine {
         }
 
         /** Updates the hierarchy's cached world transforms. */
-        void updateTransforms() { TransformSystem::update(registry_); }
+        void updateTransforms() { TransformSystem::updateDirty(registry_); }
 
         /**
          * Makes @p entity the sole enabled directional light in this scene.

@@ -7,13 +7,16 @@ namespace Engine {
     /** Resolves local ParentComponent transforms into cached world matrices. */
     class TransformSystem final {
     public:
-        /** Updates dirty world transforms in parent-before-child order. */
-        static void update(Registry &registry);
+        /** Updates only changed transforms and their descendants, parent first. */
+        static void updateDirty(Registry &registry);
 
-        /** Returns an entity's cached world matrix, updating the hierarchy first. */
-        [[nodiscard]] static const Mat4 &worldMatrix(Registry &registry, Entity entity);
+        /** Compatibility name for updateDirty(). */
+        static void update(Registry &registry) { updateDirty(registry); }
 
-        /** Returns the world-space TRS approximation used by systems such as PhysX. */
-        [[nodiscard]] static Transform worldTransform(Registry &registry, Entity entity);
+        /** Returns an entity's cached world matrix in O(1); call update first. */
+        [[nodiscard]] static const Mat4 &worldMatrix(const Registry &registry, Entity entity);
+
+        /** Returns cached world-space TRS in O(1); call update first. */
+        [[nodiscard]] static Transform worldTransform(const Registry &registry, Entity entity);
     };
 } // namespace Engine

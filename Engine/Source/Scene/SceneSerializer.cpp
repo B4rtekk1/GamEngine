@@ -824,7 +824,7 @@ namespace Engine {
                                          : "Entity " + std::to_string(entityIndex(entity));
             serialized << "IDENTITY " << uuid << ' ' << std::quoted(name) << '\n';
             if (registry.has<ParentComponent>(entity)) {
-                serialized << "PARENT " << registry.get<ParentComponent>(entity).parent << '\n';
+                serialized << "PARENT " << registry.get<ParentComponent>(entity).parentUuid << '\n';
             }
             if (registry.has<HierarchyOrderComponent>(entity)) {
                 serialized << "HIERARCHY_ORDER "
@@ -1176,7 +1176,7 @@ namespace Engine {
                     if (parent == NullUUID) {
                         invalidScene("parent UUID cannot be zero");
                     }
-                    loaded.add<ParentComponent>(entity, ParentComponent{.parent = parent});
+                    loaded.add<ParentComponent>(entity, ParentComponent{.parentUuid = parent});
                     hasParent = true;
                 } else if (component == "HIERARCHY_ORDER") {
                     if (hasHierarchyOrder) {
@@ -1419,7 +1419,7 @@ namespace Engine {
                 invalidScene("object UUID is duplicated");
             }
             if (loaded.has<ParentComponent>(entity)) {
-                const UUID parent = loaded.get<ParentComponent>(entity).parent;
+                const UUID parent = loaded.get<ParentComponent>(entity).parentUuid;
                 if (parent == uuid.value) {
                     invalidScene("object cannot be its own parent");
                 }

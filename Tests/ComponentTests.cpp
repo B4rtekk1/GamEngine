@@ -118,7 +118,7 @@ TEST(IdentityComponents, GenerateAndReserveMonotonicUniqueIdentifiers) {
     EXPECT_GT(Engine::createUUID(), second + 100);
     const Engine::NameComponent name;
     EXPECT_EQ(name.value, "GameObject");
-    EXPECT_EQ(Engine::ParentComponent{}.parent, Engine::NullUUID);
+    EXPECT_EQ(Engine::ParentComponent{}.parentUuid, Engine::NullUUID);
 }
 
 TEST(TextComponent, IsRenderableOnlyWithVisibleNonEmptyPositiveLayout) {

@@ -858,7 +858,7 @@ namespace Engine {
         }
         BroadPhaseCache &runtime = *broadPhaseCache_;
         Registry &registry = scene.registry();
-        TransformSystem::update(registry);
+        TransformSystem::updateDirty(registry);
         runtime.ensureWorld(registry);
         runtime.physicsScene->setGravity(toPhysX(gravity_));
         runtime.pushEcsState(registry);
@@ -881,6 +881,7 @@ namespace Engine {
         }
         BroadPhaseCache &runtime = *broadPhaseCache_;
         Registry &registry = scene.registry();
+        TransformSystem::updateDirty(registry);
         runtime.ensureWorld(registry);
         runtime.pushEcsState(registry);
 
