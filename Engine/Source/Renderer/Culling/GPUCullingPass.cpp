@@ -133,6 +133,15 @@ namespace Engine::Culling
             1
         );
 
+        const VkDeviceSize indirectOffset =
+            static_cast<VkDeviceSize>(drawSlot) * m_maxDrawCount *
+            sizeof(VkDrawIndexedIndirectCommand);
+        const VkDeviceSize indirectSize =
+            static_cast<VkDeviceSize>(m_maxDrawCount) *
+            sizeof(VkDrawIndexedIndirectCommand);
+        const VkDeviceSize drawCountOffset =
+            static_cast<VkDeviceSize>(drawSlot) * sizeof(std::uint32_t);
+
         VkBufferMemoryBarrier2 barriers[2]{
             {
                 .sType =
@@ -146,8 +155,8 @@ namespace Engine::Culling
                 .dstAccessMask =
                     VK_ACCESS_2_INDIRECT_COMMAND_READ_BIT,
                 .buffer = m_indirectBuffer,
-            .offset = sizeof(std::uint32_t) * drawSlot,
-                .size = VK_WHOLE_SIZE
+                .offset = indirectOffset,
+                .size = indirectSize
             },
             {
                 .sType =
@@ -161,7 +170,7 @@ namespace Engine::Culling
                 .dstAccessMask =
                     VK_ACCESS_2_INDIRECT_COMMAND_READ_BIT,
                 .buffer = m_drawCountBuffer,
-                .offset = 0,
+                .offset = drawCountOffset,
                 .size = sizeof(std::uint32_t)
             }
         };
