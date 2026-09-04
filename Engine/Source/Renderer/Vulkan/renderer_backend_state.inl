@@ -118,7 +118,20 @@
         // Dedicated command streams. They must never alias generic object
         // indirect buffers: each stream is consumed by a grass-only shader.
         struct GrassRenderLists final {
+            // Output of packed-grass frustum culling, before pass-specific
+            // distance classification.
             Buffer visibleInstances;
+            Buffer visibleCount;
+            // The three streams consumed by the later main/shadow/velocity
+            // command builders.  They intentionally do not alias.
+            Buffer mainVisibleInstances;
+            Buffer shadowVisibleInstances;
+            Buffer velocityVisibleInstances;
+            Buffer classifyCounts;
+            std::array<Buffer, 3> binCounts;
+            std::array<Buffer, 3> binOffsets;
+            std::array<Buffer, 3> binCursors;
+            std::array<Buffer, 3> drawInstances;
             Buffer mainIndirect;
             Buffer mainDrawCount;
             Buffer shadowIndirect;
@@ -129,6 +142,9 @@
         std::array<GrassRenderLists, MAX_FRAMES_IN_FLIGHT> grassRenderLists;
         std::array<Buffer, MAX_FRAMES_IN_FLIGHT> grassIndirectUniformBuffers;
         std::array<Buffer, MAX_FRAMES_IN_FLIGHT> grassPrefixUniformBuffers;
+        std::array<Buffer, MAX_FRAMES_IN_FLIGHT> grassClassifyUniformBuffers;
+        std::array<Buffer, MAX_FRAMES_IN_FLIGHT> grassPackedCullUniformBuffers;
+        std::array<std::array<Buffer, 3>, MAX_FRAMES_IN_FLIGHT> grassPackedStreamUniformBuffers;
         std::array<Buffer, MAX_FRAMES_IN_FLIGHT> uniformBuffers;
         std::array<Buffer, MAX_FRAMES_IN_FLIGHT> sceneUniformBuffers;
         std::array<Buffer, MAX_FRAMES_IN_FLIGHT> cullingObjectBuffers;
@@ -169,6 +185,11 @@
         VkDescriptorSetLayout grassPrefixDescriptorSetLayout = VK_NULL_HANDLE;
         VkDescriptorSetLayout grassScatterDescriptorSetLayout = VK_NULL_HANDLE;
         VkDescriptorSetLayout grassFinalizeDescriptorSetLayout = VK_NULL_HANDLE;
+        VkDescriptorSetLayout grassPackedCullDescriptorSetLayout = VK_NULL_HANDLE;
+        VkDescriptorSetLayout grassClassifyDescriptorSetLayout = VK_NULL_HANDLE;
+        VkDescriptorSetLayout grassPackedBinDescriptorSetLayout = VK_NULL_HANDLE;
+        VkDescriptorSetLayout grassPackedScatterDescriptorSetLayout = VK_NULL_HANDLE;
+        VkDescriptorSetLayout grassPackedFinalizeDescriptorSetLayout = VK_NULL_HANDLE;
         VkPipelineLayout hiZCopyPipelineLayout = VK_NULL_HANDLE;
         VkPipelineLayout hiZReducePipelineLayout = VK_NULL_HANDLE;
         VkPipelineLayout cullingPipelineLayout = VK_NULL_HANDLE;
@@ -177,6 +198,11 @@
         VkPipelineLayout grassPrefixPipelineLayout = VK_NULL_HANDLE;
         VkPipelineLayout grassScatterPipelineLayout = VK_NULL_HANDLE;
         VkPipelineLayout grassFinalizePipelineLayout = VK_NULL_HANDLE;
+        VkPipelineLayout grassPackedCullPipelineLayout = VK_NULL_HANDLE;
+        VkPipelineLayout grassClassifyPipelineLayout = VK_NULL_HANDLE;
+        VkPipelineLayout grassPackedBinPipelineLayout = VK_NULL_HANDLE;
+        VkPipelineLayout grassPackedScatterPipelineLayout = VK_NULL_HANDLE;
+        VkPipelineLayout grassPackedFinalizePipelineLayout = VK_NULL_HANDLE;
         VkPipeline hiZCopyPipeline = VK_NULL_HANDLE;
         VkPipeline hiZReducePipeline = VK_NULL_HANDLE;
         VkPipeline cullingPipeline = VK_NULL_HANDLE;
@@ -185,10 +211,22 @@
         VkPipeline grassPrefixPipeline = VK_NULL_HANDLE;
         VkPipeline grassScatterPipeline = VK_NULL_HANDLE;
         VkPipeline grassFinalizePipeline = VK_NULL_HANDLE;
+        VkPipeline grassPackedCullPipeline = VK_NULL_HANDLE;
+        VkPipeline grassClassifyPipeline = VK_NULL_HANDLE;
+        VkPipeline grassPackedBinPipeline = VK_NULL_HANDLE;
+        VkPipeline grassPackedPrefixPipeline = VK_NULL_HANDLE;
+        VkPipeline grassPackedScatterPipeline = VK_NULL_HANDLE;
+        VkPipeline grassPackedFinalizePipeline = VK_NULL_HANDLE;
         std::array<VkDescriptorSet, MAX_FRAMES_IN_FLIGHT> grassBuildSets{};
         std::array<VkDescriptorSet, MAX_FRAMES_IN_FLIGHT> grassPrefixSets{};
         std::array<VkDescriptorSet, MAX_FRAMES_IN_FLIGHT> grassScatterSets{};
         std::array<VkDescriptorSet, MAX_FRAMES_IN_FLIGHT> grassFinalizeSets{};
+        std::array<VkDescriptorSet, MAX_FRAMES_IN_FLIGHT> grassPackedCullSets{};
+        std::array<VkDescriptorSet, MAX_FRAMES_IN_FLIGHT> grassClassifySets{};
+        std::array<std::array<VkDescriptorSet, 3>, MAX_FRAMES_IN_FLIGHT> grassPackedBinSets{};
+        std::array<std::array<VkDescriptorSet, 3>, MAX_FRAMES_IN_FLIGHT> grassPackedPrefixSets{};
+        std::array<std::array<VkDescriptorSet, 3>, MAX_FRAMES_IN_FLIGHT> grassPackedScatterSets{};
+        std::array<std::array<VkDescriptorSet, 3>, MAX_FRAMES_IN_FLIGHT> grassPackedFinalizeSets{};
         std::vector<Culling::GPUObjectData> gpuObjects;
         // Old and new bounds of renderables whose shadow contribution changed
         // in this frame. ShadowPass evicts only overlapping virtual pages

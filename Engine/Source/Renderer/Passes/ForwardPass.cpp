@@ -42,6 +42,15 @@ void ForwardPass::create(VkDevice device, const VkFormat colorFormat,
     foliagePipeline_.create(device, foliageOptions);
     GraphicsPipelineOptions grassOptions = foliageOptions;
     grassOptions.shader = "shaders/grass_forward.spv";
+    // grass_forward.slang does not consume tangents. Keeping the generic
+    // mesh tangent attribute here triggers Vulkan validation at location 9.
+    grassOptions.vertexAttributes.erase(
+        std::remove_if(grassOptions.vertexAttributes.begin(),
+                       grassOptions.vertexAttributes.end(),
+                       [](const VkVertexInputAttributeDescription& attribute) {
+                           return attribute.location == 9;
+                       }),
+        grassOptions.vertexAttributes.end());
     grassPipeline_.create(device, grassOptions);
 
     GraphicsPipelineOptions outlineOptions = options;

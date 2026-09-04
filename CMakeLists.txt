@@ -272,6 +272,11 @@ set(SLANG_SHADER_SOURCES
         Assets/Shaders/Culling/hiz_reduce.slang
         Assets/Shaders/Grass/grass_generate.slang
         Assets/Shaders/Grass/grass_cull.slang
+        Assets/Shaders/Grass/grass_packed_cull.slang
+        Assets/Shaders/Grass/grass_packed_bin.slang
+        Assets/Shaders/Grass/grass_packed_prefix.slang
+        Assets/Shaders/Grass/grass_packed_scatter.slang
+        Assets/Shaders/Grass/grass_packed_finalize.slang
         Assets/Shaders/Grass/grass_classify.slang
         Assets/Shaders/Grass/grass_forward.slang
         Assets/Shaders/Grass/grass_shadow.slang

@@ -153,8 +153,10 @@ bool VulkanDevice::isSuitable(VkPhysicalDevice candidate) const {
     vkGetPhysicalDeviceFeatures2(candidate, &features2);
     if (features13.synchronization2 != VK_TRUE ||
         features12.drawIndirectCount != VK_TRUE ||
+        features12.shaderFloat16 != VK_TRUE ||
         features11.shaderDrawParameters != VK_TRUE ||
         features2.features.multiDrawIndirect != VK_TRUE ||
+        features2.features.shaderInt16 != VK_TRUE ||
         features2.features.shaderSampledImageArrayDynamicIndexing != VK_TRUE) {
         return false;
     }
@@ -262,12 +264,14 @@ void VulkanDevice::createLogicalDevice() {
     features13.synchronization2 = VK_TRUE;
     VkPhysicalDeviceVulkan12Features features12{.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES};
     features12.drawIndirectCount = VK_TRUE;
+    features12.shaderFloat16 = VK_TRUE;
     features12.pNext = &features13;
     VkPhysicalDeviceVulkan11Features features11{.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_1_FEATURES};
     features11.shaderDrawParameters = VK_TRUE;
     features11.pNext = &features12;
     VkPhysicalDeviceFeatures2 features2{.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2};
     features2.features.multiDrawIndirect = VK_TRUE;
+    features2.features.shaderInt16 = VK_TRUE;
     features2.features.shaderSampledImageArrayDynamicIndexing = VK_TRUE;
     features2.pNext = &features11;
 

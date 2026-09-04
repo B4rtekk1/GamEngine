@@ -13,6 +13,7 @@ struct GrassPackedCluster
 {
     float4 originExtent;
     uint4 instanceRange;
+    uint4 draw;
 };
 
 float grassUnorm16(uint value)

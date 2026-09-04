@@ -99,6 +99,30 @@ namespace Engine {
         std::uint32_t padding1{};
     };
 
+    /** Parameters for the packed-grass visibility and stream split passes. */
+    struct alignas(16) GrassClassifyUniformData {
+        std::uint32_t visibleCount{};
+        float mainDistance{};
+        float shadowDistance{};
+        float velocityDistance{};
+        glm::vec4 cameraPosition{};
+    };
+
+    struct alignas(16) GrassPackedCullUniformData {
+        glm::mat4 viewProjection{1.0F};
+        glm::vec4 cameraPosition{};
+        std::uint32_t instanceCount{};
+        std::uint32_t padding0{};
+        std::uint32_t padding1{};
+        std::uint32_t padding2{};
+    };
+    struct alignas(16) GrassPackedStreamUniformData {
+        std::uint32_t visibleCapacity{};
+        std::uint32_t streamIndex{};
+        std::uint32_t clusterCount{};
+        std::uint32_t padding{};
+    };
+
     /**
      * Dense-foliage instance, decoded relative to GPUGrassCluster. Keeping
      * this independent of RendererInstanceData prevents generic transform
@@ -123,6 +147,9 @@ namespace Engine {
         glm::vec4 originExtent{};
         // x: first packed instance, y: count, z: material table offset, w: flags.
         glm::uvec4 instanceRange{};
+        // firstIndex, indexCount, vertexOffset, LOD policy/flags.  Kept with
+        // the packed cluster so indirect generation never consults GPUScene.
+        glm::uvec4 draw{};
     };
-    static_assert(sizeof(GPUGrassCluster) == 32);
+    static_assert(sizeof(GPUGrassCluster) == 48);
 } // namespace Engine

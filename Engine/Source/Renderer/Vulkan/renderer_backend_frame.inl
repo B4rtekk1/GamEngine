@@ -363,6 +363,29 @@
                         : 0u);
             }
 
+            // Packed grass has an independent, fully GPU-resident command path.
+            // Each classify stream is compacted by cluster before its indirect
+            // commands are emitted, so mixed grass meshes never share a draw.
+            if (!sceneGpu.grassInstances.empty() && cameraController.camera()) {
+                auto& lists = grassRenderLists[currentFrame];
+                const auto camera = cameraController.camera();
+                const GrassPackedCullUniformData cullData{camera->projectionMatrix().native() * camera->viewMatrix().native(), glm::vec4{camera->position().native(), 1.0F}, static_cast<uint32_t>(sceneGpu.grassInstances.size())};
+                grassPackedCullUniformBuffers[currentFrame].update(&cullData, sizeof(cullData));
+                const GrassClassifyUniformData classifyData{static_cast<uint32_t>(sceneGpu.grassInstances.size()), 120.0F, 180.0F, 120.0F, glm::vec4{camera->position().native(), 1.0F}};
+                grassClassifyUniformBuffers[currentFrame].update(&classifyData, sizeof(classifyData));
+                const GrassPackedStreamUniformData streamData{static_cast<uint32_t>(sceneGpu.grassInstances.size()), 0U, static_cast<uint32_t>(sceneGpu.grassClusters.size()), 0U};
+                for (uint32_t stream = 0; stream < 3; ++stream) { auto data = streamData; data.streamIndex = stream; grassPackedStreamUniformBuffers[currentFrame][stream].update(&data, sizeof(data)); }
+                vkCmdFillBuffer(commandBuffer, lists.visibleCount.handle(), 0, VK_WHOLE_SIZE, 0);
+                vkCmdFillBuffer(commandBuffer, lists.classifyCounts.handle(), 0, VK_WHOLE_SIZE, 0);
+                for (uint32_t stream = 0; stream < 3; ++stream) { vkCmdFillBuffer(commandBuffer, lists.binCounts[stream].handle(), 0, VK_WHOLE_SIZE, 0); vkCmdFillBuffer(commandBuffer, lists.binCursors[stream].handle(), 0, VK_WHOLE_SIZE, 0); }
+                const VkMemoryBarrier2 transferToCompute{VK_STRUCTURE_TYPE_MEMORY_BARRIER_2, nullptr, VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT, VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_STORAGE_READ_BIT | VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT};
+                const VkDependencyInfo dependency{.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO, .memoryBarrierCount = 1, .pMemoryBarriers = &transferToCompute}; vkCmdPipelineBarrier2(commandBuffer, &dependency);
+                const auto dispatch = [&](VkPipeline pipeline, VkPipelineLayout layout, VkDescriptorSet set, uint32_t groups) { vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, pipeline); vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, layout, 0, 1, &set, 0, nullptr); vkCmdDispatch(commandBuffer, groups, 1, 1); const VkMemoryBarrier2 barrier{VK_STRUCTURE_TYPE_MEMORY_BARRIER_2, nullptr, VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT, VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_STORAGE_READ_BIT | VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT}; const VkDependencyInfo info{.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO, .memoryBarrierCount = 1, .pMemoryBarriers = &barrier}; vkCmdPipelineBarrier2(commandBuffer, &info); };
+                const uint32_t groups = (static_cast<uint32_t>(sceneGpu.grassInstances.size()) + 63U) / 64U;
+                dispatch(grassPackedCullPipeline, grassPackedCullPipelineLayout, grassPackedCullSets[currentFrame], groups);
+                dispatch(grassClassifyPipeline, grassClassifyPipelineLayout, grassClassifySets[currentFrame], groups);
+                for (uint32_t stream = 0; stream < 3; ++stream) { dispatch(grassPackedBinPipeline, grassPackedBinPipelineLayout, grassPackedBinSets[currentFrame][stream], groups); dispatch(grassPackedPrefixPipeline, grassPrefixPipelineLayout, grassPackedPrefixSets[currentFrame][stream], 1); dispatch(grassPackedScatterPipeline, grassPackedScatterPipelineLayout, grassPackedScatterSets[currentFrame][stream], groups); dispatch(grassPackedFinalizePipeline, grassPackedFinalizePipelineLayout, grassPackedFinalizeSets[currentFrame][stream], (static_cast<uint32_t>(sceneGpu.grassClusters.size()) + 63U) / 64U); }
+            }
             gpuCullingPasses[currentFrame].record(
                 commandBuffer, static_cast<std::uint32_t>(gpuObjects.size()));
             // The generic instance compaction result is not consumed by the
