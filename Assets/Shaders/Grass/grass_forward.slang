@@ -1,5 +1,5 @@
-// Dedicated foliage forward path. It is compiled now and will be bound by
-// GrassRenderer once its descriptor set replaces the legacy foliage set.
+// Dedicated packed-grass forward path.  Binding 6 is updated each frame to
+// the compacted main visibility stream before its counted indirect draw.
 import Common.SceneData;
 import Common.ShadowSampling;
 import Grass.GrassPackedData;

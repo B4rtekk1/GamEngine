@@ -55,7 +55,9 @@ namespace Engine {
                     VkDescriptorSet sceneDescriptorSet,
                     const Culling::GPUCullingPass &cullingPass,
                     const Culling::IndexedIndirectDrawCount &indirectDraw,
-                    std::uint32_t objectCount);
+                    std::uint32_t objectCount,
+                    VkDescriptorSet grassDescriptorSet = VK_NULL_HANDLE,
+                    const Culling::IndexedIndirectDrawCount *grassIndirectDraw = nullptr);
 
         void preparePages(
             const std::array<Mat4, ShadowMap::ClipLevelCount>& clipMatrices,
@@ -75,6 +77,9 @@ namespace Engine {
 
         [[nodiscard]] VkDescriptorSet descriptorSet(std::uint32_t frameIndex) const;
         [[nodiscard]] VkDescriptorSet grassDescriptorSet(std::uint32_t frameIndex) const;
+        [[nodiscard]] VkDescriptorSet grassShadowDescriptorSet(std::uint32_t frameIndex) const;
+        void setGrassVisibleInstances(std::uint32_t frameIndex, VkBuffer visibleInstances) const;
+        void setGrassShadowVisibleInstances(std::uint32_t frameIndex, VkBuffer visibleInstances) const;
 
         // The grass shaders reserve binding 7 for GPUGrassCluster.  Keeping
         // this explicit prevents a future grass-only descriptor set from
@@ -108,8 +113,10 @@ namespace Engine {
         VkDescriptorPool descriptorPool_{VK_NULL_HANDLE};
         std::vector<VkDescriptorSet> descriptorSets_;
         std::vector<VkDescriptorSet> grassDescriptorSets_;
+        std::vector<VkDescriptorSet> grassShadowDescriptorSets_;
         std::vector<std::unique_ptr<Buffer>> pageTableBuffers_;
         VkPipelineLayout pipelineLayout_{VK_NULL_HANDLE};
         VkPipeline pipeline_{VK_NULL_HANDLE};
+        VkPipeline grassPipeline_{VK_NULL_HANDLE};
     };
 } // namespace Engine

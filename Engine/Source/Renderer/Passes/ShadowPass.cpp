@@ -114,34 +114,37 @@ void ShadowPass::create(VkPhysicalDevice physicalDevice, VkDevice device,
         }
 
         const std::uint32_t frameCount = static_cast<std::uint32_t>(uniformBuffers.size());
-        // Two descriptor sets are allocated per frame. Each carries one
+        // Three descriptor sets are allocated per frame. Each carries one
         // shadow sampler, sixteen material samplers, one UBO and five SSBOs.
         const VkDescriptorPoolSize poolSizes[] = {
-            {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, frameCount * 2U * (MaxMaterialTextures + 1U)},
-            {VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, frameCount * 2U},
-            {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, frameCount * 2U * 5U},
+            {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, frameCount * 3U * (MaxMaterialTextures + 1U)},
+            {VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, frameCount * 3U},
+            {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, frameCount * 3U * 5U},
         };
         VkDescriptorPoolCreateInfo poolInfo{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
-        poolInfo.maxSets = frameCount * 2;
+        poolInfo.maxSets = frameCount * 3;
         poolInfo.poolSizeCount = std::size(poolSizes);
         poolInfo.pPoolSizes = poolSizes;
         if (vkCreateDescriptorPool(device_, &poolInfo, nullptr, &descriptorPool_) != VK_SUCCESS) {
             throw std::runtime_error("Could not create shadow descriptor pool");
         }
 
-        std::vector<VkDescriptorSetLayout> layouts(frameCount * 2, descriptorSetLayout_);
+        std::vector<VkDescriptorSetLayout> layouts(frameCount * 3, descriptorSetLayout_);
         descriptorSets_.resize(frameCount);
         grassDescriptorSets_.resize(frameCount);
+        grassShadowDescriptorSets_.resize(frameCount);
         VkDescriptorSetAllocateInfo allocateInfo{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};
         allocateInfo.descriptorPool = descriptorPool_;
-        std::vector<VkDescriptorSet> allDescriptorSets(frameCount * 2);
-        allocateInfo.descriptorSetCount = frameCount * 2;
+        std::vector<VkDescriptorSet> allDescriptorSets(frameCount * 3);
+        allocateInfo.descriptorSetCount = frameCount * 3;
         allocateInfo.pSetLayouts = layouts.data();
         if (vkAllocateDescriptorSets(device_, &allocateInfo, allDescriptorSets.data()) != VK_SUCCESS) {
             throw std::runtime_error("Could not allocate shadow descriptor sets");
         }
         std::copy_n(allDescriptorSets.begin(), frameCount, descriptorSets_.begin());
         std::copy_n(allDescriptorSets.begin() + frameCount, frameCount, grassDescriptorSets_.begin());
+        std::copy_n(allDescriptorSets.begin() + frameCount * 2, frameCount,
+                    grassShadowDescriptorSets_.begin());
 
         pageTableBuffers_.resize(frameCount);
         for (std::unique_ptr<Buffer>& buffer : pageTableBuffers_) {
@@ -200,6 +203,8 @@ void ShadowPass::create(VkPhysicalDevice physicalDevice, VkDevice device,
             writes[5].dstSet = grassDescriptorSets_[frame]; writes[5].pBufferInfo = &grassInstanceInfo;
             writes[6].dstSet = grassDescriptorSets_[frame];
             writes[7].dstSet = grassDescriptorSets_[frame];
+            vkUpdateDescriptorSets(device_, std::size(writes), writes, 0, nullptr);
+            for (VkWriteDescriptorSet& write : writes) write.dstSet = grassShadowDescriptorSets_[frame];
             vkUpdateDescriptorSets(device_, std::size(writes), writes, 0, nullptr);
         }
 
@@ -286,6 +291,20 @@ void ShadowPass::create(VkPhysicalDevice physicalDevice, VkDevice device,
                                       nullptr, &pipeline_) != VK_SUCCESS) {
             throw std::runtime_error("Could not create shadow pipeline");
         }
+
+        const auto grassShader = Vkutil::loadShaderModule(device_, assets, "shaders/grass_shadow.spv");
+        const std::array grassStages{
+            VkPipelineShaderStageCreateInfo{VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO, nullptr, 0,
+                VK_SHADER_STAGE_VERTEX_BIT, grassShader.get(), "vertexMain", nullptr},
+            VkPipelineShaderStageCreateInfo{VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO, nullptr, 0,
+                VK_SHADER_STAGE_FRAGMENT_BIT, grassShader.get(), "fragmentMain", nullptr},
+        };
+        pipelineInfo.stageCount = std::size(grassStages);
+        pipelineInfo.pStages = grassStages.data();
+        if (vkCreateGraphicsPipelines(device_, VK_NULL_HANDLE, 1, &pipelineInfo,
+                                      nullptr, &grassPipeline_) != VK_SUCCESS) {
+            throw std::runtime_error("Could not create grass shadow pipeline");
+        }
     } catch (...) {
         destroy();
         throw;
@@ -294,16 +313,20 @@ void ShadowPass::create(VkPhysicalDevice physicalDevice, VkDevice device,
 
 void ShadowPass::destroy() noexcept {
     if (device_ != VK_NULL_HANDLE) {
+        if (grassPipeline_ != VK_NULL_HANDLE) vkDestroyPipeline(device_, grassPipeline_, nullptr);
         if (pipeline_ != VK_NULL_HANDLE) vkDestroyPipeline(device_, pipeline_, nullptr);
         if (pipelineLayout_ != VK_NULL_HANDLE) vkDestroyPipelineLayout(device_, pipelineLayout_, nullptr);
         if (descriptorPool_ != VK_NULL_HANDLE) vkDestroyDescriptorPool(device_, descriptorPool_, nullptr);
         if (descriptorSetLayout_ != VK_NULL_HANDLE) vkDestroyDescriptorSetLayout(device_, descriptorSetLayout_, nullptr);
     }
     pipeline_ = VK_NULL_HANDLE;
+    grassPipeline_ = VK_NULL_HANDLE;
     pipelineLayout_ = VK_NULL_HANDLE;
     descriptorPool_ = VK_NULL_HANDLE;
     descriptorSetLayout_ = VK_NULL_HANDLE;
     descriptorSets_.clear();
+    grassDescriptorSets_.clear();
+    grassShadowDescriptorSets_.clear();
     pageTableBuffers_.clear();
     shadowMap_.destroy();
     atlasInitialized_ = false;
@@ -318,6 +341,28 @@ VkDescriptorSet ShadowPass::descriptorSet(const std::uint32_t frameIndex) const 
 
 VkDescriptorSet ShadowPass::grassDescriptorSet(const std::uint32_t frameIndex) const {
     return grassDescriptorSets_.at(frameIndex);
+}
+
+VkDescriptorSet ShadowPass::grassShadowDescriptorSet(const std::uint32_t frameIndex) const {
+    return grassShadowDescriptorSets_.at(frameIndex);
+}
+
+void ShadowPass::setGrassVisibleInstances(const std::uint32_t frameIndex,
+                                          const VkBuffer visibleInstances) const {
+    const VkDescriptorBufferInfo info{visibleInstances, 0, VK_WHOLE_SIZE};
+    const VkWriteDescriptorSet write{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr,
+                                     grassDescriptorSets_.at(frameIndex), 6, 0, 1,
+                                     VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, nullptr, &info, nullptr};
+    vkUpdateDescriptorSets(device_, 1, &write, 0, nullptr);
+}
+
+void ShadowPass::setGrassShadowVisibleInstances(const std::uint32_t frameIndex,
+                                                const VkBuffer visibleInstances) const {
+    const VkDescriptorBufferInfo info{visibleInstances, 0, VK_WHOLE_SIZE};
+    const VkWriteDescriptorSet write{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr,
+                                     grassShadowDescriptorSets_.at(frameIndex), 6, 0, 1,
+                                     VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, nullptr, &info, nullptr};
+    vkUpdateDescriptorSets(device_, 1, &write, 0, nullptr);
 }
 
 std::uint32_t ShadowPass::virtualPageIndex(const std::uint32_t level,
@@ -637,7 +682,9 @@ void ShadowPass::record(const VkCommandBuffer commandBuffer,
                         const VkBuffer indexBuffer, const VkDescriptorSet sceneDescriptorSet,
                         const Culling::GPUCullingPass& cullingPass,
                         const Culling::IndexedIndirectDrawCount& indirectDraw,
-                        const std::uint32_t objectCount) {
+                        const std::uint32_t objectCount,
+                        const VkDescriptorSet grassDescriptorSet,
+                        const Culling::IndexedIndirectDrawCount* const grassIndirectDraw) {
     (void)updateMask;
     if (objectCount == 0) {
         invalidateCache();
@@ -725,6 +772,18 @@ void ShadowPass::record(const VkCommandBuffer commandBuffer,
             indirectDraw.record(commandBuffer,
                 sizeof(VkDrawIndexedIndirectCommand) * objectCount * pageIndex,
                 sizeof(std::uint32_t) * pageIndex);
+        }
+        if (grassDescriptorSet != VK_NULL_HANDLE && grassIndirectDraw != nullptr &&
+            grassIndirectDraw->valid()) {
+            vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, grassPipeline_);
+            vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS,
+                                    pipelineLayout_, 0, 1, &grassDescriptorSet, 0, nullptr);
+            vkCmdPushConstants(commandBuffer, pipelineLayout_, VK_SHADER_STAGE_VERTEX_BIT,
+                               0, sizeof(Mat4), &pageMatrix);
+            grassIndirectDraw->record(commandBuffer);
+            vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline_);
+            vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS,
+                                    pipelineLayout_, 0, 1, &sceneDescriptorSet, 0, nullptr);
         }
     }
     vkCmdEndRenderPass(commandBuffer);

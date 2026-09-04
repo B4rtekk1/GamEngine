@@ -101,10 +101,10 @@ namespace Engine {
 
     /** Parameters for the packed-grass visibility and stream split passes. */
     struct alignas(16) GrassClassifyUniformData {
-        std::uint32_t visibleCount{};
         float mainDistance{};
         float shadowDistance{};
         float velocityDistance{};
+        float padding{};
         glm::vec4 cameraPosition{};
     };
 

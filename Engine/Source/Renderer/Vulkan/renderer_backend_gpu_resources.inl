@@ -107,7 +107,8 @@
                 {4, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
                 {5, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
                 {6, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
-                {7, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr}};
+                {7, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
+                {8, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr}};
             layoutInfo.bindingCount = std::size(grassClassifyBindings); layoutInfo.pBindings = grassClassifyBindings;
             if (vkCreateDescriptorSetLayout(device, &layoutInfo, nullptr, &grassClassifyDescriptorSetLayout) != VK_SUCCESS) {
                 throw std::runtime_error("Could not create grass-classify descriptor-set layout");
@@ -452,7 +453,7 @@
                 };
                 auto& packedLists = grassRenderLists[frame];
                 updateGrassSet(grassPackedCullSets[frame], {generatedGrassInstanceBuffers[frame].handle(), grassClusterBuffers[frame].handle(), packedLists.visibleInstances.handle(), packedLists.visibleCount.handle()}, grassPackedCullUniformBuffers[frame].handle());
-                updateGrassSet(grassClassifySets[frame], {generatedGrassInstanceBuffers[frame].handle(), grassClusterBuffers[frame].handle(), packedLists.visibleInstances.handle(), packedLists.mainVisibleInstances.handle(), packedLists.shadowVisibleInstances.handle(), packedLists.velocityVisibleInstances.handle(), packedLists.classifyCounts.handle()}, grassClassifyUniformBuffers[frame].handle());
+                updateGrassSet(grassClassifySets[frame], {generatedGrassInstanceBuffers[frame].handle(), grassClusterBuffers[frame].handle(), packedLists.visibleInstances.handle(), packedLists.mainVisibleInstances.handle(), packedLists.shadowVisibleInstances.handle(), packedLists.velocityVisibleInstances.handle(), packedLists.classifyCounts.handle(), packedLists.visibleCount.handle()}, grassClassifyUniformBuffers[frame].handle());
                 const std::array<VkBuffer, 3> classified{packedLists.mainVisibleInstances.handle(), packedLists.shadowVisibleInstances.handle(), packedLists.velocityVisibleInstances.handle()};
                 const std::array<VkBuffer, 3> indirect{packedLists.mainIndirect.handle(), packedLists.shadowIndirect.handle(), packedLists.velocityIndirect.handle()};
                 const std::array<VkBuffer, 3> drawCounts{packedLists.mainDrawCount.handle(), packedLists.shadowDrawCount.handle(), packedLists.velocityDrawCount.handle()};
@@ -749,6 +750,9 @@
                 foliageVelocityOptions.existingRenderPass = velocityPipeline.renderPass();
                 foliageVelocityOptions.cullMode = VK_CULL_MODE_NONE;
                 foliageVelocityPipeline.create(device, foliageVelocityOptions);
+                GraphicsPipelineOptions grassVelocityOptions = foliageVelocityOptions;
+                grassVelocityOptions.shader = "shaders/grass_velocity.spv";
+                grassVelocityPipeline.create(device, grassVelocityOptions);
 
                 const VkImageView velocityAttachments[] = {
                     velocityBuffer.imageView(), depthBuffer.imageView()};
@@ -772,6 +776,7 @@
                 velocityFramebuffer = VK_NULL_HANDLE;
             }
             foliageVelocityPipeline.destroy();
+            grassVelocityPipeline.destroy();
             velocityPipeline.destroy();
             velocityBuffer.destroy();
         }

@@ -28,6 +28,7 @@
         HdrBuffer velocityBuffer;
         GraphicsPipeline velocityPipeline;
         GraphicsPipeline foliageVelocityPipeline;
+        GraphicsPipeline grassVelocityPipeline;
         VkFramebuffer velocityFramebuffer = VK_NULL_HANDLE;
         // A single-sample depth target used exclusively to generate Hi-Z when
         // the visible geometry is rendered with MSAA.

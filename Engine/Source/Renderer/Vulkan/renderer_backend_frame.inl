@@ -333,6 +333,60 @@
                                               particleComputePipelineLayout, currentFrame);
             }
 
+            // Packed grass has an independent, fully GPU-resident command path.
+            // Each classify stream is compacted by cluster before its indirect
+            // commands are emitted, so mixed grass meshes never share a draw.
+            if (!sceneGpu.grassInstances.empty() && cameraController.camera()) {
+                auto& lists = grassRenderLists[currentFrame];
+                const auto camera = cameraController.camera();
+                const GrassPackedCullUniformData cullData{camera->projectionMatrix().native() * camera->viewMatrix().native(), glm::vec4{camera->position().native(), 1.0F}, static_cast<uint32_t>(sceneGpu.grassInstances.size())};
+                grassPackedCullUniformBuffers[currentFrame].update(&cullData, sizeof(cullData));
+                const GrassClassifyUniformData classifyData{120.0F, 180.0F, 120.0F, 0.0F, glm::vec4{camera->position().native(), 1.0F}};
+                grassClassifyUniformBuffers[currentFrame].update(&classifyData, sizeof(classifyData));
+                const GrassPackedStreamUniformData streamData{static_cast<uint32_t>(sceneGpu.grassInstances.size()), 0U, static_cast<uint32_t>(sceneGpu.grassClusters.size()), 0U};
+                for (uint32_t stream = 0; stream < 3; ++stream) { auto data = streamData; data.streamIndex = stream; grassPackedStreamUniformBuffers[currentFrame][stream].update(&data, sizeof(data)); }
+                vkCmdFillBuffer(commandBuffer, lists.visibleCount.handle(), 0, VK_WHOLE_SIZE, 0);
+                vkCmdFillBuffer(commandBuffer, lists.classifyCounts.handle(), 0, VK_WHOLE_SIZE, 0);
+                for (uint32_t stream = 0; stream < 3; ++stream) {
+                    vkCmdFillBuffer(commandBuffer, lists.binCounts[stream].handle(), 0, VK_WHOLE_SIZE, 0);
+                    vkCmdFillBuffer(commandBuffer, lists.binCursors[stream].handle(), 0, VK_WHOLE_SIZE, 0);
+                }
+                vkCmdFillBuffer(commandBuffer, lists.mainDrawCount.handle(), 0, sizeof(uint32_t), 0);
+                vkCmdFillBuffer(commandBuffer, lists.shadowDrawCount.handle(), 0, sizeof(uint32_t), 0);
+                vkCmdFillBuffer(commandBuffer, lists.velocityDrawCount.handle(), 0, sizeof(uint32_t), 0);
+                vkCmdFillBuffer(commandBuffer, lists.mainIndirect.handle(), 0, VK_WHOLE_SIZE, 0);
+                vkCmdFillBuffer(commandBuffer, lists.shadowIndirect.handle(), 0, VK_WHOLE_SIZE, 0);
+                vkCmdFillBuffer(commandBuffer, lists.velocityIndirect.handle(), 0, VK_WHOLE_SIZE, 0);
+                const VkMemoryBarrier2 transferToCompute{VK_STRUCTURE_TYPE_MEMORY_BARRIER_2, nullptr, VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT, VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_STORAGE_READ_BIT | VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT};
+                const VkDependencyInfo dependency{.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO, .memoryBarrierCount = 1, .pMemoryBarriers = &transferToCompute}; vkCmdPipelineBarrier2(commandBuffer, &dependency);
+                const auto dispatch = [&](VkPipeline pipeline, VkPipelineLayout layout, VkDescriptorSet set, uint32_t groups) { vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, pipeline); vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, layout, 0, 1, &set, 0, nullptr); vkCmdDispatch(commandBuffer, groups, 1, 1); const VkMemoryBarrier2 barrier{VK_STRUCTURE_TYPE_MEMORY_BARRIER_2, nullptr, VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT, VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_STORAGE_READ_BIT | VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT}; const VkDependencyInfo info{.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO, .memoryBarrierCount = 1, .pMemoryBarriers = &barrier}; vkCmdPipelineBarrier2(commandBuffer, &info); };
+                const uint32_t groups = (static_cast<uint32_t>(sceneGpu.grassInstances.size()) + 63U) / 64U;
+                dispatch(grassPackedCullPipeline, grassPackedCullPipelineLayout, grassPackedCullSets[currentFrame], groups);
+                dispatch(grassClassifyPipeline, grassClassifyPipelineLayout, grassClassifySets[currentFrame], groups);
+                for (uint32_t stream = 0; stream < 3; ++stream) { dispatch(grassPackedBinPipeline, grassPackedBinPipelineLayout, grassPackedBinSets[currentFrame][stream], groups); dispatch(grassPackedPrefixPipeline, grassPrefixPipelineLayout, grassPackedPrefixSets[currentFrame][stream], 1); dispatch(grassPackedScatterPipeline, grassPackedScatterPipelineLayout, grassPackedScatterSets[currentFrame][stream], groups); dispatch(grassPackedFinalizePipeline, grassPackedFinalizePipelineLayout, grassPackedFinalizeSets[currentFrame][stream], (static_cast<uint32_t>(sceneGpu.grassClusters.size()) + 63U) / 64U); }
+                const VkMemoryBarrier2 grassDrawBarrier{VK_STRUCTURE_TYPE_MEMORY_BARRIER_2, nullptr,
+                    VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT,
+                    VK_PIPELINE_STAGE_2_DRAW_INDIRECT_BIT | VK_PIPELINE_STAGE_2_VERTEX_SHADER_BIT,
+                    VK_ACCESS_2_INDIRECT_COMMAND_READ_BIT | VK_ACCESS_2_SHADER_STORAGE_READ_BIT};
+                const VkDependencyInfo grassDrawDependency{.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO,
+                    .memoryBarrierCount = 1, .pMemoryBarriers = &grassDrawBarrier};
+                vkCmdPipelineBarrier2(commandBuffer, &grassDrawDependency);
+            }
+
+            // The packed shadow stream is now complete and visible to indirect
+            // draws. Bind it before recording either shadow atlas: an earlier
+            // command-buffer order made grass_shadow consume the previous frame.
+            Culling::IndexedIndirectDrawCount grassShadowDraw;
+            const Culling::IndexedIndirectDrawCount* grassShadowDrawPtr = nullptr;
+            if (!sceneGpu.grassInstances.empty()) {
+                const auto& lists = grassRenderLists[currentFrame];
+                grassShadowDraw.create(lists.shadowIndirect.handle(), lists.shadowDrawCount.handle(),
+                                       static_cast<uint32_t>(std::max<std::size_t>(1, sceneGpu.grassClusters.size())));
+                grassShadowDrawPtr = &grassShadowDraw;
+                shadowPass.setGrassShadowVisibleInstances(currentFrame, lists.drawInstances[1].handle());
+                sceneDescriptorPass.setGrassShadowVisibleInstances(currentFrame, lists.drawInstances[1].handle());
+            }
+
             // The forward descriptor layout always contains the shadow-map
             // sampler. Even when shadows are disabled, run an empty shadow
             // pass so its image is transitioned from UNDEFINED to
@@ -340,12 +394,11 @@
             shadowPass.record(
                 commandBuffer, shadowClipMatrices, shadowClipUpdateMask, vertexBuffer.handle(),
                 instanceBuffers[currentFrame].handle(), indexBuffer.handle(),
-                shadowPass.descriptorSet(currentFrame),
-                shadowCullingPasses[currentFrame],
+                shadowPass.descriptorSet(currentFrame), shadowCullingPasses[currentFrame],
                 shadowIndirectDraws[currentFrame],
                 optimizationFeatures.shadows && hasShadowCasters
-                    ? static_cast<std::uint32_t>(gpuObjects.size())
-                    : 0u);
+                    ? static_cast<std::uint32_t>(gpuObjects.size()) : 0u,
+                shadowPass.grassShadowDescriptorSet(currentFrame), grassShadowDrawPtr);
 
             // Scene View has its own descriptor pass and therefore its own
             // shadow-map image. It must be transitioned as well, even when
@@ -355,36 +408,11 @@
                 sceneDescriptorPass.record(
                     commandBuffer, sceneShadowClipMatrices, sceneShadowClipUpdateMask,
                     vertexBuffer.handle(), instanceBuffers[currentFrame].handle(), indexBuffer.handle(),
-                    sceneDescriptorPass.descriptorSet(currentFrame),
-                    shadowCullingPasses[currentFrame],
+                    sceneDescriptorPass.descriptorSet(currentFrame), shadowCullingPasses[currentFrame],
                     shadowIndirectDraws[currentFrame],
                     optimizationFeatures.shadows && hasShadowCasters
-                        ? static_cast<std::uint32_t>(gpuObjects.size())
-                        : 0u);
-            }
-
-            // Packed grass has an independent, fully GPU-resident command path.
-            // Each classify stream is compacted by cluster before its indirect
-            // commands are emitted, so mixed grass meshes never share a draw.
-            if (!sceneGpu.grassInstances.empty() && cameraController.camera()) {
-                auto& lists = grassRenderLists[currentFrame];
-                const auto camera = cameraController.camera();
-                const GrassPackedCullUniformData cullData{camera->projectionMatrix().native() * camera->viewMatrix().native(), glm::vec4{camera->position().native(), 1.0F}, static_cast<uint32_t>(sceneGpu.grassInstances.size())};
-                grassPackedCullUniformBuffers[currentFrame].update(&cullData, sizeof(cullData));
-                const GrassClassifyUniformData classifyData{static_cast<uint32_t>(sceneGpu.grassInstances.size()), 120.0F, 180.0F, 120.0F, glm::vec4{camera->position().native(), 1.0F}};
-                grassClassifyUniformBuffers[currentFrame].update(&classifyData, sizeof(classifyData));
-                const GrassPackedStreamUniformData streamData{static_cast<uint32_t>(sceneGpu.grassInstances.size()), 0U, static_cast<uint32_t>(sceneGpu.grassClusters.size()), 0U};
-                for (uint32_t stream = 0; stream < 3; ++stream) { auto data = streamData; data.streamIndex = stream; grassPackedStreamUniformBuffers[currentFrame][stream].update(&data, sizeof(data)); }
-                vkCmdFillBuffer(commandBuffer, lists.visibleCount.handle(), 0, VK_WHOLE_SIZE, 0);
-                vkCmdFillBuffer(commandBuffer, lists.classifyCounts.handle(), 0, VK_WHOLE_SIZE, 0);
-                for (uint32_t stream = 0; stream < 3; ++stream) { vkCmdFillBuffer(commandBuffer, lists.binCounts[stream].handle(), 0, VK_WHOLE_SIZE, 0); vkCmdFillBuffer(commandBuffer, lists.binCursors[stream].handle(), 0, VK_WHOLE_SIZE, 0); }
-                const VkMemoryBarrier2 transferToCompute{VK_STRUCTURE_TYPE_MEMORY_BARRIER_2, nullptr, VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT, VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_STORAGE_READ_BIT | VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT};
-                const VkDependencyInfo dependency{.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO, .memoryBarrierCount = 1, .pMemoryBarriers = &transferToCompute}; vkCmdPipelineBarrier2(commandBuffer, &dependency);
-                const auto dispatch = [&](VkPipeline pipeline, VkPipelineLayout layout, VkDescriptorSet set, uint32_t groups) { vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, pipeline); vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, layout, 0, 1, &set, 0, nullptr); vkCmdDispatch(commandBuffer, groups, 1, 1); const VkMemoryBarrier2 barrier{VK_STRUCTURE_TYPE_MEMORY_BARRIER_2, nullptr, VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT, VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_STORAGE_READ_BIT | VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT}; const VkDependencyInfo info{.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO, .memoryBarrierCount = 1, .pMemoryBarriers = &barrier}; vkCmdPipelineBarrier2(commandBuffer, &info); };
-                const uint32_t groups = (static_cast<uint32_t>(sceneGpu.grassInstances.size()) + 63U) / 64U;
-                dispatch(grassPackedCullPipeline, grassPackedCullPipelineLayout, grassPackedCullSets[currentFrame], groups);
-                dispatch(grassClassifyPipeline, grassClassifyPipelineLayout, grassClassifySets[currentFrame], groups);
-                for (uint32_t stream = 0; stream < 3; ++stream) { dispatch(grassPackedBinPipeline, grassPackedBinPipelineLayout, grassPackedBinSets[currentFrame][stream], groups); dispatch(grassPackedPrefixPipeline, grassPrefixPipelineLayout, grassPackedPrefixSets[currentFrame][stream], 1); dispatch(grassPackedScatterPipeline, grassPackedScatterPipelineLayout, grassPackedScatterSets[currentFrame][stream], groups); dispatch(grassPackedFinalizePipeline, grassPackedFinalizePipelineLayout, grassPackedFinalizeSets[currentFrame][stream], (static_cast<uint32_t>(sceneGpu.grassClusters.size()) + 63U) / 64U); }
+                        ? static_cast<std::uint32_t>(gpuObjects.size()) : 0u,
+                    sceneDescriptorPass.grassShadowDescriptorSet(currentFrame), grassShadowDrawPtr);
             }
             gpuCullingPasses[currentFrame].record(
                 commandBuffer, static_cast<std::uint32_t>(gpuObjects.size()));
@@ -498,6 +526,14 @@
             ForwardPass::draw(commandBuffer, indirectDraws[currentFrame]);
             forwardPass.drawFoliage(commandBuffer, shadowPass.descriptorSet(currentFrame),
                                     foliageIndirectDraws[currentFrame]);
+            if (!sceneGpu.grassInstances.empty()) {
+                const auto& lists = grassRenderLists[currentFrame];
+                Culling::IndexedIndirectDrawCount grassDraw;
+                grassDraw.create(lists.mainIndirect.handle(), lists.mainDrawCount.handle(),
+                                 static_cast<uint32_t>(std::max<std::size_t>(1, sceneGpu.grassClusters.size())));
+                shadowPass.setGrassVisibleInstances(currentFrame, lists.drawInstances[0].handle());
+                forwardPass.drawGrass(commandBuffer, shadowPass.grassDescriptorSet(currentFrame), grassDraw);
+            }
             // Fill the background before drawing particles. Otherwise the
             // skybox can overwrite transparent particle fragments in the sky.
             skyPass.record(commandBuffer, currentFrame);
@@ -549,6 +585,19 @@
                 vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS,
                                         foliageVelocityPipeline.layout(), 0, 1, &sceneSet, 0, nullptr);
                 ForwardPass::draw(commandBuffer, foliageIndirectDraws[currentFrame]);
+                if (!sceneGpu.grassInstances.empty()) {
+                    const auto& lists = grassRenderLists[currentFrame];
+                    Culling::IndexedIndirectDrawCount grassVelocityDraw;
+                    grassVelocityDraw.create(lists.velocityIndirect.handle(), lists.velocityDrawCount.handle(),
+                                             static_cast<uint32_t>(std::max<std::size_t>(1, sceneGpu.grassClusters.size())));
+                    shadowPass.setGrassVisibleInstances(currentFrame, lists.drawInstances[2].handle());
+                    vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS,
+                                      grassVelocityPipeline.handle());
+                    const VkDescriptorSet grassSet = shadowPass.grassDescriptorSet(currentFrame);
+                    vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS,
+                                            grassVelocityPipeline.layout(), 0, 1, &grassSet, 0, nullptr);
+                    grassVelocityDraw.record(commandBuffer);
+                }
                 vkCmdEndRenderPass(commandBuffer);
             }
 
