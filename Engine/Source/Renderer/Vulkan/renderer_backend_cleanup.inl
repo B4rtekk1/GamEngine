@@ -32,15 +32,6 @@
                 for (Buffer& buffer : grassClusterBuffers) {
                     buffer.destroy();
                 }
-                for (GrassRenderLists& lists : grassRenderLists) {
-                    lists.visibleInstances.destroy(); lists.visibleCount.destroy();
-                    lists.mainVisibleInstances.destroy(); lists.shadowVisibleInstances.destroy();
-                    lists.velocityVisibleInstances.destroy(); lists.classifyCounts.destroy();
-                    lists.mainIndirect.destroy(); lists.mainDrawCount.destroy();
-                    lists.shadowIndirect.destroy(); lists.shadowDrawCount.destroy();
-                    lists.velocityIndirect.destroy(); lists.velocityDrawCount.destroy();
-                }
-                for (Buffer& buffer : grassClassifyUniformBuffers) buffer.destroy();
                 for (Buffer& buffer : materialBuffers) {
                     buffer.destroy();
                 }

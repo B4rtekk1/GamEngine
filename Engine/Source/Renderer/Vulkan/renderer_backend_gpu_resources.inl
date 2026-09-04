@@ -585,6 +585,29 @@
             for (Buffer& buffer : grassDrawCountBuffers) buffer.destroy();
             for (Buffer& buffer : grassIndirectUniformBuffers) buffer.destroy();
             for (Buffer& buffer : grassPrefixUniformBuffers) buffer.destroy();
+            for (Buffer& buffer : grassClassifyUniformBuffers) buffer.destroy();
+            for (Buffer& buffer : grassPackedCullUniformBuffers) buffer.destroy();
+            for (auto& streamUniforms : grassPackedStreamUniformBuffers) {
+                for (Buffer& buffer : streamUniforms) buffer.destroy();
+            }
+            for (GrassRenderLists& lists : grassRenderLists) {
+                lists.visibleInstances.destroy();
+                lists.visibleCount.destroy();
+                lists.mainVisibleInstances.destroy();
+                lists.shadowVisibleInstances.destroy();
+                lists.velocityVisibleInstances.destroy();
+                lists.classifyCounts.destroy();
+                for (Buffer& buffer : lists.binCounts) buffer.destroy();
+                for (Buffer& buffer : lists.binOffsets) buffer.destroy();
+                for (Buffer& buffer : lists.binCursors) buffer.destroy();
+                for (Buffer& buffer : lists.drawInstances) buffer.destroy();
+                lists.mainIndirect.destroy();
+                lists.mainDrawCount.destroy();
+                lists.shadowIndirect.destroy();
+                lists.shadowDrawCount.destroy();
+                lists.velocityIndirect.destroy();
+                lists.velocityDrawCount.destroy();
+            }
             if (cullingDescriptorPool != VK_NULL_HANDLE) { vkDestroyDescriptorPool(device, cullingDescriptorPool, nullptr);
 }
             if (hiZCopyPipeline != VK_NULL_HANDLE) { vkDestroyPipeline(device, hiZCopyPipeline, nullptr);
@@ -601,6 +624,10 @@
             if (grassFinalizePipeline != VK_NULL_HANDLE) vkDestroyPipeline(device, grassFinalizePipeline, nullptr);
             if (grassPackedCullPipeline != VK_NULL_HANDLE) vkDestroyPipeline(device, grassPackedCullPipeline, nullptr);
             if (grassClassifyPipeline != VK_NULL_HANDLE) vkDestroyPipeline(device, grassClassifyPipeline, nullptr);
+            if (grassPackedBinPipeline != VK_NULL_HANDLE) vkDestroyPipeline(device, grassPackedBinPipeline, nullptr);
+            if (grassPackedPrefixPipeline != VK_NULL_HANDLE) vkDestroyPipeline(device, grassPackedPrefixPipeline, nullptr);
+            if (grassPackedScatterPipeline != VK_NULL_HANDLE) vkDestroyPipeline(device, grassPackedScatterPipeline, nullptr);
+            if (grassPackedFinalizePipeline != VK_NULL_HANDLE) vkDestroyPipeline(device, grassPackedFinalizePipeline, nullptr);
             if (hiZCopyPipelineLayout != VK_NULL_HANDLE) { vkDestroyPipelineLayout(device, hiZCopyPipelineLayout, nullptr);
 }
             if (hiZReducePipelineLayout != VK_NULL_HANDLE) { vkDestroyPipelineLayout(device, hiZReducePipelineLayout, nullptr);
@@ -615,6 +642,9 @@
             if (grassFinalizePipelineLayout != VK_NULL_HANDLE) vkDestroyPipelineLayout(device, grassFinalizePipelineLayout, nullptr);
             if (grassPackedCullPipelineLayout != VK_NULL_HANDLE) vkDestroyPipelineLayout(device, grassPackedCullPipelineLayout, nullptr);
             if (grassClassifyPipelineLayout != VK_NULL_HANDLE) vkDestroyPipelineLayout(device, grassClassifyPipelineLayout, nullptr);
+            if (grassPackedBinPipelineLayout != VK_NULL_HANDLE) vkDestroyPipelineLayout(device, grassPackedBinPipelineLayout, nullptr);
+            if (grassPackedScatterPipelineLayout != VK_NULL_HANDLE) vkDestroyPipelineLayout(device, grassPackedScatterPipelineLayout, nullptr);
+            if (grassPackedFinalizePipelineLayout != VK_NULL_HANDLE) vkDestroyPipelineLayout(device, grassPackedFinalizePipelineLayout, nullptr);
             if (hiZCopyDescriptorSetLayout != VK_NULL_HANDLE) { vkDestroyDescriptorSetLayout(device, hiZCopyDescriptorSetLayout, nullptr);
 }
             if (hiZReduceDescriptorSetLayout != VK_NULL_HANDLE) { vkDestroyDescriptorSetLayout(device, hiZReduceDescriptorSetLayout, nullptr);
@@ -629,18 +659,24 @@
             if (grassFinalizeDescriptorSetLayout != VK_NULL_HANDLE) vkDestroyDescriptorSetLayout(device, grassFinalizeDescriptorSetLayout, nullptr);
             if (grassPackedCullDescriptorSetLayout != VK_NULL_HANDLE) vkDestroyDescriptorSetLayout(device, grassPackedCullDescriptorSetLayout, nullptr);
             if (grassClassifyDescriptorSetLayout != VK_NULL_HANDLE) vkDestroyDescriptorSetLayout(device, grassClassifyDescriptorSetLayout, nullptr);
+            if (grassPackedBinDescriptorSetLayout != VK_NULL_HANDLE) vkDestroyDescriptorSetLayout(device, grassPackedBinDescriptorSetLayout, nullptr);
+            if (grassPackedScatterDescriptorSetLayout != VK_NULL_HANDLE) vkDestroyDescriptorSetLayout(device, grassPackedScatterDescriptorSetLayout, nullptr);
+            if (grassPackedFinalizeDescriptorSetLayout != VK_NULL_HANDLE) vkDestroyDescriptorSetLayout(device, grassPackedFinalizeDescriptorSetLayout, nullptr);
             cullingDescriptorPool = VK_NULL_HANDLE; hiZCopyPipeline = hiZReducePipeline = cullingPipeline = VK_NULL_HANDLE;
             instanceCullingPipeline = VK_NULL_HANDLE;
             grassBuildPipeline = grassPrefixPipeline = grassScatterPipeline = grassFinalizePipeline = VK_NULL_HANDLE;
             grassPackedCullPipeline = grassClassifyPipeline = VK_NULL_HANDLE;
+            grassPackedBinPipeline = grassPackedPrefixPipeline = grassPackedScatterPipeline = grassPackedFinalizePipeline = VK_NULL_HANDLE;
             hiZCopyPipelineLayout = hiZReducePipelineLayout = cullingPipelineLayout = VK_NULL_HANDLE;
             instanceCullingPipelineLayout = VK_NULL_HANDLE;
             grassBuildPipelineLayout = grassPrefixPipelineLayout = grassScatterPipelineLayout = grassFinalizePipelineLayout = VK_NULL_HANDLE;
             grassPackedCullPipelineLayout = grassClassifyPipelineLayout = VK_NULL_HANDLE;
+            grassPackedBinPipelineLayout = grassPackedScatterPipelineLayout = grassPackedFinalizePipelineLayout = VK_NULL_HANDLE;
             hiZCopyDescriptorSetLayout = hiZReduceDescriptorSetLayout = cullingDescriptorSetLayout = VK_NULL_HANDLE;
             instanceCullingDescriptorSetLayout = VK_NULL_HANDLE;
             grassBuildDescriptorSetLayout = grassPrefixDescriptorSetLayout = grassScatterDescriptorSetLayout = grassFinalizeDescriptorSetLayout = VK_NULL_HANDLE;
             grassPackedCullDescriptorSetLayout = grassClassifyDescriptorSetLayout = VK_NULL_HANDLE;
+            grassPackedBinDescriptorSetLayout = grassPackedScatterDescriptorSetLayout = grassPackedFinalizeDescriptorSetLayout = VK_NULL_HANDLE;
             hiZBuffer.destroy(); gpuObjects.clear(); hiZValid = false;
         }
 
