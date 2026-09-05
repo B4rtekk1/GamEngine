@@ -17,7 +17,24 @@ namespace Engine {
 
         [[nodiscard]] Entity entity() const noexcept { return entity_; }
         [[nodiscard]] Registry &registry() const noexcept { return *registry_; }
-        [[nodiscard]] Transform &transform() const { return registry().get<Transform>(entity_); }
+        /** Returns the script entity's read-only local transform. */
+        [[nodiscard]] const Transform &transform() const { return registry().get<Transform>(entity_); }
+
+        void setPosition(Vec3 value) { registry().modify<Transform>(entity_, [&](auto &transform) {
+            transform.position = value;
+        }); }
+        void setRotation(Vec3 value) { registry().modify<Transform>(entity_, [&](auto &transform) {
+            transform.rotation = value;
+        }); }
+        void setScale(Vec3 value) { registry().modify<Transform>(entity_, [&](auto &transform) {
+            transform.scale = value;
+        }); }
+        void translate(Vec3 offset) { registry().modify<Transform>(entity_, [&](auto &transform) {
+            transform.position += offset;
+        }); }
+        void rotate(Vec3 offset) { registry().modify<Transform>(entity_, [&](auto &transform) {
+            transform.rotation += offset;
+        }); }
 
         /** Returns the high-level actor controlled by this script. */
         [[nodiscard]] Actor actor() const;

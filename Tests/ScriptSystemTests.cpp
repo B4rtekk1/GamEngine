@@ -58,7 +58,7 @@ public:
     }
 
     void onUpdate(float) override {
-        transform().position.setY(7.0F);
+        setPosition({0.0F, 7.0F, 0.0F});
     }
 };
 

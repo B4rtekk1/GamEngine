@@ -5,8 +5,14 @@
 #include "Engine/Renderer/Geometry/Cube.h"
 
 #include <cctype>
+#include <cmath>
 #include <stdexcept>
 #include <utility>
+
+#define GLM_ENABLE_EXPERIMENTAL
+#include <glm/gtc/matrix_inverse.hpp>
+#include <glm/gtx/matrix_decompose.hpp>
+#include <glm/gtx/quaternion.hpp>
 
 // NOLINTBEGIN(readability-magic-numbers)
 
@@ -19,6 +25,20 @@ namespace Engine {
                                return static_cast<char>(std::tolower(character));
                            });
             return extension == ".gltf" || extension == ".glb";
+        }
+
+        [[nodiscard]] Transform localTransformFromMatrix(const glm::mat4 &matrix) {
+            glm::vec3 scale{}, translation{}, skew{};
+            glm::quat rotation{};
+            glm::vec4 perspective{};
+            if (!glm::decompose(matrix, scale, rotation, translation, skew, perspective)) {
+                throw std::runtime_error("Cannot decompose transform while changing parent");
+            }
+            return Transform{
+                .position = Vec3{translation},
+                .rotation = Vec3{glm::degrees(glm::eulerAngles(glm::conjugate(glm::normalize(rotation))))},
+                .scale = Vec3{scale},
+            };
         }
     }
 
@@ -37,7 +57,7 @@ namespace Engine {
         return Actor{*this, object.objectId()};
     }
 
-    void Scene::setParent(const Actor &child, const Actor &parent) {
+    void Scene::setParent(const Actor &child, const Actor &parent, const ParentMode mode) {
         if (child.scene_ != this || parent.scene_ != this || !child.valid() || !parent.valid()) {
             throw std::invalid_argument("Parent and child must be live actors in this Scene");
         }
@@ -54,6 +74,16 @@ namespace Engine {
 
         const Entity childEntity = findEntity(child.objectId_);
         const Entity parentEntity = findEntity(parent.objectId_);
+        Transform preservedLocal{};
+        if (mode == ParentMode::KeepWorld) {
+            TransformSystem::updateDirty(registry_);
+            const glm::mat4 parentWorld = registry_.get<Transform>(parentEntity).worldMatrix().native();
+            if (std::abs(glm::determinant(parentWorld)) < 1.0e-6F) {
+                throw std::runtime_error("Cannot preserve world transform below a parent with a singular transform");
+            }
+            const glm::mat4 childWorld = registry_.get<Transform>(childEntity).worldMatrix().native();
+            preservedLocal = localTransformFromMatrix(glm::inverse(parentWorld) * childWorld);
+        }
         const UUID parentUuid = registry_.get<UUIDComponent>(parentEntity).value;
         if (registry_.has<ParentComponent>(childEntity)) {
             registry_.modify<ParentComponent>(childEntity, [parentUuid, parentEntity](ParentComponent &link) {
@@ -64,15 +94,35 @@ namespace Engine {
             registry_.add<ParentComponent>(childEntity, ParentComponent{.parentUuid = parentUuid,
                                                                           .runtimeParent = parentEntity});
         }
+        if (mode == ParentMode::KeepWorld) {
+            registry_.modify<Transform>(childEntity, [&](Transform &transform) {
+                transform.position = preservedLocal.position;
+                transform.rotation = preservedLocal.rotation;
+                transform.scale = preservedLocal.scale;
+            });
+        }
     }
 
-    void Scene::clearParent(const Actor &child) {
+    void Scene::clearParent(const Actor &child, const ParentMode mode) {
         if (child.scene_ != this || !child.valid()) {
             throw std::invalid_argument("Child must be a live actor in this Scene");
         }
         const Entity childEntity = findEntity(child.objectId_);
         if (registry_.has<ParentComponent>(childEntity)) {
+            Transform preservedLocal{};
+            if (mode == ParentMode::KeepWorld) {
+                TransformSystem::updateDirty(registry_);
+                preservedLocal = localTransformFromMatrix(
+                    registry_.get<Transform>(childEntity).worldMatrix().native());
+            }
             registry_.remove<ParentComponent>(childEntity);
+            if (mode == ParentMode::KeepWorld) {
+                registry_.modify<Transform>(childEntity, [&](Transform &transform) {
+                    transform.position = preservedLocal.position;
+                    transform.rotation = preservedLocal.rotation;
+                    transform.scale = preservedLocal.scale;
+                });
+            }
         }
     }
 

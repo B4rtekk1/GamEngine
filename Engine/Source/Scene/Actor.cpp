@@ -38,7 +38,10 @@ namespace Engine {
     Vec3 Actor::position() const { return object().position(); }
     Vec3 Actor::rotation() const { return object().rotation(); }
     Vec3 Actor::scale() const { return object().scale(); }
-    Transform &Actor::transform() const { return object().transform(); }
+    const Transform &Actor::transform() const { return object().transform(); }
+    void Actor::modifyTransform(const std::function<void(Transform &)> &func) const {
+        object().modifyTransform(func);
+    }
 
     Actor Actor::createChild(std::string name) const {
         if (scene_ == nullptr) {
@@ -47,18 +50,18 @@ namespace Engine {
         return scene_->createChild(*this, std::move(name));
     }
 
-    void Actor::setParent(const Actor &parent) const {
+    void Actor::setParent(const Actor &parent, const ParentMode mode) const {
         if (scene_ == nullptr) {
             throw std::logic_error("Actor is not attached to a Scene");
         }
-        scene_->setParent(*this, parent);
+        scene_->setParent(*this, parent, mode);
     }
 
-    void Actor::clearParent() const {
+    void Actor::clearParent(const ParentMode mode) const {
         if (scene_ == nullptr) {
             throw std::logic_error("Actor is not attached to a Scene");
         }
-        scene_->clearParent(*this);
+        scene_->clearParent(*this, mode);
     }
 
     Actor Actor::parent() const {

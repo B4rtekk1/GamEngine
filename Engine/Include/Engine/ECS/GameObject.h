@@ -64,7 +64,6 @@ namespace Engine {
             return entity_ != NullEntity && registry_ != nullptr && registry_->valid(entity_);
         }
 
-        [[nodiscard]] TransformComponent &transform() { return get<TransformComponent>(); }
         [[nodiscard]] const TransformComponent &transform() const { return get<TransformComponent>(); }
         [[nodiscard]] MeshRendererComponent &meshRenderer() { return get<MeshRendererComponent>(); }
         [[nodiscard]] const MeshRendererComponent &meshRenderer() const { return get<MeshRendererComponent>(); }
@@ -92,8 +91,7 @@ namespace Engine {
         [[nodiscard]] const RigidbodyComponent &rigidbody() const { return get<RigidbodyComponent>(); }
 
         void setTransform(const TransformComponent &transformValue) {
-            transform() = transformValue;
-            registry_->markChanged<TransformComponent>(entity_);
+            modifyTransform([&](auto &transform) { transform = transformValue; });
         }
 
         void setPosition(Vec3 value) { modifyTransform([&](auto &t) { t.position = value; }); } //NOLINT
@@ -196,6 +194,13 @@ namespace Engine {
 
         [[nodiscard]] Mat4 modelMatrix() const { return transform().matrix(); }
 
+        /** Mutates the local transform and records a component revision. */
+        template<typename Func>
+        void modifyTransform(Func &&func) {
+            requireSpawned();
+            registry_->modify<TransformComponent>(entity_, std::forward<Func>(func));
+        }
+
     private:
         friend class Actor;
         friend class Scene;
@@ -274,12 +279,6 @@ namespace Engine {
 
         /** Detaches a scene-owned wrapper before its Registry is replaced. */
         void detach() noexcept { entity_ = NullEntity; }
-
-        template<typename Func>
-        void modifyTransform(Func &&func) {
-            requireSpawned();
-            registry_->modify<TransformComponent>(entity_, std::forward<Func>(func));
-        }
 
         /** Adds rendering state on demand for mesh-bearing objects. */
         void ensureMeshRenderer() {

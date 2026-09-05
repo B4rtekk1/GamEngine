@@ -398,6 +398,40 @@ TEST(Scene, CachesWorldTransformsAcrossParentChildHierarchy) {
     EXPECT_FLOAT_EQ(secondPosition.z, 4.0F);
 }
 
+TEST(Scene, ReparentingKeepsWorldTransformByDefault) {
+    Engine::Scene scene;
+    const auto parent = scene.createActor("Reparent parent");
+    const auto child = scene.createActor("Reparent child");
+    parent.setPosition({100.0F, 0.0F, 0.0F});
+    child.setPosition({10.0F, 2.0F, 3.0F});
+
+    child.setParent(parent);
+    scene.updateTransforms();
+    const glm::vec3 parentedPosition{scene.worldMatrix(child).native()[3]};
+    EXPECT_FLOAT_EQ(parentedPosition.x, 10.0F);
+    EXPECT_FLOAT_EQ(parentedPosition.y, 2.0F);
+    EXPECT_FLOAT_EQ(parentedPosition.z, 3.0F);
+
+    child.clearParent();
+    scene.updateTransforms();
+    const glm::vec3 unparentedPosition{scene.worldMatrix(child).native()[3]};
+    EXPECT_FLOAT_EQ(unparentedPosition.x, 10.0F);
+    EXPECT_FLOAT_EQ(unparentedPosition.y, 2.0F);
+    EXPECT_FLOAT_EQ(unparentedPosition.z, 3.0F);
+}
+
+TEST(Scene, ReparentingCanKeepLocalTransform) {
+    Engine::Scene scene;
+    const auto parent = scene.createActor("Local parent");
+    const auto child = scene.createActor("Local child");
+    parent.setPosition({100.0F, 0.0F, 0.0F});
+    child.setPosition({10.0F, 0.0F, 0.0F});
+
+    child.setParent(parent, Engine::ParentMode::KeepLocal);
+    scene.updateTransforms();
+    EXPECT_FLOAT_EQ(glm::vec3{scene.worldMatrix(child).native()[3]}.x, 110.0F);
+}
+
 TEST(Scene, DefersWorldTrsDecompositionUntilRequested) {
     Engine::Registry registry;
     const auto entity = registry.create();

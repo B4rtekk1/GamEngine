@@ -95,7 +95,7 @@ namespace Engine {
                 throw std::invalid_argument("Parent actor must belong to this Scene");
             }
             Actor child = createActor(std::move(name));
-            setParent(child, parent);
+            setParent(child, parent, ParentMode::KeepLocal);
             return child;
         }
 
@@ -231,10 +231,11 @@ namespace Engine {
         }
 
         /** Attaches @p child below @p parent, rejecting self-parenting and cycles. */
-        void setParent(const Actor &child, const Actor &parent);
+        void setParent(const Actor &child, const Actor &parent,
+                       ParentMode mode = ParentMode::KeepWorld);
 
         /** Removes @p child's parent link. */
-        void clearParent(const Actor &child);
+        void clearParent(const Actor &child, ParentMode mode = ParentMode::KeepWorld);
 
         [[nodiscard]] Actor parentOf(const Actor &child) const noexcept;
 

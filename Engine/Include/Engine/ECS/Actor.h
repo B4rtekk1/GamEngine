@@ -12,12 +12,18 @@
 #include "Engine/Scene/Components/LightComponent.h"
 
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <string>
 #include <stdexcept>
 #include <vector>
 
 namespace Engine {
+    enum class ParentMode {
+        KeepWorld,
+        KeepLocal,
+    };
+
     class Scene;
     class GameObject;
     class PhysicsSystem;
@@ -57,17 +63,20 @@ namespace Engine {
 
         [[nodiscard]] Vec3 scale() const;
 
-        /** Returns this actor's local transform component. */
-        [[nodiscard]] Transform &transform() const;
+        /** Returns this actor's read-only local transform component. */
+        [[nodiscard]] const Transform &transform() const;
+
+        /** Mutates the local transform and records a component revision. */
+        void modifyTransform(const std::function<void(Transform &)> &func) const;
 
         /** Creates an actor and attaches it as a child of this actor. */
         [[nodiscard]] Actor createChild(std::string name) const;
 
         /** Attaches this actor to @p parent. Both actors must belong to one scene. */
-        void setParent(const Actor &parent) const;
+        void setParent(const Actor &parent, ParentMode mode = ParentMode::KeepWorld) const;
 
         /** Removes this actor from its current parent, making it a root actor. */
-        void clearParent() const;
+        void clearParent(ParentMode mode = ParentMode::KeepWorld) const;
 
         /** Returns this actor's parent, or an invalid Actor when it is a root. */
         [[nodiscard]] Actor parent() const;
@@ -177,6 +186,7 @@ namespace Engine {
         }
         addScript(*className, enabled);
     }
+
 } // namespace Engine
 
 // NOLINTEND(readability-magic-numbers)
