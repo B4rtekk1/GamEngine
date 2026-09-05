@@ -43,6 +43,10 @@ void ForwardPass::create(VkDevice device, const VkFormat colorFormat,
     GraphicsPipelineOptions foliageOptions = options;
     foliageOptions.existingRenderPass = pipeline_.renderPass();
     foliageOptions.cullMode = VK_CULL_MODE_NONE;
+    // This pass is also the transparent stream.  MASK fragments write alpha
+    // as one in the shader; BLEND retains alpha and uses standard compositing.
+    foliageOptions.alphaBlendEnable = VK_TRUE;
+    foliageOptions.depthWriteEnable = VK_FALSE;
     foliagePipeline_.create(device, foliageOptions);
     GraphicsPipelineOptions grassOptions = foliageOptions;
     grassOptions.shader = "shaders/grass_forward.spv";

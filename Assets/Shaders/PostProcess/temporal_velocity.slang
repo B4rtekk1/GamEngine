@@ -3,7 +3,7 @@ import Common.GrassWind;
 
 [[vk::binding(1, 0)]] ConstantBuffer<RendererFrameData> frame;
 [[vk::binding(2, 0)]] StructuredBuffer<MaterialData> materials;
-[[vk::binding(3, 0)]] Sampler2D materialTextures[16];
+[[vk::binding(8, 0)]] Sampler2D materialTextures[];
 [[vk::binding(5, 0)]] StructuredBuffer<RendererInstanceData> visibleGrassInstances;
 [[vk::binding(6, 0)]] StructuredBuffer<uint> visibleGrassIndices;
 

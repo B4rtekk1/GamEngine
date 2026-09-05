@@ -1,4 +1,5 @@
 #include "Engine/Renderer/Vulkan/vulkan_device.h"
+#include "Engine/Renderer/Materials/MaterialBuffer.h"
 
 #include <array>
 #include <cstring>
@@ -162,6 +163,14 @@ bool VulkanDevice::isSuitable(VkPhysicalDevice candidate) const {
         features2.features.shaderSampledImageArrayDynamicIndexing != VK_TRUE) {
         return false;
     }
+    if (features12.descriptorIndexing != VK_TRUE ||
+        features12.runtimeDescriptorArray != VK_TRUE ||
+        features12.descriptorBindingPartiallyBound != VK_TRUE ||
+        features12.descriptorBindingVariableDescriptorCount != VK_TRUE ||
+        features12.shaderSampledImageArrayNonUniformIndexing != VK_TRUE) {
+        return false;
+    }
+    if (properties.limits.maxPerStageDescriptorSampledImages < MaxMaterialTextures) return false;
     if (!findQueueFamilies(candidate).complete()) {
         return false;
     }
@@ -277,6 +286,11 @@ void VulkanDevice::createLogicalDevice() {
     features12.timelineSemaphore = VK_TRUE;
     features12.drawIndirectCount = VK_TRUE;
     features12.shaderFloat16 = VK_TRUE;
+    features12.descriptorIndexing = VK_TRUE;
+    features12.runtimeDescriptorArray = VK_TRUE;
+    features12.descriptorBindingPartiallyBound = VK_TRUE;
+    features12.descriptorBindingVariableDescriptorCount = VK_TRUE;
+    features12.shaderSampledImageArrayNonUniformIndexing = VK_TRUE;
     features12.pNext = &features13;
     VkPhysicalDeviceVulkan11Features features11{.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_1_FEATURES};
     features11.shaderDrawParameters = VK_TRUE;

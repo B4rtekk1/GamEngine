@@ -4,8 +4,9 @@
 #include <cstdint>
 
 namespace Engine {
-    // Vulkan guarantees at least 16 sampled images in a fragment stage.
-    inline constexpr std::uint32_t MaxMaterialTextures = 16;
+    // Global bindless texture table.  Indices in PBRMaterial refer directly
+    // to this table and are never rebound per material.
+    inline constexpr std::uint32_t MaxMaterialTextures = 4096;
 
     /** @brief Shader representation of one PBR material. */
     struct alignas(16) GPUMaterialData {

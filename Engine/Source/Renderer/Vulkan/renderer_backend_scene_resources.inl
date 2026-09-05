@@ -14,7 +14,7 @@
                 const Mesh& mesh = *renderer.mesh;
                 const auto offset = static_cast<std::uint32_t>(materialTextures.size() + 1);
                 if (mesh.images.size() > MaxMaterialTextures - offset) {
-                    throw std::runtime_error("GLB scene exceeds the material texture limit");
+                    throw std::runtime_error("GLB scene exceeds the 4096-entry bindless texture capacity");
                 }
                 meshTextureOffsets.emplace(&mesh, offset);
                 for (std::size_t i = 0; i < mesh.images.size(); ++i) {
@@ -45,7 +45,7 @@
                 const Mesh& mesh = *grass.mesh;
                 const auto offset = static_cast<std::uint32_t>(materialTextures.size() + 1);
                 if (mesh.images.size() > MaxMaterialTextures - offset) {
-                    throw std::runtime_error("Grass prefab exceeds the material texture limit");
+                    throw std::runtime_error("Grass prefab exceeds the 4096-entry bindless texture capacity");
                 }
                 meshTextureOffsets.emplace(&mesh, offset);
                 for (std::size_t i = 0; i < mesh.images.size(); ++i) {
@@ -294,7 +294,10 @@
                             .instanceCount = 0,
                             .castShadow = castShadow,
                             .twoSided = std::ranges::any_of(mesh->materials, [](const PBRMaterial& material) {
-                                return material.doubleSided;
+                                // The existing foliage stream is drawn after opaque geometry.
+                                // Route BLEND here until transparent draws receive their own
+                                // sorted GPU stream; this guarantees actual alpha blending.
+                                return material.doubleSided || material.alphaMode == AlphaMode::Blend;
                             }),
                             .worldBounds = worldBounds,
                         });

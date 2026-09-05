@@ -97,7 +97,7 @@ void ShadowPass::create(VkPhysicalDevice physicalDevice, VkDevice device,
                        VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, nullptr};
         bindings[2] = {2, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1,
                        VK_SHADER_STAGE_FRAGMENT_BIT, nullptr};
-        bindings[3] = {3, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, MaxMaterialTextures,
+        bindings[8] = {8, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, MaxMaterialTextures,
                        VK_SHADER_STAGE_FRAGMENT_BIT, nullptr};
         bindings[4] = {4, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1,
                        VK_SHADER_STAGE_FRAGMENT_BIT, nullptr};
@@ -109,8 +109,14 @@ void ShadowPass::create(VkPhysicalDevice physicalDevice, VkDevice device,
                                          VK_SHADER_STAGE_VERTEX_BIT, nullptr};
         bindings[GrassDeformationBinding] = {GrassDeformationBinding, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1,
                                              VK_SHADER_STAGE_VERTEX_BIT, nullptr};
+        VkDescriptorBindingFlags bindingFlags[9]{};
+        bindingFlags[8] = VK_DESCRIPTOR_BINDING_PARTIALLY_BOUND_BIT |
+                          VK_DESCRIPTOR_BINDING_VARIABLE_DESCRIPTOR_COUNT_BIT;
+        const VkDescriptorSetLayoutBindingFlagsCreateInfo bindingFlagsInfo{
+            VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_BINDING_FLAGS_CREATE_INFO,
+            nullptr, 9, bindingFlags};
         const VkDescriptorSetLayoutCreateInfo layoutInfo{
-            VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO, nullptr, 0,
+            VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO, &bindingFlagsInfo, 0,
             9, bindings};
         if (vkCreateDescriptorSetLayout(device_, &layoutInfo, nullptr,
                                         &descriptorSetLayout_) != VK_SUCCESS) {
@@ -137,7 +143,12 @@ void ShadowPass::create(VkPhysicalDevice physicalDevice, VkDevice device,
         descriptorSets_.resize(frameCount);
         grassDescriptorSets_.resize(frameCount);
         grassShadowDescriptorSets_.resize(frameCount);
+        std::vector<std::uint32_t> descriptorCounts(frameCount * 3, MaxMaterialTextures);
+        VkDescriptorSetVariableDescriptorCountAllocateInfo variableCounts{
+            VK_STRUCTURE_TYPE_DESCRIPTOR_SET_VARIABLE_DESCRIPTOR_COUNT_ALLOCATE_INFO,
+            nullptr, static_cast<std::uint32_t>(descriptorCounts.size()), descriptorCounts.data()};
         VkDescriptorSetAllocateInfo allocateInfo{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};
+        allocateInfo.pNext = &variableCounts;
         allocateInfo.descriptorPool = descriptorPool_;
         std::vector<VkDescriptorSet> allDescriptorSets(frameCount * 3);
         allocateInfo.descriptorSetCount = frameCount * 3;
@@ -185,7 +196,7 @@ void ShadowPass::create(VkPhysicalDevice physicalDevice, VkDevice device,
                          descriptorSets_[frame], 2, 0, 1,
                          VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, nullptr, &materialInfo, nullptr};
             writes[3] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr,
-                         descriptorSets_[frame], 3, 0, MaxMaterialTextures,
+                         descriptorSets_[frame], 8, 0, MaxMaterialTextures,
                          VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, materialTextures.data(), nullptr};
             writes[4] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr,
                          descriptorSets_[frame], 4, 0, 1,

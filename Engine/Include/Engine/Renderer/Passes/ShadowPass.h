@@ -85,8 +85,8 @@ namespace Engine {
         // Packed grass reserves bindings 7/8 for cluster/deformation data.
         // this explicit prevents a future grass-only descriptor set from
         // silently using the generic seven-binding contract.
-        static constexpr std::uint32_t GrassClusterBinding = 7;
-        static constexpr std::uint32_t GrassDeformationBinding = 8;
+        static constexpr std::uint32_t GrassClusterBinding = 3;
+        static constexpr std::uint32_t GrassDeformationBinding = 7;
 
     private:
         struct PhysicalPage {

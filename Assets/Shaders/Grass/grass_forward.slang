@@ -8,12 +8,12 @@ import Grass.GrassDeformation;
 [[vk::binding(0, 0)]] Sampler2DShadow shadowMap;
 [[vk::binding(1, 0)]] ConstantBuffer<RendererFrameData> frame;
 [[vk::binding(2, 0)]] StructuredBuffer<MaterialData> materials;
-[[vk::binding(3, 0)]] Sampler2D materialTextures[16];
+[[vk::binding(8, 0)]] Sampler2D materialTextures[];
 [[vk::binding(4, 0)]] StructuredBuffer<uint4> shadowPageTable;
 [[vk::binding(5, 0)]] StructuredBuffer<GrassPackedInstance> instances;
 [[vk::binding(6, 0)]] StructuredBuffer<uint> visibleInstances;
-[[vk::binding(7, 0)]] StructuredBuffer<GrassPackedCluster> clusters;
-[[vk::binding(8, 0)]] StructuredBuffer<GrassPackedDeformation> deformations;
+[[vk::binding(3, 0)]] StructuredBuffer<GrassPackedCluster> clusters;
+[[vk::binding(7, 0)]] StructuredBuffer<GrassPackedDeformation> deformations;
 
 struct VertexInput
 {

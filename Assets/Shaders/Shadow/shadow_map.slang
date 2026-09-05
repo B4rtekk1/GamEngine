@@ -60,7 +60,7 @@ ShadowVertexOutput vertexMain(ShadowVertexInput input, uint instanceIndex : SV_I
 }
 
 [[vk::binding(2, 0)]] StructuredBuffer<MaterialData> materials;
-[[vk::binding(3, 0)]] Sampler2D materialTextures[16];
+[[vk::binding(8, 0)]] Sampler2D materialTextures[];
 
 struct ShadowFragmentInput
 {
@@ -72,11 +72,14 @@ struct ShadowFragmentInput
 void fragmentMain(ShadowFragmentInput input)
 {
     MaterialData material = materials[input.materialIndex];
+    float alpha = 1.0;
     if (material.textureIndices.x >= 0)
-    {
-        const float alpha = materialTextures[material.textureIndices.x].Sample(input.texCoord).a;
-        const uint alphaMode = uint((material.textureIndices.w >> 1) & 3);
-        if (alphaMode == 1 && alpha < material.roughnessAmbientOcclusion.z)
-            discard;
-    }
+        alpha *= materialTextures[material.textureIndices.x].Sample(input.texCoord).a;
+    // Must match forward_pbr: uncooked Quixel foliage commonly carries its
+    // cutout mask separately rather than in base-color alpha.
+    if (material.auxiliaryTextureIndices.y >= 0)
+        alpha *= materialTextures[material.auxiliaryTextureIndices.y].Sample(input.texCoord).r;
+    const uint alphaMode = uint((material.textureIndices.w >> 1) & 3);
+    if (alphaMode == 1 && alpha < material.roughnessAmbientOcclusion.z)
+        discard;
 }

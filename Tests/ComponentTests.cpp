@@ -269,7 +269,7 @@ TEST(ParticleTypes, SmokeEmitterProvidesStableSimulationDefaults) {
 }
 
 TEST(MaterialTypes, ExposeGpuFriendlyDefaultsAndLayerConfiguration) {
-    EXPECT_EQ(Engine::MaxMaterialTextures, 16u);
+    EXPECT_EQ(Engine::MaxMaterialTextures, 4096u);
     EXPECT_EQ(alignof(Engine::GPUMaterialData), 16u);
     EXPECT_EQ(sizeof(Engine::GPUMaterialData), 96u);
     const Engine::GPUMaterialData gpuMaterial;
