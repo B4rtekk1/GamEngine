@@ -129,7 +129,7 @@ namespace Engine {
         }
     }
 
-    void MsaaResources::destroy() {
+    void MsaaResources::destroy() noexcept {
         if (device_ == VK_NULL_HANDLE) {
             return;
         }

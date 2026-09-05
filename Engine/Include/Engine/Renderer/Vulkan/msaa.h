@@ -8,6 +8,10 @@ namespace Engine {
     public:
         MsaaResources() = default;
 
+        ~MsaaResources() noexcept {
+            destroy();
+        }
+
         MsaaResources(const MsaaResources &) = delete;
 
         MsaaResources &operator=(const MsaaResources &) = delete;
@@ -21,7 +25,7 @@ namespace Engine {
 
         void create(VkExtent2D extent, VkFormat colorFormat);
 
-        void destroy();
+        void destroy() noexcept;
 
         [[nodiscard]] VkSampleCountFlagBits sampleCount() const { return sampleCount_; }
         [[nodiscard]] bool enabled() const { return sampleCount_ != VK_SAMPLE_COUNT_1_BIT; }
