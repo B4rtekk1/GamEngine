@@ -60,6 +60,9 @@ namespace Engine {
         // Dedicated source data for the next grass draw path. These records
         // are 16 B and cluster-relative; normal scene objects never enter it.
         std::vector<GPUGrassInstance> grassInstances;
+        std::vector<GPUGrassDeformation> grassDeformations;
+        // Maps a terrain-local instance index to its packed GPU record.
+        std::unordered_map<Entity, std::vector<std::uint32_t>> grassInstanceGpuIndices;
         std::vector<GPUGrassCluster> grassClusters;
         // Parallel ownership table used only during topology extraction to
         // resolve the shared material table for each GPU grass cluster.

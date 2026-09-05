@@ -128,6 +128,8 @@
             sceneGpu.batchRenderableIndices.clear();
             sceneGpu.renderableIndices.clear();
             sceneGpu.grassInstances.clear();
+            sceneGpu.grassDeformations.clear();
+            sceneGpu.grassInstanceGpuIndices.clear();
             sceneGpu.grassClusters.clear();
             sceneGpu.grassClusterEntities.clear();
             instanceBatches.reserve(registry.size());
@@ -331,6 +333,8 @@
                 [&](const Entity entity, const Transform& terrainTransform,
                     TerrainGrassComponent& grass) {
                     if (!grass.hasPrefab() || grass.instances.empty()) return;
+                    auto& gpuIndices = sceneGpu.grassInstanceGpuIndices[entity];
+                    gpuIndices.assign(grass.instances.size(), std::numeric_limits<std::uint32_t>::max());
                     const Mesh* mesh = grass.mesh.get();
                     MeshUploadRecord upload{};
                     if (const auto found = uploadedMeshes.find(mesh); found != uploadedMeshes.end()) {
@@ -438,6 +442,24 @@
                                 // cluster record for batching/variants.
                                 .flags = static_cast<std::uint32_t>(sceneGpu.grassClusters.size()),
                             });
+                            const auto packDeformation = [](const float bendX, const float bendZ,
+                                                            const float trampled) {
+                                const auto snorm8 = [](const float value) {
+                                    return static_cast<std::uint32_t>(static_cast<std::uint8_t>(
+                                        std::lround(std::clamp(value, -1.0F, 1.0F) * 127.0F)));
+                                };
+                                const auto unorm8 = [](const float value) {
+                                    return static_cast<std::uint32_t>(std::lround(
+                                        std::clamp(value, 0.0F, 1.0F) * 255.0F));
+                                };
+                                return snorm8(bendX) | (snorm8(bendZ) << 8U) |
+                                       (unorm8(trampled) << 16U);
+                            };
+                            const std::uint32_t deformation = packDeformation(
+                                item.bendX, item.bendZ, item.trampled);
+                            sceneGpu.grassDeformations.push_back({deformation, deformation});
+                            gpuIndices[grassIndex] = static_cast<std::uint32_t>(
+                                sceneGpu.grassDeformations.size() - 1);
                         }
                         sceneGpu.grassClusters.push_back({
                             .originExtent = {batchBounds.min.x(), batchBounds.min.z(), extent, meshRootRadius},
@@ -827,6 +849,13 @@
             if (instanceBuffers[currentFrame].handle() == VK_NULL_HANDLE) { return;
 }
 
+            if (!sceneGpu.grassDeformations.empty() &&
+                uploadedGrassDeformationVersions[currentFrame] != grassDeformationVersion) {
+                grassDeformationBuffers[currentFrame].update(sceneGpu.grassDeformations.data(),
+                    sizeof(GPUGrassDeformation) * sceneGpu.grassDeformations.size());
+                uploadedGrassDeformationVersions[currentFrame] = grassDeformationVersion;
+            }
+
             const uint8_t bit = frameBit(currentFrame);
             // Velocity needs the immediately preceding pose, not the pose from
             // whichever frame-in-flight last owned this buffer. Upload the
@@ -886,6 +915,43 @@
             const std::uint64_t meshRendererRevision = registry.componentRevision<MeshRenderer>();
             const std::uint64_t terrainGrassRevision = registry.componentRevision<TerrainGrassComponent>();
             const std::uint64_t parentRevision = registry.componentRevision<ParentComponent>();
+            if (terrainGrassRevision != lastTerrainGrassRevision) {
+                const auto packDeformation = [](const TerrainGrassInstance& item) {
+                    const auto snorm8 = [](const float value) {
+                        return static_cast<std::uint32_t>(static_cast<std::uint8_t>(
+                            std::lround(std::clamp(value, -1.0F, 1.0F) * 127.0F)));
+                    };
+                    const auto unorm8 = [](const float value) {
+                        return static_cast<std::uint32_t>(std::lround(
+                            std::clamp(value, 0.0F, 1.0F) * 255.0F));
+                    };
+                    return snorm8(item.bendX) | (snorm8(item.bendZ) << 8U) |
+                           (unorm8(item.trampled) << 16U);
+                };
+                bool deformationChanged = false;
+                registry.view<TerrainGrassComponent>([&](const Entity entity,
+                                                         const TerrainGrassComponent& grass) {
+                    const auto found = sceneGpu.grassInstanceGpuIndices.find(entity);
+                    if (found == sceneGpu.grassInstanceGpuIndices.end()) return;
+                    const auto updateOne = [&](const std::size_t sourceIndex) {
+                        if (sourceIndex >= found->second.size() || sourceIndex >= grass.instances.size()) return;
+                        const std::uint32_t gpuIndex = found->second[sourceIndex];
+                        if (gpuIndex >= sceneGpu.grassDeformations.size()) return;
+                        GPUGrassDeformation& destination = sceneGpu.grassDeformations[gpuIndex];
+                        const std::uint32_t current = packDeformation(grass.instances[sourceIndex]);
+                        if (destination.packedCurrent == current) return;
+                        destination.packedPrevious = destination.packedCurrent;
+                        destination.packedCurrent = current;
+                        deformationChanged = true;
+                    };
+                    if (grass.allInstancesDirty) {
+                        for (std::size_t index = 0; index < grass.instances.size(); ++index) updateOne(index);
+                    } else {
+                        for (const std::size_t index : grass.dirtyInstances) updateOne(index);
+                    }
+                });
+                if (deformationChanged) ++grassDeformationVersion;
+            }
             if (transformRevision == lastTransformRevision &&
                 meshRendererRevision == lastMeshRendererRevision &&
                 terrainGrassRevision == lastTerrainGrassRevision &&

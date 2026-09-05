@@ -42,6 +42,7 @@ namespace Engine {
                     const std::vector<VkBuffer> &instanceIndexBuffers,
                     const std::vector<VkBuffer> &grassInstanceBuffers,
                     const std::vector<VkBuffer> &grassClusterBuffers,
+                    const std::vector<VkBuffer> &grassDeformationBuffers,
                     const std::vector<VkDescriptorImageInfo> &materialTextures,
                     VkDeviceSize uniformBufferRange, VmaAllocator allocator,
                     Assets::AssetManager &assets);
@@ -81,10 +82,11 @@ namespace Engine {
         void setGrassVisibleInstances(std::uint32_t frameIndex, VkBuffer visibleInstances) const;
         void setGrassShadowVisibleInstances(std::uint32_t frameIndex, VkBuffer visibleInstances) const;
 
-        // The grass shaders reserve binding 7 for GPUGrassCluster.  Keeping
+        // Packed grass reserves bindings 7/8 for cluster/deformation data.
         // this explicit prevents a future grass-only descriptor set from
         // silently using the generic seven-binding contract.
         static constexpr std::uint32_t GrassClusterBinding = 7;
+        static constexpr std::uint32_t GrassDeformationBinding = 8;
 
     private:
         struct PhysicalPage {

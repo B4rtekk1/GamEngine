@@ -286,6 +286,18 @@
                     emptyGeneratedGrass.data(), sizeof(GPUGrassInstance) * emptyGeneratedGrass.size(),
                     VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
                     commandPool, vulkanDevice.graphicsQueue(), vulkanDevice.allocator());
+                const std::vector<GPUGrassDeformation> emptyGrassDeformations =
+                    sceneGpu.grassDeformations.empty() ? std::vector<GPUGrassDeformation>(1)
+                                                        : sceneGpu.grassDeformations;
+                // This is the only per-blade buffer updated at runtime. Each
+                // frame owns one copy, so mapped coherent memory is safe once
+                // that frame's fence has completed and avoids an extra staging
+                // submission for every grass interaction.
+                grassDeformationBuffers[frame].createHostVisible(vulkanDevice.physical(), device,
+                    sizeof(GPUGrassDeformation) * emptyGrassDeformations.size(),
+                    VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, vulkanDevice.allocator());
+                grassDeformationBuffers[frame].update(emptyGrassDeformations.data(),
+                    sizeof(GPUGrassDeformation) * emptyGrassDeformations.size());
                 const std::vector<GPUGrassCluster> emptyGrassClusters =
                     sceneGpu.grassClusters.empty() ? std::vector<GPUGrassCluster>(1)
                                                    : sceneGpu.grassClusters;
@@ -691,6 +703,7 @@
             for (Buffer& buffer : grassBinOffsetBuffers) buffer.destroy();
             for (Buffer& buffer : grassBinCursorBuffers) buffer.destroy();
             for (Buffer& buffer : generatedGrassInstanceBuffers) buffer.destroy();
+            for (Buffer& buffer : grassDeformationBuffers) buffer.destroy();
             for (Buffer& buffer : grassIndirectBuffers) buffer.destroy();
             for (Buffer& buffer : grassDrawCountBuffers) buffer.destroy();
             for (Buffer& buffer : grassIndirectUniformBuffers) buffer.destroy();

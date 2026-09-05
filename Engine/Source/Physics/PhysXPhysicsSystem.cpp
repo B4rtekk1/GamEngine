@@ -54,8 +54,6 @@ namespace Engine {
             std::vector<GrassSphere> spheres;
             registry.view<Transform, ColliderComponent>(
                 [&](const Entity entity, const Transform&, const ColliderComponent& collider) {
-                    const auto* sphere = std::get_if<SphereCollider>(&collider.shape);
-                    if (sphere == nullptr) return;
                     const Transform transform = TransformSystem::worldTransform(registry, entity);
                     const glm::vec3 center = glm::vec3{transform.matrix().native() *
                         glm::vec4{collider.offset.native(), 1.0F}};
@@ -64,7 +62,28 @@ namespace Engine {
                                                   std::abs(transform.scale.z())});
                     const Vec3 velocity = registry.has<RigidbodyComponent>(entity)
                         ? registry.get<RigidbodyComponent>(entity).linearVelocity : Vec3{};
-                    spheres.push_back({entity, Vec3{center}, velocity, sphere->radius * scale});
+                    // Treat every collider as a conservative horizontal
+                    // interaction volume.  This keeps the inexpensive spatial
+                    // hash path while allowing the common player capsule,
+                    // boxes, ramps and mesh-backed props to affect grass.
+                    float localRadius = 0.0F;
+                    if (const auto* sphere = std::get_if<SphereCollider>(&collider.shape)) {
+                        localRadius = sphere->radius;
+                    } else if (const auto* capsule = std::get_if<CapsuleCollider>(&collider.shape)) {
+                        localRadius = std::max(capsule->radius, capsule->height * 0.5F);
+                    } else if (const auto* box = std::get_if<BoxCollider>(&collider.shape)) {
+                        localRadius = std::hypot(box->halfExtents.x(), box->halfExtents.z());
+                    } else if (const auto* ramp = std::get_if<RampCollider>(&collider.shape)) {
+                        localRadius = std::hypot(ramp->halfExtents.x(), ramp->halfExtents.z());
+                    } else if (const auto* mesh = std::get_if<MeshCollider>(&collider.shape)) {
+                        // MeshCollider has no cheap primitive bounds in this
+                        // system; use its transform scale as a conservative
+                        // contact radius until mesh overlap is GPU-driven.
+                        (void)mesh;
+                        localRadius = 0.5F;
+                    }
+                    if (localRadius <= 0.0F) return;
+                    spheres.push_back({entity, Vec3{center}, velocity, localRadius * scale});
                 });
             if (spheres.empty()) return;
             std::vector<float> grassCoverage(spheres.size());

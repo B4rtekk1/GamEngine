@@ -113,6 +113,9 @@
         // RendererInstanceData or GPUScene records.
         std::array<Buffer, MAX_FRAMES_IN_FLIGHT> grassClusterBuffers;
         std::array<Buffer, MAX_FRAMES_IN_FLIGHT> generatedGrassInstanceBuffers;
+        std::array<Buffer, MAX_FRAMES_IN_FLIGHT> grassDeformationBuffers;
+        std::uint64_t grassDeformationVersion{};
+        std::array<std::uint64_t, MAX_FRAMES_IN_FLIGHT> uploadedGrassDeformationVersions{};
         std::array<Buffer, MAX_FRAMES_IN_FLIGHT> grassIndirectBuffers;
         std::array<Buffer, MAX_FRAMES_IN_FLIGHT> grassDrawCountBuffers;
         // Dedicated command streams. They must never alias generic object

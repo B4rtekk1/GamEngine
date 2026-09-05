@@ -1,8 +1,6 @@
-// Packed grass is static between frames; this pass still alpha-tests the same
-// blades so TAA receives an explicit zero-motion sample instead of background
-// velocity at grass pixels.
 import Common.SceneData;
 import Grass.GrassPackedData;
+import Grass.GrassDeformation;
 
 [[vk::binding(1, 0)]] ConstantBuffer<RendererFrameData> frame;
 [[vk::binding(2, 0)]] StructuredBuffer<MaterialData> materials;
@@ -10,6 +8,7 @@ import Grass.GrassPackedData;
 [[vk::binding(5, 0)]] StructuredBuffer<GrassPackedInstance> instances;
 [[vk::binding(6, 0)]] StructuredBuffer<uint> visibleInstances;
 [[vk::binding(7, 0)]] StructuredBuffer<GrassPackedCluster> clusters;
+[[vk::binding(8, 0)]] StructuredBuffer<GrassPackedDeformation> deformations;
 
 struct VertexInput {
     [[vk::location(0)]] float3 position : POSITION;
@@ -18,19 +17,27 @@ struct VertexInput {
 };
 struct VertexOutput {
     float4 position : SV_Position;
-    [[vk::location(0)]] float2 texCoord;
-    [[vk::location(1)]] nointerpolation uint materialIndex;
+    [[vk::location(0)]] noperspective float2 currentNdc;
+    [[vk::location(1)]] float4 previousClip;
+    [[vk::location(2)]] float2 texCoord;
+    [[vk::location(3)]] nointerpolation uint materialIndex;
 };
 
 [shader("vertex")]
 VertexOutput vertexMain(VertexInput input, uint instanceIndex : SV_InstanceID,
                         uint baseInstance : SV_StartInstanceLocation) {
-    GrassPackedInstance instance = instances[visibleInstances[baseInstance + instanceIndex]];
+    uint packedIndex = visibleInstances[baseInstance + instanceIndex];
+    GrassPackedInstance instance = instances[packedIndex];
     GrassPackedCluster cluster = clusters[instance.flags];
-    float3 world = grassPackedWorldPosition(instance, cluster) +
-                   grassRotateYaw(input.position * grassPackedScale(instance), grassPackedYaw(instance));
+    float3 world = grassPackedDeformedWorld(input.position, instance, cluster,
+                                            deformations[packedIndex], frame, false);
+    float3 previousWorld = grassPackedDeformedWorld(input.position, instance, cluster,
+                                                    deformations[packedIndex], frame, true);
     VertexOutput output;
-    output.position = mul(mul(float4(world, 1.0), frame.view), frame.projection);
+    float4 currentClip = mul(mul(float4(world, 1.0), frame.view), frame.projection);
+    output.position = currentClip;
+    output.currentNdc = currentClip.xy / currentClip.w;
+    output.previousClip = mul(mul(float4(previousWorld, 1.0), frame.previousView), frame.previousProjection);
     output.texCoord = input.texCoord;
     output.materialIndex = cluster.instanceRange.z + input.materialIndex;
     return output;
@@ -42,5 +49,7 @@ float4 fragmentMain(VertexOutput input) : SV_Target {
     if (material.textureIndices.x >= 0 &&
         materialTextures[material.textureIndices.x].Sample(input.texCoord).a <= 0.01)
         discard;
-    return float4(0.0, 0.0, 0.0, 1.0);
+    float2 currentUv = input.currentNdc * 0.5 + 0.5;
+    float2 previousUv = (input.previousClip.xy / input.previousClip.w) * 0.5 + 0.5;
+    return float4(currentUv - previousUv, 0.0, 1.0);
 }

@@ -150,6 +150,15 @@ namespace Engine {
     };
     static_assert(sizeof(GPUGrassInstance) == 16);
 
+    /** Dynamic, per-blade interaction state.  Each word contains SNORM8 X/Z
+     * bend and UNORM8 trampling; keeping current and previous values makes
+     * motion vectors agree with the visible deformation. */
+    struct alignas(4) GPUGrassDeformation {
+        std::uint32_t packedCurrent{};
+        std::uint32_t packedPrevious{};
+    };
+    static_assert(sizeof(GPUGrassDeformation) == 8);
+
     /** One culling/rendering unit for a contiguous range of packed blades. */
     struct alignas(16) GPUGrassCluster {
         // xy: world-space XZ origin; z: largest local XZ extent; w: mesh

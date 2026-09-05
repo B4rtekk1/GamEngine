@@ -3,6 +3,7 @@
 import Common.SceneData;
 import Common.ShadowSampling;
 import Grass.GrassPackedData;
+import Grass.GrassDeformation;
 
 [[vk::binding(0, 0)]] Sampler2DShadow shadowMap;
 [[vk::binding(1, 0)]] ConstantBuffer<RendererFrameData> frame;
@@ -12,6 +13,7 @@ import Grass.GrassPackedData;
 [[vk::binding(5, 0)]] StructuredBuffer<GrassPackedInstance> instances;
 [[vk::binding(6, 0)]] StructuredBuffer<uint> visibleInstances;
 [[vk::binding(7, 0)]] StructuredBuffer<GrassPackedCluster> clusters;
+[[vk::binding(8, 0)]] StructuredBuffer<GrassPackedDeformation> deformations;
 
 struct VertexInput
 {
@@ -38,10 +40,10 @@ VertexOutput vertexMain(VertexInput input, uint instanceIndex : SV_InstanceID,
 {
     GrassPackedInstance instance = instances[visibleInstances[baseInstance + instanceIndex]];
     GrassPackedCluster cluster = clusters[instance.flags];
-    float scale = grassPackedScale(instance);
     float yaw = grassPackedYaw(instance);
-    float3 local = grassRotateYaw(input.position * scale, yaw);
-    float3 worldPosition = grassPackedWorldPosition(instance, cluster) + local;
+    uint packedIndex = visibleInstances[baseInstance + instanceIndex];
+    float3 worldPosition = grassPackedDeformedWorld(input.position, instance, cluster,
+                                                     deformations[packedIndex], frame, false);
     VertexOutput output;
     output.position = mul(mul(float4(worldPosition, 1.0), frame.view), frame.projection);
     output.color = input.color;
