@@ -170,6 +170,9 @@ namespace Engine {
         // and half-height. Kept with
         // the packed cluster so indirect generation never consults GPUScene.
         glm::uvec4 draw{};
+        // x: mesh minimum Y, y: mesh height, z: material stiffness,
+        // w: maximum bend angle in radians.
+        glm::vec4 bladeShape{};
     };
-    static_assert(sizeof(GPUGrassCluster) == 48);
+    static_assert(sizeof(GPUGrassCluster) == 64);
 } // namespace Engine

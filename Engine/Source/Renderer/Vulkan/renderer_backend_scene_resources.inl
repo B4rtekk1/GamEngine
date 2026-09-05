@@ -400,7 +400,10 @@
                             }
                             largestScale = std::max(largestScale, item.scale);
                         }
-                        const float bendExpansion = meshHeight * largestScale * horizontalTerrainScale * 0.8F;
+                        // The angle clamp guarantees a maximum horizontal
+                        // reach of height * sin(60 degrees). Keep a small
+                        // margin for the mesh's authored width.
+                        const float bendExpansion = meshHeight * largestScale * horizontalTerrainScale * 0.9F;
                         batchBounds.min.setX(batchBounds.min.x() - bendExpansion);
                         batchBounds.min.setZ(batchBounds.min.z() - bendExpansion);
                         batchBounds.max.setX(batchBounds.max.x() + bendExpansion);
@@ -468,6 +471,8 @@
                             .draw = {upload.firstIndex, mesh->indexCount(), 0U,
                                      glm::packHalf1x16((batchBounds.min.y() + batchBounds.max.y()) * 0.5F) |
                                          (glm::packHalf1x16((batchBounds.max.y() - batchBounds.min.y()) * 0.5F) << 16U)},
+                            .bladeShape = {upload.localBounds.min.y(), std::max(meshHeight, 1.0e-4F),
+                                           1.0F, glm::radians(60.0F)},
                         });
                         sceneGpu.grassClusterEntities.push_back(entity);
                         sceneMinimum = glm::min(sceneMinimum, batchBounds.min.native());

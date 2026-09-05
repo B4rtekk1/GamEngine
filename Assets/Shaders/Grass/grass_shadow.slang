@@ -32,8 +32,8 @@ VertexOutput vertexMain(VertexInput input, uint instanceIndex : SV_InstanceID,
     uint packedIndex = visibleInstances[baseInstance + instanceIndex];
     GrassPackedInstance instance = instances[packedIndex];
     GrassPackedCluster cluster = clusters[instance.flags];
-    float3 world = grassPackedDeformedWorld(input.position, instance, cluster,
-                                            deformations[packedIndex], frame, false);
+    float3 world = grassPackedDeformedVertex(input.position, float3(0.0), instance, cluster,
+                                              deformations[packedIndex], frame, false).position;
     VertexOutput output;
     output.position = mul(float4(world, 1.0), pushConstants.lightSpace);
     output.texCoord = input.texCoord;

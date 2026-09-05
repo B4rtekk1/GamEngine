@@ -40,15 +40,15 @@ VertexOutput vertexMain(VertexInput input, uint instanceIndex : SV_InstanceID,
 {
     GrassPackedInstance instance = instances[visibleInstances[baseInstance + instanceIndex]];
     GrassPackedCluster cluster = clusters[instance.flags];
-    float yaw = grassPackedYaw(instance);
     uint packedIndex = visibleInstances[baseInstance + instanceIndex];
-    float3 worldPosition = grassPackedDeformedWorld(input.position, instance, cluster,
-                                                     deformations[packedIndex], frame, false);
+    GrassDeformedVertex deformed = grassPackedDeformedVertex(input.position, input.normal, instance, cluster,
+                                                              deformations[packedIndex], frame, false);
+    float3 worldPosition = deformed.position;
     VertexOutput output;
     output.position = mul(mul(float4(worldPosition, 1.0), frame.view), frame.projection);
     output.color = input.color;
     output.worldPosition = worldPosition;
-    output.normal = grassRotateYaw(input.normal, yaw);
+    output.normal = deformed.normal;
     output.materialIndex = cluster.instanceRange.z + input.materialIndex;
     output.texCoord = input.texCoord;
     return output;
