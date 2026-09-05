@@ -13,5 +13,10 @@ namespace Engine {
         glm::vec4 roughnessAmbientOcclusion{};
         glm::ivec4 textureIndices{-1};
         glm::ivec4 terrainLayerTextures{-1};
+        // AO, opacity, translucency, displacement.  The final component is
+        // reserved for cooker-added maps without changing the first block.
+        glm::ivec4 auxiliaryTextureIndices{-1};
+        // normalScale, translucency strength, displacement scale, specular.
+        glm::vec4 extensionScalars{};
     };
 } // namespace Engine

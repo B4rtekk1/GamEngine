@@ -244,7 +244,7 @@ TEST(SceneSerializer, RoundTripsCubeActorTransformAndMaterial) {
     Engine::PBRMaterial material;
     material.metallic = 0.6F;
     material.roughness = 0.3F;
-    material.alphaBlend = true;
+    material.alphaMode = Engine::AlphaMode::Blend;
     Engine::Scene source;
     const auto actor = source.createCube("Serialized cube", material);
     actor.setPosition({1.0F, 2.0F, 3.0F});
@@ -267,7 +267,7 @@ TEST(SceneSerializer, RoundTripsCubeActorTransformAndMaterial) {
     ASSERT_TRUE(renderer.hasMesh());
     EXPECT_FLOAT_EQ(renderer.material.metallic, 0.6F);
     EXPECT_FLOAT_EQ(renderer.material.roughness, 0.3F);
-    EXPECT_TRUE(renderer.material.alphaBlend);
+    EXPECT_EQ(renderer.material.alphaMode, Engine::AlphaMode::Blend);
 }
 
 TEST(SceneSerializer, StoresTerrainSamplesInLosslessBinarySidecar) {

@@ -595,15 +595,21 @@
                     };
                     materials[offsetIt->second + slot] = {
                         glm::vec4{source.baseColor.r(), source.baseColor.g(), source.baseColor.b(), source.metallic},
-                        glm::vec4{source.roughness, source.ambientOcclusion, source.alphaCutoff, source.normalScale},
+                        glm::vec4{source.roughness, source.aoStrength, source.alphaCutoff, 0.0F},
                         glm::ivec4{textureIndex(source.baseColorTexture),
                                    textureIndex(source.metallicRoughnessTexture), textureIndex(source.normalTexture),
-                                   (source.doubleSided ? 1 : 0) | (source.alphaBlend ? 2 : 0) |
-                                   (source.terrainLayered ? 4 : 0)},
+                                   (source.doubleSided ? 1 : 0) |
+                                   (static_cast<int>(source.alphaMode) << 1) |
+                                   (source.terrainLayered ? 8 : 0) |
+                                   (source.shadingModel == MaterialShadingModel::Foliage ? 16 : 0)},
                         glm::ivec4{textureIndex(source.terrainLayerTextures[0]),
                                    textureIndex(source.terrainLayerTextures[1]),
                                    textureIndex(source.terrainLayerTextures[2]),
                                    textureIndex(source.terrainLayerTextures[3])},
+                        glm::ivec4{textureIndex(source.aoTexture), textureIndex(source.opacityTexture),
+                                   textureIndex(source.translucencyTexture), textureIndex(source.displacementTexture)},
+                        glm::vec4{source.normalScale, source.translucency,
+                                  source.displacementScale, source.specular},
                     };
                 }
             });
@@ -1091,17 +1097,23 @@
                     const GPUMaterialData material{
                         glm::vec4{source.baseColor.r(), source.baseColor.g(),
                                   source.baseColor.b(), source.metallic},
-                        glm::vec4{source.roughness, source.ambientOcclusion,
-                                  source.alphaCutoff, source.normalScale},
+                        glm::vec4{source.roughness, source.aoStrength,
+                                  source.alphaCutoff, 0.0F},
                         glm::ivec4{textureIndex(source.baseColorTexture),
                                    textureIndex(source.metallicRoughnessTexture),
                                    textureIndex(source.normalTexture),
-                                   (source.doubleSided ? 1 : 0) | (source.alphaBlend ? 2 : 0) |
-                                   (source.terrainLayered ? 4 : 0)},
+                                   (source.doubleSided ? 1 : 0) |
+                                   (static_cast<int>(source.alphaMode) << 1) |
+                                   (source.terrainLayered ? 8 : 0) |
+                                   (source.shadingModel == MaterialShadingModel::Foliage ? 16 : 0)},
                         glm::ivec4{textureIndex(source.terrainLayerTextures[0]),
                                    textureIndex(source.terrainLayerTextures[1]),
                                    textureIndex(source.terrainLayerTextures[2]),
                                    textureIndex(source.terrainLayerTextures[3])},
+                        glm::ivec4{textureIndex(source.aoTexture), textureIndex(source.opacityTexture),
+                                   textureIndex(source.translucencyTexture), textureIndex(source.displacementTexture)},
+                        glm::vec4{source.normalScale, source.translucency,
+                                  source.displacementScale, source.specular},
                     };
                     GPUMaterialData& destination = materials[record.materialTableOffset + slot];
                     if (!optimizationFeatures.materialCaching ||

@@ -33,6 +33,8 @@ struct MaterialData
     float4 roughnessAmbientOcclusion;
     int4 textureIndices;
     int4 terrainLayerTextures;
+    int4 auxiliaryTextureIndices;
+    float4 extensionScalars;
 };
 
 // Mirrors Engine::RendererInstanceData.  The renderer binds this table as an

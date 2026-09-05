@@ -106,7 +106,7 @@ TEST(SceneComponents, ProvideExpectedDefaults) {
     const Engine::PBRMaterial material;
     EXPECT_FLOAT_EQ(material.roughness, 0.55F);
     EXPECT_EQ(material.baseColorTexture, -1);
-    EXPECT_FALSE(material.alphaBlend);
+    EXPECT_EQ(material.alphaMode, Engine::AlphaMode::Opaque);
 }
 
 TEST(IdentityComponents, GenerateAndReserveMonotonicUniqueIdentifiers) {
@@ -271,7 +271,7 @@ TEST(ParticleTypes, SmokeEmitterProvidesStableSimulationDefaults) {
 TEST(MaterialTypes, ExposeGpuFriendlyDefaultsAndLayerConfiguration) {
     EXPECT_EQ(Engine::MaxMaterialTextures, 16u);
     EXPECT_EQ(alignof(Engine::GPUMaterialData), 16u);
-    EXPECT_EQ(sizeof(Engine::GPUMaterialData), 64u);
+    EXPECT_EQ(sizeof(Engine::GPUMaterialData), 96u);
     const Engine::GPUMaterialData gpuMaterial;
     EXPECT_EQ(gpuMaterial.textureIndices[0], -1);
     EXPECT_EQ(gpuMaterial.textureIndices[3], -1);

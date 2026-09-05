@@ -370,7 +370,19 @@
                    lhs.textureIndices.x == rhs.textureIndices.x &&
                    lhs.textureIndices.y == rhs.textureIndices.y &&
                    lhs.textureIndices.z == rhs.textureIndices.z &&
-                   lhs.textureIndices.w == rhs.textureIndices.w;
+                   lhs.textureIndices.w == rhs.textureIndices.w &&
+                   lhs.terrainLayerTextures.x == rhs.terrainLayerTextures.x &&
+                   lhs.terrainLayerTextures.y == rhs.terrainLayerTextures.y &&
+                   lhs.terrainLayerTextures.z == rhs.terrainLayerTextures.z &&
+                   lhs.terrainLayerTextures.w == rhs.terrainLayerTextures.w &&
+                   lhs.auxiliaryTextureIndices.x == rhs.auxiliaryTextureIndices.x &&
+                   lhs.auxiliaryTextureIndices.y == rhs.auxiliaryTextureIndices.y &&
+                   lhs.auxiliaryTextureIndices.z == rhs.auxiliaryTextureIndices.z &&
+                   lhs.auxiliaryTextureIndices.w == rhs.auxiliaryTextureIndices.w &&
+                   lhs.extensionScalars.x == rhs.extensionScalars.x &&
+                   lhs.extensionScalars.y == rhs.extensionScalars.y &&
+                   lhs.extensionScalars.z == rhs.extensionScalars.z &&
+                   lhs.extensionScalars.w == rhs.extensionScalars.w;
         }
 
         void markDirty(const std::size_t index,

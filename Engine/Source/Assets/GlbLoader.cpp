@@ -167,9 +167,12 @@ void load_materials(const cgltf_data& data, Mesh& mesh) {
         }
         material.normalTexture = image_index(data, source.normal_texture);
         material.normalScale = source.normal_texture.texture == nullptr ? 1.0F : source.normal_texture.scale;
-        material.ambientOcclusion = source.occlusion_texture.texture == nullptr
+        material.aoTexture = image_index(data, source.occlusion_texture);
+        material.aoStrength = source.occlusion_texture.texture == nullptr
                                       ? 1.0F : source.occlusion_texture.scale;
-        material.alphaBlend = source.alpha_mode != cgltf_alpha_mode_opaque;
+        material.alphaMode = source.alpha_mode == cgltf_alpha_mode_mask ? AlphaMode::Mask :
+                             source.alpha_mode == cgltf_alpha_mode_blend ? AlphaMode::Blend :
+                             AlphaMode::Opaque;
         material.alphaCutoff = source.alpha_mode == cgltf_alpha_mode_mask ? source.alpha_cutoff : 0.5F;
         material.doubleSided = source.double_sided != 0;
         mesh.materials.push_back(material);

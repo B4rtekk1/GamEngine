@@ -107,9 +107,8 @@ FragmentOutput fragmentMain(FragmentInput input)
     if (material.textureIndices.x >= 0)
     {
         float alpha = materialTextures[material.textureIndices.x].Sample(input.texCoord).a;
-        bool alphaBlend = (material.textureIndices.w & 2) != 0;
-        if ((alphaBlend && alpha < material.roughnessAmbientOcclusion.z) ||
-            (!alphaBlend && alpha <= 0.01))
+        uint alphaMode = uint((material.textureIndices.w >> 1) & 3);
+        if (alphaMode == 1 && alpha < material.roughnessAmbientOcclusion.z)
             discard;
     }
     float2 currentUv = input.currentNdc * 0.5 + 0.5;

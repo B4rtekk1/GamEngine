@@ -121,7 +121,7 @@ ForwardFragmentOutput fragmentMain(ForwardFragmentInput input)
     }
 
     float4 baseColor = float4(vertexColor * material.baseColorMetallic.rgb, 1.0);
-    if ((material.textureIndices.w & 4) != 0)
+    if ((material.textureIndices.w & 8) != 0)
     {
         baseColor = float4(material.baseColorMetallic.rgb, 1.0);
         float3 weights = saturate(input.color);
@@ -151,18 +151,21 @@ ForwardFragmentOutput fragmentMain(ForwardFragmentInput input)
     else if (material.textureIndices.x >= 0)
         baseColor *= materialTextures[material.textureIndices.x].Sample(input.texCoord);
 
+    // Cooker may pack this map into base-color alpha; retain the separate
+    // path for uncooked glTF/Quixel assets.
+    if (material.auxiliaryTextureIndices.y >= 0)
+        baseColor.a *= materialTextures[material.auxiliaryTextureIndices.y].Sample(input.texCoord).r;
+
     const bool doubleSided = (material.textureIndices.w & 1) != 0;
-    const bool alphaBlend = (material.textureIndices.w & 2) != 0;
-    if (alphaBlend)
+    const uint alphaMode = uint((material.textureIndices.w >> 1) & 3);
+    // 0 = opaque, 1 = mask, 2 = blend.  Only MASK discards fragments.
+    if (alphaMode == 1)
     {
         if (baseColor.a < material.roughnessAmbientOcclusion.z)
             discard;
         baseColor.a = 1.0;
     }
-    else if (baseColor.a <= 0.01)
-    {
-        discard;
-    }
+    else if (alphaMode == 0) baseColor.a = 1.0;
 
     float3 albedo = baseColor.rgb;
     float metallic = material.baseColorMetallic.a;
@@ -178,15 +181,15 @@ ForwardFragmentOutput fragmentMain(ForwardFragmentInput input)
     roughness = clamp(roughness, 0.045, 1.0);
 
     float3 normal = normalize(input.normal);
-    if (doubleSided && !input.isFrontFace)
-        normal = -normal;
-    if (material.textureIndices.z >= 0 && abs(material.roughnessAmbientOcclusion.w) > 1e-6)
+    float faceSign = doubleSided && !input.isFrontFace ? -1.0 : 1.0;
+    normal *= faceSign;
+    if (material.textureIndices.z >= 0 && abs(material.extensionScalars.x) > 1e-6)
     {
-        float3 tangent = normalize(input.tangent.xyz - normal * dot(normal, input.tangent.xyz));
+        float3 tangent = normalize(input.tangent.xyz - normal * dot(normal, input.tangent.xyz)) * faceSign;
         float3 bitangent = normalize(cross(normal, tangent)) * input.tangent.w;
         float3 mappedNormal =
             materialTextures[material.textureIndices.z].Sample(input.texCoord).xyz * 2.0 - 1.0;
-        mappedNormal.xy *= material.roughnessAmbientOcclusion.w;
+        mappedNormal.xy *= material.extensionScalars.x;
         float3x3 tangentFrame = float3x3(tangent, bitangent, normal);
         normal = normalize(mul(mappedNormal, tangentFrame));
     }
@@ -235,8 +238,19 @@ ForwardFragmentOutput fragmentMain(ForwardFragmentInput input)
         direct += (localDiffuse + localSpecular) * local.colorIntensity.rgb *
                   local.colorIntensity.w * localNDotL * attenuation;
     }
-    float3 color = 0.9 * albedo *
-                   clamp(material.roughnessAmbientOcclusion.y, 0.0, 1.0) + direct;
+    float ao = 1.0;
+    if (material.auxiliaryTextureIndices.x >= 0)
+        ao = lerp(1.0, materialTextures[material.auxiliaryTextureIndices.x].Sample(input.texCoord).r,
+                  clamp(material.roughnessAmbientOcclusion.y, 0.0, 1.0));
+    float3 color = 0.9 * albedo * ao + direct;
+    // Foliage has a cheap, stable back-lighting term.  The flag is deliberately
+    // material data rather than an asset-name heuristic at runtime.
+    if ((material.textureIndices.w & 16) != 0 && material.auxiliaryTextureIndices.z >= 0) {
+        float mask = materialTextures[material.auxiliaryTextureIndices.z].Sample(input.texCoord).r;
+        float backLight = saturate(dot(-normal, lightDirection));
+        color += albedo * frame.lightColor.rgb * frame.lightDirectionIntensity.w *
+                 backLight * mask * material.extensionScalars.y;
+    }
 
     ForwardFragmentOutput output;
     output.color = float4(color, baseColor.a);

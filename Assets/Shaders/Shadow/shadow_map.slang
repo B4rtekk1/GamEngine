@@ -75,9 +75,8 @@ void fragmentMain(ShadowFragmentInput input)
     if (material.textureIndices.x >= 0)
     {
         const float alpha = materialTextures[material.textureIndices.x].Sample(input.texCoord).a;
-        const float cutoff = (material.textureIndices.w & 2) != 0
-            ? material.roughnessAmbientOcclusion.z : 0.01;
-        if (alpha < cutoff)
+        const uint alphaMode = uint((material.textureIndices.w >> 1) & 3);
+        if (alphaMode == 1 && alpha < material.roughnessAmbientOcclusion.z)
             discard;
     }
 }

@@ -228,11 +228,11 @@ namespace Engine {
             output << ' ';
             writeFloat(output, material.roughness);
             output << ' ';
-            writeFloat(output, material.ambientOcclusion);
+            writeFloat(output, material.aoStrength);
             output << ' ' << material.baseColorTexture << ' '
                     << material.metallicRoughnessTexture << ' ' << material.normalTexture << ' ';
             writeFloat(output, material.normalScale);
-            output << ' ' << static_cast<int>(material.alphaBlend) << ' '
+            output << ' ' << static_cast<int>(material.alphaMode) << ' '
                     << static_cast<int>(material.doubleSided) << ' ';
             writeFloat(output, material.alphaCutoff);
         }
@@ -242,12 +242,15 @@ namespace Engine {
             material.baseColor = readColorRgba(input, "material base color");
             material.metallic = readFloat(input, "material metallic");
             material.roughness = readFloat(input, "material roughness");
-            material.ambientOcclusion = readFloat(input, "material ambient occlusion");
+            material.aoStrength = readFloat(input, "material AO strength");
             material.baseColorTexture = read<std::int32_t>(input, "base-color texture index");
             material.metallicRoughnessTexture = read<std::int32_t>(input, "metallic-roughness texture index");
             material.normalTexture = read<std::int32_t>(input, "normal texture index");
             material.normalScale = readFloat(input, "normal scale");
-            material.alphaBlend = readBool(input, "alpha-blend flag");
+            const int alphaMode = read<int>(input, "alpha mode");
+            if (alphaMode < 0 || alphaMode > static_cast<int>(AlphaMode::Blend))
+                throw std::runtime_error("invalid material alpha mode");
+            material.alphaMode = static_cast<AlphaMode>(alphaMode);
             material.doubleSided = readBool(input, "double-sided flag");
             material.alphaCutoff = readFloat(input, "alpha cutoff");
             return material;

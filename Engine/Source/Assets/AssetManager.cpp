@@ -316,13 +316,17 @@ namespace Engine::Assets {
             float green{};
             float blue{};
             float alpha{};
+            int alphaMode{};
             if (!(file >> red >> green >> blue >> alpha
-                  >> material.metallic >> material.roughness >> material.ambientOcclusion
+                  >> material.metallic >> material.roughness >> material.aoStrength
                   >> material.baseColorTexture >> material.metallicRoughnessTexture
                   >> material.normalTexture >> material.normalScale
-                  >> material.alphaBlend >> material.doubleSided >> material.alphaCutoff)) {
+                  >> alphaMode >> material.doubleSided >> material.alphaCutoff)) {
                 return std::shared_ptr<const PBRMaterial>{};
             }
+            if (alphaMode < 0 || alphaMode > static_cast<int>(AlphaMode::Blend))
+                return std::shared_ptr<const PBRMaterial>{};
+            material.alphaMode = static_cast<AlphaMode>(alphaMode);
             material.baseColor = Math::Color{red, green, blue, alpha};
             return std::make_shared<const PBRMaterial>(material);
         });

@@ -169,17 +169,22 @@ bool ComponentsPanel::draw(Engine::ScenePreset &scene, const std::vector<Engine:
         changed |= Editor::Controls::sliderFloat("Roughness##mesh-material", &renderer.material.roughness,
                                       0.0F, 1.0F, "%.2f");
         changed |= Editor::Controls::sliderFloat("Ambient Occlusion##mesh-material",
-                                      &renderer.material.ambientOcclusion, 0.0F, 1.0F, "%.2f");
+                                      &renderer.material.aoStrength, 0.0F, 1.0F, "%.2f");
         changed |= ImGui::DragFloat("Normal Scale##mesh-material", &renderer.material.normalScale,
                                     0.01F, 0.0F, 10.0F, "%.2f");
         renderer.material.metallic = std::clamp(renderer.material.metallic, 0.0F, 1.0F);
         renderer.material.roughness = std::clamp(renderer.material.roughness, 0.0F, 1.0F);
-        renderer.material.ambientOcclusion = std::clamp(renderer.material.ambientOcclusion, 0.0F, 1.0F);
+        renderer.material.aoStrength = std::clamp(renderer.material.aoStrength, 0.0F, 1.0F);
         renderer.material.normalScale = std::max(0.0F, renderer.material.normalScale);
 
-        changed |= ImGui::Checkbox("Alpha Blend##mesh-material", &renderer.material.alphaBlend);
+        int alphaMode = static_cast<int>(renderer.material.alphaMode);
+        constexpr const char* alphaModes[] = {"Opaque", "Mask", "Blend"};
+        if (ImGui::Combo("Alpha Mode##mesh-material", &alphaMode, alphaModes, 3)) {
+            renderer.material.alphaMode = static_cast<Engine::AlphaMode>(alphaMode);
+            changed = true;
+        }
         changed |= ImGui::Checkbox("Double Sided##mesh-material", &renderer.material.doubleSided);
-        if (!renderer.material.alphaBlend) {
+        if (renderer.material.alphaMode == Engine::AlphaMode::Mask) {
             changed |= Editor::Controls::sliderFloat("Alpha Cutoff##mesh-material", &renderer.material.alphaCutoff,
                                           0.0F, 1.0F, "%.2f");
             renderer.material.alphaCutoff = std::clamp(renderer.material.alphaCutoff, 0.0F, 1.0F);
