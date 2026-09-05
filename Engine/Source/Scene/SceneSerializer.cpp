@@ -1048,7 +1048,10 @@ namespace Engine {
                 }
                 auto mesh = assetManager.loadMesh(std::filesystem::path{sourcePath}).shared();
                 if (!mesh) {
-                    invalidScene("could not load mesh asset '" + sourcePath + "'");
+                    // Keep the scene loadable when an imported source asset was
+                    // removed. The entity remains in the scene without render
+                    // geometry and can be repaired by assigning another mesh.
+                    mesh = std::make_shared<Mesh>();
                 }
                 meshes.push_back(std::move(mesh));
                 continue;

@@ -4,6 +4,8 @@
 #include "Editor/Panels/AssetDragDrop.h"
 #include "Editor/Panels/ConsolePanel.h"
 #include "Elements/NumericControl.h"
+#include "Engine/Renderer/MeshRenderer.h"
+#include "Engine/Scene/SceneEditor.h"
 #include "imgui.h"
 
 #include <algorithm>
@@ -230,7 +232,20 @@ std::string clipped_label(const std::string& value, const float width) {
     return result + "...";
 }
 
-bool delete_asset_file(const std::filesystem::path& root, const std::filesystem::path& relative,
+bool scene_uses_asset(const Engine::ScenePreset& scene, const std::filesystem::path& root,
+                      const std::filesystem::path& relative) {
+    const auto assetPath = (root / relative).lexically_normal();
+    bool used = false;
+    scene.editor().view<Engine::MeshRenderer>([&](const Engine::Entity,
+                                                   const Engine::MeshRenderer& renderer) {
+        if (renderer.mesh && renderer.mesh->sourcePath.lexically_normal() == assetPath)
+            used = true;
+    });
+    return used;
+}
+
+bool delete_asset_file(const Engine::ScenePreset& scene, const std::filesystem::path& root,
+                       const std::filesystem::path& relative,
                        std::string& error) {
     // Asset paths come from the catalog, but keep this check here as a hard
     // boundary before performing a filesystem mutation.
@@ -243,6 +258,11 @@ bool delete_asset_file(const std::filesystem::path& root, const std::filesystem:
             error = "Asset path escapes the asset directory";
             return false;
         }
+    }
+
+    if (scene_uses_asset(scene, root, relative)) {
+        error = "Asset is used by the current scene; remove it from the scene first";
+        return false;
     }
 
     const auto path = (root / relative).lexically_normal();
@@ -641,7 +661,7 @@ Engine::Entity AssetManagerPanel::draw(Engine::ScenePreset& scene, Engine::Asset
         ImGui::TextDisabled("This removes the file from the project.");
         ImGui::Separator();
         if (ImGui::Button("Delete", {120.0F, 0.0F})) {
-            if (delete_asset_file(root, deleteCandidate, error)) {
+            if (delete_asset_file(scene, root, deleteCandidate, error)) {
                 Editor::ConsolePanel::info("Deleted asset: " + deleteCandidate.generic_string());
                 refresh();
             } else {
