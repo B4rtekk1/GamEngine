@@ -1,4 +1,5 @@
 #include "Engine/Renderer/Vulkan/buffer.h"
+#include "Engine/Renderer/Vulkan/upload_context.h"
 
 #include <cstring>
 #include <algorithm>
@@ -19,75 +20,22 @@ namespace Engine {
             throw std::invalid_argument("Buffer upload requires non-empty data");
         }
 
-        Buffer staging;
-        staging.create({
-            device, size,
-            static_cast<VkBufferUsageFlags>(VK_BUFFER_USAGE_TRANSFER_SRC_BIT),
-            static_cast<VkMemoryPropertyFlags>(VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT) |
-            static_cast<VkMemoryPropertyFlags>(VK_MEMORY_PROPERTY_HOST_COHERENT_BIT),
-            allocator,
-        });
-        staging.update(data, size);
-
         create({
             device, size,
             usage | static_cast<VkBufferUsageFlags>(VK_BUFFER_USAGE_TRANSFER_DST_BIT),
             static_cast<VkMemoryPropertyFlags>(VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT),
             allocator,
         });
-
-        VkCommandBufferAllocateInfo allocateInfo{VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO};
-        allocateInfo.commandPool = commandPool;
-        allocateInfo.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
-        allocateInfo.commandBufferCount = 1;
-
-        VkCommandBuffer commandBuffer = VK_NULL_HANDLE;
-        if (vkAllocateCommandBuffers(device, &allocateInfo, &commandBuffer) != VK_SUCCESS) {
-            throw std::runtime_error("Could not allocate buffer copy command buffer");
+        // Initial data follows the same non-blocking path as dynamic updates.
+        // The staging allocation remains owned by this Buffer until its fence
+        // signals, so its lifetime is valid without stalling the CPU.
+        if (UploadContext* upload = UploadContext::current()) {
+            upload->begin();
+            upload->copyBuffer(buffer_, data, size);
+            readyTimeline_ = upload->submit();
+        } else {
+            uploadDeviceLocal(data, size, 0, commandPool, queue);
         }
-
-        VkCommandBufferBeginInfo beginInfo{VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
-        beginInfo.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
-        if (vkBeginCommandBuffer(commandBuffer, &beginInfo) != VK_SUCCESS) {
-            vkFreeCommandBuffers(device, commandPool, 1, &commandBuffer);
-            throw std::runtime_error("Could not begin buffer copy command buffer");
-        }
-
-        VkBufferCopy copyRegion{.size = size};
-        vkCmdCopyBuffer(commandBuffer, staging.buffer_, buffer_, 1, &copyRegion);
-
-        if (vkEndCommandBuffer(commandBuffer) != VK_SUCCESS) {
-            vkFreeCommandBuffers(device, commandPool, 1, &commandBuffer);
-            throw std::runtime_error("Could not end buffer copy command buffer");
-        }
-
-        VkFenceCreateInfo fenceInfo{VK_STRUCTURE_TYPE_FENCE_CREATE_INFO};
-        VkFence uploadFence = VK_NULL_HANDLE;
-        if (vkCreateFence(device, &fenceInfo, nullptr, &uploadFence) != VK_SUCCESS) {
-            vkFreeCommandBuffers(device, commandPool, 1, &commandBuffer);
-            throw std::runtime_error("Could not create buffer upload fence");
-        }
-
-        VkSubmitInfo submitInfo{VK_STRUCTURE_TYPE_SUBMIT_INFO};
-        submitInfo.commandBufferCount = 1;
-        submitInfo.pCommandBuffers = &commandBuffer;
-        const VkResult submitResult = vkQueueSubmit(queue, 1, &submitInfo, uploadFence);
-        if (submitResult != VK_SUCCESS) {
-            vkDestroyFence(device, uploadFence, nullptr);
-            vkFreeCommandBuffers(device, commandPool, 1, &commandBuffer);
-            throw std::runtime_error("Could not submit buffer copy command buffer (vkQueueSubmit VkResult " +
-                                     std::to_string(submitResult) + ")");
-        }
-        const VkResult waitResult = vkWaitForFences(device, 1, &uploadFence, VK_TRUE, UINT64_MAX);
-        if (waitResult != VK_SUCCESS) {
-            vkDestroyFence(device, uploadFence, nullptr);
-            vkFreeCommandBuffers(device, commandPool, 1, &commandBuffer);
-            throw std::runtime_error("Buffer copy command buffer failed while waiting for fence (VkResult " +
-                                     std::to_string(waitResult) + ")");
-        }
-
-        vkDestroyFence(device, uploadFence, nullptr);
-        vkFreeCommandBuffers(device, commandPool, 1, &commandBuffer);
     }
 
     void Buffer::createHostVisible([[maybe_unused]] const VkPhysicalDevice physicalDevice,
@@ -121,6 +69,12 @@ namespace Engine {
         if (data == nullptr || size == 0 || offset > size_ || size > size_ - offset ||
             device_ == VK_NULL_HANDLE || allocator_ == VK_NULL_HANDLE) {
             throw std::invalid_argument("Device-local buffer update is out of bounds");
+        }
+        if (UploadContext* upload = UploadContext::current()) {
+            upload->begin();
+            upload->copyBuffer(buffer_, data, size, offset);
+            readyTimeline_ = upload->submit();
+            return;
         }
         reapCompletedUploads();
 

@@ -94,6 +94,7 @@ public:
      * @return The owned handle, or VK_NULL_HANDLE when no buffer was created.
      */
     [[nodiscard]] VkBuffer handle() const noexcept { return buffer_; }
+    [[nodiscard]] std::uint64_t readyTimeline() const noexcept { return readyTimeline_; }
 
 private:
     struct CreateParameters {
@@ -111,6 +112,7 @@ private:
     VmaAllocator allocator_ = VK_NULL_HANDLE;
     VkDeviceSize size_ = 0;
     void* mapped_ = nullptr;
+    mutable std::uint64_t readyTimeline_ = 0;
 
     struct PendingUpload final {
         std::unique_ptr<Buffer> staging;

@@ -1,9 +1,11 @@
 #include "Engine/Renderer/Textures/Texture2D.h"
 
 #include "Engine/Renderer/Vulkan/buffer.h"
+#include "Engine/Renderer/Vulkan/upload_context.h"
 
 #include <algorithm>
 #include <bit>
+#include <cstring>
 #include <limits>
 #include <stdexcept>
 #include <utility>
@@ -59,6 +61,7 @@ Texture2D &Texture2D::operator=(Texture2D &&other) noexcept {
         width_ = std::exchange(other.width_, 0);
         height_ = std::exchange(other.height_, 0);
         mipLevels_ = std::exchange(other.mipLevels_, 0);
+        readyTimeline_ = std::exchange(other.readyTimeline_, 0);
         return *this;
     }
 
@@ -117,12 +120,23 @@ Texture2D &Texture2D::operator=(Texture2D &&other) noexcept {
         mipLevels_ = mipLevels;
 
         Buffer staging;
+        UploadContext* upload = UploadContext::current();
+        VkBuffer stagingBuffer = VK_NULL_HANDLE;
+        VkDeviceSize stagingOffset = 0;
         VkCommandBuffer commandBuffer = VK_NULL_HANDLE;
         try {
-            staging.createHostVisible(
-                physicalDevice, device_, static_cast<VkDeviceSize>(expectedSize),
-                VK_BUFFER_USAGE_TRANSFER_SRC_BIT, allocator);
-            staging.update(rgbaPixels.data(), static_cast<VkDeviceSize>(expectedSize));
+            if (upload != nullptr) {
+                upload->begin();
+                const auto slice = upload->allocate(static_cast<VkDeviceSize>(expectedSize), 16);
+                std::memcpy(slice.mapped, rgbaPixels.data(), expectedSize);
+                stagingBuffer = slice.buffer;
+                stagingOffset = slice.offset;
+                commandBuffer = upload->commandBuffer();
+            } else {
+                staging.createHostVisible(physicalDevice, device_, static_cast<VkDeviceSize>(expectedSize), VK_BUFFER_USAGE_TRANSFER_SRC_BIT, allocator);
+                staging.update(rgbaPixels.data(), static_cast<VkDeviceSize>(expectedSize));
+                stagingBuffer = staging.handle();
+            }
 
             VkImageCreateInfo imageInfo{VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO};
             imageInfo.imageType = VK_IMAGE_TYPE_2D;
@@ -151,18 +165,11 @@ Texture2D &Texture2D::operator=(Texture2D &&other) noexcept {
             vmaGetAllocationInfo(allocator_, allocation_, &allocationDetails);
             memory_ = allocationDetails.deviceMemory;
 
-            VkCommandBufferAllocateInfo commandAllocation{VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO};
-            commandAllocation.commandPool = commandPool;
-            commandAllocation.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
-            commandAllocation.commandBufferCount = 1;
-            if (vkAllocateCommandBuffers(device_, &commandAllocation, &commandBuffer) != VK_SUCCESS) {
-                throw std::runtime_error("Could not allocate Texture2D upload command buffer");
-            }
-
-            VkCommandBufferBeginInfo beginInfo{VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
-            beginInfo.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
-            if (vkBeginCommandBuffer(commandBuffer, &beginInfo) != VK_SUCCESS) {
-                throw std::runtime_error("Could not begin Texture2D upload command buffer");
+            if (upload == nullptr) {
+                VkCommandBufferAllocateInfo commandAllocation{VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO}; commandAllocation.commandPool = commandPool; commandAllocation.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY; commandAllocation.commandBufferCount = 1;
+                if (vkAllocateCommandBuffers(device_, &commandAllocation, &commandBuffer) != VK_SUCCESS) throw std::runtime_error("Could not allocate Texture2D upload command buffer");
+                VkCommandBufferBeginInfo beginInfo{VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO}; beginInfo.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+                if (vkBeginCommandBuffer(commandBuffer, &beginInfo) != VK_SUCCESS) throw std::runtime_error("Could not begin Texture2D upload command buffer");
             }
 
             transitionImage(
@@ -172,10 +179,11 @@ Texture2D &Texture2D::operator=(Texture2D &&other) noexcept {
                 VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT);
 
             VkBufferImageCopy copy{};
+            copy.bufferOffset = stagingOffset;
             copy.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
             copy.imageExtent = {width_, height_, 1};
             vkCmdCopyBufferToImage(
-                commandBuffer, staging.handle(), image_,
+                commandBuffer, stagingBuffer, image_,
                 VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &copy);
 
             std::int32_t mipWidth = static_cast<std::int32_t>(width_);
@@ -215,27 +223,8 @@ Texture2D &Texture2D::operator=(Texture2D &&other) noexcept {
                 VK_ACCESS_TRANSFER_WRITE_BIT, VK_ACCESS_SHADER_READ_BIT,
                 VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT);
 
-            if (vkEndCommandBuffer(commandBuffer) != VK_SUCCESS) {
-                throw std::runtime_error("Could not end Texture2D upload command buffer");
-            }
-            VkSubmitInfo submit{VK_STRUCTURE_TYPE_SUBMIT_INFO};
-            submit.commandBufferCount = 1;
-            submit.pCommandBuffers = &commandBuffer;
-            VkFenceCreateInfo fenceInfo{VK_STRUCTURE_TYPE_FENCE_CREATE_INFO};
-            VkFence uploadFence = VK_NULL_HANDLE;
-            if (vkCreateFence(device_, &fenceInfo, nullptr, &uploadFence) != VK_SUCCESS) {
-                throw std::runtime_error("Could not create Texture2D upload fence");
-            }
-            const VkResult submitResult = vkQueueSubmit(queue, 1, &submit, uploadFence);
-            const VkResult waitResult = submitResult == VK_SUCCESS
-                ? vkWaitForFences(device_, 1, &uploadFence, VK_TRUE, UINT64_MAX)
-                : submitResult;
-            vkDestroyFence(device_, uploadFence, nullptr);
-            if (waitResult != VK_SUCCESS) {
-                throw std::runtime_error("Could not upload Texture2D");
-            }
-            vkFreeCommandBuffers(device_, commandPool, 1, &commandBuffer);
-            commandBuffer = VK_NULL_HANDLE;
+            if (upload != nullptr) { readyTimeline_ = upload->submit(); commandBuffer = VK_NULL_HANDLE; }
+            else { if (vkEndCommandBuffer(commandBuffer) != VK_SUCCESS) throw std::runtime_error("Could not end Texture2D upload command buffer"); VkSubmitInfo submit{VK_STRUCTURE_TYPE_SUBMIT_INFO}; submit.commandBufferCount = 1; submit.pCommandBuffers = &commandBuffer; if (vkQueueSubmit(queue, 1, &submit, VK_NULL_HANDLE) != VK_SUCCESS) throw std::runtime_error("Could not upload Texture2D"); vkQueueWaitIdle(queue); vkFreeCommandBuffers(device_, commandPool, 1, &commandBuffer); commandBuffer = VK_NULL_HANDLE; }
 
             VkImageViewCreateInfo view{VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
             view.image = image_;
@@ -259,7 +248,7 @@ Texture2D &Texture2D::operator=(Texture2D &&other) noexcept {
                 throw std::runtime_error("Could not create Texture2D sampler");
             }
         } catch (...) {
-            if (commandBuffer != VK_NULL_HANDLE) {
+            if (commandBuffer != VK_NULL_HANDLE && upload == nullptr) {
                 vkFreeCommandBuffers(device_, commandPool, 1, &commandBuffer);
             }
             destroy();

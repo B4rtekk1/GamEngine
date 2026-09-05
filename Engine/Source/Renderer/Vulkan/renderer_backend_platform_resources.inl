@@ -26,6 +26,8 @@
             msaa.create(swapchain.extent(), HdrBuffer::Format);
             createDepthResources();
             createCommandPool();
+            uploadContext.create(device, vulkanDevice.graphicsQueue(), vulkanDevice.graphicsQueueFamily(), vulkanDevice.allocator());
+            UploadContext::setCurrent(&uploadContext);
             createMaterialTextures();
             createMeshBuffers();
             renderableTopologySignature = currentRenderableTopologySignature();

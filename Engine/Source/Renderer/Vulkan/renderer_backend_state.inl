@@ -130,6 +130,8 @@
             Buffer visibleClusters;
             Buffer visibleClusterCount;
             Buffer bladeCullDispatch;
+            // classify, main, shadow and velocity dispatch commands (3 x 12 B).
+            Buffer dispatchIndirect;
             // The three streams consumed by the later main/shadow/velocity
             // command builders.  They intentionally do not alias.
             Buffer mainVisibleInstances;
@@ -154,6 +156,7 @@
             Buffer visibleClusters;
             Buffer visibleClusterCount;
             Buffer bladeCullDispatch;
+            Buffer dispatchIndirect;
             Buffer mainVisibleInstances;
             Buffer classifyCounts;
             Buffer binCounts;
@@ -214,6 +217,7 @@
         VkDescriptorSetLayout cullingDescriptorSetLayout = VK_NULL_HANDLE;
         VkDescriptorSetLayout instanceCullingDescriptorSetLayout = VK_NULL_HANDLE;
         VkDescriptorSetLayout grassBuildDescriptorSetLayout = VK_NULL_HANDLE;
+        VkDescriptorSetLayout grassDispatchBuildDescriptorSetLayout = VK_NULL_HANDLE;
         VkDescriptorSetLayout grassPrefixDescriptorSetLayout = VK_NULL_HANDLE;
         VkDescriptorSetLayout grassScatterDescriptorSetLayout = VK_NULL_HANDLE;
         VkDescriptorSetLayout grassFinalizeDescriptorSetLayout = VK_NULL_HANDLE;
@@ -228,6 +232,7 @@
         VkPipelineLayout cullingPipelineLayout = VK_NULL_HANDLE;
         VkPipelineLayout instanceCullingPipelineLayout = VK_NULL_HANDLE;
         VkPipelineLayout grassBuildPipelineLayout = VK_NULL_HANDLE;
+        VkPipelineLayout grassDispatchBuildPipelineLayout = VK_NULL_HANDLE;
         VkPipelineLayout grassPrefixPipelineLayout = VK_NULL_HANDLE;
         VkPipelineLayout grassScatterPipelineLayout = VK_NULL_HANDLE;
         VkPipelineLayout grassFinalizePipelineLayout = VK_NULL_HANDLE;
@@ -242,6 +247,7 @@
         VkPipeline cullingPipeline = VK_NULL_HANDLE;
         VkPipeline instanceCullingPipeline = VK_NULL_HANDLE;
         VkPipeline grassBuildPipeline = VK_NULL_HANDLE;
+        VkPipeline grassDispatchBuildPipeline = VK_NULL_HANDLE;
         VkPipeline grassPrefixPipeline = VK_NULL_HANDLE;
         VkPipeline grassScatterPipeline = VK_NULL_HANDLE;
         VkPipeline grassFinalizePipeline = VK_NULL_HANDLE;
@@ -253,6 +259,10 @@
         VkPipeline grassPackedScatterPipeline = VK_NULL_HANDLE;
         VkPipeline grassPackedFinalizePipeline = VK_NULL_HANDLE;
         std::array<VkDescriptorSet, MAX_FRAMES_IN_FLIGHT> grassBuildSets{};
+        std::array<VkDescriptorSet, MAX_FRAMES_IN_FLIGHT> grassVisibleDispatchBuildSets{};
+        std::array<VkDescriptorSet, MAX_FRAMES_IN_FLIGHT> grassStreamDispatchBuildSets{};
+        std::array<VkDescriptorSet, MAX_FRAMES_IN_FLIGHT> sceneGrassVisibleDispatchBuildSets{};
+        std::array<VkDescriptorSet, MAX_FRAMES_IN_FLIGHT> sceneGrassStreamDispatchBuildSets{};
         std::array<VkDescriptorSet, MAX_FRAMES_IN_FLIGHT> grassPrefixSets{};
         std::array<VkDescriptorSet, MAX_FRAMES_IN_FLIGHT> grassScatterSets{};
         std::array<VkDescriptorSet, MAX_FRAMES_IN_FLIGHT> grassFinalizeSets{};
@@ -306,6 +316,7 @@
         std::uint32_t editorSelectedRenderable = std::numeric_limits<std::uint32_t>::max();
 
         VkCommandPool commandPool{};
+        UploadContext uploadContext;
         std::vector<VkCommandBuffer> commandBuffers;
 
         std::vector<VkSemaphore> imageAvailableSemaphores;

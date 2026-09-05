@@ -1,0 +1,29 @@
+#include "Engine/Renderer/Vulkan/upload_context.h"
+#include <cstring>
+#include <stdexcept>
+#include <algorithm>
+namespace Engine {
+UploadContext* UploadContext::current_ = nullptr;
+UploadContext::~UploadContext() { destroy(); }
+void UploadContext::setCurrent(UploadContext* context) noexcept { current_ = context; }
+UploadContext* UploadContext::current() noexcept { return current_; }
+void UploadContext::create(VkDevice device, VkQueue queue, uint32_t family, VmaAllocator allocator, VkDeviceSize bytes) {
+    device_=device; queue_=queue; allocator_=allocator; capacity_=bytes;
+    VkBufferCreateInfo info{VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO}; info.size=bytes; info.usage=VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
+    VmaAllocationCreateInfo alloc{}; alloc.usage=VMA_MEMORY_USAGE_AUTO_PREFER_HOST; alloc.flags=VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT|VMA_ALLOCATION_CREATE_MAPPED_BIT;
+    if(vmaCreateBuffer(allocator_, &info, &alloc, &staging_, &allocation_, nullptr)!=VK_SUCCESS) throw std::runtime_error("Could not create upload staging ring");
+    VmaAllocationInfo details{}; vmaGetAllocationInfo(allocator_, allocation_, &details); mapped_=details.pMappedData;
+    VkCommandPoolCreateInfo pool{VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO}; pool.flags=VK_COMMAND_POOL_CREATE_TRANSIENT_BIT; pool.queueFamilyIndex=family;
+    if(vkCreateCommandPool(device_, &pool, nullptr, &pool_)!=VK_SUCCESS) throw std::runtime_error("Could not create upload command pool");
+    VkSemaphoreTypeCreateInfo type{VK_STRUCTURE_TYPE_SEMAPHORE_TYPE_CREATE_INFO}; type.semaphoreType=VK_SEMAPHORE_TYPE_TIMELINE; type.initialValue=0;
+    VkSemaphoreCreateInfo semaphore{VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO}; semaphore.pNext=&type;
+    if(vkCreateSemaphore(device_, &semaphore, nullptr, &timeline_)!=VK_SUCCESS) throw std::runtime_error("Could not create upload timeline semaphore");
+}
+void UploadContext::reclaim() noexcept { if(!device_) return; const auto done=completedValue(); std::erase_if(submitted_, [=](const Submitted& s){ if(s.value>done) return false; vkFreeCommandBuffers(device_,pool_,1,&s.commandBuffer); return true; }); if(submitted_.empty()) head_=0; }
+uint64_t UploadContext::completedValue() const noexcept { uint64_t value=0; return timeline_ && vkGetSemaphoreCounterValue(device_,timeline_,&value)==VK_SUCCESS ? value : 0; }
+void UploadContext::begin() { if(commandBuffer_) throw std::logic_error("UploadContext batch already recording"); reclaim(); VkCommandBufferAllocateInfo info{VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO}; info.commandPool=pool_; info.level=VK_COMMAND_BUFFER_LEVEL_PRIMARY; info.commandBufferCount=1; if(vkAllocateCommandBuffers(device_,&info,&commandBuffer_)!=VK_SUCCESS) throw std::runtime_error("Could not allocate upload command buffer"); VkCommandBufferBeginInfo begin{VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO}; begin.flags=VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT; if(vkBeginCommandBuffer(commandBuffer_,&begin)!=VK_SUCCESS) throw std::runtime_error("Could not begin upload command buffer"); }
+UploadContext::Slice UploadContext::allocate(VkDeviceSize size,VkDeviceSize alignment) { if(!commandBuffer_ || size>capacity_) throw std::runtime_error("Invalid upload-ring allocation"); const auto offset=(head_+alignment-1)&~(alignment-1); if(offset+size>capacity_){ if(!submitted_.empty()){ VkSemaphoreWaitInfo wait{VK_STRUCTURE_TYPE_SEMAPHORE_WAIT_INFO}; const uint64_t value=submitted_.back().value; wait.semaphoreCount=1; wait.pSemaphores=&timeline_; wait.pValues=&value; vkWaitSemaphores(device_,&wait,UINT64_MAX); reclaim(); } head_=0; } const auto result=head_; head_+=size; return {staging_,result,static_cast<char*>(mapped_)+result}; }
+void UploadContext::copyBuffer(VkBuffer dst,const void* data,VkDeviceSize size,VkDeviceSize dstOffset) { auto slice=allocate(size); std::memcpy(slice.mapped,data,static_cast<size_t>(size)); VkBufferCopy copy{slice.offset,dstOffset,size}; vkCmdCopyBuffer(commandBuffer_,staging_,dst,1,&copy); }
+uint64_t UploadContext::submit() { if(!commandBuffer_) return 0; if(vkEndCommandBuffer(commandBuffer_)!=VK_SUCCESS) throw std::runtime_error("Could not end upload command buffer"); const uint64_t value=nextValue_++; VkCommandBufferSubmitInfo command{VK_STRUCTURE_TYPE_COMMAND_BUFFER_SUBMIT_INFO}; command.commandBuffer=commandBuffer_; VkSemaphoreSubmitInfo signal{VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO}; signal.semaphore=timeline_; signal.value=value; signal.stageMask=VK_PIPELINE_STAGE_2_ALL_TRANSFER_BIT; VkSubmitInfo2 submit{VK_STRUCTURE_TYPE_SUBMIT_INFO_2}; submit.commandBufferInfoCount=1; submit.pCommandBufferInfos=&command; submit.signalSemaphoreInfoCount=1; submit.pSignalSemaphoreInfos=&signal; if(vkQueueSubmit2(queue_,1,&submit,VK_NULL_HANDLE)!=VK_SUCCESS) throw std::runtime_error("Could not submit upload batch"); submitted_.push_back({commandBuffer_,value}); commandBuffer_=VK_NULL_HANDLE; return value; }
+void UploadContext::destroy() noexcept { if(!device_) return; if(commandBuffer_) { vkEndCommandBuffer(commandBuffer_); submit(); } if(timeline_ && nextValue_>1){ VkSemaphoreWaitInfo wait{VK_STRUCTURE_TYPE_SEMAPHORE_WAIT_INFO}; const uint64_t v=nextValue_-1; wait.semaphoreCount=1; wait.pSemaphores=&timeline_; wait.pValues=&v; vkWaitSemaphores(device_,&wait,UINT64_MAX); } for(auto& s:submitted_) vkFreeCommandBuffers(device_,pool_,1,&s.commandBuffer); submitted_.clear(); if(timeline_) vkDestroySemaphore(device_,timeline_,nullptr); if(pool_) vkDestroyCommandPool(device_,pool_,nullptr); if(staging_) vmaDestroyBuffer(allocator_,staging_,allocation_); if(current_==this) current_=nullptr; device_=VK_NULL_HANDLE; queue_=VK_NULL_HANDLE; allocator_=VK_NULL_HANDLE; staging_=VK_NULL_HANDLE; allocation_=VK_NULL_HANDLE; mapped_=nullptr; capacity_=head_=0; pool_=VK_NULL_HANDLE; timeline_=VK_NULL_HANDLE; nextValue_=1; }
+}

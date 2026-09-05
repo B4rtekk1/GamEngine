@@ -55,6 +55,7 @@ public:
     [[nodiscard]] std::uint32_t height() const noexcept { return height_; }
     [[nodiscard]] std::uint32_t mipLevels() const noexcept { return mipLevels_; }
     [[nodiscard]] bool valid() const noexcept { return image_ != VK_NULL_HANDLE; }
+    [[nodiscard]] std::uint64_t readyTimeline() const noexcept { return readyTimeline_; }
 
 private:
     [[nodiscard]] static std::uint32_t findMemoryType(
@@ -73,6 +74,7 @@ private:
     std::uint32_t width_ = 0;
     std::uint32_t height_ = 0;
     std::uint32_t mipLevels_ = 0;
+    std::uint64_t readyTimeline_ = 0;
 };
 
 } // namespace Engine

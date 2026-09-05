@@ -187,7 +187,8 @@ add_library(Engine
         Engine/Source/Renderer/Culling/HiZBuffer.cpp
         Engine/Source/Renderer/Culling/HiZPass.cpp
         Engine/Source/Renderer/GPUSceneDatabase.cpp
-        Engine/Source/Renderer/Vulkan/buffer.cpp
+         Engine/Source/Renderer/Vulkan/buffer.cpp
+         Engine/Source/Renderer/Vulkan/upload_context.cpp
         Engine/Source/Renderer/Vulkan/depth_buffer.cpp
         Engine/Source/Renderer/Vulkan/graphics_pipeline.cpp
         Engine/Source/Renderer/Vulkan/hdr_buffer.cpp
@@ -278,7 +279,8 @@ set(SLANG_SHADER_SOURCES
         Assets/Shaders/Grass/grass_packed_prefix.slang
         Assets/Shaders/Grass/grass_packed_scatter.slang
         Assets/Shaders/Grass/grass_packed_finalize.slang
-        Assets/Shaders/Grass/grass_classify.slang
+         Assets/Shaders/Grass/grass_classify.slang
+         Assets/Shaders/Grass/grass_build_dispatch.slang
         Assets/Shaders/Grass/grass_forward.slang
         Assets/Shaders/Grass/grass_shadow.slang
         Assets/Shaders/Grass/grass_velocity.slang

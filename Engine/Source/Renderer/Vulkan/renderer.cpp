@@ -24,6 +24,7 @@
 #include "Engine/Renderer/ViewportCamera.h"
 #include "Engine/Renderer/shader_loader.h"
 #include "Engine/Renderer/Vulkan/buffer.h"
+#include "Engine/Renderer/Vulkan/upload_context.h"
 #include "Engine/Renderer/Vulkan/graphics_pipeline.h"
 #include "Engine/Renderer/Vulkan/vulkan_device.h"
 #include "Engine/Renderer/Vulkan/swapchain.h"

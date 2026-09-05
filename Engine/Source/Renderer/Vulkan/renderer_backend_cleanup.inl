@@ -56,6 +56,7 @@
                 fallbackMaterialTexture.destroy();
                 grassHeightTexture.destroy();
                 grassDensityTexture.destroy();
+                uploadContext.destroy();
 
                 for (VkSemaphore semaphore : imageAvailableSemaphores) {
                     if (semaphore != VK_NULL_HANDLE) {
