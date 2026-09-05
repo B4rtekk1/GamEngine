@@ -17,7 +17,6 @@
                 particleComputePipelineLayout = VK_NULL_HANDLE;
                 particleSystem.reset();
                 forwardPass.destroy();
-                hiZDepthPrepass.destroy();
                 shadowPass.destroy();
                 sceneDescriptorPass.destroy();
                 destroyCullingResources();

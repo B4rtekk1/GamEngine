@@ -30,11 +30,8 @@
         GraphicsPipeline foliageVelocityPipeline;
         GraphicsPipeline grassVelocityPipeline;
         VkFramebuffer velocityFramebuffer = VK_NULL_HANDLE;
-        // A single-sample depth target used exclusively to generate Hi-Z when
-        // the visible geometry is rendered with MSAA.
+        // Single-sample depth target populated by the forward pass's MSAA depth resolve.
         DepthBuffer hiZDepthBuffer;
-        ForwardPass hiZDepthPrepass;
-        VkFramebuffer hiZDepthPrepassFramebuffer = VK_NULL_HANDLE;
 
         ForwardPass& forwardPass;
         GraphicsPipeline& particlePipeline;

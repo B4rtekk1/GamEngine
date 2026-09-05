@@ -299,12 +299,9 @@
         void createForwardPass() {
             forwardPass.create(device, HdrBuffer::Format, depthBuffer.format(),
                                msaa.sampleCount(),
+                               msaa.enabled() ? hiZDepthBuffer.format() : VK_FORMAT_UNDEFINED,
+                               msaa.enabled() ? vulkanDevice.depthResolveMode() : VK_RESOLVE_MODE_NONE,
                                shadowPass.descriptorSetLayout(), assetManager);
-            if (msaa.enabled()) {
-                hiZDepthPrepass.create(device, HdrBuffer::Format, hiZDepthBuffer.format(),
-                                       VK_SAMPLE_COUNT_1_BIT,
-                                       shadowPass.descriptorSetLayout(), assetManager);
-            }
         }
 
         void createParticleResources() {
@@ -399,10 +396,6 @@
             temporalAaPass.destroy();
             destroyVelocityResources();
 
-            if (hiZDepthPrepassFramebuffer != VK_NULL_HANDLE) {
-                vkDestroyFramebuffer(device, hiZDepthPrepassFramebuffer, nullptr);
-                hiZDepthPrepassFramebuffer = VK_NULL_HANDLE;
-            }
             if (hdrFramebuffer != VK_NULL_HANDLE) {
                 vkDestroyFramebuffer(device, hdrFramebuffer, nullptr);
                 hdrFramebuffer = VK_NULL_HANDLE;
@@ -412,7 +405,6 @@
             particlePipeline.destroy();
             skyPass.destroy();
             sceneSkyPass.destroy();
-            hiZDepthPrepass.destroy();
 
             msaa.destroy();
             hdrBuffer.destroy();

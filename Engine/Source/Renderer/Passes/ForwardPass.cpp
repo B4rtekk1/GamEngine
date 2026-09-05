@@ -11,12 +11,16 @@ namespace Engine {
 void ForwardPass::create(VkDevice device, const VkFormat colorFormat,
                          const VkFormat depthFormat,
                          const VkSampleCountFlagBits samples,
+                         const VkFormat depthResolveFormat,
+                         const VkResolveModeFlagBits depthResolveMode,
                          VkDescriptorSetLayout sceneLayout,
                          Assets::AssetManager& assets) {
     GraphicsPipelineOptions options{};
     options.colorFormat = colorFormat;
     options.depthFormat = depthFormat;
     options.samples = samples;
+    options.depthResolveFormat = depthResolveFormat;
+    options.depthResolveMode = depthResolveMode;
     options.colorFinalLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
     options.shader = "shaders/forward_pbr.spv";
     options.assetManager = &assets;

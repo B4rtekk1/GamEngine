@@ -29,6 +29,10 @@ namespace Engine {
             msaaColor_.create(extent_, HdrBuffer::Format);
             depth_.initialize(physicalDevice_, device_, allocator_);
             depth_.create(extent_, samples_);
+            if (samples_ != VK_SAMPLE_COUNT_1_BIT) {
+                resolvedDepth_.initialize(physicalDevice_, device_, allocator_);
+                resolvedDepth_.create(extent_, VK_SAMPLE_COUNT_1_BIT, depth_.format());
+            }
         } catch (...) {
             destroy();
             throw;
@@ -49,6 +53,7 @@ namespace Engine {
     }
 
     void ViewportRenderTarget::destroy() noexcept {
+        resolvedDepth_.destroy();
         depth_.destroy();
         msaaColor_.destroy();
         color_.destroy();

@@ -70,6 +70,7 @@ void VulkanDevice::destroy() noexcept {
     physicalDevice_ = VK_NULL_HANDLE;
     surface_ = VK_NULL_HANDLE;
     queueFamilies_ = {};
+    depthResolveMode_ = VK_RESOLVE_MODE_SAMPLE_ZERO_BIT;
 }
 
 QueueFamilyIndices VulkanDevice::findQueueFamilies(VkPhysicalDevice candidate) const {
@@ -237,6 +238,15 @@ void VulkanDevice::selectPhysicalDevice(const VkInstance candidate) {
 
     physicalDevice_ = bestDevice;
     queueFamilies_ = findQueueFamilies(physicalDevice_);
+    VkPhysicalDeviceDepthStencilResolveProperties depthResolveProperties{
+        .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DEPTH_STENCIL_RESOLVE_PROPERTIES};
+    VkPhysicalDeviceProperties2 properties2{
+        .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2,
+        .pNext = &depthResolveProperties};
+    vkGetPhysicalDeviceProperties2(physicalDevice_, &properties2);
+    if ((depthResolveProperties.supportedDepthResolveModes & VK_RESOLVE_MODE_MAX_BIT) != 0) {
+        depthResolveMode_ = VK_RESOLVE_MODE_MAX_BIT;
+    }
 }
 
 void VulkanDevice::createLogicalDevice() {

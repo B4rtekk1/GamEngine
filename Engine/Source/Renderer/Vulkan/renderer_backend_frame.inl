@@ -582,40 +582,6 @@
             foliageGpuCullingPasses[currentFrame].record(
                 commandBuffer, static_cast<std::uint32_t>(gpuObjects.size()));
 
-            // Never sample or resolve the multisampled depth attachment for
-            // Hi-Z.  A separate 1x prepass gives the hierarchy a conventional
-            // sampler2D source, then the main forward pass can use MSAA solely
-            // for the visible rasterization.
-            if (hizEnabled && msaa.enabled()) {
-                hiZDepthPrepass.begin(
-                    commandBuffer, hiZDepthPrepassFramebuffer, swapchain.extent(),
-                    shadowPass.descriptorSet(currentFrame), vertexBuffer.handle(),
-                    instanceBuffers[currentFrame].handle(), indexBuffer.handle());
-                ForwardPass::draw(commandBuffer, indirectDraws[currentFrame]);
-                hiZDepthPrepass.drawFoliage(commandBuffer, shadowPass.descriptorSet(currentFrame),
-                                             foliageIndirectDraws[currentFrame]);
-                ForwardPass::end(commandBuffer);
-
-                VkImageMemoryBarrier2 depthReady{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2};
-                depthReady.srcStageMask = VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT;
-                depthReady.srcAccessMask = VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
-                depthReady.dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
-                depthReady.dstAccessMask = VK_ACCESS_2_SHADER_SAMPLED_READ_BIT;
-                // ForwardPass's render pass transitions the depth attachment
-                // to READ_ONLY on exit, including its first use. Keep the
-                // layout unchanged here and only add the visibility barrier.
-                depthReady.oldLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL;
-                depthReady.newLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL;
-                depthReady.image = hiZDepthBuffer.image();
-                depthReady.subresourceRange = {VK_IMAGE_ASPECT_DEPTH_BIT, 0, 1, 0, 1};
-                VkDependencyInfo depthDependency{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
-                depthDependency.imageMemoryBarrierCount = 1;
-                depthDependency.pImageMemoryBarriers = &depthReady;
-                vkCmdPipelineBarrier2(commandBuffer, &depthDependency);
-                hiZPass.record(commandBuffer, hiZBuffer, true);
-                hiZValid = true;
-            }
-
             forwardPass.begin(
                 commandBuffer, hdrFramebuffer, swapchain.extent(),
                 shadowPass.descriptorSet(currentFrame), vertexBuffer.handle(),
@@ -747,7 +713,7 @@
                 ForwardPass::end(commandBuffer);
             }
 
-            if (hizEnabled && !msaa.enabled()) {
+            if (hizEnabled) {
                 VkImageMemoryBarrier2 depthReady{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2};
                 depthReady.srcStageMask = VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT;
                 depthReady.srcAccessMask = VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
@@ -758,15 +724,13 @@
                 // pass without inventing an UNDEFINED transition.
                 depthReady.oldLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL;
                 depthReady.newLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL;
-                depthReady.image = depthBuffer.image();
+                depthReady.image = msaa.enabled() ? hiZDepthBuffer.image() : depthBuffer.image();
                 depthReady.subresourceRange = {VK_IMAGE_ASPECT_DEPTH_BIT, 0, 1, 0, 1};
                 VkDependencyInfo depthDependency{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
                 depthDependency.imageMemoryBarrierCount = 1;
                 depthDependency.pImageMemoryBarriers = &depthReady;
                 vkCmdPipelineBarrier2(commandBuffer, &depthDependency);
-                // The first-frame initialization above establishes a valid image
-                // layout, so HiZPass must transition from SHADER_READ_ONLY rather
-                // than from UNDEFINED when it builds the first hierarchy.
+                // The forward pass has just written (or resolved) the depth source.
                 hiZPass.record(commandBuffer, hiZBuffer, true);
                 hiZValid = true;
             }
@@ -836,10 +800,6 @@
             tonemapPass.destroy();
             temporalAaPass.destroy();
             destroyVelocityResources();
-            if (hiZDepthPrepassFramebuffer != VK_NULL_HANDLE) {
-                vkDestroyFramebuffer(device, hiZDepthPrepassFramebuffer, nullptr);
-                hiZDepthPrepassFramebuffer = VK_NULL_HANDLE;
-            }
             if (hdrFramebuffer != VK_NULL_HANDLE) {
                 vkDestroyFramebuffer(device, hdrFramebuffer, nullptr);
                 hdrFramebuffer = VK_NULL_HANDLE;
@@ -888,10 +848,6 @@
             // resources, then register the SDL window again below.
             destroyEditorUiResources();
 
-            if (hiZDepthPrepassFramebuffer != VK_NULL_HANDLE) {
-                vkDestroyFramebuffer(device, hiZDepthPrepassFramebuffer, nullptr);
-                hiZDepthPrepassFramebuffer = VK_NULL_HANDLE;
-            }
             // Shadow/scene descriptor sets reference the packed grass
             // buffers owned by culling resources. They cannot outlive a
             // culling resize/rebuild.

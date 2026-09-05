@@ -19,6 +19,7 @@ namespace Engine {
     public:
         void create(VkDevice device, VkFormat colorFormat, VkFormat depthFormat,
                     VkSampleCountFlagBits samples,
+                    VkFormat depthResolveFormat, VkResolveModeFlagBits depthResolveMode,
                     VkDescriptorSetLayout sceneLayout,
                     Assets::AssetManager &assets);
 

@@ -817,7 +817,7 @@
         void createFramebuffers() {
             const VkExtent2D extent = swapchain.extent();
             VkImageView msaaAttachments[] = {
-                msaa.colorImageView(), depthBuffer.imageView(), hdrBuffer.imageView()
+                msaa.colorImageView(), depthBuffer.imageView(), hdrBuffer.imageView(), hiZDepthBuffer.imageView()
             };
             VkImageView directAttachments[] = {
                 hdrBuffer.imageView(), depthBuffer.imageView()
@@ -825,7 +825,7 @@
 
             VkFramebufferCreateInfo framebufferInfo{VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO};
             framebufferInfo.renderPass = forwardPass.renderPass();
-            framebufferInfo.attachmentCount = msaa.enabled() ? 3u : 2u;
+            framebufferInfo.attachmentCount = msaa.enabled() ? 4u : 2u;
             framebufferInfo.pAttachments = msaa.enabled()
                 ? msaaAttachments
                 : directAttachments;
@@ -838,21 +838,6 @@
                 throw std::runtime_error("Could not create HDR framebuffer");
             }
 
-            if (msaa.enabled()) {
-                const VkImageView prepassAttachments[] = {
-                    hdrBuffer.imageView(), hiZDepthBuffer.imageView()};
-                VkFramebufferCreateInfo prepassInfo{VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO};
-                prepassInfo.renderPass = hiZDepthPrepass.renderPass();
-                prepassInfo.attachmentCount = 2;
-                prepassInfo.pAttachments = prepassAttachments;
-                prepassInfo.width = extent.width;
-                prepassInfo.height = extent.height;
-                prepassInfo.layers = 1;
-                if (vkCreateFramebuffer(device, &prepassInfo, nullptr,
-                                        &hiZDepthPrepassFramebuffer) != VK_SUCCESS) {
-                    throw std::runtime_error("Could not create Hi-Z depth prepass framebuffer");
-                }
-            }
 
             if (antialiasingLevel == AntialiasingLevel::TAA) {
                 velocityBuffer.create(vulkanDevice.physical(), device, extent,
@@ -926,17 +911,15 @@
         void createSceneViewportFramebuffer() {
             // The forward render pass uses the same MSAA attachment layout for
             // Game View and Scene View: multisampled color, multisampled depth,
-            // then a single-sample resolve target. The Scene View used to bind
-            // only its single-sample color and depth images here, which made
-            // the framebuffer incompatible as soon as MSAA was enabled.
+            // then single-sample color and depth resolve targets.
             VkImageView msaaAttachments[] = {
                 sceneViewportTarget.msaaColorImageView(), sceneViewportTarget.depth().imageView(),
-                sceneViewportTarget.color().imageView()};
+                sceneViewportTarget.color().imageView(), sceneViewportTarget.resolvedDepth().imageView()};
             VkImageView directAttachments[] = {
                 sceneViewportTarget.color().imageView(), sceneViewportTarget.depth().imageView()};
             VkFramebufferCreateInfo info{VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO};
             info.renderPass = forwardPass.renderPass();
-            info.attachmentCount = msaa.enabled() ? 3u : 2u;
+            info.attachmentCount = msaa.enabled() ? 4u : 2u;
             info.pAttachments = msaa.enabled() ? msaaAttachments : directAttachments;
             info.width = sceneViewportTarget.extent().width;
             info.height = sceneViewportTarget.extent().height;

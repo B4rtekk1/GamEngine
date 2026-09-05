@@ -26,6 +26,10 @@ namespace Engine {
         VkRenderPass existingRenderPass = VK_NULL_HANDLE;
         /// Depth attachment format, or VK_FORMAT_UNDEFINED when unused.
         VkFormat depthFormat = VK_FORMAT_UNDEFINED;
+        /// Optional single-sample target populated by a multisampled depth resolve.
+        VkFormat depthResolveFormat = VK_FORMAT_UNDEFINED;
+        /// Resolve operation for depth; VK_RESOLVE_MODE_NONE disables the target.
+        VkResolveModeFlagBits depthResolveMode = VK_RESOLVE_MODE_NONE;
         /// Multisample count used by the color and depth attachments.
         VkSampleCountFlagBits samples = VK_SAMPLE_COUNT_1_BIT;
         /// Load operation for the color attachment.

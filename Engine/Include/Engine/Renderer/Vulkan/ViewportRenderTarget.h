@@ -33,6 +33,7 @@ namespace Engine {
         }
 
         [[nodiscard]] const DepthBuffer &depth() const noexcept { return depth_; }
+        [[nodiscard]] const DepthBuffer &resolvedDepth() const noexcept { return resolvedDepth_; }
 
         [[nodiscard]] VkDescriptorImageInfo colorDescriptor() const noexcept;
 
@@ -45,5 +46,6 @@ namespace Engine {
         HdrBuffer color_;
         MsaaResources msaaColor_;
         DepthBuffer depth_;
+        DepthBuffer resolvedDepth_;
     };
 } // namespace Engine

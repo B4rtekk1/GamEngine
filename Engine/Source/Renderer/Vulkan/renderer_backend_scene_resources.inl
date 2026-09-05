@@ -1145,7 +1145,8 @@
         }
 
         [[nodiscard]] bool canUseHiZOcclusionCulling() const noexcept {
-            return optimizationFeatures.gpuCulling && optimizationFeatures.occlusionCulling;
+            return optimizationFeatures.gpuCulling && optimizationFeatures.occlusionCulling &&
+                   (!msaa.enabled() || vulkanDevice.supportsConservativeDepthResolve());
         }
 
         void updateCullingUniformBuffer(const uint32_t frame) const {

@@ -59,8 +59,12 @@ namespace Engine {
     void GraphicsPipeline::createRenderPass(const GraphicsPipelineOptions &options) {
         const bool usesMsaa = options.samples != VK_SAMPLE_COUNT_1_BIT;
         const bool usesDepth = options.depthFormat != VK_FORMAT_UNDEFINED;
+        const bool resolvesDepth = usesMsaa && usesDepth &&
+                                   options.depthResolveFormat != VK_FORMAT_UNDEFINED &&
+                                   options.depthResolveMode != VK_RESOLVE_MODE_NONE;
 
-        const VkAttachmentDescription color{
+        const VkAttachmentDescription2 color{
+            .sType = VK_STRUCTURE_TYPE_ATTACHMENT_DESCRIPTION_2,
             .flags = 0,
             .format = options.colorFormat,
             .samples = options.samples,
@@ -73,7 +77,8 @@ namespace Engine {
         };
 
         // The completed depth buffer is sampled by the following frame's Hi-Z pass.
-        const VkAttachmentDescription depth{
+        const VkAttachmentDescription2 depth{
+            .sType = VK_STRUCTURE_TYPE_ATTACHMENT_DESCRIPTION_2,
             .flags = 0,
             .format = options.depthFormat,
             .samples = options.samples,
@@ -85,24 +90,42 @@ namespace Engine {
             .finalLayout = options.depthFinalLayout,
         };
 
-        VkAttachmentReference colorRef{0, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL};
-        VkAttachmentReference depthRef{1, options.depthWriteEnable
+        VkAttachmentReference2 colorRef{.sType = VK_STRUCTURE_TYPE_ATTACHMENT_REFERENCE_2,
+                                        .attachment = 0, .layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+                                        .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT};
+        VkAttachmentReference2 depthRef{.sType = VK_STRUCTURE_TYPE_ATTACHMENT_REFERENCE_2, .attachment = 1, .layout = options.depthWriteEnable
                                               ? VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL
-                                              : VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL};
-        VkAttachmentReference resolveRef{
-            usesDepth ? 2U : 1U,
-            VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+                                              : VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL,
+                                        .aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT};
+        VkAttachmentReference2 resolveRef{
+            .sType = VK_STRUCTURE_TYPE_ATTACHMENT_REFERENCE_2,
+            .attachment = usesDepth ? 2U : 1U,
+            .layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+            .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
+        };
+        VkAttachmentReference2 depthResolveRef{
+            .sType = VK_STRUCTURE_TYPE_ATTACHMENT_REFERENCE_2,
+            .attachment = 3U,
+            .layout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
+            .aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT,
+        };
+        VkSubpassDescriptionDepthStencilResolve depthResolve{
+            .sType = VK_STRUCTURE_TYPE_SUBPASS_DESCRIPTION_DEPTH_STENCIL_RESOLVE,
+            .depthResolveMode = options.depthResolveMode,
+            .stencilResolveMode = VK_RESOLVE_MODE_NONE,
+            .pDepthStencilResolveAttachment = &depthResolveRef,
         };
 
-        VkSubpassDescription subpass{};
+        VkSubpassDescription2 subpass{VK_STRUCTURE_TYPE_SUBPASS_DESCRIPTION_2};
         subpass.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
         subpass.colorAttachmentCount = 1;
         subpass.pColorAttachments = &colorRef;
         subpass.pResolveAttachments = usesMsaa ? &resolveRef : nullptr;
         subpass.pDepthStencilAttachment = usesDepth ? &depthRef : nullptr;
+        subpass.pNext = resolvesDepth ? &depthResolve : nullptr;
 
 
-        VkSubpassDependency dependency{};
+        VkSubpassDependency2 dependency{VK_STRUCTURE_TYPE_SUBPASS_DEPENDENCY_2};
         dependency.srcSubpass = VK_SUBPASS_EXTERNAL;
         dependency.dstSubpass = 0;
         dependency.srcStageMask = static_cast<VkPipelineStageFlags>(VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT) |
@@ -125,12 +148,13 @@ namespace Engine {
                                               : VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT)
                                         : VkAccessFlags{0});
 
-        std::vector<VkAttachmentDescription> attachments{color};
+        std::vector<VkAttachmentDescription2> attachments{color};
         if (usesDepth) {
             attachments.push_back(depth);
         }
         if (usesMsaa) {
-            const VkAttachmentDescription resolve{
+            const VkAttachmentDescription2 resolve{
+                .sType = VK_STRUCTURE_TYPE_ATTACHMENT_DESCRIPTION_2,
                 .flags = 0,
                 .format = options.colorFormat,
                 .samples = VK_SAMPLE_COUNT_1_BIT,
@@ -143,7 +167,22 @@ namespace Engine {
             };
             attachments.push_back(resolve);
         }
-        VkSubpassDependency sampledDependency{};
+        if (resolvesDepth) {
+            const VkAttachmentDescription2 depthResolveAttachment{
+                .sType = VK_STRUCTURE_TYPE_ATTACHMENT_DESCRIPTION_2,
+                .flags = 0,
+                .format = options.depthResolveFormat,
+                .samples = VK_SAMPLE_COUNT_1_BIT,
+                .loadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE,
+                .storeOp = VK_ATTACHMENT_STORE_OP_STORE,
+                .stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE,
+                .stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE,
+                .initialLayout = VK_IMAGE_LAYOUT_UNDEFINED,
+                .finalLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL,
+            };
+            attachments.push_back(depthResolveAttachment);
+        }
+        VkSubpassDependency2 sampledDependency{VK_STRUCTURE_TYPE_SUBPASS_DEPENDENCY_2};
         sampledDependency.srcSubpass = 0;
         sampledDependency.dstSubpass = VK_SUBPASS_EXTERNAL;
         sampledDependency.srcStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
@@ -155,14 +194,14 @@ namespace Engine {
         const bool sampledAfterPass =
                 options.colorFinalLayout == VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
 
-        VkRenderPassCreateInfo info{VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO};
+        VkRenderPassCreateInfo2 info{VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO_2};
         info.attachmentCount = static_cast<uint32_t>(attachments.size());
         info.pAttachments = attachments.data();
         info.subpassCount = 1;
         info.pSubpasses = &subpass;
         info.dependencyCount = sampledAfterPass ? 2U : 1U;
         info.pDependencies = dependencies.data();
-        const VkResult result = vkCreateRenderPass(device_, &info, nullptr, &renderPass_);
+        const VkResult result = vkCreateRenderPass2(device_, &info, nullptr, &renderPass_);
         if (result != VK_SUCCESS) {
             throw std::runtime_error("Could not create render pass");
         }

@@ -66,6 +66,14 @@ namespace Engine {
             return allocator_;
         }
 
+        [[nodiscard]] VkResolveModeFlagBits depthResolveMode() const noexcept {
+            return depthResolveMode_;
+        }
+
+        [[nodiscard]] bool supportsConservativeDepthResolve() const noexcept {
+            return depthResolveMode_ == VK_RESOLVE_MODE_MAX_BIT;
+        }
+
     private:
         VkSurfaceKHR surface_ = VK_NULL_HANDLE;
         VkPhysicalDevice physicalDevice_ = VK_NULL_HANDLE;
@@ -74,6 +82,7 @@ namespace Engine {
         VkQueue presentQueue_ = VK_NULL_HANDLE;
         QueueFamilyIndices queueFamilies_{};
         VmaAllocator allocator_ = VK_NULL_HANDLE;
+        VkResolveModeFlagBits depthResolveMode_ = VK_RESOLVE_MODE_SAMPLE_ZERO_BIT;
 
         [[nodiscard]] QueueFamilyIndices findQueueFamilies(VkPhysicalDevice candidate) const;
 

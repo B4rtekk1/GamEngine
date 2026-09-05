@@ -418,10 +418,6 @@ namespace Engine {
             tonemapPass.destroy();
             temporalAaPass.destroy();
             destroyVelocityResources();
-            if (hiZDepthPrepassFramebuffer != VK_NULL_HANDLE) {
-                vkDestroyFramebuffer(device, hiZDepthPrepassFramebuffer, nullptr);
-            }
-            hiZDepthPrepassFramebuffer = VK_NULL_HANDLE;
             if (hdrFramebuffer != VK_NULL_HANDLE) {
                 vkDestroyFramebuffer(device, hdrFramebuffer, nullptr);
             }
@@ -431,7 +427,6 @@ namespace Engine {
             skyPass.destroy();
             sceneSkyPass.destroy();
             forwardPass.destroy();
-            hiZDepthPrepass.destroy();
             shadowPass.destroy();
             sceneDescriptorPass.destroy();
             indexBuffer.destroy();
@@ -547,10 +542,6 @@ namespace Engine {
             tonemapPass.destroy();
             temporalAaPass.destroy();
             destroyVelocityResources();
-            if (hiZDepthPrepassFramebuffer != VK_NULL_HANDLE) {
-                vkDestroyFramebuffer(device, hiZDepthPrepassFramebuffer, nullptr);
-                hiZDepthPrepassFramebuffer = VK_NULL_HANDLE;
-            }
             if (hdrFramebuffer != VK_NULL_HANDLE) {
                 vkDestroyFramebuffer(device, hdrFramebuffer, nullptr);
                 hdrFramebuffer = VK_NULL_HANDLE;
@@ -573,7 +564,6 @@ namespace Engine {
             skyPass.destroy();
             sceneSkyPass.destroy();
             forwardPass.destroy();
-            hiZDepthPrepass.destroy();
             shadowPass.destroy();
             sceneDescriptorPass.destroy();
             indexBuffer.destroy();
