@@ -20,6 +20,7 @@ public:
         gameInputEnabled_ = enabled;
     }
     [[nodiscard]] bool gameInputEnabled() const noexcept { return gameInputEnabled_; }
+    void requestGameMouseCapture() noexcept { gameMouseCaptureRequested_ = true; }
     [[nodiscard]] bool gameMouseCaptured() const noexcept {
         return gameInputEnabled_ && gameMouseCaptureEnabled_;
     }
@@ -45,6 +46,7 @@ private:
     bool editorInputEnabled_{false};
     bool gameInputEnabled_{true};
     bool gameMouseCaptureEnabled_{true};
+    bool gameMouseCaptureRequested_{false};
     Vec3 editorPosition_{8.0F, 6.0F, 8.0F};
     float editorYaw_{-135.0F};
     float editorPitch_{-28.0F};

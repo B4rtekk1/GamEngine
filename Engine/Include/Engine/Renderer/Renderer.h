@@ -56,6 +56,9 @@ namespace Engine {
         /** Enables primary game-camera controls for a focused Game View. */
         void setGameCameraInput(bool active) const;
 
+        /** Requests mouse capture after an explicit click in the Game View. */
+        void requestGameMouseCapture() const;
+
         /** Enables the off-screen Scene View render path for the current editor frame. */
         void setSceneViewportActive(bool active) const;
 

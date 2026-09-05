@@ -45,9 +45,10 @@ namespace Engine {
         if (Input::keyPressed(KeyCode::Escape)) {
             gameMouseCaptureEnabled_ = false;
             disableRelativeMouseMode(window);
-        } else if (!gameMouseCaptureEnabled_ && Input::mousePressed(MouseButton::Left)) {
+        } else if (!gameMouseCaptureEnabled_ && gameMouseCaptureRequested_) {
             gameMouseCaptureEnabled_ = true;
         }
+        gameMouseCaptureRequested_ = false;
 
         CameraComponent *activeCamera = nullptr;
         Transform *activeTransform = nullptr;

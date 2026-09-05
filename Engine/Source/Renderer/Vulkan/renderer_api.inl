@@ -47,6 +47,9 @@ void Renderer::setEditorSceneCameraInput(const bool active) const {
 void Renderer::setGameCameraInput(const bool active) const {
     if (backend_) backend_->setGameCameraInput(active);
 }
+void Renderer::requestGameMouseCapture() const {
+    if (backend_) backend_->requestGameMouseCapture();
+}
 void Renderer::setSceneViewportActive(const bool active) const {
     if (backend_) backend_->setSceneViewportActive(active);
 }

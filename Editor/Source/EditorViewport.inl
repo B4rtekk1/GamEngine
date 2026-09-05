@@ -68,6 +68,7 @@ enum class PlayModeAction { None, Start, Stop, Restart };
 struct ViewportInteraction final {
     bool cameraInput{};
     bool gameCameraInput{};
+    bool gameMouseCaptureRequested{};
     bool sceneClicked{};
     bool terrainGeometryChanged{};
     std::vector<Engine::Entity> terrainGeometryEntities;
@@ -1718,6 +1719,10 @@ ViewportInteraction drawViewport(Engine::ScenePreset &scene, Engine::Assets::Con
             ImGui::EndDragDropTarget();
         }
         const bool imageHovered = ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenBlockedByActiveItem);
+        if (playing && showGameView && imageHovered &&
+            ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
+            interaction.gameMouseCaptureRequested = true;
+        }
         if (imageHovered && !assetDropError.empty()) {
             ImGui::SetTooltip("Could not add model: %s", assetDropError.c_str());
         }

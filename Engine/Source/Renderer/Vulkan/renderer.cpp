@@ -337,6 +337,10 @@ namespace Engine {
             cameraController.setGameInputEnabled(active);
         }
 
+        void requestGameMouseCapture() {
+            cameraController.requestGameMouseCapture();
+        }
+
         void setEditorSelection(const Entity entity) {
             sceneViewportNeedsRender = true;
             editorSelectedEntity = entity;

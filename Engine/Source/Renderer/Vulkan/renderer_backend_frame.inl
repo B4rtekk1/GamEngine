@@ -901,7 +901,13 @@
             // Do not skip this update merely because the Scene View controller
             // is off: Play Mode still needs to enter SDL relative mouse mode.
             if (editorUiActive && !cameraController.editorInputEnabled() &&
-                !cameraController.gameInputEnabled()) { return; }
+                !cameraController.gameInputEnabled()) {
+                // update() is also responsible for leaving SDL relative mouse
+                // mode.  It must run once when Play Mode is stopped; otherwise
+                // a cursor captured in the preceding frame remains locked.
+                cameraController.update(window, registry);
+                return;
+            }
             cameraController.update(window, registry);
         }
 
