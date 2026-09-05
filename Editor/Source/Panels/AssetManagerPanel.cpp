@@ -230,6 +230,34 @@ std::string clipped_label(const std::string& value, const float width) {
     return result + "...";
 }
 
+bool delete_asset_file(const std::filesystem::path& root, const std::filesystem::path& relative,
+                       std::string& error) {
+    // Asset paths come from the catalog, but keep this check here as a hard
+    // boundary before performing a filesystem mutation.
+    if (relative.empty() || relative.is_absolute()) {
+        error = "Invalid asset path";
+        return false;
+    }
+    for (const auto& part : relative) {
+        if (part == "..") {
+            error = "Asset path escapes the asset directory";
+            return false;
+        }
+    }
+
+    const auto path = (root / relative).lexically_normal();
+    std::error_code filesystemError;
+    if (!std::filesystem::is_regular_file(path, filesystemError)) {
+        error = "Asset does not exist: " + relative.generic_string();
+        return false;
+    }
+    if (!std::filesystem::remove(path, filesystemError) || filesystemError) {
+        error = "Could not delete asset: " + relative.generic_string();
+        return false;
+    }
+    return true;
+}
+
 void draw_folder_icon(const ImVec2 min, const float size, const bool selected) {
     auto* draw = ImGui::GetWindowDrawList();
     const ImU32 back =
@@ -327,6 +355,8 @@ Engine::Entity AssetManagerPanel::draw(Engine::ScenePreset& scene, Engine::Asset
     static float tileSize = 92.0F;
     static bool gridView = true;
     static bool showInspector = true;
+    static std::filesystem::path deleteCandidate;
+    bool openDeletePopup = false;
     Engine::Entity created = Engine::NullEntity;
 
     const auto root = content.assetRoot();
@@ -354,6 +384,10 @@ Engine::Entity AssetManagerPanel::draw(Engine::ScenePreset& scene, Engine::Asset
         } catch (const std::exception& exception) {
             error = exception.what();
         }
+    };
+    const auto requestDelete = [&](const std::filesystem::path& asset) {
+        deleteCandidate = asset;
+        openDeletePopup = true;
     };
 
     ImGui::Begin("Asset Manager", &isOpen);
@@ -516,6 +550,10 @@ Engine::Entity AssetManagerPanel::draw(Engine::ScenePreset& scene, Engine::Asset
                         instantiate();
                     }
                     ImGui::EndDisabled();
+                    if (ImGui::MenuItem("Delete asset...")) {
+                        selected = asset.relative;
+                        requestDelete(asset.relative);
+                    }
                     ImGui::EndPopup();
                 }
                 ImGui::PopID();
@@ -568,6 +606,15 @@ Engine::Entity AssetManagerPanel::draw(Engine::ScenePreset& scene, Engine::Asset
                 ImGui::TextDisabled("%s", asset.relative.filename().string().c_str());
                 ImGui::EndDragDropSource();
             }
+            if (ImGui::BeginPopupContextItem("##list-context")) {
+                ImGui::TextDisabled("%s", asset.relative.filename().string().c_str());
+                ImGui::Separator();
+                if (ImGui::MenuItem("Delete asset...")) {
+                    selected = asset.relative;
+                    requestDelete(asset.relative);
+                }
+                ImGui::EndPopup();
+            }
             ImGui::PopID();
             ImGui::TableSetColumnIndex(1);
             ImGui::TextDisabled("%s", kind_name(asset.kind));
@@ -586,6 +633,30 @@ Engine::Entity AssetManagerPanel::draw(Engine::ScenePreset& scene, Engine::Asset
         ImGui::TextDisabled("%s", message);
     }
     ImGui::EndChild();
+
+    if (openDeletePopup)
+        ImGui::OpenPopup("##confirm-delete-asset");
+    if (ImGui::BeginPopupModal("##confirm-delete-asset", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
+        ImGui::TextWrapped("Delete asset '%s'?", deleteCandidate.filename().string().c_str());
+        ImGui::TextDisabled("This removes the file from the project.");
+        ImGui::Separator();
+        if (ImGui::Button("Delete", {120.0F, 0.0F})) {
+            if (delete_asset_file(root, deleteCandidate, error)) {
+                Editor::ConsolePanel::info("Deleted asset: " + deleteCandidate.generic_string());
+                refresh();
+            } else {
+                Editor::ConsolePanel::error(error);
+            }
+            deleteCandidate.clear();
+            ImGui::CloseCurrentPopup();
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("Cancel", {120.0F, 0.0F})) {
+            deleteCandidate.clear();
+            ImGui::CloseCurrentPopup();
+        }
+        ImGui::EndPopup();
+    }
 
     if (inspectorVisible) {
         ImGui::SameLine();
@@ -624,6 +695,8 @@ Engine::Entity AssetManagerPanel::draw(Engine::ScenePreset& scene, Engine::Asset
                 ImGui::Spacing();
                 ImGui::TextDisabled("Preview/import settings are not available for this asset type yet.");
             }
+            if (ImGui::Button("Delete asset...", {-1.0F, 0.0F}))
+                requestDelete(selected);
         }
         ImGui::EndChild();
     }
