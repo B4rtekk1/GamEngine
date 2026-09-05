@@ -46,6 +46,6 @@ void fragmentMain(VertexOutput input)
 {
     MaterialData material = materials[input.materialIndex];
     if (material.textureIndices.x >= 0 &&
-        materialTextures[material.textureIndices.x].Sample(input.texCoord).a <
+        materialTextures[NonUniformResourceIndex(material.textureIndices.x)].Sample(input.texCoord).a <
             max(material.roughnessAmbientOcclusion.z, 0.01)) discard;
 }

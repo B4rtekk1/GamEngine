@@ -138,10 +138,10 @@ ForwardFragmentOutput fragmentMain(ForwardFragmentInput input)
         float4 checker = float4(checkerShade * material.baseColorMetallic.rgb, 1.0);
         baseColor = 0.0;
         float appliedWeight = 0.0;
-        if (material.terrainLayerTextures.x >= 0) { baseColor += materialTextures[material.terrainLayerTextures.x].Sample(terrainUv) * layers.x; appliedWeight += layers.x; }
-        if (material.terrainLayerTextures.y >= 0) { baseColor += materialTextures[material.terrainLayerTextures.y].Sample(terrainUv) * layers.y; appliedWeight += layers.y; }
-        if (material.terrainLayerTextures.z >= 0) { baseColor += materialTextures[material.terrainLayerTextures.z].Sample(terrainUv) * layers.z; appliedWeight += layers.z; }
-        if (material.terrainLayerTextures.w >= 0) { baseColor += materialTextures[material.terrainLayerTextures.w].Sample(terrainUv) * layers.w; appliedWeight += layers.w; }
+        if (material.terrainLayerTextures.x >= 0) { baseColor += materialTextures[NonUniformResourceIndex(material.terrainLayerTextures.x)].Sample(terrainUv) * layers.x; appliedWeight += layers.x; }
+        if (material.terrainLayerTextures.y >= 0) { baseColor += materialTextures[NonUniformResourceIndex(material.terrainLayerTextures.y)].Sample(terrainUv) * layers.y; appliedWeight += layers.y; }
+        if (material.terrainLayerTextures.z >= 0) { baseColor += materialTextures[NonUniformResourceIndex(material.terrainLayerTextures.z)].Sample(terrainUv) * layers.z; appliedWeight += layers.z; }
+        if (material.terrainLayerTextures.w >= 0) { baseColor += materialTextures[NonUniformResourceIndex(material.terrainLayerTextures.w)].Sample(terrainUv) * layers.w; appliedWeight += layers.w; }
         // Blend the unpainted part into the grid instead of leaving it with
         // a zero alpha/colour, which exposed the blue clear colour at edges.
         baseColor = baseColor * float4(material.baseColorMetallic.rgb, 1.0) +
@@ -149,12 +149,12 @@ ForwardFragmentOutput fragmentMain(ForwardFragmentInput input)
         baseColor.a = 1.0;
     }
     else if (material.textureIndices.x >= 0)
-        baseColor *= materialTextures[material.textureIndices.x].Sample(input.texCoord);
+        baseColor *= materialTextures[NonUniformResourceIndex(material.textureIndices.x)].Sample(input.texCoord);
 
     // Cooker may pack this map into base-color alpha; retain the separate
     // path for uncooked glTF/Quixel assets.
     if (material.auxiliaryTextureIndices.y >= 0)
-        baseColor.a *= materialTextures[material.auxiliaryTextureIndices.y].Sample(input.texCoord).r;
+        baseColor.a *= materialTextures[NonUniformResourceIndex(material.auxiliaryTextureIndices.y)].Sample(input.texCoord).r;
 
     const bool doubleSided = (material.textureIndices.w & 1) != 0;
     const uint alphaMode = uint((material.textureIndices.w >> 1) & 3);
@@ -173,7 +173,7 @@ ForwardFragmentOutput fragmentMain(ForwardFragmentInput input)
     if (material.textureIndices.y >= 0)
     {
         float4 metallicRoughness =
-            materialTextures[material.textureIndices.y].Sample(input.texCoord);
+            materialTextures[NonUniformResourceIndex(material.textureIndices.y)].Sample(input.texCoord);
         metallic *= metallicRoughness.b;
         roughness *= metallicRoughness.g;
     }
@@ -188,7 +188,7 @@ ForwardFragmentOutput fragmentMain(ForwardFragmentInput input)
         float3 tangent = normalize(input.tangent.xyz - normal * dot(normal, input.tangent.xyz)) * faceSign;
         float3 bitangent = normalize(cross(normal, tangent)) * input.tangent.w;
         float3 mappedNormal =
-            materialTextures[material.textureIndices.z].Sample(input.texCoord).xyz * 2.0 - 1.0;
+            materialTextures[NonUniformResourceIndex(material.textureIndices.z)].Sample(input.texCoord).xyz * 2.0 - 1.0;
         mappedNormal.xy *= material.extensionScalars.x;
         float3x3 tangentFrame = float3x3(tangent, bitangent, normal);
         normal = normalize(mul(mappedNormal, tangentFrame));
@@ -240,13 +240,13 @@ ForwardFragmentOutput fragmentMain(ForwardFragmentInput input)
     }
     float ao = 1.0;
     if (material.auxiliaryTextureIndices.x >= 0)
-        ao = lerp(1.0, materialTextures[material.auxiliaryTextureIndices.x].Sample(input.texCoord).r,
+        ao = lerp(1.0, materialTextures[NonUniformResourceIndex(material.auxiliaryTextureIndices.x)].Sample(input.texCoord).r,
                   clamp(material.roughnessAmbientOcclusion.y, 0.0, 1.0));
     float3 color = 0.9 * albedo * ao + direct;
     // Foliage has a cheap, stable back-lighting term.  The flag is deliberately
     // material data rather than an asset-name heuristic at runtime.
     if ((material.textureIndices.w & 16) != 0 && material.auxiliaryTextureIndices.z >= 0) {
-        float mask = materialTextures[material.auxiliaryTextureIndices.z].Sample(input.texCoord).r;
+        float mask = materialTextures[NonUniformResourceIndex(material.auxiliaryTextureIndices.z)].Sample(input.texCoord).r;
         float backLight = saturate(dot(-normal, lightDirection));
         color += albedo * frame.lightColor.rgb * frame.lightDirectionIntensity.w *
                  backLight * mask * material.extensionScalars.y;

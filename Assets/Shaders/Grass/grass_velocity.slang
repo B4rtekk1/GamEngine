@@ -47,7 +47,7 @@ VertexOutput vertexMain(VertexInput input, uint instanceIndex : SV_InstanceID,
 float4 fragmentMain(VertexOutput input) : SV_Target {
     MaterialData material = materials[input.materialIndex];
     if (material.textureIndices.x >= 0 &&
-        materialTextures[material.textureIndices.x].Sample(input.texCoord).a <= 0.01)
+        materialTextures[NonUniformResourceIndex(material.textureIndices.x)].Sample(input.texCoord).a <= 0.01)
         discard;
     float2 currentUv = input.currentNdc * 0.5 + 0.5;
     float2 previousUv = (input.previousClip.xy / input.previousClip.w) * 0.5 + 0.5;

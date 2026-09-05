@@ -69,7 +69,7 @@ float4 fragmentMain(FragmentInput input) : SV_Target
 {
     MaterialData material = materials[input.materialIndex];
     float4 albedo = float4(input.color * material.baseColorMetallic.rgb, 1.0);
-    if (material.textureIndices.x >= 0) albedo *= materialTextures[material.textureIndices.x].Sample(input.texCoord);
+    if (material.textureIndices.x >= 0) albedo *= materialTextures[NonUniformResourceIndex(material.textureIndices.x)].Sample(input.texCoord);
     if (albedo.a < max(material.roughnessAmbientOcclusion.z, 0.01)) discard;
     float3 normal = normalize(input.isFrontFace ? input.normal : -input.normal);
     float3 lightDirection = normalize(-frame.lightDirectionIntensity.xyz);

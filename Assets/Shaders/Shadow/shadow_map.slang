@@ -74,11 +74,11 @@ void fragmentMain(ShadowFragmentInput input)
     MaterialData material = materials[input.materialIndex];
     float alpha = 1.0;
     if (material.textureIndices.x >= 0)
-        alpha *= materialTextures[material.textureIndices.x].Sample(input.texCoord).a;
+        alpha *= materialTextures[NonUniformResourceIndex(material.textureIndices.x)].Sample(input.texCoord).a;
     // Must match forward_pbr: uncooked Quixel foliage commonly carries its
     // cutout mask separately rather than in base-color alpha.
     if (material.auxiliaryTextureIndices.y >= 0)
-        alpha *= materialTextures[material.auxiliaryTextureIndices.y].Sample(input.texCoord).r;
+        alpha *= materialTextures[NonUniformResourceIndex(material.auxiliaryTextureIndices.y)].Sample(input.texCoord).r;
     const uint alphaMode = uint((material.textureIndices.w >> 1) & 3);
     if (alphaMode == 1 && alpha < material.roughnessAmbientOcclusion.z)
         discard;
