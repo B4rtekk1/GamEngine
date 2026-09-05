@@ -16,6 +16,7 @@
 #include "Engine/ECS/Registry.h"
 #include "Engine/Renderer/MeshRenderer.h"
 #include "Engine/Scene/Scene.h"
+#include "Engine/Scene/TransformSystem.h"
 #include "Engine/Scene/Components/LightComponent.h"
 #include "Engine/Scene/Components/IdentityComponents.h"
 
@@ -1448,6 +1449,10 @@ namespace Engine {
             }
         });
         registry = std::move(loaded);
+        // Registry replacement preserves its address, but invalidates all
+        // address-keyed runtime caches and every deserialized world transform.
+        TransformSystem::invalidate(registry);
+        TransformSystem::updateDirty(registry);
     }
 } // namespace Engine
 

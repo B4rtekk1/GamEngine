@@ -236,6 +236,7 @@ int main(int argc, char** argv) {
             if (events.togglePlay) {
                 if (EditorSceneSession::setPlayMode(!playing, scene, playSceneSnapshot, playModeError,
                                                     EditorSceneSession::msaaSampleCount(renderer))) {
+                    physicsSystem.reset();
                     playing = !playing;
                     paused = false;
                     physicsAccumulator = 0.0;
@@ -320,6 +321,7 @@ int main(int argc, char** argv) {
                     Editor::ConsolePanel::error("Could not change Play mode: " + playModeError);
                     return false;
                 }
+                physicsSystem.reset();
                 playing = enabled;
                 paused = false;
                 physicsAccumulator = 0.0;

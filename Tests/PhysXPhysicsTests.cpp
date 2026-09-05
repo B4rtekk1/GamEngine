@@ -3,6 +3,7 @@
 #include "Engine/Physics/PhysicsSystem.h"
 #include "Engine/Scene/Scene.h"
 #include "Engine/Scene/SceneEditor.h"
+#include "Engine/Scene/SceneSerializer.h"
 #include "Engine/Scene/Prefab.h"
 #include "Engine/ECS/Components/TerrainGrassComponent.h"
 #include "Engine/ECS/Components/MeshRendererComponent.h"
@@ -12,6 +13,7 @@
 #include <stdexcept>
 #include <filesystem>
 #include <fstream>
+#include <sstream>
 
 namespace {
 
@@ -396,6 +398,30 @@ TEST(Scene, CachesWorldTransformsAcrossParentChildHierarchy) {
     EXPECT_FLOAT_EQ(secondPosition.x, 22.0F);
     EXPECT_FLOAT_EQ(secondPosition.y, 4.0F);
     EXPECT_FLOAT_EQ(secondPosition.z, 4.0F);
+}
+
+TEST(SceneSerializer, RebuildsWorldTransformsWhenReplacingAnExistingRegistry) {
+    Engine::Scene scene;
+    const auto parent = scene.createActor("Snapshot parent");
+    const auto child = parent.createChild("Snapshot child");
+    parent.setPosition({10.0F, 0.0F, 0.0F});
+    child.setPosition({2.0F, 0.0F, 0.0F});
+
+    std::stringstream snapshot;
+    Engine::SceneSerializer::save(scene, snapshot);
+    scene.updateTransforms();
+
+    // Simulate a Play session advancing the cached transform revision.
+    parent.setPosition({100.0F, 0.0F, 0.0F});
+    scene.updateTransforms();
+
+    Engine::SceneSerializer::load(scene, snapshot);
+    const auto restoredChild = scene.findActor("Snapshot child");
+    ASSERT_TRUE(restoredChild.valid());
+    const glm::vec3 restoredChildWorld{scene.worldMatrix(restoredChild).native()[3]};
+    EXPECT_FLOAT_EQ(restoredChildWorld.x, 12.0F);
+    EXPECT_FLOAT_EQ(restoredChildWorld.y, 0.0F);
+    EXPECT_FLOAT_EQ(restoredChildWorld.z, 0.0F);
 }
 
 TEST(Scene, ReparentingKeepsWorldTransformByDefault) {

@@ -10,6 +10,9 @@ namespace Engine {
         /** Updates only changed transforms and their descendants, parent first. */
         static void updateDirty(Registry &registry);
 
+        /** Discards runtime hierarchy data after the registry contents are replaced. */
+        static void invalidate(const Registry &registry) noexcept;
+
         /** Compatibility name for updateDirty(). */
         static void update(Registry &registry) { updateDirty(registry); }
 

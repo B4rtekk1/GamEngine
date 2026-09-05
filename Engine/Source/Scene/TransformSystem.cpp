@@ -90,6 +90,10 @@ namespace Engine {
                                   .scale = worldScale()};
     }
 
+    void TransformSystem::invalidate(const Registry &registry) noexcept {
+        caches.erase(&registry);
+    }
+
     void TransformSystem::updateDirty(Registry &registry) {
         HierarchyCache &cache = caches[&registry];
         const bool hierarchyChanged = !cache.initialized ||

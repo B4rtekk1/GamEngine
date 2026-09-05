@@ -849,6 +849,10 @@ namespace Engine {
         }
     };
 
+    void PhysicsSystem::reset() const noexcept {
+        broadPhaseCache_.reset();
+    }
+
     void PhysicsSystem::update(Scene &scene, const float deltaTime) const {
         if (deltaTime <= 0.0F) {
             return;

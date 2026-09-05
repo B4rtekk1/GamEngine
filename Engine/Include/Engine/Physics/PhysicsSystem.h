@@ -29,6 +29,9 @@ namespace Engine {
         /** Advances dynamic rigid bodies in a scene by one simulation step. */
         void update(Scene &scene, float deltaTime) const;
 
+        /** Discards the PhysX world so the next update builds a fresh simulation. */
+        void reset() const noexcept;
+
         [[nodiscard]] Vec3 gravity() const noexcept { return gravity_; }
         void setGravity(Vec3 gravity) noexcept { gravity_ = gravity; }
 
