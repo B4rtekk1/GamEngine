@@ -158,10 +158,19 @@ ForwardFragmentOutput fragmentMain(ForwardFragmentInput input)
 
     const bool doubleSided = (material.textureIndices.w & 1) != 0;
     const uint alphaMode = uint((material.textureIndices.w >> 1) & 3);
-    // 0 = opaque, 1 = mask, 2 = blend.  Only MASK discards fragments.
+    // The current two-sided foliage stream is a depth-writing cutout stream.
+    // Importers commonly mark vegetation cards as BLEND even though their
+    // opacity map is binary. Treat those cards as cutouts until they are
+    // routed through a dedicated, sorted transparent stream.
     if (alphaMode == 1)
     {
         if (baseColor.a < material.roughnessAmbientOcclusion.z)
+            discard;
+        baseColor.a = 1.0;
+    }
+    else if (alphaMode == 2)
+    {
+        if (baseColor.a < 0.30)
             discard;
         baseColor.a = 1.0;
     }

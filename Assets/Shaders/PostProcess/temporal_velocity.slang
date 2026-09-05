@@ -104,11 +104,16 @@ struct FragmentOutput
 FragmentOutput fragmentMain(FragmentInput input)
 {
     MaterialData material = materials[input.materialIndex];
-    if (material.textureIndices.x >= 0)
+    if (material.textureIndices.x >= 0 || material.auxiliaryTextureIndices.y >= 0)
     {
-        float alpha = materialTextures[NonUniformResourceIndex(material.textureIndices.x)].Sample(input.texCoord).a;
+        float alpha = 1.0;
+        if (material.textureIndices.x >= 0)
+            alpha *= materialTextures[NonUniformResourceIndex(material.textureIndices.x)].Sample(input.texCoord).a;
+        if (material.auxiliaryTextureIndices.y >= 0)
+            alpha *= materialTextures[NonUniformResourceIndex(material.auxiliaryTextureIndices.y)].Sample(input.texCoord).r;
         uint alphaMode = uint((material.textureIndices.w >> 1) & 3);
-        if (alphaMode == 1 && alpha < material.roughnessAmbientOcclusion.z)
+        const float cutoff = alphaMode == 1 ? material.roughnessAmbientOcclusion.z : 0.30;
+        if ((alphaMode == 1 || alphaMode == 2) && alpha < cutoff)
             discard;
     }
     float2 currentUv = input.currentNdc * 0.5 + 0.5;

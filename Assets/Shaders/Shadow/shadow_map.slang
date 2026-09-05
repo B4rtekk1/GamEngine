@@ -80,6 +80,9 @@ void fragmentMain(ShadowFragmentInput input)
     if (material.auxiliaryTextureIndices.y >= 0)
         alpha *= materialTextures[NonUniformResourceIndex(material.auxiliaryTextureIndices.y)].Sample(input.texCoord).r;
     const uint alphaMode = uint((material.textureIndices.w >> 1) & 3);
-    if (alphaMode == 1 && alpha < material.roughnessAmbientOcclusion.z)
+    // Match the forward foliage cutout policy. Quixel-style foliage may be
+    // authored as BLEND despite using a binary opacity texture.
+    const float cutoff = alphaMode == 1 ? material.roughnessAmbientOcclusion.z : 0.30;
+    if ((alphaMode == 1 || alphaMode == 2) && alpha < cutoff)
         discard;
 }

@@ -43,10 +43,12 @@ void ForwardPass::create(VkDevice device, const VkFormat colorFormat,
     GraphicsPipelineOptions foliageOptions = options;
     foliageOptions.existingRenderPass = pipeline_.renderPass();
     foliageOptions.cullMode = VK_CULL_MODE_NONE;
-    // This pass is also the transparent stream.  MASK fragments write alpha
-    // as one in the shader; BLEND retains alpha and uses standard compositing.
-    foliageOptions.alphaBlendEnable = VK_TRUE;
-    foliageOptions.depthWriteEnable = VK_FALSE;
+    // Vegetation cards use alpha cutout.  They must populate depth before the
+    // sky draw and TAA resolve; treating them as a generic transparent stream
+    // leaves their pixels unoccluding and causes background bleed/shimmer.
+    // Genuine, sorted transparency belongs in a separate pipeline.
+    foliageOptions.alphaBlendEnable = VK_FALSE;
+    foliageOptions.depthWriteEnable = VK_TRUE;
     foliagePipeline_.create(device, foliageOptions);
     GraphicsPipelineOptions grassOptions = foliageOptions;
     grassOptions.shader = "shaders/grass_forward.spv";
