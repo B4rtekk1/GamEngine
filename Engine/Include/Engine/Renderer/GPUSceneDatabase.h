@@ -73,7 +73,11 @@ namespace Engine {
 
     private:
         template <typename Id>
-        static void appendUnique(std::vector<Id>& list, Id id);
+        static void markDirty(std::vector<Id>& list, std::vector<std::uint32_t>& stamps,
+                              std::uint32_t generation, Id id);
+        void markRemovedInstanceDirty(GPUSceneInstanceId id);
+        void unmarkRemovedInstanceDirty(GPUSceneInstanceId id) noexcept;
+        void advanceDirtyGeneration() noexcept;
 
         std::vector<GPUInstance> m_instances;
         std::vector<GPUMesh> m_meshes;
@@ -83,5 +87,11 @@ namespace Engine {
         std::unordered_map<std::uint64_t, GPUSceneMeshId> m_meshIds;
         std::unordered_map<std::uint64_t, GPUSceneMaterialId> m_materialIds;
         DirtyRanges m_dirty;
+        std::vector<std::uint32_t> m_dirtyInstanceStamps;
+        std::vector<std::uint32_t> m_dirtyMeshStamps;
+        std::vector<std::uint32_t> m_dirtyMaterialStamps;
+        std::vector<std::uint32_t> m_removedInstanceStamps;
+        std::vector<std::uint32_t> m_removedInstancePositions;
+        std::uint32_t m_dirtyGeneration{1};
     };
 } // namespace Engine

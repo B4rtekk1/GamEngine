@@ -38,4 +38,20 @@ namespace Engine {
         EXPECT_EQ(database.meshes()[mesh].indexCount, 24U);
         EXPECT_EQ(database.materials()[material].pipelineClass, 3U);
     }
+
+    TEST(GPUSceneDatabaseTests, DirtyGenerationAllowsIdsToBeMarkedAfterClear) {
+        GPUSceneDatabase database;
+        const auto instance = database.upsertInstance(1, {});
+        const auto mesh = database.upsertMesh(2, {});
+        const auto material = database.upsertMaterial(3, {});
+        database.clearDirty();
+
+        (void) database.upsertInstance(1, {});
+        (void) database.upsertMesh(2, {});
+        (void) database.upsertMaterial(3, {});
+
+        EXPECT_EQ(database.dirty().instances, std::vector{instance});
+        EXPECT_EQ(database.dirty().meshes, std::vector{mesh});
+        EXPECT_EQ(database.dirty().materials, std::vector{material});
+    }
 } // namespace Engine
