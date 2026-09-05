@@ -35,6 +35,10 @@
 #include <unordered_set>
 #include <vector>
 
+#ifndef SCENE_SERIALIZER_REGISTRY_ONLY
+#define SCENE_SERIALIZER_SCENE_ONLY
+#endif
+
 // NOLINTBEGIN(readability-magic-numbers)
 
 namespace Engine {
@@ -621,6 +625,7 @@ namespace Engine {
         }
     } // namespace
 
+#ifndef SCENE_SERIALIZER_REGISTRY_ONLY
     void SceneSerializer::save(const Scene &scene, const std::filesystem::path &path) {
         save(scene.registry(), path);
     }
@@ -687,7 +692,9 @@ namespace Engine {
         }
         scene.rebuildObjectHandles();
     }
+#endif
 
+#ifndef SCENE_SERIALIZER_SCENE_ONLY
     void SceneSerializer::save(const Registry &registry,
                                const std::filesystem::path &path) {
         save(registry, path, 0);
@@ -1454,6 +1461,7 @@ namespace Engine {
         TransformSystem::invalidate(registry);
         TransformSystem::updateDirty(registry);
     }
+#endif
 } // namespace Engine
 
 // NOLINTEND(readability-magic-numbers)

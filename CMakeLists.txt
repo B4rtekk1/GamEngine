@@ -154,6 +154,7 @@ add_library(Engine
         Engine/Source/ECS/Registry.cpp
         Engine/Source/Input/Input.cpp
         Engine/Source/Scene/SceneSerializer.cpp
+        Engine/Source/Scene/SceneRegistrySerializer.cpp
         Engine/Source/Scene/Scene.cpp
         Engine/Source/Scene/Actor.cpp
         Engine/Source/Scene/TransformSystem.cpp
