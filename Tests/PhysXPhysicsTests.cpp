@@ -398,6 +398,28 @@ TEST(Scene, CachesWorldTransformsAcrossParentChildHierarchy) {
     EXPECT_FLOAT_EQ(secondPosition.z, 4.0F);
 }
 
+TEST(Scene, DefersWorldTrsDecompositionUntilRequested) {
+    Engine::Registry registry;
+    const auto entity = registry.create();
+    auto &local = registry.add<Engine::Transform>(entity);
+    local.position = {3.0F, 4.0F, 5.0F};
+    local.rotation = {0.0F, 45.0F, 0.0F};
+    local.scale = {2.0F, 3.0F, 4.0F};
+
+    Engine::TransformSystem::updateDirty(registry);
+    const auto &transform = registry.get<Engine::Transform>(entity);
+    EXPECT_FALSE(transform.worldTrsValid);
+    EXPECT_FLOAT_EQ(transform.worldPosition().x(), 3.0F);
+    EXPECT_FLOAT_EQ(transform.worldPosition().y(), 4.0F);
+    EXPECT_FLOAT_EQ(transform.worldPosition().z(), 5.0F);
+
+    const auto &scale = transform.worldScale();
+    EXPECT_TRUE(transform.worldTrsValid);
+    EXPECT_FLOAT_EQ(scale.x(), 2.0F);
+    EXPECT_FLOAT_EQ(scale.y(), 3.0F);
+    EXPECT_FLOAT_EQ(scale.z(), 4.0F);
+}
+
 TEST(SceneSerializer, RoundTripsParentRelationshipAndHierarchyOrder) {
     const auto path = std::filesystem::temp_directory_path() / "gameengine-hierarchy-roundtrip-test.scene";
     std::error_code error;

@@ -25,12 +25,14 @@ namespace Engine {
 
         [[nodiscard]] const Mat4 &worldMatrix() const noexcept { return cachedWorldMatrix; }
         [[nodiscard]] const Mat4 &previousWorldMatrix() const noexcept { return previousCachedWorldMatrix; }
+        /** @brief Returns the translation read directly from the world matrix. */
+        [[nodiscard]] const Vec3 &worldPosition() const noexcept { return cachedWorldPosition; }
+        /** @brief Lazily decomposes the world matrix to obtain Euler rotation. */
+        [[nodiscard]] const Vec3 &worldRotation() const noexcept;
+        /** @brief Lazily decomposes the world matrix to obtain per-axis scale. */
+        [[nodiscard]] const Vec3 &worldScale() const noexcept;
         [[nodiscard]] std::uint64_t worldRevision() const noexcept { return cachedWorldRevision; }
-        [[nodiscard]] TransformComponent worldTransform() const noexcept {
-            return TransformComponent{.position = cachedWorldPosition,
-                                      .rotation = cachedWorldRotation,
-                                      .scale = cachedWorldScale};
-        }
+        [[nodiscard]] TransformComponent worldTransform() const noexcept;
 
         /** @brief Builds the local-space matrix. */
         [[nodiscard]] Mat4 matrix() const noexcept {
@@ -46,8 +48,8 @@ namespace Engine {
         Mat4 cachedWorldMatrix{};
         Mat4 previousCachedWorldMatrix{};
         Vec3 cachedWorldPosition{};
-        Vec3 cachedWorldRotation{};
-        Vec3 cachedWorldScale{1.0F, 1.0F, 1.0F};
+        mutable Vec3 cachedWorldRotation{};
+        mutable Vec3 cachedWorldScale{1.0F, 1.0F, 1.0F};
         Vec3 cachedLocalPosition{};
         Vec3 cachedLocalRotation{};
         Vec3 cachedLocalScale{1.0F, 1.0F, 1.0F};
@@ -55,5 +57,7 @@ namespace Engine {
         std::uint64_t cachedParentWorldRevision{};
         std::uint64_t cachedWorldRevision{};
         bool worldCacheValid{false};
+        /** False until worldRotation() or worldScale() requires decomposition. */
+        mutable bool worldTrsValid{false};
     };
 } // namespace Engine

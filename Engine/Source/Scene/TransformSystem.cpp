@@ -6,8 +6,8 @@
 #include <glm/gtx/matrix_decompose.hpp>
 #include <glm/gtx/quaternion.hpp>
 
+#include <algorithm>
 #include <unordered_map>
-#include <unordered_set>
 #include <vector>
 
 namespace Engine {
@@ -17,8 +17,12 @@ namespace Engine {
             std::uint64_t uuidRevision{};
             std::uint64_t parentRevision{};
             std::uint64_t transformRevision{};
+            std::uint32_t traversalGeneration{};
             bool initialized{false};
             std::unordered_map<Entity, std::vector<Entity>> children;
+            std::vector<std::uint32_t> dirtyGeneration;
+            std::vector<std::uint32_t> resolvedGeneration;
+            std::vector<std::uint32_t> visitingGeneration;
         };
 
         // Runtime-only adjacency avoids rebuilding UUID lookup and hierarchy on every tick.
@@ -43,22 +47,47 @@ namespace Engine {
             cache.parentRevision = registry.componentRevision<ParentComponent>();
         }
 
-        void cacheWorldTrs(Transform &transform) {
+        void decomposeWorldTrs(const Transform &transform) noexcept {
             glm::vec3 scale{}, translation{}, skew{};
             glm::quat rotation{};
             glm::vec4 perspective{};
             if (glm::decompose(transform.cachedWorldMatrix.native(), scale, rotation, translation,
                                skew, perspective)) {
-                transform.cachedWorldPosition = Vec3{translation};
                 transform.cachedWorldRotation = Vec3{
                     glm::degrees(glm::eulerAngles(glm::conjugate(rotation)))};
                 transform.cachedWorldScale = Vec3{scale};
             } else {
-                transform.cachedWorldPosition = transform.position;
                 transform.cachedWorldRotation = transform.rotation;
                 transform.cachedWorldScale = transform.scale;
             }
+            transform.worldTrsValid = true;
         }
+
+        std::uint32_t nextTraversalGeneration(HierarchyCache &cache) {
+            if (++cache.traversalGeneration != 0) return cache.traversalGeneration;
+
+            // A wrap is practically unreachable, but clearing preserves the stamp invariant.
+            std::fill(cache.dirtyGeneration.begin(), cache.dirtyGeneration.end(), 0U);
+            std::fill(cache.resolvedGeneration.begin(), cache.resolvedGeneration.end(), 0U);
+            std::fill(cache.visitingGeneration.begin(), cache.visitingGeneration.end(), 0U);
+            return ++cache.traversalGeneration;
+        }
+    }
+
+    const Vec3 &TransformComponent::worldRotation() const noexcept {
+        if (!worldTrsValid) decomposeWorldTrs(*this);
+        return cachedWorldRotation;
+    }
+
+    const Vec3 &TransformComponent::worldScale() const noexcept {
+        if (!worldTrsValid) decomposeWorldTrs(*this);
+        return cachedWorldScale;
+    }
+
+    TransformComponent TransformComponent::worldTransform() const noexcept {
+        return TransformComponent{.position = worldPosition(),
+                                  .rotation = worldRotation(),
+                                  .scale = worldScale()};
     }
 
     void TransformSystem::updateDirty(Registry &registry) {
@@ -68,23 +97,39 @@ namespace Engine {
             cache.uuidRevision != registry.componentRevision<UUIDComponent>() ||
             cache.parentRevision != registry.componentRevision<ParentComponent>();
 
-        std::vector<Entity> dirty;
+        const std::uint64_t observedTransformRevision = cache.transformRevision;
+        const std::size_t entityCapacity = registry.entityIndexCapacity();
+        if (cache.dirtyGeneration.size() < entityCapacity) {
+            cache.dirtyGeneration.resize(entityCapacity);
+            cache.resolvedGeneration.resize(entityCapacity);
+            cache.visitingGeneration.resize(entityCapacity);
+        }
+        const std::uint32_t generation = nextTraversalGeneration(cache);
+        bool hasDirty = false;
+        const auto markDirty = [&](const Entity entity) {
+            const std::uint32_t index = entityIndex(entity);
+            if (index < cache.dirtyGeneration.size()) {
+                cache.dirtyGeneration[index] = generation;
+                hasDirty = true;
+            }
+        };
         if (hierarchyChanged) {
             rebuildHierarchy(registry, cache);
-            registry.view<Transform>([&](const Entity entity, Transform &) { dirty.push_back(entity); });
+            registry.view<Transform>([&](const Entity entity, Transform &) { markDirty(entity); });
         } else {
-            dirty = registry.componentEntitiesChangedSince<Transform>(cache.transformRevision);
+            registry.forEachComponentChangedSince<Transform>(observedTransformRevision, markDirty);
         }
         cache.transformRevision = registry.componentRevision<Transform>();
         cache.initialized = true;
-        if (dirty.empty()) return;
+        if (!hasDirty) return;
 
-        const std::unordered_set<Entity> explicitlyDirty{dirty.begin(), dirty.end()};
-        std::unordered_set<Entity> resolved;
-        std::unordered_set<Entity> visiting;
         const auto resolve = [&](auto &&self, const Entity entity) -> void {
-            if (!registry.valid(entity) || !registry.has<Transform>(entity) || resolved.contains(entity)) return;
-            if (!visiting.insert(entity).second) return; // Invalid cycles are treated as roots.
+            const std::uint32_t index = entityIndex(entity);
+            if (!registry.valid(entity) || !registry.has<Transform>(entity) ||
+                index >= cache.resolvedGeneration.size() ||
+                cache.resolvedGeneration[index] == generation) return;
+            if (cache.visitingGeneration[index] == generation) return; // Invalid cycles are treated as roots.
+            cache.visitingGeneration[index] = generation;
 
             Transform &transform = registry.get<Transform>(entity);
             Entity parent = NullEntity;
@@ -96,26 +141,32 @@ namespace Engine {
             const Transform *parentTransform = parent != NullEntity && registry.has<Transform>(parent)
                 ? &registry.get<Transform>(parent) : nullptr;
             const std::uint64_t parentRevision = parentTransform == nullptr ? 0 : parentTransform->worldRevision();
-            const bool changed = explicitlyDirty.contains(entity) || !transform.worldCacheValid ||
+            const bool changed = cache.dirtyGeneration[index] == generation || !transform.worldCacheValid ||
                 transform.cachedParent != parent ||
                 transform.cachedParentWorldRevision != parentRevision;
             if (changed) {
                 transform.previousCachedWorldMatrix = transform.cachedWorldMatrix;
                 transform.cachedWorldMatrix = parentTransform == nullptr ? transform.matrix() :
                     Mat4{parentTransform->worldMatrix().native() * transform.matrix().native()};
+                transform.cachedWorldPosition = Vec3{glm::vec3{transform.cachedWorldMatrix.native()[3]}};
                 transform.cachedParent = parent;
                 transform.cachedParentWorldRevision = parentRevision;
                 ++transform.cachedWorldRevision;
                 transform.worldCacheValid = true;
-                cacheWorldTrs(transform);
+                transform.worldTrsValid = false;
             }
-            visiting.erase(entity);
-            resolved.insert(entity);
+            cache.visitingGeneration[index] = 0;
+            cache.resolvedGeneration[index] = generation;
             if (const auto children = cache.children.find(entity); children != cache.children.end()) {
                 for (const Entity child : children->second) self(self, child);
             }
         };
-        for (const Entity entity : dirty) resolve(resolve, entity);
+        if (hierarchyChanged) {
+            registry.view<Transform>([&](const Entity entity, Transform &) { resolve(resolve, entity); });
+        } else {
+            registry.forEachComponentChangedSince<Transform>(observedTransformRevision,
+                [&](const Entity entity) { resolve(resolve, entity); });
+        }
     }
 
     const Mat4 &TransformSystem::worldMatrix(const Registry &registry, const Entity entity) {

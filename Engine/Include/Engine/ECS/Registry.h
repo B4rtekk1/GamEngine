@@ -187,6 +187,34 @@ namespace Engine {
         }
 
         /**
+         * Visits component changes after @p revision without allocating a result
+         * vector. The recent-log path may yield the same entity repeatedly.
+         */
+        template<typename T, typename Func>
+        void forEachComponentChangedSince(const std::uint64_t revision, Func &&func) const {
+            const auto type = std::type_index(typeid(T)); //NOLINT
+            const auto current = m_componentChangeEntities.find(type);
+            if (current == m_componentChangeEntities.end()) return;
+
+            const auto log = m_componentChangeLogs.find(type);
+            if (log != m_componentChangeLogs.end() && !log->second.records.empty() &&
+                revision >= log->second.firstRevision - 1) {
+                for (const ComponentChange &entry : log->second.records) {
+                    if (entry.revision > revision) std::invoke(func, entry.entity);
+                }
+                return;
+            }
+            for (const auto &[entity, changedRevision] : current->second) {
+                if (changedRevision > revision) std::invoke(func, entity);
+            }
+        }
+
+        /** Number of sparse entity slots, suitable for index-addressed caches. */
+        [[nodiscard]] std::size_t entityIndexCapacity() const noexcept {
+            return m_entityPositions.size();
+        }
+
+        /**
          * @brief Adds and constructs a component for an entity.
          *
          * The appropriate component pool is created lazily when the component type
