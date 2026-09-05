@@ -11,6 +11,7 @@
 #include "Engine/UI/TextElement.h"
 #include "Engine/UI/Vulkan/UIFontAtlas.h"
 
+#include <cstddef>
 #include <cstdint>
 #include <memory>
 #include <stdexcept>
@@ -223,6 +224,11 @@ TEST(CullingTypes, ObjectAndUniformDataHaveGpuCompatibleAlignment) {
     EXPECT_EQ(alignof(Engine::Culling::CullingUniformData), 16u);
     EXPECT_EQ(sizeof(Engine::Culling::GPUObjectData) % 16u, 0u);
     EXPECT_EQ(sizeof(Engine::Culling::CullingUniformData) % 16u, 0u);
+    EXPECT_EQ(offsetof(Engine::Culling::CullingUniformData, viewProjection), 0u);
+    EXPECT_EQ(offsetof(Engine::Culling::CullingUniformData, cameraPosition), 64u);
+    EXPECT_EQ(offsetof(Engine::Culling::CullingUniformData, objectCount), 80u);
+    EXPECT_EQ(offsetof(Engine::Culling::CullingUniformData, drawCategory), 124u);
+    EXPECT_EQ(sizeof(Engine::Culling::CullingUniformData), 128u);
 }
 
 TEST(InputEnums, ExposeStableDistinctButtonAndKeyValues) {
