@@ -82,7 +82,7 @@ namespace {
         if (ImGui::IsItemHovered())
             ImGui::SetTooltip("The base layer fills unpainted areas; Layers 1-3 are brush-painted.");
 
-        const auto& terrainRenderer = scene.editor().get<Engine::MeshRenderer>(selected);
+        const auto& terrainRenderer = scene.editor().read<Engine::MeshRenderer>(selected);
         const bool hasTexture = terrainRenderer.mesh && terrainRenderer.mesh->images.size() >
                                 static_cast<std::size_t>(state.paintLayer);
         ImGui::TextDisabled("Layer texture");
@@ -104,7 +104,7 @@ namespace {
                         static_cast<std::size_t>(state.paintLayer + 1)));
                     mesh->images[state.paintLayer] = {texture->width, texture->height,
                                                      texture->rgbaPixels};
-                    scene.editor().modify<Engine::MeshRenderer>(selected, [&](auto& component) {
+                    scene.editor().patch<Engine::MeshRenderer>(selected, [&](auto& component) {
                         component.mesh = mesh;
                         for (int layer = 0; layer < 4; ++layer)
                             component.material.terrainLayerTextures[layer] =
@@ -141,10 +141,10 @@ namespace {
         if (state.grassErase) ImGui::PopStyleColor(2);
 
         const bool hasDetails = scene.editor().has<Engine::TerrainGrassComponent>(selected) &&
-                                scene.editor().get<Engine::TerrainGrassComponent>(selected).hasPrefab();
+                                scene.editor().read<Engine::TerrainGrassComponent>(selected).hasPrefab();
         std::string prefabLabel = "Drop a tree or grass model here";
         if (hasDetails) {
-            const auto& details = scene.editor().get<Engine::TerrainGrassComponent>(selected);
+            const auto& details = scene.editor().read<Engine::TerrainGrassComponent>(selected);
             const std::string name = details.mesh->sourcePath.filename().string();
             prefabLabel = name.empty() ? "Detail mesh assigned" : name;
             ImGui::TextDisabled("%zu placed instances", details.instances.size());
@@ -161,7 +161,7 @@ namespace {
                     content, Editor::AssetDragDrop::modelPath(*payload));
                 Engine::TerrainGrassComponent component;
                 if (scene.editor().has<Engine::TerrainGrassComponent>(selected))
-                    component = scene.editor().get<Engine::TerrainGrassComponent>(selected);
+                    component = scene.editor().read<Engine::TerrainGrassComponent>(selected);
                 component.mesh = prefab.mesh();
                 component.material = prefab.material();
                 component.castShadow = false;
@@ -215,7 +215,7 @@ void drawTerrainToolsPanel(Engine::ScenePreset& scene, Engine::Assets::Content& 
         return;
     }
 
-    const auto& terrain = scene.editor().get<Engine::TerrainComponent>(selected);
+    const auto& terrain = scene.editor().read<Engine::TerrainComponent>(selected);
     ImGui::TextColored({0.55F, 0.82F, 0.93F, 1.0F}, "TERRAIN EDITOR");
     ImGui::TextDisabled("%u x %u heightmap  |  %.0f x %.0f m",
                         terrain.resolution, terrain.resolution, terrain.width, terrain.depth);
@@ -229,7 +229,7 @@ void drawTerrainToolsPanel(Engine::ScenePreset& scene, Engine::Assets::Content& 
         setTerrainTool(state, next);
         auto mesh = std::make_shared<Engine::Mesh>(terrain.createMesh(
             next == TerrainToolMode::Sculpt ? 0U : state.previewLod));
-        scene.editor().modify<Engine::MeshRenderer>(selected,
+        scene.editor().patch<Engine::MeshRenderer>(selected,
             [&](auto& component) { component.mesh = std::move(mesh); });
         renderer.synchronizeScene(scene);
     }
@@ -253,7 +253,7 @@ void drawTerrainToolsPanel(Engine::ScenePreset& scene, Engine::Assets::Content& 
         if (Editor::Controls::sliderInt("##terrain-preview-lod", &lod, 0, 5, "%d")) {
             state.previewLod = static_cast<std::uint32_t>(lod);
             auto mesh = std::make_shared<Engine::Mesh>(terrain.createMesh(state.previewLod));
-            scene.editor().modify<Engine::MeshRenderer>(selected,
+            scene.editor().patch<Engine::MeshRenderer>(selected,
                 [&](auto& component) { component.mesh = std::move(mesh); });
             renderer.synchronizeScene(scene);
         }

@@ -385,8 +385,8 @@ std::optional<Engine::Vec3> snapMeshVerticesTogether(
 
 Engine::Vec3 snapTranslationToObjects(Engine::ScenePreset &scene, const Engine::Entity selected,
                                       const Engine::Vec3 &candidatePosition, const int axis) {
-    const auto &selectedRenderer = scene.editor().get<Engine::MeshRenderer>(selected);
-    Engine::Transform candidateTransform = scene.editor().get<Engine::Transform>(selected);
+    const auto &selectedRenderer = scene.editor().read<Engine::MeshRenderer>(selected);
+    Engine::Transform candidateTransform = scene.editor().read<Engine::Transform>(selected);
     candidateTransform.position = candidatePosition;
     const auto candidateBounds = meshWorldBounds(selectedRenderer, candidateTransform);
     if (!candidateBounds) return candidatePosition;
@@ -508,10 +508,10 @@ bool drawTranslationGizmo(Engine::ScenePreset &scene, const Engine::Entity selec
             selected, hoveredAxis, {}, mouse, axisDirection,
             std::max(std::hypot(axisDirection.x, axisDirection.y), 1.0F), gizmoSize
         };
-        drag.startPositions.emplace_back(selected, scene.editor().get<Engine::Transform>(selected).position);
+        drag.startPositions.emplace_back(selected, scene.editor().read<Engine::Transform>(selected).position);
         for (const Engine::Entity entity : selection) {
             if (entity != selected && scene.editor().valid(entity) && scene.editor().has<Engine::Transform>(entity))
-                drag.startPositions.emplace_back(entity, scene.editor().get<Engine::Transform>(entity).position);
+                drag.startPositions.emplace_back(entity, scene.editor().read<Engine::Transform>(entity).position);
         }
     }
     if (drag.entity == selected && drag.axis >= 0 && ImGui::IsMouseDown(ImGuiMouseButton_Left)) {
@@ -599,10 +599,10 @@ bool drawScaleGizmo(Engine::ScenePreset &scene, const Engine::Entity selected,
             : ImVec2{1.0F, -1.0F};
         drag = {selected, axis, {}, mouse, direction,
                 std::max(std::hypot(direction.x, direction.y), 1.0F)};
-        drag.startScales.emplace_back(selected, scene.editor().get<Engine::Transform>(selected).scale);
+        drag.startScales.emplace_back(selected, scene.editor().read<Engine::Transform>(selected).scale);
         for (const Engine::Entity entity : selection) {
             if (entity != selected && scene.editor().valid(entity) && scene.editor().has<Engine::Transform>(entity))
-                drag.startScales.emplace_back(entity, scene.editor().get<Engine::Transform>(entity).scale);
+                drag.startScales.emplace_back(entity, scene.editor().read<Engine::Transform>(entity).scale);
         }
     }
     bool dragging = false;
@@ -875,10 +875,10 @@ bool drawRotationGizmo(Engine::ScenePreset &scene, const Engine::Entity selected
             useScreenSpace ? Engine::Vec3{} : (hitPoint - origin).normalized(), screenDirection,
             0.0F, screenCross < 0.0F ? -1.0F : 1.0F, useScreenSpace
         };
-        drag.startRotations.emplace_back(selected, scene.editor().get<Engine::Transform>(selected).rotation);
+        drag.startRotations.emplace_back(selected, scene.editor().read<Engine::Transform>(selected).rotation);
         for (const Engine::Entity entity : selection) {
             if (entity != selected && scene.editor().valid(entity) && scene.editor().has<Engine::Transform>(entity))
-                drag.startRotations.emplace_back(entity, scene.editor().get<Engine::Transform>(entity).rotation);
+                drag.startRotations.emplace_back(entity, scene.editor().read<Engine::Transform>(entity).rotation);
         }
         ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
         return true;
@@ -1005,7 +1005,7 @@ bool applyTerrainBrush(Engine::ScenePreset& scene, const Engine::Entity entity,
                        TerrainSculptState& state, Engine::Mesh& mesh,
                        Engine::TerrainRegion& dirty) {
     bool changed = false;
-    scene.editor().modify<Engine::TerrainComponent>(entity, [&](auto& terrain) {
+    scene.editor().patch<Engine::TerrainComponent>(entity, [&](auto& terrain) {
         changed = terrain.sculpt(localPoint.x(), localPoint.z(), state.radius, amount,
                                  state.mode, state.flattenHeight, state.falloff, &dirty);
         if (changed) terrain.updateMeshRegion(mesh, dirty);
@@ -1017,7 +1017,7 @@ bool applyTerrainPaintBrush(Engine::ScenePreset& scene, const Engine::Entity ent
                             const Engine::Vec3& localPoint, TerrainSculptState& state,
                             Engine::TerrainRegion& dirty) {
     bool changed = false;
-    scene.editor().modify<Engine::TerrainComponent>(entity, [&](auto& terrain) {
+    scene.editor().patch<Engine::TerrainComponent>(entity, [&](auto& terrain) {
         changed = terrain.paint(localPoint.x(), localPoint.z(), state.radius,
                                 state.paintLayer == 0 ? Engine::Vec3{1.0F, 0.0F, 0.0F} :
                                 state.paintLayer == 1 ? Engine::Vec3{0.0F, 1.0F, 0.0F} :
@@ -1064,11 +1064,11 @@ void stitchSculptTerrainEdges(Engine::ScenePreset& scene, TerrainSculptState& st
             TerrainStrokeTarget& firstTarget = state.sculptTargets[left];
             TerrainStrokeTarget& secondTarget = state.sculptTargets[right];
             if (!scene.editor().valid(firstTarget.entity) || !scene.editor().valid(secondTarget.entity)) continue;
-            const auto& first = scene.editor().get<Engine::TerrainComponent>(firstTarget.entity);
-            const auto& second = scene.editor().get<Engine::TerrainComponent>(secondTarget.entity);
+            const auto& first = scene.editor().read<Engine::TerrainComponent>(firstTarget.entity);
+            const auto& second = scene.editor().read<Engine::TerrainComponent>(secondTarget.entity);
             if (first.resolution != second.resolution) continue;
-            const auto& firstTransform = scene.editor().get<Engine::Transform>(firstTarget.entity);
-            const auto& secondTransform = scene.editor().get<Engine::Transform>(secondTarget.entity);
+            const auto& firstTransform = scene.editor().read<Engine::Transform>(firstTarget.entity);
+            const auto& secondTransform = scene.editor().read<Engine::Transform>(secondTarget.entity);
             for (int firstEdge = 0; firstEdge != 4; ++firstEdge) {
                 for (int secondEdge = 0; secondEdge != 4; ++secondEdge) {
                     const std::uint32_t last = first.resolution - 1;
@@ -1104,12 +1104,12 @@ void stitchSculptTerrainEdges(Engine::ScenePreset& scene, TerrainSculptState& st
                         secondSharedHeights[other] = terrainLocalPoint(
                             secondTransform, {seamOrigin.x(), sharedWorldHeight, seamOrigin.z()}).y();
                     }
-                    scene.editor().modify<Engine::TerrainComponent>(firstTarget.entity, [&](auto& terrain) {
+                    scene.editor().patch<Engine::TerrainComponent>(firstTarget.entity, [&](auto& terrain) {
                         for (std::uint32_t sample = 0; sample <= last; ++sample)
                             terrain.heights[edgeIndex(firstEdge, sample, terrain.resolution)] = firstSharedHeights[sample];
                         terrain.updateMeshRegion(*firstTarget.workingMesh, {0, 0, last, last, true});
                     });
-                    scene.editor().modify<Engine::TerrainComponent>(secondTarget.entity, [&](auto& terrain) {
+                    scene.editor().patch<Engine::TerrainComponent>(secondTarget.entity, [&](auto& terrain) {
                         for (std::uint32_t sample = 0; sample <= last; ++sample) {
                             const std::uint32_t other = reverseOrder ? last - sample : sample;
                             terrain.heights[edgeIndex(secondEdge, other, terrain.resolution)] = secondSharedHeights[other];
@@ -1130,15 +1130,15 @@ void finishTerrainStroke(Engine::ScenePreset& scene, TerrainSculptState& state) 
         for (const TerrainStrokeTarget& target : state.sculptTargets) {
             if (!scene.editor().valid(target.entity)) continue;
             if (target.workingMesh && scene.editor().has<Engine::ColliderComponent>(target.entity)) {
-                scene.editor().modify<Engine::ColliderComponent>(target.entity, [&](auto& collider) {
+                scene.editor().patch<Engine::ColliderComponent>(target.entity, [&](auto& collider) {
                     if (auto* meshCollider = std::get_if<Engine::MeshCollider>(&collider.shape))
                         meshCollider->mesh = target.workingMesh;
                 });
             }
             if (target.dirty.valid && scene.editor().has<Engine::TerrainComponent>(target.entity) &&
                 scene.editor().has<Engine::TerrainGrassComponent>(target.entity)) {
-                const auto& terrain = scene.editor().get<Engine::TerrainComponent>(target.entity);
-                scene.editor().modify<Engine::TerrainGrassComponent>(target.entity, [&](auto& grass) {
+                const auto& terrain = scene.editor().read<Engine::TerrainComponent>(target.entity);
+                scene.editor().patch<Engine::TerrainGrassComponent>(target.entity, [&](auto& grass) {
                     for (auto& instance : grass.instances)
                         instance.position.setY(terrain.sampleHeight(instance.position.x(), instance.position.z()));
                     grass.allInstancesDirty = true;
@@ -1157,7 +1157,7 @@ void finishTerrainStroke(Engine::ScenePreset& scene, TerrainSculptState& state) 
     if (state.strokeEntity != Engine::NullEntity && state.workingMesh &&
         scene.editor().valid(state.strokeEntity) &&
         scene.editor().has<Engine::ColliderComponent>(state.strokeEntity)) {
-        scene.editor().modify<Engine::ColliderComponent>(state.strokeEntity, [&](auto& collider) {
+        scene.editor().patch<Engine::ColliderComponent>(state.strokeEntity, [&](auto& collider) {
             if (auto* meshCollider = std::get_if<Engine::MeshCollider>(&collider.shape)) {
                 meshCollider->mesh = state.workingMesh;
             }
@@ -1167,8 +1167,8 @@ void finishTerrainStroke(Engine::ScenePreset& scene, TerrainSculptState& state) 
         if (scene.editor().valid(state.strokeEntity) &&
             scene.editor().has<Engine::TerrainComponent>(state.strokeEntity) &&
             scene.editor().has<Engine::TerrainGrassComponent>(state.strokeEntity)) {
-            const auto& terrain = scene.editor().get<Engine::TerrainComponent>(state.strokeEntity);
-            scene.editor().modify<Engine::TerrainGrassComponent>(state.strokeEntity, [&](auto& grass) {
+            const auto& terrain = scene.editor().read<Engine::TerrainComponent>(state.strokeEntity);
+            scene.editor().patch<Engine::TerrainGrassComponent>(state.strokeEntity, [&](auto& grass) {
                 for (auto& instance : grass.instances)
                     instance.position.setY(terrain.sampleHeight(instance.position.x(), instance.position.z()));
                 grass.allInstancesDirty = true;
@@ -1227,8 +1227,8 @@ bool drawTerrainSculpt(Engine::ScenePreset& scene, const Engine::Entity selected
     const bool hitsTerrain = hit.has_value();
     Engine::Vec3 localHit{};
     if (hitsTerrain) {
-        const auto& transform = scene.editor().get<Engine::Transform>(hitEntity);
-        const auto& terrain = scene.editor().get<Engine::TerrainComponent>(hitEntity);
+        const auto& transform = scene.editor().read<Engine::Transform>(hitEntity);
+        const auto& terrain = scene.editor().read<Engine::TerrainComponent>(hitEntity);
         localHit = terrainLocalPoint(transform, *hit);
         constexpr int segments = 48;
         constexpr float pi = 3.14159265358979323846F;
@@ -1256,7 +1256,7 @@ bool drawTerrainSculpt(Engine::ScenePreset& scene, const Engine::Entity selected
         state.flattenHeight = localHit.y();
         state.hasPreviousPoint = false;
         state.hasPreviousSculptWorldPoint = false;
-        state.heightsBeforeStroke = scene.editor().get<Engine::TerrainComponent>(hitEntity).heights;
+        state.heightsBeforeStroke = scene.editor().read<Engine::TerrainComponent>(hitEntity).heights;
         state.strokeDirty = {};
         scene.editor().view<Engine::TerrainComponent, Engine::MeshRenderer, Engine::Transform>(
             [&](const Engine::Entity entity, const Engine::TerrainComponent& targetTerrain,
@@ -1266,7 +1266,7 @@ bool drawTerrainSculpt(Engine::ScenePreset& scene, const Engine::Entity selected
                 // sculpt stroke must always update its full-resolution mesh.
                 auto workingMesh = std::make_shared<Engine::Mesh>(targetTerrain.createMesh());
                 state.sculptTargets.push_back({entity, workingMesh, {}});
-                scene.editor().modify<Engine::MeshRenderer>(entity, [&](auto& component) {
+                scene.editor().patch<Engine::MeshRenderer>(entity, [&](auto& component) {
                     component.mesh = std::move(workingMesh);
                 });
             });
@@ -1296,7 +1296,7 @@ bool drawTerrainSculpt(Engine::ScenePreset& scene, const Engine::Entity selected
             for (TerrainStrokeTarget& target : state.sculptTargets) {
                 if (!scene.editor().valid(target.entity) || !target.workingMesh ||
                     !scene.editor().has<Engine::Transform>(target.entity)) continue;
-                const auto& targetTransform = scene.editor().get<Engine::Transform>(target.entity);
+                const auto& targetTransform = scene.editor().read<Engine::Transform>(target.entity);
                 const Engine::Vec3 targetPoint = terrainLocalPoint(targetTransform, worldPoint);
                 Engine::TerrainRegion dirty;
                 if (!applyTerrainBrush(scene, target.entity, targetPoint, state.strength * deltaTime /
@@ -1347,9 +1347,9 @@ bool drawTerrainPaint(Engine::ScenePreset& scene, const Engine::Entity selected,
     if (!state.paintEnabled || selected == Engine::NullEntity || !scene.editor().valid(selected) ||
         !scene.editor().has<Engine::TerrainComponent>(selected) ||
         !scene.editor().has<Engine::MeshRenderer>(selected) || !scene.editor().has<Engine::Transform>(selected)) return false;
-    const auto& terrain = scene.editor().get<Engine::TerrainComponent>(selected);
-    const auto& transform = scene.editor().get<Engine::Transform>(selected);
-    const auto& meshRenderer = scene.editor().get<Engine::MeshRenderer>(selected);
+    const auto& terrain = scene.editor().read<Engine::TerrainComponent>(selected);
+    const auto& transform = scene.editor().read<Engine::Transform>(selected);
+    const auto& meshRenderer = scene.editor().read<Engine::MeshRenderer>(selected);
     const Engine::Camera camera = sceneViewCamera(renderer, min, max);
     const auto hit = imageHovered && meshRenderer.hasMesh() ? raycastTerrain(terrain, transform, camera.position(),
         viewportRayDirection(camera, ImGui::GetIO().MousePos, min, max)) : std::nullopt;
@@ -1372,7 +1372,7 @@ bool drawTerrainPaint(Engine::ScenePreset& scene, const Engine::Entity selected,
         state.strokeActive = true; state.strokeEntity = selected; state.hasPreviousPoint = false;
         state.workingMesh = std::make_shared<Engine::Mesh>(*meshRenderer.mesh);
         state.heightsBeforeStroke = terrain.heights; state.strokeDirty = {};
-        scene.editor().modify<Engine::MeshRenderer>(selected, [&](auto& component) { component.mesh = state.workingMesh; });
+        scene.editor().patch<Engine::MeshRenderer>(selected, [&](auto& component) { component.mesh = state.workingMesh; });
     }
     if (state.strokeActive && state.strokeEntity == selected && hit && ImGui::IsMouseDown(ImGuiMouseButton_Left)) {
         const Engine::Vec3 localHit = terrainLocalPoint(transform, *hit);
@@ -1406,8 +1406,8 @@ bool drawTerrainGrass(Engine::ScenePreset& scene, const Engine::Entity selected,
         !scene.editor().has<Engine::TerrainComponent>(selected) ||
         !scene.editor().has<Engine::Transform>(selected)) return false;
 
-    const auto& terrain = scene.editor().get<Engine::TerrainComponent>(selected);
-    const auto& transform = scene.editor().get<Engine::Transform>(selected);
+    const auto& terrain = scene.editor().read<Engine::TerrainComponent>(selected);
+    const auto& transform = scene.editor().read<Engine::Transform>(selected);
     const ImVec2 mouse = ImGui::GetIO().MousePos;
     const Engine::Camera camera = sceneViewCamera(renderer, min, max);
     const auto hit = imageHovered
@@ -1445,7 +1445,7 @@ bool drawTerrainGrass(Engine::ScenePreset& scene, const Engine::Entity selected,
         if (distance >= interval || !state.grassHasPreviousPoint) {
             bool changed = false;
             if (scene.editor().has<Engine::TerrainGrassComponent>(selected)) {
-                scene.editor().modify<Engine::TerrainGrassComponent>(selected, [&](auto& grass) {
+                scene.editor().patch<Engine::TerrainGrassComponent>(selected, [&](auto& grass) {
                     if (state.grassErase) {
                         const auto oldSize = grass.instances.size();
                         std::erase_if(grass.instances, [&](const auto& instance) {
@@ -1825,7 +1825,7 @@ ViewportInteraction drawViewport(Engine::ScenePreset &scene, Engine::Assets::Con
                 scene.editor().has<Engine::Transform>(selected)) {
                 ImGui::SameLine();
                 if (ImGui::Button("Align active camera to view")) {
-                    scene.editor().modify<Engine::Transform>(selected, [&](Engine::Transform& transform) {
+                    scene.editor().patch<Engine::Transform>(selected, [&](Engine::Transform& transform) {
                         transform.position = renderer.editorCameraPosition();
                         transform.rotation.setX(renderer.editorCameraPitch());
                         transform.rotation.setY(renderer.editorCameraYaw());

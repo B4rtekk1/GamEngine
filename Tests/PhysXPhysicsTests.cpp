@@ -132,14 +132,14 @@ TEST(PhysXPhysics, SphereTramplesAndGrassGraduallyRecovers) {
     Engine::PhysicsSystem physics;
     physics.update(scene, 1.0F / 60.0F);
     const auto entity = scene.findEntity(terrain.id());
-    const float trampled = scene.editor().get<Engine::TerrainGrassComponent>(entity)
+    const float trampled = scene.editor().read<Engine::TerrainGrassComponent>(entity)
                                 .instances.front().trampled;
     EXPECT_GT(trampled, 0.5F);
     EXPECT_LT(sphere.velocity().x(), 5.0F);
 
     sphere.setPosition({10.0F, 0.5F, 0.0F});
     physics.update(scene, 1.0F / 60.0F);
-    EXPECT_LT(scene.editor().get<Engine::TerrainGrassComponent>(entity)
+    EXPECT_LT(scene.editor().read<Engine::TerrainGrassComponent>(entity)
                   .instances.front().trampled, trampled);
 }
 
@@ -160,7 +160,7 @@ TEST(Prefab, CubePreservesRenderSettingsWhenInstantiatedInScene) {
     EXPECT_EQ(actor.name(), "Prefab cube");
     const auto entity = scene.findEntity(actor.id());
     ASSERT_NE(entity, Engine::NullEntity);
-    const auto& renderer = scene.editor().get<Engine::MeshRendererComponent>(entity);
+    const auto& renderer = scene.editor().read<Engine::MeshRendererComponent>(entity);
     EXPECT_EQ(renderer.mesh, prefab.mesh());
     EXPECT_FLOAT_EQ(renderer.material.metallic, 0.7F);
     EXPECT_FLOAT_EQ(renderer.material.roughness, 0.2F);
@@ -183,12 +183,12 @@ TEST(Scene, MaintainsUniqueNamesAndFreshIdentityAcrossDuplication) {
     EXPECT_TRUE(scene.findActor("Enemy").valid());
 
     const auto firstEntity = scene.findEntity(first.id());
-    const auto originalUuid = scene.editor().get<Engine::UUIDComponent>(firstEntity).value;
+    const auto originalUuid = scene.editor().read<Engine::UUIDComponent>(firstEntity).value;
     const auto copy = scene.duplicate(first);
     ASSERT_TRUE(copy.valid());
     EXPECT_EQ(copy.name(), "Player 2");
     const auto copyEntity = scene.findEntity(copy.id());
-    EXPECT_NE(scene.editor().get<Engine::UUIDComponent>(copyEntity).value, originalUuid);
+    EXPECT_NE(scene.editor().read<Engine::UUIDComponent>(copyEntity).value, originalUuid);
 
     second.destroy();
     EXPECT_FALSE(second.valid());
@@ -295,7 +295,7 @@ TEST(SceneSerializer, RoundTripsCubeActorTransformAndMaterial) {
     EXPECT_FLOAT_EQ(restored.rotation().z(), 30.0F);
     EXPECT_FLOAT_EQ(restored.scale().y(), 3.0F);
     const auto entity = loaded.findEntity(restored.id());
-    const auto& renderer = loaded.editor().get<Engine::MeshRendererComponent>(entity);
+    const auto& renderer = loaded.editor().read<Engine::MeshRendererComponent>(entity);
     ASSERT_TRUE(renderer.hasMesh());
     EXPECT_FLOAT_EQ(renderer.material.metallic, 0.6F);
     EXPECT_FLOAT_EQ(renderer.material.roughness, 0.3F);
@@ -318,7 +318,7 @@ TEST(SceneSerializer, StoresTerrainSamplesInLosslessBinarySidecar) {
     ASSERT_TRUE(sourceActor.valid());
     const auto sourceEntity = source.findEntity(sourceActor.id());
     ASSERT_NE(sourceEntity, Engine::NullEntity);
-    const auto& persisted = source.editor().get<Engine::TerrainComponent>(sourceEntity);
+    const auto& persisted = source.editor().read<Engine::TerrainComponent>(sourceEntity);
     EXPECT_FLOAT_EQ(persisted.colors[17].x(), 0.25F);
     EXPECT_FLOAT_EQ(persisted.colors[17].y(), 0.5F);
     EXPECT_FLOAT_EQ(persisted.colors[17].z(), 0.75F);
@@ -332,7 +332,7 @@ TEST(SceneSerializer, StoresTerrainSamplesInLosslessBinarySidecar) {
     ASSERT_TRUE(restoredActor.valid());
     const auto entity = loaded.findEntity(restoredActor.id());
     ASSERT_NE(entity, Engine::NullEntity);
-    const auto& restored = loaded.editor().get<Engine::TerrainComponent>(entity);
+    const auto& restored = loaded.editor().read<Engine::TerrainComponent>(entity);
     EXPECT_FLOAT_EQ(restored.heights[17], 12.25F);
     EXPECT_FLOAT_EQ(restored.colors[17].x(), 0.25F);
     EXPECT_FLOAT_EQ(restored.colors[17].y(), 0.5F);
@@ -362,7 +362,7 @@ TEST(SceneSerializer, StoresEmbeddedImagePixelsInBinarySidecar) {
     const auto actor = loaded.findActor("Image mesh");
     ASSERT_TRUE(actor.valid());
     const auto entity = loaded.findEntity(actor.id());
-    const auto& renderer = loaded.editor().get<Engine::MeshRendererComponent>(entity);
+    const auto& renderer = loaded.editor().read<Engine::MeshRendererComponent>(entity);
     ASSERT_EQ(renderer.mesh->images.size(), 1U);
     EXPECT_EQ(renderer.mesh->images[0].rgbaPixels, mesh->images[0].rgbaPixels);
 

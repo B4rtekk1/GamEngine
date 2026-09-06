@@ -53,10 +53,10 @@ public:
         if (!region.valid || !scene.editor().valid(entity) ||
             !scene.editor().has<Engine::TerrainComponent>(entity) ||
             !scene.editor().has<Engine::UUIDComponent>(entity)) return false;
-        const auto& terrain = scene.editor().get<Engine::TerrainComponent>(entity);
+        const auto& terrain = scene.editor().read<Engine::TerrainComponent>(entity);
         if (before.size() != terrain.heights.size()) return false;
         TerrainEdit edit;
-        edit.entity = scene.editor().get<Engine::UUIDComponent>(entity).value;
+        edit.entity = scene.editor().read<Engine::UUIDComponent>(entity).value;
         edit.resolution = terrain.resolution;
         edit.region = region;
         const std::size_t width = region.maximumX - region.minimumX + 1;
@@ -109,14 +109,14 @@ private:
             Engine::Entity found = Engine::NullEntity;
             scene.editor().view<>([&](const Engine::Entity candidate) {
                 if (found == Engine::NullEntity && scene.editor().has<Engine::UUIDComponent>(candidate) &&
-                    scene.editor().get<Engine::UUIDComponent>(candidate).value == edit.entity) found = candidate;
+                    scene.editor().read<Engine::UUIDComponent>(candidate).value == edit.entity) found = candidate;
             });
             if (found == Engine::NullEntity || !scene.editor().has<Engine::TerrainComponent>(found)) {
                 from.push_back(std::move(entry));
                 return false;
             }
             const std::vector<float>& values = forward ? edit.after : edit.before;
-            scene.editor().modify<Engine::TerrainComponent>(found, [&](auto& terrain) {
+            scene.editor().patch<Engine::TerrainComponent>(found, [&](auto& terrain) {
                 if (terrain.resolution != edit.resolution) return;
                 std::size_t source = 0;
                 for (std::uint32_t z = edit.region.minimumZ; z <= edit.region.maximumZ; ++z) {
@@ -125,19 +125,19 @@ private:
                     }
                 }
             });
-            const auto& terrain = scene.editor().get<Engine::TerrainComponent>(found);
+            const auto& terrain = scene.editor().read<Engine::TerrainComponent>(found);
             auto mesh = std::make_shared<Engine::Mesh>(terrain.createMesh());
             if (scene.editor().has<Engine::MeshRendererComponent>(found)) {
-                scene.editor().modify<Engine::MeshRendererComponent>(found,
+                scene.editor().patch<Engine::MeshRendererComponent>(found,
                     [&](auto& renderer) { renderer.mesh = mesh; });
             }
             if (scene.editor().has<Engine::ColliderComponent>(found)) {
-                scene.editor().modify<Engine::ColliderComponent>(found, [&](auto& collider) {
+                scene.editor().patch<Engine::ColliderComponent>(found, [&](auto& collider) {
                     if (auto* shape = std::get_if<Engine::MeshCollider>(&collider.shape)) shape->mesh = mesh;
                 });
             }
             if (scene.editor().has<Engine::TerrainGrassComponent>(found)) {
-                scene.editor().modify<Engine::TerrainGrassComponent>(found, [&](auto& grass) {
+                scene.editor().patch<Engine::TerrainGrassComponent>(found, [&](auto& grass) {
                     for (auto& instance : grass.instances)
                         instance.position.setY(terrain.sampleHeight(instance.position.x(), instance.position.z()));
                     grass.allInstancesDirty = true;
@@ -161,7 +161,7 @@ public:
     void copy(const Engine::ScenePreset &scene, const Engine::Entity entity) {
         if (!scene.editor().valid(entity) ||
             !scene.editor().has<Engine::UUIDComponent>(entity)) return;
-        source_ = scene.editor().get<Engine::UUIDComponent>(entity).value;
+        source_ = scene.editor().read<Engine::UUIDComponent>(entity).value;
     }
 
     [[nodiscard]] bool canPaste(const Engine::ScenePreset &scene) const {
@@ -179,7 +179,7 @@ private:
         Engine::Entity found = Engine::NullEntity;
         scene.editor().view<>([&](const Engine::Entity entity) {
             if (scene.editor().has<Engine::UUIDComponent>(entity) &&
-                scene.editor().get<Engine::UUIDComponent>(entity).value == *source_) found = entity;
+                scene.editor().read<Engine::UUIDComponent>(entity).value == *source_) found = entity;
         });
         return found;
     }

@@ -1,6 +1,6 @@
 const char *entityName(const Engine::ScenePreset &scene, const Engine::Entity entity) {
     if (scene.editor().has<Engine::NameComponent>(entity)) {
-        return scene.editor().get<Engine::NameComponent>(entity).value.c_str();
+        return scene.editor().read<Engine::NameComponent>(entity).value.c_str();
     }
     // A mesh can also be driven by a script. Keep the controller identity
     // visible in the hierarchy and inspector instead of hiding it behind the

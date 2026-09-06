@@ -26,11 +26,13 @@ public:
     }
 
     template<typename T> [[nodiscard]] bool has(Entity entity) const { return scene_->edit(entity).has<T>(); }
-    template<typename T> T& get(Entity entity) { return scene_->edit(entity).get<T>(); }
-    template<typename T> const T& get(Entity entity) const { return scene_->edit(entity).get<T>(); }
-    template<typename T, typename... Args> T& add(Entity entity, Args&&... args) {
+    /** Returns a component for inspection only; mutations must use patch(). */
+    template<typename T> [[nodiscard]] const T& read(Entity entity) const {
+        return scene_->edit(entity).get<T>();
+    }
+    template<typename T, typename... Args> const T& add(Entity entity, Args&&... args) {
         if constexpr (std::is_same_v<T, LightComponent>) {
-            T& light = scene_->edit(entity).addLight(std::forward<Args>(args)...);
+            const T& light = scene_->edit(entity).addLight(std::forward<Args>(args)...);
             if (light.type == LightType::Directional && light.mainLight) {
                 scene_->setActiveDirectionalLight(entity);
             }
@@ -43,7 +45,8 @@ public:
         return scene_->edit(entity).add<T>(std::forward<Args>(args)...);
     }
     template<typename T> void remove(Entity entity) { scene_->edit(entity).remove<T>(); }
-    template<typename T, typename Func> void modify(Entity entity, Func&& func) {
+    /** Mutates a component and advances its Registry revision exactly once. */
+    template<typename T, typename Func> void patch(Entity entity, Func&& func) {
         scene_->edit(entity).modify<T>(std::forward<Func>(func));
         if constexpr (std::is_same_v<T, LightComponent>) {
             const LightComponent& light = scene_->edit(entity).get<LightComponent>();
@@ -58,7 +61,7 @@ public:
             if constexpr (sizeof...(Components) == 0) {
                 func(object.entity());
             } else if ((object.template has<Components>() && ...)) {
-                func(object.entity(), object.template get<Components>()...);
+                func(object.entity(), std::as_const(object).template get<Components>()...);
             }
         });
     }

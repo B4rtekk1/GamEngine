@@ -64,10 +64,9 @@ namespace Engine {
         }
 
         [[nodiscard]] const TransformComponent &transform() const { return get<TransformComponent>(); }
-        [[nodiscard]] MeshRendererComponent &meshRenderer() { return get<MeshRendererComponent>(); }
         [[nodiscard]] const MeshRendererComponent &meshRenderer() const { return get<MeshRendererComponent>(); }
 
-        TerrainComponent &addTerrain(TerrainComponent terrain = {}) {
+        const TerrainComponent &addTerrain(TerrainComponent terrain = {}) {
             if (has<TerrainComponent>()) {
                 registry_->modify<TerrainComponent>(entity_, [&](auto &value) { value = std::move(terrain); });
                 return get<TerrainComponent>();
@@ -75,10 +74,9 @@ namespace Engine {
             return add<TerrainComponent>(std::move(terrain));
         }
 
-        [[nodiscard]] TerrainComponent &terrain() { return get<TerrainComponent>(); }
         [[nodiscard]] const TerrainComponent &terrain() const { return get<TerrainComponent>(); }
 
-        RigidbodyComponent &addRigidbody(RigidbodyComponent rigidbody = {}) {
+        const RigidbodyComponent &addRigidbody(RigidbodyComponent rigidbody = {}) {
             if (has<RigidbodyComponent>()) {
                 registry_->modify<RigidbodyComponent>(entity_, [&](auto &value) { value = rigidbody; });
                 return get<RigidbodyComponent>();
@@ -86,7 +84,6 @@ namespace Engine {
             return add<RigidbodyComponent>(rigidbody);
         }
 
-        [[nodiscard]] RigidbodyComponent &rigidbody() { return get<RigidbodyComponent>(); }
         [[nodiscard]] const RigidbodyComponent &rigidbody() const { return get<RigidbodyComponent>(); }
 
         void setTransform(const TransformComponent &transformValue) {
@@ -105,8 +102,7 @@ namespace Engine {
                 throw std::logic_error("A LightComponent cannot have a MeshRenderer");
             }
             ensureMeshRenderer();
-            meshRenderer().mesh = std::move(mesh);
-            registry_->markChanged<MeshRendererComponent>(entity_);
+            modify<MeshRendererComponent>([&](auto& renderer) { renderer.mesh = std::move(mesh); });
         }
 
         /** High-level material assignment; callers do not need to edit the component. */
@@ -115,24 +111,21 @@ namespace Engine {
                 throw std::logic_error("A LightComponent cannot have a MeshRenderer");
             }
             ensureMeshRenderer();
-            meshRenderer().material = material;
-            registry_->markChanged<MeshRendererComponent>(entity_);
+            modify<MeshRendererComponent>([&](auto& renderer) { renderer.material = material; });
         }
 
         void setCastShadow(bool enabled) {
             ensureMeshRenderer();
-            meshRenderer().castShadow = enabled;
-            registry_->markChanged<MeshRendererComponent>(entity_);
+            modify<MeshRendererComponent>([enabled](auto& renderer) { renderer.castShadow = enabled; });
         }
 
         void setCullingBatch(std::uint32_t batch) {
             ensureMeshRenderer();
-            meshRenderer().cullingBatch = batch;
-            registry_->markChanged<MeshRendererComponent>(entity_);
+            modify<MeshRendererComponent>([batch](auto& renderer) { renderer.cullingBatch = batch; });
         }
 
         /** Creates a triangle collider from this object's indexed mesh geometry. */
-        ColliderComponent &addMeshCollider() {
+        const ColliderComponent &addMeshCollider() {
             const auto &mesh = meshRenderer().mesh;
             if (mesh == nullptr || mesh->empty()) {
                 throw std::logic_error("Cannot create a mesh collider without mesh vertices");
@@ -146,7 +139,7 @@ namespace Engine {
             return get<ColliderComponent>();
         }
 
-        CameraComponent &addCamera(CameraComponent camera = {}) {
+        const CameraComponent &addCamera(CameraComponent camera = {}) {
             if (has<CameraComponent>()) {
                 registry_->modify<CameraComponent>(entity_, [&](auto &value) { value = std::move(camera); });
                 return get<CameraComponent>();
@@ -154,10 +147,9 @@ namespace Engine {
             return add<CameraComponent>(camera);
         }
 
-        [[nodiscard]] CameraComponent &camera() { return get<CameraComponent>(); }
         [[nodiscard]] const CameraComponent &camera() const { return get<CameraComponent>(); }
 
-        LightComponent &addLight(LightComponent light = {}) {
+        const LightComponent &addLight(LightComponent light = {}) {
             // A light is an editor-visible scene object, not renderable geometry.
             if (has<MeshRendererComponent>()) { remove<MeshRendererComponent>();
 }
@@ -168,10 +160,9 @@ namespace Engine {
             return add<LightComponent>(light);
         }
 
-        [[nodiscard]] LightComponent &light() { return get<LightComponent>(); }
         [[nodiscard]] const LightComponent &light() const { return get<LightComponent>(); }
 
-        ScriptComponent &addScript(std::string className, bool enabled = true) {
+        const ScriptComponent &addScript(std::string className, bool enabled = true) {
             if (has<ScriptComponent>()) {
                 registry_->modify<ScriptComponent>(entity_, [&](auto &value) {
                     value.className = std::move(className);

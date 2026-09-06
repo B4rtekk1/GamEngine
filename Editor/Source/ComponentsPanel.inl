@@ -63,7 +63,7 @@ bool ComponentsPanel::draw(Engine::ScenePreset &scene, const std::vector<Engine:
     if (multiSelection) ImGui::TextDisabled("%zu objects selected · editing common Transform", selection.size());
     if (!multiSelection && scene.editor().valid(selected) && scene.editor().has<Engine::NameComponent>(selected)) {
         const auto readScene = scene.editor();
-        const auto &name = readScene.get<Engine::NameComponent>(selected).value;
+        const auto &name = readScene.read<Engine::NameComponent>(selected).value;
         char editableName[260]{};
         std::snprintf(editableName, sizeof(editableName), "%s", name.c_str());
         ImGui::SetNextItemWidth(-1.0F);
@@ -92,7 +92,7 @@ bool ComponentsPanel::draw(Engine::ScenePreset &scene, const std::vector<Engine:
             if (scene.editor().has<Engine::ParentComponent>(selected)) {
                 ImGui::Spacing();
                 if (ImGui::Button("Reset to Parent")) {
-                    scene.editor().modify<Engine::Transform>(selected, [](auto& transform) {
+                    scene.editor().patch<Engine::Transform>(selected, [](auto& transform) {
                         transform.position = {0.0F, 0.0F, 0.0F};
                         transform.rotation = {0.0F, 0.0F, 0.0F};
                         transform.scale = {1.0F, 1.0F, 1.0F};
@@ -103,7 +103,7 @@ bool ComponentsPanel::draw(Engine::ScenePreset &scene, const std::vector<Engine:
                 }
             }
         } else {
-            const auto transform = scene.editor().get<Engine::Transform>(selected);
+            const auto transform = scene.editor().read<Engine::Transform>(selected);
             const auto apply = [&](const auto setter, const Engine::Vec3& value) {
                 for (const Engine::Entity entity : selection) {
                     if (scene.editor().valid(entity) && scene.editor().has<Engine::Transform>(entity)) {
@@ -136,7 +136,7 @@ bool ComponentsPanel::draw(Engine::ScenePreset &scene, const std::vector<Engine:
             scene.editor().remove<Engine::MeshRenderer>(selected);
         } else if (open) {
         const auto readScene = scene.editor();
-        const auto &source = readScene.get<Engine::MeshRenderer>(selected);
+        const auto &source = readScene.read<Engine::MeshRenderer>(selected);
         auto renderer = source;
         bool changed = false;
 
@@ -217,7 +217,7 @@ bool ComponentsPanel::draw(Engine::ScenePreset &scene, const std::vector<Engine:
         }
 
         if (changed) {
-            scene.editor().modify<Engine::MeshRenderer>(selected,
+            scene.editor().patch<Engine::MeshRenderer>(selected,
                 [&](auto &component) { component = renderer; });
         }
         }
@@ -228,14 +228,14 @@ bool ComponentsPanel::draw(Engine::ScenePreset &scene, const std::vector<Engine:
         if (remove) {
             scene.editor().remove<Engine::TerrainComponent>(selected);
         } else if (open) {
-        const auto& terrain = scene.editor().get<Engine::TerrainComponent>(selected);
+        const auto& terrain = scene.editor().read<Engine::TerrainComponent>(selected);
         ImGui::Text("Heightmap: %u x %u", terrain.resolution, terrain.resolution);
         ImGui::Text("Size: %.1f x %.1f", terrain.width, terrain.depth);
         ImGui::Text("Height range: %.1f to %.1f", terrain.minimumHeight, terrain.maximumHeight);
         ImGui::Spacing();
         ImGui::TextWrapped("Use Sculpt in the Scene View toolbar, then drag the left mouse button over the terrain.");
         if (scene.editor().has<Engine::TerrainGrassComponent>(selected)) {
-            const auto& grass = scene.editor().get<Engine::TerrainGrassComponent>(selected);
+            const auto& grass = scene.editor().read<Engine::TerrainGrassComponent>(selected);
             ImGui::Text("Grass instances: %zu", grass.instances.size());
             ImGui::SameLine();
             if (ImGui::SmallButton("Remove##terrain-grass")) {
@@ -243,7 +243,7 @@ bool ComponentsPanel::draw(Engine::ScenePreset &scene, const std::vector<Engine:
             } else {
             bool castGrassShadow = grass.castShadow;
             if (ImGui::Checkbox("Cast Shadows##terrain-grass", &castGrassShadow)) {
-                scene.editor().modify<Engine::TerrainGrassComponent>(selected,
+                scene.editor().patch<Engine::TerrainGrassComponent>(selected,
                     [&](auto& component) { component.castShadow = castGrassShadow; });
             }
             if (!grass.instances.empty() && ImGui::Button("Clear grass")) {
@@ -255,7 +255,7 @@ bool ComponentsPanel::draw(Engine::ScenePreset &scene, const std::vector<Engine:
             ImGui::SameLine();
             ImGui::TextDisabled("GPU instanced virtual shadows");
             if (!grass.instances.empty() && ImGui::Button("Reset trampled grass")) {
-                scene.editor().modify<Engine::TerrainGrassComponent>(selected, [](auto& component) {
+                scene.editor().patch<Engine::TerrainGrassComponent>(selected, [](auto& component) {
                     for (auto& instance : component.instances) {
                         instance.bendX = 0.0F;
                         instance.bendZ = 0.0F;
@@ -277,7 +277,7 @@ bool ComponentsPanel::draw(Engine::ScenePreset &scene, const std::vector<Engine:
         if (remove) {
             scene.editor().remove<Engine::LightComponent>(selected);
         } else if (open) {
-            const auto source = scene.editor().get<Engine::LightComponent>(selected);
+            const auto source = scene.editor().read<Engine::LightComponent>(selected);
             auto light = source;
             constexpr const char *typeNames[] = {"Directional", "Point", "Spot"};
             int type = static_cast<int>(light.type);
@@ -329,7 +329,7 @@ bool ComponentsPanel::draw(Engine::ScenePreset &scene, const std::vector<Engine:
                                                89.9F);
 
             if (changed) {
-                scene.editor().modify<Engine::LightComponent>(selected,
+                scene.editor().patch<Engine::LightComponent>(selected,
                     [&](auto &component) { component = light; });
             }
         }
@@ -341,7 +341,7 @@ bool ComponentsPanel::draw(Engine::ScenePreset &scene, const std::vector<Engine:
         if (remove) {
             scene.editor().remove<Engine::WindComponent>(selected);
         } else if (open) {
-            auto wind = scene.editor().get<Engine::WindComponent>(selected);
+            auto wind = scene.editor().read<Engine::WindComponent>(selected);
             float direction[3] = {wind.direction.x(), wind.direction.y(), wind.direction.z()};
             bool changed = ImGui::Checkbox("Enabled##wind", &wind.enabled);
             changed |= ImGui::DragFloat3("Direction##wind", direction, 0.02F, -1.0F, 1.0F);
@@ -354,7 +354,7 @@ bool ComponentsPanel::draw(Engine::ScenePreset &scene, const std::vector<Engine:
                 ImGui::TextDisabled("Direction must be non-zero");
             } else if (changed) {
                 wind.direction = candidate;
-                scene.editor().modify<Engine::WindComponent>(selected,
+                scene.editor().patch<Engine::WindComponent>(selected,
                     [&](auto& component) { component = wind; });
             }
         }
@@ -371,7 +371,7 @@ bool ComponentsPanel::draw(Engine::ScenePreset &scene, const std::vector<Engine:
         // coherent change notification per frame.
         const auto readScene = scene.editor();
         const auto &source =
-                readScene.get<Engine::SmokeEmitterComponent>(selected).emitter;
+                readScene.read<Engine::SmokeEmitterComponent>(selected).emitter;
         auto emitter = source;
 
         bool changed = false;
@@ -449,7 +449,7 @@ bool ComponentsPanel::draw(Engine::ScenePreset &scene, const std::vector<Engine:
         emitter.collisionRadius = std::max(0.0F, emitter.collisionRadius);
 
         if (changed) {
-            scene.editor().modify<Engine::SmokeEmitterComponent>(selected,
+            scene.editor().patch<Engine::SmokeEmitterComponent>(selected,
                                                                  [&](auto &component) {
                                                                      component.emitter = emitter;
                                                                  });
@@ -464,7 +464,7 @@ bool ComponentsPanel::draw(Engine::ScenePreset &scene, const std::vector<Engine:
             scene.editor().remove<Engine::ProceduralCloudComponent>(selected);
         } else if (open) {
             const auto readScene = scene.editor();
-            auto cloud = readScene.get<Engine::ProceduralCloudComponent>(selected);
+            auto cloud = readScene.read<Engine::ProceduralCloudComponent>(selected);
             bool changed = false;
             int seed = static_cast<int>(cloud.seed);
             int puffCount = static_cast<int>(cloud.puffCount);
@@ -480,9 +480,9 @@ bool ComponentsPanel::draw(Engine::ScenePreset &scene, const std::vector<Engine:
                 cloud.dimensions = {std::max(dimensions[0], 0.1F), std::max(dimensions[1], 0.1F),
                                     std::max(dimensions[2], 0.1F)};
                 cloud.puffRadius = std::max(cloud.puffRadius, 0.05F);
-                scene.editor().modify<Engine::ProceduralCloudComponent>(selected,
+                scene.editor().patch<Engine::ProceduralCloudComponent>(selected,
                     [&](auto& component) { component = cloud; });
-                scene.editor().modify<Engine::MeshRenderer>(selected, [&](auto& renderer) {
+                scene.editor().patch<Engine::MeshRenderer>(selected, [&](auto& renderer) {
                     renderer.mesh = std::make_shared<Engine::Mesh>(Engine::ProceduralCloud::createMesh(cloud));
                 });
             }
@@ -495,20 +495,20 @@ bool ComponentsPanel::draw(Engine::ScenePreset &scene, const std::vector<Engine:
             scene.editor().remove<Engine::ScriptComponent>(selected);
         } else if (open) {
         const auto readScene = scene.editor();
-        const auto &script = readScene.get<Engine::ScriptComponent>(selected);
+        const auto &script = readScene.read<Engine::ScriptComponent>(selected);
         char className[260]{};
         std::snprintf(className, sizeof(className), "%s", script.className.c_str());
         ImGui::TextDisabled("C++ script class");
         ImGui::SetNextItemWidth(-1.0F);
         if (ImGui::InputText("##script-class", className, sizeof(className))) {
-            scene.editor().modify<Engine::ScriptComponent>(selected, [&](auto &value) {
+            scene.editor().patch<Engine::ScriptComponent>(selected, [&](auto &value) {
                 value.className = className;
                 value.reset();
             });
         }
         bool enabled = script.enabled;
         if (ImGui::Checkbox("Enabled##script", &enabled)) {
-            scene.editor().modify<Engine::ScriptComponent>(selected, [&](auto &value) {
+            scene.editor().patch<Engine::ScriptComponent>(selected, [&](auto &value) {
                 value.enabled = enabled;
             });
         }
@@ -520,14 +520,14 @@ bool ComponentsPanel::draw(Engine::ScenePreset &scene, const std::vector<Engine:
         if (remove) {
             scene.editor().remove<Engine::ColliderComponent>(selected);
         } else if (open) {
-            const auto collider = scene.editor().get<Engine::ColliderComponent>(selected);
+            const auto collider = scene.editor().read<Engine::ColliderComponent>(selected);
             int shape = static_cast<int>(collider.shape.index());
             const char *shapeNames[] = {"Box", "Sphere", "Capsule", "Ramp", "Mesh"};
             const bool hasMesh = scene.editor().has<Engine::MeshRenderer>(selected) &&
-                scene.editor().get<Engine::MeshRenderer>(selected).hasMesh();
+                scene.editor().read<Engine::MeshRenderer>(selected).hasMesh();
             const bool hasBody = scene.editor().has<Engine::RigidbodyComponent>(selected);
             const Engine::RigidbodyType bodyType = hasBody
-                ? scene.editor().get<Engine::RigidbodyComponent>(selected).type
+                ? scene.editor().read<Engine::RigidbodyComponent>(selected).type
                 : Engine::RigidbodyType::Static;
             bool changed = false;
 
@@ -557,7 +557,7 @@ bool ComponentsPanel::draw(Engine::ScenePreset &scene, const std::vector<Engine:
                                               : shape == 3
                                                     ? Engine::ColliderShape{Engine::RampCollider{}}
                                                     : Engine::ColliderShape{Engine::MeshCollider{
-                                                        scene.editor().get<Engine::MeshRenderer>(selected).mesh}};
+                                                        scene.editor().read<Engine::MeshRenderer>(selected).mesh}};
             }
 
             ImGui::TextDisabled("Local offset");
@@ -622,7 +622,7 @@ bool ComponentsPanel::draw(Engine::ScenePreset &scene, const std::vector<Engine:
             value.friction = std::max(0.0F, value.friction);
             value.restitution = std::clamp(value.restitution, 0.0F, 1.0F);
             if (changed) {
-                scene.editor().modify<Engine::ColliderComponent>(selected,
+                scene.editor().patch<Engine::ColliderComponent>(selected,
                     [&](auto &component) { component = value; });
             }
         }
@@ -633,7 +633,7 @@ bool ComponentsPanel::draw(Engine::ScenePreset &scene, const std::vector<Engine:
         if (remove) {
             scene.editor().remove<Engine::RigidbodyComponent>(selected);
         } else if (open) {
-            const auto rigidbody = scene.editor().get<Engine::RigidbodyComponent>(selected);
+            const auto rigidbody = scene.editor().read<Engine::RigidbodyComponent>(selected);
             auto value = rigidbody;
             int type = static_cast<int>(value.type);
             const char *typeNames[] = {"Static", "Dynamic", "Kinematic"};
@@ -688,7 +688,7 @@ bool ComponentsPanel::draw(Engine::ScenePreset &scene, const std::vector<Engine:
             value.linearDamping = std::max(0.0F, value.linearDamping);
             value.angularDamping = std::max(0.0F, value.angularDamping);
             if (changed) {
-                scene.editor().modify<Engine::RigidbodyComponent>(selected,
+                scene.editor().patch<Engine::RigidbodyComponent>(selected,
                     [&](auto &component) { component = value; });
             }
         }
@@ -755,7 +755,7 @@ bool ComponentsPanel::draw(Engine::ScenePreset &scene, const std::vector<Engine:
             if (!scene.editor().has<Engine::ScriptComponent>(selected)) {
                 scene.editor().add<Engine::ScriptComponent>(selected);
             }
-            scene.editor().modify<Engine::ScriptComponent>(selected, [&](auto &script) {
+            scene.editor().patch<Engine::ScriptComponent>(selected, [&](auto &script) {
                 script.className = attachedClassName;
                 script.enabled = true;
                 script.reset();
@@ -781,7 +781,7 @@ bool ComponentsPanel::draw(Engine::ScenePreset &scene, const std::vector<Engine:
             if (!scene.editor().has<Engine::ScriptComponent>(selected))
                 scene.editor().add<
                     Engine::ScriptComponent>(selected);
-            scene.editor().modify<Engine::ScriptComponent>(selected, [&](auto &script) {
+            scene.editor().patch<Engine::ScriptComponent>(selected, [&](auto &script) {
                 script.className = name;
                 script.reset();
             });
