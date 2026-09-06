@@ -42,6 +42,41 @@ namespace Engine {
         }
     }
 
+    Scene::Scene() : physics_(*this) {
+    }
+
+    Actor Scene::primaryCamera() const {
+        const auto componentRevision = registry_.componentRevision<CameraComponent>();
+        const auto structuralRevision = registry_.structuralRevision();
+        if (primaryCameraComponentRevision_ != componentRevision ||
+            primaryCameraStructuralRevision_ != structuralRevision) {
+            primaryCamera_ = NullObjectId;
+            registry_.view<CameraComponent>([&](const Entity entity, const CameraComponent &camera) {
+                if (primaryCamera_ != NullObjectId || !camera.primary) return;
+                if (const auto *object = findByEntity(entity)) primaryCamera_ = object->objectId();
+            });
+            primaryCameraComponentRevision_ = componentRevision;
+            primaryCameraStructuralRevision_ = structuralRevision;
+        }
+        return primaryCamera_ == NullObjectId ? Actor{} : Actor{const_cast<Scene &>(*this), primaryCamera_};
+    }
+
+    Actor Scene::activeDirectionalLight() const {
+        const auto componentRevision = registry_.componentRevision<LightComponent>();
+        const auto structuralRevision = registry_.structuralRevision();
+        if (directionalLightComponentRevision_ != componentRevision ||
+            directionalLightStructuralRevision_ != structuralRevision) {
+            directionalLight_ = NullObjectId;
+            registry_.view<LightComponent>([&](const Entity entity, const LightComponent &light) {
+                if (directionalLight_ != NullObjectId || light.type != LightType::Directional || !light.enabled) return;
+                if (const auto *object = findByEntity(entity)) directionalLight_ = object->objectId();
+            });
+            directionalLightComponentRevision_ = componentRevision;
+            directionalLightStructuralRevision_ = structuralRevision;
+        }
+        return directionalLight_ == NullObjectId ? Actor{} : Actor{const_cast<Scene &>(*this), directionalLight_};
+    }
+
     GameObject &Scene::createMeshObject(std::string name,
                                         std::shared_ptr<const Mesh> mesh,
                                         PBRMaterial material) {

@@ -9,6 +9,7 @@
 
 namespace Engine {
     class Scene;
+    class Physics;
 
     /** Base class for native C++ behaviours attached to entities. */
     class Script {
@@ -47,6 +48,9 @@ namespace Engine {
 
         /** Returns the scene containing the scripted actor. */
         [[nodiscard]] Scene &scene() const;
+
+        /** Returns scene-bound gameplay physics queries. */
+        [[nodiscard]] Physics &physics() const;
 
         /** Called once, immediately before the first update. */
         virtual void onCreate() {

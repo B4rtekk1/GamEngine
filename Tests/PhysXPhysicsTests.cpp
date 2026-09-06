@@ -86,9 +86,8 @@ TEST(PhysXPhysics, RaycastReturnsPhysXHitDataAndActor) {
     target.setPosition({0.0F, 1.0F, 0.0F});
     target.addBoxCollider({1.0F, 1.0F, 1.0F});
 
-    Engine::PhysicsSystem physics;
-    const auto hit = physics.raycast(
-        scene, {0.0F, 5.0F, 0.0F}, {0.0F, -1.0F, 0.0F}, 10.0F);
+    const auto hit = scene.physics().raycast(
+        {0.0F, 5.0F, 0.0F}, {0.0F, -1.0F, 0.0F}, 10.0F);
 
     ASSERT_TRUE(hit.has_value());
     EXPECT_EQ(hit->actor.name(), "Ray target");
@@ -209,8 +208,13 @@ TEST(Scene, KeepsExactlyOneEnabledDirectionalLight) {
     EXPECT_TRUE(editor.get<Engine::LightComponent>(secondEntity).enabled);
 
     scene.setActiveDirectionalLight(firstEntity);
+    EXPECT_EQ(scene.activeDirectionalLight().id(), first.id());
     EXPECT_TRUE(editor.get<Engine::LightComponent>(firstEntity).enabled);
     EXPECT_FALSE(editor.get<Engine::LightComponent>(secondEntity).enabled);
+
+    first.setLightEnabled(false);
+    second.setLightEnabled(true);
+    EXPECT_EQ(scene.activeDirectionalLight().id(), second.id());
 
     Engine::LightComponent pointLight;
     pointLight.type = Engine::LightType::Point;

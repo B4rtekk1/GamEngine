@@ -44,4 +44,32 @@ namespace Engine {
         Vec3 gravity_;
         mutable std::shared_ptr<BroadPhaseCache> broadPhaseCache_;
     };
+
+    /**
+     * Scene-bound gameplay facade over the engine's PhysX system.
+     *
+     * It intentionally omits the Scene argument: a Scene owns exactly one
+     * facade and therefore exactly one underlying physics world.
+     */
+    class Physics final {
+    public:
+        explicit Physics(Scene &scene) noexcept : scene_(&scene) {
+        }
+
+        [[nodiscard]] Vec3 gravity() const noexcept { return system_.gravity(); }
+        void setGravity(Vec3 gravity) noexcept { system_.setGravity(gravity); }
+
+        [[nodiscard]] std::optional<RaycastHit> raycast(
+            Vec3 origin, Vec3 direction, float maxDistance = 1000.0F) const; //NOLINT
+
+    private:
+        friend class Application;
+        friend class Scene;
+
+        void update(float deltaTime) const;
+        void reset() const noexcept { system_.reset(); }
+
+        Scene *scene_;
+        PhysicsSystem system_{};
+    };
 } // namespace Engine

@@ -124,34 +124,35 @@ void ShadowPass::create(VkPhysicalDevice physicalDevice, VkDevice device,
         }
 
         const std::uint32_t frameCount = static_cast<std::uint32_t>(uniformBuffers.size());
-        // Three descriptor sets are allocated per frame. Each carries one
+        // Four descriptor sets are allocated per frame. Each carries one
         // shadow sampler, sixteen material samplers, one UBO and five SSBOs.
         const VkDescriptorPoolSize poolSizes[] = {
-            {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, frameCount * 3U * (MaxMaterialTextures + 1U)},
-            {VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, frameCount * 3U},
-            {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, frameCount * 3U * 6U},
+            {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, frameCount * 4U * (MaxMaterialTextures + 1U)},
+            {VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, frameCount * 4U},
+            {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, frameCount * 4U * 6U},
         };
         VkDescriptorPoolCreateInfo poolInfo{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
-        poolInfo.maxSets = frameCount * 3;
+        poolInfo.maxSets = frameCount * 4;
         poolInfo.poolSizeCount = std::size(poolSizes);
         poolInfo.pPoolSizes = poolSizes;
         if (vkCreateDescriptorPool(device_, &poolInfo, nullptr, &descriptorPool_) != VK_SUCCESS) {
             throw std::runtime_error("Could not create shadow descriptor pool");
         }
 
-        std::vector<VkDescriptorSetLayout> layouts(frameCount * 3, descriptorSetLayout_);
+        std::vector<VkDescriptorSetLayout> layouts(frameCount * 4, descriptorSetLayout_);
         descriptorSets_.resize(frameCount);
         grassDescriptorSets_.resize(frameCount);
+        grassVelocityDescriptorSets_.resize(frameCount);
         grassShadowDescriptorSets_.resize(frameCount);
-        std::vector<std::uint32_t> descriptorCounts(frameCount * 3, MaxMaterialTextures);
+        std::vector<std::uint32_t> descriptorCounts(frameCount * 4, MaxMaterialTextures);
         VkDescriptorSetVariableDescriptorCountAllocateInfo variableCounts{
             VK_STRUCTURE_TYPE_DESCRIPTOR_SET_VARIABLE_DESCRIPTOR_COUNT_ALLOCATE_INFO,
             nullptr, static_cast<std::uint32_t>(descriptorCounts.size()), descriptorCounts.data()};
         VkDescriptorSetAllocateInfo allocateInfo{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};
         allocateInfo.pNext = &variableCounts;
         allocateInfo.descriptorPool = descriptorPool_;
-        std::vector<VkDescriptorSet> allDescriptorSets(frameCount * 3);
-        allocateInfo.descriptorSetCount = frameCount * 3;
+        std::vector<VkDescriptorSet> allDescriptorSets(frameCount * 4);
+        allocateInfo.descriptorSetCount = frameCount * 4;
         allocateInfo.pSetLayouts = layouts.data();
         if (vkAllocateDescriptorSets(device_, &allocateInfo, allDescriptorSets.data()) != VK_SUCCESS) {
             throw std::runtime_error("Could not allocate shadow descriptor sets");
@@ -159,6 +160,8 @@ void ShadowPass::create(VkPhysicalDevice physicalDevice, VkDevice device,
         std::copy_n(allDescriptorSets.begin(), frameCount, descriptorSets_.begin());
         std::copy_n(allDescriptorSets.begin() + frameCount, frameCount, grassDescriptorSets_.begin());
         std::copy_n(allDescriptorSets.begin() + frameCount * 2, frameCount,
+                    grassVelocityDescriptorSets_.begin());
+        std::copy_n(allDescriptorSets.begin() + frameCount * 3, frameCount,
                     grassShadowDescriptorSets_.begin());
 
         pageTableBuffers_.resize(frameCount);
@@ -223,6 +226,8 @@ void ShadowPass::create(VkPhysicalDevice physicalDevice, VkDevice device,
             writes[6].dstSet = grassDescriptorSets_[frame];
             writes[7].dstSet = grassDescriptorSets_[frame];
             writes[8].dstSet = grassDescriptorSets_[frame];
+            vkUpdateDescriptorSets(device_, std::size(writes), writes, 0, nullptr);
+            for (VkWriteDescriptorSet& write : writes) write.dstSet = grassVelocityDescriptorSets_[frame];
             vkUpdateDescriptorSets(device_, std::size(writes), writes, 0, nullptr);
             for (VkWriteDescriptorSet& write : writes) write.dstSet = grassShadowDescriptorSets_[frame];
             vkUpdateDescriptorSets(device_, std::size(writes), writes, 0, nullptr);
@@ -346,6 +351,7 @@ void ShadowPass::destroy() noexcept {
     descriptorSetLayout_ = VK_NULL_HANDLE;
     descriptorSets_.clear();
     grassDescriptorSets_.clear();
+    grassVelocityDescriptorSets_.clear();
     grassShadowDescriptorSets_.clear();
     pageTableBuffers_.clear();
     shadowMap_.destroy();
@@ -363,6 +369,10 @@ VkDescriptorSet ShadowPass::grassDescriptorSet(const std::uint32_t frameIndex) c
     return grassDescriptorSets_.at(frameIndex);
 }
 
+VkDescriptorSet ShadowPass::grassVelocityDescriptorSet(const std::uint32_t frameIndex) const {
+    return grassVelocityDescriptorSets_.at(frameIndex);
+}
+
 VkDescriptorSet ShadowPass::grassShadowDescriptorSet(const std::uint32_t frameIndex) const {
     return grassShadowDescriptorSets_.at(frameIndex);
 }
@@ -372,6 +382,15 @@ void ShadowPass::setGrassVisibleInstances(const std::uint32_t frameIndex,
     const VkDescriptorBufferInfo info{visibleInstances, 0, VK_WHOLE_SIZE};
     const VkWriteDescriptorSet write{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr,
                                      grassDescriptorSets_.at(frameIndex), 6, 0, 1,
+                                     VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, nullptr, &info, nullptr};
+    vkUpdateDescriptorSets(device_, 1, &write, 0, nullptr);
+}
+
+void ShadowPass::setGrassVelocityVisibleInstances(const std::uint32_t frameIndex,
+                                                  const VkBuffer visibleInstances) const {
+    const VkDescriptorBufferInfo info{visibleInstances, 0, VK_WHOLE_SIZE};
+    const VkWriteDescriptorSet write{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr,
+                                     grassVelocityDescriptorSets_.at(frameIndex), 6, 0, 1,
                                      VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, nullptr, &info, nullptr};
     vkUpdateDescriptorSets(device_, 1, &write, 0, nullptr);
 }

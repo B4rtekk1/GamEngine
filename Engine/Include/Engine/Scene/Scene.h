@@ -18,10 +18,12 @@
 #include "Engine/Scene/Components/LightComponent.h"
 #include "Engine/Renderer/Geometry/Mesh.h"
 #include "Engine/Renderer/Materials/PBRMaterial.h"
+#include "Engine/Physics/PhysicsSystem.h"
 
 #include <memory>
 #include <algorithm>
 #include <filesystem>
+#include <limits>
 #include <stdexcept>
 #include <string>
 #include <unordered_map>
@@ -46,6 +48,8 @@ namespace Engine {
     // application), rather than to this data container.
     class Scene {
     public:
+        Scene();
+
         /**
          * Advanced component-oriented creation API.
          *
@@ -166,15 +170,14 @@ namespace Engine {
         }
 
         /** Returns the primary camera actor, or an invalid Actor when none is marked primary. */
-        [[nodiscard]] Actor primaryCamera() noexcept {
-            Actor result{};
-            registry_.view<CameraComponent>([&](const Entity entity, const CameraComponent &camera) {
-                if (!result.valid() && camera.primary) {
-                    if (const auto *object = findByEntity(entity)) result = Actor{*this, object->objectId()};
-                }
-            });
-            return result;
-        }
+        [[nodiscard]] Actor primaryCamera() const;
+
+        /** Returns the enabled directional-light actor, or an invalid Actor when none is active. */
+        [[nodiscard]] Actor activeDirectionalLight() const;
+
+        /** Returns this scene's gameplay-facing physics queries. */
+        [[nodiscard]] Physics &physics() noexcept { return physics_; }
+        [[nodiscard]] const Physics &physics() const noexcept { return physics_; }
 
         /** Creates a camera actor. */
         [[nodiscard]] Actor createCamera(std::string name, const CameraComponent &camera = {}) {
@@ -281,6 +284,10 @@ namespace Engine {
                     registry_.markChanged<LightComponent>(candidate);
                 }
             });
+            directionalLight_ = NullObjectId;
+            if (const auto *object = findByEntity(entity)) directionalLight_ = object->objectId();
+            directionalLightComponentRevision_ = registry_.componentRevision<LightComponent>();
+            directionalLightStructuralRevision_ = registry_.structuralRevision();
         }
 
         /** High-level scene persistence helpers. */
@@ -530,6 +537,13 @@ namespace Engine {
         void setContent(Assets::Content &content) noexcept { content_ = &content; }
 
         void detachObjectHandles() noexcept {
+            physics_.reset();
+            primaryCamera_ = NullObjectId;
+            directionalLight_ = NullObjectId;
+            primaryCameraComponentRevision_ = std::numeric_limits<std::uint64_t>::max();
+            primaryCameraStructuralRevision_ = std::numeric_limits<std::uint64_t>::max();
+            directionalLightComponentRevision_ = std::numeric_limits<std::uint64_t>::max();
+            directionalLightStructuralRevision_ = std::numeric_limits<std::uint64_t>::max();
             for (const auto &object: objects_) {
                 object->detach();
             }
@@ -538,6 +552,7 @@ namespace Engine {
         }
 
         Registry registry_;
+        Physics physics_;
         std::vector<std::unique_ptr<GameObject> > objects_;
         std::unordered_map<std::string, ObjectId> names_;
         UI::Canvas canvas_{800, 600}; //NOLINT
@@ -548,5 +563,11 @@ namespace Engine {
         bool particleScene_ = false;
         bool deferringScriptDestruction_ = false;
         std::vector<ObjectId> deferredDestroyedActors_;
+        mutable ObjectId primaryCamera_{NullObjectId};
+        mutable std::uint64_t primaryCameraComponentRevision_{std::numeric_limits<std::uint64_t>::max()};
+        mutable std::uint64_t primaryCameraStructuralRevision_{std::numeric_limits<std::uint64_t>::max()};
+        mutable ObjectId directionalLight_{NullObjectId};
+        mutable std::uint64_t directionalLightComponentRevision_{std::numeric_limits<std::uint64_t>::max()};
+        mutable std::uint64_t directionalLightStructuralRevision_{std::numeric_limits<std::uint64_t>::max()};
     };
 } // namespace Engine

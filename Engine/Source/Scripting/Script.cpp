@@ -23,4 +23,6 @@ namespace Engine {
         if (scene_ == nullptr) { throw std::logic_error("Script is not attached to a scene"); }
         return *scene_;
     }
+
+    Physics &Script::physics() const { return scene().physics(); }
 } // namespace Engine

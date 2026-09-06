@@ -46,15 +46,18 @@ class SceneAwareTestScript final : public Engine::Script {
 public:
     static inline std::string actorName;
     static inline bool foundInScene = false;
+    static inline Engine::Physics* scenePhysics = nullptr;
 
     static void reset() {
         actorName.clear();
         foundInScene = false;
+        scenePhysics = nullptr;
     }
 
     void onCreate() override {
         actorName = actor().name();
         foundInScene = scene().findActor(actorName).valid();
+        scenePhysics = &physics();
     }
 
     void onUpdate(float) override {
@@ -206,6 +209,7 @@ TEST(ScriptSystem, AttachesSceneAwareScriptsToTheirActor) {
     system.update(scene, 1.0F / 60.0F);
     EXPECT_EQ(SceneAwareTestScript::actorName, "Scripted actor");
     EXPECT_TRUE(SceneAwareTestScript::foundInScene);
+    EXPECT_EQ(SceneAwareTestScript::scenePhysics, &scene.physics());
     EXPECT_FLOAT_EQ(actor.position().y(), 7.0F);
 }
 

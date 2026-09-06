@@ -653,10 +653,10 @@
                     Culling::IndexedIndirectDrawCount grassVelocityDraw;
                     grassVelocityDraw.create(lists.velocityIndirect.handle(), lists.velocityDrawCount.handle(),
                                              static_cast<uint32_t>(std::max<std::size_t>(1, sceneGpu.grassClusters.size())));
-                    shadowPass.setGrassVisibleInstances(currentFrame, lists.drawInstances[2].handle());
+                    shadowPass.setGrassVelocityVisibleInstances(currentFrame, lists.drawInstances[2].handle());
                     vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS,
                                       grassVelocityPipeline.handle());
-                    const VkDescriptorSet grassSet = shadowPass.grassDescriptorSet(currentFrame);
+                    const VkDescriptorSet grassSet = shadowPass.grassVelocityDescriptorSet(currentFrame);
                     vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS,
                                             grassVelocityPipeline.layout(), 0, 1, &grassSet, 0, nullptr);
                     grassVelocityDraw.record(commandBuffer);

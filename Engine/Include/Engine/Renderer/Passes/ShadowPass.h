@@ -78,8 +78,10 @@ namespace Engine {
 
         [[nodiscard]] VkDescriptorSet descriptorSet(std::uint32_t frameIndex) const;
         [[nodiscard]] VkDescriptorSet grassDescriptorSet(std::uint32_t frameIndex) const;
+        [[nodiscard]] VkDescriptorSet grassVelocityDescriptorSet(std::uint32_t frameIndex) const;
         [[nodiscard]] VkDescriptorSet grassShadowDescriptorSet(std::uint32_t frameIndex) const;
         void setGrassVisibleInstances(std::uint32_t frameIndex, VkBuffer visibleInstances) const;
+        void setGrassVelocityVisibleInstances(std::uint32_t frameIndex, VkBuffer visibleInstances) const;
         void setGrassShadowVisibleInstances(std::uint32_t frameIndex, VkBuffer visibleInstances) const;
 
         // Packed grass reserves bindings 7/8 for cluster/deformation data.
@@ -115,6 +117,7 @@ namespace Engine {
         VkDescriptorPool descriptorPool_{VK_NULL_HANDLE};
         std::vector<VkDescriptorSet> descriptorSets_;
         std::vector<VkDescriptorSet> grassDescriptorSets_;
+        std::vector<VkDescriptorSet> grassVelocityDescriptorSets_;
         std::vector<VkDescriptorSet> grassShadowDescriptorSets_;
         std::vector<std::unique_ptr<Buffer>> pageTableBuffers_;
         VkPipelineLayout pipelineLayout_{VK_NULL_HANDLE};

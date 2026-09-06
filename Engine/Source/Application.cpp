@@ -21,7 +21,6 @@ namespace Engine {
         bool running = false;
         float fixedAccumulator = 0.0F;
         ScriptSystem scripts{ScriptRegistry::instance()};
-        PhysicsSystem physics{};
     };
 
     Application::Application(ApplicationConfig config)
@@ -97,14 +96,14 @@ namespace Engine {
 
     void Application::updatePhysics(const float deltaTime) {
         if (config_.fixedDeltaTime <= 0.0F) {
-            impl_->physics.update(scene_, deltaTime);
+            scene_.physics().update(deltaTime);
             return;
         }
 
         impl_->fixedAccumulator += deltaTime;
         while (impl_->fixedAccumulator >= config_.fixedDeltaTime) {
             if (game_ != nullptr) { game_->onFixedUpdate(scene_, config_.fixedDeltaTime); }
-            impl_->physics.update(scene_, config_.fixedDeltaTime);
+            scene_.physics().update(config_.fixedDeltaTime);
             impl_->fixedAccumulator -= config_.fixedDeltaTime;
         }
     }

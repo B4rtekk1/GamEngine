@@ -930,4 +930,13 @@ namespace Engine {
             .normal = fromPhysX(hit.block.normal), .distance = hit.block.distance,
         };
     }
+
+    void Physics::update(const float deltaTime) const {
+        system_.update(*scene_, deltaTime);
+    }
+
+    std::optional<RaycastHit> Physics::raycast(
+        const Vec3 origin, const Vec3 direction, const float maxDistance) const {
+        return system_.raycast(*scene_, origin, direction, maxDistance);
+    }
 } // namespace Engine
