@@ -55,6 +55,10 @@ float sampleVirtualShadowLevel(Sampler2DShadow shadowMap, float3 worldPosition,
     float depthSlope = max(abs(ddx(currentDepth)), abs(ddy(currentDepth)));
     float bias = max(MIN_SHADOW_BIAS, SLOPE_SHADOW_BIAS * depthSlope);
     const float2 virtualPixel = uv * float(VIRTUAL_RESOLUTION);
+    // virtualShadowAtlasUv resolves a texel centre for page lookup. Reapply
+    // this offset when sampling so hardware linear filtering retains motion
+    // within that texel.
+    const float2 subTexelOffset = frac(virtualPixel) - 0.5;
     const uint2 centerPixel = uint2(floor(virtualPixel));
     const uint2 localPixel = centerPixel % PAGE_RESOLUTION;
     const float atlasResolution = float(PHYSICAL_PAGES_PER_AXIS * PAGE_RESOLUTION);
@@ -76,10 +80,16 @@ float sampleVirtualShadowLevel(Sampler2DShadow shadowMap, float3 worldPosition,
                 const float2 tapOffset = float2(x, y) - 0.5;
                 float2 tapAtlasUv;
                 if (kernelFitsCenterPage)
-                    tapAtlasUv = centerAtlasUv + tapOffset / atlasResolution;
-                else if (!virtualShadowAtlasUv(virtualPixel + tapOffset, level,
-                                               pageTable, tapAtlasUv))
-                    tapAtlasUv = centerAtlasUv;
+                    tapAtlasUv = centerAtlasUv +
+                                 (tapOffset + subTexelOffset) / atlasResolution;
+                else
+                {
+                    const float2 tapVirtualPixel = virtualPixel + tapOffset;
+                    if (virtualShadowAtlasUv(tapVirtualPixel, level, pageTable, tapAtlasUv))
+                        tapAtlasUv += (frac(tapVirtualPixel) - 0.5) / atlasResolution;
+                    else
+                        tapAtlasUv = centerAtlasUv + subTexelOffset / atlasResolution;
+                }
                 filteredShadow += 1.0 - shadowMap.SampleCmpLevelZero(
                     tapAtlasUv, currentDepth - bias);
             }
@@ -104,10 +114,16 @@ float sampleVirtualShadowLevel(Sampler2DShadow shadowMap, float3 worldPosition,
             const float weight = kernel[x + 1] * kernel[y + 1];
             float2 tapAtlasUv;
             if (kernelFitsCenterPage)
-                tapAtlasUv = centerAtlasUv + float2(x, y) / atlasResolution;
-            else if (!virtualShadowAtlasUv(virtualPixel + float2(x, y), level,
-                                           pageTable, tapAtlasUv))
-                tapAtlasUv = centerAtlasUv;
+                tapAtlasUv = centerAtlasUv +
+                             (float2(x, y) + subTexelOffset) / atlasResolution;
+            else
+            {
+                const float2 tapVirtualPixel = virtualPixel + float2(x, y);
+                if (virtualShadowAtlasUv(tapVirtualPixel, level, pageTable, tapAtlasUv))
+                    tapAtlasUv += (frac(tapVirtualPixel) - 0.5) / atlasResolution;
+                else
+                    tapAtlasUv = centerAtlasUv + subTexelOffset / atlasResolution;
+            }
             filteredShadow += (1.0 - shadowMap.SampleCmpLevelZero(
                 tapAtlasUv, currentDepth - bias)) * weight;
             totalWeight += weight;
