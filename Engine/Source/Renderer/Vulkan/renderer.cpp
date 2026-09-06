@@ -97,10 +97,11 @@ namespace Engine {
     using UniformBufferObject = RendererUniformBufferObject;
 
     struct DirectionalLight final {
-        static constexpr float defaultIntensity{4.0F};
-        Vec3 direction{-0.45F, -0.80F, -0.35F};
-        Math::Color color = Math::Color::white();
-        float intensity{defaultIntensity};
+        Vec3 direction{};
+        Math::Color color{};
+        float intensity{};
+        bool enabled{};
+        bool castShadows{};
     };
 
     struct WindFrameData final {

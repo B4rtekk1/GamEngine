@@ -68,7 +68,8 @@ namespace Engine {
             directionalLightStructuralRevision_ != structuralRevision) {
             directionalLight_ = NullObjectId;
             registry_.view<LightComponent>([&](const Entity entity, const LightComponent &light) {
-                if (directionalLight_ != NullObjectId || light.type != LightType::Directional || !light.enabled) return;
+                if (directionalLight_ != NullObjectId || light.type != LightType::Directional ||
+                    !light.enabled || !light.mainLight) return;
                 if (const auto *object = findByEntity(entity)) directionalLight_ = object->objectId();
             });
             directionalLightComponentRevision_ = componentRevision;

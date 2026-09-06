@@ -203,7 +203,7 @@ namespace Engine {
         /** Returns the primary camera actor, or an invalid Actor when none is marked primary. */
         [[nodiscard]] Actor primaryCamera() const;
 
-        /** Returns the enabled directional-light actor, or an invalid Actor when none is active. */
+        /** Returns the enabled directional Main Light actor, or an invalid Actor when none is active. */
         [[nodiscard]] Actor activeDirectionalLight() const;
 
         /** Returns this scene's gameplay-facing physics queries. */
@@ -221,7 +221,7 @@ namespace Engine {
         [[nodiscard]] Actor createLight(std::string name, const LightComponent &light = {}) {
             auto &object = create(std::move(name));
             object.addLight(light);
-            if (light.type == LightType::Directional && light.enabled) {
+            if (light.type == LightType::Directional && light.mainLight) {
                 setActiveDirectionalLight(object.entity());
             }
             return Actor{*this, object.objectId()};
@@ -298,9 +298,9 @@ namespace Engine {
         void updateTransforms() { TransformSystem::updateDirty(registry_); }
 
         /**
-         * Makes @p entity the sole enabled directional light in this scene.
-         * Point and spot components remain untouched until those light paths
-         * are implemented by the renderer.
+         * Makes @p entity the sole Main Light among directional lights. This
+         * selection is independent of LightComponent::enabled, so secondary
+         * directional lights may remain active for future renderer paths.
          */
         void setActiveDirectionalLight(const Entity entity) {
             if (!registry_.valid(entity) || !registry_.has<LightComponent>(entity) ||
@@ -309,9 +309,9 @@ namespace Engine {
             }
             registry_.view<LightComponent>([&](const Entity candidate, LightComponent& light) {
                 if (light.type != LightType::Directional) return;
-                const bool enabled = candidate == entity;
-                if (light.enabled != enabled) {
-                    light.enabled = enabled;
+                const bool mainLight = candidate == entity;
+                if (light.mainLight != mainLight) {
+                    light.mainLight = mainLight;
                     registry_.markChanged<LightComponent>(candidate);
                 }
             });

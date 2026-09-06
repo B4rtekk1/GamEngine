@@ -22,12 +22,12 @@ namespace Engine {
         // This serializer intentionally supports only the current on-disk
         // format. Files with any other version are rejected while loading.
         /**
-         * Version 13 adds PBR emission while keeping the scene graph readable
+         * Version 15 persists the directional Main Light selection. Version 13 adds PBR emission while keeping the scene graph readable
          * and storing terrain sample
          * buffers in a lossless binary sidecar (<scene>.terrain).  This avoids
          * formatting and parsing every height/colour as decimal text.
          */
-        static constexpr std::uint32_t FormatVersion = 14;
+        static constexpr std::uint32_t FormatVersion = 15;
 
         /** @brief Writes a scene to a text file. */
         static void save(const Registry &registry, const std::filesystem::path &path);

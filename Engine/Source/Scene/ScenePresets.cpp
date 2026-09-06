@@ -266,6 +266,7 @@ namespace Engine {
     Entity ScenePreset::createLight() {
         LightComponent light;
         light.intensity = 4.0F;
+        light.mainLight = true;
         const Actor object = Scene::createLight("Light", light);
         object.setPosition({3.0F, 5.0F, -3.0F});
         object.setRotation({-55.0F, 35.0F, 0.0F});

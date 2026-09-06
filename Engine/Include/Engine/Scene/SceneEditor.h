@@ -31,7 +31,7 @@ public:
     template<typename T, typename... Args> T& add(Entity entity, Args&&... args) {
         if constexpr (std::is_same_v<T, LightComponent>) {
             T& light = scene_->edit(entity).addLight(std::forward<Args>(args)...);
-            if (light.type == LightType::Directional && light.enabled) {
+            if (light.type == LightType::Directional && light.mainLight) {
                 scene_->setActiveDirectionalLight(entity);
             }
             return light;
@@ -47,7 +47,7 @@ public:
         scene_->edit(entity).modify<T>(std::forward<Func>(func));
         if constexpr (std::is_same_v<T, LightComponent>) {
             const LightComponent& light = scene_->edit(entity).get<LightComponent>();
-            if (light.type == LightType::Directional && light.enabled) {
+            if (light.type == LightType::Directional && light.mainLight) {
                 scene_->setActiveDirectionalLight(entity);
             }
         }

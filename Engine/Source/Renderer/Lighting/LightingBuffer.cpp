@@ -226,7 +226,7 @@ void LightingBuffer::update(Registry& registry) const {
                 return;
             }
 
-            if (!light.enabled) {
+            if (!light.enabled || !light.mainLight) {
                 return;
             }
 

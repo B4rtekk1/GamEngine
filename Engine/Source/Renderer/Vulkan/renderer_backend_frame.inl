@@ -69,12 +69,14 @@
                         const Math::Color color = readRegistry.has<ColorPickerComponent>(entity)
                             ? readRegistry.get<ColorPickerComponent>(entity).color : light.color;
                         if (light.type == LightType::Directional) {
-                            // SceneEditor guarantees one enabled directional light. Keep externally
-                            // constructed scenes deterministic too.
-                            if (!directionalLightFound && glm::length(direction) > 1e-6F) {
+                            // Only the designated, enabled Main Light reaches the current forward
+                            // path. Other directional lights stay enabled in ECS for future paths.
+                            if (!directionalLightFound && light.mainLight && glm::length(direction) > 1e-6F) {
                                 data.directionalLight.direction = Vec3{glm::normalize(direction)};
                                 data.directionalLight.color = color;
                                 data.directionalLight.intensity = std::max(0.0F, light.intensity);
+                                data.directionalLight.enabled = true;
+                                data.directionalLight.castShadows = light.castShadows;
                                 directionalLightFound = true;
                             }
                             return;
@@ -143,6 +145,8 @@
 
         void updateUniformBuffer(const uint32_t frame) {
             const SceneFrameData& frameData = sceneFrameDataCache.data;
+            const bool mainLightShadows = frameData.directionalLight.enabled &&
+                frameData.directionalLight.castShadows && optimizationFeatures.shadows && hasShadowCasters;
             const Entity activeCamera = frameData.primaryCamera;
             if (activeCamera == NullEntity) {
                 // A malformed or incomplete scene must not stop rendering. Use
@@ -211,16 +215,18 @@
                 cameraController.camera()->setProjectionJitter(taaJitterX, taaJitterY);
             }
 
-            shadowClipUpdateMask = updateVirtualShadowClipmaps(
-                cameraController.camera()->position(), shadowClipMatrices,
-                lastShadowCameraPosition, lastShadowLightDirection, shadowClipmapsValid);
-            if (optimizationFeatures.shadows && hasShadowCasters) {
+            if (mainLightShadows) {
+                shadowClipUpdateMask = updateVirtualShadowClipmaps(
+                    cameraController.camera()->position(), shadowClipMatrices,
+                    lastShadowCameraPosition, lastShadowLightDirection, shadowClipmapsValid);
                 shadowPass.preparePages(
                     shadowClipMatrices,
                     cameraController.camera()->projectionMatrix() *
                         cameraController.camera()->viewMatrix(),
                     gpuObjects, dirtyShadowObjects, currentFrame);
             } else {
+                shadowClipUpdateMask = 0;
+                shadowClipmapsValid = false;
                 shadowPass.invalidateCache();
             }
             const Mat4 currentView = cameraController.camera()->viewMatrix();
@@ -251,7 +257,7 @@
                      frameData.directionalLight.color.b(), 1.0F},
                 frameData.wind.directionStrength, frameData.wind.sourcePositionRange,
                 frameData.wind.gustFrequencyTime,
-                (optimizationFeatures.shadows && hasShadowCasters) ? 1u : 0u,
+                mainLightShadows ? 1u : 0u,
                 materialSlots, editorSelectedRenderable, 0u, frameData.lightCount, frameData.lights};
             uniformBuffers[frame].update(&data, sizeof(data));
             previousGameView = currentView;
@@ -263,22 +269,26 @@
 
         void updateSceneViewportUniformBuffer(const uint32_t frame) {
             const SceneFrameData& frameData = sceneFrameDataCache.data;
+            const bool mainLightShadows = frameData.directionalLight.enabled &&
+                frameData.directionalLight.castShadows && optimizationFeatures.shadows && hasShadowCasters;
             const float aspect = static_cast<float>(sceneViewportTarget.extent().width) /
                                  static_cast<float>(sceneViewportTarget.extent().height);
             Camera sceneCamera{Degrees{60.0F}, aspect, 0.1F, 1000.0F};
             sceneCamera.setPosition(cameraController.editorPosition());
             sceneCamera.setRotation(Degrees{cameraController.editorYaw()},
                                     Degrees{cameraController.editorPitch()});
-            sceneShadowClipUpdateMask = updateVirtualShadowClipmaps(
-                sceneCamera.position(), sceneShadowClipMatrices,
-                lastSceneShadowCameraPosition, lastSceneShadowLightDirection,
-                sceneShadowClipmapsValid);
-            if (optimizationFeatures.shadows && hasShadowCasters) {
+            if (mainLightShadows) {
+                sceneShadowClipUpdateMask = updateVirtualShadowClipmaps(
+                    sceneCamera.position(), sceneShadowClipMatrices,
+                    lastSceneShadowCameraPosition, lastSceneShadowLightDirection,
+                    sceneShadowClipmapsValid);
                 sceneDescriptorPass.preparePages(
                     sceneShadowClipMatrices,
                     sceneCamera.projectionMatrix() * sceneCamera.viewMatrix(),
                     gpuObjects, dirtyShadowObjects, currentFrame);
             } else {
+                sceneShadowClipUpdateMask = 0;
+                sceneShadowClipmapsValid = false;
                 sceneDescriptorPass.invalidateCache();
             }
             const Mat4 sceneView = sceneCamera.viewMatrix();
@@ -293,7 +303,7 @@
                      frameData.directionalLight.color.b(), 1.0F},
                 frameData.wind.directionStrength, frameData.wind.sourcePositionRange,
                 frameData.wind.gustFrequencyTime,
-                (optimizationFeatures.shadows && hasShadowCasters) ? 1u : 0u,
+                mainLightShadows ? 1u : 0u,
                 materialSlots, editorSelectedRenderable, 0u, frameData.lightCount, frameData.lights};
             sceneUniformBuffers[frame].update(&data, sizeof(data));
         }
@@ -310,6 +320,9 @@
                 throw std::runtime_error("Could not begin command buffer");
             }
             const bool renderSceneViewport = editorUiActive && sceneViewportRendered;
+            const DirectionalLight& mainLight = sceneFrameDataCache.data.directionalLight;
+            const bool mainLightShadows = mainLight.enabled && mainLight.castShadows &&
+                optimizationFeatures.shadows && hasShadowCasters;
             // ImGui owns a persistent descriptor for Scene View and may sample
             // it even before the viewport receives its first deferred redraw.
             // Use the normal render pass for a one-time clear: it also performs
@@ -494,7 +507,7 @@
                 shadowPass.descriptorSet(currentFrame), shadowCullingPasses[currentFrame],
                 shadowIndirectDraws[currentFrame],
                 shadowTwoSidedCullingPasses[currentFrame], shadowTwoSidedIndirectDraws[currentFrame],
-                optimizationFeatures.shadows && hasShadowCasters
+                mainLightShadows
                     ? static_cast<std::uint32_t>(gpuObjects.size()) : 0u,
                 shadowPass.grassShadowDescriptorSet(currentFrame), grassShadowDrawPtr);
 
@@ -509,7 +522,7 @@
                     sceneDescriptorPass.descriptorSet(currentFrame), shadowCullingPasses[currentFrame],
                     shadowIndirectDraws[currentFrame],
                     shadowTwoSidedCullingPasses[currentFrame], shadowTwoSidedIndirectDraws[currentFrame],
-                    optimizationFeatures.shadows && hasShadowCasters
+                    mainLightShadows
                         ? static_cast<std::uint32_t>(gpuObjects.size()) : 0u,
                     sceneDescriptorPass.grassShadowDescriptorSet(currentFrame), grassShadowDrawPtr);
             }
@@ -1161,7 +1174,8 @@
             if (sceneViewportRendered) {
                 updateSceneCullingUniformBuffer(currentFrame);
             }
-            if (optimizationFeatures.shadows) {
+            const DirectionalLight& mainLight = sceneFrameDataCache.data.directionalLight;
+            if (mainLight.enabled && mainLight.castShadows && optimizationFeatures.shadows && hasShadowCasters) {
                 updateShadowCullingUniformBuffer(currentFrame);
             }
             recordCommandBuffer(commandBuffers[currentFrame], SwapchainImageIndex{imageIndex});

@@ -51,6 +51,7 @@ namespace Engine {
         constexpr std::uint32_t LegacyFormatVersion = 11;
         constexpr std::uint32_t TerrainFormatVersion = 12;
         constexpr std::uint32_t EmissiveFormatVersion = 13;
+        constexpr std::uint32_t MaterialOverrideFormatVersion = 14;
         constexpr std::uint32_t TerrainDataVersion = 1;
         constexpr std::array<char, 8> TerrainDataMagic{'G', 'E', 'T', 'E', 'R', 'R', '1', '\0'};
 
@@ -926,7 +927,8 @@ namespace Engine {
                 serialized << ' ';
                 writeFloat(serialized, light.outerConeAngle);
                 serialized << ' ' << static_cast<int>(light.enabled) << ' '
-                        << static_cast<int>(light.castShadows) << '\n';
+                        << static_cast<int>(light.castShadows) << ' '
+                        << static_cast<int>(light.mainLight) << '\n';
             }
             if (registry.has<WindComponent>(entity)) {
                 const auto& wind = registry.get<WindComponent>(entity);
@@ -1039,7 +1041,8 @@ namespace Engine {
         expect(input, "GAMENGINE_SCENE");
         const auto version = read<unsigned>(input, "format version");
         if (version != LegacyFormatVersion && version != TerrainFormatVersion &&
-            version != EmissiveFormatVersion && version != FormatVersion) {
+            version != EmissiveFormatVersion && version != MaterialOverrideFormatVersion &&
+            version != FormatVersion) {
             invalidScene("unsupported format version " + std::to_string(version));
         }
         auto* terrainData = static_cast<std::istream*>(input.pword(terrainDataStreamSlot()));
@@ -1168,6 +1171,7 @@ namespace Engine {
         expect(input, "ENTITIES");
         const std::size_t entityCount = readCount(input, "entity count", MaxEntities);
         Registry loaded;
+        bool legacyMainLightAssigned = false;
         for (std::size_t entityIndex = 0; entityIndex < entityCount; ++entityIndex) {
             expect(input, "ENTITY");
             const Entity entity = loaded.create();
@@ -1326,7 +1330,7 @@ namespace Engine {
                         renderer.mesh = meshes[static_cast<std::size_t>(meshId)];
                     }
                     renderer.material = readMaterial(input, version);
-                    renderer.materialOverride = version >= FormatVersion
+                    renderer.materialOverride = version >= MaterialOverrideFormatVersion
                         ? readBool(input, "material-override flag") : false;
                     renderer.castShadow = readBool(input, "cast-shadow flag");
                     renderer.cullingBatch = read<std::uint32_t>(input, "culling batch");
@@ -1369,6 +1373,14 @@ namespace Engine {
                     light.outerConeAngle = readFloat(input, "spot outer cone angle");
                     light.enabled = readBool(input, "light enabled flag");
                     light.castShadows = readBool(input, "light cast-shadows flag");
+                    light.mainLight = version >= FormatVersion && readBool(input, "light main-light flag");
+                    // Prior formats made the sole enabled directional light
+                    // implicit. Preserve that scene intent on migration.
+                    if (version < FormatVersion && light.type == LightType::Directional &&
+                        light.enabled && !legacyMainLightAssigned) {
+                        light.mainLight = true;
+                        legacyMainLightAssigned = true;
+                    }
                     if (light.range <= 0.0F || light.innerConeAngle < 0.0F ||
                         light.outerConeAngle <= 0.0F ||
                         light.innerConeAngle > light.outerConeAngle ||

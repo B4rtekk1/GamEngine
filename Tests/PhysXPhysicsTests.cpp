@@ -218,23 +218,30 @@ TEST(Scene, FindsActorsByStableIdAndGameplayTag) {
     EXPECT_FALSE(scene.findByTag("Missing").valid());
 }
 
-TEST(Scene, KeepsExactlyOneEnabledDirectionalLight) {
+TEST(Scene, KeepsExactlyOneMainDirectionalLightWithoutDisablingOthers) {
     Engine::Scene scene;
-    const auto first = scene.createLightActor("Sun A");
+    Engine::LightComponent firstLight;
+    firstLight.mainLight = true;
+    const auto first = scene.createLightActor("Sun A", firstLight);
     const auto second = scene.createLightActor("Sun B");
     const auto firstEntity = scene.findEntity(first.id());
     const auto secondEntity = scene.findEntity(second.id());
     auto editor = scene.editor();
-    EXPECT_FALSE(editor.get<Engine::LightComponent>(firstEntity).enabled);
+    EXPECT_TRUE(editor.get<Engine::LightComponent>(firstEntity).enabled);
+    EXPECT_FALSE(editor.get<Engine::LightComponent>(secondEntity).mainLight);
     EXPECT_TRUE(editor.get<Engine::LightComponent>(secondEntity).enabled);
+    EXPECT_TRUE(editor.get<Engine::LightComponent>(firstEntity).mainLight);
 
     scene.setActiveDirectionalLight(firstEntity);
     EXPECT_EQ(scene.activeDirectionalLight().id(), first.id());
     EXPECT_TRUE(editor.get<Engine::LightComponent>(firstEntity).enabled);
-    EXPECT_FALSE(editor.get<Engine::LightComponent>(secondEntity).enabled);
+    EXPECT_TRUE(editor.get<Engine::LightComponent>(firstEntity).mainLight);
+    EXPECT_TRUE(editor.get<Engine::LightComponent>(secondEntity).enabled);
+    EXPECT_FALSE(editor.get<Engine::LightComponent>(secondEntity).mainLight);
 
     first.setLightEnabled(false);
-    second.setLightEnabled(true);
+    EXPECT_FALSE(scene.activeDirectionalLight().valid());
+    scene.setActiveDirectionalLight(secondEntity);
     EXPECT_EQ(scene.activeDirectionalLight().id(), second.id());
 
     Engine::LightComponent pointLight;

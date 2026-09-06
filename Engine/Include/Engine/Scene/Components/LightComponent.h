@@ -25,5 +25,8 @@ namespace Engine {
 
         bool enabled = true;
         bool castShadows = true;
+        // Selects the sole directional light currently consumed by the forward
+        // renderer. It does not control whether this light itself is enabled.
+        bool mainLight = false;
     };
 }
