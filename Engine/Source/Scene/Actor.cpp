@@ -1,6 +1,7 @@
 #include "Engine/ECS/Actor.h"
 
 #include "Engine/ECS/GameObject.h"
+#include "Engine/ECS/Components/RigidbodyRuntime.h"
 #include "Engine/Scene/Scene.h"
 
 #include <algorithm>
@@ -163,9 +164,8 @@ namespace Engine {
             throw std::logic_error("Actor is not attached to a Scene");
         }
         if (hasRigidbody() && object().rigidbody().type == RigidbodyType::Dynamic) {
-            object().modify<RigidbodyComponent>([rotation](auto &body) {
-                body.teleportRotation = eulerDegrees(rotation.normalized());
-            });
+            auto& value = object(); if (!value.has<PhysicsCommandBuffer>()) value.add<PhysicsCommandBuffer>();
+            value.modify<PhysicsCommandBuffer>([rotation](auto &commands) { commands.teleportRotation = eulerDegrees(rotation.normalized()); });
             return;
         }
         const WorldTransform current = worldTransform();
@@ -258,24 +258,30 @@ namespace Engine {
     }
 
     void Actor::setVelocity(Vec3 velocity) const {
-        object().modify<RigidbodyComponent>([&](auto &body) { body.linearVelocity = velocity; });
+        auto &value = object();
+        if (!value.has<PhysicsCommandBuffer>()) value.add<PhysicsCommandBuffer>();
+        value.modify<PhysicsCommandBuffer>([velocity](auto &commands) { commands.linearVelocity = velocity; });
     }
 
     Vec3 Actor::velocity() const {
-        return object().get<RigidbodyComponent>().linearVelocity;
+        return object().has<RigidbodyState>() ? object().get<RigidbodyState>().linearVelocity : Vec3{};
     }
 
     void Actor::addRigidbodyForce(const Vec3 value) const {
-        object().modify<RigidbodyComponent>([value](auto &body) { body.addForce(value); });
+        auto &object = this->object(); if (!object.has<PhysicsCommandBuffer>()) object.add<PhysicsCommandBuffer>();
+        object.modify<PhysicsCommandBuffer>([value](auto &commands) { commands.force += value; });
     }
     void Actor::addRigidbodyImpulse(const Vec3 value) const {
-        object().modify<RigidbodyComponent>([value](auto &body) { body.addImpulse(value); });
+        auto &object = this->object(); if (!object.has<PhysicsCommandBuffer>()) object.add<PhysicsCommandBuffer>();
+        object.modify<PhysicsCommandBuffer>([value](auto &commands) { commands.impulse += value; });
     }
     void Actor::teleport(const Vec3 position) const {
-        object().modify<RigidbodyComponent>([position](auto &body) { body.teleport(position); });
+        auto &object = this->object(); if (!object.has<PhysicsCommandBuffer>()) object.add<PhysicsCommandBuffer>();
+        object.modify<PhysicsCommandBuffer>([position](auto &commands) { commands.teleportPosition = position; });
     }
     void Actor::teleport(const Vec3 position, const Vec3 rotation) const {
-        object().modify<RigidbodyComponent>([position, rotation](auto &body) { body.teleport(position, rotation); });
+        auto &object = this->object(); if (!object.has<PhysicsCommandBuffer>()) object.add<PhysicsCommandBuffer>();
+        object.modify<PhysicsCommandBuffer>([position, rotation](auto &commands) { commands.teleportPosition = position; commands.teleportRotation = rotation; });
     }
     float Actor::rigidbodyMass() const { return object().get<RigidbodyComponent>().mass; }
 

@@ -666,24 +666,6 @@ bool ComponentsPanel::draw(Engine::ScenePreset &scene, const std::vector<Engine:
             changed |= ImGui::Checkbox("Lock Rotation##rigidbody", &value.fixedRotation);
             if (!dynamic) ImGui::EndDisabled();
 
-            if (dynamic) {
-                ImGui::Separator();
-                ImGui::TextDisabled("Initial / overridden velocity");
-                float linearVelocity[3] = {value.linearVelocity.x(), value.linearVelocity.y(),
-                                           value.linearVelocity.z()};
-                float angularVelocity[3] = {value.angularVelocity.x(), value.angularVelocity.y(),
-                                            value.angularVelocity.z()};
-                if (ImGui::DragFloat3("Linear Velocity##rigidbody", linearVelocity, 0.05F,
-                                      -1000.0F, 1000.0F)) {
-                    value.linearVelocity = {linearVelocity[0], linearVelocity[1], linearVelocity[2]};
-                    changed = true;
-                }
-                if (ImGui::DragFloat3("Angular Velocity##rigidbody", angularVelocity, 1.0F,
-                                      -10000.0F, 10000.0F, "%.1f deg/s")) {
-                    value.angularVelocity = {angularVelocity[0], angularVelocity[1], angularVelocity[2]};
-                    changed = true;
-                }
-            }
             value.mass = std::max(0.001F, value.mass);
             value.linearDamping = std::max(0.0F, value.linearDamping);
             value.angularDamping = std::max(0.0F, value.angularDamping);

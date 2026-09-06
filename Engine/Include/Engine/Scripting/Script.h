@@ -4,6 +4,7 @@
 #include "Engine/ECS/Actor.h"
 #include "Engine/ECS/Entity.h"
 #include "Engine/ECS/Registry.h"
+#include "Engine/ECS/Components/RigidbodyRuntime.h"
 
 #include <vector>
 
@@ -29,7 +30,8 @@ namespace Engine {
         void setPosition(Vec3 value) {
             if (ecs().has<RigidbodyComponent>(entity_) &&
                 ecs().get<RigidbodyComponent>(entity_).type == RigidbodyType::Dynamic) {
-                ecs().modify<RigidbodyComponent>(entity_, [value](auto &body) { body.teleport(value); });
+                if (!ecs().has<PhysicsCommandBuffer>(entity_)) ecs().add<PhysicsCommandBuffer>(entity_);
+                ecs().modify<PhysicsCommandBuffer>(entity_, [value](auto &commands) { commands.teleportPosition = value; });
                 return;
             }
             ecs().modify<Transform>(entity_, [&](auto &transform) { transform.position = value; });
@@ -37,7 +39,8 @@ namespace Engine {
         void setRotation(Vec3 value) {
             if (ecs().has<RigidbodyComponent>(entity_) &&
                 ecs().get<RigidbodyComponent>(entity_).type == RigidbodyType::Dynamic) {
-                ecs().modify<RigidbodyComponent>(entity_, [value](auto &body) { body.teleportRotation = value; });
+                if (!ecs().has<PhysicsCommandBuffer>(entity_)) ecs().add<PhysicsCommandBuffer>(entity_);
+                ecs().modify<PhysicsCommandBuffer>(entity_, [value](auto &commands) { commands.teleportRotation = value; });
                 return;
             }
             ecs().modify<Transform>(entity_, [&](auto &transform) { transform.rotation = value; });

@@ -2,6 +2,7 @@
 #include "Engine/Core/Transform.h"
 #include "Engine/ECS/Components/ColliderComponent.h"
 #include "Engine/ECS/Components/RigidbodyComponent.h"
+#include "Engine/ECS/Components/RigidbodyRuntime.h"
 #include "Engine/ECS/Components/TerrainGrassComponent.h"
 #include "Engine/Renderer/Geometry/Mesh.h"
 #include "Engine/Scene/Scene.h"
@@ -60,8 +61,8 @@ namespace Engine {
                     const float scale = std::max({std::abs(transform.scale.x()),
                                                   std::abs(transform.scale.y()),
                                                   std::abs(transform.scale.z())});
-                    const Vec3 velocity = registry.has<RigidbodyComponent>(entity)
-                        ? registry.get<RigidbodyComponent>(entity).linearVelocity : Vec3{};
+                    const Vec3 velocity = registry.has<RigidbodyState>(entity)
+                        ? registry.get<RigidbodyState>(entity).linearVelocity : Vec3{};
                     // Treat every collider as a conservative horizontal
                     // interaction volume.  This keeps the inexpensive spatial
                     // hash path while allowing the common player capsule,
@@ -206,12 +207,14 @@ namespace Engine {
             for (std::size_t i = 0; i < spheres.size(); ++i) {
                 const float coverage = std::min(grassCoverage[i], 1.0F);
                 if (coverage <= 0.0F || !registry.has<RigidbodyComponent>(spheres[i].entity)) continue;
-                registry.modify<RigidbodyComponent>(spheres[i].entity, [&](auto& body) {
-                    if (body.type != RigidbodyType::Dynamic) return;
-                    const float damping = std::exp(-grassDragPerSecond * coverage * deltaTime);
-                    body.linearVelocity.setX(body.linearVelocity.x() * damping);
-                    body.linearVelocity.setZ(body.linearVelocity.z() * damping);
-                    body.angularVelocity *= damping;
+                if (!registry.has<RigidbodyState>(spheres[i].entity)) continue;
+                auto& state = registry.get<RigidbodyState>(spheres[i].entity);
+                const float damping = std::exp(-grassDragPerSecond * coverage * deltaTime);
+                if (!registry.has<PhysicsCommandBuffer>(spheres[i].entity))
+                    registry.add<PhysicsCommandBuffer>(spheres[i].entity);
+                registry.modify<PhysicsCommandBuffer>(spheres[i].entity, [&](auto& commands) {
+                    Vec3 velocity = state.linearVelocity; velocity.setX(velocity.x() * damping); velocity.setZ(velocity.z() * damping);
+                    commands.linearVelocity = velocity; commands.angularVelocity = state.angularVelocity * damping;
                 });
             }
         }
@@ -667,8 +670,6 @@ namespace Engine {
             } else {
                 PxRigidBodyExt::setMassAndUpdateInertia(rigid, std::max(body.mass, MinimumDimension));
             }
-            rigid.setLinearVelocity(toPhysX(body.linearVelocity));
-            rigid.setAngularVelocity(toPhysX(body.angularVelocity * DegreesToRadians));
         }
 
         ActorRecord createActor(const Entity entity, Registry &owner, Transform &transform) {
@@ -703,8 +704,6 @@ namespace Engine {
             if (dynamic) {
                 auto &rigid = *static_cast<PxRigidDynamic *>(actor);
                 configureRigidBody(rigid, *body);
-                record.lastLinearVelocity = body->linearVelocity;
-                record.lastAngularVelocity = body->angularVelocity;
             }
             physicsScene->addActor(*actor);
             return record;
@@ -788,8 +787,6 @@ namespace Engine {
                     } else if (record->second.bodyType != RigidbodyType::Static) {
                         const RigidbodyComponent& body = owner.get<RigidbodyComponent>(entity);
                         configureRigidBody(*static_cast<physx::PxRigidDynamic*>(record->second.actor), body);
-                        record->second.lastLinearVelocity = body.linearVelocity;
-                        record->second.lastAngularVelocity = body.angularVelocity;
                     }
                 }
                 rigidbodyRevision = owner.componentRevision<RigidbodyComponent>();
@@ -825,35 +822,26 @@ namespace Engine {
                     rigid.setKinematicTarget(toPhysX(transform));
                     record.lastTransform = transform;
                 }
-                if (body.type == RigidbodyType::Dynamic &&
-                    (body.teleportPosition.has_value() || body.teleportRotation.has_value())) {
+                PhysicsCommandBuffer* commands = owner.has<PhysicsCommandBuffer>(entity)
+                    ? &owner.get<PhysicsCommandBuffer>(entity) : nullptr;
+                if (body.type == RigidbodyType::Dynamic && commands != nullptr &&
+                    (commands->teleportPosition.has_value() || commands->teleportRotation.has_value())) {
                     PxTransform pose = rigid.getGlobalPose();
-                    if (body.teleportPosition) pose.p = toPhysX(*body.teleportPosition);
-                    if (body.teleportRotation) {
-                        pose.q = toPhysX(transformRotation(Transform{.rotation = *body.teleportRotation}));
+                    if (commands->teleportPosition) pose.p = toPhysX(*commands->teleportPosition);
+                    if (commands->teleportRotation) {
+                        pose.q = toPhysX(transformRotation(Transform{.rotation = *commands->teleportRotation}));
                     }
                     rigid.setGlobalPose(pose, true);
-                    body.teleportPosition.reset();
-                    body.teleportRotation.reset();
                 }
-                if (!same(body.linearVelocity, record.lastLinearVelocity)) {
-                    rigid.setLinearVelocity(toPhysX(body.linearVelocity));
+                if (body.type == RigidbodyType::Dynamic && commands != nullptr) {
+                    if (commands->linearVelocity) rigid.setLinearVelocity(toPhysX(*commands->linearVelocity));
+                    if (commands->angularVelocity) rigid.setAngularVelocity(toPhysX(*commands->angularVelocity * DegreesToRadians));
+                    if (nonZero(commands->force)) rigid.addForce(toPhysX(commands->force), PxForceMode::eFORCE);
+                    if (nonZero(commands->torque)) rigid.addTorque(toPhysX(commands->torque), PxForceMode::eFORCE);
+                    if (nonZero(commands->impulse)) rigid.addForce(toPhysX(commands->impulse), PxForceMode::eIMPULSE);
+                    if (nonZero(commands->angularImpulse)) rigid.addTorque(toPhysX(commands->angularImpulse), PxForceMode::eIMPULSE);
+                    commands->clear();
                 }
-                if (!same(body.angularVelocity, record.lastAngularVelocity)) {
-                    rigid.setAngularVelocity(toPhysX(body.angularVelocity * DegreesToRadians));
-                }
-                if (body.type == RigidbodyType::Dynamic) {
-                    if (nonZero(body.force)) {
-                        rigid.addForce(toPhysX(body.force), PxForceMode::eFORCE);
-                    }
-                    if (nonZero(body.torque)) {
-                        rigid.addTorque(toPhysX(body.torque), PxForceMode::eFORCE);
-                    }
-                    if (nonZero(body.angularImpulse)) {
-                        rigid.addTorque(toPhysX(body.angularImpulse), PxForceMode::eIMPULSE);
-                    }
-                }
-                body.zeroForces();
             }
         }
 
@@ -871,14 +859,12 @@ namespace Engine {
                 Transform &transform = owner.get<Transform>(entity);
                 transform.position = fromPhysX(pose.p);
                 transform.rotation = eulerDegrees(fromPhysX(pose.q).normalized());
-                body.linearVelocity = fromPhysX(rigid.getLinearVelocity());
-                body.angularVelocity = fromPhysX(rigid.getAngularVelocity()) * RadiansToDegrees;
-                if (body.fixedRotation) {
-                    body.angularVelocity = {};
-                }
+                if (!owner.has<RigidbodyState>(entity)) owner.add<RigidbodyState>(entity);
+                auto& state = owner.get<RigidbodyState>(entity);
+                state.linearVelocity = fromPhysX(rigid.getLinearVelocity());
+                state.angularVelocity = fromPhysX(rigid.getAngularVelocity()) * RadiansToDegrees;
+                if (body.fixedRotation) state.angularVelocity = {};
                 record.lastTransform = transform;
-                record.lastLinearVelocity = body.linearVelocity;
-                record.lastAngularVelocity = body.angularVelocity;
                 owner.markChanged<Transform>(entity);
             }
         }

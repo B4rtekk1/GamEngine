@@ -5,6 +5,7 @@
 #include "Engine/ECS/Components/CameraComponent.h"
 #include "Engine/ECS/Components/ScriptComponent.h"
 #include "Engine/ECS/Components/RigidbodyComponent.h"
+#include "Engine/ECS/Components/RigidbodyRuntime.h"
 #include "Engine/ECS/Components/ColliderComponent.h"
 #include "Engine/ECS/Components/TerrainComponent.h"
 #include "Engine/ECS/Entity.h"
@@ -92,14 +93,16 @@ namespace Engine {
 
         void setPosition(Vec3 value) {
             if (has<RigidbodyComponent>() && rigidbody().type == RigidbodyType::Dynamic) {
-                modify<RigidbodyComponent>([value](auto &body) { body.teleport(value); });
+                if (!has<PhysicsCommandBuffer>()) add<PhysicsCommandBuffer>();
+                modify<PhysicsCommandBuffer>([value](auto &commands) { commands.teleportPosition = value; });
                 return;
             }
             modifyTransform([&](auto &t) { t.position = value; });
         }
         void setRotation(Vec3 value) {
             if (has<RigidbodyComponent>() && rigidbody().type == RigidbodyType::Dynamic) {
-                modify<RigidbodyComponent>([value](auto &body) { body.teleportRotation = value; });
+                if (!has<PhysicsCommandBuffer>()) add<PhysicsCommandBuffer>();
+                modify<PhysicsCommandBuffer>([value](auto &commands) { commands.teleportRotation = value; });
                 return;
             }
             modifyTransform([&](auto &t) { t.rotation = value; });

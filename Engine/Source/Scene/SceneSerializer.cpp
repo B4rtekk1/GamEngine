@@ -52,6 +52,7 @@ namespace Engine {
         constexpr std::uint32_t TerrainFormatVersion = 12;
         constexpr std::uint32_t EmissiveFormatVersion = 13;
         constexpr std::uint32_t MaterialOverrideFormatVersion = 14;
+        constexpr std::uint32_t RigidbodyStateFormatVersion = 16;
         constexpr std::uint32_t TerrainDataVersion = 1;
         constexpr std::array<char, 8> TerrainDataMagic{'G', 'E', 'T', 'E', 'R', 'R', '1', '\0'};
 
@@ -336,14 +337,11 @@ namespace Engine {
             writeFloat(output, body.angularDamping);
             output << ' ';
             output << static_cast<int>(body.useGravity) << ' '
-                    << static_cast<int>(body.fixedRotation) << ' ';
-            writeVec3(output, body.linearVelocity);
-            output << ' ';
-            writeVec3(output, body.angularVelocity);
+                    << static_cast<int>(body.fixedRotation);
             output << '\n';
         }
 
-        RigidbodyComponent readRigidbody(std::istream &input) {
+        RigidbodyComponent readRigidbody(std::istream &input, const std::uint32_t version) {
             RigidbodyComponent body;
             const int type = read<int>(input, "rigidbody type");
             if (type < static_cast<int>(RigidbodyType::Static) ||
@@ -356,8 +354,12 @@ namespace Engine {
             body.angularDamping = readFloat(input, "rigidbody angular damping");
             body.useGravity = readBool(input, "rigidbody gravity flag");
             body.fixedRotation = readBool(input, "rigidbody fixed-rotation flag");
-            body.linearVelocity = readVec3(input, "rigidbody linear velocity");
-            body.angularVelocity = readVec3(input, "rigidbody angular velocity");
+            // v15 and earlier persisted runtime velocity in the configuration
+            // record. It is now mirrored by RigidbodyState, so discard it.
+            if (version < RigidbodyStateFormatVersion) {
+                static_cast<void>(readVec3(input, "legacy rigidbody linear velocity"));
+                static_cast<void>(readVec3(input, "legacy rigidbody angular velocity"));
+            }
             if (body.mass <= 0.0F || body.linearDamping < 0.0F || body.angularDamping < 0.0F) {
                 invalidScene("rigidbody values are invalid");
             }
@@ -1037,7 +1039,7 @@ namespace Engine {
         const auto version = read<unsigned>(input, "format version");
         if (version != LegacyFormatVersion && version != TerrainFormatVersion &&
             version != EmissiveFormatVersion && version != MaterialOverrideFormatVersion &&
-            version != FormatVersion) {
+            version != MaterialOverrideFormatVersion + 1 && version != FormatVersion) {
             invalidScene("unsupported format version " + std::to_string(version));
         }
         auto* terrainData = static_cast<std::istream*>(input.pword(terrainDataStreamSlot()));
@@ -1263,7 +1265,7 @@ namespace Engine {
                         invalidScene("entity contains an invalid RigidbodyComponent");
                     }
                     hasRigidbody = true;
-                    loaded.add<RigidbodyComponent>(entity, readRigidbody(input));
+                    loaded.add<RigidbodyComponent>(entity, readRigidbody(input, version));
                 } else if (component == "TERRAIN" || component == "TERRAIN_V2" || component == "TERRAIN_BIN") {
                     if (hasTerrain) {
                         invalidScene("entity contains more than one TerrainComponent");
@@ -1370,10 +1372,10 @@ namespace Engine {
                     light.outerConeAngle = readFloat(input, "spot outer cone angle");
                     light.enabled = readBool(input, "light enabled flag");
                     light.castShadows = readBool(input, "light cast-shadows flag");
-                    light.mainLight = version >= FormatVersion && readBool(input, "light main-light flag");
+                    light.mainLight = version >= RigidbodyStateFormatVersion - 1 && readBool(input, "light main-light flag");
                     // Prior formats made the sole enabled directional light
                     // implicit. Preserve that scene intent on migration.
-                    if (version < FormatVersion && light.type == LightType::Directional &&
+                    if (version < RigidbodyStateFormatVersion - 1 && light.type == LightType::Directional &&
                         light.enabled && !legacyMainLightAssigned) {
                         light.mainLight = true;
                         legacyMainLightAssigned = true;
