@@ -79,6 +79,10 @@ Engine::Entity drawEditorMenuBar(Engine::ScenePreset &scene, Engine::Renderer &r
     static bool showShortcuts = false;
     static bool showAbout = false;
     static bool openSceneSettings = false;
+    static bool openNewProject = false;
+    static char newProjectName[128] = "MyGame";
+    static char newProjectLocation[1024]{};
+    static std::string newProjectError;
     static int antialiasingType = -1;
     static int msaaSamples = -1;
     static std::string sceneFileError;
@@ -156,6 +160,22 @@ Engine::Entity drawEditorMenuBar(Engine::ScenePreset &scene, Engine::Renderer &r
             Editor::ConsolePanel::error("Could not create scene: " + sceneFileError);
         }
     };
+    const auto createProject = [&] {
+        try {
+            const std::filesystem::path root{newProjectLocation};
+            Engine::Project createdProject = Engine::Project::create(root, newProjectName);
+            loadScene(createdProject.startupScene());
+            content.clear();
+            content.setAssetRoot(createdProject.assetRoot());
+            project = std::move(createdProject);
+            EditorSceneSession::setProjectRoot(project.rootPath());
+            newProjectError.clear();
+            Editor::ConsolePanel::info("Created project: " + project.name());
+        } catch (const std::exception& error) {
+            newProjectError = error.what();
+            Editor::ConsolePanel::error("Could not create project: " + newProjectError);
+        }
+    };
 
     if (!ImGui::BeginMainMenuBar()) { return Engine::NullEntity;
 }
@@ -171,6 +191,15 @@ Engine::Entity drawEditorMenuBar(Engine::ScenePreset &scene, Engine::Renderer &r
     const std::filesystem::path activeScenePath = EditorSceneSession::scenePath();
     if (beginTopMenu("File", "Project and scene files")) {
         ImGui::BeginDisabled(playing);
+        if (ImGui::MenuItem("New Project...")) {
+            if (newProjectLocation[0] == '\0') {
+                const std::string defaultLocation = (std::filesystem::current_path() / newProjectName).string();
+                std::snprintf(newProjectLocation, sizeof(newProjectLocation), "%s", defaultLocation.c_str());
+            }
+            newProjectError.clear();
+            openNewProject = true;
+        }
+        ImGui::Separator();
         if (ImGui::MenuItem("New Scene...", "Ctrl+N")) {
             createScene();
         }
@@ -349,6 +378,42 @@ Engine::Entity drawEditorMenuBar(Engine::ScenePreset &scene, Engine::Renderer &r
     }
 
     ImGui::EndMainMenuBar();
+
+    if (openNewProject) {
+        ImGui::OpenPopup("New Project");
+        openNewProject = false;
+    }
+    if (ImGui::BeginPopupModal("New Project", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
+        ImGui::TextUnformatted("Create a portable GamEngine project.");
+        ImGui::TextDisabled("The project manifest and starter scene are created automatically.");
+        ImGui::Separator();
+        ImGui::SetNextItemWidth(420.0F);
+        ImGui::InputText("Name", newProjectName, sizeof(newProjectName));
+        ImGui::SetNextItemWidth(420.0F);
+        ImGui::InputTextWithHint("Location", "D:/Projects/MyGame", newProjectLocation,
+                                 sizeof(newProjectLocation));
+        ImGui::TextDisabled("Template");
+        ImGui::SetNextItemWidth(420.0F);
+        ImGui::BeginDisabled();
+        char templateName[] = "3D Game";
+        ImGui::InputText("##project-template", templateName, sizeof(templateName), ImGuiInputTextFlags_ReadOnly);
+        ImGui::EndDisabled();
+        ImGui::TextDisabled("Assets/Models, Materials, Textures, Scenes, Scripts and Audio will be created.");
+        if (!newProjectError.empty()) ImGui::TextColored({1.0F, 0.35F, 0.35F, 1.0F}, "%s", newProjectError.c_str());
+        const bool valid = newProjectName[0] != '\0' && newProjectLocation[0] != '\0';
+        ImGui::BeginDisabled(!valid);
+        if (EditorButton("Create", {110.0F, 0.0F}).draw()) {
+            createProject();
+            if (newProjectError.empty()) ImGui::CloseCurrentPopup();
+        }
+        ImGui::EndDisabled();
+        ImGui::SameLine();
+        if (EditorButton("Cancel", {110.0F, 0.0F}).draw()) {
+            newProjectError.clear();
+            ImGui::CloseCurrentPopup();
+        }
+        ImGui::EndPopup();
+    }
 
     if (openSceneSettings) {
         if (antialiasingType < 0) {
