@@ -1015,6 +1015,7 @@
                                                     const std::uint8_t kind) {
                     if (revision == 0) { return;
 }
+
                     for (const Entity entity : entities) {
                         const auto it = sceneGpu.renderableIndices.find(entity);
                         if (it != sceneGpu.renderableIndices.end()) addIndex(it->second, kind);

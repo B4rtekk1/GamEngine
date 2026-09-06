@@ -1,6 +1,7 @@
 #pragma once
 
 #include "Engine/Scene/ScenePresets.h"
+#include "Editor/ComponentDescriptor.h"
 
 #include <vector>
 

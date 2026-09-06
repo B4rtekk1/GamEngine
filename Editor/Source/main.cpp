@@ -98,6 +98,7 @@ namespace {
 // NOLINTBEGIN(readability-magic-numbers)
 
 int main(int argc, char** argv) {
+    Editor::registerBuiltinComponents();
     try {
         std::optional<std::filesystem::path> projectPath;
         std::optional<std::filesystem::path> createProjectPath;

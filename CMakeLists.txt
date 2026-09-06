@@ -244,6 +244,7 @@ target_include_directories(Engine
 
 add_executable(Editor
         Editor/Source/main.cpp
+        Editor/Source/ComponentDescriptor.cpp
         Editor/Source/EditorUi.cpp
         Editor/Source/EditorPreferences.cpp
         Editor/Source/Panels/EditorStyle.cpp

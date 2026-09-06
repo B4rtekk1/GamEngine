@@ -686,45 +686,41 @@ bool ComponentsPanel::draw(Engine::ScenePreset &scene, const std::vector<Engine:
     }
     ImGui::PopStyleColor(3);
     if (ImGui::BeginPopup("Add Component")) {
-        const bool hasScript = scene.editor().has<Engine::ScriptComponent>(selected);
-        const bool hasCollider = scene.editor().has<Engine::ColliderComponent>(selected);
-        const bool hasRigidbody = scene.editor().has<Engine::RigidbodyComponent>(selected);
-        const bool hasSmokeEmitter = scene.editor().has<Engine::SmokeEmitterComponent>(selected);
-        const bool hasLight = scene.editor().has<Engine::LightComponent>(selected);
-        bool sceneHasWind = false;
-        scene.editor().view<Engine::WindComponent>([&](Engine::Entity, const auto&) {
-            sceneHasWind = true;
-        });
-        if (ImGui::MenuItem("Script", nullptr, false, !hasScript)) {
-            scene.editor().add<Engine::ScriptComponent>(selected);
-            ImGui::CloseCurrentPopup();
+        // The popup deliberately knows nothing about concrete ECS types. New
+        // components appear here solely by registering a descriptor.
+        static char componentSearch[128]{};
+        ImGui::SetNextItemWidth(-1.0F);
+        ImGui::InputTextWithHint("##component-search", "Search components...", componentSearch,
+                                 sizeof(componentSearch));
+        ImGui::Separator();
+
+        std::string_view previousCategory;
+        bool found = false;
+        for (const Editor::ComponentDescriptor& descriptor :
+             Editor::ComponentRegistry::instance().components()) {
+            if (!containsCaseInsensitive(descriptor.name.data(), componentSearch) &&
+                !containsCaseInsensitive(descriptor.category.data(), componentSearch)) {
+                continue;
+            }
+            found = true;
+            if (previousCategory != descriptor.category) {
+                if (!previousCategory.empty()) ImGui::Spacing();
+                ImGui::TextDisabled("%.*s", static_cast<int>(descriptor.category.size()), descriptor.category.data());
+                previousCategory = descriptor.category;
+            }
+            const bool available = descriptor.canAdd && descriptor.canAdd(scene, selected);
+            if (ImGui::MenuItem(descriptor.name.data(), nullptr, false, available)) {
+                descriptor.add(scene, selected);
+                componentSearch[0] = '\0';
+                ImGui::CloseCurrentPopup();
+            }
+            if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
+                ImGui::SetTooltip("%.*s%s", static_cast<int>(descriptor.description.size()), descriptor.description.data(),
+                                  available ? "" : descriptor.singleton ? "\nOnly one instance is allowed in a scene."
+                                                                     : "\nAlready added to this object.");
+            }
         }
-        if (hasScript) ImGui::TextDisabled("Script component already added");
-        if (ImGui::MenuItem("Collider", nullptr, false, !hasCollider)) {
-            scene.editor().add<Engine::ColliderComponent>(selected);
-            ImGui::CloseCurrentPopup();
-        }
-        if (hasCollider) ImGui::TextDisabled("Collider component already added");
-        if (ImGui::MenuItem("Rigidbody", nullptr, false, !hasRigidbody)) {
-            scene.editor().add<Engine::RigidbodyComponent>(selected);
-            ImGui::CloseCurrentPopup();
-        }
-        if (hasRigidbody) ImGui::TextDisabled("Rigidbody component already added");
-        if (ImGui::MenuItem("Smoke Emitter", nullptr, false, !hasSmokeEmitter)) {
-            scene.editor().add<Engine::SmokeEmitterComponent>(selected);
-            ImGui::CloseCurrentPopup();
-        }
-        if (hasSmokeEmitter) ImGui::TextDisabled("Smoke Emitter component already added");
-        if (ImGui::MenuItem("Light", nullptr, false, !hasLight)) {
-            scene.editor().add<Engine::LightComponent>(selected);
-            ImGui::CloseCurrentPopup();
-        }
-        if (hasLight) ImGui::TextDisabled("Light component already added");
-        if (ImGui::MenuItem("Wind", nullptr, false, !sceneHasWind)) {
-            scene.editor().add<Engine::WindComponent>(selected);
-            ImGui::CloseCurrentPopup();
-        }
-        if (sceneHasWind) ImGui::TextDisabled("Only one Wind source is currently supported");
+        if (!found) ImGui::TextDisabled("No matching components.");
         ImGui::EndPopup();
     }
     if (EditorButton("Attach C++ Script", {-1.0F, 0.0F}).draw()) ImGui::OpenPopup("Attach C++ Script");
