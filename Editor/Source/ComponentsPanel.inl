@@ -723,32 +723,44 @@ bool ComponentsPanel::draw(Engine::ScenePreset &scene, const std::vector<Engine:
         if (!found) ImGui::TextDisabled("No matching components.");
         ImGui::EndPopup();
     }
-    if (EditorButton("Attach C++ Script", {-1.0F, 0.0F}).draw()) ImGui::OpenPopup("Attach C++ Script");
-    if (ImGui::BeginPopupModal("Attach C++ Script", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
-        static char attachedClassName[128]{};
-        ImGui::TextUnformatted("Enter the registered C++ script class name.");
-        ImGui::InputTextWithHint("Class name", "CubeMovement", attachedClassName, sizeof(attachedClassName));
-        const bool validName = attachedClassName[0] != '\0';
-        if (EditorButton("Attach", {100.0F, 0.0F}).draw() && validName) {
-            if (!scene.editor().has<Engine::ScriptComponent>(selected)) {
-                scene.editor().add<Engine::ScriptComponent>(selected);
+    if (EditorButton("Add Script", {-1.0F, 0.0F}).draw()) ImGui::OpenPopup("Add Script");
+    if (ImGui::BeginPopupModal("Add Script", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
+        static char scriptSearch[128]{};
+        ImGui::TextUnformatted("Choose a registered C++ script.");
+        ImGui::SetNextItemWidth(360.0F);
+        ImGui::InputTextWithHint("##script-search", "Search scripts...", scriptSearch, sizeof(scriptSearch));
+        ImGui::Separator();
+        bool found = false;
+        for (const std::string& className : Engine::ScriptRegistry::instance().classNames()) {
+            if (!containsCaseInsensitive(className.c_str(), scriptSearch)) continue;
+            found = true;
+            if (ImGui::Selectable(className.c_str())) {
+                if (!scene.editor().has<Engine::ScriptComponent>(selected)) {
+                    scene.editor().add<Engine::ScriptComponent>(selected);
+                }
+                scene.editor().patch<Engine::ScriptComponent>(selected, [&](auto& script) {
+                    script.className = className;
+                    script.enabled = true;
+                    script.reset();
+                });
+                scriptSearch[0] = '\0';
+                ImGui::CloseCurrentPopup();
             }
-            scene.editor().patch<Engine::ScriptComponent>(selected, [&](auto &script) {
-                script.className = attachedClassName;
-                script.enabled = true;
-                script.reset();
-            });
-            attachedClassName[0] = '\0';
-            ImGui::CloseCurrentPopup();
         }
-        ImGui::SameLine();
-        if (EditorButton("Cancel", {100.0F, 0.0F}).draw()) {
-            attachedClassName[0] = '\0';
+        if (!found) ImGui::TextDisabled("No registered scripts found.");
+        ImGui::Separator();
+        if (EditorButton("+ New C++ Script", {-1.0F, 0.0F}).draw()) {
+            scriptSearch[0] = '\0';
+            ImGui::CloseCurrentPopup();
+            ImGui::OpenPopup("Create C++ Script");
+        }
+        if (EditorButton("Cancel", {-1.0F, 0.0F}).draw()) {
+            scriptSearch[0] = '\0';
             ImGui::CloseCurrentPopup();
         }
         ImGui::EndPopup();
     }
-    if (EditorButton("Create C++ Script", {-1.0F, 0.0F}).draw()) ImGui::OpenPopup("Create C++ Script");
+    if (EditorButton("New C++ Script", {-1.0F, 0.0F}).draw()) ImGui::OpenPopup("Create C++ Script");
     if (ImGui::BeginPopupModal("Create C++ Script", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
         static char name[128]{};
         static std::string error;

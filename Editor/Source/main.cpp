@@ -23,6 +23,7 @@
 #include "Engine/Renderer/MeshRenderer.h"
 #include "Engine/Scene/SceneSerializer.h"
 #include "Engine/Scripting/ScriptSystem.h"
+#include "Engine/Scripting/ScriptRegistry.h"
 #include "Engine/Physics/PhysicsSystem.h"
 #include "Engine/Project.h"
 #include "Elements/EditorButton.h"
