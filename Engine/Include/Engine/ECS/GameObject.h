@@ -3,7 +3,6 @@
 #include "Engine/ECS/Components/MeshRendererComponent.h"
 #include "Engine/ECS/Components/TransformComponent.h"
 #include "Engine/ECS/Components/CameraComponent.h"
-#include "Engine/ECS/Components/ColorPickerComponent.h"
 #include "Engine/ECS/Components/ScriptComponent.h"
 #include "Engine/ECS/Components/RigidbodyComponent.h"
 #include "Engine/ECS/Components/ColliderComponent.h"
@@ -162,11 +161,6 @@ namespace Engine {
             // A light is an editor-visible scene object, not renderable geometry.
             if (has<MeshRendererComponent>()) { remove<MeshRendererComponent>();
 }
-            if (has<ColorPickerComponent>()) {
-                light.color = get<ColorPickerComponent>().color;
-            } else {
-                add<ColorPickerComponent>(ColorPickerComponent{.color = light.color});
-            }
             if (has<LightComponent>()) {
                 registry_->modify<LightComponent>(entity_, [&](auto &value) { value = std::move(light); });
                 return get<LightComponent>();

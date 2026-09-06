@@ -1,7 +1,6 @@
 #include <gtest/gtest.h>
 
 #include "Engine/ECS/Components/ColliderComponent.h"
-#include "Engine/ECS/Components/ColorPickerComponent.h"
 #include "Engine/ECS/Components/MeshRendererComponent.h"
 #include "Engine/ECS/Components/RigidbodyComponent.h"
 #include "Engine/ECS/Components/ScriptComponent.h"
@@ -101,8 +100,6 @@ TEST(SceneComponents, ProvideExpectedDefaults) {
     EXPECT_FLOAT_EQ(light.color.r(), 1.0F);
     EXPECT_TRUE(light.enabled);
     EXPECT_TRUE(light.castShadows);
-    const Engine::ColorPickerComponent picker;
-    EXPECT_FLOAT_EQ(picker.color.a(), 1.0F);
     const Engine::PBRMaterial material;
     EXPECT_FLOAT_EQ(material.roughness, 0.55F);
     EXPECT_EQ(material.baseColorTexture, -1);

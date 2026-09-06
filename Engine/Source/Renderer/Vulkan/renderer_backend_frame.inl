@@ -25,7 +25,6 @@
             const std::uint64_t lightRevision = readRegistry.componentRevision<LightComponent>();
             const std::uint64_t windRevision = readRegistry.componentRevision<WindComponent>();
             const std::uint64_t cameraRevision = readRegistry.componentRevision<CameraComponent>();
-            const std::uint64_t colorPickerRevision = readRegistry.componentRevision<ColorPickerComponent>();
             const std::uint64_t parentRevision = readRegistry.componentRevision<ParentComponent>();
             const std::uint64_t uuidRevision = readRegistry.componentRevision<UUIDComponent>();
             const std::uint64_t structuralRevision = readRegistry.structuralRevision();
@@ -46,7 +45,6 @@
                 sceneFrameDataCache.lightRevision != lightRevision ||
                 sceneFrameDataCache.windRevision != windRevision ||
                 sceneFrameDataCache.cameraRevision != cameraRevision ||
-                sceneFrameDataCache.colorPickerRevision != colorPickerRevision ||
                 sceneFrameDataCache.parentRevision != parentRevision ||
                 sceneFrameDataCache.uuidRevision != uuidRevision;
             if (dataDirty) {
@@ -61,13 +59,12 @@
                         }
                     });
                 readRegistry.view<Transform, LightComponent>(
-                    [&](const Entity entity, const Transform& transform, const LightComponent& light) {
+                    [&](const Entity, const Transform& transform, const LightComponent& light) {
                         if (!light.enabled) return;
                         const glm::mat4 world = transform.worldMatrix().native();
                         const glm::vec3 direction = glm::vec3(
                             world * glm::vec4{0.0F, 0.0F, -1.0F, 0.0F});
-                        const Math::Color color = readRegistry.has<ColorPickerComponent>(entity)
-                            ? readRegistry.get<ColorPickerComponent>(entity).color : light.color;
+                        const Math::Color color = light.color;
                         if (light.type == LightType::Directional) {
                             // Only the designated, enabled Main Light reaches the current forward
                             // path. Other directional lights stay enabled in ECS for future paths.
@@ -128,7 +125,6 @@
                 sceneFrameDataCache.lightRevision = lightRevision;
                 sceneFrameDataCache.windRevision = windRevision;
                 sceneFrameDataCache.cameraRevision = cameraRevision;
-                sceneFrameDataCache.colorPickerRevision = colorPickerRevision;
                 sceneFrameDataCache.parentRevision = parentRevision;
             }
             // Time is deliberately refreshed every frame, while ECS-derived wind values stay cached.
@@ -1067,17 +1063,11 @@
                     if (registry.has<Transform>(particleEntity)) {
                         emitter.position = registry.get<Transform>(particleEntity).position;
                     }
-                    if (registry.has<ColorPickerComponent>(particleEntity)) {
-                        emitter.color = registry.get<ColorPickerComponent>(particleEntity).color;
-                    }
                     particleSystem->setEmitter(emitter);
                 } else {
                     auto emitter = registry.get<ParticleEmitterComponent>(particleEntity).emitter;
                     if (registry.has<Transform>(particleEntity)) {
                         emitter.position = registry.get<Transform>(particleEntity).position;
-                    }
-                    if (registry.has<ColorPickerComponent>(particleEntity)) {
-                        emitter.color = registry.get<ColorPickerComponent>(particleEntity).color;
                     }
                     particleSystem->setEmitter(emitter);
                 }

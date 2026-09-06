@@ -3,7 +3,6 @@
 #include "Engine/Core/Transform.h"
 #include "Engine/ECS/Components/CameraComponent.h"
 #include "Engine/ECS/Components/ParticleEmitterComponent.h"
-#include "Engine/ECS/Components/ColorPickerComponent.h"
 #include "Engine/ECS/Components/ColliderComponent.h"
 #include "Engine/ECS/Components/RigidbodyComponent.h"
 #include "Engine/ECS/Components/ProceduralCloudComponent.h"
@@ -118,7 +117,6 @@ namespace Engine {
             setParticleEntity(particleSystem);
             particleObject.setPosition(particleEmitter().position);
             particleObject.add<ParticleEmitterComponent>(ParticleEmitterComponent{emitter});
-            particleObject.add<ColorPickerComponent>(ColorPickerComponent{particleEmitter().color});
         }
 
         constexpr float halfExtent = (((CubesPerAxis - 1) * CubeSpacing) + 1.0F) * 0.5F;

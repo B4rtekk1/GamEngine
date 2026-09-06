@@ -333,14 +333,10 @@
                     auto emitter = registry.get<SmokeEmitterComponent>(scene.particleEntity()).emitter;
                     if (registry.has<Transform>(scene.particleEntity())) { emitter.position = registry.get<Transform>(scene.particleEntity()).position;
 }
-                    if (registry.has<ColorPickerComponent>(scene.particleEntity())) { emitter.color = registry.get<ColorPickerComponent>(scene.particleEntity()).color;
-}
                     particleSystem->setEmitter(emitter);
                 } else {
                     auto emitter = registry.get<ParticleEmitterComponent>(scene.particleEntity()).emitter;
                     if (registry.has<Transform>(scene.particleEntity())) { emitter.position = registry.get<Transform>(scene.particleEntity()).position;
-}
-                    if (registry.has<ColorPickerComponent>(scene.particleEntity())) { emitter.color = registry.get<ColorPickerComponent>(scene.particleEntity()).color;
 }
                     particleSystem->setEmitter(emitter);
                 }

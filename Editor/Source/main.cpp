@@ -16,7 +16,6 @@
 #include "Engine/ECS/Components/ColliderComponent.h"
 #include "Engine/ECS/Components/RigidbodyComponent.h"
 #include "Engine/ECS/Components/TerrainGrassComponent.h"
-#include "Engine/ECS/Components/ColorPickerComponent.h"
 #include "Engine/ECS/Components/SmokeEmitterComponent.h"
 #include "Engine/ECS/Components/ProceduralCloudComponent.h"
 #include "Engine/Renderer/Geometry/ProceduralCloud.h"

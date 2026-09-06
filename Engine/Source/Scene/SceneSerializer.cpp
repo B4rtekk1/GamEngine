@@ -6,7 +6,6 @@
 #include "Engine/ECS/Components/ColliderComponent.h"
 #include "Engine/ECS/Components/RigidbodyComponent.h"
 #include "Engine/ECS/Components/ScriptComponent.h"
-#include "Engine/ECS/Components/ColorPickerComponent.h"
 #include "Engine/ECS/Components/ParticleEmitterComponent.h"
 #include "Engine/ECS/Components/SmokeEmitterComponent.h"
 #include "Engine/ECS/Components/ProceduralCloudComponent.h"
@@ -28,6 +27,7 @@
 #include <limits>
 #include <locale>
 #include <memory>
+#include <optional>
 #include <sstream>
 #include <stdexcept>
 #include <string>
@@ -958,11 +958,6 @@ namespace Engine {
                 writeFloat(serialized, camera.aspectRatio);
                 serialized << ' ' << static_cast<int>(camera.primary) << '\n';
             }
-            if (registry.has<ColorPickerComponent>(entity)) {
-                serialized << "COLOR_PICKER ";
-                writeColorRgba(serialized, registry.get<ColorPickerComponent>(entity).color);
-                serialized << '\n';
-            }
             if (registry.has<ParticleEmitterComponent>(entity)) {
                 serialized << "PARTICLE_EMITTER ";
                 writeParticleEmitter(serialized,
@@ -1181,7 +1176,9 @@ namespace Engine {
             bool hasWind = false;
             bool hasCamera = false;
             bool hasScript = false;
-            bool hasColorPicker = false;
+            // Legacy COLOR_PICKER records are migrated into the component
+            // that owns the rendered color. They are never written again.
+            std::optional<Color> legacyColorPicker;
             bool hasParticleEmitter = false;
             bool hasSmokeEmitter = false;
             bool hasProceduralCloud = false;
@@ -1423,13 +1420,10 @@ namespace Engine {
                     script.enabled = readBool(input, "script enabled flag");
                     loaded.add<ScriptComponent>(entity, std::move(script));
                 } else if (component == "COLOR_PICKER") {
-                    if (hasColorPicker) {
-                        invalidScene("entity contains more than one ColorPickerComponent");
+                    if (legacyColorPicker) {
+                        invalidScene("entity contains more than one legacy COLOR_PICKER record");
                     }
-                    hasColorPicker = true;
-                    loaded.add<ColorPickerComponent>(entity, ColorPickerComponent{
-                                                         .color = readColorRgba(input, "color picker color"),
-                                                     });
+                    legacyColorPicker = readColorRgba(input, "color picker color");
                 } else if (component == "PARTICLE_EMITTER") {
                     if (hasParticleEmitter) {
                         invalidScene("entity contains more than one ParticleEmitterComponent");
@@ -1458,6 +1452,17 @@ namespace Engine {
             }
             if (!hasIdentity) {
                 invalidScene("entity is missing IDENTITY");
+            }
+            if (legacyColorPicker) {
+                if (hasLight) {
+                    loaded.get<LightComponent>(entity).color = *legacyColorPicker;
+                }
+                if (hasParticleEmitter) {
+                    loaded.get<ParticleEmitterComponent>(entity).emitter.color = *legacyColorPicker;
+                }
+                if (hasSmokeEmitter) {
+                    loaded.get<SmokeEmitterComponent>(entity).emitter.color = *legacyColorPicker;
+                }
             }
             if (hasTerrain) {
                 if (!hasRenderer) invalidScene("terrain entity is missing MeshRenderer");

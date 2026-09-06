@@ -39,7 +39,6 @@
 #include "Engine/ECS/Components/CameraComponent.h"
 #include "Engine/ECS/Components/ParticleEmitterComponent.h"
 #include "Engine/ECS/Components/SmokeEmitterComponent.h"
-#include "Engine/ECS/Components/ColorPickerComponent.h"
 #include "Engine/ECS/Components/ColliderComponent.h"
 #include "Engine/ECS/Components/TerrainGrassComponent.h"
 #include "Engine/ECS/Components/TerrainComponent.h"
@@ -131,7 +130,6 @@ namespace Engine {
         std::uint64_t lightRevision{};
         std::uint64_t windRevision{};
         std::uint64_t cameraRevision{};
-        std::uint64_t colorPickerRevision{};
         std::uint64_t parentRevision{};
         std::uint64_t uuidRevision{};
         std::uint64_t structuralRevision{};

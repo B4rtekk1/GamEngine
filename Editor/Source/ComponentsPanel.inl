@@ -279,10 +279,6 @@ bool ComponentsPanel::draw(Engine::ScenePreset &scene, const std::vector<Engine:
         } else if (open) {
             const auto source = scene.editor().get<Engine::LightComponent>(selected);
             auto light = source;
-            const bool hasColorPicker = scene.editor().has<Engine::ColorPickerComponent>(selected);
-            if (hasColorPicker) {
-                light.color = scene.editor().get<Engine::ColorPickerComponent>(selected).color;
-            }
             constexpr const char *typeNames[] = {"Directional", "Point", "Spot"};
             int type = static_cast<int>(light.type);
             bool changed = false;
@@ -335,10 +331,6 @@ bool ComponentsPanel::draw(Engine::ScenePreset &scene, const std::vector<Engine:
             if (changed) {
                 scene.editor().modify<Engine::LightComponent>(selected,
                     [&](auto &component) { component = light; });
-                if (hasColorPicker) {
-                    scene.editor().modify<Engine::ColorPickerComponent>(selected,
-                        [&](auto &component) { component.color = light.color; });
-                }
             }
         }
     }
@@ -381,14 +373,8 @@ bool ComponentsPanel::draw(Engine::ScenePreset &scene, const std::vector<Engine:
         const auto &source =
                 readScene.get<Engine::SmokeEmitterComponent>(selected).emitter;
         auto emitter = source;
-        const bool hasColorPicker =
-                readScene.has<Engine::ColorPickerComponent>(selected);
-        if (hasColorPicker) {
-            emitter.color = readScene.get<Engine::ColorPickerComponent>(selected).color;
-        }
 
         bool changed = false;
-        bool colorChanged = false;
         const auto drawParticleFloat = [](const char *label, const char *id,
                                           float *value, const float speed,
                                           const float min, const float max,
@@ -449,7 +435,6 @@ bool ComponentsPanel::draw(Engine::ScenePreset &scene, const std::vector<Engine:
         if (ImGui::ColorEdit4("##particle-color", color, ImGuiColorEditFlags_AlphaBar)) {
             emitter.color = Engine::Color{color[0], color[1], color[2], color[3]};
             changed = true;
-            colorChanged = true;
         }
 
         // Enforce valid ranges even when values are entered from the keyboard.
@@ -468,12 +453,6 @@ bool ComponentsPanel::draw(Engine::ScenePreset &scene, const std::vector<Engine:
                                                                  [&](auto &component) {
                                                                      component.emitter = emitter;
                                                                  });
-            if (colorChanged && hasColorPicker) {
-                scene.editor().modify<Engine::ColorPickerComponent>(selected,
-                                                                    [&](auto &component) {
-                                                                        component.color = emitter.color;
-                                                                    });
-            }
         }
         }
     }
@@ -714,29 +693,6 @@ bool ComponentsPanel::draw(Engine::ScenePreset &scene, const std::vector<Engine:
             }
         }
     }
-    if (scene.editor().valid(selected) && scene.editor().has<Engine::ColorPickerComponent>(selected)) {
-        bool remove = false;
-        const bool open = drawRemovableComponentHeader("Color Picker", "color-picker", remove);
-        if (remove) {
-            scene.editor().remove<Engine::ColorPickerComponent>(selected);
-        } else if (open) {
-        const auto readScene = scene.editor();
-        const auto &picker =
-                readScene.get<Engine::ColorPickerComponent>(selected);
-        float rgba[4] = {picker.color.r(), picker.color.g(), picker.color.b(), picker.color.a()};
-        if (ImGui::ColorEdit4("Color", rgba, ImGuiColorEditFlags_AlphaBar)) {
-            const Engine::Color color{rgba[0], rgba[1], rgba[2], rgba[3]};
-            scene.editor().modify<Engine::ColorPickerComponent>(selected, [&](auto &component) {
-                component.color = color;
-            });
-            if (scene.editor().has<Engine::LightComponent>(selected)) {
-                scene.editor().modify<Engine::LightComponent>(selected, [&](auto &component) {
-                    component.color = color;
-                });
-            }
-        }
-        }
-    }
     ImGui::TextDisabled("COMPONENTS");
     ImGui::Spacing();
     ImGui::SetNextItemWidth(-1.0F);
@@ -749,7 +705,6 @@ bool ComponentsPanel::draw(Engine::ScenePreset &scene, const std::vector<Engine:
     ImGui::PopStyleColor(3);
     if (ImGui::BeginPopup("Add Component")) {
         const bool hasScript = scene.editor().has<Engine::ScriptComponent>(selected);
-        const bool hasColorPicker = scene.editor().has<Engine::ColorPickerComponent>(selected);
         const bool hasCollider = scene.editor().has<Engine::ColliderComponent>(selected);
         const bool hasRigidbody = scene.editor().has<Engine::RigidbodyComponent>(selected);
         const bool hasSmokeEmitter = scene.editor().has<Engine::SmokeEmitterComponent>(selected);
@@ -763,11 +718,6 @@ bool ComponentsPanel::draw(Engine::ScenePreset &scene, const std::vector<Engine:
             ImGui::CloseCurrentPopup();
         }
         if (hasScript) ImGui::TextDisabled("Script component already added");
-        if (ImGui::MenuItem("Color Picker", nullptr, false, !hasColorPicker)) {
-            scene.editor().add<Engine::ColorPickerComponent>(selected);
-            ImGui::CloseCurrentPopup();
-        }
-        if (hasColorPicker) ImGui::TextDisabled("Color Picker component already added");
         if (ImGui::MenuItem("Collider", nullptr, false, !hasCollider)) {
             scene.editor().add<Engine::ColliderComponent>(selected);
             ImGui::CloseCurrentPopup();
