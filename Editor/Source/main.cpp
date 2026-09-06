@@ -57,6 +57,7 @@ using Editor::SceneHistory;
 #include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <future>
 #include <limits>
 #include <sstream>
 #include <stdexcept>
@@ -167,9 +168,7 @@ int main(int argc, char** argv) {
         const auto initialScene = restoreScene
                                       ? previousSession.scenePath
                                       : project.startupScene();
-        if (std::filesystem::is_regular_file(initialScene)) {
-            Engine::SceneSerializer::load(scene, initialScene);
-        }
+        const bool loadInitialSceneAsync = std::filesystem::is_regular_file(initialScene);
         EditorSceneSession::setScenePath(initialScene);
         Engine::ScriptSystem scriptSystem{Engine::ScriptRegistry::instance()};
         Engine::PhysicsSystem physicsSystem{};
@@ -181,6 +180,9 @@ int main(int argc, char** argv) {
         renderer.initialize(scene, window);
         SceneHistory history;
         history.reset(scene);
+        std::optional<std::future<std::unique_ptr<Engine::ScenePreset>>> initialSceneLoad;
+        bool startInitialSceneLoad = loadInitialSceneAsync;
+        bool initialSceneSyncPending = false;
         EntityClipboard clipboard;
         Engine::Entity selectedEntity = Engine::NullEntity;
         std::vector<Engine::Entity> selectedEntities;
@@ -226,6 +228,22 @@ int main(int argc, char** argv) {
         while (running) {
             const auto start = std::chrono::steady_clock::now();
             Engine::Renderer::beginFrame();
+            if (initialSceneLoad &&
+                initialSceneLoad->wait_for(std::chrono::seconds::zero()) == std::future_status::ready) {
+                try {
+                    auto loadedScene = initialSceneLoad->get();
+                    Engine::SceneSerializer::replace(scene, *loadedScene);
+                    history.reset(scene);
+                    lastPersistedSceneRevision = scene.editor().mutationRevision();
+                    setSelection(Engine::NullEntity);
+                    initialSceneSyncPending = true;
+                    Editor::ConsolePanel::info("Scene loaded: " + initialScene.string());
+                } catch (const std::exception& error) {
+                    Editor::ConsolePanel::error("Could not load startup scene: " +
+                                                std::string{error.what()});
+                }
+                initialSceneLoad.reset();
+            }
             const Engine::EditorEventState events = renderer.pollEditorEvents();
             if (events.quitRequested) {
                 running = false;
@@ -585,12 +603,26 @@ int main(int argc, char** argv) {
             ImGui::Render();
             renderer.renderFrame();
 
-            if (sceneResourceSyncPending) {
+            if (sceneResourceSyncPending || initialSceneSyncPending) {
                 renderer.synchronizeScene(scene);
                 // Duplicated objects do not exist in the renderer's cached
                 // renderable list until synchronization completes. Reapply
                 // the selection so the next frame can outline it immediately.
                 if (sceneStructureChanged) renderer.setEditorSelection(selectedEntity);
+                initialSceneSyncPending = false;
+            }
+
+            // Do not let file parsing, GLTF decoding or image decompression
+            // postpone the first editor frame. The worker builds an isolated
+            // Scene; only its completed registry is adopted on this thread.
+            if (startInitialSceneLoad) {
+                startInitialSceneLoad = false;
+                Editor::ConsolePanel::info("Loading startup scene in background: " + initialScene.string());
+                initialSceneLoad.emplace(std::async(std::launch::async, [initialScene] {
+                    auto loadedScene = std::make_unique<Engine::ScenePreset>();
+                    Engine::SceneSerializer::load(*loadedScene, initialScene);
+                    return loadedScene;
+                }));
             }
 
             // Keep the editor UI responsive without unnecessarily throttling

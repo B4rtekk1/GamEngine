@@ -40,11 +40,11 @@ void PlayerController::onUpdate(const float deltaTime) {
     float movementYaw = body.rotation().y();
     bool foundPrimaryCamera = false;
     std::unordered_map<Engine::UUID, Engine::Entity> entitiesByUuid;
-    registry().view<Engine::UUIDComponent>([&](const Engine::Entity entity,
+    ecs().view<Engine::UUIDComponent>([&](const Engine::Entity entity,
                                                 const Engine::UUIDComponent& uuid) {
         entitiesByUuid.emplace(uuid.value, entity);
     });
-    registry().view<Engine::CameraComponent, Engine::Transform, Engine::UUIDComponent>(
+    ecs().view<Engine::CameraComponent, Engine::Transform, Engine::UUIDComponent>(
         [&](const Engine::Entity entity, const Engine::CameraComponent& camera,
             const Engine::Transform& cameraTransform, const Engine::UUIDComponent&) {
             if (foundPrimaryCamera || !camera.primary) return;
@@ -55,12 +55,12 @@ void PlayerController::onUpdate(const float deltaTime) {
             movementYaw = cameraTransform.rotation.y() +
                           Engine::Input::mouseDelta().x() * MouseSensitivity;
             Engine::Entity current = entity;
-            while (registry().has<Engine::ParentComponent>(current)) {
-                const Engine::UUID parentUuid = registry().get<Engine::ParentComponent>(current).parentUuid;
+            while (ecs().has<Engine::ParentComponent>(current)) {
+                const Engine::UUID parentUuid = ecs().get<Engine::ParentComponent>(current).parentUuid;
                 const auto parent = entitiesByUuid.find(parentUuid);
-                if (parent == entitiesByUuid.end() || !registry().has<Engine::Transform>(parent->second)) break;
+                if (parent == entitiesByUuid.end() || !ecs().has<Engine::Transform>(parent->second)) break;
                 current = parent->second;
-                movementYaw += registry().get<Engine::Transform>(current).rotation.y();
+                movementYaw += ecs().get<Engine::Transform>(current).rotation.y();
             }
             foundPrimaryCamera = true;
         });

@@ -695,6 +695,19 @@ namespace Engine {
         }
         scene.rebuildObjectHandles();
     }
+
+    void SceneSerializer::replace(Scene &destination, Scene &source) {
+        if (&destination == &source) return;
+
+        // GameObject wrappers keep references to their owning Registry. Drop
+        // them before moving the registry and recreate wrappers bound to the
+        // destination scene afterwards. No GPU state is touched here: callers
+        // synchronize it on the render thread after the hand-off.
+        destination.detachObjectHandles();
+        destination.registry_ = std::move(source.registry_);
+        source.detachObjectHandles();
+        destination.rebuildObjectHandles();
+    }
 #endif
 
 #ifndef SCENE_SERIALIZER_SCENE_ONLY

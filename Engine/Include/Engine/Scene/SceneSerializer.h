@@ -74,5 +74,13 @@ namespace Engine {
         static void load(Scene &scene, std::istream &input);
 
         static void load(Scene &scene, std::istream &input, std::optional<std::uint32_t> &msaaSamples);
+
+        /**
+         * Adopts an already decoded scene without parsing or copying its registry.
+         *
+         * Both scenes must be quiescent. This is intended for handing a scene
+         * decoded by a worker to the owner/render thread.
+         */
+        static void replace(Scene &destination, Scene &source);
     };
 } // namespace Engine
