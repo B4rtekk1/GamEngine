@@ -257,7 +257,11 @@ ForwardFragmentOutput fragmentMain(ForwardFragmentInput input)
         emissive *= materialTextures[NonUniformResourceIndex(material.extensionTextureIndices.x)]
             .Sample(input.texCoord).rgb;
     }
-    float3 color = 0.9 * albedo * ao + direct + emissive;
+    // Temporary low-level ambient until image-based lighting supplies diffuse
+    // irradiance and prefiltered specular.  A large albedo term here washes
+    // out both direct-light colour and HDR emissive validation assets.
+    float3 ambient = 0.03 * albedo * ao;
+    float3 color = ambient + direct + emissive;
     // Foliage has a cheap, stable back-lighting term.  The flag is deliberately
     // material data rather than an asset-name heuristic at runtime.
     if ((material.textureIndices.w & 16) != 0 && material.auxiliaryTextureIndices.z >= 0) {
