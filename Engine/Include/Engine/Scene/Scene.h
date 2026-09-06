@@ -490,12 +490,31 @@ namespace Engine {
 
     private:
         friend class Application;
+        friend class Actor;
         friend class SceneSerializer;
         friend class Renderer;
         friend class ScriptSystem;
         friend class PhysicsSystem;
 
         void rebuildObjectHandles();
+
+        /** Queues actor destruction while ScriptSystem is executing scripts. */
+        [[nodiscard]] bool deferDestroyDuringScriptUpdate(const Actor &actor) {
+            if (!deferringScriptDestruction_) return false;
+            deferredDestroyedActors_.push_back(actor.objectId_);
+            return true;
+        }
+
+        void beginScriptUpdateCommands() noexcept { deferringScriptDestruction_ = true; }
+
+        void flushScriptUpdateCommands() {
+            deferringScriptDestruction_ = false;
+            auto destroyedActors = std::move(deferredDestroyedActors_);
+            deferredDestroyedActors_.clear();
+            for (const ObjectId objectId : destroyedActors) {
+                destroy(Actor{*this, objectId});
+            }
+        }
 
         void setContent(Assets::Content &content) noexcept { content_ = &content; }
 
@@ -516,5 +535,7 @@ namespace Engine {
         Entity particleEntity_{NullEntity};
         Assets::Content *content_{};
         bool particleScene_ = false;
+        bool deferringScriptDestruction_ = false;
+        std::vector<ObjectId> deferredDestroyedActors_;
     };
 } // namespace Engine

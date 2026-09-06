@@ -7,6 +7,7 @@
 #include "Engine/Scene/Components/IdentityComponents.h"
 
 #include <exception>
+#include <vector>
 
 namespace Engine {
     namespace {
@@ -149,14 +150,36 @@ namespace Engine {
 
     void ScriptSystem::update(Scene &scene, const float deltaTime) const {
         auto &registry = scene.registry();
-        registry.view<ScriptComponent>([&](const Entity entity, ScriptComponent &component) {
-            updateOne(registry, entity, component, deltaTime, &scene);
+        // A script is gameplay-facing code: it may destroy itself, spawn an
+        // actor, or add/remove components.  Do not run it from a mutable view,
+        // because Registry deliberately rejects those structural changes while
+        // such a view is being iterated.  Capture the work list first, then
+        // resolve every component again immediately before it is executed.
+        std::vector<Entity> scriptedEntities;
+        registry.view<ScriptComponent>([&](const Entity entity, const ScriptComponent &) {
+            scriptedEntities.push_back(entity);
         });
+        scene.beginScriptUpdateCommands();
+        try {
+            for (const Entity entity : scriptedEntities) {
+                if (!registry.valid(entity) || !registry.has<ScriptComponent>(entity)) continue;
+                updateOne(registry, entity, registry.get<ScriptComponent>(entity), deltaTime, &scene);
+            }
+        } catch (...) {
+            scene.flushScriptUpdateCommands();
+            throw;
+        }
+        scene.flushScriptUpdateCommands();
     }
 
     void ScriptSystem::update(Registry &registry, const float deltaTime) const {
-        registry.view<ScriptComponent>([&](const Entity entity, ScriptComponent &component) {
-            updateOne(registry, entity, component, deltaTime, nullptr);
+        std::vector<Entity> scriptedEntities;
+        registry.view<ScriptComponent>([&](const Entity entity, const ScriptComponent &) {
+            scriptedEntities.push_back(entity);
         });
+        for (const Entity entity : scriptedEntities) {
+            if (!registry.valid(entity) || !registry.has<ScriptComponent>(entity)) continue;
+            updateOne(registry, entity, registry.get<ScriptComponent>(entity), deltaTime, nullptr);
+        }
     }
 } // namespace Engine

@@ -215,7 +215,9 @@ namespace Engine {
     }
 
     void Actor::destroy() {
-        if (scene_ != nullptr && valid()) { scene_->destroy(*this);
+        if (scene_ != nullptr && valid()) {
+            if (scene_->deferDestroyDuringScriptUpdate(*this)) return;
+            scene_->destroy(*this);
 }
         scene_ = nullptr;
         objectId_ = NullObjectId;

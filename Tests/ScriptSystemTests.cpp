@@ -67,6 +67,26 @@ public:
     void onUpdate(float) override { throw std::runtime_error{"test failure"}; }
 };
 
+class SelfDestroyingTestScript final : public Engine::Script {
+public:
+    static inline int updates = 0;
+
+    void onUpdate(float) override {
+        ++updates;
+        actor().destroy();
+    }
+};
+
+class SpawningTestScript final : public Engine::Script {
+public:
+    static inline int updates = 0;
+
+    void onUpdate(float) override {
+        ++updates;
+        (void) actor().createChild("Spawned enemy");
+    }
+};
+
 TEST(ScriptSystem, ManagesRuntimeLifecycleAndTransformChanges) {
     LifecycleTestScript::reset();
     auto& scripts = Engine::ScriptRegistry::instance();
@@ -187,6 +207,26 @@ TEST(ScriptSystem, AttachesSceneAwareScriptsToTheirActor) {
     EXPECT_EQ(SceneAwareTestScript::actorName, "Scripted actor");
     EXPECT_TRUE(SceneAwareTestScript::foundInScene);
     EXPECT_FLOAT_EQ(actor.position().y(), 7.0F);
+}
+
+TEST(ScriptSystem, AllowsStructuralGameplayChangesDuringScriptUpdate) {
+    SelfDestroyingTestScript::updates = 0;
+    SpawningTestScript::updates = 0;
+    auto& scripts = Engine::ScriptRegistry::instance();
+    scripts.registerClass<SelfDestroyingTestScript>("SelfDestroyingTestScript");
+    scripts.registerClass<SpawningTestScript>("SpawningTestScript");
+    Engine::Scene scene;
+    const auto doomed = scene.createActor("Doomed");
+    const auto spawner = scene.createActor("Spawner");
+    doomed.addScript("SelfDestroyingTestScript");
+    spawner.addScript("SpawningTestScript");
+
+    Engine::ScriptSystem{scripts}.update(scene, 0.1F);
+
+    EXPECT_EQ(SelfDestroyingTestScript::updates, 1);
+    EXPECT_EQ(SpawningTestScript::updates, 1);
+    EXPECT_FALSE(doomed.valid());
+    EXPECT_TRUE(scene.findActor("Spawned enemy").valid());
 }
 
 } // namespace
