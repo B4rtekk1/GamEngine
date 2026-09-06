@@ -170,6 +170,11 @@ void load_materials(const cgltf_data& data, Mesh& mesh) {
         material.aoTexture = image_index(data, source.occlusion_texture);
         material.aoStrength = source.occlusion_texture.texture == nullptr
                                       ? 1.0F : source.occlusion_texture.scale;
+        material.emissiveTexture = image_index(data, source.emissive_texture);
+        material.emissiveColor = {source.emissive_factor[0], source.emissive_factor[1],
+                                  source.emissive_factor[2], 1.0F};
+        material.emissiveIntensity = source.has_emissive_strength
+            ? source.emissive_strength.emissive_strength : 1.0F;
         material.alphaMode = source.alpha_mode == cgltf_alpha_mode_mask ? AlphaMode::Mask :
                              source.alpha_mode == cgltf_alpha_mode_blend ? AlphaMode::Blend :
                              AlphaMode::Opaque;

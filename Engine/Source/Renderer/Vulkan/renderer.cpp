@@ -20,6 +20,7 @@
 #include "Engine/Renderer/Vulkan/msaa.h"
 #include "Engine/Renderer/Vulkan/depth_buffer.h"
 #include "Engine/Renderer/Vulkan/hdr_buffer.h"
+#include "Engine/Renderer/Passes/BloomPass.h"
 #include "Engine/Renderer/Vulkan/ViewportRenderTarget.h"
 #include "Engine/Renderer/ViewportCamera.h"
 #include "Engine/Renderer/shader_loader.h"
@@ -164,6 +165,7 @@ namespace Engine {
         SkyPass skyPass;
         TonemapPass tonemapPass;
         TemporalAaPass temporalAaPass;
+        BloomPass bloomPass;
         GraphicsPipeline particlePipeline;
         UI::CanvasRenderer canvasRenderer;
     };
@@ -179,6 +181,7 @@ namespace Engine {
                          SkyPass &skyPass,
                          TonemapPass &tonemapPass,
                          TemporalAaPass &temporalAaPass,
+                         BloomPass &bloomPass,
                          GraphicsPipeline &particlePipeline,
                          UI::CanvasRenderer &canvasRenderer)
             : window(window), forwardPass(forwardPass),
@@ -186,6 +189,7 @@ namespace Engine {
               skyPass(skyPass),
               tonemapPass(tonemapPass),
               temporalAaPass(temporalAaPass),
+              bloomPass(bloomPass),
               canvasRenderer(canvasRenderer),
               scene(scene),
               registry(scene.registry()),
@@ -437,6 +441,7 @@ namespace Engine {
             destroyCullingResources();
             tonemapPass.destroy();
             temporalAaPass.destroy();
+            bloomPass.destroy();
             destroyVelocityResources();
             if (hdrFramebuffer != VK_NULL_HANDLE) {
                 vkDestroyFramebuffer(device, hdrFramebuffer, nullptr);
@@ -561,6 +566,7 @@ namespace Engine {
             destroyCullingResources();
             tonemapPass.destroy();
             temporalAaPass.destroy();
+            bloomPass.destroy();
             destroyVelocityResources();
             if (hdrFramebuffer != VK_NULL_HANDLE) {
                 vkDestroyFramebuffer(device, hdrFramebuffer, nullptr);

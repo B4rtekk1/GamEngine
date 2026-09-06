@@ -19,9 +19,10 @@
                 meshTextureOffsets.emplace(&mesh, offset);
                 for (std::size_t i = 0; i < mesh.images.size(); ++i) {
                     const Mesh::Image& image = mesh.images[i];
-                    const bool isBaseColorTexture = std::ranges::any_of(
+                    const bool isColorTexture = std::ranges::any_of(
                         mesh.materials, [i](const PBRMaterial& material) {
-                            return material.baseColorTexture == static_cast<std::int32_t>(i);
+                            const auto index = static_cast<std::int32_t>(i);
+                            return material.baseColorTexture == index || material.emissiveTexture == index;
                         });
                     if (image.width == 0 || image.height == 0 || image.rgbaPixels.empty()) {
                         materialTextures.emplace_back();
@@ -30,7 +31,7 @@
                     Texture2D texture;
                     texture.create(vulkanDevice.physical(), device, commandPool,
                                    vulkanDevice.graphicsQueue(), image.width, image.height,
-                                   image.rgbaPixels, isBaseColorTexture ? TextureColorSpace::SRGB
+                                   image.rgbaPixels, isColorTexture ? TextureColorSpace::SRGB
                                                                         : TextureColorSpace::Linear,
                                    true,
                                    vulkanDevice.allocator());
@@ -51,7 +52,8 @@
                 for (std::size_t i = 0; i < mesh.images.size(); ++i) {
                     const Mesh::Image& image = mesh.images[i];
                     const bool srgb = std::ranges::any_of(mesh.materials, [i](const PBRMaterial& material) {
-                        return material.baseColorTexture == static_cast<std::int32_t>(i);
+                        const auto index = static_cast<std::int32_t>(i);
+                        return material.baseColorTexture == index || material.emissiveTexture == index;
                     });
                     if (image.width == 0 || image.height == 0 || image.rgbaPixels.empty()) {
                         materialTextures.emplace_back();
@@ -68,6 +70,33 @@
                     materialTextures.push_back(std::move(texture));
                 }
             });
+        }
+
+        [[nodiscard]] GPUMaterialData packMaterial(const PBRMaterial& source,
+                                                   const Mesh& mesh) const {
+            const auto textureIndex = [&](const std::int32_t localIndex) {
+                const auto offset = meshTextureOffsets.find(&mesh);
+                if (localIndex < 0 || offset == meshTextureOffsets.end() ||
+                    static_cast<std::size_t>(localIndex) >= mesh.images.size()) return -1;
+                return static_cast<std::int32_t>(offset->second + localIndex);
+            };
+            const int materialFlags = (source.doubleSided ? 1 : 0) |
+                (static_cast<int>(source.alphaMode) << 1) | (source.terrainLayered ? 8 : 0) |
+                (source.shadingModel == MaterialShadingModel::Foliage ? 16 : 0);
+            return {
+                glm::vec4{source.baseColor.r(), source.baseColor.g(), source.baseColor.b(), source.metallic},
+                glm::vec4{source.roughness, source.aoStrength, source.alphaCutoff, 0.0F},
+                glm::ivec4{textureIndex(source.baseColorTexture), textureIndex(source.metallicRoughnessTexture),
+                           textureIndex(source.normalTexture), materialFlags},
+                glm::ivec4{textureIndex(source.terrainLayerTextures[0]), textureIndex(source.terrainLayerTextures[1]),
+                           textureIndex(source.terrainLayerTextures[2]), textureIndex(source.terrainLayerTextures[3])},
+                glm::ivec4{textureIndex(source.aoTexture), textureIndex(source.opacityTexture),
+                           textureIndex(source.translucencyTexture), textureIndex(source.displacementTexture)},
+                glm::vec4{source.normalScale, source.translucency, source.displacementScale, source.specular},
+                glm::ivec4{textureIndex(source.emissiveTexture), textureIndex(source.specularTexture), -1, -1},
+                glm::vec4{source.emissiveColor.r(), source.emissiveColor.g(), source.emissiveColor.b(),
+                          std::max(0.0F, source.emissiveIntensity)},
+            };
         }
 
         [[nodiscard]] std::uint64_t currentRenderableTopologySignature() const {
@@ -590,30 +619,7 @@
                 for (std::uint32_t slot = 0; slot < materialSlots; ++slot) {
                     const PBRMaterial source = mesh.materials.empty() ? grass.material :
                         (slot < mesh.materials.size() ? mesh.materials[slot] : PBRMaterial{});
-                    const auto textureIndex = [&](const std::int32_t localIndex) {
-                        const auto textures = meshTextureOffsets.find(&mesh);
-                        if (localIndex < 0 || textures == meshTextureOffsets.end() ||
-                            static_cast<std::size_t>(localIndex) >= mesh.images.size()) return -1;
-                        return static_cast<std::int32_t>(textures->second + localIndex);
-                    };
-                    materials[offsetIt->second + slot] = {
-                        glm::vec4{source.baseColor.r(), source.baseColor.g(), source.baseColor.b(), source.metallic},
-                        glm::vec4{source.roughness, source.aoStrength, source.alphaCutoff, 0.0F},
-                        glm::ivec4{textureIndex(source.baseColorTexture),
-                                   textureIndex(source.metallicRoughnessTexture), textureIndex(source.normalTexture),
-                                   (source.doubleSided ? 1 : 0) |
-                                   (static_cast<int>(source.alphaMode) << 1) |
-                                   (source.terrainLayered ? 8 : 0) |
-                                   (source.shadingModel == MaterialShadingModel::Foliage ? 16 : 0)},
-                        glm::ivec4{textureIndex(source.terrainLayerTextures[0]),
-                                   textureIndex(source.terrainLayerTextures[1]),
-                                   textureIndex(source.terrainLayerTextures[2]),
-                                   textureIndex(source.terrainLayerTextures[3])},
-                        glm::ivec4{textureIndex(source.aoTexture), textureIndex(source.opacityTexture),
-                                   textureIndex(source.translucencyTexture), textureIndex(source.displacementTexture)},
-                        glm::vec4{source.normalScale, source.translucency,
-                                  source.displacementScale, source.specular},
-                    };
+                    materials[offsetIt->second + slot] = packMaterial(source, mesh);
                 }
             });
             for (RendererInstanceData& model : instanceModels) {
@@ -1091,33 +1097,7 @@
                     const PBRMaterial source = mesh.materials.empty()
                         ? renderer->material
                         : (slot < mesh.materials.size() ? mesh.materials[slot] : PBRMaterial{});
-                    const auto textureIndex = [&](const std::int32_t localIndex) {
-                        const auto offset = meshTextureOffsets.find(&mesh);
-                        if (localIndex < 0 || offset == meshTextureOffsets.end() ||
-                            static_cast<std::size_t>(localIndex) >= mesh.images.size()) return -1;
-                        return static_cast<std::int32_t>(offset->second + localIndex);
-                    };
-                    const GPUMaterialData material{
-                        glm::vec4{source.baseColor.r(), source.baseColor.g(),
-                                  source.baseColor.b(), source.metallic},
-                        glm::vec4{source.roughness, source.aoStrength,
-                                  source.alphaCutoff, 0.0F},
-                        glm::ivec4{textureIndex(source.baseColorTexture),
-                                   textureIndex(source.metallicRoughnessTexture),
-                                   textureIndex(source.normalTexture),
-                                   (source.doubleSided ? 1 : 0) |
-                                   (static_cast<int>(source.alphaMode) << 1) |
-                                   (source.terrainLayered ? 8 : 0) |
-                                   (source.shadingModel == MaterialShadingModel::Foliage ? 16 : 0)},
-                        glm::ivec4{textureIndex(source.terrainLayerTextures[0]),
-                                   textureIndex(source.terrainLayerTextures[1]),
-                                   textureIndex(source.terrainLayerTextures[2]),
-                                   textureIndex(source.terrainLayerTextures[3])},
-                        glm::ivec4{textureIndex(source.aoTexture), textureIndex(source.opacityTexture),
-                                   textureIndex(source.translucencyTexture), textureIndex(source.displacementTexture)},
-                        glm::vec4{source.normalScale, source.translucency,
-                                  source.displacementScale, source.specular},
-                    };
+                    const GPUMaterialData material = packMaterial(source, mesh);
                     GPUMaterialData& destination = materials[record.materialTableOffset + slot];
                     if (!optimizationFeatures.materialCaching ||
                         !sameMaterial(destination, material)) {

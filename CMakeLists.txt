@@ -182,6 +182,7 @@ add_library(Engine
         Engine/Source/Renderer/Passes/ShadowPass.cpp
         Engine/Source/Renderer/Passes/SkyPass.cpp
         Engine/Source/Renderer/Passes/TonemapPass.cpp
+        Engine/Source/Renderer/Passes/BloomPass.cpp
         Engine/Source/Renderer/Passes/TemporalAaPass.cpp
         Engine/Source/Renderer/Culling/GPUCullingPass.cpp
         Engine/Source/Renderer/Culling/GPUInstanceCullingPass.cpp
@@ -296,6 +297,7 @@ set(SLANG_SHADER_SOURCES
         Assets/Shaders/Particles/particle_billboard.slang
         Assets/Shaders/Particles/particle_simulation.slang
         Assets/Shaders/PostProcess/aces_tonemap.slang
+        Assets/Shaders/PostProcess/bloom_downsample.slang
         Assets/Shaders/PostProcess/temporal_aa.slang
         Assets/Shaders/PostProcess/temporal_velocity.slang
         Assets/Shaders/Samples/basic_pbr.slang

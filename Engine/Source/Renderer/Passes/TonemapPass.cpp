@@ -25,7 +25,7 @@ TonemapPass::~TonemapPass() {
 void TonemapPass::create(const VkDevice device, const VkFormat swapchainFormat,
                          const VkExtent2D extent,
                          const std::vector<VkImageView>& swapchainViews,
-                         const VkImageView hdrView, const VkSampler hdrSampler,
+                         const VkImageView hdrView, const VkSampler hdrSampler, const VkImageView bloomView,
                          Assets::AssetManager& assets,
                          const std::array<VkImageView, 2> temporalViews) {
     if (device == VK_NULL_HANDLE || swapchainFormat == VK_FORMAT_UNDEFINED ||
@@ -44,8 +44,11 @@ void TonemapPass::create(const VkDevice device, const VkFormat swapchainFormat,
         binding.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
         VkDescriptorSetLayoutCreateInfo layoutInfo{
             VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
-        layoutInfo.bindingCount = 1;
-        layoutInfo.pBindings = &binding;
+        VkDescriptorSetLayoutBinding bloomBinding = binding;
+        bloomBinding.binding = 1;
+        std::array bindings{binding, bloomBinding};
+        layoutInfo.bindingCount = static_cast<std::uint32_t>(bindings.size());
+        layoutInfo.pBindings = bindings.data();
         if (vkCreateDescriptorSetLayout(device_, &layoutInfo, nullptr,
                                         &descriptorSetLayout_) != VK_SUCCESS) {
             throw std::runtime_error("Could not create tonemap descriptor layout");
@@ -80,7 +83,7 @@ void TonemapPass::create(const VkDevice device, const VkFormat swapchainFormat,
             }
         }
 
-        VkDescriptorPoolSize poolSize{VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 3};
+        VkDescriptorPoolSize poolSize{VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 6};
         VkDescriptorPoolCreateInfo poolInfo{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
         poolInfo.maxSets = static_cast<std::uint32_t>(descriptorSets_.size());
         poolInfo.poolSizeCount = 1;
@@ -103,11 +106,15 @@ void TonemapPass::create(const VkDevice device, const VkFormat swapchainFormat,
             temporalViews[0] == VK_NULL_HANDLE ? hdrView : temporalViews[0],
             temporalViews[1] == VK_NULL_HANDLE ? hdrView : temporalViews[1]};
         for (std::size_t index = 0; index < descriptorSets_.size(); ++index) {
-            const VkDescriptorImageInfo imageInfo{hdrSampler, sources[index], VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
-            VkWriteDescriptorSet write{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
-            write.dstSet = descriptorSets_[index]; write.dstBinding = 0; write.descriptorCount = 1;
-            write.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER; write.pImageInfo = &imageInfo;
-            vkUpdateDescriptorSets(device_, 1, &write, 0, nullptr);
+            const VkDescriptorImageInfo images[2]{{hdrSampler, sources[index], VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL},
+                                                  {hdrSampler, bloomView, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL}};
+            VkWriteDescriptorSet writes[2]{};
+            for (std::uint32_t bindingIndex = 0; bindingIndex < 2; ++bindingIndex) {
+                writes[bindingIndex] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET}; writes[bindingIndex].dstSet = descriptorSets_[index];
+                writes[bindingIndex].dstBinding = bindingIndex; writes[bindingIndex].descriptorCount = 1;
+                writes[bindingIndex].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER; writes[bindingIndex].pImageInfo = &images[bindingIndex];
+            }
+            vkUpdateDescriptorSets(device_, 2, writes, 0, nullptr);
         }
     } catch (...) {
         destroy();

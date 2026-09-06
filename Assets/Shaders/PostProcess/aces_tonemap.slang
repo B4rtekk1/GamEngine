@@ -16,6 +16,8 @@ TonemapVertexOutput vertexMain(uint vertexIndex : SV_VertexID)
 
 [[vk::binding(0, 0)]]
 Sampler2D hdrImage;
+[[vk::binding(1, 0)]]
+Sampler2D bloomImage;
 
 struct TonemapSettings
 {
@@ -51,7 +53,7 @@ float3 acesFilm(float3 color)
 TonemapFragmentOutput fragmentMain(TonemapFragmentInput input)
 {
     TonemapFragmentOutput output;
-    float3 color = hdrImage.Sample(input.uv).rgb * exp2(settings.exposure);
+    float3 color = (hdrImage.Sample(input.uv).rgb + bloomImage.Sample(input.uv).rgb * 0.12) * exp2(settings.exposure);
     color = acesFilm(color);
     if (settings.applyGamma > 0.5)
         color = pow(color, float3(1.0 / 2.2));

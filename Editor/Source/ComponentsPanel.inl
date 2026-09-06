@@ -172,10 +172,21 @@ bool ComponentsPanel::draw(Engine::ScenePreset &scene, const std::vector<Engine:
                                       &renderer.material.aoStrength, 0.0F, 1.0F, "%.2f");
         changed |= ImGui::DragFloat("Normal Scale##mesh-material", &renderer.material.normalScale,
                                     0.01F, 0.0F, 10.0F, "%.2f");
+        ImGui::Separator();
+        ImGui::TextDisabled("Emission");
+        float emissive[3] = {renderer.material.emissiveColor.r(), renderer.material.emissiveColor.g(),
+                             renderer.material.emissiveColor.b()};
+        if (ImGui::ColorEdit3("Emissive Color##mesh-material", emissive, ImGuiColorEditFlags_Float)) {
+            renderer.material.emissiveColor = Engine::Color{emissive[0], emissive[1], emissive[2]}.clamped();
+            changed = true;
+        }
+        changed |= ImGui::DragFloat("Emissive Intensity##mesh-material", &renderer.material.emissiveIntensity,
+                                    0.1F, 0.0F, 1000.0F, "%.2f");
         renderer.material.metallic = std::clamp(renderer.material.metallic, 0.0F, 1.0F);
         renderer.material.roughness = std::clamp(renderer.material.roughness, 0.0F, 1.0F);
         renderer.material.aoStrength = std::clamp(renderer.material.aoStrength, 0.0F, 1.0F);
         renderer.material.normalScale = std::max(0.0F, renderer.material.normalScale);
+        renderer.material.emissiveIntensity = std::max(0.0F, renderer.material.emissiveIntensity);
 
         int alphaMode = static_cast<int>(renderer.material.alphaMode);
         constexpr const char* alphaModes[] = {"Opaque", "Mask", "Blend"};

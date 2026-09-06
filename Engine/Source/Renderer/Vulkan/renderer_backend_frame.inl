@@ -739,6 +739,10 @@
                 temporalAaPass.record(commandBuffer, swapchain.extent(), taaJitterX, taaJitterY);
             }
 
+            bloomPass.record(commandBuffer,
+                taaResolveActive ? temporalAaPass.resolvedView() : hdrBuffer.imageView(),
+                hdrBuffer.sampler());
+
             if (editorUiActive) {
                 VkRenderPassBeginInfo pass{VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO};
                 pass.renderPass = editorUiRenderPass;
@@ -799,6 +803,7 @@
             canvasRenderer.destroy();
             tonemapPass.destroy();
             temporalAaPass.destroy();
+            bloomPass.destroy();
             destroyVelocityResources();
             if (hdrFramebuffer != VK_NULL_HANDLE) {
                 vkDestroyFramebuffer(device, hdrFramebuffer, nullptr);
@@ -859,6 +864,7 @@
             canvasRenderer.destroy();
             tonemapPass.destroy();
             temporalAaPass.destroy();
+            bloomPass.destroy();
             destroyVelocityResources();
             if (hdrFramebuffer != VK_NULL_HANDLE) {
                 vkDestroyFramebuffer(device, hdrFramebuffer, nullptr);

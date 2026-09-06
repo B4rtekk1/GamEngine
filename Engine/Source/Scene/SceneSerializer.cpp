@@ -49,6 +49,7 @@ namespace Engine {
         constexpr std::size_t MaxEntities = 10'000'000;
         constexpr std::size_t FloatBufferSize = 32;
         constexpr std::uint32_t LegacyFormatVersion = 11;
+        constexpr std::uint32_t TerrainFormatVersion = 12;
         constexpr std::uint32_t TerrainDataVersion = 1;
         constexpr std::array<char, 8> TerrainDataMagic{'G', 'E', 'T', 'E', 'R', 'R', '1', '\0'};
 
@@ -235,9 +236,14 @@ namespace Engine {
             output << ' ' << static_cast<int>(material.alphaMode) << ' '
                     << static_cast<int>(material.doubleSided) << ' ';
             writeFloat(output, material.alphaCutoff);
+            output << ' ';
+            writeColorRgba(output, material.emissiveColor);
+            output << ' ';
+            writeFloat(output, material.emissiveIntensity);
+            output << ' ' << material.emissiveTexture;
         }
 
-        PBRMaterial readMaterial(std::istream &input) {
+        PBRMaterial readMaterial(std::istream &input, const std::uint32_t version) {
             PBRMaterial material;
             material.baseColor = readColorRgba(input, "material base color");
             material.metallic = readFloat(input, "material metallic");
@@ -253,6 +259,11 @@ namespace Engine {
             material.alphaMode = static_cast<AlphaMode>(alphaMode);
             material.doubleSided = readBool(input, "double-sided flag");
             material.alphaCutoff = readFloat(input, "alpha cutoff");
+            if (version >= SceneSerializer::FormatVersion) {
+                material.emissiveColor = readColorRgba(input, "material emissive color");
+                material.emissiveIntensity = readFloat(input, "material emissive intensity");
+                material.emissiveTexture = read<std::int32_t>(input, "emissive texture index");
+            }
             return material;
         }
 
@@ -778,7 +789,7 @@ namespace Engine {
         if (msaaSamples != 0 && msaaSamples != 2 && msaaSamples != 4) {
             throw std::invalid_argument("MSAA samples must be 0, 2 or 4");
         }
-        serialized << "GAMENGINE_SCENE " << (terrainData ? FormatVersion : LegacyFormatVersion) << '\n';
+        serialized << "GAMENGINE_SCENE " << FormatVersion << '\n';
         serialized << "SETTINGS MSAA " << msaaSamples << '\n';
         serialized << "MESHES " << meshes.size() << '\n';
         for (std::size_t meshId = 0; meshId < meshes.size(); ++meshId) {
@@ -1025,7 +1036,7 @@ namespace Engine {
         input.imbue(std::locale::classic());
         expect(input, "GAMENGINE_SCENE");
         const auto version = read<unsigned>(input, "format version");
-        if (version != LegacyFormatVersion && version != FormatVersion) {
+        if (version != LegacyFormatVersion && version != TerrainFormatVersion && version != FormatVersion) {
             invalidScene("unsupported format version " + std::to_string(version));
         }
         auto* terrainData = static_cast<std::istream*>(input.pword(terrainDataStreamSlot()));
@@ -1116,13 +1127,13 @@ namespace Engine {
             mesh->materials.reserve(materialCount);
             for (std::size_t material = 0; material < materialCount; ++material) {
                 expect(input, "MATERIAL");
-                mesh->materials.push_back(readMaterial(input));
+                mesh->materials.push_back(readMaterial(input, version));
             }
             mesh->images.reserve(imageCount);
             for (std::size_t image = 0; image < imageCount; ++image) {
                 const auto imageRecord = read<std::string>(input, "image record type");
                 if (imageRecord == "IMAGE_BIN") {
-                    if (version != FormatVersion || terrainData == nullptr) {
+                    if (version < TerrainFormatVersion || terrainData == nullptr) {
                         invalidScene("embedded image data sidecar is missing");
                     }
                     mesh->images.push_back(readImageBinary(input, *terrainData));
@@ -1256,7 +1267,7 @@ namespace Engine {
                     hasTerrain = true;
                     TerrainComponent terrain;
                     if (component == "TERRAIN_BIN") {
-                        if (version != FormatVersion || terrainData == nullptr) {
+                        if (version < TerrainFormatVersion || terrainData == nullptr) {
                             invalidScene("terrain binary data sidecar is missing");
                         }
                         terrain = readTerrainBinary(input, *terrainData);
@@ -1271,7 +1282,7 @@ namespace Engine {
                     if (meshId >= meshes.size()) invalidScene("grass references an unknown mesh");
                     TerrainGrassComponent grass;
                     grass.mesh = meshes[meshId];
-                    grass.material = readMaterial(input);
+                    grass.material = readMaterial(input, version);
                     grass.castShadow = readBool(input, "grass cast-shadow flag");
                     const std::size_t count = readCount(input, "grass instance count",
                                                         TerrainGrassComponent::MaximumInstances);
@@ -1311,7 +1322,7 @@ namespace Engine {
                     if (meshId >= 0) {
                         renderer.mesh = meshes[static_cast<std::size_t>(meshId)];
                     }
-                    renderer.material = readMaterial(input);
+                    renderer.material = readMaterial(input, version);
                     renderer.castShadow = readBool(input, "cast-shadow flag");
                     renderer.cullingBatch = read<std::uint32_t>(input, "culling batch");
                     loaded.add<MeshRenderer>(entity, std::move(renderer));

@@ -412,6 +412,7 @@
             canvasRenderer.destroy();
             tonemapPass.destroy();
             temporalAaPass.destroy();
+            bloomPass.destroy();
             destroyVelocityResources();
 
             if (hdrFramebuffer != VK_NULL_HANDLE) {
@@ -447,6 +448,7 @@
             createFramebuffers();
             createSceneViewportResources();
             createTemporalAaPass();
+            createBloomPass();
             createTonemapPass();
             createUIResources();
             createEditorUiResources();
@@ -482,7 +484,11 @@
         void createTonemapPass() const {
             tonemapPass.create(device, swapchain.format(), swapchain.extent(),
                                swapchain.imageViews(), hdrBuffer.imageView(),
-                               hdrBuffer.sampler(), assetManager, temporalAaPass.historyViews());
+                               hdrBuffer.sampler(), bloomPass.resultView(), assetManager, temporalAaPass.historyViews());
+        }
+
+        void createBloomPass() {
+            bloomPass.create(vulkanDevice.physical(), device, swapchain.extent(), vulkanDevice.allocator(), assetManager);
         }
 
         void createTemporalAaPass() {

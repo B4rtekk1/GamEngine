@@ -26,6 +26,7 @@ namespace Engine {
         void create(VkDevice device, VkFormat swapchainFormat, VkExtent2D extent,
                     const std::vector<VkImageView> &swapchainViews,
                     VkImageView hdrView, VkSampler hdrSampler,
+                    VkImageView bloomView,
                     Assets::AssetManager &assets,
                     std::array<VkImageView, 2> temporalViews = {});
 

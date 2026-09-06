@@ -19,5 +19,9 @@ namespace Engine {
         glm::ivec4 auxiliaryTextureIndices{-1};
         // normalScale, translucency strength, displacement scale, specular.
         glm::vec4 extensionScalars{};
+        // emissive, specular, reserved, reserved.
+        glm::ivec4 extensionTextureIndices{-1};
+        // Linear RGB emission colour and unconstrained HDR intensity.
+        glm::vec4 emissiveColorIntensity{};
     };
 } // namespace Engine

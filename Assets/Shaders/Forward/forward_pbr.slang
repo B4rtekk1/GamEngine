@@ -251,7 +251,13 @@ ForwardFragmentOutput fragmentMain(ForwardFragmentInput input)
     if (material.auxiliaryTextureIndices.x >= 0)
         ao = lerp(1.0, materialTextures[NonUniformResourceIndex(material.auxiliaryTextureIndices.x)].Sample(input.texCoord).r,
                   clamp(material.roughnessAmbientOcclusion.y, 0.0, 1.0));
-    float3 color = 0.9 * albedo * ao + direct;
+    float3 emissive = material.emissiveColorIntensity.rgb * material.emissiveColorIntensity.w;
+    if (material.extensionTextureIndices.x >= 0)
+    {
+        emissive *= materialTextures[NonUniformResourceIndex(material.extensionTextureIndices.x)]
+            .Sample(input.texCoord).rgb;
+    }
+    float3 color = 0.9 * albedo * ao + direct + emissive;
     // Foliage has a cheap, stable back-lighting term.  The flag is deliberately
     // material data rather than an asset-name heuristic at runtime.
     if ((material.textureIndices.w & 16) != 0 && material.auxiliaryTextureIndices.z >= 0) {

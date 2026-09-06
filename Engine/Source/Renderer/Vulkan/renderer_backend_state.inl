@@ -42,6 +42,7 @@
         SkyPass& skyPass;
         TonemapPass& tonemapPass;
         TemporalAaPass& temporalAaPass;
+        BloomPass& bloomPass;
         UI::CanvasRenderer& canvasRenderer;
         Texture2D fpsFontTexture;
         Texture2D fallbackMaterialTexture;
@@ -383,7 +384,15 @@
                    lhs.extensionScalars.x == rhs.extensionScalars.x &&
                    lhs.extensionScalars.y == rhs.extensionScalars.y &&
                    lhs.extensionScalars.z == rhs.extensionScalars.z &&
-                   lhs.extensionScalars.w == rhs.extensionScalars.w;
+                   lhs.extensionScalars.w == rhs.extensionScalars.w &&
+                   lhs.extensionTextureIndices.x == rhs.extensionTextureIndices.x &&
+                   lhs.extensionTextureIndices.y == rhs.extensionTextureIndices.y &&
+                   lhs.extensionTextureIndices.z == rhs.extensionTextureIndices.z &&
+                   lhs.extensionTextureIndices.w == rhs.extensionTextureIndices.w &&
+                   lhs.emissiveColorIntensity.x == rhs.emissiveColorIntensity.x &&
+                   lhs.emissiveColorIntensity.y == rhs.emissiveColorIntensity.y &&
+                   lhs.emissiveColorIntensity.z == rhs.emissiveColorIntensity.z &&
+                   lhs.emissiveColorIntensity.w == rhs.emissiveColorIntensity.w;
         }
 
         void markDirty(const std::size_t index,

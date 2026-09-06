@@ -25,6 +25,10 @@ namespace Engine {
         std::int32_t opacityTexture{-1};
         std::int32_t translucencyTexture{-1};
         std::int32_t displacementTexture{-1};
+        // Emission is radiance in linear HDR space.  Intensity deliberately
+        // has no upper clamp: values above one feed the FP16 HDR target.
+        Math::Color emissiveColor = Math::Color::black();
+        float emissiveIntensity{0.0F};
         std::int32_t emissiveTexture{-1};
         std::int32_t specularTexture{-1};
         // glTF normalTexture.scale; zero explicitly disables normal-map detail.
