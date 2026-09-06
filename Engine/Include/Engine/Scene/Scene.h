@@ -165,6 +165,17 @@ namespace Engine {
             return object == nullptr ? Actor{} : Actor{*this, object->objectId()};
         }
 
+        /** Returns the primary camera actor, or an invalid Actor when none is marked primary. */
+        [[nodiscard]] Actor primaryCamera() noexcept {
+            Actor result{};
+            registry_.view<CameraComponent>([&](const Entity entity, const CameraComponent &camera) {
+                if (!result.valid() && camera.primary) {
+                    if (const auto *object = findByEntity(entity)) result = Actor{*this, object->objectId()};
+                }
+            });
+            return result;
+        }
+
         /** Creates a camera actor. */
         [[nodiscard]] Actor createCamera(std::string name, const CameraComponent &camera = {}) {
             auto &object = create(std::move(name));

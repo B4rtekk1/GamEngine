@@ -29,6 +29,13 @@ namespace Engine {
     class PhysicsSystem;
     class Script;
 
+    /** A decomposed, world-space transform exposed by the gameplay API. */
+    struct WorldTransform final {
+        Vec3 position{};
+        Quat rotation{};
+        Vec3 scale{1.0F, 1.0F, 1.0F};
+    };
+
     /**
      * High-level, non-owning handle to an object in a Scene.
      *
@@ -68,6 +75,32 @@ namespace Engine {
 
         /** Mutates the local transform and records a component revision. */
         void modifyTransform(const std::function<void(Transform &)> &func) const;
+
+        /** Returns the resolved transform in world space. */
+        [[nodiscard]] WorldTransform worldTransform() const;
+
+        [[nodiscard]] Vec3 worldPosition() const;
+
+        [[nodiscard]] Quat worldRotation() const;
+
+        [[nodiscard]] Vec3 worldScale() const;
+
+        /** Returns the resolved local-to-world matrix. */
+        [[nodiscard]] Mat4 worldMatrix() const;
+
+        /** Moves the actor in world space, preserving its local rotation and scale. */
+        void setWorldPosition(Vec3 position) const;
+
+        /** Sets the actor's world-space rotation, preserving its world position and scale. */
+        void setWorldRotation(Quat rotation) const;
+
+        /** Returns the actor's world-space basis vectors. Forward is local -Z. */
+        [[nodiscard]] Vec3 forward() const;
+        [[nodiscard]] Vec3 right() const;
+        [[nodiscard]] Vec3 up() const;
+
+        /** Rotates the actor so its forward vector faces @p target in world space. */
+        void lookAt(Vec3 target) const;
 
         /** Creates an actor and attaches it as a child of this actor. */
         [[nodiscard]] Actor createChild(std::string name) const;

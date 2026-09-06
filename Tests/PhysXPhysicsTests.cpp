@@ -400,6 +400,37 @@ TEST(Scene, CachesWorldTransformsAcrossParentChildHierarchy) {
     EXPECT_FLOAT_EQ(secondPosition.z, 4.0F);
 }
 
+TEST(Actor, ExposesAndSetsWorldSpaceTransforms) {
+    Engine::Scene scene;
+    const auto parent = scene.createActor("World parent");
+    const auto child = parent.createChild("World child");
+    child.addCamera();
+    child.setPrimaryCamera(true);
+    EXPECT_EQ(scene.primaryCamera().id(), child.id());
+    parent.setPosition({10.0F, 0.0F, 0.0F});
+    parent.setRotation({0.0F, 90.0F, 0.0F});
+    child.setPosition({0.0F, 0.0F, -2.0F});
+
+    EXPECT_NEAR(child.worldPosition().x(), 8.0F, 1.0e-5F);
+    EXPECT_NEAR(child.forward().x(), -1.0F, 1.0e-5F);
+    EXPECT_NEAR(child.right().z(), -1.0F, 1.0e-5F);
+    EXPECT_NEAR(child.up().y(), 1.0F, 1.0e-5F);
+
+    child.setWorldPosition({2.0F, 3.0F, 4.0F});
+    EXPECT_NEAR(child.worldPosition().x(), 2.0F, 1.0e-5F);
+    EXPECT_NEAR(child.worldPosition().y(), 3.0F, 1.0e-5F);
+    EXPECT_NEAR(child.worldPosition().z(), 4.0F, 1.0e-5F);
+
+    child.setWorldRotation({});
+    EXPECT_NEAR(child.forward().z(), -1.0F, 1.0e-5F);
+
+    child.lookAt({2.0F, 3.0F, -6.0F});
+    EXPECT_NEAR(child.forward().x(), 0.0F, 1.0e-5F);
+    EXPECT_NEAR(child.forward().y(), 0.0F, 1.0e-5F);
+    EXPECT_NEAR(child.forward().z(), -1.0F, 1.0e-5F);
+    EXPECT_NEAR(child.worldMatrix().native()[3].x, 2.0F, 1.0e-5F);
+}
+
 TEST(SceneSerializer, RebuildsWorldTransformsWhenReplacingAnExistingRegistry) {
     Engine::Scene scene;
     const auto parent = scene.createActor("Snapshot parent");

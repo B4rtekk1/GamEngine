@@ -3,10 +3,47 @@
 #include "Engine/ECS/GameObject.h"
 #include "Engine/Scene/Scene.h"
 
+#include <algorithm>
+#include <cmath>
 #include <stdexcept>
 #include <utility>
 
+#define GLM_ENABLE_EXPERIMENTAL
+#include <glm/gtc/matrix_inverse.hpp>
+#include <glm/gtx/matrix_decompose.hpp>
+#include <glm/gtx/quaternion.hpp>
+
 namespace Engine {
+    namespace {
+        [[nodiscard]] Vec3 eulerDegrees(const Quat &rotation) {
+            const Vec3 axisX = rotation * Vec3{1.0F, 0.0F, 0.0F};
+            const Vec3 axisY = rotation * Vec3{0.0F, 1.0F, 0.0F};
+            const Vec3 axisZ = rotation * Vec3{0.0F, 0.0F, 1.0F};
+            const float y = std::asin(std::clamp(axisZ.x(), -1.0F, 1.0F));
+            const float cosY = std::cos(y);
+            const float x = std::abs(cosY) > 1.0e-5F
+                ? std::atan2(-axisZ.y(), axisZ.z())
+                : std::atan2(axisY.z(), axisY.y());
+            const float z = std::abs(cosY) > 1.0e-5F
+                ? std::atan2(-axisY.x(), axisX.x()) : 0.0F;
+            return {x * kDegreesPerRadian, y * kDegreesPerRadian, z * kDegreesPerRadian};
+        }
+
+        [[nodiscard]] Transform localTransformFromMatrix(const glm::mat4 &matrix) {
+            glm::vec3 scale{}, translation{}, skew{};
+            glm::quat rotation{};
+            glm::vec4 perspective{};
+            if (!glm::decompose(matrix, scale, rotation, translation, skew, perspective)) {
+                throw std::runtime_error("Cannot decompose world transform");
+            }
+            return Transform{
+                .position = Vec3{translation},
+                .rotation = eulerDegrees(Quat{glm::normalize(rotation)}),
+                .scale = Vec3{scale},
+            };
+        }
+    }
+
     GameObject &Actor::object() const {
         if (scene_ == nullptr) {
             throw std::logic_error("Actor is not attached to a Scene");
@@ -41,6 +78,96 @@ namespace Engine {
     const Transform &Actor::transform() const { return object().transform(); }
     void Actor::modifyTransform(const std::function<void(Transform &)> &func) const {
         object().modifyTransform(func);
+    }
+
+    WorldTransform Actor::worldTransform() const {
+        if (scene_ == nullptr) {
+            throw std::logic_error("Actor is not attached to a Scene");
+        }
+        scene_->updateTransforms();
+        const Transform &transform = object().transform();
+        glm::vec3 ignoredScale{}, ignoredPosition{}, skew{};
+        glm::quat rotation{};
+        glm::vec4 perspective{};
+        if (!glm::decompose(transform.worldMatrix().native(), ignoredScale, rotation, ignoredPosition,
+                            skew, perspective)) {
+            throw std::runtime_error("Cannot decompose world transform");
+        }
+        return WorldTransform{
+            .position = transform.worldPosition(),
+            .rotation = Quat{glm::normalize(rotation)},
+            .scale = transform.worldScale(),
+        };
+    }
+
+    Vec3 Actor::worldPosition() const { return worldTransform().position; }
+    Quat Actor::worldRotation() const { return worldTransform().rotation; }
+    Vec3 Actor::worldScale() const { return worldTransform().scale; }
+
+    Mat4 Actor::worldMatrix() const {
+        if (scene_ == nullptr) {
+            throw std::logic_error("Actor is not attached to a Scene");
+        }
+        scene_->updateTransforms();
+        return scene_->worldMatrix(*this);
+    }
+
+    void Actor::setWorldPosition(const Vec3 position) const {
+        if (scene_ == nullptr) {
+            throw std::logic_error("Actor is not attached to a Scene");
+        }
+        scene_->updateTransforms();
+        const Entity entity = scene_->findEntity(objectId_);
+        Vec3 localPosition = position;
+        if (const Actor parentActor = parent(); parentActor.valid()) {
+            const glm::mat4 parentWorld = parentActor.worldMatrix().native();
+            if (std::abs(glm::determinant(parentWorld)) < 1.0e-6F) {
+                throw std::runtime_error("Cannot set world position below a parent with a singular transform");
+            }
+            localPosition = Vec3{glm::vec3{glm::inverse(parentWorld) * glm::vec4{position.native(), 1.0F}}};
+        }
+        scene_->registry_.modify<Transform>(entity, [localPosition](Transform &transform) {
+            transform.position = localPosition;
+        });
+    }
+
+    void Actor::setWorldRotation(const Quat rotation) const {
+        if (scene_ == nullptr) {
+            throw std::logic_error("Actor is not attached to a Scene");
+        }
+        const WorldTransform current = worldTransform();
+        Mat4 desiredWorld = Mat4::translate(current.position) * Mat4::rotate(rotation.normalized());
+        desiredWorld = Mat4::scale(desiredWorld, current.scale);
+        glm::mat4 localMatrix = desiredWorld.native();
+        if (const Actor parentActor = parent(); parentActor.valid()) {
+            const glm::mat4 parentWorld = parentActor.worldMatrix().native();
+            if (std::abs(glm::determinant(parentWorld)) < 1.0e-6F) {
+                throw std::runtime_error("Cannot set world rotation below a parent with a singular transform");
+            }
+            localMatrix = glm::inverse(parentWorld) * localMatrix;
+        }
+        const Transform local = localTransformFromMatrix(localMatrix);
+        const Entity entity = scene_->findEntity(objectId_);
+        scene_->registry_.modify<Transform>(entity, [local](Transform &transform) {
+            transform.position = local.position;
+            transform.rotation = local.rotation;
+            transform.scale = local.scale;
+        });
+    }
+
+    Vec3 Actor::forward() const { return worldRotation() * Vec3{0.0F, 0.0F, -1.0F}; }
+    Vec3 Actor::right() const { return worldRotation() * Vec3{1.0F, 0.0F, 0.0F}; }
+    Vec3 Actor::up() const { return worldRotation() * Vec3{0.0F, 1.0F, 0.0F}; }
+
+    void Actor::lookAt(const Vec3 target) const {
+        const Vec3 direction = target - worldPosition();
+        if (direction.length() <= 1.0e-6F) {
+            throw std::invalid_argument("Cannot look at the actor's own world position");
+        }
+        const Vec3 forward = direction.normalized();
+        const Vec3 worldUp = std::abs(forward.y()) > 0.999F
+            ? Vec3{0.0F, 0.0F, 1.0F} : Vec3{0.0F, 1.0F, 0.0F};
+        setWorldRotation(Quat{glm::quatLookAtRH(forward.native(), worldUp.native())});
     }
 
     Actor Actor::createChild(std::string name) const {
