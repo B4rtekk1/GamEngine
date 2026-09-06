@@ -15,6 +15,7 @@
 #include <functional>
 #include <memory>
 #include <string>
+#include <string_view>
 #include <stdexcept>
 #include <vector>
 
@@ -117,6 +118,12 @@ namespace Engine {
         [[nodiscard]] std::string name() const;
 
         void setName(std::string name) const;
+
+        /** Returns whether this actor has the supplied gameplay tag. */
+        [[nodiscard]] bool hasTag(std::string_view tag) const;
+
+        /** Assigns this actor's gameplay tag. Tags must not be empty. */
+        void setTag(std::string tag) const;
 
         void setPosition(Vec3 position) const;
 

@@ -18,6 +18,11 @@ namespace Engine {
         std::string value{"GameObject"};
     };
 
+    /** Gameplay-facing classification used for scene queries and filtering. */
+    struct TagComponent final {
+        std::string value;
+    };
+
     /** Persistent object identifier. It is independent of the recyclable Entity id. */
     struct UUIDComponent final {
         UUID value{NullUUID};

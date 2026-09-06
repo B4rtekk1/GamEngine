@@ -834,6 +834,9 @@ namespace Engine {
                                          ? registry.get<NameComponent>(entity).value
                                          : "Entity " + std::to_string(entityIndex(entity));
             serialized << "IDENTITY " << uuid << ' ' << std::quoted(name) << '\n';
+            if (registry.has<TagComponent>(entity)) {
+                serialized << "TAG " << std::quoted(registry.get<TagComponent>(entity).value) << '\n';
+            }
             if (registry.has<ParentComponent>(entity)) {
                 serialized << "PARENT " << registry.get<ParentComponent>(entity).parentUuid << '\n';
             }
@@ -1156,6 +1159,7 @@ namespace Engine {
             bool hasTerrain = false;
             bool hasTerrainGrass = false;
             bool hasIdentity = false;
+            bool hasTag = false;
             bool hasParent = false;
             bool hasHierarchyOrder = false;
 
@@ -1182,6 +1186,17 @@ namespace Engine {
                     loaded.add<NameComponent>(entity, std::move(name));
                     reserveUUID(uuid.value);
                     hasIdentity = true;
+                } else if (component == "TAG") {
+                    if (hasTag) {
+                        invalidScene("entity contains more than one TAG component");
+                    }
+                    TagComponent tag;
+                    input >> std::quoted(tag.value);
+                    if (!input || tag.value.empty()) {
+                        invalidScene("could not read a non-empty actor tag");
+                    }
+                    loaded.add<TagComponent>(entity, std::move(tag));
+                    hasTag = true;
                 } else if (component == "PARENT") {
                     if (hasParent) {
                         invalidScene("entity contains an invalid PARENT component");

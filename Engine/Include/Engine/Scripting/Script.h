@@ -17,23 +17,28 @@ namespace Engine {
         virtual ~Script() = default;
 
         [[nodiscard]] Entity entity() const noexcept { return entity_; }
-        [[nodiscard]] Registry &registry() const noexcept { return *registry_; }
+        /**
+         * Advanced ECS access.
+         *
+         * Prefer actor(), scene(), physics() and other gameplay APIs.
+         */
+        [[nodiscard]] Registry &ecs() const noexcept { return *registry_; }
         /** Returns the script entity's read-only local transform. */
-        [[nodiscard]] const Transform &transform() const { return registry().get<Transform>(entity_); }
+        [[nodiscard]] const Transform &transform() const { return ecs().get<Transform>(entity_); }
 
-        void setPosition(Vec3 value) { registry().modify<Transform>(entity_, [&](auto &transform) {
+        void setPosition(Vec3 value) { ecs().modify<Transform>(entity_, [&](auto &transform) {
             transform.position = value;
         }); }
-        void setRotation(Vec3 value) { registry().modify<Transform>(entity_, [&](auto &transform) {
+        void setRotation(Vec3 value) { ecs().modify<Transform>(entity_, [&](auto &transform) {
             transform.rotation = value;
         }); }
-        void setScale(Vec3 value) { registry().modify<Transform>(entity_, [&](auto &transform) {
+        void setScale(Vec3 value) { ecs().modify<Transform>(entity_, [&](auto &transform) {
             transform.scale = value;
         }); }
-        void translate(Vec3 offset) { registry().modify<Transform>(entity_, [&](auto &transform) {
+        void translate(Vec3 offset) { ecs().modify<Transform>(entity_, [&](auto &transform) {
             transform.position += offset;
         }); }
-        void rotate(Vec3 offset) { registry().modify<Transform>(entity_, [&](auto &transform) {
+        void rotate(Vec3 offset) { ecs().modify<Transform>(entity_, [&](auto &transform) {
             transform.rotation += offset;
         }); }
 

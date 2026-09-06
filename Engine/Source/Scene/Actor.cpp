@@ -72,6 +72,25 @@ namespace Engine {
         }
     }
 
+    bool Actor::hasTag(const std::string_view tag) const {
+        const Entity entity = object().entity();
+        const Registry &registry = object().registry();
+        return registry.has<TagComponent>(entity) && registry.get<TagComponent>(entity).value == tag;
+    }
+
+    void Actor::setTag(std::string tag) const {
+        if (tag.empty()) {
+            throw std::invalid_argument("Actor tag cannot be empty");
+        }
+        const Entity entity = object().entity();
+        Registry &registry = object().registry();
+        if (registry.has<TagComponent>(entity)) {
+            registry.modify<TagComponent>(entity, [&tag](auto &component) { component.value = std::move(tag); });
+            return;
+        }
+        registry.add<TagComponent>(entity, TagComponent{.value = std::move(tag)});
+    }
+
     void Actor::setPosition(Vec3 position) const { object().setPosition(position); }
     void Actor::setRotation(Vec3 rotation) const { object().setRotation(rotation); }
     void Actor::setScale(Vec3 scale) const { object().setScale(scale); }

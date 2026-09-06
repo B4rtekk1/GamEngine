@@ -197,6 +197,27 @@ TEST(Scene, MaintainsUniqueNamesAndFreshIdentityAcrossDuplication) {
     EXPECT_TRUE(copy.valid());
 }
 
+TEST(Scene, FindsActorsByStableIdAndGameplayTag) {
+    Engine::Scene scene;
+    const auto player = scene.createActor("Player actor");
+    const auto firstEnemy = scene.createActor("Enemy A");
+    const auto secondEnemy = scene.createActor("Enemy B");
+
+    player.setTag("Player");
+    firstEnemy.setTag("Enemy");
+    secondEnemy.setTag("Enemy");
+
+    EXPECT_TRUE(player.hasTag("Player"));
+    EXPECT_FALSE(player.hasTag("Enemy"));
+    EXPECT_EQ(scene.findActor(player.id()).id(), player.id());
+    EXPECT_EQ(scene.findByTag("Player").id(), player.id());
+    const auto enemies = scene.findAllByTag("Enemy");
+    ASSERT_EQ(enemies.size(), 2U);
+    EXPECT_EQ(enemies[0].id(), firstEnemy.id());
+    EXPECT_EQ(enemies[1].id(), secondEnemy.id());
+    EXPECT_FALSE(scene.findByTag("Missing").valid());
+}
+
 TEST(Scene, KeepsExactlyOneEnabledDirectionalLight) {
     Engine::Scene scene;
     const auto first = scene.createLightActor("Sun A");

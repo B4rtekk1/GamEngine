@@ -26,6 +26,7 @@
 #include <limits>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 #include <unordered_map>
 #include <vector>
 
@@ -167,6 +168,36 @@ namespace Engine {
         [[nodiscard]] Actor findActor(const std::string &name) noexcept {
             auto *object = find(name);
             return object == nullptr ? Actor{} : Actor{*this, object->objectId()};
+        }
+
+        /** Finds an actor by its stable runtime object identifier. */
+        [[nodiscard]] Actor findActor(const ObjectId objectId) noexcept {
+            return find(objectId) == nullptr ? Actor{} : Actor{*this, objectId};
+        }
+
+        /** Finds the first actor carrying @p tag, or returns an invalid Actor. */
+        [[nodiscard]] Actor findByTag(const std::string_view tag) noexcept {
+            for (const auto &object : objects_) {
+                const Entity entity = object->entity();
+                if (registry_.has<TagComponent>(entity) &&
+                    registry_.get<TagComponent>(entity).value == tag) {
+                    return Actor{*this, object->objectId()};
+                }
+            }
+            return {};
+        }
+
+        /** Returns all actors carrying @p tag in scene creation order. */
+        [[nodiscard]] std::vector<Actor> findAllByTag(const std::string_view tag) noexcept {
+            std::vector<Actor> actors;
+            for (const auto &object : objects_) {
+                const Entity entity = object->entity();
+                if (registry_.has<TagComponent>(entity) &&
+                    registry_.get<TagComponent>(entity).value == tag) {
+                    actors.push_back(Actor{*this, object->objectId()});
+                }
+            }
+            return actors;
         }
 
         /** Returns the primary camera actor, or an invalid Actor when none is marked primary. */
