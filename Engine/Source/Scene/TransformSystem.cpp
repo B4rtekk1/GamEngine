@@ -23,6 +23,7 @@ namespace Engine {
             std::vector<std::uint32_t> dirtyGeneration;
             std::vector<std::uint32_t> resolvedGeneration;
             std::vector<std::uint32_t> visitingGeneration;
+            std::vector<Entity> changedWorldTransforms;
         };
 
         // Runtime-only adjacency avoids rebuilding UUID lookup and hierarchy on every tick.
@@ -123,9 +124,13 @@ namespace Engine {
         } else {
             registry.forEachComponentChangedSince<Transform>(observedTransformRevision, markDirty);
         }
-        cache.transformRevision = registry.componentRevision<Transform>();
         cache.initialized = true;
-        if (!hasDirty) return;
+        if (!hasDirty) {
+            cache.transformRevision = registry.componentRevision<Transform>();
+            return;
+        }
+        cache.changedWorldTransforms.clear();
+        const Registry &readRegistry = registry;
 
         const auto resolve = [&](auto &&self, const Entity entity) -> void {
             const std::uint32_t index = entityIndex(entity);
@@ -137,13 +142,13 @@ namespace Engine {
 
             Transform &transform = registry.get<Transform>(entity);
             Entity parent = NullEntity;
-            if (registry.has<ParentComponent>(entity)) {
-                parent = registry.get<ParentComponent>(entity).runtimeParent;
-                if (parent != entity && registry.has<Transform>(parent)) self(self, parent);
+            if (readRegistry.has<ParentComponent>(entity)) {
+                parent = readRegistry.get<ParentComponent>(entity).runtimeParent;
+                if (parent != entity && readRegistry.has<Transform>(parent)) self(self, parent);
                 else parent = NullEntity;
             }
-            const Transform *parentTransform = parent != NullEntity && registry.has<Transform>(parent)
-                ? &registry.get<Transform>(parent) : nullptr;
+            const Transform *parentTransform = parent != NullEntity && readRegistry.has<Transform>(parent)
+                ? &readRegistry.get<Transform>(parent) : nullptr;
             const std::uint64_t parentRevision = parentTransform == nullptr ? 0 : parentTransform->worldRevision();
             const bool changed = cache.dirtyGeneration[index] == generation || !transform.worldCacheValid ||
                 transform.cachedParent != parent ||
@@ -158,6 +163,7 @@ namespace Engine {
                 ++transform.cachedWorldRevision;
                 transform.worldCacheValid = true;
                 transform.worldTrsValid = false;
+                cache.changedWorldTransforms.push_back(entity);
             }
             cache.visitingGeneration[index] = 0;
             cache.resolvedGeneration[index] = generation;
@@ -171,6 +177,16 @@ namespace Engine {
             registry.forEachComponentChangedSince<Transform>(observedTransformRevision,
                 [&](const Entity entity) { resolve(resolve, entity); });
         }
+        // Resolving writes the runtime world cache into Transform and therefore
+        // advances its component revision. Record the revision afterwards so
+        // that those internal cache writes are not rediscovered next frame.
+        cache.transformRevision = registry.componentRevision<Transform>();
+    }
+
+    std::span<const Entity> TransformSystem::changedWorldTransforms(const Registry &registry) {
+        const auto cache = caches.find(&registry);
+        if (cache == caches.end()) return {};
+        return cache->second.changedWorldTransforms;
     }
 
     const Mat4 &TransformSystem::worldMatrix(const Registry &registry, const Entity entity) {

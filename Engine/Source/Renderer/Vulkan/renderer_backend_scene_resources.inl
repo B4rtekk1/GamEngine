@@ -584,6 +584,9 @@
         }
 
         void createInstanceBuffer() {
+            // Resource creation can happen before the first render frame, so
+            // establish the same transform stage used by the frame pipeline.
+            TransformSystem::updateDirty(registry);
             instanceModels.resize(renderables.size());
             // Generic objects own their material-table ranges. Packed grass
             // receives one shared range per TerrainGrassComponent below.
@@ -931,7 +934,6 @@
                 dirtyShadowObjects.push_back(object);
             };
             const std::uint64_t transformRevision = registry.componentRevision<Transform>();
-            TransformSystem::update(registry);
             const std::uint64_t meshRendererRevision = registry.componentRevision<MeshRenderer>();
             const std::uint64_t terrainGrassRevision = registry.componentRevision<TerrainGrassComponent>();
             const std::uint64_t parentRevision = registry.componentRevision<ParentComponent>();
@@ -982,50 +984,47 @@
 
             std::vector<std::size_t> changedIndices;
             changedIndices.reserve(renderables.size());
+            constexpr std::uint8_t transformChange = 1U;
+            constexpr std::uint8_t rendererChange = 2U;
+            if (renderableChangeMarks.size() != renderables.size()) {
+                renderableChangeMarks.assign(renderables.size(), 0);
+                renderableChangeKinds.assign(renderables.size(), 0);
+                renderableChangeEpoch = 0;
+            }
             if (lastTransformRevision == std::numeric_limits<std::uint64_t>::max() ||
-                lastMeshRendererRevision == std::numeric_limits<std::uint64_t>::max() ||
-                parentRevision != lastParentRevision) {
+                lastMeshRendererRevision == std::numeric_limits<std::uint64_t>::max()) {
                 for (std::size_t index = 0; index < renderables.size(); ++index) {
                     changedIndices.push_back(index);
                 }
             } else {
-                if (renderableChangeMarks.size() != renderables.size()) {
-                    renderableChangeMarks.assign(renderables.size(), 0);
-                    renderableChangeEpoch = 0;
-                }
                 ++renderableChangeEpoch;
                 if (renderableChangeEpoch == 0) {
                     std::fill(renderableChangeMarks.begin(), renderableChangeMarks.end(), 0);
                     renderableChangeEpoch = 1;
                 }
-                const auto addIndex = [&](const std::size_t index) {
+                const auto addIndex = [&](const std::size_t index, const std::uint8_t kind) {
                     if (renderableChangeMarks[index] != renderableChangeEpoch) {
                         renderableChangeMarks[index] = renderableChangeEpoch;
+                        renderableChangeKinds[index] = kind;
                         changedIndices.push_back(index);
+                    } else {
+                        renderableChangeKinds[index] |= kind;
                     }
                 };
-                const auto addChangedEntities = [&](const auto& entities, const auto revision) {
+                const auto addChangedEntities = [&](const auto& entities, const auto revision,
+                                                    const std::uint8_t kind) {
                     if (revision == 0) { return;
 }
                     for (const Entity entity : entities) {
                         const auto it = sceneGpu.renderableIndices.find(entity);
-                        if (it != sceneGpu.renderableIndices.end()) addIndex(it->second);
+                        if (it != sceneGpu.renderableIndices.end()) addIndex(it->second, kind);
                     }
                 };
                 addChangedEntities(
-                    registry.componentEntitiesChangedSince<Transform>(lastTransformRevision),
-                    transformRevision);
+                    TransformSystem::changedWorldTransforms(registry), transformRevision, transformChange);
                 addChangedEntities(
                     registry.componentEntitiesChangedSince<MeshRenderer>(lastMeshRendererRevision),
-                    meshRendererRevision);
-                // A changed ancestor changes every descendant's world transform.
-                // Updating all renderables here keeps hierarchy transforms correct
-                // without relying on editor code to mark each child dirty.
-                if (transformRevision != lastTransformRevision) {
-                    for (std::size_t index = 0; index < renderables.size(); ++index) {
-                        addIndex(index);
-                    }
-                }
+                    meshRendererRevision, rendererChange);
             }
 
             const Registry& readRegistry = registry;
@@ -1052,13 +1051,20 @@
                 const auto& transform = readRegistry.get<Transform>(entity);
                 RenderableRecord& record = renderables[index];
                 if (!readRegistry.has<MeshRenderer>(entity)) continue;
+                const bool hasTransformChange = lastTransformRevision ==
+                    std::numeric_limits<std::uint64_t>::max() ||
+                    renderableChangeKinds[index] & transformChange;
+                const bool hasRendererChange = lastMeshRendererRevision ==
+                    std::numeric_limits<std::uint64_t>::max() ||
+                    renderableChangeKinds[index] & rendererChange;
                 const MeshRenderer* renderer = &readRegistry.get<MeshRenderer>(entity);
                 glm::mat4 model = worldModel(entity);
                 const auto shadowBounds = [&](const glm::mat4& instanceModel) {
                     return record.localBounds.transformed(instanceModel);
                 };
-                const bool transformChanged = !optimizationFeatures.transformCaching ||
-                    !record.hasCachedTransform || !sameModel(model, modelFromInstance(instanceModels[index]));
+                const bool transformChanged = hasTransformChange &&
+                    (!optimizationFeatures.transformCaching || !record.hasCachedTransform ||
+                     !sameModel(model, modelFromInstance(instanceModels[index])));
                 if (transformChanged) {
                     const bool hadCachedTransform = record.hasCachedTransform;
                     const AABB previousShadowBounds = hadCachedTransform
@@ -1091,19 +1097,21 @@
                     markDirty(index, &RenderableRecord::cullingDirtyFrames, dirtyCullingObjects);
                     changedBatches.push_back(record.batchIndex);
                 }
-                const Mesh& mesh = *renderer->mesh;
                 bool materialChanged = false;
-                for (std::uint32_t slot = 0; slot < materialSlots; ++slot) {
-                    const PBRMaterial source = mesh.materials.empty() ||
-                        (renderer->materialOverride && slot == 0)
-                        ? renderer->material
-                        : (slot < mesh.materials.size() ? mesh.materials[slot] : PBRMaterial{});
-                    const GPUMaterialData material = packMaterial(source, mesh);
-                    GPUMaterialData& destination = materials[record.materialTableOffset + slot];
-                    if (!optimizationFeatures.materialCaching ||
-                        !sameMaterial(destination, material)) {
-                        destination = material;
-                        materialChanged = true;
+                if (hasRendererChange) {
+                    const Mesh& mesh = *renderer->mesh;
+                    for (std::uint32_t slot = 0; slot < materialSlots; ++slot) {
+                        const PBRMaterial source = mesh.materials.empty() ||
+                            (renderer->materialOverride && slot == 0)
+                            ? renderer->material
+                            : (slot < mesh.materials.size() ? mesh.materials[slot] : PBRMaterial{});
+                        const GPUMaterialData material = packMaterial(source, mesh);
+                        GPUMaterialData& destination = materials[record.materialTableOffset + slot];
+                        if (!optimizationFeatures.materialCaching ||
+                            !sameMaterial(destination, material)) {
+                            destination = material;
+                            materialChanged = true;
+                        }
                     }
                 }
                 if (materialChanged) {

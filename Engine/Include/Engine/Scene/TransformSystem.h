@@ -3,12 +3,21 @@
 #include "Engine/Core/Transform.h"
 #include "Engine/ECS/Registry.h"
 
+#include <span>
+
 namespace Engine {
     /** Resolves local ParentComponent transforms into cached world matrices. */
     class TransformSystem final {
     public:
         /** Updates only changed transforms and their descendants, parent first. */
         static void updateDirty(Registry &registry);
+
+        /**
+         * Entities whose cached world matrix was resolved during the latest
+         * dirty update. Descendants affected by a changed parent are included.
+         * The result remains available when a later update finds no work.
+         */
+        [[nodiscard]] static std::span<const Entity> changedWorldTransforms(const Registry &registry);
 
         /** Discards runtime hierarchy data after the registry contents are replaced. */
         static void invalidate(const Registry &registry) noexcept;

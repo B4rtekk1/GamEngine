@@ -425,6 +425,36 @@ TEST(Scene, CachesWorldTransformsAcrossParentChildHierarchy) {
     EXPECT_FLOAT_EQ(secondPosition.z, 4.0F);
 }
 
+TEST(Scene, ReportsOnlyWorldTransformsAffectedByDirtyHierarchyBranch) {
+    Engine::Registry registry;
+    const auto parent = registry.create();
+    const auto child = registry.create();
+    const auto unrelated = registry.create();
+    registry.add<Engine::Transform>(parent);
+    registry.add<Engine::Transform>(child);
+    registry.add<Engine::Transform>(unrelated);
+    registry.add<Engine::UUIDComponent>(parent, Engine::UUIDComponent{1});
+    registry.add<Engine::UUIDComponent>(child, Engine::UUIDComponent{2});
+    registry.add<Engine::UUIDComponent>(unrelated, Engine::UUIDComponent{3});
+    registry.add<Engine::ParentComponent>(child, Engine::ParentComponent{1});
+    Engine::TransformSystem::updateDirty(registry);
+
+    registry.get<Engine::Transform>(parent).position = {10.0F, 0.0F, 0.0F};
+    registry.markChanged<Engine::Transform>(parent);
+    Engine::TransformSystem::updateDirty(registry);
+
+    const auto changed = Engine::TransformSystem::changedWorldTransforms(registry);
+    const auto contains = [&](const Engine::Entity entity) {
+        for (const Engine::Entity changedEntity : changed) {
+            if (changedEntity == entity) return true;
+        }
+        return false;
+    };
+    EXPECT_TRUE(contains(parent));
+    EXPECT_TRUE(contains(child));
+    EXPECT_FALSE(contains(unrelated));
+}
+
 TEST(Actor, ExposesAndSetsWorldSpaceTransforms) {
     Engine::Scene scene;
     const auto parent = scene.createActor("World parent");

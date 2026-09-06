@@ -305,6 +305,7 @@
         std::uint64_t particleColliderTransformRevision = 0;
         // Reused frame-stamped deduplication storage for changed renderables.
         std::vector<std::uint32_t> renderableChangeMarks;
+        std::vector<std::uint8_t> renderableChangeKinds;
         std::uint32_t renderableChangeEpoch = 0;
         std::uint64_t renderableTopologySignature = 0;
         bool hiZValid = false;
