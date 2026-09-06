@@ -26,21 +26,27 @@ namespace Engine {
         /** Returns the script entity's read-only local transform. */
         [[nodiscard]] const Transform &transform() const { return ecs().get<Transform>(entity_); }
 
-        void setPosition(Vec3 value) { ecs().modify<Transform>(entity_, [&](auto &transform) {
-            transform.position = value;
-        }); }
-        void setRotation(Vec3 value) { ecs().modify<Transform>(entity_, [&](auto &transform) {
-            transform.rotation = value;
-        }); }
+        void setPosition(Vec3 value) {
+            if (ecs().has<RigidbodyComponent>(entity_) &&
+                ecs().get<RigidbodyComponent>(entity_).type == RigidbodyType::Dynamic) {
+                ecs().modify<RigidbodyComponent>(entity_, [value](auto &body) { body.teleport(value); });
+                return;
+            }
+            ecs().modify<Transform>(entity_, [&](auto &transform) { transform.position = value; });
+        }
+        void setRotation(Vec3 value) {
+            if (ecs().has<RigidbodyComponent>(entity_) &&
+                ecs().get<RigidbodyComponent>(entity_).type == RigidbodyType::Dynamic) {
+                ecs().modify<RigidbodyComponent>(entity_, [value](auto &body) { body.teleportRotation = value; });
+                return;
+            }
+            ecs().modify<Transform>(entity_, [&](auto &transform) { transform.rotation = value; });
+        }
         void setScale(Vec3 value) { ecs().modify<Transform>(entity_, [&](auto &transform) {
             transform.scale = value;
         }); }
-        void translate(Vec3 offset) { ecs().modify<Transform>(entity_, [&](auto &transform) {
-            transform.position += offset;
-        }); }
-        void rotate(Vec3 offset) { ecs().modify<Transform>(entity_, [&](auto &transform) {
-            transform.rotation += offset;
-        }); }
+        void translate(Vec3 offset) { setPosition(transform().position + offset); }
+        void rotate(Vec3 offset) { setRotation(transform().rotation + offset); }
 
         /** Returns the high-level actor controlled by this script. */
         [[nodiscard]] Actor actor() const;

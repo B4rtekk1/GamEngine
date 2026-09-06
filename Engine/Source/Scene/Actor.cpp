@@ -139,6 +139,10 @@ namespace Engine {
         if (scene_ == nullptr) {
             throw std::logic_error("Actor is not attached to a Scene");
         }
+        if (hasRigidbody() && object().rigidbody().type == RigidbodyType::Dynamic) {
+            teleport(position);
+            return;
+        }
         scene_->updateTransforms();
         const Entity entity = scene_->findEntity(objectId_);
         Vec3 localPosition = position;
@@ -157,6 +161,12 @@ namespace Engine {
     void Actor::setWorldRotation(const Quat rotation) const {
         if (scene_ == nullptr) {
             throw std::logic_error("Actor is not attached to a Scene");
+        }
+        if (hasRigidbody() && object().rigidbody().type == RigidbodyType::Dynamic) {
+            object().modify<RigidbodyComponent>([rotation](auto &body) {
+                body.teleportRotation = eulerDegrees(rotation.normalized());
+            });
+            return;
         }
         const WorldTransform current = worldTransform();
         Mat4 desiredWorld = Mat4::translate(current.position) * Mat4::rotate(rotation.normalized());
@@ -227,7 +237,12 @@ namespace Engine {
     void Actor::setMaterial(const PBRMaterial& material) const { object().setMaterial(material); }
     void Actor::setCastShadow(const bool enabled) const { object().setCastShadow(enabled); }
     void Actor::setCullingBatch(const std::uint32_t batch) const { object().setCullingBatch(batch); }
-    void Actor::addRigidbody(const RigidbodyComponent& body) const { object().addRigidbody(body); }
+    void Actor::addRigidbody(const RigidbodyComponent& body) const {
+        if (body.type == RigidbodyType::Dynamic && parent().valid()) {
+            throw std::logic_error("Dynamic rigid bodies cannot be parented; PhysX owns their world pose");
+        }
+        object().addRigidbody(body);
+    }
     bool Actor::hasRigidbody() const { return object().has<RigidbodyComponent>(); }
 
     void Actor::setBodyType(const RigidbodyType type) const {
@@ -255,6 +270,12 @@ namespace Engine {
     }
     void Actor::addRigidbodyImpulse(const Vec3 value) const {
         object().modify<RigidbodyComponent>([value](auto &body) { body.addImpulse(value); });
+    }
+    void Actor::teleport(const Vec3 position) const {
+        object().modify<RigidbodyComponent>([position](auto &body) { body.teleport(position); });
+    }
+    void Actor::teleport(const Vec3 position, const Vec3 rotation) const {
+        object().modify<RigidbodyComponent>([position, rotation](auto &body) { body.teleport(position, rotation); });
     }
     float Actor::rigidbodyMass() const { return object().get<RigidbodyComponent>().mass; }
 
@@ -401,6 +422,10 @@ namespace Engine {
     Vec3 RigidbodyHandle::velocity() const { return Actor::fromHandle(scene_, objectId_).velocity(); }
     void RigidbodyHandle::addForce(const Vec3 value) const { Actor::fromHandle(scene_, objectId_).addRigidbodyForce(value); }
     void RigidbodyHandle::addImpulse(const Vec3 value) const { Actor::fromHandle(scene_, objectId_).addRigidbodyImpulse(value); }
+    void RigidbodyHandle::teleport(const Vec3 position) const { Actor::fromHandle(scene_, objectId_).teleport(position); }
+    void RigidbodyHandle::teleport(const Vec3 position, const Vec3 rotation) const {
+        Actor::fromHandle(scene_, objectId_).teleport(position, rotation);
+    }
     void RigidbodyHandle::setMass(const float value) const { Actor::fromHandle(scene_, objectId_).setMass(value); }
     float RigidbodyHandle::mass() const { return Actor::fromHandle(scene_, objectId_).rigidbodyMass(); }
 

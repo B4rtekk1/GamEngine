@@ -2,6 +2,8 @@
 
 #include "Engine/Math/Vec3.h"
 
+#include <optional>
+
 namespace Engine {
     enum class RigidbodyType:uint8_t {
         Static,
@@ -21,6 +23,17 @@ namespace Engine {
 
         Vec3 linearVelocity;
         Vec3 angularVelocity;
+
+        // Runtime-only world-space pose requests.  Dynamic bodies are owned by
+        // PhysX, so gameplay may move them only by queuing a teleport.
+        std::optional<Vec3> teleportPosition;
+        std::optional<Vec3> teleportRotation;
+
+        void teleport(Vec3 position) noexcept { teleportPosition = position; }
+        void teleport(Vec3 position, Vec3 rotation) noexcept {
+            teleportPosition = position;
+            teleportRotation = rotation;
+        }
 
         // Forces and torques are accumulated until the next physics step.
         // They are intentionally not serialized: these are transient inputs.

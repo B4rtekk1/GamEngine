@@ -53,6 +53,10 @@ namespace Engine {
         [[nodiscard]] Vec3 velocity() const;
         void addForce(Vec3 value) const;
         void addImpulse(Vec3 value) const;
+        /** Queues a world-space teleport for a dynamic rigid body. */
+        void teleport(Vec3 position) const;
+        /** Queues a world-space teleport, including its Euler rotation in degrees. */
+        void teleport(Vec3 position, Vec3 rotation) const;
         void setMass(float value) const;
         [[nodiscard]] float mass() const;
     private:
@@ -216,6 +220,12 @@ namespace Engine {
         void setVelocity(Vec3 velocity) const;
 
         [[nodiscard]] Vec3 velocity() const;
+
+        /** Queues a world-space teleport for this dynamic rigid body. */
+        void teleport(Vec3 position) const;
+
+        /** Queues a world-space teleport, including Euler rotation in degrees. */
+        void teleport(Vec3 position, Vec3 rotation) const;
 
         void addBoxCollider(Vec3 halfExtents = {0.5F, 0.5F, 0.5F}) const;
 

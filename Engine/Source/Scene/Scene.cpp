@@ -110,6 +110,10 @@ namespace Engine {
 
         const Entity childEntity = findEntity(child.objectId_);
         const Entity parentEntity = findEntity(parent.objectId_);
+        if (registry_.has<RigidbodyComponent>(childEntity) &&
+            registry_.get<RigidbodyComponent>(childEntity).type == RigidbodyType::Dynamic) {
+            throw std::invalid_argument("Dynamic rigid bodies cannot be parented; PhysX owns their world pose");
+        }
         Transform preservedLocal{};
         if (mode == ParentMode::KeepWorld) {
             TransformSystem::updateDirty(registry_);

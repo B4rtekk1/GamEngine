@@ -90,8 +90,20 @@ namespace Engine {
             modifyTransform([&](auto &transform) { transform = transformValue; });
         }
 
-        void setPosition(Vec3 value) { modifyTransform([&](auto &t) { t.position = value; }); } //NOLINT
-        void setRotation(Vec3 value) { modifyTransform([&](auto &t) { t.rotation = value; }); } //NOLINT
+        void setPosition(Vec3 value) {
+            if (has<RigidbodyComponent>() && rigidbody().type == RigidbodyType::Dynamic) {
+                modify<RigidbodyComponent>([value](auto &body) { body.teleport(value); });
+                return;
+            }
+            modifyTransform([&](auto &t) { t.position = value; });
+        }
+        void setRotation(Vec3 value) {
+            if (has<RigidbodyComponent>() && rigidbody().type == RigidbodyType::Dynamic) {
+                modify<RigidbodyComponent>([value](auto &body) { body.teleportRotation = value; });
+                return;
+            }
+            modifyTransform([&](auto &t) { t.rotation = value; });
+        }
         void setScale(Vec3 value) { modifyTransform([&](auto &t) { t.scale = value; }); } //NOLINT
         [[nodiscard]] const Vec3 &position() const { return transform().position; }
         [[nodiscard]] const Vec3 &rotation() const { return transform().rotation; }

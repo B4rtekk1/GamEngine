@@ -677,7 +677,7 @@ namespace Engine {
                                            ? &owner.get<RigidbodyComponent>(entity)
                                            : nullptr;
             const bool dynamic = body != nullptr && body->type != RigidbodyType::Static;
-            if (dynamic && owner.has<ParentComponent>(entity)) {
+            if (body != nullptr && body->type == RigidbodyType::Dynamic && owner.has<ParentComponent>(entity)) {
                 throw std::logic_error("Dynamic rigid bodies cannot be parented; PhysX owns their world pose");
             }
 
@@ -809,17 +809,33 @@ namespace Engine {
             using namespace physx;
             for (auto &[entity, record]: actors) {
                 Transform transform = TransformSystem::worldTransform(owner, entity);
-                if (!samePose(transform, record.lastTransform)) {
-                    record.actor->setGlobalPose(toPhysX(transform), true);
-                    record.lastTransform = transform;
-                }
-
+                // Transform owns Static and Kinematic poses. Dynamic poses are
+                // owned by PhysX and cross this boundary only through teleport.
                 if (!owner.has<RigidbodyComponent>(entity) ||
                     owner.get<RigidbodyComponent>(entity).type == RigidbodyType::Static) {
+                    if (!samePose(transform, record.lastTransform)) {
+                        record.actor->setGlobalPose(toPhysX(transform), true);
+                        record.lastTransform = transform;
+                    }
                     continue;
                 }
                 auto &body = owner.get<RigidbodyComponent>(entity);
                 auto &rigid = *static_cast<PxRigidDynamic *>(record.actor);
+                if (body.type == RigidbodyType::Kinematic && !samePose(transform, record.lastTransform)) {
+                    rigid.setKinematicTarget(toPhysX(transform));
+                    record.lastTransform = transform;
+                }
+                if (body.type == RigidbodyType::Dynamic &&
+                    (body.teleportPosition.has_value() || body.teleportRotation.has_value())) {
+                    PxTransform pose = rigid.getGlobalPose();
+                    if (body.teleportPosition) pose.p = toPhysX(*body.teleportPosition);
+                    if (body.teleportRotation) {
+                        pose.q = toPhysX(transformRotation(Transform{.rotation = *body.teleportRotation}));
+                    }
+                    rigid.setGlobalPose(pose, true);
+                    body.teleportPosition.reset();
+                    body.teleportRotation.reset();
+                }
                 if (!same(body.linearVelocity, record.lastLinearVelocity)) {
                     rigid.setLinearVelocity(toPhysX(body.linearVelocity));
                 }
@@ -847,7 +863,7 @@ namespace Engine {
                     continue;
                 }
                 auto &body = owner.get<RigidbodyComponent>(entity);
-                if (body.type == RigidbodyType::Static) {
+                if (body.type != RigidbodyType::Dynamic) {
                     continue;
                 }
                 const auto &rigid = *static_cast<physx::PxRigidDynamic *>(record.actor);
