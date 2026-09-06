@@ -209,7 +209,12 @@ ForwardFragmentOutput fragmentMain(ForwardFragmentInput input)
     float3 f0 = lerp(float3(0.04), albedo, metallic);
     float3 fresnel = fresnelSchlick(max(dot(halfway, viewDirection), 0.0), f0);
     float nDotV = max(dot(normal, viewDirection), 0.0);
-    float nDotL = max(dot(normal, lightDirection), 0.0);
+    // Thin double-sided cards (leaves, ferns and grass-like glTF meshes) do
+    // not have an opaque "back".  Their source winding is often arbitrary,
+    // so use the incident-light magnitude on either face instead of letting
+    // the camera-facing normal make the entire card black.
+    float nDotL = doubleSided ? abs(dot(normal, lightDirection))
+                              : max(dot(normal, lightDirection), 0.0);
     float geometry = geometrySchlickGGX(nDotV, roughness) *
                      geometrySchlickGGX(nDotL, roughness);
     float3 specular = distributionGGX(normal, halfway, roughness) * geometry * fresnel /
@@ -236,7 +241,8 @@ ForwardFragmentOutput fragmentMain(ForwardFragmentInput input)
             float cone = dot(normalize(-local.directionOuterCos.xyz), localDirection);
             attenuation *= smoothstep(local.directionOuterCos.w, local.parameters.x, cone);
         }
-        float localNDotL = max(dot(normal, localDirection), 0.0);
+        float localNDotL = doubleSided ? abs(dot(normal, localDirection))
+                                       : max(dot(normal, localDirection), 0.0);
         float3 localHalfway = normalize(viewDirection + localDirection);
         float3 localFresnel = fresnelSchlick(max(dot(localHalfway, viewDirection), 0.0), f0);
         float localGeometry = geometrySchlickGGX(nDotV, roughness) *

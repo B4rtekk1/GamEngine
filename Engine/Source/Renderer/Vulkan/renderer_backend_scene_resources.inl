@@ -1094,7 +1094,8 @@
                 const Mesh& mesh = *renderer->mesh;
                 bool materialChanged = false;
                 for (std::uint32_t slot = 0; slot < materialSlots; ++slot) {
-                    const PBRMaterial source = mesh.materials.empty()
+                    const PBRMaterial source = mesh.materials.empty() ||
+                        (renderer->materialOverride && slot == 0)
                         ? renderer->material
                         : (slot < mesh.materials.size() ? mesh.materials[slot] : PBRMaterial{});
                     const GPUMaterialData material = packMaterial(source, mesh);

@@ -50,6 +50,7 @@ namespace Engine {
         constexpr std::size_t FloatBufferSize = 32;
         constexpr std::uint32_t LegacyFormatVersion = 11;
         constexpr std::uint32_t TerrainFormatVersion = 12;
+        constexpr std::uint32_t EmissiveFormatVersion = 13;
         constexpr std::uint32_t TerrainDataVersion = 1;
         constexpr std::array<char, 8> TerrainDataMagic{'G', 'E', 'T', 'E', 'R', 'R', '1', '\0'};
 
@@ -259,7 +260,7 @@ namespace Engine {
             material.alphaMode = static_cast<AlphaMode>(alphaMode);
             material.doubleSided = readBool(input, "double-sided flag");
             material.alphaCutoff = readFloat(input, "alpha cutoff");
-            if (version >= SceneSerializer::FormatVersion) {
+            if (version >= EmissiveFormatVersion) {
                 material.emissiveColor = readColorRgba(input, "material emissive color");
                 material.emissiveIntensity = readFloat(input, "material emissive intensity");
                 material.emissiveTexture = read<std::int32_t>(input, "emissive texture index");
@@ -908,7 +909,8 @@ namespace Engine {
                                              : -1;
                 serialized << "MESH_RENDERER " << meshId << ' ';
                 writeMaterial(serialized, renderer.material);
-                serialized << ' ' << static_cast<int>(renderer.castShadow) << ' '
+                serialized << ' ' << static_cast<int>(renderer.materialOverride) << ' '
+                        << static_cast<int>(renderer.castShadow) << ' '
                         << renderer.cullingBatch << '\n';
             }
             if (registry.has<LightComponent>(entity)) {
@@ -1036,7 +1038,8 @@ namespace Engine {
         input.imbue(std::locale::classic());
         expect(input, "GAMENGINE_SCENE");
         const auto version = read<unsigned>(input, "format version");
-        if (version != LegacyFormatVersion && version != TerrainFormatVersion && version != FormatVersion) {
+        if (version != LegacyFormatVersion && version != TerrainFormatVersion &&
+            version != EmissiveFormatVersion && version != FormatVersion) {
             invalidScene("unsupported format version " + std::to_string(version));
         }
         auto* terrainData = static_cast<std::istream*>(input.pword(terrainDataStreamSlot()));
@@ -1323,6 +1326,8 @@ namespace Engine {
                         renderer.mesh = meshes[static_cast<std::size_t>(meshId)];
                     }
                     renderer.material = readMaterial(input, version);
+                    renderer.materialOverride = version >= FormatVersion
+                        ? readBool(input, "material-override flag") : false;
                     renderer.castShadow = readBool(input, "cast-shadow flag");
                     renderer.cullingBatch = read<std::uint32_t>(input, "culling batch");
                     loaded.add<MeshRenderer>(entity, std::move(renderer));

@@ -154,6 +154,11 @@ bool ComponentsPanel::draw(Engine::ScenePreset &scene, const std::vector<Engine:
 
         ImGui::Separator();
         ImGui::TextDisabled("Material override");
+        if (ImGui::Checkbox("Override imported material slot 0##mesh-material", &renderer.materialOverride)) {
+            if (renderer.materialOverride && renderer.mesh && !renderer.mesh->materials.empty())
+                renderer.material = renderer.mesh->materials.front();
+            changed = true;
+        }
         float baseColor[4] = {
             renderer.material.baseColor.r(), renderer.material.baseColor.g(),
             renderer.material.baseColor.b(), renderer.material.baseColor.a()

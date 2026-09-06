@@ -21,6 +21,7 @@ namespace Engine {
 
         /// Per-entity material parameters for the PBR forward pass.
         PBRMaterial material{};
+        bool materialOverride{false};
 
         /// Whether this mesh contributes to the shadow map.
         bool castShadow{true};
