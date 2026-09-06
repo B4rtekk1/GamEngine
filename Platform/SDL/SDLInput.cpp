@@ -2,6 +2,8 @@
 
 #include "Engine/Input/Input.h"
 
+#include <algorithm>
+
 namespace Engine {
     namespace {
 
@@ -138,6 +140,24 @@ namespace Engine {
                 Input::addMouseWheel(event.wheel.y * direction);
                 break;
             }
+
+            case SDL_EVENT_GAMEPAD_BUTTON_DOWN:
+            case SDL_EVENT_GAMEPAD_BUTTON_UP:
+                if (event.gbutton.button < static_cast<Uint8>(GamepadButton::Count)) {
+                    Input::setGamepadButton(static_cast<GamepadButton>(event.gbutton.button), event.gbutton.down);
+                }
+                break;
+
+            case SDL_EVENT_GAMEPAD_AXIS_MOTION:
+                if (event.gaxis.axis < static_cast<Uint8>(GamepadAxis::Count)) {
+                    constexpr float axisMaximum = 32767.0F;
+                    float value = std::clamp(static_cast<float>(event.gaxis.value) / axisMaximum, -1.0F, 1.0F);
+                    const auto axis = static_cast<GamepadAxis>(event.gaxis.axis);
+                    // SDL reports stick-up as negative; engine 2D axes use positive Y as forward/up.
+                    if (axis == GamepadAxis::LeftY || axis == GamepadAxis::RightY) value = -value;
+                    Input::setGamepadAxis(axis, value);
+                }
+                break;
 
             default:
                 break;

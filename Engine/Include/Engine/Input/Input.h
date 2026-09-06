@@ -6,8 +6,11 @@
  */
 
 #include "Engine/Input/KeyCode.h"
+#include "Engine/Input/Gamepad.h"
 #include "Engine/Input/MouseButton.h"
 #include "Engine/Math/Vec2.h"
+
+#include <string_view>
 
 namespace Engine {
     /**
@@ -54,6 +57,17 @@ namespace Engine {
         /** @brief Returns the mouse-wheel movement accumulated during the current frame. */
         static float mouseWheel();
 
+        static bool gamepadDown(GamepadButton button);
+        static bool gamepadPressed(GamepadButton button);
+        static bool gamepadReleased(GamepadButton button);
+        static float gamepadAxis(GamepadAxis axis);
+
+        /** Action-level input configured through InputMap. */
+        static bool actionDown(std::string_view action);
+        static bool actionPressed(std::string_view action);
+        static bool actionReleased(std::string_view action);
+        static Vec2 axis2D(std::string_view axis);
+
     private:
         friend class SDLInput;
 
@@ -66,5 +80,9 @@ namespace Engine {
         static void addMouseDelta(float x, float y); //NOLINT
 
         static void addMouseWheel(float value);
+
+        static void setGamepadButton(GamepadButton button, bool down);
+
+        static void setGamepadAxis(GamepadAxis axis, float value);
     };
 }

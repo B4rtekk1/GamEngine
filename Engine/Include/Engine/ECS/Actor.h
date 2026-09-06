@@ -29,6 +29,70 @@ namespace Engine {
     class PhysicsSystem;
     class Script;
 
+    class TransformHandle final {
+    public:
+        [[nodiscard]] bool valid() const noexcept;
+        [[nodiscard]] Vec3 position() const;
+        [[nodiscard]] Vec3 rotation() const;
+        [[nodiscard]] Vec3 scale() const;
+        void setPosition(Vec3 value) const;
+        void setRotation(Vec3 value) const;
+        void setScale(Vec3 value) const;
+        void translate(Vec3 offset) const;
+    private:
+        friend class Actor;
+        TransformHandle(Scene *scene, ObjectId id) noexcept : scene_(scene), objectId_(id) {}
+        Scene *scene_{}; ObjectId objectId_{NullObjectId};
+    };
+
+    class RigidbodyHandle final {
+    public:
+        [[nodiscard]] bool valid() const noexcept;
+        void setVelocity(Vec3 value) const;
+        [[nodiscard]] Vec3 velocity() const;
+        void addForce(Vec3 value) const;
+        void addImpulse(Vec3 value) const;
+        void setMass(float value) const;
+        [[nodiscard]] float mass() const;
+    private:
+        friend class Actor;
+        RigidbodyHandle(Scene *scene, ObjectId id) noexcept : scene_(scene), objectId_(id) {}
+        Scene *scene_{}; ObjectId objectId_{NullObjectId};
+    };
+
+    class ColliderHandle final {
+    public:
+        [[nodiscard]] bool valid() const noexcept;
+        void setTrigger(bool value) const;
+        [[nodiscard]] bool isTrigger() const;
+    private:
+        friend class Actor;
+        ColliderHandle(Scene *scene, ObjectId id) noexcept : scene_(scene), objectId_(id) {}
+        Scene *scene_{}; ObjectId objectId_{NullObjectId};
+    };
+
+    class CameraHandle final {
+    public:
+        [[nodiscard]] bool valid() const noexcept;
+        void setFov(float value) const;
+        [[nodiscard]] float fov() const;
+    private:
+        friend class Actor;
+        CameraHandle(Scene *scene, ObjectId id) noexcept : scene_(scene), objectId_(id) {}
+        Scene *scene_{}; ObjectId objectId_{NullObjectId};
+    };
+
+    class LightHandle final {
+    public:
+        [[nodiscard]] bool valid() const noexcept;
+        void setIntensity(float value) const;
+        [[nodiscard]] float intensity() const;
+    private:
+        friend class Actor;
+        LightHandle(Scene *scene, ObjectId id) noexcept : scene_(scene), objectId_(id) {}
+        Scene *scene_{}; ObjectId objectId_{NullObjectId};
+    };
+
     /** A decomposed, world-space transform exposed by the gameplay API. */
     struct WorldTransform final {
         Vec3 position{};
@@ -70,8 +134,13 @@ namespace Engine {
 
         [[nodiscard]] Vec3 scale() const;
 
-        /** Returns this actor's read-only local transform component. */
-        [[nodiscard]] const Transform &transform() const;
+        /** High-level handle for this actor's transform. */
+        [[nodiscard]] TransformHandle transform() const noexcept { return {scene_, objectId_}; }
+
+        [[nodiscard]] RigidbodyHandle rigidbody() const noexcept { return {scene_, objectId_}; }
+        [[nodiscard]] ColliderHandle collider() const noexcept { return {scene_, objectId_}; }
+        [[nodiscard]] CameraHandle camera() const noexcept { return {scene_, objectId_}; }
+        [[nodiscard]] LightHandle light() const noexcept { return {scene_, objectId_}; }
 
         /** Mutates the local transform and records a component revision. */
         void modifyTransform(const std::function<void(Transform &)> &func) const;
@@ -197,11 +266,25 @@ namespace Engine {
         friend class Scene;
         friend class PhysicsSystem;
         friend class Script;
+        friend class TransformHandle;
+        friend class RigidbodyHandle;
+        friend class ColliderHandle;
+        friend class CameraHandle;
+        friend class LightHandle;
 
         Actor(Scene &scene, ObjectId objectId) noexcept : scene_(&scene), objectId_(objectId) {
         }
 
         [[nodiscard]] GameObject &object() const;
+
+        [[nodiscard]] static Actor fromHandle(Scene *scene, ObjectId objectId);
+        void addRigidbodyForce(Vec3 value) const;
+        void addRigidbodyImpulse(Vec3 value) const;
+        [[nodiscard]] float rigidbodyMass() const;
+        [[nodiscard]] bool colliderTrigger() const;
+        void setCameraFov(float value) const;
+        [[nodiscard]] float cameraFov() const;
+        [[nodiscard]] float lightIntensity() const;
 
         Scene *scene_{};
         ObjectId objectId_{NullObjectId};

@@ -61,7 +61,7 @@ namespace Engine {
     }
 
     void Application::initializeRuntime() {
-        if (!SDL_Init(SDL_INIT_VIDEO | SDL_INIT_EVENTS)) {
+        if (!SDL_Init(SDL_INIT_VIDEO | SDL_INIT_EVENTS | SDL_INIT_GAMEPAD)) {
             throw std::runtime_error(SDL_GetError());
         }
         impl_->initialized = true;

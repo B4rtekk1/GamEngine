@@ -900,7 +900,7 @@
         void updateRenderableBuffers() {
             const auto modelFromInstance = [](const RendererInstanceData& instance) {
                 const glm::quat rotation{instance.rotation.w, instance.rotation.x,
-                                         instance.rotation.y, instance.rotation.z};
+                                         instance.rotation.y, instance.rotation.z,};
                 glm::mat4 model = glm::translate(glm::mat4{1.0F},
                                                  glm::vec3{instance.positionMaterial});
                 model *= glm::mat4_cast(rotation);

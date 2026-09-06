@@ -55,6 +55,11 @@ namespace Engine {
         return *object;
     }
 
+    Actor Actor::fromHandle(Scene *scene, const ObjectId objectId) {
+        if (scene == nullptr) throw std::logic_error("Component handle is not attached to a Scene");
+        return Actor{*scene, objectId};
+    }
+
     bool Actor::valid() const noexcept {
         return scene_ != nullptr && scene_->find(objectId_) != nullptr;
     }
@@ -75,7 +80,6 @@ namespace Engine {
     Vec3 Actor::position() const { return object().position(); }
     Vec3 Actor::rotation() const { return object().rotation(); }
     Vec3 Actor::scale() const { return object().scale(); }
-    const Transform &Actor::transform() const { return object().transform(); }
     void Actor::modifyTransform(const std::function<void(Transform &)> &func) const {
         object().modifyTransform(func);
     }
@@ -227,6 +231,14 @@ namespace Engine {
         return object().get<RigidbodyComponent>().linearVelocity;
     }
 
+    void Actor::addRigidbodyForce(const Vec3 value) const {
+        object().modify<RigidbodyComponent>([value](auto &body) { body.addForce(value); });
+    }
+    void Actor::addRigidbodyImpulse(const Vec3 value) const {
+        object().modify<RigidbodyComponent>([value](auto &body) { body.addImpulse(value); });
+    }
+    float Actor::rigidbodyMass() const { return object().get<RigidbodyComponent>().mass; }
+
     void Actor::addBoxCollider(Vec3 halfExtents) const {
         auto &object = this->object();
         const ColliderComponent value{.shape = BoxCollider{halfExtents}};
@@ -274,6 +286,7 @@ namespace Engine {
     void Actor::setColliderTrigger(const bool enabled) const {
         object().modify<ColliderComponent>([&](auto &collider) { collider.isTrigger = enabled; });
     }
+    bool Actor::colliderTrigger() const { return object().get<ColliderComponent>().isTrigger; }
 
     // NOLINTNEXTLINE(bugprone-easily-swappable-parameters): friction and restitution are distinct scalar API inputs.
     void Actor::setColliderMaterial(const float friction, const float restitution) const {
@@ -313,6 +326,10 @@ namespace Engine {
     void Actor::setCameraAspectRatio(const float width, const float height) const {
         object().modify<CameraComponent>([&](auto &camera) { camera.setAspectRatio(width, height); });
     }
+    void Actor::setCameraFov(const float value) const {
+        object().modify<CameraComponent>([value](auto &camera) { camera.setPerspective(value, camera.nearClip, camera.farClip); });
+    }
+    float Actor::cameraFov() const { return object().get<CameraComponent>().fieldOfView; }
 
     void Actor::addLight(const LightComponent& light) const { object().addLight(light); }
     bool Actor::hasLight() const { return object().has<LightComponent>(); }
@@ -328,6 +345,7 @@ namespace Engine {
     void Actor::setLightIntensity(const float intensity) const {
         object().modify<LightComponent>([&](auto &light) { light.intensity = intensity; });
     }
+    float Actor::lightIntensity() const { return object().get<LightComponent>().intensity; }
 
     void Actor::setLightEnabled(const bool enabled) const {
         object().modify<LightComponent>([&](auto &light) { light.enabled = enabled; });
@@ -349,4 +367,33 @@ namespace Engine {
         scene_ = nullptr;
         objectId_ = NullObjectId;
     }
+
+    bool TransformHandle::valid() const noexcept { return scene_ != nullptr && scene_->find(objectId_) != nullptr; }
+    Vec3 TransformHandle::position() const { return Actor::fromHandle(scene_, objectId_).position(); }
+    Vec3 TransformHandle::rotation() const { return Actor::fromHandle(scene_, objectId_).rotation(); }
+    Vec3 TransformHandle::scale() const { return Actor::fromHandle(scene_, objectId_).scale(); }
+    void TransformHandle::setPosition(const Vec3 value) const { Actor::fromHandle(scene_, objectId_).setPosition(value); }
+    void TransformHandle::setRotation(const Vec3 value) const { Actor::fromHandle(scene_, objectId_).setRotation(value); }
+    void TransformHandle::setScale(const Vec3 value) const { Actor::fromHandle(scene_, objectId_).setScale(value); }
+    void TransformHandle::translate(const Vec3 offset) const { Actor::fromHandle(scene_, objectId_).translate(offset); }
+
+    bool RigidbodyHandle::valid() const noexcept { return scene_ != nullptr && scene_->find(objectId_) != nullptr && Actor::fromHandle(scene_, objectId_).hasRigidbody(); }
+    void RigidbodyHandle::setVelocity(const Vec3 value) const { Actor::fromHandle(scene_, objectId_).setVelocity(value); }
+    Vec3 RigidbodyHandle::velocity() const { return Actor::fromHandle(scene_, objectId_).velocity(); }
+    void RigidbodyHandle::addForce(const Vec3 value) const { Actor::fromHandle(scene_, objectId_).addRigidbodyForce(value); }
+    void RigidbodyHandle::addImpulse(const Vec3 value) const { Actor::fromHandle(scene_, objectId_).addRigidbodyImpulse(value); }
+    void RigidbodyHandle::setMass(const float value) const { Actor::fromHandle(scene_, objectId_).setMass(value); }
+    float RigidbodyHandle::mass() const { return Actor::fromHandle(scene_, objectId_).rigidbodyMass(); }
+
+    bool ColliderHandle::valid() const noexcept { return scene_ != nullptr && scene_->find(objectId_) != nullptr && Actor::fromHandle(scene_, objectId_).hasCollider(); }
+    void ColliderHandle::setTrigger(const bool value) const { Actor::fromHandle(scene_, objectId_).setColliderTrigger(value); }
+    bool ColliderHandle::isTrigger() const { return Actor::fromHandle(scene_, objectId_).colliderTrigger(); }
+
+    bool CameraHandle::valid() const noexcept { return scene_ != nullptr && scene_->find(objectId_) != nullptr && Actor::fromHandle(scene_, objectId_).hasCamera(); }
+    void CameraHandle::setFov(const float value) const { Actor::fromHandle(scene_, objectId_).setCameraFov(value); }
+    float CameraHandle::fov() const { return Actor::fromHandle(scene_, objectId_).cameraFov(); }
+
+    bool LightHandle::valid() const noexcept { return scene_ != nullptr && scene_->find(objectId_) != nullptr && Actor::fromHandle(scene_, objectId_).hasLight(); }
+    void LightHandle::setIntensity(const float value) const { Actor::fromHandle(scene_, objectId_).setLightIntensity(value); }
+    float LightHandle::intensity() const { return Actor::fromHandle(scene_, objectId_).lightIntensity(); }
 } // namespace Engine
