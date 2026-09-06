@@ -528,6 +528,7 @@ namespace Engine {
             createFramebuffers();
             createSceneViewportResources();
             createTemporalAaPass();
+            createBloomPass();
             createTonemapPass();
             refreshEditorViewportTextures();
             sceneViewportCacheValid = false;
@@ -635,6 +636,7 @@ namespace Engine {
             createFramebuffers();
             createSceneViewportFramebuffer();
             createTemporalAaPass();
+            createBloomPass();
             createTonemapPass();
             refreshEditorViewportTextures();
             renderableTopologySignature = updatedTopology;

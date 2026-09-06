@@ -56,6 +56,8 @@ namespace Engine {
                     VkDescriptorSet sceneDescriptorSet,
                     const Culling::GPUCullingPass &cullingPass,
                     const Culling::IndexedIndirectDrawCount &indirectDraw,
+                    const Culling::GPUCullingPass &twoSidedCullingPass,
+                    const Culling::IndexedIndirectDrawCount &twoSidedIndirectDraw,
                     std::uint32_t objectCount,
                     VkDescriptorSet grassDescriptorSet = VK_NULL_HANDLE,
                     const Culling::IndexedIndirectDrawCount *grassIndirectDraw = nullptr);
@@ -122,6 +124,7 @@ namespace Engine {
         std::vector<std::unique_ptr<Buffer>> pageTableBuffers_;
         VkPipelineLayout pipelineLayout_{VK_NULL_HANDLE};
         VkPipeline pipeline_{VK_NULL_HANDLE};
+        VkPipeline twoSidedPipeline_{VK_NULL_HANDLE};
         VkPipeline grassPipeline_{VK_NULL_HANDLE};
     };
 } // namespace Engine

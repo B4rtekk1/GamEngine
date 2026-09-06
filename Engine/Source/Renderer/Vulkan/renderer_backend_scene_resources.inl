@@ -1288,8 +1288,10 @@
             data.cameraCut = 1;
             data.shadowPass = 1;
             data.enableFrustumCulling = optimizationFeatures.gpuCulling ? 1u : 0u;
-            data.drawCategory = 2;
+            data.drawCategory = 0;
             shadowCullingUniformBuffers[frame].update(&data, sizeof(data));
+            data.drawCategory = 1;
+            shadowTwoSidedCullingUniformBuffers[frame].update(&data, sizeof(data));
         }
 
         void createUniformBuffers() {

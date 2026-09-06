@@ -337,6 +337,7 @@ foreach(SLANG_SHADER_SOURCE IN LISTS SLANG_SHADER_SOURCES)
 endforeach()
 
 add_custom_target(Shaders DEPENDS ${SHADER_OUTPUTS})
+add_dependencies(Engine Shaders)
 
 if(BUILD_TESTING)
     include(FetchContent)
@@ -395,3 +396,4 @@ add_subdirectory(Sandbox)
 # Play in the editor starts this executable.  Keeping it as a build dependency
 # means an Editor build always leaves a runnable game beside its assets.
 add_dependencies(Editor GamEngine)
+add_dependencies(Editor Shaders)

@@ -50,6 +50,7 @@
             createFramebuffers();
             createSceneViewportResources();
             createTemporalAaPass();
+            createBloomPass();
             createTonemapPass();
             createUIResources();
             refreshEditorViewportTextures();

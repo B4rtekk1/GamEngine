@@ -256,6 +256,9 @@
                 shadowCullingUniformBuffers[frame].createHostVisible(vulkanDevice.physical(), device,
                     sizeof(Culling::CullingUniformData), VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
                     vulkanDevice.allocator());
+                shadowTwoSidedCullingUniformBuffers[frame].createHostVisible(vulkanDevice.physical(), device,
+                    sizeof(Culling::CullingUniformData), VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
+                    vulkanDevice.allocator());
                 const std::uint32_t zero = 0;
                 std::vector<std::uint32_t> emptyVisibleInstances(
                     std::max<std::size_t>(1, sceneGpu.database.instances().size()));
@@ -394,12 +397,24 @@
                     emptyShadowCandidates.data(), sizeof(std::uint32_t) * emptyShadowCandidates.size(),
                     VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
                     commandPool, vulkanDevice.graphicsQueue(), vulkanDevice.allocator());
+                shadowTwoSidedCandidateBuffers[frame].createDeviceLocal(vulkanDevice.physical(), device,
+                    emptyShadowCandidates.data(), sizeof(std::uint32_t) * emptyShadowCandidates.size(),
+                    VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+                    commandPool, vulkanDevice.graphicsQueue(), vulkanDevice.allocator());
                 std::array<std::uint32_t, ShadowMap::ClipLevelCount> zeroCandidateCounts{};
                 shadowCandidateCountBuffers[frame].createDeviceLocal(vulkanDevice.physical(), device,
                     zeroCandidateCounts.data(), sizeof(zeroCandidateCounts),
                     VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
                     commandPool, vulkanDevice.graphicsQueue(), vulkanDevice.allocator());
+                shadowTwoSidedCandidateCountBuffers[frame].createDeviceLocal(vulkanDevice.physical(), device,
+                    zeroCandidateCounts.data(), sizeof(zeroCandidateCounts),
+                    VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+                    commandPool, vulkanDevice.graphicsQueue(), vulkanDevice.allocator());
                 shadowIndirectBuffers[frame].createDeviceLocal(vulkanDevice.physical(), device, emptyShadowCommands.data(),
+                    sizeof(VkDrawIndexedIndirectCommand) * emptyShadowCommands.size(),
+                    VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+                    commandPool, vulkanDevice.graphicsQueue(), vulkanDevice.allocator());
+                shadowTwoSidedIndirectBuffers[frame].createDeviceLocal(vulkanDevice.physical(), device, emptyShadowCommands.data(),
                     sizeof(VkDrawIndexedIndirectCommand) * emptyShadowCommands.size(),
                     VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
                     commandPool, vulkanDevice.graphicsQueue(), vulkanDevice.allocator());
@@ -425,9 +440,13 @@
                     VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT |
                     VK_BUFFER_USAGE_TRANSFER_DST_BIT,
                     commandPool, vulkanDevice.graphicsQueue(), vulkanDevice.allocator());
+                shadowTwoSidedDrawCountBuffers[frame].createDeviceLocal(vulkanDevice.physical(), device,
+                    zeroShadowCounts.data(), sizeof(zeroShadowCounts),
+                    VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+                    commandPool, vulkanDevice.graphicsQueue(), vulkanDevice.allocator());
             }
 
-            constexpr uint32_t cullingSetCount = MAX_FRAMES_IN_FLIGHT * 5;
+            constexpr uint32_t cullingSetCount = MAX_FRAMES_IN_FLIGHT * 6;
             constexpr uint32_t instanceCullSetCount = MAX_FRAMES_IN_FLIGHT;
             // Per frame: 4 legacy sets, game cluster/blade/classify sets,
             // 14 per-frame shared sets (including four dispatch builders),
@@ -453,9 +472,9 @@
                 msaa.enabled() ? hiZDepthBuffer.imageView() : depthBuffer.imageView(),
                 msaa.enabled() ? hiZDepthBuffer.sampler() : depthBuffer.sampler());
 
-            std::array<VkDescriptorSetLayout, MAX_FRAMES_IN_FLIGHT * 5> cullLayouts{};
+            std::array<VkDescriptorSetLayout, MAX_FRAMES_IN_FLIGHT * 6> cullLayouts{};
             cullLayouts.fill(cullingDescriptorSetLayout);
-            std::array<VkDescriptorSet, MAX_FRAMES_IN_FLIGHT * 5> cullSets{};
+            std::array<VkDescriptorSet, MAX_FRAMES_IN_FLIGHT * 6> cullSets{};
             VkDescriptorSetAllocateInfo allocateInfo{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};
             allocateInfo.descriptorPool = cullingDescriptorPool;
             allocateInfo.descriptorSetCount = static_cast<uint32_t>(cullSets.size());
@@ -627,6 +646,7 @@
                 VkDescriptorSet sceneCullSet = cullSets[MAX_FRAMES_IN_FLIGHT * 2 + frame];
                 VkDescriptorSet sceneFoliageCullSet = cullSets[MAX_FRAMES_IN_FLIGHT * 3 + frame];
                 VkDescriptorSet shadowCullSet = cullSets[MAX_FRAMES_IN_FLIGHT * 4 + frame];
+                VkDescriptorSet shadowTwoSidedCullSet = cullSets[MAX_FRAMES_IN_FLIGHT * 5 + frame];
                 const auto& candidates = shadowCandidateBuffers[frame];
                 const auto& candidateCounts = shadowCandidateCountBuffers[frame];
                 updateCullingSet({cameraCullSet, indirectBuffers[frame], drawCountBuffers[frame],
@@ -635,6 +655,8 @@
                                   foliageCullingUniformBuffers[frame], candidates, candidateCounts});
                 updateCullingSet({shadowCullSet, shadowIndirectBuffers[frame], shadowDrawCountBuffers[frame],
                                   shadowCullingUniformBuffers[frame], candidates, candidateCounts});
+                updateCullingSet({shadowTwoSidedCullSet, shadowTwoSidedIndirectBuffers[frame], shadowTwoSidedDrawCountBuffers[frame],
+                                  shadowTwoSidedCullingUniformBuffers[frame], shadowTwoSidedCandidateBuffers[frame], shadowTwoSidedCandidateCountBuffers[frame]});
                 updateCullingSet({sceneCullSet, sceneIndirectBuffers[frame], sceneDrawCountBuffers[frame],
                                   sceneCullingUniformBuffers[frame], candidates, candidateCounts});
                 updateCullingSet({sceneFoliageCullSet, sceneFoliageIndirectBuffers[frame], sceneFoliageDrawCountBuffers[frame],
@@ -668,6 +690,11 @@
                     shadowCandidateCountBuffers[frame].handle());
                 shadowIndirectDraws[frame].create(
                     shadowIndirectBuffers[frame].handle(), shadowDrawCountBuffers[frame].handle(), objectCount);
+                shadowTwoSidedCullingPasses[frame].create(device, cullingPipeline, cullingPipelineLayout, shadowTwoSidedCullSet,
+                    shadowTwoSidedIndirectBuffers[frame].handle(), shadowTwoSidedDrawCountBuffers[frame].handle(), objectCount,
+                    shadowTwoSidedCandidateCountBuffers[frame].handle());
+                shadowTwoSidedIndirectDraws[frame].create(
+                    shadowTwoSidedIndirectBuffers[frame].handle(), shadowTwoSidedDrawCountBuffers[frame].handle(), objectCount);
             }
             hiZValid = false;
         }
@@ -679,23 +706,29 @@
             for (auto& draw : sceneIndirectDraws) draw.destroy();
             for (auto& draw : sceneFoliageIndirectDraws) draw.destroy();
             for (auto& draw : shadowIndirectDraws) draw.destroy();
+            for (auto& draw : shadowTwoSidedIndirectDraws) draw.destroy();
             for (Buffer& buffer : cullingUniformBuffers) buffer.destroy();
             for (Buffer& buffer : foliageCullingUniformBuffers) buffer.destroy();
             for (Buffer& buffer : sceneCullingUniformBuffers) buffer.destroy();
             for (Buffer& buffer : sceneFoliageCullingUniformBuffers) buffer.destroy();
             for (Buffer& buffer : shadowCullingUniformBuffers) buffer.destroy();
+            for (Buffer& buffer : shadowTwoSidedCullingUniformBuffers) buffer.destroy();
             for (Buffer& buffer : indirectBuffers) buffer.destroy();
             for (Buffer& buffer : foliageIndirectBuffers) buffer.destroy();
             for (Buffer& buffer : sceneIndirectBuffers) buffer.destroy();
             for (Buffer& buffer : sceneFoliageIndirectBuffers) buffer.destroy();
             for (Buffer& buffer : shadowIndirectBuffers) buffer.destroy();
+            for (Buffer& buffer : shadowTwoSidedIndirectBuffers) buffer.destroy();
             for (Buffer& buffer : shadowCandidateBuffers) buffer.destroy();
+            for (Buffer& buffer : shadowTwoSidedCandidateBuffers) buffer.destroy();
             for (Buffer& buffer : shadowCandidateCountBuffers) buffer.destroy();
+            for (Buffer& buffer : shadowTwoSidedCandidateCountBuffers) buffer.destroy();
             for (Buffer& buffer : drawCountBuffers) buffer.destroy();
             for (Buffer& buffer : foliageDrawCountBuffers) buffer.destroy();
             for (Buffer& buffer : sceneDrawCountBuffers) buffer.destroy();
             for (Buffer& buffer : sceneFoliageDrawCountBuffers) buffer.destroy();
             for (Buffer& buffer : shadowDrawCountBuffers) buffer.destroy();
+            for (Buffer& buffer : shadowTwoSidedDrawCountBuffers) buffer.destroy();
             for (Buffer& buffer : cullingObjectBuffers) buffer.destroy();
             for (Buffer& buffer : visibleInstanceBuffers) buffer.destroy();
             for (Buffer& buffer : visibleInstanceCountBuffers) buffer.destroy();

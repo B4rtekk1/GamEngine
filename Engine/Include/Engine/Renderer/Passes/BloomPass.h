@@ -3,6 +3,8 @@
 #include "Engine/Renderer/Vulkan/graphics_pipeline.h"
 #include "Engine/Renderer/Vulkan/hdr_buffer.h"
 
+#include <array>
+#include <cstdint>
 #include <vulkan/vulkan.h>
 
 namespace Engine {
@@ -18,7 +20,8 @@ namespace Engine {
         void create(VkPhysicalDevice physicalDevice, VkDevice device, VkExtent2D sourceExtent,
                     VmaAllocator allocator, Assets::AssetManager& assets);
         void destroy() noexcept;
-        void record(VkCommandBuffer commandBuffer, VkImageView source, VkSampler sourceSampler);
+        void record(VkCommandBuffer commandBuffer, VkImageView source, VkSampler sourceSampler,
+                    std::uint32_t frameIndex);
         [[nodiscard]] VkImageView resultView() const noexcept { return result_.imageView(); }
         [[nodiscard]] VkSampler resultSampler() const noexcept { return result_.sampler(); }
     private:
@@ -28,7 +31,8 @@ namespace Engine {
         GraphicsPipeline pipeline_;
         VkDescriptorSetLayout layout_ = VK_NULL_HANDLE;
         VkDescriptorPool pool_ = VK_NULL_HANDLE;
-        VkDescriptorSet set_ = VK_NULL_HANDLE;
+        static constexpr std::uint32_t FramesInFlight = 2;
+        std::array<VkDescriptorSet, FramesInFlight> sets_{};
         VkFramebuffer framebuffer_ = VK_NULL_HANDLE;
         bool initialized_ = false;
     };

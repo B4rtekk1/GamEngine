@@ -280,7 +280,7 @@ void ShadowPass::create(VkPhysicalDevice physicalDevice, VkDevice device,
         // The main pass renders glTF double-sided foliage. Its transparent
         // pixels are already discarded by shadow_map::fragmentMain, so it must also cast
         // a shadow when the light sees the back of a leaf card.
-        rasterizer.cullMode = VK_CULL_MODE_NONE;
+        rasterizer.cullMode = VK_CULL_MODE_BACK_BIT;
         rasterizer.frontFace = VK_FRONT_FACE_CLOCKWISE;
         rasterizer.lineWidth = 1.0F;
         rasterizer.depthBiasEnable = VK_TRUE;
@@ -317,6 +317,12 @@ void ShadowPass::create(VkPhysicalDevice physicalDevice, VkDevice device,
             throw std::runtime_error("Could not create shadow pipeline");
         }
 
+        rasterizer.cullMode = VK_CULL_MODE_NONE;
+        if (vkCreateGraphicsPipelines(device_, VK_NULL_HANDLE, 1, &pipelineInfo,
+                                      nullptr, &twoSidedPipeline_) != VK_SUCCESS) {
+            throw std::runtime_error("Could not create two-sided shadow pipeline");
+        }
+
         const auto grassShader = Vkutil::loadShaderModule(device_, assets, "shaders/grass_shadow.spv");
         const std::array grassStages{
             VkPipelineShaderStageCreateInfo{VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO, nullptr, 0,
@@ -339,12 +345,14 @@ void ShadowPass::create(VkPhysicalDevice physicalDevice, VkDevice device,
 void ShadowPass::destroy() noexcept {
     if (device_ != VK_NULL_HANDLE) {
         if (grassPipeline_ != VK_NULL_HANDLE) vkDestroyPipeline(device_, grassPipeline_, nullptr);
+        if (twoSidedPipeline_ != VK_NULL_HANDLE) vkDestroyPipeline(device_, twoSidedPipeline_, nullptr);
         if (pipeline_ != VK_NULL_HANDLE) vkDestroyPipeline(device_, pipeline_, nullptr);
         if (pipelineLayout_ != VK_NULL_HANDLE) vkDestroyPipelineLayout(device_, pipelineLayout_, nullptr);
         if (descriptorPool_ != VK_NULL_HANDLE) vkDestroyDescriptorPool(device_, descriptorPool_, nullptr);
         if (descriptorSetLayout_ != VK_NULL_HANDLE) vkDestroyDescriptorSetLayout(device_, descriptorSetLayout_, nullptr);
     }
     pipeline_ = VK_NULL_HANDLE;
+    twoSidedPipeline_ = VK_NULL_HANDLE;
     grassPipeline_ = VK_NULL_HANDLE;
     pipelineLayout_ = VK_NULL_HANDLE;
     descriptorPool_ = VK_NULL_HANDLE;
@@ -721,6 +729,8 @@ void ShadowPass::record(const VkCommandBuffer commandBuffer,
                         const VkBuffer indexBuffer, const VkDescriptorSet sceneDescriptorSet,
                         const Culling::GPUCullingPass& cullingPass,
                         const Culling::IndexedIndirectDrawCount& indirectDraw,
+                        const Culling::GPUCullingPass& twoSidedCullingPass,
+                        const Culling::IndexedIndirectDrawCount& twoSidedIndirectDraw,
                         const std::uint32_t objectCount,
                         const VkDescriptorSet grassDescriptorSet,
                         const Culling::IndexedIndirectDrawCount* const grassIndirectDraw) {
@@ -746,6 +756,9 @@ void ShadowPass::record(const VkCommandBuffer commandBuffer,
             if (activeLevels[level])
                 cullingPass.recordCandidates(commandBuffer, objectCount,
                                              clipMatrices[level], level);
+            if (activeLevels[level])
+                twoSidedCullingPass.recordCandidates(commandBuffer, objectCount,
+                                                      clipMatrices[level], level);
         }
         cullingPass.prepareCandidateReads(commandBuffer);
         for (std::size_t pageIndex = 0; pageIndex < pagesToRender_.size(); ++pageIndex) {
@@ -760,6 +773,8 @@ void ShadowPass::record(const VkCommandBuffer commandBuffer,
             const Mat4 pageMatrix{pageTransform * clipMatrices[page.level].native()};
             cullingPass.recordCandidatesForPage(commandBuffer, objectCount, pageMatrix,
                                                 static_cast<std::uint32_t>(pageIndex), page.level);
+            twoSidedCullingPass.recordCandidatesForPage(commandBuffer, objectCount, pageMatrix,
+                                                         static_cast<std::uint32_t>(pageIndex), page.level);
         }
     }
 
@@ -823,6 +838,13 @@ void ShadowPass::record(const VkCommandBuffer commandBuffer,
             indirectDraw.record(commandBuffer,
                 sizeof(VkDrawIndexedIndirectCommand) * objectCount * pageIndex,
                 sizeof(std::uint32_t) * pageIndex);
+        }
+        if (objectCount != 0 && twoSidedIndirectDraw.valid()) {
+            vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, twoSidedPipeline_);
+            twoSidedIndirectDraw.record(commandBuffer,
+                sizeof(VkDrawIndexedIndirectCommand) * objectCount * pageIndex,
+                sizeof(std::uint32_t) * pageIndex);
+            vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline_);
         }
         if (grassDescriptorSet != VK_NULL_HANDLE && grassIndirectDraw != nullptr &&
             grassIndirectDraw->valid()) {

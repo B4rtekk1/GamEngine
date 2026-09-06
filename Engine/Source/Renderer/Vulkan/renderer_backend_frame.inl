@@ -493,6 +493,7 @@
                 instanceBuffers[currentFrame].handle(), indexBuffer.handle(),
                 shadowPass.descriptorSet(currentFrame), shadowCullingPasses[currentFrame],
                 shadowIndirectDraws[currentFrame],
+                shadowTwoSidedCullingPasses[currentFrame], shadowTwoSidedIndirectDraws[currentFrame],
                 optimizationFeatures.shadows && hasShadowCasters
                     ? static_cast<std::uint32_t>(gpuObjects.size()) : 0u,
                 shadowPass.grassShadowDescriptorSet(currentFrame), grassShadowDrawPtr);
@@ -507,6 +508,7 @@
                     vertexBuffer.handle(), instanceBuffers[currentFrame].handle(), indexBuffer.handle(),
                     sceneDescriptorPass.descriptorSet(currentFrame), shadowCullingPasses[currentFrame],
                     shadowIndirectDraws[currentFrame],
+                    shadowTwoSidedCullingPasses[currentFrame], shadowTwoSidedIndirectDraws[currentFrame],
                     optimizationFeatures.shadows && hasShadowCasters
                         ? static_cast<std::uint32_t>(gpuObjects.size()) : 0u,
                     sceneDescriptorPass.grassShadowDescriptorSet(currentFrame), grassShadowDrawPtr);
@@ -741,7 +743,7 @@
 
             bloomPass.record(commandBuffer,
                 taaResolveActive ? temporalAaPass.resolvedView() : hdrBuffer.imageView(),
-                hdrBuffer.sampler());
+                hdrBuffer.sampler(), currentFrame);
 
             if (editorUiActive) {
                 VkRenderPassBeginInfo pass{VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO};
@@ -900,6 +902,7 @@
             createFramebuffers();
             createSceneViewportResources();
             createTemporalAaPass();
+            createBloomPass();
             createTonemapPass();
             createUIResources();
             createEditorUiResources();
