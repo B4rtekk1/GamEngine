@@ -41,6 +41,13 @@ namespace Engine {
 
         // nativeWindow and nativeEvent are opaque platform handles. Applications
         // do not need to include graphics-backend headers to use the renderer.
+        /** Initializes presentation, synchronization and the ImGui backend only. */
+        void initializeCore(Scene &scene, void *nativeWindow);
+
+        /** Creates GPU resources derived from the current scene. */
+        void initializeScene(Scene &scene);
+
+        /** Compatibility helper which initializes both stages. */
         void initialize(Scene &scene, void *nativeWindow);
 
         static void beginFrame();

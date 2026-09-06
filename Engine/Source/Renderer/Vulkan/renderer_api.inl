@@ -21,14 +21,24 @@ AntialiasingLevel Renderer::antialiasingLevel() const noexcept {
     return antialiasingLevel_;
 }
 
-void Renderer::initialize(Scene& scene, void* nativeWindow) {
+void Renderer::initializeCore(Scene& scene, void* nativeWindow) {
     auto* window = static_cast<SDL_Window*>(nativeWindow);
     if (backend_) throw std::logic_error("Renderer is already initialized");
     backend_ = std::make_unique<Backend>(scene, window, optimizationFeatures_, antialiasingLevel_, grassSettings_,
                                          state_->assetManager, state_->forwardPass, state_->skyPass,
                                          state_->tonemapPass, state_->temporalAaPass, state_->particlePipeline,
                                          state_->canvasRenderer);
-    backend_->initialize();
+    backend_->initializeCore();
+}
+
+void Renderer::initializeScene(Scene& scene) {
+    if (!backend_) throw std::logic_error("Renderer core must be initialized first");
+    backend_->initializeSceneResources(scene);
+}
+
+void Renderer::initialize(Scene& scene, void* nativeWindow) {
+    initializeCore(scene, nativeWindow);
+    initializeScene(scene);
 }
 
 void Renderer::beginFrame() { Backend::beginFrame(); }
@@ -61,7 +71,9 @@ void Renderer::setEditorSelection(const Entity entity) const {
 }
 void Renderer::renderFrame() const { backend_->renderFrame(); }
 void Renderer::synchronizeScene(Scene& scene) const {
-    if (backend_) backend_->synchronizeSceneResources(scene);
+    if (!backend_) return;
+    if (!backend_->sceneResourcesReady()) backend_->initializeSceneResources(scene);
+    else backend_->synchronizeSceneResources(scene);
 }
 void Renderer::updateMeshGeometry(const Entity entity, const std::uint32_t firstVertex,
                                   const std::uint32_t vertexCount) const {
@@ -70,6 +82,10 @@ void Renderer::updateMeshGeometry(const Entity entity, const std::uint32_t first
 void Renderer::reloadScene(Scene& scene, void* nativeWindow) {
     static_cast<void>(nativeWindow);
     if (backend_) {
+        if (!backend_->sceneResourcesReady()) {
+            backend_->initializeSceneResources(scene);
+            return;
+        }
         if (backend_->antialiasingLevel != antialiasingLevel_) {
             backend_->reconfigureAntialiasing(antialiasingLevel_);
         }

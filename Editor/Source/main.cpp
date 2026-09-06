@@ -177,11 +177,12 @@ int main(int argc, char** argv) {
         // which explicitly optimize for an unshadowed renderer.
         Engine::Renderer renderer{Engine::RenderConfig{
             .features = Engine::RenderFeatures{.shadows = true}}};
-        renderer.initialize(scene, window);
+        renderer.initializeCore(scene, window);
         SceneHistory history;
         history.reset(scene);
         std::optional<std::future<std::unique_ptr<Engine::ScenePreset>>> initialSceneLoad;
         bool startInitialSceneLoad = loadInitialSceneAsync;
+        bool startEmptySceneResources = !loadInitialSceneAsync;
         bool initialSceneSyncPending = false;
         EntityClipboard clipboard;
         Engine::Entity selectedEntity = Engine::NullEntity;
@@ -623,6 +624,10 @@ int main(int argc, char** argv) {
                     Engine::SceneSerializer::load(*loadedScene, initialScene);
                     return loadedScene;
                 }));
+            }
+            if (startEmptySceneResources) {
+                startEmptySceneResources = false;
+                renderer.initializeScene(scene);
             }
 
             // Keep the editor UI responsive without unnecessarily throttling

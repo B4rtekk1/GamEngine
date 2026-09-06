@@ -22,6 +22,7 @@
         std::array<VkDescriptorSet, 2> gameViewportTemporalDescriptors{};
         VkDescriptorSet sceneViewportDescriptor = VK_NULL_HANDLE;
         bool editorUiActive = false;
+        bool sceneResourcesInitialized = false;
 
         MsaaResources msaa;
         HdrBuffer hdrBuffer;

@@ -877,6 +877,11 @@
                                              static_cast<float>(swapchain.extent().height));
                 }
             });
+            if (!sceneResourcesInitialized) {
+                createRenderFinishedSemaphores();
+                createEditorUiResources(false);
+                return;
+            }
             hdrBuffer.create(vulkanDevice.physical(), device, swapchain.extent(), vulkanDevice.allocator());
             msaa.create(swapchain.extent(), HdrBuffer::Format);
             createDepthResources();
@@ -1164,6 +1169,34 @@
 
             currentFrame = (currentFrame + 1) % MAX_FRAMES_IN_FLIGHT;
             ++shadowClipFrameIndex;
+        }
+
+        void drawCoreFrame() {
+            if (!hasDrawableExtent()) return;
+            uint32_t imageIndex;
+            if (!acquireFrameImage(imageIndex)) return;
+            VkCommandBuffer commandBuffer = commandBuffers[currentFrame];
+            vkResetCommandBuffer(commandBuffer, 0);
+            VkCommandBufferBeginInfo beginInfo{VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
+            if (vkBeginCommandBuffer(commandBuffer, &beginInfo) != VK_SUCCESS) {
+                throw std::runtime_error("Could not begin core command buffer");
+            }
+            VkRenderPassBeginInfo pass{VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO};
+            pass.renderPass = editorUiRenderPass;
+            pass.framebuffer = editorUiFramebuffers.at(imageIndex);
+            pass.renderArea.extent = swapchain.extent();
+            VkClearValue clear{};
+            clear.color = {{0.06F, 0.07F, 0.09F, 1.0F}};
+            pass.clearValueCount = 1;
+            pass.pClearValues = &clear;
+            vkCmdBeginRenderPass(commandBuffer, &pass, VK_SUBPASS_CONTENTS_INLINE);
+            ImGui_ImplVulkan_RenderDrawData(ImGui::GetDrawData(), commandBuffer);
+            vkCmdEndRenderPass(commandBuffer);
+            if (vkEndCommandBuffer(commandBuffer) != VK_SUCCESS) {
+                throw std::runtime_error("Could not end core command buffer");
+            }
+            submitAndPresentFrame(imageIndex);
+            currentFrame = (currentFrame + 1) % MAX_FRAMES_IN_FLIGHT;
         }
 
         void updateFpsCounter() {

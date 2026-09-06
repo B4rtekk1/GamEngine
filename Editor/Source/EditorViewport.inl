@@ -1902,6 +1902,10 @@ ViewportInteraction drawViewport(Engine::ScenePreset &scene, Engine::Assets::Con
         ImGui::EndChild();
         ImGui::PopStyleVar(2);
         ImGui::PopStyleColor();
+    } else if (size.x > 1.0F && size.y > 1.0F) {
+        ImGui::SetCursorPosY(ImGui::GetCursorPosY() + size.y * 0.45F);
+        ImGui::SetCursorPosX(ImGui::GetCursorPosX() + size.x * 0.42F);
+        ImGui::TextDisabled("Loading scene...");
     }
     ImGui::End();
     // Do not enable camera navigation just because a mouse button is held

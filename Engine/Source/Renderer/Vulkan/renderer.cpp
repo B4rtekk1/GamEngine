@@ -214,11 +214,22 @@ namespace Engine {
             cleanup();
         }
 
-        void initialize() {
+        void initializeCore() {
             initWindow();
-            initVulkan();
+            initVulkanCore();
             Time::init();
         }
+
+        void initializeSceneResources(const Scene& updatedScene) {
+            if (&updatedScene != &scene) {
+                throw std::invalid_argument("Renderer cannot switch Scene instances while initialized");
+            }
+            if (sceneResourcesInitialized) return;
+            initSceneResources();
+            sceneResourcesInitialized = true;
+        }
+
+        [[nodiscard]] bool sceneResourcesReady() const noexcept { return sceneResourcesInitialized; }
 
         static void beginFrame() { Input::beginFrame(); }
 
@@ -380,6 +391,11 @@ namespace Engine {
         }
 
         void renderFrame() {
+            if (!sceneResourcesInitialized) {
+                Time::update();
+                drawCoreFrame();
+                return;
+            }
             TransformSystem::update(registry);
             Time::update();
             // Scene View navigation is updated before the editor UI so its

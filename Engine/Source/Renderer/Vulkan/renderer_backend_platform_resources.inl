@@ -4,7 +4,7 @@
             }
         }
 
-        void initVulkan() {
+        void initVulkanCore() {
             const char* basePath = SDL_GetBasePath();
             assetManager.set_asset_root(basePath ? std::filesystem::path(basePath) : std::filesystem::path{});
             Assets::register_default_asset_loaders(assetManager);
@@ -14,20 +14,26 @@
             createSurface();
             vulkanDevice.create(instance, surface);
             device = vulkanDevice.logical();
+            waitForDrawableExtent();
+            createSwapChain();
+            createCommandPool();
+            uploadContext.create(device, vulkanDevice.graphicsQueue(), vulkanDevice.graphicsQueueFamily(), vulkanDevice.allocator());
+            UploadContext::setCurrent(&uploadContext);
+            createCommandBuffers();
+            createSyncObjects();
+            createEditorUiResources(false);
+        }
+
+        void initSceneResources() {
             depthBuffer.initialize(vulkanDevice.physical(), device, vulkanDevice.allocator());
             const VkSampleCountFlagBits requestedSamples =
                 antialiasingLevel == AntialiasingLevel::MSAA4x ? VK_SAMPLE_COUNT_4_BIT :
                 antialiasingLevel == AntialiasingLevel::MSAA2x ? VK_SAMPLE_COUNT_2_BIT :
                 VK_SAMPLE_COUNT_1_BIT;
             msaa.initialize(vulkanDevice.physical(), device, requestedSamples, vulkanDevice.allocator());
-            waitForDrawableExtent();
-            createSwapChain();
             hdrBuffer.create(vulkanDevice.physical(), device, swapchain.extent(), vulkanDevice.allocator());
             msaa.create(swapchain.extent(), HdrBuffer::Format);
             createDepthResources();
-            createCommandPool();
-            uploadContext.create(device, vulkanDevice.graphicsQueue(), vulkanDevice.graphicsQueueFamily(), vulkanDevice.allocator());
-            UploadContext::setCurrent(&uploadContext);
             createMaterialTextures();
             createMeshBuffers();
             renderableTopologySignature = currentRenderableTopologySignature();
@@ -46,9 +52,7 @@
             createTemporalAaPass();
             createTonemapPass();
             createUIResources();
-            createCommandBuffers();
-            createSyncObjects();
-            createEditorUiResources();
+            refreshEditorViewportTextures();
             // Shader modules no longer need their source text after pipeline
             // creation. Release cache-only asset records before the main loop.
             assetManager.unload_unused();
@@ -382,6 +386,10 @@
         void reconfigureAntialiasing(const AntialiasingLevel requestedLevel) {
             if (device == VK_NULL_HANDLE) { return;
 }
+            if (!sceneResourcesInitialized) {
+                antialiasingLevel = requestedLevel;
+                return;
+            }
 
             // A minimized window reports a zero drawable extent. Waiting here
             // prevents recreating HDR attachments with that transient size.
@@ -504,7 +512,7 @@
                 vulkanDevice.allocator());
         }
 
-        void createEditorUiResources() {
+        void createEditorUiResources(const bool addViewportTextures = true) {
             if (ImGui::GetCurrentContext() == nullptr) { return; }
             VkAttachmentDescription color{};
             color.format = swapchain.format(); color.samples = VK_SAMPLE_COUNT_1_BIT;
@@ -562,6 +570,10 @@
             info.PipelineInfoMain.RenderPass = editorUiRenderPass;
             info.PipelineInfoMain.MSAASamples = VK_SAMPLE_COUNT_1_BIT;
             if (!ImGui_ImplVulkan_Init(&info)) throw std::runtime_error("Could not initialize ImGui Vulkan backend");
+            if (!addViewportTextures) {
+                editorUiActive = true;
+                return;
+            }
             gameViewportDescriptor = ImGui_ImplVulkan_AddTexture(hdrBuffer.imageView(), VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
             if (antialiasingLevel == AntialiasingLevel::TAA) {
                 const auto historyViews = temporalAaPass.historyViews();
