@@ -26,6 +26,7 @@ namespace Engine {
         [[nodiscard]] Entity createCapsule();
 
         [[nodiscard]] Entity createRamp();
+        [[nodiscard]] Entity createCamera();
 
         [[nodiscard]] Entity createLight();
 

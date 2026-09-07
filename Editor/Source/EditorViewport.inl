@@ -529,8 +529,16 @@ bool drawTranslationGizmo(Engine::ScenePreset &scene, const Engine::Entity selec
             }
         }
         const Engine::Vec3 offset = position - drag.startPositions.front().second;
-        for (const auto& [entity, startPosition] : drag.startPositions)
-            scene.edit(entity).setPosition(startPosition + offset);
+        for (const auto& [entity, startPosition] : drag.startPositions) {
+            // The Scene View is an authoring tool and only runs outside Play
+            // mode.  A dynamic rigid body normally queues setPosition() as a
+            // PhysX teleport, but no physics step runs here to consume that
+            // command.  Write its serialized transform directly instead.
+            const Engine::Vec3 editedPosition = startPosition + offset;
+            scene.editor().patch<Engine::Transform>(entity, [editedPosition](Engine::Transform& transform) {
+                transform.position = editedPosition;
+            });
+        }
         // The scene image is rendered later in this frame. Re-project the
         // overlay from the updated transform so it does not trail the object
         // by one frame while dragging.

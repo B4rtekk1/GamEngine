@@ -596,11 +596,18 @@ int main(int argc, char** argv) {
                 int physicsSteps = 0;
                 while (physicsAccumulator >= EditorConstants::physicsStep &&
                        physicsSteps < EditorConstants::maximumPhysicsStepsPerFrame) {
-                    physicsSystem.update(scene, static_cast<float>(EditorConstants::physicsStep));
+                    try {
+                        physicsSystem.update(scene, static_cast<float>(EditorConstants::physicsStep));
+                    } catch (const std::exception& error) {
+                        Editor::ConsolePanel::error("Physics simulation stopped: " +
+                                                    std::string{error.what()});
+                        static_cast<void>(setPlayMode(false));
+                        break;
+                    }
                     physicsAccumulator -= EditorConstants::physicsStep;
                     ++physicsSteps;
                 }
-                scriptSystem.update(scene, static_cast<float>(Engine::Time::deltaTime()));
+                if (playing) scriptSystem.update(scene, static_cast<float>(Engine::Time::deltaTime()));
             }
             ImGui::Render();
             renderer.renderFrame();

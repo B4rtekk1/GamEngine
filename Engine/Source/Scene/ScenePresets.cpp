@@ -172,7 +172,7 @@ namespace Engine {
             };
         }
         const Vec3 direction = Vec3{0, targetY, 0} - position;
-        const Actor cameraActor = createCamera("Camera", CameraComponent{
+        const Actor cameraActor = Scene::createCamera("Camera", CameraComponent{
                                               .fieldOfView = CameraFieldOfView, .nearClip = CameraNearClip,
                                               .farClip = CameraFarClip,
                                               .aspectRatio = CameraViewportWidth / CameraViewportHeight,
@@ -258,6 +258,14 @@ namespace Engine {
         const Entity entity = object.entity();
         object.add<ColliderComponent>(ColliderComponent{.shape = RampCollider{.halfExtents = Ramp::halfExtents()}});
         editorRamps.push_back(entity);
+        return entity;
+    }
+
+    Entity ScenePreset::createCamera() {
+        const Actor object = Scene::createCamera("Camera");
+        object.setPosition({0.0F, 2.0F, 5.0F});
+        const Entity entity = findEntity(object.id());
+        camera = entity;
         return entity;
     }
 

@@ -313,6 +313,9 @@ Engine::Entity drawEditorMenuBar(Engine::ScenePreset &scene, Engine::Renderer &r
         if (ImGui::MenuItem("Create Ramp")) {
             createdEntity = scene.createRamp();
         }
+        if (ImGui::MenuItem("Create Camera")) {
+            createdEntity = scene.createCamera();
+        }
         if (ImGui::MenuItem("Create Light")) {
             createdEntity = scene.createLight();
         }

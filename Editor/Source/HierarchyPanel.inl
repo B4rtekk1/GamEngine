@@ -1,3 +1,5 @@
+#include "Editor/Panels/ConsolePanel.h"
+
 Engine::Entity HierarchyPanel::draw(Engine::ScenePreset &scene, Engine::Assets::Content& content,
                                     const std::vector<Engine::Entity>& selection, Action &action,
                                     Engine::Entity &actionEntity, const bool canPaste,
@@ -16,6 +18,16 @@ Engine::Entity HierarchyPanel::draw(Engine::ScenePreset &scene, Engine::Assets::
     Engine::Entity hierarchyDropParent = Engine::NullEntity;
     action = Action::None;
     actionEntity = Engine::NullEntity;
+    const auto canParent = [&](const Engine::Entity child) {
+        if (!scene.editor().has<Engine::RigidbodyComponent>(child) ||
+            scene.editor().read<Engine::RigidbodyComponent>(child).type != Engine::RigidbodyType::Dynamic) {
+            return true;
+        }
+        const std::string message = "Cannot parent a dynamic rigid body: it is controlled by PhysX.";
+        Editor::ConsolePanel::error(message);
+        assetDropError = message;
+        return false;
+    };
     const auto createObjectMenu = [&] {
         if (ImGui::MenuItem("Empty Game Object", "Ctrl+Shift+N")) {
             clicked = scene.createGameObject();
@@ -27,6 +39,7 @@ Engine::Entity HierarchyPanel::draw(Engine::ScenePreset &scene, Engine::Assets::
         if (ImGui::MenuItem("3D Object/Plane")) clicked = scene.createPlane();
         if (ImGui::MenuItem("3D Object/Ramp")) clicked = scene.createRamp();
         ImGui::Separator();
+        if (ImGui::MenuItem("Camera")) clicked = scene.createCamera();
         if (ImGui::MenuItem("Light/Directional Light")) clicked = scene.createLight();
         if (ImGui::MenuItem("Terrain")) clicked = scene.createTerrain();
     };
@@ -37,7 +50,7 @@ Engine::Entity HierarchyPanel::draw(Engine::ScenePreset &scene, Engine::Assets::
             try {
                 clicked = Editor::AssetDragDrop::instantiateModel(
                     scene, content, Editor::AssetDragDrop::modelPath(*payload));
-                if (parent != Engine::NullEntity && clicked != Engine::NullEntity &&
+                if (parent != Engine::NullEntity && clicked != Engine::NullEntity && canParent(clicked) &&
                     scene.editor().valid(parent) && scene.editor().valid(clicked) &&
                     scene.editor().has<Engine::UUIDComponent>(parent)) {
                     const Engine::ParentComponent link{
@@ -289,7 +302,7 @@ Engine::Entity HierarchyPanel::draw(Engine::ScenePreset &scene, Engine::Assets::
                 const auto found = byUuid.find(parentUuid);
                 ancestor = found == byUuid.end() ? Engine::NullEntity : found->second;
             }
-            if (!createsCycle) {
+            if (!createsCycle && canParent(droppedHierarchyEntity)) {
                 const Engine::ParentComponent link{.parentUuid =
                     scene.editor().read<Engine::UUIDComponent>(hierarchyDropParent).value};
                 if (scene.editor().has<Engine::ParentComponent>(droppedHierarchyEntity)) {
