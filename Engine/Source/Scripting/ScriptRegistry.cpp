@@ -68,8 +68,22 @@ namespace Engine {
         std::map<std::string, ScriptFieldValue> synchronized;
         for (const auto &field : classDescriptor->fields) {
             const auto found = component.fields.find(field.name);
-            synchronized[field.name] = found != component.fields.end() &&
-                found->second.index() == field.defaultValue.index() ? found->second : field.defaultValue;
+            if (found != component.fields.end() && found->second.index() == field.defaultValue.index()) {
+                synchronized[field.name] = found->second;
+                continue;
+            }
+            bool migrated = false;
+            for (const auto &attribute : field.attributes) {
+                const auto *former = std::get_if<ScriptFormerlySerializedAsAttribute>(&attribute);
+                if (former == nullptr) continue;
+                const auto old = component.fields.find(former->name);
+                if (old != component.fields.end() && old->second.index() == field.defaultValue.index()) {
+                    synchronized[field.name] = old->second;
+                    migrated = true;
+                    break;
+                }
+            }
+            if (!migrated) synchronized[field.name] = field.defaultValue;
         }
         component.fields = std::move(synchronized);
     }

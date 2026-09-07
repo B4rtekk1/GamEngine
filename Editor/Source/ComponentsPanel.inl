@@ -1,6 +1,8 @@
 #include "Engine/ECS/Components/WindComponent.h"
 
 #include <algorithm>
+#include <cfloat>
+#include <climits>
 
 static bool drawRemovableComponentHeader(const char *label, const char *id, bool &remove) {
     const bool open = ImGui::CollapsingHeader(label, ImGuiTreeNodeFlags_DefaultOpen);
@@ -528,6 +530,9 @@ bool ComponentsPanel::draw(Engine::ScenePreset &scene, const std::vector<Engine:
         const auto *descriptor = Engine::ScriptRegistry::instance().descriptor(script.className);
         if (descriptor != nullptr) {
             for (const auto &field : descriptor->fields) {
+                if (Engine::findScriptAttribute<Engine::ScriptHideInInspectorAttribute>(field) != nullptr) continue;
+                if (const auto *space = Engine::findScriptAttribute<Engine::ScriptSpaceAttribute>(field))
+                    ImGui::Dummy({0.0F, space->pixels});
                 if (const auto *header = Engine::findScriptAttribute<Engine::ScriptHeaderAttribute>(field)) {
                     ImGui::SeparatorText(header->text.c_str());
                 }
@@ -537,35 +542,62 @@ bool ComponentsPanel::draw(Engine::ScenePreset &scene, const std::vector<Engine:
                 Engine::ScriptFieldValue edited = value;
                 bool changed = false;
                 const bool readOnly = Engine::findScriptAttribute<Engine::ScriptReadOnlyAttribute>(field) != nullptr;
+                const auto *displayName = Engine::findScriptAttribute<Engine::ScriptDisplayNameAttribute>(field);
+                const char *label = displayName != nullptr ? displayName->text.c_str() : field.name.c_str();
                 ImGui::BeginDisabled(readOnly);
                 switch (field.type) {
                 case Engine::ScriptFieldType::Bool:
-                    if (auto *v = std::get_if<bool>(&edited)) changed = ImGui::Checkbox(field.name.c_str(), v);
+                    if (auto *v = std::get_if<bool>(&edited)) changed = ImGui::Checkbox(label, v);
                     break;
                 case Engine::ScriptFieldType::Int:
                     if (auto *v = std::get_if<int>(&edited)) {
                         if (const auto *range = Engine::findScriptAttribute<Engine::ScriptRangeAttribute>(field)) {
-                            changed = ImGui::SliderInt(field.name.c_str(), v,
+                            changed = ImGui::SliderInt(label, v,
                                 static_cast<int>(range->min), static_cast<int>(range->max));
                         } else {
-                            changed = ImGui::DragInt(field.name.c_str(), v, 1.0F);
+                            const auto *step = Engine::findScriptAttribute<Engine::ScriptStepAttribute>(field);
+                            const auto *minimum = Engine::findScriptAttribute<Engine::ScriptMinAttribute>(field);
+                            const auto *maximum = Engine::findScriptAttribute<Engine::ScriptMaxAttribute>(field);
+                            if (minimum != nullptr || maximum != nullptr) {
+                                changed = ImGui::DragInt(label, v, step != nullptr ? static_cast<float>(step->value) : 1.0F,
+                                    minimum != nullptr ? static_cast<int>(minimum->value) : INT_MIN,
+                                    maximum != nullptr ? static_cast<int>(maximum->value) : INT_MAX);
+                            } else changed = ImGui::DragInt(label, v, step != nullptr ? static_cast<float>(step->value) : 1.0F);
                         }
                     }
                     break;
                 case Engine::ScriptFieldType::Float:
                     if (auto *v = std::get_if<float>(&edited)) {
+                        const bool percentage = Engine::findScriptAttribute<Engine::ScriptPercentageAttribute>(field) != nullptr;
+                        const bool angle = Engine::findScriptAttribute<Engine::ScriptAngleAttribute>(field) != nullptr;
+                        float displayValue = percentage ? *v * 100.0F : *v;
+                        const float displayScale = percentage ? 100.0F : 1.0F;
+                        const char *format = percentage ? "%.1f%%" : (angle ? "%.1f deg" : "%.3f");
                         if (const auto *range = Engine::findScriptAttribute<Engine::ScriptRangeAttribute>(field)) {
-                            changed = ImGui::SliderFloat(field.name.c_str(), v,
-                                static_cast<float>(range->min), static_cast<float>(range->max));
+                            changed = ImGui::SliderFloat(label, &displayValue,
+                                static_cast<float>(range->min) * displayScale, static_cast<float>(range->max) * displayScale,
+                                format);
                         } else {
-                            changed = ImGui::DragFloat(field.name.c_str(), v, 0.05F);
+                            const auto *step = Engine::findScriptAttribute<Engine::ScriptStepAttribute>(field);
+                            const auto *minimum = Engine::findScriptAttribute<Engine::ScriptMinAttribute>(field);
+                            const auto *maximum = Engine::findScriptAttribute<Engine::ScriptMaxAttribute>(field);
+                            if (minimum != nullptr || maximum != nullptr) {
+                                changed = ImGui::DragFloat(label, &displayValue,
+                                    (step != nullptr ? static_cast<float>(step->value) : 0.05F) * displayScale,
+                                    minimum != nullptr ? static_cast<float>(minimum->value) * displayScale : -FLT_MAX,
+                                    maximum != nullptr ? static_cast<float>(maximum->value) * displayScale : FLT_MAX,
+                                    format);
+                            } else changed = ImGui::DragFloat(label, &displayValue,
+                                (step != nullptr ? static_cast<float>(step->value) : 0.05F) * displayScale,
+                                0.0F, 0.0F, format);
                         }
+                        *v = percentage ? displayValue / 100.0F : displayValue;
                     }
                     break;
                 case Engine::ScriptFieldType::Double: {
                     if (auto *v = std::get_if<double>(&edited)) {
                         float converted = static_cast<float>(*v);
-                        changed = ImGui::DragFloat(field.name.c_str(), &converted, 0.05F);
+                        changed = ImGui::DragFloat(label, &converted, 0.05F);
                         *v = converted;
                     }
                     break;
@@ -573,7 +605,7 @@ bool ComponentsPanel::draw(Engine::ScenePreset &scene, const std::vector<Engine:
                 case Engine::ScriptFieldType::Vec3:
                     if (auto *v = std::get_if<Engine::Vec3>(&edited)) {
                         float values[3] = {v->x(), v->y(), v->z()};
-                        if (ImGui::DragFloat3(field.name.c_str(), values, 0.05F)) {
+                        if (ImGui::DragFloat3(label, values, 0.05F)) {
                             *v = {values[0], values[1], values[2]}; changed = true;
                         }
                     }
@@ -581,7 +613,7 @@ bool ComponentsPanel::draw(Engine::ScenePreset &scene, const std::vector<Engine:
                 case Engine::ScriptFieldType::Color:
                     if (auto *v = std::get_if<Engine::Color>(&edited)) {
                         float values[4] = {v->r(), v->g(), v->b(), v->a()};
-                        if (ImGui::ColorEdit4(field.name.c_str(), values)) {
+                        if (ImGui::ColorEdit4(label, values)) {
                             *v = {values[0], values[1], values[2], values[3]}; changed = true;
                         }
                     }
@@ -591,7 +623,12 @@ bool ComponentsPanel::draw(Engine::ScenePreset &scene, const std::vector<Engine:
                     char buffer[512]{};
                     if (v != nullptr) {
                         std::snprintf(buffer, sizeof(buffer), "%s", v->c_str());
-                        if (ImGui::InputText(field.name.c_str(), buffer, sizeof(buffer))) {
+                        const auto *multiline = Engine::findScriptAttribute<Engine::ScriptMultilineAttribute>(field);
+                        if (multiline != nullptr) {
+                            if (ImGui::InputTextMultiline(label, buffer, sizeof(buffer), {0.0F, ImGui::GetTextLineHeight() * multiline->lines})) {
+                                *v = buffer; changed = true;
+                            }
+                        } else if (ImGui::InputText(label, buffer, sizeof(buffer))) {
                             *v = buffer; changed = true;
                         }
                     }

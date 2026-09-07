@@ -28,12 +28,32 @@ namespace Engine {
     };
 
     struct ScriptReadOnlyAttribute {};
+    struct ScriptMinAttribute { double value{}; };
+    struct ScriptMaxAttribute { double value{}; };
+    struct ScriptStepAttribute { double value{}; };
+    struct ScriptDisplayNameAttribute { std::string text; };
+    struct ScriptHideInInspectorAttribute {};
+    struct ScriptMultilineAttribute { int lines = 4; };
+    struct ScriptAngleAttribute {};
+    struct ScriptPercentageAttribute {};
+    struct ScriptSpaceAttribute { float pixels = 8.0F; };
+    struct ScriptFormerlySerializedAsAttribute { std::string name; };
 
     using ScriptFieldAttribute = std::variant<
         ScriptRangeAttribute,
         ScriptTooltipAttribute,
         ScriptHeaderAttribute,
-        ScriptReadOnlyAttribute>;
+        ScriptReadOnlyAttribute,
+        ScriptMinAttribute,
+        ScriptMaxAttribute,
+        ScriptStepAttribute,
+        ScriptDisplayNameAttribute,
+        ScriptHideInInspectorAttribute,
+        ScriptMultilineAttribute,
+        ScriptAngleAttribute,
+        ScriptPercentageAttribute,
+        ScriptSpaceAttribute,
+        ScriptFormerlySerializedAsAttribute>;
 
     struct ScriptFieldDescriptor {
         std::string name;
