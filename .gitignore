@@ -41,6 +41,8 @@ project-ascii-tree.txt
 /docs/
 out/
 Assets/Models
-DEMO/Assets
-DEMO/Assets/Models
-DEMO/Assets/Medieval Village MegaKit\[Standard\]/
+DEMO/Assets/*
+!DEMO/Assets/Scripts/
+!DEMO/Assets/Scripts/**
+!DEMO/Assets/Scenes/
+!DEMO/Assets/Scenes/**

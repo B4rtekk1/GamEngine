@@ -5,4 +5,5 @@
 class PlayerController final : public Engine::Script {
 public:
     void onUpdate(float deltaTime) override;
+    float MovementSpeed = 6.0F;
 };
