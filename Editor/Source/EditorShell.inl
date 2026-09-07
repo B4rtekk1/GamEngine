@@ -22,7 +22,7 @@ void drawStatusBar(const Engine::ScenePreset &scene, const Engine::Entity select
     ImGui::SameLine(0.0F, 10.0F);
     ImGui::TextDisabled("·");
     ImGui::SameLine(0.0F, 10.0F);
-    ImGui::TextDisabled("%zu entities", scene.editor().size());
+    ImGui::TextDisabled("%zu entities", scene.view().size());
     ImGui::SameLine(0.0F, 10.0F);
     ImGui::TextDisabled("·");
     ImGui::SameLine(0.0F, 10.0F);

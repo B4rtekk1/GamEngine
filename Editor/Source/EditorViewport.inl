@@ -176,7 +176,7 @@ void drawCameraGizmos(const Engine::ScenePreset &scene, const Engine::Entity sel
                       const Engine::Renderer &renderer, const ImVec2 min, const ImVec2 max) {
     const Engine::Camera viewCamera = sceneViewCamera(renderer, min, max);
     ImDrawList *drawList = ImGui::GetWindowDrawList();
-    scene.editor().view<Engine::CameraComponent, Engine::Transform>(
+    scene.view().view<Engine::CameraComponent, Engine::Transform>(
         [&](const Engine::Entity entity, const Engine::CameraComponent &component,
             const Engine::Transform &transform) {
             // Use the same orientation convention as the runtime camera:
@@ -263,7 +263,7 @@ void drawLightGizmos(const Engine::ScenePreset &scene, const Engine::Entity sele
                      const Engine::Renderer &renderer, const ImVec2 min, const ImVec2 max) {
     const Engine::Camera viewCamera = sceneViewCamera(renderer, min, max);
     ImDrawList *drawList = ImGui::GetWindowDrawList();
-    scene.editor().view<Engine::LightComponent, Engine::Transform>(
+    scene.view().view<Engine::LightComponent, Engine::Transform>(
         [&](const Engine::Entity entity, const Engine::LightComponent &light,
             const Engine::Transform &transform) {
             const ImVec2 center = projectGizmoPoint(viewCamera, transform.position, min, max);
@@ -1540,7 +1540,7 @@ void drawColliderDiagnostics(const Engine::ScenePreset& scene, const Engine::Ren
                              const ImVec2 min, const ImVec2 max) {
     const Engine::Camera camera = sceneViewCamera(renderer, min, max);
     ImDrawList* drawList = ImGui::GetWindowDrawList();
-    scene.editor().view<Engine::ColliderComponent, Engine::Transform>(
+    scene.view().view<Engine::ColliderComponent, Engine::Transform>(
         [&](const Engine::Entity, const Engine::ColliderComponent& collider,
             const Engine::Transform& transform) {
             Engine::Vec3 half{0.5F, 0.5F, 0.5F};
@@ -1575,8 +1575,9 @@ void drawColliderDiagnostics(const Engine::ScenePreset& scene, const Engine::Ren
 
 void focusSceneView(const Engine::ScenePreset& scene, const Engine::Entity entity,
                     Engine::Renderer& renderer, const ImVec2 min, const ImVec2 max) {
-    if (entity == Engine::NullEntity || !scene.editor().valid(entity) ||
-        !scene.editor().has<Engine::Transform>(entity)) return;
+    const auto view = scene.view();
+    if (entity == Engine::NullEntity || !view.valid(entity) ||
+        !view.has<Engine::Transform>(entity)) return;
     const Engine::Vec3 target = renderer.editorGizmoPosition(entity);
     const Engine::Camera camera = sceneViewCamera(renderer, min, max);
     renderer.setEditorCameraPosition(target - camera.forward() * 6.0F);
@@ -1586,13 +1587,13 @@ void frameAllSceneView(const Engine::ScenePreset& scene, Engine::Renderer& rende
                        const ImVec2 min, const ImVec2 max) {
     Engine::Vec3 center{};
     std::size_t count{};
-    scene.editor().view<Engine::Transform>([&](const Engine::Entity, const Engine::Transform& transform) {
+    scene.view().view<Engine::Transform>([&](const Engine::Entity, const Engine::Transform& transform) {
         center += transform.position; ++count;
     });
     if (count == 0) return;
     center = center * (1.0F / static_cast<float>(count));
     float radius = 2.0F;
-    scene.editor().view<Engine::Transform>([&](const Engine::Entity, const Engine::Transform& transform) {
+    scene.view().view<Engine::Transform>([&](const Engine::Entity, const Engine::Transform& transform) {
         radius = std::max(radius, (transform.position - center).length());
     });
     const Engine::Camera camera = sceneViewCamera(renderer, min, max);

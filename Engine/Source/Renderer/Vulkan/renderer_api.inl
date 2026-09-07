@@ -1,4 +1,4 @@
-Renderer::~Renderer() = default;
+Renderer::~Renderer() { shutdown(); }
 
 Renderer::Renderer(RenderConfig config)
     : optimizationFeatures_(config.features), antialiasingLevel_(config.antialiasing),

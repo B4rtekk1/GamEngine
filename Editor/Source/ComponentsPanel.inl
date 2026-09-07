@@ -1,4 +1,9 @@
 #include "Engine/ECS/Components/WindComponent.h"
+#include "Editor/UI/ComponentCard.h"
+#include "Editor/UI/EditorIcons.h"
+#include "Editor/UI/EditorTheme.h"
+#include "Editor/UI/EditorWidgets.h"
+#include "Editor/UI/PropertyGrid.h"
 
 #include <algorithm>
 #include <cfloat>
@@ -24,32 +29,20 @@ bool ComponentsPanel::draw(Engine::ScenePreset &scene, const std::vector<Engine:
                            const Engine::Entity active, bool& isOpen) {
     const Engine::Entity selected = active;
     ImGui::Begin("Inspector", &isOpen);
-    ImGui::TextDisabled("PROPERTIES");
+    EditorUI::panelHeader("Inspector");
     if (selected != Engine::NullEntity && scene.editor().valid(selected)) {
         ImGui::SameLine();
         ImGui::TextDisabled("/ %s", entityName(scene, selected));
     }
-    ImGui::Separator();
     if (selected == Engine::NullEntity || selection.empty()) {
         ImGui::Spacing();
         ImGui::Spacing();
-        const float avail = ImGui::GetContentRegionAvail().x;
-        ImGui::PushStyleColor(ImGuiCol_Text, {0.42F, 0.68F, 0.92F, 1.0F});
-        const char *hintIcon = "◇";
-        ImGui::SetCursorPosX((avail - ImGui::CalcTextSize(hintIcon).x) * 0.5F);
-        ImGui::TextUnformatted(hintIcon);
-        ImGui::PopStyleColor();
         ImGui::Spacing();
-        const char *title = "Nothing selected";
-        ImGui::SetCursorPosX((avail - ImGui::CalcTextSize(title).x) * 0.5F);
-        ImGui::TextDisabled("%s", title);
-        ImGui::Spacing();
-        ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + avail);
-        ImGui::TextWrapped("Pick an object in the Hierarchy or click it in the Scene View to edit its properties here.");
-        ImGui::PopTextWrapPos();
+        EditorUI::emptyState(EditorUI::Icons::empty, "Nothing selected",
+                             "Pick an object in the Hierarchy or click it in the Scene View to edit its properties here.");
         if (!scene.hasUsablePrimaryCamera()) {
             ImGui::Spacing();
-            ImGui::TextColored({0.96F, 0.72F, 0.28F, 1.0F},
+            ImGui::TextColored(EditorUI::colors().warning,
                                "! Scene problem: no usable primary camera");
             ImGui::TextDisabled("The runtime is rendering with its fallback camera.");
         }
@@ -88,14 +81,14 @@ bool ComponentsPanel::draw(Engine::ScenePreset &scene, const std::vector<Engine:
     ImGui::TextDisabled("Rename the object, then tweak its components below.");
     if (!scene.hasUsablePrimaryCamera()) {
         ImGui::Spacing();
-        ImGui::TextColored({0.96F, 0.72F, 0.28F, 1.0F},
+        ImGui::TextColored(EditorUI::colors().warning,
                            "! Scene problem: no usable primary camera");
         ImGui::TextDisabled("The runtime is rendering with its fallback camera.");
         ImGui::TextDisabled("Add or repair a perspective camera with Transform, then mark it Primary.");
     }
     ImGui::Spacing();
-    if (ImGui::CollapsingHeader("Transform", ImGuiTreeNodeFlags_DefaultOpen) &&
-        scene.editor().valid(selected) && scene.editor().has<Engine::Transform>(selected)) {
+    EditorUI::ComponentCard transformCard{"transform", "Transform", false};
+    if (transformCard.begin() && scene.editor().valid(selected) && scene.editor().has<Engine::Transform>(selected)) {
         if (!multiSelection) {
             TransformFields{scene.edit(selected)}.draw();
             if (scene.editor().has<Engine::ParentComponent>(selected)) {
@@ -129,6 +122,7 @@ bool ComponentsPanel::draw(Engine::ScenePreset &scene, const std::vector<Engine:
                 [&](const Engine::Vec3& value) { apply(&Engine::GameObject::setScale, value); });
         }
     }
+    transformCard.end();
     if (multiSelection) {
         ImGui::Separator();
         ImGui::TextDisabled("Other components are shown for one object at a time.");

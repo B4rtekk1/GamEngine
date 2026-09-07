@@ -29,13 +29,13 @@ class SceneHistory final {
 public:
     void reset(const Engine::ScenePreset &scene) {
         baseline_ = serializeScene(scene);
-        observedRevision_ = scene.editor().mutationRevision();
+        observedRevision_ = scene.view().mutationRevision();
         undo_.clear();
         redo_.clear();
     }
 
     [[nodiscard]] bool capture(const Engine::ScenePreset &scene) {
-        const std::uint64_t revision = scene.editor().mutationRevision();
+        const std::uint64_t revision = scene.view().mutationRevision();
         if (revision == observedRevision_) return false;
         const std::string current = serializeScene(scene);
         observedRevision_ = revision;
@@ -50,13 +50,14 @@ public:
                                             const Engine::Entity entity,
                                             const std::vector<float>& before,
                                             const Engine::TerrainRegion& region) {
-        if (!region.valid || !scene.editor().valid(entity) ||
-            !scene.editor().has<Engine::TerrainComponent>(entity) ||
-            !scene.editor().has<Engine::UUIDComponent>(entity)) return false;
-        const auto& terrain = scene.editor().read<Engine::TerrainComponent>(entity);
+        const auto view = scene.view();
+        if (!region.valid || !view.valid(entity) ||
+            !view.has<Engine::TerrainComponent>(entity) ||
+            !view.has<Engine::UUIDComponent>(entity)) return false;
+        const auto& terrain = view.read<Engine::TerrainComponent>(entity);
         if (before.size() != terrain.heights.size()) return false;
         TerrainEdit edit;
-        edit.entity = scene.editor().read<Engine::UUIDComponent>(entity).value;
+        edit.entity = view.read<Engine::UUIDComponent>(entity).value;
         edit.resolution = terrain.resolution;
         edit.region = region;
         const std::size_t width = region.maximumX - region.minimumX + 1;
@@ -73,7 +74,7 @@ public:
         if (edit.before == edit.after) return false;
         undo_.emplace_back(std::move(edit));
         baseline_ = serializeScene(scene);
-        observedRevision_ = scene.editor().mutationRevision();
+        observedRevision_ = view.mutationRevision();
         redo_.clear();
         return true;
     }
@@ -159,9 +160,9 @@ private:
 class EntityClipboard final {
 public:
     void copy(const Engine::ScenePreset &scene, const Engine::Entity entity) {
-        if (!scene.editor().valid(entity) ||
-            !scene.editor().has<Engine::UUIDComponent>(entity)) return;
-        source_ = scene.editor().read<Engine::UUIDComponent>(entity).value;
+        const auto view = scene.view();
+        if (!view.valid(entity) || !view.has<Engine::UUIDComponent>(entity)) return;
+        source_ = view.read<Engine::UUIDComponent>(entity).value;
     }
 
     [[nodiscard]] bool canPaste(const Engine::ScenePreset &scene) const {
@@ -177,9 +178,10 @@ private:
     [[nodiscard]] Engine::Entity findSource(const Engine::ScenePreset &scene) const {
         if (!source_) return Engine::NullEntity;
         Engine::Entity found = Engine::NullEntity;
-        scene.editor().view<>([&](const Engine::Entity entity) {
-            if (scene.editor().has<Engine::UUIDComponent>(entity) &&
-                scene.editor().read<Engine::UUIDComponent>(entity).value == *source_) found = entity;
+        const auto view = scene.view();
+        view.view<>([&](const Engine::Entity entity) {
+            if (view.has<Engine::UUIDComponent>(entity) &&
+                view.read<Engine::UUIDComponent>(entity).value == *source_) found = entity;
         });
         return found;
     }

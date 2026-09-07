@@ -43,6 +43,7 @@ namespace Engine {
     class ScriptModuleManager;
     class PhysicsSystem;
     class SceneEditor;
+    class SceneView;
     class Application;
 
     // Runtime scene data. Content creation belongs to ScenePresets (or to the
@@ -74,6 +75,7 @@ namespace Engine {
             registry_.add<UUIDComponent>(result.entity(), UUIDComponent{.value = createUUID()});
             names_[result.name()] = result.objectId();
             objects_.push_back(std::move(object));
+            indexObject(result);
             return result;
         }
 
@@ -137,7 +139,9 @@ namespace Engine {
             registry_.modify<UUIDComponent>(copiedEntity, [&](auto &value) { value.value = createUUID(); });
             names_[name] = object->objectId();
             objects_.push_back(std::move(object));
-            return *objects_.back();
+            GameObject& result = *objects_.back();
+            indexObject(result);
+            return result;
         }
 
         /** Creates a renderable actor from an already-loaded mesh. */
@@ -201,10 +205,10 @@ namespace Engine {
         }
 
         /** Returns the primary camera actor, or an invalid Actor when none is marked primary. */
-        [[nodiscard]] Actor primaryCamera() const;
+        [[nodiscard]] Actor primaryCamera() noexcept;
 
         /** Returns the enabled directional Main Light actor, or an invalid Actor when none is active. */
-        [[nodiscard]] Actor activeDirectionalLight() const;
+        [[nodiscard]] Actor activeDirectionalLight() noexcept;
 
         /** Returns this scene's gameplay-facing physics queries. */
         [[nodiscard]] Physics &physics() noexcept { return physics_; }
@@ -282,9 +286,9 @@ namespace Engine {
         /** Removes @p child's parent link. */
         void clearParent(const Actor &child, ParentMode mode = ParentMode::KeepWorld);
 
-        [[nodiscard]] Actor parentOf(const Actor &child) const noexcept;
+        [[nodiscard]] Actor parentOf(const Actor &child) noexcept;
 
-        [[nodiscard]] std::vector<Actor> childrenOf(const Actor &parent) const;
+        [[nodiscard]] std::vector<Actor> childrenOf(const Actor &parent);
 
         /** Resolves local transforms and returns an actor's cached world matrix. */
         [[nodiscard]] const Mat4 &worldMatrix(const Actor &actor) {
@@ -329,7 +333,8 @@ namespace Engine {
         /** High-level editor facade; it does not expose the underlying Registry. */
         [[nodiscard]] SceneEditor editor() noexcept;
 
-        [[nodiscard]] SceneEditor editor() const noexcept;
+        /** Read-only scene facade for const callers. */
+        [[nodiscard]] SceneView view() const noexcept;
 
         /** Finds a named object, or returns nullptr when it does not exist. */
         [[nodiscard]] GameObject *find(const std::string &name) noexcept {
@@ -342,40 +347,24 @@ namespace Engine {
 
         /** Finds an object by its stable object identifier. */
         [[nodiscard]] GameObject *find(const ObjectId objectId) const noexcept {
-            for (const auto &object: objects_) {
-                if (object->objectId() == objectId) {
-                    return object.get();
-                }
-            }
-            return nullptr;
+            const auto it = objectById_.find(objectId);
+            return it == objectById_.end() ? nullptr : it->second;
         }
 
         [[nodiscard]] Entity findEntity(const ObjectId objectId) const noexcept {
-            for (const auto &object: objects_) {
-                if (object->objectId() == objectId) {
-                    return object->entity();
-                }
-            }
-            return NullEntity;
+            const auto it = entityByObjectId_.find(objectId);
+            return it == entityByObjectId_.end() ? NullEntity : it->second;
         }
 
         /** Finds the high-level object represented by an ECS entity. */
         [[nodiscard]] GameObject *findByEntity(const Entity entity) noexcept {
-            for (const auto &object: objects_) {
-                if (object->entity() == entity) {
-                    return object.get();
-                }
-            }
-            return nullptr;
+            const auto it = objectByEntity_.find(entity);
+            return it == objectByEntity_.end() ? nullptr : it->second;
         }
 
         [[nodiscard]] const GameObject *findByEntity(const Entity entity) const noexcept {
-            for (const auto &object: objects_) {
-                if (object->entity() == entity) {
-                    return object.get();
-                }
-            }
-            return nullptr;
+            const auto it = objectByEntity_.find(entity);
+            return it == objectByEntity_.end() ? nullptr : it->second;
         }
 
         /** Returns a high-level object for editor/runtime code. */
@@ -416,26 +405,26 @@ namespace Engine {
         }
 
         void destroy(const Entity entity) {
-            const auto it = std::ranges::find_if(objects_, //NOLINT
-                                                 [entity](const auto &object) { return object->entity() == entity; });
-            if (it == objects_.end()) {
-                return;
-            }
+            GameObject* target = findByEntity(entity);
+            if (target == nullptr) return;
 
             // A parent owns the lifetime of its descendants. Work on a copy as
             // destroy() erases entries from objects_.
-            const ObjectId objectId = (*it)->objectId();
+            const ObjectId objectId = target->objectId();
             for (const Actor &child : childrenOf(Actor{*this, objectId})) {
                 destroy(child);
             }
 
             // Recursive destruction can reallocate objects_, invalidating it.
-            const auto owner = std::ranges::find_if(objects_, [objectId](const auto &object) {
-                return object->objectId() == objectId;
+            GameObject* ownerObject = find(objectId);
+            if (ownerObject == nullptr) return;
+            const auto owner = std::ranges::find_if(objects_, [ownerObject](const auto& object) {
+                return object.get() == ownerObject;
             });
             if (owner == objects_.end()) return;
 
             names_.erase((*owner)->name()); //NOLINT
+            unindexObject(**owner);
             // Destroy the ECS entity before removing its owning wrapper. Merely
             // detaching it would make it disappear from the hierarchy while the
             // renderer could still find and draw the live registry entity.
@@ -547,6 +536,25 @@ namespace Engine {
         friend class PhysicsSystem;
 
         void rebuildObjectHandles();
+        void indexObject(GameObject& object) {
+            objectById_[object.objectId()] = &object;
+            objectByEntity_[object.entity()] = &object;
+            entityByObjectId_[object.objectId()] = object.entity();
+            if (registry_.has<UUIDComponent>(object.entity())) {
+                entityByUuid_[registry_.get<UUIDComponent>(object.entity()).value] = object.entity();
+            }
+        }
+
+        void unindexObject(const GameObject& object) {
+            objectById_.erase(object.objectId());
+            objectByEntity_.erase(object.entity());
+            entityByObjectId_.erase(object.objectId());
+            if (registry_.has<UUIDComponent>(object.entity())) {
+                entityByUuid_.erase(registry_.get<UUIDComponent>(object.entity()).value);
+            }
+        }
+
+        void rebuildHierarchyIndex() const;
 
         /** Queues actor destruction while ScriptSystem is executing scripts. */
         [[nodiscard]] bool deferDestroyDuringScriptUpdate(const Actor &actor) {
@@ -581,12 +589,24 @@ namespace Engine {
             }
             objects_.clear();
             names_.clear();
+            objectById_.clear();
+            objectByEntity_.clear();
+            entityByObjectId_.clear();
+            entityByUuid_.clear();
+            childrenByParent_.clear();
         }
 
         Registry registry_;
         Physics physics_;
         std::vector<std::unique_ptr<GameObject> > objects_;
         std::unordered_map<std::string, ObjectId> names_;
+        std::unordered_map<ObjectId, GameObject*> objectById_;
+        std::unordered_map<Entity, GameObject*> objectByEntity_;
+        std::unordered_map<ObjectId, Entity> entityByObjectId_;
+        std::unordered_map<UUID, Entity> entityByUuid_;
+        mutable std::unordered_map<Entity, std::vector<Entity>> childrenByParent_;
+        mutable std::uint64_t hierarchyComponentRevision_{std::numeric_limits<std::uint64_t>::max()};
+        mutable std::uint64_t hierarchyStructuralRevision_{std::numeric_limits<std::uint64_t>::max()};
         UI::Canvas canvas_{800, 600}; //NOLINT
         UI::UIFontAtlas fontAtlas_;
         Particles::ParticleEmitter particleEmitter_{};
@@ -603,3 +623,5 @@ namespace Engine {
         mutable std::uint64_t directionalLightStructuralRevision_{std::numeric_limits<std::uint64_t>::max()};
     };
 } // namespace Engine
+
+#include "Engine/Scene/SceneView.h"

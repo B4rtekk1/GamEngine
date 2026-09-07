@@ -45,7 +45,7 @@ namespace Engine {
     Scene::Scene() : physics_(*this) {
     }
 
-    Actor Scene::primaryCamera() const {
+    Actor Scene::primaryCamera() noexcept {
         const auto componentRevision = registry_.componentRevision<CameraComponent>();
         const auto structuralRevision = registry_.structuralRevision();
         if (primaryCameraComponentRevision_ != componentRevision ||
@@ -58,10 +58,10 @@ namespace Engine {
             primaryCameraComponentRevision_ = componentRevision;
             primaryCameraStructuralRevision_ = structuralRevision;
         }
-        return primaryCamera_ == NullObjectId ? Actor{} : Actor{const_cast<Scene &>(*this), primaryCamera_};
+        return primaryCamera_ == NullObjectId ? Actor{} : Actor{*this, primaryCamera_};
     }
 
-    Actor Scene::activeDirectionalLight() const {
+    Actor Scene::activeDirectionalLight() noexcept {
         const auto componentRevision = registry_.componentRevision<LightComponent>();
         const auto structuralRevision = registry_.structuralRevision();
         if (directionalLightComponentRevision_ != componentRevision ||
@@ -75,7 +75,7 @@ namespace Engine {
             directionalLightComponentRevision_ = componentRevision;
             directionalLightStructuralRevision_ = structuralRevision;
         }
-        return directionalLight_ == NullObjectId ? Actor{} : Actor{const_cast<Scene &>(*this), directionalLight_};
+        return directionalLight_ == NullObjectId ? Actor{} : Actor{*this, directionalLight_};
     }
 
     GameObject &Scene::createMeshObject(std::string name,
@@ -166,31 +166,26 @@ namespace Engine {
         }
     }
 
-    Actor Scene::parentOf(const Actor &child) const noexcept {
+    Actor Scene::parentOf(const Actor &child) noexcept {
         if (child.scene_ != this || !child.valid()) return {};
         const Entity childEntity = findEntity(child.objectId_);
         if (!registry_.has<ParentComponent>(childEntity)) return {};
-        const UUID parentUuid = registry_.get<ParentComponent>(childEntity).parentUuid;
-        for (const auto &object : objects_) {
-            const Entity entity = object->entity();
-            if (registry_.has<UUIDComponent>(entity) &&
-                registry_.get<UUIDComponent>(entity).value == parentUuid) {
-                return Actor{const_cast<Scene &>(*this), object->objectId()};
-            }
-        }
-        return {};
+        const Entity parentEntity = registry_.get<ParentComponent>(childEntity).runtimeParent;
+        const auto it = objectByEntity_.find(parentEntity);
+        return it == objectByEntity_.end() ? Actor{} : Actor{*this, it->second->objectId()};
     }
 
-    std::vector<Actor> Scene::childrenOf(const Actor &parent) const {
+    std::vector<Actor> Scene::childrenOf(const Actor &parent) {
         std::vector<Actor> result;
         if (parent.scene_ != this || !parent.valid()) return result;
         const Entity parentEntity = findEntity(parent.objectId_);
-        const UUID parentUuid = registry_.get<UUIDComponent>(parentEntity).value;
-        for (const auto &object : objects_) {
-            const Entity entity = object->entity();
-            if (registry_.has<ParentComponent>(entity) &&
-                registry_.get<ParentComponent>(entity).parentUuid == parentUuid) {
-                result.push_back(Actor{const_cast<Scene &>(*this), object->objectId()});
+        rebuildHierarchyIndex();
+        const auto children = childrenByParent_.find(parentEntity);
+        if (children == childrenByParent_.end()) return result;
+        result.reserve(children->second.size());
+        for (const Entity childEntity : children->second) {
+            if (const auto object = objectByEntity_.find(childEntity); object != objectByEntity_.end()) {
+                result.push_back(Actor{*this, object->second->objectId()});
             }
         }
         return result;
@@ -263,6 +258,11 @@ namespace Engine {
     void Scene::rebuildObjectHandles() {
         objects_.clear();
         names_.clear();
+        objectById_.clear();
+        objectByEntity_.clear();
+        entityByObjectId_.clear();
+        entityByUuid_.clear();
+        childrenByParent_.clear();
         registry_.view<>([this](const Entity entity) {
             std::string name = "Entity " + std::to_string(entityIndex(entity));
             if (registry_.has<NameComponent>(entity)) {
@@ -273,7 +273,24 @@ namespace Engine {
                 new GameObject(registry_, entity, objectId, name));
             names_[name] = objectId;
             objects_.push_back(std::move(object));
+            indexObject(*objects_.back());
         });
+    }
+
+    void Scene::rebuildHierarchyIndex() const {
+        const std::uint64_t componentRevision = registry_.componentRevision<ParentComponent>();
+        const std::uint64_t structuralRevision = registry_.structuralRevision();
+        if (hierarchyComponentRevision_ == componentRevision &&
+            hierarchyStructuralRevision_ == structuralRevision) return;
+
+        childrenByParent_.clear();
+        registry_.view<ParentComponent>([this](const Entity child, const ParentComponent& link) {
+            if (link.runtimeParent != NullEntity && objectByEntity_.contains(link.runtimeParent)) {
+                childrenByParent_[link.runtimeParent].push_back(child);
+            }
+        });
+        hierarchyComponentRevision_ = componentRevision;
+        hierarchyStructuralRevision_ = structuralRevision;
     }
 } // namespace Engine
 

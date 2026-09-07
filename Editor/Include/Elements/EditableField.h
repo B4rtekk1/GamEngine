@@ -69,9 +69,14 @@ protected:
                               const float speed, const char* format,
                               const std::function<void(const Engine::Vec3&)>& update) {
         float values[ComponentCount] = {current.x(), current.y(), current.z()};
-        ImGui::TextColored({LabelRed, LabelGreen, LabelBlue, FullOpacity}, "%s", label);
-        ImGui::SameLine();
-        ImGui::TextDisabled("(scroll to nudge)");
+        // A hidden label means that the field is hosted by a PropertyGrid.
+        // Keep the compact row layout; discoverability is retained in a tooltip.
+        const bool compact = label[0] == '#';
+        if (!compact) {
+            ImGui::TextColored({LabelRed, LabelGreen, LabelBlue, FullOpacity}, "%s", label);
+            ImGui::SameLine();
+            ImGui::TextDisabled("(scroll to nudge)");
+        }
 
         constexpr ImVec4 axisColors[ComponentCount] = {
             {0.92F, 0.38F, 0.38F, 1.0F},
@@ -88,7 +93,6 @@ protected:
             static_cast<float>(ComponentCount);
 
         bool changed = false;
-        ImGui::PushID(widgetId);
         for (int index = FirstComponent; index < ComponentCount; ++index) {
             if (index > FirstComponent) {
                 ImGui::SameLine(0.0F, AxisFieldGap);
@@ -101,8 +105,8 @@ protected:
             ImGui::PopStyleColor(4);
             ImGui::SameLine(0.0F, ImGui::GetStyle().ItemInnerSpacing.x);
             ImGui::SetNextItemWidth(fieldWidth);
-            char id[16];
-            std::snprintf(id, sizeof(id), "##%d", index);
+            char id[64];
+            std::snprintf(id, sizeof(id), "%s-%d", widgetId, index);
             if (Editor::Controls::dragFloat(id, &values[index], speed, NoDragLimit, NoDragLimit, format)) {
                 changed = true;
             }
@@ -110,9 +114,10 @@ protected:
                 values[index] += ImGui::GetIO().MouseWheel * speed;
                 changed = true;
             }
+            if (ImGui::IsItemHovered()) {
+                ImGui::SetTooltip("Drag, double-click to type, or scroll to nudge");
+            }
         }
-        ImGui::PopID();
-
         if (changed) {
             update(Engine::Vec3{values[XIndex], values[YIndex], values[ZIndex]});
         }

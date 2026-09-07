@@ -25,6 +25,7 @@ namespace Engine {
     class Actor;
     class Scene;
     class SceneEditor;
+    class SceneView;
     class ScenePreset;
     class PhysicsSystem;
     class Script;
@@ -205,6 +206,7 @@ namespace Engine {
         friend class Actor;
         friend class Scene;
         friend class SceneEditor;
+        friend class SceneView;
         friend class ScenePreset;
         friend class PhysicsSystem;
         friend class Script;

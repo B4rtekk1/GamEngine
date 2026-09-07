@@ -4,6 +4,7 @@
  */
 
 #include "Editor/Panels/EditorStyle.h"
+#include "Editor/UI/EditorTheme.h"
 
 #include "imgui.h"
 #include "imgui_internal.h"
@@ -28,13 +29,13 @@ namespace {
     constexpr float kGrabMinSize = 10.0F;
     constexpr float kBorderSize = 1.0F;
     constexpr float kFrameBorderSize = 0.0F;
-    constexpr float kWindowRounding = 8.0F;
-    constexpr float kChildRounding = 7.0F;
-    constexpr float kFrameRounding = 7.0F;
-    constexpr float kPopupRounding = 8.0F;
+    constexpr float kWindowRounding = 5.0F;
+    constexpr float kChildRounding = 4.0F;
+    constexpr float kFrameRounding = 4.0F;
+    constexpr float kPopupRounding = 5.0F;
     constexpr float kScrollbarRounding = 8.0F;
     constexpr float kGrabRounding = 4.0F;
-    constexpr float kTabRounding = 6.0F;
+    constexpr float kTabRounding = 4.0F;
     /** @} */
 
     /** @name Default docking layout
@@ -53,12 +54,13 @@ namespace {
  * during long sessions, while keeping selected controls immediately obvious.
  */
 void EditorStyle::apply() {
+    const EditorUI::Palette& palette = EditorUI::colors();
     // Four deliberately distinct surface levels keep docked regions legible.
     // A cool, blue-black palette avoids the flat, uniformly-grey look of
     // the default ImGui theme. Surfaces are deliberately close together;
     // borders and the azure accent do the work of separating information.
-    constexpr ImVec4 kWindowBackground = {0.060F, 0.070F, 0.095F, 1.0F};
-    constexpr ImVec4 kChildBackground = {0.044F, 0.052F, 0.074F, 1.0F};
+    const ImVec4 kWindowBackground = palette.background;
+    const ImVec4 kChildBackground = palette.surface;
     constexpr ImVec4 kPopupBackground = {0.095F, 0.112F, 0.150F, 0.99F};
     constexpr ImVec4 kMenuBarBackground = {0.035F, 0.043F, 0.062F, 1.0F};
     constexpr ImVec4 kTitleBackground = {0.050F, 0.060F, 0.084F, 1.0F};
@@ -72,11 +74,11 @@ void EditorStyle::apply() {
     constexpr ImVec4 kFrameBackground = {0.078F, 0.092F, 0.128F, 1.0F};
     constexpr ImVec4 kHoveredFrameBackground = {0.110F, 0.148F, 0.202F, 1.0F};
     constexpr ImVec4 kActiveFrameBackground = {0.080F, 0.290F, 0.390F, 1.0F};
-    constexpr ImVec4 kBorder = {0.170F, 0.215F, 0.290F, 0.78F};
+    const ImVec4 kBorder = palette.border;
     constexpr ImVec4 kSeparator = {0.125F, 0.170F, 0.235F, 1.0F};
-    constexpr ImVec4 kText = {0.910F, 0.940F, 0.990F, 1.0F};
-    constexpr ImVec4 kDisabledText = {0.470F, 0.555F, 0.680F, 1.0F};
-    constexpr ImVec4 kCheckMark = {0.330F, 0.900F, 0.840F, 1.0F};
+    const ImVec4 kText = palette.text;
+    const ImVec4 kDisabledText = palette.textMuted;
+    const ImVec4 kCheckMark = palette.success;
     constexpr ImVec4 kSliderGrab = {0.200F, 0.705F, 0.850F, 1.0F};
     constexpr ImVec4 kActiveSliderGrab = {0.400F, 0.960F, 0.930F, 1.0F};
     constexpr ImVec4 kTab = {0.048F, 0.057F, 0.079F, 1.0F};

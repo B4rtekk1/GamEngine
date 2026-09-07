@@ -236,7 +236,7 @@ bool scene_uses_asset(const Engine::ScenePreset& scene, const std::filesystem::p
                       const std::filesystem::path& relative) {
     const auto assetPath = (root / relative).lexically_normal();
     bool used = false;
-    scene.editor().view<Engine::MeshRenderer>([&](const Engine::Entity,
+    scene.view().view<Engine::MeshRenderer>([&](const Engine::Entity,
                                                    const Engine::MeshRenderer& renderer) {
         if (renderer.mesh && renderer.mesh->sourcePath.lexically_normal() == assetPath)
             used = true;

@@ -261,6 +261,10 @@ add_executable(Editor
         Editor/Source/main.cpp
         Editor/Source/ComponentDescriptor.cpp
         Editor/Source/EditorUi.cpp
+        Editor/Source/UI/EditorTheme.cpp
+        Editor/Source/UI/EditorWidgets.cpp
+        Editor/Source/UI/PropertyGrid.cpp
+        Editor/Source/UI/ComponentCard.cpp
         Editor/Source/EditorPreferences.cpp
         Editor/Source/Panels/EditorStyle.cpp
         Editor/Source/Panels/EditorSceneSession.cpp

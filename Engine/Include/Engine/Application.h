@@ -28,6 +28,8 @@ struct ApplicationConfig final {
     std::int32_t height = 720; //NOLINT
     bool closeOnEscape = true;
     float fixedDeltaTime = 1.0F / 60.0F; //NOLINT
+    std::uint32_t maxFixedStepsPerFrame = 5;
+    float maxFrameDeltaTime = 0.25F; //NOLINT
     std::filesystem::path assetRoot{};
     RenderConfig render{};
 };

@@ -10,8 +10,6 @@ namespace Engine {
 class SceneEditor final {
 public:
     explicit SceneEditor(Scene& scene) noexcept : scene_(&scene) {}
-    explicit SceneEditor(const Scene& scene) noexcept
-        : scene_(const_cast<Scene*>(&scene)) {}
 
     [[nodiscard]] std::size_t size() const noexcept { return scene_->objectCount(); }
     [[nodiscard]] bool valid(Entity entity) const { return scene_->valid(entity); }
@@ -74,5 +72,4 @@ private:
 
 namespace Engine {
 inline SceneEditor Scene::editor() noexcept { return SceneEditor{*this}; }
-inline SceneEditor Scene::editor() const noexcept { return SceneEditor{*this}; }
 } // namespace Engine

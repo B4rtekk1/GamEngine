@@ -1,4 +1,6 @@
 #include "Editor/Panels/ConsolePanel.h"
+#include "Editor/UI/EditorTheme.h"
+#include "Editor/UI/EditorWidgets.h"
 
 Engine::Entity HierarchyPanel::draw(Engine::ScenePreset &scene, Engine::Assets::Content& content,
                                     const std::vector<Engine::Entity>& selection, Action &action,
@@ -70,21 +72,11 @@ Engine::Entity HierarchyPanel::draw(Engine::ScenePreset &scene, Engine::Assets::
         }
     };
     ImGui::Begin("Hierarchy", &isOpen);
-    ImGui::TextDisabled("SCENE CONTENT");
-    ImGui::SameLine();
-    const float countWidth = ImGui::CalcTextSize("000 objects").x;
-    ImGui::SetCursorPosX(std::max(ImGui::GetCursorPosX(),
-                                  ImGui::GetWindowContentRegionMax().x - countWidth));
-    ImGui::TextDisabled("%zu objects", scene.editor().size());
-    ImGui::Separator();
+    EditorUI::panelHeader("Hierarchy");
     ImGui::BeginDisabled(disabled);
-    ImGui::PushStyleColor(ImGuiCol_Button, {0.075F, 0.410F, 0.570F, 1.0F});
-    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, {0.105F, 0.555F, 0.710F, 1.0F});
-    ImGui::PushStyleColor(ImGuiCol_ButtonActive, {0.060F, 0.310F, 0.450F, 1.0F});
-    if (EditorButton("+  New Object...", {-1.0F, 0.0F}).draw()) {
+    if (EditorUI::primaryButton("+  New Object...", {-1.0F, 0.0F})) {
         ImGui::OpenPopup("Create Object");
     }
-    ImGui::PopStyleColor(3);
     if (ImGui::IsItemHovered()) {
         ImGui::SetTooltip("Create an object in the scene");
     }
@@ -94,18 +86,11 @@ Engine::Entity HierarchyPanel::draw(Engine::ScenePreset &scene, Engine::Assets::
     }
     ImGui::EndDisabled();
     static char filter[64] = {};
-    ImGui::SetNextItemWidth(-1.0F);
-    const ImVec2 framePadding = ImGui::GetStyle().FramePadding;
-    ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, {framePadding.x + 18.0F, framePadding.y});
-    ImGui::InputTextWithHint("##hierarchy-filter", "Search objects...", filter, sizeof(filter));
-    const ImVec2 searchMin = ImGui::GetItemRectMin();
-    const ImVec2 searchMax = ImGui::GetItemRectMax();
-    ImGui::PopStyleVar();
-    drawSearchIcon(searchMin, searchMax);
+    EditorUI::searchBox("##hierarchy-filter", "Search objects...", filter, sizeof(filter));
     ImGui::Spacing();
     ImGui::TextDisabled("Right-click an object for more actions");
     if (!scene.hasUsablePrimaryCamera()) {
-        ImGui::TextColored({0.96F, 0.72F, 0.28F, 1.0F},
+        ImGui::TextColored(EditorUI::colors().warning,
                            "! No usable primary camera — fallback camera is active");
         if (ImGui::IsItemHovered()) {
             ImGui::SetTooltip("Add a perspective CameraComponent with Transform and mark it Primary.");
