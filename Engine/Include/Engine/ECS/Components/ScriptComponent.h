@@ -4,6 +4,7 @@
 #include "Engine/Scripting/ScriptRegistry.h"
 
 #include <string>
+#include <map>
 
 namespace Engine {
     /**
@@ -12,6 +13,7 @@ namespace Engine {
     struct ScriptComponent final {
         std::string className;
         bool enabled{true};
+        std::map<std::string, ScriptFieldValue> fields;
 
         ScriptComponent() = default;
 
@@ -20,7 +22,7 @@ namespace Engine {
         }
 
         ScriptComponent(const ScriptComponent &other)
-            : className(other.className), enabled(other.enabled) {
+            : className(other.className), enabled(other.enabled), fields(other.fields) {
         }
 
         ScriptComponent &operator=(const ScriptComponent &other) {
@@ -28,6 +30,7 @@ namespace Engine {
                 reset();
                 className = other.className;
                 enabled = other.enabled;
+                fields = other.fields;
                 hotReloadState.clear();
                 hasHotReloadState = false;
             }

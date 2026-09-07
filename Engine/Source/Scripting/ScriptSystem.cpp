@@ -63,6 +63,7 @@ namespace Engine {
 
         if (component.runtime && component.runtimeClassName != component.className) destroyRuntime();
         if (component.className.empty()) return;
+        scripts_.syncFields(component);
 
         // Disabling preserves a script's runtime state. It will receive
         // onEnable on reactivation rather than being recreated.
@@ -97,6 +98,7 @@ namespace Engine {
             try {
                 if (scene != nullptr) component.runtime->attach(*scene, registry, entity);
                 else component.runtime->attach(registry, entity);
+                scripts_.applyFields(component.className, component.fields, *component.runtime.instance);
                 component.runtime->onCreate();
                 if (component.hasHotReloadState) {
                     component.runtime->loadHotReloadState(component.hotReloadState);

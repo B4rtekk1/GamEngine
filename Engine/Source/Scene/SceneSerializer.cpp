@@ -18,6 +18,7 @@
 #include "Engine/Scene/TransformSystem.h"
 #include "Engine/Scene/Components/LightComponent.h"
 #include "Engine/Scene/Components/IdentityComponents.h"
+#include "Engine/Scripting/ScriptRegistry.h"
 
 #include <algorithm>
 #include <array>
@@ -31,6 +32,7 @@
 #include <sstream>
 #include <stdexcept>
 #include <string>
+#include <type_traits>
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
@@ -53,6 +55,7 @@ namespace Engine {
         constexpr std::uint32_t EmissiveFormatVersion = 13;
         constexpr std::uint32_t MaterialOverrideFormatVersion = 14;
         constexpr std::uint32_t RigidbodyStateFormatVersion = 16;
+        constexpr std::uint32_t ScriptFieldsFormatVersion = 17;
         constexpr std::uint32_t TerrainDataVersion = 1;
         constexpr std::array<char, 8> TerrainDataMagic{'G', 'E', 'T', 'E', 'R', 'R', '1', '\0'};
 
@@ -223,6 +226,21 @@ namespace Engine {
             writeFloat(output, value.b());
             output << ' ';
             writeFloat(output, value.a());
+        }
+
+        void writeScriptField(std::ostream &output, const std::string &name, const ScriptFieldValue &value) {
+            output << "SCRIPT_FIELD " << std::quoted(name) << ' ';
+            std::visit([&](const auto &typed) {
+                using T = std::decay_t<decltype(typed)>;
+                if constexpr (std::is_same_v<T, bool>) output << "BOOL " << static_cast<int>(typed);
+                else if constexpr (std::is_same_v<T, int>) output << "INT " << typed;
+                else if constexpr (std::is_same_v<T, float>) { output << "FLOAT "; writeFloat(output, typed); }
+                else if constexpr (std::is_same_v<T, double>) output << "DOUBLE " << typed;
+                else if constexpr (std::is_same_v<T, Vec3>) { output << "VEC3 "; writeVec3(output, typed); }
+                else if constexpr (std::is_same_v<T, Color>) { output << "COLOR "; writeColorRgba(output, typed); }
+                else if constexpr (std::is_same_v<T, std::string>) output << "STRING " << std::quoted(typed);
+            }, value);
+            output << '\n';
         }
 
         void writeMaterial(std::ostream &output, const PBRMaterial &material) {
@@ -979,8 +997,18 @@ namespace Engine {
             }
             if (registry.has<ScriptComponent>(entity)) {
                 const auto &script = registry.get<ScriptComponent>(entity);
+                std::vector<std::pair<std::string, ScriptFieldValue>> scriptFields;
+                if (const auto *descriptor = ScriptRegistry::instance().descriptor(script.className)) {
+                    for (const auto &field : descriptor->fields) {
+                        const auto found = script.fields.find(field.name);
+                        if (found != script.fields.end()) scriptFields.emplace_back(found->first, found->second);
+                    }
+                } else {
+                    for (const auto &field : script.fields) scriptFields.push_back(field);
+                }
                 serialized << "SCRIPT " << std::quoted(script.className) << ' '
-                        << static_cast<int>(script.enabled) << '\n';
+                        << static_cast<int>(script.enabled) << ' ' << scriptFields.size() << '\n';
+                for (const auto &[name, value] : scriptFields) writeScriptField(serialized, name, value);
             }
             serialized << "END_ENTITY\n";
         }
@@ -1420,6 +1448,29 @@ namespace Engine {
                         invalidScene("could not read script class name");
                     }
                     script.enabled = readBool(input, "script enabled flag");
+                    if (version >= ScriptFieldsFormatVersion) {
+                        const auto fieldCount = readCount(input, "script field count", 10000);
+                        for (std::size_t fieldIndex = 0; fieldIndex < fieldCount; ++fieldIndex) {
+                            expect(input, "SCRIPT_FIELD");
+                            std::string fieldName;
+                            input >> std::quoted(fieldName);
+                            std::string type;
+                            input >> type;
+                            if (!input || fieldName.empty()) invalidScene("invalid script field");
+                            if (type == "BOOL") script.fields[fieldName] = readBool(input, "script bool field");
+                            else if (type == "INT") script.fields[fieldName] = read<int>(input, "script int field");
+                            else if (type == "FLOAT") script.fields[fieldName] = readFloat(input, "script float field");
+                            else if (type == "DOUBLE") script.fields[fieldName] = read<double>(input, "script double field");
+                            else if (type == "VEC3") script.fields[fieldName] = readVec3(input, "script vec3 field");
+                            else if (type == "COLOR") script.fields[fieldName] = readColorRgba(input, "script color field");
+                            else if (type == "STRING") {
+                                std::string value;
+                                input >> std::quoted(value);
+                                if (!input) invalidScene("could not read script string field");
+                                script.fields[fieldName] = std::move(value);
+                            } else invalidScene("unknown script field type '" + type + "'");
+                        }
+                    }
                     loaded.add<ScriptComponent>(entity, std::move(script));
                 } else if (component == "COLOR_PICKER") {
                     if (legacyColorPicker) {

@@ -1,6 +1,7 @@
 #include "Engine/Scripting/ScriptRegistry.h"
 
 #include "Engine/Scripting/Script.h"
+#include "Engine/ECS/Components/ScriptComponent.h"
 
 #include <utility>
 
@@ -54,6 +55,48 @@ namespace Engine {
         const auto found = classes_.find(std::string{name});
         if (found == classes_.end() || found->second.sourceFile.empty()) return std::nullopt;
         return found->second.sourceFile;
+    }
+
+    const ScriptClassDescriptor *ScriptRegistry::descriptor(const std::string_view name) const {
+        const auto found = classes_.find(std::string{name});
+        return found == classes_.end() ? nullptr : &found->second;
+    }
+
+    void ScriptRegistry::syncFields(ScriptComponent &component) const {
+        const auto *classDescriptor = descriptor(component.className);
+        if (classDescriptor == nullptr) return;
+        std::map<std::string, ScriptFieldValue> synchronized;
+        for (const auto &field : classDescriptor->fields) {
+            const auto found = component.fields.find(field.name);
+            synchronized[field.name] = found != component.fields.end() &&
+                found->second.index() == field.defaultValue.index() ? found->second : field.defaultValue;
+        }
+        component.fields = std::move(synchronized);
+    }
+
+    void ScriptRegistry::applyFields(const std::string_view name,
+                                     const std::map<std::string, ScriptFieldValue> &values,
+                                     Script &script) const {
+        const auto *classDescriptor = descriptor(name);
+        if (classDescriptor == nullptr) return;
+        for (const auto &field : classDescriptor->fields) {
+            const auto found = values.find(field.name);
+            if (found != values.end() && field.write != nullptr) field.write(&script, found->second);
+        }
+    }
+
+    void ScriptRegistry::captureFields(const std::string_view name, const Script &script,
+                                       std::map<std::string, ScriptFieldValue> &values) const {
+        const auto *classDescriptor = descriptor(name);
+        if (classDescriptor == nullptr) return;
+        std::map<std::string, ScriptFieldValue> captured;
+        for (const auto &field : classDescriptor->fields) {
+            if (field.read == nullptr) continue;
+            ScriptFieldValue value = field.defaultValue;
+            field.read(&script, value);
+            captured.emplace(field.name, std::move(value));
+        }
+        values = std::move(captured);
     }
 
     void ScriptRegistry::removeGeneration(const std::uint64_t generation) {

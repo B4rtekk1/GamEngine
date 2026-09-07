@@ -28,6 +28,21 @@ foreach(source IN LISTS GAME_SCRIPT_SOURCES)
     file(TO_CMAKE_PATH "${relative_header}" relative_header)
     string(APPEND generated "#include \"${relative_header}\"\n")
     string(APPEND registrations "    registrar->registerScript<${class_name}>(\"${class_name}\", \"${relative_source}\");\n")
+
+    # Keep the public-field discovery deliberately limited to reflected scalar
+    # engine types.  The generated accessors use pointer-to-member functions;
+    # no object layout assumptions cross the DLL boundary.
+    string(REGEX MATCH "public:([\\s\\S]*)" public_section "${header_contents}")
+    string(REGEX REPLACE "[\\r\\n][ \\t]*private:.*" "" public_section "${CMAKE_MATCH_1}")
+    string(REGEX MATCHALL "(bool|int|float|double|Engine::Vec3|Vec3|Engine::Color|Color|std::string)[ \\t]+([A-Za-z_][A-Za-z0-9_]*)[ \\t]*(=[^;]*)?;" fields "${public_section}")
+    foreach(field IN LISTS fields)
+        string(REGEX MATCH "^(bool|int|float|double|Engine::Vec3|Vec3|Engine::Color|Color|std::string)[ \\t]+([A-Za-z_][A-Za-z0-9_]*)" "${field}")
+        set(field_type "${CMAKE_MATCH_1}")
+        set(field_name "${CMAKE_MATCH_2}")
+        if(field_type AND field_name)
+            string(APPEND registrations "    registrar->registerField<${class_name}, &${class_name}::${field_name}>(\"${class_name}\", \"${field_name}\");\n")
+        endif()
+    endforeach()
 endforeach()
 string(APPEND generated "\nextern \"C\" GAME_SCRIPT_API std::uint32_t GE_GetScriptApiVersion() {\n    return ENGINE_SCRIPT_API_VERSION;\n}\n\n")
 string(APPEND generated "extern \"C\" GAME_SCRIPT_API void GE_RegisterGameScripts(Engine::ScriptModuleRegistrar *registrar) {\n${registrations}}\n")

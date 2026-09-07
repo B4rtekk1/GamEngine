@@ -525,6 +525,64 @@ bool ComponentsPanel::draw(Engine::ScenePreset &scene, const std::vector<Engine:
                 value.enabled = enabled;
             });
         }
+        const auto *descriptor = Engine::ScriptRegistry::instance().descriptor(script.className);
+        if (descriptor != nullptr) {
+            for (const auto &field : descriptor->fields) {
+                const auto found = script.fields.find(field.name);
+                Engine::ScriptFieldValue value = found == script.fields.end()
+                    ? field.defaultValue : found->second;
+                Engine::ScriptFieldValue edited = value;
+                bool changed = false;
+                switch (field.type) {
+                case Engine::ScriptFieldType::Bool:
+                    if (auto *v = std::get_if<bool>(&edited)) changed = ImGui::Checkbox(field.name.c_str(), v);
+                    break;
+                case Engine::ScriptFieldType::Int:
+                    if (auto *v = std::get_if<int>(&edited)) changed = ImGui::DragInt(field.name.c_str(), v, 1.0F);
+                    break;
+                case Engine::ScriptFieldType::Float:
+                    if (auto *v = std::get_if<float>(&edited)) changed = ImGui::DragFloat(field.name.c_str(), v, 0.05F);
+                    break;
+                case Engine::ScriptFieldType::Double: {
+                    if (auto *v = std::get_if<double>(&edited)) {
+                        float converted = static_cast<float>(*v);
+                        changed = ImGui::DragFloat(field.name.c_str(), &converted, 0.05F);
+                        *v = converted;
+                    }
+                    break;
+                }
+                case Engine::ScriptFieldType::Vec3:
+                    if (auto *v = std::get_if<Engine::Vec3>(&edited)) {
+                        float values[3] = {v->x(), v->y(), v->z()};
+                        if (ImGui::DragFloat3(field.name.c_str(), values, 0.05F)) {
+                            *v = {values[0], values[1], values[2]}; changed = true;
+                        }
+                    }
+                    break;
+                case Engine::ScriptFieldType::Color:
+                    if (auto *v = std::get_if<Engine::Color>(&edited)) {
+                        float values[4] = {v->r(), v->g(), v->b(), v->a()};
+                        if (ImGui::ColorEdit4(field.name.c_str(), values)) {
+                            *v = {values[0], values[1], values[2], values[3]}; changed = true;
+                        }
+                    }
+                    break;
+                case Engine::ScriptFieldType::String: {
+                    auto *v = std::get_if<std::string>(&edited);
+                    char buffer[512]{};
+                    if (v != nullptr) {
+                        std::snprintf(buffer, sizeof(buffer), "%s", v->c_str());
+                        if (ImGui::InputText(field.name.c_str(), buffer, sizeof(buffer))) {
+                            *v = buffer; changed = true;
+                        }
+                    }
+                    break;
+                }
+                }
+                if (changed) scene.editor().patch<Engine::ScriptComponent>(selected,
+                    [&](auto &component) { component.fields[field.name] = edited; });
+            }
+        }
         }
     }
     if (scene.editor().valid(selected) && scene.editor().has<Engine::ColliderComponent>(selected)) {

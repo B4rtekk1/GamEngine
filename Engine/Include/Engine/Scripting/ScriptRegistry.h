@@ -2,13 +2,18 @@
 
 #include <concepts>
 #include <algorithm>
+#include <map>
 #include <optional>
 #include <string>
 #include <string_view>
 #include <cstdint>
 #include <typeindex>
+#include <type_traits>
+#include <utility>
 #include <unordered_map>
 #include <vector>
+
+#include "Engine/Scripting/ScriptField.h"
 
 namespace Engine {
     class Script;
@@ -21,6 +26,7 @@ namespace Engine {
         Create create = nullptr;
         Destroy destroy = nullptr;
         std::string sourceFile;
+        std::vector<ScriptFieldDescriptor> fields;
         std::uint64_t moduleGeneration = 0;
     };
 
@@ -55,6 +61,31 @@ namespace Engine {
                 .destroy = [](Script *script) { delete static_cast<T *>(script); },
                 .sourceFile = std::move(sourceFile),
                 .moduleGeneration = generation_});
+        }
+
+        template<typename T, auto Member>
+        void registerField(std::string_view className, std::string fieldName) {
+            static_assert(std::derived_from<T, Script>);
+            using Field = std::remove_cvref_t<decltype(std::declval<T>().*Member)>;
+            auto it = std::ranges::find_if(descriptors_, [&](const auto &descriptor) {
+                return descriptor.name == className;
+            });
+            if (it == descriptors_.end()) return;
+            T defaults{};
+            ScriptFieldDescriptor descriptor;
+            descriptor.name = std::move(fieldName);
+            descriptor.type = scriptFieldType<Field>();
+            descriptor.defaultValue = defaults.*Member;
+            descriptor.read = [](const Script *base, ScriptFieldValue &value) {
+                value = static_cast<const T *>(base)->*Member;
+            };
+            descriptor.write = [](Script *base, const ScriptFieldValue &value) {
+                const auto *typed = std::get_if<Field>(&value);
+                if (typed == nullptr) return false;
+                static_cast<T *>(base)->*Member = *typed;
+                return true;
+            };
+            it->fields.push_back(std::move(descriptor));
         }
 
         [[nodiscard]] std::uint64_t generation() const noexcept { return generation_; }
@@ -97,6 +128,12 @@ namespace Engine {
         [[nodiscard]] RuntimeScriptInstance create(std::string_view name) const;
 
         [[nodiscard]] std::optional<std::string> sourceFile(std::string_view name) const;
+        [[nodiscard]] const ScriptClassDescriptor *descriptor(std::string_view name) const;
+        void syncFields(struct ScriptComponent &component) const;
+        void applyFields(std::string_view name, const std::map<std::string, ScriptFieldValue> &values,
+                         Script &script) const;
+        void captureFields(std::string_view name, const Script &script,
+                           std::map<std::string, ScriptFieldValue> &values) const;
 
         [[nodiscard]] std::vector<std::string> classNames() const {
             std::vector<std::string> names;
