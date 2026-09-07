@@ -36,6 +36,7 @@
 #include "Editor/Panels/ComponentsPanel.h"
 #include "Editor/Panels/AssetManagerPanel.h"
 #include "Editor/Panels/ConsolePanel.h"
+#include "Editor/Panels/TerminalPanel.h"
 #include "Editor/Panels/AssetDragDrop.h"
 #include "Editor/EditorState.h"
 #include "Editor/EditorPreferences.h"
@@ -158,6 +159,7 @@ int main(int argc, char** argv) {
         if (imguiIo.Fonts->AddFontFromFileTTF(uiFont.string().c_str(), 16.0F) == nullptr) {
             throw std::runtime_error("Could not load ImGui font: " + uiFont.string());
         }
+        ImFont* terminalFont = imguiIo.Fonts->AddFontFromFileTTF("C:/Windows/Fonts/consola.ttf", 16.0F);
         EditorStyle::apply();
 
         Engine::ScenePreset scene;
@@ -230,6 +232,8 @@ int main(int argc, char** argv) {
         bool showAssetManager = true;
         bool showTerrainTools = true;
         bool showConsole = true;
+        bool showTerminal = true;
+        Editor::TerminalPanel terminal{project.rootPath(), terminalFont};
         double physicsAccumulator = 0.0;
         bool showGameView = false;
         GizmoMode gizmoMode = GizmoMode::Translate;
@@ -316,7 +320,7 @@ int main(int argc, char** argv) {
                                                                  pasteRequested, duplicateRequested,
                                                                  resetHistoryRequested, showHierarchy,
                                                                  showViewport, showInspector, showAssetManager,
-                                                                 showTerrainTools, showConsole);
+                                                                 showTerrainTools, showConsole, showTerminal);
                 created != Engine::NullEntity) {
                 setSelection(created);
             }
@@ -504,6 +508,7 @@ int main(int argc, char** argv) {
                 }
             }
             if (showConsole) Editor::ConsolePanel::draw(showConsole);
+            if (showTerminal) terminal.draw(showTerminal);
             drawStatusBar(scene, selectedEntity, playing, paused);
             if (!playing && selectedEntity != Engine::NullEntity &&
                 scene.editor().valid(selectedEntity) && !ImGui::GetIO().WantTextInput &&

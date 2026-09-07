@@ -198,6 +198,8 @@ void EditorStyle::configureDockLayout(const ImVec2 dockSize, const bool restoreP
     ImGuiID assetManager = kEmptyDockNodeId;
     ImGuiID console = kEmptyDockNodeId;
     ImGui::DockBuilderSplitNode(bottom, ImGuiDir_Right, 0.52F, &console, &assetManager);
+    ImGuiID terminal = kEmptyDockNodeId;
+    ImGui::DockBuilderSplitNode(console, ImGuiDir_Down, 0.50F, &terminal, &console);
     ImGuiID hierarchy = kEmptyDockNodeId;
     ImGuiID center = kEmptyDockNodeId;
     ImGui::DockBuilderSplitNode(workspace, ImGuiDir_Left, kHierarchyWidthRatio, &hierarchy, &center);
@@ -209,6 +211,7 @@ void EditorStyle::configureDockLayout(const ImVec2 dockSize, const bool restoreP
     ImGui::DockBuilderDockWindow("Hierarchy", hierarchy);
     ImGui::DockBuilderDockWindow("Asset Manager", assetManager);
     ImGui::DockBuilderDockWindow("Console", console);
+    ImGui::DockBuilderDockWindow("Terminal", terminal);
     ImGui::DockBuilderDockWindow("Viewport", center);
     ImGui::DockBuilderDockWindow("Inspector", inspectorTop);
     ImGui::DockBuilderDockWindow("Terrain Tools", terrainTools);

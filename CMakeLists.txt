@@ -270,13 +270,15 @@ add_executable(Editor
         Editor/Source/Panels/EditorSceneSession.cpp
         Editor/Source/Panels/AssetManagerPanel.cpp
         Editor/Source/AssetImporter.cpp
-        Editor/Source/Panels/ConsolePanel.cpp)
+        Editor/Source/Panels/ConsolePanel.cpp
+        Editor/Source/Panels/TerminalPanel.cpp
+        Platform/Terminal/TerminalBuffer.cpp)
 gameengine_enable_warnings(Editor)
 gameengine_enable_sanitizers(Editor)
 target_include_directories(Editor PRIVATE Editor/Include)
 target_include_directories(Editor PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
 if(WIN32)
-    target_sources(Editor PRIVATE Platform/Windows/Win32FileWatcher.cpp)
+    target_sources(Editor PRIVATE Platform/Windows/Win32FileWatcher.cpp Platform/Windows/ConPtyTerminal.cpp)
 elseif(UNIX AND NOT APPLE)
     target_sources(Editor PRIVATE Platform/Linux/InotifyFileWatcher.cpp)
 endif()
