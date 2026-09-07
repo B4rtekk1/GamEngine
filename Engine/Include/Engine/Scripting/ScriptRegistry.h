@@ -64,7 +64,8 @@ namespace Engine {
         }
 
         template<typename T, auto Member>
-        void registerField(std::string_view className, std::string fieldName) {
+        void registerField(std::string_view className, std::string fieldName,
+                           std::vector<ScriptFieldAttribute> attributes = {}) {
             static_assert(std::derived_from<T, Script>);
             using Field = std::remove_cvref_t<decltype(std::declval<T>().*Member)>;
             auto it = std::ranges::find_if(descriptors_, [&](const auto &descriptor) {
@@ -76,6 +77,7 @@ namespace Engine {
             descriptor.name = std::move(fieldName);
             descriptor.type = scriptFieldType<Field>();
             descriptor.defaultValue = defaults.*Member;
+            descriptor.attributes = std::move(attributes);
             descriptor.read = [](const Script *base, ScriptFieldValue &value) {
                 value = static_cast<const T *>(base)->*Member;
             };

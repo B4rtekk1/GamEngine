@@ -6,6 +6,7 @@
 #include <cstdint>
 #include <string>
 #include <variant>
+#include <vector>
 
 namespace Engine {
     class Script;
@@ -13,15 +14,45 @@ namespace Engine {
     enum class ScriptFieldType : std::uint8_t { Bool, Int, Float, Double, Vec3, Color, String };
     using ScriptFieldValue = std::variant<bool, int, float, double, Vec3, Color, std::string>;
 
+    struct ScriptRangeAttribute {
+        double min{};
+        double max{};
+    };
+
+    struct ScriptTooltipAttribute {
+        std::string text;
+    };
+
+    struct ScriptHeaderAttribute {
+        std::string text;
+    };
+
+    struct ScriptReadOnlyAttribute {};
+
+    using ScriptFieldAttribute = std::variant<
+        ScriptRangeAttribute,
+        ScriptTooltipAttribute,
+        ScriptHeaderAttribute,
+        ScriptReadOnlyAttribute>;
+
     struct ScriptFieldDescriptor {
         std::string name;
         ScriptFieldType type{};
         ScriptFieldValue defaultValue{};
+        std::vector<ScriptFieldAttribute> attributes;
         using Read = void (*)(const Script*, ScriptFieldValue&);
         using Write = bool (*)(Script*, const ScriptFieldValue&);
         Read read{};
         Write write{};
     };
+
+    template<typename T>
+    [[nodiscard]] const T* findScriptAttribute(const ScriptFieldDescriptor& field) {
+        for (const auto& attribute : field.attributes) {
+            if (const auto* result = std::get_if<T>(&attribute)) return result;
+        }
+        return nullptr;
+    }
 
     template<typename T>
     constexpr ScriptFieldType scriptFieldType() {

@@ -2,8 +2,10 @@
 #pragma once
 #include <Engine/Scripting/Script.h>
 
+#include "Engine/Scripting/ScriptAttributes.h"
+
 class PlayerController final : public Engine::Script {
 public:
     void onUpdate(float deltaTime) override;
-    float MovementSpeed = 6.0F;
+    GE_PROPERTY(Header("Movement"),Range(0.0F, 20.0F),Tooltip("The speed at which the player moves.")) float MovementSpeed = 6.0F;
 };

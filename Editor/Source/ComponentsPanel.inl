@@ -528,20 +528,39 @@ bool ComponentsPanel::draw(Engine::ScenePreset &scene, const std::vector<Engine:
         const auto *descriptor = Engine::ScriptRegistry::instance().descriptor(script.className);
         if (descriptor != nullptr) {
             for (const auto &field : descriptor->fields) {
+                if (const auto *header = Engine::findScriptAttribute<Engine::ScriptHeaderAttribute>(field)) {
+                    ImGui::SeparatorText(header->text.c_str());
+                }
                 const auto found = script.fields.find(field.name);
                 Engine::ScriptFieldValue value = found == script.fields.end()
                     ? field.defaultValue : found->second;
                 Engine::ScriptFieldValue edited = value;
                 bool changed = false;
+                const bool readOnly = Engine::findScriptAttribute<Engine::ScriptReadOnlyAttribute>(field) != nullptr;
+                ImGui::BeginDisabled(readOnly);
                 switch (field.type) {
                 case Engine::ScriptFieldType::Bool:
                     if (auto *v = std::get_if<bool>(&edited)) changed = ImGui::Checkbox(field.name.c_str(), v);
                     break;
                 case Engine::ScriptFieldType::Int:
-                    if (auto *v = std::get_if<int>(&edited)) changed = ImGui::DragInt(field.name.c_str(), v, 1.0F);
+                    if (auto *v = std::get_if<int>(&edited)) {
+                        if (const auto *range = Engine::findScriptAttribute<Engine::ScriptRangeAttribute>(field)) {
+                            changed = ImGui::SliderInt(field.name.c_str(), v,
+                                static_cast<int>(range->min), static_cast<int>(range->max));
+                        } else {
+                            changed = ImGui::DragInt(field.name.c_str(), v, 1.0F);
+                        }
+                    }
                     break;
                 case Engine::ScriptFieldType::Float:
-                    if (auto *v = std::get_if<float>(&edited)) changed = ImGui::DragFloat(field.name.c_str(), v, 0.05F);
+                    if (auto *v = std::get_if<float>(&edited)) {
+                        if (const auto *range = Engine::findScriptAttribute<Engine::ScriptRangeAttribute>(field)) {
+                            changed = ImGui::SliderFloat(field.name.c_str(), v,
+                                static_cast<float>(range->min), static_cast<float>(range->max));
+                        } else {
+                            changed = ImGui::DragFloat(field.name.c_str(), v, 0.05F);
+                        }
+                    }
                     break;
                 case Engine::ScriptFieldType::Double: {
                     if (auto *v = std::get_if<double>(&edited)) {
@@ -578,6 +597,11 @@ bool ComponentsPanel::draw(Engine::ScenePreset &scene, const std::vector<Engine:
                     }
                     break;
                 }
+                }
+                ImGui::EndDisabled();
+                if (const auto *tooltip = Engine::findScriptAttribute<Engine::ScriptTooltipAttribute>(field);
+                    tooltip != nullptr && ImGui::IsItemHovered()) {
+                    ImGui::SetTooltip("%s", tooltip->text.c_str());
                 }
                 if (changed) scene.editor().patch<Engine::ScriptComponent>(selected,
                     [&](auto &component) { component.fields[field.name] = edited; });
