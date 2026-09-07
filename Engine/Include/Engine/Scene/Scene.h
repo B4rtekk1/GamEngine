@@ -40,6 +40,7 @@ namespace Engine::Assets {
 namespace Engine {
     class Renderer;
     class ScriptSystem;
+    class ScriptModuleManager;
     class PhysicsSystem;
     class SceneEditor;
     class Application;
@@ -537,6 +538,7 @@ namespace Engine {
         }
 
     private:
+        friend class ScriptModuleManager;
         friend class Application;
         friend class Actor;
         friend class SceneSerializer;

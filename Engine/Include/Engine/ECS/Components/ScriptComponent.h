@@ -1,8 +1,8 @@
 #pragma once
 
 #include "Engine/Scripting/Script.h"
+#include "Engine/Scripting/ScriptRegistry.h"
 
-#include <memory>
 #include <string>
 
 namespace Engine {
@@ -56,7 +56,8 @@ namespace Engine {
 
     private:
         friend class ScriptSystem;
-        std::unique_ptr<Script> runtime;
+        friend class ScriptModuleManager;
+        RuntimeScriptInstance runtime;
         std::string runtimeClassName;
         std::string lastDiagnosticKey;
         bool runtimeEnabled{false};

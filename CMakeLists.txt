@@ -126,7 +126,9 @@ FetchContent_Declare(
         GIT_SHALLOW TRUE)
 FetchContent_MakeAvailable(DearImGui)
 
-add_library(DearImGui STATIC
+# ImGui owns process-wide context state.  Engine.dll and Editor.exe must import
+# the same implementation; static linking would create one context per module.
+add_library(DearImGui SHARED
         ${dearimgui_SOURCE_DIR}/imgui.cpp
         ${dearimgui_SOURCE_DIR}/imgui_demo.cpp
         ${dearimgui_SOURCE_DIR}/imgui_draw.cpp
@@ -138,10 +140,16 @@ target_include_directories(DearImGui PUBLIC
         ${dearimgui_SOURCE_DIR}
         ${dearimgui_SOURCE_DIR}/backends)
 target_link_libraries(DearImGui PUBLIC SDL3::SDL3 Vulkan::Vulkan)
+if(WIN32)
+    # Dear ImGui does not mark its public functions __declspec(dllexport).
+    # Export them from the shared target so Editor.exe and Engine.dll truly
+    # import one process-wide ImGui implementation.
+    set_target_properties(DearImGui PROPERTIES WINDOWS_EXPORT_ALL_SYMBOLS ON)
+endif()
 find_path(GLM_INCLUDE_DIR NAMES glm/glm.hpp HINTS "$ENV{VULKAN_SDK}/Include" REQUIRED)
 find_path(VMA_INCLUDE_DIR NAMES vk_mem_alloc.h HINTS "$ENV{VULKAN_SDK}/Include/vma" REQUIRED)
 
-add_library(Engine
+add_library(Engine SHARED
         Engine/Source/Application.cpp
         Engine/Source/Project.cpp
         Engine/Source/Assets/StbImage.cpp
@@ -165,6 +173,8 @@ add_library(Engine
         Engine/Source/Scripting/ScriptSystem.cpp
         Engine/Source/Scripting/Script.cpp
         Engine/Source/Scripting/ScriptRegistry.cpp
+        Engine/Source/Scripting/DynamicLibrary.cpp
+        Engine/Source/Scripting/ScriptModuleManager.cpp
         Engine/Source/UI/Canvas.cpp
         Engine/Source/UI/CanvasRenderer.cpp
         Engine/Source/UI/UIBatch.cpp
@@ -223,6 +233,11 @@ target_sources(Engine PRIVATE
 
 gameengine_enable_warnings(Engine)
 gameengine_enable_sanitizers(Engine)
+if(WIN32)
+    # Engine is an existing broad C++ API. Export all currently public symbols
+    # while individual ENGINE_API annotations are introduced incrementally.
+    set_target_properties(Engine PROPERTIES WINDOWS_EXPORT_ALL_SYMBOLS ON)
+endif()
 
 target_link_libraries(Engine
         PUBLIC SDL3::SDL3 Vulkan::Vulkan

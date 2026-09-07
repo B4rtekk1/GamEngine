@@ -12,20 +12,30 @@ if(NOT IS_DIRECTORY "${GAMEENGINE_GAME_ROOT}/Assets")
             "GAMEENGINE_GAME_DIRECTORY must contain an Assets directory: ${GAMEENGINE_GAME_ROOT}")
 endif()
 
+add_library(GameScripts SHARED
+        ${GAME_SCRIPT_SOURCES}
+        Source/GameScriptsModule.cpp)
+gameengine_enable_warnings(GameScripts)
+gameengine_enable_sanitizers(GameScripts)
+target_link_libraries(GameScripts PRIVATE Engine)
+target_compile_definitions(GameScripts PRIVATE GAME_SCRIPTS_BUILD_DLL)
+
 add_executable(GamEngine
-        Source/main.cpp
-        ${GAME_SCRIPT_SOURCES})
+        Source/main.cpp)
 gameengine_enable_warnings(GamEngine)
 gameengine_enable_sanitizers(GamEngine)
-target_link_libraries(GamEngine PRIVATE Engine)
+target_link_libraries(GamEngine PRIVATE Engine GameScripts)
 gameengine_copy_runtime_dependencies(GamEngine)
 target_compile_definitions(GamEngine PRIVATE GAMEENGINE_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
 add_dependencies(GamEngine Shaders)
 
-# Game View executes the same native behaviours as the standalone game.  The
-# editor therefore needs the gameplay translation units too, so their static
-# registrations populate ScriptRegistry in the editor process.
-target_sources(Editor PRIVATE ${GAME_SCRIPT_SOURCES})
+# Editor discovers gameplay types solely through this versioned dynamic module.
+add_dependencies(Editor GameScripts)
+add_custom_target(GameScriptsForEditor ALL
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                $<TARGET_FILE:GameScripts> $<TARGET_FILE_DIR:Editor>
+        DEPENDS GameScripts)
+add_dependencies(Editor GameScriptsForEditor)
 
 add_custom_target(GamEngineAssets ALL
         DEPENDS ${SHADER_OUTPUTS}

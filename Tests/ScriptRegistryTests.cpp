@@ -22,10 +22,10 @@ TEST(ScriptRegistry, RegistersCreatesAndListsScriptClasses) {
 
     EXPECT_EQ(registry.className<RegistryTestScript>(), name);
     auto script = registry.create(name);
-    auto* typedScript = dynamic_cast<RegistryTestScript*>(script.get());
+    auto* typedScript = dynamic_cast<RegistryTestScript*>(script.instance);
     ASSERT_NE(typedScript, nullptr);
     EXPECT_EQ(typedScript->marker, 42);
-    EXPECT_EQ(registry.create("MissingScript"), nullptr);
+    EXPECT_FALSE(registry.create("MissingScript"));
     const auto names = registry.classNames();
     EXPECT_NE(std::find(names.begin(), names.end(), name), names.end());
 }
@@ -34,11 +34,11 @@ TEST(ScriptRegistry, ReplacesFactoryForAnExistingClassName) {
     auto& registry = Engine::ScriptRegistry::instance();
     constexpr auto name = "RegistryTestReplacement";
     registry.registerClass<RegistryTestScript>(name);
-    ASSERT_NE(dynamic_cast<RegistryTestScript*>(registry.create(name).get()), nullptr);
+    ASSERT_NE(dynamic_cast<RegistryTestScript*>(registry.create(name).instance), nullptr);
 
     registry.registerClass<ReplacementRegistryTestScript>(name);
     auto replacement = registry.create(name);
-    EXPECT_NE(dynamic_cast<ReplacementRegistryTestScript*>(replacement.get()), nullptr);
+    EXPECT_NE(dynamic_cast<ReplacementRegistryTestScript*>(replacement.instance), nullptr);
     EXPECT_EQ(registry.className<ReplacementRegistryTestScript>(), name);
 }
 

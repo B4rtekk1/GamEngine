@@ -24,6 +24,7 @@
 #include "Engine/Scene/SceneSerializer.h"
 #include "Engine/Scripting/ScriptSystem.h"
 #include "Engine/Scripting/ScriptRegistry.h"
+#include "Engine/Scripting/ScriptModuleManager.h"
 #include "Engine/Physics/PhysicsSystem.h"
 #include "Engine/Project.h"
 #include "Elements/EditorButton.h"
@@ -159,6 +160,13 @@ int main(int argc, char** argv) {
         EditorStyle::apply();
 
         Engine::ScenePreset scene;
+        Engine::ScriptModuleManager scriptModules{Engine::ScriptRegistry::instance()};
+        if (const char* basePath = SDL_GetBasePath(); basePath != nullptr) {
+            const std::filesystem::path modulePath = std::filesystem::path{basePath} / "GameScripts.dll";
+            if (!scriptModules.loadInitialModule(modulePath)) {
+                Editor::ConsolePanel::warning("Could not load game scripts module: " + modulePath.string());
+            }
+        }
         Engine::Assets::Content content{project.assetRoot()};
         content.setErrorHandler([](const std::string& message) {
             Editor::ConsolePanel::error("Asset: " + message);
@@ -647,6 +655,7 @@ int main(int argc, char** argv) {
         }
         Editor::saveSession({.projectManifest = project.manifestPath(),
                              .scenePath = EditorSceneSession::scenePath()});
+        scriptModules.unload(scene);
         renderer.shutdown();
         ImGui::DestroyContext();
         SDL_DestroyWindow(window);
