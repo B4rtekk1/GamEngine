@@ -11,7 +11,6 @@ namespace Engine {
         static constexpr uint32_t VirtualPagesPerAxis = 32;
         static constexpr uint32_t PhysicalPagesPerAxis = 16;
         /// Maximum number of virtual pages refreshed in a single frame.
-        static constexpr uint32_t MaxPageUpdatesPerFrame = 48;
         static constexpr uint32_t VirtualResolution =
             PageResolution * VirtualPagesPerAxis;
         static constexpr uint32_t Resolution =
@@ -20,6 +19,11 @@ namespace Engine {
             VirtualPagesPerAxis * VirtualPagesPerAxis;
         static constexpr uint32_t PhysicalPageCount =
             PhysicalPagesPerAxis * PhysicalPagesPerAxis;
+        // A page miss is rendered as fully lit until the page becomes
+        // available. Allow the allocator to refresh the complete atlas in a
+        // frame so camera cuts and large receiver footprints do not leave
+        // tiled holes in directional shadows.
+        static constexpr uint32_t MaxPageUpdatesPerFrame = PhysicalPageCount;
         static constexpr uint32_t InvalidPage = 0xffffffffu;
 
         ~ShadowMap();

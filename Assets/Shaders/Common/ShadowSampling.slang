@@ -56,49 +56,19 @@ float sampleVirtualShadowLevel(Sampler2DShadow shadowMap, float3 worldPosition,
     float bias = max(MIN_SHADOW_BIAS, SLOPE_SHADOW_BIAS * depthSlope);
     const float2 virtualPixel = uv * float(VIRTUAL_RESOLUTION);
     // virtualShadowAtlasUv resolves a texel centre for page lookup. Reapply
-    // this offset when sampling so hardware linear filtering retains motion
-    // within that texel.
+    // the fractional offset so each manual PCF tap selects its virtual texel.
+    // The Vulkan sampler is nearest-filtered to prevent sampling a physically
+    // adjacent, unrelated atlas page.
     const float2 subTexelOffset = frac(virtualPixel) - 0.5;
     const uint2 centerPixel = uint2(floor(virtualPixel));
     const uint2 localPixel = centerPixel % PAGE_RESOLUTION;
     const float atlasResolution = float(PHYSICAL_PAGES_PER_AXIS * PAGE_RESOLUTION);
 
-    if (level >= 2)
-    {
-        // Nearly all kernels stay inside the central virtual page. Resolve it
-        // once and use cheap atlas offsets; resolve per tap only at a border.
-        const bool kernelFitsCenterPage = all(localPixel >= uint2(1, 1)) &&
-                                          all(localPixel < uint2(PAGE_RESOLUTION - 1,
-                                                                  PAGE_RESOLUTION - 1));
-        float filteredShadow = 0.0;
-        [unroll]
-        for (int y = 0; y < 2; ++y)
-        {
-            [unroll]
-            for (int x = 0; x < 2; ++x)
-            {
-                const float2 tapOffset = float2(x, y) - 0.5;
-                float2 tapAtlasUv;
-                if (kernelFitsCenterPage)
-                    tapAtlasUv = centerAtlasUv +
-                                 (tapOffset + subTexelOffset) / atlasResolution;
-                else
-                {
-                    const float2 tapVirtualPixel = virtualPixel + tapOffset;
-                    if (virtualShadowAtlasUv(tapVirtualPixel, level, pageTable, tapAtlasUv))
-                        tapAtlasUv += (frac(tapVirtualPixel) - 0.5) / atlasResolution;
-                    else
-                        tapAtlasUv = centerAtlasUv + subTexelOffset / atlasResolution;
-                }
-                filteredShadow += 1.0 - shadowMap.SampleCmpLevelZero(
-                    tapAtlasUv, currentDepth - bias);
-            }
-        }
-        return filteredShadow * 0.25;
-    }
-
-    // Levels 0 and 1 use a 3x3 tent. Keep the virtual-page-aware slow path
-    // for the one-texel border, but do not pay for it in the common case.
+    // Use the same 3x3 tent at every clip level. Coarser levels already have
+    // fewer texels per metre; reducing them to 2x2 made transitions visibly
+    // blockier when the shader fell back from a detailed page.
+    // Keep the virtual-page-aware slow path for the one-texel border, but do
+    // not pay for it in the common case.
     static const float kernel[3] = {1.0, 2.0, 1.0};
     const bool kernelFitsCenterPage = all(localPixel >= uint2(1, 1)) &&
                                       all(localPixel < uint2(PAGE_RESOLUTION - 1,

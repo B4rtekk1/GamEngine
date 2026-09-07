@@ -16,9 +16,7 @@ namespace Engine {
                 if ((properties.optimalTilingFeatures & static_cast<VkFormatFeatureFlags>(
                          VK_FORMAT_FEATURE_DEPTH_STENCIL_ATTACHMENT_BIT)) != 0 &&
                     (properties.optimalTilingFeatures & static_cast<VkFormatFeatureFlags>(
-                         VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT)) != 0 &&
-                    (properties.optimalTilingFeatures & static_cast<VkFormatFeatureFlags>(
-                         VK_FORMAT_FEATURE_SAMPLED_IMAGE_FILTER_LINEAR_BIT)) != 0) {
+                         VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT)) != 0) {
                     return format;
                 }
             }
@@ -68,8 +66,11 @@ namespace Engine {
             }
 
             VkSamplerCreateInfo sampler{VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO};
-            sampler.magFilter = VK_FILTER_LINEAR;
-            sampler.minFilter = VK_FILTER_LINEAR;
+            // The atlas contains unrelated virtual pages in adjacent physical
+            // tiles.  Filtering must therefore happen in the shader after
+            // resolving every virtual tap, never across physical tile edges.
+            sampler.magFilter = VK_FILTER_NEAREST;
+            sampler.minFilter = VK_FILTER_NEAREST;
             sampler.addressModeU = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_BORDER;
             sampler.addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_BORDER;
             sampler.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_BORDER;

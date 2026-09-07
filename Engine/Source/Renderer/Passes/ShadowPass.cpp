@@ -583,13 +583,11 @@ void ShadowPass::preparePages(
     std::array<bool, ShadowMap::VirtualPageCount> requested{};
     std::vector<std::uint32_t> requests;
     requests.reserve(ShadowMap::PhysicalPageCount);
+    // Reserve atlas capacity for progressively coarser clip levels.  A page
+    // missed at a detailed level can then fall through to a resident coarse
+    // level instead of producing a fully lit, page-shaped hole.
     constexpr std::array<std::uint32_t, ShadowMap::ClipLevelCount> levelBudgets{
-        112, 64, 48, 32};
-    // Large receivers such as a terrain cover many more virtual pages than
-    // the per-object budget. Keep a camera-centred window at every level so
-    // nearby grass does not fall straight through to the coarsest clipmap.
-    constexpr std::array<std::int32_t, ShadowMap::ClipLevelCount> focusedWindowSizes{
-        10, 8, 6, 5};
+        128, 64, 32, 32};
     std::array<std::uint32_t, ShadowMap::ClipLevelCount> levelCounts{};
     const auto requestRectangle = [&](const std::uint32_t level,
                                       const std::int32_t minimumX, const std::int32_t minimumY,
@@ -631,27 +629,10 @@ void ShadowPass::preparePages(
             const std::int32_t maximumY = std::clamp(
                 static_cast<std::int32_t>(std::floor(maximumUv.y * pageCount)) + 1,
                 0, pageCount - 1);
-            const std::uint32_t rectanglePages =
-                static_cast<std::uint32_t>((maximumX - minimumX + 1) *
-                                           (maximumY - minimumY + 1));
-            if (rectanglePages > 64) {
-                const std::int32_t windowWidth = std::min(
-                    focusedWindowSizes[level], maximumX - minimumX + 1);
-                const std::int32_t windowHeight = std::min(
-                    focusedWindowSizes[level], maximumY - minimumY + 1);
-                const std::int32_t targetX = std::clamp(pageCount / 2, minimumX, maximumX);
-                const std::int32_t targetY = std::clamp(pageCount / 2, minimumY, maximumY);
-                const std::int32_t focusedMinimumX = std::clamp(
-                    targetX - windowWidth / 2, minimumX, maximumX - windowWidth + 1);
-                const std::int32_t focusedMinimumY = std::clamp(
-                    targetY - windowHeight / 2, minimumY, maximumY - windowHeight + 1);
-                requestRectangle(level, focusedMinimumX, focusedMinimumY,
-                                 focusedMinimumX + windowWidth - 1,
-                                 focusedMinimumY + windowHeight - 1);
-                continue;
-            }
+            // Request the actual projected footprint even when a large
+            // receiver (terrain, walls) spans many pages.  Per-level budgets
+            // bound the work while avoiding arbitrary camera-centred holes.
             requestRectangle(level, minimumX, minimumY, maximumX, maximumY);
-            break;
         }
     }
 
