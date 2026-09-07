@@ -9,6 +9,7 @@
 #include <cctype>
 #include <cstdio>
 #include <ctime>
+#include <limits>
 #include <mutex>
 #include <string>
 #include <vector>
@@ -55,15 +56,6 @@ const char* levelName(const Editor::LogLevel level) {
     case Editor::LogLevel::Error: return "Error";
     }
     return "Unknown";
-}
-
-ImVec4 levelColor(const Editor::LogLevel level) {
-    switch (level) {
-    case Editor::LogLevel::Info: return {0.65F, 0.78F, 0.92F, 1.0F};
-    case Editor::LogLevel::Warning: return {0.96F, 0.72F, 0.28F, 1.0F};
-    case Editor::LogLevel::Error: return {0.98F, 0.38F, 0.35F, 1.0F};
-    }
-    return {1.0F, 1.0F, 1.0F, 1.0F};
 }
 
 bool matchesFilter(const LogEntry& entry, const char* filter) {
@@ -162,23 +154,33 @@ void ConsolePanel::draw(bool& isOpen) {
         std::scoped_lock lock{logMutex};
         visibleEntries = entries;
     }
-    ImGui::BeginChild("##console-output", {0.0F, 0.0F}, false,
-                      ImGuiWindowFlags_HorizontalScrollbar);
-    ImGui::SetWindowFontScale(textScale);
+    // ImGui::TextUnformatted does not expose text selection.  A read-only
+    // multiline input does, while still keeping the console immutable.
+    std::string output;
     for (const LogEntry& entry : visibleEntries) {
         const bool enabled = entry.level == LogLevel::Info ? showInfo
                              : entry.level == LogLevel::Warning ? showWarnings : showErrors;
         if (!enabled || !matchesFilter(entry, filter)) continue;
-        ImGui::TextDisabled("[%s]", entry.time.c_str());
-        ImGui::SameLine();
-        ImGui::TextColored(levelColor(entry.level), "%-7s", levelName(entry.level));
-        ImGui::SameLine();
-        ImGui::TextUnformatted(entry.message.c_str());
+        output += '[' + entry.time + "] ";
+        output += levelName(entry.level);
+        output += "  ";
+        output += entry.message;
+        output += '\n';
     }
-    if (autoScroll && ImGui::GetScrollY() >= ImGui::GetScrollMaxY() - 1.0F) {
-        ImGui::SetScrollHereY(1.0F);
+
+    // Keep a null terminator even when there are no visible log entries.
+    static std::vector<char> selectableOutput;
+    selectableOutput.assign(output.begin(), output.end());
+    selectableOutput.push_back('\0');
+
+    ImGui::SetWindowFontScale(textScale);
+    ImGui::InputTextMultiline("##console-output", selectableOutput.data(), selectableOutput.size(),
+                              {-std::numeric_limits<float>::min(), -std::numeric_limits<float>::min()},
+                              ImGuiInputTextFlags_ReadOnly | ImGuiInputTextFlags_AllowTabInput);
+    ImGui::SetWindowFontScale(1.0F);
+    if (ImGui::IsItemHovered()) {
+        ImGui::SetTooltip("Przeciągnij myszą, aby zaznaczyć tekst. Ctrl+C kopiuje zaznaczenie.");
     }
-    ImGui::EndChild();
     ImGui::End();
 }
 
