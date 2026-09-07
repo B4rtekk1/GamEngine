@@ -742,6 +742,7 @@ void ShadowPass::record(const VkCommandBuffer commandBuffer,
                                                       clipMatrices[level], level);
         }
         cullingPass.prepareCandidateReads(commandBuffer);
+        twoSidedCullingPass.prepareCandidateReads(commandBuffer);
         for (std::size_t pageIndex = 0; pageIndex < pagesToRender_.size(); ++pageIndex) {
             const PhysicalPage& page = physicalPages_[pagesToRender_[pageIndex]];
             glm::mat4 pageTransform{1.0F};

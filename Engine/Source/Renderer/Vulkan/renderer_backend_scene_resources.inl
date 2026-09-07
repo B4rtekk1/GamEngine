@@ -326,7 +326,8 @@
                                 // The existing foliage stream is drawn after opaque geometry.
                                 // Route BLEND here until transparent draws receive their own
                                 // sorted GPU stream; this guarantees actual alpha blending.
-                                return material.doubleSided || material.alphaMode == AlphaMode::Blend;
+                                return material.doubleSided || material.alphaMode == AlphaMode::Mask ||
+                                       material.alphaMode == AlphaMode::Blend;
                             }),
                             .worldBounds = worldBounds,
                         });
