@@ -261,7 +261,10 @@ namespace Engine {
         }
 
         bool same(const Vec3 &lhs, const Vec3 &rhs) noexcept {
-            return lhs.x() == rhs.x() && lhs.y() == rhs.y() && lhs.z() == rhs.z();
+            constexpr float epsilon = 1.0e-4F;
+            return std::abs(lhs.x() - rhs.x()) <= epsilon &&
+                   std::abs(lhs.y() - rhs.y()) <= epsilon &&
+                   std::abs(lhs.z() - rhs.z()) <= epsilon;
         }
 
         bool samePose(const Transform &lhs, const Transform &rhs) noexcept {
@@ -672,6 +675,18 @@ namespace Engine {
             }
         }
 
+        static void restoreRigidBodyState(Registry &owner, const Entity entity,
+                                          physx::PxRigidDynamic &rigid) {
+            if (!owner.has<RigidbodyState>(entity)) {
+                return;
+            }
+
+            const auto &state = owner.get<RigidbodyState>(entity);
+            rigid.setLinearVelocity(toPhysX(state.linearVelocity), false);
+            rigid.setAngularVelocity(
+                toPhysX(state.angularVelocity * DegreesToRadians), false);
+        }
+
         ActorRecord createActor(const Entity entity, Registry &owner, Transform &transform) {
             using namespace physx;
             RigidbodyComponent *body = owner.has<RigidbodyComponent>(entity)
@@ -704,6 +719,7 @@ namespace Engine {
             if (dynamic) {
                 auto &rigid = *static_cast<PxRigidDynamic *>(actor);
                 configureRigidBody(rigid, *body);
+                restoreRigidBodyState(owner, entity, rigid);
             }
             physicsScene->addActor(*actor);
             return record;
@@ -794,8 +810,10 @@ namespace Engine {
 
             std::vector<Entity> scaleChanged;
             for (const auto& [entity, record] : actors) {
-                if (!same(record.lastTransform.scale,
-                          TransformSystem::worldTransform(owner, entity).scale)) {
+                const Vec3 currentScale = record.bodyType == RigidbodyType::Dynamic
+                                              ? owner.get<Transform>(entity).scale
+                                              : TransformSystem::worldTransform(owner, entity).scale;
+                if (!same(record.lastTransform.scale, currentScale)) {
                     scaleChanged.push_back(entity);
                 }
             }

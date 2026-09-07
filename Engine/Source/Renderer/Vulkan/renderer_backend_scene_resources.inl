@@ -890,7 +890,7 @@
             }
             clearDirtyIndices(&RenderableRecord::transformDirtyFrames,
                               dirtyTransforms[currentFrame], bit);
-            for (const std::size_t index : dirtyMaterials[currentFrame]) {
+            for (const std::size_t index : dirtyMaterials[currentFrame                                                                        ]) {
                 const RenderableRecord& record = renderables[index];
                 materialBuffers[currentFrame].update(
                     materials.data() + record.materialTableOffset,
