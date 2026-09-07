@@ -2,6 +2,19 @@
 # CMake reconfigures automatically when a generated script source is added.
 file(GLOB_RECURSE GAME_SCRIPT_SOURCES CONFIGURE_DEPENDS
         "${GAMEENGINE_GAME_ROOT}/Assets/Scripts/*.cpp")
+file(GLOB_RECURSE GAME_SCRIPT_HEADERS CONFIGURE_DEPENDS
+        "${GAMEENGINE_GAME_ROOT}/Assets/Scripts/*.h")
+
+set(GENERATED_GAME_SCRIPTS_MODULE "${CMAKE_CURRENT_BINARY_DIR}/GameScriptsModule.generated.cpp")
+add_custom_command(
+        OUTPUT "${GENERATED_GAME_SCRIPTS_MODULE}"
+        COMMAND ${CMAKE_COMMAND}
+                -DGAME_ROOT:PATH=${GAMEENGINE_GAME_ROOT}
+                -DOUTPUT:FILEPATH=${GENERATED_GAME_SCRIPTS_MODULE}
+                -P "${CMAKE_SOURCE_DIR}/Tools/GenerateGameScriptsModule.cmake"
+        DEPENDS ${GAME_SCRIPT_SOURCES} ${GAME_SCRIPT_HEADERS}
+                "${CMAKE_SOURCE_DIR}/Tools/GenerateGameScriptsModule.cmake"
+        VERBATIM)
 
 if(NOT EXISTS "${GAMEENGINE_GAME_ROOT}/GamEngine.project")
     message(FATAL_ERROR
@@ -14,7 +27,9 @@ endif()
 
 add_library(GameScripts SHARED
         ${GAME_SCRIPT_SOURCES}
-        Source/GameScriptsModule.cpp)
+        "${GENERATED_GAME_SCRIPTS_MODULE}")
+target_compile_definitions(Editor PRIVATE
+        GAMEENGINE_GAME_SCRIPTS_BUILD_PATH="$<TARGET_FILE:GameScripts>")
 gameengine_enable_warnings(GameScripts)
 gameengine_enable_sanitizers(GameScripts)
 target_link_libraries(GameScripts PRIVATE Engine)

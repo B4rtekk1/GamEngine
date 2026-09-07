@@ -22,6 +22,7 @@ namespace Engine {
 
         [[nodiscard]] bool loadInitialModule(const std::filesystem::path &path);
         [[nodiscard]] bool tryReload(const std::filesystem::path &candidate, Registry &scene);
+        [[nodiscard]] bool tryReload(const std::filesystem::path &candidate, Scene &scene);
         void unload(Registry &scene);
         void unload(Scene &scene);
         [[nodiscard]] std::uint64_t activeGeneration() const noexcept;

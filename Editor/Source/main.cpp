@@ -42,6 +42,7 @@
 #include "Editor/EditorConstants.h"
 #include "Editor/EditorUi.h"
 #include "Editor/TerrainSculptState.h"
+#include "ScriptHotReload.h"
 
 using Editor::EntityClipboard;
 using Editor::SceneHistory;
@@ -161,11 +162,15 @@ int main(int argc, char** argv) {
 
         Engine::ScenePreset scene;
         Engine::ScriptModuleManager scriptModules{Engine::ScriptRegistry::instance()};
+        std::optional<Editor::ScriptHotReload> scriptHotReload;
         if (const char* basePath = SDL_GetBasePath(); basePath != nullptr) {
             const std::filesystem::path modulePath = std::filesystem::path{basePath} / "GameScripts.dll";
             if (!scriptModules.loadInitialModule(modulePath)) {
                 Editor::ConsolePanel::warning("Could not load game scripts module: " + modulePath.string());
             }
+            scriptHotReload.emplace(project.rootPath() / "Assets" / "Scripts",
+                                    std::filesystem::path{GAMEENGINE_GAME_SCRIPTS_BUILD_PATH},
+                                    std::filesystem::path{GAMEENGINE_BUILD_DIR});
         }
         Engine::Assets::Content content{project.assetRoot()};
         content.setErrorHandler([](const std::string& message) {
@@ -616,6 +621,12 @@ int main(int argc, char** argv) {
                     ++physicsSteps;
                 }
                 if (playing) scriptSystem.update(scene, static_cast<float>(Engine::Time::deltaTime()));
+            }
+            if (scriptHotReload) {
+                scriptHotReload->poll(
+                    scriptModules, scene,
+                    [](const std::string &message) { Editor::ConsolePanel::info(message); },
+                    [](const std::string &message) { Editor::ConsolePanel::warning(message); });
             }
             ImGui::Render();
             renderer.renderFrame();

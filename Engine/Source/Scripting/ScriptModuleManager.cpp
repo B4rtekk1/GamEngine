@@ -91,6 +91,10 @@ namespace Engine {
         return true;
     }
 
+    bool ScriptModuleManager::tryReload(const std::filesystem::path &candidatePath, Scene &scene) {
+        return tryReload(candidatePath, scene.registry_);
+    }
+
     void ScriptModuleManager::unload(Registry &scene) {
         destroyGeneration(scene, active_.generation);
         registry_.removeGeneration(active_.generation);

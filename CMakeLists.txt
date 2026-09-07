@@ -276,6 +276,9 @@ if(WIN32)
 endif()
 gameengine_copy_runtime_dependencies(Editor)
 target_compile_definitions(Editor PRIVATE GAMEENGINE_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
+target_compile_definitions(Editor PRIVATE
+        GAMEENGINE_BUILD_DIR="${CMAKE_BINARY_DIR}"
+        GAMEENGINE_GAME_ROOT="${GAMEENGINE_GAME_ROOT}")
 
 find_program(SLANGC NAMES slangc)
 
