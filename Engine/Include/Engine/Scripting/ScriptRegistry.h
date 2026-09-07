@@ -41,13 +41,27 @@ namespace Engine {
         void reset() noexcept;
     };
 
-    /** Passed through the C module entry point; registrations remain owned by Engine. */
+    /** Staging registry passed through the C module entry point. */
     class ScriptModuleRegistrar final {
     public:
-        explicit ScriptModuleRegistrar(class ScriptRegistry &registry) noexcept : registry_(registry) {}
-        [[nodiscard]] std::uint64_t generation() const noexcept;
+        explicit ScriptModuleRegistrar(std::uint64_t generation) noexcept : generation_(generation) {}
+
+        template<typename T>
+        void registerScript(std::string name, std::string sourceFile = {}) {
+            static_assert(std::derived_from<T, Script>);
+            descriptors_.push_back(ScriptClassDescriptor{
+                .name = std::move(name),
+                .create = []() -> Script * { return new T(); },
+                .destroy = [](Script *script) { delete static_cast<T *>(script); },
+                .sourceFile = std::move(sourceFile),
+                .moduleGeneration = generation_});
+        }
+
+        [[nodiscard]] std::uint64_t generation() const noexcept { return generation_; }
+        [[nodiscard]] const std::vector<ScriptClassDescriptor> &descriptors() const noexcept { return descriptors_; }
     private:
-        class ScriptRegistry &registry_;
+        std::uint64_t generation_;
+        std::vector<ScriptClassDescriptor> descriptors_;
     };
 
     /** Registry of C++ script classes available to ScriptComponent. */
@@ -105,15 +119,4 @@ namespace Engine {
         std::uint64_t activeRegistrationGeneration_ = 0;
     };
 
-    template<typename T>
-    class ScriptRegistration final {
-    public:
-        explicit ScriptRegistration(const char *name, const char *sourceFile) {
-            ScriptRegistry::instance().registerClass<T>(name, sourceFile);
-        }
-    };
-
-#define ENGINE_SCRIPT_JOIN_IMPL(a, b) a##b
-#define ENGINE_SCRIPT_JOIN(a, b) ENGINE_SCRIPT_JOIN_IMPL(a, b)
-#define ENGINE_REGISTER_SCRIPT(Type) static ::Engine::ScriptRegistration<Type> ENGINE_SCRIPT_JOIN(scriptRegistration_, __LINE__){#Type, __FILE__}
 } // namespace Engine

@@ -1082,7 +1082,6 @@
                         decomposedRotation = {};
                         decomposedTranslation = glm::vec3{model[3]};
                     }
-                    decomposedRotation = glm::normalize(decomposedRotation);
                     instanceModels[index].positionMaterial = glm::vec4{
                         decomposedTranslation, std::bit_cast<float>(record.materialTableOffset)};
                     instanceModels[index].rotation = glm::vec4{decomposedRotation.x, decomposedRotation.y,

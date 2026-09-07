@@ -19,6 +19,7 @@ gameengine_enable_warnings(GameScripts)
 gameengine_enable_sanitizers(GameScripts)
 target_link_libraries(GameScripts PRIVATE Engine)
 target_compile_definitions(GameScripts PRIVATE GAME_SCRIPTS_BUILD_DLL)
+target_include_directories(GameScripts PRIVATE "${GAMEENGINE_GAME_ROOT}/Assets/Scripts")
 
 add_executable(GamEngine
         Source/main.cpp)

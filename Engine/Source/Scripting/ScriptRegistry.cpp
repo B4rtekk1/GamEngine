@@ -31,8 +31,6 @@ namespace Engine {
         moduleGeneration = 0;
     }
 
-    std::uint64_t ScriptModuleRegistrar::generation() const noexcept { return registry_.activeRegistrationGeneration(); }
-
     void ScriptRegistry::registerClass(ScriptClassDescriptor descriptor) {
         if (descriptor.name.empty() || descriptor.create == nullptr || descriptor.destroy == nullptr) return;
         const std::string className = descriptor.name;

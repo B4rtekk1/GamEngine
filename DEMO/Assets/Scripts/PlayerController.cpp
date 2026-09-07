@@ -87,5 +87,3 @@ void PlayerController::onUpdate(const float deltaTime) {
     }
     body.setVelocity(velocity);
 }
-
-ENGINE_REGISTER_SCRIPT(PlayerController);

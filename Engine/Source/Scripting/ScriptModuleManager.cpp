@@ -6,31 +6,58 @@
 #include "Engine/Scripting/ScriptModuleApi.h"
 #include "Engine/Scripting/ScriptRegistry.h"
 
+#include <iomanip>
+#include <sstream>
+#include <unordered_set>
+
 namespace Engine {
     ScriptModuleManager::~ScriptModuleManager() = default;
 
+    std::filesystem::path ScriptModuleManager::makeVersionedCopy(const std::filesystem::path &path,
+                                                                  const std::uint64_t generation) const {
+        const auto directory = path.parent_path() / "HotReload";
+        std::error_code error;
+        std::filesystem::create_directories(directory, error);
+        if (error) return {};
+
+        std::ostringstream filename;
+        filename << path.stem().string() << '_' << std::setfill('0') << std::setw(6) << generation
+                 << path.extension().string();
+        const auto versioned = directory / filename.str();
+        std::filesystem::copy_file(path, versioned, std::filesystem::copy_options::overwrite_existing, error);
+        return error ? std::filesystem::path{} : versioned;
+    }
+
     bool ScriptModuleManager::loadCandidate(const std::filesystem::path &path, LoadedModule &out) {
         const std::uint64_t generation = nextGeneration_;
-        registry_.setActiveRegistrationGeneration(generation);
-        if (!out.library.load(path)) {
-            registry_.setActiveRegistrationGeneration(active_.generation);
-            return false;
-        }
+        const auto versionedPath = makeVersionedCopy(path, generation);
+        if (versionedPath.empty() || !out.library.load(versionedPath)) return false;
 
         const auto version = out.library.symbol<decltype(&GE_GetScriptApiVersion)>("GE_GetScriptApiVersion");
         const auto registerScripts = out.library.symbol<decltype(&GE_RegisterGameScripts)>("GE_RegisterGameScripts");
         if (version == nullptr || registerScripts == nullptr || version() != ENGINE_SCRIPT_API_VERSION) {
-            registry_.removeGeneration(generation);
             out.library.unload();
-            registry_.setActiveRegistrationGeneration(active_.generation);
             return false;
         }
 
-        ScriptModuleRegistrar registrar{registry_};
-        registerScripts(&registrar);
+        ScriptModuleRegistrar registrar{generation};
+        try {
+            registerScripts(&registrar);
+        } catch (...) {
+            out.library.unload();
+            return false;
+        }
+        std::unordered_set<std::string> names;
+        for (const auto &descriptor : registrar.descriptors()) {
+            if (descriptor.name.empty() || descriptor.create == nullptr || descriptor.destroy == nullptr ||
+                descriptor.moduleGeneration != generation || !names.insert(descriptor.name).second) {
+                out.library.unload();
+                return false;
+            }
+        }
         out.generation = generation;
-        out.path = path;
-        registry_.setActiveRegistrationGeneration(active_.generation);
+        out.path = versionedPath;
+        out.descriptors = registrar.descriptors();
         ++nextGeneration_;
         return true;
     }
@@ -39,6 +66,7 @@ namespace Engine {
         if (active_.library.loaded()) return false;
         LoadedModule candidate;
         if (!loadCandidate(path, candidate)) return false;
+        for (auto &descriptor : candidate.descriptors) registry_.registerClass(std::move(descriptor));
         active_ = std::move(candidate);
         return true;
     }
@@ -57,6 +85,7 @@ namespace Engine {
         // until every object using its vtable and deleter has been destroyed.
         destroyGeneration(scene, active_.generation);
         registry_.removeGeneration(active_.generation);
+        for (auto &descriptor : candidate.descriptors) registry_.registerClass(std::move(descriptor));
         active_.library.unload();
         active_ = std::move(candidate);
         return true;

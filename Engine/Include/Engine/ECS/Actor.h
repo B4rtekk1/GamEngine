@@ -315,7 +315,7 @@ namespace Engine {
     void Actor::attach(const bool enabled) const {
         const auto className = ScriptRegistry::instance().className<T>();
         if (!className) {
-            throw std::logic_error("Script type is not registered; use ENGINE_REGISTER_SCRIPT first");
+            throw std::logic_error("Script type is not registered in the active script module");
         }
         addScript(*className, enabled);
     }

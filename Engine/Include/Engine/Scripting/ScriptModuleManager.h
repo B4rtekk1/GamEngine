@@ -1,9 +1,11 @@
 #pragma once
 
 #include "Engine/Scripting/DynamicLibrary.h"
+#include "Engine/Scripting/ScriptRegistry.h"
 
 #include <cstdint>
 #include <filesystem>
+#include <vector>
 
 namespace Engine {
     class Registry;
@@ -29,9 +31,12 @@ namespace Engine {
             DynamicLibrary library;
             std::uint64_t generation = 0;
             std::filesystem::path path;
+            std::vector<ScriptClassDescriptor> descriptors;
         };
 
         [[nodiscard]] bool loadCandidate(const std::filesystem::path &path, LoadedModule &out);
+        [[nodiscard]] std::filesystem::path makeVersionedCopy(const std::filesystem::path &path,
+                                                              std::uint64_t generation) const;
         void destroyGeneration(Registry &scene, std::uint64_t generation) const;
 
         ScriptRegistry &registry_;
