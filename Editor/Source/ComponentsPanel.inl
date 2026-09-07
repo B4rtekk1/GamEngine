@@ -1,9 +1,16 @@
 #include "Engine/ECS/Components/WindComponent.h"
 
+#include <algorithm>
+
 static bool drawRemovableComponentHeader(const char *label, const char *id, bool &remove) {
     const bool open = ImGui::CollapsingHeader(label, ImGuiTreeNodeFlags_DefaultOpen);
-    ImGui::SameLine(ImGui::GetWindowContentRegionMax().x - ImGui::CalcTextSize("Remove").x -
-                    ImGui::GetStyle().FramePadding.x * 2.0F);
+    // SameLine(pos_x) is relative to the content origin.  Using
+    // GetWindowContentRegionMax() here placed the button outside the active
+    // item/clip region in the editor after the ImGui backend became shared.
+    // Keep the button outside the header's full-width hit rectangle. Drawing
+    // it over the header makes ImGui toggle the collapse state instead of
+    // delivering the click to the button.
+    ImGui::SetCursorPosX(ImGui::GetCursorStartPos().x);
     ImGui::PushID(id);
     remove = ImGui::SmallButton("Remove");
     if (ImGui::IsItemHovered()) ImGui::SetTooltip("Remove this component");
@@ -462,6 +469,12 @@ bool ComponentsPanel::draw(Engine::ScenePreset &scene, const std::vector<Engine:
         const bool open = drawRemovableComponentHeader("Procedural Cloud", "procedural-cloud", remove);
         if (remove) {
             scene.editor().remove<Engine::ProceduralCloudComponent>(selected);
+            // Procedural Cloud creates its renderable mesh as a companion
+            // component; remove that generated renderer as part of the same
+            // user-facing operation.
+            if (scene.editor().has<Engine::MeshRenderer>(selected)) {
+                scene.editor().remove<Engine::MeshRenderer>(selected);
+            }
         } else if (open) {
             const auto readScene = scene.editor();
             auto cloud = readScene.read<Engine::ProceduralCloudComponent>(selected);

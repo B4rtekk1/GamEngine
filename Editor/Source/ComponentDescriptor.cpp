@@ -83,7 +83,17 @@ namespace Editor {
                         renderer.mesh = std::make_shared<Engine::Mesh>(Engine::ProceduralCloud::createMesh(cloud));
                     });
                 },
-                standardRemove(Engine::ProceduralCloudComponent{}), {}});
+                [](Engine::ScenePreset& scene, const Engine::Entity entity) {
+                    // The cloud owns the generated mesh attached to the
+                    // MeshRenderer. Removing only the marker component leaves
+                    // that mesh renderable, making the cloud appear to remain.
+                    if (scene.editor().has<Engine::ProceduralCloudComponent>(entity)) {
+                        scene.editor().remove<Engine::ProceduralCloudComponent>(entity);
+                    }
+                    if (scene.editor().has<Engine::MeshRenderer>(entity)) {
+                        scene.editor().remove<Engine::MeshRenderer>(entity);
+                    }
+                }, {}});
             registerStandard("Terrain", "Environment", "Stores editable terrain data.", Engine::TerrainComponent{});
             registry.registerComponent({
                 "Wind", "Environment", "Provides the scene-wide wind source.", true, true,
