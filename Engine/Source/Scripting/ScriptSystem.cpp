@@ -98,6 +98,11 @@ namespace Engine {
                 if (scene != nullptr) component.runtime->attach(*scene, registry, entity);
                 else component.runtime->attach(registry, entity);
                 component.runtime->onCreate();
+                if (component.hasHotReloadState) {
+                    component.runtime->loadHotReloadState(component.hotReloadState);
+                    component.hotReloadState.clear();
+                    component.hasHotReloadState = false;
+                }
             } catch (const std::exception &error) {
                 reportOnce("create:" + component.className, DiagnosticSeverity::Error,
                     "Skrypt " + component.className + " zgłosił wyjątek podczas onCreate: " + error.what(),

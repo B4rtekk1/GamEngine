@@ -4,7 +4,7 @@
 
 // This value protects the small C ABI used between the editor and a gameplay
 // module. Increment it whenever ScriptModuleRegistrar's ABI changes.
-#define ENGINE_SCRIPT_API_VERSION 1U
+#define ENGINE_SCRIPT_API_VERSION 2U
 
 #ifdef _WIN32
 #  ifdef GAME_SCRIPTS_BUILD_DLL

@@ -73,7 +73,16 @@ namespace Engine {
 
     void ScriptModuleManager::destroyGeneration(Registry &scene, const std::uint64_t generation) const {
         scene.view<ScriptComponent>([generation](const Entity, ScriptComponent &component) {
-            if (component.runtime.moduleGeneration == generation) component.reset();
+            if (component.runtime.moduleGeneration == generation) {
+                try {
+                    component.hotReloadState = component.runtime->saveHotReloadState();
+                    component.hasHotReloadState = true;
+                } catch (...) {
+                    component.hotReloadState.clear();
+                    component.hasHotReloadState = false;
+                }
+                component.reset();
+            }
         });
     }
 

@@ -28,6 +28,8 @@ namespace Engine {
                 reset();
                 className = other.className;
                 enabled = other.enabled;
+                hotReloadState.clear();
+                hasHotReloadState = false;
             }
             return *this;
         }
@@ -60,6 +62,8 @@ namespace Engine {
         RuntimeScriptInstance runtime;
         std::string runtimeClassName;
         std::string lastDiagnosticKey;
+        std::string hotReloadState;
+        bool hasHotReloadState{false};
         bool runtimeEnabled{false};
     };
 } // namespace Engine

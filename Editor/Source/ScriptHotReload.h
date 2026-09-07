@@ -17,12 +17,20 @@ namespace Editor {
     class ScriptHotReload final {
     public:
         ScriptHotReload(std::filesystem::path scriptsRoot, std::filesystem::path candidatePath,
-                        std::filesystem::path buildDirectory)
+                        std::filesystem::path buildDirectory, std::filesystem::path sourceDirectory)
             : scriptsRoot_(std::move(scriptsRoot)), candidatePath_(std::move(candidatePath)),
-              buildDirectory_(std::move(buildDirectory)), snapshot_(snapshot()) {}
+              buildDirectory_(std::move(buildDirectory)), sourceDirectory_(std::move(sourceDirectory)),
+              projectRoot_(scriptsRoot_.parent_path().parent_path()), snapshot_(snapshot()) {}
 
         ScriptHotReload(const ScriptHotReload &) = delete;
         ScriptHotReload &operator=(const ScriptHotReload &) = delete;
+
+        void setProject(std::filesystem::path scriptsRoot) {
+            if (scriptsRoot_ == scriptsRoot) return;
+            scriptsRoot_ = std::move(scriptsRoot);
+            projectRoot_ = scriptsRoot_.parent_path().parent_path();
+            snapshot_ = snapshot();
+        }
 
         void poll(Engine::ScriptModuleManager &modules, Engine::Scene &scene,
                   const std::function<void(const std::string &)> &info,
@@ -52,8 +60,17 @@ namespace Editor {
                 building_ = true;
                 info("Game script change detected; rebuilding GameScripts.dll...");
                 const auto buildDirectory = buildDirectory_.string();
-                build_ = std::async(std::launch::async, [buildDirectory] {
-                    return std::system(("cmake --build \"" + buildDirectory + "\" --target GameScripts").c_str());
+                const auto buildConfiguration = buildConfiguration_;
+                const auto sourceDirectory = sourceDirectory_.string();
+                const auto projectRoot = projectRoot_.string();
+                build_ = std::async(std::launch::async,
+                                    [buildDirectory, buildConfiguration, sourceDirectory, projectRoot] {
+                    const std::string configure = "cmake -S \"" + sourceDirectory + "\" -B \"" +
+                                                   buildDirectory + "\" -DGAMEENGINE_GAME_DIRECTORY=\"" +
+                                                   projectRoot + "\"";
+                    const std::string build = "cmake --build \"" + buildDirectory +
+                                               "\" --target GameScripts --config " + buildConfiguration;
+                    return std::system((configure + " && " + build).c_str());
                 });
             }
         }
@@ -79,6 +96,9 @@ namespace Editor {
         std::filesystem::path scriptsRoot_;
         std::filesystem::path candidatePath_;
         std::filesystem::path buildDirectory_;
+        std::filesystem::path sourceDirectory_;
+        std::filesystem::path projectRoot_;
+        std::string buildConfiguration_ = GAMEENGINE_BUILD_CONFIG;
         Snapshot snapshot_;
         std::filesystem::file_time_type lastLoadedModuleTime_{};
         std::future<int> build_;

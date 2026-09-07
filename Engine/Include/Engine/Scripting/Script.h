@@ -7,6 +7,8 @@
 #include "Engine/ECS/Components/RigidbodyRuntime.h"
 
 #include <vector>
+#include <string>
+#include <string_view>
 
 namespace Engine {
     class Scene;
@@ -84,6 +86,12 @@ namespace Engine {
         /** Called when the runtime instance is removed. */
         virtual void onDestroy() {
         }
+
+        /** Optional state hook used by native hot reload. */
+        [[nodiscard]] virtual std::string saveHotReloadState() const { return {}; }
+
+        /** Optional state hook used by native hot reload. */
+        virtual void loadHotReloadState(std::string_view state) { (void) state; }
 
     private:
         friend class ScriptSystem;

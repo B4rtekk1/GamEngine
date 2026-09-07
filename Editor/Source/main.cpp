@@ -170,7 +170,8 @@ int main(int argc, char** argv) {
             }
             scriptHotReload.emplace(project.rootPath() / "Assets" / "Scripts",
                                     std::filesystem::path{GAMEENGINE_GAME_SCRIPTS_BUILD_PATH},
-                                    std::filesystem::path{GAMEENGINE_BUILD_DIR});
+                                    std::filesystem::path{GAMEENGINE_BUILD_DIR},
+                                    std::filesystem::path{GAMEENGINE_SOURCE_DIR});
         }
         Engine::Assets::Content content{project.assetRoot()};
         content.setErrorHandler([](const std::string& message) {
@@ -623,6 +624,7 @@ int main(int argc, char** argv) {
                 if (playing) scriptSystem.update(scene, static_cast<float>(Engine::Time::deltaTime()));
             }
             if (scriptHotReload) {
+                scriptHotReload->setProject(project.rootPath() / "Assets" / "Scripts");
                 scriptHotReload->poll(
                     scriptModules, scene,
                     [](const std::string &message) { Editor::ConsolePanel::info(message); },
