@@ -170,8 +170,7 @@ int main(int argc, char** argv) {
             }
             scriptHotReload.emplace(project.rootPath() / "Assets" / "Scripts",
                                     std::filesystem::path{GAMEENGINE_GAME_SCRIPTS_BUILD_PATH},
-                                    std::filesystem::path{GAMEENGINE_BUILD_DIR},
-                                    std::filesystem::path{GAMEENGINE_SOURCE_DIR});
+                                    std::filesystem::path{GAMEENGINE_BUILD_DIR});
         }
         Engine::Assets::Content content{project.assetRoot()};
         content.setErrorHandler([](const std::string& message) {

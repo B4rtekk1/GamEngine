@@ -8,4 +8,5 @@ class PlayerController final : public Engine::Script {
 public:
     void onUpdate(float deltaTime) override;
     GE_PROPERTY(Header("Movement"),Range(0.0F, 20.0F),Tooltip("The speed at which the player moves.")) float MovementSpeed = 6.0F;
+    GE_PROPERTY(Header("Jump speed"),Range(0.0F, 20.0F),Tooltip("The speed at which the player jumps.")) float JumpSpeed = 10.0F;
 };

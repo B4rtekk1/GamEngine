@@ -12,7 +12,9 @@ add_custom_command(
                 -DGAME_ROOT:PATH=${GAMEENGINE_GAME_ROOT}
                 -DOUTPUT:FILEPATH=${GENERATED_GAME_SCRIPTS_MODULE}
                 -P "${CMAKE_SOURCE_DIR}/Tools/GenerateGameScriptsModule.cmake"
-        DEPENDS ${GAME_SCRIPT_SOURCES} ${GAME_SCRIPT_HEADERS}
+        # Registration metadata is derived entirely from script declarations.
+        # An implementation-only edit must not regenerate or compile this TU.
+        DEPENDS ${GAME_SCRIPT_HEADERS}
                 "${CMAKE_SOURCE_DIR}/Tools/GenerateGameScriptsModule.cmake"
         VERBATIM)
 
@@ -35,6 +37,8 @@ gameengine_enable_sanitizers(GameScripts)
 target_link_libraries(GameScripts PRIVATE Engine)
 target_compile_definitions(GameScripts PRIVATE GAME_SCRIPTS_BUILD_DLL)
 target_include_directories(GameScripts PRIVATE "${GAMEENGINE_GAME_ROOT}/Assets/Scripts")
+target_precompile_headers(GameScripts PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/GameScriptsPCH.h")
 
 add_executable(GamEngine
         Source/main.cpp)
