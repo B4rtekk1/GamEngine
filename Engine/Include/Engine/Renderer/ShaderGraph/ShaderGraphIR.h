@@ -6,7 +6,10 @@
 #include <vector>
 
 namespace Engine {
-    enum class ShaderIROp : std::uint8_t { Constant, Add, Subtract, Multiply, Divide, Input, Property };
+    enum class ShaderIROp : std::uint8_t {
+        Constant, Add, Subtract, Multiply, Divide, Input, Property,
+        Lerp, Clamp, Saturate, OneMinus, Sin, Cos, Dot, Normalize, Length, Split, Combine
+    };
 
     struct ShaderIRValue final {
         std::uint32_t id{};

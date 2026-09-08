@@ -1,6 +1,7 @@
 #include "Editor/Panels/ShaderGraphPanel.h"
 
 #include "Engine/Renderer/ShaderGraph/ShaderNodeFactory.h"
+#include "Engine/Renderer/ShaderGraph/ShaderNodeRegistry.h"
 #include "Engine/Renderer/ShaderGraph/ShaderGraphSerializer.h"
 
 #include <algorithm>
@@ -10,30 +11,7 @@
 namespace Editor {
     namespace {
         const char* nodeName(const Engine::ShaderNodeType type) {
-            using Type = Engine::ShaderNodeType;
-            switch (type) {
-                case Type::Float: return "Float";
-                case Type::Vector2: return "Vector 2";
-                case Type::Vector3: return "Vector 3";
-                case Type::Vector4: return "Vector 4";
-                case Type::Property: return "Property";
-                case Type::Add: return "Add";
-                case Type::Subtract: return "Subtract";
-                case Type::Multiply: return "Multiply";
-                case Type::Divide: return "Divide";
-                case Type::Lerp: return "Lerp";
-                case Type::Clamp: return "Clamp";
-                case Type::Saturate: return "Saturate";
-                case Type::OneMinus: return "One Minus";
-                case Type::Texture2D: return "Texture 2D";
-                case Type::SampleTexture2D: return "Sample Texture 2D";
-                case Type::UV: return "UV";
-                case Type::Time: return "Time";
-                case Type::Normal: return "Normal";
-                case Type::ViewDirection: return "View Direction";
-                case Type::Fresnel: return "Fresnel";
-                case Type::SurfaceOutput: return "PBR Surface";
-            }
+            if (const auto* definition = Engine::ShaderNodeRegistry::find(type)) return definition->displayName.data();
             return "Unknown";
         }
 
@@ -182,17 +160,26 @@ namespace Editor {
             ImGui::OpenPopup("##shader-create-node");
         if (!ImGui::BeginPopup("##shader-create-node")) return;
         const ImVec2 position = ImGui::GetMousePosOnOpeningCurrentPopup();
-        if (ImGui::BeginMenu("Math")) {
-            if (ImGui::MenuItem("Add")) createNode(Engine::ShaderNodeType::Add, position);
-            if (ImGui::MenuItem("Subtract")) createNode(Engine::ShaderNodeType::Subtract, position);
-            if (ImGui::MenuItem("Multiply")) createNode(Engine::ShaderNodeType::Multiply, position);
-            if (ImGui::MenuItem("Divide")) createNode(Engine::ShaderNodeType::Divide, position);
-            ImGui::EndMenu();
-        }
-        if (ImGui::BeginMenu("Input")) {
-            if (ImGui::MenuItem("Float")) createNode(Engine::ShaderNodeType::Float, position);
-            if (ImGui::MenuItem("UV")) createNode(Engine::ShaderNodeType::UV, position);
-            if (ImGui::MenuItem("Time")) createNode(Engine::ShaderNodeType::Time, position);
+        const auto drawNodes = [&](const std::string_view category, const std::string_view subcategory) {
+            for (const auto& definition : Engine::ShaderNodeRegistry::definitions()) {
+                if (definition.category == category && definition.subcategory == subcategory &&
+                    definition.compileKind != Engine::ShaderNodeCompileKind::Unsupported &&
+                    definition.type != Engine::ShaderNodeType::SurfaceOutput && ImGui::MenuItem(definition.displayName.data()))
+                    createNode(definition.type, position);
+            }
+        };
+        for (const std::string_view category : {"Input", "Math", "Utility", "Texture"}) {
+            if (!ImGui::BeginMenu(category.data())) continue;
+            if (category == "Math") {
+                for (const std::string_view subcategory : {"Basic", "Trigonometry", "Vector"}) {
+                    if (ImGui::BeginMenu(subcategory.data())) {
+                        drawNodes(category, subcategory);
+                        ImGui::EndMenu();
+                    }
+                }
+            } else {
+                drawNodes(category, {});
+            }
             ImGui::EndMenu();
         }
         ImGui::EndPopup();

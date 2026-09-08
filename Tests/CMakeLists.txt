@@ -25,7 +25,9 @@ gameengine_copy_runtime_dependencies(PhysicsMeshTests)
 # compiler contract remains runnable without a Vulkan or PhysX runtime.
 add_executable(ShaderGraphCompilerTests
     ShaderGraphTests.cpp
-    ${PROJECT_SOURCE_DIR}/Engine/Source/Renderer/ShaderGraph/ShaderGraphCompiler.cpp)
+    ${PROJECT_SOURCE_DIR}/Engine/Source/Renderer/ShaderGraph/ShaderGraphCompiler.cpp
+    ${PROJECT_SOURCE_DIR}/Engine/Source/Renderer/ShaderGraph/ShaderNodeFactory.cpp
+    ${PROJECT_SOURCE_DIR}/Engine/Source/Renderer/ShaderGraph/ShaderNodeRegistry.cpp)
 target_link_libraries(ShaderGraphCompilerTests PRIVATE GTest::gtest_main)
 target_include_directories(ShaderGraphCompilerTests PRIVATE "${PROJECT_SOURCE_DIR}/Engine/Include" ${GLM_INCLUDE_DIR})
 gameengine_enable_warnings(ShaderGraphCompilerTests)

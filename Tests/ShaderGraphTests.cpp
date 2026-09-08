@@ -1,4 +1,6 @@
 #include "Engine/Renderer/ShaderGraph/ShaderGraphCompiler.h"
+#include "Engine/Renderer/ShaderGraph/ShaderNodeFactory.h"
+#include "Engine/Renderer/ShaderGraph/ShaderNodeRegistry.h"
 
 #include <gtest/gtest.h>
 
@@ -28,6 +30,35 @@ namespace Engine {
         const ShaderGraphCompileResult result = ShaderGraphCompiler{}.compile(graph);
         ASSERT_FALSE(result.succeeded());
         EXPECT_NE(result.diagnostics.front().message.find("cycle"), std::string::npos);
+    }
+
+    TEST(ShaderNodeRegistry, CreatesMvpNodesWithStablePins) {
+        ShaderPinId nextPin = 1;
+        const ShaderNode combine = ShaderNodeFactory::create(ShaderNodeType::Combine, 7, nextPin);
+        const ShaderNode split = ShaderNodeFactory::create(ShaderNodeType::Split, 8, nextPin);
+        ASSERT_EQ(combine.inputs.size(), 3U);
+        ASSERT_EQ(combine.outputs.front().type, ShaderValueType::Float3);
+        ASSERT_EQ(split.inputs.front().type, ShaderValueType::Float3);
+        EXPECT_EQ(split.outputs.size(), 3U);
+        EXPECT_EQ(ShaderNodeRegistry::find(ShaderNodeType::Sin)->category, "Math");
+        EXPECT_EQ(ShaderNodeRegistry::find(ShaderNodeType::Sin)->subcategory, "Trigonometry");
+    }
+
+    TEST(ShaderGraphCompiler, EmitsRegisteredMvpMath) {
+        ShaderPinId nextPin = 1;
+        ShaderNode value = ShaderNodeFactory::create(ShaderNodeType::Float, 1, nextPin);
+        value.value = 0.5F;
+        ShaderNode sine = ShaderNodeFactory::create(ShaderNodeType::Sin, 2, nextPin);
+        ShaderNode saturate = ShaderNodeFactory::create(ShaderNodeType::Saturate, 3, nextPin);
+        ShaderNode output = ShaderNodeFactory::create(ShaderNodeType::SurfaceOutput, 4, nextPin);
+        ShaderGraphAsset graph{.id = 2, .name = "MvpMath", .nodes = {value, sine, saturate, output},
+                               .links = {{.id = 1, .fromPin = value.outputs[0].id, .toPin = sine.inputs[0].id},
+                                         {.id = 2, .fromPin = sine.outputs[0].id, .toPin = saturate.inputs[0].id},
+                                         {.id = 3, .fromPin = saturate.outputs[0].id, .toPin = output.inputs[6].id}}};
+        const ShaderGraphCompileResult result = ShaderGraphCompiler{}.compile(graph);
+        ASSERT_TRUE(result.succeeded());
+        EXPECT_NE(result.slang.find("sin(v0)"), std::string::npos);
+        EXPECT_NE(result.slang.find("saturate(v1)"), std::string::npos);
     }
 
 } // namespace Engine

@@ -21,7 +21,8 @@ namespace Engine {
     enum class ShaderNodeType : std::uint8_t {
         Float, Vector2, Vector3, Vector4, Property,
         Add, Subtract, Multiply, Divide,
-        Lerp, Clamp, Saturate, OneMinus,
+        Lerp, Clamp, Saturate, OneMinus, Sin, Cos,
+        Dot, Normalize, Length, Split, Combine,
         Texture2D, SampleTexture2D,
         UV, Time, Normal, ViewDirection, Fresnel,
         SurfaceOutput
