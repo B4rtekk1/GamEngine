@@ -86,6 +86,9 @@ namespace Engine {
 
         void reconfigureAntialiasing() const;
 
+        /** Recreates shader-dependent Vulkan pipelines while preserving the window and swapchain. */
+        [[nodiscard]] bool reloadShaders() const;
+
         [[nodiscard]] ViewportHandle gameViewport() const noexcept;
 
         [[nodiscard]] ViewportHandle sceneViewport() const noexcept;

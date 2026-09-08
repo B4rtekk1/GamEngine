@@ -417,6 +417,82 @@ namespace Engine {
             }
         }
 
+        [[nodiscard]] bool reloadShaders() {
+            if (device == VK_NULL_HANDLE || !sceneResourcesInitialized) return false;
+
+            // Validate every newly copied module before touching a live
+            // pipeline.  A malformed SPIR-V file (for example an interrupted
+            // copy) therefore leaves the complete active renderer intact.
+            try {
+                const auto shaderDirectory = assetManager.asset_root() / "shaders";
+                for (const auto& entry : std::filesystem::directory_iterator(shaderDirectory)) {
+                    if (entry.is_regular_file() && entry.path().extension() == ".spv") {
+                        static_cast<void>(Vkutil::loadShaderModule(device, assetManager, entry.path()));
+                    }
+                }
+            } catch (const std::exception& exception) {
+                std::cerr << "[Renderer] Shader validation failed: " << exception.what() << '\n';
+                return false;
+            }
+
+            // A hot reload is an infrequent editor operation.  Waiting here
+            // makes every old pipeline safe to release, while deliberately
+            // retaining the Vulkan instance, swapchain, ImGui backend, scene
+            // geometry and viewport images.
+            vkDeviceWaitIdle(device);
+            try {
+                tonemapPass.destroy();
+                temporalAaPass.destroy();
+                bloomPass.destroy();
+                destroyVelocityResources();
+                if (hdrFramebuffer != VK_NULL_HANDLE) {
+                    vkDestroyFramebuffer(device, hdrFramebuffer, nullptr);
+                    hdrFramebuffer = VK_NULL_HANDLE;
+                }
+                destroySceneViewportFramebuffer();
+
+                canvasRenderer.destroy();
+                particlePipeline.destroy();
+                if (particleComputePipeline != VK_NULL_HANDLE) {
+                    vkDestroyPipeline(device, particleComputePipeline, nullptr);
+                    particleComputePipeline = VK_NULL_HANDLE;
+                }
+                if (particleComputePipelineLayout != VK_NULL_HANDLE) {
+                    vkDestroyPipelineLayout(device, particleComputePipelineLayout, nullptr);
+                    particleComputePipelineLayout = VK_NULL_HANDLE;
+                }
+                skyPass.destroy();
+                sceneSkyPass.destroy();
+                forwardPass.destroy();
+                shadowPass.destroy();
+                sceneDescriptorPass.destroy();
+                destroyCullingResources();
+
+                createCullingResources();
+                createShadowPass();
+                createSceneDescriptorPass();
+                createForwardPass();
+                createParticleResources();
+                createSkyPass();
+                createSceneSkyPass();
+                createFramebuffers();
+                createSceneViewportFramebuffer();
+                createTemporalAaPass();
+                createBloomPass();
+                createTonemapPass();
+                createUIResources();
+                refreshEditorViewportTextures();
+                sceneViewportCacheValid = false;
+                sceneViewportImageInitialized = false;
+                sceneViewportNeedsRender = true;
+                assetManager.unload_unused();
+                return true;
+            } catch (const std::exception& exception) {
+                std::cerr << "[Renderer] Shader reload failed: " << exception.what() << '\n';
+                return false;
+            }
+        }
+
         // Rebuild only registry-derived GPU data. The instance, device,
         // swapchain and ImGui backend survive ordinary editor scene changes.
         void reloadSceneResources(const Scene &updatedScene) {

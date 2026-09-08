@@ -45,6 +45,7 @@
 #include "Editor/EditorUi.h"
 #include "Editor/TerrainSculptState.h"
 #include "ScriptHotReload.h"
+#include "ShaderHotReload.h"
 
 using Editor::EntityClipboard;
 using Editor::SceneHistory;
@@ -89,6 +90,19 @@ namespace {
         const std::filesystem::path& executableDirectory) {
         for (auto directory = executableDirectory; !directory.empty(); directory = directory.parent_path()) {
             if (std::filesystem::is_regular_file(directory / "CMakeCache.txt")) return directory;
+            if (directory == directory.root_path()) break;
+        }
+        return std::nullopt;
+    }
+
+    [[nodiscard]] std::optional<std::filesystem::path> findEngineShaderDirectory(
+        const std::filesystem::path& buildDirectory) {
+        for (auto directory = std::filesystem::current_path(); !directory.empty(); directory = directory.parent_path()) {
+            if (std::filesystem::is_directory(directory / "Engine" / "Shaders")) return directory / "Engine" / "Shaders";
+            if (directory == directory.root_path()) break;
+        }
+        for (auto directory = buildDirectory.parent_path(); !directory.empty(); directory = directory.parent_path()) {
+            if (std::filesystem::is_directory(directory / "Engine" / "Shaders")) return directory / "Engine" / "Shaders";
             if (directory == directory.root_path()) break;
         }
         return std::nullopt;
@@ -188,6 +202,7 @@ int main(int argc, char** argv) {
         Engine::ScenePreset scene;
         Engine::ScriptModuleManager scriptModules{Engine::ScriptRegistry::instance()};
         std::optional<Editor::ScriptHotReload> scriptHotReload;
+        std::optional<Editor::ShaderHotReload> shaderHotReload;
         const std::filesystem::path modulePath = editorRoot / "GameScripts.dll";
         if (!scriptModules.loadInitialModule(modulePath)) {
             Editor::ConsolePanel::warning("Could not load game scripts module: " + modulePath.string());
@@ -195,6 +210,13 @@ int main(int argc, char** argv) {
         if (const auto buildDirectory = findDevelopmentBuildDirectory(editorRoot)) {
             scriptHotReload.emplace(project.rootPath() / "Assets" / "Scripts", modulePath,
                                     *buildDirectory, buildConfigurationFromExecutableDirectory(editorRoot));
+            if (const auto shaderDirectory = findEngineShaderDirectory(*buildDirectory)) {
+                shaderHotReload.emplace(*shaderDirectory, *buildDirectory,
+                                         *buildDirectory / "resources" / "shaders", editorRoot / "shaders",
+                                         buildConfigurationFromExecutableDirectory(editorRoot));
+            } else {
+                Editor::ConsolePanel::warning("Shader hot reload is unavailable: could not locate Engine/Shaders.");
+            }
         } else {
             Editor::ConsolePanel::info("C++ script hot reload is unavailable in the portable Editor package.");
         }
@@ -657,6 +679,12 @@ int main(int argc, char** argv) {
                     scriptModules, scene,
                     [](const std::string &message) { Editor::ConsolePanel::info(message); },
                     [](const std::string &message) { Editor::ConsolePanel::warning(message); });
+            }
+            if (shaderHotReload) {
+                shaderHotReload->poll(
+                    [&renderer] { return renderer.reloadShaders(); },
+                    [](const std::string& message) { Editor::ConsolePanel::info(message); },
+                    [](const std::string& message) { Editor::ConsolePanel::warning(message); });
             }
             ImGui::Render();
             renderer.renderFrame();

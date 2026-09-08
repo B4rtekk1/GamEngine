@@ -152,7 +152,10 @@ ShaderModule loadShaderModule(const VkDevice device, Assets::AssetManager& asset
     if (device == VK_NULL_HANDLE) {
         throw std::invalid_argument("Couldnt create shader for null VkDevice");
     }
-    const auto asset = assets.load<Assets::BinaryAsset>(path, Assets::AssetType::Binary);
+    // SPIR-V files may have been replaced by the editor while the renderer is
+    // alive.  This only reloads when their write timestamp changed and keeps
+    // the ordinary cached path fast.
+    const auto asset = assets.load_if_changed<Assets::BinaryAsset>(path, Assets::AssetType::Binary);
     if (!asset || asset->bytes.empty() || asset->bytes.size() % sizeof(std::uint32_t) != 0) {
         throw std::runtime_error("Invalid SPIR-V shader asset: " + path.string());
     }

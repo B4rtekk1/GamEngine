@@ -96,6 +96,9 @@ void Renderer::reconfigureAntialiasing() const {
     if (!backend_) return;
     backend_->reconfigureAntialiasing(antialiasingLevel_);
 }
+bool Renderer::reloadShaders() const {
+    return backend_ && backend_->reloadShaders();
+}
 ViewportHandle Renderer::gameViewport() const noexcept {
     return {reinterpret_cast<std::uintptr_t>(backend_ ? backend_->gameViewportTexture() : VK_NULL_HANDLE)};
 }

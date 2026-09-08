@@ -189,9 +189,22 @@ namespace Engine::Assets {
                     lock.unlock();
                     return AssetHandle<T>(id, std::move(value));
                 }
+                // load() deliberately returns a cached value.  Remove the
+                // stale record before leaving the lock so the load below
+                // actually invokes the loader for the changed file.
+                cache_.erase(it);
             }
             lock.unlock();
             return load<T>(std::move(path), type);
+        }
+
+        /** Reloads an asset unconditionally, replacing its cached value. */
+        template<typename T>
+        AssetHandle<T> reload(const std::filesystem::path& path, AssetType type = AssetType::Unknown) {
+            const auto key = make_key(path);
+            const AssetId id = make_id(key); //NOLINT
+            unload<T>(id);
+            return load<T>(path, type);
         }
 
         /**
