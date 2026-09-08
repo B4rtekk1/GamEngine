@@ -1,8 +1,12 @@
 #include "Engine/Renderer/ShaderGraph/ShaderGraphCompiler.h"
+#include "Engine/Renderer/ShaderGraph/ShaderGraphSerializer.h"
 #include "Engine/Renderer/ShaderGraph/ShaderNodeFactory.h"
 #include "Engine/Renderer/ShaderGraph/ShaderNodeRegistry.h"
 
+#include <filesystem>
+#include <fstream>
 #include <gtest/gtest.h>
+#include <iterator>
 
 namespace Engine {
     namespace {
@@ -59,6 +63,30 @@ namespace Engine {
         ASSERT_TRUE(result.succeeded());
         EXPECT_NE(result.slang.find("sin(v0)"), std::string::npos);
         EXPECT_NE(result.slang.find("saturate(v1)"), std::string::npos);
+    }
+
+    TEST(ShaderGraphSerializer, WritesStableNodeTypeIdsAndMigratesV1SurfaceOutput) {
+        const auto path = std::filesystem::temp_directory_path() / "gamengine_shader_graph_serializer_test.shadergraph";
+        const ShaderGraphAsset graph{.id = 1, .name = "Serializer", .nodes = {
+            {.id = 1, .type = ShaderNodeType::SurfaceOutput},
+            {.id = 2, .type = ShaderNodeType::Time},
+        }};
+        ShaderGraphSerializer::save(graph, path);
+
+        std::ifstream saved(path);
+        std::string contents{std::istreambuf_iterator<char>{saved}, {}};
+        EXPECT_NE(contents.find("SHADERGRAPH 2"), std::string::npos);
+        EXPECT_NE(contents.find("NODE 1 surface_output"), std::string::npos);
+        EXPECT_EQ(ShaderGraphSerializer::load(path).nodes[0].type, ShaderNodeType::SurfaceOutput);
+
+        {
+            std::ofstream legacy(path, std::ios::trunc);
+            legacy << "SHADERGRAPH 1\nGRAPH 2 \"Legacy\"\nNODE 1 20 0 0 0 NONE\nENDNODE\nEND\n";
+        }
+        const ShaderGraphAsset migrated = ShaderGraphSerializer::load(path);
+        ASSERT_EQ(migrated.nodes.size(), 1U);
+        EXPECT_EQ(migrated.nodes[0].type, ShaderNodeType::SurfaceOutput);
+        std::filesystem::remove(path);
     }
 
 } // namespace Engine

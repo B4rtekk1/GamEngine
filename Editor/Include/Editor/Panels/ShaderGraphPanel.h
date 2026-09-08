@@ -5,19 +5,24 @@
 #include <imnodes.h>
 
 #include <filesystem>
+#include <functional>
 #include <optional>
 #include <unordered_set>
+#include <utility>
 
 namespace Editor {
     /** Immediate-mode editor view over an Engine-owned shader graph asset. */
     class ShaderGraphPanel final {
     public:
+        using SavedCallback = std::function<void(const std::filesystem::path&)>;
+
         ShaderGraphPanel();
         ~ShaderGraphPanel();
         ShaderGraphPanel(const ShaderGraphPanel&) = delete;
         ShaderGraphPanel& operator=(const ShaderGraphPanel&) = delete;
 
         void open(Engine::ShaderGraphAsset& graph, std::filesystem::path assetPath = {});
+        void setSavedCallback(SavedCallback callback) { savedCallback_ = std::move(callback); }
         void draw(bool& isOpen);
 
     private:
@@ -32,6 +37,7 @@ namespace Editor {
         bool codeDirty_{};
         bool layoutDirty_{};
         std::filesystem::path assetPath_;
+        SavedCallback savedCallback_;
 
         void drawCanvas();
         void drawNode(Engine::ShaderNode& node);

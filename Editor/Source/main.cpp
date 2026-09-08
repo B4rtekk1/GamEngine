@@ -251,13 +251,15 @@ int main(int argc, char** argv) {
         content.setErrorHandler([](const std::string& message) {
             Editor::ConsolePanel::error("Asset: " + message);
         });
-        const auto resolveShaderGraphMaterials = [&] {
+        const auto resolveShaderGraphMaterials = [&](const std::optional<std::filesystem::path>& updatedGraph = std::nullopt) {
             const auto forwardTemplate = shaderGraphSourceDirectory / "Forward/forward_pbr.slang";
             const auto generatedDirectory = content.assetRoot().parent_path() / "Library/ShaderGraphs";
             std::vector<Engine::Entity> graphMaterials;
             scene.editor().view<Engine::MeshRenderer>([&](const Engine::Entity entity, const Engine::MeshRenderer& meshRenderer) {
                 if (meshRenderer.material.shaderSource == Engine::MaterialShaderSource::ShaderGraph &&
-                    !meshRenderer.material.shaderGraphAsset.empty()) graphMaterials.push_back(entity);
+                    !meshRenderer.material.shaderGraphAsset.empty() &&
+                    (!updatedGraph || meshRenderer.material.shaderGraphAsset.lexically_normal() == *updatedGraph))
+                    graphMaterials.push_back(entity);
             });
             for (const Engine::Entity entity : graphMaterials) {
                 auto material = scene.editor().read<Engine::MeshRenderer>(entity).material;
@@ -279,6 +281,10 @@ int main(int argc, char** argv) {
                 }
             }
         };
+        shaderGraphPanel->setSavedCallback([&](const std::filesystem::path& absolutePath) {
+            const auto relativePath = absolutePath.lexically_relative(content.assetRoot()).lexically_normal();
+            resolveShaderGraphMaterials(relativePath);
+        });
         Editor::ConsolePanel::info("Editor started for project '" + project.name() + "'.");
         const bool restoreScene = !projectPath && !createProjectPath &&
                                   std::filesystem::is_regular_file(previousSession.scenePath);

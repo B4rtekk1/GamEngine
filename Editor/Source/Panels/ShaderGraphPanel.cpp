@@ -80,6 +80,7 @@ namespace Editor {
                 Engine::ShaderGraphSerializer::save(*graph_, assetPath_);
                 codeDirty_ = false;
                 layoutDirty_ = false;
+                if (savedCallback_) savedCallback_(assetPath_);
             } catch (const std::exception& error) {
                 ImGui::TextColored({1.0F, 0.35F, 0.35F, 1.0F}, "%s", error.what());
             }

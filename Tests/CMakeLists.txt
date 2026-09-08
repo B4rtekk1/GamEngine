@@ -26,6 +26,7 @@ gameengine_copy_runtime_dependencies(PhysicsMeshTests)
 add_executable(ShaderGraphCompilerTests
     ShaderGraphTests.cpp
     ${PROJECT_SOURCE_DIR}/Engine/Source/Renderer/ShaderGraph/ShaderGraphCompiler.cpp
+    ${PROJECT_SOURCE_DIR}/Engine/Source/Renderer/ShaderGraph/ShaderGraphSerializer.cpp
     ${PROJECT_SOURCE_DIR}/Engine/Source/Renderer/ShaderGraph/ShaderNodeFactory.cpp
     ${PROJECT_SOURCE_DIR}/Engine/Source/Renderer/ShaderGraph/ShaderNodeRegistry.cpp)
 target_link_libraries(ShaderGraphCompilerTests PRIVATE GTest::gtest_main)
