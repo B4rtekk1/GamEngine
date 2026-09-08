@@ -10,6 +10,7 @@ struct CullingObjectData
     uint firstInstance;
     uint castShadow;
     uint twoSided;
+    uint shader;
     uint lod1IndexCount;
     uint lod2IndexCount;
     float lod1Distance;

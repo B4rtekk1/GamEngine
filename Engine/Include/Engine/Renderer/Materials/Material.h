@@ -2,15 +2,15 @@
 
 #include "Engine/Renderer/Materials/PBRMaterial.h"
 
+#include <cstddef>
 #include <cstdint>
 
 namespace Engine {
     /**
      * Surface shader families supported by the built-in material contract.
      *
-     * The first renderer iteration only compiles StandardPBR.  The enum is a
-     * stable authoring boundary: adding a shader family later must also add a
-     * compatible pipeline bin rather than binding a shader per entity.
+     * This is a stable authoring boundary. The renderer resolves it through
+     * its ForwardPass pipeline registry; it is never a shader-file path.
      */
     enum class MaterialShader : std::uint8_t {
         StandardPBR,
@@ -18,6 +18,12 @@ namespace Engine {
         Hologram,
         Water,
     };
+
+    inline constexpr std::size_t MaterialShaderCount = 4;
+
+    [[nodiscard]] constexpr std::size_t materialShaderIndex(const MaterialShader shader) noexcept {
+        return static_cast<std::size_t>(shader);
+    }
 
     /** Pipeline-relevant state authored with a surface material. */
     struct MaterialRenderState final {

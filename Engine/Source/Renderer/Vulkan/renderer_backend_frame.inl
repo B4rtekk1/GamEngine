@@ -522,8 +522,10 @@
                         ? static_cast<std::uint32_t>(gpuObjects.size()) : 0u,
                     sceneDescriptorPass.grassShadowDescriptorSet(currentFrame), grassShadowDrawPtr);
             }
-            gpuCullingPasses[currentFrame].record(
-                commandBuffer, static_cast<std::uint32_t>(gpuObjects.size()));
+            for (std::uint32_t shader = 0; shader < MaterialShaderCount; ++shader) {
+                gpuCullingPasses[currentFrame].record(
+                    commandBuffer, static_cast<std::uint32_t>(gpuObjects.size()), nullptr, shader, shader);
+            }
             // The generic instance compaction result is not consumed by the
             // active draw path. Do not dispatch it until it directly feeds
             // instance-driven commands; cluster culling remains the live
@@ -590,16 +592,24 @@
                     vkCmdPipelineBarrier2(commandBuffer, &grassDrawDependency);
                 }
             }
-            foliageGpuCullingPasses[currentFrame].record(
-                commandBuffer, static_cast<std::uint32_t>(gpuObjects.size()));
+            for (std::uint32_t shader = 0; shader < MaterialShaderCount; ++shader) {
+                foliageGpuCullingPasses[currentFrame].record(
+                    commandBuffer, static_cast<std::uint32_t>(gpuObjects.size()), nullptr, shader, shader);
+            }
 
             forwardPass.begin(
                 commandBuffer, hdrFramebuffer, swapchain.extent(),
                 shadowPass.descriptorSet(currentFrame), vertexBuffer.handle(),
                 instanceBuffers[currentFrame].handle(), indexBuffer.handle());
-            ForwardPass::draw(commandBuffer, indirectDraws[currentFrame]);
-            forwardPass.drawFoliage(commandBuffer, shadowPass.descriptorSet(currentFrame),
-                                    foliageIndirectDraws[currentFrame]);
+            for (std::uint32_t shader = 0; shader < MaterialShaderCount; ++shader) {
+                const auto commandOffset = static_cast<VkDeviceSize>(shader) * gpuObjects.size() *
+                    sizeof(VkDrawIndexedIndirectCommand);
+                const auto countOffset = static_cast<VkDeviceSize>(shader) * sizeof(std::uint32_t);
+                forwardPass.drawMaterial(commandBuffer, shadowPass.descriptorSet(currentFrame),
+                    static_cast<MaterialShader>(shader), indirectDraws[currentFrame], commandOffset, countOffset);
+                forwardPass.drawMaterial(commandBuffer, shadowPass.descriptorSet(currentFrame),
+                    static_cast<MaterialShader>(shader), foliageIndirectDraws[currentFrame], commandOffset, countOffset);
+            }
             if (!sceneGpu.grassInstances.empty()) {
                 const auto& lists = grassRenderLists[currentFrame];
                 Culling::IndexedIndirectDrawCount grassDraw;
@@ -679,18 +689,26 @@
                 // Scene View has a separate frustum and therefore needs its own
                 // indirect list. The game camera's list must not hide objects
                 // which are visible from the editor camera.
-                sceneGpuCullingPasses[currentFrame].record(
-                    commandBuffer, static_cast<std::uint32_t>(gpuObjects.size()));
-                sceneFoliageGpuCullingPasses[currentFrame].record(
-                    commandBuffer, static_cast<std::uint32_t>(gpuObjects.size()));
+                for (std::uint32_t shader = 0; shader < MaterialShaderCount; ++shader) {
+                    sceneGpuCullingPasses[currentFrame].record(
+                        commandBuffer, static_cast<std::uint32_t>(gpuObjects.size()), nullptr, shader, shader);
+                    sceneFoliageGpuCullingPasses[currentFrame].record(
+                        commandBuffer, static_cast<std::uint32_t>(gpuObjects.size()), nullptr, shader, shader);
+                }
 
                 forwardPass.begin(
                     commandBuffer, sceneViewportFramebuffer, sceneViewportTarget.extent(),
                     sceneDescriptorPass.descriptorSet(currentFrame), vertexBuffer.handle(),
                     instanceBuffers[currentFrame].handle(), indexBuffer.handle());
-                ForwardPass::draw(commandBuffer, sceneIndirectDraws[currentFrame]);
-                forwardPass.drawFoliage(commandBuffer, sceneDescriptorPass.descriptorSet(currentFrame),
-                                        sceneFoliageIndirectDraws[currentFrame]);
+                for (std::uint32_t shader = 0; shader < MaterialShaderCount; ++shader) {
+                    const auto commandOffset = static_cast<VkDeviceSize>(shader) * gpuObjects.size() *
+                        sizeof(VkDrawIndexedIndirectCommand);
+                    const auto countOffset = static_cast<VkDeviceSize>(shader) * sizeof(std::uint32_t);
+                    forwardPass.drawMaterial(commandBuffer, sceneDescriptorPass.descriptorSet(currentFrame),
+                        static_cast<MaterialShader>(shader), sceneIndirectDraws[currentFrame], commandOffset, countOffset);
+                    forwardPass.drawMaterial(commandBuffer, sceneDescriptorPass.descriptorSet(currentFrame),
+                        static_cast<MaterialShader>(shader), sceneFoliageIndirectDraws[currentFrame], commandOffset, countOffset);
+                }
                 if (!sceneGpu.grassInstances.empty()) {
                     const auto& lists = sceneGrassRenderLists[currentFrame];
                     Culling::IndexedIndirectDrawCount grassDraw;

@@ -38,10 +38,19 @@ void ForwardPass::create(VkDevice device, const VkFormat colorFormat,
         {8, 0, VK_FORMAT_R32_UINT, offsetof(Vertex, materialIndex)},
         {9, 0, VK_FORMAT_R32G32B32A32_SFLOAT, offsetof(Vertex, tangent)},
     };
-    pipeline_.create(device, options);
+    constexpr std::array shaderPaths{
+        "shaders/forward_pbr.spv", "shaders/forward_unlit.spv",
+        "shaders/forward_hologram.spv", "shaders/forward_water.spv"};
+    for (std::size_t index = 0; index < shaderPaths.size(); ++index) {
+        options.shader = shaderPaths[index];
+        if (index != materialShaderIndex(MaterialShader::StandardPBR)) {
+            options.existingRenderPass = materialPipelines_[0].renderPass();
+        }
+        materialPipelines_[index].create(device, options);
+    }
 
     GraphicsPipelineOptions foliageOptions = options;
-    foliageOptions.existingRenderPass = pipeline_.renderPass();
+    foliageOptions.existingRenderPass = materialPipelines_[0].renderPass();
     foliageOptions.cullMode = VK_CULL_MODE_NONE;
     // Vegetation cards use alpha cutout.  They must populate depth before the
     // sky draw and TAA resolve; treating them as a generic transparent stream
@@ -65,7 +74,7 @@ void ForwardPass::create(VkDevice device, const VkFormat colorFormat,
 
     GraphicsPipelineOptions outlineOptions = options;
     outlineOptions.shader = "shaders/selection_outline.spv";
-    outlineOptions.existingRenderPass = pipeline_.renderPass();
+    outlineOptions.existingRenderPass = materialPipelines_[0].renderPass();
     outlineOptions.cullMode = VK_CULL_MODE_FRONT_BIT;
     outlineOptions.depthWriteEnable = VK_FALSE;
     outlineOptions.depthCompareOp = VK_COMPARE_OP_LESS_OR_EQUAL;
@@ -88,7 +97,7 @@ void ForwardPass::destroy() noexcept {
     outlinePipeline_.destroy();
     foliagePipeline_.destroy();
     grassPipeline_.destroy();
-    pipeline_.destroy();
+    for (auto& pipeline : materialPipelines_) pipeline.destroy();
 }
 
 void ForwardPass::drawGrass(VkCommandBuffer commandBuffer, VkDescriptorSet descriptorSet,
@@ -107,7 +116,7 @@ void ForwardPass::begin(VkCommandBuffer commandBuffer,
                         VkBuffer indexBuffer) const {
     (void)instanceBuffer; // Instance data is fetched from descriptor binding 5.
     VkRenderPassBeginInfo passInfo{VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO};
-    passInfo.renderPass = pipeline_.renderPass();
+    passInfo.renderPass = materialPipelines_[0].renderPass();
     passInfo.framebuffer = framebuffer;
     passInfo.renderArea.extent = extent;
     VkClearValue clearValues[2]{};
@@ -117,9 +126,10 @@ void ForwardPass::begin(VkCommandBuffer commandBuffer,
     passInfo.pClearValues = clearValues;
     vkCmdBeginRenderPass(commandBuffer, &passInfo, VK_SUBPASS_CONTENTS_INLINE);
 
-    vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline_.handle());
+    const auto& pipeline = materialPipelines_[0];
+    vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline.handle());
     vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS,
-                            pipeline_.layout(), 0, 1, &sceneDescriptorSet, 0, nullptr);
+                            pipeline.layout(), 0, 1, &sceneDescriptorSet, 0, nullptr);
     constexpr VkDeviceSize offsets[] = {0};
     vkCmdBindVertexBuffers(commandBuffer, 0, 1, &vertexBuffer, offsets);
     vkCmdBindIndexBuffer(commandBuffer, indexBuffer, 0, VK_INDEX_TYPE_UINT32);
@@ -135,6 +145,19 @@ void ForwardPass::draw(VkCommandBuffer commandBuffer,
     if (indirectDraw.valid()) {
         indirectDraw.record(commandBuffer);
     }
+}
+
+void ForwardPass::drawMaterial(VkCommandBuffer commandBuffer, VkDescriptorSet sceneDescriptorSet,
+                               const MaterialShader shader,
+                               const Culling::IndexedIndirectDrawCount& indirectDraw,
+                               const VkDeviceSize commandOffset,
+                               const VkDeviceSize countOffset) const {
+    if (!indirectDraw.valid()) return;
+    const auto& pipeline = materialPipelines_[materialShaderIndex(shader)];
+    vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline.handle());
+    vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline.layout(),
+                            0, 1, &sceneDescriptorSet, 0, nullptr);
+    indirectDraw.record(commandBuffer, commandOffset, countOffset);
 }
 
 void ForwardPass::drawFoliage(

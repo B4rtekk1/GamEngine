@@ -9,8 +9,9 @@ struct CullingPushConstants {
     std::uint32_t sourceCount{};
     std::uint32_t candidateLevel{};
     std::uint32_t mode{};
+    std::uint32_t shaderFilter{UINT32_MAX};
 };
-static_assert(sizeof(CullingPushConstants) == 80);
+static_assert(sizeof(CullingPushConstants) == 84);
 }
 
 namespace Engine::Culling
@@ -55,7 +56,8 @@ namespace Engine::Culling
         const VkCommandBuffer commandBuffer,
         const std::uint32_t objectCount,
         const Mat4* const viewProjectionOverride,
-        const std::uint32_t drawSlot
+        const std::uint32_t drawSlot,
+        const std::uint32_t shaderFilter
     ) const
     {
         if (objectCount == 0)
@@ -121,6 +123,7 @@ namespace Engine::Culling
             pushConstants.viewProjectionOverride = viewProjectionOverride->native();
         pushConstants.drawSlot = drawSlot;
         pushConstants.sourceCount = objectCount;
+        pushConstants.shaderFilter = shaderFilter;
         vkCmdPushConstants(commandBuffer, m_pipelineLayout,
                            VK_SHADER_STAGE_COMPUTE_BIT, 0,
                            sizeof(pushConstants), &pushConstants);

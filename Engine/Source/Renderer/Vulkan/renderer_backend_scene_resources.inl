@@ -237,10 +237,6 @@
                     }
 
                     const Mesh* const mesh = renderer.mesh.get();
-                    if (renderer.material.shader != MaterialShader::StandardPBR) {
-                        throw std::runtime_error(
-                            "The selected material shader has no registered ForwardPass pipeline");
-                    }
                     AABB localBounds;
                     std::uint32_t firstVertex = 0;
                     if (optimizationFeatures.meshDeduplication) {

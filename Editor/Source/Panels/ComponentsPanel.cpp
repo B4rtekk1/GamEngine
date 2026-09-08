@@ -187,7 +187,12 @@ bool ComponentsPanel::draw(Engine::ScenePreset &scene, const std::vector<Engine:
         }
 
         ImGui::Separator();
-        ImGui::TextDisabled("Shader: Standard PBR (built-in)");
+        constexpr const char* shaders[] = {"Standard PBR", "Unlit", "Hologram", "Water"};
+        int shader = static_cast<int>(renderer.material.shader);
+        if (ImGui::Combo("Shader##mesh-material", &shader, shaders, std::size(shaders))) {
+            renderer.material.shader = static_cast<Engine::MaterialShader>(shader);
+            changed = true;
+        }
         ImGui::TextDisabled("Material override");
         if (ImGui::Checkbox("Override imported material slot 0##mesh-material", &renderer.materialOverride)) {
             if (renderer.materialOverride && renderer.mesh && !renderer.mesh->materials.empty())

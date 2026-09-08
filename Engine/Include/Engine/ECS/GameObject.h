@@ -142,6 +142,12 @@ namespace Engine {
             modify<MeshRendererComponent>([&](auto& renderer) { renderer.material = material; });
         }
 
+        /** Selects a built-in material shader family without exposing shader files. */
+        void setShader(const MaterialShader shader) {
+            ensureMeshRenderer();
+            modify<MeshRendererComponent>([shader](auto& renderer) { renderer.material.shader = shader; });
+        }
+
         void setCastShadow(bool enabled) {
             ensureMeshRenderer();
             modify<MeshRendererComponent>([enabled](auto& renderer) { renderer.castShadow = enabled; });

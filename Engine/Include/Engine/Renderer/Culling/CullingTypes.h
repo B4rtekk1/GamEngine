@@ -52,6 +52,8 @@ namespace Engine::Culling {
         std::uint32_t castShadow;
         /// Non-zero when the object requires double-sided rasterization.
         std::uint32_t twoSided;
+        /// MaterialShader value used to route the command into a pipeline bin.
+        std::uint32_t shader;
         std::uint32_t lod1IndexCount;
         std::uint32_t lod2IndexCount;
         float lod1Distance;

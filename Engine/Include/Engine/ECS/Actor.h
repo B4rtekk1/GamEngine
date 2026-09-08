@@ -205,6 +205,7 @@ namespace Engine {
         void setMaterial(const PBRMaterial &material) const;
 
         void setMaterial(const Material &material) const;
+        void setShader(MaterialShader shader) const;
 
         void setCastShadow(bool enabled) const;
 

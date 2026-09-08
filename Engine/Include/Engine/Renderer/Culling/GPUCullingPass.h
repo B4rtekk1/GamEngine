@@ -54,7 +54,8 @@ namespace Engine::Culling
             VkCommandBuffer commandBuffer,
             std::uint32_t objectCount,
             const Mat4* viewProjectionOverride = nullptr,
-            std::uint32_t drawSlot = 0
+            std::uint32_t drawSlot = 0,
+            std::uint32_t shaderFilter = UINT32_MAX
         ) const;
 
         /// Builds the caster-ID list for one shadow clip level.

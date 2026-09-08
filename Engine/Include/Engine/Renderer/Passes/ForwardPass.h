@@ -1,9 +1,11 @@
 #pragma once
 
+#include "Engine/Renderer/Materials/Material.h"
 #include "Engine/Renderer/Vulkan/graphics_pipeline.h"
 
 #include <vulkan/vulkan.h>
 
+#include <array>
 #include <cstdint>
 
 namespace Engine {
@@ -33,6 +35,12 @@ namespace Engine {
         static void draw(VkCommandBuffer commandBuffer,
                          const Culling::IndexedIndirectDrawCount &indirectDraw);
 
+        void drawMaterial(VkCommandBuffer commandBuffer, VkDescriptorSet sceneDescriptorSet,
+                          MaterialShader shader,
+                          const Culling::IndexedIndirectDrawCount& indirectDraw,
+                          VkDeviceSize commandOffset = 0,
+                          VkDeviceSize countOffset = 0) const;
+
         void drawFoliage(VkCommandBuffer commandBuffer,
                          VkDescriptorSet sceneDescriptorSet,
                          const Culling::IndexedIndirectDrawCount &indirectDraw) const;
@@ -46,11 +54,11 @@ namespace Engine {
         static void end(VkCommandBuffer commandBuffer);
 
         [[nodiscard]] VkRenderPass renderPass() const noexcept {
-            return pipeline_.renderPass();
+            return materialPipelines_[0].renderPass();
         }
 
     private:
-        GraphicsPipeline pipeline_;
+        std::array<GraphicsPipeline, MaterialShaderCount> materialPipelines_;
         GraphicsPipeline foliagePipeline_;
         GraphicsPipeline grassPipeline_;
         GraphicsPipeline outlinePipeline_;

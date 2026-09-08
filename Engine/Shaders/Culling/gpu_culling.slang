@@ -19,6 +19,7 @@ struct CullingPushConstants
     // 0: direct object input, 1: emit clip-level candidates,
     // 2: consume the candidate list for a virtual-shadow page.
     uint mode;
+    uint shaderFilter;
 };
 
 [[vk::push_constant]] ConstantBuffer<CullingPushConstants> pushConstants;
@@ -175,7 +176,9 @@ void main(uint3 dispatchThreadId : SV_DispatchThreadID)
         if (objectIndex < culling.objectCount) {
             objectData = objects[objectIndex];
             visible = !(culling.shadowPass != 0 && objectData.castShadow == 0) &&
-                      !(culling.drawCategory != 2 && objectData.twoSided != culling.drawCategory);
+                      !(culling.drawCategory != 2 && objectData.twoSided != culling.drawCategory) &&
+                      (pushConstants.shaderFilter == 0xffffffff ||
+                       objectData.shader == pushConstants.shaderFilter);
         }
     }
 
