@@ -67,6 +67,8 @@ namespace Engine {
             std::unique_ptr<GraphicsPipeline> pipeline;
         };
 
+        void createPipeline(Entry& entry);
+
         VkDevice device_{VK_NULL_HANDLE};
         GraphicsPipelineOptions baseOptions_{};
         std::unordered_map<ShaderProgramId, Entry> entries_;

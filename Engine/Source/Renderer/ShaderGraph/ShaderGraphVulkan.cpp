@@ -3,7 +3,6 @@
 
 #include <SDL3/SDL.h>
 
-#include <cstdlib>
 #include <fstream>
 #include <format>
 #include <stdexcept>
@@ -24,13 +23,6 @@ namespace Engine {
             if (!file) throw std::runtime_error("Could not write generated shader: " + path.string());
             file.write(text.data(), static_cast<std::streamsize>(text.size()));
             if (!file) throw std::runtime_error("Could not finish generated shader: " + path.string());
-        }
-
-        [[nodiscard]] std::string quote(const std::filesystem::path &path) {
-            const std::string value = path.string();
-            if (value.find('"') != std::string::npos) throw std::invalid_argument(
-                "Shader paths may not contain quotation marks");
-            return '"' + value + '"';
         }
 
         [[nodiscard]] std::filesystem::path findSlangCompiler() {
@@ -118,21 +110,56 @@ struct MaterialSurface
             // The editor invokes this after debounce on its worker thread; Vulkan
             // sees only the finished SPIR-V via ShaderGraphPipelineCache.
             const std::filesystem::path slangcPath = findSlangCompiler();
-            const std::filesystem::path compilerLogPath = generatedDirectory / (stem + ".slangc.log");
-            const std::string command = quote(slangcPath) + " " + quote(program.slangPath) +
-                                        " -target spirv -profile glsl_460 -emit-spirv-directly -matrix-layout-row-major -I "
-                                        +
-                                        quote(forwardTemplate.parent_path().parent_path()) + " -o " + quote(
-                                            program.spirvPath) + " > " + quote(compilerLogPath) + " 2>&1";
-            if (std::system(command.c_str()) != 0) {
-                std::string compilerOutput;
-                try {
-                    compilerOutput = readText(compilerLogPath);
-                } catch (...) {
-                    compilerOutput = "No compiler output was captured.";
+            const std::string compiler = slangcPath.string();
+            const std::string sourcePath = program.slangPath.string();
+            const std::string includeDirectory = forwardTemplate.parent_path().parent_path().string();
+            const std::string outputPath = program.spirvPath.string();
+            const char *arguments[] = {
+                compiler.c_str(), sourcePath.c_str(),
+                "-target", "spirv",
+                "-profile", "glsl_460",
+                "-emit-spirv-directly",
+                "-matrix-layout-row-major",
+                "-I", includeDirectory.c_str(),
+                "-o", outputPath.c_str(),
+                nullptr
+            };
+
+            const SDL_PropertiesID properties = SDL_CreateProperties();
+            if (!properties) {
+                throw std::runtime_error(std::string("Could not create process properties: ") + SDL_GetError());
+            }
+
+            SDL_SetPointerProperty(properties, SDL_PROP_PROCESS_CREATE_ARGS_POINTER,
+                                   static_cast<void *>(arguments));
+            SDL_SetNumberProperty(properties, SDL_PROP_PROCESS_CREATE_STDOUT_NUMBER, SDL_PROCESS_STDIO_APP);
+            SDL_SetBooleanProperty(properties, SDL_PROP_PROCESS_CREATE_STDERR_TO_STDOUT_BOOLEAN, true);
+
+            SDL_Process *process = SDL_CreateProcessWithProperties(properties);
+            SDL_DestroyProperties(properties);
+            if (!process) {
+                throw std::runtime_error(std::string("Could not launch slangc: ") + SDL_GetError());
+            }
+
+            size_t outputSize = 0;
+            int exitCode = -1;
+            void *processOutput = SDL_ReadProcess(process, &outputSize, &exitCode);
+            std::string compilerOutput;
+            if (processOutput) {
+                compilerOutput.assign(static_cast<const char *>(processOutput), outputSize);
+                SDL_free(processOutput);
+            }
+            SDL_DestroyProcess(process);
+
+            if (exitCode != 0) {
+                std::string message = "slangc failed while compiling generated Shader Graph module: " +
+                                      slangcPath.string();
+                if (!compilerOutput.empty()) {
+                    message += "\n\n" + compilerOutput;
+                } else {
+                    message += "\nNo compiler output was captured.";
                 }
-                result.diagnostics.push_back({"slangc failed while compiling generated Shader Graph module: " +
-                                              slangcPath.string() + "\n" + compilerOutput, {}});
+                result.diagnostics.push_back({std::move(message), {}});
             }
         } catch (const std::exception &exception) {
             result.diagnostics.push_back({exception.what(), {}});
@@ -171,14 +198,19 @@ struct MaterialSurface
     }
 
     void ShaderGraphPipelineCache::initialize(const VkDevice device, GraphicsPipelineOptions baseOptions) {
-        destroy();
         if (device == VK_NULL_HANDLE) throw std::invalid_argument(
             "Shader Graph pipeline cache requires a Vulkan device");
+        if (device_ != VK_NULL_HANDLE) throw std::logic_error(
+            "Shader Graph pipeline cache has already been initialized");
         device_ = device;
         // Generated files are not AssetManager assets; load their just-cooked
         // SPIR-V directly instead of passing through the timestamp cache.
         baseOptions.assetManager = nullptr;
         baseOptions_ = std::move(baseOptions);
+        for (auto& [program, entry] : entries_) {
+            (void) program;
+            createPipeline(entry);
+        }
     }
 
     void ShaderGraphPipelineCache::destroy() noexcept {
@@ -187,10 +219,19 @@ struct MaterialSurface
         baseOptions_ = {};
     }
 
+    void ShaderGraphPipelineCache::createPipeline(Entry& entry) {
+        GraphicsPipelineOptions options = baseOptions_;
+        options.shader = entry.spirv;
+        options.cullMode = entry.state.doubleSided ? VK_CULL_MODE_NONE : VK_CULL_MODE_BACK_BIT;
+        options.depthWriteEnable = entry.state.depthWrite ? VK_TRUE : VK_FALSE;
+        options.alphaBlendEnable = entry.state.transparent ? VK_TRUE : VK_FALSE;
+        entry.pipeline = std::make_unique<GraphicsPipeline>();
+        entry.pipeline->create(device_, options);
+    }
+
     std::uint32_t ShaderGraphPipelineCache::getOrCreate(const ShaderProgramId program,
                                                         const std::filesystem::path &spirv,
                                                         const MaterialRenderState &state) {
-        if (device_ == VK_NULL_HANDLE) throw std::logic_error("Shader Graph pipeline cache has not been initialized");
         if (program == 0 || spirv.empty()) throw std::invalid_argument(
             "Shader Graph program requires an ID and SPIR-V path");
         if (const auto existing = entries_.find(program); existing != entries_.end()) {
@@ -200,19 +241,15 @@ struct MaterialSurface
                 throw std::logic_error(
                     "A ShaderProgramId may not be reused with a different SPIR-V module or render state");
             }
+            if (device_ != VK_NULL_HANDLE && !existing->second.pipeline) createPipeline(existing->second);
             return existing->second.slot;
         }
         if (entries_.size() >= MaterialProgramSlotCount - MaterialShaderCount)
             throw std::runtime_error("Shader Graph pipeline slot capacity exceeded");
-        GraphicsPipelineOptions options = baseOptions_;
-        options.shader = spirv;
-        options.cullMode = state.doubleSided ? VK_CULL_MODE_NONE : VK_CULL_MODE_BACK_BIT;
-        options.depthWriteEnable = state.depthWrite ? VK_TRUE : VK_FALSE;
-        options.alphaBlendEnable = state.transparent ? VK_TRUE : VK_FALSE;
-        auto pipeline = std::make_unique<GraphicsPipeline>();
-        pipeline->create(device_, options);
         const std::uint32_t slot = static_cast<std::uint32_t>(MaterialShaderCount + entries_.size());
-        const auto [it, inserted] = entries_.emplace(program, Entry{spirv, state, slot, std::move(pipeline)});
+        Entry entry{spirv, state, slot, nullptr};
+        if (device_ != VK_NULL_HANDLE) createPipeline(entry);
+        const auto [it, inserted] = entries_.emplace(program, std::move(entry));
         (void) inserted;
         return it->second.slot;
     }
