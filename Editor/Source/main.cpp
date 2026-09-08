@@ -22,6 +22,7 @@
 #include "Engine/Renderer/Geometry/ProceduralCloud.h"
 #include "Engine/Scene/Components/LightComponent.h"
 #include "Engine/Renderer/MeshRenderer.h"
+#include "Engine/Renderer/ShaderGraph/ShaderGraphVulkan.h"
 #include "Engine/Scene/SceneSerializer.h"
 #include "Engine/Scripting/ScriptSystem.h"
 #include "Engine/Scripting/ScriptRegistry.h"
@@ -238,6 +239,29 @@ int main(int argc, char** argv) {
         content.setErrorHandler([](const std::string& message) {
             Editor::ConsolePanel::error("Asset: " + message);
         });
+        const auto resolveShaderGraphMaterials = [&] {
+            const auto sourceRoot = std::filesystem::path{GAMEENGINE_SOURCE_DIR};
+            const auto forwardTemplate = sourceRoot / "Engine/Shaders/Forward/forward_pbr.slang";
+            const auto generatedDirectory = content.assetRoot().parent_path() / "Library/ShaderGraphs";
+            std::vector<Engine::Entity> graphMaterials;
+            scene.editor().view<Engine::MeshRenderer>([&](const Engine::Entity entity, const Engine::MeshRenderer& meshRenderer) {
+                if (!meshRenderer.material.shaderGraphAsset.empty()) graphMaterials.push_back(entity);
+            });
+            for (const Engine::Entity entity : graphMaterials) {
+                auto material = scene.editor().read<Engine::MeshRenderer>(entity).material;
+                const auto result = Engine::ShaderGraphMaterialCompiler{}.resolve(
+                    material, content.assetRoot(), forwardTemplate, generatedDirectory);
+                if (result.succeeded()) {
+                    scene.editor().patch<Engine::MeshRenderer>(entity, [&](Engine::MeshRenderer& meshRenderer) {
+                        meshRenderer.material = std::move(material);
+                    });
+                } else {
+                    std::string error{"Could not resolve Shader Graph material"};
+                    for (const auto& diagnostic : result.diagnostics) error += ": " + diagnostic.message;
+                    Editor::ConsolePanel::error(error);
+                }
+            }
+        };
         Editor::ConsolePanel::info("Editor started for project '" + project.name() + "'.");
         const bool restoreScene = !projectPath && !createProjectPath &&
                                   std::filesystem::is_regular_file(previousSession.scenePath);
@@ -313,6 +337,7 @@ int main(int argc, char** argv) {
                 try {
                     auto loadedScene = initialSceneLoad->get();
                     Engine::SceneSerializer::replace(scene, *loadedScene);
+                    resolveShaderGraphMaterials();
                     history.reset(scene);
                     lastPersistedSceneRevision = scene.editor().mutationRevision();
                     setSelection(Engine::NullEntity);
@@ -336,6 +361,7 @@ int main(int argc, char** argv) {
                                                     EditorSceneSession::msaaSampleCount(renderer))) {
                     physicsSystem.reset();
                     playing = !playing;
+                    if (!playing) resolveShaderGraphMaterials();
                     paused = false;
                     physicsAccumulator = 0.0;
                     showGameView = playing;
@@ -396,6 +422,7 @@ int main(int argc, char** argv) {
                 sceneLoaded = true;
             }
             if (sceneLoaded) {
+                resolveShaderGraphMaterials();
                 // Loading replaces the registry, so any selection from the
                 // previous scene is stale before the hierarchy/inspector are
                 // drawn for this frame.
@@ -426,6 +453,7 @@ int main(int argc, char** argv) {
                 physicsAccumulator = 0.0;
                 showGameView = playing;
                 if (!playing) {
+                    resolveShaderGraphMaterials();
                     setSelection(Engine::NullEntity);
                     rendererReloadPending = true;
                 }
@@ -560,7 +588,7 @@ int main(int argc, char** argv) {
                 }
             }
             const bool inspectorConsumesMouseWheel = showInspector &&
-                ComponentsPanel::draw(scene, selectedEntities, selectedEntity, showInspector);
+                ComponentsPanel::draw(scene, content, selectedEntities, selectedEntity, showInspector);
             if (showAssetManager) {
                 if (const Engine::Entity created =
                         AssetManagerPanel::draw(scene, content, playing, showAssetManager,

@@ -1,4 +1,5 @@
 #include "Engine/Renderer/ShaderGraph/ShaderGraphVulkan.h"
+#include "Engine/Renderer/ShaderGraph/ShaderGraphSerializer.h"
 
 #include <cstdlib>
 #include <fstream>
@@ -104,6 +105,36 @@ struct MaterialSurface
                 result.diagnostics.push_back({"slangc failed while compiling generated Shader Graph module.", {}});
             }
         } catch (const std::exception &exception) {
+            result.diagnostics.push_back({exception.what(), {}});
+        }
+        return result;
+    }
+
+    ShaderGraphCompileResult ShaderGraphMaterialCompiler::resolve(
+        Material& material, const std::filesystem::path& assetRoot,
+        const std::filesystem::path& forwardTemplate,
+        const std::filesystem::path& generatedDirectory) const {
+        ShaderGraphCompileResult result;
+        const std::filesystem::path asset = material.shaderGraphAsset.lexically_normal();
+        if (asset.empty()) {
+            result.diagnostics.push_back({"Shader Graph material has no source asset.", {}});
+            return result;
+        }
+        if (asset.is_absolute() || *asset.begin() == ".." || asset.extension() != ".shadergraph") {
+            result.diagnostics.push_back({"Shader Graph asset must be a relative .shadergraph path inside Assets.", {}});
+            return result;
+        }
+
+        try {
+            const ShaderGraphAsset graph = ShaderGraphSerializer::load(assetRoot / asset);
+            ShaderGraphProgram program;
+            result = ShaderGraphSlangCompiler{}.compile(graph, forwardTemplate, generatedDirectory, program);
+            if (result.succeeded()) {
+                material.shaderGraphAsset = asset;
+                material.shaderProgram = program.id;
+                material.shaderProgramSpirv = program.spirvPath;
+            }
+        } catch (const std::exception& exception) {
             result.diagnostics.push_back({exception.what(), {}});
         }
         return result;

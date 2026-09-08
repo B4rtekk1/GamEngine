@@ -44,6 +44,8 @@ namespace Engine {
      */
     struct Material final {
         MaterialShader shader{MaterialShader::StandardPBR};
+        /** Relative path of the source .shadergraph asset. This is authoring data. */
+        std::filesystem::path shaderGraphAsset{};
         /** Non-zero only for a cooked Shader Graph program. Built-ins retain shader. */
         ShaderProgramId shaderProgram{};
         /** SPIR-V emitted by ShaderGraphSlangCompiler for shaderProgram. */

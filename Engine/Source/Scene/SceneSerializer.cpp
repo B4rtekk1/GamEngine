@@ -57,6 +57,7 @@ namespace Engine {
         constexpr std::uint32_t RigidbodyStateFormatVersion = 16;
         constexpr std::uint32_t ScriptFieldsFormatVersion = 17;
         constexpr std::uint32_t MaterialShaderFormatVersion = 18;
+        constexpr std::uint32_t ShaderGraphMaterialFormatVersion = 19;
         constexpr std::uint32_t TerrainDataVersion = 1;
         constexpr std::array<char, 8> TerrainDataMagic{'G', 'E', 'T', 'E', 'R', 'R', '1', '\0'};
 
@@ -931,6 +932,12 @@ namespace Engine {
                                              : -1;
                 serialized << "MESH_RENDERER " << meshId << ' ';
                 serialized << static_cast<unsigned>(renderer.material.shader) << ' ';
+                if (renderer.material.shaderGraphAsset.is_absolute() ||
+                    (!renderer.material.shaderGraphAsset.empty() &&
+                     *renderer.material.shaderGraphAsset.lexically_normal().begin() == "..")) {
+                    throw std::invalid_argument("Shader Graph material asset must be relative to Assets");
+                }
+                serialized << std::quoted(renderer.material.shaderGraphAsset.lexically_normal().generic_string()) << ' ';
                 writeMaterial(serialized, renderer.material.pbr);
                 serialized << ' ' << static_cast<int>(renderer.materialOverride) << ' '
                         << static_cast<int>(renderer.castShadow) << ' '
@@ -1070,6 +1077,7 @@ namespace Engine {
         if (version != LegacyFormatVersion && version != TerrainFormatVersion &&
             version != EmissiveFormatVersion && version != MaterialOverrideFormatVersion &&
             version != MaterialOverrideFormatVersion + 1 && version != ScriptFieldsFormatVersion &&
+            version != MaterialShaderFormatVersion &&
             version != FormatVersion) {
             invalidScene("unsupported format version " + std::to_string(version));
         }
@@ -1365,6 +1373,15 @@ namespace Engine {
                             invalidScene("invalid material shader");
                         }
                         renderer.material.shader = static_cast<MaterialShader>(shader);
+                    }
+                    if (version >= ShaderGraphMaterialFormatVersion) {
+                        std::string shaderGraphAsset;
+                        input >> std::quoted(shaderGraphAsset);
+                        const std::filesystem::path asset = std::filesystem::path{shaderGraphAsset}.lexically_normal();
+                        if (!input || asset.is_absolute() || (!asset.empty() && *asset.begin() == "..")) {
+                            invalidScene("Shader Graph asset must be relative to Assets");
+                        }
+                        renderer.material.shaderGraphAsset = asset;
                     }
                     renderer.material.pbr = readMaterial(input, version);
                     renderer.material.synchronizeRenderStateFromPbr();

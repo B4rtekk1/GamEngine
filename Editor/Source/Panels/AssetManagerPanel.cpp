@@ -565,11 +565,12 @@ Engine::Entity AssetManagerPanel::draw(Engine::ScenePreset& scene, Engine::Asset
                     selected = asset.relative;
                     error.clear();
                 }
-                if ((is_model(asset.relative) || asset.kind == AssetKind::Texture) && ImGui::BeginDragDropSource()) {
+                if ((is_model(asset.relative) || asset.kind == AssetKind::Texture || is_shader_graph(asset.relative)) && ImGui::BeginDragDropSource()) {
                     selected = asset.relative;
                     if (is_model(asset.relative)) Editor::AssetDragDrop::setModelPayload(asset.relative);
+                    else if (is_shader_graph(asset.relative)) Editor::AssetDragDrop::setShaderGraphPayload(asset.relative);
                     else Editor::AssetDragDrop::setTexturePayload(asset.relative);
-                    ImGui::TextUnformatted("Add model to scene");
+                    ImGui::TextUnformatted(is_shader_graph(asset.relative) ? "Assign Shader Graph" : "Add model to scene");
                     ImGui::TextDisabled("%s", asset.relative.filename().string().c_str());
                     ImGui::EndDragDropSource();
                 }
@@ -650,11 +651,12 @@ Engine::Entity AssetManagerPanel::draw(Engine::ScenePreset& scene, Engine::Asset
                     else if (is_shader_graph(asset.relative)) openShaderGraph(asset.relative);
                 }
             }
-            if ((is_model(asset.relative) || asset.kind == AssetKind::Texture) && ImGui::BeginDragDropSource()) {
+            if ((is_model(asset.relative) || asset.kind == AssetKind::Texture || is_shader_graph(asset.relative)) && ImGui::BeginDragDropSource()) {
                 selected = asset.relative;
                 if (is_model(asset.relative)) Editor::AssetDragDrop::setModelPayload(asset.relative);
+                else if (is_shader_graph(asset.relative)) Editor::AssetDragDrop::setShaderGraphPayload(asset.relative);
                 else Editor::AssetDragDrop::setTexturePayload(asset.relative);
-                ImGui::TextUnformatted("Add model to scene");
+                ImGui::TextUnformatted(is_shader_graph(asset.relative) ? "Assign Shader Graph" : "Add model to scene");
                 ImGui::TextDisabled("%s", asset.relative.filename().string().c_str());
                 ImGui::EndDragDropSource();
             }

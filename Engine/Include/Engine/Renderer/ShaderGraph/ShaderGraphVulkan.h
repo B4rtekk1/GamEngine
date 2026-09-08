@@ -34,6 +34,20 @@ namespace Engine {
         [[nodiscard]] static ShaderProgramId makeProgramId(std::string_view generatedSurface) noexcept;
     };
 
+    /** Resolves the authoring .shadergraph reference on a material to cooked runtime data. */
+    class ShaderGraphMaterialCompiler final {
+    public:
+        /**
+         * Compiles material.shaderGraphAsset relative to assetRoot.  On failure
+         * the material is unchanged, so a visible renderer never receives a
+         * half-cooked program.
+         */
+        [[nodiscard]] ShaderGraphCompileResult resolve(Material& material,
+                                                        const std::filesystem::path& assetRoot,
+                                                        const std::filesystem::path& forwardTemplate,
+                                                        const std::filesystem::path& generatedDirectory) const;
+    };
+
     /** Render-thread owned cache. One graph program creates one VkPipeline per render state. */
     class ShaderGraphPipelineCache final {
     public:

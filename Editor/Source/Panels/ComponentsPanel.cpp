@@ -3,6 +3,8 @@
 #include "Editor/App/EditorEntityHelpers.h"
 #include "Editor/EditorUi.h"
 #include "Editor/Panels/EditorSceneSession.h"
+#include "Editor/Panels/AssetDragDrop.h"
+#include "Editor/Panels/ConsolePanel.h"
 #include "Engine/Assets/AssetTypes.h"
 #include "Engine/Assets/Content.h"
 #include "Engine/Core/Camera.h"
@@ -18,6 +20,7 @@
 #include "Engine/Renderer/Geometry/ProceduralCloud.h"
 #include "Engine/Renderer/MeshRenderer.h"
 #include "Engine/Renderer/Renderer.h"
+#include "Engine/Renderer/ShaderGraph/ShaderGraphVulkan.h"
 #include "Engine/Scene/Components/LightComponent.h"
 #include "Engine/Scene/SceneEditor.h"
 #include "Engine/Scripting/ScriptRegistry.h"
@@ -56,7 +59,8 @@ static bool drawRemovableComponentHeader(const char *label, const char *id, bool
     return open;
 }
 
-bool ComponentsPanel::draw(Engine::ScenePreset &scene, const std::vector<Engine::Entity>& selection,
+bool ComponentsPanel::draw(Engine::ScenePreset &scene, Engine::Assets::Content& content,
+                           const std::vector<Engine::Entity>& selection,
                            const Engine::Entity active, bool& isOpen) {
     const Engine::Entity selected = active;
     ImGui::Begin("Inspector", &isOpen);
@@ -187,11 +191,77 @@ bool ComponentsPanel::draw(Engine::ScenePreset &scene, const std::vector<Engine:
         }
 
         ImGui::Separator();
-        constexpr const char* shaders[] = {"Standard PBR", "Unlit", "Hologram", "Water"};
-        int shader = static_cast<int>(renderer.material.shader);
-        if (ImGui::Combo("Shader##mesh-material", &shader, shaders, std::size(shaders))) {
-            renderer.material.shader = static_cast<Engine::MaterialShader>(shader);
+        constexpr const char* shaderTypes[] = {"Built-in", "Shader Graph"};
+        int shaderType = renderer.material.shaderGraphAsset.empty() ? 0 : 1;
+        if (ImGui::Combo("Shader Type##mesh-material", &shaderType, shaderTypes, std::size(shaderTypes))) {
+            if (shaderType == 0) {
+                renderer.material.shaderGraphAsset.clear();
+                renderer.material.shaderProgram = {};
+                renderer.material.shaderProgramSpirv.clear();
+            }
             changed = true;
+        }
+        if (shaderType == 0) {
+            constexpr const char* shaders[] = {"Standard PBR", "Unlit", "Hologram", "Water"};
+            int shader = static_cast<int>(renderer.material.shader);
+            if (ImGui::Combo("Shader##mesh-material", &shader, shaders, std::size(shaders))) {
+                renderer.material.shader = static_cast<Engine::MaterialShader>(shader);
+                changed = true;
+            }
+        } else {
+            ImGui::TextDisabled("Shader Graph");
+            const std::string graphLabel = renderer.material.shaderGraphAsset.empty()
+                                               ? "Select or drop a .shadergraph asset"
+                                               : renderer.material.shaderGraphAsset.generic_string();
+            const auto assignShaderGraph = [&](const std::filesystem::path& graphPath) {
+                const auto sourceRoot = std::filesystem::path{GAMEENGINE_SOURCE_DIR};
+                const auto templatePath = sourceRoot / "Engine/Shaders/Forward/forward_pbr.slang";
+                const auto generatedDirectory = content.assetRoot().parent_path() / "Library/ShaderGraphs";
+                auto candidate = renderer.material;
+                candidate.shaderGraphAsset = graphPath;
+                const auto result = Engine::ShaderGraphMaterialCompiler{}.resolve(
+                    candidate, content.assetRoot(), templatePath, generatedDirectory);
+                if (result.succeeded()) {
+                    renderer.material = std::move(candidate);
+                    changed = true;
+                    return true;
+                }
+                std::string error{"Could not compile Shader Graph"};
+                for (const auto& diagnostic : result.diagnostics) error += ": " + diagnostic.message;
+                Editor::ConsolePanel::error(error);
+                return false;
+            };
+            if (ImGui::Button(graphLabel.c_str(), {-1.0F, 0.0F})) {
+                ImGui::OpenPopup("Select Shader Graph##mesh-material");
+            }
+            if (ImGui::BeginDragDropTarget()) {
+                if (const ImGuiPayload* payload = ImGui::AcceptDragDropPayload(Editor::AssetDragDrop::shaderGraphPayload)) {
+                    assignShaderGraph(Editor::AssetDragDrop::shaderGraphPath(*payload));
+                }
+                ImGui::EndDragDropTarget();
+            }
+            if (ImGui::BeginPopup("Select Shader Graph##mesh-material")) {
+                bool found = false;
+                std::error_code error;
+                const std::filesystem::recursive_directory_iterator end;
+                for (std::filesystem::recursive_directory_iterator it{
+                         content.assetRoot(), std::filesystem::directory_options::skip_permission_denied, error};
+                     !error && it != end; it.increment(error)) {
+                    if (!it->is_regular_file(error) || it->path().extension() != ".shadergraph") continue;
+                    const auto relative = it->path().lexically_relative(content.assetRoot());
+                    ImGui::PushID(relative.generic_string().c_str());
+                    if (ImGui::Selectable(relative.generic_string().c_str())) {
+                        if (assignShaderGraph(relative)) ImGui::CloseCurrentPopup();
+                    }
+                    ImGui::PopID();
+                    found = true;
+                }
+                if (!found) ImGui::TextDisabled("No .shadergraph assets in Assets.");
+                ImGui::EndPopup();
+            }
+            if (renderer.material.shaderProgram == 0 && !renderer.material.shaderGraphAsset.empty()) {
+                ImGui::TextColored({0.95F, 0.65F, 0.25F, 1.0F}, "Shader Graph needs compilation.");
+            }
         }
         ImGui::TextDisabled("Material override");
         if (ImGui::Checkbox("Override imported material slot 0##mesh-material", &renderer.materialOverride)) {

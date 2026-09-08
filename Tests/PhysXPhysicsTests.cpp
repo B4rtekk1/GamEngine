@@ -282,6 +282,11 @@ TEST(SceneSerializer, RoundTripsCubeActorTransformAndMaterial) {
     actor.setPosition({1.0F, 2.0F, 3.0F});
     actor.setRotation({10.0F, 20.0F, 30.0F});
     actor.setScale({2.0F, 3.0F, 4.0F});
+    source.editor().patch<Engine::MeshRendererComponent>(source.findEntity(actor.id()), [](auto& renderer) {
+        renderer.material.shaderGraphAsset = "Shaders/AnimatedSphere.shadergraph";
+        renderer.material.shaderProgram = 42;
+        renderer.material.shaderProgramSpirv = "Library/ShaderGraphs/generated_42.spv";
+    });
     ASSERT_NO_THROW(source.save(path));
     ASSERT_TRUE(std::filesystem::exists(path));
 
@@ -300,6 +305,9 @@ TEST(SceneSerializer, RoundTripsCubeActorTransformAndMaterial) {
     EXPECT_FLOAT_EQ(renderer.material.pbr.metallic, 0.6F);
     EXPECT_FLOAT_EQ(renderer.material.pbr.roughness, 0.3F);
     EXPECT_EQ(renderer.material.pbr.alphaMode, Engine::AlphaMode::Blend);
+    EXPECT_EQ(renderer.material.shaderGraphAsset, "Shaders/AnimatedSphere.shadergraph");
+    EXPECT_EQ(renderer.material.shaderProgram, 0U);
+    EXPECT_TRUE(renderer.material.shaderProgramSpirv.empty());
 }
 
 TEST(SceneSerializer, StoresTerrainSamplesInLosslessBinarySidecar) {
