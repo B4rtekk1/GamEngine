@@ -1,6 +1,7 @@
 #include "imgui.h"
 #include "imgui_internal.h"
 #include "imgui_impl_sdl3.h"
+#include "imnodes.h"
 
 #include "Engine/Renderer/Renderer.h"
 #include "Engine/Assets/Content.h"
@@ -37,7 +38,10 @@
 #include "Editor/Panels/AssetManagerPanel.h"
 #include "Editor/Panels/ConsolePanel.h"
 #include "Editor/Panels/TerminalPanel.h"
+#include "Editor/Panels/ShaderGraphPanel.h"
 #include "Editor/Panels/AssetDragDrop.h"
+#include "Engine/Renderer/ShaderGraph/ShaderNodeFactory.h"
+#include "Engine/Renderer/ShaderGraph/ShaderGraphSerializer.h"
 #include "Editor/App/EditorEntityHelpers.h"
 #include "Editor/EditorState.h"
 #include "Editor/EditorPreferences.h"
@@ -64,6 +68,7 @@ using Editor::SceneHistory;
 #include <fstream>
 #include <future>
 #include <limits>
+#include <memory>
 #include <sstream>
 #include <stdexcept>
 #include <string_view>
@@ -185,6 +190,9 @@ int main(int argc, char** argv) {
 
         IMGUI_CHECKVERSION();
         ImGui::CreateContext();
+        ImNodes::CreateContext();
+        ImNodes::SetImGuiContext(ImGui::GetCurrentContext());
+        ImNodes::StyleColorsDark();
         ImGuiIO &imguiIo = ImGui::GetIO();
         const std::filesystem::path preferencesPath = Editor::preferencesDirectory();
         std::filesystem::create_directories(preferencesPath);
@@ -198,6 +206,12 @@ int main(int argc, char** argv) {
         }
         ImFont* terminalFont = imguiIo.Fonts->AddFontFromFileTTF("C:/Windows/Fonts/consola.ttf", 16.0F);
         EditorStyle::apply();
+        auto shaderGraphPanel = std::make_unique<Editor::ShaderGraphPanel>();
+        Engine::ShaderGraphAsset shaderGraph{.name = "Untitled Shader Graph"};
+        Engine::ShaderPinId shaderGraphPinId = 1;
+        shaderGraph.nodes.push_back(Engine::ShaderNodeFactory::create(
+            Engine::ShaderNodeType::SurfaceOutput, 1, shaderGraphPinId));
+        shaderGraphPanel->open(shaderGraph);
 
         Engine::ScenePreset scene;
         Engine::ScriptModuleManager scriptModules{Engine::ScriptRegistry::instance()};
@@ -278,6 +292,7 @@ int main(int argc, char** argv) {
         bool showAssetManager = true;
         bool showTerrainTools = true;
         bool showConsole = true;
+        bool showShaderGraph = false;
         bool showTerminal = true;
         Editor::TerminalPanel terminal{project.rootPath(), terminalFont};
         double physicsAccumulator = 0.0;
@@ -366,7 +381,8 @@ int main(int argc, char** argv) {
                                                                  pasteRequested, duplicateRequested,
                                                                  resetHistoryRequested, showHierarchy,
                                                                  showViewport, showInspector, showAssetManager,
-                                                                 showTerrainTools, showConsole, showTerminal);
+                                                                 showTerrainTools, showConsole, showTerminal,
+                                                                 showShaderGraph);
                 created != Engine::NullEntity) {
                 setSelection(created);
             }
@@ -548,13 +564,26 @@ int main(int argc, char** argv) {
             if (showAssetManager) {
                 if (const Engine::Entity created =
                         AssetManagerPanel::draw(scene, content, playing, showAssetManager,
-                                                !project.manifestPath().empty());
+                                                !project.manifestPath().empty(),
+                                                [&](const std::filesystem::path& relativePath) {
+                                                    try {
+                                                        shaderGraph = Engine::ShaderGraphSerializer::load(
+                                                            content.assetRoot() / relativePath);
+                                                        shaderGraphPanel->open(shaderGraph,
+                                                                               content.assetRoot() / relativePath);
+                                                        showShaderGraph = true;
+                                                    } catch (const std::exception& error) {
+                                                        Editor::ConsolePanel::error("Could not open shader graph: " +
+                                                                                    std::string{error.what()});
+                                                    }
+                                                });
                     created != Engine::NullEntity) {
                     setSelection(created);
                 }
             }
             if (showConsole) Editor::ConsolePanel::draw(showConsole);
             if (showTerminal) terminal.draw(showTerminal);
+            if (showShaderGraph) shaderGraphPanel->draw(showShaderGraph);
             drawStatusBar(scene, selectedEntity, playing, paused);
             if (!playing && selectedEntity != Engine::NullEntity &&
                 scene.editor().valid(selectedEntity) && !ImGui::GetIO().WantTextInput &&
@@ -727,6 +756,8 @@ int main(int argc, char** argv) {
         terminal.shutdown();
         scriptModules.unload(scene);
         renderer.shutdown();
+        shaderGraphPanel.reset();
+        ImNodes::DestroyContext();
         ImGui::DestroyContext();
         SDL_DestroyWindow(window);
         SDL_Quit();

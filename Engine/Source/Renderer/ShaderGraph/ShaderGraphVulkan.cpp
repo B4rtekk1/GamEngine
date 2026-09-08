@@ -9,13 +9,13 @@ namespace Engine {
     namespace {
         constexpr std::string_view DeclarationMarker = "// GENERATED_SHADER_GRAPH_DECLARATIONS";
 
-        [[nodiscard]] std::string readText(const std::filesystem::path& path) {
+        [[nodiscard]] std::string readText(const std::filesystem::path &path) {
             std::ifstream file(path, std::ios::binary);
             if (!file) throw std::runtime_error("Could not open shader graph template: " + path.string());
             return {std::istreambuf_iterator<char>{file}, std::istreambuf_iterator<char>{}};
         }
 
-        void writeText(const std::filesystem::path& path, const std::string& text) {
+        void writeText(const std::filesystem::path &path, const std::string &text) {
             std::filesystem::create_directories(path.parent_path());
             std::ofstream file(path, std::ios::binary | std::ios::trunc);
             if (!file) throw std::runtime_error("Could not write generated shader: " + path.string());
@@ -23,9 +23,10 @@ namespace Engine {
             if (!file) throw std::runtime_error("Could not finish generated shader: " + path.string());
         }
 
-        [[nodiscard]] std::string quote(const std::filesystem::path& path) {
+        [[nodiscard]] std::string quote(const std::filesystem::path &path) {
             const std::string value = path.string();
-            if (value.find('"') != std::string::npos) throw std::invalid_argument("Shader paths may not contain quotation marks");
+            if (value.find('"') != std::string::npos) throw std::invalid_argument(
+                "Shader paths may not contain quotation marks");
             return '"' + value + '"';
         }
     }
@@ -35,18 +36,20 @@ namespace Engine {
         // property expression cannot accidentally reuse a stale VkPipeline.
         ShaderProgramId hash = 14695981039346656037ULL;
         const auto mix = [&hash](const std::uint8_t byte) { hash = (hash ^ byte) * 1099511628211ULL; };
-        for (const unsigned char character : generatedSurface) mix(character);
+        for (const unsigned char character: generatedSurface) mix(character);
         return hash == 0 ? 1 : hash;
     }
 
-    ShaderGraphCompileResult ShaderGraphSlangCompiler::compile(const ShaderGraphAsset& graph,
-                                                                 const std::filesystem::path& forwardTemplate,
-                                                                 const std::filesystem::path& generatedDirectory,
-                                                                 ShaderGraphProgram& program) const {
+    ShaderGraphCompileResult ShaderGraphSlangCompiler::compile(const ShaderGraphAsset &graph,
+                                                               const std::filesystem::path &forwardTemplate,
+                                                               const std::filesystem::path &generatedDirectory,
+                                                               ShaderGraphProgram &program) const {
         ShaderGraphCompileResult result = ShaderGraphCompiler{}.compile(graph);
         if (!result.succeeded()) return result;
         if (result.slang.find("properties.") != std::string::npos) {
-            result.diagnostics.push_back({"Graph properties need a MaterialParameterBlock GPU layout before they can be emitted to Vulkan.", {}});
+            result.diagnostics.push_back({
+                "Graph properties need a MaterialParameterBlock GPU layout before they can be emitted to Vulkan.", {}
+            });
             return result;
         }
 
@@ -93,12 +96,14 @@ struct MaterialSurface
             // The editor invokes this after debounce on its worker thread; Vulkan
             // sees only the finished SPIR-V via ShaderGraphPipelineCache.
             const std::string command = "slangc " + quote(program.slangPath) +
-                " -target spirv -profile glsl_460 -emit-spirv-directly -matrix-layout-row-major -I " +
-                quote(forwardTemplate.parent_path().parent_path()) + " -o " + quote(program.spirvPath);
+                                        " -target spirv -profile glsl_460 -emit-spirv-directly -matrix-layout-row-major -I "
+                                        +
+                                        quote(forwardTemplate.parent_path().parent_path()) + " -o " + quote(
+                                            program.spirvPath);
             if (std::system(command.c_str()) != 0) {
                 result.diagnostics.push_back({"slangc failed while compiling generated Shader Graph module.", {}});
             }
-        } catch (const std::exception& exception) {
+        } catch (const std::exception &exception) {
             result.diagnostics.push_back({exception.what(), {}});
         }
         return result;
@@ -106,7 +111,8 @@ struct MaterialSurface
 
     void ShaderGraphPipelineCache::initialize(const VkDevice device, GraphicsPipelineOptions baseOptions) {
         destroy();
-        if (device == VK_NULL_HANDLE) throw std::invalid_argument("Shader Graph pipeline cache requires a Vulkan device");
+        if (device == VK_NULL_HANDLE) throw std::invalid_argument(
+            "Shader Graph pipeline cache requires a Vulkan device");
         device_ = device;
         // Generated files are not AssetManager assets; load their just-cooked
         // SPIR-V directly instead of passing through the timestamp cache.
@@ -121,14 +127,17 @@ struct MaterialSurface
     }
 
     std::uint32_t ShaderGraphPipelineCache::getOrCreate(const ShaderProgramId program,
-                                                         const std::filesystem::path& spirv,
-                                                         const MaterialRenderState& state) {
+                                                        const std::filesystem::path &spirv,
+                                                        const MaterialRenderState &state) {
         if (device_ == VK_NULL_HANDLE) throw std::logic_error("Shader Graph pipeline cache has not been initialized");
-        if (program == 0 || spirv.empty()) throw std::invalid_argument("Shader Graph program requires an ID and SPIR-V path");
+        if (program == 0 || spirv.empty()) throw std::invalid_argument(
+            "Shader Graph program requires an ID and SPIR-V path");
         if (const auto existing = entries_.find(program); existing != entries_.end()) {
             if (existing->second.spirv != spirv || existing->second.state.doubleSided != state.doubleSided ||
-                existing->second.state.depthWrite != state.depthWrite || existing->second.state.transparent != state.transparent) {
-                throw std::logic_error("A ShaderProgramId may not be reused with a different SPIR-V module or render state");
+                existing->second.state.depthWrite != state.depthWrite || existing->second.state.transparent != state.
+                transparent) {
+                throw std::logic_error(
+                    "A ShaderProgramId may not be reused with a different SPIR-V module or render state");
             }
             return existing->second.slot;
         }
@@ -143,13 +152,13 @@ struct MaterialSurface
         pipeline->create(device_, options);
         const std::uint32_t slot = static_cast<std::uint32_t>(MaterialShaderCount + entries_.size());
         const auto [it, inserted] = entries_.emplace(program, Entry{spirv, state, slot, std::move(pipeline)});
-        (void)inserted;
+        (void) inserted;
         return it->second.slot;
     }
 
-    const GraphicsPipeline* ShaderGraphPipelineCache::find(const std::uint32_t slot) const noexcept {
-        for (const auto& [id, entry] : entries_) {
-            (void)id;
+    const GraphicsPipeline *ShaderGraphPipelineCache::find(const std::uint32_t slot) const noexcept {
+        for (const auto &[id, entry]: entries_) {
+            (void) id;
             if (entry.slot == slot) return entry.pipeline.get();
         }
         return nullptr;

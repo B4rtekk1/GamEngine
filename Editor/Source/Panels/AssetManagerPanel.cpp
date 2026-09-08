@@ -5,6 +5,8 @@
 #include "Editor/Panels/ConsolePanel.h"
 #include "Elements/NumericControl.h"
 #include "Engine/Renderer/MeshRenderer.h"
+#include "Engine/Renderer/ShaderGraph/ShaderGraphSerializer.h"
+#include "Engine/Renderer/ShaderGraph/ShaderNodeFactory.h"
 #include "Engine/Scene/SceneEditor.h"
 #include "imgui.h"
 
@@ -83,13 +85,17 @@ bool is_model(const std::filesystem::path& path) {
     return ext == ".gltf" || ext == ".glb";
 }
 
+bool is_shader_graph(const std::filesystem::path& path) {
+    return lower(path.extension().string()) == ".shadergraph";
+}
+
 AssetKind asset_kind(const std::filesystem::path& path) {
     const auto ext = lower(path.extension().string());
     if (ext == ".gltf" || ext == ".glb" || ext == ".obj" || ext == ".fbx")
         return AssetKind::Model;
     if (ext == ".png" || ext == ".jpg" || ext == ".jpeg" || ext == ".tga" || ext == ".bmp" || ext == ".hdr")
         return AssetKind::Texture;
-    if (ext == ".vert" || ext == ".frag" || ext == ".comp" || ext == ".glsl" || ext == ".slang" || ext == ".spv")
+    if (ext == ".vert" || ext == ".frag" || ext == ".comp" || ext == ".glsl" || ext == ".slang" || ext == ".spv" || ext == ".shadergraph")
         return AssetKind::Shader;
     if (ext == ".scene")
         return AssetKind::Scene;
@@ -365,7 +371,8 @@ void draw_breadcrumbs(std::filesystem::path& folder, std::filesystem::path& sele
 } // namespace
 
 Engine::Entity AssetManagerPanel::draw(Engine::ScenePreset& scene, Engine::Assets::Content& content,
-                                       const bool disabled, bool& isOpen, const bool projectIsOpen) {
+                                       const bool disabled, bool& isOpen, const bool projectIsOpen,
+                                       const std::function<void(const std::filesystem::path&)>& openShaderGraph) {
     static std::filesystem::path selected;
     static std::filesystem::path selectedFolder;
     static std::filesystem::path scannedRoot;
@@ -409,6 +416,23 @@ Engine::Entity AssetManagerPanel::draw(Engine::ScenePreset& scene, Engine::Asset
         deleteCandidate = asset;
         openDeletePopup = true;
     };
+    const auto createShaderGraph = [&] {
+        std::filesystem::path relative = selectedFolder / "New Shader Graph.shadergraph";
+        for (unsigned int index = 2; std::filesystem::exists(root / relative); ++index)
+            relative = selectedFolder / ("New Shader Graph " + std::to_string(index) + ".shadergraph");
+        try {
+            Engine::ShaderGraphAsset graph{.id = Engine::createUUID(), .name = relative.stem().string()};
+            Engine::ShaderPinId nextPin = 1;
+            graph.nodes.push_back(Engine::ShaderNodeFactory::create(
+                Engine::ShaderNodeType::SurfaceOutput, 1, nextPin));
+            Engine::ShaderGraphSerializer::save(graph, root / relative);
+            refresh();
+            selected = relative;
+            openShaderGraph(relative);
+        } catch (const std::exception& exception) {
+            error = exception.what();
+        }
+    };
 
     ImGui::Begin("Asset Manager", &isOpen);
     ImGui::BeginDisabled(selectedFolder.empty());
@@ -447,6 +471,10 @@ Engine::Entity AssetManagerPanel::draw(Engine::ScenePreset& scene, Engine::Asset
 #endif
         ImGui::EndPopup();
     }
+    ImGui::EndDisabled();
+    ImGui::SameLine();
+    ImGui::BeginDisabled(!projectIsOpen);
+    if (ImGui::Button("New Shader Graph")) createShaderGraph();
     ImGui::EndDisabled();
     ImGui::SameLine();
     char filterBuffer[256]{};
@@ -555,8 +583,10 @@ Engine::Entity AssetManagerPanel::draw(Engine::ScenePreset& scene, Engine::Asset
                                                     ImGui::GetColorU32(ImGuiCol_Text), name.c_str());
                 ImGui::GetWindowDrawList()->AddText({min.x + 6.0F, min.y + tileSize + 24.0F},
                                                     ImGui::GetColorU32(ImGuiCol_TextDisabled), ext.c_str());
-                if (doubleClicked && is_model(asset.relative))
-                    instantiate();
+                if (doubleClicked) {
+                    if (is_model(asset.relative)) instantiate();
+                    else if (is_shader_graph(asset.relative)) openShaderGraph(asset.relative);
+                }
                 if (ImGui::BeginPopupContextItem("##context")) {
                     ImGui::TextDisabled("%s", asset.relative.filename().string().c_str());
                     ImGui::Separator();
@@ -615,8 +645,10 @@ Engine::Entity AssetManagerPanel::draw(Engine::ScenePreset& scene, Engine::Asset
                                   ImGuiSelectableFlags_SpanAllColumns | ImGuiSelectableFlags_AllowDoubleClick)) {
                 selected = asset.relative;
                 error.clear();
-                if (ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left) && is_model(asset.relative))
-                    instantiate();
+                if (ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) {
+                    if (is_model(asset.relative)) instantiate();
+                    else if (is_shader_graph(asset.relative)) openShaderGraph(asset.relative);
+                }
             }
             if ((is_model(asset.relative) || asset.kind == AssetKind::Texture) && ImGui::BeginDragDropSource()) {
                 selected = asset.relative;

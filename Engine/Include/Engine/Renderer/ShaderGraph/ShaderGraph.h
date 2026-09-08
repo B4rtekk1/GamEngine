@@ -29,6 +29,8 @@ namespace Engine {
 
     using ShaderNodeId = std::uint32_t;
     using ShaderPinId = std::uint32_t;
+    /** Stable graph-local identifier used by editor link widgets. */
+    using ShaderLinkId = std::uint32_t;
     using ShaderProgramId = std::uint64_t;
 
     /** A pin id is global within one graph. */
@@ -52,6 +54,7 @@ namespace Engine {
     };
 
     struct ShaderLink final {
+        ShaderLinkId id{};
         ShaderPinId fromPin{};
         ShaderPinId toPin{};
     };

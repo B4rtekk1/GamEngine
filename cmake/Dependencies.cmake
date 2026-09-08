@@ -42,6 +42,17 @@ target_include_directories(DearImGui PUBLIC ${dearimgui_SOURCE_DIR} ${dearimgui_
 target_link_libraries(DearImGui PUBLIC SDL3::SDL3 Vulkan::Vulkan)
 if(WIN32)
     set_target_properties(DearImGui PROPERTIES WINDOWS_EXPORT_ALL_SYMBOLS ON)
+    # imnodes instantiates inline ImGui containers which reference ImGui data
+    # symbols; export those symbols explicitly from the shared ImGui target.
+    target_compile_definitions(DearImGui PRIVATE "IMGUI_API=__declspec(dllexport)"
+                                             INTERFACE "IMGUI_API=__declspec(dllimport)")
 endif()
+# The upstream CMake file expects a package-installed ImGui; this project owns
+# its ImGui target, so only populate the source and build the single TU below.
+FetchContent_Declare(ImNodes GIT_REPOSITORY https://github.com/Nelarius/imnodes.git GIT_TAG master GIT_SHALLOW TRUE SOURCE_SUBDIR cmake-not-used)
+FetchContent_MakeAvailable(ImNodes)
+add_library(GameEngineImNodes STATIC ${imnodes_SOURCE_DIR}/imnodes.cpp)
+target_include_directories(GameEngineImNodes PUBLIC ${imnodes_SOURCE_DIR})
+target_link_libraries(GameEngineImNodes PUBLIC DearImGui)
 find_path(GLM_INCLUDE_DIR NAMES glm/glm.hpp HINTS "$ENV{VULKAN_SDK}/Include" REQUIRED)
 find_path(VMA_INCLUDE_DIR NAMES vk_mem_alloc.h HINTS "$ENV{VULKAN_SDK}/Include/vma" REQUIRED)

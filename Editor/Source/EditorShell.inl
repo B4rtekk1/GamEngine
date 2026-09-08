@@ -75,7 +75,8 @@ Engine::Entity drawEditorMenuBar(Engine::ScenePreset &scene, Engine::Renderer &r
                                  bool &duplicateRequested, bool &resetHistoryRequested,
                                  bool &showHierarchy, bool &showViewport,
                                  bool &showInspector, bool &showAssetManager,
-                                 bool &showTerrainTools, bool &showConsole, bool &showTerminal) {
+                                 bool &showTerrainTools, bool &showConsole, bool &showTerminal,
+                                 bool &showShaderGraph) {
     static bool showShortcuts = false;
     static bool showAbout = false;
     static bool openSceneSettings = false;
@@ -344,6 +345,7 @@ Engine::Entity drawEditorMenuBar(Engine::ScenePreset &scene, Engine::Renderer &r
         ImGui::MenuItem("Terrain Tools", nullptr, &showTerrainTools);
         ImGui::MenuItem("Console", nullptr, &showConsole);
         ImGui::MenuItem("Terminal", nullptr, &showTerminal);
+        ImGui::MenuItem("Shader Graph", nullptr, &showShaderGraph);
         endTopMenu();
     }
 
