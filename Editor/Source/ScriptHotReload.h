@@ -17,9 +17,10 @@ namespace Editor {
     class ScriptHotReload final {
     public:
         ScriptHotReload(std::filesystem::path scriptsRoot, std::filesystem::path candidatePath,
-                        std::filesystem::path buildDirectory)
+                        std::filesystem::path buildDirectory, std::string buildConfiguration)
             : scriptsRoot_(std::move(scriptsRoot)), candidatePath_(std::move(candidatePath)),
-              buildDirectory_(std::move(buildDirectory)), watcher_(scriptsRoot_) {}
+              buildDirectory_(std::move(buildDirectory)), buildConfiguration_(std::move(buildConfiguration)),
+              watcher_(scriptsRoot_) {}
 
         ScriptHotReload(const ScriptHotReload &) = delete;
         ScriptHotReload &operator=(const ScriptHotReload &) = delete;
@@ -77,7 +78,8 @@ namespace Editor {
                 build_ = std::async(std::launch::async,
                                     [buildDirectory, buildConfiguration] {
                     const std::string build = "cmake --build \"" + buildDirectory +
-                                               "\" --target GameScripts --config " + buildConfiguration +
+                                               "\" --target GameScripts" +
+                                               (buildConfiguration.empty() ? "" : " --config " + buildConfiguration) +
                                                " --parallel";
                     return std::system(build.c_str());
                 });
@@ -88,7 +90,7 @@ namespace Editor {
         std::filesystem::path scriptsRoot_;
         std::filesystem::path candidatePath_;
         std::filesystem::path buildDirectory_;
-        std::string buildConfiguration_ = GAMEENGINE_BUILD_CONFIG;
+        std::string buildConfiguration_;
         Platform::FileWatcher watcher_;
         std::filesystem::file_time_type lastLoadedModuleTime_{};
         std::future<int> build_;

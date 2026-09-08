@@ -10,6 +10,7 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 option(GAMEENGINE_ENABLE_WARNINGS "Enable strict compiler warnings" ON)
 option(GAMEENGINE_WARNINGS_AS_ERRORS "Treat compiler warnings as errors" OFF)
 option(GAMEENGINE_ENABLE_SANITIZERS "Enable AddressSanitizer and UndefinedBehaviorSanitizer where supported" OFF)
+option(GAMEENGINE_INSTALL_PORTABLE_EDITOR "Install a self-contained GamEngine Editor package" ON)
 
 # The in-tree demo keeps a fresh checkout buildable. Games can point this at
 # their own project directory during configuration.
@@ -287,11 +288,6 @@ if(WIN32)
     target_link_libraries(Editor PRIVATE Comdlg32 Shell32)
 endif()
 gameengine_copy_runtime_dependencies(Editor)
-target_compile_definitions(Editor PRIVATE GAMEENGINE_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
-target_compile_definitions(Editor PRIVATE
-        GAMEENGINE_BUILD_DIR="${CMAKE_BINARY_DIR}"
-        GAMEENGINE_GAME_ROOT="${GAMEENGINE_GAME_ROOT}"
-        GAMEENGINE_BUILD_CONFIG="$<CONFIG>")
 
 find_program(SLANGC NAMES slangc)
 
@@ -429,3 +425,35 @@ add_subdirectory(Sandbox)
 # means an Editor build always leaves a runnable game beside its assets.
 add_dependencies(Editor GamEngine)
 add_dependencies(Editor Shaders)
+
+# A portable editor never relies on source- or build-directory paths embedded
+# in Editor.exe. This install rule places every executable, runtime DLL,
+# shader and project asset in one relocatable directory.
+if(GAMEENGINE_INSTALL_PORTABLE_EDITOR)
+    install(TARGETS Editor Engine DearImGui
+            COMPONENT GamEngineEditor
+            RUNTIME DESTINATION .
+            LIBRARY DESTINATION .
+            ARCHIVE DESTINATION lib)
+    install(IMPORTED_RUNTIME_ARTIFACTS SDL3::SDL3-shared
+            COMPONENT GamEngineEditor
+            RUNTIME DESTINATION .
+            LIBRARY DESTINATION .)
+    # GameScripts is loaded by the editor at runtime. Its dependencies are
+    # already installed from Editor/Engine above; scanning it again can find
+    # duplicate post-build copies of SDL3.dll in multi-target build trees.
+    install(TARGETS GameScripts COMPONENT GamEngineEditor
+            RUNTIME DESTINATION .
+            LIBRARY DESTINATION .
+            ARCHIVE DESTINATION lib)
+    install(DIRECTORY "${SHADER_OUT_DIR}/" DESTINATION shaders COMPONENT GamEngineEditor)
+    install(DIRECTORY "${GAMEENGINE_GAME_ROOT}/Assets/" DESTINATION Assets COMPONENT GamEngineEditor)
+    install(FILES "${GAMEENGINE_GAME_ROOT}/GamEngine.project" DESTINATION . COMPONENT GamEngineEditor)
+
+    add_custom_target(GamEngineEditorPackage
+            COMMAND ${CMAKE_COMMAND} --install "${CMAKE_BINARY_DIR}"
+                    --config $<CONFIG> --component GamEngineEditor
+                    --prefix "${CMAKE_BINARY_DIR}/GamEngineEditor"
+            DEPENDS Editor GameScripts GamEngineAssets
+            COMMENT "Creating portable GamEngineEditor package")
+endif()

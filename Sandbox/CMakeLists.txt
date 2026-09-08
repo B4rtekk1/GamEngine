@@ -30,8 +30,6 @@ endif()
 add_library(GameScripts SHARED
         ${GAME_SCRIPT_SOURCES}
         "${GENERATED_GAME_SCRIPTS_MODULE}")
-target_compile_definitions(Editor PRIVATE
-        GAMEENGINE_GAME_SCRIPTS_BUILD_PATH="$<TARGET_FILE:GameScripts>")
 gameengine_enable_warnings(GameScripts)
 gameengine_enable_sanitizers(GameScripts)
 target_link_libraries(GameScripts PRIVATE Engine)
@@ -46,7 +44,6 @@ gameengine_enable_warnings(GamEngine)
 gameengine_enable_sanitizers(GamEngine)
 target_link_libraries(GamEngine PRIVATE Engine GameScripts)
 gameengine_copy_runtime_dependencies(GamEngine)
-target_compile_definitions(GamEngine PRIVATE GAMEENGINE_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
 add_dependencies(GamEngine Shaders)
 
 # Editor discovers gameplay types solely through this versioned dynamic module.

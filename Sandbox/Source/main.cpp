@@ -1,5 +1,7 @@
 #include <Engine/Engine.h>
 
+#include <SDL3/SDL.h>
+
 #include <cstdlib>
 #include <exception>
 #include <filesystem>
@@ -33,8 +35,11 @@ int main(int argc, char** argv) {
                                                       return Engine::Project::discover(
                                                           std::filesystem::current_path());
                                                   } catch (const std::runtime_error&) {
-                                                      return Engine::Project::defaults(
-                                                          std::filesystem::path{GAMEENGINE_SOURCE_DIR});
+                                                      const char* basePath = SDL_GetBasePath();
+                                                      if (basePath == nullptr) {
+                                                          throw std::runtime_error("Could not determine executable directory");
+                                                      }
+                                                      return Engine::Project::defaults(basePath);
                                                   }
                                               }();
         const std::filesystem::path scenePath = sceneOverride

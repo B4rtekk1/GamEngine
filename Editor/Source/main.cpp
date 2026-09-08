@@ -84,6 +84,34 @@ using Editor::SceneHistory;
 #include "EditorShell.inl"
 
 namespace {
+    [[nodiscard]] std::filesystem::path executableDirectory() {
+        const char* const basePath = SDL_GetBasePath();
+        if (basePath == nullptr) throw std::runtime_error("Could not determine executable directory");
+        return std::filesystem::path{basePath};
+    }
+
+    [[nodiscard]] std::optional<std::filesystem::path> findDevelopmentBuildDirectory(
+        const std::filesystem::path& executableDirectory) {
+        for (auto directory = executableDirectory; !directory.empty(); directory = directory.parent_path()) {
+            if (std::filesystem::is_regular_file(directory / "CMakeCache.txt")) return directory;
+            if (directory == directory.root_path()) break;
+        }
+        return std::nullopt;
+    }
+
+    [[nodiscard]] std::string buildConfigurationFromExecutableDirectory(
+        const std::filesystem::path& executableDirectory) {
+        std::string name = executableDirectory.filename().string();
+        std::ranges::transform(name, name.begin(), [](const unsigned char character) {
+            return static_cast<char>(std::tolower(character));
+        });
+        if (name == "debug") return "Debug";
+        if (name == "release") return "Release";
+        if (name == "relwithdebinfo") return "RelWithDebInfo";
+        if (name == "minsizerel") return "MinSizeRel";
+        return {};
+    }
+
     std::filesystem::path findDefaultUiFont() {
         constexpr std::array<const char *, 5> candidates{
             "C:/Windows/Fonts/segoeui.ttf", "C:/Windows/Fonts/arial.ttf",
@@ -104,6 +132,7 @@ namespace {
 int main(int argc, char** argv) {
     Editor::registerBuiltinComponents();
     try {
+        const std::filesystem::path editorRoot = executableDirectory();
         std::optional<std::filesystem::path> projectPath;
         std::optional<std::filesystem::path> createProjectPath;
         for (int index = 1; index < argc; ++index) {
@@ -130,8 +159,7 @@ int main(int argc, char** argv) {
                                                       return Engine::Project::discover(
                                                           std::filesystem::current_path());
                                                   } catch (const std::runtime_error&) {
-                                                      return Engine::Project::defaults(
-                                                          std::filesystem::path{GAMEENGINE_SOURCE_DIR});
+                                                      return Engine::Project::defaults(editorRoot);
                                                   }
                                               }();
         EditorSceneSession::setProjectRoot(project.rootPath());
@@ -165,14 +193,15 @@ int main(int argc, char** argv) {
         Engine::ScenePreset scene;
         Engine::ScriptModuleManager scriptModules{Engine::ScriptRegistry::instance()};
         std::optional<Editor::ScriptHotReload> scriptHotReload;
-        if (const char* basePath = SDL_GetBasePath(); basePath != nullptr) {
-            const std::filesystem::path modulePath = std::filesystem::path{basePath} / "GameScripts.dll";
-            if (!scriptModules.loadInitialModule(modulePath)) {
-                Editor::ConsolePanel::warning("Could not load game scripts module: " + modulePath.string());
-            }
-            scriptHotReload.emplace(project.rootPath() / "Assets" / "Scripts",
-                                    std::filesystem::path{GAMEENGINE_GAME_SCRIPTS_BUILD_PATH},
-                                    std::filesystem::path{GAMEENGINE_BUILD_DIR});
+        const std::filesystem::path modulePath = editorRoot / "GameScripts.dll";
+        if (!scriptModules.loadInitialModule(modulePath)) {
+            Editor::ConsolePanel::warning("Could not load game scripts module: " + modulePath.string());
+        }
+        if (const auto buildDirectory = findDevelopmentBuildDirectory(editorRoot)) {
+            scriptHotReload.emplace(project.rootPath() / "Assets" / "Scripts", modulePath,
+                                    *buildDirectory, buildConfigurationFromExecutableDirectory(editorRoot));
+        } else {
+            Editor::ConsolePanel::info("C++ script hot reload is unavailable in the portable Editor package.");
         }
         Engine::Assets::Content content{project.assetRoot()};
         content.setErrorHandler([](const std::string& message) {

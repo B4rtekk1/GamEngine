@@ -36,13 +36,11 @@ void EditorSceneSession::setProjectRoot(std::filesystem::path path) {
 /**
  * @brief Returns the path of the scene used by the editor session.
  *
- * @return Absolute or source-root-relative filesystem path to
- *         `Assets/Scenes/Editor.scene`, depending on the value of
- *         `GAMEENGINE_SOURCE_DIR`.
+ * @return The active project's default `Assets/Scenes/Editor.scene` path.
  */
 std::filesystem::path EditorSceneSession::scenePath() {
     if (!activeScenePath.empty()) return activeScenePath;
-    return std::filesystem::path{GAMEENGINE_SOURCE_DIR} / "Assets" / "Scenes" / "Editor.scene";
+    return activeProjectRoot / "Assets" / "Scenes" / "Editor.scene";
 }
 
 void EditorSceneSession::setScenePath(std::filesystem::path path) {
