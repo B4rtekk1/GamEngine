@@ -36,7 +36,11 @@ namespace Editor {
         }
     } // namespace
 
-    ShaderGraphPanel::ShaderGraphPanel() : editorContext_(ImNodes::EditorContextCreate()) {}
+    ShaderGraphPanel::ShaderGraphPanel() : editorContext_(ImNodes::EditorContextCreate()) {
+        // In addition to the middle mouse button, Alt + left mouse button pans the canvas.
+        // This is especially useful on touchpads and leaves regular left-dragging for nodes.
+        ImNodes::GetIO().EmulateThreeButtonMouse.Modifier = &ImGui::GetIO().KeyAlt;
+    }
 
     ShaderGraphPanel::~ShaderGraphPanel() {
         if (editorContext_ != nullptr) ImNodes::EditorContextFree(editorContext_);
@@ -55,6 +59,8 @@ namespace Editor {
         }
         for (const auto& link : graph.links) nextLinkId_ = std::max(nextLinkId_, link.id + 1);
         initializedPositions_.clear();
+        contextNodeId_.reset();
+        contextLinkId_.reset();
         ImNodes::EditorContextSet(editorContext_);
         ImNodes::EditorContextResetPanning({0.0F, 0.0F});
     }
@@ -97,12 +103,12 @@ namespace Editor {
     void ShaderGraphPanel::drawCanvas() {
         ImNodes::EditorContextSet(editorContext_);
         ImNodes::BeginNodeEditor();
-        drawCreateNodePopup();
         for (auto& node : graph_->nodes) drawNode(node);
         for (const auto& link : graph_->links)
             ImNodes::Link(static_cast<int>(link.id), static_cast<int>(link.fromPin), static_cast<int>(link.toPin));
         ImNodes::MiniMap(0.18F, ImNodesMiniMapLocation_BottomRight);
         ImNodes::EndNodeEditor();
+        drawContextMenus();
         handleLinkCreation();
         handleLinkDeletion();
         handleSelectionDeletion();
@@ -120,6 +126,7 @@ namespace Editor {
                                          {node.editorPosition.x(), node.editorPosition.y()});
             initializedPositions_.insert(node.id);
         }
+        ImNodes::SetNodeDraggable(static_cast<int>(node.id), true);
         ImNodes::BeginNode(static_cast<int>(node.id));
         ImNodes::BeginNodeTitleBar();
         ImGui::TextUnformatted(nodeName(node.type));
@@ -156,8 +163,6 @@ namespace Editor {
     }
 
     void ShaderGraphPanel::drawCreateNodePopup() {
-        if (ImNodes::IsEditorHovered() && ImGui::IsMouseClicked(ImGuiMouseButton_Right))
-            ImGui::OpenPopup("##shader-create-node");
         if (!ImGui::BeginPopup("##shader-create-node")) return;
         const ImVec2 position = ImGui::GetMousePosOnOpeningCurrentPopup();
         const auto drawNodes = [&](const std::string_view category, const std::string_view subcategory) {
@@ -183,6 +188,55 @@ namespace Editor {
             ImGui::EndMenu();
         }
         ImGui::EndPopup();
+    }
+
+    void ShaderGraphPanel::drawContextMenus() {
+        int nodeId = 0;
+        int linkId = 0;
+        const bool nodeHovered = ImNodes::IsNodeHovered(&nodeId);
+        const bool linkHovered = !nodeHovered && ImNodes::IsLinkHovered(&linkId);
+
+        if (ImGui::IsMouseClicked(ImGuiMouseButton_Right)) {
+            if (nodeHovered) {
+                contextNodeId_ = static_cast<Engine::ShaderNodeId>(nodeId);
+                ImGui::OpenPopup("##shader-node-context");
+            } else if (linkHovered) {
+                contextLinkId_ = static_cast<Engine::ShaderLinkId>(linkId);
+                ImGui::OpenPopup("##shader-link-context");
+            } else if (ImNodes::IsEditorHovered()) {
+                ImGui::OpenPopup("##shader-create-node");
+            }
+        }
+
+        if (ImGui::BeginPopup("##shader-node-context")) {
+            ImGui::TextUnformatted("Node");
+            ImGui::Separator();
+            const auto node = std::ranges::find(graph_->nodes, contextNodeId_.value_or(0),
+                                                &Engine::ShaderNode::id);
+            const bool canDelete = node != graph_->nodes.end() &&
+                                   node->type != Engine::ShaderNodeType::SurfaceOutput;
+            ImGui::BeginDisabled(!canDelete);
+            if (ImGui::MenuItem("Delete node", "Delete")) {
+                deleteNode(*contextNodeId_);
+                ImNodes::ClearNodeSelection();
+                ImNodes::ClearLinkSelection();
+                contextNodeId_.reset();
+            }
+            ImGui::EndDisabled();
+            if (!canDelete) ImGui::SetItemTooltip("The Surface Output node cannot be deleted.");
+            ImGui::EndPopup();
+        }
+
+        if (ImGui::BeginPopup("##shader-link-context")) {
+            if (ImGui::MenuItem("Delete connection", "Delete")) {
+                if (contextLinkId_) deleteLink(*contextLinkId_);
+                ImNodes::ClearLinkSelection();
+                contextLinkId_.reset();
+            }
+            ImGui::EndPopup();
+        }
+
+        drawCreateNodePopup();
     }
 
     void ShaderGraphPanel::createNode(const Engine::ShaderNodeType type, const ImVec2 screenPosition) {
@@ -211,17 +265,29 @@ namespace Editor {
     }
 
     void ShaderGraphPanel::handleSelectionDeletion() {
-        if (!ImNodes::IsEditorHovered() || !ImGui::IsKeyPressed(ImGuiKey_Delete) || ImGui::GetIO().WantTextInput)
+        const bool deletePressed = ImGui::IsKeyPressed(ImGuiKey_Delete) || ImGui::IsKeyPressed(ImGuiKey_Backspace);
+        if (!ImGui::IsWindowFocused() || !deletePressed || ImGui::GetIO().WantTextInput)
             return;
+        bool deleted = false;
         std::vector<int> links(static_cast<std::size_t>(ImNodes::NumSelectedLinks()));
         if (!links.empty()) {
             ImNodes::GetSelectedLinks(links.data());
-            for (const int id : links) deleteLink(static_cast<Engine::ShaderLinkId>(id));
+            for (const int id : links) {
+                deleteLink(static_cast<Engine::ShaderLinkId>(id));
+                deleted = true;
+            }
         }
         std::vector<int> nodes(static_cast<std::size_t>(ImNodes::NumSelectedNodes()));
         if (!nodes.empty()) {
             ImNodes::GetSelectedNodes(nodes.data());
-            for (const int id : nodes) deleteNode(static_cast<Engine::ShaderNodeId>(id));
+            for (const int id : nodes) {
+                deleteNode(static_cast<Engine::ShaderNodeId>(id));
+                deleted = true;
+            }
+        }
+        if (deleted) {
+            ImNodes::ClearNodeSelection();
+            ImNodes::ClearLinkSelection();
         }
     }
 
@@ -229,7 +295,7 @@ namespace Editor {
         const bool firstOutput = isOutputPin(first);
         const Engine::ShaderPinId output = firstOutput ? first : second;
         const Engine::ShaderPinId input = firstOutput ? second : first;
-        if (!(firstOutput ? isInputPin(second) : isOutputPin(second) && isInputPin(first))) return false;
+        if (!(firstOutput ? isInputPin(second) : (isOutputPin(second) && isInputPin(first)))) return false;
         const Engine::ShaderPin* outputPin = findPin(output);
         const Engine::ShaderPin* inputPin = findPin(input);
         if (outputPin == nullptr || inputPin == nullptr || !canConnect(outputPin->type, inputPin->type)) return false;

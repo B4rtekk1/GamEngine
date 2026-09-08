@@ -5,6 +5,7 @@
 #include <imnodes.h>
 
 #include <filesystem>
+#include <optional>
 #include <unordered_set>
 
 namespace Editor {
@@ -26,6 +27,8 @@ namespace Editor {
         Engine::ShaderPinId nextPinId_{1};
         Engine::ShaderLinkId nextLinkId_{1};
         std::unordered_set<Engine::ShaderNodeId> initializedPositions_;
+        std::optional<Engine::ShaderNodeId> contextNodeId_;
+        std::optional<Engine::ShaderLinkId> contextLinkId_;
         bool codeDirty_{};
         bool layoutDirty_{};
         std::filesystem::path assetPath_;
@@ -35,6 +38,7 @@ namespace Editor {
         void drawInputPin(Engine::ShaderPin& pin);
         void drawOutputPin(Engine::ShaderPin& pin);
         void drawCreateNodePopup();
+        void drawContextMenus();
         void createNode(Engine::ShaderNodeType type, ImVec2 screenPosition);
         void handleLinkCreation();
         void handleLinkDeletion();
