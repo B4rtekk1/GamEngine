@@ -68,6 +68,8 @@ using Editor::SceneHistory;
 #include <filesystem>
 #include <fstream>
 #include <future>
+#include <initializer_list>
+#include <iterator>
 #include <limits>
 #include <memory>
 #include <sstream>
@@ -136,6 +138,60 @@ namespace {
         if (name == "relwithdebinfo") return "RelWithDebInfo";
         if (name == "minsizerel") return "MinSizeRel";
         return {};
+    }
+
+    [[nodiscard]] bool runCmake(const std::initializer_list<std::string_view> arguments) {
+        std::vector<std::string> values{"cmake"};
+        values.reserve(values.size() + arguments.size());
+        for (const auto argument : arguments) values.emplace_back(argument);
+        std::vector<char *> argv;
+        argv.reserve(values.size() + 1);
+        for (auto &value : values) argv.push_back(value.data());
+        argv.push_back(nullptr);
+
+        const SDL_PropertiesID properties = SDL_CreateProperties();
+        if (!properties) return false;
+        SDL_SetPointerProperty(properties, SDL_PROP_PROCESS_CREATE_ARGS_POINTER, argv.data());
+        SDL_SetNumberProperty(properties, SDL_PROP_PROCESS_CREATE_STDOUT_NUMBER, SDL_PROCESS_STDIO_APP);
+        SDL_SetBooleanProperty(properties, SDL_PROP_PROCESS_CREATE_STDERR_TO_STDOUT_BOOLEAN, true);
+        SDL_Process *process = SDL_CreateProcessWithProperties(properties);
+        SDL_DestroyProperties(properties);
+        if (!process) return false;
+        size_t outputSize = 0;
+        int exitCode = -1;
+        void *output = SDL_ReadProcess(process, &outputSize, &exitCode);
+        SDL_free(output);
+        SDL_DestroyProcess(process);
+        return exitCode == 0;
+    }
+
+    [[nodiscard]] bool configureScriptBuild(const std::filesystem::path &editorRoot,
+                                            const std::filesystem::path &projectRoot) {
+        const auto source = editorRoot / "SDK" / "GameScripts";
+        const auto sdk = editorRoot / "SDK";
+        const auto build = projectRoot / "Library" / "ScriptBuild";
+        if (!std::filesystem::is_regular_file(source / "CMakeLists.txt") ||
+            !std::filesystem::is_regular_file(sdk / "Lib" / "Engine.lib")) return false;
+        std::error_code error;
+        std::filesystem::create_directories(build, error);
+        if (error) return false;
+        // The build tree belongs to the project. Its cache is intentionally
+        // retained between Editor launches; file changes only build the target.
+        if (std::filesystem::is_regular_file(build / "CMakeCache.txt")) {
+            const auto globVerification = build / "CMakeFiles" / "VerifyGlobs.cmake";
+            std::ifstream verification{globVerification, std::ios::binary};
+            const std::string contents{std::istreambuf_iterator<char>{verification}, {}};
+            // Earlier SDK revisions wrote native Windows paths into this CMake
+            // script. CMake then interprets \U in a user path as an escape.
+            if (contents.find('\\') == std::string::npos) return true;
+            std::filesystem::remove_all(build, error);
+            if (error) return false;
+            std::filesystem::create_directories(build, error);
+            if (error) return false;
+        }
+        return runCmake({"-S", source.string(), "-B", build.string(),
+                         "-DGE_PROJECT_ROOT=" + projectRoot.string(),
+                         "-DGE_SDK_ROOT=" + sdk.string(), "-DCMAKE_BUILD_TYPE=Release"});
     }
 
     std::filesystem::path findDefaultUiFont() {
@@ -230,13 +286,13 @@ int main(int argc, char** argv) {
         Engine::ScriptModuleManager scriptModules{Engine::ScriptRegistry::instance()};
         std::optional<Editor::ScriptHotReload> scriptHotReload;
         std::optional<Editor::ShaderHotReload> shaderHotReload;
-        const std::filesystem::path modulePath = editorRoot / "GameScripts.dll";
+        const std::filesystem::path scriptBuildDirectory = project.rootPath() / "Library" / "ScriptBuild";
+        const std::filesystem::path modulePath = project.rootPath() / "Library" / "ScriptModules" / "GameScripts.dll";
         if (!scriptModules.loadInitialModule(modulePath)) {
-            Editor::ConsolePanel::warning("Could not load game scripts module: " + modulePath.string());
+            Editor::ConsolePanel::info("No compiled game scripts module yet; it will be built for this project.");
         }
-        // A portable package may be located below a development build tree,
-        // so the presence of a parent CMakeCache.txt alone is not sufficient
-        // to enable hot reload. Bundled Slang marks the self-contained layout.
+        // Shader hot reload still uses the source build. C++ script hot reload
+        // above is deliberately independent of whether this is a package.
         const bool portableEditor = std::filesystem::is_regular_file(
             editorRoot / "Tools" / "Slang" /
 #ifdef _WIN32
@@ -245,10 +301,16 @@ int main(int argc, char** argv) {
             "slangc"
 #endif
         );
+        if (configureScriptBuild(editorRoot, project.rootPath())) {
+            scriptHotReload.emplace(project.rootPath() / "Assets" / "Scripts", modulePath,
+                                    scriptBuildDirectory, "Release");
+            scriptHotReload->requestBuild();
+            Editor::ConsolePanel::info("C++ script hot reload enabled.");
+        } else {
+            Editor::ConsolePanel::warning("C++ script toolchain is unavailable. Install CMake and MSVC Build Tools, then reopen the project.");
+        }
         if (!portableEditor) {
             if (const auto buildDirectory = findDevelopmentBuildDirectory(editorRoot)) {
-                scriptHotReload.emplace(project.rootPath() / "Assets" / "Scripts", modulePath,
-                                        *buildDirectory, buildConfigurationFromExecutableDirectory(editorRoot));
                 if (const auto shaderDirectory = findEngineShaderDirectory(*buildDirectory)) {
                     shaderHotReload.emplace(*shaderDirectory, *buildDirectory,
                                              *buildDirectory / "resources" / "shaders", editorRoot / "shaders",
@@ -256,11 +318,7 @@ int main(int argc, char** argv) {
                 } else {
                     Editor::ConsolePanel::warning("Shader hot reload is unavailable: could not locate Engine/Shaders.");
                 }
-            } else {
-                Editor::ConsolePanel::info("C++ script hot reload is unavailable outside a development build directory.");
             }
-        } else {
-            Editor::ConsolePanel::info("C++ script hot reload is unavailable in the portable Editor package.");
         }
         Engine::Assets::Content content{project.assetRoot()};
         content.setErrorHandler([](const std::string& message) {

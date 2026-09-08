@@ -1,6 +1,18 @@
 option(GAMEENGINE_INSTALL_PORTABLE_EDITOR "Install a self-contained GamEngine Editor package" ON)
 if(GAMEENGINE_INSTALL_PORTABLE_EDITOR)
     install(TARGETS Editor Engine DearImGui COMPONENT GamEngineEditor RUNTIME DESTINATION . LIBRARY DESTINATION . ARCHIVE DESTINATION lib)
+    # A project-side C++ script module links to this import library, not to a
+    # GamEngine source/build tree.
+    install(FILES "$<TARGET_LINKER_FILE:Engine>" DESTINATION SDK/Lib COMPONENT GamEngineEditor)
+    install(DIRECTORY "${PROJECT_SOURCE_DIR}/Engine/Include/" DESTINATION SDK/Include COMPONENT GamEngineEditor)
+    # GLM_INCLUDE_DIR already contains the glm/ directory.  Preserve that
+    # layout so <glm/...> resolves from SDK/ThirdParty.
+    install(DIRECTORY "${GLM_INCLUDE_DIR}/glm" DESTINATION SDK/ThirdParty COMPONENT GamEngineEditor)
+    install(FILES "${PROJECT_SOURCE_DIR}/Player/GameScriptsPCH.h" DESTINATION SDK COMPONENT GamEngineEditor)
+    install(FILES "${PROJECT_SOURCE_DIR}/Tools/GenerateGameScriptsModule.cmake"
+        DESTINATION SDK/Tools COMPONENT GamEngineEditor)
+    install(FILES "${PROJECT_SOURCE_DIR}/cmake/GameScriptsStandalone/CMakeLists.txt"
+        DESTINATION SDK/GameScripts COMPONENT GamEngineEditor)
     if(TARGET GameScripts)
         # Keep the script module built with the same configuration as the
         # Editor.  A Debug script DLL cannot safely exchange STL-owned data
