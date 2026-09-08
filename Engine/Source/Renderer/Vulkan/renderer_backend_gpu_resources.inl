@@ -221,7 +221,7 @@
                 object.firstInstance = batch.firstInstance;
                 object.castShadow = batch.castShadow ? 1U : 0U;
                 object.twoSided = batch.twoSided ? 1U : 0U;
-                object.shader = static_cast<std::uint32_t>(batch.shader);
+                object.shader = batch.shaderSlot;
                 object.lod1IndexCount = batch.lod1IndexCount;
                 object.lod2IndexCount = batch.lod2IndexCount;
                 object.lod1Distance = batch.lod1Distance;
@@ -325,9 +325,9 @@
                 grassPrefixUniformBuffers[frame].createHostVisible(vulkanDevice.physical(), device,
                     sizeof(GrassPrefixUniformData), VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
                     vulkanDevice.allocator());
-                std::vector<VkDrawIndexedIndirectCommand> emptyCommands(genericCapacity * MaterialShaderCount);
+                std::vector<VkDrawIndexedIndirectCommand> emptyCommands(genericCapacity * MaterialProgramSlotCount);
                 indirectBuffers[frame].createDeviceLocal(vulkanDevice.physical(), device, emptyCommands.data(),
-                    sizeof(VkDrawIndexedIndirectCommand) * genericCapacity * MaterialShaderCount,
+                    sizeof(VkDrawIndexedIndirectCommand) * genericCapacity * MaterialProgramSlotCount,
                     VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
                     commandPool, vulkanDevice.graphicsQueue(), vulkanDevice.allocator());
                 auto& lists = grassRenderLists[frame];
@@ -379,15 +379,15 @@
                 sceneLists.mainIndirect.createDeviceLocal(vulkanDevice.physical(), device, emptyGrassList.data(), sizeof(VkDrawIndexedIndirectCommand) * emptyGrassList.size(), VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT, commandPool, vulkanDevice.graphicsQueue(), vulkanDevice.allocator());
                 sceneLists.mainDrawCount.createDeviceLocal(vulkanDevice.physical(), device, &zero, sizeof(zero), VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT, commandPool, vulkanDevice.graphicsQueue(), vulkanDevice.allocator());
                 foliageIndirectBuffers[frame].createDeviceLocal(vulkanDevice.physical(), device, emptyCommands.data(),
-                    sizeof(VkDrawIndexedIndirectCommand) * genericCapacity * MaterialShaderCount,
+                    sizeof(VkDrawIndexedIndirectCommand) * genericCapacity * MaterialProgramSlotCount,
                     VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
                     commandPool, vulkanDevice.graphicsQueue(), vulkanDevice.allocator());
                 sceneIndirectBuffers[frame].createDeviceLocal(vulkanDevice.physical(), device, emptyCommands.data(),
-                    sizeof(VkDrawIndexedIndirectCommand) * genericCapacity * MaterialShaderCount,
+                    sizeof(VkDrawIndexedIndirectCommand) * genericCapacity * MaterialProgramSlotCount,
                     VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
                     commandPool, vulkanDevice.graphicsQueue(), vulkanDevice.allocator());
                 sceneFoliageIndirectBuffers[frame].createDeviceLocal(vulkanDevice.physical(), device, emptyCommands.data(),
-                    sizeof(VkDrawIndexedIndirectCommand) * genericCapacity * MaterialShaderCount,
+                    sizeof(VkDrawIndexedIndirectCommand) * genericCapacity * MaterialProgramSlotCount,
                     VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
                     commandPool, vulkanDevice.graphicsQueue(), vulkanDevice.allocator());
                 std::vector<VkDrawIndexedIndirectCommand> emptyShadowCommands(
@@ -419,7 +419,7 @@
                     sizeof(VkDrawIndexedIndirectCommand) * emptyShadowCommands.size(),
                     VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
                     commandPool, vulkanDevice.graphicsQueue(), vulkanDevice.allocator());
-                const std::array<std::uint32_t, MaterialShaderCount> zeroMaterialDrawCounts{};
+                const std::array<std::uint32_t, MaterialProgramSlotCount> zeroMaterialDrawCounts{};
                 drawCountBuffers[frame].createDeviceLocal(vulkanDevice.physical(), device, zeroMaterialDrawCounts.data(), sizeof(zeroMaterialDrawCounts),
                     VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT |
                     VK_BUFFER_USAGE_TRANSFER_DST_BIT,

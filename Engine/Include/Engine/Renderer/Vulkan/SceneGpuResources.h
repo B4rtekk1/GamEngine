@@ -47,8 +47,8 @@ namespace Engine {
             float lod2Distance{60.0F};
             std::uint32_t firstInstance{0};
             std::uint32_t instanceCount{0};
-            /// Shader family that owns this batch's graphics pipeline.
-            MaterialShader shader{MaterialShader::StandardPBR};
+            /// GPU-culling bin of the built-in or cooked Shader Graph pipeline.
+            std::uint32_t shaderSlot{};
             bool castShadow{true};
             /// True for masked/double-sided vegetation that needs its own raster pipeline.
             bool twoSided{false};

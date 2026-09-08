@@ -117,6 +117,7 @@
                     value ^= static_cast<std::uint64_t>(renderer.cullingBatch) << 1u;
                     value ^= static_cast<std::uint64_t>(renderer.castShadow) << 63u;
                     value ^= static_cast<std::uint64_t>(renderer.material.shader) << 48u;
+                    value ^= renderer.material.shaderProgram;
                     if (renderer.materialOverride) {
                         value ^= static_cast<std::uint64_t>(renderer.material.pbr.doubleSided) << 47u;
                         value ^= static_cast<std::uint64_t>(renderer.material.pbr.alphaMode) << 45u;
@@ -179,13 +180,13 @@
             };
             struct BatchKey {
                 const Mesh* mesh;
-                MaterialShader shader;
+                std::uint32_t shaderSlot;
                 bool foliagePipeline;
                 bool castShadow;
                 uint32_t cullingBatch;
 
                 bool operator==(const BatchKey& other) const noexcept {
-                    return mesh == other.mesh && shader == other.shader &&
+                    return mesh == other.mesh && shaderSlot == other.shaderSlot &&
                            foliagePipeline == other.foliagePipeline && castShadow == other.castShadow &&
                            cullingBatch == other.cullingBatch;
                 }
@@ -196,7 +197,7 @@
                     constexpr std::uint32_t hashCombineLeftShift = 6U;
                     const auto meshHash = std::hash<const Mesh*>{}(key.mesh);
                     const auto batchHash = std::hash<uint32_t>{}(key.cullingBatch);
-                    const auto shaderHash = std::hash<std::uint8_t>{}(static_cast<std::uint8_t>(key.shader));
+                    const auto shaderHash = std::hash<std::uint32_t>{}(key.shaderSlot);
                     return meshHash ^ (batchHash + shaderHash + static_cast<std::size_t>(key.foliagePipeline) +
                                        static_cast<std::size_t>(key.castShadow) +
                                        hashCombineConstant + (meshHash << hashCombineLeftShift) +
@@ -326,7 +327,13 @@
                                    material.alphaMode == AlphaMode::Blend;
                         });
                     const bool usesFoliagePipeline = overrideUsesFoliagePipeline || meshUsesFoliagePipeline;
-                    const BatchKey batchKey{mesh, renderer.material.shader, usesFoliagePipeline,
+                    const auto resolveShaderSlot = [&]() {
+                        if (renderer.material.shaderProgram == 0) return static_cast<std::uint32_t>(materialShaderIndex(renderer.material.shader));
+                        if (renderer.material.shaderProgramSpirv.empty()) throw std::runtime_error("Shader Graph material has no cooked SPIR-V module");
+                        return forwardPass.registerShaderGraph(ShaderGraphProgram{renderer.material.shaderProgram, {}, renderer.material.shaderProgramSpirv}, renderer.material.renderState);
+                    };
+                    const std::uint32_t shaderSlot = resolveShaderSlot();
+                    const BatchKey batchKey{mesh, shaderSlot, usesFoliagePipeline,
                                             castShadow, renderer.cullingBatch};
                     const auto [batchIt, inserted] = optimizationFeatures.instancedRendering
                         ? batchIndices.try_emplace(batchKey, instanceBatches.size())
@@ -342,7 +349,7 @@
                             .lod2IndexCount = 0,
                             .firstInstance = static_cast<uint32_t>(renderables.size()),
                             .instanceCount = 0,
-                            .shader = renderer.material.shader,
+                            .shaderSlot = shaderSlot,
                             .castShadow = castShadow,
                             // The foliage stream is drawn after opaque geometry. Route
                             // blend here until transparent draws have a sorted stream.

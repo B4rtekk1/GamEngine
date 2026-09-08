@@ -48,6 +48,10 @@ void ForwardPass::create(VkDevice device, const VkFormat colorFormat,
         }
         materialPipelines_[index].create(device, options);
     }
+    shaderGraphPipelineOptions_ = options;
+    shaderGraphPipelineOptions_.shader.clear();
+    shaderGraphPipelineOptions_.existingRenderPass = materialPipelines_[0].renderPass();
+    shaderGraphPipelines_.initialize(device, shaderGraphPipelineOptions_);
 
     GraphicsPipelineOptions foliageOptions = options;
     foliageOptions.existingRenderPass = materialPipelines_[0].renderPass();
@@ -94,10 +98,28 @@ void ForwardPass::create(VkDevice device, const VkFormat colorFormat,
 }
 
 void ForwardPass::destroy() noexcept {
+    shaderGraphPipelines_.destroy();
     outlinePipeline_.destroy();
     foliagePipeline_.destroy();
     grassPipeline_.destroy();
     for (auto& pipeline : materialPipelines_) pipeline.destroy();
+}
+
+std::uint32_t ForwardPass::registerShaderGraph(const ShaderGraphProgram& program, const MaterialRenderState& state) {
+    return shaderGraphPipelines_.getOrCreate(program.id, program.spirvPath, state);
+}
+
+void ForwardPass::drawShaderGraph(VkCommandBuffer commandBuffer, VkDescriptorSet sceneDescriptorSet,
+                                  const std::uint32_t shaderSlot,
+                                  const Culling::IndexedIndirectDrawCount& indirectDraw,
+                                  const VkDeviceSize commandOffset, const VkDeviceSize countOffset) const {
+    if (!indirectDraw.valid()) return;
+    const GraphicsPipeline* const pipeline = shaderGraphPipelines_.find(shaderSlot);
+    if (pipeline == nullptr) return;
+    vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline->handle());
+    vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline->layout(),
+                            0, 1, &sceneDescriptorSet, 0, nullptr);
+    indirectDraw.record(commandBuffer, commandOffset, countOffset);
 }
 
 void ForwardPass::drawGrass(VkCommandBuffer commandBuffer, VkDescriptorSet descriptorSet,
@@ -148,12 +170,16 @@ void ForwardPass::draw(VkCommandBuffer commandBuffer,
 }
 
 void ForwardPass::drawMaterial(VkCommandBuffer commandBuffer, VkDescriptorSet sceneDescriptorSet,
-                               const MaterialShader shader,
+                               const std::uint32_t shaderSlot,
                                const Culling::IndexedIndirectDrawCount& indirectDraw,
                                const VkDeviceSize commandOffset,
                                const VkDeviceSize countOffset) const {
     if (!indirectDraw.valid()) return;
-    const auto& pipeline = materialPipelines_[materialShaderIndex(shader)];
+    if (shaderSlot >= MaterialShaderCount) {
+        drawShaderGraph(commandBuffer, sceneDescriptorSet, shaderSlot, indirectDraw, commandOffset, countOffset);
+        return;
+    }
+    const auto& pipeline = materialPipelines_[shaderSlot];
     vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline.handle());
     vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline.layout(),
                             0, 1, &sceneDescriptorSet, 0, nullptr);

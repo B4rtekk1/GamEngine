@@ -522,7 +522,7 @@
                         ? static_cast<std::uint32_t>(gpuObjects.size()) : 0u,
                     sceneDescriptorPass.grassShadowDescriptorSet(currentFrame), grassShadowDrawPtr);
             }
-            for (std::uint32_t shader = 0; shader < MaterialShaderCount; ++shader) {
+            for (std::uint32_t shader = 0; shader < MaterialProgramSlotCount; ++shader) {
                 gpuCullingPasses[currentFrame].record(
                     commandBuffer, static_cast<std::uint32_t>(gpuObjects.size()), nullptr, shader, shader);
             }
@@ -592,7 +592,7 @@
                     vkCmdPipelineBarrier2(commandBuffer, &grassDrawDependency);
                 }
             }
-            for (std::uint32_t shader = 0; shader < MaterialShaderCount; ++shader) {
+            for (std::uint32_t shader = 0; shader < MaterialProgramSlotCount; ++shader) {
                 foliageGpuCullingPasses[currentFrame].record(
                     commandBuffer, static_cast<std::uint32_t>(gpuObjects.size()), nullptr, shader, shader);
             }
@@ -601,14 +601,14 @@
                 commandBuffer, hdrFramebuffer, swapchain.extent(),
                 shadowPass.descriptorSet(currentFrame), vertexBuffer.handle(),
                 instanceBuffers[currentFrame].handle(), indexBuffer.handle());
-            for (std::uint32_t shader = 0; shader < MaterialShaderCount; ++shader) {
+            for (std::uint32_t shader = 0; shader < MaterialProgramSlotCount; ++shader) {
                 const auto commandOffset = static_cast<VkDeviceSize>(shader) * gpuObjects.size() *
                     sizeof(VkDrawIndexedIndirectCommand);
                 const auto countOffset = static_cast<VkDeviceSize>(shader) * sizeof(std::uint32_t);
                 forwardPass.drawMaterial(commandBuffer, shadowPass.descriptorSet(currentFrame),
-                    static_cast<MaterialShader>(shader), indirectDraws[currentFrame], commandOffset, countOffset);
+                    shader, indirectDraws[currentFrame], commandOffset, countOffset);
                 forwardPass.drawMaterial(commandBuffer, shadowPass.descriptorSet(currentFrame),
-                    static_cast<MaterialShader>(shader), foliageIndirectDraws[currentFrame], commandOffset, countOffset);
+                    shader, foliageIndirectDraws[currentFrame], commandOffset, countOffset);
             }
             if (!sceneGpu.grassInstances.empty()) {
                 const auto& lists = grassRenderLists[currentFrame];
@@ -689,7 +689,7 @@
                 // Scene View has a separate frustum and therefore needs its own
                 // indirect list. The game camera's list must not hide objects
                 // which are visible from the editor camera.
-                for (std::uint32_t shader = 0; shader < MaterialShaderCount; ++shader) {
+                for (std::uint32_t shader = 0; shader < MaterialProgramSlotCount; ++shader) {
                     sceneGpuCullingPasses[currentFrame].record(
                         commandBuffer, static_cast<std::uint32_t>(gpuObjects.size()), nullptr, shader, shader);
                     sceneFoliageGpuCullingPasses[currentFrame].record(
@@ -700,14 +700,14 @@
                     commandBuffer, sceneViewportFramebuffer, sceneViewportTarget.extent(),
                     sceneDescriptorPass.descriptorSet(currentFrame), vertexBuffer.handle(),
                     instanceBuffers[currentFrame].handle(), indexBuffer.handle());
-                for (std::uint32_t shader = 0; shader < MaterialShaderCount; ++shader) {
+                for (std::uint32_t shader = 0; shader < MaterialProgramSlotCount; ++shader) {
                     const auto commandOffset = static_cast<VkDeviceSize>(shader) * gpuObjects.size() *
                         sizeof(VkDrawIndexedIndirectCommand);
                     const auto countOffset = static_cast<VkDeviceSize>(shader) * sizeof(std::uint32_t);
                     forwardPass.drawMaterial(commandBuffer, sceneDescriptorPass.descriptorSet(currentFrame),
-                        static_cast<MaterialShader>(shader), sceneIndirectDraws[currentFrame], commandOffset, countOffset);
+                        shader, sceneIndirectDraws[currentFrame], commandOffset, countOffset);
                     forwardPass.drawMaterial(commandBuffer, sceneDescriptorPass.descriptorSet(currentFrame),
-                        static_cast<MaterialShader>(shader), sceneFoliageIndirectDraws[currentFrame], commandOffset, countOffset);
+                        shader, sceneFoliageIndirectDraws[currentFrame], commandOffset, countOffset);
                 }
                 if (!sceneGpu.grassInstances.empty()) {
                     const auto& lists = sceneGrassRenderLists[currentFrame];

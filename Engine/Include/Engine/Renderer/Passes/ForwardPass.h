@@ -1,6 +1,7 @@
 #pragma once
 
 #include "Engine/Renderer/Materials/Material.h"
+#include "Engine/Renderer/ShaderGraph/ShaderGraphVulkan.h"
 #include "Engine/Renderer/Vulkan/graphics_pipeline.h"
 
 #include <vulkan/vulkan.h>
@@ -36,10 +37,17 @@ namespace Engine {
                          const Culling::IndexedIndirectDrawCount &indirectDraw);
 
         void drawMaterial(VkCommandBuffer commandBuffer, VkDescriptorSet sceneDescriptorSet,
-                          MaterialShader shader,
+                          std::uint32_t shaderSlot,
                           const Culling::IndexedIndirectDrawCount& indirectDraw,
                           VkDeviceSize commandOffset = 0,
                           VkDeviceSize countOffset = 0) const;
+
+        /** Adds a cooked graph module to the Vulkan pipeline cache. Render-thread only. */
+        [[nodiscard]] std::uint32_t registerShaderGraph(const ShaderGraphProgram& program,
+                                                        const MaterialRenderState& state);
+        void drawShaderGraph(VkCommandBuffer commandBuffer, VkDescriptorSet sceneDescriptorSet,
+                             std::uint32_t shaderSlot, const Culling::IndexedIndirectDrawCount& indirectDraw,
+                             VkDeviceSize commandOffset = 0, VkDeviceSize countOffset = 0) const;
 
         void drawFoliage(VkCommandBuffer commandBuffer,
                          VkDescriptorSet sceneDescriptorSet,
@@ -62,5 +70,7 @@ namespace Engine {
         GraphicsPipeline foliagePipeline_;
         GraphicsPipeline grassPipeline_;
         GraphicsPipeline outlinePipeline_;
+        ShaderGraphPipelineCache shaderGraphPipelines_;
+        GraphicsPipelineOptions shaderGraphPipelineOptions_{};
     };
 } // namespace Engine

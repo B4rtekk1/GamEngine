@@ -20,6 +20,17 @@ target_link_libraries(PhysicsMeshTests PRIVATE Engine GTest::gtest_main)
 gameengine_enable_warnings(PhysicsMeshTests)
 gameengine_enable_sanitizers(PhysicsMeshTests)
 gameengine_copy_runtime_dependencies(PhysicsMeshTests)
+
+# Kept independent from the historical mixed component test target so the
+# compiler contract remains runnable without a Vulkan or PhysX runtime.
+add_executable(ShaderGraphCompilerTests
+    ShaderGraphTests.cpp
+    ${PROJECT_SOURCE_DIR}/Engine/Source/Renderer/ShaderGraph/ShaderGraphCompiler.cpp)
+target_link_libraries(ShaderGraphCompilerTests PRIVATE GTest::gtest_main)
+target_include_directories(ShaderGraphCompilerTests PRIVATE "${PROJECT_SOURCE_DIR}/Engine/Include" ${GLM_INCLUDE_DIR})
+gameengine_enable_warnings(ShaderGraphCompilerTests)
+gameengine_enable_sanitizers(ShaderGraphCompilerTests)
 include(GoogleTest)
 gtest_discover_tests(GamEngineTests)
 gtest_discover_tests(PhysicsMeshTests)
+gtest_discover_tests(ShaderGraphCompilerTests)

@@ -3,6 +3,8 @@ import Common.SceneData;
 import Common.ShadowSampling;
 import Common.GrassWind;
 
+// GENERATED_SHADER_GRAPH_DECLARATIONS
+
 #ifndef MATERIAL_VARIANT
 #define MATERIAL_VARIANT 0
 #endif
@@ -208,6 +210,22 @@ ForwardFragmentOutput fragmentMain(ForwardFragmentInput input)
     }
 
     float3 viewDirection = normalize(frame.cameraPosition.xyz - input.worldPosition);
+#ifdef ENGINE_SHADER_GRAPH
+    SurfaceInput graphInput;
+    graphInput.worldPosition = input.worldPosition;
+    graphInput.worldNormal = normal;
+    graphInput.viewDirection = viewDirection;
+    graphInput.uv0 = input.texCoord;
+    graphInput.uv1 = input.texCoord;
+    graphInput.tangent = normalize(input.tangent.xyz);
+    graphInput.bitangent = normalize(cross(normal, graphInput.tangent)) * input.tangent.w;
+    graphInput.time = frame.windGustFrequencyTime.w;
+    MaterialSurface graphSurface = evaluateMaterial(graphInput);
+    baseColor = float4(graphSurface.baseColor, graphSurface.alpha);
+    metallic = graphSurface.metallic;
+    roughness = graphSurface.roughness;
+    normal = normalize(graphSurface.normal);
+#endif
     float3 lightDirection = normalize(-frame.lightDirectionIntensity.xyz);
     float3 halfway = normalize(viewDirection + lightDirection);
     float3 f0 = lerp(float3(0.04), albedo, metallic);
@@ -261,11 +279,17 @@ ForwardFragmentOutput fragmentMain(ForwardFragmentInput input)
     if (material.auxiliaryTextureIndices.x >= 0)
         ao = lerp(1.0, materialTextures[NonUniformResourceIndex(material.auxiliaryTextureIndices.x)].Sample(input.texCoord).r,
                   clamp(material.roughnessAmbientOcclusion.y, 0.0, 1.0));
+#ifdef ENGINE_SHADER_GRAPH
+    ao = graphSurface.ao;
+#endif
     float3 emissive = material.emissiveColorIntensity.rgb * material.emissiveColorIntensity.w;
     if (material.extensionTextureIndices.x >= 0)
     {
         emissive *= materialTextures[NonUniformResourceIndex(material.extensionTextureIndices.x)]
             .Sample(input.texCoord).rgb;
+#ifdef ENGINE_SHADER_GRAPH
+    emissive = graphSurface.emission;
+#endif
     }
     // Temporary low-level ambient until image-based lighting supplies diffuse
     // irradiance and prefiltered specular.  A large albedo term here washes
