@@ -1,6 +1,12 @@
 option(GAMEENGINE_INSTALL_PORTABLE_EDITOR "Install a self-contained GamEngine Editor package" ON)
 if(GAMEENGINE_INSTALL_PORTABLE_EDITOR)
     install(TARGETS Editor Engine DearImGui COMPONENT GamEngineEditor RUNTIME DESTINATION . LIBRARY DESTINATION . ARCHIVE DESTINATION lib)
+    if(TARGET GameScripts)
+        # Keep the script module built with the same configuration as the
+        # Editor.  A Debug script DLL cannot safely exchange STL-owned data
+        # with a Release Engine DLL (and vice versa).
+        install(TARGETS GameScripts COMPONENT GamEngineEditor RUNTIME DESTINATION . LIBRARY DESTINATION . ARCHIVE DESTINATION lib)
+    endif()
     install(IMPORTED_RUNTIME_ARTIFACTS SDL3::SDL3-shared COMPONENT GamEngineEditor RUNTIME DESTINATION . LIBRARY DESTINATION .)
     install(DIRECTORY "${GAMEENGINE_SHADER_OUTPUT_DIR}/" DESTINATION shaders COMPONENT GamEngineEditor)
     # Shader Graph authoring compiles a generated module that imports these

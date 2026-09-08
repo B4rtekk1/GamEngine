@@ -234,15 +234,30 @@ int main(int argc, char** argv) {
         if (!scriptModules.loadInitialModule(modulePath)) {
             Editor::ConsolePanel::warning("Could not load game scripts module: " + modulePath.string());
         }
-        if (const auto buildDirectory = findDevelopmentBuildDirectory(editorRoot)) {
-            scriptHotReload.emplace(project.rootPath() / "Assets" / "Scripts", modulePath,
-                                    *buildDirectory, buildConfigurationFromExecutableDirectory(editorRoot));
-            if (const auto shaderDirectory = findEngineShaderDirectory(*buildDirectory)) {
-                shaderHotReload.emplace(*shaderDirectory, *buildDirectory,
-                                         *buildDirectory / "resources" / "shaders", editorRoot / "shaders",
-                                         buildConfigurationFromExecutableDirectory(editorRoot));
+        // A portable package may be located below a development build tree,
+        // so the presence of a parent CMakeCache.txt alone is not sufficient
+        // to enable hot reload. Bundled Slang marks the self-contained layout.
+        const bool portableEditor = std::filesystem::is_regular_file(
+            editorRoot / "Tools" / "Slang" /
+#ifdef _WIN32
+            "slangc.exe"
+#else
+            "slangc"
+#endif
+        );
+        if (!portableEditor) {
+            if (const auto buildDirectory = findDevelopmentBuildDirectory(editorRoot)) {
+                scriptHotReload.emplace(project.rootPath() / "Assets" / "Scripts", modulePath,
+                                        *buildDirectory, buildConfigurationFromExecutableDirectory(editorRoot));
+                if (const auto shaderDirectory = findEngineShaderDirectory(*buildDirectory)) {
+                    shaderHotReload.emplace(*shaderDirectory, *buildDirectory,
+                                             *buildDirectory / "resources" / "shaders", editorRoot / "shaders",
+                                             buildConfigurationFromExecutableDirectory(editorRoot));
+                } else {
+                    Editor::ConsolePanel::warning("Shader hot reload is unavailable: could not locate Engine/Shaders.");
+                }
             } else {
-                Editor::ConsolePanel::warning("Shader hot reload is unavailable: could not locate Engine/Shaders.");
+                Editor::ConsolePanel::info("C++ script hot reload is unavailable outside a development build directory.");
             }
         } else {
             Editor::ConsolePanel::info("C++ script hot reload is unavailable in the portable Editor package.");
