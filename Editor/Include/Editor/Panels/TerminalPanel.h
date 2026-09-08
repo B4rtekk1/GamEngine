@@ -19,6 +19,8 @@ public:
     TerminalPanel(const TerminalPanel&) = delete;
     TerminalPanel& operator=(const TerminalPanel&) = delete;
 
+    /** Stops the terminal before graphics and window services are torn down. */
+    void shutdown();
     void draw(bool& isOpen);
 
 private:

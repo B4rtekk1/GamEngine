@@ -45,7 +45,16 @@ TerminalPanel::TerminalPanel(std::filesystem::path projectRoot, ImFont* terminal
 
 TerminalPanel::~TerminalPanel() = default;
 
+void TerminalPanel::shutdown() {
+    if (session_) {
+        session_->stop();
+        session_.reset();
+    }
+    hasKeyboardFocus_ = false;
+}
+
 void TerminalPanel::restart() {
+    shutdown();
     shell_ = Platform::defaultTerminalShell();
     session_ = Platform::createTerminalSession();
     startFailed_ = !session_ || !session_->start(shell_, projectRoot_);

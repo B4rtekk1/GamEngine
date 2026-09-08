@@ -672,6 +672,7 @@ int main(int argc, char** argv) {
         }
         Editor::saveSession({.projectManifest = project.manifestPath(),
                              .scenePath = EditorSceneSession::scenePath()});
+        terminal.shutdown();
         scriptModules.unload(scene);
         renderer.shutdown();
         ImGui::DestroyContext();

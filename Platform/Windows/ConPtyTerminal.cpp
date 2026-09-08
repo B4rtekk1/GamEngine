@@ -66,7 +66,7 @@ public:
         }
         processHandle_ = process.hProcess;
         closeHandle(process.hThread);
-        readerThread_ = std::jthread([this](std::stop_token) { readLoop(); });
+        readerThread_ = std::jthread([this](const std::stop_token stopToken) { readLoop(stopToken); });
         return true;
     }
 
@@ -93,36 +93,43 @@ public:
         return WaitForSingleObject(processHandle_, 0) == WAIT_TIMEOUT;
     }
 
-private:
-    void readLoop() {
-        std::array<char, 4096> buffer{};
-        for (;;) {
-            DWORD read{};
-            if (!ReadFile(outputRead_, buffer.data(), static_cast<DWORD>(buffer.size()), &read, nullptr) || read == 0) return;
-            std::scoped_lock lock{outputMutex_};
-            pendingOutput_.append(buffer.data(), read);
-        }
-    }
-
-    void stop() {
-        if (readerThread_.joinable()) readerThread_.request_stop();
-        if (processHandle_ != nullptr && running()) {
-            TerminateProcess(processHandle_, 0);
-            WaitForSingleObject(processHandle_, 1000);
-        }
-        closeHandle(outputRead_); // Unblocks the synchronous reader before joining it.
-        if (readerThread_.joinable()) readerThread_.join();
+    void stop() override {
         closeHandle(inputWrite_);
         closeHandle(inputRead_);
         closeHandle(outputWrite_);
-        if (pseudoConsole_ != nullptr) ClosePseudoConsole(pseudoConsole_);
-        pseudoConsole_ = nullptr;
+
+        // Close the ConPTY while the reader is alive: it can drain final output
+        // emitted as the attached process tree is asked to terminate.
+        if (pseudoConsole_ != nullptr) {
+            ClosePseudoConsole(pseudoConsole_);
+            pseudoConsole_ = nullptr;
+        }
+
+        if (readerThread_.joinable()) {
+            readerThread_.request_stop();
+            // A stop token cannot interrupt a synchronous ReadFile. Explicitly
+            // cancel any read pending on the terminal's reader thread.
+            static_cast<void>(CancelSynchronousIo(readerThread_.native_handle()));
+            readerThread_.join();
+        }
+        closeHandle(outputRead_);
         if (attributeList_ != nullptr) {
             DeleteProcThreadAttributeList(attributeList_);
             HeapFree(GetProcessHeap(), 0, attributeList_);
             attributeList_ = nullptr;
         }
         closeHandle(processHandle_);
+    }
+
+private:
+    void readLoop(const std::stop_token stopToken) {
+        std::array<char, 4096> buffer{};
+        while (!stopToken.stop_requested()) {
+            DWORD read{};
+            if (!ReadFile(outputRead_, buffer.data(), static_cast<DWORD>(buffer.size()), &read, nullptr) || read == 0) break;
+            std::scoped_lock lock{outputMutex_};
+            pendingOutput_.append(buffer.data(), read);
+        }
     }
 
     HPCON pseudoConsole_{};
