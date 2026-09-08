@@ -38,6 +38,7 @@
 #include <cstdint>
 #include <stdexcept>
 #include <string>
+#include <utility>
 
 static bool drawRemovableComponentHeader(const char *label, const char *id, bool &remove) {
     const bool open = ImGui::CollapsingHeader(label, ImGuiTreeNodeFlags_DefaultOpen);
@@ -841,6 +842,10 @@ bool ComponentsPanel::draw(Engine::ScenePreset &scene, const std::vector<Engine:
         ImGui::OpenPopup("Add Component");
     }
     ImGui::PopStyleColor(3);
+    // A popup retains its previous auto-fit size. Force a usable picker size
+    // every frame so a popup first opened before scripts were loaded does not
+    // remain a narrow menu.
+    ImGui::SetNextWindowSize({520.0F, 560.0F}, ImGuiCond_Always);
     if (ImGui::BeginPopup("Add Component")) {
         // The popup deliberately knows nothing about concrete ECS types. New
         // components appear here solely by registering a descriptor.
@@ -849,6 +854,7 @@ bool ComponentsPanel::draw(Engine::ScenePreset &scene, const std::vector<Engine:
         ImGui::InputTextWithHint("##component-search", "Search components...", componentSearch,
                                  sizeof(componentSearch));
         ImGui::Separator();
+        ImGui::BeginChild("##add-component-results", {0.0F, 0.0F}, false);
 
         std::string_view previousCategory;
         bool found = false;
@@ -876,44 +882,32 @@ bool ComponentsPanel::draw(Engine::ScenePreset &scene, const std::vector<Engine:
                                                                      : "\nAlready added to this object.");
             }
         }
-        if (!found) ImGui::TextDisabled("No matching components.");
-        ImGui::EndPopup();
-    }
-    if (EditorButton("Add Script", {-1.0F, 0.0F}).draw()) ImGui::OpenPopup("Add Script");
-    if (ImGui::BeginPopupModal("Add Script", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
-        static char scriptSearch[128]{};
-        ImGui::TextUnformatted("Choose a registered C++ script.");
-        ImGui::SetNextItemWidth(360.0F);
-        ImGui::InputTextWithHint("##script-search", "Search scripts...", scriptSearch, sizeof(scriptSearch));
-        ImGui::Separator();
-        bool found = false;
-        for (const std::string& className : Engine::ScriptRegistry::instance().classNames()) {
-            if (!containsCaseInsensitive(className.c_str(), scriptSearch)) continue;
+
+        const auto& scriptRegistry = Engine::ScriptRegistry::instance();
+        const bool alreadyHasScript = scene.editor().has<Engine::ScriptComponent>(selected);
+        bool scriptsHeaderDrawn = false;
+        for (const std::string& className : scriptRegistry.classNames()) {
+            if (!containsCaseInsensitive(className.c_str(), componentSearch)) continue;
+
+            if (!scriptsHeaderDrawn) {
+                if (found) ImGui::Spacing();
+                ImGui::TextDisabled("Scripts");
+                scriptsHeaderDrawn = true;
+            }
             found = true;
-            if (ImGui::Selectable(className.c_str())) {
-                if (!scene.editor().has<Engine::ScriptComponent>(selected)) {
-                    scene.editor().add<Engine::ScriptComponent>(selected);
-                }
-                scene.editor().patch<Engine::ScriptComponent>(selected, [&](auto& script) {
-                    script.className = className;
-                    script.enabled = true;
-                    script.reset();
-                });
-                scriptSearch[0] = '\0';
+            if (ImGui::MenuItem(className.c_str(), nullptr, false, !alreadyHasScript)) {
+                Engine::ScriptComponent script{className};
+                scriptRegistry.syncFields(script);
+                scene.editor().add<Engine::ScriptComponent>(selected, std::move(script));
+                componentSearch[0] = '\0';
                 ImGui::CloseCurrentPopup();
             }
+            if (alreadyHasScript && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
+                ImGui::SetTooltip("Only one script can be attached to an object.");
+            }
         }
-        if (!found) ImGui::TextDisabled("No registered scripts found.");
-        ImGui::Separator();
-        if (EditorButton("+ New C++ Script", {-1.0F, 0.0F}).draw()) {
-            scriptSearch[0] = '\0';
-            ImGui::CloseCurrentPopup();
-            ImGui::OpenPopup("Create C++ Script");
-        }
-        if (EditorButton("Cancel", {-1.0F, 0.0F}).draw()) {
-            scriptSearch[0] = '\0';
-            ImGui::CloseCurrentPopup();
-        }
+        if (!found) ImGui::TextDisabled("No matching components.");
+        ImGui::EndChild();
         ImGui::EndPopup();
     }
     if (EditorButton("New C++ Script", {-1.0F, 0.0F}).draw()) ImGui::OpenPopup("Create C++ Script");

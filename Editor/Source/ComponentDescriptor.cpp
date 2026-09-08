@@ -3,7 +3,6 @@
 #include "Engine/ECS/Components/ColliderComponent.h"
 #include "Engine/ECS/Components/ProceduralCloudComponent.h"
 #include "Engine/ECS/Components/RigidbodyComponent.h"
-#include "Engine/ECS/Components/ScriptComponent.h"
 #include "Engine/ECS/Components/SmokeEmitterComponent.h"
 #include "Engine/ECS/Components/TerrainComponent.h"
 #include "Engine/ECS/Components/WindComponent.h"
@@ -66,7 +65,6 @@ namespace Editor {
 
             registerStandard("Collider", "Physics", "Adds PhysX collision geometry.", Engine::ColliderComponent{});
             registerStandard("Rigidbody", "Physics", "Adds PhysX rigid-body simulation.", Engine::RigidbodyComponent{});
-            registerStandard("Script", "Scripting", "Attaches a registered C++ behaviour.", Engine::ScriptComponent{});
             registerStandard("Smoke Emitter", "Effects", "Emits GPU-simulated smoke particles.", Engine::SmokeEmitterComponent{});
             registerStandard("Light", "Rendering", "Adds a directional, point, or spot light.", Engine::LightComponent{});
             registerStandard("Mesh Renderer", "Rendering", "Renders a mesh using a PBR material.", Engine::MeshRenderer{});

@@ -14,7 +14,9 @@ function(gameengine_add_engine_shaders)
         set(shader_source "${ENGINE_SHADER_SOURCE_DIR}/${shader_entry}")
         file(RELATIVE_PATH shader_relative "${ENGINE_SHADER_SOURCE_DIR}" "${shader_source}")
         string(REGEX REPLACE "\\.slang$" ".spv" shader_relative "${shader_relative}")
-        set(shader_output "${SHADER_OUT_DIR}/${shader_relative}")
+        # Runtime shader references use a flat `shaders/<name>.spv` layout.
+        get_filename_component(shader_filename "${shader_relative}" NAME)
+        set(shader_output "${SHADER_OUT_DIR}/${shader_filename}")
         get_filename_component(shader_output_dir "${shader_output}" DIRECTORY)
         list(APPEND shader_outputs "${shader_output}")
         add_custom_command(OUTPUT "${shader_output}"
