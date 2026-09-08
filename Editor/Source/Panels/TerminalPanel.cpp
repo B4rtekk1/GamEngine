@@ -4,9 +4,9 @@
 
 #include "imgui.h"
 
+#include <SDL3/SDL.h>
+
 #include <algorithm>
-#include <array>
-#include <cctype>
 #include <cstdint>
 #include <string>
 #include <utility>
@@ -34,30 +34,6 @@ void appendUtf8(std::string& output, const char32_t character) {
     }
 }
 
-std::string asciiKeyInput(const bool shift) {
-    for (int key = ImGuiKey_A; key <= ImGuiKey_Z; ++key) {
-        if (ImGui::IsKeyPressed(static_cast<ImGuiKey>(key))) {
-            char character = static_cast<char>('a' + key - ImGuiKey_A);
-            if (shift) character = static_cast<char>(std::toupper(static_cast<unsigned char>(character)));
-            return {character};
-        }
-    }
-    constexpr std::array<std::pair<ImGuiKey, std::pair<char, char>>, 21> keys{{
-        {ImGuiKey_0, {'0', ')'}}, {ImGuiKey_1, {'1', '!'}}, {ImGuiKey_2, {'2', '@'}},
-        {ImGuiKey_3, {'3', '#'}}, {ImGuiKey_4, {'4', '$'}}, {ImGuiKey_5, {'5', '%'}},
-        {ImGuiKey_6, {'6', '^'}}, {ImGuiKey_7, {'7', '&'}}, {ImGuiKey_8, {'8', '*'}},
-        {ImGuiKey_9, {'9', '('}}, {ImGuiKey_Space, {' ', ' '}}, {ImGuiKey_Minus, {'-', '_'}},
-        {ImGuiKey_Equal, {'=', '+'}}, {ImGuiKey_LeftBracket, {'[', '{'}},
-        {ImGuiKey_RightBracket, {']', '}'}}, {ImGuiKey_Backslash, {'\\', '|'}},
-        {ImGuiKey_Semicolon, {';', ':'}}, {ImGuiKey_Apostrophe, {'\'', '"'}},
-        {ImGuiKey_Comma, {',', '<'}}, {ImGuiKey_Period, {'.', '>'}}, {ImGuiKey_Slash, {'/', '?'}},
-    }};
-    for (const auto [key, characters] : keys) {
-        if (ImGui::IsKeyPressed(key)) return {shift ? characters.second : characters.first};
-    }
-    return {};
-}
-
 } // namespace
 
 namespace Editor {
@@ -82,29 +58,48 @@ void TerminalPanel::handleKeyboard() {
     ImGuiIO& io = ImGui::GetIO();
     io.WantCaptureKeyboard = true;
     io.WantTextInput = true;
-    if (ImGui::IsKeyPressed(ImGuiKey_Escape)) {
-        hasKeyboardFocus_ = false;
-        return;
-    }
+    // This panel is not an ImGui text widget, so the SDL backend will not
+    // request text input for it. Enable it explicitly to receive SDL text
+    // events (including IME and AltGr) in InputQueueCharacters.
+    if (SDL_Window* window = SDL_GetKeyboardFocus(); window != nullptr) SDL_StartTextInput(window);
+    if (ImGui::IsKeyPressed(ImGuiKey_Escape)) session_->write("\x1B");
     if (io.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_C)) session_->write("\x03");
     else {
         std::string text;
         for (const ImWchar character : io.InputQueueCharacters) appendUtf8(text, character);
-        if (text.empty()) text = asciiKeyInput(io.KeyShift);
-        if (!text.empty()) session_->write(text);
+        if (!text.empty()) {
+            // AltGr is reported as Ctrl+Alt and must remain ordinary Unicode input.
+            if (io.KeyAlt && !io.KeyCtrl) text.insert(text.begin(), '\x1B');
+            session_->write(text);
+        }
     }
     if (ImGui::IsKeyPressed(ImGuiKey_Enter)) session_->write("\r");
-    // ConPTY forwards terminal control characters directly; PSReadLine maps
-    // the Windows Backspace key to BS (0x08), not DEL (0x7F).
-    if (ImGui::IsKeyPressed(ImGuiKey_Backspace)) session_->write("\b");
+    if (ImGui::IsKeyPressed(ImGuiKey_Backspace)) session_->write("\x7F");
     if (ImGui::IsKeyPressed(ImGuiKey_Tab)) session_->write("\t");
-    if (ImGui::IsKeyPressed(ImGuiKey_UpArrow)) session_->write("\x1B[A");
-    if (ImGui::IsKeyPressed(ImGuiKey_DownArrow)) session_->write("\x1B[B");
-    if (ImGui::IsKeyPressed(ImGuiKey_RightArrow)) session_->write("\x1B[C");
-    if (ImGui::IsKeyPressed(ImGuiKey_LeftArrow)) session_->write("\x1B[D");
-    if (ImGui::IsKeyPressed(ImGuiKey_Home)) session_->write("\x1B[H");
-    if (ImGui::IsKeyPressed(ImGuiKey_End)) session_->write("\x1B[F");
+    const char* cursorPrefix = buffer_.applicationCursorMode() ? "\x1BO" : "\x1B[";
+    const char* modifiedCursorPrefix = io.KeyCtrl ? "\x1B[1;5" : cursorPrefix;
+    if (ImGui::IsKeyPressed(ImGuiKey_UpArrow)) session_->write(std::string{modifiedCursorPrefix} + "A");
+    if (ImGui::IsKeyPressed(ImGuiKey_DownArrow)) session_->write(std::string{modifiedCursorPrefix} + "B");
+    if (ImGui::IsKeyPressed(ImGuiKey_RightArrow)) session_->write(std::string{modifiedCursorPrefix} + "C");
+    if (ImGui::IsKeyPressed(ImGuiKey_LeftArrow)) session_->write(std::string{modifiedCursorPrefix} + "D");
+    if (ImGui::IsKeyPressed(ImGuiKey_Home)) session_->write(std::string{cursorPrefix} + "H");
+    if (ImGui::IsKeyPressed(ImGuiKey_End)) session_->write(std::string{cursorPrefix} + "F");
+    if (ImGui::IsKeyPressed(ImGuiKey_Insert)) session_->write("\x1B[2~");
     if (ImGui::IsKeyPressed(ImGuiKey_Delete)) session_->write("\x1B[3~");
+    if (ImGui::IsKeyPressed(ImGuiKey_PageUp)) session_->write("\x1B[5~");
+    if (ImGui::IsKeyPressed(ImGuiKey_PageDown)) session_->write("\x1B[6~");
+    if (ImGui::IsKeyPressed(ImGuiKey_F1)) session_->write("\x1BOP");
+    if (ImGui::IsKeyPressed(ImGuiKey_F2)) session_->write("\x1BOQ");
+    if (ImGui::IsKeyPressed(ImGuiKey_F3)) session_->write("\x1BOR");
+    if (ImGui::IsKeyPressed(ImGuiKey_F4)) session_->write("\x1BOS");
+    if (ImGui::IsKeyPressed(ImGuiKey_F5)) session_->write("\x1B[15~");
+    if (ImGui::IsKeyPressed(ImGuiKey_F6)) session_->write("\x1B[17~");
+    if (ImGui::IsKeyPressed(ImGuiKey_F7)) session_->write("\x1B[18~");
+    if (ImGui::IsKeyPressed(ImGuiKey_F8)) session_->write("\x1B[19~");
+    if (ImGui::IsKeyPressed(ImGuiKey_F9)) session_->write("\x1B[20~");
+    if (ImGui::IsKeyPressed(ImGuiKey_F10)) session_->write("\x1B[21~");
+    if (ImGui::IsKeyPressed(ImGuiKey_F11)) session_->write("\x1B[23~");
+    if (ImGui::IsKeyPressed(ImGuiKey_F12)) session_->write("\x1B[24~");
 }
 
 void TerminalPanel::drawScreen() {
@@ -124,7 +119,7 @@ void TerminalPanel::drawScreen() {
     }
     ImDrawList* drawList = ImGui::GetWindowDrawList();
     drawList->PushClipRect(origin, {origin.x + area.x, origin.y + area.y}, true);
-    const ImU32 background = IM_COL32(20, 22, 28, 255);
+    const ImU32 background = IM_COL32(14, 16, 22, 255);
     drawList->AddRectFilled(origin, {origin.x + area.x, origin.y + area.y}, background);
     ImFont* font = terminalFont_ != nullptr ? terminalFont_ : ImGui::GetFont();
     const float fontSize = font->LegacySize;
@@ -133,7 +128,7 @@ void TerminalPanel::drawScreen() {
             const Platform::TerminalCell& cell = buffer_.cell(x, y);
             const ImVec2 position{origin.x + static_cast<float>(x) * cellWidth_,
                                   origin.y + static_cast<float>(y) * cellHeight_};
-            if (cell.background.red != 20 || cell.background.green != 22 || cell.background.blue != 28) {
+            if (cell.background.red != 14 || cell.background.green != 16 || cell.background.blue != 22) {
                 drawList->AddRectFilled(position, {position.x + cellWidth_, position.y + cellHeight_},
                                         toColor(cell.background));
             }
@@ -147,7 +142,7 @@ void TerminalPanel::drawScreen() {
             }
         }
     }
-    if (hasKeyboardFocus_ && session_ && session_->running()) {
+    if (hasKeyboardFocus_ && buffer_.cursorVisible() && session_ && session_->running()) {
         const float cursorX = origin.x + static_cast<float>(buffer_.cursorColumn()) * cellWidth_;
         const float cursorY = origin.y + static_cast<float>(buffer_.cursorRow()) * cellHeight_;
         drawList->AddRectFilled({cursorX, cursorY}, {cursorX + 2.0F, cursorY + cellHeight_},

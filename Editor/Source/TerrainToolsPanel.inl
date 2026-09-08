@@ -29,7 +29,8 @@ namespace {
     void panelSection(const char* title, const char* description) {
         ImGui::Spacing();
         ImGui::TextColored({0.55F, 0.80F, 0.92F, 1.0F}, "%s", title);
-        if (description != nullptr) ImGui::TextDisabled("%s", description);
+        if (description != nullptr) { ImGui::TextDisabled("%s", description);
+}
         ImGui::Separator();
         ImGui::Spacing();
     }
@@ -138,7 +139,8 @@ namespace {
             ImGui::PushStyleColor(ImGuiCol_ButtonHovered, {0.66F, 0.25F, 0.28F, 1.0F});
         }
         if (ImGui::Button("-  Erase details", {halfWidth, 36.0F})) state.grassErase = true;
-        if (state.grassErase) ImGui::PopStyleColor(2);
+        if (state.grassErase) { ImGui::PopStyleColor(2);
+}
 
         const bool hasDetails = scene.editor().has<Engine::TerrainGrassComponent>(selected) &&
                                 scene.editor().read<Engine::TerrainGrassComponent>(selected).hasPrefab();
