@@ -272,8 +272,8 @@ ForwardFragmentOutput fragmentMain(ForwardFragmentInput input)
     MaterialSurface graphSurface = evaluateMaterial(graphInput);
     baseColor = float4(graphSurface.baseColor, graphSurface.alpha);
     albedo = graphSurface.baseColor;
-    metallic = graphSurface.metallic;
-    roughness = graphSurface.roughness;
+    metallic = clamp(graphSurface.metallic, 0.0, 1.0);
+    roughness = clamp(graphSurface.roughness, 0.045, 1.0);
     normal = normalize(graphSurface.normal);
 #endif
     float3 lightDirection = normalize(-frame.lightDirectionIntensity.xyz);
@@ -337,10 +337,10 @@ ForwardFragmentOutput fragmentMain(ForwardFragmentInput input)
     {
         emissive *= materialTextures[NonUniformResourceIndex(material.extensionTextureIndices.x)]
             .Sample(input.texCoord).rgb;
+    }
 #ifdef ENGINE_SHADER_GRAPH
     emissive = graphSurface.emission;
 #endif
-    }
     // Temporary low-level ambient until image-based lighting supplies diffuse
     // irradiance and prefiltered specular.  A large albedo term here washes
     // out both direct-light colour and HDR emissive validation assets.

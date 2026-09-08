@@ -46,6 +46,7 @@ namespace Engine {
         /** Adds a cooked graph module to the Vulkan pipeline cache. Render-thread only. */
         [[nodiscard]] std::uint32_t registerShaderGraph(const ShaderGraphProgram& program,
                                                         const MaterialRenderState& state);
+        [[nodiscard]] bool hasMaterialPipeline(std::uint32_t shaderSlot) const noexcept;
         void drawShaderGraph(VkCommandBuffer commandBuffer, VkDescriptorSet sceneDescriptorSet,
                              std::uint32_t shaderSlot, const Culling::IndexedIndirectDrawCount& indirectDraw,
                              VkDeviceSize commandOffset = 0, VkDeviceSize countOffset = 0) const;

@@ -113,6 +113,10 @@ std::uint32_t ForwardPass::registerShaderGraph(const ShaderGraphProgram& program
     return shaderGraphPipelines_.getOrCreate(program.id, program.spirvPath, state);
 }
 
+bool ForwardPass::hasMaterialPipeline(const std::uint32_t shaderSlot) const noexcept {
+    return shaderSlot < MaterialShaderCount || shaderGraphPipelines_.find(shaderSlot) != nullptr;
+}
+
 void ForwardPass::drawShaderGraph(VkCommandBuffer commandBuffer, VkDescriptorSet sceneDescriptorSet,
                                   const std::uint32_t shaderSlot,
                                   const Culling::IndexedIndirectDrawCount& indirectDraw,

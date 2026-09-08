@@ -128,12 +128,12 @@
                 sceneFrameDataCache.parentRevision = parentRevision;
             }
             // Time is deliberately refreshed every frame, while ECS-derived wind values stay cached.
-            if (sceneFrameDataCache.hasWind) {
-                const float now = static_cast<float>(Time::elapsedTime());
-                const Vec4& cachedWind = sceneFrameDataCache.data.wind.gustFrequencyTime;
-                sceneFrameDataCache.data.wind.gustFrequencyTime = {
-                    cachedWind.x(), cachedWind.y(), now, now - static_cast<float>(Time::deltaTime())};
-            }
+            // Shader Graph's Time node currently reads the w component, so this
+            // must not depend on a scene having a WindComponent.
+            const float now = static_cast<float>(Time::elapsedTime());
+            const Vec4& cachedWind = sceneFrameDataCache.data.wind.gustFrequencyTime;
+            sceneFrameDataCache.data.wind.gustFrequencyTime = {
+                cachedWind.x(), cachedWind.y(), now, now - static_cast<float>(Time::deltaTime())};
             sceneFrameDataCache.uuidRevision = uuidRevision;
             sceneFrameDataCache.structuralRevision = structuralRevision;
             sceneFrameDataCache.initialized = true;
@@ -522,7 +522,14 @@
                         ? static_cast<std::uint32_t>(gpuObjects.size()) : 0u,
                     sceneDescriptorPass.grassShadowDescriptorSet(currentFrame), grassShadowDrawPtr);
             }
+            std::bitset<MaterialProgramSlotCount> activeShaderSlots;
+            for (const Culling::GPUObjectData& object : gpuObjects) {
+                if (object.shader < MaterialProgramSlotCount && forwardPass.hasMaterialPipeline(object.shader)) {
+                    activeShaderSlots.set(object.shader);
+                }
+            }
             for (std::uint32_t shader = 0; shader < MaterialProgramSlotCount; ++shader) {
+                if (!activeShaderSlots.test(shader)) continue;
                 gpuCullingPasses[currentFrame].record(
                     commandBuffer, static_cast<std::uint32_t>(gpuObjects.size()), nullptr, shader, shader);
             }
@@ -593,6 +600,7 @@
                 }
             }
             for (std::uint32_t shader = 0; shader < MaterialProgramSlotCount; ++shader) {
+                if (!activeShaderSlots.test(shader)) continue;
                 foliageGpuCullingPasses[currentFrame].record(
                     commandBuffer, static_cast<std::uint32_t>(gpuObjects.size()), nullptr, shader, shader);
             }
@@ -602,6 +610,7 @@
                 shadowPass.descriptorSet(currentFrame), vertexBuffer.handle(),
                 instanceBuffers[currentFrame].handle(), indexBuffer.handle());
             for (std::uint32_t shader = 0; shader < MaterialProgramSlotCount; ++shader) {
+                if (!activeShaderSlots.test(shader)) continue;
                 const auto commandOffset = static_cast<VkDeviceSize>(shader) * gpuObjects.size() *
                     sizeof(VkDrawIndexedIndirectCommand);
                 const auto countOffset = static_cast<VkDeviceSize>(shader) * sizeof(std::uint32_t);
@@ -690,6 +699,7 @@
                 // indirect list. The game camera's list must not hide objects
                 // which are visible from the editor camera.
                 for (std::uint32_t shader = 0; shader < MaterialProgramSlotCount; ++shader) {
+                    if (!activeShaderSlots.test(shader)) continue;
                     sceneGpuCullingPasses[currentFrame].record(
                         commandBuffer, static_cast<std::uint32_t>(gpuObjects.size()), nullptr, shader, shader);
                     sceneFoliageGpuCullingPasses[currentFrame].record(
@@ -701,6 +711,7 @@
                     sceneDescriptorPass.descriptorSet(currentFrame), vertexBuffer.handle(),
                     instanceBuffers[currentFrame].handle(), indexBuffer.handle());
                 for (std::uint32_t shader = 0; shader < MaterialProgramSlotCount; ++shader) {
+                    if (!activeShaderSlots.test(shader)) continue;
                     const auto commandOffset = static_cast<VkDeviceSize>(shader) * gpuObjects.size() *
                         sizeof(VkDrawIndexedIndirectCommand);
                     const auto countOffset = static_cast<VkDeviceSize>(shader) * sizeof(std::uint32_t);

@@ -75,6 +75,7 @@
 #include <cstdint>
 #include <array>
 #include <bit>
+#include <bitset>
 #include <chrono>
 #include <cmath>
 #include <cstdio>
