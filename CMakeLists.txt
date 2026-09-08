@@ -14,9 +14,9 @@ option(GE_BUILD_EDITOR "Build GamEngine Editor" ON)
 option(GE_BUILD_PLAYER "Build GamEngine Player and game scripts" ON)
 option(GE_BUILD_TESTS "Build GamEngine tests" OFF)
 
-# Shader Graph cooking happens at editor runtime too. Keep the exact tool
-# discovered for the build available to Engine instead of assuming the user
-# launched Editor from a shell with the Vulkan SDK on PATH.
+# Slang is used to cook built-in shaders and, in a development build, is the
+# fallback compiler for Shader Graphs.  Portable Editor packages bundle this
+# exact tool instead of relying on PATH or a Vulkan SDK installation.
 find_program(GAMEENGINE_SLANGC NAMES slangc REQUIRED)
 
 add_subdirectory(Engine)

@@ -1,6 +1,8 @@
 #include "Engine/Renderer/ShaderGraph/ShaderGraphVulkan.h"
 #include "Engine/Renderer/ShaderGraph/ShaderGraphSerializer.h"
 
+#include <SDL3/SDL.h>
+
 #include <cstdlib>
 #include <fstream>
 #include <format>
@@ -29,6 +31,25 @@ namespace Engine {
             if (value.find('"') != std::string::npos) throw std::invalid_argument(
                 "Shader paths may not contain quotation marks");
             return '"' + value + '"';
+        }
+
+        [[nodiscard]] std::filesystem::path findSlangCompiler() {
+            if (const char* const basePath = SDL_GetBasePath()) {
+                const auto bundled = std::filesystem::path{basePath} / "Tools" / "Slang"
+#if defined(_WIN32)
+                                      / "slangc.exe";
+#else
+                                      / "slangc";
+#endif
+                if (std::filesystem::is_regular_file(bundled)) return bundled;
+            }
+
+#ifdef GAMEENGINE_SLANGC_PATH
+            const std::filesystem::path development{GAMEENGINE_SLANGC_PATH};
+            if (std::filesystem::is_regular_file(development)) return development;
+#endif
+
+            throw std::runtime_error("Slang compiler is not available. Reinstall the GamEngine Editor.");
         }
     }
 
@@ -96,7 +117,7 @@ struct MaterialSurface
 
             // The editor invokes this after debounce on its worker thread; Vulkan
             // sees only the finished SPIR-V via ShaderGraphPipelineCache.
-            const std::filesystem::path slangcPath{GAMEENGINE_SLANGC_PATH};
+            const std::filesystem::path slangcPath = findSlangCompiler();
             const std::string command = quote(slangcPath) + " " + quote(program.slangPath) +
                                         " -target spirv -profile glsl_460 -emit-spirv-directly -matrix-layout-row-major -I "
                                         +

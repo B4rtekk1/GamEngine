@@ -114,6 +114,17 @@ namespace {
         return std::nullopt;
     }
 
+    [[nodiscard]] std::filesystem::path findShaderGraphSourceDirectory(
+        const std::filesystem::path& editorRoot) {
+        const auto bundled = editorRoot / "ShaderSources";
+        if (std::filesystem::is_regular_file(bundled / "Forward/forward_pbr.slang")) return bundled;
+
+        const auto development = std::filesystem::path{GAMEENGINE_SOURCE_DIR} / "Engine/Shaders";
+        if (std::filesystem::is_regular_file(development / "Forward/forward_pbr.slang")) return development;
+
+        throw std::runtime_error("Shader Graph sources are not available. Reinstall the GamEngine Editor.");
+    }
+
     [[nodiscard]] std::string buildConfigurationFromExecutableDirectory(
         const std::filesystem::path& executableDirectory) {
         std::string name = executableDirectory.filename().string();
@@ -148,6 +159,7 @@ int main(int argc, char** argv) {
     Editor::registerBuiltinComponents();
     try {
         const std::filesystem::path editorRoot = executableDirectory();
+        const std::filesystem::path shaderGraphSourceDirectory = findShaderGraphSourceDirectory(editorRoot);
         std::optional<std::filesystem::path> projectPath;
         std::optional<std::filesystem::path> createProjectPath;
         for (int index = 1; index < argc; ++index) {
@@ -240,8 +252,7 @@ int main(int argc, char** argv) {
             Editor::ConsolePanel::error("Asset: " + message);
         });
         const auto resolveShaderGraphMaterials = [&] {
-            const auto sourceRoot = std::filesystem::path{GAMEENGINE_SOURCE_DIR};
-            const auto forwardTemplate = sourceRoot / "Engine/Shaders/Forward/forward_pbr.slang";
+            const auto forwardTemplate = shaderGraphSourceDirectory / "Forward/forward_pbr.slang";
             const auto generatedDirectory = content.assetRoot().parent_path() / "Library/ShaderGraphs";
             std::vector<Engine::Entity> graphMaterials;
             scene.editor().view<Engine::MeshRenderer>([&](const Engine::Entity entity, const Engine::MeshRenderer& meshRenderer) {
@@ -588,7 +599,8 @@ int main(int argc, char** argv) {
                 }
             }
             const bool inspectorConsumesMouseWheel = showInspector &&
-                ComponentsPanel::draw(scene, content, selectedEntities, selectedEntity, showInspector);
+                ComponentsPanel::draw(scene, content, shaderGraphSourceDirectory, selectedEntities, selectedEntity,
+                                      showInspector);
             if (showAssetManager) {
                 if (const Engine::Entity created =
                         AssetManagerPanel::draw(scene, content, playing, showAssetManager,

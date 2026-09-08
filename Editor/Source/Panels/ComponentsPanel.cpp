@@ -60,6 +60,7 @@ static bool drawRemovableComponentHeader(const char *label, const char *id, bool
 }
 
 bool ComponentsPanel::draw(Engine::ScenePreset &scene, Engine::Assets::Content& content,
+                           const std::filesystem::path& shaderSourceDirectory,
                            const std::vector<Engine::Entity>& selection,
                            const Engine::Entity active, bool& isOpen) {
     const Engine::Entity selected = active;
@@ -198,8 +199,13 @@ bool ComponentsPanel::draw(Engine::ScenePreset &scene, Engine::Assets::Content& 
                 renderer.material.shaderGraphAsset.clear();
                 renderer.material.shaderProgram = {};
                 renderer.material.shaderProgramSpirv.clear();
+                changed = true;
+            } else {
+                // A material becomes a Shader Graph material only after a graph
+                // compiles successfully.  Open its selector immediately so the
+                // choice cannot be reset on the next frame by the empty asset.
+                ImGui::OpenPopup("Select Shader Graph##mesh-material");
             }
-            changed = true;
         }
         if (shaderType == 0) {
             constexpr const char* shaders[] = {"Standard PBR", "Unlit", "Hologram", "Water"};
@@ -214,8 +220,7 @@ bool ComponentsPanel::draw(Engine::ScenePreset &scene, Engine::Assets::Content& 
                                                ? "Select or drop a .shadergraph asset"
                                                : renderer.material.shaderGraphAsset.generic_string();
             const auto assignShaderGraph = [&](const std::filesystem::path& graphPath) {
-                const auto sourceRoot = std::filesystem::path{GAMEENGINE_SOURCE_DIR};
-                const auto templatePath = sourceRoot / "Engine/Shaders/Forward/forward_pbr.slang";
+                const auto templatePath = shaderSourceDirectory / "Forward/forward_pbr.slang";
                 const auto generatedDirectory = content.assetRoot().parent_path() / "Library/ShaderGraphs";
                 auto candidate = renderer.material;
                 candidate.shaderGraphAsset = graphPath;
