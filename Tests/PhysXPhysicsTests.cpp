@@ -162,8 +162,8 @@ TEST(Prefab, CubePreservesRenderSettingsWhenInstantiatedInScene) {
     ASSERT_NE(entity, Engine::NullEntity);
     const auto& renderer = scene.editor().read<Engine::MeshRendererComponent>(entity);
     EXPECT_EQ(renderer.mesh, prefab.mesh());
-    EXPECT_FLOAT_EQ(renderer.material.metallic, 0.7F);
-    EXPECT_FLOAT_EQ(renderer.material.roughness, 0.2F);
+    EXPECT_FLOAT_EQ(renderer.material.pbr.metallic, 0.7F);
+    EXPECT_FLOAT_EQ(renderer.material.pbr.roughness, 0.2F);
     EXPECT_FALSE(renderer.castShadow);
     EXPECT_EQ(renderer.cullingBatch, 9u);
 }
@@ -297,9 +297,9 @@ TEST(SceneSerializer, RoundTripsCubeActorTransformAndMaterial) {
     const auto entity = loaded.findEntity(restored.id());
     const auto& renderer = loaded.editor().read<Engine::MeshRendererComponent>(entity);
     ASSERT_TRUE(renderer.hasMesh());
-    EXPECT_FLOAT_EQ(renderer.material.metallic, 0.6F);
-    EXPECT_FLOAT_EQ(renderer.material.roughness, 0.3F);
-    EXPECT_EQ(renderer.material.alphaMode, Engine::AlphaMode::Blend);
+    EXPECT_FLOAT_EQ(renderer.material.pbr.metallic, 0.6F);
+    EXPECT_FLOAT_EQ(renderer.material.pbr.roughness, 0.3F);
+    EXPECT_EQ(renderer.material.pbr.alphaMode, Engine::AlphaMode::Blend);
 }
 
 TEST(SceneSerializer, StoresTerrainSamplesInLosslessBinarySidecar) {

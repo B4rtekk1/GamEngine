@@ -1,7 +1,7 @@
 #pragma once
 
 #include "Engine/Renderer/Geometry/Mesh.h"
-#include "Engine/Renderer/Materials/PBRMaterial.h"
+#include "Engine/Renderer/Materials/Material.h"
 
 #include <cstdint>
 #include <limits>
@@ -19,8 +19,9 @@ namespace Engine {
         /// Geometry to submit. The same mesh may be referenced by many entities.
         std::shared_ptr<const Mesh> mesh;
 
-        /// Per-entity material parameters for the PBR forward pass.
-        PBRMaterial material{};
+        /// Per-entity surface material. The renderer resolves its shader to a
+        /// pipeline batch; entities never own or bind Vulkan shaders directly.
+        Material material{};
         bool materialOverride{false};
 
         /// Whether this mesh contributes to the shadow map.

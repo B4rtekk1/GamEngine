@@ -235,6 +235,7 @@ namespace Engine {
     std::size_t Actor::childCount() const { return children().size(); }
     void Actor::setMesh(std::shared_ptr<const Mesh> mesh) const { object().setMesh(std::move(mesh)); }
     void Actor::setMaterial(const PBRMaterial& material) const { object().setMaterial(material); }
+    void Actor::setMaterial(const Material& material) const { object().setMaterial(material); }
     void Actor::setCastShadow(const bool enabled) const { object().setCastShadow(enabled); }
     void Actor::setCullingBatch(const std::uint32_t batch) const { object().setCullingBatch(batch); }
     void Actor::addRigidbody(const RigidbodyComponent& body) const {

@@ -187,58 +187,60 @@ bool ComponentsPanel::draw(Engine::ScenePreset &scene, const std::vector<Engine:
         }
 
         ImGui::Separator();
+        ImGui::TextDisabled("Shader: Standard PBR (built-in)");
         ImGui::TextDisabled("Material override");
         if (ImGui::Checkbox("Override imported material slot 0##mesh-material", &renderer.materialOverride)) {
             if (renderer.materialOverride && renderer.mesh && !renderer.mesh->materials.empty())
-                renderer.material = renderer.mesh->materials.front();
+                renderer.material.pbr = renderer.mesh->materials.front();
             changed = true;
         }
         float baseColor[4] = {
-            renderer.material.baseColor.r(), renderer.material.baseColor.g(),
-            renderer.material.baseColor.b(), renderer.material.baseColor.a()
+            renderer.material.pbr.baseColor.r(), renderer.material.pbr.baseColor.g(),
+            renderer.material.pbr.baseColor.b(), renderer.material.pbr.baseColor.a()
         };
         if (ImGui::ColorEdit4("Base Color##mesh-material", baseColor,
                               ImGuiColorEditFlags_AlphaBar | ImGuiColorEditFlags_Float)) {
-            renderer.material.baseColor = Engine::Color{baseColor[0], baseColor[1],
+            renderer.material.pbr.baseColor = Engine::Color{baseColor[0], baseColor[1],
                                                          baseColor[2], baseColor[3]}.clamped();
             changed = true;
         }
-        changed |= Editor::Controls::sliderFloat("Metallic##mesh-material", &renderer.material.metallic,
+        changed |= Editor::Controls::sliderFloat("Metallic##mesh-material", &renderer.material.pbr.metallic,
                                       0.0F, 1.0F, "%.2f");
-        changed |= Editor::Controls::sliderFloat("Roughness##mesh-material", &renderer.material.roughness,
+        changed |= Editor::Controls::sliderFloat("Roughness##mesh-material", &renderer.material.pbr.roughness,
                                       0.0F, 1.0F, "%.2f");
         changed |= Editor::Controls::sliderFloat("Ambient Occlusion##mesh-material",
-                                      &renderer.material.aoStrength, 0.0F, 1.0F, "%.2f");
-        changed |= ImGui::DragFloat("Normal Scale##mesh-material", &renderer.material.normalScale,
+                                      &renderer.material.pbr.aoStrength, 0.0F, 1.0F, "%.2f");
+        changed |= ImGui::DragFloat("Normal Scale##mesh-material", &renderer.material.pbr.normalScale,
                                     0.01F, 0.0F, 10.0F, "%.2f");
         ImGui::Separator();
         ImGui::TextDisabled("Emission");
-        float emissive[3] = {renderer.material.emissiveColor.r(), renderer.material.emissiveColor.g(),
-                             renderer.material.emissiveColor.b()};
+        float emissive[3] = {renderer.material.pbr.emissiveColor.r(), renderer.material.pbr.emissiveColor.g(),
+                             renderer.material.pbr.emissiveColor.b()};
         if (ImGui::ColorEdit3("Emissive Color##mesh-material", emissive, ImGuiColorEditFlags_Float)) {
-            renderer.material.emissiveColor = Engine::Color{emissive[0], emissive[1], emissive[2]}.clamped();
+            renderer.material.pbr.emissiveColor = Engine::Color{emissive[0], emissive[1], emissive[2]}.clamped();
             changed = true;
         }
-        changed |= ImGui::DragFloat("Emissive Intensity##mesh-material", &renderer.material.emissiveIntensity,
+        changed |= ImGui::DragFloat("Emissive Intensity##mesh-material", &renderer.material.pbr.emissiveIntensity,
                                     0.1F, 0.0F, 1000.0F, "%.2f");
-        renderer.material.metallic = std::clamp(renderer.material.metallic, 0.0F, 1.0F);
-        renderer.material.roughness = std::clamp(renderer.material.roughness, 0.0F, 1.0F);
-        renderer.material.aoStrength = std::clamp(renderer.material.aoStrength, 0.0F, 1.0F);
-        renderer.material.normalScale = std::max(0.0F, renderer.material.normalScale);
-        renderer.material.emissiveIntensity = std::max(0.0F, renderer.material.emissiveIntensity);
+        renderer.material.pbr.metallic = std::clamp(renderer.material.pbr.metallic, 0.0F, 1.0F);
+        renderer.material.pbr.roughness = std::clamp(renderer.material.pbr.roughness, 0.0F, 1.0F);
+        renderer.material.pbr.aoStrength = std::clamp(renderer.material.pbr.aoStrength, 0.0F, 1.0F);
+        renderer.material.pbr.normalScale = std::max(0.0F, renderer.material.pbr.normalScale);
+        renderer.material.pbr.emissiveIntensity = std::max(0.0F, renderer.material.pbr.emissiveIntensity);
 
-        int alphaMode = static_cast<int>(renderer.material.alphaMode);
+        int alphaMode = static_cast<int>(renderer.material.pbr.alphaMode);
         constexpr const char* alphaModes[] = {"Opaque", "Mask", "Blend"};
         if (ImGui::Combo("Alpha Mode##mesh-material", &alphaMode, alphaModes, 3)) {
-            renderer.material.alphaMode = static_cast<Engine::AlphaMode>(alphaMode);
+            renderer.material.pbr.alphaMode = static_cast<Engine::AlphaMode>(alphaMode);
             changed = true;
         }
-        changed |= ImGui::Checkbox("Double Sided##mesh-material", &renderer.material.doubleSided);
-        if (renderer.material.alphaMode == Engine::AlphaMode::Mask) {
-            changed |= Editor::Controls::sliderFloat("Alpha Cutoff##mesh-material", &renderer.material.alphaCutoff,
+        changed |= ImGui::Checkbox("Double Sided##mesh-material", &renderer.material.pbr.doubleSided);
+        if (renderer.material.pbr.alphaMode == Engine::AlphaMode::Mask) {
+            changed |= Editor::Controls::sliderFloat("Alpha Cutoff##mesh-material", &renderer.material.pbr.alphaCutoff,
                                           0.0F, 1.0F, "%.2f");
-            renderer.material.alphaCutoff = std::clamp(renderer.material.alphaCutoff, 0.0F, 1.0F);
+            renderer.material.pbr.alphaCutoff = std::clamp(renderer.material.pbr.alphaCutoff, 0.0F, 1.0F);
         }
+        renderer.material.synchronizeRenderStateFromPbr();
 
         ImGui::Separator();
         ImGui::TextDisabled("Rendering");

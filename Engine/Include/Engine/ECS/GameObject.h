@@ -127,6 +127,18 @@ namespace Engine {
                 throw std::logic_error("A LightComponent cannot have a MeshRenderer");
             }
             ensureMeshRenderer();
+            modify<MeshRendererComponent>([&](auto& renderer) {
+                renderer.material.pbr = material;
+                renderer.material.synchronizeRenderStateFromPbr();
+            });
+        }
+
+        /** Assigns a complete surface material, including its shader family. */
+        void setMaterial(const Material &material) {
+            if (has<LightComponent>()) {
+                throw std::logic_error("A LightComponent cannot have a MeshRenderer");
+            }
+            ensureMeshRenderer();
             modify<MeshRendererComponent>([&](auto& renderer) { renderer.material = material; });
         }
 

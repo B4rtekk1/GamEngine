@@ -116,6 +116,11 @@
                         hashCombineConstant + (value << hashCombineLeftShift) + (value >> 2u);
                     value ^= static_cast<std::uint64_t>(renderer.cullingBatch) << 1u;
                     value ^= static_cast<std::uint64_t>(renderer.castShadow) << 63u;
+                    value ^= static_cast<std::uint64_t>(renderer.material.shader) << 48u;
+                    if (renderer.materialOverride) {
+                        value ^= static_cast<std::uint64_t>(renderer.material.pbr.doubleSided) << 47u;
+                        value ^= static_cast<std::uint64_t>(renderer.material.pbr.alphaMode) << 45u;
+                    }
                     signature ^= value * hashCombineConstant;
                     ++count;
                 });
@@ -174,11 +179,14 @@
             };
             struct BatchKey {
                 const Mesh* mesh;
+                MaterialShader shader;
+                bool foliagePipeline;
                 bool castShadow;
                 uint32_t cullingBatch;
 
                 bool operator==(const BatchKey& other) const noexcept {
-                    return mesh == other.mesh && castShadow == other.castShadow &&
+                    return mesh == other.mesh && shader == other.shader &&
+                           foliagePipeline == other.foliagePipeline && castShadow == other.castShadow &&
                            cullingBatch == other.cullingBatch;
                 }
             };
@@ -188,7 +196,9 @@
                     constexpr std::uint32_t hashCombineLeftShift = 6U;
                     const auto meshHash = std::hash<const Mesh*>{}(key.mesh);
                     const auto batchHash = std::hash<uint32_t>{}(key.cullingBatch);
-                    return meshHash ^ (batchHash + static_cast<std::size_t>(key.castShadow) +
+                    const auto shaderHash = std::hash<std::uint8_t>{}(static_cast<std::uint8_t>(key.shader));
+                    return meshHash ^ (batchHash + shaderHash + static_cast<std::size_t>(key.foliagePipeline) +
+                                       static_cast<std::size_t>(key.castShadow) +
                                        hashCombineConstant + (meshHash << hashCombineLeftShift) +
                                        (meshHash >> 2U));
                 }
@@ -227,6 +237,10 @@
                     }
 
                     const Mesh* const mesh = renderer.mesh.get();
+                    if (renderer.material.shader != MaterialShader::StandardPBR) {
+                        throw std::runtime_error(
+                            "The selected material shader has no registered ForwardPass pipeline");
+                    }
                     AABB localBounds;
                     std::uint32_t firstVertex = 0;
                     if (optimizationFeatures.meshDeduplication) {
@@ -306,7 +320,18 @@
                     // its parent's position but culled at its local position.
                     const AABB worldBounds = localBounds.transformed(worldModel(entity));
                     const bool castShadow = renderer.castShadow;
-                    const BatchKey batchKey{mesh, castShadow, renderer.cullingBatch};
+                    const bool overrideUsesFoliagePipeline = renderer.materialOverride &&
+                        (renderer.material.pbr.doubleSided ||
+                         renderer.material.pbr.alphaMode == AlphaMode::Mask ||
+                         renderer.material.pbr.alphaMode == AlphaMode::Blend);
+                    const bool meshUsesFoliagePipeline = std::ranges::any_of(
+                        mesh->materials, [](const PBRMaterial& material) {
+                            return material.doubleSided || material.alphaMode == AlphaMode::Mask ||
+                                   material.alphaMode == AlphaMode::Blend;
+                        });
+                    const bool usesFoliagePipeline = overrideUsesFoliagePipeline || meshUsesFoliagePipeline;
+                    const BatchKey batchKey{mesh, renderer.material.shader, usesFoliagePipeline,
+                                            castShadow, renderer.cullingBatch};
                     const auto [batchIt, inserted] = optimizationFeatures.instancedRendering
                         ? batchIndices.try_emplace(batchKey, instanceBatches.size())
                         : std::pair{batchIndices.end(), true};
@@ -321,14 +346,11 @@
                             .lod2IndexCount = 0,
                             .firstInstance = static_cast<uint32_t>(renderables.size()),
                             .instanceCount = 0,
+                            .shader = renderer.material.shader,
                             .castShadow = castShadow,
-                            .twoSided = std::ranges::any_of(mesh->materials, [](const PBRMaterial& material) {
-                                // The existing foliage stream is drawn after opaque geometry.
-                                // Route BLEND here until transparent draws receive their own
-                                // sorted GPU stream; this guarantees actual alpha blending.
-                                return material.doubleSided || material.alphaMode == AlphaMode::Mask ||
-                                       material.alphaMode == AlphaMode::Blend;
-                            }),
+                            // The foliage stream is drawn after opaque geometry. Route
+                            // blend here until transparent draws have a sorted stream.
+                            .twoSided = usesFoliagePipeline,
                             .worldBounds = worldBounds,
                         });
                         sceneGpu.batchRenderableIndices.emplace_back();
@@ -1104,7 +1126,7 @@
                     for (std::uint32_t slot = 0; slot < materialSlots; ++slot) {
                         const PBRMaterial source = mesh.materials.empty() ||
                             (renderer->materialOverride && slot == 0)
-                            ? renderer->material
+                            ? renderer->material.pbr
                             : (slot < mesh.materials.size() ? mesh.materials[slot] : PBRMaterial{});
                         const GPUMaterialData material = packMaterial(source, mesh);
                         GPUMaterialData& destination = materials[record.materialTableOffset + slot];

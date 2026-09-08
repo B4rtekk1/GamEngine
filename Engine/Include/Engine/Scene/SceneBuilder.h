@@ -49,7 +49,7 @@ namespace Engine {
             registry_.add<Transform>(entity, transform);
             registry_.add<MeshRenderer>(entity, MeshRenderer{
                                             .mesh = std::move(mesh),
-                                            .material = material,
+                                            .material = Material{.pbr = material},
                                             .castShadow = castShadow,
                                             .cullingBatch = cullingBatch,
                                         });

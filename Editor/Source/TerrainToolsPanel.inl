@@ -108,9 +108,9 @@ namespace {
                     scene.editor().patch<Engine::MeshRenderer>(selected, [&](auto& component) {
                         component.mesh = mesh;
                         for (int layer = 0; layer < 4; ++layer)
-                            component.material.terrainLayerTextures[layer] =
+                            component.material.pbr.terrainLayerTextures[layer] =
                                 layer < static_cast<int>(mesh->images.size()) ? layer : -1;
-                        component.material.terrainLayered = true;
+                        component.material.pbr.terrainLayered = true;
                     });
                     renderer.synchronizeScene(scene);
                 }

@@ -9,6 +9,7 @@
 #include "Engine/ECS/Components/CameraComponent.h"
 #include "Engine/Renderer/Geometry/Mesh.h"
 #include "Engine/Renderer/Materials/PBRMaterial.h"
+#include "Engine/Renderer/Materials/Material.h"
 #include "Engine/Scene/Components/LightComponent.h"
 
 #include <cstdint>
@@ -202,6 +203,8 @@ namespace Engine {
         void setMesh(std::shared_ptr<const Mesh> mesh) const;
 
         void setMaterial(const PBRMaterial &material) const;
+
+        void setMaterial(const Material &material) const;
 
         void setCastShadow(bool enabled) const;
 

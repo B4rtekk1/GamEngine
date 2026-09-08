@@ -56,6 +56,7 @@ namespace Engine {
         constexpr std::uint32_t MaterialOverrideFormatVersion = 14;
         constexpr std::uint32_t RigidbodyStateFormatVersion = 16;
         constexpr std::uint32_t ScriptFieldsFormatVersion = 17;
+        constexpr std::uint32_t MaterialShaderFormatVersion = 18;
         constexpr std::uint32_t TerrainDataVersion = 1;
         constexpr std::array<char, 8> TerrainDataMagic{'G', 'E', 'T', 'E', 'R', 'R', '1', '\0'};
 
@@ -929,7 +930,8 @@ namespace Engine {
                                              ? static_cast<long long>(meshIds.at(renderer.mesh.get()))
                                              : -1;
                 serialized << "MESH_RENDERER " << meshId << ' ';
-                writeMaterial(serialized, renderer.material);
+                serialized << static_cast<unsigned>(renderer.material.shader) << ' ';
+                writeMaterial(serialized, renderer.material.pbr);
                 serialized << ' ' << static_cast<int>(renderer.materialOverride) << ' '
                         << static_cast<int>(renderer.castShadow) << ' '
                         << renderer.cullingBatch << '\n';
@@ -1067,7 +1069,8 @@ namespace Engine {
         const auto version = read<unsigned>(input, "format version");
         if (version != LegacyFormatVersion && version != TerrainFormatVersion &&
             version != EmissiveFormatVersion && version != MaterialOverrideFormatVersion &&
-            version != MaterialOverrideFormatVersion + 1 && version != FormatVersion) {
+            version != MaterialOverrideFormatVersion + 1 && version != ScriptFieldsFormatVersion &&
+            version != FormatVersion) {
             invalidScene("unsupported format version " + std::to_string(version));
         }
         auto* terrainData = static_cast<std::istream*>(input.pword(terrainDataStreamSlot()));
@@ -1356,7 +1359,15 @@ namespace Engine {
                     if (meshId >= 0) {
                         renderer.mesh = meshes[static_cast<std::size_t>(meshId)];
                     }
-                    renderer.material = readMaterial(input, version);
+                    if (version >= MaterialShaderFormatVersion) {
+                        const auto shader = read<unsigned>(input, "material shader");
+                        if (shader > static_cast<unsigned>(MaterialShader::Water)) {
+                            invalidScene("invalid material shader");
+                        }
+                        renderer.material.shader = static_cast<MaterialShader>(shader);
+                    }
+                    renderer.material.pbr = readMaterial(input, version);
+                    renderer.material.synchronizeRenderStateFromPbr();
                     renderer.materialOverride = version >= MaterialOverrideFormatVersion
                         ? readBool(input, "material-override flag") : false;
                     renderer.castShadow = readBool(input, "cast-shadow flag");
@@ -1521,7 +1532,7 @@ namespace Engine {
                 if (!hasRenderer) invalidScene("terrain entity is missing MeshRenderer");
                 const auto mesh = std::make_shared<Mesh>(loaded.get<TerrainComponent>(entity).createMesh());
                 loaded.get<MeshRenderer>(entity).mesh = mesh;
-                loaded.get<MeshRenderer>(entity).material.terrainLayered = true;
+                loaded.get<MeshRenderer>(entity).material.pbr.terrainLayered = true;
                 if (hasCollider) {
                     if (auto* meshCollider = std::get_if<MeshCollider>(
                             &loaded.get<ColliderComponent>(entity).shape)) {

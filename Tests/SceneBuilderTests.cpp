@@ -57,7 +57,7 @@ TEST(SceneBuilder, CreatesMeshEntityWithIndependentRenderSettings) {
     EXPECT_TRUE(renderer.hasMesh());
     EXPECT_FALSE(renderer.castShadow);
     EXPECT_EQ(renderer.cullingBatch, 7u);
-    EXPECT_FLOAT_EQ(renderer.material.metallic, 0.8F);
+    EXPECT_FLOAT_EQ(renderer.material.pbr.metallic, 0.8F);
     EXPECT_FLOAT_EQ(registry.get<Engine::Transform>(entity).scale.y(), 3.0F);
     EXPECT_EQ(registry.get<Engine::NameComponent>(entity).value, "Mesh");
 }

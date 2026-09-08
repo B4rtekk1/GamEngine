@@ -27,7 +27,7 @@ namespace Engine {
          * buffers in a lossless binary sidecar (<scene>.terrain).  This avoids
          * formatting and parsing every height/colour as decimal text.
          */
-        static constexpr std::uint32_t FormatVersion = 17;
+        static constexpr std::uint32_t FormatVersion = 18;
 
         /** @brief Writes a scene to a text file. */
         static void save(const Registry &registry, const std::filesystem::path &path);

@@ -4,6 +4,7 @@
 #include "Engine/Math/AABB.h"
 #include "Engine/Renderer/Culling/CullingTypes.h"
 #include "Engine/Renderer/Materials/MaterialBuffer.h"
+#include "Engine/Renderer/Materials/Material.h"
 #include "Engine/Renderer/Geometry/Mesh.h"
 #include "Engine/Renderer/GPUSceneDatabase.h"
 #include "Engine/Renderer/Vulkan/renderer_types.h"
@@ -46,6 +47,8 @@ namespace Engine {
             float lod2Distance{60.0F};
             std::uint32_t firstInstance{0};
             std::uint32_t instanceCount{0};
+            /// Shader family that owns this batch's graphics pipeline.
+            MaterialShader shader{MaterialShader::StandardPBR};
             bool castShadow{true};
             /// True for masked/double-sided vegetation that needs its own raster pipeline.
             bool twoSided{false};
