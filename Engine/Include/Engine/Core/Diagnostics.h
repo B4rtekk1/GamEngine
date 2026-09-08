@@ -1,8 +1,14 @@
 #pragma once
 
+#include <chrono>
+#include <cstdint>
+#include <deque>
+#include <filesystem>
 #include <functional>
 #include <mutex>
+#include <fstream>
 #include <string>
+#include <thread>
 #include <vector>
 
 namespace Engine {
@@ -19,6 +25,9 @@ namespace Engine {
     };
 
     struct Diagnostic final {
+        std::uint64_t sequence = 0;
+        std::chrono::system_clock::time_point timestamp;
+        std::thread::id threadId;
         DiagnosticSeverity severity;
         std::string message;
         DiagnosticContext context;
@@ -29,13 +38,21 @@ namespace Engine {
     public:
         [[nodiscard]] static Diagnostics &instance();
 
+        /** Starts a file sink for this process. Safe to call again after shutdown. */
+        void initialize(const std::filesystem::path& logDirectory) noexcept;
+        void shutdown() noexcept;
         void report(DiagnosticSeverity severity, std::string message,
                     DiagnosticContext context = {}) noexcept;
         [[nodiscard]] std::vector<Diagnostic> entries() const;
+        [[nodiscard]] std::filesystem::path currentLogPath() const;
         void clear() noexcept;
+        void flush() noexcept;
 
     private:
         mutable std::mutex mutex_;
-        std::vector<Diagnostic> entries_;
+        std::deque<Diagnostic> entries_;
+        std::ofstream logFile_;
+        std::filesystem::path currentLogPath_;
+        std::uint64_t nextSequence_ = 1;
     };
 } // namespace Engine

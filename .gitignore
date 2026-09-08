@@ -42,6 +42,7 @@ project-ascii-tree.txt
 out/
 Assets/Models
 DEMO/Assets/*
+DEMO/Library
 !DEMO/Assets/Scripts/
 !DEMO/Assets/Scripts/**
 !DEMO/Assets/Scenes/

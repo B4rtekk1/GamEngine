@@ -9,6 +9,7 @@
 #include "Engine/Scene/ScenePresets.h"
 #include "Engine/Scene/SceneEditor.h"
 #include "Engine/Core/Time.h"
+#include "Engine/Core/Diagnostics.h"
 #include "Engine/Core/Transform.h"
 #include "Engine/Core/Camera.h"
 #include "Engine/Math/AABB.h"
@@ -51,6 +52,7 @@
 #include "Editor/TerrainSculptState.h"
 #include "ScriptHotReload.h"
 #include "ShaderHotReload.h"
+#include "Platform/UserPaths.h"
 
 using Editor::EntityClipboard;
 using Editor::SceneHistory;
@@ -214,6 +216,7 @@ namespace {
 int main(int argc, char** argv) {
     Editor::registerBuiltinComponents();
     try {
+        Engine::Diagnostics::instance().initialize(Platform::UserPaths::editorLogs());
         const std::filesystem::path editorRoot = executableDirectory();
         const std::filesystem::path shaderGraphSourceDirectory = findShaderGraphSourceDirectory(editorRoot);
         std::optional<std::filesystem::path> projectPath;
@@ -263,9 +266,9 @@ int main(int argc, char** argv) {
         ImNodes::SetImGuiContext(ImGui::GetCurrentContext());
         ImNodes::StyleColorsDark();
         ImGuiIO &imguiIo = ImGui::GetIO();
-        const std::filesystem::path preferencesPath = Editor::preferencesDirectory();
-        std::filesystem::create_directories(preferencesPath);
-        const std::string imguiIniPath = (preferencesPath / "imgui.ini").string();
+        const std::filesystem::path statePath = Platform::UserPaths::editorState();
+        std::filesystem::create_directories(statePath);
+        const std::string imguiIniPath = (statePath / "imgui.ini").string();
         const bool restorePersistedLayout = std::filesystem::is_regular_file(imguiIniPath);
         imguiIo.IniFilename = imguiIniPath.c_str();
         imguiIo.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard | ImGuiConfigFlags_DockingEnable;
@@ -886,8 +889,11 @@ int main(int argc, char** argv) {
         ImGui::DestroyContext();
         SDL_DestroyWindow(window);
         SDL_Quit();
+        Engine::Diagnostics::instance().shutdown();
         return 0;
     } catch (const std::exception &error) {
+        Engine::Diagnostics::instance().report(Engine::DiagnosticSeverity::Error, error.what(), {.subsystem = "Editor"});
+        Engine::Diagnostics::instance().shutdown();
         std::fprintf(stderr, "Editor error: %s\n", error.what());
         SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, "GamEngine Editor error",
                                  error.what(), nullptr);

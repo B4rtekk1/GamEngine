@@ -1,29 +1,13 @@
 #include "Editor/EditorPreferences.h"
+#include "Platform/UserPaths.h"
 
 #include <fstream>
 #include <stdexcept>
-#include <vector>
-
-#ifdef _WIN32
-#ifndef NOMINMAX
-#define NOMINMAX
-#endif
-#include <windows.h>
-#endif
 
 namespace Editor {
 
 std::filesystem::path preferencesDirectory() {
-#ifdef _WIN32
-    const DWORD length = GetEnvironmentVariableW(L"LOCALAPPDATA", nullptr, 0);
-    if (length > 1) {
-        std::vector<wchar_t> appData(length);
-        if (GetEnvironmentVariableW(L"LOCALAPPDATA", appData.data(), length) != 0) {
-            return std::filesystem::path{appData.data()} / "GamEngine" / "Editor";
-        }
-    }
-#endif
-    return std::filesystem::temp_directory_path() / "GamEngine" / "Editor";
+    return Platform::UserPaths::editorData();
 }
 
 EditorSession loadSession() {

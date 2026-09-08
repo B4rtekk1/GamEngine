@@ -7,7 +7,7 @@ namespace Editor {
 
 enum class LogLevel { Info, Warning, Error };
 
-/** Thread-safe in-editor log buffer and its dockable ImGui panel. */
+/** Dockable view over the engine-wide diagnostic stream. */
 class ConsolePanel final {
 public:
     static void info(std::string_view message);

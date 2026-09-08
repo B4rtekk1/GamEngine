@@ -10,8 +10,6 @@
 #include <unordered_map>
 
 namespace {
-constexpr float JumpSpeed = 6.5F;
-constexpr float GroundVelocityTolerance = 0.15F;
 // Keep this in sync with CameraController's gameplay mouse sensitivity.
 constexpr float MouseSensitivity = 0.3F;
 constexpr float Zero = 0.0F;

@@ -22,7 +22,7 @@ namespace Engine {
         const auto context = [&](std::string action) {
             return DiagnosticContext{.subsystem = "ScriptSystem", .object = objectName(registry, entity),
                 .component = "ScriptComponent", .file = scripts_.sourceFile(component.className).value_or(
-                    "Nie znaleziono rejestracji pliku"), .suggestedAction = std::move(action)};
+                    "Source file registration not found"), .suggestedAction = std::move(action)};
         };
         const auto reportOnce = [&](std::string key, const DiagnosticSeverity severity,
                                     std::string message, DiagnosticContext diagnosticContext) {
@@ -37,12 +37,12 @@ namespace Engine {
                     component.runtime->onDisable();
                 } catch (const std::exception &error) {
                     reportOnce("disable:" + component.runtimeClassName, DiagnosticSeverity::Error,
-                        "Skrypt " + component.runtimeClassName + " zgłosił wyjątek podczas onDisable: " + error.what(),
-                        context("Popraw onDisable lub usuń komponent skryptu."));
+                        "Script " + component.runtimeClassName + " threw an exception during onDisable: " + error.what(),
+                        context("Fix onDisable or remove the script component."));
                 } catch (...) {
                     reportOnce("disable:" + component.runtimeClassName, DiagnosticSeverity::Error,
-                        "Skrypt " + component.runtimeClassName + " zgłosił nieznany wyjątek podczas onDisable.",
-                        context("Popraw onDisable lub usuń komponent skryptu."));
+                        "Script " + component.runtimeClassName + " threw an unknown exception during onDisable.",
+                        context("Fix onDisable or remove the script component."));
                 }
                 component.runtimeEnabled = false;
             }
@@ -50,12 +50,12 @@ namespace Engine {
                 component.runtime->onDestroy();
             } catch (const std::exception &error) {
                 reportOnce("destroy:" + component.runtimeClassName, DiagnosticSeverity::Error,
-                    "Skrypt " + component.runtimeClassName + " zgłosił wyjątek podczas onDestroy: " + error.what(),
-                    context("Popraw onDestroy lub usuń komponent skryptu."));
+                    "Script " + component.runtimeClassName + " threw an exception during onDestroy: " + error.what(),
+                    context("Fix onDestroy or remove the script component."));
             } catch (...) {
                 reportOnce("destroy:" + component.runtimeClassName, DiagnosticSeverity::Error,
-                    "Skrypt " + component.runtimeClassName + " zgłosił nieznany wyjątek podczas onDestroy.",
-                    context("Popraw onDestroy lub usuń komponent skryptu."));
+                    "Script " + component.runtimeClassName + " threw an unknown exception during onDestroy.",
+                    context("Fix onDestroy or remove the script component."));
             }
             component.runtime.reset();
             component.runtimeClassName.clear();
@@ -74,12 +74,12 @@ namespace Engine {
                     component.runtimeEnabled = false;
                 } catch (const std::exception &error) {
                     reportOnce("disable:" + component.className, DiagnosticSeverity::Error,
-                        "Skrypt " + component.className + " zgłosił wyjątek podczas onDisable: " + error.what(),
-                        context("Popraw onDisable lub usuń komponent skryptu."));
+                        "Script " + component.className + " threw an exception during onDisable: " + error.what(),
+                        context("Fix onDisable or remove the script component."));
                 } catch (...) {
                     reportOnce("disable:" + component.className, DiagnosticSeverity::Error,
-                        "Skrypt " + component.className + " zgłosił nieznany wyjątek podczas onDisable.",
-                        context("Popraw onDisable lub usuń komponent skryptu."));
+                        "Script " + component.className + " threw an unknown exception during onDisable.",
+                        context("Fix onDisable or remove the script component."));
                 }
             }
             return;
@@ -89,8 +89,8 @@ namespace Engine {
             component.runtime = scripts_.create(component.className);
             if (!component.runtime) {
                 reportOnce("missing:" + component.className, DiagnosticSeverity::Warning,
-                    "Brak skryptu " + component.className + "; zarejestruj go lub usuń komponent.",
-                    context("Zarejestruj skrypt lub usuń komponent ScriptComponent."));
+                    "Script " + component.className + " is not registered; register it or remove the component.",
+                    context("Register the script or remove the ScriptComponent."));
                 return;
             }
             component.runtimeClassName = component.className;
@@ -107,14 +107,14 @@ namespace Engine {
                 }
             } catch (const std::exception &error) {
                 reportOnce("create:" + component.className, DiagnosticSeverity::Error,
-                    "Skrypt " + component.className + " zgłosił wyjątek podczas onCreate: " + error.what(),
-                    context("Popraw onCreate lub usuń komponent skryptu."));
+                    "Script " + component.className + " threw an exception during onCreate: " + error.what(),
+                    context("Fix onCreate or remove the script component."));
                 destroyRuntime();
                 return;
             } catch (...) {
                 reportOnce("create:" + component.className, DiagnosticSeverity::Error,
-                    "Skrypt " + component.className + " zgłosił nieznany wyjątek podczas onCreate.",
-                    context("Popraw onCreate lub usuń komponent skryptu."));
+                    "Script " + component.className + " threw an unknown exception during onCreate.",
+                    context("Fix onCreate or remove the script component."));
                 destroyRuntime();
                 return;
             }
@@ -125,14 +125,14 @@ namespace Engine {
                 component.runtimeEnabled = true;
             } catch (const std::exception &error) {
                 reportOnce("enable:" + component.className, DiagnosticSeverity::Error,
-                    "Skrypt " + component.className + " zgłosił wyjątek podczas onEnable: " + error.what(),
-                    context("Popraw onEnable lub usuń komponent skryptu."));
+                    "Script " + component.className + " threw an exception during onEnable: " + error.what(),
+                    context("Fix onEnable or remove the script component."));
                 destroyRuntime();
                 return;
             } catch (...) {
                 reportOnce("enable:" + component.className, DiagnosticSeverity::Error,
-                    "Skrypt " + component.className + " zgłosił nieznany wyjątek podczas onEnable.",
-                    context("Popraw onEnable lub usuń komponent skryptu."));
+                    "Script " + component.className + " threw an unknown exception during onEnable.",
+                    context("Fix onEnable or remove the script component."));
                 destroyRuntime();
                 return;
             }
@@ -141,14 +141,14 @@ namespace Engine {
             component.runtime->onUpdate(deltaTime);
         } catch (const std::exception &error) {
             reportOnce("update:" + component.className, DiagnosticSeverity::Error,
-                "Skrypt " + component.className + " zgłosił wyjątek podczas onUpdate: " + error.what(),
-                context("Popraw onUpdate lub usuń komponent skryptu."));
+                "Script " + component.className + " threw an exception during onUpdate: " + error.what(),
+                context("Fix onUpdate or remove the script component."));
             destroyRuntime();
             return;
         } catch (...) {
             reportOnce("update:" + component.className, DiagnosticSeverity::Error,
-                "Skrypt " + component.className + " zgłosił nieznany wyjątek podczas onUpdate.",
-                context("Popraw onUpdate lub usuń komponent skryptu."));
+                "Script " + component.className + " threw an unknown exception during onUpdate.",
+                context("Fix onUpdate or remove the script component."));
             destroyRuntime();
             return;
         }

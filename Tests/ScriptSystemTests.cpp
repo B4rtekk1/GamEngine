@@ -174,7 +174,7 @@ TEST(ScriptSystem, ReportsMissingScriptWithContextOnlyOnce) {
     EXPECT_EQ(diagnostics.front().context.component, "ScriptComponent");
     EXPECT_EQ(diagnostics.front().context.object, "Entity " + std::to_string(entity));
     EXPECT_EQ(diagnostics.front().message,
-              "Brak skryptu PlayerController; zarejestruj go lub usuń komponent.");
+              "Script PlayerController is not registered; register it or remove the component.");
     EXPECT_FALSE(diagnostics.front().context.suggestedAction.empty());
 }
 

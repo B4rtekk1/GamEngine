@@ -9,4 +9,5 @@ public:
     void onUpdate(float deltaTime) override;
     GE_PROPERTY(Header("Movement"),Range(0.0F, 100.0F),Tooltip("The speed at which the player moves.")) float MovementSpeed = 6.0F;
     GE_PROPERTY(Header("Jump speed"),Range(0.0F, 100.0F),Tooltip("The speed at which the player jumps.")) float JumpSpeed = 10.0F;
+    GE_PROPERTY(Header("Ground velocity tolerance"),Range(0.0F, 1.0F), Step(0.01F),Tooltip("The tolerance for the player's vertical velocity when on the ground.")) float GroundVelocityTolerance = 0.15F;
 };

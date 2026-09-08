@@ -7,25 +7,12 @@
 #include <algorithm>
 #include <chrono>
 #include <cctype>
-#include <cstdio>
 #include <ctime>
 #include <limits>
-#include <mutex>
 #include <string>
 #include <vector>
 
 namespace {
-
-struct LogEntry final {
-    Editor::LogLevel level;
-    std::string time;
-    std::string message;
-};
-
-std::mutex logMutex;
-std::vector<LogEntry> entries;
-constexpr std::size_t maximumEntries = 2'000;
-std::size_t consumedDiagnostics = 0;
 
 Editor::LogLevel toLogLevel(const Engine::DiagnosticSeverity level) {
     switch (level) {
@@ -42,10 +29,10 @@ std::string formatDiagnostic(const Engine::Diagnostic &diagnostic) {
         if (!value.empty()) result += " | " + std::string{label} + ": " + value;
     };
     append("System", diagnostic.context.subsystem);
-    append("Obiekt", diagnostic.context.object);
-    append("Komponent", diagnostic.context.component);
-    append("Plik", diagnostic.context.file);
-    append("Działanie", diagnostic.context.suggestedAction);
+    append("Object", diagnostic.context.object);
+    append("Component", diagnostic.context.component);
+    append("File", diagnostic.context.file);
+    append("Suggested action", diagnostic.context.suggestedAction);
     return result;
 }
 
@@ -58,9 +45,23 @@ const char* levelName(const Editor::LogLevel level) {
     return "Unknown";
 }
 
-bool matchesFilter(const LogEntry& entry, const char* filter) {
+std::string formatTime(const std::chrono::system_clock::time_point timestamp) {
+    const auto time = std::chrono::system_clock::to_time_t(timestamp);
+    std::tm local{};
+#ifdef _WIN32
+    localtime_s(&local, &time);
+#else
+    localtime_r(&time, &local);
+#endif
+    char result[16]{};
+    std::strftime(result, sizeof(result), "%H:%M:%S", &local);
+    return result;
+}
+
+bool matchesFilter(const Engine::Diagnostic& entry, const char* filter) {
     if (filter == nullptr || *filter == '\0') return true;
-    std::string message = entry.time + " " + levelName(entry.level) + " " + entry.message;
+    std::string message = formatTime(entry.timestamp) + " " + levelName(toLogLevel(entry.severity)) + " " +
+                          formatDiagnostic(entry);
     std::string query{filter};
     std::ranges::transform(message, message.begin(), [](unsigned char value) {
         return static_cast<char>(std::tolower(value));
@@ -69,15 +70,6 @@ bool matchesFilter(const LogEntry& entry, const char* filter) {
         return static_cast<char>(std::tolower(value));
     });
     return message.find(query) != std::string::npos;
-}
-
-std::string currentTime() {
-    const auto now = std::chrono::system_clock::to_time_t(std::chrono::system_clock::now());
-    std::tm local{};
-    localtime_s(&local, &now);
-    char result[16]{};
-    std::strftime(result, sizeof(result), "%H:%M:%S", &local);
-    return result;
 }
 
 } // namespace
@@ -89,10 +81,6 @@ void ConsolePanel::add(const LogLevel level, const std::string_view message) {
                         : level == LogLevel::Warning ? Engine::DiagnosticSeverity::Warning
                                                      : Engine::DiagnosticSeverity::Error;
     Engine::Diagnostics::instance().report(severity, std::string{message}, {.subsystem = "Editor"});
-    std::scoped_lock lock{logMutex};
-    if (entries.size() == maximumEntries) entries.erase(entries.begin());
-    entries.push_back({.level = level, .time = currentTime(), .message = std::string{message}});
-    consumedDiagnostics = Engine::Diagnostics::instance().entries().size();
 }
 
 void ConsolePanel::info(const std::string_view message) { add(LogLevel::Info, message); }
@@ -101,9 +89,6 @@ void ConsolePanel::error(const std::string_view message) { add(LogLevel::Error, 
 
 void ConsolePanel::clear() {
     Engine::Diagnostics::instance().clear();
-    std::scoped_lock lock{logMutex};
-    entries.clear();
-    consumedDiagnostics = 0;
 }
 
 void ConsolePanel::draw(bool& isOpen) {
@@ -113,16 +98,6 @@ void ConsolePanel::draw(bool& isOpen) {
     }
 
     const auto diagnostics = Engine::Diagnostics::instance().entries();
-    {
-        std::scoped_lock lock{logMutex};
-        if (consumedDiagnostics > diagnostics.size()) consumedDiagnostics = 0;
-        for (std::size_t index = consumedDiagnostics; index < diagnostics.size(); ++index) {
-            if (entries.size() == maximumEntries) entries.erase(entries.begin());
-            entries.push_back({.level = toLogLevel(diagnostics[index].severity), .time = currentTime(),
-                               .message = formatDiagnostic(diagnostics[index])});
-        }
-        consumedDiagnostics = diagnostics.size();
-    }
 
     static bool showInfo = true;
     static bool showWarnings = true;
@@ -149,22 +124,18 @@ void ConsolePanel::draw(bool& isOpen) {
     ImGui::InputTextWithHint("##console-filter", "Filter logs...", filter, sizeof(filter));
     ImGui::Separator();
 
-    std::vector<LogEntry> visibleEntries;
-    {
-        std::scoped_lock lock{logMutex};
-        visibleEntries = entries;
-    }
     // ImGui::TextUnformatted does not expose text selection.  A read-only
     // multiline input does, while still keeping the console immutable.
     std::string output;
-    for (const LogEntry& entry : visibleEntries) {
-        const bool enabled = entry.level == LogLevel::Info ? showInfo
-                             : entry.level == LogLevel::Warning ? showWarnings : showErrors;
+    for (const Engine::Diagnostic& entry : diagnostics) {
+        const LogLevel level = toLogLevel(entry.severity);
+        const bool enabled = level == LogLevel::Info ? showInfo
+                             : level == LogLevel::Warning ? showWarnings : showErrors;
         if (!enabled || !matchesFilter(entry, filter)) continue;
-        output += '[' + entry.time + "] ";
-        output += levelName(entry.level);
+        output += '[' + formatTime(entry.timestamp) + "] ";
+        output += levelName(level);
         output += "  ";
-        output += entry.message;
+        output += formatDiagnostic(entry);
         output += '\n';
     }
 
@@ -173,13 +144,17 @@ void ConsolePanel::draw(bool& isOpen) {
     selectableOutput.assign(output.begin(), output.end());
     selectableOutput.push_back('\0');
 
-    ImGui::SetWindowFontScale(textScale);
+    // SetWindowFontScale is a legacy per-window API. In particular, it does
+    // not reliably update the child window used by InputTextMultiline.
+    // Select the scaled font explicitly so the log text, line height and
+    // scrolling area all use the same size.
+    ImGui::PushFont(nullptr, ImGui::GetStyle().FontSizeBase * textScale);
     ImGui::InputTextMultiline("##console-output", selectableOutput.data(), selectableOutput.size(),
                               {-std::numeric_limits<float>::min(), -std::numeric_limits<float>::min()},
                               ImGuiInputTextFlags_ReadOnly | ImGuiInputTextFlags_AllowTabInput);
-    ImGui::SetWindowFontScale(1.0F);
+    ImGui::PopFont();
     if (ImGui::IsItemHovered()) {
-        ImGui::SetTooltip("Przeciągnij myszą, aby zaznaczyć tekst. Ctrl+C kopiuje zaznaczenie.");
+        ImGui::SetTooltip("Drag to select text. Ctrl+C copies the selection.");
     }
     ImGui::End();
 }
