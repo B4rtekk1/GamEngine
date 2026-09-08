@@ -72,20 +72,28 @@ namespace Engine {
     }
 
     void ScriptModuleManager::destroyGeneration(Registry &scene, const std::uint64_t generation) const {
+        // Generation zero denotes components without a dynamically loaded module.
+        // It must never be treated as a real module generation, as those
+        // components can have an empty RuntimeScriptInstance.
+        if (generation == 0) return;
+
         scene.view<ScriptComponent>([this, generation](const Entity, ScriptComponent &component) {
-            if (component.runtime.moduleGeneration == generation) {
-                try {
-                    if (component.runtime.instance != nullptr) {
-                        registry_.captureFields(component.className, *component.runtime.instance, component.fields);
-                    }
-                    component.hotReloadState = component.runtime->saveHotReloadState();
-                    component.hasHotReloadState = true;
-                } catch (...) {
-                    component.hotReloadState.clear();
-                    component.hasHotReloadState = false;
-                }
+            if (component.runtime.moduleGeneration != generation) return;
+
+            if (!component.runtime) {
                 component.reset();
+                return;
             }
+
+            try {
+                registry_.captureFields(component.className, *component.runtime.instance, component.fields);
+                component.hotReloadState = component.runtime->saveHotReloadState();
+                component.hasHotReloadState = true;
+            } catch (...) {
+                component.hotReloadState.clear();
+                component.hasHotReloadState = false;
+            }
+            component.reset();
         });
     }
 
@@ -108,11 +116,14 @@ namespace Engine {
     }
 
     void ScriptModuleManager::unload(Registry &scene) {
+        if (!active_.library.loaded() || active_.generation == 0) return;
+
         destroyGeneration(scene, active_.generation);
         registry_.removeGeneration(active_.generation);
         active_.library.unload();
         active_.generation = 0;
         active_.path.clear();
+        active_.descriptors.clear();
     }
 
     void ScriptModuleManager::unload(Scene &scene) { unload(scene.registry_); }
