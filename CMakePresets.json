@@ -8,16 +8,23 @@
       "binaryDir": "${sourceDir}/out/build/${presetName}",
       "cacheVariables": {
         "CMAKE_EXPORT_COMPILE_COMMANDS": "ON",
-        "BUILD_TESTING": "ON",
-        "CMAKE_EXE_LINKER_FLAGS": "/DEFAULTLIB:runtimeobject.lib"
+        "GE_BUILD_TESTS": "OFF"
       }
     },
     {
-      "name": "debug",
-      "displayName": "Debug",
+      "name": "dev",
+      "displayName": "Development",
       "inherits": "base",
       "cacheVariables": {
         "CMAKE_BUILD_TYPE": "Debug"
+      }
+    },
+    {
+      "name": "dev-tests",
+      "displayName": "Development (tests)",
+      "inherits": "dev",
+      "cacheVariables": {
+        "GE_BUILD_TESTS": "ON"
       }
     },
     {
@@ -31,21 +38,22 @@
     {
       "name": "asan-ubsan",
       "displayName": "AddressSanitizer + UndefinedBehaviorSanitizer",
-      "inherits": "debug",
+      "inherits": "dev",
       "cacheVariables": {
         "GAMEENGINE_ENABLE_SANITIZERS": "ON"
       }
     }
   ],
   "buildPresets": [
-    { "name": "debug", "configurePreset": "debug" },
+    { "name": "dev", "configurePreset": "dev" },
+    { "name": "dev-tests", "configurePreset": "dev-tests" },
     { "name": "release", "configurePreset": "release" },
     { "name": "asan-ubsan", "configurePreset": "asan-ubsan" }
   ],
   "testPresets": [
     {
-      "name": "debug",
-      "configurePreset": "debug",
+      "name": "dev-tests",
+      "configurePreset": "dev-tests",
       "output": { "outputOnFailure": true }
     },
     {

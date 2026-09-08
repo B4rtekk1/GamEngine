@@ -38,6 +38,7 @@
 #include "Editor/Panels/ConsolePanel.h"
 #include "Editor/Panels/TerminalPanel.h"
 #include "Editor/Panels/AssetDragDrop.h"
+#include "Editor/App/EditorEntityHelpers.h"
 #include "Editor/EditorState.h"
 #include "Editor/EditorPreferences.h"
 #include "Editor/EditorConstants.h"
@@ -71,15 +72,9 @@ using Editor::SceneHistory;
 #include <unordered_set>
 #include <vector>
 
-#include "EditorEntityHelpers.inl"
-
 #include "EditorViewport.inl"
 
 #include "TerrainToolsPanel.inl"
-
-#include "HierarchyPanel.inl"
-
-#include "ComponentsPanel.inl"
 
 #include "EditorShell.inl"
 

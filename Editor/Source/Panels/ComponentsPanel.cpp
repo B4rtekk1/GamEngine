@@ -1,13 +1,43 @@
+#include "Editor/Panels/ComponentsPanel.h"
+
+#include "Editor/App/EditorEntityHelpers.h"
+#include "Editor/EditorUi.h"
+#include "Editor/Panels/EditorSceneSession.h"
+#include "Engine/Assets/AssetTypes.h"
+#include "Engine/Assets/Content.h"
+#include "Engine/Core/Camera.h"
+#include "Engine/Core/Transform.h"
+#include "Engine/ECS/Components/CameraComponent.h"
+#include "Engine/ECS/Components/ColliderComponent.h"
+#include "Engine/ECS/Components/ProceduralCloudComponent.h"
+#include "Engine/ECS/Components/RigidbodyComponent.h"
+#include "Engine/ECS/Components/ScriptComponent.h"
+#include "Engine/ECS/Components/SmokeEmitterComponent.h"
+#include "Engine/ECS/Components/TerrainGrassComponent.h"
 #include "Engine/ECS/Components/WindComponent.h"
+#include "Engine/Renderer/Geometry/ProceduralCloud.h"
+#include "Engine/Renderer/MeshRenderer.h"
+#include "Engine/Renderer/Renderer.h"
+#include "Engine/Scene/Components/LightComponent.h"
+#include "Engine/Scene/SceneEditor.h"
+#include "Engine/Scripting/ScriptRegistry.h"
+#include "Engine/Scripting/ScriptSystem.h"
 #include "Editor/UI/ComponentCard.h"
 #include "Editor/UI/EditorIcons.h"
 #include "Editor/UI/EditorTheme.h"
 #include "Editor/UI/EditorWidgets.h"
 #include "Editor/UI/PropertyGrid.h"
+#include "Elements/NumericControl.h"
+#include "Elements/EditorButton.h"
+#include "Elements/TransformFields.h"
 
 #include <algorithm>
 #include <cfloat>
 #include <climits>
+#include <cstdio>
+#include <cstdint>
+#include <stdexcept>
+#include <string>
 
 static bool drawRemovableComponentHeader(const char *label, const char *id, bool &remove) {
     const bool open = ImGui::CollapsingHeader(label, ImGuiTreeNodeFlags_DefaultOpen);

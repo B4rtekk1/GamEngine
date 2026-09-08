@@ -1,6 +1,22 @@
+#include "Editor/Panels/HierarchyPanel.h"
+
+#include "Editor/App/EditorEntityHelpers.h"
+#include "Engine/Assets/Content.h"
+#include "Engine/ECS/Components/RigidbodyComponent.h"
+#include "Engine/Scene/SceneEditor.h"
+#include "Engine/Scene/Components/IdentityComponents.h"
+#include "Editor/Panels/AssetDragDrop.h"
 #include "Editor/Panels/ConsolePanel.h"
+#include "Editor/EditorUi.h"
 #include "Editor/UI/EditorTheme.h"
 #include "Editor/UI/EditorWidgets.h"
+
+#include <algorithm>
+#include <exception>
+#include <string>
+#include <vector>
+
+#include "imgui_internal.h"
 
 Engine::Entity HierarchyPanel::draw(Engine::ScenePreset &scene, Engine::Assets::Content& content,
                                     const std::vector<Engine::Entity>& selection, Action &action,

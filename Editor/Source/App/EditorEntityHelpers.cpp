@@ -1,3 +1,7 @@
+#include "Editor/App/EditorEntityHelpers.h"
+
+#include "Engine/ECS/Components/ScriptComponent.h"
+
 const char *entityName(const Engine::ScenePreset &scene, const Engine::Entity entity) {
     const auto view = scene.view();
     if (view.has<Engine::NameComponent>(entity)) {
