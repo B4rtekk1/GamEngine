@@ -1,5 +1,5 @@
 function(gameengine_add_engine_shaders)
-    find_program(SLANGC NAMES slangc REQUIRED)
+    set(SLANGC "${GAMEENGINE_SLANGC}")
     set(ENGINE_SHADER_SOURCE_DIR "${PROJECT_SOURCE_DIR}/Engine/Shaders")
     set(SHADER_OUT_DIR "${CMAKE_BINARY_DIR}/resources/shaders" CACHE PATH "Compiled engine shader directory")
     file(GLOB_RECURSE shader_modules CONFIGURE_DEPENDS "${ENGINE_SHADER_SOURCE_DIR}/*.slang")

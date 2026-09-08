@@ -14,7 +14,7 @@ add_library(Engine SHARED
 file(GLOB_RECURSE ENGINE_PUBLIC_HEADERS CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/Include/*.h" "${CMAKE_CURRENT_SOURCE_DIR}/Include/*.hpp")
 target_sources(Engine PRIVATE FILE_SET engine_public_headers TYPE HEADERS BASE_DIRS "${CMAKE_CURRENT_SOURCE_DIR}/Include" FILES ${ENGINE_PUBLIC_HEADERS})
 target_link_libraries(Engine PUBLIC SDL3::SDL3 Vulkan::Vulkan PRIVATE DearImGui physx_lib)
-target_compile_definitions(Engine PRIVATE PX_PHYSX_STATIC_LIB)
+target_compile_definitions(Engine PRIVATE PX_PHYSX_STATIC_LIB GAMEENGINE_SLANGC_PATH="${GAMEENGINE_SLANGC}")
 target_include_directories(Engine PUBLIC $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/Include> ${GLM_INCLUDE_DIR} ${VMA_INCLUDE_DIR} PRIVATE "${PROJECT_SOURCE_DIR}" "${CMAKE_CURRENT_SOURCE_DIR}/Source" "${PROJECT_SOURCE_DIR}/ThridParty/stb")
 gameengine_enable_warnings(Engine)
 gameengine_enable_sanitizers(Engine)

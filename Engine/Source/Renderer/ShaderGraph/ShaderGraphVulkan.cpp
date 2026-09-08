@@ -96,13 +96,15 @@ struct MaterialSurface
 
             // The editor invokes this after debounce on its worker thread; Vulkan
             // sees only the finished SPIR-V via ShaderGraphPipelineCache.
-            const std::string command = "slangc " + quote(program.slangPath) +
+            const std::filesystem::path slangcPath{GAMEENGINE_SLANGC_PATH};
+            const std::string command = quote(slangcPath) + " " + quote(program.slangPath) +
                                         " -target spirv -profile glsl_460 -emit-spirv-directly -matrix-layout-row-major -I "
                                         +
                                         quote(forwardTemplate.parent_path().parent_path()) + " -o " + quote(
                                             program.spirvPath);
             if (std::system(command.c_str()) != 0) {
-                result.diagnostics.push_back({"slangc failed while compiling generated Shader Graph module.", {}});
+                result.diagnostics.push_back({"slangc failed while compiling generated Shader Graph module: " +
+                                              slangcPath.string(), {}});
             }
         } catch (const std::exception &exception) {
             result.diagnostics.push_back({exception.what(), {}});
