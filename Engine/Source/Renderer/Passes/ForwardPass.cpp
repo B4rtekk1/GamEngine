@@ -1,10 +1,12 @@
 #include "Engine/Renderer/Passes/ForwardPass.h"
 
+#include "Engine/Core/Diagnostics.h"
 #include "Engine/Renderer/Culling/IndexedIndirectDrawCount.h"
 #include "Engine/Renderer/Geometry/Vertex.h"
 #include "Engine/Renderer/Vulkan/renderer_types.h"
 #include <algorithm>
 #include <cstddef>
+#include <string>
 
 namespace Engine {
 
@@ -15,6 +17,7 @@ void ForwardPass::create(VkDevice device, const VkFormat colorFormat,
                          const VkResolveModeFlagBits depthResolveMode,
                          VkDescriptorSetLayout sceneLayout,
                          Assets::AssetManager& assets) {
+    reportedMissingShaderGraphSlots_.clear();
     GraphicsPipelineOptions options{};
     options.colorFormat = colorFormat;
     options.depthFormat = depthFormat;
@@ -98,6 +101,7 @@ void ForwardPass::create(VkDevice device, const VkFormat colorFormat,
 }
 
 void ForwardPass::destroy() noexcept {
+    reportedMissingShaderGraphSlots_.clear();
     shaderGraphPipelines_.destroy();
     outlinePipeline_.destroy();
     foliagePipeline_.destroy();
@@ -115,7 +119,20 @@ void ForwardPass::drawShaderGraph(VkCommandBuffer commandBuffer, VkDescriptorSet
                                   const VkDeviceSize commandOffset, const VkDeviceSize countOffset) const {
     if (!indirectDraw.valid()) return;
     const GraphicsPipeline* const pipeline = shaderGraphPipelines_.find(shaderSlot);
-    if (pipeline == nullptr) return;
+    if (pipeline == nullptr) {
+        if (reportedMissingShaderGraphSlots_.insert(shaderSlot).second) {
+            Diagnostics::instance().report(
+                DiagnosticSeverity::Error,
+                "[Renderer] Shader Graph pipeline missing for slot " +
+                    std::to_string(shaderSlot) + "; falling back to Standard PBR.");
+        }
+        const auto& fallback = materialPipelines_[materialShaderIndex(MaterialShader::StandardPBR)];
+        vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, fallback.handle());
+        vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, fallback.layout(),
+                                0, 1, &sceneDescriptorSet, 0, nullptr);
+        indirectDraw.record(commandBuffer, commandOffset, countOffset);
+        return;
+    }
     vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline->handle());
     vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline->layout(),
                             0, 1, &sceneDescriptorSet, 0, nullptr);

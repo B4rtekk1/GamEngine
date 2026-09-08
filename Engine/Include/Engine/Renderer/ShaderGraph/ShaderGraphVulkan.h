@@ -52,6 +52,8 @@ namespace Engine {
     class ShaderGraphPipelineCache final {
     public:
         void initialize(VkDevice device, GraphicsPipelineOptions baseOptions);
+        // Releases Vulkan pipelines but preserves program-to-slot mappings
+        // across render-pass recreation.
         void destroy() noexcept;
 
         [[nodiscard]] std::uint32_t getOrCreate(ShaderProgramId program,

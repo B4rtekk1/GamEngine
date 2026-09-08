@@ -3,7 +3,56 @@ import Common.SceneData;
 import Common.ShadowSampling;
 import Common.GrassWind;
 
-// GENERATED_SHADER_GRAPH_DECLARATIONS
+
+#define ENGINE_SHADER_GRAPH 1
+struct SurfaceInput
+{
+    float3 worldPosition;
+    float3 worldNormal;
+    float3 viewDirection;
+    float2 uv0;
+    float2 uv1;
+    float3 tangent;
+    float3 bitangent;
+    float time;
+};
+struct MaterialSurface
+{
+    float3 baseColor;
+    float metallic;
+    float roughness;
+    float ao;
+    float3 normal;
+    float3 emission;
+    float alpha;
+    float alphaCutoff;
+};
+MaterialSurface evaluateMaterial(SurfaceInput input)
+{
+    float v0 = input.time;
+    float v1 = 1.5;
+    float v2 = v0 * v1;
+    float v3 = sin(v2);
+    float v4 = 0.5;
+    float v5 = v3 * v4;
+    float v6 = 0.5;
+    float v7 = v5 + v6;
+    float v8 = 0.100000001;
+    float v9 = v5 + v6;
+    float v10 = 1.0 - v9;
+    float3 v11 = float3(v7, v8, v10);
+    MaterialSurface result;
+    result.baseColor = v11;
+    result.metallic = 0.0;
+    result.roughness = 0.55;
+    result.normal = normalize(input.worldNormal);
+    result.ao = 1.0;
+    result.emission = float3(0.0);
+    result.alpha = 1.0;
+    result.alphaCutoff = 0.5;
+    return result;
+}
+
 
 #ifndef MATERIAL_VARIANT
 #define MATERIAL_VARIANT 0

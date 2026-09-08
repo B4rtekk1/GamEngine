@@ -8,6 +8,7 @@
 
 #include <array>
 #include <cstdint>
+#include <unordered_set>
 
 namespace Engine {
     namespace Assets {
@@ -72,5 +73,8 @@ namespace Engine {
         GraphicsPipeline outlinePipeline_;
         ShaderGraphPipelineCache shaderGraphPipelines_;
         GraphicsPipelineOptions shaderGraphPipelineOptions_{};
+        // Avoid flooding the editor console when a stale GPU batch references
+        // a missing graph pipeline for multiple frames.
+        mutable std::unordered_set<std::uint32_t> reportedMissingShaderGraphSlots_;
     };
 } // namespace Engine

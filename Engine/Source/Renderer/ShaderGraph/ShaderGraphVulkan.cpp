@@ -214,7 +214,14 @@ struct MaterialSurface
     }
 
     void ShaderGraphPipelineCache::destroy() noexcept {
-        entries_.clear();
+        // ForwardPass is also torn down for swapchain/MSAA recreation while
+        // the scene's GPU batches retain their shader slots. Keep the slot
+        // registry so initialize() can recreate equivalent VkPipelines for
+        // those batches; only device-owned resources must be released here.
+        for (auto& [program, entry] : entries_) {
+            (void) program;
+            entry.pipeline.reset();
+        }
         device_ = VK_NULL_HANDLE;
         baseOptions_ = {};
     }

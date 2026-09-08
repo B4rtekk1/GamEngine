@@ -271,6 +271,7 @@ ForwardFragmentOutput fragmentMain(ForwardFragmentInput input)
     graphInput.time = frame.windGustFrequencyTime.w;
     MaterialSurface graphSurface = evaluateMaterial(graphInput);
     baseColor = float4(graphSurface.baseColor, graphSurface.alpha);
+    albedo = graphSurface.baseColor;
     metallic = graphSurface.metallic;
     roughness = graphSurface.roughness;
     normal = normalize(graphSurface.normal);
