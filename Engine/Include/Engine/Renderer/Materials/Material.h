@@ -21,6 +21,12 @@ namespace Engine {
         Water,
     };
 
+    /** Authored shader source, independent of whether a graph asset is assigned or cooks successfully. */
+    enum class MaterialShaderSource : std::uint8_t {
+        BuiltIn,
+        ShaderGraph,
+    };
+
     inline constexpr std::size_t MaterialShaderCount = 4;
     /** GPU-culling bins: four built-ins plus room for cooked Shader Graphs. */
     inline constexpr std::size_t MaterialProgramSlotCount = 32;
@@ -43,6 +49,7 @@ namespace Engine {
      * shader.  It deliberately does not own shader or Vulkan pipeline state.
      */
     struct Material final {
+        MaterialShaderSource shaderSource{MaterialShaderSource::BuiltIn};
         MaterialShader shader{MaterialShader::StandardPBR};
         /** Relative path of the source .shadergraph asset. This is authoring data. */
         std::filesystem::path shaderGraphAsset{};

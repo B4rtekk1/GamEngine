@@ -40,12 +40,15 @@ namespace Engine {
         [[nodiscard]] std::string literal(const ShaderNodeValue &value, const ShaderValueType type) {
             const auto scalar = [](const float v) { return std::format("{:.9g}", v); };
             if (const auto *v = std::get_if<float>(&value)) return scalar(*v);
-            if (const auto *v = std::get_if<Vec2>(&value)) return std::format(
-                "float2({}, {})", scalar(v->x()), scalar(v->y()));
-            if (const auto *v = std::get_if<Vec3>(&value)) return std::format(
-                "float3({}, {}, {})", scalar(v->x()), scalar(v->y()), scalar(v->z()));
-            if (const auto *v = std::get_if<Vec4>(&value)) return std::format(
-                "float4({}, {}, {}, {})", scalar(v->x()), scalar(v->y()), scalar(v->z()), scalar(v->w()));
+            if (const auto *v = std::get_if<Vec2>(&value))
+                return std::format(
+                    "float2({}, {})", scalar(v->x()), scalar(v->y()));
+            if (const auto *v = std::get_if<Vec3>(&value))
+                return std::format(
+                    "float3({}, {}, {})", scalar(v->x()), scalar(v->y()), scalar(v->z()));
+            if (const auto *v = std::get_if<Vec4>(&value))
+                return std::format(
+                    "float4({}, {}, {}, {})", scalar(v->x()), scalar(v->y()), scalar(v->z()), scalar(v->w()));
             return std::string{slangType(type)} + "(0.0)";
         }
 
@@ -64,7 +67,8 @@ namespace Engine {
         const unsigned leftDimensions = dimensions(left);
         const unsigned rightDimensions = dimensions(right);
         if (leftDimensions == 0 || rightDimensions == 0 || (
-                leftDimensions != rightDimensions && leftDimensions != 1 && rightDimensions != 1)) return false;
+                leftDimensions != rightDimensions && leftDimensions != 1 && rightDimensions != 1))
+            return false;
         result = leftDimensions >= rightDimensions ? left : right;
         return true;
     }
@@ -89,21 +93,25 @@ namespace Engine {
             }
         }
         for (const ShaderNode &node: graph.nodes) {
-            if (!nodes.emplace(node.id, &node).second) error(std::format("Duplicate shader node {}.", node.id),
-                                                             {node.id});
+            if (!nodes.emplace(node.id, &node).second)
+                error(std::format("Duplicate shader node {}.", node.id),
+                      {node.id});
             if (node.type == ShaderNodeType::SurfaceOutput) {
-                if (output != nullptr) error("A shader graph must have exactly one SurfaceOutput node.",
-                                             {output->id, node.id});
+                if (output != nullptr)
+                    error("A shader graph must have exactly one SurfaceOutput node.",
+                          {output->id, node.id});
                 output = &node;
             }
             for (const ShaderPin &pin: node.inputs) {
-                if (!pins.emplace(pin.id, &pin).second) error(std::format("Duplicate shader pin {}.", pin.id),
-                                                              {node.id});
+                if (!pins.emplace(pin.id, &pin).second)
+                    error(std::format("Duplicate shader pin {}.", pin.id),
+                          {node.id});
                 pinOwners.emplace(pin.id, &node);
             }
             for (const ShaderPin &pin: node.outputs) {
-                if (!pins.emplace(pin.id, &pin).second) error(std::format("Duplicate shader pin {}.", pin.id),
-                                                              {node.id});
+                if (!pins.emplace(pin.id, &pin).second)
+                    error(std::format("Duplicate shader pin {}.", pin.id),
+                          {node.id});
                 pinOwners.emplace(pin.id, &node);
             }
         }
@@ -121,8 +129,9 @@ namespace Engine {
                 error("Shader links must connect an output pin to an input pin.");
                 continue;
             }
-            if (!incoming.emplace(link.toPin, link.fromPin).second) error(
-                "An input pin may have only one connection.", {to->second->id});
+            if (!incoming.emplace(link.toPin, link.fromPin).second)
+                error(
+                    "An input pin may have only one connection.", {to->second->id});
         }
         if (!result.succeeded()) return result;
 
@@ -169,7 +178,7 @@ namespace Engine {
             }
             const ShaderNode *node = pinOwners.at(source->second);
             const ShaderPin *outPin = pins.at(source->second);
-            const ShaderNodeDefinition* definition = ShaderNodeRegistry::find(node->type);
+            const ShaderNodeDefinition *definition = ShaderNodeRegistry::find(node->type);
             if (definition == nullptr) {
                 error("Shader node is not registered.", {node->id});
                 return std::nullopt;
@@ -239,38 +248,70 @@ namespace Engine {
                 auto a = compilePin(node->inputs[0].id);
                 auto b = compilePin(node->inputs[1].id);
                 auto c = compilePin(node->inputs[2].id);
-                if (!a || !b || !c || a->value.type != ShaderValueType::Float || b->value.type != ShaderValueType::Float ||
+                if (!a || !b || !c || a->value.type != ShaderValueType::Float || b->value.type != ShaderValueType::Float
+                    ||
                     c->value.type != ShaderValueType::Float || outPin->type != ShaderValueType::Float) {
                     error("Lerp and Clamp currently require scalar inputs.", {node->id});
                     return std::nullopt;
                 }
-                compiledValue.value = emit(definition->compileKind == ShaderNodeCompileKind::Lerp ? ShaderIROp::Lerp : ShaderIROp::Clamp,
-                                           ShaderValueType::Float, {a->value, b->value, c->value}, {});
+                compiledValue.value = emit(
+                    definition->compileKind == ShaderNodeCompileKind::Lerp ? ShaderIROp::Lerp : ShaderIROp::Clamp,
+                    ShaderValueType::Float, {a->value, b->value, c->value}, {});
             } else if (definition->compileKind == ShaderNodeCompileKind::Unary) {
-                if (node->inputs.size() != 1) { error("Unary node requires exactly one input pin.", {node->id}); return std::nullopt; }
+                if (node->inputs.size() != 1) {
+                    error("Unary node requires exactly one input pin.", {node->id});
+                    return std::nullopt;
+                }
                 auto value = compilePin(node->inputs[0].id);
-                if (!value || (node->type != ShaderNodeType::Length && value->value.type != outPin->type)) { error("Unary node input type does not match its output.", {node->id}); return std::nullopt; }
-                const ShaderIROp op = node->type == ShaderNodeType::Saturate ? ShaderIROp::Saturate :
-                                       node->type == ShaderNodeType::OneMinus ? ShaderIROp::OneMinus :
-                                       node->type == ShaderNodeType::Sin ? ShaderIROp::Sin :
-                                       node->type == ShaderNodeType::Cos ? ShaderIROp::Cos :
-                                       node->type == ShaderNodeType::Normalize ? ShaderIROp::Normalize : ShaderIROp::Length;
-                if (op == ShaderIROp::Length && (value->value.type != ShaderValueType::Float3 || outPin->type != ShaderValueType::Float)) {
-                    error("Length requires a Float3 input and Float output.", {node->id}); return std::nullopt;
+                if (!value || (node->type != ShaderNodeType::Length && value->value.type != outPin->type)) {
+                    error("Unary node input type does not match its output.", {node->id});
+                    return std::nullopt;
+                }
+                const ShaderIROp op = node->type == ShaderNodeType::Saturate
+                                          ? ShaderIROp::Saturate
+                                          : node->type == ShaderNodeType::OneMinus
+                                                ? ShaderIROp::OneMinus
+                                                : node->type == ShaderNodeType::Sin
+                                                      ? ShaderIROp::Sin
+                                                      : node->type == ShaderNodeType::Cos
+                                                            ? ShaderIROp::Cos
+                                                            : node->type == ShaderNodeType::Normalize
+                                                                  ? ShaderIROp::Normalize
+                                                                  : ShaderIROp::Length;
+                if (op == ShaderIROp::Length && (
+                        value->value.type != ShaderValueType::Float3 || outPin->type != ShaderValueType::Float)) {
+                    error("Length requires a Float3 input and Float output.", {node->id});
+                    return std::nullopt;
                 }
                 compiledValue.value = emit(op, outPin->type, {value->value}, {});
             } else if (definition->compileKind == ShaderNodeCompileKind::Dot) {
-                auto a = compilePin(node->inputs[0].id); auto b = compilePin(node->inputs[1].id);
-                if (!a || !b || a->value.type != ShaderValueType::Float3 || b->value.type != ShaderValueType::Float3 || outPin->type != ShaderValueType::Float) { error("Dot requires two Float3 inputs.", {node->id}); return std::nullopt; }
+                auto a = compilePin(node->inputs[0].id);
+                auto b = compilePin(node->inputs[1].id);
+                if (!a || !b || a->value.type != ShaderValueType::Float3 || b->value.type != ShaderValueType::Float3 ||
+                    outPin->type != ShaderValueType::Float) {
+                    error("Dot requires two Float3 inputs.", {node->id});
+                    return std::nullopt;
+                }
                 compiledValue.value = emit(ShaderIROp::Dot, ShaderValueType::Float, {a->value, b->value}, {});
             } else if (definition->compileKind == ShaderNodeCompileKind::Split) {
                 auto value = compilePin(node->inputs[0].id);
-                if (!value || value->value.type != ShaderValueType::Float3 || outPin->type != ShaderValueType::Float) { error("Split requires a Float3 input.", {node->id}); return std::nullopt; }
+                if (!value || value->value.type != ShaderValueType::Float3 || outPin->type != ShaderValueType::Float) {
+                    error("Split requires a Float3 input.", {node->id});
+                    return std::nullopt;
+                }
                 const char component = outPin->name == "X" ? 'x' : outPin->name == "Y" ? 'y' : 'z';
-                compiledValue.value = emit(ShaderIROp::Split, ShaderValueType::Float, {value->value}, std::string(1, component));
+                compiledValue.value = emit(ShaderIROp::Split, ShaderValueType::Float, {value->value},
+                                           std::string(1, component));
             } else if (definition->compileKind == ShaderNodeCompileKind::Combine) {
                 std::vector<ShaderIRValue> components;
-                for (const auto& input : node->inputs) { auto value = compilePin(input.id); if (!value || value->value.type != ShaderValueType::Float) { error("Combine requires scalar inputs.", {node->id}); return std::nullopt; } components.push_back(value->value); }
+                for (const auto &input: node->inputs) {
+                    auto value = compilePin(input.id);
+                    if (!value || value->value.type != ShaderValueType::Float) {
+                        error("Combine requires scalar inputs.", {node->id});
+                        return std::nullopt;
+                    }
+                    components.push_back(value->value);
+                }
                 compiledValue.value = emit(ShaderIROp::Combine, ShaderValueType::Float3, std::move(components), {});
             } else {
                 error("This shader node is not supported by the MVP compiler.", {node->id});
@@ -345,17 +386,32 @@ namespace Engine {
                 case ShaderIROp::Divide: slang << "v" << instruction.operands[0].id << " / v" << instruction.operands[1]
                                          .id;
                     break;
-                case ShaderIROp::Lerp: slang << "lerp(v" << instruction.operands[0].id << ", v" << instruction.operands[1].id << ", v" << instruction.operands[2].id << ')'; break;
-                case ShaderIROp::Clamp: slang << "clamp(v" << instruction.operands[0].id << ", v" << instruction.operands[1].id << ", v" << instruction.operands[2].id << ')'; break;
-                case ShaderIROp::Saturate: slang << "saturate(v" << instruction.operands[0].id << ')'; break;
-                case ShaderIROp::OneMinus: slang << "1.0 - v" << instruction.operands[0].id; break;
-                case ShaderIROp::Sin: slang << "sin(v" << instruction.operands[0].id << ')'; break;
-                case ShaderIROp::Cos: slang << "cos(v" << instruction.operands[0].id << ')'; break;
-                case ShaderIROp::Dot: slang << "dot(v" << instruction.operands[0].id << ", v" << instruction.operands[1].id << ')'; break;
-                case ShaderIROp::Normalize: slang << "normalize(v" << instruction.operands[0].id << ')'; break;
-                case ShaderIROp::Length: slang << "length(v" << instruction.operands[0].id << ')'; break;
-                case ShaderIROp::Split: slang << "v" << instruction.operands[0].id << '.' << instruction.payload; break;
-                case ShaderIROp::Combine: slang << "float3(v" << instruction.operands[0].id << ", v" << instruction.operands[1].id << ", v" << instruction.operands[2].id << ')'; break;
+                case ShaderIROp::Lerp: slang << "lerp(v" << instruction.operands[0].id << ", v" << instruction.operands[
+                                           1].id << ", v" << instruction.operands[2].id << ')';
+                    break;
+                case ShaderIROp::Clamp: slang << "clamp(v" << instruction.operands[0].id << ", v" << instruction.
+                                        operands[1].id << ", v" << instruction.operands[2].id << ')';
+                    break;
+                case ShaderIROp::Saturate: slang << "saturate(v" << instruction.operands[0].id << ')';
+                    break;
+                case ShaderIROp::OneMinus: slang << "1.0 - v" << instruction.operands[0].id;
+                    break;
+                case ShaderIROp::Sin: slang << "sin(v" << instruction.operands[0].id << ')';
+                    break;
+                case ShaderIROp::Cos: slang << "cos(v" << instruction.operands[0].id << ')';
+                    break;
+                case ShaderIROp::Dot: slang << "dot(v" << instruction.operands[0].id << ", v" << instruction.operands[1]
+                                      .id << ')';
+                    break;
+                case ShaderIROp::Normalize: slang << "normalize(v" << instruction.operands[0].id << ')';
+                    break;
+                case ShaderIROp::Length: slang << "length(v" << instruction.operands[0].id << ')';
+                    break;
+                case ShaderIROp::Split: slang << "v" << instruction.operands[0].id << '.' << instruction.payload;
+                    break;
+                case ShaderIROp::Combine: slang << "float3(v" << instruction.operands[0].id << ", v" << instruction.
+                                          operands[1].id << ", v" << instruction.operands[2].id << ')';
+                    break;
             }
             slang << ";\n";
         }

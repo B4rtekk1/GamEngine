@@ -58,6 +58,7 @@ namespace Engine {
         constexpr std::uint32_t ScriptFieldsFormatVersion = 17;
         constexpr std::uint32_t MaterialShaderFormatVersion = 18;
         constexpr std::uint32_t ShaderGraphMaterialFormatVersion = 19;
+        constexpr std::uint32_t MaterialShaderSourceFormatVersion = 20;
         constexpr std::uint32_t TerrainDataVersion = 1;
         constexpr std::array<char, 8> TerrainDataMagic{'G', 'E', 'T', 'E', 'R', 'R', '1', '\0'};
 
@@ -932,6 +933,7 @@ namespace Engine {
                                              : -1;
                 serialized << "MESH_RENDERER " << meshId << ' ';
                 serialized << static_cast<unsigned>(renderer.material.shader) << ' ';
+                serialized << static_cast<unsigned>(renderer.material.shaderSource) << ' ';
                 if (renderer.material.shaderGraphAsset.is_absolute() ||
                     (!renderer.material.shaderGraphAsset.empty() &&
                      *renderer.material.shaderGraphAsset.lexically_normal().begin() == "..")) {
@@ -1374,6 +1376,13 @@ namespace Engine {
                         }
                         renderer.material.shader = static_cast<MaterialShader>(shader);
                     }
+                    if (version >= MaterialShaderSourceFormatVersion) {
+                        const auto shaderSource = read<unsigned>(input, "material shader source");
+                        if (shaderSource > static_cast<unsigned>(MaterialShaderSource::ShaderGraph)) {
+                            invalidScene("invalid material shader source");
+                        }
+                        renderer.material.shaderSource = static_cast<MaterialShaderSource>(shaderSource);
+                    }
                     if (version >= ShaderGraphMaterialFormatVersion) {
                         std::string shaderGraphAsset;
                         input >> std::quoted(shaderGraphAsset);
@@ -1382,6 +1391,11 @@ namespace Engine {
                             invalidScene("Shader Graph asset must be relative to Assets");
                         }
                         renderer.material.shaderGraphAsset = asset;
+                        // Before v20, a non-empty graph asset was the only persisted indication
+                        // that the material used a Shader Graph.
+                        if (version < MaterialShaderSourceFormatVersion && !asset.empty()) {
+                            renderer.material.shaderSource = MaterialShaderSource::ShaderGraph;
+                        }
                     }
                     renderer.material.pbr = readMaterial(input, version);
                     renderer.material.synchronizeRenderStateFromPbr();

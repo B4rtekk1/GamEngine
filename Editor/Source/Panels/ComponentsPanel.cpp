@@ -193,21 +193,17 @@ bool ComponentsPanel::draw(Engine::ScenePreset &scene, Engine::Assets::Content& 
 
         ImGui::Separator();
         constexpr const char* shaderTypes[] = {"Built-in", "Shader Graph"};
-        int shaderType = renderer.material.shaderGraphAsset.empty() ? 0 : 1;
+        int shaderType = static_cast<int>(renderer.material.shaderSource);
         if (ImGui::Combo("Shader Type##mesh-material", &shaderType, shaderTypes, std::size(shaderTypes))) {
-            if (shaderType == 0) {
+            renderer.material.shaderSource = static_cast<Engine::MaterialShaderSource>(shaderType);
+            if (renderer.material.shaderSource == Engine::MaterialShaderSource::BuiltIn) {
                 renderer.material.shaderGraphAsset.clear();
                 renderer.material.shaderProgram = {};
                 renderer.material.shaderProgramSpirv.clear();
-                changed = true;
-            } else {
-                // A material becomes a Shader Graph material only after a graph
-                // compiles successfully.  Open its selector immediately so the
-                // choice cannot be reset on the next frame by the empty asset.
-                ImGui::OpenPopup("Select Shader Graph##mesh-material");
             }
+            changed = true;
         }
-        if (shaderType == 0) {
+        if (renderer.material.shaderSource == Engine::MaterialShaderSource::BuiltIn) {
             constexpr const char* shaders[] = {"Standard PBR", "Unlit", "Hologram", "Water"};
             int shader = static_cast<int>(renderer.material.shader);
             if (ImGui::Combo("Shader##mesh-material", &shader, shaders, std::size(shaders))) {
@@ -217,18 +213,22 @@ bool ComponentsPanel::draw(Engine::ScenePreset &scene, Engine::Assets::Content& 
         } else {
             ImGui::TextDisabled("Shader Graph");
             const std::string graphLabel = renderer.material.shaderGraphAsset.empty()
-                                               ? "Select or drop a .shadergraph asset"
+                                               ? "None"
                                                : renderer.material.shaderGraphAsset.generic_string();
             const auto assignShaderGraph = [&](const std::filesystem::path& graphPath) {
+                renderer.material.shaderSource = Engine::MaterialShaderSource::ShaderGraph;
+                renderer.material.shaderGraphAsset = graphPath;
+                renderer.material.shaderProgram = {};
+                renderer.material.shaderProgramSpirv.clear();
+                changed = true;
                 const auto templatePath = shaderSourceDirectory / "Forward/forward_pbr.slang";
                 const auto generatedDirectory = content.assetRoot().parent_path() / "Library/ShaderGraphs";
                 auto candidate = renderer.material;
-                candidate.shaderGraphAsset = graphPath;
                 const auto result = Engine::ShaderGraphMaterialCompiler{}.resolve(
                     candidate, content.assetRoot(), templatePath, generatedDirectory);
                 if (result.succeeded()) {
-                    renderer.material = std::move(candidate);
-                    changed = true;
+                    renderer.material.shaderProgram = candidate.shaderProgram;
+                    renderer.material.shaderProgramSpirv = std::move(candidate.shaderProgramSpirv);
                     return true;
                 }
                 std::string error{"Could not compile Shader Graph"};

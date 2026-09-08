@@ -283,6 +283,7 @@ TEST(SceneSerializer, RoundTripsCubeActorTransformAndMaterial) {
     actor.setRotation({10.0F, 20.0F, 30.0F});
     actor.setScale({2.0F, 3.0F, 4.0F});
     source.editor().patch<Engine::MeshRendererComponent>(source.findEntity(actor.id()), [](auto& renderer) {
+        renderer.material.shaderSource = Engine::MaterialShaderSource::ShaderGraph;
         renderer.material.shaderGraphAsset = "Shaders/AnimatedSphere.shadergraph";
         renderer.material.shaderProgram = 42;
         renderer.material.shaderProgramSpirv = "Library/ShaderGraphs/generated_42.spv";
@@ -305,9 +306,34 @@ TEST(SceneSerializer, RoundTripsCubeActorTransformAndMaterial) {
     EXPECT_FLOAT_EQ(renderer.material.pbr.metallic, 0.6F);
     EXPECT_FLOAT_EQ(renderer.material.pbr.roughness, 0.3F);
     EXPECT_EQ(renderer.material.pbr.alphaMode, Engine::AlphaMode::Blend);
+    EXPECT_EQ(renderer.material.shaderSource, Engine::MaterialShaderSource::ShaderGraph);
     EXPECT_EQ(renderer.material.shaderGraphAsset, "Shaders/AnimatedSphere.shadergraph");
     EXPECT_EQ(renderer.material.shaderProgram, 0U);
     EXPECT_TRUE(renderer.material.shaderProgramSpirv.empty());
+}
+
+TEST(SceneSerializer, PreservesShaderGraphSourceWithoutAsset) {
+    const auto path = std::filesystem::temp_directory_path() / "gameengine-shader-graph-source-test.scene";
+    std::error_code error;
+    std::filesystem::remove(path, error);
+
+    Engine::Scene source;
+    const auto actor = source.createCube("Unassigned Shader Graph");
+    source.editor().patch<Engine::MeshRendererComponent>(source.findEntity(actor.id()), [](auto& renderer) {
+        renderer.material.shaderSource = Engine::MaterialShaderSource::ShaderGraph;
+    });
+    ASSERT_NO_THROW(source.save(path));
+
+    Engine::Scene loaded;
+    ASSERT_NO_THROW(loaded.load(path));
+    std::filesystem::remove(path, error);
+    const auto restored = loaded.findActor("Unassigned Shader Graph");
+    ASSERT_TRUE(restored.valid());
+    const auto entity = loaded.findEntity(restored.id());
+    const auto& renderer = loaded.editor().read<Engine::MeshRendererComponent>(entity);
+    EXPECT_EQ(renderer.material.shaderSource, Engine::MaterialShaderSource::ShaderGraph);
+    EXPECT_TRUE(renderer.material.shaderGraphAsset.empty());
+    EXPECT_EQ(renderer.material.shaderProgram, 0U);
 }
 
 TEST(SceneSerializer, StoresTerrainSamplesInLosslessBinarySidecar) {

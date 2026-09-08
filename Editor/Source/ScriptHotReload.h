@@ -78,7 +78,7 @@ namespace Editor {
                 build_ = std::async(std::launch::async,
                                     [buildDirectory, buildConfiguration] {
                     const std::string build = "cmake --build \"" + buildDirectory +
-                                               "\" --target GameScripts" +
+                                               "\" --target GameScriptsForEditor" +
                                                (buildConfiguration.empty() ? "" : " --config " + buildConfiguration) +
                                                " --parallel";
                     return std::system(build.c_str());

@@ -19,8 +19,13 @@ gameengine_enable_sanitizers(Player)
 gameengine_copy_runtime_dependencies(Player)
 if(TARGET Editor)
     add_custom_target(GameScriptsForEditor
-        COMMAND ${CMAKE_COMMAND} -E copy_if_different $<TARGET_FILE:GameScripts> $<TARGET_FILE_DIR:Editor>
-        DEPENDS GameScripts COMMENT "Copying game scripts for explicit Editor hot-reload testing")
+        COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_FILE_DIR:Editor>"
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "$<TARGET_FILE:GameScripts>"
+            "$<TARGET_FILE_DIR:Editor>/GameScripts.dll"
+        DEPENDS GameScripts
+        COMMENT "Building and copying game scripts for Editor")
+    add_dependencies(Editor GameScriptsForEditor)
 endif()
 add_custom_target(GameProjectAssets
     COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_FILE_DIR:Player>/shaders"

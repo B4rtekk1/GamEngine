@@ -328,7 +328,14 @@
                         });
                     const bool usesFoliagePipeline = overrideUsesFoliagePipeline || meshUsesFoliagePipeline;
                     const auto resolveShaderSlot = [&]() {
-                        if (renderer.material.shaderProgram == 0) return static_cast<std::uint32_t>(materialShaderIndex(renderer.material.shader));
+                        if (renderer.material.shaderSource == MaterialShaderSource::BuiltIn) {
+                            return static_cast<std::uint32_t>(materialShaderIndex(renderer.material.shader));
+                        }
+                        // An incomplete or failed Shader Graph keeps its authoring state but
+                        // renders with a safe built-in fallback until it cooks successfully.
+                        if (renderer.material.shaderProgram == 0) {
+                            return static_cast<std::uint32_t>(materialShaderIndex(MaterialShader::StandardPBR));
+                        }
                         if (renderer.material.shaderProgramSpirv.empty()) throw std::runtime_error("Shader Graph material has no cooked SPIR-V module");
                         return forwardPass.registerShaderGraph(ShaderGraphProgram{renderer.material.shaderProgram, {}, renderer.material.shaderProgramSpirv}, renderer.material.renderState);
                     };
