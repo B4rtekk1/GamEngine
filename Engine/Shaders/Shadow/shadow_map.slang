@@ -72,7 +72,7 @@ struct ShadowFragmentInput
 void fragmentMain(ShadowFragmentInput input)
 {
     MaterialData material = materials[input.materialIndex];
-    float alpha = 1.0;
+    float alpha = material.roughnessAmbientOcclusion.w;
     if (material.textureIndices.x >= 0)
         alpha *= materialTextures[NonUniformResourceIndex(material.textureIndices.x)].Sample(input.texCoord).a;
     // Must match forward_pbr: uncooked Quixel foliage commonly carries its

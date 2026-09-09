@@ -17,6 +17,8 @@
 #include <glm/gtc/type_ptr.hpp>
 
 #include <array>
+#include <algorithm>
+#include <cctype>
 #include <cmath>
 #include <cstdint>
 #include <fstream>
@@ -48,6 +50,57 @@ using GltfData = std::unique_ptr<cgltf_data, decltype(&cgltf_free)>;
     const auto index = view.texture->image - data.images;
     if (index < 0 || static_cast<cgltf_size>(index) >= data.images_count) return -1;
     return static_cast<std::int32_t>(index);
+}
+
+[[nodiscard]] std::string lower_label(const char* label) {
+    if (label == nullptr) return {};
+    std::string result{label};
+    std::ranges::transform(result, result.begin(), [](const unsigned char character) {
+        return static_cast<char>(std::tolower(character));
+    });
+    return result;
+}
+
+[[nodiscard]] std::string lower_image_label(const cgltf_image& image) {
+    return lower_label(image.name != nullptr ? image.name : image.uri);
+}
+
+[[nodiscard]] bool contains_any(const std::string_view value,
+                                const std::initializer_list<std::string_view> needles) {
+    return std::ranges::any_of(needles, [&](const std::string_view needle) {
+        return value.find(needle) != std::string_view::npos;
+    });
+}
+
+// Fab packages sometimes retain their auxiliary maps in the glTF image table
+// without a core glTF texture slot for them.  Resolve those maps by their
+// published Quixel suffixes.  Ambiguous maps are deliberately ignored: it is
+// safer than assigning one material's opacity to another material.
+[[nodiscard]] std::int32_t named_quixel_image(const cgltf_data& data,
+                                              const cgltf_material& material,
+                                              const std::initializer_list<std::string_view> suffixes) {
+    std::int32_t result = -1;
+    const std::string materialLabel = lower_label(material.name);
+    for (cgltf_size i = 0; i < data.images_count; ++i) {
+        const std::string label = lower_image_label(data.images[i]);
+        if (!contains_any(label, suffixes)) continue;
+        // Single-material assets are unambiguous.  For multi-material assets,
+        // accept only a map whose file name names the material as well.
+        if (data.materials_count != 1 &&
+            (materialLabel.empty() || label.find(materialLabel) == std::string::npos)) continue;
+        if (result >= 0) return -1;
+        result = static_cast<std::int32_t>(i);
+    }
+    return result;
+}
+
+[[nodiscard]] bool is_foliage_label(const cgltf_material& material) {
+    if (material.name == nullptr) return false;
+    std::string label{material.name};
+    std::ranges::transform(label, label.begin(), [](const unsigned char character) {
+        return static_cast<char>(std::tolower(character));
+    });
+    return contains_any(label, {"foliage", "grass", "leaf", "plant", "thatch", "vegetation"});
 }
 
 [[nodiscard]] std::vector<std::uint8_t> decode_base64(std::string_view source) {
@@ -175,11 +228,44 @@ void load_materials(const cgltf_data& data, Mesh& mesh) {
                                   source.emissive_factor[2], 1.0F};
         material.emissiveIntensity = source.has_emissive_strength
             ? source.emissive_strength.emissive_strength : 1.0F;
+        if (source.has_specular) {
+            material.specularTexture = image_index(data, source.specular.specular_texture);
+            material.specular = source.specular.specular_factor;
+        }
+        if (source.has_diffuse_transmission) {
+            material.translucencyTexture = image_index(
+                data, source.diffuse_transmission.diffuse_transmission_color_texture);
+            material.translucency = source.diffuse_transmission.diffuse_transmission_factor;
+        }
+
+        // These maps have no core glTF material slots.  Fab exports commonly
+        // keep them as named images, so resolve their Quixel naming convention
+        // before handing the material to the renderer.
+        if (material.opacityTexture < 0)
+            material.opacityTexture = named_quixel_image(data, source, {"opacity", "_op."});
+        if (material.translucencyTexture < 0)
+            material.translucencyTexture = named_quixel_image(data, source, {"translucency", "_trans."});
+        if (material.translucencyTexture >= 0 && material.translucency == 0.0F)
+            material.translucency = 1.0F;
+        material.displacementTexture = named_quixel_image(data, source, {"displacement", "height", "_disp."});
+        if (material.specularTexture < 0)
+            material.specularTexture = named_quixel_image(data, source, {"specular", "_spec."});
+
         material.alphaMode = source.alpha_mode == cgltf_alpha_mode_mask ? AlphaMode::Mask :
                              source.alpha_mode == cgltf_alpha_mode_blend ? AlphaMode::Blend :
                              AlphaMode::Opaque;
         material.alphaCutoff = source.alpha_mode == cgltf_alpha_mode_mask ? source.alpha_cutoff : 0.5F;
         material.doubleSided = source.double_sided != 0;
+        // An explicit opacity texture is a cutout mask even when the exporter
+        // omitted glTF's alphaMode.  This is the normal Quixel vegetation path.
+        const bool foliage = is_foliage_label(source) ||
+            (material.opacityTexture >= 0 && (material.doubleSided || data.materials_count == 1));
+        if (foliage) {
+            material.shadingModel = MaterialShadingModel::Foliage;
+            material.vertexColorUsage = VertexColorUsage::FoliageData;
+            material.doubleSided = true;
+            if (material.alphaMode == AlphaMode::Opaque) material.alphaMode = AlphaMode::Mask;
+        }
         mesh.materials.push_back(material);
     }
 }

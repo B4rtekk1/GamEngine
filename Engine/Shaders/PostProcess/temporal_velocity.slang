@@ -106,7 +106,7 @@ FragmentOutput fragmentMain(FragmentInput input)
     MaterialData material = materials[input.materialIndex];
     if (material.textureIndices.x >= 0 || material.auxiliaryTextureIndices.y >= 0)
     {
-        float alpha = 1.0;
+        float alpha = material.roughnessAmbientOcclusion.w;
         if (material.textureIndices.x >= 0)
             alpha *= materialTextures[NonUniformResourceIndex(material.textureIndices.x)].Sample(input.texCoord).a;
         if (material.auxiliaryTextureIndices.y >= 0)

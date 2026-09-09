@@ -11,6 +11,9 @@ namespace Engine {
     // cooker converts DirectX assets before they reach this structure.
     enum class NormalConvention : std::uint8_t { OpenGL, DirectX };
     enum class MaterialShadingModel : std::uint8_t { Standard, Foliage };
+    // COLOR_0 is normally an albedo multiplier in glTF, but vegetation
+    // exporters commonly store wind and per-leaf masks in it instead.
+    enum class VertexColorUsage : std::uint8_t { Albedo, FoliageData, TerrainWeights };
 
     // Values follow the metallic/roughness workflow used by glTF.
     struct PBRMaterial {
@@ -45,6 +48,7 @@ namespace Engine {
         float ior{1.5F};
         NormalConvention normalConvention{NormalConvention::OpenGL};
         MaterialShadingModel shadingModel{MaterialShadingModel::Standard};
+        VertexColorUsage vertexColorUsage{VertexColorUsage::Albedo};
         // Terrain uses four albedo layers blended by the vertex splat weights.
         std::array<std::int32_t, 4> terrainLayerTextures{-1, -1, -1, -1};
         bool terrainLayered{false};

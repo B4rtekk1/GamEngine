@@ -84,10 +84,11 @@
             };
             const int materialFlags = (source.doubleSided ? 1 : 0) |
                 (static_cast<int>(source.alphaMode) << 1) | (source.terrainLayered ? 8 : 0) |
-                (source.shadingModel == MaterialShadingModel::Foliage ? 16 : 0);
+                (source.shadingModel == MaterialShadingModel::Foliage ? 16 : 0) |
+                (source.vertexColorUsage == VertexColorUsage::FoliageData ? 32 : 0);
             return {
                 glm::vec4{source.baseColor.r(), source.baseColor.g(), source.baseColor.b(), source.metallic},
-                glm::vec4{source.roughness, source.aoStrength, source.alphaCutoff, 0.0F},
+                glm::vec4{source.roughness, source.aoStrength, source.alphaCutoff, source.baseColor.a()},
                 glm::ivec4{textureIndex(source.baseColorTexture), textureIndex(source.metallicRoughnessTexture),
                            textureIndex(source.normalTexture), materialFlags},
                 glm::ivec4{textureIndex(source.terrainLayerTextures[0]), textureIndex(source.terrainLayerTextures[1]),

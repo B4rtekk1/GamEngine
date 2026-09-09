@@ -127,10 +127,14 @@ ForwardFragmentOutput fragmentMain(ForwardFragmentInput input)
         vertexColor = shade;
     }
 
-    float4 baseColor = float4(vertexColor * material.baseColorMetallic.rgb, 1.0);
+    // Quixel foliage uses COLOR_0 for wind/mask data, not pigment.  Preserve
+    // glTF's usual vertex-colour modulation for every other material.
+    float3 albedoMultiplier = (material.textureIndices.w & 32) != 0 ? 1.0 : vertexColor;
+    float4 baseColor = float4(albedoMultiplier * material.baseColorMetallic.rgb,
+                              material.roughnessAmbientOcclusion.w);
     if ((material.textureIndices.w & 8) != 0)
     {
-        baseColor = float4(material.baseColorMetallic.rgb, 1.0);
+        baseColor = float4(material.baseColorMetallic.rgb, material.roughnessAmbientOcclusion.w);
         float3 weights = saturate(input.color);
         float fourthWeight = saturate(1.0 - weights.x - weights.y - weights.z);
         float4 layers = float4(weights.x, weights.y, weights.z, fourthWeight);
