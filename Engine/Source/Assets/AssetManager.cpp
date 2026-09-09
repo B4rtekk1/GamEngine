@@ -178,6 +178,12 @@ namespace Engine::Assets {
         register_default_asset_loaders(*this);
     }
 
+    AssetManager::~AssetManager() {
+        // Worker lambdas may use the manager's error handler; join them before
+        // any member storage is destroyed.
+        for (auto &job : pending_) job.wait();
+    }
+
     void AssetManager::set_asset_root(std::filesystem::path root) {
         std::scoped_lock lock(mutex_);
         asset_root_ = std::move(root);
@@ -203,6 +209,13 @@ namespace Engine::Assets {
 
     std::string AssetManager::make_key(const std::filesystem::path &path) const {
         return normalize_path(resolve(path));
+    }
+
+    std::filesystem::path AssetManager::stream_level_path(
+        const std::filesystem::path &source, const std::string_view kind, const std::uint32_t level) {
+        const auto extension = source.extension();
+        const auto stem = source.stem().string();
+        return source.parent_path() / (stem + "." + std::string(kind) + std::to_string(level) + extension.string());
     }
 
     AssetId AssetManager::make_id(std::string_view value) noexcept {
@@ -240,23 +253,51 @@ namespace Engine::Assets {
             } else { ++it;
 }
         }
+        std::erase_if(async_cache_, [](const auto &entry) {
+            return entry.second.use_count() == 1 &&
+                   entry.second->state.load(std::memory_order_acquire) != AssetLoadState::Pending;
+        });
     }
 
     void AssetManager::clear() {
         std::scoped_lock lock(mutex_);
         cache_.clear();
+        async_cache_.clear();
     }
 
     bool AssetManager::contains(AssetId id, std::type_index type) const {
         std::scoped_lock lock(mutex_);
-        return std::ranges::any_of(cache_, [id, type](const auto &entry) {
+        const auto matches = [id, type](const auto &entry) {
             return entry.first.id == id && entry.first.type == type;
-        });
+        };
+        return std::ranges::any_of(cache_, matches) || std::ranges::any_of(async_cache_, matches);
     }
 
     std::size_t AssetManager::size() const {
         std::scoped_lock lock(mutex_);
-        return cache_.size();
+        return cache_.size() + async_cache_.size();
+    }
+
+    void AssetManager::enqueue_gpu_upload(GpuUploadJob job) {
+        if (!job) return;
+        std::scoped_lock lock(mutex_);
+        gpu_uploads_.push_back(std::move(job));
+    }
+
+    std::size_t AssetManager::process_gpu_uploads(const std::size_t max_jobs) {
+        std::size_t completed{};
+        while (completed < max_jobs) {
+            GpuUploadJob job;
+            {
+                std::scoped_lock lock(mutex_);
+                if (gpu_uploads_.empty()) break;
+                job = std::move(gpu_uploads_.front());
+                gpu_uploads_.pop_front();
+            }
+            job(); // Render-thread-only Vulkan work belongs here.
+            ++completed;
+        }
+        return completed;
     }
 
     void register_default_asset_loaders(AssetManager &manager) {

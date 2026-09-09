@@ -10,6 +10,10 @@
 #include "Engine/Renderer/Geometry/Mesh.h"
 
 #include <functional>
+#include <future>
+#include <deque>
+#include <exception>
+#include <limits>
 #include <mutex>
 #include <string>
 #include <typeindex>
@@ -35,7 +39,7 @@ namespace Engine::Assets {
         explicit AssetManager(std::filesystem::path asset_root = {});
 
         /// Destroys the manager and releases its cached records.
-        ~AssetManager() = default;
+        ~AssetManager();
 
         /// Copy construction is disabled because the manager owns synchronized state.
         AssetManager(const AssetManager &) = delete;
@@ -59,6 +63,32 @@ namespace Engine::Assets {
 
         [[nodiscard]] AssetHandle<TextureAsset> loadTexture(const std::filesystem::path& path) {
             return load<TextureAsset>(path, AssetType::Texture2D);
+        }
+
+        [[nodiscard]] AssetHandle<::Engine::Mesh> loadMeshAsync(const std::filesystem::path& path) {
+            return load_async<::Engine::Mesh>(path, AssetType::Mesh);
+        }
+
+        [[nodiscard]] AssetHandle<TextureAsset> loadTextureAsync(const std::filesystem::path& path) {
+            return load_async<TextureAsset>(path, AssetType::Texture2D);
+        }
+
+        /**
+         * Streams one cooked texture mip. For `rock.png`, level 0 resolves to
+         * `rock.mip0.png`; each request reads and decodes that level only.
+         */
+        [[nodiscard]] AssetHandle<TextureAsset> load_texture_mip_async(
+            const std::filesystem::path& source, std::uint32_t mip_level) {
+            return load_async<TextureAsset>(stream_level_path(source, "mip", mip_level), AssetType::Texture2D);
+        }
+
+        /**
+         * Streams one cooked mesh LOD. For `scene.glb`, level 2 resolves to
+         * `scene.lod2.glb`; each LOD owns independent geometry data.
+         */
+        [[nodiscard]] AssetHandle<::Engine::Mesh> load_mesh_lod_async(
+            const std::filesystem::path& source, std::uint32_t lod_level) {
+            return load_async<::Engine::Mesh>(stream_level_path(source, "lod", lod_level), AssetType::Mesh);
         }
 
 
@@ -198,6 +228,72 @@ namespace Engine::Assets {
             return load<T>(std::move(path), type);
         }
 
+        /** Starts CPU loading on a worker and immediately returns a pending handle. */
+        template<typename T>
+        AssetHandle<T> load_async(const std::filesystem::path& path, AssetType type = AssetType::Unknown) {
+            const auto key = make_key(path);
+            const AssetId id = make_id(key); //NOLINT
+            const auto typeIndex = std::type_index(typeid(T));
+            const CacheKey cacheKey{id, typeIndex, key};
+            {
+                std::scoped_lock lock(mutex_);
+                if (const auto it = async_cache_.find(cacheKey); it != async_cache_.end())
+                    return AssetHandle<T>(id, it->second);
+            }
+
+            const auto absolutePath = resolve(path);
+            std::error_code error;
+            if (!std::filesystem::is_regular_file(absolutePath, error)) {
+                report("Asset does not exist: " + absolutePath.string()); return {};
+            }
+            AssetMetadata metadata{id, type, absolutePath,
+                std::filesystem::last_write_time(absolutePath, error), std::filesystem::file_size(absolutePath, error)};
+            if (error) { report("Could not read asset metadata: " + absolutePath.string()); return {}; }
+
+            LoaderErased loader;
+            auto slot = std::make_shared<AssetSlot>();
+            bool loaderMissing = false;
+            {
+                std::scoped_lock lock(mutex_);
+                if (const auto it = async_cache_.find(cacheKey); it != async_cache_.end())
+                    return AssetHandle<T>(id, it->second);
+                const auto loaderIt = loaders_.find(CacheKey{static_cast<AssetId>(type), typeIndex}); //NOLINT
+                if (loaderIt == loaders_.end()) {
+                    slot->state.store(AssetLoadState::Failed, std::memory_order_release);
+                    loaderMissing = true;
+                } else {
+                    loader = loaderIt->second;
+                    async_cache_.emplace(cacheKey, slot);
+                    pending_.push_back(std::async(std::launch::async, [this, loader = std::move(loader), absolutePath, metadata, slot] {
+                        std::shared_ptr<const void> value;
+                        try {
+                            value = loader(absolutePath, metadata);
+                        } catch (const std::exception &exception) {
+                            report("Loader threw for asset " + absolutePath.string() + ": " + exception.what());
+                        } catch (...) {
+                            report("Loader threw for asset: " + absolutePath.string());
+                        }
+                        {
+                            std::scoped_lock slotLock(slot->mutex);
+                            slot->value = std::move(value);
+                            slot->state.store(slot->value ? AssetLoadState::Ready : AssetLoadState::Failed,
+                                              std::memory_order_release);
+                        }
+                        if (slot->state.load(std::memory_order_acquire) == AssetLoadState::Failed)
+                            report("Loader failed for asset: " + absolutePath.string());
+                    }));
+                }
+            }
+            if (loaderMissing)
+                report("No loader registered for " + std::string(to_string(type)) + " and type " + typeid(T).name());
+            return AssetHandle<T>(id, std::move(slot));
+        }
+
+        using GpuUploadJob = std::function<void()>;
+        void enqueue_gpu_upload(GpuUploadJob job);
+        [[nodiscard]] std::size_t process_gpu_uploads(
+            std::size_t max_jobs = std::numeric_limits<std::size_t>::max());
+
         /** Reloads an asset unconditionally, replacing its cached value. */
         template<typename T>
         AssetHandle<T> reload(const std::filesystem::path& path, AssetType type = AssetType::Unknown) {
@@ -219,6 +315,9 @@ namespace Engine::Assets {
             std::erase_if(cache_, [id, type](const auto &entry) {
                 return entry.first.id == id && entry.first.type == type;
             });
+            std::erase_if(async_cache_, [id, type](const auto &entry) {
+                return entry.first.id == id && entry.first.type == type;
+            });
         }
 
         /// Removes cached records that are no longer externally referenced.
@@ -227,7 +326,7 @@ namespace Engine::Assets {
         /// Removes every cached asset record.
         void clear();
 
-        /** @brief Checks whether a typed asset is present in the cache. */
+        /** @brief Checks whether a typed asset is present in either cache. */
         [[nodiscard]] bool contains(AssetId id, std::type_index type) const; //NOLINT
 
         /** @brief Returns the number of cached asset records. */
@@ -278,6 +377,9 @@ namespace Engine::Assets {
 
         [[nodiscard]] std::string make_key(const std::filesystem::path &path) const;
 
+        [[nodiscard]] static std::filesystem::path stream_level_path(
+            const std::filesystem::path &source, std::string_view kind, std::uint32_t level);
+
         void report(const std::string &message) const;
 
         mutable std::mutex mutex_;
@@ -285,6 +387,9 @@ namespace Engine::Assets {
         ErrorHandler error_handler_;
         std::unordered_map<CacheKey, Record, CacheKeyHash> cache_;
         std::unordered_map<CacheKey, LoaderErased, CacheKeyHash> loaders_;
+        std::unordered_map<CacheKey, std::shared_ptr<AssetSlot>, CacheKeyHash> async_cache_;
+        std::deque<std::future<void>> pending_;
+        std::deque<GpuUploadJob> gpu_uploads_;
     };
 
     /**
