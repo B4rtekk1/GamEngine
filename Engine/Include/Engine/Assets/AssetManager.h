@@ -10,7 +10,8 @@
 #include "Engine/Renderer/Geometry/Mesh.h"
 
 #include <functional>
-#include <future>
+#include "Engine/Core/TaskScheduler.h"
+
 #include <deque>
 #include <exception>
 #include <limits>
@@ -264,7 +265,7 @@ namespace Engine::Assets {
                 } else {
                     loader = loaderIt->second;
                     async_cache_.emplace(cacheKey, slot);
-                    pending_.push_back(std::async(std::launch::async, [this, loader = std::move(loader), absolutePath, metadata, slot] {
+                    pending_.push_back(TaskScheduler::global().schedule([this, loader = std::move(loader), absolutePath, metadata, slot] {
                         std::shared_ptr<const void> value;
                         try {
                             value = loader(absolutePath, metadata);
@@ -281,7 +282,7 @@ namespace Engine::Assets {
                         }
                         if (slot->state.load(std::memory_order_acquire) == AssetLoadState::Failed)
                             report("Loader failed for asset: " + absolutePath.string());
-                    }));
+                    }, TaskPriority::Low));
                 }
             }
             if (loaderMissing)
@@ -388,7 +389,7 @@ namespace Engine::Assets {
         std::unordered_map<CacheKey, Record, CacheKeyHash> cache_;
         std::unordered_map<CacheKey, LoaderErased, CacheKeyHash> loaders_;
         std::unordered_map<CacheKey, std::shared_ptr<AssetSlot>, CacheKeyHash> async_cache_;
-        std::deque<std::future<void>> pending_;
+        std::deque<TaskHandle> pending_;
         std::deque<GpuUploadJob> gpu_uploads_;
     };
 

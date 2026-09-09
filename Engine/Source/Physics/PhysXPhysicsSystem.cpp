@@ -1,5 +1,6 @@
 #include "Engine/Physics/PhysicsSystem.h"
 #include "Engine/Core/Transform.h"
+#include "Engine/Core/TaskScheduler.h"
 #include "Engine/ECS/Components/ColliderComponent.h"
 #include "Engine/ECS/Components/RigidbodyComponent.h"
 #include "Engine/ECS/Components/RigidbodyRuntime.h"
@@ -10,7 +11,6 @@
 
 #include <PxPhysicsAPI.h>
 #include <cooking/PxCooking.h>
-#include <extensions/PxDefaultCpuDispatcher.h>
 #include <extensions/PxDefaultStreams.h>
 #include <extensions/PxExtensionsAPI.h>
 #include <extensions/PxRigidBodyExt.h>
@@ -274,6 +274,31 @@ namespace Engine {
         bool nonZero(const Vec3 &value) noexcept {
             return value.x() != 0.0F || value.y() != 0.0F || value.z() != 0.0F;
         }
+
+        /** Bridges PhysX task submission into the engine-wide CPU pool. */
+        class PhysicsDispatcher final : public physx::PxCpuDispatcher {
+        public:
+            explicit PhysicsDispatcher(TaskScheduler& scheduler) : scheduler_(scheduler) {}
+
+            void submitTask(physx::PxBaseTask& task) override {
+                static_cast<void>(scheduler_.schedule([&task] {
+                    try {
+                        task.run();
+                    } catch (...) {
+                        task.release();
+                        throw;
+                    }
+                    task.release();
+                }, TaskPriority::High));
+            }
+
+            [[nodiscard]] physx::PxU32 getWorkerCount() const override {
+                return static_cast<physx::PxU32>(scheduler_.worker_count());
+            }
+
+        private:
+            TaskScheduler& scheduler_;
+        };
     } // namespace
 
     struct PhysicsSystem::BroadPhaseCache final {
@@ -312,7 +337,7 @@ namespace Engine {
         physx::PxFoundation *foundation{};
         physx::PxPhysics *physics{};
         physx::PxCookingParams cookingParameters{physx::PxTolerancesScale{}};
-        physx::PxDefaultCpuDispatcher *dispatcher{};
+        std::unique_ptr<PhysicsDispatcher> dispatcher;
         physx::PxScene *physicsScene{};
         Registry *registry{};
         std::uint64_t structuralRevision{};
@@ -344,14 +369,11 @@ namespace Engine {
             cookingParameters.meshPreprocessParams |= PxMeshPreprocessingFlag::eWELD_VERTICES;
             cookingParameters.meshWeldTolerance = 1.0e-4F; //NOLINT
 
-            dispatcher = PxDefaultCpuDispatcherCreate(2);
-            if (dispatcher == nullptr) {
-                fail("PxDefaultCpuDispatcherCreate failed");
-            }
+            dispatcher = std::make_unique<PhysicsDispatcher>(TaskScheduler::global());
 
             PxSceneDesc sceneDescription{scale};
             sceneDescription.gravity = {0.0F, -9.81F, 0.0F}; // NOLINT g=9.81
-            sceneDescription.cpuDispatcher = dispatcher;
+            sceneDescription.cpuDispatcher = dispatcher.get();
             sceneDescription.filterShader = PxDefaultSimulationFilterShader;
             sceneDescription.flags |= PxSceneFlag::eENABLE_ACTIVE_ACTORS;
             physicsScene = physics->createScene(sceneDescription);
@@ -378,10 +400,7 @@ namespace Engine {
                 physicsScene->release();
                 physicsScene = nullptr;
             }
-            if (dispatcher != nullptr) {
-                dispatcher->release();
-                dispatcher = nullptr;
-            }
+            dispatcher.reset();
             if (physics != nullptr) {
                 PxCloseExtensions();
                 physics->release();
@@ -414,12 +433,10 @@ namespace Engine {
         }
 
         [[nodiscard]] std::optional<Entity> entityForActor(const physx::PxRigidActor *actor) const {
-            for (const auto &[entity, record] : actors) {
-                if (record.actor == actor) {
-                    return entity;
-                }
+            if (actor == nullptr || actor->userData == nullptr) {
+                return std::nullopt;
             }
-            return std::nullopt;
+            return static_cast<Entity>(reinterpret_cast<std::uintptr_t>(actor->userData));
         }
 
         static physx::PxShape *attachGeometry(physx::PxRigidActor &actor,
@@ -703,6 +720,7 @@ namespace Engine {
             if (actor == nullptr) {
                 throw std::runtime_error("PhysX rigid actor creation failed");
             }
+            actor->userData = reinterpret_cast<void*>(static_cast<std::uintptr_t>(entity));
             if (owner.has<ColliderComponent>(entity)) {
                 const ColliderComponent &collider = owner.get<ColliderComponent>(entity);
                 if (!attachCollider(*actor, collider, transform, dynamic)) {

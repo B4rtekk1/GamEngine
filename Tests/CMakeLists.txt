@@ -7,13 +7,21 @@ FetchContent_MakeAvailable(googletest)
 # step; until then this avoids linking the renderer and its runtime setup.
 add_executable(GamEngineTests
     MathTests.cpp EcsTests.cpp GeneralTests.cpp ComponentTests.cpp UiAndLayoutTests.cpp TimeTests.cpp SceneBuilderTests.cpp ScriptRegistryTests.cpp ProjectTests.cpp GPUSceneDatabaseTests.cpp
-    ${PROJECT_SOURCE_DIR}/Engine/Source/Core/Camera.cpp ${PROJECT_SOURCE_DIR}/Engine/Source/Core/Time.cpp ${PROJECT_SOURCE_DIR}/Engine/Source/Project.cpp
+    ${PROJECT_SOURCE_DIR}/Engine/Source/Core/Camera.cpp ${PROJECT_SOURCE_DIR}/Engine/Source/Core/TaskScheduler.cpp ${PROJECT_SOURCE_DIR}/Engine/Source/Core/Time.cpp ${PROJECT_SOURCE_DIR}/Engine/Source/Project.cpp
     ${PROJECT_SOURCE_DIR}/Engine/Source/Renderer/Geometry/Terrain.cpp ${PROJECT_SOURCE_DIR}/Engine/Source/Renderer/Geometry/ProceduralCloud.cpp ${PROJECT_SOURCE_DIR}/Engine/Source/Renderer/GPUSceneDatabase.cpp
     ${PROJECT_SOURCE_DIR}/Engine/Source/UI/Canvas.cpp ${PROJECT_SOURCE_DIR}/Engine/Source/UI/RectTransform.cpp ${PROJECT_SOURCE_DIR}/Engine/Source/UI/UIBatch.cpp ${PROJECT_SOURCE_DIR}/Engine/Source/UI/Vulkan/UIFontAtlas.cpp ${PROJECT_SOURCE_DIR}/Engine/Source/UI/Vulkan/UIFontAtlasRuntime.cpp ${PROJECT_SOURCE_DIR}/Engine/Source/Scripting/ScriptRegistry.cpp)
 target_link_libraries(GamEngineTests PRIVATE GTest::gtest_main)
 target_include_directories(GamEngineTests PRIVATE "${PROJECT_SOURCE_DIR}/Engine/Include" ${GLM_INCLUDE_DIR})
 gameengine_enable_warnings(GamEngineTests)
 gameengine_enable_sanitizers(GamEngineTests)
+
+add_executable(TaskSchedulerTests
+    TaskSchedulerTests.cpp
+    ${PROJECT_SOURCE_DIR}/Engine/Source/Core/TaskScheduler.cpp)
+target_link_libraries(TaskSchedulerTests PRIVATE GTest::gtest_main)
+target_include_directories(TaskSchedulerTests PRIVATE "${PROJECT_SOURCE_DIR}/Engine/Include")
+gameengine_enable_warnings(TaskSchedulerTests)
+gameengine_enable_sanitizers(TaskSchedulerTests)
 
 add_executable(RenderGraphTests
     RenderGraphTests.cpp
@@ -44,6 +52,7 @@ gameengine_enable_warnings(ShaderGraphCompilerTests)
 gameengine_enable_sanitizers(ShaderGraphCompilerTests)
 include(GoogleTest)
 gtest_discover_tests(GamEngineTests)
+gtest_discover_tests(TaskSchedulerTests)
 gtest_discover_tests(RenderGraphTests)
 gtest_discover_tests(PhysicsMeshTests)
 gtest_discover_tests(ShaderGraphCompilerTests)

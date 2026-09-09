@@ -181,7 +181,13 @@ namespace Engine::Assets {
     AssetManager::~AssetManager() {
         // Worker lambdas may use the manager's error handler; join them before
         // any member storage is destroyed.
-        for (auto &job : pending_) job.wait();
+        for (auto &job : pending_) {
+            try {
+                job.wait();
+            } catch (...) {
+                // Asset loading reports loader failures through AssetSlot.
+            }
+        }
     }
 
     void AssetManager::set_asset_root(std::filesystem::path root) {
