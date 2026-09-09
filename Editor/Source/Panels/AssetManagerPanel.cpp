@@ -281,6 +281,9 @@ bool delete_asset_file(const Engine::ScenePreset& scene, const std::filesystem::
         error = "Could not delete asset: " + relative.generic_string();
         return false;
     }
+    if (path.extension() == ".scene") {
+        std::filesystem::remove(std::filesystem::path{path.string() + ".terrain"}, filesystemError);
+    }
     return true;
 }
 
@@ -372,7 +375,8 @@ void draw_breadcrumbs(std::filesystem::path& folder, std::filesystem::path& sele
 
 Engine::Entity AssetManagerPanel::draw(Engine::ScenePreset& scene, Engine::Assets::Content& content,
                                        const bool disabled, bool& isOpen, const bool projectIsOpen,
-                                       const std::function<void(const std::filesystem::path&)>& openShaderGraph) {
+                                       const std::function<void(const std::filesystem::path&)>& openShaderGraph,
+                                       const std::function<void(const std::filesystem::path&)>& sceneDeleted) {
     static std::filesystem::path selected;
     static std::filesystem::path selectedFolder;
     static std::filesystem::path scannedRoot;
@@ -697,6 +701,8 @@ Engine::Entity AssetManagerPanel::draw(Engine::ScenePreset& scene, Engine::Asset
         if (ImGui::Button("Delete", {120.0F, 0.0F})) {
             if (delete_asset_file(scene, root, deleteCandidate, error)) {
                 Editor::ConsolePanel::info("Deleted asset: " + deleteCandidate.generic_string());
+                if (deleteCandidate.extension() == ".scene")
+                    sceneDeleted((root / deleteCandidate).lexically_normal());
                 refresh();
             } else {
                 Editor::ConsolePanel::error(error);

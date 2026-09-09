@@ -67,6 +67,7 @@ void endTopMenu() {
 Engine::Entity drawEditorMenuBar(Engine::ScenePreset &scene, Engine::Renderer &renderer,
                                  Engine::Assets::Content& content, Engine::Project& project,
                                  bool &antialiasingChanged, bool &sceneLoaded, bool &sceneSaved,
+                                 bool &sceneDeleted,
                                  const bool playing, const bool paused, bool &playToggleRequested,
                                  bool &pauseToggleRequested, const bool canUndo,
                                  const bool canRedo, const bool canPaste,
@@ -87,8 +88,10 @@ Engine::Entity drawEditorMenuBar(Engine::ScenePreset &scene, Engine::Renderer &r
     static int antialiasingType = -1;
     static int msaaSamples = -1;
     static std::string sceneFileError;
+    static bool openDeleteScene = false;
     Engine::Entity createdEntity = Engine::NullEntity;
     sceneSaved = false;
+    sceneDeleted = false;
 
     const auto saveScene = [&](const std::filesystem::path &path) {
         if (!path.parent_path().empty()) {
@@ -219,6 +222,9 @@ Engine::Entity drawEditorMenuBar(Engine::ScenePreset &scene, Engine::Renderer &r
         if (ImGui::MenuItem("Save Scene As...", "Ctrl+Shift+S")) {
             saveSceneAs();
         }
+        if (ImGui::MenuItem("Delete Scene...", nullptr, false, EditorSceneSession::hasSavedScene())) {
+            openDeleteScene = true;
+        }
         if (ImGui::MenuItem("Open Scene...", "Ctrl+Alt+O")) {
             if (const auto path = EditorSceneSession::chooseLoadScenePath()) {
                 tryLoadScene(*path);
@@ -268,6 +274,37 @@ Engine::Entity drawEditorMenuBar(Engine::ScenePreset &scene, Engine::Renderer &r
         ImGui::Separator();
         ImGui::TextDisabled("Auto-save: every 30 seconds after changes");
         endTopMenu();
+    }
+
+    if (openDeleteScene)
+        ImGui::OpenPopup("##confirm-delete-scene");
+    if (ImGui::BeginPopupModal("##confirm-delete-scene", nullptr,
+                               ImGuiWindowFlags_AlwaysAutoResize)) {
+        ImGui::TextWrapped("Delete scene '%s'?", activeScenePath.filename().string().c_str());
+        ImGui::TextDisabled("This permanently removes the scene file from the project.");
+        ImGui::Separator();
+        if (ImGui::Button("Delete", {120.0F, 0.0F})) {
+            std::error_code error;
+            if (std::filesystem::remove(activeScenePath, error) && !error) {
+                const auto terrainPath = std::filesystem::path{activeScenePath.string() + ".terrain"};
+                std::filesystem::remove(terrainPath, error);
+                EditorSceneSession::clearSavedScene();
+                sceneDeleted = true;
+                sceneFileError.clear();
+                Editor::ConsolePanel::info("Deleted scene: " + activeScenePath.string());
+            } else {
+                sceneFileError = error ? error.message() : "Scene file does not exist";
+                Editor::ConsolePanel::error("Could not delete scene: " + sceneFileError);
+            }
+            openDeleteScene = false;
+            ImGui::CloseCurrentPopup();
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("Cancel", {120.0F, 0.0F})) {
+            openDeleteScene = false;
+            ImGui::CloseCurrentPopup();
+        }
+        ImGui::EndPopup();
     }
 
     // Keep scene navigation in the main bar: switching levels should not

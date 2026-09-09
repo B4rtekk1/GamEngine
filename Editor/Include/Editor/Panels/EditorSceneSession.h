@@ -26,6 +26,8 @@ public:
     [[nodiscard]] static std::optional<std::filesystem::path> chooseLoadProjectPath();
     /** Marks the current scene as persisted at @p path. */
     static void markSceneSaved(std::filesystem::path path);
+    /** Clears the persisted-scene association after its file was removed. */
+    static void clearSavedScene();
     [[nodiscard]] static std::uint32_t msaaSampleCount(const Engine::Renderer& renderer);
 
     static bool setPlayMode(bool play, Engine::ScenePreset& scene, std::string& snapshot,

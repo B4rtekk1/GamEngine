@@ -1,3 +1,4 @@
+#pragma once
 Renderer::~Renderer() { shutdown(); }
 
 Renderer::Renderer(RenderConfig config)

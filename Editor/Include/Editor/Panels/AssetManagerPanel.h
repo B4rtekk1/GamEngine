@@ -14,5 +14,6 @@ public:
                                                bool disabled,
                                                bool& isOpen,
                                                bool projectIsOpen,
-                                               const std::function<void(const std::filesystem::path&)>& openShaderGraph);
+                                               const std::function<void(const std::filesystem::path&)>& openShaderGraph,
+                                               const std::function<void(const std::filesystem::path&)>& sceneDeleted);
 };

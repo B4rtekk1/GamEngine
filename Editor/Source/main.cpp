@@ -489,6 +489,7 @@ int main(int argc, char** argv) {
             bool antialiasingChanged = false;
             bool sceneLoaded = false;
             bool sceneSaved = false;
+            bool sceneDeleted = false;
             bool playToggleRequested = false;
             bool pauseToggleRequested = false;
             bool undoRequested = false;
@@ -499,6 +500,7 @@ int main(int argc, char** argv) {
             bool resetHistoryRequested = false;
             if (const Engine::Entity created = drawEditorMenuBar(scene, renderer, content, project,
                                                                  antialiasingChanged, sceneLoaded, sceneSaved,
+                                                                 sceneDeleted,
                                                                  playing, paused, playToggleRequested,
                                                                  pauseToggleRequested, history.canUndo(),
                                                                  history.canRedo(), clipboard.canPaste(scene),
@@ -513,6 +515,26 @@ int main(int argc, char** argv) {
             }
             if (resetHistoryRequested) {
                 history.reset(scene);
+            }
+            if (sceneDeleted) {
+                Engine::ScenePreset emptyScene;
+                Engine::SceneSerializer::replace(scene, emptyScene);
+                scene.plane = Engine::NullEntity;
+                scene.camera = Engine::NullEntity;
+                scene.particleSystem = Engine::NullEntity;
+                scene.editorGameObjects.clear();
+                scene.editorCubes.clear();
+                scene.editorPlanes.clear();
+                scene.editorSpheres.clear();
+                scene.editorCapsules.clear();
+                scene.editorRamps.clear();
+                scene.editorLights.clear();
+                scene.editorTerrains.clear();
+                scene.editorClouds.clear();
+                history.reset(scene);
+                lastPersistedSceneRevision = scene.editor().mutationRevision();
+                setSelection(Engine::NullEntity);
+                rendererReloadPending = true;
             }
             if (!playing && undoRequested && history.undo(scene)) {
                 sceneLoaded = true;
@@ -704,6 +726,29 @@ int main(int argc, char** argv) {
                                                         Editor::ConsolePanel::error("Could not open shader graph: " +
                                                                                     std::string{error.what()});
                                                     }
+                                                },
+                                                [&](const std::filesystem::path& deletedPath) {
+                                                    if (deletedPath != EditorSceneSession::scenePath()) return;
+
+                                                    EditorSceneSession::clearSavedScene();
+                                                    Engine::ScenePreset emptyScene;
+                                                    Engine::SceneSerializer::replace(scene, emptyScene);
+                                                    scene.plane = Engine::NullEntity;
+                                                    scene.camera = Engine::NullEntity;
+                                                    scene.particleSystem = Engine::NullEntity;
+                                                    scene.editorGameObjects.clear();
+                                                    scene.editorCubes.clear();
+                                                    scene.editorPlanes.clear();
+                                                    scene.editorSpheres.clear();
+                                                    scene.editorCapsules.clear();
+                                                    scene.editorRamps.clear();
+                                                    scene.editorLights.clear();
+                                                    scene.editorTerrains.clear();
+                                                    scene.editorClouds.clear();
+                                                    history.reset(scene);
+                                                    lastPersistedSceneRevision = scene.editor().mutationRevision();
+                                                    setSelection(Engine::NullEntity);
+                                                    rendererReloadPending = true;
                                                 });
                     created != Engine::NullEntity) {
                     setSelection(created);

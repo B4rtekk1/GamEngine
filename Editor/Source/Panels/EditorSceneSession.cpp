@@ -120,6 +120,11 @@ void EditorSceneSession::markSceneSaved(std::filesystem::path path) {
     sceneHasBeenSaved = true;
 }
 
+void EditorSceneSession::clearSavedScene() {
+    activeScenePath.clear();
+    sceneHasBeenSaved = false;
+}
+
 /**
  * @brief Converts the renderer's MSAA level to a numeric sample count.
  *
