@@ -20,9 +20,9 @@ struct RendererFrameData
     float4 windSourcePositionRange;
     float4 windGustFrequencyTime;
     uint shadowEnabled;
+    uint shadowQuality;
     uint materialSlots;
     uint selectedInstance;
-    uint materialSlotsPadding;
     uint localLightCount;
     LocalLightData localLights[32];
 };

@@ -254,7 +254,8 @@
                 frameData.wind.directionStrength, frameData.wind.sourcePositionRange,
                 frameData.wind.gustFrequencyTime,
                 mainLightShadows ? 1u : 0u,
-                materialSlots, editorSelectedRenderable, 0u, frameData.lightCount, frameData.lights};
+                static_cast<std::uint32_t>(shadowQuality),
+                materialSlots, editorSelectedRenderable, frameData.lightCount, frameData.lights};
             uniformBuffers[frame].update(&data, sizeof(data));
             previousGameView = currentView;
             previousGameProjection = currentProjection;
@@ -300,7 +301,8 @@
                 frameData.wind.directionStrength, frameData.wind.sourcePositionRange,
                 frameData.wind.gustFrequencyTime,
                 mainLightShadows ? 1u : 0u,
-                materialSlots, editorSelectedRenderable, 0u, frameData.lightCount, frameData.lights};
+                static_cast<std::uint32_t>(shadowQuality),
+                materialSlots, editorSelectedRenderable, frameData.lightCount, frameData.lights};
             sceneUniformBuffers[frame].update(&data, sizeof(data));
         }
 

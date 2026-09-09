@@ -12,6 +12,18 @@ namespace Engine {
         TAA,
     };
 
+    /**
+     * Filter budget for directional virtual shadow maps.
+     * Low uses one comparison per level; Medium uses 2x2 near the camera;
+     * High uses 3x3/2x2/1x from near to far; Ultra preserves legacy 3x3 PCF.
+     */
+    enum class ShadowQuality : std::uint8_t {
+        Low,
+        Medium,
+        High,
+        Ultra,
+    };
+
     struct RenderFeatures final {
         bool shadows = false;
         bool instancedRendering = true;
@@ -33,6 +45,7 @@ namespace Engine {
         RenderFeatures features{};
         AntialiasingLevel antialiasing = AntialiasingLevel::Off;
         GrassRenderSettings grass{};
+        ShadowQuality shadowQuality = ShadowQuality::High;
     };
 
     /** Opaque viewport texture handle used by editor integrations. */

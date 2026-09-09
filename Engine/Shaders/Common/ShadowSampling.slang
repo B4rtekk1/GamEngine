@@ -6,6 +6,10 @@ static const uint PHYSICAL_PAGES_PER_AXIS = 16;
 static const uint PAGE_RESOLUTION = 256;
 static const uint VIRTUAL_RESOLUTION = VIRTUAL_PAGES_PER_AXIS * PAGE_RESOLUTION;
 static const uint INVALID_SHADOW_PAGE = 0xffffffff;
+static const uint SHADOW_QUALITY_LOW = 0;
+static const uint SHADOW_QUALITY_MEDIUM = 1;
+static const uint SHADOW_QUALITY_HIGH = 2;
+static const uint SHADOW_QUALITY_ULTRA = 3;
 
 // Resolves one virtual texel to the centre of its physical atlas texel.
 bool resolveVirtualShadowTexel(int2 texel, uint level,
@@ -37,7 +41,7 @@ bool virtualShadowAtlasUv(float2 virtualPixel, uint level,
 
 float sampleVirtualShadowLevel(Sampler2DShadow shadowMap, float3 worldPosition,
                                float4x4 lightSpace, uint level,
-                               StructuredBuffer<uint4> pageTable, out bool resident,
+                               StructuredBuffer<uint4> pageTable, uint shadowQuality, out bool resident,
                                out float clipEdge)
 {
     float4 lightSpacePosition = mul(float4(worldPosition, 1.0), lightSpace);
@@ -54,6 +58,13 @@ float sampleVirtualShadowLevel(Sampler2DShadow shadowMap, float3 worldPosition,
 
     float depthSlope = max(abs(ddx(currentDepth)), abs(ddy(currentDepth)));
     float bias = max(MIN_SHADOW_BIAS, SLOPE_SHADOW_BIAS * depthSlope);
+    // Coarse clipmaps already cover many metres per texel. Avoid spending the
+    // same PCF budget there as in the close, visually dominant level.
+    const bool useSingleTap = shadowQuality == SHADOW_QUALITY_LOW ||
+                              (shadowQuality != SHADOW_QUALITY_ULTRA && level >= 2);
+    if (useSingleTap)
+        return 1.0 - shadowMap.SampleCmpLevelZero(centerAtlasUv, currentDepth - bias);
+
     const float2 virtualPixel = uv * float(VIRTUAL_RESOLUTION);
     // virtualShadowAtlasUv resolves a texel centre for page lookup. Reapply
     // the fractional offset so each manual PCF tap selects its virtual texel.
@@ -64,24 +75,26 @@ float sampleVirtualShadowLevel(Sampler2DShadow shadowMap, float3 worldPosition,
     const uint2 localPixel = centerPixel % PAGE_RESOLUTION;
     const float atlasResolution = float(PHYSICAL_PAGES_PER_AXIS * PAGE_RESOLUTION);
 
-    // Use the same 3x3 tent at every clip level. Coarser levels already have
-    // fewer texels per metre; reducing them to 2x2 made transitions visibly
-    // blockier when the shader fell back from a detailed page.
-    // Keep the virtual-page-aware slow path for the one-texel border, but do
-    // not pay for it in the common case.
+    // High uses 3x3 only at level zero; Medium uses 2x2 at all near levels;
+    // Ultra retains the original 3x3 tent at every level. Keep page-aware
+    // lookup at borders, while the common interior path uses only arithmetic.
+    const bool useTent3x3 = shadowQuality == SHADOW_QUALITY_ULTRA ||
+                             (shadowQuality == SHADOW_QUALITY_HIGH && level == 0);
     static const float kernel[3] = {1.0, 2.0, 1.0};
     const bool kernelFitsCenterPage = all(localPixel >= uint2(1, 1)) &&
                                       all(localPixel < uint2(PAGE_RESOLUTION - 1,
                                                               PAGE_RESOLUTION - 1));
     float filteredShadow = 0.0;
     float totalWeight = 0.0;
-    [unroll]
-    for (int y = -1; y <= 1; ++y)
+    const int firstTap = useTent3x3 ? -1 : 0;
+    const int lastTap = 1;
+    [loop]
+    for (int y = firstTap; y <= lastTap; ++y)
     {
-        [unroll]
-        for (int x = -1; x <= 1; ++x)
+        [loop]
+        for (int x = firstTap; x <= lastTap; ++x)
         {
-            const float weight = kernel[x + 1] * kernel[y + 1];
+            const float weight = useTent3x3 ? kernel[x + 1] * kernel[y + 1] : 1.0;
             float2 tapAtlasUv;
             if (kernelFitsCenterPage)
                 tapAtlasUv = centerAtlasUv +
@@ -103,7 +116,8 @@ float sampleVirtualShadowLevel(Sampler2DShadow shadowMap, float3 worldPosition,
 }
 
 float sampleVirtualShadow(Sampler2DShadow shadowMap, float3 worldPosition,
-                          float4x4 clipMatrices[4], StructuredBuffer<uint4> pageTable)
+                          float4x4 clipMatrices[4], StructuredBuffer<uint4> pageTable,
+                          uint shadowQuality)
 {
     bool resident;
     [unroll]
@@ -112,7 +126,7 @@ float sampleVirtualShadow(Sampler2DShadow shadowMap, float3 worldPosition,
         float clipEdge;
         float shadow = sampleVirtualShadowLevel(shadowMap, worldPosition,
                                                  clipMatrices[level], level,
-                                                 pageTable, resident, clipEdge);
+                                                 pageTable, shadowQuality, resident, clipEdge);
         if (resident)
         {
             // Fade through the outer fifth of the clipmap. Do not blend with
@@ -123,7 +137,7 @@ float sampleVirtualShadow(Sampler2DShadow shadowMap, float3 worldPosition,
                 float nextClipEdge;
                 float nextShadow = sampleVirtualShadowLevel(
                     shadowMap, worldPosition, clipMatrices[level + 1], level + 1,
-                    pageTable, nextResident, nextClipEdge);
+                    pageTable, shadowQuality, nextResident, nextClipEdge);
                 if (nextResident)
                     shadow = lerp(shadow, nextShadow, smoothstep(0.75, 0.95, clipEdge));
             }

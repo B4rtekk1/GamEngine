@@ -3,6 +3,7 @@ Renderer::~Renderer() { shutdown(); }
 
 Renderer::Renderer(RenderConfig config)
     : optimizationFeatures_(config.features), antialiasingLevel_(config.antialiasing),
+      shadowQuality_(config.shadowQuality),
       grassSettings_(config.grass),
       state_(std::make_unique<State>()) {}
 
@@ -22,10 +23,18 @@ AntialiasingLevel Renderer::antialiasingLevel() const noexcept {
     return antialiasingLevel_;
 }
 
+void Renderer::setShadowQuality(const ShadowQuality quality) noexcept {
+    shadowQuality_ = quality;
+}
+
+ShadowQuality Renderer::shadowQuality() const noexcept {
+    return shadowQuality_;
+}
+
 void Renderer::initializeCore(Scene& scene, void* nativeWindow) {
     auto* window = static_cast<SDL_Window*>(nativeWindow);
     if (backend_) throw std::logic_error("Renderer is already initialized");
-    backend_ = std::make_unique<Backend>(scene, window, optimizationFeatures_, antialiasingLevel_, grassSettings_,
+    backend_ = std::make_unique<Backend>(scene, window, optimizationFeatures_, antialiasingLevel_, shadowQuality_, grassSettings_,
                                          state_->assetManager, state_->forwardPass, state_->skyPass,
                                          state_->tonemapPass, state_->temporalAaPass, state_->bloomPass, state_->particlePipeline,
                                          state_->canvasRenderer);

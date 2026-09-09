@@ -75,6 +75,7 @@ float4 fragmentMain(FragmentInput input) : SV_Target
     float3 lightDirection = normalize(-frame.lightDirectionIntensity.xyz);
     float diffuse = saturate(dot(normal, lightDirection) * 0.5 + 0.5);
     float shadow = frame.shadowEnabled != 0 ? sampleVirtualShadow(
-        shadowMap, input.worldPosition, frame.shadowClipMatrices, shadowPageTable) : 0.0;
+        shadowMap, input.worldPosition, frame.shadowClipMatrices, shadowPageTable,
+        frame.shadowQuality) : 0.0;
     return float4(albedo.rgb * (0.20 + diffuse * frame.lightDirectionIntensity.w * (1.0 - shadow) * frame.lightColor.rgb), 1.0);
 }

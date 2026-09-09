@@ -294,7 +294,7 @@ ForwardFragmentOutput fragmentMain(ForwardFragmentInput input)
     float3 diffuse = (1.0 - fresnel) * (1.0 - metallic) * albedo / PBR_PI;
     float shadow = frame.shadowEnabled != 0
         ? sampleVirtualShadow(shadowMap, input.worldPosition, frame.shadowClipMatrices,
-                              shadowPageTable) : 0.0;
+                              shadowPageTable, frame.shadowQuality) : 0.0;
     float3 direct = (diffuse + specular) * frame.lightDirectionIntensity.w *
                     frame.lightColor.rgb * nDotL * (1.0 - shadow);
     for (uint lightIndex = 0; lightIndex < frame.localLightCount; ++lightIndex)

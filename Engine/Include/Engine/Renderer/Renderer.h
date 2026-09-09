@@ -39,6 +39,10 @@ namespace Engine {
 
         [[nodiscard]] AntialiasingLevel antialiasingLevel() const noexcept;
 
+        void setShadowQuality(ShadowQuality quality) noexcept;
+
+        [[nodiscard]] ShadowQuality shadowQuality() const noexcept;
+
         // nativeWindow and nativeEvent are opaque platform handles. Applications
         // do not need to include graphics-backend headers to use the renderer.
         /** Initializes presentation, synchronization and the ImGui backend only. */
@@ -116,6 +120,7 @@ namespace Engine {
         class State;
         RenderOptimizationFeatures optimizationFeatures_{};
         AntialiasingLevel antialiasingLevel_ = AntialiasingLevel::Off;
+        ShadowQuality shadowQuality_ = ShadowQuality::High;
         GrassRenderSettings grassSettings_{};
         std::unique_ptr<State> state_;
         std::unique_ptr<Backend> backend_;
