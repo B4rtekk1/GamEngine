@@ -33,7 +33,7 @@ void drawStatusBar(const Engine::ScenePreset &scene, const Engine::Entity select
     ImGui::PopStyleColor();
 }
 
-void drawGpuProfilePanel(const Engine::Renderer& renderer, bool& isOpen) {
+[[maybe_unused]] void drawLegacyGpuProfilePanel(const Engine::Renderer& renderer, bool& isOpen) {
     (void)renderer;
     static bool writeCsv{};
     static float intervalSeconds{2.0F};
@@ -581,7 +581,7 @@ Engine::Entity drawEditorMenuBar(Engine::ScenePreset &scene, Engine::Renderer &r
         ImGui::MenuItem("Console", nullptr, &showConsole);
         ImGui::MenuItem("Terminal", nullptr, &showTerminal);
         ImGui::MenuItem("Shader Graph", nullptr, &showShaderGraph);
-        ImGui::MenuItem("GPU Profile", nullptr, &showGpuProfile);
+        ImGui::MenuItem("Profiler", nullptr, &showGpuProfile);
         endTopMenu();
     }
 

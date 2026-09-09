@@ -1,6 +1,6 @@
 add_executable(Editor
     Source/main.cpp Source/App/EditorEntityHelpers.cpp Source/ComponentDescriptor.cpp Source/EditorUi.cpp Source/UI/EditorTheme.cpp Source/UI/EditorWidgets.cpp Source/UI/PropertyGrid.cpp Source/UI/ComponentCard.cpp Source/EditorPreferences.cpp
-    Source/Panels/EditorStyle.cpp Source/Panels/EditorSceneSession.cpp Source/Panels/HierarchyPanel.cpp Source/Panels/ComponentsPanel.cpp Source/Panels/AssetManagerPanel.cpp Source/Panels/ShaderGraphPanel.cpp Source/AssetImporter.cpp Source/Panels/ConsolePanel.cpp Source/Panels/TerminalPanel.cpp ${PROJECT_SOURCE_DIR}/Platform/Terminal/TerminalBuffer.cpp)
+    Source/Panels/EditorStyle.cpp Source/Panels/EditorSceneSession.cpp Source/Panels/HierarchyPanel.cpp Source/Panels/ComponentsPanel.cpp Source/Panels/AssetManagerPanel.cpp Source/Panels/ShaderGraphPanel.cpp Source/Panels/ProfilerPanel.cpp Source/AssetImporter.cpp Source/Panels/ConsolePanel.cpp Source/Panels/TerminalPanel.cpp ${PROJECT_SOURCE_DIR}/Platform/Terminal/TerminalBuffer.cpp)
 if(WIN32)
     target_sources(Editor PRIVATE ${PROJECT_SOURCE_DIR}/Platform/Windows/Win32FileWatcher.cpp ${PROJECT_SOURCE_DIR}/Platform/Windows/ConPtyTerminal.cpp ${PROJECT_SOURCE_DIR}/Platform/Windows/WindowsUserPaths.cpp)
 elseif(UNIX AND NOT APPLE)

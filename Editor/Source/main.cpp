@@ -36,6 +36,7 @@
 #include "Elements/TransformFields.h"
 #include "Editor/Panels/EditorSceneSession.h"
 #include "Editor/Panels/EditorStyle.h"
+#include "Editor/Panels/ProfilerPanel.h"
 #include "Editor/Panels/HierarchyPanel.h"
 #include "Editor/Panels/ComponentsPanel.h"
 #include "Editor/Panels/AssetManagerPanel.h"
@@ -418,7 +419,7 @@ int main(int argc, char** argv) {
         bool showConsole = true;
         bool showShaderGraph = false;
         bool showTerminal = true;
-        bool showGpuProfile = true;
+        bool showProfiler = true;
         Editor::TerminalPanel terminal{project.rootPath(), terminalFont};
         double physicsAccumulator = 0.0;
         bool showGameView = false;
@@ -512,7 +513,7 @@ int main(int argc, char** argv) {
                                                                  resetHistoryRequested, showHierarchy,
                                                                  showViewport, showInspector, showAssetManager,
                                                                  showTerrainTools, showConsole, showTerminal,
-                                                                 showShaderGraph, showGpuProfile);
+                                                                 showShaderGraph, showProfiler);
                 created != Engine::NullEntity) {
                 setSelection(created);
             }
@@ -760,7 +761,7 @@ int main(int argc, char** argv) {
             if (showConsole) Editor::ConsolePanel::draw(showConsole);
             if (showTerminal) terminal.draw(showTerminal);
             if (showShaderGraph) shaderGraphPanel->draw(showShaderGraph);
-            drawGpuProfilePanel(renderer, showGpuProfile);
+            Editor::drawProfilerPanel(renderer, showProfiler);
             drawStatusBar(scene, selectedEntity, playing, paused);
             if (!playing && selectedEntity != Engine::NullEntity &&
                 scene.editor().valid(selectedEntity) && !ImGui::GetIO().WantTextInput &&
