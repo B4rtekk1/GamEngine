@@ -39,6 +39,41 @@ bool virtualShadowAtlasUv(float2 virtualPixel, uint level,
     return resolveVirtualShadowTexel(int2(floor(virtualPixel)), level, pageTable, atlasUv);
 }
 
+// The atlas sampler is intentionally nearest-filtered: filtering it directly
+// would blend unrelated physical pages.  Reconstruct a bilinear sample in
+// *virtual* texel space instead, resolving each of the four texels separately.
+// A missing neighbour is omitted and the remaining weights are normalized.  A
+// resident centre texel therefore remains usable at a cache boundary rather
+// than forcing an abrupt clipmap fallback.
+float sampleVirtualShadowBilinear(Sampler2DShadow shadowMap, float2 virtualPixel,
+                                  uint level, StructuredBuffer<uint4> pageTable,
+                                  float compareDepth, out bool hasSamples)
+{
+    const float2 texelSpace = virtualPixel - 0.5;
+    const int2 base = int2(floor(texelSpace));
+    const float2 fraction = frac(texelSpace);
+    const float weights[4] = {
+        (1.0 - fraction.x) * (1.0 - fraction.y),
+        fraction.x * (1.0 - fraction.y),
+        (1.0 - fraction.x) * fraction.y,
+        fraction.x * fraction.y};
+    const int2 offsets[4] = {int2(0, 0), int2(1, 0), int2(0, 1), int2(1, 1)};
+
+    float shadow = 0.0;
+    float totalWeight = 0.0;
+    [unroll]
+    for (uint tap = 0; tap < 4; ++tap)
+    {
+        float2 atlasUv;
+        if (!resolveVirtualShadowTexel(base + offsets[tap], level, pageTable, atlasUv))
+            continue;
+        shadow += (1.0 - shadowMap.SampleCmpLevelZero(atlasUv, compareDepth)) * weights[tap];
+        totalWeight += weights[tap];
+    }
+    hasSamples = totalWeight > 0.0;
+    return hasSamples ? shadow / totalWeight : 0.0;
+}
+
 float shadowWorldTexelSize(float4x4 lightSpace)
 {
     // Orthographic clip matrices scale the light-space X/Y axes by 1/extent.
@@ -102,9 +137,9 @@ float sampleVirtualShadowLevel(Sampler2DShadow shadowMap, float3 worldPosition,
 
     if (useStablePoisson)
     {
-        // Spend the samples nearest the receiver, but keep the footprint
-        // below one virtual texel. This gives a soft, continuous PCF edge
-        // rather than sparse coverage over a large disk.
+        // Every Poisson position is a continuous virtual coordinate. The
+        // bilinear helper below prevents the old floor() quantization from
+        // collapsing several taps onto the same texel.
         const uint tapCount = level == 0 ? 12u : (level == 1 ? 8u : 4u);
         const float radius = level == 0 ? 0.90 : (level == 1 ? 0.75 : 0.65);
         float filteredShadow = 0.0;
@@ -112,11 +147,13 @@ float sampleVirtualShadowLevel(Sampler2DShadow shadowMap, float3 worldPosition,
         [loop]
         for (uint tap = 0; tap < tapCount; ++tap)
         {
-            float2 tapAtlasUv;
-            const int2 texel = int2(floor(virtualPixel + poisson[tap] * radius));
-            if (!resolveVirtualShadowTexel(texel, level, pageTable, tapAtlasUv))
+            bool tapResident;
+            const float tapShadow = sampleVirtualShadowBilinear(
+                shadowMap, virtualPixel + poisson[tap] * radius, level, pageTable,
+                currentDepth - bias, tapResident);
+            if (!tapResident)
                 continue;
-            filteredShadow += 1.0 - shadowMap.SampleCmpLevelZero(tapAtlasUv, currentDepth - bias);
+            filteredShadow += tapShadow;
             totalWeight += 1.0;
         }
         return totalWeight > 0.0 ? filteredShadow / totalWeight : 0.0;
@@ -133,10 +170,12 @@ float sampleVirtualShadowLevel(Sampler2DShadow shadowMap, float3 worldPosition,
             [unroll]
             for (int x = 0; x < 2; ++x)
             {
-                float2 tapAtlasUv;
-                const int2 texel = int2(floor(virtualPixel)) + int2(x, y);
-                if (!resolveVirtualShadowTexel(texel, level, pageTable, tapAtlasUv)) continue;
-                filteredShadow += 1.0 - shadowMap.SampleCmpLevelZero(tapAtlasUv, currentDepth - bias);
+                bool tapResident;
+                const float tapShadow = sampleVirtualShadowBilinear(
+                    shadowMap, virtualPixel + float2(x, y), level, pageTable,
+                    currentDepth - bias, tapResident);
+                if (!tapResident) continue;
+                filteredShadow += tapShadow;
                 totalWeight += 1.0;
             }
         }
@@ -155,12 +194,13 @@ float sampleVirtualShadowLevel(Sampler2DShadow shadowMap, float3 worldPosition,
         for (int x = firstTap; x <= lastTap; ++x)
         {
             const float weight = useTent3x3 ? kernel[x + 1] * kernel[y + 1] : 1.0;
-            float2 tapAtlasUv;
-            const int2 texel = int2(floor(virtualPixel)) + int2(x, y);
-            if (!resolveVirtualShadowTexel(texel, level, pageTable, tapAtlasUv))
+            bool tapResident;
+            const float tapShadow = sampleVirtualShadowBilinear(
+                shadowMap, virtualPixel + float2(x, y), level, pageTable,
+                currentDepth - bias, tapResident);
+            if (!tapResident)
                 continue;
-            filteredShadow += (1.0 - shadowMap.SampleCmpLevelZero(
-                tapAtlasUv, currentDepth - bias)) * weight;
+            filteredShadow += tapShadow * weight;
             totalWeight += weight;
         }
     }

@@ -75,7 +75,16 @@ void TemporalAaPass::create(const VkPhysicalDevice physicalDevice, const VkDevic
     } catch (...) { destroy(); throw; }
 }
 
-void TemporalAaPass::reset() noexcept { initialized_ = false; historyValid_ = false; historyIndex_ = 0; previousJitterX_ = previousJitterY_ = 0.0F; }
+void TemporalAaPass::reset() noexcept {
+    // Resetting accumulation does not change an image's Vulkan layout.  The
+    // first record after a camera cut can safely overwrite the output history
+    // while historyValid_ keeps the previous contents out of the resolve.
+    // Re-marking already initialized images as UNDEFINED caused invalid layout
+    // transitions on the next TAA frame.
+    historyValid_ = false;
+    historyIndex_ = 0;
+    previousJitterX_ = previousJitterY_ = 0.0F;
+}
 
 void TemporalAaPass::initializeHistory(const VkCommandBuffer commandBuffer) {
     VkImageMemoryBarrier2 barriers[2]{};
@@ -116,6 +125,8 @@ void TemporalAaPass::record(const VkCommandBuffer commandBuffer, const VkExtent2
 void TemporalAaPass::destroy() noexcept {
     if (device_ != VK_NULL_HANDLE) { for (auto framebuffer : framebuffers_) if (framebuffer) vkDestroyFramebuffer(device_, framebuffer, nullptr); if (pool_) vkDestroyDescriptorPool(device_, pool_, nullptr); if (layout_) vkDestroyDescriptorSetLayout(device_, layout_, nullptr); }
     framebuffers_.fill(VK_NULL_HANDLE); sets_.fill(VK_NULL_HANDLE); pool_ = VK_NULL_HANDLE;
-    layout_ = VK_NULL_HANDLE; pipeline_.destroy(); for (HdrBuffer& image : history_) image.destroy(); device_ = VK_NULL_HANDLE; reset();
+    layout_ = VK_NULL_HANDLE; pipeline_.destroy(); for (HdrBuffer& image : history_) image.destroy(); device_ = VK_NULL_HANDLE;
+    initialized_ = false;
+    reset();
 }
 } // namespace Engine

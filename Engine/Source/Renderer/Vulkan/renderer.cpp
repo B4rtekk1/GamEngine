@@ -281,7 +281,10 @@ namespace Engine {
         }
 
         [[nodiscard]] VkDescriptorSet gameViewportTexture() const noexcept {
-            if (antialiasingLevel == AntialiasingLevel::TAA) {
+            // Scene View temporarily suppresses the Game View TAA resolve.
+            // In that case the temporal history has not been written or
+            // transitioned yet, so ImGui must keep sampling the HDR target.
+            if (taaResolveActive) {
                 const VkDescriptorSet descriptor =
                     gameViewportTemporalDescriptors[temporalAaPass.nextResolvedIndex()];
                 if (descriptor != VK_NULL_HANDLE) return descriptor;
