@@ -84,15 +84,12 @@ float sampleVirtualShadowLevel(Sampler2DShadow shadowMap, float3 worldPosition,
     // The physical atlas deliberately has a nearest sampler: adjacent tiles
     // can represent unrelated virtual pages. Every filtered tap must therefore
     // resolve its own virtual texel before sampling the atlas.
-    const bool usePoisson16 = shadowQuality == SHADOW_QUALITY_ULTRA;
-    const bool usePoisson4 = shadowQuality == SHADOW_QUALITY_HIGH && level >= 3;
+    const bool useStablePoisson = shadowQuality == SHADOW_QUALITY_ULTRA;
     const bool useTent3x3 = shadowQuality == SHADOW_QUALITY_HIGH && level < 2;
 
-    // Interleaved gradient rotation prevents the fixed kernel from aligning
-    // with virtual texels. TAA turns this spatially distributed noise into a
-    // stable soft edge without ever filtering across physical page borders.
-    const float angle = frac(sin(dot(worldPosition.xz, float2(12.9898, 78.233))) * 43758.5453) * 6.2831853;
-    const float2x2 rotation = float2x2(cos(angle), -sin(angle), sin(angle), cos(angle));
+    // Keep this kernel fixed. A world-position rotation makes a single Scene
+    // View frame read as a noisy dither, and must not be enabled unless the
+    // pass is guaranteed to receive a shadow-aware temporal accumulation.
     static const float2 poisson[16] = {
         float2(-0.94201624, -0.39906216), float2(0.94558609, -0.76890725),
         float2(-0.09418410, -0.92938870), float2(0.34495938, 0.29387760),
@@ -103,17 +100,20 @@ float sampleVirtualShadowLevel(Sampler2DShadow shadowMap, float3 worldPosition,
         float2(-0.24188840, 0.99706507), float2(-0.81409955, 0.91437590),
         float2(0.19984126, 0.78641367), float2(0.14383161, -0.14100790)};
 
-    if (usePoisson16 || usePoisson4)
+    if (useStablePoisson)
     {
-        const uint tapCount = usePoisson16 ? 16u : 4u;
-        const float radius = usePoisson16 ? 2.25 : 1.35;
+        // Spend the samples nearest the receiver, but keep the footprint
+        // below one virtual texel. This gives a soft, continuous PCF edge
+        // rather than sparse coverage over a large disk.
+        const uint tapCount = level == 0 ? 12u : (level == 1 ? 8u : 4u);
+        const float radius = level == 0 ? 0.90 : (level == 1 ? 0.75 : 0.65);
         float filteredShadow = 0.0;
         float totalWeight = 0.0;
         [loop]
         for (uint tap = 0; tap < tapCount; ++tap)
         {
             float2 tapAtlasUv;
-            const int2 texel = int2(floor(virtualPixel + mul(poisson[tap], rotation) * radius));
+            const int2 texel = int2(floor(virtualPixel + poisson[tap] * radius));
             if (!resolveVirtualShadowTexel(texel, level, pageTable, tapAtlasUv))
                 continue;
             filteredShadow += 1.0 - shadowMap.SampleCmpLevelZero(tapAtlasUv, currentDepth - bias);
