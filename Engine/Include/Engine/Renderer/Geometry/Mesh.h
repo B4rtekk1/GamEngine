@@ -43,6 +43,15 @@ namespace Engine {
         /** @brief Index array used for indexed rendering. */
         std::vector<uint32_t> indices;
 
+        /**
+         * @brief Monotonically increasing version of the mesh's collision geometry.
+         *
+         * Call markGeometryChanged() after changing vertices or indices in place.
+         * Systems which cache derived geometry (for example PhysX cooked meshes)
+         * use this value to avoid reusing stale data.
+         */
+        std::uint64_t geometryRevision{};
+
         /** @brief Physically based materials used by the mesh. */
         std::vector<PBRMaterial> materials;
 
@@ -80,5 +89,8 @@ namespace Engine {
         [[nodiscard]] uint32_t indexCount() const noexcept {
             return static_cast<uint32_t>(indices.size());
         }
+
+        /** @brief Marks CPU-side vertex or index geometry as having changed. */
+        void markGeometryChanged() noexcept { ++geometryRevision; }
     };
 } // namespace Engine

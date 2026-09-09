@@ -312,10 +312,11 @@ namespace Engine {
 
         struct CookedMeshKey final {
             const Mesh* mesh{};
+            std::uint64_t revision{};
             Vec3 scale{};
 
             [[nodiscard]] bool operator==(const CookedMeshKey& other) const noexcept {
-                return mesh == other.mesh && scale.x() == other.scale.x() &&
+                return mesh == other.mesh && revision == other.revision && scale.x() == other.scale.x() &&
                        scale.y() == other.scale.y() && scale.z() == other.scale.z();
             }
         };
@@ -326,6 +327,7 @@ namespace Engine {
                     return seed ^ (value + 0x9e3779b9U + (seed << 6U) + (seed >> 2U));
                 };
                 std::size_t result = std::hash<const Mesh*>{}(key.mesh);
+                result = combine(result, std::hash<std::uint64_t>{}(key.revision));
                 result = combine(result, std::hash<float>{}(key.scale.x()));
                 result = combine(result, std::hash<float>{}(key.scale.y()));
                 return combine(result, std::hash<float>{}(key.scale.z()));
@@ -486,25 +488,15 @@ namespace Engine {
                                     vertex.position.z() * scale.z());
             }
 
-            // Vulkan render meshes are authored with clockwise front faces,
-            // whereas PhysX derives collision normals from counter-clockwise
-            // triangle winding.  Supply the same surface with its winding
-            // reversed so contacts are generated on the visible/top side.
-            std::vector<std::uint32_t> indices;
-            indices.reserve(mesh.indices.size());
-            for (std::size_t index = 0; index < mesh.indices.size(); index += 3) {
-                indices.push_back(mesh.indices[index]);
-                indices.push_back(mesh.indices[index + 2]);
-                indices.push_back(mesh.indices[index + 1]);
-            }
-
             physx::PxTriangleMeshDesc description;
             description.points.count = static_cast<physx::PxU32>(points.size());
             description.points.stride = sizeof(physx::PxVec3);
             description.points.data = points.data();
             description.triangles.count = static_cast<physx::PxU32>(mesh.indices.size() / 3);
             description.triangles.stride = sizeof(std::uint32_t) * 3;
-            description.triangles.data = indices.data();
+            // Engine meshes are authored counter-clockwise.  Preserve their
+            // winding so PhysX contact normals point out of the rendered mesh.
+            description.triangles.data = mesh.indices.data();
 
             physx::PxDefaultMemoryOutputStream output;
             if (!PxCookTriangleMesh(cookingParameters, description, output)) {
@@ -515,7 +507,7 @@ namespace Engine {
         }
 
         physx::PxConvexMesh* cachedConvexMesh(const Mesh& mesh, const Vec3& scale) {
-            const CookedMeshKey key{&mesh, scale};
+            const CookedMeshKey key{&mesh, mesh.geometryRevision, scale};
             if (const auto existing = convexMeshes.find(key); existing != convexMeshes.end()) {
                 return existing->second;
             }
@@ -531,7 +523,7 @@ namespace Engine {
         }
 
         physx::PxTriangleMesh* cachedTriangleMesh(const Mesh& mesh, const Vec3& scale) {
-            const CookedMeshKey key{&mesh, scale};
+            const CookedMeshKey key{&mesh, mesh.geometryRevision, scale};
             if (const auto existing = triangleMeshes.find(key); existing != triangleMeshes.end()) {
                 return existing->second;
             }
@@ -655,10 +647,9 @@ namespace Engine {
                         return false;
                     }
                     PxTriangleMeshGeometry geometry{mesh};
-                    // Render meshes use Vulkan's front-face convention, which
-                    // need not match PhysX's one-sided triangle convention.
-                    // Static mesh colliders must receive contacts from either
-                    // side (notably for generated terrain).
+                    // Keep two-sided queries (raycasts and sweeps) available;
+                    // simulation contact orientation still comes from the
+                    // counter-clockwise triangle winding supplied above.
                     geometry.meshFlags |= PxMeshGeometryFlag::eDOUBLE_SIDED;
                     const bool result = attachGeometry(actor, geometry, *material, localOffset,
                                                        collider.isTrigger) != nullptr;

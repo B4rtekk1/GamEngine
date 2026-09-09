@@ -164,6 +164,7 @@ bool TerrainComponent::updateMeshRegion(Mesh& mesh, const TerrainRegion& region)
             vertex.color = colors[static_cast<std::size_t>(z) * resolution + x];
         }
     }
+    mesh.markGeometryChanged();
     return true;
 }
 

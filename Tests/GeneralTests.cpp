@@ -273,6 +273,13 @@ TEST(PrimitiveMeshes, RampExposesExpectedDimensionsAndValidTriangles) {
     ExpectOutwardTriangleWinding(ramp);
 }
 
+TEST(Mesh, GeometryRevisionChangesOnlyWhenMarked) {
+    Engine::Mesh mesh;
+    EXPECT_EQ(mesh.geometryRevision, 0u);
+    mesh.markGeometryChanged();
+    EXPECT_EQ(mesh.geometryRevision, 1u);
+}
+
 TEST(ViewportCamera, BuildsGameCameraFromComponentAndTransform) {
     Engine::CameraComponent component;
     component.setPerspective(75.0F, 0.25F, 500.0F);
