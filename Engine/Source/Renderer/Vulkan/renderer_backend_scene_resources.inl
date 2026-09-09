@@ -925,15 +925,33 @@
             }
 
             const uint8_t bit = frameBit(currentFrame);
-            // Velocity needs the immediately preceding pose, not the pose from
-            // whichever frame-in-flight last owned this buffer. Upload the
-            // compact instance table every frame, then advance the CPU history.
-            if (!instanceModels.empty()) {
-                instanceBuffers[currentFrame].update(
-                    instanceModels.data(), sizeof(RendererInstanceData) * instanceModels.size());
+            // The dirty list is populated for every frame-in-flight. Sort it
+            // here so adjacent instance IDs become a single mapped-buffer
+            // write; static instances remain entirely untouched.
+            std::ranges::sort(dirtyTransforms[currentFrame]);
+            uploadDirtyIndices<RendererInstanceData>({
+                .buffer = instanceBuffers[currentFrame],
+                .data = instanceModels,
+                .dirtyFrames = &RenderableRecord::transformDirtyFrames,
+                .indices = dirtyTransforms[currentFrame],
+            });
+            // Once this frame has consumed the old/current pair, future
+            // frames must see a stationary pair unless the transform changes
+            // again. Keep just the M uploaded IDs while their dirty bit is
+            // advanced to the next frame-in-flight.
+            const std::vector<std::size_t> uploadedTransforms = dirtyTransforms[currentFrame];
+            for (const std::size_t index : uploadedTransforms) {
+                RendererInstanceData& rendererInstance = instanceModels[index];
+                rendererInstance.previousPosition =
+                    glm::vec4{glm::vec3{rendererInstance.positionMaterial}, 0.0F};
+                rendererInstance.previousRotation = rendererInstance.rotation;
+                rendererInstance.previousScale = rendererInstance.scaleBase;
             }
             clearDirtyIndices(&RenderableRecord::transformDirtyFrames,
                               dirtyTransforms[currentFrame], bit);
+            for (const std::size_t index : uploadedTransforms) {
+                markDirty(index, &RenderableRecord::transformDirtyFrames, dirtyTransforms);
+            }
             for (const std::size_t index : dirtyMaterials[currentFrame                                                                        ]) {
                 const RenderableRecord& record = renderables[index];
                 materialBuffers[currentFrame].update(
@@ -943,11 +961,6 @@
             }
             clearDirtyIndices(&RenderableRecord::materialDirtyFrames,
                               dirtyMaterials[currentFrame], bit);
-            for (RendererInstanceData& model : instanceModels) {
-                model.previousPosition = glm::vec4{glm::vec3{model.positionMaterial}, 0.0F};
-                model.previousRotation = model.rotation;
-                model.previousScale = model.scaleBase;
-            }
             uploadPendingGPUSceneDatabase(currentFrame);
         }
 
@@ -1112,9 +1125,18 @@
                     (!optimizationFeatures.transformCaching || !record.hasCachedTransform ||
                      !sameModel(model, modelFromInstance(instanceModels[index])));
                 if (transformChanged) {
+                    // Preserve history only for an instance whose pose is
+                    // changing. The dirty upload below carries both poses to
+                    // every frame-in-flight, so velocity always observes the
+                    // immediately preceding transform without an O(N) pass.
+                    RendererInstanceData& rendererInstance = instanceModels[index];
+                    rendererInstance.previousPosition =
+                        glm::vec4{glm::vec3{rendererInstance.positionMaterial}, 0.0F};
+                    rendererInstance.previousRotation = rendererInstance.rotation;
+                    rendererInstance.previousScale = rendererInstance.scaleBase;
                     const bool hadCachedTransform = record.hasCachedTransform;
                     const AABB previousShadowBounds = hadCachedTransform
-                        ? shadowBounds(modelFromInstance(instanceModels[index])) : AABB{};
+                        ? shadowBounds(modelFromInstance(rendererInstance)) : AABB{};
                     glm::vec3 decomposedScale{};
                     glm::quat decomposedRotation{};
                     glm::vec3 decomposedTranslation{};
@@ -1126,11 +1148,11 @@
                         decomposedRotation = {};
                         decomposedTranslation = glm::vec3{model[3]};
                     }
-                    instanceModels[index].positionMaterial = glm::vec4{
+                    rendererInstance.positionMaterial = glm::vec4{
                         decomposedTranslation, std::bit_cast<float>(record.materialTableOffset)};
-                    instanceModels[index].rotation = glm::vec4{decomposedRotation.x, decomposedRotation.y,
-                                                               decomposedRotation.z, decomposedRotation.w};
-                    instanceModels[index].scaleBase = glm::vec4{decomposedScale, 0.0F};
+                    rendererInstance.rotation = glm::vec4{decomposedRotation.x, decomposedRotation.y,
+                                                           decomposedRotation.z, decomposedRotation.w};
+                    rendererInstance.scaleBase = glm::vec4{decomposedScale, 0.0F};
                     record.cachedTransform = transform;
                     record.hasCachedTransform = true;
                     if (record.batchIndex < instanceBatches.size() &&
