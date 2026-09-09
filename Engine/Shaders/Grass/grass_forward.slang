@@ -6,9 +6,10 @@ import Grass.GrassPackedData;
 import Grass.GrassDeformation;
 
 [[vk::binding(0, 0)]] Sampler2DShadow shadowMap;
+[[vk::binding(9, 0)]] Sampler2D shadowDepthMap;
 [[vk::binding(1, 0)]] ConstantBuffer<RendererFrameData> frame;
 [[vk::binding(2, 0)]] StructuredBuffer<MaterialData> materials;
-[[vk::binding(8, 0)]] Sampler2D materialTextures[];
+[[vk::binding(10, 0)]] Sampler2D materialTextures[];
 [[vk::binding(4, 0)]] StructuredBuffer<uint4> shadowPageTable;
 [[vk::binding(5, 0)]] StructuredBuffer<GrassPackedInstance> instances;
 [[vk::binding(6, 0)]] StructuredBuffer<uint> visibleInstances;
@@ -75,7 +76,7 @@ float4 fragmentMain(FragmentInput input) : SV_Target
     float3 lightDirection = normalize(-frame.lightDirectionIntensity.xyz);
     float diffuse = saturate(dot(normal, lightDirection) * 0.5 + 0.5);
     float shadow = frame.shadowEnabled != 0 ? sampleVirtualShadow(
-        shadowMap, input.worldPosition, normal, lightDirection, frame.shadowClipMatrices, shadowPageTable,
+        shadowMap, shadowDepthMap, input.worldPosition, normal, lightDirection, frame.shadowClipMatrices, shadowPageTable,
         frame.shadowQuality) : 0.0;
     return float4(albedo.rgb * (0.20 + diffuse * frame.lightDirectionIntensity.w * (1.0 - shadow) * frame.lightColor.rgb), 1.0);
 }

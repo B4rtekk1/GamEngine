@@ -44,6 +44,8 @@ namespace Engine {
         [[nodiscard]] VkImage image() const noexcept { return image_; }
         [[nodiscard]] VkImageView imageView() const noexcept { return imageView_; }
         [[nodiscard]] VkSampler sampler() const noexcept { return sampler_; }
+        /// Nearest non-comparison sampler used by PCSS blocker search.
+        [[nodiscard]] VkSampler depthSampler() const noexcept { return depthSampler_; }
         [[nodiscard]] VkRenderPass renderPass() const noexcept { return renderPass_; }
         [[nodiscard]] VkFramebuffer framebuffer() const noexcept { return framebuffer_; }
 
@@ -54,6 +56,7 @@ namespace Engine {
         VmaAllocator allocator_ = VK_NULL_HANDLE;
         VkImageView imageView_ = VK_NULL_HANDLE;
         VkSampler sampler_ = VK_NULL_HANDLE;
+        VkSampler depthSampler_ = VK_NULL_HANDLE;
         VkRenderPass renderPass_ = VK_NULL_HANDLE;
         VkFramebuffer framebuffer_ = VK_NULL_HANDLE;
         VkFormat format_ = VK_FORMAT_UNDEFINED;

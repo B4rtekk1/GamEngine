@@ -74,6 +74,22 @@ float sampleVirtualShadowBilinear(Sampler2DShadow shadowMap, float2 virtualPixel
     return hasSamples ? shadow / totalWeight : 0.0;
 }
 
+// Read one unfiltered virtual texel for the PCSS blocker pass. Sampling the
+// physical atlas directly is safe only after this virtual-to-physical resolve.
+bool sampleVirtualShadowDepth(Sampler2D shadowDepthMap, float2 virtualPixel,
+                              uint level, StructuredBuffer<uint4> pageTable,
+                              out float depth)
+{
+    float2 atlasUv;
+    if (!virtualShadowAtlasUv(virtualPixel, level, pageTable, atlasUv))
+    {
+        depth = 1.0;
+        return false;
+    }
+    depth = shadowDepthMap.SampleLevel(atlasUv, 0.0).x;
+    return true;
+}
+
 float shadowWorldTexelSize(float4x4 lightSpace)
 {
     // Orthographic clip matrices scale the light-space X/Y axes by 1/extent.
@@ -83,7 +99,8 @@ float shadowWorldTexelSize(float4x4 lightSpace)
     return 2.0 / (float(VIRTUAL_RESOLUTION) * lightSpaceScale);
 }
 
-float sampleVirtualShadowLevel(Sampler2DShadow shadowMap, float3 worldPosition,
+float sampleVirtualShadowLevel(Sampler2DShadow shadowMap, Sampler2D shadowDepthMap,
+                               float3 worldPosition,
                                float3 normal, float3 lightDirection,
                                float4x4 lightSpace, uint level,
                                StructuredBuffer<uint4> pageTable, uint shadowQuality, out bool resident,
@@ -137,11 +154,50 @@ float sampleVirtualShadowLevel(Sampler2DShadow shadowMap, float3 worldPosition,
 
     if (useStablePoisson)
     {
-        // Every Poisson position is a continuous virtual coordinate. The
-        // bilinear helper below prevents the old floor() quantization from
-        // collapsing several taps onto the same texel.
-        const uint tapCount = level == 0 ? 12u : (level == 1 ? 8u : 4u);
-        const float radius = level == 0 ? 0.90 : (level == 1 ? 0.75 : 0.65);
+        // PCSS blocker search. A compare sampler cannot expose blocker depth,
+        // so this deliberately uses the matching nearest raw-depth sampler.
+        // The centre plus four nearby samples makes contact shadows retain the
+        // existing sharp bilinear footprint without paying a full 12-tap PCF.
+        static const float2 blockerOffsets[5] = {
+            float2(0.0, 0.0), float2(-1.5, -0.5), float2(1.5, -0.5),
+            float2(-0.5, 1.5), float2(0.5, -1.5)};
+        float blockerDepthSum = 0.0;
+        float blockerCount = 0.0;
+        [unroll]
+        for (uint blockerTap = 0; blockerTap < 5; ++blockerTap)
+        {
+            float blockerDepth;
+            if (sampleVirtualShadowDepth(shadowDepthMap,
+                                         virtualPixel + blockerOffsets[blockerTap],
+                                         level, pageTable, blockerDepth) &&
+                blockerDepth < currentDepth - bias)
+            {
+                blockerDepthSum += blockerDepth;
+                blockerCount += 1.0;
+            }
+        }
+        if (blockerCount == 0.0)
+            return 0.0;
+
+        // Convert the receiver/blocker separation from projected depth to a
+        // world-space distance, then to virtual texels.  0.00465 rad is the
+        // Sun's angular radius; clamping prevents a distant occluder from
+        // turning a page miss or a thin object into an impractically broad
+        // filter.  This is intentionally a PCSS approximation, not SMRT.
+        const float averageBlockerDepth = blockerDepthSum / blockerCount;
+        const float lightDepthScale = max(length(lightSpace[2].xyz), 1.0e-6);
+        const float receiverBlockerDistance =
+            max(currentDepth - averageBlockerDepth, 0.0) / lightDepthScale;
+        const float sunAngularRadius = 0.00465;
+        const float penumbraRadius = clamp(
+            tan(sunAngularRadius) * receiverBlockerDistance /
+            shadowWorldTexelSize(lightSpace), 0.25, 6.0);
+
+        // Scale the compare budget with the visible penumbra. At contact the
+        // four-tap path is cheaper than the previous fixed twelve samples;
+        // only broad penumbrae use the complete stable Poisson kernel.
+        const uint tapCount = penumbraRadius < 1.5 ? 4u :
+                              (penumbraRadius < 3.5 ? 8u : 12u);
         float filteredShadow = 0.0;
         float totalWeight = 0.0;
         [loop]
@@ -149,7 +205,7 @@ float sampleVirtualShadowLevel(Sampler2DShadow shadowMap, float3 worldPosition,
         {
             bool tapResident;
             const float tapShadow = sampleVirtualShadowBilinear(
-                shadowMap, virtualPixel + poisson[tap] * radius, level, pageTable,
+                shadowMap, virtualPixel + poisson[tap] * penumbraRadius, level, pageTable,
                 currentDepth - bias, tapResident);
             if (!tapResident)
                 continue;
@@ -159,7 +215,9 @@ float sampleVirtualShadowLevel(Sampler2DShadow shadowMap, float3 worldPosition,
         return totalWeight > 0.0 ? filteredShadow / totalWeight : 0.0;
     }
 
-    // Medium remains deliberately inexpensive; High uses 2x2 at L2.
+    // Medium remains deliberately inexpensive. Centre its four continuous
+    // bilinear samples on the receiver; using offsets 0..1 shifted the whole
+    // filter half a virtual texel towards +X/+Y.
     if (!useTent3x3)
     {
         float filteredShadow = 0.0;
@@ -172,7 +230,7 @@ float sampleVirtualShadowLevel(Sampler2DShadow shadowMap, float3 worldPosition,
             {
                 bool tapResident;
                 const float tapShadow = sampleVirtualShadowBilinear(
-                    shadowMap, virtualPixel + float2(x, y), level, pageTable,
+                    shadowMap, virtualPixel + float2(x - 0.5, y - 0.5), level, pageTable,
                     currentDepth - bias, tapResident);
                 if (!tapResident) continue;
                 filteredShadow += tapShadow;
@@ -207,7 +265,8 @@ float sampleVirtualShadowLevel(Sampler2DShadow shadowMap, float3 worldPosition,
     return totalWeight > 0.0 ? filteredShadow / totalWeight : 0.0;
 }
 
-float sampleVirtualShadow(Sampler2DShadow shadowMap, float3 worldPosition,
+float sampleVirtualShadow(Sampler2DShadow shadowMap, Sampler2D shadowDepthMap,
+                          float3 worldPosition,
                           float3 normal, float3 lightDirection,
                           float4x4 clipMatrices[7], StructuredBuffer<uint4> pageTable,
                           uint shadowQuality)
@@ -217,9 +276,9 @@ float sampleVirtualShadow(Sampler2DShadow shadowMap, float3 worldPosition,
     for (uint level = 0; level < SHADOW_CLIP_LEVELS; ++level)
     {
         float clipEdge;
-        float shadow = sampleVirtualShadowLevel(shadowMap, worldPosition, normal, lightDirection,
-                                                 clipMatrices[level], level,
-                                                 pageTable, shadowQuality, resident, clipEdge);
+        float shadow = sampleVirtualShadowLevel(
+            shadowMap, shadowDepthMap, worldPosition, normal, lightDirection,
+            clipMatrices[level], level, pageTable, shadowQuality, resident, clipEdge);
         if (resident)
         {
             // Fade through the outer fifth of the clipmap. Do not blend with
@@ -229,7 +288,7 @@ float sampleVirtualShadow(Sampler2DShadow shadowMap, float3 worldPosition,
                 bool nextResident;
                 float nextClipEdge;
                 float nextShadow = sampleVirtualShadowLevel(
-                    shadowMap, worldPosition, normal, lightDirection, clipMatrices[level + 1], level + 1,
+                    shadowMap, shadowDepthMap, worldPosition, normal, lightDirection, clipMatrices[level + 1], level + 1,
                     pageTable, shadowQuality, nextResident, nextClipEdge);
                 if (nextResident)
                     shadow = lerp(shadow, nextShadow, smoothstep(0.75, 0.95, clipEdge));

@@ -82,6 +82,13 @@ namespace Engine {
                 throw std::runtime_error(
                     "Could not create shadow map sampler");
             }
+            // PCSS needs the blocker depth itself, rather than a comparison
+            // result. Keep the addressing/filtering identical to the compare
+            // sampler so both paths resolve the exact same atlas texel.
+            sampler.compareEnable = VK_FALSE;
+            if (vkCreateSampler(device_, &sampler, nullptr, &depthSampler_) != VK_SUCCESS) {
+                throw std::runtime_error("Could not create shadow depth sampler");
+            }
 
             VkAttachmentDescription depth{.samples = VK_SAMPLE_COUNT_1_BIT};
                 depth.format = format_;
@@ -148,6 +155,9 @@ namespace Engine {
         if (sampler_ != nullptr) {
             vkDestroySampler(device_, sampler_, nullptr);
         }
+        if (depthSampler_ != nullptr) {
+            vkDestroySampler(device_, depthSampler_, nullptr);
+        }
         if (imageView_ != nullptr) {
             vkDestroyImageView(device_, imageView_, nullptr);
         }
@@ -155,6 +165,7 @@ namespace Engine {
         framebuffer_ = VK_NULL_HANDLE;
         renderPass_ = VK_NULL_HANDLE;
         sampler_ = VK_NULL_HANDLE;
+        depthSampler_ = VK_NULL_HANDLE;
         imageView_ = VK_NULL_HANDLE;
         image_ = VK_NULL_HANDLE;
         allocation_ = VK_NULL_HANDLE;

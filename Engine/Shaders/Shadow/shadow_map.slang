@@ -60,7 +60,7 @@ ShadowVertexOutput vertexMain(ShadowVertexInput input, uint instanceIndex : SV_I
 }
 
 [[vk::binding(2, 0)]] StructuredBuffer<MaterialData> materials;
-[[vk::binding(8, 0)]] Sampler2D materialTextures[];
+[[vk::binding(10, 0)]] Sampler2D materialTextures[];
 
 struct ShadowFragmentInput
 {

@@ -141,8 +141,9 @@ ForwardVertexOutput vertexMain(ForwardVertexInput input, uint instanceIndex : SV
 }
 
 [[vk::binding(0, 0)]] Sampler2DShadow shadowMap;
+[[vk::binding(9, 0)]] Sampler2D shadowDepthMap;
 [[vk::binding(2, 0)]] StructuredBuffer<MaterialData> materials;
-[[vk::binding(8, 0)]] Sampler2D materialTextures[];
+[[vk::binding(10, 0)]] Sampler2D materialTextures[];
 [[vk::binding(4, 0)]] StructuredBuffer<uint4> shadowPageTable;
 
 struct ForwardFragmentInput
@@ -293,7 +294,7 @@ ForwardFragmentOutput fragmentMain(ForwardFragmentInput input)
                       max(4.0 * nDotV * nDotL, 0.0001);
     float3 diffuse = (1.0 - fresnel) * (1.0 - metallic) * albedo / PBR_PI;
     float shadow = frame.shadowEnabled != 0
-        ? sampleVirtualShadow(shadowMap, input.worldPosition, normal, lightDirection, frame.shadowClipMatrices,
+        ? sampleVirtualShadow(shadowMap, shadowDepthMap, input.worldPosition, normal, lightDirection, frame.shadowClipMatrices,
                               shadowPageTable, frame.shadowQuality) : 0.0;
     float3 direct = (diffuse + specular) * frame.lightDirectionIntensity.w *
                     frame.lightColor.rgb * nDotL * (1.0 - shadow);
