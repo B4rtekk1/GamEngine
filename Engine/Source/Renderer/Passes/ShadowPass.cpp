@@ -361,6 +361,65 @@ void ShadowPass::create(VkPhysicalDevice physicalDevice, VkDevice device,
     }
 }
 
+void ShadowPass::updateDescriptors(
+        const std::vector<VkBuffer>& uniformBuffers,
+        const std::vector<VkBuffer>& materialBuffers,
+        const std::vector<VkBuffer>& instanceBuffers,
+        const std::vector<VkBuffer>& instanceIndexBuffers,
+        const std::vector<VkBuffer>& grassInstanceBuffers,
+        const std::vector<VkBuffer>& grassClusterBuffers,
+        const std::vector<VkBuffer>& grassDeformationBuffers,
+        const std::vector<VkDescriptorImageInfo>& materialTextures,
+        const VkDeviceSize uniformBufferRange) const {
+    const std::size_t frameCount = descriptorSets_.size();
+    if (device_ == VK_NULL_HANDLE || descriptorPool_ == VK_NULL_HANDLE ||
+        materialBuffers.size() != frameCount || uniformBuffers.size() != frameCount ||
+        instanceBuffers.size() != frameCount || instanceIndexBuffers.size() != frameCount ||
+        grassInstanceBuffers.size() != frameCount || grassClusterBuffers.size() != frameCount ||
+        grassDeformationBuffers.size() != frameCount || materialTextures.size() != MaxMaterialTextures ||
+        grassDescriptorSets_.size() != frameCount || grassVelocityDescriptorSets_.size() != frameCount ||
+        grassShadowDescriptorSets_.size() != frameCount || pageTableBuffers_.size() != frameCount) {
+        throw std::invalid_argument("Invalid shadow descriptor update resources");
+    }
+
+    for (std::uint32_t frame = 0; frame < frameCount; ++frame) {
+        const VkDescriptorBufferInfo uniform{uniformBuffers[frame], 0, uniformBufferRange};
+        const VkDescriptorBufferInfo material{materialBuffers[frame], 0, VK_WHOLE_SIZE};
+        const VkDescriptorBufferInfo pageTable{pageTableBuffers_[frame]->handle(), 0, VK_WHOLE_SIZE};
+        const VkDescriptorBufferInfo instance{instanceBuffers[frame], 0, VK_WHOLE_SIZE};
+        const VkDescriptorBufferInfo instanceIndex{instanceIndexBuffers[frame], 0, VK_WHOLE_SIZE};
+        const VkDescriptorBufferInfo grassInstance{grassInstanceBuffers[frame], 0, VK_WHOLE_SIZE};
+        const VkDescriptorBufferInfo grassCluster{grassClusterBuffers[frame], 0, VK_WHOLE_SIZE};
+        const VkDescriptorBufferInfo grassDeformation{grassDeformationBuffers[frame], 0, VK_WHOLE_SIZE};
+        VkWriteDescriptorSet writes[8]{};
+        writes[0] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr, descriptorSets_[frame], 1, 0, 1,
+                     VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, nullptr, &uniform, nullptr};
+        writes[1] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr, descriptorSets_[frame], 2, 0, 1,
+                     VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, nullptr, &material, nullptr};
+        writes[2] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr, descriptorSets_[frame], 4, 0, 1,
+                     VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, nullptr, &pageTable, nullptr};
+        writes[3] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr, descriptorSets_[frame], 5, 0, 1,
+                     VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, nullptr, &instance, nullptr};
+        writes[4] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr, descriptorSets_[frame], 6, 0, 1,
+                     VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, nullptr, &instanceIndex, nullptr};
+        writes[5] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr, descriptorSets_[frame], GrassClusterBinding, 0, 1,
+                     VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, nullptr, &grassCluster, nullptr};
+        writes[6] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr, descriptorSets_[frame], GrassDeformationBinding, 0, 1,
+                     VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, nullptr, &grassDeformation, nullptr};
+        writes[7] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr, descriptorSets_[frame], 10, 0,
+                     MaxMaterialTextures, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+                     materialTextures.data(), nullptr, nullptr};
+        vkUpdateDescriptorSets(device_, std::size(writes), writes, 0, nullptr);
+
+        for (VkDescriptorSet set : {grassDescriptorSets_[frame], grassVelocityDescriptorSets_[frame],
+                                    grassShadowDescriptorSets_[frame]}) {
+            for (VkWriteDescriptorSet& write : writes) write.dstSet = set;
+            writes[3].pBufferInfo = &grassInstance;
+            vkUpdateDescriptorSets(device_, std::size(writes), writes, 0, nullptr);
+        }
+    }
+}
+
 void ShadowPass::destroy() noexcept {
     if (device_ != VK_NULL_HANDLE) {
         if (grassPipeline_ != VK_NULL_HANDLE) vkDestroyPipeline(device_, grassPipeline_, nullptr);

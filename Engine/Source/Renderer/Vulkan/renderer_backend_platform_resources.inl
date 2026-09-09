@@ -272,10 +272,18 @@
             for (std::size_t i = 0; i < grassDeformationBuffers.size(); ++i)
                 gpuGrassDeformationBuffers.push_back(grassDeformationBuffers[i].handle() != VK_NULL_HANDLE
                     ? grassDeformationBuffers[i].handle() : instanceBuffers[i].handle());
-            shadowPass.create(vulkanDevice.physical(), device, buffers,
-                              gpuMaterialBuffers, gpuInstanceBuffers, gpuInstanceIndexBuffers,
-                              gpuGrassInstanceBuffers, gpuGrassClusterBuffers, gpuGrassDeformationBuffers, materialTextureDescriptors,
-                              sizeof(UniformBufferObject), vulkanDevice.allocator(), assetManager);
+            if (shadowPass.descriptorSetLayout() == VK_NULL_HANDLE) {
+                shadowPass.create(vulkanDevice.physical(), device, buffers,
+                                  gpuMaterialBuffers, gpuInstanceBuffers, gpuInstanceIndexBuffers,
+                                  gpuGrassInstanceBuffers, gpuGrassClusterBuffers, gpuGrassDeformationBuffers,
+                                  materialTextureDescriptors, sizeof(UniformBufferObject),
+                                  vulkanDevice.allocator(), assetManager);
+            } else {
+                shadowPass.updateDescriptors(
+                    buffers, gpuMaterialBuffers, gpuInstanceBuffers, gpuInstanceIndexBuffers,
+                    gpuGrassInstanceBuffers, gpuGrassClusterBuffers, gpuGrassDeformationBuffers,
+                    materialTextureDescriptors, sizeof(UniformBufferObject));
+            }
         }
 
         void createSceneDescriptorPass() {
@@ -306,10 +314,18 @@
             for (std::size_t i = 0; i < grassDeformationBuffers.size(); ++i)
                 gpuGrassDeformationBuffers.push_back(grassDeformationBuffers[i].handle() != VK_NULL_HANDLE
                     ? grassDeformationBuffers[i].handle() : instanceBuffers[i].handle());
-            sceneDescriptorPass.create(vulkanDevice.physical(), device, buffers,
-                                       gpuMaterialBuffers, gpuInstanceBuffers, gpuInstanceIndexBuffers,
-                                       gpuGrassInstanceBuffers, gpuGrassClusterBuffers, gpuGrassDeformationBuffers, materialTextureDescriptors,
-                                       sizeof(UniformBufferObject), vulkanDevice.allocator(), assetManager);
+            if (sceneDescriptorPass.descriptorSetLayout() == VK_NULL_HANDLE) {
+                sceneDescriptorPass.create(vulkanDevice.physical(), device, buffers,
+                                           gpuMaterialBuffers, gpuInstanceBuffers, gpuInstanceIndexBuffers,
+                                           gpuGrassInstanceBuffers, gpuGrassClusterBuffers, gpuGrassDeformationBuffers,
+                                           materialTextureDescriptors, sizeof(UniformBufferObject),
+                                           vulkanDevice.allocator(), assetManager);
+            } else {
+                sceneDescriptorPass.updateDescriptors(
+                    buffers, gpuMaterialBuffers, gpuInstanceBuffers, gpuInstanceIndexBuffers,
+                    gpuGrassInstanceBuffers, gpuGrassClusterBuffers, gpuGrassDeformationBuffers,
+                    materialTextureDescriptors, sizeof(UniformBufferObject));
+            }
         }
 
         void createForwardPass() {

@@ -652,36 +652,15 @@ namespace Engine {
                 throw std::runtime_error("Could not synchronize frames for scene update");
             }
 
+            // ECS topology is not renderer topology.  Only resources whose
+            // contents or descriptor bindings refer to the renderable tables
+            // are rebuilt below.  In particular, the render targets and all
+            // post processing passes deliberately survive this operation:
+            // adding an entity must not discard TAA history or recreate the
+            // Bloom/Tonemap/sky/forward/particle pipelines. ShadowPass now
+            // updates descriptor-set contents in place, preserving its set
+            // layout and therefore every pipeline which consumes it.
             destroyCullingResources();
-            tonemapPass.destroy();
-            temporalAaPass.destroy();
-            bloomPass.destroy();
-            destroyVelocityResources();
-            if (hdrFramebuffer != VK_NULL_HANDLE) {
-                vkDestroyFramebuffer(device, hdrFramebuffer, nullptr);
-                hdrFramebuffer = VK_NULL_HANDLE;
-            }
-            destroySceneViewportFramebuffer();
-            particlePipeline.destroy();
-            // A particle emitter may have been removed from the scene.  The
-            // compute/render pipelines and the ParticleSystem must share the
-            // same lifetime; otherwise the next frame records commands with
-            // destroyed pipeline handles.
-            particleSystem.reset();
-            if (particleComputePipeline != VK_NULL_HANDLE) {
-                vkDestroyPipeline(device, particleComputePipeline, nullptr);
-                particleComputePipeline = VK_NULL_HANDLE;
-            }
-            if (particleComputePipelineLayout != VK_NULL_HANDLE) {
-                vkDestroyPipelineLayout(device, particleComputePipelineLayout, nullptr);
-                particleComputePipelineLayout = VK_NULL_HANDLE;
-            }
-            skyPass.destroy();
-            sceneSkyPass.destroy();
-            sceneViewportForwardPass.destroy();
-            forwardPass.destroy();
-            shadowPass.destroy();
-            sceneDescriptorPass.destroy();
             indexBuffer.destroy();
             vertexBuffer.destroy();
             for (Buffer &buffer: instanceBuffers) { buffer.destroy(); }
@@ -718,17 +697,6 @@ namespace Engine {
             createCullingResources();
             createShadowPass();
             createSceneDescriptorPass();
-            createForwardPass();
-            createSceneViewportForwardPass();
-            createParticleResources();
-            createSkyPass();
-            createSceneSkyPass();
-            createFramebuffers();
-            createSceneViewportFramebuffer();
-            createTemporalAaPass();
-            createBloomPass();
-            createTonemapPass();
-            refreshEditorViewportTextures();
             renderableTopologySignature = updatedTopology;
             assetManager.unload_unused();
         }

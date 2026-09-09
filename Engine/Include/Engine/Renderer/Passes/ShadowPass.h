@@ -47,6 +47,19 @@ namespace Engine {
                     VkDeviceSize uniformBufferRange, VmaAllocator allocator,
                     Assets::AssetManager &assets);
 
+        // Rebind scene-owned buffers/textures without replacing the descriptor
+        // set layout, shadow atlas or graphics pipelines. This is the normal
+        // path for an ECS topology change.
+        void updateDescriptors(const std::vector<VkBuffer> &uniformBuffers,
+                               const std::vector<VkBuffer> &materialBuffers,
+                               const std::vector<VkBuffer> &instanceBuffers,
+                               const std::vector<VkBuffer> &instanceIndexBuffers,
+                               const std::vector<VkBuffer> &grassInstanceBuffers,
+                               const std::vector<VkBuffer> &grassClusterBuffers,
+                               const std::vector<VkBuffer> &grassDeformationBuffers,
+                               const std::vector<VkDescriptorImageInfo> &materialTextures,
+                               VkDeviceSize uniformBufferRange) const;
+
         void destroy() noexcept;
 
         void record(VkCommandBuffer commandBuffer,
