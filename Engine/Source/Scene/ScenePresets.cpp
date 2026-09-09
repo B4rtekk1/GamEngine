@@ -253,6 +253,7 @@ namespace Engine {
                                         PBRMaterial{
                                             .baseColor = {RampColorRed, RampColorGreen, RampColorBlue},
                                             .metallic = RampMetallic, .roughness = RampRoughness,
+                                            .doubleSided = true,
                                         });
         object.setPosition({0, RampObjectHeight, 0});
         const Entity entity = object.entity();

@@ -1571,6 +1571,14 @@ namespace Engine {
                     }
                 }
             }
+            if (hasRenderer && hasCollider &&
+                std::holds_alternative<RampCollider>(loaded.get<ColliderComponent>(entity).shape)) {
+                // Ramps must remain legible from either side in the editor and
+                // use the renderer's dedicated two-sided material stream.
+                auto& material = loaded.get<MeshRenderer>(entity).material;
+                material.pbr.doubleSided = true;
+                material.synchronizeRenderStateFromPbr();
+            }
             if (hasTerrainGrass && !hasTerrain) {
                 invalidScene("TerrainGrassComponent requires TerrainComponent");
             }
