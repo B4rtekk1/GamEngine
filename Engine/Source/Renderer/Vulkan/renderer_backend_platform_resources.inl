@@ -14,6 +14,7 @@
             createSurface();
             vulkanDevice.create(instance, surface);
             device = vulkanDevice.logical();
+            gpuTimestampProfiler.create(vulkanDevice.physical(), device);
             waitForDrawableExtent();
             createSwapChain();
             createCommandPool();

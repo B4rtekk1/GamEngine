@@ -27,6 +27,7 @@
 #include "Engine/Renderer/Vulkan/buffer.h"
 #include "Engine/Renderer/Vulkan/upload_context.h"
 #include "Engine/Renderer/Vulkan/graphics_pipeline.h"
+#include "Engine/Renderer/Vulkan/GpuTimestampProfiler.h"
 #include "Engine/Renderer/Vulkan/vulkan_device.h"
 #include "Engine/Renderer/Vulkan/swapchain.h"
 #include "Engine/Renderer/Textures/Texture2D.h"
@@ -131,7 +132,6 @@ namespace Engine {
         std::uint64_t lightRevision{};
         std::uint64_t windRevision{};
         std::uint64_t cameraRevision{};
-        std::uint64_t parentRevision{};
         std::uint64_t uuidRevision{};
         std::uint64_t structuralRevision{};
         std::unordered_map<UUID, Entity> entitiesByUuid;

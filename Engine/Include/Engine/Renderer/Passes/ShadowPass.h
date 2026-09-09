@@ -67,7 +67,8 @@ namespace Engine {
             const Mat4& cameraViewProjection,
             std::span<const Culling::GPUObjectData> objects,
             std::span<const Culling::GPUObjectData> dirtyObjects,
-            std::uint32_t frameIndex);
+            std::uint32_t frameIndex,
+            std::uint32_t pageUpdateBudget = ShadowMap::PhysicalPageCount);
 
         void invalidateCache() noexcept;
 

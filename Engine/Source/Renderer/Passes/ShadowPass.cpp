@@ -452,11 +452,13 @@ void ShadowPass::preparePages(
     const Mat4& cameraViewProjection,
     const std::span<const Culling::GPUObjectData> objects,
     const std::span<const Culling::GPUObjectData> dirtyObjects,
-    const std::uint32_t frameIndex) {
+    const std::uint32_t frameIndex,
+    const std::uint32_t pageUpdateBudget) {
     constexpr std::int32_t pageCount =
         static_cast<std::int32_t>(ShadowMap::VirtualPagesPerAxis);
     ++cacheClock_;
     pagesToRender_.clear();
+    const std::uint32_t maxPageUpdates = std::min(pageUpdateBudget, ShadowMap::PhysicalPageCount);
 
     // Dynamic transforms used to invalidate the whole virtual atlas. In play
     // mode even a single rigid body therefore redrew every cached terrain and
@@ -665,7 +667,7 @@ void ShadowPass::preparePages(
     // removes the caster's previous shadow instead of leaving it in the
     // atlas until that page happens to be requested again.
     for (std::uint32_t physical = 0; physical < physicalPages_.size() &&
-                                      pagesToRender_.size() < ShadowMap::MaxPageUpdatesPerFrame;
+                                      pagesToRender_.size() < maxPageUpdates;
          ++physical) {
         PhysicalPage& page = physicalPages_[physical];
         if (!page.allocated || !page.dirty) continue;
@@ -678,7 +680,7 @@ void ShadowPass::preparePages(
         if (physical == ShadowMap::InvalidPage) {
             // Do not map a page until it can be rendered. Otherwise the
             // sampling shader could observe stale atlas contents.
-            if (pagesToRender_.size() >= ShadowMap::MaxPageUpdatesPerFrame) continue;
+            if (pagesToRender_.size() >= maxPageUpdates) continue;
             physical = ShadowMap::InvalidPage;
             for (std::uint32_t slot = 0; slot < physicalPages_.size(); ++slot) {
                 if (!physicalPages_[slot].allocated) { physical = slot; break; }
@@ -712,7 +714,7 @@ void ShadowPass::preparePages(
         } else {
             physicalPages_[physical].lastUsed = cacheClock_;
             if (physicalPages_[physical].dirty &&
-                pagesToRender_.size() < ShadowMap::MaxPageUpdatesPerFrame) {
+                pagesToRender_.size() < maxPageUpdates) {
                 physicalPages_[physical].dirty = false;
                 pagesToRender_.push_back(physical);
             }

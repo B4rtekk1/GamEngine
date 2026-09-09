@@ -25,7 +25,6 @@
             const std::uint64_t lightRevision = readRegistry.componentRevision<LightComponent>();
             const std::uint64_t windRevision = readRegistry.componentRevision<WindComponent>();
             const std::uint64_t cameraRevision = readRegistry.componentRevision<CameraComponent>();
-            const std::uint64_t parentRevision = readRegistry.componentRevision<ParentComponent>();
             const std::uint64_t uuidRevision = readRegistry.componentRevision<UUIDComponent>();
             const std::uint64_t structuralRevision = readRegistry.structuralRevision();
             const bool uuidIndexDirty = !sceneFrameDataCache.initialized ||
@@ -40,12 +39,28 @@
                 });
             }
 
+            // TransformSystem already records the world transforms it actually
+            // recomputed, including descendants of a moved parent. A moving
+            // renderable must not force scans of every camera, light and wind
+            // component just because Transform has a global revision.
+            bool relevantTransformChanged = !sceneFrameDataCache.initialized;
+            if (!relevantTransformChanged &&
+                sceneFrameDataCache.transformRevision != transformRevision) {
+                for (const Entity entity : TransformSystem::changedWorldTransforms(registry)) {
+                    if (readRegistry.has<CameraComponent>(entity) ||
+                        readRegistry.has<LightComponent>(entity) ||
+                        readRegistry.has<WindComponent>(entity)) {
+                        relevantTransformChanged = true;
+                        break;
+                    }
+                }
+            }
+
             const bool dataDirty = !sceneFrameDataCache.initialized ||
-                sceneFrameDataCache.transformRevision != transformRevision ||
+                relevantTransformChanged ||
                 sceneFrameDataCache.lightRevision != lightRevision ||
                 sceneFrameDataCache.windRevision != windRevision ||
                 sceneFrameDataCache.cameraRevision != cameraRevision ||
-                sceneFrameDataCache.parentRevision != parentRevision ||
                 sceneFrameDataCache.uuidRevision != uuidRevision;
             if (dataDirty) {
                 SceneFrameData data{};
@@ -121,11 +136,9 @@
                     }
                 }
                 sceneFrameDataCache.data = std::move(data);
-                sceneFrameDataCache.transformRevision = transformRevision;
                 sceneFrameDataCache.lightRevision = lightRevision;
                 sceneFrameDataCache.windRevision = windRevision;
                 sceneFrameDataCache.cameraRevision = cameraRevision;
-                sceneFrameDataCache.parentRevision = parentRevision;
             }
             // Time is deliberately refreshed every frame, while ECS-derived wind values stay cached.
             // Shader Graph's Time node currently reads the w component, so this
@@ -135,6 +148,10 @@
             sceneFrameDataCache.data.wind.gustFrequencyTime = {
                 cachedWind.x(), cachedWind.y(), now, now - static_cast<float>(Time::deltaTime())};
             sceneFrameDataCache.uuidRevision = uuidRevision;
+            // Advance this watermark even when only an unrelated Transform
+            // changed, otherwise that same change would be inspected again on
+            // every subsequent frame.
+            sceneFrameDataCache.transformRevision = transformRevision;
             sceneFrameDataCache.structuralRevision = structuralRevision;
             sceneFrameDataCache.initialized = true;
         }
@@ -211,6 +228,18 @@
                 cameraController.camera()->setProjectionJitter(taaJitterX, taaJitterY);
             }
 
+            // Use a short burst after a camera cut (and during the first
+            // frame) so the bounded VSM scheduler fills useful pages quickly.
+            // Steady frames keep the much cheaper normal budget.
+            const Vec3 currentCameraPosition = cameraController.camera()->position();
+            const Vec3 currentCameraForward = cameraController.camera()->forward();
+            constexpr float cameraCutDistance = 5.0F;
+            constexpr float cameraCutDirectionDot = 0.8660254F; // 30 degrees
+            const bool cameraCut = previousGameCameraValid &&
+                ((currentCameraPosition - previousGameCameraPosition).length() > cameraCutDistance ||
+                 dot(currentCameraForward, previousGameCameraForward) < cameraCutDirectionDot);
+            const std::uint32_t shadowPageBudget = (!previousGameCameraValid || cameraCut) ? 128u : 64u;
+
             if (mainLightShadows) {
                 shadowClipUpdateMask = updateVirtualShadowClipmaps(
                     cameraController.camera()->position(), shadowClipMatrices,
@@ -219,7 +248,7 @@
                     shadowClipMatrices,
                     cameraController.camera()->projectionMatrix() *
                         cameraController.camera()->viewMatrix(),
-                    gpuObjects, dirtyShadowObjects, currentFrame);
+                    gpuObjects, dirtyShadowObjects, currentFrame, shadowPageBudget);
             } else {
                 shadowClipUpdateMask = 0;
                 shadowClipmapsValid = false;
@@ -227,16 +256,9 @@
             }
             const Mat4 currentView = cameraController.camera()->viewMatrix();
             const Mat4 currentProjection = cameraController.camera()->projectionMatrix();
-            const Vec3 currentCameraPosition = cameraController.camera()->position();
-            const Vec3 currentCameraForward = cameraController.camera()->forward();
             // Motion vectors describe continuous motion.  Reusing history after
             // a teleport or a large orientation jump produces unavoidable
             // ghosting, so treat it as a camera cut instead.
-            constexpr float cameraCutDistance = 5.0F;
-            constexpr float cameraCutDirectionDot = 0.8660254F; // 30 degrees
-            const bool cameraCut = previousGameCameraValid &&
-                ((currentCameraPosition - previousGameCameraPosition).length() > cameraCutDistance ||
-                 dot(currentCameraForward, previousGameCameraForward) < cameraCutDirectionDot);
             if (taaResolveActive && cameraCut) {
                 temporalAaPass.reset();
             }
@@ -283,7 +305,7 @@
                 sceneDescriptorPass.preparePages(
                     sceneShadowClipMatrices,
                     sceneCamera.projectionMatrix() * sceneCamera.viewMatrix(),
-                    gpuObjects, dirtyShadowObjects, currentFrame);
+                    gpuObjects, dirtyShadowObjects, currentFrame, 32);
             } else {
                 sceneShadowClipUpdateMask = 0;
                 sceneShadowClipmapsValid = false;
@@ -319,6 +341,7 @@
             if (vkBeginCommandBuffer(commandBuffer, &beginInfo) != VK_SUCCESS) {
                 throw std::runtime_error("Could not begin command buffer");
             }
+            gpuTimestampProfiler.beginFrame(commandBuffer, currentFrame);
             const bool renderSceneViewport = editorUiActive && sceneViewportRendered;
             const ForwardPass& sceneForwardPass = msaa.enabled()
                 ? forwardPass
@@ -519,6 +542,7 @@
             // sampler. Even when shadows are disabled, run an empty shadow
             // pass so its image is transitioned from UNDEFINED to
             // SHADER_READ_ONLY_OPTIMAL before the descriptor is used.
+            gpuTimestampProfiler.beginPass(commandBuffer, currentFrame, GpuProfilePass::Shadow);
             shadowPass.record(
                 commandBuffer, shadowClipMatrices, shadowClipUpdateMask, vertexBuffer.handle(),
                 instanceBuffers[currentFrame].handle(), indexBuffer.handle(),
@@ -544,6 +568,8 @@
                         ? static_cast<std::uint32_t>(gpuObjects.size()) : 0u,
                     sceneDescriptorPass.grassShadowDescriptorSet(currentFrame), grassShadowDrawPtr);
             }
+            gpuTimestampProfiler.endPass(commandBuffer, currentFrame, GpuProfilePass::Shadow);
+            gpuTimestampProfiler.beginPass(commandBuffer, currentFrame, GpuProfilePass::Culling);
             std::bitset<MaterialProgramSlotCount> activeShaderSlots;
             for (const Culling::GPUObjectData& object : gpuObjects) {
                 if (object.shader < MaterialProgramSlotCount && forwardPass.hasMaterialPipeline(object.shader)) {
@@ -627,6 +653,8 @@
                     commandBuffer, static_cast<std::uint32_t>(gpuObjects.size()), nullptr, shader, shader);
             }
 
+            gpuTimestampProfiler.endPass(commandBuffer, currentFrame, GpuProfilePass::Culling);
+            gpuTimestampProfiler.beginPass(commandBuffer, currentFrame, GpuProfilePass::Forward);
             forwardPass.begin(
                 commandBuffer, hdrFramebuffer, swapchain.extent(),
                 shadowPass.descriptorSet(currentFrame), vertexBuffer.handle(),
@@ -667,8 +695,10 @@
             forwardPass.drawOutline(commandBuffer, shadowPass.descriptorSet(currentFrame),
                                     indirectDraws[currentFrame]);
             ForwardPass::end(commandBuffer);
+            gpuTimestampProfiler.endPass(commandBuffer, currentFrame, GpuProfilePass::Forward);
 
             if (taaResolveActive) {
+                gpuTimestampProfiler.beginPass(commandBuffer, currentFrame, GpuProfilePass::Velocity);
                 VkClearValue velocityClear{};
                 VkRenderPassBeginInfo velocityPass{VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO};
                 velocityPass.renderPass = velocityPipeline.renderPass();
@@ -714,6 +744,10 @@
                     grassVelocityDraw.record(commandBuffer);
                 }
                 vkCmdEndRenderPass(commandBuffer);
+                gpuTimestampProfiler.endPass(commandBuffer, currentFrame, GpuProfilePass::Velocity);
+            } else {
+                gpuTimestampProfiler.beginPass(commandBuffer, currentFrame, GpuProfilePass::Velocity);
+                gpuTimestampProfiler.endPass(commandBuffer, currentFrame, GpuProfilePass::Velocity);
             }
 
             if (renderSceneViewport) {
@@ -818,13 +852,21 @@
             }
 
             if (taaResolveActive) {
+                gpuTimestampProfiler.beginPass(commandBuffer, currentFrame, GpuProfilePass::Taa);
                 temporalAaPass.record(commandBuffer, swapchain.extent(), taaJitterX, taaJitterY);
+                gpuTimestampProfiler.endPass(commandBuffer, currentFrame, GpuProfilePass::Taa);
+            } else {
+                gpuTimestampProfiler.beginPass(commandBuffer, currentFrame, GpuProfilePass::Taa);
+                gpuTimestampProfiler.endPass(commandBuffer, currentFrame, GpuProfilePass::Taa);
             }
 
+            gpuTimestampProfiler.beginPass(commandBuffer, currentFrame, GpuProfilePass::Bloom);
             bloomPass.record(commandBuffer,
                 taaResolveActive ? temporalAaPass.resolvedView() : hdrBuffer.imageView(),
                 hdrBuffer.sampler(), currentFrame);
+            gpuTimestampProfiler.endPass(commandBuffer, currentFrame, GpuProfilePass::Bloom);
 
+            gpuTimestampProfiler.beginPass(commandBuffer, currentFrame, GpuProfilePass::Tonemap);
             if (editorUiActive) {
                 VkRenderPassBeginInfo pass{VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO};
                 pass.renderPass = editorUiRenderPass;
@@ -850,6 +892,7 @@
                 canvasRenderer.record(scene.uiCanvas(), commandBuffer, imageIndex.value, currentFrame,
                                       swapchain.extent());
             }
+            gpuTimestampProfiler.endPass(commandBuffer, currentFrame, GpuProfilePass::Tonemap);
 
             if (vkEndCommandBuffer(commandBuffer) != VK_SUCCESS) {
                 throw std::runtime_error("Could not end command buffer");
@@ -1107,6 +1150,9 @@
 
         [[nodiscard]] bool acquireFrameImage(uint32_t& imageIndex) {
             vkWaitForFences(device, 1, &inFlightFences[currentFrame], VK_TRUE, UINT64_MAX);
+            if (const auto completed = gpuTimestampProfiler.completedFrame(currentFrame)) {
+                lastGpuProfile = *completed;
+            }
             const VkResult result = vkAcquireNextImageKHR(device, swapchain.handle(), UINT64_MAX,
                 imageAvailableSemaphores[currentFrame], VK_NULL_HANDLE, &imageIndex);
 
@@ -1240,6 +1286,9 @@
             }
             recordCommandBuffer(commandBuffers[currentFrame], SwapchainImageIndex{imageIndex});
             submitAndPresentFrame(imageIndex);
+            // Only this path records timestamp queries.  drawCoreFrame() shares
+            // submitAndPresentFrame(), but does not reset or write this pool.
+            gpuTimestampProfiler.markSubmitted(currentFrame);
             if (sceneViewportRendered) {
                 renderedSceneViewportPosition = sceneCameraPosition;
                 renderedSceneViewportYaw = sceneCameraYaw;

@@ -44,8 +44,12 @@ void appendDraw(bool visible, CullingObjectData objectData)
     command.indexCount = objectData.indexCount;
     if (culling.shadowPass == 0 && objectData.lod1IndexCount != 0)
     {
-        float3 center = (objectData.localAabbMin.xyz + objectData.localAabbMax.xyz) * 0.5;
-        float distanceToCamera = length(center - culling.cameraPosition.xyz);
+        // Bounds are stored in object-local space, while the culling camera is
+        // in world space. Compare positions in the same space so LOD choice is
+        // independent of the object's transform.
+        float3 localCenter = (objectData.localAabbMin.xyz + objectData.localAabbMax.xyz) * 0.5;
+        float3 worldCenter = mul(float4(localCenter, 1.0), objectData.model).xyz;
+        float distanceToCamera = length(worldCenter - culling.cameraPosition.xyz);
         if (distanceToCamera >= objectData.lod2Distance && objectData.lod2IndexCount != 0)
             command.indexCount = objectData.lod2IndexCount;
         else if (distanceToCamera >= objectData.lod1Distance)

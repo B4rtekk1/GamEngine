@@ -24,6 +24,31 @@ struct ShadowSampleDebug
     uint2 virtualPage;
 };
 
+// Resolving the page once is enough for every texel of a bilinear footprint
+// that stays inside that page. This is the common case (only a two-texel-wide
+// strip around each page edge needs the general resolver below), and avoids
+// three redundant page-table fetches per logical PCF tap.
+bool resolveVirtualShadowPage(uint2 page, uint level,
+                              StructuredBuffer<uint4> pageTable, out uint physical)
+{
+    physical = INVALID_SHADOW_PAGE;
+    if (any(page >= uint2(VIRTUAL_PAGES_PER_AXIS)))
+        return false;
+    const uint tableIndex = level * VIRTUAL_PAGES_PER_AXIS * VIRTUAL_PAGES_PER_AXIS +
+                            page.y * VIRTUAL_PAGES_PER_AXIS + page.x;
+    physical = pageTable[tableIndex >> 2][tableIndex & 3];
+    return physical != INVALID_SHADOW_PAGE;
+}
+
+float2 virtualTexelAtlasUv(uint2 texel, uint physical)
+{
+    const uint2 physicalPage = uint2(physical % PHYSICAL_PAGES_PER_AXIS,
+                                     physical / PHYSICAL_PAGES_PER_AXIS);
+    const uint2 localPixel = texel % PAGE_RESOLUTION;
+    return (float2(physicalPage * PAGE_RESOLUTION + localPixel) + 0.5) /
+           float(PHYSICAL_PAGES_PER_AXIS * PAGE_RESOLUTION);
+}
+
 // Resolves one virtual texel to the centre of its physical atlas texel.
 bool resolveVirtualShadowTexel(int2 texel, uint level,
                                StructuredBuffer<uint4> pageTable, out float2 atlasUv)
@@ -32,17 +57,10 @@ bool resolveVirtualShadowTexel(int2 texel, uint level,
     if (any(texel < int2(0)) || any(texel >= int2(VIRTUAL_RESOLUTION)))
         return false;
     uint2 pixel = uint2(texel);
-    uint2 page = pixel / PAGE_RESOLUTION;
-    uint tableIndex = level * VIRTUAL_PAGES_PER_AXIS * VIRTUAL_PAGES_PER_AXIS +
-                      page.y * VIRTUAL_PAGES_PER_AXIS + page.x;
-    uint physical = pageTable[tableIndex >> 2][tableIndex & 3];
-    if (physical == INVALID_SHADOW_PAGE)
+    uint physical;
+    if (!resolveVirtualShadowPage(pixel / PAGE_RESOLUTION, level, pageTable, physical))
         return false;
-    uint2 physicalPage = uint2(physical % PHYSICAL_PAGES_PER_AXIS,
-                               physical / PHYSICAL_PAGES_PER_AXIS);
-    uint2 localPixel = pixel % PAGE_RESOLUTION;
-    float2 atlasPixel = float2(physicalPage * PAGE_RESOLUTION + localPixel) + 0.5;
-    atlasUv = atlasPixel / float(PHYSICAL_PAGES_PER_AXIS * PAGE_RESOLUTION);
+    atlasUv = virtualTexelAtlasUv(pixel, physical);
     return true;
 }
 
@@ -71,6 +89,29 @@ float sampleVirtualShadowBilinear(Sampler2DShadow shadowMap, float2 virtualPixel
         (1.0 - fraction.x) * fraction.y,
         fraction.x * fraction.y};
     const int2 offsets[4] = {int2(0, 0), int2(1, 0), int2(0, 1), int2(1, 1)};
+
+    // Fast path: the entire bilinear footprint is resident in one virtual
+    // page. Map that page once, then sample its physical texels directly.
+    // The atlas sampler remains nearest-filtered, so this preserves virtual
+    // bilinear filtering exactly without bleeding across physical pages.
+    const bool footprintInPage = (base.x % int(PAGE_RESOLUTION)) != int(PAGE_RESOLUTION - 1) &&
+                                 (base.y % int(PAGE_RESOLUTION)) != int(PAGE_RESOLUTION - 1);
+    if (all(base >= int2(0)) && all(base + int2(1) < int2(VIRTUAL_RESOLUTION)) && footprintInPage)
+    {
+        uint physical;
+        if (resolveVirtualShadowPage(uint2(base) / PAGE_RESOLUTION, level, pageTable, physical))
+        {
+            float shadow = 0.0;
+            [unroll]
+            for (uint tap = 0; tap < 4; ++tap)
+            {
+                const float2 atlasUv = virtualTexelAtlasUv(uint2(base + offsets[tap]), physical);
+                shadow += (1.0 - shadowMap.SampleCmpLevelZero(atlasUv, compareDepth)) * weights[tap];
+            }
+            hasSamples = true;
+            return shadow;
+        }
+    }
 
     float shadow = 0.0;
     float totalWeight = 0.0;
