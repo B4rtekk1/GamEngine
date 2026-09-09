@@ -22,6 +22,7 @@
 #include <cmath>
 #include <cstdint>
 #include <fstream>
+#include <iostream>
 #include <limits>
 #include <string>
 #include <string_view>
@@ -72,24 +73,29 @@ using GltfData = std::unique_ptr<cgltf_data, decltype(&cgltf_free)>;
     });
 }
 
+struct NamedImage final {
+    std::string label;
+    std::int32_t index{-1};
+};
+
 // Fab packages sometimes retain their auxiliary maps in the glTF image table
 // without a core glTF texture slot for them.  Resolve those maps by their
 // published Quixel suffixes.  Ambiguous maps are deliberately ignored: it is
 // safer than assigning one material's opacity to another material.
-[[nodiscard]] std::int32_t named_quixel_image(const cgltf_data& data,
+[[nodiscard]] std::int32_t named_quixel_image(const std::vector<NamedImage>& images,
                                               const cgltf_material& material,
+                                              const bool singleMaterialAsset,
                                               const std::initializer_list<std::string_view> suffixes) {
     std::int32_t result = -1;
     const std::string materialLabel = lower_label(material.name);
-    for (cgltf_size i = 0; i < data.images_count; ++i) {
-        const std::string label = lower_image_label(data.images[i]);
-        if (!contains_any(label, suffixes)) continue;
+    for (const NamedImage& image : images) {
+        if (!contains_any(image.label, suffixes)) continue;
         // Single-material assets are unambiguous.  For multi-material assets,
         // accept only a map whose file name names the material as well.
-        if (data.materials_count != 1 &&
-            (materialLabel.empty() || label.find(materialLabel) == std::string::npos)) continue;
+        if (!singleMaterialAsset &&
+            (materialLabel.empty() || image.label.find(materialLabel) == std::string::npos)) continue;
         if (result >= 0) return -1;
-        result = static_cast<std::int32_t>(i);
+        result = image.index;
     }
     return result;
 }
@@ -101,6 +107,20 @@ using GltfData = std::unique_ptr<cgltf_data, decltype(&cgltf_free)>;
         return static_cast<char>(std::tolower(character));
     });
     return contains_any(label, {"foliage", "grass", "leaf", "plant", "thatch", "vegetation"});
+}
+
+void import_texture_transform(PBRMaterial& material, const MaterialTextureSlot slot,
+                              const cgltf_texture_view& view) {
+    auto& target = material.textureTransforms[static_cast<std::size_t>(slot)];
+    target.texCoord = static_cast<std::uint8_t>(std::clamp(view.texcoord, 0, 1));
+    if (!view.has_transform) return;
+    target.offsetX = view.transform.offset[0];
+    target.offsetY = view.transform.offset[1];
+    target.scaleX = view.transform.scale[0];
+    target.scaleY = view.transform.scale[1];
+    target.rotation = view.transform.rotation;
+    if (view.transform.has_texcoord)
+        target.texCoord = static_cast<std::uint8_t>(std::clamp(view.transform.texcoord, 0, 1));
 }
 
 [[nodiscard]] std::vector<std::uint8_t> decode_base64(std::string_view source) {
@@ -204,7 +224,42 @@ using GltfData = std::unique_ptr<cgltf_data, decltype(&cgltf_free)>;
     return true;
 }
 
-void load_materials(const cgltf_data& data, Mesh& mesh) {
+[[nodiscard]] std::vector<NamedImage> load_quixel_external_images(const cgltf_data& data,
+                                                                    const std::filesystem::path& path,
+                                                                    Mesh& mesh) {
+    std::vector<NamedImage> result;
+    result.reserve(data.images_count);
+    for (cgltf_size i = 0; i < data.images_count; ++i)
+        result.push_back({lower_image_label(data.images[i]), static_cast<std::int32_t>(i)});
+
+    std::error_code error;
+    for (const auto& entry : std::filesystem::directory_iterator(path.parent_path(), error)) {
+        if (error || !entry.is_regular_file(error)) continue;
+        const std::string label = lower_label(entry.path().filename().string().c_str());
+        if (!contains_any(label, {"opacity", "_op.", "translucency", "_trans.",
+                                  "displacement", "height", "_disp.", "specular", "_spec."})) continue;
+        if (std::ranges::any_of(result, [&](const NamedImage& image) { return image.label == label; })) continue;
+        int width = 0;
+        int height = 0;
+        int channels = 0;
+        stbi_uc* pixels = stbi_load(entry.path().string().c_str(), &width, &height, &channels, STBI_rgb_alpha);
+        if (pixels == nullptr || width <= 0 || height <= 0) {
+            stbi_image_free(pixels);
+            continue;
+        }
+        Mesh::Image image;
+        image.width = static_cast<std::uint32_t>(width);
+        image.height = static_cast<std::uint32_t>(height);
+        const auto byteCount = static_cast<std::size_t>(width) * static_cast<std::size_t>(height) * STBI_rgb_alpha;
+        image.rgbaPixels.assign(pixels, pixels + byteCount);
+        stbi_image_free(pixels);
+        result.push_back({label, static_cast<std::int32_t>(mesh.images.size())});
+        mesh.images.push_back(std::move(image));
+    }
+    return result;
+}
+
+void load_materials(const cgltf_data& data, const std::vector<NamedImage>& images, Mesh& mesh) {
     mesh.materials.reserve(data.materials_count + 1);
     for (cgltf_size i = 0; i < data.materials_count; ++i) {
         const cgltf_material& source = data.materials[i];
@@ -217,24 +272,32 @@ void load_materials(const cgltf_data& data, Mesh& mesh) {
             material.roughness = pbr.roughness_factor;
             material.baseColorTexture = image_index(data, pbr.base_color_texture);
             material.metallicRoughnessTexture = image_index(data, pbr.metallic_roughness_texture);
+            import_texture_transform(material, MaterialTextureSlot::BaseColor, pbr.base_color_texture);
+            import_texture_transform(material, MaterialTextureSlot::MetallicRoughness, pbr.metallic_roughness_texture);
         }
         material.normalTexture = image_index(data, source.normal_texture);
+        import_texture_transform(material, MaterialTextureSlot::Normal, source.normal_texture);
         material.normalScale = source.normal_texture.texture == nullptr ? 1.0F : source.normal_texture.scale;
         material.aoTexture = image_index(data, source.occlusion_texture);
+        import_texture_transform(material, MaterialTextureSlot::AmbientOcclusion, source.occlusion_texture);
         material.aoStrength = source.occlusion_texture.texture == nullptr
                                       ? 1.0F : source.occlusion_texture.scale;
         material.emissiveTexture = image_index(data, source.emissive_texture);
+        import_texture_transform(material, MaterialTextureSlot::Emissive, source.emissive_texture);
         material.emissiveColor = {source.emissive_factor[0], source.emissive_factor[1],
                                   source.emissive_factor[2], 1.0F};
         material.emissiveIntensity = source.has_emissive_strength
             ? source.emissive_strength.emissive_strength : 1.0F;
         if (source.has_specular) {
             material.specularTexture = image_index(data, source.specular.specular_texture);
+            import_texture_transform(material, MaterialTextureSlot::Specular, source.specular.specular_texture);
             material.specular = source.specular.specular_factor;
         }
         if (source.has_diffuse_transmission) {
             material.translucencyTexture = image_index(
                 data, source.diffuse_transmission.diffuse_transmission_color_texture);
+            import_texture_transform(material, MaterialTextureSlot::Translucency,
+                                     source.diffuse_transmission.diffuse_transmission_color_texture);
             material.translucency = source.diffuse_transmission.diffuse_transmission_factor;
         }
 
@@ -242,14 +305,14 @@ void load_materials(const cgltf_data& data, Mesh& mesh) {
         // keep them as named images, so resolve their Quixel naming convention
         // before handing the material to the renderer.
         if (material.opacityTexture < 0)
-            material.opacityTexture = named_quixel_image(data, source, {"opacity", "_op."});
+            material.opacityTexture = named_quixel_image(images, source, data.materials_count == 1, {"opacity", "_op."});
         if (material.translucencyTexture < 0)
-            material.translucencyTexture = named_quixel_image(data, source, {"translucency", "_trans."});
+            material.translucencyTexture = named_quixel_image(images, source, data.materials_count == 1, {"translucency", "_trans."});
         if (material.translucencyTexture >= 0 && material.translucency == 0.0F)
             material.translucency = 1.0F;
-        material.displacementTexture = named_quixel_image(data, source, {"displacement", "height", "_disp."});
+        material.displacementTexture = named_quixel_image(images, source, data.materials_count == 1, {"displacement", "height", "_disp."});
         if (material.specularTexture < 0)
-            material.specularTexture = named_quixel_image(data, source, {"specular", "_spec."});
+            material.specularTexture = named_quixel_image(images, source, data.materials_count == 1, {"specular", "_spec."});
 
         material.alphaMode = source.alpha_mode == cgltf_alpha_mode_mask ? AlphaMode::Mask :
                              source.alpha_mode == cgltf_alpha_mode_blend ? AlphaMode::Blend :
@@ -258,14 +321,19 @@ void load_materials(const cgltf_data& data, Mesh& mesh) {
         material.doubleSided = source.double_sided != 0;
         // An explicit opacity texture is a cutout mask even when the exporter
         // omitted glTF's alphaMode.  This is the normal Quixel vegetation path.
-        const bool foliage = is_foliage_label(source) ||
-            (material.opacityTexture >= 0 && (material.doubleSided || data.materials_count == 1));
+        const bool foliage = is_foliage_label(source) || material.opacityTexture >= 0 ||
+            (material.doubleSided && (material.alphaMode == AlphaMode::Mask || material.alphaMode == AlphaMode::Blend));
         if (foliage) {
             material.shadingModel = MaterialShadingModel::Foliage;
             material.vertexColorUsage = VertexColorUsage::FoliageData;
             material.doubleSided = true;
             if (material.alphaMode == AlphaMode::Opaque) material.alphaMode = AlphaMode::Mask;
         }
+        std::clog << "glTF material '" << (source.name != nullptr ? source.name : "<unnamed>")
+                  << "': doubleSided=" << material.doubleSided
+                  << ", alphaMode=" << static_cast<int>(material.alphaMode)
+                  << ", opacity=" << material.opacityTexture
+                  << ", foliage=" << foliage << '\n';
         mesh.materials.push_back(material);
     }
 }
@@ -375,11 +443,15 @@ void generate_tangents(Mesh& mesh, const std::size_t vertexStart, const std::siz
         positions->count > std::numeric_limits<std::uint32_t>::max()) return false;
 
     const cgltf_accessor* normals = attribute(primitive, cgltf_attribute_type_normal);
-    const cgltf_accessor* texCoords = attribute(primitive, cgltf_attribute_type_texcoord);
+    // The base-color texture chooses its own glTF TEXCOORD_n set.  Meshes use
+    // one runtime UV stream today, so select that authored set while importing.
+    const cgltf_accessor* texCoords = attribute(primitive, cgltf_attribute_type_texcoord, 0);
+    const cgltf_accessor* texCoords1 = attribute(primitive, cgltf_attribute_type_texcoord, 1);
     const cgltf_accessor* colors = attribute(primitive, cgltf_attribute_type_color);
     const cgltf_accessor* sourceTangents = attribute(primitive, cgltf_attribute_type_tangent);
     if ((normals != nullptr && normals->count != positions->count) ||
         (texCoords != nullptr && texCoords->count != positions->count) ||
+        (texCoords1 != nullptr && texCoords1->count != positions->count) ||
         (colors != nullptr && colors->count != positions->count) ||
         (sourceTangents != nullptr && sourceTangents->count != positions->count)) return false;
 
@@ -417,6 +489,10 @@ void generate_tangents(Mesh& mesh, const std::size_t vertexStart, const std::siz
             if (!cgltf_accessor_read_float(texCoords, i, values, 2)) return false;
             vertex.texCoord = Vec2{values[0], values[1]};
         }
+        if (texCoords1 != nullptr) {
+            if (!cgltf_accessor_read_float(texCoords1, i, values, 2)) return false;
+            vertex.texCoord1 = Vec2{values[0], values[1]};
+        } else vertex.texCoord1 = vertex.texCoord;
         if (colors != nullptr) {
             if (!cgltf_accessor_read_float(colors, i, values, 4)) return false;
             vertex.color = Vec3{values[0], values[1], values[2]};
@@ -470,10 +546,11 @@ std::shared_ptr<const Mesh> load_gltf_mesh(const std::filesystem::path& path) {
         cgltf_validate(data.get()) != cgltf_result_success) return {};
 
     Mesh mesh;
-    load_materials(*data, mesh);
+    if (!load_images(*data, path, mesh)) return {};
+    const auto quixelImages = load_quixel_external_images(*data, path, mesh);
+    load_materials(*data, quixelImages, mesh);
     // The last slot is the glTF default material used by primitives without one.
     mesh.materials.emplace_back();
-    if (!load_images(*data, path, mesh)) return {};
 
     if (data->scene != nullptr) {
         for (cgltf_size i = 0; i < data->scene->nodes_count; ++i) {

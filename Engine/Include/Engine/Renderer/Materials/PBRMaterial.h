@@ -14,6 +14,19 @@ namespace Engine {
     // COLOR_0 is normally an albedo multiplier in glTF, but vegetation
     // exporters commonly store wind and per-leaf masks in it instead.
     enum class VertexColorUsage : std::uint8_t { Albedo, FoliageData, TerrainWeights };
+    enum class MaterialTextureSlot : std::uint8_t {
+        BaseColor, MetallicRoughness, Normal, AmbientOcclusion, Opacity,
+        Translucency, Displacement, Emissive, Specular, Count
+    };
+
+    struct TextureCoordinateTransform final {
+        std::uint8_t texCoord{0};
+        float offsetX{0.0F};
+        float offsetY{0.0F};
+        float scaleX{1.0F};
+        float scaleY{1.0F};
+        float rotation{0.0F};
+    };
 
     // Values follow the metallic/roughness workflow used by glTF.
     struct PBRMaterial {
@@ -49,6 +62,7 @@ namespace Engine {
         NormalConvention normalConvention{NormalConvention::OpenGL};
         MaterialShadingModel shadingModel{MaterialShadingModel::Standard};
         VertexColorUsage vertexColorUsage{VertexColorUsage::Albedo};
+        std::array<TextureCoordinateTransform, static_cast<std::size_t>(MaterialTextureSlot::Count)> textureTransforms{};
         // Terrain uses four albedo layers blended by the vertex splat weights.
         std::array<std::int32_t, 4> terrainLayerTextures{-1, -1, -1, -1};
         bool terrainLayered{false};

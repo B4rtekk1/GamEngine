@@ -408,7 +408,12 @@
                    lhs.emissiveColorIntensity.x == rhs.emissiveColorIntensity.x &&
                    lhs.emissiveColorIntensity.y == rhs.emissiveColorIntensity.y &&
                    lhs.emissiveColorIntensity.z == rhs.emissiveColorIntensity.z &&
-                   lhs.emissiveColorIntensity.w == rhs.emissiveColorIntensity.w;
+                   lhs.emissiveColorIntensity.w == rhs.emissiveColorIntensity.w &&
+                   lhs.textureCoordinateSets0 == rhs.textureCoordinateSets0 &&
+                   lhs.textureCoordinateSets1 == rhs.textureCoordinateSets1 &&
+                   lhs.textureCoordinateSets2 == rhs.textureCoordinateSets2 &&
+                   lhs.textureTransforms == rhs.textureTransforms &&
+                   lhs.textureTransformRotations == rhs.textureTransformRotations;
         }
 
         void markDirty(const std::size_t index,

@@ -11,6 +11,7 @@ struct VertexInput
 {
     [[vk::location(0)]] float3 position : POSITION;
     [[vk::location(2)]] float2 texCoord : TEXCOORD0;
+    [[vk::location(4)]] float2 texCoord1 : TEXCOORD1;
     [[vk::location(8)]] uint materialIndex : MATERIAL_INDEX;
 };
 
@@ -28,6 +29,7 @@ struct VertexOutput
     [[vk::location(1)]] float4 previousClip;
     [[vk::location(2)]] float2 texCoord;
     [[vk::location(3)]] nointerpolation uint materialIndex;
+    [[vk::location(4)]] float2 texCoord1;
 };
 
 [shader("vertex")]
@@ -83,6 +85,7 @@ VertexOutput vertexMain(VertexInput input, uint instanceIndex : SV_InstanceID,
     output.currentNdc = currentClip.xy / currentClip.w;
     output.previousClip = previousClip;
     output.texCoord = input.texCoord;
+    output.texCoord1 = input.texCoord1;
     output.materialIndex = asuint(instance.positionMaterial.w) + input.materialIndex;
     return output;
 }
@@ -93,6 +96,7 @@ struct FragmentInput
     [[vk::location(1)]] float4 previousClip;
     [[vk::location(2)]] float2 texCoord;
     [[vk::location(3)]] nointerpolation uint materialIndex;
+    [[vk::location(4)]] float2 texCoord1;
 };
 
 struct FragmentOutput
@@ -108,9 +112,9 @@ FragmentOutput fragmentMain(FragmentInput input)
     {
         float alpha = material.roughnessAmbientOcclusion.w;
         if (material.textureIndices.x >= 0)
-            alpha *= materialTextures[NonUniformResourceIndex(material.textureIndices.x)].Sample(input.texCoord).a;
+            alpha *= materialTextures[NonUniformResourceIndex(material.textureIndices.x)].Sample(materialTextureUv(material, 0, input.texCoord, input.texCoord1)).a;
         if (material.auxiliaryTextureIndices.y >= 0)
-            alpha *= materialTextures[NonUniformResourceIndex(material.auxiliaryTextureIndices.y)].Sample(input.texCoord).r;
+            alpha *= materialTextures[NonUniformResourceIndex(material.auxiliaryTextureIndices.y)].Sample(materialTextureUv(material, 4, input.texCoord, input.texCoord1)).r;
         uint alphaMode = uint((material.textureIndices.w >> 1) & 3);
         const float cutoff = alphaMode == 1 ? material.roughnessAmbientOcclusion.z : 0.30;
         if ((alphaMode == 1 || alphaMode == 2) && alpha < cutoff)

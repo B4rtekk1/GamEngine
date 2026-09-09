@@ -28,6 +28,7 @@ namespace Engine {
         /** @brief Two-dimensional texture coordinates. */
         Vec2 texCoord;
 
+
         /** @brief Surface normal in object or model space. */
         Vec3 normal;
 
@@ -38,6 +39,9 @@ namespace Engine {
          * its handedness, which is used to reconstruct the bitangent.
          */
         Vec4 tangent;
+
+        /** @brief Secondary glTF TEXCOORD_1 stream. */
+        Vec2 texCoord1;
 
         /**
          * @brief Index into Mesh::materials.

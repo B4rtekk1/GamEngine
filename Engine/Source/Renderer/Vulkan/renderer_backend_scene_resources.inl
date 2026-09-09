@@ -86,6 +86,16 @@
                 (static_cast<int>(source.alphaMode) << 1) | (source.terrainLayered ? 8 : 0) |
                 (source.shadingModel == MaterialShadingModel::Foliage ? 16 : 0) |
                 (source.vertexColorUsage == VertexColorUsage::FoliageData ? 32 : 0);
+            const auto coordinateSet = [&](const MaterialTextureSlot slot) {
+                return static_cast<int>(source.textureTransforms[static_cast<std::size_t>(slot)].texCoord);
+            };
+            const auto transform = [&](const MaterialTextureSlot slot) {
+                const auto& value = source.textureTransforms[static_cast<std::size_t>(slot)];
+                return glm::vec4{value.offsetX, value.offsetY, value.scaleX, value.scaleY};
+            };
+            std::array<glm::vec4, 3> rotations{};
+            for (std::size_t i = 0; i < source.textureTransforms.size(); ++i)
+                rotations[i / 4][i % 4] = source.textureTransforms[i].rotation;
             return {
                 glm::vec4{source.baseColor.r(), source.baseColor.g(), source.baseColor.b(), source.metallic},
                 glm::vec4{source.roughness, source.aoStrength, source.alphaCutoff, source.baseColor.a()},
@@ -99,6 +109,17 @@
                 glm::ivec4{textureIndex(source.emissiveTexture), textureIndex(source.specularTexture), -1, -1},
                 glm::vec4{source.emissiveColor.r(), source.emissiveColor.g(), source.emissiveColor.b(),
                           std::max(0.0F, source.emissiveIntensity)},
+                glm::ivec4{coordinateSet(MaterialTextureSlot::BaseColor), coordinateSet(MaterialTextureSlot::MetallicRoughness),
+                           coordinateSet(MaterialTextureSlot::Normal), coordinateSet(MaterialTextureSlot::AmbientOcclusion)},
+                glm::ivec4{coordinateSet(MaterialTextureSlot::Opacity), coordinateSet(MaterialTextureSlot::Translucency),
+                           coordinateSet(MaterialTextureSlot::Displacement), coordinateSet(MaterialTextureSlot::Emissive)},
+                glm::ivec4{coordinateSet(MaterialTextureSlot::Specular), 0, 0, 0},
+                {transform(MaterialTextureSlot::BaseColor), transform(MaterialTextureSlot::MetallicRoughness),
+                 transform(MaterialTextureSlot::Normal), transform(MaterialTextureSlot::AmbientOcclusion),
+                 transform(MaterialTextureSlot::Opacity), transform(MaterialTextureSlot::Translucency),
+                 transform(MaterialTextureSlot::Displacement), transform(MaterialTextureSlot::Emissive),
+                 transform(MaterialTextureSlot::Specular)},
+                rotations,
             };
         }
 

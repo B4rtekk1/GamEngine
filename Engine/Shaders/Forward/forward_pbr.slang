@@ -18,6 +18,7 @@ struct ForwardVertexInput
     [[vk::location(0)]] float3 position : POSITION;
     [[vk::location(1)]] float3 color : COLOR0;
     [[vk::location(2)]] float2 texCoord : TEXCOORD0;
+    [[vk::location(4)]] float2 texCoord1 : TEXCOORD1;
     [[vk::location(3)]] float3 normal : NORMAL;
     [[vk::location(8)]] uint materialIndex : MATERIAL_INDEX;
     [[vk::location(9)]] float4 tangent : TANGENT;
@@ -32,6 +33,7 @@ struct ForwardVertexOutput
     [[vk::location(3)]] nointerpolation uint materialIndex;
     [[vk::location(4)]] float2 texCoord;
     [[vk::location(5)]] float4 tangent;
+    [[vk::location(6)]] float2 texCoord1;
 };
 
 [shader("vertex")]
@@ -87,6 +89,7 @@ ForwardVertexOutput vertexMain(ForwardVertexInput input, uint instanceIndex : SV
     output.normal = mul(localNormal, normalMatrix);
     output.materialIndex = asuint(instance.positionMaterial.w) + input.materialIndex;
     output.texCoord = input.texCoord;
+    output.texCoord1 = input.texCoord1;
     output.tangent = float4(mul(input.tangent.xyz, normalMatrix), input.tangent.w);
     return output;
 }
@@ -105,6 +108,7 @@ struct ForwardFragmentInput
     [[vk::location(3)]] nointerpolation uint materialIndex;
     [[vk::location(4)]] float2 texCoord;
     [[vk::location(5)]] float4 tangent;
+    [[vk::location(6)]] float2 texCoord1;
     bool isFrontFace : SV_IsFrontFace;
 };
 
@@ -160,12 +164,12 @@ ForwardFragmentOutput fragmentMain(ForwardFragmentInput input)
         baseColor.a = 1.0;
     }
     else if (material.textureIndices.x >= 0)
-        baseColor *= materialTextures[NonUniformResourceIndex(material.textureIndices.x)].Sample(input.texCoord);
+        baseColor *= materialTextures[NonUniformResourceIndex(material.textureIndices.x)].Sample(materialTextureUv(material, 0, input.texCoord, input.texCoord1));
 
     // Cooker may pack this map into base-color alpha; retain the separate
     // path for uncooked glTF/Quixel assets.
     if (material.auxiliaryTextureIndices.y >= 0)
-        baseColor.a *= materialTextures[NonUniformResourceIndex(material.auxiliaryTextureIndices.y)].Sample(input.texCoord).r;
+        baseColor.a *= materialTextures[NonUniformResourceIndex(material.auxiliaryTextureIndices.y)].Sample(materialTextureUv(material, 4, input.texCoord, input.texCoord1)).r;
 
     const bool doubleSided = (material.textureIndices.w & 1) != 0;
     const uint alphaMode = uint((material.textureIndices.w >> 1) & 3);
@@ -193,7 +197,7 @@ ForwardFragmentOutput fragmentMain(ForwardFragmentInput input)
     if (material.textureIndices.y >= 0)
     {
         float4 metallicRoughness =
-            materialTextures[NonUniformResourceIndex(material.textureIndices.y)].Sample(input.texCoord);
+            materialTextures[NonUniformResourceIndex(material.textureIndices.y)].Sample(materialTextureUv(material, 1, input.texCoord, input.texCoord1));
         metallic *= metallicRoughness.b;
         roughness *= metallicRoughness.g;
     }
@@ -208,7 +212,7 @@ ForwardFragmentOutput fragmentMain(ForwardFragmentInput input)
         float3 tangent = normalize(input.tangent.xyz - normal * dot(normal, input.tangent.xyz)) * faceSign;
         float3 bitangent = normalize(cross(normal, tangent)) * input.tangent.w;
         float3 mappedNormal =
-            materialTextures[NonUniformResourceIndex(material.textureIndices.z)].Sample(input.texCoord).xyz * 2.0 - 1.0;
+            materialTextures[NonUniformResourceIndex(material.textureIndices.z)].Sample(materialTextureUv(material, 2, input.texCoord, input.texCoord1)).xyz * 2.0 - 1.0;
         mappedNormal.xy *= material.extensionScalars.x;
         float3x3 tangentFrame = float3x3(tangent, bitangent, normal);
         normal = normalize(mul(mappedNormal, tangentFrame));
@@ -221,7 +225,7 @@ ForwardFragmentOutput fragmentMain(ForwardFragmentInput input)
     graphInput.worldNormal = normal;
     graphInput.viewDirection = viewDirection;
     graphInput.uv0 = input.texCoord;
-    graphInput.uv1 = input.texCoord;
+    graphInput.uv1 = input.texCoord1;
     graphInput.tangent = normalize(input.tangent.xyz);
     graphInput.bitangent = normalize(cross(normal, graphInput.tangent)) * input.tangent.w;
     graphInput.time = frame.windGustFrequencyTime.w;
@@ -290,7 +294,7 @@ ForwardFragmentOutput fragmentMain(ForwardFragmentInput input)
     }
     float ao = 1.0;
     if (material.auxiliaryTextureIndices.x >= 0)
-        ao = lerp(1.0, materialTextures[NonUniformResourceIndex(material.auxiliaryTextureIndices.x)].Sample(input.texCoord).r,
+        ao = lerp(1.0, materialTextures[NonUniformResourceIndex(material.auxiliaryTextureIndices.x)].Sample(materialTextureUv(material, 3, input.texCoord, input.texCoord1)).r,
                   clamp(material.roughnessAmbientOcclusion.y, 0.0, 1.0));
 #ifdef ENGINE_SHADER_GRAPH
     ao = graphSurface.ao;
@@ -299,7 +303,7 @@ ForwardFragmentOutput fragmentMain(ForwardFragmentInput input)
     if (material.extensionTextureIndices.x >= 0)
     {
         emissive *= materialTextures[NonUniformResourceIndex(material.extensionTextureIndices.x)]
-            .Sample(input.texCoord).rgb;
+            .Sample(materialTextureUv(material, 7, input.texCoord, input.texCoord1)).rgb;
     }
 #ifdef ENGINE_SHADER_GRAPH
     emissive = graphSurface.emission;
@@ -325,7 +329,7 @@ ForwardFragmentOutput fragmentMain(ForwardFragmentInput input)
     // Foliage has a cheap, stable back-lighting term.  The flag is deliberately
     // material data rather than an asset-name heuristic at runtime.
     if ((material.textureIndices.w & 16) != 0 && material.auxiliaryTextureIndices.z >= 0) {
-        float mask = materialTextures[NonUniformResourceIndex(material.auxiliaryTextureIndices.z)].Sample(input.texCoord).r;
+        float mask = materialTextures[NonUniformResourceIndex(material.auxiliaryTextureIndices.z)].Sample(materialTextureUv(material, 5, input.texCoord, input.texCoord1)).r;
         float backLight = saturate(dot(-normal, lightDirection));
         color += albedo * frame.lightColor.rgb * frame.lightDirectionIntensity.w *
                  backLight * mask * material.extensionScalars.y;

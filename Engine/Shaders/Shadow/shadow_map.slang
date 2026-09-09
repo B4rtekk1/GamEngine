@@ -15,6 +15,7 @@ struct ShadowVertexInput
 {
     [[vk::location(0)]] float3 position : POSITION;
     [[vk::location(2)]] float2 texCoord : TEXCOORD0;
+    [[vk::location(4)]] float2 texCoord1 : TEXCOORD1;
     [[vk::location(8)]] uint materialIndex : MATERIAL_INDEX;
 };
 
@@ -23,6 +24,7 @@ struct ShadowVertexOutput
     float4 position : SV_Position;
     [[vk::location(0)]] float2 texCoord;
     [[vk::location(1)]] nointerpolation uint materialIndex;
+    [[vk::location(2)]] float2 texCoord1;
 };
 
 [shader("vertex")]
@@ -56,6 +58,7 @@ ShadowVertexOutput vertexMain(ShadowVertexInput input, uint instanceIndex : SV_I
     output.position = mul(worldPosition, pushConstants.lightSpace);
     output.texCoord = input.texCoord;
     output.materialIndex = asuint(instance.positionMaterial.w) + input.materialIndex;
+    output.texCoord1 = input.texCoord1;
     return output;
 }
 
@@ -66,6 +69,7 @@ struct ShadowFragmentInput
 {
     [[vk::location(0)]] float2 texCoord;
     [[vk::location(1)]] nointerpolation uint materialIndex;
+    [[vk::location(2)]] float2 texCoord1;
 };
 
 [shader("fragment")]
@@ -74,11 +78,11 @@ void fragmentMain(ShadowFragmentInput input)
     MaterialData material = materials[input.materialIndex];
     float alpha = material.roughnessAmbientOcclusion.w;
     if (material.textureIndices.x >= 0)
-        alpha *= materialTextures[NonUniformResourceIndex(material.textureIndices.x)].Sample(input.texCoord).a;
+        alpha *= materialTextures[NonUniformResourceIndex(material.textureIndices.x)].Sample(materialTextureUv(material, 0, input.texCoord, input.texCoord1)).a;
     // Must match forward_pbr: uncooked Quixel foliage commonly carries its
     // cutout mask separately rather than in base-color alpha.
     if (material.auxiliaryTextureIndices.y >= 0)
-        alpha *= materialTextures[NonUniformResourceIndex(material.auxiliaryTextureIndices.y)].Sample(input.texCoord).r;
+        alpha *= materialTextures[NonUniformResourceIndex(material.auxiliaryTextureIndices.y)].Sample(materialTextureUv(material, 4, input.texCoord, input.texCoord1)).r;
     const uint alphaMode = uint((material.textureIndices.w >> 1) & 3);
     // Match the forward foliage cutout policy. Quixel-style foliage may be
     // authored as BLEND despite using a binary opacity texture.

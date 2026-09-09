@@ -278,6 +278,7 @@ void ShadowPass::create(VkPhysicalDevice physicalDevice, VkDevice device,
         const VkVertexInputAttributeDescription attributes[] = {
             {0, 0, VK_FORMAT_R32G32B32_SFLOAT, offsetof(Vertex, position)},
             {2, 0, VK_FORMAT_R32G32_SFLOAT, offsetof(Vertex, texCoord)},
+            {4, 0, VK_FORMAT_R32G32_SFLOAT, offsetof(Vertex, texCoord1)},
             {8, 0, VK_FORMAT_R32_UINT, offsetof(Vertex, materialIndex)},
         };
         VkPipelineVertexInputStateCreateInfo vertexInput{

@@ -2,6 +2,7 @@
 
 #include <glm/glm.hpp>
 #include <cstdint>
+#include <array>
 
 namespace Engine {
     // Global bindless texture table.  Indices in PBRMaterial refer directly
@@ -23,5 +24,10 @@ namespace Engine {
         glm::ivec4 extensionTextureIndices{-1};
         // Linear RGB emission colour and unconstrained HDR intensity.
         glm::vec4 emissiveColorIntensity{};
+        glm::ivec4 textureCoordinateSets0{};
+        glm::ivec4 textureCoordinateSets1{};
+        glm::ivec4 textureCoordinateSets2{};
+        std::array<glm::vec4, 9> textureTransforms{};
+        std::array<glm::vec4, 3> textureTransformRotations{};
     };
 } // namespace Engine
