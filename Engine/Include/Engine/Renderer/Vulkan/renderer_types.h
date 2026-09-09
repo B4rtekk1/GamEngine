@@ -10,7 +10,17 @@
 #include "Engine/Renderer/Vulkan/shadow_map.h"
 
 namespace Engine {
+    // Legacy forward UBO. It is intentionally kept below the Vulkan-guaranteed
+    // maxUniformBufferRange (64 KiB): 32 * LocalLightGPU is 2 KiB.
+    //
+    // Clustered lighting uses a separate SSBO and must use
+    // MaxClusteredLocalLights instead. Do not raise this value while
+    // RendererUniformBufferObject still contains localLights.
     inline constexpr std::uint32_t MaxLocalLights = 32;
+    inline constexpr std::uint32_t MaxClusteredLocalLights = 1024;
+    inline constexpr std::uint32_t ClusterTileSize = 64;
+    inline constexpr std::uint32_t ClusterDepthSlices = 24;
+    inline constexpr std::uint32_t MaxLightsPerCluster = 64;
 
     /** GPU-friendly record for point and spot lights. */
     struct alignas(16) LocalLightGPU {
@@ -19,6 +29,24 @@ namespace Engine {
         glm::vec4 colorIntensity{};
         // x: inner cone cosine, y: LightType, z: casts local shadow.
         glm::vec4 parameters{};
+    };
+
+    /** std430 header for one (x, y, logarithmic-depth) forward+ cluster. */
+    struct alignas(8) ClusterLightRangeGPU {
+        std::uint32_t offset{};
+        std::uint32_t count{};
+    };
+
+    /**
+     * Per-view parameters consumed by clustered_light_culling.  The cluster
+     * grid is sized from the actual render target, so Game View and Scene
+     * View never share an incompatible light list.
+     */
+    struct alignas(16) ClusteredLightingUniforms {
+        glm::mat4 view{1.0F};
+        glm::mat4 projection{1.0F};
+        glm::uvec4 gridAndLightCount{}; // x tiles, y tiles, z slices, light count
+        glm::vec4 viewportNearFar{};    // xy pixels, z near, w far
     };
 
     struct RendererUniformBufferObject {
