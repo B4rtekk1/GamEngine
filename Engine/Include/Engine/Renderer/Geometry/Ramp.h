@@ -32,13 +32,11 @@ namespace Engine {
                     {{3.0F, 2.0F, 2.0F}, {0.78F, 0.34F, 0.10F}, {1, 1}, {0, 0, 1}},
                     {{-3.0F, 2.0F, 2.0F}, {0.78F, 0.34F, 0.10F}, {0, 1}, {0, 0, 1}},
                 },
-                // The triangular end caps use both windings. Their projection
-                // can otherwise be back-face culled from one side of the ramp.
                 .indices = {
-                    0, 2, 1, 2, 0, 3, 4, 5, 6, 6, 7, 4,
-                    8, 9, 10, 10, 9, 8,
-                    11, 13, 12, 12, 13, 11,
-                    14, 16, 15, 16, 14, 17,
+                    0, 1, 2, 2, 3, 0, 4, 6, 5, 6, 4, 7,
+                    8, 9, 10,
+                    12, 13, 11,
+                    14, 15, 16, 16, 17, 14,
                 },
             };
         }

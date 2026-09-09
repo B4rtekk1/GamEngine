@@ -300,7 +300,7 @@ void ShadowPass::create(VkPhysicalDevice physicalDevice, VkDevice device,
         // pixels are already discarded by shadow_map::fragmentMain, so it must also cast
         // a shadow when the light sees the back of a leaf card.
         rasterizer.cullMode = VK_CULL_MODE_BACK_BIT;
-        rasterizer.frontFace = VK_FRONT_FACE_CLOCKWISE;
+        rasterizer.frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE;
         rasterizer.lineWidth = 1.0F;
         rasterizer.depthBiasEnable = VK_TRUE;
         VkPipelineMultisampleStateCreateInfo multisampling{

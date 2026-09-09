@@ -35,7 +35,7 @@ namespace Engine {
                 for (unsigned int segment = 0; segment < segments; ++segment) {
                     const unsigned int first = (ring * (segments + 1)) + segment;
                     const unsigned int second = first + segments + 1;
-                    mesh.indices.insert(mesh.indices.end(), {first, second, first + 1, first + 1, second, second + 1});
+                    mesh.indices.insert(mesh.indices.end(), {first, first + 1, second, first + 1, second + 1, second});
                 }
             }
             return mesh;

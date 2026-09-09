@@ -32,6 +32,23 @@ void ExpectMat4Near(const Engine::Mat4& value, const Engine::Mat4& expected) {
     }
 }
 
+void ExpectOutwardTriangleWinding(const Engine::Mesh& mesh) {
+    ASSERT_EQ(mesh.indices.size() % 3U, 0U);
+    for (std::size_t index = 0; index < mesh.indices.size(); index += 3U) {
+        const auto& first = mesh.vertices[mesh.indices[index]];
+        const auto& second = mesh.vertices[mesh.indices[index + 1U]];
+        const auto& third = mesh.vertices[mesh.indices[index + 2U]];
+        const Engine::Vec3 geometricNormal = Engine::cross(
+            second.position - first.position, third.position - first.position);
+        if (geometricNormal.length() <= 1.0e-6F) continue;
+        const Engine::Vec3 vertexNormal = first.normal + second.normal + third.normal;
+        const float alignment = geometricNormal.x() * vertexNormal.x() +
+                                geometricNormal.y() * vertexNormal.y() +
+                                geometricNormal.z() * vertexNormal.z();
+        EXPECT_GT(alignment, 0.0F) << "triangle " << index / 3U << " has inward winding";
+    }
+}
+
 TEST(CameraComponent, DefaultsAreValidPerspectiveSettings) {
     const Engine::CameraComponent camera;
     EXPECT_TRUE(camera.isPerspective());
@@ -181,6 +198,7 @@ TEST(PrimitiveMeshes, CubeAndPlaneHaveExpectedTopologyAndBounds) {
         EXPECT_NEAR(vertex.position.length(), 0.8660254F, 1.0e-5F);
         EXPECT_NEAR(vertex.normal.length(), 1.0F, 1.0e-5F);
     }
+    ExpectOutwardTriangleWinding(cube);
 
     const auto plane = Engine::Plane::createMesh();
     ASSERT_EQ(plane.vertices.size(), 4u);
@@ -191,6 +209,7 @@ TEST(PrimitiveMeshes, CubeAndPlaneHaveExpectedTopologyAndBounds) {
     for (const auto& vertex : plane.vertices) {
         ExpectVec3Near(vertex.normal, 0.0F, 1.0F, 0.0F);
     }
+    ExpectOutwardTriangleWinding(plane);
 }
 
 TEST(PrimitiveMeshes, SphereRespectsRequestedResolutionAndUnitNormals) {
@@ -206,6 +225,7 @@ TEST(PrimitiveMeshes, SphereRespectsRequestedResolutionAndUnitNormals) {
         EXPECT_NEAR(vertex.position.length(), 0.5F, 1.0e-5F);
         EXPECT_NEAR(vertex.normal.length(), 1.0F, 1.0e-5F);
     }
+    ExpectOutwardTriangleWinding(sphere);
 }
 
 TEST(PrimitiveMeshes, CapsuleHasExpectedBoundsAndValidTriangles) {
@@ -235,6 +255,7 @@ TEST(PrimitiveMeshes, CapsuleHasExpectedBoundsAndValidTriangles) {
     }
     EXPECT_FLOAT_EQ(minimumY, -height * 0.5F);
     EXPECT_FLOAT_EQ(maximumY, height * 0.5F);
+    ExpectOutwardTriangleWinding(capsule);
 }
 
 TEST(PrimitiveMeshes, RampExposesExpectedDimensionsAndValidTriangles) {
@@ -242,13 +263,14 @@ TEST(PrimitiveMeshes, RampExposesExpectedDimensionsAndValidTriangles) {
     ExpectVec3Near(extent, 3.0F, 2.0F, 2.0F);
     const auto ramp = Engine::Ramp::createMesh();
     EXPECT_EQ(ramp.vertices.size(), 18u);
-    EXPECT_EQ(ramp.indices.size(), 30u);
+    EXPECT_EQ(ramp.indices.size(), 24u);
     for (const auto index : ramp.indices) {
         EXPECT_LT(index, ramp.vertices.size());
     }
     EXPECT_FLOAT_EQ(ramp.vertices[0].position.y(), -extent.y());
     EXPECT_FLOAT_EQ(ramp.vertices[6].position.y(), extent.y());
     EXPECT_FLOAT_EQ(ramp.vertices[6].position.z(), extent.z());
+    ExpectOutwardTriangleWinding(ramp);
 }
 
 TEST(ViewportCamera, BuildsGameCameraFromComponentAndTransform) {

@@ -175,6 +175,11 @@ TEST(TerrainComponent, BuildsCheckerboardGridAndSculptsHeightmap) {
     EXPECT_EQ(flatMesh.indices.size(), 96u);
     EXPECT_LT(flatMesh.vertices[0].color.x(), 0.0F);
     EXPECT_FLOAT_EQ(flatMesh.vertices[0].color.y(), 4.0F);
+    const auto& first = flatMesh.vertices[flatMesh.indices[0]];
+    const auto& second = flatMesh.vertices[flatMesh.indices[1]];
+    const auto& third = flatMesh.vertices[flatMesh.indices[2]];
+    EXPECT_GT(Engine::cross(second.position - first.position,
+                            third.position - first.position).y(), 0.0F);
 
     EXPECT_TRUE(terrain.sculpt(0.0F, 0.0F, 1.5F, 0.5F,
                                Engine::TerrainSculptMode::Raise));

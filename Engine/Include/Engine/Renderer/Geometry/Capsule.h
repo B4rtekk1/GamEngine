@@ -71,7 +71,7 @@ namespace Engine {
                     const unsigned int first = (row * (sides + 1U)) + segment;
                     const unsigned int second = first + sides + 1U;
                     mesh.indices.insert(mesh.indices.end(), {
-                        first, second, first + 1U, first + 1U, second, second + 1U,
+                        first, first + 1U, second, first + 1U, second + 1U, second,
                     });
                 }
             }

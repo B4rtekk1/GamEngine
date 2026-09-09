@@ -58,7 +58,7 @@ namespace Engine {
         /// Face-culling configuration.
         VkCullModeFlags cullMode = VK_CULL_MODE_BACK_BIT;
         /// Winding order treated as front-facing.
-        VkFrontFace frontFace = VK_FRONT_FACE_CLOCKWISE;
+        VkFrontFace frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE;
         /// Enabled color channels in the color attachment.
         VkColorComponentFlags colorWriteMask = static_cast<VkColorComponentFlags>(VK_COLOR_COMPONENT_R_BIT) |
                                                static_cast<VkColorComponentFlags>(VK_COLOR_COMPONENT_G_BIT) |
