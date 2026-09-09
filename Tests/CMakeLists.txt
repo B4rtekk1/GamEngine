@@ -15,6 +15,15 @@ target_include_directories(GamEngineTests PRIVATE "${PROJECT_SOURCE_DIR}/Engine/
 gameengine_enable_warnings(GamEngineTests)
 gameengine_enable_sanitizers(GamEngineTests)
 
+add_executable(RenderGraphTests
+    RenderGraphTests.cpp
+    ${PROJECT_SOURCE_DIR}/Engine/Source/Renderer/RenderGraph/RenderGraph.cpp
+    ${PROJECT_SOURCE_DIR}/Engine/Source/Renderer/Vulkan/vma_impl.cpp)
+target_link_libraries(RenderGraphTests PRIVATE GTest::gtest_main Vulkan::Vulkan)
+target_include_directories(RenderGraphTests PRIVATE "${PROJECT_SOURCE_DIR}/Engine/Include" ${VMA_INCLUDE_DIR})
+gameengine_enable_warnings(RenderGraphTests)
+gameengine_enable_sanitizers(RenderGraphTests)
+
 add_executable(PhysicsMeshTests PhysicsMeshTests.cpp PhysXPhysicsTests.cpp ScriptSystemTests.cpp)
 target_link_libraries(PhysicsMeshTests PRIVATE Engine GTest::gtest_main)
 gameengine_enable_warnings(PhysicsMeshTests)
@@ -35,5 +44,6 @@ gameengine_enable_warnings(ShaderGraphCompilerTests)
 gameengine_enable_sanitizers(ShaderGraphCompilerTests)
 include(GoogleTest)
 gtest_discover_tests(GamEngineTests)
+gtest_discover_tests(RenderGraphTests)
 gtest_discover_tests(PhysicsMeshTests)
 gtest_discover_tests(ShaderGraphCompilerTests)
