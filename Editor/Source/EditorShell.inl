@@ -371,6 +371,19 @@ Engine::Entity drawEditorMenuBar(Engine::ScenePreset &scene, Engine::Renderer &r
         if (ImGui::MenuItem("Antialiasing...")) {
             openSceneSettings = true;
         }
+        if (ImGui::BeginMenu("Shadow Debug")) {
+            const Engine::ShadowDebugView current = renderer.shadowDebugView();
+            const auto selectDebugView = [&](const char* label, const Engine::ShadowDebugView view) {
+                if (ImGui::MenuItem(label, nullptr, current == view)) renderer.setShadowDebugView(view);
+            };
+            selectDebugView("Off", Engine::ShadowDebugView::Off);
+            ImGui::Separator();
+            selectDebugView("Blocker Count", Engine::ShadowDebugView::BlockerCount);
+            selectDebugView("Penumbra Radius", Engine::ShadowDebugView::PenumbraRadius);
+            selectDebugView("Clip Level", Engine::ShadowDebugView::ClipLevel);
+            selectDebugView("Virtual Page", Engine::ShadowDebugView::VirtualPage);
+            ImGui::EndMenu();
+        }
         endTopMenu();
     }
 

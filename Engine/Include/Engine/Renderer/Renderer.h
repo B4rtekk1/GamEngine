@@ -43,6 +43,10 @@ namespace Engine {
 
         [[nodiscard]] ShadowQuality shadowQuality() const noexcept;
 
+        void setShadowDebugView(ShadowDebugView view) noexcept;
+
+        [[nodiscard]] ShadowDebugView shadowDebugView() const noexcept;
+
         // nativeWindow and nativeEvent are opaque platform handles. Applications
         // do not need to include graphics-backend headers to use the renderer.
         /** Initializes presentation, synchronization and the ImGui backend only. */
@@ -121,6 +125,7 @@ namespace Engine {
         RenderOptimizationFeatures optimizationFeatures_{};
         AntialiasingLevel antialiasingLevel_ = AntialiasingLevel::Off;
         ShadowQuality shadowQuality_ = ShadowQuality::High;
+        ShadowDebugView shadowDebugView_ = ShadowDebugView::Off;
         GrassRenderSettings grassSettings_{};
         std::unique_ptr<State> state_;
         std::unique_ptr<Backend> backend_;

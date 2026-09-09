@@ -244,9 +244,16 @@ ForwardFragmentOutput fragmentMain(ForwardFragmentInput input)
     float3 specular = distributionGGX(normal, halfway, roughness) * geometry * fresnel /
                       max(4.0 * nDotV * nDotL, 0.0001);
     float3 diffuse = (1.0 - fresnel) * (1.0 - metallic) * albedo / PBR_PI;
+    ShadowSampleDebug shadowDebug = {0.0, 0.0, 0u, uint2(0, 0)};
     float shadow = frame.shadowEnabled != 0
         ? sampleVirtualShadow(shadowMap, shadowDepthMap, input.worldPosition, normal, lightDirection, frame.shadowClipMatrices,
-                              shadowPageTable, frame.shadowQuality) : 0.0;
+                              shadowPageTable, frame.shadowQuality, shadowDebug) : 0.0;
+    if (frame.shadowDebugView != SHADOW_DEBUG_OFF)
+    {
+        ForwardFragmentOutput debugOutput;
+        debugOutput.color = float4(shadowDebugColor(frame.shadowDebugView, shadowDebug), baseColor.a);
+        return debugOutput;
+    }
     float3 direct = (diffuse + specular) * frame.lightDirectionIntensity.w *
                     frame.lightColor.rgb * nDotL * (1.0 - shadow);
     for (uint lightIndex = 0; lightIndex < frame.localLightCount; ++lightIndex)

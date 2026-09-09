@@ -255,6 +255,7 @@
                 frameData.wind.gustFrequencyTime,
                 mainLightShadows ? 1u : 0u,
                 static_cast<std::uint32_t>(shadowQuality),
+                static_cast<std::uint32_t>(shadowDebugView),
                 materialSlots, editorSelectedRenderable, frameData.lightCount, frameData.lights};
             uniformBuffers[frame].update(&data, sizeof(data));
             previousGameView = currentView;
@@ -302,6 +303,7 @@
                 frameData.wind.gustFrequencyTime,
                 mainLightShadows ? 1u : 0u,
                 static_cast<std::uint32_t>(shadowQuality),
+                static_cast<std::uint32_t>(shadowDebugView),
                 materialSlots, editorSelectedRenderable, frameData.lightCount, frameData.lights};
             sceneUniformBuffers[frame].update(&data, sizeof(data));
         }

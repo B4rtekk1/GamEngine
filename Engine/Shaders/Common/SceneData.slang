@@ -21,6 +21,7 @@ struct RendererFrameData
     float4 windGustFrequencyTime;
     uint shadowEnabled;
     uint shadowQuality;
+    uint shadowDebugView;
     uint materialSlots;
     uint selectedInstance;
     uint localLightCount;

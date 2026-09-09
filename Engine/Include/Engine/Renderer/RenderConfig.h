@@ -26,6 +26,15 @@ namespace Engine {
         Ultra,
     };
 
+    /** Diagnostic visualization of directional virtual-shadow sampling. */
+    enum class ShadowDebugView : std::uint8_t {
+        Off,
+        BlockerCount,
+        PenumbraRadius,
+        ClipLevel,
+        VirtualPage,
+    };
+
     struct RenderFeatures final {
         bool shadows = false;
         bool instancedRendering = true;
@@ -48,6 +57,7 @@ namespace Engine {
         AntialiasingLevel antialiasing = AntialiasingLevel::Off;
         GrassRenderSettings grass{};
         ShadowQuality shadowQuality = ShadowQuality::High;
+        ShadowDebugView shadowDebugView = ShadowDebugView::Off;
     };
 
     /** Opaque viewport texture handle used by editor integrations. */

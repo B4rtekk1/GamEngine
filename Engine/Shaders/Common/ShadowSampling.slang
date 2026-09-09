@@ -10,6 +10,19 @@ static const uint SHADOW_QUALITY_LOW = 0;
 static const uint SHADOW_QUALITY_MEDIUM = 1;
 static const uint SHADOW_QUALITY_HIGH = 2;
 static const uint SHADOW_QUALITY_ULTRA = 3;
+static const uint SHADOW_DEBUG_OFF = 0;
+static const uint SHADOW_DEBUG_BLOCKER_COUNT = 1;
+static const uint SHADOW_DEBUG_PENUMBRA_RADIUS = 2;
+static const uint SHADOW_DEBUG_CLIP_LEVEL = 3;
+static const uint SHADOW_DEBUG_VIRTUAL_PAGE = 4;
+
+struct ShadowSampleDebug
+{
+    float blockerCount;
+    float penumbraRadius;
+    uint clipLevel;
+    uint2 virtualPage;
+};
 
 // Resolves one virtual texel to the centre of its physical atlas texel.
 bool resolveVirtualShadowTexel(int2 texel, uint level,
@@ -104,8 +117,12 @@ float sampleVirtualShadowLevel(Sampler2DShadow shadowMap, Sampler2D shadowDepthM
                                float3 normal, float3 lightDirection,
                                float4x4 lightSpace, uint level,
                                StructuredBuffer<uint4> pageTable, uint shadowQuality, out bool resident,
-                               out float clipEdge)
+                               out float clipEdge, out float blockerCount,
+                               out float penumbraRadius, out uint2 virtualPage)
 {
+    blockerCount = 0.0;
+    penumbraRadius = 0.0;
+    virtualPage = 0;
     const float NoL = saturate(dot(normalize(normal), normalize(lightDirection)));
     const float normalBias = shadowWorldTexelSize(lightSpace) * lerp(0.5, 2.0, 1.0 - NoL);
     const float3 shadowPosition = worldPosition + normalize(normal) * normalBias;
@@ -121,6 +138,9 @@ float sampleVirtualShadowLevel(Sampler2DShadow shadowMap, Sampler2D shadowDepthM
     if (!resident)
         return 0.0;
 
+    const float2 virtualPixel = uv * float(VIRTUAL_RESOLUTION);
+    virtualPage = uint2(virtualPixel) / PAGE_RESOLUTION;
+
     float depthSlope = max(abs(ddx(currentDepth)), abs(ddy(currentDepth)));
     float bias = max(MIN_SHADOW_BIAS, SLOPE_SHADOW_BIAS * depthSlope * 0.25);
     // Keep a single comparison exclusively for the deliberately lowest
@@ -132,7 +152,6 @@ float sampleVirtualShadowLevel(Sampler2DShadow shadowMap, Sampler2D shadowDepthM
     if (useSingleTap)
         return 1.0 - shadowMap.SampleCmpLevelZero(centerAtlasUv, currentDepth - bias);
 
-    const float2 virtualPixel = uv * float(VIRTUAL_RESOLUTION);
     // The physical atlas deliberately has a nearest sampler: adjacent tiles
     // can represent unrelated virtual pages. Every filtered tap must therefore
     // resolve its own virtual texel before sampling the atlas.
@@ -154,26 +173,49 @@ float sampleVirtualShadowLevel(Sampler2DShadow shadowMap, Sampler2D shadowDepthM
 
     if (useStablePoisson)
     {
-        // PCSS blocker search. A compare sampler cannot expose blocker depth,
-        // so this deliberately uses the matching nearest raw-depth sampler.
-        // The centre plus four nearby samples makes contact shadows retain the
-        // existing sharp bilinear footprint without paying a full 12-tap PCF.
-        static const float2 blockerOffsets[5] = {
-            float2(0.0, 0.0), float2(-1.5, -0.5), float2(1.5, -0.5),
-            float2(-0.5, 1.5), float2(0.5, -1.5)};
+        // PCSS needs a receiver-dependent search region too: a finite light
+        // subtends a larger cone at receivers farther along the light axis.
+        // The first four samples cover the centre. If all four are blockers,
+        // the receiver is inside a stable solid shadow and the outer ring is
+        // skipped; silhouette and foliage pixels receive all eight samples.
+        const float lightDepthScale = max(length(lightSpace[2].xyz), 1.0e-6);
+        const float sunAngularRadius = 0.00465;
+        const float blockerSearchRadius = clamp(
+            tan(sunAngularRadius) * max(currentDepth, 0.02) /
+            (lightDepthScale * shadowWorldTexelSize(lightSpace)), 0.75, 4.0);
+        static const float2 blockerOffsets[8] = {
+            float2(0.0, 0.0), float2(-0.45, -0.35),
+            float2(0.45, -0.35), float2(0.0, 0.48),
+            float2(-0.92, -0.62), float2(0.88, -0.58),
+            float2(-0.67, 0.82), float2(0.72, 0.76)};
         float blockerDepthSum = 0.0;
-        float blockerCount = 0.0;
         [unroll]
-        for (uint blockerTap = 0; blockerTap < 5; ++blockerTap)
+        for (uint blockerTap = 0; blockerTap < 4; ++blockerTap)
         {
             float blockerDepth;
             if (sampleVirtualShadowDepth(shadowDepthMap,
-                                         virtualPixel + blockerOffsets[blockerTap],
+                                         virtualPixel + blockerOffsets[blockerTap] * blockerSearchRadius,
                                          level, pageTable, blockerDepth) &&
                 blockerDepth < currentDepth - bias)
             {
                 blockerDepthSum += blockerDepth;
                 blockerCount += 1.0;
+            }
+        }
+        if (blockerCount < 4.0)
+        {
+            [unroll]
+            for (uint blockerTap = 4; blockerTap < 8; ++blockerTap)
+            {
+                float blockerDepth;
+                if (sampleVirtualShadowDepth(shadowDepthMap,
+                                             virtualPixel + blockerOffsets[blockerTap] * blockerSearchRadius,
+                                             level, pageTable, blockerDepth) &&
+                    blockerDepth < currentDepth - bias)
+                {
+                    blockerDepthSum += blockerDepth;
+                    blockerCount += 1.0;
+                }
             }
         }
         if (blockerCount == 0.0)
@@ -185,11 +227,9 @@ float sampleVirtualShadowLevel(Sampler2DShadow shadowMap, Sampler2D shadowDepthM
         // turning a page miss or a thin object into an impractically broad
         // filter.  This is intentionally a PCSS approximation, not SMRT.
         const float averageBlockerDepth = blockerDepthSum / blockerCount;
-        const float lightDepthScale = max(length(lightSpace[2].xyz), 1.0e-6);
         const float receiverBlockerDistance =
             max(currentDepth - averageBlockerDepth, 0.0) / lightDepthScale;
-        const float sunAngularRadius = 0.00465;
-        const float penumbraRadius = clamp(
+        penumbraRadius = clamp(
             tan(sunAngularRadius) * receiverBlockerDistance /
             shadowWorldTexelSize(lightSpace), 0.25, 6.0);
 
@@ -269,27 +309,43 @@ float sampleVirtualShadow(Sampler2DShadow shadowMap, Sampler2D shadowDepthMap,
                           float3 worldPosition,
                           float3 normal, float3 lightDirection,
                           float4x4 clipMatrices[7], StructuredBuffer<uint4> pageTable,
-                          uint shadowQuality)
+                          uint shadowQuality, out ShadowSampleDebug debug)
 {
+    debug.blockerCount = 0.0;
+    debug.penumbraRadius = 0.0;
+    debug.clipLevel = 0;
+    debug.virtualPage = 0;
     bool resident;
     [unroll]
     for (uint level = 0; level < SHADOW_CLIP_LEVELS; ++level)
     {
         float clipEdge;
+        float blockerCount;
+        float penumbraRadius;
+        uint2 virtualPage;
         float shadow = sampleVirtualShadowLevel(
             shadowMap, shadowDepthMap, worldPosition, normal, lightDirection,
-            clipMatrices[level], level, pageTable, shadowQuality, resident, clipEdge);
+            clipMatrices[level], level, pageTable, shadowQuality, resident, clipEdge,
+            blockerCount, penumbraRadius, virtualPage);
         if (resident)
         {
+            debug.blockerCount = blockerCount;
+            debug.penumbraRadius = penumbraRadius;
+            debug.clipLevel = level;
+            debug.virtualPage = virtualPage;
             // Fade through the outer fifth of the clipmap. Do not blend with
             // an absent next-level page: it is safer to keep the valid level.
             if (level + 1 < SHADOW_CLIP_LEVELS && clipEdge > 0.75)
             {
                 bool nextResident;
                 float nextClipEdge;
+                float nextBlockerCount;
+                float nextPenumbraRadius;
+                uint2 nextVirtualPage;
                 float nextShadow = sampleVirtualShadowLevel(
                     shadowMap, shadowDepthMap, worldPosition, normal, lightDirection, clipMatrices[level + 1], level + 1,
-                    pageTable, shadowQuality, nextResident, nextClipEdge);
+                    pageTable, shadowQuality, nextResident, nextClipEdge,
+                    nextBlockerCount, nextPenumbraRadius, nextVirtualPage);
                 if (nextResident)
                     shadow = lerp(shadow, nextShadow, smoothstep(0.75, 0.95, clipEdge));
             }
@@ -297,6 +353,31 @@ float sampleVirtualShadow(Sampler2DShadow shadowMap, Sampler2D shadowDepthMap,
         }
     }
     return 0.0;
+}
+
+float3 shadowDebugColor(uint view, ShadowSampleDebug debug)
+{
+    if (view == SHADOW_DEBUG_BLOCKER_COUNT)
+        return saturate(debug.blockerCount / 8.0).xxx;
+    if (view == SHADOW_DEBUG_PENUMBRA_RADIUS)
+    {
+        const float t = saturate(debug.penumbraRadius / 6.0);
+        return float3(t, 0.15 + 0.85 * (1.0 - abs(2.0 * t - 1.0)), 1.0 - t);
+    }
+    if (view == SHADOW_DEBUG_CLIP_LEVEL)
+    {
+        static const float3 colors[7] = {
+            float3(0.90, 0.20, 0.20), float3(0.95, 0.60, 0.15), float3(0.90, 0.90, 0.20),
+            float3(0.20, 0.80, 0.30), float3(0.15, 0.70, 0.90), float3(0.30, 0.35, 0.95),
+            float3(0.75, 0.25, 0.90)};
+        return colors[min(debug.clipLevel, 6u)];
+    }
+    // A deterministic page hash makes virtual-page boundaries and residency
+    // churn visible without exposing physical atlas placement.
+    uint hash = debug.virtualPage.x * 1664525u + debug.virtualPage.y * 1013904223u +
+                debug.clipLevel * 2246822519u;
+    return float3(float(hash & 255u), float((hash >> 8u) & 255u),
+                  float((hash >> 16u) & 255u)) / 255.0;
 }
 
 // Compatibility path for the standalone sample shader.

@@ -81,6 +81,7 @@
         const RenderOptimizationFeatures& optimizationFeatures;
         AntialiasingLevel antialiasingLevel;
         const ShadowQuality& shadowQuality;
+        const ShadowDebugView& shadowDebugView;
         const GrassRenderSettings& grassSettings;
         Assets::AssetManager& assetManager;
         SceneGpuResources sceneGpu;

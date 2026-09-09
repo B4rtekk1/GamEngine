@@ -39,6 +39,7 @@ namespace Engine {
         Vec4 windGustFrequencyTime;
         std::uint32_t shadowEnabled{0};
         std::uint32_t shadowQuality{2};
+        std::uint32_t shadowDebugView{0};
         std::uint32_t materialSlots{1};
         std::uint32_t selectedInstance{std::numeric_limits<std::uint32_t>::max()};
         std::uint32_t localLightCount{};
