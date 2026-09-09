@@ -101,7 +101,16 @@
             const VkDebugUtilsMessengerCallbackDataEXT* pCallbackData,
             void* pUserData) {
             if (messageSeverity >= VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT) {
-                std::cerr << "[Vulkan] " << pCallbackData->pMessage << std::endl;
+                const auto severity = messageSeverity >= VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT
+                                          ? DiagnosticSeverity::Error
+                                          : DiagnosticSeverity::Warning;
+                Diagnostics::instance().report(
+                    severity,
+                    std::string{"[Vulkan] "} +
+                        (pCallbackData != nullptr && pCallbackData->pMessage != nullptr
+                             ? pCallbackData->pMessage
+                             : "Validation layer returned an empty message."),
+                    {.subsystem = "Vulkan"});
             }
             return VK_FALSE;
         }
