@@ -342,6 +342,13 @@
                 throw std::runtime_error("Could not begin command buffer");
             }
             gpuTimestampProfiler.beginFrame(commandBuffer, currentFrame);
+            static const ProfileNameId shadowProfileName = Profiler::registerName("Shadow");
+            static const ProfileNameId cullingProfileName = Profiler::registerName("Culling");
+            static const ProfileNameId forwardProfileName = Profiler::registerName("Forward");
+            static const ProfileNameId velocityProfileName = Profiler::registerName("Velocity");
+            static const ProfileNameId taaProfileName = Profiler::registerName("TAA");
+            static const ProfileNameId bloomProfileName = Profiler::registerName("Bloom");
+            static const ProfileNameId tonemapProfileName = Profiler::registerName("Tonemap");
             const bool renderSceneViewport = editorUiActive && sceneViewportRendered;
             const ForwardPass& sceneForwardPass = msaa.enabled()
                 ? forwardPass
@@ -542,7 +549,7 @@
             // sampler. Even when shadows are disabled, run an empty shadow
             // pass so its image is transitioned from UNDEFINED to
             // SHADER_READ_ONLY_OPTIMAL before the descriptor is used.
-            gpuTimestampProfiler.beginPass(commandBuffer, currentFrame, GpuProfilePass::Shadow);
+            gpuTimestampProfiler.beginZone(commandBuffer, currentFrame, shadowProfileName);
             shadowPass.record(
                 commandBuffer, shadowClipMatrices, shadowClipUpdateMask, vertexBuffer.handle(),
                 instanceBuffers[currentFrame].handle(), indexBuffer.handle(),
@@ -568,8 +575,8 @@
                         ? static_cast<std::uint32_t>(gpuObjects.size()) : 0u,
                     sceneDescriptorPass.grassShadowDescriptorSet(currentFrame), grassShadowDrawPtr);
             }
-            gpuTimestampProfiler.endPass(commandBuffer, currentFrame, GpuProfilePass::Shadow);
-            gpuTimestampProfiler.beginPass(commandBuffer, currentFrame, GpuProfilePass::Culling);
+            gpuTimestampProfiler.endZone(commandBuffer, currentFrame);
+            gpuTimestampProfiler.beginZone(commandBuffer, currentFrame, cullingProfileName);
             std::bitset<MaterialProgramSlotCount> activeShaderSlots;
             for (const Culling::GPUObjectData& object : gpuObjects) {
                 if (object.shader < MaterialProgramSlotCount && forwardPass.hasMaterialPipeline(object.shader)) {
@@ -653,8 +660,8 @@
                     commandBuffer, static_cast<std::uint32_t>(gpuObjects.size()), nullptr, shader, shader);
             }
 
-            gpuTimestampProfiler.endPass(commandBuffer, currentFrame, GpuProfilePass::Culling);
-            gpuTimestampProfiler.beginPass(commandBuffer, currentFrame, GpuProfilePass::Forward);
+            gpuTimestampProfiler.endZone(commandBuffer, currentFrame);
+            gpuTimestampProfiler.beginZone(commandBuffer, currentFrame, forwardProfileName);
             forwardPass.begin(
                 commandBuffer, hdrFramebuffer, swapchain.extent(),
                 shadowPass.descriptorSet(currentFrame), vertexBuffer.handle(),
@@ -695,10 +702,10 @@
             forwardPass.drawOutline(commandBuffer, shadowPass.descriptorSet(currentFrame),
                                     indirectDraws[currentFrame]);
             ForwardPass::end(commandBuffer);
-            gpuTimestampProfiler.endPass(commandBuffer, currentFrame, GpuProfilePass::Forward);
+            gpuTimestampProfiler.endZone(commandBuffer, currentFrame);
 
             if (taaResolveActive) {
-                gpuTimestampProfiler.beginPass(commandBuffer, currentFrame, GpuProfilePass::Velocity);
+                gpuTimestampProfiler.beginZone(commandBuffer, currentFrame, velocityProfileName);
                 VkClearValue velocityClear{};
                 VkRenderPassBeginInfo velocityPass{VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO};
                 velocityPass.renderPass = velocityPipeline.renderPass();
@@ -744,10 +751,10 @@
                     grassVelocityDraw.record(commandBuffer);
                 }
                 vkCmdEndRenderPass(commandBuffer);
-                gpuTimestampProfiler.endPass(commandBuffer, currentFrame, GpuProfilePass::Velocity);
+                gpuTimestampProfiler.endZone(commandBuffer, currentFrame);
             } else {
-                gpuTimestampProfiler.beginPass(commandBuffer, currentFrame, GpuProfilePass::Velocity);
-                gpuTimestampProfiler.endPass(commandBuffer, currentFrame, GpuProfilePass::Velocity);
+                gpuTimestampProfiler.beginZone(commandBuffer, currentFrame, velocityProfileName);
+                gpuTimestampProfiler.endZone(commandBuffer, currentFrame);
             }
 
             if (renderSceneViewport) {
@@ -852,21 +859,21 @@
             }
 
             if (taaResolveActive) {
-                gpuTimestampProfiler.beginPass(commandBuffer, currentFrame, GpuProfilePass::Taa);
+                gpuTimestampProfiler.beginZone(commandBuffer, currentFrame, taaProfileName);
                 temporalAaPass.record(commandBuffer, swapchain.extent(), taaJitterX, taaJitterY);
-                gpuTimestampProfiler.endPass(commandBuffer, currentFrame, GpuProfilePass::Taa);
+                gpuTimestampProfiler.endZone(commandBuffer, currentFrame);
             } else {
-                gpuTimestampProfiler.beginPass(commandBuffer, currentFrame, GpuProfilePass::Taa);
-                gpuTimestampProfiler.endPass(commandBuffer, currentFrame, GpuProfilePass::Taa);
+                gpuTimestampProfiler.beginZone(commandBuffer, currentFrame, taaProfileName);
+                gpuTimestampProfiler.endZone(commandBuffer, currentFrame);
             }
 
-            gpuTimestampProfiler.beginPass(commandBuffer, currentFrame, GpuProfilePass::Bloom);
+            gpuTimestampProfiler.beginZone(commandBuffer, currentFrame, bloomProfileName);
             bloomPass.record(commandBuffer,
                 taaResolveActive ? temporalAaPass.resolvedView() : hdrBuffer.imageView(),
                 hdrBuffer.sampler(), currentFrame);
-            gpuTimestampProfiler.endPass(commandBuffer, currentFrame, GpuProfilePass::Bloom);
+            gpuTimestampProfiler.endZone(commandBuffer, currentFrame);
 
-            gpuTimestampProfiler.beginPass(commandBuffer, currentFrame, GpuProfilePass::Tonemap);
+            gpuTimestampProfiler.beginZone(commandBuffer, currentFrame, tonemapProfileName);
             if (editorUiActive) {
                 VkRenderPassBeginInfo pass{VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO};
                 pass.renderPass = editorUiRenderPass;
@@ -892,7 +899,8 @@
                 canvasRenderer.record(scene.uiCanvas(), commandBuffer, imageIndex.value, currentFrame,
                                       swapchain.extent());
             }
-            gpuTimestampProfiler.endPass(commandBuffer, currentFrame, GpuProfilePass::Tonemap);
+            gpuTimestampProfiler.endZone(commandBuffer, currentFrame);
+            gpuTimestampProfiler.endFrame(commandBuffer, currentFrame);
 
             if (vkEndCommandBuffer(commandBuffer) != VK_SUCCESS) {
                 throw std::runtime_error("Could not end command buffer");

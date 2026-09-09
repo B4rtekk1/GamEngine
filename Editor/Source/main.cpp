@@ -9,6 +9,7 @@
 #include "Engine/Scene/ScenePresets.h"
 #include "Engine/Scene/SceneEditor.h"
 #include "Engine/Core/Time.h"
+#include "Engine/Core/Profiler.h"
 #include "Engine/Core/Diagnostics.h"
 #include "Engine/Core/Transform.h"
 #include "Engine/Core/Camera.h"
@@ -431,6 +432,7 @@ int main(int argc, char** argv) {
         std::uint64_t lastPersistedSceneRevision = scene.editor().mutationRevision();
         while (running) {
             const auto start = std::chrono::steady_clock::now();
+            Engine::Profiler::beginFrame();
             Engine::Renderer::beginFrame();
             if (initialSceneLoad &&
                 initialSceneLoad->wait_for(std::chrono::seconds::zero()) == std::future_status::ready) {
@@ -860,11 +862,13 @@ int main(int argc, char** argv) {
                 }
             }
             if (playing && !paused) {
+                GE_PROFILE_SCOPE("Game Update");
                 physicsAccumulator += Engine::Time::deltaTime();
                 int physicsSteps = 0;
                 while (physicsAccumulator >= EditorConstants::physicsStep &&
                        physicsSteps < EditorConstants::maximumPhysicsStepsPerFrame) {
                     try {
+                        GE_PROFILE_SCOPE("Physics");
                         physicsSystem.update(scene, static_cast<float>(EditorConstants::physicsStep));
                     } catch (const std::exception& error) {
                         Editor::ConsolePanel::error("Physics simulation stopped: " +
@@ -875,7 +879,10 @@ int main(int argc, char** argv) {
                     physicsAccumulator -= EditorConstants::physicsStep;
                     ++physicsSteps;
                 }
-                if (playing) scriptSystem.update(scene, static_cast<float>(Engine::Time::deltaTime()));
+                if (playing) {
+                    GE_PROFILE_SCOPE("Scripts");
+                    scriptSystem.update(scene, static_cast<float>(Engine::Time::deltaTime()));
+                }
             }
             if (scriptHotReload) {
                 scriptHotReload->setProject(project.rootPath() / "Assets" / "Scripts");
@@ -891,7 +898,13 @@ int main(int argc, char** argv) {
                     [](const std::string& message) { Editor::ConsolePanel::warning(message); });
             }
             ImGui::Render();
-            renderer.renderFrame();
+            {
+                GE_PROFILE_SCOPE("Renderer");
+                renderer.renderFrame();
+            }
+            if (const auto gpu = renderer.gpuProfile()) {
+                Engine::Profiler::setGpuFrameMilliseconds(gpu->frameMilliseconds);
+            }
 
             if (sceneResourceSyncPending || initialSceneSyncPending) {
                 renderer.synchronizeScene(scene);
@@ -918,6 +931,10 @@ int main(int argc, char** argv) {
                 startEmptySceneResources = false;
                 renderer.initializeScene(scene);
             }
+
+            // Deliberately exclude the editor's frame limiter from CPU time:
+            // it is idle time, not work the profiler should attribute.
+            Engine::Profiler::endFrame();
 
             // Keep the editor UI responsive without unnecessarily throttling
             // the game simulation while Play Mode is active.

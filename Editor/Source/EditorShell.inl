@@ -60,16 +60,14 @@ void drawGpuProfilePanel(const Engine::Renderer& renderer, bool& isOpen) {
                 writeError = "Could not open GPU profile CSV for writing.";
             } else {
                 if (writeHeader) {
-                    output << "timestamp_unix_ms,shadow_ms,culling_ms,forward_ms,velocity_ms,taa_ms,"
-                              "bloom_ms,tonemap_ms,total_ms\n";
+                    output << "timestamp_unix_ms,gpu_frame_ms,profiled_zones_ms\n";
                 }
-                float totalMilliseconds = 0.0F;
-                for (const float milliseconds : profile->milliseconds) totalMilliseconds += milliseconds;
+                float profiledMilliseconds = 0.0F;
+                for (const Engine::GpuProfileEvent& event : profile->events)
+                    profiledMilliseconds += event.endMs - event.startMs;
                 const auto timestamp = std::chrono::duration_cast<std::chrono::milliseconds>(
                     std::chrono::system_clock::now().time_since_epoch()).count();
-                output << timestamp;
-                for (const float milliseconds : profile->milliseconds) output << ',' << milliseconds;
-                output << ',' << totalMilliseconds << '\n';
+                output << timestamp << ',' << profile->frameMilliseconds << ',' << profiledMilliseconds << '\n';
                 writeError.clear();
                 lastWrite = monotonicNow;
             }
@@ -82,6 +80,15 @@ void drawGpuProfilePanel(const Engine::Renderer& renderer, bool& isOpen) {
         return;
     }
 
+    static bool paused{};
+    static std::uint64_t selectedFrame{};
+    if (ImGui::Button(paused ? "Resume" : "Pause")) paused = !paused;
+    ImGui::SameLine();
+    if (ImGui::Button("Clear")) {
+        Engine::Profiler::clear();
+        selectedFrame = 0;
+    }
+    ImGui::SameLine();
     if (ImGui::Checkbox("Write CSV", &writeCsv)) lastWrite = {};
     ImGui::SameLine();
     ImGui::SetNextItemWidth(88.0F);
@@ -98,27 +105,93 @@ void drawGpuProfilePanel(const Engine::Renderer& renderer, bool& isOpen) {
         return;
     }
 
-    static constexpr std::array passNames{
-        "Shadow", "Culling", "Forward", "Velocity", "TAA", "Bloom", "Tonemap"};
-    float totalMilliseconds = 0.0F;
+    const std::span<const Engine::ProfileFrame> history = Engine::Profiler::history();
+    if (!history.empty()) {
+        if (!paused || selectedFrame == 0) selectedFrame = history.back().frameNumber;
+        std::vector<float> cpuTimes;
+        std::vector<float> gpuTimes;
+        cpuTimes.reserve(history.size());
+        gpuTimes.reserve(history.size());
+        for (const Engine::ProfileFrame& frame : history) {
+            cpuTimes.push_back(static_cast<float>(frame.cpuFrameMs));
+            gpuTimes.push_back(static_cast<float>(frame.gpuFrameMs));
+        }
+        const float graphMax = std::max(16.667F, *std::max_element(cpuTimes.begin(), cpuTimes.end()));
+        ImGui::TextUnformatted("Frame time history");
+        ImGui::PlotLines("CPU (ms)", cpuTimes.data(), static_cast<int>(cpuTimes.size()), 0,
+                         nullptr, 0.0F, graphMax, {0.0F, 72.0F});
+        ImGui::PlotLines("GPU (ms)", gpuTimes.data(), static_cast<int>(gpuTimes.size()), 0,
+                         nullptr, 0.0F, graphMax, {0.0F, 72.0F});
+        if (ImGui::BeginCombo("Selected frame", ("#" + std::to_string(selectedFrame)).c_str())) {
+            for (const Engine::ProfileFrame& frame : history) {
+                const bool selected = frame.frameNumber == selectedFrame;
+                const std::string label = "#" + std::to_string(frame.frameNumber) + "  CPU " +
+                    std::to_string(frame.cpuFrameMs).substr(0, 5) + " ms";
+                if (ImGui::Selectable(label.c_str(), selected)) {
+                    selectedFrame = frame.frameNumber;
+                    paused = true;
+                }
+                if (selected) ImGui::SetItemDefaultFocus();
+            }
+            ImGui::EndCombo();
+        }
+        const std::uint64_t targetFrame = selectedFrame;
+        const auto selected = std::find_if(history.begin(), history.end(),
+            [targetFrame](const Engine::ProfileFrame& frame) { return frame.frameNumber == targetFrame; });
+        if (selected != history.end()) {
+            ImGui::Text("CPU %.3f ms   GPU %.3f ms", selected->cpuFrameMs, selected->gpuFrameMs);
+            if (ImGui::BeginTable("##cpu-profile-zones", 3,
+                                  ImGuiTableFlags_SizingStretchProp | ImGuiTableFlags_BordersInnerV)) {
+                ImGui::TableSetupColumn("CPU zone");
+                ImGui::TableSetupColumn("Total", ImGuiTableColumnFlags_WidthFixed, 86.0F);
+                ImGui::TableSetupColumn("Self", ImGuiTableColumnFlags_WidthFixed, 86.0F);
+                ImGui::TableHeadersRow();
+                for (std::size_t index = 0; index < selected->cpuEvents.size(); ++index) {
+                    const auto& event = selected->cpuEvents[index];
+                    const double total = static_cast<double>(event.endNs - event.startNs) * 1.0e-6;
+                    std::uint64_t childNs{};
+                    for (std::size_t child = index + 1; child < selected->cpuEvents.size(); ++child) {
+                        const auto& candidate = selected->cpuEvents[child];
+                        if (candidate.depth <= event.depth) break;
+                        if (candidate.depth == event.depth + 1) childNs += candidate.endNs - candidate.startNs;
+                    }
+                    ImGui::TableNextRow();
+                    ImGui::TableSetColumnIndex(0);
+                    ImGui::Indent(static_cast<float>(event.depth) * 12.0F);
+                    ImGui::TextUnformatted(Engine::Profiler::name(event.name).data());
+                    ImGui::Unindent(static_cast<float>(event.depth) * 12.0F);
+                    ImGui::TableSetColumnIndex(1); ImGui::Text("%.3f ms", total);
+                    ImGui::TableSetColumnIndex(2); ImGui::Text("%.3f ms", total - static_cast<double>(childNs) * 1.0e-6);
+                }
+                ImGui::EndTable();
+            }
+        }
+        ImGui::Separator();
+    }
+
+    float profiledMilliseconds = 0.0F;
     if (ImGui::BeginTable("##gpu-profile-passes", 2,
                           ImGuiTableFlags_SizingStretchProp | ImGuiTableFlags_BordersInnerV)) {
-        ImGui::TableSetupColumn("Pass");
+        ImGui::TableSetupColumn("GPU zone");
         ImGui::TableSetupColumn("GPU time", ImGuiTableColumnFlags_WidthFixed, 92.0F);
         ImGui::TableHeadersRow();
-        for (std::size_t pass = 0; pass < passNames.size(); ++pass) {
-            const float milliseconds = profile->milliseconds[pass];
-            totalMilliseconds += milliseconds;
+        for (const Engine::GpuProfileEvent& event : profile->events) {
+            const float milliseconds = event.endMs - event.startMs;
+            profiledMilliseconds += milliseconds;
             ImGui::TableNextRow();
             ImGui::TableSetColumnIndex(0);
-            ImGui::TextUnformatted(passNames[pass]);
+            ImGui::Indent(static_cast<float>(event.depth) * 12.0F);
+            ImGui::TextUnformatted(Engine::Profiler::name(event.name).data());
+            ImGui::Unindent(static_cast<float>(event.depth) * 12.0F);
             ImGui::TableSetColumnIndex(1);
             ImGui::Text("%.3f ms", milliseconds);
         }
         ImGui::EndTable();
     }
     ImGui::Separator();
-    ImGui::Text("Profiled passes: %.3f ms", totalMilliseconds);
+    ImGui::Text("GPU frame: %.3f ms", profile->frameMilliseconds);
+    ImGui::Text("Profiled zones: %.3f ms   Unaccounted: %.3f ms", profiledMilliseconds,
+                std::max(0.0F, profile->frameMilliseconds - profiledMilliseconds));
     ImGui::TextDisabled("Values use the last fence-completed frame.");
     ImGui::End();
 }

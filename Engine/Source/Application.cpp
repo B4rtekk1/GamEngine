@@ -1,6 +1,7 @@
 #include "Engine/Application.h"
 
 #include "Engine/Core/Time.h"
+#include "Engine/Core/Profiler.h"
 #include "Engine/Renderer/Renderer.h"
 #include "Engine/Scripting/ScriptSystem.h"
 #include "Engine/Physics/PhysicsSystem.h"
@@ -117,14 +118,34 @@ namespace Engine {
     }
 
     void Application::updateFrame(const float deltaTime) {
-        scene_.ui().update();
-        if (game_ != nullptr) { game_->onUpdate(scene_, deltaTime); }
-        if (updateCallback_) { updateCallback_(scene_, deltaTime); }
-        impl_->scripts.update(scene_, deltaTime);
+        Profiler::beginFrame();
+        {
+            GE_PROFILE_SCOPE("UI");
+            scene_.ui().update();
+        }
+        {
+            GE_PROFILE_SCOPE("Game Update");
+            if (game_ != nullptr) { game_->onUpdate(scene_, deltaTime); }
+            if (updateCallback_) { updateCallback_(scene_, deltaTime); }
+        }
+        {
+            GE_PROFILE_SCOPE("Scripts");
+            impl_->scripts.update(scene_, deltaTime);
+        }
         // Apply input-driven changes before stepping PhysX so movement and
         // jumping affect this frame rather than the next one.
-        updatePhysics(deltaTime);
-        impl_->renderer.renderFrame();
+        {
+            GE_PROFILE_SCOPE("Physics");
+            updatePhysics(deltaTime);
+        }
+        {
+            GE_PROFILE_SCOPE("Renderer");
+            impl_->renderer.renderFrame();
+        }
+        if (const auto gpu = impl_->renderer.gpuProfile()) {
+            Profiler::setGpuFrameMilliseconds(gpu->frameMilliseconds);
+        }
+        Profiler::endFrame();
     }
 
     void Application::updatePhysics(const float deltaTime) {

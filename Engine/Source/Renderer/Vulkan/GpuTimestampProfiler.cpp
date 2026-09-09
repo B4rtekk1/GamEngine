@@ -16,6 +16,8 @@ void GpuTimestampProfiler::create(const VkPhysicalDevice physicalDevice, const V
         throw std::runtime_error("Could not create GPU timestamp query pool");
     device_ = device;
     submitted_.fill(false);
+    for (auto& events : events_) events.reserve(MaxZonesPerFrame);
+    for (auto& stack : zoneStack_) stack.reserve(MaxZonesPerFrame);
     hasCompletedFrame_ = false;
 }
 
@@ -26,12 +28,23 @@ void GpuTimestampProfiler::destroy() noexcept {
     queryPool_ = VK_NULL_HANDLE;
     timestampPeriodNs_ = 0.0F;
     submitted_.fill(false);
+    for (auto& events : events_) events.clear();
+    for (auto& stack : zoneStack_) stack.clear();
     hasCompletedFrame_ = false;
 }
 
 void GpuTimestampProfiler::beginFrame(const VkCommandBuffer commandBuffer, const std::uint32_t frameIndex) const {
-    if (queryPool_ != VK_NULL_HANDLE)
-        vkCmdResetQueryPool(commandBuffer, queryPool_, frameIndex * QueriesPerFrame, QueriesPerFrame);
+    if (queryPool_ == VK_NULL_HANDLE) return;
+    vkCmdResetQueryPool(commandBuffer, queryPool_, query(frameIndex, 0), QueriesPerFrame);
+    events_[frameIndex].clear();
+    zoneStack_[frameIndex].clear();
+    vkCmdWriteTimestamp2(commandBuffer, VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, queryPool_, query(frameIndex, 0));
+}
+
+void GpuTimestampProfiler::endFrame(const VkCommandBuffer commandBuffer, const std::uint32_t frameIndex) const {
+    if (queryPool_ == VK_NULL_HANDLE) return;
+    while (!zoneStack_[frameIndex].empty()) endZone(commandBuffer, frameIndex);
+    vkCmdWriteTimestamp2(commandBuffer, VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, queryPool_, query(frameIndex, 1));
 }
 
 void GpuTimestampProfiler::markSubmitted(const std::uint32_t frameIndex) noexcept {
@@ -42,30 +55,40 @@ bool GpuTimestampProfiler::hasCompletedFrame() const noexcept {
     return hasCompletedFrame_;
 }
 
-void GpuTimestampProfiler::beginPass(const VkCommandBuffer commandBuffer, const std::uint32_t frameIndex,
-                                     const GpuProfilePass pass) const {
-    if (queryPool_ != VK_NULL_HANDLE)
-        vkCmdWriteTimestamp2(commandBuffer, VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, queryPool_, query(frameIndex, pass, false));
+void GpuTimestampProfiler::beginZone(const VkCommandBuffer commandBuffer, const std::uint32_t frameIndex,
+                                     const ProfileNameId name) const {
+    if (queryPool_ == VK_NULL_HANDLE || events_[frameIndex].size() == MaxZonesPerFrame) return;
+    const std::uint32_t eventIndex = static_cast<std::uint32_t>(events_[frameIndex].size());
+    events_[frameIndex].push_back({name, static_cast<std::uint16_t>(zoneStack_[frameIndex].size())});
+    zoneStack_[frameIndex].push_back(eventIndex);
+    vkCmdWriteTimestamp2(commandBuffer, VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, queryPool_, query(frameIndex, 2 + eventIndex * 2));
 }
 
-void GpuTimestampProfiler::endPass(const VkCommandBuffer commandBuffer, const std::uint32_t frameIndex,
-                                   const GpuProfilePass pass) const {
-    if (queryPool_ != VK_NULL_HANDLE)
-        vkCmdWriteTimestamp2(commandBuffer, VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, queryPool_, query(frameIndex, pass, true));
+void GpuTimestampProfiler::endZone(const VkCommandBuffer commandBuffer, const std::uint32_t frameIndex) const {
+    if (queryPool_ == VK_NULL_HANDLE || zoneStack_[frameIndex].empty()) return;
+    const std::uint32_t eventIndex = zoneStack_[frameIndex].back();
+    zoneStack_[frameIndex].pop_back();
+    vkCmdWriteTimestamp2(commandBuffer, VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, queryPool_, query(frameIndex, 3 + eventIndex * 2));
 }
 
 std::optional<GpuProfileFrame> GpuTimestampProfiler::completedFrame(const std::uint32_t frameIndex) const {
     if (queryPool_ == VK_NULL_HANDLE || !submitted_[frameIndex]) return std::nullopt;
+    const std::uint32_t queryCount = 2 + static_cast<std::uint32_t>(events_[frameIndex].size()) * 2;
     std::array<std::uint64_t, QueriesPerFrame> values{};
-    if (vkGetQueryPoolResults(device_, queryPool_, frameIndex * QueriesPerFrame, QueriesPerFrame,
+    if (vkGetQueryPoolResults(device_, queryPool_, query(frameIndex, 0), queryCount,
                               sizeof(values), values.data(), sizeof(std::uint64_t), VK_QUERY_RESULT_64_BIT) != VK_SUCCESS)
         return std::nullopt;
+    const std::uint64_t frameBegin = values[0];
+    const auto milliseconds = [this, frameBegin](const std::uint64_t value) {
+        return value >= frameBegin ? static_cast<float>(value - frameBegin) * timestampPeriodNs_ * 1.0e-6F : 0.0F;
+    };
     GpuProfileFrame frame{};
-    for (std::uint32_t pass = 0; pass < PassCount; ++pass) {
-        const std::uint64_t begin = values[pass * 2];
-        const std::uint64_t end = values[pass * 2 + 1];
-        frame.milliseconds[pass] = end >= begin ?
-            static_cast<float>(end - begin) * timestampPeriodNs_ * 1.0e-6F : 0.0F;
+    frame.frameMilliseconds = milliseconds(values[1]);
+    frame.events.reserve(events_[frameIndex].size());
+    for (std::uint32_t index = 0; index < events_[frameIndex].size(); ++index) {
+        const PendingEvent& event = events_[frameIndex][index];
+        frame.events.push_back({event.name, milliseconds(values[2 + index * 2]),
+                                milliseconds(values[3 + index * 2]), event.depth});
     }
     hasCompletedFrame_ = true;
     return frame;

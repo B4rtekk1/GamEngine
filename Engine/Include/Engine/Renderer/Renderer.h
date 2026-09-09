@@ -1,25 +1,32 @@
 #pragma once
 
+#include "Engine/Core/Profiler.h"
 #include "Engine/Renderer/RenderConfig.h"
 #include "Engine/ECS/Entity.h"
 #include "Engine/Math/Vec3.h"
 
-#include <array>
 #include <cstdint>
 #include <limits>
 #include <memory>
 #include <optional>
+#include <vector>
 
 namespace Engine {
     class Scene;
     using RenderOptimizationFeatures = RenderFeatures;
 
-    /** Main render stages measured by the Vulkan timestamp profiler. */
-    enum class GpuProfilePass : std::uint32_t { Shadow, Culling, Forward, Velocity, Taa, Bloom, Tonemap, Count };
+    /** A named GPU interval, relative to the start of its submitted frame. */
+    struct GpuProfileEvent final {
+        ProfileNameId name{};
+        float startMs{};
+        float endMs{};
+        std::uint16_t depth{};
+    };
 
-    /** GPU durations for the most recently completed frame, in milliseconds. */
+    /** GPU timeline for the most recently fence-completed frame. */
     struct GpuProfileFrame final {
-        std::array<float, static_cast<std::size_t>(GpuProfilePass::Count)> milliseconds{};
+        float frameMilliseconds{};
+        std::vector<GpuProfileEvent> events;
     };
 
     /** Public renderer facade. The concrete graphics backend is an implementation detail. */
