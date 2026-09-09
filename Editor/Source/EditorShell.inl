@@ -34,18 +34,23 @@ void drawStatusBar(const Engine::ScenePreset &scene, const Engine::Entity select
 }
 
 void drawGpuProfilePanel(const Engine::Renderer& renderer, bool& isOpen) {
+    (void)renderer;
     static bool writeCsv{};
     static float intervalSeconds{2.0F};
     static std::chrono::steady_clock::time_point lastWrite{};
     static std::string writeError;
     const std::filesystem::path csvPath = Platform::UserPaths::editorLogs() / "gpu-profile.csv";
-    const auto profile = renderer.gpuProfile();
+    const std::uint32_t historyCount = Engine::Profiler::historySize();
+    const Engine::ProfileFrame* latestGpuFrame = nullptr;
+    for (std::uint32_t index = historyCount; index != 0; --index) {
+        const Engine::ProfileFrame& frame = Engine::Profiler::historyFrame(index - 1);
+        if (frame.gpuReady) { latestGpuFrame = &frame; break; }
+    }
 
-    // Sampling a fence-completed profile has no GPU synchronization cost. Keep
-    // recording active even when the panel is hidden, so it can be used during
-    // an uninterrupted benchmark run.
+    // Sampling history has no GPU synchronization cost. Keep recording active
+    // while hidden, so it remains useful during uninterrupted benchmark runs.
     const auto monotonicNow = std::chrono::steady_clock::now();
-    if (writeCsv && profile &&
+    if (writeCsv && latestGpuFrame &&
         (lastWrite == std::chrono::steady_clock::time_point{} ||
          monotonicNow - lastWrite >= std::chrono::duration<float>{intervalSeconds})) {
         std::error_code error;
@@ -63,11 +68,12 @@ void drawGpuProfilePanel(const Engine::Renderer& renderer, bool& isOpen) {
                     output << "timestamp_unix_ms,gpu_frame_ms,profiled_zones_ms\n";
                 }
                 float profiledMilliseconds = 0.0F;
-                for (const Engine::GpuProfileEvent& event : profile->events)
-                    profiledMilliseconds += event.endMs - event.startMs;
+                for (const Engine::GpuProfileEvent& event : latestGpuFrame->gpuEvents) {
+                    if (event.depth == 0) profiledMilliseconds += event.endMs - event.startMs;
+                }
                 const auto timestamp = std::chrono::duration_cast<std::chrono::milliseconds>(
                     std::chrono::system_clock::now().time_since_epoch()).count();
-                output << timestamp << ',' << profile->frameMilliseconds << ',' << profiledMilliseconds << '\n';
+                output << timestamp << ',' << latestGpuFrame->gpuFrameMs << ',' << profiledMilliseconds << '\n';
                 writeError.clear();
                 lastWrite = monotonicNow;
             }
@@ -80,9 +86,9 @@ void drawGpuProfilePanel(const Engine::Renderer& renderer, bool& isOpen) {
         return;
     }
 
-    static bool paused{};
+    static bool followLatest{true};
     static std::uint64_t selectedFrame{};
-    if (ImGui::Button(paused ? "Resume" : "Pause")) paused = !paused;
+    if (ImGui::Button(followLatest ? "Lock frame" : "Follow latest")) followLatest = !followLatest;
     ImGui::SameLine();
     if (ImGui::Button("Clear")) {
         Engine::Profiler::clear();
@@ -99,47 +105,55 @@ void drawGpuProfilePanel(const Engine::Renderer& renderer, bool& isOpen) {
     if (writeCsv) ImGui::TextDisabled("%s", csvPath.string().c_str());
     if (!writeError.empty()) ImGui::TextColored({0.95F, 0.38F, 0.32F, 1.0F}, "%s", writeError.c_str());
     ImGui::Separator();
-    if (!profile) {
-        ImGui::TextDisabled("Waiting for a completed GPU frame...");
+    if (historyCount == 0) {
+        ImGui::TextDisabled("Waiting for profiled frames...");
         ImGui::End();
         return;
     }
 
-    const std::span<const Engine::ProfileFrame> history = Engine::Profiler::history();
-    if (!history.empty()) {
-        if (!paused || selectedFrame == 0) selectedFrame = history.back().frameNumber;
-        std::vector<float> cpuTimes;
-        std::vector<float> gpuTimes;
-        cpuTimes.reserve(history.size());
-        gpuTimes.reserve(history.size());
-        for (const Engine::ProfileFrame& frame : history) {
-            cpuTimes.push_back(static_cast<float>(frame.cpuFrameMs));
-            gpuTimes.push_back(static_cast<float>(frame.gpuFrameMs));
+    if (historyCount != 0) {
+        if (followLatest || selectedFrame == 0)
+            selectedFrame = Engine::Profiler::historyFrame(historyCount - 1).frameNumber;
+        std::array<float, Engine::Profiler::HistorySize> cpuTimes{};
+        std::array<float, Engine::Profiler::HistorySize> gpuTimes{};
+        float maxCpu = 0.0F;
+        float maxGpu = 0.0F;
+        for (std::uint32_t index = 0; index < historyCount; ++index) {
+            const Engine::ProfileFrame& frame = Engine::Profiler::historyFrame(index);
+            cpuTimes[index] = static_cast<float>(frame.cpuFrameMs);
+            gpuTimes[index] = static_cast<float>(frame.gpuFrameMs);
+            maxCpu = std::max(maxCpu, cpuTimes[index]);
+            maxGpu = std::max(maxGpu, gpuTimes[index]);
         }
-        const float graphMax = std::max(16.667F, *std::max_element(cpuTimes.begin(), cpuTimes.end()));
+        const float graphMax = std::max({16.667F, maxCpu, maxGpu});
         ImGui::TextUnformatted("Frame time history");
-        ImGui::PlotLines("CPU (ms)", cpuTimes.data(), static_cast<int>(cpuTimes.size()), 0,
+        ImGui::PlotLines("CPU (ms)", cpuTimes.data(), static_cast<int>(historyCount), 0,
                          nullptr, 0.0F, graphMax, {0.0F, 72.0F});
-        ImGui::PlotLines("GPU (ms)", gpuTimes.data(), static_cast<int>(gpuTimes.size()), 0,
+        ImGui::PlotLines("GPU (ms)", gpuTimes.data(), static_cast<int>(historyCount), 0,
                          nullptr, 0.0F, graphMax, {0.0F, 72.0F});
         if (ImGui::BeginCombo("Selected frame", ("#" + std::to_string(selectedFrame)).c_str())) {
-            for (const Engine::ProfileFrame& frame : history) {
+            for (std::uint32_t index = 0; index < historyCount; ++index) {
+                const Engine::ProfileFrame& frame = Engine::Profiler::historyFrame(index);
                 const bool selected = frame.frameNumber == selectedFrame;
                 const std::string label = "#" + std::to_string(frame.frameNumber) + "  CPU " +
                     std::to_string(frame.cpuFrameMs).substr(0, 5) + " ms";
                 if (ImGui::Selectable(label.c_str(), selected)) {
                     selectedFrame = frame.frameNumber;
-                    paused = true;
+                    followLatest = false;
                 }
                 if (selected) ImGui::SetItemDefaultFocus();
             }
             ImGui::EndCombo();
         }
         const std::uint64_t targetFrame = selectedFrame;
-        const auto selected = std::find_if(history.begin(), history.end(),
-            [targetFrame](const Engine::ProfileFrame& frame) { return frame.frameNumber == targetFrame; });
-        if (selected != history.end()) {
-            ImGui::Text("CPU %.3f ms   GPU %.3f ms", selected->cpuFrameMs, selected->gpuFrameMs);
+        const Engine::ProfileFrame* selected = nullptr;
+        for (std::uint32_t index = 0; index < historyCount; ++index) {
+            const Engine::ProfileFrame& frame = Engine::Profiler::historyFrame(index);
+            if (frame.frameNumber == targetFrame) { selected = &frame; break; }
+        }
+        if (selected != nullptr) {
+            ImGui::Text("CPU %.3f ms   GPU %s", selected->cpuFrameMs,
+                        selected->gpuReady ? (std::to_string(selected->gpuFrameMs) + " ms").c_str() : "pending");
             if (ImGui::BeginTable("##cpu-profile-zones", 3,
                                   ImGuiTableFlags_SizingStretchProp | ImGuiTableFlags_BordersInnerV)) {
                 ImGui::TableSetupColumn("CPU zone");
@@ -169,15 +183,20 @@ void drawGpuProfilePanel(const Engine::Renderer& renderer, bool& isOpen) {
         ImGui::Separator();
     }
 
+    const Engine::ProfileFrame* selectedGpuFrame = nullptr;
+    for (std::uint32_t index = 0; index < historyCount; ++index) {
+        const Engine::ProfileFrame& frame = Engine::Profiler::historyFrame(index);
+        if (frame.frameNumber == selectedFrame) { selectedGpuFrame = &frame; break; }
+    }
     float profiledMilliseconds = 0.0F;
-    if (ImGui::BeginTable("##gpu-profile-passes", 2,
+    if (selectedGpuFrame && selectedGpuFrame->gpuReady && ImGui::BeginTable("##gpu-profile-passes", 2,
                           ImGuiTableFlags_SizingStretchProp | ImGuiTableFlags_BordersInnerV)) {
         ImGui::TableSetupColumn("GPU zone");
         ImGui::TableSetupColumn("GPU time", ImGuiTableColumnFlags_WidthFixed, 92.0F);
         ImGui::TableHeadersRow();
-        for (const Engine::GpuProfileEvent& event : profile->events) {
+        for (const Engine::GpuProfileEvent& event : selectedGpuFrame->gpuEvents) {
             const float milliseconds = event.endMs - event.startMs;
-            profiledMilliseconds += milliseconds;
+            if (event.depth == 0) profiledMilliseconds += milliseconds;
             ImGui::TableNextRow();
             ImGui::TableSetColumnIndex(0);
             ImGui::Indent(static_cast<float>(event.depth) * 12.0F);
@@ -189,10 +208,13 @@ void drawGpuProfilePanel(const Engine::Renderer& renderer, bool& isOpen) {
         ImGui::EndTable();
     }
     ImGui::Separator();
-    ImGui::Text("GPU frame: %.3f ms", profile->frameMilliseconds);
-    ImGui::Text("Profiled zones: %.3f ms   Unaccounted: %.3f ms", profiledMilliseconds,
-                std::max(0.0F, profile->frameMilliseconds - profiledMilliseconds));
-    ImGui::TextDisabled("Values use the last fence-completed frame.");
+    if (selectedGpuFrame && selectedGpuFrame->gpuReady) {
+        ImGui::Text("GPU frame: %.3f ms", selectedGpuFrame->gpuFrameMs);
+        ImGui::Text("Profiled zones: %.3f ms   Unaccounted: %.3f ms", profiledMilliseconds,
+                    std::max(0.0F, static_cast<float>(selectedGpuFrame->gpuFrameMs) - profiledMilliseconds));
+    } else {
+        ImGui::TextDisabled("GPU timestamps for this CPU frame are still pending.");
+    }
     ImGui::End();
 }
 

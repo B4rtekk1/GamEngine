@@ -1256,8 +1256,14 @@
             if (!acquireFrameImage(imageIndex)) { return; }
 
             vkResetCommandBuffer(commandBuffers[currentFrame], 0);
-            refreshSceneFrameData();
-            updateRenderableBuffers();
+            {
+                GE_PROFILE_SCOPE("Refresh Scene Data");
+                refreshSceneFrameData();
+            }
+            {
+                GE_PROFILE_SCOPE("GPU Object Update");
+                updateRenderableBuffers();
+            }
             const Vec3 sceneCameraPosition = cameraController.editorPosition();
             const float sceneCameraYaw = cameraController.editorYaw();
             const float sceneCameraPitch = cameraController.editorPitch();
@@ -1279,7 +1285,10 @@
             if (!sceneViewportActive && !dirtyShadowObjects.empty()) {
                 sceneDescriptorPass.invalidateCache();
             }
-            updateUniformBuffer(currentFrame);
+            {
+                GE_PROFILE_SCOPE("Update Uniforms");
+                updateUniformBuffer(currentFrame);
+            }
             if (sceneViewportRendered) {
                 updateSceneViewportUniformBuffer(currentFrame);
             }
@@ -1292,11 +1301,17 @@
             if (mainLight.enabled && mainLight.castShadows && optimizationFeatures.shadows && hasShadowCasters) {
                 updateShadowCullingUniformBuffer(currentFrame);
             }
-            recordCommandBuffer(commandBuffers[currentFrame], SwapchainImageIndex{imageIndex});
-            submitAndPresentFrame(imageIndex);
+            {
+                GE_PROFILE_SCOPE("Command Recording");
+                recordCommandBuffer(commandBuffers[currentFrame], SwapchainImageIndex{imageIndex});
+            }
+            {
+                GE_PROFILE_SCOPE("Queue Submit / Present");
+                submitAndPresentFrame(imageIndex);
+            }
             // Only this path records timestamp queries.  drawCoreFrame() shares
             // submitAndPresentFrame(), but does not reset or write this pool.
-            gpuTimestampProfiler.markSubmitted(currentFrame);
+            gpuTimestampProfiler.markSubmitted(currentFrame, Profiler::currentFrameNumber());
             if (sceneViewportRendered) {
                 renderedSceneViewportPosition = sceneCameraPosition;
                 renderedSceneViewportYaw = sceneCameraYaw;

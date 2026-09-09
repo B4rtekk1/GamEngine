@@ -12,20 +12,25 @@ namespace Engine {
 namespace {
     using Clock = std::chrono::steady_clock;
     constexpr std::size_t MaxEventsPerFrame = 1024;
+    constexpr std::size_t MaxGpuEventsPerFrame = 64;
     struct ActiveZone final { std::size_t eventIndex; };
     struct Storage final {
         std::array<ProfileFrame, Profiler::HistorySize> frames;
-        std::array<ProfileFrame, Profiler::HistorySize> orderedFrames;
         std::deque<std::string> names{"<unknown>"};
         std::mutex namesMutex;
         std::uint32_t nextFrame{};
         std::uint32_t frameCount{};
         std::uint64_t frameNumber{};
         bool recording{};
+        bool clearRequested{};
         Clock::time_point frameStart{};
+        std::thread::id recordingThread{};
 
         Storage() {
-            for (ProfileFrame& frame : frames) frame.cpuEvents.reserve(MaxEventsPerFrame);
+            for (ProfileFrame& frame : frames) {
+                frame.cpuEvents.reserve(MaxEventsPerFrame);
+                frame.gpuEvents.reserve(MaxGpuEventsPerFrame);
+            }
         }
     };
     Storage& storage() { static Storage value; return value; }
@@ -53,12 +58,29 @@ std::string_view Profiler::name(const ProfileNameId id) noexcept {
 
 void Profiler::beginFrame() {
     Storage& state = storage();
+    if (state.clearRequested) {
+        for (ProfileFrame& frame : state.frames) {
+            frame.frameNumber = 0;
+            frame.cpuFrameMs = 0.0;
+            frame.gpuFrameMs = 0.0;
+            frame.cpuEvents.clear();
+            frame.gpuEvents.clear();
+            frame.gpuReady = false;
+        }
+        state.nextFrame = 0;
+        state.frameCount = 0;
+        state.clearRequested = false;
+    }
     ProfileFrame& frame = state.frames[state.nextFrame];
-    frame = {};
-    frame.cpuEvents.reserve(MaxEventsPerFrame);
     frame.frameNumber = ++state.frameNumber;
+    frame.cpuFrameMs = 0.0;
+    frame.gpuFrameMs = 0.0;
+    frame.cpuEvents.clear();
+    frame.gpuEvents.clear();
+    frame.gpuReady = false;
     state.frameStart = Clock::now();
     state.recording = true;
+    state.recordingThread = std::this_thread::get_id();
     activeZones.clear();
 }
 
@@ -75,11 +97,12 @@ void Profiler::endFrame() {
     state.nextFrame = (state.nextFrame + 1) % HistorySize;
     state.frameCount = std::min(state.frameCount + 1, HistorySize);
     state.recording = false;
+    state.recordingThread = {};
 }
 
 void Profiler::beginCpuZone(const ProfileNameId name) {
     Storage& state = storage();
-    if (!state.recording) return;
+    if (!state.recording || std::this_thread::get_id() != state.recordingThread) return;
     ProfileFrame& frame = state.frames[state.nextFrame];
     if (frame.cpuEvents.size() == MaxEventsPerFrame) return;
     frame.cpuEvents.push_back({name, nowNs(state.frameStart), 0,
@@ -90,29 +113,36 @@ void Profiler::beginCpuZone(const ProfileNameId name) {
 
 void Profiler::endCpuZone() {
     Storage& state = storage();
-    if (!state.recording || activeZones.empty()) return;
+    if (!state.recording || std::this_thread::get_id() != state.recordingThread || activeZones.empty()) return;
     state.frames[state.nextFrame].cpuEvents[activeZones.back().eventIndex].endNs = nowNs(state.frameStart);
     activeZones.pop_back();
 }
 
-void Profiler::setGpuFrameMilliseconds(const double milliseconds) noexcept {
+void Profiler::attachGpuFrame(const std::uint64_t frameNumber, const double milliseconds,
+                              const std::span<const GpuProfileEvent> events) noexcept {
     Storage& state = storage();
-    if (state.recording) state.frames[state.nextFrame].gpuFrameMs = milliseconds;
+    for (ProfileFrame& frame : state.frames) {
+        if (frame.frameNumber != frameNumber) continue;
+        frame.gpuFrameMs = milliseconds;
+        frame.gpuEvents.assign(events.begin(), events.end());
+        frame.gpuReady = true;
+        return;
+    }
 }
 
 void Profiler::clear() {
     Storage& state = storage();
-    for (ProfileFrame& frame : state.frames) frame = {};
-    state.nextFrame = 0;
-    state.frameCount = 0;
-    state.frameNumber = 0;
+    state.clearRequested = true;
 }
 
-std::span<const ProfileFrame> Profiler::history() noexcept {
+std::uint64_t Profiler::currentFrameNumber() noexcept { return storage().frameNumber; }
+
+std::uint32_t Profiler::historySize() noexcept { return storage().frameCount; }
+
+const ProfileFrame& Profiler::historyFrame(const std::uint32_t index) noexcept {
     Storage& state = storage();
     const std::uint32_t first = state.frameCount == HistorySize ? state.nextFrame : 0;
-    for (std::uint32_t i = 0; i < state.frameCount; ++i)
-        state.orderedFrames[i] = state.frames[(first + i) % HistorySize];
-    return {state.orderedFrames.data(), state.frameCount};
+    if (state.frameCount == 0) return state.frames[0];
+    return state.frames[(first + std::min(index, state.frameCount - 1)) % HistorySize];
 }
 } // namespace Engine

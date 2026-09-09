@@ -18,6 +18,8 @@ void GpuTimestampProfiler::create(const VkPhysicalDevice physicalDevice, const V
     submitted_.fill(false);
     for (auto& events : events_) events.reserve(MaxZonesPerFrame);
     for (auto& stack : zoneStack_) stack.reserve(MaxZonesPerFrame);
+    suppressedZoneDepth_.fill(0);
+    frameNumbers_.fill(0);
     hasCompletedFrame_ = false;
 }
 
@@ -30,6 +32,8 @@ void GpuTimestampProfiler::destroy() noexcept {
     submitted_.fill(false);
     for (auto& events : events_) events.clear();
     for (auto& stack : zoneStack_) stack.clear();
+    suppressedZoneDepth_.fill(0);
+    frameNumbers_.fill(0);
     hasCompletedFrame_ = false;
 }
 
@@ -38,6 +42,7 @@ void GpuTimestampProfiler::beginFrame(const VkCommandBuffer commandBuffer, const
     vkCmdResetQueryPool(commandBuffer, queryPool_, query(frameIndex, 0), QueriesPerFrame);
     events_[frameIndex].clear();
     zoneStack_[frameIndex].clear();
+    suppressedZoneDepth_[frameIndex] = 0;
     vkCmdWriteTimestamp2(commandBuffer, VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, queryPool_, query(frameIndex, 0));
 }
 
@@ -47,8 +52,9 @@ void GpuTimestampProfiler::endFrame(const VkCommandBuffer commandBuffer, const s
     vkCmdWriteTimestamp2(commandBuffer, VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, queryPool_, query(frameIndex, 1));
 }
 
-void GpuTimestampProfiler::markSubmitted(const std::uint32_t frameIndex) noexcept {
+void GpuTimestampProfiler::markSubmitted(const std::uint32_t frameIndex, const std::uint64_t frameNumber) noexcept {
     submitted_[frameIndex] = true;
+    frameNumbers_[frameIndex] = frameNumber;
 }
 
 bool GpuTimestampProfiler::hasCompletedFrame() const noexcept {
@@ -57,7 +63,11 @@ bool GpuTimestampProfiler::hasCompletedFrame() const noexcept {
 
 void GpuTimestampProfiler::beginZone(const VkCommandBuffer commandBuffer, const std::uint32_t frameIndex,
                                      const ProfileNameId name) const {
-    if (queryPool_ == VK_NULL_HANDLE || events_[frameIndex].size() == MaxZonesPerFrame) return;
+    if (queryPool_ == VK_NULL_HANDLE) return;
+    if (suppressedZoneDepth_[frameIndex] != 0 || events_[frameIndex].size() == MaxZonesPerFrame) {
+        ++suppressedZoneDepth_[frameIndex];
+        return;
+    }
     const std::uint32_t eventIndex = static_cast<std::uint32_t>(events_[frameIndex].size());
     events_[frameIndex].push_back({name, static_cast<std::uint16_t>(zoneStack_[frameIndex].size())});
     zoneStack_[frameIndex].push_back(eventIndex);
@@ -65,7 +75,12 @@ void GpuTimestampProfiler::beginZone(const VkCommandBuffer commandBuffer, const 
 }
 
 void GpuTimestampProfiler::endZone(const VkCommandBuffer commandBuffer, const std::uint32_t frameIndex) const {
-    if (queryPool_ == VK_NULL_HANDLE || zoneStack_[frameIndex].empty()) return;
+    if (queryPool_ == VK_NULL_HANDLE) return;
+    if (suppressedZoneDepth_[frameIndex] != 0) {
+        --suppressedZoneDepth_[frameIndex];
+        return;
+    }
+    if (zoneStack_[frameIndex].empty()) return;
     const std::uint32_t eventIndex = zoneStack_[frameIndex].back();
     zoneStack_[frameIndex].pop_back();
     vkCmdWriteTimestamp2(commandBuffer, VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, queryPool_, query(frameIndex, 3 + eventIndex * 2));
@@ -83,6 +98,7 @@ std::optional<GpuProfileFrame> GpuTimestampProfiler::completedFrame(const std::u
         return value >= frameBegin ? static_cast<float>(value - frameBegin) * timestampPeriodNs_ * 1.0e-6F : 0.0F;
     };
     GpuProfileFrame frame{};
+    frame.frameNumber = frameNumbers_[frameIndex];
     frame.frameMilliseconds = milliseconds(values[1]);
     frame.events.reserve(events_[frameIndex].size());
     for (std::uint32_t index = 0; index < events_[frameIndex].size(); ++index) {

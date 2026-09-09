@@ -15,16 +15,9 @@ namespace Engine {
     class Scene;
     using RenderOptimizationFeatures = RenderFeatures;
 
-    /** A named GPU interval, relative to the start of its submitted frame. */
-    struct GpuProfileEvent final {
-        ProfileNameId name{};
-        float startMs{};
-        float endMs{};
-        std::uint16_t depth{};
-    };
-
-    /** GPU timeline for the most recently fence-completed frame. */
+    /** GPU timeline for a fence-completed frame, matched to its CPU frame number. */
     struct GpuProfileFrame final {
+        std::uint64_t frameNumber{};
         float frameMilliseconds{};
         std::vector<GpuProfileEvent> events;
     };

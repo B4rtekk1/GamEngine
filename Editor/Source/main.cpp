@@ -903,7 +903,7 @@ int main(int argc, char** argv) {
                 renderer.renderFrame();
             }
             if (const auto gpu = renderer.gpuProfile()) {
-                Engine::Profiler::setGpuFrameMilliseconds(gpu->frameMilliseconds);
+                Engine::Profiler::attachGpuFrame(gpu->frameNumber, gpu->frameMilliseconds, gpu->events);
             }
 
             if (sceneResourceSyncPending || initialSceneSyncPending) {

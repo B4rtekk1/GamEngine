@@ -16,11 +16,20 @@ namespace Engine {
         std::uint16_t depth{};
     };
 
+    struct GpuProfileEvent final {
+        ProfileNameId name{};
+        float startMs{};
+        float endMs{};
+        std::uint16_t depth{};
+    };
+
     struct ProfileFrame final {
         std::uint64_t frameNumber{};
         double cpuFrameMs{};
         double gpuFrameMs{};
         std::vector<CpuProfileEvent> cpuEvents;
+        std::vector<GpuProfileEvent> gpuEvents;
+        bool gpuReady{};
     };
 
     /** Frame-local CPU profiler with a bounded, allocation-free-after-warmup history. */
@@ -35,10 +44,15 @@ namespace Engine {
         static void endFrame();
         static void beginCpuZone(ProfileNameId name);
         static void endCpuZone();
-        static void setGpuFrameMilliseconds(double milliseconds) noexcept;
+        /** Associates a fence-completed GPU timeline with its original CPU frame. */
+        static void attachGpuFrame(std::uint64_t frameNumber, double milliseconds,
+                                   std::span<const GpuProfileEvent> events) noexcept;
         static void clear();
 
-        [[nodiscard]] static std::span<const ProfileFrame> history() noexcept;
+        [[nodiscard]] static std::uint64_t currentFrameNumber() noexcept;
+        [[nodiscard]] static std::uint32_t historySize() noexcept;
+        /** Oldest frame is index zero. This view never copies profiling events. */
+        [[nodiscard]] static const ProfileFrame& historyFrame(std::uint32_t index) noexcept;
     };
 
     class CpuProfileScope final {

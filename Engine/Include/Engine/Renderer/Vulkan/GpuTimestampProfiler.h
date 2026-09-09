@@ -16,7 +16,7 @@ namespace Engine {
         void destroy() noexcept;
         void beginFrame(VkCommandBuffer commandBuffer, std::uint32_t frameIndex) const;
         void endFrame(VkCommandBuffer commandBuffer, std::uint32_t frameIndex) const;
-        void markSubmitted(std::uint32_t frameIndex) noexcept;
+        void markSubmitted(std::uint32_t frameIndex, std::uint64_t frameNumber) noexcept;
         [[nodiscard]] bool hasCompletedFrame() const noexcept;
         void beginZone(VkCommandBuffer commandBuffer, std::uint32_t frameIndex, ProfileNameId name) const;
         void endZone(VkCommandBuffer commandBuffer, std::uint32_t frameIndex) const;
@@ -37,6 +37,8 @@ namespace Engine {
         std::array<bool, FramesInFlight> submitted_{};
         mutable std::array<std::vector<PendingEvent>, FramesInFlight> events_;
         mutable std::array<std::vector<std::uint32_t>, FramesInFlight> zoneStack_;
+        mutable std::array<std::uint32_t, FramesInFlight> suppressedZoneDepth_{};
+        std::array<std::uint64_t, FramesInFlight> frameNumbers_{};
         mutable bool hasCompletedFrame_{};
     };
 } // namespace Engine

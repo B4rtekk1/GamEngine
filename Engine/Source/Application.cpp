@@ -143,7 +143,7 @@ namespace Engine {
             impl_->renderer.renderFrame();
         }
         if (const auto gpu = impl_->renderer.gpuProfile()) {
-            Profiler::setGpuFrameMilliseconds(gpu->frameMilliseconds);
+            Profiler::attachGpuFrame(gpu->frameNumber, gpu->frameMilliseconds, gpu->events);
         }
         Profiler::endFrame();
     }
