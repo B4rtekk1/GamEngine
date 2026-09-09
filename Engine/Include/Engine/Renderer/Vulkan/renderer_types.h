@@ -27,7 +27,7 @@ namespace Engine {
         Mat4 previousView;
         Mat4 previousProjection;
         // Camera-centred directional-light virtual clipmaps.
-        std::array<Mat4, 4> shadowClipMatrices{};
+        std::array<Mat4, ShadowMap::ClipLevelCount> shadowClipMatrices{};
         Vec4 cameraPosition;
         Vec4 lightDirectionIntensity;
         Vec4 lightColor;

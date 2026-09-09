@@ -6,7 +6,9 @@
 namespace Engine {
     class ShadowMap final {
     public:
-        static constexpr uint32_t ClipLevelCount = 4;
+        // The overlapping 2x/1.5x steps avoid a visible density cliff when a
+        // receiver moves from one virtual clipmap into the next.
+        static constexpr uint32_t ClipLevelCount = 7;
         static constexpr uint32_t PageResolution = 256;
         static constexpr uint32_t VirtualPagesPerAxis = 32;
         static constexpr uint32_t PhysicalPagesPerAxis = 16;

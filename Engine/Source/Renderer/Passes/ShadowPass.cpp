@@ -20,8 +20,13 @@
 
 namespace Engine {
 namespace {
-constexpr float DepthBiasConstant = 0.05F;
-constexpr float DepthBiasSlope = 0.10F;
+// Receiver normal bias handles most self-shadowing. Keep raster bias small,
+// then scale it with the clipmap's texel footprint instead of applying an L0
+// value to the far pages.
+constexpr std::array<float, ShadowMap::ClipLevelCount> DepthBiasConstant{
+    0.004F, 0.006F, 0.009F, 0.014F, 0.021F, 0.032F, 0.048F};
+constexpr std::array<float, ShadowMap::ClipLevelCount> DepthBiasSlope{
+    0.010F, 0.014F, 0.020F, 0.030F, 0.045F, 0.065F, 0.090F};
 
 bool sameMatrix(const Mat4& left, const Mat4& right) {
     return std::memcmp(&left.native(), &right.native(), sizeof(glm::mat4)) == 0;
@@ -587,7 +592,7 @@ void ShadowPass::preparePages(
     // missed at a detailed level can then fall through to a resident coarse
     // level instead of producing a fully lit, page-shaped hole.
     constexpr std::array<std::uint32_t, ShadowMap::ClipLevelCount> levelBudgets{
-        128, 64, 32, 32};
+        72, 48, 40, 32, 24, 20, 20};
     std::array<std::uint32_t, ShadowMap::ClipLevelCount> levelCounts{};
     const auto requestRectangle = [&](const std::uint32_t level,
                                       const std::int32_t minimumX, const std::int32_t minimumY,
@@ -789,10 +794,11 @@ void ShadowPass::record(const VkCommandBuffer commandBuffer,
     constexpr VkDeviceSize offsets[] = {0, 0};
     vkCmdBindVertexBuffers(commandBuffer, 0, 2, vertexBuffers, offsets);
     vkCmdBindIndexBuffer(commandBuffer, indexBuffer, 0, VK_INDEX_TYPE_UINT32);
-    vkCmdSetDepthBias(commandBuffer, DepthBiasConstant, 0.0F, DepthBiasSlope);
     for (std::size_t pageIndex = 0; pageIndex < pagesToRender_.size(); ++pageIndex) {
         const std::uint32_t physical = pagesToRender_[pageIndex];
         const PhysicalPage& page = physicalPages_[physical];
+        vkCmdSetDepthBias(commandBuffer, DepthBiasConstant[page.level], 0.0F,
+                          DepthBiasSlope[page.level]);
         const std::int32_t x = static_cast<std::int32_t>(
             (physical % ShadowMap::PhysicalPagesPerAxis) * ShadowMap::PageResolution);
         const std::int32_t y = static_cast<std::int32_t>(

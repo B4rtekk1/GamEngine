@@ -293,7 +293,7 @@ ForwardFragmentOutput fragmentMain(ForwardFragmentInput input)
                       max(4.0 * nDotV * nDotL, 0.0001);
     float3 diffuse = (1.0 - fresnel) * (1.0 - metallic) * albedo / PBR_PI;
     float shadow = frame.shadowEnabled != 0
-        ? sampleVirtualShadow(shadowMap, input.worldPosition, frame.shadowClipMatrices,
+        ? sampleVirtualShadow(shadowMap, input.worldPosition, normal, lightDirection, frame.shadowClipMatrices,
                               shadowPageTable, frame.shadowQuality) : 0.0;
     float3 direct = (diffuse + specular) * frame.lightDirectionIntensity.w *
                     frame.lightColor.rgb * nDotL * (1.0 - shadow);

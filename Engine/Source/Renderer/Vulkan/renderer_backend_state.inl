@@ -68,8 +68,8 @@
         Vec3 lastSceneShadowCameraPosition{};
         Vec3 lastShadowLightDirection{};
         Vec3 lastSceneShadowLightDirection{};
-        std::uint32_t shadowClipUpdateMask{0xFu};
-        std::uint32_t sceneShadowClipUpdateMask{0xFu};
+        std::uint32_t shadowClipUpdateMask{(1u << ShadowMap::ClipLevelCount) - 1u};
+        std::uint32_t sceneShadowClipUpdateMask{(1u << ShadowMap::ClipLevelCount) - 1u};
         std::uint64_t shadowClipFrameIndex{0};
         bool shadowClipmapsValid{false};
         bool sceneShadowClipmapsValid{false};

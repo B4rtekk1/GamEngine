@@ -1047,14 +1047,17 @@
                 ? dot(light.direction, previousLightDirection)
                 : -1.0F;
             const bool invalidate = !valid || cameraJump > 8.0F || lightAgreement < 0.9995F;
-            std::uint32_t updateMask = invalidate ? 0xFu : 0x1u;
+            constexpr std::uint32_t allClipLevels = (1u << ShadowMap::ClipLevelCount) - 1u;
+            std::uint32_t updateMask = invalidate ? allClipLevels : 0x1u;
             if (!invalidate) {
-                if ((shadowClipFrameIndex & 1u) == 0) updateMask |= 0x2u;
-                if ((shadowClipFrameIndex & 3u) == 0) updateMask |= 0x4u;
-                if ((shadowClipFrameIndex & 7u) == 0) updateMask |= 0x8u;
+                for (std::uint32_t level = 1; level < ShadowMap::ClipLevelCount; ++level) {
+                    if ((shadowClipFrameIndex & ((1u << level) - 1u)) == 0)
+                        updateMask |= 1u << level;
+                }
             }
 
-            constexpr std::array<float, 3> baseExtents{12.0F, 36.0F, 108.0F};
+            constexpr std::array<float, 6> baseExtents{
+                12.0F, 24.0F, 36.0F, 72.0F, 108.0F, 216.0F};
             const float cameraSceneDistance = (cameraPosition - sceneCenter).length();
             const float farExtent = std::max(324.0F,
                 (cameraSceneDistance + sceneRadius) * 1.1F);

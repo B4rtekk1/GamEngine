@@ -14,9 +14,9 @@ namespace Engine {
 
     /**
      * Filter budget for directional virtual shadow maps.
-     * Low uses one comparison per level; Medium uses 2x2/2x2/1x/1x;
-     * High uses 3x3/3x3/2x2/1x; Ultra uses a page-aware smooth 4x4 tent
-     * at the two nearest levels, followed by 3x3 and 2x2 filtering.
+     * Low uses one comparison per level. High never falls back to a single
+     * comparison: it uses 3x3 near, 2x2 mid-range and a rotated four-tap
+     * kernel at distance. Ultra uses a rotated sixteen-tap kernel.
      */
     enum class ShadowQuality : std::uint8_t {
         Low,
