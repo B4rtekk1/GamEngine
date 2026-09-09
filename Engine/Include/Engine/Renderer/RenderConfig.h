@@ -14,8 +14,9 @@ namespace Engine {
 
     /**
      * Filter budget for directional virtual shadow maps.
-     * Low uses one comparison per level; Medium uses 2x2 near the camera;
-     * High uses 3x3/2x2/1x from near to far; Ultra preserves legacy 3x3 PCF.
+     * Low uses one comparison per level; Medium uses 2x2/2x2/1x/1x;
+     * High uses 3x3/3x3/2x2/1x; Ultra uses a page-aware smooth 4x4 tent
+     * at the two nearest levels, followed by 3x3 and 2x2 filtering.
      */
     enum class ShadowQuality : std::uint8_t {
         Low,
