@@ -753,12 +753,13 @@
         }
 
         template <typename Id>
-        static void appendPendingIds(std::vector<Id>& destination,
-                                     const std::vector<Id>& source) {
+        static void appendPendingIds(std::vector<Id>& destination, std::vector<std::uint32_t>& stamps,
+                                     const std::uint32_t generation, const std::vector<Id>& source) {
             for (const Id id : source) {
-                if (std::ranges::find(destination, id) == destination.end()) {
-                    destination.push_back(id);
-                }
+                if (id >= stamps.size()) stamps.resize(static_cast<std::size_t>(id) + 1U);
+                if (stamps[id] == generation) continue;
+                stamps[id] = generation;
+                destination.push_back(id);
             }
         }
 
@@ -768,10 +769,11 @@
                 dirty.removedInstances.empty()) { return;
 }
             for (auto& pending : sceneGpu.pendingDatabaseUploads) {
-                appendPendingIds(pending.instances, dirty.instances);
-                appendPendingIds(pending.meshes, dirty.meshes);
-                appendPendingIds(pending.materials, dirty.materials);
-                appendPendingIds(pending.removedInstances, dirty.removedInstances);
+                appendPendingIds(pending.instances, pending.instanceStamps, pending.generation, dirty.instances);
+                appendPendingIds(pending.meshes, pending.meshStamps, pending.generation, dirty.meshes);
+                appendPendingIds(pending.materials, pending.materialStamps, pending.generation, dirty.materials);
+                appendPendingIds(pending.removedInstances, pending.removedInstanceStamps, pending.generation,
+                                 dirty.removedInstances);
             }
             sceneGpu.database.clearDirty();
         }
@@ -806,7 +808,7 @@
                     const auto record = gpuSceneRecord(databaseMaterials[id]);
                     gpuSceneMaterialBuffers[frame].update(&record, sizeof(record), sizeof(record) * id);
                 }
-                sceneGpu.pendingDatabaseUploads[frame] = {};
+                sceneGpu.pendingDatabaseUploads[frame].clear();
             }
             sceneGpu.database.clearDirty();
         }
@@ -844,7 +846,7 @@
                 const auto record = gpuSceneRecord(databaseMaterials[id]);
                 gpuSceneMaterialBuffers[frame].update(&record, sizeof(record), sizeof(record) * id);
             }
-            pending = {};
+            pending.clear();
         }
 
         template <typename T>

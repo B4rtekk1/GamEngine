@@ -9,6 +9,7 @@
 #include "Engine/Renderer/GPUSceneDatabase.h"
 #include "Engine/Renderer/Vulkan/renderer_types.h"
 
+#include <algorithm>
 #include <array>
 #include <cstdint>
 #include <limits>
@@ -79,8 +80,31 @@ namespace Engine {
         std::array<std::vector<std::size_t>, 2> dirtyTransforms;
         std::array<std::vector<std::size_t>, 2> dirtyMaterials;
         std::array<std::vector<std::size_t>, 2> dirtyCullingObjects;
+        struct PendingDatabaseUploads final : GPUSceneDatabase::DirtyRanges {
+            std::vector<std::uint32_t> instanceStamps;
+            std::vector<std::uint32_t> meshStamps;
+            std::vector<std::uint32_t> materialStamps;
+            std::vector<std::uint32_t> removedInstanceStamps;
+            std::uint32_t generation{1};
+
+            void clear() noexcept {
+                instances.clear();
+                meshes.clear();
+                materials.clear();
+                removedInstances.clear();
+
+                ++generation;
+                if (generation != 0) return;
+
+                std::fill(instanceStamps.begin(), instanceStamps.end(), 0U);
+                std::fill(meshStamps.begin(), meshStamps.end(), 0U);
+                std::fill(materialStamps.begin(), materialStamps.end(), 0U);
+                std::fill(removedInstanceStamps.begin(), removedInstanceStamps.end(), 0U);
+                generation = 1;
+            }
+        };
         // Changes waiting to be copied to each frame-in-flight GPU Scene SSBO.
-        std::array<GPUSceneDatabase::DirtyRanges, 2> pendingDatabaseUploads;
+        std::array<PendingDatabaseUploads, 2> pendingDatabaseUploads;
         Vec3 sceneCenter;
         float sceneRadius{1.0F};
         bool hasShadowCasters{false};
