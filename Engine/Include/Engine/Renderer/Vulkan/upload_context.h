@@ -47,13 +47,16 @@ public:
     [[nodiscard]] UploadTicket pendingTicket() const noexcept;
     [[nodiscard]] uint64_t completedValue() const noexcept;
     [[nodiscard]] VkSemaphore timeline() const noexcept { return timeline_; }
-    [[nodiscard]] bool recording() const noexcept { return commandBuffer_ != VK_NULL_HANDLE; }
+    [[nodiscard]] bool recording() const noexcept { return recording_; }
     static UploadContext* current() noexcept;
     static void setCurrent(UploadContext* context) noexcept;
 private:
     struct Submitted { VkCommandBuffer commandBuffer{}; uint64_t value{}; };
     VkDevice device_{}; VkQueue queue_{}; VmaAllocator allocator_{}; VkBuffer staging_{}; VmaAllocation allocation_{}; void* mapped_{};
-    VkDeviceSize capacity_{}; VkDeviceSize head_{}; VkCommandPool pool_{}; VkCommandBuffer commandBuffer_{}; VkSemaphore timeline_{}; uint64_t nextValue_{1}; std::vector<Submitted> submitted_;
+    VkDeviceSize capacity_{}; VkDeviceSize head_{}; VkCommandPool pool_{};
+    VkCommandBuffer commandBuffer_{}; VkSemaphore timeline_{}; uint64_t nextValue_{1};
+    bool recording_{};
+    std::vector<Submitted> submitted_;
     void reclaim() noexcept;
     void abort() noexcept;
     static UploadContext* current_;
