@@ -1,4 +1,5 @@
         void createCullingResources() {
+            auto uploadBatch = uploadContext.beginBatch();
             constexpr std::size_t modelDiagonalStride = 5;
             constexpr std::size_t cullingDescriptorBindingCount = 7;
             const std::uint32_t grassBinCount = std::max(1u, static_cast<std::uint32_t>(
@@ -699,6 +700,7 @@
                     shadowTwoSidedIndirectBuffers[frame].handle(), shadowTwoSidedDrawCountBuffers[frame].handle(), objectCount);
             }
             hiZValid = false;
+            [[maybe_unused]] const UploadTicket ticket = uploadBatch.submit();
         }
 
         void destroyCullingResources() noexcept {

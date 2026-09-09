@@ -1,4 +1,5 @@
         void createMaterialTextures() {
+            auto uploadBatch = uploadContext.beginBatch();
             constexpr std::array<std::uint8_t, 4> white = {255, 255, 255, 255};
             fallbackMaterialTexture.create(
                 vulkanDevice.physical(), device, commandPool, vulkanDevice.graphicsQueue(),
@@ -70,6 +71,7 @@
                     materialTextures.push_back(std::move(texture));
                 }
             });
+            [[maybe_unused]] const UploadTicket ticket = uploadBatch.submit();
         }
 
         [[nodiscard]] GPUMaterialData packMaterial(const PBRMaterial& source,
@@ -152,6 +154,7 @@
         }
 
         void createMeshBuffers() {
+            auto uploadBatch = uploadContext.beginBatch();
             Mesh sceneMesh;
             // A topology rebuild creates a new GPU allocation layout. Clear the
             // database only here; ordinary transform/material changes update
@@ -576,6 +579,7 @@
                     vulkanDevice.physical(), device, &dummyIndex, sizeof(dummyIndex),
                     VK_BUFFER_USAGE_INDEX_BUFFER_BIT, commandPool,
                     vulkanDevice.graphicsQueue(), vulkanDevice.allocator());
+                [[maybe_unused]] const UploadTicket ticket = uploadBatch.submit();
                 return;
             }
 
@@ -626,6 +630,7 @@
                     vulkanDevice.graphicsQueue(), terrain.resolution, terrain.resolution, density,
                     TextureColorSpace::Linear, false, vulkanDevice.allocator(), TexturePixelFormat::R8);
             });
+            [[maybe_unused]] const UploadTicket ticket = uploadBatch.submit();
         }
 
         void createInstanceBuffer() {

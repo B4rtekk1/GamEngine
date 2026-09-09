@@ -30,9 +30,11 @@ namespace Engine {
         // The staging allocation remains owned by this Buffer until its fence
         // signals, so its lifetime is valid without stalling the CPU.
         if (UploadContext* upload = UploadContext::current()) {
-            upload->begin();
+            const bool ownsBatch = !upload->recording();
+            if (ownsBatch) upload->begin();
             upload->copyBuffer(buffer_, data, size);
-            readyTimeline_ = upload->submit();
+            readyTimeline_ = upload->pendingTicket().timelineValue;
+            if (ownsBatch) readyTimeline_ = upload->submit().timelineValue;
         } else {
             uploadDeviceLocal(data, size, 0, commandPool, queue);
         }
@@ -71,9 +73,11 @@ namespace Engine {
             throw std::invalid_argument("Device-local buffer update is out of bounds");
         }
         if (UploadContext* upload = UploadContext::current()) {
-            upload->begin();
+            const bool ownsBatch = !upload->recording();
+            if (ownsBatch) upload->begin();
             upload->copyBuffer(buffer_, data, size, offset);
-            readyTimeline_ = upload->submit();
+            readyTimeline_ = upload->pendingTicket().timelineValue;
+            if (ownsBatch) readyTimeline_ = upload->submit().timelineValue;
             return;
         }
         reapCompletedUploads();

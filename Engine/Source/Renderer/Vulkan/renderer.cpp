@@ -525,6 +525,13 @@ namespace Engine {
                                                            UINT64_MAX) != VK_SUCCESS) {
                 throw std::runtime_error("Could not synchronize frames for scene reload");
             }
+            // Upload batches use the graphics queue but intentionally have no
+            // frame fence. A scene rebuild destroys the resources they touch,
+            // so it is a lifetime boundary: wait for that queue before any
+            // destruction rather than relying solely on frame fences.
+            if (vkQueueWaitIdle(vulkanDevice.graphicsQueue()) != VK_SUCCESS) {
+                throw std::runtime_error("Could not synchronize upload queue for scene reload");
+            }
 
             destroyCullingResources();
             tonemapPass.destroy();
@@ -651,6 +658,12 @@ namespace Engine {
                                                            UINT64_MAX) != VK_SUCCESS) {
                 throw std::runtime_error("Could not synchronize frames for scene update");
             }
+            // See reloadSceneResources(): a transfer batch is not associated
+            // with an in-flight frame fence, but it can still reference the
+            // buffers and images about to be retired.
+            if (vkQueueWaitIdle(vulkanDevice.graphicsQueue()) != VK_SUCCESS) {
+                throw std::runtime_error("Could not synchronize upload queue for scene update");
+            }
 
             // ECS topology is not renderer topology.  Only resources whose
             // contents or descriptor bindings refer to the renderable tables
@@ -692,8 +705,10 @@ namespace Engine {
             createMeshBuffers();
             createInstanceBuffer();
             renderableTopologySignature = currentRenderableTopologySignature();
-            createUniformBuffers();
-            createSceneUniformBuffers();
+            // Camera UBOs are independent of renderable topology. Recreating
+            // them here would destroy buffers still referenced by the sky
+            // descriptor sets, while the sky passes intentionally survive a
+            // topology-only rebuild.
             createCullingResources();
             createShadowPass();
             createSceneDescriptorPass();
