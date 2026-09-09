@@ -316,6 +316,9 @@
                 throw std::runtime_error("Could not begin command buffer");
             }
             const bool renderSceneViewport = editorUiActive && sceneViewportRendered;
+            const ForwardPass& sceneForwardPass = msaa.enabled()
+                ? forwardPass
+                : sceneViewportForwardPass;
             const DirectionalLight& mainLight = sceneFrameDataCache.data.directionalLight;
             const bool mainLightShadows = mainLight.enabled && mainLight.castShadows &&
                 optimizationFeatures.shadows && hasShadowCasters;
@@ -324,8 +327,23 @@
             // Use the normal render pass for a one-time clear: it also performs
             // the exact attachment-layout transition used by a real Scene View
             // render (including the MSAA resolve target).
+            // The first use may itself be a real Scene View render, so this
+            // cannot live only in the deferred-clear branch below.
+            if (!sceneViewportImageInitialized && !msaa.enabled()) {
+                VkImageMemoryBarrier2 initializeColor{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2};
+                initializeColor.dstStageMask = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT;
+                initializeColor.dstAccessMask = VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT;
+                initializeColor.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+                initializeColor.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+                initializeColor.image = sceneViewportTarget.color().image();
+                initializeColor.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+                VkDependencyInfo dependency{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
+                dependency.imageMemoryBarrierCount = 1;
+                dependency.pImageMemoryBarriers = &initializeColor;
+                vkCmdPipelineBarrier2(commandBuffer, &dependency);
+            }
             if (!renderSceneViewport && !sceneViewportImageInitialized) {
-                forwardPass.begin(
+                sceneForwardPass.begin(
                     commandBuffer, sceneViewportFramebuffer, sceneViewportTarget.extent(),
                     sceneDescriptorPass.descriptorSet(currentFrame), vertexBuffer.handle(),
                     instanceBuffers[currentFrame].handle(), indexBuffer.handle());
@@ -695,6 +713,26 @@
             }
 
             if (renderSceneViewport) {
+                // The prior Scene View image was sampled by ImGui. Make those
+                // reads visible before the cache pass changes it back into a
+                // color attachment; the render pass itself preserves the
+                // SHADER_READ_ONLY -> COLOR_ATTACHMENT -> SHADER_READ_ONLY
+                // layout sequence.
+                if (!msaa.enabled() && sceneViewportImageInitialized) {
+                    VkImageMemoryBarrier2 sampledToColor{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2};
+                    sampledToColor.srcStageMask = VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT;
+                    sampledToColor.srcAccessMask = VK_ACCESS_2_SHADER_SAMPLED_READ_BIT;
+                    sampledToColor.dstStageMask = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT;
+                    sampledToColor.dstAccessMask = VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT;
+                    sampledToColor.oldLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+                    sampledToColor.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+                    sampledToColor.image = sceneViewportTarget.color().image();
+                    sampledToColor.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+                    VkDependencyInfo dependency{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
+                    dependency.imageMemoryBarrierCount = 1;
+                    dependency.pImageMemoryBarriers = &sampledToColor;
+                    vkCmdPipelineBarrier2(commandBuffer, &dependency);
+                }
                 // Scene View has a separate frustum and therefore needs its own
                 // indirect list. The game camera's list must not hide objects
                 // which are visible from the editor camera.
@@ -706,7 +744,7 @@
                         commandBuffer, static_cast<std::uint32_t>(gpuObjects.size()), nullptr, shader, shader);
                 }
 
-                forwardPass.begin(
+                sceneForwardPass.begin(
                     commandBuffer, sceneViewportFramebuffer, sceneViewportTarget.extent(),
                     sceneDescriptorPass.descriptorSet(currentFrame), vertexBuffer.handle(),
                     instanceBuffers[currentFrame].handle(), indexBuffer.handle());
@@ -715,9 +753,9 @@
                     const auto commandOffset = static_cast<VkDeviceSize>(shader) * gpuObjects.size() *
                         sizeof(VkDrawIndexedIndirectCommand);
                     const auto countOffset = static_cast<VkDeviceSize>(shader) * sizeof(std::uint32_t);
-                    forwardPass.drawMaterial(commandBuffer, sceneDescriptorPass.descriptorSet(currentFrame),
+                    sceneForwardPass.drawMaterial(commandBuffer, sceneDescriptorPass.descriptorSet(currentFrame),
                         shader, sceneIndirectDraws[currentFrame], commandOffset, countOffset);
-                    forwardPass.drawMaterial(commandBuffer, sceneDescriptorPass.descriptorSet(currentFrame),
+                    sceneForwardPass.drawMaterial(commandBuffer, sceneDescriptorPass.descriptorSet(currentFrame),
                         shader, sceneFoliageIndirectDraws[currentFrame], commandOffset, countOffset);
                 }
                 if (!sceneGpu.grassInstances.empty()) {
@@ -726,7 +764,7 @@
                     grassDraw.create(lists.mainIndirect.handle(), lists.mainDrawCount.handle(),
                                      static_cast<uint32_t>(std::max<std::size_t>(1, sceneGpu.grassClusters.size())));
                     sceneDescriptorPass.setGrassVisibleInstances(currentFrame, lists.drawInstances.handle());
-                    forwardPass.drawGrass(commandBuffer, sceneDescriptorPass.grassDescriptorSet(currentFrame), grassDraw);
+                    sceneForwardPass.drawGrass(commandBuffer, sceneDescriptorPass.grassDescriptorSet(currentFrame), grassDraw);
                 }
                 sceneSkyPass.record(commandBuffer, currentFrame);
                 if (particleSystem) {
@@ -748,7 +786,7 @@
                                                  particlePipeline.handle(), particlePipeline.layout(),
                                                  currentFrame, true);
                 }
-                forwardPass.drawOutline(commandBuffer, sceneDescriptorPass.descriptorSet(currentFrame),
+                sceneForwardPass.drawOutline(commandBuffer, sceneDescriptorPass.descriptorSet(currentFrame),
                                         sceneIndirectDraws[currentFrame]);
                 ForwardPass::end(commandBuffer);
             }
@@ -1171,12 +1209,11 @@
                 sceneCameraPosition.z() != renderedSceneViewportPosition.z() ||
                 sceneCameraYaw != renderedSceneViewportYaw ||
                 sceneCameraPitch != renderedSceneViewportPitch;
-            // The direct single-sample target is also exposed to ImGui. Keep
-            // its established every-frame render path until it has a dedicated
-            // cache-compatible render pass; MSAA uses a separate resolve image
-            // and can safely retain the deferred Scene View cache.
+            // Both paths retain the Scene View result until the camera, scene,
+            // viewport, or explicit editor state requests a redraw. The direct
+            // path uses a pass whose input and output layouts are sampled.
             sceneViewportRendered = sceneViewportActive &&
-                (!msaa.enabled() || sceneViewportNeedsRender || sceneCameraChanged ||
+                (sceneViewportNeedsRender || sceneCameraChanged ||
                  scene.mutationRevision() != sceneViewportRenderedRevision);
             // Scene View is deliberately not rendered in play mode. Its cache
             // cannot consume this frame's dirty list, so discard it lazily;

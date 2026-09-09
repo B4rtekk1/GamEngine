@@ -464,6 +464,7 @@ namespace Engine {
                 }
                 skyPass.destroy();
                 sceneSkyPass.destroy();
+                sceneViewportForwardPass.destroy();
                 forwardPass.destroy();
                 shadowPass.destroy();
                 sceneDescriptorPass.destroy();
@@ -473,6 +474,7 @@ namespace Engine {
                 createShadowPass();
                 createSceneDescriptorPass();
                 createForwardPass();
+                createSceneViewportForwardPass();
                 createParticleResources();
                 createSkyPass();
                 createSceneSkyPass();
@@ -666,6 +668,7 @@ namespace Engine {
             }
             skyPass.destroy();
             sceneSkyPass.destroy();
+            sceneViewportForwardPass.destroy();
             forwardPass.destroy();
             shadowPass.destroy();
             sceneDescriptorPass.destroy();
@@ -706,6 +709,7 @@ namespace Engine {
             createShadowPass();
             createSceneDescriptorPass();
             createForwardPass();
+            createSceneViewportForwardPass();
             createParticleResources();
             createSkyPass();
             createSceneSkyPass();

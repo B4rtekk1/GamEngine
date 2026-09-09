@@ -953,6 +953,7 @@
             // also makes the off-screen lifecycle valid for non-editor users.
             sceneViewportTarget.create(vulkanDevice.physical(), device, swapchain.extent(),
                                        msaa.sampleCount(), vulkanDevice.allocator());
+            createSceneViewportForwardPass();
             createSceneViewportFramebuffer();
         }
 
@@ -966,7 +967,9 @@
             VkImageView directAttachments[] = {
                 sceneViewportTarget.color().imageView(), sceneViewportTarget.depth().imageView()};
             VkFramebufferCreateInfo info{VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO};
-            info.renderPass = forwardPass.renderPass();
+            info.renderPass = msaa.enabled()
+                ? forwardPass.renderPass()
+                : sceneViewportForwardPass.renderPass();
             info.attachmentCount = msaa.enabled() ? 4u : 2u;
             info.pAttachments = msaa.enabled() ? msaaAttachments : directAttachments;
             info.width = sceneViewportTarget.extent().width;
@@ -980,6 +983,7 @@
 
         void destroySceneViewportResources() noexcept {
             destroySceneViewportFramebuffer();
+            sceneViewportForwardPass.destroy();
             sceneViewportTarget.destroy();
         }
 

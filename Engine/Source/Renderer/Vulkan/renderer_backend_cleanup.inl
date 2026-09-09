@@ -16,6 +16,7 @@
                 particleComputePipeline = VK_NULL_HANDLE;
                 particleComputePipelineLayout = VK_NULL_HANDLE;
                 particleSystem.reset();
+                sceneViewportForwardPass.destroy();
                 forwardPass.destroy();
                 shadowPass.destroy();
                 sceneDescriptorPass.destroy();

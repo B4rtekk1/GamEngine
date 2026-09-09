@@ -16,7 +16,9 @@ void ForwardPass::create(VkDevice device, const VkFormat colorFormat,
                          const VkFormat depthResolveFormat,
                          const VkResolveModeFlagBits depthResolveMode,
                          VkDescriptorSetLayout sceneLayout,
-                         Assets::AssetManager& assets) {
+                         Assets::AssetManager& assets,
+                         const VkImageLayout colorInitialLayout,
+                         const bool colorInitialLayoutExternallySynchronized) {
     reportedMissingShaderGraphSlots_.clear();
     GraphicsPipelineOptions options{};
     options.colorFormat = colorFormat;
@@ -24,6 +26,8 @@ void ForwardPass::create(VkDevice device, const VkFormat colorFormat,
     options.samples = samples;
     options.depthResolveFormat = depthResolveFormat;
     options.depthResolveMode = depthResolveMode;
+    options.colorInitialLayout = colorInitialLayout;
+    options.colorInitialLayoutExternallySynchronized = colorInitialLayoutExternallySynchronized;
     options.colorFinalLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
     options.shader = "shaders/forward_pbr.spv";
     options.assetManager = &assets;

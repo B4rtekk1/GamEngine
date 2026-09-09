@@ -16,6 +16,10 @@
         // path, so both views share the forward/sky/particle pipelines.
         ViewportRenderTarget sceneViewportTarget;
         VkFramebuffer sceneViewportFramebuffer = VK_NULL_HANDLE;
+        // With AA off, Scene View preserves its color image between redraws.
+        // This pass starts from the descriptor's sampled layout instead of
+        // discarding the cached image through an UNDEFINED transition.
+        ForwardPass sceneViewportForwardPass;
         VkRenderPass editorUiRenderPass = VK_NULL_HANDLE;
         std::vector<VkFramebuffer> editorUiFramebuffers;
         VkDescriptorSet gameViewportDescriptor = VK_NULL_HANDLE;
@@ -50,10 +54,10 @@
         // separate from material textures so compute can sample it directly.
         Texture2D grassHeightTexture;
         Texture2D grassDensityTexture;
-        std::vector<Texture2D> materialTextures;
         std::vector<VkDescriptorImageInfo> materialTextureDescriptors;
         std::unordered_map<const Mesh*, std::uint32_t> meshTextureOffsets;
         DepthBuffer depthBuffer;
+        std::vector<Texture2D> materialTextures;
         ShadowPass shadowPass;
         // A descriptor-compatible pass for Scene View. It owns an independent
         // per-frame camera UBO while reusing the exact forward material layout.

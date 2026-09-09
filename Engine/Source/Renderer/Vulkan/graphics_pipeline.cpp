@@ -134,7 +134,8 @@ namespace Engine {
                                        : VkPipelineStageFlags{0});
         dependency.dstStageMask = dependency.srcStageMask;
         dependency.srcAccessMask =
-                options.colorInitialLayout == VK_IMAGE_LAYOUT_UNDEFINED
+                options.colorInitialLayout == VK_IMAGE_LAYOUT_UNDEFINED ||
+                options.colorInitialLayoutExternallySynchronized
                     ? 0
                     : VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
         if (usesDepth && options.depthInitialLayout != VK_IMAGE_LAYOUT_UNDEFINED) {

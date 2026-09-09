@@ -37,6 +37,9 @@ namespace Engine {
         VkAttachmentLoadOp depthLoadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
         /// Layout expected when the color attachment is first used.
         VkImageLayout colorInitialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+        /// The caller supplies external synchronization for colorInitialLayout.
+        /// This retains render-pass compatibility with an UNDEFINED-entry pass.
+        bool colorInitialLayoutExternallySynchronized = false;
         /// Layout required after rendering completes.
         VkImageLayout colorFinalLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
         VkImageLayout depthInitialLayout = VK_IMAGE_LAYOUT_UNDEFINED;

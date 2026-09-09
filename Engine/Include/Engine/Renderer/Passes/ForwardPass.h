@@ -25,7 +25,9 @@ namespace Engine {
                     VkSampleCountFlagBits samples,
                     VkFormat depthResolveFormat, VkResolveModeFlagBits depthResolveMode,
                     VkDescriptorSetLayout sceneLayout,
-                    Assets::AssetManager &assets);
+                    Assets::AssetManager &assets,
+                    VkImageLayout colorInitialLayout = VK_IMAGE_LAYOUT_UNDEFINED,
+                    bool colorInitialLayoutExternallySynchronized = false);
 
         void destroy() noexcept;
 
