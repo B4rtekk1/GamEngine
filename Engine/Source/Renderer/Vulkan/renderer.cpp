@@ -238,6 +238,10 @@ namespace Engine {
 
         [[nodiscard]] bool sceneResourcesReady() const noexcept { return sceneResourcesInitialized; }
 
+        [[nodiscard]] std::optional<GpuProfileFrame> gpuProfile() const noexcept {
+            return gpuTimestampProfiler.hasCompletedFrame() ? std::optional{lastGpuProfile} : std::nullopt;
+        }
+
         static void beginFrame() { Input::beginFrame(); }
 
         EditorEventState pollEditorEvents() {

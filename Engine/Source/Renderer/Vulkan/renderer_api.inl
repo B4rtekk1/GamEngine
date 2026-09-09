@@ -40,6 +40,10 @@ ShadowDebugView Renderer::shadowDebugView() const noexcept {
     return shadowDebugView_;
 }
 
+std::optional<GpuProfileFrame> Renderer::gpuProfile() const noexcept {
+    return backend_ ? backend_->gpuProfile() : std::nullopt;
+}
+
 void Renderer::initializeCore(Scene& scene, void* nativeWindow) {
     auto* window = static_cast<SDL_Window*>(nativeWindow);
     if (backend_) throw std::logic_error("Renderer is already initialized");

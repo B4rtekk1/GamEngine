@@ -1,17 +1,12 @@
 #pragma once
 
-#include <array>
 #include <cstdint>
 #include <optional>
 #include <vulkan/vulkan.h>
 
+#include "Engine/Renderer/Renderer.h"
+
 namespace Engine {
-    enum class GpuProfilePass : std::uint32_t { Shadow, Culling, Forward, Velocity, Taa, Bloom, Tonemap, Count };
-
-    struct GpuProfileFrame final {
-        std::array<float, static_cast<std::size_t>(GpuProfilePass::Count)> milliseconds{};
-    };
-
     /** Lightweight, fence-safe timestamp collector for the main GPU passes. */
     class GpuTimestampProfiler final {
     public:
@@ -19,6 +14,7 @@ namespace Engine {
         void destroy() noexcept;
         void beginFrame(VkCommandBuffer commandBuffer, std::uint32_t frameIndex) const;
         void markSubmitted(std::uint32_t frameIndex) noexcept;
+        [[nodiscard]] bool hasCompletedFrame() const noexcept;
         void beginPass(VkCommandBuffer commandBuffer, std::uint32_t frameIndex, GpuProfilePass pass) const;
         void endPass(VkCommandBuffer commandBuffer, std::uint32_t frameIndex, GpuProfilePass pass) const;
         [[nodiscard]] std::optional<GpuProfileFrame> completedFrame(std::uint32_t frameIndex) const;
@@ -36,5 +32,6 @@ namespace Engine {
         VkQueryPool queryPool_{VK_NULL_HANDLE};
         float timestampPeriodNs_{};
         std::array<bool, FramesInFlight> submitted_{};
+        mutable bool hasCompletedFrame_{};
     };
 } // namespace Engine

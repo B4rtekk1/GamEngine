@@ -417,6 +417,7 @@ int main(int argc, char** argv) {
         bool showConsole = true;
         bool showShaderGraph = false;
         bool showTerminal = true;
+        bool showGpuProfile = true;
         Editor::TerminalPanel terminal{project.rootPath(), terminalFont};
         double physicsAccumulator = 0.0;
         bool showGameView = false;
@@ -509,7 +510,7 @@ int main(int argc, char** argv) {
                                                                  resetHistoryRequested, showHierarchy,
                                                                  showViewport, showInspector, showAssetManager,
                                                                  showTerrainTools, showConsole, showTerminal,
-                                                                 showShaderGraph);
+                                                                 showShaderGraph, showGpuProfile);
                 created != Engine::NullEntity) {
                 setSelection(created);
             }
@@ -757,6 +758,7 @@ int main(int argc, char** argv) {
             if (showConsole) Editor::ConsolePanel::draw(showConsole);
             if (showTerminal) terminal.draw(showTerminal);
             if (showShaderGraph) shaderGraphPanel->draw(showShaderGraph);
+            drawGpuProfilePanel(renderer, showGpuProfile);
             drawStatusBar(scene, selectedEntity, playing, paused);
             if (!playing && selectedEntity != Engine::NullEntity &&
                 scene.editor().valid(selectedEntity) && !ImGui::GetIO().WantTextInput &&

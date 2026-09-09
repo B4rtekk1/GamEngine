@@ -4,13 +4,23 @@
 #include "Engine/ECS/Entity.h"
 #include "Engine/Math/Vec3.h"
 
+#include <array>
 #include <cstdint>
 #include <limits>
 #include <memory>
+#include <optional>
 
 namespace Engine {
     class Scene;
     using RenderOptimizationFeatures = RenderFeatures;
+
+    /** Main render stages measured by the Vulkan timestamp profiler. */
+    enum class GpuProfilePass : std::uint32_t { Shadow, Culling, Forward, Velocity, Taa, Bloom, Tonemap, Count };
+
+    /** GPU durations for the most recently completed frame, in milliseconds. */
+    struct GpuProfileFrame final {
+        std::array<float, static_cast<std::size_t>(GpuProfilePass::Count)> milliseconds{};
+    };
 
     /** Public renderer facade. The concrete graphics backend is an implementation detail. */
     class Renderer final {
@@ -46,6 +56,9 @@ namespace Engine {
         void setShadowDebugView(ShadowDebugView view) noexcept;
 
         [[nodiscard]] ShadowDebugView shadowDebugView() const noexcept;
+
+        /** Returns timestamps from the most recently completed GPU frame. */
+        [[nodiscard]] std::optional<GpuProfileFrame> gpuProfile() const noexcept;
 
         // nativeWindow and nativeEvent are opaque platform handles. Applications
         // do not need to include graphics-backend headers to use the renderer.

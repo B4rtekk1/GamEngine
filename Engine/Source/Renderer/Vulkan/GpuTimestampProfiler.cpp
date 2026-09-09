@@ -16,6 +16,7 @@ void GpuTimestampProfiler::create(const VkPhysicalDevice physicalDevice, const V
         throw std::runtime_error("Could not create GPU timestamp query pool");
     device_ = device;
     submitted_.fill(false);
+    hasCompletedFrame_ = false;
 }
 
 void GpuTimestampProfiler::destroy() noexcept {
@@ -25,6 +26,7 @@ void GpuTimestampProfiler::destroy() noexcept {
     queryPool_ = VK_NULL_HANDLE;
     timestampPeriodNs_ = 0.0F;
     submitted_.fill(false);
+    hasCompletedFrame_ = false;
 }
 
 void GpuTimestampProfiler::beginFrame(const VkCommandBuffer commandBuffer, const std::uint32_t frameIndex) const {
@@ -34,6 +36,10 @@ void GpuTimestampProfiler::beginFrame(const VkCommandBuffer commandBuffer, const
 
 void GpuTimestampProfiler::markSubmitted(const std::uint32_t frameIndex) noexcept {
     submitted_[frameIndex] = true;
+}
+
+bool GpuTimestampProfiler::hasCompletedFrame() const noexcept {
+    return hasCompletedFrame_;
 }
 
 void GpuTimestampProfiler::beginPass(const VkCommandBuffer commandBuffer, const std::uint32_t frameIndex,
@@ -61,6 +67,7 @@ std::optional<GpuProfileFrame> GpuTimestampProfiler::completedFrame(const std::u
         frame.milliseconds[pass] = end >= begin ?
             static_cast<float>(end - begin) * timestampPeriodNs_ * 1.0e-6F : 0.0F;
     }
+    hasCompletedFrame_ = true;
     return frame;
 }
 } // namespace Engine

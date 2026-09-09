@@ -33,6 +33,96 @@ void drawStatusBar(const Engine::ScenePreset &scene, const Engine::Entity select
     ImGui::PopStyleColor();
 }
 
+void drawGpuProfilePanel(const Engine::Renderer& renderer, bool& isOpen) {
+    static bool writeCsv{};
+    static float intervalSeconds{2.0F};
+    static std::chrono::steady_clock::time_point lastWrite{};
+    static std::string writeError;
+    const std::filesystem::path csvPath = Platform::UserPaths::editorLogs() / "gpu-profile.csv";
+    const auto profile = renderer.gpuProfile();
+
+    // Sampling a fence-completed profile has no GPU synchronization cost. Keep
+    // recording active even when the panel is hidden, so it can be used during
+    // an uninterrupted benchmark run.
+    const auto monotonicNow = std::chrono::steady_clock::now();
+    if (writeCsv && profile &&
+        (lastWrite == std::chrono::steady_clock::time_point{} ||
+         monotonicNow - lastWrite >= std::chrono::duration<float>{intervalSeconds})) {
+        std::error_code error;
+        std::filesystem::create_directories(csvPath.parent_path(), error);
+        if (error) {
+            writeError = "Could not create log directory: " + error.message();
+        } else {
+            const bool writeHeader = !std::filesystem::exists(csvPath, error) ||
+                (!error && std::filesystem::file_size(csvPath, error) == 0);
+            std::ofstream output{csvPath, std::ios::app};
+            if (!output) {
+                writeError = "Could not open GPU profile CSV for writing.";
+            } else {
+                if (writeHeader) {
+                    output << "timestamp_unix_ms,shadow_ms,culling_ms,forward_ms,velocity_ms,taa_ms,"
+                              "bloom_ms,tonemap_ms,total_ms\n";
+                }
+                float totalMilliseconds = 0.0F;
+                for (const float milliseconds : profile->milliseconds) totalMilliseconds += milliseconds;
+                const auto timestamp = std::chrono::duration_cast<std::chrono::milliseconds>(
+                    std::chrono::system_clock::now().time_since_epoch()).count();
+                output << timestamp;
+                for (const float milliseconds : profile->milliseconds) output << ',' << milliseconds;
+                output << ',' << totalMilliseconds << '\n';
+                writeError.clear();
+                lastWrite = monotonicNow;
+            }
+        }
+    }
+
+    if (!isOpen) return;
+    if (!ImGui::Begin("GPU Profile", &isOpen)) {
+        ImGui::End();
+        return;
+    }
+
+    if (ImGui::Checkbox("Write CSV", &writeCsv)) lastWrite = {};
+    ImGui::SameLine();
+    ImGui::SetNextItemWidth(88.0F);
+    if (ImGui::DragFloat("##gpu-profile-interval", &intervalSeconds, 0.25F, 0.25F, 60.0F,
+                         "every %.2f s")) {
+        lastWrite = {};
+    }
+    if (writeCsv) ImGui::TextDisabled("%s", csvPath.string().c_str());
+    if (!writeError.empty()) ImGui::TextColored({0.95F, 0.38F, 0.32F, 1.0F}, "%s", writeError.c_str());
+    ImGui::Separator();
+    if (!profile) {
+        ImGui::TextDisabled("Waiting for a completed GPU frame...");
+        ImGui::End();
+        return;
+    }
+
+    static constexpr std::array passNames{
+        "Shadow", "Culling", "Forward", "Velocity", "TAA", "Bloom", "Tonemap"};
+    float totalMilliseconds = 0.0F;
+    if (ImGui::BeginTable("##gpu-profile-passes", 2,
+                          ImGuiTableFlags_SizingStretchProp | ImGuiTableFlags_BordersInnerV)) {
+        ImGui::TableSetupColumn("Pass");
+        ImGui::TableSetupColumn("GPU time", ImGuiTableColumnFlags_WidthFixed, 92.0F);
+        ImGui::TableHeadersRow();
+        for (std::size_t pass = 0; pass < passNames.size(); ++pass) {
+            const float milliseconds = profile->milliseconds[pass];
+            totalMilliseconds += milliseconds;
+            ImGui::TableNextRow();
+            ImGui::TableSetColumnIndex(0);
+            ImGui::TextUnformatted(passNames[pass]);
+            ImGui::TableSetColumnIndex(1);
+            ImGui::Text("%.3f ms", milliseconds);
+        }
+        ImGui::EndTable();
+    }
+    ImGui::Separator();
+    ImGui::Text("Profiled passes: %.3f ms", totalMilliseconds);
+    ImGui::TextDisabled("Values use the last fence-completed frame.");
+    ImGui::End();
+}
+
 namespace {
 
 // The main-menu entries are navigation controls, not regular action buttons.
@@ -77,7 +167,7 @@ Engine::Entity drawEditorMenuBar(Engine::ScenePreset &scene, Engine::Renderer &r
                                  bool &showHierarchy, bool &showViewport,
                                  bool &showInspector, bool &showAssetManager,
                                  bool &showTerrainTools, bool &showConsole, bool &showTerminal,
-                                 bool &showShaderGraph) {
+                                 bool &showShaderGraph, bool& showGpuProfile) {
     static bool showShortcuts = false;
     static bool showAbout = false;
     static bool openSceneSettings = false;
@@ -396,6 +486,7 @@ Engine::Entity drawEditorMenuBar(Engine::ScenePreset &scene, Engine::Renderer &r
         ImGui::MenuItem("Console", nullptr, &showConsole);
         ImGui::MenuItem("Terminal", nullptr, &showTerminal);
         ImGui::MenuItem("Shader Graph", nullptr, &showShaderGraph);
+        ImGui::MenuItem("GPU Profile", nullptr, &showGpuProfile);
         endTopMenu();
     }
 
