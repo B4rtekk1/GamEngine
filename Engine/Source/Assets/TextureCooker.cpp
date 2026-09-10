@@ -5,11 +5,16 @@
 #include <stb_image.h>
 
 #include <algorithm>
+#include <atomic>
 #include <array>
 #include <cmath>
 #include <cctype>
+#include <condition_variable>
+#include <deque>
+#include <functional>
 #include <limits>
 #include <memory>
+#include <mutex>
 #include <stdexcept>
 #include <string_view>
 #include <system_error>
@@ -19,6 +24,104 @@
 namespace Engine::Assets {
     namespace {
         constexpr float bc7Quality = 0.10F;
+
+        [[nodiscard]] std::size_t texture_cooker_worker_count() noexcept {
+            const std::size_t cores = std::thread::hardware_concurrency();
+            return cores > 1 ? cores - 1 : 1;
+        }
+
+        class TextureCookerWorkerPool final {
+        public:
+            TextureCookerWorkerPool() {
+                const std::size_t workerCount = texture_cooker_worker_count();
+                workers_.reserve(workerCount);
+                for (std::size_t worker = 0; worker < workerCount; ++worker)
+                    workers_.emplace_back([this] { worker_main(); });
+            }
+
+            ~TextureCookerWorkerPool() {
+                {
+                    std::scoped_lock lock(mutex_);
+                    stopping_ = true;
+                }
+                available_.notify_all();
+            }
+
+            TextureCookerWorkerPool(const TextureCookerWorkerPool&) = delete;
+            TextureCookerWorkerPool& operator=(const TextureCookerWorkerPool&) = delete;
+
+            template<typename Function>
+            void parallel_for(const std::size_t count, Function&& function) {
+                if (count == 0) return;
+
+                struct State final {
+                    std::atomic<std::size_t> next{};
+                    std::atomic<std::size_t> remaining{};
+                    std::mutex mutex;
+                    std::condition_variable completed;
+                };
+                const auto state = std::make_shared<State>();
+                const std::size_t taskCount = std::min(count, workers_.size());
+                state->remaining.store(taskCount, std::memory_order_relaxed);
+                const auto callback = std::make_shared<std::decay_t<Function>>(std::forward<Function>(function));
+
+                {
+                    std::scoped_lock lock(mutex_);
+                    for (std::size_t task = 0; task < taskCount; ++task) {
+                        tasks_.emplace_back([state, callback, count](void* options) {
+                            for (;;) {
+                                const std::size_t index = state->next.fetch_add(1, std::memory_order_relaxed);
+                                if (index >= count) break;
+                                (*callback)(options, index);
+                            }
+                            if (state->remaining.fetch_sub(1, std::memory_order_acq_rel) == 1)
+                                state->completed.notify_one();
+                        });
+                    }
+                }
+                available_.notify_all();
+
+                std::unique_lock lock(state->mutex);
+                state->completed.wait(lock, [&] { return state->remaining.load(std::memory_order_acquire) == 0; });
+            }
+
+        private:
+            using Task = std::function<void(void*)>;
+
+            void worker_main() {
+                void* rawOptions = nullptr;
+                if (CreateOptionsBC7(&rawOptions) != 0 || rawOptions == nullptr ||
+                    SetQualityBC7(rawOptions, bc7Quality) != 0) {
+                    if (rawOptions != nullptr) DestroyOptionsBC7(rawOptions);
+                    rawOptions = nullptr;
+                }
+                const auto destroyOptions = [](void* options) { if (options != nullptr) DestroyOptionsBC7(options); };
+                const std::unique_ptr<void, decltype(destroyOptions)> options{rawOptions, destroyOptions};
+
+                for (;;) {
+                    Task task;
+                    {
+                        std::unique_lock lock(mutex_);
+                        available_.wait(lock, [this] { return stopping_ || !tasks_.empty(); });
+                        if (stopping_ && tasks_.empty()) return;
+                        task = std::move(tasks_.front());
+                        tasks_.pop_front();
+                    }
+                    task(options.get());
+                }
+            }
+
+            std::mutex mutex_;
+            std::condition_variable available_;
+            bool stopping_{};
+            std::deque<Task> tasks_;
+            std::vector<std::jthread> workers_;
+        };
+
+        [[nodiscard]] TextureCookerWorkerPool& texture_cooker_workers() {
+            static TextureCookerWorkerPool pool;
+            return pool;
+        }
 
         [[nodiscard]] const std::array<float, 256>& srgb_to_linear_lut() noexcept {
             static const std::array<float, 256> lut = [] {
@@ -34,10 +137,25 @@ namespace Engine::Assets {
             return lut;
         }
 
+        [[nodiscard]] const std::array<std::uint8_t, 65536>& linear_to_srgb_lut() noexcept {
+            static const std::array<std::uint8_t, 65536> lut = [] {
+                std::array<std::uint8_t, 65536> result{};
+                for (std::uint32_t index = 0; index < result.size(); ++index) {
+                    const float linear = static_cast<float>(index) / 65535.0F;
+                    const float encoded = linear <= 0.0031308F
+                        ? linear * 12.92F
+                        : 1.055F * std::pow(linear, 1.0F / 2.4F) - 0.055F;
+                    result[index] = static_cast<std::uint8_t>(std::round(encoded * 255.0F));
+                }
+                return result;
+            }();
+            return lut;
+        }
+
         [[nodiscard]] std::uint8_t linear_to_srgb(const float value) noexcept {
             const float linear = std::clamp(value, 0.0F, 1.0F);
-            const float encoded = linear <= 0.0031308F ? linear * 12.92F : 1.055F * std::pow(linear, 1.0F / 2.4F) - 0.055F;
-            return static_cast<std::uint8_t>(std::round(encoded * 255.0F));
+            const std::uint32_t index = std::min(static_cast<std::uint32_t>(linear * 65535.0F), 65535U);
+            return linear_to_srgb_lut()[index];
         }
 
         [[nodiscard]] std::vector<std::uint8_t> downsample_rgba(const std::span<const std::uint8_t> source,
@@ -48,7 +166,9 @@ namespace Engine::Assets {
             const std::uint32_t height = std::max(1U, sourceHeight / 2);
             std::vector<std::uint8_t> result(static_cast<std::size_t>(width) * height * 4);
             const auto& srgbToLinear = srgb_to_linear_lut();
-            for (std::uint32_t y = 0; y < height; ++y) for (std::uint32_t x = 0; x < width; ++x) {
+            texture_cooker_workers().parallel_for(height, [&](void*, const std::size_t row) {
+                const std::uint32_t y = static_cast<std::uint32_t>(row);
+                for (std::uint32_t x = 0; x < width; ++x) {
                 std::array<float, 4> sum{};
                 for (std::uint32_t oy = 0; oy < 2; ++oy) for (std::uint32_t ox = 0; ox < 2; ++ox) {
                     const auto sx = std::min(sourceWidth - 1, x * 2 + ox);
@@ -62,7 +182,8 @@ namespace Engine::Assets {
                 for (std::uint32_t channel = 0; channel < 3; ++channel)
                     result[output + channel] = srgb ? linear_to_srgb(sum[channel] / 4.0F) : static_cast<std::uint8_t>(std::round(sum[channel] / 4.0F));
                 result[output + 3] = static_cast<std::uint8_t>(std::round(sum[3] / 4.0F));
-            }
+                }
+            });
             return result;
         }
 
@@ -75,17 +196,8 @@ namespace Engine::Assets {
             const auto output = destination.data() + destination.size() - static_cast<std::size_t>(blockCount) * 16;
             std::atomic<bool> failed{};
             std::atomic<std::uint32_t> nextBlock{};
-            const std::size_t logicalCores = std::thread::hardware_concurrency();
-            // This function already runs inside the low-priority cook task. Limit
-            // BC7 workers so the editor and render driver retain CPU capacity.
-            const std::size_t workerCount = std::min<std::size_t>(3, logicalCores > 2 ? logicalCores - 2 : 1);
-            const auto encodeRange = [&] {
-                void* rawOptions = nullptr;
-                if (CreateOptionsBC7(&rawOptions) != 0 || rawOptions == nullptr)
-                    failed.store(true, std::memory_order_relaxed);
-                const auto destroyOptions = [](void* options) { if (options != nullptr) DestroyOptionsBC7(options); };
-                const std::unique_ptr<void, decltype(destroyOptions)> options{rawOptions, destroyOptions};
-                if (!options || SetQualityBC7(options.get(), bc7Quality) != 0) {
+            texture_cooker_workers().parallel_for(texture_cooker_worker_count(), [&](void* options, std::size_t) {
+                if (options == nullptr) {
                     failed.store(true, std::memory_order_relaxed);
                     return;
                 }
@@ -103,7 +215,7 @@ namespace Engine::Assets {
                         auto* destinationBlock = output + static_cast<std::size_t>(index) * 16;
                         if (px + 4 <= width && py + 4 <= height) {
                             const auto* sourceBlock = rgba.data() + (static_cast<std::size_t>(py) * width + px) * 4;
-                            if (CompressBlockBC7(sourceBlock, width * 4, destinationBlock, options.get()) != 0)
+                            if (CompressBlockBC7(sourceBlock, width * 4, destinationBlock, options) != 0)
                                 failed.store(true, std::memory_order_relaxed);
                             continue;
                         }
@@ -114,18 +226,11 @@ namespace Engine::Assets {
                             const auto blockOffset = (static_cast<std::size_t>(y) * 4 + x) * 4;
                             std::copy_n(rgba.data() + sourceOffset, 4, block.data() + blockOffset);
                         }
-                        if (CompressBlockBC7(block.data(), 16, destinationBlock, options.get()) != 0)
+                        if (CompressBlockBC7(block.data(), 16, destinationBlock, options) != 0)
                             failed.store(true, std::memory_order_relaxed);
                     }
                 }
-            };
-            std::vector<std::jthread> workers;
-            workers.reserve(workerCount);
-            for (std::size_t worker = 0; worker < workerCount; ++worker) {
-                workers.emplace_back(encodeRange);
-            }
-            // jthread destruction joins all workers before their output is used.
-            workers.clear();
+            });
             if (failed.load(std::memory_order_relaxed))
                 throw std::runtime_error("Compressonator could not encode a BC7 block");
         }
