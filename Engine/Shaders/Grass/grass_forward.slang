@@ -5,6 +5,10 @@ import Common.ShadowSampling;
 import Grass.GrassPackedData;
 import Grass.GrassDeformation;
 
+#ifndef FORWARD_OUTPUT_VELOCITY
+#define FORWARD_OUTPUT_VELOCITY 1
+#endif
+
 [[vk::binding(0, 0)]] Sampler2DShadow shadowMap;
 [[vk::binding(9, 0)]] Sampler2D shadowDepthMap;
 [[vk::binding(1, 0)]] ConstantBuffer<RendererFrameData> frame;
@@ -74,7 +78,12 @@ struct FragmentInput
     bool isFrontFace : SV_IsFrontFace;
 };
 
-struct GrassFragmentOutput { [[vk::location(0)]] float4 color : SV_Target; [[vk::location(1)]] float2 velocity : SV_Target1; };
+struct GrassFragmentOutput {
+    [[vk::location(0)]] float4 color : SV_Target;
+#if FORWARD_OUTPUT_VELOCITY
+    [[vk::location(1)]] float2 velocity : SV_Target1;
+#endif
+};
 
 [shader("fragment")]
 GrassFragmentOutput fragmentMain(FragmentInput input)
@@ -94,6 +103,8 @@ GrassFragmentOutput fragmentMain(FragmentInput input)
     output.color = frame.shadowDebugView != SHADOW_DEBUG_OFF
         ? float4(shadowDebugColor(frame.shadowDebugView, shadowDebug), 1.0)
         : float4(albedo.rgb * (0.20 + diffuse * frame.lightDirectionIntensity.w * (1.0 - shadow) * frame.lightColor.rgb), 1.0);
+#if FORWARD_OUTPUT_VELOCITY
     output.velocity = (input.currentNdc - input.previousClip.xy / input.previousClip.w) * 0.5;
+#endif
     return output;
 }

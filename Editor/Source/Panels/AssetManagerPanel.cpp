@@ -464,7 +464,11 @@ Engine::Entity AssetManagerPanel::draw(Engine::ScenePreset& scene, Engine::Asset
             if (summary->failed == 0) {
                 Editor::ConsolePanel::info("Cooked " + std::to_string(summary->cooked) + " textures; skipped " +
                                            std::to_string(summary->skipped) + " unchanged of " +
-                                           std::to_string(summary->discovered) + ".");
+                                           std::to_string(summary->discovered) + ". Decode: " +
+                                           std::to_string(summary->decodeMilliseconds) + " ms, mips: " +
+                                           std::to_string(summary->mipGenerationMilliseconds) + " ms, BC7: " +
+                                           std::to_string(summary->bc7EncodeMilliseconds) + " ms, save: " +
+                                           std::to_string(summary->saveMilliseconds) + " ms.");
             } else {
                 Editor::ConsolePanel::error("Cooked " + std::to_string(summary->cooked) + "/" +
                                             std::to_string(summary->discovered) + " textures; skipped " +

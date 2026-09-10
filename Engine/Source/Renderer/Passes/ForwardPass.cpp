@@ -49,9 +49,11 @@ void ForwardPass::create(VkDevice device, const VkFormat colorFormat,
         {8, 0, VK_FORMAT_R32_UINT, offsetof(Vertex, materialIndex)},
         {9, 0, VK_FORMAT_R32G32B32A32_SFLOAT, offsetof(Vertex, tangent)},
     };
-    constexpr std::array shaderPaths{
-        "shaders/forward_pbr.spv", "shaders/forward_unlit.spv",
-        "shaders/forward_hologram.spv", "shaders/forward_water.spv"};
+    const auto shaderPaths = hasVelocityAttachment_
+        ? std::array{"shaders/forward_pbr.spv", "shaders/forward_unlit.spv",
+                     "shaders/forward_hologram.spv", "shaders/forward_water.spv"}
+        : std::array{"shaders/forward_pbr_no_velocity.spv", "shaders/forward_unlit_no_velocity.spv",
+                     "shaders/forward_hologram_no_velocity.spv", "shaders/forward_water_no_velocity.spv"};
     for (std::size_t index = 0; index < shaderPaths.size(); ++index) {
         options.shader = shaderPaths[index];
         if (index != materialShaderIndex(MaterialShader::StandardPBR)) {
@@ -75,14 +77,15 @@ void ForwardPass::create(VkDevice device, const VkFormat colorFormat,
     foliageOptions.depthWriteEnable = VK_TRUE;
     foliagePipeline_.create(device, foliageOptions);
     GraphicsPipelineOptions grassOptions = foliageOptions;
-    grassOptions.shader = "shaders/grass_forward.spv";
-    // grass_forward.slang does not consume tangents. Keeping the generic
-    // mesh tangent attribute here triggers Vulkan validation at location 9.
+    grassOptions.shader = hasVelocityAttachment_
+        ? "shaders/grass_forward.spv" : "shaders/grass_forward_no_velocity.spv";
+    // Grass consumes only position, color, UV0, normal, and material index.
+    // Supplying UV1/tangents causes Vulkan validation warnings at locations 4/9.
     grassOptions.vertexAttributes.erase(
         std::remove_if(grassOptions.vertexAttributes.begin(),
                        grassOptions.vertexAttributes.end(),
                        [](const VkVertexInputAttributeDescription& attribute) {
-                           return attribute.location == 9;
+                           return attribute.location == 4 || attribute.location == 9;
                        }),
         grassOptions.vertexAttributes.end());
     grassPipeline_.create(device, grassOptions);
@@ -119,7 +122,15 @@ void ForwardPass::destroy() noexcept {
 }
 
 std::uint32_t ForwardPass::registerShaderGraph(const ShaderGraphProgram& program, const MaterialRenderState& state) {
-    return shaderGraphPipelines_.getOrCreate(program.id, program.spirvPath, state);
+    std::filesystem::path shader = program.spirvPath;
+    if (!hasVelocityAttachment_) {
+        shader = program.noVelocitySpirvPath;
+        if (shader.empty()) {
+            shader = program.spirvPath.parent_path() /
+                     (program.spirvPath.stem().string() + "_no_velocity" + program.spirvPath.extension().string());
+        }
+    }
+    return shaderGraphPipelines_.getOrCreate(program.id, shader, state);
 }
 
 bool ForwardPass::hasMaterialPipeline(const std::uint32_t shaderSlot) const noexcept {

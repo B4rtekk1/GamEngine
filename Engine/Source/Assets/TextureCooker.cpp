@@ -9,6 +9,7 @@
 #include <array>
 #include <cmath>
 #include <cctype>
+#include <chrono>
 #include <condition_variable>
 #include <deque>
 #include <functional>
@@ -24,6 +25,15 @@
 namespace Engine::Assets {
     namespace {
         constexpr float bc7Quality = 0.10F;
+
+        struct TextureCookTimings final {
+            std::chrono::nanoseconds mipGeneration{};
+            std::chrono::nanoseconds bc7Encode{};
+        };
+
+        [[nodiscard]] std::uint64_t milliseconds(const std::chrono::nanoseconds duration) noexcept {
+            return static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(duration).count());
+        }
 
         [[nodiscard]] std::size_t texture_cooker_worker_count() noexcept {
             const std::size_t cores = std::thread::hardware_concurrency();
@@ -255,8 +265,9 @@ namespace Engine::Assets {
         }
     }
 
-    CookedTexture cook_bc7(const std::span<const std::uint8_t> rgbaPixels, const std::uint32_t width,
-                           const std::uint32_t height, const bool srgb) {
+        [[nodiscard]] CookedTexture cook_bc7_impl(const std::span<const std::uint8_t> rgbaPixels,
+                                                  const std::uint32_t width, const std::uint32_t height,
+                                                  const bool srgb, TextureCookTimings* const timings) {
         if (width == 0 || height == 0 || width > std::numeric_limits<std::size_t>::max() / height / 4 ||
             rgbaPixels.size() != static_cast<std::size_t>(width) * height * 4)
             throw std::invalid_argument("Texture cooker requires a complete RGBA8 image");
@@ -268,14 +279,24 @@ namespace Engine::Assets {
         std::uint32_t mipHeight = height;
         while (true) {
             const auto offset = static_cast<std::uint64_t>(result.data.size());
+            const auto encodeStarted = std::chrono::steady_clock::now();
             encode_mip_bc7(mip, mipWidth, mipHeight, result.data);
+            if (timings != nullptr)
+                timings->bc7Encode += std::chrono::steady_clock::now() - encodeStarted;
             result.mips.push_back({offset, static_cast<std::uint64_t>(result.data.size()) - offset, mipWidth, mipHeight});
             if (mipWidth == 1 && mipHeight == 1) break;
+            const auto mipStarted = std::chrono::steady_clock::now();
             mip = downsample_rgba(mip, mipWidth, mipHeight, srgb);
+            if (timings != nullptr)
+                timings->mipGeneration += std::chrono::steady_clock::now() - mipStarted;
             mipWidth = std::max(1U, mipWidth / 2);
             mipHeight = std::max(1U, mipHeight / 2);
         }
         return result;
+    }
+    CookedTexture cook_bc7(const std::span<const std::uint8_t> rgbaPixels, const std::uint32_t width,
+                           const std::uint32_t height, const bool srgb) {
+        return cook_bc7_impl(rgbaPixels, width, height, srgb, nullptr);
     }
 
     TextureCookSummary cook_all_textures(const std::filesystem::path& assetRoot, TextureCookProgress* progress) {
@@ -313,7 +334,9 @@ namespace Engine::Assets {
             int width{};
             int height{};
             int channels{};
+            const auto decodeStarted = std::chrono::steady_clock::now();
             stbi_uc* pixels = stbi_load(source.string().c_str(), &width, &height, &channels, STBI_rgb_alpha);
+            const auto decodeElapsed = std::chrono::steady_clock::now() - decodeStarted;
             if (pixels == nullptr || width <= 0 || height <= 0) {
                 summary.errors += source.string() + ": cannot decode image\n";
                 stbi_image_free(pixels);
@@ -324,10 +347,16 @@ namespace Engine::Assets {
             }
             try {
                 const auto count = static_cast<std::size_t>(width) * static_cast<std::size_t>(height) * STBI_rgb_alpha;
-                const auto cooked = cook_bc7(std::span<const std::uint8_t>{pixels, count},
-                                              static_cast<std::uint32_t>(width), static_cast<std::uint32_t>(height),
-                                              !linear_texture(source));
+                TextureCookTimings timings;
+                const auto cooked = cook_bc7_impl(std::span<const std::uint8_t>{pixels, count},
+                                                   static_cast<std::uint32_t>(width), static_cast<std::uint32_t>(height),
+                                                   !linear_texture(source), &timings);
+                const auto saveStarted = std::chrono::steady_clock::now();
                 if (!save_gtex(output, cooked)) throw std::runtime_error("could not write " + output.string());
+                summary.decodeMilliseconds += milliseconds(decodeElapsed);
+                summary.mipGenerationMilliseconds += milliseconds(timings.mipGeneration);
+                summary.bc7EncodeMilliseconds += milliseconds(timings.bc7Encode);
+                summary.saveMilliseconds += milliseconds(std::chrono::steady_clock::now() - saveStarted);
                 ++summary.cooked;
             } catch (const std::exception& exception) {
                 summary.errors += source.string() + ": " + exception.what() + "\n";

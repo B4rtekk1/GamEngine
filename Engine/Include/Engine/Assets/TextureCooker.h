@@ -21,6 +21,11 @@ namespace Engine::Assets {
         std::uint32_t cooked{};
         std::uint32_t skipped{};
         std::uint32_t failed{};
+        /** Aggregate wall-clock durations for successfully processed source textures. */
+        std::uint64_t decodeMilliseconds{};
+        std::uint64_t mipGenerationMilliseconds{};
+        std::uint64_t bc7EncodeMilliseconds{};
+        std::uint64_t saveMilliseconds{};
         std::string errors;
     };
 

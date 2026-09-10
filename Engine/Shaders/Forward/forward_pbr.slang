@@ -8,6 +8,10 @@ import Common.ShadowSampling;
 #define MATERIAL_VARIANT 0
 #endif
 
+#ifndef FORWARD_OUTPUT_VELOCITY
+#define FORWARD_OUTPUT_VELOCITY 1
+#endif
+
 [[vk::binding(1, 0)]] ConstantBuffer<RendererFrameData> frame;
 [[vk::binding(5, 0)]] StructuredBuffer<RendererInstanceData> visibleInstances;
 [[vk::binding(6, 0)]] StructuredBuffer<uint> visibleInstanceIndices;
@@ -104,7 +108,9 @@ struct ForwardFragmentInput
 struct ForwardFragmentOutput
 {
     [[vk::location(0)]] float4 color : SV_Target;
+#if FORWARD_OUTPUT_VELOCITY
     [[vk::location(1)]] float2 velocity : SV_Target1;
+#endif
 };
 
 [shader("fragment")]
@@ -250,8 +256,10 @@ ForwardFragmentOutput fragmentMain(ForwardFragmentInput input)
     {
         ForwardFragmentOutput debugOutput;
         debugOutput.color = float4(shadowDebugColor(frame.shadowDebugView, shadowDebug), baseColor.a);
+#if FORWARD_OUTPUT_VELOCITY
         float2 previousNdc = input.previousClip.xy / input.previousClip.w;
         debugOutput.velocity = (input.currentNdc - previousNdc) * 0.5;
+#endif
         return debugOutput;
     }
     float3 direct = (diffuse + specular) * frame.lightDirectionIntensity.w *
@@ -329,7 +337,9 @@ ForwardFragmentOutput fragmentMain(ForwardFragmentInput input)
 
     ForwardFragmentOutput output;
     output.color = float4(color, baseColor.a);
+#if FORWARD_OUTPUT_VELOCITY
     float2 previousNdc = input.previousClip.xy / input.previousClip.w;
     output.velocity = (input.currentNdc - previousNdc) * 0.5;
+#endif
     return output;
 }

@@ -16,6 +16,8 @@ namespace Engine {
         ShaderProgramId id{};
         std::filesystem::path slangPath;
         std::filesystem::path spirvPath;
+        /// Color-only module used by passes without a velocity attachment.
+        std::filesystem::path noVelocitySpirvPath;
     };
 
     /**

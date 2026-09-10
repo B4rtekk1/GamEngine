@@ -363,6 +363,14 @@ void ShadowPass::create(VkPhysicalDevice physicalDevice, VkDevice device,
         };
         pipelineInfo.stageCount = std::size(grassStages);
         pipelineInfo.pStages = grassStages.data();
+        // grass_shadow consumes position, UV0 and material index only.
+        const VkVertexInputAttributeDescription grassAttributes[] = {
+            {0, 0, VK_FORMAT_R32G32B32_SFLOAT, offsetof(Vertex, position)},
+            {2, 0, VK_FORMAT_R32G32_SFLOAT, offsetof(Vertex, texCoord)},
+            {8, 0, VK_FORMAT_R32_UINT, offsetof(Vertex, materialIndex)},
+        };
+        vertexInput.vertexAttributeDescriptionCount = std::size(grassAttributes);
+        vertexInput.pVertexAttributeDescriptions = grassAttributes;
         if (vkCreateGraphicsPipelines(device_, VK_NULL_HANDLE, 1, &pipelineInfo,
                                       nullptr, &grassPipeline_) != VK_SUCCESS) {
             throw std::runtime_error("Could not create grass shadow pipeline");

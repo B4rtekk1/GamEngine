@@ -43,6 +43,33 @@ function(gameengine_add_engine_shaders)
             DEPENDS "${ENGINE_SHADER_SOURCE_DIR}/Forward/forward_pbr.slang" ${shader_modules}
             COMMENT "Compiling forward ${variant_name} material shader" VERBATIM)
     endforeach()
+    # The editor Scene View does not allocate a motion-vector target.  Build
+    # matching forward modules whose fragment entry point writes color only.
+    foreach(variant_name IN ITEMS pbr unlit hologram water)
+        if(variant_name STREQUAL "pbr")
+            set(variant_define 0)
+        elseif(variant_name STREQUAL "unlit")
+            set(variant_define 1)
+        elseif(variant_name STREQUAL "hologram")
+            set(variant_define 2)
+        else()
+            set(variant_define 3)
+        endif()
+        set(variant_output "${SHADER_OUT_DIR}/forward_${variant_name}_no_velocity.spv")
+        list(APPEND shader_outputs "${variant_output}")
+        add_custom_command(OUTPUT "${variant_output}"
+            COMMAND ${CMAKE_COMMAND} -E make_directory "${SHADER_OUT_DIR}"
+            COMMAND ${SLANGC} "${ENGINE_SHADER_SOURCE_DIR}/Forward/forward_pbr.slang" -target spirv -profile glsl_460 -emit-spirv-directly -matrix-layout-row-major -I "${ENGINE_SHADER_SOURCE_DIR}" -D MATERIAL_VARIANT=${variant_define} -D FORWARD_OUTPUT_VELOCITY=0 -o "${variant_output}"
+            DEPENDS "${ENGINE_SHADER_SOURCE_DIR}/Forward/forward_pbr.slang" ${shader_modules}
+            COMMENT "Compiling color-only forward ${variant_name} material shader" VERBATIM)
+    endforeach()
+    set(grass_no_velocity_output "${SHADER_OUT_DIR}/grass_forward_no_velocity.spv")
+    list(APPEND shader_outputs "${grass_no_velocity_output}")
+    add_custom_command(OUTPUT "${grass_no_velocity_output}"
+        COMMAND ${CMAKE_COMMAND} -E make_directory "${SHADER_OUT_DIR}"
+        COMMAND ${SLANGC} "${ENGINE_SHADER_SOURCE_DIR}/Grass/grass_forward.slang" -target spirv -profile glsl_460 -emit-spirv-directly -matrix-layout-row-major -I "${ENGINE_SHADER_SOURCE_DIR}" -D FORWARD_OUTPUT_VELOCITY=0 -o "${grass_no_velocity_output}"
+        DEPENDS "${ENGINE_SHADER_SOURCE_DIR}/Grass/grass_forward.slang" ${shader_modules}
+        COMMENT "Compiling color-only grass forward shader" VERBATIM)
     add_custom_target(EngineShaders DEPENDS ${shader_outputs})
     set(GAMEENGINE_SHADER_OUTPUT_DIR "${SHADER_OUT_DIR}" PARENT_SCOPE)
 endfunction()

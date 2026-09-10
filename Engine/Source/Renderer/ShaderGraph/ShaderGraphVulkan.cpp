@@ -105,6 +105,7 @@ struct MaterialSurface
             const std::string stem = std::format("generated_{:016x}", program.id);
             program.slangPath = generatedDirectory / (stem + ".slang");
             program.spirvPath = generatedDirectory / (stem + ".spv");
+            program.noVelocitySpirvPath = generatedDirectory / (stem + "_no_velocity.spv");
             writeText(program.slangPath, source);
 
             // The editor invokes this after debounce on its worker thread; Vulkan
@@ -114,6 +115,7 @@ struct MaterialSurface
             const std::string sourcePath = program.slangPath.string();
             const std::string includeDirectory = forwardTemplate.parent_path().parent_path().string();
             const std::string outputPath = program.spirvPath.string();
+            const std::string noVelocityOutputPath = program.noVelocitySpirvPath.string();
             const char *arguments[] = {
                 compiler.c_str(), sourcePath.c_str(),
                 "-target", "spirv",
@@ -159,6 +161,49 @@ struct MaterialSurface
                 } else {
                     message += "\nNo compiler output was captured.";
                 }
+                result.diagnostics.push_back({std::move(message), {}});
+                return result;
+            }
+
+            const char *noVelocityArguments[] = {
+                compiler.c_str(), sourcePath.c_str(),
+                "-target", "spirv",
+                "-profile", "glsl_460",
+                "-emit-spirv-directly",
+                "-matrix-layout-row-major",
+                "-I", includeDirectory.c_str(),
+                "-D", "FORWARD_OUTPUT_VELOCITY=0",
+                "-o", noVelocityOutputPath.c_str(),
+                nullptr
+            };
+            const SDL_PropertiesID noVelocityProperties = SDL_CreateProperties();
+            if (!noVelocityProperties) {
+                throw std::runtime_error(std::string("Could not create process properties: ") + SDL_GetError());
+            }
+            SDL_SetPointerProperty(noVelocityProperties, SDL_PROP_PROCESS_CREATE_ARGS_POINTER,
+                                   static_cast<void *>(noVelocityArguments));
+            SDL_SetNumberProperty(noVelocityProperties, SDL_PROP_PROCESS_CREATE_STDOUT_NUMBER, SDL_PROCESS_STDIO_APP);
+            SDL_SetBooleanProperty(noVelocityProperties, SDL_PROP_PROCESS_CREATE_STDERR_TO_STDOUT_BOOLEAN, true);
+            SDL_Process *noVelocityProcess = SDL_CreateProcessWithProperties(noVelocityProperties);
+            SDL_DestroyProperties(noVelocityProperties);
+            if (!noVelocityProcess) {
+                throw std::runtime_error(std::string("Could not launch slangc: ") + SDL_GetError());
+            }
+            size_t noVelocityOutputSize = 0;
+            int noVelocityExitCode = -1;
+            void *noVelocityProcessOutput = SDL_ReadProcess(noVelocityProcess, &noVelocityOutputSize,
+                                                            &noVelocityExitCode);
+            std::string noVelocityCompilerOutput;
+            if (noVelocityProcessOutput) {
+                noVelocityCompilerOutput.assign(static_cast<const char *>(noVelocityProcessOutput),
+                                                noVelocityOutputSize);
+                SDL_free(noVelocityProcessOutput);
+            }
+            SDL_DestroyProcess(noVelocityProcess);
+            if (noVelocityExitCode != 0) {
+                std::string message = "slangc failed while compiling color-only generated Shader Graph module: " +
+                                      slangcPath.string();
+                if (!noVelocityCompilerOutput.empty()) message += "\n\n" + noVelocityCompilerOutput;
                 result.diagnostics.push_back({std::move(message), {}});
             }
         } catch (const std::exception &exception) {
