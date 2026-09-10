@@ -1,11 +1,10 @@
 import Common.SceneData;
-import Common.GrassWind;
 
 [[vk::binding(1, 0)]] ConstantBuffer<RendererFrameData> frame;
 [[vk::binding(2, 0)]] StructuredBuffer<MaterialData> materials;
 [[vk::binding(10, 0)]] Sampler2D materialTextures[];
-[[vk::binding(5, 0)]] StructuredBuffer<RendererInstanceData> visibleGrassInstances;
-[[vk::binding(6, 0)]] StructuredBuffer<uint> visibleGrassIndices;
+[[vk::binding(5, 0)]] StructuredBuffer<RendererInstanceData> visibleInstances;
+[[vk::binding(6, 0)]] StructuredBuffer<uint> visibleInstanceIndices;
 
 struct VertexInput
 {
@@ -36,42 +35,9 @@ struct VertexOutput
 VertexOutput vertexMain(VertexInput input, uint instanceIndex : SV_InstanceID,
                         uint baseInstance : SV_StartInstanceLocation)
 {
-    RendererInstanceData instance = visibleGrassInstances[visibleGrassIndices[baseInstance + instanceIndex]];
-    float3 localPosition = input.position;
-    float normalizedHeight = clamp((input.position.y - instance.scaleBase.w) *
-                                   instance.grassDeformation.w, 0.0, 1.0);
-    float bendCurve = normalizedHeight * normalizedHeight * (3.0 - 2.0 * normalizedHeight);
-    float bendWeight = bendCurve * instance.grassDeformation.z;
-    float grassHeight = instance.grassDeformation.w > 0.0 ? 1.0 / instance.grassDeformation.w : 0.0;
-    localPosition.xz += instance.grassDeformation.xy * bendWeight * grassHeight * 0.8;
-    localPosition.y -= bendWeight * (0.25 + 0.30 * normalizedHeight) * grassHeight;
-    float4 inverseRotation = float4(-instance.rotation.xyz, instance.rotation.w);
-    localPosition += grassWindDisplacement(instance.positionMaterial.xz, inverseRotation,
-                                           normalizedHeight, grassHeight,
-                                           frame.windGustFrequencyTime.z,
-                                           frame.windDirectionStrength,
-                                           frame.windSourcePositionRange,
-                                           frame.windGustFrequencyTime);
-
-    float3 previousLocalPosition = input.position;
-    float previousNormalizedHeight = clamp((input.position.y - instance.previousScale.w) *
-                                           instance.previousGrassDeformation.w, 0.0, 1.0);
-    float previousBendCurve = previousNormalizedHeight * previousNormalizedHeight *
-                              (3.0 - 2.0 * previousNormalizedHeight);
-    float previousBendWeight = previousBendCurve * instance.previousGrassDeformation.z;
-    float previousGrassHeight = instance.previousGrassDeformation.w > 0.0
-        ? 1.0 / instance.previousGrassDeformation.w : 0.0;
-    previousLocalPosition.xz += instance.previousGrassDeformation.xy * previousBendWeight *
-                                previousGrassHeight * 0.8;
-    previousLocalPosition.y -= previousBendWeight * (0.25 + 0.30 * previousNormalizedHeight) *
-                               previousGrassHeight;
-    float4 inversePreviousRotation = float4(-instance.previousRotation.xyz, instance.previousRotation.w);
-    previousLocalPosition += grassWindDisplacement(instance.previousPosition.xz, inversePreviousRotation,
-                                                   previousNormalizedHeight, previousGrassHeight,
-                                                   frame.windGustFrequencyTime.w,
-                                                   frame.windDirectionStrength,
-                                                   frame.windSourcePositionRange,
-                                                   frame.windGustFrequencyTime);
+    RendererInstanceData instance = visibleInstances[visibleInstanceIndices[baseInstance + instanceIndex]];
+    const float3 localPosition = input.position;
+    const float3 previousLocalPosition = input.position;
 
     float4 currentWorld = float4(rotateByQuaternion(localPosition * instance.scaleBase.xyz,
                                                     instance.rotation) + instance.positionMaterial.xyz, 1.0);

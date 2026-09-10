@@ -75,25 +75,25 @@ namespace Engine {
     };
 
     /**
-     * Generic-renderer instance data. It is intentionally kept separate from
-     * GPUGrassInstance: history and full quaternion/scale data make this a
-     * 128-byte format and it is unsuitable for dense foliage.
+     * Generic-renderer instance data. Dense foliage uses GPUGrassInstance and
+     * GPUGrassDeformation instead; do not add vegetation-only state here.
+     *
+     * Current and previous transforms are deliberately retained together for
+     * the generic TAA velocity path. This is 96 bytes, rather than charging
+     * every ordinary MeshRenderer for grass deformation data as well.
      */
     struct RendererInstanceData {
         // xyz: world position, w: bit-cast material-table base index.
         glm::vec4 positionMaterial{};
         // Quaternion stored as xyzw.
         glm::vec4 rotation{0.0F, 0.0F, 0.0F, 1.0F};
-        // xyz: non-uniform scale, w: local mesh minimum Y for grass bending.
+        // xyz: non-uniform scale; w is std430 padding.
         glm::vec4 scaleBase{1.0F, 1.0F, 1.0F, 0.0F};
-        // xyz: bend X, bend Z, trample; w: reciprocal grass mesh height.
-        glm::vec4 grassDeformation{};
-        glm::vec4 previousGrassDeformation{};
         glm::vec4 previousPosition{};
         glm::vec4 previousRotation{0.0F, 0.0F, 0.0F, 1.0F};
         glm::vec4 previousScale{1.0F};
     };
-    static_assert(sizeof(RendererInstanceData) == 128);
+    static_assert(sizeof(RendererInstanceData) == 96);
 
     /** std430-compatible records backing the persistent GPU Scene SSBOs. */
     struct alignas(16) GPUSceneInstanceRecord {

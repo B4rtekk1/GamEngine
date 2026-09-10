@@ -68,8 +68,6 @@ struct RendererInstanceData
     float4 positionMaterial;
     float4 rotation;
     float4 scaleBase;
-    float4 grassDeformation;
-    float4 previousGrassDeformation;
     float4 previousPosition;
     float4 previousRotation;
     float4 previousScale;

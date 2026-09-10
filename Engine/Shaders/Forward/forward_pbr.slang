@@ -1,7 +1,6 @@
 import Common.PbrLighting;
 import Common.SceneData;
 import Common.ShadowSampling;
-import Common.GrassWind;
 
 // GENERATED_SHADER_GRAPH_DECLARATIONS
 
@@ -10,8 +9,8 @@ import Common.GrassWind;
 #endif
 
 [[vk::binding(1, 0)]] ConstantBuffer<RendererFrameData> frame;
-[[vk::binding(5, 0)]] StructuredBuffer<RendererInstanceData> visibleGrassInstances;
-[[vk::binding(6, 0)]] StructuredBuffer<uint> visibleGrassIndices;
+[[vk::binding(5, 0)]] StructuredBuffer<RendererInstanceData> visibleInstances;
+[[vk::binding(6, 0)]] StructuredBuffer<uint> visibleInstanceIndices;
 
 struct ForwardVertexInput
 {
@@ -42,36 +41,9 @@ struct ForwardVertexOutput
 ForwardVertexOutput vertexMain(ForwardVertexInput input, uint instanceIndex : SV_InstanceID,
                                uint baseInstance : SV_StartInstanceLocation)
 {
-    RendererInstanceData instance = visibleGrassInstances[visibleGrassIndices[baseInstance + instanceIndex]];
-    float3 localPosition = input.position;
-    float3 localNormal = input.normal;
-    float normalizedHeight = clamp((input.position.y - instance.scaleBase.w) *
-                                   instance.grassDeformation.w, 0.0, 1.0);
-    // Smooth S-shaped curvature keeps the root planted and the tip relaxed,
-    // rather than making the blade look like a translated rigid card.
-    float bendCurve = normalizedHeight * normalizedHeight * (3.0 - 2.0 * normalizedHeight);
-    float bendWeight = bendCurve * instance.grassDeformation.z;
-    float grassHeight = instance.grassDeformation.w > 0.0 ? 1.0 / instance.grassDeformation.w : 0.0;
-    localPosition.xz += instance.grassDeformation.xy * bendWeight * grassHeight * 0.8;
-    localPosition.y -= bendWeight * (0.25 + 0.30 * normalizedHeight) * grassHeight;
-    // Wind is authored in world space. Convert it into the card's local
-    // frame first, otherwise randomized blade yaw makes neighbouring grass
-    // sway in unrelated directions.
-    float4 inverseInstanceRotation = float4(-instance.rotation.xyz, instance.rotation.w);
-    float3 windOffset = grassWindDisplacement(instance.positionMaterial.xz, inverseInstanceRotation,
-                                              normalizedHeight, grassHeight,
-                                              frame.windGustFrequencyTime.z,
-                                              frame.windDirectionStrength,
-                                              frame.windSourcePositionRange,
-                                              frame.windGustFrequencyTime);
-    localPosition += windOffset;
-    float bendSlope = 1.6 * normalizedHeight * (1.0 - normalizedHeight) * instance.grassDeformation.z;
-    localNormal = normalize(localNormal + float3(-instance.grassDeformation.x * bendSlope,
-                                                0.0,
-                                               -instance.grassDeformation.y * bendSlope));
-    float windSlope = 1.8 * normalizedHeight / max(grassHeight, 1.0e-4);
-    localNormal = normalize(localNormal + float3(-windOffset.x * windSlope, 0.0,
-                                                  -windOffset.z * windSlope));
+    RendererInstanceData instance = visibleInstances[visibleInstanceIndices[baseInstance + instanceIndex]];
+    const float3 localPosition = input.position;
+    const float3 localNormal = input.normal;
 
     float4 q = instance.rotation;
     float3x3 rotationMatrix = float3x3(

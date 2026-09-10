@@ -1,8 +1,8 @@
 import Common.SceneData;
 
 [[vk::binding(1, 0)]] ConstantBuffer<RendererFrameData> frame;
-[[vk::binding(5, 0)]] StructuredBuffer<RendererInstanceData> visibleGrassInstances;
-[[vk::binding(6, 0)]] StructuredBuffer<uint> visibleGrassIndices;
+[[vk::binding(5, 0)]] StructuredBuffer<RendererInstanceData> visibleInstances;
+[[vk::binding(6, 0)]] StructuredBuffer<uint> visibleInstanceIndices;
 
 struct OutlineVertexInput
 {
@@ -20,7 +20,7 @@ struct OutlineVertexOutput
 OutlineVertexOutput vertexMain(OutlineVertexInput input, uint instanceIndex : SV_InstanceID,
                                uint baseInstance : SV_StartInstanceLocation)
 {
-    RendererInstanceData instance = visibleGrassInstances[visibleGrassIndices[baseInstance + instanceIndex]];
+    RendererInstanceData instance = visibleInstances[visibleInstanceIndices[baseInstance + instanceIndex]];
     float4 q = instance.rotation;
     float3x3 rotationMatrix = float3x3(
         1.0 - 2.0 * (q.y * q.y + q.z * q.z), 2.0 * (q.x * q.y + q.z * q.w), 2.0 * (q.x * q.z - q.y * q.w),

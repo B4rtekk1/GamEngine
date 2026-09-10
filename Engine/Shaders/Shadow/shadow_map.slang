@@ -1,5 +1,4 @@
 import Common.SceneData;
-import Common.GrassWind;
 
 struct PushConstants
 {
@@ -7,8 +6,8 @@ struct PushConstants
 };
 
 [[vk::binding(1, 0)]] ConstantBuffer<RendererFrameData> frame;
-[[vk::binding(5, 0)]] StructuredBuffer<RendererInstanceData> visibleGrassInstances;
-[[vk::binding(6, 0)]] StructuredBuffer<uint> visibleGrassIndices;
+[[vk::binding(5, 0)]] StructuredBuffer<RendererInstanceData> visibleInstances;
+[[vk::binding(6, 0)]] StructuredBuffer<uint> visibleInstanceIndices;
 [[vk::push_constant]] ConstantBuffer<PushConstants> pushConstants;
 
 struct ShadowVertexInput
@@ -31,23 +30,9 @@ struct ShadowVertexOutput
 ShadowVertexOutput vertexMain(ShadowVertexInput input, uint instanceIndex : SV_InstanceID,
                               uint baseInstance : SV_StartInstanceLocation)
 {
-    RendererInstanceData instance = visibleGrassInstances[visibleGrassIndices[baseInstance + instanceIndex]];
+    RendererInstanceData instance = visibleInstances[visibleInstanceIndices[baseInstance + instanceIndex]];
     ShadowVertexOutput output;
-    float3 localPosition = input.position;
-    float normalizedHeight = clamp((input.position.y - instance.scaleBase.w) *
-                                   instance.grassDeformation.w, 0.0, 1.0);
-    float bendCurve = normalizedHeight * normalizedHeight * (3.0 - 2.0 * normalizedHeight);
-    float bendWeight = bendCurve * instance.grassDeformation.z;
-    float grassHeight = instance.grassDeformation.w > 0.0 ? 1.0 / instance.grassDeformation.w : 0.0;
-    localPosition.xz += instance.grassDeformation.xy * bendWeight * grassHeight * 0.8;
-    localPosition.y -= bendWeight * (0.25 + 0.30 * normalizedHeight) * grassHeight;
-    float4 inverseInstanceRotation = float4(-instance.rotation.xyz, instance.rotation.w);
-    localPosition += grassWindDisplacement(instance.positionMaterial.xz, inverseInstanceRotation,
-                                           normalizedHeight, grassHeight,
-                                           frame.windGustFrequencyTime.z,
-                                           frame.windDirectionStrength,
-                                           frame.windSourcePositionRange,
-                                           frame.windGustFrequencyTime);
+    const float3 localPosition = input.position;
     float4 q = instance.rotation;
     float3x3 rotationMatrix = float3x3(
         1.0 - 2.0 * (q.y * q.y + q.z * q.z), 2.0 * (q.x * q.y + q.z * q.w), 2.0 * (q.x * q.z - q.y * q.w),
