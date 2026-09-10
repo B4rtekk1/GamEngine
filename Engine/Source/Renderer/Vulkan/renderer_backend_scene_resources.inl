@@ -1296,16 +1296,18 @@
             changedBatches.reserve(changedIndices.size());
             for (const std::size_t index : changedIndices) {
                 const Entity entity = renderables[index].entity;
+                RenderableRecord& record = renderables[index];
                 if (!readRegistry.has<Transform>(entity)) {
                     sceneGpu.database.removeInstance(static_cast<std::uint64_t>(entity),
                                                      submittedFrameValue);
+                    record.renderProxy.instance = InvalidGPUSceneInstanceId;
                     continue;
                 }
                 const auto& transform = readRegistry.get<Transform>(entity);
-                RenderableRecord& record = renderables[index];
                 if (!readRegistry.has<MeshRenderer>(entity)) {
                     sceneGpu.database.removeInstance(static_cast<std::uint64_t>(entity),
                                                      submittedFrameValue);
+                    record.renderProxy.instance = InvalidGPUSceneInstanceId;
                     continue;
                 }
                 const bool hasTransformChange = lastTransformRevision ==
@@ -1391,40 +1393,57 @@
 
                 {
                     const InstanceBatch& batch = instanceBatches[record.batchIndex];
-                    const std::uint64_t meshKey = static_cast<std::uint64_t>(
-                        reinterpret_cast<std::uintptr_t>(batch.mesh));
-                    const GPUSceneMeshId meshId = sceneGpu.database.upsertMesh(meshKey, {
+                    const GPUSceneDatabase::GPUMesh mesh{
                         .firstIndex = batch.firstIndex,
                         .indexCount = batch.indexCount,
                         .vertexOffset = 0,
                         .lod1IndexCount = batch.lod1IndexCount,
                         .lod2IndexCount = batch.lod2IndexCount,
-                    });
-                    const GPUSceneMaterialId materialId = sceneGpu.database.upsertMaterial(
-                        static_cast<std::uint64_t>(record.materialTableOffset), {
-                            .materialTableOffset = record.materialTableOffset,
-                            .pipelineClass = batch.twoSided ? 1U : 0U,
-                            .flags = batch.castShadow ? 1U : 0U,
-                        });
-                    record.renderProxy.mesh = meshId;
-                    record.renderProxy.material = materialId;
-                    record.renderProxy.instance = sceneGpu.database.upsertInstance(
-                        static_cast<std::uint64_t>(entity), {
-                            .worldMatrix = [&model] {
-                                std::array<float, 16> matrix{};
-                                for (glm::length_t column = 0; column < 4; ++column) {
-                                    for (glm::length_t row = 0; row < 4; ++row) {
-                                        matrix[column * 4 + row] = model[column][row];
-                                    }
-                                }
-                                return matrix;
-                            }(),
-                            .localBounds = record.localBounds,
-                            .meshId = meshId,
-                            .materialId = materialId,
-                            .objectId = static_cast<std::uint32_t>(index),
-                            .flags = 1U | (batch.twoSided ? 2U : 0U),
-                        });
+                    };
+                    const GPUSceneDatabase::GPUMaterial material{
+                        .materialTableOffset = record.materialTableOffset,
+                        .pipelineClass = batch.twoSided ? 1U : 0U,
+                        .flags = batch.castShadow ? 1U : 0U,
+                    };
+                    const auto worldMatrix = [&model] {
+                        std::array<float, 16> matrix{};
+                        for (glm::length_t column = 0; column < 4; ++column) {
+                            for (glm::length_t row = 0; row < 4; ++row) {
+                                matrix[column * 4 + row] = model[column][row];
+                            }
+                        }
+                        return matrix;
+                    }();
+                    const std::uint32_t instanceFlags = 1U | (batch.twoSided ? 2U : 0U);
+                    const bool proxyUninitialized = record.renderProxy.instance == InvalidGPUSceneInstanceId;
+                    if (proxyUninitialized) {
+                        const std::uint64_t meshKey = static_cast<std::uint64_t>(
+                            reinterpret_cast<std::uintptr_t>(batch.mesh));
+                        record.renderProxy.mesh = sceneGpu.database.upsertMesh(meshKey, mesh);
+                        record.renderProxy.material = sceneGpu.database.upsertMaterial(
+                            static_cast<std::uint64_t>(record.materialTableOffset), material);
+                        record.renderProxy.instance = sceneGpu.database.upsertInstance(
+                            static_cast<std::uint64_t>(entity), {
+                                .worldMatrix = worldMatrix,
+                                .localBounds = record.localBounds,
+                                .meshId = record.renderProxy.mesh,
+                                .materialId = record.renderProxy.material,
+                                .objectId = static_cast<std::uint32_t>(index),
+                                .flags = instanceFlags,
+                            });
+                    } else {
+                        // A transform-only update deliberately does no hashing,
+                        // lookup or write to the mesh/material tables.
+                        if (transformChanged) {
+                            sceneGpu.database.updateInstanceTransform(
+                                record.renderProxy.instance, worldMatrix, record.localBounds);
+                        }
+                        if (hasRendererChange) {
+                            sceneGpu.database.updateMesh(record.renderProxy.mesh, mesh);
+                            sceneGpu.database.updateMaterial(record.renderProxy.material, material);
+                            sceneGpu.database.updateInstanceFlags(record.renderProxy.instance, instanceFlags);
+                        }
+                    }
                 }
             }
             if (gpuObjects.size() == instanceBatches.size() && !changedBatches.empty()) {

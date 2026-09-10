@@ -60,4 +60,40 @@ namespace Engine {
         EXPECT_EQ(database.dirty().meshes, std::vector{mesh});
         EXPECT_EQ(database.dirty().materials, std::vector{material});
     }
+
+    TEST(GPUSceneDatabaseTests, TransformUpdateDoesNotTouchMeshOrMaterial) {
+        GPUSceneDatabase database;
+        const auto mesh = database.upsertMesh(1, {.indexCount = 3});
+        const auto material = database.upsertMaterial(2, {.pipelineClass = 4});
+        const auto instance = database.upsertInstance(3, {.meshId = mesh, .materialId = material});
+        database.clearDirty();
+
+        std::array<float, 16> matrix{};
+        matrix[12] = 7.0F;
+        database.updateInstanceTransform(instance, matrix, {.min = Vec3{1.0F, 2.0F, 3.0F}});
+
+        EXPECT_EQ(database.dirty().instances, std::vector{instance});
+        EXPECT_TRUE(database.dirty().meshes.empty());
+        EXPECT_TRUE(database.dirty().materials.empty());
+        EXPECT_EQ(database.instances()[instance].meshId, mesh);
+        EXPECT_EQ(database.instances()[instance].materialId, material);
+        EXPECT_EQ(database.instances()[instance].worldMatrix, matrix);
+    }
+
+    TEST(GPUSceneDatabaseTests, DirectRecordUpdatesMarkOnlyTheirOwnTable) {
+        GPUSceneDatabase database;
+        const auto mesh = database.upsertMesh(1, {});
+        const auto material = database.upsertMaterial(2, {});
+        const auto instance = database.upsertInstance(3, {});
+        database.clearDirty();
+
+        database.updateMesh(mesh, {.indexCount = 9});
+        database.updateMaterial(material, {.pipelineClass = 2});
+        database.updateInstanceFlags(instance, 7);
+
+        EXPECT_EQ(database.dirty().meshes, std::vector{mesh});
+        EXPECT_EQ(database.dirty().materials, std::vector{material});
+        EXPECT_EQ(database.dirty().instances, std::vector{instance});
+        EXPECT_EQ(database.instances()[instance].flags, 7U);
+    }
 } // namespace Engine

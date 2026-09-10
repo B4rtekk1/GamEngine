@@ -70,6 +70,23 @@ namespace Engine {
         return id;
     }
 
+    void GPUSceneDatabase::updateInstanceTransform(const GPUSceneInstanceId instanceId,
+                                                   const std::array<float, 16>& worldMatrix,
+                                                   const AABB& localBounds) {
+        if (instanceId >= m_instances.size() || !m_instances[instanceId].alive) return;
+        GPUInstance& instance = m_instances[instanceId];
+        instance.worldMatrix = worldMatrix;
+        instance.localBounds = localBounds;
+        markDirty(m_dirty.instances, m_dirtyInstanceStamps, m_dirtyGeneration, instanceId);
+    }
+
+    void GPUSceneDatabase::updateInstanceFlags(const GPUSceneInstanceId instanceId,
+                                                const std::uint32_t flags) {
+        if (instanceId >= m_instances.size() || !m_instances[instanceId].alive) return;
+        m_instances[instanceId].flags = flags;
+        markDirty(m_dirty.instances, m_dirtyInstanceStamps, m_dirtyGeneration, instanceId);
+    }
+
     void GPUSceneDatabase::removeInstance(const std::uint64_t sourceKey,
                                           const std::uint64_t retireValue) {
         const auto found = m_instanceIds.find(sourceKey);
@@ -120,6 +137,19 @@ namespace Engine {
         m_materialIds.emplace(sourceKey, id);
         markDirty(m_dirty.materials, m_dirtyMaterialStamps, m_dirtyGeneration, id);
         return id;
+    }
+
+    void GPUSceneDatabase::updateMesh(const GPUSceneMeshId meshId, const GPUMesh& mesh) {
+        if (meshId >= m_meshes.size()) return;
+        m_meshes[meshId] = mesh;
+        markDirty(m_dirty.meshes, m_dirtyMeshStamps, m_dirtyGeneration, meshId);
+    }
+
+    void GPUSceneDatabase::updateMaterial(const GPUSceneMaterialId materialId,
+                                          const GPUMaterial& material) {
+        if (materialId >= m_materials.size()) return;
+        m_materials[materialId] = material;
+        markDirty(m_dirty.materials, m_dirtyMaterialStamps, m_dirtyGeneration, materialId);
     }
 
     GPUSceneInstanceId GPUSceneDatabase::instanceId(const std::uint64_t sourceKey) const noexcept {

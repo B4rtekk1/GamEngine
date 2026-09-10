@@ -70,6 +70,13 @@ namespace Engine {
         /// @p sourceKey identifies one extracted renderable (an entity or one
         /// compact instance owned by an entity, such as terrain grass).
         [[nodiscard]] GPUSceneInstanceId upsertInstance(std::uint64_t sourceKey, const GPUInstance& instance);
+        /// Updates only the per-instance spatial data.  Mesh/material links
+        /// stay untouched, which makes transform animation a single table
+        /// write and a single dirty instance range.
+        void updateInstanceTransform(GPUSceneInstanceId instanceId,
+                                     const std::array<float, 16>& worldMatrix,
+                                     const AABB& localBounds);
+        void updateInstanceFlags(GPUSceneInstanceId instanceId, std::uint32_t flags);
         /// Marks an instance inactive immediately. Its slot is reusable only
         /// after reclaimDeferredInstances() observes the submission value
         /// which was current when it was removed.
@@ -77,6 +84,8 @@ namespace Engine {
         void reclaimDeferredInstances(std::uint64_t completedValue);
         [[nodiscard]] GPUSceneMeshId upsertMesh(std::uint64_t sourceKey, const GPUMesh& mesh);
         [[nodiscard]] GPUSceneMaterialId upsertMaterial(std::uint64_t sourceKey, const GPUMaterial& material);
+        void updateMesh(GPUSceneMeshId meshId, const GPUMesh& mesh);
+        void updateMaterial(GPUSceneMaterialId materialId, const GPUMaterial& material);
 
         [[nodiscard]] GPUSceneInstanceId instanceId(std::uint64_t sourceKey) const noexcept;
         [[nodiscard]] const std::vector<GPUInstance>& instances() const noexcept { return m_instances; }

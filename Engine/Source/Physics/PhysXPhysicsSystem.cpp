@@ -873,26 +873,33 @@ namespace Engine {
         }
 
         void pullPhysXState(Registry &owner) {
-            for (auto &[entity, record]: actors) {
-                if (!owner.has<RigidbodyComponent>(entity)) {
+            physx::PxU32 activeCount = 0;
+            physx::PxActor** activeActors = physicsScene->getActiveActors(activeCount);
+            for (physx::PxU32 index = 0; index < activeCount; ++index) {
+                const auto entity = entityForActor(
+                    static_cast<physx::PxRigidActor*>(activeActors[index]));
+                if (!entity || !owner.valid(*entity) || !owner.has<RigidbodyComponent>(*entity)) {
                     continue;
                 }
-                auto &body = owner.get<RigidbodyComponent>(entity);
+                const auto recordIt = actors.find(*entity);
+                if (recordIt == actors.end() || recordIt->second.actor != activeActors[index]) continue;
+                ActorRecord& record = recordIt->second;
+                auto &body = owner.get<RigidbodyComponent>(*entity);
                 if (body.type != RigidbodyType::Dynamic) {
                     continue;
                 }
                 const auto &rigid = *static_cast<physx::PxRigidDynamic *>(record.actor);
                 const physx::PxTransform pose = rigid.getGlobalPose();
-                Transform &transform = owner.get<Transform>(entity);
+                Transform &transform = owner.get<Transform>(*entity);
                 transform.position = fromPhysX(pose.p);
                 transform.rotation = eulerDegrees(fromPhysX(pose.q).normalized());
-                if (!owner.has<RigidbodyState>(entity)) owner.add<RigidbodyState>(entity);
-                auto& state = owner.get<RigidbodyState>(entity);
+                if (!owner.has<RigidbodyState>(*entity)) owner.add<RigidbodyState>(*entity);
+                auto& state = owner.get<RigidbodyState>(*entity);
                 state.linearVelocity = fromPhysX(rigid.getLinearVelocity());
                 state.angularVelocity = fromPhysX(rigid.getAngularVelocity()) * RadiansToDegrees;
                 if (body.fixedRotation) state.angularVelocity = {};
                 record.lastTransform = transform;
-                owner.markChanged<Transform>(entity);
+                owner.markChanged<Transform>(*entity);
             }
         }
     };
