@@ -64,4 +64,23 @@ TEST(RenderGraphTests, ReusesAllocationSlotForNonOverlappingCompatibleBuffers) {
     graph.compile();
     EXPECT_EQ(graph.lifetime(count).allocationSlot, graph.lifetime(scatter).allocationSlot);
 }
+
+TEST(RenderGraphTests, RebuildsTheSameTopologyAfterLogicalReset) {
+    RenderGraph graph;
+    const auto build = [&graph] {
+        TextureHandle intermediate;
+        graph.addPass("Producer", [&](PassBuilder& builder) {
+            intermediate = builder.writeTexture("Intermediate", ColorTarget);
+        }, {});
+        graph.addPass("Consumer", [&](PassBuilder& builder) { builder.read(intermediate); }, {});
+    };
+    build();
+    graph.compile();
+    EXPECT_EQ(graph.executionOrder(), (std::vector<std::string>{"Producer", "Consumer"}));
+
+    graph.reset();
+    build();
+    graph.compile();
+    EXPECT_EQ(graph.executionOrder(), (std::vector<std::string>{"Producer", "Consumer"}));
+}
 } // namespace Engine::Renderer

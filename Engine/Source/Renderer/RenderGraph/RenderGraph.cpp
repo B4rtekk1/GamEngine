@@ -124,8 +124,11 @@ namespace Engine::Renderer {
     }
 
     void RenderGraph::initialize(const VkDevice device, const VmaAllocator allocator) {
-        if (compiled_ || !transientAllocations_.empty() || !transientBufferAllocations_.empty()) throw std::logic_error(
+        if (compiled_ || !transientImageSlots_.empty() || !transientBufferSlots_.empty()) throw std::logic_error(
             "Reset RenderGraph before changing its allocator");
+        if ((!transientAllocations_.empty() || !transientBufferAllocations_.empty()) &&
+            (device != device_ || allocator != allocator_)) throw std::logic_error(
+            "Trim RenderGraph's transient pool before changing its allocator");
         if (device == VK_NULL_HANDLE || allocator == VK_NULL_HANDLE) throw std::invalid_argument(
             "RenderGraph requires a valid Vulkan device and VMA allocator");
         device_ = device;
@@ -173,55 +176,77 @@ namespace Engine::Renderer {
     }
 
     void RenderGraph::compile() {
+        if (compiled_) return;
         const auto count = static_cast<std::uint32_t>(passes_.size());
-        std::vector<std::unordered_set<std::uint32_t> > edges(count);
-        std::vector<std::uint32_t> indegree(count);
-        std::vector<std::int32_t> lastWriter(resources_.size(), -1);
-        std::vector<std::vector<std::uint32_t> > readers(resources_.size());
-        std::vector<std::int32_t> lastBufferWriter(buffers_.size(), -1);
-        std::vector<std::vector<std::uint32_t>> bufferReaders(buffers_.size());
-        for (std::uint32_t pass = 0; pass < count; ++pass) {
-            for (const Access &access: passes_[pass].accesses) {
-                const auto resource = access.texture.index;
-                if (!access.write) {
-                    if (lastWriter[resource] >= 0) edges[static_cast<std::uint32_t>(lastWriter[resource])].insert(pass);
-                    else if (!resources_[resource].imported) throw std::logic_error(
-                        "Transient texture read before it is written: " + resources_[resource].name);
-                    readers[resource].push_back(pass);
-                } else {
-                    if (lastWriter[resource] >= 0) edges[static_cast<std::uint32_t>(lastWriter[resource])].insert(pass);
-                    for (const auto reader: readers[resource]) edges[reader].insert(pass);
-                    readers[resource].clear();
-                    lastWriter[resource] = static_cast<std::int32_t>(pass);
-                }
-            }
-            for (const BufferAccess& access: passes_[pass].bufferAccesses) {
-                const auto resource = access.buffer.index;
-                if (!access.write) {
-                    if (lastBufferWriter[resource] >= 0) edges[static_cast<std::uint32_t>(lastBufferWriter[resource])].insert(pass);
-                    else if (!buffers_[resource].imported) throw std::logic_error("Transient buffer read before it is written: " + buffers_[resource].name);
-                    bufferReaders[resource].push_back(pass);
-                } else {
-                    if (lastBufferWriter[resource] >= 0) edges[static_cast<std::uint32_t>(lastBufferWriter[resource])].insert(pass);
-                    for (const auto reader: bufferReaders[resource]) edges[reader].insert(pass);
-                    bufferReaders[resource].clear();
-                    lastBufferWriter[resource] = static_cast<std::int32_t>(pass);
-                }
-            }
+        // Hash only declarative structure, never VkImage/VkBuffer handles:
+        // imported physical resources are expected to change per frame.
+        std::uint64_t signature = 1469598103934665603ULL;
+        const auto mix = [&signature](const std::uint64_t value) {
+            signature ^= value;
+            signature *= 1099511628211ULL;
+        };
+        mix(resources_.size()); mix(buffers_.size()); mix(count);
+        for (const auto& resource: resources_) {
+            mix(resource.imported); mix(resource.desc.extent.width); mix(resource.desc.extent.height);
+            mix(resource.desc.extent.depth); mix(resource.desc.format); mix(resource.desc.usage);
+            mix(resource.desc.aspect); mix(resource.desc.mipLevels); mix(resource.desc.arrayLayers); mix(resource.desc.samples);
         }
-        for (const auto &sources: edges) for (const auto target: sources) ++indegree[target];
-        std::queue<std::uint32_t> ready;
-        for (std::uint32_t pass = 0; pass < count; ++pass) if (indegree[pass] == 0) ready.push(pass);
+        for (const auto& resource: buffers_) { mix(resource.imported); mix(resource.desc.size); mix(resource.desc.usage); }
+        for (const auto& pass: passes_) {
+            mix(pass.accesses.size()); mix(pass.bufferAccesses.size());
+            for (const auto& access: pass.accesses) { mix(access.texture.index); mix(static_cast<std::uint8_t>(access.usage)); mix(access.write); }
+            for (const auto& access: pass.bufferAccesses) { mix(access.buffer.index); mix(static_cast<std::uint8_t>(access.usage)); mix(access.write); }
+        }
         order_.clear();
         orderNames_.clear();
-        while (!ready.empty()) {
-            const auto pass = ready.front();
-            ready.pop();
-            order_.push_back(pass);
-            orderNames_.push_back(passes_[pass].name);
-            for (const auto target: edges[pass]) if (--indegree[target] == 0) ready.push(target);
+        const auto cachedTopology = std::find_if(topologyCaches_.begin(), topologyCaches_.end(),
+            [signature](const TopologyCache& cache) { return cache.valid && cache.signature == signature; });
+        if (cachedTopology != topologyCaches_.end()) {
+            order_ = cachedTopology->order;
+        } else {
+            std::vector<std::unordered_set<std::uint32_t> > edges(count);
+            std::vector<std::uint32_t> indegree(count);
+            std::vector<std::int32_t> lastWriter(resources_.size(), -1);
+            std::vector<std::vector<std::uint32_t> > readers(resources_.size());
+            std::vector<std::int32_t> lastBufferWriter(buffers_.size(), -1);
+            std::vector<std::vector<std::uint32_t>> bufferReaders(buffers_.size());
+            for (std::uint32_t pass = 0; pass < count; ++pass) {
+                for (const Access &access: passes_[pass].accesses) {
+                    const auto resource = access.texture.index;
+                    if (!access.write) {
+                        if (lastWriter[resource] >= 0) edges[static_cast<std::uint32_t>(lastWriter[resource])].insert(pass);
+                        else if (!resources_[resource].imported) throw std::logic_error("Transient texture read before it is written: " + resources_[resource].name);
+                        readers[resource].push_back(pass);
+                    } else {
+                        if (lastWriter[resource] >= 0) edges[static_cast<std::uint32_t>(lastWriter[resource])].insert(pass);
+                        for (const auto reader: readers[resource]) edges[reader].insert(pass);
+                        readers[resource].clear(); lastWriter[resource] = static_cast<std::int32_t>(pass);
+                    }
+                }
+                for (const BufferAccess& access: passes_[pass].bufferAccesses) {
+                    const auto resource = access.buffer.index;
+                    if (!access.write) {
+                        if (lastBufferWriter[resource] >= 0) edges[static_cast<std::uint32_t>(lastBufferWriter[resource])].insert(pass);
+                        else if (!buffers_[resource].imported) throw std::logic_error("Transient buffer read before it is written: " + buffers_[resource].name);
+                        bufferReaders[resource].push_back(pass);
+                    } else {
+                        if (lastBufferWriter[resource] >= 0) edges[static_cast<std::uint32_t>(lastBufferWriter[resource])].insert(pass);
+                        for (const auto reader: bufferReaders[resource]) edges[reader].insert(pass);
+                        bufferReaders[resource].clear(); lastBufferWriter[resource] = static_cast<std::int32_t>(pass);
+                    }
+                }
+            }
+            for (const auto &sources: edges) for (const auto target: sources) ++indegree[target];
+            std::queue<std::uint32_t> ready;
+            for (std::uint32_t pass = 0; pass < count; ++pass) if (indegree[pass] == 0) ready.push(pass);
+            while (!ready.empty()) {
+                const auto pass = ready.front(); ready.pop(); order_.push_back(pass);
+                for (const auto target: edges[pass]) if (--indegree[target] == 0) ready.push(target);
+            }
+            if (order_.size() != passes_.size()) throw std::logic_error("RenderGraph contains a dependency cycle");
+            topologyCaches_.push_back({signature, order_, true});
         }
-        if (order_.size() != passes_.size()) throw std::logic_error("RenderGraph contains a dependency cycle");
+        for (const auto pass: order_) orderNames_.push_back(passes_[pass].name);
 
         for (auto &resource: resources_) resource.lifetime = {count, 0, 0};
         for (std::uint32_t ordered = 0; ordered < count; ++ordered)
@@ -240,6 +265,8 @@ namespace Engine::Renderer {
 
         std::vector<std::uint32_t> slotsLastUse;
         std::vector<TextureDesc> slotsDesc;
+        std::vector<std::uint32_t> slotLastResource;
+        std::vector<std::uint32_t> imageAliasPredecessor(resources_.size(), std::numeric_limits<std::uint32_t>::max());
         for (const auto resourceIndex: transientResources) {
             auto &resource = resources_[resourceIndex];
             std::uint32_t slot = static_cast<std::uint32_t>(slotsDesc.size());
@@ -252,7 +279,12 @@ namespace Engine::Renderer {
             if (slot == slotsDesc.size()) {
                 slotsDesc.push_back(resource.desc);
                 slotsLastUse.push_back(resource.lifetime.lastPass);
-            } else slotsLastUse[slot] = resource.lifetime.lastPass;
+                slotLastResource.push_back(resourceIndex);
+            } else {
+                imageAliasPredecessor[resourceIndex] = slotLastResource[slot];
+                slotsLastUse[slot] = resource.lifetime.lastPass;
+                slotLastResource[slot] = resourceIndex;
+            }
             resource.lifetime.allocationSlot = slot;
         }
         allocateTransients(slotsDesc);
@@ -312,6 +344,15 @@ namespace Engine::Renderer {
                     VkImageMemoryBarrier2 barrier{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2};
                     barrier.srcStageMask = state.stage;
                     barrier.srcAccessMask = state.access;
+                    if (state.stage == VK_PIPELINE_STAGE_2_NONE &&
+                        imageAliasPredecessor[access.texture.index] != std::numeric_limits<std::uint32_t>::max()) {
+                        // This logical resource starts with an undefined
+                        // layout, but its physical image was used earlier in
+                        // the frame. Preserve the discard transition while
+                        // making that earlier use visible.
+                        barrier.srcStageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
+                        barrier.srcAccessMask = VK_ACCESS_2_MEMORY_READ_BIT | VK_ACCESS_2_MEMORY_WRITE_BIT;
+                    }
                     barrier.dstStageMask = next.stage;
                     barrier.dstAccessMask = next.access;
                     barrier.oldLayout = state.layout;
@@ -369,9 +410,22 @@ namespace Engine::Renderer {
 
     void RenderGraph::allocateTransients(const std::vector<TextureDesc> &slotDescs) {
         if (device_ == VK_NULL_HANDLE) return; // Metadata-only graphs are useful in tooling and tests.
-        transientAllocations_.reserve(slotDescs.size());
+        transientImageSlots_.clear();
+        transientImageSlots_.reserve(slotDescs.size());
+        std::vector<bool> leased(transientAllocations_.size(), false);
         try {
             for (const TextureDesc &desc: slotDescs) {
+                const auto reusable = std::find_if(transientAllocations_.begin(), transientAllocations_.end(),
+                    [&](const TransientAllocation& allocation) {
+                        const auto index = static_cast<std::size_t>(&allocation - transientAllocations_.data());
+                        return !leased[index] && allocation.desc.compatibleWith(desc);
+                    });
+                if (reusable != transientAllocations_.end()) {
+                    const auto index = static_cast<std::uint32_t>(reusable - transientAllocations_.begin());
+                    leased[index] = true;
+                    transientImageSlots_.push_back(index);
+                    continue;
+                }
                 const VkImageCreateInfo createInfo{
                     .sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO,
                     .imageType = desc.extent.depth > 1 ? VK_IMAGE_TYPE_3D : VK_IMAGE_TYPE_2D,
@@ -390,22 +444,38 @@ namespace Engine::Renderer {
                 if (vmaCreateImage(allocator_, &createInfo, &allocationInfo, &allocation.image, &allocation.allocation,
                                    nullptr) != VK_SUCCESS)
                     throw std::runtime_error("Could not allocate a transient RenderGraph image");
+                allocation.desc = desc;
                 transientAllocations_.push_back(allocation);
+                leased.push_back(true);
+                transientImageSlots_.push_back(static_cast<std::uint32_t>(transientAllocations_.size() - 1));
             }
         } catch (...) {
-            destroyTransients();
+            transientImageSlots_.clear();
             throw;
         }
         for (auto &resource: resources_)
             if (!resource.imported && resource.lifetime.firstPass != passes_.size())
-                resource.image = transientAllocations_[resource.lifetime.allocationSlot].image;
+                resource.image = transientAllocations_[transientImageSlots_[resource.lifetime.allocationSlot]].image;
     }
 
     void RenderGraph::allocateTransientBuffers(const std::vector<BufferDesc>& slotDescs) {
         if (device_ == VK_NULL_HANDLE) return;
-        transientBufferAllocations_.reserve(slotDescs.size());
+        transientBufferSlots_.clear();
+        transientBufferSlots_.reserve(slotDescs.size());
+        std::vector<bool> leased(transientBufferAllocations_.size(), false);
         try {
             for (const BufferDesc& desc: slotDescs) {
+                const auto reusable = std::find_if(transientBufferAllocations_.begin(), transientBufferAllocations_.end(),
+                    [&](const TransientBufferAllocation& allocation) {
+                        const auto index = static_cast<std::size_t>(&allocation - transientBufferAllocations_.data());
+                        return !leased[index] && allocation.desc.compatibleWith(desc);
+                    });
+                if (reusable != transientBufferAllocations_.end()) {
+                    const auto index = static_cast<std::uint32_t>(reusable - transientBufferAllocations_.begin());
+                    leased[index] = true;
+                    transientBufferSlots_.push_back(index);
+                    continue;
+                }
                 const VkBufferCreateInfo createInfo{
                     .sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO,
                     .size = desc.size,
@@ -417,15 +487,18 @@ namespace Engine::Renderer {
                 if (vmaCreateBuffer(allocator_, &createInfo, &allocationInfo, &allocation.buffer, &allocation.allocation,
                                     nullptr) != VK_SUCCESS)
                     throw std::runtime_error("Could not allocate a transient RenderGraph buffer");
+                allocation.desc = desc;
                 transientBufferAllocations_.push_back(allocation);
+                leased.push_back(true);
+                transientBufferSlots_.push_back(static_cast<std::uint32_t>(transientBufferAllocations_.size() - 1));
             }
         } catch (...) {
-            destroyTransients();
+            transientBufferSlots_.clear();
             throw;
         }
         for (auto& resource: buffers_)
             if (!resource.imported && resource.lifetime.firstPass != passes_.size())
-                resource.buffer = transientBufferAllocations_[resource.lifetime.allocationSlot].buffer;
+                resource.buffer = transientBufferAllocations_[transientBufferSlots_[resource.lifetime.allocationSlot]].buffer;
     }
 
     void RenderGraph::execute(const VkCommandBuffer commandBuffer) {
@@ -455,7 +528,7 @@ namespace Engine::Renderer {
         }
     }
 
-    void RenderGraph::destroyTransients() noexcept {
+    void RenderGraph::destroyTransientPool() noexcept {
         if (allocator_ != VK_NULL_HANDLE)
             for (const auto &allocation: transientAllocations_)
                 vmaDestroyImage(allocator_, allocation.image, allocation.allocation);
@@ -464,10 +537,13 @@ namespace Engine::Renderer {
                 vmaDestroyBuffer(allocator_, allocation.buffer, allocation.allocation);
         transientAllocations_.clear();
         transientBufferAllocations_.clear();
+        transientImageSlots_.clear();
+        transientBufferSlots_.clear();
     }
 
     void RenderGraph::reset() noexcept {
-        destroyTransients();
+        transientImageSlots_.clear();
+        transientBufferSlots_.clear();
         resources_.clear();
         buffers_.clear();
         passes_.clear();
@@ -477,6 +553,8 @@ namespace Engine::Renderer {
         bufferBarriers_.clear();
         compiled_ = false;
     }
+
+    void RenderGraph::trimTransientPool() noexcept { destroyTransientPool(); }
 
     const std::vector<std::string> &RenderGraph::executionOrder() const noexcept { return orderNames_; }
 

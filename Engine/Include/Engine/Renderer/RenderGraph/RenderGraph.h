@@ -5,8 +5,8 @@
  * @brief Declarative, single-queue Vulkan frame-graph compiler.
  *
  * A graph owns only the declarations made for one frame. Imported images stay
- * owned by their existing wrappers; transient image allocation is deliberately
- * allocated through VMA and reused when compatible lifetimes do not overlap.
+ * owned by their existing wrappers.  Physical transient allocations belong to
+ * a persistent pool: reset() releases logical declarations, never GPU memory.
  */
 
 #include <vulkan/vulkan.h>
@@ -95,11 +95,11 @@ namespace Engine::Renderer {
         using ExecuteCallback = std::function<void(VkCommandBuffer)>;
 
         RenderGraph() = default;
-        ~RenderGraph() { reset(); }
+        ~RenderGraph() { destroyTransientPool(); }
         RenderGraph(const RenderGraph&) = delete;
         RenderGraph& operator=(const RenderGraph&) = delete;
 
-        /** Enables physical transient-image allocation for this graph. */
+        /** Enables physical transient allocation and its persistent pool. */
         void initialize(VkDevice device, VmaAllocator allocator);
 
         [[nodiscard]] TextureHandle importTexture(std::string name, VkImage image,
@@ -115,7 +115,13 @@ namespace Engine::Renderer {
         void compile();
         /** Emits automatic barriers immediately before each pass callback. */
         void execute(VkCommandBuffer commandBuffer);
+        /**
+         * Starts a new logical frame. The caller must ensure commands using
+         * the previous graph have completed before reusing the pool.
+         */
         void reset() noexcept;
+        /** Explicitly releases all cached transient physical allocations. */
+        void trimTransientPool() noexcept;
 
         [[nodiscard]] const std::vector<std::string>& executionOrder() const noexcept;
         [[nodiscard]] const TextureLifetime& lifetime(TextureHandle texture) const;
@@ -143,8 +149,13 @@ namespace Engine::Renderer {
         };
         struct Barrier final { std::uint32_t resource; VkImageMemoryBarrier2 vk; };
         struct BufferBarrier final { std::uint32_t resource; VkBufferMemoryBarrier2 vk; };
-        struct TransientAllocation final { VkImage image; VmaAllocation allocation; };
-        struct TransientBufferAllocation final { VkBuffer buffer; VmaAllocation allocation; };
+        struct TransientAllocation final { TextureDesc desc; VkImage image; VmaAllocation allocation; };
+        struct TransientBufferAllocation final { BufferDesc desc; VkBuffer buffer; VmaAllocation allocation; };
+        struct TopologyCache final {
+            std::uint64_t signature{};
+            std::vector<std::uint32_t> order;
+            bool valid{};
+        };
 
         friend class PassBuilder;
         void addAccess(std::uint32_t pass, TextureHandle texture, TextureUsage usage, bool write);
@@ -155,7 +166,7 @@ namespace Engine::Renderer {
         void requireValid(BufferHandle buffer) const;
         void allocateTransients(const std::vector<TextureDesc>& slotDescs);
         void allocateTransientBuffers(const std::vector<BufferDesc>& slotDescs);
-        void destroyTransients() noexcept;
+        void destroyTransientPool() noexcept;
 
         std::vector<Resource> resources_;
         std::vector<BufferResource> buffers_;
@@ -164,8 +175,15 @@ namespace Engine::Renderer {
         std::vector<std::string> orderNames_;
         std::vector<std::vector<Barrier>> barriers_;
         std::vector<std::vector<BufferBarrier>> bufferBarriers_;
+        // Pools outlive a logical graph. The index arrays lease one pool item
+        // per allocation slot of the currently compiled graph.
         std::vector<TransientAllocation> transientAllocations_;
         std::vector<TransientBufferAllocation> transientBufferAllocations_;
+        std::vector<std::uint32_t> transientImageSlots_;
+        std::vector<std::uint32_t> transientBufferSlots_;
+        // reset() deliberately retains these compilation artifacts. Resource
+        // handles may change every frame; the declarative topology does not.
+        std::vector<TopologyCache> topologyCaches_;
         VkDevice device_{VK_NULL_HANDLE};
         VmaAllocator allocator_{VK_NULL_HANDLE};
         bool compiled_{};
