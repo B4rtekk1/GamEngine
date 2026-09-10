@@ -207,6 +207,8 @@
         std::array<Buffer, MAX_FRAMES_IN_FLIGHT> shadowTwoSidedCandidateBuffers;
         std::array<Buffer, MAX_FRAMES_IN_FLIGHT> shadowCandidateCountBuffers;
         std::array<Buffer, MAX_FRAMES_IN_FLIGHT> shadowTwoSidedCandidateCountBuffers;
+        std::array<Buffer, MAX_FRAMES_IN_FLIGHT> shadowCandidateDispatchBuffers;
+        std::array<Buffer, MAX_FRAMES_IN_FLIGHT> shadowTwoSidedCandidateDispatchBuffers;
         std::array<Buffer, MAX_FRAMES_IN_FLIGHT> drawCountBuffers;
         std::array<Buffer, MAX_FRAMES_IN_FLIGHT> foliageDrawCountBuffers;
         std::array<Buffer, MAX_FRAMES_IN_FLIGHT> sceneDrawCountBuffers;

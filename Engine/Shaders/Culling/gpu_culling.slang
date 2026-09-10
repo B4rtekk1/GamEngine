@@ -9,6 +9,8 @@ import Culling.CullingTypes;
 // clip level, then consumes the relevant list for each virtual page.
 [[vk::binding(5, 0)]] RWStructuredBuffer<uint> candidateObjectIndices;
 [[vk::binding(6, 0)]] RWStructuredBuffer<uint> candidateCounts;
+// Three uints per clip level, matching VkDispatchIndirectCommand.
+[[vk::binding(7, 0)]] RWStructuredBuffer<uint> candidateDispatchArguments;
 
 struct CullingPushConstants
 {
@@ -205,6 +207,18 @@ bool occlusionTest(float4 clipPositions[8])
 [shader("compute")]
 void main(uint3 dispatchThreadId : SV_DispatchThreadID)
 {
+    if (pushConstants.mode == 4)
+    {
+        if (dispatchThreadId.x == 0)
+        {
+            const uint argumentOffset = pushConstants.candidateLevel * 3;
+            candidateDispatchArguments[argumentOffset] =
+                (candidateCounts[pushConstants.candidateLevel] + 63) / 64;
+            candidateDispatchArguments[argumentOffset + 1] = 1;
+            candidateDispatchArguments[argumentOffset + 2] = 1;
+        }
+        return;
+    }
     const uint sourceIndex = dispatchThreadId.x;
     uint sourceCount = pushConstants.sourceCount;
     if (pushConstants.mode == 2)

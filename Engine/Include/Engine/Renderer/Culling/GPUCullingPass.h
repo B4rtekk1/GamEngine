@@ -42,7 +42,8 @@ namespace Engine::Culling
             VkBuffer indirectBuffer,
             VkBuffer drawCountBuffer,
             std::uint32_t maxDrawCount,
-            VkBuffer candidateCountBuffer = VK_NULL_HANDLE
+            VkBuffer candidateCountBuffer = VK_NULL_HANDLE,
+            VkBuffer candidateDispatchBuffer = VK_NULL_HANDLE
         );
 
         /**
@@ -74,6 +75,10 @@ namespace Engine::Culling
 
         /// Makes all clip-level candidate streams visible to page-culling dispatches.
         void prepareCandidateReads(VkCommandBuffer commandBuffer) const;
+
+        /// Builds the indirect dispatch dimensions for one clip-level candidate stream.
+        void recordCandidateDispatchArgs(VkCommandBuffer commandBuffer,
+                                         std::uint32_t clipLevel) const;
 
         /// Culls one virtual page using the candidate list of @p clipLevel.
         void recordCandidatesForPage(VkCommandBuffer commandBuffer, std::uint32_t objectCount,
@@ -108,6 +113,7 @@ namespace Engine::Culling
         VkBuffer m_indirectBuffer{VK_NULL_HANDLE};
         VkBuffer m_drawCountBuffer{VK_NULL_HANDLE};
         VkBuffer m_candidateCountBuffer{VK_NULL_HANDLE};
+        VkBuffer m_candidateDispatchBuffer{VK_NULL_HANDLE};
 
         std::uint32_t m_maxDrawCount{0};
     };

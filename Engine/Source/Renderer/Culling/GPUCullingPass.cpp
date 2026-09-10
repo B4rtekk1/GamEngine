@@ -24,7 +24,8 @@ namespace Engine::Culling
         const VkBuffer indirectBuffer,
         const VkBuffer drawCountBuffer,
         const std::uint32_t maxDrawCount,
-        const VkBuffer candidateCountBuffer
+        const VkBuffer candidateCountBuffer,
+        const VkBuffer candidateDispatchBuffer
     )
     {
         if (
@@ -49,6 +50,7 @@ namespace Engine::Culling
         m_indirectBuffer = indirectBuffer;
         m_drawCountBuffer = drawCountBuffer;
         m_candidateCountBuffer = candidateCountBuffer;
+        m_candidateDispatchBuffer = candidateDispatchBuffer;
         m_maxDrawCount = maxDrawCount;
     }
 
@@ -304,6 +306,36 @@ namespace Engine::Culling
         vkCmdPipelineBarrier2(commandBuffer, &candidateDependency);
     }
 
+    void GPUCullingPass::recordCandidateDispatchArgs(const VkCommandBuffer commandBuffer,
+                                                      const std::uint32_t clipLevel) const
+    {
+        if (m_candidateCountBuffer == VK_NULL_HANDLE ||
+            m_candidateDispatchBuffer == VK_NULL_HANDLE) return;
+
+        vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, m_pipeline);
+        vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, m_pipelineLayout,
+                                0, 1, &m_descriptorSet, 0, nullptr);
+        CullingPushConstants pushConstants{};
+        pushConstants.candidateLevel = clipLevel;
+        pushConstants.mode = 4;
+        vkCmdPushConstants(commandBuffer, m_pipelineLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0,
+                           sizeof(pushConstants), &pushConstants);
+        vkCmdDispatch(commandBuffer, 1, 1, 1);
+
+        const VkBufferMemoryBarrier2 dispatchBarrier{
+            .sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER_2,
+            .srcStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+            .srcAccessMask = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT,
+            .dstStageMask = VK_PIPELINE_STAGE_2_DRAW_INDIRECT_BIT,
+            .dstAccessMask = VK_ACCESS_2_INDIRECT_COMMAND_READ_BIT,
+            .buffer = m_candidateDispatchBuffer,
+            .offset = static_cast<VkDeviceSize>(clipLevel) * sizeof(VkDispatchIndirectCommand),
+            .size = sizeof(VkDispatchIndirectCommand)};
+        const VkDependencyInfo dependency{.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO,
+            .bufferMemoryBarrierCount = 1, .pBufferMemoryBarriers = &dispatchBarrier};
+        vkCmdPipelineBarrier2(commandBuffer, &dependency);
+    }
+
     void GPUCullingPass::recordCandidatesForPage(const VkCommandBuffer commandBuffer,
                                                   const std::uint32_t objectCount,
                                                   const Mat4& pageMatrix,
@@ -337,7 +369,12 @@ namespace Engine::Culling
         pushConstants.mode = 2;
         vkCmdPushConstants(commandBuffer, m_pipelineLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0,
                            sizeof(pushConstants), &pushConstants);
-        vkCmdDispatch(commandBuffer, (objectCount + 63U) / 64U, 1, 1);
+        if (m_candidateDispatchBuffer != VK_NULL_HANDLE) {
+            vkCmdDispatchIndirect(commandBuffer, m_candidateDispatchBuffer,
+                                  static_cast<VkDeviceSize>(clipLevel) * sizeof(VkDispatchIndirectCommand));
+        } else {
+            vkCmdDispatch(commandBuffer, (objectCount + 63U) / 64U, 1, 1);
+        }
 
         const VkDeviceSize indirectOffset = static_cast<VkDeviceSize>(drawSlot) * m_maxDrawCount *
                                             sizeof(VkDrawIndexedIndirectCommand);
