@@ -38,4 +38,8 @@ namespace Engine::Assets {
     /** Cooks every supported source image below @p assetRoot to a sibling .gtex file. */
     [[nodiscard]] TextureCookSummary cook_all_textures(const std::filesystem::path& assetRoot,
                                                         TextureCookProgress* progress = nullptr);
+
+    /** Imports every GLB/glTF below @p assetRoot into a sibling .gmesh plus .gtex files. */
+    [[nodiscard]] TextureCookSummary cook_all_gltf_meshes(const std::filesystem::path& assetRoot,
+                                                           TextureCookProgress* progress = nullptr);
 }

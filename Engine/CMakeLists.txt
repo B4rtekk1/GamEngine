@@ -1,5 +1,5 @@
 add_library(Engine SHARED
-    Source/Application.cpp Source/Project.cpp Source/Assets/StbImage.cpp Source/Assets/AssetManager.cpp Source/Assets/Gtex.cpp Source/Assets/TextureCooker.cpp Source/Assets/GlbLoader.cpp Source/Assets/Content.cpp
+    Source/Application.cpp Source/Project.cpp Source/Assets/StbImage.cpp Source/Assets/AssetManager.cpp Source/Assets/Gtex.cpp Source/Assets/Gmesh.cpp Source/Assets/TextureCooker.cpp Source/Assets/GlbLoader.cpp Source/Assets/Content.cpp
     Source/Core/Camera.cpp Source/Core/Diagnostics.cpp Source/Core/Profiler.cpp Source/Core/TaskScheduler.cpp Source/Core/Time.cpp Source/ECS/Registry.cpp Source/Input/Input.cpp Source/Input/InputMap.cpp
     Source/Scene/SceneSerializer.cpp Source/Scene/SceneRegistrySerializer.cpp Source/Scene/Scene.cpp Source/Scene/Actor.cpp Source/Scene/TransformSystem.cpp Source/Scene/Prefab.cpp Source/Scene/ScenePresets.cpp
     Source/Physics/PhysXPhysicsSystem.cpp Source/Scripting/ScriptSystem.cpp Source/Scripting/Script.cpp Source/Scripting/ScriptRegistry.cpp Source/Scripting/DynamicLibrary.cpp Source/Scripting/ScriptModuleManager.cpp

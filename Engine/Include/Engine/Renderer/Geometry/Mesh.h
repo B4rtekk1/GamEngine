@@ -2,9 +2,11 @@
 
 #include "Engine/Renderer/Geometry/Vertex.h"
 #include "Engine/Renderer/Materials/PBRMaterial.h"
+#include "Engine/Assets/AssetTypes.h"
 
 #include <cstdint>
 #include <filesystem>
+#include <optional>
 #include <vector>
 
 /**
@@ -35,6 +37,12 @@ namespace Engine {
 
             /** @brief Raw RGBA8 pixel data. */
             std::vector<std::uint8_t> rgbaPixels;
+
+            /** GPU-ready data loaded from a cooked .gtex sidecar. */
+            std::optional<Assets::CookedTexture> cooked;
+
+            /** Path stored by .gmesh, relative to that mesh file. */
+            std::filesystem::path cookedPath;
         };
 
         /** @brief Vertex array referenced by the mesh indices. */

@@ -497,8 +497,8 @@ Engine::Entity AssetManagerPanel::draw(Engine::ScenePreset& scene, Engine::Asset
     if (ImGui::Button("Compress all textures##asset-compress"))
         ImGui::OpenPopup("##asset-compress-confirm");
     if (ImGui::BeginPopupModal("##asset-compress-confirm", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
-        ImGui::TextWrapped("Generate .gtex files for every new or changed PNG, JPEG, TGA, and BMP texture in Assets?");
-        ImGui::TextDisabled("Unchanged .gtex files are skipped. This can take a while.");
+        ImGui::TextWrapped("Generate .gtex files for source images and .gmesh + .gtex files for every GLB/glTF in Assets?");
+        ImGui::TextDisabled("Unchanged cooked assets are skipped. This can take a while.");
         if (ImGui::Button("Compress all")) {
             cookJob.progress.discovered.store(0, std::memory_order_release);
             cookJob.progress.completed.store(0, std::memory_order_release);
@@ -512,6 +512,12 @@ Engine::Entity AssetManagerPanel::draw(Engine::ScenePreset& scene, Engine::Asset
                 Engine::Assets::TextureCookSummary summary;
                 try {
                     summary = Engine::Assets::cook_all_textures(root, &job->progress);
+                    const auto meshes = Engine::Assets::cook_all_gltf_meshes(root);
+                    summary.discovered += meshes.discovered;
+                    summary.cooked += meshes.cooked;
+                    summary.skipped += meshes.skipped;
+                    summary.failed += meshes.failed;
+                    summary.errors += meshes.errors;
                 } catch (const std::exception& exception) {
                     summary.failed = 1;
                     summary.errors = exception.what();

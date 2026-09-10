@@ -1,5 +1,6 @@
 #include "Engine/Assets/AssetManager.h"
 #include "Engine/Assets/Gtex.h"
+#include "Engine/Assets/Gmesh.h"
 
 #include "GlbLoader.h"
 #include "Engine/Renderer/Geometry/Mesh.h"
@@ -398,10 +399,18 @@ namespace Engine::Assets {
         });
         manager.register_loader<Mesh>(AssetType::Mesh, [](const auto &path, const auto &) {
             const auto extension = path.extension().string();
+            if (extension == ".gmesh" || extension == ".GMESH") return load_gmesh(path);
             if (extension == ".obj" || extension == ".OBJ") { return load_obj_mesh(path);
 }
             if (extension == ".glb" || extension == ".GLB" ||
                 extension == ".gltf" || extension == ".GLTF") {
+                auto cookedPath = path;
+                cookedPath.replace_extension(".gmesh");
+                std::error_code error;
+                if (std::filesystem::is_regular_file(cookedPath, error) &&
+                    std::filesystem::last_write_time(cookedPath, error) >=
+                        std::filesystem::last_write_time(path, error))
+                    return load_gmesh(cookedPath);
                 return load_gltf_mesh(path);
 }
             return std::shared_ptr<const Mesh>{};

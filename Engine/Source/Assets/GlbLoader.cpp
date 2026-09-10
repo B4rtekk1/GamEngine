@@ -1,5 +1,6 @@
 #include "GlbLoader.h"
 
+#include "Engine/Assets/Gtex.h"
 #include "Engine/Renderer/Geometry/Mesh.h"
 
 #include <stb_image.h>
@@ -197,9 +198,20 @@ void import_texture_transform(PBRMaterial& material, const MaterialTextureSlot s
 }
 
 [[nodiscard]] bool load_images(const cgltf_data& data, const std::filesystem::path& path,
-                               Mesh& mesh) {
+                               Mesh& mesh, const bool preferCooked) {
     mesh.images.reserve(data.images_count);
     for (cgltf_size i = 0; i < data.images_count; ++i) {
+        const auto cookedPath = path.parent_path() /
+            (path.stem().string() + ".image" + std::to_string(i) + ".gtex");
+        if (preferCooked) if (const auto cooked = load_gtex(cookedPath)) {
+            Mesh::Image result;
+            result.width = cooked->width;
+            result.height = cooked->height;
+            result.cooked = *cooked;
+            result.cookedPath = cookedPath.filename();
+            mesh.images.push_back(std::move(result));
+            continue;
+        }
         const auto encoded = image_bytes(data.images[i], path);
         if (encoded.empty() || encoded.size() > static_cast<std::size_t>(std::numeric_limits<int>::max())) {
             return false;
@@ -535,7 +547,8 @@ void generate_tangents(Mesh& mesh, const std::size_t vertexStart, const std::siz
 
 } // namespace
 
-std::shared_ptr<const Mesh> load_gltf_mesh(const std::filesystem::path& path) {
+namespace {
+std::shared_ptr<const Mesh> load_gltf_mesh_impl(const std::filesystem::path& path, const bool preferCooked) {
     cgltf_options options{};
     cgltf_data* parsed = nullptr;
     const std::string pathString = path.string();
@@ -546,7 +559,7 @@ std::shared_ptr<const Mesh> load_gltf_mesh(const std::filesystem::path& path) {
         cgltf_validate(data.get()) != cgltf_result_success) return {};
 
     Mesh mesh;
-    if (!load_images(*data, path, mesh)) return {};
+    if (!load_images(*data, path, mesh, preferCooked)) return {};
     const auto quixelImages = load_quixel_external_images(*data, path, mesh);
     load_materials(*data, quixelImages, mesh);
     // The last slot is the glTF default material used by primitives without one.
@@ -564,6 +577,15 @@ std::shared_ptr<const Mesh> load_gltf_mesh(const std::filesystem::path& path) {
     if (mesh.empty()) return {};
     mesh.sourcePath = path;
     return std::make_shared<const Mesh>(std::move(mesh));
+}
+} // namespace
+
+std::shared_ptr<const Mesh> load_gltf_mesh(const std::filesystem::path& path) {
+    return load_gltf_mesh_impl(path, true);
+}
+
+std::shared_ptr<const Mesh> load_gltf_mesh_uncooked(const std::filesystem::path& path) {
+    return load_gltf_mesh_impl(path, false);
 }
 
 } // namespace Engine::Assets

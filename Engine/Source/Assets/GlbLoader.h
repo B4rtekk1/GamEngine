@@ -14,4 +14,7 @@ namespace Engine::Assets {
  */
 [[nodiscard]] std::shared_ptr<const Mesh> load_gltf_mesh(const std::filesystem::path& path);
 
+/** Editor-only import path: always decodes source images, ignoring .gtex sidecars. */
+[[nodiscard]] std::shared_ptr<const Mesh> load_gltf_mesh_uncooked(const std::filesystem::path& path);
+
 } // namespace Engine::Assets

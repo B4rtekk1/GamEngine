@@ -859,7 +859,10 @@ namespace Engine {
                 writeMaterial(serialized, material);
                 serialized << '\n';
             }
-            for (const auto &[width, height, rgbaPixels]: mesh.images) {
+            for (const auto& image: mesh.images) {
+                const auto width = image.width;
+                const auto height = image.height;
+                const auto& rgbaPixels = image.rgbaPixels;
                 if (terrainData) {
                     writeImageBinary(serialized, *terrainData, width, height, rgbaPixels);
                     continue;

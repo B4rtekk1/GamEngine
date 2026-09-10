@@ -1,5 +1,6 @@
 #include "Engine/Assets/TextureCooker.h"
 #include "Engine/Assets/Gtex.h"
+#include "Engine/Assets/Gmesh.h"
 
 #include <cmp_core.h>
 #include <stb_image.h>
@@ -365,6 +366,34 @@ namespace Engine::Assets {
             stbi_image_free(pixels);
             if (progress != nullptr)
                 progress->completed.fetch_add(1, std::memory_order_release);
+        }
+        return summary;
+    }
+
+    TextureCookSummary cook_all_gltf_meshes(const std::filesystem::path& assetRoot, TextureCookProgress* progress) {
+        TextureCookSummary summary;
+        std::error_code error;
+        std::vector<std::filesystem::path> sources;
+        for (std::filesystem::recursive_directory_iterator it{assetRoot,
+                 std::filesystem::directory_options::skip_permission_denied, error}, end;
+             it != end; it.increment(error)) {
+            if (error) { summary.errors += error.message() + "\n"; error.clear(); ++summary.failed; continue; }
+            if (!it->is_regular_file(error)) continue;
+            auto extension = it->path().extension().string();
+            std::ranges::transform(extension, extension.begin(), [](const unsigned char value) { return static_cast<char>(std::tolower(value)); });
+            if (extension == ".glb" || extension == ".gltf") sources.push_back(it->path());
+        }
+        summary.discovered = static_cast<std::uint32_t>(sources.size());
+        if (progress != nullptr) progress->discovered.store(summary.discovered, std::memory_order_release);
+        for (const auto& source : sources) {
+            auto cooked = source; cooked.replace_extension(".gmesh");
+            const auto sourceTime = std::filesystem::last_write_time(source, error);
+            const auto cookedTime = std::filesystem::last_write_time(cooked, error);
+            if (!error && cookedTime >= sourceTime) ++summary.skipped;
+            else if (cook_gltf_mesh(source)) ++summary.cooked;
+            else { ++summary.failed; summary.errors += source.string() + ": could not cook glTF mesh\n"; }
+            error.clear();
+            if (progress != nullptr) progress->completed.fetch_add(1, std::memory_order_release);
         }
         return summary;
     }

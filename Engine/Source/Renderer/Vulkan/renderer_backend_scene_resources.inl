@@ -25,6 +25,17 @@
                             const auto index = static_cast<std::int32_t>(i);
                             return material.baseColorTexture == index || material.emissiveTexture == index;
                         });
+                    if (image.cooked) {
+                        Texture2D texture;
+                        texture.createCooked(vulkanDevice.physical(), device, commandPool,
+                                             vulkanDevice.graphicsQueue(), *image.cooked,
+                                             vulkanDevice.allocator());
+                        materialTextureDescriptors[offset + i] = {
+                            texture.sampler(), texture.imageView(),
+                            VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
+                        materialTextures.push_back(std::move(texture));
+                        continue;
+                    }
                     if (image.width == 0 || image.height == 0 || image.rgbaPixels.empty()) {
                         materialTextures.emplace_back();
                         continue;
@@ -56,6 +67,17 @@
                         const auto index = static_cast<std::int32_t>(i);
                         return material.baseColorTexture == index || material.emissiveTexture == index;
                     });
+                    if (image.cooked) {
+                        Texture2D texture;
+                        texture.createCooked(vulkanDevice.physical(), device, commandPool,
+                                             vulkanDevice.graphicsQueue(), *image.cooked,
+                                             vulkanDevice.allocator());
+                        materialTextureDescriptors[offset + i] = {
+                            texture.sampler(), texture.imageView(),
+                            VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
+                        materialTextures.push_back(std::move(texture));
+                        continue;
+                    }
                     if (image.width == 0 || image.height == 0 || image.rgbaPixels.empty()) {
                         materialTextures.emplace_back();
                         continue;
