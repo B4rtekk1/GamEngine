@@ -94,6 +94,9 @@ void Renderer::requestGameMouseCapture() const {
 void Renderer::setSceneViewportActive(const bool active) const {
     if (backend_) backend_->setSceneViewportActive(active);
 }
+void Renderer::setSceneViewportExtent(const std::uint32_t width, const std::uint32_t height) const {
+    if (backend_) backend_->setSceneViewportExtent(width, height);
+}
 void Renderer::updateEditorSceneCameraInput() const {
     if (backend_) backend_->updateEditorSceneCameraInput();
 }

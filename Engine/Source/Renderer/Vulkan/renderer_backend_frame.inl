@@ -1204,6 +1204,7 @@
             // A minimized window has no presentable Vulkan extent.  Do not
             // acquire or recreate resources until it becomes drawable again.
             if (!hasDrawableExtent()) { return; }
+            applyPendingSceneViewportResize();
 
             uint32_t imageIndex;
             if (!acquireFrameImage(imageIndex)) { return; }

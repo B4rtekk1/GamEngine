@@ -95,6 +95,9 @@ namespace Engine {
         /** Enables the off-screen Scene View render path for the current editor frame. */
         void setSceneViewportActive(bool active) const;
 
+        /** Sets the Scene View render resolution in physical pixels. */
+        void setSceneViewportExtent(std::uint32_t width, std::uint32_t height) const;
+
         /** Updates Scene View navigation before its UI overlays are drawn. */
         void updateEditorSceneCameraInput() const;
 

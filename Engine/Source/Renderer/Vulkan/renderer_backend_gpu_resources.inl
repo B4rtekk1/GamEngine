@@ -14,8 +14,14 @@
             // counts stay zero because objectCount itself remains zero.
             const auto genericCapacity = std::max(1u, objectCount);
 
-            hiZBuffer.create(vulkanDevice.physical(), device, swapchain.extent().width, swapchain.extent().height,
-                             vulkanDevice.allocator());
+            // Keep the complete R32F hierarchy out of memory unless the
+            // feature can actually consume it. Frustum/GPU culling remains
+            // available without this optional occlusion input.
+            const bool allocateHiZ = canUseHiZOcclusionCulling();
+            if (allocateHiZ) {
+                hiZBuffer.create(vulkanDevice.physical(), device, swapchain.extent().width,
+                                 swapchain.extent().height, vulkanDevice.allocator());
+            }
 
             constexpr VkDescriptorSetLayoutBinding copyBindings[] = {
                 {0, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
@@ -432,21 +438,24 @@
             const uint32_t imageDescriptors = hiZBuffer.mipCount() + cullingSetCount;
             const VkDescriptorPoolSize poolSizes[] = {
                 {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, imageDescriptors},
-                {VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, hiZBuffer.mipCount()},
                 {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, cullingSetCount * 6 + instanceCullSetCount * 3 + MAX_FRAMES_IN_FLIGHT * 128},
                 {VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, cullingSetCount + MAX_FRAMES_IN_FLIGHT * 24},
+                {VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, hiZBuffer.mipCount()},
             };
             VkDescriptorPoolCreateInfo poolInfo{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
             poolInfo.maxSets = hiZBuffer.mipCount() + cullingSetCount + instanceCullSetCount + grassSetCount;
-            poolInfo.poolSizeCount = std::size(poolSizes); poolInfo.pPoolSizes = poolSizes;
+            poolInfo.poolSizeCount = allocateHiZ ? std::size(poolSizes) : std::size(poolSizes) - 1;
+            poolInfo.pPoolSizes = poolSizes;
             if (vkCreateDescriptorPool(device, &poolInfo, nullptr, &cullingDescriptorPool) != VK_SUCCESS) {
                 throw std::runtime_error("Could not create Hi-Z descriptor pool");
             }
-            hiZPass.create(device, cullingDescriptorPool, hiZCopyPipeline, hiZCopyPipelineLayout,
-                hiZCopyDescriptorSetLayout, hiZReducePipeline, hiZReducePipelineLayout,
-                hiZReduceDescriptorSetLayout, hiZBuffer,
-                msaa.enabled() ? hiZDepthBuffer.imageView() : depthBuffer.imageView(),
-                msaa.enabled() ? hiZDepthBuffer.sampler() : depthBuffer.sampler());
+            if (allocateHiZ) {
+                hiZPass.create(device, cullingDescriptorPool, hiZCopyPipeline, hiZCopyPipelineLayout,
+                    hiZCopyDescriptorSetLayout, hiZReducePipeline, hiZReducePipelineLayout,
+                    hiZReduceDescriptorSetLayout, hiZBuffer,
+                    msaa.enabled() ? hiZDepthBuffer.imageView() : depthBuffer.imageView(),
+                    msaa.enabled() ? hiZDepthBuffer.sampler() : depthBuffer.sampler());
+            }
 
             std::array<VkDescriptorSetLayout, MAX_FRAMES_IN_FLIGHT * 6> cullLayouts{};
             cullLayouts.fill(cullingDescriptorSetLayout);
@@ -584,7 +593,12 @@
                     grassBinCountBuffers[frame].handle(), grassBinOffsetBuffers[frame].handle(),
                     grassIndirectBuffers[frame].handle(), grassDrawCountBuffers[frame].handle()},
                     grassIndirectUniformBuffers[frame].handle());
-                const VkDescriptorImageInfo hiZInfo{hiZBuffer.sampler(), hiZBuffer.fullView(), VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
+                // Binding 3 is retained by the shared culling pipeline.  When
+                // Hi-Z is disabled the shader's feature flag prevents a read,
+                // so HDR is a small, already-allocated valid fallback.
+                const VkDescriptorImageInfo hiZInfo = hiZBuffer.image() != VK_NULL_HANDLE
+                    ? VkDescriptorImageInfo{hiZBuffer.sampler(), hiZBuffer.fullView(), VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL}
+                    : VkDescriptorImageInfo{hdrBuffer.sampler(), hdrBuffer.imageView(), VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
                 struct CullingSetUpdate {
                     VkDescriptorSet set;
                     const Buffer& indirectBuffer;
@@ -866,6 +880,35 @@
                                        vulkanDevice.allocator());
             createSceneViewportForwardPass();
             createSceneViewportFramebuffer();
+        }
+
+        void applyPendingSceneViewportResize() {
+            const VkExtent2D requested = requestedSceneViewportExtent;
+            if (requested.width == 0 || requested.height == 0 ||
+                (requested.width == sceneViewportTarget.extent().width &&
+                 requested.height == sceneViewportTarget.extent().height)) return;
+
+            // ImGui has already stored this descriptor in the current draw
+            // data. Synchronize before retargeting it, rather than releasing a
+            // descriptor or image still referenced by an in-flight UI frame.
+            vkDeviceWaitIdle(device);
+            destroySceneViewportFramebuffer();
+            sceneViewportTarget.resize(requested);
+            createSceneViewportFramebuffer();
+
+            if (sceneViewportDescriptor != VK_NULL_HANDLE) {
+                const VkDescriptorImageInfo imageInfo = sceneViewportTarget.colorDescriptor();
+                VkWriteDescriptorSet write{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
+                write.dstSet = sceneViewportDescriptor;
+                write.dstBinding = 0;
+                write.descriptorCount = 1;
+                write.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+                write.pImageInfo = &imageInfo;
+                vkUpdateDescriptorSets(device, 1, &write, 0, nullptr);
+            }
+            sceneViewportCacheValid = false;
+            sceneViewportImageInitialized = false;
+            sceneViewportNeedsRender = true;
         }
 
         void createSceneViewportFramebuffer() {

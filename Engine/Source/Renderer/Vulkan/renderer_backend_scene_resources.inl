@@ -1422,7 +1422,9 @@
         }
 
         [[nodiscard]] bool canUseHiZOcclusionCulling() const noexcept {
+            constexpr std::size_t minimumHiZRenderableCount = 256;
             return optimizationFeatures.gpuCulling && optimizationFeatures.occlusionCulling &&
+                   instanceBatches.size() >= minimumHiZRenderableCount &&
                    (!msaa.enabled() || vulkanDevice.supportsConservativeDepthResolve());
         }
 

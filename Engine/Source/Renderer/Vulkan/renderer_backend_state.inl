@@ -329,6 +329,7 @@
         std::uint64_t renderableTopologySignature = 0;
         bool hiZValid = false;
         bool sceneViewportActive = false;
+        VkExtent2D requestedSceneViewportExtent{};
         // Scene View is an off-screen cache. Redraw it only when its camera or
         // scene data changes; the ImGui panel keeps sampling its last image.
         bool sceneViewportNeedsRender = true;

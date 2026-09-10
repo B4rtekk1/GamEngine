@@ -1702,6 +1702,12 @@ ViewportInteraction drawViewport(Engine::ScenePreset &scene, Engine::Assets::Con
         ImGui::SetCursorPosY(ImGui::GetCursorPosY() + verticalOffset);
         ImGui::Image(ImTextureRef{static_cast<ImTextureID>(descriptor.value)},
                      {frameSize.x, imageHeight}, {0, 0}, {1, 1});
+        if (!showGameView && !playing) {
+            const ImVec2 framebufferScale = ImGui::GetIO().DisplayFramebufferScale;
+            renderer.setSceneViewportExtent(
+                static_cast<std::uint32_t>(std::max(1.0F, std::round(frameSize.x * framebufferScale.x))),
+                static_cast<std::uint32_t>(std::max(1.0F, std::round(imageHeight * framebufferScale.y))));
+        }
         const ImVec2 imageMin = ImGui::GetItemRectMin();
         const ImVec2 imageMax = ImGui::GetItemRectMax();
         if (ImGui::BeginDragDropTarget()) {
