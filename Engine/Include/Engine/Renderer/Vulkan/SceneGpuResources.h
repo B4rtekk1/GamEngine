@@ -1,6 +1,5 @@
 #pragma once
 
-#include "Engine/Core/Transform.h"
 #include "Engine/Math/AABB.h"
 #include "Engine/Renderer/Culling/CullingTypes.h"
 #include "Engine/Renderer/Materials/MaterialBuffer.h"
@@ -28,8 +27,9 @@ namespace Engine {
             std::size_t batchIndex{0};
             std::uint32_t firstVertex{0};
             std::uint32_t vertexCount{0};
-            Transform cachedTransform{};
-            bool hasCachedTransform{false};
+            // Revision of the ECS world transform last uploaded to the GPU.
+            // Do not retain a second full Transform here: ECS owns it.
+            std::uint64_t lastWorldRevision{std::numeric_limits<std::uint64_t>::max()};
             std::uint8_t transformDirtyFrames{0};
             std::uint8_t materialDirtyFrames{0};
             std::uint8_t cullingDirtyFrames{0};

@@ -24,7 +24,6 @@ namespace Engine {
         Vec3 scale{1.0F, 1.0F, 1.0F};
 
         [[nodiscard]] const Mat4 &worldMatrix() const noexcept { return cachedWorldMatrix; }
-        [[nodiscard]] const Mat4 &previousWorldMatrix() const noexcept { return previousCachedWorldMatrix; }
         /** @brief Returns the translation read directly from the world matrix. */
         [[nodiscard]] const Vec3 &worldPosition() const noexcept { return cachedWorldPosition; }
         /** @brief Lazily decomposes the world matrix to obtain Euler rotation. */
@@ -46,13 +45,9 @@ namespace Engine {
         // TransformSystem-owned cache. Keep it public so it remains an ECS
         // value type; clients must consume it through the accessors above.
         Mat4 cachedWorldMatrix{};
-        Mat4 previousCachedWorldMatrix{};
         Vec3 cachedWorldPosition{};
         mutable Vec3 cachedWorldRotation{};
         mutable Vec3 cachedWorldScale{1.0F, 1.0F, 1.0F};
-        Vec3 cachedLocalPosition{};
-        Vec3 cachedLocalRotation{};
-        Vec3 cachedLocalScale{1.0F, 1.0F, 1.0F};
         Entity cachedParent{NullEntity};
         std::uint64_t cachedParentWorldRevision{};
         std::uint64_t cachedWorldRevision{};

@@ -154,7 +154,6 @@ namespace Engine {
                 transform.cachedParent != parent ||
                 transform.cachedParentWorldRevision != parentRevision;
             if (changed) {
-                transform.previousCachedWorldMatrix = transform.cachedWorldMatrix;
                 transform.cachedWorldMatrix = parentTransform == nullptr ? transform.matrix() :
                     Mat4{parentTransform->worldMatrix().native() * transform.matrix().native()};
                 transform.cachedWorldPosition = Vec3{glm::vec3{transform.cachedWorldMatrix.native()[3]}};

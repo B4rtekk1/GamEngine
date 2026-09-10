@@ -1211,16 +1211,6 @@
             const auto worldModel = [&](const Entity entity) {
                 return readRegistry.get<Transform>(entity).worldMatrix().native();
             };
-            const auto sameModel = [](const glm::mat4& left, const glm::mat4& right) {
-                constexpr float epsilon = 1.0e-5F;
-                for (glm::length_t column = 0; column < 4; ++column) {
-                    for (glm::length_t row = 0; row < 4; ++row) {
-                        if (std::abs(left[column][row] - right[column][row]) > epsilon) { return false;
-}
-                    }
-                }
-                return true;
-            };
             std::vector<std::size_t> changedBatches;
             changedBatches.reserve(changedIndices.size());
             for (const std::size_t index : changedIndices) {
@@ -1243,8 +1233,8 @@
                     return record.localBounds.transformed(instanceModel);
                 };
                 const bool transformChanged = hasTransformChange &&
-                    (!optimizationFeatures.transformCaching || !record.hasCachedTransform ||
-                     !sameModel(model, modelFromInstance(instanceModels[index])));
+                    (!optimizationFeatures.transformCaching ||
+                     record.lastWorldRevision != transform.worldRevision());
                 if (transformChanged) {
                     // Preserve history only for an instance whose pose is
                     // changing. The dirty upload below carries both poses to
@@ -1257,8 +1247,9 @@
                         .previousRotation = rendererInstance.rotation,
                         .previousScale = rendererInstance.scaleBase,
                     };
-                    const bool hadCachedTransform = record.hasCachedTransform;
-                    const AABB previousShadowBounds = hadCachedTransform
+                    const bool hadWorldTransform = record.lastWorldRevision !=
+                        std::numeric_limits<std::uint64_t>::max();
+                    const AABB previousShadowBounds = hadWorldTransform
                         ? shadowBounds(modelFromInstance(instanceModels[index])) : AABB{};
                     glm::vec3 decomposedScale{};
                     glm::quat decomposedRotation{};
@@ -1276,11 +1267,10 @@
                     rendererInstance.rotation = glm::vec4{decomposedRotation.x, decomposedRotation.y,
                                                            decomposedRotation.z, decomposedRotation.w};
                     rendererInstance.scaleBase = glm::vec4{decomposedScale, 0.0F};
-                    record.cachedTransform = transform;
-                    record.hasCachedTransform = true;
+                    record.lastWorldRevision = transform.worldRevision();
                     if (record.batchIndex < instanceBatches.size() &&
                         instanceBatches[record.batchIndex].castShadow) {
-                        if (hadCachedTransform) appendDirtyShadowBounds(previousShadowBounds);
+                        if (hadWorldTransform) appendDirtyShadowBounds(previousShadowBounds);
                         appendDirtyShadowBounds(shadowBounds(model));
                     }
                     markDirty(index, &RenderableRecord::transformDirtyFrames, dirtyTransforms);
