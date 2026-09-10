@@ -55,6 +55,17 @@ public:
         VkQueue queue,
         VmaAllocator allocator);
 
+    /// Creates an uninitialized device-local buffer for a sequence of uploads.
+    void createDeviceLocalEmpty(
+        VkDevice device,
+        VkDeviceSize size,
+        VkBufferUsageFlags usage,
+        VmaAllocator allocator);
+
+    /// Records a copy from the active UploadContext staging ring.
+    void copyFromUploadRing(VkBuffer source, VkDeviceSize sourceOffset,
+                            VkDeviceSize size, VkDeviceSize destinationOffset = 0) const;
+
     /**
      * @brief Creates a host-visible buffer suitable for CPU updates.
      * @param physicalDevice Vulkan physical device used to select memory.

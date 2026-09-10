@@ -55,6 +55,25 @@ namespace Engine {
         });
     }
 
+    void Buffer::createDeviceLocalEmpty(const VkDevice device, const VkDeviceSize size,
+                                        const VkBufferUsageFlags usage, VmaAllocator allocator) {
+        if (size == 0) throw std::invalid_argument("Device-local buffer requires non-zero size");
+        create({device, size, usage | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+                VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, allocator});
+    }
+
+    void Buffer::copyFromUploadRing(const VkBuffer source, const VkDeviceSize sourceOffset,
+                                    const VkDeviceSize size, const VkDeviceSize destinationOffset) const {
+        UploadContext* const upload = UploadContext::current();
+        if (upload == nullptr || !upload->recording() || source == VK_NULL_HANDLE || size == 0 ||
+            destinationOffset > size_ || size > size_ - destinationOffset) {
+            throw std::invalid_argument("Invalid upload-ring buffer copy");
+        }
+        const VkBufferCopy copy{sourceOffset, destinationOffset, size};
+        vkCmdCopyBuffer(upload->commandBuffer(), source, buffer_, 1, &copy);
+        readyTimeline_ = upload->pendingTicket().timelineValue;
+    }
+
     void Buffer::update(const void *data, const VkDeviceSize size, const VkDeviceSize offset) const {
         if (data == nullptr || size == 0 || offset > size_ || size > size_ - offset) {
             throw std::invalid_argument("Uniform buffer update is out of bounds");

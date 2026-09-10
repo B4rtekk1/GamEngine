@@ -230,7 +230,6 @@
 
         void createMeshBuffers() {
             auto uploadBatch = uploadContext.beginBatch();
-            Mesh sceneMesh;
             // A topology rebuild creates a new GPU allocation layout. Clear the
             // database only here; ordinary transform/material changes update
             // stable records in place below.
@@ -256,6 +255,11 @@
                 uint32_t firstIndex;
                 uint32_t firstVertex;
                 AABB localBounds;
+            };
+            struct MeshUpload {
+                const Mesh* mesh;
+                std::uint32_t firstVertex;
+                std::uint32_t firstIndex;
             };
             struct BatchKey {
                 const Mesh* mesh;
@@ -283,33 +287,94 @@
                                        (meshHash >> 2U));
                 }
             };
-            std::unordered_map<const Mesh*, MeshUploadRecord> uploadedMeshes;
-            uploadedMeshes.reserve(registry.size());
             std::unordered_map<BatchKey, std::size_t, BatchKeyHash> batchIndices;
             batchIndices.reserve(registry.size());
+            materialSlots = 1;
             std::unordered_set<const Mesh*> uniqueMeshes;
             uniqueMeshes.reserve(registry.size());
-            std::size_t vertexCapacity = 0;
-            std::size_t indexCapacity = 0;
-            materialSlots = 1;
             registry.view<MeshRenderer>([&](const Entity, const MeshRenderer& renderer) {
                 if (!renderer.hasMesh() || !uniqueMeshes.insert(renderer.mesh.get()).second) {
                     return;
                 }
-                vertexCapacity += renderer.mesh->vertices.size();
-                indexCapacity += renderer.mesh->indices.size();
                 materialSlots = std::max(materialSlots, static_cast<std::uint32_t>(
                     std::max<std::size_t>(1, renderer.mesh->materials.size())));
             });
             registry.view<TerrainGrassComponent>([&](const Entity, const TerrainGrassComponent& grass) {
                 if (!grass.hasPrefab() || !uniqueMeshes.insert(grass.mesh.get()).second) return;
-                vertexCapacity += grass.mesh->vertices.size();
-                indexCapacity += grass.mesh->indices.size();
                 materialSlots = std::max(materialSlots, static_cast<std::uint32_t>(
                     std::max<std::size_t>(1, grass.mesh->materials.size())));
             });
-            sceneMesh.vertices.reserve(vertexCapacity);
-            sceneMesh.indices.reserve(indexCapacity);
+            // Plan every final range before allocating GPU memory.  Keeping only
+            // these records avoids a second, scene-sized CPU Mesh during upload.
+            std::vector<MeshUpload> meshUploads;
+            meshUploads.reserve(uniqueMeshes.size());
+            std::unordered_map<Entity, MeshUploadRecord> rendererUploads;
+            std::unordered_map<Entity, MeshUploadRecord> grassUploads;
+            std::unordered_map<const Mesh*, MeshUploadRecord> plannedUploadedMeshes;
+            rendererUploads.reserve(registry.size());
+            grassUploads.reserve(registry.size());
+            plannedUploadedMeshes.reserve(uniqueMeshes.size());
+            std::uint32_t vertexCount = 0;
+            std::uint32_t indexCount = 0;
+            const auto planUpload = [&](const Mesh* mesh) {
+                if (mesh->vertices.size() > std::numeric_limits<std::uint32_t>::max() - vertexCount ||
+                    mesh->indices.size() > std::numeric_limits<std::uint32_t>::max() - indexCount) {
+                    throw std::runtime_error("Scene geometry exceeds 32-bit draw limits");
+                }
+                const MeshUploadRecord record{indexCount, vertexCount, {}};
+                meshUploads.push_back({mesh, vertexCount, indexCount});
+                vertexCount += static_cast<std::uint32_t>(mesh->vertices.size());
+                indexCount += static_cast<std::uint32_t>(mesh->indices.size());
+                return record;
+            };
+            registry.view<Transform, MeshRenderer>([&](const Entity entity, const Transform&, const MeshRenderer& renderer) {
+                if (!renderer.hasMesh()) return;
+                const Mesh* const mesh = renderer.mesh.get();
+                MeshUploadRecord record{};
+                if (optimizationFeatures.meshDeduplication) {
+                    if (const auto found = plannedUploadedMeshes.find(mesh); found != plannedUploadedMeshes.end()) {
+                        record = found->second;
+                    } else {
+                        record = planUpload(mesh);
+                        plannedUploadedMeshes.emplace(mesh, record);
+                    }
+                } else {
+                    record = planUpload(mesh);
+                }
+                rendererUploads.emplace(entity, record);
+            });
+            registry.view<Transform, TerrainGrassComponent>([&](const Entity entity, const Transform&, const TerrainGrassComponent& grass) {
+                if (!grass.hasPrefab() || grass.instances.empty()) return;
+                const Mesh* const mesh = grass.mesh.get();
+                MeshUploadRecord record{};
+                if (const auto found = plannedUploadedMeshes.find(mesh); found != plannedUploadedMeshes.end()) {
+                    record = found->second;
+                } else {
+                    record = planUpload(mesh);
+                    plannedUploadedMeshes.emplace(mesh, record);
+                }
+                grassUploads.emplace(entity, record);
+            });
+            if (vertexCount == 0 || indexCount == 0) {
+                // The empty-scene path below keeps valid dummy bindings.
+            } else {
+                vertexBuffer.createDeviceLocalEmpty(device, sizeof(Vertex) * vertexCount,
+                    VK_BUFFER_USAGE_VERTEX_BUFFER_BIT, vulkanDevice.allocator());
+                indexBuffer.createDeviceLocalEmpty(device, sizeof(std::uint32_t) * indexCount,
+                    VK_BUFFER_USAGE_INDEX_BUFFER_BIT, vulkanDevice.allocator());
+                for (const MeshUpload& upload : meshUploads) {
+                    vertexBuffer.uploadDeviceLocal(upload.mesh->vertices.data(),
+                        sizeof(Vertex) * upload.mesh->vertices.size(), sizeof(Vertex) * upload.firstVertex,
+                        commandPool, vulkanDevice.graphicsQueue());
+                    const VkDeviceSize indexBytes = sizeof(std::uint32_t) * upload.mesh->indices.size();
+                    const auto slice = uploadContext.allocate(indexBytes, alignof(std::uint32_t));
+                    auto* const indices = static_cast<std::uint32_t*>(slice.mapped);
+                    for (std::size_t i = 0; i < upload.mesh->indices.size(); ++i)
+                        indices[i] = upload.firstVertex + upload.mesh->indices[i];
+                    indexBuffer.copyFromUploadRing(slice.buffer, slice.offset, indexBytes,
+                        sizeof(std::uint32_t) * upload.firstIndex);
+                }
+            }
             registry.view<Transform, MeshRenderer>(
                 [&](const Entity entity, const Transform&, MeshRenderer& renderer) {
                     if (!renderer.hasMesh()) {
@@ -317,79 +382,22 @@
                     }
 
                     const Mesh* const mesh = renderer.mesh.get();
-                    AABB localBounds;
-                    std::uint32_t firstVertex = 0;
-                    if (optimizationFeatures.meshDeduplication) {
-                        const auto existing = uploadedMeshes.find(mesh);
-                        if (existing != uploadedMeshes.end()) {
-                        renderer.firstIndex = existing->second.firstIndex;
-                        firstVertex = existing->second.firstVertex;
-                        localBounds = existing->second.localBounds;
-                        } else {
-                            if (sceneMesh.vertices.size() + mesh->vertices.size() >
-                                    std::numeric_limits<uint32_t>::max() ||
-                                sceneMesh.indices.size() + mesh->indices.size() >
-                                    std::numeric_limits<uint32_t>::max()) {
-                                throw std::runtime_error("Scene geometry exceeds 32-bit draw limits");
-                            }
-                            const uint32_t vertexOffset = sceneMesh.vertexCount();
-                            firstVertex = vertexOffset;
-                            renderer.firstIndex = sceneMesh.indexCount();
-                            sceneMesh.vertices.insert(sceneMesh.vertices.end(),
-                                                      mesh->vertices.begin(), mesh->vertices.end());
-                            for (const uint32_t index : mesh->indices) {
-                                sceneMesh.indices.push_back(vertexOffset + index);
-                            }
-                            localBounds = {
-                            .min = Vec3{std::numeric_limits<float>::max(),
-                                        std::numeric_limits<float>::max(),
-                                        std::numeric_limits<float>::max()},
-                            .max = Vec3{std::numeric_limits<float>::lowest(),
-                                        std::numeric_limits<float>::lowest(),
-                                        std::numeric_limits<float>::lowest()},
-                            };
-                            for (const Vertex& vertex : mesh->vertices) {
-                                localBounds.min.setX(std::min(localBounds.min.x(), vertex.position.x()));
-                                localBounds.min.setY(std::min(localBounds.min.y(), vertex.position.y()));
-                                localBounds.min.setZ(std::min(localBounds.min.z(), vertex.position.z()));
-                                localBounds.max.setX(std::max(localBounds.max.x(), vertex.position.x()));
-                                localBounds.max.setY(std::max(localBounds.max.y(), vertex.position.y()));
-                                localBounds.max.setZ(std::max(localBounds.max.z(), vertex.position.z()));
-                            }
-                            uploadedMeshes.emplace(mesh, MeshUploadRecord{
-                                renderer.firstIndex, firstVertex, localBounds});
-                        }
-                    } else {
-                        if (sceneMesh.vertices.size() + mesh->vertices.size() >
-                                std::numeric_limits<uint32_t>::max() ||
-                            sceneMesh.indices.size() + mesh->indices.size() >
-                                std::numeric_limits<uint32_t>::max()) {
-                            throw std::runtime_error("Scene geometry exceeds 32-bit draw limits");
-                        }
-                        const uint32_t vertexOffset = sceneMesh.vertexCount();
-                        firstVertex = vertexOffset;
-                        renderer.firstIndex = sceneMesh.indexCount();
-                        sceneMesh.vertices.insert(sceneMesh.vertices.end(),
-                                                  mesh->vertices.begin(), mesh->vertices.end());
-                        for (const uint32_t index : mesh->indices) {
-                            sceneMesh.indices.push_back(vertexOffset + index);
-                        }
-                        localBounds = {
-                        .min = Vec3{std::numeric_limits<float>::max(),
-                                    std::numeric_limits<float>::max(),
+                    const MeshUploadRecord& planned = rendererUploads.at(entity);
+                    renderer.firstIndex = planned.firstIndex;
+                    const std::uint32_t firstVertex = planned.firstVertex;
+                    AABB localBounds{
+                        .min = Vec3{std::numeric_limits<float>::max(), std::numeric_limits<float>::max(),
                                     std::numeric_limits<float>::max()},
-                        .max = Vec3{std::numeric_limits<float>::lowest(),
-                                    std::numeric_limits<float>::lowest(),
+                        .max = Vec3{std::numeric_limits<float>::lowest(), std::numeric_limits<float>::lowest(),
                                     std::numeric_limits<float>::lowest()},
-                        };
-                        for (const Vertex& vertex : mesh->vertices) {
+                    };
+                    for (const Vertex& vertex : mesh->vertices) {
                         localBounds.min.setX(std::min(localBounds.min.x(), vertex.position.x()));
                         localBounds.min.setY(std::min(localBounds.min.y(), vertex.position.y()));
                         localBounds.min.setZ(std::min(localBounds.min.z(), vertex.position.z()));
                         localBounds.max.setX(std::max(localBounds.max.x(), vertex.position.x()));
                         localBounds.max.setY(std::max(localBounds.max.y(), vertex.position.y()));
                         localBounds.max.setZ(std::max(localBounds.max.z(), vertex.position.z()));
-                        }
                     }
                     // Persist the GPU range on the ECS-facing handle.  The
                     // draw path can therefore stop consulting MeshSourceData
@@ -503,32 +511,16 @@
                     auto& gpuIndices = sceneGpu.grassInstanceGpuIndices[entity];
                     gpuIndices.assign(grass.instances.size(), std::numeric_limits<std::uint32_t>::max());
                     const Mesh* mesh = grass.mesh.get();
-                    MeshUploadRecord upload{};
-                    if (const auto found = uploadedMeshes.find(mesh); found != uploadedMeshes.end()) {
-                        upload = found->second;
-                    } else {
-                        if (sceneMesh.vertices.size() + mesh->vertices.size() >
-                                std::numeric_limits<uint32_t>::max() ||
-                            sceneMesh.indices.size() + mesh->indices.size() >
-                                std::numeric_limits<uint32_t>::max()) {
-                            throw std::runtime_error("Scene geometry exceeds 32-bit draw limits");
-                        }
-                        upload.firstVertex = sceneMesh.vertexCount();
-                        upload.firstIndex = sceneMesh.indexCount();
-                        upload.localBounds = {
-                            .min = Vec3{std::numeric_limits<float>::max(), std::numeric_limits<float>::max(),
-                                        std::numeric_limits<float>::max()},
-                            .max = Vec3{std::numeric_limits<float>::lowest(), std::numeric_limits<float>::lowest(),
-                                        std::numeric_limits<float>::lowest()},
-                        };
-                        sceneMesh.vertices.insert(sceneMesh.vertices.end(), mesh->vertices.begin(), mesh->vertices.end());
-                        for (const std::uint32_t index : mesh->indices)
-                            sceneMesh.indices.push_back(upload.firstVertex + index);
-                        for (const Vertex& vertex : mesh->vertices) {
-                            upload.localBounds.min = Vec3{glm::min(upload.localBounds.min.native(), vertex.position.native())};
-                            upload.localBounds.max = Vec3{glm::max(upload.localBounds.max.native(), vertex.position.native())};
-                        }
-                        uploadedMeshes.emplace(mesh, upload);
+                    MeshUploadRecord upload = grassUploads.at(entity);
+                    upload.localBounds = {
+                        .min = Vec3{std::numeric_limits<float>::max(), std::numeric_limits<float>::max(),
+                                    std::numeric_limits<float>::max()},
+                        .max = Vec3{std::numeric_limits<float>::lowest(), std::numeric_limits<float>::lowest(),
+                                    std::numeric_limits<float>::lowest()},
+                    };
+                    for (const Vertex& vertex : mesh->vertices) {
+                        upload.localBounds.min = Vec3{glm::min(upload.localBounds.min.native(), vertex.position.native())};
+                        upload.localBounds.max = Vec3{glm::max(upload.localBounds.max.native(), vertex.position.native())};
                     }
 
                     // Authoring changes compact legacy exceptions into fixed
@@ -652,7 +644,7 @@
             // no draw calls, so keep one harmless dummy element in each GPU
             // buffer instead of failing scene synchronization after deleting
             // the final mesh object.
-            if (sceneMesh.empty()) {
+            if (vertexCount == 0 || indexCount == 0) {
                 constexpr Vertex dummyVertex{};
                 constexpr std::uint32_t dummyIndex = 0;
                 hasShadowCasters = false;
@@ -682,13 +674,6 @@
             const glm::vec3 halfExtent = (sceneMaximum - sceneMinimum) * 0.5F;
             sceneCenter = Vec3{center};
             sceneRadius = std::max({halfExtent.x, halfExtent.y, halfExtent.z, 1.0F});
-
-            vertexBuffer.createDeviceLocal(vulkanDevice.physical(), device, sceneMesh.vertices.data(),
-                sizeof(Vertex) * sceneMesh.vertices.size(), VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
-                commandPool, vulkanDevice.graphicsQueue(), vulkanDevice.allocator());
-            indexBuffer.createDeviceLocal(vulkanDevice.physical(), device, sceneMesh.indices.data(),
-                sizeof(uint32_t) * sceneMesh.indices.size(), VK_BUFFER_USAGE_INDEX_BUFFER_BIT,
-                commandPool, vulkanDevice.graphicsQueue(), vulkanDevice.allocator());
 
             // Compute generation samples the same normalized height data used
             // by TerrainComponent::sampleHeight.  The first terrain is the
