@@ -279,8 +279,18 @@
                 mainLightShadows ? 1u : 0u,
                 static_cast<std::uint32_t>(shadowQuality),
                 static_cast<std::uint32_t>(shadowDebugView),
-                materialSlots, editorSelectedRenderable, frameData.lightCount, frameData.lights};
+                materialSlots, editorSelectedRenderable, frameData.lightCount,
+                glm::vec4{static_cast<float>(swapchain.extent().width),
+                          static_cast<float>(swapchain.extent().height), 0.1F, 1000.0F},
+                frameData.lights};
             uniformBuffers[frame].update(&data, sizeof(data));
+            const ClusteredLightingUniforms clustered{
+                currentView.native(), currentProjection.native(),
+                glm::uvec4{(swapchain.extent().width + ClusterTileSize - 1U) / ClusterTileSize,
+                           (swapchain.extent().height + ClusterTileSize - 1U) / ClusterTileSize,
+                           ClusterDepthSlices, frameData.lightCount},
+                glm::vec4{static_cast<float>(swapchain.extent().width), static_cast<float>(swapchain.extent().height), 0.1F, 1000.0F}};
+            clusteredLightingUniformBuffers[frame].update(&clustered, sizeof(clustered));
             previousGameView = currentView;
             previousGameProjection = currentProjection;
             previousGameCameraPosition = currentCameraPosition;
@@ -327,8 +337,18 @@
                 mainLightShadows ? 1u : 0u,
                 static_cast<std::uint32_t>(shadowQuality),
                 static_cast<std::uint32_t>(shadowDebugView),
-                materialSlots, editorSelectedRenderable, frameData.lightCount, frameData.lights};
+                materialSlots, editorSelectedRenderable, frameData.lightCount,
+                glm::vec4{static_cast<float>(sceneViewportTarget.extent().width),
+                          static_cast<float>(sceneViewportTarget.extent().height), 0.1F, 1000.0F},
+                frameData.lights};
             sceneUniformBuffers[frame].update(&data, sizeof(data));
+            const ClusteredLightingUniforms clustered{
+                sceneView.native(), sceneProjection.native(),
+                glm::uvec4{(sceneViewportTarget.extent().width + ClusterTileSize - 1U) / ClusterTileSize,
+                           (sceneViewportTarget.extent().height + ClusterTileSize - 1U) / ClusterTileSize,
+                           ClusterDepthSlices, frameData.lightCount},
+                glm::vec4{static_cast<float>(sceneViewportTarget.extent().width), static_cast<float>(sceneViewportTarget.extent().height), 0.1F, 1000.0F}};
+            sceneClusteredLightingUniformBuffers[frame].update(&clustered, sizeof(clustered));
         }
 
         struct SwapchainImageIndex final {
@@ -583,6 +603,22 @@
             }
             gpuTimestampProfiler.endZone(commandBuffer, currentFrame);
             gpuTimestampProfiler.beginZone(commandBuffer, currentFrame, cullingProfileName);
+            const auto dispatchClusteredLights = [&](VkDescriptorSet set, const VkExtent2D extent) {
+                const uint32_t tilesX = (extent.width + ClusterTileSize - 1U) / ClusterTileSize;
+                const uint32_t tilesY = (extent.height + ClusterTileSize - 1U) / ClusterTileSize;
+                vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, clusteredLightingPipeline);
+                vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE,
+                                        clusteredLightingPipelineLayout, 0, 1, &set, 0, nullptr);
+                vkCmdDispatch(commandBuffer, (tilesX + 3U) / 4U, (tilesY + 3U) / 4U,
+                              (ClusterDepthSlices + 3U) / 4U);
+                const VkMemoryBarrier2 barrier{VK_STRUCTURE_TYPE_MEMORY_BARRIER_2, nullptr,
+                    VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT,
+                    VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT, VK_ACCESS_2_SHADER_STORAGE_READ_BIT};
+                const VkDependencyInfo dependency{VK_STRUCTURE_TYPE_DEPENDENCY_INFO, nullptr, 0, 1, &barrier};
+                vkCmdPipelineBarrier2(commandBuffer, &dependency);
+            };
+            if (renderGameViewport) dispatchClusteredLights(clusteredLightingSets[currentFrame], swapchain.extent());
+            if (renderSceneViewport) dispatchClusteredLights(sceneClusteredLightingSets[currentFrame], sceneViewportTarget.extent());
             std::bitset<MaterialProgramSlotCount> activeShaderSlots;
             for (const Culling::GPUObjectData& object : gpuObjects) {
                 if (object.shader < MaterialProgramSlotCount && forwardPass.hasMaterialPipeline(object.shader)) {

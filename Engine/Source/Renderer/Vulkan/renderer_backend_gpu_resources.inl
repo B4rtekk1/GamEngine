@@ -77,6 +77,13 @@
             // their backing allocations need one inert element. Their draw
             // counts stay zero because objectCount itself remains zero.
             const auto genericCapacity = std::max(1u, objectCount + objectCount / 2u + 1u);
+            const auto clusterCountFor = [](const VkExtent2D extent) {
+                const std::uint32_t tilesX = (extent.width + ClusterTileSize - 1U) / ClusterTileSize;
+                const std::uint32_t tilesY = (extent.height + ClusterTileSize - 1U) / ClusterTileSize;
+                return std::max(1U, tilesX * tilesY * ClusterDepthSlices);
+            };
+            const std::uint32_t gameClusterCount = clusterCountFor(swapchain.extent());
+            const std::uint32_t sceneClusterCount = clusterCountFor(sceneViewportTarget.extent());
 
             // Keep the complete R32F hierarchy out of memory unless the
             // feature can actually consume it. Frustum/GPU culling remains
@@ -223,6 +230,14 @@
                 {0, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr}, {1, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr}, {2, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr}, {3, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr}, {4, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr}, {5, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr}};
             layoutInfo.bindingCount = std::size(grassPackedFinalizeBindings); layoutInfo.pBindings = grassPackedFinalizeBindings;
             if (vkCreateDescriptorSetLayout(device, &layoutInfo, nullptr, &grassPackedFinalizeDescriptorSetLayout) != VK_SUCCESS) throw std::runtime_error("Could not create packed grass-finalize layout");
+            const VkDescriptorSetLayoutBinding clusteredLightingBindings[] = {
+                {0, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
+                {1, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
+                {2, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
+                {3, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr}};
+            layoutInfo.bindingCount = std::size(clusteredLightingBindings); layoutInfo.pBindings = clusteredLightingBindings;
+            if (vkCreateDescriptorSetLayout(device, &layoutInfo, nullptr, &clusteredLightingDescriptorSetLayout) != VK_SUCCESS)
+                throw std::runtime_error("Could not create clustered-light descriptor layout");
             const auto createLayout = [&](VkDescriptorSetLayout setLayout, VkPipelineLayout& pipelineLayout,
                                           const VkPushConstantRange* pushConstantRange = nullptr) {
                 VkPipelineLayoutCreateInfo info{VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
@@ -254,6 +269,7 @@
             createLayout(grassPackedBinDescriptorSetLayout, grassPackedBinPipelineLayout);
             createLayout(grassPackedScatterDescriptorSetLayout, grassPackedScatterPipelineLayout);
             createLayout(grassPackedFinalizeDescriptorSetLayout, grassPackedFinalizePipelineLayout);
+            createLayout(clusteredLightingDescriptorSetLayout, clusteredLightingPipelineLayout);
             hiZCopyPipeline = createComputePipeline("shaders/hiz_initialize.spv", hiZCopyPipelineLayout);
             hiZReducePipeline = createComputePipeline("shaders/hiz_reduce.spv", hiZReducePipelineLayout);
             cullingPipeline = createComputePipeline("shaders/gpu_culling.spv", cullingPipelineLayout);
@@ -272,6 +288,7 @@
             grassPackedPrefixPipeline = createComputePipeline("shaders/grass_packed_prefix.spv", grassPrefixPipelineLayout);
             grassPackedScatterPipeline = createComputePipeline("shaders/grass_packed_scatter.spv", grassPackedScatterPipelineLayout);
             grassPackedFinalizePipeline = createComputePipeline("shaders/grass_packed_finalize.spv", grassPackedFinalizePipelineLayout);
+            clusteredLightingPipeline = createComputePipeline("shaders/clustered_light_culling.spv", clusteredLightingPipelineLayout);
 
             refreshCullingBatchObjects();
             for (Buffer& buffer : cullingObjectBuffers) {
@@ -285,6 +302,30 @@
             }
 
             for (uint32_t frame = 0; frame < MAX_FRAMES_IN_FLIGHT; ++frame) {
+                clusteredLightingUniformBuffers[frame].createHostVisible(vulkanDevice.physical(), device,
+                    sizeof(ClusteredLightingUniforms), VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT, vulkanDevice.allocator());
+                sceneClusteredLightingUniformBuffers[frame].createHostVisible(vulkanDevice.physical(), device,
+                    sizeof(ClusteredLightingUniforms), VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT, vulkanDevice.allocator());
+                std::vector<ClusterLightRangeGPU> emptyGameRanges(gameClusterCount);
+                std::vector<ClusterLightRangeGPU> emptySceneRanges(sceneClusterCount);
+                std::vector<std::uint32_t> emptyGameIndices(gameClusterCount * MaxLightsPerCluster);
+                std::vector<std::uint32_t> emptySceneIndices(sceneClusterCount * MaxLightsPerCluster);
+                clusteredLightRangeBuffers[frame].createDeviceLocal(vulkanDevice.physical(), device,
+                    emptyGameRanges.data(), sizeof(ClusterLightRangeGPU) * emptyGameRanges.size(),
+                    VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+                    commandPool, vulkanDevice.graphicsQueue(), vulkanDevice.allocator());
+                clusteredLightIndexBuffers[frame].createDeviceLocal(vulkanDevice.physical(), device,
+                    emptyGameIndices.data(), sizeof(std::uint32_t) * emptyGameIndices.size(),
+                    VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+                    commandPool, vulkanDevice.graphicsQueue(), vulkanDevice.allocator());
+                sceneClusteredLightRangeBuffers[frame].createDeviceLocal(vulkanDevice.physical(), device,
+                    emptySceneRanges.data(), sizeof(ClusterLightRangeGPU) * emptySceneRanges.size(),
+                    VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+                    commandPool, vulkanDevice.graphicsQueue(), vulkanDevice.allocator());
+                sceneClusteredLightIndexBuffers[frame].createDeviceLocal(vulkanDevice.physical(), device,
+                    emptySceneIndices.data(), sizeof(std::uint32_t) * emptySceneIndices.size(),
+                    VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+                    commandPool, vulkanDevice.graphicsQueue(), vulkanDevice.allocator());
                 cullingUniformBuffers[frame].createHostVisible(vulkanDevice.physical(), device,
                     sizeof(Culling::CullingUniformData), VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
                     vulkanDevice.allocator());
@@ -476,12 +517,12 @@
             const uint32_t imageDescriptors = hiZBuffer.mipCount() + cullingSetCount;
             const VkDescriptorPoolSize poolSizes[] = {
                 {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, imageDescriptors},
-                {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, cullingSetCount * 7 + instanceCullSetCount * 3 + MAX_FRAMES_IN_FLIGHT * 128},
-                {VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, cullingSetCount + MAX_FRAMES_IN_FLIGHT * 24},
+                {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, cullingSetCount * 7 + instanceCullSetCount * 3 + MAX_FRAMES_IN_FLIGHT * 132},
+                {VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, cullingSetCount + MAX_FRAMES_IN_FLIGHT * 28},
                 {VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, hiZBuffer.mipCount()},
             };
             VkDescriptorPoolCreateInfo poolInfo{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
-            poolInfo.maxSets = hiZBuffer.mipCount() + cullingSetCount + instanceCullSetCount + grassSetCount;
+            poolInfo.maxSets = hiZBuffer.mipCount() + cullingSetCount + instanceCullSetCount + grassSetCount + MAX_FRAMES_IN_FLIGHT * 2;
             poolInfo.poolSizeCount = allocateHiZ ? std::size(poolSizes) : std::size(poolSizes) - 1;
             poolInfo.pPoolSizes = poolSizes;
             if (vkCreateDescriptorPool(device, &poolInfo, nullptr, &cullingDescriptorPool) != VK_SUCCESS) {
@@ -512,6 +553,36 @@
             allocateInfo.pSetLayouts = instanceCullLayouts.data();
             if (vkAllocateDescriptorSets(device, &allocateInfo, instanceCullSets.data()) != VK_SUCCESS) {
                 throw std::runtime_error("Could not allocate instance-culling descriptor sets");
+            }
+            std::array<VkDescriptorSetLayout, MAX_FRAMES_IN_FLIGHT * 2> clusteredLayouts{};
+            clusteredLayouts.fill(clusteredLightingDescriptorSetLayout);
+            std::array<VkDescriptorSet, MAX_FRAMES_IN_FLIGHT * 2> clusteredSets{};
+            allocateInfo.descriptorSetCount = static_cast<uint32_t>(clusteredSets.size());
+            allocateInfo.pSetLayouts = clusteredLayouts.data();
+            if (vkAllocateDescriptorSets(device, &allocateInfo, clusteredSets.data()) != VK_SUCCESS)
+                throw std::runtime_error("Could not allocate clustered-light descriptor sets");
+            std::copy_n(clusteredSets.begin(), MAX_FRAMES_IN_FLIGHT, clusteredLightingSets.begin());
+            std::copy_n(clusteredSets.begin() + MAX_FRAMES_IN_FLIGHT, MAX_FRAMES_IN_FLIGHT, sceneClusteredLightingSets.begin());
+            for (uint32_t frame = 0; frame < MAX_FRAMES_IN_FLIGHT; ++frame) {
+                const auto updateClusterSet = [&](VkDescriptorSet set, VkBuffer frameUniform, VkBuffer ranges,
+                                                  VkBuffer indices, VkBuffer clusteredUniform) {
+                    const VkDescriptorBufferInfo infos[] = {{frameUniform, 0, sizeof(UniformBufferObject)},
+                        {ranges, 0, VK_WHOLE_SIZE}, {indices, 0, VK_WHOLE_SIZE},
+                        {clusteredUniform, 0, sizeof(ClusteredLightingUniforms)}};
+                    VkWriteDescriptorSet writes[4]{};
+                    for (uint32_t binding = 0; binding < 4; ++binding) {
+                        writes[binding] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr, set, binding, 0, 1,
+                            binding == 0 || binding == 3 ? VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER : VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+                            nullptr, &infos[binding], nullptr};
+                    }
+                    vkUpdateDescriptorSets(device, 4, writes, 0, nullptr);
+                };
+                updateClusterSet(clusteredLightingSets[frame], uniformBuffers[frame].handle(),
+                    clusteredLightRangeBuffers[frame].handle(), clusteredLightIndexBuffers[frame].handle(),
+                    clusteredLightingUniformBuffers[frame].handle());
+                updateClusterSet(sceneClusteredLightingSets[frame], sceneUniformBuffers[frame].handle(),
+                    sceneClusteredLightRangeBuffers[frame].handle(), sceneClusteredLightIndexBuffers[frame].handle(),
+                    sceneClusteredLightingUniformBuffers[frame].handle());
             }
             std::array<VkDescriptorSetLayout, MAX_FRAMES_IN_FLIGHT> grassLayouts{};
             const auto allocateGrassSets = [&](VkDescriptorSetLayout layout,
@@ -759,6 +830,12 @@
             for (Buffer& buffer : shadowCandidateDispatchBuffers) buffer.destroy();
             for (Buffer& buffer : shadowTwoSidedCandidateDispatchBuffers) buffer.destroy();
             for (Buffer& buffer : shadowPageWorkBuffers) buffer.destroy();
+            for (Buffer& buffer : clusteredLightRangeBuffers) buffer.destroy();
+            for (Buffer& buffer : clusteredLightIndexBuffers) buffer.destroy();
+            for (Buffer& buffer : sceneClusteredLightRangeBuffers) buffer.destroy();
+            for (Buffer& buffer : sceneClusteredLightIndexBuffers) buffer.destroy();
+            for (Buffer& buffer : clusteredLightingUniformBuffers) buffer.destroy();
+            for (Buffer& buffer : sceneClusteredLightingUniformBuffers) buffer.destroy();
             for (Buffer& buffer : drawCountBuffers) buffer.destroy();
             for (Buffer& buffer : foliageDrawCountBuffers) buffer.destroy();
             for (Buffer& buffer : shadowDrawCountBuffers) buffer.destroy();
@@ -823,6 +900,7 @@
             if (grassPackedPrefixPipeline != VK_NULL_HANDLE) vkDestroyPipeline(device, grassPackedPrefixPipeline, nullptr);
             if (grassPackedScatterPipeline != VK_NULL_HANDLE) vkDestroyPipeline(device, grassPackedScatterPipeline, nullptr);
             if (grassPackedFinalizePipeline != VK_NULL_HANDLE) vkDestroyPipeline(device, grassPackedFinalizePipeline, nullptr);
+            if (clusteredLightingPipeline != VK_NULL_HANDLE) vkDestroyPipeline(device, clusteredLightingPipeline, nullptr);
             if (hiZCopyPipelineLayout != VK_NULL_HANDLE) { vkDestroyPipelineLayout(device, hiZCopyPipelineLayout, nullptr);
 }
             if (hiZReducePipelineLayout != VK_NULL_HANDLE) { vkDestroyPipelineLayout(device, hiZReducePipelineLayout, nullptr);
@@ -842,6 +920,7 @@
             if (grassPackedBinPipelineLayout != VK_NULL_HANDLE) vkDestroyPipelineLayout(device, grassPackedBinPipelineLayout, nullptr);
             if (grassPackedScatterPipelineLayout != VK_NULL_HANDLE) vkDestroyPipelineLayout(device, grassPackedScatterPipelineLayout, nullptr);
             if (grassPackedFinalizePipelineLayout != VK_NULL_HANDLE) vkDestroyPipelineLayout(device, grassPackedFinalizePipelineLayout, nullptr);
+            if (clusteredLightingPipelineLayout != VK_NULL_HANDLE) vkDestroyPipelineLayout(device, clusteredLightingPipelineLayout, nullptr);
             if (hiZCopyDescriptorSetLayout != VK_NULL_HANDLE) { vkDestroyDescriptorSetLayout(device, hiZCopyDescriptorSetLayout, nullptr);
 }
             if (hiZReduceDescriptorSetLayout != VK_NULL_HANDLE) { vkDestroyDescriptorSetLayout(device, hiZReduceDescriptorSetLayout, nullptr);
@@ -861,6 +940,7 @@
             if (grassPackedBinDescriptorSetLayout != VK_NULL_HANDLE) vkDestroyDescriptorSetLayout(device, grassPackedBinDescriptorSetLayout, nullptr);
             if (grassPackedScatterDescriptorSetLayout != VK_NULL_HANDLE) vkDestroyDescriptorSetLayout(device, grassPackedScatterDescriptorSetLayout, nullptr);
             if (grassPackedFinalizeDescriptorSetLayout != VK_NULL_HANDLE) vkDestroyDescriptorSetLayout(device, grassPackedFinalizeDescriptorSetLayout, nullptr);
+            if (clusteredLightingDescriptorSetLayout != VK_NULL_HANDLE) vkDestroyDescriptorSetLayout(device, clusteredLightingDescriptorSetLayout, nullptr);
             cullingDescriptorPool = VK_NULL_HANDLE; hiZCopyPipeline = hiZReducePipeline = cullingPipeline = VK_NULL_HANDLE;
             instanceCullingPipeline = VK_NULL_HANDLE;
             grassBuildPipeline = grassPrefixPipeline = grassScatterPipeline = grassFinalizePipeline = VK_NULL_HANDLE;

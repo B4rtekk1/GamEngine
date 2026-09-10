@@ -45,6 +45,8 @@ namespace Engine {
                     const std::vector<VkBuffer> &grassInstanceBuffers,
                     const std::vector<VkBuffer> &grassClusterBuffers,
                     const std::vector<VkBuffer> &grassDeformationBuffers,
+                    const std::vector<VkBuffer> &clusterRangeBuffers,
+                    const std::vector<VkBuffer> &clusterIndexBuffers,
                     const std::vector<VkDescriptorImageInfo> &materialTextures,
                     VkDeviceSize uniformBufferRange, VmaAllocator allocator,
                     Assets::AssetManager &assets);
@@ -60,6 +62,8 @@ namespace Engine {
                                const std::vector<VkBuffer> &grassInstanceBuffers,
                                const std::vector<VkBuffer> &grassClusterBuffers,
                                const std::vector<VkBuffer> &grassDeformationBuffers,
+                               const std::vector<VkBuffer> &clusterRangeBuffers,
+                               const std::vector<VkBuffer> &clusterIndexBuffers,
                                const std::vector<VkDescriptorImageInfo> &materialTextures,
                                VkDeviceSize uniformBufferRange) const;
 

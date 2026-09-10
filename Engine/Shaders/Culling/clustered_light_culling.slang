@@ -1,21 +1,9 @@
+import Common.SceneData;
+
 // One invocation owns one 3D view cluster.  The list has a fixed, bounded
 // stride; overflow is deliberately clamped so malformed content cannot write
 // beyond its SSBO.  A production scene should expose this overflow count in
 // renderer diagnostics rather than silently increasing fragment work.
-
-struct LocalLightData
-{
-    float4 positionRange;
-    float4 directionOuterCos;
-    float4 colorIntensity;
-    float4 parameters;
-};
-
-struct ClusterLightRange
-{
-    uint offset;
-    uint count;
-};
 
 struct ClusteredLightingUniforms
 {
@@ -25,7 +13,7 @@ struct ClusteredLightingUniforms
     float4 viewportNearFar;
 };
 
-[[vk::binding(0, 0)]] StructuredBuffer<LocalLightData> localLights;
+[[vk::binding(0, 0)]] ConstantBuffer<RendererFrameData> frame;
 [[vk::binding(1, 0)]] RWStructuredBuffer<ClusterLightRange> clusterRanges;
 [[vk::binding(2, 0)]] RWStructuredBuffer<uint> clusterLightIndices;
 [[vk::binding(3, 0)]] ConstantBuffer<ClusteredLightingUniforms> uniforms;
@@ -67,7 +55,7 @@ void main(uint3 id : SV_DispatchThreadID)
     uint count = 0u;
     for (uint lightIndex = 0u; lightIndex < uniforms.gridAndLightCount.w; ++lightIndex)
     {
-        if (affectsCluster(localLights[lightIndex], id) && count < MaxLightsPerCluster)
+        if (affectsCluster(frame.localLights[lightIndex], id) && count < MaxLightsPerCluster)
             clusterLightIndices[offset + count++] = lightIndex;
     }
     ClusterLightRange range;

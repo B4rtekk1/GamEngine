@@ -75,6 +75,8 @@ void ShadowPass::create(VkPhysicalDevice physicalDevice, VkDevice device,
         const std::vector<VkBuffer>& grassInstanceBuffers,
         const std::vector<VkBuffer>& grassClusterBuffers,
         const std::vector<VkBuffer>& grassDeformationBuffers,
+        const std::vector<VkBuffer>& clusterRangeBuffers,
+        const std::vector<VkBuffer>& clusterIndexBuffers,
         const std::vector<VkDescriptorImageInfo>& materialTextures,
                         const VkDeviceSize uniformBufferRange,
                         const VmaAllocator allocator,
@@ -97,6 +99,8 @@ void ShadowPass::create(VkPhysicalDevice physicalDevice, VkDevice device,
             grassInstanceBuffers.size() != uniformBuffers.size() ||
             grassClusterBuffers.size() != uniformBuffers.size() ||
             grassDeformationBuffers.size() != uniformBuffers.size() ||
+            clusterRangeBuffers.size() != uniformBuffers.size() ||
+            clusterIndexBuffers.size() != uniformBuffers.size() ||
             materialTextures.size() != MaxMaterialTextures) {
             throw std::invalid_argument("Invalid material descriptor resources");
         }
@@ -110,7 +114,7 @@ void ShadowPass::create(VkPhysicalDevice physicalDevice, VkDevice device,
         bindings[2] = {2, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1,
                        VK_SHADER_STAGE_FRAGMENT_BIT, nullptr};
         bindings[3] = {GrassClusterBinding, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1,
-                       VK_SHADER_STAGE_VERTEX_BIT, nullptr};
+                       VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, nullptr};
         bindings[4] = {4, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1,
                        VK_SHADER_STAGE_FRAGMENT_BIT, nullptr};
         bindings[5] = {5, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1,
@@ -118,7 +122,7 @@ void ShadowPass::create(VkPhysicalDevice physicalDevice, VkDevice device,
         bindings[6] = {6, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1,
                        VK_SHADER_STAGE_VERTEX_BIT, nullptr};
         bindings[7] = {GrassDeformationBinding, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1,
-                       VK_SHADER_STAGE_VERTEX_BIT, nullptr};
+                       VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, nullptr};
         bindings[8] = {8, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1,
                        VK_SHADER_STAGE_VERTEX_BIT, nullptr};
         bindings[9] = {9, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1,
@@ -210,6 +214,8 @@ void ShadowPass::create(VkPhysicalDevice physicalDevice, VkDevice device,
             const VkDescriptorBufferInfo grassInstanceInfo{grassInstanceBuffers[frame], 0, VK_WHOLE_SIZE};
             const VkDescriptorBufferInfo grassClusterInfo{grassClusterBuffers[frame], 0, VK_WHOLE_SIZE};
             const VkDescriptorBufferInfo grassDeformationInfo{grassDeformationBuffers[frame], 0, VK_WHOLE_SIZE};
+            const VkDescriptorBufferInfo clusterRangeInfo{clusterRangeBuffers[frame], 0, VK_WHOLE_SIZE};
+            const VkDescriptorBufferInfo clusterIndexInfo{clusterIndexBuffers[frame], 0, VK_WHOLE_SIZE};
             VkWriteDescriptorSet writes[11]{};
             writes[0] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr,
                          descriptorSets_[frame], 0, 0, 1,
@@ -244,7 +250,14 @@ void ShadowPass::create(VkPhysicalDevice physicalDevice, VkDevice device,
             writes[10] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr,
                           descriptorSets_[frame], 8, 0, 1,
                           VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, nullptr, &previousTransformInfo, nullptr};
+            // Standard forward consumes bindings 3/7 as the clustered range
+            // headers and compact light-index list.  Grass descriptors below
+            // retain their vertex-only cluster/deformation bindings.
+            writes[7].pBufferInfo = &clusterRangeInfo;
+            writes[8].pBufferInfo = &clusterIndexInfo;
             vkUpdateDescriptorSets(device_, std::size(writes), writes, 0, nullptr);
+            writes[7].pBufferInfo = &grassClusterInfo;
+            writes[8].pBufferInfo = &grassDeformationInfo;
             writes[0].dstSet = grassDescriptorSets_[frame];
             writes[1].dstSet = grassDescriptorSets_[frame];
             writes[2].dstSet = grassDescriptorSets_[frame];
@@ -390,6 +403,8 @@ void ShadowPass::updateDescriptors(
         const std::vector<VkBuffer>& grassInstanceBuffers,
         const std::vector<VkBuffer>& grassClusterBuffers,
         const std::vector<VkBuffer>& grassDeformationBuffers,
+        const std::vector<VkBuffer>& clusterRangeBuffers,
+        const std::vector<VkBuffer>& clusterIndexBuffers,
         const std::vector<VkDescriptorImageInfo>& materialTextures,
         const VkDeviceSize uniformBufferRange) const {
     const std::size_t frameCount = descriptorSets_.size();
@@ -398,7 +413,8 @@ void ShadowPass::updateDescriptors(
         instanceBuffers.size() != frameCount || previousTransformBuffers.size() != frameCount ||
         instanceIndexBuffers.size() != frameCount ||
         grassInstanceBuffers.size() != frameCount || grassClusterBuffers.size() != frameCount ||
-        grassDeformationBuffers.size() != frameCount || materialTextures.size() != MaxMaterialTextures ||
+        grassDeformationBuffers.size() != frameCount || clusterRangeBuffers.size() != frameCount ||
+        clusterIndexBuffers.size() != frameCount || materialTextures.size() != MaxMaterialTextures ||
         grassDescriptorSets_.size() != frameCount || grassVelocityDescriptorSets_.size() != frameCount ||
         grassShadowDescriptorSets_.size() != frameCount || pageTableBuffers_.size() != frameCount) {
         throw std::invalid_argument("Invalid shadow descriptor update resources");
@@ -414,6 +430,8 @@ void ShadowPass::updateDescriptors(
         const VkDescriptorBufferInfo grassInstance{grassInstanceBuffers[frame], 0, VK_WHOLE_SIZE};
         const VkDescriptorBufferInfo grassCluster{grassClusterBuffers[frame], 0, VK_WHOLE_SIZE};
         const VkDescriptorBufferInfo grassDeformation{grassDeformationBuffers[frame], 0, VK_WHOLE_SIZE};
+        const VkDescriptorBufferInfo clusterRanges{clusterRangeBuffers[frame], 0, VK_WHOLE_SIZE};
+        const VkDescriptorBufferInfo clusterIndices{clusterIndexBuffers[frame], 0, VK_WHOLE_SIZE};
         VkWriteDescriptorSet writes[9]{};
         writes[0] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr, descriptorSets_[frame], 1, 0, 1,
                      VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, nullptr, &uniform, nullptr};
@@ -426,9 +444,9 @@ void ShadowPass::updateDescriptors(
         writes[4] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr, descriptorSets_[frame], 6, 0, 1,
                      VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, nullptr, &instanceIndex, nullptr};
         writes[5] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr, descriptorSets_[frame], GrassClusterBinding, 0, 1,
-                     VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, nullptr, &grassCluster, nullptr};
+                     VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, nullptr, &clusterRanges, nullptr};
         writes[6] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr, descriptorSets_[frame], GrassDeformationBinding, 0, 1,
-                     VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, nullptr, &grassDeformation, nullptr};
+                     VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, nullptr, &clusterIndices, nullptr};
         writes[7] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr, descriptorSets_[frame], 10, 0,
                      MaxMaterialTextures, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
                      materialTextures.data(), nullptr, nullptr};
@@ -440,6 +458,8 @@ void ShadowPass::updateDescriptors(
                                     grassShadowDescriptorSets_[frame]}) {
             for (VkWriteDescriptorSet& write : writes) write.dstSet = set;
             writes[3].pBufferInfo = &grassInstance;
+            writes[5].pBufferInfo = &grassCluster;
+            writes[6].pBufferInfo = &grassDeformation;
             vkUpdateDescriptorSets(device_, std::size(writes), writes, 0, nullptr);
         }
     }

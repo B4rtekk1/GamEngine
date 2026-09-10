@@ -98,9 +98,12 @@ ForwardVertexOutput vertexMain(ForwardVertexInput input, uint instanceIndex : SV
 [[vk::binding(2, 0)]] StructuredBuffer<MaterialData> materials;
 [[vk::binding(10, 0)]] Sampler2D materialTextures[];
 [[vk::binding(4, 0)]] StructuredBuffer<uint4> shadowPageTable;
+[[vk::binding(3, 0)]] StructuredBuffer<ClusterLightRange> clusterRanges;
+[[vk::binding(7, 0)]] StructuredBuffer<uint> clusterLightIndices;
 
 struct ForwardFragmentInput
 {
+    float4 position : SV_Position;
     [[vk::location(0)]] float3 color;
     [[vk::location(1)]] float3 worldPosition;
     [[vk::location(2)]] float3 normal;
@@ -274,8 +277,19 @@ ForwardFragmentOutput fragmentMain(ForwardFragmentInput input)
     }
     float3 direct = (diffuse + specular) * frame.lightDirectionIntensity.w *
                     frame.lightColor.rgb * nDotL * (1.0 - shadow);
-    for (uint lightIndex = 0; lightIndex < frame.localLightCount; ++lightIndex)
+    const uint2 grid = uint2((uint(frame.clusteredViewportNearFar.x) + 63u) / 64u,
+                             (uint(frame.clusteredViewportNearFar.y) + 63u) / 64u);
+    const float nearPlane = frame.clusteredViewportNearFar.z;
+    const float farPlane = frame.clusteredViewportNearFar.w;
+    const float viewDepth = max(-mul(float4(input.worldPosition, 1.0), frame.view).z, nearPlane);
+    const uint slice = min(uint(log(viewDepth / nearPlane) / log(farPlane / nearPlane) * 24.0), 23u);
+    const uint2 tile = min(uint2(input.position.xy) / 64u, grid - 1u);
+    const uint clusterIndex = (slice * grid.y + tile.y) * grid.x + tile.x;
+    const ClusterLightRange lightRange = clusterRanges[clusterIndex];
+    for (uint i = 0u; i < lightRange.count; ++i)
     {
+        const uint lightIndex = clusterLightIndices[lightRange.offset + i];
+        if (lightIndex >= frame.localLightCount) continue;
         LocalLightData local = frame.localLights[lightIndex];
         float3 toLight = local.positionRange.xyz - input.worldPosition;
         float distanceToLight = length(toLight);

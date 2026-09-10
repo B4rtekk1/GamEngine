@@ -232,6 +232,14 @@
         std::array<Buffer, MAX_FRAMES_IN_FLIGHT> shadowTwoSidedCandidateDispatchBuffers;
         // One CPU-populated SSBO per frame, shared by both shadow cull passes.
         std::array<Buffer, MAX_FRAMES_IN_FLIGHT> shadowPageWorkBuffers;
+        // Forward+ lists are view-relative: the Game and Scene cameras can
+        // have different extents and depth partitions in the same frame.
+        std::array<Buffer, MAX_FRAMES_IN_FLIGHT> clusteredLightRangeBuffers;
+        std::array<Buffer, MAX_FRAMES_IN_FLIGHT> clusteredLightIndexBuffers;
+        std::array<Buffer, MAX_FRAMES_IN_FLIGHT> sceneClusteredLightRangeBuffers;
+        std::array<Buffer, MAX_FRAMES_IN_FLIGHT> sceneClusteredLightIndexBuffers;
+        std::array<Buffer, MAX_FRAMES_IN_FLIGHT> clusteredLightingUniformBuffers;
+        std::array<Buffer, MAX_FRAMES_IN_FLIGHT> sceneClusteredLightingUniformBuffers;
         std::array<Buffer, MAX_FRAMES_IN_FLIGHT>& drawCountBuffers = viewRenderScratch.drawCountBuffers;
         std::array<Buffer, MAX_FRAMES_IN_FLIGHT>& foliageDrawCountBuffers = viewRenderScratch.foliageDrawCountBuffers;
         std::array<Buffer, MAX_FRAMES_IN_FLIGHT>& sceneDrawCountBuffers = viewRenderScratch.drawCountBuffers;
@@ -269,6 +277,7 @@
         VkDescriptorSetLayout grassPackedBinDescriptorSetLayout = VK_NULL_HANDLE;
         VkDescriptorSetLayout grassPackedScatterDescriptorSetLayout = VK_NULL_HANDLE;
         VkDescriptorSetLayout grassPackedFinalizeDescriptorSetLayout = VK_NULL_HANDLE;
+        VkDescriptorSetLayout clusteredLightingDescriptorSetLayout = VK_NULL_HANDLE;
         VkPipelineLayout hiZCopyPipelineLayout = VK_NULL_HANDLE;
         VkPipelineLayout hiZReducePipelineLayout = VK_NULL_HANDLE;
         VkPipelineLayout cullingPipelineLayout = VK_NULL_HANDLE;
@@ -284,6 +293,7 @@
         VkPipelineLayout grassPackedBinPipelineLayout = VK_NULL_HANDLE;
         VkPipelineLayout grassPackedScatterPipelineLayout = VK_NULL_HANDLE;
         VkPipelineLayout grassPackedFinalizePipelineLayout = VK_NULL_HANDLE;
+        VkPipelineLayout clusteredLightingPipelineLayout = VK_NULL_HANDLE;
         VkPipeline hiZCopyPipeline = VK_NULL_HANDLE;
         VkPipeline hiZReducePipeline = VK_NULL_HANDLE;
         VkPipeline cullingPipeline = VK_NULL_HANDLE;
@@ -300,6 +310,9 @@
         VkPipeline grassPackedPrefixPipeline = VK_NULL_HANDLE;
         VkPipeline grassPackedScatterPipeline = VK_NULL_HANDLE;
         VkPipeline grassPackedFinalizePipeline = VK_NULL_HANDLE;
+        VkPipeline clusteredLightingPipeline = VK_NULL_HANDLE;
+        std::array<VkDescriptorSet, MAX_FRAMES_IN_FLIGHT> clusteredLightingSets{};
+        std::array<VkDescriptorSet, MAX_FRAMES_IN_FLIGHT> sceneClusteredLightingSets{};
         std::array<VkDescriptorSet, MAX_FRAMES_IN_FLIGHT> grassBuildSets{};
         std::array<VkDescriptorSet, MAX_FRAMES_IN_FLIGHT> grassVisibleDispatchBuildSets{};
         std::array<VkDescriptorSet, MAX_FRAMES_IN_FLIGHT> grassStreamDispatchBuildSets{};

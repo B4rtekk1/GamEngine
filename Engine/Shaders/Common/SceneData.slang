@@ -6,6 +6,12 @@ struct LocalLightData
     float4 parameters;
 };
 
+struct ClusterLightRange
+{
+    uint offset;
+    uint count;
+};
+
 struct RendererFrameData
 {
     float4x4 view;
@@ -25,6 +31,8 @@ struct RendererFrameData
     uint materialSlots;
     uint selectedInstance;
     uint localLightCount;
+    // xy viewport pixels, z near plane, w far plane.
+    float4 clusteredViewportNearFar;
     LocalLightData localLights[32];
 };
 
