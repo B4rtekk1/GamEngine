@@ -31,7 +31,7 @@
 #include "Engine/Renderer/Vulkan/vulkan_device.h"
 #include "Engine/Renderer/Vulkan/swapchain.h"
 #include "Engine/Renderer/Textures/Texture2D.h"
-#include "Engine/Renderer/Geometry/Vertex.h"
+#include "Engine/Renderer/Geometry/GpuVertex.h"
 #include "Engine/Renderer/Geometry/Mesh.h"
 #include "Engine/ECS/Registry.h"
 #include "Engine/Scene/Scene.h"
@@ -740,9 +740,14 @@ namespace Engine {
             // uploadDeviceLocal submits the copy after all graphics work already
             // queued on this queue. Avoid waiting for every frame in flight here:
             // that global stall made terrain sculpting block on unrelated frames.
+            std::vector<GpuVertex> packedVertices;
+            packedVertices.reserve(vertexCount);
+            for (std::uint32_t index = 0; index < vertexCount; ++index) {
+                packedVertices.push_back(GpuVertex::pack(renderer.mesh->vertices[firstVertex + index]));
+            }
             vertexBuffer.uploadDeviceLocal(
-                renderer.mesh->vertices.data() + firstVertex, sizeof(Vertex) * vertexCount,
-                sizeof(Vertex) * (record.firstVertex + firstVertex), commandPool,
+                packedVertices.data(), sizeof(GpuVertex) * packedVertices.size(),
+                sizeof(GpuVertex) * (record.firstVertex + firstVertex), commandPool,
                 vulkanDevice.graphicsQueue());
 
             AABB localBounds{

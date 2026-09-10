@@ -8,6 +8,7 @@
 #include "Engine/ECS/Components/TerrainGrassComponent.h"
 #include "Engine/ECS/Components/ProceduralCloudComponent.h"
 #include "Engine/Renderer/Geometry/ProceduralCloud.h"
+#include "Engine/Renderer/Geometry/GpuVertex.h"
 #include "Engine/Renderer/Lighting/DirectionalLightData.h"
 #include "Engine/Renderer/Materials/PBRMaterial.h"
 #include "Engine/Renderer/Materials/MaterialBuffer.h"
@@ -63,6 +64,42 @@ TEST(ProceduralCloud, ProducesDeterministicThreeDimensionalMesh) {
     EXPECT_FLOAT_EQ(first.vertices.front().position.x(), second.vertices.front().position.x());
     EXPECT_FLOAT_EQ(first.vertices.front().position.y(), second.vertices.front().position.y());
     EXPECT_FLOAT_EQ(first.vertices.front().position.z(), second.vertices.front().position.z());
+}
+
+TEST(GpuVertex, PacksMeshAttributesIntoTheGpuLayout) {
+    const Engine::Vertex source{
+        .position = {1.0F, -2.0F, 3.0F},
+        .color = {0.25F, 0.5F, 0.75F},
+        .texCoord = {0.125F, 0.875F},
+        .normal = {0.0F, 0.0F, 1.0F},
+        .tangent = {1.0F, 0.0F, 0.0F, -1.0F},
+        .texCoord1 = {0.25F, 0.75F},
+        .materialIndex = 1234U,
+    };
+
+    const Engine::GpuVertex packed = Engine::GpuVertex::pack(source);
+    EXPECT_EQ(sizeof(packed), 36U);
+    EXPECT_FLOAT_EQ(packed.px, source.position.x());
+    EXPECT_FLOAT_EQ(packed.py, source.position.y());
+    EXPECT_FLOAT_EQ(packed.pz, source.position.z());
+    EXPECT_EQ(packed.materialIndex, source.materialIndex);
+
+    const glm::vec4 normal = glm::unpackSnorm3x10_1x2(packed.normal);
+    const glm::vec4 tangent = glm::unpackSnorm3x10_1x2(packed.tangent);
+    const glm::vec2 uv0 = glm::unpackHalf2x16(packed.texCoord);
+    const glm::vec2 uv1 = glm::unpackHalf2x16(packed.texCoord1);
+    const glm::vec4 color = glm::unpackUnorm4x8(packed.color);
+    EXPECT_NEAR(normal.z, 1.0F, 0.01F);
+    EXPECT_NEAR(tangent.x, 1.0F, 0.01F);
+    EXPECT_NEAR(tangent.w, -1.0F, 0.01F);
+    EXPECT_NEAR(uv0.x, source.texCoord.x(), 0.001F);
+    EXPECT_NEAR(uv0.y, source.texCoord.y(), 0.001F);
+    EXPECT_NEAR(uv1.x, source.texCoord1.x(), 0.001F);
+    EXPECT_NEAR(uv1.y, source.texCoord1.y(), 0.001F);
+    EXPECT_NEAR(color.r, source.color.x(), 0.01F);
+    EXPECT_NEAR(color.g, source.color.y(), 0.01F);
+    EXPECT_NEAR(color.b, source.color.z(), 0.01F);
+    EXPECT_FLOAT_EQ(color.a, 1.0F);
 }
 
 TEST(RigidbodyComponent, IgnoresLinearImpulseForNonPositiveMassAndStops) {

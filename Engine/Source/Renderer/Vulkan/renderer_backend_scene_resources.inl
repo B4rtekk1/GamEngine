@@ -358,13 +358,18 @@
             if (vertexCount == 0 || indexCount == 0) {
                 // The empty-scene path below keeps valid dummy bindings.
             } else {
-                vertexBuffer.createDeviceLocalEmpty(device, sizeof(Vertex) * vertexCount,
+                vertexBuffer.createDeviceLocalEmpty(device, sizeof(GpuVertex) * vertexCount,
                     VK_BUFFER_USAGE_VERTEX_BUFFER_BIT, vulkanDevice.allocator());
                 indexBuffer.createDeviceLocalEmpty(device, sizeof(std::uint32_t) * indexCount,
                     VK_BUFFER_USAGE_INDEX_BUFFER_BIT, vulkanDevice.allocator());
                 for (const MeshUpload& upload : meshUploads) {
-                    vertexBuffer.uploadDeviceLocal(upload.mesh->vertices.data(),
-                        sizeof(Vertex) * upload.mesh->vertices.size(), sizeof(Vertex) * upload.firstVertex,
+                    std::vector<GpuVertex> packedVertices;
+                    packedVertices.reserve(upload.mesh->vertices.size());
+                    for (const Vertex& vertex : upload.mesh->vertices) {
+                        packedVertices.push_back(GpuVertex::pack(vertex));
+                    }
+                    vertexBuffer.uploadDeviceLocal(packedVertices.data(),
+                        sizeof(GpuVertex) * packedVertices.size(), sizeof(GpuVertex) * upload.firstVertex,
                         commandPool, vulkanDevice.graphicsQueue());
                     const VkDeviceSize indexBytes = sizeof(std::uint32_t) * upload.mesh->indices.size();
                     const auto slice = uploadContext.allocate(indexBytes, alignof(std::uint32_t));

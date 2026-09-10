@@ -2,7 +2,7 @@
 
 #include "Engine/Core/Diagnostics.h"
 #include "Engine/Renderer/Culling/IndexedIndirectDrawCount.h"
-#include "Engine/Renderer/Geometry/Vertex.h"
+#include "Engine/Renderer/Geometry/GpuVertex.h"
 #include "Engine/Renderer/Vulkan/renderer_types.h"
 #include <algorithm>
 #include <cstddef>
@@ -38,16 +38,16 @@ void ForwardPass::create(VkDevice device, const VkFormat colorFormat,
     options.alphaBlendEnable = VK_FALSE;
     options.descriptorSetLayouts = {sceneLayout};
     options.vertexBindings = {
-        {0, sizeof(Vertex), VK_VERTEX_INPUT_RATE_VERTEX},
+        {0, sizeof(GpuVertex), VK_VERTEX_INPUT_RATE_VERTEX},
     };
     options.vertexAttributes = {
-        {0, 0, VK_FORMAT_R32G32B32_SFLOAT, offsetof(Vertex, position)},
-        {1, 0, VK_FORMAT_R32G32B32_SFLOAT, offsetof(Vertex, color)},
-        {2, 0, VK_FORMAT_R32G32_SFLOAT, offsetof(Vertex, texCoord)},
-        {4, 0, VK_FORMAT_R32G32_SFLOAT, offsetof(Vertex, texCoord1)},
-        {3, 0, VK_FORMAT_R32G32B32_SFLOAT, offsetof(Vertex, normal)},
-        {8, 0, VK_FORMAT_R32_UINT, offsetof(Vertex, materialIndex)},
-        {9, 0, VK_FORMAT_R32G32B32A32_SFLOAT, offsetof(Vertex, tangent)},
+        {0, 0, VK_FORMAT_R32G32B32_SFLOAT, offsetof(GpuVertex, px)},
+        {1, 0, VK_FORMAT_R8G8B8A8_UNORM, offsetof(GpuVertex, color)},
+        {2, 0, VK_FORMAT_R16G16_SFLOAT, offsetof(GpuVertex, texCoord)},
+        {4, 0, VK_FORMAT_R16G16_SFLOAT, offsetof(GpuVertex, texCoord1)},
+        {3, 0, VK_FORMAT_A2B10G10R10_SNORM_PACK32, offsetof(GpuVertex, normal)},
+        {8, 0, VK_FORMAT_R32_UINT, offsetof(GpuVertex, materialIndex)},
+        {9, 0, VK_FORMAT_A2B10G10R10_SNORM_PACK32, offsetof(GpuVertex, tangent)},
     };
     const auto shaderPaths = hasVelocityAttachment_
         ? std::array{"shaders/forward_pbr.spv", "shaders/forward_unlit.spv",

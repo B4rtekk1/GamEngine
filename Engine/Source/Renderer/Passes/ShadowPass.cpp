@@ -3,7 +3,7 @@
 #include "Engine/Math/Mat4.h"
 #include "Engine/Renderer/Culling/GPUCullingPass.h"
 #include "Engine/Renderer/Culling/IndexedIndirectDrawCount.h"
-#include "Engine/Renderer/Geometry/Vertex.h"
+#include "Engine/Renderer/Geometry/GpuVertex.h"
 #include "Engine/Renderer/Materials/MaterialBuffer.h"
 #include "Engine/Renderer/shader_loader.h"
 #include "Engine/Renderer/Vulkan/renderer_types.h"
@@ -284,13 +284,13 @@ void ShadowPass::create(VkPhysicalDevice physicalDevice, VkDevice device,
         }
 
         const VkVertexInputBindingDescription vertexBindings[] = {
-            {0, sizeof(Vertex), VK_VERTEX_INPUT_RATE_VERTEX},
+            {0, sizeof(GpuVertex), VK_VERTEX_INPUT_RATE_VERTEX},
         };
         const VkVertexInputAttributeDescription attributes[] = {
-            {0, 0, VK_FORMAT_R32G32B32_SFLOAT, offsetof(Vertex, position)},
-            {2, 0, VK_FORMAT_R32G32_SFLOAT, offsetof(Vertex, texCoord)},
-            {4, 0, VK_FORMAT_R32G32_SFLOAT, offsetof(Vertex, texCoord1)},
-            {8, 0, VK_FORMAT_R32_UINT, offsetof(Vertex, materialIndex)},
+            {0, 0, VK_FORMAT_R32G32B32_SFLOAT, offsetof(GpuVertex, px)},
+            {2, 0, VK_FORMAT_R16G16_SFLOAT, offsetof(GpuVertex, texCoord)},
+            {4, 0, VK_FORMAT_R16G16_SFLOAT, offsetof(GpuVertex, texCoord1)},
+            {8, 0, VK_FORMAT_R32_UINT, offsetof(GpuVertex, materialIndex)},
         };
         VkPipelineVertexInputStateCreateInfo vertexInput{
             VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO};
@@ -365,9 +365,9 @@ void ShadowPass::create(VkPhysicalDevice physicalDevice, VkDevice device,
         pipelineInfo.pStages = grassStages.data();
         // grass_shadow consumes position, UV0 and material index only.
         const VkVertexInputAttributeDescription grassAttributes[] = {
-            {0, 0, VK_FORMAT_R32G32B32_SFLOAT, offsetof(Vertex, position)},
-            {2, 0, VK_FORMAT_R32G32_SFLOAT, offsetof(Vertex, texCoord)},
-            {8, 0, VK_FORMAT_R32_UINT, offsetof(Vertex, materialIndex)},
+            {0, 0, VK_FORMAT_R32G32B32_SFLOAT, offsetof(GpuVertex, px)},
+            {2, 0, VK_FORMAT_R16G16_SFLOAT, offsetof(GpuVertex, texCoord)},
+            {8, 0, VK_FORMAT_R32_UINT, offsetof(GpuVertex, materialIndex)},
         };
         vertexInput.vertexAttributeDescriptionCount = std::size(grassAttributes);
         vertexInput.pVertexAttributeDescriptions = grassAttributes;
