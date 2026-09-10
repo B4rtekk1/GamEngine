@@ -52,7 +52,6 @@ namespace Engine {
             ++m_structuralRevision;
             return entity;
         }
-
         /**
          * @brief Destroys an entity and removes all of its components.
          *
@@ -69,9 +68,6 @@ namespace Engine {
 
             for (auto &pool: m_componentPools | std::views::values) {
                 pool->remove(entity);
-            }
-            for (auto& changes : m_componentChangeEntities | std::views::values) {
-                changes.erase(entity);
             }
             const std::uint32_t index = entityIndex(entity);
             const std::uint32_t denseIndex = m_entityPositions[index];
@@ -153,17 +149,12 @@ namespace Engine {
         /**
          * Returns distinct entities whose component changed after the supplied
          * revision. Recent revisions are served from an append-only delta log;
-         * an old observer transparently falls back to the current-state map.
+         * an old observer scans the pool's dense revision array.
          */
         template<typename T>
         [[nodiscard]] std::vector<Entity> componentEntitiesChangedSince(
             const std::uint64_t revision) const {
             const auto type = std::type_index(typeid(T)); //NOLINT
-            const auto current = m_componentChangeEntities.find(type);
-            if (current == m_componentChangeEntities.end()) {
-                return {};
-            }
-
             std::vector<Entity> changed;
             const auto log = m_componentChangeLogs.find(type);
             if (log != m_componentChangeLogs.end() && !log->second.records.empty() &&
@@ -177,11 +168,14 @@ namespace Engine {
                 return changed;
             }
 
-            // The observer predates the bounded delta log. This slower path
-            // remains correct and is used only after a long pause.
-            changed.reserve(current->second.size());
-            for (const auto& [entity, changedRevision] : current->second) {
-                if (changedRevision > revision) changed.push_back(entity);
+            // The observer predates the bounded delta log. The dense revision
+            // sidecar is compact (exactly eight bytes per live component) and
+            // follows the component during swap-and-pop removal.
+            if (const auto* pool = findPool<T>(); pool != nullptr) {
+                changed.reserve(pool->size());
+                pool->forEachChangedSince(revision, [&](const Entity entity) {
+                    changed.push_back(entity);
+                });
             }
             return changed;
         }
@@ -193,9 +187,6 @@ namespace Engine {
         template<typename T, typename Func>
         void forEachComponentChangedSince(const std::uint64_t revision, Func &&func) const {
             const auto type = std::type_index(typeid(T)); //NOLINT
-            const auto current = m_componentChangeEntities.find(type);
-            if (current == m_componentChangeEntities.end()) return;
-
             const auto log = m_componentChangeLogs.find(type);
             if (log != m_componentChangeLogs.end() && !log->second.records.empty() &&
                 revision >= log->second.firstRevision - 1) {
@@ -204,8 +195,8 @@ namespace Engine {
                 }
                 return;
             }
-            for (const auto &[entity, changedRevision] : current->second) {
-                if (changedRevision > revision) std::invoke(func, entity);
+            if (const auto* pool = findPool<T>(); pool != nullptr) {
+                pool->forEachChangedSince(revision, std::forward<Func>(func));
             }
         }
 
@@ -213,6 +204,7 @@ namespace Engine {
         [[nodiscard]] std::size_t entityIndexCapacity() const noexcept {
             return m_entityPositions.size();
         }
+
 
         /**
          * @brief Adds and constructs a component for an entity.
@@ -439,7 +431,11 @@ namespace Engine {
         void bumpComponentRevision(const Entity entity) {
             const auto type = std::type_index(typeid(T));
             const auto revision = ++m_componentRevisions[type];
-            m_componentChangeEntities[type][entity] = revision;
+            // Keep current-state tracking alongside the sparse set, rather
+            // than in a node-based Entity -> revision hash table.
+            if (auto* pool = findPool<T>(); pool != nullptr && pool->has(entity)) {
+                pool->setChangeRevision(entity, revision);
+            }
             ComponentChangeLog& log = m_componentChangeLogs[type];
             log.records.push_back({entity, revision});
             if (log.records.size() > MaxComponentChangeLogSize) log.records.pop_front();
@@ -572,8 +568,6 @@ namespace Engine {
             std::deque<ComponentChange> records;
         };
         static constexpr std::size_t MaxComponentChangeLogSize = 4096;
-        std::unordered_map<std::type_index, std::unordered_map<Entity, std::uint64_t> >
-        m_componentChangeEntities;
         std::unordered_map<std::type_index, ComponentChangeLog> m_componentChangeLogs;
 
         std::uint64_t m_mutationRevision = 0;

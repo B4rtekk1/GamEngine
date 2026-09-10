@@ -177,4 +177,23 @@ TEST(Registry, EmptyViewVisitsEveryLiveEntityAndRemovalTracksRevision) {
     EXPECT_EQ(changed.front(), first);
 }
 
+TEST(Registry, DenseChangeRevisionsFollowSwapAndPopAfterDeltaLogExpires) {
+    Engine::Registry registry;
+    const auto removed = registry.create();
+    const auto retained = registry.create();
+    registry.add<Position>(removed, Position{1});
+    registry.add<Position>(retained, Position{2});
+
+    // Moving retained into the removed component's dense slot must also move
+    // its change revision. Exhaust the bounded log to force the dense fallback.
+    registry.remove<Position>(removed);
+    for (int index = 0; index < 4097; ++index) {
+        registry.modify<Position>(retained, [](Position& value) { ++value.x; });
+    }
+
+    const auto changed = registry.componentEntitiesChangedSince<Position>(0);
+    ASSERT_EQ(changed.size(), 1u);
+    EXPECT_EQ(changed.front(), retained);
+}
+
 } // namespace

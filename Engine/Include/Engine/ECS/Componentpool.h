@@ -3,6 +3,8 @@
 #include "Entity.h"
 
 #include <cassert>
+#include <cstdint>
+#include <functional>
 #include <limits>
 #include <utility>
 #include <vector>
@@ -85,6 +87,13 @@ namespace Engine {
                 m_components.pop_back();
                 throw;
             }
+            try {
+                m_changeRevisions.push_back(0);
+            } catch (...) {
+                m_entities.pop_back();
+                m_components.pop_back();
+                throw;
+            }
             m_sparse[entityIndex(entity)] = index;
             return m_components.back();
         }
@@ -107,6 +116,7 @@ namespace Engine {
 
             if (index != lastIndex) {
                 m_components[index] = std::move(m_components[lastIndex]);
+                m_changeRevisions[index] = m_changeRevisions[lastIndex];
 
                 const Entity movedEntity = m_entities[lastIndex];
                 m_entities[index] = movedEntity;
@@ -115,6 +125,7 @@ namespace Engine {
 
             m_components.pop_back();
             m_entities.pop_back();
+            m_changeRevisions.pop_back();
             m_sparse[entityIndex(entity)] = InvalidIndex;
         }
 
@@ -205,6 +216,22 @@ namespace Engine {
             return m_components[m_sparse[entityIndex(entity)]];
         }
 
+        /** Records the revision of the component at its dense-storage slot. */
+        void setChangeRevision(Entity entity, const std::uint64_t revision) {
+            assert(has(entity));
+            m_changeRevisions[m_sparse[entityIndex(entity)]] = revision;
+        }
+
+        /** Visits the current dense entries changed after @p revision. */
+        template<typename Func>
+        void forEachChangedSince(const std::uint64_t revision, Func&& func) const {
+            for (std::size_t index = 0; index < m_entities.size(); ++index) {
+                if (m_changeRevisions[index] > revision) {
+                    std::invoke(std::forward<Func>(func), m_entities[index]);
+                }
+            }
+        }
+
     private:
         /**
          * @brief Sentinel indicating that an entity has no dense-array entry.
@@ -236,6 +263,9 @@ namespace Engine {
          * @brief Entity identifiers corresponding to entries in m_components.
          */
         std::vector<Entity> m_entities;
+
+        /** Per-component revision, kept in lockstep with dense storage. */
+        std::vector<std::uint64_t> m_changeRevisions;
 
         /**
          * @brief Sparse mapping from entity identifier to dense-array index.
