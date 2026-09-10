@@ -15,7 +15,9 @@ import Common.ShadowSampling;
 [[vk::binding(1, 0)]] ConstantBuffer<RendererFrameData> frame;
 [[vk::binding(5, 0)]] StructuredBuffer<RendererInstanceData> visibleInstances;
 [[vk::binding(6, 0)]] StructuredBuffer<uint> visibleInstanceIndices;
+#if FORWARD_OUTPUT_VELOCITY
 [[vk::binding(8, 0)]] StructuredBuffer<RendererPreviousTransformData> previousTransforms;
+#endif
 
 struct ForwardVertexInput
 {
@@ -38,8 +40,10 @@ struct ForwardVertexOutput
     [[vk::location(4)]] float2 texCoord;
     [[vk::location(5)]] float4 tangent;
     [[vk::location(6)]] float2 texCoord1;
+#if FORWARD_OUTPUT_VELOCITY
     [[vk::location(7)]] noperspective float2 currentNdc;
     [[vk::location(8)]] float4 previousClip;
+#endif
 };
 
 [shader("vertex")]
@@ -48,7 +52,6 @@ ForwardVertexOutput vertexMain(ForwardVertexInput input, uint instanceIndex : SV
 {
     const uint visibleIndex = visibleInstanceIndices[baseInstance + instanceIndex];
     RendererInstanceData instance = visibleInstances[visibleIndex];
-    RendererPreviousTransformData previousTransform = previousTransforms[visibleIndex];
     const float3 localPosition = input.position;
     const float3 localNormal = input.normal;
 
@@ -65,6 +68,8 @@ ForwardVertexOutput vertexMain(ForwardVertexInput input, uint instanceIndex : SV
 
     ForwardVertexOutput output;
     float4 currentClip = mul(mul(worldPosition, frame.view), frame.projection);
+#if FORWARD_OUTPUT_VELOCITY
+    RendererPreviousTransformData previousTransform = previousTransforms[visibleIndex];
     float4 previousQ = previousTransform.previousRotation;
     float3x3 previousRotationMatrix = float3x3(
         1.0 - 2.0 * (previousQ.y * previousQ.y + previousQ.z * previousQ.z), 2.0 * (previousQ.x * previousQ.y + previousQ.z * previousQ.w), 2.0 * (previousQ.x * previousQ.z - previousQ.y * previousQ.w),
@@ -72,6 +77,7 @@ ForwardVertexOutput vertexMain(ForwardVertexInput input, uint instanceIndex : SV
         2.0 * (previousQ.x * previousQ.z + previousQ.y * previousQ.w), 2.0 * (previousQ.y * previousQ.z - previousQ.x * previousQ.w), 1.0 - 2.0 * (previousQ.x * previousQ.x + previousQ.y * previousQ.y));
     float3 previousWorldPosition = mul(input.position * previousTransform.previousScale.xyz, previousRotationMatrix) +
                                    previousTransform.previousPosition.xyz;
+#endif
     output.position = currentClip;
     output.color = input.color;
     output.worldPosition = worldPosition.xyz;
@@ -80,8 +86,10 @@ ForwardVertexOutput vertexMain(ForwardVertexInput input, uint instanceIndex : SV
     output.texCoord = input.texCoord;
     output.texCoord1 = input.texCoord1;
     output.tangent = float4(mul(input.tangent.xyz, normalMatrix), input.tangent.w);
+#if FORWARD_OUTPUT_VELOCITY
     output.currentNdc = currentClip.xy / currentClip.w;
     output.previousClip = mul(mul(float4(previousWorldPosition, 1.0), frame.previousView), frame.previousProjection);
+#endif
     return output;
 }
 
@@ -100,8 +108,10 @@ struct ForwardFragmentInput
     [[vk::location(4)]] float2 texCoord;
     [[vk::location(5)]] float4 tangent;
     [[vk::location(6)]] float2 texCoord1;
+#if FORWARD_OUTPUT_VELOCITY
     [[vk::location(7)]] noperspective float2 currentNdc;
     [[vk::location(8)]] float4 previousClip;
+#endif
     bool isFrontFace : SV_IsFrontFace;
 };
 

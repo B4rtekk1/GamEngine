@@ -37,8 +37,10 @@ struct VertexOutput
     [[vk::location(2)]] float3 normal;
     [[vk::location(3)]] nointerpolation uint materialIndex;
     [[vk::location(4)]] float2 texCoord;
+#if FORWARD_OUTPUT_VELOCITY
     [[vk::location(5)]] noperspective float2 currentNdc;
     [[vk::location(6)]] float4 previousClip;
+#endif
 };
 
 [shader("vertex")]
@@ -53,16 +55,20 @@ VertexOutput vertexMain(VertexInput input, uint instanceIndex : SV_InstanceID,
     float3 worldPosition = deformed.position;
     VertexOutput output;
     float4 currentClip = mul(mul(float4(worldPosition, 1.0), frame.view), frame.projection);
+#if FORWARD_OUTPUT_VELOCITY
     float3 previousWorld = grassPackedDeformedVertex(input.position, input.normal, instance, cluster,
                                                       deformations[packedIndex], frame, true).position;
+#endif
     output.position = currentClip;
     output.color = input.color;
     output.worldPosition = worldPosition;
     output.normal = deformed.normal;
     output.materialIndex = cluster.instanceRange.z + input.materialIndex;
     output.texCoord = input.texCoord;
+#if FORWARD_OUTPUT_VELOCITY
     output.currentNdc = currentClip.xy / currentClip.w;
     output.previousClip = mul(mul(float4(previousWorld, 1.0), frame.previousView), frame.previousProjection);
+#endif
     return output;
 }
 
@@ -73,8 +79,10 @@ struct FragmentInput
     [[vk::location(2)]] float3 normal;
     [[vk::location(3)]] nointerpolation uint materialIndex;
     [[vk::location(4)]] float2 texCoord;
+#if FORWARD_OUTPUT_VELOCITY
     [[vk::location(5)]] noperspective float2 currentNdc;
     [[vk::location(6)]] float4 previousClip;
+#endif
     bool isFrontFace : SV_IsFrontFace;
 };
 
