@@ -6,6 +6,7 @@
 #include "Elements/NumericControl.h"
 #include "Engine/Renderer/MeshRenderer.h"
 #include "Engine/Assets/TextureCooker.h"
+#include "Engine/Core/TaskScheduler.h"
 #include "Engine/Renderer/ShaderGraph/ShaderGraphSerializer.h"
 #include "Engine/Renderer/ShaderGraph/ShaderNodeFactory.h"
 #include "Engine/Scene/SceneEditor.h"
@@ -13,11 +14,13 @@
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <cctype>
 #include <cstdio>
 #include <fstream>
 #include <regex>
 #include <optional>
+#include <mutex>
 #include <string>
 #include <vector>
 
@@ -46,6 +49,14 @@ struct AssetEntry final {
 struct AssetCatalog final {
     std::vector<AssetEntry> files;
     std::vector<std::filesystem::path> folders;
+};
+
+struct TextureCookJob final {
+    std::atomic<bool> running{};
+    Engine::Assets::TextureCookProgress progress;
+    std::mutex resultMutex;
+    std::optional<Engine::Assets::TextureCookSummary> result;
+    Engine::TaskHandle task;
 };
 
 std::string lower(std::string value) {
@@ -388,6 +399,7 @@ Engine::Entity AssetManagerPanel::draw(Engine::ScenePreset& scene, Engine::Asset
     static bool gridView = true;
     static bool showInspector = true;
     static std::filesystem::path deleteCandidate;
+    static TextureCookJob cookJob;
     bool openDeletePopup = false;
     Engine::Entity created = Engine::NullEntity;
 
@@ -439,6 +451,29 @@ Engine::Entity AssetManagerPanel::draw(Engine::ScenePreset& scene, Engine::Asset
         }
     };
 
+    if (cookJob.task && cookJob.task.ready()) {
+        std::optional<Engine::Assets::TextureCookSummary> summary;
+        {
+            std::scoped_lock lock(cookJob.resultMutex);
+            summary = std::move(cookJob.result);
+        }
+        cookJob.task = {};
+        cookJob.running.store(false, std::memory_order_release);
+        if (summary) {
+            refresh();
+            if (summary->failed == 0) {
+                Editor::ConsolePanel::info("Cooked " + std::to_string(summary->cooked) + " textures; skipped " +
+                                           std::to_string(summary->skipped) + " unchanged of " +
+                                           std::to_string(summary->discovered) + ".");
+            } else {
+                Editor::ConsolePanel::error("Cooked " + std::to_string(summary->cooked) + "/" +
+                                            std::to_string(summary->discovered) + " textures; skipped " +
+                                            std::to_string(summary->skipped) + "; " +
+                                            std::to_string(summary->failed) + " failed.\n" + summary->errors);
+            }
+        }
+    }
+
     ImGui::Begin("Asset Manager", &isOpen);
     ImGui::BeginDisabled(selectedFolder.empty());
     if (ImGui::Button("<##asset-up")) {
@@ -454,23 +489,37 @@ Engine::Entity AssetManagerPanel::draw(Engine::ScenePreset& scene, Engine::Asset
     if (ImGui::IsItemHovered())
     ImGui::SetTooltip("Refresh assets");
     ImGui::SameLine();
-    ImGui::BeginDisabled(!projectIsOpen);
+    ImGui::BeginDisabled(!projectIsOpen || cookJob.running.load(std::memory_order_acquire));
     if (ImGui::Button("Compress all textures##asset-compress"))
         ImGui::OpenPopup("##asset-compress-confirm");
     if (ImGui::BeginPopupModal("##asset-compress-confirm", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
-        ImGui::TextWrapped("Generate or overwrite .gtex files for every PNG, JPEG, TGA, and BMP texture in Assets?");
-        ImGui::TextDisabled("The source images are kept unchanged. This can take a while.");
+        ImGui::TextWrapped("Generate .gtex files for every new or changed PNG, JPEG, TGA, and BMP texture in Assets?");
+        ImGui::TextDisabled("Unchanged .gtex files are skipped. This can take a while.");
         if (ImGui::Button("Compress all")) {
-            const auto summary = Engine::Assets::cook_all_textures(root);
-            refresh();
-            if (summary.failed == 0) {
-                Editor::ConsolePanel::info("Cooked " + std::to_string(summary.cooked) + " of " +
-                                           std::to_string(summary.discovered) + " textures to GTEX.");
-            } else {
-                Editor::ConsolePanel::error("Cooked " + std::to_string(summary.cooked) + "/" +
-                                            std::to_string(summary.discovered) + " textures; " +
-                                            std::to_string(summary.failed) + " failed.\n" + summary.errors);
+            cookJob.progress.discovered.store(0, std::memory_order_release);
+            cookJob.progress.completed.store(0, std::memory_order_release);
+            {
+                std::scoped_lock lock(cookJob.resultMutex);
+                cookJob.result.reset();
             }
+            cookJob.running.store(true, std::memory_order_release);
+            auto* job = &cookJob;
+            cookJob.task = Engine::TaskScheduler::global().schedule([job, root] {
+                Engine::Assets::TextureCookSummary summary;
+                try {
+                    summary = Engine::Assets::cook_all_textures(root, &job->progress);
+                } catch (const std::exception& exception) {
+                    summary.failed = 1;
+                    summary.errors = exception.what();
+                } catch (...) {
+                    summary.failed = 1;
+                    summary.errors = "Unknown error while cooking textures";
+                }
+                {
+                    std::scoped_lock lock(job->resultMutex);
+                    job->result = std::move(summary);
+                }
+            }, Engine::TaskPriority::Low);
             ImGui::CloseCurrentPopup();
         }
         ImGui::SameLine();
@@ -478,6 +527,13 @@ Engine::Entity AssetManagerPanel::draw(Engine::ScenePreset& scene, Engine::Asset
         ImGui::EndPopup();
     }
     ImGui::EndDisabled();
+    if (cookJob.running.load(std::memory_order_acquire)) {
+        const auto discovered = cookJob.progress.discovered.load(std::memory_order_acquire);
+        const auto completed = cookJob.progress.completed.load(std::memory_order_acquire);
+        ImGui::Text("Compressing textures: %u / %u", completed, discovered);
+        ImGui::ProgressBar(discovered == 0 ? 0.0F : static_cast<float>(completed) / discovered,
+                           {-1.0F, 0.0F});
+    }
     ImGui::SameLine();
     ImGui::BeginDisabled(!projectIsOpen);
     if (ImGui::Button("Import...##asset-import"))

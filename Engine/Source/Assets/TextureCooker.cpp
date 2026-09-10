@@ -12,6 +12,7 @@
 #include <stdexcept>
 #include <string_view>
 #include <system_error>
+#include <thread>
 #include <vector>
 
 namespace Engine::Assets {
@@ -56,8 +57,19 @@ namespace Engine::Assets {
                             const std::uint32_t height, std::vector<std::uint8_t>& destination) {
             const std::uint32_t blocksWide = (width + 3) / 4;
             const std::uint32_t blocksHigh = (height + 3) / 4;
-            std::array<std::uint8_t, 64> block{};
-            for (std::uint32_t by = 0; by < blocksHigh; ++by) for (std::uint32_t bx = 0; bx < blocksWide; ++bx) {
+            const std::uint32_t blockCount = blocksWide * blocksHigh;
+            destination.resize(destination.size() + static_cast<std::size_t>(blockCount) * 16);
+            const auto output = destination.data() + destination.size() - static_cast<std::size_t>(blockCount) * 16;
+            std::atomic<bool> failed{};
+            const std::size_t logicalCores = std::thread::hardware_concurrency();
+            // This function already runs inside the low-priority cook task. Limit
+            // BC7 workers so the editor and render driver retain CPU capacity.
+            const std::size_t workerCount = std::min<std::size_t>(3, logicalCores > 2 ? logicalCores - 2 : 1);
+            const auto encodeRange = [&](const std::uint32_t first, const std::uint32_t last) {
+                std::array<std::uint8_t, 64> block{};
+                for (std::uint32_t index = first; index < last; ++index) {
+                    const std::uint32_t bx = index % blocksWide;
+                    const std::uint32_t by = index / blocksWide;
                 for (std::uint32_t y = 0; y < 4; ++y) for (std::uint32_t x = 0; x < 4; ++x) {
                     const auto sourceX = std::min(width - 1, bx * 4 + x);
                     const auto sourceY = std::min(height - 1, by * 4 + y);
@@ -65,11 +77,21 @@ namespace Engine::Assets {
                     const auto blockOffset = (static_cast<std::size_t>(y) * 4 + x) * 4;
                     std::copy_n(rgba.data() + sourceOffset, 4, block.data() + blockOffset);
                 }
-                const auto outputOffset = destination.size();
-                destination.resize(outputOffset + 16);
-                if (CompressBlockBC7(block.data(), 16, destination.data() + outputOffset) != 0)
-                    throw std::runtime_error("Compressonator could not encode a BC7 block");
+                    if (CompressBlockBC7(block.data(), 16, output + static_cast<std::size_t>(index) * 16) != 0)
+                        failed.store(true, std::memory_order_relaxed);
+                }
+            };
+            std::vector<std::jthread> workers;
+            workers.reserve(workerCount);
+            for (std::size_t worker = 0; worker < workerCount; ++worker) {
+                const auto first = static_cast<std::uint32_t>(static_cast<std::uint64_t>(blockCount) * worker / workerCount);
+                const auto last = static_cast<std::uint32_t>(static_cast<std::uint64_t>(blockCount) * (worker + 1) / workerCount);
+                workers.emplace_back(encodeRange, first, last);
             }
+            // jthread destruction joins all workers before their output is used.
+            workers.clear();
+            if (failed.load(std::memory_order_relaxed))
+                throw std::runtime_error("Compressonator could not encode a BC7 block");
         }
 
         [[nodiscard]] bool source_texture(const std::filesystem::path& path) {
@@ -115,7 +137,7 @@ namespace Engine::Assets {
         return result;
     }
 
-    TextureCookSummary cook_all_textures(const std::filesystem::path& assetRoot) {
+    TextureCookSummary cook_all_textures(const std::filesystem::path& assetRoot, TextureCookProgress* progress) {
         TextureCookSummary summary;
         std::error_code error;
         for (std::filesystem::recursive_directory_iterator it{assetRoot,
@@ -129,6 +151,19 @@ namespace Engine::Assets {
             }
             if (!it->is_regular_file(error) || !source_texture(it->path())) continue;
             ++summary.discovered;
+            if (progress != nullptr)
+                progress->discovered.store(summary.discovered, std::memory_order_release);
+            auto output = it->path();
+            output.replace_extension(".gtex");
+            const auto sourceTime = std::filesystem::last_write_time(it->path(), error);
+            const auto outputTime = std::filesystem::last_write_time(output, error);
+            if (!error && outputTime >= sourceTime) {
+                ++summary.skipped;
+                if (progress != nullptr)
+                    progress->completed.fetch_add(1, std::memory_order_release);
+                continue;
+            }
+            error.clear();
             int width{};
             int height{};
             int channels{};
@@ -137,6 +172,8 @@ namespace Engine::Assets {
                 summary.errors += it->path().string() + ": cannot decode image\n";
                 stbi_image_free(pixels);
                 ++summary.failed;
+                if (progress != nullptr)
+                    progress->completed.fetch_add(1, std::memory_order_release);
                 continue;
             }
             try {
@@ -144,8 +181,6 @@ namespace Engine::Assets {
                 const auto cooked = cook_bc7(std::span<const std::uint8_t>{pixels, count},
                                               static_cast<std::uint32_t>(width), static_cast<std::uint32_t>(height),
                                               !linear_texture(it->path()));
-                auto output = it->path();
-                output.replace_extension(".gtex");
                 if (!save_gtex(output, cooked)) throw std::runtime_error("could not write " + output.string());
                 ++summary.cooked;
             } catch (const std::exception& exception) {
@@ -153,6 +188,8 @@ namespace Engine::Assets {
                 ++summary.failed;
             }
             stbi_image_free(pixels);
+            if (progress != nullptr)
+                progress->completed.fetch_add(1, std::memory_order_release);
         }
         return summary;
     }
