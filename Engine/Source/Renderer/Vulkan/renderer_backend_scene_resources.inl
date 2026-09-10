@@ -1506,10 +1506,8 @@
         }
 
         void createSceneUniformBuffers() {
-            for (Buffer& buffer : sceneUniformBuffers) {
-                buffer.createHostVisible(vulkanDevice.physical(), device, sizeof(UniformBufferObject),
-                                         VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT, vulkanDevice.allocator());
-            }
+            // Scene descriptor sets bind ViewRenderScratchResources::uniformBuffers.
+            // The storage is created once by createUniformBuffers().
         }
 
         VkPipeline createComputePipeline(const char* shaderPath, VkPipelineLayout layout) const {

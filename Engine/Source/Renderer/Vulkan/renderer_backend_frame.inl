@@ -509,7 +509,7 @@
                 vkCmdFillBuffer(commandBuffer, lists.visibleClusterCount.handle(), 0, VK_WHOLE_SIZE, 0);
                 vkCmdFillBuffer(commandBuffer, lists.bladeCullDispatch.handle(), sizeof(uint32_t), sizeof(uint32_t), 0);
                 vkCmdFillBuffer(commandBuffer, lists.classifyCounts.handle(), 0, VK_WHOLE_SIZE, 0);
-                vkCmdFillBuffer(commandBuffer, lists.binCounts.handle(), 0, VK_WHOLE_SIZE, 0); vkCmdFillBuffer(commandBuffer, lists.binCursors.handle(), 0, VK_WHOLE_SIZE, 0);
+                vkCmdFillBuffer(commandBuffer, lists.binCounts[0].handle(), 0, VK_WHOLE_SIZE, 0); vkCmdFillBuffer(commandBuffer, lists.binCursors[0].handle(), 0, VK_WHOLE_SIZE, 0);
                 vkCmdFillBuffer(commandBuffer, lists.mainDrawCount.handle(), 0, sizeof(uint32_t), 0);
                 const VkMemoryBarrier2 transferToCompute{VK_STRUCTURE_TYPE_MEMORY_BARRIER_2, nullptr, VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT, VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_STORAGE_READ_BIT | VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT};
                 const VkDependencyInfo dependency{.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO, .memoryBarrierCount = 1, .pMemoryBarriers = &transferToCompute}; vkCmdPipelineBarrier2(commandBuffer, &dependency);
@@ -759,7 +759,7 @@
                     Culling::IndexedIndirectDrawCount grassDraw;
                     grassDraw.create(lists.mainIndirect.handle(), lists.mainDrawCount.handle(),
                                      static_cast<uint32_t>(std::max<std::size_t>(1, sceneGpu.grassClusters.size())));
-                    sceneDescriptorPass.setGrassVisibleInstances(currentFrame, lists.drawInstances.handle());
+                    sceneDescriptorPass.setGrassVisibleInstances(currentFrame, lists.drawInstances[0].handle());
                     sceneForwardPass.drawGrass(commandBuffer, sceneDescriptorPass.grassDescriptorSet(currentFrame), grassDraw);
                 }
                 sceneSkyPass.record(commandBuffer, currentFrame);

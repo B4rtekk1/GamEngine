@@ -47,9 +47,6 @@
                 for (Buffer& uniformBuffer : uniformBuffers) {
                     uniformBuffer.destroy();
                 }
-                for (Buffer& uniformBuffer : sceneUniformBuffers) {
-                    uniformBuffer.destroy();
-                }
                 fpsFontTexture.destroy();
                 for (Texture2D& texture : materialTextures) {
                     texture.destroy();

@@ -566,9 +566,6 @@ namespace Engine {
             for (Buffer &buffer: uniformBuffers) {
                 buffer.destroy();
             }
-            for (Buffer &buffer: sceneUniformBuffers) {
-                buffer.destroy();
-            }
             for (Texture2D &texture: materialTextures) {
                 texture.destroy();
             }

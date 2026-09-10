@@ -165,47 +165,50 @@
             Buffer velocityIndirect;
             Buffer velocityDrawCount;
         };
-        std::array<GrassRenderLists, MAX_FRAMES_IN_FLIGHT> grassRenderLists;
-        struct SceneGrassRenderLists final {
-            Buffer visibleInstances;
-            Buffer visibleCount;
-            Buffer visibleClusters;
-            Buffer visibleClusterCount;
-            Buffer bladeCullDispatch;
-            Buffer dispatchIndirect;
-            Buffer mainVisibleInstances;
-            Buffer classifyCounts;
-            Buffer binCounts;
-            Buffer binOffsets;
-            Buffer binCursors;
-            Buffer drawInstances;
-            Buffer mainIndirect;
-            Buffer mainDrawCount;
-        };
-        // Scene View has an independent camera, so packed grass cannot share
-        // the Game View's visibility or indirect-command buffers.
-        std::array<SceneGrassRenderLists, MAX_FRAMES_IN_FLIGHT> sceneGrassRenderLists;
+        // Game View and Scene View are never recorded as visible render paths
+        // in the same frame. Keep one physical scratch allocation and let the
+        // per-view descriptor sets select its contents with their own camera.
+        // Scene View retains only its final color target for ImGui caching.
+        struct ViewRenderScratchResources final {
+            std::array<GrassRenderLists, MAX_FRAMES_IN_FLIGHT> grassRenderLists;
+            std::array<Buffer, MAX_FRAMES_IN_FLIGHT> grassClassifyUniformBuffers;
+            std::array<Buffer, MAX_FRAMES_IN_FLIGHT> grassPackedCullUniformBuffers;
+            std::array<std::array<Buffer, 3>, MAX_FRAMES_IN_FLIGHT> grassPackedStreamUniformBuffers;
+            std::array<Buffer, MAX_FRAMES_IN_FLIGHT> uniformBuffers;
+            std::array<Buffer, MAX_FRAMES_IN_FLIGHT> cullingUniformBuffers;
+            std::array<Buffer, MAX_FRAMES_IN_FLIGHT> foliageCullingUniformBuffers;
+            std::array<Buffer, MAX_FRAMES_IN_FLIGHT> indirectBuffers;
+            std::array<Buffer, MAX_FRAMES_IN_FLIGHT> foliageIndirectBuffers;
+            std::array<Buffer, MAX_FRAMES_IN_FLIGHT> drawCountBuffers;
+            std::array<Buffer, MAX_FRAMES_IN_FLIGHT> foliageDrawCountBuffers;
+        } viewRenderScratch;
+        std::array<GrassRenderLists, MAX_FRAMES_IN_FLIGHT>& grassRenderLists =
+            viewRenderScratch.grassRenderLists;
+        // Compatibility names keep independent descriptor-set wiring explicit,
+        // while referring to the same physical scratch storage.
+        std::array<GrassRenderLists, MAX_FRAMES_IN_FLIGHT>& sceneGrassRenderLists =
+            viewRenderScratch.grassRenderLists;
         std::array<Buffer, MAX_FRAMES_IN_FLIGHT> grassIndirectUniformBuffers;
         std::array<Buffer, MAX_FRAMES_IN_FLIGHT> grassPrefixUniformBuffers;
-        std::array<Buffer, MAX_FRAMES_IN_FLIGHT> grassClassifyUniformBuffers;
-        std::array<Buffer, MAX_FRAMES_IN_FLIGHT> grassPackedCullUniformBuffers;
-        std::array<std::array<Buffer, 3>, MAX_FRAMES_IN_FLIGHT> grassPackedStreamUniformBuffers;
-        std::array<Buffer, MAX_FRAMES_IN_FLIGHT> sceneGrassClassifyUniformBuffers;
-        std::array<Buffer, MAX_FRAMES_IN_FLIGHT> sceneGrassPackedCullUniformBuffers;
-        std::array<std::array<Buffer, 3>, MAX_FRAMES_IN_FLIGHT> sceneGrassPackedStreamUniformBuffers;
-        std::array<Buffer, MAX_FRAMES_IN_FLIGHT> uniformBuffers;
-        std::array<Buffer, MAX_FRAMES_IN_FLIGHT> sceneUniformBuffers;
+        std::array<Buffer, MAX_FRAMES_IN_FLIGHT>& grassClassifyUniformBuffers = viewRenderScratch.grassClassifyUniformBuffers;
+        std::array<Buffer, MAX_FRAMES_IN_FLIGHT>& grassPackedCullUniformBuffers = viewRenderScratch.grassPackedCullUniformBuffers;
+        std::array<std::array<Buffer, 3>, MAX_FRAMES_IN_FLIGHT>& grassPackedStreamUniformBuffers = viewRenderScratch.grassPackedStreamUniformBuffers;
+        std::array<Buffer, MAX_FRAMES_IN_FLIGHT>& sceneGrassClassifyUniformBuffers = viewRenderScratch.grassClassifyUniformBuffers;
+        std::array<Buffer, MAX_FRAMES_IN_FLIGHT>& sceneGrassPackedCullUniformBuffers = viewRenderScratch.grassPackedCullUniformBuffers;
+        std::array<std::array<Buffer, 3>, MAX_FRAMES_IN_FLIGHT>& sceneGrassPackedStreamUniformBuffers = viewRenderScratch.grassPackedStreamUniformBuffers;
+        std::array<Buffer, MAX_FRAMES_IN_FLIGHT>& uniformBuffers = viewRenderScratch.uniformBuffers;
+        std::array<Buffer, MAX_FRAMES_IN_FLIGHT>& sceneUniformBuffers = viewRenderScratch.uniformBuffers;
         std::array<Buffer, MAX_FRAMES_IN_FLIGHT> cullingObjectBuffers;
-        std::array<Buffer, MAX_FRAMES_IN_FLIGHT> cullingUniformBuffers;
-        std::array<Buffer, MAX_FRAMES_IN_FLIGHT> foliageCullingUniformBuffers;
-        std::array<Buffer, MAX_FRAMES_IN_FLIGHT> sceneCullingUniformBuffers;
-        std::array<Buffer, MAX_FRAMES_IN_FLIGHT> sceneFoliageCullingUniformBuffers;
+        std::array<Buffer, MAX_FRAMES_IN_FLIGHT>& cullingUniformBuffers = viewRenderScratch.cullingUniformBuffers;
+        std::array<Buffer, MAX_FRAMES_IN_FLIGHT>& foliageCullingUniformBuffers = viewRenderScratch.foliageCullingUniformBuffers;
+        std::array<Buffer, MAX_FRAMES_IN_FLIGHT>& sceneCullingUniformBuffers = viewRenderScratch.cullingUniformBuffers;
+        std::array<Buffer, MAX_FRAMES_IN_FLIGHT>& sceneFoliageCullingUniformBuffers = viewRenderScratch.foliageCullingUniformBuffers;
         std::array<Buffer, MAX_FRAMES_IN_FLIGHT> shadowCullingUniformBuffers;
         std::array<Buffer, MAX_FRAMES_IN_FLIGHT> shadowTwoSidedCullingUniformBuffers;
-        std::array<Buffer, MAX_FRAMES_IN_FLIGHT> indirectBuffers;
-        std::array<Buffer, MAX_FRAMES_IN_FLIGHT> foliageIndirectBuffers;
-        std::array<Buffer, MAX_FRAMES_IN_FLIGHT> sceneIndirectBuffers;
-        std::array<Buffer, MAX_FRAMES_IN_FLIGHT> sceneFoliageIndirectBuffers;
+        std::array<Buffer, MAX_FRAMES_IN_FLIGHT>& indirectBuffers = viewRenderScratch.indirectBuffers;
+        std::array<Buffer, MAX_FRAMES_IN_FLIGHT>& foliageIndirectBuffers = viewRenderScratch.foliageIndirectBuffers;
+        std::array<Buffer, MAX_FRAMES_IN_FLIGHT>& sceneIndirectBuffers = viewRenderScratch.indirectBuffers;
+        std::array<Buffer, MAX_FRAMES_IN_FLIGHT>& sceneFoliageIndirectBuffers = viewRenderScratch.foliageIndirectBuffers;
         std::array<Buffer, MAX_FRAMES_IN_FLIGHT> shadowIndirectBuffers;
         std::array<Buffer, MAX_FRAMES_IN_FLIGHT> shadowTwoSidedIndirectBuffers;
         // Four compact caster-ID streams, one for each shadow clip level.
@@ -215,10 +218,10 @@
         std::array<Buffer, MAX_FRAMES_IN_FLIGHT> shadowTwoSidedCandidateCountBuffers;
         std::array<Buffer, MAX_FRAMES_IN_FLIGHT> shadowCandidateDispatchBuffers;
         std::array<Buffer, MAX_FRAMES_IN_FLIGHT> shadowTwoSidedCandidateDispatchBuffers;
-        std::array<Buffer, MAX_FRAMES_IN_FLIGHT> drawCountBuffers;
-        std::array<Buffer, MAX_FRAMES_IN_FLIGHT> foliageDrawCountBuffers;
-        std::array<Buffer, MAX_FRAMES_IN_FLIGHT> sceneDrawCountBuffers;
-        std::array<Buffer, MAX_FRAMES_IN_FLIGHT> sceneFoliageDrawCountBuffers;
+        std::array<Buffer, MAX_FRAMES_IN_FLIGHT>& drawCountBuffers = viewRenderScratch.drawCountBuffers;
+        std::array<Buffer, MAX_FRAMES_IN_FLIGHT>& foliageDrawCountBuffers = viewRenderScratch.foliageDrawCountBuffers;
+        std::array<Buffer, MAX_FRAMES_IN_FLIGHT>& sceneDrawCountBuffers = viewRenderScratch.drawCountBuffers;
+        std::array<Buffer, MAX_FRAMES_IN_FLIGHT>& sceneFoliageDrawCountBuffers = viewRenderScratch.foliageDrawCountBuffers;
         std::array<Buffer, MAX_FRAMES_IN_FLIGHT> shadowDrawCountBuffers;
         std::array<Buffer, MAX_FRAMES_IN_FLIGHT> shadowTwoSidedDrawCountBuffers;
         std::array<Culling::GPUCullingPass, MAX_FRAMES_IN_FLIGHT> gpuCullingPasses;
