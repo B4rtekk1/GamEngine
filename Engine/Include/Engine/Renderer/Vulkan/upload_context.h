@@ -33,7 +33,7 @@ public:
 
     UploadContext() = default; ~UploadContext();
     UploadContext(const UploadContext&) = delete; UploadContext& operator=(const UploadContext&) = delete;
-    void create(VkDevice device, VkQueue queue, uint32_t family, VmaAllocator allocator, VkDeviceSize bytes = 64ull * 1024 * 1024);
+    void create(VkDevice device, VkQueue queue, uint32_t family, VmaAllocator allocator, VkDeviceSize bytes = 32ull * 1024 * 1024);
     void destroy() noexcept;
     /// Starts an explicit upload batch. Resources created while it is active
     /// append their copy commands instead of submitting independently.
@@ -48,6 +48,7 @@ public:
     [[nodiscard]] uint64_t completedValue() const noexcept;
     [[nodiscard]] VkSemaphore timeline() const noexcept { return timeline_; }
     [[nodiscard]] bool recording() const noexcept { return recording_; }
+    [[nodiscard]] VkDeviceSize capacity() const noexcept { return capacity_; }
     static UploadContext* current() noexcept;
     static void setCurrent(UploadContext* context) noexcept;
 private:

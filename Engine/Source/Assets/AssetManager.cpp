@@ -342,21 +342,21 @@ namespace Engine::Assets {
         manager.register_loader<BinaryAsset>(AssetType::Binary, binary_loader);
         manager.register_loader<TextureAsset>(AssetType::Texture2D, [](const auto &path, const auto &) {
             if (path.extension() == ".gtex" || path.extension() == ".GTEX") {
-                const auto cooked = load_gtex(path);
+                auto cooked = load_gtex(path);
                 if (!cooked) return std::shared_ptr<const TextureAsset>{};
                 TextureAsset texture;
                 texture.width = cooked->width;
                 texture.height = cooked->height;
-                texture.cooked = *cooked;
+                texture.cooked.emplace(std::move(*cooked));
                 return std::make_shared<const TextureAsset>(std::move(texture));
             }
             auto cookedPath = path;
             cookedPath.replace_extension(".gtex");
-            if (const auto cooked = load_gtex(cookedPath)) {
+            if (auto cooked = load_gtex(cookedPath)) {
                 TextureAsset texture;
                 texture.width = cooked->width;
                 texture.height = cooked->height;
-                texture.cooked = *cooked;
+                texture.cooked.emplace(std::move(*cooked));
                 return std::make_shared<const TextureAsset>(std::move(texture));
             }
             int width{};

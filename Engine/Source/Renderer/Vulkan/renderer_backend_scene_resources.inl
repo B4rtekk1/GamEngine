@@ -371,13 +371,17 @@
                     vertexBuffer.uploadDeviceLocal(packedVertices.data(),
                         sizeof(GpuVertex) * packedVertices.size(), sizeof(GpuVertex) * upload.firstVertex,
                         commandPool, vulkanDevice.graphicsQueue());
-                    const VkDeviceSize indexBytes = sizeof(std::uint32_t) * upload.mesh->indices.size();
-                    const auto slice = uploadContext.allocate(indexBytes, alignof(std::uint32_t));
-                    auto* const indices = static_cast<std::uint32_t*>(slice.mapped);
-                    for (std::size_t i = 0; i < upload.mesh->indices.size(); ++i)
-                        indices[i] = upload.firstVertex + upload.mesh->indices[i];
-                    indexBuffer.copyFromUploadRing(slice.buffer, slice.offset, indexBytes,
-                        sizeof(std::uint32_t) * upload.firstIndex);
+                    const auto indicesPerChunk = static_cast<std::size_t>(uploadContext.capacity() / sizeof(std::uint32_t));
+                    for (std::size_t first = 0; first < upload.mesh->indices.size(); first += indicesPerChunk) {
+                        const auto count = std::min(indicesPerChunk, upload.mesh->indices.size() - first);
+                        const auto bytes = static_cast<VkDeviceSize>(sizeof(std::uint32_t) * count);
+                        const auto slice = uploadContext.allocate(bytes, alignof(std::uint32_t));
+                        auto* const indices = static_cast<std::uint32_t*>(slice.mapped);
+                        for (std::size_t i = 0; i < count; ++i)
+                            indices[i] = upload.firstVertex + upload.mesh->indices[first + i];
+                        indexBuffer.copyFromUploadRing(slice.buffer, slice.offset, bytes,
+                            sizeof(std::uint32_t) * (upload.firstIndex + first));
+                    }
                 }
             }
             registry.view<Transform, MeshRenderer>(

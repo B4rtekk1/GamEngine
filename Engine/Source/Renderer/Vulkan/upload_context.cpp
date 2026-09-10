@@ -1,5 +1,6 @@
 #include "Engine/Renderer/Vulkan/upload_context.h"
 #include <cstring>
+#include <cstddef>
 #include <stdexcept>
 #include <algorithm>
 #include <utility>
@@ -67,7 +68,19 @@ void UploadContext::begin() {
     recording_ = true;
 }
 UploadContext::Slice UploadContext::allocate(VkDeviceSize size,VkDeviceSize alignment) { if(!recording_ || size>capacity_) throw std::runtime_error("Invalid upload-ring allocation"); auto offset=(head_+alignment-1)&~(alignment-1); if(offset+size>capacity_){ const UploadTicket ticket=submit(); VkSemaphoreWaitInfo wait{VK_STRUCTURE_TYPE_SEMAPHORE_WAIT_INFO}; wait.semaphoreCount=1; wait.pSemaphores=&timeline_; wait.pValues=&ticket.timelineValue; vkWaitSemaphores(device_,&wait,UINT64_MAX); reclaim(); begin(); offset=0; } head_=offset+size; return {staging_,offset,static_cast<char*>(mapped_)+offset}; }
-void UploadContext::copyBuffer(VkBuffer dst,const void* data,VkDeviceSize size,VkDeviceSize dstOffset) { auto slice=allocate(size); std::memcpy(slice.mapped,data,static_cast<size_t>(size)); VkBufferCopy copy{slice.offset,dstOffset,size}; vkCmdCopyBuffer(commandBuffer_,staging_,dst,1,&copy); }
+void UploadContext::copyBuffer(VkBuffer dst,const void* data,VkDeviceSize size,VkDeviceSize dstOffset) {
+    const auto* source = static_cast<const std::byte*>(data);
+    while (size != 0) {
+        const VkDeviceSize chunkSize = std::min(size, capacity_);
+        const auto slice = allocate(chunkSize);
+        std::memcpy(slice.mapped, source, static_cast<size_t>(chunkSize));
+        const VkBufferCopy copy{slice.offset, dstOffset, chunkSize};
+        vkCmdCopyBuffer(commandBuffer_, staging_, dst, 1, &copy);
+        source += chunkSize;
+        dstOffset += chunkSize;
+        size -= chunkSize;
+    }
+}
 UploadTicket UploadContext::pendingTicket() const noexcept { return recording_ ? UploadTicket{nextValue_} : UploadTicket{}; }
 UploadTicket UploadContext::submit() {
     if (commandBuffer_ == VK_NULL_HANDLE) return {};

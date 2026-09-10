@@ -25,6 +25,84 @@ namespace Engine {
             throw std::invalid_argument("Unknown cooked texture format");
         }
 
+        void copy_pixels_in_chunks(UploadContext& upload, VkImage image, const std::uint32_t width,
+                                   const std::uint32_t height, const std::size_t bytesPerPixel,
+                                   const std::span<const std::uint8_t> pixels) {
+            const auto pixelsPerChunk = std::max<VkDeviceSize>(1, upload.capacity() / bytesPerPixel);
+            for (std::uint32_t y = 0; y < height;) {
+                const auto chunkWidth = static_cast<std::uint32_t>(std::min<VkDeviceSize>(width, pixelsPerChunk));
+                const auto chunkHeight = static_cast<std::uint32_t>(std::min<VkDeviceSize>(height - y, pixelsPerChunk / chunkWidth));
+                for (std::uint32_t x = 0; x < width; x += chunkWidth) {
+                    const auto actualWidth = std::min(chunkWidth, width - x);
+                    const std::size_t chunkBytes = static_cast<std::size_t>(actualWidth) * chunkHeight * bytesPerPixel;
+                    const auto slice = upload.allocate(chunkBytes, 16);
+                    auto* destination = static_cast<std::uint8_t*>(slice.mapped);
+                    for (std::uint32_t row = 0; row < chunkHeight; ++row) {
+                        const auto sourceOffset = (static_cast<std::size_t>(y + row) * width + x) * bytesPerPixel;
+                        std::memcpy(destination + static_cast<std::size_t>(row) * actualWidth * bytesPerPixel,
+                                    pixels.data() + sourceOffset, static_cast<std::size_t>(actualWidth) * bytesPerPixel);
+                    }
+                    VkBufferImageCopy copy{};
+                    copy.bufferOffset = slice.offset;
+                    copy.bufferRowLength = actualWidth;
+                    copy.bufferImageHeight = chunkHeight;
+                    copy.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+                    copy.imageOffset = {static_cast<std::int32_t>(x), static_cast<std::int32_t>(y), 0};
+                    copy.imageExtent = {actualWidth, chunkHeight, 1};
+                    vkCmdCopyBufferToImage(upload.commandBuffer(), slice.buffer, image,
+                                           VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &copy);
+                }
+                y += chunkHeight;
+            }
+        }
+
+        [[nodiscard]] std::uint32_t bytes_per_block(const Assets::TextureFormat format) {
+            if (format == Assets::TextureFormat::RGBA8_SRGB || format == Assets::TextureFormat::RGBA8_UNORM) return 4;
+            return format == Assets::TextureFormat::BC4_UNORM ? 8 : 16;
+        }
+
+        [[nodiscard]] std::uint32_t block_extent(const Assets::TextureFormat format) {
+            return (format == Assets::TextureFormat::RGBA8_SRGB || format == Assets::TextureFormat::RGBA8_UNORM) ? 1 : 4;
+        }
+
+        void copy_cooked_in_chunks(UploadContext& upload, VkImage image, const Assets::CookedTexture& texture) {
+            const auto bytesPerBlock = bytes_per_block(texture.format);
+            const auto blockExtent = block_extent(texture.format);
+            const auto blocksPerChunk = std::max<VkDeviceSize>(1, upload.capacity() / bytesPerBlock);
+            for (std::uint32_t level = 0; level < texture.mips.size(); ++level) {
+                const auto& mip = texture.mips[level];
+                const auto blocksWide = (mip.width + blockExtent - 1) / blockExtent;
+                const auto blocksHigh = (mip.height + blockExtent - 1) / blockExtent;
+                const auto chunkBlocksWide = static_cast<std::uint32_t>(std::min<VkDeviceSize>(blocksWide, blocksPerChunk));
+                const auto chunkBlockRows = static_cast<std::uint32_t>(std::max<VkDeviceSize>(1, blocksPerChunk / chunkBlocksWide));
+                const auto* source = texture.data.data() + static_cast<std::size_t>(mip.offset);
+                for (std::uint32_t blockY = 0; blockY < blocksHigh; blockY += chunkBlockRows) {
+                    const auto actualBlockRows = std::min(chunkBlockRows, blocksHigh - blockY);
+                    for (std::uint32_t blockX = 0; blockX < blocksWide; blockX += chunkBlocksWide) {
+                        const auto actualBlocksWide = std::min(chunkBlocksWide, blocksWide - blockX);
+                        const std::size_t chunkBytes = static_cast<std::size_t>(actualBlocksWide) * actualBlockRows * bytesPerBlock;
+                        const auto slice = upload.allocate(chunkBytes, 16);
+                        auto* destination = static_cast<std::uint8_t*>(slice.mapped);
+                        for (std::uint32_t row = 0; row < actualBlockRows; ++row) {
+                            const auto sourceOffset = (static_cast<std::size_t>(blockY + row) * blocksWide + blockX) * bytesPerBlock;
+                            std::memcpy(destination + static_cast<std::size_t>(row) * actualBlocksWide * bytesPerBlock,
+                                        source + sourceOffset, static_cast<std::size_t>(actualBlocksWide) * bytesPerBlock);
+                        }
+                        VkBufferImageCopy copy{};
+                        copy.bufferOffset = slice.offset;
+                        copy.bufferRowLength = actualBlocksWide * blockExtent;
+                        copy.bufferImageHeight = actualBlockRows * blockExtent;
+                        copy.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, level, 0, 1};
+                        copy.imageOffset = {static_cast<std::int32_t>(blockX * blockExtent), static_cast<std::int32_t>(blockY * blockExtent), 0};
+                        copy.imageExtent = {std::min(actualBlocksWide * blockExtent, mip.width - blockX * blockExtent),
+                                            std::min(actualBlockRows * blockExtent, mip.height - blockY * blockExtent), 1};
+                        vkCmdCopyBufferToImage(upload.commandBuffer(), slice.buffer, image,
+                                               VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &copy);
+                    }
+                }
+            }
+        }
+
         void transitionImage(
             VkCommandBuffer commandBuffer,
             VkImage image,
@@ -137,15 +215,11 @@ Texture2D &Texture2D::operator=(Texture2D &&other) noexcept {
         VkBuffer stagingBuffer = VK_NULL_HANDLE;
         VkDeviceSize stagingOffset = 0;
         VkCommandBuffer commandBuffer = VK_NULL_HANDLE;
-        const bool ownsUploadBatch = upload != nullptr && !upload->recording();
-        try {
-            if (upload != nullptr) {
-                if (ownsUploadBatch) upload->begin();
-                const auto slice = upload->allocate(static_cast<VkDeviceSize>(expectedSize), 16);
-                std::memcpy(slice.mapped, rgbaPixels.data(), expectedSize);
-                stagingBuffer = slice.buffer;
-                stagingOffset = slice.offset;
-                commandBuffer = upload->commandBuffer();
+            const bool ownsUploadBatch = upload != nullptr && !upload->recording();
+            try {
+                if (upload != nullptr) {
+                    if (ownsUploadBatch) upload->begin();
+                    commandBuffer = upload->commandBuffer();
             } else {
                 staging.createHostVisible(physicalDevice, device_, static_cast<VkDeviceSize>(expectedSize), VK_BUFFER_USAGE_TRANSFER_SRC_BIT, allocator);
                 staging.update(rgbaPixels.data(), static_cast<VkDeviceSize>(expectedSize));
@@ -192,13 +266,18 @@ Texture2D &Texture2D::operator=(Texture2D &&other) noexcept {
                 0, VK_ACCESS_TRANSFER_WRITE_BIT,
                 VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT);
 
-            VkBufferImageCopy copy{};
-            copy.bufferOffset = stagingOffset;
-            copy.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
-            copy.imageExtent = {width_, height_, 1};
-            vkCmdCopyBufferToImage(
-                commandBuffer, stagingBuffer, image_,
-                VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &copy);
+            if (upload != nullptr) {
+                copy_pixels_in_chunks(*upload, image_, width_, height_, bytesPerPixel, rgbaPixels);
+                commandBuffer = upload->commandBuffer();
+            } else {
+                VkBufferImageCopy copy{};
+                copy.bufferOffset = stagingOffset;
+                copy.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+                copy.imageExtent = {width_, height_, 1};
+                vkCmdCopyBufferToImage(
+                    commandBuffer, stagingBuffer, image_,
+                    VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &copy);
+            }
 
             std::int32_t mipWidth = static_cast<std::int32_t>(width_);
             std::int32_t mipHeight = static_cast<std::int32_t>(height_);
@@ -294,15 +373,11 @@ Texture2D &Texture2D::operator=(Texture2D &&other) noexcept {
         VkBuffer stagingBuffer = VK_NULL_HANDLE;
         VkDeviceSize stagingOffset = 0;
         VkCommandBuffer commandBuffer = VK_NULL_HANDLE;
-        const bool ownsUploadBatch = upload != nullptr && !upload->recording();
-        try {
-            if (upload != nullptr) {
-                if (ownsUploadBatch) upload->begin();
-                const auto slice = upload->allocate(static_cast<VkDeviceSize>(texture.data.size()), 16);
-                std::memcpy(slice.mapped, texture.data.data(), texture.data.size());
-                stagingBuffer = slice.buffer;
-                stagingOffset = slice.offset;
-                commandBuffer = upload->commandBuffer();
+            const bool ownsUploadBatch = upload != nullptr && !upload->recording();
+            try {
+                if (upload != nullptr) {
+                    if (ownsUploadBatch) upload->begin();
+                    commandBuffer = upload->commandBuffer();
             } else {
                 staging.createHostVisible(physicalDevice, device_, static_cast<VkDeviceSize>(texture.data.size()), VK_BUFFER_USAGE_TRANSFER_SRC_BIT, allocator_);
                 staging.update(texture.data.data(), static_cast<VkDeviceSize>(texture.data.size()));
@@ -340,18 +415,23 @@ Texture2D &Texture2D::operator=(Texture2D &&other) noexcept {
 
             transitionImage(commandBuffer, image_, 0, mipLevels_, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
                             0, VK_ACCESS_TRANSFER_WRITE_BIT, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT);
-            std::vector<VkBufferImageCopy> regions;
-            regions.reserve(texture.mips.size());
-            for (std::uint32_t level = 0; level < mipLevels_; ++level) {
-                const auto& mip = texture.mips[level];
-                VkBufferImageCopy copy{};
-                copy.bufferOffset = stagingOffset + mip.offset;
-                copy.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, level, 0, 1};
-                copy.imageExtent = {mip.width, mip.height, 1};
-                regions.push_back(copy);
+            if (upload != nullptr) {
+                copy_cooked_in_chunks(*upload, image_, texture);
+                commandBuffer = upload->commandBuffer();
+            } else {
+                std::vector<VkBufferImageCopy> regions;
+                regions.reserve(texture.mips.size());
+                for (std::uint32_t level = 0; level < mipLevels_; ++level) {
+                    const auto& mip = texture.mips[level];
+                    VkBufferImageCopy copy{};
+                    copy.bufferOffset = stagingOffset + mip.offset;
+                    copy.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, level, 0, 1};
+                    copy.imageExtent = {mip.width, mip.height, 1};
+                    regions.push_back(copy);
+                }
+                vkCmdCopyBufferToImage(commandBuffer, stagingBuffer, image_, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                                       static_cast<std::uint32_t>(regions.size()), regions.data());
             }
-            vkCmdCopyBufferToImage(commandBuffer, stagingBuffer, image_, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-                                   static_cast<std::uint32_t>(regions.size()), regions.data());
             transitionImage(commandBuffer, image_, 0, mipLevels_, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
                             VK_ACCESS_TRANSFER_WRITE_BIT, VK_ACCESS_SHADER_READ_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT);
             if (upload != nullptr) {
