@@ -103,6 +103,35 @@ namespace Engine {
             }
         }
 
+        void copy_gtex_mips_to_ring(UploadContext& upload, VkImage image, const Assets::GtexTexture& texture,
+                                    const std::uint32_t firstMip) {
+            const auto bytesPerBlock = bytes_per_block(texture.format);
+            const auto blockExtent = block_extent(texture.format);
+            for (std::uint32_t sourceLevel = firstMip; sourceLevel < texture.mips.size(); ++sourceLevel) {
+                const auto& mip = texture.mips[sourceLevel];
+                const auto blocksWide = (mip.width + blockExtent - 1) / blockExtent;
+                const auto blocksHigh = (mip.height + blockExtent - 1) / blockExtent;
+                const auto rowBytes = static_cast<VkDeviceSize>(blocksWide) * bytesPerBlock;
+                const auto rowsPerSlice = std::max<VkDeviceSize>(1, upload.capacity() / rowBytes);
+                for (std::uint32_t blockY = 0; blockY < blocksHigh;) {
+                    const auto rows = static_cast<std::uint32_t>(std::min<VkDeviceSize>(rowsPerSlice, blocksHigh - blockY));
+                    const auto bytes = rowBytes * rows;
+                    const auto slice = upload.allocate(bytes, 16);
+                    auto destination = std::span<std::uint8_t>{static_cast<std::uint8_t*>(slice.mapped), static_cast<std::size_t>(bytes)};
+                    if (!Assets::readMipRange(texture, sourceLevel, static_cast<std::uint64_t>(blockY) * rowBytes, destination))
+                        throw std::runtime_error("Could not read GTEX mip payload into upload ring");
+                    VkBufferImageCopy copy{};
+                    copy.bufferOffset = slice.offset;
+                    copy.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, sourceLevel - firstMip, 0, 1};
+                    copy.imageOffset = {0, static_cast<std::int32_t>(blockY * blockExtent), 0};
+                    copy.imageExtent = {mip.width, std::min(rows * blockExtent, mip.height - blockY * blockExtent), 1};
+                    vkCmdCopyBufferToImage(upload.commandBuffer(), slice.buffer, image,
+                                           VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &copy);
+                    blockY += rows;
+                }
+            }
+        }
+
         void transitionImage(
             VkCommandBuffer commandBuffer,
             VkImage image,
@@ -460,12 +489,84 @@ Texture2D &Texture2D::operator=(Texture2D &&other) noexcept {
         }
     }
 
+    void Texture2D::createGtex(
+        const VkPhysicalDevice physicalDevice, const VkDevice device, const VkCommandPool commandPool,
+        const VkQueue queue, const Assets::GtexTexture& texture, const std::uint32_t firstResidentMip,
+        const VmaAllocator allocator) {
+        if (physicalDevice == VK_NULL_HANDLE || device == VK_NULL_HANDLE || commandPool == VK_NULL_HANDLE || queue == VK_NULL_HANDLE ||
+            allocator == VK_NULL_HANDLE || firstResidentMip >= texture.mips.size())
+            throw std::invalid_argument("Texture2D::createGtex received invalid arguments");
+        UploadContext* const upload = UploadContext::current();
+        if (upload == nullptr) throw std::logic_error("GTEX streaming requires an active UploadContext");
+
+        destroy();
+        device_ = device;
+        allocator_ = allocator;
+        format_ = to_vk_format(texture.format);
+        width_ = texture.mips[firstResidentMip].width;
+        height_ = texture.mips[firstResidentMip].height;
+        mipLevels_ = static_cast<std::uint32_t>(texture.mips.size()) - firstResidentMip;
+        const bool ownsUploadBatch = !upload->recording();
+        try {
+            if (ownsUploadBatch) upload->begin();
+            VkImageCreateInfo imageInfo{VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO};
+            imageInfo.imageType = VK_IMAGE_TYPE_2D;
+            imageInfo.format = format_;
+            imageInfo.extent = {width_, height_, 1};
+            imageInfo.mipLevels = mipLevels_;
+            imageInfo.arrayLayers = 1;
+            imageInfo.samples = VK_SAMPLE_COUNT_1_BIT;
+            imageInfo.tiling = VK_IMAGE_TILING_OPTIMAL;
+            imageInfo.usage = VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
+            imageInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+            VmaAllocationCreateInfo allocationInfo{};
+            allocationInfo.usage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE;
+            if (vmaCreateImage(allocator_, &imageInfo, &allocationInfo, &image_, &allocation_, nullptr) != VK_SUCCESS)
+                throw std::runtime_error("Could not allocate resident GTEX Texture2D image");
+            VmaAllocationInfo allocationDetails{};
+            vmaGetAllocationInfo(allocator_, allocation_, &allocationDetails);
+            memory_ = allocationDetails.deviceMemory;
+
+            transitionImage(upload->commandBuffer(), image_, 0, mipLevels_, VK_IMAGE_LAYOUT_UNDEFINED,
+                            VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 0, VK_ACCESS_TRANSFER_WRITE_BIT,
+                            VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT);
+            copy_gtex_mips_to_ring(*upload, image_, texture, firstResidentMip);
+            transitionImage(upload->commandBuffer(), image_, 0, mipLevels_, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                            VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_ACCESS_TRANSFER_WRITE_BIT,
+                            VK_ACCESS_SHADER_READ_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT);
+            readyTimeline_ = upload->pendingTicket().timelineValue;
+            if (ownsUploadBatch) readyTimeline_ = upload->submit().timelineValue;
+
+            VkImageViewCreateInfo view{VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
+            view.image = image_; view.viewType = VK_IMAGE_VIEW_TYPE_2D; view.format = format_;
+            view.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, mipLevels_, 0, 1};
+            if (vkCreateImageView(device_, &view, nullptr, &imageView_) != VK_SUCCESS)
+                throw std::runtime_error("Could not create resident GTEX image view");
+            VkSamplerCreateInfo samplerInfo{VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO};
+            samplerInfo.magFilter = VK_FILTER_LINEAR; samplerInfo.minFilter = VK_FILTER_LINEAR;
+            samplerInfo.mipmapMode = VK_SAMPLER_MIPMAP_MODE_LINEAR;
+            samplerInfo.addressModeU = VK_SAMPLER_ADDRESS_MODE_REPEAT; samplerInfo.addressModeV = VK_SAMPLER_ADDRESS_MODE_REPEAT;
+            samplerInfo.addressModeW = VK_SAMPLER_ADDRESS_MODE_REPEAT; samplerInfo.maxLod = static_cast<float>(mipLevels_ - 1);
+            if (vkCreateSampler(device_, &samplerInfo, nullptr, &sampler_) != VK_SUCCESS)
+                throw std::runtime_error("Could not create resident GTEX sampler");
+        } catch (...) {
+            destroy();
+            throw;
+        }
+    }
+
     void Texture2D::createFromAsset(
         const VkPhysicalDevice physicalDevice, const VkDevice device, const VkCommandPool commandPool,
         const VkQueue queue, const Assets::TextureAsset& asset, const TextureColorSpace colorSpace,
         const VmaAllocator allocator) {
         if (asset.cooked) {
             createCooked(physicalDevice, device, commandPool, queue, *asset.cooked, allocator);
+            return;
+        }
+        if (asset.gtex) {
+            // Start from the smallest level: a residency manager can promote this later.
+            createGtex(physicalDevice, device, commandPool, queue, *asset.gtex,
+                       static_cast<std::uint32_t>(asset.gtex->mips.size() - 1), allocator);
             return;
         }
         create(physicalDevice, device, commandPool, queue, asset.width, asset.height, asset.rgbaPixels,

@@ -79,12 +79,23 @@ namespace Engine::Assets {
         std::vector<std::uint8_t> data;
     };
 
+    /** A validated GTEX directory.  Payload bytes stay in the source file. */
+    struct GtexTexture {
+        std::filesystem::path path;
+        std::uint32_t width{};
+        std::uint32_t height{};
+        TextureFormat format{TextureFormat::RGBA8_UNORM};
+        std::vector<TextureMip> mips;
+        std::uint64_t payloadOffset{};
+    };
+
     /** Source or GPU-ready texture data. Prefer cooked when it is present. */
     struct TextureAsset {
         std::uint32_t width{};
         std::uint32_t height{};
         std::vector<std::uint8_t> rgbaPixels;
         std::optional<CookedTexture> cooked;
+        std::optional<GtexTexture> gtex;
     };
 
     /** @brief Text contents of an asset file. */

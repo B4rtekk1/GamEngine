@@ -67,6 +67,17 @@
                         materialTextures.push_back(std::move(texture));
                         continue;
                     }
+                    if (image.gtex) {
+                        Texture2D texture;
+                        texture.createGtex(vulkanDevice.physical(), device, commandPool,
+                                           vulkanDevice.graphicsQueue(), *image.gtex,
+                                           static_cast<std::uint32_t>(image.gtex->mips.size() - 1),
+                                           vulkanDevice.allocator());
+                        materialTextureDescriptors[offset + i] = {texture.sampler(), texture.imageView(),
+                                                                    VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
+                        materialTextures.push_back(std::move(texture));
+                        continue;
+                    }
                     if (image.width == 0 || image.height == 0 || image.rgbaPixels.empty()) {
                         materialTextures.emplace_back();
                         continue;
@@ -106,6 +117,17 @@
                         materialTextureDescriptors[offset + i] = {
                             texture.sampler(), texture.imageView(),
                             VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
+                        materialTextures.push_back(std::move(texture));
+                        continue;
+                    }
+                    if (image.gtex) {
+                        Texture2D texture;
+                        texture.createGtex(vulkanDevice.physical(), device, commandPool,
+                                           vulkanDevice.graphicsQueue(), *image.gtex,
+                                           static_cast<std::uint32_t>(image.gtex->mips.size() - 1),
+                                           vulkanDevice.allocator());
+                        materialTextureDescriptors[offset + i] = {texture.sampler(), texture.imageView(),
+                                                                    VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
                         materialTextures.push_back(std::move(texture));
                         continue;
                     }

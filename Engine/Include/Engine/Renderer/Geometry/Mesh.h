@@ -44,6 +44,9 @@ namespace Engine {
             /** GPU-ready data loaded from a cooked .gtex sidecar. */
             std::optional<Assets::CookedTexture> cooked;
 
+            /** Header-only reference to a cooked texture; its payload is streamed at upload time. */
+            std::optional<Assets::GtexTexture> gtex;
+
             /** Path stored by .gmesh, relative to that mesh file. */
             std::filesystem::path cookedPath;
         };
@@ -119,6 +122,7 @@ namespace Engine {
             for (Image& image : images) {
                 std::vector<std::uint8_t>{}.swap(image.rgbaPixels);
                 image.cooked.reset();
+                image.gtex.reset();
             }
             std::vector<Image>{}.swap(images);
         }

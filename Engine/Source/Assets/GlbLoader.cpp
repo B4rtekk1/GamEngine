@@ -203,11 +203,11 @@ void import_texture_transform(PBRMaterial& material, const MaterialTextureSlot s
     for (cgltf_size i = 0; i < data.images_count; ++i) {
         const auto cookedPath = path.parent_path() /
             (path.stem().string() + ".image" + std::to_string(i) + ".gtex");
-        if (preferCooked) if (auto cooked = load_gtex(cookedPath)) {
+        if (preferCooked) if (auto gtex = load_gtex(cookedPath)) {
             Mesh::Image result;
-            result.width = cooked->width;
-            result.height = cooked->height;
-            result.cooked.emplace(std::move(*cooked));
+            result.width = gtex->width;
+            result.height = gtex->height;
+            result.gtex.emplace(std::move(*gtex));
             result.cookedPath = cookedPath.filename();
             mesh.images.push_back(std::move(result));
             continue;

@@ -55,6 +55,12 @@ public:
         const Assets::CookedTexture& texture,
         VmaAllocator allocator = VK_NULL_HANDLE);
 
+    /** Creates a physically smaller resident mip chain and streams it from a GTEX file. */
+    void createGtex(
+        VkPhysicalDevice physicalDevice, VkDevice device, VkCommandPool commandPool, VkQueue queue,
+        const Assets::GtexTexture& texture, std::uint32_t firstResidentMip,
+        VmaAllocator allocator = VK_NULL_HANDLE);
+
     /** Uses the cooked payload when available; decoded RGBA remains a development fallback. */
     void createFromAsset(
         VkPhysicalDevice physicalDevice,

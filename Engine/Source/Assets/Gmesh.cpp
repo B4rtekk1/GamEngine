@@ -41,7 +41,7 @@ std::shared_ptr<const Mesh> load_gmesh(const std::filesystem::path& path) {
     if (!file || !read(file, header) || header.magic != magic || header.version != version || header.vertices > maxElements || header.indices > maxElements || header.materials > maxElements || header.images > maxElements) return {};
     Mesh mesh; mesh.vertices.resize(header.vertices); mesh.indices.resize(header.indices); mesh.materials.resize(header.materials); mesh.images.resize(header.images);
     if (!read_vector(file, mesh.vertices) || !read_vector(file, mesh.indices) || !read_vector(file, mesh.materials)) return {};
-    for (auto& image : mesh.images) { std::uint32_t length{}; if (!read(file, length) || length > 32'768) return {}; std::string text(length, '\0'); file.read(text.data(), length); if (!file) return {}; image.cookedPath = text; auto cooked = load_gtex(path.parent_path() / image.cookedPath); if (!cooked) return {}; image.width = cooked->width; image.height = cooked->height; image.cooked.emplace(std::move(*cooked)); }
+    for (auto& image : mesh.images) { std::uint32_t length{}; if (!read(file, length) || length > 32'768) return {}; std::string text(length, '\0'); file.read(text.data(), length); if (!file) return {}; image.cookedPath = text; auto gtex = load_gtex(path.parent_path() / image.cookedPath); if (!gtex) return {}; image.width = gtex->width; image.height = gtex->height; image.gtex.emplace(std::move(*gtex)); }
     if (mesh.empty()) return {}; mesh.sourcePath = path; return std::make_shared<const Mesh>(std::move(mesh));
 }
 
