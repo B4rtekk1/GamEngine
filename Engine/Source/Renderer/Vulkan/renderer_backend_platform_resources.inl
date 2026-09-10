@@ -376,7 +376,7 @@
 
             if (!particleSystem) {
                 particleSystem = std::make_unique<Particles::ParticleSystem>(
-                    device, vulkanDevice.physical(), vulkanDevice.graphicsQueue(), commandPool, 8192);
+                    device, vulkanDevice.allocator(), vulkanDevice.graphicsQueue(), commandPool, 8192);
                 if (registry.has<SmokeEmitterComponent>(scene.particleEntity())) {
                     auto emitter = registry.get<SmokeEmitterComponent>(scene.particleEntity()).emitter;
                     if (registry.has<Transform>(scene.particleEntity())) { emitter.position = registry.get<Transform>(scene.particleEntity()).position;

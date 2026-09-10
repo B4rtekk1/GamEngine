@@ -45,4 +45,23 @@ TEST(RenderGraphTests, ReusesAllocationSlotForNonOverlappingCompatibleTextures) 
     graph.compile();
     EXPECT_EQ(graph.lifetime(first).allocationSlot, graph.lifetime(second).allocationSlot);
 }
+
+TEST(RenderGraphTests, ReusesAllocationSlotForNonOverlappingCompatibleBuffers) {
+    RenderGraph graph;
+    constexpr BufferDesc scratch{.size = 4096, .usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT};
+    BufferHandle count;
+    BufferHandle scatter;
+    BufferHandle gate;
+    graph.addPass("Count", [&](PassBuilder& builder) { count = builder.writeBuffer("Count", scratch); }, {});
+    graph.addPass("Prefix", [&](PassBuilder& builder) {
+        builder.read(count);
+        gate = builder.writeBuffer("Gate", scratch);
+    }, {});
+    graph.addPass("Scatter", [&](PassBuilder& builder) {
+        builder.read(gate);
+        scatter = builder.writeBuffer("Scatter", scratch);
+    }, {});
+    graph.compile();
+    EXPECT_EQ(graph.lifetime(count).allocationSlot, graph.lifetime(scatter).allocationSlot);
+}
 } // namespace Engine::Renderer

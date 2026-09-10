@@ -1,6 +1,7 @@
 #pragma once
 
 #include <vulkan/vulkan.h>
+#include <vk_mem_alloc.h>
 #include <array>
 #include <cstddef>
 #include <cstdint>
@@ -100,8 +101,7 @@ namespace Engine::Particles {
     public:
         static constexpr uint32_t FramesInFlight = 2;
 
-        ParticleSystem(VkDevice device, VkPhysicalDevice physicalDevice,
-                       VkQueue computeQueue, VkCommandPool commandPool,
+        ParticleSystem(VkDevice device, VmaAllocator allocator, VkQueue computeQueue, VkCommandPool commandPool,
                        uint32_t maxParticles);
 
         ~ParticleSystem();
@@ -144,20 +144,19 @@ namespace Engine::Particles {
         void destroy();
 
         VkDevice device_{};
-        VkPhysicalDevice physicalDevice_{};
+        VmaAllocator allocator_{};
         VkQueue computeQueue_{};
         VkCommandPool commandPool_{};
         static constexpr uint32_t RenderTargets = 2;
         VkBuffer particleBuffer_{};
-        VkDeviceMemory particleMemory_{};
+        VmaAllocation particleMemory_{};
         std::array<std::array<VkBuffer, FramesInFlight>, RenderTargets> frameBuffers_{};
-        std::array<std::array<VkDeviceMemory, FramesInFlight>, RenderTargets> frameMemories_{};
         std::array<VkBuffer, FramesInFlight> activeIndexBuffers_{};
-        std::array<VkDeviceMemory, FramesInFlight> activeIndexMemories_{};
+        std::array<VmaAllocation, FramesInFlight> activeIndexMemories_{};
         std::array<VkBuffer, FramesInFlight> drawBuffers_{};
-        std::array<VkDeviceMemory, FramesInFlight> drawMemories_{};
+        std::array<VmaAllocation, FramesInFlight> drawMemories_{};
         VkBuffer quadBuffer_{};
-        VkDeviceMemory quadMemory_{};
+        VmaAllocation quadMemory_{};
         VkDescriptorSetLayout descriptorSetLayout_{};
         VkDescriptorPool descriptorPool_{};
         std::array<std::array<VkDescriptorSet, FramesInFlight>, RenderTargets> descriptorSets_{};
@@ -166,12 +165,17 @@ namespace Engine::Particles {
         SmokeEmitter smoke_;
         ParticleSimulationData simulation_{};
         std::array<std::array<void *, FramesInFlight>, RenderTargets> frameMapped_{};
+        std::array<VkBuffer, FramesInFlight> smallArenaBuffers_{};
+        std::array<VmaAllocation, FramesInFlight> smallArenaAllocations_{};
+        std::array<void*, FramesInFlight> smallArenaMapped_{};
+        std::array<std::array<VkDeviceSize, FramesInFlight>, RenderTargets> frameOffsets_{};
+        std::array<VkDeviceSize, FramesInFlight> drawOffsets_{};
         void *quadMapped_ = nullptr;
         uint32_t nextSpawnIndex_ = 0;
         uint32_t spawnSeed_ = 0;
         static constexpr uint32_t MaxColliders = 64;
         VkBuffer colliderBuffer_{};
-        VkDeviceMemory colliderMemory_{};
+        VmaAllocation colliderMemory_{};
         void *colliderMapped_ = nullptr;
         std::vector<ParticleCollider> colliders_;
         std::vector<ParticleCollider> activeColliders_;

@@ -27,6 +27,11 @@ namespace Engine::Renderer {
         }
         friend bool operator==(TextureHandle, TextureHandle) = default;
     };
+    struct BufferHandle final {
+        std::uint32_t index{std::numeric_limits<std::uint32_t>::max()};
+        [[nodiscard]] explicit operator bool() const noexcept { return index != std::numeric_limits<std::uint32_t>::max(); }
+        friend bool operator==(BufferHandle, BufferHandle) = default;
+    };
 
     enum class TextureUsage : std::uint8_t {
         SampledRead,
@@ -56,6 +61,13 @@ namespace Engine::Renderer {
         std::uint32_t lastPass{};
         std::uint32_t allocationSlot{};
     };
+    enum class BufferUsage : std::uint8_t { UniformRead, StorageRead, StorageWrite, VertexRead, IndexRead, IndirectRead, TransferRead, TransferWrite };
+    struct BufferDesc final {
+        VkDeviceSize size{};
+        VkBufferUsageFlags usage{};
+        [[nodiscard]] bool compatibleWith(const BufferDesc& other) const noexcept;
+    };
+    struct BufferLifetime final { std::uint32_t firstPass{}; std::uint32_t lastPass{}; std::uint32_t allocationSlot{}; };
 
     class RenderGraph;
 
@@ -65,6 +77,10 @@ namespace Engine::Renderer {
         void write(TextureHandle texture, TextureUsage usage);
         [[nodiscard]] TextureHandle writeTexture(std::string name, const TextureDesc& desc,
                                                   TextureUsage usage = TextureUsage::StorageWrite);
+        void read(BufferHandle buffer, BufferUsage usage = BufferUsage::StorageRead);
+        void write(BufferHandle buffer, BufferUsage usage = BufferUsage::StorageWrite);
+        [[nodiscard]] BufferHandle writeBuffer(std::string name, const BufferDesc& desc,
+                                                BufferUsage usage = BufferUsage::StorageWrite);
 
     private:
         friend class RenderGraph;
@@ -89,6 +105,8 @@ namespace Engine::Renderer {
         [[nodiscard]] TextureHandle importTexture(std::string name, VkImage image,
             const TextureDesc& desc, VkImageLayout initialLayout = VK_IMAGE_LAYOUT_UNDEFINED);
         [[nodiscard]] TextureHandle createTexture(std::string name, const TextureDesc& desc);
+        [[nodiscard]] BufferHandle importBuffer(std::string name, VkBuffer buffer, const BufferDesc& desc);
+        [[nodiscard]] BufferHandle createBuffer(std::string name, const BufferDesc& desc);
 
         void addPass(std::string name, const std::function<void(PassBuilder&)>& setup,
                      ExecuteCallback execute);
@@ -101,10 +119,13 @@ namespace Engine::Renderer {
 
         [[nodiscard]] const std::vector<std::string>& executionOrder() const noexcept;
         [[nodiscard]] const TextureLifetime& lifetime(TextureHandle texture) const;
+        [[nodiscard]] const BufferLifetime& lifetime(BufferHandle buffer) const;
         [[nodiscard]] VkImage image(TextureHandle texture) const;
+        [[nodiscard]] VkBuffer buffer(BufferHandle buffer) const;
 
     private:
         struct Access final { TextureHandle texture; TextureUsage usage; bool write; };
+        struct BufferAccess final { BufferHandle buffer; BufferUsage usage; bool write; };
         struct Resource final {
             std::string name;
             TextureDesc desc;
@@ -113,28 +134,38 @@ namespace Engine::Renderer {
             bool imported{};
             TextureLifetime lifetime{};
         };
+        struct BufferResource final { std::string name; BufferDesc desc; VkBuffer buffer{VK_NULL_HANDLE}; bool imported{}; BufferLifetime lifetime{}; };
         struct Pass final {
             std::string name;
             std::vector<Access> accesses;
+            std::vector<BufferAccess> bufferAccesses;
             ExecuteCallback execute;
         };
         struct Barrier final { std::uint32_t resource; VkImageMemoryBarrier2 vk; };
+        struct BufferBarrier final { std::uint32_t resource; VkBufferMemoryBarrier2 vk; };
         struct TransientAllocation final { VkImage image; VmaAllocation allocation; };
+        struct TransientBufferAllocation final { VkBuffer buffer; VmaAllocation allocation; };
 
         friend class PassBuilder;
         void addAccess(std::uint32_t pass, TextureHandle texture, TextureUsage usage, bool write);
+        void addBufferAccess(std::uint32_t pass, BufferHandle buffer, BufferUsage usage, bool write);
         [[nodiscard]] TextureHandle addTransient(std::string name, const TextureDesc& desc,
                                                  std::uint32_t pass, TextureUsage usage);
         void requireValid(TextureHandle texture) const;
+        void requireValid(BufferHandle buffer) const;
         void allocateTransients(const std::vector<TextureDesc>& slotDescs);
+        void allocateTransientBuffers(const std::vector<BufferDesc>& slotDescs);
         void destroyTransients() noexcept;
 
         std::vector<Resource> resources_;
+        std::vector<BufferResource> buffers_;
         std::vector<Pass> passes_;
         std::vector<std::uint32_t> order_;
         std::vector<std::string> orderNames_;
         std::vector<std::vector<Barrier>> barriers_;
+        std::vector<std::vector<BufferBarrier>> bufferBarriers_;
         std::vector<TransientAllocation> transientAllocations_;
+        std::vector<TransientBufferAllocation> transientBufferAllocations_;
         VkDevice device_{VK_NULL_HANDLE};
         VmaAllocator allocator_{VK_NULL_HANDLE};
         bool compiled_{};
