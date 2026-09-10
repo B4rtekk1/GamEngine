@@ -882,19 +882,26 @@
 
         void createFramebuffers() {
             const VkExtent2D extent = swapchain.extent();
+            const bool taaEnabled = antialiasingLevel == AntialiasingLevel::TAA;
+            if (taaEnabled) {
+                velocityBuffer.create(vulkanDevice.physical(), device, extent,
+                                      vulkanDevice.allocator(), VK_FILTER_NEAREST,
+                                      VK_FORMAT_R16G16_SFLOAT);
+            }
             VkImageView msaaAttachments[] = {
                 msaa.colorImageView(), depthBuffer.imageView(), hdrBuffer.imageView(), hiZDepthBuffer.imageView()
             };
-            VkImageView directAttachments[] = {
-                hdrBuffer.imageView(), depthBuffer.imageView()
+            VkImageView taaAttachments[] = {
+                hdrBuffer.imageView(), velocityBuffer.imageView(), depthBuffer.imageView()
             };
+            VkImageView directAttachments[] = {hdrBuffer.imageView(), depthBuffer.imageView()};
 
             VkFramebufferCreateInfo framebufferInfo{VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO};
             framebufferInfo.renderPass = forwardPass.renderPass();
-            framebufferInfo.attachmentCount = msaa.enabled() ? 4u : 2u;
+            framebufferInfo.attachmentCount = msaa.enabled() ? 4u : (taaEnabled ? 3u : 2u);
             framebufferInfo.pAttachments = msaa.enabled()
                 ? msaaAttachments
-                : directAttachments;
+                : (taaEnabled ? taaAttachments : directAttachments);
             framebufferInfo.width = extent.width;
             framebufferInfo.height = extent.height;
             framebufferInfo.layers = 1;
@@ -903,66 +910,9 @@
                                     &hdrFramebuffer) != VK_SUCCESS) {
                 throw std::runtime_error("Could not create HDR framebuffer");
             }
-
-
-            if (antialiasingLevel == AntialiasingLevel::TAA) {
-                velocityBuffer.create(vulkanDevice.physical(), device, extent,
-                                      vulkanDevice.allocator(), VK_FILTER_NEAREST);
-                GraphicsPipelineOptions velocityOptions{};
-                velocityOptions.colorFormat = HdrBuffer::Format;
-                velocityOptions.depthFormat = depthBuffer.format();
-                velocityOptions.colorFinalLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-                velocityOptions.depthLoadOp = VK_ATTACHMENT_LOAD_OP_LOAD;
-                velocityOptions.depthInitialLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL;
-                velocityOptions.depthFinalLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL;
-                velocityOptions.shader = "shaders/temporal_velocity.spv";
-                velocityOptions.assetManager = &assetManager;
-                velocityOptions.cullMode = VK_CULL_MODE_BACK_BIT;
-                velocityOptions.depthTestEnable = VK_TRUE;
-                velocityOptions.depthWriteEnable = VK_FALSE;
-                velocityOptions.depthCompareOp = VK_COMPARE_OP_LESS_OR_EQUAL;
-                velocityOptions.descriptorSetLayouts = {shadowPass.descriptorSetLayout()};
-                velocityOptions.vertexBindings = {
-                    {0, sizeof(Vertex), VK_VERTEX_INPUT_RATE_VERTEX}};
-                velocityOptions.vertexAttributes = {
-                    {0, 0, VK_FORMAT_R32G32B32_SFLOAT, offsetof(Vertex, position)},
-                    {2, 0, VK_FORMAT_R32G32_SFLOAT, offsetof(Vertex, texCoord)},
-                    {4, 0, VK_FORMAT_R32G32_SFLOAT, offsetof(Vertex, texCoord1)},
-                    {8, 0, VK_FORMAT_R32_UINT, offsetof(Vertex, materialIndex)},
-                    };
-                velocityPipeline.create(device, velocityOptions);
-                GraphicsPipelineOptions foliageVelocityOptions = velocityOptions;
-                foliageVelocityOptions.existingRenderPass = velocityPipeline.renderPass();
-                foliageVelocityOptions.cullMode = VK_CULL_MODE_NONE;
-                foliageVelocityPipeline.create(device, foliageVelocityOptions);
-                GraphicsPipelineOptions grassVelocityOptions = foliageVelocityOptions;
-                grassVelocityOptions.shader = "shaders/grass_velocity.spv";
-                grassVelocityPipeline.create(device, grassVelocityOptions);
-
-                const VkImageView velocityAttachments[] = {
-                    velocityBuffer.imageView(), depthBuffer.imageView()};
-                VkFramebufferCreateInfo velocityInfo{VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO};
-                velocityInfo.renderPass = velocityPipeline.renderPass();
-                velocityInfo.attachmentCount = 2;
-                velocityInfo.pAttachments = velocityAttachments;
-                velocityInfo.width = extent.width;
-                velocityInfo.height = extent.height;
-                velocityInfo.layers = 1;
-                if (vkCreateFramebuffer(device, &velocityInfo, nullptr,
-                                        &velocityFramebuffer) != VK_SUCCESS) {
-                    throw std::runtime_error("Could not create TAA velocity framebuffer");
-                }
-            }
         }
 
         void destroyVelocityResources() noexcept {
-            if (velocityFramebuffer != VK_NULL_HANDLE) {
-                vkDestroyFramebuffer(device, velocityFramebuffer, nullptr);
-                velocityFramebuffer = VK_NULL_HANDLE;
-            }
-            foliageVelocityPipeline.destroy();
-            grassVelocityPipeline.destroy();
-            velocityPipeline.destroy();
             velocityBuffer.destroy();
         }
 

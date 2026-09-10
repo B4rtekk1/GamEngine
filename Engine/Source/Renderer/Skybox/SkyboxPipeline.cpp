@@ -10,7 +10,7 @@ SkyboxPipeline::~SkyboxPipeline() { destroy(); }
 
 void SkyboxPipeline::create(VkDevice device, VkRenderPass renderPass, VkFormat, VkSampleCountFlagBits samples,
                             VkDescriptorSetLayout descriptorSetLayout,
-                            Assets::AssetManager& assets) {
+                            Assets::AssetManager& assets, const std::uint32_t colorAttachmentCount) {
     destroy(); device_ = device;
     try {
         const auto shader = Vkutil::loadShaderModule(device_, assets, "shaders/skybox.spv");
@@ -29,7 +29,8 @@ void SkyboxPipeline::create(VkDevice device, VkRenderPass renderPass, VkFormat, 
         VkPipelineMultisampleStateCreateInfo multisampling{VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO}; multisampling.rasterizationSamples = samples;
         VkPipelineDepthStencilStateCreateInfo depth{VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO}; depth.depthTestEnable = VK_TRUE; depth.depthWriteEnable = VK_FALSE; depth.depthCompareOp = VK_COMPARE_OP_LESS_OR_EQUAL;
         VkPipelineColorBlendAttachmentState color{}; color.colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT | VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT;
-        VkPipelineColorBlendStateCreateInfo blend{VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO}; blend.attachmentCount = 1; blend.pAttachments = &color;
+        std::array colors{color, color};
+        VkPipelineColorBlendStateCreateInfo blend{VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO}; blend.attachmentCount = colorAttachmentCount; blend.pAttachments = colors.data();
         const std::array dynamicStates{VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR};
         VkPipelineDynamicStateCreateInfo dynamic{VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO}; dynamic.dynamicStateCount = dynamicStates.size(); dynamic.pDynamicStates = dynamicStates.data();
         VkGraphicsPipelineCreateInfo info{VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO}; info.stageCount = stages.size(); info.pStages = stages.data(); info.pVertexInputState = &vertexInput; info.pInputAssemblyState = &assembly; info.pViewportState = &viewport; info.pRasterizationState = &rasterizer; info.pMultisampleState = &multisampling; info.pDepthStencilState = &depth; info.pColorBlendState = &blend; info.pDynamicState = &dynamic; info.layout = layout_; info.renderPass = renderPass;

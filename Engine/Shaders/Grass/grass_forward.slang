@@ -33,6 +33,8 @@ struct VertexOutput
     [[vk::location(2)]] float3 normal;
     [[vk::location(3)]] nointerpolation uint materialIndex;
     [[vk::location(4)]] float2 texCoord;
+    [[vk::location(5)]] noperspective float2 currentNdc;
+    [[vk::location(6)]] float4 previousClip;
 };
 
 [shader("vertex")]
@@ -46,12 +48,17 @@ VertexOutput vertexMain(VertexInput input, uint instanceIndex : SV_InstanceID,
                                                               deformations[packedIndex], frame, false);
     float3 worldPosition = deformed.position;
     VertexOutput output;
-    output.position = mul(mul(float4(worldPosition, 1.0), frame.view), frame.projection);
+    float4 currentClip = mul(mul(float4(worldPosition, 1.0), frame.view), frame.projection);
+    float3 previousWorld = grassPackedDeformedVertex(input.position, input.normal, instance, cluster,
+                                                      deformations[packedIndex], frame, true).position;
+    output.position = currentClip;
     output.color = input.color;
     output.worldPosition = worldPosition;
     output.normal = deformed.normal;
     output.materialIndex = cluster.instanceRange.z + input.materialIndex;
     output.texCoord = input.texCoord;
+    output.currentNdc = currentClip.xy / currentClip.w;
+    output.previousClip = mul(mul(float4(previousWorld, 1.0), frame.previousView), frame.previousProjection);
     return output;
 }
 
@@ -62,11 +69,15 @@ struct FragmentInput
     [[vk::location(2)]] float3 normal;
     [[vk::location(3)]] nointerpolation uint materialIndex;
     [[vk::location(4)]] float2 texCoord;
+    [[vk::location(5)]] noperspective float2 currentNdc;
+    [[vk::location(6)]] float4 previousClip;
     bool isFrontFace : SV_IsFrontFace;
 };
 
+struct GrassFragmentOutput { [[vk::location(0)]] float4 color : SV_Target; [[vk::location(1)]] float2 velocity : SV_Target1; };
+
 [shader("fragment")]
-float4 fragmentMain(FragmentInput input) : SV_Target
+GrassFragmentOutput fragmentMain(FragmentInput input)
 {
     MaterialData material = materials[input.materialIndex];
     float4 albedo = float4(input.color * material.baseColorMetallic.rgb, 1.0);
@@ -79,7 +90,10 @@ float4 fragmentMain(FragmentInput input) : SV_Target
     float shadow = frame.shadowEnabled != 0 ? sampleVirtualShadow(
         shadowMap, shadowDepthMap, input.worldPosition, normal, lightDirection, frame.shadowClipMatrices, shadowPageTable,
         frame.shadowQuality, shadowDebug) : 0.0;
-    if (frame.shadowDebugView != SHADOW_DEBUG_OFF)
-        return float4(shadowDebugColor(frame.shadowDebugView, shadowDebug), 1.0);
-    return float4(albedo.rgb * (0.20 + diffuse * frame.lightDirectionIntensity.w * (1.0 - shadow) * frame.lightColor.rgb), 1.0);
+    GrassFragmentOutput output;
+    output.color = frame.shadowDebugView != SHADOW_DEBUG_OFF
+        ? float4(shadowDebugColor(frame.shadowDebugView, shadowDebug), 1.0)
+        : float4(albedo.rgb * (0.20 + diffuse * frame.lightDirectionIntensity.w * (1.0 - shadow) * frame.lightColor.rgb), 1.0);
+    output.velocity = (input.currentNdc - input.previousClip.xy / input.previousClip.w) * 0.5;
+    return output;
 }

@@ -59,6 +59,10 @@ namespace Engine {
     void GraphicsPipeline::createRenderPass(const GraphicsPipelineOptions &options) {
         const bool usesMsaa = options.samples != VK_SAMPLE_COUNT_1_BIT;
         const bool usesDepth = options.depthFormat != VK_FORMAT_UNDEFINED;
+        const bool usesAdditionalColor = options.additionalColorFormat != VK_FORMAT_UNDEFINED;
+        if (usesAdditionalColor && usesMsaa) {
+            throw std::invalid_argument("MRT forward velocity is only supported for single-sample rendering");
+        }
         const bool resolvesDepth = usesMsaa && usesDepth &&
                                    options.depthResolveFormat != VK_FORMAT_UNDEFINED &&
                                    options.depthResolveMode != VK_RESOLVE_MODE_NONE;
@@ -93,7 +97,11 @@ namespace Engine {
         VkAttachmentReference2 colorRef{.sType = VK_STRUCTURE_TYPE_ATTACHMENT_REFERENCE_2,
                                         .attachment = 0, .layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
                                         .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT};
-        VkAttachmentReference2 depthRef{.sType = VK_STRUCTURE_TYPE_ATTACHMENT_REFERENCE_2, .attachment = 1, .layout = options.depthWriteEnable
+        VkAttachmentReference2 additionalColorRef{.sType = VK_STRUCTURE_TYPE_ATTACHMENT_REFERENCE_2,
+                                        .attachment = 1, .layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+                                        .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT};
+        std::array colorRefs{colorRef, additionalColorRef};
+        VkAttachmentReference2 depthRef{.sType = VK_STRUCTURE_TYPE_ATTACHMENT_REFERENCE_2, .attachment = usesAdditionalColor ? 2U : 1U, .layout = options.depthWriteEnable
                                               ? VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL
                                               : VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL,
                                         .aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT};
@@ -118,8 +126,8 @@ namespace Engine {
 
         VkSubpassDescription2 subpass{VK_STRUCTURE_TYPE_SUBPASS_DESCRIPTION_2};
         subpass.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
-        subpass.colorAttachmentCount = 1;
-        subpass.pColorAttachments = &colorRef;
+        subpass.colorAttachmentCount = usesAdditionalColor ? 2U : 1U;
+        subpass.pColorAttachments = colorRefs.data();
         subpass.pResolveAttachments = usesMsaa ? &resolveRef : nullptr;
         subpass.pDepthStencilAttachment = usesDepth ? &depthRef : nullptr;
         subpass.pNext = resolvesDepth ? &depthResolve : nullptr;
@@ -150,6 +158,19 @@ namespace Engine {
                                         : VkAccessFlags{0});
 
         std::vector<VkAttachmentDescription2> attachments{color};
+        if (usesAdditionalColor) {
+            attachments.push_back(VkAttachmentDescription2{
+                .sType = VK_STRUCTURE_TYPE_ATTACHMENT_DESCRIPTION_2,
+                .format = options.additionalColorFormat,
+                .samples = options.samples,
+                .loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR,
+                .storeOp = VK_ATTACHMENT_STORE_OP_STORE,
+                .stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE,
+                .stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE,
+                .initialLayout = VK_IMAGE_LAYOUT_UNDEFINED,
+                .finalLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+            });
+        }
         if (usesDepth) {
             attachments.push_back(depth);
         }
@@ -279,9 +300,10 @@ namespace Engine {
         colorAttachment.srcAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
         colorAttachment.dstAlphaBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
         colorAttachment.alphaBlendOp = VK_BLEND_OP_ADD;
+        std::array colorAttachments{colorAttachment, colorAttachment};
         VkPipelineColorBlendStateCreateInfo blend{VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO};
-        blend.attachmentCount = 1;
-        blend.pAttachments = &colorAttachment;
+        blend.attachmentCount = options.additionalColorFormat == VK_FORMAT_UNDEFINED ? 1U : 2U;
+        blend.pAttachments = colorAttachments.data();
         constexpr std::array dynamicStates{VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR};
         VkPipelineDynamicStateCreateInfo dynamic{VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO};
         dynamic.dynamicStateCount = static_cast<uint32_t>(dynamicStates.size());

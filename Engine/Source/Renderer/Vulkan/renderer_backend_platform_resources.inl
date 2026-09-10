@@ -47,9 +47,9 @@
             createForwardPass();
             createParticleResources();
             createSkyPass();
-            createSceneSkyPass();
             createFramebuffers();
             createSceneViewportResources();
+            createSceneSkyPass();
             createTemporalAaPass();
             createBloomPass();
             createTonemapPass();
@@ -342,7 +342,10 @@
                                msaa.sampleCount(),
                                msaa.enabled() ? hiZDepthBuffer.format() : VK_FORMAT_UNDEFINED,
                                msaa.enabled() ? vulkanDevice.depthResolveMode() : VK_RESOLVE_MODE_NONE,
-                               shadowPass.descriptorSetLayout(), assetManager);
+                               shadowPass.descriptorSetLayout(), assetManager,
+                               VK_IMAGE_LAYOUT_UNDEFINED, false,
+                               antialiasingLevel == AntialiasingLevel::TAA
+                                   ? VK_FORMAT_R16G16_SFLOAT : VK_FORMAT_UNDEFINED);
         }
 
         void createSceneViewportForwardPass() {
@@ -382,6 +385,8 @@
             options.depthFormat = depthBuffer.format();
             options.samples = msaa.sampleCount();
             options.existingRenderPass = forwardPass.renderPass();
+            options.additionalColorFormat = antialiasingLevel == AntialiasingLevel::TAA
+                ? VK_FORMAT_R16G16_SFLOAT : VK_FORMAT_UNDEFINED;
             options.shader = "shaders/particle_billboard.spv";
             options.assetManager = &assetManager;
             options.cullMode = VK_CULL_MODE_NONE;
@@ -451,11 +456,13 @@
                 vkDestroyFramebuffer(device, hdrFramebuffer, nullptr);
                 hdrFramebuffer = VK_NULL_HANDLE;
             }
+            // Scene Sky uses the Scene View render pass when MSAA is off.
+            // Destroy that pipeline before releasing its render pass.
+            skyPass.destroy();
+            sceneSkyPass.destroy();
             destroySceneViewportResources();
 
             particlePipeline.destroy();
-            skyPass.destroy();
-            sceneSkyPass.destroy();
 
             msaa.destroy();
             hdrBuffer.destroy();
@@ -476,9 +483,9 @@
             createForwardPass();
             createParticleResources();
             createSkyPass();
-            createSceneSkyPass();
             createFramebuffers();
             createSceneViewportResources();
+            createSceneSkyPass();
             createTemporalAaPass();
             createBloomPass();
             createTonemapPass();
@@ -499,7 +506,8 @@
                            vulkanDevice.graphicsQueue(), forwardPass.renderPass(),
                            HdrBuffer::Format, msaa.sampleCount(), buffers,
                            sizeof(UniformBufferObject), assetManager,
-                           vulkanDevice.allocator());
+                           vulkanDevice.allocator(),
+                           antialiasingLevel == AntialiasingLevel::TAA ? 2U : 1U);
         }
 
         void createSceneSkyPass() {
@@ -507,7 +515,8 @@
             buffers.reserve(sceneUniformBuffers.size());
             for (const Buffer& buffer : sceneUniformBuffers) buffers.push_back(buffer.handle());
             sceneSkyPass.create(vulkanDevice.physical(), device, commandPool,
-                                vulkanDevice.graphicsQueue(), forwardPass.renderPass(),
+                                vulkanDevice.graphicsQueue(),
+                                msaa.enabled() ? forwardPass.renderPass() : sceneViewportForwardPass.renderPass(),
                                 HdrBuffer::Format, msaa.sampleCount(), buffers,
                                 sizeof(UniformBufferObject), assetManager,
                                 vulkanDevice.allocator());

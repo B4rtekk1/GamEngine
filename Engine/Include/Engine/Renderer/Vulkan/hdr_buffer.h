@@ -39,7 +39,8 @@ namespace Engine {
          * @param extent Width and height of the HDR render target.
          */
         void create(VkPhysicalDevice physicalDevice, VkDevice device, VkExtent2D extent,
-                    VmaAllocator allocator, VkFilter filter = VK_FILTER_LINEAR);
+                    VmaAllocator allocator, VkFilter filter = VK_FILTER_LINEAR,
+                    VkFormat format = Format);
 
         /// Releases the HDR image, memory, view and sampler.
         void destroy() noexcept;

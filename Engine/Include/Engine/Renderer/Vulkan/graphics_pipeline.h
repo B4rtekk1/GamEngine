@@ -22,6 +22,8 @@ namespace Engine {
     struct GraphicsPipelineOptions {
         /// Color attachment format used by the render pass.
         VkFormat colorFormat = VK_FORMAT_UNDEFINED;
+        /// Optional second color attachment used by MRT pipelines.
+        VkFormat additionalColorFormat = VK_FORMAT_UNDEFINED;
         /// Existing render pass to use instead of creating one.
         VkRenderPass existingRenderPass = VK_NULL_HANDLE;
         /// Depth attachment format, or VK_FORMAT_UNDEFINED when unused.

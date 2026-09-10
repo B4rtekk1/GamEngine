@@ -2,6 +2,8 @@
 
 #include <vulkan/vulkan.h>
 
+#include <cstdint>
+
 namespace Engine {
     namespace Assets {
         class AssetManager;
@@ -19,7 +21,7 @@ namespace Engine {
 
         void create(VkDevice device, VkRenderPass renderPass, VkFormat colorFormat,
                     VkSampleCountFlagBits samples, VkDescriptorSetLayout descriptorSetLayout,
-                    Assets::AssetManager &assets);
+                    Assets::AssetManager &assets, std::uint32_t colorAttachmentCount = 1);
 
         void destroy() noexcept;
 

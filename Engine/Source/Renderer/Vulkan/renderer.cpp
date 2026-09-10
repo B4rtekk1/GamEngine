@@ -619,9 +619,9 @@ namespace Engine {
             createForwardPass();
             createParticleResources();
             createSkyPass();
-            createSceneSkyPass();
             createFramebuffers();
             createSceneViewportResources();
+            createSceneSkyPass();
             createTemporalAaPass();
             createBloomPass();
             createTonemapPass();

@@ -31,10 +31,6 @@
         MsaaResources msaa;
         HdrBuffer hdrBuffer;
         HdrBuffer velocityBuffer;
-        GraphicsPipeline velocityPipeline;
-        GraphicsPipeline foliageVelocityPipeline;
-        GraphicsPipeline grassVelocityPipeline;
-        VkFramebuffer velocityFramebuffer = VK_NULL_HANDLE;
         GpuTimestampProfiler gpuTimestampProfiler;
         GpuProfileFrame lastGpuProfile{};
         // Single-sample depth target populated by the forward pass's MSAA depth resolve.

@@ -9,19 +9,19 @@ namespace Engine {
 
     void HdrBuffer::create(const VkPhysicalDevice physicalDevice, const VkDevice device,
                            const VkExtent2D extent, const VmaAllocator allocator,
-                           const VkFilter filter) {
+                           const VkFilter filter, const VkFormat format) {
         if (physicalDevice == VK_NULL_HANDLE || device == VK_NULL_HANDLE ||
             extent.width == 0 || extent.height == 0 || allocator == VK_NULL_HANDLE) {
             throw std::invalid_argument("HDR buffer requires a device and non-zero extent");
         }
 
         VkFormatProperties formatProperties{};
-        vkGetPhysicalDeviceFormatProperties(physicalDevice, Format, &formatProperties);
+        vkGetPhysicalDeviceFormatProperties(physicalDevice, format, &formatProperties);
         constexpr VkFormatFeatureFlags required =
                 static_cast<VkFormatFeatureFlags>(VK_FORMAT_FEATURE_COLOR_ATTACHMENT_BIT) |
                 static_cast<VkFormatFeatureFlags>(VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT);
         if ((formatProperties.optimalTilingFeatures & required) != required) {
-            throw std::runtime_error("GPU does not support RGBA16F as a sampled color attachment");
+            throw std::runtime_error("GPU does not support the requested floating-point sampled color attachment");
         }
 
         destroy();
@@ -33,7 +33,7 @@ namespace Engine {
                 .pNext = nullptr,
                 .flags = 0,
                 .imageType = VK_IMAGE_TYPE_2D,
-                .format = Format,
+            .format = format,
                 .extent = {extent.width, extent.height, 1},
                 .mipLevels = 1,
                 .arrayLayers = 1,
@@ -58,7 +58,7 @@ namespace Engine {
             VkImageViewCreateInfo viewInfo{VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
             viewInfo.image = image_;
             viewInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
-            viewInfo.format = Format;
+            viewInfo.format = format;
             viewInfo.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
             if (vkCreateImageView(device_, &viewInfo, nullptr, &imageView_) != VK_SUCCESS) {
                 throw std::runtime_error("Could not create HDR image view");

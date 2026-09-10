@@ -18,10 +18,13 @@ void ForwardPass::create(VkDevice device, const VkFormat colorFormat,
                          VkDescriptorSetLayout sceneLayout,
                          Assets::AssetManager& assets,
                          const VkImageLayout colorInitialLayout,
-                         const bool colorInitialLayoutExternallySynchronized) {
+                         const bool colorInitialLayoutExternallySynchronized,
+                         const VkFormat velocityFormat) {
     reportedMissingShaderGraphSlots_.clear();
+    hasVelocityAttachment_ = velocityFormat != VK_FORMAT_UNDEFINED;
     GraphicsPipelineOptions options{};
     options.colorFormat = colorFormat;
+    options.additionalColorFormat = velocityFormat;
     options.depthFormat = depthFormat;
     options.samples = samples;
     options.depthResolveFormat = depthResolveFormat;
@@ -107,6 +110,7 @@ void ForwardPass::create(VkDevice device, const VkFormat colorFormat,
 
 void ForwardPass::destroy() noexcept {
     reportedMissingShaderGraphSlots_.clear();
+    hasVelocityAttachment_ = false;
     shaderGraphPipelines_.destroy();
     outlinePipeline_.destroy();
     foliagePipeline_.destroy();
@@ -167,10 +171,11 @@ void ForwardPass::begin(VkCommandBuffer commandBuffer,
     passInfo.renderPass = materialPipelines_[0].renderPass();
     passInfo.framebuffer = framebuffer;
     passInfo.renderArea.extent = extent;
-    VkClearValue clearValues[2]{};
+    VkClearValue clearValues[3]{};
     clearValues[0].color = {{0.02F, 0.02F, 0.05F, 1.0F}};
-    clearValues[1].depthStencil = {1.0F, 0};
-    passInfo.clearValueCount = std::size(clearValues);
+    clearValues[1].color = {{0.0F, 0.0F, 0.0F, 0.0F}};
+    clearValues[hasVelocityAttachment_ ? 2 : 1].depthStencil = {1.0F, 0};
+    passInfo.clearValueCount = hasVelocityAttachment_ ? 3U : 2U;
     passInfo.pClearValues = clearValues;
     vkCmdBeginRenderPass(commandBuffer, &passInfo, VK_SUBPASS_CONTENTS_INLINE);
 

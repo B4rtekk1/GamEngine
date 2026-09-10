@@ -698,58 +698,10 @@
             ForwardPass::end(commandBuffer);
             gpuTimestampProfiler.endZone(commandBuffer, currentFrame);
 
-            if (taaResolveActive) {
-                gpuTimestampProfiler.beginZone(commandBuffer, currentFrame, velocityProfileName);
-                VkClearValue velocityClear{};
-                VkRenderPassBeginInfo velocityPass{VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO};
-                velocityPass.renderPass = velocityPipeline.renderPass();
-                velocityPass.framebuffer = velocityFramebuffer;
-                velocityPass.renderArea.extent = swapchain.extent();
-                velocityPass.clearValueCount = 1;
-                velocityPass.pClearValues = &velocityClear;
-                vkCmdBeginRenderPass(commandBuffer, &velocityPass, VK_SUBPASS_CONTENTS_INLINE);
-                vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS,
-                                  velocityPipeline.handle());
-                const VkDescriptorSet sceneSet = shadowPass.descriptorSet(currentFrame);
-                vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS,
-                                        velocityPipeline.layout(), 0, 1, &sceneSet, 0, nullptr);
-                const VkBuffer velocityVertexBuffers[] = {
-                    vertexBuffer.handle(), instanceBuffers[currentFrame].handle()};
-                constexpr VkDeviceSize velocityOffsets[] = {0, 0};
-                vkCmdBindVertexBuffers(commandBuffer, 0, 2, velocityVertexBuffers,
-                                       velocityOffsets);
-                vkCmdBindIndexBuffer(commandBuffer, indexBuffer.handle(), 0, VK_INDEX_TYPE_UINT32);
-                const VkViewport velocityViewport{0.0F, 0.0F,
-                    static_cast<float>(swapchain.extent().width),
-                    static_cast<float>(swapchain.extent().height), 0.0F, 1.0F};
-                const VkRect2D velocityScissor{{0, 0}, swapchain.extent()};
-                vkCmdSetViewport(commandBuffer, 0, 1, &velocityViewport);
-                vkCmdSetScissor(commandBuffer, 0, 1, &velocityScissor);
-                ForwardPass::draw(commandBuffer, indirectDraws[currentFrame]);
-                vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS,
-                                  foliageVelocityPipeline.handle());
-                vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS,
-                                        foliageVelocityPipeline.layout(), 0, 1, &sceneSet, 0, nullptr);
-                ForwardPass::draw(commandBuffer, foliageIndirectDraws[currentFrame]);
-                if (!sceneGpu.grassInstances.empty()) {
-                    const auto& lists = grassRenderLists[currentFrame];
-                    Culling::IndexedIndirectDrawCount grassVelocityDraw;
-                    grassVelocityDraw.create(lists.velocityIndirect.handle(), lists.velocityDrawCount.handle(),
-                                             static_cast<uint32_t>(std::max<std::size_t>(1, sceneGpu.grassClusters.size())));
-                    shadowPass.setGrassVelocityVisibleInstances(currentFrame, lists.drawInstances[2].handle());
-                    vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS,
-                                      grassVelocityPipeline.handle());
-                    const VkDescriptorSet grassSet = shadowPass.grassVelocityDescriptorSet(currentFrame);
-                    vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS,
-                                            grassVelocityPipeline.layout(), 0, 1, &grassSet, 0, nullptr);
-                    grassVelocityDraw.record(commandBuffer);
-                }
-                vkCmdEndRenderPass(commandBuffer);
-                gpuTimestampProfiler.endZone(commandBuffer, currentFrame);
-            } else {
-                gpuTimestampProfiler.beginZone(commandBuffer, currentFrame, velocityProfileName);
-                gpuTimestampProfiler.endZone(commandBuffer, currentFrame);
-            }
+            // TAA velocity is the second forward-pass render target, so opaque
+            // geometry, foliage and packed grass are rasterized only once.
+            gpuTimestampProfiler.beginZone(commandBuffer, currentFrame, velocityProfileName);
+            gpuTimestampProfiler.endZone(commandBuffer, currentFrame);
 
             if (renderSceneViewport) {
                 // The prior Scene View image was sampled by ImGui. Make those

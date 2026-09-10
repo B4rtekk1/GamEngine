@@ -34,6 +34,8 @@ struct ForwardVertexOutput
     [[vk::location(4)]] float2 texCoord;
     [[vk::location(5)]] float4 tangent;
     [[vk::location(6)]] float2 texCoord1;
+    [[vk::location(7)]] noperspective float2 currentNdc;
+    [[vk::location(8)]] float4 previousClip;
 };
 
 [shader("vertex")]
@@ -83,7 +85,15 @@ ForwardVertexOutput vertexMain(ForwardVertexInput input, uint instanceIndex : SV
                                      rotationMatrix[2] / instance.scaleBase.z);
 
     ForwardVertexOutput output;
-    output.position = mul(mul(worldPosition, frame.view), frame.projection);
+    float4 currentClip = mul(mul(worldPosition, frame.view), frame.projection);
+    float4 previousQ = instance.previousRotation;
+    float3x3 previousRotationMatrix = float3x3(
+        1.0 - 2.0 * (previousQ.y * previousQ.y + previousQ.z * previousQ.z), 2.0 * (previousQ.x * previousQ.y + previousQ.z * previousQ.w), 2.0 * (previousQ.x * previousQ.z - previousQ.y * previousQ.w),
+        2.0 * (previousQ.x * previousQ.y - previousQ.z * previousQ.w), 1.0 - 2.0 * (previousQ.x * previousQ.x + previousQ.z * previousQ.z), 2.0 * (previousQ.y * previousQ.z + previousQ.x * previousQ.w),
+        2.0 * (previousQ.x * previousQ.z + previousQ.y * previousQ.w), 2.0 * (previousQ.y * previousQ.z - previousQ.x * previousQ.w), 1.0 - 2.0 * (previousQ.x * previousQ.x + previousQ.y * previousQ.y));
+    float3 previousWorldPosition = mul(input.position * instance.previousScale.xyz, previousRotationMatrix) +
+                                   instance.previousPosition.xyz;
+    output.position = currentClip;
     output.color = input.color;
     output.worldPosition = worldPosition.xyz;
     output.normal = mul(localNormal, normalMatrix);
@@ -91,6 +101,8 @@ ForwardVertexOutput vertexMain(ForwardVertexInput input, uint instanceIndex : SV
     output.texCoord = input.texCoord;
     output.texCoord1 = input.texCoord1;
     output.tangent = float4(mul(input.tangent.xyz, normalMatrix), input.tangent.w);
+    output.currentNdc = currentClip.xy / currentClip.w;
+    output.previousClip = mul(mul(float4(previousWorldPosition, 1.0), frame.previousView), frame.previousProjection);
     return output;
 }
 
@@ -109,12 +121,15 @@ struct ForwardFragmentInput
     [[vk::location(4)]] float2 texCoord;
     [[vk::location(5)]] float4 tangent;
     [[vk::location(6)]] float2 texCoord1;
+    [[vk::location(7)]] noperspective float2 currentNdc;
+    [[vk::location(8)]] float4 previousClip;
     bool isFrontFace : SV_IsFrontFace;
 };
 
 struct ForwardFragmentOutput
 {
     [[vk::location(0)]] float4 color : SV_Target;
+    [[vk::location(1)]] float2 velocity : SV_Target1;
 };
 
 [shader("fragment")]
@@ -260,6 +275,8 @@ ForwardFragmentOutput fragmentMain(ForwardFragmentInput input)
     {
         ForwardFragmentOutput debugOutput;
         debugOutput.color = float4(shadowDebugColor(frame.shadowDebugView, shadowDebug), baseColor.a);
+        float2 previousNdc = input.previousClip.xy / input.previousClip.w;
+        debugOutput.velocity = (input.currentNdc - previousNdc) * 0.5;
         return debugOutput;
     }
     float3 direct = (diffuse + specular) * frame.lightDirectionIntensity.w *
@@ -337,5 +354,7 @@ ForwardFragmentOutput fragmentMain(ForwardFragmentInput input)
 
     ForwardFragmentOutput output;
     output.color = float4(color, baseColor.a);
+    float2 previousNdc = input.previousClip.xy / input.previousClip.w;
+    output.velocity = (input.currentNdc - previousNdc) * 0.5;
     return output;
 }

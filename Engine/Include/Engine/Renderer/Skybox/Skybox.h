@@ -27,7 +27,8 @@ namespace Engine {
                     VkQueue queue, VkRenderPass renderPass, VkFormat colorFormat,
                     VkSampleCountFlagBits samples, VkDescriptorSetLayout descriptorSetLayout,
                     const std::vector<VkBuffer> &uniformBuffers, VkDeviceSize uniformBufferRange,
-                    Assets::AssetManager &assets, VmaAllocator allocator);
+                    Assets::AssetManager &assets, VmaAllocator allocator,
+                    std::uint32_t colorAttachmentCount = 1);
 
         void draw(VkCommandBuffer commandBuffer, uint32_t frameIndex) const;
 

@@ -66,15 +66,14 @@ FragmentOutput fragmentMain(FragmentInput input) {
     const float2 texel = float2(settings.inverseWidth, settings.inverseHeight);
     const float2 resolution = 1.0 / texel;
     const float3 current = currentFrame.Sample(input.uv).rgb;
-    const float4 velocitySample = velocityFrame.Sample(input.uv);
+    const float2 velocitySample = velocityFrame.Sample(input.uv).xy;
 
     // Our velocity is current UV - previous UV, unlike Godot's convention.
     // Velocity-less sky/particles instead use the projection-jitter delta.
     const float2 jitterHistoryUv = input.uv - 0.5 * float2(
         settings.currentJitterX - settings.previousJitterX,
         settings.currentJitterY - settings.previousJitterY);
-    const float2 historyUv = velocitySample.a >= 0.5
-        ? input.uv - velocitySample.xy : jitterHistoryUv;
+    const float2 historyUv = input.uv - velocitySample;
     const bool historyInBounds = all(historyUv >= 0.0) && all(historyUv <= 1.0);
 
     float3 mean = 0.0;
