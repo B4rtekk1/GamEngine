@@ -11,6 +11,14 @@ import Culling.CullingTypes;
 [[vk::binding(6, 0)]] RWStructuredBuffer<uint> candidateCounts;
 // Three uints per clip level, matching VkDispatchIndirectCommand.
 [[vk::binding(7, 0)]] RWStructuredBuffer<uint> candidateDispatchArguments;
+struct ShadowPageWork
+{
+    float4x4 viewProjection;
+    uint drawSlot;
+    uint clipLevel;
+    uint2 padding;
+};
+[[vk::binding(8, 0)]] StructuredBuffer<ShadowPageWork> shadowPageWork;
 
 struct CullingPushConstants
 {
@@ -26,14 +34,14 @@ struct CullingPushConstants
 
 [[vk::push_constant]] ConstantBuffer<CullingPushConstants> pushConstants;
 
-void appendDraw(bool visible, CullingObjectData objectData)
+void appendDraw(bool visible, CullingObjectData objectData, uint drawSlot)
 {
     // Reserve one contiguous range per wave.  Calling this from every active
     // lane is important: wave operations must not be nested in divergent flow.
     const uint visibleInWave = WaveActiveCountBits(visible);
     uint waveBase = 0;
     if (WaveIsFirstLane() && visibleInWave != 0)
-        InterlockedAdd(drawCounts[pushConstants.drawSlot], visibleInWave, waveBase);
+        InterlockedAdd(drawCounts[drawSlot], visibleInWave, waveBase);
     waveBase = WaveReadLaneFirst(waveBase);
     if (!visible)
         return;
@@ -61,7 +69,7 @@ void appendDraw(bool visible, CullingObjectData objectData)
     command.firstIndex = objectData.firstIndex;
     command.vertexOffset = int(objectData.vertexOffset);
     command.firstInstance = objectData.firstInstance;
-    commands[pushConstants.drawSlot * culling.maxDrawCount + destinationIndex] = command;
+    commands[drawSlot * culling.maxDrawCount + destinationIndex] = command;
 }
 
 void appendBinnedDraw(bool visible, CullingObjectData objectData)
@@ -242,17 +250,21 @@ void main(uint3 dispatchThreadId : SV_DispatchThreadID)
         }
         return;
     }
+    const bool batchedShadowPages = pushConstants.mode == 5;
+    // Binding 8 always contains at least one inert entry for non-shadow uses.
+    const ShadowPageWork pageWork = shadowPageWork[batchedShadowPages ? dispatchThreadId.y : 0];
     const uint sourceIndex = dispatchThreadId.x;
     uint sourceCount = pushConstants.sourceCount;
-    if (pushConstants.mode == 2)
-        sourceCount = min(sourceCount, candidateCounts[pushConstants.candidateLevel]);
+    const uint candidateLevel = batchedShadowPages ? pageWork.clipLevel : pushConstants.candidateLevel;
+    if (pushConstants.mode == 2 || batchedShadowPages)
+        sourceCount = min(sourceCount, candidateCounts[candidateLevel]);
     bool visible = false;
     uint objectIndex = 0;
     CullingObjectData objectData = (CullingObjectData)0;
 
     if (sourceIndex < sourceCount) {
-        objectIndex = pushConstants.mode == 2
-            ? candidateObjectIndices[pushConstants.candidateLevel * culling.maxDrawCount + sourceIndex]
+        objectIndex = (pushConstants.mode == 2 || batchedShadowPages)
+            ? candidateObjectIndices[candidateLevel * culling.maxDrawCount + sourceIndex]
             : sourceIndex;
         if (objectIndex < culling.objectCount) {
             objectData = objects[objectIndex];
@@ -283,7 +295,8 @@ void main(uint3 dispatchThreadId : SV_DispatchThreadID)
         {
             const float3 localPosition = lerp(localMinimum, localMaximum, UNIT_AABB_CORNERS[i]);
             const float4 worldPosition = mul(float4(localPosition, 1.0), objectData.model);
-            clipPositions[i] = mul(worldPosition, pushConstants.viewProjectionOverride);
+            clipPositions[i] = mul(worldPosition, batchedShadowPages
+                ? pageWork.viewProjection : pushConstants.viewProjectionOverride);
         }
         visible = !outsideFrustum(clipPositions);
     }
@@ -315,5 +328,6 @@ void main(uint3 dispatchThreadId : SV_DispatchThreadID)
     else if (pushConstants.mode == 3)
         appendBinnedDraw(visible, objectData);
     else
-        appendDraw(visible, objectData);
+        appendDraw(visible, objectData,
+                   batchedShadowPages ? pageWork.drawSlot : pushConstants.drawSlot);
 }

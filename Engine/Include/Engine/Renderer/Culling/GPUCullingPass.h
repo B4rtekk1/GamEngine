@@ -7,13 +7,24 @@
 
 #include "Engine/Renderer/Culling/HiZBuffer.h"
 #include "Engine/Math/Mat4.h"
+#include "Engine/Renderer/Vulkan/buffer.h"
 
 #include <vulkan/vulkan.h>
 
 #include <cstdint>
+#include <span>
 
 namespace Engine::Culling
 {
+    /// GPU input for one active virtual-shadow page.  Keep this layout in
+    /// sync with ShadowPageWork in gpu_culling.slang.
+    struct ShadowPageWork {
+        glm::mat4 viewProjection{1.0F};
+        std::uint32_t drawSlot{};
+        std::uint32_t clipLevel{};
+        std::uint32_t padding[2]{};
+    };
+    static_assert(sizeof(ShadowPageWork) == 80);
     /**
      * @brief Records a compute pass that generates indirect draw commands.
      *
@@ -43,7 +54,8 @@ namespace Engine::Culling
             VkBuffer drawCountBuffer,
             std::uint32_t maxDrawCount,
             VkBuffer candidateCountBuffer = VK_NULL_HANDLE,
-            VkBuffer candidateDispatchBuffer = VK_NULL_HANDLE
+            VkBuffer candidateDispatchBuffer = VK_NULL_HANDLE,
+            const Buffer* pageWorkBuffer = nullptr
         );
 
         /**
@@ -85,6 +97,13 @@ namespace Engine::Culling
                                      const Mat4& pageMatrix, std::uint32_t drawSlot,
                                      std::uint32_t clipLevel) const;
 
+        /// Culls every active VSM page in a single 2D dispatch.  The page
+        /// dimension selects a ShadowPageWork entry and the X dimension walks
+        /// that page's compact clip-level candidate list.
+        void recordCandidatesForPages(VkCommandBuffer commandBuffer,
+                                      std::uint32_t objectCount,
+                                      std::span<const ShadowPageWork> pages) const;
+
         /** @brief Returns the generated indirect draw-command buffer. */
         [[nodiscard]] VkBuffer indirectBuffer() const noexcept
         {
@@ -114,6 +133,7 @@ namespace Engine::Culling
         VkBuffer m_drawCountBuffer{VK_NULL_HANDLE};
         VkBuffer m_candidateCountBuffer{VK_NULL_HANDLE};
         VkBuffer m_candidateDispatchBuffer{VK_NULL_HANDLE};
+        const Buffer* m_pageWorkBuffer{};
 
         std::uint32_t m_maxDrawCount{0};
     };

@@ -223,13 +223,15 @@
         std::array<Buffer, MAX_FRAMES_IN_FLIGHT>& sceneFoliageIndirectBuffers = viewRenderScratch.foliageIndirectBuffers;
         std::array<Buffer, MAX_FRAMES_IN_FLIGHT> shadowIndirectBuffers;
         std::array<Buffer, MAX_FRAMES_IN_FLIGHT> shadowTwoSidedIndirectBuffers;
-        // Four compact caster-ID streams, one for each shadow clip level.
+        // Compact caster-ID streams, one for each shadow clip level.
         std::array<Buffer, MAX_FRAMES_IN_FLIGHT> shadowCandidateBuffers;
         std::array<Buffer, MAX_FRAMES_IN_FLIGHT> shadowTwoSidedCandidateBuffers;
         std::array<Buffer, MAX_FRAMES_IN_FLIGHT> shadowCandidateCountBuffers;
         std::array<Buffer, MAX_FRAMES_IN_FLIGHT> shadowTwoSidedCandidateCountBuffers;
         std::array<Buffer, MAX_FRAMES_IN_FLIGHT> shadowCandidateDispatchBuffers;
         std::array<Buffer, MAX_FRAMES_IN_FLIGHT> shadowTwoSidedCandidateDispatchBuffers;
+        // One CPU-populated SSBO per frame, shared by both shadow cull passes.
+        std::array<Buffer, MAX_FRAMES_IN_FLIGHT> shadowPageWorkBuffers;
         std::array<Buffer, MAX_FRAMES_IN_FLIGHT>& drawCountBuffers = viewRenderScratch.drawCountBuffers;
         std::array<Buffer, MAX_FRAMES_IN_FLIGHT>& foliageDrawCountBuffers = viewRenderScratch.foliageDrawCountBuffers;
         std::array<Buffer, MAX_FRAMES_IN_FLIGHT>& sceneDrawCountBuffers = viewRenderScratch.drawCountBuffers;

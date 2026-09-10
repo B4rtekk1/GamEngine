@@ -848,14 +848,11 @@ void ShadowPass::record(const VkCommandBuffer commandBuffer,
         }
         cullingPass.prepareCandidateReads(commandBuffer);
         twoSidedCullingPass.prepareCandidateReads(commandBuffer);
-        // Convert the GPU-produced candidate counts to dispatch dimensions once
-        // per active clip level.  Every page below then launches only enough
-        // workgroups to cover its compact candidate stream.
-        for (std::uint32_t level = 0; level < ShadowMap::ClipLevelCount; ++level) {
-            if (!activeLevels[level]) continue;
-            cullingPass.recordCandidateDispatchArgs(commandBuffer, level);
-            twoSidedCullingPass.recordCandidateDispatchArgs(commandBuffer, level);
-        }
+        // The second dispatch dimension selects an active virtual page.  This
+        // replaces the former one-dispatch-per-page pattern with a single
+        // compute launch for each material-sidedness stream.
+        std::vector<Culling::ShadowPageWork> pageWork;
+        pageWork.reserve(pagesToRender_.size());
         for (std::size_t pageIndex = 0; pageIndex < pagesToRender_.size(); ++pageIndex) {
             const PhysicalPage& page = physicalPages_[pagesToRender_[pageIndex]];
             glm::mat4 pageTransform{1.0F};
@@ -865,12 +862,13 @@ void ShadowPass::record(const VkCommandBuffer commandBuffer,
                                   2.0F * static_cast<float>(page.virtualX) - 1.0F;
             pageTransform[3][1] = static_cast<float>(ShadowMap::VirtualPagesPerAxis) -
                                   2.0F * static_cast<float>(page.virtualY) - 1.0F;
-            const Mat4 pageMatrix{pageTransform * clipMatrices[page.level].native()};
-            cullingPass.recordCandidatesForPage(commandBuffer, objectCount, pageMatrix,
-                                                static_cast<std::uint32_t>(pageIndex), page.level);
-            twoSidedCullingPass.recordCandidatesForPage(commandBuffer, objectCount, pageMatrix,
-                                                         static_cast<std::uint32_t>(pageIndex), page.level);
+            pageWork.push_back(Culling::ShadowPageWork{
+                .viewProjection = pageTransform * clipMatrices[page.level].native(),
+                .drawSlot = static_cast<std::uint32_t>(pageIndex),
+                .clipLevel = page.level});
         }
+        cullingPass.recordCandidatesForPages(commandBuffer, objectCount, pageWork);
+        twoSidedCullingPass.recordCandidatesForPages(commandBuffer, objectCount, pageWork);
     }
 
     VkImageMemoryBarrier2 atlasBarrier{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2};

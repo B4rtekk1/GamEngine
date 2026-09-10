@@ -25,7 +25,8 @@ namespace Engine::Culling
         const VkBuffer drawCountBuffer,
         const std::uint32_t maxDrawCount,
         const VkBuffer candidateCountBuffer,
-        const VkBuffer candidateDispatchBuffer
+        const VkBuffer candidateDispatchBuffer,
+        const Buffer* const pageWorkBuffer
     )
     {
         if (
@@ -51,6 +52,7 @@ namespace Engine::Culling
         m_drawCountBuffer = drawCountBuffer;
         m_candidateCountBuffer = candidateCountBuffer;
         m_candidateDispatchBuffer = candidateDispatchBuffer;
+        m_pageWorkBuffer = pageWorkBuffer;
         m_maxDrawCount = maxDrawCount;
     }
 
@@ -392,6 +394,65 @@ namespace Engine::Culling
             .offset = sizeof(std::uint32_t) * drawSlot, .size = sizeof(std::uint32_t)}};
         const VkDependencyInfo drawDependency{.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO,
             .bufferMemoryBarrierCount = 2, .pBufferMemoryBarriers = barriers};
+        vkCmdPipelineBarrier2(commandBuffer, &drawDependency);
+    }
+
+    void GPUCullingPass::recordCandidatesForPages(const VkCommandBuffer commandBuffer,
+                                                   const std::uint32_t objectCount,
+                                                   const std::span<const ShadowPageWork> pages) const
+    {
+        if (objectCount == 0 || pages.empty() || m_candidateCountBuffer == VK_NULL_HANDLE ||
+            m_pageWorkBuffer == nullptr) return;
+
+        // Page work is host-visible and frame-local.  Clear every active
+        // indirect counter in one transfer operation, then publish both the
+        // work list and counters to the sole page-culling dispatch.
+        m_pageWorkBuffer->update(pages.data(), sizeof(ShadowPageWork) * pages.size());
+        vkCmdFillBuffer(commandBuffer, m_drawCountBuffer, 0,
+                        sizeof(std::uint32_t) * pages.size(), 0);
+        const VkBufferMemoryBarrier2 barriers[2]{{.sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER_2,
+            .srcStageMask = VK_PIPELINE_STAGE_2_HOST_BIT,
+            .srcAccessMask = VK_ACCESS_2_HOST_WRITE_BIT,
+            .dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+            .dstAccessMask = VK_ACCESS_2_SHADER_STORAGE_READ_BIT,
+            .buffer = m_pageWorkBuffer->handle(), .offset = 0,
+            .size = sizeof(ShadowPageWork) * pages.size()},
+            {.sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER_2,
+            .srcStageMask = VK_PIPELINE_STAGE_2_TRANSFER_BIT,
+            .srcAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT,
+            .dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+            .dstAccessMask = VK_ACCESS_2_SHADER_STORAGE_READ_BIT | VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT,
+            .buffer = m_drawCountBuffer, .offset = 0,
+            .size = sizeof(std::uint32_t) * pages.size()}};
+        const VkDependencyInfo clearDependency{.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO,
+            .bufferMemoryBarrierCount = 2, .pBufferMemoryBarriers = barriers};
+        vkCmdPipelineBarrier2(commandBuffer, &clearDependency);
+
+        vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, m_pipeline);
+        vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, m_pipelineLayout,
+                                0, 1, &m_descriptorSet, 0, nullptr);
+        CullingPushConstants pushConstants{};
+        pushConstants.sourceCount = objectCount;
+        pushConstants.mode = 5;
+        vkCmdPushConstants(commandBuffer, m_pipelineLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0,
+                           sizeof(pushConstants), &pushConstants);
+        vkCmdDispatch(commandBuffer, (objectCount + 63U) / 64U,
+                      static_cast<std::uint32_t>(pages.size()), 1);
+
+        const VkBufferMemoryBarrier2 drawBarriers[2]{{.sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER_2,
+            .srcStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+            .srcAccessMask = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT,
+            .dstStageMask = VK_PIPELINE_STAGE_2_DRAW_INDIRECT_BIT,
+            .dstAccessMask = VK_ACCESS_2_INDIRECT_COMMAND_READ_BIT, .buffer = m_indirectBuffer,
+            .offset = 0, .size = static_cast<VkDeviceSize>(pages.size()) * m_maxDrawCount * sizeof(VkDrawIndexedIndirectCommand)},
+            {.sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER_2,
+            .srcStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+            .srcAccessMask = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT,
+            .dstStageMask = VK_PIPELINE_STAGE_2_DRAW_INDIRECT_BIT,
+            .dstAccessMask = VK_ACCESS_2_INDIRECT_COMMAND_READ_BIT, .buffer = m_drawCountBuffer,
+            .offset = 0, .size = sizeof(std::uint32_t) * pages.size()}};
+        const VkDependencyInfo drawDependency{.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO,
+            .bufferMemoryBarrierCount = 2, .pBufferMemoryBarriers = drawBarriers};
         vkCmdPipelineBarrier2(commandBuffer, &drawDependency);
     }
 }
