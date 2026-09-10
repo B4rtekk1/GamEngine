@@ -58,6 +58,16 @@ namespace Engine::Culling
             std::uint32_t shaderFilter = UINT32_MAX
         ) const;
 
+        /**
+         * @brief Culls once and appends visible objects to their material bins.
+         *
+         * The output layout remains [material slot][maxDrawCount], so callers
+         * can retain their existing per-material indirect draws.
+         */
+        void recordBinned(VkCommandBuffer commandBuffer,
+                          std::uint32_t objectCount,
+                          std::uint32_t binCount) const;
+
         /// Builds the caster-ID list for one shadow clip level.
         void recordCandidates(VkCommandBuffer commandBuffer, std::uint32_t objectCount,
                               const Mat4& clipMatrix, std::uint32_t clipLevel) const;

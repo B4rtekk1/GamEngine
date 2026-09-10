@@ -583,11 +583,8 @@
                     activeShaderSlots.set(object.shader);
                 }
             }
-            for (std::uint32_t shader = 0; shader < MaterialProgramSlotCount; ++shader) {
-                if (!activeShaderSlots.test(shader)) continue;
-                gpuCullingPasses[currentFrame].record(
-                    commandBuffer, static_cast<std::uint32_t>(gpuObjects.size()), nullptr, shader, shader);
-            }
+            gpuCullingPasses[currentFrame].recordBinned(
+                commandBuffer, static_cast<std::uint32_t>(gpuObjects.size()), MaterialProgramSlotCount);
             // The generic instance compaction result is not consumed by the
             // active draw path. Do not dispatch it until it directly feeds
             // instance-driven commands; cluster culling remains the live
@@ -654,11 +651,8 @@
                     vkCmdPipelineBarrier2(commandBuffer, &grassDrawDependency);
                 }
             }
-            for (std::uint32_t shader = 0; shader < MaterialProgramSlotCount; ++shader) {
-                if (!activeShaderSlots.test(shader)) continue;
-                foliageGpuCullingPasses[currentFrame].record(
-                    commandBuffer, static_cast<std::uint32_t>(gpuObjects.size()), nullptr, shader, shader);
-            }
+            foliageGpuCullingPasses[currentFrame].recordBinned(
+                commandBuffer, static_cast<std::uint32_t>(gpuObjects.size()), MaterialProgramSlotCount);
 
             gpuTimestampProfiler.endZone(commandBuffer, currentFrame);
             gpuTimestampProfiler.beginZone(commandBuffer, currentFrame, forwardProfileName);
@@ -781,13 +775,10 @@
                 // Scene View has a separate frustum and therefore needs its own
                 // indirect list. The game camera's list must not hide objects
                 // which are visible from the editor camera.
-                for (std::uint32_t shader = 0; shader < MaterialProgramSlotCount; ++shader) {
-                    if (!activeShaderSlots.test(shader)) continue;
-                    sceneGpuCullingPasses[currentFrame].record(
-                        commandBuffer, static_cast<std::uint32_t>(gpuObjects.size()), nullptr, shader, shader);
-                    sceneFoliageGpuCullingPasses[currentFrame].record(
-                        commandBuffer, static_cast<std::uint32_t>(gpuObjects.size()), nullptr, shader, shader);
-                }
+                sceneGpuCullingPasses[currentFrame].recordBinned(
+                    commandBuffer, static_cast<std::uint32_t>(gpuObjects.size()), MaterialProgramSlotCount);
+                sceneFoliageGpuCullingPasses[currentFrame].recordBinned(
+                    commandBuffer, static_cast<std::uint32_t>(gpuObjects.size()), MaterialProgramSlotCount);
 
                 sceneForwardPass.begin(
                     commandBuffer, sceneViewportFramebuffer, sceneViewportTarget.extent(),

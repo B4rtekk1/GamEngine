@@ -62,6 +62,46 @@ void appendDraw(bool visible, CullingObjectData objectData)
     commands[pushConstants.drawSlot * culling.maxDrawCount + destinationIndex] = command;
 }
 
+void appendBinnedDraw(bool visible, CullingObjectData objectData)
+{
+    // Visibility/LOD/Hi-Z are evaluated once per object.  Iterate bins only
+    // for wave compaction: every lane enters each wave intrinsic uniformly.
+    // This trades N complete scene scans for one scan plus cheap wave ballots.
+    for (uint bin = 0; bin < 32; ++bin)
+    {
+        const bool inBin = visible && objectData.shader == bin;
+        const uint visibleInWave = WaveActiveCountBits(inBin);
+        uint waveBase = 0;
+        if (WaveIsFirstLane() && visibleInWave != 0)
+            InterlockedAdd(drawCounts[bin], visibleInWave, waveBase);
+        waveBase = WaveReadLaneFirst(waveBase);
+        if (!inBin)
+            continue;
+
+        const uint destinationIndex = waveBase + WavePrefixCountBits(inBin);
+        if (destinationIndex >= culling.maxDrawCount)
+            continue;
+
+        IndexedDrawCommand command;
+        command.indexCount = objectData.indexCount;
+        if (culling.shadowPass == 0 && objectData.lod1IndexCount != 0)
+        {
+            float3 localCenter = (objectData.localAabbMin.xyz + objectData.localAabbMax.xyz) * 0.5;
+            float3 worldCenter = mul(float4(localCenter, 1.0), objectData.model).xyz;
+            float distanceToCamera = length(worldCenter - culling.cameraPosition.xyz);
+            if (distanceToCamera >= objectData.lod2Distance && objectData.lod2IndexCount != 0)
+                command.indexCount = objectData.lod2IndexCount;
+            else if (distanceToCamera >= objectData.lod1Distance)
+                command.indexCount = objectData.lod1IndexCount;
+        }
+        command.instanceCount = objectData.instanceCount;
+        command.firstIndex = objectData.firstIndex;
+        command.vertexOffset = int(objectData.vertexOffset);
+        command.firstInstance = objectData.firstInstance;
+        commands[bin * culling.maxDrawCount + destinationIndex] = command;
+    }
+}
+
 void appendCandidate(bool visible, uint objectIndex)
 {
     const uint visibleInWave = WaveActiveCountBits(visible);
@@ -223,6 +263,8 @@ void main(uint3 dispatchThreadId : SV_DispatchThreadID)
     // exactly one compaction routine and its wave operations stay uniform.
     if (pushConstants.mode == 1)
         appendCandidate(visible, objectIndex);
+    else if (pushConstants.mode == 3)
+        appendBinnedDraw(visible, objectData);
     else
         appendDraw(visible, objectData);
 }
