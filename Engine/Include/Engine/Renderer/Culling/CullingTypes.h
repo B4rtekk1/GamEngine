@@ -68,6 +68,8 @@ namespace Engine::Culling {
         /// Combined view and projection matrix of the active camera.
         GPUMat4 viewProjection;
         GPUVec4 cameraPosition;
+        /// Normalized inward-facing world-space frustum planes.
+        GPUVec4 frustumPlanes[6];
 
         /// Number of objects available to the culling dispatch.
         std::uint32_t objectCount;

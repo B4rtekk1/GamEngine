@@ -30,6 +30,7 @@ struct CullingUniformData
 {
     float4x4 viewProjection;
     float4 cameraPosition;
+    float4 frustumPlanes[6];
     uint objectCount;
     uint maxDrawCount;
     uint hiZMipCount;

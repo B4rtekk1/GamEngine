@@ -147,6 +147,29 @@ bool outsideFrustum(float4 clipPositions[8])
            outsideTop || outsideNear || outsideFar;
 }
 
+// Converts a local AABB into a conservative world-space center/extent pair.
+// Transforming the three local extent axes separately works for arbitrary
+// affine transforms (including rotations and non-uniform scale).
+bool worldAabbOutsideFrustum(CullingObjectData objectData, float boundsPadding)
+{
+    const float3 localMinimum = objectData.localAabbMin.xyz - boundsPadding;
+    const float3 localMaximum = objectData.localAabbMax.xyz + boundsPadding;
+    const float3 localCenter = (localMinimum + localMaximum) * 0.5;
+    const float3 localExtent = (localMaximum - localMinimum) * 0.5;
+    const float3 worldCenter = mul(float4(localCenter, 1.0), objectData.model).xyz;
+    const float3 worldExtent =
+        abs(mul(float4(localExtent.x, 0.0, 0.0, 0.0), objectData.model).xyz) +
+        abs(mul(float4(0.0, localExtent.y, 0.0, 0.0), objectData.model).xyz) +
+        abs(mul(float4(0.0, 0.0, localExtent.z, 0.0), objectData.model).xyz);
+    for (uint planeIndex = 0; planeIndex < 6; ++planeIndex)
+    {
+        const float4 plane = culling.frustumPlanes[planeIndex];
+        if (dot(plane.xyz, worldCenter) + plane.w + dot(abs(plane.xyz), worldExtent) < 0.0)
+            return true;
+    }
+    return false;
+}
+
 bool occlusionTest(float4 clipPositions[8])
 {
     float2 minimumNdc = 1.0;
@@ -243,34 +266,46 @@ void main(uint3 dispatchThreadId : SV_DispatchThreadID)
     if (visible && culling.enableFrustumCulling != 0)
     {
 
-    // A fixed centimetre-scale padding is insufficient for large, rotated
-    // meshes at the frustum edge (for example ramps).  Keep culling
-    // conservative by scaling the guard band with the extracted AABB.
+    // A larger guard band for singleton draws makes their Hi-Z result robust
+    // at shallow angles, while still allowing them to benefit from occlusion.
+    const float boundsScale = objectData.instanceCount == 1 ? 0.05 : 0.02;
     const float boundsPadding = max(culling.aabbExpansion,
-                                    length(objectData.localAabbMax.xyz - objectData.localAabbMin.xyz) * 0.02);
-    float3 localMinimum = objectData.localAabbMin.xyz - boundsPadding;
-    float3 localMaximum = objectData.localAabbMax.xyz + boundsPadding;
-    float4 clipPositions[8];
-    for (uint i = 0; i < 8; ++i)
+                                    length(objectData.localAabbMax.xyz - objectData.localAabbMin.xyz) * boundsScale);
+    // Virtual-shadow candidate passes supply a per-clip/page matrix through
+    // push constants. Its planes are not available in the uniform buffer, so
+    // retain the homogeneous-corner test on that path.
+    if (culling.shadowPass != 0)
     {
-        float3 localPosition = lerp(localMinimum, localMaximum, UNIT_AABB_CORNERS[i]);
-        float4 worldPosition = mul(float4(localPosition, 1.0), objectData.model);
-        float4x4 viewProjection = culling.shadowPass != 0
-            ? pushConstants.viewProjectionOverride : culling.viewProjection;
-        clipPositions[i] = mul(worldPosition, viewProjection);
+        const float3 localMinimum = objectData.localAabbMin.xyz - boundsPadding;
+        const float3 localMaximum = objectData.localAabbMax.xyz + boundsPadding;
+        float4 clipPositions[8];
+        for (uint i = 0; i < 8; ++i)
+        {
+            const float3 localPosition = lerp(localMinimum, localMaximum, UNIT_AABB_CORNERS[i]);
+            const float4 worldPosition = mul(float4(localPosition, 1.0), objectData.model);
+            clipPositions[i] = mul(worldPosition, pushConstants.viewProjectionOverride);
+        }
+        visible = !outsideFrustum(clipPositions);
     }
+    else
+    {
+        visible = !worldAabbOutsideFrustum(objectData, boundsPadding);
 
-    if (outsideFrustum(clipPositions))
-        visible = false;
-
-    bool occluded = false;
-    // Single-instance static meshes receive little benefit from Hi-Z, while
-    // their small projected rectangles are the most susceptible to false
-    // occlusion (notably ramps viewed at shallow angles).  Keep frustum
-    // culling, but reserve Hi-Z for batched geometry.
-    if (visible && objectData.instanceCount > 1 && culling.enableOcclusionCulling != 0 && culling.cameraCut == 0)
-        occluded = occlusionTest(clipPositions);
-    visible = visible && !occluded;
+        // Only the objects reaching Hi-Z need projected corners.
+        if (visible && culling.enableOcclusionCulling != 0 && culling.cameraCut == 0)
+        {
+            const float3 localMinimum = objectData.localAabbMin.xyz - boundsPadding;
+            const float3 localMaximum = objectData.localAabbMax.xyz + boundsPadding;
+            float4 clipPositions[8];
+            for (uint i = 0; i < 8; ++i)
+            {
+                const float3 localPosition = lerp(localMinimum, localMaximum, UNIT_AABB_CORNERS[i]);
+                const float4 worldPosition = mul(float4(localPosition, 1.0), objectData.model);
+                clipPositions[i] = mul(worldPosition, culling.viewProjection);
+            }
+            visible = !occlusionTest(clipPositions);
+        }
+    }
     }
 
     // mode is a dispatch-wide push constant, hence every active lane enters

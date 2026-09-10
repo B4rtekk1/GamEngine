@@ -1365,6 +1365,9 @@
             }
             const glm::mat4 viewProjection = cameraController.camera()->projectionMatrix().native() * cameraController.camera()->viewMatrix().native();
             std::memcpy(data.viewProjection.data, &viewProjection, sizeof(viewProjection));
+            const auto frustumPlanes = extractFrustumPlanes(viewProjection);
+            for (std::size_t i = 0; i < frustumPlanes.size(); ++i)
+                std::memcpy(&data.frustumPlanes[i], &frustumPlanes[i], sizeof(frustumPlanes[i]));
             data.cameraPosition = {cameraController.camera()->position().x(), cameraController.camera()->position().y(),
                                    cameraController.camera()->position().z(), 1.0F};
             data.objectCount = static_cast<uint32_t>(gpuObjects.size());
@@ -1396,6 +1399,9 @@
                                     Degrees{cameraController.editorPitch()});
             const glm::mat4 viewProjection = sceneCamera.projectionMatrix().native() * sceneCamera.viewMatrix().native();
             std::memcpy(data.viewProjection.data, &viewProjection, sizeof(viewProjection));
+            const auto frustumPlanes = extractFrustumPlanes(viewProjection);
+            for (std::size_t i = 0; i < frustumPlanes.size(); ++i)
+                std::memcpy(&data.frustumPlanes[i], &frustumPlanes[i], sizeof(frustumPlanes[i]));
             data.cameraPosition = {sceneCamera.position().x(), sceneCamera.position().y(), sceneCamera.position().z(), 1.0F};
             data.objectCount = static_cast<uint32_t>(gpuObjects.size());
             data.maxDrawCount = data.objectCount;
@@ -1415,6 +1421,9 @@
             Culling::CullingUniformData data{};
             const glm::mat4 lightViewProjection = lightSpaceMatrix().native();
             std::memcpy(data.viewProjection.data, &lightViewProjection, sizeof(lightViewProjection));
+            const auto frustumPlanes = extractFrustumPlanes(lightViewProjection);
+            for (std::size_t i = 0; i < frustumPlanes.size(); ++i)
+                std::memcpy(&data.frustumPlanes[i], &frustumPlanes[i], sizeof(frustumPlanes[i]));
             data.cameraPosition = {0.0F, 0.0F, 0.0F, 1.0F};
             data.objectCount = static_cast<uint32_t>(gpuObjects.size());
             data.maxDrawCount = data.objectCount;
