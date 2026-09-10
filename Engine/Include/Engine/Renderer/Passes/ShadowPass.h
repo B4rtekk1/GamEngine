@@ -36,6 +36,7 @@ namespace Engine {
         ShadowPass &operator=(const ShadowPass &) = delete;
 
         void create(VkPhysicalDevice physicalDevice, VkDevice device,
+                    ShadowMap& physicalPagePool,
                     const std::vector<VkBuffer> &uniformBuffers,
                     const std::vector<VkBuffer> &materialBuffers,
                     const std::vector<VkBuffer> &instanceBuffers,
@@ -130,7 +131,9 @@ namespace Engine {
         std::vector<std::uint32_t> pagesToRender_;
         std::uint64_t cacheClock_{};
         VkDevice device_{VK_NULL_HANDLE};
-        ShadowMap shadowMap_;
+        // The two view contexts keep independent virtual page tables, but
+        // render into the renderer-owned physical atlas.
+        ShadowMap* shadowMap_{nullptr};
         VkDescriptorSetLayout descriptorSetLayout_{VK_NULL_HANDLE};
         VkDescriptorPool descriptorPool_{VK_NULL_HANDLE};
         std::vector<VkDescriptorSet> descriptorSets_;

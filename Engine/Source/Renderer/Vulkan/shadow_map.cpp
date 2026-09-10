@@ -171,6 +171,7 @@ namespace Engine {
         allocation_ = VK_NULL_HANDLE;
         allocator_ = VK_NULL_HANDLE;
         format_ = VK_FORMAT_UNDEFINED;
+        initialized_ = false;
         device_ = VK_NULL_HANDLE;
     }
 } // namespace Engine

@@ -66,6 +66,7 @@ ShadowPass::~ShadowPass() {
 }
 
 void ShadowPass::create(VkPhysicalDevice physicalDevice, VkDevice device,
+        ShadowMap& physicalPagePool,
         const std::vector<VkBuffer>& uniformBuffers,
         const std::vector<VkBuffer>& materialBuffers,
         const std::vector<VkBuffer>& instanceBuffers,
@@ -82,7 +83,10 @@ void ShadowPass::create(VkPhysicalDevice physicalDevice, VkDevice device,
     device_ = device;
 
     try {
-        shadowMap_.create(physicalDevice, device_, allocator);
+        if (physicalPagePool.image() == VK_NULL_HANDLE) {
+            physicalPagePool.create(physicalDevice, device_, allocator);
+        }
+        shadowMap_ = &physicalPagePool;
         pageTable_.fill(ShadowMap::InvalidPage);
         pagesToRender_.reserve(ShadowMap::PhysicalPageCount);
 
@@ -188,10 +192,10 @@ void ShadowPass::create(VkPhysicalDevice physicalDevice, VkDevice device,
         }
 
         const VkDescriptorImageInfo imageInfo{
-            shadowMap_.sampler(), shadowMap_.imageView(),
+            shadowMap_->sampler(), shadowMap_->imageView(),
             VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
         const VkDescriptorImageInfo depthImageInfo{
-            shadowMap_.depthSampler(), shadowMap_.imageView(),
+            shadowMap_->depthSampler(), shadowMap_->imageView(),
             VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
         for (std::uint32_t frame = 0; frame < frameCount; ++frame) {
             const VkDescriptorBufferInfo bufferInfo{
@@ -338,7 +342,7 @@ void ShadowPass::create(VkPhysicalDevice physicalDevice, VkDevice device,
         pipelineInfo.pDepthStencilState = &depth;
         pipelineInfo.pDynamicState = &dynamic;
         pipelineInfo.layout = pipelineLayout_;
-        pipelineInfo.renderPass = shadowMap_.renderPass();
+        pipelineInfo.renderPass = shadowMap_->renderPass();
         if (vkCreateGraphicsPipelines(device_, VK_NULL_HANDLE, 1, &pipelineInfo,
                                       nullptr, &pipeline_) != VK_SUCCESS) {
             throw std::runtime_error("Could not create shadow pipeline");
@@ -453,7 +457,7 @@ void ShadowPass::destroy() noexcept {
     grassVelocityDescriptorSets_.clear();
     grassShadowDescriptorSets_.clear();
     pageTableBuffers_.clear();
-    shadowMap_.destroy();
+    shadowMap_ = nullptr;
     atlasInitialized_ = false;
     atlasContentValid_ = false;
     invalidateCache();
@@ -862,16 +866,17 @@ void ShadowPass::record(const VkCommandBuffer commandBuffer,
     }
 
     VkImageMemoryBarrier2 atlasBarrier{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2};
-    atlasBarrier.srcStageMask = atlasInitialized_ ? VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT
-                                                  : VK_PIPELINE_STAGE_2_NONE;
-    atlasBarrier.srcAccessMask = atlasInitialized_ ? VK_ACCESS_2_SHADER_SAMPLED_READ_BIT : 0;
+    const bool physicalAtlasInitialized = shadowMap_->initialized();
+    atlasBarrier.srcStageMask = physicalAtlasInitialized ? VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT
+                                                          : VK_PIPELINE_STAGE_2_NONE;
+    atlasBarrier.srcAccessMask = physicalAtlasInitialized ? VK_ACCESS_2_SHADER_SAMPLED_READ_BIT : 0;
     atlasBarrier.dstStageMask = VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT;
     atlasBarrier.dstAccessMask = VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_READ_BIT |
                                  VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
-    atlasBarrier.oldLayout = atlasInitialized_ ? VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL
-                                               : VK_IMAGE_LAYOUT_UNDEFINED;
+    atlasBarrier.oldLayout = physicalAtlasInitialized ? VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL
+                                                       : VK_IMAGE_LAYOUT_UNDEFINED;
     atlasBarrier.newLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
-    atlasBarrier.image = shadowMap_.image();
+    atlasBarrier.image = shadowMap_->image();
     atlasBarrier.subresourceRange = {VK_IMAGE_ASPECT_DEPTH_BIT, 0, 1, 0, 1};
     VkDependencyInfo atlasDependency{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
     atlasDependency.imageMemoryBarrierCount = 1;
@@ -879,8 +884,8 @@ void ShadowPass::record(const VkCommandBuffer commandBuffer,
     vkCmdPipelineBarrier2(commandBuffer, &atlasDependency);
 
     VkRenderPassBeginInfo passInfo{VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO};
-    passInfo.renderPass = shadowMap_.renderPass();
-    passInfo.framebuffer = shadowMap_.framebuffer();
+    passInfo.renderPass = shadowMap_->renderPass();
+    passInfo.framebuffer = shadowMap_->framebuffer();
     passInfo.renderArea.extent = {ShadowMap::Resolution, ShadowMap::Resolution};
     vkCmdBeginRenderPass(commandBuffer, &passInfo, VK_SUBPASS_CONTENTS_INLINE);
     vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline_);
@@ -945,6 +950,7 @@ void ShadowPass::record(const VkCommandBuffer commandBuffer,
     }
     vkCmdEndRenderPass(commandBuffer);
     atlasInitialized_ = true;
+    shadowMap_->markInitialized();
     if (objectCount != 0) atlasContentValid_ = true;
     pagesToRender_.clear();
 }

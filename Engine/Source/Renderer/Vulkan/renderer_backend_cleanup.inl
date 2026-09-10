@@ -20,6 +20,7 @@
                 forwardPass.destroy();
                 shadowPass.destroy();
                 sceneDescriptorPass.destroy();
+                physicalShadowPagePool.destroy();
                 destroyCullingResources();
                 indexBuffer.destroy();
                 vertexBuffer.destroy();

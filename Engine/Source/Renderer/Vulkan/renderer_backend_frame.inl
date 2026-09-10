@@ -157,6 +157,7 @@
         }
 
         void updateUniformBuffer(const uint32_t frame) {
+            const bool renderGameViewport = !editorUiActive || !sceneViewportActive;
             const SceneFrameData& frameData = sceneFrameDataCache.data;
             const bool mainLightShadows = frameData.directionalLight.enabled &&
                 frameData.directionalLight.castShadows && optimizationFeatures.shadows && hasShadowCasters;
@@ -240,7 +241,7 @@
                  dot(currentCameraForward, previousGameCameraForward) < cameraCutDirectionDot);
             const std::uint32_t shadowPageBudget = (!previousGameCameraValid || cameraCut) ? 128u : 64u;
 
-            if (mainLightShadows) {
+            if (mainLightShadows && renderGameViewport) {
                 shadowClipUpdateMask = updateVirtualShadowClipmaps(
                     cameraController.camera()->position(), shadowClipMatrices,
                     lastShadowCameraPosition, lastShadowLightDirection, shadowClipmapsValid);
@@ -350,6 +351,10 @@
             static const ProfileNameId bloomProfileName = Profiler::registerName("Bloom");
             static const ProfileNameId tonemapProfileName = Profiler::registerName("Tonemap");
             const bool renderSceneViewport = editorUiActive && sceneViewportRendered;
+            // Scene View replaces the embedded Game View in the editor.  Do
+            // not submit hidden Game View work: this also makes the shared
+            // physical VSM atlas single-writer for the entire frame.
+            const bool renderGameViewport = !editorUiActive || !sceneViewportActive;
             const ForwardPass& sceneForwardPass = msaa.enabled()
                 ? forwardPass
                 : sceneViewportForwardPass;
@@ -425,6 +430,9 @@
             // Packed grass has an independent, fully GPU-resident command path.
             // Each classify stream is compacted by cluster before its indirect
             // commands are emitted, so mixed grass meshes never share a draw.
+            // The shadow stream is also consumed by Scene View, which has no
+            // dedicated grass-shadow stream yet. Keep this producer alive
+            // even when the hidden Game View forward pass is omitted.
             if (!sceneGpu.grassInstances.empty() && cameraController.camera()) {
                 auto& lists = grassRenderLists[currentFrame];
                 const auto camera = cameraController.camera();
@@ -546,15 +554,17 @@
             // pass so its image is transitioned from UNDEFINED to
             // SHADER_READ_ONLY_OPTIMAL before the descriptor is used.
             gpuTimestampProfiler.beginZone(commandBuffer, currentFrame, shadowProfileName);
-            shadowPass.record(
-                commandBuffer, shadowClipMatrices, shadowClipUpdateMask, vertexBuffer.handle(),
-                instanceBuffers[currentFrame].handle(), indexBuffer.handle(),
-                shadowPass.descriptorSet(currentFrame), shadowCullingPasses[currentFrame],
-                shadowIndirectDraws[currentFrame],
-                shadowTwoSidedCullingPasses[currentFrame], shadowTwoSidedIndirectDraws[currentFrame],
-                mainLightShadows
-                    ? static_cast<std::uint32_t>(gpuObjects.size()) : 0u,
-                shadowPass.grassShadowDescriptorSet(currentFrame), grassShadowDrawPtr);
+            if (renderGameViewport) {
+                shadowPass.record(
+                    commandBuffer, shadowClipMatrices, shadowClipUpdateMask, vertexBuffer.handle(),
+                    instanceBuffers[currentFrame].handle(), indexBuffer.handle(),
+                    shadowPass.descriptorSet(currentFrame), shadowCullingPasses[currentFrame],
+                    shadowIndirectDraws[currentFrame],
+                    shadowTwoSidedCullingPasses[currentFrame], shadowTwoSidedIndirectDraws[currentFrame],
+                    mainLightShadows
+                        ? static_cast<std::uint32_t>(gpuObjects.size()) : 0u,
+                    shadowPass.grassShadowDescriptorSet(currentFrame), grassShadowDrawPtr);
+            }
 
             // Scene View has its own descriptor pass and therefore its own
             // shadow-map image. It must be transitioned as well, even when
@@ -647,6 +657,7 @@
                     vkCmdPipelineBarrier2(commandBuffer, &grassDrawDependency);
                 }
             }
+            if (renderGameViewport) {
             foliageGpuCullingPasses[currentFrame].recordBinned(
                 commandBuffer, static_cast<std::uint32_t>(gpuObjects.size()), MaterialProgramSlotCount);
 
@@ -698,6 +709,7 @@
             // geometry, foliage and packed grass are rasterized only once.
             gpuTimestampProfiler.beginZone(commandBuffer, currentFrame, velocityProfileName);
             gpuTimestampProfiler.endZone(commandBuffer, currentFrame);
+            }
 
             if (renderSceneViewport) {
                 // The prior Scene View image was sampled by ImGui. Make those
@@ -775,7 +787,7 @@
                 ForwardPass::end(commandBuffer);
             }
 
-            if (hizEnabled) {
+            if (renderGameViewport && hizEnabled) {
                 VkImageMemoryBarrier2 depthReady{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2};
                 depthReady.srcStageMask = VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT;
                 depthReady.srcAccessMask = VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
@@ -797,7 +809,7 @@
                 hiZValid = true;
             }
 
-            if (taaResolveActive) {
+            if (renderGameViewport && taaResolveActive) {
                 gpuTimestampProfiler.beginZone(commandBuffer, currentFrame, taaProfileName);
                 temporalAaPass.record(commandBuffer, swapchain.extent(), taaJitterX, taaJitterY);
                 gpuTimestampProfiler.endZone(commandBuffer, currentFrame);
@@ -807,9 +819,11 @@
             }
 
             gpuTimestampProfiler.beginZone(commandBuffer, currentFrame, bloomProfileName);
-            bloomPass.record(commandBuffer,
-                taaResolveActive ? temporalAaPass.resolvedView() : hdrBuffer.imageView(),
-                hdrBuffer.sampler(), currentFrame);
+            if (renderGameViewport) {
+                bloomPass.record(commandBuffer,
+                    taaResolveActive ? temporalAaPass.resolvedView() : hdrBuffer.imageView(),
+                    hdrBuffer.sampler(), currentFrame);
+            }
             gpuTimestampProfiler.endZone(commandBuffer, currentFrame);
 
             gpuTimestampProfiler.beginZone(commandBuffer, currentFrame, tonemapProfileName);
@@ -1218,6 +1232,14 @@
             sceneViewportRendered = sceneViewportActive &&
                 (sceneViewportNeedsRender || sceneCameraChanged ||
                  scene.mutationRevision() != sceneViewportRenderedRevision);
+            const bool renderGameViewport = !editorUiActive || !sceneViewportActive;
+            if (renderGameViewport != gameShadowContextActive) {
+                shadowPass.invalidateCache();
+                sceneDescriptorPass.invalidateCache();
+                shadowClipmapsValid = false;
+                sceneShadowClipmapsValid = false;
+                gameShadowContextActive = renderGameViewport;
+            }
             // Scene View is deliberately not rendered in play mode. Its cache
             // cannot consume this frame's dirty list, so discard it lazily;
             // the active game-view cache is updated page-by-page below.

@@ -48,6 +48,8 @@ namespace Engine {
         [[nodiscard]] VkSampler depthSampler() const noexcept { return depthSampler_; }
         [[nodiscard]] VkRenderPass renderPass() const noexcept { return renderPass_; }
         [[nodiscard]] VkFramebuffer framebuffer() const noexcept { return framebuffer_; }
+        [[nodiscard]] bool initialized() const noexcept { return initialized_; }
+        void markInitialized() noexcept { initialized_ = true; }
 
     private:
         VkDevice device_ = VK_NULL_HANDLE;
@@ -60,5 +62,6 @@ namespace Engine {
         VkRenderPass renderPass_ = VK_NULL_HANDLE;
         VkFramebuffer framebuffer_ = VK_NULL_HANDLE;
         VkFormat format_ = VK_FORMAT_UNDEFINED;
+        bool initialized_{false};
     };
 } // namespace Engine

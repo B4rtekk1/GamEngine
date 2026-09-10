@@ -56,6 +56,9 @@
         std::unordered_map<const Mesh*, std::uint32_t> meshTextureOffsets;
         DepthBuffer depthBuffer;
         std::vector<Texture2D> materialTextures;
+        // Shared physical 4096x4096 VSM atlas. Game and Scene contexts own
+        // their descriptors/page tables, never concurrent atlas writes.
+        ShadowMap physicalShadowPagePool;
         ShadowPass shadowPass;
         // A descriptor-compatible pass for Scene View. It owns an independent
         // per-frame camera UBO while reusing the exact forward material layout.
@@ -71,6 +74,9 @@
         std::uint64_t shadowClipFrameIndex{0};
         bool shadowClipmapsValid{false};
         bool sceneShadowClipmapsValid{false};
+        // A physical page can hold data for only one virtual-shadow context.
+        // Switching views invalidates both logical caches before the next use.
+        bool gameShadowContextActive{true};
         bool fallbackCameraWarningReported{false};
         SceneFrameDataCache sceneFrameDataCache;
         SkyPass sceneSkyPass;
