@@ -69,6 +69,7 @@ void ShadowPass::create(VkPhysicalDevice physicalDevice, VkDevice device,
         const std::vector<VkBuffer>& uniformBuffers,
         const std::vector<VkBuffer>& materialBuffers,
         const std::vector<VkBuffer>& instanceBuffers,
+        const std::vector<VkBuffer>& previousTransformBuffers,
         const std::vector<VkBuffer>& instanceIndexBuffers,
         const std::vector<VkBuffer>& grassInstanceBuffers,
         const std::vector<VkBuffer>& grassClusterBuffers,
@@ -87,6 +88,7 @@ void ShadowPass::create(VkPhysicalDevice physicalDevice, VkDevice device,
 
         if (materialBuffers.size() != uniformBuffers.size() ||
             instanceBuffers.size() != uniformBuffers.size() ||
+            previousTransformBuffers.size() != uniformBuffers.size() ||
             instanceIndexBuffers.size() != uniformBuffers.size() ||
             grassInstanceBuffers.size() != uniformBuffers.size() ||
             grassClusterBuffers.size() != uniformBuffers.size() ||
@@ -95,10 +97,8 @@ void ShadowPass::create(VkPhysicalDevice physicalDevice, VkDevice device,
             throw std::invalid_argument("Invalid material descriptor resources");
         }
 
-        // This is a compact list, not an array indexed by binding number:
-        // binding 8 is deliberately unused and must not be passed to Vulkan
-        // as a zero-initialised duplicate binding 0.
-        VkDescriptorSetLayoutBinding bindings[10]{};
+        // This is a compact list, not an array indexed by binding number.
+        VkDescriptorSetLayoutBinding bindings[11]{};
         bindings[0] = {0, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1,
                        VK_SHADER_STAGE_FRAGMENT_BIT, nullptr};
         bindings[1] = {1, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1,
@@ -115,21 +115,23 @@ void ShadowPass::create(VkPhysicalDevice physicalDevice, VkDevice device,
                        VK_SHADER_STAGE_VERTEX_BIT, nullptr};
         bindings[7] = {GrassDeformationBinding, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1,
                        VK_SHADER_STAGE_VERTEX_BIT, nullptr};
-        bindings[8] = {9, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1,
+        bindings[8] = {8, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1,
+                       VK_SHADER_STAGE_VERTEX_BIT, nullptr};
+        bindings[9] = {9, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1,
                        VK_SHADER_STAGE_FRAGMENT_BIT, nullptr};
         // Variable-count bindings must be the numerically last binding in a
         // Vulkan descriptor set. Keep material textures after PCSS depth.
-        bindings[9] = {10, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, MaxMaterialTextures,
+        bindings[10] = {10, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, MaxMaterialTextures,
                         VK_SHADER_STAGE_FRAGMENT_BIT, nullptr};
-        VkDescriptorBindingFlags bindingFlags[10]{};
-        bindingFlags[9] = VK_DESCRIPTOR_BINDING_PARTIALLY_BOUND_BIT |
+        VkDescriptorBindingFlags bindingFlags[11]{};
+        bindingFlags[10] = VK_DESCRIPTOR_BINDING_PARTIALLY_BOUND_BIT |
                           VK_DESCRIPTOR_BINDING_VARIABLE_DESCRIPTOR_COUNT_BIT;
         const VkDescriptorSetLayoutBindingFlagsCreateInfo bindingFlagsInfo{
             VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_BINDING_FLAGS_CREATE_INFO,
-            nullptr, 10, bindingFlags};
+            nullptr, 11, bindingFlags};
         const VkDescriptorSetLayoutCreateInfo layoutInfo{
             VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO, &bindingFlagsInfo, 0,
-            10, bindings};
+            11, bindings};
         if (vkCreateDescriptorSetLayout(device_, &layoutInfo, nullptr,
                                         &descriptorSetLayout_) != VK_SUCCESS) {
             throw std::runtime_error("Could not create shadow descriptor-set layout");
@@ -137,11 +139,11 @@ void ShadowPass::create(VkPhysicalDevice physicalDevice, VkDevice device,
 
         const std::uint32_t frameCount = static_cast<std::uint32_t>(uniformBuffers.size());
         // Four descriptor sets are allocated per frame. Each carries one
-        // compare sampler, raw-depth sampler, material samplers, one UBO and five SSBOs.
+        // compare sampler, raw-depth sampler, material samplers, one UBO and seven SSBOs.
         const VkDescriptorPoolSize poolSizes[] = {
             {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, frameCount * 4U * (MaxMaterialTextures + 2U)},
             {VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, frameCount * 4U},
-            {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, frameCount * 4U * 6U},
+            {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, frameCount * 4U * 7U},
         };
         VkDescriptorPoolCreateInfo poolInfo{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
         poolInfo.maxSets = frameCount * 4;
@@ -199,11 +201,12 @@ void ShadowPass::create(VkPhysicalDevice physicalDevice, VkDevice device,
             const VkDescriptorBufferInfo pageTableInfo{
                 pageTableBuffers_[frame]->handle(), 0, VK_WHOLE_SIZE};
             const VkDescriptorBufferInfo instanceInfo{instanceBuffers[frame], 0, VK_WHOLE_SIZE};
+            const VkDescriptorBufferInfo previousTransformInfo{previousTransformBuffers[frame], 0, VK_WHOLE_SIZE};
             const VkDescriptorBufferInfo instanceIndexInfo{instanceIndexBuffers[frame], 0, VK_WHOLE_SIZE};
             const VkDescriptorBufferInfo grassInstanceInfo{grassInstanceBuffers[frame], 0, VK_WHOLE_SIZE};
             const VkDescriptorBufferInfo grassClusterInfo{grassClusterBuffers[frame], 0, VK_WHOLE_SIZE};
             const VkDescriptorBufferInfo grassDeformationInfo{grassDeformationBuffers[frame], 0, VK_WHOLE_SIZE};
-            VkWriteDescriptorSet writes[10]{};
+            VkWriteDescriptorSet writes[11]{};
             writes[0] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr,
                          descriptorSets_[frame], 0, 0, 1,
                          VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &imageInfo, nullptr, nullptr};
@@ -234,6 +237,9 @@ void ShadowPass::create(VkPhysicalDevice physicalDevice, VkDevice device,
             writes[9] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr,
                          descriptorSets_[frame], 9, 0, 1,
                          VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &depthImageInfo, nullptr, nullptr};
+            writes[10] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr,
+                          descriptorSets_[frame], 8, 0, 1,
+                          VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, nullptr, &previousTransformInfo, nullptr};
             vkUpdateDescriptorSets(device_, std::size(writes), writes, 0, nullptr);
             writes[0].dstSet = grassDescriptorSets_[frame];
             writes[1].dstSet = grassDescriptorSets_[frame];
@@ -245,6 +251,7 @@ void ShadowPass::create(VkPhysicalDevice physicalDevice, VkDevice device,
             writes[7].dstSet = grassDescriptorSets_[frame];
             writes[8].dstSet = grassDescriptorSets_[frame];
             writes[9].dstSet = grassDescriptorSets_[frame];
+            writes[10].dstSet = grassDescriptorSets_[frame];
             vkUpdateDescriptorSets(device_, std::size(writes), writes, 0, nullptr);
             for (VkWriteDescriptorSet& write : writes) write.dstSet = grassVelocityDescriptorSets_[frame];
             vkUpdateDescriptorSets(device_, std::size(writes), writes, 0, nullptr);
@@ -366,6 +373,7 @@ void ShadowPass::updateDescriptors(
         const std::vector<VkBuffer>& uniformBuffers,
         const std::vector<VkBuffer>& materialBuffers,
         const std::vector<VkBuffer>& instanceBuffers,
+        const std::vector<VkBuffer>& previousTransformBuffers,
         const std::vector<VkBuffer>& instanceIndexBuffers,
         const std::vector<VkBuffer>& grassInstanceBuffers,
         const std::vector<VkBuffer>& grassClusterBuffers,
@@ -375,7 +383,8 @@ void ShadowPass::updateDescriptors(
     const std::size_t frameCount = descriptorSets_.size();
     if (device_ == VK_NULL_HANDLE || descriptorPool_ == VK_NULL_HANDLE ||
         materialBuffers.size() != frameCount || uniformBuffers.size() != frameCount ||
-        instanceBuffers.size() != frameCount || instanceIndexBuffers.size() != frameCount ||
+        instanceBuffers.size() != frameCount || previousTransformBuffers.size() != frameCount ||
+        instanceIndexBuffers.size() != frameCount ||
         grassInstanceBuffers.size() != frameCount || grassClusterBuffers.size() != frameCount ||
         grassDeformationBuffers.size() != frameCount || materialTextures.size() != MaxMaterialTextures ||
         grassDescriptorSets_.size() != frameCount || grassVelocityDescriptorSets_.size() != frameCount ||
@@ -388,11 +397,12 @@ void ShadowPass::updateDescriptors(
         const VkDescriptorBufferInfo material{materialBuffers[frame], 0, VK_WHOLE_SIZE};
         const VkDescriptorBufferInfo pageTable{pageTableBuffers_[frame]->handle(), 0, VK_WHOLE_SIZE};
         const VkDescriptorBufferInfo instance{instanceBuffers[frame], 0, VK_WHOLE_SIZE};
+        const VkDescriptorBufferInfo previousTransform{previousTransformBuffers[frame], 0, VK_WHOLE_SIZE};
         const VkDescriptorBufferInfo instanceIndex{instanceIndexBuffers[frame], 0, VK_WHOLE_SIZE};
         const VkDescriptorBufferInfo grassInstance{grassInstanceBuffers[frame], 0, VK_WHOLE_SIZE};
         const VkDescriptorBufferInfo grassCluster{grassClusterBuffers[frame], 0, VK_WHOLE_SIZE};
         const VkDescriptorBufferInfo grassDeformation{grassDeformationBuffers[frame], 0, VK_WHOLE_SIZE};
-        VkWriteDescriptorSet writes[8]{};
+        VkWriteDescriptorSet writes[9]{};
         writes[0] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr, descriptorSets_[frame], 1, 0, 1,
                      VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, nullptr, &uniform, nullptr};
         writes[1] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr, descriptorSets_[frame], 2, 0, 1,
@@ -410,6 +420,8 @@ void ShadowPass::updateDescriptors(
         writes[7] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr, descriptorSets_[frame], 10, 0,
                      MaxMaterialTextures, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
                      materialTextures.data(), nullptr, nullptr};
+        writes[8] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr, descriptorSets_[frame], 8, 0, 1,
+                     VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, nullptr, &previousTransform, nullptr};
         vkUpdateDescriptorSets(device_, std::size(writes), writes, 0, nullptr);
 
         for (VkDescriptorSet set : {grassDescriptorSets_[frame], grassVelocityDescriptorSets_[frame],

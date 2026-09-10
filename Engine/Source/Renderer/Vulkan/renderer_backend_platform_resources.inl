@@ -253,6 +253,7 @@
             std::vector<VkBuffer> buffers;
             std::vector<VkBuffer> gpuMaterialBuffers;
             std::vector<VkBuffer> gpuInstanceBuffers;
+            std::vector<VkBuffer> gpuPreviousTransformBuffers;
             std::vector<VkBuffer> gpuInstanceIndexBuffers;
             std::vector<VkBuffer> gpuGrassInstanceBuffers;
             std::vector<VkBuffer> gpuGrassClusterBuffers;
@@ -260,6 +261,7 @@
             buffers.reserve(uniformBuffers.size());
             gpuMaterialBuffers.reserve(materialBuffers.size());
             gpuInstanceBuffers.reserve(instanceBuffers.size());
+            gpuPreviousTransformBuffers.reserve(previousTransformBuffers.size());
             gpuInstanceIndexBuffers.reserve(compactGrassInstanceBuffers.size());
             gpuGrassInstanceBuffers.reserve(generatedGrassInstanceBuffers.size());
             gpuGrassClusterBuffers.reserve(grassClusterBuffers.size());
@@ -271,6 +273,9 @@
                 gpuMaterialBuffers.push_back(buffer.handle());
             }
             for (const Buffer& buffer : instanceBuffers) gpuInstanceBuffers.push_back(buffer.handle());
+            for (std::size_t i = 0; i < previousTransformBuffers.size(); ++i)
+                gpuPreviousTransformBuffers.push_back(previousTransformBuffers[i].handle() != VK_NULL_HANDLE
+                    ? previousTransformBuffers[i].handle() : instanceBuffers[i].handle());
             for (const Buffer& buffer : compactGrassInstanceBuffers) gpuInstanceIndexBuffers.push_back(buffer.handle());
             for (std::size_t i = 0; i < generatedGrassInstanceBuffers.size(); ++i)
                 gpuGrassInstanceBuffers.push_back(generatedGrassInstanceBuffers[i].handle() != VK_NULL_HANDLE
@@ -283,13 +288,13 @@
                     ? grassDeformationBuffers[i].handle() : instanceBuffers[i].handle());
             if (shadowPass.descriptorSetLayout() == VK_NULL_HANDLE) {
                 shadowPass.create(vulkanDevice.physical(), device, buffers,
-                                  gpuMaterialBuffers, gpuInstanceBuffers, gpuInstanceIndexBuffers,
+                                  gpuMaterialBuffers, gpuInstanceBuffers, gpuPreviousTransformBuffers, gpuInstanceIndexBuffers,
                                   gpuGrassInstanceBuffers, gpuGrassClusterBuffers, gpuGrassDeformationBuffers,
                                   materialTextureDescriptors, sizeof(UniformBufferObject),
                                   vulkanDevice.allocator(), assetManager);
             } else {
                 shadowPass.updateDescriptors(
-                    buffers, gpuMaterialBuffers, gpuInstanceBuffers, gpuInstanceIndexBuffers,
+                    buffers, gpuMaterialBuffers, gpuInstanceBuffers, gpuPreviousTransformBuffers, gpuInstanceIndexBuffers,
                     gpuGrassInstanceBuffers, gpuGrassClusterBuffers, gpuGrassDeformationBuffers,
                     materialTextureDescriptors, sizeof(UniformBufferObject));
             }
@@ -299,6 +304,7 @@
             std::vector<VkBuffer> buffers;
             std::vector<VkBuffer> gpuMaterialBuffers;
             std::vector<VkBuffer> gpuInstanceBuffers;
+            std::vector<VkBuffer> gpuPreviousTransformBuffers;
             std::vector<VkBuffer> gpuInstanceIndexBuffers;
             std::vector<VkBuffer> gpuGrassInstanceBuffers;
             std::vector<VkBuffer> gpuGrassClusterBuffers;
@@ -306,6 +312,7 @@
             buffers.reserve(sceneUniformBuffers.size());
             gpuMaterialBuffers.reserve(materialBuffers.size());
             gpuInstanceBuffers.reserve(instanceBuffers.size());
+            gpuPreviousTransformBuffers.reserve(previousTransformBuffers.size());
             gpuInstanceIndexBuffers.reserve(compactGrassInstanceBuffers.size());
             gpuGrassInstanceBuffers.reserve(generatedGrassInstanceBuffers.size());
             gpuGrassClusterBuffers.reserve(grassClusterBuffers.size());
@@ -313,6 +320,9 @@
             for (const Buffer& buffer : sceneUniformBuffers) buffers.push_back(buffer.handle());
             for (const Buffer& buffer : materialBuffers) gpuMaterialBuffers.push_back(buffer.handle());
             for (const Buffer& buffer : instanceBuffers) gpuInstanceBuffers.push_back(buffer.handle());
+            for (std::size_t i = 0; i < previousTransformBuffers.size(); ++i)
+                gpuPreviousTransformBuffers.push_back(previousTransformBuffers[i].handle() != VK_NULL_HANDLE
+                    ? previousTransformBuffers[i].handle() : instanceBuffers[i].handle());
             for (const Buffer& buffer : compactGrassInstanceBuffers) gpuInstanceIndexBuffers.push_back(buffer.handle());
             for (std::size_t i = 0; i < generatedGrassInstanceBuffers.size(); ++i)
                 gpuGrassInstanceBuffers.push_back(generatedGrassInstanceBuffers[i].handle() != VK_NULL_HANDLE
@@ -325,13 +335,13 @@
                     ? grassDeformationBuffers[i].handle() : instanceBuffers[i].handle());
             if (sceneDescriptorPass.descriptorSetLayout() == VK_NULL_HANDLE) {
                 sceneDescriptorPass.create(vulkanDevice.physical(), device, buffers,
-                                           gpuMaterialBuffers, gpuInstanceBuffers, gpuInstanceIndexBuffers,
+                                           gpuMaterialBuffers, gpuInstanceBuffers, gpuPreviousTransformBuffers, gpuInstanceIndexBuffers,
                                            gpuGrassInstanceBuffers, gpuGrassClusterBuffers, gpuGrassDeformationBuffers,
                                            materialTextureDescriptors, sizeof(UniformBufferObject),
                                            vulkanDevice.allocator(), assetManager);
             } else {
                 sceneDescriptorPass.updateDescriptors(
-                    buffers, gpuMaterialBuffers, gpuInstanceBuffers, gpuInstanceIndexBuffers,
+                    buffers, gpuMaterialBuffers, gpuInstanceBuffers, gpuPreviousTransformBuffers, gpuInstanceIndexBuffers,
                     gpuGrassInstanceBuffers, gpuGrassClusterBuffers, gpuGrassDeformationBuffers,
                     materialTextureDescriptors, sizeof(UniformBufferObject));
             }
@@ -476,6 +486,22 @@
             hdrBuffer.create(vulkanDevice.physical(), device, swapchain.extent(), vulkanDevice.allocator());
             msaa.create(swapchain.extent(), HdrBuffer::Format);
             createDepthResources();
+
+            // Instance buffers outlive swapchain attachments, so changing
+            // AA mode must explicitly add/remove the TAA-only history stream.
+            for (Buffer& buffer : previousTransformBuffers) buffer.destroy();
+            if (antialiasingLevel == AntialiasingLevel::TAA) {
+                for (Buffer& buffer : previousTransformBuffers) {
+                    buffer.createHostVisible(vulkanDevice.physical(), device,
+                        sizeof(RendererPreviousTransformData) *
+                            std::max<std::size_t>(1, previousInstanceTransforms.size()),
+                        VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, vulkanDevice.allocator());
+                    if (!previousInstanceTransforms.empty()) {
+                        buffer.update(previousInstanceTransforms.data(),
+                            sizeof(RendererPreviousTransformData) * previousInstanceTransforms.size());
+                    }
+                }
+            }
 
             createCullingResources();
             createShadowPass();

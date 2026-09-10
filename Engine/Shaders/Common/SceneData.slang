@@ -60,14 +60,18 @@ float2 materialTextureUv(MaterialData material, uint slot, float2 uv0, float2 uv
     return rotated + transform.xy;
 }
 
-// Mirrors Engine::RendererInstanceData.  The renderer binds this table as an
-// SSBO so instance fetch is driven by the indirect command's firstInstance,
-// not a per-instance vertex-input binding.
+// Mirrors Engine::RendererInstanceData and RendererPreviousTransformData.
+// The renderer binds these tables as SSBOs so instance fetch is driven by the
+// indirect command's firstInstance, not a vertex-input binding.
 struct RendererInstanceData
 {
     float4 positionMaterial;
     float4 rotation;
     float4 scaleBase;
+};
+
+struct RendererPreviousTransformData
+{
     float4 previousPosition;
     float4 previousRotation;
     float4 previousScale;

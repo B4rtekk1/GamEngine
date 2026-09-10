@@ -39,6 +39,7 @@ namespace Engine {
                     const std::vector<VkBuffer> &uniformBuffers,
                     const std::vector<VkBuffer> &materialBuffers,
                     const std::vector<VkBuffer> &instanceBuffers,
+                    const std::vector<VkBuffer> &previousTransformBuffers,
                     const std::vector<VkBuffer> &instanceIndexBuffers,
                     const std::vector<VkBuffer> &grassInstanceBuffers,
                     const std::vector<VkBuffer> &grassClusterBuffers,
@@ -53,6 +54,7 @@ namespace Engine {
         void updateDescriptors(const std::vector<VkBuffer> &uniformBuffers,
                                const std::vector<VkBuffer> &materialBuffers,
                                const std::vector<VkBuffer> &instanceBuffers,
+                               const std::vector<VkBuffer> &previousTransformBuffers,
                                const std::vector<VkBuffer> &instanceIndexBuffers,
                                const std::vector<VkBuffer> &grassInstanceBuffers,
                                const std::vector<VkBuffer> &grassClusterBuffers,
@@ -100,7 +102,7 @@ namespace Engine {
         void setGrassVelocityVisibleInstances(std::uint32_t frameIndex, VkBuffer visibleInstances) const;
         void setGrassShadowVisibleInstances(std::uint32_t frameIndex, VkBuffer visibleInstances) const;
 
-        // Packed grass reserves bindings 7/8 for cluster/deformation data.
+        // Packed grass reserves bindings 3/7 for cluster/deformation data.
         // this explicit prevents a future grass-only descriptor set from
         // silently using the generic seven-binding contract.
         static constexpr std::uint32_t GrassClusterBinding = 3;

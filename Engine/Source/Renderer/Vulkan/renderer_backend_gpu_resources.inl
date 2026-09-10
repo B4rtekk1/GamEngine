@@ -750,6 +750,7 @@
             for (Buffer& buffer : shadowDrawCountBuffers) buffer.destroy();
             for (Buffer& buffer : shadowTwoSidedDrawCountBuffers) buffer.destroy();
             for (Buffer& buffer : cullingObjectBuffers) buffer.destroy();
+            for (Buffer& buffer : previousTransformBuffers) buffer.destroy();
             for (Buffer& buffer : visibleInstanceBuffers) buffer.destroy();
             for (Buffer& buffer : visibleInstanceCountBuffers) buffer.destroy();
             for (Buffer& buffer : grassBinCountBuffers) buffer.destroy();

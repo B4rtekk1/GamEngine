@@ -78,9 +78,8 @@ namespace Engine {
      * Generic-renderer instance data. Dense foliage uses GPUGrassInstance and
      * GPUGrassDeformation instead; do not add vegetation-only state here.
      *
-     * Current and previous transforms are deliberately retained together for
-     * the generic TAA velocity path. This is 96 bytes, rather than charging
-     * every ordinary MeshRenderer for grass deformation data as well.
+     * This current-state stream remains 48 bytes. TAA history lives in the
+     * separately allocated RendererPreviousTransformData stream instead.
      */
     struct RendererInstanceData {
         // xyz: world position, w: bit-cast material-table base index.
@@ -89,11 +88,17 @@ namespace Engine {
         glm::vec4 rotation{0.0F, 0.0F, 0.0F, 1.0F};
         // xyz: non-uniform scale; w is std430 padding.
         glm::vec4 scaleBase{1.0F, 1.0F, 1.0F, 0.0F};
+    };
+    static_assert(sizeof(RendererInstanceData) == 48);
+
+    /** TAA-only transform history. Kept out of the current instance stream
+     * so disabling TAA does not reserve a second transform per renderable. */
+    struct RendererPreviousTransformData {
         glm::vec4 previousPosition{};
         glm::vec4 previousRotation{0.0F, 0.0F, 0.0F, 1.0F};
         glm::vec4 previousScale{1.0F};
     };
-    static_assert(sizeof(RendererInstanceData) == 96);
+    static_assert(sizeof(RendererPreviousTransformData) == 48);
 
     /** std430-compatible records backing the persistent GPU Scene SSBOs. */
     struct alignas(16) GPUSceneInstanceRecord {

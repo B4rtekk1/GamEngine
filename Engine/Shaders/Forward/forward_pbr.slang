@@ -11,6 +11,7 @@ import Common.ShadowSampling;
 [[vk::binding(1, 0)]] ConstantBuffer<RendererFrameData> frame;
 [[vk::binding(5, 0)]] StructuredBuffer<RendererInstanceData> visibleInstances;
 [[vk::binding(6, 0)]] StructuredBuffer<uint> visibleInstanceIndices;
+[[vk::binding(8, 0)]] StructuredBuffer<RendererPreviousTransformData> previousTransforms;
 
 struct ForwardVertexInput
 {
@@ -41,7 +42,9 @@ struct ForwardVertexOutput
 ForwardVertexOutput vertexMain(ForwardVertexInput input, uint instanceIndex : SV_InstanceID,
                                uint baseInstance : SV_StartInstanceLocation)
 {
-    RendererInstanceData instance = visibleInstances[visibleInstanceIndices[baseInstance + instanceIndex]];
+    const uint visibleIndex = visibleInstanceIndices[baseInstance + instanceIndex];
+    RendererInstanceData instance = visibleInstances[visibleIndex];
+    RendererPreviousTransformData previousTransform = previousTransforms[visibleIndex];
     const float3 localPosition = input.position;
     const float3 localNormal = input.normal;
 
@@ -58,13 +61,13 @@ ForwardVertexOutput vertexMain(ForwardVertexInput input, uint instanceIndex : SV
 
     ForwardVertexOutput output;
     float4 currentClip = mul(mul(worldPosition, frame.view), frame.projection);
-    float4 previousQ = instance.previousRotation;
+    float4 previousQ = previousTransform.previousRotation;
     float3x3 previousRotationMatrix = float3x3(
         1.0 - 2.0 * (previousQ.y * previousQ.y + previousQ.z * previousQ.z), 2.0 * (previousQ.x * previousQ.y + previousQ.z * previousQ.w), 2.0 * (previousQ.x * previousQ.z - previousQ.y * previousQ.w),
         2.0 * (previousQ.x * previousQ.y - previousQ.z * previousQ.w), 1.0 - 2.0 * (previousQ.x * previousQ.x + previousQ.z * previousQ.z), 2.0 * (previousQ.y * previousQ.z + previousQ.x * previousQ.w),
         2.0 * (previousQ.x * previousQ.z + previousQ.y * previousQ.w), 2.0 * (previousQ.y * previousQ.z - previousQ.x * previousQ.w), 1.0 - 2.0 * (previousQ.x * previousQ.x + previousQ.y * previousQ.y));
-    float3 previousWorldPosition = mul(input.position * instance.previousScale.xyz, previousRotationMatrix) +
-                                   instance.previousPosition.xyz;
+    float3 previousWorldPosition = mul(input.position * previousTransform.previousScale.xyz, previousRotationMatrix) +
+                                   previousTransform.previousPosition.xyz;
     output.position = currentClip;
     output.color = input.color;
     output.worldPosition = worldPosition.xyz;

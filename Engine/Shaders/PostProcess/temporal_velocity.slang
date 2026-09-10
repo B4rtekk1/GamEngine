@@ -5,6 +5,7 @@ import Common.SceneData;
 [[vk::binding(10, 0)]] Sampler2D materialTextures[];
 [[vk::binding(5, 0)]] StructuredBuffer<RendererInstanceData> visibleInstances;
 [[vk::binding(6, 0)]] StructuredBuffer<uint> visibleInstanceIndices;
+[[vk::binding(8, 0)]] StructuredBuffer<RendererPreviousTransformData> previousTransforms;
 
 struct VertexInput
 {
@@ -35,14 +36,16 @@ struct VertexOutput
 VertexOutput vertexMain(VertexInput input, uint instanceIndex : SV_InstanceID,
                         uint baseInstance : SV_StartInstanceLocation)
 {
-    RendererInstanceData instance = visibleInstances[visibleInstanceIndices[baseInstance + instanceIndex]];
+    const uint visibleIndex = visibleInstanceIndices[baseInstance + instanceIndex];
+    RendererInstanceData instance = visibleInstances[visibleIndex];
+    RendererPreviousTransformData previousTransform = previousTransforms[visibleIndex];
     const float3 localPosition = input.position;
     const float3 previousLocalPosition = input.position;
 
     float4 currentWorld = float4(rotateByQuaternion(localPosition * instance.scaleBase.xyz,
                                                     instance.rotation) + instance.positionMaterial.xyz, 1.0);
-    float4 previousWorld = float4(rotateByQuaternion(previousLocalPosition * instance.previousScale.xyz,
-                                                     instance.previousRotation) + instance.previousPosition.xyz, 1.0);
+    float4 previousWorld = float4(rotateByQuaternion(previousLocalPosition * previousTransform.previousScale.xyz,
+                                                     previousTransform.previousRotation) + previousTransform.previousPosition.xyz, 1.0);
 
     VertexOutput output;
     float4 currentClip = mul(mul(currentWorld, frame.view), frame.projection);

@@ -26,6 +26,9 @@
                 for (Buffer& buffer : instanceBuffers) {
                     buffer.destroy();
                 }
+                for (Buffer& buffer : previousTransformBuffers) {
+                    buffer.destroy();
+                }
                 for (Buffer& buffer : compactGrassInstanceBuffers) {
                     buffer.destroy();
                 }

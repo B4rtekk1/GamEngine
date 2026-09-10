@@ -89,6 +89,7 @@
         std::vector<RenderableRecord>& renderables;
         std::vector<InstanceBatch>& instanceBatches;
         std::vector<RendererInstanceData>& instanceModels;
+        std::vector<RendererPreviousTransformData>& previousInstanceTransforms;
         std::vector<GPUMaterialData>& materials;
         std::uint32_t& materialSlots;
         std::uint64_t& lastTransformRevision;
@@ -104,6 +105,9 @@
         Buffer vertexBuffer;
         Buffer indexBuffer;
         std::array<Buffer, MAX_FRAMES_IN_FLIGHT> instanceBuffers;
+        // Allocated only with TAA. Descriptor binding 8 falls back to the
+        // current transform buffer when this array is empty.
+        std::array<Buffer, MAX_FRAMES_IN_FLIGHT> previousTransformBuffers;
         std::array<Buffer, MAX_FRAMES_IN_FLIGHT> materialBuffers;
         std::array<Buffer, MAX_FRAMES_IN_FLIGHT> gpuSceneInstanceBuffers;
         std::array<Buffer, MAX_FRAMES_IN_FLIGHT> gpuSceneMeshBuffers;

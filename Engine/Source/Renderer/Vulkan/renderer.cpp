@@ -203,6 +203,7 @@ namespace Engine {
               renderables(sceneGpu.renderables),
               instanceBatches(sceneGpu.instanceBatches),
               instanceModels(sceneGpu.instanceModels),
+              previousInstanceTransforms(sceneGpu.previousInstanceTransforms),
               materials(sceneGpu.materials),
               materialSlots(sceneGpu.materialSlots),
               lastTransformRevision(sceneGpu.lastTransformRevision),

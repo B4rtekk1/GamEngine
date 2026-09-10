@@ -61,6 +61,7 @@ namespace Engine {
         std::vector<std::vector<std::size_t> > batchRenderableIndices;
         std::unordered_map<Entity, std::size_t> renderableIndices;
         std::vector<RendererInstanceData> instanceModels;
+        std::vector<RendererPreviousTransformData> previousInstanceTransforms;
         // Dedicated source data for the next grass draw path. These records
         // are 16 B and cluster-relative; normal scene objects never enter it.
         std::vector<GPUGrassInstance> grassInstances;

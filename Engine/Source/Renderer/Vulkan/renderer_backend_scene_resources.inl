@@ -192,6 +192,7 @@
             sceneGpu.grassInstanceGpuIndices.clear();
             sceneGpu.grassClusters.clear();
             sceneGpu.grassClusterEntities.clear();
+            previousInstanceTransforms.clear();
             instanceBatches.reserve(registry.size());
             sceneGpu.batchRenderableIndices.reserve(registry.size());
             glm::vec3 sceneMinimum{std::numeric_limits<float>::max()};
@@ -660,6 +661,9 @@
             // establish the same transform stage used by the frame pipeline.
             TransformSystem::updateDirty(registry);
             instanceModels.resize(renderables.size());
+            // updateRenderableBuffers() initializes the current transform
+            // stream and preserves the prior pose for each changed record.
+            previousInstanceTransforms.resize(renderables.size());
             // Generic objects own their material-table ranges. Packed grass
             // receives one shared range per TerrainGrassComponent below.
             std::uint32_t nextMaterialOffset = 0;
@@ -697,10 +701,13 @@
                     materials[offsetIt->second + slot] = packMaterial(source, mesh);
                 }
             });
-            for (RendererInstanceData& model : instanceModels) {
-                model.previousPosition = glm::vec4{glm::vec3{model.positionMaterial}, 0.0F};
-                model.previousRotation = model.rotation;
-                model.previousScale = model.scaleBase;
+            for (std::size_t index = 0; index < instanceModels.size(); ++index) {
+                const RendererInstanceData& model = instanceModels[index];
+                previousInstanceTransforms[index] = {
+                    .previousPosition = glm::vec4{glm::vec3{model.positionMaterial}, 0.0F},
+                    .previousRotation = model.rotation,
+                    .previousScale = model.scaleBase,
+                };
             }
             for (Buffer& buffer : instanceBuffers) {
                 buffer.createHostVisible(vulkanDevice.physical(), device,
@@ -711,6 +718,20 @@
                     buffer.update(instanceModels.data(),
                                   sizeof(RendererInstanceData) * instanceModels.size());
                 }
+            }
+            if (antialiasingLevel == AntialiasingLevel::TAA) {
+                for (Buffer& buffer : previousTransformBuffers) {
+                    buffer.createHostVisible(vulkanDevice.physical(), device,
+                        sizeof(RendererPreviousTransformData) *
+                            std::max<std::size_t>(1, previousInstanceTransforms.size()),
+                        VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, vulkanDevice.allocator());
+                    if (!previousInstanceTransforms.empty()) {
+                        buffer.update(previousInstanceTransforms.data(),
+                            sizeof(RendererPreviousTransformData) * previousInstanceTransforms.size());
+                    }
+                }
+            } else {
+                for (Buffer& buffer : previousTransformBuffers) buffer.destroy();
             }
             // Binding 6 is part of the forward/shadow descriptor contract and
             // therefore must exist before createShadowPass(). The first half
@@ -964,17 +985,26 @@
                 .dirtyFrames = &RenderableRecord::transformDirtyFrames,
                 .indices = dirtyTransforms[currentFrame],
             });
+            if (antialiasingLevel == AntialiasingLevel::TAA) {
+                uploadDirtyIndices<RendererPreviousTransformData>({
+                    .buffer = previousTransformBuffers[currentFrame],
+                    .data = previousInstanceTransforms,
+                    .dirtyFrames = &RenderableRecord::transformDirtyFrames,
+                    .indices = dirtyTransforms[currentFrame],
+                });
+            }
             // Once this frame has consumed the old/current pair, future
             // frames must see a stationary pair unless the transform changes
             // again. Keep just the M uploaded IDs while their dirty bit is
             // advanced to the next frame-in-flight.
             const std::vector<std::size_t> uploadedTransforms = dirtyTransforms[currentFrame];
             for (const std::size_t index : uploadedTransforms) {
-                RendererInstanceData& rendererInstance = instanceModels[index];
-                rendererInstance.previousPosition =
-                    glm::vec4{glm::vec3{rendererInstance.positionMaterial}, 0.0F};
-                rendererInstance.previousRotation = rendererInstance.rotation;
-                rendererInstance.previousScale = rendererInstance.scaleBase;
+                const RendererInstanceData& rendererInstance = instanceModels[index];
+                previousInstanceTransforms[index] = {
+                    .previousPosition = glm::vec4{glm::vec3{rendererInstance.positionMaterial}, 0.0F},
+                    .previousRotation = rendererInstance.rotation,
+                    .previousScale = rendererInstance.scaleBase,
+                };
             }
             clearDirtyIndices(&RenderableRecord::transformDirtyFrames,
                               dirtyTransforms[currentFrame], bit);
@@ -1158,14 +1188,16 @@
                     // changing. The dirty upload below carries both poses to
                     // every frame-in-flight, so velocity always observes the
                     // immediately preceding transform without an O(N) pass.
+                    RendererPreviousTransformData& previousTransform = previousInstanceTransforms[index];
                     RendererInstanceData& rendererInstance = instanceModels[index];
-                    rendererInstance.previousPosition =
-                        glm::vec4{glm::vec3{rendererInstance.positionMaterial}, 0.0F};
-                    rendererInstance.previousRotation = rendererInstance.rotation;
-                    rendererInstance.previousScale = rendererInstance.scaleBase;
+                    previousTransform = {
+                        .previousPosition = glm::vec4{glm::vec3{rendererInstance.positionMaterial}, 0.0F},
+                        .previousRotation = rendererInstance.rotation,
+                        .previousScale = rendererInstance.scaleBase,
+                    };
                     const bool hadCachedTransform = record.hasCachedTransform;
                     const AABB previousShadowBounds = hadCachedTransform
-                        ? shadowBounds(modelFromInstance(rendererInstance)) : AABB{};
+                        ? shadowBounds(modelFromInstance(instanceModels[index])) : AABB{};
                     glm::vec3 decomposedScale{};
                     glm::quat decomposedRotation{};
                     glm::vec3 decomposedTranslation{};
