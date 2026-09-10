@@ -110,6 +110,18 @@
         bool& hasShadowCasters;
         Buffer vertexBuffer;
         Buffer indexBuffer;
+        // Geometry Heap. Mesh ranges are never derived from dense ECS order:
+        // a new proxy receives an append-only sub-allocation and removing a
+        // proxy leaves the old range untouched until a future heap compaction.
+        struct GeometryHeapAllocation final {
+            std::uint32_t firstVertex{};
+            std::uint32_t vertexCount{};
+            std::uint32_t firstIndex{};
+            std::uint32_t indexCount{};
+        };
+        std::unordered_map<const Mesh*, GeometryHeapAllocation> geometryHeapAllocations;
+        std::uint32_t geometryHeapVertexHighWater{};
+        std::uint32_t geometryHeapIndexHighWater{};
         std::array<Buffer, MAX_FRAMES_IN_FLIGHT> instanceBuffers;
         // Allocated only with TAA. Descriptor binding 8 falls back to the
         // current transform buffer when this array is empty.
@@ -353,6 +365,12 @@
         std::vector<VkSemaphore> renderFinishedSemaphores;
         std::vector<VkFence> inFlightFences;
         uint32_t currentFrame = 0;
+        // A fence is also the completion source for retired GPU-scene slots.
+        // Values are monotonically increasing submission serials; unlike a
+        // queue idle this lets reclamation progress one frame at a time.
+        std::array<std::uint64_t, MAX_FRAMES_IN_FLIGHT> frameSubmissionValues{};
+        std::uint64_t submittedFrameValue{};
+        std::uint64_t completedFrameValue{};
         std::uint64_t taaSampleIndex = 0;
         float taaJitterX = 0.0F;
         float taaJitterY = 0.0F;

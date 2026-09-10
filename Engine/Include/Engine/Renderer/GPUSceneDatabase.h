@@ -18,6 +18,17 @@ namespace Engine {
         std::numeric_limits<GPUSceneInstanceId>::max();
 
     /**
+     * Stable renderer-facing identity for an extracted ECS renderable.  These
+     * are table indices, not offsets into transient draw lists, so a change
+     * to another entity can never invalidate this proxy.
+     */
+    struct RenderProxyHandle final {
+        GPUSceneInstanceId instance{InvalidGPUSceneInstanceId};
+        GPUSceneMeshId mesh{InvalidGPUSceneInstanceId};
+        GPUSceneMaterialId material{InvalidGPUSceneInstanceId};
+    };
+
+    /**
      * Persistent, renderer-owned scene table.  IDs are indices, never CPU
      * pointers, so shaders can follow instance -> mesh -> material links.
      * The class is deliberately API/Vulkan agnostic: the backend consumes its
@@ -59,7 +70,11 @@ namespace Engine {
         /// @p sourceKey identifies one extracted renderable (an entity or one
         /// compact instance owned by an entity, such as terrain grass).
         [[nodiscard]] GPUSceneInstanceId upsertInstance(std::uint64_t sourceKey, const GPUInstance& instance);
-        void removeInstance(std::uint64_t sourceKey);
+        /// Marks an instance inactive immediately. Its slot is reusable only
+        /// after reclaimDeferredInstances() observes the submission value
+        /// which was current when it was removed.
+        void removeInstance(std::uint64_t sourceKey, std::uint64_t retireValue = 0);
+        void reclaimDeferredInstances(std::uint64_t completedValue);
         [[nodiscard]] GPUSceneMeshId upsertMesh(std::uint64_t sourceKey, const GPUMesh& mesh);
         [[nodiscard]] GPUSceneMaterialId upsertMaterial(std::uint64_t sourceKey, const GPUMaterial& material);
 
@@ -82,7 +97,12 @@ namespace Engine {
         std::vector<GPUInstance> m_instances;
         std::vector<GPUMesh> m_meshes;
         std::vector<GPUMaterial> m_materials;
+        struct DeferredInstanceFree final {
+            GPUSceneInstanceId id;
+            std::uint64_t retireValue;
+        };
         std::vector<GPUSceneInstanceId> m_freeInstances;
+        std::vector<DeferredInstanceFree> m_deferredInstanceFrees;
         std::unordered_map<std::uint64_t, GPUSceneInstanceId> m_instanceIds;
         std::unordered_map<std::uint64_t, GPUSceneMeshId> m_meshIds;
         std::unordered_map<std::uint64_t, GPUSceneMaterialId> m_materialIds;

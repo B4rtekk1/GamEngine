@@ -350,7 +350,30 @@ Texture2D &Texture2D::operator=(Texture2D &&other) noexcept {
                 if (ownsUploadBatch) readyTimeline_ = upload->submit().timelineValue;
                 commandBuffer = VK_NULL_HANDLE;
             }
-            else { if (vkEndCommandBuffer(commandBuffer) != VK_SUCCESS) throw std::runtime_error("Could not end Texture2D upload command buffer"); VkSubmitInfo submit{VK_STRUCTURE_TYPE_SUBMIT_INFO}; submit.commandBufferCount = 1; submit.pCommandBuffers = &commandBuffer; if (vkQueueSubmit(queue, 1, &submit, VK_NULL_HANDLE) != VK_SUCCESS) throw std::runtime_error("Could not upload Texture2D"); vkQueueWaitIdle(queue); vkFreeCommandBuffers(device_, commandPool, 1, &commandBuffer); commandBuffer = VK_NULL_HANDLE; }
+            else {
+                if (vkEndCommandBuffer(commandBuffer) != VK_SUCCESS) {
+                    throw std::runtime_error("Could not end Texture2D upload command buffer");
+                }
+                VkFenceCreateInfo fenceInfo{VK_STRUCTURE_TYPE_FENCE_CREATE_INFO};
+                VkFence uploadFence = VK_NULL_HANDLE;
+                if (vkCreateFence(device_, &fenceInfo, nullptr, &uploadFence) != VK_SUCCESS) {
+                    throw std::runtime_error("Could not create Texture2D upload fence");
+                }
+                VkSubmitInfo submit{VK_STRUCTURE_TYPE_SUBMIT_INFO};
+                submit.commandBufferCount = 1;
+                submit.pCommandBuffers = &commandBuffer;
+                if (vkQueueSubmit(queue, 1, &submit, uploadFence) != VK_SUCCESS) {
+                    vkDestroyFence(device_, uploadFence, nullptr);
+                    throw std::runtime_error("Could not upload Texture2D");
+                }
+                // This legacy fallback has no UploadContext to retain its
+                // staging allocation.  Wait only for this submission rather
+                // than idling every pending operation on the graphics queue.
+                static_cast<void>(vkWaitForFences(device_, 1, &uploadFence, VK_TRUE, UINT64_MAX));
+                vkDestroyFence(device_, uploadFence, nullptr);
+                vkFreeCommandBuffers(device_, commandPool, 1, &commandBuffer);
+                commandBuffer = VK_NULL_HANDLE;
+            }
 
             VkImageViewCreateInfo view{VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
             view.image = image_;
@@ -470,8 +493,19 @@ Texture2D &Texture2D::operator=(Texture2D &&other) noexcept {
             } else {
                 if (vkEndCommandBuffer(commandBuffer) != VK_SUCCESS) throw std::runtime_error("Could not end cooked Texture2D upload command buffer");
                 VkSubmitInfo submit{VK_STRUCTURE_TYPE_SUBMIT_INFO}; submit.commandBufferCount = 1; submit.pCommandBuffers = &commandBuffer;
-                if (vkQueueSubmit(queue, 1, &submit, VK_NULL_HANDLE) != VK_SUCCESS) throw std::runtime_error("Could not upload cooked Texture2D");
-                vkQueueWaitIdle(queue); vkFreeCommandBuffers(device_, commandPool, 1, &commandBuffer); commandBuffer = VK_NULL_HANDLE;
+                VkFenceCreateInfo fenceInfo{VK_STRUCTURE_TYPE_FENCE_CREATE_INFO};
+                VkFence uploadFence = VK_NULL_HANDLE;
+                if (vkCreateFence(device_, &fenceInfo, nullptr, &uploadFence) != VK_SUCCESS) {
+                    throw std::runtime_error("Could not create cooked Texture2D upload fence");
+                }
+                if (vkQueueSubmit(queue, 1, &submit, uploadFence) != VK_SUCCESS) {
+                    vkDestroyFence(device_, uploadFence, nullptr);
+                    throw std::runtime_error("Could not upload cooked Texture2D");
+                }
+                static_cast<void>(vkWaitForFences(device_, 1, &uploadFence, VK_TRUE, UINT64_MAX));
+                vkDestroyFence(device_, uploadFence, nullptr);
+                vkFreeCommandBuffers(device_, commandPool, 1, &commandBuffer);
+                commandBuffer = VK_NULL_HANDLE;
             }
             VkImageViewCreateInfo view{VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
             view.image = image_; view.viewType = VK_IMAGE_VIEW_TYPE_2D; view.format = format_;

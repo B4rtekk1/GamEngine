@@ -1111,6 +1111,9 @@
 
         [[nodiscard]] bool acquireFrameImage(uint32_t& imageIndex) {
             vkWaitForFences(device, 1, &inFlightFences[currentFrame], VK_TRUE, UINT64_MAX);
+            completedFrameValue = std::max(completedFrameValue,
+                                           frameSubmissionValues[currentFrame]);
+            sceneGpu.database.reclaimDeferredInstances(completedFrameValue);
             if (const auto completed = gpuTimestampProfiler.completedFrame(currentFrame)) {
                 lastGpuProfile = *completed;
             }
@@ -1179,6 +1182,7 @@
                     "Could not submit command buffer to queue (VkResult " +
                     std::to_string(static_cast<int>(submitResult)) + ")");
             }
+            frameSubmissionValues[currentFrame] = ++submittedFrameValue;
             VkPresentInfoKHR presentInfo{};
             presentInfo.sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR;
             presentInfo.waitSemaphoreCount = 1;

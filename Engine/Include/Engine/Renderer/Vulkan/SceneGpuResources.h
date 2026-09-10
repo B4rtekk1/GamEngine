@@ -35,7 +35,9 @@ namespace Engine {
             std::uint8_t cullingDirtyFrames{0};
             // Offset into the compact material table.
             std::uint32_t materialTableOffset{};
-            GPUSceneInstanceId gpuSceneInstanceId{InvalidGPUSceneInstanceId};
+            // Stable links into the retained GPU scene. Draw-list compaction
+            // never changes these IDs.
+            RenderProxyHandle renderProxy{};
         };
 
         struct InstanceBatch {

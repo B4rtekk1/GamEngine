@@ -17,15 +17,21 @@ namespace Engine {
         EXPECT_EQ(database.dirty().instances.front(), id);
     }
 
-    TEST(GPUSceneDatabaseTests, ReusesRemovedInstanceSlot) {
+    TEST(GPUSceneDatabaseTests, ReusesRemovedInstanceSlotOnlyAfterGpuRetiresIt) {
         GPUSceneDatabase database;
         const auto first = database.upsertInstance(1, {});
-        database.removeInstance(1);
-        const auto reused = database.upsertInstance(2, {});
+        database.removeInstance(1, 7);
+        const auto beforeRetirement = database.upsertInstance(2, {});
 
-        EXPECT_EQ(reused, first);
+        EXPECT_NE(beforeRetirement, first);
+        database.removeInstance(2, 7);
+        database.reclaimDeferredInstances(6);
+        EXPECT_NE(database.upsertInstance(3, {}), first);
+
+        database.reclaimDeferredInstances(7);
+        const auto reused = database.upsertInstance(4, {});
+        EXPECT_EQ(reused, beforeRetirement);
         EXPECT_TRUE(database.instances()[reused].alive);
-        EXPECT_TRUE(database.dirty().removedInstances.empty());
     }
 
     TEST(GPUSceneDatabaseTests, MeshAndMaterialAreDeduplicatedBySourceKey) {

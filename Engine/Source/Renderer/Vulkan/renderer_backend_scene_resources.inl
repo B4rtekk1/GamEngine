@@ -252,10 +252,18 @@
 
         void createMeshBuffers() {
             auto uploadBatch = uploadContext.beginBatch();
-            // A topology rebuild creates a new GPU allocation layout. Clear the
-            // database only here; ordinary transform/material changes update
-            // stable records in place below.
-            sceneGpu.database.clear();
+            // Renderable tables are reconstructed below, but geometry itself
+            // is retained in the append-only Geometry Heap.  In particular,
+            // do not clear GPUSceneDatabase here: existing proxies retain
+            // their instance/mesh/material IDs across an ECS topology delta.
+            for (const RenderableRecord& record : renderables) {
+                if (!registry.has<Transform>(record.entity) ||
+                    !registry.has<MeshRenderer>(record.entity) ||
+                    !registry.get<MeshRenderer>(record.entity).hasMesh()) {
+                    sceneGpu.database.removeInstance(static_cast<std::uint64_t>(record.entity),
+                                                     submittedFrameValue);
+                }
+            }
             renderables.reserve(registry.size());
             renderables.clear();
             instanceBatches.clear();
@@ -336,9 +344,15 @@
             rendererUploads.reserve(registry.size());
             grassUploads.reserve(registry.size());
             plannedUploadedMeshes.reserve(uniqueMeshes.size());
-            std::uint32_t vertexCount = 0;
-            std::uint32_t indexCount = 0;
+            std::uint32_t vertexCount = geometryHeapVertexHighWater;
+            std::uint32_t indexCount = geometryHeapIndexHighWater;
             const auto planUpload = [&](const Mesh* mesh) {
+                if (const auto found = geometryHeapAllocations.find(mesh);
+                    found != geometryHeapAllocations.end() &&
+                    found->second.vertexCount == mesh->vertices.size() &&
+                    found->second.indexCount == mesh->indices.size()) {
+                    return MeshUploadRecord{found->second.firstIndex, found->second.firstVertex, {}};
+                }
                 if (mesh->vertices.size() > std::numeric_limits<std::uint32_t>::max() - vertexCount ||
                     mesh->indices.size() > std::numeric_limits<std::uint32_t>::max() - indexCount) {
                     throw std::runtime_error("Scene geometry exceeds 32-bit draw limits");
@@ -347,6 +361,12 @@
                 meshUploads.push_back({mesh, vertexCount, indexCount});
                 vertexCount += static_cast<std::uint32_t>(mesh->vertices.size());
                 indexCount += static_cast<std::uint32_t>(mesh->indices.size());
+                geometryHeapAllocations[mesh] = {
+                    .firstVertex = record.firstVertex,
+                    .vertexCount = static_cast<std::uint32_t>(mesh->vertices.size()),
+                    .firstIndex = record.firstIndex,
+                    .indexCount = static_cast<std::uint32_t>(mesh->indices.size()),
+                };
                 return record;
             };
             registry.view<Transform, MeshRenderer>([&](const Entity entity, const Transform&, const MeshRenderer& renderer) {
@@ -377,13 +397,44 @@
                 }
                 grassUploads.emplace(entity, record);
             });
+            geometryHeapVertexHighWater = vertexCount;
+            geometryHeapIndexHighWater = indexCount;
             if (vertexCount == 0 || indexCount == 0) {
                 // The empty-scene path below keeps valid dummy bindings.
             } else {
-                vertexBuffer.createDeviceLocalEmpty(device, sizeof(GpuVertex) * vertexCount,
-                    VK_BUFFER_USAGE_VERTEX_BUFFER_BIT, vulkanDevice.allocator());
-                indexBuffer.createDeviceLocalEmpty(device, sizeof(std::uint32_t) * indexCount,
-                    VK_BUFFER_USAGE_INDEX_BUFFER_BIT, vulkanDevice.allocator());
+                const auto growCapacity = [](const std::uint32_t required) {
+                    // Leave headroom for normal editor additions. Growth is
+                    // deliberately rare; it is the only point at which the
+                    // heap must be reallocated.
+                    return std::max(required, required + required / 2U + 1U);
+                };
+                const VkDeviceSize requiredVertexBytes = sizeof(GpuVertex) * static_cast<VkDeviceSize>(vertexCount);
+                const VkDeviceSize requiredIndexBytes = sizeof(std::uint32_t) * static_cast<VkDeviceSize>(indexCount);
+                const bool growVertexHeap = vertexBuffer.handle() == VK_NULL_HANDLE ||
+                    vertexBuffer.size() < requiredVertexBytes;
+                const bool growIndexHeap = indexBuffer.handle() == VK_NULL_HANDLE ||
+                    indexBuffer.size() < requiredIndexBytes;
+                if (growVertexHeap) {
+                    vertexBuffer.createDeviceLocalEmpty(device,
+                        sizeof(GpuVertex) * static_cast<VkDeviceSize>(growCapacity(vertexCount)),
+                        VK_BUFFER_USAGE_VERTEX_BUFFER_BIT, vulkanDevice.allocator());
+                }
+                if (growIndexHeap) {
+                    indexBuffer.createDeviceLocalEmpty(device,
+                        sizeof(std::uint32_t) * static_cast<VkDeviceSize>(growCapacity(indexCount)),
+                        VK_BUFFER_USAGE_INDEX_BUFFER_BIT, vulkanDevice.allocator());
+                }
+                if (growVertexHeap || growIndexHeap) {
+                    // A newly allocated heap has no contents from the old
+                    // backing allocation.  Reupload every live allocation,
+                    // but keep each allocation's immutable offsets.
+                    meshUploads.clear();
+                    meshUploads.reserve(uniqueMeshes.size());
+                    for (const Mesh* mesh : uniqueMeshes) {
+                        const GeometryHeapAllocation& allocation = geometryHeapAllocations.at(mesh);
+                        meshUploads.push_back({mesh, allocation.firstVertex, allocation.firstIndex});
+                    }
+                }
                 for (const MeshUpload& upload : meshUploads) {
                     std::vector<GpuVertex> packedVertices;
                     packedVertices.reserve(upload.mesh->vertices.size());
@@ -790,10 +841,13 @@
                 };
             }
             for (Buffer& buffer : instanceBuffers) {
-                buffer.createHostVisible(vulkanDevice.physical(), device,
-                    sizeof(RendererInstanceData) * std::max<std::size_t>(1, instanceModels.size()),
-                    VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
-                    vulkanDevice.allocator());
+                const VkDeviceSize required = sizeof(RendererInstanceData) *
+                    std::max<std::size_t>(1, instanceModels.size());
+                if (buffer.handle() == VK_NULL_HANDLE || buffer.size() < required) {
+                    buffer.createHostVisible(vulkanDevice.physical(), device, required + required / 2U,
+                        VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+                        vulkanDevice.allocator());
+                }
                 if (!instanceModels.empty()) {
                     buffer.update(instanceModels.data(),
                                   sizeof(RendererInstanceData) * instanceModels.size());
@@ -801,10 +855,12 @@
             }
             if (antialiasingLevel == AntialiasingLevel::TAA) {
                 for (Buffer& buffer : previousTransformBuffers) {
-                    buffer.createHostVisible(vulkanDevice.physical(), device,
-                        sizeof(RendererPreviousTransformData) *
-                            std::max<std::size_t>(1, previousInstanceTransforms.size()),
-                        VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, vulkanDevice.allocator());
+                    const VkDeviceSize required = sizeof(RendererPreviousTransformData) *
+                        std::max<std::size_t>(1, previousInstanceTransforms.size());
+                    if (buffer.handle() == VK_NULL_HANDLE || buffer.size() < required) {
+                        buffer.createHostVisible(vulkanDevice.physical(), device, required + required / 2U,
+                            VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, vulkanDevice.allocator());
+                    }
                     if (!previousInstanceTransforms.empty()) {
                         buffer.update(previousInstanceTransforms.data(),
                             sizeof(RendererPreviousTransformData) * previousInstanceTransforms.size());
@@ -827,9 +883,12 @@
                     commandPool, vulkanDevice.graphicsQueue(), vulkanDevice.allocator());
             }
             for (Buffer& buffer : materialBuffers) {
-                buffer.createHostVisible(vulkanDevice.physical(), device,
-                    sizeof(GPUMaterialData) * std::max<std::size_t>(1, materials.size()),
-                    VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, vulkanDevice.allocator());
+                const VkDeviceSize required = sizeof(GPUMaterialData) *
+                    std::max<std::size_t>(1, materials.size());
+                if (buffer.handle() == VK_NULL_HANDLE || buffer.size() < required) {
+                    buffer.createHostVisible(vulkanDevice.physical(), device, required + required / 2U,
+                        VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, vulkanDevice.allocator());
+                }
                 if (!materials.empty()) {
                     buffer.update(materials.data(), sizeof(GPUMaterialData) * materials.size());
                 }
@@ -915,18 +974,18 @@
             const auto& meshes = sceneGpu.database.meshes();
             const auto& databaseMaterials = sceneGpu.database.materials();
             for (std::uint32_t frame = 0; frame < MAX_FRAMES_IN_FLIGHT; ++frame) {
-                gpuSceneInstanceBuffers[frame].createHostVisible(
-                    vulkanDevice.physical(), device,
-                    sizeof(GPUSceneInstanceRecord) * std::max<std::size_t>(1, instances.size()),
-                    VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, vulkanDevice.allocator());
-                gpuSceneMeshBuffers[frame].createHostVisible(
-                    vulkanDevice.physical(), device,
-                    sizeof(GPUSceneMeshRecord) * std::max<std::size_t>(1, meshes.size()),
-                    VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, vulkanDevice.allocator());
-                gpuSceneMaterialBuffers[frame].createHostVisible(
-                    vulkanDevice.physical(), device,
-                    sizeof(GPUSceneMaterialRecord) * std::max<std::size_t>(1, databaseMaterials.size()),
-                    VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, vulkanDevice.allocator());
+                const auto ensureCapacity = [&](Buffer& buffer, const VkDeviceSize required) {
+                    if (buffer.handle() == VK_NULL_HANDLE || buffer.size() < required) {
+                        buffer.createHostVisible(vulkanDevice.physical(), device, required + required / 2U,
+                            VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, vulkanDevice.allocator());
+                    }
+                };
+                ensureCapacity(gpuSceneInstanceBuffers[frame], sizeof(GPUSceneInstanceRecord) *
+                    std::max<std::size_t>(1, instances.size()));
+                ensureCapacity(gpuSceneMeshBuffers[frame], sizeof(GPUSceneMeshRecord) *
+                    std::max<std::size_t>(1, meshes.size()));
+                ensureCapacity(gpuSceneMaterialBuffers[frame], sizeof(GPUSceneMaterialRecord) *
+                    std::max<std::size_t>(1, databaseMaterials.size()));
                 for (std::size_t id = 0; id < instances.size(); ++id) {
                     const auto record = gpuSceneRecord(instances[id]);
                     gpuSceneInstanceBuffers[frame].update(&record, sizeof(record),
@@ -1238,11 +1297,17 @@
             for (const std::size_t index : changedIndices) {
                 const Entity entity = renderables[index].entity;
                 if (!readRegistry.has<Transform>(entity)) {
+                    sceneGpu.database.removeInstance(static_cast<std::uint64_t>(entity),
+                                                     submittedFrameValue);
                     continue;
                 }
                 const auto& transform = readRegistry.get<Transform>(entity);
                 RenderableRecord& record = renderables[index];
-                if (!readRegistry.has<MeshRenderer>(entity)) continue;
+                if (!readRegistry.has<MeshRenderer>(entity)) {
+                    sceneGpu.database.removeInstance(static_cast<std::uint64_t>(entity),
+                                                     submittedFrameValue);
+                    continue;
+                }
                 const bool hasTransformChange = lastTransformRevision ==
                     std::numeric_limits<std::uint64_t>::max() ||
                     renderableChangeKinds[index] & transformChange;
@@ -1341,7 +1406,9 @@
                             .pipelineClass = batch.twoSided ? 1U : 0U,
                             .flags = batch.castShadow ? 1U : 0U,
                         });
-                    record.gpuSceneInstanceId = sceneGpu.database.upsertInstance(
+                    record.renderProxy.mesh = meshId;
+                    record.renderProxy.material = materialId;
+                    record.renderProxy.instance = sceneGpu.database.upsertInstance(
                         static_cast<std::uint64_t>(entity), {
                             .worldMatrix = [&model] {
                                 std::array<float, 16> matrix{};

@@ -1,6 +1,70 @@
+        void refreshCullingBatchObjects() {
+            constexpr std::size_t modelDiagonalStride = 5;
+            const std::uint32_t objectCount = static_cast<std::uint32_t>(instanceBatches.size());
+            gpuObjects.resize(objectCount);
+            for (std::uint32_t i = 0; i < objectCount; ++i) {
+                const InstanceBatch& batch = instanceBatches[i];
+                auto& object = gpuObjects[i];
+                object.model = {};
+                object.model.data[0] = 1.0F;
+                object.model.data[modelDiagonalStride] = 1.0F;
+                object.model.data[modelDiagonalStride * 2] = 1.0F;
+                object.model.data[modelDiagonalStride * 3] = 1.0F;
+                const AABB& bounds = batch.worldBounds;
+                object.localAabbMin = {bounds.min.x(), bounds.min.y(), bounds.min.z(), 0.0F};
+                object.localAabbMax = {bounds.max.x(), bounds.max.y(), bounds.max.z(), 0.0F};
+                object.indexCount = batch.indexCount;
+                object.instanceCount = batch.instanceCount;
+                object.firstIndex = batch.firstIndex;
+                object.vertexOffset = 0;
+                object.firstInstance = batch.firstInstance;
+                object.castShadow = batch.castShadow ? 1U : 0U;
+                object.twoSided = batch.twoSided ? 1U : 0U;
+                object.shader = batch.shaderSlot;
+                object.lod1IndexCount = batch.lod1IndexCount;
+                object.lod2IndexCount = batch.lod2IndexCount;
+                object.lod1Distance = batch.lod1Distance;
+                object.lod2Distance = batch.lod2Distance;
+            }
+            const Culling::GPUObjectData emptyObject{};
+            for (Buffer& buffer : cullingObjectBuffers) {
+                if (buffer.handle() == VK_NULL_HANDLE) continue;
+                buffer.update(objectCount == 0 ? &emptyObject : gpuObjects.data(),
+                              sizeof(Culling::GPUObjectData) * std::max(1U, objectCount));
+            }
+            for (RenderableRecord& record : renderables) record.cullingDirtyFrames = 0;
+        }
+
+        [[nodiscard]] bool canReuseCullingResources() const {
+            // Grass has a separate, variable set of compacted scratch lists;
+            // keep its migration boundary explicit until it gets its own heap.
+            if (!sceneGpu.grassInstances.empty() || !sceneGpu.grassClusters.empty() ||
+                cullingDescriptorPool == VK_NULL_HANDLE) return false;
+            const VkDeviceSize objectBytes = sizeof(Culling::GPUObjectData) *
+                std::max<std::size_t>(1, instanceBatches.size());
+            const VkDeviceSize visibleBytes = sizeof(std::uint32_t) *
+                std::max<std::size_t>(1, sceneGpu.database.instances().size());
+            const VkDeviceSize indirectBytes = sizeof(VkDrawIndexedIndirectCommand) *
+                std::max<std::size_t>(1, instanceBatches.size()) * MaterialProgramSlotCount;
+            const VkDeviceSize shadowIndirectBytes = sizeof(VkDrawIndexedIndirectCommand) *
+                std::max<std::size_t>(1, instanceBatches.size()) * ShadowMap::MaxPageUpdatesPerFrame;
+            const VkDeviceSize shadowCandidateBytes = sizeof(std::uint32_t) *
+                std::max<std::size_t>(1, instanceBatches.size()) * ShadowMap::ClipLevelCount;
+            for (std::uint32_t frame = 0; frame < MAX_FRAMES_IN_FLIGHT; ++frame) {
+                if (cullingObjectBuffers[frame].size() < objectBytes ||
+                    visibleInstanceBuffers[frame].size() < visibleBytes ||
+                    indirectBuffers[frame].size() < indirectBytes ||
+                    foliageIndirectBuffers[frame].size() < indirectBytes ||
+                    shadowIndirectBuffers[frame].size() < shadowIndirectBytes ||
+                    shadowTwoSidedIndirectBuffers[frame].size() < shadowIndirectBytes ||
+                    shadowCandidateBuffers[frame].size() < shadowCandidateBytes ||
+                    shadowTwoSidedCandidateBuffers[frame].size() < shadowCandidateBytes) return false;
+            }
+            return true;
+        }
+
         void createCullingResources() {
             auto uploadBatch = uploadContext.beginBatch();
-            constexpr std::size_t modelDiagonalStride = 5;
             constexpr std::size_t cullingDescriptorBindingCount = 8;
             const std::uint32_t grassBinCount = std::max(1u, static_cast<std::uint32_t>(
                 sceneGpu.database.meshes().size() * 3u));
@@ -12,7 +76,7 @@
             // Generic descriptors remain valid in a grass-only scene, but
             // their backing allocations need one inert element. Their draw
             // counts stay zero because objectCount itself remains zero.
-            const auto genericCapacity = std::max(1u, objectCount);
+            const auto genericCapacity = std::max(1u, objectCount + objectCount / 2u + 1u);
 
             // Keep the complete R32F hierarchy out of memory unless the
             // feature can actually consume it. Frustum/GPU culling remains
@@ -208,33 +272,7 @@
             grassPackedScatterPipeline = createComputePipeline("shaders/grass_packed_scatter.spv", grassPackedScatterPipelineLayout);
             grassPackedFinalizePipeline = createComputePipeline("shaders/grass_packed_finalize.spv", grassPackedFinalizePipelineLayout);
 
-            gpuObjects.resize(objectCount);
-            for (uint32_t i = 0; i < objectCount; ++i) {
-                const InstanceBatch& batch = instanceBatches[i];
-                auto& object = gpuObjects[i];
-                object.model = {};
-                object.model.data[0] = 1.0F;
-                object.model.data[modelDiagonalStride] = 1.0F;
-                object.model.data[modelDiagonalStride * 2] = 1.0F;
-                object.model.data[modelDiagonalStride * 3] = 1.0F;
-                const AABB& bounds = batch.worldBounds;
-                object.localAabbMin = {
-                    bounds.min.x(), bounds.min.y(), bounds.min.z(), 0.0F, };
-                object.localAabbMax = {
-                    bounds.max.x(), bounds.max.y(), bounds.max.z(), 0.0F, };
-                object.indexCount = batch.indexCount;
-                object.instanceCount = batch.instanceCount;
-                object.firstIndex = batch.firstIndex;
-                object.vertexOffset = 0;
-                object.firstInstance = batch.firstInstance;
-                object.castShadow = batch.castShadow ? 1U : 0U;
-                object.twoSided = batch.twoSided ? 1U : 0U;
-                object.shader = batch.shaderSlot;
-                object.lod1IndexCount = batch.lod1IndexCount;
-                object.lod2IndexCount = batch.lod2IndexCount;
-                object.lod1Distance = batch.lod1Distance;
-                object.lod2Distance = batch.lod2Distance;
-            }
+            refreshCullingBatchObjects();
             for (Buffer& buffer : cullingObjectBuffers) {
                 buffer.createHostVisible(
                     vulkanDevice.physical(), device,
@@ -243,10 +281,6 @@
                 const Culling::GPUObjectData emptyObject{};
                 buffer.update(objectCount == 0 ? &emptyObject : gpuObjects.data(),
                               sizeof(Culling::GPUObjectData) * genericCapacity);
-            }
-            // Culling buffers were initialized in full for every frame.
-            for (RenderableRecord& record : renderables) {
-                record.cullingDirtyFrames = 0;
             }
 
             for (uint32_t frame = 0; frame < MAX_FRAMES_IN_FLIGHT; ++frame) {

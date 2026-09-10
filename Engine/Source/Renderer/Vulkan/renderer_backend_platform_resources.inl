@@ -571,11 +571,16 @@
             scene.uiCanvas().resize(extent.width, extent.height);
 
             if (!fpsFontTexture.valid()) {
+                // Keep the font atlas on the same asynchronous upload path as
+                // scene textures.  In particular, UI initialization must not
+                // fall back to a queue-wide idle while a scene is loading.
+                auto uploadBatch = uploadContext.beginBatch();
                 const auto& atlas = scene.uiFontAtlas();
                 fpsFontTexture.create(vulkanDevice.physical(), device, commandPool,
                                       vulkanDevice.graphicsQueue(), atlas.width(),
                                       atlas.height(), atlas.pixels(), TextureColorSpace::Linear,
                                       false, vulkanDevice.allocator(), TexturePixelFormat::R8);
+                [[maybe_unused]] const UploadTicket ticket = uploadBatch.submit();
             }
 
             canvasRenderer.create(

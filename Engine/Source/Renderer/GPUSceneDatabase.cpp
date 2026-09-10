@@ -70,16 +70,30 @@ namespace Engine {
         return id;
     }
 
-    void GPUSceneDatabase::removeInstance(const std::uint64_t sourceKey) {
+    void GPUSceneDatabase::removeInstance(const std::uint64_t sourceKey,
+                                          const std::uint64_t retireValue) {
         const auto found = m_instanceIds.find(sourceKey);
         if (found == m_instanceIds.end()) return;
         const GPUSceneInstanceId id = found->second;
         m_instances[id].alive = false;
         m_instanceIds.erase(found);
-        if (std::ranges::find(m_freeInstances, id) == m_freeInstances.end()) {
-            m_freeInstances.push_back(id);
-        }
+        // Do not put this ID in m_freeInstances yet.  Old command buffers may
+        // still address the same SSBO slot; overwriting it for a new entity
+        // would make those commands render the wrong proxy.
+        m_deferredInstanceFrees.push_back({id, retireValue});
         markRemovedInstanceDirty(id);
+    }
+
+    void GPUSceneDatabase::reclaimDeferredInstances(const std::uint64_t completedValue) {
+        auto write = m_deferredInstanceFrees.begin();
+        for (auto read = m_deferredInstanceFrees.begin(); read != m_deferredInstanceFrees.end(); ++read) {
+            if (read->retireValue <= completedValue) {
+                m_freeInstances.push_back(read->id);
+            } else {
+                *write++ = *read;
+            }
+        }
+        m_deferredInstanceFrees.erase(write, m_deferredInstanceFrees.end());
     }
 
     GPUSceneMeshId GPUSceneDatabase::upsertMesh(const std::uint64_t sourceKey, const GPUMesh& mesh) {
@@ -123,6 +137,7 @@ namespace Engine {
 
     void GPUSceneDatabase::clear() noexcept {
         m_instances.clear(); m_meshes.clear(); m_materials.clear(); m_freeInstances.clear();
+        m_deferredInstanceFrees.clear();
         m_instanceIds.clear(); m_meshIds.clear(); m_materialIds.clear(); clearDirty();
         m_dirtyInstanceStamps.clear(); m_dirtyMeshStamps.clear(); m_dirtyMaterialStamps.clear();
         m_removedInstanceStamps.clear(); m_removedInstancePositions.clear();

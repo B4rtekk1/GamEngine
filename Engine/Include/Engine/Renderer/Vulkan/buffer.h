@@ -105,6 +105,9 @@ public:
      * @return The owned handle, or VK_NULL_HANDLE when no buffer was created.
      */
     [[nodiscard]] VkBuffer handle() const noexcept { return buffer_; }
+    /// Allocated byte capacity. Geometry heaps use this to grow only when a
+    /// new sub-allocation no longer fits; ordinary scene deltas never resize.
+    [[nodiscard]] VkDeviceSize size() const noexcept { return size_; }
     [[nodiscard]] std::uint64_t readyTimeline() const noexcept { return readyTimeline_; }
 
 private:

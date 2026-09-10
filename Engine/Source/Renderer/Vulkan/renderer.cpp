@@ -538,13 +538,9 @@ namespace Engine {
                                                            UINT64_MAX) != VK_SUCCESS) {
                 throw std::runtime_error("Could not synchronize frames for scene reload");
             }
-            // Upload batches use the graphics queue but intentionally have no
-            // frame fence. A scene rebuild destroys the resources they touch,
-            // so it is a lifetime boundary: wait for that queue before any
-            // destruction rather than relying solely on frame fences.
-            if (vkQueueWaitIdle(vulkanDevice.graphicsQueue()) != VK_SUCCESS) {
-                throw std::runtime_error("Could not synchronize upload queue for scene reload");
-            }
+            // Individual Buffer objects own and retire any one-shot upload
+            // fences during destruction.  Do not idle the graphics queue
+            // here: that also blocks unrelated presentation and compute work.
 
             destroyCullingResources();
             tonemapPass.destroy();
@@ -564,6 +560,10 @@ namespace Engine {
             sceneDescriptorPass.destroy();
             indexBuffer.destroy();
             vertexBuffer.destroy();
+            geometryHeapAllocations.clear();
+            geometryHeapVertexHighWater = 0;
+            geometryHeapIndexHighWater = 0;
+            sceneGpu.database.clear();
             for (Buffer &buffer: instanceBuffers) {
                 buffer.destroy();
             }
@@ -668,12 +668,9 @@ namespace Engine {
                                                            UINT64_MAX) != VK_SUCCESS) {
                 throw std::runtime_error("Could not synchronize frames for scene update");
             }
-            // See reloadSceneResources(): a transfer batch is not associated
-            // with an in-flight frame fence, but it can still reference the
-            // buffers and images about to be retired.
-            if (vkQueueWaitIdle(vulkanDevice.graphicsQueue()) != VK_SUCCESS) {
-                throw std::runtime_error("Could not synchronize upload queue for scene update");
-            }
+            // Buffer destruction retires its own upload fence.  In-flight
+            // rendering is covered by the per-frame fences above; a queue
+            // wide idle would turn every hierarchy edit into a GPU hitch.
 
             // ECS topology is not renderer topology.  Only resources whose
             // contents or descriptor bindings refer to the renderable tables
@@ -683,16 +680,13 @@ namespace Engine {
             // Bloom/Tonemap/sky/forward/particle pipelines. ShadowPass now
             // updates descriptor-set contents in place, preserving its set
             // layout and therefore every pipeline which consumes it.
-            destroyCullingResources();
-            indexBuffer.destroy();
-            vertexBuffer.destroy();
-            for (Buffer &buffer: instanceBuffers) { buffer.destroy(); }
-            for (Buffer &buffer: materialBuffers) { buffer.destroy(); }
-            for (Buffer& buffer : gpuSceneInstanceBuffers) buffer.destroy();
-            for (Buffer& buffer : gpuSceneMeshBuffers) buffer.destroy();
-            for (Buffer& buffer : gpuSceneMaterialBuffers) buffer.destroy();
-            for (Buffer& buffer : visibleInstanceBuffers) buffer.destroy();
-            for (Buffer& buffer : visibleInstanceCountBuffers) buffer.destroy();
+            // Geometry is an append-only heap. Topology changes only append
+            // sub-allocations; old mesh ranges stay valid for in-flight draw
+            // calls. createMeshBuffers() grows its backing buffer only when
+            // this heap has exhausted its reserved capacity.
+            // Persistent scene tables retain their backing allocations. Their
+            // creators grow geometrically only when a new delta exceeds the
+            // current capacity, otherwise they overwrite changed records.
             for (Texture2D &texture: materialTextures) { texture.destroy(); }
             materialTextures.clear();
             materialTextureDescriptors.clear();
@@ -719,7 +713,14 @@ namespace Engine {
             // them here would destroy buffers still referenced by the sky
             // descriptor sets, while the sky passes intentionally survive a
             // topology-only rebuild.
-            createCullingResources();
+            if (canReuseCullingResources()) {
+                // Descriptor sets and pipelines still point at the same
+                // capacity-reserved buffers. Only batch records changed.
+                refreshCullingBatchObjects();
+            } else {
+                destroyCullingResources();
+                createCullingResources();
+            }
             createShadowPass();
             createSceneDescriptorPass();
             renderableTopologySignature = updatedTopology;
