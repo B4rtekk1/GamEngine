@@ -724,7 +724,11 @@ namespace Engine {
                 !registry.has<MeshRenderer>(entity) || !registry.has<Transform>(entity)) return;
             const auto& renderer = registry.get<MeshRenderer>(entity);
             RenderableRecord& record = renderables[recordIt->second];
-            if (!renderer.hasMesh() || renderer.mesh->vertexCount() != record.vertexCount ||
+            // Imported runtime assets release decoded vertices after upload.
+            // A geometry edit therefore has to go through the editor/source
+            // path, which pins data and rebuilds the GPU resource first.
+            if (!renderer.hasMesh() || !renderer.mesh.hasSourceData() ||
+                renderer.mesh->vertexCount() != record.vertexCount ||
                 record.batchIndex >= instanceBatches.size()) {
                 synchronizeSceneResources(scene);
                 return;

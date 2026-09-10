@@ -164,7 +164,7 @@ namespace Engine {
             if (mesh == nullptr || mesh->empty()) {
                 throw std::logic_error("Cannot create a mesh collider without mesh vertices");
             }
-            const ColliderComponent collider{.shape = MeshCollider{mesh}};
+            const ColliderComponent collider{.shape = MeshCollider{mesh.source()}};
             if (has<ColliderComponent>()) {
                 modify<ColliderComponent>([&](auto &value) { value = collider; });
             } else {

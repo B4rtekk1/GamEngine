@@ -167,6 +167,28 @@ TEST(MeshRendererComponent, RequiresNonEmptySharedMeshToBeRenderable) {
     EXPECT_EQ(renderer.occlusionQueryIndex, std::numeric_limits<std::uint32_t>::max());
 }
 
+TEST(MeshRendererComponent, UploadedHandleDoesNotRequireDecodedSourceData) {
+    auto source = std::make_shared<Engine::Mesh>();
+    source->vertices.resize(3);
+    source->indices = {0, 1, 2};
+    source->sourcePath = "uploaded-test.mesh";
+
+    Engine::MeshRendererComponent renderer;
+    renderer.mesh = source;
+    ASSERT_TRUE(renderer.hasMesh());
+
+    const auto resource = renderer.mesh.resource();
+    ASSERT_NE(resource, nullptr);
+    resource->handle = Engine::MeshId{7};
+    resource->vertexCount = 3;
+    resource->indexCount = 3;
+    renderer.mesh.releaseSourceReference();
+
+    EXPECT_FALSE(renderer.mesh.hasSourceData());
+    EXPECT_TRUE(renderer.mesh.uploaded());
+    EXPECT_TRUE(renderer.hasMesh());
+}
+
 TEST(TerrainComponent, BuildsCheckerboardGridAndSculptsHeightmap) {
     Engine::TerrainComponent terrain{5, 4.0F, 4.0F, -2.0F, 2.0F};
     ASSERT_TRUE(terrain.valid());

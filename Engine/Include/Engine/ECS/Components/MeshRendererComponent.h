@@ -1,6 +1,6 @@
 #pragma once
 
-#include "Engine/Renderer/Geometry/Mesh.h"
+#include "Engine/Renderer/Geometry/MeshGpuResource.h"
 #include "Engine/Renderer/Materials/Material.h"
 
 #include <cstdint>
@@ -17,7 +17,7 @@ namespace Engine {
      */
     struct MeshRendererComponent final {
         /// Geometry to submit. The same mesh may be referenced by many entities.
-        std::shared_ptr<const Mesh> mesh;
+        MeshHandle mesh;
 
         /// Per-entity surface material. The renderer resolves its shader to a
         /// pipeline batch; entities never own or bind Vulkan shaders directly.
@@ -38,7 +38,10 @@ namespace Engine {
         uint32_t occlusionQueryIndex{std::numeric_limits<uint32_t>::max()};
 
         [[nodiscard]] bool hasMesh() const noexcept {
-            return mesh != nullptr && !mesh->empty();
+            // Before the initial upload, the decoded payload establishes that
+            // this is drawable. Afterwards its GPU range is authoritative.
+            return mesh != nullptr && (mesh.uploaded() ||
+                (mesh.hasSourceData() && !mesh->empty()));
         }
     };
 } // namespace Engine

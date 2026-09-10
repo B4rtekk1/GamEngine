@@ -11,15 +11,18 @@
 
 /**
  * @file Mesh.h
- * @brief Defines the CPU-side mesh container used by the renderer.
+ * @brief Defines decoded mesh source data used before GPU upload.
  */
 
 namespace Engine {
     /**
-     * @brief Stores vertex data, indices, materials, and embedded image data for a mesh.
+     * @brief Stores decoded vertex data, indices, materials, and embedded image data.
      *
-     * The mesh owns its CPU-side arrays. GPU buffers and textures created from this
-     * data are managed by the renderer or asset system rather than by this class.
+     * GPU buffers and textures created from this data are managed by the renderer.
+     * Keeping source arrays is intentional only while an asset needs CPU access
+     * (editing, collision cooking, or a renderer resource rebuild).  Once a
+     * mesh has a persistent GPU resource and any requested collider is cooked,
+     * releaseSourceData() frees the decoded payload.
      */
     class Mesh final {
     public:
@@ -100,5 +103,36 @@ namespace Engine {
 
         /** @brief Marks CPU-side vertex or index geometry as having changed. */
         void markGeometryChanged() noexcept { ++geometryRevision; }
+
+        /**
+         * @brief Releases decoded CPU geometry and image payloads.
+         *
+         * This is a terminal operation for the current decoded representation:
+         * callers must retain or be able to reload source data before calling
+         * it.  In particular, it must run only after GPU upload and PhysX
+         * cooking have completed.  Materials are retained because they are
+         * small authored data and can still be used to create material tables.
+         */
+        void releaseSourceData() noexcept {
+            std::vector<Vertex>{}.swap(vertices);
+            std::vector<uint32_t>{}.swap(indices);
+            for (Image& image : images) {
+                std::vector<std::uint8_t>{}.swap(image.rgbaPixels);
+                image.cooked.reset();
+            }
+            std::vector<Image>{}.swap(images);
+        }
+
+        /** @brief Whether decoded CPU geometry is still available. */
+        [[nodiscard]] bool hasSourceGeometry() const noexcept {
+            return !vertices.empty() && !indices.empty();
+        }
     };
+
+    /**
+     * Explicit name for decoded, CPU-resident asset data.  Mesh is retained as
+     * the compatibility spelling while call sites are migrated to source/GPU
+     * resource ownership.
+     */
+    using MeshSourceData = Mesh;
 } // namespace Engine

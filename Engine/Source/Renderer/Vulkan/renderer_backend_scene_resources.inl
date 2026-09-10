@@ -1,4 +1,35 @@
+        // A renderer topology rebuild is allowed to need decoded data, but it
+        // must not make that decoded data resident between rebuilds. Imported
+        // meshes are decoded again from their asset path into this short-lived
+        // upload payload; procedural/edited meshes explicitly pin their data.
+        void restoreMeshSourceDataForUpload() {
+            registry.view<MeshRenderer>([&](const Entity, MeshRenderer& renderer) {
+                if (!renderer.mesh || renderer.mesh.hasSourceData()) return;
+                const auto resource = renderer.mesh.resource();
+                if (!resource || resource->sourcePath.empty()) {
+                    throw std::runtime_error("Mesh GPU resource has no source data or reloadable asset path");
+                }
+                const auto decoded = assetManager.reload<Mesh>(resource->sourcePath, Assets::AssetType::Mesh).shared();
+                if (!decoded || decoded->empty()) {
+                    throw std::runtime_error("Could not decode mesh source for GPU resource rebuild: " +
+                                             resource->sourcePath.string());
+                }
+                resource->sourceData = decoded;
+            });
+        }
+
+        void releaseUploadedMeshSourceData() {
+            registry.view<MeshRenderer>([&](const Entity, MeshRenderer& renderer) {
+                if (renderer.mesh.uploaded()) renderer.mesh.releaseSourceReference();
+            });
+            // Cache entries are deliberately weak from the renderer's point
+            // of view. This is what returns decoded vertex/index/RGBA memory
+            // to the allocator after the upload has completed.
+            assetManager.unload_unused();
+        }
+
         void createMaterialTextures() {
+            restoreMeshSourceDataForUpload();
             auto uploadBatch = uploadContext.beginBatch();
             constexpr std::array<std::uint8_t, 4> white = {255, 255, 255, 255};
             fallbackMaterialTexture.create(
@@ -158,7 +189,7 @@
                 [&](const Entity entity, const Transform&, const MeshRenderer& renderer) {
                     if (!renderer.hasMesh()) return;
                     std::uint64_t value = static_cast<std::uint64_t>(entity);
-                    value ^= static_cast<std::uint64_t>(reinterpret_cast<std::uintptr_t>(renderer.mesh.get())) +
+                    value ^= static_cast<std::uint64_t>(reinterpret_cast<std::uintptr_t>(renderer.mesh.resource().get())) +
                         hashCombineConstant + (value << hashCombineLeftShift) + (value >> 2u);
                     value ^= static_cast<std::uint64_t>(renderer.cullingBatch) << 1u;
                     value ^= static_cast<std::uint64_t>(renderer.castShadow) << 63u;
@@ -359,6 +390,17 @@
                         localBounds.max.setY(std::max(localBounds.max.y(), vertex.position.y()));
                         localBounds.max.setZ(std::max(localBounds.max.z(), vertex.position.z()));
                         }
+                    }
+                    // Persist the GPU range on the ECS-facing handle.  The
+                    // draw path can therefore stop consulting MeshSourceData
+                    // once all batches use MeshGpuResource directly.
+                    if (const auto& resource = renderer.mesh.resource()) {
+                        resource->handle = MeshId{renderer.firstIndex};
+                        resource->firstVertex = firstVertex;
+                        resource->vertexCount = mesh->vertexCount();
+                        resource->firstIndex = renderer.firstIndex;
+                        resource->indexCount = mesh->indexCount();
+                        resource->bounds = localBounds;
                     }
                     // Culling must use the same parent-composed matrix as the
                     // instance renderer. Otherwise a child can be rendered at
@@ -787,6 +829,10 @@
             for (auto& indices : dirtyMaterials) indices.clear();
 
             createGPUSceneDatabaseBuffers();
+            // All renderer uploads have consumed the decoded payload. A
+            // MeshCollider owns a separate source reference until PhysX has
+            // cooked it; procedural/editor meshes are explicitly pinned.
+            releaseUploadedMeshSourceData();
         }
 
         [[nodiscard]] static GPUSceneInstanceRecord gpuSceneRecord(

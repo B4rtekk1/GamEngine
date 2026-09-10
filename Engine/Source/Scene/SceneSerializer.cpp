@@ -786,8 +786,14 @@ namespace Engine {
         std::ostream& serialized = output;
         auto* terrainData = static_cast<std::ostream*>(output.pword(terrainDataStreamSlot()));
         const std::vector<Entity> entities = sortedEntities(registry);
-        std::vector<std::shared_ptr<const Mesh> > meshes;
-        std::unordered_map<const Mesh *, std::size_t> meshIds;
+        struct SerializedMesh final {
+            std::shared_ptr<const Mesh> source;
+            std::filesystem::path sourcePath;
+        };
+        std::vector<SerializedMesh> meshes;
+        // MeshRenderer identity is the renderer-owned resource, not the
+        // optional decoded MeshSourceData payload.
+        std::unordered_map<const void*, std::size_t> meshIds;
 
         for (const Entity entity: entities) {
             if (!registry.has<MeshRenderer>(entity)) {
@@ -797,9 +803,10 @@ namespace Engine {
             // is rebuilt while loading instead of being duplicated in MESHES.
             if (registry.has<TerrainComponent>(entity)) continue;
             const auto &renderer = registry.get<MeshRenderer>(entity);
-            if (renderer.mesh && !meshIds.contains(renderer.mesh.get())) {
-                meshIds.emplace(renderer.mesh.get(), meshes.size());
-                meshes.push_back(renderer.mesh);
+            const auto resource = renderer.mesh.resource();
+            if (renderer.mesh && resource && !meshIds.contains(resource.get())) {
+                meshIds.emplace(resource.get(), meshes.size());
+                meshes.push_back({renderer.mesh.source(), resource->sourcePath});
             }
         }
         for (const Entity entity : entities) {
@@ -807,7 +814,7 @@ namespace Engine {
             const auto& grass = registry.get<TerrainGrassComponent>(entity);
             if (grass.mesh && !meshIds.contains(grass.mesh.get())) {
                 meshIds.emplace(grass.mesh.get(), meshes.size());
-                meshes.push_back(grass.mesh);
+                meshes.push_back({grass.mesh, grass.mesh->sourcePath});
             }
         }
 
@@ -818,12 +825,16 @@ namespace Engine {
         serialized << "SETTINGS MSAA " << msaaSamples << '\n';
         serialized << "MESHES " << meshes.size() << '\n';
         for (std::size_t meshId = 0; meshId < meshes.size(); ++meshId) {
-            const Mesh &mesh = *meshes[meshId];
-            if (!mesh.sourcePath.empty()) {
+            const SerializedMesh& saved = meshes[meshId];
+            if (!saved.sourcePath.empty()) {
                 serialized << "MESH_ASSET " << meshId << ' '
-                           << std::quoted(mesh.sourcePath.lexically_normal().generic_string()) << '\n';
+                           << std::quoted(saved.sourcePath.lexically_normal().generic_string()) << '\n';
                 continue;
             }
+            if (!saved.source) {
+                throw std::runtime_error("Cannot serialize a procedural mesh after its source data was released");
+            }
+            const Mesh &mesh = *saved.source;
             serialized << "MESH " << meshId << ' ' << mesh.vertices.size() << ' '
                     << mesh.indices.size() << ' ' << mesh.materials.size() << ' '
                     << mesh.images.size() << '\n';
@@ -932,7 +943,7 @@ namespace Engine {
             if (registry.has<MeshRenderer>(entity)) {
                 const auto &renderer = registry.get<MeshRenderer>(entity);
                 const long long meshId = renderer.mesh && !registry.has<TerrainComponent>(entity)
-                                             ? static_cast<long long>(meshIds.at(renderer.mesh.get()))
+                                             ? static_cast<long long>(meshIds.at(renderer.mesh.resource().get()))
                                              : -1;
                 serialized << "MESH_RENDERER " << meshId << ' ';
                 serialized << static_cast<unsigned>(renderer.material.shader) << ' ';
