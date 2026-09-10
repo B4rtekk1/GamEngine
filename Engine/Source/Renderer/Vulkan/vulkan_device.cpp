@@ -2,6 +2,7 @@
 #include "Engine/Renderer/Materials/MaterialBuffer.h"
 
 #include <array>
+#include <algorithm>
 #include <cstring>
 #include <limits>
 #include <set>
@@ -47,9 +48,13 @@ void VulkanDevice::create(VkInstance instance, VkSurfaceKHR surface) {
         allocatorInfo.physicalDevice = physicalDevice_;
         allocatorInfo.device = device_;
         allocatorInfo.instance = instance;
+        if (memoryBudgetExtensionSupported_) {
+            allocatorInfo.flags |= VMA_ALLOCATOR_CREATE_EXT_MEMORY_BUDGET_BIT;
+        }
         if (vmaCreateAllocator(&allocatorInfo, &allocator_) != VK_SUCCESS) {
             throw std::runtime_error("Could not create VMA allocator");
         }
+        memoryBudgetManager_.initialize(physicalDevice_, allocator_);
     } catch(...) {
         destroy();
         throw;
@@ -57,6 +62,7 @@ void VulkanDevice::create(VkInstance instance, VkSurfaceKHR surface) {
 }
 
 void VulkanDevice::destroy() noexcept {
+    memoryBudgetManager_.reset();
     if (allocator_ != VK_NULL_HANDLE) {
         vmaDestroyAllocator(allocator_);
         allocator_ = VK_NULL_HANDLE;
@@ -72,6 +78,7 @@ void VulkanDevice::destroy() noexcept {
     surface_ = VK_NULL_HANDLE;
     queueFamilies_ = {};
     depthResolveMode_ = VK_RESOLVE_MODE_SAMPLE_ZERO_BIT;
+    memoryBudgetExtensionSupported_ = false;
 }
 
 QueueFamilyIndices VulkanDevice::findQueueFamilies(VkPhysicalDevice candidate) const {
@@ -247,6 +254,13 @@ void VulkanDevice::selectPhysicalDevice(const VkInstance candidate) {
     }
 
     physicalDevice_ = bestDevice;
+    uint32_t extensionCount = 0;
+    vkEnumerateDeviceExtensionProperties(physicalDevice_, nullptr, &extensionCount, nullptr);
+    std::vector<VkExtensionProperties> extensions(extensionCount);
+    vkEnumerateDeviceExtensionProperties(physicalDevice_, nullptr, &extensionCount, extensions.data());
+    memoryBudgetExtensionSupported_ = std::any_of(extensions.begin(), extensions.end(), [](const VkExtensionProperties& extension) {
+        return std::strcmp(extension.extensionName, VK_EXT_MEMORY_BUDGET_EXTENSION_NAME) == 0;
+    });
     queueFamilies_ = findQueueFamilies(physicalDevice_);
     VkPhysicalDeviceDepthStencilResolveProperties depthResolveProperties{
         .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DEPTH_STENCIL_RESOLVE_PROPERTIES};
@@ -303,6 +317,8 @@ void VulkanDevice::createLogicalDevice() {
     features2.features.textureCompressionBC = VK_TRUE;
     features2.pNext = &features11;
 
+    std::vector<const char*> enabledExtensions(kRequiredDeviceExtensions.begin(), kRequiredDeviceExtensions.end());
+    if (memoryBudgetExtensionSupported_) enabledExtensions.push_back(VK_EXT_MEMORY_BUDGET_EXTENSION_NAME);
     VkDeviceCreateInfo createInfo{};
     createInfo.sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO;
     createInfo.queueCreateInfoCount =
@@ -310,8 +326,8 @@ void VulkanDevice::createLogicalDevice() {
     createInfo.pQueueCreateInfos = queueCreateInfos.data();
     createInfo.pNext = &features2;
     createInfo.enabledExtensionCount =
-        static_cast<uint32_t>(kRequiredDeviceExtensions.size());
-    createInfo.ppEnabledExtensionNames = kRequiredDeviceExtensions.data();
+        static_cast<uint32_t>(enabledExtensions.size());
+    createInfo.ppEnabledExtensionNames = enabledExtensions.data();
 
     const VkResult result = vkCreateDevice(
             physicalDevice_,

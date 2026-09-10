@@ -2,6 +2,7 @@
 
 #include <vulkan/vulkan.h>
 #include <vk_mem_alloc.h>
+#include "Engine/Renderer/Vulkan/MemoryBudgetManager.h"
 
 #include <cstdint>
 #include <optional>
@@ -74,6 +75,10 @@ namespace Engine {
             return depthResolveMode_ == VK_RESOLVE_MODE_MAX_BIT;
         }
 
+        [[nodiscard]] const MemoryBudgetManager& memoryBudgetManager() const noexcept {
+            return memoryBudgetManager_;
+        }
+
     private:
         VkSurfaceKHR surface_ = VK_NULL_HANDLE;
         VkPhysicalDevice physicalDevice_ = VK_NULL_HANDLE;
@@ -83,6 +88,8 @@ namespace Engine {
         QueueFamilyIndices queueFamilies_{};
         VmaAllocator allocator_ = VK_NULL_HANDLE;
         VkResolveModeFlagBits depthResolveMode_ = VK_RESOLVE_MODE_SAMPLE_ZERO_BIT;
+        bool memoryBudgetExtensionSupported_ = false;
+        MemoryBudgetManager memoryBudgetManager_{};
 
         [[nodiscard]] QueueFamilyIndices findQueueFamilies(VkPhysicalDevice candidate) const;
 

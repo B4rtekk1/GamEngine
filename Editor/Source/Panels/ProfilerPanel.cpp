@@ -13,6 +13,30 @@
 
 namespace Editor {
 namespace {
+    const char* memoryCategoryName(const Engine::GpuMemoryCategory category) {
+        switch (category) {
+            case Engine::GpuMemoryCategory::DeviceLocal: return "Device local";
+            case Engine::GpuMemoryCategory::HostVisible: return "Host visible";
+            case Engine::GpuMemoryCategory::Other: return "Other";
+        }
+        return "Unknown";
+    }
+
+    double mib(const VkDeviceSize bytes) { return static_cast<double>(bytes) / (1024.0 * 1024.0); }
+
+    void drawMemoryInsights(const Engine::Renderer& renderer) {
+        const auto categories = renderer.gpuMemoryCategories();
+        const auto heaps = renderer.gpuMemoryHeaps();
+        ImGui::Separator(); ImGui::TextUnformatted("MEMORY INSIGHTS");
+        if (heaps.empty()) { ImGui::TextDisabled("GPU memory budget is unavailable before Vulkan initialization."); return; }
+        if (ImGui::BeginTable("##memory-categories", 5, ImGuiTableFlags_SizingStretchProp | ImGuiTableFlags_BordersInnerV | ImGuiTableFlags_RowBg)) {
+            ImGui::TableSetupColumn("Category"); ImGui::TableSetupColumn("Usage"); ImGui::TableSetupColumn("Budget"); ImGui::TableSetupColumn("Allocations"); ImGui::TableSetupColumn("Pressure"); ImGui::TableHeadersRow();
+            for (const auto& category : categories) { if (!category.budget && !category.usage && !category.allocationCount) continue; ImGui::TableNextRow(); ImGui::TableSetColumnIndex(0); ImGui::TextUnformatted(memoryCategoryName(category.category)); ImGui::TableSetColumnIndex(1); ImGui::Text("%.1f MiB", mib(category.usage)); ImGui::TableSetColumnIndex(2); ImGui::Text("%.1f MiB", mib(category.budget)); ImGui::TableSetColumnIndex(3); ImGui::Text("%u", category.allocationCount); ImGui::TableSetColumnIndex(4); ImGui::Text("%.1f%%", category.budget ? 100.0 * static_cast<double>(category.usage) / static_cast<double>(category.budget) : 0.0); }
+            ImGui::EndTable();
+        }
+        if (ImGui::TreeNode("Heap details")) { if (ImGui::BeginTable("##memory-heaps", 7, ImGuiTableFlags_SizingStretchProp | ImGuiTableFlags_BordersInnerV | ImGuiTableFlags_RowBg)) { ImGui::TableSetupColumn("Heap"); ImGui::TableSetupColumn("Class"); ImGui::TableSetupColumn("Usage"); ImGui::TableSetupColumn("Budget"); ImGui::TableSetupColumn("Allocated"); ImGui::TableSetupColumn("Allocations"); ImGui::TableSetupColumn("Blocks"); ImGui::TableHeadersRow(); for (const auto& heap : heaps) { ImGui::TableNextRow(); ImGui::TableSetColumnIndex(0); ImGui::Text("%u", heap.heapIndex); ImGui::TableSetColumnIndex(1); ImGui::TextUnformatted(memoryCategoryName(heap.category)); ImGui::TableSetColumnIndex(2); ImGui::Text("%.1f MiB", mib(heap.usage)); ImGui::TableSetColumnIndex(3); ImGui::Text("%.1f MiB", mib(heap.budget)); ImGui::TableSetColumnIndex(4); ImGui::Text("%.1f MiB", mib(heap.allocationBytes)); ImGui::TableSetColumnIndex(5); ImGui::Text("%u", heap.allocationCount); ImGui::TableSetColumnIndex(6); ImGui::Text("%u", heap.blockCount); } ImGui::EndTable(); } ImGui::TreePop(); }
+    }
+
     struct Hotspot final {
         double self{};
         double total{};
@@ -107,7 +131,7 @@ namespace {
     }
 }
 
-void drawProfilerPanel(const Engine::Renderer&, bool& isOpen) {
+void drawProfilerPanel(const Engine::Renderer& renderer, bool& isOpen) {
     if (!isOpen) return;
     if (!ImGui::Begin("Profiler", &isOpen)) { ImGui::End(); return; }
     static bool followLatest = true;
@@ -116,6 +140,7 @@ void drawProfilerPanel(const Engine::Renderer&, bool& isOpen) {
     if (ImGui::Button(followLatest ? "Lock frame" : "Follow latest")) followLatest = !followLatest;
     ImGui::SameLine(); if (ImGui::Button("Clear")) { Engine::Profiler::clear(); selectedFrame = 0; }
     const std::uint32_t count = Engine::Profiler::historySize();
+    drawMemoryInsights(renderer);
     if (!count) { ImGui::TextDisabled("Waiting for profiled frames..."); ImGui::End(); return; }
     if (followLatest || !selectedFrame) selectedFrame = Engine::Profiler::historyFrame(count - 1).frameNumber;
     const Engine::ProfileFrame* selected = &Engine::Profiler::historyFrame(count - 1);

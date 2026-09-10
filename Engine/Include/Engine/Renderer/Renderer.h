@@ -2,6 +2,7 @@
 
 #include "Engine/Core/Profiler.h"
 #include "Engine/Renderer/RenderConfig.h"
+#include "Engine/Renderer/Vulkan/MemoryBudgetManager.h"
 #include "Engine/ECS/Entity.h"
 #include "Engine/Math/Vec3.h"
 
@@ -59,6 +60,10 @@ namespace Engine {
 
         /** Returns timestamps from the most recently completed GPU frame. */
         [[nodiscard]] std::optional<GpuProfileFrame> gpuProfile() const noexcept;
+
+        /** Latest driver/VMA heap budgets and engine memory-class aggregates. */
+        [[nodiscard]] std::vector<GpuMemoryHeapBudget> gpuMemoryHeaps() const;
+        [[nodiscard]] std::vector<GpuMemoryCategoryBudget> gpuMemoryCategories() const;
 
         // nativeWindow and nativeEvent are opaque platform handles. Applications
         // do not need to include graphics-backend headers to use the renderer.

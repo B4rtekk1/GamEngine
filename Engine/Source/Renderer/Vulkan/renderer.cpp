@@ -243,6 +243,14 @@ namespace Engine {
             return gpuTimestampProfiler.hasCompletedFrame() ? std::optional{lastGpuProfile} : std::nullopt;
         }
 
+        [[nodiscard]] std::vector<GpuMemoryHeapBudget> gpuMemoryHeaps() const {
+            return vulkanDevice.memoryBudgetManager().heaps();
+        }
+
+        [[nodiscard]] std::vector<GpuMemoryCategoryBudget> gpuMemoryCategories() const {
+            return vulkanDevice.memoryBudgetManager().categories();
+        }
+
         static void beginFrame() { Input::beginFrame(); }
 
         EditorEventState pollEditorEvents() {

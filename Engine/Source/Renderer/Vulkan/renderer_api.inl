@@ -44,6 +44,14 @@ std::optional<GpuProfileFrame> Renderer::gpuProfile() const noexcept {
     return backend_ ? backend_->gpuProfile() : std::nullopt;
 }
 
+std::vector<GpuMemoryHeapBudget> Renderer::gpuMemoryHeaps() const {
+    return backend_ ? backend_->gpuMemoryHeaps() : std::vector<GpuMemoryHeapBudget>{};
+}
+
+std::vector<GpuMemoryCategoryBudget> Renderer::gpuMemoryCategories() const {
+    return backend_ ? backend_->gpuMemoryCategories() : std::vector<GpuMemoryCategoryBudget>{};
+}
+
 void Renderer::initializeCore(Scene& scene, void* nativeWindow) {
     auto* window = static_cast<SDL_Window*>(nativeWindow);
     if (backend_) throw std::logic_error("Renderer is already initialized");
