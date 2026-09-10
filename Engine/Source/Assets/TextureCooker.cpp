@@ -9,6 +9,7 @@
 #include <cmath>
 #include <cctype>
 #include <limits>
+#include <memory>
 #include <stdexcept>
 #include <string_view>
 #include <system_error>
@@ -17,9 +18,20 @@
 
 namespace Engine::Assets {
     namespace {
-        [[nodiscard]] float srgb_to_linear(const std::uint8_t value) noexcept {
-            const float encoded = static_cast<float>(value) / 255.0F;
-            return encoded <= 0.04045F ? encoded / 12.92F : std::pow((encoded + 0.055F) / 1.055F, 2.4F);
+        constexpr float bc7Quality = 0.10F;
+
+        [[nodiscard]] const std::array<float, 256>& srgb_to_linear_lut() noexcept {
+            static const std::array<float, 256> lut = [] {
+                std::array<float, 256> result{};
+                for (std::uint32_t value = 0; value < result.size(); ++value) {
+                    const float encoded = static_cast<float>(value) / 255.0F;
+                    result[value] = encoded <= 0.04045F
+                        ? encoded / 12.92F
+                        : std::pow((encoded + 0.055F) / 1.055F, 2.4F);
+                }
+                return result;
+            }();
+            return lut;
         }
 
         [[nodiscard]] std::uint8_t linear_to_srgb(const float value) noexcept {
@@ -35,6 +47,7 @@ namespace Engine::Assets {
             const std::uint32_t width = std::max(1U, sourceWidth / 2);
             const std::uint32_t height = std::max(1U, sourceHeight / 2);
             std::vector<std::uint8_t> result(static_cast<std::size_t>(width) * height * 4);
+            const auto& srgbToLinear = srgb_to_linear_lut();
             for (std::uint32_t y = 0; y < height; ++y) for (std::uint32_t x = 0; x < width; ++x) {
                 std::array<float, 4> sum{};
                 for (std::uint32_t oy = 0; oy < 2; ++oy) for (std::uint32_t ox = 0; ox < 2; ++ox) {
@@ -42,7 +55,7 @@ namespace Engine::Assets {
                     const auto sy = std::min(sourceHeight - 1, y * 2 + oy);
                     const auto offset = (static_cast<std::size_t>(sy) * sourceWidth + sx) * 4;
                     for (std::uint32_t channel = 0; channel < 3; ++channel)
-                        sum[channel] += srgb ? srgb_to_linear(source[offset + channel]) : static_cast<float>(source[offset + channel]);
+                        sum[channel] += srgb ? srgbToLinear[source[offset + channel]] : static_cast<float>(source[offset + channel]);
                     sum[3] += static_cast<float>(source[offset + 3]);
                 }
                 const auto output = (static_cast<std::size_t>(y) * width + x) * 4;
@@ -61,32 +74,55 @@ namespace Engine::Assets {
             destination.resize(destination.size() + static_cast<std::size_t>(blockCount) * 16);
             const auto output = destination.data() + destination.size() - static_cast<std::size_t>(blockCount) * 16;
             std::atomic<bool> failed{};
+            std::atomic<std::uint32_t> nextBlock{};
             const std::size_t logicalCores = std::thread::hardware_concurrency();
             // This function already runs inside the low-priority cook task. Limit
             // BC7 workers so the editor and render driver retain CPU capacity.
             const std::size_t workerCount = std::min<std::size_t>(3, logicalCores > 2 ? logicalCores - 2 : 1);
-            const auto encodeRange = [&](const std::uint32_t first, const std::uint32_t last) {
-                std::array<std::uint8_t, 64> block{};
-                for (std::uint32_t index = first; index < last; ++index) {
-                    const std::uint32_t bx = index % blocksWide;
-                    const std::uint32_t by = index / blocksWide;
-                for (std::uint32_t y = 0; y < 4; ++y) for (std::uint32_t x = 0; x < 4; ++x) {
-                    const auto sourceX = std::min(width - 1, bx * 4 + x);
-                    const auto sourceY = std::min(height - 1, by * 4 + y);
-                    const auto sourceOffset = (static_cast<std::size_t>(sourceY) * width + sourceX) * 4;
-                    const auto blockOffset = (static_cast<std::size_t>(y) * 4 + x) * 4;
-                    std::copy_n(rgba.data() + sourceOffset, 4, block.data() + blockOffset);
+            const auto encodeRange = [&] {
+                void* rawOptions = nullptr;
+                if (CreateOptionsBC7(&rawOptions) != 0 || rawOptions == nullptr)
+                    failed.store(true, std::memory_order_relaxed);
+                const auto destroyOptions = [](void* options) { if (options != nullptr) DestroyOptionsBC7(options); };
+                const std::unique_ptr<void, decltype(destroyOptions)> options{rawOptions, destroyOptions};
+                if (!options || SetQualityBC7(options.get(), bc7Quality) != 0) {
+                    failed.store(true, std::memory_order_relaxed);
+                    return;
                 }
-                    if (CompressBlockBC7(block.data(), 16, output + static_cast<std::size_t>(index) * 16) != 0)
-                        failed.store(true, std::memory_order_relaxed);
+                std::array<std::uint8_t, 64> block{};
+                constexpr std::uint32_t blocksPerChunk = 512;
+                for (;;) {
+                    const std::uint32_t first = nextBlock.fetch_add(blocksPerChunk, std::memory_order_relaxed);
+                    if (first >= blockCount) break;
+                    const std::uint32_t last = std::min(blockCount, first + blocksPerChunk);
+                    for (std::uint32_t index = first; index < last; ++index) {
+                        const std::uint32_t bx = index % blocksWide;
+                        const std::uint32_t by = index / blocksWide;
+                        const std::uint32_t px = bx * 4;
+                        const std::uint32_t py = by * 4;
+                        auto* destinationBlock = output + static_cast<std::size_t>(index) * 16;
+                        if (px + 4 <= width && py + 4 <= height) {
+                            const auto* sourceBlock = rgba.data() + (static_cast<std::size_t>(py) * width + px) * 4;
+                            if (CompressBlockBC7(sourceBlock, width * 4, destinationBlock, options.get()) != 0)
+                                failed.store(true, std::memory_order_relaxed);
+                            continue;
+                        }
+                        for (std::uint32_t y = 0; y < 4; ++y) for (std::uint32_t x = 0; x < 4; ++x) {
+                            const auto sourceX = std::min(width - 1, px + x);
+                            const auto sourceY = std::min(height - 1, py + y);
+                            const auto sourceOffset = (static_cast<std::size_t>(sourceY) * width + sourceX) * 4;
+                            const auto blockOffset = (static_cast<std::size_t>(y) * 4 + x) * 4;
+                            std::copy_n(rgba.data() + sourceOffset, 4, block.data() + blockOffset);
+                        }
+                        if (CompressBlockBC7(block.data(), 16, destinationBlock, options.get()) != 0)
+                            failed.store(true, std::memory_order_relaxed);
+                    }
                 }
             };
             std::vector<std::jthread> workers;
             workers.reserve(workerCount);
             for (std::size_t worker = 0; worker < workerCount; ++worker) {
-                const auto first = static_cast<std::uint32_t>(static_cast<std::uint64_t>(blockCount) * worker / workerCount);
-                const auto last = static_cast<std::uint32_t>(static_cast<std::uint64_t>(blockCount) * (worker + 1) / workerCount);
-                workers.emplace_back(encodeRange, first, last);
+                workers.emplace_back(encodeRange);
             }
             // jthread destruction joins all workers before their output is used.
             workers.clear();
@@ -140,6 +176,7 @@ namespace Engine::Assets {
     TextureCookSummary cook_all_textures(const std::filesystem::path& assetRoot, TextureCookProgress* progress) {
         TextureCookSummary summary;
         std::error_code error;
+        std::vector<std::filesystem::path> sources;
         for (std::filesystem::recursive_directory_iterator it{assetRoot,
                  std::filesystem::directory_options::skip_permission_denied, error}, end;
              it != end; it.increment(error)) {
@@ -150,12 +187,16 @@ namespace Engine::Assets {
                 continue;
             }
             if (!it->is_regular_file(error) || !source_texture(it->path())) continue;
-            ++summary.discovered;
-            if (progress != nullptr)
-                progress->discovered.store(summary.discovered, std::memory_order_release);
-            auto output = it->path();
+            sources.push_back(it->path());
+        }
+        summary.discovered = static_cast<std::uint32_t>(sources.size());
+        if (progress != nullptr)
+            progress->discovered.store(summary.discovered, std::memory_order_release);
+
+        for (const auto& source : sources) {
+            auto output = source;
             output.replace_extension(".gtex");
-            const auto sourceTime = std::filesystem::last_write_time(it->path(), error);
+            const auto sourceTime = std::filesystem::last_write_time(source, error);
             const auto outputTime = std::filesystem::last_write_time(output, error);
             if (!error && outputTime >= sourceTime) {
                 ++summary.skipped;
@@ -167,9 +208,9 @@ namespace Engine::Assets {
             int width{};
             int height{};
             int channels{};
-            stbi_uc* pixels = stbi_load(it->path().string().c_str(), &width, &height, &channels, STBI_rgb_alpha);
+            stbi_uc* pixels = stbi_load(source.string().c_str(), &width, &height, &channels, STBI_rgb_alpha);
             if (pixels == nullptr || width <= 0 || height <= 0) {
-                summary.errors += it->path().string() + ": cannot decode image\n";
+                summary.errors += source.string() + ": cannot decode image\n";
                 stbi_image_free(pixels);
                 ++summary.failed;
                 if (progress != nullptr)
@@ -180,11 +221,11 @@ namespace Engine::Assets {
                 const auto count = static_cast<std::size_t>(width) * static_cast<std::size_t>(height) * STBI_rgb_alpha;
                 const auto cooked = cook_bc7(std::span<const std::uint8_t>{pixels, count},
                                               static_cast<std::uint32_t>(width), static_cast<std::uint32_t>(height),
-                                              !linear_texture(it->path()));
+                                              !linear_texture(source));
                 if (!save_gtex(output, cooked)) throw std::runtime_error("could not write " + output.string());
                 ++summary.cooked;
             } catch (const std::exception& exception) {
-                summary.errors += it->path().string() + ": " + exception.what() + "\n";
+                summary.errors += source.string() + ": " + exception.what() + "\n";
                 ++summary.failed;
             }
             stbi_image_free(pixels);
