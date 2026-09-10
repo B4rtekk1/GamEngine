@@ -160,7 +160,8 @@ bool VulkanDevice::isSuitable(VkPhysicalDevice candidate) const {
         features11.shaderDrawParameters != VK_TRUE ||
         features2.features.multiDrawIndirect != VK_TRUE ||
         features2.features.shaderInt16 != VK_TRUE ||
-        features2.features.shaderSampledImageArrayDynamicIndexing != VK_TRUE) {
+        features2.features.shaderSampledImageArrayDynamicIndexing != VK_TRUE ||
+        features2.features.textureCompressionBC != VK_TRUE) {
         return false;
     }
     if (features12.descriptorIndexing != VK_TRUE ||
@@ -299,6 +300,7 @@ void VulkanDevice::createLogicalDevice() {
     features2.features.multiDrawIndirect = VK_TRUE;
     features2.features.shaderInt16 = VK_TRUE;
     features2.features.shaderSampledImageArrayDynamicIndexing = VK_TRUE;
+    features2.features.textureCompressionBC = VK_TRUE;
     features2.pNext = &features11;
 
     VkDeviceCreateInfo createInfo{};

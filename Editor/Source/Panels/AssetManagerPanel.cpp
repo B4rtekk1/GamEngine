@@ -5,6 +5,7 @@
 #include "Editor/Panels/ConsolePanel.h"
 #include "Elements/NumericControl.h"
 #include "Engine/Renderer/MeshRenderer.h"
+#include "Engine/Assets/TextureCooker.h"
 #include "Engine/Renderer/ShaderGraph/ShaderGraphSerializer.h"
 #include "Engine/Renderer/ShaderGraph/ShaderNodeFactory.h"
 #include "Engine/Scene/SceneEditor.h"
@@ -452,6 +453,31 @@ Engine::Entity AssetManagerPanel::draw(Engine::ScenePreset& scene, Engine::Asset
         refresh();
     if (ImGui::IsItemHovered())
     ImGui::SetTooltip("Refresh assets");
+    ImGui::SameLine();
+    ImGui::BeginDisabled(!projectIsOpen);
+    if (ImGui::Button("Compress all textures##asset-compress"))
+        ImGui::OpenPopup("##asset-compress-confirm");
+    if (ImGui::BeginPopupModal("##asset-compress-confirm", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
+        ImGui::TextWrapped("Generate or overwrite .gtex files for every PNG, JPEG, TGA, and BMP texture in Assets?");
+        ImGui::TextDisabled("The source images are kept unchanged. This can take a while.");
+        if (ImGui::Button("Compress all")) {
+            const auto summary = Engine::Assets::cook_all_textures(root);
+            refresh();
+            if (summary.failed == 0) {
+                Editor::ConsolePanel::info("Cooked " + std::to_string(summary.cooked) + " of " +
+                                           std::to_string(summary.discovered) + " textures to GTEX.");
+            } else {
+                Editor::ConsolePanel::error("Cooked " + std::to_string(summary.cooked) + "/" +
+                                            std::to_string(summary.discovered) + " textures; " +
+                                            std::to_string(summary.failed) + " failed.\n" + summary.errors);
+            }
+            ImGui::CloseCurrentPopup();
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("Cancel")) ImGui::CloseCurrentPopup();
+        ImGui::EndPopup();
+    }
+    ImGui::EndDisabled();
     ImGui::SameLine();
     ImGui::BeginDisabled(!projectIsOpen);
     if (ImGui::Button("Import...##asset-import"))

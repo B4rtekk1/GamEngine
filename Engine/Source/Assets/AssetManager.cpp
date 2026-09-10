@@ -1,4 +1,5 @@
 #include "Engine/Assets/AssetManager.h"
+#include "Engine/Assets/Gtex.h"
 
 #include "GlbLoader.h"
 #include "Engine/Renderer/Geometry/Mesh.h"
@@ -339,6 +340,24 @@ namespace Engine::Assets {
         });
         manager.register_loader<BinaryAsset>(AssetType::Binary, binary_loader);
         manager.register_loader<TextureAsset>(AssetType::Texture2D, [](const auto &path, const auto &) {
+            if (path.extension() == ".gtex" || path.extension() == ".GTEX") {
+                const auto cooked = load_gtex(path);
+                if (!cooked) return std::shared_ptr<const TextureAsset>{};
+                TextureAsset texture;
+                texture.width = cooked->width;
+                texture.height = cooked->height;
+                texture.cooked = *cooked;
+                return std::make_shared<const TextureAsset>(std::move(texture));
+            }
+            auto cookedPath = path;
+            cookedPath.replace_extension(".gtex");
+            if (const auto cooked = load_gtex(cookedPath)) {
+                TextureAsset texture;
+                texture.width = cooked->width;
+                texture.height = cooked->height;
+                texture.cooked = *cooked;
+                return std::make_shared<const TextureAsset>(std::move(texture));
+            }
             int width{};
             int height{};
             int channels{};

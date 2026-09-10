@@ -1,5 +1,6 @@
 #include "Engine/Renderer/Textures/Texture2D.h"
 
+#include "Engine/Assets/Gtex.h"
 #include "Engine/Renderer/Vulkan/buffer.h"
 #include "Engine/Renderer/Vulkan/upload_context.h"
 
@@ -12,6 +13,18 @@
 
 namespace Engine {
     namespace {
+        [[nodiscard]] VkFormat to_vk_format(const Assets::TextureFormat format) {
+            switch (format) {
+                case Assets::TextureFormat::RGBA8_SRGB: return VK_FORMAT_R8G8B8A8_SRGB;
+                case Assets::TextureFormat::RGBA8_UNORM: return VK_FORMAT_R8G8B8A8_UNORM;
+                case Assets::TextureFormat::BC4_UNORM: return VK_FORMAT_BC4_UNORM_BLOCK;
+                case Assets::TextureFormat::BC5_UNORM: return VK_FORMAT_BC5_UNORM_BLOCK;
+                case Assets::TextureFormat::BC7_UNORM: return VK_FORMAT_BC7_UNORM_BLOCK;
+                case Assets::TextureFormat::BC7_SRGB: return VK_FORMAT_BC7_SRGB_BLOCK;
+            }
+            throw std::invalid_argument("Unknown cooked texture format");
+        }
+
         void transitionImage(
             VkCommandBuffer commandBuffer,
             VkImage image,
@@ -259,6 +272,124 @@ Texture2D &Texture2D::operator=(Texture2D &&other) noexcept {
             destroy();
             throw;
         }
+    }
+
+    void Texture2D::createCooked(
+        const VkPhysicalDevice physicalDevice, const VkDevice device, const VkCommandPool commandPool,
+        const VkQueue queue, const Assets::CookedTexture& texture, const VmaAllocator allocator) {
+        if (physicalDevice == VK_NULL_HANDLE || device == VK_NULL_HANDLE || commandPool == VK_NULL_HANDLE || queue == VK_NULL_HANDLE ||
+            allocator == VK_NULL_HANDLE) throw std::invalid_argument("Texture2D requires valid Vulkan handles and VMA allocator");
+        if (!Assets::valid_cooked_texture(texture)) throw std::invalid_argument("Cooked texture has invalid mip data");
+
+        destroy();
+        device_ = device;
+        allocator_ = allocator;
+        format_ = to_vk_format(texture.format);
+        width_ = texture.width;
+        height_ = texture.height;
+        mipLevels_ = static_cast<std::uint32_t>(texture.mips.size());
+
+        Buffer staging;
+        UploadContext* upload = UploadContext::current();
+        VkBuffer stagingBuffer = VK_NULL_HANDLE;
+        VkDeviceSize stagingOffset = 0;
+        VkCommandBuffer commandBuffer = VK_NULL_HANDLE;
+        const bool ownsUploadBatch = upload != nullptr && !upload->recording();
+        try {
+            if (upload != nullptr) {
+                if (ownsUploadBatch) upload->begin();
+                const auto slice = upload->allocate(static_cast<VkDeviceSize>(texture.data.size()), 16);
+                std::memcpy(slice.mapped, texture.data.data(), texture.data.size());
+                stagingBuffer = slice.buffer;
+                stagingOffset = slice.offset;
+                commandBuffer = upload->commandBuffer();
+            } else {
+                staging.createHostVisible(physicalDevice, device_, static_cast<VkDeviceSize>(texture.data.size()), VK_BUFFER_USAGE_TRANSFER_SRC_BIT, allocator_);
+                staging.update(texture.data.data(), static_cast<VkDeviceSize>(texture.data.size()));
+                stagingBuffer = staging.handle();
+            }
+
+            VkImageCreateInfo imageInfo{VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO};
+            imageInfo.imageType = VK_IMAGE_TYPE_2D;
+            imageInfo.format = format_;
+            imageInfo.extent = {width_, height_, 1};
+            imageInfo.mipLevels = mipLevels_;
+            imageInfo.arrayLayers = 1;
+            imageInfo.samples = VK_SAMPLE_COUNT_1_BIT;
+            imageInfo.tiling = VK_IMAGE_TILING_OPTIMAL;
+            imageInfo.usage = VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
+            imageInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+            imageInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+            VmaAllocationCreateInfo allocationInfo{};
+            allocationInfo.usage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE;
+            if (vmaCreateImage(allocator_, &imageInfo, &allocationInfo, &image_, &allocation_, nullptr) != VK_SUCCESS)
+                throw std::runtime_error("Could not allocate cooked Texture2D image with VMA");
+            VmaAllocationInfo allocationDetails{};
+            vmaGetAllocationInfo(allocator_, allocation_, &allocationDetails);
+            memory_ = allocationDetails.deviceMemory;
+
+            if (upload == nullptr) {
+                VkCommandBufferAllocateInfo commandAllocation{VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO};
+                commandAllocation.commandPool = commandPool; commandAllocation.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY; commandAllocation.commandBufferCount = 1;
+                VkCommandBufferBeginInfo beginInfo{VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
+                beginInfo.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+                if (vkAllocateCommandBuffers(device_, &commandAllocation, &commandBuffer) != VK_SUCCESS ||
+                    vkBeginCommandBuffer(commandBuffer, &beginInfo) != VK_SUCCESS)
+                    throw std::runtime_error("Could not begin cooked Texture2D upload command buffer");
+            }
+
+            transitionImage(commandBuffer, image_, 0, mipLevels_, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                            0, VK_ACCESS_TRANSFER_WRITE_BIT, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT);
+            std::vector<VkBufferImageCopy> regions;
+            regions.reserve(texture.mips.size());
+            for (std::uint32_t level = 0; level < mipLevels_; ++level) {
+                const auto& mip = texture.mips[level];
+                VkBufferImageCopy copy{};
+                copy.bufferOffset = stagingOffset + mip.offset;
+                copy.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, level, 0, 1};
+                copy.imageExtent = {mip.width, mip.height, 1};
+                regions.push_back(copy);
+            }
+            vkCmdCopyBufferToImage(commandBuffer, stagingBuffer, image_, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                                   static_cast<std::uint32_t>(regions.size()), regions.data());
+            transitionImage(commandBuffer, image_, 0, mipLevels_, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                            VK_ACCESS_TRANSFER_WRITE_BIT, VK_ACCESS_SHADER_READ_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT);
+            if (upload != nullptr) {
+                readyTimeline_ = upload->pendingTicket().timelineValue;
+                if (ownsUploadBatch) readyTimeline_ = upload->submit().timelineValue;
+                commandBuffer = VK_NULL_HANDLE;
+            } else {
+                if (vkEndCommandBuffer(commandBuffer) != VK_SUCCESS) throw std::runtime_error("Could not end cooked Texture2D upload command buffer");
+                VkSubmitInfo submit{VK_STRUCTURE_TYPE_SUBMIT_INFO}; submit.commandBufferCount = 1; submit.pCommandBuffers = &commandBuffer;
+                if (vkQueueSubmit(queue, 1, &submit, VK_NULL_HANDLE) != VK_SUCCESS) throw std::runtime_error("Could not upload cooked Texture2D");
+                vkQueueWaitIdle(queue); vkFreeCommandBuffers(device_, commandPool, 1, &commandBuffer); commandBuffer = VK_NULL_HANDLE;
+            }
+            VkImageViewCreateInfo view{VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
+            view.image = image_; view.viewType = VK_IMAGE_VIEW_TYPE_2D; view.format = format_;
+            view.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, mipLevels_, 0, 1};
+            if (vkCreateImageView(device_, &view, nullptr, &imageView_) != VK_SUCCESS) throw std::runtime_error("Could not create cooked Texture2D image view");
+            VkSamplerCreateInfo samplerInfo{VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO};
+            samplerInfo.magFilter = VK_FILTER_LINEAR; samplerInfo.minFilter = VK_FILTER_LINEAR; samplerInfo.mipmapMode = VK_SAMPLER_MIPMAP_MODE_LINEAR;
+            samplerInfo.addressModeU = VK_SAMPLER_ADDRESS_MODE_REPEAT; samplerInfo.addressModeV = VK_SAMPLER_ADDRESS_MODE_REPEAT; samplerInfo.addressModeW = VK_SAMPLER_ADDRESS_MODE_REPEAT;
+            samplerInfo.maxLod = static_cast<float>(mipLevels_ - 1);
+            if (vkCreateSampler(device_, &samplerInfo, nullptr, &sampler_) != VK_SUCCESS) throw std::runtime_error("Could not create cooked Texture2D sampler");
+        } catch (...) {
+            if (commandBuffer != VK_NULL_HANDLE && upload == nullptr) vkFreeCommandBuffers(device_, commandPool, 1, &commandBuffer);
+            destroy();
+            throw;
+        }
+    }
+
+    void Texture2D::createFromAsset(
+        const VkPhysicalDevice physicalDevice, const VkDevice device, const VkCommandPool commandPool,
+        const VkQueue queue, const Assets::TextureAsset& asset, const TextureColorSpace colorSpace,
+        const VmaAllocator allocator) {
+        if (asset.cooked) {
+            createCooked(physicalDevice, device, commandPool, queue, *asset.cooked, allocator);
+            return;
+        }
+        create(physicalDevice, device, commandPool, queue, asset.width, asset.height, asset.rgbaPixels,
+               colorSpace, true, allocator);
     }
 
     void Texture2D::destroy() noexcept {

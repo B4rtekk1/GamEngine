@@ -1,5 +1,5 @@
 add_library(Engine SHARED
-    Source/Application.cpp Source/Project.cpp Source/Assets/StbImage.cpp Source/Assets/AssetManager.cpp Source/Assets/GlbLoader.cpp Source/Assets/Content.cpp
+    Source/Application.cpp Source/Project.cpp Source/Assets/StbImage.cpp Source/Assets/AssetManager.cpp Source/Assets/Gtex.cpp Source/Assets/TextureCooker.cpp Source/Assets/GlbLoader.cpp Source/Assets/Content.cpp
     Source/Core/Camera.cpp Source/Core/Diagnostics.cpp Source/Core/Profiler.cpp Source/Core/TaskScheduler.cpp Source/Core/Time.cpp Source/ECS/Registry.cpp Source/Input/Input.cpp Source/Input/InputMap.cpp
     Source/Scene/SceneSerializer.cpp Source/Scene/SceneRegistrySerializer.cpp Source/Scene/Scene.cpp Source/Scene/Actor.cpp Source/Scene/TransformSystem.cpp Source/Scene/Prefab.cpp Source/Scene/ScenePresets.cpp
     Source/Physics/PhysXPhysicsSystem.cpp Source/Scripting/ScriptSystem.cpp Source/Scripting/Script.cpp Source/Scripting/ScriptRegistry.cpp Source/Scripting/DynamicLibrary.cpp Source/Scripting/ScriptModuleManager.cpp
@@ -14,7 +14,7 @@ add_library(Engine SHARED
     ${PROJECT_SOURCE_DIR}/Platform/SDL/SDLInput.cpp)
 file(GLOB_RECURSE ENGINE_PUBLIC_HEADERS CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/Include/*.h" "${CMAKE_CURRENT_SOURCE_DIR}/Include/*.hpp")
 target_sources(Engine PRIVATE FILE_SET engine_public_headers TYPE HEADERS BASE_DIRS "${CMAKE_CURRENT_SOURCE_DIR}/Include" FILES ${ENGINE_PUBLIC_HEADERS})
-target_link_libraries(Engine PUBLIC SDL3::SDL3 Vulkan::Vulkan PRIVATE DearImGui physx_lib)
+target_link_libraries(Engine PUBLIC SDL3::SDL3 Vulkan::Vulkan PRIVATE DearImGui physx_lib CMP_Core)
 target_compile_definitions(Engine PRIVATE PX_PHYSX_STATIC_LIB
     GAMEENGINE_SLANGC_PATH="${GAMEENGINE_SLANGC}")
 target_include_directories(Engine PUBLIC $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/Include> ${GLM_INCLUDE_DIR} ${VMA_INCLUDE_DIR} PRIVATE "${PROJECT_SOURCE_DIR}" "${CMAKE_CURRENT_SOURCE_DIR}/Source" "${PROJECT_SOURCE_DIR}/ThridParty/stb")

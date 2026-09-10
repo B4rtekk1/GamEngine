@@ -1,5 +1,6 @@
 #pragma once
 
+#include "Engine/Assets/AssetTypes.h"
 #include <vulkan/vulkan.h>
 #include <vk_mem_alloc.h>
 
@@ -44,6 +45,25 @@ public:
         bool generateMipmaps = true,
         VmaAllocator allocator = VK_NULL_HANDLE,
         TexturePixelFormat pixelFormat = TexturePixelFormat::RGBA8);
+
+    /** Uploads pre-cooked RGBA/BC mip blocks without runtime decompression or blits. */
+    void createCooked(
+        VkPhysicalDevice physicalDevice,
+        VkDevice device,
+        VkCommandPool commandPool,
+        VkQueue queue,
+        const Assets::CookedTexture& texture,
+        VmaAllocator allocator = VK_NULL_HANDLE);
+
+    /** Uses the cooked payload when available; decoded RGBA remains a development fallback. */
+    void createFromAsset(
+        VkPhysicalDevice physicalDevice,
+        VkDevice device,
+        VkCommandPool commandPool,
+        VkQueue queue,
+        const Assets::TextureAsset& asset,
+        TextureColorSpace colorSpace = TextureColorSpace::SRGB,
+        VmaAllocator allocator = VK_NULL_HANDLE);
 
     void destroy() noexcept;
 

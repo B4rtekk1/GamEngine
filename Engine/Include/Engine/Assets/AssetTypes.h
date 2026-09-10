@@ -7,6 +7,7 @@
 
 #include <cstdint>
 #include <filesystem>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -52,10 +53,38 @@ namespace Engine::Assets {
     };
 
     /** CPU-side decoded RGBA texture. The renderer uploads it when needed. */
+    enum class TextureFormat : std::uint32_t {
+        RGBA8_SRGB,
+        RGBA8_UNORM,
+        BC4_UNORM,
+        BC5_UNORM,
+        BC7_UNORM,
+        BC7_SRGB,
+    };
+
+    /** Byte range and dimensions of one cooked mip level. */
+    struct TextureMip {
+        std::uint64_t offset{};
+        std::uint64_t size{};
+        std::uint32_t width{};
+        std::uint32_t height{};
+    };
+
+    /** GPU-ready texture data. Blocks are never decompressed by the runtime. */
+    struct CookedTexture {
+        std::uint32_t width{};
+        std::uint32_t height{};
+        TextureFormat format{TextureFormat::RGBA8_UNORM};
+        std::vector<TextureMip> mips;
+        std::vector<std::uint8_t> data;
+    };
+
+    /** Source or GPU-ready texture data. Prefer cooked when it is present. */
     struct TextureAsset {
         std::uint32_t width{};
         std::uint32_t height{};
         std::vector<std::uint8_t> rgbaPixels;
+        std::optional<CookedTexture> cooked;
     };
 
     /** @brief Text contents of an asset file. */
