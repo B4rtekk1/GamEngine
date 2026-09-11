@@ -140,7 +140,7 @@ namespace Engine {
 
     constexpr uint32_t WIDTH = 800;
     constexpr uint32_t HEIGHT = 600;
-    constexpr int MAX_FRAMES_IN_FLIGHT = 2;
+    constexpr int MAX_FRAMES_IN_FLIGHT = 3;
     constexpr float HALF_EXTENT_FACTOR = 0.5F;
     constexpr float DEFAULT_SELECTION_RADIUS = 1.0F;
     constexpr float SCENE_CAMERA_FOV_DEGREES = 60.0F;

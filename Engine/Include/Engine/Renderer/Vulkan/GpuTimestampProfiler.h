@@ -23,7 +23,7 @@ namespace Engine {
         [[nodiscard]] std::optional<GpuProfileFrame> completedFrame(std::uint32_t frameIndex) const;
 
     private:
-        static constexpr std::uint32_t FramesInFlight = 2;
+        static constexpr std::uint32_t FramesInFlight = 3;
         static constexpr std::uint32_t MaxZonesPerFrame = 64;
         static constexpr std::uint32_t QueriesPerFrame = 2 + MaxZonesPerFrame * 2;
         struct PendingEvent final { ProfileNameId name{}; std::uint16_t depth{}; };

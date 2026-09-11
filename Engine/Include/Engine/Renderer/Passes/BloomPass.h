@@ -31,7 +31,7 @@ namespace Engine {
         GraphicsPipeline pipeline_;
         VkDescriptorSetLayout layout_ = VK_NULL_HANDLE;
         VkDescriptorPool pool_ = VK_NULL_HANDLE;
-        static constexpr std::uint32_t FramesInFlight = 2;
+        static constexpr std::uint32_t FramesInFlight = 3;
         std::array<VkDescriptorSet, FramesInFlight> sets_{};
         VkFramebuffer framebuffer_ = VK_NULL_HANDLE;
         bool initialized_ = false;
