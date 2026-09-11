@@ -23,6 +23,8 @@ namespace Engine {
         void record(VkCommandBuffer commandBuffer, VkImageView source, VkSampler sourceSampler,
                     std::uint32_t frameIndex);
         [[nodiscard]] VkImageView resultView() const noexcept { return result_.imageView(); }
+        [[nodiscard]] VkImage resultImage() const noexcept { return result_.image(); }
+        [[nodiscard]] bool initialized() const noexcept { return initialized_; }
         [[nodiscard]] VkSampler resultSampler() const noexcept { return result_.sampler(); }
     private:
         VkDevice device_ = VK_NULL_HANDLE;

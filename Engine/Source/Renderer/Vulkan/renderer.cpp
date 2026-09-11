@@ -68,6 +68,7 @@
 #include "Engine/Renderer/MeshRenderer.h"
 #include "Engine/Renderer/Particles/ParticleSystem.h"
 #include "Engine/Renderer/RenderGraph/RenderGraph.h"
+#include "Engine/Renderer/RenderGraph/RenderGraphExecutor.h"
 #include "Engine/Input/Input.h"
 #include "Engine/UI/Canvas.h"
 #include "Engine/UI/CanvasRenderer.h"
@@ -713,11 +714,11 @@ namespace Engine {
             // Persistent scene tables retain their backing allocations. Their
             // creators grow geometrically only when a new delta exceeds the
             // current capacity, otherwise they overwrite changed records.
-            for (Texture2D &texture: materialTextures) { texture.destroy(); }
-            materialTextures.clear();
-            materialTextureDescriptors.clear();
-            meshTextureOffsets.clear();
-            fallbackMaterialTexture.destroy();
+            // Texture bindings are retained and append-only.  A new instance
+            // of an already known mesh must not tear down the bindless table
+            // (nor re-upload its images) for the rest of the scene.
+            const bool needsTextureTableAppend = topologyIntroducesMaterialTextures(
+                lastMeshRendererRevision, lastTerrainGrassRevision);
             renderables.clear();
             instanceBatches.clear();
             instanceModels.clear();
@@ -731,7 +732,9 @@ namespace Engine {
             lastParentRevision = std::numeric_limits<std::uint64_t>::max();
             hiZValid = false;
 
-            createMaterialTextures();
+            if (needsTextureTableAppend) {
+                createMaterialTextures();
+            }
             createMeshBuffers();
             createInstanceBuffer();
             lastRenderTopologyRevision = registry.renderTopologyRevision();

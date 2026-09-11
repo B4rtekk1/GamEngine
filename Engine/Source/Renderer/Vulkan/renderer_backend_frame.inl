@@ -823,19 +823,13 @@
                 ForwardPass::end(commandBuffer);
             }
 
-            // The post-processing tail is owned by the frame graph.  Some
-            // callbacks still use legacy Vulkan render passes (and therefore
-            // own their attachment transitions), but their execution order is
-            // no longer implicit in this function.  Explicit dependencies are
-            // the migration bridge for such callbacks; once their attachment
-            // interfaces are graph-native they can be replaced by resource
-            // edges without changing this frame schedule.
+            // RenderGraph owns the post-forward tail of the frame.  Its
+            // imported resources describe the work recorded above (shadow,
+            // culling and raster passes); from this point on no manual
+            // cross-pass image barrier is emitted by the renderer.
             frameGraph.reset();
-            RenderGraph::PassHandle previousPass{};
+            RenderGraph::TextureHandle hiZ{};
             if (renderGameViewport && hizEnabled) {
-                // The imported depth state describes the preceding Forward
-                // pass, so the graph emits the late-depth -> compute sampled
-                // read dependency before Hi-Z records its pyramid.
                 const VkExtent2D extent = swapchain.extent();
                 const RenderGraph::TextureDesc depthDesc{
                     .extent = {extent.width, extent.height, 1},
@@ -847,24 +841,85 @@
                     {.stage = VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT,
                      .access = VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT,
                      .layout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL,
-                     .write = true});
-                previousPass = frameGraph.addPass("Hi-Z", [&](RenderGraph::PassBuilder& builder) {
+                     .write = true,
+                     .queueFamily = vulkanDevice.graphicsQueueFamily()});
+                const RenderGraph::TextureDesc hiZDesc{
+                    .extent = {hiZBuffer.width(), hiZBuffer.height(), 1},
+                    .format = VK_FORMAT_R32_SFLOAT,
+                    .usage = VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
+                    .aspect = VK_IMAGE_ASPECT_COLOR_BIT,
+                    .mipLevels = hiZBuffer.mipCount()};
+                hiZ = frameGraph.importTexture("Hi-Z pyramid", hiZBuffer.image(), hiZDesc,
+                    {.stage = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                     .access = VK_ACCESS_2_SHADER_SAMPLED_READ_BIT,
+                     .layout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                     .queueFamily = vulkanDevice.graphicsQueueFamily()});
+                frameGraph.addPass("Hi-Z", [&](RenderGraph::PassBuilder& builder) {
                     builder.read(depth, RenderGraph::TextureUsage::SampledReadCompute);
+                    builder.write(hiZ, RenderGraph::TextureUsage::ExternalComputeWrite);
                 }, [this](const VkCommandBuffer buffer) {
                     hiZPass.record(buffer, hiZBuffer, true);
-                });
+                }, RenderGraph::QueueClass::AsyncCompute);
+                // The next frame's legacy culling samples this pyramid on the
+                // graphics family. Make that transfer explicit now, while the
+                // graph still owns both sides of the hand-off.
+                frameGraph.addPass("Hi-Z ownership return", [&](RenderGraph::PassBuilder& builder) {
+                    builder.read(hiZ, RenderGraph::TextureUsage::SampledReadCompute);
+                }, {}, RenderGraph::QueueClass::Graphics);
             }
 
-            const auto taaPass = frameGraph.addPass("TAA", [previousPass](RenderGraph::PassBuilder& builder) {
-                if (previousPass) builder.dependsOn(previousPass);
+            const VkExtent2D frameExtent = swapchain.extent();
+            const RenderGraph::TextureDesc hdrDesc{
+                .extent = {frameExtent.width, frameExtent.height, 1}, .format = HdrBuffer::Format,
+                .usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT};
+            const auto hdr = frameGraph.importTexture("HDR scene color", hdrBuffer.image(), hdrDesc,
+                {.stage = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
+                 .access = VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT,
+                 .layout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, .write = true});
+            RenderGraph::TextureHandle velocity{};
+            RenderGraph::TextureHandle taaOutput{};
+            if (renderGameViewport && taaResolveActive) {
+                const RenderGraph::TextureDesc velocityDesc{
+                    .extent = {frameExtent.width, frameExtent.height, 1}, .format = VK_FORMAT_R16G16_SFLOAT,
+                    .usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT};
+                velocity = frameGraph.importTexture("Motion vectors", velocityBuffer.image(), velocityDesc,
+                    {.stage = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
+                     .access = VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT,
+                     .layout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, .write = true});
+                taaOutput = frameGraph.importTexture("TAA history (next)", temporalAaPass.nextResolvedImage(), hdrDesc,
+                    {.layout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL});
+            }
+            const RenderGraph::TextureDesc bloomDesc{
+                .extent = {std::max(1U, frameExtent.width / 2U), std::max(1U, frameExtent.height / 2U), 1},
+                .format = HdrBuffer::Format, .usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT};
+            const auto bloomOutput = frameGraph.importTexture("Bloom", bloomPass.resultImage(), bloomDesc,
+                {.layout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL});
+            const RenderGraph::TextureDesc swapchainDesc{
+                .extent = {frameExtent.width, frameExtent.height, 1}, .format = swapchain.format(),
+                .usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT, .aspect = VK_IMAGE_ASPECT_COLOR_BIT};
+            const auto output = frameGraph.importTexture("Present", swapchain.images().at(imageIndex.value), swapchainDesc,
+                {.layout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR});
+
+            frameGraph.addPass("TAA", [&](RenderGraph::PassBuilder& builder) {
+                if (renderGameViewport && taaResolveActive) {
+                    builder.read(hdr, RenderGraph::TextureUsage::SampledReadFragment);
+                    builder.read(velocity, RenderGraph::TextureUsage::SampledReadFragment);
+                    if (temporalAaPass.initialized())
+                        builder.write(taaOutput, RenderGraph::TextureUsage::ExternalColorWrite);
+                }
             }, [this, renderGameViewport](const VkCommandBuffer buffer) {
                 gpuTimestampProfiler.beginZone(buffer, currentFrame, taaProfileName);
                 if (renderGameViewport && taaResolveActive)
                     temporalAaPass.record(buffer, swapchain.extent(), taaJitterX, taaJitterY);
                 gpuTimestampProfiler.endZone(buffer, currentFrame);
             });
-            const auto bloomGraphPass = frameGraph.addPass("Bloom downsample", [taaPass](RenderGraph::PassBuilder& builder) {
-                builder.dependsOn(taaPass);
+
+            frameGraph.addPass("Bloom", [&](RenderGraph::PassBuilder& builder) {
+                if (renderGameViewport) {
+                    builder.read(taaResolveActive ? taaOutput : hdr, RenderGraph::TextureUsage::SampledReadFragment);
+                    if (bloomPass.initialized())
+                        builder.write(bloomOutput, RenderGraph::TextureUsage::ExternalColorWrite);
+                }
             }, [this, renderGameViewport](const VkCommandBuffer buffer) {
                 gpuTimestampProfiler.beginZone(buffer, currentFrame, bloomProfileName);
                 if (renderGameViewport)
@@ -872,43 +927,49 @@
                                      hdrBuffer.sampler(), currentFrame);
                 gpuTimestampProfiler.endZone(buffer, currentFrame);
             });
-            const auto tonemapGraphPass = frameGraph.addPass("Tonemap", [bloomGraphPass](RenderGraph::PassBuilder& builder) {
-                builder.dependsOn(bloomGraphPass);
-            }, [this, imageIndex](const VkCommandBuffer buffer) {
-                gpuTimestampProfiler.beginZone(buffer, currentFrame, tonemapProfileName);
-                if (!editorUiActive) {
-                    if (taaResolveActive)
-                        tonemapPass.record(buffer, imageIndex.value, swapchain.extent(), 0.0F,
-                                           1U + temporalAaPass.resolvedIndex());
-                    else tonemapPass.record(buffer, imageIndex.value, swapchain.extent());
-                }
-                gpuTimestampProfiler.endZone(buffer, currentFrame);
-            });
-            const auto uiGraphPass = frameGraph.addPass("UI", [tonemapGraphPass](RenderGraph::PassBuilder& builder) {
-                builder.dependsOn(tonemapGraphPass);
-            }, [this, imageIndex](const VkCommandBuffer buffer) {
-                if (editorUiActive) {
-                    VkRenderPassBeginInfo pass{VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO};
-                    pass.renderPass = editorUiRenderPass;
-                    pass.framebuffer = editorUiFramebuffers.at(imageIndex.value);
-                    pass.renderArea.extent = swapchain.extent();
-                    VkClearValue clear{};
-                    clear.color = {{0.06F, 0.07F, 0.09F, 1.0F}};
-                    pass.clearValueCount = 1;
-                    pass.pClearValues = &clear;
-                    vkCmdBeginRenderPass(buffer, &pass, VK_SUBPASS_CONTENTS_INLINE);
-                    ImGui_ImplVulkan_RenderDrawData(ImGui::GetDrawData(), buffer);
-                    vkCmdEndRenderPass(buffer);
+
+            frameGraph.addPass(editorUiActive ? "Editor UI / Present" : "Tonemap / UI / Present",
+                [&](RenderGraph::PassBuilder& builder) {
+                    builder.read(taaResolveActive ? taaOutput : hdr, RenderGraph::TextureUsage::SampledReadFragment);
+                    builder.read(bloomOutput, RenderGraph::TextureUsage::SampledReadFragment);
+                    // Tonemap/ImGui/Canvas own their render-pass transitions
+                    // and leave the acquired image ready for presentation.
+                    builder.write(output, RenderGraph::TextureUsage::ExternalPresentWrite);
+                }, [this, imageIndex](const VkCommandBuffer buffer) {
+            gpuTimestampProfiler.beginZone(buffer, currentFrame, tonemapProfileName);
+            if (editorUiActive) {
+                VkRenderPassBeginInfo pass{VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO};
+                pass.renderPass = editorUiRenderPass;
+                pass.framebuffer = editorUiFramebuffers.at(imageIndex.value);
+                pass.renderArea.extent = swapchain.extent();
+                constexpr float editorClearRed{0.06F};
+                constexpr float editorClearGreen{0.07F};
+                constexpr float editorClearBlue{0.09F};
+                VkClearValue clear{};
+                clear.color = {{editorClearRed, editorClearGreen, editorClearBlue, 1.0F}};
+                pass.clearValueCount = 1;
+                pass.pClearValues = &clear;
+                vkCmdBeginRenderPass(buffer, &pass, VK_SUBPASS_CONTENTS_INLINE);
+                ImGui_ImplVulkan_RenderDrawData(ImGui::GetDrawData(), buffer);
+                vkCmdEndRenderPass(buffer);
+            } else {
+                if (taaResolveActive) {
+                    tonemapPass.record(buffer, imageIndex.value, swapchain.extent(), 0.0F,
+                                       1U + temporalAaPass.resolvedIndex());
                 } else {
-                    canvasRenderer.record(scene.uiCanvas(), buffer, imageIndex.value, currentFrame, swapchain.extent());
+                    tonemapPass.record(buffer, imageIndex.value, swapchain.extent());
                 }
+                canvasRenderer.record(scene.uiCanvas(), buffer, imageIndex.value, currentFrame,
+                                      swapchain.extent());
+            }
+            gpuTimestampProfiler.endZone(buffer, currentFrame);
+            gpuTimestampProfiler.endFrame(buffer, currentFrame);
             });
-            [[maybe_unused]] const auto presentGraphPass = frameGraph.addPass("Present", [uiGraphPass](RenderGraph::PassBuilder& builder) {
-                builder.dependsOn(uiGraphPass);
-            }, {});
-            frameGraph.execute(commandBuffer);
+            // The prelude owns all legacy graphics work. Compile the graph
+            // here so a depth image handed to the async Hi-Z queue gets its
+            // release barrier before this command buffer is submitted.
+            frameGraphExecutor.recordPreludeReleases(frameGraph, commandBuffer);
             if (renderGameViewport && hizEnabled) hiZValid = true;
-            gpuTimestampProfiler.endFrame(commandBuffer, currentFrame);
 
             if (vkEndCommandBuffer(commandBuffer) != VK_SUCCESS) {
                 throw std::runtime_error("Could not end command buffer");
@@ -1214,7 +1275,32 @@
             particleSystem->update(static_cast<float>(Time::deltaTime()));
         }
 
-        void submitAndPresentFrame(const uint32_t imageIndex) {
+        void submitAndPresentFrame(const uint32_t imageIndex, const bool hasGraphTail = false) {
+            if (hasGraphTail) {
+                const std::uint64_t preludeValue = frameGraphExecutor.submitPrelude(commandBuffers[currentFrame]);
+                frameGraphExecutor.submit(frameGraph, imageAvailableSemaphores[currentFrame],
+                    VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT, renderFinishedSemaphores[imageIndex],
+                    inFlightFences[currentFrame], preludeValue);
+                frameSubmissionValues[currentFrame] = ++submittedFrameValue;
+
+                VkPresentInfoKHR presentInfo{};
+                presentInfo.sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR;
+                presentInfo.waitSemaphoreCount = 1;
+                const VkSemaphore signalSemaphore = renderFinishedSemaphores[imageIndex];
+                presentInfo.pWaitSemaphores = &signalSemaphore;
+                const VkSwapchainKHR swapChain = swapchain.handle();
+                presentInfo.swapchainCount = 1;
+                presentInfo.pSwapchains = &swapChain;
+                presentInfo.pImageIndices = &imageIndex;
+                const VkResult result = vkQueuePresentKHR(vulkanDevice.presentQueue(), &presentInfo);
+                if (result == VK_ERROR_OUT_OF_DATE_KHR || result == VK_SUBOPTIMAL_KHR || framebufferResized) {
+                    framebufferResized = false;
+                    recreateSwapChain();
+                } else if (result != VK_SUCCESS) {
+                    throw std::runtime_error("Could not present image");
+                }
+                return;
+            }
             VkSubmitInfo submitInfo{};
             submitInfo.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
 
@@ -1267,6 +1353,8 @@
 
             uint32_t imageIndex;
             if (!acquireFrameImage(imageIndex)) { return; }
+
+            frameGraphExecutor.beginFrame();
 
             vkResetCommandBuffer(commandBuffers[currentFrame], 0);
             {
@@ -1328,7 +1416,7 @@
             }
             {
                 GE_PROFILE_SCOPE("Queue Submit / Present");
-                submitAndPresentFrame(imageIndex);
+                submitAndPresentFrame(imageIndex, true);
             }
             // Only this path records timestamp queries.  drawCoreFrame() shares
             // submitAndPresentFrame(), but does not reset or write this pool.

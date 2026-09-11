@@ -98,6 +98,37 @@ TEST(Registry, TracksRenderableTopologyWithoutTransformOrDeformationNoise) {
     EXPECT_EQ(registry.renderTopologyRevision(), afterGrassTopology);
 }
 
+TEST(Registry, SeparatesInstanceAndResourceTopologyRevisions) {
+    Engine::Registry registry;
+    const Engine::Entity entity = registry.create();
+    registry.add<Engine::Transform>(entity);
+
+    const std::uint64_t instanceBefore = registry.instanceTopologyRevision();
+    const std::uint64_t meshBefore = registry.meshResourceRevision();
+    const std::uint64_t materialBefore = registry.materialBindingRevision();
+    const std::uint64_t textureBefore = registry.textureTableRevision();
+
+    registry.add<Engine::MeshRendererComponent>(entity);
+    EXPECT_GT(registry.instanceTopologyRevision(), instanceBefore);
+    // A second proxy does not mutate a mesh/material/texture resource.
+    EXPECT_EQ(registry.meshResourceRevision(), meshBefore);
+    EXPECT_EQ(registry.materialBindingRevision(), materialBefore);
+    EXPECT_EQ(registry.textureTableRevision(), textureBefore);
+
+    registry.markMeshResourceChanged();
+    registry.markMaterialBindingChanged();
+    registry.markTextureTableChanged();
+    EXPECT_GT(registry.meshResourceRevision(), meshBefore);
+    EXPECT_GT(registry.materialBindingRevision(), materialBefore);
+    EXPECT_GT(registry.textureTableRevision(), textureBefore);
+
+    const std::uint64_t resourceAfterRenderer = registry.meshResourceRevision();
+    registry.modify<Engine::Transform>(entity, [](auto& transform) {
+        transform.position = Engine::Vec3{1.0F, 0.0F, 0.0F};
+    });
+    EXPECT_EQ(registry.meshResourceRevision(), resourceAfterRenderer);
+}
+
 TEST(Registry, ManagesComponentsAndReportsErrorsForInvalidOperations) {
     Engine::Registry registry;
     const auto entity = registry.create();

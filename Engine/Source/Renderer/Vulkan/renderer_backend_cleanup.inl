@@ -58,6 +58,8 @@
                 grassHeightTexture.destroy();
                 grassDensityTexture.destroy();
                 uploadContext.destroy();
+                frameGraphExecutor.destroy();
+                frameGraph.trimTransientPool();
                 gpuTimestampProfiler.destroy();
 
                 for (VkSemaphore semaphore : imageAvailableSemaphores) {

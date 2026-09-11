@@ -97,4 +97,33 @@ TEST(RenderGraphTests, OrdersLegacyCallbacksThroughExplicitDependencies) {
     graph.compile();
     EXPECT_EQ(graph.executionOrder(), (std::vector<std::string>{"TAA", "Bloom", "Tonemap"}));
 }
+
+TEST(RenderGraphTests, CreatesTimelineWaitOnlyForCrossQueueResourceDependency) {
+    RenderGraph graph;
+    TextureHandle depth;
+    TextureHandle hiz;
+    graph.addPass("Depth", [&](PassBuilder& builder) {
+        depth = builder.writeTexture("Depth", ColorTarget, TextureUsage::DepthAttachment);
+    }, {}, QueueClass::Graphics);
+    graph.addPass("HiZ", [&](PassBuilder& builder) {
+        builder.read(depth, TextureUsage::SampledReadCompute);
+        hiz = builder.writeTexture("HiZ", ColorTarget, TextureUsage::StorageWriteCompute);
+    }, {}, QueueClass::AsyncCompute);
+    graph.addPass("Shadow", [](PassBuilder&) {}, {}, QueueClass::Graphics);
+    graph.addPass("Cull", [&](PassBuilder& builder) {
+        builder.read(hiz, TextureUsage::SampledReadCompute);
+    }, {}, QueueClass::AsyncCompute);
+    graph.compile();
+
+    const auto& plan = graph.submissionPlan();
+    ASSERT_EQ(plan.size(), 4U);
+    EXPECT_EQ(plan[0].queue, QueueClass::Graphics);
+    EXPECT_EQ(plan[1].queue, QueueClass::Graphics);
+    EXPECT_EQ(plan[2].queue, QueueClass::AsyncCompute);
+    EXPECT_EQ(plan[3].queue, QueueClass::AsyncCompute);
+    EXPECT_TRUE(plan[1].waits.empty());
+    ASSERT_EQ(plan[2].waits.size(), 1U);
+    EXPECT_EQ(plan[2].waits[0].producerBatch, 0U);
+    EXPECT_TRUE(plan[3].waits.empty());
+}
 } // namespace Engine::Renderer

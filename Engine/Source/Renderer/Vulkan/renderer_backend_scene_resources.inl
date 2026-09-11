@@ -28,19 +28,53 @@
             assetManager.unload_unused();
         }
 
+        [[nodiscard]] bool topologyIntroducesMaterialTextures(
+            const std::uint64_t meshRendererRevision,
+            const std::uint64_t terrainGrassRevision) const {
+            const auto isUnresident = [this](const Mesh* mesh) {
+                return mesh != nullptr && !meshTextureOffsets.contains(mesh);
+            };
+            bool result = false;
+            registry.forEachComponentChangedSince<MeshRenderer>(meshRendererRevision,
+                [&](const Entity entity) {
+                    if (result || !registry.valid(entity) || !registry.has<MeshRenderer>(entity)) return;
+                    const MeshRenderer& renderer = registry.get<MeshRenderer>(entity);
+                    result = renderer.hasMesh() && isUnresident(renderer.mesh.get());
+                });
+            registry.forEachComponentChangedSince<TerrainGrassComponent>(terrainGrassRevision,
+                [&](const Entity entity) {
+                    if (result || !registry.valid(entity) || !registry.has<TerrainGrassComponent>(entity)) return;
+                    const TerrainGrassComponent& grass = registry.get<TerrainGrassComponent>(entity);
+                    result = grass.hasPrefab() && isUnresident(grass.mesh.get());
+                });
+            return result;
+        }
+
         void createMaterialTextures() {
             restoreMeshSourceDataForUpload();
             auto uploadBatch = uploadContext.beginBatch();
             constexpr std::array<std::uint8_t, 4> white = {255, 255, 255, 255};
-            fallbackMaterialTexture.create(
-                vulkanDevice.physical(), device, commandPool, vulkanDevice.graphicsQueue(),
-                1, 1, white, TextureColorSpace::SRGB, false, vulkanDevice.allocator());
+            // The bindless texture table is append-only during a scene's
+            // lifetime.  A topology delta must not invalidate descriptors
+            // belonging to every already resident mesh.
+            if (!fallbackMaterialTexture.valid()) {
+                fallbackMaterialTexture.create(
+                    vulkanDevice.physical(), device, commandPool, vulkanDevice.graphicsQueue(),
+                    1, 1, white, TextureColorSpace::SRGB, false, vulkanDevice.allocator());
+            }
             const VkDescriptorImageInfo fallback{
                 fallbackMaterialTexture.sampler(), fallbackMaterialTexture.imageView(),
                 VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
-            materialTextureDescriptors.assign(MaxMaterialTextures, fallback);
+            if (materialTextureDescriptors.empty()) {
+                materialTextureDescriptors.assign(MaxMaterialTextures, fallback);
+            }
 
             std::unordered_set<const Mesh*> uploaded;
+            uploaded.reserve(meshTextureOffsets.size());
+            for (const auto& [mesh, offset] : meshTextureOffsets) {
+                static_cast<void>(offset);
+                uploaded.insert(mesh);
+            }
             registry.view<MeshRenderer>([&](const Entity, const MeshRenderer& renderer) {
                 if (!renderer.hasMesh() || !uploaded.insert(renderer.mesh.get()).second) return;
                 const Mesh& mesh = *renderer.mesh;
@@ -925,6 +959,18 @@
         }
 
         void createGPUSceneDatabaseBuffers() {
+            // After initialization the buffers are retained.  Capacity growth
+            // and per-frame dirty uploads are handled by
+            // uploadPendingGPUSceneDatabase(); doing a full snapshot here on
+            // every draw-list topology change defeats the stable-ID database.
+            bool requiresInitialSnapshot = false;
+            for (std::uint32_t frame = 0; frame < MAX_FRAMES_IN_FLIGHT; ++frame) {
+                requiresInitialSnapshot |= gpuSceneInstanceBuffers[frame].handle() == VK_NULL_HANDLE ||
+                    gpuSceneMeshBuffers[frame].handle() == VK_NULL_HANDLE ||
+                    gpuSceneMaterialBuffers[frame].handle() == VK_NULL_HANDLE;
+            }
+            if (!requiresInitialSnapshot) return;
+
             auto uploadBatch = uploadContext.beginBatch();
             const auto& instances = sceneGpu.database.instances();
             const auto& meshes = sceneGpu.database.meshes();

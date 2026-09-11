@@ -26,6 +26,11 @@ namespace Engine {
         void record(VkCommandBuffer commandBuffer, VkExtent2D extent,
                     float currentJitterX, float currentJitterY);
         [[nodiscard]] VkImageView resolvedView() const noexcept { return history_[historyIndex_].imageView(); }
+        /** Physical history image selected by resolvedView(). */
+        [[nodiscard]] VkImage resolvedImage() const noexcept { return history_[historyIndex_].image(); }
+        /** Image which will be written by the next record() call. */
+        [[nodiscard]] VkImage nextResolvedImage() const noexcept { return history_[1U - historyIndex_].image(); }
+        [[nodiscard]] bool initialized() const noexcept { return initialized_; }
         [[nodiscard]] std::uint32_t resolvedIndex() const noexcept { return historyIndex_; }
         // The editor builds its ImGui draw data before the command buffer is
         // recorded. This is the history image that record() will write later
