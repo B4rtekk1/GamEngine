@@ -52,6 +52,10 @@ std::vector<GpuMemoryCategoryBudget> Renderer::gpuMemoryCategories() const {
     return backend_ ? backend_->gpuMemoryCategories() : std::vector<GpuMemoryCategoryBudget>{};
 }
 
+std::vector<GpuSceneMemoryAllocation> Renderer::gpuSceneMemory() const {
+    return backend_ ? backend_->gpuSceneMemory() : std::vector<GpuSceneMemoryAllocation>{};
+}
+
 void Renderer::initializeCore(Scene& scene, void* nativeWindow) {
     auto* window = static_cast<SDL_Window*>(nativeWindow);
     if (backend_) throw std::logic_error("Renderer is already initialized");

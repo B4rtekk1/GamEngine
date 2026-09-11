@@ -1,7 +1,6 @@
 #include "Engine/Scripting/ScriptSystem.h"
 
 #include "Engine/Core/Diagnostics.h"
-#include "Engine/Core/Transform.h"
 #include "Engine/ECS/Components/ScriptComponent.h"
 #include "Engine/Scene/Scene.h"
 #include "Engine/Scene/Components/IdentityComponents.h"
@@ -152,7 +151,6 @@ namespace Engine {
             destroyRuntime();
             return;
         }
-        if (registry.has<Transform>(entity)) registry.markChanged<Transform>(entity);
     }
 
     void ScriptSystem::update(Scene &scene, const float deltaTime) const {

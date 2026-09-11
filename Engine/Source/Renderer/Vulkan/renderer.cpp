@@ -252,6 +252,23 @@ namespace Engine {
             return vulkanDevice.memoryBudgetManager().categories();
         }
 
+        [[nodiscard]] std::vector<GpuSceneMemoryAllocation> gpuSceneMemory() const {
+            std::vector<GpuSceneMemoryAllocation> result;
+            const auto append = [&](const char* table, const Buffer& buffer) {
+                if (buffer.handle() == VK_NULL_HANDLE) return;
+                const Buffer::MemoryInfo info = buffer.memoryInfo(vulkanDevice.physical());
+                constexpr VkMemoryPropertyFlags deviceLocal = VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT;
+                constexpr VkMemoryPropertyFlags hostVisible = VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT;
+                constexpr VkMemoryPropertyFlags hostCoherent = VK_MEMORY_PROPERTY_HOST_COHERENT_BIT;
+                result.push_back({table, info.heapIndex, (info.properties & deviceLocal) != 0,
+                    (info.properties & hostVisible) != 0, (info.properties & hostCoherent) != 0, info.bytes});
+            };
+            append("Instances", gpuSceneInstanceBuffers[currentFrame]);
+            append("Meshes", gpuSceneMeshBuffers[currentFrame]);
+            append("Materials", gpuSceneMaterialBuffers[currentFrame]);
+            return result;
+        }
+
         static void beginFrame() { Input::beginFrame(); }
 
         EditorEventState pollEditorEvents() {

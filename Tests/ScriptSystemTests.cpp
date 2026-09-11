@@ -90,7 +90,7 @@ public:
     }
 };
 
-TEST(ScriptSystem, ManagesRuntimeLifecycleAndTransformChanges) {
+TEST(ScriptSystem, ManagesRuntimeLifecycleWithoutSpuriousTransformChanges) {
     LifecycleTestScript::reset();
     auto& scripts = Engine::ScriptRegistry::instance();
     scripts.registerClass<LifecycleTestScript>("LifecycleTestScript");
@@ -106,7 +106,7 @@ TEST(ScriptSystem, ManagesRuntimeLifecycleAndTransformChanges) {
     EXPECT_EQ(LifecycleTestScript::created, 1);
     EXPECT_EQ(LifecycleTestScript::updated, 1);
     EXPECT_FLOAT_EQ(LifecycleTestScript::lastDeltaTime, 0.25F);
-    EXPECT_GT(registry.componentRevision<Engine::Transform>(), transformRevision);
+    EXPECT_EQ(registry.componentRevision<Engine::Transform>(), transformRevision);
 
     system.update(registry, 0.5F);
     EXPECT_EQ(LifecycleTestScript::created, 1);

@@ -64,6 +64,7 @@ namespace Engine {
         /** Latest driver/VMA heap budgets and engine memory-class aggregates. */
         [[nodiscard]] std::vector<GpuMemoryHeapBudget> gpuMemoryHeaps() const;
         [[nodiscard]] std::vector<GpuMemoryCategoryBudget> gpuMemoryCategories() const;
+        [[nodiscard]] std::vector<GpuSceneMemoryAllocation> gpuSceneMemory() const;
 
         // nativeWindow and nativeEvent are opaque platform handles. Applications
         // do not need to include graphics-backend headers to use the renderer.

@@ -27,6 +27,7 @@ namespace {
     void drawMemoryInsights(const Engine::Renderer& renderer) {
         const auto categories = renderer.gpuMemoryCategories();
         const auto heaps = renderer.gpuMemoryHeaps();
+        const auto gpuScene = renderer.gpuSceneMemory();
         ImGui::Separator(); ImGui::TextUnformatted("MEMORY INSIGHTS");
         if (heaps.empty()) { ImGui::TextDisabled("GPU memory budget is unavailable before Vulkan initialization."); return; }
         if (ImGui::BeginTable("##memory-categories", 5, ImGuiTableFlags_SizingStretchProp | ImGuiTableFlags_BordersInnerV | ImGuiTableFlags_RowBg)) {
@@ -35,6 +36,15 @@ namespace {
             ImGui::EndTable();
         }
         if (ImGui::TreeNode("Heap details")) { if (ImGui::BeginTable("##memory-heaps", 7, ImGuiTableFlags_SizingStretchProp | ImGuiTableFlags_BordersInnerV | ImGuiTableFlags_RowBg)) { ImGui::TableSetupColumn("Heap"); ImGui::TableSetupColumn("Class"); ImGui::TableSetupColumn("Usage"); ImGui::TableSetupColumn("Budget"); ImGui::TableSetupColumn("Allocated"); ImGui::TableSetupColumn("Allocations"); ImGui::TableSetupColumn("Blocks"); ImGui::TableHeadersRow(); for (const auto& heap : heaps) { ImGui::TableNextRow(); ImGui::TableSetColumnIndex(0); ImGui::Text("%u", heap.heapIndex); ImGui::TableSetColumnIndex(1); ImGui::TextUnformatted(memoryCategoryName(heap.category)); ImGui::TableSetColumnIndex(2); ImGui::Text("%.1f MiB", mib(heap.usage)); ImGui::TableSetColumnIndex(3); ImGui::Text("%.1f MiB", mib(heap.budget)); ImGui::TableSetColumnIndex(4); ImGui::Text("%.1f MiB", mib(heap.allocationBytes)); ImGui::TableSetColumnIndex(5); ImGui::Text("%u", heap.allocationCount); ImGui::TableSetColumnIndex(6); ImGui::Text("%u", heap.blockCount); } ImGui::EndTable(); } ImGui::TreePop(); }
+        if (ImGui::TreeNode("GPU Scene memory")) {
+            if (gpuScene.empty()) ImGui::TextDisabled("GPU Scene buffers are not allocated.");
+            else if (ImGui::BeginTable("##gpu-scene-memory", 6, ImGuiTableFlags_SizingStretchProp | ImGuiTableFlags_BordersInnerV | ImGuiTableFlags_RowBg)) {
+                ImGui::TableSetupColumn("Table"); ImGui::TableSetupColumn("Heap"); ImGui::TableSetupColumn("Device local"); ImGui::TableSetupColumn("Host visible"); ImGui::TableSetupColumn("Host coherent"); ImGui::TableSetupColumn("Bytes"); ImGui::TableHeadersRow();
+                for (const auto& allocation : gpuScene) { ImGui::TableNextRow(); ImGui::TableSetColumnIndex(0); ImGui::TextUnformatted(allocation.table.c_str()); ImGui::TableSetColumnIndex(1); ImGui::Text("%u", allocation.heapIndex); ImGui::TableSetColumnIndex(2); ImGui::TextUnformatted(allocation.deviceLocal ? "yes" : "no"); ImGui::TableSetColumnIndex(3); ImGui::TextUnformatted(allocation.hostVisible ? "yes" : "no"); ImGui::TableSetColumnIndex(4); ImGui::TextUnformatted(allocation.hostCoherent ? "yes" : "no"); ImGui::TableSetColumnIndex(5); ImGui::Text("%llu", static_cast<unsigned long long>(allocation.bytes)); }
+                ImGui::EndTable();
+            }
+            ImGui::TreePop();
+        }
     }
 
     struct Hotspot final {

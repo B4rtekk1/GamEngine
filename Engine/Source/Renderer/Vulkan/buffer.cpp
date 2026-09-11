@@ -204,6 +204,19 @@ namespace Engine {
         mapped_ = nullptr;
     }
 
+    Buffer::MemoryInfo Buffer::memoryInfo(const VkPhysicalDevice physicalDevice) const noexcept {
+        if (physicalDevice == VK_NULL_HANDLE || allocation_ == VK_NULL_HANDLE || size_ == 0) return {};
+
+        VmaAllocationInfo allocationInfo{};
+        vmaGetAllocationInfo(allocator_, allocation_, &allocationInfo);
+        VkPhysicalDeviceMemoryProperties deviceMemory{};
+        vkGetPhysicalDeviceMemoryProperties(physicalDevice, &deviceMemory);
+        if (allocationInfo.memoryType >= deviceMemory.memoryTypeCount) return {};
+        const VkMemoryType& memoryType = deviceMemory.memoryTypes[allocationInfo.memoryType];
+        return {.heapIndex = memoryType.heapIndex, .properties = memoryType.propertyFlags,
+                .bytes = allocationInfo.size};
+    }
+
     void Buffer::create(const CreateParameters &parameters) {
         destroy();
         if (parameters.allocator == VK_NULL_HANDLE) {

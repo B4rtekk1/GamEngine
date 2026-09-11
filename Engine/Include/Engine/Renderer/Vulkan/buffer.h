@@ -22,6 +22,11 @@ namespace Engine {
  */
 class Buffer final {
 public:
+    struct MemoryInfo final {
+        std::uint32_t heapIndex{};
+        VkMemoryPropertyFlags properties{};
+        VkDeviceSize bytes{};
+    };
     /// Creates an empty buffer wrapper.
     Buffer() = default;
 
@@ -109,6 +114,8 @@ public:
     /// new sub-allocation no longer fits; ordinary scene deltas never resize.
     [[nodiscard]] VkDeviceSize size() const noexcept { return size_; }
     [[nodiscard]] std::uint64_t readyTimeline() const noexcept { return readyTimeline_; }
+    /// Returns the memory type actually selected by VMA for this allocation.
+    [[nodiscard]] MemoryInfo memoryInfo(VkPhysicalDevice physicalDevice) const noexcept;
 
 private:
     struct CreateParameters {

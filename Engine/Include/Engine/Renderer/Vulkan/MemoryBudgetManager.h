@@ -4,6 +4,7 @@
 #include <vk_mem_alloc.h>
 
 #include <cstdint>
+#include <string>
 #include <vector>
 
 namespace Engine {
@@ -24,6 +25,15 @@ namespace Engine {
         VkDeviceSize usage{};
         VkDeviceSize allocationBytes{};
         std::uint32_t allocationCount{};
+    };
+    /** Actual VMA allocations used by the current GPU Scene snapshot. */
+    struct GpuSceneMemoryAllocation final {
+        std::string table;
+        std::uint32_t heapIndex{};
+        bool deviceLocal{};
+        bool hostVisible{};
+        bool hostCoherent{};
+        VkDeviceSize bytes{};
     };
 
     /** Live VMA/VK_EXT_memory_budget snapshotter for engine diagnostics. */

@@ -925,13 +925,14 @@
         }
 
         void createGPUSceneDatabaseBuffers() {
+            auto uploadBatch = uploadContext.beginBatch();
             const auto& instances = sceneGpu.database.instances();
             const auto& meshes = sceneGpu.database.meshes();
             const auto& databaseMaterials = sceneGpu.database.materials();
             for (std::uint32_t frame = 0; frame < MAX_FRAMES_IN_FLIGHT; ++frame) {
                 const auto ensureCapacity = [&](Buffer& buffer, const VkDeviceSize required) {
                     if (buffer.handle() == VK_NULL_HANDLE || buffer.size() < required) {
-                        buffer.createHostVisible(vulkanDevice.physical(), device, required + required / 2U,
+                        buffer.createDeviceLocalEmpty(device, required + required / 2U,
                             VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, vulkanDevice.allocator());
                     }
                 };
@@ -943,20 +944,34 @@
                     std::max<std::size_t>(1, databaseMaterials.size()));
                 for (std::size_t id = 0; id < instances.size(); ++id) {
                     const auto record = gpuSceneRecord(instances[id]);
-                    gpuSceneInstanceBuffers[frame].update(&record, sizeof(record),
-                        sizeof(record) * id);
+                    gpuSceneInstanceBuffers[frame].uploadDeviceLocal(&record, sizeof(record),
+                        sizeof(record) * id, commandPool, vulkanDevice.graphicsQueue());
                 }
                 for (std::size_t id = 0; id < meshes.size(); ++id) {
                     const auto record = gpuSceneRecord(meshes[id]);
-                    gpuSceneMeshBuffers[frame].update(&record, sizeof(record), sizeof(record) * id);
+                    gpuSceneMeshBuffers[frame].uploadDeviceLocal(&record, sizeof(record), sizeof(record) * id,
+                        commandPool, vulkanDevice.graphicsQueue());
                 }
                 for (std::size_t id = 0; id < databaseMaterials.size(); ++id) {
                     const auto record = gpuSceneRecord(databaseMaterials[id]);
-                    gpuSceneMaterialBuffers[frame].update(&record, sizeof(record), sizeof(record) * id);
+                    gpuSceneMaterialBuffers[frame].uploadDeviceLocal(&record, sizeof(record), sizeof(record) * id,
+                        commandPool, vulkanDevice.graphicsQueue());
                 }
                 sceneGpu.pendingDatabaseUploads[frame].clear();
             }
             sceneGpu.database.clearDirty();
+            recordGPUSceneUploadBarrier();
+            [[maybe_unused]] const UploadTicket ticket = uploadBatch.submit();
+        }
+
+        void recordGPUSceneUploadBarrier() const {
+            if (!uploadContext.recording()) return;
+            VkMemoryBarrier barrier{VK_STRUCTURE_TYPE_MEMORY_BARRIER};
+            barrier.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+            barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+            vkCmdPipelineBarrier(uploadContext.commandBuffer(), VK_PIPELINE_STAGE_TRANSFER_BIT,
+                VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT | VK_PIPELINE_STAGE_VERTEX_SHADER_BIT,
+                0, 1, &barrier, 0, nullptr, 0, nullptr);
         }
 
         // A frame owns its own GPU-scene snapshot.  drawFrame() only reaches
@@ -975,7 +990,7 @@
                 const VkDeviceSize capacity = buffer.handle() == VK_NULL_HANDLE
                     ? required + required / 2U
                     : std::max(required, buffer.size() * 2U);
-                buffer.createHostVisible(vulkanDevice.physical(), device, capacity,
+                buffer.createDeviceLocalEmpty(device, capacity,
                     VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, vulkanDevice.allocator());
                 return true;
             };
@@ -1052,6 +1067,9 @@
         void uploadPendingGPUSceneDatabase(const std::uint32_t frame) {
             collectGPUSceneDatabaseChanges();
             auto& pending = sceneGpu.pendingDatabaseUploads[frame];
+            if (pending.instances.empty() && pending.meshes.empty() && pending.materials.empty() &&
+                pending.removedInstances.empty()) return;
+            auto uploadBatch = uploadContext.beginBatch();
             if (ensureGPUSceneDatabaseCapacity(frame)) {
                 // A replacement allocation has no old contents.  Upload the
                 // complete per-frame snapshot and repoint descriptors before
@@ -1061,25 +1079,31 @@
                 const auto& databaseMaterials = sceneGpu.database.materials();
                 for (std::size_t id = 0; id < instances.size(); ++id) {
                     const auto record = gpuSceneRecord(instances[id]);
-                    gpuSceneInstanceBuffers[frame].update(&record, sizeof(record), sizeof(record) * id);
+                    gpuSceneInstanceBuffers[frame].uploadDeviceLocal(&record, sizeof(record), sizeof(record) * id,
+                        commandPool, vulkanDevice.graphicsQueue());
                 }
                 for (std::size_t id = 0; id < meshes.size(); ++id) {
                     const auto record = gpuSceneRecord(meshes[id]);
-                    gpuSceneMeshBuffers[frame].update(&record, sizeof(record), sizeof(record) * id);
+                    gpuSceneMeshBuffers[frame].uploadDeviceLocal(&record, sizeof(record), sizeof(record) * id,
+                        commandPool, vulkanDevice.graphicsQueue());
                 }
                 for (std::size_t id = 0; id < databaseMaterials.size(); ++id) {
                     const auto record = gpuSceneRecord(databaseMaterials[id]);
-                    gpuSceneMaterialBuffers[frame].update(&record, sizeof(record), sizeof(record) * id);
+                    gpuSceneMaterialBuffers[frame].uploadDeviceLocal(&record, sizeof(record), sizeof(record) * id,
+                        commandPool, vulkanDevice.graphicsQueue());
                 }
                 refreshGPUSceneDescriptors(frame);
                 pending.clear();
+                recordGPUSceneUploadBarrier();
+                [[maybe_unused]] const UploadTicket ticket = uploadBatch.submit();
                 return;
             }
             const auto& instances = sceneGpu.database.instances();
             for (const GPUSceneInstanceId id : pending.instances) {
                 if (id >= instances.size()) continue;
                 const auto record = gpuSceneRecord(instances[id]);
-                gpuSceneInstanceBuffers[frame].update(&record, sizeof(record), sizeof(record) * id);
+                gpuSceneInstanceBuffers[frame].uploadDeviceLocal(&record, sizeof(record), sizeof(record) * id,
+                    commandPool, vulkanDevice.graphicsQueue());
             }
             // A removed slot retains its fixed address but becomes inert. This
             // makes an in-flight indirect list harmless even before compaction.
@@ -1087,21 +1111,26 @@
                 if (id >= instances.size()) continue;
                 auto record = gpuSceneRecord(instances[id]);
                 record.idsAndFlags.w = 0U;
-                gpuSceneInstanceBuffers[frame].update(&record, sizeof(record), sizeof(record) * id);
+                gpuSceneInstanceBuffers[frame].uploadDeviceLocal(&record, sizeof(record), sizeof(record) * id,
+                    commandPool, vulkanDevice.graphicsQueue());
             }
             const auto& meshes = sceneGpu.database.meshes();
             for (const GPUSceneMeshId id : pending.meshes) {
                 if (id >= meshes.size()) continue;
                 const auto record = gpuSceneRecord(meshes[id]);
-                gpuSceneMeshBuffers[frame].update(&record, sizeof(record), sizeof(record) * id);
+                gpuSceneMeshBuffers[frame].uploadDeviceLocal(&record, sizeof(record), sizeof(record) * id,
+                    commandPool, vulkanDevice.graphicsQueue());
             }
             const auto& databaseMaterials = sceneGpu.database.materials();
             for (const GPUSceneMaterialId id : pending.materials) {
                 if (id >= databaseMaterials.size()) continue;
                 const auto record = gpuSceneRecord(databaseMaterials[id]);
-                gpuSceneMaterialBuffers[frame].update(&record, sizeof(record), sizeof(record) * id);
+                gpuSceneMaterialBuffers[frame].uploadDeviceLocal(&record, sizeof(record), sizeof(record) * id,
+                    commandPool, vulkanDevice.graphicsQueue());
             }
             pending.clear();
+            recordGPUSceneUploadBarrier();
+            [[maybe_unused]] const UploadTicket ticket = uploadBatch.submit();
         }
 
         template <typename T>
