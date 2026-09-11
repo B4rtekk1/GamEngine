@@ -198,58 +198,6 @@
             };
         }
 
-        [[nodiscard]] std::uint64_t currentRenderableTopologySignature() const {
-            // Commutative mixing makes the value independent of dense-pool
-            // ordering, which can change after an unrelated ECS removal.
-            constexpr std::uint64_t topologySignatureSeed = 14695981039346656037ULL;
-            constexpr std::uint64_t hashCombineConstant = 0x9e3779b97f4a7c15ULL;
-            constexpr std::uint32_t hashCombineLeftShift = 6U;
-            std::uint64_t signature = topologySignatureSeed;
-            std::size_t count = 0;
-            const Registry& readRegistry = registry;
-            readRegistry.view<Transform, MeshRenderer>(
-                [&](const Entity entity, const Transform&, const MeshRenderer& renderer) {
-                    if (!renderer.hasMesh()) return;
-                    std::uint64_t value = static_cast<std::uint64_t>(entity);
-                    value ^= static_cast<std::uint64_t>(reinterpret_cast<std::uintptr_t>(renderer.mesh.resource().get())) +
-                        hashCombineConstant + (value << hashCombineLeftShift) + (value >> 2u);
-                    value ^= static_cast<std::uint64_t>(renderer.cullingBatch) << 1u;
-                    value ^= static_cast<std::uint64_t>(renderer.castShadow) << 63u;
-                    value ^= static_cast<std::uint64_t>(renderer.material.shader) << 48u;
-                    value ^= renderer.material.shaderProgram;
-                    if (renderer.materialOverride) {
-                        value ^= static_cast<std::uint64_t>(renderer.material.pbr.doubleSided) << 47u;
-                        value ^= static_cast<std::uint64_t>(renderer.material.pbr.alphaMode) << 45u;
-                    }
-                    signature ^= value * hashCombineConstant;
-                    ++count;
-                });
-            readRegistry.view<Transform, TerrainGrassComponent>(
-                [&](const Entity entity, const Transform&, const TerrainGrassComponent& grass) {
-                    if (!grass.hasPrefab() || grass.instances.empty()) return;
-                    std::uint64_t value = static_cast<std::uint64_t>(entity);
-                    value ^= static_cast<std::uint64_t>(reinterpret_cast<std::uintptr_t>(grass.mesh.get())) +
-                        hashCombineConstant + (value << hashCombineLeftShift) + (value >> 2u);
-                    value ^= static_cast<std::uint64_t>(grass.instances.size()) << 17u;
-                    value ^= readRegistry.componentRevision<TerrainGrassComponent>();
-                    signature ^= value * hashCombineConstant;
-                    count += grass.instances.size();
-                });
-
-            // Particle resources are derived from the emitter entity, but do
-            // not participate in the regular renderable list above. Include
-            // them in the signature so removing an emitter cannot leave the
-            // old ParticleSystem alive on the GPU.
-            const Entity particleEntity = scene.particleEntity();
-            std::uint64_t particleValue = static_cast<std::uint64_t>(particleEntity);
-            particleValue ^= static_cast<std::uint64_t>(
-                readRegistry.has<SmokeEmitterComponent>(particleEntity)) << 1u;
-            particleValue ^= static_cast<std::uint64_t>(
-                readRegistry.has<ParticleEmitterComponent>(particleEntity)) << 2u;
-            signature ^= particleValue * hashCombineConstant;
-            return signature ^ (static_cast<std::uint64_t>(count) * hashCombineConstant);
-        }
-
         void createMeshBuffers() {
             auto uploadBatch = uploadContext.beginBatch();
             // Renderable tables are reconstructed below, but geometry itself
@@ -431,7 +379,14 @@
                     meshUploads.clear();
                     meshUploads.reserve(uniqueMeshes.size());
                     for (const Mesh* mesh : uniqueMeshes) {
-                        const GeometryHeapAllocation& allocation = geometryHeapAllocations.at(mesh);
+                        // uniqueMeshes also contains mesh components that are
+                        // not a draw this frame (for example an entity without
+                        // Transform, or an empty grass prefab). Such a mesh
+                        // was deliberately not passed to planUpload(), so it
+                        // has no heap allocation to restore.
+                        const auto allocationIt = geometryHeapAllocations.find(mesh);
+                        if (allocationIt == geometryHeapAllocations.end()) continue;
+                        const GeometryHeapAllocation& allocation = allocationIt->second;
                         meshUploads.push_back({mesh, allocation.firstVertex, allocation.firstIndex});
                     }
                 }

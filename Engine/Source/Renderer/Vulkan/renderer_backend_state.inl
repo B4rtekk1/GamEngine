@@ -357,7 +357,11 @@
         std::vector<std::uint32_t> renderableChangeMarks;
         std::vector<std::uint8_t> renderableChangeKinds;
         std::uint32_t renderableChangeEpoch = 0;
-        std::uint64_t renderableTopologySignature = 0;
+        // O(1) ECS-provided revision.  Do not derive this by traversing every
+        // renderable during synchronization.
+        std::uint64_t lastRenderTopologyRevision = std::numeric_limits<std::uint64_t>::max();
+        std::uint64_t lastParticleEmitterRevision = std::numeric_limits<std::uint64_t>::max();
+        std::uint64_t lastSmokeEmitterRevision = std::numeric_limits<std::uint64_t>::max();
         bool hiZValid = false;
         bool sceneViewportActive = false;
         VkExtent2D requestedSceneViewportExtent{};

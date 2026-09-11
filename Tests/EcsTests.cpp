@@ -63,6 +63,41 @@ TEST(Registry, CreatesDestroysAndReusesEntitiesWithNewGeneration) {
     EXPECT_NE(reused, first);
 }
 
+TEST(Registry, TracksRenderableTopologyWithoutTransformOrDeformationNoise) {
+    Engine::Registry registry;
+    const Engine::Entity entity = registry.create();
+    const std::uint64_t initial = registry.renderTopologyRevision();
+
+    registry.add<Engine::Transform>(entity);
+    EXPECT_EQ(registry.renderTopologyRevision(), initial);
+    const std::uint64_t afterTransform = registry.renderTopologyRevision();
+
+    registry.add<Engine::MeshRendererComponent>(entity);
+    EXPECT_GT(registry.renderTopologyRevision(), afterTransform);
+    const std::uint64_t afterRenderer = registry.renderTopologyRevision();
+
+    registry.modify<Engine::Transform>(entity, [](auto& transform) {
+        transform.position = Engine::Vec3{4.0F, 0.0F, 0.0F};
+    });
+    EXPECT_EQ(registry.renderTopologyRevision(), afterRenderer);
+
+    registry.modify<Engine::MeshRendererComponent>(entity,
+        [](auto& renderer) { renderer.cullingBatch = 7; });
+    EXPECT_GT(registry.renderTopologyRevision(), afterRenderer);
+
+    const Engine::Entity terrain = registry.create();
+    registry.add<Engine::Transform>(terrain);
+    registry.add<Engine::TerrainGrassComponent>(terrain);
+    const std::uint64_t afterGrassAdded = registry.renderTopologyRevision();
+    registry.modify<Engine::TerrainGrassComponent>(terrain, [](auto& grass) {
+        grass.instances.push_back({});
+    });
+    EXPECT_GT(registry.renderTopologyRevision(), afterGrassAdded);
+    const std::uint64_t afterGrassTopology = registry.renderTopologyRevision();
+    registry.markChanged<Engine::TerrainGrassComponent>(terrain);
+    EXPECT_EQ(registry.renderTopologyRevision(), afterGrassTopology);
+}
+
 TEST(Registry, ManagesComponentsAndReportsErrorsForInvalidOperations) {
     Engine::Registry registry;
     const auto entity = registry.create();

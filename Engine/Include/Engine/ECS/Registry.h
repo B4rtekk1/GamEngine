@@ -2,6 +2,9 @@
 
 #include "Entity.h"
 #include "Componentpool.h"
+#include "Engine/Core/Transform.h"
+#include "Components/MeshRendererComponent.h"
+#include "Components/TerrainGrassComponent.h"
 
 #include <unordered_map>
 #include <unordered_set>
@@ -66,6 +69,10 @@ namespace Engine {
                 return;
             }
 
+            const bool removedRenderableTopology =
+                has<Transform>(entity) &&
+                (has<MeshRendererComponent>(entity) || has<TerrainGrassComponent>(entity));
+
             for (auto &pool: m_componentPools | std::views::values) {
                 pool->remove(entity);
             }
@@ -80,6 +87,9 @@ namespace Engine {
             m_freeEntities.push_back(index);
             ++m_mutationRevision;
             ++m_structuralRevision;
+            if (removedRenderableTopology) {
+                markRenderTopologyChanged();
+            }
         }
 
         /**
@@ -105,6 +115,10 @@ namespace Engine {
             } catch (...) {
                 destroy(target);
                 throw;
+            }
+            if (has<Transform>(target) &&
+                (has<MeshRendererComponent>(target) || has<TerrainGrassComponent>(target))) {
+                markRenderTopologyChanged();
             }
             return target;
         }
@@ -138,6 +152,18 @@ namespace Engine {
         [[nodiscard]] std::uint64_t structuralRevision() const noexcept {
             return m_structuralRevision;
         }
+
+        /**
+         * Revision of the ECS state which changes the renderer's draw-list
+         * topology.  Unlike structuralRevision(), this deliberately ignores
+         * unrelated components and transform-only edits.
+         */
+        [[nodiscard]] std::uint64_t renderTopologyRevision() const noexcept {
+            return m_renderTopologyRevision;
+        }
+
+        /** Use after a retained reference changes render-topology fields. */
+        void markRenderTopologyChanged() noexcept { ++m_renderTopologyRevision; }
 
         /** Returns the revision of one concrete component type. */
         template<typename T>
@@ -234,6 +260,9 @@ namespace Engine {
             ++m_mutationRevision;
             ++m_structuralRevision;
             bumpComponentRevision<T>(entity);
+            if (changesRenderTopology<T>(entity)) {
+                markRenderTopologyChanged();
+            }
             return component;
         }
 
@@ -260,6 +289,9 @@ namespace Engine {
                 ++m_mutationRevision;
                 ++m_structuralRevision;
                 bumpComponentRevision<T>(entity);
+                if (changesRenderTopology<T>(entity)) {
+                    markRenderTopologyChanged();
+                }
             }
         }
 
@@ -279,8 +311,15 @@ namespace Engine {
             if (!has<T>(entity)) {
                 throw std::out_of_range("Cannot modify a missing component");
             }
-            std::invoke(std::forward<Func>(func), get<T>(entity));
+            T& component = get<T>(entity);
+            const auto topologyBefore = renderTopologyState(component);
+            std::invoke(std::forward<Func>(func), component);
             markChanged<T>(entity);
+            if constexpr (isRenderTopologyComponent<T>()) {
+                if (has<Transform>(entity) && topologyBefore != renderTopologyState(component)) {
+                    markRenderTopologyChanged();
+                }
+            }
         }
 
         /**
@@ -409,6 +448,69 @@ namespace Engine {
         }
 
     private:
+        template<typename T>
+        [[nodiscard]] static consteval bool isRenderTopologyComponent() {
+            return std::is_same_v<T, MeshRendererComponent> ||
+                   std::is_same_v<T, TerrainGrassComponent>;
+        }
+
+        template<typename T>
+        [[nodiscard]] bool changesRenderTopology(const Entity entity) const {
+            if constexpr (std::is_same_v<T, Transform>) {
+                return has<MeshRendererComponent>(entity) || has<TerrainGrassComponent>(entity);
+            } else if constexpr (isRenderTopologyComponent<T>()) {
+                return has<Transform>(entity);
+            } else {
+                return false;
+            }
+        }
+
+        struct RenderTopologyState final {
+            const void* mesh{};
+            std::size_t instanceCount{};
+            std::size_t chunkCount{};
+            std::uint64_t pipeline{};
+            std::uint32_t batch{};
+            bool castShadow{};
+            bool materialOverride{};
+            bool twoSided{};
+            std::uint8_t alphaMode{};
+
+            [[nodiscard]] bool operator==(const RenderTopologyState&) const = default;
+        };
+
+        template<typename T>
+        [[nodiscard]] static RenderTopologyState renderTopologyState(const T&) noexcept {
+            return {};
+        }
+
+        [[nodiscard]] static RenderTopologyState renderTopologyState(
+            const MeshRendererComponent& renderer) noexcept {
+            return {
+                .mesh = renderer.mesh.get(),
+                .pipeline = renderer.material.shaderProgram ^
+                    (static_cast<std::uint64_t>(renderer.material.shader) << 48U),
+                .batch = renderer.cullingBatch,
+                .castShadow = renderer.castShadow,
+                .materialOverride = renderer.materialOverride,
+                .twoSided = renderer.materialOverride && renderer.material.pbr.doubleSided,
+                .alphaMode = renderer.materialOverride
+                    ? static_cast<std::uint8_t>(renderer.material.pbr.alphaMode) : std::uint8_t{0},
+            };
+        }
+
+        [[nodiscard]] static RenderTopologyState renderTopologyState(
+            const TerrainGrassComponent& grass) noexcept {
+            return {
+                .mesh = grass.mesh.get(),
+                .instanceCount = grass.instances.size(),
+                .chunkCount = grass.chunks.size(),
+                .castShadow = grass.castShadow,
+                .twoSided = grass.material.doubleSided,
+                .alphaMode = static_cast<std::uint8_t>(grass.material.alphaMode),
+            };
+        }
+
         class ViewIterationGuard {
         public:
             explicit ViewIterationGuard(Registry &registry) noexcept : registry_(registry) {
@@ -572,6 +674,7 @@ namespace Engine {
 
         std::uint64_t m_mutationRevision = 0;
         std::uint64_t m_structuralRevision = 0;
+        std::uint64_t m_renderTopologyRevision = 0;
         std::uint32_t m_mutableViewDepth = 0;
     };
 }

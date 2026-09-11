@@ -621,7 +621,9 @@ namespace Engine {
             createMaterialTextures();
             createMeshBuffers();
             createInstanceBuffer();
-            renderableTopologySignature = currentRenderableTopologySignature();
+            lastRenderTopologyRevision = registry.renderTopologyRevision();
+            lastParticleEmitterRevision = registry.componentRevision<ParticleEmitterComponent>();
+            lastSmokeEmitterRevision = registry.componentRevision<SmokeEmitterComponent>();
             createUniformBuffers();
             createSceneUniformBuffers();
             createCullingResources();
@@ -658,8 +660,14 @@ namespace Engine {
             // hierarchy, scripts and colliders. Avoid stalling the GPU and
             // recreating render resources unless the renderable topology
             // itself changed.
-            const std::uint64_t updatedTopology = currentRenderableTopologySignature();
-            if (updatedTopology == renderableTopologySignature) {
+            const std::uint64_t updatedTopologyRevision = registry.renderTopologyRevision();
+            const std::uint64_t updatedParticleEmitterRevision =
+                registry.componentRevision<ParticleEmitterComponent>();
+            const std::uint64_t updatedSmokeEmitterRevision =
+                registry.componentRevision<SmokeEmitterComponent>();
+            if (updatedTopologyRevision == lastRenderTopologyRevision &&
+                updatedParticleEmitterRevision == lastParticleEmitterRevision &&
+                updatedSmokeEmitterRevision == lastSmokeEmitterRevision) {
                 return;
             }
             sceneViewportNeedsRender = true;
@@ -709,7 +717,9 @@ namespace Engine {
             createMaterialTextures();
             createMeshBuffers();
             createInstanceBuffer();
-            renderableTopologySignature = currentRenderableTopologySignature();
+            lastRenderTopologyRevision = registry.renderTopologyRevision();
+            lastParticleEmitterRevision = registry.componentRevision<ParticleEmitterComponent>();
+            lastSmokeEmitterRevision = registry.componentRevision<SmokeEmitterComponent>();
             // Camera UBOs are independent of renderable topology. Recreating
             // them here would destroy buffers still referenced by the sky
             // descriptor sets, while the sky passes intentionally survive a
@@ -724,7 +734,9 @@ namespace Engine {
             }
             createShadowPass();
             createSceneDescriptorPass();
-            renderableTopologySignature = updatedTopology;
+            lastRenderTopologyRevision = updatedTopologyRevision;
+            lastParticleEmitterRevision = updatedParticleEmitterRevision;
+            lastSmokeEmitterRevision = updatedSmokeEmitterRevision;
             assetManager.unload_unused();
         }
 
@@ -815,7 +827,9 @@ namespace Engine {
                 sceneCenter = Vec3{center};
                 sceneRadius = std::max({halfExtent.x, halfExtent.y, halfExtent.z, 1.0F});
             }
-            renderableTopologySignature = currentRenderableTopologySignature();
+            lastRenderTopologyRevision = registry.renderTopologyRevision();
+            lastParticleEmitterRevision = registry.componentRevision<ParticleEmitterComponent>();
+            lastSmokeEmitterRevision = registry.componentRevision<SmokeEmitterComponent>();
             hiZValid = false;
             // Vertex edits can change every depth sample inside the previous
             // and current bounds. They are interactive and infrequent, so a

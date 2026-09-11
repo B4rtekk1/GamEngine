@@ -37,7 +37,9 @@
             createDepthResources();
             createMaterialTextures();
             createMeshBuffers();
-            renderableTopologySignature = currentRenderableTopologySignature();
+            lastRenderTopologyRevision = registry.renderTopologyRevision();
+            lastParticleEmitterRevision = registry.componentRevision<ParticleEmitterComponent>();
+            lastSmokeEmitterRevision = registry.componentRevision<SmokeEmitterComponent>();
             createInstanceBuffer();
             createUniformBuffers();
             createSceneUniformBuffers();
