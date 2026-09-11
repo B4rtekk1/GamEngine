@@ -98,6 +98,13 @@ public:
     void update(const void* data, VkDeviceSize size, VkDeviceSize offset = 0) const;
 
     /**
+     * Copies a completed GPU write from a host-visible allocation.  Callers
+     * must establish completion (normally by waiting for the frame fence)
+     * before reading; this method deliberately never waits or maps memory.
+     */
+    void read(void* destination, VkDeviceSize size, VkDeviceSize offset = 0) const;
+
+    /**
      * Uploads a subrange into an existing device-local buffer without waiting
      * for the copy to finish. Temporary staging allocations are retained until
      * their fences signal, so callers can safely continue recording frames.

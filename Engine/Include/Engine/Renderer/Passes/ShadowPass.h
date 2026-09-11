@@ -87,6 +87,9 @@ namespace Engine {
             const Mat4& cameraViewProjection,
             std::span<const Culling::GPUObjectData> objects,
             std::span<const Culling::GPUObjectData> dirtyObjects,
+            // GPU-compacted page keys from the completed frame's depth pass.
+            // An empty span is the one-frame bootstrap fallback only.
+            std::span<const std::uint32_t> receiverPageRequests,
             std::uint32_t frameIndex,
             std::uint32_t pageUpdateBudget = ShadowMap::PhysicalPageCount);
 

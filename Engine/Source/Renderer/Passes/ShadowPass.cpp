@@ -556,6 +556,7 @@ void ShadowPass::preparePages(
     const Mat4& cameraViewProjection,
     const std::span<const Culling::GPUObjectData> objects,
     const std::span<const Culling::GPUObjectData> dirtyObjects,
+    const std::span<const std::uint32_t> receiverPageRequests,
     const std::uint32_t frameIndex,
     const std::uint32_t pageUpdateBudget) {
     constexpr std::int32_t pageCount =
@@ -677,7 +678,10 @@ void ShadowPass::preparePages(
     std::vector<VisibleObject> visibleObjects;
     visibleObjects.reserve(objects.size());
     const glm::mat4 cameraMatrix = cameraViewProjection.native();
-    for (const Culling::GPUObjectData& object : objects) {
+    // This is only a bootstrap fallback until the first completed depth
+    // request bitset is available for a frame slot. Steady-state VSM page
+    // selection never scans GPU objects on the CPU.
+    if (receiverPageRequests.empty()) for (const Culling::GPUObjectData& object : objects) {
         const glm::vec3 minimum{object.localAabbMin.x, object.localAabbMin.y,
                                 object.localAabbMin.z};
         const glm::vec3 maximum{object.localAabbMax.x, object.localAabbMax.y,
@@ -703,7 +707,8 @@ void ShadowPass::preparePages(
         if (!(outsideLeft || outsideRight || outsideBottom || outsideTop ||
               outsideNear || outsideFar)) visibleObjects.push_back(candidate);
     }
-    std::ranges::sort(visibleObjects, {}, &VisibleObject::nearestDepth);
+    if (receiverPageRequests.empty())
+        std::ranges::sort(visibleObjects, {}, &VisibleObject::nearestDepth);
 
     std::array<bool, ShadowMap::VirtualPageCount> requested{};
     std::vector<std::uint32_t> requests;
@@ -730,7 +735,21 @@ void ShadowPass::preparePages(
             }
         }
     };
-    for (const VisibleObject& object : visibleObjects) {
+    if (!receiverPageRequests.empty()) {
+        // The compute pass emits only set bits, so this is O(requested pages)
+        // rather than O(all virtual pages).
+        constexpr std::uint32_t pagesPerLevelForRequests =
+            ShadowMap::VirtualPagesPerAxis * ShadowMap::VirtualPagesPerAxis;
+        for (const std::uint32_t key : receiverPageRequests) {
+            if (key >= ShadowMap::VirtualPageCount) continue;
+            const std::uint32_t level = key / pagesPerLevelForRequests;
+            const std::uint32_t local = key % pagesPerLevelForRequests;
+            requestRectangle(level, static_cast<std::int32_t>(local % ShadowMap::VirtualPagesPerAxis),
+                             static_cast<std::int32_t>(local / ShadowMap::VirtualPagesPerAxis),
+                             static_cast<std::int32_t>(local % ShadowMap::VirtualPagesPerAxis),
+                             static_cast<std::int32_t>(local / ShadowMap::VirtualPagesPerAxis));
+        }
+    } else for (const VisibleObject& object : visibleObjects) {
         for (std::uint32_t level = 0; level < ShadowMap::ClipLevelCount; ++level) {
             glm::vec2 minimumUv{std::numeric_limits<float>::max()};
             glm::vec2 maximumUv{-std::numeric_limits<float>::max()};

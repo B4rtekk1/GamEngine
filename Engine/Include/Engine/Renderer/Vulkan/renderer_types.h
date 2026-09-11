@@ -50,6 +50,16 @@ namespace Engine {
         glm::vec4 viewportNearFar{};    // xy pixels, z near, w far
     };
 
+    /** Inputs for receiver-driven virtual-shadow page marking. */
+    struct alignas(16) VsmPageMarkingUniforms {
+        glm::mat4 inverseViewProjection{1.0F};
+        std::array<glm::mat4, ShadowMap::ClipLevelCount> clipMatrices{};
+        std::uint32_t pageCountPerAxis{};
+        std::uint32_t clipLevelCount{};
+        std::uint32_t depthWidth{};
+        std::uint32_t depthHeight{};
+    };
+
     struct RendererUniformBufferObject {
         Mat4 view;
         Mat4 projection;

@@ -89,6 +89,18 @@ namespace Engine {
         std::memcpy(static_cast<char *>(mapped_) + offset, data, static_cast<size_t>(size));
     }
 
+    void Buffer::read(void* const destination, const VkDeviceSize size,
+                      const VkDeviceSize offset) const {
+        if (destination == nullptr || size == 0 || offset > size_ || size > size_ - offset) {
+            throw std::invalid_argument("Buffer read out of bounds");
+        }
+        if (mapped_ == nullptr) {
+            throw std::runtime_error("Cannot read buffer without host-visible memory");
+        }
+        std::memcpy(destination, static_cast<const char*>(mapped_) + offset,
+                    static_cast<size_t>(size));
+    }
+
     void Buffer::uploadDeviceLocal(const void* data, const VkDeviceSize size,
                                    const VkDeviceSize offset, const VkCommandPool commandPool,
                                    const VkQueue queue) const {

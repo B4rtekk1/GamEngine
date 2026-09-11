@@ -8,7 +8,7 @@ function(gameengine_add_engine_shaders)
     set(shader_entries
         Culling/gpu_culling.slang Culling/gpu_instance_culling.slang Culling/meshlet_culling.slang Culling/hiz_initialize.slang Culling/hiz_reduce.slang Culling/clustered_light_culling.slang
         Grass/grass_generate.slang Grass/grass_cull.slang Grass/grass_packed_cull.slang Grass/grass_cluster_cull.slang Grass/grass_packed_bin.slang Grass/grass_packed_prefix.slang Grass/grass_packed_scatter.slang Grass/grass_packed_finalize.slang Grass/grass_classify.slang Grass/grass_build_dispatch.slang Grass/grass_forward.slang Grass/grass_shadow.slang Grass/grass_velocity.slang Grass/grass_build_indirect.slang Grass/grass_finalize_indirect.slang Grass/grass_prefix_sum.slang Grass/grass_scatter_instances.slang
-        Environment/skybox.slang Forward/forward_pbr.slang Forward/selection_outline.slang Particles/particle_billboard.slang Particles/particle_simulation.slang PostProcess/aces_tonemap.slang PostProcess/bloom_downsample.slang PostProcess/temporal_aa.slang PostProcess/temporal_velocity.slang Samples/basic_pbr.slang Shadow/shadow_map.slang UI/canvas.slang)
+        Environment/skybox.slang Forward/forward_pbr.slang Forward/selection_outline.slang Particles/particle_billboard.slang Particles/particle_simulation.slang PostProcess/aces_tonemap.slang PostProcess/bloom_downsample.slang PostProcess/temporal_aa.slang PostProcess/temporal_velocity.slang Samples/basic_pbr.slang Shadow/shadow_map.slang Shadow/vsm_page_marking.slang Shadow/vsm_page_compact.slang UI/canvas.slang)
     set(shader_outputs)
     foreach(shader_entry IN LISTS shader_entries)
         set(shader_source "${ENGINE_SHADER_SOURCE_DIR}/${shader_entry}")

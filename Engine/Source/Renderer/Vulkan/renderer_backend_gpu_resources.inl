@@ -88,7 +88,9 @@
             // Keep the complete R32F hierarchy out of memory unless the
             // feature can actually consume it. Frustum/GPU culling remains
             // available without this optional occlusion input.
-            const bool allocateHiZ = canUseHiZOcclusionCulling();
+            // VSM receiver marking consumes the previous depth hierarchy even
+            // when object occlusion culling itself is disabled.
+            const bool allocateHiZ = canUseHiZOcclusionCulling() || optimizationFeatures.shadows;
             if (allocateHiZ) {
                 hiZBuffer.create(vulkanDevice.physical(), device, swapchain.extent().width,
                                  swapchain.extent().height, vulkanDevice.allocator());
@@ -104,6 +106,28 @@
             if (vkCreateDescriptorSetLayout(device, &layoutInfo, nullptr, &hiZCopyDescriptorSetLayout) != VK_SUCCESS ||
                 vkCreateDescriptorSetLayout(device, &layoutInfo, nullptr, &hiZReduceDescriptorSetLayout) != VK_SUCCESS) {
                 throw std::runtime_error("Could not create Hi-Z descriptor-set layouts");
+            }
+            const VkDescriptorSetLayoutBinding vsmPageMarkingBindings[] = {
+                {0, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
+                {1, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
+                {2, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
+            };
+            layoutInfo.bindingCount = std::size(vsmPageMarkingBindings);
+            layoutInfo.pBindings = vsmPageMarkingBindings;
+            if (vkCreateDescriptorSetLayout(device, &layoutInfo, nullptr,
+                                            &vsmPageMarkingDescriptorSetLayout) != VK_SUCCESS) {
+                throw std::runtime_error("Could not create VSM page-marking descriptor-set layout");
+            }
+            const VkDescriptorSetLayoutBinding vsmPageCompactBindings[] = {
+                {0, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
+                {1, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
+                {2, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
+            };
+            layoutInfo.bindingCount = std::size(vsmPageCompactBindings);
+            layoutInfo.pBindings = vsmPageCompactBindings;
+            if (vkCreateDescriptorSetLayout(device, &layoutInfo, nullptr,
+                                            &vsmPageCompactDescriptorSetLayout) != VK_SUCCESS) {
+                throw std::runtime_error("Could not create VSM page-compaction descriptor-set layout");
             }
             const VkDescriptorSetLayoutBinding cullBindings[] = {
                 {0, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
@@ -264,6 +288,8 @@
             };
             createLayout(hiZCopyDescriptorSetLayout, hiZCopyPipelineLayout);
             createLayout(hiZReduceDescriptorSetLayout, hiZReducePipelineLayout);
+            createLayout(vsmPageMarkingDescriptorSetLayout, vsmPageMarkingPipelineLayout);
+            createLayout(vsmPageCompactDescriptorSetLayout, vsmPageCompactPipelineLayout);
             // mat4 plus draw-slot index, rounded to a 16-byte block by Slang.
             const VkPushConstantRange cullingPushConstants{
                 VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(Mat4) + 20};
@@ -285,6 +311,8 @@
             createLayout(clusteredLightingDescriptorSetLayout, clusteredLightingPipelineLayout);
             hiZCopyPipeline = createComputePipeline("shaders/hiz_initialize.spv", hiZCopyPipelineLayout);
             hiZReducePipeline = createComputePipeline("shaders/hiz_reduce.spv", hiZReducePipelineLayout);
+            vsmPageMarkingPipeline = createComputePipeline("shaders/vsm_page_marking.spv", vsmPageMarkingPipelineLayout);
+            vsmPageCompactPipeline = createComputePipeline("shaders/vsm_page_compact.spv", vsmPageCompactPipelineLayout);
             cullingPipeline = createComputePipeline("shaders/gpu_culling.spv", cullingPipelineLayout);
             instanceCullingPipeline = createComputePipeline("shaders/gpu_instance_culling.spv",
                                                              instanceCullingPipelineLayout);
@@ -510,6 +538,23 @@
                 std::array<Culling::ShadowPageWork, ShadowMap::MaxPageUpdatesPerFrame> emptyPageWork{};
                 shadowPageWorkBuffers[frame].createHostVisible(vulkanDevice.physical(), device,
                     sizeof(emptyPageWork), VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, vulkanDevice.allocator());
+                constexpr std::uint32_t vsmRequestWordCount =
+                    (ShadowMap::VirtualPageCount + 31U) / 32U;
+                const std::array<std::uint32_t, vsmRequestWordCount> emptyVsmRequests{};
+                vsmRequestedPageBuffers[frame].createHostVisible(vulkanDevice.physical(), device,
+                    sizeof(emptyVsmRequests), VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
+                    VK_BUFFER_USAGE_TRANSFER_DST_BIT, vulkanDevice.allocator());
+                const std::array<std::uint32_t, ShadowMap::VirtualPageCount> emptyVsmPageKeys{};
+                const std::uint32_t emptyVsmPageCount = 0;
+                vsmCompactedPageBuffers[frame].createHostVisible(vulkanDevice.physical(), device,
+                    sizeof(emptyVsmPageKeys), VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+                    vulkanDevice.allocator());
+                vsmCompactedPageCountBuffers[frame].createHostVisible(vulkanDevice.physical(), device,
+                    sizeof(emptyVsmPageCount), VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
+                    VK_BUFFER_USAGE_TRANSFER_DST_BIT, vulkanDevice.allocator());
+                vsmPageMarkingUniformBuffers[frame].createHostVisible(vulkanDevice.physical(), device,
+                    sizeof(VsmPageMarkingUniforms), VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
+                    vulkanDevice.allocator());
                 shadowTwoSidedIndirectBuffers[frame].createDeviceLocal(vulkanDevice.physical(), device, emptyShadowCommands.data(),
                     sizeof(VkDrawIndexedIndirectCommand) * emptyShadowCommands.size(),
                     VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
@@ -544,13 +589,13 @@
             constexpr uint32_t grassSetCount = MAX_FRAMES_IN_FLIGHT * 38;
             const uint32_t imageDescriptors = hiZBuffer.mipCount() + cullingSetCount;
             const VkDescriptorPoolSize poolSizes[] = {
-                {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, imageDescriptors},
-                {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, cullingSetCount * 7 + instanceCullSetCount * 3 + MAX_FRAMES_IN_FLIGHT * 134},
-                {VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, cullingSetCount + MAX_FRAMES_IN_FLIGHT * 29},
+                {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, imageDescriptors + MAX_FRAMES_IN_FLIGHT},
+                {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, cullingSetCount * 7 + instanceCullSetCount * 3 + MAX_FRAMES_IN_FLIGHT * 137},
+                {VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, cullingSetCount + MAX_FRAMES_IN_FLIGHT * 30},
                 {VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, hiZBuffer.mipCount()},
             };
             VkDescriptorPoolCreateInfo poolInfo{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
-            poolInfo.maxSets = hiZBuffer.mipCount() + cullingSetCount + instanceCullSetCount + grassSetCount + MAX_FRAMES_IN_FLIGHT * 3;
+            poolInfo.maxSets = hiZBuffer.mipCount() + cullingSetCount + instanceCullSetCount + grassSetCount + MAX_FRAMES_IN_FLIGHT * 5;
             poolInfo.poolSizeCount = allocateHiZ ? std::size(poolSizes) : std::size(poolSizes) - 1;
             poolInfo.pPoolSizes = poolSizes;
             if (vkCreateDescriptorPool(device, &poolInfo, nullptr, &cullingDescriptorPool) != VK_SUCCESS) {
@@ -573,6 +618,19 @@
             allocateInfo.pSetLayouts = cullLayouts.data();
             if (vkAllocateDescriptorSets(device, &allocateInfo, cullSets.data()) != VK_SUCCESS) {
                 throw std::runtime_error("Could not allocate culling descriptor sets");
+            }
+            std::array<VkDescriptorSetLayout, MAX_FRAMES_IN_FLIGHT> vsmMarkingLayouts{};
+            vsmMarkingLayouts.fill(vsmPageMarkingDescriptorSetLayout);
+            allocateInfo.descriptorSetCount = MAX_FRAMES_IN_FLIGHT;
+            allocateInfo.pSetLayouts = vsmMarkingLayouts.data();
+            if (vkAllocateDescriptorSets(device, &allocateInfo, vsmPageMarkingSets.data()) != VK_SUCCESS) {
+                throw std::runtime_error("Could not allocate VSM page-marking descriptor sets");
+            }
+            std::array<VkDescriptorSetLayout, MAX_FRAMES_IN_FLIGHT> vsmCompactLayouts{};
+            vsmCompactLayouts.fill(vsmPageCompactDescriptorSetLayout);
+            allocateInfo.pSetLayouts = vsmCompactLayouts.data();
+            if (vkAllocateDescriptorSets(device, &allocateInfo, vsmPageCompactSets.data()) != VK_SUCCESS) {
+                throw std::runtime_error("Could not allocate VSM page-compaction descriptor sets");
             }
             std::array<VkDescriptorSetLayout, MAX_FRAMES_IN_FLIGHT> instanceCullLayouts{};
             instanceCullLayouts.fill(instanceCullingDescriptorSetLayout);
@@ -742,6 +800,39 @@
                 const VkDescriptorImageInfo hiZInfo = hiZBuffer.image() != VK_NULL_HANDLE
                     ? VkDescriptorImageInfo{hiZBuffer.sampler(), hiZBuffer.fullView(), VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL}
                     : VkDescriptorImageInfo{hdrBuffer.sampler(), hdrBuffer.imageView(), VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
+                const VkDescriptorBufferInfo vsmRequestInfo{
+                    vsmRequestedPageBuffers[frame].handle(), 0, VK_WHOLE_SIZE};
+                const VkDescriptorBufferInfo vsmUniformInfo{
+                    vsmPageMarkingUniformBuffers[frame].handle(), 0,
+                    sizeof(VsmPageMarkingUniforms)};
+                const VkWriteDescriptorSet vsmWrites[] = {
+                    {.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+                     .dstSet = vsmPageMarkingSets[frame], .dstBinding = 0,
+                     .descriptorCount = 1, .descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+                     .pImageInfo = &hiZInfo},
+                    {.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+                     .dstSet = vsmPageMarkingSets[frame], .dstBinding = 1,
+                     .descriptorCount = 1, .descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+                     .pBufferInfo = &vsmRequestInfo},
+                    {.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+                     .dstSet = vsmPageMarkingSets[frame], .dstBinding = 2,
+                     .descriptorCount = 1, .descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
+                     .pBufferInfo = &vsmUniformInfo},
+                };
+                vkUpdateDescriptorSets(device, std::size(vsmWrites), vsmWrites, 0, nullptr);
+                const VkDescriptorBufferInfo vsmCompactInfos[] = {
+                    {vsmRequestedPageBuffers[frame].handle(), 0, VK_WHOLE_SIZE},
+                    {vsmCompactedPageBuffers[frame].handle(), 0, VK_WHOLE_SIZE},
+                    {vsmCompactedPageCountBuffers[frame].handle(), 0, sizeof(std::uint32_t)},
+                };
+                VkWriteDescriptorSet vsmCompactWrites[3]{};
+                for (std::uint32_t binding = 0; binding < std::size(vsmCompactWrites); ++binding) {
+                    vsmCompactWrites[binding] = {.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+                        .dstSet = vsmPageCompactSets[frame], .dstBinding = binding,
+                        .descriptorCount = 1, .descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+                        .pBufferInfo = &vsmCompactInfos[binding]};
+                }
+                vkUpdateDescriptorSets(device, std::size(vsmCompactWrites), vsmCompactWrites, 0, nullptr);
                 struct CullingSetUpdate {
                     VkDescriptorSet set;
                     const Buffer& indirectBuffer;
@@ -879,6 +970,11 @@
             for (Buffer& buffer : shadowCandidateDispatchBuffers) buffer.destroy();
             for (Buffer& buffer : shadowTwoSidedCandidateDispatchBuffers) buffer.destroy();
             for (Buffer& buffer : shadowPageWorkBuffers) buffer.destroy();
+            for (Buffer& buffer : vsmRequestedPageBuffers) buffer.destroy();
+            for (Buffer& buffer : vsmCompactedPageBuffers) buffer.destroy();
+            for (Buffer& buffer : vsmCompactedPageCountBuffers) buffer.destroy();
+            for (Buffer& buffer : vsmPageMarkingUniformBuffers) buffer.destroy();
+            vsmRequestsReady.fill(false);
             for (Buffer& buffer : clusteredLightRangeBuffers) buffer.destroy();
             for (Buffer& buffer : clusteredLightIndexBuffers) buffer.destroy();
             for (Buffer& buffer : sceneClusteredLightRangeBuffers) buffer.destroy();
@@ -955,6 +1051,8 @@
             if (grassPackedScatterPipeline != VK_NULL_HANDLE) vkDestroyPipeline(device, grassPackedScatterPipeline, nullptr);
             if (grassPackedFinalizePipeline != VK_NULL_HANDLE) vkDestroyPipeline(device, grassPackedFinalizePipeline, nullptr);
             if (clusteredLightingPipeline != VK_NULL_HANDLE) vkDestroyPipeline(device, clusteredLightingPipeline, nullptr);
+            if (vsmPageMarkingPipeline != VK_NULL_HANDLE) vkDestroyPipeline(device, vsmPageMarkingPipeline, nullptr);
+            if (vsmPageCompactPipeline != VK_NULL_HANDLE) vkDestroyPipeline(device, vsmPageCompactPipeline, nullptr);
             if (hiZCopyPipelineLayout != VK_NULL_HANDLE) { vkDestroyPipelineLayout(device, hiZCopyPipelineLayout, nullptr);
 }
             if (hiZReducePipelineLayout != VK_NULL_HANDLE) { vkDestroyPipelineLayout(device, hiZReducePipelineLayout, nullptr);
@@ -977,6 +1075,8 @@
             if (grassPackedScatterPipelineLayout != VK_NULL_HANDLE) vkDestroyPipelineLayout(device, grassPackedScatterPipelineLayout, nullptr);
             if (grassPackedFinalizePipelineLayout != VK_NULL_HANDLE) vkDestroyPipelineLayout(device, grassPackedFinalizePipelineLayout, nullptr);
             if (clusteredLightingPipelineLayout != VK_NULL_HANDLE) vkDestroyPipelineLayout(device, clusteredLightingPipelineLayout, nullptr);
+            if (vsmPageMarkingPipelineLayout != VK_NULL_HANDLE) vkDestroyPipelineLayout(device, vsmPageMarkingPipelineLayout, nullptr);
+            if (vsmPageCompactPipelineLayout != VK_NULL_HANDLE) vkDestroyPipelineLayout(device, vsmPageCompactPipelineLayout, nullptr);
             if (hiZCopyDescriptorSetLayout != VK_NULL_HANDLE) { vkDestroyDescriptorSetLayout(device, hiZCopyDescriptorSetLayout, nullptr);
 }
             if (hiZReduceDescriptorSetLayout != VK_NULL_HANDLE) { vkDestroyDescriptorSetLayout(device, hiZReduceDescriptorSetLayout, nullptr);
@@ -999,19 +1099,27 @@
             if (grassPackedScatterDescriptorSetLayout != VK_NULL_HANDLE) vkDestroyDescriptorSetLayout(device, grassPackedScatterDescriptorSetLayout, nullptr);
             if (grassPackedFinalizeDescriptorSetLayout != VK_NULL_HANDLE) vkDestroyDescriptorSetLayout(device, grassPackedFinalizeDescriptorSetLayout, nullptr);
             if (clusteredLightingDescriptorSetLayout != VK_NULL_HANDLE) vkDestroyDescriptorSetLayout(device, clusteredLightingDescriptorSetLayout, nullptr);
+            if (vsmPageMarkingDescriptorSetLayout != VK_NULL_HANDLE) vkDestroyDescriptorSetLayout(device, vsmPageMarkingDescriptorSetLayout, nullptr);
+            if (vsmPageCompactDescriptorSetLayout != VK_NULL_HANDLE) vkDestroyDescriptorSetLayout(device, vsmPageCompactDescriptorSetLayout, nullptr);
             cullingDescriptorPool = VK_NULL_HANDLE; hiZCopyPipeline = hiZReducePipeline = cullingPipeline = VK_NULL_HANDLE;
+            vsmPageMarkingPipeline = VK_NULL_HANDLE;
+            vsmPageCompactPipeline = VK_NULL_HANDLE;
             instanceCullingPipeline = VK_NULL_HANDLE;
             meshletCullingPipeline = VK_NULL_HANDLE;
             grassBuildPipeline = grassPrefixPipeline = grassScatterPipeline = grassFinalizePipeline = VK_NULL_HANDLE;
             grassPackedCullPipeline = grassBladeCullPipeline = grassClassifyPipeline = VK_NULL_HANDLE;
             grassPackedBinPipeline = grassPackedPrefixPipeline = grassPackedScatterPipeline = grassPackedFinalizePipeline = VK_NULL_HANDLE;
             hiZCopyPipelineLayout = hiZReducePipelineLayout = cullingPipelineLayout = VK_NULL_HANDLE;
+            vsmPageMarkingPipelineLayout = VK_NULL_HANDLE;
+            vsmPageCompactPipelineLayout = VK_NULL_HANDLE;
             instanceCullingPipelineLayout = VK_NULL_HANDLE;
             meshletCullingPipelineLayout = VK_NULL_HANDLE;
             grassBuildPipelineLayout = grassPrefixPipelineLayout = grassScatterPipelineLayout = grassFinalizePipelineLayout = VK_NULL_HANDLE;
             grassPackedCullPipelineLayout = grassBladeCullPipelineLayout = grassClassifyPipelineLayout = VK_NULL_HANDLE;
             grassPackedBinPipelineLayout = grassPackedScatterPipelineLayout = grassPackedFinalizePipelineLayout = VK_NULL_HANDLE;
             hiZCopyDescriptorSetLayout = hiZReduceDescriptorSetLayout = cullingDescriptorSetLayout = VK_NULL_HANDLE;
+            vsmPageMarkingDescriptorSetLayout = VK_NULL_HANDLE;
+            vsmPageCompactDescriptorSetLayout = VK_NULL_HANDLE;
             instanceCullingDescriptorSetLayout = VK_NULL_HANDLE;
             meshletCullingDescriptorSetLayout = VK_NULL_HANDLE;
             grassBuildDescriptorSetLayout = grassPrefixDescriptorSetLayout = grassScatterDescriptorSetLayout = grassFinalizeDescriptorSetLayout = VK_NULL_HANDLE;

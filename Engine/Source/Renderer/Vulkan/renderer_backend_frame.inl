@@ -241,6 +241,23 @@
                  dot(currentCameraForward, previousGameCameraForward) < cameraCutDirectionDot);
             const std::uint32_t shadowPageBudget = (!previousGameCameraValid || cameraCut) ? 128u : 64u;
 
+            std::array<std::uint32_t, ShadowMap::VirtualPageCount> completedVsmRequests{};
+            std::span<const std::uint32_t> receiverPageRequests;
+            // currentFrame's fence was waited before this per-frame update.
+            // Reading this mapped allocation therefore consumes GPU work from
+            // its prior use with no queue wait or submission-time readback.
+            if (!cameraCut && vsmRequestsReady[currentFrame] &&
+                vsmCompactedPageCountBuffers[currentFrame].handle() != VK_NULL_HANDLE) {
+                std::uint32_t requestCount{};
+                vsmCompactedPageCountBuffers[currentFrame].read(&requestCount, sizeof(requestCount));
+                requestCount = std::min(requestCount, ShadowMap::VirtualPageCount);
+                if (requestCount != 0) {
+                    vsmCompactedPageBuffers[currentFrame].read(completedVsmRequests.data(),
+                        sizeof(std::uint32_t) * requestCount);
+                    receiverPageRequests = std::span{completedVsmRequests}.first(requestCount);
+                }
+            }
+
             if (mainLightShadows && renderGameViewport) {
                 shadowClipUpdateMask = updateVirtualShadowClipmaps(
                     cameraController.camera()->position(), shadowClipMatrices,
@@ -249,14 +266,29 @@
                     shadowClipMatrices,
                     cameraController.camera()->projectionMatrix() *
                         cameraController.camera()->viewMatrix(),
-                    gpuObjects, dirtyShadowObjects, currentFrame, shadowPageBudget);
+                    gpuObjects, dirtyShadowObjects, receiverPageRequests, currentFrame, shadowPageBudget);
             } else {
                 shadowClipUpdateMask = 0;
                 shadowClipmapsValid = false;
                 shadowPass.invalidateCache();
+                vsmRequestsReady.fill(false);
             }
             const Mat4 currentView = cameraController.camera()->viewMatrix();
             const Mat4 currentProjection = cameraController.camera()->projectionMatrix();
+            if (vsmPageMarkingUniformBuffers[currentFrame].handle() != VK_NULL_HANDLE) {
+                const glm::mat4 markingViewProjection =
+                    (previousGameCameraValid ? previousGameProjection * previousGameView
+                                             : currentProjection * currentView).native();
+                VsmPageMarkingUniforms marking{};
+                marking.inverseViewProjection = glm::inverse(markingViewProjection);
+                for (std::uint32_t level = 0; level < ShadowMap::ClipLevelCount; ++level)
+                    marking.clipMatrices[level] = shadowClipMatrices[level].native();
+                marking.pageCountPerAxis = ShadowMap::VirtualPagesPerAxis;
+                marking.clipLevelCount = ShadowMap::ClipLevelCount;
+                marking.depthWidth = swapchain.extent().width;
+                marking.depthHeight = swapchain.extent().height;
+                vsmPageMarkingUniformBuffers[currentFrame].update(&marking, sizeof(marking));
+            }
             // Motion vectors describe continuous motion.  Reusing history after
             // a teleport or a large orientation jump produces unavoidable
             // ghosting, so treat it as a camera cut instead.
@@ -316,7 +348,7 @@
                 sceneDescriptorPass.preparePages(
                     sceneShadowClipMatrices,
                     sceneCamera.projectionMatrix() * sceneCamera.viewMatrix(),
-                    gpuObjects, dirtyShadowObjects, currentFrame, 32);
+                    gpuObjects, dirtyShadowObjects, {}, currentFrame, 32);
             } else {
                 sceneShadowClipUpdateMask = 0;
                 sceneShadowClipmapsValid = false;
@@ -596,6 +628,89 @@
             // sampler. Even when shadows are disabled, run an empty shadow
             // pass so its image is transitioned from UNDEFINED to
             // SHADER_READ_ONLY_OPTIMAL before the descriptor is used.
+            // Mark VSM pages from the completed depth hierarchy. The result
+            // is consumed the next time this frame slot is reused, so this
+            // dispatch never creates a CPU/GPU synchronization point.
+            if (renderGameViewport && mainLightShadows && hadPreviousHiZ &&
+                vsmPageMarkingPipeline != VK_NULL_HANDLE &&
+                vsmPageMarkingSets[currentFrame] != VK_NULL_HANDLE &&
+                vsmPageCompactPipeline != VK_NULL_HANDLE &&
+                vsmPageCompactSets[currentFrame] != VK_NULL_HANDLE) {
+                vkCmdFillBuffer(commandBuffer, vsmRequestedPageBuffers[currentFrame].handle(),
+                                0, VK_WHOLE_SIZE, 0);
+                const VkBufferMemoryBarrier2 clearBarrier{
+                    .sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER_2,
+                    .srcStageMask = VK_PIPELINE_STAGE_2_TRANSFER_BIT,
+                    .srcAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT,
+                    .dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                    .dstAccessMask = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT,
+                    .buffer = vsmRequestedPageBuffers[currentFrame].handle(),
+                    .offset = 0, .size = VK_WHOLE_SIZE};
+                const VkDependencyInfo clearDependency{
+                    .sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO,
+                    .bufferMemoryBarrierCount = 1, .pBufferMemoryBarriers = &clearBarrier};
+                vkCmdPipelineBarrier2(commandBuffer, &clearDependency);
+                vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE,
+                                  vsmPageMarkingPipeline);
+                const VkDescriptorSet markingSet = vsmPageMarkingSets[currentFrame];
+                vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE,
+                                        vsmPageMarkingPipelineLayout, 0, 1,
+                                        &markingSet, 0, nullptr);
+                vkCmdDispatch(commandBuffer, (swapchain.extent().width + 7U) / 8U,
+                              (swapchain.extent().height + 7U) / 8U, 1);
+                const VkBufferMemoryBarrier2 markingBarrier{
+                    .sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER_2,
+                    .srcStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                    .srcAccessMask = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT,
+                    .dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                    .dstAccessMask = VK_ACCESS_2_SHADER_STORAGE_READ_BIT,
+                    .buffer = vsmRequestedPageBuffers[currentFrame].handle(),
+                    .offset = 0, .size = VK_WHOLE_SIZE};
+                const VkDependencyInfo markingDependency{
+                    .sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO,
+                    .bufferMemoryBarrierCount = 1, .pBufferMemoryBarriers = &markingBarrier};
+                vkCmdPipelineBarrier2(commandBuffer, &markingDependency);
+                vkCmdFillBuffer(commandBuffer, vsmCompactedPageCountBuffers[currentFrame].handle(),
+                                0, sizeof(std::uint32_t), 0);
+                const VkBufferMemoryBarrier2 countBarrier{
+                    .sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER_2,
+                    .srcStageMask = VK_PIPELINE_STAGE_2_TRANSFER_BIT,
+                    .srcAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT,
+                    .dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                    .dstAccessMask = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT,
+                    .buffer = vsmCompactedPageCountBuffers[currentFrame].handle(),
+                    .offset = 0, .size = sizeof(std::uint32_t)};
+                const VkDependencyInfo countDependency{
+                    .sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO,
+                    .bufferMemoryBarrierCount = 1, .pBufferMemoryBarriers = &countBarrier};
+                vkCmdPipelineBarrier2(commandBuffer, &countDependency);
+                vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, vsmPageCompactPipeline);
+                const VkDescriptorSet compactSet = vsmPageCompactSets[currentFrame];
+                vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE,
+                                        vsmPageCompactPipelineLayout, 0, 1, &compactSet, 0, nullptr);
+                vkCmdDispatch(commandBuffer, (ShadowMap::VirtualPageCount + 31U) / 32U, 1, 1);
+                const VkBufferMemoryBarrier2 completionBarriers[] = {
+                    {.sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER_2,
+                     .srcStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                     .srcAccessMask = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT,
+                     .dstStageMask = VK_PIPELINE_STAGE_2_HOST_BIT,
+                     .dstAccessMask = VK_ACCESS_2_HOST_READ_BIT,
+                     .buffer = vsmCompactedPageBuffers[currentFrame].handle(),
+                     .offset = 0, .size = VK_WHOLE_SIZE},
+                    {.sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER_2,
+                     .srcStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                     .srcAccessMask = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT,
+                     .dstStageMask = VK_PIPELINE_STAGE_2_HOST_BIT,
+                     .dstAccessMask = VK_ACCESS_2_HOST_READ_BIT,
+                     .buffer = vsmCompactedPageCountBuffers[currentFrame].handle(),
+                     .offset = 0, .size = sizeof(std::uint32_t)}};
+                const VkDependencyInfo completionDependency{
+                    .sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO,
+                    .bufferMemoryBarrierCount = std::size(completionBarriers),
+                    .pBufferMemoryBarriers = completionBarriers};
+                vkCmdPipelineBarrier2(commandBuffer, &completionDependency);
+                vsmRequestsReady[currentFrame] = true;
+            }
             gpuTimestampProfiler.beginZone(commandBuffer, currentFrame, shadowProfileName);
             if (renderGameViewport) {
                 shadowPass.record(
