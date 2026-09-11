@@ -105,6 +105,9 @@ namespace Engine {
             return depthResolveMode_ == VK_RESOLVE_MODE_MAX_BIT;
         }
 
+        /** Whether the selected GPU exposes the optional VK_EXT_mesh_shader path. */
+        [[nodiscard]] bool supportsMeshShaders() const noexcept { return meshShaderSupported_; }
+
         [[nodiscard]] const MemoryBudgetManager& memoryBudgetManager() const noexcept {
             return memoryBudgetManager_;
         }
@@ -121,6 +124,8 @@ namespace Engine {
         VmaAllocator allocator_ = VK_NULL_HANDLE;
         VkResolveModeFlagBits depthResolveMode_ = VK_RESOLVE_MODE_SAMPLE_ZERO_BIT;
         bool memoryBudgetExtensionSupported_ = false;
+        bool meshShaderExtensionSupported_ = false;
+        bool meshShaderSupported_ = false;
         MemoryBudgetManager memoryBudgetManager_{};
 
         [[nodiscard]] QueueFamilyIndices findQueueFamilies(VkPhysicalDevice candidate) const;

@@ -33,6 +33,11 @@ namespace Engine {
         std::uint32_t vertexCount{};
         std::uint32_t firstIndex{};
         std::uint32_t indexCount{};
+        /// Number of meshlets belonging to this LOD. Their streamed payload is
+        /// addressed by the mesh-shader path, not by indexed fallback draws.
+        std::uint32_t meshletCount{};
+        /// Offset into the renderer-wide GpuMeshlet buffer for this mesh LOD.
+        std::uint32_t firstMeshlet{};
         AABB bounds{};
         /// Asset path used to decode a short-lived source payload on a GPU
         /// resource rebuild. Empty paths identify procedural/editor meshes.

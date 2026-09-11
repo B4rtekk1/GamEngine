@@ -113,6 +113,14 @@
         bool& hasShadowCasters;
         Buffer vertexBuffer;
         Buffer indexBuffer;
+        // Mesh-shader payload mirrors the append-only indexed geometry heap.
+        // It remains separate so the conventional indexed fallback does not
+        // pay a descriptor or vertex-input cost for meshlet data.
+        Buffer meshletBuffer;
+        Buffer meshletVertexBuffer;
+        Buffer meshletTriangleBuffer;
+        std::uint32_t globalMeshletCount{};
+        std::uint32_t meshletVisibleCapacity{};
         // Geometry Heap. Mesh ranges are never derived from dense ECS order:
         // a new proxy receives an append-only sub-allocation and removing a
         // proxy leaves the old range untouched until a future heap compaction.
@@ -145,6 +153,9 @@
         std::size_t gpuSceneMaterialHighWater{};
         std::array<Buffer, MAX_FRAMES_IN_FLIGHT> visibleInstanceBuffers;
         std::array<Buffer, MAX_FRAMES_IN_FLIGHT> visibleInstanceCountBuffers;
+        std::array<Buffer, MAX_FRAMES_IN_FLIGHT> visibleMeshletBuffers;
+        std::array<Buffer, MAX_FRAMES_IN_FLIGHT> visibleMeshletCountBuffers;
+        std::array<Buffer, MAX_FRAMES_IN_FLIGHT> meshletCullingUniformBuffers;
         // GPU-driven grass compaction: count -> prefix -> scatter -> indirect.
         std::array<Buffer, MAX_FRAMES_IN_FLIGHT> grassBinCountBuffers;
         std::array<Buffer, MAX_FRAMES_IN_FLIGHT> grassBinOffsetBuffers;
@@ -279,6 +290,7 @@
         VkDescriptorSetLayout hiZReduceDescriptorSetLayout = VK_NULL_HANDLE;
         VkDescriptorSetLayout cullingDescriptorSetLayout = VK_NULL_HANDLE;
         VkDescriptorSetLayout instanceCullingDescriptorSetLayout = VK_NULL_HANDLE;
+        VkDescriptorSetLayout meshletCullingDescriptorSetLayout = VK_NULL_HANDLE;
         VkDescriptorSetLayout grassBuildDescriptorSetLayout = VK_NULL_HANDLE;
         VkDescriptorSetLayout grassDispatchBuildDescriptorSetLayout = VK_NULL_HANDLE;
         VkDescriptorSetLayout grassPrefixDescriptorSetLayout = VK_NULL_HANDLE;
@@ -295,6 +307,7 @@
         VkPipelineLayout hiZReducePipelineLayout = VK_NULL_HANDLE;
         VkPipelineLayout cullingPipelineLayout = VK_NULL_HANDLE;
         VkPipelineLayout instanceCullingPipelineLayout = VK_NULL_HANDLE;
+        VkPipelineLayout meshletCullingPipelineLayout = VK_NULL_HANDLE;
         VkPipelineLayout grassBuildPipelineLayout = VK_NULL_HANDLE;
         VkPipelineLayout grassDispatchBuildPipelineLayout = VK_NULL_HANDLE;
         VkPipelineLayout grassPrefixPipelineLayout = VK_NULL_HANDLE;
@@ -311,6 +324,7 @@
         VkPipeline hiZReducePipeline = VK_NULL_HANDLE;
         VkPipeline cullingPipeline = VK_NULL_HANDLE;
         VkPipeline instanceCullingPipeline = VK_NULL_HANDLE;
+        VkPipeline meshletCullingPipeline = VK_NULL_HANDLE;
         VkPipeline grassBuildPipeline = VK_NULL_HANDLE;
         VkPipeline grassDispatchBuildPipeline = VK_NULL_HANDLE;
         VkPipeline grassPrefixPipeline = VK_NULL_HANDLE;
@@ -325,6 +339,7 @@
         VkPipeline grassPackedFinalizePipeline = VK_NULL_HANDLE;
         VkPipeline clusteredLightingPipeline = VK_NULL_HANDLE;
         std::array<VkDescriptorSet, MAX_FRAMES_IN_FLIGHT> instanceCullSets{};
+        std::array<VkDescriptorSet, MAX_FRAMES_IN_FLIGHT> meshletCullSets{};
         std::array<VkDescriptorSet, MAX_FRAMES_IN_FLIGHT> clusteredLightingSets{};
         std::array<VkDescriptorSet, MAX_FRAMES_IN_FLIGHT> sceneClusteredLightingSets{};
         std::array<VkDescriptorSet, MAX_FRAMES_IN_FLIGHT> grassBuildSets{};

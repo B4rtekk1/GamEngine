@@ -1,6 +1,7 @@
 #pragma once
 
 #include "Engine/Renderer/Geometry/Vertex.h"
+#include "Engine/Renderer/Geometry/Meshlet.h"
 #include "Engine/Renderer/Materials/PBRMaterial.h"
 #include "Engine/Assets/AssetTypes.h"
 
@@ -56,6 +57,13 @@ namespace Engine {
 
         /** @brief Index array used for indexed rendering. */
         std::vector<uint32_t> indices;
+
+        /** Fine-grained geometry used by the GPU-driven mesh-shader path. */
+        std::vector<Meshlet> meshlets;
+        /** Global vertex indices addressed by each Meshlet::vertexOffset range. */
+        std::vector<std::uint32_t> meshletVertices;
+        /** Packed uint8x3 local triangle indices addressed by Meshlet::triangleOffset. */
+        std::vector<std::uint32_t> meshletTriangles;
 
         /**
          * @brief Monotonically increasing version of the mesh's collision geometry.

@@ -39,7 +39,7 @@
             // Grass has a separate, variable set of compacted scratch lists;
             // keep its migration boundary explicit until it gets its own heap.
             if (!sceneGpu.grassInstances.empty() || !sceneGpu.grassClusters.empty() ||
-                cullingDescriptorPool == VK_NULL_HANDLE) return false;
+                cullingDescriptorPool == VK_NULL_HANDLE || globalMeshletCount > meshletVisibleCapacity) return false;
             const VkDeviceSize objectBytes = sizeof(Culling::GPUObjectData) *
                 std::max<std::size_t>(1, instanceBatches.size());
             const VkDeviceSize visibleBytes = sizeof(std::uint32_t) *
@@ -132,6 +132,18 @@
             if (vkCreateDescriptorSetLayout(device, &layoutInfo, nullptr,
                                              &instanceCullingDescriptorSetLayout) != VK_SUCCESS) {
                 throw std::runtime_error("Could not create instance-culling descriptor-set layout");
+            }
+            const VkDescriptorSetLayoutBinding meshletCullBindings[] = {
+                {0, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
+                {1, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
+                {2, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
+                {3, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
+            };
+            layoutInfo.bindingCount = std::size(meshletCullBindings);
+            layoutInfo.pBindings = meshletCullBindings;
+            if (vkCreateDescriptorSetLayout(device, &layoutInfo, nullptr,
+                                            &meshletCullingDescriptorSetLayout) != VK_SUCCESS) {
+                throw std::runtime_error("Could not create meshlet-culling descriptor-set layout");
             }
             const VkDescriptorSetLayoutBinding grassBuildBindings[] = {
                 {0, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
@@ -258,6 +270,7 @@
             createLayout(cullingDescriptorSetLayout, cullingPipelineLayout,
                          &cullingPushConstants);
             createLayout(instanceCullingDescriptorSetLayout, instanceCullingPipelineLayout);
+            createLayout(meshletCullingDescriptorSetLayout, meshletCullingPipelineLayout);
             createLayout(grassBuildDescriptorSetLayout, grassBuildPipelineLayout);
             createLayout(grassDispatchBuildDescriptorSetLayout, grassDispatchBuildPipelineLayout);
             createLayout(grassPrefixDescriptorSetLayout, grassPrefixPipelineLayout);
@@ -275,6 +288,8 @@
             cullingPipeline = createComputePipeline("shaders/gpu_culling.spv", cullingPipelineLayout);
             instanceCullingPipeline = createComputePipeline("shaders/gpu_instance_culling.spv",
                                                              instanceCullingPipelineLayout);
+            meshletCullingPipeline = createComputePipeline("shaders/meshlet_culling.spv",
+                                                            meshletCullingPipelineLayout);
             grassBuildPipeline = createComputePipeline("shaders/grass_build_indirect.spv", grassBuildPipelineLayout);
             grassDispatchBuildPipeline = createComputePipeline("shaders/grass_build_dispatch.spv", grassDispatchBuildPipelineLayout);
             grassPrefixPipeline = createComputePipeline("shaders/grass_prefix_sum.spv", grassPrefixPipelineLayout);
@@ -329,6 +344,9 @@
                 cullingUniformBuffers[frame].createHostVisible(vulkanDevice.physical(), device,
                     sizeof(Culling::CullingUniformData), VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
                     vulkanDevice.allocator());
+                meshletCullingUniformBuffers[frame].createHostVisible(vulkanDevice.physical(), device,
+                    sizeof(Culling::MeshletCullUniforms), VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
+                    vulkanDevice.allocator());
                 foliageCullingUniformBuffers[frame].createHostVisible(vulkanDevice.physical(), device,
                     sizeof(Culling::CullingUniformData), VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
                     vulkanDevice.allocator());
@@ -346,6 +364,16 @@
                     VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
                     commandPool, vulkanDevice.graphicsQueue(), vulkanDevice.allocator());
                 visibleInstanceCountBuffers[frame].createDeviceLocal(vulkanDevice.physical(), device, &zero,
+                    sizeof(zero), VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+                    commandPool, vulkanDevice.graphicsQueue(), vulkanDevice.allocator());
+                const std::uint32_t meshletCapacity = static_cast<std::uint32_t>(
+                    std::max<VkDeviceSize>(1, meshletBuffer.size() / sizeof(Culling::GpuMeshlet)));
+                meshletVisibleCapacity = meshletCapacity;
+                visibleMeshletBuffers[frame].createDeviceLocal(vulkanDevice.physical(), device, &zero,
+                    sizeof(std::uint32_t) * meshletCapacity,
+                    VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+                    commandPool, vulkanDevice.graphicsQueue(), vulkanDevice.allocator());
+                visibleMeshletCountBuffers[frame].createDeviceLocal(vulkanDevice.physical(), device, &zero,
                     sizeof(zero), VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
                     commandPool, vulkanDevice.graphicsQueue(), vulkanDevice.allocator());
                 std::vector<std::uint32_t> emptyGrassBins(grassBinCount, 0U);
@@ -517,12 +545,12 @@
             const uint32_t imageDescriptors = hiZBuffer.mipCount() + cullingSetCount;
             const VkDescriptorPoolSize poolSizes[] = {
                 {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, imageDescriptors},
-                {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, cullingSetCount * 7 + instanceCullSetCount * 3 + MAX_FRAMES_IN_FLIGHT * 132},
-                {VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, cullingSetCount + MAX_FRAMES_IN_FLIGHT * 28},
+                {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, cullingSetCount * 7 + instanceCullSetCount * 3 + MAX_FRAMES_IN_FLIGHT * 134},
+                {VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, cullingSetCount + MAX_FRAMES_IN_FLIGHT * 29},
                 {VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, hiZBuffer.mipCount()},
             };
             VkDescriptorPoolCreateInfo poolInfo{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
-            poolInfo.maxSets = hiZBuffer.mipCount() + cullingSetCount + instanceCullSetCount + grassSetCount + MAX_FRAMES_IN_FLIGHT * 2;
+            poolInfo.maxSets = hiZBuffer.mipCount() + cullingSetCount + instanceCullSetCount + grassSetCount + MAX_FRAMES_IN_FLIGHT * 3;
             poolInfo.poolSizeCount = allocateHiZ ? std::size(poolSizes) : std::size(poolSizes) - 1;
             poolInfo.pPoolSizes = poolSizes;
             if (vkCreateDescriptorPool(device, &poolInfo, nullptr, &cullingDescriptorPool) != VK_SUCCESS) {
@@ -552,6 +580,13 @@
             allocateInfo.pSetLayouts = instanceCullLayouts.data();
             if (vkAllocateDescriptorSets(device, &allocateInfo, instanceCullSets.data()) != VK_SUCCESS) {
                 throw std::runtime_error("Could not allocate instance-culling descriptor sets");
+            }
+            std::array<VkDescriptorSetLayout, MAX_FRAMES_IN_FLIGHT> meshletCullLayouts{};
+            meshletCullLayouts.fill(meshletCullingDescriptorSetLayout);
+            allocateInfo.descriptorSetCount = MAX_FRAMES_IN_FLIGHT;
+            allocateInfo.pSetLayouts = meshletCullLayouts.data();
+            if (vkAllocateDescriptorSets(device, &allocateInfo, meshletCullSets.data()) != VK_SUCCESS) {
+                throw std::runtime_error("Could not allocate meshlet-culling descriptor sets");
             }
             std::array<VkDescriptorSetLayout, MAX_FRAMES_IN_FLIGHT * 2> clusteredLayouts{};
             clusteredLayouts.fill(clusteredLightingDescriptorSetLayout);
@@ -767,6 +802,21 @@
                                   sceneCullingUniformBuffers[frame], candidates, candidateCounts, candidateDispatches, pageWork});
                 updateCullingSet({sceneFoliageCullSet, sceneFoliageIndirectBuffers[frame], sceneFoliageDrawCountBuffers[frame],
                                   sceneFoliageCullingUniformBuffers[frame], candidates, candidateCounts, candidateDispatches, pageWork});
+                const VkDescriptorBufferInfo meshletInfos[] = {
+                    {meshletBuffer.handle(), 0, VK_WHOLE_SIZE},
+                    {visibleMeshletBuffers[frame].handle(), 0, VK_WHOLE_SIZE},
+                    {visibleMeshletCountBuffers[frame].handle(), 0, sizeof(std::uint32_t)},
+                    {meshletCullingUniformBuffers[frame].handle(), 0, sizeof(Culling::MeshletCullUniforms)},
+                };
+                VkWriteDescriptorSet meshletWrites[4]{};
+                for (std::uint32_t binding = 0; binding < std::size(meshletWrites); ++binding) {
+                    meshletWrites[binding] = {.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+                        .dstSet = meshletCullSets[frame], .dstBinding = binding, .descriptorCount = 1,
+                        .descriptorType = binding == 3 ? VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER
+                                                       : VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+                        .pBufferInfo = &meshletInfos[binding]};
+                }
+                vkUpdateDescriptorSets(device, std::size(meshletWrites), meshletWrites, 0, nullptr);
                 instanceCullingPasses[frame].create(instanceCullingPipeline, instanceCullingPipelineLayout,
                     instanceCullSets[frame], visibleInstanceCountBuffers[frame].handle(),
                     visibleInstanceBuffers[frame].handle());
@@ -843,6 +893,9 @@
             for (Buffer& buffer : previousTransformBuffers) buffer.destroy();
             for (Buffer& buffer : visibleInstanceBuffers) buffer.destroy();
             for (Buffer& buffer : visibleInstanceCountBuffers) buffer.destroy();
+            for (Buffer& buffer : visibleMeshletBuffers) buffer.destroy();
+            for (Buffer& buffer : visibleMeshletCountBuffers) buffer.destroy();
+            for (Buffer& buffer : meshletCullingUniformBuffers) buffer.destroy();
             for (Buffer& buffer : grassBinCountBuffers) buffer.destroy();
             for (Buffer& buffer : grassBinOffsetBuffers) buffer.destroy();
             for (Buffer& buffer : grassBinCursorBuffers) buffer.destroy();
@@ -887,6 +940,8 @@
 }
             if (instanceCullingPipeline != VK_NULL_HANDLE) { vkDestroyPipeline(device, instanceCullingPipeline, nullptr);
 }
+            if (meshletCullingPipeline != VK_NULL_HANDLE) { vkDestroyPipeline(device, meshletCullingPipeline, nullptr);
+}
             if (grassBuildPipeline != VK_NULL_HANDLE) vkDestroyPipeline(device, grassBuildPipeline, nullptr);
             if (grassDispatchBuildPipeline != VK_NULL_HANDLE) vkDestroyPipeline(device, grassDispatchBuildPipeline, nullptr);
             if (grassPrefixPipeline != VK_NULL_HANDLE) vkDestroyPipeline(device, grassPrefixPipeline, nullptr);
@@ -908,6 +963,8 @@
 }
             if (instanceCullingPipelineLayout != VK_NULL_HANDLE) { vkDestroyPipelineLayout(device, instanceCullingPipelineLayout, nullptr);
 }
+            if (meshletCullingPipelineLayout != VK_NULL_HANDLE) { vkDestroyPipelineLayout(device, meshletCullingPipelineLayout, nullptr);
+}
             if (grassBuildPipelineLayout != VK_NULL_HANDLE) vkDestroyPipelineLayout(device, grassBuildPipelineLayout, nullptr);
             if (grassDispatchBuildPipelineLayout != VK_NULL_HANDLE) vkDestroyPipelineLayout(device, grassDispatchBuildPipelineLayout, nullptr);
             if (grassPrefixPipelineLayout != VK_NULL_HANDLE) vkDestroyPipelineLayout(device, grassPrefixPipelineLayout, nullptr);
@@ -928,6 +985,8 @@
 }
             if (instanceCullingDescriptorSetLayout != VK_NULL_HANDLE) { vkDestroyDescriptorSetLayout(device, instanceCullingDescriptorSetLayout, nullptr);
 }
+            if (meshletCullingDescriptorSetLayout != VK_NULL_HANDLE) { vkDestroyDescriptorSetLayout(device, meshletCullingDescriptorSetLayout, nullptr);
+}
             if (grassBuildDescriptorSetLayout != VK_NULL_HANDLE) vkDestroyDescriptorSetLayout(device, grassBuildDescriptorSetLayout, nullptr);
             if (grassDispatchBuildDescriptorSetLayout != VK_NULL_HANDLE) vkDestroyDescriptorSetLayout(device, grassDispatchBuildDescriptorSetLayout, nullptr);
             if (grassPrefixDescriptorSetLayout != VK_NULL_HANDLE) vkDestroyDescriptorSetLayout(device, grassPrefixDescriptorSetLayout, nullptr);
@@ -942,16 +1001,19 @@
             if (clusteredLightingDescriptorSetLayout != VK_NULL_HANDLE) vkDestroyDescriptorSetLayout(device, clusteredLightingDescriptorSetLayout, nullptr);
             cullingDescriptorPool = VK_NULL_HANDLE; hiZCopyPipeline = hiZReducePipeline = cullingPipeline = VK_NULL_HANDLE;
             instanceCullingPipeline = VK_NULL_HANDLE;
+            meshletCullingPipeline = VK_NULL_HANDLE;
             grassBuildPipeline = grassPrefixPipeline = grassScatterPipeline = grassFinalizePipeline = VK_NULL_HANDLE;
             grassPackedCullPipeline = grassBladeCullPipeline = grassClassifyPipeline = VK_NULL_HANDLE;
             grassPackedBinPipeline = grassPackedPrefixPipeline = grassPackedScatterPipeline = grassPackedFinalizePipeline = VK_NULL_HANDLE;
             hiZCopyPipelineLayout = hiZReducePipelineLayout = cullingPipelineLayout = VK_NULL_HANDLE;
             instanceCullingPipelineLayout = VK_NULL_HANDLE;
+            meshletCullingPipelineLayout = VK_NULL_HANDLE;
             grassBuildPipelineLayout = grassPrefixPipelineLayout = grassScatterPipelineLayout = grassFinalizePipelineLayout = VK_NULL_HANDLE;
             grassPackedCullPipelineLayout = grassBladeCullPipelineLayout = grassClassifyPipelineLayout = VK_NULL_HANDLE;
             grassPackedBinPipelineLayout = grassPackedScatterPipelineLayout = grassPackedFinalizePipelineLayout = VK_NULL_HANDLE;
             hiZCopyDescriptorSetLayout = hiZReduceDescriptorSetLayout = cullingDescriptorSetLayout = VK_NULL_HANDLE;
             instanceCullingDescriptorSetLayout = VK_NULL_HANDLE;
+            meshletCullingDescriptorSetLayout = VK_NULL_HANDLE;
             grassBuildDescriptorSetLayout = grassPrefixDescriptorSetLayout = grassScatterDescriptorSetLayout = grassFinalizeDescriptorSetLayout = VK_NULL_HANDLE;
             grassPackedCullDescriptorSetLayout = grassBladeCullDescriptorSetLayout = grassClassifyDescriptorSetLayout = VK_NULL_HANDLE;
             grassPackedBinDescriptorSetLayout = grassPackedScatterDescriptorSetLayout = grassPackedFinalizeDescriptorSetLayout = VK_NULL_HANDLE;

@@ -24,6 +24,9 @@
                 destroyCullingResources();
                 indexBuffer.destroy();
                 vertexBuffer.destroy();
+                meshletTriangleBuffer.destroy();
+                meshletVertexBuffer.destroy();
+                meshletBuffer.destroy();
                 for (Buffer& buffer : instanceBuffers) {
                     buffer.destroy();
                 }
@@ -44,6 +47,9 @@
                 for (Buffer& buffer : gpuSceneMaterialBuffers) buffer.destroy();
                 for (Buffer& buffer : visibleInstanceBuffers) buffer.destroy();
                 for (Buffer& buffer : visibleInstanceCountBuffers) buffer.destroy();
+                for (Buffer& buffer : visibleMeshletBuffers) buffer.destroy();
+                for (Buffer& buffer : visibleMeshletCountBuffers) buffer.destroy();
+                for (Buffer& buffer : meshletCullingUniformBuffers) buffer.destroy();
                 for (Buffer& uniformBuffer : uniformBuffers) {
                     uniformBuffer.destroy();
                 }

@@ -2,6 +2,7 @@
 
 #include "Engine/Assets/Gtex.h"
 #include "Engine/Renderer/Geometry/Mesh.h"
+#include "Engine/Renderer/Geometry/Meshlet.h"
 
 #include <stb_image.h>
 
@@ -574,7 +575,7 @@ std::shared_ptr<const Mesh> load_gltf_mesh_impl(const std::filesystem::path& pat
             if (data->nodes[i].parent == nullptr && !append_node(*data, data->nodes[i], mesh)) return {};
         }
     }
-    if (mesh.empty()) return {};
+    if (mesh.empty() || !build_meshlets(mesh)) return {};
     mesh.sourcePath = path;
     return std::make_shared<const Mesh>(std::move(mesh));
 }

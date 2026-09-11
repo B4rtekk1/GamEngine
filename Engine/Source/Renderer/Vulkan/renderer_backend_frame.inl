@@ -375,6 +375,29 @@
             // not submit hidden Game View work: this also makes the shared
             // physical VSM atlas single-writer for the entire frame.
             const bool renderGameViewport = !editorUiActive || !sceneViewportActive;
+            if (vulkanDevice.supportsMeshShaders() && globalMeshletCount != 0 &&
+                meshletCullSets[currentFrame] != VK_NULL_HANDLE) {
+                vkCmdFillBuffer(commandBuffer, visibleMeshletCountBuffers[currentFrame].handle(), 0,
+                                sizeof(std::uint32_t), 0);
+                const VkMemoryBarrier2 clearBarrier{VK_STRUCTURE_TYPE_MEMORY_BARRIER_2, nullptr,
+                    VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT,
+                    VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_STORAGE_READ_BIT};
+                const VkDependencyInfo clearDependency{.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO,
+                    .memoryBarrierCount = 1, .pMemoryBarriers = &clearBarrier};
+                vkCmdPipelineBarrier2(commandBuffer, &clearDependency);
+                vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, meshletCullingPipeline);
+                const VkDescriptorSet meshletSet = meshletCullSets[currentFrame];
+                vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE,
+                                        meshletCullingPipelineLayout, 0, 1, &meshletSet, 0, nullptr);
+                vkCmdDispatch(commandBuffer, (globalMeshletCount + 63U) / 64U, 1, 1);
+                const VkMemoryBarrier2 meshletBarrier{VK_STRUCTURE_TYPE_MEMORY_BARRIER_2, nullptr,
+                    VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT,
+                    VK_PIPELINE_STAGE_2_MESH_SHADER_BIT_EXT,
+                    VK_ACCESS_2_SHADER_STORAGE_READ_BIT};
+                const VkDependencyInfo meshletDependency{.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO,
+                    .memoryBarrierCount = 1, .pMemoryBarriers = &meshletBarrier};
+                vkCmdPipelineBarrier2(commandBuffer, &meshletDependency);
+            }
             const ForwardPass& sceneForwardPass = msaa.enabled()
                 ? forwardPass
                 : sceneViewportForwardPass;
@@ -1432,6 +1455,7 @@
             }
             updateParticleSystemForFrame();
             updateCullingUniformBuffer(currentFrame);
+            updateMeshletCullingUniformBuffer(currentFrame);
             if (sceneViewportRendered) {
                 updateSceneCullingUniformBuffer(currentFrame);
             }

@@ -64,6 +64,7 @@
 #include "Engine/Renderer/Culling/IndexedIndirectDrawCount.h"
 #include "Engine/Renderer/Culling/HiZBuffer.h"
 #include "Engine/Renderer/Culling/HiZPass.h"
+#include "Engine/Renderer/Culling/MeshletCulling.h"
 #include "Engine/Renderer/Materials/MaterialBuffer.h"
 #include "Engine/Renderer/MeshRenderer.h"
 #include "Engine/Renderer/Particles/ParticleSystem.h"

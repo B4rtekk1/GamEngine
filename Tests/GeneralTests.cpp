@@ -6,6 +6,8 @@
 #include "Engine/Renderer/Geometry/Cube.h"
 #include "Engine/Renderer/Geometry/Capsule.h"
 #include "Engine/Renderer/Geometry/Mesh.h"
+#include "Engine/Renderer/Geometry/Meshlet.h"
+#include "Engine/Renderer/Culling/MeshletCulling.h"
 #include "Engine/Renderer/Geometry/Plane.h"
 #include "Engine/Renderer/Geometry/Ramp.h"
 #include "Engine/Renderer/Geometry/Sphere.h"
@@ -278,6 +280,46 @@ TEST(Mesh, GeometryRevisionChangesOnlyWhenMarked) {
     EXPECT_EQ(mesh.geometryRevision, 0u);
     mesh.markGeometryChanged();
     EXPECT_EQ(mesh.geometryRevision, 1u);
+}
+
+TEST(Meshlets, PartitionGeometryWithinGpuLimitsAndRetainCullData) {
+    Engine::Mesh mesh = Engine::Plane::createMesh();
+    ASSERT_TRUE(Engine::build_meshlets(mesh, {.maxVertices = 3, .maxTriangles = 1}));
+    ASSERT_EQ(mesh.meshlets.size(), 2u);
+    ASSERT_EQ(mesh.meshletTriangles.size(), 2u);
+    for (const auto& meshlet : mesh.meshlets) {
+        EXPECT_LE(meshlet.vertexCount, 3u);
+        EXPECT_EQ(meshlet.triangleCount, 1u);
+        EXPECT_GE(meshlet.radius, 0.0F);
+        EXPECT_GE(meshlet.coneCutoff, -1.0F);
+        EXPECT_LE(meshlet.coneCutoff, 1.0F);
+        for (std::uint32_t vertex = 0; vertex < meshlet.vertexCount; ++vertex)
+            EXPECT_LT(mesh.meshletVertices[meshlet.vertexOffset + vertex], mesh.vertices.size());
+    }
+}
+
+TEST(Meshlets, RejectsInvalidInputAndLimits) {
+    Engine::Mesh mesh = Engine::Plane::createMesh();
+    EXPECT_FALSE(Engine::build_meshlets(mesh, {.maxVertices = 65, .maxTriangles = 126}));
+    mesh.indices[0] = static_cast<std::uint32_t>(mesh.vertices.size());
+    EXPECT_FALSE(Engine::build_meshlets(mesh));
+}
+
+TEST(Meshlets, ProducesGlobalGpuPayloadWithoutChangingLocalGeometry) {
+    Engine::Mesh mesh = Engine::Plane::createMesh();
+    ASSERT_TRUE(Engine::build_meshlets(mesh));
+    std::vector<Engine::Culling::GpuMeshlet> gpuMeshlets;
+    std::vector<std::uint32_t> gpuVertices;
+    std::vector<std::uint32_t> gpuTriangles;
+    ASSERT_TRUE(Engine::Culling::appendMeshletPayload(mesh, 37U, gpuMeshlets, gpuVertices, gpuTriangles));
+    ASSERT_EQ(gpuMeshlets.size(), mesh.meshlets.size());
+    ASSERT_EQ(gpuVertices.size(), mesh.meshletVertices.size());
+    ASSERT_EQ(gpuTriangles, mesh.meshletTriangles);
+    for (std::size_t index = 0; index < gpuVertices.size(); ++index)
+        EXPECT_EQ(gpuVertices[index], mesh.meshletVertices[index] + 37U);
+    EXPECT_EQ(gpuMeshlets.front().range.x, 0u);
+    EXPECT_EQ(gpuMeshlets.front().range.z, 0u);
+    EXPECT_EQ(gpuMeshlets.front().bounds.w, mesh.meshlets.front().radius);
 }
 
 TEST(ViewportCamera, BuildsGameCameraFromComponentAndTransform) {

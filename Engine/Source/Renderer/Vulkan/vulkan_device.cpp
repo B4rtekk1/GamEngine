@@ -83,6 +83,8 @@ void VulkanDevice::destroy() noexcept {
     queueFamilies_ = {};
     depthResolveMode_ = VK_RESOLVE_MODE_SAMPLE_ZERO_BIT;
     memoryBudgetExtensionSupported_ = false;
+    meshShaderExtensionSupported_ = false;
+    meshShaderSupported_ = false;
 }
 
 QueueFamilyIndices VulkanDevice::findQueueFamilies(VkPhysicalDevice candidate) const {
@@ -335,6 +337,17 @@ void VulkanDevice::selectPhysicalDevice(const VkInstance candidate) {
     memoryBudgetExtensionSupported_ = std::any_of(extensions.begin(), extensions.end(), [](const VkExtensionProperties& extension) {
         return std::strcmp(extension.extensionName, VK_EXT_MEMORY_BUDGET_EXTENSION_NAME) == 0;
     });
+    meshShaderExtensionSupported_ = std::any_of(extensions.begin(), extensions.end(), [](const VkExtensionProperties& extension) {
+        return std::strcmp(extension.extensionName, VK_EXT_MESH_SHADER_EXTENSION_NAME) == 0;
+    });
+    if (meshShaderExtensionSupported_) {
+        VkPhysicalDeviceMeshShaderFeaturesEXT meshFeatures{
+            .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MESH_SHADER_FEATURES_EXT};
+        VkPhysicalDeviceFeatures2 features{.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2,
+                                            .pNext = &meshFeatures};
+        vkGetPhysicalDeviceFeatures2(physicalDevice_, &features);
+        meshShaderSupported_ = meshFeatures.meshShader == VK_TRUE;
+    }
     queueFamilies_ = findQueueFamilies(physicalDevice_);
     VkPhysicalDeviceDepthStencilResolveProperties depthResolveProperties{
         .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DEPTH_STENCIL_RESOLVE_PROPERTIES};
@@ -398,14 +411,26 @@ void VulkanDevice::createLogicalDevice() {
     features2.features.textureCompressionBC = VK_TRUE;
     features2.pNext = &features11;
 
+    VkPhysicalDeviceMeshShaderFeaturesEXT meshFeatures{
+        .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MESH_SHADER_FEATURES_EXT};
+    if (meshShaderSupported_) {
+        VkPhysicalDeviceFeatures2 availableFeatures{.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2,
+                                                     .pNext = &meshFeatures};
+        vkGetPhysicalDeviceFeatures2(physicalDevice_, &availableFeatures);
+        meshFeatures.meshShader = VK_TRUE;
+        // Task shaders are useful for a later amplification stage, but mesh
+        // shaders and compute-driven meshlet culling do not require them.
+    }
+    if (meshShaderSupported_) meshFeatures.pNext = &features2;
     std::vector<const char*> enabledExtensions(kRequiredDeviceExtensions.begin(), kRequiredDeviceExtensions.end());
     if (memoryBudgetExtensionSupported_) enabledExtensions.push_back(VK_EXT_MEMORY_BUDGET_EXTENSION_NAME);
+    if (meshShaderSupported_) enabledExtensions.push_back(VK_EXT_MESH_SHADER_EXTENSION_NAME);
     VkDeviceCreateInfo createInfo{};
     createInfo.sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO;
     createInfo.queueCreateInfoCount =
         static_cast<uint32_t>(queueCreateInfos.size());
     createInfo.pQueueCreateInfos = queueCreateInfos.data();
-    createInfo.pNext = &features2;
+    createInfo.pNext = meshShaderSupported_ ? static_cast<void*>(&meshFeatures) : static_cast<void*>(&features2);
     createInfo.enabledExtensionCount =
         static_cast<uint32_t>(enabledExtensions.size());
     createInfo.ppEnabledExtensionNames = enabledExtensions.data();

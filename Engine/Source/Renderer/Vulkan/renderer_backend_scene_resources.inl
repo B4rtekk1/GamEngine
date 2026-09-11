@@ -412,6 +412,55 @@
                     }
                 }
             }
+            // Meshlet streams intentionally use global vertex references so a
+            // mesh shader can fetch the same packed vertex heap as the indexed
+            // fallback. Build all live payloads, including allocations reused
+            // from a previous topology rebuild.
+            std::vector<Culling::GpuMeshlet> gpuMeshlets;
+            std::vector<std::uint32_t> meshletVertices;
+            std::vector<std::uint32_t> meshletTriangles;
+            std::unordered_map<const Mesh*, std::uint32_t> firstMeshlets;
+            gpuMeshlets.reserve(indexCount / 3U);
+            firstMeshlets.reserve(geometryHeapAllocations.size());
+            for (const Mesh* mesh : uniqueMeshes) {
+                const auto allocation = geometryHeapAllocations.find(mesh);
+                if (allocation == geometryHeapAllocations.end() || mesh->meshlets.empty()) continue;
+                const std::uint32_t firstMeshlet = static_cast<std::uint32_t>(gpuMeshlets.size());
+                if (!Culling::appendMeshletPayload(*mesh, allocation->second.firstVertex, gpuMeshlets,
+                                                   meshletVertices, meshletTriangles)) {
+                    throw std::runtime_error("Invalid meshlet payload during GPU scene upload");
+                }
+                firstMeshlets.emplace(mesh, firstMeshlet);
+            }
+            globalMeshletCount = static_cast<std::uint32_t>(gpuMeshlets.size());
+            // Vulkan forbids zero-byte buffers. Bind an inert record in an
+            // empty scene so descriptor setup can remain branch-free.
+            const Culling::GpuMeshlet emptyMeshlet{};
+            const std::uint32_t emptyWord{};
+            meshletBuffer.destroy();
+            meshletVertexBuffer.destroy();
+            meshletTriangleBuffer.destroy();
+            meshletBuffer.createDeviceLocal(vulkanDevice.physical(), device,
+                gpuMeshlets.empty() ? static_cast<const void*>(&emptyMeshlet) : gpuMeshlets.data(),
+                sizeof(Culling::GpuMeshlet) * std::max<std::size_t>(1, gpuMeshlets.size()),
+                VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+                commandPool, vulkanDevice.graphicsQueue(), vulkanDevice.allocator());
+            meshletVertexBuffer.createDeviceLocal(vulkanDevice.physical(), device,
+                meshletVertices.empty() ? static_cast<const void*>(&emptyWord) : meshletVertices.data(),
+                sizeof(std::uint32_t) * std::max<std::size_t>(1, meshletVertices.size()),
+                VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+                commandPool, vulkanDevice.graphicsQueue(), vulkanDevice.allocator());
+            meshletTriangleBuffer.createDeviceLocal(vulkanDevice.physical(), device,
+                meshletTriangles.empty() ? static_cast<const void*>(&emptyWord) : meshletTriangles.data(),
+                sizeof(std::uint32_t) * std::max<std::size_t>(1, meshletTriangles.size()),
+                VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+                commandPool, vulkanDevice.graphicsQueue(), vulkanDevice.allocator());
+            // A topology rebuild replaces the shared meshlet SSBO. Existing
+            // per-frame descriptor sets remain valid only after this rebind.
+            if (cullingDescriptorPool != VK_NULL_HANDLE) {
+                for (std::uint32_t frame = 0; frame < MAX_FRAMES_IN_FLIGHT; ++frame)
+                    refreshGPUSceneDescriptors(frame);
+            }
             registry.view<Transform, MeshRenderer>(
                 [&](const Entity entity, const Transform&, MeshRenderer& renderer) {
                     if (!renderer.hasMesh()) {
@@ -445,6 +494,8 @@
                         resource->vertexCount = mesh->vertexCount();
                         resource->firstIndex = renderer.firstIndex;
                         resource->indexCount = mesh->indexCount();
+                        resource->meshletCount = static_cast<std::uint32_t>(mesh->meshlets.size());
+                        resource->firstMeshlet = firstMeshlets.contains(mesh) ? firstMeshlets.at(mesh) : 0U;
                         resource->bounds = localBounds;
                     }
                     // Culling must use the same parent-composed matrix as the
@@ -1060,6 +1111,24 @@
             vkUpdateDescriptorSets(device, static_cast<std::uint32_t>(instanceWrites.size()),
                                    instanceWrites.data(), 0, nullptr);
 
+            if (meshletCullSets[frame] != VK_NULL_HANDLE && meshletBuffer.handle() != VK_NULL_HANDLE) {
+                const VkDescriptorBufferInfo meshletInfos[] = {
+                    {meshletBuffer.handle(), 0, VK_WHOLE_SIZE},
+                    {visibleMeshletBuffers[frame].handle(), 0, VK_WHOLE_SIZE},
+                    {visibleMeshletCountBuffers[frame].handle(), 0, sizeof(std::uint32_t)},
+                    {meshletCullingUniformBuffers[frame].handle(), 0, sizeof(Culling::MeshletCullUniforms)},
+                };
+                VkWriteDescriptorSet meshletWrites[4]{};
+                for (std::uint32_t binding = 0; binding < std::size(meshletWrites); ++binding) {
+                    meshletWrites[binding] = {.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+                        .dstSet = meshletCullSets[frame], .dstBinding = binding, .descriptorCount = 1,
+                        .descriptorType = binding == 3 ? VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER
+                                                       : VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+                        .pBufferInfo = &meshletInfos[binding]};
+                }
+                vkUpdateDescriptorSets(device, std::size(meshletWrites), meshletWrites, 0, nullptr);
+            }
+
             const auto updateGrassSet = [&](const VkDescriptorSet set,
                                             std::initializer_list<VkBuffer> storageBuffers,
                                             const VkBuffer uniformBuffer) {
@@ -1658,6 +1727,23 @@
             cullingUniformBuffers[frame].update(&data, sizeof(data));
             data.drawCategory = 1;
             foliageCullingUniformBuffers[frame].update(&data, sizeof(data));
+        }
+
+        void updateMeshletCullingUniformBuffer(const uint32_t frame) const {
+            if (meshletCullingUniformBuffers[frame].handle() == VK_NULL_HANDLE ||
+                !cameraController.camera()) return;
+            Culling::MeshletCullUniforms data{};
+            const glm::mat4 viewProjection = cameraController.camera()->projectionMatrix().native() *
+                                             cameraController.camera()->viewMatrix().native();
+            std::memcpy(data.viewProjection.data, &viewProjection, sizeof(viewProjection));
+            const auto planes = extractFrustumPlanes(viewProjection);
+            for (std::size_t index = 0; index < planes.size(); ++index)
+                std::memcpy(&data.frustumPlanes[index], &planes[index], sizeof(planes[index]));
+            data.cameraX = cameraController.camera()->position().x();
+            data.cameraY = cameraController.camera()->position().y();
+            data.cameraZ = cameraController.camera()->position().z();
+            data.meshletCount = globalMeshletCount;
+            meshletCullingUniformBuffers[frame].update(&data, sizeof(data));
         }
 
         void updateSceneCullingUniformBuffer(const uint32_t frame) const {
