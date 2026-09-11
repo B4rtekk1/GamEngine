@@ -1035,6 +1035,7 @@
                                             std::initializer_list<VkBuffer> storageBuffers,
                                             const VkBuffer uniformBuffer) {
                 if (set == VK_NULL_HANDLE) return;
+
                 std::vector<VkDescriptorBufferInfo> infos;
                 infos.reserve(storageBuffers.size() + 1U);
                 for (const VkBuffer buffer : storageBuffers) infos.push_back({buffer, 0, VK_WHOLE_SIZE});
