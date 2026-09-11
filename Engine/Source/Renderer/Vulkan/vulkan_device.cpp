@@ -47,6 +47,9 @@ void VulkanDevice::create(VkInstance instance, VkSurfaceKHR surface) {
         allocatorInfo.physicalDevice = physicalDevice_;
         allocatorInfo.device = device_;
         allocatorInfo.instance = instance;
+        // VMA must allocate memory with DEVICE_ADDRESS support before a
+        // VkBuffer created with SHADER_DEVICE_ADDRESS_BIT can expose an address.
+        allocatorInfo.flags |= VMA_ALLOCATOR_CREATE_BUFFER_DEVICE_ADDRESS_BIT;
         if (memoryBudgetExtensionSupported_) {
             allocatorInfo.flags |= VMA_ALLOCATOR_CREATE_EXT_MEMORY_BUDGET_BIT;
         }
@@ -207,6 +210,7 @@ bool VulkanDevice::isSuitable(VkPhysicalDevice candidate) const {
         features12.timelineSemaphore != VK_TRUE ||
         features12.drawIndirectCount != VK_TRUE ||
         features12.shaderFloat16 != VK_TRUE ||
+        features12.bufferDeviceAddress != VK_TRUE ||
         features11.shaderDrawParameters != VK_TRUE ||
         features2.features.multiDrawIndirect != VK_TRUE ||
         features2.features.shaderInt16 != VK_TRUE ||
@@ -348,6 +352,7 @@ void VulkanDevice::createLogicalDevice() {
     features12.timelineSemaphore = VK_TRUE;
     features12.drawIndirectCount = VK_TRUE;
     features12.shaderFloat16 = VK_TRUE;
+    features12.bufferDeviceAddress = VK_TRUE;
     features12.descriptorIndexing = VK_TRUE;
     features12.runtimeDescriptorArray = VK_TRUE;
     features12.descriptorBindingPartiallyBound = VK_TRUE;

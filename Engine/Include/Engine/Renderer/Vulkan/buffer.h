@@ -9,6 +9,7 @@
 #include <vk_mem_alloc.h>
 
 #include <memory>
+#include <cstdint>
 #include <vector>
 
 namespace Engine {
@@ -65,7 +66,8 @@ public:
         VkDevice device,
         VkDeviceSize size,
         VkBufferUsageFlags usage,
-        VmaAllocator allocator);
+        VmaAllocator allocator,
+        bool enableDeviceAddress = false);
 
     /// Records a copy from the active UploadContext staging ring.
     void copyFromUploadRing(VkBuffer source, VkDeviceSize sourceOffset,
@@ -84,7 +86,8 @@ public:
         VkDevice device,
         VkDeviceSize size,
         VkBufferUsageFlags usage,
-        VmaAllocator allocator);
+        VmaAllocator allocator,
+        bool enableDeviceAddress = false);
 
     /**
      * @brief Copies data into the mapped host-visible allocation.
@@ -110,6 +113,11 @@ public:
      * @return The owned handle, or VK_NULL_HANDLE when no buffer was created.
      */
     [[nodiscard]] VkBuffer handle() const noexcept { return buffer_; }
+    /// Returns the stable GPU virtual address of this buffer, if requested at
+    /// creation time.  The address becomes invalid when the buffer is
+    /// destroyed or re-created.
+    [[nodiscard]] VkDeviceAddress deviceAddress() const noexcept;
+    [[nodiscard]] bool hasDeviceAddress() const noexcept { return deviceAddressEnabled_; }
     /// Allocated byte capacity. Geometry heaps use this to grow only when a
     /// new sub-allocation no longer fits; ordinary scene deltas never resize.
     [[nodiscard]] VkDeviceSize size() const noexcept { return size_; }
@@ -124,6 +132,7 @@ private:
         VkBufferUsageFlags usage;
         VkMemoryPropertyFlags properties;
         VmaAllocator allocator;
+        bool enableDeviceAddress{false};
     };
 
     VkDevice device_ = VK_NULL_HANDLE;
@@ -133,6 +142,7 @@ private:
     VmaAllocator allocator_ = VK_NULL_HANDLE;
     VkDeviceSize size_ = 0;
     void* mapped_ = nullptr;
+    bool deviceAddressEnabled_ = false;
     mutable std::uint64_t readyTimeline_ = 0;
 
     struct PendingUpload final {

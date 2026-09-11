@@ -7,6 +7,7 @@
 #include <glm/glm.hpp>
 
 #include "Engine/Core/Camera.h"
+#include "Engine/Renderer/Vulkan/GpuScene.h"
 #include "Engine/Renderer/Vulkan/shadow_map.h"
 
 namespace Engine {

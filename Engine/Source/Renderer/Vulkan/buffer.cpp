@@ -43,7 +43,7 @@ namespace Engine {
     void Buffer::createHostVisible([[maybe_unused]] const VkPhysicalDevice physicalDevice,
                                    const VkDevice device,
                                    const VkDeviceSize size, const VkBufferUsageFlags usage,
-                                   VmaAllocator allocator) {
+                                   VmaAllocator allocator, const bool enableDeviceAddress) {
         if (size == 0) {
             throw std::invalid_argument("Host-visible buffer requires non-zero size");
         }
@@ -51,15 +51,16 @@ namespace Engine {
             device, size, usage,
             static_cast<VkMemoryPropertyFlags>(VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT) |
             static_cast<VkMemoryPropertyFlags>(VK_MEMORY_PROPERTY_HOST_COHERENT_BIT),
-            allocator,
+            allocator, enableDeviceAddress,
         });
     }
 
     void Buffer::createDeviceLocalEmpty(const VkDevice device, const VkDeviceSize size,
-                                        const VkBufferUsageFlags usage, VmaAllocator allocator) {
+                                        const VkBufferUsageFlags usage, VmaAllocator allocator,
+                                        const bool enableDeviceAddress) {
         if (size == 0) throw std::invalid_argument("Device-local buffer requires non-zero size");
         create({device, size, usage | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
-                VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, allocator});
+                VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, allocator, enableDeviceAddress});
     }
 
     void Buffer::copyFromUploadRing(const VkBuffer source, const VkDeviceSize sourceOffset,
@@ -202,6 +203,16 @@ namespace Engine {
         device_ = VK_NULL_HANDLE;
         size_ = 0;
         mapped_ = nullptr;
+        deviceAddressEnabled_ = false;
+    }
+
+    VkDeviceAddress Buffer::deviceAddress() const noexcept {
+        if (!deviceAddressEnabled_ || device_ == VK_NULL_HANDLE || buffer_ == VK_NULL_HANDLE) return 0;
+        const VkBufferDeviceAddressInfo info{
+            .sType = VK_STRUCTURE_TYPE_BUFFER_DEVICE_ADDRESS_INFO,
+            .buffer = buffer_,
+        };
+        return vkGetBufferDeviceAddress(device_, &info);
     }
 
     Buffer::MemoryInfo Buffer::memoryInfo(const VkPhysicalDevice physicalDevice) const noexcept {
@@ -228,7 +239,10 @@ namespace Engine {
 
         VkBufferCreateInfo bufferInfo{VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
         bufferInfo.size = parameters.size;
+        deviceAddressEnabled_ = parameters.enableDeviceAddress ||
+            (parameters.usage & VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT) != 0;
         bufferInfo.usage = parameters.usage;
+        if (deviceAddressEnabled_) bufferInfo.usage |= VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT;
         bufferInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
         VmaAllocationCreateInfo allocationInfo{};
         constexpr VkMemoryPropertyFlags hostVisibleBit =

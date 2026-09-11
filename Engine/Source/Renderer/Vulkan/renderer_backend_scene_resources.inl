@@ -958,7 +958,7 @@
                     const VkDeviceSize required = recordSize * capacity;
                     if (buffer.handle() == VK_NULL_HANDLE || buffer.size() < required) {
                         buffer.createDeviceLocalEmpty(device, required,
-                            VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, vulkanDevice.allocator());
+                            VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, vulkanDevice.allocator(), true);
                     }
                 };
                 ensureCapacity(gpuSceneInstanceBuffers[frame], instances.size(), gpuSceneInstanceHighWater,
@@ -970,6 +970,7 @@
                 uploadGPUSceneSnapshot<GPUSceneInstanceRecord>(gpuSceneInstanceBuffers[frame], instances);
                 uploadGPUSceneSnapshot<GPUSceneMeshRecord>(gpuSceneMeshBuffers[frame], meshes);
                 uploadGPUSceneSnapshot<GPUSceneMaterialRecord>(gpuSceneMaterialBuffers[frame], databaseMaterials);
+                refreshGPUSceneRoot(frame);
                 sceneGpu.pendingDatabaseUploads[frame].clear();
             }
             sceneGpu.database.clearDirty();
@@ -985,6 +986,17 @@
             vkCmdPipelineBarrier(uploadContext.commandBuffer(), VK_PIPELINE_STAGE_TRANSFER_BIT,
                 VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT | VK_PIPELINE_STAGE_VERTEX_SHADER_BIT,
                 0, 1, &barrier, 0, nullptr, 0, nullptr);
+        }
+
+        void refreshGPUSceneRoot(const std::uint32_t frame) {
+            gpuSceneRoots[frame] = {
+                .objects = {gpuSceneInstanceBuffers[frame].deviceAddress()},
+                .materials = {gpuSceneMaterialBuffers[frame].deviceAddress()},
+                .meshes = {gpuSceneMeshBuffers[frame].deviceAddress()},
+                .objectCount = static_cast<std::uint32_t>(sceneGpu.database.instances().size()),
+                .materialCount = static_cast<std::uint32_t>(sceneGpu.database.materials().size()),
+                .meshCount = static_cast<std::uint32_t>(sceneGpu.database.meshes().size()),
+            };
         }
 
         // A frame owns its own GPU-scene snapshot.  drawFrame() only reaches
@@ -1004,7 +1016,7 @@
                     ? required + required / 2U
                     : std::max(required, buffer.size() * 2U);
                 buffer.createDeviceLocalEmpty(device, capacity,
-                    VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, vulkanDevice.allocator());
+                    VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, vulkanDevice.allocator(), true);
                 return true;
             };
 
@@ -1017,6 +1029,7 @@
             gpuSceneInstanceHighWater = std::max(gpuSceneInstanceHighWater, sceneGpu.database.instances().size());
             gpuSceneMeshHighWater = std::max(gpuSceneMeshHighWater, sceneGpu.database.meshes().size());
             gpuSceneMaterialHighWater = std::max(gpuSceneMaterialHighWater, sceneGpu.database.materials().size());
+            refreshGPUSceneRoot(frame);
             return instanceResized || meshResized || materialResized;
         }
 

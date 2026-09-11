@@ -133,6 +133,10 @@
         std::array<Buffer, MAX_FRAMES_IN_FLIGHT> gpuSceneInstanceBuffers;
         std::array<Buffer, MAX_FRAMES_IN_FLIGHT> gpuSceneMeshBuffers;
         std::array<Buffer, MAX_FRAMES_IN_FLIGHT> gpuSceneMaterialBuffers;
+        // CPU-side roots for the frame-local BDA scene tables.  The current
+        // descriptor path remains active until shaders consume this root via
+        // push constants.
+        std::array<GpuScene, MAX_FRAMES_IN_FLIGHT> gpuSceneRoots;
         // Retained across scene reloads so the next scene starts at the
         // largest GPU-scene table we have already observed, not at a tiny
         // default capacity which would immediately grow during rendering.
