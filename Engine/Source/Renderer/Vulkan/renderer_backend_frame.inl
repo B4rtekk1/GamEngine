@@ -824,24 +824,29 @@
             }
 
             if (renderGameViewport && hizEnabled) {
-                VkImageMemoryBarrier2 depthReady{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2};
-                depthReady.srcStageMask = VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT;
-                depthReady.srcAccessMask = VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
-                depthReady.dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
-                depthReady.dstAccessMask = VK_ACCESS_2_SHADER_SAMPLED_READ_BIT;
-                // The forward render pass already leaves depth in READ_ONLY.
-                // This barrier supplies visibility for the following compute
-                // pass without inventing an UNDEFINED transition.
-                depthReady.oldLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL;
-                depthReady.newLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL;
-                depthReady.image = msaa.enabled() ? hiZDepthBuffer.image() : depthBuffer.image();
-                depthReady.subresourceRange = {VK_IMAGE_ASPECT_DEPTH_BIT, 0, 1, 0, 1};
-                VkDependencyInfo depthDependency{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
-                depthDependency.imageMemoryBarrierCount = 1;
-                depthDependency.pImageMemoryBarriers = &depthReady;
-                vkCmdPipelineBarrier2(commandBuffer, &depthDependency);
-                // The forward pass has just written (or resolved) the depth source.
-                hiZPass.record(commandBuffer, hiZBuffer, true);
+                // This is the first production pass owned by RenderGraph. The
+                // imported depth state describes the preceding Forward pass;
+                // the graph therefore emits the exact late-depth -> compute
+                // sampled-read dependency before Hi-Z records its pyramid.
+                frameGraph.reset();
+                const VkExtent2D extent = swapchain.extent();
+                const RenderGraph::TextureDesc depthDesc{
+                    .extent = {extent.width, extent.height, 1},
+                    .format = msaa.enabled() ? hiZDepthBuffer.format() : depthBuffer.format(),
+                    .usage = VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
+                    .aspect = VK_IMAGE_ASPECT_DEPTH_BIT};
+                const auto depth = frameGraph.importTexture(
+                    "Forward depth", msaa.enabled() ? hiZDepthBuffer.image() : depthBuffer.image(), depthDesc,
+                    {.stage = VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT,
+                     .access = VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT,
+                     .layout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL,
+                     .write = true});
+                frameGraph.addPass("Hi-Z", [&](RenderGraph::PassBuilder& builder) {
+                    builder.read(depth, RenderGraph::TextureUsage::SampledReadCompute);
+                }, [this](const VkCommandBuffer buffer) {
+                    hiZPass.record(buffer, hiZBuffer, true);
+                });
+                frameGraph.execute(commandBuffer);
                 hiZValid = true;
             }
 

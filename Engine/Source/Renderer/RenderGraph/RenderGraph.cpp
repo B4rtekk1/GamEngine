@@ -5,7 +5,7 @@
 #include <stdexcept>
 #include <unordered_set>
 
-namespace Engine::Renderer {
+namespace Engine::RenderGraph {
     namespace {
         struct UsageInfo final {
             VkPipelineStageFlags2 stage;
@@ -17,7 +17,19 @@ namespace Engine::Renderer {
         [[nodiscard]] UsageInfo usageInfo(const TextureUsage usage) {
             switch (usage) {
                 case TextureUsage::SampledRead: return {
-                        VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, VK_ACCESS_2_SHADER_SAMPLED_READ_BIT,
+                        VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT, VK_ACCESS_2_SHADER_SAMPLED_READ_BIT,
+                        VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, false
+                    };
+                case TextureUsage::SampledReadVertex: return {
+                        VK_PIPELINE_STAGE_2_VERTEX_SHADER_BIT, VK_ACCESS_2_SHADER_SAMPLED_READ_BIT,
+                        VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, false
+                    };
+                case TextureUsage::SampledReadFragment: return {
+                        VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT, VK_ACCESS_2_SHADER_SAMPLED_READ_BIT,
+                        VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, false
+                    };
+                case TextureUsage::SampledReadCompute: return {
+                        VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_SAMPLED_READ_BIT,
                         VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, false
                     };
                 case TextureUsage::StorageRead: return {
@@ -27,6 +39,14 @@ namespace Engine::Renderer {
                 case TextureUsage::StorageWrite: return {
                         VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT | VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT,
                         VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT, VK_IMAGE_LAYOUT_GENERAL, true
+                    };
+                case TextureUsage::StorageReadCompute: return {
+                        VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_STORAGE_READ_BIT,
+                        VK_IMAGE_LAYOUT_GENERAL, false
+                    };
+                case TextureUsage::StorageWriteCompute: return {
+                        VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT,
+                        VK_IMAGE_LAYOUT_GENERAL, true
                     };
                 case TextureUsage::ColorAttachment: return {
                         VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
@@ -98,10 +118,10 @@ namespace Engine::Renderer {
     }
 
     TextureHandle RenderGraph::importTexture(std::string name, const VkImage image, const TextureDesc &desc,
-                                             const VkImageLayout initialLayout) {
+                                             const TextureState initialState) {
         if (image == VK_NULL_HANDLE) throw std::invalid_argument("Cannot import a null image into RenderGraph");
         if (compiled_) throw std::logic_error("Reset RenderGraph before adding resources");
-        resources_.push_back({std::move(name), desc, image, initialLayout, true});
+        resources_.push_back({std::move(name), desc, image, initialState, true});
         return {static_cast<std::uint32_t>(resources_.size() - 1)};
     }
 
@@ -332,10 +352,13 @@ namespace Engine::Renderer {
             bool write{};
         };
         std::vector<State> states(resources_.size());
-        for (std::uint32_t resource = 0; resource < resources_.size(); ++resource)
-            states[resource].layout = resources_[resource].initialLayout;
+        for (std::uint32_t resource = 0; resource < resources_.size(); ++resource) {
+            states[resource] = {resources_[resource].initialState.stage,
+                                 resources_[resource].initialState.access,
+                                 resources_[resource].initialState.layout,
+                                 resources_[resource].initialState.write};
+        }
         barriers_.assign(count, {});
-        bufferBarriers_.assign(count, {});
         for (std::uint32_t ordered = 0; ordered < count; ++ordered)
             for (const Access &access: passes_[order_[ordered]].accesses) {
                 auto &state = states[access.texture.index];
@@ -350,8 +373,9 @@ namespace Engine::Renderer {
                         // layout, but its physical image was used earlier in
                         // the frame. Preserve the discard transition while
                         // making that earlier use visible.
-                        barrier.srcStageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
-                        barrier.srcAccessMask = VK_ACCESS_2_MEMORY_READ_BIT | VK_ACCESS_2_MEMORY_WRITE_BIT;
+                        const State& predecessor = states[imageAliasPredecessor[access.texture.index]];
+                        barrier.srcStageMask = predecessor.stage;
+                        barrier.srcAccessMask = predecessor.access;
                     }
                     barrier.dstStageMask = next.stage;
                     barrier.dstAccessMask = next.access;
@@ -363,7 +387,7 @@ namespace Engine::Renderer {
                         resources_[access.texture.index].desc.mipLevels, 0,
                         resources_[access.texture.index].desc.arrayLayers
                     };
-                    barriers_[ordered].push_back({access.texture.index, barrier});
+                    barriers_[ordered].images.push_back(barrier);
                 }
                 state = {next.stage, next.access, next.layout, next.write};
             }
@@ -382,7 +406,7 @@ namespace Engine::Renderer {
                     barrier.buffer = buffers_[access.buffer.index].buffer;
                     barrier.offset = 0;
                     barrier.size = VK_WHOLE_SIZE;
-                    bufferBarriers_[ordered].push_back({access.buffer.index, barrier});
+                    barriers_[ordered].buffers.push_back(barrier);
                 }
                 state = {next.stage, next.access, next.write};
             }
@@ -395,13 +419,14 @@ namespace Engine::Renderer {
                 if (access.buffer.index != resource) continue;
                 const auto next = bufferUsageInfo(access.usage);
                 VkBufferMemoryBarrier2 barrier{VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER_2};
-                barrier.srcStageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
-                barrier.srcAccessMask = VK_ACCESS_2_MEMORY_READ_BIT | VK_ACCESS_2_MEMORY_WRITE_BIT;
+                const BufferState& predecessor = bufferStates[bufferAliasPredecessor[resource]];
+                barrier.srcStageMask = predecessor.stage;
+                barrier.srcAccessMask = predecessor.access;
                 barrier.dstStageMask = next.stage;
                 barrier.dstAccessMask = next.access;
                 barrier.buffer = buffers_[resource].buffer;
                 barrier.size = VK_WHOLE_SIZE;
-                bufferBarriers_[buffers_[resource].lifetime.firstPass].push_back({resource, barrier});
+                barriers_[buffers_[resource].lifetime.firstPass].buffers.push_back(barrier);
                 break;
             }
         }
@@ -504,24 +529,13 @@ namespace Engine::Renderer {
     void RenderGraph::execute(const VkCommandBuffer commandBuffer) {
         if (!compiled_) compile();
         for (std::uint32_t ordered = 0; ordered < order_.size(); ++ordered) {
-            std::vector<VkImageMemoryBarrier2> barriers;
-            std::vector<VkBufferMemoryBarrier2> bufferBarriers;
-            for (const auto &planned: barriers_[ordered]) {
-                if (planned.vk.image == VK_NULL_HANDLE) throw std::logic_error(
-                    "Transient RenderGraph allocation is not bound: " + resources_[planned.resource].name);
-                barriers.push_back(planned.vk);
-            }
-            for (const auto& planned: bufferBarriers_[ordered]) {
-                if (planned.vk.buffer == VK_NULL_HANDLE) throw std::logic_error(
-                    "Transient RenderGraph allocation is not bound: " + buffers_[planned.resource].name);
-                bufferBarriers.push_back(planned.vk);
-            }
-            if (!barriers.empty() || !bufferBarriers.empty()) {
+            const BarrierBatch& barriers = barriers_[ordered];
+            if (!barriers.images.empty() || !barriers.buffers.empty()) {
                 VkDependencyInfo dependency{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
-                dependency.bufferMemoryBarrierCount = static_cast<std::uint32_t>(bufferBarriers.size());
-                dependency.pBufferMemoryBarriers = bufferBarriers.data();
-                dependency.imageMemoryBarrierCount = static_cast<std::uint32_t>(barriers.size());
-                dependency.pImageMemoryBarriers = barriers.data();
+                dependency.bufferMemoryBarrierCount = static_cast<std::uint32_t>(barriers.buffers.size());
+                dependency.pBufferMemoryBarriers = barriers.buffers.data();
+                dependency.imageMemoryBarrierCount = static_cast<std::uint32_t>(barriers.images.size());
+                dependency.pImageMemoryBarriers = barriers.images.data();
                 vkCmdPipelineBarrier2(commandBuffer, &dependency);
             }
             if (const auto &callback = passes_[order_[ordered]].execute) callback(commandBuffer);
@@ -550,7 +564,6 @@ namespace Engine::Renderer {
         order_.clear();
         orderNames_.clear();
         barriers_.clear();
-        bufferBarriers_.clear();
         compiled_ = false;
     }
 
@@ -578,4 +591,4 @@ namespace Engine::Renderer {
         requireValid(buffer);
         return buffers_[buffer.index].buffer;
     }
-} // namespace Engine::Renderer
+} // namespace Engine::RenderGraph

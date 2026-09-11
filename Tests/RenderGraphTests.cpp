@@ -4,7 +4,7 @@
 
 #include <cstdint>
 
-namespace Engine::Renderer {
+namespace Engine::RenderGraph {
 namespace {
     constexpr TextureDesc ColorTarget{
         .extent = {1920, 1080, 1},

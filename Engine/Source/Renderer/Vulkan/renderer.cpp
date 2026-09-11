@@ -67,6 +67,7 @@
 #include "Engine/Renderer/Materials/MaterialBuffer.h"
 #include "Engine/Renderer/MeshRenderer.h"
 #include "Engine/Renderer/Particles/ParticleSystem.h"
+#include "Engine/Renderer/RenderGraph/RenderGraph.h"
 #include "Engine/Input/Input.h"
 #include "Engine/UI/Canvas.h"
 #include "Engine/UI/CanvasRenderer.h"

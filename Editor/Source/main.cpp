@@ -428,6 +428,10 @@ int main(int argc, char** argv) {
         TerrainSculptState terrainSculpt;
         std::string playSceneSnapshot;
         std::string playModeError;
+        // Restoring the editor snapshot replaces registry-owned render data.
+        // Its GPU resources are rebuilt at the start of the following loop,
+        // so never render the one intervening frame against stale buffers.
+        bool skipRendererFrameAfterSceneRestore = false;
         constexpr auto autoSaveInterval = std::chrono::seconds{30};
         auto lastAutoSaveAttempt = std::chrono::steady_clock::now();
         std::uint64_t lastPersistedSceneRevision = scene.editor().mutationRevision();
@@ -469,6 +473,7 @@ int main(int argc, char** argv) {
                     physicsAccumulator = 0.0;
                     showGameView = playing;
                     rendererReloadPending = !playing;
+                    skipRendererFrameAfterSceneRestore = !playing;
                     Editor::ConsolePanel::info(playing ? "Entered Play mode." : "Stopped Play mode.");
                 } else Editor::ConsolePanel::error("Could not change Play mode: " + playModeError);
             }
@@ -581,6 +586,7 @@ int main(int argc, char** argv) {
                     resolveShaderGraphMaterials();
                     setSelection(Engine::NullEntity);
                     rendererReloadPending = true;
+                    skipRendererFrameAfterSceneRestore = true;
                 }
                 Editor::ConsolePanel::info(playing ? "Entered Play mode." : "Stopped Play mode.");
                 return true;
@@ -899,15 +905,20 @@ int main(int argc, char** argv) {
                     [](const std::string& message) { Editor::ConsolePanel::warning(message); });
             }
             ImGui::Render();
+            const bool deferSceneGpuWork = skipRendererFrameAfterSceneRestore;
             {
                 GE_PROFILE_SCOPE("Renderer");
-                renderer.renderFrame();
+                if (!deferSceneGpuWork) {
+                    renderer.renderFrame();
+                }
             }
-            if (const auto gpu = renderer.gpuProfile()) {
-                Engine::Profiler::attachGpuFrame(gpu->frameNumber, gpu->frameMilliseconds, gpu->events);
+            if (!deferSceneGpuWork) {
+                if (const auto gpu = renderer.gpuProfile()) {
+                    Engine::Profiler::attachGpuFrame(gpu->frameNumber, gpu->frameMilliseconds, gpu->events);
+                }
             }
 
-            if (sceneResourceSyncPending || initialSceneSyncPending) {
+            if (!deferSceneGpuWork && (sceneResourceSyncPending || initialSceneSyncPending)) {
                 renderer.synchronizeScene(scene);
                 // Duplicated objects do not exist in the renderer's cached
                 // renderable list until synchronization completes. Reapply
@@ -915,6 +926,10 @@ int main(int argc, char** argv) {
                 if (sceneStructureChanged) renderer.setEditorSelection(selectedEntity);
                 initialSceneSyncPending = false;
             }
+            // renderer.reloadScene() runs at the next loop boundary, before
+            // any further drawFrame() or incremental upload sees the restored
+            // ECS snapshot.
+            skipRendererFrameAfterSceneRestore = false;
 
             // Do not let file parsing, GLTF decoding or image decompression
             // postpone the first editor frame. The worker builds an isolated

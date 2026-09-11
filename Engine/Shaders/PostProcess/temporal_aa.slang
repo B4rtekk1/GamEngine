@@ -20,7 +20,9 @@ float3 reinhard(float3 color) { return color / (color + 1.0); }
 float3 reinhardInverse(float3 color) { return color / max(1.0 - color, 1e-5); }
 float luminance(float3 color) { return max(dot(color, float3(0.299, 0.587, 0.114)), 1e-4); }
 
-// Nine-tap Catmull-Rom history reconstruction, as used by Godot's TAA resolve.
+// Five-tap Catmull-Rom-style history reconstruction. Four bilinear samples
+// coalesce the 4x4 cubic footprint; a small centre contribution suppresses
+// ringing from the negative Catmull-Rom lobes.
 float3 sampleHistoryCatmullRom(float2 uv, float2 resolution) {
     float2 samplePos = uv * resolution;
     float2 texPos1 = floor(samplePos - 0.5) + 0.5;
@@ -29,21 +31,19 @@ float3 sampleHistoryCatmullRom(float2 uv, float2 resolution) {
     float2 w1 = 1.0 + f * f * (-2.5 + 1.5 * f);
     float2 w2 = f * (0.5 + f * (2.0 - 1.5 * f));
     float2 w3 = f * f * (-0.5 + 0.5 * f);
-    float2 w12 = w1 + w2;
-    float2 texPos0 = (texPos1 - 1.0) / resolution;
-    float2 texPos3 = (texPos1 + 2.0) / resolution;
-    float2 texPos12 = (texPos1 + w2 / max(w12, 1e-5)) / resolution;
-    float3 result = 0.0;
-    result += historyFrame.Sample(float2(texPos0.x, texPos0.y)).rgb * w0.x * w0.y;
-    result += historyFrame.Sample(float2(texPos12.x, texPos0.y)).rgb * w12.x * w0.y;
-    result += historyFrame.Sample(float2(texPos3.x, texPos0.y)).rgb * w3.x * w0.y;
-    result += historyFrame.Sample(float2(texPos0.x, texPos12.y)).rgb * w0.x * w12.y;
-    result += historyFrame.Sample(float2(texPos12.x, texPos12.y)).rgb * w12.x * w12.y;
-    result += historyFrame.Sample(float2(texPos3.x, texPos12.y)).rgb * w3.x * w12.y;
-    result += historyFrame.Sample(float2(texPos0.x, texPos3.y)).rgb * w0.x * w3.y;
-    result += historyFrame.Sample(float2(texPos12.x, texPos3.y)).rgb * w12.x * w3.y;
-    result += historyFrame.Sample(float2(texPos3.x, texPos3.y)).rgb * w3.x * w3.y;
-    return max(result, 0.0);
+    const float2 w01 = w0 + w1;
+    const float2 w23 = w2 + w3;
+    const float2 uv01 = (texPos1 - 1.0 + w1 / max(w01, 1e-5)) / resolution;
+    const float2 uv23 = (texPos1 + 1.0 + w3 / max(w23, 1e-5)) / resolution;
+
+    float3 cubic = 0.0;
+    cubic += historyFrame.Sample(float2(uv01.x, uv01.y)).rgb * w01.x * w01.y;
+    cubic += historyFrame.Sample(float2(uv23.x, uv01.y)).rgb * w23.x * w01.y;
+    cubic += historyFrame.Sample(float2(uv01.x, uv23.y)).rgb * w01.x * w23.y;
+    cubic += historyFrame.Sample(float2(uv23.x, uv23.y)).rgb * w23.x * w23.y;
+
+    const float3 centre = historyFrame.Sample(uv).rgb;
+    return max(lerp(cubic, centre, 0.125), 0.0);
 }
 
 // Playdead/Godot AABB clipping avoids the colour shifts of per-channel clamp.
@@ -69,20 +69,22 @@ FragmentOutput fragmentMain(FragmentInput input) {
     const float2 velocitySample = velocityFrame.Sample(input.uv).xy;
 
     // Our velocity is current UV - previous UV, unlike Godot's convention.
-    // Velocity-less sky/particles instead use the projection-jitter delta.
-    const float2 jitterHistoryUv = input.uv - 0.5 * float2(
-        settings.currentJitterX - settings.previousJitterX,
-        settings.currentJitterY - settings.previousJitterY);
     const float2 historyUv = input.uv - velocitySample;
     const bool historyInBounds = all(historyUv >= 0.0) && all(historyUv <= 1.0);
 
-    float3 mean = 0.0;
-    float3 meanSquared = 0.0;
-    for (int y = -1; y <= 1; ++y) for (int x = -1; x <= 1; ++x) {
-        const float3 sample = currentFrame.Sample(input.uv + float2(x, y) * texel).rgb;
+    // Cross-shaped five-tap neighbourhood. Reuse `current` rather than
+    // sampling the centre again: 1 centre + 4 neighbours, not 9 fetches.
+    float3 mean = current;
+    float3 meanSquared = current * current;
+    const float2 offsets[4] = {
+        float2(-texel.x, 0.0), float2(texel.x, 0.0),
+        float2(0.0, -texel.y), float2(0.0, texel.y)
+    };
+    for (int i = 0; i < 4; ++i) {
+        const float3 sample = currentFrame.Sample(input.uv + offsets[i]).rgb;
         mean += sample; meanSquared += sample * sample;
     }
-    mean *= 1.0 / 9.0; meanSquared *= 1.0 / 9.0;
+    mean *= 0.2; meanSquared *= 0.2;
     const float varianceScale = clamp(1.1 * 1080.0 * settings.inverseHeight, 0.75, 1.0);
     const float3 deviation = sqrt(abs(meanSquared - mean * mean)) * varianceScale;
     float3 history = sampleHistoryCatmullRom(historyUv, resolution);

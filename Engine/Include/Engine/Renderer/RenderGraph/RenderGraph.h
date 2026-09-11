@@ -18,7 +18,7 @@
 #include <string>
 #include <vector>
 
-namespace Engine::Renderer {
+namespace Engine::RenderGraph {
 
     struct TextureHandle final {
         std::uint32_t index{std::numeric_limits<std::uint32_t>::max()};
@@ -35,8 +35,13 @@ namespace Engine::Renderer {
 
     enum class TextureUsage : std::uint8_t {
         SampledRead,
+        SampledReadVertex,
+        SampledReadFragment,
+        SampledReadCompute,
         StorageRead,
         StorageWrite,
+        StorageReadCompute,
+        StorageWriteCompute,
         ColorAttachment,
         DepthAttachment,
         TransferRead,
@@ -54,6 +59,14 @@ namespace Engine::Renderer {
         VkSampleCountFlagBits samples{VK_SAMPLE_COUNT_1_BIT};
 
         [[nodiscard]] bool compatibleWith(const TextureDesc& other) const noexcept;
+    };
+
+    /** The state in which an imported image enters this graph. */
+    struct TextureState final {
+        VkPipelineStageFlags2 stage{VK_PIPELINE_STAGE_2_NONE};
+        VkAccessFlags2 access{VK_ACCESS_2_NONE};
+        VkImageLayout layout{VK_IMAGE_LAYOUT_UNDEFINED};
+        bool write{};
     };
 
     struct TextureLifetime final {
@@ -103,7 +116,11 @@ namespace Engine::Renderer {
         void initialize(VkDevice device, VmaAllocator allocator);
 
         [[nodiscard]] TextureHandle importTexture(std::string name, VkImage image,
-            const TextureDesc& desc, VkImageLayout initialLayout = VK_IMAGE_LAYOUT_UNDEFINED);
+            const TextureDesc& desc, TextureState initialState = {});
+        [[nodiscard]] TextureHandle importTexture(std::string name, VkImage image,
+            const TextureDesc& desc, VkImageLayout initialLayout) {
+            return importTexture(std::move(name), image, desc, {.layout = initialLayout});
+        }
         [[nodiscard]] TextureHandle createTexture(std::string name, const TextureDesc& desc);
         [[nodiscard]] BufferHandle importBuffer(std::string name, VkBuffer buffer, const BufferDesc& desc);
         [[nodiscard]] BufferHandle createBuffer(std::string name, const BufferDesc& desc);
@@ -136,7 +153,7 @@ namespace Engine::Renderer {
             std::string name;
             TextureDesc desc;
             VkImage image{VK_NULL_HANDLE};
-            VkImageLayout initialLayout{VK_IMAGE_LAYOUT_UNDEFINED};
+            TextureState initialState{};
             bool imported{};
             TextureLifetime lifetime{};
         };
@@ -147,8 +164,13 @@ namespace Engine::Renderer {
             std::vector<BufferAccess> bufferAccesses;
             ExecuteCallback execute;
         };
-        struct Barrier final { std::uint32_t resource; VkImageMemoryBarrier2 vk; };
-        struct BufferBarrier final { std::uint32_t resource; VkBufferMemoryBarrier2 vk; };
+        // These are complete, physical Vulkan barriers after compile().  Keeping
+        // them contiguous means execute() only borrows their storage; it never
+        // builds per-pass vectors on the render thread.
+        struct BarrierBatch final {
+            std::vector<VkImageMemoryBarrier2> images;
+            std::vector<VkBufferMemoryBarrier2> buffers;
+        };
         struct TransientAllocation final { TextureDesc desc; VkImage image; VmaAllocation allocation; };
         struct TransientBufferAllocation final { BufferDesc desc; VkBuffer buffer; VmaAllocation allocation; };
         struct TopologyCache final {
@@ -173,8 +195,7 @@ namespace Engine::Renderer {
         std::vector<Pass> passes_;
         std::vector<std::uint32_t> order_;
         std::vector<std::string> orderNames_;
-        std::vector<std::vector<Barrier>> barriers_;
-        std::vector<std::vector<BufferBarrier>> bufferBarriers_;
+        std::vector<BarrierBatch> barriers_;
         // Pools outlive a logical graph. The index arrays lease one pool item
         // per allocation slot of the currently compiled graph.
         std::vector<TransientAllocation> transientAllocations_;
@@ -188,4 +209,4 @@ namespace Engine::Renderer {
         VmaAllocator allocator_{VK_NULL_HANDLE};
         bool compiled_{};
     };
-} // namespace Engine::Renderer
+} // namespace Engine::RenderGraph
