@@ -53,18 +53,36 @@ void main(uint3 dispatchThreadId : SV_DispatchThreadID)
     const uint instanceId = dispatchThreadId.x;
     uint instanceCount, instanceStride;
     instances.GetDimensions(instanceCount, instanceStride);
-    if (instanceId >= instanceCount) return;
-    const GPUSceneInstanceRecord instance = instances[instanceId];
-    // Bit 0 is the renderer visibility/alive bit; inactive slots never enter the list.
-    if ((instance.idsAndFlags.w & 1U) == 0U) return;
-    // Terrain grass is already submitted in terrain chunks.  Until the
-    // GPU-scene bounds path owns those chunk bounds, do not apply the
-    // per-blade frustum test here: a mismatched extracted bound must never
-    // make an entire grass field disappear in the game view.
-    const bool isGrass = (instance.idsAndFlags.w & 4u) != 0u;
-    if (!isGrass && culling.enableFrustumCulling != 0u && worldAabbOutsideFrustum(instance)) return;
-    uint destination;
-    InterlockedAdd(visibleCount[0], 1, destination);
+
+    // All lanes must reach the wave operations below.  In particular, the
+    // final, partially populated workgroup cannot return early before its
+    // subgroup has collectively reserved output storage.
+    bool visible = false;
+    if (instanceId < instanceCount)
+    {
+        const GPUSceneInstanceRecord instance = instances[instanceId];
+        // Bit 0 is the renderer visibility/alive bit; inactive slots never enter the list.
+        visible = (instance.idsAndFlags.w & 1U) != 0U;
+        // Terrain grass is already submitted in terrain chunks.  Until the
+        // GPU-scene bounds path owns those chunk bounds, do not apply the
+        // per-blade frustum test here: a mismatched extracted bound must never
+        // make an entire grass field disappear in the game view.
+        const bool isGrass = (instance.idsAndFlags.w & 4u) != 0u;
+        if (visible && !isGrass && culling.enableFrustumCulling != 0u)
+            visible = !worldAabbOutsideFrustum(instance);
+    }
+
+    // Compact visible IDs per implementation-defined subgroup. This uses one
+    // global atomic per subgroup, without assuming a 32-lane NVIDIA warp.
+    const uint visibleInWave = WaveActiveCountBits(visible);
+    uint waveBase = 0;
+    if (WaveIsFirstLane() && visibleInWave != 0)
+        InterlockedAdd(visibleCount[0], visibleInWave, waveBase);
+    waveBase = WaveReadLaneFirst(waveBase);
+
+    if (!visible) return;
+
+    const uint destination = waveBase + WavePrefixCountBits(visible);
     uint maxVisibleInstances, visibleStride;
     visibleInstances.GetDimensions(maxVisibleInstances, visibleStride);
     // Keep the GPU-scene ID here: the grass binning pass needs mesh/type flags
