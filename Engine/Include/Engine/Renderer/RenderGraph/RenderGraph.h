@@ -46,6 +46,14 @@ namespace Engine::RenderGraph {
         DepthAttachment,
         TransferRead,
         TransferWrite,
+        /**
+         * A render-pass wrapper performs its own attachment-layout
+         * transitions and leaves the image shader-readable.  This declaration
+         * still models its write hazard without duplicating those transitions.
+         */
+        ExternalColorWrite,
+        /** Same as ExternalColorWrite, but the wrapped render pass presents it. */
+        ExternalPresentWrite,
         Present,
     };
 
