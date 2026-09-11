@@ -1004,13 +1004,122 @@
             sceneGpu.database.clearDirty();
         }
 
+        // A frame owns its own GPU-scene snapshot.  drawFrame() only reaches
+        // this after waiting for that frame's fence, so replacing this frame's
+        // mapped buffers and rewriting its descriptors cannot invalidate work
+        // which is still executing on the GPU for another frame.
+        [[nodiscard]] bool ensureGPUSceneDatabaseCapacity(const std::uint32_t frame) {
+            const auto requiredBytes = [](const std::size_t count, const VkDeviceSize recordSize) {
+                return recordSize * std::max<std::size_t>(1, count);
+            };
+            const auto grow = [&](Buffer& buffer, const VkDeviceSize required) {
+                if (buffer.handle() != VK_NULL_HANDLE && buffer.size() >= required) return false;
+
+                // Keep the allocation amortized, but never allocate less than
+                // the complete snapshot that is about to be uploaded.
+                const VkDeviceSize capacity = buffer.handle() == VK_NULL_HANDLE
+                    ? required + required / 2U
+                    : std::max(required, buffer.size() * 2U);
+                buffer.createHostVisible(vulkanDevice.physical(), device, capacity,
+                    VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, vulkanDevice.allocator());
+                return true;
+            };
+
+            const bool instanceResized = grow(gpuSceneInstanceBuffers[frame], requiredBytes(
+                sceneGpu.database.instances().size(), sizeof(GPUSceneInstanceRecord)));
+            const bool meshResized = grow(gpuSceneMeshBuffers[frame], requiredBytes(
+                sceneGpu.database.meshes().size(), sizeof(GPUSceneMeshRecord)));
+            const bool materialResized = grow(gpuSceneMaterialBuffers[frame], requiredBytes(
+                sceneGpu.database.materials().size(), sizeof(GPUSceneMaterialRecord)));
+            return instanceResized || meshResized || materialResized;
+        }
+
+        void refreshGPUSceneDescriptors(const std::uint32_t frame) const {
+            // These are the only descriptors that directly retain GPU-scene
+            // buffers.  VkBuffer handles change when a mapped buffer grows.
+            if (cullingDescriptorPool == VK_NULL_HANDLE ||
+                instanceCullSets[frame] == VK_NULL_HANDLE) return;
+
+            const VkDescriptorBufferInfo instanceInfo{
+                gpuSceneInstanceBuffers[frame].handle(), 0, VK_WHOLE_SIZE};
+            const VkDescriptorBufferInfo visibleInfo{
+                visibleInstanceBuffers[frame].handle(), 0, VK_WHOLE_SIZE};
+            const VkDescriptorBufferInfo visibleCountInfo{
+                visibleInstanceCountBuffers[frame].handle(), 0, VK_WHOLE_SIZE};
+            const VkDescriptorBufferInfo cullingUniformInfo{
+                cullingUniformBuffers[frame].handle(), 0, sizeof(Culling::CullingUniformData)};
+            const std::array<const VkDescriptorBufferInfo*, 4> instanceInfos{
+                &instanceInfo, &visibleInfo, &visibleCountInfo, &cullingUniformInfo};
+            std::array<VkWriteDescriptorSet, 4> instanceWrites{};
+            for (std::uint32_t binding = 0; binding < instanceWrites.size(); ++binding) {
+                instanceWrites[binding] = {.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+                    .dstSet = instanceCullSets[frame], .dstBinding = binding, .descriptorCount = 1,
+                    .descriptorType = binding == 3 ? VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER
+                                                   : VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+                    .pBufferInfo = instanceInfos[binding]};
+            }
+            vkUpdateDescriptorSets(device, static_cast<std::uint32_t>(instanceWrites.size()),
+                                   instanceWrites.data(), 0, nullptr);
+
+            const auto updateGrassSet = [&](const VkDescriptorSet set,
+                                            std::initializer_list<VkBuffer> storageBuffers,
+                                            const VkBuffer uniformBuffer) {
+                if (set == VK_NULL_HANDLE) return;
+                std::vector<VkDescriptorBufferInfo> infos;
+                infos.reserve(storageBuffers.size() + 1U);
+                for (const VkBuffer buffer : storageBuffers) infos.push_back({buffer, 0, VK_WHOLE_SIZE});
+                infos.push_back({uniformBuffer, 0, VK_WHOLE_SIZE});
+                std::vector<VkWriteDescriptorSet> writes(infos.size());
+                for (std::uint32_t binding = 0; binding < writes.size(); ++binding) {
+                    writes[binding] = {.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+                        .dstSet = set, .dstBinding = binding, .descriptorCount = 1,
+                        .descriptorType = binding + 1 == writes.size() ? VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER
+                                                                         : VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+                        .pBufferInfo = &infos[binding]};
+                }
+                vkUpdateDescriptorSets(device, static_cast<std::uint32_t>(writes.size()),
+                                       writes.data(), 0, nullptr);
+            };
+            updateGrassSet(grassBuildSets[frame], {gpuSceneInstanceBuffers[frame].handle(),
+                visibleInstanceBuffers[frame].handle(), visibleInstanceCountBuffers[frame].handle(),
+                gpuSceneMeshBuffers[frame].handle(), grassBinCountBuffers[frame].handle()},
+                grassIndirectUniformBuffers[frame].handle());
+            updateGrassSet(grassScatterSets[frame], {gpuSceneInstanceBuffers[frame].handle(),
+                visibleInstanceBuffers[frame].handle(), visibleInstanceCountBuffers[frame].handle(),
+                grassBinOffsetBuffers[frame].handle(), grassBinCursorBuffers[frame].handle(),
+                compactGrassInstanceBuffers[frame].handle()}, grassIndirectUniformBuffers[frame].handle());
+            updateGrassSet(grassFinalizeSets[frame], {gpuSceneMeshBuffers[frame].handle(),
+                grassBinCountBuffers[frame].handle(), grassBinOffsetBuffers[frame].handle(),
+                grassIndirectBuffers[frame].handle(), grassDrawCountBuffers[frame].handle()},
+                grassIndirectUniformBuffers[frame].handle());
+        }
+
         void uploadPendingGPUSceneDatabase(const std::uint32_t frame) {
-            if (gpuSceneInstanceBuffers[frame].handle() == VK_NULL_HANDLE ||
-                gpuSceneMeshBuffers[frame].handle() == VK_NULL_HANDLE ||
-                gpuSceneMaterialBuffers[frame].handle() == VK_NULL_HANDLE) { return;
-}
             collectGPUSceneDatabaseChanges();
             auto& pending = sceneGpu.pendingDatabaseUploads[frame];
+            if (ensureGPUSceneDatabaseCapacity(frame)) {
+                // A replacement allocation has no old contents.  Upload the
+                // complete per-frame snapshot and repoint descriptors before
+                // any compute or draw command can consume it.
+                const auto& instances = sceneGpu.database.instances();
+                const auto& meshes = sceneGpu.database.meshes();
+                const auto& databaseMaterials = sceneGpu.database.materials();
+                for (std::size_t id = 0; id < instances.size(); ++id) {
+                    const auto record = gpuSceneRecord(instances[id]);
+                    gpuSceneInstanceBuffers[frame].update(&record, sizeof(record), sizeof(record) * id);
+                }
+                for (std::size_t id = 0; id < meshes.size(); ++id) {
+                    const auto record = gpuSceneRecord(meshes[id]);
+                    gpuSceneMeshBuffers[frame].update(&record, sizeof(record), sizeof(record) * id);
+                }
+                for (std::size_t id = 0; id < databaseMaterials.size(); ++id) {
+                    const auto record = gpuSceneRecord(databaseMaterials[id]);
+                    gpuSceneMaterialBuffers[frame].update(&record, sizeof(record), sizeof(record) * id);
+                }
+                refreshGPUSceneDescriptors(frame);
+                pending.clear();
+                return;
+            }
             const auto& instances = sceneGpu.database.instances();
             for (const GPUSceneInstanceId id : pending.instances) {
                 if (id >= instances.size()) continue;

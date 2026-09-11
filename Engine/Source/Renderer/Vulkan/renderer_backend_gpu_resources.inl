@@ -548,7 +548,6 @@
             }
             std::array<VkDescriptorSetLayout, MAX_FRAMES_IN_FLIGHT> instanceCullLayouts{};
             instanceCullLayouts.fill(instanceCullingDescriptorSetLayout);
-            std::array<VkDescriptorSet, MAX_FRAMES_IN_FLIGHT> instanceCullSets{};
             allocateInfo.descriptorSetCount = MAX_FRAMES_IN_FLIGHT;
             allocateInfo.pSetLayouts = instanceCullLayouts.data();
             if (vkAllocateDescriptorSets(device, &allocateInfo, instanceCullSets.data()) != VK_SUCCESS) {

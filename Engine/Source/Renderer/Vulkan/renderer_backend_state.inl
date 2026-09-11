@@ -314,6 +314,7 @@
         VkPipeline grassPackedScatterPipeline = VK_NULL_HANDLE;
         VkPipeline grassPackedFinalizePipeline = VK_NULL_HANDLE;
         VkPipeline clusteredLightingPipeline = VK_NULL_HANDLE;
+        std::array<VkDescriptorSet, MAX_FRAMES_IN_FLIGHT> instanceCullSets{};
         std::array<VkDescriptorSet, MAX_FRAMES_IN_FLIGHT> clusteredLightingSets{};
         std::array<VkDescriptorSet, MAX_FRAMES_IN_FLIGHT> sceneClusteredLightingSets{};
         std::array<VkDescriptorSet, MAX_FRAMES_IN_FLIGHT> grassBuildSets{};
