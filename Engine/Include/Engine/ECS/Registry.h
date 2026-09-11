@@ -162,8 +162,33 @@ namespace Engine {
             return m_renderTopologyRevision;
         }
 
+        /**
+         * Fine-grained renderer invalidation domains.  The legacy aggregate
+         * revision remains for observers which still need a complete draw-list
+         * rebuild, while retained GPU resources can subscribe to the smallest
+         * domain that changed.
+         */
+        [[nodiscard]] std::uint64_t instanceTopologyRevision() const noexcept {
+            return m_instanceTopologyRevision;
+        }
+        [[nodiscard]] std::uint64_t meshResourceRevision() const noexcept {
+            return m_meshResourceRevision;
+        }
+        [[nodiscard]] std::uint64_t materialBindingRevision() const noexcept {
+            return m_materialBindingRevision;
+        }
+        [[nodiscard]] std::uint64_t textureTableRevision() const noexcept {
+            return m_textureTableRevision;
+        }
+
         /** Use after a retained reference changes render-topology fields. */
-        void markRenderTopologyChanged() noexcept { ++m_renderTopologyRevision; }
+        void markRenderTopologyChanged() noexcept {
+            ++m_renderTopologyRevision;
+            ++m_instanceTopologyRevision;
+        }
+        void markMeshResourceChanged() noexcept { ++m_meshResourceRevision; }
+        void markMaterialBindingChanged() noexcept { ++m_materialBindingRevision; }
+        void markTextureTableChanged() noexcept { ++m_textureTableRevision; }
 
         /** Returns the revision of one concrete component type. */
         template<typename T>
@@ -316,8 +341,20 @@ namespace Engine {
             std::invoke(std::forward<Func>(func), component);
             markChanged<T>(entity);
             if constexpr (isRenderTopologyComponent<T>()) {
-                if (has<Transform>(entity) && topologyBefore != renderTopologyState(component)) {
+                const auto topologyAfter = renderTopologyState(component);
+                if (has<Transform>(entity) && topologyBefore != topologyAfter) {
                     markRenderTopologyChanged();
+                    if (topologyBefore.mesh != topologyAfter.mesh) {
+                        markMeshResourceChanged();
+                        markTextureTableChanged();
+                    }
+                    if constexpr (std::is_same_v<T, MeshRendererComponent>) {
+                        if (topologyBefore.pipeline != topologyAfter.pipeline ||
+                            topologyBefore.twoSided != topologyAfter.twoSided ||
+                            topologyBefore.alphaMode != topologyAfter.alphaMode) {
+                            markMaterialBindingChanged();
+                        }
+                    }
                 }
             }
         }
@@ -675,6 +712,10 @@ namespace Engine {
         std::uint64_t m_mutationRevision = 0;
         std::uint64_t m_structuralRevision = 0;
         std::uint64_t m_renderTopologyRevision = 0;
+        std::uint64_t m_instanceTopologyRevision = 0;
+        std::uint64_t m_meshResourceRevision = 0;
+        std::uint64_t m_materialBindingRevision = 0;
+        std::uint64_t m_textureTableRevision = 0;
         std::uint32_t m_mutableViewDepth = 0;
     };
 }
