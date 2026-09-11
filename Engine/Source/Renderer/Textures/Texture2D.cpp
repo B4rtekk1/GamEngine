@@ -305,7 +305,7 @@ Texture2D &Texture2D::operator=(Texture2D &&other) noexcept {
 
             if (upload != nullptr) {
                 copy_pixels_in_chunks(*upload, image_, width_, height_, bytesPerPixel, rgbaPixels);
-                commandBuffer = upload->commandBuffer();
+                commandBuffer = upload->graphicsCommandBuffer();
             } else {
                 VkBufferImageCopy copy{};
                 copy.bufferOffset = stagingOffset;
@@ -484,7 +484,7 @@ Texture2D &Texture2D::operator=(Texture2D &&other) noexcept {
                             0, VK_ACCESS_TRANSFER_WRITE_BIT, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT);
             if (upload != nullptr) {
                 copy_cooked_in_chunks(*upload, image_, texture);
-                commandBuffer = upload->commandBuffer();
+                commandBuffer = upload->graphicsCommandBuffer();
             } else {
                 std::vector<VkBufferImageCopy> regions;
                 regions.reserve(texture.mips.size());
@@ -587,7 +587,7 @@ Texture2D &Texture2D::operator=(Texture2D &&other) noexcept {
                             VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 0, VK_ACCESS_TRANSFER_WRITE_BIT,
                             VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT);
             copy_gtex_mips_to_ring(*upload, image_, texture, firstResidentMip);
-            transitionImage(upload->commandBuffer(), image_, 0, mipLevels_, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+            transitionImage(upload->graphicsCommandBuffer(), image_, 0, mipLevels_, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
                             VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_ACCESS_TRANSFER_WRITE_BIT,
                             VK_ACCESS_SHADER_READ_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT);
             readyTimeline_ = upload->pendingTicket().timelineValue;

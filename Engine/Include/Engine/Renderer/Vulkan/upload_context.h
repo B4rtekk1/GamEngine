@@ -34,7 +34,8 @@ public:
 
     UploadContext() = default; ~UploadContext();
     UploadContext(const UploadContext&) = delete; UploadContext& operator=(const UploadContext&) = delete;
-    void create(VkDevice device, VkQueue queue, uint32_t family, uint32_t graphicsFamily, uint32_t computeFamily,
+    void create(VkDevice device, VkQueue transferQueue, uint32_t transferFamily, VkQueue graphicsQueue,
+                uint32_t graphicsFamily, uint32_t computeFamily,
                 VmaAllocator allocator, VkDeviceSize bytes = 32ull * 1024 * 1024);
     void destroy() noexcept;
     /// Starts an explicit upload batch. Resources created while it is active
@@ -43,6 +44,10 @@ public:
     void begin();
     [[nodiscard]] Slice allocate(VkDeviceSize size, VkDeviceSize alignment = 16);
     void copyBuffer(VkBuffer destination, const void* data, VkDeviceSize size, VkDeviceSize destinationOffset = 0);
+    /// Records work which must execute on the graphics queue (mip blits and
+    /// shader-visible image transitions).  On a shared queue this is the copy
+    /// command buffer, so callers do not need a special fallback path.
+    [[nodiscard]] VkCommandBuffer graphicsCommandBuffer();
     [[nodiscard]] VkCommandBuffer commandBuffer() const noexcept { return commandBuffer_; }
     [[nodiscard]] UploadTicket submit();
     /// Ticket that will be signalled by the batch currently being recorded.
@@ -68,10 +73,12 @@ public:
     static UploadContext* current() noexcept;
     static void setCurrent(UploadContext* context) noexcept;
 private:
-    struct Submitted { VkCommandBuffer commandBuffer{}; uint64_t value{}; };
-    VkDevice device_{}; VkQueue queue_{}; uint32_t queueFamily_{}; uint32_t graphicsFamily_{}; uint32_t computeFamily_{}; VmaAllocator allocator_{}; VkBuffer staging_{}; VmaAllocation allocation_{}; void* mapped_{};
+    struct Submitted { VkCommandBuffer copyCommandBuffer{}; VkCommandBuffer graphicsCommandBuffer{}; uint64_t value{}; };
+    VkDevice device_{}; VkQueue queue_{}; VkQueue graphicsQueue_{}; uint32_t queueFamily_{}; uint32_t graphicsFamily_{}; uint32_t computeFamily_{}; VmaAllocator allocator_{}; VkBuffer staging_{}; VmaAllocation allocation_{}; void* mapped_{};
     VkDeviceSize capacity_{}; VkDeviceSize head_{}; VkCommandPool pool_{};
-    VkCommandBuffer commandBuffer_{}; VkSemaphore timeline_{}; uint64_t nextValue_{1};
+    VkCommandPool graphicsPool_{}; VkCommandBuffer commandBuffer_{}; VkCommandBuffer graphicsCommandBuffer_{};
+    VkSemaphore timeline_{}; VkSemaphore copyTimeline_{}; uint64_t nextValue_{1};
+    bool splitQueues_{};
     bool recording_{};
     std::vector<Submitted> submitted_;
     void reclaim() noexcept;
