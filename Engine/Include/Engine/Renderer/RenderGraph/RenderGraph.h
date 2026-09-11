@@ -2,7 +2,7 @@
 
 /**
  * @file RenderGraph.h
- * @brief Declarative, single-queue Vulkan frame-graph compiler.
+ * @brief Declarative Vulkan frame-graph compiler with queue-aware dependencies.
  *
  * A graph owns only the declarations made for one frame. Imported images stay
  * owned by their existing wrappers.  Physical transient allocations belong to
@@ -19,6 +19,8 @@
 #include <vector>
 
 namespace Engine::RenderGraph {
+
+    enum class Queue : std::uint8_t { Graphics, AsyncCompute, Transfer };
 
     struct TextureHandle final {
         std::uint32_t index{std::numeric_limits<std::uint32_t>::max()};
@@ -82,6 +84,14 @@ namespace Engine::RenderGraph {
     };
     struct BufferLifetime final { std::uint32_t firstPass{}; std::uint32_t lastPass{}; std::uint32_t allocationSlot{}; };
 
+    /** A semaphore dependency that must be honoured when passes use different queues. */
+    struct QueueDependency final {
+        std::uint32_t producerPass{};
+        std::uint32_t consumerPass{};
+        Queue producerQueue{Queue::Graphics};
+        Queue consumerQueue{Queue::Graphics};
+    };
+
     class RenderGraph;
 
     class PassBuilder final {
@@ -127,11 +137,18 @@ namespace Engine::RenderGraph {
 
         void addPass(std::string name, const std::function<void(PassBuilder&)>& setup,
                      ExecuteCallback execute);
+        void addPass(std::string name, Queue queue, const std::function<void(PassBuilder&)>& setup,
+                     ExecuteCallback execute);
+
+        /** Sets queue-family indices used for ownership transfers. Call before compile(). */
+        void setQueueFamily(Queue queue, std::uint32_t family) noexcept;
 
         /** Validates resource declarations and computes order, lifetimes and barriers. */
         void compile();
         /** Emits automatic barriers immediately before each pass callback. */
         void execute(VkCommandBuffer commandBuffer);
+        /** Emits only work assigned to queue. Cross-queue acquire/release barriers are included. */
+        void execute(Queue queue, VkCommandBuffer commandBuffer);
         /**
          * Starts a new logical frame. The caller must ensure commands using
          * the previous graph have completed before reusing the pool.
@@ -141,6 +158,7 @@ namespace Engine::RenderGraph {
         void trimTransientPool() noexcept;
 
         [[nodiscard]] const std::vector<std::string>& executionOrder() const noexcept;
+        [[nodiscard]] const std::vector<QueueDependency>& queueDependencies() const noexcept;
         [[nodiscard]] const TextureLifetime& lifetime(TextureHandle texture) const;
         [[nodiscard]] const BufferLifetime& lifetime(BufferHandle buffer) const;
         [[nodiscard]] VkImage image(TextureHandle texture) const;
@@ -160,6 +178,7 @@ namespace Engine::RenderGraph {
         struct BufferResource final { std::string name; BufferDesc desc; VkBuffer buffer{VK_NULL_HANDLE}; bool imported{}; BufferLifetime lifetime{}; };
         struct Pass final {
             std::string name;
+            Queue queue{Queue::Graphics};
             std::vector<Access> accesses;
             std::vector<BufferAccess> bufferAccesses;
             ExecuteCallback execute;
@@ -196,6 +215,8 @@ namespace Engine::RenderGraph {
         std::vector<std::uint32_t> order_;
         std::vector<std::string> orderNames_;
         std::vector<BarrierBatch> barriers_;
+        std::vector<BarrierBatch> releaseBarriers_;
+        std::vector<QueueDependency> queueDependencies_;
         // Pools outlive a logical graph. The index arrays lease one pool item
         // per allocation slot of the currently compiled graph.
         std::vector<TransientAllocation> transientAllocations_;
@@ -207,6 +228,7 @@ namespace Engine::RenderGraph {
         std::vector<TopologyCache> topologyCaches_;
         VkDevice device_{VK_NULL_HANDLE};
         VmaAllocator allocator_{VK_NULL_HANDLE};
+        std::uint32_t queueFamilies_[3]{VK_QUEUE_FAMILY_IGNORED, VK_QUEUE_FAMILY_IGNORED, VK_QUEUE_FAMILY_IGNORED};
         bool compiled_{};
     };
 } // namespace Engine::RenderGraph

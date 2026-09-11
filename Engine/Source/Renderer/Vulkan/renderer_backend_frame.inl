@@ -841,18 +841,20 @@
                      .access = VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT,
                      .layout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL,
                      .write = true});
-                frameGraph.addPass("Hi-Z", [&](RenderGraph::PassBuilder& builder) {
+                const bool canSubmitHiZAsync = vulkanDevice.hasAsyncComputeQueue() &&
+                    vulkanDevice.computeQueueFamily() == vulkanDevice.graphicsQueueFamily();
+                frameGraph.setQueueFamily(RenderGraph::Queue::Graphics, vulkanDevice.graphicsQueueFamily());
+                frameGraph.setQueueFamily(RenderGraph::Queue::AsyncCompute, vulkanDevice.computeQueueFamily());
+                frameGraph.addPass("Hi-Z", canSubmitHiZAsync ? RenderGraph::Queue::AsyncCompute : RenderGraph::Queue::Graphics,
+                [&](RenderGraph::PassBuilder& builder) {
                     builder.read(depth, RenderGraph::TextureUsage::SampledReadCompute);
                 }, [this](const VkCommandBuffer buffer) {
                     hiZPass.record(buffer, hiZBuffer, true);
                 });
-                // The imported depth resource is exclusive to graphics in
-                // this renderer. A same-family compute queue needs no queue
-                // ownership transfer, so it can safely execute this pass on
-                // a distinct VkQueue. A dedicated family falls back until the
-                // graph also emits release/acquire ownership barriers.
-                const bool canSubmitHiZAsync = vulkanDevice.hasAsyncComputeQueue() &&
-                    vulkanDevice.computeQueueFamily() == vulkanDevice.graphicsQueueFamily();
+                // Depth is produced outside this graph by Forward. Until that
+                // producer is graph-owned too, async Hi-Z is restricted to a
+                // same-family compute queue; RenderGraph already handles
+                // ownership release/acquire for graph-to-graph edges.
                 if (canSubmitHiZAsync) {
                     // Close the producer batch now. The remaining post work
                     // is recorded in a second graphics command buffer and can
@@ -866,7 +868,7 @@
                     if (vkBeginCommandBuffer(asyncBuffer, &begin) != VK_SUCCESS) {
                         throw std::runtime_error("Could not begin async Hi-Z command buffer");
                     }
-                    frameGraph.execute(asyncBuffer);
+                    frameGraph.execute(RenderGraph::Queue::AsyncCompute, asyncBuffer);
                     if (vkEndCommandBuffer(asyncBuffer) != VK_SUCCESS) {
                         throw std::runtime_error("Could not end async Hi-Z command buffer");
                     }

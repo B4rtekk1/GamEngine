@@ -157,10 +157,19 @@ namespace Engine::RenderGraph {
 
     void RenderGraph::addPass(std::string name, const std::function<void(PassBuilder &)> &setup,
                               ExecuteCallback execute) {
+        addPass(std::move(name), Queue::Graphics, setup, std::move(execute));
+    }
+
+    void RenderGraph::addPass(std::string name, const Queue queue, const std::function<void(PassBuilder &)> &setup,
+                              ExecuteCallback execute) {
         if (compiled_) throw std::logic_error("Reset RenderGraph before adding passes");
-        passes_.push_back({std::move(name), {}, {}, std::move(execute)});
+        passes_.push_back({std::move(name), queue, {}, {}, std::move(execute)});
         PassBuilder builder{*this, static_cast<std::uint32_t>(passes_.size() - 1)};
         setup(builder);
+    }
+
+    void RenderGraph::setQueueFamily(const Queue queue, const std::uint32_t family) noexcept {
+        queueFamilies_[static_cast<std::uint32_t>(queue)] = family;
     }
 
     void RenderGraph::requireValid(const TextureHandle texture) const {
@@ -213,6 +222,7 @@ namespace Engine::RenderGraph {
         }
         for (const auto& resource: buffers_) { mix(resource.imported); mix(resource.desc.size); mix(resource.desc.usage); }
         for (const auto& pass: passes_) {
+            mix(static_cast<std::uint8_t>(pass.queue));
             mix(pass.accesses.size()); mix(pass.bufferAccesses.size());
             for (const auto& access: pass.accesses) { mix(access.texture.index); mix(static_cast<std::uint8_t>(access.usage)); mix(access.write); }
             for (const auto& access: pass.bufferAccesses) { mix(access.buffer.index); mix(static_cast<std::uint8_t>(access.usage)); mix(access.write); }
@@ -267,6 +277,34 @@ namespace Engine::RenderGraph {
             topologyCaches_.push_back({signature, order_, true});
         }
         for (const auto pass: order_) orderNames_.push_back(passes_[pass].name);
+
+        // Keep the cross-queue edges separately from the topological order.
+        // The submitter turns each of these into a timeline wait/signal pair;
+        // multiple resource hazards between the same two passes collapse here.
+        queueDependencies_.clear();
+        std::unordered_set<std::uint64_t> seenQueueEdges;
+        const auto addQueueEdge = [&](const std::uint32_t producer, const std::uint32_t consumer) {
+            if (producer == consumer || passes_[producer].queue == passes_[consumer].queue) return;
+            const auto key = (static_cast<std::uint64_t>(producer) << 32U) | consumer;
+            if (seenQueueEdges.insert(key).second)
+                queueDependencies_.push_back({producer, consumer, passes_[producer].queue, passes_[consumer].queue});
+        };
+        std::vector<std::int32_t> dependencyWriter(resources_.size(), -1);
+        std::vector<std::vector<std::uint32_t>> dependencyReaders(resources_.size());
+        std::vector<std::int32_t> dependencyBufferWriter(buffers_.size(), -1);
+        std::vector<std::vector<std::uint32_t>> dependencyBufferReaders(buffers_.size());
+        for (std::uint32_t pass = 0; pass < count; ++pass) {
+            for (const auto& access: passes_[pass].accesses) {
+                const auto resource = access.texture.index;
+                if (!access.write) { if (dependencyWriter[resource] >= 0) addQueueEdge(dependencyWriter[resource], pass); dependencyReaders[resource].push_back(pass); }
+                else { if (dependencyWriter[resource] >= 0) addQueueEdge(dependencyWriter[resource], pass); for (const auto reader: dependencyReaders[resource]) addQueueEdge(reader, pass); dependencyReaders[resource].clear(); dependencyWriter[resource] = static_cast<std::int32_t>(pass); }
+            }
+            for (const auto& access: passes_[pass].bufferAccesses) {
+                const auto resource = access.buffer.index;
+                if (!access.write) { if (dependencyBufferWriter[resource] >= 0) addQueueEdge(dependencyBufferWriter[resource], pass); dependencyBufferReaders[resource].push_back(pass); }
+                else { if (dependencyBufferWriter[resource] >= 0) addQueueEdge(dependencyBufferWriter[resource], pass); for (const auto reader: dependencyBufferReaders[resource]) addQueueEdge(reader, pass); dependencyBufferReaders[resource].clear(); dependencyBufferWriter[resource] = static_cast<std::int32_t>(pass); }
+            }
+        }
 
         for (auto &resource: resources_) resource.lifetime = {count, 0, 0};
         for (std::uint32_t ordered = 0; ordered < count; ++ordered)
@@ -350,6 +388,8 @@ namespace Engine::RenderGraph {
             VkAccessFlags2 access{};
             VkImageLayout layout{};
             bool write{};
+            Queue queue{Queue::Graphics};
+            std::int32_t pass{-1};
         };
         std::vector<State> states(resources_.size());
         for (std::uint32_t resource = 0; resource < resources_.size(); ++resource) {
@@ -359,14 +399,41 @@ namespace Engine::RenderGraph {
                                  resources_[resource].initialState.write};
         }
         barriers_.assign(count, {});
+        releaseBarriers_.assign(count, {});
         for (std::uint32_t ordered = 0; ordered < count; ++ordered)
             for (const Access &access: passes_[order_[ordered]].accesses) {
                 auto &state = states[access.texture.index];
                 const auto next = usageInfo(access.usage);
+                const Queue nextQueue = passes_[order_[ordered]].queue;
+                const bool crossQueue = state.queue != nextQueue;
                 if (state.layout != next.layout || state.write || next.write) {
                     VkImageMemoryBarrier2 barrier{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2};
                     barrier.srcStageMask = state.stage;
                     barrier.srcAccessMask = state.access;
+                    if (crossQueue) {
+                        // Semaphore wait supplies availability; the acquire barrier only
+                        // needs the destination scope. A release is emitted after producer.
+                        barrier.srcStageMask = VK_PIPELINE_STAGE_2_NONE;
+                        barrier.srcAccessMask = VK_ACCESS_2_NONE;
+                        const auto sourceFamily = queueFamilies_[static_cast<std::uint32_t>(state.queue)];
+                        const auto destinationFamily = queueFamilies_[static_cast<std::uint32_t>(nextQueue)];
+                        if (state.pass >= 0 && sourceFamily != VK_QUEUE_FAMILY_IGNORED && destinationFamily != VK_QUEUE_FAMILY_IGNORED && sourceFamily != destinationFamily) {
+                            VkImageMemoryBarrier2 release = barrier;
+                            release.srcStageMask = state.stage;
+                            release.srcAccessMask = state.access;
+                            release.dstStageMask = VK_PIPELINE_STAGE_2_NONE;
+                            release.dstAccessMask = VK_ACCESS_2_NONE;
+                            release.oldLayout = state.layout;
+                            release.newLayout = next.layout;
+                            release.srcQueueFamilyIndex = sourceFamily;
+                            release.dstQueueFamilyIndex = destinationFamily;
+                            releaseBarriers_[state.pass].images.push_back(release);
+                            barrier.oldLayout = next.layout;
+                            barrier.newLayout = next.layout;
+                            barrier.srcQueueFamilyIndex = sourceFamily;
+                            barrier.dstQueueFamilyIndex = destinationFamily;
+                        }
+                    }
                     if (state.stage == VK_PIPELINE_STAGE_2_NONE &&
                         imageAliasPredecessor[access.texture.index] != std::numeric_limits<std::uint32_t>::max()) {
                         // This logical resource starts with an undefined
@@ -389,18 +456,34 @@ namespace Engine::RenderGraph {
                     };
                     barriers_[ordered].images.push_back(barrier);
                 }
-                state = {next.stage, next.access, next.layout, next.write};
+                state = {next.stage, next.access, next.layout, next.write, nextQueue, static_cast<std::int32_t>(ordered)};
             }
-        struct BufferState { VkPipelineStageFlags2 stage{}; VkAccessFlags2 access{}; bool write{}; };
+        struct BufferState { VkPipelineStageFlags2 stage{}; VkAccessFlags2 access{}; bool write{}; Queue queue{Queue::Graphics}; std::int32_t pass{-1}; };
         std::vector<BufferState> bufferStates(buffers_.size());
         for (std::uint32_t ordered = 0; ordered < count; ++ordered)
             for (const auto& access: passes_[order_[ordered]].bufferAccesses) {
                 auto& state = bufferStates[access.buffer.index];
                 const auto next = bufferUsageInfo(access.usage);
+                const Queue nextQueue = passes_[order_[ordered]].queue;
+                const bool crossQueue = state.queue != nextQueue;
                 if (state.write || next.write) {
                     VkBufferMemoryBarrier2 barrier{VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER_2};
                     barrier.srcStageMask = state.stage;
                     barrier.srcAccessMask = state.access;
+                    if (crossQueue) {
+                        barrier.srcStageMask = VK_PIPELINE_STAGE_2_NONE;
+                        barrier.srcAccessMask = VK_ACCESS_2_NONE;
+                        const auto sourceFamily = queueFamilies_[static_cast<std::uint32_t>(state.queue)];
+                        const auto destinationFamily = queueFamilies_[static_cast<std::uint32_t>(nextQueue)];
+                        if (state.pass >= 0 && sourceFamily != VK_QUEUE_FAMILY_IGNORED && destinationFamily != VK_QUEUE_FAMILY_IGNORED && sourceFamily != destinationFamily) {
+                            VkBufferMemoryBarrier2 release = barrier;
+                            release.srcStageMask = state.stage; release.srcAccessMask = state.access;
+                            release.dstStageMask = VK_PIPELINE_STAGE_2_NONE; release.dstAccessMask = VK_ACCESS_2_NONE;
+                            release.srcQueueFamilyIndex = sourceFamily; release.dstQueueFamilyIndex = destinationFamily;
+                            releaseBarriers_[state.pass].buffers.push_back(release);
+                            barrier.srcQueueFamilyIndex = sourceFamily; barrier.dstQueueFamilyIndex = destinationFamily;
+                        }
+                    }
                     barrier.dstStageMask = next.stage;
                     barrier.dstAccessMask = next.access;
                     barrier.buffer = buffers_[access.buffer.index].buffer;
@@ -408,7 +491,7 @@ namespace Engine::RenderGraph {
                     barrier.size = VK_WHOLE_SIZE;
                     barriers_[ordered].buffers.push_back(barrier);
                 }
-                state = {next.stage, next.access, next.write};
+                state = {next.stage, next.access, next.write, nextQueue, static_cast<std::int32_t>(ordered)};
             }
         // A reused slot is a real Vulkan alias: its previous logical buffer may
         // have left writes in cache.  The per-resource state above deliberately
@@ -542,6 +625,28 @@ namespace Engine::RenderGraph {
         }
     }
 
+    void RenderGraph::execute(const Queue queue, const VkCommandBuffer commandBuffer) {
+        if (!compiled_) compile();
+        const auto emit = [commandBuffer](const BarrierBatch& batch) {
+            if (batch.images.empty() && batch.buffers.empty()) return;
+            VkDependencyInfo dependency{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
+            dependency.bufferMemoryBarrierCount = static_cast<std::uint32_t>(batch.buffers.size());
+            dependency.pBufferMemoryBarriers = batch.buffers.data();
+            dependency.imageMemoryBarrierCount = static_cast<std::uint32_t>(batch.images.size());
+            dependency.pImageMemoryBarriers = batch.images.data();
+            vkCmdPipelineBarrier2(commandBuffer, &dependency);
+        };
+        for (std::uint32_t ordered = 0; ordered < order_.size(); ++ordered) {
+            const Pass& pass = passes_[order_[ordered]];
+            if (pass.queue != queue) continue;
+            emit(barriers_[ordered]);
+            if (pass.execute) pass.execute(commandBuffer);
+            // Ownership release must be recorded by the producing queue, after
+            // its callback and before its timeline value is signalled.
+            emit(releaseBarriers_[ordered]);
+        }
+    }
+
     void RenderGraph::destroyTransientPool() noexcept {
         if (allocator_ != VK_NULL_HANDLE)
             for (const auto &allocation: transientAllocations_)
@@ -564,12 +669,15 @@ namespace Engine::RenderGraph {
         order_.clear();
         orderNames_.clear();
         barriers_.clear();
+        releaseBarriers_.clear();
+        queueDependencies_.clear();
         compiled_ = false;
     }
 
     void RenderGraph::trimTransientPool() noexcept { destroyTransientPool(); }
 
     const std::vector<std::string> &RenderGraph::executionOrder() const noexcept { return orderNames_; }
+    const std::vector<QueueDependency>& RenderGraph::queueDependencies() const noexcept { return queueDependencies_; }
 
     const TextureLifetime &RenderGraph::lifetime(const TextureHandle texture) const {
         requireValid(texture);

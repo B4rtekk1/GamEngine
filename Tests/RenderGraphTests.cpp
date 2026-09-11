@@ -83,4 +83,23 @@ TEST(RenderGraphTests, RebuildsTheSameTopologyAfterLogicalReset) {
     graph.compile();
     EXPECT_EQ(graph.executionOrder(), (std::vector<std::string>{"Producer", "Consumer"}));
 }
+
+TEST(RenderGraphTests, ReportsTimelineDependenciesAcrossQueues) {
+    RenderGraph graph;
+    TextureHandle intermediate;
+    graph.addPass("Depth", Queue::Graphics, [&](PassBuilder& builder) {
+        intermediate = builder.writeTexture("Depth", ColorTarget);
+    }, {});
+    graph.addPass("Hi-Z", Queue::AsyncCompute, [&](PassBuilder& builder) {
+        builder.read(intermediate, TextureUsage::SampledReadCompute);
+    }, {});
+    graph.compile();
+
+    ASSERT_EQ(graph.queueDependencies().size(), 1U);
+    const auto& dependency = graph.queueDependencies().front();
+    EXPECT_EQ(dependency.producerPass, 0U);
+    EXPECT_EQ(dependency.consumerPass, 1U);
+    EXPECT_EQ(dependency.producerQueue, Queue::Graphics);
+    EXPECT_EQ(dependency.consumerQueue, Queue::AsyncCompute);
+}
 } // namespace Engine::Renderer
