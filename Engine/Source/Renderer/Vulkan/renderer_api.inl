@@ -123,12 +123,12 @@ void Renderer::reloadScene(Scene& scene, void* nativeWindow) {
         if (backend_->antialiasingLevel != antialiasingLevel_) {
             backend_->reconfigureAntialiasing(antialiasingLevel_);
         }
-        // "Reload" is an editor-level operation, not a Vulkan-backend
-        // lifetime boundary.  Keep it on the normal scene synchronization
-        // path so play-mode transitions and scene edits preserve platform and
-        // viewport resources.  Device reconfiguration has its own explicit
-        // entry points (swapchain/AA/shader reload).
-        backend_->synchronizeSceneResources(scene);
+        // Scene snapshots replace the complete ECS registry. Incremental
+        // synchronization is only valid for edits made against the current
+        // registry; it can otherwise retain GPU-scene IDs and buffer
+        // capacities from the discarded registry. Rebuild every
+        // registry-derived resource before the next render frame.
+        backend_->reloadSceneResources(scene);
     } else initialize(scene, nativeWindow);
 }
 void Renderer::reconfigureAntialiasing() const {

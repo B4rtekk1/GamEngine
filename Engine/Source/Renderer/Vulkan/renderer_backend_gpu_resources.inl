@@ -1020,14 +1020,13 @@
             createSceneViewportFramebuffer();
 
             if (sceneViewportDescriptor != VK_NULL_HANDLE) {
-                const VkDescriptorImageInfo imageInfo = sceneViewportTarget.colorDescriptor();
-                VkWriteDescriptorSet write{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
-                write.dstSet = sceneViewportDescriptor;
-                write.dstBinding = 0;
-                write.descriptorCount = 1;
-                write.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-                write.pImageInfo = &imageInfo;
-                vkUpdateDescriptorSets(device, 1, &write, 0, nullptr);
+                // Recent ImGui Vulkan backends use a SAMPLED_IMAGE descriptor
+                // plus a separate sampler. Its descriptor type is backend
+                // owned, so a direct COMBINED_IMAGE_SAMPLER write is invalid.
+                ImGui_ImplVulkan_RemoveTexture(sceneViewportDescriptor);
+                sceneViewportDescriptor = ImGui_ImplVulkan_AddTexture(
+                    sceneViewportTarget.color().imageView(),
+                    VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
             }
             sceneViewportCacheValid = false;
             sceneViewportImageInitialized = false;

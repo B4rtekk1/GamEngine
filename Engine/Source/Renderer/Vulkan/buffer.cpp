@@ -76,7 +76,10 @@ namespace Engine {
 
     void Buffer::update(const void *data, const VkDeviceSize size, const VkDeviceSize offset) const {
         if (data == nullptr || size == 0 || offset > size_ || size > size_ - offset) {
-            throw std::invalid_argument("Uniform buffer update is out of bounds");
+            throw std::invalid_argument(
+                "Buffer update out of bounds: requested=" + std::to_string(size) +
+                ", offset=" + std::to_string(offset) +
+                ", capacity=" + std::to_string(size_));
         }
         if (mapped_ == nullptr) {
             throw std::runtime_error("Cannot update buffer without host-visible memory");
