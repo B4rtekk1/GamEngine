@@ -5,6 +5,7 @@
 #include "Engine/Renderer/Vulkan/upload_context.h"
 
 #include <algorithm>
+#include <array>
 #include <bit>
 #include <cstring>
 #include <limits>
@@ -268,6 +269,13 @@ Texture2D &Texture2D::operator=(Texture2D &&other) noexcept {
                 imageInfo.usage |= VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
             }
             imageInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+            std::array<uint32_t, 3> sharingFamilies{};
+            if (upload != nullptr && upload->requiresConcurrentSharing()) {
+                sharingFamilies = upload->sharingFamilies();
+                imageInfo.sharingMode = VK_SHARING_MODE_CONCURRENT;
+                imageInfo.queueFamilyIndexCount = upload->sharingFamilyCount();
+                imageInfo.pQueueFamilyIndices = sharingFamilies.data();
+            }
             imageInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
             if (allocator_ == VK_NULL_HANDLE) {
                 throw std::invalid_argument("Texture2D requires a VMA allocator");
@@ -446,6 +454,13 @@ Texture2D &Texture2D::operator=(Texture2D &&other) noexcept {
             imageInfo.tiling = VK_IMAGE_TILING_OPTIMAL;
             imageInfo.usage = VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
             imageInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+            std::array<uint32_t, 3> sharingFamilies{};
+            if (upload != nullptr && upload->requiresConcurrentSharing()) {
+                sharingFamilies = upload->sharingFamilies();
+                imageInfo.sharingMode = VK_SHARING_MODE_CONCURRENT;
+                imageInfo.queueFamilyIndexCount = upload->sharingFamilyCount();
+                imageInfo.pQueueFamilyIndices = sharingFamilies.data();
+            }
             imageInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
             VmaAllocationCreateInfo allocationInfo{};
             allocationInfo.usage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE;
@@ -553,6 +568,13 @@ Texture2D &Texture2D::operator=(Texture2D &&other) noexcept {
             imageInfo.tiling = VK_IMAGE_TILING_OPTIMAL;
             imageInfo.usage = VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
             imageInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+            std::array<uint32_t, 3> sharingFamilies{};
+            if (upload->requiresConcurrentSharing()) {
+                sharingFamilies = upload->sharingFamilies();
+                imageInfo.sharingMode = VK_SHARING_MODE_CONCURRENT;
+                imageInfo.queueFamilyIndexCount = upload->sharingFamilyCount();
+                imageInfo.pQueueFamilyIndices = sharingFamilies.data();
+            }
             VmaAllocationCreateInfo allocationInfo{};
             allocationInfo.usage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE;
             if (vmaCreateImage(allocator_, &imageInfo, &allocationInfo, &image_, &allocation_, nullptr) != VK_SUCCESS)

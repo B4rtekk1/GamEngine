@@ -12,11 +12,15 @@ namespace Engine {
         std::optional<uint32_t> graphics;
         std::optional<uint32_t> present;
         std::optional<uint32_t> compute;
+        std::optional<uint32_t> transfer;
         uint32_t graphicsIndex{};
         uint32_t presentIndex{};
         uint32_t computeIndex{};
+        uint32_t transferIndex{};
         bool asyncCompute{};
         bool dedicatedComputeFamily{};
+        bool asyncTransfer{};
+        bool dedicatedTransferFamily{};
 
         [[nodiscard]] bool complete() const noexcept {
             return graphics.has_value() && present.has_value();
@@ -60,6 +64,7 @@ namespace Engine {
         [[nodiscard]] VkQueue computeQueue() const noexcept {
             return computeQueue_;
         }
+        [[nodiscard]] VkQueue transferQueue() const noexcept { return transferQueue_; }
 
         [[nodiscard]] const QueueFamilyIndices &queueFamilies() const noexcept {
             return queueFamilies_;
@@ -76,6 +81,7 @@ namespace Engine {
         [[nodiscard]] uint32_t computeQueueFamily() const {
             return queueFamilies_.compute.value();
         }
+        [[nodiscard]] uint32_t transferQueueFamily() const { return queueFamilies_.transfer.value(); }
 
         [[nodiscard]] bool hasAsyncComputeQueue() const noexcept {
             return queueFamilies_.asyncCompute;
@@ -84,6 +90,8 @@ namespace Engine {
         [[nodiscard]] bool hasDedicatedComputeFamily() const noexcept {
             return queueFamilies_.dedicatedComputeFamily;
         }
+        [[nodiscard]] bool hasAsyncTransferQueue() const noexcept { return queueFamilies_.asyncTransfer; }
+        [[nodiscard]] bool hasDedicatedTransferFamily() const noexcept { return queueFamilies_.dedicatedTransferFamily; }
 
         [[nodiscard]] VmaAllocator allocator() const noexcept {
             return allocator_;
@@ -108,6 +116,7 @@ namespace Engine {
         VkQueue graphicsQueue_ = VK_NULL_HANDLE;
         VkQueue presentQueue_ = VK_NULL_HANDLE;
         VkQueue computeQueue_ = VK_NULL_HANDLE;
+        VkQueue transferQueue_ = VK_NULL_HANDLE;
         QueueFamilyIndices queueFamilies_{};
         VmaAllocator allocator_ = VK_NULL_HANDLE;
         VkResolveModeFlagBits depthResolveMode_ = VK_RESOLVE_MODE_SAMPLE_ZERO_BIT;

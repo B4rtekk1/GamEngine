@@ -3,6 +3,7 @@
 
 #include <cstring>
 #include <algorithm>
+#include <array>
 #include <memory>
 #include <string>
 #include <stdexcept>
@@ -244,6 +245,13 @@ namespace Engine {
         bufferInfo.usage = parameters.usage;
         if (deviceAddressEnabled_) bufferInfo.usage |= VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT;
         bufferInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+        std::array<uint32_t, 3> sharingFamilies{};
+        if (const UploadContext* upload = UploadContext::current(); upload != nullptr && upload->requiresConcurrentSharing()) {
+            sharingFamilies = upload->sharingFamilies();
+            bufferInfo.sharingMode = VK_SHARING_MODE_CONCURRENT;
+            bufferInfo.queueFamilyIndexCount = upload->sharingFamilyCount();
+            bufferInfo.pQueueFamilyIndices = sharingFamilies.data();
+        }
         VmaAllocationCreateInfo allocationInfo{};
         constexpr VkMemoryPropertyFlags hostVisibleBit =
                 static_cast<VkMemoryPropertyFlags>(VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT);

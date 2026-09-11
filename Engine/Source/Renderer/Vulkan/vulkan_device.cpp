@@ -21,7 +21,7 @@ namespace {
 
     constexpr int kDiscreteGpuScoreBonus = 10'000;
     constexpr int kIntegratedGpuScoreBonus = 1'000;
-    constexpr std::array<float, 2> kQueuePriorities = {1.0F, 1.0F};
+    constexpr std::array<float, 3> kQueuePriorities = {1.0F, 1.0F, 1.0F};
 }
 
 VulkanDevice::~VulkanDevice() { destroy();}
@@ -76,6 +76,7 @@ void VulkanDevice::destroy() noexcept {
     presentQueue_ = VK_NULL_HANDLE;
     graphicsQueue_ = VK_NULL_HANDLE;
     computeQueue_ = VK_NULL_HANDLE;
+    transferQueue_ = VK_NULL_HANDLE;
     device_ = VK_NULL_HANDLE;
     physicalDevice_ = VK_NULL_HANDLE;
     surface_ = VK_NULL_HANDLE;
@@ -96,6 +97,8 @@ QueueFamilyIndices VulkanDevice::findQueueFamilies(VkPhysicalDevice candidate) c
 
     std::optional<uint32_t> dedicatedCompute;
     std::optional<uint32_t> generalCompute;
+    std::optional<uint32_t> dedicatedTransfer;
+    std::optional<uint32_t> nonGraphicsTransfer;
 
     for (uint32_t i = 0; i < queueFamilyCount; i++) {
         const VkQueueFamilyProperties& family = families[i];
@@ -114,6 +117,12 @@ QueueFamilyIndices VulkanDevice::findQueueFamilies(VkPhysicalDevice candidate) c
             if (!generalCompute.has_value()) {
                 generalCompute = i;
             }
+        }
+        if ((family.queueFlags & VK_QUEUE_TRANSFER_BIT) != 0) {
+            const bool hasGraphics = (family.queueFlags & VK_QUEUE_GRAPHICS_BIT) != 0;
+            const bool hasCompute = (family.queueFlags & VK_QUEUE_COMPUTE_BIT) != 0;
+            if (!hasGraphics && !hasCompute && !dedicatedTransfer.has_value()) dedicatedTransfer = i;
+            if (!hasGraphics && !nonGraphicsTransfer.has_value()) nonGraphicsTransfer = i;
         }
 
         VkBool32 supportsPresent = VK_FALSE;
@@ -151,6 +160,23 @@ QueueFamilyIndices VulkanDevice::findQueueFamilies(VkPhysicalDevice candidate) c
     // defined fallback for unusual devices that expose no compute queue.
     if (!indices.compute.has_value()) {
         indices.compute = indices.graphics;
+    }
+    if (dedicatedTransfer.has_value()) {
+        indices.transfer = dedicatedTransfer;
+        indices.dedicatedTransferFamily = true;
+        indices.asyncTransfer = dedicatedTransfer != indices.graphics;
+    } else if (nonGraphicsTransfer.has_value()) {
+        indices.transfer = nonGraphicsTransfer;
+        indices.asyncTransfer = nonGraphicsTransfer != indices.graphics;
+    } else {
+        indices.transfer = indices.graphics;
+        const uint32_t graphicsFamily = indices.graphics.value();
+        uint32_t nextIndex = 1;
+        if (indices.compute == indices.graphics) nextIndex = std::max(nextIndex, indices.computeIndex + 1);
+        if (families[graphicsFamily].queueCount > nextIndex) {
+            indices.transferIndex = nextIndex;
+            indices.asyncTransfer = true;
+        }
     }
     return indices;
 }
@@ -333,6 +359,7 @@ void VulkanDevice::createLogicalDevice() {
     requireQueue(queueFamilies_.graphics.value(), queueFamilies_.graphicsIndex);
     requireQueue(queueFamilies_.present.value(), queueFamilies_.presentIndex);
     requireQueue(queueFamilies_.compute.value(), queueFamilies_.computeIndex);
+    requireQueue(queueFamilies_.transfer.value(), queueFamilies_.transferIndex);
 
     std::vector<VkDeviceQueueCreateInfo> queueCreateInfos;
     queueCreateInfos.reserve(requestedQueueCounts.size());
@@ -409,6 +436,11 @@ void VulkanDevice::createLogicalDevice() {
         queueFamilies_.compute.value(),
         queueFamilies_.computeIndex,
         &computeQueue_);
+    vkGetDeviceQueue(
+        device_,
+        queueFamilies_.transfer.value(),
+        queueFamilies_.transferIndex,
+        &transferQueue_);
 
     Diagnostics::instance().report(
         DiagnosticSeverity::Info,
@@ -416,7 +448,11 @@ void VulkanDevice::createLogicalDevice() {
         " index=" + std::to_string(queueFamilies_.graphicsIndex) +
         "; Compute: family=" + std::to_string(queueFamilies_.compute.value()) +
         " index=" + std::to_string(queueFamilies_.computeIndex) +
+        "; Transfer: family=" + std::to_string(queueFamilies_.transfer.value()) +
+        " index=" + std::to_string(queueFamilies_.transferIndex) +
         "; Async compute: " + (queueFamilies_.asyncCompute ? "YES" : "NO") +
+        "; Async transfer: " + (queueFamilies_.asyncTransfer ? "YES" : "NO") +
+        "; Dedicated transfer family: " + (queueFamilies_.dedicatedTransferFamily ? "YES" : "NO") +
         "; Dedicated compute family: " + (queueFamilies_.dedicatedComputeFamily ? "YES" : "NO"),
         {.subsystem = "Vulkan"});
 }

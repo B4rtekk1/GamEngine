@@ -18,7 +18,13 @@
             waitForDrawableExtent();
             createSwapChain();
             createCommandPool();
-            uploadContext.create(device, vulkanDevice.graphicsQueue(), vulkanDevice.graphicsQueueFamily(), vulkanDevice.allocator());
+            // The legacy uploader also generates mip levels with vkCmdBlitImage
+            // and emits fragment-stage barriers.  Those operations are not
+            // legal on a transfer-only family, so keep it on graphics until
+            // the uploader is split into a copy pass and a graphics finalizer.
+            uploadContext.create(device, vulkanDevice.graphicsQueue(), vulkanDevice.graphicsQueueFamily(),
+                                 vulkanDevice.graphicsQueueFamily(), vulkanDevice.computeQueueFamily(),
+                                 vulkanDevice.allocator());
             UploadContext::setCurrent(&uploadContext);
             createCommandBuffers();
             createSyncObjects();

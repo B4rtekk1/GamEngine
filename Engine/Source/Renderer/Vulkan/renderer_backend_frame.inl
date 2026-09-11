@@ -1244,6 +1244,12 @@
 
         void submitAndPresentFrame(const uint32_t imageIndex) {
             VkSemaphore signalSemaphores[] = {renderFinishedSemaphores[imageIndex]};
+            // Do not block the CPU or either queue with QueueWaitIdle.  The
+            // graphics submission waits on the exact highest upload ticket
+            // known when this frame is submitted; the transfer queue can keep
+            // recording later streaming work concurrently.
+            const std::uint64_t uploadValue = uploadContext.lastSubmittedValue();
+            const bool waitForUploads = uploadValue != 0;
             if (asyncHiZSubmittedThisFrame) {
                 const std::uint64_t graphicsValue = ++asyncComputeTimelineValue;
                 const std::uint64_t computeValue = ++asyncComputeTimelineValue;
@@ -1254,6 +1260,11 @@
                     .sType = VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO,
                     .semaphore = imageAvailableSemaphores[currentFrame],
                     .stageMask = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT};
+                const VkSemaphoreSubmitInfo uploadWait{
+                    .sType = VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO,
+                    .semaphore = uploadContext.timeline(), .value = uploadValue,
+                    .stageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT};
+                const std::array graphicsWaits = {imageAvailable, uploadWait};
                 const VkCommandBufferSubmitInfo graphicsCommand{
                     .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_SUBMIT_INFO, .commandBuffer = graphicsBuffer};
                 const VkSemaphoreSubmitInfo graphicsSignal{
@@ -1261,7 +1272,8 @@
                     .value = graphicsValue, .stageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT};
                 const VkSubmitInfo2 graphicsSubmit{
                     .sType = VK_STRUCTURE_TYPE_SUBMIT_INFO_2,
-                    .waitSemaphoreInfoCount = 1, .pWaitSemaphoreInfos = &imageAvailable,
+                    .waitSemaphoreInfoCount = waitForUploads ? 2u : 1u,
+                    .pWaitSemaphoreInfos = graphicsWaits.data(),
                     .commandBufferInfoCount = 1, .pCommandBufferInfos = &graphicsCommand,
                     .signalSemaphoreInfoCount = 1, .pSignalSemaphoreInfos = &graphicsSignal};
                 if (vkQueueSubmit2(vulkanDevice.graphicsQueue(), 1, &graphicsSubmit, VK_NULL_HANDLE) != VK_SUCCESS) {
@@ -1312,9 +1324,16 @@
             VkSubmitInfo submitInfo{};
             submitInfo.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
 
-            VkSemaphore waitSemaphores[] = {imageAvailableSemaphores[currentFrame]};
-            VkPipelineStageFlags waitStages[] = {VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT};
-            submitInfo.waitSemaphoreCount = 1;
+            VkSemaphore waitSemaphores[] = {imageAvailableSemaphores[currentFrame], uploadContext.timeline()};
+            VkPipelineStageFlags waitStages[] = {VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT};
+            std::uint64_t waitValues[] = {0, uploadValue};
+            VkTimelineSemaphoreSubmitInfo timelineInfo{VK_STRUCTURE_TYPE_TIMELINE_SEMAPHORE_SUBMIT_INFO};
+            if (waitForUploads) {
+                timelineInfo.waitSemaphoreValueCount = 2;
+                timelineInfo.pWaitSemaphoreValues = waitValues;
+                submitInfo.pNext = &timelineInfo;
+            }
+            submitInfo.waitSemaphoreCount = waitForUploads ? 2u : 1u;
             submitInfo.pWaitSemaphores = waitSemaphores;
             submitInfo.pWaitDstStageMask = waitStages;
             submitInfo.commandBufferCount = 1;

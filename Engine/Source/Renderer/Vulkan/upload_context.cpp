@@ -19,8 +19,8 @@ UploadTicket UploadContext::Batch::submit() {
 }
 void UploadContext::setCurrent(UploadContext* context) noexcept { current_ = context; }
 UploadContext* UploadContext::current() noexcept { return current_; }
-void UploadContext::create(VkDevice device, VkQueue queue, uint32_t family, VmaAllocator allocator, VkDeviceSize bytes) {
-    device_=device; queue_=queue; allocator_=allocator; capacity_=bytes;
+void UploadContext::create(VkDevice device, VkQueue queue, uint32_t family, uint32_t graphicsFamily, uint32_t computeFamily, VmaAllocator allocator, VkDeviceSize bytes) {
+    device_=device; queue_=queue; queueFamily_=family; graphicsFamily_=graphicsFamily; computeFamily_=computeFamily; allocator_=allocator; capacity_=bytes;
     VkBufferCreateInfo info{VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO}; info.size=bytes; info.usage=VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
     VmaAllocationCreateInfo alloc{}; alloc.usage=VMA_MEMORY_USAGE_AUTO_PREFER_HOST; alloc.flags=VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT|VMA_ALLOCATION_CREATE_MAPPED_BIT;
     if(vmaCreateBuffer(allocator_, &info, &alloc, &staging_, &allocation_, nullptr)!=VK_SUCCESS) throw std::runtime_error("Could not create upload staging ring");
@@ -95,5 +95,5 @@ UploadTicket UploadContext::submit() {
     if(vkQueueSubmit2(queue_,1,&submit,VK_NULL_HANDLE)!=VK_SUCCESS) throw std::runtime_error("Could not submit upload batch");
     submitted_.push_back({commandBuffer_,value}); commandBuffer_=VK_NULL_HANDLE; return {value};
 }
-void UploadContext::destroy() noexcept { if(!device_) return; if(commandBuffer_) { abort(); } if(timeline_ && nextValue_>1){ VkSemaphoreWaitInfo wait{VK_STRUCTURE_TYPE_SEMAPHORE_WAIT_INFO}; const uint64_t v=nextValue_-1; wait.semaphoreCount=1; wait.pSemaphores=&timeline_; wait.pValues=&v; vkWaitSemaphores(device_,&wait,UINT64_MAX); } for(auto& s:submitted_) vkFreeCommandBuffers(device_,pool_,1,&s.commandBuffer); submitted_.clear(); if(timeline_) vkDestroySemaphore(device_,timeline_,nullptr); if(pool_) vkDestroyCommandPool(device_,pool_,nullptr); if(staging_) vmaDestroyBuffer(allocator_,staging_,allocation_); if(current_==this) current_=nullptr; device_=VK_NULL_HANDLE; queue_=VK_NULL_HANDLE; allocator_=VK_NULL_HANDLE; staging_=VK_NULL_HANDLE; allocation_=VK_NULL_HANDLE; mapped_=nullptr; capacity_=head_=0; pool_=VK_NULL_HANDLE; timeline_=VK_NULL_HANDLE; nextValue_=1; recording_=false; }
+void UploadContext::destroy() noexcept { if(!device_) return; if(commandBuffer_) { abort(); } if(timeline_ && nextValue_>1){ VkSemaphoreWaitInfo wait{VK_STRUCTURE_TYPE_SEMAPHORE_WAIT_INFO}; const uint64_t v=nextValue_-1; wait.semaphoreCount=1; wait.pSemaphores=&timeline_; wait.pValues=&v; vkWaitSemaphores(device_,&wait,UINT64_MAX); } for(auto& s:submitted_) vkFreeCommandBuffers(device_,pool_,1,&s.commandBuffer); submitted_.clear(); if(timeline_) vkDestroySemaphore(device_,timeline_,nullptr); if(pool_) vkDestroyCommandPool(device_,pool_,nullptr); if(staging_) vmaDestroyBuffer(allocator_,staging_,allocation_); if(current_==this) current_=nullptr; device_=VK_NULL_HANDLE; queue_=VK_NULL_HANDLE; queueFamily_=graphicsFamily_=computeFamily_=0; allocator_=VK_NULL_HANDLE; staging_=VK_NULL_HANDLE; allocation_=VK_NULL_HANDLE; mapped_=nullptr; capacity_=head_=0; pool_=VK_NULL_HANDLE; timeline_=VK_NULL_HANDLE; nextValue_=1; recording_=false; }
 }

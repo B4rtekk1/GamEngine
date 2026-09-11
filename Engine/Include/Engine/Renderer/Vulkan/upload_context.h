@@ -3,6 +3,7 @@
 #include <vulkan/vulkan.h>
 #include <vk_mem_alloc.h>
 #include <cstdint>
+#include <array>
 #include <vector>
 
 namespace Engine {
@@ -33,7 +34,8 @@ public:
 
     UploadContext() = default; ~UploadContext();
     UploadContext(const UploadContext&) = delete; UploadContext& operator=(const UploadContext&) = delete;
-    void create(VkDevice device, VkQueue queue, uint32_t family, VmaAllocator allocator, VkDeviceSize bytes = 32ull * 1024 * 1024);
+    void create(VkDevice device, VkQueue queue, uint32_t family, uint32_t graphicsFamily, uint32_t computeFamily,
+                VmaAllocator allocator, VkDeviceSize bytes = 32ull * 1024 * 1024);
     void destroy() noexcept;
     /// Starts an explicit upload batch. Resources created while it is active
     /// append their copy commands instead of submitting independently.
@@ -46,14 +48,28 @@ public:
     /// Ticket that will be signalled by the batch currently being recorded.
     [[nodiscard]] UploadTicket pendingTicket() const noexcept;
     [[nodiscard]] uint64_t completedValue() const noexcept;
+    [[nodiscard]] uint64_t lastSubmittedValue() const noexcept { return nextValue_ - 1; }
     [[nodiscard]] VkSemaphore timeline() const noexcept { return timeline_; }
+    [[nodiscard]] bool requiresConcurrentSharing() const noexcept { return sharingFamilyCount() > 1; }
+    [[nodiscard]] std::array<uint32_t, 3> sharingFamilies() const noexcept {
+        std::array<uint32_t, 3> families{queueFamily_, 0, 0};
+        uint32_t count = 1;
+        if (graphicsFamily_ != queueFamily_) families[count++] = graphicsFamily_;
+        if (computeFamily_ != queueFamily_ && computeFamily_ != graphicsFamily_) families[count] = computeFamily_;
+        return families;
+    }
+    [[nodiscard]] uint32_t sharingFamilyCount() const noexcept {
+        uint32_t count = queueFamily_ == graphicsFamily_ ? 1u : 2u;
+        if (computeFamily_ != queueFamily_ && computeFamily_ != graphicsFamily_) ++count;
+        return count;
+    }
     [[nodiscard]] bool recording() const noexcept { return recording_; }
     [[nodiscard]] VkDeviceSize capacity() const noexcept { return capacity_; }
     static UploadContext* current() noexcept;
     static void setCurrent(UploadContext* context) noexcept;
 private:
     struct Submitted { VkCommandBuffer commandBuffer{}; uint64_t value{}; };
-    VkDevice device_{}; VkQueue queue_{}; VmaAllocator allocator_{}; VkBuffer staging_{}; VmaAllocation allocation_{}; void* mapped_{};
+    VkDevice device_{}; VkQueue queue_{}; uint32_t queueFamily_{}; uint32_t graphicsFamily_{}; uint32_t computeFamily_{}; VmaAllocator allocator_{}; VkBuffer staging_{}; VmaAllocation allocation_{}; void* mapped_{};
     VkDeviceSize capacity_{}; VkDeviceSize head_{}; VkCommandPool pool_{};
     VkCommandBuffer commandBuffer_{}; VkSemaphore timeline_{}; uint64_t nextValue_{1};
     bool recording_{};
