@@ -823,12 +823,19 @@
                 ForwardPass::end(commandBuffer);
             }
 
+            // The post-processing tail is owned by the frame graph.  Some
+            // callbacks still use legacy Vulkan render passes (and therefore
+            // own their attachment transitions), but their execution order is
+            // no longer implicit in this function.  Explicit dependencies are
+            // the migration bridge for such callbacks; once their attachment
+            // interfaces are graph-native they can be replaced by resource
+            // edges without changing this frame schedule.
+            frameGraph.reset();
+            RenderGraph::PassHandle previousPass{};
             if (renderGameViewport && hizEnabled) {
-                // This is the first production pass owned by RenderGraph. The
-                // imported depth state describes the preceding Forward pass;
-                // the graph therefore emits the exact late-depth -> compute
-                // sampled-read dependency before Hi-Z records its pyramid.
-                frameGraph.reset();
+                // The imported depth state describes the preceding Forward
+                // pass, so the graph emits the late-depth -> compute sampled
+                // read dependency before Hi-Z records its pyramid.
                 const VkExtent2D extent = swapchain.extent();
                 const RenderGraph::TextureDesc depthDesc{
                     .extent = {extent.width, extent.height, 1},
@@ -841,59 +848,66 @@
                      .access = VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT,
                      .layout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL,
                      .write = true});
-                frameGraph.addPass("Hi-Z", [&](RenderGraph::PassBuilder& builder) {
+                previousPass = frameGraph.addPass("Hi-Z", [&](RenderGraph::PassBuilder& builder) {
                     builder.read(depth, RenderGraph::TextureUsage::SampledReadCompute);
                 }, [this](const VkCommandBuffer buffer) {
                     hiZPass.record(buffer, hiZBuffer, true);
                 });
-                frameGraph.execute(commandBuffer);
-                hiZValid = true;
             }
 
-            if (renderGameViewport && taaResolveActive) {
-                gpuTimestampProfiler.beginZone(commandBuffer, currentFrame, taaProfileName);
-                temporalAaPass.record(commandBuffer, swapchain.extent(), taaJitterX, taaJitterY);
-                gpuTimestampProfiler.endZone(commandBuffer, currentFrame);
-            } else {
-                gpuTimestampProfiler.beginZone(commandBuffer, currentFrame, taaProfileName);
-                gpuTimestampProfiler.endZone(commandBuffer, currentFrame);
-            }
-
-            gpuTimestampProfiler.beginZone(commandBuffer, currentFrame, bloomProfileName);
-            if (renderGameViewport) {
-                bloomPass.record(commandBuffer,
-                    taaResolveActive ? temporalAaPass.resolvedView() : hdrBuffer.imageView(),
-                    hdrBuffer.sampler(), currentFrame);
-            }
-            gpuTimestampProfiler.endZone(commandBuffer, currentFrame);
-
-            gpuTimestampProfiler.beginZone(commandBuffer, currentFrame, tonemapProfileName);
-            if (editorUiActive) {
-                VkRenderPassBeginInfo pass{VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO};
-                pass.renderPass = editorUiRenderPass;
-                pass.framebuffer = editorUiFramebuffers.at(imageIndex.value);
-                pass.renderArea.extent = swapchain.extent();
-                constexpr float editorClearRed{0.06F};
-                constexpr float editorClearGreen{0.07F};
-                constexpr float editorClearBlue{0.09F};
-                VkClearValue clear{};
-                clear.color = {{editorClearRed, editorClearGreen, editorClearBlue, 1.0F}};
-                pass.clearValueCount = 1;
-                pass.pClearValues = &clear;
-                vkCmdBeginRenderPass(commandBuffer, &pass, VK_SUBPASS_CONTENTS_INLINE);
-                ImGui_ImplVulkan_RenderDrawData(ImGui::GetDrawData(), commandBuffer);
-                vkCmdEndRenderPass(commandBuffer);
-            } else {
-                if (taaResolveActive) {
-                    tonemapPass.record(commandBuffer, imageIndex.value, swapchain.extent(), 0.0F,
-                                       1U + temporalAaPass.resolvedIndex());
-                } else {
-                    tonemapPass.record(commandBuffer, imageIndex.value, swapchain.extent());
+            const auto taaPass = frameGraph.addPass("TAA", [previousPass](RenderGraph::PassBuilder& builder) {
+                if (previousPass) builder.dependsOn(previousPass);
+            }, [this, renderGameViewport](const VkCommandBuffer buffer) {
+                gpuTimestampProfiler.beginZone(buffer, currentFrame, taaProfileName);
+                if (renderGameViewport && taaResolveActive)
+                    temporalAaPass.record(buffer, swapchain.extent(), taaJitterX, taaJitterY);
+                gpuTimestampProfiler.endZone(buffer, currentFrame);
+            });
+            const auto bloomGraphPass = frameGraph.addPass("Bloom downsample", [taaPass](RenderGraph::PassBuilder& builder) {
+                builder.dependsOn(taaPass);
+            }, [this, renderGameViewport](const VkCommandBuffer buffer) {
+                gpuTimestampProfiler.beginZone(buffer, currentFrame, bloomProfileName);
+                if (renderGameViewport)
+                    bloomPass.record(buffer, taaResolveActive ? temporalAaPass.resolvedView() : hdrBuffer.imageView(),
+                                     hdrBuffer.sampler(), currentFrame);
+                gpuTimestampProfiler.endZone(buffer, currentFrame);
+            });
+            const auto tonemapGraphPass = frameGraph.addPass("Tonemap", [bloomGraphPass](RenderGraph::PassBuilder& builder) {
+                builder.dependsOn(bloomGraphPass);
+            }, [this, imageIndex](const VkCommandBuffer buffer) {
+                gpuTimestampProfiler.beginZone(buffer, currentFrame, tonemapProfileName);
+                if (!editorUiActive) {
+                    if (taaResolveActive)
+                        tonemapPass.record(buffer, imageIndex.value, swapchain.extent(), 0.0F,
+                                           1U + temporalAaPass.resolvedIndex());
+                    else tonemapPass.record(buffer, imageIndex.value, swapchain.extent());
                 }
-                canvasRenderer.record(scene.uiCanvas(), commandBuffer, imageIndex.value, currentFrame,
-                                      swapchain.extent());
-            }
-            gpuTimestampProfiler.endZone(commandBuffer, currentFrame);
+                gpuTimestampProfiler.endZone(buffer, currentFrame);
+            });
+            const auto uiGraphPass = frameGraph.addPass("UI", [tonemapGraphPass](RenderGraph::PassBuilder& builder) {
+                builder.dependsOn(tonemapGraphPass);
+            }, [this, imageIndex](const VkCommandBuffer buffer) {
+                if (editorUiActive) {
+                    VkRenderPassBeginInfo pass{VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO};
+                    pass.renderPass = editorUiRenderPass;
+                    pass.framebuffer = editorUiFramebuffers.at(imageIndex.value);
+                    pass.renderArea.extent = swapchain.extent();
+                    VkClearValue clear{};
+                    clear.color = {{0.06F, 0.07F, 0.09F, 1.0F}};
+                    pass.clearValueCount = 1;
+                    pass.pClearValues = &clear;
+                    vkCmdBeginRenderPass(buffer, &pass, VK_SUBPASS_CONTENTS_INLINE);
+                    ImGui_ImplVulkan_RenderDrawData(ImGui::GetDrawData(), buffer);
+                    vkCmdEndRenderPass(buffer);
+                } else {
+                    canvasRenderer.record(scene.uiCanvas(), buffer, imageIndex.value, currentFrame, swapchain.extent());
+                }
+            });
+            [[maybe_unused]] const auto presentGraphPass = frameGraph.addPass("Present", [uiGraphPass](RenderGraph::PassBuilder& builder) {
+                builder.dependsOn(uiGraphPass);
+            }, {});
+            frameGraph.execute(commandBuffer);
+            if (renderGameViewport && hizEnabled) hiZValid = true;
             gpuTimestampProfiler.endFrame(commandBuffer, currentFrame);
 
             if (vkEndCommandBuffer(commandBuffer) != VK_SUCCESS) {

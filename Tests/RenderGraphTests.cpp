@@ -83,4 +83,18 @@ TEST(RenderGraphTests, RebuildsTheSameTopologyAfterLogicalReset) {
     graph.compile();
     EXPECT_EQ(graph.executionOrder(), (std::vector<std::string>{"Producer", "Consumer"}));
 }
+
+TEST(RenderGraphTests, OrdersLegacyCallbacksThroughExplicitDependencies) {
+    RenderGraph graph;
+    const PassHandle taa = graph.addPass("TAA", [](PassBuilder&) {}, {});
+    const PassHandle bloom = graph.addPass("Bloom", [taa](PassBuilder& builder) {
+        builder.dependsOn(taa);
+    }, {});
+    graph.addPass("Tonemap", [bloom](PassBuilder& builder) {
+        builder.dependsOn(bloom);
+    }, {});
+
+    graph.compile();
+    EXPECT_EQ(graph.executionOrder(), (std::vector<std::string>{"TAA", "Bloom", "Tonemap"}));
+}
 } // namespace Engine::Renderer

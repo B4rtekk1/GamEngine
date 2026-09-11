@@ -116,6 +116,7 @@ namespace Engine::RenderGraph {
         graph_.addBufferAccess(pass_, buffer, usage, true);
         return buffer;
     }
+    void PassBuilder::dependsOn(const PassHandle pass) { graph_.addDependency(pass_, pass); }
 
     TextureHandle RenderGraph::importTexture(std::string name, const VkImage image, const TextureDesc &desc,
                                              const TextureState initialState) {
@@ -155,12 +156,14 @@ namespace Engine::RenderGraph {
         allocator_ = allocator;
     }
 
-    void RenderGraph::addPass(std::string name, const std::function<void(PassBuilder &)> &setup,
-                              ExecuteCallback execute) {
+    PassHandle RenderGraph::addPass(std::string name, const std::function<void(PassBuilder &)> &setup,
+                                    ExecuteCallback execute) {
         if (compiled_) throw std::logic_error("Reset RenderGraph before adding passes");
-        passes_.push_back({std::move(name), {}, {}, std::move(execute)});
-        PassBuilder builder{*this, static_cast<std::uint32_t>(passes_.size() - 1)};
+        passes_.push_back({std::move(name), {}, {}, {}, std::move(execute)});
+        const PassHandle handle{static_cast<std::uint32_t>(passes_.size() - 1)};
+        PassBuilder builder{*this, handle.index};
         setup(builder);
+        return handle;
     }
 
     void RenderGraph::requireValid(const TextureHandle texture) const {
@@ -186,6 +189,12 @@ namespace Engine::RenderGraph {
         if (pass >= passes_.size()) throw std::logic_error("Invalid RenderGraph pass");
         if (bufferUsageInfo(usage).write != write) throw std::invalid_argument("Buffer usage does not match read/write declaration");
         passes_[pass].bufferAccesses.push_back({buffer, usage, write});
+    }
+    void RenderGraph::addDependency(const std::uint32_t pass, const PassHandle dependency) {
+        if (pass >= passes_.size() || !dependency || dependency.index >= passes_.size())
+            throw std::out_of_range("Invalid RenderGraph pass dependency");
+        if (pass == dependency.index) throw std::logic_error("RenderGraph pass cannot depend on itself");
+        passes_[pass].explicitDependencies.push_back(dependency);
     }
 
     TextureHandle RenderGraph::addTransient(std::string name, const TextureDesc &desc, const std::uint32_t pass,
@@ -213,9 +222,10 @@ namespace Engine::RenderGraph {
         }
         for (const auto& resource: buffers_) { mix(resource.imported); mix(resource.desc.size); mix(resource.desc.usage); }
         for (const auto& pass: passes_) {
-            mix(pass.accesses.size()); mix(pass.bufferAccesses.size());
+            mix(pass.accesses.size()); mix(pass.bufferAccesses.size()); mix(pass.explicitDependencies.size());
             for (const auto& access: pass.accesses) { mix(access.texture.index); mix(static_cast<std::uint8_t>(access.usage)); mix(access.write); }
             for (const auto& access: pass.bufferAccesses) { mix(access.buffer.index); mix(static_cast<std::uint8_t>(access.usage)); mix(access.write); }
+            for (const auto dependency: pass.explicitDependencies) mix(dependency.index);
         }
         order_.clear();
         orderNames_.clear();
@@ -231,6 +241,8 @@ namespace Engine::RenderGraph {
             std::vector<std::int32_t> lastBufferWriter(buffers_.size(), -1);
             std::vector<std::vector<std::uint32_t>> bufferReaders(buffers_.size());
             for (std::uint32_t pass = 0; pass < count; ++pass) {
+                for (const PassHandle dependency: passes_[pass].explicitDependencies)
+                    edges[dependency.index].insert(pass);
                 for (const Access &access: passes_[pass].accesses) {
                     const auto resource = access.texture.index;
                     if (!access.write) {

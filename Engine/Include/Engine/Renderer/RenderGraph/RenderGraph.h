@@ -32,6 +32,14 @@ namespace Engine::RenderGraph {
         [[nodiscard]] explicit operator bool() const noexcept { return index != std::numeric_limits<std::uint32_t>::max(); }
         friend bool operator==(BufferHandle, BufferHandle) = default;
     };
+    /** Opaque ordering token for passes without a GPU resource dependency. */
+    struct PassHandle final {
+        std::uint32_t index{std::numeric_limits<std::uint32_t>::max()};
+        [[nodiscard]] explicit operator bool() const noexcept {
+            return index != std::numeric_limits<std::uint32_t>::max();
+        }
+        friend bool operator==(PassHandle, PassHandle) = default;
+    };
 
     enum class TextureUsage : std::uint8_t {
         SampledRead,
@@ -94,6 +102,8 @@ namespace Engine::RenderGraph {
         void write(BufferHandle buffer, BufferUsage usage = BufferUsage::StorageWrite);
         [[nodiscard]] BufferHandle writeBuffer(std::string name, const BufferDesc& desc,
                                                 BufferUsage usage = BufferUsage::StorageWrite);
+        /** Adds an execution dependency when a legacy pass owns its resource transitions. */
+        void dependsOn(PassHandle pass);
 
     private:
         friend class RenderGraph;
@@ -125,8 +135,8 @@ namespace Engine::RenderGraph {
         [[nodiscard]] BufferHandle importBuffer(std::string name, VkBuffer buffer, const BufferDesc& desc);
         [[nodiscard]] BufferHandle createBuffer(std::string name, const BufferDesc& desc);
 
-        void addPass(std::string name, const std::function<void(PassBuilder&)>& setup,
-                     ExecuteCallback execute);
+        PassHandle addPass(std::string name, const std::function<void(PassBuilder&)>& setup,
+                           ExecuteCallback execute);
 
         /** Validates resource declarations and computes order, lifetimes and barriers. */
         void compile();
@@ -162,6 +172,7 @@ namespace Engine::RenderGraph {
             std::string name;
             std::vector<Access> accesses;
             std::vector<BufferAccess> bufferAccesses;
+            std::vector<PassHandle> explicitDependencies;
             ExecuteCallback execute;
         };
         // These are complete, physical Vulkan barriers after compile().  Keeping
@@ -182,6 +193,7 @@ namespace Engine::RenderGraph {
         friend class PassBuilder;
         void addAccess(std::uint32_t pass, TextureHandle texture, TextureUsage usage, bool write);
         void addBufferAccess(std::uint32_t pass, BufferHandle buffer, BufferUsage usage, bool write);
+        void addDependency(std::uint32_t pass, PassHandle dependency);
         [[nodiscard]] TextureHandle addTransient(std::string name, const TextureDesc& desc,
                                                  std::uint32_t pass, TextureUsage usage);
         void requireValid(TextureHandle texture) const;
