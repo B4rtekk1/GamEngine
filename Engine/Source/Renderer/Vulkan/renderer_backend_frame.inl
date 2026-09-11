@@ -846,7 +846,39 @@
                 }, [this](const VkCommandBuffer buffer) {
                     hiZPass.record(buffer, hiZBuffer, true);
                 });
-                frameGraph.execute(commandBuffer);
+                // The imported depth resource is exclusive to graphics in
+                // this renderer. A same-family compute queue needs no queue
+                // ownership transfer, so it can safely execute this pass on
+                // a distinct VkQueue. A dedicated family falls back until the
+                // graph also emits release/acquire ownership barriers.
+                const bool canSubmitHiZAsync = vulkanDevice.hasAsyncComputeQueue() &&
+                    vulkanDevice.computeQueueFamily() == vulkanDevice.graphicsQueueFamily();
+                if (canSubmitHiZAsync) {
+                    // Close the producer batch now. The remaining post work
+                    // is recorded in a second graphics command buffer and can
+                    // overlap the compute queue after the first batch signals.
+                    if (vkEndCommandBuffer(commandBuffer) != VK_SUCCESS) {
+                        throw std::runtime_error("Could not end graphics producer command buffer for async Hi-Z");
+                    }
+                    VkCommandBuffer asyncBuffer = asyncComputeCommandBuffers.at(currentFrame);
+                    vkResetCommandBuffer(asyncBuffer, 0);
+                    VkCommandBufferBeginInfo begin{VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
+                    if (vkBeginCommandBuffer(asyncBuffer, &begin) != VK_SUCCESS) {
+                        throw std::runtime_error("Could not begin async Hi-Z command buffer");
+                    }
+                    frameGraph.execute(asyncBuffer);
+                    if (vkEndCommandBuffer(asyncBuffer) != VK_SUCCESS) {
+                        throw std::runtime_error("Could not end async Hi-Z command buffer");
+                    }
+                    commandBuffer = postAsyncGraphicsCommandBuffers.at(currentFrame);
+                    vkResetCommandBuffer(commandBuffer, 0);
+                    if (vkBeginCommandBuffer(commandBuffer, &begin) != VK_SUCCESS) {
+                        throw std::runtime_error("Could not begin post-async graphics command buffer");
+                    }
+                    asyncHiZSubmittedThisFrame = true;
+                } else {
+                    frameGraph.execute(commandBuffer);
+                }
                 hiZValid = true;
             }
 
@@ -908,6 +940,16 @@
 
             VkSemaphoreCreateInfo semaphoreInfo{};
             semaphoreInfo.sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO;
+
+            if (vulkanDevice.hasAsyncComputeQueue()) {
+                VkSemaphoreTypeCreateInfo timelineInfo{VK_STRUCTURE_TYPE_SEMAPHORE_TYPE_CREATE_INFO};
+                timelineInfo.semaphoreType = VK_SEMAPHORE_TYPE_TIMELINE;
+                semaphoreInfo.pNext = &timelineInfo;
+                if (vkCreateSemaphore(device, &semaphoreInfo, nullptr, &asyncComputeTimeline) != VK_SUCCESS) {
+                    throw std::runtime_error("Could not create async compute timeline semaphore");
+                }
+                semaphoreInfo.pNext = nullptr;
+            }
 
             VkFenceCreateInfo fenceInfo{};
             fenceInfo.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
@@ -1201,6 +1243,72 @@
         }
 
         void submitAndPresentFrame(const uint32_t imageIndex) {
+            VkSemaphore signalSemaphores[] = {renderFinishedSemaphores[imageIndex]};
+            if (asyncHiZSubmittedThisFrame) {
+                const std::uint64_t graphicsValue = ++asyncComputeTimelineValue;
+                const std::uint64_t computeValue = ++asyncComputeTimelineValue;
+                const VkCommandBuffer graphicsBuffer = commandBuffers[currentFrame];
+                const VkCommandBuffer postGraphicsBuffer = postAsyncGraphicsCommandBuffers.at(currentFrame);
+                const VkCommandBuffer computeBuffer = asyncComputeCommandBuffers.at(currentFrame);
+                const VkSemaphoreSubmitInfo imageAvailable{
+                    .sType = VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO,
+                    .semaphore = imageAvailableSemaphores[currentFrame],
+                    .stageMask = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT};
+                const VkCommandBufferSubmitInfo graphicsCommand{
+                    .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_SUBMIT_INFO, .commandBuffer = graphicsBuffer};
+                const VkSemaphoreSubmitInfo graphicsSignal{
+                    .sType = VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO, .semaphore = asyncComputeTimeline,
+                    .value = graphicsValue, .stageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT};
+                const VkSubmitInfo2 graphicsSubmit{
+                    .sType = VK_STRUCTURE_TYPE_SUBMIT_INFO_2,
+                    .waitSemaphoreInfoCount = 1, .pWaitSemaphoreInfos = &imageAvailable,
+                    .commandBufferInfoCount = 1, .pCommandBufferInfos = &graphicsCommand,
+                    .signalSemaphoreInfoCount = 1, .pSignalSemaphoreInfos = &graphicsSignal};
+                if (vkQueueSubmit2(vulkanDevice.graphicsQueue(), 1, &graphicsSubmit, VK_NULL_HANDLE) != VK_SUCCESS) {
+                    throw std::runtime_error("Could not submit graphics batch before async Hi-Z");
+                }
+
+                const VkSemaphoreSubmitInfo computeWait{
+                    .sType = VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO, .semaphore = asyncComputeTimeline,
+                    .value = graphicsValue, .stageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT};
+                const VkCommandBufferSubmitInfo computeCommand{
+                    .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_SUBMIT_INFO, .commandBuffer = computeBuffer};
+                const VkSemaphoreSubmitInfo computeSignal{
+                    .sType = VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO, .semaphore = asyncComputeTimeline,
+                    .value = computeValue, .stageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT};
+                const VkSubmitInfo2 computeSubmit{
+                    .sType = VK_STRUCTURE_TYPE_SUBMIT_INFO_2,
+                    .waitSemaphoreInfoCount = 1, .pWaitSemaphoreInfos = &computeWait,
+                    .commandBufferInfoCount = 1, .pCommandBufferInfos = &computeCommand,
+                    .signalSemaphoreInfoCount = 1, .pSignalSemaphoreInfos = &computeSignal};
+                if (vkQueueSubmit2(vulkanDevice.computeQueue(), 1, &computeSubmit, VK_NULL_HANDLE) != VK_SUCCESS) {
+                    throw std::runtime_error("Could not submit async Hi-Z command buffer");
+                }
+
+                const VkCommandBufferSubmitInfo postGraphicsCommand{
+                    .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_SUBMIT_INFO, .commandBuffer = postGraphicsBuffer};
+                const VkSubmitInfo2 postGraphicsSubmit{
+                    .sType = VK_STRUCTURE_TYPE_SUBMIT_INFO_2,
+                    .commandBufferInfoCount = 1, .pCommandBufferInfos = &postGraphicsCommand};
+                if (vkQueueSubmit2(vulkanDevice.graphicsQueue(), 1, &postGraphicsSubmit, VK_NULL_HANDLE) != VK_SUCCESS) {
+                    throw std::runtime_error("Could not submit graphics batch overlapping async Hi-Z");
+                }
+
+                const VkSemaphoreSubmitInfo completeWait{
+                    .sType = VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO, .semaphore = asyncComputeTimeline,
+                    .value = computeValue, .stageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT};
+                const VkSemaphoreSubmitInfo renderFinished{
+                    .sType = VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO, .semaphore = signalSemaphores[0],
+                    .stageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT};
+                const VkSubmitInfo2 completionSubmit{
+                    .sType = VK_STRUCTURE_TYPE_SUBMIT_INFO_2,
+                    .waitSemaphoreInfoCount = 1, .pWaitSemaphoreInfos = &completeWait,
+                    .signalSemaphoreInfoCount = 1, .pSignalSemaphoreInfos = &renderFinished};
+                if (vkQueueSubmit2(vulkanDevice.graphicsQueue(), 1, &completionSubmit,
+                                   inFlightFences[currentFrame]) != VK_SUCCESS) {
+                    throw std::runtime_error("Could not complete async Hi-Z submission chain");
+                }
+            } else {
             VkSubmitInfo submitInfo{};
             submitInfo.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
 
@@ -1212,7 +1320,6 @@
             submitInfo.commandBufferCount = 1;
             submitInfo.pCommandBuffers = &commandBuffers[currentFrame];
 
-            VkSemaphore signalSemaphores[] = {renderFinishedSemaphores[imageIndex]};
             submitInfo.signalSemaphoreCount = 1;
             submitInfo.pSignalSemaphores = signalSemaphores;
 
@@ -1222,6 +1329,7 @@
                 throw std::runtime_error(
                     "Could not submit command buffer to queue (VkResult " +
                     std::to_string(static_cast<int>(submitResult)) + ")");
+            }
             }
             frameSubmissionValues[currentFrame] = ++submittedFrameValue;
             VkPresentInfoKHR presentInfo{};
@@ -1255,6 +1363,8 @@
             if (!acquireFrameImage(imageIndex)) { return; }
 
             vkResetCommandBuffer(commandBuffers[currentFrame], 0);
+            vkResetCommandBuffer(postAsyncGraphicsCommandBuffers[currentFrame], 0);
+            asyncHiZSubmittedThisFrame = false;
             {
                 GE_PROFILE_SCOPE("Refresh Scene Data");
                 refreshSceneFrameData();
@@ -1337,6 +1447,7 @@
             if (!hasDrawableExtent()) return;
             uint32_t imageIndex;
             if (!acquireFrameImage(imageIndex)) return;
+            asyncHiZSubmittedThisFrame = false;
             VkCommandBuffer commandBuffer = commandBuffers[currentFrame];
             vkResetCommandBuffer(commandBuffer, 0);
             VkCommandBufferBeginInfo beginInfo{VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};

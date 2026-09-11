@@ -74,6 +74,17 @@
                 imageAvailableSemaphores.clear();
                 inFlightFences.clear();
 
+                if (asyncComputeTimeline != VK_NULL_HANDLE) {
+                    vkDestroySemaphore(device, asyncComputeTimeline, nullptr);
+                    asyncComputeTimeline = VK_NULL_HANDLE;
+                }
+                asyncComputeCommandBuffers.clear();
+                postAsyncGraphicsCommandBuffers.clear();
+                if (asyncComputeCommandPool != VK_NULL_HANDLE) {
+                    vkDestroyCommandPool(device, asyncComputeCommandPool, nullptr);
+                    asyncComputeCommandPool = VK_NULL_HANDLE;
+                }
+
                 if (commandPool != VK_NULL_HANDLE) {
                     vkDestroyCommandPool(device, commandPool, nullptr);
                     commandPool = VK_NULL_HANDLE;

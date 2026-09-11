@@ -1,11 +1,12 @@
 #include "Engine/Renderer/Vulkan/vulkan_device.h"
+#include "Engine/Core/Diagnostics.h"
 #include "Engine/Renderer/Materials/MaterialBuffer.h"
 
 #include <array>
 #include <algorithm>
 #include <cstring>
 #include <limits>
-#include <set>
+#include <map>
 #include <string>
 #include <stdexcept>
 #include <vector>
@@ -20,9 +21,7 @@ namespace {
 
     constexpr int kDiscreteGpuScoreBonus = 10'000;
     constexpr int kIntegratedGpuScoreBonus = 1'000;
-    constexpr float kQueuePriority = 1.0F;
-    constexpr uint32_t kQueueCount = 1;
-    constexpr uint32_t kFirstQueueIndex = 0;
+    constexpr std::array<float, 2> kQueuePriorities = {1.0F, 1.0F};
 }
 
 VulkanDevice::~VulkanDevice() { destroy();}
@@ -73,6 +72,7 @@ void VulkanDevice::destroy() noexcept {
 
     presentQueue_ = VK_NULL_HANDLE;
     graphicsQueue_ = VK_NULL_HANDLE;
+    computeQueue_ = VK_NULL_HANDLE;
     device_ = VK_NULL_HANDLE;
     physicalDevice_ = VK_NULL_HANDLE;
     surface_ = VK_NULL_HANDLE;
@@ -91,10 +91,26 @@ QueueFamilyIndices VulkanDevice::findQueueFamilies(VkPhysicalDevice candidate) c
     std::vector<VkQueueFamilyProperties> families(queueFamilyCount);
     vkGetPhysicalDeviceQueueFamilyProperties(candidate, &queueFamilyCount, families.data());
 
+    std::optional<uint32_t> dedicatedCompute;
+    std::optional<uint32_t> generalCompute;
+
     for (uint32_t i = 0; i < queueFamilyCount; i++) {
-        if (families[i].queueCount > 0 &&
-            (families[i].queueFlags & static_cast<VkQueueFlags>(VK_QUEUE_GRAPHICS_BIT)) != 0) {
+        const VkQueueFamilyProperties& family = families[i];
+        if (family.queueCount == 0) {
+            continue;
+        }
+
+        if ((family.queueFlags & VK_QUEUE_GRAPHICS_BIT) != 0 && !indices.graphics.has_value()) {
             indices.graphics = i;
+        }
+
+        if ((family.queueFlags & VK_QUEUE_COMPUTE_BIT) != 0) {
+            if ((family.queueFlags & VK_QUEUE_GRAPHICS_BIT) == 0 && !dedicatedCompute.has_value()) {
+                dedicatedCompute = i;
+            }
+            if (!generalCompute.has_value()) {
+                generalCompute = i;
+            }
         }
 
         VkBool32 supportsPresent = VK_FALSE;
@@ -102,9 +118,36 @@ QueueFamilyIndices VulkanDevice::findQueueFamilies(VkPhysicalDevice candidate) c
             indices.present = i;
         }
 
-        if (indices.complete()) {
-            break;
+    }
+
+    if (!indices.graphics.has_value()) {
+        return indices;
+    }
+
+    // Prefer a compute-only family. If none exists, request a second queue
+    // from the graphics family; queue family and queue index are distinct.
+    if (dedicatedCompute.has_value()) {
+        indices.compute = dedicatedCompute;
+        indices.dedicatedComputeFamily = true;
+        indices.asyncCompute = dedicatedCompute != indices.graphics;
+    } else {
+        const uint32_t graphicsFamily = indices.graphics.value();
+        if ((families[graphicsFamily].queueFlags & VK_QUEUE_COMPUTE_BIT) != 0) {
+            indices.compute = graphicsFamily;
+            if (families[graphicsFamily].queueCount > 1) {
+                indices.computeIndex = 1;
+                indices.asyncCompute = true;
+            }
+        } else if (generalCompute.has_value()) {
+            indices.compute = generalCompute;
+            indices.asyncCompute = generalCompute != indices.graphics;
         }
+    }
+
+    // A Vulkan graphics queue is normally also compute-capable. Retain a
+    // defined fallback for unusual devices that expose no compute queue.
+    if (!indices.compute.has_value()) {
+        indices.compute = indices.graphics;
     }
     return indices;
 }
@@ -278,20 +321,24 @@ void VulkanDevice::createLogicalDevice() {
         throw std::logic_error("GPU does not exist");
     }
 
-    const std::set<uint32_t> uniqueFamilies = {
-        queueFamilies_.graphics.value(),
-        queueFamilies_.present.value(),
+    std::map<uint32_t, uint32_t> requestedQueueCounts;
+    const auto requireQueue = [&requestedQueueCounts](const uint32_t family, const uint32_t index) {
+        auto& count = requestedQueueCounts[family];
+        count = std::max(count, index + 1);
     };
+    requireQueue(queueFamilies_.graphics.value(), queueFamilies_.graphicsIndex);
+    requireQueue(queueFamilies_.present.value(), queueFamilies_.presentIndex);
+    requireQueue(queueFamilies_.compute.value(), queueFamilies_.computeIndex);
 
     std::vector<VkDeviceQueueCreateInfo> queueCreateInfos;
-    queueCreateInfos.reserve(uniqueFamilies.size());
+    queueCreateInfos.reserve(requestedQueueCounts.size());
 
-    for (uint32_t family : uniqueFamilies) {
+    for (const auto& [family, count] : requestedQueueCounts) {
         VkDeviceQueueCreateInfo queueInfo{};
         queueInfo.sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO;
         queueInfo.queueFamilyIndex = family;
-        queueInfo.queueCount = kQueueCount;
-        queueInfo.pQueuePriorities = &kQueuePriority;
+        queueInfo.queueCount = count;
+        queueInfo.pQueuePriorities = kQueuePriorities.data();
         queueCreateInfos.push_back(queueInfo);
     }
 
@@ -343,14 +390,30 @@ void VulkanDevice::createLogicalDevice() {
     vkGetDeviceQueue(
         device_,
         queueFamilies_.graphics.value(),
-        kFirstQueueIndex,
+        queueFamilies_.graphicsIndex,
         &graphicsQueue_);
 
     vkGetDeviceQueue(
         device_,
         queueFamilies_.present.value(),
-        kFirstQueueIndex,
+        queueFamilies_.presentIndex,
         &presentQueue_);
+
+    vkGetDeviceQueue(
+        device_,
+        queueFamilies_.compute.value(),
+        queueFamilies_.computeIndex,
+        &computeQueue_);
+
+    Diagnostics::instance().report(
+        DiagnosticSeverity::Info,
+        "Vulkan queues: Graphics: family=" + std::to_string(queueFamilies_.graphics.value()) +
+        " index=" + std::to_string(queueFamilies_.graphicsIndex) +
+        "; Compute: family=" + std::to_string(queueFamilies_.compute.value()) +
+        " index=" + std::to_string(queueFamilies_.computeIndex) +
+        "; Async compute: " + (queueFamilies_.asyncCompute ? "YES" : "NO") +
+        "; Dedicated compute family: " + (queueFamilies_.dedicatedComputeFamily ? "YES" : "NO"),
+        {.subsystem = "Vulkan"});
 }
 
 } // namespace Engine

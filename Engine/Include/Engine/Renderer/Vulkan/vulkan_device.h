@@ -11,6 +11,12 @@ namespace Engine {
     struct QueueFamilyIndices {
         std::optional<uint32_t> graphics;
         std::optional<uint32_t> present;
+        std::optional<uint32_t> compute;
+        uint32_t graphicsIndex{};
+        uint32_t presentIndex{};
+        uint32_t computeIndex{};
+        bool asyncCompute{};
+        bool dedicatedComputeFamily{};
 
         [[nodiscard]] bool complete() const noexcept {
             return graphics.has_value() && present.has_value();
@@ -51,6 +57,10 @@ namespace Engine {
             return presentQueue_;
         }
 
+        [[nodiscard]] VkQueue computeQueue() const noexcept {
+            return computeQueue_;
+        }
+
         [[nodiscard]] const QueueFamilyIndices &queueFamilies() const noexcept {
             return queueFamilies_;
         }
@@ -61,6 +71,18 @@ namespace Engine {
 
         [[nodiscard]] uint32_t presentQueueFamily() const {
             return queueFamilies_.present.value();
+        }
+
+        [[nodiscard]] uint32_t computeQueueFamily() const {
+            return queueFamilies_.compute.value();
+        }
+
+        [[nodiscard]] bool hasAsyncComputeQueue() const noexcept {
+            return queueFamilies_.asyncCompute;
+        }
+
+        [[nodiscard]] bool hasDedicatedComputeFamily() const noexcept {
+            return queueFamilies_.dedicatedComputeFamily;
         }
 
         [[nodiscard]] VmaAllocator allocator() const noexcept {
@@ -85,6 +107,7 @@ namespace Engine {
         VkDevice device_ = VK_NULL_HANDLE;
         VkQueue graphicsQueue_ = VK_NULL_HANDLE;
         VkQueue presentQueue_ = VK_NULL_HANDLE;
+        VkQueue computeQueue_ = VK_NULL_HANDLE;
         QueueFamilyIndices queueFamilies_{};
         VmaAllocator allocator_ = VK_NULL_HANDLE;
         VkResolveModeFlagBits depthResolveMode_ = VK_RESOLVE_MODE_SAMPLE_ZERO_BIT;

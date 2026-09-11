@@ -387,8 +387,14 @@
         std::uint32_t editorSelectedRenderable = std::numeric_limits<std::uint32_t>::max();
 
         VkCommandPool commandPool{};
+        VkCommandPool asyncComputeCommandPool{};
         UploadContext uploadContext;
         std::vector<VkCommandBuffer> commandBuffers;
+        std::vector<VkCommandBuffer> postAsyncGraphicsCommandBuffers;
+        std::vector<VkCommandBuffer> asyncComputeCommandBuffers;
+        VkSemaphore asyncComputeTimeline{};
+        std::uint64_t asyncComputeTimelineValue{};
+        bool asyncHiZSubmittedThisFrame{};
 
         std::vector<VkSemaphore> imageAvailableSemaphores;
         std::vector<VkSemaphore> renderFinishedSemaphores;
