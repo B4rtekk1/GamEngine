@@ -898,6 +898,23 @@
                                        material.pipelineClass, material.flags, 0U}};
         }
 
+        template <typename GPURecord, typename SourceRecord>
+        [[nodiscard]] static std::vector<GPURecord> makeGPUSceneSnapshot(
+            const std::vector<SourceRecord>& source) {
+            std::vector<GPURecord> snapshot;
+            snapshot.reserve(source.size());
+            for (const SourceRecord& record : source) snapshot.push_back(gpuSceneRecord(record));
+            return snapshot;
+        }
+
+        template <typename GPURecord, typename SourceRecord>
+        void uploadGPUSceneSnapshot(Buffer& buffer, const std::vector<SourceRecord>& source) {
+            if (source.empty()) return;
+            const std::vector<GPURecord> snapshot = makeGPUSceneSnapshot<GPURecord>(source);
+            buffer.uploadDeviceLocal(snapshot.data(), sizeof(GPURecord) * snapshot.size(), 0,
+                commandPool, vulkanDevice.graphicsQueue());
+        }
+
         template <typename Id>
         static void appendPendingIds(std::vector<Id>& destination, std::vector<std::uint32_t>& stamps,
                                      const std::uint32_t generation, const std::vector<Id>& source) {
@@ -929,34 +946,30 @@
             const auto& instances = sceneGpu.database.instances();
             const auto& meshes = sceneGpu.database.meshes();
             const auto& databaseMaterials = sceneGpu.database.materials();
+            gpuSceneInstanceHighWater = std::max(gpuSceneInstanceHighWater, instances.size());
+            gpuSceneMeshHighWater = std::max(gpuSceneMeshHighWater, meshes.size());
+            gpuSceneMaterialHighWater = std::max(gpuSceneMaterialHighWater, databaseMaterials.size());
             for (std::uint32_t frame = 0; frame < MAX_FRAMES_IN_FLIGHT; ++frame) {
-                const auto ensureCapacity = [&](Buffer& buffer, const VkDeviceSize required) {
+                const auto ensureCapacity = [&](Buffer& buffer, const std::size_t count,
+                                                const std::size_t highWater, const std::size_t minimum,
+                                                const VkDeviceSize recordSize) {
+                    const std::size_t capacity = std::max({minimum, count + count / 2U,
+                                                           highWater + highWater / 2U});
+                    const VkDeviceSize required = recordSize * capacity;
                     if (buffer.handle() == VK_NULL_HANDLE || buffer.size() < required) {
-                        buffer.createDeviceLocalEmpty(device, required + required / 2U,
+                        buffer.createDeviceLocalEmpty(device, required,
                             VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, vulkanDevice.allocator());
                     }
                 };
-                ensureCapacity(gpuSceneInstanceBuffers[frame], sizeof(GPUSceneInstanceRecord) *
-                    std::max<std::size_t>(1, instances.size()));
-                ensureCapacity(gpuSceneMeshBuffers[frame], sizeof(GPUSceneMeshRecord) *
-                    std::max<std::size_t>(1, meshes.size()));
-                ensureCapacity(gpuSceneMaterialBuffers[frame], sizeof(GPUSceneMaterialRecord) *
-                    std::max<std::size_t>(1, databaseMaterials.size()));
-                for (std::size_t id = 0; id < instances.size(); ++id) {
-                    const auto record = gpuSceneRecord(instances[id]);
-                    gpuSceneInstanceBuffers[frame].uploadDeviceLocal(&record, sizeof(record),
-                        sizeof(record) * id, commandPool, vulkanDevice.graphicsQueue());
-                }
-                for (std::size_t id = 0; id < meshes.size(); ++id) {
-                    const auto record = gpuSceneRecord(meshes[id]);
-                    gpuSceneMeshBuffers[frame].uploadDeviceLocal(&record, sizeof(record), sizeof(record) * id,
-                        commandPool, vulkanDevice.graphicsQueue());
-                }
-                for (std::size_t id = 0; id < databaseMaterials.size(); ++id) {
-                    const auto record = gpuSceneRecord(databaseMaterials[id]);
-                    gpuSceneMaterialBuffers[frame].uploadDeviceLocal(&record, sizeof(record), sizeof(record) * id,
-                        commandPool, vulkanDevice.graphicsQueue());
-                }
+                ensureCapacity(gpuSceneInstanceBuffers[frame], instances.size(), gpuSceneInstanceHighWater,
+                    4096U, sizeof(GPUSceneInstanceRecord));
+                ensureCapacity(gpuSceneMeshBuffers[frame], meshes.size(), gpuSceneMeshHighWater,
+                    1024U, sizeof(GPUSceneMeshRecord));
+                ensureCapacity(gpuSceneMaterialBuffers[frame], databaseMaterials.size(), gpuSceneMaterialHighWater,
+                    1024U, sizeof(GPUSceneMaterialRecord));
+                uploadGPUSceneSnapshot<GPUSceneInstanceRecord>(gpuSceneInstanceBuffers[frame], instances);
+                uploadGPUSceneSnapshot<GPUSceneMeshRecord>(gpuSceneMeshBuffers[frame], meshes);
+                uploadGPUSceneSnapshot<GPUSceneMaterialRecord>(gpuSceneMaterialBuffers[frame], databaseMaterials);
                 sceneGpu.pendingDatabaseUploads[frame].clear();
             }
             sceneGpu.database.clearDirty();
@@ -1001,6 +1014,9 @@
                 sceneGpu.database.meshes().size(), sizeof(GPUSceneMeshRecord)));
             const bool materialResized = grow(gpuSceneMaterialBuffers[frame], requiredBytes(
                 sceneGpu.database.materials().size(), sizeof(GPUSceneMaterialRecord)));
+            gpuSceneInstanceHighWater = std::max(gpuSceneInstanceHighWater, sceneGpu.database.instances().size());
+            gpuSceneMeshHighWater = std::max(gpuSceneMeshHighWater, sceneGpu.database.meshes().size());
+            gpuSceneMaterialHighWater = std::max(gpuSceneMaterialHighWater, sceneGpu.database.materials().size());
             return instanceResized || meshResized || materialResized;
         }
 
@@ -1077,21 +1093,9 @@
                 const auto& instances = sceneGpu.database.instances();
                 const auto& meshes = sceneGpu.database.meshes();
                 const auto& databaseMaterials = sceneGpu.database.materials();
-                for (std::size_t id = 0; id < instances.size(); ++id) {
-                    const auto record = gpuSceneRecord(instances[id]);
-                    gpuSceneInstanceBuffers[frame].uploadDeviceLocal(&record, sizeof(record), sizeof(record) * id,
-                        commandPool, vulkanDevice.graphicsQueue());
-                }
-                for (std::size_t id = 0; id < meshes.size(); ++id) {
-                    const auto record = gpuSceneRecord(meshes[id]);
-                    gpuSceneMeshBuffers[frame].uploadDeviceLocal(&record, sizeof(record), sizeof(record) * id,
-                        commandPool, vulkanDevice.graphicsQueue());
-                }
-                for (std::size_t id = 0; id < databaseMaterials.size(); ++id) {
-                    const auto record = gpuSceneRecord(databaseMaterials[id]);
-                    gpuSceneMaterialBuffers[frame].uploadDeviceLocal(&record, sizeof(record), sizeof(record) * id,
-                        commandPool, vulkanDevice.graphicsQueue());
-                }
+                uploadGPUSceneSnapshot<GPUSceneInstanceRecord>(gpuSceneInstanceBuffers[frame], instances);
+                uploadGPUSceneSnapshot<GPUSceneMeshRecord>(gpuSceneMeshBuffers[frame], meshes);
+                uploadGPUSceneSnapshot<GPUSceneMaterialRecord>(gpuSceneMaterialBuffers[frame], databaseMaterials);
                 refreshGPUSceneDescriptors(frame);
                 pending.clear();
                 recordGPUSceneUploadBarrier();

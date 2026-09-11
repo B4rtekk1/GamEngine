@@ -133,6 +133,12 @@
         std::array<Buffer, MAX_FRAMES_IN_FLIGHT> gpuSceneInstanceBuffers;
         std::array<Buffer, MAX_FRAMES_IN_FLIGHT> gpuSceneMeshBuffers;
         std::array<Buffer, MAX_FRAMES_IN_FLIGHT> gpuSceneMaterialBuffers;
+        // Retained across scene reloads so the next scene starts at the
+        // largest GPU-scene table we have already observed, not at a tiny
+        // default capacity which would immediately grow during rendering.
+        std::size_t gpuSceneInstanceHighWater{};
+        std::size_t gpuSceneMeshHighWater{};
+        std::size_t gpuSceneMaterialHighWater{};
         std::array<Buffer, MAX_FRAMES_IN_FLIGHT> visibleInstanceBuffers;
         std::array<Buffer, MAX_FRAMES_IN_FLIGHT> visibleInstanceCountBuffers;
         // GPU-driven grass compaction: count -> prefix -> scatter -> indirect.
