@@ -16,13 +16,17 @@
 
 namespace Engine::Culling
 {
-    /// GPU input for one active virtual-shadow page.  Keep this layout in
-    /// sync with ShadowPageWork in gpu_culling.slang.
+    /// GPU render-work item for one active virtual-shadow page.  The
+    /// allocator writes the physical destination and virtual source together;
+    /// neither the raster pass nor page-table commit needs to recover that
+    /// association from CPU-side allocator state. Keep this layout in sync
+    /// with ShadowPageWork in gpu_culling.slang.
     struct ShadowPageWork {
         glm::mat4 viewProjection{1.0F};
         std::uint32_t drawSlot{};
         std::uint32_t clipLevel{};
-        std::uint32_t padding[2]{};
+        std::uint32_t physicalPage{};
+        std::uint32_t virtualPage{};
     };
     static_assert(sizeof(ShadowPageWork) == 80);
     /**

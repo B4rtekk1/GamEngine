@@ -16,7 +16,12 @@ struct ShadowPageWork
     float4x4 viewProjection;
     uint drawSlot;
     uint clipLevel;
-    uint2 padding;
+    // These fields are deliberately carried through culling even though that
+    // pass only needs the matrix. The graphics pass and the later page-table
+    // commit consume the same GPU work-list entry, so a physical tile can
+    // never be confused with a stale virtual mapping.
+    uint physicalPage;
+    uint virtualPage;
 };
 [[vk::binding(8, 0)]] StructuredBuffer<ShadowPageWork> shadowPageWork;
 

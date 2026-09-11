@@ -91,6 +91,7 @@ void ShadowPass::create(VkPhysicalDevice physicalDevice, VkDevice device,
         shadowMap_ = &physicalPagePool;
         pageTable_.fill(ShadowMap::InvalidPage);
         pagesToRender_.reserve(ShadowMap::PhysicalPageCount);
+        pendingPageCommits_.reserve(ShadowMap::PhysicalPageCount);
 
         if (materialBuffers.size() != uniformBuffers.size() ||
             instanceBuffers.size() != uniformBuffers.size() ||
@@ -548,6 +549,7 @@ void ShadowPass::invalidateCache() noexcept {
     physicalPages_.fill({});
     cachedClipMatricesValid_.fill(false);
     pagesToRender_.clear();
+    pendingPageCommits_.clear();
     atlasContentValid_ = false;
 }
 
@@ -563,6 +565,8 @@ void ShadowPass::preparePages(
         static_cast<std::int32_t>(ShadowMap::VirtualPagesPerAxis);
     ++cacheClock_;
     pagesToRender_.clear();
+    pendingPageCommits_.clear();
+    preparedFrameIndex_ = frameIndex;
     const std::uint32_t maxPageUpdates = std::min(pageUpdateBudget, ShadowMap::PhysicalPageCount);
 
     // Dynamic transforms used to invalidate the whole virtual atlas. In play
@@ -821,10 +825,11 @@ void ShadowPass::preparePages(
                 }
             }
             if (physical == ShadowMap::InvalidPage) continue;
+            std::uint32_t evictedVirtualPage = ShadowMap::InvalidPage;
             if (physicalPages_[physical].allocated) {
                 const PhysicalPage& evicted = physicalPages_[physical];
-                pageTable_[virtualPageIndex(evicted.level, evicted.virtualX,
-                                             evicted.virtualY)] = ShadowMap::InvalidPage;
+                evictedVirtualPage = virtualPageIndex(evicted.level, evicted.virtualX,
+                                                       evicted.virtualY);
             }
             const std::uint32_t level = key / pagesPerLevel;
             const std::uint32_t local = key % pagesPerLevel;
@@ -832,7 +837,10 @@ void ShadowPass::preparePages(
                 static_cast<std::uint16_t>(local % ShadowMap::VirtualPagesPerAxis),
                 static_cast<std::uint16_t>(local / ShadowMap::VirtualPagesPerAxis),
                 static_cast<std::uint8_t>(level), true, false, cacheClock_};
-            pageTable_[key] = physical;
+            // Do not publish pageTable_[key] yet. The physical tile still
+            // contains its previous depth until record() has cleared and
+            // rasterized it. The explicit commit below runs after that pass.
+            pendingPageCommits_.push_back({key, physical, evictedVirtualPage});
             pagesToRender_.push_back(physical);
         } else {
             physicalPages_[physical].lastUsed = cacheClock_;
@@ -843,6 +851,10 @@ void ShadowPass::preparePages(
             }
         }
     }
+
+    // Scroll/invalidation changes only remap already-rendered tiles and are
+    // safe to publish now. Newly allocated entries are intentionally absent
+    // from pageTable_ until the post-render commit in record().
     pageTableBuffers_.at(frameIndex)->update(pageTable_.data(),
                                               sizeof(std::uint32_t) * pageTable_.size());
 }
@@ -864,6 +876,23 @@ void ShadowPass::record(const VkCommandBuffer commandBuffer,
         invalidateCache();
         atlasContentValid_ = false;
     }
+    // preparePages() may have published clipmap-scroll/removal updates for
+    // entries that already point at valid depth. Publish those host writes
+    // even when this frame has no tiles to rasterize.
+    const VkBufferMemoryBarrier2 preparedTableBarrier{
+        .sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER_2,
+        .srcStageMask = VK_PIPELINE_STAGE_2_HOST_BIT,
+        .srcAccessMask = VK_ACCESS_2_HOST_WRITE_BIT,
+        .dstStageMask = VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT,
+        .dstAccessMask = VK_ACCESS_2_SHADER_STORAGE_READ_BIT,
+        .buffer = pageTableBuffers_.at(preparedFrameIndex_)->handle(),
+        .offset = 0,
+        .size = VK_WHOLE_SIZE};
+    const VkDependencyInfo preparedTableDependency{
+        .sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO,
+        .bufferMemoryBarrierCount = 1,
+        .pBufferMemoryBarriers = &preparedTableBarrier};
+    vkCmdPipelineBarrier2(commandBuffer, &preparedTableDependency);
     // The atlas already stays in shader-read layout after a completed pass.
     // Avoid opening a 4096x4096 LOAD render pass when every requested page is
     // cached; this is the steady state for both editor and play mode.
@@ -904,7 +933,9 @@ void ShadowPass::record(const VkCommandBuffer commandBuffer,
             pageWork.push_back(Culling::ShadowPageWork{
                 .viewProjection = pageTransform * clipMatrices[page.level].native(),
                 .drawSlot = static_cast<std::uint32_t>(pageIndex),
-                .clipLevel = page.level});
+                .clipLevel = page.level,
+                .physicalPage = pagesToRender_[pageIndex],
+                .virtualPage = virtualPageIndex(page.level, page.virtualX, page.virtualY)});
         }
         cullingPass.recordCandidatesForPages(commandBuffer, objectCount, pageWork);
         twoSidedCullingPass.recordCandidatesForPages(commandBuffer, objectCount, pageWork);
@@ -994,6 +1025,35 @@ void ShadowPass::record(const VkCommandBuffer commandBuffer,
         }
     }
     vkCmdEndRenderPass(commandBuffer);
+
+    // This is the sole publication point for new/recycled mappings. It is
+    // deliberately after vkCmdEndRenderPass: the depth attachment write is
+    // ordered before the host-visible table update and the latter is made
+    // visible to the following forward fragment sampling work.
+    if (!pendingPageCommits_.empty()) {
+        for (const PendingPageCommit& commit : pendingPageCommits_) {
+            if (commit.evictedVirtualPage != ShadowMap::InvalidPage)
+                pageTable_[commit.evictedVirtualPage] = ShadowMap::InvalidPage;
+            pageTable_[commit.virtualPage] = commit.physicalPage;
+        }
+        Buffer& pageTableBuffer = *pageTableBuffers_.at(preparedFrameIndex_);
+        pageTableBuffer.update(pageTable_.data(), sizeof(std::uint32_t) * pageTable_.size());
+        const VkBufferMemoryBarrier2 pageTableBarrier{
+            .sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER_2,
+            .srcStageMask = VK_PIPELINE_STAGE_2_HOST_BIT,
+            .srcAccessMask = VK_ACCESS_2_HOST_WRITE_BIT,
+            .dstStageMask = VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT,
+            .dstAccessMask = VK_ACCESS_2_SHADER_STORAGE_READ_BIT,
+            .buffer = pageTableBuffer.handle(),
+            .offset = 0,
+            .size = VK_WHOLE_SIZE};
+        const VkDependencyInfo pageTableDependency{
+            .sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO,
+            .bufferMemoryBarrierCount = 1,
+            .pBufferMemoryBarriers = &pageTableBarrier};
+        vkCmdPipelineBarrier2(commandBuffer, &pageTableDependency);
+        pendingPageCommits_.clear();
+    }
     atlasInitialized_ = true;
     shadowMap_->markInitialized();
     if (objectCount != 0) atlasContentValid_ = true;

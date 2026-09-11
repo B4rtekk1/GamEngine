@@ -126,6 +126,16 @@ namespace Engine {
             std::uint64_t lastUsed{};
         };
 
+        // A mapping is intentionally pending while its physical tile is
+        // being cleared and rendered. Publishing it earlier would make the
+        // sampler resolve a new virtual page to depth left by the previous
+        // occupant of that tile.
+        struct PendingPageCommit {
+            std::uint32_t virtualPage{ShadowMap::InvalidPage};
+            std::uint32_t physicalPage{ShadowMap::InvalidPage};
+            std::uint32_t evictedVirtualPage{ShadowMap::InvalidPage};
+        };
+
         [[nodiscard]] static std::uint32_t virtualPageIndex(
             std::uint32_t level, std::uint32_t x, std::uint32_t y) noexcept;
 
@@ -136,6 +146,8 @@ namespace Engine {
         std::array<Mat4, ShadowMap::ClipLevelCount> cachedClipMatrices_{};
         std::array<bool, ShadowMap::ClipLevelCount> cachedClipMatricesValid_{};
         std::vector<std::uint32_t> pagesToRender_;
+        std::vector<PendingPageCommit> pendingPageCommits_;
+        std::uint32_t preparedFrameIndex_{};
         std::uint64_t cacheClock_{};
         VkDevice device_{VK_NULL_HANDLE};
         // The two view contexts keep independent virtual page tables, but
