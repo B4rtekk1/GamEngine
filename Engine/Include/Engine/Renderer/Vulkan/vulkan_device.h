@@ -10,6 +10,7 @@
 namespace Engine {
     struct QueueFamilyIndices {
         std::optional<uint32_t> graphics;
+        std::optional<uint32_t> compute;
         std::optional<uint32_t> present;
 
         [[nodiscard]] bool complete() const noexcept {
@@ -66,6 +67,12 @@ namespace Engine {
         [[nodiscard]] VmaAllocator allocator() const noexcept {
             return allocator_;
         }
+        [[nodiscard]] VkQueue computeQueue() const noexcept { return computeQueue_; }
+        /** True only when compute uses a family separate from graphics. */
+        [[nodiscard]] bool hasDedicatedComputeQueue() const noexcept {
+            return queueFamilies_.compute.has_value() && queueFamilies_.compute != queueFamilies_.graphics;
+        }
+        [[nodiscard]] uint32_t computeQueueFamily() const { return queueFamilies_.compute.value_or(queueFamilies_.graphics.value()); }
 
         [[nodiscard]] VkResolveModeFlagBits depthResolveMode() const noexcept {
             return depthResolveMode_;
@@ -85,6 +92,7 @@ namespace Engine {
         VkDevice device_ = VK_NULL_HANDLE;
         VkQueue graphicsQueue_ = VK_NULL_HANDLE;
         VkQueue presentQueue_ = VK_NULL_HANDLE;
+        VkQueue computeQueue_ = VK_NULL_HANDLE;
         QueueFamilyIndices queueFamilies_{};
         VmaAllocator allocator_ = VK_NULL_HANDLE;
         VkResolveModeFlagBits depthResolveMode_ = VK_RESOLVE_MODE_SAMPLE_ZERO_BIT;

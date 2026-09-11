@@ -73,6 +73,7 @@ void VulkanDevice::destroy() noexcept {
 
     presentQueue_ = VK_NULL_HANDLE;
     graphicsQueue_ = VK_NULL_HANDLE;
+    computeQueue_ = VK_NULL_HANDLE;
     device_ = VK_NULL_HANDLE;
     physicalDevice_ = VK_NULL_HANDLE;
     surface_ = VK_NULL_HANDLE;
@@ -95,6 +96,13 @@ QueueFamilyIndices VulkanDevice::findQueueFamilies(VkPhysicalDevice candidate) c
         if (families[i].queueCount > 0 &&
             (families[i].queueFlags & static_cast<VkQueueFlags>(VK_QUEUE_GRAPHICS_BIT)) != 0) {
             indices.graphics = i;
+        }
+
+        // Prefer a compute-only family: it is the configuration that can
+        // genuinely overlap graphics work. Fall back to any compute-capable
+        // family (normally graphics) so async passes remain usable everywhere.
+        if (families[i].queueCount > 0 && (families[i].queueFlags & VK_QUEUE_COMPUTE_BIT) != 0) {
+            if (!indices.compute.has_value() || (families[i].queueFlags & VK_QUEUE_GRAPHICS_BIT) == 0) indices.compute = i;
         }
 
         VkBool32 supportsPresent = VK_FALSE;
@@ -281,6 +289,7 @@ void VulkanDevice::createLogicalDevice() {
     const std::set<uint32_t> uniqueFamilies = {
         queueFamilies_.graphics.value(),
         queueFamilies_.present.value(),
+        queueFamilies_.compute.value_or(queueFamilies_.graphics.value()),
     };
 
     std::vector<VkDeviceQueueCreateInfo> queueCreateInfos;
@@ -351,6 +360,7 @@ void VulkanDevice::createLogicalDevice() {
         queueFamilies_.present.value(),
         kFirstQueueIndex,
         &presentQueue_);
+    vkGetDeviceQueue(device_, queueFamilies_.compute.value_or(queueFamilies_.graphics.value()), kFirstQueueIndex, &computeQueue_);
 }
 
 } // namespace Engine

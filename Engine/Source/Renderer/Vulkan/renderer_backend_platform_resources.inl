@@ -18,6 +18,9 @@
             waitForDrawableExtent();
             createSwapChain();
             createCommandPool();
+            frameGraph.initialize(device, vulkanDevice.allocator());
+            frameGraphExecutor.initialize(device, vulkanDevice.graphicsQueue(), vulkanDevice.graphicsQueueFamily(),
+                                          vulkanDevice.computeQueue(), vulkanDevice.computeQueueFamily());
             uploadContext.create(device, vulkanDevice.graphicsQueue(), vulkanDevice.graphicsQueueFamily(), vulkanDevice.allocator());
             UploadContext::setCurrent(&uploadContext);
             createCommandBuffers();

@@ -35,6 +35,7 @@
         // Retained across frames: reset() clears declarations, while the graph
         // keeps its compiled topology cache.
         RenderGraph::RenderGraph frameGraph;
+        RenderGraph::RenderGraphExecutor frameGraphExecutor;
         GpuProfileFrame lastGpuProfile{};
         // Single-sample depth target populated by the forward pass's MSAA depth resolve.
         DepthBuffer hiZDepthBuffer;

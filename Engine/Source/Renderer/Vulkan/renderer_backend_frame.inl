@@ -828,6 +828,7 @@
             // culling and raster passes); from this point on no manual
             // cross-pass image barrier is emitted by the renderer.
             frameGraph.reset();
+            RenderGraph::TextureHandle hiZ{};
             if (renderGameViewport && hizEnabled) {
                 const VkExtent2D extent = swapchain.extent();
                 const RenderGraph::TextureDesc depthDesc{
@@ -840,12 +841,31 @@
                     {.stage = VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT,
                      .access = VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT,
                      .layout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL,
-                     .write = true});
+                     .write = true,
+                     .queueFamily = vulkanDevice.graphicsQueueFamily()});
+                const RenderGraph::TextureDesc hiZDesc{
+                    .extent = {hiZBuffer.width(), hiZBuffer.height(), 1},
+                    .format = VK_FORMAT_R32_SFLOAT,
+                    .usage = VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
+                    .aspect = VK_IMAGE_ASPECT_COLOR_BIT,
+                    .mipLevels = hiZBuffer.mipCount()};
+                hiZ = frameGraph.importTexture("Hi-Z pyramid", hiZBuffer.image(), hiZDesc,
+                    {.stage = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                     .access = VK_ACCESS_2_SHADER_SAMPLED_READ_BIT,
+                     .layout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                     .queueFamily = vulkanDevice.graphicsQueueFamily()});
                 frameGraph.addPass("Hi-Z", [&](RenderGraph::PassBuilder& builder) {
                     builder.read(depth, RenderGraph::TextureUsage::SampledReadCompute);
+                    builder.write(hiZ, RenderGraph::TextureUsage::ExternalComputeWrite);
                 }, [this](const VkCommandBuffer buffer) {
                     hiZPass.record(buffer, hiZBuffer, true);
-                });
+                }, RenderGraph::QueueClass::AsyncCompute);
+                // The next frame's legacy culling samples this pyramid on the
+                // graphics family. Make that transfer explicit now, while the
+                // graph still owns both sides of the hand-off.
+                frameGraph.addPass("Hi-Z ownership return", [&](RenderGraph::PassBuilder& builder) {
+                    builder.read(hiZ, RenderGraph::TextureUsage::SampledReadCompute);
+                }, {}, RenderGraph::QueueClass::Graphics);
             }
 
             const VkExtent2D frameExtent = swapchain.extent();
@@ -943,10 +963,13 @@
                                       swapchain.extent());
             }
             gpuTimestampProfiler.endZone(buffer, currentFrame);
+            gpuTimestampProfiler.endFrame(buffer, currentFrame);
             });
-            frameGraph.execute(commandBuffer);
+            // The prelude owns all legacy graphics work. Compile the graph
+            // here so a depth image handed to the async Hi-Z queue gets its
+            // release barrier before this command buffer is submitted.
+            frameGraphExecutor.recordPreludeReleases(frameGraph, commandBuffer);
             if (renderGameViewport && hizEnabled) hiZValid = true;
-            gpuTimestampProfiler.endFrame(commandBuffer, currentFrame);
 
             if (vkEndCommandBuffer(commandBuffer) != VK_SUCCESS) {
                 throw std::runtime_error("Could not end command buffer");
@@ -1252,7 +1275,32 @@
             particleSystem->update(static_cast<float>(Time::deltaTime()));
         }
 
-        void submitAndPresentFrame(const uint32_t imageIndex) {
+        void submitAndPresentFrame(const uint32_t imageIndex, const bool hasGraphTail = false) {
+            if (hasGraphTail) {
+                const std::uint64_t preludeValue = frameGraphExecutor.submitPrelude(commandBuffers[currentFrame]);
+                frameGraphExecutor.submit(frameGraph, imageAvailableSemaphores[currentFrame],
+                    VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT, renderFinishedSemaphores[imageIndex],
+                    inFlightFences[currentFrame], preludeValue);
+                frameSubmissionValues[currentFrame] = ++submittedFrameValue;
+
+                VkPresentInfoKHR presentInfo{};
+                presentInfo.sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR;
+                presentInfo.waitSemaphoreCount = 1;
+                const VkSemaphore signalSemaphore = renderFinishedSemaphores[imageIndex];
+                presentInfo.pWaitSemaphores = &signalSemaphore;
+                const VkSwapchainKHR swapChain = swapchain.handle();
+                presentInfo.swapchainCount = 1;
+                presentInfo.pSwapchains = &swapChain;
+                presentInfo.pImageIndices = &imageIndex;
+                const VkResult result = vkQueuePresentKHR(vulkanDevice.presentQueue(), &presentInfo);
+                if (result == VK_ERROR_OUT_OF_DATE_KHR || result == VK_SUBOPTIMAL_KHR || framebufferResized) {
+                    framebufferResized = false;
+                    recreateSwapChain();
+                } else if (result != VK_SUCCESS) {
+                    throw std::runtime_error("Could not present image");
+                }
+                return;
+            }
             VkSubmitInfo submitInfo{};
             submitInfo.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
 
@@ -1305,6 +1353,8 @@
 
             uint32_t imageIndex;
             if (!acquireFrameImage(imageIndex)) { return; }
+
+            frameGraphExecutor.beginFrame();
 
             vkResetCommandBuffer(commandBuffers[currentFrame], 0);
             {
@@ -1366,7 +1416,7 @@
             }
             {
                 GE_PROFILE_SCOPE("Queue Submit / Present");
-                submitAndPresentFrame(imageIndex);
+                submitAndPresentFrame(imageIndex, true);
             }
             // Only this path records timestamp queries.  drawCoreFrame() shares
             // submitAndPresentFrame(), but does not reset or write this pool.
