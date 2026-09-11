@@ -232,7 +232,8 @@ bool VulkanDevice::isSuitable(VkPhysicalDevice candidate) const {
     features11.pNext = &features12;
     features12.pNext = &features13;
     vkGetPhysicalDeviceFeatures2(candidate, &features2);
-    if (features13.synchronization2 != VK_TRUE ||
+    if (features13.dynamicRendering != VK_TRUE ||
+        features13.synchronization2 != VK_TRUE ||
         features12.timelineSemaphore != VK_TRUE ||
         features12.drawIndirectCount != VK_TRUE ||
         features12.shaderFloat16 != VK_TRUE ||
@@ -374,6 +375,7 @@ void VulkanDevice::createLogicalDevice() {
     }
 
     VkPhysicalDeviceVulkan13Features features13{.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES};
+    features13.dynamicRendering = VK_TRUE;
     features13.synchronization2 = VK_TRUE;
     VkPhysicalDeviceVulkan12Features features12{.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES};
     features12.timelineSemaphore = VK_TRUE;
