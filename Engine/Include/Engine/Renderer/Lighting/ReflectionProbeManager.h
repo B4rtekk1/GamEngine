@@ -4,6 +4,8 @@
 #include "Engine/ECS/Entity.h"
 
 #include <cstdint>
+#include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 namespace Engine {
@@ -35,11 +37,19 @@ public:
     // prefiltered-sky fallback.
     static constexpr std::uint32_t TextureDescriptorCount = MaxProbes;
     void update(const Registry& registry);
+    /** Queues an ECS probe for a renderer-owned cubemap capture. */
     void bakeProbe(Entity entity);
+    /** Returns and clears requests; only the Vulkan backend may consume them. */
+    [[nodiscard]] std::vector<Entity> consumeBakeRequests();
+    /** Publishes the descriptor-array slot after the six faces were rendered. */
+    void markBaked(Entity entity);
     void uploadProbeTable(std::uint32_t frameIndex) noexcept;
     [[nodiscard]] const std::vector<GpuReflectionProbe>& probes() const noexcept { return probes_; }
 
 private:
     std::vector<GpuReflectionProbe> probes_;
+    std::unordered_map<Entity, std::uint32_t> slots_;
+    std::unordered_set<Entity> baked_;
+    std::vector<Entity> bakeRequests_;
 };
 } // namespace Engine

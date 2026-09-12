@@ -6,12 +6,14 @@
 #include "Engine/Core/Transform.h"
 
 #include <algorithm>
+#include <utility>
 
 namespace Engine {
 void ReflectionProbeManager::update(const Registry& registry) {
     probes_.clear();
+    slots_.clear();
     probes_.reserve(std::min<std::size_t>(registry.size(), MaxProbes));
-    registry.view<Transform, ReflectionProbeComponent>([&](const Entity, const Transform& transform,
+    registry.view<Transform, ReflectionProbeComponent>([&](const Entity entity, const Transform& transform,
                                                             const ReflectionProbeComponent& probe) {
         if (probes_.size() == MaxProbes) return;
         const glm::vec3 position = glm::vec3(transform.worldMatrix().native()[3]);
@@ -23,18 +25,31 @@ void ReflectionProbeManager::update(const Registry& registry) {
         gpu.flags = (probe.shape == ReflectionProbeShape::Box ? Probe_Box : 0u) |
                     (probe.boxProjection ? Probe_BoxProject : 0u) |
                     (probe.enabled ? Probe_Enabled : 0u);
-        // Slot zero is the valid prefiltered-environment fallback until bakeProbe
-        // attaches a captured cubemap to this entry.
-        gpu.textureIndex = 0;
+        // Each dense probe entry owns the descriptor slot with the same index.
+        // The descriptor itself remains populated by the prefiltered-sky
+        // fallback until the capture pass publishes its cubemap.
+        gpu.textureIndex = static_cast<std::uint32_t>(probes_.size());
+        slots_.insert_or_assign(entity, gpu.textureIndex);
         probes_.push_back(gpu);
     });
+
+    // Discard handles for ECS entities removed since the previous extraction.
+    for (auto it = baked_.begin(); it != baked_.end();) {
+        if (!slots_.contains(*it)) it = baked_.erase(it); else ++it;
+    }
 }
 
-void ReflectionProbeManager::bakeProbe(const Entity) {
-    // Capture rendering is deliberately queued by the Vulkan backend. Keeping
-    // selection/table construction independent means edits never require CPU
-    // per-renderable probe selection.
+void ReflectionProbeManager::bakeProbe(const Entity entity) {
+    if (entity == NullEntity) return;
+    if (std::find(bakeRequests_.begin(), bakeRequests_.end(), entity) == bakeRequests_.end())
+        bakeRequests_.push_back(entity);
 }
+
+std::vector<Entity> ReflectionProbeManager::consumeBakeRequests() {
+    return std::exchange(bakeRequests_, {});
+}
+
+void ReflectionProbeManager::markBaked(const Entity entity) { baked_.insert(entity); }
 
 void ReflectionProbeManager::uploadProbeTable(const std::uint32_t) noexcept {}
 } // namespace Engine

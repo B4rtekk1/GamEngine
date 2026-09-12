@@ -536,6 +536,21 @@ void ShadowPass::updateImageBasedLightingDescriptors(
     }
 }
 
+void ShadowPass::setReflectionProbeTexture(const std::uint32_t frameIndex,
+                                           const std::uint32_t textureIndex,
+                                           const VkDescriptorImageInfo& texture) const {
+    if (device_ == VK_NULL_HANDLE || frameIndex >= descriptorSets_.size() ||
+        textureIndex >= ReflectionProbeManager::TextureDescriptorCount) {
+        throw std::out_of_range("Reflection-probe descriptor index is invalid");
+    }
+    for (const VkDescriptorSet set : {descriptorSets_[frameIndex], grassDescriptorSets_[frameIndex],
+                                      grassVelocityDescriptorSets_[frameIndex], grassShadowDescriptorSets_[frameIndex]}) {
+        const VkWriteDescriptorSet write{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr, set, 15,
+            textureIndex, 1, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &texture, nullptr, nullptr};
+        vkUpdateDescriptorSets(device_, 1, &write, 0, nullptr);
+    }
+}
+
 void ShadowPass::destroy() noexcept {
     if (device_ != VK_NULL_HANDLE) {
         if (grassPipeline_ != VK_NULL_HANDLE) vkDestroyPipeline(device_, grassPipeline_, nullptr);

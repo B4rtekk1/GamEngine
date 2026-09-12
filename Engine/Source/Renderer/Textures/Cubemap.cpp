@@ -70,9 +70,74 @@ Cubemap& Cubemap::operator=(Cubemap&& other) noexcept {
     image_ = std::exchange(other.image_, VK_NULL_HANDLE);
     memory_ = std::exchange(other.memory_, VK_NULL_HANDLE);
     imageView_ = std::exchange(other.imageView_, VK_NULL_HANDLE);
+    faceImageViews_ = std::exchange(other.faceImageViews_, {});
     sampler_ = std::exchange(other.sampler_, VK_NULL_HANDLE);
     mipLevels_ = std::exchange(other.mipLevels_, 0);
     return *this;
+}
+
+void Cubemap::createRenderTarget(const VkPhysicalDevice physicalDevice, const VkDevice device,
+                                 const uint32_t faceSize, const uint32_t mipLevels) {
+    if (faceSize == 0 || mipLevels == 0 ||
+        mipLevels > static_cast<uint32_t>(std::bit_width(faceSize))) {
+        throw std::invalid_argument("Cubemap render target has invalid dimensions or mip count");
+    }
+
+    destroy();
+    device_ = device;
+    mipLevels_ = mipLevels;
+    try {
+        VkImageCreateInfo imageInfo{VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO};
+        imageInfo.flags = VK_IMAGE_CREATE_CUBE_COMPATIBLE_BIT;
+        imageInfo.imageType = VK_IMAGE_TYPE_2D;
+        imageInfo.format = VK_FORMAT_R16G16B16A16_SFLOAT;
+        imageInfo.extent = {faceSize, faceSize, 1};
+        imageInfo.mipLevels = mipLevels_;
+        imageInfo.arrayLayers = 6;
+        imageInfo.samples = VK_SAMPLE_COUNT_1_BIT;
+        imageInfo.tiling = VK_IMAGE_TILING_OPTIMAL;
+        imageInfo.usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT |
+                          VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
+        imageInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+        if (vkCreateImage(device_, &imageInfo, nullptr, &image_) != VK_SUCCESS)
+            throw std::runtime_error("Could not create reflection-probe cubemap image");
+
+        VkMemoryRequirements requirements{};
+        vkGetImageMemoryRequirements(device_, image_, &requirements);
+        VkMemoryAllocateInfo allocation{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO};
+        allocation.allocationSize = requirements.size;
+        allocation.memoryTypeIndex = findMemoryType(physicalDevice, requirements.memoryTypeBits,
+                                                     VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+        if (vkAllocateMemory(device_, &allocation, nullptr, &memory_) != VK_SUCCESS)
+            throw std::runtime_error("Could not allocate reflection-probe cubemap memory");
+        if (vkBindImageMemory(device_, image_, memory_, 0) != VK_SUCCESS)
+            throw std::runtime_error("Could not bind reflection-probe cubemap memory");
+
+        VkImageViewCreateInfo cubeView{VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
+        cubeView.image = image_; cubeView.viewType = VK_IMAGE_VIEW_TYPE_CUBE;
+        cubeView.format = imageInfo.format;
+        cubeView.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, mipLevels_, 0, 6};
+        if (vkCreateImageView(device_, &cubeView, nullptr, &imageView_) != VK_SUCCESS)
+            throw std::runtime_error("Could not create reflection-probe cubemap view");
+        for (uint32_t face = 0; face < 6; ++face) {
+            VkImageViewCreateInfo faceView = cubeView;
+            faceView.viewType = VK_IMAGE_VIEW_TYPE_2D;
+            faceView.subresourceRange.levelCount = 1;
+            faceView.subresourceRange.baseArrayLayer = face;
+            faceView.subresourceRange.layerCount = 1;
+            if (vkCreateImageView(device_, &faceView, nullptr, &faceImageViews_[face]) != VK_SUCCESS)
+                throw std::runtime_error("Could not create reflection-probe face view");
+        }
+        VkSamplerCreateInfo sampler{VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO};
+        sampler.magFilter = VK_FILTER_LINEAR; sampler.minFilter = VK_FILTER_LINEAR;
+        sampler.mipmapMode = VK_SAMPLER_MIPMAP_MODE_LINEAR;
+        sampler.addressModeU = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+        sampler.addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+        sampler.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+        sampler.maxLod = static_cast<float>(mipLevels_ - 1);
+        if (vkCreateSampler(device_, &sampler, nullptr, &sampler_) != VK_SUCCESS)
+            throw std::runtime_error("Could not create reflection-probe cubemap sampler");
+    } catch (...) { destroy(); throw; }
 }
 
 void Cubemap::create(VkPhysicalDevice physicalDevice, VkDevice device, VkCommandPool commandPool,
@@ -166,10 +231,14 @@ void Cubemap::createHdr(VkPhysicalDevice physicalDevice, VkDevice device, VkComm
 void Cubemap::destroy() noexcept {
     if (device_ != VK_NULL_HANDLE) {
         if (sampler_ != VK_NULL_HANDLE) vkDestroySampler(device_, sampler_, nullptr);
+        for (VkImageView& faceView : faceImageViews_) {
+            if (faceView != VK_NULL_HANDLE) vkDestroyImageView(device_, faceView, nullptr);
+            faceView = VK_NULL_HANDLE;
+        }
         if (imageView_ != VK_NULL_HANDLE) vkDestroyImageView(device_, imageView_, nullptr);
         if (image_ != VK_NULL_HANDLE) vkDestroyImage(device_, image_, nullptr);
         if (memory_ != VK_NULL_HANDLE) vkFreeMemory(device_, memory_, nullptr);
     }
-    sampler_ = VK_NULL_HANDLE; imageView_ = VK_NULL_HANDLE; image_ = VK_NULL_HANDLE; memory_ = VK_NULL_HANDLE; device_ = VK_NULL_HANDLE; mipLevels_ = 0;
+    sampler_ = VK_NULL_HANDLE; imageView_ = VK_NULL_HANDLE; faceImageViews_.fill(VK_NULL_HANDLE); image_ = VK_NULL_HANDLE; memory_ = VK_NULL_HANDLE; device_ = VK_NULL_HANDLE; mipLevels_ = 0;
 }
 } // namespace Engine

@@ -11,6 +11,7 @@
 #include "Engine/Renderer/Geometry/ProceduralCloud.h"
 #include "Engine/Renderer/Geometry/GpuVertex.h"
 #include "Engine/Renderer/Lighting/DirectionalLightData.h"
+#include "Engine/Renderer/Lighting/ReflectionProbeCapture.h"
 #include "Engine/Renderer/Materials/PBRMaterial.h"
 #include "Engine/Renderer/Materials/MaterialBuffer.h"
 #include "Engine/Renderer/RenderConfig.h"
@@ -38,6 +39,18 @@ TEST(ReflectionProbeComponent, ComputesBoxAndSphereInfluence) {
     probe.shape = Engine::ReflectionProbeShape::Sphere;
     probe.extents = {5.0F, 0.0F, 0.0F};
     EXPECT_FLOAT_EQ(probe.influence({0.0F, 0.0F, 0.0F}, {4.5F, 0.0F, 0.0F}), 0.5F);
+}
+
+TEST(ReflectionProbeCapture, UsesCanonicalCubemapCamerasAndFullMipChain) {
+    constexpr auto faces = Engine::ReflectionProbeCapture::faces();
+    EXPECT_FLOAT_EQ(faces[0].direction.x(), 1.0F);
+    EXPECT_FLOAT_EQ(faces[0].up.y(), -1.0F);
+    EXPECT_FLOAT_EQ(faces[2].direction.y(), 1.0F);
+    EXPECT_FLOAT_EQ(faces[2].up.z(), 1.0F);
+    EXPECT_FLOAT_EQ(faces[3].up.z(), -1.0F);
+    EXPECT_EQ(Engine::ReflectionProbeCapture::fullMipCount(256), 9U);
+    EXPECT_EQ(Engine::ReflectionProbeCapture::fullMipCount(1), 1U);
+    EXPECT_EQ(Engine::ReflectionProbeCapture::fullMipCount(0), 0U);
 }
 
 void ExpectVec3Near(const Engine::Vec3& value, float x, float y, float z) {

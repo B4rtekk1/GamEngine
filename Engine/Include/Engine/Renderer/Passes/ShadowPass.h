@@ -74,6 +74,12 @@ namespace Engine {
         void updateImageBasedLightingDescriptors(
             const std::array<VkDescriptorImageInfo, 3>& imageBasedLighting) const;
 
+        /** Replaces one local-probe fallback descriptor in every forward set
+         * for a frame. The image must remain alive until that frame fence. */
+        void setReflectionProbeTexture(std::uint32_t frameIndex,
+                                       std::uint32_t textureIndex,
+                                       const VkDescriptorImageInfo& texture) const;
+
         void destroy() noexcept;
 
         void record(VkCommandBuffer commandBuffer,

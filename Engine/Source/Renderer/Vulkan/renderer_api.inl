@@ -110,6 +110,9 @@ void Renderer::setEditorSelection(const Entity entity) const {
 bool Renderer::setEnvironmentEquirectangular(const std::filesystem::path& path) const {
     return backend_ && backend_->setEnvironmentEquirectangular(path);
 }
+void Renderer::bakeReflectionProbe(const Entity entity) const {
+    if (backend_) backend_->bakeReflectionProbe(entity);
+}
 void Renderer::renderFrame() const { backend_->renderFrame(); }
 void Renderer::synchronizeScene(Scene& scene) const {
     if (!backend_) return;

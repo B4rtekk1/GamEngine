@@ -108,6 +108,9 @@ namespace Engine {
         /** Rebuilds global IBL from an HDR/EXR equirectangular panorama. */
         [[nodiscard]] bool setEnvironmentEquirectangular(const std::filesystem::path& path) const;
 
+        /** Queues a scene-linear six-face capture for a ReflectionProbeComponent. */
+        void bakeReflectionProbe(Entity entity) const;
+
         void renderFrame() const;
 
         void synchronizeScene(Scene &scene) const;

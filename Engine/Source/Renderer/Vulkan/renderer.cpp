@@ -485,6 +485,10 @@ namespace Engine {
             }
         }
 
+        void bakeReflectionProbe(const Entity entity) {
+            if (sceneResourcesInitialized) reflectionProbeManager.bakeProbe(entity);
+        }
+
         [[nodiscard]] bool reloadShaders() {
             if (device == VK_NULL_HANDLE || !sceneResourcesInitialized) return false;
 
