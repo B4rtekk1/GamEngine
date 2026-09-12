@@ -61,6 +61,7 @@ namespace Engine {
         constexpr std::uint32_t ShaderGraphMaterialFormatVersion = 19;
         constexpr std::uint32_t MaterialShaderSourceFormatVersion = 20;
         constexpr std::uint32_t ReflectionProbeFormatVersion = 21;
+        constexpr std::uint32_t TerrainMaterialLayersFormatVersion = 22;
         constexpr std::uint32_t TerrainDataVersion = 1;
         constexpr std::array<char, 8> TerrainDataMagic{'G', 'E', 'T', 'E', 'R', 'R', '1', '\0'};
 
@@ -633,6 +634,61 @@ namespace Engine {
             return image;
         }
 
+        void writeTerrainLayers(std::ostream& scene, std::ostream* data,
+                                const TerrainComponent& terrain, const MeshRenderer& renderer) {
+            scene << "TERRAIN_LAYERS 4\n";
+            for (std::size_t layer = 0; layer < terrain.materialLayers.size(); ++layer) {
+                const Mesh::Image* image = terrain.materialLayers[layer] ? &*terrain.materialLayers[layer] : nullptr;
+                const auto localIndex = renderer.material.pbr.terrainLayerTextures[layer];
+                if (image == nullptr && renderer.mesh && localIndex >= 0 &&
+                    static_cast<std::size_t>(localIndex) < renderer.mesh->images.size()) {
+                    image = &renderer.mesh->images[static_cast<std::size_t>(localIndex)];
+                }
+                if (image == nullptr || image->width == 0 || image->height == 0 ||
+                    image->rgbaPixels.size() != static_cast<std::size_t>(image->width) * image->height * 4) {
+                    scene << "EMPTY\n";
+                } else if (data != nullptr) {
+                    writeImageBinary(scene, *data, image->width, image->height, image->rgbaPixels);
+                } else {
+                    scene << "IMAGE " << image->width << ' ' << image->height << ' ' << image->rgbaPixels.size()
+                          << "\nPIXELS";
+                    for (const std::uint8_t pixel : image->rgbaPixels) scene << ' ' << static_cast<unsigned>(pixel);
+                    scene << '\n';
+                }
+            }
+        }
+
+        void readTerrainLayers(std::istream& scene, std::istream* data, TerrainComponent& terrain) {
+            const auto count = readCount(scene, "terrain material layer count", terrain.materialLayers.size());
+            if (count != terrain.materialLayers.size()) invalidScene("terrain must have exactly four material layers");
+            for (std::size_t layer = 0; layer < count; ++layer) {
+                const auto record = read<std::string>(scene, "terrain material layer record");
+                if (record == "EMPTY") continue;
+                if (record == "IMAGE_BIN") {
+                    if (data == nullptr) invalidScene("terrain material image sidecar is missing");
+                    terrain.materialLayers[layer] = readImageBinary(scene, *data);
+                    continue;
+                }
+                if (record != "IMAGE") invalidScene("invalid terrain material layer record");
+                Mesh::Image image;
+                image.width = read<std::uint32_t>(scene, "terrain layer image width");
+                image.height = read<std::uint32_t>(scene, "terrain layer image height");
+                const auto pixels = readCount(scene, "terrain layer image pixels", MaxIndices * 4);
+                if (image.width == 0 || image.height == 0 ||
+                    pixels != static_cast<std::size_t>(image.width) * image.height * 4) {
+                    invalidScene("terrain layer image dimensions do not match RGBA pixel data");
+                }
+                expect(scene, "PIXELS");
+                image.rgbaPixels.reserve(pixels);
+                for (std::size_t pixel = 0; pixel < pixels; ++pixel) {
+                    const auto byte = read<unsigned>(scene, "terrain layer image pixel");
+                    if (byte > std::numeric_limits<std::uint8_t>::max()) invalidScene("terrain layer image pixel is outside byte range");
+                    image.rgbaPixels.push_back(static_cast<std::uint8_t>(byte));
+                }
+                terrain.materialLayers[layer] = std::move(image);
+            }
+        }
+
         void writeTerrainGrass(std::ostream& output, const TerrainGrassComponent& grass,
                                const std::size_t meshId) {
             output << meshId << ' ';
@@ -957,6 +1013,10 @@ namespace Engine {
                     serialized << "TERRAIN_V2 ";
                     writeTerrain(serialized, registry.get<TerrainComponent>(entity));
                 }
+                if (registry.has<MeshRenderer>(entity)) {
+                    writeTerrainLayers(serialized, terrainData, registry.get<TerrainComponent>(entity),
+                                       registry.get<MeshRenderer>(entity));
+                }
             }
             if (registry.has<TerrainGrassComponent>(entity)) {
                 const auto& grass = registry.get<TerrainGrassComponent>(entity);
@@ -1128,6 +1188,7 @@ namespace Engine {
             version != EmissiveFormatVersion && version != MaterialOverrideFormatVersion &&
             version != MaterialOverrideFormatVersion + 1 && version != ScriptFieldsFormatVersion &&
             version != MaterialShaderFormatVersion && version != MaterialShaderSourceFormatVersion &&
+            version != ReflectionProbeFormatVersion &&
             version != FormatVersion) {
             invalidScene("unsupported format version " + std::to_string(version));
         }
@@ -1371,6 +1432,11 @@ namespace Engine {
                         terrain = readTerrain(input, component == "TERRAIN_V2");
                     }
                     loaded.add<TerrainComponent>(entity, std::move(terrain));
+                } else if (component == "TERRAIN_LAYERS") {
+                    if (version < TerrainMaterialLayersFormatVersion || !hasTerrain) {
+                        invalidScene("terrain material layers must follow TerrainComponent");
+                    }
+                    readTerrainLayers(input, terrainData, loaded.get<TerrainComponent>(entity));
                 } else if (component == "TERRAIN_GRASS" || component == "TERRAIN_GRASS_V2") {
                     if (hasTerrainGrass) invalidScene("entity contains more than one TerrainGrassComponent");
                     hasTerrainGrass = true;
@@ -1635,7 +1701,8 @@ namespace Engine {
                 if (!hasRenderer) invalidScene("terrain entity is missing MeshRenderer");
                 const auto mesh = std::make_shared<Mesh>(loaded.get<TerrainComponent>(entity).createMesh());
                 loaded.get<MeshRenderer>(entity).mesh = mesh;
-                loaded.get<MeshRenderer>(entity).material.pbr.terrainLayered = true;
+                loaded.get<TerrainComponent>(entity).applyMaterialLayers(
+                    *mesh, loaded.get<MeshRenderer>(entity).material.pbr);
                 if (hasCollider) {
                     if (auto* meshCollider = std::get_if<MeshCollider>(
                             &loaded.get<ColliderComponent>(entity).shape)) {

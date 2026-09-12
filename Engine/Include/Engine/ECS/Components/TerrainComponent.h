@@ -4,6 +4,8 @@
 
 #include <cstdint>
 #include <cstddef>
+#include <array>
+#include <optional>
 #include <vector>
 
 
@@ -44,6 +46,12 @@ namespace Engine {
         std::vector<float> heights;
         /** Per-heightmap-sample tint, painted by the terrain brush. */
         std::vector<Vec3> colors;
+        /** Durable source images for the four splat-material layers.
+         *
+         * They deliberately live with terrain data rather than in a generated
+         * mesh: terrain geometry is rebuilt for loading, sculpting and LOD.
+         */
+        std::array<std::optional<Mesh::Image>, 4> materialLayers;
 
         TerrainComponent();
 
@@ -61,6 +69,10 @@ namespace Engine {
 
         /** Builds a shared-vertex mesh. lodLevel 0 uses every height sample. */
         [[nodiscard]] Mesh createMesh(std::uint32_t lodLevel = 0) const;
+
+        /** Attaches persistent layer images to regenerated geometry and maps
+         * them to the terrain material's mesh-local texture indices. */
+        void applyMaterialLayers(Mesh& mesh, PBRMaterial& material) const;
 
         /** Updates positions and normals in an existing full-resolution terrain mesh. */
         bool updateMeshRegion(Mesh &mesh, const TerrainRegion &region) const;

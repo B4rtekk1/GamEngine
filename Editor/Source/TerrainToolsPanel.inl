@@ -105,6 +105,9 @@ namespace {
                         static_cast<std::size_t>(state.paintLayer + 1)));
                     mesh->images[state.paintLayer] = {texture->width, texture->height,
                                                      texture->rgbaPixels};
+                    scene.editor().patch<Engine::TerrainComponent>(selected, [&](auto& terrain) {
+                        terrain.materialLayers[state.paintLayer] = mesh->images[state.paintLayer];
+                    });
                     scene.editor().patch<Engine::MeshRenderer>(selected, [&](auto& component) {
                         component.mesh = mesh;
                         for (int layer = 0; layer < 4; ++layer)
@@ -231,8 +234,10 @@ void drawTerrainToolsPanel(Engine::ScenePreset& scene, Engine::Assets::Content& 
         setTerrainTool(state, next);
         auto mesh = std::make_shared<Engine::Mesh>(terrain.createMesh(
             next == TerrainToolMode::Sculpt ? 0U : state.previewLod));
-        scene.editor().patch<Engine::MeshRenderer>(selected,
-            [&](auto& component) { component.mesh = std::move(mesh); });
+        scene.editor().patch<Engine::MeshRenderer>(selected, [&](auto& component) {
+            terrain.applyMaterialLayers(*mesh, component.material.pbr);
+            component.mesh = std::move(mesh);
+        });
         renderer.synchronizeScene(scene);
     }
     if (terrainModeButton("Paint Materials", "Blend up to four terrain texture layers",
@@ -255,8 +260,10 @@ void drawTerrainToolsPanel(Engine::ScenePreset& scene, Engine::Assets::Content& 
         if (Editor::Controls::sliderInt("##terrain-preview-lod", &lod, 0, 5, "%d")) {
             state.previewLod = static_cast<std::uint32_t>(lod);
             auto mesh = std::make_shared<Engine::Mesh>(terrain.createMesh(state.previewLod));
-            scene.editor().patch<Engine::MeshRenderer>(selected,
-                [&](auto& component) { component.mesh = std::move(mesh); });
+            scene.editor().patch<Engine::MeshRenderer>(selected, [&](auto& component) {
+                terrain.applyMaterialLayers(*mesh, component.material.pbr);
+                component.mesh = std::move(mesh);
+            });
             renderer.synchronizeScene(scene);
         }
         ImGui::TextWrapped("Choose a tool above, then paint directly in the Scene View.");

@@ -140,6 +140,21 @@ Mesh TerrainComponent::createMesh(const std::uint32_t lodLevel) const {
     return mesh;
 }
 
+void TerrainComponent::applyMaterialLayers(Mesh& mesh, PBRMaterial& material) const {
+    mesh.images.clear();
+    material.terrainLayerTextures.fill(-1);
+    for (std::size_t layer = 0; layer < materialLayers.size(); ++layer) {
+        const auto& image = materialLayers[layer];
+        if (!image || image->width == 0 || image->height == 0 ||
+            image->rgbaPixels.size() != static_cast<std::size_t>(image->width) * image->height * 4) {
+            continue;
+        }
+        material.terrainLayerTextures[layer] = static_cast<std::int32_t>(mesh.images.size());
+        mesh.images.push_back(*image);
+    }
+    material.terrainLayered = true;
+}
+
 bool TerrainComponent::updateMeshRegion(Mesh& mesh, const TerrainRegion& region) const {
     if (!valid() || !region.valid || mesh.vertices.size() != sampleCount()) return false;
     const float spacingX = width / static_cast<float>(resolution - 1);

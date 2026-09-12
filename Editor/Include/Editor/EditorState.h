@@ -130,7 +130,10 @@ private:
             auto mesh = std::make_shared<Engine::Mesh>(terrain.createMesh());
             if (scene.editor().has<Engine::MeshRendererComponent>(found)) {
                 scene.editor().patch<Engine::MeshRendererComponent>(found,
-                    [&](auto& renderer) { renderer.mesh = mesh; });
+                    [&](auto& renderer) {
+                        terrain.applyMaterialLayers(*mesh, renderer.material.pbr);
+                        renderer.mesh = mesh;
+                    });
             }
             if (scene.editor().has<Engine::ColliderComponent>(found)) {
                 scene.editor().patch<Engine::ColliderComponent>(found, [&](auto& collider) {

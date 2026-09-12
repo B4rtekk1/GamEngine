@@ -376,6 +376,41 @@ TEST(SceneSerializer, StoresTerrainSamplesInLosslessBinarySidecar) {
     std::filesystem::remove(sidecar, error);
 }
 
+TEST(SceneSerializer, RestoresTerrainMaterialLayersAfterRegeneratingGeometry) {
+    Engine::Scene source;
+    const auto actor = source.createTerrain("Layered terrain");
+    const auto entity = source.findEntity(actor.id());
+    ASSERT_NE(entity, Engine::NullEntity);
+    source.editor().patch<Engine::TerrainComponent>(entity, [](auto& terrain) {
+        terrain.materialLayers[0] = Engine::Mesh::Image{
+            .width = 1, .height = 1, .rgbaPixels = {10, 20, 30, 255}};
+        terrain.materialLayers[2] = Engine::Mesh::Image{
+            .width = 1, .height = 1, .rgbaPixels = {40, 50, 60, 255}};
+    });
+    const auto& terrain = source.editor().read<Engine::TerrainComponent>(entity);
+    source.editor().patch<Engine::MeshRenderer>(entity, [&](auto& renderer) {
+        auto mesh = std::make_shared<Engine::Mesh>(terrain.createMesh());
+        terrain.applyMaterialLayers(*mesh, renderer.material.pbr);
+        renderer.mesh = std::move(mesh);
+    });
+
+    std::stringstream serialized;
+    ASSERT_NO_THROW(Engine::SceneSerializer::save(source, serialized));
+    Engine::Scene loaded;
+    ASSERT_NO_THROW(Engine::SceneSerializer::load(loaded, serialized));
+    const auto loadedEntity = loaded.findEntity(loaded.findActor("Layered terrain").id());
+    const auto& restoredTerrain = loaded.editor().read<Engine::TerrainComponent>(loadedEntity);
+    const auto& renderer = loaded.editor().read<Engine::MeshRenderer>(loadedEntity);
+    ASSERT_TRUE(restoredTerrain.materialLayers[0].has_value());
+    ASSERT_TRUE(restoredTerrain.materialLayers[2].has_value());
+    ASSERT_TRUE(renderer.mesh);
+    ASSERT_EQ(renderer.mesh->images.size(), 2U);
+    EXPECT_EQ(renderer.material.pbr.terrainLayerTextures[0], 0);
+    EXPECT_EQ(renderer.material.pbr.terrainLayerTextures[1], -1);
+    EXPECT_EQ(renderer.material.pbr.terrainLayerTextures[2], 1);
+    EXPECT_EQ(renderer.mesh->images[1].rgbaPixels[0], 40U);
+}
+
 TEST(SceneSerializer, StoresEmbeddedImagePixelsInBinarySidecar) {
     const auto path = std::filesystem::temp_directory_path() / "gameengine-image-sidecar-test.scene";
     const auto sidecar = std::filesystem::path{path.string() + ".terrain"};

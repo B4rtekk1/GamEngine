@@ -627,6 +627,7 @@ namespace Engine {
             skyPass.destroy();
             sceneSkyPass.destroy();
             forwardPass.destroy();
+            lightingForwardPass.destroy();
             shadowPass.destroy();
             sceneDescriptorPass.destroy();
             indexBuffer.destroy();

@@ -236,12 +236,14 @@ namespace Engine {
 
     Actor Scene::createTerrain(std::string name, TerrainComponent terrain) {
         auto mesh = std::make_shared<Mesh>(terrain.createMesh());
-        auto& object = createMeshObject(std::move(name), mesh, PBRMaterial{
+        PBRMaterial material{
             .baseColor = {0.74F, 0.78F, 0.70F},
             .metallic = 0.0F,
             .roughness = 0.92F,
             .terrainLayered = true,
-        });
+        };
+        terrain.applyMaterialLayers(*mesh, material);
+        auto& object = createMeshObject(std::move(name), mesh, material);
         object.addTerrain(std::move(terrain));
         object.addMeshCollider();
         return Actor{*this, object.objectId()};

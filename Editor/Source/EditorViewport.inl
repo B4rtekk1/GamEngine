@@ -1275,6 +1275,7 @@ bool drawTerrainSculpt(Engine::ScenePreset& scene, const Engine::Entity selected
                 auto workingMesh = std::make_shared<Engine::Mesh>(targetTerrain.createMesh());
                 state.sculptTargets.push_back({entity, workingMesh, {}});
                 scene.editor().patch<Engine::MeshRenderer>(entity, [&](auto& component) {
+                    targetTerrain.applyMaterialLayers(*workingMesh, component.material.pbr);
                     component.mesh = std::move(workingMesh);
                 });
             });
