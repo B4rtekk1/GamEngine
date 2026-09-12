@@ -848,8 +848,23 @@
             ensureHostVisibleCapacity(instanceBuffers, instanceModels.size(), sizeof(RendererInstanceData),
                 VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT);
             if (antialiasingLevel == AntialiasingLevel::TAA) {
-                ensureHostVisibleCapacity(previousTransformBuffers, previousInstanceTransforms.size(),
-                    sizeof(RendererPreviousTransformData), VK_BUFFER_USAGE_STORAGE_BUFFER_BIT);
+                const std::size_t minimumCount = std::max<std::size_t>(1, previousInstanceTransforms.size());
+                for (std::size_t frame = 0; frame < previousTransformBuffers.size(); ++frame) {
+                    Buffer& current = previousTransformBuffers[frame];
+                    const std::size_t oldCapacity = static_cast<std::size_t>(
+                        current.size() / sizeof(RendererPreviousTransformData));
+                    if (current.handle() == VK_NULL_HANDLE || oldCapacity < minimumCount) {
+                        Buffer replacement;
+                        const std::size_t capacity = std::max(minimumCount, oldCapacity + oldCapacity / 2U);
+                        replacement.createHostVisible(vulkanDevice.physical(), device,
+                            capacity * sizeof(RendererPreviousTransformData),
+                            VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, vulkanDevice.allocator());
+                        if (current.handle() != VK_NULL_HANDLE) {
+                            deferredPreviousTransformBuffers[frame].emplace_back(std::move(current));
+                        }
+                        current = std::move(replacement);
+                    }
+                }
             }
             ensureHostVisibleCapacity(materialBuffers, materials.size(), sizeof(GPUMaterialData),
                 VK_BUFFER_USAGE_STORAGE_BUFFER_BIT);
@@ -901,7 +916,12 @@
                     }
                 }
             } else {
-                for (Buffer& buffer : previousTransformBuffers) buffer.destroy();
+                for (std::size_t frame = 0; frame < previousTransformBuffers.size(); ++frame) {
+                    Buffer& current = previousTransformBuffers[frame];
+                    if (current.handle() != VK_NULL_HANDLE) {
+                        deferredPreviousTransformBuffers[frame].emplace_back(std::move(current));
+                    }
+                }
             }
             // Binding 6 is part of the forward/shadow descriptor contract and
             // therefore must exist before createShadowPass(). The first half

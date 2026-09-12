@@ -465,11 +465,14 @@ namespace Engine {
             if (!sceneResourcesInitialized || device == VK_NULL_HANDLE || path.empty()) return false;
             try {
                 waitIdle();
+                ImageBasedLighting replacement;
+                replacement.create(vulkanDevice.physical(), device, commandPool,
+                                   vulkanDevice.graphicsQueue(), vulkanDevice.allocator(), path);
+                imageBasedLighting.swap(replacement);
+                const auto descriptors = imageBasedLighting.descriptors();
+                shadowPass.updateImageBasedLightingDescriptors(descriptors);
+                sceneDescriptorPass.updateImageBasedLightingDescriptors(descriptors);
                 environmentEquirectangularPath = path;
-                imageBasedLighting.create(vulkanDevice.physical(), device, commandPool,
-                                          vulkanDevice.graphicsQueue(), vulkanDevice.allocator(), path);
-                createShadowPass();
-                createSceneDescriptorPass();
                 sceneViewportNeedsRender = true;
                 return true;
             } catch (const std::exception& exception) {

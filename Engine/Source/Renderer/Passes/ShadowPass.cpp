@@ -486,6 +486,27 @@ void ShadowPass::updateDescriptors(
     }
 }
 
+void ShadowPass::updateImageBasedLightingDescriptors(
+        const std::array<VkDescriptorImageInfo, 3>& imageBasedLighting) const {
+    if (device_ == VK_NULL_HANDLE || descriptorPool_ == VK_NULL_HANDLE) {
+        throw std::logic_error("Cannot update IBL descriptors before creating the shadow pass");
+    }
+    for (std::uint32_t frame = 0; frame < descriptorSets_.size(); ++frame) {
+        VkWriteDescriptorSet writes[3]{};
+        for (std::uint32_t index = 0; index < 3; ++index) {
+            writes[index] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr,
+                descriptorSets_[frame], 10 + index, 0, 1,
+                VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+                &imageBasedLighting[index], nullptr, nullptr};
+        }
+        for (const VkDescriptorSet set : {descriptorSets_[frame], grassDescriptorSets_[frame],
+                                          grassVelocityDescriptorSets_[frame], grassShadowDescriptorSets_[frame]}) {
+            for (VkWriteDescriptorSet& write : writes) write.dstSet = set;
+            vkUpdateDescriptorSets(device_, std::size(writes), writes, 0, nullptr);
+        }
+    }
+}
+
 void ShadowPass::destroy() noexcept {
     if (device_ != VK_NULL_HANDLE) {
         if (grassPipeline_ != VK_NULL_HANDLE) vkDestroyPipeline(device_, grassPipeline_, nullptr);

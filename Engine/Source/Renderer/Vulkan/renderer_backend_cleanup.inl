@@ -33,6 +33,9 @@
                 for (Buffer& buffer : previousTransformBuffers) {
                     buffer.destroy();
                 }
+                for (auto& retiredBuffers : deferredPreviousTransformBuffers) {
+                    retiredBuffers.clear();
+                }
                 for (Buffer& buffer : compactGrassInstanceBuffers) {
                     buffer.destroy();
                 }

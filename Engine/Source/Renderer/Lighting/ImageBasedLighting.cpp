@@ -190,14 +190,16 @@ std::vector<float> bakeCubemap(std::uint32_t size, std::uint32_t mipLevels, Eval
 void ImageBasedLighting::create(VkPhysicalDevice physicalDevice, VkDevice device, VkCommandPool commandPool,
                                 VkQueue queue, VmaAllocator allocator,
                                 const std::filesystem::path& equirectangularPath) {
-    destroy();
     const EnvironmentSource source = loadEquirectangular(equirectangularPath);
+    // Build every resource away from the live set. A decode, allocation or
+    // upload failure must leave the active descriptor targets intact.
+    ImageBasedLighting replacement;
     const auto prefilterMips = std::bit_width(PrefilterSize);
-    environment_.createHdr(physicalDevice, device, commandPool, queue, EnvironmentSize, 1,
+    replacement.environment_.createHdr(physicalDevice, device, commandPool, queue, EnvironmentSize, 1,
         bakeCubemap(EnvironmentSize, 1, [&source](Vec3 direction, std::uint32_t, std::uint32_t) { return source.sample(direction); }));
-    irradiance_.createHdr(physicalDevice, device, commandPool, queue, IrradianceSize, 1,
+    replacement.irradiance_.createHdr(physicalDevice, device, commandPool, queue, IrradianceSize, 1,
         bakeCubemap(IrradianceSize, 1, [&source](Vec3 direction, std::uint32_t, std::uint32_t) { return diffuseIrradiance(direction, source); }));
-    prefiltered_.createHdr(physicalDevice, device, commandPool, queue, PrefilterSize, prefilterMips,
+    replacement.prefiltered_.createHdr(physicalDevice, device, commandPool, queue, PrefilterSize, prefilterMips,
         bakeCubemap(PrefilterSize, prefilterMips, [&source](Vec3 direction, std::uint32_t mip, std::uint32_t mipCount) {
             return prefilter(direction, static_cast<float>(mip) / static_cast<float>(mipCount - 1), source);
         }));
@@ -217,10 +219,19 @@ void ImageBasedLighting::create(VkPhysicalDevice physicalDevice, VkDevice device
             pixels[index + 3] = 255;
         }
     }
-    brdfLut_.create(physicalDevice, device, commandPool, queue, size, size, pixels, TextureColorSpace::Linear, false, allocator);
+    replacement.brdfLut_.create(physicalDevice, device, commandPool, queue, size, size, pixels, TextureColorSpace::Linear, false, allocator);
+    swap(replacement);
 }
 
 void ImageBasedLighting::destroy() noexcept { brdfLut_.destroy(); prefiltered_.destroy(); irradiance_.destroy(); environment_.destroy(); }
+
+void ImageBasedLighting::swap(ImageBasedLighting& other) noexcept {
+    using std::swap;
+    swap(environment_, other.environment_);
+    swap(irradiance_, other.irradiance_);
+    swap(prefiltered_, other.prefiltered_);
+    swap(brdfLut_, other.brdfLut_);
+}
 
 std::array<VkDescriptorImageInfo, 3> ImageBasedLighting::descriptors() const noexcept {
     return {{{irradiance_.sampler(), irradiance_.imageView(), VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL},

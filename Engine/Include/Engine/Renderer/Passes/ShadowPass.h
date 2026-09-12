@@ -69,6 +69,9 @@ namespace Engine {
                                const std::array<VkDescriptorImageInfo, 3>& imageBasedLighting,
                                VkDeviceSize uniformBufferRange) const;
 
+        void updateImageBasedLightingDescriptors(
+            const std::array<VkDescriptorImageInfo, 3>& imageBasedLighting) const;
+
         void destroy() noexcept;
 
         void record(VkCommandBuffer commandBuffer,

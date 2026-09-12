@@ -13,6 +13,26 @@ namespace Engine {
         destroy();
     }
 
+    Buffer::Buffer(Buffer&& other) noexcept {
+        *this = std::move(other);
+    }
+
+    Buffer& Buffer::operator=(Buffer&& other) noexcept {
+        if (this == &other) return *this;
+        destroy();
+        device_ = std::exchange(other.device_, VK_NULL_HANDLE);
+        buffer_ = std::exchange(other.buffer_, VK_NULL_HANDLE);
+        memory_ = std::exchange(other.memory_, VK_NULL_HANDLE);
+        allocation_ = std::exchange(other.allocation_, VK_NULL_HANDLE);
+        allocator_ = std::exchange(other.allocator_, VK_NULL_HANDLE);
+        size_ = std::exchange(other.size_, 0);
+        mapped_ = std::exchange(other.mapped_, nullptr);
+        deviceAddressEnabled_ = std::exchange(other.deviceAddressEnabled_, false);
+        readyTimeline_ = std::exchange(other.readyTimeline_, 0);
+        pendingUploads_ = std::move(other.pendingUploads_);
+        return *this;
+    }
+
     void Buffer::createDeviceLocal([[maybe_unused]] VkPhysicalDevice physicalDevice, VkDevice device,
                                    const void *data, VkDeviceSize size,
                                    VkBufferUsageFlags usage, VkCommandPool commandPool, VkQueue queue,

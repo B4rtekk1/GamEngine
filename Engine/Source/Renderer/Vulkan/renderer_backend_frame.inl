@@ -1357,6 +1357,9 @@
 
         [[nodiscard]] bool acquireFrameImage(uint32_t& imageIndex) {
             vkWaitForFences(device, 1, &inFlightFences[currentFrame], VK_TRUE, UINT64_MAX);
+            // Every buffer retired into this slot belonged to the submission
+            // guarded by this fence, so destruction is now safe.
+            deferredPreviousTransformBuffers[currentFrame].clear();
             completedFrameValue = std::max(completedFrameValue,
                                            frameSubmissionValues[currentFrame]);
             sceneGpu.database.reclaimDeferredInstances(completedFrameValue);

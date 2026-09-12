@@ -50,6 +50,22 @@ void submitAndWait(VkDevice device, VkQueue queue, VkCommandBuffer commandBuffer
 
 Cubemap::~Cubemap() { destroy(); }
 
+Cubemap::Cubemap(Cubemap&& other) noexcept {
+    *this = std::move(other);
+}
+
+Cubemap& Cubemap::operator=(Cubemap&& other) noexcept {
+    if (this == &other) return *this;
+    destroy();
+    device_ = std::exchange(other.device_, VK_NULL_HANDLE);
+    image_ = std::exchange(other.image_, VK_NULL_HANDLE);
+    memory_ = std::exchange(other.memory_, VK_NULL_HANDLE);
+    imageView_ = std::exchange(other.imageView_, VK_NULL_HANDLE);
+    sampler_ = std::exchange(other.sampler_, VK_NULL_HANDLE);
+    mipLevels_ = std::exchange(other.mipLevels_, 0);
+    return *this;
+}
+
 void Cubemap::create(VkPhysicalDevice physicalDevice, VkDevice device, VkCommandPool commandPool,
                      VkQueue queue, const std::array<std::array<uint8_t, 4>, 6>& faceColours) {
     std::vector<float> pixels(6 * 4);

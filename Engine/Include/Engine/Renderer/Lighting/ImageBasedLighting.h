@@ -17,6 +17,7 @@ public:
                 VkQueue queue, VmaAllocator allocator,
                 const std::filesystem::path& equirectangularPath = {});
     void destroy() noexcept;
+    void swap(ImageBasedLighting& other) noexcept;
 
     [[nodiscard]] std::array<VkDescriptorImageInfo, 3> descriptors() const noexcept;
 

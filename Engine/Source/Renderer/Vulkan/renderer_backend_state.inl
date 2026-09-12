@@ -143,6 +143,9 @@
         // Allocated only with TAA. Descriptor binding 8 falls back to the
         // current transform buffer when this array is empty.
         std::array<Buffer, MAX_FRAMES_IN_FLIGHT> previousTransformBuffers;
+        // A descriptor set may still refer to a prior transform buffer from a
+        // submitted frame. Retire each allocation with that frame's fence.
+        std::array<std::vector<Buffer>, MAX_FRAMES_IN_FLIGHT> deferredPreviousTransformBuffers;
         std::array<Buffer, MAX_FRAMES_IN_FLIGHT> materialBuffers;
         std::array<Buffer, MAX_FRAMES_IN_FLIGHT> gpuSceneInstanceBuffers;
         std::array<Buffer, MAX_FRAMES_IN_FLIGHT> gpuSceneMeshBuffers;

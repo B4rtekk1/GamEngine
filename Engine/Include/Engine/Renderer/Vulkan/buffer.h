@@ -10,6 +10,7 @@
 
 #include <memory>
 #include <cstdint>
+#include <utility>
 #include <vector>
 
 namespace Engine {
@@ -39,6 +40,9 @@ public:
 
     /// Copy assignment is disabled because the object owns Vulkan handles.
     Buffer &operator=(const Buffer &) = delete;
+
+    Buffer(Buffer&& other) noexcept;
+    Buffer& operator=(Buffer&& other) noexcept;
 
     /**
      * @brief Creates a device-local buffer and uploads initial data to it.

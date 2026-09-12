@@ -5,6 +5,7 @@
 #include <array>
 #include <cstdint>
 #include <span>
+#include <utility>
 
 namespace Engine {
 
@@ -17,6 +18,8 @@ public:
 
     Cubemap(const Cubemap&) = delete;
     Cubemap& operator=(const Cubemap&) = delete;
+    Cubemap(Cubemap&& other) noexcept;
+    Cubemap& operator=(Cubemap&& other) noexcept;
 
     void create(VkPhysicalDevice physicalDevice, VkDevice device, VkCommandPool commandPool,
                 VkQueue queue, const std::array<std::array<uint8_t, 4>, 6>& faceColours); //NOLINT
