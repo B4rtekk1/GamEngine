@@ -11,6 +11,7 @@
 #include "Engine/Renderer/Geometry/ProceduralCloud.h"
 #include "Engine/Renderer/Geometry/GpuVertex.h"
 #include "Engine/Renderer/Lighting/DirectionalLightData.h"
+#include "Engine/Renderer/Lighting/EnvironmentBaker.h"
 #include "Engine/Renderer/Lighting/ReflectionProbeCapture.h"
 #include "Engine/Renderer/Materials/PBRMaterial.h"
 #include "Engine/Renderer/Materials/MaterialBuffer.h"
@@ -51,6 +52,13 @@ TEST(ReflectionProbeCapture, UsesCanonicalCubemapCamerasAndFullMipChain) {
     EXPECT_EQ(Engine::ReflectionProbeCapture::fullMipCount(256), 9U);
     EXPECT_EQ(Engine::ReflectionProbeCapture::fullMipCount(1), 1U);
     EXPECT_EQ(Engine::ReflectionProbeCapture::fullMipCount(0), 0U);
+}
+
+TEST(EnvironmentBaker, MapsCompleteCubemapMipChainToRoughness) {
+    EXPECT_FLOAT_EQ(Engine::EnvironmentBaker::roughnessForMip(0, 9), 0.0F);
+    EXPECT_FLOAT_EQ(Engine::EnvironmentBaker::roughnessForMip(1, 9), 0.125F);
+    EXPECT_FLOAT_EQ(Engine::EnvironmentBaker::roughnessForMip(8, 9), 1.0F);
+    EXPECT_FLOAT_EQ(Engine::EnvironmentBaker::roughnessForMip(0, 1), 0.0F);
 }
 
 void ExpectVec3Near(const Engine::Vec3& value, float x, float y, float z) {

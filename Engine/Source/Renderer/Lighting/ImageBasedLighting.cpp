@@ -1,4 +1,5 @@
 #include "Engine/Renderer/Lighting/ImageBasedLighting.h"
+#include "Engine/Renderer/Lighting/EnvironmentBaker.h"
 
 #include <algorithm>
 #include <array>
@@ -15,38 +16,16 @@
 
 namespace Engine {
 namespace {
-constexpr float Pi = 3.14159265358979323846F;
 constexpr std::uint32_t EnvironmentSize = 512;
 constexpr std::uint32_t IrradianceSize = 32;
 constexpr std::uint32_t PrefilterSize = 256;
 
-struct Vec3 { float x, y, z; };
-Vec3 operator+(Vec3 a, Vec3 b) { return {a.x + b.x, a.y + b.y, a.z + b.z}; }
-Vec3 operator-(Vec3 a, Vec3 b) { return {a.x - b.x, a.y - b.y, a.z - b.z}; }
-Vec3 operator*(Vec3 v, float s) { return {v.x * s, v.y * s, v.z * s}; }
-float dot(Vec3 a, Vec3 b) { return a.x * b.x + a.y * b.y + a.z * b.z; }
-Vec3 normalize(Vec3 v) { const float length = std::sqrt(std::max(dot(v, v), 1e-12F)); return v * (1.0F / length); }
-Vec3 cross(Vec3 a, Vec3 b) { return {a.y*b.z-a.z*b.y, a.z*b.x-a.x*b.z, a.x*b.y-a.y*b.x}; }
-Vec3 reflect(Vec3 incident, Vec3 normal) { return incident - normal * (2.0F * dot(normal, incident)); }
-
-Vec3 faceDirection(std::uint32_t face, float u, float v) {
-    // Matches Vulkan's conventional cube-face orientation.
-    switch (face) {
-        case 0: return normalize({ 1.0F, -v, -u});
-        case 1: return normalize({-1.0F, -v,  u});
-        case 2: return normalize({ u,  1.0F,  v});
-        case 3: return normalize({ u, -1.0F, -v});
-        case 4: return normalize({ u, -v,  1.0F});
-        default:return normalize({-u, -v, -1.0F});
-    }
-}
-
 // Procedural fallback is an HDR *directional* source, not six flat colours.
 // Replacing radiance() with HDR/EXR cubemap sampling keeps the baker unchanged.
 Vec3 proceduralRadiance(Vec3 direction) {
-    const float horizon = std::clamp(direction.y * 0.5F + 0.5F, 0.0F, 1.0F);
+    const float horizon = std::clamp(direction.y() * 0.5F + 0.5F, 0.0F, 1.0F);
     Vec3 sky = Vec3{0.035F, 0.055F, 0.12F} * (1.0F - horizon) + Vec3{0.22F, 0.48F, 0.95F} * horizon;
-    const Vec3 sun = normalize({0.35F, 0.82F, -0.45F});
+    const Vec3 sun = Vec3{0.35F, 0.82F, -0.45F}.normalized();
     const float sunDisk = std::pow(std::max(dot(direction, sun), 0.0F), 2048.0F);
     return sky + Vec3{18.0F, 14.0F, 8.0F} * sunDisk;
 }
@@ -60,9 +39,9 @@ struct EnvironmentSource {
 
     [[nodiscard]] Vec3 sample(Vec3 direction) const {
         if (!loaded()) return proceduralRadiance(direction);
-        const float longitude = std::atan2(direction.z, direction.x);
+        const float longitude = std::atan2(direction.z(), direction.x());
         const float u = longitude * (0.5F / Pi) + 0.5F;
-        const float v = std::acos(std::clamp(direction.y, -1.0F, 1.0F)) / Pi;
+        const float v = std::acos(std::clamp(direction.y(), -1.0F, 1.0F)) / Pi;
         const float x = u * static_cast<float>(width) - 0.5F;
         const float y = v * static_cast<float>(height) - 0.5F;
         const int x0 = (static_cast<int>(std::floor(x)) % width + width) % width;
@@ -116,75 +95,6 @@ EnvironmentSource loadEquirectangular(const std::filesystem::path& path) {
     return source;
 }
 
-float radicalInverseVdC(std::uint32_t bits) {
-    bits = (bits << 16U) | (bits >> 16U);
-    bits = ((bits & 0x55555555U) << 1U) | ((bits & 0xAAAAAAAAU) >> 1U);
-    bits = ((bits & 0x33333333U) << 2U) | ((bits & 0xCCCCCCCCU) >> 2U);
-    bits = ((bits & 0x0F0F0F0FU) << 4U) | ((bits & 0xF0F0F0F0U) >> 4U);
-    bits = ((bits & 0x00FF00FFU) << 8U) | ((bits & 0xFF00FF00U) >> 8U);
-    return static_cast<float>(bits) * 2.3283064365386963e-10F;
-}
-
-Vec3 tangentToWorld(Vec3 local, Vec3 normal) {
-    const Vec3 up = std::abs(normal.y) < 0.999F ? Vec3{0, 1, 0} : Vec3{1, 0, 0};
-    const Vec3 tangent = normalize(cross(up, normal));
-    const Vec3 bitangent = cross(normal, tangent);
-    return normalize(tangent * local.x + bitangent * local.y + normal * local.z);
-}
-
-Vec3 diffuseIrradiance(Vec3 normal, const EnvironmentSource& source) {
-    constexpr std::uint32_t Samples = 64;
-    Vec3 result{};
-    for (std::uint32_t i = 0; i < Samples; ++i) {
-        const float xi1 = static_cast<float>(i) / Samples;
-        const float xi2 = radicalInverseVdC(i);
-        const float r = std::sqrt(xi1);
-        const Vec3 local{r * std::cos(2.0F * Pi * xi2), r * std::sin(2.0F * Pi * xi2), std::sqrt(1.0F - xi1)};
-        result = result + source.sample(tangentToWorld(local, normal));
-    }
-    return result * (Pi / static_cast<float>(Samples));
-}
-
-Vec3 importanceSampleGgx(float xi1, float xi2, float roughness, Vec3 normal) {
-    const float a = roughness * roughness;
-    const float phi = 2.0F * Pi * xi1;
-    const float cosTheta = std::sqrt((1.0F - xi2) / (1.0F + (a * a - 1.0F) * xi2));
-    const float sinTheta = std::sqrt(std::max(1.0F - cosTheta * cosTheta, 0.0F));
-    return tangentToWorld({std::cos(phi) * sinTheta, std::sin(phi) * sinTheta, cosTheta}, normal);
-}
-
-Vec3 prefilter(Vec3 reflection, float roughness, const EnvironmentSource& source) {
-    if (roughness <= 0.001F) return source.sample(reflection);
-    constexpr std::uint32_t Samples = 128;
-    Vec3 result{}; float weight = 0.0F;
-    // For the split-sum prefilter V=N. Every mip therefore contains the GGX
-    // integral appropriate to its roughness rather than a box-filtered copy.
-    for (std::uint32_t i = 0; i < Samples; ++i) {
-        const Vec3 halfVector = importanceSampleGgx(static_cast<float>(i) / Samples, radicalInverseVdC(i), roughness, reflection);
-        const Vec3 light = normalize(reflect(reflection * -1.0F, halfVector));
-        const float nDotL = std::max(dot(reflection, light), 0.0F);
-        if (nDotL > 0.0F) { result = result + source.sample(light) * nDotL; weight += nDotL; }
-    }
-    return weight > 0.0F ? result * (1.0F / weight) : source.sample(reflection);
-}
-
-template <typename Evaluator>
-std::vector<float> bakeCubemap(std::uint32_t size, std::uint32_t mipLevels, Evaluator evaluator) {
-    std::size_t texels = 0;
-    for (std::uint32_t mip = 0; mip < mipLevels; ++mip) { const auto side = std::max(1U, size >> mip); texels += static_cast<std::size_t>(6) * side * side; }
-    std::vector<float> pixels(texels * 4); std::size_t index = 0;
-    for (std::uint32_t mip = 0; mip < mipLevels; ++mip) {
-        const auto side = std::max(1U, size >> mip);
-        for (std::uint32_t face = 0; face < 6; ++face)
-            for (std::uint32_t y = 0; y < side; ++y)
-                for (std::uint32_t x = 0; x < side; ++x) {
-                    const Vec3 direction = faceDirection(face, 2.0F * (static_cast<float>(x) + 0.5F) / side - 1.0F, 2.0F * (static_cast<float>(y) + 0.5F) / side - 1.0F);
-                    const Vec3 color = evaluator(direction, mip, mipLevels);
-                    pixels[index++] = color.x; pixels[index++] = color.y; pixels[index++] = color.z; pixels[index++] = 1.0F;
-                }
-    }
-    return pixels;
-}
 }
 
 void ImageBasedLighting::create(VkPhysicalDevice physicalDevice, VkDevice device, VkCommandPool commandPool,
@@ -196,13 +106,16 @@ void ImageBasedLighting::create(VkPhysicalDevice physicalDevice, VkDevice device
     ImageBasedLighting replacement;
     const auto prefilterMips = std::bit_width(PrefilterSize);
     replacement.environment_.createHdr(physicalDevice, device, commandPool, queue, EnvironmentSize, 1,
-        bakeCubemap(EnvironmentSize, 1, [&source](Vec3 direction, std::uint32_t, std::uint32_t) { return source.sample(direction); }));
+        EnvironmentBaker::bakeCubemap(EnvironmentSize, 1,
+            [&source](const Vec3& direction, std::uint32_t, std::uint32_t) { return source.sample(direction); }));
     replacement.irradiance_.createHdr(physicalDevice, device, commandPool, queue, IrradianceSize, 1,
-        bakeCubemap(IrradianceSize, 1, [&source](Vec3 direction, std::uint32_t, std::uint32_t) { return diffuseIrradiance(direction, source); }));
-    replacement.prefiltered_.createHdr(physicalDevice, device, commandPool, queue, PrefilterSize, prefilterMips,
-        bakeCubemap(PrefilterSize, prefilterMips, [&source](Vec3 direction, std::uint32_t mip, std::uint32_t mipCount) {
-            return prefilter(direction, static_cast<float>(mip) / static_cast<float>(mipCount - 1), source);
+        EnvironmentBaker::bakeCubemap(IrradianceSize, 1, [&source](const Vec3& direction, std::uint32_t, std::uint32_t) {
+            return EnvironmentBaker::diffuseIrradiance(direction,
+                [&source](const Vec3& sampleDirection) { return source.sample(sampleDirection); });
         }));
+    replacement.prefiltered_.createHdr(physicalDevice, device, commandPool, queue, PrefilterSize, prefilterMips,
+        EnvironmentBaker::bakePrefilteredCubemap(PrefilterSize, prefilterMips,
+            [&source](const Vec3& direction) { return source.sample(direction); }));
 
     constexpr std::uint32_t size = 128;
     std::vector<std::uint8_t> pixels(size * size * 4);
