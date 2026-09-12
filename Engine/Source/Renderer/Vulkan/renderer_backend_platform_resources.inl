@@ -48,39 +48,46 @@
         }
 
         void initSceneResources() {
-            depthBuffer.initialize(vulkanDevice.physical(), device, vulkanDevice.allocator());
-            const VkSampleCountFlagBits requestedSamples =
-                antialiasingLevel == AntialiasingLevel::MSAA4x ? VK_SAMPLE_COUNT_4_BIT :
-                antialiasingLevel == AntialiasingLevel::MSAA2x ? VK_SAMPLE_COUNT_2_BIT :
-                VK_SAMPLE_COUNT_1_BIT;
-            msaa.initialize(vulkanDevice.physical(), device, requestedSamples, vulkanDevice.allocator());
-            hdrBuffer.create(vulkanDevice.physical(), device, swapchain.extent(), vulkanDevice.allocator());
-            msaa.create(swapchain.extent(), HdrBuffer::Format);
-            createDepthResources();
-            createGtaoPass();
-            createMaterialTextures();
-            createImageBasedLighting();
-            createMeshBuffers();
+            {
+                GE_PROFILE_SCOPE("Renderer.RenderTargets");
+                depthBuffer.initialize(vulkanDevice.physical(), device, vulkanDevice.allocator());
+                const VkSampleCountFlagBits requestedSamples =
+                    antialiasingLevel == AntialiasingLevel::MSAA4x ? VK_SAMPLE_COUNT_4_BIT :
+                    antialiasingLevel == AntialiasingLevel::MSAA2x ? VK_SAMPLE_COUNT_2_BIT :
+                    VK_SAMPLE_COUNT_1_BIT;
+                msaa.initialize(vulkanDevice.physical(), device, requestedSamples, vulkanDevice.allocator());
+                hdrBuffer.create(vulkanDevice.physical(), device, swapchain.extent(), vulkanDevice.allocator());
+                msaa.create(swapchain.extent(), HdrBuffer::Format);
+                createDepthResources();
+            }
+            { GE_PROFILE_SCOPE("Renderer.GTAO"); createGtaoPass(); }
+            { GE_PROFILE_SCOPE("Renderer.MaterialTextures"); createMaterialTextures(); }
+            { GE_PROFILE_SCOPE("Renderer.IBL"); createImageBasedLighting(); }
+            { GE_PROFILE_SCOPE("Renderer.MeshUpload"); createMeshBuffers(); }
             lastRenderTopologyRevision = registry.renderTopologyRevision();
             lastParticleEmitterRevision = registry.componentRevision<ParticleEmitterComponent>();
             lastSmokeEmitterRevision = registry.componentRevision<SmokeEmitterComponent>();
-            createInstanceBuffer();
-            createUniformBuffers();
-            createSceneUniformBuffers();
-            createCullingResources();
-            createShadowPass();
-            createSceneDescriptorPass();
-            createForwardPass();
-            createSkyPass();
-            createFramebuffers();
-            createSceneViewportResources();
-            createParticleResources();
-            createSceneSkyPass();
-            createTemporalAaPass();
-            createBloomPass();
-            createTonemapPass();
-            createUIResources();
-            refreshEditorViewportTextures();
+            { GE_PROFILE_SCOPE("Renderer.InstanceBuffers"); createInstanceBuffer(); }
+            { GE_PROFILE_SCOPE("Renderer.UniformBuffers"); createUniformBuffers(); createSceneUniformBuffers(); }
+            { GE_PROFILE_SCOPE("Renderer.Culling"); createCullingResources(); }
+            { GE_PROFILE_SCOPE("Renderer.Shadows"); createShadowPass(); }
+            {
+                GE_PROFILE_SCOPE("Renderer.Pipelines");
+                createSceneDescriptorPass();
+                createForwardPass();
+                createSkyPass();
+                createFramebuffers();
+                createSceneViewportResources();
+                createParticleResources();
+                createSceneSkyPass();
+            }
+            {
+                GE_PROFILE_SCOPE("Renderer.PostProcess");
+                createTemporalAaPass();
+                createBloomPass();
+                createTonemapPass();
+            }
+            { GE_PROFILE_SCOPE("Renderer.EditorResources"); createUIResources(); refreshEditorViewportTextures(); }
             // Shader modules no longer need their source text after pipeline
             // creation. Release cache-only asset records before the main loop.
             assetManager.unload_unused();

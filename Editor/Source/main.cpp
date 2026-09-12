@@ -385,6 +385,15 @@ int main(int argc, char** argv) {
         bool startInitialSceneLoad = loadInitialSceneAsync;
         bool startEmptySceneResources = !loadInitialSceneAsync;
         bool initialSceneSyncPending = false;
+        bool initialSceneFirstRenderableFramePending = false;
+        std::optional<std::chrono::steady_clock::time_point> initialSceneLoadStartedAt;
+        const auto reportSceneLoadStage = [](const std::string_view stage,
+                                             const std::chrono::steady_clock::time_point startedAt) {
+            const auto elapsed = std::chrono::steady_clock::now() - startedAt;
+            const auto milliseconds = std::chrono::duration<double, std::milli>{elapsed}.count();
+            Editor::ConsolePanel::info("[SceneLoad] " + std::string{stage} + ": " +
+                                       std::to_string(milliseconds) + " ms");
+        };
         EntityClipboard clipboard;
         Engine::Entity selectedEntity = Engine::NullEntity;
         std::vector<Engine::Entity> selectedEntities;
@@ -443,13 +452,31 @@ int main(int argc, char** argv) {
                 initialSceneLoad->wait_for(std::chrono::seconds::zero()) == std::future_status::ready) {
                 try {
                     auto loadedScene = initialSceneLoad->get();
-                    Engine::SceneSerializer::replace(scene, *loadedScene);
-                    resolveShaderGraphMaterials();
-                    history.reset(scene);
+                    if (initialSceneLoadStartedAt) {
+                        reportSceneLoadStage("CPU scene load finished", *initialSceneLoadStartedAt);
+                    }
+                    {
+                        GE_PROFILE_SCOPE("SceneLoad.Adopt");
+                        const auto stageStartedAt = std::chrono::steady_clock::now();
+                        Engine::SceneSerializer::replace(scene, *loadedScene);
+                        reportSceneLoadStage("Scene adopt", stageStartedAt);
+                    }
+                    {
+                        GE_PROFILE_SCOPE("SceneLoad.ShaderGraphResolve");
+                        const auto stageStartedAt = std::chrono::steady_clock::now();
+                        resolveShaderGraphMaterials();
+                        reportSceneLoadStage("Shader graphs ready", stageStartedAt);
+                    }
+                    {
+                        GE_PROFILE_SCOPE("SceneLoad.HistoryReset");
+                        const auto stageStartedAt = std::chrono::steady_clock::now();
+                        history.reset(scene);
+                        reportSceneLoadStage("History reset", stageStartedAt);
+                    }
                     lastPersistedSceneRevision = scene.editor().mutationRevision();
                     setSelection(Engine::NullEntity);
                     initialSceneSyncPending = true;
-                    Editor::ConsolePanel::info("Scene loaded: " + initialScene.string());
+                    Editor::ConsolePanel::info("[SceneLoad] ECS ready: " + initialScene.string());
                 } catch (const std::exception& error) {
                     Editor::ConsolePanel::error("Could not load startup scene: " +
                                                 std::string{error.what()});
@@ -912,6 +939,13 @@ int main(int argc, char** argv) {
                     renderer.renderFrame();
                 }
             }
+            if (!deferSceneGpuWork && initialSceneFirstRenderableFramePending) {
+                if (initialSceneLoadStartedAt) {
+                    reportSceneLoadStage("First renderable frame", *initialSceneLoadStartedAt);
+                }
+                initialSceneFirstRenderableFramePending = false;
+                initialSceneLoadStartedAt.reset();
+            }
             if (!deferSceneGpuWork) {
                 if (const auto gpu = renderer.gpuProfile()) {
                     Engine::Profiler::attachGpuFrame(gpu->frameNumber, gpu->frameMilliseconds, gpu->events);
@@ -919,12 +953,21 @@ int main(int argc, char** argv) {
             }
 
             if (!deferSceneGpuWork && (sceneResourceSyncPending || initialSceneSyncPending)) {
-                renderer.synchronizeScene(scene);
+                const bool completingInitialSceneLoad = initialSceneSyncPending;
+                {
+                    GE_PROFILE_SCOPE("SceneLoad.RendererSynchronize");
+                    const auto stageStartedAt = std::chrono::steady_clock::now();
+                    renderer.synchronizeScene(scene);
+                    if (completingInitialSceneLoad) {
+                        reportSceneLoadStage("GPU sync finished", stageStartedAt);
+                    }
+                }
                 // Duplicated objects do not exist in the renderer's cached
                 // renderable list until synchronization completes. Reapply
                 // the selection so the next frame can outline it immediately.
                 if (sceneStructureChanged) renderer.setEditorSelection(selectedEntity);
                 initialSceneSyncPending = false;
+                initialSceneFirstRenderableFramePending = completingInitialSceneLoad;
             }
             // renderer.reloadScene() runs at the next loop boundary, before
             // any further drawFrame() or incremental upload sees the restored
@@ -936,6 +979,7 @@ int main(int argc, char** argv) {
             // Scene; only its completed registry is adopted on this thread.
             if (startInitialSceneLoad) {
                 startInitialSceneLoad = false;
+                initialSceneLoadStartedAt = std::chrono::steady_clock::now();
                 Editor::ConsolePanel::info("Loading startup scene in background: " + initialScene.string());
                 initialSceneLoad.emplace(std::async(std::launch::async, [initialScene] {
                     auto loadedScene = std::make_unique<Engine::ScenePreset>();

@@ -3,6 +3,7 @@
 #include "Engine/Renderer/Vulkan/renderer_types.h"
 #include "Engine/Renderer/Vulkan/CameraController.h"
 #include "Engine/Renderer/Vulkan/SceneGpuResources.h"
+#include "Engine/Core/Profiler.h"
 
 #define SDL_MAIN_HANDLED
 #include <SDL3/SDL.h>
