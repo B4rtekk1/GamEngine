@@ -1158,12 +1158,13 @@
         void createFramebuffers() {
             const VkExtent2D extent = swapchain.extent();
             const bool taaEnabled = antialiasingLevel == AntialiasingLevel::TAA;
-            // GTAO owns temporal use independently from the selected AA mode.
-            // Even when it is not attached, keep a valid sampled fallback for
-            // its non-temporal path.
-            velocityBuffer.create(vulkanDevice.physical(), device, extent,
-                                  vulkanDevice.allocator(), VK_FILTER_NEAREST,
-                                  VK_FORMAT_R16G16_SFLOAT);
+            // Velocity is written and consumed only by TAA. GTAO substitutes
+            // its initialized AO image when temporal velocity is disabled.
+            if (taaEnabled) {
+                velocityBuffer.create(vulkanDevice.physical(), device, extent,
+                                      vulkanDevice.allocator(), VK_FILTER_NEAREST,
+                                      VK_FORMAT_R16G16_SFLOAT);
+            }
             VkImageView msaaAttachments[] = {
                 msaa.colorImageView(), depthBuffer.imageView(), hdrBuffer.imageView(), hiZDepthBuffer.imageView()
             };
