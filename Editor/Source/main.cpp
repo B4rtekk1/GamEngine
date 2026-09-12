@@ -332,27 +332,33 @@ int main(int argc, char** argv) {
         const auto resolveShaderGraphMaterials = [&](const std::optional<std::filesystem::path>& updatedGraph = std::nullopt) {
             const auto forwardTemplate = shaderGraphSourceDirectory / "Forward/forward_pbr.slang";
             const auto generatedDirectory = content.assetRoot().parent_path() / "Library/ShaderGraphs";
-            std::vector<Engine::Entity> graphMaterials;
+            std::unordered_map<std::filesystem::path, std::vector<Engine::Entity>> materialsByGraph;
             scene.editor().view<Engine::MeshRenderer>([&](const Engine::Entity entity, const Engine::MeshRenderer& meshRenderer) {
+                const auto graphAsset = meshRenderer.material.shaderGraphAsset.lexically_normal();
                 if (meshRenderer.material.shaderSource == Engine::MaterialShaderSource::ShaderGraph &&
-                    !meshRenderer.material.shaderGraphAsset.empty() &&
-                    (!updatedGraph || meshRenderer.material.shaderGraphAsset.lexically_normal() == *updatedGraph))
-                    graphMaterials.push_back(entity);
+                    !graphAsset.empty() && (!updatedGraph || graphAsset == *updatedGraph)) {
+                    materialsByGraph[graphAsset].push_back(entity);
+                }
             });
-            for (const Engine::Entity entity : graphMaterials) {
-                auto material = scene.editor().read<Engine::MeshRenderer>(entity).material;
+            for (const auto& [graphAsset, entities] : materialsByGraph) {
+                auto material = scene.editor().read<Engine::MeshRenderer>(entities.front()).material;
                 const auto result = Engine::ShaderGraphMaterialCompiler{}.resolve(
                     material, content.assetRoot(), forwardTemplate, generatedDirectory);
                 if (result.succeeded()) {
-                    scene.editor().patch<Engine::MeshRenderer>(entity, [&](Engine::MeshRenderer& meshRenderer) {
-                        meshRenderer.material = std::move(material);
-                    });
+                    for (const Engine::Entity entity : entities) {
+                        scene.editor().patch<Engine::MeshRenderer>(entity, [&](Engine::MeshRenderer& meshRenderer) {
+                            meshRenderer.material.shaderGraphAsset = graphAsset;
+                            meshRenderer.material.shaderProgram = material.shaderProgram;
+                            meshRenderer.material.shaderProgramSpirv = material.shaderProgramSpirv;
+                        });
+                    }
                 } else {
-                    material.shaderProgram = {};
-                    material.shaderProgramSpirv.clear();
-                    scene.editor().patch<Engine::MeshRenderer>(entity, [&](Engine::MeshRenderer& meshRenderer) {
-                        meshRenderer.material = std::move(material);
-                    });
+                    for (const Engine::Entity entity : entities) {
+                        scene.editor().patch<Engine::MeshRenderer>(entity, [&](Engine::MeshRenderer& meshRenderer) {
+                            meshRenderer.material.shaderProgram = {};
+                            meshRenderer.material.shaderProgramSpirv.clear();
+                        });
+                    }
                     std::string error{"Could not resolve Shader Graph material"};
                     for (const auto& diagnostic : result.diagnostics) error += ": " + diagnostic.message;
                     Editor::ConsolePanel::error(error);

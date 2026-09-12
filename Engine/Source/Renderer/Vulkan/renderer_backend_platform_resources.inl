@@ -48,7 +48,18 @@
         }
 
         void initSceneResources() {
-            {
+            const auto timeInitialization = [](const std::string_view stage, const auto& initialize) {
+                const auto startedAt = std::chrono::steady_clock::now();
+                initialize();
+                const auto elapsed = std::chrono::steady_clock::now() - startedAt;
+                const auto milliseconds = std::chrono::duration_cast<std::chrono::milliseconds>(elapsed).count();
+                Diagnostics::instance().report(
+                    DiagnosticSeverity::Info,
+                    "[GPUInit] " + std::string{stage} + ": " + std::to_string(milliseconds) + " ms",
+                    {.subsystem = "Renderer"});
+            };
+
+            timeInitialization("Depth", [&] {
                 GE_PROFILE_SCOPE("Renderer.RenderTargets");
                 depthBuffer.initialize(vulkanDevice.physical(), device, vulkanDevice.allocator());
                 const VkSampleCountFlagBits requestedSamples =
@@ -59,35 +70,79 @@
                 hdrBuffer.create(vulkanDevice.physical(), device, swapchain.extent(), vulkanDevice.allocator());
                 msaa.create(swapchain.extent(), HdrBuffer::Format);
                 createDepthResources();
-            }
-            { GE_PROFILE_SCOPE("Renderer.GTAO"); createGtaoPass(); }
-            { GE_PROFILE_SCOPE("Renderer.MaterialTextures"); createMaterialTextures(); }
-            { GE_PROFILE_SCOPE("Renderer.IBL"); createImageBasedLighting(); }
-            { GE_PROFILE_SCOPE("Renderer.MeshUpload"); createMeshBuffers(); }
+            });
+            timeInitialization("GTAO", [&] { GE_PROFILE_SCOPE("Renderer.GTAO"); createGtaoPass(); });
+            timeInitialization("Material textures", [&] {
+                GE_PROFILE_SCOPE("Renderer.MaterialTextures");
+                createMaterialTextures();
+            });
+            timeInitialization("IBL", [&] { GE_PROFILE_SCOPE("Renderer.IBL"); createImageBasedLighting(); });
+            timeInitialization("Mesh buffers", [&] { GE_PROFILE_SCOPE("Renderer.MeshUpload"); createMeshBuffers(); });
             lastRenderTopologyRevision = registry.renderTopologyRevision();
             lastParticleEmitterRevision = registry.componentRevision<ParticleEmitterComponent>();
             lastSmokeEmitterRevision = registry.componentRevision<SmokeEmitterComponent>();
-            { GE_PROFILE_SCOPE("Renderer.InstanceBuffers"); createInstanceBuffer(); }
-            { GE_PROFILE_SCOPE("Renderer.UniformBuffers"); createUniformBuffers(); createSceneUniformBuffers(); }
-            { GE_PROFILE_SCOPE("Renderer.Culling"); createCullingResources(); }
-            { GE_PROFILE_SCOPE("Renderer.Shadows"); createShadowPass(); }
-            {
+            timeInitialization("Instance buffer", [&] {
+                GE_PROFILE_SCOPE("Renderer.InstanceBuffers");
+                createInstanceBuffer();
+            });
+            timeInitialization("Uniform buffers", [&] {
+                GE_PROFILE_SCOPE("Renderer.UniformBuffers");
+                createUniformBuffers();
+            });
+            timeInitialization("Scene uniform buffers", [&] {
+                GE_PROFILE_SCOPE("Renderer.UniformBuffers");
+                createSceneUniformBuffers();
+            });
+            timeInitialization("Culling", [&] { GE_PROFILE_SCOPE("Renderer.Culling"); createCullingResources(); });
+            timeInitialization("Shadows", [&] { GE_PROFILE_SCOPE("Renderer.Shadows"); createShadowPass(); });
+            timeInitialization("Scene descriptors", [&] {
                 GE_PROFILE_SCOPE("Renderer.Pipelines");
                 createSceneDescriptorPass();
+            });
+            timeInitialization("Forward pipelines", [&] {
+                GE_PROFILE_SCOPE("Renderer.Pipelines");
                 createForwardPass();
+            });
+            timeInitialization("Sky", [&] {
+                GE_PROFILE_SCOPE("Renderer.Pipelines");
                 createSkyPass();
+            });
+            timeInitialization("Framebuffers", [&] {
+                GE_PROFILE_SCOPE("Renderer.Pipelines");
                 createFramebuffers();
+            });
+            timeInitialization("Scene viewport", [&] {
+                GE_PROFILE_SCOPE("Renderer.Pipelines");
                 createSceneViewportResources();
+            });
+            timeInitialization("Particles", [&] {
+                GE_PROFILE_SCOPE("Renderer.Pipelines");
                 createParticleResources();
+            });
+            timeInitialization("Scene sky", [&] {
+                GE_PROFILE_SCOPE("Renderer.Pipelines");
                 createSceneSkyPass();
-            }
-            {
+            });
+            timeInitialization("TAA", [&] {
                 GE_PROFILE_SCOPE("Renderer.PostProcess");
                 createTemporalAaPass();
+            });
+            timeInitialization("Bloom", [&] {
+                GE_PROFILE_SCOPE("Renderer.PostProcess");
                 createBloomPass();
+            });
+            timeInitialization("Tonemap", [&] {
+                GE_PROFILE_SCOPE("Renderer.PostProcess");
                 createTonemapPass();
-            }
-            { GE_PROFILE_SCOPE("Renderer.EditorResources"); createUIResources(); refreshEditorViewportTextures(); }
+            });
+            timeInitialization("UI resources", [&] {
+                GE_PROFILE_SCOPE("Renderer.EditorResources");
+                createUIResources();
+            });
+            timeInitialization("Editor viewport textures", [&] {
+                GE_PROFILE_SCOPE("Renderer.EditorResources");
+                refreshEditorViewportTextures();
+            });
             // Shader modules no longer need their source text after pipeline
             // creation. Release cache-only asset records before the main loop.
             assetManager.unload_unused();
