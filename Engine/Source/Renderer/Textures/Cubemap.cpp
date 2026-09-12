@@ -45,6 +45,15 @@ void submitAndWait(VkDevice device, VkQueue queue, VkCommandBuffer commandBuffer
     const VkResult completed = submitted == VK_SUCCESS ? vkWaitForFences(device, 1, &fence, VK_TRUE, UINT64_MAX) : submitted;
     vkDestroyFence(device, fence, nullptr);
     if (completed != VK_SUCCESS) throw std::runtime_error("Could not upload cubemap");
+
+    // Cubemap creation is a scene-load operation, not a streaming path.  The
+    // graphics queue can also contain submissions made outside this helper;
+    // retire all of them before the caller frees its staging buffer and command
+    // buffer.  This prevents a buffer lifetime race reported by validation
+    // during IBL creation.
+    if (vkQueueWaitIdle(queue) != VK_SUCCESS) {
+        throw std::runtime_error("Could not synchronize cubemap upload queue");
+    }
 }
 }
 

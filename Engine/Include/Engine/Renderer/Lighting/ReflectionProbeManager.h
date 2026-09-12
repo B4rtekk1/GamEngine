@@ -30,6 +30,10 @@ static_assert(sizeof(GpuReflectionProbe) == 48);
 class ReflectionProbeManager final {
 public:
     static constexpr std::uint32_t MaxProbes = 256;
+    // Kept equal to MaxProbes so an entry's textureIndex can be used directly
+    // with the fixed-size descriptor array.  Slot zero is always a valid
+    // prefiltered-sky fallback.
+    static constexpr std::uint32_t TextureDescriptorCount = MaxProbes;
     void update(const Registry& registry);
     void bakeProbe(Entity entity);
     void uploadProbeTable(std::uint32_t frameIndex) noexcept;

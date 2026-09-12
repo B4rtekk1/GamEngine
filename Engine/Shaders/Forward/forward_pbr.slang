@@ -116,6 +116,10 @@ struct ReflectionProbeData
     uint padding;
 };
 [[vk::binding(14, 0)]] StructuredBuffer<ReflectionProbeData> reflectionProbes;
+// Fixed capacity deliberately avoids descriptor indexing/count changes while
+// probes are baked. Entry zero is the global prefiltered environment, so an
+// unbaked probe is safe to sample immediately.
+[[vk::binding(15, 0)]] SamplerCube reflectionProbeTextures[256];
 
 static const uint Probe_Box = 1u << 0u;
 static const uint Probe_BoxProject = 1u << 1u;
@@ -149,7 +153,7 @@ float3 boxProjectedReflection(ReflectionProbeData probe, float3 worldPosition, f
 }
 
 ReflectionCandidate sampleLocalProbes(float3 worldPosition, float3 reflection, float roughness,
-                                      uint prefilteredMipCount)
+                                      uint prefilteredMipCount, ClusterLightRange clusterRange)
 {
     if (frame.reflectionProbeCount == 0u)
     {
@@ -163,8 +167,15 @@ ReflectionCandidate sampleLocalProbes(float3 worldPosition, float3 reflection, f
     float secondWeight = 0.0;
     ReflectionProbeData best;
     ReflectionProbeData second;
-    [loop] for (uint index = 0u; index < frame.reflectionProbeCount; ++index)
+    // The compute pass writes probe IDs with its high bit set into the same
+    // compact Forward+ list as local lights.  This keeps selection GPU-driven
+    // and bounds fragment work by MaxLightsPerCluster, not MaxProbes.
+    [loop] for (uint candidate = 0u; candidate < clusterRange.count; ++candidate)
     {
+        const uint encodedIndex = clusterLightIndices[clusterRange.offset + candidate];
+        if ((encodedIndex & 0x80000000u) == 0u) continue;
+        const uint index = encodedIndex & 0x7fffffffu;
+        if (index >= frame.reflectionProbeCount) continue;
         ReflectionProbeData probe = reflectionProbes[index];
         float weight = probeInfluence(probe, worldPosition);
         if (weight <= 0.0) continue;
@@ -181,9 +192,15 @@ ReflectionCandidate sampleLocalProbes(float3 worldPosition, float3 reflection, f
     float total = bestWeight + secondWeight;
     if (total <= 0.0) { ReflectionCandidate none = {float3(0.0), 0.0}; return none; }
     float mip = roughness * float(max(prefilteredMipCount, 1u) - 1u);
-    float3 value = prefilteredEnvironmentMap.SampleLevel(boxProjectedReflection(best, worldPosition, reflection), mip).rgb * bestWeight;
+    const uint bestTexture = min(best.textureIndex, 255u);
+    float3 value = reflectionProbeTextures[NonUniformResourceIndex(bestTexture)].SampleLevel(
+        boxProjectedReflection(best, worldPosition, reflection), mip).rgb * bestWeight;
     if (secondWeight > 0.0)
-        value += prefilteredEnvironmentMap.SampleLevel(boxProjectedReflection(second, worldPosition, reflection), mip).rgb * secondWeight;
+    {
+        const uint secondTexture = min(second.textureIndex, 255u);
+        value += reflectionProbeTextures[NonUniformResourceIndex(secondTexture)].SampleLevel(
+            boxProjectedReflection(second, worldPosition, reflection), mip).rgb * secondWeight;
+    }
     ReflectionCandidate result = {value / total, saturate(total)};
     return result;
 }
@@ -376,6 +393,7 @@ ForwardFragmentOutput fragmentMain(ForwardFragmentInput input)
     for (uint i = 0u; i < lightRange.count; ++i)
     {
         const uint lightIndex = clusterLightIndices[lightRange.offset + i];
+        if ((lightIndex & 0x80000000u) != 0u) continue;
         if (lightIndex >= frame.localLightCount) continue;
         LocalLightData local = frame.localLights[lightIndex];
         float3 toLight = local.positionRange.xyz - input.worldPosition;
@@ -435,7 +453,8 @@ ForwardFragmentOutput fragmentMain(ForwardFragmentInput input)
     // available; this explicit resolver keeps the material-side priority
     // fixed as RT -> SSR -> probe -> sky.
     ReflectionCandidate skyReflection = {prefiltered, 1.0};
-    ReflectionCandidate localProbeReflection = sampleLocalProbes(input.worldPosition, reflection, roughness, prefilteredMipCount);
+    ReflectionCandidate localProbeReflection = sampleLocalProbes(input.worldPosition, reflection, roughness,
+                                                                  prefilteredMipCount, lightRange);
     ReflectionCandidate screenSpaceReflection = {0.0, 0.0};
     ReflectionCandidate rayTracedReflection = {0.0, 0.0};
     prefiltered = resolveReflection(rayTracedReflection, screenSpaceReflection,

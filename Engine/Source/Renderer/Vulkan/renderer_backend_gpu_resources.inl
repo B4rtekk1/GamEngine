@@ -280,7 +280,8 @@
                 {0, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
                 {1, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
                 {2, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
-                {3, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr}};
+                {3, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
+                {4, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr}};
             layoutInfo.bindingCount = std::size(clusteredLightingBindings); layoutInfo.pBindings = clusteredLightingBindings;
             if (vkCreateDescriptorSetLayout(device, &layoutInfo, nullptr, &clusteredLightingDescriptorSetLayout) != VK_SUCCESS)
                 throw std::runtime_error("Could not create clustered-light descriptor layout");
@@ -679,24 +680,24 @@
             std::copy_n(clusteredSets.begin() + MAX_FRAMES_IN_FLIGHT, MAX_FRAMES_IN_FLIGHT, sceneClusteredLightingSets.begin());
             for (uint32_t frame = 0; frame < MAX_FRAMES_IN_FLIGHT; ++frame) {
                 const auto updateClusterSet = [&](VkDescriptorSet set, VkBuffer frameUniform, VkBuffer ranges,
-                                                  VkBuffer indices, VkBuffer clusteredUniform) {
+                                                  VkBuffer indices, VkBuffer clusteredUniform, VkBuffer probes) {
                     const VkDescriptorBufferInfo infos[] = {{frameUniform, 0, sizeof(UniformBufferObject)},
                         {ranges, 0, VK_WHOLE_SIZE}, {indices, 0, VK_WHOLE_SIZE},
-                        {clusteredUniform, 0, sizeof(ClusteredLightingUniforms)}};
-                    VkWriteDescriptorSet writes[4]{};
-                    for (uint32_t binding = 0; binding < 4; ++binding) {
+                        {clusteredUniform, 0, sizeof(ClusteredLightingUniforms)}, {probes, 0, VK_WHOLE_SIZE}};
+                    VkWriteDescriptorSet writes[5]{};
+                    for (uint32_t binding = 0; binding < 5; ++binding) {
                         writes[binding] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr, set, binding, 0, 1,
                             binding == 0 || binding == 3 ? VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER : VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
                             nullptr, &infos[binding], nullptr};
                     }
-                    vkUpdateDescriptorSets(device, 4, writes, 0, nullptr);
+                    vkUpdateDescriptorSets(device, 5, writes, 0, nullptr);
                 };
                 updateClusterSet(clusteredLightingSets[frame], uniformBuffers[frame].handle(),
                     clusteredLightRangeBuffers[frame].handle(), clusteredLightIndexBuffers[frame].handle(),
-                    clusteredLightingUniformBuffers[frame].handle());
+                    clusteredLightingUniformBuffers[frame].handle(), reflectionProbeBuffers[frame].handle());
                 updateClusterSet(sceneClusteredLightingSets[frame], sceneUniformBuffers[frame].handle(),
                     sceneClusteredLightRangeBuffers[frame].handle(), sceneClusteredLightIndexBuffers[frame].handle(),
-                    sceneClusteredLightingUniformBuffers[frame].handle());
+                    sceneClusteredLightingUniformBuffers[frame].handle(), reflectionProbeBuffers[frame].handle());
             }
             std::array<VkDescriptorSetLayout, MAX_FRAMES_IN_FLIGHT> grassLayouts{};
             const auto allocateGrassSets = [&](VkDescriptorSetLayout layout,

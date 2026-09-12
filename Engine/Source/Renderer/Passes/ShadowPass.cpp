@@ -1,5 +1,7 @@
 #include "Engine/Renderer/Passes/ShadowPass.h"
 
+#include "Engine/Renderer/Lighting/ReflectionProbeManager.h"
+
 #include "Engine/Math/Mat4.h"
 #include "Engine/Renderer/Culling/GPUCullingPass.h"
 #include "Engine/Renderer/Culling/IndexedIndirectDrawCount.h"
@@ -110,7 +112,7 @@ void ShadowPass::create(VkPhysicalDevice physicalDevice, VkDevice device,
         }
 
         // This is a compact list, not an array indexed by binding number.
-        VkDescriptorSetLayoutBinding bindings[15]{};
+        VkDescriptorSetLayoutBinding bindings[16]{};
         bindings[0] = {0, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1,
                        VK_SHADER_STAGE_FRAGMENT_BIT, nullptr};
         bindings[1] = {1, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1,
@@ -144,9 +146,12 @@ void ShadowPass::create(VkPhysicalDevice physicalDevice, VkDevice device,
                         VK_SHADER_STAGE_FRAGMENT_BIT, nullptr};
         bindings[14] = {14, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1,
                         VK_SHADER_STAGE_FRAGMENT_BIT, nullptr};
+        bindings[15] = {15, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+                        ReflectionProbeManager::TextureDescriptorCount,
+                        VK_SHADER_STAGE_FRAGMENT_BIT, nullptr};
         const VkDescriptorSetLayoutCreateInfo layoutInfo{
             VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO, nullptr, 0,
-            15, bindings};
+            16, bindings};
         if (vkCreateDescriptorSetLayout(device_, &layoutInfo, nullptr,
                                         &descriptorSetLayout_) != VK_SUCCESS) {
             throw std::runtime_error("Could not create shadow descriptor-set layout");
@@ -156,7 +161,8 @@ void ShadowPass::create(VkPhysicalDevice physicalDevice, VkDevice device,
         // Four descriptor sets are allocated per frame. Each carries shadow,
         // IBL and material samplers, one UBO and seven SSBOs.
         const VkDescriptorPoolSize poolSizes[] = {
-            {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, frameCount * 4U * (MaxMaterialTextures + 5U)},
+            {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, frameCount * 4U *
+                (MaxMaterialTextures + 5U + ReflectionProbeManager::TextureDescriptorCount)},
             {VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, frameCount * 4U},
             {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, frameCount * 4U * 8U},
         };
@@ -219,7 +225,9 @@ void ShadowPass::create(VkPhysicalDevice physicalDevice, VkDevice device,
             const VkDescriptorBufferInfo clusterRangeInfo{clusterRangeBuffers[frame], 0, VK_WHOLE_SIZE};
             const VkDescriptorBufferInfo clusterIndexInfo{clusterIndexBuffers[frame], 0, VK_WHOLE_SIZE};
             const VkDescriptorBufferInfo reflectionProbeInfo{reflectionProbeBuffers[frame], 0, VK_WHOLE_SIZE};
-            VkWriteDescriptorSet writes[15]{};
+            std::vector<VkDescriptorImageInfo> reflectionTextures(
+                ReflectionProbeManager::TextureDescriptorCount, imageBasedLighting[1]);
+            VkWriteDescriptorSet writes[16]{};
             writes[0] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr,
                          descriptorSets_[frame], 0, 0, 1,
                          VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &imageInfo, nullptr, nullptr};
@@ -265,6 +273,11 @@ void ShadowPass::create(VkPhysicalDevice physicalDevice, VkDevice device,
             writes[14] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr,
                           descriptorSets_[frame], 14, 0, 1,
                           VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, nullptr, &reflectionProbeInfo, nullptr};
+            writes[15] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr,
+                          descriptorSets_[frame], 15, 0,
+                          ReflectionProbeManager::TextureDescriptorCount,
+                          VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+                          reflectionTextures.data(), nullptr, nullptr};
             // Standard forward consumes bindings 3/7 as the clustered range
             // headers and compact light-index list.  Grass descriptors below
             // retain their vertex-only cluster/deformation bindings.
@@ -450,7 +463,9 @@ void ShadowPass::updateDescriptors(
         const VkDescriptorBufferInfo clusterRanges{clusterRangeBuffers[frame], 0, VK_WHOLE_SIZE};
         const VkDescriptorBufferInfo clusterIndices{clusterIndexBuffers[frame], 0, VK_WHOLE_SIZE};
         const VkDescriptorBufferInfo reflectionProbes{reflectionProbeBuffers[frame], 0, VK_WHOLE_SIZE};
-        VkWriteDescriptorSet writes[13]{};
+        std::vector<VkDescriptorImageInfo> reflectionTextures(
+            ReflectionProbeManager::TextureDescriptorCount, imageBasedLighting[1]);
+        VkWriteDescriptorSet writes[14]{};
         writes[0] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr, descriptorSets_[frame], 1, 0, 1,
                      VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, nullptr, &uniform, nullptr};
         writes[1] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr, descriptorSets_[frame], 2, 0, 1,
@@ -476,6 +491,10 @@ void ShadowPass::updateDescriptors(
         }
         writes[12] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr, descriptorSets_[frame], 14, 0, 1,
                       VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, nullptr, &reflectionProbes, nullptr};
+        writes[13] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr, descriptorSets_[frame], 15, 0,
+                      ReflectionProbeManager::TextureDescriptorCount,
+                      VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+                      reflectionTextures.data(), nullptr, nullptr};
         vkUpdateDescriptorSets(device_, std::size(writes), writes, 0, nullptr);
 
         for (VkDescriptorSet set : {grassDescriptorSets_[frame], grassVelocityDescriptorSets_[frame],
@@ -495,13 +514,20 @@ void ShadowPass::updateImageBasedLightingDescriptors(
         throw std::logic_error("Cannot update IBL descriptors before creating the shadow pass");
     }
     for (std::uint32_t frame = 0; frame < descriptorSets_.size(); ++frame) {
-        VkWriteDescriptorSet writes[3]{};
+        std::vector<VkDescriptorImageInfo> reflectionTextures(
+            ReflectionProbeManager::TextureDescriptorCount, imageBasedLighting[1]);
+        VkWriteDescriptorSet writes[4]{};
         for (std::uint32_t index = 0; index < 3; ++index) {
             writes[index] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr,
                 descriptorSets_[frame], 10 + index, 0, 1,
                 VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
                 &imageBasedLighting[index], nullptr, nullptr};
         }
+        writes[3] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr,
+            descriptorSets_[frame], 15, 0,
+            ReflectionProbeManager::TextureDescriptorCount,
+            VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+            reflectionTextures.data(), nullptr, nullptr};
         for (const VkDescriptorSet set : {descriptorSets_[frame], grassDescriptorSets_[frame],
                                           grassVelocityDescriptorSets_[frame], grassShadowDescriptorSets_[frame]}) {
             for (VkWriteDescriptorSet& write : writes) write.dstSet = set;

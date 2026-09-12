@@ -17,8 +17,22 @@ struct ClusteredLightingUniforms
 [[vk::binding(1, 0)]] RWStructuredBuffer<ClusterLightRange> clusterRanges;
 [[vk::binding(2, 0)]] RWStructuredBuffer<uint> clusterLightIndices;
 [[vk::binding(3, 0)]] ConstantBuffer<ClusteredLightingUniforms> uniforms;
+struct ReflectionProbeData
+{
+    float4 positionAndBlendDistance;
+    float4 extentsAndShape;
+    uint textureIndex;
+    int priority;
+    uint flags;
+    uint padding;
+};
+[[vk::binding(4, 0)]] StructuredBuffer<ReflectionProbeData> reflectionProbes;
 
 static const uint MaxLightsPerCluster = 64u;
+static const uint MaxLocalLightsPerCluster = 48u;
+static const uint MaxProbesPerCluster = MaxLightsPerCluster - MaxLocalLightsPerCluster;
+static const uint Probe_Enabled = 1u << 2u;
+static const uint ProbeIndexBit = 0x80000000u;
 
 // Conservative sphere-vs-cluster test in view space.  Every local light is
 // represented by its influence sphere; spot lights can safely use the same
@@ -45,6 +59,17 @@ bool affectsCluster(LocalLightData light, uint3 cluster)
            center.y + extent.y >= minNdc.y && center.y - extent.y <= maxNdc.y;
 }
 
+// A box is conservatively assigned through its bounding sphere.  The forward
+// shader still evaluates the exact box/sphere volume and blend distance.
+bool affectsCluster(ReflectionProbeData probe, uint3 cluster)
+{
+    if ((probe.flags & Probe_Enabled) == 0u) return false;
+    LocalLightData bound;
+    bound.positionRange = float4(probe.positionAndBlendDistance.xyz,
+        max(length(probe.extentsAndShape.xyz), 1e-4));
+    return affectsCluster(bound, cluster);
+}
+
 [numthreads(4, 4, 4)]
 [shader("compute")]
 void main(uint3 id : SV_DispatchThreadID)
@@ -55,8 +80,14 @@ void main(uint3 id : SV_DispatchThreadID)
     uint count = 0u;
     for (uint lightIndex = 0u; lightIndex < uniforms.gridAndLightCount.w; ++lightIndex)
     {
-        if (affectsCluster(frame.localLights[lightIndex], id) && count < MaxLightsPerCluster)
+        if (affectsCluster(frame.localLights[lightIndex], id) && count < MaxLocalLightsPerCluster)
             clusterLightIndices[offset + count++] = lightIndex;
+    }
+    const uint probeStart = count;
+    for (uint probeIndex = 0u; probeIndex < frame.reflectionProbeCount; ++probeIndex)
+    {
+        if (affectsCluster(reflectionProbes[probeIndex], id) && count - probeStart < MaxProbesPerCluster)
+            clusterLightIndices[offset + count++] = ProbeIndexBit | probeIndex;
     }
     ClusterLightRange range;
     range.offset = offset;

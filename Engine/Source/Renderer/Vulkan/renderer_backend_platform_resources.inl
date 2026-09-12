@@ -28,17 +28,7 @@
             createEditorUiResources(false);
         }
 
-        void initSceneResources() {
-            depthBuffer.initialize(vulkanDevice.physical(), device, vulkanDevice.allocator());
-            const VkSampleCountFlagBits requestedSamples =
-                antialiasingLevel == AntialiasingLevel::MSAA4x ? VK_SAMPLE_COUNT_4_BIT :
-                antialiasingLevel == AntialiasingLevel::MSAA2x ? VK_SAMPLE_COUNT_2_BIT :
-                VK_SAMPLE_COUNT_1_BIT;
-            msaa.initialize(vulkanDevice.physical(), device, requestedSamples, vulkanDevice.allocator());
-            hdrBuffer.create(vulkanDevice.physical(), device, swapchain.extent(), vulkanDevice.allocator());
-            msaa.create(swapchain.extent(), HdrBuffer::Format);
-            createDepthResources();
-            createMaterialTextures();
+        void createImageBasedLighting() {
             // SDL's base path is the executable directory. Project assets
             // live in its Assets subdirectory for both the Editor and Player.
             const auto assetDirectory = assetManager.asset_root() / "Assets";
@@ -55,6 +45,20 @@
             imageBasedLighting.create(vulkanDevice.physical(), device, commandPool,
                                       vulkanDevice.graphicsQueue(), vulkanDevice.allocator(),
                                       environmentPath);
+        }
+
+        void initSceneResources() {
+            depthBuffer.initialize(vulkanDevice.physical(), device, vulkanDevice.allocator());
+            const VkSampleCountFlagBits requestedSamples =
+                antialiasingLevel == AntialiasingLevel::MSAA4x ? VK_SAMPLE_COUNT_4_BIT :
+                antialiasingLevel == AntialiasingLevel::MSAA2x ? VK_SAMPLE_COUNT_2_BIT :
+                VK_SAMPLE_COUNT_1_BIT;
+            msaa.initialize(vulkanDevice.physical(), device, requestedSamples, vulkanDevice.allocator());
+            hdrBuffer.create(vulkanDevice.physical(), device, swapchain.extent(), vulkanDevice.allocator());
+            msaa.create(swapchain.extent(), HdrBuffer::Format);
+            createDepthResources();
+            createMaterialTextures();
+            createImageBasedLighting();
             createMeshBuffers();
             lastRenderTopologyRevision = registry.renderTopologyRevision();
             lastParticleEmitterRevision = registry.componentRevision<ParticleEmitterComponent>();

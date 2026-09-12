@@ -572,19 +572,14 @@ namespace Engine {
             if (device == VK_NULL_HANDLE) {
                 return;
             }
-            // All scene work is submitted through the graphics queue and each
-            // frame has its own fence. Waiting for every in-flight frame is
-            // sufficient before destroying scene-owned resources; idling the
-            // whole device here needlessly stalls unrelated queue work.
-            if (!inFlightFences.empty() && vkWaitForFences(device,
-                                                           static_cast<uint32_t>(inFlightFences.size()),
-                                                           inFlightFences.data(), VK_TRUE,
-                                                           UINT64_MAX) != VK_SUCCESS) {
-                throw std::runtime_error("Could not synchronize frames for scene reload");
+            // A scene snapshot replaces descriptor sets and buffers consumed
+            // by graphics, transfer and dedicated compute submissions. Frame
+            // fences cover presentation, but do not cover every one-shot or
+            // async submission. This infrequent editor operation must retire
+            // the entire device before releasing those shared resources.
+            if (vkDeviceWaitIdle(device) != VK_SUCCESS) {
+                throw std::runtime_error("Could not synchronize device for scene reload");
             }
-            // Individual Buffer objects own and retire any one-shot upload
-            // fences during destruction.  Do not idle the graphics queue
-            // here: that also blocks unrelated presentation and compute work.
 
             destroyCullingResources();
             tonemapPass.destroy();
@@ -663,6 +658,7 @@ namespace Engine {
             }
 
             createMaterialTextures();
+            createImageBasedLighting();
             createMeshBuffers();
             createInstanceBuffer();
             lastRenderTopologyRevision = registry.renderTopologyRevision();
