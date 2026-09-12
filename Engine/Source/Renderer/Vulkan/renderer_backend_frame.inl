@@ -1002,7 +1002,7 @@
                         0.0F,
                     };
                     particleSystem->recordRender(commandBuffer, particleFrame,
-                                                 particlePipeline.handle(), particlePipeline.layout(),
+                                                 sceneParticlePipeline.handle(), sceneParticlePipeline.layout(),
                                                  currentFrame, true);
                 }
                 sceneForwardPass.drawOutline(commandBuffer, sceneDescriptorPass.descriptorSet(currentFrame),
@@ -1597,8 +1597,6 @@
             // A minimized window has no presentable Vulkan extent.  Do not
             // acquire or recreate resources until it becomes drawable again.
             if (!hasDrawableExtent()) { return; }
-            applyPendingSceneViewportResize();
-
             uint32_t imageIndex;
             if (!acquireFrameImage(imageIndex)) { return; }
 
@@ -1678,6 +1676,11 @@
                 sceneViewportNeedsRender = false;
                 sceneViewportCacheValid = true;
                 sceneViewportImageInitialized = true;
+            }
+            if (sceneViewportImageInitialized && sceneViewportDescriptor == VK_NULL_HANDLE) {
+                sceneViewportDescriptor = ImGui_ImplVulkan_AddTexture(
+                    sceneViewportTarget.color().imageView(),
+                    VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
             }
 
             currentFrame = (currentFrame + 1) % MAX_FRAMES_IN_FLIGHT;

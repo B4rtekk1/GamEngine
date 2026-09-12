@@ -71,10 +71,10 @@
             createShadowPass();
             createSceneDescriptorPass();
             createForwardPass();
-            createParticleResources();
             createSkyPass();
             createFramebuffers();
             createSceneViewportResources();
+            createParticleResources();
             createSceneSkyPass();
             createTemporalAaPass();
             createBloomPass();
@@ -464,7 +464,7 @@
             options.colorFormat = HdrBuffer::Format;
             options.depthFormat = depthBuffer.format();
             options.samples = msaa.sampleCount();
-            options.existingRenderPass = forwardPass.renderPass();
+            options.existingRenderPass = lightingForwardPass.renderPass();
             options.additionalColorFormat = antialiasingLevel == AntialiasingLevel::TAA
                 ? VK_FORMAT_R16G16_SFLOAT : VK_FORMAT_UNDEFINED;
             options.shader = "shaders/particle_billboard.spv";
@@ -480,6 +480,13 @@
                 {1, 0, VK_FORMAT_R32G32_SFLOAT, sizeof(float) * 2},
             };
             particlePipeline.create(device, options);
+
+            // Scene View uses a distinct render pass, so it requires a
+            // compatible particle pipeline of its own.
+            options.existingRenderPass = msaa.enabled()
+                ? forwardPass.renderPass()
+                : sceneViewportForwardPass.renderPass();
+            sceneParticlePipeline.create(device, options);
 
             if (particleComputePipeline == VK_NULL_HANDLE) {
                 VkPushConstantRange pushConstants{};
@@ -549,6 +556,7 @@
             destroySceneViewportResources();
 
             particlePipeline.destroy();
+            sceneParticlePipeline.destroy();
 
             msaa.destroy();
             hdrBuffer.destroy();
@@ -584,10 +592,10 @@
             createShadowPass();
             createSceneDescriptorPass();
             createForwardPass();
-            createParticleResources();
             createSkyPass();
             createFramebuffers();
             createSceneViewportResources();
+            createParticleResources();
             createSceneSkyPass();
             createTemporalAaPass();
             createBloomPass();
@@ -606,7 +614,7 @@
                 buffers.push_back(buffer.handle());
             }
             skyPass.create(vulkanDevice.physical(), device, commandPool,
-                           vulkanDevice.graphicsQueue(), forwardPass.renderPass(),
+                           vulkanDevice.graphicsQueue(), lightingForwardPass.renderPass(),
                            HdrBuffer::Format, msaa.sampleCount(), buffers,
                            sizeof(UniformBufferObject), assetManager,
                            vulkanDevice.allocator(),
@@ -739,7 +747,9 @@
                         historyViews[index], VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
                 }
             }
-            sceneViewportDescriptor = ImGui_ImplVulkan_AddTexture(sceneViewportTarget.color().imageView(), VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+            // The image starts in UNDEFINED layout. Publish it only after a
+            // render has transitioned it to SHADER_READ_ONLY_OPTIMAL.
+            sceneViewportDescriptor = VK_NULL_HANDLE;
             editorUiActive = true;
         }
 
@@ -801,6 +811,5 @@
                         historyViews[index], VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
                 }
             }
-            sceneViewportDescriptor = ImGui_ImplVulkan_AddTexture(
-                sceneViewportTarget.color().imageView(), VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+            sceneViewportDescriptor = VK_NULL_HANDLE;
         }

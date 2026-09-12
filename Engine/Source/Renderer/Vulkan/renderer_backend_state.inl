@@ -43,6 +43,7 @@
         ForwardPass& forwardPass;
         ForwardPass lightingForwardPass;
         GraphicsPipeline& particlePipeline;
+        GraphicsPipeline sceneParticlePipeline;
         std::unique_ptr<Particles::ParticleSystem> particleSystem;
         VkPipelineLayout particleComputePipelineLayout = VK_NULL_HANDLE;
         VkPipeline particleComputePipeline = VK_NULL_HANDLE;

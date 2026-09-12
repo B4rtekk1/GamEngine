@@ -88,7 +88,8 @@ void ForwardPass::create(VkDevice device, const VkFormat colorFormat,
     // leaves their pixels unoccluding and causes background bleed/shimmer.
     // Genuine, sorted transparency belongs in a separate pipeline.
     foliageOptions.alphaBlendEnable = VK_FALSE;
-    foliageOptions.depthWriteEnable = VK_TRUE;
+    // Preserve the base pass's depth mode: lighting reads the depth prepass,
+    // while the regular forward pass writes depth.
     foliagePipeline_.create(device, foliageOptions);
     GraphicsPipelineOptions grassOptions = foliageOptions;
     grassOptions.shader = hasVelocityAttachment_

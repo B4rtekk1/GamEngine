@@ -1215,9 +1215,8 @@
                 (requested.width == sceneViewportTarget.extent().width &&
                  requested.height == sceneViewportTarget.extent().height)) return;
 
-            // ImGui has already stored this descriptor in the current draw
-            // data. Synchronize before retargeting it, rather than releasing a
-            // descriptor or image still referenced by an in-flight UI frame.
+            // This is called before ImGui::NewFrame(), so no current draw data
+            // can retain the descriptor that is about to be retired.
             vkDeviceWaitIdle(device);
             destroySceneViewportFramebuffer();
             sceneViewportTarget.resize(requested);
@@ -1228,9 +1227,7 @@
                 // plus a separate sampler. Its descriptor type is backend
                 // owned, so a direct COMBINED_IMAGE_SAMPLER write is invalid.
                 ImGui_ImplVulkan_RemoveTexture(sceneViewportDescriptor);
-                sceneViewportDescriptor = ImGui_ImplVulkan_AddTexture(
-                    sceneViewportTarget.color().imageView(),
-                    VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+                sceneViewportDescriptor = VK_NULL_HANDLE;
             }
             sceneViewportCacheValid = false;
             sceneViewportImageInitialized = false;

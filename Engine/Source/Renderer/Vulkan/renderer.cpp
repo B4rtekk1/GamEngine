@@ -311,10 +311,11 @@ namespace Engine {
             return result;
         }
 
-        void beginEditorUiFrame() const {
+        void beginEditorUiFrame() {
             if (!editorUiActive) {
                 throw std::logic_error("Renderer was initialized without an ImGui context");
             }
+            applyPendingSceneViewportResize();
             ImGui_ImplVulkan_NewFrame();
             ImGui_ImplSDL3_NewFrame();
             ImGui::NewFrame();
@@ -555,6 +556,7 @@ namespace Engine {
 
                 canvasRenderer.destroy();
                 particlePipeline.destroy();
+                sceneParticlePipeline.destroy();
                 if (particleComputePipeline != VK_NULL_HANDLE) {
                     vkDestroyPipeline(device, particleComputePipeline, nullptr);
                     particleComputePipeline = VK_NULL_HANDLE;
@@ -624,6 +626,7 @@ namespace Engine {
             hdrFramebuffer = VK_NULL_HANDLE;
             destroySceneViewportResources();
             particlePipeline.destroy();
+            sceneParticlePipeline.destroy();
             skyPass.destroy();
             sceneSkyPass.destroy();
             forwardPass.destroy();
@@ -703,10 +706,10 @@ namespace Engine {
             createShadowPass();
             createSceneDescriptorPass();
             createForwardPass();
-            createParticleResources();
             createSkyPass();
             createFramebuffers();
             createSceneViewportResources();
+            createParticleResources();
             createSceneSkyPass();
             createTemporalAaPass();
             createBloomPass();

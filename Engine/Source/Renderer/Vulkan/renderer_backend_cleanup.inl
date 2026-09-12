@@ -11,6 +11,7 @@
                 skyPass.destroy();
                 sceneSkyPass.destroy();
                 particlePipeline.destroy();
+                sceneParticlePipeline.destroy();
                 vkDestroyPipeline(device, particleComputePipeline, nullptr);
                 vkDestroyPipelineLayout(device, particleComputePipelineLayout, nullptr);
                 particleComputePipeline = VK_NULL_HANDLE;
