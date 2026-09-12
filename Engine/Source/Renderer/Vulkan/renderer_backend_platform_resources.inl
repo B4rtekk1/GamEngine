@@ -39,14 +39,19 @@
             msaa.create(swapchain.extent(), HdrBuffer::Format);
             createDepthResources();
             createMaterialTextures();
-            const auto hdrEnvironment = assetManager.asset_root() / "Environment.hdr";
-            const auto exrEnvironment = assetManager.asset_root() / "Environment.exr";
+            // SDL's base path is the executable directory. Project assets
+            // live in its Assets subdirectory for both the Editor and Player.
+            const auto assetDirectory = assetManager.asset_root() / "Assets";
+            const auto hdrEnvironment = assetDirectory / "Environment.hdr";
+            const auto exrEnvironment = assetDirectory / "Environment.exr";
             const auto sceneEnvironment = scene.environmentEquirectangular();
             const auto environmentPath = !environmentEquirectangularPath.empty()
                 ? environmentEquirectangularPath
                 : sceneEnvironment.empty()
-                ? (std::filesystem::exists(hdrEnvironment) ? hdrEnvironment : exrEnvironment)
-                : assetManager.asset_root() / sceneEnvironment;
+                ? (std::filesystem::exists(hdrEnvironment) ? hdrEnvironment
+                    : std::filesystem::exists(exrEnvironment) ? exrEnvironment
+                    : std::filesystem::path{})
+                : sceneEnvironment.is_absolute() ? sceneEnvironment : assetDirectory / sceneEnvironment;
             imageBasedLighting.create(vulkanDevice.physical(), device, commandPool,
                                       vulkanDevice.graphicsQueue(), vulkanDevice.allocator(),
                                       environmentPath);
