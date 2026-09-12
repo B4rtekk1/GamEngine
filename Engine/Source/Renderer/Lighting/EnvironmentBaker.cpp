@@ -53,7 +53,10 @@ Vec3 EnvironmentBaker::diffuseIrradiance(const Vec3& normal, const RadianceSampl
                          std::sqrt(1.0F - xi1)};
         result += source(tangentToWorld(local, normal));
     }
-    return result * (Pi / static_cast<float>(Samples));
+    // Cosine-weighted sampling estimates irradiance as pi * average(radiance).
+    // Store irradiance divided by pi so the Lambertian BRDF is folded into the
+    // baked map; the runtime diffuse IBL path then only needs albedo * kD.
+    return result * (1.0F / static_cast<float>(Samples));
 }
 
 Vec3 EnvironmentBaker::prefilter(const Vec3& reflection, const float roughness,

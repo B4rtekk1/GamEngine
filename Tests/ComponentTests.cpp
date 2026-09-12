@@ -61,6 +61,17 @@ TEST(EnvironmentBaker, MapsCompleteCubemapMipChainToRoughness) {
     EXPECT_FLOAT_EQ(Engine::EnvironmentBaker::roughnessForMip(0, 1), 0.0F);
 }
 
+TEST(EnvironmentBaker, DiffuseIrradianceFoldsInLambertianNormalization) {
+    constexpr Engine::Vec3 Radiance{0.25F, 0.5F, 0.75F};
+
+    const Engine::Vec3 baked = Engine::EnvironmentBaker::diffuseIrradiance(
+        {0.0F, 1.0F, 0.0F}, [](const Engine::Vec3&) { return Radiance; });
+
+    EXPECT_FLOAT_EQ(baked.x(), Radiance.x());
+    EXPECT_FLOAT_EQ(baked.y(), Radiance.y());
+    EXPECT_FLOAT_EQ(baked.z(), Radiance.z());
+}
+
 void ExpectVec3Near(const Engine::Vec3& value, float x, float y, float z) {
     EXPECT_NEAR(value.x(), x, 1.0e-5F);
     EXPECT_NEAR(value.y(), y, 1.0e-5F);

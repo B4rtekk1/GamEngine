@@ -27,7 +27,7 @@ constexpr std::uint32_t PrefilterSize = 256;
 constexpr std::uint32_t BrdfLutSize = 256;
 constexpr std::uint32_t BrdfLutSamples = 1024;
 // Bump this whenever any bake parameter or integration algorithm changes.
-constexpr std::uint64_t IblCacheVersion = 2;
+constexpr std::uint64_t IblCacheVersion = 3;
 constexpr std::uint64_t BrdfCacheKey = 0x4745425244463032ULL; // "GEBRDF02"
 
 enum class IblCacheKind : std::uint32_t { Cubemap = 1, BrdfLut = 2 };
