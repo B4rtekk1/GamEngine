@@ -1,4 +1,5 @@
 #include "Engine/Renderer/RenderGraph/RenderGraph.h"
+#include "Engine/Renderer/Lighting/ReflectionGraph.h"
 
 #include <gtest/gtest.h>
 
@@ -140,5 +141,28 @@ TEST(RenderGraphTests, BuildsQueueBatchesFromTheCompiledDag) {
     EXPECT_EQ(graph.queueBatches()[1].queue, Queue::AsyncCompute);
     EXPECT_EQ(graph.queueBatches()[1].waitBatches, (std::vector<std::uint32_t>{0U}));
     EXPECT_EQ(graph.queueBatches()[2].waitBatches, (std::vector<std::uint32_t>{1U}));
+}
+
+TEST(RenderGraphTests, ReflectionFallbackOrdersSsrBeforeProbeAndSkyResolution) {
+    RenderGraph graph;
+    const auto image = [](const std::uintptr_t value) { return reinterpret_cast<VkImage>(value); };
+    const auto color = graph.importTexture("Forward HDR", image(1), ColorTarget,
+                                           VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+    const auto depth = graph.importTexture("Depth", image(2), ColorTarget,
+                                           VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL);
+    const auto sky = graph.importTexture("Global sky", image(3), ColorTarget,
+                                         VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+    const auto probes = graph.importTexture("Local probe atlas", image(4), ColorTarget,
+                                            VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+    const auto output = Lighting::addReflectionPasses(graph, {
+        .sceneColor = color, .depth = depth, .globalSky = sky,
+        .localProbeAtlas = probes, .reflectionDesc = ColorTarget, .enableSsr = true});
+    graph.exportTexture(output.resolved);
+    graph.compile();
+    EXPECT_EQ(graph.executionOrder(),
+              (std::vector<std::string>{"Screen-space reflections", "Reflection fallback resolve"}));
+    ASSERT_EQ(graph.queueDependencies().size(), 1U);
+    EXPECT_EQ(graph.queueDependencies().front().producerQueue, Queue::AsyncCompute);
+    EXPECT_EQ(graph.queueDependencies().front().consumerQueue, Queue::Graphics);
 }
 } // namespace Engine::Renderer

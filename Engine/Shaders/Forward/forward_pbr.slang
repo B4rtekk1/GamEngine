@@ -1,4 +1,5 @@
 import Common.PbrLighting;
+import Common.ReflectionFallback;
 import Common.SceneData;
 import Common.ShadowSampling;
 
@@ -341,6 +342,16 @@ ForwardFragmentOutput fragmentMain(ForwardFragmentInput input)
     float3 diffuseIbl = irradianceMap.Sample(normal).rgb * albedo * kD;
     float3 reflection = reflect(-viewDirection, normal);
     float3 prefiltered = prefilteredEnvironmentMap.SampleLevel(reflection, roughness * 8.0).rgb;
+    // The current forward pass provides the global sky.  Local-probe, SSR and
+    // RT passes populate the preceding candidates as their resources become
+    // available; this explicit resolver keeps the material-side priority
+    // fixed as RT -> SSR -> probe -> sky.
+    ReflectionCandidate skyReflection = {prefiltered, 1.0};
+    ReflectionCandidate localProbeReflection = {0.0, 0.0};
+    ReflectionCandidate screenSpaceReflection = {0.0, 0.0};
+    ReflectionCandidate rayTracedReflection = {0.0, 0.0};
+    prefiltered = resolveReflection(rayTracedReflection, screenSpaceReflection,
+                                    localProbeReflection, skyReflection);
     float2 brdf = brdfIntegrationLut.Sample(float2(nDotV, roughness)).rg;
     float3 specularIbl = prefiltered * (fresnelIbl * brdf.x + brdf.y);
     float3 ambient = (diffuseIbl + specularIbl) * ao;

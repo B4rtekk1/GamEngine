@@ -7,6 +7,7 @@
 #include "Engine/ECS/Components/TerrainComponent.h"
 #include "Engine/ECS/Components/TerrainGrassComponent.h"
 #include "Engine/ECS/Components/ProceduralCloudComponent.h"
+#include "Engine/ECS/Components/ReflectionProbeComponent.h"
 #include "Engine/Renderer/Geometry/ProceduralCloud.h"
 #include "Engine/Renderer/Geometry/GpuVertex.h"
 #include "Engine/Renderer/Lighting/DirectionalLightData.h"
@@ -25,6 +26,19 @@
 #include <variant>
 
 namespace {
+
+TEST(ReflectionProbeComponent, ComputesBoxAndSphereInfluence) {
+    Engine::ReflectionProbeComponent probe;
+    probe.extents = {4.0F, 3.0F, 2.0F};
+    probe.blendDistance = 1.0F;
+    EXPECT_FLOAT_EQ(probe.influence({0.0F, 0.0F, 0.0F}, {0.0F, 0.0F, 0.0F}), 1.0F);
+    EXPECT_FLOAT_EQ(probe.influence({0.0F, 0.0F, 0.0F}, {3.5F, 0.0F, 0.0F}), 0.5F);
+    EXPECT_FLOAT_EQ(probe.influence({0.0F, 0.0F, 0.0F}, {4.1F, 0.0F, 0.0F}), 0.0F);
+
+    probe.shape = Engine::ReflectionProbeShape::Sphere;
+    probe.extents = {5.0F, 0.0F, 0.0F};
+    EXPECT_FLOAT_EQ(probe.influence({0.0F, 0.0F, 0.0F}, {4.5F, 0.0F, 0.0F}), 0.5F);
+}
 
 void ExpectVec3Near(const Engine::Vec3& value, float x, float y, float z) {
     EXPECT_NEAR(value.x(), x, 1.0e-5F);

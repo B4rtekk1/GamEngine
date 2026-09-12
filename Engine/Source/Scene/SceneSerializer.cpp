@@ -9,6 +9,7 @@
 #include "Engine/ECS/Components/ParticleEmitterComponent.h"
 #include "Engine/ECS/Components/SmokeEmitterComponent.h"
 #include "Engine/ECS/Components/ProceduralCloudComponent.h"
+#include "Engine/ECS/Components/ReflectionProbeComponent.h"
 #include "Engine/ECS/Components/TerrainComponent.h"
 #include "Engine/ECS/Components/TerrainGrassComponent.h"
 #include "Engine/ECS/Components/WindComponent.h"
@@ -59,6 +60,7 @@ namespace Engine {
         constexpr std::uint32_t MaterialShaderFormatVersion = 18;
         constexpr std::uint32_t ShaderGraphMaterialFormatVersion = 19;
         constexpr std::uint32_t MaterialShaderSourceFormatVersion = 20;
+        constexpr std::uint32_t ReflectionProbeFormatVersion = 21;
         constexpr std::uint32_t TerrainDataVersion = 1;
         constexpr std::array<char, 8> TerrainDataMagic{'G', 'E', 'T', 'E', 'R', 'R', '1', '\0'};
 
@@ -975,6 +977,15 @@ namespace Engine {
                         << static_cast<int>(light.castShadows) << ' '
                         << static_cast<int>(light.mainLight) << '\n';
             }
+            if (registry.has<ReflectionProbeComponent>(entity)) {
+                const auto& probe = registry.get<ReflectionProbeComponent>(entity);
+                serialized << "REFLECTION_PROBE " << static_cast<unsigned>(probe.shape) << ' ';
+                writeVec3(serialized, probe.extents);
+                serialized << ' ';
+                writeFloat(serialized, probe.blendDistance);
+                serialized << ' ' << probe.priority << ' ' << static_cast<int>(probe.enabled)
+                           << ' ' << static_cast<int>(probe.boxProjection) << '\n';
+            }
             if (registry.has<WindComponent>(entity)) {
                 const auto& wind = registry.get<WindComponent>(entity);
                 serialized << "WIND_V2 ";
@@ -1093,7 +1104,7 @@ namespace Engine {
         if (version != LegacyFormatVersion && version != TerrainFormatVersion &&
             version != EmissiveFormatVersion && version != MaterialOverrideFormatVersion &&
             version != MaterialOverrideFormatVersion + 1 && version != ScriptFieldsFormatVersion &&
-            version != MaterialShaderFormatVersion &&
+            version != MaterialShaderFormatVersion && version != MaterialShaderSourceFormatVersion &&
             version != FormatVersion) {
             invalidScene("unsupported format version " + std::to_string(version));
         }
@@ -1230,6 +1241,7 @@ namespace Engine {
             bool hasTransform = false;
             bool hasRenderer = false;
             bool hasLight = false;
+            bool hasReflectionProbe = false;
             bool hasWind = false;
             bool hasCamera = false;
             bool hasScript = false;
@@ -1471,6 +1483,29 @@ namespace Engine {
                         invalidScene("local light settings are invalid");
                     }
                     loaded.add<LightComponent>(entity, light);
+                } else if (component == "REFLECTION_PROBE") {
+                    if (version < ReflectionProbeFormatVersion || hasReflectionProbe) {
+                        invalidScene("invalid ReflectionProbeComponent");
+                    }
+                    const auto shape = read<unsigned>(input, "reflection probe shape");
+                    if (shape > static_cast<unsigned>(ReflectionProbeShape::Sphere)) {
+                        invalidScene("unknown reflection probe shape");
+                    }
+                    ReflectionProbeComponent probe;
+                    probe.shape = static_cast<ReflectionProbeShape>(shape);
+                    probe.extents = readVec3(input, "reflection probe extents");
+                    probe.blendDistance = readFloat(input, "reflection probe blend distance");
+                    probe.priority = read<std::int32_t>(input, "reflection probe priority");
+                    probe.enabled = readBool(input, "reflection probe enabled flag");
+                    probe.boxProjection = readBool(input, "reflection probe box-projection flag");
+                    if (probe.extents.x() <= 0.0F ||
+                        (probe.shape == ReflectionProbeShape::Box &&
+                         (probe.extents.y() <= 0.0F || probe.extents.z() <= 0.0F)) ||
+                        probe.blendDistance < 0.0F) {
+                        invalidScene("reflection probe volume is invalid");
+                    }
+                    loaded.add<ReflectionProbeComponent>(entity, probe);
+                    hasReflectionProbe = true;
                 } else if (component == "CAMERA") {
                     if (hasCamera) {
                         invalidScene("entity contains more than one CameraComponent");
