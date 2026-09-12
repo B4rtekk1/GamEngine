@@ -101,6 +101,8 @@ namespace Engine {
     }
 
     void Application::initializeRuntime() {
+        const auto assetRoot = content_.assetRoot();
+        if (!assetRoot.empty()) impl_->renderer.setProjectRoot(assetRoot.parent_path());
         impl_->sdl.initialize();
         impl_->window.create(config_.title, config_.width, config_.height);
         impl_->renderer.initialize(scene_, impl_->window.get());

@@ -67,6 +67,9 @@ namespace Engine {
         [[nodiscard]] std::vector<GpuMemoryCategoryBudget> gpuMemoryCategories() const;
         [[nodiscard]] std::vector<GpuSceneMemoryAllocation> gpuSceneMemory() const;
 
+        /** Sets the project directory used for project-owned runtime caches. Must be called before initializeCore(). */
+        void setProjectRoot(std::filesystem::path root);
+
         // nativeWindow and nativeEvent are opaque platform handles. Applications
         // do not need to include graphics-backend headers to use the renderer.
         /** Initializes presentation, synchronization and the ImGui backend only. */

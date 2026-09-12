@@ -384,6 +384,7 @@ int main(int argc, char** argv) {
         // which explicitly optimize for an unshadowed renderer.
         Engine::Renderer renderer{Engine::RenderConfig{
             .features = Engine::RenderFeatures{.shadows = true}}};
+        renderer.setProjectRoot(project.rootPath());
         renderer.initializeCore(scene, window);
         SceneHistory history;
         history.reset(scene);

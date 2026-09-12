@@ -169,6 +169,7 @@ namespace Engine {
     class Renderer::State {
     public:
         Assets::AssetManager assetManager{};
+        std::filesystem::path projectRoot;
         ForwardPass forwardPass{};
         SkyPass skyPass;
         TonemapPass tonemapPass;
@@ -187,6 +188,7 @@ namespace Engine {
                          const ShadowQuality &shadowQuality,
                          const ShadowDebugView &shadowDebugView,
                          const GrassRenderSettings &grassSettings,
+                         std::filesystem::path projectRoot,
                          Assets::AssetManager &assetManager,
                          ForwardPass &forwardPass,
                          SkyPass &skyPass,
@@ -210,6 +212,7 @@ namespace Engine {
               antialiasingLevel(antialiasingLevel),
               shadowQuality(shadowQuality), shadowDebugView(shadowDebugView),
               grassSettings(grassSettings),
+              projectRoot(std::move(projectRoot)),
               assetManager(assetManager),
               renderables(sceneGpu.renderables),
               instanceBatches(sceneGpu.instanceBatches),
@@ -501,7 +504,8 @@ namespace Engine {
                 waitIdle();
                 ImageBasedLighting replacement;
                 replacement.create(vulkanDevice.physical(), device, commandPool,
-                                   vulkanDevice.graphicsQueue(), vulkanDevice.allocator(), path);
+                                   vulkanDevice.graphicsQueue(), vulkanDevice.allocator(), path,
+                                   assetManager.asset_root() / "Library");
                 imageBasedLighting.swap(replacement);
                 const auto descriptors = imageBasedLighting.descriptors();
                 shadowPass.updateImageBasedLightingDescriptors(descriptors);

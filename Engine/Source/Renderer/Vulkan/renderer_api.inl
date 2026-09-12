@@ -56,10 +56,15 @@ std::vector<GpuSceneMemoryAllocation> Renderer::gpuSceneMemory() const {
     return backend_ ? backend_->gpuSceneMemory() : std::vector<GpuSceneMemoryAllocation>{};
 }
 
+void Renderer::setProjectRoot(std::filesystem::path root) {
+    if (backend_) throw std::logic_error("Renderer project root must be set before initialization");
+    state_->projectRoot = std::move(root).lexically_normal();
+}
+
 void Renderer::initializeCore(Scene& scene, void* nativeWindow) {
     auto* window = static_cast<SDL_Window*>(nativeWindow);
     if (backend_) throw std::logic_error("Renderer is already initialized");
-    backend_ = std::make_unique<Backend>(scene, window, optimizationFeatures_, antialiasingLevel_, shadowQuality_, shadowDebugView_, grassSettings_,
+    backend_ = std::make_unique<Backend>(scene, window, optimizationFeatures_, antialiasingLevel_, shadowQuality_, shadowDebugView_, grassSettings_, state_->projectRoot,
                                          state_->assetManager, state_->forwardPass, state_->skyPass,
                                          state_->tonemapPass, state_->temporalAaPass, state_->bloomPass, state_->gtaoPass,
                                          state_->particlePipeline,

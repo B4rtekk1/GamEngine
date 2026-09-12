@@ -6,9 +6,14 @@
 #include <bit>
 #include <cmath>
 #include <cstdint>
+#include <cstddef>
+#include <cstdio>
 #include <filesystem>
+#include <fstream>
 #include <iostream>
 #include <memory>
+#include <string>
+#include <string_view>
 #include <vector>
 
 #include <stb_image.h>
@@ -21,6 +26,121 @@ constexpr std::uint32_t IrradianceSize = 32;
 constexpr std::uint32_t PrefilterSize = 256;
 constexpr std::uint32_t BrdfLutSize = 256;
 constexpr std::uint32_t BrdfLutSamples = 1024;
+// Bump this whenever any bake parameter or integration algorithm changes.
+constexpr std::uint64_t IblCacheVersion = 2;
+constexpr std::uint64_t BrdfCacheKey = 0x4745425244463032ULL; // "GEBRDF02"
+
+enum class IblCacheKind : std::uint32_t { Cubemap = 1, BrdfLut = 2 };
+
+struct IblCacheHeader {
+    char magic[4];
+    std::uint32_t version;
+    std::uint32_t kind;
+    std::uint32_t size;
+    std::uint32_t mipLevels;
+    std::uint64_t sourceHash;
+    std::uint64_t payloadBytes;
+};
+
+static_assert(sizeof(IblCacheHeader) == 40);
+
+std::uint64_t hashBytes(std::uint64_t hash, const std::byte* bytes, const std::size_t size) noexcept {
+    constexpr std::uint64_t Prime = 1099511628211ULL;
+    for (std::size_t index = 0; index < size; ++index) {
+        hash ^= static_cast<std::uint8_t>(bytes[index]);
+        hash *= Prime;
+    }
+    return hash;
+}
+
+std::uint64_t hashEnvironment(const std::filesystem::path& path) {
+    constexpr std::uint64_t OffsetBasis = 14695981039346656037ULL;
+    std::uint64_t hash = hashBytes(OffsetBasis, reinterpret_cast<const std::byte*>(&IblCacheVersion),
+                                   sizeof(IblCacheVersion));
+    const auto proceduralHash = [&]() {
+        return hashBytes(hash, reinterpret_cast<const std::byte*>("procedural"), 10);
+    };
+    if (path.empty()) return proceduralHash();
+    std::ifstream input(path, std::ios::binary);
+    if (!input) {
+        // Keep the renderer's historical behaviour: a missing/corrupt source
+        // is represented by the procedural environment, never a fatal init error.
+        std::cerr << "[IBL] Could not open environment for hashing '" << path.string()
+                  << "'; using procedural fallback.\n";
+        return proceduralHash();
+    }
+    std::array<std::byte, 64 * 1024> buffer{};
+    while (input) {
+        input.read(reinterpret_cast<char*>(buffer.data()), static_cast<std::streamsize>(buffer.size()));
+        const auto count = static_cast<std::size_t>(input.gcount());
+        hash = hashBytes(hash, buffer.data(), count);
+    }
+    if (!input.eof()) {
+        std::cerr << "[IBL] Could not read environment for hashing '" << path.string()
+                  << "'; using procedural fallback.\n";
+        return proceduralHash();
+    }
+    return hash;
+}
+
+std::size_t cubemapFloatCount(const std::uint32_t size, const std::uint32_t mipLevels) noexcept {
+    std::size_t count = 0;
+    for (std::uint32_t mip = 0; mip < mipLevels; ++mip) {
+        const auto side = std::max(1U, size >> mip);
+        count += static_cast<std::size_t>(6) * side * side * 4;
+    }
+    return count;
+}
+
+bool loadCache(const std::filesystem::path& path, const IblCacheKind kind, const std::uint32_t size,
+               const std::uint32_t mipLevels, const std::uint64_t sourceHash, std::vector<std::byte>& payload) {
+    std::ifstream input(path, std::ios::binary | std::ios::ate);
+    if (!input) return false;
+    const auto length = input.tellg();
+    if (length < static_cast<std::streamoff>(sizeof(IblCacheHeader))) return false;
+    input.seekg(0);
+    IblCacheHeader header{};
+    input.read(reinterpret_cast<char*>(&header), sizeof(header));
+    const auto expectedBytes = kind == IblCacheKind::Cubemap
+        ? cubemapFloatCount(size, mipLevels) * sizeof(float)
+        : static_cast<std::size_t>(size) * size * 2 * sizeof(std::uint16_t);
+    if (!input || std::string_view(header.magic, 4) != "GTEX" || header.version != IblCacheVersion ||
+        header.kind != static_cast<std::uint32_t>(kind) || header.size != size ||
+        header.mipLevels != mipLevels || header.sourceHash != sourceHash || header.payloadBytes != expectedBytes ||
+        length != static_cast<std::streamoff>(sizeof(header) + expectedBytes)) return false;
+    payload.resize(expectedBytes);
+    input.read(reinterpret_cast<char*>(payload.data()), static_cast<std::streamsize>(payload.size()));
+    return static_cast<bool>(input);
+}
+
+void saveCache(const std::filesystem::path& path, const IblCacheKind kind, const std::uint32_t size,
+               const std::uint32_t mipLevels, const std::uint64_t sourceHash, std::span<const std::byte> payload) {
+    std::error_code error;
+    std::filesystem::create_directories(path.parent_path(), error);
+    if (error) throw std::runtime_error("Could not create IBL cache directory: " + error.message());
+    const auto temporary = path.string() + ".tmp";
+    std::ofstream output(temporary, std::ios::binary | std::ios::trunc);
+    if (!output) throw std::runtime_error("Could not write IBL cache: " + path.string());
+    const IblCacheHeader header{{'G', 'T', 'E', 'X'}, static_cast<std::uint32_t>(IblCacheVersion),
+        static_cast<std::uint32_t>(kind), size, mipLevels, sourceHash, payload.size()};
+    output.write(reinterpret_cast<const char*>(&header), sizeof(header));
+    output.write(reinterpret_cast<const char*>(payload.data()), static_cast<std::streamsize>(payload.size()));
+    output.close();
+    if (!output) throw std::runtime_error("Could not finish IBL cache: " + path.string());
+    std::filesystem::rename(temporary, path, error);
+    if (error) {
+        std::filesystem::remove(path, error);
+        error.clear();
+        std::filesystem::rename(temporary, path, error);
+        if (error) throw std::runtime_error("Could not publish IBL cache: " + error.message());
+    }
+}
+
+std::filesystem::path cacheDirectory(const std::filesystem::path& libraryDirectory, const std::uint64_t hash) {
+    char name[17]{};
+    std::snprintf(name, sizeof(name), "%016llx", static_cast<unsigned long long>(hash));
+    return libraryDirectory / "IBL" / name;
+}
 
 float radicalInverseVdC(std::uint32_t bits) noexcept {
     bits = (bits << 16U) | (bits >> 16U);
@@ -160,37 +280,80 @@ EnvironmentSource loadEquirectangular(const std::filesystem::path& path) {
 
 void ImageBasedLighting::create(VkPhysicalDevice physicalDevice, VkDevice device, VkCommandPool commandPool,
                                 VkQueue queue, VmaAllocator allocator,
-                                const std::filesystem::path& equirectangularPath) {
-    const EnvironmentSource source = loadEquirectangular(equirectangularPath);
+                                const std::filesystem::path& equirectangularPath,
+                                const std::filesystem::path& libraryDirectory) {
+    const auto environmentHash = hashEnvironment(equirectangularPath);
+    const auto iblDirectory = cacheDirectory(libraryDirectory, environmentHash);
+    const auto environmentCache = iblDirectory / "environment.gtex";
+    const auto irradianceCache = iblDirectory / "irradiance.gtex";
+    const auto prefilteredCache = iblDirectory / "prefiltered.gtex";
+    const auto brdfCache = libraryDirectory / "IBL" / "brdf_lut.gtex";
     // Build every resource away from the live set. A decode, allocation or
     // upload failure must leave the active descriptor targets intact.
     ImageBasedLighting replacement;
     const auto prefilterMips = std::bit_width(PrefilterSize);
-    replacement.environment_.createHdr(physicalDevice, device, commandPool, queue, EnvironmentSize, 1,
-        EnvironmentBaker::bakeCubemap(EnvironmentSize, 1,
-            [&source](const Vec3& direction, std::uint32_t, std::uint32_t) { return source.sample(direction); }));
-    replacement.irradiance_.createHdr(physicalDevice, device, commandPool, queue, IrradianceSize, 1,
-        EnvironmentBaker::bakeCubemap(IrradianceSize, 1, [&source](const Vec3& direction, std::uint32_t, std::uint32_t) {
-            return EnvironmentBaker::diffuseIrradiance(direction,
-                [&source](const Vec3& sampleDirection) { return source.sample(sampleDirection); });
-        }));
-    replacement.prefiltered_.createHdr(physicalDevice, device, commandPool, queue, PrefilterSize, prefilterMips,
-        EnvironmentBaker::bakePrefilteredCubemap(PrefilterSize, prefilterMips,
-            [&source](const Vec3& direction) { return source.sample(direction); }));
-
-    std::vector<std::uint16_t> pixels(BrdfLutSize * BrdfLutSize * 2);
-    for (std::uint32_t y = 0; y < BrdfLutSize; ++y) {
-        const float roughness = (static_cast<float>(y) + 0.5F) / static_cast<float>(BrdfLutSize);
-        for (std::uint32_t x = 0; x < BrdfLutSize; ++x) {
-            const float nDotV = (static_cast<float>(x) + 0.5F) / static_cast<float>(BrdfLutSize);
-            const Vec2 value = integrateBrdf(nDotV, roughness);
-            const auto index = (y * BrdfLutSize + x) * 2;
-            pixels[index] = floatToHalf(value.x());
-            pixels[index + 1] = floatToHalf(value.y());
+    std::vector<std::byte> payload;
+    const auto uploadCubemap = [&](const std::filesystem::path& path, const std::uint32_t size,
+                                   const std::uint32_t mipLevels, const auto& bake, Cubemap& target) {
+        if (loadCache(path, IblCacheKind::Cubemap, size, mipLevels, environmentHash, payload)) {
+            std::cerr << "[IBL] Cache hit: " << path.string() << '\n';
+        } else {
+            std::cerr << "[IBL] Cache miss; baking " << path.string() << '\n';
+            const auto pixels = bake();
+            payload.resize(pixels.size() * sizeof(float));
+            std::memcpy(payload.data(), pixels.data(), payload.size());
+            saveCache(path, IblCacheKind::Cubemap, size, mipLevels, environmentHash, payload);
         }
+        // std::vector<std::byte> is not required to provide float alignment;
+        // copy into typed storage before handing it to the cubemap uploader.
+        std::vector<float> pixels(payload.size() / sizeof(float));
+        std::memcpy(pixels.data(), payload.data(), payload.size());
+        target.createHdr(physicalDevice, device, commandPool, queue, size, mipLevels, pixels);
+    };
+
+    std::optional<EnvironmentSource> source;
+    const auto getSource = [&]() -> const EnvironmentSource& {
+        if (!source) source.emplace(loadEquirectangular(equirectangularPath));
+        return *source;
+    };
+    uploadCubemap(environmentCache, EnvironmentSize, 1, [&] {
+        const auto& decoded = getSource();
+        return EnvironmentBaker::bakeCubemap(EnvironmentSize, 1,
+            [&decoded](const Vec3& direction, std::uint32_t, std::uint32_t) { return decoded.sample(direction); });
+    }, replacement.environment_);
+    uploadCubemap(irradianceCache, IrradianceSize, 1, [&] {
+        const auto& decoded = getSource();
+        return EnvironmentBaker::bakeCubemap(IrradianceSize, 1, [&decoded](const Vec3& direction, std::uint32_t, std::uint32_t) {
+            return EnvironmentBaker::diffuseIrradiance(direction,
+                [&decoded](const Vec3& sampleDirection) { return decoded.sample(sampleDirection); });
+        });
+    }, replacement.irradiance_);
+    uploadCubemap(prefilteredCache, PrefilterSize, prefilterMips, [&] {
+        const auto& decoded = getSource();
+        return EnvironmentBaker::bakePrefilteredCubemap(PrefilterSize, prefilterMips,
+            [&decoded](const Vec3& direction) { return decoded.sample(direction); });
+    }, replacement.prefiltered_);
+
+    if (!loadCache(brdfCache, IblCacheKind::BrdfLut, BrdfLutSize, 1, BrdfCacheKey, payload)) {
+        std::cerr << "[IBL] BRDF LUT cache miss; generating engine LUT once.\n";
+        std::vector<std::uint16_t> pixels(BrdfLutSize * BrdfLutSize * 2);
+        for (std::uint32_t y = 0; y < BrdfLutSize; ++y) {
+            const float roughness = (static_cast<float>(y) + 0.5F) / static_cast<float>(BrdfLutSize);
+            for (std::uint32_t x = 0; x < BrdfLutSize; ++x) {
+                const float nDotV = (static_cast<float>(x) + 0.5F) / static_cast<float>(BrdfLutSize);
+                const Vec2 value = integrateBrdf(nDotV, roughness);
+                const auto index = (y * BrdfLutSize + x) * 2;
+                pixels[index] = floatToHalf(value.x());
+                pixels[index + 1] = floatToHalf(value.y());
+            }
+        }
+        payload.resize(pixels.size() * sizeof(std::uint16_t));
+        std::memcpy(payload.data(), pixels.data(), payload.size());
+        saveCache(brdfCache, IblCacheKind::BrdfLut, BrdfLutSize, 1, BrdfCacheKey, payload);
+    } else {
+        std::cerr << "[IBL] BRDF LUT cache hit.\n";
     }
-    const auto bytes = std::span<const std::uint8_t>{reinterpret_cast<const std::uint8_t*>(pixels.data()),
-                                                      pixels.size() * sizeof(std::uint16_t)};
+    const auto bytes = std::span<const std::uint8_t>{reinterpret_cast<const std::uint8_t*>(payload.data()), payload.size()};
     replacement.brdfLut_.create(physicalDevice, device, commandPool, queue, BrdfLutSize, BrdfLutSize, bytes,
                                 TextureColorSpace::Linear, false, allocator, TexturePixelFormat::RG16F);
     swap(replacement);

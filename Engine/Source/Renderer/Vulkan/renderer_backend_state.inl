@@ -64,6 +64,8 @@
         std::uint64_t reflectionProbeTransformRevision = 0;
         std::uint32_t reflectionProbeBufferDirtyMask = (1U << MAX_FRAMES_IN_FLIGHT) - 1U;
         std::filesystem::path environmentEquirectangularPath;
+        // Caches belong to the opened game project, never beside the Editor executable.
+        std::filesystem::path projectRoot;
         // Terrain height input for procedural grass generation. It is kept
         // separate from material textures so compute can sample it directly.
         Texture2D grassHeightTexture;

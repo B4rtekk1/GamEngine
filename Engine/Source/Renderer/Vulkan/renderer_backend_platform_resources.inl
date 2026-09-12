@@ -31,7 +31,8 @@
         void createImageBasedLighting() {
             // SDL's base path is the executable directory. Project assets
             // live in its Assets subdirectory for both the Editor and Player.
-            const auto assetDirectory = assetManager.asset_root() / "Assets";
+            const auto runtimeRoot = projectRoot.empty() ? assetManager.asset_root() : projectRoot;
+            const auto assetDirectory = runtimeRoot / "Assets";
             const auto hdrEnvironment = assetDirectory / "Environment.hdr";
             const auto exrEnvironment = assetDirectory / "Environment.exr";
             const auto sceneEnvironment = scene.environmentEquirectangular();
@@ -44,7 +45,7 @@
                 : sceneEnvironment.is_absolute() ? sceneEnvironment : assetDirectory / sceneEnvironment;
             imageBasedLighting.create(vulkanDevice.physical(), device, commandPool,
                                       vulkanDevice.graphicsQueue(), vulkanDevice.allocator(),
-                                      environmentPath);
+                                      environmentPath, runtimeRoot / "Library");
         }
 
         void initSceneResources() {

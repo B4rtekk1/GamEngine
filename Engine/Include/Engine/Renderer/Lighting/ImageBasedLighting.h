@@ -15,7 +15,8 @@ class ImageBasedLighting final {
 public:
     void create(VkPhysicalDevice physicalDevice, VkDevice device, VkCommandPool commandPool,
                 VkQueue queue, VmaAllocator allocator,
-                const std::filesystem::path& equirectangularPath = {});
+                const std::filesystem::path& equirectangularPath = {},
+                const std::filesystem::path& libraryDirectory = {});
     void destroy() noexcept;
     void swap(ImageBasedLighting& other) noexcept;
 
