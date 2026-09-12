@@ -667,13 +667,33 @@ namespace Engine {
     } // namespace
 
 #ifndef SCENE_SERIALIZER_REGISTRY_ONLY
+    namespace {
+        std::filesystem::path environmentDataPath(const std::filesystem::path& scenePath) {
+            return std::filesystem::path{scenePath.string() + ".environment"};
+        }
+
+        void saveEnvironment(const Scene& scene, const std::filesystem::path& scenePath) {
+            std::ofstream output{environmentDataPath(scenePath), std::ios::trunc};
+            if (!output) throw std::runtime_error("Could not write scene environment settings");
+            output << std::quoted(scene.environmentEquirectangular().generic_string()) << '\n';
+        }
+
+        void loadEnvironment(Scene& scene, const std::filesystem::path& scenePath) {
+            std::ifstream input{environmentDataPath(scenePath)};
+            if (!input) { scene.setEnvironmentEquirectangular({}); return; }
+            std::string path;
+            if (input >> std::quoted(path)) scene.setEnvironmentEquirectangular(std::filesystem::path{path});
+        }
+    }
     void SceneSerializer::save(const Scene &scene, const std::filesystem::path &path) {
         save(scene.registry(), path);
+        saveEnvironment(scene, path);
     }
 
     void SceneSerializer::save(const Scene &scene, const std::filesystem::path &path,
                                const std::uint32_t msaaSamples) {
         save(scene.registry(), path, msaaSamples);
+        saveEnvironment(scene, path);
     }
 
     void SceneSerializer::save(const Scene &scene, std::ostream &output) {
@@ -697,6 +717,7 @@ namespace Engine {
             throw;
         }
         scene.rebuildObjectHandles();
+        loadEnvironment(scene, path);
     }
 
     void SceneSerializer::load(Scene &scene, const std::filesystem::path &path,
@@ -709,6 +730,7 @@ namespace Engine {
             throw;
         }
         scene.rebuildObjectHandles();
+        loadEnvironment(scene, path);
     }
 
     void SceneSerializer::load(Scene &scene, std::istream &input) {
@@ -743,6 +765,7 @@ namespace Engine {
         // synchronize it on the render thread after the hand-off.
         destination.detachObjectHandles();
         destination.registry_ = std::move(source.registry_);
+        destination.environmentEquirectangular_ = std::move(source.environmentEquirectangular_);
         source.detachObjectHandles();
         destination.rebuildObjectHandles();
     }

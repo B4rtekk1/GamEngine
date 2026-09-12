@@ -461,6 +461,23 @@ namespace Engine {
             }
         }
 
+        [[nodiscard]] bool setEnvironmentEquirectangular(const std::filesystem::path& path) {
+            if (!sceneResourcesInitialized || device == VK_NULL_HANDLE || path.empty()) return false;
+            try {
+                waitIdle();
+                environmentEquirectangularPath = path;
+                imageBasedLighting.create(vulkanDevice.physical(), device, commandPool,
+                                          vulkanDevice.graphicsQueue(), vulkanDevice.allocator(), path);
+                createShadowPass();
+                createSceneDescriptorPass();
+                sceneViewportNeedsRender = true;
+                return true;
+            } catch (const std::exception& exception) {
+                std::cerr << "[Renderer] Could not rebuild environment IBL: " << exception.what() << '\n';
+                return false;
+            }
+        }
+
         [[nodiscard]] bool reloadShaders() {
             if (device == VK_NULL_HANDLE || !sceneResourcesInitialized) return false;
 

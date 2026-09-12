@@ -7,6 +7,7 @@
 #include "Engine/Math/Vec3.h"
 
 #include <cstdint>
+#include <filesystem>
 #include <limits>
 #include <memory>
 #include <optional>
@@ -103,6 +104,9 @@ namespace Engine {
         void updateEditorSceneCameraInput() const;
 
         void setEditorSelection(Entity entity) const;
+
+        /** Rebuilds global IBL from an HDR/EXR equirectangular panorama. */
+        [[nodiscard]] bool setEnvironmentEquirectangular(const std::filesystem::path& path) const;
 
         void renderFrame() const;
 

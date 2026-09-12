@@ -4,16 +4,18 @@
 #include "Engine/Renderer/Textures/Texture2D.h"
 
 #include <array>
+#include <filesystem>
 
 namespace Engine {
 
-// Global lighting textures used by the forward PBR descriptor set.  The
-// current procedural sky is deliberately also the source of these maps, so
-// IBL is useful before an HDR environment-asset import path is added.
+// Global lighting textures used by the forward PBR descriptor set. The
+// procedural HDR fallback is convolved into irradiance and GGX-prefiltered
+// maps at startup; an imported HDR environment can replace that source.
 class ImageBasedLighting final {
 public:
     void create(VkPhysicalDevice physicalDevice, VkDevice device, VkCommandPool commandPool,
-                VkQueue queue, VmaAllocator allocator);
+                VkQueue queue, VmaAllocator allocator,
+                const std::filesystem::path& equirectangularPath = {});
     void destroy() noexcept;
 
     [[nodiscard]] std::array<VkDescriptorImageInfo, 3> descriptors() const noexcept;

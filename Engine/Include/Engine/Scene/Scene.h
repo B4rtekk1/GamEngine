@@ -52,6 +52,10 @@ namespace Engine {
     public:
         Scene();
 
+        /** Asset-root-relative equirectangular HDR/EXR used for global IBL. */
+        [[nodiscard]] const std::filesystem::path& environmentEquirectangular() const noexcept { return environmentEquirectangular_; }
+        void setEnvironmentEquirectangular(std::filesystem::path path) { environmentEquirectangular_ = std::move(path).lexically_normal(); }
+
         /**
          * Advanced component-oriented creation API.
          *
@@ -527,6 +531,7 @@ namespace Engine {
         }
 
     private:
+        std::filesystem::path environmentEquirectangular_;
         friend class ScriptModuleManager;
         friend class Application;
         friend class Actor;

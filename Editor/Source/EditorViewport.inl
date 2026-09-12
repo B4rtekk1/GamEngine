@@ -1712,6 +1712,16 @@ ViewportInteraction drawViewport(Engine::ScenePreset &scene, Engine::Assets::Con
         const ImVec2 imageMax = ImGui::GetItemRectMax();
         if (ImGui::BeginDragDropTarget()) {
             if (const ImGuiPayload* payload =
+                    ImGui::AcceptDragDropPayload(Editor::AssetDragDrop::environmentPayload)) {
+                const auto environment = Editor::AssetDragDrop::environmentPath(*payload);
+                if (!renderer.setEnvironmentEquirectangular(content.assetRoot() / environment))
+                    assetDropError = "Could not load HDR/EXR environment";
+                else {
+                    scene.setEnvironmentEquirectangular(environment);
+                    assetDropError.clear();
+                }
+            }
+            if (const ImGuiPayload* payload =
                     ImGui::AcceptDragDropPayload(Editor::AssetDragDrop::modelPayload)) {
                 try {
                     Engine::Vec3 position{};

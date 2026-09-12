@@ -52,6 +52,7 @@
         Texture2D fpsFontTexture;
         Texture2D fallbackMaterialTexture;
         ImageBasedLighting imageBasedLighting;
+        std::filesystem::path environmentEquirectangularPath;
         // Terrain height input for procedural grass generation. It is kept
         // separate from material textures so compute can sample it directly.
         Texture2D grassHeightTexture;

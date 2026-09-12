@@ -306,6 +306,10 @@ Engine::Entity drawEditorMenuBar(Engine::ScenePreset &scene, Engine::Renderer &r
     const auto loadScene = [&](const std::filesystem::path& path) {
         std::optional<std::uint32_t> samples;
         Engine::SceneSerializer::load(scene, path, samples);
+        if (!scene.environmentEquirectangular().empty() &&
+            !renderer.setEnvironmentEquirectangular(content.assetRoot() / scene.environmentEquirectangular())) {
+            throw std::runtime_error("Could not load scene HDR/EXR environment");
+        }
         EditorSceneSession::markSceneSaved(path);
         if (samples) {
             renderer.setAntialiasingLevel(*samples == 2

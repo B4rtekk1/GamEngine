@@ -14,6 +14,7 @@ namespace Editor::AssetDragDrop {
 inline constexpr const char* modelPayload = "EDITOR_MODEL_ASSET";
 inline constexpr const char* texturePayload = "EDITOR_TEXTURE_ASSET";
 inline constexpr const char* shaderGraphPayload = "EDITOR_SHADER_GRAPH_ASSET";
+inline constexpr const char* environmentPayload = "EDITOR_ENVIRONMENT_ASSET";
 
 inline void setModelPayload(const std::filesystem::path& relativePath) {
     const std::string value = relativePath.generic_string();
@@ -30,6 +31,11 @@ inline void setShaderGraphPayload(const std::filesystem::path& relativePath) {
     ImGui::SetDragDropPayload(shaderGraphPayload, value.c_str(), value.size() + 1);
 }
 
+inline void setEnvironmentPayload(const std::filesystem::path& relativePath) {
+    const std::string value = relativePath.generic_string();
+    ImGui::SetDragDropPayload(environmentPayload, value.c_str(), value.size() + 1);
+}
+
 inline std::filesystem::path modelPath(const ImGuiPayload& payload) {
     if (payload.Data == nullptr || payload.DataSize <= 1)
         return {};
@@ -38,6 +44,7 @@ inline std::filesystem::path modelPath(const ImGuiPayload& payload) {
 
 inline std::filesystem::path texturePath(const ImGuiPayload& payload) { return modelPath(payload); }
 inline std::filesystem::path shaderGraphPath(const ImGuiPayload& payload) { return modelPath(payload); }
+inline std::filesystem::path environmentPath(const ImGuiPayload& payload) { return modelPath(payload); }
 
 inline Engine::Entity instantiateModel(Engine::ScenePreset& scene, Engine::Assets::Content& content,
                                        const std::filesystem::path& relativePath,

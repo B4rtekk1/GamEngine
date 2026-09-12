@@ -341,7 +341,12 @@ ForwardFragmentOutput fragmentMain(ForwardFragmentInput input)
     float3 kD = (1.0 - kS) * (1.0 - metallic);
     float3 diffuseIbl = irradianceMap.Sample(normal).rgb * albedo * kD;
     float3 reflection = reflect(-viewDirection, normal);
-    float3 prefiltered = prefilteredEnvironmentMap.SampleLevel(reflection, roughness * 8.0).rgb;
+    uint prefilteredWidth;
+    uint prefilteredHeight;
+    uint prefilteredMipCount;
+    prefilteredEnvironmentMap.GetDimensions(0, prefilteredWidth, prefilteredHeight, prefilteredMipCount);
+    float3 prefiltered = prefilteredEnvironmentMap.SampleLevel(
+        reflection, roughness * float(max(prefilteredMipCount, 1u) - 1u)).rgb;
     // The current forward pass provides the global sky.  Local-probe, SSR and
     // RT passes populate the preceding candidates as their resources become
     // available; this explicit resolver keeps the material-side priority

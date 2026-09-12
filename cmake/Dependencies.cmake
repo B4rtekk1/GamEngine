@@ -67,3 +67,15 @@ FetchContent_Declare(CompressonatorCore
     GIT_SHALLOW TRUE
     SOURCE_SUBDIR cmp_core)
 FetchContent_MakeAvailable(CompressonatorCore)
+FetchContent_Declare(TinyEXR
+    GIT_REPOSITORY https://github.com/syoyo/tinyexr.git
+    GIT_TAG v1.0.7
+    GIT_SHALLOW TRUE
+    SOURCE_SUBDIR cmake-not-used)
+FetchContent_MakeAvailable(TinyEXR)
+enable_language(C)
+add_library(GameEngineMiniz STATIC ${tinyexr_SOURCE_DIR}/deps/miniz/miniz.c)
+target_include_directories(GameEngineMiniz PUBLIC ${tinyexr_SOURCE_DIR}/deps/miniz)
+add_library(GameEngineTinyExr STATIC ${tinyexr_SOURCE_DIR}/tinyexr.cc)
+target_include_directories(GameEngineTinyExr PUBLIC ${tinyexr_SOURCE_DIR})
+target_link_libraries(GameEngineTinyExr PRIVATE GameEngineMiniz)

@@ -661,12 +661,14 @@ Engine::Entity AssetManagerPanel::draw(Engine::ScenePreset& scene, Engine::Asset
                     selected = asset.relative;
                     error.clear();
                 }
-                if ((is_model(asset.relative) || asset.kind == AssetKind::Texture || is_shader_graph(asset.relative)) && ImGui::BeginDragDropSource()) {
+                const bool isEnvironment = lower(asset.relative.extension().string()) == ".hdr" || lower(asset.relative.extension().string()) == ".exr";
+                if ((is_model(asset.relative) || asset.kind == AssetKind::Texture || is_shader_graph(asset.relative) || isEnvironment) && ImGui::BeginDragDropSource()) {
                     selected = asset.relative;
                     if (is_model(asset.relative)) Editor::AssetDragDrop::setModelPayload(asset.relative);
                     else if (is_shader_graph(asset.relative)) Editor::AssetDragDrop::setShaderGraphPayload(asset.relative);
+                    else if (isEnvironment) Editor::AssetDragDrop::setEnvironmentPayload(asset.relative);
                     else Editor::AssetDragDrop::setTexturePayload(asset.relative);
-                    ImGui::TextUnformatted(is_shader_graph(asset.relative) ? "Assign Shader Graph" : "Add model to scene");
+                    ImGui::TextUnformatted(isEnvironment ? "Set scene environment" : (is_shader_graph(asset.relative) ? "Assign Shader Graph" : "Add model to scene"));
                     ImGui::TextDisabled("%s", asset.relative.filename().string().c_str());
                     ImGui::EndDragDropSource();
                 }
@@ -747,12 +749,14 @@ Engine::Entity AssetManagerPanel::draw(Engine::ScenePreset& scene, Engine::Asset
                     else if (is_shader_graph(asset.relative)) openShaderGraph(asset.relative);
                 }
             }
-            if ((is_model(asset.relative) || asset.kind == AssetKind::Texture || is_shader_graph(asset.relative)) && ImGui::BeginDragDropSource()) {
+            const bool isEnvironment = lower(asset.relative.extension().string()) == ".hdr" || lower(asset.relative.extension().string()) == ".exr";
+            if ((is_model(asset.relative) || asset.kind == AssetKind::Texture || is_shader_graph(asset.relative) || isEnvironment) && ImGui::BeginDragDropSource()) {
                 selected = asset.relative;
                 if (is_model(asset.relative)) Editor::AssetDragDrop::setModelPayload(asset.relative);
                 else if (is_shader_graph(asset.relative)) Editor::AssetDragDrop::setShaderGraphPayload(asset.relative);
+                else if (isEnvironment) Editor::AssetDragDrop::setEnvironmentPayload(asset.relative);
                 else Editor::AssetDragDrop::setTexturePayload(asset.relative);
-                ImGui::TextUnformatted(is_shader_graph(asset.relative) ? "Assign Shader Graph" : "Add model to scene");
+                ImGui::TextUnformatted(isEnvironment ? "Set scene environment" : (is_shader_graph(asset.relative) ? "Assign Shader Graph" : "Add model to scene"));
                 ImGui::TextDisabled("%s", asset.relative.filename().string().c_str());
                 ImGui::EndDragDropSource();
             }

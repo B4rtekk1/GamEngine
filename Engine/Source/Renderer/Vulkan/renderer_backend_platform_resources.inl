@@ -39,8 +39,17 @@
             msaa.create(swapchain.extent(), HdrBuffer::Format);
             createDepthResources();
             createMaterialTextures();
+            const auto hdrEnvironment = assetManager.asset_root() / "Environment.hdr";
+            const auto exrEnvironment = assetManager.asset_root() / "Environment.exr";
+            const auto sceneEnvironment = scene.environmentEquirectangular();
+            const auto environmentPath = !environmentEquirectangularPath.empty()
+                ? environmentEquirectangularPath
+                : sceneEnvironment.empty()
+                ? (std::filesystem::exists(hdrEnvironment) ? hdrEnvironment : exrEnvironment)
+                : assetManager.asset_root() / sceneEnvironment;
             imageBasedLighting.create(vulkanDevice.physical(), device, commandPool,
-                                      vulkanDevice.graphicsQueue(), vulkanDevice.allocator());
+                                      vulkanDevice.graphicsQueue(), vulkanDevice.allocator(),
+                                      environmentPath);
             createMeshBuffers();
             lastRenderTopologyRevision = registry.renderTopologyRevision();
             lastParticleEmitterRevision = registry.componentRevision<ParticleEmitterComponent>();
