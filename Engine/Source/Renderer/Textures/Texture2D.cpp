@@ -217,9 +217,11 @@ Texture2D &Texture2D::operator=(Texture2D &&other) noexcept {
 
         const VkFormat format = pixelFormat == TexturePixelFormat::R8
                                     ? VK_FORMAT_R8_UNORM
-                                    : (colorSpace == TextureColorSpace::SRGB
-                                           ? VK_FORMAT_R8G8B8A8_SRGB
-                                           : VK_FORMAT_R8G8B8A8_UNORM);
+                                    : (pixelFormat == TexturePixelFormat::RG16F
+                                           ? VK_FORMAT_R16G16_SFLOAT
+                                           : (colorSpace == TextureColorSpace::SRGB
+                                                  ? VK_FORMAT_R8G8B8A8_SRGB
+                                                  : VK_FORMAT_R8G8B8A8_UNORM));
         const std::uint32_t mipLevels = generateMipmaps
                                             ? std::bit_width(std::max(width, height))
                                             : 1u;

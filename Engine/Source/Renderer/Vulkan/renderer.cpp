@@ -40,6 +40,7 @@
 #include "Engine/Scene/Components/IdentityComponents.h"
 #include "Engine/Scene/TransformSystem.h"
 #include "Engine/ECS/Components/CameraComponent.h"
+#include "Engine/ECS/Components/ReflectionProbeComponent.h"
 #include "Engine/ECS/Components/ParticleEmitterComponent.h"
 #include "Engine/ECS/Components/SmokeEmitterComponent.h"
 #include "Engine/ECS/Components/ColliderComponent.h"

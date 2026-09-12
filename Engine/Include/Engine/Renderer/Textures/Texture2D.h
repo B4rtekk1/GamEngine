@@ -17,9 +17,11 @@ enum class TextureColorSpace:uint8_t {
 enum class TexturePixelFormat:uint8_t {
     RGBA8,
     R8,
+    /** Two 16-bit floating-point channels, for data textures such as a BRDF LUT. */
+    RG16F,
 };
 
-// Owns an RGBA8 image uploaded to device-local memory and ready for sampling.
+// Owns a sampled image uploaded to device-local memory and ready for sampling.
 // Image decoding intentionally stays outside this class so callers may use any
 // asset library (for example stb_image or a glTF importer).
 class Texture2D final {

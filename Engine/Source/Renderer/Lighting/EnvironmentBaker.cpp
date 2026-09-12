@@ -10,7 +10,7 @@ float radicalInverseVdC(std::uint32_t bits) {
     bits = (bits << 16U) | (bits >> 16U);
     bits = ((bits & 0x55555555U) << 1U) | ((bits & 0xAAAAAAAAU) >> 1U);
     bits = ((bits & 0x33333333U) << 2U) | ((bits & 0xCCCCCCCCU) >> 2U);
-    bits = ((bits & 0x0F0F0F0FU) << 4U) | ((bits & 0xF0F0F0FU) >> 4U);
+    bits = ((bits & 0x0F0F0F0FU) << 4U) | ((bits & 0xF0F0F0F0U) >> 4U);
     bits = ((bits & 0x00FF00FFU) << 8U) | ((bits & 0xFF00FF00U) >> 8U);
     return static_cast<float>(bits) * 2.3283064365386963e-10F;
 }

@@ -53,6 +53,12 @@
         Texture2D fallbackMaterialTexture;
         ImageBasedLighting imageBasedLighting;
         ReflectionProbeManager reflectionProbeManager;
+        // Probe extraction is static in the common case. Each frame-local SSBO
+        // is refreshed only when its fence makes it safe after an ECS change.
+        bool reflectionProbeTableInitialized = false;
+        std::uint64_t reflectionProbeComponentRevision = 0;
+        std::uint64_t reflectionProbeTransformRevision = 0;
+        std::uint32_t reflectionProbeBufferDirtyMask = (1U << MAX_FRAMES_IN_FLIGHT) - 1U;
         std::filesystem::path environmentEquirectangularPath;
         // Terrain height input for procedural grass generation. It is kept
         // separate from material textures so compute can sample it directly.

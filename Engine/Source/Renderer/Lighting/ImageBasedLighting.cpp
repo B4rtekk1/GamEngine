@@ -19,6 +19,67 @@ namespace {
 constexpr std::uint32_t EnvironmentSize = 512;
 constexpr std::uint32_t IrradianceSize = 32;
 constexpr std::uint32_t PrefilterSize = 256;
+constexpr std::uint32_t BrdfLutSize = 256;
+constexpr std::uint32_t BrdfLutSamples = 1024;
+
+float radicalInverseVdC(std::uint32_t bits) noexcept {
+    bits = (bits << 16U) | (bits >> 16U);
+    bits = ((bits & 0x55555555U) << 1U) | ((bits & 0xAAAAAAAAU) >> 1U);
+    bits = ((bits & 0x33333333U) << 2U) | ((bits & 0xCCCCCCCCU) >> 2U);
+    bits = ((bits & 0x0F0F0F0FU) << 4U) | ((bits & 0xF0F0F0F0U) >> 4U);
+    bits = ((bits & 0x00FF00FFU) << 8U) | ((bits & 0xFF00FF00U) >> 8U);
+    return static_cast<float>(bits) * 2.3283064365386963e-10F;
+}
+
+Vec3 importanceSampleGgx(const float xi1, const float xi2, const float roughness) {
+    const float alpha = roughness * roughness;
+    const float phi = 2.0F * Pi * xi1;
+    const float cosTheta = std::sqrt((1.0F - xi2) / (1.0F + (alpha * alpha - 1.0F) * xi2));
+    const float sinTheta = std::sqrt(std::max(0.0F, 1.0F - cosTheta * cosTheta));
+    return {std::cos(phi) * sinTheta, std::sin(phi) * sinTheta, cosTheta};
+}
+
+float geometrySchlickGgx(const float nDotX, const float roughness) noexcept {
+    const float k = roughness * roughness * 0.5F;
+    return nDotX / (nDotX * (1.0F - k) + k);
+}
+
+Vec2 integrateBrdf(const float nDotV, const float roughness) {
+    const Vec3 view{std::sqrt(std::max(0.0F, 1.0F - nDotV * nDotV)), 0.0F, nDotV};
+    float a = 0.0F;
+    float b = 0.0F;
+    for (std::uint32_t sample = 0; sample < BrdfLutSamples; ++sample) {
+        const float xi1 = static_cast<float>(sample) / static_cast<float>(BrdfLutSamples);
+        const Vec3 halfVector = importanceSampleGgx(xi1, radicalInverseVdC(sample), roughness);
+        const Vec3 light = (halfVector * (2.0F * dot(view, halfVector)) - view).normalized();
+        const float nDotL = std::max(light.z(), 0.0F);
+        const float nDotH = std::max(halfVector.z(), 0.0F);
+        const float vDotH = std::max(dot(view, halfVector), 0.0F);
+        if (nDotL <= 0.0F) continue;
+        const float visibility = geometrySchlickGgx(nDotV, roughness) *
+                                 geometrySchlickGgx(nDotL, roughness) * vDotH /
+                                 std::max(nDotH * nDotV, 1.0e-5F);
+        const float fresnel = std::pow(1.0F - vDotH, 5.0F);
+        a += (1.0F - fresnel) * visibility;
+        b += fresnel * visibility;
+    }
+    return {a / static_cast<float>(BrdfLutSamples), b / static_cast<float>(BrdfLutSamples)};
+}
+
+std::uint16_t floatToHalf(const float value) noexcept {
+    const std::uint32_t bits = std::bit_cast<std::uint32_t>(value);
+    const std::uint32_t sign = (bits >> 16U) & 0x8000U;
+    const int exponent = static_cast<int>((bits >> 23U) & 0xFFU) - 127 + 15;
+    std::uint32_t mantissa = bits & 0x007FFFFFU;
+    if (exponent <= 0) {
+        if (exponent < -10) return static_cast<std::uint16_t>(sign);
+        mantissa = (mantissa | 0x00800000U) >> static_cast<std::uint32_t>(1 - exponent);
+        return static_cast<std::uint16_t>(sign | ((mantissa + 0x1000U) >> 13U));
+    }
+    if (exponent >= 31) return static_cast<std::uint16_t>(sign | 0x7C00U);
+    return static_cast<std::uint16_t>(sign | (static_cast<std::uint32_t>(exponent) << 10U) |
+                                      ((mantissa + 0x1000U) >> 13U));
+}
 
 // Procedural fallback is an HDR *directional* source, not six flat colours.
 // Replacing radiance() with HDR/EXR cubemap sampling keeps the baker unchanged.
@@ -117,22 +178,21 @@ void ImageBasedLighting::create(VkPhysicalDevice physicalDevice, VkDevice device
         EnvironmentBaker::bakePrefilteredCubemap(PrefilterSize, prefilterMips,
             [&source](const Vec3& direction) { return source.sample(direction); }));
 
-    constexpr std::uint32_t size = 128;
-    std::vector<std::uint8_t> pixels(size * size * 4);
-    for (std::uint32_t y = 0; y < size; ++y) {
-        const float roughness = (static_cast<float>(y) + 0.5F) / static_cast<float>(size);
-        for (std::uint32_t x = 0; x < size; ++x) {
-            const float nDotV = (static_cast<float>(x) + 0.5F) / static_cast<float>(size);
-            const float r0 = 1.0F - roughness;
-            const float a004 = std::min(r0 * r0, std::exp2(-9.28F * nDotV)) * r0 + roughness;
-            const float a = -1.04F * a004 + 1.04F; const float b = 1.04F * a004 - 0.04F;
-            const auto index = (y * size + x) * 4;
-            pixels[index] = static_cast<std::uint8_t>(std::clamp(a, 0.0F, 1.0F) * 255.0F + 0.5F);
-            pixels[index + 1] = static_cast<std::uint8_t>(std::clamp(b, 0.0F, 1.0F) * 255.0F + 0.5F);
-            pixels[index + 3] = 255;
+    std::vector<std::uint16_t> pixels(BrdfLutSize * BrdfLutSize * 2);
+    for (std::uint32_t y = 0; y < BrdfLutSize; ++y) {
+        const float roughness = (static_cast<float>(y) + 0.5F) / static_cast<float>(BrdfLutSize);
+        for (std::uint32_t x = 0; x < BrdfLutSize; ++x) {
+            const float nDotV = (static_cast<float>(x) + 0.5F) / static_cast<float>(BrdfLutSize);
+            const Vec2 value = integrateBrdf(nDotV, roughness);
+            const auto index = (y * BrdfLutSize + x) * 2;
+            pixels[index] = floatToHalf(value.x());
+            pixels[index + 1] = floatToHalf(value.y());
         }
     }
-    replacement.brdfLut_.create(physicalDevice, device, commandPool, queue, size, size, pixels, TextureColorSpace::Linear, false, allocator);
+    const auto bytes = std::span<const std::uint8_t>{reinterpret_cast<const std::uint8_t*>(pixels.data()),
+                                                      pixels.size() * sizeof(std::uint16_t)};
+    replacement.brdfLut_.create(physicalDevice, device, commandPool, queue, BrdfLutSize, BrdfLutSize, bytes,
+                                TextureColorSpace::Linear, false, allocator, TexturePixelFormat::RG16F);
     swap(replacement);
 }
 

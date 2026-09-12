@@ -157,12 +157,33 @@
         }
 
         void updateUniformBuffer(const uint32_t frame) {
-            reflectionProbeManager.update(registry);
+            const auto componentRevision = registry.componentRevision<ReflectionProbeComponent>();
+            const auto transformRevision = registry.componentRevision<Transform>();
+            bool probesChanged = !reflectionProbeTableInitialized ||
+                componentRevision != reflectionProbeComponentRevision;
+            if (!probesChanged && transformRevision != reflectionProbeTransformRevision) {
+                registry.forEachComponentChangedSince<Transform>(reflectionProbeTransformRevision,
+                    [&](const Entity entity) {
+                        probesChanged = probesChanged || registry.has<ReflectionProbeComponent>(entity);
+                    });
+            }
+            reflectionProbeComponentRevision = componentRevision;
+            reflectionProbeTransformRevision = transformRevision;
+            if (probesChanged) {
+                reflectionProbeManager.update(registry);
+                reflectionProbeTableInitialized = true;
+                reflectionProbeBufferDirtyMask = (1U << MAX_FRAMES_IN_FLIGHT) - 1U;
+            }
+            const std::uint32_t frameBit = 1U << frame;
+            if ((reflectionProbeBufferDirtyMask & frameBit) != 0U) {
+                const auto& reflectionProbes = reflectionProbeManager.probes();
+                const GpuReflectionProbe emptyProbe{};
+                reflectionProbeBuffers[frame].update(reflectionProbes.empty() ? &emptyProbe : reflectionProbes.data(),
+                    sizeof(GpuReflectionProbe) * std::max<std::size_t>(1, reflectionProbes.size()));
+                reflectionProbeManager.uploadProbeTable(frame);
+                reflectionProbeBufferDirtyMask &= ~frameBit;
+            }
             const auto& reflectionProbes = reflectionProbeManager.probes();
-            const GpuReflectionProbe emptyProbe{};
-            reflectionProbeBuffers[frame].update(reflectionProbes.empty() ? &emptyProbe : reflectionProbes.data(),
-                sizeof(GpuReflectionProbe) * std::max<std::size_t>(1, reflectionProbes.size()));
-            reflectionProbeManager.uploadProbeTable(frame);
             const bool renderGameViewport = !editorUiActive || !sceneViewportActive;
             const SceneFrameData& frameData = sceneFrameDataCache.data;
             const bool mainLightShadows = frameData.directionalLight.enabled &&
