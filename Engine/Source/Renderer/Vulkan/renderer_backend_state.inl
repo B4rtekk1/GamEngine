@@ -121,6 +121,10 @@
         Buffer meshletTriangleBuffer;
         std::uint32_t globalMeshletCount{};
         std::uint32_t meshletVisibleCapacity{};
+        // The current forward pipelines use vertex/fragment entry points and
+        // indexed draws.  Keep meshlet culling off until a mesh-shader forward
+        // pipeline consumes visibleMeshletBuffers.
+        bool meshShaderPathActive = false;
         // Geometry Heap. Mesh ranges are never derived from dense ECS order:
         // a new proxy receives an append-only sub-allocation and removing a
         // proxy leaves the old range untouched until a future heap compaction.

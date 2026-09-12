@@ -552,6 +552,8 @@
                             .indexCount = mesh->indexCount(),
                             .lod1IndexCount = 0,
                             .lod2IndexCount = 0,
+                            .firstMeshlet = firstMeshlets.contains(mesh) ? firstMeshlets.at(mesh) : 0U,
+                            .meshletCount = static_cast<std::uint32_t>(mesh->meshlets.size()),
                             .firstInstance = static_cast<uint32_t>(renderables.size()),
                             .instanceCount = 0,
                             .shaderSlot = shaderSlot,
@@ -939,7 +941,8 @@
                 .draw = glm::uvec4{mesh.firstIndex, mesh.indexCount,
                                    static_cast<std::uint32_t>(mesh.vertexOffset),
                                    mesh.lod1IndexCount},
-                .lod = glm::uvec4{mesh.lod2IndexCount, 0U, 0U, 0U},
+                .lod = glm::uvec4{mesh.lod2IndexCount, mesh.firstMeshlet,
+                                  mesh.meshletCount, 0U},
             };
         }
 
@@ -1114,15 +1117,19 @@
             if (meshletCullSets[frame] != VK_NULL_HANDLE && meshletBuffer.handle() != VK_NULL_HANDLE) {
                 const VkDescriptorBufferInfo meshletInfos[] = {
                     {meshletBuffer.handle(), 0, VK_WHOLE_SIZE},
+                    {gpuSceneInstanceBuffers[frame].handle(), 0, VK_WHOLE_SIZE},
+                    {gpuSceneMeshBuffers[frame].handle(), 0, VK_WHOLE_SIZE},
+                    {visibleInstanceBuffers[frame].handle(), 0, VK_WHOLE_SIZE},
+                    {visibleInstanceCountBuffers[frame].handle(), 0, sizeof(std::uint32_t)},
                     {visibleMeshletBuffers[frame].handle(), 0, VK_WHOLE_SIZE},
                     {visibleMeshletCountBuffers[frame].handle(), 0, sizeof(std::uint32_t)},
                     {meshletCullingUniformBuffers[frame].handle(), 0, sizeof(Culling::MeshletCullUniforms)},
                 };
-                VkWriteDescriptorSet meshletWrites[4]{};
+                VkWriteDescriptorSet meshletWrites[8]{};
                 for (std::uint32_t binding = 0; binding < std::size(meshletWrites); ++binding) {
                     meshletWrites[binding] = {.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
                         .dstSet = meshletCullSets[frame], .dstBinding = binding, .descriptorCount = 1,
-                        .descriptorType = binding == 3 ? VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER
+                        .descriptorType = binding == 7 ? VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER
                                                        : VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
                         .pBufferInfo = &meshletInfos[binding]};
                 }
@@ -1578,6 +1585,8 @@
                         .vertexOffset = 0,
                         .lod1IndexCount = batch.lod1IndexCount,
                         .lod2IndexCount = batch.lod2IndexCount,
+                        .firstMeshlet = batch.firstMeshlet,
+                        .meshletCount = batch.meshletCount,
                     };
                     const GPUSceneDatabase::GPUMaterial material{
                         .materialTableOffset = record.materialTableOffset,

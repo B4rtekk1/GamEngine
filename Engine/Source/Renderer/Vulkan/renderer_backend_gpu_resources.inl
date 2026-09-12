@@ -39,11 +39,17 @@
             // Grass has a separate, variable set of compacted scratch lists;
             // keep its migration boundary explicit until it gets its own heap.
             if (!sceneGpu.grassInstances.empty() || !sceneGpu.grassClusters.empty() ||
-                cullingDescriptorPool == VK_NULL_HANDLE || globalMeshletCount > meshletVisibleCapacity) return false;
+                cullingDescriptorPool == VK_NULL_HANDLE) return false;
             const VkDeviceSize objectBytes = sizeof(Culling::GPUObjectData) *
                 std::max<std::size_t>(1, instanceBatches.size());
             const VkDeviceSize visibleBytes = sizeof(std::uint32_t) *
                 std::max<std::size_t>(1, sceneGpu.database.instances().size());
+            std::uint64_t requiredVisibleMeshlets = 0;
+            for (const auto& instance : sceneGpu.database.instances()) {
+                if (!instance.alive || instance.meshId >= sceneGpu.database.meshes().size()) continue;
+                requiredVisibleMeshlets += sceneGpu.database.meshes()[instance.meshId].meshletCount;
+            }
+            if (requiredVisibleMeshlets > meshletVisibleCapacity) return false;
             const VkDeviceSize indirectBytes = sizeof(VkDrawIndexedIndirectCommand) *
                 std::max<std::size_t>(1, instanceBatches.size()) * MaterialProgramSlotCount;
             const VkDeviceSize shadowIndirectBytes = sizeof(VkDrawIndexedIndirectCommand) *
@@ -161,7 +167,11 @@
                 {0, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
                 {1, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
                 {2, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
-                {3, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
+                {3, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
+                {4, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
+                {5, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
+                {6, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
+                {7, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
             };
             layoutInfo.bindingCount = std::size(meshletCullBindings);
             layoutInfo.pBindings = meshletCullBindings;
@@ -394,11 +404,18 @@
                 visibleInstanceCountBuffers[frame].createDeviceLocal(vulkanDevice.physical(), device, &zero,
                     sizeof(zero), VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
                     commandPool, vulkanDevice.graphicsQueue(), vulkanDevice.allocator());
+                std::uint64_t requiredVisibleMeshlets = 0;
+                for (const auto& instance : sceneGpu.database.instances()) {
+                    if (!instance.alive || instance.meshId >= sceneGpu.database.meshes().size()) continue;
+                    requiredVisibleMeshlets += sceneGpu.database.meshes()[instance.meshId].meshletCount;
+                }
+                if (requiredVisibleMeshlets > std::numeric_limits<std::uint32_t>::max())
+                    throw std::runtime_error("Visible meshlet list exceeds uint32 capacity");
                 const std::uint32_t meshletCapacity = static_cast<std::uint32_t>(
-                    std::max<VkDeviceSize>(1, meshletBuffer.size() / sizeof(Culling::GpuMeshlet)));
+                    std::max<std::uint64_t>(1, requiredVisibleMeshlets));
                 meshletVisibleCapacity = meshletCapacity;
                 visibleMeshletBuffers[frame].createDeviceLocal(vulkanDevice.physical(), device, &zero,
-                    sizeof(std::uint32_t) * meshletCapacity,
+                    sizeof(Culling::VisibleMeshlet) * meshletCapacity,
                     VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
                     commandPool, vulkanDevice.graphicsQueue(), vulkanDevice.allocator());
                 visibleMeshletCountBuffers[frame].createDeviceLocal(vulkanDevice.physical(), device, &zero,
@@ -895,15 +912,19 @@
                                   sceneFoliageCullingUniformBuffers[frame], candidates, candidateCounts, candidateDispatches, pageWork});
                 const VkDescriptorBufferInfo meshletInfos[] = {
                     {meshletBuffer.handle(), 0, VK_WHOLE_SIZE},
+                    {gpuSceneInstanceBuffers[frame].handle(), 0, VK_WHOLE_SIZE},
+                    {gpuSceneMeshBuffers[frame].handle(), 0, VK_WHOLE_SIZE},
+                    {visibleInstanceBuffers[frame].handle(), 0, VK_WHOLE_SIZE},
+                    {visibleInstanceCountBuffers[frame].handle(), 0, sizeof(std::uint32_t)},
                     {visibleMeshletBuffers[frame].handle(), 0, VK_WHOLE_SIZE},
                     {visibleMeshletCountBuffers[frame].handle(), 0, sizeof(std::uint32_t)},
                     {meshletCullingUniformBuffers[frame].handle(), 0, sizeof(Culling::MeshletCullUniforms)},
                 };
-                VkWriteDescriptorSet meshletWrites[4]{};
+                VkWriteDescriptorSet meshletWrites[8]{};
                 for (std::uint32_t binding = 0; binding < std::size(meshletWrites); ++binding) {
                     meshletWrites[binding] = {.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
                         .dstSet = meshletCullSets[frame], .dstBinding = binding, .descriptorCount = 1,
-                        .descriptorType = binding == 3 ? VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER
+                        .descriptorType = binding == 7 ? VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER
                                                        : VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
                         .pBufferInfo = &meshletInfos[binding]};
                 }

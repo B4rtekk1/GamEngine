@@ -52,6 +52,10 @@ namespace Engine {
             std::int32_t vertexOffset{0};
             std::uint32_t lod1IndexCount{0};
             std::uint32_t lod2IndexCount{0};
+            // Range in the global meshlet payload.  These are deliberately
+            // GPU-scene data: meshlet bounds are local to an instance's mesh.
+            std::uint32_t firstMeshlet{0};
+            std::uint32_t meshletCount{0};
         };
 
         struct GPUMaterial {

@@ -22,6 +22,14 @@ namespace Engine::Culling {
     };
     static_assert(sizeof(GpuMeshlet) == 64);
 
+    /** One fine-grained visibility result. Meshlet IDs address the global
+     * meshlet payload; instance IDs address the GPU-scene instance table. */
+    struct VisibleMeshlet final {
+        std::uint32_t instanceId{};
+        std::uint32_t meshletId{};
+    };
+    static_assert(sizeof(VisibleMeshlet) == 8);
+
     /** Matches MeshletCullUniforms in meshlet_culling.slang. */
     struct alignas(16) MeshletCullUniforms final {
         GPUMat4 viewProjection{};

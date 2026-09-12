@@ -407,8 +407,13 @@
             // not submit hidden Game View work: this also makes the shared
             // physical VSM atlas single-writer for the entire frame.
             const bool renderGameViewport = !editorUiActive || !sceneViewportActive;
-            if (vulkanDevice.supportsMeshShaders() && globalMeshletCount != 0 &&
+            if (meshShaderPathActive && vulkanDevice.supportsMeshShaders() && globalMeshletCount != 0 &&
+                !sceneGpu.database.instances().empty() &&
                 meshletCullSets[currentFrame] != VK_NULL_HANDLE) {
+                // Meshlet culling consumes the compact coarse-visible instance
+                // list. Its workgroups therefore never scan hidden instances.
+                instanceCullingPasses[currentFrame].record(commandBuffer,
+                    static_cast<std::uint32_t>(sceneGpu.database.instances().size()));
                 vkCmdFillBuffer(commandBuffer, visibleMeshletCountBuffers[currentFrame].handle(), 0,
                                 sizeof(std::uint32_t), 0);
                 const VkMemoryBarrier2 clearBarrier{VK_STRUCTURE_TYPE_MEMORY_BARRIER_2, nullptr,
@@ -421,7 +426,8 @@
                 const VkDescriptorSet meshletSet = meshletCullSets[currentFrame];
                 vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE,
                                         meshletCullingPipelineLayout, 0, 1, &meshletSet, 0, nullptr);
-                vkCmdDispatch(commandBuffer, (globalMeshletCount + 63U) / 64U, 1, 1);
+                vkCmdDispatch(commandBuffer,
+                    static_cast<std::uint32_t>(sceneGpu.database.instances().size()), 1, 1);
                 const VkMemoryBarrier2 meshletBarrier{VK_STRUCTURE_TYPE_MEMORY_BARRIER_2, nullptr,
                     VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT,
                     VK_PIPELINE_STAGE_2_MESH_SHADER_BIT_EXT,

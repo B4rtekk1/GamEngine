@@ -122,7 +122,8 @@ namespace Engine {
 
     struct alignas(16) GPUSceneMeshRecord {
         glm::uvec4 draw{}; // firstIndex, indexCount, vertexOffset, lod1IndexCount
-        glm::uvec4 lod{};  // lod2IndexCount, reserved, reserved, reserved
+        // lod2IndexCount, firstMeshlet, meshletCount, reserved
+        glm::uvec4 lod{};
     };
 
     struct alignas(16) GPUSceneMaterialRecord {
