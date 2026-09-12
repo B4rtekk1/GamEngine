@@ -3,9 +3,12 @@
 
 #include <SDL3/SDL.h>
 
+#include <algorithm>
 #include <fstream>
 #include <format>
+#include <regex>
 #include <stdexcept>
+#include <unordered_set>
 
 namespace Engine {
     namespace {
@@ -23,6 +26,67 @@ namespace Engine {
             if (!file) throw std::runtime_error("Could not write generated shader: " + path.string());
             file.write(text.data(), static_cast<std::streamsize>(text.size()));
             if (!file) throw std::runtime_error("Could not finish generated shader: " + path.string());
+        }
+
+        void appendCacheInput(std::string& input, const std::string_view label,
+                              const std::string_view value) {
+            input.append(label);
+            input.push_back('\0');
+            input.append(value);
+            input.push_back('\0');
+        }
+
+        [[nodiscard]] std::filesystem::path resolveSlangModule(const std::string& module,
+                                                                const std::filesystem::path& sourceDirectory,
+                                                                const std::filesystem::path& includeDirectory) {
+            std::string relativeModule = module;
+            std::replace(relativeModule.begin(), relativeModule.end(), '.', '/');
+            std::filesystem::path relative{relativeModule};
+            relative += ".slang";
+            for (const auto& directory : {sourceDirectory, includeDirectory}) {
+                const std::filesystem::path candidate = directory / relative;
+                if (std::filesystem::is_regular_file(candidate)) return candidate;
+            }
+            throw std::runtime_error("Could not resolve Slang import '" + module + "'.");
+        }
+
+        [[nodiscard]] std::filesystem::path resolveSlangInclude(const std::string& include,
+                                                                 const std::filesystem::path& sourceDirectory,
+                                                                 const std::filesystem::path& includeDirectory) {
+            for (const auto& directory : {sourceDirectory, includeDirectory}) {
+                const std::filesystem::path candidate = directory / include;
+                if (std::filesystem::is_regular_file(candidate)) return candidate;
+            }
+            throw std::runtime_error("Could not resolve Slang include '" + include + "'.");
+        }
+
+        void appendSlangDependencyTree(std::string& input, const std::filesystem::path& path,
+                                       const std::filesystem::path& includeDirectory,
+                                       std::unordered_set<std::string>& visited) {
+            const std::filesystem::path normalized = std::filesystem::absolute(path).lexically_normal();
+            if (!visited.insert(normalized.generic_string()).second) return;
+
+            const std::string contents = readText(normalized);
+            appendCacheInput(input, normalized.generic_string(), contents);
+
+            static const std::regex ImportPattern{R"(^\s*import\s+([A-Za-z_][A-Za-z0-9_.]*)\s*;)"};
+            for (std::sregex_iterator it(contents.begin(), contents.end(), ImportPattern), end; it != end; ++it) {
+                const std::filesystem::path dependency = resolveSlangModule((*it)[1].str(), normalized.parent_path(),
+                                                                             includeDirectory);
+                appendSlangDependencyTree(input, dependency, includeDirectory, visited);
+            }
+            static const std::regex IncludePattern{R"include(^\s*#\s*include\s*"([^"]+)")include"};
+            for (std::sregex_iterator it(contents.begin(), contents.end(), IncludePattern), end; it != end; ++it) {
+                const std::filesystem::path dependency = resolveSlangInclude((*it)[1].str(), normalized.parent_path(),
+                                                                              includeDirectory);
+                appendSlangDependencyTree(input, dependency, includeDirectory, visited);
+            }
+        }
+
+        [[nodiscard]] bool isUsableCachedOutput(const std::filesystem::path& path) {
+            std::error_code error;
+            return std::filesystem::is_regular_file(path, error) && !error &&
+                   std::filesystem::file_size(path, error) > 0 && !error;
         }
 
         [[nodiscard]] std::filesystem::path findSlangCompiler() {
@@ -101,19 +165,39 @@ struct MaterialSurface
 };
 )" + result.slang;
             source.replace(marker, DeclarationMarker.size(), declarations);
-            program.id = makeProgramId(result.slang);
+            const std::filesystem::path slangcPath = findSlangCompiler();
+            const std::filesystem::path includeDirectory = forwardTemplate.parent_path().parent_path();
+            std::string cacheInput;
+            // Bump this if the generated declarations or invocation contract changes.
+            appendCacheInput(cacheInput, "shader-graph-cache-schema", "1");
+            appendCacheInput(cacheInput, "generated-surface", result.slang);
+            appendCacheInput(cacheInput, "compile-flags",
+                             "-target=spirv;-profile=glsl_460;-emit-spirv-directly;"
+                             "-matrix-layout-row-major;FORWARD_OUTPUT_VELOCITY=0,1");
+            // Hash the compiler binary rather than querying --version: this avoids
+            // an extra process on a warm start and invalidates the cache for every
+            // compiler-version change.
+            appendCacheInput(cacheInput, "slangc-binary", readText(slangcPath));
+            std::unordered_set<std::string> visitedDependencies;
+            appendSlangDependencyTree(cacheInput, forwardTemplate, includeDirectory, visitedDependencies);
+
+            program.id = makeProgramId(cacheInput);
             const std::string stem = std::format("generated_{:016x}", program.id);
             program.slangPath = generatedDirectory / (stem + ".slang");
             program.spirvPath = generatedDirectory / (stem + ".spv");
             program.noVelocitySpirvPath = generatedDirectory / (stem + "_no_velocity.spv");
+
+            if (isUsableCachedOutput(program.spirvPath) && isUsableCachedOutput(program.noVelocitySpirvPath)) {
+                return result;
+            }
+
             writeText(program.slangPath, source);
 
             // The editor invokes this after debounce on its worker thread; Vulkan
             // sees only the finished SPIR-V via ShaderGraphPipelineCache.
-            const std::filesystem::path slangcPath = findSlangCompiler();
             const std::string compiler = slangcPath.string();
             const std::string sourcePath = program.slangPath.string();
-            const std::string includeDirectory = forwardTemplate.parent_path().parent_path().string();
+            const std::string includeDirectoryString = includeDirectory.string();
             const std::string outputPath = program.spirvPath.string();
             const std::string noVelocityOutputPath = program.noVelocitySpirvPath.string();
             const char *arguments[] = {
@@ -122,7 +206,7 @@ struct MaterialSurface
                 "-profile", "glsl_460",
                 "-emit-spirv-directly",
                 "-matrix-layout-row-major",
-                "-I", includeDirectory.c_str(),
+                "-I", includeDirectoryString.c_str(),
                 "-o", outputPath.c_str(),
                 nullptr
             };
@@ -171,7 +255,7 @@ struct MaterialSurface
                 "-profile", "glsl_460",
                 "-emit-spirv-directly",
                 "-matrix-layout-row-major",
-                "-I", includeDirectory.c_str(),
+                "-I", includeDirectoryString.c_str(),
                 "-D", "FORWARD_OUTPUT_VELOCITY=0",
                 "-o", noVelocityOutputPath.c_str(),
                 nullptr
