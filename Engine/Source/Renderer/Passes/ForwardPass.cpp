@@ -32,9 +32,17 @@ void ForwardPass::create(VkDevice device, const VkFormat colorFormat,
     options.colorInitialLayout = colorInitialLayout;
     options.colorInitialLayoutExternallySynchronized = colorInitialLayoutExternallySynchronized;
     options.colorFinalLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-    if (depthOnly) options.colorWriteMask = 0;
+    if (depthOnly) {
+        // The depth prepass deliberately leaves HDR untouched, but it must
+        // still emit the motion vectors used by temporal GTAO/TAA.
+        options.colorWriteMask = 0;
+        options.additionalColorWriteMask = VK_COLOR_COMPONENT_R_BIT |
+                                           VK_COLOR_COMPONENT_G_BIT;
+    }
     if (preserveDepth) {
         options.depthLoadOp = VK_ATTACHMENT_LOAD_OP_LOAD;
+        options.depthInitialLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL;
+        options.depthFinalLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL;
         options.depthWriteEnable = VK_FALSE;
         options.depthCompareOp = VK_COMPARE_OP_EQUAL;
     }

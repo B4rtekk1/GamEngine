@@ -467,11 +467,12 @@ ForwardFragmentOutput fragmentMain(ForwardFragmentInput input)
     float3 specularIbl = prefiltered * (fresnelIbl * brdf.x + brdf.y);
     const float dynamicAo = gtaoVisibility.Sample(input.position.xy /
         float2(frame.clusteredViewportNearFar.x, frame.clusteredViewportNearFar.y)).r;
-    const float diffuseAO = min(ao, dynamicAo);
-    // Lagarde-style specular occlusion preserves grazing reflections rather
-    // than applying diffuse AO blindly to the GGX lobe.
-    const float specularOcclusion = saturate(pow(nDotV + dynamicAo,
-        exp2(-16.0 * roughness - 1.0)) - 1.0 + dynamicAo);
+    // Keep the dynamic term conservative while GTAO is intentionally used
+    // only for diffuse contact occlusion. Specular AO is reintroduced after
+    // visual validation of the new horizon baseline.
+    const float gtao = lerp(1.0, dynamicAo, 0.65);
+    const float diffuseAO = min(ao, gtao);
+    const float specularOcclusion = 1.0;
     float3 ambient = diffuseIbl * diffuseAO + specularIbl * specularOcclusion;
     float3 color = ambient + direct + emissive;
 #if MATERIAL_VARIANT == 1

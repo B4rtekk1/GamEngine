@@ -66,6 +66,11 @@ namespace Engine {
                                                static_cast<VkColorComponentFlags>(VK_COLOR_COMPONENT_G_BIT) |
                                                static_cast<VkColorComponentFlags>(VK_COLOR_COMPONENT_B_BIT) |
                                                static_cast<VkColorComponentFlags>(VK_COLOR_COMPONENT_A_BIT);
+        /// Enabled color channels in the optional second MRT attachment.
+        VkColorComponentFlags additionalColorWriteMask = static_cast<VkColorComponentFlags>(VK_COLOR_COMPONENT_R_BIT) |
+                                                         static_cast<VkColorComponentFlags>(VK_COLOR_COMPONENT_G_BIT) |
+                                                         static_cast<VkColorComponentFlags>(VK_COLOR_COMPONENT_B_BIT) |
+                                                         static_cast<VkColorComponentFlags>(VK_COLOR_COMPONENT_A_BIT);
         /// Enables writing depth values.
         VkBool32 depthWriteEnable = VK_TRUE;
         /// Enables depth testing.

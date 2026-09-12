@@ -207,8 +207,12 @@ namespace Engine {
         VkSubpassDependency2 sampledDependency{VK_STRUCTURE_TYPE_SUBPASS_DEPENDENCY_2};
         sampledDependency.srcSubpass = 0;
         sampledDependency.dstSubpass = VK_SUBPASS_EXTERNAL;
-        sampledDependency.srcStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
-        sampledDependency.srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+        // A following fullscreen pass can sample either the color result or
+        // the depth written by this pass (GTAO samples the depth prepass).
+        sampledDependency.srcStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT |
+                                         VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT;
+        sampledDependency.srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT |
+                                          VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
         sampledDependency.dstStageMask = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
         sampledDependency.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
 
@@ -300,7 +304,9 @@ namespace Engine {
         colorAttachment.srcAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
         colorAttachment.dstAlphaBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
         colorAttachment.alphaBlendOp = VK_BLEND_OP_ADD;
-        std::array colorAttachments{colorAttachment, colorAttachment};
+        VkPipelineColorBlendAttachmentState additionalColorAttachment = colorAttachment;
+        additionalColorAttachment.colorWriteMask = options.additionalColorWriteMask;
+        std::array colorAttachments{colorAttachment, additionalColorAttachment};
         VkPipelineColorBlendStateCreateInfo blend{VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO};
         blend.attachmentCount = options.additionalColorFormat == VK_FORMAT_UNDEFINED ? 1U : 2U;
         blend.pAttachments = colorAttachments.data();
