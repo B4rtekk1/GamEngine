@@ -725,9 +725,8 @@ namespace Engine {
                 return;
             }
             // The editor reports every ECS structural change here, including
-            // hierarchy, scripts and colliders. Avoid stalling the GPU and
-            // recreating render resources unless the renderable topology
-            // itself changed.
+            // hierarchy, scripts and colliders. Avoid rebuilding render
+            // resources unless the renderable topology itself changed.
             const std::uint64_t updatedTopologyRevision = registry.renderTopologyRevision();
             const std::uint64_t updatedParticleEmitterRevision =
                 registry.componentRevision<ParticleEmitterComponent>();
@@ -739,10 +738,10 @@ namespace Engine {
                 return;
             }
             sceneViewportNeedsRender = true;
-            waitForAllFrames();
-            // Buffer destruction retires its own upload fence.  In-flight
-            // rendering is covered by the per-frame fences above; a queue
-            // wide idle would turn every hierarchy edit into a GPU hitch.
+            // This rebuild releases resources used by graphics, async compute
+            // and UploadContext transfer submissions. Per-frame fences cover
+            // only graphics frame submissions, so they are not sufficient.
+            waitForGlobalResourceRebuild();
 
             // ECS topology is not renderer topology.  Only resources whose
             // contents or descriptor bindings refer to the renderable tables

@@ -930,11 +930,33 @@
             const std::size_t instanceCount = std::max<std::size_t>(1, instanceModels.size());
             std::vector<std::uint32_t> instanceIndexMap(instanceCount * 2U, 0U);
             for (std::uint32_t index = 0; index < instanceCount; ++index) instanceIndexMap[index] = index;
+            const VkDeviceSize compactGrassInstancesRequired =
+                sizeof(std::uint32_t) * instanceIndexMap.size();
+            constexpr VkBufferUsageFlags compactGrassInstancesUsage =
+                VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT;
             for (Buffer& buffer : compactGrassInstanceBuffers) {
-                buffer.createDeviceLocal(vulkanDevice.physical(), device, instanceIndexMap.data(),
-                    sizeof(std::uint32_t) * instanceIndexMap.size(),
-                    VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
-                    commandPool, vulkanDevice.graphicsQueue(), vulkanDevice.allocator());
+                if (buffer.handle() == VK_NULL_HANDLE) {
+                    buffer.createDeviceLocal(vulkanDevice.physical(), device,
+                        instanceIndexMap.data(), compactGrassInstancesRequired,
+                        compactGrassInstancesUsage, commandPool,
+                        vulkanDevice.graphicsQueue(), vulkanDevice.allocator());
+                } else if (buffer.size() >= compactGrassInstancesRequired) {
+                    buffer.uploadDeviceLocal(instanceIndexMap.data(),
+                        compactGrassInstancesRequired, 0, commandPool,
+                        vulkanDevice.graphicsQueue());
+                } else {
+                    // Preserve the old allocation until its upload has
+                    // completed; Buffer move-assignment retires it safely.
+                    Buffer replacement;
+                    const VkDeviceSize capacity = compactGrassInstancesRequired +
+                        compactGrassInstancesRequired / 2U;
+                    replacement.createDeviceLocalEmpty(device, capacity,
+                        compactGrassInstancesUsage, vulkanDevice.allocator());
+                    replacement.uploadDeviceLocal(instanceIndexMap.data(),
+                        compactGrassInstancesRequired, 0, commandPool,
+                        vulkanDevice.graphicsQueue());
+                    buffer = std::move(replacement);
+                }
             }
             for (Buffer& buffer : materialBuffers) {
                 const VkDeviceSize required = sizeof(GPUMaterialData) *

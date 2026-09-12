@@ -78,6 +78,18 @@ void UploadContext::abort() noexcept {
     }
 }
 uint64_t UploadContext::completedValue() const noexcept { uint64_t value=0; return timeline_ && vkGetSemaphoreCounterValue(device_,timeline_,&value)==VK_SUCCESS ? value : 0; }
+void UploadContext::wait(const uint64_t value) const noexcept {
+    if (value == 0 || timeline_ == VK_NULL_HANDLE || device_ == VK_NULL_HANDLE ||
+        completedValue() >= value) {
+        return;
+    }
+
+    VkSemaphoreWaitInfo waitInfo{VK_STRUCTURE_TYPE_SEMAPHORE_WAIT_INFO};
+    waitInfo.semaphoreCount = 1;
+    waitInfo.pSemaphores = &timeline_;
+    waitInfo.pValues = &value;
+    static_cast<void>(vkWaitSemaphores(device_, &waitInfo, UINT64_MAX));
+}
 UploadContext::Batch UploadContext::beginBatch() { return Batch{*this}; }
 void UploadContext::begin() {
     if (commandBuffer_ != VK_NULL_HANDLE) {

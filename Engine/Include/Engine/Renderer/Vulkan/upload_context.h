@@ -53,6 +53,9 @@ public:
     /// Ticket that will be signalled by the batch currently being recorded.
     [[nodiscard]] UploadTicket pendingTicket() const noexcept;
     [[nodiscard]] uint64_t completedValue() const noexcept;
+    /// Waits until the upload timeline has reached @p value.  This is used
+    /// when an asynchronously-uploaded destination resource is retired.
+    void wait(uint64_t value) const noexcept;
     [[nodiscard]] uint64_t lastSubmittedValue() const noexcept { return nextValue_ - 1; }
     [[nodiscard]] VkSemaphore timeline() const noexcept { return timeline_; }
     [[nodiscard]] bool requiresConcurrentSharing() const noexcept { return sharingFamilyCount() > 1; }

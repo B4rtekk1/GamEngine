@@ -223,6 +223,15 @@ namespace Engine {
     }
 
     void Buffer::destroy() noexcept {
+        // UploadContext submits copies independently of frame submissions.
+        // A frame fence alone therefore cannot guarantee that this buffer is
+        // no longer a transfer destination.
+        if (readyTimeline_ != 0) {
+            if (UploadContext* const upload = UploadContext::current()) {
+                upload->wait(readyTimeline_);
+            }
+            readyTimeline_ = 0;
+        }
         finishPendingUploads();
         if (device_ != VK_NULL_HANDLE) {
             if (buffer_ != VK_NULL_HANDLE) {
