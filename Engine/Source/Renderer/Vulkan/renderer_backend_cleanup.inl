@@ -18,6 +18,7 @@
                 particleSystem.reset();
                 sceneViewportForwardPass.destroy();
                 forwardPass.destroy();
+                gtaoPass.destroy();
                 shadowPass.destroy();
                 sceneDescriptorPass.destroy();
                 // Cubemap owns samplers, views, images and memory; the BRDF

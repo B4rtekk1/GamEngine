@@ -21,6 +21,7 @@
 #include "Engine/Renderer/Vulkan/depth_buffer.h"
 #include "Engine/Renderer/Vulkan/hdr_buffer.h"
 #include "Engine/Renderer/Passes/BloomPass.h"
+#include "Engine/Renderer/Passes/GtaoPass.h"
 #include "Engine/Renderer/Vulkan/ViewportRenderTarget.h"
 #include "Engine/Renderer/ViewportCamera.h"
 #include "Engine/Renderer/shader_loader.h"
@@ -171,6 +172,7 @@ namespace Engine {
         TonemapPass tonemapPass;
         TemporalAaPass temporalAaPass;
         BloomPass bloomPass;
+        GtaoPass gtaoPass;
         GraphicsPipeline particlePipeline;
         UI::CanvasRenderer canvasRenderer;
     };
@@ -189,6 +191,7 @@ namespace Engine {
                          TonemapPass &tonemapPass,
                          TemporalAaPass &temporalAaPass,
                          BloomPass &bloomPass,
+                         GtaoPass &gtaoPass,
                          GraphicsPipeline &particlePipeline,
                          UI::CanvasRenderer &canvasRenderer)
             : window(window), forwardPass(forwardPass),
@@ -197,6 +200,7 @@ namespace Engine {
               tonemapPass(tonemapPass),
               temporalAaPass(temporalAaPass),
               bloomPass(bloomPass),
+              gtaoPass(gtaoPass),
               canvasRenderer(canvasRenderer),
               scene(scene),
               registry(scene.registry()),

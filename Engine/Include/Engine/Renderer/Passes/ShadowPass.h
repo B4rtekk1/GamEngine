@@ -80,6 +80,9 @@ namespace Engine {
                                        std::uint32_t textureIndex,
                                        const VkDescriptorImageInfo& texture) const;
 
+        /** Binds the full-resolution GTAO visibility texture for one safe frame slot. */
+        void setGtaoTexture(std::uint32_t frameIndex, const VkDescriptorImageInfo& texture) const;
+
         void destroy() noexcept;
 
         void record(VkCommandBuffer commandBuffer,

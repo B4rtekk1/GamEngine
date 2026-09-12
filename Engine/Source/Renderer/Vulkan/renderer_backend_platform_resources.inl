@@ -57,6 +57,7 @@
             hdrBuffer.create(vulkanDevice.physical(), device, swapchain.extent(), vulkanDevice.allocator());
             msaa.create(swapchain.extent(), HdrBuffer::Format);
             createDepthResources();
+            createGtaoPass();
             createMaterialTextures();
             createImageBasedLighting();
             createMeshBuffers();
@@ -274,6 +275,18 @@
             depthBuffer.destroy();
         }
 
+        void createGtaoPass() {
+            gtaoPass.create(vulkanDevice.physical(), device, swapchain.extent(),
+                            vulkanDevice.allocator(), assetManager);
+        }
+
+        void bindGtaoTexture(ShadowPass& descriptors) {
+            const VkDescriptorImageInfo gtao{gtaoPass.resultSampler(), gtaoPass.resultView(),
+                                             VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
+            for (std::uint32_t frame = 0; frame < MAX_FRAMES_IN_FLIGHT; ++frame)
+                descriptors.setGtaoTexture(frame, gtao);
+        }
+
         void createShadowPass() {
             std::vector<VkBuffer> buffers;
             std::vector<VkBuffer> gpuMaterialBuffers;
@@ -334,6 +347,7 @@
                     clusterRangeBuffers, clusterIndexBuffers, reflectionBuffers,
                     materialTextureDescriptors, imageBasedLighting.descriptors(), sizeof(UniformBufferObject));
             }
+            bindGtaoTexture(shadowPass);
         }
 
         void createSceneDescriptorPass() {
@@ -392,6 +406,7 @@
                     clusterRangeBuffers, clusterIndexBuffers, reflectionBuffers,
                     materialTextureDescriptors, imageBasedLighting.descriptors(), sizeof(UniformBufferObject));
             }
+            bindGtaoTexture(sceneDescriptorPass);
         }
 
         void createForwardPass() {
@@ -507,6 +522,7 @@
             tonemapPass.destroy();
             temporalAaPass.destroy();
             bloomPass.destroy();
+            gtaoPass.destroy();
             destroyVelocityResources();
 
             if (hdrFramebuffer != VK_NULL_HANDLE) {
@@ -533,6 +549,7 @@
             hdrBuffer.create(vulkanDevice.physical(), device, swapchain.extent(), vulkanDevice.allocator());
             msaa.create(swapchain.extent(), HdrBuffer::Format);
             createDepthResources();
+            createGtaoPass();
 
             // Instance buffers outlive swapchain attachments, so changing
             // AA mode must explicitly add/remove the TAA-only history stream.

@@ -19,6 +19,10 @@ import Common.ShadowSampling;
 #if FORWARD_OUTPUT_VELOCITY
 [[vk::binding(8, 0)]] StructuredBuffer<RendererPreviousTransformData> previousTransforms;
 #endif
+// Dynamic GTAO is deliberately sampled independently of material AO.  It is
+// full resolution after a depth-aware upsample and therefore needs no final
+// HDR darkening pass.
+[[vk::binding(16, 0)]] Sampler2D gtaoVisibility;
 
 struct ForwardVertexInput
 {
@@ -461,7 +465,14 @@ ForwardFragmentOutput fragmentMain(ForwardFragmentInput input)
                                     localProbeReflection, skyReflection);
     float2 brdf = brdfIntegrationLut.Sample(float2(nDotV, roughness)).rg;
     float3 specularIbl = prefiltered * (fresnelIbl * brdf.x + brdf.y);
-    float3 ambient = (diffuseIbl + specularIbl) * ao;
+    const float dynamicAo = gtaoVisibility.Sample(input.position.xy /
+        float2(frame.clusteredViewportNearFar.x, frame.clusteredViewportNearFar.y)).r;
+    const float diffuseAO = min(ao, dynamicAo);
+    // Lagarde-style specular occlusion preserves grazing reflections rather
+    // than applying diffuse AO blindly to the GGX lobe.
+    const float specularOcclusion = saturate(pow(nDotV + dynamicAo,
+        exp2(-16.0 * roughness - 1.0)) - 1.0 + dynamicAo);
+    float3 ambient = diffuseIbl * diffuseAO + specularIbl * specularOcclusion;
     float3 color = ambient + direct + emissive;
 #if MATERIAL_VARIANT == 1
     // Unlit keeps texture/base-color authoring but deliberately skips scene lighting.

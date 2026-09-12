@@ -866,6 +866,9 @@
                     vkCmdPipelineBarrier2(commandBuffer, &grassDrawDependency);
                 }
             }
+            // The first frame has no previous AO yet. Clear it to visibility=1
+            // before either Game View or Scene View material shaders sample it.
+            gtaoPass.initialize(commandBuffer);
             if (renderGameViewport) {
             foliageGpuCullingPasses[currentFrame].recordBinned(
                 commandBuffer, static_cast<std::uint32_t>(gpuObjects.size()), MaterialProgramSlotCount);
@@ -994,6 +997,14 @@
                 sceneForwardPass.drawOutline(commandBuffer, sceneDescriptorPass.descriptorSet(currentFrame),
                                         sceneIndirectDraws[currentFrame]);
                 ForwardPass::end(commandBuffer);
+            }
+
+            if (renderGameViewport && taaResolveActive) {
+                const DepthBuffer& gtaoDepth = msaa.enabled() ? hiZDepthBuffer : depthBuffer;
+                const Mat4 inverseProjection{glm::inverse(cameraController.camera()->projectionMatrix().native())};
+                gtaoPass.record(commandBuffer, gtaoDepth.imageView(), gtaoDepth.sampler(),
+                                velocityBuffer.imageView(), velocityBuffer.sampler(), inverseProjection,
+                                taaResolveActive);
             }
 
             if (renderGameViewport && hizEnabled) {
@@ -1165,6 +1176,7 @@
             tonemapPass.destroy();
             temporalAaPass.destroy();
             bloomPass.destroy();
+            gtaoPass.destroy();
             destroyVelocityResources();
             if (hdrFramebuffer != VK_NULL_HANDLE) {
                 vkDestroyFramebuffer(device, hdrFramebuffer, nullptr);
@@ -1226,6 +1238,7 @@
             tonemapPass.destroy();
             temporalAaPass.destroy();
             bloomPass.destroy();
+            gtaoPass.destroy();
             destroyVelocityResources();
             if (hdrFramebuffer != VK_NULL_HANDLE) {
                 vkDestroyFramebuffer(device, hdrFramebuffer, nullptr);
@@ -1252,6 +1265,7 @@
             hdrBuffer.create(vulkanDevice.physical(), device, swapchain.extent(), vulkanDevice.allocator());
             msaa.create(swapchain.extent(), HdrBuffer::Format);
             createDepthResources();
+            createGtaoPass();
             createRenderFinishedSemaphores();
 
             createCullingResources();

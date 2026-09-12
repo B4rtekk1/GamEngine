@@ -48,6 +48,7 @@
         TonemapPass& tonemapPass;
         TemporalAaPass& temporalAaPass;
         BloomPass& bloomPass;
+        GtaoPass& gtaoPass;
         UI::CanvasRenderer& canvasRenderer;
         Texture2D fpsFontTexture;
         Texture2D fallbackMaterialTexture;
