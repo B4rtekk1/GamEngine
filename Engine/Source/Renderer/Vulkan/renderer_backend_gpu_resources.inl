@@ -355,6 +355,11 @@
             }
 
             for (uint32_t frame = 0; frame < MAX_FRAMES_IN_FLIGHT; ++frame) {
+                const GpuReflectionProbe emptyProbe{};
+                reflectionProbeBuffers[frame].createHostVisible(vulkanDevice.physical(), device,
+                    sizeof(GpuReflectionProbe) * ReflectionProbeManager::MaxProbes,
+                    VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, vulkanDevice.allocator());
+                reflectionProbeBuffers[frame].update(&emptyProbe, sizeof(emptyProbe));
                 clusteredLightingUniformBuffers[frame].createHostVisible(vulkanDevice.physical(), device,
                     sizeof(ClusteredLightingUniforms), VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT, vulkanDevice.allocator());
                 sceneClusteredLightingUniformBuffers[frame].createHostVisible(vulkanDevice.physical(), device,

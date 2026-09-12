@@ -61,6 +61,9 @@
                 for (Buffer& uniformBuffer : uniformBuffers) {
                     uniformBuffer.destroy();
                 }
+                for (Buffer& reflectionProbeBuffer : reflectionProbeBuffers) {
+                    reflectionProbeBuffer.destroy();
+                }
                 fpsFontTexture.destroy();
                 for (Texture2D& texture : materialTextures) {
                     texture.destroy();

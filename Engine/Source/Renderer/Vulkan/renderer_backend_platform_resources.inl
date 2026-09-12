@@ -281,6 +281,7 @@
             std::vector<VkBuffer> gpuGrassDeformationBuffers;
             std::vector<VkBuffer> clusterRangeBuffers;
             std::vector<VkBuffer> clusterIndexBuffers;
+            std::vector<VkBuffer> reflectionBuffers;
             buffers.reserve(uniformBuffers.size());
             gpuMaterialBuffers.reserve(materialBuffers.size());
             gpuInstanceBuffers.reserve(instanceBuffers.size());
@@ -291,6 +292,7 @@
             gpuGrassDeformationBuffers.reserve(grassDeformationBuffers.size());
             clusterRangeBuffers.reserve(clusteredLightRangeBuffers.size());
             clusterIndexBuffers.reserve(clusteredLightIndexBuffers.size());
+            reflectionBuffers.reserve(reflectionProbeBuffers.size());
             for (const Buffer& buffer : uniformBuffers) {
                 buffers.push_back(buffer.handle());
             }
@@ -313,18 +315,19 @@
                     ? grassDeformationBuffers[i].handle() : instanceBuffers[i].handle());
             for (const Buffer& buffer : clusteredLightRangeBuffers) clusterRangeBuffers.push_back(buffer.handle());
             for (const Buffer& buffer : clusteredLightIndexBuffers) clusterIndexBuffers.push_back(buffer.handle());
+            for (const Buffer& buffer : reflectionProbeBuffers) reflectionBuffers.push_back(buffer.handle());
             if (shadowPass.descriptorSetLayout() == VK_NULL_HANDLE) {
                 shadowPass.create(vulkanDevice.physical(), device, physicalShadowPagePool, buffers,
                                   gpuMaterialBuffers, gpuInstanceBuffers, gpuPreviousTransformBuffers, gpuInstanceIndexBuffers,
                                   gpuGrassInstanceBuffers, gpuGrassClusterBuffers, gpuGrassDeformationBuffers,
-                                  clusterRangeBuffers, clusterIndexBuffers,
+                                  clusterRangeBuffers, clusterIndexBuffers, reflectionBuffers,
                                   materialTextureDescriptors, imageBasedLighting.descriptors(), sizeof(UniformBufferObject),
                                   vulkanDevice.allocator(), assetManager);
             } else {
                 shadowPass.updateDescriptors(
                     buffers, gpuMaterialBuffers, gpuInstanceBuffers, gpuPreviousTransformBuffers, gpuInstanceIndexBuffers,
                     gpuGrassInstanceBuffers, gpuGrassClusterBuffers, gpuGrassDeformationBuffers,
-                    clusterRangeBuffers, clusterIndexBuffers,
+                    clusterRangeBuffers, clusterIndexBuffers, reflectionBuffers,
                     materialTextureDescriptors, imageBasedLighting.descriptors(), sizeof(UniformBufferObject));
             }
         }
@@ -340,6 +343,7 @@
             std::vector<VkBuffer> gpuGrassDeformationBuffers;
             std::vector<VkBuffer> clusterRangeBuffers;
             std::vector<VkBuffer> clusterIndexBuffers;
+            std::vector<VkBuffer> reflectionBuffers;
             buffers.reserve(sceneUniformBuffers.size());
             gpuMaterialBuffers.reserve(materialBuffers.size());
             gpuInstanceBuffers.reserve(instanceBuffers.size());
@@ -350,6 +354,7 @@
             gpuGrassDeformationBuffers.reserve(grassDeformationBuffers.size());
             clusterRangeBuffers.reserve(sceneClusteredLightRangeBuffers.size());
             clusterIndexBuffers.reserve(sceneClusteredLightIndexBuffers.size());
+            reflectionBuffers.reserve(reflectionProbeBuffers.size());
             for (const Buffer& buffer : sceneUniformBuffers) buffers.push_back(buffer.handle());
             for (const Buffer& buffer : materialBuffers) gpuMaterialBuffers.push_back(buffer.handle());
             for (const Buffer& buffer : instanceBuffers) gpuInstanceBuffers.push_back(buffer.handle());
@@ -368,18 +373,19 @@
                     ? grassDeformationBuffers[i].handle() : instanceBuffers[i].handle());
             for (const Buffer& buffer : sceneClusteredLightRangeBuffers) clusterRangeBuffers.push_back(buffer.handle());
             for (const Buffer& buffer : sceneClusteredLightIndexBuffers) clusterIndexBuffers.push_back(buffer.handle());
+            for (const Buffer& buffer : reflectionProbeBuffers) reflectionBuffers.push_back(buffer.handle());
             if (sceneDescriptorPass.descriptorSetLayout() == VK_NULL_HANDLE) {
                 sceneDescriptorPass.create(vulkanDevice.physical(), device, physicalShadowPagePool, buffers,
                                            gpuMaterialBuffers, gpuInstanceBuffers, gpuPreviousTransformBuffers, gpuInstanceIndexBuffers,
                                            gpuGrassInstanceBuffers, gpuGrassClusterBuffers, gpuGrassDeformationBuffers,
-                                           clusterRangeBuffers, clusterIndexBuffers,
+                                           clusterRangeBuffers, clusterIndexBuffers, reflectionBuffers,
                                            materialTextureDescriptors, imageBasedLighting.descriptors(), sizeof(UniformBufferObject),
                                            vulkanDevice.allocator(), assetManager);
             } else {
                 sceneDescriptorPass.updateDescriptors(
                     buffers, gpuMaterialBuffers, gpuInstanceBuffers, gpuPreviousTransformBuffers, gpuInstanceIndexBuffers,
                     gpuGrassInstanceBuffers, gpuGrassClusterBuffers, gpuGrassDeformationBuffers,
-                    clusterRangeBuffers, clusterIndexBuffers,
+                    clusterRangeBuffers, clusterIndexBuffers, reflectionBuffers,
                     materialTextureDescriptors, imageBasedLighting.descriptors(), sizeof(UniformBufferObject));
             }
         }

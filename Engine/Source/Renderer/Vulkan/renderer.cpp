@@ -32,6 +32,7 @@
 #include "Engine/Renderer/Vulkan/swapchain.h"
 #include "Engine/Renderer/Textures/Texture2D.h"
 #include "Engine/Renderer/Lighting/ImageBasedLighting.h"
+#include "Engine/Renderer/Lighting/ReflectionProbeManager.h"
 #include "Engine/Renderer/Geometry/GpuVertex.h"
 #include "Engine/Renderer/Geometry/Mesh.h"
 #include "Engine/ECS/Registry.h"

@@ -157,6 +157,12 @@
         }
 
         void updateUniformBuffer(const uint32_t frame) {
+            reflectionProbeManager.update(registry);
+            const auto& reflectionProbes = reflectionProbeManager.probes();
+            const GpuReflectionProbe emptyProbe{};
+            reflectionProbeBuffers[frame].update(reflectionProbes.empty() ? &emptyProbe : reflectionProbes.data(),
+                sizeof(GpuReflectionProbe) * std::max<std::size_t>(1, reflectionProbes.size()));
+            reflectionProbeManager.uploadProbeTable(frame);
             const bool renderGameViewport = !editorUiActive || !sceneViewportActive;
             const SceneFrameData& frameData = sceneFrameDataCache.data;
             const bool mainLightShadows = frameData.directionalLight.enabled &&

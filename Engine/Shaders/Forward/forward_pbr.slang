@@ -104,6 +104,85 @@ ForwardVertexOutput vertexMain(ForwardVertexInput input, uint instanceIndex : SV
 [[vk::binding(4, 0)]] StructuredBuffer<uint4> shadowPageTable;
 [[vk::binding(3, 0)]] StructuredBuffer<ClusterLightRange> clusterRanges;
 [[vk::binding(7, 0)]] StructuredBuffer<uint> clusterLightIndices;
+// A fixed-capacity table avoids a CPU probe choice per instance. The current
+// capture path binds slot zero to the prefiltered environment until per-probe
+// cubemap baking supplies distinct bindless cube slots.
+struct ReflectionProbeData
+{
+    float4 positionAndBlendDistance;
+    float4 extentsAndShape;
+    uint textureIndex;
+    int priority;
+    uint flags;
+    uint padding;
+};
+[[vk::binding(14, 0)]] StructuredBuffer<ReflectionProbeData> reflectionProbes;
+
+static const uint ReflectionProbeCapacity = 256u;
+static const uint Probe_Box = 1u << 0u;
+static const uint Probe_BoxProject = 1u << 1u;
+static const uint Probe_Enabled = 1u << 2u;
+
+float probeInfluence(ReflectionProbeData probe, float3 worldPosition)
+{
+    if ((probe.flags & Probe_Enabled) == 0u) return 0.0;
+    float3 delta = abs(worldPosition - probe.positionAndBlendDistance.xyz);
+    float boundary;
+    if ((probe.flags & Probe_Box) != 0u)
+        boundary = min(min(probe.extentsAndShape.x - delta.x, probe.extentsAndShape.y - delta.y),
+                       probe.extentsAndShape.z - delta.z);
+    else
+        boundary = probe.extentsAndShape.x - length(delta);
+    return saturate(boundary / max(probe.positionAndBlendDistance.w, 1e-4));
+}
+
+float3 boxProjectedReflection(ReflectionProbeData probe, float3 worldPosition, float3 direction)
+{
+    if ((probe.flags & (Probe_Box | Probe_BoxProject)) != (Probe_Box | Probe_BoxProject)) return direction;
+    float3 local = worldPosition - probe.positionAndBlendDistance.xyz;
+    float3 safeDirection = direction + sign(direction) * 1e-5;
+    float3 positive = (probe.extentsAndShape.xyz - local) / safeDirection;
+    float3 negative = (-probe.extentsAndShape.xyz - local) / safeDirection;
+    float3 distances = float3(safeDirection.x > 0.0 ? positive.x : negative.x,
+                              safeDirection.y > 0.0 ? positive.y : negative.y,
+                              safeDirection.z > 0.0 ? positive.z : negative.z);
+    float hitDistance = min(min(distances.x, distances.y), distances.z);
+    return normalize(local + direction * max(hitDistance, 0.0));
+}
+
+ReflectionCandidate sampleLocalProbes(float3 worldPosition, float3 reflection, float roughness,
+                                      uint prefilteredMipCount)
+{
+    int bestPriority = -2147483647;
+    int secondPriority = -2147483647;
+    float bestWeight = 0.0;
+    float secondWeight = 0.0;
+    ReflectionProbeData best;
+    ReflectionProbeData second;
+    [loop] for (uint index = 0u; index < ReflectionProbeCapacity; ++index)
+    {
+        ReflectionProbeData probe = reflectionProbes[index];
+        float weight = probeInfluence(probe, worldPosition);
+        if (weight <= 0.0) continue;
+        if (probe.priority > bestPriority || (probe.priority == bestPriority && weight > bestWeight))
+        {
+            second = best; secondPriority = bestPriority; secondWeight = bestWeight;
+            best = probe; bestPriority = probe.priority; bestWeight = weight;
+        }
+        else if (probe.priority > secondPriority || (probe.priority == secondPriority && weight > secondWeight))
+        {
+            second = probe; secondPriority = probe.priority; secondWeight = weight;
+        }
+    }
+    float total = bestWeight + secondWeight;
+    if (total <= 0.0) { ReflectionCandidate none = {float3(0.0), 0.0}; return none; }
+    float mip = roughness * float(max(prefilteredMipCount, 1u) - 1u);
+    float3 value = prefilteredEnvironmentMap.SampleLevel(boxProjectedReflection(best, worldPosition, reflection), mip).rgb * bestWeight;
+    if (secondWeight > 0.0)
+        value += prefilteredEnvironmentMap.SampleLevel(boxProjectedReflection(second, worldPosition, reflection), mip).rgb * secondWeight;
+    ReflectionCandidate result = {value / total, saturate(total)};
+    return result;
+}
 
 struct ForwardFragmentInput
 {
@@ -352,7 +431,7 @@ ForwardFragmentOutput fragmentMain(ForwardFragmentInput input)
     // available; this explicit resolver keeps the material-side priority
     // fixed as RT -> SSR -> probe -> sky.
     ReflectionCandidate skyReflection = {prefiltered, 1.0};
-    ReflectionCandidate localProbeReflection = {0.0, 0.0};
+    ReflectionCandidate localProbeReflection = sampleLocalProbes(input.worldPosition, reflection, roughness, prefilteredMipCount);
     ReflectionCandidate screenSpaceReflection = {0.0, 0.0};
     ReflectionCandidate rayTracedReflection = {0.0, 0.0};
     prefiltered = resolveReflection(rayTracedReflection, screenSpaceReflection,

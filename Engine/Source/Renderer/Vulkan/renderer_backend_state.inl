@@ -52,6 +52,7 @@
         Texture2D fpsFontTexture;
         Texture2D fallbackMaterialTexture;
         ImageBasedLighting imageBasedLighting;
+        ReflectionProbeManager reflectionProbeManager;
         std::filesystem::path environmentEquirectangularPath;
         // Terrain height input for procedural grass generation. It is kept
         // separate from material textures so compute can sample it directly.
@@ -140,6 +141,7 @@
         std::uint32_t geometryHeapVertexHighWater{};
         std::uint32_t geometryHeapIndexHighWater{};
         std::array<Buffer, MAX_FRAMES_IN_FLIGHT> instanceBuffers;
+        std::array<Buffer, MAX_FRAMES_IN_FLIGHT> reflectionProbeBuffers;
         // Allocated only with TAA. Descriptor binding 8 falls back to the
         // current transform buffer when this array is empty.
         std::array<Buffer, MAX_FRAMES_IN_FLIGHT> previousTransformBuffers;
