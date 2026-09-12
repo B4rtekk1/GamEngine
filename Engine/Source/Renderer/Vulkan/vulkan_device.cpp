@@ -411,17 +411,19 @@ void VulkanDevice::createLogicalDevice() {
     features2.features.textureCompressionBC = VK_TRUE;
     features2.pNext = &features11;
 
-    VkPhysicalDeviceMeshShaderFeaturesEXT meshFeatures{
+    VkPhysicalDeviceMeshShaderFeaturesEXT enabledMeshFeatures{
         .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MESH_SHADER_FEATURES_EXT};
     if (meshShaderSupported_) {
+        VkPhysicalDeviceMeshShaderFeaturesEXT availableMeshFeatures{
+            .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MESH_SHADER_FEATURES_EXT};
         VkPhysicalDeviceFeatures2 availableFeatures{.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2,
-                                                     .pNext = &meshFeatures};
+                                                     .pNext = &availableMeshFeatures};
         vkGetPhysicalDeviceFeatures2(physicalDevice_, &availableFeatures);
-        meshFeatures.meshShader = VK_TRUE;
+        enabledMeshFeatures.meshShader = availableMeshFeatures.meshShader;
         // Task shaders are useful for a later amplification stage, but mesh
         // shaders and compute-driven meshlet culling do not require them.
     }
-    if (meshShaderSupported_) meshFeatures.pNext = &features2;
+    if (meshShaderSupported_) enabledMeshFeatures.pNext = &features2;
     std::vector<const char*> enabledExtensions(kRequiredDeviceExtensions.begin(), kRequiredDeviceExtensions.end());
     if (memoryBudgetExtensionSupported_) enabledExtensions.push_back(VK_EXT_MEMORY_BUDGET_EXTENSION_NAME);
     if (meshShaderSupported_) enabledExtensions.push_back(VK_EXT_MESH_SHADER_EXTENSION_NAME);
@@ -430,7 +432,7 @@ void VulkanDevice::createLogicalDevice() {
     createInfo.queueCreateInfoCount =
         static_cast<uint32_t>(queueCreateInfos.size());
     createInfo.pQueueCreateInfos = queueCreateInfos.data();
-    createInfo.pNext = meshShaderSupported_ ? static_cast<void*>(&meshFeatures) : static_cast<void*>(&features2);
+    createInfo.pNext = meshShaderSupported_ ? static_cast<void*>(&enabledMeshFeatures) : static_cast<void*>(&features2);
     createInfo.enabledExtensionCount =
         static_cast<uint32_t>(enabledExtensions.size());
     createInfo.ppEnabledExtensionNames = enabledExtensions.data();

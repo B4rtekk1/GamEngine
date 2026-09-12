@@ -827,6 +827,32 @@
 }
                 sceneGpu.grassClusters[cluster].instanceRange.z = material->second;
             }
+
+            // updateRenderableBuffers() performs incremental writes for the
+            // current frame.  A topology rebuild may have changed both the
+            // number of records and the global material-table stride, so
+            // reserve every target before it can issue any such write.
+            const auto ensureHostVisibleCapacity = [&](auto& buffers, const std::size_t requiredCount,
+                                                        const VkDeviceSize elementSize,
+                                                        const VkBufferUsageFlags usage) {
+                const std::size_t minimumCount = std::max<std::size_t>(1, requiredCount);
+                for (Buffer& buffer : buffers) {
+                    const std::size_t oldCapacity = static_cast<std::size_t>(buffer.size() / elementSize);
+                    const std::size_t capacity = std::max(minimumCount, oldCapacity + oldCapacity / 2U);
+                    if (buffer.handle() == VK_NULL_HANDLE || oldCapacity < minimumCount) {
+                        buffer.createHostVisible(vulkanDevice.physical(), device, capacity * elementSize,
+                            usage, vulkanDevice.allocator());
+                    }
+                }
+            };
+            ensureHostVisibleCapacity(instanceBuffers, instanceModels.size(), sizeof(RendererInstanceData),
+                VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT);
+            if (antialiasingLevel == AntialiasingLevel::TAA) {
+                ensureHostVisibleCapacity(previousTransformBuffers, previousInstanceTransforms.size(),
+                    sizeof(RendererPreviousTransformData), VK_BUFFER_USAGE_STORAGE_BUFFER_BIT);
+            }
+            ensureHostVisibleCapacity(materialBuffers, materials.size(), sizeof(GPUMaterialData),
+                VK_BUFFER_USAGE_STORAGE_BUFFER_BIT);
             updateRenderableBuffers();
             // Packed grass has no RenderableRecord. Populate its shared
             // material ranges directly from TerrainGrassComponent instead.
