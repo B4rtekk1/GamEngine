@@ -13,7 +13,7 @@ import Grass.GrassDeformation;
 [[vk::binding(9, 0)]] Sampler2D shadowDepthMap;
 [[vk::binding(1, 0)]] ConstantBuffer<RendererFrameData> frame;
 [[vk::binding(2, 0)]] StructuredBuffer<MaterialData> materials;
-[[vk::binding(10, 0)]] Sampler2D materialTextures[];
+[[vk::binding(13, 0)]] Sampler2D materialTextures[];
 [[vk::binding(4, 0)]] StructuredBuffer<uint4> shadowPageTable;
 [[vk::binding(5, 0)]] StructuredBuffer<GrassPackedInstance> instances;
 [[vk::binding(6, 0)]] StructuredBuffer<uint> visibleInstances;

@@ -31,6 +31,7 @@
 #include "Engine/Renderer/Vulkan/vulkan_device.h"
 #include "Engine/Renderer/Vulkan/swapchain.h"
 #include "Engine/Renderer/Textures/Texture2D.h"
+#include "Engine/Renderer/Lighting/ImageBasedLighting.h"
 #include "Engine/Renderer/Geometry/GpuVertex.h"
 #include "Engine/Renderer/Geometry/Mesh.h"
 #include "Engine/ECS/Registry.h"
@@ -604,6 +605,7 @@ namespace Engine {
             materialTextureDescriptors.clear();
             meshTextureOffsets.clear();
             fallbackMaterialTexture.destroy();
+            imageBasedLighting.destroy();
             renderables.clear();
             instanceBatches.clear();
             instanceModels.clear();

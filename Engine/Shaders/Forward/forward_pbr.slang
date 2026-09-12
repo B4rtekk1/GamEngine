@@ -96,7 +96,10 @@ ForwardVertexOutput vertexMain(ForwardVertexInput input, uint instanceIndex : SV
 [[vk::binding(0, 0)]] Sampler2DShadow shadowMap;
 [[vk::binding(9, 0)]] Sampler2D shadowDepthMap;
 [[vk::binding(2, 0)]] StructuredBuffer<MaterialData> materials;
-[[vk::binding(10, 0)]] Sampler2D materialTextures[];
+[[vk::binding(10, 0)]] SamplerCube irradianceMap;
+[[vk::binding(11, 0)]] SamplerCube prefilteredEnvironmentMap;
+[[vk::binding(12, 0)]] Sampler2D brdfIntegrationLut;
+[[vk::binding(13, 0)]] Sampler2D materialTextures[];
 [[vk::binding(4, 0)]] StructuredBuffer<uint4> shadowPageTable;
 [[vk::binding(3, 0)]] StructuredBuffer<ClusterLightRange> clusterRanges;
 [[vk::binding(7, 0)]] StructuredBuffer<uint> clusterLightIndices;
@@ -332,10 +335,15 @@ ForwardFragmentOutput fragmentMain(ForwardFragmentInput input)
 #ifdef ENGINE_SHADER_GRAPH
     emissive = graphSurface.emission;
 #endif
-    // Temporary low-level ambient until image-based lighting supplies diffuse
-    // irradiance and prefiltered specular.  A large albedo term here washes
-    // out both direct-light colour and HDR emissive validation assets.
-    float3 ambient = 0.03 * albedo * ao;
+    float3 fresnelIbl = fresnelSchlickRoughness(nDotV, f0, roughness);
+    float3 kS = fresnelIbl;
+    float3 kD = (1.0 - kS) * (1.0 - metallic);
+    float3 diffuseIbl = irradianceMap.Sample(normal).rgb * albedo * kD;
+    float3 reflection = reflect(-viewDirection, normal);
+    float3 prefiltered = prefilteredEnvironmentMap.SampleLevel(reflection, roughness * 8.0).rgb;
+    float2 brdf = brdfIntegrationLut.Sample(float2(nDotV, roughness)).rg;
+    float3 specularIbl = prefiltered * (fresnelIbl * brdf.x + brdf.y);
+    float3 ambient = (diffuseIbl + specularIbl) * ao;
     float3 color = ambient + direct + emissive;
 #if MATERIAL_VARIANT == 1
     // Unlit keeps texture/base-color authoring but deliberately skips scene lighting.

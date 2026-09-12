@@ -39,6 +39,8 @@
             msaa.create(swapchain.extent(), HdrBuffer::Format);
             createDepthResources();
             createMaterialTextures();
+            imageBasedLighting.create(vulkanDevice.physical(), device, commandPool,
+                                      vulkanDevice.graphicsQueue(), vulkanDevice.allocator());
             createMeshBuffers();
             lastRenderTopologyRevision = registry.renderTopologyRevision();
             lastParticleEmitterRevision = registry.componentRevision<ParticleEmitterComponent>();
@@ -302,14 +304,14 @@
                                   gpuMaterialBuffers, gpuInstanceBuffers, gpuPreviousTransformBuffers, gpuInstanceIndexBuffers,
                                   gpuGrassInstanceBuffers, gpuGrassClusterBuffers, gpuGrassDeformationBuffers,
                                   clusterRangeBuffers, clusterIndexBuffers,
-                                  materialTextureDescriptors, sizeof(UniformBufferObject),
+                                  materialTextureDescriptors, imageBasedLighting.descriptors(), sizeof(UniformBufferObject),
                                   vulkanDevice.allocator(), assetManager);
             } else {
                 shadowPass.updateDescriptors(
                     buffers, gpuMaterialBuffers, gpuInstanceBuffers, gpuPreviousTransformBuffers, gpuInstanceIndexBuffers,
                     gpuGrassInstanceBuffers, gpuGrassClusterBuffers, gpuGrassDeformationBuffers,
                     clusterRangeBuffers, clusterIndexBuffers,
-                    materialTextureDescriptors, sizeof(UniformBufferObject));
+                    materialTextureDescriptors, imageBasedLighting.descriptors(), sizeof(UniformBufferObject));
             }
         }
 
@@ -357,14 +359,14 @@
                                            gpuMaterialBuffers, gpuInstanceBuffers, gpuPreviousTransformBuffers, gpuInstanceIndexBuffers,
                                            gpuGrassInstanceBuffers, gpuGrassClusterBuffers, gpuGrassDeformationBuffers,
                                            clusterRangeBuffers, clusterIndexBuffers,
-                                           materialTextureDescriptors, sizeof(UniformBufferObject),
+                                           materialTextureDescriptors, imageBasedLighting.descriptors(), sizeof(UniformBufferObject),
                                            vulkanDevice.allocator(), assetManager);
             } else {
                 sceneDescriptorPass.updateDescriptors(
                     buffers, gpuMaterialBuffers, gpuInstanceBuffers, gpuPreviousTransformBuffers, gpuInstanceIndexBuffers,
                     gpuGrassInstanceBuffers, gpuGrassClusterBuffers, gpuGrassDeformationBuffers,
                     clusterRangeBuffers, clusterIndexBuffers,
-                    materialTextureDescriptors, sizeof(UniformBufferObject));
+                    materialTextureDescriptors, imageBasedLighting.descriptors(), sizeof(UniformBufferObject));
             }
         }
 

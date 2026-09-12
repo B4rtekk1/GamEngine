@@ -4,7 +4,7 @@ add_library(Engine SHARED
     Source/Scene/SceneSerializer.cpp Source/Scene/SceneRegistrySerializer.cpp Source/Scene/Scene.cpp Source/Scene/Actor.cpp Source/Scene/TransformSystem.cpp Source/Scene/Prefab.cpp Source/Scene/ScenePresets.cpp
     Source/Physics/PhysXPhysicsSystem.cpp Source/Scripting/ScriptSystem.cpp Source/Scripting/Script.cpp Source/Scripting/ScriptRegistry.cpp Source/Scripting/DynamicLibrary.cpp Source/Scripting/ScriptModuleManager.cpp
     Source/UI/Canvas.cpp Source/UI/CanvasRenderer.cpp Source/UI/UIBatch.cpp Source/UI/Vulkan/UIFontAtlas.cpp Source/UI/Vulkan/UIFontAtlasRuntime.cpp Source/UI/RectTransform.cpp Source/UI/Vulkan/UIPipeline.cpp
-    Source/Renderer/shader_loader.cpp Source/Renderer/Textures/Cubemap.cpp Source/Renderer/Textures/Texture2D.cpp Source/Renderer/Skybox/Skybox.cpp Source/Renderer/Skybox/SkyboxPipeline.cpp Source/Renderer/Lighting/LightingBuffer.cpp
+    Source/Renderer/shader_loader.cpp Source/Renderer/Textures/Cubemap.cpp Source/Renderer/Textures/Texture2D.cpp Source/Renderer/Skybox/Skybox.cpp Source/Renderer/Skybox/SkyboxPipeline.cpp Source/Renderer/Lighting/LightingBuffer.cpp Source/Renderer/Lighting/ImageBasedLighting.cpp
     Source/Renderer/ShaderGraph/ShaderGraphCompiler.cpp Source/Renderer/ShaderGraph/ShaderGraphVulkan.cpp Source/Renderer/ShaderGraph/ShaderNodeFactory.cpp Source/Renderer/ShaderGraph/ShaderNodeRegistry.cpp Source/Renderer/ShaderGraph/ShaderGraphSerializer.cpp
     Source/Renderer/Passes/ForwardPass.cpp Source/Renderer/Passes/ShadowPass.cpp Source/Renderer/Passes/SkyPass.cpp Source/Renderer/Passes/TonemapPass.cpp Source/Renderer/Passes/BloomPass.cpp Source/Renderer/Passes/TemporalAaPass.cpp
     Source/Renderer/RenderGraph/RenderGraph.cpp

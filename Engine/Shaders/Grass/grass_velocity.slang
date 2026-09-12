@@ -4,7 +4,7 @@ import Grass.GrassDeformation;
 
 [[vk::binding(1, 0)]] ConstantBuffer<RendererFrameData> frame;
 [[vk::binding(2, 0)]] StructuredBuffer<MaterialData> materials;
-[[vk::binding(10, 0)]] Sampler2D materialTextures[];
+[[vk::binding(13, 0)]] Sampler2D materialTextures[];
 [[vk::binding(5, 0)]] StructuredBuffer<GrassPackedInstance> instances;
 [[vk::binding(6, 0)]] StructuredBuffer<uint> visibleInstances;
 [[vk::binding(3, 0)]] StructuredBuffer<GrassPackedCluster> clusters;
