@@ -275,7 +275,10 @@ struct MaterialSurface
         GraphicsPipelineOptions options = baseOptions_;
         options.shader = entry.spirv;
         options.cullMode = entry.state.doubleSided ? VK_CULL_MODE_NONE : VK_CULL_MODE_BACK_BIT;
-        options.depthWriteEnable = entry.state.depthWrite ? VK_TRUE : VK_FALSE;
+        // A material can disable depth writes, but cannot enable them when the
+        // owning pass keeps its depth attachment read-only (e.g. lighting
+        // after the depth prepass).
+        options.depthWriteEnable = baseOptions_.depthWriteEnable && entry.state.depthWrite;
         options.alphaBlendEnable = entry.state.transparent ? VK_TRUE : VK_FALSE;
         entry.pipeline = std::make_unique<GraphicsPipeline>();
         entry.pipeline->create(device_, options);
