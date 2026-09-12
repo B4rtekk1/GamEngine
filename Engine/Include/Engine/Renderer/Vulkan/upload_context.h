@@ -36,7 +36,10 @@ public:
     UploadContext(const UploadContext&) = delete; UploadContext& operator=(const UploadContext&) = delete;
     void create(VkDevice device, VkQueue transferQueue, uint32_t transferFamily, VkQueue graphicsQueue,
                 uint32_t graphicsFamily, uint32_t computeFamily,
-                VmaAllocator allocator, VkDeviceSize bytes = 32ull * 1024 * 1024);
+                // Diagnostic capacity: avoids the known full-ring CPU wait while
+                // measuring large scene uploads. Replace with page/range reuse
+                // before treating this as a production streaming solution.
+                VmaAllocator allocator, VkDeviceSize bytes = 256ull * 1024 * 1024);
     void destroy() noexcept;
     /// Starts an explicit upload batch. Resources created while it is active
     /// append their copy commands instead of submitting independently.
