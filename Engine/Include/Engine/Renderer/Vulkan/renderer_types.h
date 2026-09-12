@@ -82,6 +82,7 @@ namespace Engine {
         std::uint32_t materialSlots{1};
         std::uint32_t selectedInstance{std::numeric_limits<std::uint32_t>::max()};
         std::uint32_t localLightCount{};
+        std::uint32_t reflectionProbeCount{};
         glm::vec4 clusteredViewportNearFar{};
         std::array<LocalLightGPU, MaxLocalLights> localLights{};
     };

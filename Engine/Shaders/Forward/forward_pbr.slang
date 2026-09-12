@@ -104,9 +104,8 @@ ForwardVertexOutput vertexMain(ForwardVertexInput input, uint instanceIndex : SV
 [[vk::binding(4, 0)]] StructuredBuffer<uint4> shadowPageTable;
 [[vk::binding(3, 0)]] StructuredBuffer<ClusterLightRange> clusterRanges;
 [[vk::binding(7, 0)]] StructuredBuffer<uint> clusterLightIndices;
-// A fixed-capacity table avoids a CPU probe choice per instance. The current
-// capture path binds slot zero to the prefiltered environment until per-probe
-// cubemap baking supplies distinct bindless cube slots.
+// A fixed-capacity table avoids a CPU probe choice per instance. Only
+// frame.reflectionProbeCount entries are valid and may be read.
 struct ReflectionProbeData
 {
     float4 positionAndBlendDistance;
@@ -118,7 +117,6 @@ struct ReflectionProbeData
 };
 [[vk::binding(14, 0)]] StructuredBuffer<ReflectionProbeData> reflectionProbes;
 
-static const uint ReflectionProbeCapacity = 256u;
 static const uint Probe_Box = 1u << 0u;
 static const uint Probe_BoxProject = 1u << 1u;
 static const uint Probe_Enabled = 1u << 2u;
@@ -153,13 +151,19 @@ float3 boxProjectedReflection(ReflectionProbeData probe, float3 worldPosition, f
 ReflectionCandidate sampleLocalProbes(float3 worldPosition, float3 reflection, float roughness,
                                       uint prefilteredMipCount)
 {
+    if (frame.reflectionProbeCount == 0u)
+    {
+        ReflectionCandidate none = {float3(0.0), 0.0};
+        return none;
+    }
+
     int bestPriority = -2147483647;
     int secondPriority = -2147483647;
     float bestWeight = 0.0;
     float secondWeight = 0.0;
     ReflectionProbeData best;
     ReflectionProbeData second;
-    [loop] for (uint index = 0u; index < ReflectionProbeCapacity; ++index)
+    [loop] for (uint index = 0u; index < frame.reflectionProbeCount; ++index)
     {
         ReflectionProbeData probe = reflectionProbes[index];
         float weight = probeInfluence(probe, worldPosition);

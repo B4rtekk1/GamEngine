@@ -31,6 +31,9 @@ struct RendererFrameData
     uint materialSlots;
     uint selectedInstance;
     uint localLightCount;
+    // Number of valid records in the reflection-probe SSBO.  The buffer has
+    // fixed storage capacity, but entries beyond this count are not populated.
+    uint reflectionProbeCount;
     // xy viewport pixels, z near plane, w far plane.
     float4 clusteredViewportNearFar;
     LocalLightData localLights[32];
