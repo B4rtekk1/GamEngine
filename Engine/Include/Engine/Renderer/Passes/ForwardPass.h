@@ -28,7 +28,8 @@ namespace Engine {
                     Assets::AssetManager &assets,
                     VkImageLayout colorInitialLayout = VK_IMAGE_LAYOUT_UNDEFINED,
                     bool colorInitialLayoutExternallySynchronized = false,
-                    VkFormat velocityFormat = VK_FORMAT_UNDEFINED);
+                    VkFormat velocityFormat = VK_FORMAT_UNDEFINED,
+                    bool preserveDepth = false, bool depthOnly = false);
 
         void destroy() noexcept;
 

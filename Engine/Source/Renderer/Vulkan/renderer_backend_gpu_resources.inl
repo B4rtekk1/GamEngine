@@ -1158,11 +1158,12 @@
         void createFramebuffers() {
             const VkExtent2D extent = swapchain.extent();
             const bool taaEnabled = antialiasingLevel == AntialiasingLevel::TAA;
-            if (taaEnabled) {
-                velocityBuffer.create(vulkanDevice.physical(), device, extent,
-                                      vulkanDevice.allocator(), VK_FILTER_NEAREST,
-                                      VK_FORMAT_R16G16_SFLOAT);
-            }
+            // GTAO owns temporal use independently from the selected AA mode.
+            // Even when it is not attached, keep a valid sampled fallback for
+            // its non-temporal path.
+            velocityBuffer.create(vulkanDevice.physical(), device, extent,
+                                  vulkanDevice.allocator(), VK_FILTER_NEAREST,
+                                  VK_FORMAT_R16G16_SFLOAT);
             VkImageView msaaAttachments[] = {
                 msaa.colorImageView(), depthBuffer.imageView(), hdrBuffer.imageView(), hiZDepthBuffer.imageView()
             };
@@ -1184,6 +1185,13 @@
             if (vkCreateFramebuffer(device, &framebufferInfo, nullptr,
                                     &hdrFramebuffer) != VK_SUCCESS) {
                 throw std::runtime_error("Could not create HDR framebuffer");
+            }
+            framebufferInfo.renderPass = lightingForwardPass.renderPass();
+            if (vkCreateFramebuffer(device, &framebufferInfo, nullptr,
+                                    &lightingHdrFramebuffer) != VK_SUCCESS) {
+                vkDestroyFramebuffer(device, hdrFramebuffer, nullptr);
+                hdrFramebuffer = VK_NULL_HANDLE;
+                throw std::runtime_error("Could not create GTAO lighting framebuffer");
             }
         }
 

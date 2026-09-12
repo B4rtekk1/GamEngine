@@ -417,7 +417,15 @@
                                shadowPass.descriptorSetLayout(), assetManager,
                                VK_IMAGE_LAYOUT_UNDEFINED, false,
                                antialiasingLevel == AntialiasingLevel::TAA
-                                   ? VK_FORMAT_R16G16_SFLOAT : VK_FORMAT_UNDEFINED);
+                                   ? VK_FORMAT_R16G16_SFLOAT : VK_FORMAT_UNDEFINED, false, true);
+            lightingForwardPass.create(device, HdrBuffer::Format, depthBuffer.format(),
+                               msaa.sampleCount(),
+                               msaa.enabled() ? hiZDepthBuffer.format() : VK_FORMAT_UNDEFINED,
+                               msaa.enabled() ? vulkanDevice.depthResolveMode() : VK_RESOLVE_MODE_NONE,
+                               shadowPass.descriptorSetLayout(), assetManager,
+                               VK_IMAGE_LAYOUT_UNDEFINED, false,
+                               antialiasingLevel == AntialiasingLevel::TAA
+                                   ? VK_FORMAT_R16G16_SFLOAT : VK_FORMAT_UNDEFINED, true);
         }
 
         void createSceneViewportForwardPass() {
@@ -514,6 +522,7 @@
             // These descriptor sets bind packed grass buffers, which are
             // recreated together with culling resources below.
             forwardPass.destroy();
+            lightingForwardPass.destroy();
             shadowPass.destroy();
             sceneDescriptorPass.destroy();
             destroyCullingResources();
@@ -528,6 +537,10 @@
             if (hdrFramebuffer != VK_NULL_HANDLE) {
                 vkDestroyFramebuffer(device, hdrFramebuffer, nullptr);
                 hdrFramebuffer = VK_NULL_HANDLE;
+            }
+            if (lightingHdrFramebuffer != VK_NULL_HANDLE) {
+                vkDestroyFramebuffer(device, lightingHdrFramebuffer, nullptr);
+                lightingHdrFramebuffer = VK_NULL_HANDLE;
             }
             // Scene Sky uses the Scene View render pass when MSAA is off.
             // Destroy that pipeline before releasing its render pass.

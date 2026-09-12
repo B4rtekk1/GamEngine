@@ -527,6 +527,8 @@
                             renderer.material.shaderProgram, {}, renderer.material.shaderProgramSpirv};
                         const std::uint32_t shaderSlot = forwardPass.registerShaderGraph(
                             program, renderer.material.renderState);
+                        static_cast<void>(lightingForwardPass.registerShaderGraph(
+                            program, renderer.material.renderState));
                         // In the single-sample editor path Scene View owns a
                         // cache-compatible ForwardPass. It needs the same graph
                         // pipeline registry as Game View rather than falling

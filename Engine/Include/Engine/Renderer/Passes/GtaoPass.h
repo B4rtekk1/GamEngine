@@ -27,7 +27,8 @@ public:
     void reset() noexcept;
     /** Makes the white (unoccluded) bootstrap visibility sampleable before Forward reads it. */
     void initialize(VkCommandBuffer commandBuffer);
-    void record(VkCommandBuffer commandBuffer, VkImageView depthView, VkSampler depthSampler,
+    void record(VkCommandBuffer commandBuffer, std::uint32_t frameIndex,
+                VkImageView depthView, VkSampler depthSampler,
                 VkImageView velocityView, VkSampler velocitySampler,
                 const Mat4& inverseProjection, bool useTemporalVelocity);
     [[nodiscard]] VkImageView resultView() const noexcept { return full_.imageView(); }
@@ -47,7 +48,10 @@ private:
     std::array<GraphicsPipeline, 4> pipelines_;
     std::array<VkDescriptorSetLayout, 4> layouts_{};
     std::array<VkDescriptorPool, 4> pools_{};
-    std::array<VkDescriptorSet, 4> sets_{};
+    // Descriptor writes must not race command buffers submitted for earlier
+    // frames.  This renderer has three frame slots.
+    static constexpr std::uint32_t FramesInFlight = 3;
+    std::array<std::array<VkDescriptorSet, FramesInFlight>, 4> sets_{};
     std::array<VkFramebuffer, 5> framebuffers_{};
     std::uint32_t historyIndex_ = 0;
     bool initialized_ = false;

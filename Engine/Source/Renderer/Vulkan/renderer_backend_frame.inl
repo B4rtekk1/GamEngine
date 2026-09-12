@@ -319,8 +319,11 @@
             // Motion vectors describe continuous motion.  Reusing history after
             // a teleport or a large orientation jump produces unavoidable
             // ghosting, so treat it as a camera cut instead.
-            if (taaResolveActive && cameraCut) {
-                temporalAaPass.reset();
+            if (cameraCut) {
+                // GTAO history is independent of TAA and must not survive a
+                // teleport or a large camera rotation either.
+                gtaoPass.reset();
+                if (taaResolveActive) temporalAaPass.reset();
             }
             const UniformBufferObject data{
                 currentView, currentProjection,
@@ -897,29 +900,37 @@
                 shadowPass.setGrassVisibleInstances(currentFrame, lists.drawInstances[0].handle());
                 forwardPass.drawGrass(commandBuffer, shadowPass.grassDescriptorSet(currentFrame), grassDraw);
             }
-            // Fill the background before drawing particles. Otherwise the
-            // skybox can overwrite transparent particle fragments in the sky.
-            skyPass.record(commandBuffer, currentFrame);
-            if (particleSystem && cameraController.camera()) {
-                const Particles::ParticleFrameData particleFrame{
-                    cameraController.camera()->projectionMatrix() * cameraController.camera()->viewMatrix(),
-                    cameraController.camera()->right(),
-                    0.0F,
-                    cameraController.camera()->up(),
-                    0.0F,
-                };
-                particleSystem->recordRender(commandBuffer, particleFrame,
-                                             particlePipeline.handle(), particlePipeline.layout(),
-                                              currentFrame, false);
-            }
-            forwardPass.drawOutline(commandBuffer, shadowPass.descriptorSet(currentFrame),
-                                    indirectDraws[currentFrame]);
             ForwardPass::end(commandBuffer);
             gpuTimestampProfiler.endZone(commandBuffer, currentFrame);
 
-            // TAA velocity is the second forward-pass render target, so opaque
-            // geometry, foliage and packed grass are rasterized only once.
-            gpuTimestampProfiler.beginZone(commandBuffer, currentFrame, velocityProfileName);
+            // The prepass has produced this frame's depth and velocity. GTAO
+            // must finish before the lighting pass samples its result.
+            const DepthBuffer& gtaoDepth = msaa.enabled() ? hiZDepthBuffer : depthBuffer;
+            const Mat4 inverseProjection{glm::inverse(cameraController.camera()->projectionMatrix().native())};
+            gtaoPass.record(commandBuffer, currentFrame, gtaoDepth.imageView(), gtaoDepth.sampler(),
+                            velocityBuffer.imageView(), velocityBuffer.sampler(), inverseProjection,
+                            taaResolveActive);
+
+            gpuTimestampProfiler.beginZone(commandBuffer, currentFrame, forwardProfileName);
+            lightingForwardPass.begin(commandBuffer, lightingHdrFramebuffer, swapchain.extent(),
+                shadowPass.descriptorSet(currentFrame), vertexBuffer.handle(), instanceBuffers[currentFrame].handle(), indexBuffer.handle());
+            for (std::uint32_t shader = 0; shader < MaterialProgramSlotCount; ++shader) {
+                if (!activeShaderSlots.test(shader)) continue;
+                const auto commandOffset = static_cast<VkDeviceSize>(shader) * gpuObjects.size() * sizeof(VkDrawIndexedIndirectCommand);
+                const auto countOffset = static_cast<VkDeviceSize>(shader) * sizeof(std::uint32_t);
+                lightingForwardPass.drawMaterial(commandBuffer, shadowPass.descriptorSet(currentFrame), shader, indirectDraws[currentFrame], commandOffset, countOffset);
+                lightingForwardPass.drawMaterial(commandBuffer, shadowPass.descriptorSet(currentFrame), shader, foliageIndirectDraws[currentFrame], commandOffset, countOffset);
+            }
+            if (!sceneGpu.grassInstances.empty()) {
+                const auto& lists = grassRenderLists[currentFrame]; Culling::IndexedIndirectDrawCount grassDraw;
+                grassDraw.create(lists.mainIndirect.handle(), lists.mainDrawCount.handle(), static_cast<uint32_t>(std::max<std::size_t>(1, sceneGpu.grassClusters.size())));
+                shadowPass.setGrassVisibleInstances(currentFrame, lists.drawInstances[0].handle());
+                lightingForwardPass.drawGrass(commandBuffer, shadowPass.grassDescriptorSet(currentFrame), grassDraw);
+            }
+            skyPass.record(commandBuffer, currentFrame);
+            if (particleSystem && cameraController.camera()) { const Particles::ParticleFrameData particleFrame{cameraController.camera()->projectionMatrix()*cameraController.camera()->viewMatrix(),cameraController.camera()->right(),0.0F,cameraController.camera()->up(),0.0F}; particleSystem->recordRender(commandBuffer,particleFrame,particlePipeline.handle(),particlePipeline.layout(),currentFrame,false); }
+            lightingForwardPass.drawOutline(commandBuffer, shadowPass.descriptorSet(currentFrame), indirectDraws[currentFrame]);
+            ForwardPass::end(commandBuffer);
             gpuTimestampProfiler.endZone(commandBuffer, currentFrame);
             }
 
@@ -997,14 +1008,6 @@
                 sceneForwardPass.drawOutline(commandBuffer, sceneDescriptorPass.descriptorSet(currentFrame),
                                         sceneIndirectDraws[currentFrame]);
                 ForwardPass::end(commandBuffer);
-            }
-
-            if (renderGameViewport && taaResolveActive) {
-                const DepthBuffer& gtaoDepth = msaa.enabled() ? hiZDepthBuffer : depthBuffer;
-                const Mat4 inverseProjection{glm::inverse(cameraController.camera()->projectionMatrix().native())};
-                gtaoPass.record(commandBuffer, gtaoDepth.imageView(), gtaoDepth.sampler(),
-                                velocityBuffer.imageView(), velocityBuffer.sampler(), inverseProjection,
-                                taaResolveActive);
             }
 
             if (renderGameViewport && hizEnabled) {
@@ -1182,6 +1185,10 @@
                 vkDestroyFramebuffer(device, hdrFramebuffer, nullptr);
                 hdrFramebuffer = VK_NULL_HANDLE;
             }
+            if (lightingHdrFramebuffer != VK_NULL_HANDLE) {
+                vkDestroyFramebuffer(device, lightingHdrFramebuffer, nullptr);
+                lightingHdrFramebuffer = VK_NULL_HANDLE;
+            }
             destroySceneViewportResources();
 
             msaa.destroy();
@@ -1230,6 +1237,7 @@
             // buffers owned by culling resources. They cannot outlive a
             // culling resize/rebuild.
             forwardPass.destroy();
+            lightingForwardPass.destroy();
             shadowPass.destroy();
             sceneDescriptorPass.destroy();
             destroyCullingResources();
@@ -1243,6 +1251,10 @@
             if (hdrFramebuffer != VK_NULL_HANDLE) {
                 vkDestroyFramebuffer(device, hdrFramebuffer, nullptr);
                 hdrFramebuffer = VK_NULL_HANDLE;
+            }
+            if (lightingHdrFramebuffer != VK_NULL_HANDLE) {
+                vkDestroyFramebuffer(device, lightingHdrFramebuffer, nullptr);
+                lightingHdrFramebuffer = VK_NULL_HANDLE;
             }
             destroySceneViewportResources();
             msaa.destroy();

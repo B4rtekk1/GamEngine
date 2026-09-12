@@ -11,6 +11,7 @@
 
         Swapchain swapchain;
         VkFramebuffer hdrFramebuffer = VK_NULL_HANDLE;
+        VkFramebuffer lightingHdrFramebuffer = VK_NULL_HANDLE;
         // The editor's Scene View uses this actual render output rather than a
         // UI-only placeholder. It has the same attachment formats as the game
         // path, so both views share the forward/sky/particle pipelines.
@@ -40,6 +41,7 @@
         DepthBuffer hiZDepthBuffer;
 
         ForwardPass& forwardPass;
+        ForwardPass lightingForwardPass;
         GraphicsPipeline& particlePipeline;
         std::unique_ptr<Particles::ParticleSystem> particleSystem;
         VkPipelineLayout particleComputePipelineLayout = VK_NULL_HANDLE;

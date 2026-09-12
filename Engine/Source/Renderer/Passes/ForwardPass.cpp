@@ -19,7 +19,7 @@ void ForwardPass::create(VkDevice device, const VkFormat colorFormat,
                          Assets::AssetManager& assets,
                          const VkImageLayout colorInitialLayout,
                          const bool colorInitialLayoutExternallySynchronized,
-                         const VkFormat velocityFormat) {
+                         const VkFormat velocityFormat, const bool preserveDepth, const bool depthOnly) {
     reportedMissingShaderGraphSlots_.clear();
     hasVelocityAttachment_ = velocityFormat != VK_FORMAT_UNDEFINED;
     GraphicsPipelineOptions options{};
@@ -32,6 +32,12 @@ void ForwardPass::create(VkDevice device, const VkFormat colorFormat,
     options.colorInitialLayout = colorInitialLayout;
     options.colorInitialLayoutExternallySynchronized = colorInitialLayoutExternallySynchronized;
     options.colorFinalLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    if (depthOnly) options.colorWriteMask = 0;
+    if (preserveDepth) {
+        options.depthLoadOp = VK_ATTACHMENT_LOAD_OP_LOAD;
+        options.depthWriteEnable = VK_FALSE;
+        options.depthCompareOp = VK_COMPARE_OP_EQUAL;
+    }
     options.shader = "shaders/forward_pbr.spv";
     options.assetManager = &assets;
     options.cullMode = VK_CULL_MODE_BACK_BIT;

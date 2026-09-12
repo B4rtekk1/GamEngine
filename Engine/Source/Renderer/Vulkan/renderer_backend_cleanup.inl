@@ -18,6 +18,7 @@
                 particleSystem.reset();
                 sceneViewportForwardPass.destroy();
                 forwardPass.destroy();
+                lightingForwardPass.destroy();
                 gtaoPass.destroy();
                 shadowPass.destroy();
                 sceneDescriptorPass.destroy();
