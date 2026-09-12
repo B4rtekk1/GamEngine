@@ -472,6 +472,9 @@ namespace Engine {
                 const auto descriptors = imageBasedLighting.descriptors();
                 shadowPass.updateImageBasedLightingDescriptors(descriptors);
                 sceneDescriptorPass.updateImageBasedLightingDescriptors(descriptors);
+                const auto environment = imageBasedLighting.environmentDescriptor();
+                skyPass.setEnvironment(environment);
+                sceneSkyPass.setEnvironment(environment);
                 environmentEquirectangularPath = path;
                 sceneViewportNeedsRender = true;
                 return true;

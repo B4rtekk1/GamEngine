@@ -20,6 +20,7 @@ public:
     void swap(ImageBasedLighting& other) noexcept;
 
     [[nodiscard]] std::array<VkDescriptorImageInfo, 3> descriptors() const noexcept;
+    [[nodiscard]] VkDescriptorImageInfo environmentDescriptor() const noexcept;
 
 private:
     Cubemap environment_;

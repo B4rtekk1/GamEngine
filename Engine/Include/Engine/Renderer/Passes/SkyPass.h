@@ -34,6 +34,7 @@ namespace Engine {
         void destroy() noexcept;
 
         void record(VkCommandBuffer commandBuffer, std::uint32_t frameIndex) const;
+        void setEnvironment(const VkDescriptorImageInfo& environment) const;
 
     private:
         VkDevice device_{VK_NULL_HANDLE};

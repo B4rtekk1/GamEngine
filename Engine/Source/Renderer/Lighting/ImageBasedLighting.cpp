@@ -238,4 +238,8 @@ std::array<VkDescriptorImageInfo, 3> ImageBasedLighting::descriptors() const noe
              {prefiltered_.sampler(), prefiltered_.imageView(), VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL},
              {brdfLut_.sampler(), brdfLut_.imageView(), VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL}}};
 }
+
+VkDescriptorImageInfo ImageBasedLighting::environmentDescriptor() const noexcept {
+    return {environment_.sampler(), environment_.imageView(), VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
+}
 } // namespace Engine

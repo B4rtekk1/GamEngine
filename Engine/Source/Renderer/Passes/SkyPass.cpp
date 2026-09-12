@@ -54,4 +54,8 @@ void SkyPass::record(const VkCommandBuffer commandBuffer,
     skybox_.draw(commandBuffer, frameIndex);
 }
 
+void SkyPass::setEnvironment(const VkDescriptorImageInfo& environment) const {
+    skybox_.setEnvironment(environment);
+}
+
 } // namespace Engine

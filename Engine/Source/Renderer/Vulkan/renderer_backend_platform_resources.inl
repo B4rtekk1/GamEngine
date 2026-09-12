@@ -571,6 +571,7 @@
                            sizeof(UniformBufferObject), assetManager,
                            vulkanDevice.allocator(),
                            antialiasingLevel == AntialiasingLevel::TAA ? 2U : 1U);
+            skyPass.setEnvironment(imageBasedLighting.environmentDescriptor());
         }
 
         void createSceneSkyPass() {
@@ -583,6 +584,7 @@
                                 HdrBuffer::Format, msaa.sampleCount(), buffers,
                                 sizeof(UniformBufferObject), assetManager,
                                 vulkanDevice.allocator());
+            sceneSkyPass.setEnvironment(imageBasedLighting.environmentDescriptor());
         }
 
         void createTonemapPass() const {

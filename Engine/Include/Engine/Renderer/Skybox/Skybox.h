@@ -1,6 +1,5 @@
 #pragma once
 
-#include "../Textures/Cubemap.h"
 #include "Skyboxpipeline.h"
 #include "Engine/Renderer/Vulkan/buffer.h"
 
@@ -31,12 +30,12 @@ namespace Engine {
                     std::uint32_t colorAttachmentCount = 1);
 
         void draw(VkCommandBuffer commandBuffer, uint32_t frameIndex) const;
+        void setEnvironment(const VkDescriptorImageInfo& environment) const;
 
         void destroy() noexcept;
 
     private:
         Buffer vertexBuffer_;
-        Cubemap cubemap_;
         SkyboxPipeline pipeline_;
         VkDevice device_ = VK_NULL_HANDLE;
         VkDescriptorPool descriptorPool_ = VK_NULL_HANDLE;
