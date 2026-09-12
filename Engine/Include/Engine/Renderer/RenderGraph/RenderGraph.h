@@ -92,6 +92,13 @@ namespace Engine::RenderGraph {
         Queue consumerQueue{Queue::Graphics};
     };
 
+    /** A submission-sized contiguous run of passes for one hardware queue. */
+    struct QueueBatch final {
+        Queue queue{Queue::Graphics};
+        std::vector<std::uint32_t> passes;
+        std::vector<std::uint32_t> waitBatches;
+    };
+
     class RenderGraph;
 
     class PassBuilder final {
@@ -135,6 +142,15 @@ namespace Engine::RenderGraph {
         [[nodiscard]] BufferHandle importBuffer(std::string name, VkBuffer buffer, const BufferDesc& desc);
         [[nodiscard]] BufferHandle createBuffer(std::string name, const BufferDesc& desc);
 
+        /**
+         * Marks a resource as externally observable. When pass culling is
+         * enabled, only producers that contribute to an exported resource and
+         * their dependencies remain in the compiled graph.
+         */
+        void exportTexture(TextureHandle texture);
+        void exportBuffer(BufferHandle buffer);
+        void enablePassCulling(bool enabled = true) noexcept;
+
         void addPass(std::string name, const std::function<void(PassBuilder&)>& setup,
                      ExecuteCallback execute);
         void addPass(std::string name, Queue queue, const std::function<void(PassBuilder&)>& setup,
@@ -159,6 +175,7 @@ namespace Engine::RenderGraph {
 
         [[nodiscard]] const std::vector<std::string>& executionOrder() const noexcept;
         [[nodiscard]] const std::vector<QueueDependency>& queueDependencies() const noexcept;
+        [[nodiscard]] const std::vector<QueueBatch>& queueBatches() const noexcept;
         [[nodiscard]] const TextureLifetime& lifetime(TextureHandle texture) const;
         [[nodiscard]] const BufferLifetime& lifetime(BufferHandle buffer) const;
         [[nodiscard]] VkImage image(TextureHandle texture) const;
@@ -217,6 +234,9 @@ namespace Engine::RenderGraph {
         std::vector<BarrierBatch> barriers_;
         std::vector<BarrierBatch> releaseBarriers_;
         std::vector<QueueDependency> queueDependencies_;
+        std::vector<QueueBatch> queueBatches_;
+        std::vector<TextureHandle> exportedTextures_;
+        std::vector<BufferHandle> exportedBuffers_;
         // Pools outlive a logical graph. The index arrays lease one pool item
         // per allocation slot of the currently compiled graph.
         std::vector<TransientAllocation> transientAllocations_;
@@ -229,6 +249,7 @@ namespace Engine::RenderGraph {
         VkDevice device_{VK_NULL_HANDLE};
         VmaAllocator allocator_{VK_NULL_HANDLE};
         std::uint32_t queueFamilies_[3]{VK_QUEUE_FAMILY_IGNORED, VK_QUEUE_FAMILY_IGNORED, VK_QUEUE_FAMILY_IGNORED};
+        bool passCullingEnabled_{};
         bool compiled_{};
     };
 } // namespace Engine::RenderGraph

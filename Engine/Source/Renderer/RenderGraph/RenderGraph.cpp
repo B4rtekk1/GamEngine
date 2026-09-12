@@ -143,6 +143,20 @@ namespace Engine::RenderGraph {
         return {static_cast<std::uint32_t>(buffers_.size() - 1)};
     }
 
+    void RenderGraph::exportTexture(const TextureHandle texture) {
+        requireValid(texture);
+        if (compiled_) throw std::logic_error("Reset RenderGraph before exporting resources");
+        if (std::ranges::find(exportedTextures_, texture) == exportedTextures_.end()) exportedTextures_.push_back(texture);
+    }
+
+    void RenderGraph::exportBuffer(const BufferHandle buffer) {
+        requireValid(buffer);
+        if (compiled_) throw std::logic_error("Reset RenderGraph before exporting resources");
+        if (std::ranges::find(exportedBuffers_, buffer) == exportedBuffers_.end()) exportedBuffers_.push_back(buffer);
+    }
+
+    void RenderGraph::enablePassCulling(const bool enabled) noexcept { passCullingEnabled_ = enabled; }
+
     void RenderGraph::initialize(const VkDevice device, const VmaAllocator allocator) {
         if (compiled_ || !transientImageSlots_.empty() || !transientBufferSlots_.empty()) throw std::logic_error(
             "Reset RenderGraph before changing its allocator");
@@ -276,6 +290,52 @@ namespace Engine::RenderGraph {
             if (order_.size() != passes_.size()) throw std::logic_error("RenderGraph contains a dependency cycle");
             topologyCaches_.push_back({signature, order_, true});
         }
+        // An output is a real graph root: everything that cannot reach an
+        // exported image/buffer can be discarded.  Keep the legacy behaviour
+        // when no outputs are declared, which makes incremental migration
+        // safe for existing callers with command-buffer side effects.
+        if (passCullingEnabled_ && (!exportedTextures_.empty() || !exportedBuffers_.empty())) {
+            std::vector<std::vector<std::uint32_t>> dependencies(count);
+            std::vector<std::int32_t> writer(resources_.size(), -1);
+            std::vector<std::vector<std::uint32_t>> readers(resources_.size());
+            std::vector<std::int32_t> bufferWriter(buffers_.size(), -1);
+            std::vector<std::vector<std::uint32_t>> bufferReaders(buffers_.size());
+            const auto addDependency = [&dependencies](const std::int32_t producer, const std::uint32_t consumer) {
+                if (producer >= 0 && static_cast<std::uint32_t>(producer) != consumer)
+                    dependencies[consumer].push_back(static_cast<std::uint32_t>(producer));
+            };
+            for (std::uint32_t pass = 0; pass < count; ++pass) {
+                for (const auto& access : passes_[pass].accesses) {
+                    const auto resource = access.texture.index;
+                    if (!access.write) { addDependency(writer[resource], pass); readers[resource].push_back(pass); }
+                    else {
+                        addDependency(writer[resource], pass);
+                        for (const auto reader : readers[resource]) addDependency(static_cast<std::int32_t>(reader), pass);
+                        readers[resource].clear(); writer[resource] = static_cast<std::int32_t>(pass);
+                    }
+                }
+                for (const auto& access : passes_[pass].bufferAccesses) {
+                    const auto resource = access.buffer.index;
+                    if (!access.write) { addDependency(bufferWriter[resource], pass); bufferReaders[resource].push_back(pass); }
+                    else {
+                        addDependency(bufferWriter[resource], pass);
+                        for (const auto reader : bufferReaders[resource]) addDependency(static_cast<std::int32_t>(reader), pass);
+                        bufferReaders[resource].clear(); bufferWriter[resource] = static_cast<std::int32_t>(pass);
+                    }
+                }
+            }
+            std::vector<bool> live(count);
+            std::vector<std::uint32_t> pending;
+            for (const auto texture : exportedTextures_) if (writer[texture.index] >= 0) pending.push_back(static_cast<std::uint32_t>(writer[texture.index]));
+            for (const auto buffer : exportedBuffers_) if (bufferWriter[buffer.index] >= 0) pending.push_back(static_cast<std::uint32_t>(bufferWriter[buffer.index]));
+            while (!pending.empty()) {
+                const auto pass = pending.back(); pending.pop_back();
+                if (live[pass]) continue;
+                live[pass] = true;
+                pending.insert(pending.end(), dependencies[pass].begin(), dependencies[pass].end());
+            }
+            std::erase_if(order_, [&live](const std::uint32_t pass) { return !live[pass]; });
+        }
         for (const auto pass: order_) orderNames_.push_back(passes_[pass].name);
 
         // Keep the cross-queue edges separately from the topological order.
@@ -283,7 +343,11 @@ namespace Engine::RenderGraph {
         // multiple resource hazards between the same two passes collapse here.
         queueDependencies_.clear();
         std::unordered_set<std::uint64_t> seenQueueEdges;
+        const auto isLive = [this](const std::uint32_t pass) {
+            return std::ranges::find(order_, pass) != order_.end();
+        };
         const auto addQueueEdge = [&](const std::uint32_t producer, const std::uint32_t consumer) {
+            if (!isLive(producer) || !isLive(consumer)) return;
             if (producer == consumer || passes_[producer].queue == passes_[consumer].queue) return;
             const auto key = (static_cast<std::uint64_t>(producer) << 32U) | consumer;
             if (seenQueueEdges.insert(key).second)
@@ -306,8 +370,30 @@ namespace Engine::RenderGraph {
             }
         }
 
+        // Submission planning belongs to the graph too. A contiguous queue
+        // run is one command-recording/submission batch; cross-queue hazards
+        // become waits on the producer batch rather than renderer-specific
+        // special cases such as the old Hi-Z split.
+        queueBatches_.clear();
+        std::vector<std::uint32_t> passToBatch(count, std::numeric_limits<std::uint32_t>::max());
+        for (const auto pass : order_) {
+            if (queueBatches_.empty() || queueBatches_.back().queue != passes_[pass].queue)
+                queueBatches_.push_back({.queue = passes_[pass].queue});
+            const auto batch = static_cast<std::uint32_t>(queueBatches_.size() - 1);
+            queueBatches_.back().passes.push_back(pass);
+            passToBatch[pass] = batch;
+        }
+        for (const auto& dependency : queueDependencies_) {
+            const auto producer = passToBatch[dependency.producerPass];
+            const auto consumer = passToBatch[dependency.consumerPass];
+            if (producer == consumer || producer == std::numeric_limits<std::uint32_t>::max() ||
+                consumer == std::numeric_limits<std::uint32_t>::max()) continue;
+            auto& waits = queueBatches_[consumer].waitBatches;
+            if (std::ranges::find(waits, producer) == waits.end()) waits.push_back(producer);
+        }
+
         for (auto &resource: resources_) resource.lifetime = {count, 0, 0};
-        for (std::uint32_t ordered = 0; ordered < count; ++ordered)
+        for (std::uint32_t ordered = 0; ordered < order_.size(); ++ordered)
             for (const auto &access: passes_[order_[ordered]].accesses) {
                 auto &lifetime = resources_[access.texture.index].lifetime;
                 lifetime.firstPass = std::min(lifetime.firstPass, ordered);
@@ -348,7 +434,7 @@ namespace Engine::RenderGraph {
         allocateTransients(slotsDesc);
 
         for (auto& resource: buffers_) resource.lifetime = {count, 0, 0};
-        for (std::uint32_t ordered = 0; ordered < count; ++ordered)
+        for (std::uint32_t ordered = 0; ordered < order_.size(); ++ordered)
             for (const auto& access: passes_[order_[ordered]].bufferAccesses) {
                 auto& lifetime = buffers_[access.buffer.index].lifetime;
                 lifetime.firstPass = std::min(lifetime.firstPass, ordered);
@@ -400,7 +486,7 @@ namespace Engine::RenderGraph {
         }
         barriers_.assign(count, {});
         releaseBarriers_.assign(count, {});
-        for (std::uint32_t ordered = 0; ordered < count; ++ordered)
+        for (std::uint32_t ordered = 0; ordered < order_.size(); ++ordered)
             for (const Access &access: passes_[order_[ordered]].accesses) {
                 auto &state = states[access.texture.index];
                 const auto next = usageInfo(access.usage);
@@ -460,7 +546,7 @@ namespace Engine::RenderGraph {
             }
         struct BufferState { VkPipelineStageFlags2 stage{}; VkAccessFlags2 access{}; bool write{}; Queue queue{Queue::Graphics}; std::int32_t pass{-1}; };
         std::vector<BufferState> bufferStates(buffers_.size());
-        for (std::uint32_t ordered = 0; ordered < count; ++ordered)
+        for (std::uint32_t ordered = 0; ordered < order_.size(); ++ordered)
             for (const auto& access: passes_[order_[ordered]].bufferAccesses) {
                 auto& state = bufferStates[access.buffer.index];
                 const auto next = bufferUsageInfo(access.usage);
@@ -671,6 +757,9 @@ namespace Engine::RenderGraph {
         barriers_.clear();
         releaseBarriers_.clear();
         queueDependencies_.clear();
+        queueBatches_.clear();
+        exportedTextures_.clear();
+        exportedBuffers_.clear();
         compiled_ = false;
     }
 
@@ -678,6 +767,7 @@ namespace Engine::RenderGraph {
 
     const std::vector<std::string> &RenderGraph::executionOrder() const noexcept { return orderNames_; }
     const std::vector<QueueDependency>& RenderGraph::queueDependencies() const noexcept { return queueDependencies_; }
+    const std::vector<QueueBatch>& RenderGraph::queueBatches() const noexcept { return queueBatches_; }
 
     const TextureLifetime &RenderGraph::lifetime(const TextureHandle texture) const {
         requireValid(texture);

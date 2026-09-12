@@ -962,11 +962,12 @@
             }
 
             if (renderGameViewport && hizEnabled) {
-                // This is the first production pass owned by RenderGraph. The
-                // imported depth state describes the preceding Forward pass;
-                // the graph therefore emits the exact late-depth -> compute
-                // sampled-read dependency before Hi-Z records its pyramid.
+                // Hi-Z is a complete graph resource: Forward produces the
+                // imported depth image and this pass writes the imported mip
+                // chain.  The graph owns the outer depth/read -> storage/write
+                // transition; HiZPass owns only per-mip dependencies.
                 frameGraph.reset();
+                frameGraph.enablePassCulling();
                 const VkExtent2D extent = swapchain.extent();
                 const RenderGraph::TextureDesc depthDesc{
                     .extent = {extent.width, extent.height, 1},
@@ -979,6 +980,17 @@
                      .access = VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT,
                      .layout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL,
                      .write = true});
+                const RenderGraph::TextureDesc hiZDesc{
+                    .extent = {hiZBuffer.width(), hiZBuffer.height(), 1},
+                    .format = VK_FORMAT_R32_SFLOAT,
+                    .usage = VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
+                    .aspect = VK_IMAGE_ASPECT_COLOR_BIT,
+                    .mipLevels = hiZBuffer.mipCount()};
+                const auto hiZ = frameGraph.importTexture(
+                    "Hi-Z pyramid", hiZBuffer.image(), hiZDesc,
+                    {.stage = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                     .access = VK_ACCESS_2_SHADER_SAMPLED_READ_BIT,
+                     .layout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL});
                 const bool canSubmitHiZAsync = vulkanDevice.hasAsyncComputeQueue() &&
                     vulkanDevice.computeQueueFamily() == vulkanDevice.graphicsQueueFamily();
                 frameGraph.setQueueFamily(RenderGraph::Queue::Graphics, vulkanDevice.graphicsQueueFamily());
@@ -986,9 +998,14 @@
                 frameGraph.addPass("Hi-Z", canSubmitHiZAsync ? RenderGraph::Queue::AsyncCompute : RenderGraph::Queue::Graphics,
                 [&](RenderGraph::PassBuilder& builder) {
                     builder.read(depth, RenderGraph::TextureUsage::SampledReadCompute);
+                    builder.write(hiZ, RenderGraph::TextureUsage::StorageWriteCompute);
                 }, [this](const VkCommandBuffer buffer) {
-                    hiZPass.record(buffer, hiZBuffer, true);
+                    hiZPass.record(buffer, hiZBuffer);
                 });
+                // This image is sampled by culling and VSM page marking on the
+                // next use of this frame slot, so it is the graph's external
+                // output even though Present is produced later in the frame.
+                frameGraph.exportTexture(hiZ);
                 // Depth is produced outside this graph by Forward. Until that
                 // producer is graph-owned too, async Hi-Z is restricted to a
                 // same-family compute queue; RenderGraph already handles

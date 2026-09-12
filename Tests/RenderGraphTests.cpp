@@ -102,4 +102,43 @@ TEST(RenderGraphTests, ReportsTimelineDependenciesAcrossQueues) {
     EXPECT_EQ(dependency.producerQueue, Queue::Graphics);
     EXPECT_EQ(dependency.consumerQueue, Queue::AsyncCompute);
 }
+
+TEST(RenderGraphTests, CullsPassesThatCannotReachAnExport) {
+    RenderGraph graph;
+    graph.enablePassCulling();
+    TextureHandle visible;
+    graph.addPass("Visible", [&](PassBuilder& builder) {
+        visible = builder.writeTexture("Visible", ColorTarget);
+    }, {});
+    graph.addPass("Unused", [&](PassBuilder& builder) {
+        [[maybe_unused]] const auto unused = builder.writeTexture("Unused", ColorTarget);
+    }, {});
+    graph.exportTexture(visible);
+    graph.compile();
+
+    EXPECT_EQ(graph.executionOrder(), (std::vector<std::string>{"Visible"}));
+}
+
+TEST(RenderGraphTests, BuildsQueueBatchesFromTheCompiledDag) {
+    RenderGraph graph;
+    TextureHandle depth;
+    TextureHandle hiZ;
+    graph.addPass("Forward", Queue::Graphics, [&](PassBuilder& builder) {
+        depth = builder.writeTexture("Depth", ColorTarget);
+    }, {});
+    graph.addPass("Hi-Z", Queue::AsyncCompute, [&](PassBuilder& builder) {
+        builder.read(depth, TextureUsage::SampledReadCompute);
+        hiZ = builder.writeTexture("Hi-Z", ColorTarget);
+    }, {});
+    graph.addPass("Tonemap", Queue::Graphics, [&](PassBuilder& builder) {
+        builder.read(hiZ);
+    }, {});
+    graph.compile();
+
+    ASSERT_EQ(graph.queueBatches().size(), 3U);
+    EXPECT_EQ(graph.queueBatches()[0].queue, Queue::Graphics);
+    EXPECT_EQ(graph.queueBatches()[1].queue, Queue::AsyncCompute);
+    EXPECT_EQ(graph.queueBatches()[1].waitBatches, (std::vector<std::uint32_t>{0U}));
+    EXPECT_EQ(graph.queueBatches()[2].waitBatches, (std::vector<std::uint32_t>{1U}));
+}
 } // namespace Engine::Renderer

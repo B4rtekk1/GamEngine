@@ -259,46 +259,9 @@ namespace Engine::Culling
 
     void HiZPass::record(
         VkCommandBuffer commandBuffer,
-        const HiZBuffer& hiZBuffer,
-        const bool hasPreviousContents
+        const HiZBuffer& hiZBuffer
     ) const
     {
-        VkImageMemoryBarrier2 prepareBarrier{
-            .sType =
-                VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2,
-            .srcStageMask =
-                VK_PIPELINE_STAGE_2_NONE,
-            .srcAccessMask = 0,
-            .dstStageMask =
-                VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-            .dstAccessMask =
-                VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT |
-                VK_ACCESS_2_SHADER_SAMPLED_READ_BIT,
-            .oldLayout = hasPreviousContents
-                ? VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL
-                : VK_IMAGE_LAYOUT_UNDEFINED,
-            .newLayout = VK_IMAGE_LAYOUT_GENERAL,
-            .image = hiZBuffer.image(),
-            .subresourceRange = {
-                .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
-                .baseMipLevel = 0,
-                .levelCount = hiZBuffer.mipCount(),
-                .baseArrayLayer = 0,
-                .layerCount = 1
-            }
-        };
-
-        VkDependencyInfo prepareDependency{
-            .sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO,
-            .imageMemoryBarrierCount = 1,
-            .pImageMemoryBarriers = &prepareBarrier
-        };
-
-        vkCmdPipelineBarrier2(
-            commandBuffer,
-            &prepareDependency
-        );
-
         vkCmdBindPipeline(
             commandBuffer,
             VK_PIPELINE_BIND_POINT_COMPUTE,

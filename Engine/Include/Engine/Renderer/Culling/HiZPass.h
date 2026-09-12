@@ -82,15 +82,15 @@ namespace Engine::Culling
          * @brief Records commands that build the hierarchical Z-buffer.
          * @param commandBuffer Command buffer receiving the compute commands.
          * @param hiZBuffer Destination Hi-Z buffer and its mip-level information.
-         * @param hasPreviousContents Whether the Hi-Z image already contains valid contents.
-         *
-         * If previous contents exist, the recorded commands can use them when
-         * selecting the appropriate image-layout transitions and synchronization.
+         * The caller must transition the complete destination image to
+         * GENERAL with compute-storage write access before recording. This
+         * makes the external depth/Hi-Z dependency visible to RenderGraph;
+         * this pass retains only the barriers required between individual
+         * mip levels and the final sampled-read transition.
          */
         void record(
             VkCommandBuffer commandBuffer,
-            const HiZBuffer& hiZBuffer,
-            bool hasPreviousContents
+            const HiZBuffer& hiZBuffer
         ) const;
 
     private:
