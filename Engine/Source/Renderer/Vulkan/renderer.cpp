@@ -463,6 +463,19 @@ namespace Engine {
             }
         }
 
+        // Descriptor pools and scene-wide buffers are shared by every frame
+        // slot.  Waiting only for currentFrame is therefore insufficient
+        // before a Play/Stop snapshot or another global scene rebuild.
+        void waitForAllFrames() const {
+            if (device == VK_NULL_HANDLE || inFlightFences.empty()) {
+                return;
+            }
+            if (vkWaitForFences(device, static_cast<std::uint32_t>(inFlightFences.size()),
+                                inFlightFences.data(), VK_TRUE, UINT64_MAX) != VK_SUCCESS) {
+                throw std::runtime_error("Could not synchronize all frames");
+            }
+        }
+
         [[nodiscard]] bool setEnvironmentEquirectangular(const std::filesystem::path& path) {
             if (!sceneResourcesInitialized || device == VK_NULL_HANDLE || path.empty()) return false;
             try {
@@ -578,13 +591,12 @@ namespace Engine {
                 return;
             }
             // A scene snapshot replaces descriptor sets and buffers consumed
-            // by graphics, transfer and dedicated compute submissions. Frame
-            // fences cover presentation, but do not cover every one-shot or
-            // async submission. This infrequent editor operation must retire
-            // the entire device before releasing those shared resources.
-            if (vkDeviceWaitIdle(device) != VK_SUCCESS) {
-                throw std::runtime_error("Could not synchronize device for scene reload");
-            }
+            // by all graphics frame slots. Retire those submissions before
+            // releasing the shared resources, without stalling unrelated GPU
+            // work with vkDeviceWaitIdle().
+            // Retire the graphics submissions associated with every frame
+            // slot before any descriptor pool or shared buffer is destroyed.
+            waitForAllFrames();
 
             destroyCullingResources();
             tonemapPass.destroy();
@@ -716,12 +728,7 @@ namespace Engine {
                 return;
             }
             sceneViewportNeedsRender = true;
-            if (!inFlightFences.empty() && vkWaitForFences(device,
-                                                           static_cast<uint32_t>(inFlightFences.size()),
-                                                           inFlightFences.data(), VK_TRUE,
-                                                           UINT64_MAX) != VK_SUCCESS) {
-                throw std::runtime_error("Could not synchronize frames for scene update");
-            }
+            waitForAllFrames();
             // Buffer destruction retires its own upload fence.  In-flight
             // rendering is covered by the per-frame fences above; a queue
             // wide idle would turn every hierarchy edit into a GPU hitch.
