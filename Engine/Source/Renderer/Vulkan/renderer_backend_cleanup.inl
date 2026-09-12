@@ -20,6 +20,11 @@
                 forwardPass.destroy();
                 shadowPass.destroy();
                 sceneDescriptorPass.destroy();
+                // Cubemap owns samplers, views, images and memory; the BRDF
+                // LUT is VMA-backed.  Release all IBL resources while both
+                // the logical device and allocator still exist.  Otherwise
+                // the member Cubemap destructors run after vkDestroyDevice().
+                imageBasedLighting.destroy();
                 physicalShadowPagePool.destroy();
                 destroyCullingResources();
                 indexBuffer.destroy();
