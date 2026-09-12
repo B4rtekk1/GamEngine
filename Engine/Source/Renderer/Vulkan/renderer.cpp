@@ -476,6 +476,18 @@ namespace Engine {
             }
         }
 
+        // Frame fences only retire graphics frame submissions.  Global scene
+        // replacement also releases resources referenced by one-shot uploads
+        // and work submitted to the dedicated compute and transfer queues.
+        void waitForGlobalResourceRebuild() const {
+            if (device == VK_NULL_HANDLE) {
+                return;
+            }
+            if (vkDeviceWaitIdle(device) != VK_SUCCESS) {
+                throw std::runtime_error("Could not synchronize device for scene rebuild");
+            }
+        }
+
         [[nodiscard]] bool setEnvironmentEquirectangular(const std::filesystem::path& path) {
             if (!sceneResourcesInitialized || device == VK_NULL_HANDLE || path.empty()) return false;
             try {
@@ -591,12 +603,11 @@ namespace Engine {
                 return;
             }
             // A scene snapshot replaces descriptor sets and buffers consumed
-            // by all graphics frame slots. Retire those submissions before
-            // releasing the shared resources, without stalling unrelated GPU
-            // work with vkDeviceWaitIdle().
-            // Retire the graphics submissions associated with every frame
-            // slot before any descriptor pool or shared buffer is destroyed.
-            waitForAllFrames();
+            // by graphics, transfer and dedicated compute submissions. Frame
+            // fences cover presentation, but not every one-shot or async
+            // submission, so retire the entire device before releasing these
+            // shared resources.
+            waitForGlobalResourceRebuild();
 
             destroyCullingResources();
             tonemapPass.destroy();
