@@ -1,5 +1,10 @@
-static const float MIN_SHADOW_BIAS = 0.0002;
-static const float SLOPE_SHADOW_BIAS = 0.003;
+// This is only a numerical floor.  The actual receiver bias is calculated
+// from the shadow texel footprint below; a fixed 0.0002 depth offset was large
+// enough to hide the slope term on nearly every receiver.
+static const float MIN_SHADOW_BIAS = 1.0e-5;
+static const float LEGACY_MIN_SHADOW_BIAS = 0.0002;
+static const float LEGACY_SLOPE_SHADOW_BIAS = 0.003;
+static const float SHADOW_TEXEL_BIAS_SCALE = 2.0;
 static const uint SHADOW_CLIP_LEVELS = 7;
 static const uint VIRTUAL_PAGES_PER_AXIS = 32;
 static const uint PHYSICAL_PAGES_PER_AXIS = 16;
@@ -153,6 +158,31 @@ float shadowWorldTexelSize(float4x4 lightSpace)
     return 2.0 / (float(VIRTUAL_RESOLUTION) * lightSpaceScale);
 }
 
+float shadowReceiverDepthBias(float currentDepth, float2 uv, float3 normal,
+                              float3 lightDirection, float4x4 lightSpace)
+{
+    // A receiver plane may cross several shadow texels per screen pixel, or
+    // only a fraction of one.  Convert the screen-space depth derivatives to
+    // depth per virtual-shadow texel, then cover the 2-texel comparison
+    // footprint.  This prevents quantized shadow depths from producing acne
+    // bands on large, nearly planar receivers.
+    const float depthSlope = max(abs(ddx(currentDepth)), abs(ddy(currentDepth)));
+    const float uvFootprint = max(length(ddx(uv)), length(ddy(uv)));
+    const float texelsPerPixel = max(uvFootprint * float(VIRTUAL_RESOLUTION), 1.0);
+    const float receiverPlaneBias =
+        SHADOW_TEXEL_BIAS_SCALE * depthSlope / texelsPerPixel;
+
+    // Normal offset is expressed in world units, so convert one world shadow
+    // texel to the normalized depth range before combining it with the plane
+    // term.  It is a conservative floor for surfaces with a tiny derivative.
+    const float NoL = saturate(dot(normalize(normal), normalize(lightDirection)));
+    const float lightDepthScale = max(length(lightSpace[2].xyz), 1.0e-6);
+    const float normalDepthBias = shadowWorldTexelSize(lightSpace) * lightDepthScale *
+        lerp(0.5, 2.0, 1.0 - NoL);
+
+    return max(MIN_SHADOW_BIAS, max(receiverPlaneBias, normalDepthBias));
+}
+
 float sampleVirtualShadowLevel(Sampler2DShadow shadowMap, Sampler2D shadowDepthMap,
                                float3 worldPosition,
                                float3 normal, float3 lightDirection,
@@ -182,8 +212,8 @@ float sampleVirtualShadowLevel(Sampler2DShadow shadowMap, Sampler2D shadowDepthM
     const float2 virtualPixel = uv * float(VIRTUAL_RESOLUTION);
     virtualPage = uint2(virtualPixel) / PAGE_RESOLUTION;
 
-    float depthSlope = max(abs(ddx(currentDepth)), abs(ddy(currentDepth)));
-    float bias = max(MIN_SHADOW_BIAS, SLOPE_SHADOW_BIAS * depthSlope * 0.25);
+    const float bias = shadowReceiverDepthBias(currentDepth, uv, normal,
+                                                lightDirection, lightSpace);
     // Keep a single comparison exclusively for the deliberately lowest
     // settings.  A single coarse-clipmap texel spans centimetres in world
     // space, so using it at High creates visible stair-steps after a page
@@ -429,7 +459,8 @@ float samplePcfShadow(Sampler2DShadow shadowMap, float4 lightSpacePosition)
     float currentDepth = projected.z;
     if (any(uv <= 0.0) || any(uv >= 1.0) || currentDepth <= 0.0 || currentDepth >= 1.0)
         return 0.0;
-    float bias = max(MIN_SHADOW_BIAS,
-                     SLOPE_SHADOW_BIAS * max(abs(ddx(currentDepth)), abs(ddy(currentDepth))));
+    float bias = max(LEGACY_MIN_SHADOW_BIAS,
+                     LEGACY_SLOPE_SHADOW_BIAS *
+                         max(abs(ddx(currentDepth)), abs(ddy(currentDepth))));
     return 1.0 - shadowMap.SampleCmpLevelZero(uv, currentDepth - bias);
 }

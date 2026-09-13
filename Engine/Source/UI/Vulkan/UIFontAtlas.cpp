@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <cstddef>
 #include <cstring>
 #include <fstream>
 #include <limits>
@@ -98,8 +99,9 @@ namespace Engine::UI {
                                 return static_cast<std::uint16_t>(
                                     (cp + delta) & 0xffffU);
                             }
-                            const auto at = segments_[i].rangeAddress + segments_[i].rangeOffset + (2U * (
-                                                cp - segments_[i].start));
+                            const auto at = segments_[i].rangeAddress + segments_[i].rangeOffset + (static_cast<
+                                                std::size_t>(2U * (
+                                                                 cp - segments_[i].start)));
                             if (at + 2 > data_.size()) {
                                 return 0;
                             }
@@ -150,7 +152,7 @@ namespace Engine::UI {
                 while (flags.size() < count) {
                     const auto f = data_.at(pos++);
                     flags.push_back(f);
-                    if (f & 8) {
+                    if ((f & 8) != 0) {
                         const auto n = data_.at(pos++);
                         for (int i = 0; i < n; ++i) {
                             flags.push_back(f);
@@ -167,7 +169,7 @@ namespace Engine::UI {
                         contour.push_back({
                             static_cast<double>(xs[i]), static_cast<double>(ys[i]), (flags[i] & 1) != 0,
                         });
-}
+                    }
                     out.contours.push_back(std::move(contour));
                     first = last + 1;
                 }
@@ -183,18 +185,24 @@ namespace Engine::UI {
             };
 
             static std::uint32_t makeTag(const char *s) {
-                return (std::uint32_t(std::uint8_t(s[0])) << 24) | (std::uint32_t(std::uint8_t(s[1])) << 16) | (
-                           std::uint32_t(std::uint8_t(s[2])) << 8) | std::uint8_t(s[3]);
+                return (static_cast<std::uint32_t>(static_cast<std::uint8_t>(s[0])) << 24) | (
+                           static_cast<std::uint32_t>(static_cast<std::uint8_t>(s[1])) << 16) | (
+                           static_cast<std::uint32_t>(static_cast<std::uint8_t>(s[2])) << 8) | static_cast<std::uint8_t>
+                       (s[3]);
             }
 
             std::uint32_t tag(std::size_t p) const {
-                return (std::uint32_t(data_[p]) << 24) | (std::uint32_t(data_[p + 1]) << 16) | (
-                           std::uint32_t(data_[p + 2]) << 8) | data_[p + 3];
+                return (static_cast<std::uint32_t>(data_[p]) << 24) | (static_cast<std::uint32_t>(data_[p + 1]) << 16) |
+                       (
+                           static_cast<std::uint32_t>(data_[p + 2]) << 8) | data_[p + 3];
             }
 
-            std::uint16_t u16(std::size_t p) const { return std::uint16_t(data_.at(p) << 8 | data_.at(p + 1)); }
+            std::uint16_t u16(std::size_t p) const {
+                return static_cast<std::uint16_t>(data_.at(p) << 8 | data_.at(p + 1));
+            }
+
             std::int16_t s16(std::size_t p) const { return static_cast<std::int16_t>(u16(p)); }
-            std::uint32_t u32(std::size_t p) const { return (std::uint32_t(u16(p)) << 16) | u16(p + 2); }
+            std::uint32_t u32(std::size_t p) const { return (static_cast<std::uint32_t>(u16(p)) << 16) | u16(p + 2); }
 
             Table table(const char *name) const {
                 const auto i = tables_.find(makeTag(name));
@@ -202,7 +210,9 @@ namespace Engine::UI {
             }
 
             std::size_t glyphOffset(std::uint16_t id) const {
-                return indexFormat_ == 0 ? 2u * u16(loca_.offset + 2u * id) : u32(loca_.offset + 4u * id);
+                return indexFormat_ == 0
+                           ? 2U * u16(loca_.offset + (static_cast<std::size_t>(2U * id)))
+                           : u32(loca_.offset + (static_cast<std::size_t>(4U * id)));
             }
 
             void decodeCoordinates(const std::vector<std::uint8_t> &flags, std::size_t &pos,
@@ -210,16 +220,18 @@ namespace Engine::UI {
                 std::int32_t value = 0;
                 for (std::size_t i = 0; i < flags.size(); ++i) {
                     const auto f = flags[i];
-                    const bool shortVec = x ? (f & 2) : (f & 4);
-                    const bool same = x ? (f & 16) : (f & 32);
+                    const bool shortVec = (x ? (f & 2) : (f & 4)) != 0;
+                    const bool same = (x ? (f & 16) : (f & 32)) != 0;
                     std::int32_t delta = 0;
-                    if (shortVec) { delta = data_.at(pos++);
+                    if (shortVec) {
+                        delta = data_.at(pos++);
                     } else if (!same) {
                         delta = s16(pos);
                         pos += 2;
                     }
-                    if (shortVec && !same) { delta = -delta;
-}
+                    if (shortVec && !same) {
+                        delta = -delta;
+                    }
                     value += delta;
                     values[i] = static_cast<std::int16_t>(value);
                 }
@@ -229,7 +241,7 @@ namespace Engine::UI {
                 const auto n = u16(cmap.offset + 2);
                 std::size_t chosen = 0;
                 for (std::uint16_t i = 0; i < n; ++i) {
-                    const auto p = cmap.offset + 4u + 8u * i;
+                    const auto p = cmap.offset + 4U + (static_cast<std::size_t>(8U * i));
                     const auto platform = u16(p);
                     const auto encoding = u16(p + 2);
                     const auto off = u32(p + 4);
@@ -247,23 +259,26 @@ namespace Engine::UI {
                 cmapFormat_ = 4;
                 const auto segCount = u16(chosen + 6) / 2;
                 const auto endBase = chosen + 14;
-                const auto startBase = endBase + 2u * segCount + 2;
-                const auto deltaBase = startBase + 2u * segCount;
-                const auto rangeBase = deltaBase + 2u * segCount;
+                const auto startBase = endBase + (static_cast<std::size_t>(2U * segCount)) + 2;
+                const auto deltaBase = startBase + (static_cast<std::size_t>(2U * segCount));
+                const auto rangeBase = deltaBase + (static_cast<std::size_t>(2U * segCount));
                 segments_.resize(segCount);
-                for (std::size_t i = 0; i < segCount; ++i)
+                for (std::size_t i = 0; i < segCount; ++i) {
                     segments_[i] = {
-                        u16(startBase + 2u * i), u16(endBase + 2u * i),
-                        s16(deltaBase + 2u * i), u16(rangeBase + 2u * i),
-                        rangeBase + 2u * i
+                        u16(startBase + (2U * i)), u16(endBase + (2U * i)),
+                        s16(deltaBase + (2U * i)), u16(rangeBase + (2U * i)),
+                        rangeBase + (2U * i),
                     };
+                }
                 return true;
             }
 
             std::vector<std::uint8_t> data_;
             std::unordered_map<std::uint32_t, Table> tables_;
             std::vector<Segment> segments_;
-            Table loca_{}, glyf_{}, hmtx_{};
+            Table loca_{};
+            Table glyf_{};
+            Table hmtx_{};
             std::uint16_t units_{}, glyphCount_{}, metricCount_{};
             std::int16_t ascender_{}, descender_{}, lineGap_{}, indexFormat_{};
             int cmapFormat_{};
@@ -271,9 +286,11 @@ namespace Engine::UI {
 
         std::vector<Point> flatten(const std::vector<Point> &in) {
             std::vector<Point> result;
-            if (in.empty()) return result;
+            if (in.empty()) {
+                return result;
+            }
             const auto midpoint = [](const Point &a, const Point &b) { // NOLINT(readability-identifier-length)
-                return Point{(a.x + b.x) * .5, (a.y + b.y) * .5, true};
+                return Point{.x = (a.x + b.x) * .5, .y = (a.y + b.y) * .5, .onCurve = true};
             };
             const std::size_t n = in.size();
             Point current = in[0].onCurve ? in[0] : (in[n - 1].onCurve ? in[n - 1] : midpoint(in[n - 1], in[0]));
@@ -289,10 +306,11 @@ namespace Engine::UI {
                     const Point &next = in[(i + 1) % n];
                     const Point end = next.onCurve ? next : midpoint(point, next);
                     for (int step = 1; step <= 8; ++step) {
-                        const double t = step / 8.0, u = 1.0 - t;
+                        const double t = step / 8.0;
+                        const double u = 1.0 - t;
                         result.push_back({
                             u * u * current.x + 2 * u * t * point.x + t * t * end.x,
-                            u * u * current.y + 2 * u * t * point.y + t * t * end.y, true
+                            u * u * current.y + 2 * u * t * point.y + t * t * end.y, true,
                         });
                     }
                     current = end;
@@ -318,12 +336,14 @@ namespace Engine::UI {
 
     std::string UIFontAtlas::build(const std::string &fontPath, std::uint32_t pixelSize, std::uint32_t firstCodepoint,
                                    std::uint32_t lastCodepoint) {
-        if (fontPath.empty() || pixelSize == 0 || firstCodepoint > lastCodepoint) {return "Invalid font atlas parameters";
-}
+        if (fontPath.empty() || pixelSize == 0 || firstCodepoint > lastCodepoint) {
+            return "Invalid font atlas parameters";
+        }
         TrueType font;
         std::string error;
-        if (!font.load(fontPath, error)) {return error;
-}
+        if (!font.load(fontPath, error)) {
+            return error;
+        }
         constexpr std::uint32_t padding = 2;
         constexpr std::uint32_t atlasWidth = 1024;
         constexpr std::uint32_t samples = 4;
@@ -341,8 +361,9 @@ namespace Engine::UI {
         for (std::uint32_t cp = firstCodepoint; cp <= lastCodepoint; ++cp) {
             const auto id = font.glyph(cp);
             Outline o;
-            if (!font.outline(id, o)) {continue;
-}
+            if (!font.outline(id, o)) {
+                continue;
+            }
             double minX = 0;
             double minY = 0;
             double maxX = 0;
@@ -356,7 +377,7 @@ namespace Engine::UI {
                     maxY = any ? std::max(maxY, p.y) : p.y;
                     any = true;
                 }
-}
+            }
             const auto w = static_cast<std::uint32_t>(std::ceil((maxX - minX) * scale));
             const auto h = static_cast<std::uint32_t>(std::ceil((maxY - minY) * scale));
             if (x + w + padding > atlasWidth) {

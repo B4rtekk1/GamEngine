@@ -22,13 +22,13 @@
 
 namespace Engine {
 namespace {
-// Receiver normal bias handles most self-shadowing. Keep raster bias small,
-// then scale it with the clipmap's texel footprint instead of applying an L0
-// value to the far pages.
+// Receiver-side bias tracks the virtual-shadow texel footprint.  Raster bias
+// only protects caster rasterization, so keep it deliberately small; a large
+// per-level raster bias causes detached shadows before it fixes receiver acne.
 constexpr std::array<float, ShadowMap::ClipLevelCount> DepthBiasConstant{
-    0.004F, 0.006F, 0.009F, 0.014F, 0.021F, 0.032F, 0.048F};
+    0.001F, 0.001F, 0.001F, 0.001F, 0.001F, 0.001F, 0.001F};
 constexpr std::array<float, ShadowMap::ClipLevelCount> DepthBiasSlope{
-    0.010F, 0.014F, 0.020F, 0.030F, 0.045F, 0.065F, 0.090F};
+    0.003F, 0.003F, 0.003F, 0.003F, 0.003F, 0.003F, 0.003F};
 
 bool sameMatrix(const Mat4& left, const Mat4& right) {
     return std::memcmp(&left.native(), &right.native(), sizeof(glm::mat4)) == 0;
