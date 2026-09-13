@@ -652,7 +652,6 @@ namespace Engine {
             geometryHeapAllocations.clear();
             geometryHeapVertexHighWater = 0;
             geometryHeapIndexHighWater = 0;
-            opaqueSceneColor.destroy();
             sceneGpu.database.clear();
             for (Buffer &buffer: instanceBuffers) {
                 buffer.destroy();

@@ -118,7 +118,7 @@ void ShadowPass::create(VkPhysicalDevice physicalDevice, VkDevice device,
         bindings[1] = {1, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1,
                        VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, nullptr};
         bindings[2] = {2, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1,
-                       VK_SHADER_STAGE_FRAGMENT_BIT, nullptr};
+                       VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, nullptr};
         bindings[3] = {GrassClusterBinding, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1,
                        VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, nullptr};
         bindings[4] = {4, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1,

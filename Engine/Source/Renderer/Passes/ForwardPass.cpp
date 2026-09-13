@@ -87,6 +87,8 @@ void ForwardPass::create(VkDevice device, const VkFormat colorFormat,
     shaderGraphPipelines_.initialize(device, shaderGraphPipelineOptions_);
 
     GraphicsPipelineOptions foliageOptions = options;
+    foliageOptions.shader = hasVelocityAttachment_
+        ? "shaders/forward_pbr.spv" : "shaders/forward_pbr_no_velocity.spv";
     foliageOptions.existingRenderPass = materialPipelines_[0].renderPass();
     foliageOptions.cullMode = VK_CULL_MODE_NONE;
     // Vegetation cards use alpha cutout.  They must populate depth before the

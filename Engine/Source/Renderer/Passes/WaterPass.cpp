@@ -12,6 +12,9 @@ void WaterPass::create(const VkDevice device, const VkFormat colorFormat, const 
                        const VkResolveModeFlagBits depthResolveMode, const VkDescriptorSetLayout sceneLayout,
                        Assets::AssetManager& assets, const bool velocity,
                        const VkDescriptorImageInfo& opaqueColor, const VkDescriptorImageInfo& opaqueDepth) {
+    if (opaqueColor.imageView == VK_NULL_HANDLE || opaqueDepth.imageView == VK_NULL_HANDLE) {
+        throw std::invalid_argument("WaterPass requires valid opaque scene color/depth views");
+    }
     device_ = device;
     hasVelocity_ = velocity;
     GraphicsPipelineOptions options{};

@@ -497,6 +497,25 @@
                 dependency.pImageMemoryBarriers = &initializeColor;
                 vkCmdPipelineBarrier2(commandBuffer, &dependency);
             }
+            // Water's immutable opaque-color descriptor is created along with
+            // the render target, before it has received its first copy. Keep
+            // the descriptor's declared layout valid even on frames that do
+            // not render water; the later copy overwrites its contents before
+            // the image is sampled.
+            if (!opaqueSceneColorInitialized) {
+                VkImageMemoryBarrier2 initializeOpaqueColor{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2};
+                initializeOpaqueColor.dstStageMask = VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT;
+                initializeOpaqueColor.dstAccessMask = VK_ACCESS_2_SHADER_SAMPLED_READ_BIT;
+                initializeOpaqueColor.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+                initializeOpaqueColor.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+                initializeOpaqueColor.image = opaqueSceneColor.image();
+                initializeOpaqueColor.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+                VkDependencyInfo dependency{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
+                dependency.imageMemoryBarrierCount = 1;
+                dependency.pImageMemoryBarriers = &initializeOpaqueColor;
+                vkCmdPipelineBarrier2(commandBuffer, &dependency);
+                opaqueSceneColorInitialized = true;
+            }
             if (!renderSceneViewport && !sceneViewportImageInitialized) {
                 sceneForwardPass.begin(
                     commandBuffer, sceneViewportFramebuffer, sceneViewportTarget.extent(),
@@ -948,8 +967,12 @@
                     particleSystem->recordRender(commandBuffer, particleFrame, particlePipeline.handle(),
                                                  particlePipeline.layout(), currentFrame, false);
                 }
-                lightingForwardPass.drawOutline(commandBuffer, shadowPass.descriptorSet(currentFrame), indirectDraws[currentFrame]);
             }
+            // This pipeline was created against LightingForwardPass's render
+            // pass. It must be recorded while that pass is active, not in
+            // WaterPass, whose external dependency also reads the color
+            // attachment and is therefore render-pass incompatible.
+            lightingForwardPass.drawOutline(commandBuffer, shadowPass.descriptorSet(currentFrame), indirectDraws[currentFrame]);
             ForwardPass::end(commandBuffer);
             gpuTimestampProfiler.endZone(commandBuffer, currentFrame);
             if (hasWater) {
@@ -1004,10 +1027,9 @@
                     sizeof(std::uint32_t);
                 waterPass.draw(commandBuffer, shadowPass.descriptorSet(currentFrame), indirectDraws[currentFrame],
                                commandOffset, countOffset);
-                // The particle and outline pipelines are render-pass
-                // compatible with WaterPass (same attachments and samples),
-                // so draw their transparent/overlay work after water while
-                // its load-preserving pass is active.
+                // Particles use a compatible pipeline and can be composited
+                // after water. The outline pipeline belongs to the lighting
+                // render pass and was recorded before ending that pass.
                 if (particleSystem && cameraController.camera()) {
                     const Particles::ParticleFrameData particleFrame{
                         cameraController.camera()->projectionMatrix() * cameraController.camera()->viewMatrix(),
@@ -1015,7 +1037,6 @@
                     particleSystem->recordRender(commandBuffer, particleFrame, particlePipeline.handle(),
                                                  particlePipeline.layout(), currentFrame, false);
                 }
-                lightingForwardPass.drawOutline(commandBuffer, shadowPass.descriptorSet(currentFrame), indirectDraws[currentFrame]);
                 WaterPass::end(commandBuffer);
             }
             }
