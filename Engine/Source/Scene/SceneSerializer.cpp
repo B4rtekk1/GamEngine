@@ -1057,8 +1057,8 @@ namespace Engine {
                 writeFloat(serialized, water.foamIntensity); serialized << ' '; writeFloat(serialized, water.foamThreshold); serialized << ' ';
                 writeFloat(serialized, water.maxDepth); serialized << ' ' << water.normalMap << ' ' << water.foamTexture << ' ' << water.flowMap << ' '
                            << static_cast<int>(water.enableSSR) << ' ' << static_cast<int>(water.enableCaustics) << ' ' << static_cast<int>(water.enableUnderwater) << ' '
-                           << water.waveCount << ' ' << water.lakeBoundary.size() << ' ' << water.riverSpline.size();
-                for (std::uint32_t index = 0; index < water.waveCount; ++index) {
+                           << std::min(water.waveCount, static_cast<std::uint32_t>(water.waves.size())) << ' ' << water.lakeBoundary.size() << ' ' << water.riverSpline.size();
+                for (std::uint32_t index = 0; index < std::min(water.waveCount, static_cast<std::uint32_t>(water.waves.size())); ++index) {
                     const auto& wave = water.waves[index];
                     serialized << ' '; writeFloat(serialized, wave.direction.x()); serialized << ' '; writeFloat(serialized, wave.direction.y());
                     serialized << ' '; writeFloat(serialized, wave.amplitude); serialized << ' '; writeFloat(serialized, wave.wavelength);

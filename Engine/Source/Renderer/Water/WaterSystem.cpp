@@ -12,13 +12,40 @@
 namespace Engine {
 namespace {
 constexpr std::uint32_t ClipmapResolution = 32;
-constexpr float ClipmapExtents[] = {50.0F, 150.0F, 500.0F, 2000.0F, 8000.0F};
+// Every level is exactly twice the previous one.  With a fixed 32x32 grid,
+// the inner boundary of level N therefore lies on vertices of level N-1.
+constexpr float ClipmapExtents[] = {
+    50.0F, 100.0F, 200.0F, 400.0F, 800.0F,
+    1600.0F, 3200.0F, 6400.0F, 12800.0F,
+};
 
 void addQuad(Mesh& mesh, const Vec3& a, const Vec3& b, const Vec3& c, const Vec3& d) {
     const auto first = static_cast<std::uint32_t>(mesh.vertices.size());
     WaterSystem::addWaterVertex(mesh, a, {0.0F, 0.0F}); WaterSystem::addWaterVertex(mesh, b, {1.0F, 0.0F});
     WaterSystem::addWaterVertex(mesh, c, {1.0F, 1.0F}); WaterSystem::addWaterVertex(mesh, d, {0.0F, 1.0F});
     mesh.indices.insert(mesh.indices.end(), {first, first + 1U, first + 2U, first, first + 2U, first + 3U});
+}
+
+enum class StitchEdge { Bottom, Right, Top, Left };
+
+void addStitchedQuad(Mesh& mesh, const Vec3& a, const Vec3& b, const Vec3& c,
+                     const Vec3& d, const StitchEdge edge) {
+    const auto first = static_cast<std::uint32_t>(mesh.vertices.size());
+    const Vec3 midpoint = edge == StitchEdge::Bottom ? (a + b) * 0.5F :
+                          edge == StitchEdge::Right  ? (b + c) * 0.5F :
+                          edge == StitchEdge::Top    ? (c + d) * 0.5F : (d + a) * 0.5F;
+    WaterSystem::addWaterVertex(mesh, a, {0.0F, 0.0F});
+    WaterSystem::addWaterVertex(mesh, b, {1.0F, 0.0F});
+    WaterSystem::addWaterVertex(mesh, c, {1.0F, 1.0F});
+    WaterSystem::addWaterVertex(mesh, d, {0.0F, 1.0F});
+    WaterSystem::addWaterVertex(mesh, midpoint, {0.5F, 0.5F});
+    const std::uint32_t A = first, B = first + 1U, C = first + 2U, D = first + 3U, M = first + 4U;
+    switch (edge) {
+    case StitchEdge::Bottom: mesh.indices.insert(mesh.indices.end(), {A, M, D, M, C, D, M, B, C}); break;
+    case StitchEdge::Right:  mesh.indices.insert(mesh.indices.end(), {B, M, A, M, D, A, M, C, D}); break;
+    case StitchEdge::Top:    mesh.indices.insert(mesh.indices.end(), {D, M, A, M, B, A, M, C, B}); break;
+    case StitchEdge::Left:   mesh.indices.insert(mesh.indices.end(), {A, M, B, M, C, B, M, D, C}); break;
+    }
 }
 } // namespace
 
@@ -36,9 +63,27 @@ Mesh WaterSystem::buildOceanClipmap() {
         for (std::uint32_t z = 0; z < ClipmapResolution; ++z) for (std::uint32_t x = 0; x < ClipmapResolution; ++x) {
             const float minX = -outer + cell * static_cast<float>(x); const float minZ = -outer + cell * static_cast<float>(z);
             const float maxX = minX + cell; const float maxZ = minZ + cell;
-            const float centerX = (minX + maxX) * 0.5F; const float centerZ = (minZ + maxZ) * 0.5F;
-            if (level != 0 && std::abs(centerX) < inner && std::abs(centerZ) < inner) continue;
-            addQuad(mesh, {minX, 0.0F, minZ}, {maxX, 0.0F, minZ}, {maxX, 0.0F, maxZ}, {minX, 0.0F, maxZ});
+            // The hole is selected from cell bounds, never its centre.  The
+            // power-of-two extents make this exact: level N's hole is the
+            // outer square of level N - 1, so there can be neither overlap
+            // nor a gap at the ring boundary.
+            if (level != 0 && minX >= -inner && maxX <= inner &&
+                minZ >= -inner && maxZ <= inner) continue;
+            const Vec3 a{minX, 0.0F, minZ}, b{maxX, 0.0F, minZ};
+            const Vec3 c{maxX, 0.0F, maxZ}, d{minX, 0.0F, maxZ};
+            // Split each coarse cell touching the hole at the fine-level
+            // boundary vertex.  This is true index stitching, not a
+            // centre-based approximation or a decorative skirt.
+            if (level != 0 && std::abs(minZ - inner) < 1.0e-4F)
+                addStitchedQuad(mesh, a, b, c, d, StitchEdge::Bottom);
+            else if (level != 0 && std::abs(maxX + inner) < 1.0e-4F)
+                addStitchedQuad(mesh, a, b, c, d, StitchEdge::Right);
+            else if (level != 0 && std::abs(maxZ + inner) < 1.0e-4F)
+                addStitchedQuad(mesh, a, b, c, d, StitchEdge::Top);
+            else if (level != 0 && std::abs(minX - inner) < 1.0e-4F)
+                addStitchedQuad(mesh, a, b, c, d, StitchEdge::Left);
+            else
+                addQuad(mesh, a, b, c, d);
         }
     }
     return mesh;
@@ -79,6 +124,10 @@ void WaterSystem::rebuild(Registry& registry, const Entity entity) const {
     if (!registry.has<WaterBodyComponent>(entity)) throw std::invalid_argument("Entity has no WaterBodyComponent");
     const WaterBodyComponent& water = registry.get<WaterBodyComponent>(entity);
     Mesh mesh = buildMesh(water);
+    auto waves = water.waves;
+    const auto waveCount = std::min(water.waveCount, static_cast<std::uint32_t>(waves.size()));
+    for (std::uint32_t index = 0; index < waveCount; ++index)
+        if (waves[index].direction.length() < 1.0e-4F) waves[index].direction = {1.0F, 0.0F};
     auto source = std::make_shared<Mesh>(std::move(mesh));
     if (!registry.has<MeshRendererComponent>(entity)) registry.add<MeshRendererComponent>(entity);
     registry.modify<MeshRendererComponent>(entity, [&](MeshRendererComponent& renderer) {
@@ -102,8 +151,8 @@ void WaterSystem::rebuild(Registry& registry, const Entity entity) const {
             .enableSSR = water.enableSSR,
             .enableCaustics = water.enableCaustics,
             .enableUnderwater = water.enableUnderwater,
-            .waves = water.waves,
-            .waveCount = water.waveCount,
+            .waves = waves,
+            .waveCount = waveCount,
         };
         // Water is composited as a surface; it must not produce a shadow-map
         // receiver/caster entry from its displaced visual mesh.
@@ -115,6 +164,10 @@ void WaterSystem::rebuild(SceneEditor& editor, const Entity entity) const {
     if (!editor.has<WaterBodyComponent>(entity)) throw std::invalid_argument("Entity has no WaterBodyComponent");
     const WaterBodyComponent& water = editor.read<WaterBodyComponent>(entity);
     Mesh mesh = buildMesh(water);
+    auto waves = water.waves;
+    const auto waveCount = std::min(water.waveCount, static_cast<std::uint32_t>(waves.size()));
+    for (std::uint32_t index = 0; index < waveCount; ++index)
+        if (waves[index].direction.length() < 1.0e-4F) waves[index].direction = {1.0F, 0.0F};
     auto source = std::make_shared<Mesh>(std::move(mesh));
     if (!editor.has<MeshRendererComponent>(entity)) editor.add<MeshRendererComponent>(entity);
     editor.patch<MeshRendererComponent>(entity, [&](MeshRendererComponent& renderer) {
@@ -128,7 +181,7 @@ void WaterSystem::rebuild(SceneEditor& editor, const Entity entity) const {
             .foamThreshold = water.foamThreshold, .maxVisibleDepth = water.maxDepth,
             .normalMap = water.normalMap, .foamTexture = water.foamTexture, .flowMap = water.flowMap,
             .enableSSR = water.enableSSR, .enableCaustics = water.enableCaustics,
-            .enableUnderwater = water.enableUnderwater, .waves = water.waves, .waveCount = water.waveCount,
+            .enableUnderwater = water.enableUnderwater, .waves = waves, .waveCount = waveCount,
         };
         renderer.castShadow = false;
     });

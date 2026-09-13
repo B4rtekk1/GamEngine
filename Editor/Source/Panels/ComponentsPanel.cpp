@@ -382,6 +382,13 @@ bool ComponentsPanel::draw(Engine::ScenePreset &scene, Engine::Assets::Content& 
                 float direction[2] = {wave.direction.x(), wave.direction.y()};
                 changed |= ImGui::DragFloat2("Direction", direction, 0.01F, -1.0F, 1.0F);
                 wave.direction = {direction[0], direction[1]};
+                // Gerstner evaluation normalizes this vector in the shader.
+                // Never let the editor publish a zero direction (normalize(0)
+                // is undefined and can poison the water surface with NaNs).
+                if (wave.direction.length() < 1.0e-4F) {
+                    wave.direction = {1.0F, 0.0F};
+                    changed = true;
+                }
                 changed |= ImGui::DragFloat("Amplitude", &wave.amplitude, 0.005F, 0.0F, 10.0F);
                 changed |= ImGui::DragFloat("Wavelength", &wave.wavelength, 0.01F, 0.01F, 1000.0F);
                 changed |= ImGui::DragFloat("Speed", &wave.speed, 0.01F, -100.0F, 100.0F);

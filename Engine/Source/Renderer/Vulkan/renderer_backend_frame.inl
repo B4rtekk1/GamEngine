@@ -936,14 +936,26 @@
                 lightingForwardPass.drawGrass(commandBuffer, shadowPass.grassDescriptorSet(currentFrame), grassDraw);
             }
             skyPass.record(commandBuffer, currentFrame);
-            if (particleSystem && cameraController.camera()) { const Particles::ParticleFrameData particleFrame{cameraController.camera()->projectionMatrix()*cameraController.camera()->viewMatrix(),cameraController.camera()->right(),0.0F,cameraController.camera()->up(),0.0F}; particleSystem->recordRender(commandBuffer,particleFrame,particlePipeline.handle(),particlePipeline.layout(),currentFrame,false); }
-            lightingForwardPass.drawOutline(commandBuffer, shadowPass.descriptorSet(currentFrame), indirectDraws[currentFrame]);
+            // Water must be composited before alpha-blended particles.  A
+            // particle does not write depth, so rendering it into the opaque
+            // source would let the later water pass incorrectly cover it.
+            const bool hasWater = activeShaderSlots.test(materialShaderIndex(MaterialShader::Water));
+            if (!hasWater) {
+                if (particleSystem && cameraController.camera()) {
+                    const Particles::ParticleFrameData particleFrame{
+                        cameraController.camera()->projectionMatrix() * cameraController.camera()->viewMatrix(),
+                        cameraController.camera()->right(), 0.0F, cameraController.camera()->up(), 0.0F};
+                    particleSystem->recordRender(commandBuffer, particleFrame, particlePipeline.handle(),
+                                                 particlePipeline.layout(), currentFrame, false);
+                }
+                lightingForwardPass.drawOutline(commandBuffer, shadowPass.descriptorSet(currentFrame), indirectDraws[currentFrame]);
+            }
             ForwardPass::end(commandBuffer);
             gpuTimestampProfiler.endZone(commandBuffer, currentFrame);
-            if (activeShaderSlots.test(materialShaderIndex(MaterialShader::Water))) {
+            if (hasWater) {
                 const VkImageMemoryBarrier2 barriersBefore[] = {
                     {VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2, nullptr,
-                     VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT, VK_ACCESS_2_SHADER_SAMPLED_READ_BIT,
+                     VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT, VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT,
                      VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_ACCESS_2_TRANSFER_READ_BIT,
                      VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
                      VK_QUEUE_FAMILY_IGNORED, VK_QUEUE_FAMILY_IGNORED, hdrBuffer.image(),
@@ -992,6 +1004,18 @@
                     sizeof(std::uint32_t);
                 waterPass.draw(commandBuffer, shadowPass.descriptorSet(currentFrame), indirectDraws[currentFrame],
                                commandOffset, countOffset);
+                // The particle and outline pipelines are render-pass
+                // compatible with WaterPass (same attachments and samples),
+                // so draw their transparent/overlay work after water while
+                // its load-preserving pass is active.
+                if (particleSystem && cameraController.camera()) {
+                    const Particles::ParticleFrameData particleFrame{
+                        cameraController.camera()->projectionMatrix() * cameraController.camera()->viewMatrix(),
+                        cameraController.camera()->right(), 0.0F, cameraController.camera()->up(), 0.0F};
+                    particleSystem->recordRender(commandBuffer, particleFrame, particlePipeline.handle(),
+                                                 particlePipeline.layout(), currentFrame, false);
+                }
+                lightingForwardPass.drawOutline(commandBuffer, shadowPass.descriptorSet(currentFrame), indirectDraws[currentFrame]);
                 WaterPass::end(commandBuffer);
             }
             }
