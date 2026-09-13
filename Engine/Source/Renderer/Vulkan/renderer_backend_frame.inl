@@ -434,6 +434,10 @@
             }
             gpuTimestampProfiler.beginFrame(commandBuffer, currentFrame);
             static const ProfileNameId shadowProfileName = Profiler::registerName("Shadow");
+            static const ProfileNameId shadowPageMarkProfileName = Profiler::registerName("Shadow.PageMark");
+            static const ProfileNameId shadowPageCompactProfileName = Profiler::registerName("Shadow.PageCompact");
+            static const ProfileNameId shadowDepthRasterProfileName = Profiler::registerName("Shadow.CasterCullDepth");
+            static const ProfileNameId shadowProjectionProfileName = Profiler::registerName("Shadow.Projection");
             static const ProfileNameId cullingProfileName = Profiler::registerName("Culling");
             static const ProfileNameId forwardProfileName = Profiler::registerName("Forward");
             static const ProfileNameId velocityProfileName = Profiler::registerName("Velocity");
@@ -713,6 +717,7 @@
                     .sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO,
                     .bufferMemoryBarrierCount = 1, .pBufferMemoryBarriers = &clearBarrier};
                 vkCmdPipelineBarrier2(commandBuffer, &clearDependency);
+                gpuTimestampProfiler.beginZone(commandBuffer, currentFrame, shadowPageMarkProfileName);
                 vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE,
                                   vsmPageMarkingPipeline);
                 const VkDescriptorSet markingSet = vsmPageMarkingSets[currentFrame];
@@ -733,6 +738,8 @@
                     .sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO,
                     .bufferMemoryBarrierCount = 1, .pBufferMemoryBarriers = &markingBarrier};
                 vkCmdPipelineBarrier2(commandBuffer, &markingDependency);
+                gpuTimestampProfiler.endZone(commandBuffer, currentFrame);
+                gpuTimestampProfiler.beginZone(commandBuffer, currentFrame, shadowPageCompactProfileName);
                 vkCmdFillBuffer(commandBuffer, vsmCompactedPageCountBuffers[currentFrame].handle(),
                                 0, sizeof(std::uint32_t), 0);
                 const VkBufferMemoryBarrier2 countBarrier{
@@ -773,8 +780,10 @@
                     .pBufferMemoryBarriers = completionBarriers};
                 vkCmdPipelineBarrier2(commandBuffer, &completionDependency);
                 vsmRequestsReady[currentFrame] = true;
+                gpuTimestampProfiler.endZone(commandBuffer, currentFrame);
             }
             gpuTimestampProfiler.beginZone(commandBuffer, currentFrame, shadowProfileName);
+            gpuTimestampProfiler.beginZone(commandBuffer, currentFrame, shadowDepthRasterProfileName);
             if (renderGameViewport) {
                 shadowPass.record(
                     commandBuffer, shadowClipMatrices, shadowClipUpdateMask, vertexBuffer.handle(),
@@ -802,6 +811,7 @@
                         ? static_cast<std::uint32_t>(gpuObjects.size()) : 0u,
                     sceneDescriptorPass.grassShadowDescriptorSet(currentFrame), grassShadowDrawPtr);
             }
+            gpuTimestampProfiler.endZone(commandBuffer, currentFrame);
             gpuTimestampProfiler.endZone(commandBuffer, currentFrame);
             gpuTimestampProfiler.beginZone(commandBuffer, currentFrame, cullingProfileName);
             const auto dispatchClusteredLights = [&](VkDescriptorSet set, const VkExtent2D extent) {
@@ -941,6 +951,7 @@
                             gtaoDepth.imageView(), gtaoDepth.sampler(), inverseProjection);
 
             gpuTimestampProfiler.beginZone(commandBuffer, currentFrame, forwardProfileName);
+            gpuTimestampProfiler.beginZone(commandBuffer, currentFrame, shadowProjectionProfileName);
             lightingForwardPass.begin(commandBuffer, lightingHdrFramebuffer, swapchain.extent(),
                 shadowPass.descriptorSet(currentFrame), vertexBuffer.handle(), instanceBuffers[currentFrame].handle(), indexBuffer.handle());
             for (std::uint32_t shader = 0; shader < MaterialProgramSlotCount; ++shader) {
@@ -957,6 +968,7 @@
                 shadowPass.setGrassVisibleInstances(currentFrame, lists.drawInstances[0].handle());
                 lightingForwardPass.drawGrass(commandBuffer, shadowPass.grassDescriptorSet(currentFrame), grassDraw);
             }
+            gpuTimestampProfiler.endZone(commandBuffer, currentFrame);
             skyPass.record(commandBuffer, currentFrame);
             // Water must be composited before alpha-blended particles.  A
             // particle does not write depth, so rendering it into the opaque
