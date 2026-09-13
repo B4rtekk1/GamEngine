@@ -84,6 +84,10 @@ namespace Engine {
         std::uint32_t selectedInstance{std::numeric_limits<std::uint32_t>::max()};
         std::uint32_t localLightCount{};
         std::uint32_t reflectionProbeCount{};
+        // Screen-space inputs (GTAO, opaque colour/depth) are valid only for
+        // the Game View render graph. Scene View owns a differently sized
+        // target and must not sample Game View textures.
+        std::uint32_t screenSpaceEffects{1};
         glm::vec4 clusteredViewportNearFar{};
         std::array<LocalLightGPU, MaxLocalLights> localLights{};
     };

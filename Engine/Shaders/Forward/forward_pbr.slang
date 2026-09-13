@@ -465,8 +465,13 @@ ForwardFragmentOutput fragmentMain(ForwardFragmentInput input)
                                     localProbeReflection, skyReflection);
     float2 brdf = brdfIntegrationLut.Sample(float2(nDotV, roughness)).rg;
     float3 specularIbl = prefiltered * (fresnelIbl * brdf.x + brdf.y);
-    const float dynamicAo = gtaoVisibility.Sample(input.position.xy /
-        float2(frame.clusteredViewportNearFar.x, frame.clusteredViewportNearFar.y)).r;
+    // Scene View has an independent render target and no matching GTAO
+    // texture yet. Sampling the Game View result there mixes two unrelated
+    // screen spaces and produces hard viewport-aligned seams.
+    const float dynamicAo = frame.screenSpaceEffects != 0u
+        ? gtaoVisibility.Sample(input.position.xy /
+            float2(frame.clusteredViewportNearFar.x, frame.clusteredViewportNearFar.y)).r
+        : 1.0;
     // Keep the dynamic term conservative while GTAO is intentionally used
     // only for diffuse contact occlusion. Specular AO is reintroduced after
     // visual validation of the new horizon baseline.

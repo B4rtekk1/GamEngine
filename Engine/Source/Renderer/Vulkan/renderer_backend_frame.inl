@@ -346,6 +346,7 @@
                 static_cast<std::uint32_t>(shadowDebugView),
                 materialSlots, editorSelectedRenderable, frameData.lightCount,
                 static_cast<std::uint32_t>(reflectionProbes.size()),
+                1u,
                 glm::vec4{static_cast<float>(swapchain.extent().width),
                           static_cast<float>(swapchain.extent().height), 0.1F, 1000.0F},
                 frameData.lights};
@@ -405,6 +406,7 @@
                 static_cast<std::uint32_t>(shadowDebugView),
                 materialSlots, editorSelectedRenderable, frameData.lightCount,
                 static_cast<std::uint32_t>(reflectionProbeManager.probes().size()),
+                0u,
                 glm::vec4{static_cast<float>(sceneViewportTarget.extent().width),
                           static_cast<float>(sceneViewportTarget.extent().height), 0.1F, 1000.0F},
                 frameData.lights};

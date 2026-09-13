@@ -508,7 +508,8 @@
                 device, HdrBuffer::Format, depthBuffer.format(),
                 VK_SAMPLE_COUNT_1_BIT, VK_FORMAT_UNDEFINED, VK_RESOLVE_MODE_NONE,
                 sceneDescriptorPass.descriptorSetLayout(), assetManager,
-                VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, true);
+                VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, true,
+                VK_FORMAT_UNDEFINED, false);
         }
 
         void createParticleResources() {

@@ -35,6 +35,9 @@ struct RendererFrameData
     // Number of valid records in the reflection-probe SSBO.  The buffer has
     // fixed storage capacity, but entries beyond this count are not populated.
     uint reflectionProbeCount;
+    // Zero for views without matching full-screen inputs (currently Scene
+    // View); prevents sampling Game View's GTAO/depth/colour textures.
+    uint screenSpaceEffects;
     // xy viewport pixels, z near plane, w far plane.
     float4 clusteredViewportNearFar;
     LocalLightData localLights[32];
