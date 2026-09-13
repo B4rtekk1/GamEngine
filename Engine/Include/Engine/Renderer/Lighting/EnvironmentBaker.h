@@ -17,6 +17,9 @@ namespace Engine {
 class EnvironmentBaker final {
 public:
     using RadianceSampler = std::function<Vec3(const Vec3& direction)>;
+    // Samples the filtered source environment at an explicit, fractional mip.
+    // The prefilter uses this to match a GGX sample's solid-angle footprint.
+    using MipRadianceSampler = std::function<Vec3(const Vec3& direction, float mip)>;
 
     /** Maps a cubemap mip to the PBR roughness it represents. */
     [[nodiscard]] static constexpr float roughnessForMip(const std::uint32_t mip,
@@ -31,13 +34,15 @@ public:
     /** GGX-convolves source into a complete mip chain. Mip zero has roughness
      * 0 and the final mip has roughness 1. */
     [[nodiscard]] static std::vector<float> bakePrefilteredCubemap(
-        std::uint32_t faceSize, std::uint32_t mipLevels, const RadianceSampler& source);
+        std::uint32_t faceSize, std::uint32_t mipLevels, std::uint32_t sourceFaceSize,
+        std::uint32_t sourceMipLevels, const MipRadianceSampler& source);
 
     [[nodiscard]] static Vec3 diffuseIrradiance(const Vec3& normal, const RadianceSampler& source);
 
 private:
     [[nodiscard]] static Vec3 prefilter(const Vec3& reflection, float roughness,
-                                        const RadianceSampler& source);
+                                        std::uint32_t sourceFaceSize, std::uint32_t sourceMipLevels,
+                                        const MipRadianceSampler& source);
 };
 
 } // namespace Engine

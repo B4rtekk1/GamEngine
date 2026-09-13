@@ -27,7 +27,7 @@ constexpr std::uint32_t PrefilterSize = 256;
 constexpr std::uint32_t BrdfLutSize = 256;
 constexpr std::uint32_t BrdfLutSamples = 1024;
 // Bump this whenever any bake parameter or integration algorithm changes.
-constexpr std::uint64_t IblCacheVersion = 3;
+constexpr std::uint64_t IblCacheVersion = 4;
 constexpr std::uint64_t BrdfCacheKey = 0x4745425244463032ULL; // "GEBRDF02"
 
 enum class IblCacheKind : std::uint32_t { Cubemap = 1, BrdfLut = 2 };
@@ -212,31 +212,70 @@ Vec3 proceduralRadiance(Vec3 direction) {
 }
 
 struct EnvironmentSource {
-    int width = 0;
-    int height = 0;
-    std::vector<float> pixels;
+    struct Mip {
+        int width = 0;
+        int height = 0;
+        std::vector<float> pixels;
+    };
+    std::vector<Mip> mips;
 
-    [[nodiscard]] bool loaded() const noexcept { return width > 0 && height > 0; }
+    [[nodiscard]] bool loaded() const noexcept { return !mips.empty(); }
 
-    [[nodiscard]] Vec3 sample(Vec3 direction) const {
+    [[nodiscard]] Vec3 sample(Vec3 direction, const float mip = 0.0F) const {
         if (!loaded()) return proceduralRadiance(direction);
-        const float longitude = std::atan2(direction.z(), direction.x());
-        const float u = longitude * (0.5F / Pi) + 0.5F;
-        const float v = std::acos(std::clamp(direction.y(), -1.0F, 1.0F)) / Pi;
-        const float x = u * static_cast<float>(width) - 0.5F;
-        const float y = v * static_cast<float>(height) - 0.5F;
-        const int x0 = (static_cast<int>(std::floor(x)) % width + width) % width;
-        const int x1 = (x0 + 1) % width;
-        const int y0 = std::clamp(static_cast<int>(std::floor(y)), 0, height - 1);
-        const int y1 = std::min(y0 + 1, height - 1);
-        const float tx = x - std::floor(x); const float ty = y - std::floor(y);
-        const auto pixel = [this](int px, int py) {
-            const auto index = (static_cast<std::size_t>(py) * width + px) * 4;
-            return Vec3{pixels[index], pixels[index + 1], pixels[index + 2]};
+        const float clampedMip = std::clamp(mip, 0.0F, static_cast<float>(mips.size() - 1));
+        const auto sampleMip = [direction](const Mip& level) {
+            const int width = level.width;
+            const int height = level.height;
+            const auto& pixels = level.pixels;
+            const float longitude = std::atan2(direction.z(), direction.x());
+            const float u = longitude * (0.5F / Pi) + 0.5F;
+            const float v = std::acos(std::clamp(direction.y(), -1.0F, 1.0F)) / Pi;
+            const float x = u * static_cast<float>(width) - 0.5F;
+            const float y = v * static_cast<float>(height) - 0.5F;
+            const int x0 = (static_cast<int>(std::floor(x)) % width + width) % width;
+            const int x1 = (x0 + 1) % width;
+            const int y0 = std::clamp(static_cast<int>(std::floor(y)), 0, height - 1);
+            const int y1 = std::min(y0 + 1, height - 1);
+            const float tx = x - std::floor(x); const float ty = y - std::floor(y);
+            const auto pixel = [&pixels, width](int px, int py) {
+                const auto index = (static_cast<std::size_t>(py) * width + px) * 4;
+                return Vec3{pixels[index], pixels[index + 1], pixels[index + 2]};
+            };
+            const Vec3 a = pixel(x0, y0) * (1.0F - tx) + pixel(x1, y0) * tx;
+            const Vec3 b = pixel(x0, y1) * (1.0F - tx) + pixel(x1, y1) * tx;
+            return a * (1.0F - ty) + b * ty;
         };
-        const Vec3 a = pixel(x0, y0) * (1.0F - tx) + pixel(x1, y0) * tx;
-        const Vec3 b = pixel(x0, y1) * (1.0F - tx) + pixel(x1, y1) * tx;
-        return a * (1.0F - ty) + b * ty;
+        const auto lower = static_cast<std::size_t>(std::floor(clampedMip));
+        const auto upper = std::min(lower + 1, mips.size() - 1);
+        return sampleMip(mips[lower]) * (1.0F - (clampedMip - static_cast<float>(lower))) +
+               sampleMip(mips[upper]) * (clampedMip - static_cast<float>(lower));
+    }
+
+    void buildMipChain() {
+        while (mips.back().width > 1 || mips.back().height > 1) {
+            const Mip& previous = mips.back();
+            Mip next{std::max(1, previous.width / 2), std::max(1, previous.height / 2)};
+            next.pixels.resize(static_cast<std::size_t>(next.width) * next.height * 4);
+            for (int y = 0; y < next.height; ++y) {
+                for (int x = 0; x < next.width; ++x) {
+                    const int x0 = x * 2, y0 = y * 2;
+                    for (int channel = 0; channel < 4; ++channel) {
+                        float sum = 0.0F;
+                        for (int dy = 0; dy < 2; ++dy) {
+                            for (int dx = 0; dx < 2; ++dx) {
+                                const int sourceX = (x0 + dx) % previous.width;
+                                const int sourceY = std::min(y0 + dy, previous.height - 1);
+                                sum += previous.pixels[
+                                    (static_cast<std::size_t>(sourceY) * previous.width + sourceX) * 4 + channel];
+                            }
+                        }
+                        next.pixels[(static_cast<std::size_t>(y) * next.width + x) * 4 + channel] = sum * 0.25F;
+                    }
+                }
+            }
+            mips.push_back(std::move(next));
+        }
     }
 };
 
@@ -256,8 +295,9 @@ EnvironmentSource loadEquirectangular(const std::filesystem::path& path) {
             if (decoded != nullptr) free(decoded);
             return {};
         }
-        EnvironmentSource source; source.width = width; source.height = height;
-        source.pixels.assign(decoded, decoded + static_cast<std::size_t>(width) * height * 4);
+        EnvironmentSource source; source.mips.push_back({width, height, {}});
+        source.mips.front().pixels.assign(decoded, decoded + static_cast<std::size_t>(width) * height * 4);
+        source.buildMipChain();
         free(decoded);
         return source;
     }
@@ -270,8 +310,9 @@ EnvironmentSource loadEquirectangular(const std::filesystem::path& path) {
         if (decoded != nullptr) stbi_image_free(decoded);
         return {};
     }
-    EnvironmentSource source; source.width = width; source.height = height;
-    source.pixels.assign(decoded, decoded + static_cast<std::size_t>(width) * height * 4);
+    EnvironmentSource source; source.mips.push_back({width, height, {}});
+    source.mips.front().pixels.assign(decoded, decoded + static_cast<std::size_t>(width) * height * 4);
+    source.buildMipChain();
     stbi_image_free(decoded);
     return source;
 }
@@ -291,6 +332,7 @@ void ImageBasedLighting::create(VkPhysicalDevice physicalDevice, VkDevice device
     // Build every resource away from the live set. A decode, allocation or
     // upload failure must leave the active descriptor targets intact.
     ImageBasedLighting replacement;
+    const auto environmentMips = std::bit_width(EnvironmentSize);
     const auto prefilterMips = std::bit_width(PrefilterSize);
     std::vector<std::byte> payload;
     const auto uploadCubemap = [&](const std::filesystem::path& path, const std::uint32_t size,
@@ -316,10 +358,12 @@ void ImageBasedLighting::create(VkPhysicalDevice physicalDevice, VkDevice device
         if (!source) source.emplace(loadEquirectangular(equirectangularPath));
         return *source;
     };
-    uploadCubemap(environmentCache, EnvironmentSize, 1, [&] {
+    uploadCubemap(environmentCache, EnvironmentSize, environmentMips, [&] {
         const auto& decoded = getSource();
-        return EnvironmentBaker::bakeCubemap(EnvironmentSize, 1,
-            [&decoded](const Vec3& direction, std::uint32_t, std::uint32_t) { return decoded.sample(direction); });
+        return EnvironmentBaker::bakeCubemap(EnvironmentSize, environmentMips,
+            [&decoded](const Vec3& direction, const std::uint32_t mip, std::uint32_t) {
+                return decoded.sample(direction, static_cast<float>(mip));
+            });
     }, replacement.environment_);
     uploadCubemap(irradianceCache, IrradianceSize, 1, [&] {
         const auto& decoded = getSource();
@@ -330,8 +374,10 @@ void ImageBasedLighting::create(VkPhysicalDevice physicalDevice, VkDevice device
     }, replacement.irradiance_);
     uploadCubemap(prefilteredCache, PrefilterSize, prefilterMips, [&] {
         const auto& decoded = getSource();
-        return EnvironmentBaker::bakePrefilteredCubemap(PrefilterSize, prefilterMips,
-            [&decoded](const Vec3& direction) { return decoded.sample(direction); });
+        return EnvironmentBaker::bakePrefilteredCubemap(PrefilterSize, prefilterMips, EnvironmentSize,
+            environmentMips, [&decoded](const Vec3& direction, const float mip) {
+                return decoded.sample(direction, mip);
+            });
     }, replacement.prefiltered_);
 
     if (!loadCache(brdfCache, IblCacheKind::BrdfLut, BrdfLutSize, 1, BrdfCacheKey, payload)) {

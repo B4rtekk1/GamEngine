@@ -60,9 +60,12 @@ Vec3 EnvironmentBaker::diffuseIrradiance(const Vec3& normal, const RadianceSampl
 }
 
 Vec3 EnvironmentBaker::prefilter(const Vec3& reflection, const float roughness,
-                                  const RadianceSampler& source) {
-    if (roughness <= 0.001F) return source(reflection);
+                                  const std::uint32_t sourceFaceSize, const std::uint32_t sourceMipLevels,
+                                  const MipRadianceSampler& source) {
+    if (roughness <= 0.001F) return source(reflection, 0.0F);
     constexpr std::uint32_t Samples = 128;
+    const float sourceTexelSolidAngle = 4.0F * Pi /
+        (6.0F * static_cast<float>(sourceFaceSize) * static_cast<float>(sourceFaceSize));
     Vec3 result{};
     float weight = 0.0F;
     for (std::uint32_t i = 0; i < Samples; ++i) {
@@ -71,11 +74,23 @@ Vec3 EnvironmentBaker::prefilter(const Vec3& reflection, const float roughness,
         const Vec3 light = (-reflection + halfVector * (2.0F * dot(reflection, halfVector))).normalized();
         const float nDotL = std::max(dot(reflection, light), 0.0F);
         if (nDotL > 0.0F) {
-            result += source(light) * nDotL;
+            const float nDotH = std::max(dot(reflection, halfVector), 0.0F);
+            const float vDotH = nDotH; // V equals the reflection vector for split-sum prefiltering.
+            const float alpha = roughness * roughness;
+            const float alphaSquared = alpha * alpha;
+            const float denominator = nDotH * nDotH * (alphaSquared - 1.0F) + 1.0F;
+            const float distribution = alphaSquared /
+                std::max(Pi * denominator * denominator, 1.0e-7F);
+            const float pdf = std::max(distribution * nDotH /
+                                       std::max(4.0F * vDotH, 1.0e-7F), 1.0e-7F);
+            const float sampleSolidAngle = 1.0F / (static_cast<float>(Samples) * pdf);
+            const float sourceMip = std::clamp(0.5F * std::log2(sampleSolidAngle / sourceTexelSolidAngle),
+                                               0.0F, static_cast<float>(sourceMipLevels - 1));
+            result += source(light, sourceMip) * nDotL;
             weight += nDotL;
         }
     }
-    return weight > 0.0F ? result * (1.0F / weight) : source(reflection);
+    return weight > 0.0F ? result * (1.0F / weight) : source(reflection, 0.0F);
 }
 
 std::vector<float> EnvironmentBaker::bakeCubemap(
@@ -104,11 +119,16 @@ std::vector<float> EnvironmentBaker::bakeCubemap(
 }
 
 std::vector<float> EnvironmentBaker::bakePrefilteredCubemap(
-    const std::uint32_t faceSize, const std::uint32_t mipLevels, const RadianceSampler& source) {
-    return bakeCubemap(faceSize, mipLevels, [&source](const Vec3& direction, const std::uint32_t mip,
-                                                       const std::uint32_t count) {
+    const std::uint32_t faceSize, const std::uint32_t mipLevels, const std::uint32_t sourceFaceSize,
+    const std::uint32_t sourceMipLevels, const MipRadianceSampler& source) {
+    if (sourceFaceSize == 0 || sourceMipLevels == 0)
+        throw std::invalid_argument("Environment prefilter requires a source mip chain");
+    return bakeCubemap(faceSize, mipLevels,
+                        [&source, sourceFaceSize, sourceMipLevels](const Vec3& direction,
+                                                                      const std::uint32_t mip,
+                                                                      const std::uint32_t count) {
         const float roughness = roughnessForMip(mip, count);
-        return prefilter(direction, roughness, source);
+        return prefilter(direction, roughness, sourceFaceSize, sourceMipLevels, source);
     });
 }
 } // namespace Engine

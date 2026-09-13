@@ -57,5 +57,7 @@ float integrateHorizon(float horizon, float normalAngle, float normalCos) { retu
         h1=normalAngle+clamp(h1-normalAngle,-Pi*.5,Pi*.5);
         visibility+=normalLength*(integrateHorizon(h0,normalAngle,normalCos)+integrateHorizon(h1,normalAngle,normalCos));
     }
-    o.value=saturate(visibility/directions); o.auxiliary=float4(viewDepth,encodeOctNormal(n),0); return o;
+    o.value=saturate(visibility/directions);
+    o.auxiliary=float4(viewDepth,encodeOctNormal(n),0);
+    return o;
 }
