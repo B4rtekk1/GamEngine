@@ -612,7 +612,7 @@ namespace Engine {
         mutable std::unordered_map<Entity, std::vector<Entity>> childrenByParent_;
         mutable std::uint64_t hierarchyComponentRevision_{std::numeric_limits<std::uint64_t>::max()};
         mutable std::uint64_t hierarchyStructuralRevision_{std::numeric_limits<std::uint64_t>::max()};
-        UI::Canvas canvas_{800, 600}; //NOLINT
+        UI::Canvas canvas_{UI::Canvas::Width{800}, UI::Canvas::Height{600}};
         UI::UIFontAtlas fontAtlas_;
         Particles::ParticleEmitter particleEmitter_{};
         Entity particleEntity_{NullEntity};

@@ -25,7 +25,9 @@ namespace Engine {
             }
 
             ~SdlRuntime() {
-                if (initialized_) SDL_Quit();
+                if (initialized_) {
+                    SDL_Quit();
+                }
             }
 
         private:
@@ -34,20 +36,24 @@ namespace Engine {
 
         class Window final {
         public:
-            void create(const std::string& title, const std::int32_t width, const std::int32_t height) {
+            void create(const std::string &title, const std::int32_t width, const std::int32_t height) {
                 window_ = SDL_CreateWindow(title.c_str(), width, height,
                                            SDL_WINDOW_VULKAN | SDL_WINDOW_RESIZABLE);
-                if (window_ == nullptr) throw std::runtime_error(SDL_GetError());
+                if (window_ == nullptr) {
+                    throw std::runtime_error(SDL_GetError());
+                }
             }
 
             ~Window() {
-                if (window_ != nullptr) SDL_DestroyWindow(window_);
+                if (window_ != nullptr) {
+                    SDL_DestroyWindow(window_);
+                }
             }
 
-            [[nodiscard]] SDL_Window* get() const noexcept { return window_; }
+            [[nodiscard]] SDL_Window *get() const noexcept { return window_; }
 
         private:
-            SDL_Window* window_ = nullptr;
+            SDL_Window *window_ = nullptr;
         };
 
         explicit Impl(const RenderConfig &renderConfig) : renderer(renderConfig) {
@@ -102,7 +108,9 @@ namespace Engine {
 
     void Application::initializeRuntime() {
         const auto assetRoot = content_.assetRoot();
-        if (!assetRoot.empty()) impl_->renderer.setProjectRoot(assetRoot.parent_path());
+        if (!assetRoot.empty()) {
+            impl_->renderer.setProjectRoot(assetRoot.parent_path());
+        }
         impl_->sdl.initialize();
         impl_->window.create(config_.title, config_.width, config_.height);
         impl_->renderer.initialize(scene_, impl_->window.get());

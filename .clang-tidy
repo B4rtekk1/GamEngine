@@ -4,6 +4,7 @@ Checks: >-
   performance-*,
   portability-*,
   readability-*,
+  -readability-identifier-length,
   modernize-use-nullptr,
   modernize-use-override,
   cppcoreguidelines-owning-memory

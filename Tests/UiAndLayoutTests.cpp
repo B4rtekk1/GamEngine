@@ -60,7 +60,8 @@ TEST(UIElement, StoresVisualStateAndOwnsChildren) {
 }
 
 TEST(Canvas, LaysOutElementsAndTracksStructuralChanges) {
-    Engine::UI::Canvas canvas{200, 100};
+    Engine::UI::Canvas canvas{Engine::UI::Canvas::Width{200},
+                              Engine::UI::Canvas::Height{100}};
     EXPECT_TRUE(canvas.empty());
     EXPECT_EQ(canvas.revision(), 1u);
 
@@ -73,11 +74,11 @@ TEST(Canvas, LaysOutElementsAndTracksStructuralChanges) {
     EXPECT_FLOAT_EQ(added.rectTransform.calculatedRect.height, 30.0F);
     const auto afterAdd = canvas.revision();
 
-    canvas.resize(300, 150);
+    canvas.resize(Engine::UI::Canvas::Width{300}, Engine::UI::Canvas::Height{150});
     EXPECT_FLOAT_EQ(added.rectTransform.calculatedRect.width, 50.0F);
     EXPECT_GT(canvas.revision(), afterAdd);
     const auto afterResize = canvas.revision();
-    canvas.resize(300, 150);
+    canvas.resize(Engine::UI::Canvas::Width{300}, Engine::UI::Canvas::Height{150});
     EXPECT_EQ(canvas.revision(), afterResize);
 
     auto removed = canvas.removeElement(&added);

@@ -26,6 +26,18 @@ namespace Engine::UI {
 
     class CanvasRenderer final {
     public:
+        struct ImageIndex final {
+            explicit ImageIndex(const std::uint32_t value) : value(value) {}
+
+            std::uint32_t value;
+        };
+
+        struct FrameIndex final {
+            explicit FrameIndex(const std::uint32_t value) : value(value) {}
+
+            std::uint32_t value;
+        };
+
         ~CanvasRenderer();
 
         CanvasRenderer();
@@ -46,7 +58,7 @@ namespace Engine::UI {
         void destroy() noexcept;
 
         void record(const Canvas &canvas, VkCommandBuffer commandBuffer,
-                    std::uint32_t imageIndex, std::uint32_t frameIndex,
+                    ImageIndex imageIndex, FrameIndex frameIndex,
                     VkExtent2D extent);
 
     private:
@@ -60,10 +72,10 @@ namespace Engine::UI {
 
         [[nodiscard]] const std::vector<const UIElement *> &sortedChildren(const UIElement &element);
 
-        void sortIfNeeded(const std::vector<const UIElement *> &source,
-                          SortCache &cache);
+        static void sortIfNeeded(const std::vector<const UIElement *> &source,
+                                 SortCache &cache);
 
-        [[nodiscard]] bool ensureCapacity(FrameResources &frame);
+        [[nodiscard]] bool ensureCapacity(FrameResources &frame) const;
 
         VkPhysicalDevice physicalDevice_ = VK_NULL_HANDLE;
         VkDevice device_ = VK_NULL_HANDLE;

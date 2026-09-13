@@ -1,8 +1,8 @@
 #include "Engine/Renderer/GPUSceneDatabase.h"
 
 namespace Engine {
-    template <typename Id>
-    void GPUSceneDatabase::markDirty(std::vector<Id>& list, std::vector<std::uint32_t>& stamps,
+    template<typename Id>
+    void GPUSceneDatabase::markDirty(std::vector<Id> &list, std::vector<std::uint32_t> &stamps,
                                      const std::uint32_t generation, const Id id) {
         if (id >= stamps.size()) stamps.resize(static_cast<std::size_t>(id) + 1U);
         if (stamps[id] == generation) return;
@@ -24,7 +24,8 @@ namespace Engine {
 
     void GPUSceneDatabase::unmarkRemovedInstanceDirty(const GPUSceneInstanceId id) noexcept {
         if (id >= m_removedInstanceStamps.size() ||
-            m_removedInstanceStamps[id] != m_dirtyGeneration) return;
+            m_removedInstanceStamps[id] != m_dirtyGeneration)
+            return;
 
         const std::uint32_t position = m_removedInstancePositions[id];
         const GPUSceneInstanceId lastId = m_dirty.removedInstances.back();
@@ -45,7 +46,7 @@ namespace Engine {
         m_removedInstanceStamps.assign(m_removedInstanceStamps.size(), 0);
     }
 
-    GPUSceneInstanceId GPUSceneDatabase::upsertInstance(const std::uint64_t sourceKey, const GPUInstance& instance) {
+    GPUSceneInstanceId GPUSceneDatabase::upsertInstance(const std::uint64_t sourceKey, const GPUInstance &instance) {
         if (const auto found = m_instanceIds.find(sourceKey); found != m_instanceIds.end()) {
             m_instances[found->second] = instance;
             m_instances[found->second].alive = true;
@@ -71,17 +72,17 @@ namespace Engine {
     }
 
     void GPUSceneDatabase::updateInstanceTransform(const GPUSceneInstanceId instanceId,
-                                                   const std::array<float, 16>& worldMatrix,
-                                                   const AABB& localBounds) {
+                                                   const std::array<float, 16> &worldMatrix,
+                                                   const AABB &localBounds) {
         if (instanceId >= m_instances.size() || !m_instances[instanceId].alive) return;
-        GPUInstance& instance = m_instances[instanceId];
+        GPUInstance &instance = m_instances[instanceId];
         instance.worldMatrix = worldMatrix;
         instance.localBounds = localBounds;
         markDirty(m_dirty.instances, m_dirtyInstanceStamps, m_dirtyGeneration, instanceId);
     }
 
     void GPUSceneDatabase::updateInstanceFlags(const GPUSceneInstanceId instanceId,
-                                                const std::uint32_t flags) {
+                                               const std::uint32_t flags) {
         if (instanceId >= m_instances.size() || !m_instances[instanceId].alive) return;
         m_instances[instanceId].flags = flags;
         markDirty(m_dirty.instances, m_dirtyInstanceStamps, m_dirtyGeneration, instanceId);
@@ -113,7 +114,7 @@ namespace Engine {
         m_deferredInstanceFrees.erase(write, m_deferredInstanceFrees.end());
     }
 
-    GPUSceneMeshId GPUSceneDatabase::upsertMesh(const std::uint64_t sourceKey, const GPUMesh& mesh) {
+    GPUSceneMeshId GPUSceneDatabase::upsertMesh(const std::uint64_t sourceKey, const GPUMesh &mesh) {
         if (const auto found = m_meshIds.find(sourceKey); found != m_meshIds.end()) {
             m_meshes[found->second] = mesh;
             markDirty(m_dirty.meshes, m_dirtyMeshStamps, m_dirtyGeneration, found->second);
@@ -126,7 +127,7 @@ namespace Engine {
         return id;
     }
 
-    GPUSceneMaterialId GPUSceneDatabase::upsertMaterial(const std::uint64_t sourceKey, const GPUMaterial& material) {
+    GPUSceneMaterialId GPUSceneDatabase::upsertMaterial(const std::uint64_t sourceKey, const GPUMaterial &material) {
         if (const auto found = m_materialIds.find(sourceKey); found != m_materialIds.end()) {
             m_materials[found->second] = material;
             markDirty(m_dirty.materials, m_dirtyMaterialStamps, m_dirtyGeneration, found->second);
@@ -139,14 +140,14 @@ namespace Engine {
         return id;
     }
 
-    void GPUSceneDatabase::updateMesh(const GPUSceneMeshId meshId, const GPUMesh& mesh) {
+    void GPUSceneDatabase::updateMesh(const GPUSceneMeshId meshId, const GPUMesh &mesh) {
         if (meshId >= m_meshes.size()) return;
         m_meshes[meshId] = mesh;
         markDirty(m_dirty.meshes, m_dirtyMeshStamps, m_dirtyGeneration, meshId);
     }
 
     void GPUSceneDatabase::updateMaterial(const GPUSceneMaterialId materialId,
-                                          const GPUMaterial& material) {
+                                          const GPUMaterial &material) {
         if (materialId >= m_materials.size()) return;
         m_materials[materialId] = material;
         markDirty(m_dirty.materials, m_dirtyMaterialStamps, m_dirtyGeneration, materialId);
@@ -166,10 +167,19 @@ namespace Engine {
     }
 
     void GPUSceneDatabase::clear() noexcept {
-        m_instances.clear(); m_meshes.clear(); m_materials.clear(); m_freeInstances.clear();
+        m_instances.clear();
+        m_meshes.clear();
+        m_materials.clear();
+        m_freeInstances.clear();
         m_deferredInstanceFrees.clear();
-        m_instanceIds.clear(); m_meshIds.clear(); m_materialIds.clear(); clearDirty();
-        m_dirtyInstanceStamps.clear(); m_dirtyMeshStamps.clear(); m_dirtyMaterialStamps.clear();
-        m_removedInstanceStamps.clear(); m_removedInstancePositions.clear();
+        m_instanceIds.clear();
+        m_meshIds.clear();
+        m_materialIds.clear();
+        clearDirty();
+        m_dirtyInstanceStamps.clear();
+        m_dirtyMeshStamps.clear();
+        m_dirtyMaterialStamps.clear();
+        m_removedInstanceStamps.clear();
+        m_removedInstancePositions.clear();
     }
 } // namespace Engine

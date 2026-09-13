@@ -1241,7 +1241,9 @@
                 } else {
                     tonemapPass.record(commandBuffer, imageIndex.value, swapchain.extent());
                 }
-                canvasRenderer.record(scene.uiCanvas(), commandBuffer, imageIndex.value, currentFrame,
+                canvasRenderer.record(scene.uiCanvas(), commandBuffer,
+                                      UI::CanvasRenderer::ImageIndex{imageIndex.value},
+                                      UI::CanvasRenderer::FrameIndex{currentFrame},
                                       swapchain.extent());
             }
             gpuTimestampProfiler.endZone(commandBuffer, currentFrame);

@@ -22,9 +22,21 @@ namespace Engine::UI {
     public:
         using ElementContainer = std::vector<std::unique_ptr<UIElement> >;
 
-        Canvas(std::uint32_t width, std::uint32_t height);
+        struct Width final {
+            explicit Width(const std::uint32_t value) : value(value) {}
 
-        void resize(std::uint32_t width, std::uint32_t height);
+            std::uint32_t value;
+        };
+
+        struct Height final {
+            explicit Height(const std::uint32_t value) : value(value) {}
+
+            std::uint32_t value;
+        };
+
+        Canvas(Width width, Height height);
+
+        void resize(Width width, Height height);
 
         void updateLayout();
 

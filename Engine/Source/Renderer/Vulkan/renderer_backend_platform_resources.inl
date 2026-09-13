@@ -739,7 +739,8 @@
 
         void createUIResources() {
             const VkExtent2D extent = swapchain.extent();
-            scene.uiCanvas().resize(extent.width, extent.height);
+            scene.uiCanvas().resize(UI::Canvas::Width{extent.width},
+                                    UI::Canvas::Height{extent.height});
 
             if (!fpsFontTexture.valid()) {
                 // Keep the font atlas on the same asynchronous upload path as
