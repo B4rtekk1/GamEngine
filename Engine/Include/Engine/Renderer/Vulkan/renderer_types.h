@@ -59,6 +59,10 @@ namespace Engine {
         std::uint32_t clipLevelCount{};
         std::uint32_t depthWidth{};
         std::uint32_t depthHeight{};
+        // Kept in step with the fragment sampler so receiver requests target
+        // the same quality-dependent virtual-shadow LOD.
+        std::uint32_t shadowQuality{};
+        std::uint32_t padding[2]{};
     };
 
     struct RendererUniformBufferObject {

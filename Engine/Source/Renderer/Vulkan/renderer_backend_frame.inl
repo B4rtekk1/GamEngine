@@ -318,6 +318,7 @@
                 marking.clipLevelCount = ShadowMap::ClipLevelCount;
                 marking.depthWidth = swapchain.extent().width;
                 marking.depthHeight = swapchain.extent().height;
+                marking.shadowQuality = static_cast<std::uint32_t>(shadowQuality);
                 vsmPageMarkingUniformBuffers[currentFrame].update(&marking, sizeof(marking));
             }
             // Motion vectors describe continuous motion.  Reusing history after
@@ -758,7 +759,13 @@
                 const VkDescriptorSet compactSet = vsmPageCompactSets[currentFrame];
                 vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE,
                                         vsmPageCompactPipelineLayout, 0, 1, &compactSet, 0, nullptr);
-                vkCmdDispatch(commandBuffer, (ShadowMap::VirtualPageCount + 31U) / 32U, 1, 1);
+                constexpr std::uint32_t vsmRequestWordCount =
+                    (ShadowMap::VirtualPageCount + 31U) / 32U;
+                constexpr std::uint32_t vsmCompactionThreadsPerGroup = 64U;
+                vkCmdDispatch(commandBuffer,
+                              (vsmRequestWordCount + vsmCompactionThreadsPerGroup - 1U) /
+                                  vsmCompactionThreadsPerGroup,
+                              1, 1);
                 const VkBufferMemoryBarrier2 completionBarriers[] = {
                     {.sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER_2,
                      .srcStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,

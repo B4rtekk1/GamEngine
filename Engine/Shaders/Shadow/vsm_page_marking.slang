@@ -11,6 +11,8 @@ struct VsmPageMarkingUniforms
     uint clipLevelCount;
     uint depthWidth;
     uint depthHeight;
+    uint shadowQuality;
+    uint padding[2];
 };
 
 [[vk::binding(0, 0)]] Texture2D<float> receiverDepth;
@@ -25,6 +27,15 @@ void markPage(const uint level, const float2 uv)
     const uint pageIndex = level * uniforms.pageCountPerAxis * uniforms.pageCountPerAxis +
                            page.y * uniforms.pageCountPerAxis + page.x;
     InterlockedOr(requestedPageBits[pageIndex >> 5], 1u << (pageIndex & 31));
+}
+
+float shadowTexelFootprintThreshold(const uint shadowQuality)
+{
+    // A larger threshold retains a finer clip level.  Higher settings can
+    // afford that density and need it most where the filter footprint grows.
+    if (shadowQuality == 3u) return 3.0;
+    if (shadowQuality == 2u) return 2.0;
+    return shadowQuality == 1u ? 1.5 : 1.0;
 }
 
 void markPageAndNeighbours(const uint encodedPage)
@@ -69,8 +80,10 @@ void main(uint3 threadId : SV_DispatchThreadID, uint3 groupThreadId : SV_GroupTh
     if (inBounds && depth < 0.999999)
     {
         const float4 world = reconstructWorld(threadId.xy, depth);
-        const uint2 neighbourPixel = uint2(min(threadId.x + 1, uniforms.depthWidth - 1), threadId.y);
-        const float4 neighbourWorld = reconstructWorld(neighbourPixel, depth);
+        const uint2 neighbourPixelX = uint2(min(threadId.x + 1, uniforms.depthWidth - 1), threadId.y);
+        const uint2 neighbourPixelY = uint2(threadId.x, min(threadId.y + 1, uniforms.depthHeight - 1));
+        const float4 neighbourWorldX = reconstructWorld(neighbourPixelX, depth);
+        const float4 neighbourWorldY = reconstructWorld(neighbourPixelY, depth);
         const uint pagesPerLevel = uniforms.pageCountPerAxis * uniforms.pageCountPerAxis;
         uint selectedLevel = 0xffffffffu;
         // Select the finest clip level whose virtual texel is no smaller
@@ -79,14 +92,19 @@ void main(uint3 threadId : SV_DispatchThreadID, uint3 groupThreadId : SV_GroupTh
         [loop] for (uint level = 0; level < uniforms.clipLevelCount; ++level)
         {
             const float4 lightClip = mul(world, uniforms.clipMatrices[level]);
-            const float4 neighbourClip = mul(neighbourWorld, uniforms.clipMatrices[level]);
-            if (abs(lightClip.w) < 1.0e-6 || abs(neighbourClip.w) < 1.0e-6) continue;
+            const float4 neighbourClipX = mul(neighbourWorldX, uniforms.clipMatrices[level]);
+            const float4 neighbourClipY = mul(neighbourWorldY, uniforms.clipMatrices[level]);
+            if (abs(lightClip.w) < 1.0e-6 || abs(neighbourClipX.w) < 1.0e-6 ||
+                abs(neighbourClipY.w) < 1.0e-6) continue;
             const float2 lightUv = lightClip.xy / lightClip.w * 0.5 + 0.5;
             if (any(lightUv < 0.0) || any(lightUv >= 1.0)) continue;
-            const float2 neighbourUv = neighbourClip.xy / neighbourClip.w * 0.5 + 0.5;
-            const float footprintInTexels = length((neighbourUv - lightUv) *
-                                                   float(uniforms.virtualResolution));
-            if (footprintInTexels <= 1.5 || level + 1 == uniforms.clipLevelCount)
+            const float2 neighbourUvX = neighbourClipX.xy / neighbourClipX.w * 0.5 + 0.5;
+            const float2 neighbourUvY = neighbourClipY.xy / neighbourClipY.w * 0.5 + 0.5;
+            const float footprintInTexels = max(length(neighbourUvX - lightUv),
+                                                length(neighbourUvY - lightUv)) *
+                                            float(uniforms.virtualResolution);
+            if (footprintInTexels <= shadowTexelFootprintThreshold(uniforms.shadowQuality) ||
+                level + 1 == uniforms.clipLevelCount)
             {
                 const uint2 page = min(uint2(lightUv * uniforms.pageCountPerAxis), uniforms.pageCountPerAxis - 1);
                 groupPages[localIndex] = level * pagesPerLevel + page.y * uniforms.pageCountPerAxis + page.x;

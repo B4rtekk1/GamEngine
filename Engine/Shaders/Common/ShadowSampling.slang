@@ -227,7 +227,9 @@ float sampleVirtualShadowLevel(Sampler2DShadow shadowMap, Sampler2D shadowDepthM
     // can represent unrelated virtual pages. Every filtered tap must therefore
     // resolve its own virtual texel before sampling the atlas.
     const bool useStablePoisson = shadowQuality == SHADOW_QUALITY_ULTRA;
-    const bool useTent3x3 = shadowQuality == SHADOW_QUALITY_HIGH && level < 2;
+    // Coarser levels have the largest world-space texels.  Do not drop to a
+    // 2x2 filter precisely where the virtual grid is easiest to see.
+    const bool useTent3x3 = shadowQuality == SHADOW_QUALITY_HIGH && level < 4;
 
     // Keep this kernel fixed. A world-position rotation makes a single Scene
     // View frame read as a noisy dither, and must not be enabled unless the
@@ -376,6 +378,36 @@ float sampleVirtualShadowLevel(Sampler2DShadow shadowMap, Sampler2D shadowDepthM
     return totalWeight > 0.0 ? filteredShadow / totalWeight : 0.0;
 }
 
+float shadowTexelFootprintThreshold(const uint shadowQuality)
+{
+    if (shadowQuality == SHADOW_QUALITY_ULTRA) return 3.0;
+    if (shadowQuality == SHADOW_QUALITY_HIGH) return 2.0;
+    return shadowQuality == SHADOW_QUALITY_MEDIUM ? 1.5 : 1.0;
+}
+
+uint selectVirtualShadowLevel(float3 worldPosition, float4x4 clipMatrices[7],
+                              const uint shadowQuality)
+{
+    const float threshold = shadowTexelFootprintThreshold(shadowQuality);
+    [unroll]
+    for (uint level = 0; level < SHADOW_CLIP_LEVELS; ++level)
+    {
+        const float4 lightClip = mul(float4(worldPosition, 1.0), clipMatrices[level]);
+        if (abs(lightClip.w) < 1.0e-6) continue;
+        const float2 uv = lightClip.xy / lightClip.w * 0.5 + 0.5;
+        if (any(uv < 0.0) || any(uv >= 1.0)) continue;
+
+        // This is the same LOD rule as receiver marking, but uses both
+        // screen-space axes.  Sampling must never let incidental L0 cache
+        // residency override the requested geometric LOD.
+        const float footprintInTexels = max(length(ddx(uv)), length(ddy(uv))) *
+                                        float(VIRTUAL_RESOLUTION);
+        if (footprintInTexels <= threshold || level + 1 == SHADOW_CLIP_LEVELS)
+            return level;
+    }
+    return SHADOW_CLIP_LEVELS - 1;
+}
+
 float sampleVirtualShadow(Sampler2DShadow shadowMap, Sampler2D shadowDepthMap,
                           float3 worldPosition,
                           float3 normal, float3 lightDirection,
@@ -387,8 +419,9 @@ float sampleVirtualShadow(Sampler2DShadow shadowMap, Sampler2D shadowDepthMap,
     debug.clipLevel = 0;
     debug.virtualPage = 0;
     bool resident;
-    [unroll]
-    for (uint level = 0; level < SHADOW_CLIP_LEVELS; ++level)
+    const uint desiredLevel = selectVirtualShadowLevel(worldPosition, clipMatrices, shadowQuality);
+    [loop]
+    for (uint level = desiredLevel; level < SHADOW_CLIP_LEVELS; ++level)
     {
         float clipEdge;
         float blockerCount;
