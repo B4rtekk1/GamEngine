@@ -301,9 +301,10 @@
             createLayout(hiZReduceDescriptorSetLayout, hiZReducePipelineLayout);
             createLayout(vsmPageMarkingDescriptorSetLayout, vsmPageMarkingPipelineLayout);
             createLayout(vsmPageCompactDescriptorSetLayout, vsmPageCompactPipelineLayout);
-            // mat4 plus draw-slot index, rounded to a 16-byte block by Slang.
+            // mat4 plus page-culling control fields. Keep this synchronized
+            // with CullingPushConstants in GPUCullingPass.cpp/.slang.
             const VkPushConstantRange cullingPushConstants{
-                VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(Mat4) + 20};
+                VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(Mat4) + 28};
             createLayout(cullingDescriptorSetLayout, cullingPipelineLayout,
                          &cullingPushConstants);
             createLayout(instanceCullingDescriptorSetLayout, instanceCullingPipelineLayout);

@@ -178,6 +178,7 @@ namespace Engine {
         std::vector<std::unique_ptr<Buffer>> pageTableBuffers_;
         VkPipelineLayout pipelineLayout_{VK_NULL_HANDLE};
         VkPipeline pipeline_{VK_NULL_HANDLE};
+        VkPipeline opaquePipeline_{VK_NULL_HANDLE};
         VkPipeline twoSidedPipeline_{VK_NULL_HANDLE};
         VkPipeline grassPipeline_{VK_NULL_HANDLE};
     };

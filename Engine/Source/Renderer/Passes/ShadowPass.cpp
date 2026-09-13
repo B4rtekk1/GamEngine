@@ -312,6 +312,11 @@ void ShadowPass::create(VkPhysicalDevice physicalDevice, VkDevice device,
             vkUpdateDescriptorSets(device_, std::size(writes), writes, 0, nullptr);
         }
 
+        const auto opaqueShader = Vkutil::loadShaderModule(device_, assets, "shaders/shadow_opaque.spv");
+        const std::array opaqueStages{
+            VkPipelineShaderStageCreateInfo{VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO, nullptr, 0,
+                VK_SHADER_STAGE_VERTEX_BIT, opaqueShader.get(), "main", nullptr},
+        };
         const auto shader = Vkutil::loadShaderModule(device_, assets, "shaders/shadow_map.spv");
         const std::array stages{
             VkPipelineShaderStageCreateInfo{VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO, nullptr, 0,
@@ -392,6 +397,14 @@ void ShadowPass::create(VkPhysicalDevice physicalDevice, VkDevice device,
         pipelineInfo.pDynamicState = &dynamic;
         pipelineInfo.layout = pipelineLayout_;
         pipelineInfo.renderPass = shadowMap_->renderPass();
+        pipelineInfo.stageCount = std::size(opaqueStages);
+        pipelineInfo.pStages = opaqueStages.data();
+        if (vkCreateGraphicsPipelines(device_, VK_NULL_HANDLE, 1, &pipelineInfo,
+                                      nullptr, &opaquePipeline_) != VK_SUCCESS) {
+            throw std::runtime_error("Could not create opaque shadow pipeline");
+        }
+        pipelineInfo.stageCount = std::size(stages);
+        pipelineInfo.pStages = stages.data();
         if (vkCreateGraphicsPipelines(device_, VK_NULL_HANDLE, 1, &pipelineInfo,
                                       nullptr, &pipeline_) != VK_SUCCESS) {
             throw std::runtime_error("Could not create shadow pipeline");
@@ -571,12 +584,14 @@ void ShadowPass::destroy() noexcept {
     if (device_ != VK_NULL_HANDLE) {
         if (grassPipeline_ != VK_NULL_HANDLE) vkDestroyPipeline(device_, grassPipeline_, nullptr);
         if (twoSidedPipeline_ != VK_NULL_HANDLE) vkDestroyPipeline(device_, twoSidedPipeline_, nullptr);
+        if (opaquePipeline_ != VK_NULL_HANDLE) vkDestroyPipeline(device_, opaquePipeline_, nullptr);
         if (pipeline_ != VK_NULL_HANDLE) vkDestroyPipeline(device_, pipeline_, nullptr);
         if (pipelineLayout_ != VK_NULL_HANDLE) vkDestroyPipelineLayout(device_, pipelineLayout_, nullptr);
         if (descriptorPool_ != VK_NULL_HANDLE) vkDestroyDescriptorPool(device_, descriptorPool_, nullptr);
         if (descriptorSetLayout_ != VK_NULL_HANDLE) vkDestroyDescriptorSetLayout(device_, descriptorSetLayout_, nullptr);
     }
     pipeline_ = VK_NULL_HANDLE;
+    opaquePipeline_ = VK_NULL_HANDLE;
     twoSidedPipeline_ = VK_NULL_HANDLE;
     grassPipeline_ = VK_NULL_HANDLE;
     pipelineLayout_ = VK_NULL_HANDLE;
@@ -1038,6 +1053,11 @@ void ShadowPass::record(const VkCommandBuffer commandBuffer,
                 .physicalPage = pagesToRender_[pageIndex],
                 .virtualPage = virtualPageIndex(page.level, page.virtualX, page.virtualY)});
         }
+        std::stable_sort(pageWork.begin(), pageWork.end(),
+                         [](const Culling::ShadowPageWork& left,
+                            const Culling::ShadowPageWork& right) {
+                             return left.clipLevel < right.clipLevel;
+                         });
         cullingPass.recordCandidatesForPages(commandBuffer, objectCount, pageWork);
         twoSidedCullingPass.recordCandidatesForPages(commandBuffer, objectCount, pageWork);
     }
@@ -1065,7 +1085,9 @@ void ShadowPass::record(const VkCommandBuffer commandBuffer,
     passInfo.framebuffer = shadowMap_->framebuffer();
     passInfo.renderArea.extent = {ShadowMap::Resolution, ShadowMap::Resolution};
     vkCmdBeginRenderPass(commandBuffer, &passInfo, VK_SUBPASS_CONTENTS_INLINE);
-    vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline_);
+    // The one-sided stream is built from non-foliage batches and is therefore
+    // opaque. Render it with a vertex-only depth pipeline.
+    vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, opaquePipeline_);
     vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS,
                             pipelineLayout_, 0, 1, &sceneDescriptorSet, 0, nullptr);
     const VkBuffer vertexBuffers[] = {vertexBuffer, instanceBuffer};
@@ -1110,7 +1132,7 @@ void ShadowPass::record(const VkCommandBuffer commandBuffer,
             twoSidedIndirectDraw.record(commandBuffer,
                 sizeof(VkDrawIndexedIndirectCommand) * objectCount * pageIndex,
                 sizeof(std::uint32_t) * pageIndex);
-            vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline_);
+            vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, opaquePipeline_);
         }
         if (grassDescriptorSet != VK_NULL_HANDLE && grassIndirectDraw != nullptr &&
             grassIndirectDraw->valid()) {
@@ -1120,7 +1142,7 @@ void ShadowPass::record(const VkCommandBuffer commandBuffer,
             vkCmdPushConstants(commandBuffer, pipelineLayout_, VK_SHADER_STAGE_VERTEX_BIT,
                                0, sizeof(Mat4), &pageMatrix);
             grassIndirectDraw->record(commandBuffer);
-            vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline_);
+            vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, opaquePipeline_);
             vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS,
                                     pipelineLayout_, 0, 1, &sceneDescriptorSet, 0, nullptr);
         }

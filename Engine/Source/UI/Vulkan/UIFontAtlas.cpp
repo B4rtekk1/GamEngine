@@ -53,7 +53,7 @@ namespace Engine::UI {
                     return false;
                 }
                 const auto count = u16(4);
-                if (12U + static_cast<std::size_t>(count) * 16U > data_.size()) {
+                if (12U + (static_cast<std::size_t>(count) * 16U) > data_.size()) {
                     error = "Invalid TrueType table directory";
                     return false;
                 }

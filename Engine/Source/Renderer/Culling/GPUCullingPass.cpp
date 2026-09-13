@@ -10,8 +10,10 @@ struct CullingPushConstants {
     std::uint32_t candidateLevel{};
     std::uint32_t mode{};
     std::uint32_t shaderFilter{UINT32_MAX};
+    std::uint32_t pageWorkOffset{};
+    std::uint32_t pageWorkCount{};
 };
-static_assert(sizeof(CullingPushConstants) == 84);
+static_assert(sizeof(CullingPushConstants) == 92);
 }
 
 namespace Engine::Culling
@@ -431,13 +433,47 @@ namespace Engine::Culling
         vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, m_pipeline);
         vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, m_pipelineLayout,
                                 0, 1, &m_descriptorSet, 0, nullptr);
-        CullingPushConstants pushConstants{};
-        pushConstants.sourceCount = objectCount;
-        pushConstants.mode = 5;
-        vkCmdPushConstants(commandBuffer, m_pipelineLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0,
-                           sizeof(pushConstants), &pushConstants);
-        vkCmdDispatch(commandBuffer, (objectCount + 63U) / 64U,
-                      static_cast<std::uint32_t>(pages.size()), 1);
+        // Page work is sorted by clip level.  Generate a separate indirect
+        // dispatch for every contiguous level range: X then follows that
+        // level's compact candidate count instead of the full scene size.
+        std::size_t firstPage = 0;
+        while (firstPage < pages.size()) {
+            const std::uint32_t level = pages[firstPage].clipLevel;
+            std::size_t pageEnd = firstPage + 1;
+            while (pageEnd < pages.size() && pages[pageEnd].clipLevel == level) ++pageEnd;
+            const std::uint32_t pageCount = static_cast<std::uint32_t>(pageEnd - firstPage);
+
+            CullingPushConstants arguments{};
+            arguments.candidateLevel = level;
+            arguments.pageWorkCount = pageCount;
+            arguments.mode = 4;
+            vkCmdPushConstants(commandBuffer, m_pipelineLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0,
+                               sizeof(arguments), &arguments);
+            vkCmdDispatch(commandBuffer, 1, 1, 1);
+            const VkBufferMemoryBarrier2 dispatchBarrier{
+                .sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER_2,
+                .srcStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                .srcAccessMask = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT,
+                .dstStageMask = VK_PIPELINE_STAGE_2_DRAW_INDIRECT_BIT,
+                .dstAccessMask = VK_ACCESS_2_INDIRECT_COMMAND_READ_BIT,
+                .buffer = m_candidateDispatchBuffer,
+                .offset = static_cast<VkDeviceSize>(level) * sizeof(VkDispatchIndirectCommand),
+                .size = sizeof(VkDispatchIndirectCommand)};
+            const VkDependencyInfo dispatchDependency{
+                .sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO,
+                .bufferMemoryBarrierCount = 1, .pBufferMemoryBarriers = &dispatchBarrier};
+            vkCmdPipelineBarrier2(commandBuffer, &dispatchDependency);
+
+            CullingPushConstants pushConstants{};
+            pushConstants.sourceCount = objectCount;
+            pushConstants.pageWorkOffset = static_cast<std::uint32_t>(firstPage);
+            pushConstants.mode = 5;
+            vkCmdPushConstants(commandBuffer, m_pipelineLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0,
+                               sizeof(pushConstants), &pushConstants);
+            vkCmdDispatchIndirect(commandBuffer, m_candidateDispatchBuffer,
+                                  static_cast<VkDeviceSize>(level) * sizeof(VkDispatchIndirectCommand));
+            firstPage = pageEnd;
+        }
 
         const VkBufferMemoryBarrier2 drawBarriers[2]{{.sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER_2,
             .srcStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,

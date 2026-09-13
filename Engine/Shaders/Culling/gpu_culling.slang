@@ -35,6 +35,8 @@ struct CullingPushConstants
     // 2: consume the candidate list for a virtual-shadow page.
     uint mode;
     uint shaderFilter;
+    uint pageWorkOffset;
+    uint pageWorkCount;
 };
 
 [[vk::push_constant]] ConstantBuffer<CullingPushConstants> pushConstants;
@@ -253,14 +255,15 @@ void main(uint3 dispatchThreadId : SV_DispatchThreadID)
             const uint argumentOffset = pushConstants.candidateLevel * 3;
             candidateDispatchArguments[argumentOffset] =
                 (candidateCounts[pushConstants.candidateLevel] + 63) / 64;
-            candidateDispatchArguments[argumentOffset + 1] = 1;
+            candidateDispatchArguments[argumentOffset + 1] = pushConstants.pageWorkCount;
             candidateDispatchArguments[argumentOffset + 2] = 1;
         }
         return;
     }
     const bool batchedShadowPages = pushConstants.mode == 5;
     // Binding 8 always contains at least one inert entry for non-shadow uses.
-    const ShadowPageWork pageWork = shadowPageWork[batchedShadowPages ? dispatchThreadId.y : 0];
+    const ShadowPageWork pageWork = shadowPageWork[batchedShadowPages
+        ? pushConstants.pageWorkOffset + dispatchThreadId.y : 0];
     const uint sourceIndex = dispatchThreadId.x;
     uint sourceCount = pushConstants.sourceCount;
     const uint candidateLevel = batchedShadowPages ? pageWork.clipLevel : pushConstants.candidateLevel;
