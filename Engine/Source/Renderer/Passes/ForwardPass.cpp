@@ -75,14 +75,13 @@ void ForwardPass::create(VkDevice device, const VkFormat colorFormat,
             materialOptions.existingRenderPass = materialPipelines_[0].renderPass();
         }
         if (index == materialShaderIndex(MaterialShader::Water)) {
-            // Water currently generates displacement and normals analytically.
-            // It needs only position and the per-vertex material slot; remove
-            // the unused PBR attributes from this pipeline's vertex contract.
+            // Water owns its macro normal analytically, but retains UV0 for
+            // optional micro-normal, foam and future flow-map sampling.
             materialOptions.vertexAttributes.erase(
                 std::remove_if(materialOptions.vertexAttributes.begin(), materialOptions.vertexAttributes.end(),
                                [](const VkVertexInputAttributeDescription& attribute) {
-                                   return attribute.location == 1 || attribute.location == 2 ||
-                                          attribute.location == 3 || attribute.location == 4 ||
+                                   return attribute.location == 1 || attribute.location == 3 ||
+                                          attribute.location == 4 ||
                                           attribute.location == 9;
                                }),
                 materialOptions.vertexAttributes.end());

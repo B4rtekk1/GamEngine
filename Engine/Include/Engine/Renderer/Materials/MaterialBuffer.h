@@ -29,5 +29,13 @@ namespace Engine {
         glm::ivec4 textureCoordinateSets2{};
         std::array<glm::vec4, 9> textureTransforms{};
         std::array<glm::vec4, 3> textureTransformRotations{};
+        // Dedicated water block. Kept in the material SSBO so the existing
+        // GPU-driven material-index indirection remains intact.
+        glm::vec4 waterShallowColorRoughness{};
+        glm::vec4 waterDeepColorIor{};
+        glm::vec4 waterAbsorptionRefraction{};
+        glm::vec4 waterScatteringMaxDepth{};
+        glm::vec4 waterFoam{};
+        glm::ivec4 waterTextureIndices{-1};
     };
 } // namespace Engine

@@ -54,6 +54,14 @@ struct MaterialData
     int4 textureCoordinateSets2;
     float4 textureTransforms[9];
     float4 textureTransformRotations[3];
+    float4 waterShallowColorRoughness;
+    float4 waterDeepColorIor;
+    float4 waterAbsorptionRefraction;
+    float4 waterScatteringMaxDepth;
+    // x foam intensity, y threshold, z normal strength, w feature flags.
+    float4 waterFoam;
+    // normal map, foam map, flow map, reserved.
+    int4 waterTextureIndices;
 };
 
 float2 materialTextureUv(MaterialData material, uint slot, float2 uv0, float2 uv1)

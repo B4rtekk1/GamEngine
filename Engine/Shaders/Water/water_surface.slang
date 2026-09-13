@@ -14,6 +14,12 @@ import Common.SceneData;
 [[vk::binding(2, 0)]] StructuredBuffer<MaterialData> materials;
 [[vk::binding(5, 0)]] StructuredBuffer<RendererInstanceData> visibleInstances;
 [[vk::binding(6, 0)]] StructuredBuffer<uint> visibleInstanceIndices;
+[[vk::binding(11, 0)]] SamplerCube prefilteredEnvironmentMap;
+[[vk::binding(13, 0)]] Sampler2D materialTextures[];
+// Immutable copies made after opaque lighting. Water never samples the HDR
+// attachment it is currently writing, which would be a feedback hazard.
+[[vk::binding(17, 0)]] Sampler2D opaqueSceneColor;
+[[vk::binding(18, 0)]] Sampler2D opaqueSceneDepth;
 #if FORWARD_OUTPUT_VELOCITY
 [[vk::binding(8, 0)]] StructuredBuffer<RendererPreviousTransformData> previousTransforms;
 #endif
@@ -58,6 +64,7 @@ struct WaterVertexOutput
     [[vk::location(0)]] float3 worldPosition;
     [[vk::location(1)]] float3 normal;
     [[vk::location(2)]] nointerpolation uint materialIndex;
+    [[vk::location(5)]] float2 texCoord;
 #if FORWARD_OUTPUT_VELOCITY
     [[vk::location(3)]] noperspective float2 currentNdc;
     [[vk::location(4)]] float4 previousClip;
@@ -84,6 +91,7 @@ WaterVertexOutput vertexMain(WaterVertexInput input, uint instanceIndex : SV_Ins
     output.worldPosition = worldPosition;
     output.normal = normalize(mul(normalize(cross(binormal, tangent)), rotationMatrix));
     output.materialIndex = asuint(instance.positionMaterial.w) + input.materialIndex;
+    output.texCoord = input.texCoord;
 #if FORWARD_OUTPUT_VELOCITY
     RendererPreviousTransformData previous = previousTransforms[visibleIndex];
     float4 previousQ = previous.previousRotation;
@@ -105,6 +113,7 @@ struct WaterFragmentInput
     [[vk::location(0)]] float3 worldPosition;
     [[vk::location(1)]] float3 normal;
     [[vk::location(2)]] nointerpolation uint materialIndex;
+    [[vk::location(5)]] float2 texCoord;
 #if FORWARD_OUTPUT_VELOCITY
     [[vk::location(3)]] noperspective float2 currentNdc;
     [[vk::location(4)]] float4 previousClip;
@@ -120,6 +129,13 @@ struct WaterFragmentOutput
 #endif
 };
 
+float linearViewDepth(float depth)
+{
+    // Row-vector projection used by the renderer: clip.z = z*m22 + m32 and
+    // clip.w = z. This avoids expanding the shared per-frame UBO.
+    return abs(frame.projection[3][2] / max(abs(depth - frame.projection[2][2]), 1.0e-5));
+}
+
 [shader("fragment")]
 WaterFragmentOutput fragmentMain(WaterFragmentInput input)
 {
@@ -128,17 +144,47 @@ WaterFragmentOutput fragmentMain(WaterFragmentInput input)
     if ((material.textureIndices.w & 1) != 0 && !input.isFrontFace)
         normal = -normal;
 
+    // Macro normal follows the displaced Gerstner geometry. A material-owned
+    // normal map is strictly micro detail, never the water's main shape.
+    if (material.waterTextureIndices.x >= 0) {
+        float3 micro = materialTextures[NonUniformResourceIndex(material.waterTextureIndices.x)]
+            .Sample(input.texCoord * 6.0 + frame.windDirectionStrength.xz * frame.windGustFrequencyTime.z * 0.04).xyz * 2.0 - 1.0;
+        normal = normalize(normal + micro * material.waterFoam.z);
+    }
+
     float3 viewDirection = normalize(frame.cameraPosition.xyz - input.worldPosition);
     float3 lightDirection = normalize(-frame.lightDirectionIntensity.xyz);
     float nDotL = max(dot(normal, lightDirection), 0.0);
-    float fresnel = pow(1.0 - saturate(dot(normal, viewDirection)), 4.0);
+    float nDotV = saturate(dot(normal, viewDirection));
+    float ior = max(material.waterDeepColorIor.w, 1.001);
+    float f0 = pow((ior - 1.0) / (ior + 1.0), 2.0);
+    float fresnel = f0 + (1.0 - f0) * pow(1.0 - nDotV, 5.0);
 
-    // Compatibility shading only: the dedicated module retains the existing
-    // visual until WaterMaterial and its absorption/scattering coefficients
-    // are introduced.  Do not add new water resources to the PBR module.
-    float3 shallowColor = material.baseColorMetallic.rgb * (0.08 + 0.35 * nDotL);
-    float3 color = lerp(shallowColor, float3(0.25, 0.55, 0.80), fresnel) +
-                   material.emissiveColorIntensity.rgb * material.emissiveColorIntensity.w;
+    float2 screenUv = input.position.xy / frame.clusteredViewportNearFar.xy;
+    float2 distortedUv = clamp(screenUv + normal.xz * material.waterAbsorptionRefraction.w,
+                               float2(0.001, 0.001), float2(0.999, 0.999));
+    const float opaqueDepth = opaqueSceneDepth.SampleLevel(distortedUv, 0.0).r;
+    const float waterDepth = input.position.z;
+    float thickness = opaqueDepth >= 0.99999
+        ? material.waterScatteringMaxDepth.w
+        : max(0.0, linearViewDepth(opaqueDepth) - linearViewDepth(waterDepth));
+    thickness = min(thickness, material.waterScatteringMaxDepth.w);
+    float3 transmittance = exp(-material.waterAbsorptionRefraction.rgb * thickness);
+    float3 refracted = opaqueSceneColor.SampleLevel(distortedUv, 0.0).rgb;
+    float3 transmission = refracted * transmittance +
+        material.waterScatteringMaxDepth.rgb * (1.0 - transmittance);
+
+    uint reflectionWidth; uint reflectionHeight; uint reflectionMips;
+    prefilteredEnvironmentMap.GetDimensions(0, reflectionWidth, reflectionHeight, reflectionMips);
+    float3 reflected = prefilteredEnvironmentMap.SampleLevel(reflect(-viewDirection, normal),
+        material.waterShallowColorRoughness.w * float(max(reflectionMips, 1u) - 1u)).rgb;
+    // A compact GGX-like sun lobe retains the crucial sun glitter even before
+    // the specialised ocean BRDF arrives in the FFT stage.
+    float3 halfVector = normalize(lightDirection + viewDirection);
+    float sunSpecular = pow(saturate(dot(normal, halfVector)),
+        lerp(2048.0, 24.0, material.waterShallowColorRoughness.w)) * nDotL;
+    float3 color = lerp(transmission, reflected, fresnel) +
+        frame.lightColor.rgb * frame.lightDirectionIntensity.w * sunSpecular * fresnel;
 
     WaterFragmentOutput output;
     output.color = float4(color, 1.0);

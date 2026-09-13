@@ -1194,6 +1194,15 @@
                 hdrFramebuffer = VK_NULL_HANDLE;
                 throw std::runtime_error("Could not create GTAO lighting framebuffer");
             }
+            framebufferInfo.renderPass = waterPass.renderPass();
+            if (vkCreateFramebuffer(device, &framebufferInfo, nullptr,
+                                    &waterHdrFramebuffer) != VK_SUCCESS) {
+                vkDestroyFramebuffer(device, lightingHdrFramebuffer, nullptr);
+                lightingHdrFramebuffer = VK_NULL_HANDLE;
+                vkDestroyFramebuffer(device, hdrFramebuffer, nullptr);
+                hdrFramebuffer = VK_NULL_HANDLE;
+                throw std::runtime_error("Could not create Water framebuffer");
+            }
         }
 
         void destroyVelocityResources() noexcept {

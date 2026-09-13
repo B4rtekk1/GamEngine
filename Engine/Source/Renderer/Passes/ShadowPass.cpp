@@ -112,7 +112,7 @@ void ShadowPass::create(VkPhysicalDevice physicalDevice, VkDevice device,
         }
 
         // This is a compact list, not an array indexed by binding number.
-        VkDescriptorSetLayoutBinding bindings[17]{};
+        VkDescriptorSetLayoutBinding bindings[19]{};
         bindings[0] = {0, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1,
                        VK_SHADER_STAGE_FRAGMENT_BIT, nullptr};
         bindings[1] = {1, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1,
@@ -151,9 +151,13 @@ void ShadowPass::create(VkPhysicalDevice physicalDevice, VkDevice device,
                         VK_SHADER_STAGE_FRAGMENT_BIT, nullptr};
         bindings[16] = {16, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1,
                         VK_SHADER_STAGE_FRAGMENT_BIT, nullptr}; // full-res GTAO visibility
+        bindings[17] = {17, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1,
+                        VK_SHADER_STAGE_FRAGMENT_BIT, nullptr}; // opaque HDR copy for water
+        bindings[18] = {18, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1,
+                        VK_SHADER_STAGE_FRAGMENT_BIT, nullptr}; // opaque resolved depth for water
         const VkDescriptorSetLayoutCreateInfo layoutInfo{
             VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO, nullptr, 0,
-            17, bindings};
+            19, bindings};
         if (vkCreateDescriptorSetLayout(device_, &layoutInfo, nullptr,
                                         &descriptorSetLayout_) != VK_SUCCESS) {
             throw std::runtime_error("Could not create shadow descriptor-set layout");
@@ -164,7 +168,7 @@ void ShadowPass::create(VkPhysicalDevice physicalDevice, VkDevice device,
         // IBL and material samplers, one UBO and seven SSBOs.
         const VkDescriptorPoolSize poolSizes[] = {
             {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, frameCount * 4U *
-                (MaxMaterialTextures + 6U + ReflectionProbeManager::TextureDescriptorCount)},
+                (MaxMaterialTextures + 8U + ReflectionProbeManager::TextureDescriptorCount)},
             {VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, frameCount * 4U},
             {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, frameCount * 4U * 8U},
         };
@@ -436,6 +440,21 @@ void ShadowPass::setGtaoTexture(const std::uint32_t frameIndex,
     const VkWriteDescriptorSet write{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr, set, 16, 0, 1,
                                      VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &texture, nullptr, nullptr};
     vkUpdateDescriptorSets(device_, 1, &write, 0, nullptr);
+}
+
+void ShadowPass::setWaterSceneTextures(const std::uint32_t frameIndex,
+                                       const VkDescriptorImageInfo& color,
+                                       const VkDescriptorImageInfo& depth) const {
+    if (frameIndex >= descriptorSets_.size()) {
+        throw std::out_of_range("Water descriptor frame index is invalid");
+    }
+    const VkWriteDescriptorSet writes[] = {
+        {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr, descriptorSets_[frameIndex], 17, 0, 1,
+         VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &color, nullptr, nullptr},
+        {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr, descriptorSets_[frameIndex], 18, 0, 1,
+         VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &depth, nullptr, nullptr},
+    };
+    vkUpdateDescriptorSets(device_, std::size(writes), writes, 0, nullptr);
 }
 
 void ShadowPass::updateDescriptors(

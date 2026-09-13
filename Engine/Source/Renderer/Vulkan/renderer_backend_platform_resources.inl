@@ -69,6 +69,8 @@
                     VK_SAMPLE_COUNT_1_BIT;
                 msaa.initialize(vulkanDevice.physical(), device, requestedSamples, vulkanDevice.allocator());
                 hdrBuffer.create(vulkanDevice.physical(), device, swapchain.extent(), vulkanDevice.allocator());
+                opaqueSceneColor.create(vulkanDevice.physical(), device, swapchain.extent(), vulkanDevice.allocator());
+                opaqueSceneColorInitialized = false;
                 msaa.create(swapchain.extent(), HdrBuffer::Format);
                 createDepthResources();
             });
@@ -488,7 +490,12 @@
                                shadowPass.descriptorSetLayout(), assetManager,
                                VK_IMAGE_LAYOUT_UNDEFINED, false,
                                antialiasingLevel == AntialiasingLevel::TAA
-                                   ? VK_FORMAT_R16G16_SFLOAT : VK_FORMAT_UNDEFINED, true);
+                               ? VK_FORMAT_R16G16_SFLOAT : VK_FORMAT_UNDEFINED, true);
+            waterPass.create(device, HdrBuffer::Format, depthBuffer.format(), msaa.sampleCount(),
+                             msaa.enabled() ? hiZDepthBuffer.format() : VK_FORMAT_UNDEFINED,
+                             msaa.enabled() ? vulkanDevice.depthResolveMode() : VK_RESOLVE_MODE_NONE,
+                             shadowPass.descriptorSetLayout(), assetManager,
+                             antialiasingLevel == AntialiasingLevel::TAA);
         }
 
         void createSceneViewportForwardPass() {
@@ -593,6 +600,7 @@
             // recreated together with culling resources below.
             forwardPass.destroy();
             lightingForwardPass.destroy();
+            waterPass.destroy();
             shadowPass.destroy();
             sceneDescriptorPass.destroy();
             destroyCullingResources();
@@ -612,6 +620,10 @@
                 vkDestroyFramebuffer(device, lightingHdrFramebuffer, nullptr);
                 lightingHdrFramebuffer = VK_NULL_HANDLE;
             }
+            if (waterHdrFramebuffer != VK_NULL_HANDLE) {
+                vkDestroyFramebuffer(device, waterHdrFramebuffer, nullptr);
+                waterHdrFramebuffer = VK_NULL_HANDLE;
+            }
             // Scene Sky uses the Scene View render pass when MSAA is off.
             // Destroy that pipeline before releasing its render pass.
             skyPass.destroy();
@@ -623,6 +635,8 @@
 
             msaa.destroy();
             hdrBuffer.destroy();
+            opaqueSceneColor.destroy();
+            opaqueSceneColorInitialized = false;
             destroyDepthResources();
 
             const VkSampleCountFlagBits requestedSamples =
@@ -631,6 +645,8 @@
                 VK_SAMPLE_COUNT_1_BIT;
             msaa.initialize(vulkanDevice.physical(), device, requestedSamples, vulkanDevice.allocator());
             hdrBuffer.create(vulkanDevice.physical(), device, swapchain.extent(), vulkanDevice.allocator());
+            opaqueSceneColor.create(vulkanDevice.physical(), device, swapchain.extent(), vulkanDevice.allocator());
+            opaqueSceneColorInitialized = false;
             msaa.create(swapchain.extent(), HdrBuffer::Format);
             createDepthResources();
             createGtaoPass();

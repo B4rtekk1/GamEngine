@@ -369,6 +369,18 @@ bool ComponentsPanel::draw(Engine::ScenePreset &scene, Engine::Assets::Content& 
                         renderer.mesh = std::make_shared<Engine::Mesh>(Engine::WaterSystem::buildMesh(water));
                         renderer.materialOverride = true;
                         renderer.material.shader = Engine::MaterialShader::Water;
+                        renderer.material.water.shallowColor = water.shallowColor;
+                        renderer.material.water.deepColor = water.deepColor;
+                        renderer.material.water.absorptionCoefficient = water.absorptionCoefficient;
+                        renderer.material.water.scatteringCoefficient = water.scatteringCoefficient;
+                        renderer.material.water.roughness = water.roughness;
+                        renderer.material.water.ior = water.ior;
+                        renderer.material.water.foamIntensity = water.foamIntensity;
+                        renderer.material.water.foamThreshold = water.foamThreshold;
+                        renderer.material.water.maxVisibleDepth = water.maxDepth;
+                        renderer.material.water.enableSSR = water.enableSSR;
+                        renderer.material.water.enableCaustics = water.enableCaustics;
+                        renderer.material.water.enableUnderwater = water.enableUnderwater;
                         renderer.castShadow = false;
                     });
                 } catch (const std::exception& error) {

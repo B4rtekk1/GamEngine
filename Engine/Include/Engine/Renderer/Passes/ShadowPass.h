@@ -83,6 +83,11 @@ namespace Engine {
         /** Binds the full-resolution GTAO visibility texture for one safe frame slot. */
         void setGtaoTexture(std::uint32_t frameIndex, const VkDescriptorImageInfo& texture) const;
 
+        /** Opaque HDR/depth inputs consumed exclusively by WaterPass. */
+        void setWaterSceneTextures(std::uint32_t frameIndex,
+                                   const VkDescriptorImageInfo& color,
+                                   const VkDescriptorImageInfo& depth) const;
+
         void destroy() noexcept;
 
         void record(VkCommandBuffer commandBuffer,

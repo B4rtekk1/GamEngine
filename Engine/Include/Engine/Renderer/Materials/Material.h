@@ -2,6 +2,7 @@
 
 #include "Engine/Renderer/Materials/PBRMaterial.h"
 #include "Engine/Renderer/ShaderGraph/ShaderGraph.h"
+#include "Engine/Renderer/Water/WaterMaterial.h"
 
 #include <cstddef>
 #include <cstdint>
@@ -58,6 +59,9 @@ namespace Engine {
         /** SPIR-V emitted by ShaderGraphSlangCompiler for shaderProgram. */
         std::filesystem::path shaderProgramSpirv{};
         PBRMaterial pbr{};
+        /// Used only by MaterialShader::Water; PBR data remains available for
+        /// mesh import and non-water material families.
+        WaterMaterial water{};
         MaterialRenderState renderState{};
 
         /** Keeps legacy PBR flags and explicit render state coherent. */

@@ -12,6 +12,7 @@
         Swapchain swapchain;
         VkFramebuffer hdrFramebuffer = VK_NULL_HANDLE;
         VkFramebuffer lightingHdrFramebuffer = VK_NULL_HANDLE;
+        VkFramebuffer waterHdrFramebuffer = VK_NULL_HANDLE;
         // The editor's Scene View uses this actual render output rather than a
         // UI-only placeholder. It has the same attachment formats as the game
         // path, so both views share the forward/sky/particle pipelines.
@@ -31,6 +32,9 @@
 
         MsaaResources msaa;
         HdrBuffer hdrBuffer;
+        // Immutable opaque HDR source sampled by the refracting water pass.
+        HdrBuffer opaqueSceneColor;
+        bool opaqueSceneColorInitialized{false};
         HdrBuffer velocityBuffer;
         GpuTimestampProfiler gpuTimestampProfiler;
         // Retained across frames: reset() clears declarations, while the graph
@@ -42,6 +46,7 @@
 
         ForwardPass& forwardPass;
         ForwardPass lightingForwardPass;
+        WaterPass waterPass;
         GraphicsPipeline& particlePipeline;
         GraphicsPipeline sceneParticlePipeline;
         std::unique_ptr<Particles::ParticleSystem> particleSystem;
@@ -538,7 +543,13 @@
                    lhs.textureCoordinateSets1 == rhs.textureCoordinateSets1 &&
                    lhs.textureCoordinateSets2 == rhs.textureCoordinateSets2 &&
                    lhs.textureTransforms == rhs.textureTransforms &&
-                   lhs.textureTransformRotations == rhs.textureTransformRotations;
+                   lhs.textureTransformRotations == rhs.textureTransformRotations &&
+                   lhs.waterShallowColorRoughness == rhs.waterShallowColorRoughness &&
+                   lhs.waterDeepColorIor == rhs.waterDeepColorIor &&
+                   lhs.waterAbsorptionRefraction == rhs.waterAbsorptionRefraction &&
+                   lhs.waterScatteringMaxDepth == rhs.waterScatteringMaxDepth &&
+                   lhs.waterFoam == rhs.waterFoam &&
+                   lhs.waterTextureIndices == rhs.waterTextureIndices;
         }
 
         void markDirty(const std::size_t index,

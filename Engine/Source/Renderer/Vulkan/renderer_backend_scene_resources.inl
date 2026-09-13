@@ -150,7 +150,8 @@
         }
 
         [[nodiscard]] GPUMaterialData packMaterial(const PBRMaterial& source,
-                                                   const Mesh& mesh) const {
+                                                   const Mesh& mesh,
+                                                   const WaterMaterial* water = nullptr) const {
             const auto textureIndex = [&](const std::int32_t localIndex) {
                 const auto offset = meshTextureOffsets.find(&mesh);
                 if (localIndex < 0 || offset == meshTextureOffsets.end() ||
@@ -171,7 +172,7 @@
             std::array<glm::vec4, 3> rotations{};
             for (std::size_t i = 0; i < source.textureTransforms.size(); ++i)
                 rotations[i / 4][i % 4] = source.textureTransforms[i].rotation;
-            return {
+            GPUMaterialData packed{
                 glm::vec4{source.baseColor.r(), source.baseColor.g(), source.baseColor.b(), source.metallic},
                 glm::vec4{source.roughness, source.aoStrength, source.alphaCutoff, source.baseColor.a()},
                 glm::ivec4{textureIndex(source.baseColorTexture), textureIndex(source.metallicRoughnessTexture),
@@ -196,6 +197,30 @@
                  transform(MaterialTextureSlot::Specular)},
                 rotations,
             };
+            if (water != nullptr) {
+                const std::int32_t normalMap = textureIndex(water->normalMap);
+                const std::int32_t foamTexture = textureIndex(water->foamTexture);
+                const std::int32_t flowMap = textureIndex(water->flowMap);
+                const std::int32_t flags = (water->enableSSR ? 1 : 0) |
+                                           (water->enableCaustics ? 2 : 0) |
+                                           (water->enableUnderwater ? 4 : 0);
+                packed.waterShallowColorRoughness = {water->shallowColor.x(), water->shallowColor.y(),
+                                                      water->shallowColor.z(), water->roughness};
+                packed.waterDeepColorIor = {water->deepColor.x(), water->deepColor.y(),
+                                             water->deepColor.z(), water->ior};
+                packed.waterAbsorptionRefraction = {water->absorptionCoefficient.x(),
+                                                     water->absorptionCoefficient.y(),
+                                                     water->absorptionCoefficient.z(),
+                                                     water->refractionStrength};
+                packed.waterScatteringMaxDepth = {water->scatteringCoefficient.x(),
+                                                   water->scatteringCoefficient.y(),
+                                                   water->scatteringCoefficient.z(),
+                                                   water->maxVisibleDepth};
+                packed.waterFoam = {water->foamIntensity, water->foamThreshold,
+                                    water->normalStrength, water->depthFadeDistance};
+                packed.waterTextureIndices = {normalMap, foamTexture, flowMap, flags};
+            }
+            return packed;
         }
 
         void createMeshBuffers() {
@@ -1630,7 +1655,11 @@
                             (renderer->materialOverride && slot == 0)
                             ? renderer->material.pbr
                             : (slot < mesh.materials.size() ? mesh.materials[slot] : PBRMaterial{});
-                        const GPUMaterialData material = packMaterial(source, mesh);
+                        const WaterMaterial* const water = renderer->materialOverride && slot == 0 &&
+                            renderer->material.shaderSource == MaterialShaderSource::BuiltIn &&
+                            renderer->material.shader == MaterialShader::Water
+                            ? &renderer->material.water : nullptr;
+                        const GPUMaterialData material = packMaterial(source, mesh, water);
                         GPUMaterialData& destination = materials[record.materialTableOffset + slot];
                         if (!optimizationFeatures.materialCaching ||
                             !sameMaterial(destination, material)) {

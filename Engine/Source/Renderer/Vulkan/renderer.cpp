@@ -58,6 +58,7 @@
 #include "Engine/Math/Math.h"
 #include "Engine/Core/Time.h"
 #include "Engine/Renderer/Passes/ForwardPass.h"
+#include "Engine/Renderer/Passes/WaterPass.h"
 #include "Engine/Renderer/Passes/ShadowPass.h"
 #include "Engine/Renderer/Passes/SkyPass.h"
 #include "Engine/Renderer/Passes/TonemapPass.h"
@@ -631,6 +632,10 @@ namespace Engine {
                 vkDestroyFramebuffer(device, hdrFramebuffer, nullptr);
             }
             hdrFramebuffer = VK_NULL_HANDLE;
+            if (lightingHdrFramebuffer != VK_NULL_HANDLE) vkDestroyFramebuffer(device, lightingHdrFramebuffer, nullptr);
+            lightingHdrFramebuffer = VK_NULL_HANDLE;
+            if (waterHdrFramebuffer != VK_NULL_HANDLE) vkDestroyFramebuffer(device, waterHdrFramebuffer, nullptr);
+            waterHdrFramebuffer = VK_NULL_HANDLE;
             destroySceneViewportResources();
             particlePipeline.destroy();
             sceneParticlePipeline.destroy();
@@ -638,6 +643,7 @@ namespace Engine {
             sceneSkyPass.destroy();
             forwardPass.destroy();
             lightingForwardPass.destroy();
+            waterPass.destroy();
             shadowPass.destroy();
             sceneDescriptorPass.destroy();
             indexBuffer.destroy();
@@ -645,6 +651,7 @@ namespace Engine {
             geometryHeapAllocations.clear();
             geometryHeapVertexHighWater = 0;
             geometryHeapIndexHighWater = 0;
+            opaqueSceneColor.destroy();
             sceneGpu.database.clear();
             for (Buffer &buffer: instanceBuffers) {
                 buffer.destroy();

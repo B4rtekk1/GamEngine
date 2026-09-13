@@ -20,6 +20,7 @@
                 sceneViewportForwardPass.destroy();
                 forwardPass.destroy();
                 lightingForwardPass.destroy();
+                waterPass.destroy();
                 gtaoPass.destroy();
                 shadowPass.destroy();
                 sceneDescriptorPass.destroy();

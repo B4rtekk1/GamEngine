@@ -82,8 +82,24 @@ void WaterSystem::rebuild(Registry& registry, const Entity entity) const {
     if (!registry.has<MeshRendererComponent>(entity)) registry.add<MeshRendererComponent>(entity);
     registry.modify<MeshRendererComponent>(entity, [&](MeshRendererComponent& renderer) {
         renderer.mesh = MeshHandle{std::move(source)}; renderer.materialOverride = true;
-        renderer.material.shader = MaterialShader::Water; renderer.material.pbr.baseColor = Math::Color::from_rgb(water.shallowColor.x(), water.shallowColor.y(), water.shallowColor.z());
-        renderer.material.pbr.roughness = water.roughness; renderer.castShadow = false;
+        renderer.material.shader = MaterialShader::Water;
+        renderer.material.water = {
+            .shallowColor = water.shallowColor,
+            .deepColor = water.deepColor,
+            .absorptionCoefficient = water.absorptionCoefficient,
+            .scatteringCoefficient = water.scatteringCoefficient,
+            .roughness = water.roughness,
+            .ior = water.ior,
+            .foamIntensity = water.foamIntensity,
+            .foamThreshold = water.foamThreshold,
+            .maxVisibleDepth = water.maxDepth,
+            .enableSSR = water.enableSSR,
+            .enableCaustics = water.enableCaustics,
+            .enableUnderwater = water.enableUnderwater,
+        };
+        // Water is composited as a surface; it must not produce a shadow-map
+        // receiver/caster entry from its displaced visual mesh.
+        renderer.castShadow = false;
     });
 }
 

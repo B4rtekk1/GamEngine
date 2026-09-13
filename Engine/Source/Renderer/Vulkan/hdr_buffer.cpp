@@ -42,6 +42,11 @@ namespace Engine {
                 .tiling = VK_IMAGE_TILING_OPTIMAL,
                 .usage = static_cast<VkImageUsageFlags>(VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT) |
                          static_cast<VkImageUsageFlags>(VK_IMAGE_USAGE_SAMPLED_BIT) |
+                         // Water copies the opaque HDR result before it draws
+                         // its refracting surface. Keeping this on every HDR
+                         // target also makes the attachment usable as a safe
+                         // source during a viewport transition.
+                         static_cast<VkImageUsageFlags>(VK_IMAGE_USAGE_TRANSFER_SRC_BIT) |
                          // Temporal AA clears its ping-pong history before its
                          // first use, which requires TRANSFER_DST usage.
                          static_cast<VkImageUsageFlags>(VK_IMAGE_USAGE_TRANSFER_DST_BIT) |

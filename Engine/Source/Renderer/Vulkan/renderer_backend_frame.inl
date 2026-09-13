@@ -884,6 +884,7 @@
                 instanceBuffers[currentFrame].handle(), indexBuffer.handle());
             for (std::uint32_t shader = 0; shader < MaterialProgramSlotCount; ++shader) {
                 if (!activeShaderSlots.test(shader)) continue;
+                if (shader == materialShaderIndex(MaterialShader::Water)) continue;
                 const auto commandOffset = static_cast<VkDeviceSize>(shader) * gpuObjects.size() *
                     sizeof(VkDrawIndexedIndirectCommand);
                 const auto countOffset = static_cast<VkDeviceSize>(shader) * sizeof(std::uint32_t);
@@ -919,6 +920,7 @@
                 shadowPass.descriptorSet(currentFrame), vertexBuffer.handle(), instanceBuffers[currentFrame].handle(), indexBuffer.handle());
             for (std::uint32_t shader = 0; shader < MaterialProgramSlotCount; ++shader) {
                 if (!activeShaderSlots.test(shader)) continue;
+                if (shader == materialShaderIndex(MaterialShader::Water)) continue;
                 const auto commandOffset = static_cast<VkDeviceSize>(shader) * gpuObjects.size() * sizeof(VkDrawIndexedIndirectCommand);
                 const auto countOffset = static_cast<VkDeviceSize>(shader) * sizeof(std::uint32_t);
                 lightingForwardPass.drawMaterial(commandBuffer, shadowPass.descriptorSet(currentFrame), shader, indirectDraws[currentFrame], commandOffset, countOffset);
@@ -935,6 +937,63 @@
             lightingForwardPass.drawOutline(commandBuffer, shadowPass.descriptorSet(currentFrame), indirectDraws[currentFrame]);
             ForwardPass::end(commandBuffer);
             gpuTimestampProfiler.endZone(commandBuffer, currentFrame);
+            if (activeShaderSlots.test(materialShaderIndex(MaterialShader::Water))) {
+                const VkImageMemoryBarrier2 barriersBefore[] = {
+                    {VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2, nullptr,
+                     VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT, VK_ACCESS_2_SHADER_SAMPLED_READ_BIT,
+                     VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_ACCESS_2_TRANSFER_READ_BIT,
+                     VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                     VK_QUEUE_FAMILY_IGNORED, VK_QUEUE_FAMILY_IGNORED, hdrBuffer.image(),
+                     {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1}},
+                    {VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2, nullptr,
+                     opaqueSceneColorInitialized ? VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT : VK_PIPELINE_STAGE_2_NONE,
+                     opaqueSceneColorInitialized ? VK_ACCESS_2_SHADER_SAMPLED_READ_BIT : 0,
+                     VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT,
+                     opaqueSceneColorInitialized ? VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL : VK_IMAGE_LAYOUT_UNDEFINED,
+                     VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_QUEUE_FAMILY_IGNORED, VK_QUEUE_FAMILY_IGNORED,
+                     opaqueSceneColor.image(), {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1}},
+                };
+                VkDependencyInfo dependency{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
+                dependency.imageMemoryBarrierCount = std::size(barriersBefore);
+                dependency.pImageMemoryBarriers = barriersBefore;
+                vkCmdPipelineBarrier2(commandBuffer, &dependency);
+                const VkImageCopy copy{{VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1}, {0, 0, 0},
+                                       {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1}, {0, 0, 0},
+                                       {swapchain.extent().width, swapchain.extent().height, 1}};
+                vkCmdCopyImage(commandBuffer, hdrBuffer.image(), VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                               opaqueSceneColor.image(), VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &copy);
+                const VkImageMemoryBarrier2 barriersAfter[] = {
+                    {VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2, nullptr,
+                     VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_ACCESS_2_TRANSFER_READ_BIT,
+                     VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT, VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT,
+                     VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                     VK_QUEUE_FAMILY_IGNORED, VK_QUEUE_FAMILY_IGNORED, hdrBuffer.image(),
+                     {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1}},
+                    {VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2, nullptr,
+                     VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT,
+                     VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT, VK_ACCESS_2_SHADER_SAMPLED_READ_BIT,
+                     VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                     VK_QUEUE_FAMILY_IGNORED, VK_QUEUE_FAMILY_IGNORED, opaqueSceneColor.image(),
+                     {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1}},
+                };
+                dependency.imageMemoryBarrierCount = std::size(barriersAfter);
+                dependency.pImageMemoryBarriers = barriersAfter;
+                vkCmdPipelineBarrier2(commandBuffer, &dependency);
+                opaqueSceneColorInitialized = true;
+                const DepthBuffer& waterDepth = msaa.enabled() ? hiZDepthBuffer : depthBuffer;
+                shadowPass.setWaterSceneTextures(currentFrame,
+                    {opaqueSceneColor.sampler(), opaqueSceneColor.imageView(), VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL},
+                    {waterDepth.sampler(), waterDepth.imageView(), VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL});
+                waterPass.begin(commandBuffer, waterHdrFramebuffer, swapchain.extent(),
+                                shadowPass.descriptorSet(currentFrame), vertexBuffer.handle(), indexBuffer.handle());
+                const auto commandOffset = static_cast<VkDeviceSize>(materialShaderIndex(MaterialShader::Water)) *
+                    gpuObjects.size() * sizeof(VkDrawIndexedIndirectCommand);
+                const auto countOffset = static_cast<VkDeviceSize>(materialShaderIndex(MaterialShader::Water)) *
+                    sizeof(std::uint32_t);
+                waterPass.draw(commandBuffer, shadowPass.descriptorSet(currentFrame), indirectDraws[currentFrame],
+                               commandOffset, countOffset);
+                WaterPass::end(commandBuffer);
+            }
             }
 
             if (renderSceneViewport) {
@@ -972,6 +1031,10 @@
                     instanceBuffers[currentFrame].handle(), indexBuffer.handle());
                 for (std::uint32_t shader = 0; shader < MaterialProgramSlotCount; ++shader) {
                     if (!activeShaderSlots.test(shader)) continue;
+                    // Scene View will receive the same dedicated post-opaque
+                    // WaterPass when its viewport render graph is split. Do
+                    // not accidentally run water through its opaque pass.
+                    if (shader == materialShaderIndex(MaterialShader::Water)) continue;
                     const auto commandOffset = static_cast<VkDeviceSize>(shader) * gpuObjects.size() *
                         sizeof(VkDrawIndexedIndirectCommand);
                     const auto countOffset = static_cast<VkDeviceSize>(shader) * sizeof(std::uint32_t);
@@ -1192,10 +1255,16 @@
                 vkDestroyFramebuffer(device, lightingHdrFramebuffer, nullptr);
                 lightingHdrFramebuffer = VK_NULL_HANDLE;
             }
+            if (waterHdrFramebuffer != VK_NULL_HANDLE) {
+                vkDestroyFramebuffer(device, waterHdrFramebuffer, nullptr);
+                waterHdrFramebuffer = VK_NULL_HANDLE;
+            }
             destroySceneViewportResources();
 
             msaa.destroy();
             hdrBuffer.destroy();
+            opaqueSceneColor.destroy();
+            opaqueSceneColorInitialized = false;
             destroyDepthResources();
             destroyRenderFinishedSemaphores();
             swapchain.destroy();
@@ -1241,6 +1310,7 @@
             // culling resize/rebuild.
             forwardPass.destroy();
             lightingForwardPass.destroy();
+            waterPass.destroy();
             shadowPass.destroy();
             sceneDescriptorPass.destroy();
             destroyCullingResources();
@@ -1259,9 +1329,15 @@
                 vkDestroyFramebuffer(device, lightingHdrFramebuffer, nullptr);
                 lightingHdrFramebuffer = VK_NULL_HANDLE;
             }
+            if (waterHdrFramebuffer != VK_NULL_HANDLE) {
+                vkDestroyFramebuffer(device, waterHdrFramebuffer, nullptr);
+                waterHdrFramebuffer = VK_NULL_HANDLE;
+            }
             destroySceneViewportResources();
             msaa.destroy();
             hdrBuffer.destroy();
+            opaqueSceneColor.destroy();
+            opaqueSceneColorInitialized = false;
             destroyDepthResources();
             destroyRenderFinishedSemaphores();
 
@@ -1278,6 +1354,8 @@
                 return;
             }
             hdrBuffer.create(vulkanDevice.physical(), device, swapchain.extent(), vulkanDevice.allocator());
+            opaqueSceneColor.create(vulkanDevice.physical(), device, swapchain.extent(), vulkanDevice.allocator());
+            opaqueSceneColorInitialized = false;
             msaa.create(swapchain.extent(), HdrBuffer::Format);
             createDepthResources();
             createGtaoPass();
