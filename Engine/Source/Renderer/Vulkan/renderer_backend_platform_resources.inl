@@ -495,7 +495,11 @@
                              msaa.enabled() ? hiZDepthBuffer.format() : VK_FORMAT_UNDEFINED,
                              msaa.enabled() ? vulkanDevice.depthResolveMode() : VK_RESOLVE_MODE_NONE,
                              shadowPass.descriptorSetLayout(), assetManager,
-                             antialiasingLevel == AntialiasingLevel::TAA);
+                             antialiasingLevel == AntialiasingLevel::TAA,
+                             {opaqueSceneColor.sampler(), opaqueSceneColor.imageView(), VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL},
+                             {(msaa.enabled() ? hiZDepthBuffer : depthBuffer).sampler(),
+                              (msaa.enabled() ? hiZDepthBuffer : depthBuffer).imageView(),
+                              VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL});
         }
 
         void createSceneViewportForwardPass() {

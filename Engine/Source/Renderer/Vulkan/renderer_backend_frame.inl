@@ -261,6 +261,9 @@
             // Steady frames keep the much cheaper normal budget.
             const Vec3 currentCameraPosition = cameraController.camera()->position();
             const Vec3 currentCameraForward = cameraController.camera()->forward();
+            // Keep ocean clipmap geometry camera-local while its Gerstner
+            // phase remains world-anchored in the water shader.
+            WaterSystem{}.updateOceans(registry, currentCameraPosition);
             constexpr float cameraCutDistance = 5.0F;
             constexpr float cameraCutDirectionDot = 0.8660254F; // 30 degrees
             const bool cameraCut = previousGameCameraValid &&
@@ -980,12 +983,9 @@
                 dependency.pImageMemoryBarriers = barriersAfter;
                 vkCmdPipelineBarrier2(commandBuffer, &dependency);
                 opaqueSceneColorInitialized = true;
-                const DepthBuffer& waterDepth = msaa.enabled() ? hiZDepthBuffer : depthBuffer;
-                shadowPass.setWaterSceneTextures(currentFrame,
-                    {opaqueSceneColor.sampler(), opaqueSceneColor.imageView(), VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL},
-                    {waterDepth.sampler(), waterDepth.imageView(), VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL});
                 waterPass.begin(commandBuffer, waterHdrFramebuffer, swapchain.extent(),
-                                shadowPass.descriptorSet(currentFrame), vertexBuffer.handle(), indexBuffer.handle());
+                                shadowPass.descriptorSet(currentFrame), currentFrame,
+                                vertexBuffer.handle(), indexBuffer.handle());
                 const auto commandOffset = static_cast<VkDeviceSize>(materialShaderIndex(MaterialShader::Water)) *
                     gpuObjects.size() * sizeof(VkDrawIndexedIndirectCommand);
                 const auto countOffset = static_cast<VkDeviceSize>(materialShaderIndex(MaterialShader::Water)) *

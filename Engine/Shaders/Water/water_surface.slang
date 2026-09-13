@@ -16,10 +16,11 @@ import Common.SceneData;
 [[vk::binding(6, 0)]] StructuredBuffer<uint> visibleInstanceIndices;
 [[vk::binding(11, 0)]] SamplerCube prefilteredEnvironmentMap;
 [[vk::binding(13, 0)]] Sampler2D materialTextures[];
-// Immutable copies made after opaque lighting. Water never samples the HDR
-// attachment it is currently writing, which would be a feedback hazard.
-[[vk::binding(17, 0)]] Sampler2D opaqueSceneColor;
-[[vk::binding(18, 0)]] Sampler2D opaqueSceneDepth;
+// Immutable copies made after opaque lighting.  These belong to Water's own
+// descriptor set: updating them can therefore never mutate a forward set that
+// is already referenced by this command buffer.
+[[vk::binding(0, 1)]] Sampler2D opaqueSceneColor;
+[[vk::binding(1, 1)]] Sampler2D opaqueSceneDepth;
 #if FORWARD_OUTPUT_VELOCITY
 [[vk::binding(8, 0)]] StructuredBuffer<RendererPreviousTransformData> previousTransforms;
 #endif
@@ -63,6 +64,8 @@ struct WaterVertexOutput
     float4 position : SV_Position;
     [[vk::location(0)]] float3 worldPosition;
     [[vk::location(1)]] float3 normal;
+    [[vk::location(6)]] float3 tangent;
+    [[vk::location(7)]] float3 binormal;
     [[vk::location(2)]] nointerpolation uint materialIndex;
     [[vk::location(5)]] float2 texCoord;
 #if FORWARD_OUTPUT_VELOCITY
@@ -83,13 +86,18 @@ WaterVertexOutput vertexMain(WaterVertexInput input, uint instanceIndex : SV_Ins
         2.0 * (q.x * q.y - q.z * q.w), 1.0 - 2.0 * (q.x * q.x + q.z * q.z), 2.0 * (q.y * q.z + q.x * q.w),
         2.0 * (q.x * q.z + q.y * q.w), 2.0 * (q.y * q.z - q.x * q.w), 1.0 - 2.0 * (q.x * q.x + q.y * q.y));
     float3 displacement; float3 tangent; float3 binormal;
-    evaluateGerstnerWaves(input.position.xz, frame.windGustFrequencyTime.z, displacement, tangent, binormal);
-    float3 worldPosition = mul((input.position + displacement) * instance.scaleBase.xyz, rotationMatrix) + instance.positionMaterial.xyz;
+    // Anchor wave phase in world space.  Ocean clipmap recentering now moves
+    // only its sampling mesh, never the surface function itself.
+    float3 baseWorldPosition = mul(input.position * instance.scaleBase.xyz, rotationMatrix) + instance.positionMaterial.xyz;
+    evaluateGerstnerWaves(baseWorldPosition.xz, frame.windGustFrequencyTime.z, displacement, tangent, binormal);
+    float3 worldPosition = baseWorldPosition + mul(displacement * instance.scaleBase.xyz, rotationMatrix);
     WaterVertexOutput output;
     float4 currentClip = mul(mul(float4(worldPosition, 1.0), frame.view), frame.projection);
     output.position = currentClip;
     output.worldPosition = worldPosition;
-    output.normal = normalize(mul(normalize(cross(binormal, tangent)), rotationMatrix));
+    output.tangent = normalize(mul(tangent, rotationMatrix));
+    output.binormal = normalize(mul(binormal, rotationMatrix));
+    output.normal = normalize(cross(output.binormal, output.tangent));
     output.materialIndex = asuint(instance.positionMaterial.w) + input.materialIndex;
     output.texCoord = input.texCoord;
 #if FORWARD_OUTPUT_VELOCITY
@@ -99,8 +107,9 @@ WaterVertexOutput vertexMain(WaterVertexInput input, uint instanceIndex : SV_Ins
         1.0 - 2.0 * (previousQ.y * previousQ.y + previousQ.z * previousQ.z), 2.0 * (previousQ.x * previousQ.y + previousQ.z * previousQ.w), 2.0 * (previousQ.x * previousQ.z - previousQ.y * previousQ.w),
         2.0 * (previousQ.x * previousQ.y - previousQ.z * previousQ.w), 1.0 - 2.0 * (previousQ.x * previousQ.x + previousQ.z * previousQ.z), 2.0 * (previousQ.y * previousQ.z + previousQ.x * previousQ.w),
         2.0 * (previousQ.x * previousQ.z + previousQ.y * previousQ.w), 2.0 * (previousQ.y * previousQ.z - previousQ.x * previousQ.w), 1.0 - 2.0 * (previousQ.x * previousQ.x + previousQ.y * previousQ.y));
-    evaluateGerstnerWaves(input.position.xz, frame.windGustFrequencyTime.w, displacement, tangent, binormal);
-    float3 previousWorldPosition = mul((input.position + displacement) * previous.previousScale.xyz, previousRotation) + previous.previousPosition.xyz;
+    float3 previousBaseWorldPosition = mul(input.position * previous.previousScale.xyz, previousRotation) + previous.previousPosition.xyz;
+    evaluateGerstnerWaves(previousBaseWorldPosition.xz, frame.windGustFrequencyTime.w, displacement, tangent, binormal);
+    float3 previousWorldPosition = previousBaseWorldPosition + mul(displacement * previous.previousScale.xyz, previousRotation);
     output.currentNdc = currentClip.xy / currentClip.w;
     output.previousClip = mul(mul(float4(previousWorldPosition, 1.0), frame.previousView), frame.previousProjection);
 #endif
@@ -112,6 +121,8 @@ struct WaterFragmentInput
     float4 position : SV_Position;
     [[vk::location(0)]] float3 worldPosition;
     [[vk::location(1)]] float3 normal;
+    [[vk::location(6)]] float3 tangent;
+    [[vk::location(7)]] float3 binormal;
     [[vk::location(2)]] nointerpolation uint materialIndex;
     [[vk::location(5)]] float2 texCoord;
 #if FORWARD_OUTPUT_VELOCITY
@@ -147,9 +158,10 @@ WaterFragmentOutput fragmentMain(WaterFragmentInput input)
     // Macro normal follows the displaced Gerstner geometry. A material-owned
     // normal map is strictly micro detail, never the water's main shape.
     if (material.waterTextureIndices.x >= 0) {
-        float3 micro = materialTextures[NonUniformResourceIndex(material.waterTextureIndices.x)]
+        float3 microTS = materialTextures[NonUniformResourceIndex(material.waterTextureIndices.x)]
             .Sample(input.texCoord * 6.0 + frame.windDirectionStrength.xz * frame.windGustFrequencyTime.z * 0.04).xyz * 2.0 - 1.0;
-        normal = normalize(normal + micro * material.waterFoam.z);
+        float3 microWS = normalize(input.tangent * microTS.x + input.binormal * microTS.y + normal * microTS.z);
+        normal = normalize(lerp(normal, microWS, saturate(material.waterFoam.z)));
     }
 
     float3 viewDirection = normalize(frame.cameraPosition.xyz - input.worldPosition);
@@ -161,10 +173,17 @@ WaterFragmentOutput fragmentMain(WaterFragmentInput input)
     float fresnel = f0 + (1.0 - f0) * pow(1.0 - nDotV, 5.0);
 
     float2 screenUv = input.position.xy / frame.clusteredViewportNearFar.xy;
-    float2 distortedUv = clamp(screenUv + normal.xz * material.waterAbsorptionRefraction.w,
+    float3 normalVS = normalize(mul(normal, (float3x3)frame.view));
+    float2 distortedUv = clamp(screenUv + normalVS.xy * material.waterAbsorptionRefraction.w,
                                float2(0.001, 0.001), float2(0.999, 0.999));
-    const float opaqueDepth = opaqueSceneDepth.SampleLevel(distortedUv, 0.0).r;
+    float opaqueDepth = opaqueSceneDepth.SampleLevel(distortedUv, 0.0).r;
     const float waterDepth = input.position.z;
+    // Never refract foreground geometry into the water surface.  Falling back
+    // to the undistorted scene sample is stable at intersections.
+    if (opaqueDepth <= waterDepth) {
+        distortedUv = screenUv;
+        opaqueDepth = opaqueSceneDepth.SampleLevel(distortedUv, 0.0).r;
+    }
     float thickness = opaqueDepth >= 0.99999
         ? material.waterScatteringMaxDepth.w
         : max(0.0, linearViewDepth(opaqueDepth) - linearViewDepth(waterDepth));

@@ -24,6 +24,8 @@ namespace Engine {
         VkFormat colorFormat = VK_FORMAT_UNDEFINED;
         /// Optional second color attachment used by MRT pipelines.
         VkFormat additionalColorFormat = VK_FORMAT_UNDEFINED;
+        /// Load operation for the optional MRT attachment.
+        VkAttachmentLoadOp additionalColorLoadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
         /// Existing render pass to use instead of creating one.
         VkRenderPass existingRenderPass = VK_NULL_HANDLE;
         /// Depth attachment format, or VK_FORMAT_UNDEFINED when unused.

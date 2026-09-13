@@ -111,9 +111,13 @@ Mesh WaterSystem::buildMesh(const WaterBodyComponent& water) {
 void WaterSystem::updateOceans(Registry& registry, const Vec3& cameraPosition) const {
     registry.view<WaterBodyComponent, TransformComponent>([&](const Entity entity, const WaterBodyComponent& water, const TransformComponent&) {
         if (water.type != WaterBodyType::Ocean) return;
+        const float snappedX = std::floor(cameraPosition.x() / 3.125F) * 3.125F;
+        const float snappedZ = std::floor(cameraPosition.z() / 3.125F) * 3.125F;
+        const TransformComponent& transform = registry.get<TransformComponent>(entity);
+        if (transform.position.x() == snappedX && transform.position.z() == snappedZ) return;
         registry.modify<TransformComponent>(entity, [&](TransformComponent& transform) {
-            transform.position.setX(std::floor(cameraPosition.x() / 3.125F) * 3.125F);
-            transform.position.setZ(std::floor(cameraPosition.z() / 3.125F) * 3.125F);
+            transform.position.setX(snappedX);
+            transform.position.setZ(snappedZ);
         });
     });
 }

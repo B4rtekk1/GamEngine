@@ -69,22 +69,15 @@ void ForwardPass::create(VkDevice device, const VkFormat colorFormat,
         : std::array{"shaders/forward_pbr_no_velocity.spv", "shaders/forward_unlit_no_velocity.spv",
                      "shaders/forward_hologram_no_velocity.spv", "shaders/forward_water_no_velocity.spv"};
     for (std::size_t index = 0; index < shaderPaths.size(); ++index) {
+        // Water has its own render pass and a second descriptor set for the
+        // immutable opaque scene.  Building a forward-compatible pipeline
+        // here produces a validation warning (velocity target mismatch) and
+        // can never be selected by a draw loop.
+        if (index == materialShaderIndex(MaterialShader::Water)) continue;
         GraphicsPipelineOptions materialOptions = options;
         materialOptions.shader = shaderPaths[index];
         if (index != materialShaderIndex(MaterialShader::StandardPBR)) {
             materialOptions.existingRenderPass = materialPipelines_[0].renderPass();
-        }
-        if (index == materialShaderIndex(MaterialShader::Water)) {
-            // Water owns its macro normal analytically, but retains UV0 for
-            // optional micro-normal, foam and future flow-map sampling.
-            materialOptions.vertexAttributes.erase(
-                std::remove_if(materialOptions.vertexAttributes.begin(), materialOptions.vertexAttributes.end(),
-                               [](const VkVertexInputAttributeDescription& attribute) {
-                                   return attribute.location == 1 || attribute.location == 3 ||
-                                          attribute.location == 4 ||
-                                          attribute.location == 9;
-                               }),
-                materialOptions.vertexAttributes.end());
         }
         materialPipelines_[index].create(device, materialOptions);
     }

@@ -4,16 +4,20 @@
 #include "Engine/Renderer/Geometry/GpuVertex.h"
 
 #include <cstddef>
+#include <stdexcept>
 
 namespace Engine {
 void WaterPass::create(const VkDevice device, const VkFormat colorFormat, const VkFormat depthFormat,
                        const VkSampleCountFlagBits samples, const VkFormat depthResolveFormat,
                        const VkResolveModeFlagBits depthResolveMode, const VkDescriptorSetLayout sceneLayout,
-                       Assets::AssetManager& assets, const bool velocity) {
+                       Assets::AssetManager& assets, const bool velocity,
+                       const VkDescriptorImageInfo& opaqueColor, const VkDescriptorImageInfo& opaqueDepth) {
+    device_ = device;
     hasVelocity_ = velocity;
     GraphicsPipelineOptions options{};
     options.colorFormat = colorFormat;
     options.additionalColorFormat = velocity ? VK_FORMAT_R16G16_SFLOAT : VK_FORMAT_UNDEFINED;
+    options.additionalColorLoadOp = velocity ? VK_ATTACHMENT_LOAD_OP_LOAD : VK_ATTACHMENT_LOAD_OP_CLEAR;
     options.depthFormat = depthFormat;
     options.samples = samples;
     options.depthResolveFormat = depthResolveFormat;
@@ -31,7 +35,15 @@ void WaterPass::create(const VkDevice device, const VkFormat colorFormat, const 
     options.shader = velocity ? "shaders/forward_water.spv" : "shaders/forward_water_no_velocity.spv";
     options.assetManager = &assets;
     options.cullMode = VK_CULL_MODE_NONE;
-    options.descriptorSetLayouts = {sceneLayout};
+    const VkDescriptorSetLayoutBinding bindings[] = {
+        {0, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr},
+        {1, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr},
+    };
+    const VkDescriptorSetLayoutCreateInfo layoutInfo{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO,
+        nullptr, 0, static_cast<std::uint32_t>(std::size(bindings)), bindings};
+    if (vkCreateDescriptorSetLayout(device_, &layoutInfo, nullptr, &sceneTextureLayout_) != VK_SUCCESS)
+        throw std::runtime_error("Could not create water scene descriptor layout");
+    options.descriptorSetLayouts = {sceneLayout, sceneTextureLayout_};
     options.vertexBindings = {{0, sizeof(GpuVertex), VK_VERTEX_INPUT_RATE_VERTEX}};
     options.vertexAttributes = {
         {0, 0, VK_FORMAT_R32G32B32_SFLOAT, offsetof(GpuVertex, px)},
@@ -39,18 +51,51 @@ void WaterPass::create(const VkDevice device, const VkFormat colorFormat, const 
         {8, 0, VK_FORMAT_R32_UINT, offsetof(GpuVertex, materialIndex)},
     };
     pipeline_.create(device, options);
+    createSceneDescriptors(opaqueColor, opaqueDepth);
 }
 
-void WaterPass::destroy() noexcept { pipeline_.destroy(); hasVelocity_ = false; }
+void WaterPass::createSceneDescriptors(const VkDescriptorImageInfo& opaqueColor,
+                                       const VkDescriptorImageInfo& opaqueDepth) {
+    const VkDescriptorPoolSize size{VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, FramesInFlight * 2U};
+    const VkDescriptorPoolCreateInfo poolInfo{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO, nullptr, 0,
+        FramesInFlight, 1, &size};
+    if (vkCreateDescriptorPool(device_, &poolInfo, nullptr, &descriptorPool_) != VK_SUCCESS)
+        throw std::runtime_error("Could not create water scene descriptor pool");
+    std::array<VkDescriptorSetLayout, FramesInFlight> layouts{}; layouts.fill(sceneTextureLayout_);
+    VkDescriptorSetAllocateInfo allocate{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};
+    allocate.descriptorPool = descriptorPool_; allocate.descriptorSetCount = FramesInFlight;
+    allocate.pSetLayouts = layouts.data();
+    if (vkAllocateDescriptorSets(device_, &allocate, sceneTextureSets_.data()) != VK_SUCCESS)
+        throw std::runtime_error("Could not allocate water scene descriptor sets");
+    for (const VkDescriptorSet set : sceneTextureSets_) {
+        const VkWriteDescriptorSet writes[] = {
+            {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr, set, 0, 0, 1, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &opaqueColor, nullptr, nullptr},
+            {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr, set, 1, 0, 1, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &opaqueDepth, nullptr, nullptr},
+        };
+        vkUpdateDescriptorSets(device_, std::size(writes), writes, 0, nullptr);
+    }
+}
+
+void WaterPass::destroy() noexcept {
+    pipeline_.destroy();
+    if (device_ != VK_NULL_HANDLE) {
+        if (descriptorPool_ != VK_NULL_HANDLE) vkDestroyDescriptorPool(device_, descriptorPool_, nullptr);
+        if (sceneTextureLayout_ != VK_NULL_HANDLE) vkDestroyDescriptorSetLayout(device_, sceneTextureLayout_, nullptr);
+    }
+    device_ = VK_NULL_HANDLE; descriptorPool_ = VK_NULL_HANDLE; sceneTextureLayout_ = VK_NULL_HANDLE;
+    sceneTextureSets_.fill(VK_NULL_HANDLE); hasVelocity_ = false;
+}
 
 void WaterPass::begin(const VkCommandBuffer commandBuffer, const VkFramebuffer framebuffer,
                       const VkExtent2D extent, const VkDescriptorSet descriptorSet,
-                      const VkBuffer vertexBuffer, const VkBuffer indexBuffer) const {
+                      const std::uint32_t frameIndex, const VkBuffer vertexBuffer, const VkBuffer indexBuffer) const {
     VkRenderPassBeginInfo info{VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO};
     info.renderPass = pipeline_.renderPass(); info.framebuffer = framebuffer; info.renderArea.extent = extent;
     vkCmdBeginRenderPass(commandBuffer, &info, VK_SUBPASS_CONTENTS_INLINE);
     vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline_.handle());
-    vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline_.layout(), 0, 1, &descriptorSet, 0, nullptr);
+    const std::array sets{descriptorSet, sceneTextureSets_.at(frameIndex % FramesInFlight)};
+    vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline_.layout(), 0,
+                            static_cast<std::uint32_t>(sets.size()), sets.data(), 0, nullptr);
     constexpr VkDeviceSize offset{};
     vkCmdBindVertexBuffers(commandBuffer, 0, 1, &vertexBuffer, &offset);
     vkCmdBindIndexBuffer(commandBuffer, indexBuffer, 0, VK_INDEX_TYPE_UINT32);

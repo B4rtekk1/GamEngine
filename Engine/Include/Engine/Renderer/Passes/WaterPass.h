@@ -4,6 +4,8 @@
 
 #include <vulkan/vulkan.h>
 
+#include <array>
+
 namespace Engine {
 namespace Culling { class IndexedIndirectDrawCount; }
 
@@ -19,10 +21,12 @@ public:
     void create(VkDevice device, VkFormat colorFormat, VkFormat depthFormat,
                 VkSampleCountFlagBits samples, VkFormat depthResolveFormat,
                 VkResolveModeFlagBits depthResolveMode, VkDescriptorSetLayout sceneLayout,
-                Assets::AssetManager& assets, bool velocity);
+                Assets::AssetManager& assets, bool velocity,
+                const VkDescriptorImageInfo& opaqueColor, const VkDescriptorImageInfo& opaqueDepth);
     void destroy() noexcept;
     void begin(VkCommandBuffer commandBuffer, VkFramebuffer framebuffer, VkExtent2D extent,
-               VkDescriptorSet descriptorSet, VkBuffer vertexBuffer, VkBuffer indexBuffer) const;
+               VkDescriptorSet sceneDescriptorSet, std::uint32_t frameIndex,
+               VkBuffer vertexBuffer, VkBuffer indexBuffer) const;
     void draw(VkCommandBuffer commandBuffer, VkDescriptorSet descriptorSet,
               const Culling::IndexedIndirectDrawCount& indirectDraw,
               VkDeviceSize commandOffset, VkDeviceSize countOffset) const;
@@ -30,7 +34,14 @@ public:
     [[nodiscard]] VkRenderPass renderPass() const noexcept { return pipeline_.renderPass(); }
 
 private:
+    static constexpr std::uint32_t FramesInFlight = 3;
+    void createSceneDescriptors(const VkDescriptorImageInfo& opaqueColor,
+                                const VkDescriptorImageInfo& opaqueDepth);
     GraphicsPipeline pipeline_;
+    VkDevice device_{VK_NULL_HANDLE};
+    VkDescriptorSetLayout sceneTextureLayout_{VK_NULL_HANDLE};
+    VkDescriptorPool descriptorPool_{VK_NULL_HANDLE};
+    std::array<VkDescriptorSet, FramesInFlight> sceneTextureSets_{};
     bool hasVelocity_{};
 };
 } // namespace Engine

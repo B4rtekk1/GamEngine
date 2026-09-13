@@ -59,6 +59,7 @@
 #include "Engine/Core/Time.h"
 #include "Engine/Renderer/Passes/ForwardPass.h"
 #include "Engine/Renderer/Passes/WaterPass.h"
+#include "Engine/Renderer/Water/WaterSystem.h"
 #include "Engine/Renderer/Passes/ShadowPass.h"
 #include "Engine/Renderer/Passes/SkyPass.h"
 #include "Engine/Renderer/Passes/TonemapPass.h"

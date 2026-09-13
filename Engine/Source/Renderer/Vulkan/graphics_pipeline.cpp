@@ -73,7 +73,9 @@ namespace Engine {
             .format = options.colorFormat,
             .samples = options.samples,
             .loadOp = options.colorLoadOp,
-            .storeOp = usesMsaa ? VK_ATTACHMENT_STORE_OP_DONT_CARE : VK_ATTACHMENT_STORE_OP_STORE,
+            // A later compositing pass (water) may LOAD the MSAA attachment.
+            // DONT_CARE would make that perfectly valid use undefined.
+            .storeOp = VK_ATTACHMENT_STORE_OP_STORE,
             .stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE,
             .stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE,
             .initialLayout = options.colorInitialLayout,
@@ -163,7 +165,7 @@ namespace Engine {
                 .sType = VK_STRUCTURE_TYPE_ATTACHMENT_DESCRIPTION_2,
                 .format = options.additionalColorFormat,
                 .samples = options.samples,
-                .loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR,
+                .loadOp = options.additionalColorLoadOp,
                 .storeOp = VK_ATTACHMENT_STORE_OP_STORE,
                 .stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE,
                 .stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE,
