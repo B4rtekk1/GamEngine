@@ -5,7 +5,7 @@ struct VertexOutput { float4 position : SV_Position; [[vk::location(0)]] float2 
 [[vk::binding(0,0)]] Sampler2D depthTexture;
 struct Settings { float4x4 inverseProjection; float fullWidth, fullHeight, radiusView, falloff; };
 [[vk::push_constant]] ConstantBuffer<Settings> settings;
-struct Input { [[vk::location(0)]] float2 uv; }; struct Output { [[vk::location(0)]] float4 value:SV_Target; };
+struct Input { [[vk::location(0)]] float2 uv; }; struct Output { [[vk::location(0)]] float value:SV_Target0; [[vk::location(1)]] float4 auxiliary:SV_Target1; };
 static const float Pi = 3.14159265359;
 // rawAo is R16G16B16A16_SFLOAT.  Keep the sky sentinel below FP16's largest
 // finite value (65504), otherwise it is stored as infinity and INF-INF in
@@ -13,9 +13,12 @@ static const float Pi = 3.14159265359;
 static const float BackgroundViewDepth = 65500.0;
 float3 positionFromDepth(float2 uv,float z) { float4 p=mul(float4(uv*2-1,z,1),settings.inverseProjection); return p.xyz/max(p.w,1e-6); }
 float3 normalFromDepth(float2 uv,float3 p) { float2 t=1/float2(settings.fullWidth,settings.fullHeight); float3 px=positionFromDepth(uv+float2(t.x,0),depthTexture.SampleLevel(uv+float2(t.x,0),0).r); float3 py=positionFromDepth(uv+float2(0,t.y),depthTexture.SampleLevel(uv+float2(0,t.y),0).r); return normalize(cross(px-p,py-p)); }
+// The spatial denoiser consumes this directly.  Keeping the normal beside AO
+// avoids reconstructing the same normal from depth in every filter tap.
+float2 encodeOctNormal(float3 n) { n/=max(abs(n.x)+abs(n.y)+abs(n.z),1e-6); if(n.z<0) n.xy=(1-abs(n.yx))*float2(n.x>=0?1:-1,n.y>=0?1:-1); return n.xy*.5+.5; }
 float integrateHorizon(float horizon, float normalAngle, float normalCos) { return (normalCos + 2.0*horizon*sin(normalAngle) - cos(2.0*horizon-normalAngle))*0.25; }
 [shader("fragment")] Output fragmentMain(Input input) {
-    Output o; float z=depthTexture.SampleLevel(input.uv,0).r; if(z>=0.999999) { o.value=float4(1,BackgroundViewDepth,0,1); return o; }
+    Output o; float z=depthTexture.SampleLevel(input.uv,0).r; if(z>=0.999999) { o.value=1; o.auxiliary=float4(BackgroundViewDepth,0,1,0); return o; }
     float3 p=positionFromDepth(input.uv,z); float viewDepth=max(-p.z,1e-4); float3 n=normalFromDepth(input.uv,p);
     float2 projectionScale=float2(1.0/settings.inverseProjection[0][0],1.0/settings.inverseProjection[1][1]);
     float2 radiusUv=0.5*settings.radiusView*abs(projectionScale)/viewDepth;
@@ -47,5 +50,5 @@ float integrateHorizon(float horizon, float normalAngle, float normalCos) { retu
         h1=normalAngle+clamp(h1-normalAngle,-Pi*.5,Pi*.5);
         visibility+=normalLength*(integrateHorizon(h0,normalAngle,normalCos)+integrateHorizon(h1,normalAngle,normalCos));
     }
-    o.value=float4(saturate(visibility/directions),viewDepth,0,1); return o;
+    o.value=saturate(visibility/directions); o.auxiliary=float4(viewDepth,encodeOctNormal(n),0); return o;
 }

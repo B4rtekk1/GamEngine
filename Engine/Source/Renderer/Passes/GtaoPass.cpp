@@ -7,10 +7,13 @@
 namespace Engine {
 namespace {
 struct RawSettings { glm::mat4 inverseProjection; float fullWidth, fullHeight, radiusView, falloff; };
-struct FilterSettings { glm::mat4 inverseProjection; float inverseWidth, inverseHeight, depthSigma, normalSigma; };
+struct FilterSettings { float inverseWidth, inverseHeight, depthSigma, normalSigma; glm::vec2 direction; };
 struct TemporalSettings { float inverseWidth, inverseHeight, historyWeight, padding; };
-struct UpsampleSettings { glm::mat4 inverseProjection; float inverseFullWidth, inverseFullHeight, depthSigma, padding; };
-constexpr VkFormat AoFormat = VK_FORMAT_R16G16B16A16_SFLOAT;
+struct UpsampleSettings { glm::mat4 inverseProjection; float inverseFullWidth, inverseFullHeight, depthSigma, padding; float inverseHalfWidth, inverseHalfHeight, padding0, padding1; };
+constexpr VkFormat AoFormat = VK_FORMAT_R16_SFLOAT;
+constexpr VkFormat HistoryFormat = VK_FORMAT_R16G16_SFLOAT;
+constexpr VkFormat AuxiliaryFormat = VK_FORMAT_R16G16B16A16_SFLOAT;
+constexpr VkFormat FullAoFormat = VK_FORMAT_R8_UNORM;
 }
 
 GtaoPass::~GtaoPass() { destroy(); }
@@ -22,31 +25,35 @@ void GtaoPass::create(const VkPhysicalDevice physical, const VkDevice device, co
     halfExtent_ = {std::max(1U, fullExtent.width / 2U), std::max(1U, fullExtent.height / 2U)};
     try {
         raw_.create(physical, device_, halfExtent_, allocator, VK_FILTER_NEAREST, AoFormat);
+        auxiliary_.create(physical, device_, halfExtent_, allocator, VK_FILTER_NEAREST, AuxiliaryFormat);
+        spatial_.create(physical, device_, halfExtent_, allocator, VK_FILTER_NEAREST, AoFormat);
         filtered_.create(physical, device_, halfExtent_, allocator, VK_FILTER_NEAREST, AoFormat);
-        for (auto& image : history_) image.create(physical, device_, halfExtent_, allocator, VK_FILTER_NEAREST, AoFormat);
-        full_.create(physical, device_, fullExtent_, allocator, VK_FILTER_LINEAR, AoFormat);
-        const std::array<std::uint32_t, 4> counts{1, 2, 3, 2};
-        const std::array<const char*, 4> shaders{"shaders/gtao_raw.spv", "shaders/gtao_spatial.spv", "shaders/gtao_temporal.spv", "shaders/gtao_upsample.spv"};
-        const std::array<std::uint32_t, 4> constantSizes{sizeof(RawSettings), sizeof(FilterSettings), sizeof(TemporalSettings), sizeof(UpsampleSettings)};
+        for (auto& image : history_) image.create(physical, device_, halfExtent_, allocator, VK_FILTER_NEAREST, HistoryFormat);
+        full_.create(physical, device_, fullExtent_, allocator, VK_FILTER_LINEAR, FullAoFormat);
+        const std::array<std::uint32_t, 5> counts{1, 2, 2, 4, 3};
+        const std::array<const char*, 5> shaders{"shaders/gtao_raw.spv", "shaders/gtao_spatial.spv", "shaders/gtao_spatial.spv", "shaders/gtao_temporal.spv", "shaders/gtao_upsample.spv"};
+        const std::array<std::uint32_t, 5> constantSizes{sizeof(RawSettings), sizeof(FilterSettings), sizeof(FilterSettings), sizeof(TemporalSettings), sizeof(UpsampleSettings)};
         for (std::size_t p = 0; p < pipelines_.size(); ++p) {
             std::vector<VkDescriptorSetLayoutBinding> bindings(counts[p]);
             for (std::uint32_t i = 0; i < counts[p]; ++i) bindings[i] = {i, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr};
             VkDescriptorSetLayoutCreateInfo li{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO}; li.bindingCount = counts[p]; li.pBindings = bindings.data();
             if (vkCreateDescriptorSetLayout(device_, &li, nullptr, &layouts_[p]) != VK_SUCCESS) throw std::runtime_error("Could not create GTAO descriptor layout");
-            GraphicsPipelineOptions options{}; options.colorFormat = AoFormat; options.colorInitialLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL; options.colorFinalLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL; options.shader = shaders[p]; options.assetManager = &assets; options.pushConstantSize = constantSizes[p]; options.pushConstantStages = VK_SHADER_STAGE_FRAGMENT_BIT; options.cullMode = VK_CULL_MODE_NONE; options.depthTestEnable = VK_FALSE; options.depthWriteEnable = VK_FALSE; options.descriptorSetLayouts = {layouts_[p]}; pipelines_[p].create(device_, options);
+            GraphicsPipelineOptions options{}; options.colorFormat = p == 4 ? FullAoFormat : p == 3 ? HistoryFormat : AoFormat; options.additionalColorFormat = p == 0 ? AuxiliaryFormat : VK_FORMAT_UNDEFINED; options.colorInitialLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL; options.colorFinalLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL; options.shader = shaders[p]; options.assetManager = &assets; options.pushConstantSize = constantSizes[p]; options.pushConstantStages = VK_SHADER_STAGE_FRAGMENT_BIT; options.cullMode = VK_CULL_MODE_NONE; options.depthTestEnable = VK_FALSE; options.depthWriteEnable = VK_FALSE; options.descriptorSetLayouts = {layouts_[p]}; pipelines_[p].create(device_, options);
             VkDescriptorPoolSize size{VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, counts[p] * FramesInFlight}; VkDescriptorPoolCreateInfo pi{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO}; pi.maxSets = FramesInFlight; pi.poolSizeCount = 1; pi.pPoolSizes = &size;
             if (vkCreateDescriptorPool(device_, &pi, nullptr, &pools_[p]) != VK_SUCCESS) throw std::runtime_error("Could not create GTAO descriptor pool");
             std::array<VkDescriptorSetLayout, FramesInFlight> setLayouts{}; setLayouts.fill(layouts_[p]);
             VkDescriptorSetAllocateInfo ai{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO}; ai.descriptorPool = pools_[p]; ai.descriptorSetCount = FramesInFlight; ai.pSetLayouts = setLayouts.data();
             if (vkAllocateDescriptorSets(device_, &ai, sets_[p].data()) != VK_SUCCESS) throw std::runtime_error("Could not allocate GTAO descriptor set");
         }
-        const std::array<VkImageView, 5> views{raw_.imageView(), filtered_.imageView(), history_[0].imageView(), history_[1].imageView(), full_.imageView()};
-        for (std::size_t i = 0; i < views.size(); ++i) { VkFramebufferCreateInfo fb{VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO}; fb.renderPass = pipelines_[i == 0 ? 0 : i == 1 ? 1 : i < 4 ? 2 : 3].renderPass(); fb.attachmentCount = 1; fb.pAttachments = &views[i]; fb.width = i == 4 ? fullExtent_.width : halfExtent_.width; fb.height = i == 4 ? fullExtent_.height : halfExtent_.height; fb.layers = 1; if (vkCreateFramebuffer(device_, &fb, nullptr, &framebuffers_[i]) != VK_SUCCESS) throw std::runtime_error("Could not create GTAO framebuffer"); }
+        const std::array<VkImageView, 2> rawViews{raw_.imageView(), auxiliary_.imageView()};
+        VkFramebufferCreateInfo rawFramebuffer{VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO}; rawFramebuffer.renderPass=pipelines_[0].renderPass(); rawFramebuffer.attachmentCount=uint32_t(rawViews.size()); rawFramebuffer.pAttachments=rawViews.data(); rawFramebuffer.width=halfExtent_.width; rawFramebuffer.height=halfExtent_.height; rawFramebuffer.layers=1; if(vkCreateFramebuffer(device_,&rawFramebuffer,nullptr,&framebuffers_[0])!=VK_SUCCESS) throw std::runtime_error("Could not create GTAO raw framebuffer");
+        const std::array<VkImageView, 5> views{spatial_.imageView(), filtered_.imageView(), history_[0].imageView(), history_[1].imageView(), full_.imageView()};
+        for (std::size_t i = 0; i < views.size(); ++i) { const std::size_t framebufferIndex=i+1; VkFramebufferCreateInfo fb{VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO}; fb.renderPass = pipelines_[i < 2 ? i + 1 : i < 4 ? 3 : 4].renderPass(); fb.attachmentCount = 1; fb.pAttachments = &views[i]; fb.width = i == 4 ? fullExtent_.width : halfExtent_.width; fb.height = i == 4 ? fullExtent_.height : halfExtent_.height; fb.layers = 1; if (vkCreateFramebuffer(device_, &fb, nullptr, &framebuffers_[framebufferIndex]) != VK_SUCCESS) throw std::runtime_error("Could not create GTAO framebuffer"); }
     } catch (...) { destroy(); throw; }
 }
 
 void GtaoPass::clearImages(const VkCommandBuffer cmd) {
-    std::array<VkImageMemoryBarrier2, 5> b{}; const std::array<VkImage, 5> images{raw_.image(), filtered_.image(), history_[0].image(), history_[1].image(), full_.image()};
+    std::array<VkImageMemoryBarrier2, 7> b{}; const std::array<VkImage, 7> images{raw_.image(), auxiliary_.image(), spatial_.image(), filtered_.image(), history_[0].image(), history_[1].image(), full_.image()};
     for (std::size_t i=0;i<b.size();++i) { b[i]={VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2}; b[i].dstStageMask=VK_PIPELINE_STAGE_2_TRANSFER_BIT; b[i].dstAccessMask=VK_ACCESS_2_TRANSFER_WRITE_BIT; b[i].oldLayout=VK_IMAGE_LAYOUT_UNDEFINED; b[i].newLayout=VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL; b[i].image=images[i]; b[i].subresourceRange={VK_IMAGE_ASPECT_COLOR_BIT,0,1,0,1}; }
     VkDependencyInfo d{VK_STRUCTURE_TYPE_DEPENDENCY_INFO}; d.imageMemoryBarrierCount=uint32_t(b.size()); d.pImageMemoryBarriers=b.data(); vkCmdPipelineBarrier2(cmd,&d); VkClearColorValue white{{1.F,1.F,1.F,1.F}}; for(auto& barrier:b) vkCmdClearColorImage(cmd,barrier.image,VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,&white,1,&barrier.subresourceRange);
     for(auto& barrier:b) { barrier.srcStageMask=VK_PIPELINE_STAGE_2_TRANSFER_BIT; barrier.srcAccessMask=VK_ACCESS_2_TRANSFER_WRITE_BIT; barrier.dstStageMask=VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT; barrier.dstAccessMask=VK_ACCESS_2_SHADER_SAMPLED_READ_BIT; barrier.oldLayout=VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL; barrier.newLayout=VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL; } vkCmdPipelineBarrier2(cmd,&d); initialized_=true;
@@ -60,15 +67,18 @@ void GtaoPass::record(const VkCommandBuffer cmd, const std::uint32_t frameIndex,
     if (frameIndex >= FramesInFlight) throw std::out_of_range("Invalid GTAO frame slot");
     if (!initialized_) clearImages(cmd); const auto write = [&](uint32_t p, std::initializer_list<VkDescriptorImageInfo> images) { std::vector<VkWriteDescriptorSet> writes; uint32_t binding=0; for (const auto& image:images) { VkWriteDescriptorSet w{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET}; w.dstSet=sets_[p][frameIndex]; w.dstBinding=binding++; w.descriptorCount=1; w.descriptorType=VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER; w.pImageInfo=&image; writes.push_back(w); } vkUpdateDescriptorSets(device_,uint32_t(writes.size()),writes.data(),0,nullptr); };
     write(0, {{depthSampler,depth,VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL}}); RawSettings raw{inverseProjection.native(),float(fullExtent_.width),float(fullExtent_.height),1.0F,1.0F}; draw(cmd,pipelines_[0],framebuffers_[0],sets_[0][frameIndex],halfExtent_,&raw,sizeof(raw));
-    write(1, {{raw_.sampler(),raw_.imageView(),VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL},{depthSampler,depth,VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL}}); FilterSettings filter{inverseProjection.native(),1.F/float(halfExtent_.width),1.F/float(halfExtent_.height),2.0F,32.F}; draw(cmd,pipelines_[1],framebuffers_[1],sets_[1][frameIndex],halfExtent_,&filter,sizeof(filter));
+    FilterSettings filter{1.F/float(halfExtent_.width),1.F/float(halfExtent_.height),2.0F,32.F,{1.F,0.F}};
+    write(1, {{raw_.sampler(),raw_.imageView(),VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL},{auxiliary_.sampler(),auxiliary_.imageView(),VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL}}); draw(cmd,pipelines_[1],framebuffers_[1],sets_[1][frameIndex],halfExtent_,&filter,sizeof(filter));
+    filter.direction={0.F,1.F};
+    write(2, {{spatial_.sampler(),spatial_.imageView(),VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL},{auxiliary_.sampler(),auxiliary_.imageView(),VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL}}); draw(cmd,pipelines_[2],framebuffers_[2],sets_[2][frameIndex],halfExtent_,&filter,sizeof(filter));
     const uint32_t out=1U-historyIndex_;
     const VkDescriptorImageInfo velocityInfo = useTemporalVelocity
         ? VkDescriptorImageInfo{velocitySampler, velocity, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL}
         : VkDescriptorImageInfo{filtered_.sampler(), filtered_.imageView(), VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
-    write(2, {{filtered_.sampler(),filtered_.imageView(),VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL},{history_[historyIndex_].sampler(),history_[historyIndex_].imageView(),VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL},velocityInfo}); TemporalSettings temporal{1.F/float(halfExtent_.width),1.F/float(halfExtent_.height),useTemporalVelocity ? 0.88F : 0.F,0}; draw(cmd,pipelines_[2],framebuffers_[2+out],sets_[2][frameIndex],halfExtent_,&temporal,sizeof(temporal)); historyIndex_=out;
-    write(3, {{history_[historyIndex_].sampler(),history_[historyIndex_].imageView(),VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL},{depthSampler,depth,VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL}}); UpsampleSettings up{inverseProjection.native(),1.F/float(fullExtent_.width),1.F/float(fullExtent_.height),2.0F,0}; draw(cmd,pipelines_[3],framebuffers_[4],sets_[3][frameIndex],fullExtent_,&up,sizeof(up));
+    write(3, {{filtered_.sampler(),filtered_.imageView(),VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL},{history_[historyIndex_].sampler(),history_[historyIndex_].imageView(),VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL},velocityInfo,{auxiliary_.sampler(),auxiliary_.imageView(),VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL}}); TemporalSettings temporal{1.F/float(halfExtent_.width),1.F/float(halfExtent_.height),useTemporalVelocity ? 0.88F : 0.F,0}; draw(cmd,pipelines_[3],framebuffers_[3+out],sets_[3][frameIndex],halfExtent_,&temporal,sizeof(temporal)); historyIndex_=out;
+    write(4, {{history_[historyIndex_].sampler(),history_[historyIndex_].imageView(),VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL},{auxiliary_.sampler(),auxiliary_.imageView(),VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL},{depthSampler,depth,VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL}}); UpsampleSettings up{inverseProjection.native(),1.F/float(fullExtent_.width),1.F/float(fullExtent_.height),2.0F,0,1.F/float(halfExtent_.width),1.F/float(halfExtent_.height),0,0}; draw(cmd,pipelines_[4],framebuffers_[5],sets_[4][frameIndex],fullExtent_,&up,sizeof(up));
 }
 
 void GtaoPass::reset() noexcept { historyIndex_=0; initialized_=false; }
-void GtaoPass::destroy() noexcept { if(device_) { for(auto fb:framebuffers_) if(fb) vkDestroyFramebuffer(device_,fb,nullptr); for(auto pool:pools_) if(pool) vkDestroyDescriptorPool(device_,pool,nullptr); for(auto layout:layouts_) if(layout) vkDestroyDescriptorSetLayout(device_,layout,nullptr); } framebuffers_.fill(VK_NULL_HANDLE); pools_.fill(VK_NULL_HANDLE); layouts_.fill(VK_NULL_HANDLE); for(auto& perPass:sets_) perPass.fill(VK_NULL_HANDLE); for(auto& p:pipelines_) p.destroy(); raw_.destroy(); filtered_.destroy(); for(auto& h:history_) h.destroy(); full_.destroy(); device_=VK_NULL_HANDLE; reset(); }
+void GtaoPass::destroy() noexcept { if(device_) { for(auto fb:framebuffers_) if(fb) vkDestroyFramebuffer(device_,fb,nullptr); for(auto pool:pools_) if(pool) vkDestroyDescriptorPool(device_,pool,nullptr); for(auto layout:layouts_) if(layout) vkDestroyDescriptorSetLayout(device_,layout,nullptr); } framebuffers_.fill(VK_NULL_HANDLE); pools_.fill(VK_NULL_HANDLE); layouts_.fill(VK_NULL_HANDLE); for(auto& perPass:sets_) perPass.fill(VK_NULL_HANDLE); for(auto& p:pipelines_) p.destroy(); raw_.destroy(); auxiliary_.destroy(); spatial_.destroy(); filtered_.destroy(); for(auto& h:history_) h.destroy(); full_.destroy(); device_=VK_NULL_HANDLE; reset(); }
 } // namespace Engine

@@ -42,17 +42,21 @@ private:
     VkExtent2D fullExtent_{};
     VkExtent2D halfExtent_{};
     HdrBuffer raw_;
+    // Linear depth and oct-encoded normal are shared, read-only guidance for
+    // the spatial and upsample passes.  AO itself stays single-channel.
+    HdrBuffer auxiliary_;
+    HdrBuffer spatial_;
     HdrBuffer filtered_;
     std::array<HdrBuffer, 2> history_;
     HdrBuffer full_;
-    std::array<GraphicsPipeline, 4> pipelines_;
-    std::array<VkDescriptorSetLayout, 4> layouts_{};
-    std::array<VkDescriptorPool, 4> pools_{};
+    std::array<GraphicsPipeline, 5> pipelines_;
+    std::array<VkDescriptorSetLayout, 5> layouts_{};
+    std::array<VkDescriptorPool, 5> pools_{};
     // Descriptor writes must not race command buffers submitted for earlier
     // frames.  This renderer has three frame slots.
     static constexpr std::uint32_t FramesInFlight = 3;
-    std::array<std::array<VkDescriptorSet, FramesInFlight>, 4> sets_{};
-    std::array<VkFramebuffer, 5> framebuffers_{};
+    std::array<std::array<VkDescriptorSet, FramesInFlight>, 5> sets_{};
+    std::array<VkFramebuffer, 6> framebuffers_{};
     std::uint32_t historyIndex_ = 0;
     bool initialized_ = false;
 };
