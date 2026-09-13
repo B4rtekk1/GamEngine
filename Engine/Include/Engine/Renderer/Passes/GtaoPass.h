@@ -28,10 +28,13 @@ public:
     void reset() noexcept;
     /** Makes the white (unoccluded) bootstrap visibility sampleable before Forward reads it. */
     void initialize(VkCommandBuffer commandBuffer);
-    void record(VkCommandBuffer commandBuffer, std::uint32_t frameIndex,
-                VkImageView depthView, VkSampler depthSampler,
-                VkImageView velocityView, VkSampler velocitySampler,
-                const Mat4& inverseProjection, bool useTemporalVelocity);
+    // `frameSlot` selects per-frame descriptors; `sampleIndex` must increase
+    // once per rendered frame and drives the stochastic sampling sequence.
+    // GTAO deliberately has no history here: when TAA is active its HDR
+    // resolve is the sole temporal accumulator for AO and lighting.
+    void record(VkCommandBuffer commandBuffer, std::uint32_t frameSlot,
+                std::uint32_t sampleIndex, VkImageView depthView,
+                VkSampler depthSampler, const Mat4& inverseProjection);
     [[nodiscard]] VkImageView resultView() const noexcept { return full_.imageView(); }
     [[nodiscard]] VkSampler resultSampler() const noexcept { return full_.sampler(); }
 

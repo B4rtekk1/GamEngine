@@ -4,7 +4,7 @@
 [[vk::binding(0,0)]] Sampler2D halfDepth;
 [[vk::binding(1,0)]] RWTexture2D<float> rawAo;
 [[vk::binding(2,0)]] RWTexture2D<float4> guide;
-struct Settings { float2 projectionScale; float radiusView, falloff; };
+struct Settings { float2 projectionScale; float radiusView, falloff; uint frameIndex; float padding; };
 [[vk::push_constant]] ConstantBuffer<Settings> settings;
 groupshared float depthTile[14][14];
 static const float BackgroundDepth=65500.0;
@@ -17,7 +17,12 @@ void main(uint3 groupId:SV_GroupID,uint3 threadId:SV_GroupThreadID,uint3 id:SV_D
  GroupMemoryBarrierWithGroupSync(); if(any(id.xy>=uint2(w,h)))return;
  int2 local=int2(threadId.xy)+3,p=int2(id.xy);float depth=depthTile[local.y][local.x];if(depth>=BackgroundDepth){rawAo[p]=1;guide[p]=float4(BackgroundDepth,0,1,1);return;}
  float3 center=positionFromDepth(p,depth,uint2(w,h));float dx=depthTile[local.y][local.x+1],dy=depthTile[local.y+1][local.x];float3 normal=normalize(cross(positionFromDepth(p+int2(1,0),dx,uint2(w,h))-center,positionFromDepth(p+int2(0,1),dy,uint2(w,h))-center));
- float occlusion=0,edge=0;const int2 directions[4]={int2(1,0),int2(0,1),int2(1,1),int2(1,-1)};
- [unroll]for(int d=0;d<4;++d)[unroll]for(int side=-1;side<=1;side+=2)[unroll]for(int step=1;step<=3;++step){int2 o=directions[d]*side*step;float sample=depthTile[local.y+o.y][local.x+o.x];edge=max(edge,abs(sample-depth)/max(depth,1e-3));if(sample>=BackgroundDepth)continue;float3 v=positionFromDepth(p+o,sample,uint2(w,h))-center;float dist2=dot(v,v);float range=saturate(1-dist2/(settings.radiusView*settings.radiusView));occlusion+=saturate(dot(normalize(v),normal))*range;}
+ // The spatial hash removes structured bands.  Advancing by the golden angle
+ // each frame makes the four directions a temporal sampling sequence rather
+ // than re-evaluating the same rays every frame.
+ float spatialRotation=frac(sin(dot(float2(p),float2(12.9898,78.233)))*43758.5453)*6.2831853;
+ float rotation=spatialRotation+float(settings.frameIndex)*2.39996323;
+ float occlusion=0,edge=0;
+ [unroll]for(int d=0;d<4;++d)[unroll]for(int side=-1;side<=1;side+=2)[unroll]for(int step=1;step<=3;++step){float angle=rotation+float(d)*0.785398163+float(side<0)*3.14159265;int2 o=int2(round(float2(cos(angle),sin(angle))*float(step)));float sample=depthTile[local.y+o.y][local.x+o.x];edge=max(edge,abs(sample-depth)/max(depth,1e-3));if(sample>=BackgroundDepth)continue;float3 v=positionFromDepth(p+o,sample,uint2(w,h))-center;float dist2=dot(v,v);float range=saturate(1-dist2/(settings.radiusView*settings.radiusView));occlusion+=saturate(dot(normalize(v),normal))*range;}
  rawAo[p]=saturate(1-occlusion/24);guide[p]=float4(depth,encodeOct(normal),saturate(edge*settings.falloff));
 }

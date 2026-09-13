@@ -907,9 +907,12 @@
             // must finish before the lighting pass samples its result.
             const DepthBuffer& gtaoDepth = msaa.enabled() ? hiZDepthBuffer : depthBuffer;
             const Mat4 inverseProjection{glm::inverse(cameraController.camera()->projectionMatrix().native())};
-            gtaoPass.record(commandBuffer, currentFrame, gtaoDepth.imageView(), gtaoDepth.sampler(),
-                            velocityBuffer.imageView(), velocityBuffer.sampler(), inverseProjection,
-                            taaResolveActive);
+            // GTAO is spatial per frame. Its rotated sample pattern supplies
+            // fresh information to the TAA HDR history without a second AO
+            // history that could trail moving or newly revealed geometry.
+            gtaoPass.record(commandBuffer, currentFrame,
+                            static_cast<std::uint32_t>(submittedFrameValue),
+                            gtaoDepth.imageView(), gtaoDepth.sampler(), inverseProjection);
 
             gpuTimestampProfiler.beginZone(commandBuffer, currentFrame, forwardProfileName);
             lightingForwardPass.begin(commandBuffer, lightingHdrFramebuffer, swapchain.extent(),
