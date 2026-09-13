@@ -2,6 +2,7 @@
 
 #include "Engine/Renderer/Textures/Cubemap.h"
 #include "Engine/Renderer/Textures/Texture2D.h"
+#include "Engine/Renderer/RenderConfig.h"
 
 #include <array>
 #include <filesystem>
@@ -16,7 +17,8 @@ public:
     void create(VkPhysicalDevice physicalDevice, VkDevice device, VkCommandPool commandPool,
                 VkQueue queue, VmaAllocator allocator,
                 const std::filesystem::path& equirectangularPath = {},
-                const std::filesystem::path& libraryDirectory = {});
+                const std::filesystem::path& libraryDirectory = {},
+                IblQualitySettings quality = iblQualitySettings(IblQuality::High));
     void destroy() noexcept;
     void swap(ImageBasedLighting& other) noexcept;
 

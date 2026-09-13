@@ -9,7 +9,12 @@
 namespace Engine {
 namespace {
 struct LinearizeSettings { glm::mat4 inverseProjection; };
-struct MainSettings { glm::vec2 projectionScale; float radiusView, falloff; std::uint32_t frameIndex; float padding; };
+struct MainSettings {
+ glm::vec2 projectionScale; float radiusView, falloff; std::uint32_t frameIndex; float padding; std::uint32_t directions, stepsPerDirection;
+ inline static std::uint32_t profileDirections=8, profileSteps=4;
+ MainSettings(glm::vec2 projection,float radius,float falloffValue,std::uint32_t frame,float pad)
+  : projectionScale(projection),radiusView(radius),falloff(falloffValue),frameIndex(frame),padding(pad),directions(profileDirections),stepsPerDirection(profileSteps) {}
+};
 struct DenoiseSettings { float depthSigma, normalSigma, edgeSigma, padding; };
 struct UpsampleSettings { float depthSigma, padding0, padding1, padding2; };
 constexpr VkFormat AoFormat=VK_FORMAT_R16_SFLOAT, AuxiliaryFormat=VK_FORMAT_R16G16B16A16_SFLOAT;
@@ -18,11 +23,11 @@ VkPipeline makeCompute(VkDevice device,Assets::AssetManager& assets,const char* 
 }
 GtaoPass::~GtaoPass(){destroy();}
 
-void GtaoPass::create(VkPhysicalDevice physical,VkDevice device,VkExtent2D fullExtent,VmaAllocator allocator,Assets::AssetManager& assets){
- if(!device||!fullExtent.width||!fullExtent.height)throw std::invalid_argument("GTAO requires a valid extent");destroy();device_=device;allocator_=allocator;fullExtent_=fullExtent;halfExtent_={std::max(1u,fullExtent.width/2),std::max(1u,fullExtent.height/2)};
+void GtaoPass::create(VkPhysicalDevice physical,VkDevice device,VkExtent2D fullExtent,VmaAllocator allocator,Assets::AssetManager& assets,const GtaoQualitySettings quality){
+ if(!device||!fullExtent.width||!fullExtent.height)throw std::invalid_argument("GTAO requires a valid extent");destroy();device_=device;allocator_=allocator;quality_=quality;MainSettings::profileDirections=quality_.directions;MainSettings::profileSteps=quality_.stepsPerDirection;fullExtent_=fullExtent;halfExtent_={std::max(1u,uint32_t(float(fullExtent.width)*quality_.resolutionScale)),std::max(1u,uint32_t(float(fullExtent.height)*quality_.resolutionScale))};
  try{
   raw_.create(physical,device_,halfExtent_,allocator,VK_FILTER_NEAREST,AoFormat,true); auxiliary_.create(physical,device_,halfExtent_,allocator,VK_FILTER_NEAREST,AuxiliaryFormat,true); filtered_.create(physical,device_,halfExtent_,allocator,VK_FILTER_NEAREST,AoFormat,true); full_.create(physical,device_,fullExtent_,allocator,VK_FILTER_LINEAR,AoFormat,true);
-  linearDepthMipCount_=1;for(auto d=std::max(fullExtent.width,fullExtent.height);d>1;d>>=1)++linearDepthMipCount_;
+  linearDepthMipCount_=1;for(auto d=std::max(fullExtent.width,fullExtent.height);d>1;d>>=1)++linearDepthMipCount_;linearDepthMipCount_=std::min(linearDepthMipCount_,std::max(1u,quality_.depthMipCount));
   VkImageCreateInfo image{VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO};image.imageType=VK_IMAGE_TYPE_2D;image.format=AoFormat;image.extent={fullExtent.width,fullExtent.height,1};image.mipLevels=linearDepthMipCount_;image.arrayLayers=1;image.samples=VK_SAMPLE_COUNT_1_BIT;image.tiling=VK_IMAGE_TILING_OPTIMAL;image.usage=VK_IMAGE_USAGE_SAMPLED_BIT|VK_IMAGE_USAGE_STORAGE_BIT;image.sharingMode=VK_SHARING_MODE_EXCLUSIVE;VmaAllocationCreateInfo alloc{};alloc.usage=VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE;if(vmaCreateImage(allocator,&image,&alloc,&linearDepthImage_,&linearDepthAllocation_,nullptr)!=VK_SUCCESS)throw std::runtime_error("Could not create GTAO depth pyramid");
   VkImageViewCreateInfo view{VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};view.image=linearDepthImage_;view.viewType=VK_IMAGE_VIEW_TYPE_2D;view.format=AoFormat;view.subresourceRange={VK_IMAGE_ASPECT_COLOR_BIT,0,linearDepthMipCount_,0,1};if(vkCreateImageView(device_,&view,nullptr,&linearDepthView_)!=VK_SUCCESS)throw std::runtime_error("Could not create GTAO depth view");linearDepthMipViews_.resize(linearDepthMipCount_);for(uint32_t mip=0;mip<linearDepthMipCount_;++mip){auto mipView=view;mipView.subresourceRange.baseMipLevel=mip;mipView.subresourceRange.levelCount=1;if(vkCreateImageView(device_,&mipView,nullptr,&linearDepthMipViews_[mip])!=VK_SUCCESS)throw std::runtime_error("Could not create GTAO depth mip view");}
   VkSamplerCreateInfo sampler{VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO};sampler.magFilter=sampler.minFilter=VK_FILTER_NEAREST;sampler.mipmapMode=VK_SAMPLER_MIPMAP_MODE_NEAREST;sampler.addressModeU=sampler.addressModeV=sampler.addressModeW=VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;sampler.maxLod=float(linearDepthMipCount_-1);if(vkCreateSampler(device_,&sampler,nullptr,&linearDepthSampler_)!=VK_SUCCESS)throw std::runtime_error("Could not create GTAO depth sampler");

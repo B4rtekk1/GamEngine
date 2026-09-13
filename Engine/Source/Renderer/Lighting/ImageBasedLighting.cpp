@@ -1,5 +1,6 @@
 #include "Engine/Renderer/Lighting/ImageBasedLighting.h"
 #include "Engine/Renderer/Lighting/EnvironmentBaker.h"
+#include "Engine/Renderer/Vulkan/upload_context.h"
 
 #include <algorithm>
 #include <array>
@@ -12,6 +13,7 @@
 #include <fstream>
 #include <iostream>
 #include <memory>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -288,7 +290,8 @@ EnvironmentSource loadEquirectangular(const std::filesystem::path& path) {
 void ImageBasedLighting::create(VkPhysicalDevice physicalDevice, VkDevice device, VkCommandPool commandPool,
                                 VkQueue queue, VmaAllocator allocator,
                                 const std::filesystem::path& equirectangularPath,
-                                const std::filesystem::path& libraryDirectory) {
+                                const std::filesystem::path& libraryDirectory,
+                                const IblQualitySettings quality) {
     const auto environmentHash = hashEnvironment(equirectangularPath);
     const auto iblDirectory = cacheDirectory(libraryDirectory, environmentHash);
     const auto environmentCache = iblDirectory / "environment.gtex";
@@ -298,9 +301,12 @@ void ImageBasedLighting::create(VkPhysicalDevice physicalDevice, VkDevice device
     // Build every resource away from the live set. A decode, allocation or
     // upload failure must leave the active descriptor targets intact.
     ImageBasedLighting replacement;
-    const auto environmentMips = std::bit_width(EnvironmentSize);
-    const auto prefilterMips = std::bit_width(PrefilterSize);
+    const auto environmentMips = std::bit_width(quality.environmentResolution);
+    const auto prefilterMips = std::bit_width(quality.prefilterResolution);
     std::vector<std::byte> payload;
+    std::optional<UploadContext::Batch> uploadBatch;
+    if (auto* upload = UploadContext::current(); upload != nullptr && !upload->recording())
+        uploadBatch.emplace(upload->beginBatch());
     const auto uploadCubemap = [&](const std::filesystem::path& path, const std::uint32_t size,
                                    const std::uint32_t mipLevels, const auto& bake, Cubemap& target) {
         if (loadCache(path, IblCacheKind::Cubemap, size, mipLevels, environmentHash, payload)) {
@@ -324,9 +330,9 @@ void ImageBasedLighting::create(VkPhysicalDevice physicalDevice, VkDevice device
         if (!source) source.emplace(loadEquirectangular(equirectangularPath));
         return *source;
     };
-    uploadCubemap(environmentCache, EnvironmentSize, environmentMips, [&] {
+    uploadCubemap(environmentCache, quality.environmentResolution, environmentMips, [&] {
         const auto& decoded = getSource();
-        return EnvironmentBaker::bakeCubemap(EnvironmentSize, environmentMips,
+        return EnvironmentBaker::bakeCubemap(quality.environmentResolution, environmentMips,
             [&decoded](const Vec3& direction, const std::uint32_t mip, std::uint32_t) {
                 return decoded.sample(direction, static_cast<float>(mip));
             });
@@ -338,9 +344,9 @@ void ImageBasedLighting::create(VkPhysicalDevice physicalDevice, VkDevice device
                 [&decoded](const Vec3& sampleDirection) { return decoded.sample(sampleDirection); });
         });
     }, replacement.irradiance_);
-    uploadCubemap(prefilteredCache, PrefilterSize, prefilterMips, [&] {
+    uploadCubemap(prefilteredCache, quality.prefilterResolution, prefilterMips, [&] {
         const auto& decoded = getSource();
-        return EnvironmentBaker::bakePrefilteredCubemap(PrefilterSize, prefilterMips, EnvironmentSize,
+        return EnvironmentBaker::bakePrefilteredCubemap(quality.prefilterResolution, prefilterMips, quality.environmentResolution,
             environmentMips, [&decoded](const Vec3& direction, const float mip) {
                 return decoded.sample(direction, mip);
             });
@@ -350,6 +356,7 @@ void ImageBasedLighting::create(VkPhysicalDevice physicalDevice, VkDevice device
     const auto bytes = std::span<const std::uint8_t>{reinterpret_cast<const std::uint8_t*>(payload.data()), payload.size()};
     replacement.brdfLut_.create(physicalDevice, device, commandPool, queue, BrdfLutSize, BrdfLutSize, bytes,
                                 TextureColorSpace::Linear, false, allocator, TexturePixelFormat::RG16F);
+    if (uploadBatch) static_cast<void>(uploadBatch->submit());
     swap(replacement);
 }
 

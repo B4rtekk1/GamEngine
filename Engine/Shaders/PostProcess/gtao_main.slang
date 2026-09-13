@@ -4,7 +4,7 @@
 [[vk::binding(0,0)]] Sampler2D halfDepth;
 [[vk::binding(1,0)]] RWTexture2D<float> rawAo;
 [[vk::binding(2,0)]] RWTexture2D<float4> guide;
-struct Settings { float2 projectionScale; float radiusView, falloff; uint frameIndex; float padding; };
+struct Settings { float2 projectionScale; float radiusView, falloff; uint frameIndex; float padding; uint directions, stepsPerDirection; };
 [[vk::push_constant]] ConstantBuffer<Settings> settings;
 groupshared float depthTile[16][16];
 static const float BackgroundDepth=65500.0;
@@ -23,6 +23,7 @@ void main(uint3 groupId:SV_GroupID,uint3 threadId:SV_GroupThreadID,uint3 id:SV_D
  float spatialRotation=frac(sin(dot(float2(p),float2(12.9898,78.233)))*43758.5453)*6.2831853;
  float rotation=spatialRotation+float(settings.frameIndex)*2.39996323;
  float occlusion=0,edge=0;
- [unroll]for(int d=0;d<8;++d)[unroll]for(int side=-1;side<=1;side+=2)[unroll]for(int step=1;step<=4;++step){float angle=rotation+float(d)*0.392699082+float(side<0)*3.14159265;int2 o=int2(round(float2(cos(angle),sin(angle))*float(step)));float sample=depthTile[local.y+o.y][local.x+o.x];edge=max(edge,abs(sample-depth)/max(depth,1e-3));if(sample>=BackgroundDepth)continue;float3 v=positionFromDepth(p+o,sample,uint2(w,h))-center;float dist2=dot(v,v);float range=saturate(1-dist2/(settings.radiusView*settings.radiusView));occlusion+=saturate(dot(normalize(v),normal))*range;}
- rawAo[p]=saturate(1-occlusion/64);guide[p]=float4(depth,encodeOct(normal),saturate(edge*settings.falloff));
+ const uint directions=max(settings.directions,1u),steps=max(settings.stepsPerDirection,1u);
+ for(uint d=0;d<directions;++d)for(int side=-1;side<=1;side+=2)for(uint step=1;step<=steps;++step){float angle=rotation+float(d)*(3.14159265/float(directions))+float(side<0)*3.14159265;int2 o=int2(round(float2(cos(angle),sin(angle))*float(step)));float sample=depthTile[local.y+o.y][local.x+o.x];edge=max(edge,abs(sample-depth)/max(depth,1e-3));if(sample>=BackgroundDepth)continue;float3 v=positionFromDepth(p+o,sample,uint2(w,h))-center;float dist2=dot(v,v);float range=saturate(1-dist2/(settings.radiusView*settings.radiusView));occlusion+=saturate(dot(normalize(v),normal))*range;}
+ rawAo[p]=saturate(1-occlusion/float(directions*steps*2));guide[p]=float4(depth,encodeOct(normal),saturate(edge*settings.falloff));
 }

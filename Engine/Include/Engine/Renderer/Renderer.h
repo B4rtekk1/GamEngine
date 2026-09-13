@@ -55,6 +55,11 @@ namespace Engine {
 
         [[nodiscard]] ShadowQuality shadowQuality() const noexcept;
 
+        void setGtaoQuality(GtaoQuality quality) noexcept;
+        [[nodiscard]] GtaoQuality gtaoQuality() const noexcept;
+        void setIblQuality(IblQuality quality) noexcept;
+        [[nodiscard]] IblQuality iblQuality() const noexcept;
+
         void setShadowDebugView(ShadowDebugView view) noexcept;
 
         [[nodiscard]] ShadowDebugView shadowDebugView() const noexcept;
@@ -157,6 +162,8 @@ namespace Engine {
         RenderOptimizationFeatures optimizationFeatures_{};
         AntialiasingLevel antialiasingLevel_ = AntialiasingLevel::Off;
         ShadowQuality shadowQuality_ = ShadowQuality::High;
+        GtaoQuality gtaoQuality_ = GtaoQuality::High;
+        IblQuality iblQuality_ = IblQuality::High;
         ShadowDebugView shadowDebugView_ = ShadowDebugView::Off;
         GrassRenderSettings grassSettings_{};
         std::unique_ptr<State> state_;

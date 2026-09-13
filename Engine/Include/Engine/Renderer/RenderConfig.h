@@ -26,6 +26,49 @@ namespace Engine {
         Ultra,
     };
 
+    enum class GtaoQuality : std::uint8_t { Low, Medium, High, Ultra };
+
+    /** Tunables are deliberately data, so automated GPU benchmarks can sweep them. */
+    struct GtaoQualitySettings final {
+        float resolutionScale;
+        std::uint32_t directions;
+        std::uint32_t stepsPerDirection;
+        std::uint32_t depthMipCount;
+        std::uint32_t denoisePassCount;
+        bool temporal;
+        float historyWeight;
+        bool specularOcclusion;
+        bool bentNormals;
+    };
+
+    constexpr GtaoQualitySettings gtaoQualitySettings(const GtaoQuality quality) noexcept {
+        switch (quality) {
+        case GtaoQuality::Low:    return {.resolutionScale=.5F, .directions=3, .stepsPerDirection=2, .depthMipCount=2, .denoisePassCount=1, .temporal=false, .historyWeight=0.F, .specularOcclusion=false, .bentNormals=false};
+        case GtaoQuality::Medium: return {.resolutionScale=.5F, .directions=4, .stepsPerDirection=3, .depthMipCount=3, .denoisePassCount=1, .temporal=false, .historyWeight=0.F, .specularOcclusion=false, .bentNormals=false};
+        case GtaoQuality::High:   return {.resolutionScale=.5F, .directions=6, .stepsPerDirection=3, .depthMipCount=4, .denoisePassCount=1, .temporal=false, .historyWeight=0.F, .specularOcclusion=false, .bentNormals=false};
+        case GtaoQuality::Ultra:  return {.resolutionScale=1.F, .directions=8, .stepsPerDirection=4, .depthMipCount=5, .denoisePassCount=1, .temporal=false, .historyWeight=0.F, .specularOcclusion=false, .bentNormals=false};
+        }
+        return gtaoQualitySettings(GtaoQuality::High);
+    }
+
+    enum class IblQuality : std::uint8_t { Low, Medium, High, Ultra };
+    struct IblQualitySettings final {
+        std::uint32_t environmentResolution;
+        std::uint32_t prefilterResolution;
+        std::uint32_t reflectionProbeResolution;
+        std::uint32_t probeUpdateBudget;
+        bool useBc6h;
+    };
+    constexpr IblQualitySettings iblQualitySettings(const IblQuality quality) noexcept {
+        switch (quality) {
+        case IblQuality::Low: return {128, 64, 128, 1, false};
+        case IblQuality::Medium: return {256, 128, 256, 1, false};
+        case IblQuality::High: return {512, 256, 512, 2, false};
+        case IblQuality::Ultra: return {1024, 512, 1024, 4, false};
+        }
+        return iblQualitySettings(IblQuality::High);
+    }
+
     /** Diagnostic visualization of directional virtual-shadow sampling. */
     enum class ShadowDebugView : std::uint8_t {
         Off,
@@ -57,6 +100,8 @@ namespace Engine {
         AntialiasingLevel antialiasing = AntialiasingLevel::Off;
         GrassRenderSettings grass{};
         ShadowQuality shadowQuality = ShadowQuality::High;
+        GtaoQuality gtaoQuality = GtaoQuality::High;
+        IblQuality iblQuality = IblQuality::High;
         ShadowDebugView shadowDebugView = ShadowDebugView::Off;
     };
 

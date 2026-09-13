@@ -45,7 +45,7 @@
                 : sceneEnvironment.is_absolute() ? sceneEnvironment : assetDirectory / sceneEnvironment;
             imageBasedLighting.create(vulkanDevice.physical(), device, commandPool,
                                       vulkanDevice.graphicsQueue(), vulkanDevice.allocator(),
-                                      environmentPath, runtimeRoot / "Library");
+                                      environmentPath, runtimeRoot / "Library", iblQualitySettings(iblQuality));
         }
 
         void initSceneResources() {
@@ -340,7 +340,7 @@
 
         void createGtaoPass() {
             gtaoPass.create(vulkanDevice.physical(), device, swapchain.extent(),
-                            vulkanDevice.allocator(), assetManager);
+                            vulkanDevice.allocator(), assetManager, gtaoQualitySettings(gtaoQuality));
         }
 
         void bindGtaoTexture(ShadowPass& descriptors) {

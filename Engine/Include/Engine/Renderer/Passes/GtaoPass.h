@@ -2,6 +2,7 @@
 
 #include "Engine/Math/Mat4.h"
 #include "Engine/Renderer/Vulkan/hdr_buffer.h"
+#include "Engine/Renderer/RenderConfig.h"
 
 #include <array>
 #include <vulkan/vulkan.h>
@@ -23,7 +24,8 @@ public:
     GtaoPass& operator=(const GtaoPass&) = delete;
 
     void create(VkPhysicalDevice physicalDevice, VkDevice device, VkExtent2D fullExtent,
-                VmaAllocator allocator, Assets::AssetManager& assets);
+                VmaAllocator allocator, Assets::AssetManager& assets,
+                GtaoQualitySettings quality = gtaoQualitySettings(GtaoQuality::High));
     void destroy() noexcept;
     void reset() noexcept;
     /** Makes the white (unoccluded) bootstrap visibility sampleable before Forward reads it. */
@@ -45,6 +47,7 @@ private:
     VkDevice device_ = VK_NULL_HANDLE;
     VkExtent2D fullExtent_{};
     VkExtent2D halfExtent_{};
+    GtaoQualitySettings quality_ = gtaoQualitySettings(GtaoQuality::High);
     // Descriptor writes must not race command buffers submitted for earlier
     // frames.  This renderer has three frame slots.
     static constexpr std::uint32_t FramesInFlight = 3;

@@ -52,6 +52,7 @@ private:
     std::array<VkImageView, 6> faceImageViews_{};
     VkSampler sampler_ = VK_NULL_HANDLE;
     std::uint32_t mipLevels_ = 0;
+    std::uint64_t readyTimeline_ = 0;
 };
 
 } // namespace Engine

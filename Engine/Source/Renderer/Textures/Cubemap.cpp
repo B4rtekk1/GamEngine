@@ -1,4 +1,5 @@
 #include "Engine/Renderer/Textures/Cubemap.h"
+#include "Engine/Renderer/Vulkan/upload_context.h"
 
 #include <algorithm>
 #include <bit>
@@ -46,14 +47,6 @@ void submitAndWait(VkDevice device, VkQueue queue, VkCommandBuffer commandBuffer
     vkDestroyFence(device, fence, nullptr);
     if (completed != VK_SUCCESS) throw std::runtime_error("Could not upload cubemap");
 
-    // Cubemap creation is a scene-load operation, not a streaming path.  The
-    // graphics queue can also contain submissions made outside this helper;
-    // retire all of them before the caller frees its staging buffer and command
-    // buffer.  This prevents a buffer lifetime race reported by validation
-    // during IBL creation.
-    if (vkQueueWaitIdle(queue) != VK_SUCCESS) {
-        throw std::runtime_error("Could not synchronize cubemap upload queue");
-    }
 }
 }
 
@@ -73,6 +66,7 @@ Cubemap& Cubemap::operator=(Cubemap&& other) noexcept {
     faceImageViews_ = std::exchange(other.faceImageViews_, {});
     sampler_ = std::exchange(other.sampler_, VK_NULL_HANDLE);
     mipLevels_ = std::exchange(other.mipLevels_, 0);
+    readyTimeline_ = std::exchange(other.readyTimeline_, 0);
     return *this;
 }
 
@@ -163,37 +157,50 @@ void Cubemap::createHdr(VkPhysicalDevice physicalDevice, VkDevice device, VkComm
 
     destroy(); device_ = device; mipLevels_ = mipLevels;
     VkBuffer staging = VK_NULL_HANDLE; VkDeviceMemory stagingMemory = VK_NULL_HANDLE; VkCommandBuffer commandBuffer = VK_NULL_HANDLE;
+    UploadContext* const upload = UploadContext::current();
+    const bool ownsUploadBatch = upload != nullptr && !upload->recording();
     try {
         std::vector<uint16_t> halfPixels(rgbaPixels.size());
         std::transform(rgbaPixels.begin(), rgbaPixels.end(), halfPixels.begin(), floatToHalf);
         const VkDeviceSize imageSize = static_cast<VkDeviceSize>(halfPixels.size() * sizeof(uint16_t));
-        VkBufferCreateInfo bufferInfo{VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
-        bufferInfo.size = imageSize; bufferInfo.usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT; bufferInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
-        if (vkCreateBuffer(device_, &bufferInfo, nullptr, &staging) != VK_SUCCESS) throw std::runtime_error("Could not create cubemap staging buffer");
-        VkMemoryRequirements requirements{}; vkGetBufferMemoryRequirements(device_, staging, &requirements);
-        VkMemoryAllocateInfo alloc{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO}; alloc.allocationSize = requirements.size;
-        alloc.memoryTypeIndex = findMemoryType(physicalDevice, requirements.memoryTypeBits, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
-        if (vkAllocateMemory(device_, &alloc, nullptr, &stagingMemory) != VK_SUCCESS) throw std::runtime_error("Could not allocate cubemap staging memory");
-        if (vkBindBufferMemory(device_, staging, stagingMemory, 0) != VK_SUCCESS) throw std::runtime_error("Could not bind cubemap staging memory");
-        void* mapped = nullptr;
-        if (vkMapMemory(device_, stagingMemory, 0, imageSize, 0, &mapped) != VK_SUCCESS) throw std::runtime_error("Could not map cubemap staging memory");
-        std::memcpy(mapped, halfPixels.data(), static_cast<size_t>(imageSize)); vkUnmapMemory(device_, stagingMemory);
+        VkDeviceSize stagingOffset = 0;
+        if (upload != nullptr) {
+            if (ownsUploadBatch) upload->begin();
+            const auto slice = upload->allocate(imageSize, 16);
+            staging = slice.buffer; stagingOffset = slice.offset;
+            std::memcpy(slice.mapped, halfPixels.data(), static_cast<size_t>(imageSize));
+            commandBuffer = upload->commandBuffer();
+        } else {
+            VkBufferCreateInfo bufferInfo{VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO}; bufferInfo.size = imageSize; bufferInfo.usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT; bufferInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+            if (vkCreateBuffer(device_, &bufferInfo, nullptr, &staging) != VK_SUCCESS) throw std::runtime_error("Could not create cubemap staging buffer");
+            VkMemoryRequirements stagingRequirements{}; vkGetBufferMemoryRequirements(device_, staging, &stagingRequirements);
+            VkMemoryAllocateInfo stagingAlloc{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO}; stagingAlloc.allocationSize = stagingRequirements.size;
+            stagingAlloc.memoryTypeIndex = findMemoryType(physicalDevice, stagingRequirements.memoryTypeBits, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+            if (vkAllocateMemory(device_, &stagingAlloc, nullptr, &stagingMemory) != VK_SUCCESS) throw std::runtime_error("Could not allocate cubemap staging memory");
+            if (vkBindBufferMemory(device_, staging, stagingMemory, 0) != VK_SUCCESS) throw std::runtime_error("Could not bind cubemap staging memory");
+            void* mapped = nullptr; if (vkMapMemory(device_, stagingMemory, 0, imageSize, 0, &mapped) != VK_SUCCESS) throw std::runtime_error("Could not map cubemap staging memory");
+            std::memcpy(mapped, halfPixels.data(), static_cast<size_t>(imageSize)); vkUnmapMemory(device_, stagingMemory);
+        }
 
         VkImageCreateInfo imageInfo{VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO}; imageInfo.flags = VK_IMAGE_CREATE_CUBE_COMPATIBLE_BIT;
         imageInfo.imageType = VK_IMAGE_TYPE_2D; imageInfo.format = VK_FORMAT_R16G16B16A16_SFLOAT;
         imageInfo.extent = {faceSize, faceSize, 1}; imageInfo.mipLevels = mipLevels_; imageInfo.arrayLayers = 6;
         imageInfo.samples = VK_SAMPLE_COUNT_1_BIT; imageInfo.tiling = VK_IMAGE_TILING_OPTIMAL;
         imageInfo.usage = VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT; imageInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+        std::array<uint32_t, 3> sharingFamilies{};
+        if (upload != nullptr && upload->requiresConcurrentSharing()) {
+            sharingFamilies = upload->sharingFamilies();
+            imageInfo.sharingMode = VK_SHARING_MODE_CONCURRENT;
+            imageInfo.queueFamilyIndexCount = upload->sharingFamilyCount();
+            imageInfo.pQueueFamilyIndices = sharingFamilies.data();
+        }
         if (vkCreateImage(device_, &imageInfo, nullptr, &image_) != VK_SUCCESS) throw std::runtime_error("Could not create cubemap image");
-        vkGetImageMemoryRequirements(device_, image_, &requirements); alloc.allocationSize = requirements.size;
+        VkMemoryRequirements requirements{}; vkGetImageMemoryRequirements(device_, image_, &requirements); VkMemoryAllocateInfo alloc{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO}; alloc.allocationSize = requirements.size;
         alloc.memoryTypeIndex = findMemoryType(physicalDevice, requirements.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
         if (vkAllocateMemory(device_, &alloc, nullptr, &memory_) != VK_SUCCESS) throw std::runtime_error("Could not allocate cubemap image memory");
         if (vkBindImageMemory(device_, image_, memory_, 0) != VK_SUCCESS) throw std::runtime_error("Could not bind cubemap image memory");
 
-        VkCommandBufferAllocateInfo commandAlloc{VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO}; commandAlloc.commandPool = commandPool; commandAlloc.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY; commandAlloc.commandBufferCount = 1;
-        if (vkAllocateCommandBuffers(device_, &commandAlloc, &commandBuffer) != VK_SUCCESS) throw std::runtime_error("Could not allocate cubemap upload command buffer");
-        VkCommandBufferBeginInfo begin{VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO}; begin.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
-        if (vkBeginCommandBuffer(commandBuffer, &begin) != VK_SUCCESS) throw std::runtime_error("Could not begin cubemap upload command buffer");
+        if (upload == nullptr) { VkCommandBufferAllocateInfo commandAlloc{VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO}; commandAlloc.commandPool = commandPool; commandAlloc.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY; commandAlloc.commandBufferCount = 1; if (vkAllocateCommandBuffers(device_, &commandAlloc, &commandBuffer) != VK_SUCCESS) throw std::runtime_error("Could not allocate cubemap upload command buffer"); VkCommandBufferBeginInfo begin{VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO}; begin.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT; if (vkBeginCommandBuffer(commandBuffer, &begin) != VK_SUCCESS) throw std::runtime_error("Could not begin cubemap upload command buffer"); }
         VkImageMemoryBarrier barrier{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER}; barrier.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED; barrier.newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
         barrier.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT; barrier.image = image_; barrier.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, mipLevels_, 0, 6};
         vkCmdPipelineBarrier(commandBuffer, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0, nullptr, 1, &barrier);
@@ -201,16 +208,17 @@ void Cubemap::createHdr(VkPhysicalDevice physicalDevice, VkDevice device, VkComm
         for (uint32_t mip = 0; mip < mipLevels_; ++mip) {
             const auto side = std::max(1U, faceSize >> mip); const VkDeviceSize faceBytes = static_cast<VkDeviceSize>(side) * side * 4 * sizeof(uint16_t);
             for (uint32_t face = 0; face < 6; ++face) {
-                VkBufferImageCopy copy{}; copy.bufferOffset = offset; copy.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, mip, face, 1}; copy.imageExtent = {side, side, 1};
+                VkBufferImageCopy copy{}; copy.bufferOffset = stagingOffset + offset; copy.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, mip, face, 1}; copy.imageExtent = {side, side, 1};
                 regions.push_back(copy); offset += faceBytes;
             }
         }
         vkCmdCopyBufferToImage(commandBuffer, staging, image_, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, static_cast<uint32_t>(regions.size()), regions.data());
+        if (upload != nullptr) commandBuffer = upload->graphicsCommandBuffer();
         barrier.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL; barrier.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
         barrier.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT; barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
         vkCmdPipelineBarrier(commandBuffer, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0, 0, nullptr, 0, nullptr, 1, &barrier);
-        if (vkEndCommandBuffer(commandBuffer) != VK_SUCCESS) throw std::runtime_error("Could not finish cubemap upload command buffer");
-        submitAndWait(device_, queue, commandBuffer); vkFreeCommandBuffers(device_, commandPool, 1, &commandBuffer); commandBuffer = VK_NULL_HANDLE;
+        if (upload != nullptr) { readyTimeline_ = upload->pendingTicket().timelineValue; if (ownsUploadBatch) readyTimeline_ = upload->submit().timelineValue; commandBuffer = VK_NULL_HANDLE; }
+        else { if (vkEndCommandBuffer(commandBuffer) != VK_SUCCESS) throw std::runtime_error("Could not finish cubemap upload command buffer"); submitAndWait(device_, queue, commandBuffer); vkFreeCommandBuffers(device_, commandPool, 1, &commandBuffer); commandBuffer = VK_NULL_HANDLE; }
 
         VkImageViewCreateInfo view{VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO}; view.image = image_; view.viewType = VK_IMAGE_VIEW_TYPE_CUBE; view.format = imageInfo.format;
         view.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, mipLevels_, 0, 6};
@@ -219,7 +227,7 @@ void Cubemap::createHdr(VkPhysicalDevice physicalDevice, VkDevice device, VkComm
         sampler.mipmapMode = VK_SAMPLER_MIPMAP_MODE_LINEAR; sampler.addressModeU = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE; sampler.addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE; sampler.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
         sampler.maxLod = static_cast<float>(mipLevels_ - 1);
         if (vkCreateSampler(device_, &sampler, nullptr, &sampler_) != VK_SUCCESS) throw std::runtime_error("Could not create cubemap sampler");
-        vkDestroyBuffer(device_, staging, nullptr); vkFreeMemory(device_, stagingMemory, nullptr);
+        if (upload == nullptr) { vkDestroyBuffer(device_, staging, nullptr); vkFreeMemory(device_, stagingMemory, nullptr); }
     } catch (...) {
         if (commandBuffer != VK_NULL_HANDLE) vkFreeCommandBuffers(device_, commandPool, 1, &commandBuffer);
         if (staging != VK_NULL_HANDLE) vkDestroyBuffer(device_, staging, nullptr);
@@ -239,6 +247,6 @@ void Cubemap::destroy() noexcept {
         if (image_ != VK_NULL_HANDLE) vkDestroyImage(device_, image_, nullptr);
         if (memory_ != VK_NULL_HANDLE) vkFreeMemory(device_, memory_, nullptr);
     }
-    sampler_ = VK_NULL_HANDLE; imageView_ = VK_NULL_HANDLE; faceImageViews_.fill(VK_NULL_HANDLE); image_ = VK_NULL_HANDLE; memory_ = VK_NULL_HANDLE; device_ = VK_NULL_HANDLE; mipLevels_ = 0;
+    sampler_ = VK_NULL_HANDLE; imageView_ = VK_NULL_HANDLE; faceImageViews_.fill(VK_NULL_HANDLE); image_ = VK_NULL_HANDLE; memory_ = VK_NULL_HANDLE; device_ = VK_NULL_HANDLE; mipLevels_ = 0; readyTimeline_ = 0;
 }
 } // namespace Engine

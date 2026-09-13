@@ -103,6 +103,8 @@
         const RenderOptimizationFeatures& optimizationFeatures;
         AntialiasingLevel antialiasingLevel;
         const ShadowQuality& shadowQuality;
+        const GtaoQuality& gtaoQuality;
+        const IblQuality& iblQuality;
         const ShadowDebugView& shadowDebugView;
         const GrassRenderSettings& grassSettings;
         Assets::AssetManager& assetManager;
