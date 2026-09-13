@@ -549,7 +549,10 @@
                    lhs.waterAbsorptionRefraction == rhs.waterAbsorptionRefraction &&
                    lhs.waterScatteringMaxDepth == rhs.waterScatteringMaxDepth &&
                    lhs.waterFoam == rhs.waterFoam &&
-                   lhs.waterTextureIndices == rhs.waterTextureIndices;
+                   lhs.waterTextureIndices == rhs.waterTextureIndices &&
+                   lhs.waterWaves == rhs.waterWaves &&
+                   lhs.waterWaveMotion == rhs.waterWaveMotion &&
+                   lhs.waterWaveCount == rhs.waterWaveCount;
         }
 
         void markDirty(const std::size_t index,

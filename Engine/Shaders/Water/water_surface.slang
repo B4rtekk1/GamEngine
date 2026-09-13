@@ -25,26 +25,19 @@ import Common.SceneData;
 [[vk::binding(8, 0)]] StructuredBuffer<RendererPreviousTransformData> previousTransforms;
 #endif
 
-struct GerstnerWave { float2 direction; float amplitude; float wavelength; float speed; float steepness; };
-static const GerstnerWave WaterWaves[8] = {
-    {{ 1.00,  0.10}, 0.60, 22.0, 1.20, 0.32}, {{ 0.65,  0.76}, 0.18, 5.0, 2.00, 0.25},
-    {{-0.34,  0.94}, 0.10, 3.1, 2.60, 0.22}, {{ 0.91, -0.41}, 0.07, 1.8, 3.30, 0.18},
-    {{-0.82, -0.57}, 0.03, 0.7, 4.20, 0.12}, {{ 0.18, -0.98}, 0.025, 0.52, 4.80, 0.10},
-    {{-0.96,  0.27}, 0.04, 1.1, 3.80, 0.14}, {{ 0.48,  0.88}, 0.12, 7.5, 1.70, 0.20},
-};
-
-void evaluateGerstnerWaves(float2 positionXZ, float time, out float3 displacement,
+void evaluateGerstnerWaves(MaterialData material, float2 positionXZ, float time, out float3 displacement,
                            out float3 tangent, out float3 binormal) {
     displacement = 0.0; tangent = float3(1.0, 0.0, 0.0); binormal = float3(0.0, 0.0, 1.0);
     [unroll] for (uint index = 0; index < 8; ++index) {
-        GerstnerWave wave = WaterWaves[index];
-        float2 direction = normalize(wave.direction);
-        float k = 6.28318530718 / wave.wavelength;
-        float phase = k * dot(direction, positionXZ) + wave.speed * time;
-        float sine = sin(phase); float cosine = cos(phase); float horizontal = wave.steepness * wave.amplitude;
-        displacement += float3(horizontal * direction.x * cosine, wave.amplitude * sine, horizontal * direction.y * cosine);
-        tangent += float3(-horizontal * direction.x * direction.x * k * sine, wave.amplitude * direction.x * k * cosine, -horizontal * direction.x * direction.y * k * sine);
-        binormal += float3(-horizontal * direction.x * direction.y * k * sine, wave.amplitude * direction.y * k * cosine, -horizontal * direction.y * direction.y * k * sine);
+        if (index >= material.waterWaveCount.x) break;
+        float4 wave = material.waterWaves[index];
+        float2 direction = normalize(wave.xy);
+        float k = 6.28318530718 / max(wave.w, 0.001);
+        float phase = k * dot(direction, positionXZ) + material.waterWaveMotion[index].x * time;
+        float sine = sin(phase); float cosine = cos(phase); float horizontal = material.waterWaveMotion[index].y * wave.z;
+        displacement += float3(horizontal * direction.x * cosine, wave.z * sine, horizontal * direction.y * cosine);
+        tangent += float3(-horizontal * direction.x * direction.x * k * sine, wave.z * direction.x * k * cosine, -horizontal * direction.x * direction.y * k * sine);
+        binormal += float3(-horizontal * direction.x * direction.y * k * sine, wave.z * direction.y * k * cosine, -horizontal * direction.y * direction.y * k * sine);
     }
 }
 
@@ -86,10 +79,12 @@ WaterVertexOutput vertexMain(WaterVertexInput input, uint instanceIndex : SV_Ins
         2.0 * (q.x * q.y - q.z * q.w), 1.0 - 2.0 * (q.x * q.x + q.z * q.z), 2.0 * (q.y * q.z + q.x * q.w),
         2.0 * (q.x * q.z + q.y * q.w), 2.0 * (q.y * q.z - q.x * q.w), 1.0 - 2.0 * (q.x * q.x + q.y * q.y));
     float3 displacement; float3 tangent; float3 binormal;
+    const uint materialIndex = asuint(instance.positionMaterial.w) + input.materialIndex;
+    MaterialData material = materials[materialIndex];
     // Anchor wave phase in world space.  Ocean clipmap recentering now moves
     // only its sampling mesh, never the surface function itself.
     float3 baseWorldPosition = mul(input.position * instance.scaleBase.xyz, rotationMatrix) + instance.positionMaterial.xyz;
-    evaluateGerstnerWaves(baseWorldPosition.xz, frame.windGustFrequencyTime.z, displacement, tangent, binormal);
+    evaluateGerstnerWaves(material, baseWorldPosition.xz, frame.windGustFrequencyTime.z, displacement, tangent, binormal);
     float3 worldPosition = baseWorldPosition + mul(displacement * instance.scaleBase.xyz, rotationMatrix);
     WaterVertexOutput output;
     float4 currentClip = mul(mul(float4(worldPosition, 1.0), frame.view), frame.projection);
@@ -98,7 +93,7 @@ WaterVertexOutput vertexMain(WaterVertexInput input, uint instanceIndex : SV_Ins
     output.tangent = normalize(mul(tangent, rotationMatrix));
     output.binormal = normalize(mul(binormal, rotationMatrix));
     output.normal = normalize(cross(output.binormal, output.tangent));
-    output.materialIndex = asuint(instance.positionMaterial.w) + input.materialIndex;
+    output.materialIndex = materialIndex;
     output.texCoord = input.texCoord;
 #if FORWARD_OUTPUT_VELOCITY
     RendererPreviousTransformData previous = previousTransforms[visibleIndex];
@@ -108,7 +103,7 @@ WaterVertexOutput vertexMain(WaterVertexInput input, uint instanceIndex : SV_Ins
         2.0 * (previousQ.x * previousQ.y - previousQ.z * previousQ.w), 1.0 - 2.0 * (previousQ.x * previousQ.x + previousQ.z * previousQ.z), 2.0 * (previousQ.y * previousQ.z + previousQ.x * previousQ.w),
         2.0 * (previousQ.x * previousQ.z + previousQ.y * previousQ.w), 2.0 * (previousQ.y * previousQ.z - previousQ.x * previousQ.w), 1.0 - 2.0 * (previousQ.x * previousQ.x + previousQ.y * previousQ.y));
     float3 previousBaseWorldPosition = mul(input.position * previous.previousScale.xyz, previousRotation) + previous.previousPosition.xyz;
-    evaluateGerstnerWaves(previousBaseWorldPosition.xz, frame.windGustFrequencyTime.w, displacement, tangent, binormal);
+    evaluateGerstnerWaves(material, previousBaseWorldPosition.xz, frame.windGustFrequencyTime.w, displacement, tangent, binormal);
     float3 previousWorldPosition = previousBaseWorldPosition + mul(displacement * previous.previousScale.xyz, previousRotation);
     output.currentNdc = currentClip.xy / currentClip.w;
     output.previousClip = mul(mul(float4(previousWorldPosition, 1.0), frame.previousView), frame.previousProjection);
@@ -140,11 +135,12 @@ struct WaterFragmentOutput
 #endif
 };
 
-float linearViewDepth(float depth)
+float3 reconstructViewPosition(float depth, float2 uv)
 {
-    // Row-vector projection used by the renderer: clip.z = z*m22 + m32 and
-    // clip.w = z. This avoids expanding the shared per-frame UBO.
-    return abs(frame.projection[3][2] / max(abs(depth - frame.projection[2][2]), 1.0e-5));
+    // The inverse jittered projection is the authoritative convention for
+    // Vulkan RH_ZO depth and also gives the true oblique ray distance.
+    float4 view = mul(float4(uv * 2.0 - 1.0, depth, 1.0), frame.inverseProjection);
+    return view.xyz / max(abs(view.w), 1.0e-5);
 }
 
 [shader("fragment")]
@@ -184,14 +180,18 @@ WaterFragmentOutput fragmentMain(WaterFragmentInput input)
         distortedUv = screenUv;
         opaqueDepth = opaqueSceneDepth.SampleLevel(distortedUv, 0.0).r;
     }
-    float thickness = opaqueDepth >= 0.99999
-        ? material.waterScatteringMaxDepth.w
-        : max(0.0, linearViewDepth(opaqueDepth) - linearViewDepth(waterDepth));
+    float thickness = opaqueDepth >= 0.99999 ? material.waterScatteringMaxDepth.w :
+        length(reconstructViewPosition(opaqueDepth, distortedUv) - reconstructViewPosition(waterDepth, screenUv));
     thickness = min(thickness, material.waterScatteringMaxDepth.w);
     float3 transmittance = exp(-material.waterAbsorptionRefraction.rgb * thickness);
     float3 refracted = opaqueSceneColor.SampleLevel(distortedUv, 0.0).rgb;
+    // Retain physical absorption/scattering while making the artist-facing
+    // shallow/deep colours an explicit tint of in-scattered light.
+    float3 scatteringTint = lerp(material.waterShallowColorRoughness.rgb,
+                                 material.waterDeepColorIor.rgb,
+                                 saturate(thickness / material.waterScatteringMaxDepth.w));
     float3 transmission = refracted * transmittance +
-        material.waterScatteringMaxDepth.rgb * (1.0 - transmittance);
+        material.waterScatteringMaxDepth.rgb * scatteringTint * (1.0 - transmittance);
 
     uint reflectionWidth; uint reflectionHeight; uint reflectionMips;
     prefilteredEnvironmentMap.GetDimensions(0, reflectionWidth, reflectionHeight, reflectionMips);

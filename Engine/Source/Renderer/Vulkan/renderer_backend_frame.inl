@@ -329,7 +329,7 @@
                 if (taaResolveActive) temporalAaPass.reset();
             }
             const UniformBufferObject data{
-                currentView, currentProjection,
+                currentView, currentProjection, Mat4{glm::inverse(currentProjection.native())},
                 previousGameCameraValid ? previousGameView : currentView,
                 previousGameCameraValid ? previousGameProjection : currentProjection,
                 shadowClipMatrices,
@@ -391,7 +391,7 @@
             const Mat4 sceneView = sceneCamera.viewMatrix();
             const Mat4 sceneProjection = sceneCamera.projectionMatrix();
             const UniformBufferObject data{
-                sceneView, sceneProjection, sceneView, sceneProjection,
+                sceneView, sceneProjection, Mat4{glm::inverse(sceneProjection.native())}, sceneView, sceneProjection,
                 sceneShadowClipMatrices,
                 Vec4{sceneCamera.position().x(), sceneCamera.position().y(), sceneCamera.position().z(), 1.0F},
                 Vec4{frameData.directionalLight.direction.x(), frameData.directionalLight.direction.y(),

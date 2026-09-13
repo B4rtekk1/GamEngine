@@ -1,6 +1,6 @@
 #pragma once
 
-#include "Engine/Math/Math.h"
+#include "Engine/Renderer/Water/WaterMaterial.h"
 
 #include <array>
 #include <cstdint>
@@ -9,13 +9,7 @@
 namespace Engine {
     enum class WaterBodyType : std::uint8_t { Ocean, Lake, River };
 
-    struct GerstnerWave final {
-        Vec2 direction{1.0F, 0.0F};
-        float amplitude{0.1F};
-        float wavelength{5.0F};
-        float speed{1.0F};
-        float steepness{0.25F};
-    };
+    using GerstnerWave = WaterGerstnerWave;
 
     struct RiverSplinePoint final {
         Vec3 position{};
@@ -37,14 +31,19 @@ namespace Engine {
         Vec3 scatteringCoefficient{0.02F, 0.05F, 0.06F};
         float roughness{0.08F};
         float ior{1.333F};
+        float refractionStrength{0.025F};
+        float normalStrength{1.0F};
         float foamIntensity{0.5F};
         float foamThreshold{0.7F};
         float maxDepth{20.0F};
+        std::int32_t normalMap{-1};
+        std::int32_t foamTexture{-1};
+        std::int32_t flowMap{-1};
         bool enableSSR{true};
         bool enableCaustics{false};
         bool enableUnderwater{true};
-        std::array<GerstnerWave, 8> waves{};
-        std::uint32_t waveCount{};
+        std::array<GerstnerWave, 8> waves{defaultWaterWaves()};
+        std::uint32_t waveCount{8};
         std::vector<Vec3> lakeBoundary;
         std::vector<RiverSplinePoint> riverSpline;
     };

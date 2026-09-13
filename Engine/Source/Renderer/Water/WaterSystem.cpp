@@ -2,6 +2,7 @@
 
 #include "Engine/ECS/Components/MeshRendererComponent.h"
 #include "Engine/ECS/Components/TransformComponent.h"
+#include "Engine/Scene/SceneEditor.h"
 
 #include <algorithm>
 #include <cmath>
@@ -90,15 +91,45 @@ void WaterSystem::rebuild(Registry& registry, const Entity entity) const {
             .scatteringCoefficient = water.scatteringCoefficient,
             .roughness = water.roughness,
             .ior = water.ior,
+            .refractionStrength = water.refractionStrength,
+            .normalStrength = water.normalStrength,
             .foamIntensity = water.foamIntensity,
             .foamThreshold = water.foamThreshold,
             .maxVisibleDepth = water.maxDepth,
+            .normalMap = water.normalMap,
+            .foamTexture = water.foamTexture,
+            .flowMap = water.flowMap,
             .enableSSR = water.enableSSR,
             .enableCaustics = water.enableCaustics,
             .enableUnderwater = water.enableUnderwater,
+            .waves = water.waves,
+            .waveCount = water.waveCount,
         };
         // Water is composited as a surface; it must not produce a shadow-map
         // receiver/caster entry from its displaced visual mesh.
+        renderer.castShadow = false;
+    });
+}
+
+void WaterSystem::rebuild(SceneEditor& editor, const Entity entity) const {
+    if (!editor.has<WaterBodyComponent>(entity)) throw std::invalid_argument("Entity has no WaterBodyComponent");
+    const WaterBodyComponent& water = editor.read<WaterBodyComponent>(entity);
+    Mesh mesh = buildMesh(water);
+    auto source = std::make_shared<Mesh>(std::move(mesh));
+    if (!editor.has<MeshRendererComponent>(entity)) editor.add<MeshRendererComponent>(entity);
+    editor.patch<MeshRendererComponent>(entity, [&](MeshRendererComponent& renderer) {
+        renderer.mesh = MeshHandle{std::move(source)}; renderer.materialOverride = true;
+        renderer.material.shader = MaterialShader::Water;
+        renderer.material.water = {
+            .shallowColor = water.shallowColor, .deepColor = water.deepColor,
+            .absorptionCoefficient = water.absorptionCoefficient, .scatteringCoefficient = water.scatteringCoefficient,
+            .roughness = water.roughness, .ior = water.ior, .refractionStrength = water.refractionStrength,
+            .normalStrength = water.normalStrength, .foamIntensity = water.foamIntensity,
+            .foamThreshold = water.foamThreshold, .maxVisibleDepth = water.maxDepth,
+            .normalMap = water.normalMap, .foamTexture = water.foamTexture, .flowMap = water.flowMap,
+            .enableSSR = water.enableSSR, .enableCaustics = water.enableCaustics,
+            .enableUnderwater = water.enableUnderwater, .waves = water.waves, .waveCount = water.waveCount,
+        };
         renderer.castShadow = false;
     });
 }

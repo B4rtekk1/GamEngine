@@ -357,32 +357,48 @@ bool ComponentsPanel::draw(Engine::ScenePreset &scene, Engine::Assets::Content& 
             changed |= ImGui::ColorEdit3("Shallow Color##water", shallow, ImGuiColorEditFlags_Float);
             changed |= ImGui::ColorEdit3("Deep Color##water", deep, ImGuiColorEditFlags_Float);
             changed |= Editor::Controls::sliderFloat("Roughness##water", &water.roughness, 0.0F, 1.0F, "%.2f");
+            changed |= Editor::Controls::sliderFloat("IOR##water", &water.ior, 1.001F, 2.5F, "%.3f");
+            changed |= Editor::Controls::sliderFloat("Refraction Strength##water", &water.refractionStrength, 0.0F, 0.2F, "%.3f");
+            changed |= Editor::Controls::sliderFloat("Micro Normal Strength##water", &water.normalStrength, 0.0F, 1.0F, "%.2f");
+            float absorption[3] = {water.absorptionCoefficient.x(), water.absorptionCoefficient.y(), water.absorptionCoefficient.z()};
+            float scattering[3] = {water.scatteringCoefficient.x(), water.scatteringCoefficient.y(), water.scatteringCoefficient.z()};
+            changed |= ImGui::DragFloat3("Absorption##water", absorption, 0.001F, 0.0F, 10.0F, "%.3f");
+            changed |= ImGui::DragFloat3("Scattering##water", scattering, 0.001F, 0.0F, 10.0F, "%.3f");
+            changed |= Editor::Controls::sliderFloat("Max Depth##water", &water.maxDepth, 0.01F, 200.0F, "%.2f");
+            changed |= Editor::Controls::sliderFloat("Foam Intensity##water", &water.foamIntensity, 0.0F, 4.0F, "%.2f");
+            changed |= Editor::Controls::sliderFloat("Foam Threshold##water", &water.foamThreshold, 0.0F, 1.0F, "%.2f");
+            changed |= ImGui::Checkbox("Enable SSR##water", &water.enableSSR);
+            changed |= ImGui::Checkbox("Enable Caustics##water", &water.enableCaustics);
+            changed |= ImGui::Checkbox("Enable Underwater##water", &water.enableUnderwater);
+            changed |= ImGui::DragInt("Normal Map Index##water", &water.normalMap, 1.0F, -1, 4095);
+            changed |= ImGui::DragInt("Foam Texture Index##water", &water.foamTexture, 1.0F, -1, 4095);
+            changed |= ImGui::DragInt("Flow Map Index##water", &water.flowMap, 1.0F, -1, 4095);
+            int waveCount = static_cast<int>(water.waveCount);
+            changed |= ImGui::SliderInt("Wave Count##water", &waveCount, 0, 8);
+            water.waveCount = static_cast<std::uint32_t>(waveCount);
+            for (std::uint32_t index = 0; index < water.waveCount; ++index) {
+                ImGui::PushID(static_cast<int>(index));
+                auto& wave = water.waves[index];
+                float direction[2] = {wave.direction.x(), wave.direction.y()};
+                changed |= ImGui::DragFloat2("Direction", direction, 0.01F, -1.0F, 1.0F);
+                wave.direction = {direction[0], direction[1]};
+                changed |= ImGui::DragFloat("Amplitude", &wave.amplitude, 0.005F, 0.0F, 10.0F);
+                changed |= ImGui::DragFloat("Wavelength", &wave.wavelength, 0.01F, 0.01F, 1000.0F);
+                changed |= ImGui::DragFloat("Speed", &wave.speed, 0.01F, -100.0F, 100.0F);
+                changed |= ImGui::DragFloat("Steepness", &wave.steepness, 0.01F, 0.0F, 1.0F);
+                ImGui::PopID();
+            }
             if (changed) {
                 water.shallowColor = {shallow[0], shallow[1], shallow[2]};
                 water.deepColor = {deep[0], deep[1], deep[2]};
+                water.absorptionCoefficient = {absorption[0], absorption[1], absorption[2]};
+                water.scatteringCoefficient = {scattering[0], scattering[1], scattering[2]};
                 scene.editor().patch<Engine::WaterBodyComponent>(selected, [&](auto& component) { component = water; });
             }
             if (changed || ImGui::Button("Rebuild Water Geometry")) {
                 try {
-                    if (!scene.editor().has<Engine::MeshRenderer>(selected)) scene.editor().add<Engine::MeshRenderer>(selected);
-                    scene.editor().patch<Engine::MeshRenderer>(selected, [&](auto& renderer) {
-                        renderer.mesh = std::make_shared<Engine::Mesh>(Engine::WaterSystem::buildMesh(water));
-                        renderer.materialOverride = true;
-                        renderer.material.shader = Engine::MaterialShader::Water;
-                        renderer.material.water.shallowColor = water.shallowColor;
-                        renderer.material.water.deepColor = water.deepColor;
-                        renderer.material.water.absorptionCoefficient = water.absorptionCoefficient;
-                        renderer.material.water.scatteringCoefficient = water.scatteringCoefficient;
-                        renderer.material.water.roughness = water.roughness;
-                        renderer.material.water.ior = water.ior;
-                        renderer.material.water.foamIntensity = water.foamIntensity;
-                        renderer.material.water.foamThreshold = water.foamThreshold;
-                        renderer.material.water.maxVisibleDepth = water.maxDepth;
-                        renderer.material.water.enableSSR = water.enableSSR;
-                        renderer.material.water.enableCaustics = water.enableCaustics;
-                        renderer.material.water.enableUnderwater = water.enableUnderwater;
-                        renderer.castShadow = false;
-                    });
+                    auto editor = scene.editor();
+                    Engine::WaterSystem{}.rebuild(editor, selected);
                 } catch (const std::exception& error) {
                     Editor::ConsolePanel::error(error.what());
                 }

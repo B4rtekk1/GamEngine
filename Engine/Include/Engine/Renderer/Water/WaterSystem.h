@@ -5,11 +5,14 @@
 #include "Engine/Renderer/Geometry/Mesh.h"
 
 namespace Engine {
+    class SceneEditor;
     /** Builds runtime water geometry and submits it through the Water pipeline. */
     class WaterSystem final {
     public:
         /** Rebuilds an authored lake or river, or the shared ocean clipmap. */
         void rebuild(Registry& registry, Entity entity) const;
+        /** Editor-safe rebuild path; preserves Scene's Registry encapsulation. */
+        void rebuild(SceneEditor& editor, Entity entity) const;
 
         /** Snaps every ocean's transform to the active camera in XZ. */
         void updateOceans(Registry& registry, const Vec3& cameraPosition) const;

@@ -13,8 +13,10 @@
 #include "Engine/ECS/Components/TerrainComponent.h"
 #include "Engine/ECS/Components/TerrainGrassComponent.h"
 #include "Engine/ECS/Components/WindComponent.h"
+#include "Engine/ECS/Components/WaterBodyComponent.h"
 #include "Engine/ECS/Registry.h"
 #include "Engine/Renderer/MeshRenderer.h"
+#include "Engine/Renderer/Water/WaterSystem.h"
 #include "Engine/Scene/Scene.h"
 #include "Engine/Scene/TransformSystem.h"
 #include "Engine/Scene/Components/LightComponent.h"
@@ -62,6 +64,7 @@ namespace Engine {
         constexpr std::uint32_t MaterialShaderSourceFormatVersion = 20;
         constexpr std::uint32_t ReflectionProbeFormatVersion = 21;
         constexpr std::uint32_t TerrainMaterialLayersFormatVersion = 22;
+        constexpr std::uint32_t WaterBodyFormatVersion = 23;
         constexpr std::uint32_t TerrainDataVersion = 1;
         constexpr std::array<char, 8> TerrainDataMagic{'G', 'E', 'T', 'E', 'R', 'R', '1', '\0'};
 
@@ -1044,6 +1047,27 @@ namespace Engine {
                         << static_cast<int>(renderer.castShadow) << ' '
                         << renderer.cullingBatch << '\n';
             }
+            if (registry.has<WaterBodyComponent>(entity)) {
+                const auto& water = registry.get<WaterBodyComponent>(entity);
+                serialized << "WATER " << static_cast<unsigned>(water.type) << ' ';
+                writeVec3(serialized, water.shallowColor); serialized << ' '; writeVec3(serialized, water.deepColor); serialized << ' ';
+                writeVec3(serialized, water.absorptionCoefficient); serialized << ' '; writeVec3(serialized, water.scatteringCoefficient); serialized << ' ';
+                writeFloat(serialized, water.roughness); serialized << ' '; writeFloat(serialized, water.ior); serialized << ' ';
+                writeFloat(serialized, water.refractionStrength); serialized << ' '; writeFloat(serialized, water.normalStrength); serialized << ' ';
+                writeFloat(serialized, water.foamIntensity); serialized << ' '; writeFloat(serialized, water.foamThreshold); serialized << ' ';
+                writeFloat(serialized, water.maxDepth); serialized << ' ' << water.normalMap << ' ' << water.foamTexture << ' ' << water.flowMap << ' '
+                           << static_cast<int>(water.enableSSR) << ' ' << static_cast<int>(water.enableCaustics) << ' ' << static_cast<int>(water.enableUnderwater) << ' '
+                           << water.waveCount << ' ' << water.lakeBoundary.size() << ' ' << water.riverSpline.size();
+                for (std::uint32_t index = 0; index < water.waveCount; ++index) {
+                    const auto& wave = water.waves[index];
+                    serialized << ' '; writeFloat(serialized, wave.direction.x()); serialized << ' '; writeFloat(serialized, wave.direction.y());
+                    serialized << ' '; writeFloat(serialized, wave.amplitude); serialized << ' '; writeFloat(serialized, wave.wavelength);
+                    serialized << ' '; writeFloat(serialized, wave.speed); serialized << ' '; writeFloat(serialized, wave.steepness);
+                }
+                for (const Vec3& point : water.lakeBoundary) { serialized << ' '; writeVec3(serialized, point); }
+                for (const RiverSplinePoint& point : water.riverSpline) { serialized << ' '; writeVec3(serialized, point.position); serialized << ' '; writeFloat(serialized, point.width); serialized << ' '; writeFloat(serialized, point.depth); serialized << ' '; writeFloat(serialized, point.flowSpeed); }
+                serialized << '\n';
+            }
             if (registry.has<LightComponent>(entity)) {
                 const auto &light = registry.get<LightComponent>(entity);
                 serialized << "LIGHT " << static_cast<int>(light.type) << ' ';
@@ -1189,6 +1213,7 @@ namespace Engine {
             version != MaterialOverrideFormatVersion + 1 && version != ScriptFieldsFormatVersion &&
             version != MaterialShaderFormatVersion && version != MaterialShaderSourceFormatVersion &&
             version != ReflectionProbeFormatVersion &&
+            version != TerrainMaterialLayersFormatVersion &&
             version != FormatVersion) {
             invalidScene("unsupported format version " + std::to_string(version));
         }
@@ -1343,6 +1368,7 @@ namespace Engine {
             bool hasTag = false;
             bool hasParent = false;
             bool hasHierarchyOrder = false;
+            bool hasWater = false;
 
             while (true) {
                 const auto component = read<std::string>(input, "component name");
@@ -1519,6 +1545,27 @@ namespace Engine {
                     renderer.castShadow = readBool(input, "cast-shadow flag");
                     renderer.cullingBatch = read<std::uint32_t>(input, "culling batch");
                     loaded.add<MeshRenderer>(entity, std::move(renderer));
+                } else if (component == "WATER") {
+                    if (version < WaterBodyFormatVersion || hasWater) invalidScene("invalid WaterBodyComponent");
+                    const unsigned type = read<unsigned>(input, "water type");
+                    if (type > static_cast<unsigned>(WaterBodyType::River)) invalidScene("unknown water type");
+                    WaterBodyComponent water;
+                    water.type = static_cast<WaterBodyType>(type);
+                    water.shallowColor = readVec3(input, "water shallow color"); water.deepColor = readVec3(input, "water deep color");
+                    water.absorptionCoefficient = readVec3(input, "water absorption"); water.scatteringCoefficient = readVec3(input, "water scattering");
+                    water.roughness = readFloat(input, "water roughness"); water.ior = readFloat(input, "water IOR");
+                    water.refractionStrength = readFloat(input, "water refraction strength"); water.normalStrength = readFloat(input, "water normal strength");
+                    water.foamIntensity = readFloat(input, "water foam intensity"); water.foamThreshold = readFloat(input, "water foam threshold");
+                    water.maxDepth = readFloat(input, "water max depth"); water.normalMap = read<std::int32_t>(input, "water normal map");
+                    water.foamTexture = read<std::int32_t>(input, "water foam texture"); water.flowMap = read<std::int32_t>(input, "water flow map");
+                    water.enableSSR = readBool(input, "water SSR flag"); water.enableCaustics = readBool(input, "water caustics flag"); water.enableUnderwater = readBool(input, "water underwater flag");
+                    water.waveCount = static_cast<std::uint32_t>(readCount(input, "water wave count", water.waves.size()));
+                    const std::size_t boundaryCount = readCount(input, "water boundary count", 100000); const std::size_t splineCount = readCount(input, "water spline count", 100000);
+                    for (std::uint32_t index = 0; index < water.waveCount; ++index) { auto& wave = water.waves[index]; wave.direction = {readFloat(input, "wave direction x"), readFloat(input, "wave direction y")}; wave.amplitude = readFloat(input, "wave amplitude"); wave.wavelength = readFloat(input, "wave wavelength"); wave.speed = readFloat(input, "wave speed"); wave.steepness = readFloat(input, "wave steepness"); if (wave.direction.length() < 1.0e-4F || wave.amplitude < 0.0F || wave.wavelength <= 0.0F || wave.steepness < 0.0F || wave.steepness > 1.0F) invalidScene("water wave is invalid"); }
+                    water.lakeBoundary.resize(boundaryCount); for (Vec3& point : water.lakeBoundary) point = readVec3(input, "water boundary point");
+                    water.riverSpline.resize(splineCount); for (RiverSplinePoint& point : water.riverSpline) { point.position = readVec3(input, "river spline point"); point.width = readFloat(input, "river width"); point.depth = readFloat(input, "river depth"); point.flowSpeed = readFloat(input, "river flow speed"); if (point.width <= 0.0F || point.depth < 0.0F) invalidScene("river spline is invalid"); }
+                    if (water.roughness < 0.0F || water.roughness > 1.0F || water.ior <= 1.0F || water.maxDepth <= 0.0F || water.refractionStrength < 0.0F || water.normalStrength < 0.0F) invalidScene("water material is invalid");
+                    loaded.add<WaterBodyComponent>(entity, std::move(water)); hasWater = true;
                 } else if (component == "WIND" || component == "WIND_V2") {
                     if (hasWind) invalidScene("entity contains more than one WindComponent");
                     hasWind = true;
@@ -1721,6 +1768,7 @@ namespace Engine {
             if (hasTerrainGrass && !hasTerrain) {
                 invalidScene("TerrainGrassComponent requires TerrainComponent");
             }
+            if (hasWater) WaterSystem{}.rebuild(loaded, entity);
         }
 
         expect(input, "END_SCENE");

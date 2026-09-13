@@ -219,6 +219,12 @@
                 packed.waterFoam = {water->foamIntensity, water->foamThreshold,
                                     water->normalStrength, water->depthFadeDistance};
                 packed.waterTextureIndices = {normalMap, foamTexture, flowMap, flags};
+                packed.waterWaveCount.x = std::min(water->waveCount, 8U);
+                for (std::uint32_t waveIndex = 0; waveIndex < packed.waterWaveCount.x; ++waveIndex) {
+                    const auto& wave = water->waves[waveIndex];
+                    packed.waterWaves[waveIndex] = {wave.direction.x(), wave.direction.y(), wave.amplitude, wave.wavelength};
+                    packed.waterWaveMotion[waveIndex] = {wave.speed, wave.steepness, 0.0F, 0.0F};
+                }
             }
             return packed;
         }

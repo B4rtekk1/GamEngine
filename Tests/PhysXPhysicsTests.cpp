@@ -312,6 +312,23 @@ TEST(SceneSerializer, RoundTripsCubeActorTransformAndMaterial) {
     EXPECT_TRUE(renderer.material.shaderProgramSpirv.empty());
 }
 
+TEST(SceneSerializer, LoadsVersion22AndResavesAsVersion23) {
+    Engine::Scene source;
+    source.createCube("Version 22 migration");
+    std::ostringstream currentFormat;
+    ASSERT_NO_THROW(Engine::SceneSerializer::save(source, currentFormat));
+    std::string legacy = currentFormat.str();
+    ASSERT_TRUE(legacy.starts_with("GAMENGINE_SCENE 23\n"));
+    legacy.replace(0, std::string{"GAMENGINE_SCENE 23"}.size(), "GAMENGINE_SCENE 22");
+
+    Engine::Scene loaded;
+    std::istringstream input{legacy};
+    ASSERT_NO_THROW(Engine::SceneSerializer::load(loaded, input));
+    std::ostringstream migrated;
+    ASSERT_NO_THROW(Engine::SceneSerializer::save(loaded, migrated));
+    EXPECT_TRUE(migrated.str().starts_with("GAMENGINE_SCENE 23\n"));
+}
+
 TEST(SceneSerializer, PreservesShaderGraphSourceWithoutAsset) {
     const auto path = std::filesystem::temp_directory_path() / "gameengine-shader-graph-source-test.scene";
     std::error_code error;

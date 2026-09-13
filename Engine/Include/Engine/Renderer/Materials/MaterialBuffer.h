@@ -37,5 +37,9 @@ namespace Engine {
         glm::vec4 waterScatteringMaxDepth{};
         glm::vec4 waterFoam{};
         glm::ivec4 waterTextureIndices{-1};
+        // xy direction, z amplitude, w wavelength; x speed, y steepness.
+        std::array<glm::vec4, 8> waterWaves{};
+        std::array<glm::vec4, 8> waterWaveMotion{};
+        glm::uvec4 waterWaveCount{};
     };
 } // namespace Engine

@@ -16,6 +16,7 @@ struct RendererFrameData
 {
     float4x4 view;
     float4x4 projection;
+    float4x4 inverseProjection;
     float4x4 previousView;
     float4x4 previousProjection;
     float4x4 shadowClipMatrices[7];
@@ -62,6 +63,9 @@ struct MaterialData
     float4 waterFoam;
     // normal map, foam map, flow map, reserved.
     int4 waterTextureIndices;
+    float4 waterWaves[8];
+    float4 waterWaveMotion[8];
+    uint4 waterWaveCount;
 };
 
 float2 materialTextureUv(MaterialData material, uint slot, float2 uv0, float2 uv1)
