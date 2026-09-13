@@ -1799,11 +1799,19 @@ ViewportInteraction drawViewport(Engine::ScenePreset &scene, Engine::Assets::Con
                         const auto& mesh = *meshRenderer.mesh;
                         const std::size_t limit = std::min<std::size_t>(mesh.indices.size(), 900);
                         for (std::size_t index = 0; index + 2 < limit; index += 3) {
+                            const std::uint32_t indexA = mesh.indices[index];
+                            const std::uint32_t indexB = mesh.indices[index + 1];
+                            const std::uint32_t indexC = mesh.indices[index + 2];
+                            // Imported or live-edited meshes can briefly contain
+                            // stale indices.  The diagnostic overlay must never
+                            // index the CPU vertex array out of bounds.
+                            if (indexA >= mesh.vertices.size() || indexB >= mesh.vertices.size() ||
+                                indexC >= mesh.vertices.size()) continue;
                             const auto project = [&](const std::uint32_t vertex) {
                                 return projectGizmoPoint(camera, Engine::Vec3{transform.matrix().native() *
                                     glm::vec4{mesh.vertices[vertex].position.native(), 1.0F}}, imageMin, imageMax);
                             };
-                            const ImVec2 a = project(mesh.indices[index]), b = project(mesh.indices[index + 1]), c = project(mesh.indices[index + 2]);
+                            const ImVec2 a = project(indexA), b = project(indexB), c = project(indexC);
                             drawList->AddTriangle(a, b, c, IM_COL32(75, 235, 255, 180), 1.0F);
                         }
                     });

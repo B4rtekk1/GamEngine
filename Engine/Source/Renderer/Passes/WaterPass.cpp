@@ -50,8 +50,16 @@ void WaterPass::create(const VkDevice device, const VkFormat colorFormat, const 
     options.vertexBindings = {{0, sizeof(GpuVertex), VK_VERTEX_INPUT_RATE_VERTEX}};
     options.vertexAttributes = {
         {0, 0, VK_FORMAT_R32G32B32_SFLOAT, offsetof(GpuVertex, px)},
+        {1, 0, VK_FORMAT_R8G8B8A8_UNORM, offsetof(GpuVertex, color)},
         {2, 0, VK_FORMAT_R16G16_SFLOAT, offsetof(GpuVertex, texCoord)},
+        // forward_water's vertex entry point consumes the complete GpuVertex
+        // layout.  Every declared input needs an attribute on devices without
+        // vertex attribute robustness/maintenance9, even when a variant does
+        // not visibly use a value in its final fragment output.
+        {4, 0, VK_FORMAT_R16G16_SFLOAT, offsetof(GpuVertex, texCoord1)},
+        {3, 0, VK_FORMAT_A2B10G10R10_SNORM_PACK32, offsetof(GpuVertex, normal)},
         {8, 0, VK_FORMAT_R32_UINT, offsetof(GpuVertex, materialIndex)},
+        {9, 0, VK_FORMAT_A2B10G10R10_SNORM_PACK32, offsetof(GpuVertex, tangent)},
     };
     pipeline_.create(device, options);
     createSceneDescriptors(opaqueColor, opaqueDepth);

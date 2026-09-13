@@ -68,8 +68,8 @@ namespace Engine::UI {
                 const auto loca = table("loca");
                 const auto glyf = table("glyf");
                 const auto cmap = table("cmap");
-                if (!head.length || !maxp.length || !hhea.length || !hmtx.length ||
-                    !loca.length || !glyf.length || !cmap.length) {
+                if ((head.length == 0U) || (maxp.length == 0U) || (hhea.length == 0U) || (hmtx.length == 0U) ||
+                    (loca.length == 0U) || (glyf.length == 0U) || (cmap.length == 0U)) {
                     error = "TrueType font is missing required tables";
                     return false;
                 }
@@ -116,8 +116,8 @@ namespace Engine::UI {
             float lineHeight() const { return static_cast<float>(ascender_ - descender_ + lineGap_); }
 
             float advance(std::uint16_t id) const {
-                const auto n = std::min<std::uint16_t>(id, metricCount_ ? metricCount_ - 1 : 0);
-                return static_cast<float>(u16(hmtx_.offset + 4u * n));
+                const auto n = std::min<std::uint16_t>(id, (metricCount_ != 0U) ? metricCount_ - 1 : 0);
+                return static_cast<float>(u16(hmtx_.offset + (static_cast<std::size_t>(4U * n))));
             }
 
             bool outline(std::uint16_t id, Outline &out) const {
@@ -139,10 +139,12 @@ namespace Engine::UI {
                 }
                 auto end = std::vector<std::uint16_t>(contours);
                 const auto endBase = p + 10;
-                for (int i = 0; i < contours; ++i) end[i] = u16(endBase + (2U * i));
-                const auto instructionLength = u16(endBase + 2u * contours);
-                auto pos = endBase + 2u * contours + 2u + instructionLength;
-                const auto count = static_cast<std::size_t>(end.back()) + 1u;
+                for (int i = 0; i < contours; ++i) {
+                    end[i] = u16(endBase + (static_cast<std::size_t>(2U * i)));
+                }
+                const auto instructionLength = u16(endBase + (static_cast<std::size_t>(2U * contours)));
+                auto pos = endBase + (static_cast<std::size_t>(2U * contours)) + 2U + instructionLength;
+                const auto count = static_cast<std::size_t>(end.back()) + 1U;
                 std::vector<std::uint8_t> flags;
                 flags.reserve(count);
                 while (flags.size() < count) {
@@ -150,7 +152,9 @@ namespace Engine::UI {
                     flags.push_back(f);
                     if (f & 8) {
                         const auto n = data_.at(pos++);
-                        for (int i = 0; i < n; ++i) flags.push_back(f);
+                        for (int i = 0; i < n; ++i) {
+                            flags.push_back(f);
+                        }
                     }
                 }
                 std::vector<std::int16_t> xs(count), ys(count);
@@ -159,10 +163,11 @@ namespace Engine::UI {
                 std::size_t first = 0;
                 for (const auto last: end) {
                     std::vector<Point> contour;
-                    for (std::size_t i = first; i <= last; ++i)
+                    for (std::size_t i = first; i <= last; ++i) {
                         contour.push_back({
-                            static_cast<double>(xs[i]), static_cast<double>(ys[i]), (flags[i] & 1) != 0
+                            static_cast<double>(xs[i]), static_cast<double>(ys[i]), (flags[i] & 1) != 0,
                         });
+}
                     out.contours.push_back(std::move(contour));
                     first = last + 1;
                 }
@@ -208,12 +213,13 @@ namespace Engine::UI {
                     const bool shortVec = x ? (f & 2) : (f & 4);
                     const bool same = x ? (f & 16) : (f & 32);
                     std::int32_t delta = 0;
-                    if (shortVec) delta = data_.at(pos++);
-                    else if (!same) {
+                    if (shortVec) { delta = data_.at(pos++);
+                    } else if (!same) {
                         delta = s16(pos);
                         pos += 2;
                     }
-                    if (shortVec && !same) delta = -delta;
+                    if (shortVec && !same) { delta = -delta;
+}
                     value += delta;
                     values[i] = static_cast<std::int16_t>(value);
                 }
@@ -234,7 +240,7 @@ namespace Engine::UI {
                         }
                     }
                 }
-                if (!chosen) {
+                if (chosen == 0U) {
                     error = "TrueType cmap format 4 is required";
                     return false;
                 }
@@ -312,26 +318,37 @@ namespace Engine::UI {
 
     std::string UIFontAtlas::build(const std::string &fontPath, std::uint32_t pixelSize, std::uint32_t firstCodepoint,
                                    std::uint32_t lastCodepoint) {
-        if (fontPath.empty() || pixelSize == 0 || firstCodepoint > lastCodepoint)return "Invalid font atlas parameters";
+        if (fontPath.empty() || pixelSize == 0 || firstCodepoint > lastCodepoint) {return "Invalid font atlas parameters";
+}
         TrueType font;
         std::string error;
-        if (!font.load(fontPath, error))return error;
-        constexpr std::uint32_t padding = 2, atlasWidth = 1024, samples = 4;
+        if (!font.load(fontPath, error)) {return error;
+}
+        constexpr std::uint32_t padding = 2;
+        constexpr std::uint32_t atlasWidth = 1024;
+        constexpr std::uint32_t samples = 4;
         struct Pending {
             std::uint32_t cp;
             Glyph glyph;
             Outline outline;
         };
         std::vector<Pending> pending;
-        std::uint32_t x = padding, y = padding, row = 0, required = padding;
+        std::uint32_t x = padding;
+        std::uint32_t y = padding;
+        std::uint32_t row = 0;
+        std::uint32_t required = padding;
         const double scale = static_cast<double>(pixelSize) / font.units();
         for (std::uint32_t cp = firstCodepoint; cp <= lastCodepoint; ++cp) {
             const auto id = font.glyph(cp);
             Outline o;
-            if (!font.outline(id, o))continue;
-            double minX = 0, minY = 0, maxX = 0, maxY = 0;
+            if (!font.outline(id, o)) {continue;
+}
+            double minX = 0;
+            double minY = 0;
+            double maxX = 0;
+            double maxY = 0;
             bool any = false;
-            for (const auto &c: o.contours)
+            for (const auto &c: o.contours) {
                 for (const auto &p: c) {
                     minX = any ? std::min(minX, p.x) : p.x;
                     maxX = any ? std::max(maxX, p.x) : p.x;
@@ -339,6 +356,7 @@ namespace Engine::UI {
                     maxY = any ? std::max(maxY, p.y) : p.y;
                     any = true;
                 }
+}
             const auto w = static_cast<std::uint32_t>(std::ceil((maxX - minX) * scale));
             const auto h = static_cast<std::uint32_t>(std::ceil((maxY - minY) * scale));
             if (x + w + padding > atlasWidth) {
@@ -348,22 +366,22 @@ namespace Engine::UI {
             }
             Pending q{cp, {}, {},};
             q.outline = std::move(o);
-            q.glyph.width = float(w);
-            q.glyph.height = float(h);
-            q.glyph.bearingX = float(minX * scale);
-            q.glyph.bearingY = float(maxY * scale);
-            q.glyph.advance = font.advance(id) * float(scale);
-            q.glyph.uv.min[0] = float(x) / atlasWidth;
-            q.glyph.uv.max[0] = float(x + w) / atlasWidth;
-            q.glyph.uv.min[1] = float(y);
-            q.glyph.uv.max[1] = float(y + h);
+            q.glyph.width = static_cast<float>(w);
+            q.glyph.height = static_cast<float>(h);
+            q.glyph.bearingX = static_cast<float>(minX * scale);
+            q.glyph.bearingY = static_cast<float>(maxY * scale);
+            q.glyph.advance = font.advance(id) * static_cast<float>(scale);
+            q.glyph.uv.min[0] = static_cast<float>(x) / atlasWidth;
+            q.glyph.uv.max[0] = static_cast<float>(x + w) / atlasWidth;
+            q.glyph.uv.min[1] = static_cast<float>(y);
+            q.glyph.uv.max[1] = static_cast<float>(y + h);
             pending.push_back(std::move(q));
             x += w + padding;
             row = std::max(row, h);
             required = std::max(required, y + row + padding);
         }
         m_width = atlasWidth;
-        m_height = std::max(required, pixelSize + padding * 2);
+        m_height = std::max(required, pixelSize + (padding * 2));
         m_pixelSize = pixelSize;
         m_ascent = font.ascent() * static_cast<float>(scale);
         m_lineHeight = font.lineHeight() * static_cast<float>(scale);
