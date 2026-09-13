@@ -9,7 +9,7 @@ namespace Engine {
 
     void HdrBuffer::create(const VkPhysicalDevice physicalDevice, const VkDevice device,
                            const VkExtent2D extent, const VmaAllocator allocator,
-                           const VkFilter filter, const VkFormat format) {
+                           const VkFilter filter, const VkFormat format, const bool storage) {
         if (physicalDevice == VK_NULL_HANDLE || device == VK_NULL_HANDLE ||
             extent.width == 0 || extent.height == 0 || allocator == VK_NULL_HANDLE) {
             throw std::invalid_argument("HDR buffer requires a device and non-zero extent");
@@ -17,9 +17,10 @@ namespace Engine {
 
         VkFormatProperties formatProperties{};
         vkGetPhysicalDeviceFormatProperties(physicalDevice, format, &formatProperties);
-        constexpr VkFormatFeatureFlags required =
+        VkFormatFeatureFlags required =
                 static_cast<VkFormatFeatureFlags>(VK_FORMAT_FEATURE_COLOR_ATTACHMENT_BIT) |
                 static_cast<VkFormatFeatureFlags>(VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT);
+        if (storage) required |= VK_FORMAT_FEATURE_STORAGE_IMAGE_BIT;
         if ((formatProperties.optimalTilingFeatures & required) != required) {
             throw std::runtime_error("GPU does not support the requested floating-point sampled color attachment");
         }
@@ -43,7 +44,8 @@ namespace Engine {
                          static_cast<VkImageUsageFlags>(VK_IMAGE_USAGE_SAMPLED_BIT) |
                          // Temporal AA clears its ping-pong history before its
                          // first use, which requires TRANSFER_DST usage.
-                         static_cast<VkImageUsageFlags>(VK_IMAGE_USAGE_TRANSFER_DST_BIT),
+                         static_cast<VkImageUsageFlags>(VK_IMAGE_USAGE_TRANSFER_DST_BIT) |
+                         (storage ? static_cast<VkImageUsageFlags>(VK_IMAGE_USAGE_STORAGE_BIT) : 0),
                 .sharingMode = VK_SHARING_MODE_EXCLUSIVE,
                 .queueFamilyIndexCount = 0,
                 .pQueueFamilyIndices = nullptr,

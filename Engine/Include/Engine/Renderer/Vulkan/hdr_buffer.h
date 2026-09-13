@@ -40,7 +40,7 @@ namespace Engine {
          */
         void create(VkPhysicalDevice physicalDevice, VkDevice device, VkExtent2D extent,
                     VmaAllocator allocator, VkFilter filter = VK_FILTER_LINEAR,
-                    VkFormat format = Format);
+                    VkFormat format = Format, bool storage = false);
 
         /// Releases the HDR image, memory, view and sampler.
         void destroy() noexcept;

@@ -1,7 +1,6 @@
 #pragma once
 
 #include "Engine/Math/Mat4.h"
-#include "Engine/Renderer/Vulkan/graphics_pipeline.h"
 #include "Engine/Renderer/Vulkan/hdr_buffer.h"
 
 #include <array>
@@ -40,8 +39,6 @@ private:
     void clearImages(VkCommandBuffer commandBuffer);
     void buildLinearDepth(VkCommandBuffer commandBuffer, std::uint32_t frameIndex, VkImageView depthView, VkSampler depthSampler,
                           const Mat4& inverseProjection);
-    void draw(VkCommandBuffer commandBuffer, GraphicsPipeline& pipeline, VkFramebuffer framebuffer,
-              VkDescriptorSet set, VkExtent2D extent, const void* constants, std::uint32_t constantSize);
     VkDevice device_ = VK_NULL_HANDLE;
     VkExtent2D fullExtent_{};
     VkExtent2D halfExtent_{};
@@ -49,12 +46,10 @@ private:
     // frames.  This renderer has three frame slots.
     static constexpr std::uint32_t FramesInFlight = 3;
     HdrBuffer raw_;
-    // Linear depth and oct-encoded normal are shared, read-only guidance for
-    // the spatial and upsample passes.  AO itself stays single-channel.
+    // Linear depth, oct-normal and a discontinuity mask guide the 5x5
+    // groupshared denoiser and the bilateral upsample.
     HdrBuffer auxiliary_;
-    HdrBuffer spatial_;
     HdrBuffer filtered_;
-    std::array<HdrBuffer, 2> history_;
     HdrBuffer full_;
     // A dedicated R16F view-depth hierarchy.  It intentionally is not Hi-Z:
     // GTAO consumes filtered view depths, while culling consumes extrema.
@@ -72,12 +67,12 @@ private:
     VkDescriptorPool depthDescriptorPool_ = VK_NULL_HANDLE;
     std::array<VkDescriptorSet, FramesInFlight> linearizeSets_{};
     std::vector<VkDescriptorSet> depthReduceSets_;
-    std::array<GraphicsPipeline, 5> pipelines_;
-    std::array<VkDescriptorSetLayout, 5> layouts_{};
-    std::array<VkDescriptorPool, 5> pools_{};
-    std::array<std::array<VkDescriptorSet, FramesInFlight>, 5> sets_{};
-    std::array<VkFramebuffer, 6> framebuffers_{};
-    std::uint32_t historyIndex_ = 0;
+    // Main AO, 5x5 denoise and bilateral upsample are all compute pipelines.
+    std::array<VkDescriptorSetLayout, 3> computeLayouts_{};
+    std::array<VkPipelineLayout, 3> computePipelineLayouts_{};
+    std::array<VkPipeline, 3> computePipelines_{};
+    VkDescriptorPool computeDescriptorPool_ = VK_NULL_HANDLE;
+    std::array<std::array<VkDescriptorSet, FramesInFlight>, 3> computeSets_{};
     bool initialized_ = false;
 };
 } // namespace Engine
