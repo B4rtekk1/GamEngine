@@ -25,19 +25,25 @@ import Common.SceneData;
 [[vk::binding(8, 0)]] StructuredBuffer<RendererPreviousTransformData> previousTransforms;
 #endif
 
-void evaluateGerstnerWaves(MaterialData material, float2 positionXZ, float time, out float3 displacement,
+void evaluateGerstnerWaves(MaterialData material, float2 positionXZ, float time, float cellSize, out float3 displacement,
                            out float3 tangent, out float3 binormal) {
     displacement = 0.0; tangent = float3(1.0, 0.0, 0.0); binormal = float3(0.0, 0.0, 1.0);
     [unroll] for (uint index = 0; index < 8; ++index) {
         if (index >= material.waterWaveCount.x) break;
         float4 wave = material.waterWaves[index];
+        // Clipmap vertices cannot represent wavelengths below their sampling
+        // rate.  Authored lakes/rivers carry cellSize == 0 and retain their
+        // complete wave set.  The smooth transition avoids a hard spectral
+        // cutoff while the CPU matches it on shared ring edges.
+        float waveLod = cellSize > 0.0 ? smoothstep(2.0, 6.0, wave.w / cellSize) : 1.0;
+        if (waveLod <= 0.0) continue;
         float2 direction = normalize(wave.xy);
         float k = 6.28318530718 / max(wave.w, 0.001);
         float phase = k * dot(direction, positionXZ) + material.waterWaveMotion[index].x * time;
         float sine = sin(phase); float cosine = cos(phase); float horizontal = material.waterWaveMotion[index].y * wave.z;
-        displacement += float3(horizontal * direction.x * cosine, wave.z * sine, horizontal * direction.y * cosine);
-        tangent += float3(-horizontal * direction.x * direction.x * k * sine, wave.z * direction.x * k * cosine, -horizontal * direction.x * direction.y * k * sine);
-        binormal += float3(-horizontal * direction.x * direction.y * k * sine, wave.z * direction.y * k * cosine, -horizontal * direction.y * direction.y * k * sine);
+        displacement += waveLod * float3(horizontal * direction.x * cosine, wave.z * sine, horizontal * direction.y * cosine);
+        tangent += waveLod * float3(-horizontal * direction.x * direction.x * k * sine, wave.z * direction.x * k * cosine, -horizontal * direction.x * direction.y * k * sine);
+        binormal += waveLod * float3(-horizontal * direction.x * direction.y * k * sine, wave.z * direction.y * k * cosine, -horizontal * direction.y * direction.y * k * sine);
     }
 }
 
@@ -84,7 +90,7 @@ WaterVertexOutput vertexMain(WaterVertexInput input, uint instanceIndex : SV_Ins
     // Anchor wave phase in world space.  Ocean clipmap recentering now moves
     // only its sampling mesh, never the surface function itself.
     float3 baseWorldPosition = mul(input.position * instance.scaleBase.xyz, rotationMatrix) + instance.positionMaterial.xyz;
-    evaluateGerstnerWaves(material, baseWorldPosition.xz, frame.windGustFrequencyTime.z, displacement, tangent, binormal);
+    evaluateGerstnerWaves(material, baseWorldPosition.xz, frame.windGustFrequencyTime.z, input.texCoord1.x, displacement, tangent, binormal);
     float3 worldPosition = baseWorldPosition + mul(displacement * instance.scaleBase.xyz, rotationMatrix);
     WaterVertexOutput output;
     float4 currentClip = mul(mul(float4(worldPosition, 1.0), frame.view), frame.projection);
@@ -103,7 +109,7 @@ WaterVertexOutput vertexMain(WaterVertexInput input, uint instanceIndex : SV_Ins
         2.0 * (previousQ.x * previousQ.y - previousQ.z * previousQ.w), 1.0 - 2.0 * (previousQ.x * previousQ.x + previousQ.z * previousQ.z), 2.0 * (previousQ.y * previousQ.z + previousQ.x * previousQ.w),
         2.0 * (previousQ.x * previousQ.z + previousQ.y * previousQ.w), 2.0 * (previousQ.y * previousQ.z - previousQ.x * previousQ.w), 1.0 - 2.0 * (previousQ.x * previousQ.x + previousQ.y * previousQ.y));
     float3 previousBaseWorldPosition = mul(input.position * previous.previousScale.xyz, previousRotation) + previous.previousPosition.xyz;
-    evaluateGerstnerWaves(material, previousBaseWorldPosition.xz, frame.windGustFrequencyTime.w, displacement, tangent, binormal);
+    evaluateGerstnerWaves(material, previousBaseWorldPosition.xz, frame.windGustFrequencyTime.w, input.texCoord1.x, displacement, tangent, binormal);
     float3 previousWorldPosition = previousBaseWorldPosition + mul(displacement * previous.previousScale.xyz, previousRotation);
     output.currentNdc = currentClip.xy / currentClip.w;
     output.previousClip = mul(mul(float4(previousWorldPosition, 1.0), frame.previousView), frame.previousProjection);
@@ -154,8 +160,13 @@ WaterFragmentOutput fragmentMain(WaterFragmentInput input)
     // Macro normal follows the displaced Gerstner geometry. A material-owned
     // normal map is strictly micro detail, never the water's main shape.
     if (material.waterTextureIndices.x >= 0) {
+        // Ocean detail must be continuous in world space: per-quad UVs make
+        // normal-map frequency and phase change at every clipmap ring.
+        const float normalMapScale = 0.15;
+        float2 waterUv = input.worldPosition.xz * normalMapScale +
+            frame.windDirectionStrength.xz * frame.windGustFrequencyTime.z * 0.04;
         float3 microTS = materialTextures[NonUniformResourceIndex(material.waterTextureIndices.x)]
-            .Sample(input.texCoord * 6.0 + frame.windDirectionStrength.xz * frame.windGustFrequencyTime.z * 0.04).xyz * 2.0 - 1.0;
+            .Sample(waterUv).xyz * 2.0 - 1.0;
         float3 microWS = normalize(input.tangent * microTS.x + input.binormal * microTS.y + normal * microTS.z);
         normal = normalize(lerp(normal, microWS, saturate(material.waterFoam.z)));
     }

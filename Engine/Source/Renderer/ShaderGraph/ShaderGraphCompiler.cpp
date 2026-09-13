@@ -39,16 +39,20 @@ namespace Engine {
 
         [[nodiscard]] std::string literal(const ShaderNodeValue &value, const ShaderValueType type) {
             const auto scalar = [](const float v) { return std::format("{:.9g}", v); };
-            if (const auto *v = std::get_if<float>(&value)) return scalar(*v);
-            if (const auto *v = std::get_if<Vec2>(&value))
+            if (const auto *v = std::get_if<float>(&value)) { return scalar(*v);
+}
+            if (const auto *v = std::get_if<Vec2>(&value)) {
                 return std::format(
                     "float2({}, {})", scalar(v->x()), scalar(v->y()));
-            if (const auto *v = std::get_if<Vec3>(&value))
+}
+            if (const auto *v = std::get_if<Vec3>(&value)) {
                 return std::format(
                     "float3({}, {}, {})", scalar(v->x()), scalar(v->y()), scalar(v->z()));
-            if (const auto *v = std::get_if<Vec4>(&value))
+}
+            if (const auto *v = std::get_if<Vec4>(&value)) {
                 return std::format(
                     "float4({}, {}, {}, {})", scalar(v->x()), scalar(v->y()), scalar(v->z()), scalar(v->w()));
+}
             return std::string{slangType(type)} + "(0.0)";
         }
 

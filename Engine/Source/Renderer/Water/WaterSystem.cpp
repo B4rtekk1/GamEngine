@@ -11,27 +11,42 @@
 
 namespace Engine {
     namespace {
-        constexpr std::uint32_t ClipmapResolution = 32;
-        // Every level is exactly twice the previous one.  With a fixed 32x32 grid,
+        constexpr std::uint32_t ClipmapResolution = 64;
+        // Every level is exactly twice the previous one.  With a fixed 64x64 grid,
         // the inner boundary of level N therefore lies on vertices of level N-1.
         constexpr float ClipmapExtents[] = {
             50.0F, 100.0F, 200.0F, 400.0F, 800.0F,
             1600.0F, 3200.0F, 6400.0F, 12800.0F,
         };
 
-        void addQuad(Mesh &mesh, const Vec3 &a, const Vec3 &b, const Vec3 &c, const Vec3 &d) {
+        float samplingCellSize(const Vec3 &position, const float outer, const float cell,
+                               const std::uint32_t level) {
+            // The inner edge of the next ring uses its own cell size.  Give the
+            // matching outer-edge vertices in this ring that same spectral LOD,
+            // so filtered Gerstner displacement remains watertight at the seam.
+            constexpr float edgeEpsilon = 1.0e-4F;
+            if (level + 1U < std::size(ClipmapExtents) &&
+                (std::abs(std::abs(position.x()) - outer) < edgeEpsilon ||
+                 std::abs(std::abs(position.z()) - outer) < edgeEpsilon))
+                return cell * 2.0F;
+            return cell;
+        }
+
+        void addQuad(Mesh &mesh, const Vec3 &a, const Vec3 &b, const Vec3 &c, const Vec3 &d,
+                     const float outer, const float cell, const std::uint32_t level) {
             const auto first = static_cast<std::uint32_t>(mesh.vertices.size());
-            WaterSystem::addWaterVertex(mesh, a, {0.0F, 0.0F});
-            WaterSystem::addWaterVertex(mesh, b, {1.0F, 0.0F});
-            WaterSystem::addWaterVertex(mesh, c, {1.0F, 1.0F});
-            WaterSystem::addWaterVertex(mesh, d, {0.0F, 1.0F});
+            WaterSystem::addWaterVertex(mesh, a, {0.0F, 0.0F}, samplingCellSize(a, outer, cell, level));
+            WaterSystem::addWaterVertex(mesh, b, {1.0F, 0.0F}, samplingCellSize(b, outer, cell, level));
+            WaterSystem::addWaterVertex(mesh, c, {1.0F, 1.0F}, samplingCellSize(c, outer, cell, level));
+            WaterSystem::addWaterVertex(mesh, d, {0.0F, 1.0F}, samplingCellSize(d, outer, cell, level));
             mesh.indices.insert(mesh.indices.end(), {first, first + 1U, first + 2U, first, first + 2U, first + 3U});
         }
 
         enum class StitchEdge { Bottom, Right, Top, Left };
 
         void addStitchedQuad(Mesh &mesh, const Vec3 &a, const Vec3 &b, const Vec3 &c,
-                             const Vec3 &d, const StitchEdge edge) {
+                             const Vec3 &d, const StitchEdge edge, const float outer,
+                             const float cell, const std::uint32_t level) {
             const auto first = static_cast<std::uint32_t>(mesh.vertices.size());
             const Vec3 midpoint = edge == StitchEdge::Bottom
                                       ? (a + b) * 0.5F
@@ -40,11 +55,11 @@ namespace Engine {
                                             : edge == StitchEdge::Top
                                                   ? (c + d) * 0.5F
                                                   : (d + a) * 0.5F;
-            WaterSystem::addWaterVertex(mesh, a, {0.0F, 0.0F});
-            WaterSystem::addWaterVertex(mesh, b, {1.0F, 0.0F});
-            WaterSystem::addWaterVertex(mesh, c, {1.0F, 1.0F});
-            WaterSystem::addWaterVertex(mesh, d, {0.0F, 1.0F});
-            WaterSystem::addWaterVertex(mesh, midpoint, {0.5F, 0.5F});
+            WaterSystem::addWaterVertex(mesh, a, {0.0F, 0.0F}, samplingCellSize(a, outer, cell, level));
+            WaterSystem::addWaterVertex(mesh, b, {1.0F, 0.0F}, samplingCellSize(b, outer, cell, level));
+            WaterSystem::addWaterVertex(mesh, c, {1.0F, 1.0F}, samplingCellSize(c, outer, cell, level));
+            WaterSystem::addWaterVertex(mesh, d, {0.0F, 1.0F}, samplingCellSize(d, outer, cell, level));
+            WaterSystem::addWaterVertex(mesh, midpoint, {0.5F, 0.5F}, samplingCellSize(midpoint, outer, cell, level));
             const std::uint32_t A = first, B = first + 1U, C = first + 2U, D = first + 3U, M = first + 4U;
             switch (edge) {
                 case StitchEdge::Bottom: mesh.indices.insert(mesh.indices.end(), {A, M, D, M, C, D, M, B, C});
@@ -59,10 +74,11 @@ namespace Engine {
         }
     } // namespace
 
-    void WaterSystem::addWaterVertex(Mesh &mesh, const Vec3 &position, const Vec2 &uv) {
+    void WaterSystem::addWaterVertex(Mesh &mesh, const Vec3 &position, const Vec2 &uv, const float cellSize) {
         mesh.vertices.push_back({
             .position = position, .color = {1.0F, 1.0F, 1.0F}, .texCoord = uv,
-            .normal = {0.0F, 1.0F, 0.0F}, .tangent = {1.0F, 0.0F, 0.0F, 1.0F}
+            .normal = {0.0F, 1.0F, 0.0F}, .tangent = {1.0F, 0.0F, 0.0F, 1.0F},
+            .texCoord1 = {cellSize, 0.0F}
         });
     }
 
@@ -91,15 +107,15 @@ namespace Engine {
                     // boundary vertex.  This is true index stitching, not a
                     // centre-based approximation or a decorative skirt.
                     if (level != 0 && std::abs(minZ - inner) < 1.0e-4F)
-                        addStitchedQuad(mesh, a, b, c, d, StitchEdge::Bottom);
+                        addStitchedQuad(mesh, a, b, c, d, StitchEdge::Bottom, outer, cell, level);
                     else if (level != 0 && std::abs(maxX + inner) < 1.0e-4F)
-                        addStitchedQuad(mesh, a, b, c, d, StitchEdge::Right);
+                        addStitchedQuad(mesh, a, b, c, d, StitchEdge::Right, outer, cell, level);
                     else if (level != 0 && std::abs(maxZ + inner) < 1.0e-4F)
-                        addStitchedQuad(mesh, a, b, c, d, StitchEdge::Top);
+                        addStitchedQuad(mesh, a, b, c, d, StitchEdge::Top, outer, cell, level);
                     else if (level != 0 && std::abs(minX - inner) < 1.0e-4F)
-                        addStitchedQuad(mesh, a, b, c, d, StitchEdge::Left);
+                        addStitchedQuad(mesh, a, b, c, d, StitchEdge::Left, outer, cell, level);
                     else
-                        addQuad(mesh, a, b, c, d);
+                        addQuad(mesh, a, b, c, d, outer, cell, level);
                 }
         }
         return mesh;
@@ -226,8 +242,9 @@ namespace Engine {
         registry.view<WaterBodyComponent, TransformComponent>(
             [&](const Entity entity, const WaterBodyComponent &water, const TransformComponent &) {
                 if (water.type != WaterBodyType::Ocean) return;
-                const float snappedX = std::floor(cameraPosition.x() / 3.125F) * 3.125F;
-                const float snappedZ = std::floor(cameraPosition.z() / 3.125F) * 3.125F;
+                constexpr float finestCell = (2.0F * ClipmapExtents[0]) / ClipmapResolution;
+                const float snappedX = std::floor(cameraPosition.x() / finestCell) * finestCell;
+                const float snappedZ = std::floor(cameraPosition.z() / finestCell) * finestCell;
                 const TransformComponent &transform = registry.get<TransformComponent>(entity);
                 if (transform.position.x() == snappedX && transform.position.z() == snappedZ) return;
                 registry.modify<TransformComponent>(entity, [&](TransformComponent &transform) {

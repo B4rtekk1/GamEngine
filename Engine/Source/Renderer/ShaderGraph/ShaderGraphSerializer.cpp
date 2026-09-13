@@ -68,8 +68,10 @@ namespace Engine {
 
         [[nodiscard]] std::optional<ShaderNodeType> shaderNodeTypeFromV1(const int type) {
             // SurfaceOutput was 20 in v1, before Texture2D occupied that value.
-            if (type == 20) return ShaderNodeType::SurfaceOutput;
-            if (type < static_cast<int>(ShaderNodeType::Float) || type > static_cast<int>(ShaderNodeType::SurfaceOutput)) return std::nullopt;
+            if (type == 20) { return ShaderNodeType::SurfaceOutput;
+}
+            if (type < static_cast<int>(ShaderNodeType::Float) || type > static_cast<int>(ShaderNodeType::SurfaceOutput)) { return std::nullopt;
+}
             return static_cast<ShaderNodeType>(type);
         }
 

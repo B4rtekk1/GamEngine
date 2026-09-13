@@ -21,7 +21,10 @@ namespace Engine {
         [[nodiscard]] static Mesh buildMesh(const WaterBodyComponent& water);
 
         /** Internal vertex format shared by the procedural mesh builders. */
-        static void addWaterVertex(Mesh& mesh, const Vec3& position, const Vec2& uv);
+        // `cellSize` is carried in TEXCOORD_1.x for the Water shader.  A
+        // non-positive value denotes authored (non-clipmap) water.
+        static void addWaterVertex(Mesh& mesh, const Vec3& position, const Vec2& uv,
+                                   float cellSize = 0.0F);
 
     private:
         [[nodiscard]] static Mesh buildOceanClipmap();
