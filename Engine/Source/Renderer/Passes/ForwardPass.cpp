@@ -46,7 +46,9 @@ void ForwardPass::create(VkDevice device, const VkFormat colorFormat,
         options.depthWriteEnable = VK_FALSE;
         options.depthCompareOp = VK_COMPARE_OP_EQUAL;
     }
-    options.shader = "shaders/forward_pbr.spv";
+    options.shader = depthOnly
+        ? (hasVelocityAttachment_ ? "shaders/depth_velocity.spv" : "shaders/depth_velocity_no_velocity.spv")
+        : "shaders/forward_pbr.spv";
     options.assetManager = &assets;
     options.cullMode = VK_CULL_MODE_BACK_BIT;
     options.alphaBlendEnable = VK_FALSE;
@@ -63,11 +65,16 @@ void ForwardPass::create(VkDevice device, const VkFormat colorFormat,
         {8, 0, VK_FORMAT_R32_UINT, offsetof(GpuVertex, materialIndex)},
         {9, 0, VK_FORMAT_A2B10G10R10_SNORM_PACK32, offsetof(GpuVertex, tangent)},
     };
-    const auto shaderPaths = hasVelocityAttachment_
-        ? std::array{"shaders/forward_pbr.spv", "shaders/forward_unlit.spv",
-                     "shaders/forward_hologram.spv", "shaders/forward_water.spv"}
-        : std::array{"shaders/forward_pbr_no_velocity.spv", "shaders/forward_unlit_no_velocity.spv",
-                     "shaders/forward_hologram_no_velocity.spv", "shaders/forward_water_no_velocity.spv"};
+    std::array<std::filesystem::path, MaterialShaderCount> shaderPaths{};
+    if (depthOnly) {
+        shaderPaths.fill(options.shader);
+    } else if (hasVelocityAttachment_) {
+        shaderPaths = {"shaders/forward_pbr.spv", "shaders/forward_unlit.spv",
+                       "shaders/forward_hologram.spv", "shaders/forward_water.spv"};
+    } else {
+        shaderPaths = {"shaders/forward_pbr_no_velocity.spv", "shaders/forward_unlit_no_velocity.spv",
+                       "shaders/forward_hologram_no_velocity.spv", "shaders/forward_water_no_velocity.spv"};
+    }
     for (std::size_t index = 0; index < shaderPaths.size(); ++index) {
         // Water has its own render pass and a second descriptor set for the
         // immutable opaque scene.  Building a forward-compatible pipeline
@@ -87,7 +94,7 @@ void ForwardPass::create(VkDevice device, const VkFormat colorFormat,
     shaderGraphPipelines_.initialize(device, shaderGraphPipelineOptions_);
 
     GraphicsPipelineOptions foliageOptions = options;
-    foliageOptions.shader = hasVelocityAttachment_
+    foliageOptions.shader = depthOnly ? options.shader : hasVelocityAttachment_
         ? "shaders/forward_pbr.spv" : "shaders/forward_pbr_no_velocity.spv";
     foliageOptions.existingRenderPass = materialPipelines_[0].renderPass();
     foliageOptions.cullMode = VK_CULL_MODE_NONE;

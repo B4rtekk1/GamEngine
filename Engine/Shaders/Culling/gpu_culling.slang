@@ -57,13 +57,16 @@ void appendDraw(bool visible, CullingObjectData objectData, uint drawSlot)
 
     IndexedDrawCommand command;
     command.indexCount = objectData.indexCount;
-    if (culling.shadowPass == 0 && objectData.lod1IndexCount != 0)
+    if (objectData.lod1IndexCount != 0)
     {
         // Bounds are stored in object-local space, while the culling camera is
         // in world space. Compare positions in the same space so LOD choice is
         // independent of the object's transform.
         float3 localCenter = (objectData.localAabbMin.xyz + objectData.localAabbMax.xyz) * 0.5;
         float3 worldCenter = mul(float4(localCenter, 1.0), objectData.model).xyz;
+        // Shadow clipmaps are camera-centred. The same distance thresholds
+        // are conservative for a page and avoid forcing expensive LOD0 into
+        // coarse shadow levels.
         float distanceToCamera = length(worldCenter - culling.cameraPosition.xyz);
         if (distanceToCamera >= objectData.lod2Distance && objectData.lod2IndexCount != 0)
             command.indexCount = objectData.lod2IndexCount;
@@ -99,7 +102,7 @@ void appendBinnedDraw(bool visible, CullingObjectData objectData)
 
         IndexedDrawCommand command;
         command.indexCount = objectData.indexCount;
-        if (culling.shadowPass == 0 && objectData.lod1IndexCount != 0)
+        if (objectData.lod1IndexCount != 0)
         {
             float3 localCenter = (objectData.localAabbMin.xyz + objectData.localAabbMax.xyz) * 0.5;
             float3 worldCenter = mul(float4(localCenter, 1.0), objectData.model).xyz;

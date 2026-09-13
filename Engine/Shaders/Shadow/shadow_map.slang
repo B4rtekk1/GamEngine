@@ -61,6 +61,12 @@ struct ShadowFragmentInput
 void fragmentMain(ShadowFragmentInput input)
 {
     MaterialData material = materials[input.materialIndex];
+    const uint alphaMode = uint((material.textureIndices.w >> 1) & 3);
+    // The overwhelmingly common opaque caster must be VS -> depth only in
+    // practice: do not fetch albedo/opacity textures merely to discover that
+    // it cannot discard. Alpha-tested foliage takes the slow path below.
+    if (alphaMode == 0)
+        return;
     float alpha = material.roughnessAmbientOcclusion.w;
     if (material.textureIndices.x >= 0)
         alpha *= materialTextures[NonUniformResourceIndex(material.textureIndices.x)].Sample(materialTextureUv(material, 0, input.texCoord, input.texCoord1)).a;
@@ -68,7 +74,6 @@ void fragmentMain(ShadowFragmentInput input)
     // cutout mask separately rather than in base-color alpha.
     if (material.auxiliaryTextureIndices.y >= 0)
         alpha *= materialTextures[NonUniformResourceIndex(material.auxiliaryTextureIndices.y)].Sample(materialTextureUv(material, 4, input.texCoord, input.texCoord1)).r;
-    const uint alphaMode = uint((material.textureIndices.w >> 1) & 3);
     // Match the forward foliage cutout policy. Quixel-style foliage may be
     // authored as BLEND despite using a binary opacity texture.
     const float cutoff = alphaMode == 1 ? material.roughnessAmbientOcclusion.z : 0.30;

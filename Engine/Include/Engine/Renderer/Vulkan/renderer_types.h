@@ -55,6 +55,7 @@ namespace Engine {
         glm::mat4 inverseViewProjection{1.0F};
         std::array<glm::mat4, ShadowMap::ClipLevelCount> clipMatrices{};
         std::uint32_t pageCountPerAxis{};
+        std::uint32_t virtualResolution{};
         std::uint32_t clipLevelCount{};
         std::uint32_t depthWidth{};
         std::uint32_t depthHeight{};

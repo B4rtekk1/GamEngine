@@ -314,6 +314,7 @@
                 for (std::uint32_t level = 0; level < ShadowMap::ClipLevelCount; ++level)
                     marking.clipMatrices[level] = shadowClipMatrices[level].native();
                 marking.pageCountPerAxis = ShadowMap::VirtualPagesPerAxis;
+                marking.virtualResolution = ShadowMap::VirtualResolution;
                 marking.clipLevelCount = ShadowMap::ClipLevelCount;
                 marking.depthWidth = swapchain.extent().width;
                 marking.depthHeight = swapchain.extent().height;
