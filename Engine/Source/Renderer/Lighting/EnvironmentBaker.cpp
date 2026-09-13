@@ -1,6 +1,7 @@
 #include "Engine/Renderer/Lighting/EnvironmentBaker.h"
 
 #include <algorithm>
+#include <bit>
 #include <cmath>
 #include <stdexcept>
 
@@ -39,6 +40,44 @@ Vec3 faceDirection(const std::uint32_t face, const float u, const float v) {
         case 4: return Vec3{u, -v, 1.0F}.normalized();
         default: return Vec3{-u, -v, -1.0F}.normalized();
     }
+}
+
+std::uint16_t floatToHalf(const float value) noexcept {
+    const std::uint32_t bits = std::bit_cast<std::uint32_t>(value);
+    const std::uint32_t sign = (bits >> 16U) & 0x8000U;
+    const int exponent = static_cast<int>((bits >> 23U) & 0xFFU) - 127 + 15;
+    std::uint32_t mantissa = bits & 0x007FFFFFU;
+    if (exponent <= 0) {
+        if (exponent < -10) return static_cast<std::uint16_t>(sign);
+        mantissa = (mantissa | 0x00800000U) >> static_cast<std::uint32_t>(1 - exponent);
+        return static_cast<std::uint16_t>(sign | ((mantissa + 0x1000U) >> 13U));
+    }
+    if (exponent >= 31) return static_cast<std::uint16_t>(sign | 0x7C00U);
+    return static_cast<std::uint16_t>(sign | (static_cast<std::uint32_t>(exponent) << 10U) |
+                                      ((mantissa + 0x1000U) >> 13U));
+}
+
+Vec2 integrateBrdf(const float nDotV, const float roughness, const std::uint32_t samples) {
+    const Vec3 view{std::sqrt(std::max(0.0F, 1.0F - nDotV * nDotV)), 0.0F, nDotV};
+    float a = 0.0F;
+    float b = 0.0F;
+    for (std::uint32_t sample = 0; sample < samples; ++sample) {
+        const float xi1 = static_cast<float>(sample) / static_cast<float>(samples);
+        const Vec3 halfVector = importanceSampleGgx(xi1, radicalInverseVdC(sample), roughness, Vec3{0, 0, 1});
+        const Vec3 light = (halfVector * (2.0F * dot(view, halfVector)) - view).normalized();
+        const float nDotL = std::max(light.z(), 0.0F);
+        const float nDotH = std::max(halfVector.z(), 0.0F);
+        const float vDotH = std::max(dot(view, halfVector), 0.0F);
+        if (nDotL <= 0.0F) continue;
+        const float k = roughness * roughness * 0.5F;
+        const auto geometry = [k](const float nDotX) { return nDotX / (nDotX * (1.0F - k) + k); };
+        const float visibility = geometry(nDotV) * geometry(nDotL) * vDotH /
+                                 std::max(nDotH * nDotV, 1.0e-5F);
+        const float fresnel = std::pow(1.0F - vDotH, 5.0F);
+        a += (1.0F - fresnel) * visibility;
+        b += fresnel * visibility;
+    }
+    return {a / static_cast<float>(samples), b / static_cast<float>(samples)};
 }
 } // namespace
 
@@ -130,5 +169,22 @@ std::vector<float> EnvironmentBaker::bakePrefilteredCubemap(
         const float roughness = roughnessForMip(mip, count);
         return prefilter(direction, roughness, sourceFaceSize, sourceMipLevels, source);
     });
+}
+
+std::vector<std::uint16_t> EnvironmentBaker::generateBrdfLut(const std::uint32_t size,
+                                                              const std::uint32_t samples) {
+    if (size == 0 || samples == 0) throw std::invalid_argument("BRDF LUT requires non-zero dimensions and samples");
+    std::vector<std::uint16_t> pixels(static_cast<std::size_t>(size) * size * 2);
+    for (std::uint32_t y = 0; y < size; ++y) {
+        const float roughness = (static_cast<float>(y) + 0.5F) / static_cast<float>(size);
+        for (std::uint32_t x = 0; x < size; ++x) {
+            const float nDotV = (static_cast<float>(x) + 0.5F) / static_cast<float>(size);
+            const Vec2 value = integrateBrdf(nDotV, roughness, samples);
+            const auto index = (static_cast<std::size_t>(y) * size + x) * 2;
+            pixels[index] = floatToHalf(value.x());
+            pixels[index + 1] = floatToHalf(value.y());
+        }
+    }
+    return pixels;
 }
 } // namespace Engine

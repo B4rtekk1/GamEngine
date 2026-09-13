@@ -47,3 +47,5 @@ DEMO/Library
 !DEMO/Assets/Scripts/**
 !DEMO/Assets/Scenes/
 !DEMO/Assets/Scenes/**
+!DEMO/Assets/BRDF/
+!DEMO/Assets/BRDF/**

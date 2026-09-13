@@ -19,8 +19,10 @@ gameengine_enable_sanitizers(Player)
 gameengine_copy_runtime_dependencies(Player)
 add_custom_target(GameProjectAssets
     COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_FILE_DIR:Player>/shaders"
+    COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_FILE_DIR:Player>/Assets/BRDF"
     COMMAND ${CMAKE_COMMAND} -E copy_directory "${GAMEENGINE_SHADER_OUTPUT_DIR}" "$<TARGET_FILE_DIR:Player>/shaders"
     COMMAND ${CMAKE_COMMAND} -E copy_directory "${GAMEENGINE_GAME_ROOT}/Assets" "$<TARGET_FILE_DIR:Player>/Assets"
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different "${GAMEENGINE_GAME_ROOT}/Assets/BRDF/brdf_lut.bin" "$<TARGET_FILE_DIR:Player>/Assets/BRDF/brdf_lut.bin"
     COMMAND ${CMAKE_COMMAND} -E copy_if_different "${GAMEENGINE_GAME_ROOT}/GamEngine.project" "$<TARGET_FILE_DIR:Player>/GamEngine.project"
-    DEPENDS EngineShaders Player COMMENT "Copying assets for Player")
+    DEPENDS EngineShaders Player BrdfLutAsset COMMENT "Copying assets for Player")
 add_custom_target(Demo DEPENDS Player GameProjectAssets)

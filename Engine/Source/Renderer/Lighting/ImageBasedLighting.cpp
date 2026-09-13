@@ -25,12 +25,10 @@ constexpr std::uint32_t EnvironmentSize = 512;
 constexpr std::uint32_t IrradianceSize = 32;
 constexpr std::uint32_t PrefilterSize = 256;
 constexpr std::uint32_t BrdfLutSize = 256;
-constexpr std::uint32_t BrdfLutSamples = 1024;
 // Bump this whenever any bake parameter or integration algorithm changes.
 constexpr std::uint64_t IblCacheVersion = 4;
-constexpr std::uint64_t BrdfCacheKey = 0x4745425244463032ULL; // "GEBRDF02"
 
-enum class IblCacheKind : std::uint32_t { Cubemap = 1, BrdfLut = 2 };
+enum class IblCacheKind : std::uint32_t { Cubemap = 1 };
 
 struct IblCacheHeader {
     char magic[4];
@@ -101,9 +99,7 @@ bool loadCache(const std::filesystem::path& path, const IblCacheKind kind, const
     input.seekg(0);
     IblCacheHeader header{};
     input.read(reinterpret_cast<char*>(&header), sizeof(header));
-    const auto expectedBytes = kind == IblCacheKind::Cubemap
-        ? cubemapFloatCount(size, mipLevels) * sizeof(float)
-        : static_cast<std::size_t>(size) * size * 2 * sizeof(std::uint16_t);
+    const auto expectedBytes = cubemapFloatCount(size, mipLevels) * sizeof(float);
     if (!input || std::string_view(header.magic, 4) != "GTEX" || header.version != IblCacheVersion ||
         header.kind != static_cast<std::uint32_t>(kind) || header.size != size ||
         header.mipLevels != mipLevels || header.sourceHash != sourceHash || header.payloadBytes != expectedBytes ||
@@ -142,63 +138,33 @@ std::filesystem::path cacheDirectory(const std::filesystem::path& libraryDirecto
     return libraryDirectory / "IBL" / name;
 }
 
-float radicalInverseVdC(std::uint32_t bits) noexcept {
-    bits = (bits << 16U) | (bits >> 16U);
-    bits = ((bits & 0x55555555U) << 1U) | ((bits & 0xAAAAAAAAU) >> 1U);
-    bits = ((bits & 0x33333333U) << 2U) | ((bits & 0xCCCCCCCCU) >> 2U);
-    bits = ((bits & 0x0F0F0F0FU) << 4U) | ((bits & 0xF0F0F0F0U) >> 4U);
-    bits = ((bits & 0x00FF00FFU) << 8U) | ((bits & 0xFF00FF00U) >> 8U);
-    return static_cast<float>(bits) * 2.3283064365386963e-10F;
-}
+struct BrdfLutHeader {
+    char magic[4];
+    std::uint32_t version;
+    std::uint32_t width;
+    std::uint32_t height;
+    std::uint32_t channels;
+    std::uint32_t samples;
+};
+static_assert(sizeof(BrdfLutHeader) == 24);
 
-Vec3 importanceSampleGgx(const float xi1, const float xi2, const float roughness) {
-    const float alpha = roughness * roughness;
-    const float phi = 2.0F * Pi * xi1;
-    const float cosTheta = std::sqrt((1.0F - xi2) / (1.0F + (alpha * alpha - 1.0F) * xi2));
-    const float sinTheta = std::sqrt(std::max(0.0F, 1.0F - cosTheta * cosTheta));
-    return {std::cos(phi) * sinTheta, std::sin(phi) * sinTheta, cosTheta};
-}
-
-float geometrySchlickGgx(const float nDotX, const float roughness) noexcept {
-    const float k = roughness * roughness * 0.5F;
-    return nDotX / (nDotX * (1.0F - k) + k);
-}
-
-Vec2 integrateBrdf(const float nDotV, const float roughness) {
-    const Vec3 view{std::sqrt(std::max(0.0F, 1.0F - nDotV * nDotV)), 0.0F, nDotV};
-    float a = 0.0F;
-    float b = 0.0F;
-    for (std::uint32_t sample = 0; sample < BrdfLutSamples; ++sample) {
-        const float xi1 = static_cast<float>(sample) / static_cast<float>(BrdfLutSamples);
-        const Vec3 halfVector = importanceSampleGgx(xi1, radicalInverseVdC(sample), roughness);
-        const Vec3 light = (halfVector * (2.0F * dot(view, halfVector)) - view).normalized();
-        const float nDotL = std::max(light.z(), 0.0F);
-        const float nDotH = std::max(halfVector.z(), 0.0F);
-        const float vDotH = std::max(dot(view, halfVector), 0.0F);
-        if (nDotL <= 0.0F) continue;
-        const float visibility = geometrySchlickGgx(nDotV, roughness) *
-                                 geometrySchlickGgx(nDotL, roughness) * vDotH /
-                                 std::max(nDotH * nDotV, 1.0e-5F);
-        const float fresnel = std::pow(1.0F - vDotH, 5.0F);
-        a += (1.0F - fresnel) * visibility;
-        b += fresnel * visibility;
+std::vector<std::byte> loadBrdfLutAsset(const std::filesystem::path& path) {
+    std::ifstream input(path, std::ios::binary | std::ios::ate);
+    const std::size_t payloadBytes = static_cast<std::size_t>(BrdfLutSize) * BrdfLutSize * 2 * sizeof(std::uint16_t);
+    if (!input || input.tellg() != static_cast<std::streamoff>(sizeof(BrdfLutHeader) + payloadBytes)) {
+        throw std::runtime_error("Missing or invalid cooked BRDF LUT asset: " + path.string());
     }
-    return {a / static_cast<float>(BrdfLutSamples), b / static_cast<float>(BrdfLutSamples)};
-}
-
-std::uint16_t floatToHalf(const float value) noexcept {
-    const std::uint32_t bits = std::bit_cast<std::uint32_t>(value);
-    const std::uint32_t sign = (bits >> 16U) & 0x8000U;
-    const int exponent = static_cast<int>((bits >> 23U) & 0xFFU) - 127 + 15;
-    std::uint32_t mantissa = bits & 0x007FFFFFU;
-    if (exponent <= 0) {
-        if (exponent < -10) return static_cast<std::uint16_t>(sign);
-        mantissa = (mantissa | 0x00800000U) >> static_cast<std::uint32_t>(1 - exponent);
-        return static_cast<std::uint16_t>(sign | ((mantissa + 0x1000U) >> 13U));
+    input.seekg(0);
+    BrdfLutHeader header{};
+    input.read(reinterpret_cast<char*>(&header), sizeof(header));
+    if (!input || std::string_view(header.magic, 4) != "BRDF" || header.version != 3 ||
+        header.width != BrdfLutSize || header.height != BrdfLutSize || header.channels != 2 || header.samples != 1024) {
+        throw std::runtime_error("BRDF LUT asset has an incompatible BRDF version: " + path.string());
     }
-    if (exponent >= 31) return static_cast<std::uint16_t>(sign | 0x7C00U);
-    return static_cast<std::uint16_t>(sign | (static_cast<std::uint32_t>(exponent) << 10U) |
-                                      ((mantissa + 0x1000U) >> 13U));
+    std::vector<std::byte> payload(payloadBytes);
+    input.read(reinterpret_cast<char*>(payload.data()), static_cast<std::streamsize>(payload.size()));
+    if (!input) throw std::runtime_error("Could not read cooked BRDF LUT asset: " + path.string());
+    return payload;
 }
 
 // Procedural fallback is an HDR *directional* source, not six flat colours.
@@ -328,7 +294,7 @@ void ImageBasedLighting::create(VkPhysicalDevice physicalDevice, VkDevice device
     const auto environmentCache = iblDirectory / "environment.gtex";
     const auto irradianceCache = iblDirectory / "irradiance.gtex";
     const auto prefilteredCache = iblDirectory / "prefiltered.gtex";
-    const auto brdfCache = libraryDirectory / "IBL" / "brdf_lut.gtex";
+    const auto brdfAsset = libraryDirectory.parent_path() / "Assets" / "BRDF" / "brdf_lut.bin";
     // Build every resource away from the live set. A decode, allocation or
     // upload failure must leave the active descriptor targets intact.
     ImageBasedLighting replacement;
@@ -380,25 +346,7 @@ void ImageBasedLighting::create(VkPhysicalDevice physicalDevice, VkDevice device
             });
     }, replacement.prefiltered_);
 
-    if (!loadCache(brdfCache, IblCacheKind::BrdfLut, BrdfLutSize, 1, BrdfCacheKey, payload)) {
-        std::cerr << "[IBL] BRDF LUT cache miss; generating engine LUT once.\n";
-        std::vector<std::uint16_t> pixels(BrdfLutSize * BrdfLutSize * 2);
-        for (std::uint32_t y = 0; y < BrdfLutSize; ++y) {
-            const float roughness = (static_cast<float>(y) + 0.5F) / static_cast<float>(BrdfLutSize);
-            for (std::uint32_t x = 0; x < BrdfLutSize; ++x) {
-                const float nDotV = (static_cast<float>(x) + 0.5F) / static_cast<float>(BrdfLutSize);
-                const Vec2 value = integrateBrdf(nDotV, roughness);
-                const auto index = (y * BrdfLutSize + x) * 2;
-                pixels[index] = floatToHalf(value.x());
-                pixels[index + 1] = floatToHalf(value.y());
-            }
-        }
-        payload.resize(pixels.size() * sizeof(std::uint16_t));
-        std::memcpy(payload.data(), pixels.data(), payload.size());
-        saveCache(brdfCache, IblCacheKind::BrdfLut, BrdfLutSize, 1, BrdfCacheKey, payload);
-    } else {
-        std::cerr << "[IBL] BRDF LUT cache hit.\n";
-    }
+    payload = loadBrdfLutAsset(brdfAsset);
     const auto bytes = std::span<const std::uint8_t>{reinterpret_cast<const std::uint8_t*>(payload.data()), payload.size()};
     replacement.brdfLut_.create(physicalDevice, device, commandPool, queue, BrdfLutSize, BrdfLutSize, bytes,
                                 TextureColorSpace::Linear, false, allocator, TexturePixelFormat::RG16F);

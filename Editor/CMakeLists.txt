@@ -15,10 +15,12 @@ endif()
 gameengine_enable_warnings(Editor)
 gameengine_enable_sanitizers(Editor)
 gameengine_copy_runtime_dependencies(Editor)
-add_dependencies(Editor EngineShaders)
+add_dependencies(Editor EngineShaders BrdfLutAsset)
 add_custom_command(TARGET Editor POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_FILE_DIR:Editor>/shaders"
     COMMAND ${CMAKE_COMMAND} -E copy_directory "${GAMEENGINE_SHADER_OUTPUT_DIR}" "$<TARGET_FILE_DIR:Editor>/shaders"
+    COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_FILE_DIR:Editor>/Assets/BRDF"
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different "${GAMEENGINE_GAME_ROOT}/Assets/BRDF/brdf_lut.bin" "$<TARGET_FILE_DIR:Editor>/Assets/BRDF/brdf_lut.bin"
     COMMENT "Copying engine shaders for Editor")
 
 # Keep development and portable Editors on the exact same project-script

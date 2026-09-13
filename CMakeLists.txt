@@ -20,6 +20,16 @@ option(GE_BUILD_TESTS "Build GamEngine tests" OFF)
 find_program(GAMEENGINE_SLANGC NAMES slangc REQUIRED)
 
 add_subdirectory(Engine)
+add_executable(GenerateBRDFLut Tools/GenerateBRDFLut/main.cpp Engine/Source/Renderer/Lighting/EnvironmentBaker.cpp)
+target_include_directories(GenerateBRDFLut PRIVATE "${PROJECT_SOURCE_DIR}/Engine/Include" "${GLM_INCLUDE_DIR}")
+gameengine_enable_warnings(GenerateBRDFLut)
+add_custom_target(BrdfLutAsset
+    # This is project content, not an executable-side cache.  The Editor uses
+    # GAMEENGINE_GAME_ROOT directly, while Player copies it beside the binary.
+    COMMAND "$<TARGET_FILE:GenerateBRDFLut>" "${GAMEENGINE_GAME_ROOT}/Assets/BRDF/brdf_lut.bin"
+    DEPENDS GenerateBRDFLut
+    BYPRODUCTS "${GAMEENGINE_GAME_ROOT}/Assets/BRDF/brdf_lut.bin"
+    COMMENT "Cooking immutable BRDF LUT asset")
 include(cmake/Shaders.cmake)
 gameengine_add_engine_shaders()
 

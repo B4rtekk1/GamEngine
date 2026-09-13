@@ -39,6 +39,12 @@ public:
 
     [[nodiscard]] static Vec3 diffuseIrradiance(const Vec3& normal, const RadianceSampler& source);
 
+    /** Builds the split-sum GGX BRDF integration table as RG16F texels.
+     * This is intentionally a cooker-only operation; applications load the
+     * resulting immutable asset rather than integrating it at startup. */
+    [[nodiscard]] static std::vector<std::uint16_t> generateBrdfLut(
+        std::uint32_t size, std::uint32_t samples);
+
 private:
     [[nodiscard]] static Vec3 prefilter(const Vec3& reflection, float roughness,
                                         std::uint32_t sourceFaceSize, std::uint32_t sourceMipLevels,
