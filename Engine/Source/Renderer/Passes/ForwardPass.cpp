@@ -69,11 +69,25 @@ void ForwardPass::create(VkDevice device, const VkFormat colorFormat,
         : std::array{"shaders/forward_pbr_no_velocity.spv", "shaders/forward_unlit_no_velocity.spv",
                      "shaders/forward_hologram_no_velocity.spv", "shaders/forward_water_no_velocity.spv"};
     for (std::size_t index = 0; index < shaderPaths.size(); ++index) {
-        options.shader = shaderPaths[index];
+        GraphicsPipelineOptions materialOptions = options;
+        materialOptions.shader = shaderPaths[index];
         if (index != materialShaderIndex(MaterialShader::StandardPBR)) {
-            options.existingRenderPass = materialPipelines_[0].renderPass();
+            materialOptions.existingRenderPass = materialPipelines_[0].renderPass();
         }
-        materialPipelines_[index].create(device, options);
+        if (index == materialShaderIndex(MaterialShader::Water)) {
+            // Water currently generates displacement and normals analytically.
+            // It needs only position and the per-vertex material slot; remove
+            // the unused PBR attributes from this pipeline's vertex contract.
+            materialOptions.vertexAttributes.erase(
+                std::remove_if(materialOptions.vertexAttributes.begin(), materialOptions.vertexAttributes.end(),
+                               [](const VkVertexInputAttributeDescription& attribute) {
+                                   return attribute.location == 1 || attribute.location == 2 ||
+                                          attribute.location == 3 || attribute.location == 4 ||
+                                          attribute.location == 9;
+                               }),
+                materialOptions.vertexAttributes.end());
+        }
+        materialPipelines_[index].create(device, materialOptions);
     }
     shaderGraphPipelineOptions_ = options;
     shaderGraphPipelineOptions_.shader.clear();

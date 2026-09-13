@@ -483,10 +483,6 @@ ForwardFragmentOutput fragmentMain(ForwardFragmentInput input)
     float scanline = 0.55 + 0.45 * sin(input.worldPosition.y * 90.0 + frame.windGustFrequencyTime.w * 8.0);
     float hologramFresnel = pow(1.0 - saturate(dot(normal, viewDirection)), 3.0);
     color = albedo * (0.25 + scanline * 0.75) + emissive + float3(0.05, 0.65, 1.0) * hologramFresnel;
-#elif MATERIAL_VARIANT == 3
-    // Water reuses the common material block until WaterMaterial is introduced.
-    float facing = pow(1.0 - saturate(dot(normal, viewDirection)), 4.0);
-    color = lerp(albedo * (0.08 + 0.35 * nDotL), float3(0.25, 0.55, 0.8), facing) + emissive;
 #endif
     // Foliage has a cheap, stable back-lighting term.  The flag is deliberately
     // material data rather than an asset-name heuristic at runtime.

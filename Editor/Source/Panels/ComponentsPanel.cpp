@@ -16,11 +16,13 @@
 #include "Engine/ECS/Components/ScriptComponent.h"
 #include "Engine/ECS/Components/SmokeEmitterComponent.h"
 #include "Engine/ECS/Components/TerrainGrassComponent.h"
+#include "Engine/ECS/Components/WaterBodyComponent.h"
 #include "Engine/ECS/Components/WindComponent.h"
 #include "Engine/Renderer/Geometry/ProceduralCloud.h"
 #include "Engine/Renderer/MeshRenderer.h"
 #include "Engine/Renderer/Renderer.h"
 #include "Engine/Renderer/ShaderGraph/ShaderGraphVulkan.h"
+#include "Engine/Renderer/Water/WaterSystem.h"
 #include "Engine/Scene/Components/LightComponent.h"
 #include "Engine/Scene/SceneEditor.h"
 #include "Engine/Scripting/ScriptRegistry.h"
@@ -336,6 +338,44 @@ bool ComponentsPanel::draw(Engine::ScenePreset &scene, Engine::Assets::Content& 
             scene.editor().patch<Engine::MeshRenderer>(selected,
                 [&](auto &component) { component = renderer; });
         }
+        }
+    }
+    if (scene.editor().valid(selected) && scene.editor().has<Engine::WaterBodyComponent>(selected)) {
+        bool remove = false;
+        const bool open = drawRemovableComponentHeader("Water Body", "water-body", remove);
+        if (remove) {
+            scene.editor().remove<Engine::WaterBodyComponent>(selected);
+            if (scene.editor().has<Engine::MeshRenderer>(selected)) scene.editor().remove<Engine::MeshRenderer>(selected);
+        } else if (open) {
+            auto water = scene.editor().read<Engine::WaterBodyComponent>(selected);
+            constexpr const char* types[] = {"Ocean", "Lake", "River"};
+            int type = static_cast<int>(water.type);
+            bool changed = ImGui::Combo("Type##water", &type, types, std::size(types));
+            water.type = static_cast<Engine::WaterBodyType>(type);
+            float shallow[3] = {water.shallowColor.x(), water.shallowColor.y(), water.shallowColor.z()};
+            float deep[3] = {water.deepColor.x(), water.deepColor.y(), water.deepColor.z()};
+            changed |= ImGui::ColorEdit3("Shallow Color##water", shallow, ImGuiColorEditFlags_Float);
+            changed |= ImGui::ColorEdit3("Deep Color##water", deep, ImGuiColorEditFlags_Float);
+            changed |= Editor::Controls::sliderFloat("Roughness##water", &water.roughness, 0.0F, 1.0F, "%.2f");
+            if (changed) {
+                water.shallowColor = {shallow[0], shallow[1], shallow[2]};
+                water.deepColor = {deep[0], deep[1], deep[2]};
+                scene.editor().patch<Engine::WaterBodyComponent>(selected, [&](auto& component) { component = water; });
+            }
+            if (changed || ImGui::Button("Rebuild Water Geometry")) {
+                try {
+                    if (!scene.editor().has<Engine::MeshRenderer>(selected)) scene.editor().add<Engine::MeshRenderer>(selected);
+                    scene.editor().patch<Engine::MeshRenderer>(selected, [&](auto& renderer) {
+                        renderer.mesh = std::make_shared<Engine::Mesh>(Engine::WaterSystem::buildMesh(water));
+                        renderer.materialOverride = true;
+                        renderer.material.shader = Engine::MaterialShader::Water;
+                        renderer.castShadow = false;
+                    });
+                } catch (const std::exception& error) {
+                    Editor::ConsolePanel::error(error.what());
+                }
+            }
+            ImGui::TextDisabled("Lake uses its boundary; River requires spline points. Ocean follows the camera after WaterSystem::updateOceans.");
         }
     }
     if (scene.editor().valid(selected) && scene.editor().has<Engine::TerrainComponent>(selected)) {

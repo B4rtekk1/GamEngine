@@ -27,13 +27,11 @@ function(gameengine_add_engine_shaders)
     # Surface families share the forward material descriptor contract.  They
     # are separate SPIR-V modules so ForwardPass can select one pipeline per
     # MaterialShader without any per-entity shader file lookup.
-    foreach(variant_name IN ITEMS unlit hologram water)
+    foreach(variant_name IN ITEMS unlit hologram)
         if(variant_name STREQUAL "unlit")
             set(variant_define 1)
         elseif(variant_name STREQUAL "hologram")
             set(variant_define 2)
-        else()
-            set(variant_define 3)
         endif()
         set(variant_output "${SHADER_OUT_DIR}/forward_${variant_name}.spv")
         list(APPEND shader_outputs "${variant_output}")
@@ -43,17 +41,23 @@ function(gameengine_add_engine_shaders)
             DEPENDS "${ENGINE_SHADER_SOURCE_DIR}/Forward/forward_pbr.slang" ${shader_modules}
             COMMENT "Compiling forward ${variant_name} material shader" VERBATIM)
     endforeach()
+    set(water_shader_source "${ENGINE_SHADER_SOURCE_DIR}/Water/water_surface.slang")
+    set(water_shader_output "${SHADER_OUT_DIR}/forward_water.spv")
+    list(APPEND shader_outputs "${water_shader_output}")
+    add_custom_command(OUTPUT "${water_shader_output}"
+        COMMAND ${CMAKE_COMMAND} -E make_directory "${SHADER_OUT_DIR}"
+        COMMAND ${SLANGC} "${water_shader_source}" -target spirv -profile glsl_460 -emit-spirv-directly -matrix-layout-row-major -I "${ENGINE_SHADER_SOURCE_DIR}" -o "${water_shader_output}"
+        DEPENDS "${water_shader_source}" ${shader_modules}
+        COMMENT "Compiling dedicated water surface shader" VERBATIM)
     # The editor Scene View does not allocate a motion-vector target.  Build
     # matching forward modules whose fragment entry point writes color only.
-    foreach(variant_name IN ITEMS pbr unlit hologram water)
+    foreach(variant_name IN ITEMS pbr unlit hologram)
         if(variant_name STREQUAL "pbr")
             set(variant_define 0)
         elseif(variant_name STREQUAL "unlit")
             set(variant_define 1)
         elseif(variant_name STREQUAL "hologram")
             set(variant_define 2)
-        else()
-            set(variant_define 3)
         endif()
         set(variant_output "${SHADER_OUT_DIR}/forward_${variant_name}_no_velocity.spv")
         list(APPEND shader_outputs "${variant_output}")
@@ -63,6 +67,13 @@ function(gameengine_add_engine_shaders)
             DEPENDS "${ENGINE_SHADER_SOURCE_DIR}/Forward/forward_pbr.slang" ${shader_modules}
             COMMENT "Compiling color-only forward ${variant_name} material shader" VERBATIM)
     endforeach()
+    set(water_no_velocity_output "${SHADER_OUT_DIR}/forward_water_no_velocity.spv")
+    list(APPEND shader_outputs "${water_no_velocity_output}")
+    add_custom_command(OUTPUT "${water_no_velocity_output}"
+        COMMAND ${CMAKE_COMMAND} -E make_directory "${SHADER_OUT_DIR}"
+        COMMAND ${SLANGC} "${water_shader_source}" -target spirv -profile glsl_460 -emit-spirv-directly -matrix-layout-row-major -I "${ENGINE_SHADER_SOURCE_DIR}" -D FORWARD_OUTPUT_VELOCITY=0 -o "${water_no_velocity_output}"
+        DEPENDS "${water_shader_source}" ${shader_modules}
+        COMMENT "Compiling color-only dedicated water surface shader" VERBATIM)
     set(grass_no_velocity_output "${SHADER_OUT_DIR}/grass_forward_no_velocity.spv")
     list(APPEND shader_outputs "${grass_no_velocity_output}")
     add_custom_command(OUTPUT "${grass_no_velocity_output}"

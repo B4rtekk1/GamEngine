@@ -6,8 +6,10 @@
 #include "Engine/ECS/Components/SmokeEmitterComponent.h"
 #include "Engine/ECS/Components/TerrainComponent.h"
 #include "Engine/ECS/Components/WindComponent.h"
+#include "Engine/ECS/Components/WaterBodyComponent.h"
 #include "Engine/Renderer/MeshRenderer.h"
 #include "Engine/Renderer/Geometry/ProceduralCloud.h"
+#include "Engine/Renderer/Water/WaterSystem.h"
 #include "Engine/Scene/Components/LightComponent.h"
 #include "Engine/Scene/SceneEditor.h"
 
@@ -93,6 +95,32 @@ namespace Editor {
                     }
                 }, {}});
             registerStandard("Terrain", "Environment", "Stores editable terrain data.", Engine::TerrainComponent{});
+            registry.registerComponent({
+                "Water Body", "Environment", "Creates an ocean clipmap, lake boundary, or river spline surface.", false, true,
+                [](Engine::ScenePreset& scene, const Engine::Entity entity) {
+                    return scene.editor().valid(entity) &&
+                           !scene.editor().has<Engine::WaterBodyComponent>(entity) &&
+                           !scene.editor().has<Engine::LightComponent>(entity);
+                },
+                [](Engine::ScenePreset& scene, const Engine::Entity entity) {
+                    Engine::WaterBodyComponent water;
+                    water.lakeBoundary = {{-10.0F, 0.0F, -10.0F}, {10.0F, 0.0F, -10.0F},
+                                          {10.0F, 0.0F, 10.0F}, {-10.0F, 0.0F, 10.0F}};
+                    if (!scene.editor().has<Engine::MeshRenderer>(entity)) scene.editor().add<Engine::MeshRenderer>(entity);
+                    scene.editor().add<Engine::WaterBodyComponent>(entity, water);
+                    scene.editor().patch<Engine::MeshRenderer>(entity, [&](auto& renderer) {
+                        renderer.mesh = std::make_shared<Engine::Mesh>(Engine::WaterSystem::buildMesh(water));
+                        renderer.materialOverride = true;
+                        renderer.material.shader = Engine::MaterialShader::Water;
+                        renderer.material.pbr.baseColor = Engine::Color::from_rgb(water.shallowColor.x(), water.shallowColor.y(), water.shallowColor.z());
+                        renderer.material.pbr.roughness = water.roughness;
+                        renderer.castShadow = false;
+                    });
+                },
+                [](Engine::ScenePreset& scene, const Engine::Entity entity) {
+                    scene.editor().remove<Engine::WaterBodyComponent>(entity);
+                    if (scene.editor().has<Engine::MeshRenderer>(entity)) scene.editor().remove<Engine::MeshRenderer>(entity);
+                }, {}});
             registry.registerComponent({
                 "Wind", "Environment", "Provides the scene-wide wind source.", true, true,
                 [](Engine::ScenePreset& scene, Engine::Entity entity) {
