@@ -7,11 +7,15 @@ struct Settings { float4x4 inverseProjection; float fullWidth, fullHeight, radiu
 [[vk::push_constant]] ConstantBuffer<Settings> settings;
 struct Input { [[vk::location(0)]] float2 uv; }; struct Output { [[vk::location(0)]] float4 value:SV_Target; };
 static const float Pi = 3.14159265359;
+// rawAo is R16G16B16A16_SFLOAT.  Keep the sky sentinel below FP16's largest
+// finite value (65504), otherwise it is stored as infinity and INF-INF in
+// the bilateral filter produces NaNs.
+static const float BackgroundViewDepth = 65500.0;
 float3 positionFromDepth(float2 uv,float z) { float4 p=mul(float4(uv*2-1,z,1),settings.inverseProjection); return p.xyz/max(p.w,1e-6); }
 float3 normalFromDepth(float2 uv,float3 p) { float2 t=1/float2(settings.fullWidth,settings.fullHeight); float3 px=positionFromDepth(uv+float2(t.x,0),depthTexture.SampleLevel(uv+float2(t.x,0),0).r); float3 py=positionFromDepth(uv+float2(0,t.y),depthTexture.SampleLevel(uv+float2(0,t.y),0).r); return normalize(cross(px-p,py-p)); }
 float integrateHorizon(float horizon, float normalAngle, float normalCos) { return (normalCos + 2.0*horizon*sin(normalAngle) - cos(2.0*horizon-normalAngle))*0.25; }
 [shader("fragment")] Output fragmentMain(Input input) {
-    Output o; float z=depthTexture.SampleLevel(input.uv,0).r; if(z>=0.999999) { o.value=float4(1,1e6,0,0); return o; }
+    Output o; float z=depthTexture.SampleLevel(input.uv,0).r; if(z>=0.999999) { o.value=float4(1,BackgroundViewDepth,0,1); return o; }
     float3 p=positionFromDepth(input.uv,z); float viewDepth=max(-p.z,1e-4); float3 n=normalFromDepth(input.uv,p);
     float2 projectionScale=float2(1.0/settings.inverseProjection[0][0],1.0/settings.inverseProjection[1][1]);
     float2 radiusUv=0.5*settings.radiusView*abs(projectionScale)/viewDepth;

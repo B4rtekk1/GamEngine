@@ -219,8 +219,8 @@ namespace Engine::Assets {
                     return;
                 }
                 std::array<std::uint8_t, 64> block{};
-                constexpr std::uint32_t blocksPerChunk = 512;
                 for (;;) {
+                    constexpr std::uint32_t blocksPerChunk = 512;
                     const std::uint32_t first = nextBlock.fetch_add(blocksPerChunk, std::memory_order_relaxed);
                     if (first >= blockCount) break;
                     const std::uint32_t last = std::min(blockCount, first + blocksPerChunk);
