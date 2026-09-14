@@ -58,6 +58,15 @@ float3 reconstructNormal(int2 pixel,float center,float left,float right,float to
 }
 float2 encodeOct(float3 n){n/=max(abs(n.x)+abs(n.y)+abs(n.z),1e-5);if(n.z<0)n.xy=(1-abs(n.yx))*float2(n.x>=0?1:-1,n.y>=0?1:-1);return n.xy*.5+.5;}
 float3 decodeOct(float2 e){float3 n=float3(e,1-abs(e.x)-abs(e.y));if(n.z<0)n.xy=(1-abs(n.yx))*float2(n.x>=0?1:-1,n.y>=0?1:-1);return safeNormalize(n);}
+// The prepass normal buffer is always native-resolution, while Low and
+// Medium GTAO run at half resolution.  Map through normalized coordinates
+// rather than using the AO pixel directly.
+float3 loadViewNormal(int2 pixel,uint2 aoSize){
+ uint normalW,normalH;viewNormalTexture.GetDimensions(normalW,normalH);
+ float2 uv=(float2(pixel)+.5)/float2(aoSize);
+ int2 normalPixel=clamp(int2(uv*float2(normalW,normalH)),int2(0,0),int2(normalW,normalH)-1);
+ return decodeOct(viewNormalTexture.Load(int3(normalPixel,0)).xy);
+}
 // Integral of the projected cosine over one unoccluded horizon arc.
 float integrateHorizon(float horizon,float normalAngle,float normalCos){return(normalCos+2*horizon*sin(normalAngle)-cos(2*horizon-normalAngle))*.25;}
 [numthreads(8,8,1)] [shader("compute")]
@@ -71,7 +80,7 @@ void main(uint3 groupId:SV_GroupID,uint3 threadId:SV_GroupThreadID,uint3 id:SV_D
  int2 local=int2(threadId.xy)+4,p=int2(id.xy);float depth=depthTile[local.y][local.x];baseDepth[p]=depth;if(depth>=BackgroundDepth){rawAo[p]=1;guide[p]=float4(0,1,1,1);return;}
  // Keep edge detection on the original depth, but move the AO center a tiny
  // amount toward the camera to prevent FP32 depth quantization self-occlusion.
- float centerDepth=depth*.99999;float3 center=positionFromDepth(p,centerDepth,uint2(w,h));float left=depthTile[local.y][local.x-1],right=depthTile[local.y][local.x+1],top=depthTile[local.y-1][local.x],bottom=depthTile[local.y+1][local.x];float3 normal=settings.padding>0.5?decodeOct(viewNormalTexture.Load(int3(p,0)).xy):reconstructNormal(p,depth,left,right,top,bottom,uint2(w,h));
+ float centerDepth=depth*.99999;float3 center=positionFromDepth(p,centerDepth,uint2(w,h));float left=depthTile[local.y][local.x-1],right=depthTile[local.y][local.x+1],top=depthTile[local.y-1][local.x],bottom=depthTile[local.y+1][local.x];float3 normal=settings.padding>0.5?loadViewNormal(p,uint2(w,h)):reconstructNormal(p,depth,left,right,top,bottom,uint2(w,h));
  float2 localNoise=lowDiscrepancyNoise(uint2(p),settings.frameIndex);
  float visibility=0;
  // The shared tile is used only for the source mip.  Horizon samples may
@@ -90,6 +99,9 @@ void main(uint3 groupId:SV_GroupID,uint3 threadId:SV_GroupThreadID,uint3 id:SV_D
  const float falloffMul=-1.0/falloffRange;
  const float falloffAdd=effectRadius*(1.0-effectFalloffRange)/falloffRange+1.0;
  const float minSampleDistance=1.3/max(max(radiusPixels.x,radiusPixels.y),1e-4);
+ // Match XeGTAO's small-radius fade.  Integer-rounded offsets otherwise
+ // cause abrupt visibility changes when the radius spans only a few pixels.
+ visibility+=saturate((10.0-radiusPixels.x)/100.0)*.5;
  for(uint d=0;d<directions;++d){
   // Jitter slices and radial locations independently.  The squared
   // distribution places more samples where near-field occluders matter most.
@@ -124,8 +136,10 @@ void main(uint3 groupId:SV_GroupID,uint3 threadId:SV_GroupThreadID,uint3 id:SV_D
    sampleHorizonCos=lerp(lowHorizon[side],sampleHorizonCos,weight);
    horizonCos[side]=max(horizonCos[side],sampleHorizonCos);
   }
+  // XeGTAO keeps these horizon angles unclamped.  The projected-normal
+  // correction counters its slight high-slope over-darkening instead.
+  normalLength=lerp(normalLength,1.0,.05);
   float h0=-acos(clamp(horizonCos[1],-1.0,1.0));float h1=acos(clamp(horizonCos[0],-1.0,1.0));
-  h0=normalAngle+clamp(h0-normalAngle,-Pi*.5,Pi*.5);h1=normalAngle+clamp(h1-normalAngle,-Pi*.5,Pi*.5);
   visibility+=normalLength*(integrateHorizon(h0,normalAngle,normalCos)+integrateHorizon(h1,normalAngle,normalCos));
  }
  // Preserve directional local continuity for the denoiser.  Horizon samples

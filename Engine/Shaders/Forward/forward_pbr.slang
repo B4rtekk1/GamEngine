@@ -384,6 +384,17 @@ ForwardFragmentOutput fragmentMain(ForwardFragmentInput input)
 #endif
         return debugOutput;
     }
+    if (frame.gtaoDebugView != 0u && frame.screenSpaceEffects != 0u)
+    {
+        ForwardFragmentOutput debugOutput;
+        const float visibility = gtaoVisibility.Sample(input.position.xy / frame.clusteredViewportNearFar.xy).r;
+        debugOutput.color = float4(visibility.xxx, baseColor.a);
+#if FORWARD_OUTPUT_VELOCITY
+        float2 previousNdc = input.previousClip.xy / input.previousClip.w;
+        debugOutput.velocity = (input.currentNdc - previousNdc) * 0.5;
+#endif
+        return debugOutput;
+    }
     float3 direct = (diffuse + specular) * frame.lightDirectionIntensity.w *
                     frame.lightColor.rgb * nDotL * (1.0 - shadow);
     const uint2 grid = uint2((uint(frame.clusteredViewportNearFar.x) + 63u) / 64u,

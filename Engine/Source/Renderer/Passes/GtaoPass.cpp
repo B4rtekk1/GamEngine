@@ -28,8 +28,7 @@ struct MainSettings {
           directions(profileDirections), stepsPerDirection(profileSteps), sourceMip(0), maxSampleMip(0) {}
 };
 struct DenoiseSettings {
-    float depthSigma, normalSigma, edgeSigma;
-    std::uint32_t depthMip;
+    float blurAmount;
 };
 struct UpsampleSettings {
     glm::vec2 inputToOutputScale;
@@ -192,7 +191,7 @@ void GtaoPass::create(VkPhysicalDevice physical, VkDevice device, VkExtent2D ful
                   VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, &dst, nullptr, nullptr}}};
             vkUpdateDescriptorSets(device_, 2, w.data(), 0, nullptr);
         }
-        const std::array<uint32_t, 3> inputCount{2, 3, 3}, outputCount{3, 1, 1},
+        const std::array<uint32_t, 3> inputCount{2, 2, 3}, outputCount{3, 1, 1},
             pushSize{sizeof(MainSettings), sizeof(DenoiseSettings), sizeof(UpsampleSettings)};
         const std::array<const char*, 3> shader{"shaders/gtao_main.spv", "shaders/gtao_denoise.spv",
                                                 "shaders/gtao_upsample_compute.spv"};
@@ -353,10 +352,9 @@ void GtaoPass::record(VkCommandBuffer cmd, uint32_t frame, uint32_t sampleIndex,
             VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
     update(1,
            {{raw_.sampler(), raw_.imageView(), VK_IMAGE_LAYOUT_GENERAL},
-            {auxiliary_.sampler(), auxiliary_.imageView(), VK_IMAGE_LAYOUT_GENERAL},
-            {baseDepth_.sampler(), baseDepth_.imageView(), VK_IMAGE_LAYOUT_GENERAL}},
+            {auxiliary_.sampler(), auxiliary_.imageView(), VK_IMAGE_LAYOUT_GENERAL}},
            {filtered_.imageView()});
-    DenoiseSettings denoise{2, 32, 8, 0};
+    DenoiseSettings denoise{1.F};
     dispatch(1, denoise, halfExtent_);
     barrier(cmd, filtered_.image(), VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_GENERAL,
             VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT,

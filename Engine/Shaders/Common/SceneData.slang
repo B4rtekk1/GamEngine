@@ -29,6 +29,7 @@ struct RendererFrameData
     uint shadowEnabled;
     uint shadowQuality;
     uint shadowDebugView;
+    uint gtaoDebugView;
     uint materialSlots;
     uint selectedInstance;
     uint localLightCount;

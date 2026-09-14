@@ -28,6 +28,9 @@ namespace Engine {
 
     enum class GtaoQuality : std::uint8_t { Low, Medium, High, Ultra };
 
+    /** Full-screen diagnostic stage for isolating GTAO artifacts. */
+    enum class GtaoDebugView : std::uint8_t { Off, Raw, Filtered, Full };
+
     /** Tunables are deliberately data, so automated GPU benchmarks can sweep them. */
     struct GtaoQualitySettings final {
         float resolutionScale;
@@ -103,6 +106,7 @@ namespace Engine {
         GrassRenderSettings grass{};
         ShadowQuality shadowQuality = ShadowQuality::High;
         GtaoQuality gtaoQuality = GtaoQuality::High;
+        GtaoDebugView gtaoDebugView = GtaoDebugView::Off;
         IblQuality iblQuality = IblQuality::High;
         ShadowDebugView shadowDebugView = ShadowDebugView::Off;
     };

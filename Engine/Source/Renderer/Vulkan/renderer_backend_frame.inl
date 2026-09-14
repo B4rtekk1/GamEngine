@@ -346,6 +346,7 @@
                 mainLightShadows ? 1u : 0u,
                 static_cast<std::uint32_t>(shadowQuality),
                 static_cast<std::uint32_t>(shadowDebugView),
+                static_cast<std::uint32_t>(gtaoDebugView),
                 materialSlots, editorSelectedRenderable, frameData.lightCount,
                 static_cast<std::uint32_t>(reflectionProbes.size()),
                 1u,
@@ -409,6 +410,7 @@
                 mainLightShadows ? 1u : 0u,
                 static_cast<std::uint32_t>(shadowQuality),
                 static_cast<std::uint32_t>(shadowDebugView),
+                0u,
                 materialSlots, editorSelectedRenderable, frameData.lightCount,
                 static_cast<std::uint32_t>(reflectionProbeManager.probes().size()),
                 0u,
@@ -962,6 +964,10 @@
                             gtaoDepth.imageView(), gtaoDepth.sampler(),
                             msaa.enabled() ? gtaoDepth.imageView() : gtaoViewNormalBuffer.imageView(),
                             msaa.enabled() ? gtaoDepth.sampler() : gtaoViewNormalBuffer.sampler(), !msaa.enabled(), inverseProjection);
+            const VkDescriptorImageInfo gtaoDebugTexture{gtaoPass.debugSampler(gtaoDebugView),
+                                                         gtaoPass.debugView(gtaoDebugView),
+                                                         VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
+            shadowPass.setGtaoTexture(currentFrame, gtaoDebugTexture);
 
             gpuTimestampProfiler.beginZone(commandBuffer, currentFrame, forwardProfileName);
             gpuTimestampProfiler.beginZone(commandBuffer, currentFrame, shadowProjectionProfileName);

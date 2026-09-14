@@ -573,6 +573,18 @@ Engine::Entity drawEditorMenuBar(Engine::ScenePreset &scene, Engine::Renderer &r
             selectDebugView("Virtual Page", Engine::ShadowDebugView::VirtualPage);
             ImGui::EndMenu();
         }
+        if (ImGui::BeginMenu("GTAO Debug")) {
+            const Engine::GtaoDebugView current = renderer.gtaoDebugView();
+            const auto selectGtaoDebugView = [&](const char* label, const Engine::GtaoDebugView view) {
+                if (ImGui::MenuItem(label, nullptr, current == view)) renderer.setGtaoDebugView(view);
+            };
+            selectGtaoDebugView("Final Lighting", Engine::GtaoDebugView::Off);
+            ImGui::Separator();
+            selectGtaoDebugView("GTAO Raw", Engine::GtaoDebugView::Raw);
+            selectGtaoDebugView("GTAO Filtered", Engine::GtaoDebugView::Filtered);
+            selectGtaoDebugView("GTAO Full", Engine::GtaoDebugView::Full);
+            ImGui::EndMenu();
+        }
         endTopMenu();
     }
 

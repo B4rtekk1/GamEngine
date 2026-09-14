@@ -111,6 +111,7 @@
         AntialiasingLevel antialiasingLevel;
         const ShadowQuality& shadowQuality;
         const GtaoQuality& gtaoQuality;
+        const GtaoDebugView& gtaoDebugView;
         const IblQuality& iblQuality;
         const ShadowDebugView& shadowDebugView;
         const GrassRenderSettings& grassSettings;

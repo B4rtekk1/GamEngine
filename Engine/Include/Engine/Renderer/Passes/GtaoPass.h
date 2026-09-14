@@ -40,6 +40,20 @@ public:
                 VkSampler viewNormalSampler, bool useExternalNormals, const Mat4& inverseProjection);
     [[nodiscard]] VkImageView resultView() const noexcept { return full_.imageView(); }
     [[nodiscard]] VkSampler resultSampler() const noexcept { return full_.sampler(); }
+    [[nodiscard]] VkImageView debugView(GtaoDebugView view) const noexcept {
+        switch (view) {
+        case GtaoDebugView::Raw: return raw_.imageView();
+        case GtaoDebugView::Filtered: return filtered_.imageView();
+        default: return full_.imageView();
+        }
+    }
+    [[nodiscard]] VkSampler debugSampler(GtaoDebugView view) const noexcept {
+        switch (view) {
+        case GtaoDebugView::Raw: return raw_.sampler();
+        case GtaoDebugView::Filtered: return filtered_.sampler();
+        default: return full_.sampler();
+        }
+    }
 
 private:
     void clearImages(VkCommandBuffer commandBuffer);

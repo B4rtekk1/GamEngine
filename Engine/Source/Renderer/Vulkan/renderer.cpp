@@ -108,17 +108,17 @@ namespace Engine {
     using UniformBufferObject = RendererUniformBufferObject;
 
     struct DirectionalLight final {
-        Vec3 direction{};
-        Math::Color color{};
+        Vec3 direction;
+        Math::Color color;
         float intensity{};
         bool enabled{};
         bool castShadows{};
     };
 
     struct WindFrameData final {
-        Vec4 directionStrength{};
-        Vec4 sourcePositionRange{};
-        Vec4 gustFrequencyTime{};
+        Vec4 directionStrength;
+        Vec4 sourcePositionRange;
+        Vec4 gustFrequencyTime;
     };
 
     /** ECS-derived values shared by Game View and Scene View for one frame. */
@@ -133,7 +133,7 @@ namespace Engine {
     struct SceneFrameDataCache final {
         SceneFrameData data{};
         CameraComponent primaryCameraComponent{};
-        Vec3 primaryCameraPosition{};
+        Vec3 primaryCameraPosition;
         float primaryCameraYaw{};
         float primaryCameraPitch{};
         bool hasWind{};
@@ -188,7 +188,8 @@ namespace Engine {
                          const RenderOptimizationFeatures &optimizationFeatures,
                          const AntialiasingLevel antialiasingLevel,
                          const ShadowQuality &shadowQuality,
-                         const GtaoQuality &gtaoQuality, const IblQuality &iblQuality,
+                         const GtaoQuality &gtaoQuality, const GtaoDebugView &gtaoDebugView,
+                         const IblQuality &iblQuality,
                          const ShadowDebugView &shadowDebugView,
                          const GrassRenderSettings &grassSettings,
                          std::filesystem::path projectRoot,
@@ -213,7 +214,8 @@ namespace Engine {
               registry(scene.registry()),
               optimizationFeatures(optimizationFeatures),
               antialiasingLevel(antialiasingLevel),
-              shadowQuality(shadowQuality), gtaoQuality(gtaoQuality), iblQuality(iblQuality), shadowDebugView(shadowDebugView),
+              shadowQuality(shadowQuality), gtaoQuality(gtaoQuality), gtaoDebugView(gtaoDebugView),
+              iblQuality(iblQuality), shadowDebugView(shadowDebugView),
               grassSettings(grassSettings),
               projectRoot(std::move(projectRoot)),
               assetManager(assetManager),
@@ -249,7 +251,8 @@ namespace Engine {
             if (&updatedScene != &scene) {
                 throw std::invalid_argument("Renderer cannot switch Scene instances while initialized");
             }
-            if (sceneResourcesInitialized) return;
+            if (sceneResourcesInitialized) { return;
+}
             initSceneResources();
             sceneResourcesInitialized = true;
         }
@@ -271,13 +274,14 @@ namespace Engine {
         [[nodiscard]] std::vector<GpuSceneMemoryAllocation> gpuSceneMemory() const {
             std::vector<GpuSceneMemoryAllocation> result;
             const auto append = [&](const char* table, const Buffer& buffer) {
-                if (buffer.handle() == VK_NULL_HANDLE) return;
+                if (buffer.handle() == VK_NULL_HANDLE) { return;
+}
                 const Buffer::MemoryInfo info = buffer.memoryInfo(vulkanDevice.physical());
                 constexpr VkMemoryPropertyFlags deviceLocal = VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT;
                 constexpr VkMemoryPropertyFlags hostVisible = VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT;
                 constexpr VkMemoryPropertyFlags hostCoherent = VK_MEMORY_PROPERTY_HOST_COHERENT_BIT;
                 result.push_back({table, info.heapIndex, (info.properties & deviceLocal) != 0,
-                    (info.properties & hostVisible) != 0, (info.properties & hostCoherent) != 0, info.bytes});
+                    (info.properties & hostVisible) != 0, (info.properties & hostCoherent) != 0, info.bytes,});
             };
             append("Instances", gpuSceneInstanceBuffers[currentFrame]);
             append("Meshes", gpuSceneMeshBuffers[currentFrame]);
@@ -347,7 +351,8 @@ namespace Engine {
 
         [[nodiscard]] glm::mat4 worldModel(const Entity entity) const noexcept {
             const Registry& readRegistry = registry;
-            if (!readRegistry.valid(entity) || !readRegistry.has<Transform>(entity)) return glm::mat4{1.0F};
+            if (!readRegistry.valid(entity) || !readRegistry.has<Transform>(entity)) { return glm::mat4{1.0F};
+}
             return readRegistry.get<Transform>(entity).worldMatrix().native();
         }
 
@@ -387,11 +392,13 @@ namespace Engine {
             sceneViewportActive = active;
             // Returning to the panel must never show an uninitialized or stale
             // cache after it was hidden while the scene changed.
-            if (active && !wasActive) sceneViewportNeedsRender = true;
+            if (active && !wasActive) { sceneViewportNeedsRender = true;
+}
         }
 
         void setSceneViewportExtent(const std::uint32_t width, const std::uint32_t height) noexcept {
-            if (width != 0 && height != 0) requestedSceneViewportExtent = {width, height};
+            if (width != 0 && height != 0) { requestedSceneViewportExtent = {width, height};
+}
         }
 
         void processEvent(const SDL_Event &event) {

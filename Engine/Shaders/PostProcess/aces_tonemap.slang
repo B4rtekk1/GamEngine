@@ -30,6 +30,7 @@ ConstantBuffer<TonemapSettings> settings;
 
 struct TonemapFragmentInput
 {
+    float4 position : SV_Position;
     [[vk::location(0)]] float2 uv;
 };
 
@@ -62,6 +63,11 @@ float3 acesFilmLuminancePreserving(float3 color)
     return color * (mappedLuminance / luminance);
 }
 
+float interleavedGradientNoise(float2 pixel)
+{
+    return frac(52.9829189 * frac(dot(pixel, float2(0.06711056, 0.00583715))));
+}
+
 [shader("fragment")]
 TonemapFragmentOutput fragmentMain(TonemapFragmentInput input)
 {
@@ -73,6 +79,9 @@ TonemapFragmentOutput fragmentMain(TonemapFragmentInput input)
     color = saturate(color);
     if (settings.applyGamma > 0.5)
         color = pow(color, float3(1.0 / 2.2));
+    // One display-space LSB decorrelates smooth post-process gradients from
+    // 8-bit swapchain quantization without producing visible grain.
+    color = saturate(color + (interleavedGradientNoise(input.position.xy) - 0.5) / 255.0);
     output.color = float4(color, 1.0);
     return output;
 }
