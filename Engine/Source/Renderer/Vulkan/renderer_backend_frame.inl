@@ -264,11 +264,25 @@
             // Keep ocean clipmap geometry camera-local while its Gerstner
             // phase remains world-anchored in the water shader.
             WaterSystem{}.updateOceans(registry, currentCameraPosition);
+            const Mat4 currentView = cameraController.camera()->viewMatrix();
+            const Mat4 currentProjection = cameraController.camera()->projectionMatrix();
             constexpr float cameraCutDistance = 5.0F;
             constexpr float cameraCutDirectionDot = 0.8660254F; // 30 degrees
+            // Motion vectors cannot make a retained frame valid after a
+            // camera switch or a discontinuous projection change (FOV,
+            // aspect, near/far plane).  Compare the non-zero perspective
+            // coefficients rather than relying on position/rotation alone.
+            const glm::mat4& projection = currentProjection.native();
+            const glm::mat4& previousProjection = previousGameProjection.native();
+            const bool projectionChanged = previousGameCameraValid &&
+                (std::abs(projection[0][0] - previousProjection[0][0]) > 1e-4F ||
+                 std::abs(projection[1][1] - previousProjection[1][1]) > 1e-4F ||
+                 std::abs(projection[2][2] - previousProjection[2][2]) > 1e-4F ||
+                 std::abs(projection[3][2] - previousProjection[3][2]) > 1e-4F);
             const bool cameraCut = previousGameCameraValid &&
                 ((currentCameraPosition - previousGameCameraPosition).length() > cameraCutDistance ||
-                 dot(currentCameraForward, previousGameCameraForward) < cameraCutDirectionDot);
+                 dot(currentCameraForward, previousGameCameraForward) < cameraCutDirectionDot ||
+                 activeCamera != previousGameCamera || projectionChanged);
             const std::uint32_t shadowPageBudget = (!previousGameCameraValid || cameraCut) ? 128u : 64u;
 
             std::array<std::uint32_t, ShadowMap::VirtualPageCount> completedVsmRequests{};
@@ -303,8 +317,6 @@
                 shadowPass.invalidateCache();
                 vsmRequestsReady.fill(false);
             }
-            const Mat4 currentView = cameraController.camera()->viewMatrix();
-            const Mat4 currentProjection = cameraController.camera()->projectionMatrix();
             if (vsmPageMarkingUniformBuffers[currentFrame].handle() != VK_NULL_HANDLE) {
                 const glm::mat4 markingViewProjection =
                     (previousGameCameraValid ? previousGameProjection * previousGameView
@@ -350,7 +362,11 @@
                 materialSlots, editorSelectedRenderable, frameData.lightCount,
                 static_cast<std::uint32_t>(reflectionProbes.size()),
                 1u,
-                taaResolveActive ? 1u : 0u,
+                // Do not vary PCF/VSM sample phase until TAA has stronger
+                // per-surface confidence (normals/reactive mask).  Depth
+                // rejection prevents trails, but cannot fully hide changing
+                // shadow-filter noise at sub-pixel edges.
+                0u,
                 static_cast<std::uint32_t>(Profiler::currentFrameNumber()),
                 0u,
                 glm::vec4{static_cast<float>(swapchain.extent().width),
@@ -364,10 +380,19 @@
                            ClusterDepthSlices, frameData.lightCount},
                 glm::vec4{static_cast<float>(swapchain.extent().width), static_cast<float>(swapchain.extent().height), 0.1F, 1000.0F}};
             clusteredLightingUniformBuffers[frame].update(&clustered, sizeof(clustered));
+            particlePreviousGameViewProjection = previousGameCameraValid
+                ? previousGameProjection * previousGameView : currentProjection * currentView;
+            particlePreviousGameCameraRight = previousGameCameraValid
+                ? previousGameCameraRight : cameraController.camera()->right();
+            particlePreviousGameCameraUp = previousGameCameraValid
+                ? previousGameCameraUp : cameraController.camera()->up();
             previousGameView = currentView;
             previousGameProjection = currentProjection;
+            previousGameCamera = activeCamera;
             previousGameCameraPosition = currentCameraPosition;
             previousGameCameraForward = currentCameraForward;
+            previousGameCameraRight = cameraController.camera()->right();
+            previousGameCameraUp = cameraController.camera()->up();
             previousGameCameraValid = true;
         }
 
@@ -997,7 +1022,10 @@
                 if (particleSystem && cameraController.camera()) {
                     const Particles::ParticleFrameData particleFrame{
                         cameraController.camera()->projectionMatrix() * cameraController.camera()->viewMatrix(),
-                        cameraController.camera()->right(), 0.0F, cameraController.camera()->up(), 0.0F};
+                        particlePreviousGameViewProjection,
+                        cameraController.camera()->right(), 0.0F, cameraController.camera()->up(), 0.0F,
+                        particlePreviousGameCameraRight, 0.0F, particlePreviousGameCameraUp, 0.0F,
+                        static_cast<float>(Time::deltaTime())};
                     particleSystem->recordRender(commandBuffer, particleFrame, particlePipeline.handle(),
                                                  particlePipeline.layout(), currentFrame, false);
                 }
@@ -1067,7 +1095,10 @@
                 if (particleSystem && cameraController.camera()) {
                     const Particles::ParticleFrameData particleFrame{
                         cameraController.camera()->projectionMatrix() * cameraController.camera()->viewMatrix(),
-                        cameraController.camera()->right(), 0.0F, cameraController.camera()->up(), 0.0F};
+                        particlePreviousGameViewProjection,
+                        cameraController.camera()->right(), 0.0F, cameraController.camera()->up(), 0.0F,
+                        particlePreviousGameCameraRight, 0.0F, particlePreviousGameCameraUp, 0.0F,
+                        static_cast<float>(Time::deltaTime())};
                     particleSystem->recordRender(commandBuffer, particleFrame, particlePipeline.handle(),
                                                  particlePipeline.layout(), currentFrame, false);
                 }
@@ -1141,10 +1172,16 @@
                                             Degrees{cameraController.editorPitch()});
                     const Particles::ParticleFrameData particleFrame{
                         sceneCamera.projectionMatrix() * sceneCamera.viewMatrix(),
+                        sceneCamera.projectionMatrix() * sceneCamera.viewMatrix(),
                         sceneCamera.right(),
                         0.0F,
                         sceneCamera.up(),
                         0.0F,
+                        sceneCamera.right(),
+                        0.0F,
+                        sceneCamera.up(),
+                        0.0F,
+                        static_cast<float>(Time::deltaTime()),
                     };
                     particleSystem->recordRender(commandBuffer, particleFrame,
                                                  sceneParticlePipeline.handle(), sceneParticlePipeline.layout(),

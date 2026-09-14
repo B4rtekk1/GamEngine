@@ -64,10 +64,17 @@ namespace Engine::Particles {
 
     struct ParticleFrameData {
         Mat4 viewProjection;
+        Mat4 previousViewProjection;
         Vec3 cameraRight{1.0F, 0.0F, 0.0F};
         float _pad0 = 0.0F;
         Vec3 cameraUp{0.0F, 1.0F, 0.0F};
         float _pad1 = 0.0F;
+        Vec3 previousCameraRight{1.0F, 0.0F, 0.0F};
+        float _pad2 = 0.0F;
+        Vec3 previousCameraUp{0.0F, 1.0F, 0.0F};
+        float _pad3 = 0.0F;
+        float deltaTime = 0.0F;
+        float _pad4[3]{};
     };
 
     /** World-space axis-aligned obstacle used by the smoke simulation. */

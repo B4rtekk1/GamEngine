@@ -542,7 +542,8 @@
             options.existingRenderPass = lightingForwardPass.renderPass();
             options.additionalColorFormat = antialiasingLevel == AntialiasingLevel::TAA
                 ? VK_FORMAT_R16G16_SFLOAT : VK_FORMAT_UNDEFINED;
-            options.shader = "shaders/particle_billboard.spv";
+            options.shader = antialiasingLevel == AntialiasingLevel::TAA
+                ? "shaders/particle_billboard.spv" : "shaders/particle_billboard_no_velocity.spv";
             options.assetManager = &assetManager;
             options.cullMode = VK_CULL_MODE_NONE;
             options.depthWriteEnable = VK_FALSE;
@@ -561,6 +562,7 @@
             options.existingRenderPass = msaa.enabled()
                 ? forwardPass.renderPass()
                 : sceneViewportForwardPass.renderPass();
+            options.shader = "shaders/particle_billboard_no_velocity.spv";
             sceneParticlePipeline.create(device, options);
 
             if (particleComputePipeline == VK_NULL_HANDLE) {
@@ -734,7 +736,10 @@
             temporalAaPass.create(vulkanDevice.physical(), device, swapchain.extent(),
                                   vulkanDevice.allocator(), hdrBuffer.imageView(),
                                   hdrBuffer.sampler(), velocityBuffer.imageView(),
-                                  velocityBuffer.sampler(), assetManager);
+                                  velocityBuffer.sampler(),
+                                  (msaa.enabled() ? hiZDepthBuffer : depthBuffer).imageView(),
+                                  (msaa.enabled() ? hiZDepthBuffer : depthBuffer).sampler(),
+                                  assetManager);
         }
 
         void createUIResources() {

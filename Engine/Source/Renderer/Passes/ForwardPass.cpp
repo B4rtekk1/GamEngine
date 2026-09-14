@@ -125,7 +125,8 @@ void ForwardPass::create(VkDevice device, const VkFormat colorFormat,
     grassPipeline_.create(device, grassOptions);
 
     GraphicsPipelineOptions outlineOptions = options;
-    outlineOptions.shader = "shaders/selection_outline.spv";
+    outlineOptions.shader = hasVelocityAttachment_
+        ? "shaders/selection_outline.spv" : "shaders/selection_outline_no_velocity.spv";
     outlineOptions.existingRenderPass = materialPipelines_[0].renderPass();
     outlineOptions.cullMode = VK_CULL_MODE_FRONT_BIT;
     outlineOptions.depthWriteEnable = VK_FALSE;

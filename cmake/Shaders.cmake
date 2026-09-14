@@ -31,6 +31,25 @@ function(gameengine_add_engine_shaders)
         COMMAND ${SLANGC} "${ENGINE_SHADER_SOURCE_DIR}/Forward/depth_velocity.slang" -target spirv -profile glsl_460 -emit-spirv-directly -matrix-layout-row-major -I "${ENGINE_SHADER_SOURCE_DIR}" -D DEPTH_OUTPUT_VELOCITY=0 -o "${depth_velocity_no_velocity_output}"
         DEPENDS "${ENGINE_SHADER_SOURCE_DIR}/Forward/depth_velocity.slang" ${shader_modules}
         COMMENT "Compiling depth-only shader without velocity" VERBATIM)
+    foreach(temporal_variant IN ITEMS skybox selection_outline particle_billboard)
+        set(temporal_variant_output "${SHADER_OUT_DIR}/${temporal_variant}_no_velocity.spv")
+        list(APPEND shader_outputs "${temporal_variant_output}")
+        if(temporal_variant STREQUAL "skybox")
+            set(temporal_variant_define SKY_OUTPUT_VELOCITY=0)
+            set(temporal_variant_source "${ENGINE_SHADER_SOURCE_DIR}/Environment/skybox.slang")
+        elseif(temporal_variant STREQUAL "selection_outline")
+            set(temporal_variant_define OUTLINE_OUTPUT_VELOCITY=0)
+            set(temporal_variant_source "${ENGINE_SHADER_SOURCE_DIR}/Forward/selection_outline.slang")
+        else()
+            set(temporal_variant_define PARTICLE_OUTPUT_VELOCITY=0)
+            set(temporal_variant_source "${ENGINE_SHADER_SOURCE_DIR}/Particles/particle_billboard.slang")
+        endif()
+        add_custom_command(OUTPUT "${temporal_variant_output}"
+            COMMAND ${CMAKE_COMMAND} -E make_directory "${SHADER_OUT_DIR}"
+            COMMAND ${SLANGC} "${temporal_variant_source}" -target spirv -profile glsl_460 -emit-spirv-directly -matrix-layout-row-major -I "${ENGINE_SHADER_SOURCE_DIR}" -D ${temporal_variant_define} -o "${temporal_variant_output}"
+            DEPENDS "${temporal_variant_source}" ${shader_modules}
+            COMMENT "Compiling color-only ${temporal_variant} shader" VERBATIM)
+    endforeach()
     # Surface families share the forward material descriptor contract.  They
     # are separate SPIR-V modules so ForwardPass can select one pipeline per
     # MaterialShader without any per-entity shader file lookup.

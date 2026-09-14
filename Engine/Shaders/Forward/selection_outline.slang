@@ -3,6 +3,12 @@ import Common.SceneData;
 [[vk::binding(1, 0)]] ConstantBuffer<RendererFrameData> frame;
 [[vk::binding(5, 0)]] StructuredBuffer<RendererInstanceData> visibleInstances;
 [[vk::binding(6, 0)]] StructuredBuffer<uint> visibleInstanceIndices;
+#ifndef OUTLINE_OUTPUT_VELOCITY
+#define OUTLINE_OUTPUT_VELOCITY 1
+#endif
+#if OUTLINE_OUTPUT_VELOCITY
+[[vk::binding(8, 0)]] StructuredBuffer<RendererPreviousTransformData> previousTransforms;
+#endif
 
 struct OutlineVertexInput
 {
@@ -14,13 +20,18 @@ struct OutlineVertexOutput
 {
     float4 position : SV_Position;
     [[vk::location(2)]] nointerpolation uint instanceIndex;
+#if OUTLINE_OUTPUT_VELOCITY
+    [[vk::location(3)]] noperspective float2 currentNdc;
+    [[vk::location(4)]] float4 previousClip;
+#endif
 };
 
 [shader("vertex")]
 OutlineVertexOutput vertexMain(OutlineVertexInput input, uint instanceIndex : SV_InstanceID,
                                uint baseInstance : SV_StartInstanceLocation)
 {
-    RendererInstanceData instance = visibleInstances[visibleInstanceIndices[baseInstance + instanceIndex]];
+    const uint visibleIndex = visibleInstanceIndices[baseInstance + instanceIndex];
+    RendererInstanceData instance = visibleInstances[visibleIndex];
     float4 q = instance.rotation;
     float3x3 rotationMatrix = float3x3(
         1.0 - 2.0 * (q.y * q.y + q.z * q.z), 2.0 * (q.x * q.y + q.z * q.w), 2.0 * (q.x * q.z - q.y * q.w),
@@ -39,17 +50,41 @@ OutlineVertexOutput vertexMain(OutlineVertexInput input, uint instanceIndex : SV
     OutlineVertexOutput output;
     output.position = clipPosition;
     output.instanceIndex = instanceIndex;
+#if OUTLINE_OUTPUT_VELOCITY
+    RendererPreviousTransformData previous = previousTransforms[visibleIndex];
+    float4 previousQ = previous.previousRotation;
+    float3x3 previousRotation = float3x3(
+        1.0 - 2.0 * (previousQ.y * previousQ.y + previousQ.z * previousQ.z), 2.0 * (previousQ.x * previousQ.y + previousQ.z * previousQ.w), 2.0 * (previousQ.x * previousQ.z - previousQ.y * previousQ.w),
+        2.0 * (previousQ.x * previousQ.y - previousQ.z * previousQ.w), 1.0 - 2.0 * (previousQ.x * previousQ.x + previousQ.z * previousQ.z), 2.0 * (previousQ.y * previousQ.z + previousQ.x * previousQ.w),
+        2.0 * (previousQ.x * previousQ.z + previousQ.y * previousQ.w), 2.0 * (previousQ.y * previousQ.z - previousQ.x * previousQ.w), 1.0 - 2.0 * (previousQ.x * previousQ.x + previousQ.y * previousQ.y));
+    float4 previousClip = mul(mul(float4(mul(input.position * previous.previousScale.xyz, previousRotation) +
+        previous.previousPosition.xyz, 1.0), frame.previousView), frame.previousProjection);
+    float3 previousViewNormal = normalize(mul(mul(input.normal / previous.previousScale.xyz,
+        previousRotation), (float3x3)frame.previousView));
+    float2 previousScreenDirection = length(previousViewNormal.xy) < 0.001
+        ? float2(0.0, 1.0) : normalize(previousViewNormal.xy);
+    previousClip.xy += previousScreenDirection * 0.012 * previousClip.w;
+    output.currentNdc = clipPosition.xy / clipPosition.w;
+    output.previousClip = previousClip;
+#endif
     return output;
 }
 
 struct OutlineFragmentInput
 {
     [[vk::location(2)]] nointerpolation uint instanceIndex;
+#if OUTLINE_OUTPUT_VELOCITY
+    [[vk::location(3)]] noperspective float2 currentNdc;
+    [[vk::location(4)]] float4 previousClip;
+#endif
 };
 
 struct OutlineFragmentOutput
 {
     [[vk::location(0)]] float4 color : SV_Target;
+#if OUTLINE_OUTPUT_VELOCITY
+    [[vk::location(1)]] float2 velocity : SV_Target1;
+#endif
 };
 
 [shader("fragment")]
@@ -60,5 +95,8 @@ OutlineFragmentOutput fragmentMain(OutlineFragmentInput input)
 
     OutlineFragmentOutput output;
     output.color = 1.0;
+#if OUTLINE_OUTPUT_VELOCITY
+    output.velocity = (input.currentNdc - input.previousClip.xy / input.previousClip.w) * 0.5;
+#endif
     return output;
 }

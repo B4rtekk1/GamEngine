@@ -9,6 +9,11 @@ struct Particle
 struct ParticleFrameData
 {
     float4x4 viewProjection;
+    float4x4 previousViewProjection;
     float3 cameraRight;
     float3 cameraUp;
+    float3 previousCameraRight;
+    float3 previousCameraUp;
+    float deltaTime;
+    float3 padding;
 };

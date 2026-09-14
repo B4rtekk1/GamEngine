@@ -13,7 +13,8 @@ void SkyboxPipeline::create(VkDevice device, VkRenderPass renderPass, VkFormat, 
                             Assets::AssetManager& assets, const std::uint32_t colorAttachmentCount) {
     destroy(); device_ = device;
     try {
-        const auto shader = Vkutil::loadShaderModule(device_, assets, "shaders/skybox.spv");
+        const auto shader = Vkutil::loadShaderModule(device_, assets,
+            colorAttachmentCount > 1 ? "shaders/skybox.spv" : "shaders/skybox_no_velocity.spv");
         const std::array stages{
             VkPipelineShaderStageCreateInfo{VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO, nullptr, 0, VK_SHADER_STAGE_VERTEX_BIT, shader.get(), "vertexMain"},
             VkPipelineShaderStageCreateInfo{VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO, nullptr, 0, VK_SHADER_STAGE_FRAGMENT_BIT, shader.get(), "fragmentMain"},

@@ -20,6 +20,7 @@ namespace Engine {
         void create(VkPhysicalDevice physicalDevice, VkDevice device, VkExtent2D extent,
                     VmaAllocator allocator, VkImageView currentView, VkSampler sampler,
                     VkImageView velocityView, VkSampler velocitySampler,
+                    VkImageView currentDepthView, VkSampler currentDepthSampler,
                     Assets::AssetManager& assets);
         void destroy() noexcept;
         void reset() noexcept;
@@ -44,6 +45,10 @@ namespace Engine {
         std::array<VkDescriptorSet, 2> sets_{};
         std::array<VkFramebuffer, 2> framebuffers_{};
         std::array<HdrBuffer, 2> history_;
+        // A sampled copy of the depth that produced each HDR history image.
+        // It is stored by the resolve itself, so the two ping-pong histories
+        // always refer to exactly the same frame.
+        std::array<HdrBuffer, 2> historyDepth_;
         std::uint32_t historyIndex_ = 0;
         bool initialized_ = false;
         bool historyValid_ = false;

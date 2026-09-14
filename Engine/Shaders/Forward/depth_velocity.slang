@@ -88,7 +88,7 @@ struct FragmentOutput { [[vk::location(1)]] float2 velocity : SV_Target1; [[vk::
 FragmentOutput fragmentMain(VertexOutput input) {
     alphaTest(input);
     FragmentOutput output;
-    output.velocity = input.currentNdc - input.previousClip.xy / input.previousClip.w;
+    output.velocity = (input.currentNdc - input.previousClip.xy / input.previousClip.w) * 0.5;
     output.viewNormal = encodeOct(input.viewNormal);
     return output;
 }

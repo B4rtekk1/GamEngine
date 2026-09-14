@@ -480,8 +480,14 @@
         bool taaResolveActive = false;
         Mat4 previousGameView{};
         Mat4 previousGameProjection{};
+        Mat4 particlePreviousGameViewProjection{};
+        Entity previousGameCamera{NullEntity};
         Vec3 previousGameCameraPosition{};
         Vec3 previousGameCameraForward{};
+        Vec3 previousGameCameraRight{1.0F, 0.0F, 0.0F};
+        Vec3 previousGameCameraUp{0.0F, 1.0F, 0.0F};
+        Vec3 particlePreviousGameCameraRight{1.0F, 0.0F, 0.0F};
+        Vec3 particlePreviousGameCameraUp{0.0F, 1.0F, 0.0F};
         bool previousGameCameraValid = false;
 
         bool framebufferResized = false;
