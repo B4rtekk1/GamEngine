@@ -16,19 +16,25 @@ namespace Engine {
 
         [[nodiscard]] std::string readText(const std::filesystem::path &path) {
             std::ifstream file(path, std::ios::binary);
-            if (!file) throw std::runtime_error("Could not open shader graph template: " + path.string());
+            if (!file) {
+                throw std::runtime_error("Could not open shader graph template: " + path.string());
+            }
             return {std::istreambuf_iterator<char>{file}, std::istreambuf_iterator<char>{}};
         }
 
         void writeText(const std::filesystem::path &path, const std::string &text) {
             std::filesystem::create_directories(path.parent_path());
             std::ofstream file(path, std::ios::binary | std::ios::trunc);
-            if (!file) throw std::runtime_error("Could not write generated shader: " + path.string());
+            if (!file) {
+                throw std::runtime_error("Could not write generated shader: " + path.string());
+            }
             file.write(text.data(), static_cast<std::streamsize>(text.size()));
-            if (!file) throw std::runtime_error("Could not finish generated shader: " + path.string());
+            if (!file) {
+                throw std::runtime_error("Could not finish generated shader: " + path.string());
+            }
         }
 
-        void appendCacheInput(std::string& input, const std::string_view label,
+        void appendCacheInput(std::string &input, const std::string_view label,
                               const std::string_view value) {
             input.append(label);
             input.push_back('\0');
@@ -36,35 +42,41 @@ namespace Engine {
             input.push_back('\0');
         }
 
-        [[nodiscard]] std::filesystem::path resolveSlangModule(const std::string& module,
-                                                                const std::filesystem::path& sourceDirectory,
-                                                                const std::filesystem::path& includeDirectory) {
+        [[nodiscard]] std::filesystem::path resolveSlangModule(const std::string &module,
+                                                               const std::filesystem::path &sourceDirectory,
+                                                               const std::filesystem::path &includeDirectory) {
             std::string relativeModule = module;
-            std::replace(relativeModule.begin(), relativeModule.end(), '.', '/');
+            std::ranges::replace(relativeModule, '.', '/');
             std::filesystem::path relative{relativeModule};
             relative += ".slang";
-            for (const auto& directory : {sourceDirectory, includeDirectory}) {
+            for (const auto &directory: {sourceDirectory, includeDirectory}) {
                 const std::filesystem::path candidate = directory / relative;
-                if (std::filesystem::is_regular_file(candidate)) return candidate;
+                if (std::filesystem::is_regular_file(candidate)) {
+                    return candidate;
+                }
             }
             throw std::runtime_error("Could not resolve Slang import '" + module + "'.");
         }
 
-        [[nodiscard]] std::filesystem::path resolveSlangInclude(const std::string& include,
-                                                                 const std::filesystem::path& sourceDirectory,
-                                                                 const std::filesystem::path& includeDirectory) {
-            for (const auto& directory : {sourceDirectory, includeDirectory}) {
+        [[nodiscard]] std::filesystem::path resolveSlangInclude(const std::string &include,
+                                                                const std::filesystem::path &sourceDirectory,
+                                                                const std::filesystem::path &includeDirectory) {
+            for (const auto &directory: {sourceDirectory, includeDirectory}) {
                 const std::filesystem::path candidate = directory / include;
-                if (std::filesystem::is_regular_file(candidate)) return candidate;
+                if (std::filesystem::is_regular_file(candidate)) {
+                    return candidate;
+                }
             }
             throw std::runtime_error("Could not resolve Slang include '" + include + "'.");
         }
 
-        void appendSlangDependencyTree(std::string& input, const std::filesystem::path& path,
-                                       const std::filesystem::path& includeDirectory,
-                                       std::unordered_set<std::string>& visited) {
+        void appendSlangDependencyTree(std::string &input, const std::filesystem::path &path,
+                                       const std::filesystem::path &includeDirectory,
+                                       std::unordered_set<std::string> &visited) {
             const std::filesystem::path normalized = std::filesystem::absolute(path).lexically_normal();
-            if (!visited.insert(normalized.generic_string()).second) return;
+            if (!visited.insert(normalized.generic_string()).second) {
+                return;
+            }
 
             const std::string contents = readText(normalized);
             appendCacheInput(input, normalized.generic_string(), contents);
@@ -72,37 +84,41 @@ namespace Engine {
             static const std::regex ImportPattern{R"(^\s*import\s+([A-Za-z_][A-Za-z0-9_.]*)\s*;)"};
             for (std::sregex_iterator it(contents.begin(), contents.end(), ImportPattern), end; it != end; ++it) {
                 const std::filesystem::path dependency = resolveSlangModule((*it)[1].str(), normalized.parent_path(),
-                                                                             includeDirectory);
+                                                                            includeDirectory);
                 appendSlangDependencyTree(input, dependency, includeDirectory, visited);
             }
             static const std::regex IncludePattern{R"include(^\s*#\s*include\s*"([^"]+)")include"};
             for (std::sregex_iterator it(contents.begin(), contents.end(), IncludePattern), end; it != end; ++it) {
                 const std::filesystem::path dependency = resolveSlangInclude((*it)[1].str(), normalized.parent_path(),
-                                                                              includeDirectory);
+                                                                             includeDirectory);
                 appendSlangDependencyTree(input, dependency, includeDirectory, visited);
             }
         }
 
-        [[nodiscard]] bool isUsableCachedOutput(const std::filesystem::path& path) {
+        [[nodiscard]] bool isUsableCachedOutput(const std::filesystem::path &path) {
             std::error_code error;
             return std::filesystem::is_regular_file(path, error) && !error &&
                    std::filesystem::file_size(path, error) > 0 && !error;
         }
 
         [[nodiscard]] std::filesystem::path findSlangCompiler() {
-            if (const char* const basePath = SDL_GetBasePath()) {
+            if (const char *const basePath = SDL_GetBasePath()) {
                 const auto bundled = std::filesystem::path{basePath} / "Tools" / "Slang"
 #if defined(_WIN32)
-                                      / "slangc.exe";
+                                     / "slangc.exe";
 #else
                                       / "slangc";
 #endif
-                if (std::filesystem::is_regular_file(bundled)) return bundled;
+                if (std::filesystem::is_regular_file(bundled)) {
+                    return bundled;
+                }
             }
 
 #ifdef GAMEENGINE_SLANGC_PATH
             const std::filesystem::path development{GAMEENGINE_SLANGC_PATH};
-            if (std::filesystem::is_regular_file(development)) return development;
+            if (std::filesystem::is_regular_file(development)) {
+                return development;
+            }
 #endif
 
             throw std::runtime_error("Slang compiler is not available. Reinstall the GamEngine Editor.");
@@ -114,7 +130,8 @@ namespace Engine {
         // property expression cannot accidentally reuse a stale VkPipeline.
         ShaderProgramId hash = 14695981039346656037ULL;
         const auto mix = [&hash](const std::uint8_t byte) { hash = (hash ^ byte) * 1099511628211ULL; };
-        for (const unsigned char character: generatedSurface) mix(character);
+        for (const unsigned char character: generatedSurface) { mix(character);
+}
         return hash == 0 ? 1 : hash;
     }
 
@@ -123,10 +140,12 @@ namespace Engine {
                                                                const std::filesystem::path &generatedDirectory,
                                                                ShaderGraphProgram &program) const {
         ShaderGraphCompileResult result = ShaderGraphCompiler{}.compile(graph);
-        if (!result.succeeded()) return result;
+        if (!result.succeeded()) {
+            return result;
+        }
         if (result.slang.find("properties.") != std::string::npos) {
             result.diagnostics.push_back({
-                "Graph properties need a MaterialParameterBlock GPU layout before they can be emitted to Vulkan.", {}
+                "Graph properties need a MaterialParameterBlock GPU layout before they can be emitted to Vulkan.", {},
             });
             return result;
         }
@@ -208,11 +227,11 @@ struct MaterialSurface
                 "-matrix-layout-row-major",
                 "-I", includeDirectoryString.c_str(),
                 "-o", outputPath.c_str(),
-                nullptr
+                nullptr,
             };
 
             const SDL_PropertiesID properties = SDL_CreateProperties();
-            if (!properties) {
+            if (properties == 0U) {
                 throw std::runtime_error(std::string("Could not create process properties: ") + SDL_GetError());
             }
 
@@ -223,7 +242,7 @@ struct MaterialSurface
 
             SDL_Process *process = SDL_CreateProcessWithProperties(properties);
             SDL_DestroyProperties(properties);
-            if (!process) {
+            if (process == nullptr) {
                 throw std::runtime_error(std::string("Could not launch slangc: ") + SDL_GetError());
             }
 
@@ -231,7 +250,7 @@ struct MaterialSurface
             int exitCode = -1;
             void *processOutput = SDL_ReadProcess(process, &outputSize, &exitCode);
             std::string compilerOutput;
-            if (processOutput) {
+            if (processOutput != nullptr) {
                 compilerOutput.assign(static_cast<const char *>(processOutput), outputSize);
                 SDL_free(processOutput);
             }
@@ -258,10 +277,10 @@ struct MaterialSurface
                 "-I", includeDirectoryString.c_str(),
                 "-D", "FORWARD_OUTPUT_VELOCITY=0",
                 "-o", noVelocityOutputPath.c_str(),
-                nullptr
+                nullptr,
             };
             const SDL_PropertiesID noVelocityProperties = SDL_CreateProperties();
-            if (!noVelocityProperties) {
+            if (noVelocityProperties == 0U) {
                 throw std::runtime_error(std::string("Could not create process properties: ") + SDL_GetError());
             }
             SDL_SetPointerProperty(noVelocityProperties, SDL_PROP_PROCESS_CREATE_ARGS_POINTER,
@@ -270,7 +289,7 @@ struct MaterialSurface
             SDL_SetBooleanProperty(noVelocityProperties, SDL_PROP_PROCESS_CREATE_STDERR_TO_STDOUT_BOOLEAN, true);
             SDL_Process *noVelocityProcess = SDL_CreateProcessWithProperties(noVelocityProperties);
             SDL_DestroyProperties(noVelocityProperties);
-            if (!noVelocityProcess) {
+            if (noVelocityProcess == nullptr) {
                 throw std::runtime_error(std::string("Could not launch slangc: ") + SDL_GetError());
             }
             size_t noVelocityOutputSize = 0;
@@ -278,7 +297,7 @@ struct MaterialSurface
             void *noVelocityProcessOutput = SDL_ReadProcess(noVelocityProcess, &noVelocityOutputSize,
                                                             &noVelocityExitCode);
             std::string noVelocityCompilerOutput;
-            if (noVelocityProcessOutput) {
+            if (noVelocityProcessOutput != nullptr) {
                 noVelocityCompilerOutput.assign(static_cast<const char *>(noVelocityProcessOutput),
                                                 noVelocityOutputSize);
                 SDL_free(noVelocityProcessOutput);
@@ -287,7 +306,9 @@ struct MaterialSurface
             if (noVelocityExitCode != 0) {
                 std::string message = "slangc failed while compiling color-only generated Shader Graph module: " +
                                       slangcPath.string();
-                if (!noVelocityCompilerOutput.empty()) message += "\n\n" + noVelocityCompilerOutput;
+                if (!noVelocityCompilerOutput.empty()) {
+                    message += "\n\n" + noVelocityCompilerOutput;
+                }
                 result.diagnostics.push_back({std::move(message), {}});
             }
         } catch (const std::exception &exception) {
@@ -297,9 +318,9 @@ struct MaterialSurface
     }
 
     ShaderGraphCompileResult ShaderGraphMaterialCompiler::resolve(
-        Material& material, const std::filesystem::path& assetRoot,
-        const std::filesystem::path& forwardTemplate,
-        const std::filesystem::path& generatedDirectory) const {
+        Material &material, const std::filesystem::path &assetRoot,
+        const std::filesystem::path &forwardTemplate,
+        const std::filesystem::path &generatedDirectory) const {
         ShaderGraphCompileResult result;
         const std::filesystem::path asset = material.shaderGraphAsset.lexically_normal();
         if (asset.empty()) {
@@ -307,7 +328,9 @@ struct MaterialSurface
             return result;
         }
         if (asset.is_absolute() || *asset.begin() == ".." || asset.extension() != ".shadergraph") {
-            result.diagnostics.push_back({"Shader Graph asset must be a relative .shadergraph path inside Assets.", {}});
+            result.diagnostics.push_back({
+                "Shader Graph asset must be a relative .shadergraph path inside Assets.", {}
+            });
             return result;
         }
 
@@ -320,23 +343,27 @@ struct MaterialSurface
                 material.shaderProgram = program.id;
                 material.shaderProgramSpirv = program.spirvPath;
             }
-        } catch (const std::exception& exception) {
+        } catch (const std::exception &exception) {
             result.diagnostics.push_back({exception.what(), {}});
         }
         return result;
     }
 
     void ShaderGraphPipelineCache::initialize(const VkDevice device, GraphicsPipelineOptions baseOptions) {
-        if (device == VK_NULL_HANDLE) throw std::invalid_argument(
-            "Shader Graph pipeline cache requires a Vulkan device");
-        if (device_ != VK_NULL_HANDLE) throw std::logic_error(
-            "Shader Graph pipeline cache has already been initialized");
+        if (device == VK_NULL_HANDLE) {
+            throw std::invalid_argument(
+                "Shader Graph pipeline cache requires a Vulkan device");
+        }
+        if (device_ != VK_NULL_HANDLE) {
+            throw std::logic_error(
+                "Shader Graph pipeline cache has already been initialized");
+        }
         device_ = device;
         // Generated files are not AssetManager assets; load their just-cooked
         // SPIR-V directly instead of passing through the timestamp cache.
         baseOptions.assetManager = nullptr;
         baseOptions_ = std::move(baseOptions);
-        for (auto& [program, entry] : entries_) {
+        for (auto &[program, entry]: entries_) {
             (void) program;
             createPipeline(entry);
         }
@@ -347,7 +374,7 @@ struct MaterialSurface
         // the scene's GPU batches retain their shader slots. Keep the slot
         // registry so initialize() can recreate equivalent VkPipelines for
         // those batches; only device-owned resources must be released here.
-        for (auto& [program, entry] : entries_) {
+        for (auto &[program, entry]: entries_) {
             (void) program;
             entry.pipeline.reset();
         }
@@ -355,14 +382,14 @@ struct MaterialSurface
         baseOptions_ = {};
     }
 
-    void ShaderGraphPipelineCache::createPipeline(Entry& entry) {
+    void ShaderGraphPipelineCache::createPipeline(Entry &entry) {
         GraphicsPipelineOptions options = baseOptions_;
         options.shader = entry.spirv;
         options.cullMode = entry.state.doubleSided ? VK_CULL_MODE_NONE : VK_CULL_MODE_BACK_BIT;
         // A material can disable depth writes, but cannot enable them when the
         // owning pass keeps its depth attachment read-only (e.g. lighting
         // after the depth prepass).
-        options.depthWriteEnable = baseOptions_.depthWriteEnable && entry.state.depthWrite;
+        options.depthWriteEnable = static_cast<VkBool32>((baseOptions_.depthWriteEnable != 0U) && entry.state.depthWrite);
         options.alphaBlendEnable = entry.state.transparent ? VK_TRUE : VK_FALSE;
         entry.pipeline = std::make_unique<GraphicsPipeline>();
         entry.pipeline->create(device_, options);
@@ -371,8 +398,10 @@ struct MaterialSurface
     std::uint32_t ShaderGraphPipelineCache::getOrCreate(const ShaderProgramId program,
                                                         const std::filesystem::path &spirv,
                                                         const MaterialRenderState &state) {
-        if (program == 0 || spirv.empty()) throw std::invalid_argument(
-            "Shader Graph program requires an ID and SPIR-V path");
+        if (program == 0 || spirv.empty()) {
+            throw std::invalid_argument(
+                "Shader Graph program requires an ID and SPIR-V path");
+        }
         if (const auto existing = entries_.find(program); existing != entries_.end()) {
             if (existing->second.spirv != spirv || existing->second.state.doubleSided != state.doubleSided ||
                 existing->second.state.depthWrite != state.depthWrite || existing->second.state.transparent != state.
@@ -380,14 +409,19 @@ struct MaterialSurface
                 throw std::logic_error(
                     "A ShaderProgramId may not be reused with a different SPIR-V module or render state");
             }
-            if (device_ != VK_NULL_HANDLE && !existing->second.pipeline) createPipeline(existing->second);
+            if (device_ != VK_NULL_HANDLE && !existing->second.pipeline) {
+                createPipeline(existing->second);
+            }
             return existing->second.slot;
         }
-        if (entries_.size() >= MaterialProgramSlotCount - MaterialShaderCount)
+        if (entries_.size() >= MaterialProgramSlotCount - MaterialShaderCount) {
             throw std::runtime_error("Shader Graph pipeline slot capacity exceeded");
+        }
         const std::uint32_t slot = static_cast<std::uint32_t>(MaterialShaderCount + entries_.size());
         Entry entry{spirv, state, slot, nullptr};
-        if (device_ != VK_NULL_HANDLE) createPipeline(entry);
+        if (device_ != VK_NULL_HANDLE) {
+            createPipeline(entry);
+        }
         const auto [it, inserted] = entries_.emplace(program, std::move(entry));
         (void) inserted;
         return it->second.slot;
@@ -396,7 +430,9 @@ struct MaterialSurface
     const GraphicsPipeline *ShaderGraphPipelineCache::find(const std::uint32_t slot) const noexcept {
         for (const auto &[id, entry]: entries_) {
             (void) id;
-            if (entry.slot == slot) return entry.pipeline.get();
+            if (entry.slot == slot) {
+                return entry.pipeline.get();
+            }
         }
         return nullptr;
     }
