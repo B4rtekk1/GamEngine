@@ -107,28 +107,31 @@
 namespace Engine {
     using UniformBufferObject = RendererUniformBufferObject;
 
-    struct DirectionalLight final {
-        Vec3 direction;
-        Math::Color color;
-        float intensity{};
-        bool enabled{};
-        bool castShadows{};
-    };
+    namespace {
+        struct DirectionalLight final {
+            Vec3 direction;
+            Math::Color color;
+            float intensity{};
+            bool enabled{};
+            bool castShadows{};
+        };
 
-    struct WindFrameData final {
-        Vec4 directionStrength;
-        Vec4 sourcePositionRange;
-        Vec4 gustFrequencyTime;
-    };
+        struct WindFrameData final {
+            Vec4 directionStrength;
+            Vec4 sourcePositionRange;
+            Vec4 gustFrequencyTime;
+        };
 
-    /** ECS-derived values shared by Game View and Scene View for one frame. */
-    struct SceneFrameData final {
-        Entity primaryCamera{NullEntity};
-        DirectionalLight directionalLight{};
-        WindFrameData wind{};
-        std::array<LocalLightGPU, MaxLocalLights> lights{};
-        std::uint32_t lightCount{};
-    };
+
+        /** ECS-derived values shared by Game View and Scene View for one frame. */
+        struct SceneFrameData final {
+            Entity primaryCamera{NullEntity};
+            DirectionalLight directionalLight{};
+            WindFrameData wind{};
+            std::array<LocalLightGPU, MaxLocalLights> lights{};
+            std::uint32_t lightCount{};
+        };
+    }
 
     struct SceneFrameDataCache final {
         SceneFrameData data{};
@@ -210,14 +213,14 @@ namespace Engine {
               bloomPass(bloomPass),
               gtaoPass(gtaoPass),
               canvasRenderer(canvasRenderer),
+              projectRoot(std::move(projectRoot)),
               scene(scene),
               registry(scene.registry()),
               optimizationFeatures(optimizationFeatures),
-              antialiasingLevel(antialiasingLevel),
-              shadowQuality(shadowQuality), gtaoQuality(gtaoQuality), gtaoDebugView(gtaoDebugView),
-              iblQuality(iblQuality), shadowDebugView(shadowDebugView),
+              antialiasingLevel(antialiasingLevel), shadowQuality(shadowQuality), gtaoQuality(gtaoQuality),
+              gtaoDebugView(gtaoDebugView), iblQuality(iblQuality),
+              shadowDebugView(shadowDebugView),
               grassSettings(grassSettings),
-              projectRoot(std::move(projectRoot)),
               assetManager(assetManager),
               renderables(sceneGpu.renderables),
               instanceBatches(sceneGpu.instanceBatches),
@@ -247,12 +250,13 @@ namespace Engine {
             Time::init();
         }
 
-        void initializeSceneResources(const Scene& updatedScene) {
+        void initializeSceneResources(const Scene &updatedScene) {
             if (&updatedScene != &scene) {
                 throw std::invalid_argument("Renderer cannot switch Scene instances while initialized");
             }
-            if (sceneResourcesInitialized) { return;
-}
+            if (sceneResourcesInitialized) {
+                return;
+            }
             initSceneResources();
             sceneResourcesInitialized = true;
         }
@@ -273,15 +277,18 @@ namespace Engine {
 
         [[nodiscard]] std::vector<GpuSceneMemoryAllocation> gpuSceneMemory() const {
             std::vector<GpuSceneMemoryAllocation> result;
-            const auto append = [&](const char* table, const Buffer& buffer) {
-                if (buffer.handle() == VK_NULL_HANDLE) { return;
-}
+            const auto append = [&](const char *table, const Buffer &buffer) {
+                if (buffer.handle() == VK_NULL_HANDLE) {
+                    return;
+                }
                 const Buffer::MemoryInfo info = buffer.memoryInfo(vulkanDevice.physical());
                 constexpr VkMemoryPropertyFlags deviceLocal = VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT;
                 constexpr VkMemoryPropertyFlags hostVisible = VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT;
                 constexpr VkMemoryPropertyFlags hostCoherent = VK_MEMORY_PROPERTY_HOST_COHERENT_BIT;
-                result.push_back({table, info.heapIndex, (info.properties & deviceLocal) != 0,
-                    (info.properties & hostVisible) != 0, (info.properties & hostCoherent) != 0, info.bytes,});
+                result.push_back({
+                    table, info.heapIndex, (info.properties & deviceLocal) != 0,
+                    (info.properties & hostVisible) != 0, (info.properties & hostCoherent) != 0, info.bytes,
+                });
             };
             append("Instances", gpuSceneInstanceBuffers[currentFrame]);
             append("Meshes", gpuSceneMeshBuffers[currentFrame]);
@@ -339,20 +346,24 @@ namespace Engine {
             // transitioned yet, so ImGui must keep sampling the HDR target.
             if (taaResolveActive) {
                 const VkDescriptorSet descriptor =
-                    gameViewportTemporalDescriptors[temporalAaPass.nextResolvedIndex()];
-                if (descriptor != VK_NULL_HANDLE) return descriptor;
+                        gameViewportTemporalDescriptors[temporalAaPass.nextResolvedIndex()];
+                if (descriptor != VK_NULL_HANDLE) {
+                    return descriptor;
+                }
             }
             return gameViewportDescriptor;
         }
+
         [[nodiscard]] VkDescriptorSet sceneViewportTexture() const noexcept { return sceneViewportDescriptor; }
         [[nodiscard]] float editorCameraYaw() const noexcept { return cameraController.editorYaw(); }
         [[nodiscard]] float editorCameraPitch() const noexcept { return cameraController.editorPitch(); }
         [[nodiscard]] Vec3 editorCameraPosition() const noexcept { return cameraController.editorPosition(); }
 
         [[nodiscard]] glm::mat4 worldModel(const Entity entity) const noexcept {
-            const Registry& readRegistry = registry;
-            if (!readRegistry.valid(entity) || !readRegistry.has<Transform>(entity)) { return glm::mat4{1.0F};
-}
+            const Registry &readRegistry = registry;
+            if (!readRegistry.valid(entity) || !readRegistry.has<Transform>(entity)) {
+                return glm::mat4{1.0F};
+            }
             return readRegistry.get<Transform>(entity).worldMatrix().native();
         }
 
@@ -392,13 +403,15 @@ namespace Engine {
             sceneViewportActive = active;
             // Returning to the panel must never show an uninitialized or stale
             // cache after it was hidden while the scene changed.
-            if (active && !wasActive) { sceneViewportNeedsRender = true;
-}
+            if (active && !wasActive) {
+                sceneViewportNeedsRender = true;
+            }
         }
 
         void setSceneViewportExtent(const std::uint32_t width, const std::uint32_t height) noexcept {
-            if (width != 0 && height != 0) { requestedSceneViewportExtent = {width, height};
-}
+            if (width != 0 && height != 0) {
+                requestedSceneViewportExtent = {width, height};
+            }
         }
 
         void processEvent(const SDL_Event &event) {
@@ -508,8 +521,10 @@ namespace Engine {
             }
         }
 
-        [[nodiscard]] bool setEnvironmentEquirectangular(const std::filesystem::path& path) {
-            if (!sceneResourcesInitialized || device == VK_NULL_HANDLE || path.empty()) return false;
+        [[nodiscard]] bool setEnvironmentEquirectangular(const std::filesystem::path &path) {
+            if (!sceneResourcesInitialized || device == VK_NULL_HANDLE || path.empty()) {
+                return false;
+            }
             try {
                 waitIdle();
                 ImageBasedLighting replacement;
@@ -526,30 +541,34 @@ namespace Engine {
                 environmentEquirectangularPath = path;
                 sceneViewportNeedsRender = true;
                 return true;
-            } catch (const std::exception& exception) {
+            } catch (const std::exception &exception) {
                 std::cerr << "[Renderer] Could not rebuild environment IBL: " << exception.what() << '\n';
                 return false;
             }
         }
 
         void bakeReflectionProbe(const Entity entity) {
-            if (sceneResourcesInitialized) reflectionProbeManager.bakeProbe(entity);
+            if (sceneResourcesInitialized) {
+                reflectionProbeManager.bakeProbe(entity);
+            }
         }
 
         [[nodiscard]] bool reloadShaders() {
-            if (device == VK_NULL_HANDLE || !sceneResourcesInitialized) return false;
+            if (device == VK_NULL_HANDLE || !sceneResourcesInitialized) {
+                return false;
+            }
 
             // Validate every newly copied module before touching a live
             // pipeline.  A malformed SPIR-V file (for example an interrupted
             // copy) therefore leaves the complete active renderer intact.
             try {
                 const auto shaderDirectory = assetManager.asset_root() / "shaders";
-                for (const auto& entry : std::filesystem::directory_iterator(shaderDirectory)) {
+                for (const auto &entry: std::filesystem::directory_iterator(shaderDirectory)) {
                     if (entry.is_regular_file() && entry.path().extension() == ".spv") {
                         static_cast<void>(Vkutil::loadShaderModule(device, assetManager, entry.path()));
                     }
                 }
-            } catch (const std::exception& exception) {
+            } catch (const std::exception &exception) {
                 std::cerr << "[Renderer] Shader validation failed: " << exception.what() << '\n';
                 return false;
             }
@@ -609,7 +628,7 @@ namespace Engine {
                 sceneViewportNeedsRender = true;
                 assetManager.unload_unused();
                 return true;
-            } catch (const std::exception& exception) {
+            } catch (const std::exception &exception) {
                 std::cerr << "[Renderer] Shader reload failed: " << exception.what() << '\n';
                 return false;
             }
@@ -640,9 +659,13 @@ namespace Engine {
                 vkDestroyFramebuffer(device, hdrFramebuffer, nullptr);
             }
             hdrFramebuffer = VK_NULL_HANDLE;
-            if (lightingHdrFramebuffer != VK_NULL_HANDLE) vkDestroyFramebuffer(device, lightingHdrFramebuffer, nullptr);
+            if (lightingHdrFramebuffer != VK_NULL_HANDLE) {
+                vkDestroyFramebuffer(device, lightingHdrFramebuffer, nullptr);
+            }
             lightingHdrFramebuffer = VK_NULL_HANDLE;
-            if (waterHdrFramebuffer != VK_NULL_HANDLE) vkDestroyFramebuffer(device, waterHdrFramebuffer, nullptr);
+            if (waterHdrFramebuffer != VK_NULL_HANDLE) {
+                vkDestroyFramebuffer(device, waterHdrFramebuffer, nullptr);
+            }
             waterHdrFramebuffer = VK_NULL_HANDLE;
             destroySceneViewportResources();
             particlePipeline.destroy();
@@ -666,11 +689,21 @@ namespace Engine {
             for (Buffer &buffer: materialBuffers) {
                 buffer.destroy();
             }
-            for (Buffer& buffer : gpuSceneInstanceBuffers) buffer.destroy();
-            for (Buffer& buffer : gpuSceneMeshBuffers) buffer.destroy();
-            for (Buffer& buffer : gpuSceneMaterialBuffers) buffer.destroy();
-            for (Buffer& buffer : visibleInstanceBuffers) buffer.destroy();
-            for (Buffer& buffer : visibleInstanceCountBuffers) buffer.destroy();
+            for (Buffer &buffer: gpuSceneInstanceBuffers) {
+                buffer.destroy();
+            }
+            for (Buffer &buffer: gpuSceneMeshBuffers) {
+                buffer.destroy();
+            }
+            for (Buffer &buffer: gpuSceneMaterialBuffers) {
+                buffer.destroy();
+            }
+            for (Buffer &buffer: visibleInstanceBuffers) {
+                buffer.destroy();
+            }
+            for (Buffer &buffer: visibleInstanceCountBuffers) {
+                buffer.destroy();
+            }
             for (Buffer &buffer: uniformBuffers) {
                 buffer.destroy();
             }
@@ -758,9 +791,9 @@ namespace Engine {
             // resources unless the renderable topology itself changed.
             const std::uint64_t updatedTopologyRevision = registry.renderTopologyRevision();
             const std::uint64_t updatedParticleEmitterRevision =
-                registry.componentRevision<ParticleEmitterComponent>();
+                    registry.componentRevision<ParticleEmitterComponent>();
             const std::uint64_t updatedSmokeEmitterRevision =
-                registry.componentRevision<SmokeEmitterComponent>();
+                    registry.componentRevision<SmokeEmitterComponent>();
             if (updatedTopologyRevision == lastRenderTopologyRevision &&
                 updatedParticleEmitterRevision == lastParticleEmitterRevision &&
                 updatedSmokeEmitterRevision == lastSmokeEmitterRevision) {
@@ -835,9 +868,11 @@ namespace Engine {
                                 const std::uint32_t requestedVertexCount) {
             const auto recordIt = sceneGpu.renderableIndices.find(entity);
             if (recordIt == sceneGpu.renderableIndices.end() ||
-                !registry.has<MeshRenderer>(entity) || !registry.has<Transform>(entity)) return;
-            const auto& renderer = registry.get<MeshRenderer>(entity);
-            RenderableRecord& record = renderables[recordIt->second];
+                !registry.has<MeshRenderer>(entity) || !registry.has<Transform>(entity)) {
+                return;
+            }
+            const auto &renderer = registry.get<MeshRenderer>(entity);
+            RenderableRecord &record = renderables[recordIt->second];
             // Imported runtime assets release decoded vertices after upload.
             // A geometry edit therefore has to go through the editor/source
             // path, which pins data and rebuilds the GPU resource first.
@@ -847,10 +882,14 @@ namespace Engine {
                 synchronizeSceneResources(scene);
                 return;
             }
-            if (firstVertex >= renderer.mesh->vertexCount()) return;
+            if (firstVertex >= renderer.mesh->vertexCount()) {
+                return;
+            }
             const std::uint32_t vertexCount = std::min(
                 requestedVertexCount, renderer.mesh->vertexCount() - firstVertex);
-            if (vertexCount == 0) return;
+            if (vertexCount == 0) {
+                return;
+            }
             // uploadDeviceLocal submits the copy after all graphics work already
             // queued on this queue. Avoid waiting for every frame in flight here:
             // that global stall made terrain sculpting block on unrelated frames.
@@ -865,12 +904,16 @@ namespace Engine {
                 vulkanDevice.graphicsQueue());
 
             AABB localBounds{
-                .min = Vec3{std::numeric_limits<float>::max(), std::numeric_limits<float>::max(),
-                            std::numeric_limits<float>::max()},
-                .max = Vec3{std::numeric_limits<float>::lowest(), std::numeric_limits<float>::lowest(),
-                            std::numeric_limits<float>::lowest()},
+                .min = Vec3{
+                    std::numeric_limits<float>::max(), std::numeric_limits<float>::max(),
+                    std::numeric_limits<float>::max()
+                },
+                .max = Vec3{
+                    std::numeric_limits<float>::lowest(), std::numeric_limits<float>::lowest(),
+                    std::numeric_limits<float>::lowest()
+                },
             };
-            for (const Vertex& vertex : renderer.mesh->vertices) {
+            for (const Vertex &vertex: renderer.mesh->vertices) {
                 localBounds.min.setX(std::min(localBounds.min.x(), vertex.position.x()));
                 localBounds.min.setY(std::min(localBounds.min.y(), vertex.position.y()));
                 localBounds.min.setZ(std::min(localBounds.min.z(), vertex.position.z()));
@@ -879,14 +922,16 @@ namespace Engine {
                 localBounds.max.setZ(std::max(localBounds.max.z(), vertex.position.z()));
             }
             record.localBounds = localBounds;
-            InstanceBatch& changedBatch = instanceBatches[record.batchIndex];
+            InstanceBatch &changedBatch = instanceBatches[record.batchIndex];
             changedBatch.mesh = renderer.mesh.get();
 
             bool first = true;
             AABB batchBounds{};
-            for (const std::size_t index : sceneGpu.batchRenderableIndices[record.batchIndex]) {
-                const RenderableRecord& item = renderables[index];
-                if (!registry.has<Transform>(item.entity)) continue;
+            for (const std::size_t index: sceneGpu.batchRenderableIndices[record.batchIndex]) {
+                const RenderableRecord &item = renderables[index];
+                if (!registry.has<Transform>(item.entity)) {
+                    continue;
+                }
                 const AABB world = item.localBounds.transformed(
                     registry.get<Transform>(item.entity).matrix().native());
                 if (first) {
@@ -899,17 +944,17 @@ namespace Engine {
             }
             if (!first && record.batchIndex < gpuObjects.size()) {
                 changedBatch.worldBounds = batchBounds;
-                auto& gpuObject = gpuObjects[record.batchIndex];
+                auto &gpuObject = gpuObjects[record.batchIndex];
                 gpuObject.localAabbMin = {batchBounds.min.x(), batchBounds.min.y(), batchBounds.min.z(), 0.0F};
                 gpuObject.localAabbMax = {batchBounds.max.x(), batchBounds.max.y(), batchBounds.max.z(), 0.0F};
-                for (Buffer& buffer : cullingObjectBuffers) {
+                for (Buffer &buffer: cullingObjectBuffers) {
                     buffer.update(&gpuObject, sizeof(gpuObject),
                                   sizeof(Culling::GPUObjectData) * record.batchIndex);
                 }
 
                 glm::vec3 sceneMinimum{std::numeric_limits<float>::max()};
                 glm::vec3 sceneMaximum{std::numeric_limits<float>::lowest()};
-                for (const InstanceBatch& batch : instanceBatches) {
+                for (const InstanceBatch &batch: instanceBatches) {
                     sceneMinimum = glm::min(sceneMinimum, batch.worldBounds.min.native());
                     sceneMaximum = glm::max(sceneMaximum, batch.worldBounds.max.native());
                 }

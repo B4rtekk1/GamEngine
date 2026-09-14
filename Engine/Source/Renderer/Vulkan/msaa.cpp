@@ -87,7 +87,7 @@ namespace Engine {
 
         // Vulkan requires zero-initialization for the unused fields, while its
         // sample-count enum has no zero enumerator.
-        VkImageCreateInfo imageInfo{}; // NOLINT(clang-analyzer-optin.core.EnumCastOutOfRange)
+        VkImageCreateInfo imageInfo{};
         imageInfo.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
         imageInfo.imageType = VK_IMAGE_TYPE_2D;
         imageInfo.extent = {extent.width, extent.height, 1};
@@ -138,7 +138,9 @@ namespace Engine {
             vkDestroyImageView(device_, colorImageView_, nullptr);
             colorImageView_ = VK_NULL_HANDLE;
         }
-        if (colorImage_ != VK_NULL_HANDLE) vmaDestroyImage(allocator_, colorImage_, colorImageAllocation_);
+        if (colorImage_ != VK_NULL_HANDLE) {
+            vmaDestroyImage(allocator_, colorImage_, colorImageAllocation_);
+        }
         colorImage_ = VK_NULL_HANDLE;
         colorImageAllocation_ = VK_NULL_HANDLE;
     }
