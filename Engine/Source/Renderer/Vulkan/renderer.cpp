@@ -872,7 +872,14 @@ namespace Engine {
                 return;
             }
             const auto &renderer = registry.get<MeshRenderer>(entity);
-            RenderableRecord &record = renderables[recordIt->second];
+            if (recordIt->second.size() != 1U) {
+                // Virtual-water pages share one source mesh but have many
+                // independently cullable draw ranges; rebuild their ranges
+                // atomically after an editor geometry edit.
+                synchronizeSceneResources(scene);
+                return;
+            }
+            RenderableRecord &record = renderables[recordIt->second.front()];
             // Imported runtime assets release decoded vertices after upload.
             // A geometry edit therefore has to go through the editor/source
             // path, which pins data and rebuilds the GPU resource first.

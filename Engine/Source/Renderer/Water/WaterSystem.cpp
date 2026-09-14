@@ -5,15 +5,25 @@
 #include "Engine/Scene/SceneEditor.h"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <memory>
+#include <optional>
 #include <stdexcept>
 
 namespace Engine {
     namespace {
-        constexpr std::uint32_t ClipmapResolution = 64;
-        // Every level is exactly twice the previous one.  With a fixed 64x64 grid,
-        // the inner boundary of level N therefore lies on vertices of level N-1.
+        // Virtual-water geometry layout.  A level remains a 64x64-cell clipmap,
+        // but is expressed as an 8x8 array of independently addressable 8x8
+        // pages.  The current mesh path still submits the pages as one ocean
+        // mesh; keeping this layout explicit is what lets the GPU page-list path
+        // replace that submission without changing the surface function.
+        constexpr std::uint32_t WaterPagesPerAxis = 8;
+        constexpr std::uint32_t WaterPageCells = 8;
+        constexpr std::uint32_t ClipmapResolution = WaterPagesPerAxis * WaterPageCells;
+        static_assert(ClipmapResolution == 64);
+        // Every level is exactly twice the previous one. With the fixed grid,
+        // the inner boundary of level N lies on vertices of level N - 1.
         constexpr float ClipmapExtents[] = {
             50.0F, 100.0F, 200.0F, 400.0F, 800.0F,
             1600.0F, 3200.0F, 6400.0F, 12800.0F,
@@ -32,45 +42,136 @@ namespace Engine {
             return cell;
         }
 
-        void addQuad(Mesh &mesh, const Vec3 &a, const Vec3 &b, const Vec3 &c, const Vec3 &d,
-                     const float outer, const float cell, const std::uint32_t level) {
-            const auto first = static_cast<std::uint32_t>(mesh.vertices.size());
-            WaterSystem::addWaterVertex(mesh, a, {0.0F, 0.0F}, samplingCellSize(a, outer, cell, level));
-            WaterSystem::addWaterVertex(mesh, b, {1.0F, 0.0F}, samplingCellSize(b, outer, cell, level));
-            WaterSystem::addWaterVertex(mesh, c, {1.0F, 1.0F}, samplingCellSize(c, outer, cell, level));
-            WaterSystem::addWaterVertex(mesh, d, {0.0F, 1.0F}, samplingCellSize(d, outer, cell, level));
-            mesh.indices.insert(mesh.indices.end(), {first, first + 1U, first + 2U, first, first + 2U, first + 3U});
-        }
-
         enum class StitchEdge { Bottom, Right, Top, Left };
 
-        void addStitchedQuad(Mesh &mesh, const Vec3 &a, const Vec3 &b, const Vec3 &c,
-                             const Vec3 &d, const StitchEdge edge, const float outer,
-                             const float cell, const std::uint32_t level) {
-            const auto first = static_cast<std::uint32_t>(mesh.vertices.size());
-            const Vec3 midpoint = edge == StitchEdge::Bottom
-                                      ? (a + b) * 0.5F
-                                      : edge == StitchEdge::Right
-                                            ? (b + c) * 0.5F
-                                            : edge == StitchEdge::Top
-                                                  ? (c + d) * 0.5F
-                                                  : (d + a) * 0.5F;
-            WaterSystem::addWaterVertex(mesh, a, {0.0F, 0.0F}, samplingCellSize(a, outer, cell, level));
-            WaterSystem::addWaterVertex(mesh, b, {1.0F, 0.0F}, samplingCellSize(b, outer, cell, level));
-            WaterSystem::addWaterVertex(mesh, c, {1.0F, 1.0F}, samplingCellSize(c, outer, cell, level));
-            WaterSystem::addWaterVertex(mesh, d, {0.0F, 1.0F}, samplingCellSize(d, outer, cell, level));
-            WaterSystem::addWaterVertex(mesh, midpoint, {0.5F, 0.5F}, samplingCellSize(midpoint, outer, cell, level));
-            const std::uint32_t A = first, B = first + 1U, C = first + 2U, D = first + 3U, M = first + 4U;
+        void addStitchedCellIndices(Mesh &mesh, const std::uint32_t a, const std::uint32_t b,
+                                    const std::uint32_t c, const std::uint32_t d,
+                                    const std::uint32_t midpoint, const StitchEdge edge) {
             switch (edge) {
-                case StitchEdge::Bottom: mesh.indices.insert(mesh.indices.end(), {A, M, D, M, C, D, M, B, C});
+                case StitchEdge::Bottom: mesh.indices.insert(mesh.indices.end(), {a, midpoint, d, midpoint, c, d, midpoint, b, c});
                     break;
-                case StitchEdge::Right: mesh.indices.insert(mesh.indices.end(), {B, M, A, M, D, A, M, C, D});
+                case StitchEdge::Right: mesh.indices.insert(mesh.indices.end(), {b, midpoint, a, midpoint, d, a, midpoint, c, d});
                     break;
-                case StitchEdge::Top: mesh.indices.insert(mesh.indices.end(), {D, M, A, M, B, A, M, C, B});
+                case StitchEdge::Top: mesh.indices.insert(mesh.indices.end(), {d, midpoint, a, midpoint, b, a, midpoint, c, b});
                     break;
-                case StitchEdge::Left: mesh.indices.insert(mesh.indices.end(), {A, M, B, M, C, B, M, D, C});
+                case StitchEdge::Left: mesh.indices.insert(mesh.indices.end(), {a, midpoint, b, midpoint, c, b, midpoint, d, c});
                     break;
             }
+        }
+
+        [[nodiscard]] bool pageIsInactive(const std::uint32_t level, const std::uint32_t pageX,
+                                          const std::uint32_t pageZ) {
+            // The 4x4 centre of every outer level is fully covered by its
+            // preceding (finer) level. It is a logical virtual slot, but has
+            // no geometry and therefore costs no vertex work.
+            return level != 0U && pageX >= 2U && pageX < 6U && pageZ >= 2U && pageZ < 6U;
+        }
+
+        [[nodiscard]] std::optional<StitchEdge> pageStitchEdge(const std::uint32_t level,
+                                                                 const std::uint32_t pageX,
+                                                                 const std::uint32_t pageZ) {
+            if (level == 0U) return std::nullopt;
+            // Exactly one page edge can touch the central 4x4 hole. Corner
+            // pages touch it only diagonally and need no index stitching.
+            if (pageX == 1U && pageZ >= 2U && pageZ < 6U) return StitchEdge::Right;
+            if (pageX == 6U && pageZ >= 2U && pageZ < 6U) return StitchEdge::Left;
+            if (pageZ == 1U && pageX >= 2U && pageX < 6U) return StitchEdge::Top;
+            if (pageZ == 6U && pageX >= 2U && pageX < 6U) return StitchEdge::Bottom;
+            return std::nullopt;
+        }
+
+        void addOceanPage(Mesh &mesh, const std::uint32_t level, const std::uint32_t pageX,
+                          const std::uint32_t pageZ) {
+            const float outer = ClipmapExtents[level];
+            const float cell = (2.0F * outer) / static_cast<float>(ClipmapResolution);
+            const float pageSize = cell * static_cast<float>(WaterPageCells);
+            const float minX = -outer + pageSize * static_cast<float>(pageX);
+            const float minZ = -outer + pageSize * static_cast<float>(pageZ);
+            const std::uint32_t firstVertex = static_cast<std::uint32_t>(mesh.vertices.size());
+            const std::uint32_t firstIndex = static_cast<std::uint32_t>(mesh.indices.size());
+            constexpr std::uint32_t PageVertexAxis = WaterPageCells + 1U;
+            const auto vertexIndex = [firstVertex](const std::uint32_t x, const std::uint32_t z) {
+                return firstVertex + z * PageVertexAxis + x;
+            };
+
+            // One page owns a compact 9x9 grid rather than four independent
+            // vertices for every quad. Positions remain in the old local
+            // clipmap coordinate system, so world-space phase is unchanged.
+            for (std::uint32_t z = 0; z <= WaterPageCells; ++z)
+                for (std::uint32_t x = 0; x <= WaterPageCells; ++x) {
+                    const Vec3 position{minX + cell * static_cast<float>(x), 0.0F,
+                                        minZ + cell * static_cast<float>(z)};
+                    WaterSystem::addWaterVertex(mesh, position,
+                        {static_cast<float>(x) / WaterPageCells, static_cast<float>(z) / WaterPageCells},
+                        samplingCellSize(position, outer, cell, level));
+                }
+
+            const std::optional<StitchEdge> stitchedEdge = pageStitchEdge(level, pageX, pageZ);
+            std::array<std::uint32_t, WaterPageCells> stitchMidpoints{};
+            if (stitchedEdge.has_value()) {
+                // The coarser edge has eight segments while its finer neighbour
+                // has sixteen. Add one midpoint to each coarse segment, exactly
+                // matching the old per-cell stitching without duplicating its
+                // four corner vertices.
+                for (std::uint32_t segment = 0; segment < WaterPageCells; ++segment) {
+                    Vec3 a{}, b{};
+                    switch (*stitchedEdge) {
+                        case StitchEdge::Bottom:
+                            a = {minX + cell * segment, 0.0F, minZ};
+                            b = {minX + cell * (segment + 1U), 0.0F, minZ};
+                            break;
+                        case StitchEdge::Right:
+                            a = {minX + pageSize, 0.0F, minZ + cell * segment};
+                            b = {minX + pageSize, 0.0F, minZ + cell * (segment + 1U)};
+                            break;
+                        case StitchEdge::Top:
+                            a = {minX + cell * segment, 0.0F, minZ + pageSize};
+                            b = {minX + cell * (segment + 1U), 0.0F, minZ + pageSize};
+                            break;
+                        case StitchEdge::Left:
+                            a = {minX, 0.0F, minZ + cell * segment};
+                            b = {minX, 0.0F, minZ + cell * (segment + 1U)};
+                            break;
+                    }
+                    stitchMidpoints[segment] = static_cast<std::uint32_t>(mesh.vertices.size());
+                    const Vec3 midpoint = (a + b) * 0.5F;
+                    WaterSystem::addWaterVertex(mesh, midpoint, {0.5F, 0.5F},
+                        samplingCellSize(midpoint, outer, cell, level));
+                }
+            }
+
+            for (std::uint32_t z = 0; z < WaterPageCells; ++z)
+                for (std::uint32_t x = 0; x < WaterPageCells; ++x) {
+                    const std::uint32_t a = vertexIndex(x, z);
+                    const std::uint32_t b = vertexIndex(x + 1U, z);
+                    const std::uint32_t c = vertexIndex(x + 1U, z + 1U);
+                    const std::uint32_t d = vertexIndex(x, z + 1U);
+                    const bool onStitchedEdge = stitchedEdge.has_value() &&
+                        ((*stitchedEdge == StitchEdge::Bottom && z == 0U) ||
+                         (*stitchedEdge == StitchEdge::Right && x + 1U == WaterPageCells) ||
+                         (*stitchedEdge == StitchEdge::Top && z + 1U == WaterPageCells) ||
+                         (*stitchedEdge == StitchEdge::Left && x == 0U));
+                    if (onStitchedEdge) {
+                        const std::uint32_t segment = *stitchedEdge == StitchEdge::Bottom ||
+                                                      *stitchedEdge == StitchEdge::Top ? x : z;
+                        addStitchedCellIndices(mesh, a, b, c, d, stitchMidpoints[segment], *stitchedEdge);
+                    } else {
+                        mesh.indices.insert(mesh.indices.end(), {a, b, c, a, c, d});
+                    }
+                }
+            // This survives the geometry-heap upload as a logical page range.
+            // The first GPU page culling pass consumes these ranges directly
+            // instead of recreating or scanning the clipmap mesh on the CPU.
+            mesh.drawRanges.push_back({
+                .firstIndex = firstIndex,
+                .indexCount = static_cast<std::uint32_t>(mesh.indices.size()) - firstIndex,
+                // Gerstner displacement is added as a conservative material
+                // bound by the page-culling extraction step. Keeping the base
+                // footprint here means the mesh remains independent of a
+                // particular water material or time sample.
+                .localBounds = {.min = {minX, 0.0F, minZ},
+                                .max = {minX + pageSize, 0.0F, minZ + pageSize}},
+            });
         }
     } // namespace
 
@@ -85,37 +186,10 @@ namespace Engine {
     Mesh WaterSystem::buildOceanClipmap() {
         Mesh mesh;
         for (std::uint32_t level = 0; level < std::size(ClipmapExtents); ++level) {
-            const float outer = ClipmapExtents[level];
-            const float inner = level == 0 ? 0.0F : ClipmapExtents[level - 1U];
-            const float cell = (2.0F * outer) / static_cast<float>(ClipmapResolution);
-            for (std::uint32_t z = 0; z < ClipmapResolution; ++z)
-                for (std::uint32_t x = 0; x < ClipmapResolution; ++x) {
-                    const float minX = -outer + cell * static_cast<float>(x);
-                    const float minZ = -outer + cell * static_cast<float>(z);
-                    const float maxX = minX + cell;
-                    const float maxZ = minZ + cell;
-                    // The hole is selected from cell bounds, never its centre.  The
-                    // power-of-two extents make this exact: level N's hole is the
-                    // outer square of level N - 1, so there can be neither overlap
-                    // nor a gap at the ring boundary.
-                    if (level != 0 && minX >= -inner && maxX <= inner &&
-                        minZ >= -inner && maxZ <= inner)
-                        continue;
-                    const Vec3 a{minX, 0.0F, minZ}, b{maxX, 0.0F, minZ};
-                    const Vec3 c{maxX, 0.0F, maxZ}, d{minX, 0.0F, maxZ};
-                    // Split each coarse cell touching the hole at the fine-level
-                    // boundary vertex.  This is true index stitching, not a
-                    // centre-based approximation or a decorative skirt.
-                    if (level != 0 && std::abs(minZ - inner) < 1.0e-4F)
-                        addStitchedQuad(mesh, a, b, c, d, StitchEdge::Bottom, outer, cell, level);
-                    else if (level != 0 && std::abs(maxX + inner) < 1.0e-4F)
-                        addStitchedQuad(mesh, a, b, c, d, StitchEdge::Right, outer, cell, level);
-                    else if (level != 0 && std::abs(maxZ + inner) < 1.0e-4F)
-                        addStitchedQuad(mesh, a, b, c, d, StitchEdge::Top, outer, cell, level);
-                    else if (level != 0 && std::abs(minX - inner) < 1.0e-4F)
-                        addStitchedQuad(mesh, a, b, c, d, StitchEdge::Left, outer, cell, level);
-                    else
-                        addQuad(mesh, a, b, c, d, outer, cell, level);
+            for (std::uint32_t pageZ = 0; pageZ < WaterPagesPerAxis; ++pageZ)
+                for (std::uint32_t pageX = 0; pageX < WaterPagesPerAxis; ++pageX) {
+                    if (pageIsInactive(level, pageX, pageZ)) continue;
+                    addOceanPage(mesh, level, pageX, pageZ);
                 }
         }
         return mesh;

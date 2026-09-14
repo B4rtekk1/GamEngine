@@ -571,18 +571,24 @@
                         return shaderSlot;
                     };
                     const std::uint32_t shaderSlot = resolveShaderSlot();
+                    const bool virtualWaterPages = renderer.materialOverride &&
+                        renderer.material.shaderSource == MaterialShaderSource::BuiltIn &&
+                        renderer.material.shader == MaterialShader::Water && !mesh->drawRanges.empty();
+                    const auto appendRange = [&](const Mesh::DrawRange& drawRange, const AABB& rangeBounds,
+                                                 const bool forceDistinctBatch) {
                     const BatchKey batchKey{mesh, shaderSlot, usesFoliagePipeline,
                                             castShadow, renderer.cullingBatch};
-                    const auto [batchIt, inserted] = optimizationFeatures.instancedRendering
+                    const auto [batchIt, inserted] = !forceDistinctBatch && optimizationFeatures.instancedRendering
                         ? batchIndices.try_emplace(batchKey, instanceBatches.size())
                         : std::pair{batchIndices.end(), true};
-                    const std::size_t batchIndex = optimizationFeatures.instancedRendering
+                    const std::size_t batchIndex = !forceDistinctBatch && optimizationFeatures.instancedRendering
                         ? batchIt->second : instanceBatches.size();
+                    const AABB rangeWorldBounds = rangeBounds.transformed(worldModel(entity));
                     if (inserted) {
                         instanceBatches.push_back(InstanceBatch{
                             .mesh = mesh,
-                            .firstIndex = renderer.firstIndex,
-                            .indexCount = mesh->indexCount(),
+                            .firstIndex = renderer.firstIndex + drawRange.firstIndex,
+                            .indexCount = drawRange.indexCount,
                             .lod1IndexCount = 0,
                             .lod2IndexCount = 0,
                             .firstMeshlet = firstMeshlets.contains(mesh) ? firstMeshlets.at(mesh) : 0U,
@@ -594,31 +600,61 @@
                             // The foliage stream is drawn after opaque geometry. Route
                             // blend here until transparent draws have a sorted stream.
                             .twoSided = usesFoliagePipeline,
-                            .worldBounds = worldBounds,
+                            .worldBounds = rangeWorldBounds,
                         });
                         sceneGpu.batchRenderableIndices.emplace_back();
                     }
                     InstanceBatch& batch = instanceBatches[batchIndex];
                     if (batch.instanceCount == 0) {
-                        batch.worldBounds = worldBounds;
+                        batch.worldBounds = rangeWorldBounds;
                     } else {
                         batch.worldBounds.min = Vec3{
-                            std::min(batch.worldBounds.min.x(), worldBounds.min.x()),
-                            std::min(batch.worldBounds.min.y(), worldBounds.min.y()),
-                            std::min(batch.worldBounds.min.z(), worldBounds.min.z())};
+                            std::min(batch.worldBounds.min.x(), rangeWorldBounds.min.x()),
+                            std::min(batch.worldBounds.min.y(), rangeWorldBounds.min.y()),
+                            std::min(batch.worldBounds.min.z(), rangeWorldBounds.min.z())};
                         batch.worldBounds.max = Vec3{
-                            std::max(batch.worldBounds.max.x(), worldBounds.max.x()),
-                            std::max(batch.worldBounds.max.y(), worldBounds.max.y()),
-                            std::max(batch.worldBounds.max.z(), worldBounds.max.z())};
+                            std::max(batch.worldBounds.max.x(), rangeWorldBounds.max.x()),
+                            std::max(batch.worldBounds.max.y(), rangeWorldBounds.max.y()),
+                            std::max(batch.worldBounds.max.z(), rangeWorldBounds.max.z())};
                     }
                     ++batch.instanceCount;
-                    renderables.push_back({entity, localBounds, batchIndex,
+                    renderables.push_back({entity, rangeBounds, batchIndex,
                                            firstVertex, mesh->vertexCount()});
                     const std::size_t renderableIndex = renderables.size() - 1;
                     sceneGpu.batchRenderableIndices[batchIndex].push_back(renderableIndex);
-                    sceneGpu.renderableIndices[entity] = renderableIndex;
-                    sceneMinimum = glm::min(sceneMinimum, worldBounds.min.native());
-                    sceneMaximum = glm::max(sceneMaximum, worldBounds.max.native());
+                    sceneGpu.renderableIndices[entity].push_back(renderableIndex);
+                    sceneMinimum = glm::min(sceneMinimum, rangeWorldBounds.min.native());
+                    sceneMaximum = glm::max(sceneMaximum, rangeWorldBounds.max.native());
+                    };
+                    if (virtualWaterPages) {
+                        // The culler sees page-local AABBs, not a flat ocean
+                        // plane. Expand every page by the analytic Gerstner
+                        // envelope so frustum/Hi-Z rejection remains
+                        // conservative while the shader displaces vertices.
+                        float verticalBound = 0.0F;
+                        float horizontalBound = 0.0F;
+                        const auto& water = renderer.material.water;
+                        for (std::uint32_t waveIndex = 0;
+                             waveIndex < std::min(water.waveCount,
+                                                  static_cast<std::uint32_t>(water.waves.size())); ++waveIndex) {
+                            verticalBound += std::abs(water.waves[waveIndex].amplitude);
+                            horizontalBound += std::abs(water.waves[waveIndex].steepness *
+                                                        water.waves[waveIndex].amplitude);
+                        }
+                        for (const Mesh::DrawRange& drawRange : mesh->drawRanges) {
+                            AABB pageBounds = drawRange.localBounds;
+                            pageBounds.min.setX(pageBounds.min.x() - horizontalBound);
+                            pageBounds.min.setY(pageBounds.min.y() - verticalBound);
+                            pageBounds.min.setZ(pageBounds.min.z() - horizontalBound);
+                            pageBounds.max.setX(pageBounds.max.x() + horizontalBound);
+                            pageBounds.max.setY(pageBounds.max.y() + verticalBound);
+                            pageBounds.max.setZ(pageBounds.max.z() + horizontalBound);
+                            appendRange(drawRange, pageBounds, true);
+                        }
+                    } else {
+                        appendRange({.firstIndex = 0, .indexCount = mesh->indexCount(), .localBounds = localBounds},
+                                    localBounds, false);
+                    }
                 });
 
             // Painted grass stays compact in the ECS and is expanded into
@@ -1565,7 +1601,8 @@
 
                     for (const Entity entity : entities) {
                         const auto it = sceneGpu.renderableIndices.find(entity);
-                        if (it != sceneGpu.renderableIndices.end()) addIndex(it->second, kind);
+                        if (it != sceneGpu.renderableIndices.end())
+                            for (const std::size_t index : it->second) addIndex(index, kind);
                     }
                 };
                 addChangedEntities(

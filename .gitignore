@@ -49,3 +49,5 @@ DEMO/Library
 !DEMO/Assets/Scenes/**
 !DEMO/Assets/BRDF/
 !DEMO/Assets/BRDF/**
+virtual_water_architektura.md
+virtual_water_implementacja.md

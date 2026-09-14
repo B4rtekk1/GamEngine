@@ -63,7 +63,9 @@ namespace Engine {
         std::vector<RenderableRecord> renderables;
         std::vector<InstanceBatch> instanceBatches;
         std::vector<std::vector<std::size_t> > batchRenderableIndices;
-        std::unordered_map<Entity, std::size_t> renderableIndices;
+        // A normal entity has one record. Virtual-water meshes expand into
+        // independently culled page records which all retain the same owner.
+        std::unordered_map<Entity, std::vector<std::size_t>> renderableIndices;
         std::vector<RendererInstanceData> instanceModels;
         std::vector<RendererPreviousTransformData> previousInstanceTransforms;
         // Dedicated source data for the next grass draw path. These records

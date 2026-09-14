@@ -4,6 +4,7 @@
 #include "Engine/Renderer/Geometry/Meshlet.h"
 #include "Engine/Renderer/Materials/PBRMaterial.h"
 #include "Engine/Assets/AssetTypes.h"
+#include "Engine/Math/AABB.h"
 
 #include <cstdint>
 #include <filesystem>
@@ -27,6 +28,21 @@ namespace Engine {
      */
     class Mesh final {
     public:
+        /**
+         * An independently drawable contiguous range in the index stream.
+         *
+         * Procedural systems use this to retain their logical work units after
+         * geometry has been packed into the shared renderer heap.  Ordinary
+         * imported meshes leave the list empty and retain their single-draw
+         * behaviour.
+         */
+        struct DrawRange final {
+            std::uint32_t firstIndex{};
+            std::uint32_t indexCount{};
+            /// Local-space bounds of only this range, not the whole mesh.
+            AABB localBounds{};
+        };
+
         /**
          * @brief Stores one embedded RGBA image associated with the mesh.
          *
@@ -57,6 +73,9 @@ namespace Engine {
 
         /** @brief Index array used for indexed rendering. */
         std::vector<uint32_t> indices;
+
+        /** Optional logical sub-draws, expressed in @ref indices coordinates. */
+        std::vector<DrawRange> drawRanges;
 
         /** Fine-grained geometry used by the GPU-driven mesh-shader path. */
         std::vector<Meshlet> meshlets;

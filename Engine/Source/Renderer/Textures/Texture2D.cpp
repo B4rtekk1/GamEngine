@@ -26,22 +26,24 @@ namespace Engine {
             throw std::invalid_argument("Unknown cooked texture format");
         }
 
-        void copy_pixels_in_chunks(UploadContext& upload, VkImage image, const std::uint32_t width,
+        void copy_pixels_in_chunks(UploadContext &upload, VkImage image, const std::uint32_t width,
                                    const std::uint32_t height, const std::size_t bytesPerPixel,
                                    const std::span<const std::uint8_t> pixels) {
             const auto pixelsPerChunk = std::max<VkDeviceSize>(1, upload.capacity() / bytesPerPixel);
             for (std::uint32_t y = 0; y < height;) {
                 const auto chunkWidth = static_cast<std::uint32_t>(std::min<VkDeviceSize>(width, pixelsPerChunk));
-                const auto chunkHeight = static_cast<std::uint32_t>(std::min<VkDeviceSize>(height - y, pixelsPerChunk / chunkWidth));
+                const auto chunkHeight = static_cast<std::uint32_t>(std::min<VkDeviceSize>(
+                    height - y, pixelsPerChunk / chunkWidth));
                 for (std::uint32_t x = 0; x < width; x += chunkWidth) {
                     const auto actualWidth = std::min(chunkWidth, width - x);
                     const std::size_t chunkBytes = static_cast<std::size_t>(actualWidth) * chunkHeight * bytesPerPixel;
                     const auto slice = upload.allocate(chunkBytes, 16);
-                    auto* destination = static_cast<std::uint8_t*>(slice.mapped);
+                    auto *destination = static_cast<std::uint8_t *>(slice.mapped);
                     for (std::uint32_t row = 0; row < chunkHeight; ++row) {
                         const auto sourceOffset = (static_cast<std::size_t>(y + row) * width + x) * bytesPerPixel;
                         std::memcpy(destination + static_cast<std::size_t>(row) * actualWidth * bytesPerPixel,
-                                    pixels.data() + sourceOffset, static_cast<std::size_t>(actualWidth) * bytesPerPixel);
+                                    pixels.data() + sourceOffset,
+                                    static_cast<std::size_t>(actualWidth) * bytesPerPixel);
                     }
                     VkBufferImageCopy copy{};
                     copy.bufferOffset = slice.offset;
@@ -58,45 +60,58 @@ namespace Engine {
         }
 
         [[nodiscard]] std::uint32_t bytes_per_block(const Assets::TextureFormat format) {
-            if (format == Assets::TextureFormat::RGBA8_SRGB || format == Assets::TextureFormat::RGBA8_UNORM) return 4;
+            if (format == Assets::TextureFormat::RGBA8_SRGB || format == Assets::TextureFormat::RGBA8_UNORM) { return 4;
+}
             return format == Assets::TextureFormat::BC4_UNORM ? 8 : 16;
         }
 
         [[nodiscard]] std::uint32_t block_extent(const Assets::TextureFormat format) {
-            return (format == Assets::TextureFormat::RGBA8_SRGB || format == Assets::TextureFormat::RGBA8_UNORM) ? 1 : 4;
+            return (format == Assets::TextureFormat::RGBA8_SRGB || format == Assets::TextureFormat::RGBA8_UNORM)
+                       ? 1
+                       : 4;
         }
 
-        void copy_cooked_in_chunks(UploadContext& upload, VkImage image, const Assets::CookedTexture& texture) {
+        void copy_cooked_in_chunks(UploadContext &upload, VkImage image, const Assets::CookedTexture &texture) {
             const auto bytesPerBlock = bytes_per_block(texture.format);
             const auto blockExtent = block_extent(texture.format);
             const auto blocksPerChunk = std::max<VkDeviceSize>(1, upload.capacity() / bytesPerBlock);
             for (std::uint32_t level = 0; level < texture.mips.size(); ++level) {
-                const auto& mip = texture.mips[level];
+                const auto &mip = texture.mips[level];
                 const auto blocksWide = (mip.width + blockExtent - 1) / blockExtent;
                 const auto blocksHigh = (mip.height + blockExtent - 1) / blockExtent;
-                const auto chunkBlocksWide = static_cast<std::uint32_t>(std::min<VkDeviceSize>(blocksWide, blocksPerChunk));
-                const auto chunkBlockRows = static_cast<std::uint32_t>(std::max<VkDeviceSize>(1, blocksPerChunk / chunkBlocksWide));
-                const auto* source = texture.data.data() + static_cast<std::size_t>(mip.offset);
+                const auto chunkBlocksWide = static_cast<std::uint32_t>(std::min<VkDeviceSize>(
+                    blocksWide, blocksPerChunk));
+                const auto chunkBlockRows = static_cast<std::uint32_t>(std::max<VkDeviceSize>(
+                    1, blocksPerChunk / chunkBlocksWide));
+                const auto *source = texture.data.data() + static_cast<std::size_t>(mip.offset);
                 for (std::uint32_t blockY = 0; blockY < blocksHigh; blockY += chunkBlockRows) {
                     const auto actualBlockRows = std::min(chunkBlockRows, blocksHigh - blockY);
                     for (std::uint32_t blockX = 0; blockX < blocksWide; blockX += chunkBlocksWide) {
                         const auto actualBlocksWide = std::min(chunkBlocksWide, blocksWide - blockX);
-                        const std::size_t chunkBytes = static_cast<std::size_t>(actualBlocksWide) * actualBlockRows * bytesPerBlock;
+                        const std::size_t chunkBytes =
+                                static_cast<std::size_t>(actualBlocksWide) * actualBlockRows * bytesPerBlock;
                         const auto slice = upload.allocate(chunkBytes, 16);
-                        auto* destination = static_cast<std::uint8_t*>(slice.mapped);
+                        auto *destination = static_cast<std::uint8_t *>(slice.mapped);
                         for (std::uint32_t row = 0; row < actualBlockRows; ++row) {
-                            const auto sourceOffset = (static_cast<std::size_t>(blockY + row) * blocksWide + blockX) * bytesPerBlock;
-                            std::memcpy(destination + static_cast<std::size_t>(row) * actualBlocksWide * bytesPerBlock,
-                                        source + sourceOffset, static_cast<std::size_t>(actualBlocksWide) * bytesPerBlock);
+                            const auto sourceOffset =
+                                    ((static_cast<std::size_t>(blockY + row) * blocksWide) + blockX) * bytesPerBlock;
+                            std::memcpy(destination + (static_cast<std::size_t>(row) * actualBlocksWide * bytesPerBlock),
+                                        source + sourceOffset,
+                                        static_cast<std::size_t>(actualBlocksWide) * bytesPerBlock);
                         }
                         VkBufferImageCopy copy{};
                         copy.bufferOffset = slice.offset;
                         copy.bufferRowLength = actualBlocksWide * blockExtent;
                         copy.bufferImageHeight = actualBlockRows * blockExtent;
                         copy.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, level, 0, 1};
-                        copy.imageOffset = {static_cast<std::int32_t>(blockX * blockExtent), static_cast<std::int32_t>(blockY * blockExtent), 0};
-                        copy.imageExtent = {std::min(actualBlocksWide * blockExtent, mip.width - blockX * blockExtent),
-                                            std::min(actualBlockRows * blockExtent, mip.height - blockY * blockExtent), 1};
+                        copy.imageOffset = {
+                            static_cast<std::int32_t>(blockX * blockExtent),
+                            static_cast<std::int32_t>(blockY * blockExtent), 0
+                        };
+                        copy.imageExtent = {
+                            std::min(actualBlocksWide * blockExtent, mip.width - blockX * blockExtent),
+                            std::min(actualBlockRows * blockExtent, mip.height - blockY * blockExtent), 1,
+                        };
                         vkCmdCopyBufferToImage(upload.commandBuffer(), slice.buffer, image,
                                                VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &copy);
                     }
@@ -104,22 +119,26 @@ namespace Engine {
             }
         }
 
-        void copy_gtex_mips_to_ring(UploadContext& upload, VkImage image, const Assets::GtexTexture& texture,
+        void copy_gtex_mips_to_ring(UploadContext &upload, VkImage image, const Assets::GtexTexture &texture,
                                     const std::uint32_t firstMip) {
             const auto bytesPerBlock = bytes_per_block(texture.format);
             const auto blockExtent = block_extent(texture.format);
             for (std::uint32_t sourceLevel = firstMip; sourceLevel < texture.mips.size(); ++sourceLevel) {
-                const auto& mip = texture.mips[sourceLevel];
+                const auto &mip = texture.mips[sourceLevel];
                 const auto blocksWide = (mip.width + blockExtent - 1) / blockExtent;
                 const auto blocksHigh = (mip.height + blockExtent - 1) / blockExtent;
                 const auto rowBytes = static_cast<VkDeviceSize>(blocksWide) * bytesPerBlock;
                 const auto rowsPerSlice = std::max<VkDeviceSize>(1, upload.capacity() / rowBytes);
                 for (std::uint32_t blockY = 0; blockY < blocksHigh;) {
-                    const auto rows = static_cast<std::uint32_t>(std::min<VkDeviceSize>(rowsPerSlice, blocksHigh - blockY));
+                    const auto rows = static_cast<std::uint32_t>(std::min<VkDeviceSize>(
+                        rowsPerSlice, blocksHigh - blockY));
                     const auto bytes = rowBytes * rows;
                     const auto slice = upload.allocate(bytes, 16);
-                    auto destination = std::span<std::uint8_t>{static_cast<std::uint8_t*>(slice.mapped), static_cast<std::size_t>(bytes)};
-                    if (!Assets::readMipRange(texture, sourceLevel, static_cast<std::uint64_t>(blockY) * rowBytes, destination))
+                    auto destination = std::span<std::uint8_t>{
+                        static_cast<std::uint8_t *>(slice.mapped), static_cast<std::size_t>(bytes)
+                    };
+                    if (!Assets::readMipRange(texture, sourceLevel, static_cast<std::uint64_t>(blockY) * rowBytes,
+                                              destination))
                         throw std::runtime_error("Could not read GTEX mip payload into upload ring");
                     VkBufferImageCopy copy{};
                     copy.bufferOffset = slice.offset;
@@ -167,7 +186,7 @@ namespace Engine {
         *this = std::move(other);
     }
 
-Texture2D &Texture2D::operator=(Texture2D &&other) noexcept {
+    Texture2D &Texture2D::operator=(Texture2D &&other) noexcept {
         if (this == &other) { return *this; }
 
         destroy();
@@ -243,17 +262,19 @@ Texture2D &Texture2D::operator=(Texture2D &&other) noexcept {
         mipLevels_ = mipLevels;
 
         Buffer staging;
-        UploadContext* upload = UploadContext::current();
+        UploadContext *upload = UploadContext::current();
         VkBuffer stagingBuffer = VK_NULL_HANDLE;
         VkDeviceSize stagingOffset = 0;
         VkCommandBuffer commandBuffer = VK_NULL_HANDLE;
-            const bool ownsUploadBatch = upload != nullptr && !upload->recording();
-            try {
-                if (upload != nullptr) {
-                    if (ownsUploadBatch) upload->begin();
-                    commandBuffer = upload->commandBuffer();
+        const bool ownsUploadBatch = upload != nullptr && !upload->recording();
+        try {
+            if (upload != nullptr) {
+                if (ownsUploadBatch) { upload->begin();
+}
+                commandBuffer = upload->commandBuffer();
             } else {
-                staging.createHostVisible(physicalDevice, device_, static_cast<VkDeviceSize>(expectedSize), VK_BUFFER_USAGE_TRANSFER_SRC_BIT, allocator);
+                staging.createHostVisible(physicalDevice, device_, static_cast<VkDeviceSize>(expectedSize),
+                                          VK_BUFFER_USAGE_TRANSFER_SRC_BIT, allocator);
                 staging.update(rgbaPixels.data(), static_cast<VkDeviceSize>(expectedSize));
                 stagingBuffer = staging.handle();
             }
@@ -293,10 +314,18 @@ Texture2D &Texture2D::operator=(Texture2D &&other) noexcept {
             memory_ = allocationDetails.deviceMemory;
 
             if (upload == nullptr) {
-                VkCommandBufferAllocateInfo commandAllocation{VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO}; commandAllocation.commandPool = commandPool; commandAllocation.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY; commandAllocation.commandBufferCount = 1;
-                if (vkAllocateCommandBuffers(device_, &commandAllocation, &commandBuffer) != VK_SUCCESS) throw std::runtime_error("Could not allocate Texture2D upload command buffer");
-                VkCommandBufferBeginInfo beginInfo{VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO}; beginInfo.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
-                if (vkBeginCommandBuffer(commandBuffer, &beginInfo) != VK_SUCCESS) throw std::runtime_error("Could not begin Texture2D upload command buffer");
+                VkCommandBufferAllocateInfo commandAllocation{VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO};
+                commandAllocation.commandPool = commandPool;
+                commandAllocation.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+                commandAllocation.commandBufferCount = 1;
+                if (vkAllocateCommandBuffers(device_, &commandAllocation, &commandBuffer) != VK_SUCCESS) { throw
+                        std::runtime_error("Could not allocate Texture2D upload command buffer");
+}
+                VkCommandBufferBeginInfo beginInfo{VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
+                beginInfo.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+                if (vkBeginCommandBuffer(commandBuffer, &beginInfo) != VK_SUCCESS) { throw std::runtime_error(
+                    "Could not begin Texture2D upload command buffer");
+}
             }
 
             transitionImage(
@@ -330,10 +359,10 @@ Texture2D &Texture2D::operator=(Texture2D &&other) noexcept {
                 const std::int32_t nextWidth = std::max(mipWidth / 2, 1);
                 const std::int32_t nextHeight = std::max(mipHeight / 2, 1);
                 VkImageBlit blit{};
-                blit.srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, level - 1, 0, 1};
-                blit.srcOffsets[1] = {mipWidth, mipHeight, 1};
-                blit.dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, level, 0, 1};
-                blit.dstOffsets[1] = {nextWidth, nextHeight, 1};
+                blit.srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, level - 1, 0, 1,};
+                blit.srcOffsets[1] = {mipWidth, mipHeight, 1,};
+                blit.dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, level, 0, 1,};
+                blit.dstOffsets[1] = {nextWidth, nextHeight, 1,};
                 vkCmdBlitImage(
                     commandBuffer,
                     image_, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
@@ -359,8 +388,7 @@ Texture2D &Texture2D::operator=(Texture2D &&other) noexcept {
                 readyTimeline_ = upload->pendingTicket().timelineValue;
                 if (ownsUploadBatch) readyTimeline_ = upload->submit().timelineValue;
                 commandBuffer = VK_NULL_HANDLE;
-            }
-            else {
+            } else {
                 if (vkEndCommandBuffer(commandBuffer) != VK_SUCCESS) {
                     throw std::runtime_error("Could not end Texture2D upload command buffer");
                 }
@@ -417,9 +445,11 @@ Texture2D &Texture2D::operator=(Texture2D &&other) noexcept {
 
     void Texture2D::createCooked(
         const VkPhysicalDevice physicalDevice, const VkDevice device, const VkCommandPool commandPool,
-        const VkQueue queue, const Assets::CookedTexture& texture, const VmaAllocator allocator) {
-        if (physicalDevice == VK_NULL_HANDLE || device == VK_NULL_HANDLE || commandPool == VK_NULL_HANDLE || queue == VK_NULL_HANDLE ||
-            allocator == VK_NULL_HANDLE) throw std::invalid_argument("Texture2D requires valid Vulkan handles and VMA allocator");
+        const VkQueue queue, const Assets::CookedTexture &texture, const VmaAllocator allocator) {
+        if (physicalDevice == VK_NULL_HANDLE || device == VK_NULL_HANDLE || commandPool == VK_NULL_HANDLE || queue ==
+            VK_NULL_HANDLE ||
+            allocator == VK_NULL_HANDLE)
+            throw std::invalid_argument("Texture2D requires valid Vulkan handles and VMA allocator");
         if (!Assets::valid_cooked_texture(texture)) throw std::invalid_argument("Cooked texture has invalid mip data");
 
         destroy();
@@ -431,17 +461,18 @@ Texture2D &Texture2D::operator=(Texture2D &&other) noexcept {
         mipLevels_ = static_cast<std::uint32_t>(texture.mips.size());
 
         Buffer staging;
-        UploadContext* upload = UploadContext::current();
+        UploadContext *upload = UploadContext::current();
         VkBuffer stagingBuffer = VK_NULL_HANDLE;
         VkDeviceSize stagingOffset = 0;
         VkCommandBuffer commandBuffer = VK_NULL_HANDLE;
-            const bool ownsUploadBatch = upload != nullptr && !upload->recording();
-            try {
-                if (upload != nullptr) {
-                    if (ownsUploadBatch) upload->begin();
-                    commandBuffer = upload->commandBuffer();
+        const bool ownsUploadBatch = upload != nullptr && !upload->recording();
+        try {
+            if (upload != nullptr) {
+                if (ownsUploadBatch) upload->begin();
+                commandBuffer = upload->commandBuffer();
             } else {
-                staging.createHostVisible(physicalDevice, device_, static_cast<VkDeviceSize>(texture.data.size()), VK_BUFFER_USAGE_TRANSFER_SRC_BIT, allocator_);
+                staging.createHostVisible(physicalDevice, device_, static_cast<VkDeviceSize>(texture.data.size()),
+                                          VK_BUFFER_USAGE_TRANSFER_SRC_BIT, allocator_);
                 staging.update(texture.data.data(), static_cast<VkDeviceSize>(texture.data.size()));
                 stagingBuffer = staging.handle();
             }
@@ -474,7 +505,9 @@ Texture2D &Texture2D::operator=(Texture2D &&other) noexcept {
 
             if (upload == nullptr) {
                 VkCommandBufferAllocateInfo commandAllocation{VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO};
-                commandAllocation.commandPool = commandPool; commandAllocation.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY; commandAllocation.commandBufferCount = 1;
+                commandAllocation.commandPool = commandPool;
+                commandAllocation.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+                commandAllocation.commandBufferCount = 1;
                 VkCommandBufferBeginInfo beginInfo{VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
                 beginInfo.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
                 if (vkAllocateCommandBuffers(device_, &commandAllocation, &commandBuffer) != VK_SUCCESS ||
@@ -482,8 +515,10 @@ Texture2D &Texture2D::operator=(Texture2D &&other) noexcept {
                     throw std::runtime_error("Could not begin cooked Texture2D upload command buffer");
             }
 
-            transitionImage(commandBuffer, image_, 0, mipLevels_, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-                            0, VK_ACCESS_TRANSFER_WRITE_BIT, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT);
+            transitionImage(commandBuffer, image_, 0, mipLevels_, VK_IMAGE_LAYOUT_UNDEFINED,
+                            VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                            0, VK_ACCESS_TRANSFER_WRITE_BIT, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+                            VK_PIPELINE_STAGE_TRANSFER_BIT);
             if (upload != nullptr) {
                 copy_cooked_in_chunks(*upload, image_, texture);
                 commandBuffer = upload->graphicsCommandBuffer();
@@ -491,7 +526,7 @@ Texture2D &Texture2D::operator=(Texture2D &&other) noexcept {
                 std::vector<VkBufferImageCopy> regions;
                 regions.reserve(texture.mips.size());
                 for (std::uint32_t level = 0; level < mipLevels_; ++level) {
-                    const auto& mip = texture.mips[level];
+                    const auto &mip = texture.mips[level];
                     VkBufferImageCopy copy{};
                     copy.bufferOffset = stagingOffset + mip.offset;
                     copy.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, level, 0, 1};
@@ -501,15 +536,20 @@ Texture2D &Texture2D::operator=(Texture2D &&other) noexcept {
                 vkCmdCopyBufferToImage(commandBuffer, stagingBuffer, image_, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
                                        static_cast<std::uint32_t>(regions.size()), regions.data());
             }
-            transitionImage(commandBuffer, image_, 0, mipLevels_, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-                            VK_ACCESS_TRANSFER_WRITE_BIT, VK_ACCESS_SHADER_READ_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT);
+            transitionImage(commandBuffer, image_, 0, mipLevels_, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                            VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                            VK_ACCESS_TRANSFER_WRITE_BIT, VK_ACCESS_SHADER_READ_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                            VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT);
             if (upload != nullptr) {
                 readyTimeline_ = upload->pendingTicket().timelineValue;
                 if (ownsUploadBatch) readyTimeline_ = upload->submit().timelineValue;
                 commandBuffer = VK_NULL_HANDLE;
             } else {
-                if (vkEndCommandBuffer(commandBuffer) != VK_SUCCESS) throw std::runtime_error("Could not end cooked Texture2D upload command buffer");
-                VkSubmitInfo submit{VK_STRUCTURE_TYPE_SUBMIT_INFO}; submit.commandBufferCount = 1; submit.pCommandBuffers = &commandBuffer;
+                if (vkEndCommandBuffer(commandBuffer) != VK_SUCCESS) throw std::runtime_error(
+                    "Could not end cooked Texture2D upload command buffer");
+                VkSubmitInfo submit{VK_STRUCTURE_TYPE_SUBMIT_INFO};
+                submit.commandBufferCount = 1;
+                submit.pCommandBuffers = &commandBuffer;
                 VkFenceCreateInfo fenceInfo{VK_STRUCTURE_TYPE_FENCE_CREATE_INFO};
                 VkFence uploadFence = VK_NULL_HANDLE;
                 if (vkCreateFence(device_, &fenceInfo, nullptr, &uploadFence) != VK_SUCCESS) {
@@ -525,16 +565,25 @@ Texture2D &Texture2D::operator=(Texture2D &&other) noexcept {
                 commandBuffer = VK_NULL_HANDLE;
             }
             VkImageViewCreateInfo view{VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
-            view.image = image_; view.viewType = VK_IMAGE_VIEW_TYPE_2D; view.format = format_;
+            view.image = image_;
+            view.viewType = VK_IMAGE_VIEW_TYPE_2D;
+            view.format = format_;
             view.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, mipLevels_, 0, 1};
-            if (vkCreateImageView(device_, &view, nullptr, &imageView_) != VK_SUCCESS) throw std::runtime_error("Could not create cooked Texture2D image view");
+            if (vkCreateImageView(device_, &view, nullptr, &imageView_) != VK_SUCCESS) throw std::runtime_error(
+                "Could not create cooked Texture2D image view");
             VkSamplerCreateInfo samplerInfo{VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO};
-            samplerInfo.magFilter = VK_FILTER_LINEAR; samplerInfo.minFilter = VK_FILTER_LINEAR; samplerInfo.mipmapMode = VK_SAMPLER_MIPMAP_MODE_LINEAR;
-            samplerInfo.addressModeU = VK_SAMPLER_ADDRESS_MODE_REPEAT; samplerInfo.addressModeV = VK_SAMPLER_ADDRESS_MODE_REPEAT; samplerInfo.addressModeW = VK_SAMPLER_ADDRESS_MODE_REPEAT;
+            samplerInfo.magFilter = VK_FILTER_LINEAR;
+            samplerInfo.minFilter = VK_FILTER_LINEAR;
+            samplerInfo.mipmapMode = VK_SAMPLER_MIPMAP_MODE_LINEAR;
+            samplerInfo.addressModeU = VK_SAMPLER_ADDRESS_MODE_REPEAT;
+            samplerInfo.addressModeV = VK_SAMPLER_ADDRESS_MODE_REPEAT;
+            samplerInfo.addressModeW = VK_SAMPLER_ADDRESS_MODE_REPEAT;
             samplerInfo.maxLod = static_cast<float>(mipLevels_ - 1);
-            if (vkCreateSampler(device_, &samplerInfo, nullptr, &sampler_) != VK_SUCCESS) throw std::runtime_error("Could not create cooked Texture2D sampler");
+            if (vkCreateSampler(device_, &samplerInfo, nullptr, &sampler_) != VK_SUCCESS) throw std::runtime_error(
+                "Could not create cooked Texture2D sampler");
         } catch (...) {
-            if (commandBuffer != VK_NULL_HANDLE && upload == nullptr) vkFreeCommandBuffers(device_, commandPool, 1, &commandBuffer);
+            if (commandBuffer != VK_NULL_HANDLE && upload == nullptr) vkFreeCommandBuffers(
+                device_, commandPool, 1, &commandBuffer);
             destroy();
             throw;
         }
@@ -542,12 +591,13 @@ Texture2D &Texture2D::operator=(Texture2D &&other) noexcept {
 
     void Texture2D::createGtex(
         const VkPhysicalDevice physicalDevice, const VkDevice device, const VkCommandPool commandPool,
-        const VkQueue queue, const Assets::GtexTexture& texture, const std::uint32_t firstResidentMip,
+        const VkQueue queue, const Assets::GtexTexture &texture, const std::uint32_t firstResidentMip,
         const VmaAllocator allocator) {
-        if (physicalDevice == VK_NULL_HANDLE || device == VK_NULL_HANDLE || commandPool == VK_NULL_HANDLE || queue == VK_NULL_HANDLE ||
+        if (physicalDevice == VK_NULL_HANDLE || device == VK_NULL_HANDLE || commandPool == VK_NULL_HANDLE || queue ==
+            VK_NULL_HANDLE ||
             allocator == VK_NULL_HANDLE || firstResidentMip >= texture.mips.size())
             throw std::invalid_argument("Texture2D::createGtex received invalid arguments");
-        UploadContext* const upload = UploadContext::current();
+        UploadContext *const upload = UploadContext::current();
         if (upload == nullptr) throw std::logic_error("GTEX streaming requires an active UploadContext");
 
         destroy();
@@ -589,22 +639,29 @@ Texture2D &Texture2D::operator=(Texture2D &&other) noexcept {
                             VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 0, VK_ACCESS_TRANSFER_WRITE_BIT,
                             VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT);
             copy_gtex_mips_to_ring(*upload, image_, texture, firstResidentMip);
-            transitionImage(upload->graphicsCommandBuffer(), image_, 0, mipLevels_, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+            transitionImage(upload->graphicsCommandBuffer(), image_, 0, mipLevels_,
+                            VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
                             VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_ACCESS_TRANSFER_WRITE_BIT,
-                            VK_ACCESS_SHADER_READ_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT);
+                            VK_ACCESS_SHADER_READ_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                            VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT);
             readyTimeline_ = upload->pendingTicket().timelineValue;
             if (ownsUploadBatch) readyTimeline_ = upload->submit().timelineValue;
 
             VkImageViewCreateInfo view{VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
-            view.image = image_; view.viewType = VK_IMAGE_VIEW_TYPE_2D; view.format = format_;
+            view.image = image_;
+            view.viewType = VK_IMAGE_VIEW_TYPE_2D;
+            view.format = format_;
             view.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, mipLevels_, 0, 1};
             if (vkCreateImageView(device_, &view, nullptr, &imageView_) != VK_SUCCESS)
                 throw std::runtime_error("Could not create resident GTEX image view");
             VkSamplerCreateInfo samplerInfo{VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO};
-            samplerInfo.magFilter = VK_FILTER_LINEAR; samplerInfo.minFilter = VK_FILTER_LINEAR;
+            samplerInfo.magFilter = VK_FILTER_LINEAR;
+            samplerInfo.minFilter = VK_FILTER_LINEAR;
             samplerInfo.mipmapMode = VK_SAMPLER_MIPMAP_MODE_LINEAR;
-            samplerInfo.addressModeU = VK_SAMPLER_ADDRESS_MODE_REPEAT; samplerInfo.addressModeV = VK_SAMPLER_ADDRESS_MODE_REPEAT;
-            samplerInfo.addressModeW = VK_SAMPLER_ADDRESS_MODE_REPEAT; samplerInfo.maxLod = static_cast<float>(mipLevels_ - 1);
+            samplerInfo.addressModeU = VK_SAMPLER_ADDRESS_MODE_REPEAT;
+            samplerInfo.addressModeV = VK_SAMPLER_ADDRESS_MODE_REPEAT;
+            samplerInfo.addressModeW = VK_SAMPLER_ADDRESS_MODE_REPEAT;
+            samplerInfo.maxLod = static_cast<float>(mipLevels_ - 1);
             if (vkCreateSampler(device_, &samplerInfo, nullptr, &sampler_) != VK_SUCCESS)
                 throw std::runtime_error("Could not create resident GTEX sampler");
         } catch (...) {
@@ -615,7 +672,7 @@ Texture2D &Texture2D::operator=(Texture2D &&other) noexcept {
 
     void Texture2D::createFromAsset(
         const VkPhysicalDevice physicalDevice, const VkDevice device, const VkCommandPool commandPool,
-        const VkQueue queue, const Assets::TextureAsset& asset, const TextureColorSpace colorSpace,
+        const VkQueue queue, const Assets::TextureAsset &asset, const TextureColorSpace colorSpace,
         const VmaAllocator allocator) {
         if (asset.cooked) {
             createCooked(physicalDevice, device, commandPool, queue, *asset.cooked, allocator);
