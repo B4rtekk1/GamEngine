@@ -1,9 +1,10 @@
 // 8x8 output pixels cooperatively cache a 16x16 half-resolution depth tile.
 // Ultra quality traces eight directions, two sides and four steps: 64 horizon
 // samples per half-resolution pixel. The shared tile keeps those reads local.
-[[vk::binding(0,0)]] Sampler2D halfDepth;
+[[vk::binding(0,0)]] Sampler2D horizonDepth;
 [[vk::binding(1,0)]] RWTexture2D<float> rawAo;
 [[vk::binding(2,0)]] RWTexture2D<float4> guide;
+[[vk::binding(3,0)]] RWTexture2D<float> baseDepth;
 struct Settings { float2 projectionScale; float radiusView, falloff; uint frameIndex; float padding; uint directions, stepsPerDirection, sourceMip, maxSampleMip; };
 [[vk::push_constant]] ConstantBuffer<Settings> settings;
 groupshared float depthTile[16][16];
@@ -11,11 +12,12 @@ static const float BackgroundDepth=65500.0;
 static const float Pi=3.14159265359;
 float3 positionFromDepth(int2 pixel,float depth,uint2 size){float2 uv=(float2(pixel)+.5)/size;return float3((uv*2-1)/settings.projectionScale,-1)*depth;}
 float3 safeNormalize(float3 value){return value*rsqrt(max(dot(value,value),1e-12));}
-// Spatially coherent Hilbert indexing plus the R2 sequence provides a
-// low-discrepancy two-dimensional sample sequence without a noise texture.
+// XeGTAO uses a deliberately small 64x64 Hilbert pattern.  Keeping the index
+// below 4096 preserves every spatial bit when it is converted to float for
+// the R2 sequence; a full-screen Hilbert index loses low bits in FP32.
 uint hilbertIndex(uint2 pixel){
- uint x=pixel.x,y=pixel.y,index=0;
- for(uint scale=32768;scale>0;scale>>=1){
+ uint x=pixel.x&63u,y=pixel.y&63u,index=0;
+ for(uint scale=32;scale>0;scale>>=1){
   uint rx=(x&scale)!=0?1:0,ry=(y&scale)!=0?1:0;
   index+=scale*scale*((3*rx)^ry);
   if(ry==0){if(rx!=0){x=(scale*2-1)-x;y=(scale*2-1)-y;}uint swap=x;x=y;y=swap;}
@@ -24,7 +26,8 @@ uint hilbertIndex(uint2 pixel){
 }
 float2 lowDiscrepancyNoise(uint2 pixel,uint frame){
  const float2 r2=float2(0.754877666,0.569840296);
- return frac(float(hilbertIndex(pixel))*r2+(float(frame)+.5)*r2);
+ uint index=hilbertIndex(pixel)+288u*(frame%64u);
+ return frac(float(index)*r2);
 }
 // XeGTAO's slope-adjusted continuity test.  It rejects the neighbour on the
 // other side of a depth discontinuity without rejecting a continuous slope.
@@ -58,14 +61,15 @@ float integrateHorizon(float horizon,float normalAngle,float normalCos){return(n
 [numthreads(8,8,1)] [shader("compute")]
 void main(uint3 groupId:SV_GroupID,uint3 threadId:SV_GroupThreadID,uint3 id:SV_DispatchThreadID){
  uint w,h;rawAo.GetDimensions(w,h);int2 size=int2(w,h), base=int2(groupId.xy)*8-int2(4,4);
- for(uint y=threadId.y;y<16;y+=8) for(uint x=threadId.x;x<16;x+=8){int2 p=clamp(base+int2(x,y),int2(0,0),size-1);depthTile[y][x]=halfDepth.SampleLevel((float2(p)+.5)/float2(size),settings.sourceMip).r;}
+ for(uint y=threadId.y;y<16;y+=8) for(uint x=threadId.x;x<16;x+=8){int2 q=clamp(base+int2(x,y),int2(0,0),size-1),p=q<<settings.sourceMip;uint fullW,fullH;horizonDepth.GetDimensions(fullW,fullH);int2 fullSize=int2(fullW,fullH);float d0=horizonDepth.Load(int3(min(p,fullSize-1),0)).r,d1=d0,d2=d0,d3=d0;if(settings.sourceMip>0){d1=horizonDepth.Load(int3(min(p+int2(1,0),fullSize-1),0)).r;d2=horizonDepth.Load(int3(min(p+int2(0,1),fullSize-1),0)).r;d3=horizonDepth.Load(int3(min(p+int2(1,1),fullSize-1),0)).r;}depthTile[y][x]=min(min(d0,d1),min(d2,d3));}
  GroupMemoryBarrierWithGroupSync(); if(any(id.xy>=uint2(w,h)))return;
- int2 local=int2(threadId.xy)+4,p=int2(id.xy);float depth=depthTile[local.y][local.x];if(depth>=BackgroundDepth){rawAo[p]=1;guide[p]=float4(0,1,1,1);return;}
+ int2 local=int2(threadId.xy)+4,p=int2(id.xy);float depth=depthTile[local.y][local.x];baseDepth[p]=depth;if(depth>=BackgroundDepth){rawAo[p]=1;guide[p]=float4(0,1,1,1);return;}
  float3 center=positionFromDepth(p,depth,uint2(w,h));float left=depthTile[local.y][local.x-1],right=depthTile[local.y][local.x+1],top=depthTile[local.y-1][local.x],bottom=depthTile[local.y+1][local.x];float3 normal=reconstructNormal(p,depth,left,right,top,bottom,uint2(w,h));
  float2 localNoise=lowDiscrepancyNoise(uint2(p),settings.frameIndex);
  float visibility=0;
- // The tile covers nearby taps; projected-radius taps beyond its four-pixel
- // apron fall back to the source texture below.
+ // The shared tile is used only for the source mip.  Horizon samples may
+ // select a coarser mip based on their offset, so reading them from the tile
+ // would make their depth depend on the workgroup boundary.
  const uint directions=max(settings.directions,1u),steps=min(max(settings.stepsPerDirection,1u),4u);
  float3 viewDir=normalize(-center);
  float2 radiusPixels=.5*settings.radiusView*abs(settings.projectionScale)/max(depth,1e-4)*float2(w,h);
@@ -91,7 +95,9 @@ void main(uint3 groupId:SV_GroupID,uint3 threadId:SV_GroupThreadID,uint3 id:SV_D
    int2 offset=int2(round(ray*radiusPixels*(side==0?1.0:-1.0)*t));if(!any(offset))continue;
    int2 samplePixel=clamp(p+offset,int2(0,0),size-1),tilePixel=local+offset;
    float sampleMip=float(settings.sourceMip)+min(max(log2(max(length(float2(offset)),1.0))-3.30,0.0),float(settings.maxSampleMip));
-   float sample=all(tilePixel>=int2(0,0))&&all(tilePixel<int2(16,16))?depthTile[tilePixel.y][tilePixel.x]:halfDepth.SampleLevel((float2(samplePixel)+.5)/float2(size),sampleMip).r;
+   uint selectedMip=uint(round(sampleMip));
+   bool canUseShared=selectedMip==settings.sourceMip&&all(tilePixel>=int2(0,0))&&all(tilePixel<int2(16,16));
+   float sample=canUseShared?depthTile[tilePixel.y][tilePixel.x]:horizonDepth.SampleLevel((float2(samplePixel)+.5)/float2(size),sampleMip).r;
    if(sample>=BackgroundDepth)continue;
    float3 v=positionFromDepth(samplePixel,sample,uint2(w,h))-center;float dist2=dot(v,v);if(dist2<1e-6)continue;
    float sampleDistance=sqrt(dist2);

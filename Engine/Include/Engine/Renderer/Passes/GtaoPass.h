@@ -52,8 +52,11 @@ private:
     // frames.  This renderer has three frame slots.
     static constexpr std::uint32_t FramesInFlight = 3;
     HdrBuffer raw_;
-    // Oct-normal and a discontinuity mask guide the 5x5 denoiser. Depth is
-    // sampled directly from the dedicated R32F linear-depth hierarchy.
+    // Nearest-surface depth at the AO resolution.  It is distinct from the
+    // far-biased hierarchy, which is used only by horizon sampling.
+    HdrBuffer baseDepth_;
+    // Oct-normal and a discontinuity mask guide the 5x5 denoiser; its depth
+    // is the representative half-resolution baseDepth_ above.
     HdrBuffer auxiliary_;
     HdrBuffer filtered_;
     HdrBuffer full_;

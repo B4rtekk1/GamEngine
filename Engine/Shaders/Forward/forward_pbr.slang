@@ -473,12 +473,18 @@ ForwardFragmentOutput fragmentMain(ForwardFragmentInput input)
         ? gtaoVisibility.Sample(input.position.xy /
             float2(frame.clusteredViewportNearFar.x, frame.clusteredViewportNearFar.y)).r
         : 1.0;
-    // Keep the dynamic term conservative while GTAO is intentionally used
-    // only for diffuse contact occlusion. Specular AO is reintroduced after
-    // visual validation of the new horizon baseline.
-    const float gtao = lerp(1.0, dynamicAo, 0.65);
-    const float diffuseAO = min(ao, gtao);
-    const float specularOcclusion = 1.0;
+    // Material and screen-space visibility both describe indirect-light
+    // accessibility, so neither is allowed to brighten the other.  The
+    // GTAO visibility is used at full strength after its bilateral upsample.
+    const float indirectVisibility = min(ao, dynamicAo);
+    const float diffuseAO = indirectVisibility;
+    // Lagarde's visibility-based specular-occlusion approximation.  It
+    // suppresses sky/probe reflections in contact cavities without needing a
+    // bent normal; rough surfaces converge to the diffuse visibility while
+    // smooth ones retain the expected view-angle dependence.
+    const float specularOcclusion = saturate(
+        pow(saturate(nDotV) + indirectVisibility,
+            exp2(-16.0 * roughness - 1.0)) - 1.0 + indirectVisibility);
     float3 ambient = diffuseIbl * diffuseAO + specularIbl * specularOcclusion;
     float3 color = ambient + direct + emissive;
 #if MATERIAL_VARIANT == 1

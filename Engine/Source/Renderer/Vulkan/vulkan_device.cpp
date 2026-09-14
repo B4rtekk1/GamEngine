@@ -424,7 +424,7 @@ namespace Engine {
         features2.pNext = &features11;
 
         VkPhysicalDeviceMeshShaderFeaturesEXT enabledMeshFeatures{
-            .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MESH_SHADER_FEATURES_EXT
+            .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MESH_SHADER_FEATURES_EXT,
         };
         if (meshShaderSupported_) {
             VkPhysicalDeviceMeshShaderFeaturesEXT availableMeshFeatures{
