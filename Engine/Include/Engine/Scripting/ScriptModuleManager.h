@@ -36,8 +36,8 @@ namespace Engine {
         };
 
         [[nodiscard]] bool loadCandidate(const std::filesystem::path &path, LoadedModule &out);
-        [[nodiscard]] std::filesystem::path makeVersionedCopy(const std::filesystem::path &path,
-                                                              std::uint64_t generation) const;
+        [[nodiscard]] static std::filesystem::path makeVersionedCopy(const std::filesystem::path &path,
+                                                                     std::uint64_t generation);
         void destroyGeneration(Registry &scene, std::uint64_t generation) const;
 
         ScriptRegistry &registry_;

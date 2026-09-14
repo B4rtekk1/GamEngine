@@ -38,7 +38,7 @@ namespace Engine::UI {
             constexpr VkVertexInputBindingDescription binding{
                 0, sizeof(UIVertex), VK_VERTEX_INPUT_RATE_VERTEX,
             };
-            const std::array attributes{
+            constexpr std::array attributes{
                 VkVertexInputAttributeDescription{
                     0, 0, VK_FORMAT_R32G32_SFLOAT,
                     static_cast<std::uint32_t>(offsetof(UIVertex, position)),

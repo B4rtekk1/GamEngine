@@ -1,7 +1,10 @@
 #pragma once
 
+#include "Engine/Core/Diagnostics.h"
 #include "Engine/ECS/Registry.h"
 #include "Engine/Scripting/ScriptRegistry.h"
+
+#include <string>
 
 namespace Engine {
     class Scene;
@@ -20,6 +23,18 @@ namespace Engine {
     private:
         void updateOne(Registry &registry, Entity entity, ScriptComponent &component,
                        float deltaTime, Scene *scene) const;
+        [[nodiscard]] DiagnosticContext diagnosticContext(const Registry &registry, Entity entity,
+                                                          const ScriptComponent &component,
+                                                          std::string action) const;
+        static void reportOnce(ScriptComponent &component, std::string key, DiagnosticSeverity severity,
+                               std::string message, DiagnosticContext context);
+        void destroyRuntime(const Registry &registry, Entity entity, ScriptComponent &component) const;
+        void disableRuntime(const Registry &registry, Entity entity, ScriptComponent &component) const;
+        [[nodiscard]] bool createRuntime(Registry &registry, Entity entity, ScriptComponent &component,
+                                         Scene *scene) const;
+        [[nodiscard]] bool enableRuntime(const Registry &registry, Entity entity, ScriptComponent &component) const;
+        [[nodiscard]] bool updateRuntime(const Registry &registry, Entity entity, ScriptComponent &component,
+                                         float deltaTime) const;
 
         ScriptRegistry &scripts_;
     };
