@@ -151,20 +151,20 @@ namespace Engine {
         /** Creates a renderable actor from an already-loaded mesh. */
         [[nodiscard]] Actor createMesh(std::string name,
                                        std::shared_ptr<const Mesh> mesh,
-                                       PBRMaterial material = {});
+                                       const PBRMaterial &material = {});
 
         /** Loads a model through Content and creates an actor in one operation. */
         [[nodiscard]] Actor createModel(std::string name,
-                                        std::filesystem::path path,
+                                        const std::filesystem::path &path,
                                         const Assets::Content &content);
 
         /** Loads a model using the Content service attached to this scene. */
-        [[nodiscard]] Actor createModel(std::string name, std::filesystem::path path);
+        [[nodiscard]] Actor createModel(std::string name, const std::filesystem::path &path);
 
         /** Loads a model prefab and instantiates it in one operation. */
         [[nodiscard]] Actor createPrefab(std::string name,
                                          std::filesystem::path path,
-                                         PBRMaterial material = {});
+                                         const PBRMaterial &material = {});
 
         [[nodiscard]] Actor createCube(std::string name, const PBRMaterial &material = {});
 
@@ -512,7 +512,7 @@ namespace Engine {
         /** Engine-only mesh creation primitive for scene presets. */
         [[nodiscard]] GameObject &createMeshObject(std::string name,
                                                     std::shared_ptr<const Mesh> mesh,
-                                                    PBRMaterial material = {});
+                                                    const PBRMaterial &material = {});
 
         // Scene subclasses are engine-owned content layers. They may assemble
         // entities directly; application code uses Actor instead.

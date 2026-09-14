@@ -64,10 +64,6 @@ namespace Engine {
         constexpr float CapsuleObjectHeight = CapsuleHeight * 0.5F;
         constexpr int DefaultCullingBatch = 1;
 
-        constexpr float GroundColorRed = 0.24F;
-        constexpr float GroundColorGreen = 0.16F;
-        constexpr float GroundColorBlue = 0.08F;
-        constexpr float GroundRoughness = 0.9F;
         constexpr float SphereColorRed = 0.35F;
         constexpr float SphereColorGreen = 0.65F;
         constexpr float SphereColorBlue = 0.95F;
@@ -173,10 +169,10 @@ namespace Engine {
         }
         const Vec3 direction = Vec3{0, targetY, 0} - position;
         const Actor cameraActor = Scene::createCamera("Camera", CameraComponent{
-                                              .fieldOfView = CameraFieldOfView, .nearClip = CameraNearClip,
-                                              .farClip = CameraFarClip,
-                                              .aspectRatio = CameraViewportWidth / CameraViewportHeight,
-        });
+                                                          .fieldOfView = CameraFieldOfView, .nearClip = CameraNearClip,
+                                                          .farClip = CameraFarClip,
+                                                          .aspectRatio = CameraViewportWidth / CameraViewportHeight,
+                                                      });
         cameraActor.setPosition(position);
         if (type != SceneType::Empty) {
             cameraActor.setRotation({
@@ -242,7 +238,8 @@ namespace Engine {
         object.setPosition({0, CapsuleObjectHeight, 0});
         const Entity entity = object.entity();
         object.add<ColliderComponent>(ColliderComponent{
-            .shape = CapsuleCollider{.radius = CapsuleRadius, .height = CapsuleHeight}});
+            .shape = CapsuleCollider{.radius = CapsuleRadius, .height = CapsuleHeight},
+        });
         object.add<RigidbodyComponent>();
         editorCapsules.push_back(entity);
         return entity;
@@ -291,7 +288,7 @@ namespace Engine {
 
     Entity ScenePreset::createProceduralCloud() {
         ProceduralCloudComponent cloud;
-        auto& object = createMeshObject("Procedural Cloud",
+        auto &object = createMeshObject("Procedural Cloud",
                                         std::make_shared<Mesh>(ProceduralCloud::createMesh(cloud)),
                                         PBRMaterial{
                                             .baseColor = {0.94F, 0.96F, 1.0F},

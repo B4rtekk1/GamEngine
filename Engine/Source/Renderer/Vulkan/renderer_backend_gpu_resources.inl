@@ -1363,7 +1363,7 @@
             }
 
             constexpr std::array<float, 6> baseExtents{
-                12.0F, 24.0F, 36.0F, 72.0F, 108.0F, 216.0F};
+                6.0F, 12.0F, 24.0F, 48.0F, 96.0F, 192.0F};
             const float cameraSceneDistance = (cameraPosition - sceneCenter).length();
             const float farExtent = std::max(324.0F,
                 (cameraSceneDistance + sceneRadius) * 1.1F);

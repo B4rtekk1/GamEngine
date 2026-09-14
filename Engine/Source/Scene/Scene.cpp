@@ -18,17 +18,19 @@
 
 namespace Engine {
     namespace {
-        [[nodiscard]] bool isGltfPath(const std::filesystem::path& path) {
+        [[nodiscard]] bool isGltfPath(const std::filesystem::path &path) {
             std::string extension = path.extension().string();
-            std::transform(extension.begin(), extension.end(), extension.begin(),
-                           [](const unsigned char character) {
-                               return static_cast<char>(std::tolower(character));
-                           });
+            std::ranges::transform(extension, extension.begin(),
+                                   [](const unsigned char character) {
+                                       return static_cast<char>(std::tolower(character));
+                                   });
             return extension == ".gltf" || extension == ".glb";
         }
 
         [[nodiscard]] Transform localTransformFromMatrix(const glm::mat4 &matrix) {
-            glm::vec3 scale{}, translation{}, skew{};
+            glm::vec3 scale{};
+            glm::vec3 translation{};
+            glm::vec3 skew{};
             glm::quat rotation{};
             glm::vec4 perspective{};
             if (!glm::decompose(matrix, scale, rotation, translation, skew, perspective)) {
@@ -52,8 +54,12 @@ namespace Engine {
             primaryCameraStructuralRevision_ != structuralRevision) {
             primaryCamera_ = NullObjectId;
             registry_.view<CameraComponent>([&](const Entity entity, const CameraComponent &camera) {
-                if (primaryCamera_ != NullObjectId || !camera.primary) return;
-                if (const auto *object = findByEntity(entity)) primaryCamera_ = object->objectId();
+                if (primaryCamera_ != NullObjectId || !camera.primary) {
+                    return;
+                }
+                if (const auto *object = findByEntity(entity)) {
+                    primaryCamera_ = object->objectId();
+                }
             });
             primaryCameraComponentRevision_ = componentRevision;
             primaryCameraStructuralRevision_ = structuralRevision;
@@ -69,8 +75,12 @@ namespace Engine {
             directionalLight_ = NullObjectId;
             registry_.view<LightComponent>([&](const Entity entity, const LightComponent &light) {
                 if (directionalLight_ != NullObjectId || light.type != LightType::Directional ||
-                    !light.enabled || !light.mainLight) return;
-                if (const auto *object = findByEntity(entity)) directionalLight_ = object->objectId();
+                    !light.enabled || !light.mainLight) {
+                    return;
+                }
+                if (const auto *object = findByEntity(entity)) {
+                    directionalLight_ = object->objectId();
+                }
             });
             directionalLightComponentRevision_ = componentRevision;
             directionalLightStructuralRevision_ = structuralRevision;
@@ -80,7 +90,7 @@ namespace Engine {
 
     GameObject &Scene::createMeshObject(std::string name,
                                         std::shared_ptr<const Mesh> mesh,
-                                        PBRMaterial material) {
+                                        const PBRMaterial &material) {
         GameObject &object = create(std::move(name));
         object.setMesh(std::move(mesh));
         object.setMaterial(material);
@@ -88,7 +98,7 @@ namespace Engine {
     }
 
     Actor Scene::createMesh(std::string name, std::shared_ptr<const Mesh> mesh,
-                            PBRMaterial material) {
+                            const PBRMaterial &material) {
         auto &object = createMeshObject(std::move(name), std::move(mesh), material);
         return Actor{*this, object.objectId()};
     }
@@ -131,8 +141,10 @@ namespace Engine {
                 link.runtimeParent = parentEntity;
             });
         } else {
-            registry_.add<ParentComponent>(childEntity, ParentComponent{.parentUuid = parentUuid,
-                                                                          .runtimeParent = parentEntity});
+            registry_.add<ParentComponent>(childEntity, ParentComponent{
+                                               .parentUuid = parentUuid,
+                                               .runtimeParent = parentEntity,
+                                           });
         }
         if (mode == ParentMode::KeepWorld) {
             registry_.modify<Transform>(childEntity, [&](Transform &transform) {
@@ -167,9 +179,13 @@ namespace Engine {
     }
 
     Actor Scene::parentOf(const Actor &child) noexcept {
-        if (child.scene_ != this || !child.valid()) return {};
+        if (child.scene_ != this || !child.valid()) {
+            return {};
+        }
         const Entity childEntity = findEntity(child.objectId_);
-        if (!registry_.has<ParentComponent>(childEntity)) return {};
+        if (!registry_.has<ParentComponent>(childEntity)) {
+            return {};
+        }
         const Entity parentEntity = registry_.get<ParentComponent>(childEntity).runtimeParent;
         const auto it = objectByEntity_.find(parentEntity);
         return it == objectByEntity_.end() ? Actor{} : Actor{*this, it->second->objectId()};
@@ -177,13 +193,17 @@ namespace Engine {
 
     std::vector<Actor> Scene::childrenOf(const Actor &parent) {
         std::vector<Actor> result;
-        if (parent.scene_ != this || !parent.valid()) return result;
+        if (parent.scene_ != this || !parent.valid()) {
+            return result;
+        }
         const Entity parentEntity = findEntity(parent.objectId_);
         rebuildHierarchyIndex();
         const auto children = childrenByParent_.find(parentEntity);
-        if (children == childrenByParent_.end()) return result;
+        if (children == childrenByParent_.end()) {
+            return result;
+        }
         result.reserve(children->second.size());
-        for (const Entity childEntity : children->second) {
+        for (const Entity childEntity: children->second) {
             if (const auto object = objectByEntity_.find(childEntity); object != objectByEntity_.end()) {
                 result.push_back(Actor{*this, object->second->objectId()});
             }
@@ -191,27 +211,29 @@ namespace Engine {
         return result;
     }
 
-    Actor Scene::createModel(std::string name, std::filesystem::path path,
+    Actor Scene::createModel(std::string name, const std::filesystem::path& path,
                              const Assets::Content &content) {
         auto mesh = content.mesh(path);
         if (!mesh) {
             throw std::runtime_error("Could not load model for actor '" + name + "'");
         }
-        auto &object = createMeshObject(std::move(name), std::move(mesh));
-        Actor actor{*this, object.objectId()};
-        if (isGltfPath(path)) actor.addMeshCollider();
+        const auto &object = createMeshObject(std::move(name), std::move(mesh));
+        const Actor actor{*this, object.objectId()};
+        if (isGltfPath(path)) {
+            actor.addMeshCollider();
+        }
         return actor;
     }
 
-    Actor Scene::createModel(std::string name, std::filesystem::path path) {
+    Actor Scene::createModel(std::string name, const std::filesystem::path& path) {
         if (content_ == nullptr) {
             throw std::logic_error("Scene has no Content service attached");
         }
-        return createModel(std::move(name), std::move(path), *content_);
+        return createModel(std::move(name), path, *content_);
     }
 
     Actor Scene::createPrefab(std::string name, std::filesystem::path path,
-                              PBRMaterial material) {
+                              const PBRMaterial &material) {
         if (content_ == nullptr) {
             throw std::logic_error("Scene has no Content service attached");
         }
@@ -243,7 +265,7 @@ namespace Engine {
             .terrainLayered = true,
         };
         terrain.applyMaterialLayers(*mesh, material);
-        auto& object = createMeshObject(std::move(name), mesh, material);
+        auto &object = createMeshObject(std::move(name), mesh, material);
         object.addTerrain(std::move(terrain));
         object.addMeshCollider();
         return Actor{*this, object.objectId()};
@@ -283,10 +305,12 @@ namespace Engine {
         const std::uint64_t componentRevision = registry_.componentRevision<ParentComponent>();
         const std::uint64_t structuralRevision = registry_.structuralRevision();
         if (hierarchyComponentRevision_ == componentRevision &&
-            hierarchyStructuralRevision_ == structuralRevision) return;
+            hierarchyStructuralRevision_ == structuralRevision) {
+            return;
+        }
 
         childrenByParent_.clear();
-        registry_.view<ParentComponent>([this](const Entity child, const ParentComponent& link) {
+        registry_.view<ParentComponent>([this](const Entity child, const ParentComponent &link) {
             if (link.runtimeParent != NullEntity && objectByEntity_.contains(link.runtimeParent)) {
                 childrenByParent_[link.runtimeParent].push_back(child);
             }

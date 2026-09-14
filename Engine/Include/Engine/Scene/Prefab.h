@@ -14,10 +14,10 @@ namespace Engine {
     /** Immutable, reusable description of a renderable actor. */
     class Prefab final {
     public:
-        static Prefab model(Assets::Content &content, std::filesystem::path path,
-                            PBRMaterial material = {});
+        static Prefab model(const Assets::Content &content, std::filesystem::path path,
+                            const PBRMaterial &material = {});
 
-        static Prefab cube(PBRMaterial material = {});
+        static Prefab cube(const PBRMaterial &material = {});
 
         [[nodiscard]] const std::shared_ptr<const Mesh> &mesh() const noexcept { return mesh_; }
         [[nodiscard]] const PBRMaterial &material() const noexcept { return material_; }
