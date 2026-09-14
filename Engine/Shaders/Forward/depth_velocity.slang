@@ -18,6 +18,7 @@ import Common.SceneData;
 
 struct VertexInput {
     [[vk::location(0)]] float3 position : POSITION;
+    [[vk::location(3)]] float3 normal : NORMAL;
     [[vk::location(2)]] float2 texCoord : TEXCOORD0;
     [[vk::location(4)]] float2 texCoord1 : TEXCOORD1;
     [[vk::location(8)]] uint materialIndex : MATERIAL_INDEX;
@@ -27,6 +28,7 @@ struct VertexOutput {
     [[vk::location(0)]] float2 texCoord;
     [[vk::location(1)]] float2 texCoord1;
     [[vk::location(2)]] nointerpolation uint materialIndex;
+    [[vk::location(5)]] float3 viewNormal;
 #if DEPTH_OUTPUT_VELOCITY
     [[vk::location(3)]] noperspective float2 currentNdc;
     [[vk::location(4)]] float4 previousClip;
@@ -52,6 +54,8 @@ VertexOutput vertexMain(VertexInput input, uint instanceIndex : SV_InstanceID,
     output.texCoord = input.texCoord;
     output.texCoord1 = input.texCoord1;
     output.materialIndex = asuint(instance.positionMaterial.w) + input.materialIndex;
+    float3 worldNormal = normalize(mul(input.normal / instance.scaleBase.xyz, rotation(instance.rotation)));
+    output.viewNormal = normalize(mul(float4(worldNormal, 0.0), frame.view).xyz);
 #if DEPTH_OUTPUT_VELOCITY
     RendererPreviousTransformData previous = previousTransforms[visibleIndex];
     float3 previousWorld = mul(input.position * previous.previousScale.xyz, rotation(previous.previousRotation)) + previous.previousPosition.xyz;
@@ -78,12 +82,14 @@ void alphaTest(VertexOutput input) {
 }
 
 #if DEPTH_OUTPUT_VELOCITY
-struct FragmentOutput { [[vk::location(1)]] float2 velocity : SV_Target1; };
+float2 encodeOct(float3 n) { n /= max(abs(n.x) + abs(n.y) + abs(n.z), 1e-5); if(n.z < 0) n.xy = (1-abs(n.yx))*float2(n.x>=0?1:-1,n.y>=0?1:-1); return n.xy; }
+struct FragmentOutput { [[vk::location(1)]] float2 velocity : SV_Target1; [[vk::location(2)]] float2 viewNormal : SV_Target2; };
 [shader("fragment")]
 FragmentOutput fragmentMain(VertexOutput input) {
     alphaTest(input);
     FragmentOutput output;
     output.velocity = input.currentNdc - input.previousClip.xy / input.previousClip.w;
+    output.viewNormal = encodeOct(input.viewNormal);
     return output;
 }
 #else

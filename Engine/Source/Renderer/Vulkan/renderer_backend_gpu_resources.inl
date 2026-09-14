@@ -1159,27 +1159,32 @@
         void createFramebuffers() {
             const VkExtent2D extent = swapchain.extent();
             const bool taaEnabled = antialiasingLevel == AntialiasingLevel::TAA;
-            // Velocity is written and consumed only by TAA. GTAO substitutes
-            // its initialized AO image when temporal velocity is disabled.
-            if (taaEnabled) {
+            // The prepass writes velocity and view-normal MRTs at single sample.
+            // Velocity is retained even without TAA to keep attachment locations
+            // stable: view normals are fragment output location 2.
+            if (!msaa.enabled()) {
                 velocityBuffer.create(vulkanDevice.physical(), device, extent,
                                       vulkanDevice.allocator(), VK_FILTER_NEAREST,
                                       VK_FORMAT_R16G16_SFLOAT);
+                gtaoViewNormalBuffer.create(vulkanDevice.physical(), device, extent,
+                                            vulkanDevice.allocator(), VK_FILTER_NEAREST,
+                                            VK_FORMAT_R16G16_SNORM);
             }
             VkImageView msaaAttachments[] = {
                 msaa.colorImageView(), depthBuffer.imageView(), hdrBuffer.imageView(), hiZDepthBuffer.imageView()
             };
             VkImageView taaAttachments[] = {
-                hdrBuffer.imageView(), velocityBuffer.imageView(), depthBuffer.imageView()
+                hdrBuffer.imageView(), velocityBuffer.imageView(), gtaoViewNormalBuffer.imageView(), depthBuffer.imageView()
             };
+            VkImageView lightingTaaAttachments[] = {hdrBuffer.imageView(), velocityBuffer.imageView(), depthBuffer.imageView()};
             VkImageView directAttachments[] = {hdrBuffer.imageView(), depthBuffer.imageView()};
 
             VkFramebufferCreateInfo framebufferInfo{VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO};
             framebufferInfo.renderPass = forwardPass.renderPass();
-            framebufferInfo.attachmentCount = msaa.enabled() ? 4u : (taaEnabled ? 3u : 2u);
+            framebufferInfo.attachmentCount = msaa.enabled() ? 4u : 4u;
             framebufferInfo.pAttachments = msaa.enabled()
                 ? msaaAttachments
-                : (taaEnabled ? taaAttachments : directAttachments);
+                : taaAttachments;
             framebufferInfo.width = extent.width;
             framebufferInfo.height = extent.height;
             framebufferInfo.layers = 1;
@@ -1189,6 +1194,8 @@
                 throw std::runtime_error("Could not create HDR framebuffer");
             }
             framebufferInfo.renderPass = lightingForwardPass.renderPass();
+            framebufferInfo.attachmentCount = msaa.enabled() ? 4u : (taaEnabled ? 3u : 2u);
+            framebufferInfo.pAttachments = msaa.enabled() ? msaaAttachments : (taaEnabled ? lightingTaaAttachments : directAttachments);
             if (vkCreateFramebuffer(device, &framebufferInfo, nullptr,
                                     &lightingHdrFramebuffer) != VK_SUCCESS) {
                 vkDestroyFramebuffer(device, hdrFramebuffer, nullptr);
@@ -1208,6 +1215,7 @@
 
         void destroyVelocityResources() noexcept {
             velocityBuffer.destroy();
+            gtaoViewNormalBuffer.destroy();
         }
 
         void createSceneViewportResources() {

@@ -24,8 +24,11 @@ namespace Engine {
         VkFormat colorFormat = VK_FORMAT_UNDEFINED;
         /// Optional second color attachment used by MRT pipelines.
         VkFormat additionalColorFormat = VK_FORMAT_UNDEFINED;
+        /// Optional third color attachment (used by the depth prepass view normals).
+        VkFormat thirdColorFormat = VK_FORMAT_UNDEFINED;
         /// Load operation for the optional MRT attachment.
         VkAttachmentLoadOp additionalColorLoadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+        VkAttachmentLoadOp thirdColorLoadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
         /// Existing render pass to use instead of creating one.
         VkRenderPass existingRenderPass = VK_NULL_HANDLE;
         /// Depth attachment format, or VK_FORMAT_UNDEFINED when unused.
@@ -73,6 +76,8 @@ namespace Engine {
                                                          static_cast<VkColorComponentFlags>(VK_COLOR_COMPONENT_G_BIT) |
                                                          static_cast<VkColorComponentFlags>(VK_COLOR_COMPONENT_B_BIT) |
                                                          static_cast<VkColorComponentFlags>(VK_COLOR_COMPONENT_A_BIT);
+        VkColorComponentFlags thirdColorWriteMask = static_cast<VkColorComponentFlags>(VK_COLOR_COMPONENT_R_BIT) |
+                                                     static_cast<VkColorComponentFlags>(VK_COLOR_COMPONENT_G_BIT);
         /// Enables writing depth values.
         VkBool32 depthWriteEnable = VK_TRUE;
         /// Enables depth testing.

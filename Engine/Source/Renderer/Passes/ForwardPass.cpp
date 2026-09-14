@@ -19,12 +19,14 @@ void ForwardPass::create(VkDevice device, const VkFormat colorFormat,
                          Assets::AssetManager& assets,
                          const VkImageLayout colorInitialLayout,
                          const bool colorInitialLayoutExternallySynchronized,
-                         const VkFormat velocityFormat, const bool preserveDepth, const bool depthOnly) {
+                         const VkFormat velocityFormat, const VkFormat viewNormalFormat, const bool preserveDepth, const bool depthOnly) {
     reportedMissingShaderGraphSlots_.clear();
     hasVelocityAttachment_ = velocityFormat != VK_FORMAT_UNDEFINED;
+    hasViewNormalAttachment_ = viewNormalFormat != VK_FORMAT_UNDEFINED;
     GraphicsPipelineOptions options{};
     options.colorFormat = colorFormat;
     options.additionalColorFormat = velocityFormat;
+    options.thirdColorFormat = viewNormalFormat;
     options.depthFormat = depthFormat;
     options.samples = samples;
     options.depthResolveFormat = depthResolveFormat;
@@ -38,6 +40,8 @@ void ForwardPass::create(VkDevice device, const VkFormat colorFormat,
         options.colorWriteMask = 0;
         options.additionalColorWriteMask = VK_COLOR_COMPONENT_R_BIT |
                                            VK_COLOR_COMPONENT_G_BIT;
+        options.thirdColorWriteMask = VK_COLOR_COMPONENT_R_BIT |
+                                      VK_COLOR_COMPONENT_G_BIT;
     }
     if (preserveDepth) {
         options.depthLoadOp = VK_ATTACHMENT_LOAD_OP_LOAD;
@@ -144,6 +148,7 @@ void ForwardPass::create(VkDevice device, const VkFormat colorFormat,
 void ForwardPass::destroy() noexcept {
     reportedMissingShaderGraphSlots_.clear();
     hasVelocityAttachment_ = false;
+    hasViewNormalAttachment_ = false;
     shaderGraphPipelines_.destroy();
     outlinePipeline_.destroy();
     foliagePipeline_.destroy();
@@ -212,11 +217,13 @@ void ForwardPass::begin(VkCommandBuffer commandBuffer,
     passInfo.renderPass = materialPipelines_[0].renderPass();
     passInfo.framebuffer = framebuffer;
     passInfo.renderArea.extent = extent;
-    VkClearValue clearValues[3]{};
+    VkClearValue clearValues[4]{};
     clearValues[0].color = {{0.02F, 0.02F, 0.05F, 1.0F}};
     clearValues[1].color = {{0.0F, 0.0F, 0.0F, 0.0F}};
-    clearValues[hasVelocityAttachment_ ? 2 : 1].depthStencil = {1.0F, 0};
-    passInfo.clearValueCount = hasVelocityAttachment_ ? 3U : 2U;
+    const uint32_t colorAttachmentCount = 1U + (hasVelocityAttachment_ ? 1U : 0U) +
+                                          (hasViewNormalAttachment_ ? 1U : 0U);
+    clearValues[colorAttachmentCount].depthStencil = {1.0F, 0};
+    passInfo.clearValueCount = colorAttachmentCount + 1U;
     passInfo.pClearValues = clearValues;
     vkCmdBeginRenderPass(commandBuffer, &passInfo, VK_SUBPASS_CONTENTS_INLINE);
 

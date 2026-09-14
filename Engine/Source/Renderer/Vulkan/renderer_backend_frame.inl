@@ -959,7 +959,9 @@
             // AO shimmer.
             gtaoPass.record(commandBuffer, currentFrame,
                             taaResolveActive ? static_cast<std::uint32_t>(submittedFrameValue) : 0U,
-                            gtaoDepth.imageView(), gtaoDepth.sampler(), inverseProjection);
+                            gtaoDepth.imageView(), gtaoDepth.sampler(),
+                            msaa.enabled() ? gtaoDepth.imageView() : gtaoViewNormalBuffer.imageView(),
+                            msaa.enabled() ? gtaoDepth.sampler() : gtaoViewNormalBuffer.sampler(), !msaa.enabled(), inverseProjection);
 
             gpuTimestampProfiler.beginZone(commandBuffer, currentFrame, forwardProfileName);
             gpuTimestampProfiler.beginZone(commandBuffer, currentFrame, shadowProjectionProfileName);

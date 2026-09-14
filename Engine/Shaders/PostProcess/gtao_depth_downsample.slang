@@ -10,9 +10,12 @@ struct Settings { float effectRadius, effectFalloffRange; };
 float depthMipFilter(float d0, float d1, float d2, float d3) {
     float maxDepth = max(max(d0, d1), max(d2, d3));
     const float depthRangeScaleFactor = 0.75;
-    float effectRadius = depthRangeScaleFactor * settings.effectRadius;
-    float falloffRange = settings.effectFalloffRange * effectRadius;
-    float falloffFrom = effectRadius * (1.0 - settings.effectFalloffRange);
+    // Keep the hierarchy filter in lockstep with the XeGTAO main-pass
+    // defaults (radius 0.5 * 1.457, falloff range 0.615).
+    float effectRadius = depthRangeScaleFactor * settings.effectRadius * 0.5 * 1.457;
+    const float effectFalloffRange = 0.615;
+    float falloffRange = effectFalloffRange * effectRadius;
+    float falloffFrom = effectRadius * (1.0 - effectFalloffRange);
     float falloffMul = -1.0 / falloffRange;
     float falloffAdd = falloffFrom / falloffRange + 1.0;
     float w0 = saturate((maxDepth - d0) * falloffMul + falloffAdd);

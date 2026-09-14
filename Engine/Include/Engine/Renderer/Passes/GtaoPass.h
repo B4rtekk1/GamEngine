@@ -36,7 +36,8 @@ public:
     // GTAO deliberately has no history here: TAA is its temporal accumulator.
     void record(VkCommandBuffer commandBuffer, std::uint32_t frameSlot,
                 std::uint32_t sampleIndex, VkImageView depthView,
-                VkSampler depthSampler, const Mat4& inverseProjection);
+                VkSampler depthSampler, VkImageView viewNormal,
+                VkSampler viewNormalSampler, bool useExternalNormals, const Mat4& inverseProjection);
     [[nodiscard]] VkImageView resultView() const noexcept { return full_.imageView(); }
     [[nodiscard]] VkSampler resultSampler() const noexcept { return full_.sampler(); }
 

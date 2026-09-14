@@ -481,16 +481,16 @@
                                msaa.enabled() ? vulkanDevice.depthResolveMode() : VK_RESOLVE_MODE_NONE,
                                shadowPass.descriptorSetLayout(), assetManager,
                                VK_IMAGE_LAYOUT_UNDEFINED, false,
-                               antialiasingLevel == AntialiasingLevel::TAA
-                                   ? VK_FORMAT_R16G16_SFLOAT : VK_FORMAT_UNDEFINED, false, true);
+                               !msaa.enabled() ? VK_FORMAT_R16G16_SFLOAT : VK_FORMAT_UNDEFINED,
+                               !msaa.enabled() ? VK_FORMAT_R16G16_SNORM : VK_FORMAT_UNDEFINED, false, true);
             lightingForwardPass.create(device, HdrBuffer::Format, depthBuffer.format(),
                                msaa.sampleCount(),
                                msaa.enabled() ? hiZDepthBuffer.format() : VK_FORMAT_UNDEFINED,
                                msaa.enabled() ? vulkanDevice.depthResolveMode() : VK_RESOLVE_MODE_NONE,
                                shadowPass.descriptorSetLayout(), assetManager,
                                VK_IMAGE_LAYOUT_UNDEFINED, false,
-                               antialiasingLevel == AntialiasingLevel::TAA
-                               ? VK_FORMAT_R16G16_SFLOAT : VK_FORMAT_UNDEFINED, true);
+                               antialiasingLevel == AntialiasingLevel::TAA ? VK_FORMAT_R16G16_SFLOAT : VK_FORMAT_UNDEFINED,
+                               VK_FORMAT_UNDEFINED, true);
             waterPass.create(device, HdrBuffer::Format, depthBuffer.format(), msaa.sampleCount(),
                              msaa.enabled() ? hiZDepthBuffer.format() : VK_FORMAT_UNDEFINED,
                              msaa.enabled() ? vulkanDevice.depthResolveMode() : VK_RESOLVE_MODE_NONE,
@@ -509,7 +509,7 @@
                 VK_SAMPLE_COUNT_1_BIT, VK_FORMAT_UNDEFINED, VK_RESOLVE_MODE_NONE,
                 sceneDescriptorPass.descriptorSetLayout(), assetManager,
                 VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, true,
-                VK_FORMAT_UNDEFINED, false);
+                VK_FORMAT_UNDEFINED, VK_FORMAT_UNDEFINED, false);
         }
 
         void createParticleResources() {

@@ -36,6 +36,8 @@
         HdrBuffer opaqueSceneColor;
         bool opaqueSceneColorInitialized{false};
         HdrBuffer velocityBuffer;
+        // Octahedrally encoded view-space normals written by the opaque depth prepass.
+        HdrBuffer gtaoViewNormalBuffer;
         GpuTimestampProfiler gpuTimestampProfiler;
         // Retained across frames: reset() clears declarations, while the graph
         // keeps its compiled topology cache.

@@ -29,6 +29,7 @@ namespace Engine {
                     VkImageLayout colorInitialLayout = VK_IMAGE_LAYOUT_UNDEFINED,
                     bool colorInitialLayoutExternallySynchronized = false,
                     VkFormat velocityFormat = VK_FORMAT_UNDEFINED,
+                    VkFormat viewNormalFormat = VK_FORMAT_UNDEFINED,
                     bool preserveDepth = false, bool depthOnly = false);
 
         void destroy() noexcept;
@@ -79,6 +80,7 @@ namespace Engine {
         ShaderGraphPipelineCache shaderGraphPipelines_;
         GraphicsPipelineOptions shaderGraphPipelineOptions_{};
         bool hasVelocityAttachment_ = false;
+        bool hasViewNormalAttachment_ = false;
         // Avoid flooding the editor console when a stale GPU batch references
         // a missing graph pipeline for multiple frames.
         mutable std::unordered_set<std::uint32_t> reportedMissingShaderGraphSlots_;

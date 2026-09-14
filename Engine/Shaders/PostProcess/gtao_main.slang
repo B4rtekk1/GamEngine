@@ -2,9 +2,10 @@
 // Ultra quality traces eight directions, two sides and four steps: 64 horizon
 // samples per half-resolution pixel. The shared tile keeps those reads local.
 [[vk::binding(0,0)]] Sampler2D horizonDepth;
-[[vk::binding(1,0)]] RWTexture2D<float> rawAo;
-[[vk::binding(2,0)]] RWTexture2D<float4> guide;
-[[vk::binding(3,0)]] RWTexture2D<float> baseDepth;
+[[vk::binding(1,0)]] Sampler2D viewNormalTexture;
+[[vk::binding(2,0)]] RWTexture2D<float> rawAo;
+[[vk::binding(3,0)]] RWTexture2D<float4> guide;
+[[vk::binding(4,0)]] RWTexture2D<float> baseDepth;
 struct Settings { float2 projectionScale; float radiusView, falloff; uint frameIndex; float padding; uint directions, stepsPerDirection, sourceMip, maxSampleMip; };
 [[vk::push_constant]] ConstantBuffer<Settings> settings;
 groupshared float depthTile[16][16];
@@ -27,7 +28,7 @@ uint hilbertIndex(uint2 pixel){
 float2 lowDiscrepancyNoise(uint2 pixel,uint frame){
  const float2 r2=float2(0.754877666,0.569840296);
  uint index=hilbertIndex(pixel)+288u*(frame%64u);
- return frac(float(index)*r2);
+ return frac(float(index)*r2+.5);
 }
 // XeGTAO's slope-adjusted continuity test.  It rejects the neighbour on the
 // other side of a depth discontinuity without rejecting a continuous slope.
@@ -56,15 +57,21 @@ float3 reconstructNormal(int2 pixel,float center,float left,float right,float to
  return normal;
 }
 float2 encodeOct(float3 n){n/=max(abs(n.x)+abs(n.y)+abs(n.z),1e-5);if(n.z<0)n.xy=(1-abs(n.yx))*float2(n.x>=0?1:-1,n.y>=0?1:-1);return n.xy*.5+.5;}
+float3 decodeOct(float2 e){float3 n=float3(e,1-abs(e.x)-abs(e.y));if(n.z<0)n.xy=(1-abs(n.yx))*float2(n.x>=0?1:-1,n.y>=0?1:-1);return safeNormalize(n);}
 // Integral of the projected cosine over one unoccluded horizon arc.
 float integrateHorizon(float horizon,float normalAngle,float normalCos){return(normalCos+2*horizon*sin(normalAngle)-cos(2*horizon-normalAngle))*.25;}
 [numthreads(8,8,1)] [shader("compute")]
 void main(uint3 groupId:SV_GroupID,uint3 threadId:SV_GroupThreadID,uint3 id:SV_DispatchThreadID){
  uint w,h;rawAo.GetDimensions(w,h);int2 size=int2(w,h), base=int2(groupId.xy)*8-int2(4,4);
- for(uint y=threadId.y;y<16;y+=8) for(uint x=threadId.x;x<16;x+=8){int2 q=clamp(base+int2(x,y),int2(0,0),size-1),p=q<<settings.sourceMip;uint fullW,fullH;horizonDepth.GetDimensions(fullW,fullH);int2 fullSize=int2(fullW,fullH);float d0=horizonDepth.Load(int3(min(p,fullSize-1),0)).r,d1=d0,d2=d0,d3=d0;if(settings.sourceMip>0){d1=horizonDepth.Load(int3(min(p+int2(1,0),fullSize-1),0)).r;d2=horizonDepth.Load(int3(min(p+int2(0,1),fullSize-1),0)).r;d3=horizonDepth.Load(int3(min(p+int2(1,1),fullSize-1),0)).r;}depthTile[y][x]=min(min(d0,d1),min(d2,d3));}
+ // Cache the exact selected-mip value that a non-shared horizon sample would
+ // read.  The depth pyramid's filter is deliberately not min(2x2), so
+ // rebuilding it here would make AO depend on workgroup boundaries.
+ for(uint y=threadId.y;y<16;y+=8) for(uint x=threadId.x;x<16;x+=8){int2 q=clamp(base+int2(x,y),int2(0,0),size-1);float2 uv=(float2(q)+.5)/float2(size);depthTile[y][x]=horizonDepth.SampleLevel(uv,float(settings.sourceMip)).r;}
  GroupMemoryBarrierWithGroupSync(); if(any(id.xy>=uint2(w,h)))return;
  int2 local=int2(threadId.xy)+4,p=int2(id.xy);float depth=depthTile[local.y][local.x];baseDepth[p]=depth;if(depth>=BackgroundDepth){rawAo[p]=1;guide[p]=float4(0,1,1,1);return;}
- float3 center=positionFromDepth(p,depth,uint2(w,h));float left=depthTile[local.y][local.x-1],right=depthTile[local.y][local.x+1],top=depthTile[local.y-1][local.x],bottom=depthTile[local.y+1][local.x];float3 normal=reconstructNormal(p,depth,left,right,top,bottom,uint2(w,h));
+ // Keep edge detection on the original depth, but move the AO center a tiny
+ // amount toward the camera to prevent FP32 depth quantization self-occlusion.
+ float centerDepth=depth*.99999;float3 center=positionFromDepth(p,centerDepth,uint2(w,h));float left=depthTile[local.y][local.x-1],right=depthTile[local.y][local.x+1],top=depthTile[local.y-1][local.x],bottom=depthTile[local.y+1][local.x];float3 normal=settings.padding>0.5?decodeOct(viewNormalTexture.Load(int3(p,0)).xy):reconstructNormal(p,depth,left,right,top,bottom,uint2(w,h));
  float2 localNoise=lowDiscrepancyNoise(uint2(p),settings.frameIndex);
  float visibility=0;
  // The shared tile is used only for the source mip.  Horizon samples may
@@ -72,7 +79,16 @@ void main(uint3 groupId:SV_GroupID,uint3 threadId:SV_GroupThreadID,uint3 id:SV_D
  // would make their depth depend on the workgroup boundary.
  const uint directions=max(settings.directions,1u),steps=min(max(settings.stepsPerDirection,1u),4u);
  float3 viewDir=normalize(-center);
- float2 radiusPixels=.5*settings.radiusView*abs(settings.projectionScale)/max(depth,1e-4)*float2(w,h);
+ // Intel's defaults are EffectRadius 0.5 multiplied by RadiusMultiplier
+ // 1.457, and EffectFalloffRange 0.615.
+ const float effectRadius=settings.radiusView*.5*1.457;
+ const float effectFalloffRange=.615;
+ float2 radiusPixels=.5*effectRadius*abs(settings.projectionScale)/max(centerDepth,1e-4)*float2(w,h);
+ // XeGTAO's linear falloff band starts at 38.5% of the effect radius rather
+ // than applying a quadratic attenuation across the entire horizon ray.
+ const float falloffRange=max(effectFalloffRange*effectRadius,1e-6);
+ const float falloffMul=-1.0/falloffRange;
+ const float falloffAdd=effectRadius*(1.0-effectFalloffRange)/falloffRange+1.0;
  const float minSampleDistance=1.3/max(max(radiusPixels.x,radiusPixels.y),1e-4);
  for(uint d=0;d<directions;++d){
   // Jitter slices and radial locations independently.  The squared
@@ -92,17 +108,21 @@ void main(uint3 groupId:SV_GroupID,uint3 threadId:SV_GroupThreadID,uint3 id:SV_D
   for(uint side=0;side<2;++side)for(uint step=0;step<steps;++step){
    float stepNoise=frac(localNoise.y+float(d+step*steps)*.61803398875);
    float t=pow((float(step)+stepNoise)/float(steps),2)+minSampleDistance;
-   int2 offset=int2(round(ray*radiusPixels*(side==0?1.0:-1.0)*t));if(!any(offset))continue;
+   float2 floatOffset=ray*radiusPixels*(side==0?1.0:-1.0)*t;
+   float offsetLength=length(floatOffset);
+   float sampleMip=float(settings.sourceMip)+min(max(log2(max(offsetLength,1.0))-3.30,0.0),float(settings.maxSampleMip));
+   int2 offset=int2(round(floatOffset));if(!any(offset))continue;
    int2 samplePixel=clamp(p+offset,int2(0,0),size-1),tilePixel=local+offset;
-   float sampleMip=float(settings.sourceMip)+min(max(log2(max(length(float2(offset)),1.0))-3.30,0.0),float(settings.maxSampleMip));
    uint selectedMip=uint(round(sampleMip));
    bool canUseShared=selectedMip==settings.sourceMip&&all(tilePixel>=int2(0,0))&&all(tilePixel<int2(16,16));
    float sample=canUseShared?depthTile[tilePixel.y][tilePixel.x]:horizonDepth.SampleLevel((float2(samplePixel)+.5)/float2(size),sampleMip).r;
    if(sample>=BackgroundDepth)continue;
    float3 v=positionFromDepth(samplePixel,sample,uint2(w,h))-center;float dist2=dot(v,v);if(dist2<1e-6)continue;
    float sampleDistance=sqrt(dist2);
-   float sampleHorizonCos=dot(v/sampleDistance,viewDir);float attenuation=saturate(1-dist2/(settings.radiusView*settings.radiusView));
-   horizonCos[side]=max(horizonCos[side],lerp(lowHorizon[side],sampleHorizonCos,attenuation));
+   float sampleHorizonCos=dot(v/sampleDistance,viewDir);
+   float weight=saturate(sampleDistance*falloffMul+falloffAdd);
+   sampleHorizonCos=lerp(lowHorizon[side],sampleHorizonCos,weight);
+   horizonCos[side]=max(horizonCos[side],sampleHorizonCos);
   }
   float h0=-acos(clamp(horizonCos[1],-1.0,1.0));float h1=acos(clamp(horizonCos[0],-1.0,1.0));
   h0=normalAngle+clamp(h0-normalAngle,-Pi*.5,Pi*.5);h1=normalAngle+clamp(h1-normalAngle,-Pi*.5,Pi*.5);
@@ -113,5 +133,5 @@ void main(uint3 groupId:SV_GroupID,uint3 threadId:SV_GroupThreadID,uint3 id:SV_D
  float4 localEdges=depthEdges(depth,left,right,top,bottom);
  float4 packedEdges=round(saturate(localEdges)*2.9);
  float edgePayload=dot(packedEdges,float4(64.0/255.0,16.0/255.0,4.0/255.0,1.0/255.0));
- rawAo[p]=saturate(visibility/float(directions));guide[p]=float4(encodeOct(normal),edgePayload,0);
+ rawAo[p]=pow(saturate(visibility/float(directions)),2.2);guide[p]=float4(encodeOct(normal),edgePayload,0);
 }
