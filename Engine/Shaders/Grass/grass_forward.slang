@@ -11,6 +11,7 @@ import Grass.GrassDeformation;
 
 [[vk::binding(0, 0)]] Sampler2DShadow shadowMap;
 [[vk::binding(9, 0)]] Sampler2D shadowDepthMap;
+[[vk::binding(17, 0)]] Sampler2DShadow linearShadowMap;
 [[vk::binding(1, 0)]] ConstantBuffer<RendererFrameData> frame;
 [[vk::binding(2, 0)]] StructuredBuffer<MaterialData> materials;
 [[vk::binding(13, 0)]] Sampler2D materialTextures[];
@@ -104,9 +105,9 @@ GrassFragmentOutput fragmentMain(FragmentInput input)
     float3 normal = normalize(input.isFrontFace ? input.normal : -input.normal);
     float3 lightDirection = normalize(-frame.lightDirectionIntensity.xyz);
     float diffuse = saturate(dot(normal, lightDirection) * 0.5 + 0.5);
-    ShadowSampleDebug shadowDebug = {0.0, 0.0, 0u, uint2(0, 0)};
+    ShadowSampleDebug shadowDebug = {0.0, 0.0, 0u, 0u, uint2(0, 0)};
     float shadow = frame.shadowEnabled != 0 ? sampleVirtualShadow(
-        shadowMap, shadowDepthMap, input.worldPosition, normal, lightDirection, frame.shadowClipMatrices, shadowPageTable,
+        shadowMap, linearShadowMap, shadowDepthMap, input.worldPosition, normal, lightDirection, frame.shadowClipMatrices, shadowPageTable,
         frame.shadowQuality, uint2(input.position.xy), frame.temporalSampleIndex,
         frame.temporalShadowJitter != 0, shadowDebug) : 0.0;
     GrassFragmentOutput output;

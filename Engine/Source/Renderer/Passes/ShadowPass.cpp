@@ -112,7 +112,7 @@ void ShadowPass::create(VkPhysicalDevice physicalDevice, VkDevice device,
         }
 
         // This is a compact list, not an array indexed by binding number.
-        VkDescriptorSetLayoutBinding bindings[19]{};
+        VkDescriptorSetLayoutBinding bindings[18]{};
         bindings[0] = {0, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1,
                        VK_SHADER_STAGE_FRAGMENT_BIT, nullptr};
         bindings[1] = {1, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1,
@@ -151,9 +151,11 @@ void ShadowPass::create(VkPhysicalDevice physicalDevice, VkDevice device,
                         VK_SHADER_STAGE_FRAGMENT_BIT, nullptr};
         bindings[16] = {16, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1,
                         VK_SHADER_STAGE_FRAGMENT_BIT, nullptr}; // full-res GTAO visibility
+        bindings[17] = {17, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1,
+                        VK_SHADER_STAGE_FRAGMENT_BIT, nullptr}; // linear VSM comparison
         const VkDescriptorSetLayoutCreateInfo layoutInfo{
             VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO, nullptr, 0,
-            17, bindings};
+            static_cast<std::uint32_t>(std::size(bindings)), bindings};
         if (vkCreateDescriptorSetLayout(device_, &layoutInfo, nullptr,
                                         &descriptorSetLayout_) != VK_SUCCESS) {
             throw std::runtime_error("Could not create shadow descriptor-set layout");
@@ -164,7 +166,7 @@ void ShadowPass::create(VkPhysicalDevice physicalDevice, VkDevice device,
         // IBL and material samplers, one UBO and seven SSBOs.
         const VkDescriptorPoolSize poolSizes[] = {
             {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, frameCount * 4U *
-                (MaxMaterialTextures + 8U + ReflectionProbeManager::TextureDescriptorCount)},
+                (MaxMaterialTextures + 9U + ReflectionProbeManager::TextureDescriptorCount)},
             {VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, frameCount * 4U},
             {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, frameCount * 4U * 8U},
         };
@@ -211,6 +213,9 @@ void ShadowPass::create(VkPhysicalDevice physicalDevice, VkDevice device,
         const VkDescriptorImageInfo depthImageInfo{
             shadowMap_->depthSampler(), shadowMap_->imageView(),
             VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
+        const VkDescriptorImageInfo linearImageInfo{
+            shadowMap_->linearSampler(), shadowMap_->imageView(),
+            VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
         for (std::uint32_t frame = 0; frame < frameCount; ++frame) {
             const VkDescriptorBufferInfo bufferInfo{
                 uniformBuffers[frame], 0, uniformBufferRange};
@@ -229,7 +234,7 @@ void ShadowPass::create(VkPhysicalDevice physicalDevice, VkDevice device,
             const VkDescriptorBufferInfo reflectionProbeInfo{reflectionProbeBuffers[frame], 0, VK_WHOLE_SIZE};
             std::vector<VkDescriptorImageInfo> reflectionTextures(
                 ReflectionProbeManager::TextureDescriptorCount, imageBasedLighting[1]);
-            VkWriteDescriptorSet writes[17]{};
+            VkWriteDescriptorSet writes[18]{};
             writes[0] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr,
                          descriptorSets_[frame], 0, 0, 1,
                          VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &imageInfo, nullptr, nullptr};
@@ -286,6 +291,10 @@ void ShadowPass::create(VkPhysicalDevice physicalDevice, VkDevice device,
                           descriptorSets_[frame], 16, 0, 1,
                           VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
                           materialTextures.data(), nullptr, nullptr};
+            writes[17] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr,
+                          descriptorSets_[frame], 17, 0, 1,
+                          VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+                          &linearImageInfo, nullptr, nullptr};
             // Standard forward consumes bindings 3/7 as the clustered range
             // headers and compact light-index list.  Grass descriptors below
             // retain their vertex-only cluster/deformation bindings.

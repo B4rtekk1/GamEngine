@@ -569,7 +569,9 @@ Engine::Entity drawEditorMenuBar(Engine::ScenePreset &scene, Engine::Renderer &r
             ImGui::Separator();
             selectDebugView("Blocker Count", Engine::ShadowDebugView::BlockerCount);
             selectDebugView("Penumbra Radius", Engine::ShadowDebugView::PenumbraRadius);
-            selectDebugView("Clip Level", Engine::ShadowDebugView::ClipLevel);
+            selectDebugView("Desired Clip Level", Engine::ShadowDebugView::DesiredClipLevel);
+            selectDebugView("Resolved Clip Level", Engine::ShadowDebugView::ResolvedClipLevel);
+            selectDebugView("Fallback Delta", Engine::ShadowDebugView::FallbackDelta);
             selectDebugView("Virtual Page", Engine::ShadowDebugView::VirtualPage);
             ImGui::EndMenu();
         }

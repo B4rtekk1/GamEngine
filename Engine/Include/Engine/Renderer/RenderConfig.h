@@ -79,7 +79,12 @@ namespace Engine {
         Off,
         BlockerCount,
         PenumbraRadius,
-        ClipLevel,
+        /** The level selected from receiver geometry before cache fallback. */
+        DesiredClipLevel,
+        /** The resident level that supplied the shadow result. */
+        ResolvedClipLevel,
+        /** Cache-fallback distance: green=0, yellow=1, orange=2, red=3+. */
+        FallbackDelta,
         VirtualPage,
     };
 

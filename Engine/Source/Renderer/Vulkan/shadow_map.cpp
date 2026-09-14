@@ -16,7 +16,9 @@ namespace Engine {
                 if ((properties.optimalTilingFeatures & static_cast<VkFormatFeatureFlags>(
                          VK_FORMAT_FEATURE_DEPTH_STENCIL_ATTACHMENT_BIT)) != 0 &&
                     (properties.optimalTilingFeatures & static_cast<VkFormatFeatureFlags>(
-                         VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT)) != 0) {
+                         VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT | VK_FORMAT_FEATURE_SAMPLED_IMAGE_FILTER_LINEAR_BIT)) ==
+                        static_cast<VkFormatFeatureFlags>(VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT |
+                                                         VK_FORMAT_FEATURE_SAMPLED_IMAGE_FILTER_LINEAR_BIT)) {
                     return format;
                 }
             }
@@ -82,9 +84,19 @@ namespace Engine {
                 throw std::runtime_error(
                     "Could not create shadow map sampler");
             }
+            // Hardware PCF is safe and much cheaper whenever the shader has
+            // proven that the full 2x2 virtual footprint stays in this tile.
+            // Format selection above guarantees this is supported for depth.
+            sampler.magFilter = VK_FILTER_LINEAR;
+            sampler.minFilter = VK_FILTER_LINEAR;
+            if (vkCreateSampler(device_, &sampler, nullptr, &linearSampler_) != VK_SUCCESS) {
+                throw std::runtime_error("Could not create linear shadow map sampler");
+            }
             // PCSS needs the blocker depth itself, rather than a comparison
             // result. Keep the addressing/filtering identical to the compare
             // sampler so both paths resolve the exact same atlas texel.
+            sampler.magFilter = VK_FILTER_NEAREST;
+            sampler.minFilter = VK_FILTER_NEAREST;
             sampler.compareEnable = VK_FALSE;
             if (vkCreateSampler(device_, &sampler, nullptr, &depthSampler_) != VK_SUCCESS) {
                 throw std::runtime_error("Could not create shadow depth sampler");
@@ -155,6 +167,9 @@ namespace Engine {
         if (sampler_ != nullptr) {
             vkDestroySampler(device_, sampler_, nullptr);
         }
+        if (linearSampler_ != nullptr) {
+            vkDestroySampler(device_, linearSampler_, nullptr);
+        }
         if (depthSampler_ != nullptr) {
             vkDestroySampler(device_, depthSampler_, nullptr);
         }
@@ -167,6 +182,7 @@ namespace Engine {
         framebuffer_ = VK_NULL_HANDLE;
         renderPass_ = VK_NULL_HANDLE;
         sampler_ = VK_NULL_HANDLE;
+        linearSampler_ = VK_NULL_HANDLE;
         depthSampler_ = VK_NULL_HANDLE;
         imageView_ = VK_NULL_HANDLE;
         image_ = VK_NULL_HANDLE;

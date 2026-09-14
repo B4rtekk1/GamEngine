@@ -20,7 +20,9 @@ namespace Engine {
         VkFormatFeatureFlags required =
                 static_cast<VkFormatFeatureFlags>(VK_FORMAT_FEATURE_COLOR_ATTACHMENT_BIT) |
                 static_cast<VkFormatFeatureFlags>(VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT);
-        if (storage) required |= VK_FORMAT_FEATURE_STORAGE_IMAGE_BIT;
+        if (storage) {
+            required |= VK_FORMAT_FEATURE_STORAGE_IMAGE_BIT;
+        }
         if ((formatProperties.optimalTilingFeatures & required) != required) {
             throw std::runtime_error("GPU does not support the requested floating-point sampled color attachment");
         }
@@ -34,7 +36,7 @@ namespace Engine {
                 .pNext = nullptr,
                 .flags = 0,
                 .imageType = VK_IMAGE_TYPE_2D,
-            .format = format,
+                .format = format,
                 .extent = {extent.width, extent.height, 1},
                 .mipLevels = 1,
                 .arrayLayers = 1,

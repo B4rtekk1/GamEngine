@@ -97,21 +97,30 @@ namespace Engine {
             .finalLayout = options.depthFinalLayout,
         };
 
-        VkAttachmentReference2 colorRef{.sType = VK_STRUCTURE_TYPE_ATTACHMENT_REFERENCE_2,
-                                        .attachment = 0, .layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
-                                        .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT};
-        VkAttachmentReference2 additionalColorRef{.sType = VK_STRUCTURE_TYPE_ATTACHMENT_REFERENCE_2,
-                                        .attachment = 1, .layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
-                                        .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT};
-        VkAttachmentReference2 thirdColorRef{.sType = VK_STRUCTURE_TYPE_ATTACHMENT_REFERENCE_2,
-                                        .attachment = 2, .layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
-                                        .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT};
+        VkAttachmentReference2 colorRef{
+            .sType = VK_STRUCTURE_TYPE_ATTACHMENT_REFERENCE_2,
+            .attachment = 0, .layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+            .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT
+        };
+        VkAttachmentReference2 additionalColorRef{
+            .sType = VK_STRUCTURE_TYPE_ATTACHMENT_REFERENCE_2,
+            .attachment = 1, .layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+            .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT
+        };
+        VkAttachmentReference2 thirdColorRef{
+            .sType = VK_STRUCTURE_TYPE_ATTACHMENT_REFERENCE_2,
+            .attachment = 2, .layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+            .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT
+        };
         std::array colorRefs{colorRef, additionalColorRef, thirdColorRef};
         const uint32_t colorAttachmentCount = 1U + (usesAdditionalColor ? 1U : 0U) + (usesThirdColor ? 1U : 0U);
-        VkAttachmentReference2 depthRef{.sType = VK_STRUCTURE_TYPE_ATTACHMENT_REFERENCE_2, .attachment = colorAttachmentCount, .layout = options.depthWriteEnable
-                                              ? VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL
-                                              : VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL,
-                                        .aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT};
+        VkAttachmentReference2 depthRef{
+            .sType = VK_STRUCTURE_TYPE_ATTACHMENT_REFERENCE_2, .attachment = colorAttachmentCount,
+            .layout = options.depthWriteEnable
+                          ? VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL
+                          : VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL,
+            .aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT
+        };
         VkAttachmentReference2 resolveRef{
             .sType = VK_STRUCTURE_TYPE_ATTACHMENT_REFERENCE_2,
             .attachment = usesDepth ? 2U : 1U,
@@ -160,8 +169,8 @@ namespace Engine {
                                    static_cast<VkAccessFlags>(VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT) |
                                    (usesDepth
                                         ? static_cast<VkAccessFlags>(options.depthWriteEnable
-                                              ? VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT
-                                              : VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT)
+                                                                         ? VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT
+                                                                         : VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT)
                                         : VkAccessFlags{0});
 
         std::vector<VkAttachmentDescription2> attachments{color};

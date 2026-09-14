@@ -43,7 +43,11 @@ namespace Engine {
         [[nodiscard]] VkFormat format() const noexcept { return format_; }
         [[nodiscard]] VkImage image() const noexcept { return image_; }
         [[nodiscard]] VkImageView imageView() const noexcept { return imageView_; }
+        /// Nearest comparison sampler for individual virtual texels.
         [[nodiscard]] VkSampler sampler() const noexcept { return sampler_; }
+        /// Linear comparison sampler, used only for footprints proven to be
+        /// wholly contained in one physical page.
+        [[nodiscard]] VkSampler linearSampler() const noexcept { return linearSampler_; }
         /// Nearest non-comparison sampler used by PCSS blocker search.
         [[nodiscard]] VkSampler depthSampler() const noexcept { return depthSampler_; }
         [[nodiscard]] VkRenderPass renderPass() const noexcept { return renderPass_; }
@@ -58,6 +62,7 @@ namespace Engine {
         VmaAllocator allocator_ = VK_NULL_HANDLE;
         VkImageView imageView_ = VK_NULL_HANDLE;
         VkSampler sampler_ = VK_NULL_HANDLE;
+        VkSampler linearSampler_ = VK_NULL_HANDLE;
         VkSampler depthSampler_ = VK_NULL_HANDLE;
         VkRenderPass renderPass_ = VK_NULL_HANDLE;
         VkFramebuffer framebuffer_ = VK_NULL_HANDLE;

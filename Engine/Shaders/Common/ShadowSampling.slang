@@ -18,14 +18,17 @@ static const uint SHADOW_QUALITY_ULTRA = 3;
 static const uint SHADOW_DEBUG_OFF = 0;
 static const uint SHADOW_DEBUG_BLOCKER_COUNT = 1;
 static const uint SHADOW_DEBUG_PENUMBRA_RADIUS = 2;
-static const uint SHADOW_DEBUG_CLIP_LEVEL = 3;
-static const uint SHADOW_DEBUG_VIRTUAL_PAGE = 4;
+static const uint SHADOW_DEBUG_DESIRED_CLIP_LEVEL = 3;
+static const uint SHADOW_DEBUG_RESOLVED_CLIP_LEVEL = 4;
+static const uint SHADOW_DEBUG_FALLBACK_DELTA = 5;
+static const uint SHADOW_DEBUG_VIRTUAL_PAGE = 6;
 
 struct ShadowSampleDebug
 {
     float blockerCount;
     float penumbraRadius;
-    uint clipLevel;
+    uint desiredClipLevel;
+    uint resolvedClipLevel;
     uint2 virtualPage;
 };
 
@@ -51,6 +54,18 @@ float2 virtualTexelAtlasUv(uint2 texel, uint physical)
                                      physical / PHYSICAL_PAGES_PER_AXIS);
     const uint2 localPixel = texel % PAGE_RESOLUTION;
     return (float2(physicalPage * PAGE_RESOLUTION + localPixel) + 0.5) /
+           float(PHYSICAL_PAGES_PER_AXIS * PAGE_RESOLUTION);
+}
+
+// Unlike virtualTexelAtlasUv(), this retains the fractional virtual-pixel
+// position. It is valid for hardware bilinear PCF only after the caller has
+// established that its complete 2x2 footprint is inside this physical page.
+float2 virtualPixelAtlasUv(float2 virtualPixel, uint physical)
+{
+    const uint2 physicalPage = uint2(physical % PHYSICAL_PAGES_PER_AXIS,
+                                     physical / PHYSICAL_PAGES_PER_AXIS);
+    const float2 localPixel = virtualPixel - floor(virtualPixel / PAGE_RESOLUTION) * PAGE_RESOLUTION;
+    return (float2(physicalPage * PAGE_RESOLUTION) + localPixel) /
            float(PHYSICAL_PAGES_PER_AXIS * PAGE_RESOLUTION);
 }
 
@@ -81,7 +96,8 @@ bool virtualShadowAtlasUv(float2 virtualPixel, uint level,
 // A missing neighbour is omitted and the remaining weights are normalized.  A
 // resident centre texel therefore remains usable at a cache boundary rather
 // than forcing an abrupt clipmap fallback.
-float sampleVirtualShadowBilinear(Sampler2DShadow shadowMap, float2 virtualPixel,
+float sampleVirtualShadowBilinear(Sampler2DShadow shadowMap, Sampler2DShadow linearShadowMap,
+                                  float2 virtualPixel,
                                   uint level, StructuredBuffer<uint4> pageTable,
                                   float compareDepth, out bool hasSamples)
 {
@@ -96,9 +112,8 @@ float sampleVirtualShadowBilinear(Sampler2DShadow shadowMap, float2 virtualPixel
     const int2 offsets[4] = {int2(0, 0), int2(1, 0), int2(0, 1), int2(1, 1)};
 
     // Fast path: the entire bilinear footprint is resident in one virtual
-    // page. Map that page once, then sample its physical texels directly.
-    // The atlas sampler remains nearest-filtered, so this preserves virtual
-    // bilinear filtering exactly without bleeding across physical pages.
+    // page. Its physical 2x2 footprint is therefore contiguous too, so one
+    // hardware linear comparison exactly replaces four resolved comparisons.
     const bool footprintInPage = (base.x % int(PAGE_RESOLUTION)) != int(PAGE_RESOLUTION - 1) &&
                                  (base.y % int(PAGE_RESOLUTION)) != int(PAGE_RESOLUTION - 1);
     if (all(base >= int2(0)) && all(base + int2(1) < int2(VIRTUAL_RESOLUTION)) && footprintInPage)
@@ -106,15 +121,9 @@ float sampleVirtualShadowBilinear(Sampler2DShadow shadowMap, float2 virtualPixel
         uint physical;
         if (resolveVirtualShadowPage(uint2(base) / PAGE_RESOLUTION, level, pageTable, physical))
         {
-            float shadow = 0.0;
-            [unroll]
-            for (uint tap = 0; tap < 4; ++tap)
-            {
-                const float2 atlasUv = virtualTexelAtlasUv(uint2(base + offsets[tap]), physical);
-                shadow += (1.0 - shadowMap.SampleCmpLevelZero(atlasUv, compareDepth)) * weights[tap];
-            }
             hasSamples = true;
-            return shadow;
+            return 1.0 - linearShadowMap.SampleCmpLevelZero(
+                virtualPixelAtlasUv(virtualPixel, physical), compareDepth);
         }
     }
 
@@ -215,7 +224,8 @@ float shadowKernelRotation(uint2 pixelCoordinate, uint temporalSampleIndex,
     return float(hash & 0x00ffffffu) / float(0x01000000u) * 6.28318530718;
 }
 
-float sampleVirtualShadowLevel(Sampler2DShadow shadowMap, Sampler2D shadowDepthMap,
+float sampleVirtualShadowLevel(Sampler2DShadow shadowMap, Sampler2DShadow linearShadowMap,
+                               Sampler2D shadowDepthMap,
                                float3 worldPosition,
                                float3 normal, float3 lightDirection,
                                float4x4 lightSpace, uint level,
@@ -355,7 +365,7 @@ float sampleVirtualShadowLevel(Sampler2DShadow shadowMap, Sampler2D shadowDepthM
                 poisson[tap].x * rotationCos - poisson[tap].y * rotationSin,
                 poisson[tap].x * rotationSin + poisson[tap].y * rotationCos);
             const float tapShadow = sampleVirtualShadowBilinear(
-                shadowMap, virtualPixel + offset * penumbraRadius, level, pageTable,
+                shadowMap, linearShadowMap, virtualPixel + offset * penumbraRadius, level, pageTable,
                 currentDepth - bias, tapResident);
             if (!tapResident)
                 continue;
@@ -380,7 +390,7 @@ float sampleVirtualShadowLevel(Sampler2DShadow shadowMap, Sampler2D shadowDepthM
             {
                 bool tapResident;
                 const float tapShadow = sampleVirtualShadowBilinear(
-                    shadowMap, virtualPixel + float2(x - 0.5, y - 0.5), level, pageTable,
+                    shadowMap, linearShadowMap, virtualPixel + float2(x - 0.5, y - 0.5), level, pageTable,
                     currentDepth - bias, tapResident);
                 if (!tapResident) continue;
                 filteredShadow += tapShadow;
@@ -402,7 +412,7 @@ float sampleVirtualShadowLevel(Sampler2DShadow shadowMap, Sampler2D shadowDepthM
         {
             bool tapResident;
             const float tapShadow = sampleVirtualShadowBilinear(
-                shadowMap, virtualPixel + float2(x - 0.5, y - 0.5), level, pageTable,
+                shadowMap, linearShadowMap, virtualPixel + float2(x - 0.5, y - 0.5), level, pageTable,
                 currentDepth - bias, tapResident);
             if (!tapResident) continue;
             initialShadow += tapShadow;
@@ -423,7 +433,7 @@ float sampleVirtualShadowLevel(Sampler2DShadow shadowMap, Sampler2D shadowDepthM
             poisson[tap].x * rotationSin + poisson[tap].y * rotationCos);
         bool tapResident;
         const float tapShadow = sampleVirtualShadowBilinear(
-            shadowMap, virtualPixel + offset * 1.25, level, pageTable,
+            shadowMap, linearShadowMap, virtualPixel + offset * 1.25, level, pageTable,
             currentDepth - bias, tapResident);
         if (!tapResident) continue;
         filteredShadow += tapShadow;
@@ -474,7 +484,8 @@ uint selectVirtualShadowLevel(float3 worldPosition, float4x4 clipMatrices[7],
     return SHADOW_CLIP_LEVELS - 1;
 }
 
-float sampleVirtualShadow(Sampler2DShadow shadowMap, Sampler2D shadowDepthMap,
+float sampleVirtualShadow(Sampler2DShadow shadowMap, Sampler2DShadow linearShadowMap,
+                          Sampler2D shadowDepthMap,
                           float3 worldPosition,
                           float3 normal, float3 lightDirection,
                           float4x4 clipMatrices[7], StructuredBuffer<uint4> pageTable,
@@ -484,12 +495,15 @@ float sampleVirtualShadow(Sampler2DShadow shadowMap, Sampler2D shadowDepthMap,
 {
     debug.blockerCount = 0.0;
     debug.penumbraRadius = 0.0;
-    debug.clipLevel = 0;
+    debug.desiredClipLevel = 0;
+    debug.resolvedClipLevel = 0;
     debug.virtualPage = 0;
     bool resident;
     float desiredFootprintInTexels;
     const uint desiredLevel = selectVirtualShadowLevel(
         worldPosition, clipMatrices, shadowQuality, desiredFootprintInTexels);
+    debug.desiredClipLevel = desiredLevel;
+    debug.resolvedClipLevel = desiredLevel;
     [loop]
     for (uint level = desiredLevel; level < SHADOW_CLIP_LEVELS; ++level)
     {
@@ -498,7 +512,7 @@ float sampleVirtualShadow(Sampler2DShadow shadowMap, Sampler2D shadowDepthMap,
         float penumbraRadius;
         uint2 virtualPage;
         float shadow = sampleVirtualShadowLevel(
-            shadowMap, shadowDepthMap, worldPosition, normal, lightDirection,
+            shadowMap, linearShadowMap, shadowDepthMap, worldPosition, normal, lightDirection,
             clipMatrices[level], level, pageTable, shadowQuality, pixelCoordinate,
             temporalSampleIndex, temporalShadowJitter, resident, clipEdge,
             blockerCount, penumbraRadius, virtualPage);
@@ -506,7 +520,7 @@ float sampleVirtualShadow(Sampler2DShadow shadowMap, Sampler2D shadowDepthMap,
         {
             debug.blockerCount = blockerCount;
             debug.penumbraRadius = penumbraRadius;
-            debug.clipLevel = level;
+            debug.resolvedClipLevel = level;
             debug.virtualPage = virtualPage;
             // Cross-fade both at the geometric clipmap edge and across the
             // screen-space footprint threshold.  The latter keeps adjacent
@@ -529,7 +543,7 @@ float sampleVirtualShadow(Sampler2DShadow shadowMap, Sampler2D shadowDepthMap,
                 float nextPenumbraRadius;
                 uint2 nextVirtualPage;
                 float nextShadow = sampleVirtualShadowLevel(
-                    shadowMap, shadowDepthMap, worldPosition, normal, lightDirection, clipMatrices[level + 1], level + 1,
+                    shadowMap, linearShadowMap, shadowDepthMap, worldPosition, normal, lightDirection, clipMatrices[level + 1], level + 1,
                     pageTable, shadowQuality, pixelCoordinate, temporalSampleIndex,
                     temporalShadowJitter, nextResident, nextClipEdge,
                     nextBlockerCount, nextPenumbraRadius, nextVirtualPage);
@@ -551,18 +565,28 @@ float3 shadowDebugColor(uint view, ShadowSampleDebug debug)
         const float t = saturate(debug.penumbraRadius / 6.0);
         return float3(t, 0.15 + 0.85 * (1.0 - abs(2.0 * t - 1.0)), 1.0 - t);
     }
-    if (view == SHADOW_DEBUG_CLIP_LEVEL)
+    if (view == SHADOW_DEBUG_DESIRED_CLIP_LEVEL || view == SHADOW_DEBUG_RESOLVED_CLIP_LEVEL)
     {
         static const float3 colors[7] = {
             float3(0.90, 0.20, 0.20), float3(0.95, 0.60, 0.15), float3(0.90, 0.90, 0.20),
             float3(0.20, 0.80, 0.30), float3(0.15, 0.70, 0.90), float3(0.30, 0.35, 0.95),
             float3(0.75, 0.25, 0.90)};
-        return colors[min(debug.clipLevel, 6u)];
+        const uint level = view == SHADOW_DEBUG_DESIRED_CLIP_LEVEL
+            ? debug.desiredClipLevel : debug.resolvedClipLevel;
+        return colors[min(level, 6u)];
+    }
+    if (view == SHADOW_DEBUG_FALLBACK_DELTA)
+    {
+        const uint delta = max(debug.resolvedClipLevel, debug.desiredClipLevel) - debug.desiredClipLevel;
+        if (delta == 0u) return float3(0.10, 0.90, 0.20);
+        if (delta == 1u) return float3(1.00, 0.90, 0.10);
+        if (delta == 2u) return float3(1.00, 0.45, 0.05);
+        return float3(0.95, 0.05, 0.05);
     }
     // A deterministic page hash makes virtual-page boundaries and residency
     // churn visible without exposing physical atlas placement.
     uint hash = debug.virtualPage.x * 1664525u + debug.virtualPage.y * 1013904223u +
-                debug.clipLevel * 2246822519u;
+                debug.resolvedClipLevel * 2246822519u;
     return float3(float(hash & 255u), float((hash >> 8u) & 255u),
                   float((hash >> 16u) & 255u)) / 255.0;
 }

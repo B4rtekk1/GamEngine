@@ -100,6 +100,7 @@ ForwardVertexOutput vertexMain(ForwardVertexInput input, uint instanceIndex : SV
 
 [[vk::binding(0, 0)]] Sampler2DShadow shadowMap;
 [[vk::binding(9, 0)]] Sampler2D shadowDepthMap;
+[[vk::binding(17, 0)]] Sampler2DShadow linearShadowMap;
 [[vk::binding(2, 0)]] StructuredBuffer<MaterialData> materials;
 [[vk::binding(10, 0)]] SamplerCube irradianceMap;
 [[vk::binding(11, 0)]] SamplerCube prefilteredEnvironmentMap;
@@ -369,9 +370,9 @@ ForwardFragmentOutput fragmentMain(ForwardFragmentInput input)
     float3 specular = distributionGGX(normal, halfway, roughness) * geometry * fresnel /
                       max(4.0 * nDotV * nDotL, 0.0001);
     float3 diffuse = (1.0 - fresnel) * (1.0 - metallic) * albedo / PBR_PI;
-    ShadowSampleDebug shadowDebug = {0.0, 0.0, 0u, uint2(0, 0)};
+    ShadowSampleDebug shadowDebug = {0.0, 0.0, 0u, 0u, uint2(0, 0)};
     float shadow = frame.shadowEnabled != 0
-        ? sampleVirtualShadow(shadowMap, shadowDepthMap, input.worldPosition, normal, lightDirection, frame.shadowClipMatrices,
+        ? sampleVirtualShadow(shadowMap, linearShadowMap, shadowDepthMap, input.worldPosition, normal, lightDirection, frame.shadowClipMatrices,
                               shadowPageTable, frame.shadowQuality, uint2(input.position.xy),
                               frame.temporalSampleIndex, frame.temporalShadowJitter != 0, shadowDebug) : 0.0;
     if (frame.shadowDebugView != SHADOW_DEBUG_OFF)
