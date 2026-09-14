@@ -90,12 +90,12 @@ void main(uint3 groupId:SV_GroupID,uint3 threadId:SV_GroupThreadID,uint3 id:SV_D
    float t=pow((float(step)+stepNoise)/float(steps),2)+minSampleDistance;
    int2 offset=int2(round(ray*radiusPixels*(side==0?1.0:-1.0)*t));if(!any(offset))continue;
    int2 samplePixel=clamp(p+offset,int2(0,0),size-1),tilePixel=local+offset;
-   float sampleMip=float(settings.sourceMip)+min(max(log2(max(length(float2(offset)),1.0))-3.15,0.0),float(settings.maxSampleMip));
+   float sampleMip=float(settings.sourceMip)+min(max(log2(max(length(float2(offset)),1.0))-3.30,0.0),float(settings.maxSampleMip));
    float sample=all(tilePixel>=int2(0,0))&&all(tilePixel<int2(16,16))?depthTile[tilePixel.y][tilePixel.x]:halfDepth.SampleLevel((float2(samplePixel)+.5)/float2(size),sampleMip).r;
    if(sample>=BackgroundDepth)continue;
    float3 v=positionFromDepth(samplePixel,sample,uint2(w,h))-center;float dist2=dot(v,v);if(dist2<1e-6)continue;
-   float3 sliceV=v-bitangent*dot(v,bitangent);float sliceLength=length(sliceV);if(sliceLength<1e-5)continue;
-   float sampleHorizonCos=dot(sliceV/sliceLength,viewDir);float attenuation=saturate(1-dist2/(settings.radiusView*settings.radiusView));
+   float sampleDistance=sqrt(dist2);
+   float sampleHorizonCos=dot(v/sampleDistance,viewDir);float attenuation=saturate(1-dist2/(settings.radiusView*settings.radiusView));
    horizonCos[side]=max(horizonCos[side],lerp(lowHorizon[side],sampleHorizonCos,attenuation));
   }
   float h0=-acos(clamp(horizonCos[1],-1.0,1.0));float h1=acos(clamp(horizonCos[0],-1.0,1.0));

@@ -2,7 +2,6 @@
 [[vk::binding(1, 0)]] RWTexture2D<float> destinationMip;
 struct Settings { float effectRadius, effectFalloffRange; };
 [[vk::push_constant]] ConstantBuffer<Settings> settings;
-static const float BackgroundDepth = 65500.0;
 
 // XeGTAO's depth MIP filter retains the farthest depth in a discontinuity
 // while still averaging values on a continuous slope.  The far-depth bias
@@ -33,14 +32,7 @@ void main(uint3 id : SV_DispatchThreadID) {
     float d1=sourceMip.Load(int3(min(base+int2(1,0),size-1),0)).r;
     float d2=sourceMip.Load(int3(min(base+int2(0,1),size-1),0)).r;
     float d3=sourceMip.Load(int3(min(base+int2(1,1),size-1),0)).r;
-    // Do not include the sky sentinel in the geometric-depth filter.
-    bool g0=d0<BackgroundDepth, g1=d1<BackgroundDepth;
-    bool g2=d2<BackgroundDepth, g3=d3<BackgroundDepth;
-    uint count=uint(g0)+uint(g1)+uint(g2)+uint(g3);
-    if(count==0){destinationMip[id.xy]=BackgroundDepth;return;}
-    // With fewer than four geometric samples, duplicating a valid depth keeps
-    // the XeGTAO filter normalized without treating the sky as a surface.
-    float fallback=g0?d0:(g1?d1:(g2?d2:d3));
-    destinationMip[id.xy]=depthMipFilter(g0?d0:fallback,g1?d1:fallback,
-                                         g2?d2:fallback,g3?d3:fallback);
+    // Preserve the sky sentinel as a far depth. Replacing it with geometry
+    // would dilate silhouettes into the coarse horizon hierarchy.
+    destinationMip[id.xy]=depthMipFilter(d0,d1,d2,d3);
 }
