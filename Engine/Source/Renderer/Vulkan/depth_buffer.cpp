@@ -163,7 +163,9 @@ namespace Engine {
             vkDestroyImageView(device_, imageView_, nullptr);
             imageView_ = VK_NULL_HANDLE;
         }
-        if (image_ != VK_NULL_HANDLE) vmaDestroyImage(allocator_, image_, allocation_);
+        if (image_ != VK_NULL_HANDLE) {
+            vmaDestroyImage(allocator_, image_, allocation_);
+        }
         image_ = VK_NULL_HANDLE;
         allocation_ = VK_NULL_HANDLE;
         if (sampler_ != VK_NULL_HANDLE) {

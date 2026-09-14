@@ -13,12 +13,13 @@ namespace Engine {
         destroy();
     }
 
-    Buffer::Buffer(Buffer&& other) noexcept {
+    Buffer::Buffer(Buffer &&other) noexcept {
         *this = std::move(other);
     }
 
-    Buffer& Buffer::operator=(Buffer&& other) noexcept {
-        if (this == &other) return *this;
+    Buffer &Buffer::operator=(Buffer &&other) noexcept {
+        if (this == &other) { return *this;
+}
         destroy();
         device_ = std::exchange(other.device_, VK_NULL_HANDLE);
         buffer_ = std::exchange(other.buffer_, VK_NULL_HANDLE);
@@ -50,12 +51,14 @@ namespace Engine {
         // Initial data follows the same non-blocking path as dynamic updates.
         // The staging allocation remains owned by this Buffer until its fence
         // signals, so its lifetime is valid without stalling the CPU.
-        if (UploadContext* upload = UploadContext::current()) {
+        if (UploadContext *upload = UploadContext::current()) {
             const bool ownsBatch = !upload->recording();
-            if (ownsBatch) upload->begin();
+            if (ownsBatch) { upload->begin();
+}
             upload->copyBuffer(buffer_, data, size);
             readyTimeline_ = upload->pendingTicket().timelineValue;
-            if (ownsBatch) readyTimeline_ = upload->submit().timelineValue;
+            if (ownsBatch) { readyTimeline_ = upload->submit().timelineValue;
+}
         } else {
             uploadDeviceLocal(data, size, 0, commandPool, queue);
         }
@@ -79,14 +82,17 @@ namespace Engine {
     void Buffer::createDeviceLocalEmpty(const VkDevice device, const VkDeviceSize size,
                                         const VkBufferUsageFlags usage, VmaAllocator allocator,
                                         const bool enableDeviceAddress) {
-        if (size == 0) throw std::invalid_argument("Device-local buffer requires non-zero size");
-        create({device, size, usage | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
-                VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, allocator, enableDeviceAddress});
+        if (size == 0) { throw std::invalid_argument("Device-local buffer requires non-zero size");
+}
+        create({
+            device, size, usage | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+            VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, allocator, enableDeviceAddress,
+        });
     }
 
     void Buffer::copyFromUploadRing(const VkBuffer source, const VkDeviceSize sourceOffset,
                                     const VkDeviceSize size, const VkDeviceSize destinationOffset) const {
-        UploadContext* const upload = UploadContext::current();
+        UploadContext *const upload = UploadContext::current();
         if (upload == nullptr || !upload->recording() || source == VK_NULL_HANDLE || size == 0 ||
             destinationOffset > size_ || size > size_ - destinationOffset) {
             throw std::invalid_argument("Invalid upload-ring buffer copy");
@@ -109,7 +115,7 @@ namespace Engine {
         std::memcpy(static_cast<char *>(mapped_) + offset, data, static_cast<size_t>(size));
     }
 
-    void Buffer::read(void* const destination, const VkDeviceSize size,
+    void Buffer::read(void *const destination, const VkDeviceSize size,
                       const VkDeviceSize offset) const {
         if (destination == nullptr || size == 0 || offset > size_ || size > size_ - offset) {
             throw std::invalid_argument("Buffer read out of bounds");
@@ -117,23 +123,25 @@ namespace Engine {
         if (mapped_ == nullptr) {
             throw std::runtime_error("Cannot read buffer without host-visible memory");
         }
-        std::memcpy(destination, static_cast<const char*>(mapped_) + offset,
+        std::memcpy(destination, static_cast<const char *>(mapped_) + offset,
                     static_cast<size_t>(size));
     }
 
-    void Buffer::uploadDeviceLocal(const void* data, const VkDeviceSize size,
+    void Buffer::uploadDeviceLocal(const void *data, const VkDeviceSize size,
                                    const VkDeviceSize offset, const VkCommandPool commandPool,
                                    const VkQueue queue) const {
         if (data == nullptr || size == 0 || offset > size_ || size > size_ - offset ||
             device_ == VK_NULL_HANDLE || allocator_ == VK_NULL_HANDLE) {
             throw std::invalid_argument("Device-local buffer update is out of bounds");
         }
-        if (UploadContext* upload = UploadContext::current()) {
+        if (UploadContext *upload = UploadContext::current()) {
             const bool ownsBatch = !upload->recording();
-            if (ownsBatch) upload->begin();
+            if (ownsBatch) { upload->begin();
+}
             upload->copyBuffer(buffer_, data, size, offset);
             readyTimeline_ = upload->pendingTicket().timelineValue;
-            if (ownsBatch) readyTimeline_ = upload->submit().timelineValue;
+            if (ownsBatch) { readyTimeline_ = upload->submit().timelineValue;
+}
             return;
         }
         reapCompletedUploads();
@@ -200,9 +208,11 @@ namespace Engine {
     }
 
     void Buffer::reapCompletedUploads() const noexcept {
-        if (device_ == VK_NULL_HANDLE) return;
-        std::erase_if(pendingUploads_, [this](PendingUpload& upload) {
-            if (vkGetFenceStatus(device_, upload.fence) != VK_SUCCESS) return false;
+        if (device_ == VK_NULL_HANDLE) { return;
+}
+        std::erase_if(pendingUploads_, [this](PendingUpload &upload) {
+            if (vkGetFenceStatus(device_, upload.fence) != VK_SUCCESS) { return false;
+}
             vkDestroyFence(device_, upload.fence, nullptr);
             vkFreeCommandBuffers(device_, upload.commandPool, 1, &upload.commandBuffer);
             return true;
@@ -210,7 +220,7 @@ namespace Engine {
     }
 
     void Buffer::finishPendingUploads() noexcept {
-        for (PendingUpload& upload : pendingUploads_) {
+        for (PendingUpload &upload: pendingUploads_) {
             if (upload.fence != VK_NULL_HANDLE) {
                 vkWaitForFences(device_, 1, &upload.fence, VK_TRUE, UINT64_MAX);
                 vkDestroyFence(device_, upload.fence, nullptr);
@@ -227,7 +237,7 @@ namespace Engine {
         // A frame fence alone therefore cannot guarantee that this buffer is
         // no longer a transfer destination.
         if (readyTimeline_ != 0) {
-            if (UploadContext* const upload = UploadContext::current()) {
+            if (UploadContext *const upload = UploadContext::current()) {
                 upload->wait(readyTimeline_);
             }
             readyTimeline_ = 0;
@@ -249,7 +259,8 @@ namespace Engine {
     }
 
     VkDeviceAddress Buffer::deviceAddress() const noexcept {
-        if (!deviceAddressEnabled_ || device_ == VK_NULL_HANDLE || buffer_ == VK_NULL_HANDLE) return 0;
+        if (!deviceAddressEnabled_ || device_ == VK_NULL_HANDLE || buffer_ == VK_NULL_HANDLE) { return 0;
+}
         const VkBufferDeviceAddressInfo info{
             .sType = VK_STRUCTURE_TYPE_BUFFER_DEVICE_ADDRESS_INFO,
             .buffer = buffer_,
@@ -258,16 +269,20 @@ namespace Engine {
     }
 
     Buffer::MemoryInfo Buffer::memoryInfo(const VkPhysicalDevice physicalDevice) const noexcept {
-        if (physicalDevice == VK_NULL_HANDLE || allocation_ == VK_NULL_HANDLE || size_ == 0) return {};
+        if (physicalDevice == VK_NULL_HANDLE || allocation_ == VK_NULL_HANDLE || size_ == 0) { return {};
+}
 
         VmaAllocationInfo allocationInfo{};
         vmaGetAllocationInfo(allocator_, allocation_, &allocationInfo);
         VkPhysicalDeviceMemoryProperties deviceMemory{};
         vkGetPhysicalDeviceMemoryProperties(physicalDevice, &deviceMemory);
-        if (allocationInfo.memoryType >= deviceMemory.memoryTypeCount) return {};
-        const VkMemoryType& memoryType = deviceMemory.memoryTypes[allocationInfo.memoryType];
-        return {.heapIndex = memoryType.heapIndex, .properties = memoryType.propertyFlags,
-                .bytes = allocationInfo.size};
+        if (allocationInfo.memoryType >= deviceMemory.memoryTypeCount) { return {};
+}
+        const VkMemoryType &memoryType = deviceMemory.memoryTypes[allocationInfo.memoryType];
+        return {
+            .heapIndex = memoryType.heapIndex, .properties = memoryType.propertyFlags,
+            .bytes = allocationInfo.size,
+        };
     }
 
     void Buffer::create(const CreateParameters &parameters) {
@@ -282,12 +297,14 @@ namespace Engine {
         VkBufferCreateInfo bufferInfo{VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
         bufferInfo.size = parameters.size;
         deviceAddressEnabled_ = parameters.enableDeviceAddress ||
-            (parameters.usage & VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT) != 0;
+                                (parameters.usage & VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT) != 0;
         bufferInfo.usage = parameters.usage;
-        if (deviceAddressEnabled_) bufferInfo.usage |= VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT;
+        if (deviceAddressEnabled_) { bufferInfo.usage |= VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT;
+}
         bufferInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
         std::array<uint32_t, 3> sharingFamilies{};
-        if (const UploadContext* upload = UploadContext::current(); upload != nullptr && upload->requiresConcurrentSharing()) {
+        if (const UploadContext *upload = UploadContext::current();
+            upload != nullptr && upload->requiresConcurrentSharing()) {
             sharingFamilies = upload->sharingFamilies();
             bufferInfo.sharingMode = VK_SHARING_MODE_CONCURRENT;
             bufferInfo.queueFamilyIndexCount = upload->sharingFamilyCount();

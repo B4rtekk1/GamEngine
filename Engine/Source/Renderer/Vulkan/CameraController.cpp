@@ -107,8 +107,8 @@ namespace Engine {
         }
         if (movement.length() > Zero) {
             transform.position += movement.normalized() *
-                    (MovementSpeed * (moveFast ? EditorFastMovementMultiplier : 1.0F) *
-                     static_cast<float>(Time::deltaTime()));
+            (MovementSpeed * (moveFast ? EditorFastMovementMultiplier : 1.0F) *
+             static_cast<float>(Time::deltaTime()));
         }
         if (flyMode) {
             transform.position += camera_->forward() * (Input::mouseWheel() * MouseWheelSpeed);
