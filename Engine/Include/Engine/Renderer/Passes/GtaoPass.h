@@ -52,12 +52,12 @@ private:
     // frames.  This renderer has three frame slots.
     static constexpr std::uint32_t FramesInFlight = 3;
     HdrBuffer raw_;
-    // Linear depth, oct-normal and a discontinuity mask guide the 5x5
-    // groupshared denoiser and the bilateral upsample.
+    // Oct-normal and a discontinuity mask guide the 5x5 denoiser. Depth is
+    // sampled directly from the dedicated R32F linear-depth hierarchy.
     HdrBuffer auxiliary_;
     HdrBuffer filtered_;
     HdrBuffer full_;
-    // A dedicated R16F view-depth hierarchy.  It intentionally is not Hi-Z:
+    // A dedicated R32F view-depth hierarchy.  It intentionally is not Hi-Z:
     // GTAO consumes filtered view depths, while culling consumes extrema.
     VkImage linearDepthImage_ = VK_NULL_HANDLE;
     VmaAllocation linearDepthAllocation_ = VK_NULL_HANDLE;

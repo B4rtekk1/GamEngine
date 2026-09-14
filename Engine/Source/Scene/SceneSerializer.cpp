@@ -77,42 +77,49 @@ namespace Engine {
             throw std::runtime_error("Invalid scene: " + message);
         }
 
-        [[nodiscard]] std::filesystem::path terrainDataPath(const std::filesystem::path& scenePath) {
+        [[nodiscard]] std::filesystem::path terrainDataPath(const std::filesystem::path &scenePath) {
             return std::filesystem::path{scenePath.string() + ".terrain"};
         }
 
-        void writeLittleEndianU32(std::ostream& output, const std::uint32_t value) {
+        void writeLittleEndianU32(std::ostream &output, const std::uint32_t value) {
             const std::array<char, 4> bytes{
                 static_cast<char>(value & 0xFFU), static_cast<char>((value >> 8U) & 0xFFU),
-                static_cast<char>((value >> 16U) & 0xFFU), static_cast<char>((value >> 24U) & 0xFFU)};
+                static_cast<char>((value >> 16U) & 0xFFU), static_cast<char>((value >> 24U) & 0xFFU),
+            };
             output.write(bytes.data(), static_cast<std::streamsize>(bytes.size()));
         }
 
-        [[nodiscard]] std::uint32_t readLittleEndianU32(std::istream& input, const std::string_view description) {
+        [[nodiscard]] std::uint32_t readLittleEndianU32(std::istream &input, const std::string_view description) {
             std::array<unsigned char, 4> bytes{};
-            input.read(reinterpret_cast<char*>(bytes.data()), static_cast<std::streamsize>(bytes.size()));
-            if (!input) invalidScene("could not read " + std::string(description));
+            input.read(reinterpret_cast<char *>(bytes.data()), static_cast<std::streamsize>(bytes.size()));
+            if (!input) {
+                invalidScene("could not read " + std::string(description));
+            }
             return static_cast<std::uint32_t>(bytes[0]) |
                    (static_cast<std::uint32_t>(bytes[1]) << 8U) |
                    (static_cast<std::uint32_t>(bytes[2]) << 16U) |
                    (static_cast<std::uint32_t>(bytes[3]) << 24U);
         }
 
-        void writeLittleEndianU64(std::ostream& output, const std::uint64_t value) {
-            for (unsigned shift = 0; shift < 64; shift += 8) output.put(static_cast<char>((value >> shift) & 0xFFU));
+        void writeLittleEndianU64(std::ostream &output, const std::uint64_t value) {
+            for (unsigned shift = 0; shift < 64; shift += 8) {
+                output.put(static_cast<char>((value >> shift) & 0xFFU));
+            }
         }
 
-        [[nodiscard]] std::uint64_t readLittleEndianU64(std::istream& input, const std::string_view description) {
+        [[nodiscard]] std::uint64_t readLittleEndianU64(std::istream &input, const std::string_view description) {
             std::uint64_t value = 0;
             for (unsigned shift = 0; shift < 64; shift += 8) {
                 const int byte = input.get();
-                if (byte == EOF) invalidScene("could not read " + std::string(description));
+                if (byte == EOF) {
+                    invalidScene("could not read " + std::string(description));
+                }
                 value |= static_cast<std::uint64_t>(static_cast<unsigned char>(byte)) << shift;
             }
             return value;
         }
 
-        [[nodiscard]] std::uint64_t terrainChecksum(const TerrainComponent& terrain) noexcept {
+        [[nodiscard]] std::uint64_t terrainChecksum(const TerrainComponent &terrain) noexcept {
             std::uint64_t hash = 1469598103934665603ULL;
             const auto append = [&hash](const float value) {
                 const auto bits = std::bit_cast<std::uint32_t>(value);
@@ -121,14 +128,20 @@ namespace Engine {
                     hash *= 1099511628211ULL;
                 }
             };
-            for (const float value : terrain.heights) append(value);
-            for (const Vec3& color : terrain.colors) { append(color.x()); append(color.y()); append(color.z()); }
+            for (const float value: terrain.heights) {
+                append(value);
+            }
+            for (const Vec3 &color: terrain.colors) {
+                append(color.x());
+                append(color.y());
+                append(color.z());
+            }
             return hash;
         }
 
-        [[nodiscard]] std::uint64_t byteChecksum(const std::vector<std::uint8_t>& bytes) noexcept {
+        [[nodiscard]] std::uint64_t byteChecksum(const std::vector<std::uint8_t> &bytes) noexcept {
             std::uint64_t hash = 1469598103934665603ULL;
-            for (const std::uint8_t byte : bytes) {
+            for (const std::uint8_t byte: bytes) {
                 hash ^= byte;
                 hash *= 1099511628211ULL;
             }
@@ -239,15 +252,26 @@ namespace Engine {
 
         void writeScriptField(std::ostream &output, const std::string &name, const ScriptFieldValue &value) {
             output << "SCRIPT_FIELD " << std::quoted(name) << ' ';
-            std::visit([&](const auto &typed) {
-                using T = std::decay_t<decltype(typed)>;
-                if constexpr (std::is_same_v<T, bool>) output << "BOOL " << static_cast<int>(typed);
-                else if constexpr (std::is_same_v<T, int>) output << "INT " << typed;
-                else if constexpr (std::is_same_v<T, float>) { output << "FLOAT "; writeFloat(output, typed); }
-                else if constexpr (std::is_same_v<T, double>) output << "DOUBLE " << typed;
-                else if constexpr (std::is_same_v<T, Vec3>) { output << "VEC3 "; writeVec3(output, typed); }
-                else if constexpr (std::is_same_v<T, Color>) { output << "COLOR "; writeColorRgba(output, typed); }
-                else if constexpr (std::is_same_v<T, std::string>) output << "STRING " << std::quoted(typed);
+            std::visit([&]<typename T>(const T &typed) {
+                using ValueType = std::decay_t<T>;
+                if constexpr (std::is_same_v<ValueType, bool>) {
+                    output << "BOOL " << static_cast<int>(typed);
+                } else if constexpr (std::is_same_v<ValueType, int>) {
+                    output << "INT " << typed;
+                } else if constexpr (std::is_same_v<ValueType, float>) {
+                    output << "FLOAT ";
+                    writeFloat(output, typed);
+                } else if constexpr (std::is_same_v<ValueType, double>) {
+                    output << "DOUBLE " << typed;
+                } else if constexpr (std::is_same_v<ValueType, Vec3>) {
+                    output << "VEC3 ";
+                    writeVec3(output, typed);
+                } else if constexpr (std::is_same_v<ValueType, Color>) {
+                    output << "COLOR ";
+                    writeColorRgba(output, typed);
+                } else if constexpr (std::is_same_v<ValueType, std::string>) {
+                    output << "STRING " << std::quoted(typed);
+                }
             }, value);
             output << '\n';
         }
@@ -284,8 +308,9 @@ namespace Engine {
             material.normalTexture = read<std::int32_t>(input, "normal texture index");
             material.normalScale = readFloat(input, "normal scale");
             const int alphaMode = read<int>(input, "alpha mode");
-            if (alphaMode < 0 || alphaMode > static_cast<int>(AlphaMode::Blend))
+            if (alphaMode < 0 || alphaMode > static_cast<int>(AlphaMode::Blend)) {
                 throw std::runtime_error("invalid material alpha mode");
+            }
             material.alphaMode = static_cast<AlphaMode>(alphaMode);
             material.doubleSided = readBool(input, "double-sided flag");
             material.alphaCutoff = readFloat(input, "alpha cutoff");
@@ -477,14 +502,14 @@ namespace Engine {
             return emitter;
         }
 
-        void writeProceduralCloud(std::ostream& output, const ProceduralCloudComponent& cloud) {
+        void writeProceduralCloud(std::ostream &output, const ProceduralCloudComponent &cloud) {
             output << cloud.seed << ' ' << cloud.puffCount << ' ';
             writeVec3(output, cloud.dimensions);
             output << ' ';
             writeFloat(output, cloud.puffRadius);
         }
 
-        ProceduralCloudComponent readProceduralCloud(std::istream& input) {
+        ProceduralCloudComponent readProceduralCloud(std::istream &input) {
             ProceduralCloudComponent cloud;
             cloud.seed = read<std::uint32_t>(input, "cloud seed");
             cloud.puffCount = read<std::uint32_t>(input, "cloud puff count");
@@ -497,7 +522,7 @@ namespace Engine {
             return cloud;
         }
 
-        void writeTerrain(std::ostream& output, const TerrainComponent& terrain) {
+        void writeTerrain(std::ostream &output, const TerrainComponent &terrain) {
             output << terrain.resolution << ' ';
             writeFloat(output, terrain.width);
             output << ' ';
@@ -507,19 +532,19 @@ namespace Engine {
             output << ' ';
             writeFloat(output, terrain.maximumHeight);
             output << ' ' << terrain.heights.size();
-            for (const float height : terrain.heights) {
+            for (const float height: terrain.heights) {
                 output << ' ';
                 writeFloat(output, height);
             }
             output << ' ' << terrain.colors.size();
-            for (const Vec3& color : terrain.colors) {
+            for (const Vec3 &color: terrain.colors) {
                 output << ' ';
                 writeVec3(output, color);
             }
             output << '\n';
         }
 
-        TerrainComponent readTerrain(std::istream& input, const bool hasColors) {
+        TerrainComponent readTerrain(std::istream &input, const bool hasColors) {
             const auto resolution = read<std::uint32_t>(input, "terrain resolution");
             const float width = readFloat(input, "terrain width");
             const float depth = readFloat(input, "terrain depth");
@@ -531,46 +556,62 @@ namespace Engine {
             }
             TerrainComponent terrain{resolution, width, depth, minimumHeight, maximumHeight};
             const std::size_t count = readCount(input, "terrain height count",
-                static_cast<std::size_t>(TerrainComponent::MaximumResolution) *
-                TerrainComponent::MaximumResolution);
+                                                static_cast<std::size_t>(TerrainComponent::MaximumResolution) *
+                                                TerrainComponent::MaximumResolution);
             if (count != terrain.sampleCount()) {
                 invalidScene("terrain height count does not match its resolution");
             }
-            for (float& height : terrain.heights) {
+            for (float &height: terrain.heights) {
                 height = readFloat(input, "terrain height");
             }
             if (hasColors) {
                 const std::size_t colorCount = readCount(input, "terrain colour count", terrain.sampleCount());
-                if (colorCount != terrain.sampleCount()) invalidScene("terrain colour count does not match its resolution");
-                for (Vec3& color : terrain.colors) color = readVec3(input, "terrain colour");
+                if (colorCount != terrain.sampleCount()) {
+                    invalidScene(
+                        "terrain colour count does not match its resolution");
+                }
+                for (Vec3 &color: terrain.colors) {
+                    color = readVec3(input, "terrain colour");
+                }
             }
-            if (!terrain.valid()) invalidScene("terrain data is invalid");
+            if (!terrain.valid()) {
+                invalidScene("terrain data is invalid");
+            }
             return terrain;
         }
 
-        void writeTerrainBinary(std::ostream& scene, std::ostream& data, const TerrainComponent& terrain) {
+        void writeTerrainBinary(std::ostream &scene, std::ostream &data, const TerrainComponent &terrain) {
             const auto offset = data.tellp();
-            if (offset < 0) throw std::runtime_error("Could not determine terrain data offset");
-            const std::uint64_t byteCount = static_cast<std::uint64_t>(terrain.heights.size()) * 4ULL +
-                                            static_cast<std::uint64_t>(terrain.colors.size()) * 12ULL;
+            if (offset < 0) {
+                throw std::runtime_error("Could not determine terrain data offset");
+            }
+            const std::uint64_t byteCount = (terrain.heights.size() * 4ULL) +
+                                            (static_cast<std::uint64_t>(terrain.colors.size()) * 12ULL);
             scene << "TERRAIN_BIN " << terrain.resolution << ' ';
-            writeFloat(scene, terrain.width); scene << ' ';
-            writeFloat(scene, terrain.depth); scene << ' ';
-            writeFloat(scene, terrain.minimumHeight); scene << ' ';
+            writeFloat(scene, terrain.width);
+            scene << ' ';
+            writeFloat(scene, terrain.depth);
+            scene << ' ';
+            writeFloat(scene, terrain.minimumHeight);
+            scene << ' ';
             writeFloat(scene, terrain.maximumHeight);
             scene << ' ' << terrain.heights.size() << ' ' << terrain.colors.size() << ' '
-                  << static_cast<std::uint64_t>(offset) << ' ' << byteCount << ' '
-                  << terrainChecksum(terrain) << '\n';
-            for (const float height : terrain.heights) writeLittleEndianU32(data, std::bit_cast<std::uint32_t>(height));
-            for (const Vec3& color : terrain.colors) {
+                    << static_cast<std::uint64_t>(offset) << ' ' << byteCount << ' '
+                    << terrainChecksum(terrain) << '\n';
+            for (const float height: terrain.heights) {
+                writeLittleEndianU32(data, std::bit_cast<std::uint32_t>(height));
+            }
+            for (const Vec3 &color: terrain.colors) {
                 writeLittleEndianU32(data, std::bit_cast<std::uint32_t>(color.x()));
                 writeLittleEndianU32(data, std::bit_cast<std::uint32_t>(color.y()));
                 writeLittleEndianU32(data, std::bit_cast<std::uint32_t>(color.z()));
             }
-            if (!data) throw std::runtime_error("Could not write terrain data");
+            if (!data) {
+                throw std::runtime_error("Could not write terrain data");
+            }
         }
 
-        TerrainComponent readTerrainBinary(std::istream& scene, std::istream& data) {
+        TerrainComponent readTerrainBinary(std::istream &scene, std::istream &data) {
             const auto resolution = read<std::uint32_t>(scene, "terrain resolution");
             const float width = readFloat(scene, "terrain width");
             const float depth = readFloat(scene, "terrain depth");
@@ -585,16 +626,22 @@ namespace Engine {
             const auto offset = read<std::uint64_t>(scene, "terrain data offset");
             const auto byteCount = read<std::uint64_t>(scene, "terrain data size");
             const auto checksum = read<std::uint64_t>(scene, "terrain data checksum");
-            const auto expectedBytes = static_cast<std::uint64_t>(heightCount) * 4ULL +
-                                       static_cast<std::uint64_t>(colorCount) * 12ULL;
-            if (heightCount != terrain.sampleCount() || colorCount != terrain.sampleCount() || byteCount != expectedBytes) {
+            const auto expectedBytes = (static_cast<std::uint64_t>(heightCount) * 4ULL) +
+                                       (static_cast<std::uint64_t>(colorCount) * 12ULL);
+            if (heightCount != terrain.sampleCount() || colorCount != terrain.sampleCount() || byteCount !=
+                expectedBytes) {
                 invalidScene("terrain binary data dimensions are invalid");
             }
             data.clear();
             data.seekg(static_cast<std::streamoff>(offset));
-            if (!data) invalidScene("could not seek terrain data");
-            for (float& height : terrain.heights) height = std::bit_cast<float>(readLittleEndianU32(data, "terrain height"));
-            for (Vec3& color : terrain.colors) {
+            if (!data) {
+                invalidScene("could not seek terrain data");
+            }
+            for (float &height: terrain.heights) {
+                height = std::bit_cast<float>(
+                    readLittleEndianU32(data, "terrain height"));
+            }
+            for (Vec3 &color: terrain.colors) {
                 // Decode in separate statements: function-argument evaluation
                 // order must not determine the byte order of a colour.
                 const float red = std::bit_cast<float>(readLittleEndianU32(data, "terrain colour red"));
@@ -602,22 +649,31 @@ namespace Engine {
                 const float blue = std::bit_cast<float>(readLittleEndianU32(data, "terrain colour blue"));
                 color = {red, green, blue};
             }
-            if (terrainChecksum(terrain) != checksum) invalidScene("terrain binary data checksum does not match");
-            if (!terrain.valid()) invalidScene("terrain binary values are invalid");
+            if (terrainChecksum(terrain) != checksum) {
+                invalidScene("terrain binary data checksum does not match");
+            }
+            if (!terrain.valid()) {
+                invalidScene("terrain binary values are invalid");
+            }
             return terrain;
         }
 
-        void writeImageBinary(std::ostream& scene, std::ostream& data, const std::uint32_t width,
-                              const std::uint32_t height, const std::vector<std::uint8_t>& rgbaPixels) {
+        void writeImageBinary(std::ostream &scene, std::ostream &data, const std::uint32_t width,
+                              const std::uint32_t height, const std::vector<std::uint8_t> &rgbaPixels) {
             const auto offset = data.tellp();
-            if (offset < 0) throw std::runtime_error("Could not determine embedded image data offset");
+            if (offset < 0) {
+                throw std::runtime_error("Could not determine embedded image data offset");
+            }
             scene << "IMAGE_BIN " << width << ' ' << height << ' ' << rgbaPixels.size() << ' '
-                  << static_cast<std::uint64_t>(offset) << ' ' << byteChecksum(rgbaPixels) << '\n';
-            data.write(reinterpret_cast<const char*>(rgbaPixels.data()), static_cast<std::streamsize>(rgbaPixels.size()));
-            if (!data) throw std::runtime_error("Could not write embedded image data");
+                    << static_cast<std::uint64_t>(offset) << ' ' << byteChecksum(rgbaPixels) << '\n';
+            data.write(reinterpret_cast<const char *>(rgbaPixels.data()),
+                       static_cast<std::streamsize>(rgbaPixels.size()));
+            if (!data) {
+                throw std::runtime_error("Could not write embedded image data");
+            }
         }
 
-        Mesh::Image readImageBinary(std::istream& scene, std::istream& data) {
+        Mesh::Image readImageBinary(std::istream &scene, std::istream &data) {
             Mesh::Image image;
             image.width = read<std::uint32_t>(scene, "image width");
             image.height = read<std::uint32_t>(scene, "image height");
@@ -631,17 +687,21 @@ namespace Engine {
             image.rgbaPixels.resize(byteCount);
             data.clear();
             data.seekg(static_cast<std::streamoff>(offset));
-            if (!data) invalidScene("could not seek embedded image data");
-            data.read(reinterpret_cast<char*>(image.rgbaPixels.data()), static_cast<std::streamsize>(byteCount));
-            if (!data || byteChecksum(image.rgbaPixels) != checksum) invalidScene("embedded image data is invalid");
+            if (!data) {
+                invalidScene("could not seek embedded image data");
+            }
+            data.read(reinterpret_cast<char *>(image.rgbaPixels.data()), static_cast<std::streamsize>(byteCount));
+            if (!data || byteChecksum(image.rgbaPixels) != checksum) {
+                invalidScene("embedded image data is invalid");
+            }
             return image;
         }
 
-        void writeTerrainLayers(std::ostream& scene, std::ostream* data,
-                                const TerrainComponent& terrain, const MeshRenderer& renderer) {
+        void writeTerrainLayers(std::ostream &scene, std::ostream *data,
+                                const TerrainComponent &terrain, const MeshRenderer &renderer) {
             scene << "TERRAIN_LAYERS 4\n";
             for (std::size_t layer = 0; layer < terrain.materialLayers.size(); ++layer) {
-                const Mesh::Image* image = terrain.materialLayers[layer] ? &*terrain.materialLayers[layer] : nullptr;
+                const Mesh::Image *image = terrain.materialLayers[layer] ? &*terrain.materialLayers[layer] : nullptr;
                 const auto localIndex = renderer.material.pbr.terrainLayerTextures[layer];
                 if (image == nullptr && renderer.mesh && localIndex >= 0 &&
                     static_cast<std::size_t>(localIndex) < renderer.mesh->images.size()) {
@@ -654,25 +714,35 @@ namespace Engine {
                     writeImageBinary(scene, *data, image->width, image->height, image->rgbaPixels);
                 } else {
                     scene << "IMAGE " << image->width << ' ' << image->height << ' ' << image->rgbaPixels.size()
-                          << "\nPIXELS";
-                    for (const std::uint8_t pixel : image->rgbaPixels) scene << ' ' << static_cast<unsigned>(pixel);
+                            << "\nPIXELS";
+                    for (const std::uint8_t pixel: image->rgbaPixels) {
+                        scene << ' ' << static_cast<unsigned>(pixel);
+                    }
                     scene << '\n';
                 }
             }
         }
 
-        void readTerrainLayers(std::istream& scene, std::istream* data, TerrainComponent& terrain) {
+        void readTerrainLayers(std::istream &scene, std::istream *data, TerrainComponent &terrain) {
             const auto count = readCount(scene, "terrain material layer count", terrain.materialLayers.size());
-            if (count != terrain.materialLayers.size()) invalidScene("terrain must have exactly four material layers");
+            if (count != terrain.materialLayers.size()) {
+                invalidScene("terrain must have exactly four material layers");
+            }
             for (std::size_t layer = 0; layer < count; ++layer) {
                 const auto record = read<std::string>(scene, "terrain material layer record");
-                if (record == "EMPTY") continue;
+                if (record == "EMPTY") {
+                    continue;
+                }
                 if (record == "IMAGE_BIN") {
-                    if (data == nullptr) invalidScene("terrain material image sidecar is missing");
+                    if (data == nullptr) {
+                        invalidScene("terrain material image sidecar is missing");
+                    }
                     terrain.materialLayers[layer] = readImageBinary(scene, *data);
                     continue;
                 }
-                if (record != "IMAGE") invalidScene("invalid terrain material layer record");
+                if (record != "IMAGE") {
+                    invalidScene("invalid terrain material layer record");
+                }
                 Mesh::Image image;
                 image.width = read<std::uint32_t>(scene, "terrain layer image width");
                 image.height = read<std::uint32_t>(scene, "terrain layer image height");
@@ -685,19 +755,22 @@ namespace Engine {
                 image.rgbaPixels.reserve(pixels);
                 for (std::size_t pixel = 0; pixel < pixels; ++pixel) {
                     const auto byte = read<unsigned>(scene, "terrain layer image pixel");
-                    if (byte > std::numeric_limits<std::uint8_t>::max()) invalidScene("terrain layer image pixel is outside byte range");
+                    if (byte > std::numeric_limits<std::uint8_t>::max()) {
+                        invalidScene(
+                            "terrain layer image pixel is outside byte range");
+                    }
                     image.rgbaPixels.push_back(static_cast<std::uint8_t>(byte));
                 }
                 terrain.materialLayers[layer] = std::move(image);
             }
         }
 
-        void writeTerrainGrass(std::ostream& output, const TerrainGrassComponent& grass,
+        void writeTerrainGrass(std::ostream &output, const TerrainGrassComponent &grass,
                                const std::size_t meshId) {
             output << meshId << ' ';
             writeMaterial(output, grass.material);
             output << ' ' << static_cast<int>(grass.castShadow) << ' ' << grass.instances.size();
-            for (const auto& instance : grass.instances) {
+            for (const auto &instance: grass.instances) {
                 output << ' ';
                 writeVec3(output, instance.position);
                 output << ' ';
@@ -727,23 +800,31 @@ namespace Engine {
 
 #ifndef SCENE_SERIALIZER_REGISTRY_ONLY
     namespace {
-        std::filesystem::path environmentDataPath(const std::filesystem::path& scenePath) {
+        std::filesystem::path environmentDataPath(const std::filesystem::path &scenePath) {
             return std::filesystem::path{scenePath.string() + ".environment"};
         }
 
-        void saveEnvironment(const Scene& scene, const std::filesystem::path& scenePath) {
+        void saveEnvironment(const Scene &scene, const std::filesystem::path &scenePath) {
             std::ofstream output{environmentDataPath(scenePath), std::ios::trunc};
-            if (!output) throw std::runtime_error("Could not write scene environment settings");
+            if (!output) {
+                throw std::runtime_error("Could not write scene environment settings");
+            }
             output << std::quoted(scene.environmentEquirectangular().generic_string()) << '\n';
         }
 
-        void loadEnvironment(Scene& scene, const std::filesystem::path& scenePath) {
+        void loadEnvironment(Scene &scene, const std::filesystem::path &scenePath) {
             std::ifstream input{environmentDataPath(scenePath)};
-            if (!input) { scene.setEnvironmentEquirectangular({}); return; }
+            if (!input) {
+                scene.setEnvironmentEquirectangular({});
+                return;
+            }
             std::string path;
-            if (input >> std::quoted(path)) scene.setEnvironmentEquirectangular(std::filesystem::path{path});
+            if (input >> std::quoted(path)) {
+                scene.setEnvironmentEquirectangular(std::filesystem::path{path});
+            }
         }
     }
+
     void SceneSerializer::save(const Scene &scene, const std::filesystem::path &path) {
         save(scene.registry(), path);
         saveEnvironment(scene, path);
@@ -816,7 +897,9 @@ namespace Engine {
     }
 
     void SceneSerializer::replace(Scene &destination, Scene &source) {
-        if (&destination == &source) return;
+        if (&destination == &source) {
+            return;
+        }
 
         // GameObject wrappers keep references to their owning Registry. Drop
         // them before moving the registry and recreate wrappers bound to the
@@ -867,8 +950,8 @@ namespace Engine {
     void SceneSerializer::save(const Registry &registry, std::ostream &output,
                                const std::uint32_t msaaSamples) {
         output.imbue(std::locale::classic());
-        std::ostream& serialized = output;
-        auto* terrainData = static_cast<std::ostream*>(output.pword(terrainDataStreamSlot()));
+        std::ostream &serialized = output;
+        auto *terrainData = static_cast<std::ostream *>(output.pword(terrainDataStreamSlot()));
         const std::vector<Entity> entities = sortedEntities(registry);
         struct SerializedMesh final {
             std::shared_ptr<const Mesh> source;
@@ -877,7 +960,7 @@ namespace Engine {
         std::vector<SerializedMesh> meshes;
         // MeshRenderer identity is the renderer-owned resource, not the
         // optional decoded MeshSourceData payload.
-        std::unordered_map<const void*, std::size_t> meshIds;
+        std::unordered_map<const void *, std::size_t> meshIds;
 
         for (const Entity entity: entities) {
             if (!registry.has<MeshRenderer>(entity)) {
@@ -893,9 +976,9 @@ namespace Engine {
                 meshes.push_back({renderer.mesh.source(), resource->sourcePath});
             }
         }
-        for (const Entity entity : entities) {
+        for (const Entity entity: entities) {
             if (!registry.has<TerrainGrassComponent>(entity)) continue;
-            const auto& grass = registry.get<TerrainGrassComponent>(entity);
+            const auto &grass = registry.get<TerrainGrassComponent>(entity);
             if (grass.mesh && !meshIds.contains(grass.mesh.get())) {
                 meshIds.emplace(grass.mesh.get(), meshes.size());
                 meshes.push_back({grass.mesh, grass.mesh->sourcePath});
@@ -909,10 +992,10 @@ namespace Engine {
         serialized << "SETTINGS MSAA " << msaaSamples << '\n';
         serialized << "MESHES " << meshes.size() << '\n';
         for (std::size_t meshId = 0; meshId < meshes.size(); ++meshId) {
-            const SerializedMesh& saved = meshes[meshId];
+            const SerializedMesh &saved = meshes[meshId];
             if (!saved.sourcePath.empty()) {
                 serialized << "MESH_ASSET " << meshId << ' '
-                           << std::quoted(saved.sourcePath.lexically_normal().generic_string()) << '\n';
+                        << std::quoted(saved.sourcePath.lexically_normal().generic_string()) << '\n';
                 continue;
             }
             if (!saved.source) {
@@ -954,10 +1037,10 @@ namespace Engine {
                 writeMaterial(serialized, material);
                 serialized << '\n';
             }
-            for (const auto& image: mesh.images) {
+            for (const auto &image: mesh.images) {
                 const auto width = image.width;
                 const auto height = image.height;
-                const auto& rgbaPixels = image.rgbaPixels;
+                const auto &rgbaPixels = image.rgbaPixels;
                 if (terrainData) {
                     writeImageBinary(serialized, *terrainData, width, height, rgbaPixels);
                     continue;
@@ -989,7 +1072,7 @@ namespace Engine {
             }
             if (registry.has<HierarchyOrderComponent>(entity)) {
                 serialized << "HIERARCHY_ORDER "
-                           << registry.get<HierarchyOrderComponent>(entity).value << '\n';
+                        << registry.get<HierarchyOrderComponent>(entity).value << '\n';
             }
             if (registry.has<Transform>(entity)) {
                 const auto &transform = registry.get<Transform>(entity);
@@ -1022,7 +1105,7 @@ namespace Engine {
                 }
             }
             if (registry.has<TerrainGrassComponent>(entity)) {
-                const auto& grass = registry.get<TerrainGrassComponent>(entity);
+                const auto &grass = registry.get<TerrainGrassComponent>(entity);
                 if (grass.mesh) {
                     serialized << "TERRAIN_GRASS_V2 ";
                     writeTerrainGrass(serialized, grass, meshIds.at(grass.mesh.get()));
@@ -1041,31 +1124,73 @@ namespace Engine {
                      *renderer.material.shaderGraphAsset.lexically_normal().begin() == "..")) {
                     throw std::invalid_argument("Shader Graph material asset must be relative to Assets");
                 }
-                serialized << std::quoted(renderer.material.shaderGraphAsset.lexically_normal().generic_string()) << ' ';
+                serialized << std::quoted(renderer.material.shaderGraphAsset.lexically_normal().generic_string()) <<
+                        ' ';
                 writeMaterial(serialized, renderer.material.pbr);
                 serialized << ' ' << static_cast<int>(renderer.materialOverride) << ' '
                         << static_cast<int>(renderer.castShadow) << ' '
                         << renderer.cullingBatch << '\n';
             }
             if (registry.has<WaterBodyComponent>(entity)) {
-                const auto& water = registry.get<WaterBodyComponent>(entity);
+                const auto &water = registry.get<WaterBodyComponent>(entity);
                 serialized << "WATER " << static_cast<unsigned>(water.type) << ' ';
-                writeVec3(serialized, water.shallowColor); serialized << ' '; writeVec3(serialized, water.deepColor); serialized << ' ';
-                writeVec3(serialized, water.absorptionCoefficient); serialized << ' '; writeVec3(serialized, water.scatteringCoefficient); serialized << ' ';
-                writeFloat(serialized, water.roughness); serialized << ' '; writeFloat(serialized, water.ior); serialized << ' ';
-                writeFloat(serialized, water.refractionStrength); serialized << ' '; writeFloat(serialized, water.normalStrength); serialized << ' ';
-                writeFloat(serialized, water.foamIntensity); serialized << ' '; writeFloat(serialized, water.foamThreshold); serialized << ' ';
-                writeFloat(serialized, water.maxDepth); serialized << ' ' << water.normalMap << ' ' << water.foamTexture << ' ' << water.flowMap << ' '
-                           << static_cast<int>(water.enableSSR) << ' ' << static_cast<int>(water.enableCaustics) << ' ' << static_cast<int>(water.enableUnderwater) << ' '
-                           << std::min(water.waveCount, static_cast<std::uint32_t>(water.waves.size())) << ' ' << water.lakeBoundary.size() << ' ' << water.riverSpline.size();
-                for (std::uint32_t index = 0; index < std::min(water.waveCount, static_cast<std::uint32_t>(water.waves.size())); ++index) {
-                    const auto& wave = water.waves[index];
-                    serialized << ' '; writeFloat(serialized, wave.direction.x()); serialized << ' '; writeFloat(serialized, wave.direction.y());
-                    serialized << ' '; writeFloat(serialized, wave.amplitude); serialized << ' '; writeFloat(serialized, wave.wavelength);
-                    serialized << ' '; writeFloat(serialized, wave.speed); serialized << ' '; writeFloat(serialized, wave.steepness);
+                writeVec3(serialized, water.shallowColor);
+                serialized << ' ';
+                writeVec3(serialized, water.deepColor);
+                serialized << ' ';
+                writeVec3(serialized, water.absorptionCoefficient);
+                serialized << ' ';
+                writeVec3(serialized, water.scatteringCoefficient);
+                serialized << ' ';
+                writeFloat(serialized, water.roughness);
+                serialized << ' ';
+                writeFloat(serialized, water.ior);
+                serialized << ' ';
+                writeFloat(serialized, water.refractionStrength);
+                serialized << ' ';
+                writeFloat(serialized, water.normalStrength);
+                serialized << ' ';
+                writeFloat(serialized, water.foamIntensity);
+                serialized << ' ';
+                writeFloat(serialized, water.foamThreshold);
+                serialized << ' ';
+                writeFloat(serialized, water.maxDepth);
+                serialized << ' ' << water.normalMap << ' ' << water.foamTexture << ' ' << water.flowMap << ' '
+                        << static_cast<int>(water.enableSSR) << ' ' << static_cast<int>(water.enableCaustics) << ' ' <<
+                        static_cast<int>(water.enableUnderwater) << ' '
+                        << std::min(water.waveCount, static_cast<std::uint32_t>(water.waves.size())) << ' ' << water.
+                        lakeBoundary.size() << ' ' << water.riverSpline.size();
+                for (std::uint32_t index = 0; index < std::min(water.waveCount,
+                                                               static_cast<std::uint32_t>(water.waves.size())); ++
+                     index) {
+                    const auto &wave = water.waves[index];
+                    serialized << ' ';
+                    writeFloat(serialized, wave.direction.x());
+                    serialized << ' ';
+                    writeFloat(serialized, wave.direction.y());
+                    serialized << ' ';
+                    writeFloat(serialized, wave.amplitude);
+                    serialized << ' ';
+                    writeFloat(serialized, wave.wavelength);
+                    serialized << ' ';
+                    writeFloat(serialized, wave.speed);
+                    serialized << ' ';
+                    writeFloat(serialized, wave.steepness);
                 }
-                for (const Vec3& point : water.lakeBoundary) { serialized << ' '; writeVec3(serialized, point); }
-                for (const RiverSplinePoint& point : water.riverSpline) { serialized << ' '; writeVec3(serialized, point.position); serialized << ' '; writeFloat(serialized, point.width); serialized << ' '; writeFloat(serialized, point.depth); serialized << ' '; writeFloat(serialized, point.flowSpeed); }
+                for (const Vec3 &point: water.lakeBoundary) {
+                    serialized << ' ';
+                    writeVec3(serialized, point);
+                }
+                for (const RiverSplinePoint &point: water.riverSpline) {
+                    serialized << ' ';
+                    writeVec3(serialized, point.position);
+                    serialized << ' ';
+                    writeFloat(serialized, point.width);
+                    serialized << ' ';
+                    writeFloat(serialized, point.depth);
+                    serialized << ' ';
+                    writeFloat(serialized, point.flowSpeed);
+                }
                 serialized << '\n';
             }
             if (registry.has<LightComponent>(entity)) {
@@ -1085,16 +1210,16 @@ namespace Engine {
                         << static_cast<int>(light.mainLight) << '\n';
             }
             if (registry.has<ReflectionProbeComponent>(entity)) {
-                const auto& probe = registry.get<ReflectionProbeComponent>(entity);
+                const auto &probe = registry.get<ReflectionProbeComponent>(entity);
                 serialized << "REFLECTION_PROBE " << static_cast<unsigned>(probe.shape) << ' ';
                 writeVec3(serialized, probe.extents);
                 serialized << ' ';
                 writeFloat(serialized, probe.blendDistance);
                 serialized << ' ' << probe.priority << ' ' << static_cast<int>(probe.enabled)
-                           << ' ' << static_cast<int>(probe.boxProjection) << '\n';
+                        << ' ' << static_cast<int>(probe.boxProjection) << '\n';
             }
             if (registry.has<WindComponent>(entity)) {
-                const auto& wind = registry.get<WindComponent>(entity);
+                const auto &wind = registry.get<WindComponent>(entity);
                 serialized << "WIND_V2 ";
                 writeVec3(serialized, wind.direction);
                 serialized << ' ';
@@ -1140,18 +1265,18 @@ namespace Engine {
             }
             if (registry.has<ScriptComponent>(entity)) {
                 const auto &script = registry.get<ScriptComponent>(entity);
-                std::vector<std::pair<std::string, ScriptFieldValue>> scriptFields;
+                std::vector<std::pair<std::string, ScriptFieldValue> > scriptFields;
                 if (const auto *descriptor = ScriptRegistry::instance().descriptor(script.className)) {
-                    for (const auto &field : descriptor->fields) {
+                    for (const auto &field: descriptor->fields) {
                         const auto found = script.fields.find(field.name);
                         if (found != script.fields.end()) scriptFields.emplace_back(found->first, found->second);
                     }
                 } else {
-                    for (const auto &field : script.fields) scriptFields.push_back(field);
+                    for (const auto &field: script.fields) scriptFields.push_back(field);
                 }
                 serialized << "SCRIPT " << std::quoted(script.className) << ' '
                         << static_cast<int>(script.enabled) << ' ' << scriptFields.size() << '\n';
-                for (const auto &[name, value] : scriptFields) writeScriptField(serialized, name, value);
+                for (const auto &[name, value]: scriptFields) writeScriptField(serialized, name, value);
             }
             serialized << "END_ENTITY\n";
         }
@@ -1182,7 +1307,8 @@ namespace Engine {
         if (terrainData) {
             std::array<char, TerrainDataMagic.size()> magic{};
             terrainData.read(magic.data(), static_cast<std::streamsize>(magic.size()));
-            if (magic != TerrainDataMagic || readLittleEndianU32(terrainData, "terrain data version") != TerrainDataVersion) {
+            if (magic != TerrainDataMagic || readLittleEndianU32(terrainData, "terrain data version") !=
+                TerrainDataVersion) {
                 invalidScene("unsupported terrain data sidecar");
             }
             input.pword(terrainDataStreamSlot()) = &terrainData;
@@ -1217,7 +1343,7 @@ namespace Engine {
             version != FormatVersion) {
             invalidScene("unsupported format version " + std::to_string(version));
         }
-        auto* terrainData = static_cast<std::istream*>(input.pword(terrainDataStreamSlot()));
+        auto *terrainData = static_cast<std::istream *>(input.pword(terrainDataStreamSlot()));
 
         std::string section;
         input >> section;
@@ -1541,7 +1667,8 @@ namespace Engine {
                     renderer.material.pbr = readMaterial(input, version);
                     renderer.material.synchronizeRenderStateFromPbr();
                     renderer.materialOverride = version >= MaterialOverrideFormatVersion
-                        ? readBool(input, "material-override flag") : false;
+                                                    ? readBool(input, "material-override flag")
+                                                    : false;
                     renderer.castShadow = readBool(input, "cast-shadow flag");
                     renderer.cullingBatch = read<std::uint32_t>(input, "culling batch");
                     loaded.add<MeshRenderer>(entity, std::move(renderer));
@@ -1551,21 +1678,54 @@ namespace Engine {
                     if (type > static_cast<unsigned>(WaterBodyType::River)) invalidScene("unknown water type");
                     WaterBodyComponent water;
                     water.type = static_cast<WaterBodyType>(type);
-                    water.shallowColor = readVec3(input, "water shallow color"); water.deepColor = readVec3(input, "water deep color");
-                    water.absorptionCoefficient = readVec3(input, "water absorption"); water.scatteringCoefficient = readVec3(input, "water scattering");
-                    water.roughness = readFloat(input, "water roughness"); water.ior = readFloat(input, "water IOR");
-                    water.refractionStrength = readFloat(input, "water refraction strength"); water.normalStrength = readFloat(input, "water normal strength");
-                    water.foamIntensity = readFloat(input, "water foam intensity"); water.foamThreshold = readFloat(input, "water foam threshold");
-                    water.maxDepth = readFloat(input, "water max depth"); water.normalMap = read<std::int32_t>(input, "water normal map");
-                    water.foamTexture = read<std::int32_t>(input, "water foam texture"); water.flowMap = read<std::int32_t>(input, "water flow map");
-                    water.enableSSR = readBool(input, "water SSR flag"); water.enableCaustics = readBool(input, "water caustics flag"); water.enableUnderwater = readBool(input, "water underwater flag");
-                    water.waveCount = static_cast<std::uint32_t>(readCount(input, "water wave count", water.waves.size()));
-                    const std::size_t boundaryCount = readCount(input, "water boundary count", 100000); const std::size_t splineCount = readCount(input, "water spline count", 100000);
-                    for (std::uint32_t index = 0; index < water.waveCount; ++index) { auto& wave = water.waves[index]; wave.direction = {readFloat(input, "wave direction x"), readFloat(input, "wave direction y")}; wave.amplitude = readFloat(input, "wave amplitude"); wave.wavelength = readFloat(input, "wave wavelength"); wave.speed = readFloat(input, "wave speed"); wave.steepness = readFloat(input, "wave steepness"); if (wave.direction.length() < 1.0e-4F || wave.amplitude < 0.0F || wave.wavelength <= 0.0F || wave.steepness < 0.0F || wave.steepness > 1.0F) invalidScene("water wave is invalid"); }
-                    water.lakeBoundary.resize(boundaryCount); for (Vec3& point : water.lakeBoundary) point = readVec3(input, "water boundary point");
-                    water.riverSpline.resize(splineCount); for (RiverSplinePoint& point : water.riverSpline) { point.position = readVec3(input, "river spline point"); point.width = readFloat(input, "river width"); point.depth = readFloat(input, "river depth"); point.flowSpeed = readFloat(input, "river flow speed"); if (point.width <= 0.0F || point.depth < 0.0F) invalidScene("river spline is invalid"); }
-                    if (water.roughness < 0.0F || water.roughness > 1.0F || water.ior <= 1.0F || water.maxDepth <= 0.0F || water.refractionStrength < 0.0F || water.normalStrength < 0.0F) invalidScene("water material is invalid");
-                    loaded.add<WaterBodyComponent>(entity, std::move(water)); hasWater = true;
+                    water.shallowColor = readVec3(input, "water shallow color");
+                    water.deepColor = readVec3(input, "water deep color");
+                    water.absorptionCoefficient = readVec3(input, "water absorption");
+                    water.scatteringCoefficient = readVec3(input, "water scattering");
+                    water.roughness = readFloat(input, "water roughness");
+                    water.ior = readFloat(input, "water IOR");
+                    water.refractionStrength = readFloat(input, "water refraction strength");
+                    water.normalStrength = readFloat(input, "water normal strength");
+                    water.foamIntensity = readFloat(input, "water foam intensity");
+                    water.foamThreshold = readFloat(input, "water foam threshold");
+                    water.maxDepth = readFloat(input, "water max depth");
+                    water.normalMap = read<std::int32_t>(input, "water normal map");
+                    water.foamTexture = read<std::int32_t>(input, "water foam texture");
+                    water.flowMap = read<std::int32_t>(input, "water flow map");
+                    water.enableSSR = readBool(input, "water SSR flag");
+                    water.enableCaustics = readBool(input, "water caustics flag");
+                    water.enableUnderwater = readBool(input, "water underwater flag");
+                    water.waveCount = static_cast<std::uint32_t>(readCount(
+                        input, "water wave count", water.waves.size()));
+                    const std::size_t boundaryCount = readCount(input, "water boundary count", 100000);
+                    const std::size_t splineCount = readCount(input, "water spline count", 100000);
+                    for (std::uint32_t index = 0; index < water.waveCount; ++index) {
+                        auto &wave = water.waves[index];
+                        wave.direction = {readFloat(input, "wave direction x"), readFloat(input, "wave direction y")};
+                        wave.amplitude = readFloat(input, "wave amplitude");
+                        wave.wavelength = readFloat(input, "wave wavelength");
+                        wave.speed = readFloat(input, "wave speed");
+                        wave.steepness = readFloat(input, "wave steepness");
+                        if (wave.direction.length() < 1.0e-4F || wave.amplitude < 0.0F || wave.wavelength <= 0.0F ||
+                            wave.steepness < 0.0F || wave.steepness > 1.0F)
+                            invalidScene("water wave is invalid");
+                    }
+                    water.lakeBoundary.resize(boundaryCount);
+                    for (Vec3 &point: water.lakeBoundary) point = readVec3(input, "water boundary point");
+                    water.riverSpline.resize(splineCount);
+                    for (RiverSplinePoint &point: water.riverSpline) {
+                        point.position = readVec3(input, "river spline point");
+                        point.width = readFloat(input, "river width");
+                        point.depth = readFloat(input, "river depth");
+                        point.flowSpeed = readFloat(input, "river flow speed");
+                        if (point.width <= 0.0F || point.depth < 0.0F) invalidScene("river spline is invalid");
+                    }
+                    if (water.roughness < 0.0F || water.roughness > 1.0F || water.ior <= 1.0F || water.maxDepth <= 0.0F
+                        || water.refractionStrength < 0.0F || water.normalStrength < 0.0F)
+                        invalidScene(
+                            "water material is invalid");
+                    loaded.add<WaterBodyComponent>(entity, std::move(water));
+                    hasWater = true;
                 } else if (component == "WIND" || component == "WIND_V2") {
                     if (hasWind) invalidScene("entity contains more than one WindComponent");
                     hasWind = true;
@@ -1604,7 +1764,8 @@ namespace Engine {
                     light.outerConeAngle = readFloat(input, "spot outer cone angle");
                     light.enabled = readBool(input, "light enabled flag");
                     light.castShadows = readBool(input, "light cast-shadows flag");
-                    light.mainLight = version >= RigidbodyStateFormatVersion - 1 && readBool(input, "light main-light flag");
+                    light.mainLight = version >= RigidbodyStateFormatVersion - 1 && readBool(
+                                          input, "light main-light flag");
                     // Prior formats made the sole enabled directional light
                     // implicit. Preserve that scene intent on migration.
                     if (version < RigidbodyStateFormatVersion - 1 && light.type == LightType::Directional &&
@@ -1687,9 +1848,13 @@ namespace Engine {
                             if (type == "BOOL") script.fields[fieldName] = readBool(input, "script bool field");
                             else if (type == "INT") script.fields[fieldName] = read<int>(input, "script int field");
                             else if (type == "FLOAT") script.fields[fieldName] = readFloat(input, "script float field");
-                            else if (type == "DOUBLE") script.fields[fieldName] = read<double>(input, "script double field");
+                            else if (type == "DOUBLE")
+                                script.fields[fieldName] = read<double>(
+                                    input, "script double field");
                             else if (type == "VEC3") script.fields[fieldName] = readVec3(input, "script vec3 field");
-                            else if (type == "COLOR") script.fields[fieldName] = readColorRgba(input, "script color field");
+                            else if (type == "COLOR")
+                                script.fields[fieldName] = readColorRgba(
+                                    input, "script color field");
                             else if (type == "STRING") {
                                 std::string value;
                                 input >> std::quoted(value);
@@ -1751,8 +1916,8 @@ namespace Engine {
                 loaded.get<TerrainComponent>(entity).applyMaterialLayers(
                     *mesh, loaded.get<MeshRenderer>(entity).material.pbr);
                 if (hasCollider) {
-                    if (auto* meshCollider = std::get_if<MeshCollider>(
-                            &loaded.get<ColliderComponent>(entity).shape)) {
+                    if (auto *meshCollider = std::get_if<MeshCollider>(
+                        &loaded.get<ColliderComponent>(entity).shape)) {
                         meshCollider->mesh = mesh;
                     }
                 }
@@ -1761,7 +1926,7 @@ namespace Engine {
                 std::holds_alternative<RampCollider>(loaded.get<ColliderComponent>(entity).shape)) {
                 // Ramps must remain legible from either side in the editor and
                 // use the renderer's dedicated two-sided material stream.
-                auto& material = loaded.get<MeshRenderer>(entity).material;
+                auto &material = loaded.get<MeshRenderer>(entity).material;
                 material.pbr.doubleSided = true;
                 material.synchronizeRenderStateFromPbr();
             }
@@ -1806,9 +1971,9 @@ namespace Engine {
         }
 
         loaded.view<ColliderComponent, MeshRenderer>([](const Entity,
-                                                         ColliderComponent& collider,
-                                                         const MeshRenderer& renderer) {
-            if (auto* meshCollider = std::get_if<MeshCollider>(&collider.shape)) {
+                                                        ColliderComponent &collider,
+                                                        const MeshRenderer &renderer) {
+            if (auto *meshCollider = std::get_if<MeshCollider>(&collider.shape)) {
                 meshCollider->mesh = renderer.mesh;
             }
         });
