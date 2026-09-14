@@ -154,8 +154,18 @@ float shadowWorldTexelSize(float4x4 lightSpace)
     // Orthographic clip matrices scale the light-space X/Y axes by 1/extent.
     // Reading that scale keeps the receiver bias correct for the dynamic far
     // clipmap as well as the fixed near levels.
-    float lightSpaceScale = max(length(lightSpace[0].xyz), 1.0e-6);
+    // Positions are transformed as row vectors below, so each clip-space
+    // component is formed from a *column* of the matrix, not a row.
+    const float3 clipXGradient = float3(lightSpace[0][0], lightSpace[1][0], lightSpace[2][0]);
+    const float3 clipYGradient = float3(lightSpace[0][1], lightSpace[1][1], lightSpace[2][1]);
+    const float lightSpaceScale = max(max(length(clipXGradient), length(clipYGradient)), 1.0e-6);
     return 2.0 / (float(VIRTUAL_RESOLUTION) * lightSpaceScale);
+}
+
+float shadowLightDepthScale(float4x4 lightSpace)
+{
+    const float3 clipZGradient = float3(lightSpace[0][2], lightSpace[1][2], lightSpace[2][2]);
+    return max(length(clipZGradient), 1.0e-6);
 }
 
 float shadowReceiverDepthBias(float currentDepth, float2 uv, float3 normal,
@@ -166,17 +176,28 @@ float shadowReceiverDepthBias(float currentDepth, float2 uv, float3 normal,
     // depth per virtual-shadow texel, then cover the 2-texel comparison
     // footprint.  This prevents quantized shadow depths from producing acne
     // bands on large, nearly planar receivers.
-    const float depthSlope = max(abs(ddx(currentDepth)), abs(ddy(currentDepth)));
-    const float uvFootprint = max(length(ddx(uv)), length(ddy(uv)));
-    const float texelsPerPixel = max(uvFootprint * float(VIRTUAL_RESOLUTION), 1.0);
-    const float receiverPlaneBias =
-        SHADOW_TEXEL_BIAS_SCALE * depthSlope / texelsPerPixel;
+    const float2 uvDx = ddx(uv);
+    const float2 uvDy = ddy(uv);
+    const float zDx = ddx(currentDepth);
+    const float zDy = ddy(currentDepth);
+    const float determinant = uvDx.x * uvDy.y - uvDx.y * uvDy.x;
+    // Invert the screen-to-shadow-UV Jacobian.  Taking independent maxima of
+    // depth and UV derivatives can pair values from different screen axes and
+    // severely underestimate the required bias on diagonally projected planes.
+    float receiverPlaneBias = 0.0;
+    if (abs(determinant) > 1.0e-8)
+    {
+        const float dzdu = (uvDy.y * zDx - uvDx.y * zDy) / determinant;
+        const float dzdv = (uvDx.x * zDy - uvDy.x * zDx) / determinant;
+        receiverPlaneBias = SHADOW_TEXEL_BIAS_SCALE *
+                            (abs(dzdu) + abs(dzdv)) / float(VIRTUAL_RESOLUTION);
+    }
 
     // Normal offset is expressed in world units, so convert one world shadow
     // texel to the normalized depth range before combining it with the plane
     // term.  It is a conservative floor for surfaces with a tiny derivative.
     const float NoL = saturate(dot(normalize(normal), normalize(lightDirection)));
-    const float lightDepthScale = max(length(lightSpace[2].xyz), 1.0e-6);
+    const float lightDepthScale = shadowLightDepthScale(lightSpace);
     const float normalDepthBias = shadowWorldTexelSize(lightSpace) * lightDepthScale *
         lerp(0.5, 2.0, 1.0 - NoL);
 
@@ -251,7 +272,7 @@ float sampleVirtualShadowLevel(Sampler2DShadow shadowMap, Sampler2D shadowDepthM
         // The first four samples cover the centre. If all four are blockers,
         // the receiver is inside a stable solid shadow and the outer ring is
         // skipped; silhouette and foliage pixels receive all eight samples.
-        const float lightDepthScale = max(length(lightSpace[2].xyz), 1.0e-6);
+        const float lightDepthScale = shadowLightDepthScale(lightSpace);
         const float sunAngularRadius = 0.00465;
         const float blockerSearchRadius = clamp(
             tan(sunAngularRadius) * max(currentDepth, 0.02) /
@@ -385,10 +406,20 @@ float shadowTexelFootprintThreshold(const uint shadowQuality)
     return shadowQuality == SHADOW_QUALITY_MEDIUM ? 1.5 : 1.0;
 }
 
+float shadowFootprintInTexels(float3 worldPosition, float4x4 clipMatrix)
+{
+    const float4 lightClip = mul(float4(worldPosition, 1.0), clipMatrix);
+    if (abs(lightClip.w) < 1.0e-6)
+        return 0.0;
+    const float2 uv = lightClip.xy / lightClip.w * 0.5 + 0.5;
+    return max(length(ddx(uv)), length(ddy(uv))) * float(VIRTUAL_RESOLUTION);
+}
+
 uint selectVirtualShadowLevel(float3 worldPosition, float4x4 clipMatrices[7],
-                              const uint shadowQuality)
+                              const uint shadowQuality, out float footprintInTexels)
 {
     const float threshold = shadowTexelFootprintThreshold(shadowQuality);
+    footprintInTexels = 0.0;
     [unroll]
     for (uint level = 0; level < SHADOW_CLIP_LEVELS; ++level)
     {
@@ -400,10 +431,12 @@ uint selectVirtualShadowLevel(float3 worldPosition, float4x4 clipMatrices[7],
         // This is the same LOD rule as receiver marking, but uses both
         // screen-space axes.  Sampling must never let incidental L0 cache
         // residency override the requested geometric LOD.
-        const float footprintInTexels = max(length(ddx(uv)), length(ddy(uv))) *
-                                        float(VIRTUAL_RESOLUTION);
-        if (footprintInTexels <= threshold || level + 1 == SHADOW_CLIP_LEVELS)
+        const float levelFootprint = shadowFootprintInTexels(worldPosition, clipMatrices[level]);
+        if (levelFootprint <= threshold || level + 1 == SHADOW_CLIP_LEVELS)
+        {
+            footprintInTexels = levelFootprint;
             return level;
+        }
     }
     return SHADOW_CLIP_LEVELS - 1;
 }
@@ -419,7 +452,9 @@ float sampleVirtualShadow(Sampler2DShadow shadowMap, Sampler2D shadowDepthMap,
     debug.clipLevel = 0;
     debug.virtualPage = 0;
     bool resident;
-    const uint desiredLevel = selectVirtualShadowLevel(worldPosition, clipMatrices, shadowQuality);
+    float desiredFootprintInTexels;
+    const uint desiredLevel = selectVirtualShadowLevel(
+        worldPosition, clipMatrices, shadowQuality, desiredFootprintInTexels);
     [loop]
     for (uint level = desiredLevel; level < SHADOW_CLIP_LEVELS; ++level)
     {
@@ -437,9 +472,20 @@ float sampleVirtualShadow(Sampler2DShadow shadowMap, Sampler2D shadowDepthMap,
             debug.penumbraRadius = penumbraRadius;
             debug.clipLevel = level;
             debug.virtualPage = virtualPage;
-            // Fade through the outer fifth of the clipmap. Do not blend with
-            // an absent next-level page: it is safer to keep the valid level.
-            if (level + 1 < SHADOW_CLIP_LEVELS && clipEdge > 0.75)
+            // Cross-fade both at the geometric clipmap edge and across the
+            // screen-space footprint threshold.  The latter keeps adjacent
+            // pixels from abruptly switching between independently rendered
+            // clip levels, which otherwise appears as horizontal LOD seams.
+            const float footprintInTexels = level == desiredLevel
+                ? desiredFootprintInTexels
+                : shadowFootprintInTexels(worldPosition, clipMatrices[level]);
+            const float threshold = shadowTexelFootprintThreshold(shadowQuality);
+            const float lodBlend = smoothstep(threshold * 0.70, threshold, footprintInTexels);
+            const float clipBlend = smoothstep(0.75, 0.95, clipEdge);
+            const float transition = max(lodBlend, clipBlend);
+            // Do not blend with an absent next-level page: it is safer to
+            // keep the valid level until its fallback becomes resident.
+            if (level + 1 < SHADOW_CLIP_LEVELS && transition > 0.0)
             {
                 bool nextResident;
                 float nextClipEdge;
@@ -451,7 +497,7 @@ float sampleVirtualShadow(Sampler2DShadow shadowMap, Sampler2D shadowDepthMap,
                     pageTable, shadowQuality, nextResident, nextClipEdge,
                     nextBlockerCount, nextPenumbraRadius, nextVirtualPage);
                 if (nextResident)
-                    shadow = lerp(shadow, nextShadow, smoothstep(0.75, 0.95, clipEdge));
+                    shadow = lerp(shadow, nextShadow, transition);
             }
             return shadow;
         }
