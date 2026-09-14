@@ -93,6 +93,11 @@ namespace Engine {
         // the Game View render graph. Scene View owns a differently sized
         // target and must not sample Game View textures.
         std::uint32_t screenSpaceEffects{1};
+        // Shadow kernels vary their phase only while this view is resolved by
+        // TAA; Scene View intentionally remains spatially stable.
+        std::uint32_t temporalShadowJitter{0};
+        std::uint32_t temporalSampleIndex{0};
+        std::uint32_t padding{};
         glm::vec4 clusteredViewportNearFar{};
         std::array<LocalLightGPU, MaxLocalLights> localLights{};
     };

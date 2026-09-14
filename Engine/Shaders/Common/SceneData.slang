@@ -38,6 +38,9 @@ struct RendererFrameData
     // Zero for views without matching full-screen inputs (currently Scene
     // View); prevents sampling Game View's GTAO/depth/colour textures.
     uint screenSpaceEffects;
+    uint temporalShadowJitter;
+    uint temporalSampleIndex;
+    uint padding;
     // xy viewport pixels, z near plane, w far plane.
     float4 clusteredViewportNearFar;
     LocalLightData localLights[32];

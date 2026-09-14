@@ -372,7 +372,8 @@ ForwardFragmentOutput fragmentMain(ForwardFragmentInput input)
     ShadowSampleDebug shadowDebug = {0.0, 0.0, 0u, uint2(0, 0)};
     float shadow = frame.shadowEnabled != 0
         ? sampleVirtualShadow(shadowMap, shadowDepthMap, input.worldPosition, normal, lightDirection, frame.shadowClipMatrices,
-                              shadowPageTable, frame.shadowQuality, shadowDebug) : 0.0;
+                              shadowPageTable, frame.shadowQuality, uint2(input.position.xy),
+                              frame.temporalSampleIndex, frame.temporalShadowJitter != 0, shadowDebug) : 0.0;
     if (frame.shadowDebugView != SHADOW_DEBUG_OFF)
     {
         ForwardFragmentOutput debugOutput;

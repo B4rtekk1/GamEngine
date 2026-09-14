@@ -204,11 +204,24 @@ float shadowReceiverDepthBias(float currentDepth, float2 uv, float3 normal,
     return max(MIN_SHADOW_BIAS, max(receiverPlaneBias, normalDepthBias));
 }
 
+float shadowKernelRotation(uint2 pixelCoordinate, uint temporalSampleIndex,
+                           bool temporalShadowJitter)
+{
+    uint hash = pixelCoordinate.x * 1664525u + pixelCoordinate.y * 1013904223u;
+    if (temporalShadowJitter)
+        hash ^= temporalSampleIndex * 747796405u;
+    hash = (hash ^ (hash >> 16u)) * 2246822519u;
+    hash ^= hash >> 13u;
+    return float(hash & 0x00ffffffu) / float(0x01000000u) * 6.28318530718;
+}
+
 float sampleVirtualShadowLevel(Sampler2DShadow shadowMap, Sampler2D shadowDepthMap,
                                float3 worldPosition,
                                float3 normal, float3 lightDirection,
                                float4x4 lightSpace, uint level,
-                               StructuredBuffer<uint4> pageTable, uint shadowQuality, out bool resident,
+                               StructuredBuffer<uint4> pageTable, uint shadowQuality,
+                               uint2 pixelCoordinate, uint temporalSampleIndex,
+                               bool temporalShadowJitter, out bool resident,
                                out float clipEdge, out float blockerCount,
                                out float penumbraRadius, out uint2 virtualPage)
 {
@@ -248,13 +261,10 @@ float sampleVirtualShadowLevel(Sampler2DShadow shadowMap, Sampler2D shadowDepthM
     // can represent unrelated virtual pages. Every filtered tap must therefore
     // resolve its own virtual texel before sampling the atlas.
     const bool useStablePoisson = shadowQuality == SHADOW_QUALITY_ULTRA;
-    // Coarser levels have the largest world-space texels.  Do not drop to a
-    // 2x2 filter precisely where the virtual grid is easiest to see.
-    const bool useTent3x3 = shadowQuality == SHADOW_QUALITY_HIGH && level < 4;
+    // The edge-only PCF16 is also useful on coarse levels, where the virtual
+    // grid is otherwise most visible.
+    const bool useHighEdgeFilter = shadowQuality == SHADOW_QUALITY_HIGH;
 
-    // Keep this kernel fixed. A world-position rotation makes a single Scene
-    // View frame read as a noisy dither, and must not be enabled unless the
-    // pass is guaranteed to receive a shadow-aware temporal accumulation.
     static const float2 poisson[16] = {
         float2(-0.94201624, -0.39906216), float2(0.94558609, -0.76890725),
         float2(-0.09418410, -0.92938870), float2(0.34495938, 0.29387760),
@@ -264,6 +274,11 @@ float sampleVirtualShadowLevel(Sampler2DShadow shadowMap, Sampler2D shadowDepthM
         float2(-0.26496911, -0.41893023), float2(0.79197514, 0.19090188),
         float2(-0.24188840, 0.99706507), float2(-0.81409955, 0.91437590),
         float2(0.19984126, 0.78641367), float2(0.14383161, -0.14100790)};
+    const float rotation = shadowKernelRotation(pixelCoordinate, temporalSampleIndex,
+                                                temporalShadowJitter);
+    float rotationSin;
+    float rotationCos;
+    sincos(rotation, rotationSin, rotationCos);
 
     if (useStablePoisson)
     {
@@ -327,19 +342,20 @@ float sampleVirtualShadowLevel(Sampler2DShadow shadowMap, Sampler2D shadowDepthM
             tan(sunAngularRadius) * receiverBlockerDistance /
             shadowWorldTexelSize(lightSpace), 0.25, 6.0);
 
-        // Scale the compare budget with the visible penumbra. At contact the
-        // four-tap path is cheaper than the previous fixed twelve samples;
-        // only broad penumbrae use the complete stable Poisson kernel.
-        const uint tapCount = penumbraRadius < 1.5 ? 4u :
-                              (penumbraRadius < 3.5 ? 8u : 12u);
+        // Contact shadows need silhouette antialiasing too; penumbra width
+        // must not reduce the comparison budget below twelve samples.
+        const uint tapCount = penumbraRadius < 3.5 ? 12u : 16u;
         float filteredShadow = 0.0;
         float totalWeight = 0.0;
         [loop]
         for (uint tap = 0; tap < tapCount; ++tap)
         {
             bool tapResident;
+            const float2 offset = float2(
+                poisson[tap].x * rotationCos - poisson[tap].y * rotationSin,
+                poisson[tap].x * rotationSin + poisson[tap].y * rotationCos);
             const float tapShadow = sampleVirtualShadowBilinear(
-                shadowMap, virtualPixel + poisson[tap] * penumbraRadius, level, pageTable,
+                shadowMap, virtualPixel + offset * penumbraRadius, level, pageTable,
                 currentDepth - bias, tapResident);
             if (!tapResident)
                 continue;
@@ -352,7 +368,7 @@ float sampleVirtualShadowLevel(Sampler2DShadow shadowMap, Sampler2D shadowDepthM
     // Medium remains deliberately inexpensive. Centre its four continuous
     // bilinear samples on the receiver; using offsets 0..1 shifted the whole
     // filter half a virtual texel towards +X/+Y.
-    if (!useTent3x3)
+    if (!useHighEdgeFilter)
     {
         float filteredShadow = 0.0;
         float totalWeight = 0.0;
@@ -374,27 +390,44 @@ float sampleVirtualShadowLevel(Sampler2DShadow shadowMap, Sampler2D shadowDepthM
         return totalWeight > 0.0 ? filteredShadow / totalWeight : 0.0;
     }
 
-    static const float kernel[3] = {1.0, 2.0, 1.0};
-    float filteredShadow = 0.0;
-    float totalWeight = 0.0;
-    const int firstTap = useTent3x3 ? -1 : 0;
-    const int lastTap = 1;
-    [loop]
-    for (int y = firstTap; y <= lastTap; ++y)
+    // The four logical probes cheaply reject uniform regions. A full Poisson
+    // PCF16 is paid only where the footprint crosses a shadow silhouette.
+    float initialShadow = 0.0;
+    uint initialTapCount = 0;
+    [unroll]
+    for (int y = 0; y < 2; ++y)
     {
-        [loop]
-        for (int x = firstTap; x <= lastTap; ++x)
+        [unroll]
+        for (int x = 0; x < 2; ++x)
         {
-            const float weight = useTent3x3 ? kernel[x + 1] * kernel[y + 1] : 1.0;
             bool tapResident;
             const float tapShadow = sampleVirtualShadowBilinear(
-                shadowMap, virtualPixel + float2(x, y), level, pageTable,
+                shadowMap, virtualPixel + float2(x - 0.5, y - 0.5), level, pageTable,
                 currentDepth - bias, tapResident);
-            if (!tapResident)
-                continue;
-            filteredShadow += tapShadow * weight;
-            totalWeight += weight;
+            if (!tapResident) continue;
+            initialShadow += tapShadow;
+            ++initialTapCount;
         }
+    }
+    initialShadow *= 0.25;
+    if (initialTapCount == 4 && (initialShadow <= 0.001 || initialShadow >= 0.999))
+        return initialShadow;
+
+    float filteredShadow = 0.0;
+    float totalWeight = 0.0;
+    [unroll]
+    for (uint tap = 0; tap < 16; ++tap)
+    {
+        const float2 offset = float2(
+            poisson[tap].x * rotationCos - poisson[tap].y * rotationSin,
+            poisson[tap].x * rotationSin + poisson[tap].y * rotationCos);
+        bool tapResident;
+        const float tapShadow = sampleVirtualShadowBilinear(
+            shadowMap, virtualPixel + offset * 1.25, level, pageTable,
+            currentDepth - bias, tapResident);
+        if (!tapResident) continue;
+        filteredShadow += tapShadow;
+        totalWeight += 1.0;
     }
     return totalWeight > 0.0 ? filteredShadow / totalWeight : 0.0;
 }
@@ -445,7 +478,9 @@ float sampleVirtualShadow(Sampler2DShadow shadowMap, Sampler2D shadowDepthMap,
                           float3 worldPosition,
                           float3 normal, float3 lightDirection,
                           float4x4 clipMatrices[7], StructuredBuffer<uint4> pageTable,
-                          uint shadowQuality, out ShadowSampleDebug debug)
+                          uint shadowQuality, uint2 pixelCoordinate,
+                          uint temporalSampleIndex, bool temporalShadowJitter,
+                          out ShadowSampleDebug debug)
 {
     debug.blockerCount = 0.0;
     debug.penumbraRadius = 0.0;
@@ -464,7 +499,8 @@ float sampleVirtualShadow(Sampler2DShadow shadowMap, Sampler2D shadowDepthMap,
         uint2 virtualPage;
         float shadow = sampleVirtualShadowLevel(
             shadowMap, shadowDepthMap, worldPosition, normal, lightDirection,
-            clipMatrices[level], level, pageTable, shadowQuality, resident, clipEdge,
+            clipMatrices[level], level, pageTable, shadowQuality, pixelCoordinate,
+            temporalSampleIndex, temporalShadowJitter, resident, clipEdge,
             blockerCount, penumbraRadius, virtualPage);
         if (resident)
         {
@@ -494,7 +530,8 @@ float sampleVirtualShadow(Sampler2DShadow shadowMap, Sampler2D shadowDepthMap,
                 uint2 nextVirtualPage;
                 float nextShadow = sampleVirtualShadowLevel(
                     shadowMap, shadowDepthMap, worldPosition, normal, lightDirection, clipMatrices[level + 1], level + 1,
-                    pageTable, shadowQuality, nextResident, nextClipEdge,
+                    pageTable, shadowQuality, pixelCoordinate, temporalSampleIndex,
+                    temporalShadowJitter, nextResident, nextClipEdge,
                     nextBlockerCount, nextPenumbraRadius, nextVirtualPage);
                 if (nextResident)
                     shadow = lerp(shadow, nextShadow, transition);

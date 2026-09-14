@@ -74,6 +74,7 @@ VertexOutput vertexMain(VertexInput input, uint instanceIndex : SV_InstanceID,
 
 struct FragmentInput
 {
+    float4 position : SV_Position;
     [[vk::location(0)]] float3 color;
     [[vk::location(1)]] float3 worldPosition;
     [[vk::location(2)]] float3 normal;
@@ -106,7 +107,8 @@ GrassFragmentOutput fragmentMain(FragmentInput input)
     ShadowSampleDebug shadowDebug = {0.0, 0.0, 0u, uint2(0, 0)};
     float shadow = frame.shadowEnabled != 0 ? sampleVirtualShadow(
         shadowMap, shadowDepthMap, input.worldPosition, normal, lightDirection, frame.shadowClipMatrices, shadowPageTable,
-        frame.shadowQuality, shadowDebug) : 0.0;
+        frame.shadowQuality, uint2(input.position.xy), frame.temporalSampleIndex,
+        frame.temporalShadowJitter != 0, shadowDebug) : 0.0;
     GrassFragmentOutput output;
     output.color = frame.shadowDebugView != SHADOW_DEBUG_OFF
         ? float4(shadowDebugColor(frame.shadowDebugView, shadowDebug), 1.0)
