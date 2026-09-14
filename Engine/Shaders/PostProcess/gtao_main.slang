@@ -45,7 +45,12 @@ float3 reconstructNormal(int2 pixel,float center,float left,float right,float to
  float4 edge=depthEdges(center,left,right,top,bottom);
  float4 weight=saturate(float4(edge.x*edge.z,edge.z*edge.y,edge.y*edge.w,edge.w*edge.x)+.01);
  float3 normal=weight.x*cross(l,t)+weight.y*cross(t,r)+weight.z*cross(r,b)+weight.w*cross(b,l);
- return safeNormalize(normal);
+ normal=safeNormalize(normal);
+ // positionFromDepth uses negative view-space Z in front of the camera.
+ // Orient the reconstructed normal toward the camera independently of the
+ // neighbour winding, which was originally derived for positive-Z depth.
+ if(dot(normal,safeNormalize(-c))<0)normal=-normal;
+ return normal;
 }
 float2 encodeOct(float3 n){n/=max(abs(n.x)+abs(n.y)+abs(n.z),1e-5);if(n.z<0)n.xy=(1-abs(n.yx))*float2(n.x>=0?1:-1,n.y>=0?1:-1);return n.xy*.5+.5;}
 // Integral of the projected cosine over one unoccluded horizon arc.
@@ -68,11 +73,14 @@ void main(uint3 groupId:SV_GroupID,uint3 threadId:SV_GroupThreadID,uint3 id:SV_D
  for(uint d=0;d<directions;++d){
   // Jitter slices and radial locations independently.  The squared
   // distribution places more samples where near-field occluders matter most.
-  float angle=(float(d)+localNoise.x)*(Pi/float(directions));float2 ray=float2(cos(angle),sin(angle));
+  float angle=(float(d)+localNoise.x)*(Pi/float(directions));
+  float cosPhi=cos(angle),sinPhi=sin(angle);
+  // Vulkan pixel coordinates grow downward, whereas view-space Y grows up.
+  float2 ray=float2(cosPhi,-sinPhi);
   // radiusPixels already converts the view-space radius into pixels; applying
   // the projection scale here again would rotate the slice plane relative to
   // the actual view-space sampling direction.
-  float3 screenTangent=normalize(float3(ray.x,ray.y,0));
+  float3 screenTangent=float3(cosPhi,sinPhi,0);
   float3 bitangent=normalize(cross(viewDir,screenTangent));float3 tangent=normalize(cross(bitangent,viewDir));
   float3 projectedNormal=normal-bitangent*dot(normal,bitangent);float normalLength=length(projectedNormal);if(normalLength<1e-4)continue;
   projectedNormal/=normalLength;float normalCos=saturate(dot(projectedNormal,viewDir));float normalAngle=sign(dot(tangent,projectedNormal))*acos(normalCos);
