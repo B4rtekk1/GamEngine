@@ -321,11 +321,9 @@ ForwardFragmentOutput fragmentMain(ForwardFragmentInput input)
     metallic = clamp(metallic, 0.0, 1.0);
     roughness = clamp(roughness, 0.045, 1.0);
 
+    float3 normal = normalize(input.normal);
     float faceSign = doubleSided && !input.isFrontFace ? -1.0 : 1.0;
-    // Shadow projection and receiver bias must use the unperturbed surface
-    // normal. Normal maps describe BRDF detail, not the receiver geometry.
-    float3 geometricNormal = normalize(input.normal) * faceSign;
-    float3 normal = geometricNormal;
+    normal *= faceSign;
     if (material.textureIndices.z >= 0 && abs(material.extensionScalars.x) > 1e-6)
     {
         float3 tangent = normalize(input.tangent.xyz - normal * dot(normal, input.tangent.xyz)) * faceSign;
@@ -373,7 +371,7 @@ ForwardFragmentOutput fragmentMain(ForwardFragmentInput input)
     float3 diffuse = (1.0 - fresnel) * (1.0 - metallic) * albedo / PBR_PI;
     ShadowSampleDebug shadowDebug = {0.0, 0.0, 0u, uint2(0, 0)};
     float shadow = frame.shadowEnabled != 0
-        ? sampleVirtualShadow(shadowMap, shadowDepthMap, input.worldPosition, geometricNormal, lightDirection, frame.shadowClipMatrices,
+        ? sampleVirtualShadow(shadowMap, shadowDepthMap, input.worldPosition, normal, lightDirection, frame.shadowClipMatrices,
                               shadowPageTable, frame.shadowQuality, uint2(input.position.xy),
                               frame.temporalSampleIndex, frame.temporalShadowJitter != 0, shadowDebug) : 0.0;
     if (frame.shadowDebugView != SHADOW_DEBUG_OFF)

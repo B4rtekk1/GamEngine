@@ -14,6 +14,13 @@ namespace Engine {
     using GPUSceneMeshId = std::uint32_t;
     using GPUSceneMaterialId = std::uint32_t;
 
+    /// GPU submission timeline value at which a retired scene slot is reusable.
+    struct GPUSceneRetireValue final {
+        constexpr GPUSceneRetireValue(const std::uint64_t value = 0) noexcept : value(value) {}
+
+        std::uint64_t value;
+    };
+
     inline constexpr GPUSceneInstanceId InvalidGPUSceneInstanceId =
         std::numeric_limits<GPUSceneInstanceId>::max();
 
@@ -84,7 +91,7 @@ namespace Engine {
         /// Marks an instance inactive immediately. Its slot is reusable only
         /// after reclaimDeferredInstances() observes the submission value
         /// which was current when it was removed.
-        void removeInstance(std::uint64_t sourceKey, std::uint64_t retireValue = 0);
+        void removeInstance(std::uint64_t sourceKey, GPUSceneRetireValue retireValue = {});
         void reclaimDeferredInstances(std::uint64_t completedValue);
         [[nodiscard]] GPUSceneMeshId upsertMesh(std::uint64_t sourceKey, const GPUMesh& mesh);
         [[nodiscard]] GPUSceneMaterialId upsertMaterial(std::uint64_t sourceKey, const GPUMaterial& material);

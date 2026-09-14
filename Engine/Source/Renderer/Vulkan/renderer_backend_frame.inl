@@ -349,10 +349,7 @@
                 materialSlots, editorSelectedRenderable, frameData.lightCount,
                 static_cast<std::uint32_t>(reflectionProbes.size()),
                 1u,
-                // TAA currently has no depth-disocclusion rejection. Keep
-                // the PCF rotation spatially stable until that history test
-                // exists, otherwise historical shadow edges can ghost.
-                0u,
+                taaResolveActive ? 1u : 0u,
                 static_cast<std::uint32_t>(Profiler::currentFrameNumber()),
                 0u,
                 glm::vec4{static_cast<float>(swapchain.extent().width),

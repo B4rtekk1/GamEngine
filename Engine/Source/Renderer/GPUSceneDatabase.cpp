@@ -4,8 +4,10 @@ namespace Engine {
     template<typename Id>
     void GPUSceneDatabase::markDirty(std::vector<Id> &list, std::vector<std::uint32_t> &stamps,
                                      const std::uint32_t generation, const Id id) {
-        if (id >= stamps.size()) stamps.resize(static_cast<std::size_t>(id) + 1U);
-        if (stamps[id] == generation) return;
+        if (id >= stamps.size()) { stamps.resize(static_cast<std::size_t>(id) + 1U);
+}
+        if (stamps[id] == generation) { return;
+}
         stamps[id] = generation;
         list.push_back(id);
     }
@@ -16,7 +18,8 @@ namespace Engine {
             m_removedInstanceStamps.resize(size);
             m_removedInstancePositions.resize(size);
         }
-        if (m_removedInstanceStamps[id] == m_dirtyGeneration) return;
+        if (m_removedInstanceStamps[id] == m_dirtyGeneration) { return;
+}
         m_removedInstanceStamps[id] = m_dirtyGeneration;
         m_removedInstancePositions[id] = static_cast<std::uint32_t>(m_dirty.removedInstances.size());
         m_dirty.removedInstances.push_back(id);
@@ -24,8 +27,9 @@ namespace Engine {
 
     void GPUSceneDatabase::unmarkRemovedInstanceDirty(const GPUSceneInstanceId id) noexcept {
         if (id >= m_removedInstanceStamps.size() ||
-            m_removedInstanceStamps[id] != m_dirtyGeneration)
+            m_removedInstanceStamps[id] != m_dirtyGeneration) {
             return;
+}
 
         const std::uint32_t position = m_removedInstancePositions[id];
         const GPUSceneInstanceId lastId = m_dirty.removedInstances.back();
@@ -37,7 +41,8 @@ namespace Engine {
 
     void GPUSceneDatabase::advanceDirtyGeneration() noexcept {
         ++m_dirtyGeneration;
-        if (m_dirtyGeneration != 0) return;
+        if (m_dirtyGeneration != 0) { return;
+}
 
         m_dirtyGeneration = 1;
         m_dirtyInstanceStamps.assign(m_dirtyInstanceStamps.size(), 0);
@@ -74,7 +79,8 @@ namespace Engine {
     void GPUSceneDatabase::updateInstanceTransform(const GPUSceneInstanceId instanceId,
                                                    const std::array<float, 16> &worldMatrix,
                                                    const AABB &localBounds) {
-        if (instanceId >= m_instances.size() || !m_instances[instanceId].alive) return;
+        if (instanceId >= m_instances.size() || !m_instances[instanceId].alive) { return;
+}
         GPUInstance &instance = m_instances[instanceId];
         instance.worldMatrix = worldMatrix;
         instance.localBounds = localBounds;
@@ -83,22 +89,24 @@ namespace Engine {
 
     void GPUSceneDatabase::updateInstanceFlags(const GPUSceneInstanceId instanceId,
                                                const std::uint32_t flags) {
-        if (instanceId >= m_instances.size() || !m_instances[instanceId].alive) return;
+        if (instanceId >= m_instances.size() || !m_instances[instanceId].alive) { return;
+}
         m_instances[instanceId].flags = flags;
         markDirty(m_dirty.instances, m_dirtyInstanceStamps, m_dirtyGeneration, instanceId);
     }
 
     void GPUSceneDatabase::removeInstance(const std::uint64_t sourceKey,
-                                          const std::uint64_t retireValue) {
+                                          const GPUSceneRetireValue retireValue) {
         const auto found = m_instanceIds.find(sourceKey);
-        if (found == m_instanceIds.end()) return;
+        if (found == m_instanceIds.end()) { return;
+}
         const GPUSceneInstanceId id = found->second;
         m_instances[id].alive = false;
         m_instanceIds.erase(found);
         // Do not put this ID in m_freeInstances yet.  Old command buffers may
         // still address the same SSBO slot; overwriting it for a new entity
         // would make those commands render the wrong proxy.
-        m_deferredInstanceFrees.push_back({id, retireValue});
+        m_deferredInstanceFrees.push_back({id, retireValue.value});
         markRemovedInstanceDirty(id);
     }
 
@@ -141,14 +149,16 @@ namespace Engine {
     }
 
     void GPUSceneDatabase::updateMesh(const GPUSceneMeshId meshId, const GPUMesh &mesh) {
-        if (meshId >= m_meshes.size()) return;
+        if (meshId >= m_meshes.size()) { return;
+}
         m_meshes[meshId] = mesh;
         markDirty(m_dirty.meshes, m_dirtyMeshStamps, m_dirtyGeneration, meshId);
     }
 
     void GPUSceneDatabase::updateMaterial(const GPUSceneMaterialId materialId,
                                           const GPUMaterial &material) {
-        if (materialId >= m_materials.size()) return;
+        if (materialId >= m_materials.size()) { return;
+}
         m_materials[materialId] = material;
         markDirty(m_dirty.materials, m_dirtyMaterialStamps, m_dirtyGeneration, materialId);
     }
