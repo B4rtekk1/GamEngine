@@ -2,6 +2,7 @@
 // currently shares the forward scene/material descriptor contract; future
 // water-only inputs (scene colour/depth, SSR, FFT and foam) belong here, not
 // in Forward/forward_pbr.slang.
+import Common.PbrLighting;
 import Common.SceneData;
 
 #ifndef FORWARD_OUTPUT_VELOCITY
@@ -149,6 +150,27 @@ float3 reconstructViewPosition(float depth, float2 uv)
     return view.xyz / max(abs(view.w), 1.0e-5);
 }
 
+// Schlick's inexpensive approximation of the Henyey-Greenstein phase
+// function.  The incident ray travels along -lightDirection, while the
+// scattered ray travels towards the camera along viewDirection.
+float schlickPhase(float cosTheta, float g)
+{
+    float k = 1.55 * g - 0.55 * g * g * g;
+    float denominator = 1.0 + k * cosTheta;
+    return (1.0 - k * k) / max(4.0 * PBR_PI * denominator * denominator, 1.0e-4);
+}
+
+// Correlated Smith visibility for a GGX/Trowbridge-Reitz microfacet surface.
+// Returned visibility already contains G / (4 * NdotL * NdotV).
+float visibilitySmithGGXCorrelated(float nDotV, float nDotL, float roughness)
+{
+    float alpha = roughness * roughness;
+    float alpha2 = alpha * alpha;
+    float lambdaV = nDotL * sqrt(max((nDotV - nDotV * alpha2) * nDotV + alpha2, 0.0));
+    float lambdaL = nDotV * sqrt(max((nDotL - nDotL * alpha2) * nDotL + alpha2, 0.0));
+    return 0.5 / max(lambdaV + lambdaL, 1.0e-4);
+}
+
 [shader("fragment")]
 WaterFragmentOutput fragmentMain(WaterFragmentInput input)
 {
@@ -173,11 +195,12 @@ WaterFragmentOutput fragmentMain(WaterFragmentInput input)
 
     float3 viewDirection = normalize(frame.cameraPosition.xyz - input.worldPosition);
     float3 lightDirection = normalize(-frame.lightDirectionIntensity.xyz);
-    float nDotL = max(dot(normal, lightDirection), 0.0);
+    float nDotL = saturate(dot(normal, lightDirection));
     float nDotV = saturate(dot(normal, viewDirection));
     float ior = max(material.waterDeepColorIor.w, 1.001);
     float f0 = pow((ior - 1.0) / (ior + 1.0), 2.0);
-    float fresnel = f0 + (1.0 - f0) * pow(1.0 - nDotV, 5.0);
+    float3 surfaceF0 = float3(f0);
+    float3 reflectionFresnel = fresnelSchlick(nDotV, surfaceF0);
 
     float2 screenUv = input.position.xy / frame.clusteredViewportNearFar.xy;
     float3 normalVS = normalize(mul(normal, (float3x3)frame.view));
@@ -194,27 +217,41 @@ WaterFragmentOutput fragmentMain(WaterFragmentInput input)
     float thickness = opaqueDepth >= 0.99999 ? material.waterScatteringMaxDepth.w :
         length(reconstructViewPosition(opaqueDepth, distortedUv) - reconstructViewPosition(waterDepth, screenUv));
     thickness = min(thickness, material.waterScatteringMaxDepth.w);
-    float3 transmittance = exp(-material.waterAbsorptionRefraction.rgb * thickness);
+    // Water is a homogeneous participating medium.  Both absorption and
+    // out-scattering remove radiance from the refracted background.
+    float3 sigmaA = max(material.waterAbsorptionRefraction.rgb, 0.0);
+    float3 sigmaS = max(material.waterScatteringMaxDepth.rgb, 0.0);
+    float3 extinction = max(sigmaA + sigmaS, float3(1.0e-4));
+    float3 transmittance = exp(-extinction * thickness);
     float3 refracted = opaqueSceneColor.SampleLevel(distortedUv, 0.0).rgb;
     // Retain physical absorption/scattering while making the artist-facing
     // shallow/deep colours an explicit tint of in-scattered light.
     float3 scatteringTint = lerp(material.waterShallowColorRoughness.rgb,
                                  material.waterDeepColorIor.rgb,
                                  saturate(thickness / material.waterScatteringMaxDepth.w));
+    // g > 0 favours forward scattering, making a submerged view towards the
+    // sun visibly brighter without introducing a separate artist coefficient.
+    const float phaseG = 0.2;
+    float phase = schlickPhase(dot(-lightDirection, viewDirection), phaseG);
+    float3 scatterRadiance = scatteringTint * frame.lightColor.rgb *
+        frame.lightDirectionIntensity.w * phase;
     float3 transmission = refracted * transmittance +
-        material.waterScatteringMaxDepth.rgb * scatteringTint * (1.0 - transmittance);
+        (sigmaS / extinction) * (1.0 - transmittance) * scatterRadiance;
 
     uint reflectionWidth; uint reflectionHeight; uint reflectionMips;
     prefilteredEnvironmentMap.GetDimensions(0, reflectionWidth, reflectionHeight, reflectionMips);
     float3 reflected = prefilteredEnvironmentMap.SampleLevel(reflect(-viewDirection, normal),
         material.waterShallowColorRoughness.w * float(max(reflectionMips, 1u) - 1u)).rgb;
-    // A compact GGX-like sun lobe retains the crucial sun glitter even before
-    // the specialised ocean BRDF arrives in the FFT stage.
+    // Dielectric GGX/Trowbridge-Reitz BRDF.  It responds to the actual local
+    // wave and normal-map slopes, yielding distributed sun glitter rather
+    // than a single exponent-shaped highlight.
     float3 halfVector = normalize(lightDirection + viewDirection);
-    float sunSpecular = pow(saturate(dot(normal, halfVector)),
-        lerp(2048.0, 24.0, material.waterShallowColorRoughness.w)) * nDotL;
-    float3 color = lerp(transmission, reflected, fresnel) +
-        frame.lightColor.rgb * frame.lightDirectionIntensity.w * sunSpecular * fresnel;
+    float roughness = clamp(material.waterShallowColorRoughness.w, 0.045, 1.0);
+    float3 sunFresnel = fresnelSchlick(saturate(dot(halfVector, viewDirection)), surfaceF0);
+    float3 sunSpecular = distributionGGX(normal, halfVector, roughness) *
+        visibilitySmithGGXCorrelated(nDotV, nDotL, roughness) * sunFresnel;
+    float3 color = lerp(transmission, reflected, reflectionFresnel) +
+        frame.lightColor.rgb * frame.lightDirectionIntensity.w * sunSpecular * nDotL;
 
     WaterFragmentOutput output;
     output.color = float4(color, 1.0);
