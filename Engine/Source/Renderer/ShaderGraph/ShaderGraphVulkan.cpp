@@ -130,8 +130,9 @@ namespace Engine {
         // property expression cannot accidentally reuse a stale VkPipeline.
         ShaderProgramId hash = 14695981039346656037ULL;
         const auto mix = [&hash](const std::uint8_t byte) { hash = (hash ^ byte) * 1099511628211ULL; };
-        for (const unsigned char character: generatedSurface) { mix(character);
-}
+        for (const unsigned char character: generatedSurface) {
+            mix(character);
+        }
         return hash == 0 ? 1 : hash;
     }
 
@@ -389,7 +390,8 @@ struct MaterialSurface
         // A material can disable depth writes, but cannot enable them when the
         // owning pass keeps its depth attachment read-only (e.g. lighting
         // after the depth prepass).
-        options.depthWriteEnable = static_cast<VkBool32>((baseOptions_.depthWriteEnable != 0U) && entry.state.depthWrite);
+        options.depthWriteEnable = static_cast<VkBool32>(
+            (baseOptions_.depthWriteEnable != 0U) && entry.state.depthWrite);
         options.alphaBlendEnable = entry.state.transparent ? VK_TRUE : VK_FALSE;
         entry.pipeline = std::make_unique<GraphicsPipeline>();
         entry.pipeline->create(device_, options);
