@@ -688,9 +688,19 @@ int main(int argc, char** argv) {
             } else if (!playing && hierarchyActionEntity != Engine::NullEntity &&
                        scene.editor().valid(hierarchyActionEntity)) {
                 if (hierarchyAction == HierarchyPanel::Action::Delete) {
-                    deferEntityDestruction(hierarchyActionEntity);
-                    if (selectedEntity == hierarchyActionEntity) {
+                    // Deleting an item that is already part of the hierarchy
+                    // selection applies to that complete selection.  A
+                    // right-click on an unselected item still deletes only
+                    // that item, which keeps the context-menu behaviour
+                    // predictable.
+                    if (std::ranges::find(selectedEntities, hierarchyActionEntity) !=
+                        selectedEntities.end()) {
+                        for (const Engine::Entity entity : selectedEntities) {
+                            if (scene.editor().valid(entity)) deferEntityDestruction(entity);
+                        }
                         setSelection(Engine::NullEntity);
+                    } else {
+                        deferEntityDestruction(hierarchyActionEntity);
                     }
                 } else if (hierarchyAction == HierarchyPanel::Action::Duplicate) {
                     setSelection(scene.editor().duplicate(hierarchyActionEntity));
@@ -819,10 +829,11 @@ int main(int argc, char** argv) {
             if (showShaderGraph) shaderGraphPanel->draw(showShaderGraph);
             Editor::drawProfilerPanel(renderer, showProfiler);
             drawStatusBar(scene, selectedEntity, playing, paused);
-            if (!playing && selectedEntity != Engine::NullEntity &&
-                scene.editor().valid(selectedEntity) && !ImGui::GetIO().WantTextInput &&
+            if (!playing && !selectedEntities.empty() && !ImGui::GetIO().WantTextInput &&
                 ImGui::IsKeyPressed(ImGuiKey_Delete)) {
-                deferEntityDestruction(selectedEntity);
+                for (const Engine::Entity entity : selectedEntities) {
+                    if (scene.editor().valid(entity)) deferEntityDestruction(entity);
+                }
                 setSelection(Engine::NullEntity);
             }
             if (!playing && !ImGui::GetIO().WantTextInput &&
