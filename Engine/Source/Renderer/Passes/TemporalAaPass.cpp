@@ -17,15 +17,21 @@ void TemporalAaPass::create(const VkPhysicalDevice physicalDevice, const VkDevic
                             const VkImageView currentView, const VkSampler sampler,
                             const VkImageView velocityView, const VkSampler velocitySampler,
                             const VkImageView currentDepthView, const VkSampler currentDepthSampler,
+                            const VkImageView waterVelocityView, const VkSampler waterVelocitySampler,
+                            const VkImageView waterMetaView, const VkSampler waterMetaSampler,
+                            const VkImageView waterSurfaceView, const VkSampler waterSurfaceSampler,
                             Assets::AssetManager& assets) {
     if (device == VK_NULL_HANDLE || currentView == VK_NULL_HANDLE || sampler == VK_NULL_HANDLE ||
         velocityView == VK_NULL_HANDLE || velocitySampler == VK_NULL_HANDLE ||
-        currentDepthView == VK_NULL_HANDLE || currentDepthSampler == VK_NULL_HANDLE)
+        currentDepthView == VK_NULL_HANDLE || currentDepthSampler == VK_NULL_HANDLE ||
+        waterVelocityView == VK_NULL_HANDLE || waterVelocitySampler == VK_NULL_HANDLE ||
+        waterMetaView == VK_NULL_HANDLE || waterMetaSampler == VK_NULL_HANDLE ||
+        waterSurfaceView == VK_NULL_HANDLE || waterSurfaceSampler == VK_NULL_HANDLE)
         throw std::invalid_argument("Temporal AA pass received incomplete resources");
     destroy(); device_ = device;
     try {
-        VkDescriptorSetLayoutBinding bindings[5]{};
-        for (std::uint32_t i = 0; i < 5; ++i) {
+        VkDescriptorSetLayoutBinding bindings[8]{};
+        for (std::uint32_t i = 0; i < 8; ++i) {
             bindings[i].binding = i; bindings[i].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
             bindings[i].descriptorCount = 1; bindings[i].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
         }
@@ -53,7 +59,7 @@ void TemporalAaPass::create(const VkPhysicalDevice physicalDevice, const VkDevic
             if (vkCreateFramebuffer(device_, &info, nullptr, &framebuffers_[i]) != VK_SUCCESS)
                 throw std::runtime_error("Could not create temporal AA framebuffer");
         }
-        VkDescriptorPoolSize size{VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 10};
+        VkDescriptorPoolSize size{VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 16};
         VkDescriptorPoolCreateInfo poolInfo{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
         poolInfo.maxSets = 2; poolInfo.poolSizeCount = 1; poolInfo.pPoolSizes = &size;
         if (vkCreateDescriptorPool(device_, &poolInfo, nullptr, &pool_) != VK_SUCCESS)
@@ -65,18 +71,21 @@ void TemporalAaPass::create(const VkPhysicalDevice physicalDevice, const VkDevic
         if (vkAllocateDescriptorSets(device_, &allocation, sets_.data()) != VK_SUCCESS)
             throw std::runtime_error("Could not allocate temporal AA descriptor sets");
         for (std::uint32_t i = 0; i < 2; ++i) {
-            VkDescriptorImageInfo images[5] = {{sampler, currentView, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL},
+            VkDescriptorImageInfo images[8] = {{sampler, currentView, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL},
                                                {sampler, history_[i].imageView(), VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL},
                                                {velocitySampler, velocityView, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL},
                                                {currentDepthSampler, currentDepthView, VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL},
-                                               {historyDepth_[i].sampler(), historyDepth_[i].imageView(), VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL}};
-            VkWriteDescriptorSet writes[5]{};
-            for (std::uint32_t binding = 0; binding < 5; ++binding) {
+                                               {historyDepth_[i].sampler(), historyDepth_[i].imageView(), VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL},
+                                               {waterVelocitySampler, waterVelocityView, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL},
+                                               {waterMetaSampler, waterMetaView, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL},
+                                               {waterSurfaceSampler, waterSurfaceView, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL}};
+            VkWriteDescriptorSet writes[8]{};
+            for (std::uint32_t binding = 0; binding < 8; ++binding) {
                 writes[binding] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET}; writes[binding].dstSet = sets_[i];
                 writes[binding].dstBinding = binding; writes[binding].descriptorCount = 1;
                 writes[binding].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER; writes[binding].pImageInfo = &images[binding];
             }
-            vkUpdateDescriptorSets(device_, 5, writes, 0, nullptr);
+            vkUpdateDescriptorSets(device_, 8, writes, 0, nullptr);
         }
         reset();
     } catch (...) { destroy(); throw; }
@@ -125,7 +134,8 @@ void TemporalAaPass::record(const VkCommandBuffer commandBuffer, const VkExtent2
     // A 16-frame accumulation is too soft for this renderer's jitter pattern.
     // Retain temporal stability while letting the current frame restore detail.
     const Settings settings{currentJitterX, currentJitterY, previousJitterX_, previousJitterY_, historyValid_ ? 0.80F : 0.0F,
-                            1.0F / static_cast<float>(extent.width), 1.0F / static_cast<float>(extent.height), 0.0F};
+                            1.0F / static_cast<float>(extent.width), 1.0F / static_cast<float>(extent.height),
+                            virtualWaterEnabled_ ? 1.0F : 0.0F};
     vkCmdPushConstants(commandBuffer, pipeline_.layout(), VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(settings), &settings);
     const VkViewport viewport{0, 0, static_cast<float>(extent.width), static_cast<float>(extent.height), 0, 1}; const VkRect2D scissor{{0, 0}, extent};
     vkCmdSetViewport(commandBuffer, 0, 1, &viewport); vkCmdSetScissor(commandBuffer, 0, 1, &scissor); vkCmdDraw(commandBuffer, 3, 1, 0, 0); vkCmdEndRenderPass(commandBuffer);

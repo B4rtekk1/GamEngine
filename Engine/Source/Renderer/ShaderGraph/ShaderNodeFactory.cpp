@@ -3,7 +3,7 @@
 
 namespace Engine {
     ShaderNode ShaderNodeFactory::create(const ShaderNodeType type, const ShaderNodeId nodeId,
-                                         ShaderPinId &nextPinId) {
+                                         ShaderPinId& nextPinId) {
         return ShaderNodeRegistry::create(type, nodeId, nextPinId);
     }
 } // namespace Engine

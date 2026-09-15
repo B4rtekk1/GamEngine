@@ -21,9 +21,13 @@ namespace Engine {
                     VmaAllocator allocator, VkImageView currentView, VkSampler sampler,
                     VkImageView velocityView, VkSampler velocitySampler,
                     VkImageView currentDepthView, VkSampler currentDepthSampler,
+                    VkImageView waterVelocityView, VkSampler waterVelocitySampler,
+                    VkImageView waterMetaView, VkSampler waterMetaSampler,
+                    VkImageView waterSurfaceView, VkSampler waterSurfaceSampler,
                     Assets::AssetManager& assets);
         void destroy() noexcept;
         void reset() noexcept;
+        void setVirtualWaterEnabled(bool enabled) noexcept { virtualWaterEnabled_ = enabled; }
         void record(VkCommandBuffer commandBuffer, VkExtent2D extent,
                     float currentJitterX, float currentJitterY);
         [[nodiscard]] VkImageView resolvedView() const noexcept { return history_[historyIndex_].imageView(); }
@@ -54,5 +58,6 @@ namespace Engine {
         bool historyValid_ = false;
         float previousJitterX_ = 0.0F;
         float previousJitterY_ = 0.0F;
+        bool virtualWaterEnabled_ = false;
     };
 } // namespace Engine

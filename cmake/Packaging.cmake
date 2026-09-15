@@ -57,7 +57,17 @@ if(GAMEENGINE_INSTALL_PORTABLE_EDITOR)
             DESTINATION Tools/Slang COMPONENT GamEngineEditor RENAME LICENSE-VulkanSDK.txt)
     endif()
 
+    # The install manifest contains GameScripts whenever that target exists.
+    # PackageEditor must therefore build it before invoking `cmake --install`;
+    # otherwise a parallel/package-only build can reach the install step while
+    # Player/<config>/GameScripts.dll has never been produced.
+    set(GAMEENGINE_EDITOR_PACKAGE_DEPENDS Editor EngineShaders)
+    if(TARGET GameScripts)
+        list(APPEND GAMEENGINE_EDITOR_PACKAGE_DEPENDS GameScripts)
+    endif()
+
     add_custom_target(PackageEditor
         COMMAND ${CMAKE_COMMAND} --install "${CMAKE_BINARY_DIR}" --config $<CONFIG> --component GamEngineEditor --prefix "${CMAKE_BINARY_DIR}/GamEngineEditor"
-        DEPENDS Editor EngineShaders COMMENT "Creating portable GamEngine Editor package")
+        DEPENDS ${GAMEENGINE_EDITOR_PACKAGE_DEPENDS}
+        COMMENT "Creating portable GamEngine Editor package")
 endif()

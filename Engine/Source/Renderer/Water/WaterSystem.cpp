@@ -1,4 +1,5 @@
 #include "Engine/Renderer/Water/WaterSystem.h"
+#include "Engine/Renderer/Water/VirtualWaterPageBuilder.h"
 
 #include "Engine/ECS/Components/MeshRendererComponent.h"
 #include "Engine/ECS/Components/TransformComponent.h"
@@ -10,171 +11,164 @@
 #include <memory>
 #include <optional>
 #include <stdexcept>
+#include <limits>
+
+#include <glm/geometric.hpp>
+
+
+namespace {
+    struct AnalyticSurface final {
+        float height{};
+        Engine::Vec3 normal{0.0F, 1.0F, 0.0F};
+        Engine::Vec3 velocity{};
+    };
+
+    [[nodiscard]] AnalyticSurface evaluateWaterSurface(const Engine::WaterBodyComponent& water,
+                                                       const Engine::TransformComponent& transform,
+                                                       const Engine::Vec3& worldPosition,
+                                                       const float time,
+                                                       const float baseHeight) {
+        AnalyticSurface result{};
+        result.height = baseHeight;
+        glm::vec3 tangent{1.0F, 0.0F, 0.0F};
+        glm::vec3 binormal{0.0F, 0.0F, 1.0F};
+        glm::vec3 localVelocity{};
+        const glm::mat4 worldMatrix = transform.worldMatrix().native();
+        const glm::mat3 linearTransform{worldMatrix};
+        const std::uint32_t count = std::min<std::uint32_t>(
+            water.waveCount, static_cast<std::uint32_t>(water.waves.size()));
+        for (std::uint32_t i = 0; i < count; ++i) {
+            const Engine::WaterGerstnerWave& wave = water.waves[i];
+            Engine::Vec2 direction = wave.direction;
+            if (direction.length() < 1.0e-5F) direction = {1.0F, 0.0F};
+            else direction = direction.normalized();
+            const float k = 6.28318530718F / std::max(wave.wavelength, 1.0e-3F);
+            const float phase = k * (direction.x() * worldPosition.x() +
+                                     direction.y() * worldPosition.z()) + wave.speed * time;
+            const float sine = std::sin(phase);
+            const float cosine = std::cos(phase);
+            const float amplitude = wave.amplitude;
+            const float horizontal = wave.steepness * amplitude;
+            const glm::vec3 localDisplacement{horizontal * direction.x() * cosine,
+                                              amplitude * sine,
+                                              horizontal * direction.y() * cosine};
+            // Match the renderer: Gerstner is evaluated in world phase space, then
+            // the authored local displacement is transformed by the water body's
+            // complete world linear transform. This keeps rotated/scaled lakes and
+            // rivers consistent with their rasterized surface.
+            result.height += (linearTransform * localDisplacement).y;
+            tangent += glm::vec3{-horizontal * direction.x() * direction.x() * k * sine,
+                                 amplitude * direction.x() * k * cosine,
+                                 -horizontal * direction.x() * direction.y() * k * sine};
+            binormal += glm::vec3{-horizontal * direction.x() * direction.y() * k * sine,
+                                  amplitude * direction.y() * k * cosine,
+                                  -horizontal * direction.y() * direction.y() * k * sine};
+            localVelocity += glm::vec3{-horizontal * direction.x() * wave.speed * sine,
+                                       amplitude * wave.speed * cosine,
+                                       -horizontal * direction.y() * wave.speed * sine};
+        }
+        const glm::vec3 worldTangent = glm::normalize(linearTransform * tangent);
+        const glm::vec3 worldBinormal = glm::normalize(linearTransform * binormal);
+        const glm::vec3 n = glm::normalize(glm::cross(worldBinormal, worldTangent));
+        result.normal = Engine::Vec3{n};
+        result.velocity = Engine::Vec3{linearTransform * localVelocity};
+        return result;
+    }
+
+    [[nodiscard]] Engine::Vec3 transformPoint(const Engine::TransformComponent& transform,
+                                              const Engine::Vec3& point) {
+        const glm::vec4 p = transform.worldMatrix().native() * glm::vec4(point.native(), 1.0F);
+        return Engine::Vec3{glm::vec3(p) / std::max(std::abs(p.w), 1.0e-6F)};
+    }
+
+    [[nodiscard]] bool pointInLake(const Engine::WaterBodyComponent& water,
+                                   const Engine::TransformComponent& transform,
+                                   const Engine::Vec3& worldPosition) {
+        if (water.lakeBoundary.size() < 3) return false;
+        bool inside = false;
+        for (std::size_t i = 0, j = water.lakeBoundary.size() - 1; i < water.lakeBoundary.size(); j = i++) {
+            const Engine::Vec3 a = transformPoint(transform, water.lakeBoundary[i]);
+            const Engine::Vec3 b = transformPoint(transform, water.lakeBoundary[j]);
+            const float dz = b.z() - a.z();
+            const bool crosses = ((a.z() > worldPosition.z()) != (b.z() > worldPosition.z())) &&
+                (worldPosition.x() < (b.x() - a.x()) * (worldPosition.z() - a.z()) /
+                    (std::abs(dz) > 1.0e-6F ? dz : (dz >= 0.0F ? 1.0e-6F : -1.0e-6F)) + a.x());
+            if (crosses) inside = !inside;
+        }
+        return inside;
+    }
+
+    [[nodiscard]] std::optional<float> lakeBaseHeight(const Engine::WaterBodyComponent& water,
+                                                       const Engine::TransformComponent& transform,
+                                                       const Engine::Vec3& worldPosition) {
+        if (water.lakeBoundary.size() < 3) return std::nullopt;
+        const Engine::Vec3 a3 = transformPoint(transform, water.lakeBoundary[0]);
+        const glm::vec2 p{worldPosition.x(), worldPosition.z()};
+        const glm::vec2 a{a3.x(), a3.z()};
+        for (std::size_t i = 1; i + 1 < water.lakeBoundary.size(); ++i) {
+            const Engine::Vec3 b3 = transformPoint(transform, water.lakeBoundary[i]);
+            const Engine::Vec3 c3 = transformPoint(transform, water.lakeBoundary[i + 1]);
+            const glm::vec2 b{b3.x(), b3.z()};
+            const glm::vec2 c{c3.x(), c3.z()};
+            const glm::vec2 v0 = b - a;
+            const glm::vec2 v1 = c - a;
+            const glm::vec2 v2 = p - a;
+            const float det = v0.x * v1.y - v1.x * v0.y;
+            if (std::abs(det) < 1.0e-8F) continue;
+            const float invDet = 1.0F / det;
+            const float u = (v2.x * v1.y - v1.x * v2.y) * invDet;
+            const float v = (v0.x * v2.y - v2.x * v0.y) * invDet;
+            const float w = 1.0F - u - v;
+            constexpr float epsilon = 1.0e-4F;
+            if (u >= -epsilon && v >= -epsilon && w >= -epsilon)
+                return w * a3.y() + u * b3.y() + v * c3.y();
+        }
+        // buildLake() documents convex editor boundaries; numerical edge cases
+        // fall back to their mean plane instead of the entity origin.
+        float sum = 0.0F;
+        for (const Engine::Vec3& local : water.lakeBoundary) sum += transformPoint(transform, local).y();
+        return sum / static_cast<float>(water.lakeBoundary.size());
+    }
+
+    struct RiverHit final {
+        bool hit{};
+        float depth{};
+        float flowSpeed{};
+        float surfaceHeight{};
+        Engine::Vec3 flowDirection{};
+    };
+
+    [[nodiscard]] RiverHit queryRiverFootprint(const Engine::WaterBodyComponent& water,
+                                               const Engine::TransformComponent& transform,
+                                               const Engine::Vec3& worldPosition) {
+        RiverHit best{};
+        float bestDistance2 = std::numeric_limits<float>::max();
+        if (water.riverSpline.size() < 2) return best;
+        const glm::vec2 p{worldPosition.x(), worldPosition.z()};
+        for (std::size_t i = 0; i + 1 < water.riverSpline.size(); ++i) {
+            const Engine::Vec3 aw = transformPoint(transform, water.riverSpline[i].position);
+            const Engine::Vec3 bw = transformPoint(transform, water.riverSpline[i + 1].position);
+            const glm::vec2 a{aw.x(), aw.z()}, b{bw.x(), bw.z()};
+            const glm::vec2 ab = b - a;
+            const float ab2 = glm::dot(ab, ab);
+            const float t = ab2 > 1.0e-8F ? std::clamp(glm::dot(p - a, ab) / ab2, 0.0F, 1.0F) : 0.0F;
+            const glm::vec2 closest = a + ab * t;
+            const float d2 = glm::dot(p - closest, p - closest);
+            const float width = std::lerp(water.riverSpline[i].width, water.riverSpline[i + 1].width, t) *
+                                std::max(std::abs(transform.worldScale().x()), std::abs(transform.worldScale().z()));
+            if (d2 > 0.25F * width * width || d2 >= bestDistance2) continue;
+            bestDistance2 = d2; best.hit = true;
+            best.depth = std::lerp(water.riverSpline[i].depth, water.riverSpline[i + 1].depth, t);
+            best.flowSpeed = std::lerp(water.riverSpline[i].flowSpeed, water.riverSpline[i + 1].flowSpeed, t);
+            best.surfaceHeight = std::lerp(aw.y(), bw.y(), t);
+            const glm::vec2 dir = glm::dot(ab, ab) > 1.0e-8F ? glm::normalize(ab) : glm::vec2{1.0F, 0.0F};
+            best.flowDirection = Engine::Vec3{dir.x, 0.0F, dir.y};
+        }
+        return best;
+    }
+}
 
 namespace Engine {
-    namespace {
-        // Virtual-water geometry layout.  A level remains a 64x64-cell clipmap,
-        // but is expressed as an 8x8 array of independently addressable 8x8
-        // pages.  The current mesh path still submits the pages as one ocean
-        // mesh; keeping this layout explicit is what lets the GPU page-list path
-        // replace that submission without changing the surface function.
-        constexpr std::uint32_t WaterPagesPerAxis = 8;
-        constexpr std::uint32_t WaterPageCells = 8;
-        constexpr std::uint32_t ClipmapResolution = WaterPagesPerAxis * WaterPageCells;
-        static_assert(ClipmapResolution == 64);
-        // Every level is exactly twice the previous one. With the fixed grid,
-        // the inner boundary of level N lies on vertices of level N - 1.
-        constexpr float ClipmapExtents[] = {
-            50.0F, 100.0F, 200.0F, 400.0F, 800.0F,
-            1600.0F, 3200.0F, 6400.0F, 12800.0F,
-        };
-
-        float samplingCellSize(const Vec3 &position, const float outer, const float cell,
-                               const std::uint32_t level) {
-            // The inner edge of the next ring uses its own cell size.  Give the
-            // matching outer-edge vertices in this ring that same spectral LOD,
-            // so filtered Gerstner displacement remains watertight at the seam.
-            constexpr float edgeEpsilon = 1.0e-4F;
-            if (level + 1U < std::size(ClipmapExtents) &&
-                (std::abs(std::abs(position.x()) - outer) < edgeEpsilon ||
-                 std::abs(std::abs(position.z()) - outer) < edgeEpsilon))
-                return cell * 2.0F;
-            return cell;
-        }
-
-        enum class StitchEdge { Bottom, Right, Top, Left };
-
-        void addStitchedCellIndices(Mesh &mesh, const std::uint32_t a, const std::uint32_t b,
-                                    const std::uint32_t c, const std::uint32_t d,
-                                    const std::uint32_t midpoint, const StitchEdge edge) {
-            switch (edge) {
-                case StitchEdge::Bottom: mesh.indices.insert(mesh.indices.end(), {a, midpoint, d, midpoint, c, d, midpoint, b, c});
-                    break;
-                case StitchEdge::Right: mesh.indices.insert(mesh.indices.end(), {b, midpoint, a, midpoint, d, a, midpoint, c, d});
-                    break;
-                case StitchEdge::Top: mesh.indices.insert(mesh.indices.end(), {d, midpoint, a, midpoint, b, a, midpoint, c, b});
-                    break;
-                case StitchEdge::Left: mesh.indices.insert(mesh.indices.end(), {a, midpoint, b, midpoint, c, b, midpoint, d, c});
-                    break;
-            }
-        }
-
-        [[nodiscard]] bool pageIsInactive(const std::uint32_t level, const std::uint32_t pageX,
-                                          const std::uint32_t pageZ) {
-            // The 4x4 centre of every outer level is fully covered by its
-            // preceding (finer) level. It is a logical virtual slot, but has
-            // no geometry and therefore costs no vertex work.
-            return level != 0U && pageX >= 2U && pageX < 6U && pageZ >= 2U && pageZ < 6U;
-        }
-
-        [[nodiscard]] std::optional<StitchEdge> pageStitchEdge(const std::uint32_t level,
-                                                                 const std::uint32_t pageX,
-                                                                 const std::uint32_t pageZ) {
-            if (level == 0U) return std::nullopt;
-            // Exactly one page edge can touch the central 4x4 hole. Corner
-            // pages touch it only diagonally and need no index stitching.
-            if (pageX == 1U && pageZ >= 2U && pageZ < 6U) return StitchEdge::Right;
-            if (pageX == 6U && pageZ >= 2U && pageZ < 6U) return StitchEdge::Left;
-            if (pageZ == 1U && pageX >= 2U && pageX < 6U) return StitchEdge::Top;
-            if (pageZ == 6U && pageX >= 2U && pageX < 6U) return StitchEdge::Bottom;
-            return std::nullopt;
-        }
-
-        void addOceanPage(Mesh &mesh, const std::uint32_t level, const std::uint32_t pageX,
-                          const std::uint32_t pageZ) {
-            const float outer = ClipmapExtents[level];
-            const float cell = (2.0F * outer) / static_cast<float>(ClipmapResolution);
-            const float pageSize = cell * static_cast<float>(WaterPageCells);
-            const float minX = -outer + pageSize * static_cast<float>(pageX);
-            const float minZ = -outer + pageSize * static_cast<float>(pageZ);
-            const std::uint32_t firstVertex = static_cast<std::uint32_t>(mesh.vertices.size());
-            const std::uint32_t firstIndex = static_cast<std::uint32_t>(mesh.indices.size());
-            constexpr std::uint32_t PageVertexAxis = WaterPageCells + 1U;
-            const auto vertexIndex = [firstVertex](const std::uint32_t x, const std::uint32_t z) {
-                return firstVertex + z * PageVertexAxis + x;
-            };
-
-            // One page owns a compact 9x9 grid rather than four independent
-            // vertices for every quad. Positions remain in the old local
-            // clipmap coordinate system, so world-space phase is unchanged.
-            for (std::uint32_t z = 0; z <= WaterPageCells; ++z)
-                for (std::uint32_t x = 0; x <= WaterPageCells; ++x) {
-                    const Vec3 position{minX + cell * static_cast<float>(x), 0.0F,
-                                        minZ + cell * static_cast<float>(z)};
-                    WaterSystem::addWaterVertex(mesh, position,
-                        {static_cast<float>(x) / WaterPageCells, static_cast<float>(z) / WaterPageCells},
-                        samplingCellSize(position, outer, cell, level));
-                }
-
-            const std::optional<StitchEdge> stitchedEdge = pageStitchEdge(level, pageX, pageZ);
-            std::array<std::uint32_t, WaterPageCells> stitchMidpoints{};
-            if (stitchedEdge.has_value()) {
-                // The coarser edge has eight segments while its finer neighbour
-                // has sixteen. Add one midpoint to each coarse segment, exactly
-                // matching the old per-cell stitching without duplicating its
-                // four corner vertices.
-                for (std::uint32_t segment = 0; segment < WaterPageCells; ++segment) {
-                    Vec3 a{}, b{};
-                    switch (*stitchedEdge) {
-                        case StitchEdge::Bottom:
-                            a = {minX + cell * segment, 0.0F, minZ};
-                            b = {minX + cell * (segment + 1U), 0.0F, minZ};
-                            break;
-                        case StitchEdge::Right:
-                            a = {minX + pageSize, 0.0F, minZ + cell * segment};
-                            b = {minX + pageSize, 0.0F, minZ + cell * (segment + 1U)};
-                            break;
-                        case StitchEdge::Top:
-                            a = {minX + cell * segment, 0.0F, minZ + pageSize};
-                            b = {minX + cell * (segment + 1U), 0.0F, minZ + pageSize};
-                            break;
-                        case StitchEdge::Left:
-                            a = {minX, 0.0F, minZ + cell * segment};
-                            b = {minX, 0.0F, minZ + cell * (segment + 1U)};
-                            break;
-                    }
-                    stitchMidpoints[segment] = static_cast<std::uint32_t>(mesh.vertices.size());
-                    const Vec3 midpoint = (a + b) * 0.5F;
-                    WaterSystem::addWaterVertex(mesh, midpoint, {0.5F, 0.5F},
-                        samplingCellSize(midpoint, outer, cell, level));
-                }
-            }
-
-            for (std::uint32_t z = 0; z < WaterPageCells; ++z)
-                for (std::uint32_t x = 0; x < WaterPageCells; ++x) {
-                    const std::uint32_t a = vertexIndex(x, z);
-                    const std::uint32_t b = vertexIndex(x + 1U, z);
-                    const std::uint32_t c = vertexIndex(x + 1U, z + 1U);
-                    const std::uint32_t d = vertexIndex(x, z + 1U);
-                    const bool onStitchedEdge = stitchedEdge.has_value() &&
-                        ((*stitchedEdge == StitchEdge::Bottom && z == 0U) ||
-                         (*stitchedEdge == StitchEdge::Right && x + 1U == WaterPageCells) ||
-                         (*stitchedEdge == StitchEdge::Top && z + 1U == WaterPageCells) ||
-                         (*stitchedEdge == StitchEdge::Left && x == 0U));
-                    if (onStitchedEdge) {
-                        const std::uint32_t segment = *stitchedEdge == StitchEdge::Bottom ||
-                                                      *stitchedEdge == StitchEdge::Top ? x : z;
-                        addStitchedCellIndices(mesh, a, b, c, d, stitchMidpoints[segment], *stitchedEdge);
-                    } else {
-                        mesh.indices.insert(mesh.indices.end(), {a, b, c, a, c, d});
-                    }
-                }
-            // This survives the geometry-heap upload as a logical page range.
-            // The first GPU page culling pass consumes these ranges directly
-            // instead of recreating or scanning the clipmap mesh on the CPU.
-            mesh.drawRanges.push_back({
-                .firstIndex = firstIndex,
-                .indexCount = static_cast<std::uint32_t>(mesh.indices.size()) - firstIndex,
-                // Gerstner displacement is added as a conservative material
-                // bound by the page-culling extraction step. Keeping the base
-                // footprint here means the mesh remains independent of a
-                // particular water material or time sample.
-                .localBounds = {.min = {minX, 0.0F, minZ},
-                                .max = {minX + pageSize, 0.0F, minZ + pageSize}},
-            });
-        }
-    } // namespace
-
     void WaterSystem::addWaterVertex(Mesh &mesh, const Vec3 &position, const Vec2 &uv, const float cellSize) {
         mesh.vertices.push_back({
             .position = position, .color = {1.0F, 1.0F, 1.0F}, .texCoord = uv,
@@ -184,15 +178,10 @@ namespace Engine {
     }
 
     Mesh WaterSystem::buildOceanClipmap() {
-        Mesh mesh;
-        for (std::uint32_t level = 0; level < std::size(ClipmapExtents); ++level) {
-            for (std::uint32_t pageZ = 0; pageZ < WaterPagesPerAxis; ++pageZ)
-                for (std::uint32_t pageX = 0; pageX < WaterPagesPerAxis; ++pageX) {
-                    if (pageIsInactive(level, pageX, pageZ)) continue;
-                    addOceanPage(mesh, level, pageX, pageZ);
-                }
-        }
-        return mesh;
+        // Ocean geometry is now one reusable page grid.  The logical 448-page
+        // domain lives in VirtualWaterRenderer and is never duplicated in the
+        // vertex/index heap.  drawRanges are stitch topology variants, not pages.
+        return Water::buildReusableOceanPageMesh();
     }
 
     Mesh WaterSystem::buildLake(const WaterBodyComponent &water) {
@@ -316,7 +305,7 @@ namespace Engine {
         registry.view<WaterBodyComponent, TransformComponent>(
             [&](const Entity entity, const WaterBodyComponent &water, const TransformComponent &) {
                 if (water.type != WaterBodyType::Ocean) return;
-                constexpr float finestCell = (2.0F * ClipmapExtents[0]) / ClipmapResolution;
+                constexpr float finestCell = (2.0F * Water::OceanExtents[0]) / Water::ClipmapResolution;
                 const float snappedX = std::floor(cameraPosition.x() / finestCell) * finestCell;
                 const float snappedZ = std::floor(cameraPosition.z() / finestCell) * finestCell;
                 const TransformComponent &transform = registry.get<TransformComponent>(entity);
@@ -327,4 +316,56 @@ namespace Engine {
                 });
             });
     }
+
+    std::optional<WaterQueryResult> WaterSystem::query(Registry& registry, const Vec3& worldPosition,
+                                                       const float time) {
+        std::optional<WaterQueryResult> best;
+        float bestSurface = -std::numeric_limits<float>::infinity();
+        registry.view<WaterBodyComponent, TransformComponent>(
+            [&](const Entity entity, const WaterBodyComponent& water, const TransformComponent& transform) {
+                bool footprint = false;
+                float authoredDepth = water.maxDepth;
+                float flowSpeed = 0.0F;
+                float baseHeight = transform.worldPosition().y();
+                Vec3 flowDirection{};
+                switch (water.type) {
+                    case WaterBodyType::Ocean:
+                        footprint = true;
+                        break;
+                    case WaterBodyType::Lake: {
+                        footprint = pointInLake(water, transform, worldPosition);
+                        if (footprint) {
+                            const auto height = lakeBaseHeight(water, transform, worldPosition);
+                            if (height.has_value()) baseHeight = *height;
+                        }
+                        break;
+                    }
+                    case WaterBodyType::River: {
+                        const RiverHit river = queryRiverFootprint(water, transform, worldPosition);
+                        footprint = river.hit;
+                        authoredDepth = river.depth;
+                        flowSpeed = river.flowSpeed;
+                        flowDirection = river.flowDirection;
+                        if (river.hit) baseHeight = river.surfaceHeight;
+                        break;
+                    }
+                }
+                if (!footprint) return;
+                const AnalyticSurface surface = evaluateWaterSurface(water, transform, worldPosition, time, baseHeight);
+                if (surface.height < bestSurface) return;
+                bestSurface = surface.height;
+                WaterQueryResult result{};
+                result.surfaceHeight = surface.height;
+                result.normal = surface.normal;
+                result.velocity = surface.velocity + flowDirection * flowSpeed;
+                result.depth = std::max(authoredDepth, 0.0F);
+                result.immersion = std::max(surface.height - worldPosition.y(), 0.0F);
+                result.flowSpeed = flowSpeed;
+                result.waterBody = entity;
+                result.type = water.type;
+                best = result;
+            });
+        return best;
+    }
+
 } // namespace Engine

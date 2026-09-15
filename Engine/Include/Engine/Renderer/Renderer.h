@@ -121,6 +121,9 @@ namespace Engine {
         /** Queues a scene-linear six-face capture for a ReflectionProbeComponent. */
         void bakeReflectionProbe(Entity entity) const;
 
+        /** Injects a local disturbance into the virtual-water persistent state cache. */
+        void addWaterInteraction(Vec3 worldPosition, float radius = 1.5F, float strength = 1.0F) const;
+
         void renderFrame() const;
 
         void synchronizeScene(Scene &scene) const;

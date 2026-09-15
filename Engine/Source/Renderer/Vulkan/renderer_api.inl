@@ -127,6 +127,9 @@ bool Renderer::setEnvironmentEquirectangular(const std::filesystem::path& path) 
 void Renderer::bakeReflectionProbe(const Entity entity) const {
     if (backend_) backend_->bakeReflectionProbe(entity);
 }
+void Renderer::addWaterInteraction(const Vec3 worldPosition, const float radius, const float strength) const {
+    if (backend_) backend_->addWaterInteraction(worldPosition, radius, strength);
+}
 void Renderer::renderFrame() const { backend_->renderFrame(); }
 void Renderer::synchronizeScene(Scene& scene) const {
     if (!backend_) return;

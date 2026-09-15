@@ -1,7 +1,6 @@
-// Reflection sources are resolved by confidence, never added together.  A
-// screen-space or ray-traced hit owns the pixel only when its validation pass
-// marks it reliable; otherwise the local capture and finally the sky remain a
-// stable fallback for off-screen geometry.
+// Reflection sources are resolved by confidence rather than added. Lower-
+// confidence screen-space/RT results blend into stable probe/sky fallback,
+// which avoids hard ownership changes and reflection popping at screen edges.
 struct ReflectionCandidate
 {
     float3 radiance;
@@ -11,8 +10,9 @@ struct ReflectionCandidate
 float3 resolveReflection(ReflectionCandidate rayTraced, ReflectionCandidate screenSpace,
                          ReflectionCandidate localProbe, ReflectionCandidate sky)
 {
-    if (rayTraced.confidence > 0.0) return rayTraced.radiance;
-    if (screenSpace.confidence > 0.0) return screenSpace.radiance;
-    if (localProbe.confidence > 0.0) return localProbe.radiance;
-    return sky.radiance;
+    float3 result = sky.radiance;
+    result = lerp(result, localProbe.radiance, saturate(localProbe.confidence));
+    result = lerp(result, screenSpace.radiance, saturate(screenSpace.confidence));
+    result = lerp(result, rayTraced.radiance, saturate(rayTraced.confidence));
+    return result;
 }

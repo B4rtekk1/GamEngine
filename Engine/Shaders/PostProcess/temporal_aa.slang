@@ -10,6 +10,9 @@ VertexOutput vertexMain(uint index : SV_VertexID) {
 [[vk::binding(2, 0)]] Sampler2D velocityFrame;
 [[vk::binding(3, 0)]] Sampler2D currentDepthFrame;
 [[vk::binding(4, 0)]] Sampler2D historyDepthFrame;
+[[vk::binding(5, 0)]] Sampler2D waterVelocityFrame;
+[[vk::binding(6, 0)]] Sampler2D waterMetaFrame;
+[[vk::binding(7, 0)]] Sampler2D waterSurfaceFrame;
 struct Settings {
     float currentJitterX, currentJitterY, previousJitterX, previousJitterY;
     float historyWeight, inverseWidth, inverseHeight, padding;
@@ -71,20 +74,29 @@ FragmentOutput fragmentMain(FragmentInput input) {
     const float2 texel = float2(settings.inverseWidth, settings.inverseHeight);
     const float2 resolution = 1.0 / texel;
     const float3 current = currentFrame.Sample(input.uv).rgb;
-    const float currentDepth = currentDepthFrame.Sample(input.uv).r;
+    const uint waterQuality = settings.padding > 0.5 ? asuint(waterMetaFrame.Sample(input.uv).y) : 0u;
+    const bool waterPixel = (waterQuality & 0x80000000u) != 0;
+    const float currentDepth = waterPixel ? waterSurfaceFrame.Sample(input.uv).z
+                                          : currentDepthFrame.Sample(input.uv).r;
+    const float reactive = (waterQuality & 0x40000000u) != 0 ? 1.0 : 0.0;
     // At a silhouette, bilinear velocity may contain the background's motion
     // even though the current pixel belongs to the foreground.  Vulkan's
     // depth convention is near=0, so select the velocity at the nearest depth
     // in a compact 3x3 footprint before reprojection.
     float nearestDepth = currentDepth;
-    float2 velocitySample = velocityFrame.Sample(input.uv).xy;
+    float2 velocitySample = waterPixel ? waterVelocityFrame.Sample(input.uv).xy
+                                       : velocityFrame.Sample(input.uv).xy;
     [unroll] for (int y = -1; y <= 1; ++y) {
         [unroll] for (int x = -1; x <= 1; ++x) {
             const float2 sampleUv = clamp(input.uv + float2(x, y) * texel, 0.0, 1.0);
-            const float sampleDepth = currentDepthFrame.Sample(sampleUv).r;
+            const uint sampleWaterQuality = settings.padding > 0.5 ? asuint(waterMetaFrame.Sample(sampleUv).y) : 0u;
+            const bool sampleWater = (sampleWaterQuality & 0x80000000u) != 0;
+            const float sampleDepth = sampleWater ? waterSurfaceFrame.Sample(sampleUv).z
+                                                  : currentDepthFrame.Sample(sampleUv).r;
             if (sampleDepth < nearestDepth) {
                 nearestDepth = sampleDepth;
-                velocitySample = velocityFrame.Sample(sampleUv).xy;
+                velocitySample = sampleWater ? waterVelocityFrame.Sample(sampleUv).xy
+                                             : velocityFrame.Sample(sampleUv).xy;
             }
         }
     }
@@ -126,7 +138,7 @@ FragmentOutput fragmentMain(FragmentInput input) {
     // Retain history only when its luminance agrees with this frame. A large
     // difference is a disocclusion/change signal, so it must favour current.
     const float historyConfidence = similarity * similarity;
-    const float historyWeight = settings.historyWeight * historyConfidence;
+    const float historyWeight = settings.historyWeight * historyConfidence * lerp(1.0, 0.12, reactive);
     const float3 resolved = reinhardInverse(lerp(currentTm, historyTm,
         (historyInBounds && depthMatches) ? historyWeight : 0.0));
     output.color = float4(resolved, 1.0);
