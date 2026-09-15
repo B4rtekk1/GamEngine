@@ -1233,7 +1233,9 @@
                 shadowPass.descriptorSetLayout(), hdrBuffer.imageView(),
                 {opaqueSceneColor.sampler(), opaqueSceneColor.imageView(), VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL},
                 depthInfo, hizInfo, instances, culling);
-            virtualWaterRenderer.rebuild(registry, sceneGpu);
+            const Water::WaterRenderWorld waterWorld =
+                Water::WaterRenderWorld::capture(registry, sceneGpu);
+            virtualWaterRenderer.rebuild(waterWorld);
         }
 
         void destroyVelocityResources() noexcept {

@@ -511,16 +511,31 @@ namespace Engine {
             }
         }
 
-        // Frame fences only retire graphics frame submissions.  Global scene
-        // replacement also releases resources referenced by one-shot uploads
-        // and work submitted to the dedicated compute and transfer queues.
+        // Frame fences retire complete graphics submissions, including the
+        // async-compute chain when it is enabled.  A scene topology rebuild
+        // must wait for every frame slot that can still reference a replaced
+        // descriptor, texture, or scene table.
         void waitForGlobalResourceRebuild() const {
             if (device == VK_NULL_HANDLE) {
                 return;
             }
-            if (vkDeviceWaitIdle(device) != VK_SUCCESS) {
-                throw std::runtime_error("Could not synchronize device for scene rebuild");
-            }
+            // Do not use vkDeviceWaitIdle() here.  It also waits for work
+            // unrelated to the old scene generation and made an otherwise
+            // bounded topology edit look like a hung editor.  Retire the
+            // exact two classes of work that own scene resources instead.
+            Diagnostics::instance().report(
+                DiagnosticSeverity::Info,
+                "[SceneSync] waiting for frame/upload retirement before topology rebuild",
+                {.subsystem = "Renderer"});
+            Diagnostics::instance().flush();
+            const std::uint64_t uploadRetireValue = uploadContext.lastSubmittedValue();
+            waitForAllFrames();
+            if (uploadRetireValue != 0U) uploadContext.wait(uploadRetireValue);
+            Diagnostics::instance().report(
+                DiagnosticSeverity::Info,
+                "[SceneSync] frame/upload retirement complete",
+                {.subsystem = "Renderer"});
+            Diagnostics::instance().flush();
         }
 
         [[nodiscard]] bool setEnvironmentEquirectangular(const std::filesystem::path &path) {
@@ -807,9 +822,9 @@ namespace Engine {
                 return;
             }
             sceneViewportNeedsRender = true;
-            // This rebuild releases resources used by graphics, async compute
-            // and UploadContext transfer submissions. Per-frame fences cover
-            // only graphics frame submissions, so they are not sufficient.
+            // Retire the previous scene generation before changing shared
+            // descriptor bindings and scene tables.  This is fence/timeline
+            // based rather than a device-wide idle wait.
             waitForGlobalResourceRebuild();
 
             // ECS topology is not renderer topology.  Only resources whose
@@ -876,7 +891,9 @@ namespace Engine {
                 VkDescriptorImageInfo hizInfo{hiZBuffer.sampler(), hiZBuffer.fullView(),
                                                VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
                 virtualWaterRenderer.updateFrameBindings(virtualInstances, virtualCulling, hizInfo);
-                virtualWaterRenderer.rebuild(registry, sceneGpu);
+                const Water::WaterRenderWorld waterWorld =
+                    Water::WaterRenderWorld::capture(registry, sceneGpu);
+                virtualWaterRenderer.rebuild(waterWorld);
             }
             lastRenderTopologyRevision = updatedTopologyRevision;
             lastParticleEmitterRevision = updatedParticleEmitterRevision;

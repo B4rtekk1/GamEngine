@@ -158,7 +158,14 @@ namespace Engine {
                          << entry.message;
                 appendContext(logFile_, entry.context);
                 logFile_ << '\n';
+                // In Debug an editor can be terminated while blocked inside
+                // a graphics-driver call.  Persist every entry so the last
+                // line identifies the actual blocking boundary.
+#ifndef NDEBUG
+                logFile_.flush();
+#else
                 if (severity == DiagnosticSeverity::Error) logFile_.flush();
+#endif
             }
         } catch (...) {
             // Reporting must never turn a recoverable runtime problem into a crash.

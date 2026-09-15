@@ -176,7 +176,18 @@ bool ComponentsPanel::draw(Engine::ScenePreset &scene, Engine::Assets::Content& 
         bool remove = false;
         const bool open = drawRemovableComponentHeader("Mesh Renderer", "mesh-renderer", remove);
         if (remove) {
-            scene.editor().remove<Engine::MeshRenderer>(selected);
+            if (scene.editor().has<Engine::WaterBodyComponent>(selected)) {
+                // A Water Body owns the renderer that Virtual Water maps to
+                // its immutable scene snapshot.  Retire both components
+                // after this frame's submission instead of exposing a live
+                // Water Body with a removed MeshRenderer to the renderer.
+                if (std::ranges::find(deferredWaterBodyRemovals, selected) ==
+                    deferredWaterBodyRemovals.end()) {
+                    deferredWaterBodyRemovals.push_back(selected);
+                }
+            } else {
+                scene.editor().remove<Engine::MeshRenderer>(selected);
+            }
         } else if (open) {
         const auto readScene = scene.editor();
         const auto &source = readScene.read<Engine::MeshRenderer>(selected);

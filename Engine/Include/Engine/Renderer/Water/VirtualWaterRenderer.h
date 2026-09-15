@@ -9,6 +9,7 @@
 #include "Engine/Renderer/Vulkan/graphics_pipeline.h"
 #include "Engine/Renderer/Vulkan/hdr_buffer.h"
 #include "Engine/Renderer/Water/VirtualWaterTypes.h"
+#include "Engine/Renderer/Water/WaterRenderWorld.h"
 
 #include <array>
 #include <cstdint>
@@ -18,8 +19,6 @@
 #include <vk_mem_alloc.h>
 
 namespace Engine {
-class Registry;
-class SceneGpuResources;
 namespace Assets { class AssetManager; }
 
 namespace Water {
@@ -41,8 +40,8 @@ public:
                 std::span<const VkBuffer> cullingUniformBuffers);
     void destroy() noexcept;
 
-    /** Rebuilds logical pages/templates after scene topology or water authoring changes. */
-    void rebuild(Registry& registry, const SceneGpuResources& sceneGpu);
+    /** Rebuilds GPU page/templates from an immutable scene-generation snapshot. */
+    void rebuild(const WaterRenderWorld& world);
     /** Refreshes frame-buffer bindings after renderer buffer growth/recreation. */
     void updateFrameBindings(std::span<const VkBuffer> instanceBuffers,
                              std::span<const VkBuffer> cullingUniformBuffers,

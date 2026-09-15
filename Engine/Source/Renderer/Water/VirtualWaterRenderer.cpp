@@ -1,12 +1,9 @@
 #include "Engine/Renderer/Water/VirtualWaterRenderer.h"
 
 #include "Engine/Assets/AssetManager.h"
-#include "Engine/ECS/Registry.h"
-#include "Engine/ECS/Components/MeshRendererComponent.h"
 #include "Engine/ECS/Components/WaterBodyComponent.h"
 #include "Engine/ECS/Components/TransformComponent.h"
 #include "Engine/Renderer/Geometry/GpuVertex.h"
-#include "Engine/Renderer/Vulkan/SceneGpuResources.h"
 #include "Engine/Renderer/Water/VirtualWaterPageBuilder.h"
 #include "Engine/Renderer/Water/WaterSystem.h"
 #include "Engine/Renderer/shader_loader.h"
@@ -518,7 +515,7 @@ void VirtualWaterRenderer::updateFrameBindings(std::span<const VkBuffer> instanc
     if(instances.size()<FramesInFlight||culling.size()<FramesInFlight)return;std::copy_n(instances.begin(),FramesInFlight,instanceBuffers_.begin());std::copy_n(culling.begin(),FramesInFlight,cullingUniformBuffers_.begin());previousHiZ_=hiz;if(device_)writeDescriptors();
 }
 
-void VirtualWaterRenderer::rebuild(Registry& registry, const SceneGpuResources& sceneGpu) {
+void VirtualWaterRenderer::rebuild(const WaterRenderWorld& world) {
     if (!device_) return;
 
     std::vector<GPUVirtualWaterPage> pages;
@@ -529,28 +526,25 @@ void VirtualWaterRenderer::rebuild(Registry& registry, const SceneGpuResources& 
     authoredWaterActive_ = false;
 
     // Oceans own virtual geometry pages and an analytic horizon.
-    registry.view<WaterBodyComponent, MeshRendererComponent>(
-        [&](Entity entity, const WaterBodyComponent& water, const MeshRendererComponent& renderer) {
-            if (!renderer.hasMesh() || water.type != WaterBodyType::Ocean ||
-                bodyCount_ >= MaxVirtualWaterBodies) return;
-            const auto it = sceneGpu.renderableIndices.find(entity);
-            if (it == sceneGpu.renderableIndices.end() || it->second.empty()) return;
-            const auto resource = renderer.mesh.resource();
-            const Mesh* mesh = renderer.mesh.get();
-            if (!resource || !mesh || mesh->drawRanges.size() != StitchVariantCount) return;
+    for (const WaterRenderBody& body : world.bodies()) {
+            const WaterBodyComponent& water = body.water;
+            if (water.type != WaterBodyType::Ocean ||
+                bodyCount_ >= MaxVirtualWaterBodies) continue;
+            const auto& resource = body.meshResource;
+            if (!resource || body.drawRanges.size() != StitchVariantCount) continue;
 
             OceanDomainConfig domain{};
             domain.waves = water.waves;
             domain.waveCount = water.waveCount;
             domain.bodyIndex = bodyCount_;
-            domain.instanceIndex = static_cast<std::uint32_t>(it->second.front());
+            domain.instanceIndex = body.instanceIndex;
             domain.pageBaseIndex = static_cast<std::uint32_t>(pages.size());
             domain.geometryLevelCount = GeometryClipLevels;
             auto bodyPages = buildOceanPageDomain(domain);
             pages.insert(pages.end(), bodyPages.begin(), bodyPages.end());
 
             for (std::uint32_t mask = 0; mask < StitchVariantCount; ++mask) {
-                const auto& range = mesh->drawRanges[mask];
+                const auto& range = body.drawRanges[mask];
                 templates.push_back({
                     range.indexCount,
                     resource->firstIndex + range.firstIndex,
@@ -566,20 +560,18 @@ void VirtualWaterRenderer::rebuild(Registry& registry, const SceneGpuResources& 
                                  static_cast<float>(ClipmapResolution);
             far.waveMask = 0xffU;
             ++bodyCount_;
-        });
+    }
 
     // Lakes and rivers retain authored mesh topology, but get a state-only virtual
     // page so persistent wakes/foam use the same bounded physical cache as ocean.
-    registry.view<WaterBodyComponent, MeshRendererComponent>(
-        [&](Entity entity, const WaterBodyComponent& water, const MeshRendererComponent& renderer) {
-            if (!renderer.hasMesh() || water.type == WaterBodyType::Ocean ||
-                authoredConfig.bodyCount >= MaxVirtualWaterBodies) return;
-            const auto it = sceneGpu.renderableIndices.find(entity);
-            if (it == sceneGpu.renderableIndices.end() || it->second.empty()) return;
+    for (const WaterRenderBody& body : world.bodies()) {
+            const WaterBodyComponent& water = body.water;
+            if (water.type == WaterBodyType::Ocean ||
+                authoredConfig.bodyCount >= MaxVirtualWaterBodies) continue;
             authoredWaterActive_ = true;
 
             GPUAuthoredWaterBody& authored = authoredConfig.bodies[authoredConfig.bodyCount++];
-            authored.instanceIndex = static_cast<std::uint32_t>(it->second.front());
+            authored.instanceIndex = body.instanceIndex;
             authored.bodyType = static_cast<std::uint32_t>(water.type);
             authored.statePageIndex = FarAnalyticPageId;
 
@@ -620,7 +612,7 @@ void VirtualWaterRenderer::rebuild(Registry& registry, const SceneGpuResources& 
                     riverFlowWeight += length;
                 }
             }
-            if (pointCount == 0U || pages.size() >= MaxPages) return;
+            if (pointCount == 0U || pages.size() >= MaxPages) continue;
 
             GPUVirtualWaterPage statePage{};
             statePage.originX = statePage.minX = minX;
@@ -648,7 +640,7 @@ void VirtualWaterRenderer::rebuild(Registry& registry, const SceneGpuResources& 
             // not geometry. The authored mesh is rasterized by water_authored_prepass.
             authored.statePageIndex = static_cast<std::uint32_t>(pages.size());
             pages.push_back(statePage);
-        });
+    }
 
     pageCount_ = static_cast<std::uint32_t>(pages.size());
     drawBinCount_ = bodyCount_ * StitchVariantCount;
@@ -680,6 +672,39 @@ void VirtualWaterRenderer::rebuild(Registry& registry, const SceneGpuResources& 
     stateAllocator_.update(&zeroAllocator, sizeof(zeroAllocator));
     stateCurrentScratch_ = false;
     pendingInteractions_.clear();
+
+    // `active_` prevents these buffers from being consumed in the next
+    // frame, but leaving their contents behind makes a 1 -> 0 water
+    // transition fragile: a stale indirect command can be observed by any
+    // future pass or diagnostic readback.  A rebuild is globally retired by
+    // the caller, so explicitly reset every per-frame water output now.
+    if (!active_) {
+        std::vector<GPUVirtualWaterPage> emptyPages(MaxPages);
+        std::vector<GPUWaterDrawTemplate> emptyTemplates(MaxDrawBins);
+        std::vector<GPUVisibleWaterPage> emptyVisiblePages(MaxVisiblePageSlots);
+        std::vector<std::uint32_t> emptyDrawBinCounts(MaxDrawBins);
+        std::vector<VkDrawIndexedIndirectCommand> emptyIndirectCommands(MaxDrawBins);
+        std::vector<std::uint32_t> emptyTileLists(4ULL * tileSettings_.maxTiles);
+        std::array<std::uint32_t, 4> emptyTileCounts{};
+        std::array<VkDispatchIndirectCommand, 4> emptyTileDispatch{};
+        const GPUWaterPageStats emptyStats{};
+
+        pages_.update(emptyPages.data(), sizeof(GPUVirtualWaterPage) * emptyPages.size());
+        drawTemplates_.update(emptyTemplates.data(), sizeof(GPUWaterDrawTemplate) * emptyTemplates.size());
+        for (std::uint32_t frame = 0; frame < FramesInFlight; ++frame) {
+            visiblePages_[frame].update(emptyVisiblePages.data(),
+                                        sizeof(GPUVisibleWaterPage) * emptyVisiblePages.size());
+            drawBinCounts_[frame].update(emptyDrawBinCounts.data(),
+                                         sizeof(std::uint32_t) * emptyDrawBinCounts.size());
+            indirectCommands_[frame].update(emptyIndirectCommands.data(),
+                                            sizeof(VkDrawIndexedIndirectCommand) * emptyIndirectCommands.size());
+            stats_[frame].update(&emptyStats, sizeof(emptyStats));
+            tileLists_[frame].update(emptyTileLists.data(),
+                                     sizeof(std::uint32_t) * emptyTileLists.size());
+            tileCounts_[frame].update(emptyTileCounts.data(), sizeof(emptyTileCounts));
+            tileDispatch_[frame].update(emptyTileDispatch.data(), sizeof(emptyTileDispatch));
+        }
+    }
 }
 
 void VirtualWaterRenderer::recordCull(VkCommandBuffer cmd, std::uint32_t frame) const {
