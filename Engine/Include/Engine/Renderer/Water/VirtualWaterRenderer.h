@@ -98,6 +98,10 @@ private:
 
     Buffer pages_;
     Buffer drawTemplates_;
+    // Reusable clipmap page topology, owned by Virtual Water rather than ECS.
+    Buffer oceanVertexBuffer_;
+    Buffer oceanIndexBuffer_;
+    std::vector<Mesh::DrawRange> oceanDrawRanges_;
     Buffer cullConfig_;
     Buffer farOceanConfig_;
     Buffer authoredWaterConfig_;
@@ -187,6 +191,7 @@ private:
     VkDescriptorImageInfo opaqueDepth_{};
 
     void createBuffers();
+    void createOceanGeometry();
     void createDescriptors(VkDescriptorSetLayout sceneLayout);
     void createPipelines(VkDescriptorSetLayout sceneLayout, VkFormat depthFormat);
     void createFramebuffers(VkImageView hdrTargetView);

@@ -60,6 +60,12 @@ Engine::Entity HierarchyPanel::draw(Engine::ScenePreset &scene, Engine::Assets::
         if (ImGui::MenuItem("Camera")) clicked = scene.createCamera();
         if (ImGui::MenuItem("Light/Directional Light")) clicked = scene.createLight();
         if (ImGui::MenuItem("Terrain")) clicked = scene.createTerrain();
+        if (ImGui::BeginMenu("Water")) {
+            if (ImGui::MenuItem("Ocean")) clicked = scene.createOcean();
+            if (ImGui::MenuItem("Lake")) clicked = scene.createLake();
+            if (ImGui::MenuItem("River")) clicked = scene.createRiver();
+            ImGui::EndMenu();
+        }
     };
     const auto acceptModelDrop = [&](const Engine::Entity parent = Engine::NullEntity) {
         if (disabled) return;

@@ -14,6 +14,7 @@
 #include "Engine/ECS/Components/TerrainGrassComponent.h"
 #include "Engine/ECS/Components/WindComponent.h"
 #include "Engine/ECS/Components/WaterBodyComponent.h"
+#include "Engine/ECS/Components/WaterShapeComponent.h"
 #include "Engine/ECS/Registry.h"
 #include "Engine/Renderer/MeshRenderer.h"
 #include "Engine/Renderer/Water/WaterSystem.h"
@@ -1725,6 +1726,16 @@ namespace Engine {
                         invalidScene(
                             "water material is invalid");
                     loaded.add<WaterBodyComponent>(entity, std::move(water));
+                    // Older scene versions stored shape data in the water
+                    // material component.  Materialise the new authoring
+                    // component on load so every live water entity follows
+                    // the WaterBody + WaterShape archetype.
+                    const WaterBodyComponent& loadedWater = loaded.get<WaterBodyComponent>(entity);
+                    WaterShapeComponent shape{};
+                    shape.type = loadedWater.type;
+                    shape.lakePolygon = loadedWater.lakeBoundary;
+                    shape.riverSpline = loadedWater.riverSpline;
+                    loaded.add<WaterShapeComponent>(entity, std::move(shape));
                     hasWater = true;
                 } else if (component == "WIND" || component == "WIND_V2") {
                     if (hasWind) invalidScene("entity contains more than one WindComponent");

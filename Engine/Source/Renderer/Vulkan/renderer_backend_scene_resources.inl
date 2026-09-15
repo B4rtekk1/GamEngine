@@ -378,6 +378,25 @@
             });
             geometryHeapVertexHighWater = vertexCount;
             geometryHeapIndexHighWater = indexCount;
+            // Water contributes a transform slot to the shared scene-instance
+            // buffer, but deliberately contributes no generic draw record.
+            // VirtualWaterRenderer is its sole geometry owner. This retains
+            // the existing shader descriptor contract while removing the ECS
+            // MeshRenderer requirement.
+            registry.view<Transform, WaterBodyComponent>(
+                [&](const Entity entity, const Transform&, const WaterBodyComponent&) {
+                    const std::size_t instanceIndex = renderables.size();
+                    renderables.push_back({
+                        .entity = entity,
+                        .localBounds = {{-Water::OceanExtents.back(), -2.0F, -Water::OceanExtents.back()},
+                                        { Water::OceanExtents.back(),  2.0F,  Water::OceanExtents.back()}},
+                        .batchIndex = 0,
+                        .firstVertex = 0,
+                        .vertexCount = 0,
+                        .waterOnly = true,
+                    });
+                    sceneGpu.renderableIndices[entity].push_back(instanceIndex);
+                });
             if (vertexCount == 0 || indexCount == 0) {
                 // The empty-scene path below keeps valid dummy bindings.
             } else {
@@ -805,6 +824,9 @@
                     vulkanDevice.physical(), device, &dummyIndex, sizeof(dummyIndex),
                     VK_BUFFER_USAGE_INDEX_BUFFER_BIT, commandPool,
                     vulkanDevice.graphicsQueue(), vulkanDevice.allocator());
+                // A mesh-free water scene still needs its renderer-owned
+                // transform slots uploaded for VirtualWaterRenderer.
+                if (!renderables.empty()) createInstanceBuffer();
                 [[maybe_unused]] const UploadTicket ticket = uploadBatch.submit();
                 return;
             }
@@ -1622,6 +1644,37 @@
                     continue;
                 }
                 const auto& transform = readRegistry.get<Transform>(entity);
+                if (record.waterOnly) {
+                    const bool transformChanged = lastTransformRevision ==
+                        std::numeric_limits<std::uint64_t>::max() ||
+                        (!optimizationFeatures.transformCaching ||
+                         record.lastWorldRevision != transform.worldRevision());
+                    if (transformChanged) {
+                        const glm::mat4 model = worldModel(entity);
+                        glm::vec3 scale{};
+                        glm::quat rotation{};
+                        glm::vec3 translation{};
+                        glm::vec3 skew{};
+                        glm::vec4 perspective{};
+                        if (!glm::decompose(model, scale, rotation, translation, skew, perspective)) {
+                            scale = {1.0F, 1.0F, 1.0F};
+                            rotation = {};
+                            translation = glm::vec3{model[3]};
+                        }
+                        RendererInstanceData& instance = instanceModels[index];
+                        previousInstanceTransforms[index] = {
+                            .previousPosition = glm::vec4{glm::vec3{instance.positionMaterial}, 0.0F},
+                            .previousRotation = instance.rotation,
+                            .previousScale = instance.scaleBase,
+                        };
+                        instance.positionMaterial = glm::vec4{translation, 0.0F};
+                        instance.rotation = {rotation.x, rotation.y, rotation.z, rotation.w};
+                        instance.scaleBase = {scale, 0.0F};
+                        record.lastWorldRevision = transform.worldRevision();
+                        markDirty(index, &RenderableRecord::transformDirtyFrames, dirtyTransforms);
+                    }
+                    continue;
+                }
                 if (!readRegistry.has<MeshRenderer>(entity)) {
                     sceneGpu.database.removeInstance(static_cast<std::uint64_t>(entity),
                                                      submittedFrameValue);

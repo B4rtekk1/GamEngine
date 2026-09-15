@@ -194,6 +194,21 @@ namespace Engine {
         return entity;
     }
 
+    Entity ScenePreset::createOcean() {
+        const Entity entity = findEntity(Scene::createOcean().id());
+        return entity;
+    }
+
+    Entity ScenePreset::createLake() {
+        const Entity entity = findEntity(Scene::createLake().id());
+        return entity;
+    }
+
+    Entity ScenePreset::createRiver() {
+        const Entity entity = findEntity(Scene::createRiver().id());
+        return entity;
+    }
+
     Entity ScenePreset::createCube() {
         auto &object = createMeshObject("Cube", cubeMesh_,
                                         PBRMaterial{

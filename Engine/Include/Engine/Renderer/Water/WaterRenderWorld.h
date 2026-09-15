@@ -1,6 +1,7 @@
 #pragma once
 
 #include "Engine/ECS/Components/WaterBodyComponent.h"
+#include "Engine/ECS/Components/WaterShapeComponent.h"
 #include "Engine/Renderer/Geometry/Mesh.h"
 #include "Engine/Renderer/Geometry/MeshGpuResource.h"
 
@@ -22,6 +23,7 @@ namespace Water {
  */
 struct WaterRenderBody final {
     WaterBodyComponent water{};
+    WaterShapeComponent shape{};
     std::uint32_t instanceIndex{};
     std::shared_ptr<const MeshGpuResource> meshResource;
     std::vector<Mesh::DrawRange> drawRanges;

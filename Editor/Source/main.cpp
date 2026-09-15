@@ -979,10 +979,9 @@ int main(int argc, char** argv) {
                         !scene.editor().has<Engine::WaterBodyComponent>(entity)) {
                         continue;
                     }
-                    scene.editor().remove<Engine::WaterBodyComponent>(entity);
-                    if (scene.editor().has<Engine::MeshRenderer>(entity)) {
-                        scene.editor().remove<Engine::MeshRenderer>(entity);
-                    }
+                    // Water is an editor archetype. Removing it must not
+                    // leave an empty Transform-only object behind.
+                    scene.editor().destroy(entity);
                 }
                 deferredWaterBodyRemovals.clear();
                 sceneResourceSyncPending = true;

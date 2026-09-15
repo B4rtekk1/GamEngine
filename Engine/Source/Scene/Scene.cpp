@@ -103,6 +103,34 @@ namespace Engine {
         return Actor{*this, object.objectId()};
     }
 
+    Actor Scene::createWaterBody(const WaterBodyType type, std::string name) {
+        GameObject& object = create(std::move(name));
+        WaterBodyComponent body{};
+        body.type = type;
+        WaterShapeComponent shape{};
+        shape.type = type;
+        switch (type) {
+            case WaterBodyType::Ocean:
+                shape.oceanExtent = 65536.0F;
+                break;
+            case WaterBodyType::Lake:
+                shape.lakePolygon = {{-10.0F, 0.0F, -10.0F}, {10.0F, 0.0F, -10.0F},
+                                     {10.0F, 0.0F, 10.0F}, {-10.0F, 0.0F, 10.0F}};
+                // Keep the legacy field populated while old scene and water
+                // mesh paths are retired. New code must read WaterShape.
+                body.lakeBoundary = shape.lakePolygon;
+                break;
+            case WaterBodyType::River:
+                shape.riverSpline = {{{-10.0F, 0.0F, 0.0F}, 4.0F, 1.0F, 1.0F},
+                                     {{10.0F, 0.0F, 0.0F}, 4.0F, 1.0F, 1.0F}};
+                body.riverSpline = shape.riverSpline;
+                break;
+        }
+        object.add<WaterBodyComponent>(std::move(body));
+        object.add<WaterShapeComponent>(std::move(shape));
+        return Actor{*this, object.objectId()};
+    }
+
     void Scene::setParent(const Actor &child, const Actor &parent, const ParentMode mode) {
         if (child.scene_ != this || parent.scene_ != this || !child.valid() || !parent.valid()) {
             throw std::invalid_argument("Parent and child must be live actors in this Scene");

@@ -81,6 +81,7 @@ void VirtualWaterRenderer::create(VkPhysicalDevice physicalDevice, VkDevice devi
     std::copy_n(cullingUniformBuffers.begin(),FramesInFlight,cullingUniformBuffers_.begin());
     try {
         createBuffers();
+        createOceanGeometry();
         surface_.create(physicalDevice_,device_,extent_,allocator_,VK_FILTER_NEAREST,VK_FORMAT_R16G16B16A16_SFLOAT,false);
         meta_.create(physicalDevice_,device_,extent_,allocator_,VK_FILTER_NEAREST,VK_FORMAT_R32G32_SFLOAT,false);
         velocity_.create(physicalDevice_,device_,extent_,allocator_,VK_FILTER_NEAREST,VK_FORMAT_R16G16_SFLOAT,false);
@@ -138,6 +139,26 @@ void VirtualWaterRenderer::createBuffers() {
         const GPUWaterUnderwaterConfig emptyUnderwater{};
         underwaterConfig_[f].update(&emptyUnderwater, sizeof(emptyUnderwater));
     }
+}
+
+void VirtualWaterRenderer::createOceanGeometry() {
+    WaterBodyComponent ocean{};
+    ocean.type = WaterBodyType::Ocean;
+    const Mesh mesh = WaterSystem::buildMesh(ocean);
+    if (mesh.vertices.empty() || mesh.indices.empty() ||
+        mesh.drawRanges.size() != StitchVariantCount) {
+        throw std::runtime_error("Virtual Water clipmap topology is invalid");
+    }
+    std::vector<GpuVertex> vertices;
+    vertices.reserve(mesh.vertices.size());
+    for (const Vertex& vertex : mesh.vertices) vertices.push_back(GpuVertex::pack(vertex));
+    oceanVertexBuffer_.createHostVisible(physicalDevice_, device_,
+        sizeof(GpuVertex) * vertices.size(), VK_BUFFER_USAGE_VERTEX_BUFFER_BIT, allocator_);
+    oceanVertexBuffer_.update(vertices.data(), sizeof(GpuVertex) * vertices.size());
+    oceanIndexBuffer_.createHostVisible(physicalDevice_, device_,
+        sizeof(std::uint32_t) * mesh.indices.size(), VK_BUFFER_USAGE_INDEX_BUFFER_BIT, allocator_);
+    oceanIndexBuffer_.update(mesh.indices.data(), sizeof(std::uint32_t) * mesh.indices.size());
+    oceanDrawRanges_ = mesh.drawRanges;
 }
 
 void VirtualWaterRenderer::createDescriptors(VkDescriptorSetLayout sceneLayout) {
@@ -530,9 +551,6 @@ void VirtualWaterRenderer::rebuild(const WaterRenderWorld& world) {
             const WaterBodyComponent& water = body.water;
             if (water.type != WaterBodyType::Ocean ||
                 bodyCount_ >= MaxVirtualWaterBodies) continue;
-            const auto& resource = body.meshResource;
-            if (!resource || body.drawRanges.size() != StitchVariantCount) continue;
-
             OceanDomainConfig domain{};
             domain.waves = water.waves;
             domain.waveCount = water.waveCount;
@@ -540,17 +558,20 @@ void VirtualWaterRenderer::rebuild(const WaterRenderWorld& world) {
             domain.instanceIndex = body.instanceIndex;
             domain.pageBaseIndex = static_cast<std::uint32_t>(pages.size());
             domain.geometryLevelCount = GeometryClipLevels;
-            auto bodyPages = buildOceanPageDomain(domain);
-            pages.insert(pages.end(), bodyPages.begin(), bodyPages.end());
-
-            for (std::uint32_t mask = 0; mask < StitchVariantCount; ++mask) {
-                const auto& range = body.drawRanges[mask];
-                templates.push_back({
-                    range.indexCount,
-                    resource->firstIndex + range.firstIndex,
-                    static_cast<std::int32_t>(resource->firstVertex),
-                    bodyCount_ * StitchVariantCount * VisiblePagesPerBin + mask * VisiblePagesPerBin
-                });
+            // The reusable clipmap topology is owned by this renderer. ECS
+            // meshes no longer participate in the near-ocean draw path.
+            if (oceanDrawRanges_.size() == StitchVariantCount) {
+                auto bodyPages = buildOceanPageDomain(domain);
+                pages.insert(pages.end(), bodyPages.begin(), bodyPages.end());
+                for (std::uint32_t mask = 0; mask < StitchVariantCount; ++mask) {
+                    const auto& range = oceanDrawRanges_[mask];
+                    templates.push_back({
+                        range.indexCount,
+                        range.firstIndex,
+                        0,
+                        bodyCount_ * StitchVariantCount * VisiblePagesPerBin + mask * VisiblePagesPerBin
+                    });
+                }
             }
 
             GPUFarOceanBody& far = farConfig.bodies[farConfig.bodyCount++];
@@ -885,8 +906,10 @@ void VirtualWaterRenderer::recordPrepass(VkCommandBuffer cmd, std::uint32_t fram
         const std::array sets{sceneSet, drawSets_[frame]};
         vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, prepassPipeline_.layout(),
                                 0, static_cast<std::uint32_t>(sets.size()), sets.data(), 0, nullptr);
-        VkDeviceSize offset = 0; vkCmdBindVertexBuffers(cmd, 0, 1, &vb, &offset);
-        vkCmdBindIndexBuffer(cmd, ib, 0, VK_INDEX_TYPE_UINT32);
+        VkDeviceSize offset = 0;
+        const VkBuffer oceanVertexBuffer = oceanVertexBuffer_.handle();
+        vkCmdBindVertexBuffers(cmd, 0, 1, &oceanVertexBuffer, &offset);
+        vkCmdBindIndexBuffer(cmd, oceanIndexBuffer_.handle(), 0, VK_INDEX_TYPE_UINT32);
         vkCmdDrawIndexedIndirect(cmd, indirectCommands_[frame].handle(), 0, drawBinCount_,
                                  sizeof(VkDrawIndexedIndirectCommand));
     }
@@ -1039,6 +1062,9 @@ void VirtualWaterRenderer::destroy() noexcept {
     sssrDepth_.destroy();
     pages_.destroy();
     drawTemplates_.destroy();
+    oceanVertexBuffer_.destroy();
+    oceanIndexBuffer_.destroy();
+    oceanDrawRanges_.clear();
     cullConfig_.destroy();
     farOceanConfig_.destroy();
     authoredWaterConfig_.destroy();

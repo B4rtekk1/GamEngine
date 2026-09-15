@@ -14,6 +14,8 @@
 #include "Engine/UI/Interface.h"
 #include "Engine/ECS/Components/CameraComponent.h"
 #include "Engine/ECS/Components/TerrainComponent.h"
+#include "Engine/ECS/Components/WaterBodyComponent.h"
+#include "Engine/ECS/Components/WaterShapeComponent.h"
 #include "Engine/Scene/Components/LightComponent.h"
 #include "Engine/Renderer/Geometry/Mesh.h"
 #include "Engine/Renderer/Materials/PBRMaterial.h"
@@ -172,6 +174,19 @@ namespace Engine {
 
         /** Creates a checkerboard terrain backed by an editable heightmap. */
         [[nodiscard]] Actor createTerrain(std::string name, TerrainComponent terrain = {});
+
+        /** Creates a water authoring archetype.  Water is an Entity/GameObject,
+         * never a second runtime object model. */
+        [[nodiscard]] Actor createWaterBody(WaterBodyType type, std::string name = "Water");
+        [[nodiscard]] Actor createOcean(std::string name = "Ocean") {
+            return createWaterBody(WaterBodyType::Ocean, std::move(name));
+        }
+        [[nodiscard]] Actor createLake(std::string name = "Lake") {
+            return createWaterBody(WaterBodyType::Lake, std::move(name));
+        }
+        [[nodiscard]] Actor createRiver(std::string name = "River") {
+            return createWaterBody(WaterBodyType::River, std::move(name));
+        }
 
         [[nodiscard]] Actor findActor(const std::string &name) noexcept {
             auto *object = find(name);

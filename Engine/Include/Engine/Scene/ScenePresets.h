@@ -35,6 +35,10 @@ namespace Engine {
         /** Creates an editable cloud assembled from deterministic 3D puffs. */
         [[nodiscard]] Entity createProceduralCloud();
 
+        [[nodiscard]] Entity createOcean();
+        [[nodiscard]] Entity createLake();
+        [[nodiscard]] Entity createRiver();
+
         Entity plane{NullEntity};
         Entity camera{NullEntity};
         Entity particleSystem{NullEntity};

@@ -567,6 +567,12 @@ Engine::Entity drawEditorMenuBar(Engine::ScenePreset &scene, Engine::Renderer &r
         if (ImGui::MenuItem("Create Procedural Cloud")) {
             createdEntity = scene.createProceduralCloud();
         }
+        if (ImGui::BeginMenu("Water")) {
+            if (ImGui::MenuItem("Ocean")) createdEntity = scene.createOcean();
+            if (ImGui::MenuItem("Lake")) createdEntity = scene.createLake();
+            if (ImGui::MenuItem("River")) createdEntity = scene.createRiver();
+            ImGui::EndMenu();
+        }
         ImGui::EndDisabled();
         endTopMenu();
     }

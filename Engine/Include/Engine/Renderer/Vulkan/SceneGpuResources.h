@@ -27,6 +27,9 @@ namespace Engine {
             std::size_t batchIndex{0};
             std::uint32_t firstVertex{0};
             std::uint32_t vertexCount{0};
+            /// Instance data consumed only by VirtualWaterRenderer. It has no
+            /// generic mesh draw or material-table allocation.
+            bool waterOnly{false};
             // Revision of the ECS world transform last uploaded to the GPU.
             // Do not retain a second full Transform here: ECS owns it.
             std::uint64_t lastWorldRevision{std::numeric_limits<std::uint64_t>::max()};
