@@ -344,6 +344,7 @@
             }
             const UniformBufferObject data{
                 currentView, currentProjection, Mat4{glm::inverse(currentProjection.native())},
+                Mat4{glm::inverse(currentView.native())},
                 previousGameCameraValid ? previousGameView : currentView,
                 previousGameCameraValid ? previousGameProjection : currentProjection,
                 shadowClipMatrices,
@@ -423,7 +424,8 @@
             const Mat4 sceneView = sceneCamera.viewMatrix();
             const Mat4 sceneProjection = sceneCamera.projectionMatrix();
             const UniformBufferObject data{
-                sceneView, sceneProjection, Mat4{glm::inverse(sceneProjection.native())}, sceneView, sceneProjection,
+                sceneView, sceneProjection, Mat4{glm::inverse(sceneProjection.native())},
+                Mat4{glm::inverse(sceneView.native())}, sceneView, sceneProjection,
                 sceneShadowClipMatrices,
                 Vec4{sceneCamera.position().x(), sceneCamera.position().y(), sceneCamera.position().z(), 1.0F},
                 Vec4{frameData.directionalLight.direction.x(), frameData.directionalLight.direction.y(),
@@ -876,6 +878,15 @@
             }
             gpuCullingPasses[currentFrame].recordBinned(
                 commandBuffer, static_cast<std::uint32_t>(gpuObjects.size()), MaterialProgramSlotCount);
+            if (renderGameViewport && virtualWaterRenderer.active()) {
+                static const ProfileNameId waterPageCullProfileName = Profiler::registerName("Water Page Cull");
+                gpuTimestampProfiler.beginZone(commandBuffer, currentFrame, waterPageCullProfileName);
+                virtualWaterRenderer.recordCull(commandBuffer, currentFrame);
+                virtualWaterRenderer.recordState(commandBuffer, currentFrame,
+                                                 shadowPass.descriptorSet(currentFrame),
+                                                 static_cast<float>(Time::deltaTime()));
+                gpuTimestampProfiler.endZone(commandBuffer, currentFrame);
+            }
             // The generic instance compaction result is not consumed by the
             // active draw path. Do not dispatch it until it directly feeds
             // instance-driven commands; cluster culling remains the live
@@ -1080,15 +1091,40 @@
                 dependency.pImageMemoryBarriers = barriersAfter;
                 vkCmdPipelineBarrier2(commandBuffer, &dependency);
                 opaqueSceneColorInitialized = true;
-                waterPass.begin(commandBuffer, waterHdrFramebuffer, swapchain.extent(),
-                                shadowPass.descriptorSet(currentFrame), currentFrame,
-                                vertexBuffer.handle(), indexBuffer.handle());
                 const auto commandOffset = static_cast<VkDeviceSize>(materialShaderIndex(MaterialShader::Water)) *
                     gpuObjects.size() * sizeof(VkDrawIndexedIndirectCommand);
                 const auto countOffset = static_cast<VkDeviceSize>(materialShaderIndex(MaterialShader::Water)) *
                     sizeof(std::uint32_t);
-                waterPass.draw(commandBuffer, shadowPass.descriptorSet(currentFrame), indirectDraws[currentFrame],
-                               commandOffset, countOffset);
+                if (virtualWaterRenderer.active()) {
+                    if (cameraController.camera()) {
+                        virtualWaterRenderer.updateUnderwaterState(
+                            currentFrame, registry, cameraController.camera()->position(),
+                            static_cast<float>(Time::elapsedTime()));
+                    }
+                    static const ProfileNameId waterPrepassProfileName = Profiler::registerName("Virtual Water Prepass");
+                    static const ProfileNameId waterShadeProfileName = Profiler::registerName("Virtual Water Shading");
+                    gpuTimestampProfiler.beginZone(commandBuffer, currentFrame, waterPrepassProfileName);
+                    virtualWaterRenderer.recordPrepass(commandBuffer, currentFrame,
+                        shadowPass.descriptorSet(currentFrame), vertexBuffer.handle(), indexBuffer.handle(),
+                        indirectDraws[currentFrame], commandOffset, countOffset);
+                    gpuTimestampProfiler.endZone(commandBuffer, currentFrame);
+                    gpuTimestampProfiler.beginZone(commandBuffer, currentFrame, waterShadeProfileName);
+                    virtualWaterRenderer.recordAdaptiveShading(commandBuffer, currentFrame,
+                        shadowPass.descriptorSet(currentFrame));
+                    virtualWaterRenderer.recordComposite(commandBuffer, currentFrame,
+                        shadowPass.descriptorSet(currentFrame));
+                    gpuTimestampProfiler.endZone(commandBuffer, currentFrame);
+                }
+                waterPass.begin(commandBuffer, waterHdrFramebuffer, swapchain.extent(),
+                                shadowPass.descriptorSet(currentFrame), currentFrame,
+                                vertexBuffer.handle(), indexBuffer.handle());
+                // When Virtual Water is active it owns ocean, lake and river shading.
+                // Keep this compatible render pass only for particles; drawing water here
+                // would shade authored bodies twice.
+                if (!virtualWaterRenderer.active()) {
+                    waterPass.draw(commandBuffer, shadowPass.descriptorSet(currentFrame), indirectDraws[currentFrame],
+                                   commandOffset, countOffset);
+                }
                 // Particles use a compatible pipeline and can be composited
                 // after water. The outline pipeline belongs to the lighting
                 // render pass and was recorded before ending that pass.
@@ -1272,6 +1308,7 @@
 
             if (renderGameViewport && taaResolveActive) {
                 gpuTimestampProfiler.beginZone(commandBuffer, currentFrame, taaProfileName);
+                temporalAaPass.setVirtualWaterEnabled(virtualWaterRenderer.active());
                 temporalAaPass.record(commandBuffer, swapchain.extent(), taaJitterX, taaJitterY);
                 gpuTimestampProfiler.endZone(commandBuffer, currentFrame);
             } else {
@@ -1358,6 +1395,7 @@
         // ---------- SWAPCHAIN RECREATE ----------
 
         void cleanupSwapChain() {
+            virtualWaterRenderer.destroy();
             destroyEditorUiResources();
             canvasRenderer.destroy();
             tonemapPass.destroy();
@@ -1426,6 +1464,7 @@
             // Shadow/scene descriptor sets reference the packed grass
             // buffers owned by culling resources. They cannot outlive a
             // culling resize/rebuild.
+            virtualWaterRenderer.destroy();
             forwardPass.destroy();
             lightingForwardPass.destroy();
             waterPass.destroy();

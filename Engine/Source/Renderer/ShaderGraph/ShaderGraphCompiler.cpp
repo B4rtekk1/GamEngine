@@ -39,21 +39,20 @@ namespace Engine {
 
         [[nodiscard]] std::string literal(const ShaderNodeValue &value, const ShaderValueType type) {
             const auto scalar = [](const float v) { return std::format("{:.9g}", v); };
-            if (const auto *v = std::get_if<float>(&value)) {
-                return scalar(*v);
-            }
+            if (const auto *v = std::get_if<float>(&value)) { return scalar(*v);
+}
             if (const auto *v = std::get_if<Vec2>(&value)) {
                 return std::format(
                     "float2({}, {})", scalar(v->x()), scalar(v->y()));
-            }
+}
             if (const auto *v = std::get_if<Vec3>(&value)) {
                 return std::format(
                     "float3({}, {}, {})", scalar(v->x()), scalar(v->y()), scalar(v->z()));
-            }
+}
             if (const auto *v = std::get_if<Vec4>(&value)) {
                 return std::format(
                     "float4({}, {}, {}, {})", scalar(v->x()), scalar(v->y()), scalar(v->z()), scalar(v->w()));
-            }
+}
             return std::string{slangType(type)} + "(0.0)";
         }
 
@@ -72,9 +71,8 @@ namespace Engine {
         const unsigned leftDimensions = dimensions(left);
         const unsigned rightDimensions = dimensions(right);
         if (leftDimensions == 0 || rightDimensions == 0 || (
-                leftDimensions != rightDimensions && leftDimensions != 1 && rightDimensions != 1)) {
+                leftDimensions != rightDimensions && leftDimensions != 1 && rightDimensions != 1))
             return false;
-        }
         result = leftDimensions >= rightDimensions ? left : right;
         return true;
     }
@@ -99,35 +97,29 @@ namespace Engine {
             }
         }
         for (const ShaderNode &node: graph.nodes) {
-            if (!nodes.emplace(node.id, &node).second) {
+            if (!nodes.emplace(node.id, &node).second)
                 error(std::format("Duplicate shader node {}.", node.id),
                       {node.id});
-            }
             if (node.type == ShaderNodeType::SurfaceOutput) {
-                if (output != nullptr) {
+                if (output != nullptr)
                     error("A shader graph must have exactly one SurfaceOutput node.",
                           {output->id, node.id});
-                }
                 output = &node;
             }
             for (const ShaderPin &pin: node.inputs) {
-                if (!pins.emplace(pin.id, &pin).second) {
+                if (!pins.emplace(pin.id, &pin).second)
                     error(std::format("Duplicate shader pin {}.", pin.id),
                           {node.id});
-                }
                 pinOwners.emplace(pin.id, &node);
             }
             for (const ShaderPin &pin: node.outputs) {
-                if (!pins.emplace(pin.id, &pin).second) {
+                if (!pins.emplace(pin.id, &pin).second)
                     error(std::format("Duplicate shader pin {}.", pin.id),
                           {node.id});
-                }
                 pinOwners.emplace(pin.id, &node);
             }
         }
-        if (output == nullptr) {
-            error("A shader graph requires one SurfaceOutput node.");
-        }
+        if (output == nullptr) error("A shader graph requires one SurfaceOutput node.");
         for (const ShaderLink &link: graph.links) {
             const auto from = pinOwners.find(link.fromPin);
             const auto to = pinOwners.find(link.toPin);
@@ -141,46 +133,36 @@ namespace Engine {
                 error("Shader links must connect an output pin to an input pin.");
                 continue;
             }
-            if (!incoming.emplace(link.toPin, link.fromPin).second) {
+            if (!incoming.emplace(link.toPin, link.fromPin).second)
                 error(
                     "An input pin may have only one connection.", {to->second->id});
-            }
         }
-        if (!result.succeeded()) {
-            return result;
-        }
+        if (!result.succeeded()) return result;
 
-        enum class Visit:uint8_t { Unvisited, Visiting, Visited };
+        enum class Visit { Unvisited, Visiting, Visited };
         std::unordered_map<ShaderNodeId, Visit> visit;
         std::vector<ShaderNodeId> stack;
         std::function<bool(const ShaderNode *)> detectCycles = [&](const ShaderNode *node) {
             Visit &state = visit[node->id];
             if (state == Visit::Visiting) {
-                auto begin = std::ranges::find(stack, node->id);
+                auto begin = std::find(stack.begin(), stack.end(), node->id);
                 std::vector<ShaderNodeId> cycle(begin, stack.end());
                 cycle.push_back(node->id);
                 error("Shader graph contains a cycle.", std::move(cycle));
                 return false;
             }
-            if (state == Visit::Visited) {
-                return true;
-            }
+            if (state == Visit::Visited) return true;
             state = Visit::Visiting;
             stack.push_back(node->id);
-            for (const ShaderPin &input: node->inputs) {
+            for (const ShaderPin &input: node->inputs)
                 if (const auto it = incoming.find(input.id); it != incoming.end()) {
-                    if (!detectCycles(pinOwners.at(it->second))) {
-                        return false;
-                    }
+                    if (!detectCycles(pinOwners.at(it->second))) return false;
                 }
-}
             stack.pop_back();
             state = Visit::Visited;
             return true;
         };
-        if (!detectCycles(output)) {
-            return result;
-        }
+        if (!detectCycles(output)) return result;
 
         std::unordered_map<ShaderPinId, CompiledValue> compiled;
         std::uint32_t nextValue = 0;
@@ -192,9 +174,7 @@ namespace Engine {
         };
         std::function<std::optional<CompiledValue>(ShaderPinId)> compilePin;
         compilePin = [&](const ShaderPinId pinId) -> std::optional<CompiledValue> {
-            if (const auto cached = compiled.find(pinId); cached != compiled.end()) {
-                return cached->second;
-            }
+            if (const auto cached = compiled.find(pinId); cached != compiled.end()) return cached->second;
             const auto source = incoming.find(pinId);
             if (source == incoming.end()) {
                 error(std::format("Required input pin {} is not connected.", pinId));
@@ -211,9 +191,8 @@ namespace Engine {
             if (node->type == ShaderNodeType::Float || node->type == ShaderNodeType::Vector2 || node->type ==
                 ShaderNodeType::Vector3 || node->type == ShaderNodeType::Vector4) {
                 compiledValue.value = emit(ShaderIROp::Constant, outPin->type, {}, literal(node->value, outPin->type));
-                if (const auto *value = std::get_if<float>(&node->value); outPin->type == ShaderValueType::Float) {
+                if (const auto *value = std::get_if<float>(&node->value); outPin->type == ShaderValueType::Float)
                     compiledValue.scalarConstant = *value;
-                }
             } else if (node->type == ShaderNodeType::Property) {
                 if (!node->propertyId || !properties.contains(*node->propertyId)) {
                     error("Property node references a missing property.", {node->id});
@@ -243,9 +222,7 @@ namespace Engine {
                 }
                 auto left = compilePin(node->inputs[0].id);
                 auto right = compilePin(node->inputs[1].id);
-                if (!left || !right) {
-                    return std::nullopt;
-                }
+                if (!left || !right) return std::nullopt;
                 ShaderValueType type{};
                 if (!resolveBinaryType(left->value.type, right->value.type, type) || outPin->type != type) {
                     error("Incompatible types on binary math node.", {node->id});
@@ -376,20 +353,16 @@ namespace Engine {
             }
             if (const auto link = incoming.find(pin->id); link != incoming.end()) {
                 auto value = compilePin(pin->id);
-                if (!value) {
-                    continue;
-                }
+                if (!value) continue;
                 std::string expression = std::format("v{}", value->value.id);
-                if (value->value.type == ShaderValueType::Float && member.type != ShaderValueType::Float) {
+                if (value->value.type == ShaderValueType::Float && member.type != ShaderValueType::Float)
                     expression = std::format("{}({})", slangType(member.type), expression);
-                } else if (value->value.type != member.type) {
+                else if (value->value.type != member.type) {
                     error(std::format("Surface input '{}' has an incompatible type.", member.pin), {output->id});
                     continue;
                 }
                 assignments << "    result." << member.field << " = " << expression << ";\n";
-            } else {
-                assignments << "    result." << member.field << " = " << member.fallback << ";\n";
-            }
+            } else assignments << "    result." << member.field << " = " << member.fallback << ";\n";
         }
         if (!result.succeeded()) {
             result.ir.instructions.clear();

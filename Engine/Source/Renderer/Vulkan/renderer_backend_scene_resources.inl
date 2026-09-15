@@ -571,9 +571,12 @@
                         return shaderSlot;
                     };
                     const std::uint32_t shaderSlot = resolveShaderSlot();
-                    const bool virtualWaterPages = renderer.materialOverride &&
+                    const bool virtualOcean = renderer.materialOverride &&
                         renderer.material.shaderSource == MaterialShaderSource::BuiltIn &&
-                        renderer.material.shader == MaterialShader::Water && !mesh->drawRanges.empty();
+                        renderer.material.shader == MaterialShader::Water &&
+                        registry.has<WaterBodyComponent>(entity) &&
+                        registry.get<WaterBodyComponent>(entity).type == WaterBodyType::Ocean &&
+                        mesh->drawRanges.size() == Water::StitchVariantCount;
                     const auto appendRange = [&](const Mesh::DrawRange& drawRange, const AABB& rangeBounds,
                                                  const bool forceDistinctBatch) {
                     const BatchKey batchKey{mesh, shaderSlot, usesFoliagePipeline,
@@ -626,31 +629,16 @@
                     sceneMinimum = glm::min(sceneMinimum, rangeWorldBounds.min.native());
                     sceneMaximum = glm::max(sceneMaximum, rangeWorldBounds.max.native());
                     };
-                    if (virtualWaterPages) {
-                        // The culler sees page-local AABBs, not a flat ocean
-                        // plane. Expand every page by the analytic Gerstner
-                        // envelope so frustum/Hi-Z rejection remains
-                        // conservative while the shader displaces vertices.
-                        float verticalBound = 0.0F;
-                        float horizontalBound = 0.0F;
-                        const auto& water = renderer.material.water;
-                        for (std::uint32_t waveIndex = 0;
-                             waveIndex < std::min(water.waveCount,
-                                                  static_cast<std::uint32_t>(water.waves.size())); ++waveIndex) {
-                            verticalBound += std::abs(water.waves[waveIndex].amplitude);
-                            horizontalBound += std::abs(water.waves[waveIndex].steepness *
-                                                        water.waves[waveIndex].amplitude);
-                        }
-                        for (const Mesh::DrawRange& drawRange : mesh->drawRanges) {
-                            AABB pageBounds = drawRange.localBounds;
-                            pageBounds.min.setX(pageBounds.min.x() - horizontalBound);
-                            pageBounds.min.setY(pageBounds.min.y() - verticalBound);
-                            pageBounds.min.setZ(pageBounds.min.z() - horizontalBound);
-                            pageBounds.max.setX(pageBounds.max.x() + horizontalBound);
-                            pageBounds.max.setY(pageBounds.max.y() + verticalBound);
-                            pageBounds.max.setZ(pageBounds.max.z() + horizontalBound);
-                            appendRange(drawRange, pageBounds, true);
-                        }
+                    if (virtualOcean) {
+                        // Virtual-ocean pages are owned by VirtualWaterRenderer. Keep exactly one
+                        // zero-index generic record so the shared scene instance/material streams
+                        // retain this entity without sending its 448 pages through generic culling.
+                        AABB oceanBounds{
+                            .min = {-Water::OceanExtents.back(), -2.0F, -Water::OceanExtents.back()},
+                            .max = { Water::OceanExtents.back(),  2.0F,  Water::OceanExtents.back()},
+                        };
+                        appendRange({.firstIndex = 0, .indexCount = 0, .localBounds = oceanBounds},
+                                    oceanBounds, false);
                     } else {
                         appendRange({.firstIndex = 0, .indexCount = mesh->indexCount(), .localBounds = localBounds},
                                     localBounds, false);

@@ -19,6 +19,7 @@
                 particleSystem.reset();
                 sceneViewportForwardPass.destroy();
                 forwardPass.destroy();
+                virtualWaterRenderer.destroy();
                 lightingForwardPass.destroy();
                 waterPass.destroy();
                 gtaoPass.destroy();

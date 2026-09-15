@@ -1211,6 +1211,29 @@
                 hdrFramebuffer = VK_NULL_HANDLE;
                 throw std::runtime_error("Could not create Water framebuffer");
             }
+            createVirtualWaterResources();
+        }
+
+        void createVirtualWaterResources() {
+            std::array<VkBuffer, MAX_FRAMES_IN_FLIGHT> instances{};
+            std::array<VkBuffer, MAX_FRAMES_IN_FLIGHT> culling{};
+            for (std::size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i) {
+                instances[i] = instanceBuffers[i].handle();
+                culling[i] = cullingUniformBuffers[i].handle();
+            }
+            const DepthBuffer& sampledDepth = msaa.enabled() ? hiZDepthBuffer : depthBuffer;
+            const VkDescriptorImageInfo depthInfo{
+                sampledDepth.sampler(), sampledDepth.imageView(), VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL};
+            VkDescriptorImageInfo hizInfo{
+                hiZBuffer.sampler(), hiZBuffer.fullView(), VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
+            if (hizInfo.imageView == VK_NULL_HANDLE) hizInfo = depthInfo;
+            virtualWaterRenderer.create(
+                vulkanDevice.physical(), device, vulkanDevice.allocator(), assetManager,
+                swapchain.extent(), sampledDepth.format(), sampledDepth.imageView(),
+                shadowPass.descriptorSetLayout(), hdrBuffer.imageView(),
+                {opaqueSceneColor.sampler(), opaqueSceneColor.imageView(), VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL},
+                depthInfo, hizInfo, instances, culling);
+            virtualWaterRenderer.rebuild(registry, sceneGpu);
         }
 
         void destroyVelocityResources() noexcept {

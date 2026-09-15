@@ -4,8 +4,21 @@
 #include "Engine/ECS/Registry.h"
 #include "Engine/Renderer/Geometry/Mesh.h"
 
+#include <optional>
+
 namespace Engine {
     class SceneEditor;
+
+    struct WaterQueryResult final {
+        float surfaceHeight{};
+        Vec3 normal{0.0F, 1.0F, 0.0F};
+        Vec3 velocity{};
+        float depth{};
+        float immersion{};
+        float flowSpeed{};
+        Entity waterBody{NullEntity};
+        WaterBodyType type{WaterBodyType::Ocean};
+    };
     /** Builds runtime water geometry and submits it through the Water pipeline. */
     class WaterSystem final {
     public:
@@ -16,6 +29,13 @@ namespace Engine {
 
         /** Snaps every ocean's transform to the active camera in XZ. */
         void updateOceans(Registry& registry, const Vec3& cameraPosition) const;
+
+        /**
+         * Analytic gameplay/physics query independent of render-page residency.
+         * Returns the highest matching water surface at @p worldPosition.
+         */
+        [[nodiscard]] static std::optional<WaterQueryResult> query(
+            Registry& registry, const Vec3& worldPosition, float time);
 
         /** Generates CPU mesh data for editor preview and runtime submission. */
         [[nodiscard]] static Mesh buildMesh(const WaterBodyComponent& water);

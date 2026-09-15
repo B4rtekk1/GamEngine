@@ -69,6 +69,7 @@ namespace Engine {
         Mat4 view;
         Mat4 projection;
         Mat4 inverseProjection;
+        Mat4 inverseView;
         Mat4 previousView;
         Mat4 previousProjection;
         // Camera-centred directional-light virtual clipmaps.

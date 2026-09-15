@@ -605,6 +605,7 @@
 
             // These descriptor sets bind packed grass buffers, which are
             // recreated together with culling resources below.
+            virtualWaterRenderer.destroy();
             forwardPass.destroy();
             lightingForwardPass.destroy();
             waterPass.destroy();
@@ -739,6 +740,9 @@
                                   velocityBuffer.sampler(),
                                   (msaa.enabled() ? hiZDepthBuffer : depthBuffer).imageView(),
                                   (msaa.enabled() ? hiZDepthBuffer : depthBuffer).sampler(),
+                                  virtualWaterRenderer.velocityView(), virtualWaterRenderer.velocitySampler(),
+                                  virtualWaterRenderer.metaView(), virtualWaterRenderer.metaSampler(),
+                                  virtualWaterRenderer.surfaceView(), virtualWaterRenderer.surfaceSampler(),
                                   assetManager);
         }
 

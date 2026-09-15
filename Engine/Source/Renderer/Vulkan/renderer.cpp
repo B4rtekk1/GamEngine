@@ -49,6 +49,7 @@
 #include "Engine/ECS/Components/TerrainGrassComponent.h"
 #include "Engine/ECS/Components/TerrainComponent.h"
 #include "Engine/ECS/Components/WindComponent.h"
+#include "Engine/ECS/Components/WaterBodyComponent.h"
 #include "Engine/Scene/Components/LightComponent.h"
 #include "Engine/Core/Transform.h"
 #include "Engine/Core/Camera.h"
@@ -60,6 +61,7 @@
 #include "Engine/Renderer/Passes/ForwardPass.h"
 #include "Engine/Renderer/Passes/WaterPass.h"
 #include "Engine/Renderer/Water/WaterSystem.h"
+#include "Engine/Renderer/Water/VirtualWaterRenderer.h"
 #include "Engine/Renderer/Passes/ShadowPass.h"
 #include "Engine/Renderer/Passes/SkyPass.h"
 #include "Engine/Renderer/Passes/TonemapPass.h"
@@ -636,6 +638,10 @@ namespace Engine {
 
         // Rebuild only registry-derived GPU data. The instance, device,
         // swapchain and ImGui backend survive ordinary editor scene changes.
+        void addWaterInteraction(const Vec3& worldPosition, const float radius, const float strength) {
+            virtualWaterRenderer.queueInteraction(worldPosition, radius, strength);
+        }
+
         void reloadSceneResources(const Scene &updatedScene) {
             if (&updatedScene != &scene) {
                 throw std::invalid_argument("Renderer cannot switch Scene instances while initialized");
@@ -673,6 +679,7 @@ namespace Engine {
             skyPass.destroy();
             sceneSkyPass.destroy();
             forwardPass.destroy();
+            virtualWaterRenderer.destroy();
             lightingForwardPass.destroy();
             waterPass.destroy();
             shadowPass.destroy();
@@ -858,6 +865,18 @@ namespace Engine {
             }
             createShadowPass();
             createSceneDescriptorPass();
+            {
+                std::array<VkBuffer, MAX_FRAMES_IN_FLIGHT> virtualInstances{};
+                std::array<VkBuffer, MAX_FRAMES_IN_FLIGHT> virtualCulling{};
+                for (std::size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i) {
+                    virtualInstances[i] = instanceBuffers[i].handle();
+                    virtualCulling[i] = cullingUniformBuffers[i].handle();
+                }
+                VkDescriptorImageInfo hizInfo{hiZBuffer.sampler(), hiZBuffer.fullView(),
+                                               VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
+                virtualWaterRenderer.updateFrameBindings(virtualInstances, virtualCulling, hizInfo);
+                virtualWaterRenderer.rebuild(registry, sceneGpu);
+            }
             lastRenderTopologyRevision = updatedTopologyRevision;
             lastParticleEmitterRevision = updatedParticleEmitterRevision;
             lastSmokeEmitterRevision = updatedSmokeEmitterRevision;

@@ -49,6 +49,7 @@
         ForwardPass& forwardPass;
         ForwardPass lightingForwardPass;
         WaterPass waterPass;
+        Water::VirtualWaterRenderer virtualWaterRenderer;
         GraphicsPipeline& particlePipeline;
         GraphicsPipeline sceneParticlePipeline;
         std::unique_ptr<Particles::ParticleSystem> particleSystem;
