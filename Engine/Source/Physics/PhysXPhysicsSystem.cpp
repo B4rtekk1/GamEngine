@@ -962,9 +962,7 @@ namespace Engine {
                     continue;
                 }
                 const auto recordIt = actors.find(*entity);
-                if (recordIt == actors.end() || recordIt->second.actor != activeActors[index]) {
-                    continue;
-                }
+                if (recordIt == actors.end() || recordIt->second.actor != activeActors[index]) continue;
                 ActorRecord &record = recordIt->second;
                 auto &body = owner.get<RigidbodyComponent>(*entity);
                 if (body.type != RigidbodyType::Dynamic) {
@@ -975,15 +973,11 @@ namespace Engine {
                 Transform &transform = owner.get<Transform>(*entity);
                 transform.position = fromPhysX(pose.p);
                 transform.rotation = eulerDegrees(fromPhysX(pose.q).normalized());
-                if (!owner.has<RigidbodyState>(*entity)) {
-                    owner.add<RigidbodyState>(*entity);
-                }
+                if (!owner.has<RigidbodyState>(*entity)) owner.add<RigidbodyState>(*entity);
                 auto &state = owner.get<RigidbodyState>(*entity);
                 state.linearVelocity = fromPhysX(rigid.getLinearVelocity());
                 state.angularVelocity = fromPhysX(rigid.getAngularVelocity()) * RadiansToDegrees;
-                if (body.fixedRotation) {
-                    state.angularVelocity = {};
-                }
+                if (body.fixedRotation) state.angularVelocity = {};
                 record.lastTransform = transform;
                 owner.markChanged<Transform>(*entity);
             }

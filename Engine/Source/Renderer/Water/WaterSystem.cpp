@@ -187,11 +187,71 @@ namespace Engine {
     Mesh WaterSystem::buildLake(const WaterBodyComponent &water) {
         if (water.lakeBoundary.size() < 3) throw std::invalid_argument("Lake requires at least three boundary points");
         Mesh mesh;
-        // A triangle fan is deterministic and valid for convex editor boundaries.
-        // Concave boundaries will be switched to editor-side ear clipping with holes.
         for (const Vec3 &point: water.lakeBoundary) addWaterVertex(mesh, point, {point.x(), point.z()});
-        for (std::uint32_t i = 1; i + 1 < mesh.vertices.size(); ++i)
-            mesh.indices.insert(mesh.indices.end(), {0U, i, i + 1U});
+
+        // Ear clipping keeps authored concave lake boundaries valid. The water
+        // authoring format currently represents one simple outer loop (no holes).
+        const auto cross2 = [&](const std::uint32_t ia, const std::uint32_t ib, const std::uint32_t ic) {
+            const Vec3& a = water.lakeBoundary[ia];
+            const Vec3& b = water.lakeBoundary[ib];
+            const Vec3& c = water.lakeBoundary[ic];
+            return (b.x() - a.x()) * (c.z() - a.z()) - (b.z() - a.z()) * (c.x() - a.x());
+        };
+        float signedArea = 0.0F;
+        for (std::size_t i = 0, j = water.lakeBoundary.size() - 1U; i < water.lakeBoundary.size(); j = i++) {
+            const Vec3& a = water.lakeBoundary[j];
+            const Vec3& b = water.lakeBoundary[i];
+            signedArea += a.x() * b.z() - b.x() * a.z();
+        }
+        const bool ccw = signedArea >= 0.0F;
+        std::vector<std::uint32_t> polygon(water.lakeBoundary.size());
+        for (std::uint32_t i = 0; i < polygon.size(); ++i) polygon[i] = i;
+
+        const auto pointInTriangle = [&](const Vec3& p, const Vec3& a, const Vec3& b, const Vec3& c) {
+            const auto edge = [](const Vec3& p0, const Vec3& p1, const Vec3& q) {
+                return (p1.x() - p0.x()) * (q.z() - p0.z()) - (p1.z() - p0.z()) * (q.x() - p0.x());
+            };
+            const float e0 = edge(a, b, p), e1 = edge(b, c, p), e2 = edge(c, a, p);
+            constexpr float epsilon = 1.0e-6F;
+            const bool hasNegative = e0 < -epsilon || e1 < -epsilon || e2 < -epsilon;
+            const bool hasPositive = e0 > epsilon || e1 > epsilon || e2 > epsilon;
+            return !(hasNegative && hasPositive);
+        };
+
+        std::size_t guard = polygon.size() * polygon.size();
+        while (polygon.size() > 3U && guard-- > 0U) {
+            bool clipped = false;
+            for (std::size_t i = 0; i < polygon.size(); ++i) {
+                const std::uint32_t previous = polygon[(i + polygon.size() - 1U) % polygon.size()];
+                const std::uint32_t current = polygon[i];
+                const std::uint32_t next = polygon[(i + 1U) % polygon.size()];
+                const float orientation = cross2(previous, current, next);
+                if ((ccw && orientation <= 1.0e-7F) || (!ccw && orientation >= -1.0e-7F)) continue;
+
+                bool containsVertex = false;
+                for (const std::uint32_t candidate : polygon) {
+                    if (candidate == previous || candidate == current || candidate == next) continue;
+                    if (pointInTriangle(water.lakeBoundary[candidate], water.lakeBoundary[previous],
+                                        water.lakeBoundary[current], water.lakeBoundary[next])) {
+                        containsVertex = true;
+                        break;
+                    }
+                }
+                if (containsVertex) continue;
+                if (ccw) mesh.indices.insert(mesh.indices.end(), {previous, current, next});
+                else mesh.indices.insert(mesh.indices.end(), {previous, next, current});
+                polygon.erase(polygon.begin() + static_cast<std::ptrdiff_t>(i));
+                clipped = true;
+                break;
+            }
+            if (!clipped) {
+                throw std::invalid_argument("Lake boundary must be a simple non-self-intersecting polygon");
+            }
+        }
+        if (polygon.size() == 3U) {
+            if (ccw) mesh.indices.insert(mesh.indices.end(), {polygon[0], polygon[1], polygon[2]});
+            else mesh.indices.insert(mesh.indices.end(), {polygon[0], polygon[2], polygon[1]});
+        }
         return mesh;
     }
 

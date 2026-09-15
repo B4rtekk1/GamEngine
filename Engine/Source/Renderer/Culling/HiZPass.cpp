@@ -259,7 +259,8 @@ namespace Engine::Culling
 
     void HiZPass::record(
         VkCommandBuffer commandBuffer,
-        const HiZBuffer& hiZBuffer
+        const HiZBuffer& hiZBuffer,
+        const VkDescriptorSet sharedDescriptorSet
     ) const
     {
         vkCmdBindPipeline(
@@ -268,16 +269,15 @@ namespace Engine::Culling
             m_copyPipeline
         );
 
-        vkCmdBindDescriptorSets(
-            commandBuffer,
-            VK_PIPELINE_BIND_POINT_COMPUTE,
-            m_copyPipelineLayout,
-            0,
-            1,
-            &m_copyDescriptorSet,
-            0,
-            nullptr
-        );
+        if (sharedDescriptorSet != VK_NULL_HANDLE) {
+            const std::array sets{sharedDescriptorSet, m_copyDescriptorSet};
+            vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE,
+                                    m_copyPipelineLayout, 0,
+                                    static_cast<std::uint32_t>(sets.size()), sets.data(), 0, nullptr);
+        } else {
+            vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE,
+                                    m_copyPipelineLayout, 0, 1, &m_copyDescriptorSet, 0, nullptr);
+        }
 
         vkCmdDispatch(
             commandBuffer,
@@ -337,16 +337,15 @@ namespace Engine::Culling
             VkDescriptorSet descriptorSet =
                 m_reduceDescriptorSets[destinationMip - 1];
 
-            vkCmdBindDescriptorSets(
-                commandBuffer,
-                VK_PIPELINE_BIND_POINT_COMPUTE,
-                m_reducePipelineLayout,
-                0,
-                1,
-                &descriptorSet,
-                0,
-                nullptr
-            );
+            if (sharedDescriptorSet != VK_NULL_HANDLE) {
+                const std::array sets{sharedDescriptorSet, descriptorSet};
+                vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE,
+                                        m_reducePipelineLayout, 0,
+                                        static_cast<std::uint32_t>(sets.size()), sets.data(), 0, nullptr);
+            } else {
+                vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE,
+                                        m_reducePipelineLayout, 0, 1, &descriptorSet, 0, nullptr);
+            }
 
             const VkExtent2D extent =
                 hiZBuffer.mipExtent(destinationMip);

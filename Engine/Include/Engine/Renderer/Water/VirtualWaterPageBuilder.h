@@ -7,6 +7,7 @@
 #include <array>
 #include <cstdint>
 #include <vector>
+#include <span>
 
 namespace Engine::Water {
     struct OceanDomainConfig final {
@@ -14,9 +15,48 @@ namespace Engine::Water {
         std::array<WaterGerstnerWave, 8> waves{defaultWaterWaves()};
         std::uint32_t waveCount{8};
         std::uint32_t bodyIndex{};
+        WaterBodyId bodyId{};
+        std::uint32_t spectrumRevision{};
         std::uint32_t instanceIndex{};
         std::uint32_t pageBaseIndex{};
         std::uint32_t geometryLevelCount{GeometryClipLevels};
+        std::uint32_t executionFlags{ExecutionBudgetedShading | ExecutionSparseState};
+    };
+
+    struct FiniteWaterDomainConfig final {
+        std::span<const Vec3> boundary;
+        std::array<WaterGerstnerWave, 8> waves{defaultWaterWaves()};
+        std::uint32_t waveCount{8};
+        std::uint32_t bodyIndex{};
+        WaterBodyId bodyId{};
+        std::uint32_t spectrumRevision{};
+        std::uint32_t instanceIndex{};
+        std::uint32_t pageBaseIndex{};
+        std::uint32_t executionFlags{ExecutionBudgetedShading | ExecutionSparseState};
+        float targetPageWorldSize{32.0F};
+    };
+
+    struct SplineDomainConfig final {
+        std::span<const RiverSplinePoint> points;
+        std::array<WaterGerstnerWave, 8> waves{defaultWaterWaves()};
+        std::uint32_t waveCount{8};
+        std::uint32_t bodyIndex{};
+        WaterBodyId bodyId{};
+        std::uint32_t spectrumRevision{};
+        std::uint32_t instanceIndex{};
+        std::uint32_t pageBaseIndex{};
+        std::uint32_t executionFlags{ExecutionBudgetedShading | ExecutionSparseState};
+    };
+
+    struct SpectrumLODEntry final {
+        std::uint32_t waveCandidateMask{};
+        float verticalBound{};
+        float horizontalBound{};
+        float unresolvedSlopeVariance{};
+        float unresolvedSlopeXX{};
+        float unresolvedSlopeXZ{};
+        float unresolvedSlopeZZ{};
+        float normalDetailImportance{};
     };
 
     [[nodiscard]] float spectralWeight(float wavelength, float cellSize) noexcept;
@@ -26,7 +66,13 @@ namespace Engine::Water {
                                                std::uint32_t z) noexcept;
 
     /** Builds the 448 logical pages of one ocean. No geometry is duplicated here. */
+    [[nodiscard]] SpectrumLODEntry spectrumLOD(std::span<const WaterGerstnerWave> waves,
+                                                std::uint32_t waveCount,
+                                                std::uint32_t spectrumRevision,
+                                                float cellSize);
     [[nodiscard]] std::vector<GPUVirtualWaterPage> buildOceanPageDomain(const OceanDomainConfig& config);
+    [[nodiscard]] std::vector<GPUVirtualWaterPage> buildFiniteWaterPageDomain(const FiniteWaterDomainConfig& config);
+    [[nodiscard]] std::vector<GPUVirtualWaterPage> buildSplinePageDomain(const SplineDomainConfig& config);
 
     /**
      * Builds one compact page grid and 16 index ranges. All ocean pages instance this same geometry.
