@@ -10,52 +10,50 @@
 #include <string>
 
 namespace Editor::AssetDragDrop {
+    inline constexpr const char *modelPayload = "EDITOR_MODEL_ASSET";
+    inline constexpr const char *texturePayload = "EDITOR_TEXTURE_ASSET";
+    inline constexpr const char *shaderGraphPayload = "EDITOR_SHADER_GRAPH_ASSET";
+    inline constexpr const char *environmentPayload = "EDITOR_ENVIRONMENT_ASSET";
 
-inline constexpr const char* modelPayload = "EDITOR_MODEL_ASSET";
-inline constexpr const char* texturePayload = "EDITOR_TEXTURE_ASSET";
-inline constexpr const char* shaderGraphPayload = "EDITOR_SHADER_GRAPH_ASSET";
-inline constexpr const char* environmentPayload = "EDITOR_ENVIRONMENT_ASSET";
+    inline void setModelPayload(const std::filesystem::path &relativePath) {
+        const std::string value = relativePath.generic_string();
+        ImGui::SetDragDropPayload(modelPayload, value.c_str(), value.size() + 1);
+    }
 
-inline void setModelPayload(const std::filesystem::path& relativePath) {
-    const std::string value = relativePath.generic_string();
-    ImGui::SetDragDropPayload(modelPayload, value.c_str(), value.size() + 1);
-}
+    inline void setTexturePayload(const std::filesystem::path &relativePath) {
+        const std::string value = relativePath.generic_string();
+        ImGui::SetDragDropPayload(texturePayload, value.c_str(), value.size() + 1);
+    }
 
-inline void setTexturePayload(const std::filesystem::path& relativePath) {
-    const std::string value = relativePath.generic_string();
-    ImGui::SetDragDropPayload(texturePayload, value.c_str(), value.size() + 1);
-}
+    inline void setShaderGraphPayload(const std::filesystem::path &relativePath) {
+        const std::string value = relativePath.generic_string();
+        ImGui::SetDragDropPayload(shaderGraphPayload, value.c_str(), value.size() + 1);
+    }
 
-inline void setShaderGraphPayload(const std::filesystem::path& relativePath) {
-    const std::string value = relativePath.generic_string();
-    ImGui::SetDragDropPayload(shaderGraphPayload, value.c_str(), value.size() + 1);
-}
+    inline void setEnvironmentPayload(const std::filesystem::path &relativePath) {
+        const std::string value = relativePath.generic_string();
+        ImGui::SetDragDropPayload(environmentPayload, value.c_str(), value.size() + 1);
+    }
 
-inline void setEnvironmentPayload(const std::filesystem::path& relativePath) {
-    const std::string value = relativePath.generic_string();
-    ImGui::SetDragDropPayload(environmentPayload, value.c_str(), value.size() + 1);
-}
+    inline std::filesystem::path modelPath(const ImGuiPayload &payload) {
+        if (payload.Data == nullptr || payload.DataSize <= 1)
+            return {};
+        return std::filesystem::path{static_cast<const char *>(payload.Data)};
+    }
 
-inline std::filesystem::path modelPath(const ImGuiPayload& payload) {
-    if (payload.Data == nullptr || payload.DataSize <= 1)
-        return {};
-    return std::filesystem::path{static_cast<const char*>(payload.Data)};
-}
+    inline std::filesystem::path texturePath(const ImGuiPayload &payload) { return modelPath(payload); }
+    inline std::filesystem::path shaderGraphPath(const ImGuiPayload &payload) { return modelPath(payload); }
+    inline std::filesystem::path environmentPath(const ImGuiPayload &payload) { return modelPath(payload); }
 
-inline std::filesystem::path texturePath(const ImGuiPayload& payload) { return modelPath(payload); }
-inline std::filesystem::path shaderGraphPath(const ImGuiPayload& payload) { return modelPath(payload); }
-inline std::filesystem::path environmentPath(const ImGuiPayload& payload) { return modelPath(payload); }
-
-inline Engine::Entity instantiateModel(Engine::ScenePreset& scene, Engine::Assets::Content& content,
-                                       const std::filesystem::path& relativePath,
-                                       const std::optional<Engine::Vec3>& position = std::nullopt) {
-    if (relativePath.empty())
-        return Engine::NullEntity;
-    const auto prefab = Engine::Prefab::model(content, relativePath);
-    const auto actor = scene.createPrefab(relativePath.stem().string(), prefab);
-    if (position)
-        actor.setPosition(*position);
-    return scene.findEntity(actor.id());
-}
-
+    inline Engine::Entity instantiateModel(Engine::ScenePreset &scene, Engine::Assets::Content &content,
+                                           const std::filesystem::path &relativePath,
+                                           const std::optional<Engine::Vec3> &position = std::nullopt) {
+        if (relativePath.empty())
+            return Engine::NullEntity;
+        const auto prefab = Engine::Prefab::model(content, relativePath);
+        const auto actor = scene.createPrefab(relativePath.stem().string(), prefab);
+        if (position)
+            actor.setPosition(*position);
+        return scene.findEntity(actor.id());
+    }
 } // namespace Editor::AssetDragDrop

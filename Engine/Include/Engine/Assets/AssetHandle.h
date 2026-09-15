@@ -20,6 +20,7 @@ namespace Engine::Assets {
         std::shared_ptr<const void> value;
         std::atomic<AssetLoadState> state{AssetLoadState::Pending};
     };
+
     /**
      * @brief Non-owning-style typed access wrapper for a loaded asset.
      *
@@ -42,15 +43,28 @@ namespace Engine::Assets {
          */
         AssetHandle(AssetId id, std::shared_ptr<const T> value) : id_(id), slot_(std::make_shared<AssetSlot>()) { //NOLINT
             slot_->value = std::move(value);
-            slot_->state.store(slot_->value ? AssetLoadState::Ready : AssetLoadState::Failed, std::memory_order_release);
+            slot_->state.store(slot_->value ? AssetLoadState::Ready : AssetLoadState::Failed,
+                               std::memory_order_release);
         }
-        AssetHandle(AssetId id, std::shared_ptr<AssetSlot> slot) : id_(id), slot_(std::move(slot)) {} //NOLINT
+
+        AssetHandle(AssetId id, std::shared_ptr<AssetSlot> slot) : id_(id), slot_(std::move(slot)) {
+        } //NOLINT
 
         /** @brief Checks whether the handle refers to a loaded asset. */
         [[nodiscard]] explicit operator bool() const noexcept { return is_ready(); }
-        [[nodiscard]] bool is_ready() const noexcept { return slot_ && slot_->state.load(std::memory_order_acquire) == AssetLoadState::Ready; }
-        [[nodiscard]] bool failed() const noexcept { return slot_ && slot_->state.load(std::memory_order_acquire) == AssetLoadState::Failed; }
-        [[nodiscard]] AssetLoadState state() const noexcept { return slot_ ? slot_->state.load(std::memory_order_acquire) : AssetLoadState::Failed; }
+
+        [[nodiscard]] bool is_ready() const noexcept {
+            return slot_ && slot_->state.load(std::memory_order_acquire) == AssetLoadState::Ready;
+        }
+
+        [[nodiscard]] bool failed() const noexcept {
+            return slot_ && slot_->state.load(std::memory_order_acquire) == AssetLoadState::Failed;
+        }
+
+        [[nodiscard]] AssetLoadState state() const noexcept {
+            return slot_ ? slot_->state.load(std::memory_order_acquire) : AssetLoadState::Failed;
+        }
+
         /** @brief Returns the stable asset identifier. */
         [[nodiscard]] AssetId id() const noexcept { return id_; }
         /** @brief Returns a pointer to the asset, or nullptr when empty. */
@@ -61,10 +75,13 @@ namespace Engine::Assets {
         [[nodiscard]] const T *operator->() const noexcept { return get(); }
         /** @brief Returns the shared immutable pointer held by the handle. */
         [[nodiscard]] std::shared_ptr<const T> shared() const noexcept {
-            if (!slot_ || !is_ready()) return {};
+            if (!slot_ || !is_ready()) {
+                return {};
+            }
             std::scoped_lock lock(slot_->mutex);
             return std::static_pointer_cast<const T>(slot_->value);
         }
+
         [[nodiscard]] bool IsReady() const noexcept { return is_ready(); }
         [[nodiscard]] const T *Get() const noexcept { return get(); }
         /** @brief Clears the identifier and releases the shared asset value. */
