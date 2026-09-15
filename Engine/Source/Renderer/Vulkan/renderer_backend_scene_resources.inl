@@ -300,16 +300,22 @@
             batchIndices.reserve(registry.size());
             materialSlots = 1;
             std::unordered_set<const Mesh*> uniqueMeshes;
+            std::unordered_map<const Mesh*, const void*> meshResources;
             uniqueMeshes.reserve(registry.size());
+            meshResources.reserve(registry.size());
             registry.view<MeshRenderer>([&](const Entity, const MeshRenderer& renderer) {
                 if (!renderer.hasMesh() || !uniqueMeshes.insert(renderer.mesh.get()).second) {
                     return;
                 }
+                meshResources.emplace(renderer.mesh.get(), renderer.mesh.resource().get());
                 materialSlots = std::max(materialSlots, static_cast<std::uint32_t>(
                     std::max<std::size_t>(1, renderer.mesh->materials.size())));
             });
             registry.view<TerrainGrassComponent>([&](const Entity, const TerrainGrassComponent& grass) {
                 if (!grass.hasPrefab() || !uniqueMeshes.insert(grass.mesh.get()).second) return;
+                // Grass still owns an immutable shared Mesh directly; unlike
+                // imported MeshRenderer assets it is not source-reloaded.
+                meshResources.emplace(grass.mesh.get(), grass.mesh.get());
                 materialSlots = std::max(materialSlots, static_cast<std::uint32_t>(
                     std::max<std::size_t>(1, grass.mesh->materials.size())));
             });
@@ -319,14 +325,18 @@
             meshUploads.reserve(uniqueMeshes.size());
             std::unordered_map<Entity, MeshUploadRecord> rendererUploads;
             std::unordered_map<Entity, MeshUploadRecord> grassUploads;
-            std::unordered_map<const Mesh*, MeshUploadRecord> plannedUploadedMeshes;
+            std::unordered_map<const void*, MeshUploadRecord> plannedUploadedMeshes;
             rendererUploads.reserve(registry.size());
             grassUploads.reserve(registry.size());
             plannedUploadedMeshes.reserve(uniqueMeshes.size());
             std::uint32_t vertexCount = geometryHeapVertexHighWater;
             std::uint32_t indexCount = geometryHeapIndexHighWater;
             const auto planUpload = [&](const Mesh* mesh) {
-                if (const auto found = geometryHeapAllocations.find(mesh);
+                const auto resourceIt = meshResources.find(mesh);
+                if (resourceIt == meshResources.end() || resourceIt->second == nullptr)
+                    throw std::runtime_error("Mesh has no stable GPU resource identity");
+                const void* const key = resourceIt->second;
+                if (const auto found = geometryHeapAllocations.find(key);
                     found != geometryHeapAllocations.end() &&
                     found->second.vertexCount == mesh->vertices.size() &&
                     found->second.indexCount == mesh->indices.size()) {
@@ -340,7 +350,7 @@
                 meshUploads.push_back({mesh, vertexCount, indexCount});
                 vertexCount += static_cast<std::uint32_t>(mesh->vertices.size());
                 indexCount += static_cast<std::uint32_t>(mesh->indices.size());
-                geometryHeapAllocations[mesh] = {
+                geometryHeapAllocations[key] = {
                     .firstVertex = record.firstVertex,
                     .vertexCount = static_cast<std::uint32_t>(mesh->vertices.size()),
                     .firstIndex = record.firstIndex,
@@ -351,13 +361,14 @@
             registry.view<Transform, MeshRenderer>([&](const Entity entity, const Transform&, const MeshRenderer& renderer) {
                 if (!renderer.hasMesh()) return;
                 const Mesh* const mesh = renderer.mesh.get();
+                const MeshGpuResource* const resource = renderer.mesh.resource().get();
                 MeshUploadRecord record{};
                 if (optimizationFeatures.meshDeduplication) {
-                    if (const auto found = plannedUploadedMeshes.find(mesh); found != plannedUploadedMeshes.end()) {
+                    if (const auto found = plannedUploadedMeshes.find(resource); found != plannedUploadedMeshes.end()) {
                         record = found->second;
                     } else {
                         record = planUpload(mesh);
-                        plannedUploadedMeshes.emplace(mesh, record);
+                        plannedUploadedMeshes.emplace(resource, record);
                     }
                 } else {
                     record = planUpload(mesh);
@@ -367,12 +378,13 @@
             registry.view<Transform, TerrainGrassComponent>([&](const Entity entity, const Transform&, const TerrainGrassComponent& grass) {
                 if (!grass.hasPrefab() || grass.instances.empty()) return;
                 const Mesh* const mesh = grass.mesh.get();
+                const void* const resource = grass.mesh.get();
                 MeshUploadRecord record{};
-                if (const auto found = plannedUploadedMeshes.find(mesh); found != plannedUploadedMeshes.end()) {
+                if (const auto found = plannedUploadedMeshes.find(resource); found != plannedUploadedMeshes.end()) {
                     record = found->second;
                 } else {
                     record = planUpload(mesh);
-                    plannedUploadedMeshes.emplace(mesh, record);
+                    plannedUploadedMeshes.emplace(resource, record);
                 }
                 grassUploads.emplace(entity, record);
             });
@@ -434,7 +446,9 @@
                         // Transform, or an empty grass prefab). Such a mesh
                         // was deliberately not passed to planUpload(), so it
                         // has no heap allocation to restore.
-                        const auto allocationIt = geometryHeapAllocations.find(mesh);
+                        const auto resourceIt = meshResources.find(mesh);
+                        if (resourceIt == meshResources.end()) continue;
+                        const auto allocationIt = geometryHeapAllocations.find(resourceIt->second);
                         if (allocationIt == geometryHeapAllocations.end()) continue;
                         const GeometryHeapAllocation& allocation = allocationIt->second;
                         meshUploads.push_back({mesh, allocation.firstVertex, allocation.firstIndex});
@@ -469,18 +483,20 @@
             std::vector<Culling::GpuMeshlet> gpuMeshlets;
             std::vector<std::uint32_t> meshletVertices;
             std::vector<std::uint32_t> meshletTriangles;
-            std::unordered_map<const Mesh*, std::uint32_t> firstMeshlets;
+            std::unordered_map<const void*, std::uint32_t> firstMeshlets;
             gpuMeshlets.reserve(indexCount / 3U);
             firstMeshlets.reserve(geometryHeapAllocations.size());
             for (const Mesh* mesh : uniqueMeshes) {
-                const auto allocation = geometryHeapAllocations.find(mesh);
+                const auto resourceIt = meshResources.find(mesh);
+                if (resourceIt == meshResources.end()) continue;
+                const auto allocation = geometryHeapAllocations.find(resourceIt->second);
                 if (allocation == geometryHeapAllocations.end() || mesh->meshlets.empty()) continue;
                 const std::uint32_t firstMeshlet = static_cast<std::uint32_t>(gpuMeshlets.size());
                 if (!Culling::appendMeshletPayload(*mesh, allocation->second.firstVertex, gpuMeshlets,
                                                    meshletVertices, meshletTriangles)) {
                     throw std::runtime_error("Invalid meshlet payload during GPU scene upload");
                 }
-                firstMeshlets.emplace(mesh, firstMeshlet);
+                firstMeshlets.emplace(resourceIt->second, firstMeshlet);
             }
             globalMeshletCount = static_cast<std::uint32_t>(gpuMeshlets.size());
             // Vulkan forbids zero-byte buffers. Bind an inert record in an
@@ -545,7 +561,7 @@
                         resource->firstIndex = renderer.firstIndex;
                         resource->indexCount = mesh->indexCount();
                         resource->meshletCount = static_cast<std::uint32_t>(mesh->meshlets.size());
-                        resource->firstMeshlet = firstMeshlets.contains(mesh) ? firstMeshlets.at(mesh) : 0U;
+                        resource->firstMeshlet = firstMeshlets.contains(resource.get()) ? firstMeshlets.at(resource.get()) : 0U;
                         resource->bounds = localBounds;
                     }
                     // Culling must use the same parent-composed matrix as the
@@ -613,7 +629,8 @@
                             .indexCount = drawRange.indexCount,
                             .lod1IndexCount = 0,
                             .lod2IndexCount = 0,
-                            .firstMeshlet = firstMeshlets.contains(mesh) ? firstMeshlets.at(mesh) : 0U,
+                            .firstMeshlet = firstMeshlets.contains(renderer.mesh.resource().get())
+                                ? firstMeshlets.at(renderer.mesh.resource().get()) : 0U,
                             .meshletCount = static_cast<std::uint32_t>(mesh->meshlets.size()),
                             .firstInstance = static_cast<uint32_t>(renderables.size()),
                             .instanceCount = 0,

@@ -165,7 +165,7 @@
             std::uint32_t firstIndex{};
             std::uint32_t indexCount{};
         };
-        std::unordered_map<const Mesh*, GeometryHeapAllocation> geometryHeapAllocations;
+        std::unordered_map<const void*, GeometryHeapAllocation> geometryHeapAllocations;
         std::uint32_t geometryHeapVertexHighWater{};
         std::uint32_t geometryHeapIndexHighWater{};
         std::array<Buffer, MAX_FRAMES_IN_FLIGHT> instanceBuffers;
@@ -251,6 +251,7 @@
             std::array<std::array<Buffer, 3>, MAX_FRAMES_IN_FLIGHT> grassPackedStreamUniformBuffers;
             std::array<Buffer, MAX_FRAMES_IN_FLIGHT> uniformBuffers;
             std::array<Buffer, MAX_FRAMES_IN_FLIGHT> cullingUniformBuffers;
+            std::array<Buffer, MAX_FRAMES_IN_FLIGHT> sceneCullingUniformBuffers;
             std::array<Buffer, MAX_FRAMES_IN_FLIGHT> foliageCullingUniformBuffers;
             std::array<Buffer, MAX_FRAMES_IN_FLIGHT> indirectBuffers;
             std::array<Buffer, MAX_FRAMES_IN_FLIGHT> foliageIndirectBuffers;
@@ -276,7 +277,7 @@
         std::array<Buffer, MAX_FRAMES_IN_FLIGHT> cullingObjectBuffers;
         std::array<Buffer, MAX_FRAMES_IN_FLIGHT>& cullingUniformBuffers = viewRenderScratch.cullingUniformBuffers;
         std::array<Buffer, MAX_FRAMES_IN_FLIGHT>& foliageCullingUniformBuffers = viewRenderScratch.foliageCullingUniformBuffers;
-        std::array<Buffer, MAX_FRAMES_IN_FLIGHT>& sceneCullingUniformBuffers = viewRenderScratch.cullingUniformBuffers;
+        std::array<Buffer, MAX_FRAMES_IN_FLIGHT>& sceneCullingUniformBuffers = viewRenderScratch.sceneCullingUniformBuffers;
         std::array<Buffer, MAX_FRAMES_IN_FLIGHT>& sceneFoliageCullingUniformBuffers = viewRenderScratch.foliageCullingUniformBuffers;
         std::array<Buffer, MAX_FRAMES_IN_FLIGHT> shadowCullingUniformBuffers;
         std::array<Buffer, MAX_FRAMES_IN_FLIGHT> shadowTwoSidedCullingUniformBuffers;

@@ -246,11 +246,11 @@ namespace Engine {
             throw std::runtime_error("Could not load model for actor '" + name + "'");
         }
         const auto &object = createMeshObject(std::move(name), std::move(mesh));
-        const Actor actor{*this, object.objectId()};
-        if (isGltfPath(path)) {
-            actor.addMeshCollider();
-        }
-        return actor;
+        // Imported render meshes can be extremely detailed.  Cooking the
+        // complete glTF as a PhysX triangle mesh here makes asset import
+        // unexpectedly expensive and can exhaust memory.  Collision is an
+        // explicit authoring choice and can be added by the caller.
+        return Actor{*this, object.objectId()};
     }
 
     Actor Scene::createModel(std::string name, const std::filesystem::path& path) {

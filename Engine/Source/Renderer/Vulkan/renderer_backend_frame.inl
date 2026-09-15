@@ -823,6 +823,14 @@
             gpuTimestampProfiler.beginZone(commandBuffer, currentFrame, shadowProfileName);
             gpuTimestampProfiler.beginZone(commandBuffer, currentFrame, shadowDepthRasterProfileName);
             if (renderGameViewport) {
+                // This descriptor set is bound by shadowPass.record(). Update
+                // the GTAO image before that first use; Vulkan does not allow
+                // updating a bound descriptor set while recording the command
+                // buffer unless UPDATE_AFTER_BIND is enabled.
+                const VkDescriptorImageInfo gtaoDebugTexture{gtaoPass.debugSampler(gtaoDebugView),
+                                                             gtaoPass.debugView(gtaoDebugView),
+                                                             VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
+                shadowPass.setGtaoTexture(currentFrame, gtaoDebugTexture);
                 shadowPass.record(
                     commandBuffer, shadowClipMatrices, shadowClipUpdateMask, vertexBuffer.handle(),
                     instanceBuffers[currentFrame].handle(), indexBuffer.handle(),
@@ -1008,10 +1016,6 @@
                             gtaoDepth.imageView(), gtaoDepth.sampler(),
                             msaa.enabled() ? gtaoDepth.imageView() : gtaoViewNormalBuffer.imageView(),
                             msaa.enabled() ? gtaoDepth.sampler() : gtaoViewNormalBuffer.sampler(), !msaa.enabled(), inverseProjection);
-            const VkDescriptorImageInfo gtaoDebugTexture{gtaoPass.debugSampler(gtaoDebugView),
-                                                         gtaoPass.debugView(gtaoDebugView),
-                                                         VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
-            shadowPass.setGtaoTexture(currentFrame, gtaoDebugTexture);
 
             gpuTimestampProfiler.beginZone(commandBuffer, currentFrame, forwardProfileName);
             gpuTimestampProfiler.beginZone(commandBuffer, currentFrame, shadowProjectionProfileName);

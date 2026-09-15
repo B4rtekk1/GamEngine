@@ -394,6 +394,9 @@
                 cullingUniformBuffers[frame].createHostVisible(vulkanDevice.physical(), device,
                     sizeof(Culling::CullingUniformData), VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
                     vulkanDevice.allocator());
+                sceneCullingUniformBuffers[frame].createHostVisible(vulkanDevice.physical(), device,
+                    sizeof(Culling::CullingUniformData), VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
+                    vulkanDevice.allocator());
                 meshletCullingUniformBuffers[frame].createHostVisible(vulkanDevice.physical(), device,
                     sizeof(Culling::MeshletCullUniforms), VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
                     vulkanDevice.allocator());
@@ -989,6 +992,7 @@
             for (auto& draw : shadowIndirectDraws) draw.destroy();
             for (auto& draw : shadowTwoSidedIndirectDraws) draw.destroy();
             for (Buffer& buffer : cullingUniformBuffers) buffer.destroy();
+            for (Buffer& buffer : sceneCullingUniformBuffers) buffer.destroy();
             for (Buffer& buffer : foliageCullingUniformBuffers) buffer.destroy();
             for (Buffer& buffer : shadowCullingUniformBuffers) buffer.destroy();
             for (Buffer& buffer : shadowTwoSidedCullingUniformBuffers) buffer.destroy();

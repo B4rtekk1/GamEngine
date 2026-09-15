@@ -897,12 +897,11 @@ namespace Engine {
                 const Water::WaterRenderWorld waterWorld =
                     Water::WaterRenderWorld::capture(registry, sceneGpu);
                 virtualWaterRenderer.rebuild(waterWorld);
-                const DepthBuffer& sceneWaterDepth = msaa.enabled() ? hiZDepthBuffer : depthBuffer;
-                sceneVirtualWaterRenderer.updateFrameBindings(
-                    virtualInstances, sceneVirtualCulling,
-                    {sceneWaterDepth.sampler(), sceneWaterDepth.imageView(),
-                     VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL});
-                sceneVirtualWaterRenderer.rebuild(waterWorld);
+                // Scene View Virtual Water is intentionally not rebuilt here:
+                // topology changes must not enter the still-fragile editor
+                // water descriptor path while ordinary meshes are added.
+                // Its dedicated view resources are rebuilt by the Scene View
+                // initialization/update path instead.
             }
             lastRenderTopologyRevision = updatedTopologyRevision;
             lastParticleEmitterRevision = updatedParticleEmitterRevision;
