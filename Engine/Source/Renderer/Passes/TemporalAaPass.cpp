@@ -59,32 +59,42 @@ void TemporalAaPass::create(const VkPhysicalDevice physicalDevice, const VkDevic
             if (vkCreateFramebuffer(device_, &info, nullptr, &framebuffers_[i]) != VK_SUCCESS)
                 throw std::runtime_error("Could not create temporal AA framebuffer");
         }
-        VkDescriptorPoolSize size{VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 16};
+        VkDescriptorPoolSize size{VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 32};
         VkDescriptorPoolCreateInfo poolInfo{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
-        poolInfo.maxSets = 2; poolInfo.poolSizeCount = 1; poolInfo.pPoolSizes = &size;
+        poolInfo.maxSets = 4; poolInfo.poolSizeCount = 1; poolInfo.pPoolSizes = &size;
         if (vkCreateDescriptorPool(device_, &poolInfo, nullptr, &pool_) != VK_SUCCESS)
             throw std::runtime_error("Could not create temporal AA descriptor pool");
         VkDescriptorSetAllocateInfo allocation{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};
-        const std::array<VkDescriptorSetLayout, 2> layouts{layout_, layout_};
-        allocation.descriptorPool = pool_; allocation.descriptorSetCount = 2;
+        const std::array<VkDescriptorSetLayout, 4> layouts{layout_, layout_, layout_, layout_};
+        allocation.descriptorPool = pool_; allocation.descriptorSetCount = 4;
         allocation.pSetLayouts = layouts.data();
         if (vkAllocateDescriptorSets(device_, &allocation, sets_.data()) != VK_SUCCESS)
             throw std::runtime_error("Could not allocate temporal AA descriptor sets");
+        constexpr std::uint32_t WaterSetOffset = 2;
         for (std::uint32_t i = 0; i < 2; ++i) {
             VkDescriptorImageInfo images[8] = {{sampler, currentView, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL},
                                                {sampler, history_[i].imageView(), VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL},
                                                {velocitySampler, velocityView, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL},
                                                {currentDepthSampler, currentDepthView, VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL},
                                                {historyDepth_[i].sampler(), historyDepth_[i].imageView(), VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL},
-                                               {waterVelocitySampler, waterVelocityView, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL},
-                                               {waterMetaSampler, waterMetaView, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL},
-                                               {waterSurfaceSampler, waterSurfaceView, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL}};
+                                               // The shader's water branch is disabled for this set. These valid
+                                               // fallbacks keep bindings 5-7 legal while virtual water is unprepared.
+                                               {sampler, currentView, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL},
+                                               {sampler, currentView, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL},
+                                               {sampler, currentView, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL}};
             VkWriteDescriptorSet writes[8]{};
             for (std::uint32_t binding = 0; binding < 8; ++binding) {
                 writes[binding] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET}; writes[binding].dstSet = sets_[i];
                 writes[binding].dstBinding = binding; writes[binding].descriptorCount = 1;
                 writes[binding].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER; writes[binding].pImageInfo = &images[binding];
             }
+            vkUpdateDescriptorSets(device_, 8, writes, 0, nullptr);
+
+            images[5] = {waterVelocitySampler, waterVelocityView, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
+            images[6] = {waterMetaSampler, waterMetaView, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
+            images[7] = {waterSurfaceSampler, waterSurfaceView, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
+            for (std::uint32_t binding = 0; binding < 8; ++binding)
+                writes[binding].dstSet = sets_[i + WaterSetOffset];
             vkUpdateDescriptorSets(device_, 8, writes, 0, nullptr);
         }
         reset();
@@ -130,7 +140,9 @@ void TemporalAaPass::record(const VkCommandBuffer commandBuffer, const VkExtent2
     begin.pClearValues = clearValues;
     vkCmdBeginRenderPass(commandBuffer, &begin, VK_SUBPASS_CONTENTS_INLINE);
     vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline_.handle());
-    vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline_.layout(), 0, 1, &sets_[historyIndex_], 0, nullptr);
+    constexpr std::uint32_t WaterSetOffset = 2;
+    const VkDescriptorSet descriptorSet = sets_[historyIndex_ + (virtualWaterEnabled_ ? WaterSetOffset : 0U)];
+    vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline_.layout(), 0, 1, &descriptorSet, 0, nullptr);
     // A 16-frame accumulation is too soft for this renderer's jitter pattern.
     // Retain temporal stability while letting the current frame restore detail.
     const Settings settings{currentJitterX, currentJitterY, previousJitterX_, previousJitterY_, historyValid_ ? 0.80F : 0.0F,

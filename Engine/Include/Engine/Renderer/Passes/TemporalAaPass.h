@@ -46,7 +46,9 @@ namespace Engine {
         GraphicsPipeline pipeline_;
         VkDescriptorSetLayout layout_ = VK_NULL_HANDLE;
         VkDescriptorPool pool_ = VK_NULL_HANDLE;
-        std::array<VkDescriptorSet, 2> sets_{};
+        // Two history inputs times two source variants: ordinary scene data
+        // uses current HDR as a valid fallback for the water-only bindings.
+        std::array<VkDescriptorSet, 4> sets_{};
         std::array<VkFramebuffer, 2> framebuffers_{};
         std::array<HdrBuffer, 2> history_;
         // A sampled copy of the depth that produced each HDR history image.
