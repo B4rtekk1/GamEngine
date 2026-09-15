@@ -887,6 +887,16 @@
                                                  static_cast<float>(Time::deltaTime()));
                 gpuTimestampProfiler.endZone(commandBuffer, currentFrame);
             }
+            if (renderSceneViewport && sceneVirtualWaterRenderer.active()) {
+                static const ProfileNameId sceneWaterPageCullProfileName =
+                    Profiler::registerName("Scene Water Page Cull");
+                gpuTimestampProfiler.beginZone(commandBuffer, currentFrame, sceneWaterPageCullProfileName);
+                sceneVirtualWaterRenderer.recordCull(commandBuffer, currentFrame);
+                sceneVirtualWaterRenderer.recordState(commandBuffer, currentFrame,
+                                                      sceneDescriptorPass.descriptorSet(currentFrame),
+                                                      static_cast<float>(Time::deltaTime()));
+                gpuTimestampProfiler.endZone(commandBuffer, currentFrame);
+            }
             // The generic instance compaction result is not consumed by the
             // active draw path. Do not dispatch it until it directly feeds
             // instance-driven commands; cluster culling remains the live
@@ -1226,6 +1236,66 @@
                 sceneForwardPass.drawOutline(commandBuffer, sceneDescriptorPass.descriptorSet(currentFrame),
                                         sceneIndirectDraws[currentFrame]);
                 ForwardPass::end(commandBuffer);
+
+                const bool hasSceneWater = activeShaderSlots.test(materialShaderIndex(MaterialShader::Water)) &&
+                                           sceneVirtualWaterRenderer.active();
+                if (hasSceneWater) {
+                    const VkImageMemoryBarrier2 beforeCopy[] = {
+                        {VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2, nullptr,
+                         VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT, VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT,
+                         VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_ACCESS_2_TRANSFER_READ_BIT,
+                         VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                         VK_QUEUE_FAMILY_IGNORED, VK_QUEUE_FAMILY_IGNORED, sceneViewportTarget.color().image(),
+                         {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1}},
+                        {VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2, nullptr,
+                         sceneOpaqueColorInitialized ? VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT : VK_PIPELINE_STAGE_2_NONE,
+                         sceneOpaqueColorInitialized ? VK_ACCESS_2_SHADER_SAMPLED_READ_BIT : 0,
+                         VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT,
+                         sceneOpaqueColorInitialized ? VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL : VK_IMAGE_LAYOUT_UNDEFINED,
+                         VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_QUEUE_FAMILY_IGNORED, VK_QUEUE_FAMILY_IGNORED,
+                         sceneOpaqueColor.image(), {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1}},
+                    };
+                    VkDependencyInfo dependency{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
+                    dependency.imageMemoryBarrierCount = std::size(beforeCopy);
+                    dependency.pImageMemoryBarriers = beforeCopy;
+                    vkCmdPipelineBarrier2(commandBuffer, &dependency);
+                    const VkExtent2D extent = sceneViewportTarget.extent();
+                    const VkImageCopy copy{{VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1}, {0, 0, 0},
+                                           {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1}, {0, 0, 0},
+                                           {extent.width, extent.height, 1}};
+                    vkCmdCopyImage(commandBuffer, sceneViewportTarget.color().image(), VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                                   sceneOpaqueColor.image(), VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &copy);
+                    const VkImageMemoryBarrier2 afterCopy[] = {
+                        {VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2, nullptr,
+                         VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_ACCESS_2_TRANSFER_READ_BIT,
+                         VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT, VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT,
+                         VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                         VK_QUEUE_FAMILY_IGNORED, VK_QUEUE_FAMILY_IGNORED, sceneViewportTarget.color().image(),
+                         {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1}},
+                        {VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2, nullptr,
+                         VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT,
+                         VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT, VK_ACCESS_2_SHADER_SAMPLED_READ_BIT,
+                         VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                         VK_QUEUE_FAMILY_IGNORED, VK_QUEUE_FAMILY_IGNORED, sceneOpaqueColor.image(),
+                         {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1}},
+                    };
+                    dependency.imageMemoryBarrierCount = std::size(afterCopy);
+                    dependency.pImageMemoryBarriers = afterCopy;
+                    vkCmdPipelineBarrier2(commandBuffer, &dependency);
+                    sceneOpaqueColorInitialized = true;
+
+                    const auto commandOffset = static_cast<VkDeviceSize>(materialShaderIndex(MaterialShader::Water)) *
+                        gpuObjects.size() * sizeof(VkDrawIndexedIndirectCommand);
+                    const auto countOffset = static_cast<VkDeviceSize>(materialShaderIndex(MaterialShader::Water)) *
+                        sizeof(std::uint32_t);
+                    sceneVirtualWaterRenderer.recordPrepass(commandBuffer, currentFrame,
+                        sceneDescriptorPass.descriptorSet(currentFrame), vertexBuffer.handle(), indexBuffer.handle(),
+                        sceneIndirectDraws[currentFrame], commandOffset, countOffset);
+                    sceneVirtualWaterRenderer.recordAdaptiveShading(commandBuffer, currentFrame,
+                        sceneDescriptorPass.descriptorSet(currentFrame));
+                    sceneVirtualWaterRenderer.recordComposite(commandBuffer, currentFrame,
+                        sceneDescriptorPass.descriptorSet(currentFrame));
+                }
             }
 
             if (renderGameViewport && hizEnabled) {

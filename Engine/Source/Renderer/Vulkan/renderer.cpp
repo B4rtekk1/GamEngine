@@ -545,9 +545,10 @@ namespace Engine {
             try {
                 waitIdle();
                 ImageBasedLighting replacement;
+                const auto runtimeRoot = projectRoot.empty() ? assetManager.asset_root() : projectRoot;
                 replacement.create(vulkanDevice.physical(), device, commandPool,
                                    vulkanDevice.graphicsQueue(), vulkanDevice.allocator(), path,
-                                   assetManager.asset_root() / "Library");
+                                   runtimeRoot / "Library");
                 imageBasedLighting.swap(replacement);
                 const auto descriptors = imageBasedLighting.descriptors();
                 shadowPass.updateImageBasedLightingDescriptors(descriptors);
@@ -884,9 +885,11 @@ namespace Engine {
             {
                 std::array<VkBuffer, MAX_FRAMES_IN_FLIGHT> virtualInstances{};
                 std::array<VkBuffer, MAX_FRAMES_IN_FLIGHT> virtualCulling{};
+                std::array<VkBuffer, MAX_FRAMES_IN_FLIGHT> sceneVirtualCulling{};
                 for (std::size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i) {
                     virtualInstances[i] = instanceBuffers[i].handle();
                     virtualCulling[i] = cullingUniformBuffers[i].handle();
+                    sceneVirtualCulling[i] = sceneCullingUniformBuffers[i].handle();
                 }
                 VkDescriptorImageInfo hizInfo{hiZBuffer.sampler(), hiZBuffer.fullView(),
                                                VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
@@ -894,6 +897,12 @@ namespace Engine {
                 const Water::WaterRenderWorld waterWorld =
                     Water::WaterRenderWorld::capture(registry, sceneGpu);
                 virtualWaterRenderer.rebuild(waterWorld);
+                const DepthBuffer& sceneWaterDepth = msaa.enabled() ? hiZDepthBuffer : depthBuffer;
+                sceneVirtualWaterRenderer.updateFrameBindings(
+                    virtualInstances, sceneVirtualCulling,
+                    {sceneWaterDepth.sampler(), sceneWaterDepth.imageView(),
+                     VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL});
+                sceneVirtualWaterRenderer.rebuild(waterWorld);
             }
             lastRenderTopologyRevision = updatedTopologyRevision;
             lastParticleEmitterRevision = updatedParticleEmitterRevision;

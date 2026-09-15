@@ -71,12 +71,14 @@ void VirtualWaterRenderer::create(VkPhysicalDevice physicalDevice, VkDevice devi
                                   VkImageView hdrTargetView, VkDescriptorImageInfo opaqueColor,
                                   VkDescriptorImageInfo opaqueDepth, VkDescriptorImageInfo previousHiZ,
                                   std::span<const VkBuffer> instanceBuffers,
-                                  std::span<const VkBuffer> cullingUniformBuffers) {
+                                  std::span<const VkBuffer> cullingUniformBuffers,
+                                  const bool enableHiZ) {
     destroy();
     if(!device || !extent.width || !extent.height || instanceBuffers.size()<FramesInFlight ||
        cullingUniformBuffers.size()<FramesInFlight) throw std::invalid_argument("Invalid VirtualWaterRenderer resources");
     physicalDevice_=physicalDevice; device_=device; allocator_=allocator; assets_=&assets; extent_=extent; depthView_=depthView;
     opaqueColor_=opaqueColor; opaqueDepth_=opaqueDepth; previousHiZ_=previousHiZ;
+    hiZEnabled_ = enableHiZ;
     std::copy_n(instanceBuffers.begin(),FramesInFlight,instanceBuffers_.begin());
     std::copy_n(cullingUniformBuffers.begin(),FramesInFlight,cullingUniformBuffers_.begin());
     try {
@@ -674,7 +676,7 @@ void VirtualWaterRenderer::rebuild(const WaterRenderWorld& world) {
     GPUWaterCullConfig config{};
     config.pageCount = pageCount_;
     config.drawBinCount = drawBinCount_;
-    config.enableHiZ = previousHiZ_.imageView != VK_NULL_HANDLE ? 1U : 0U;
+    config.enableHiZ = hiZEnabled_ && previousHiZ_.imageView != VK_NULL_HANDLE ? 1U : 0U;
     cullConfig_.update(&config, sizeof(config));
 
     std::vector<GPUWaterPageHistory> zeroHistory(MaxPages);

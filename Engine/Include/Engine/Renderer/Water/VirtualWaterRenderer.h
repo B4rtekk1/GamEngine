@@ -37,7 +37,8 @@ public:
                 VkImageView hdrTargetView, VkDescriptorImageInfo opaqueColor,
                 VkDescriptorImageInfo opaqueDepth, VkDescriptorImageInfo previousHiZ,
                 std::span<const VkBuffer> instanceBuffers,
-                std::span<const VkBuffer> cullingUniformBuffers);
+                std::span<const VkBuffer> cullingUniformBuffers,
+                bool enableHiZ = true);
     void destroy() noexcept;
 
     /** Rebuilds GPU page/templates from an immutable scene-generation snapshot. */
@@ -189,6 +190,10 @@ private:
     VkDescriptorImageInfo previousHiZ_{};
     VkDescriptorImageInfo opaqueColor_{};
     VkDescriptorImageInfo opaqueDepth_{};
+    // Editor Scene View starts without a separate Hi-Z hierarchy.  Its
+    // descriptor remains valid (depth is bound), but page culling is strictly
+    // frustum based until a per-view hierarchy is introduced.
+    bool hiZEnabled_{true};
 
     void createBuffers();
     void createOceanGeometry();

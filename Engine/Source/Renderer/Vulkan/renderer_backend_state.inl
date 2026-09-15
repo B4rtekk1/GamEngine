@@ -35,6 +35,10 @@
         // Immutable opaque HDR source sampled by the refracting water pass.
         HdrBuffer opaqueSceneColor;
         bool opaqueSceneColorInitialized{false};
+        // Scene View has a distinct opaque source because Virtual Water
+        // refracts the editor's off-screen color target, never Game View HDR.
+        HdrBuffer sceneOpaqueColor;
+        bool sceneOpaqueColorInitialized{false};
         HdrBuffer velocityBuffer;
         // Octahedrally encoded view-space normals written by the opaque depth prepass.
         HdrBuffer gtaoViewNormalBuffer;
@@ -50,6 +54,7 @@
         ForwardPass lightingForwardPass;
         WaterPass waterPass;
         Water::VirtualWaterRenderer virtualWaterRenderer;
+        Water::VirtualWaterRenderer sceneVirtualWaterRenderer;
         GraphicsPipeline& particlePipeline;
         GraphicsPipeline sceneParticlePipeline;
         std::unique_ptr<Particles::ParticleSystem> particleSystem;

@@ -1256,6 +1256,34 @@
                                        vulkanDevice.allocator());
             createSceneViewportForwardPass();
             createSceneViewportFramebuffer();
+            createSceneVirtualWaterResources();
+        }
+
+        void createSceneVirtualWaterResources() {
+            sceneVirtualWaterRenderer.destroy();
+            sceneOpaqueColor.destroy();
+            sceneOpaqueColor.create(vulkanDevice.physical(), device, sceneViewportTarget.extent(),
+                                    vulkanDevice.allocator());
+            sceneOpaqueColorInitialized = false;
+
+            std::array<VkBuffer, MAX_FRAMES_IN_FLIGHT> instances{};
+            std::array<VkBuffer, MAX_FRAMES_IN_FLIGHT> culling{};
+            for (std::size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i) {
+                instances[i] = instanceBuffers[i].handle();
+                culling[i] = sceneCullingUniformBuffers[i].handle();
+            }
+            const DepthBuffer& sampledDepth = msaa.enabled() ? hiZDepthBuffer : depthBuffer;
+            const VkDescriptorImageInfo depthInfo{
+                sampledDepth.sampler(), sampledDepth.imageView(), VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL};
+            // Bind depth to keep the descriptor valid, but deliberately turn
+            // Hi-Z off: the Scene View owns no independent pyramid yet.
+            sceneVirtualWaterRenderer.create(
+                vulkanDevice.physical(), device, vulkanDevice.allocator(), assetManager,
+                sceneViewportTarget.extent(), sampledDepth.format(), sampledDepth.imageView(),
+                sceneDescriptorPass.descriptorSetLayout(), sceneViewportTarget.color().imageView(),
+                {sceneOpaqueColor.sampler(), sceneOpaqueColor.imageView(), VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL},
+                depthInfo, depthInfo, instances, culling, false);
+            sceneVirtualWaterRenderer.rebuild(Water::WaterRenderWorld::capture(registry, sceneGpu));
         }
 
         void applyPendingSceneViewportResize() {
@@ -1270,6 +1298,7 @@
             destroySceneViewportFramebuffer();
             sceneViewportTarget.resize(requested);
             createSceneViewportFramebuffer();
+            createSceneVirtualWaterResources();
 
             if (sceneViewportDescriptor != VK_NULL_HANDLE) {
                 // Recent ImGui Vulkan backends use a SAMPLED_IMAGE descriptor
@@ -1308,6 +1337,9 @@
         }
 
         void destroySceneViewportResources() noexcept {
+            sceneVirtualWaterRenderer.destroy();
+            sceneOpaqueColor.destroy();
+            sceneOpaqueColorInitialized = false;
             destroySceneViewportFramebuffer();
             sceneViewportForwardPass.destroy();
             sceneViewportTarget.destroy();

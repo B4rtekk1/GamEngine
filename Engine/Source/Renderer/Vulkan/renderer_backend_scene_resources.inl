@@ -1961,6 +1961,12 @@
             data.cameraPosition = {sceneCamera.position().x(), sceneCamera.position().y(), sceneCamera.position().z(), 1.0F};
             data.objectCount = static_cast<uint32_t>(gpuObjects.size());
             data.maxDrawCount = data.objectCount;
+            // Virtual Water uses these dimensions to convert a page's NDC
+            // bounds to pixels. Leaving them zero rejected every Scene View
+            // page as sub-pixel, even though frustum culling accepted it.
+            data.viewportWidth = static_cast<float>(sceneViewportTarget.extent().width);
+            data.viewportHeight = static_cast<float>(sceneViewportTarget.extent().height);
+            data.hizMipCount = 0;
             data.enableOcclusionCulling = 0;
             data.enableFrustumCulling = optimizationFeatures.gpuCulling ? 1U : 0U;
             data.cameraCut = 1;
