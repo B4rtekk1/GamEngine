@@ -421,11 +421,13 @@ TEST(SceneSerializer, RestoresTerrainMaterialLayersAfterRegeneratingGeometry) {
     ASSERT_TRUE(restoredTerrain.materialLayers[0].has_value());
     ASSERT_TRUE(restoredTerrain.materialLayers[2].has_value());
     ASSERT_TRUE(renderer.mesh);
-    ASSERT_EQ(renderer.mesh->images.size(), 2U);
+    const auto restoredSource = renderer.mesh.source();
+    ASSERT_TRUE(restoredSource);
+    ASSERT_EQ(restoredSource->images.size(), 2U);
     EXPECT_EQ(renderer.material.pbr.terrainLayerTextures[0], 0);
     EXPECT_EQ(renderer.material.pbr.terrainLayerTextures[1], -1);
     EXPECT_EQ(renderer.material.pbr.terrainLayerTextures[2], 1);
-    EXPECT_EQ(renderer.mesh->images[1].rgbaPixels[0], 40U);
+    EXPECT_EQ(restoredSource->images[1].rgbaPixels[0], 40U);
 }
 
 TEST(SceneSerializer, StoresEmbeddedImagePixelsInBinarySidecar) {
@@ -449,8 +451,10 @@ TEST(SceneSerializer, StoresEmbeddedImagePixelsInBinarySidecar) {
     ASSERT_TRUE(actor.valid());
     const auto entity = loaded.findEntity(actor.id());
     const auto& renderer = loaded.editor().read<Engine::MeshRendererComponent>(entity);
-    ASSERT_EQ(renderer.mesh->images.size(), 1U);
-    EXPECT_EQ(renderer.mesh->images[0].rgbaPixels, mesh->images[0].rgbaPixels);
+    const auto restoredSource = renderer.mesh.source();
+    ASSERT_TRUE(restoredSource);
+    ASSERT_EQ(restoredSource->images.size(), 1U);
+    EXPECT_EQ(restoredSource->images[0].rgbaPixels, mesh->images[0].rgbaPixels);
 
     std::filesystem::remove(path, error);
     std::filesystem::remove(sidecar, error);

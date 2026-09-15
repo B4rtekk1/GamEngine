@@ -84,7 +84,8 @@ namespace {
             ImGui::SetTooltip("The base layer fills unpainted areas; Layers 1-3 are brush-painted.");
 
         const auto& terrainRenderer = scene.editor().read<Engine::MeshRenderer>(selected);
-        const bool hasTexture = terrainRenderer.mesh && terrainRenderer.mesh->images.size() >
+        const auto terrainSource = terrainRenderer.mesh.source();
+        const bool hasTexture = terrainSource && terrainSource->images.size() >
                                 static_cast<std::size_t>(state.paintLayer);
         ImGui::TextDisabled("Layer texture");
         ImGui::PushStyleColor(ImGuiCol_Button, hasTexture
@@ -99,8 +100,8 @@ namespace {
                     Editor::AssetDragDrop::texturePayload)) {
                 const auto texture = content.texture(Editor::AssetDragDrop::texturePath(*payload));
                 if (texture && texture->width > 0 && texture->height > 0 &&
-                    !texture->rgbaPixels.empty() && terrainRenderer.mesh) {
-                    auto mesh = std::make_shared<Engine::Mesh>(*terrainRenderer.mesh);
+                    !texture->rgbaPixels.empty() && terrainSource) {
+                    auto mesh = std::make_shared<Engine::Mesh>(*terrainSource);
                     mesh->images.resize(std::max(mesh->images.size(),
                         static_cast<std::size_t>(state.paintLayer + 1)));
                     mesh->images[state.paintLayer] = {texture->width, texture->height,

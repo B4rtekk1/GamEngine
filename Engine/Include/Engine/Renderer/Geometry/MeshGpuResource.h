@@ -77,11 +77,6 @@ namespace Engine {
         }
         [[nodiscard]] bool operator==(std::nullptr_t) const noexcept { return !static_cast<bool>(*this); }
         [[nodiscard]] bool operator!=(std::nullptr_t) const noexcept { return static_cast<bool>(*this); }
-        [[nodiscard]] const MeshSourceData* get() const noexcept {
-            return resource_ ? resource_->sourceData.get() : nullptr;
-        }
-        [[nodiscard]] const MeshSourceData* operator->() const noexcept { return get(); }
-        [[nodiscard]] const MeshSourceData& operator*() const noexcept { return *get(); }
         [[nodiscard]] const std::shared_ptr<MeshGpuResource>& resource() const noexcept { return resource_; }
         [[nodiscard]] std::shared_ptr<const MeshSourceData> source() const noexcept {
             return resource_ ? resource_->sourceData : nullptr;
@@ -108,8 +103,6 @@ namespace Engine {
         void setSourceDataRetained(const bool retained) noexcept {
             if (resource_) resource_->retainSourceData = retained;
         }
-        [[nodiscard]] operator std::shared_ptr<const MeshSourceData>() const noexcept { return source(); }
-
     private:
         std::shared_ptr<MeshGpuResource> resource_;
     };

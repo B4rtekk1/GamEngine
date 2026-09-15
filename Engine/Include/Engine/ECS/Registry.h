@@ -492,7 +492,7 @@ namespace Engine {
         [[nodiscard]] static RenderTopologyState renderTopologyState(
             const MeshRendererComponent& renderer) noexcept {
             return {
-                .mesh = renderer.mesh.get(),
+                .mesh = renderer.mesh.resource().get(),
                 .pipeline = renderer.material.shaderProgram ^
                     (static_cast<std::uint64_t>(renderer.material.shader) << 48U),
                 .batch = renderer.cullingBatch,

@@ -65,7 +65,7 @@ WaterRenderWorld WaterRenderWorld::capture(const Registry& registry,
                     !renderable->second.empty()) {
                     body.instanceIndex = static_cast<std::uint32_t>(renderable->second.front());
                     body.meshResource = renderer.mesh.resource();
-                    if (const Mesh* mesh = renderer.mesh.get()) body.drawRanges = mesh->drawRanges;
+                    if (const auto source = renderer.mesh.source()) body.drawRanges = source->drawRanges;
                 }
             }
             world.bodies_.push_back(std::move(body));

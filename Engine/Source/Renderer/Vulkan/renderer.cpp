@@ -928,17 +928,18 @@ namespace Engine {
             // Imported runtime assets release decoded vertices after upload.
             // A geometry edit therefore has to go through the editor/source
             // path, which pins data and rebuilds the GPU resource first.
-            if (!renderer.hasMesh() || !renderer.mesh.hasSourceData() ||
-                renderer.mesh->vertexCount() != record.vertexCount ||
+            const auto sourceMesh = renderer.mesh.source();
+            if (!renderer.hasRenderableMesh() || !sourceMesh ||
+                sourceMesh->vertexCount() != record.vertexCount ||
                 record.batchIndex >= instanceBatches.size()) {
                 synchronizeSceneResources(scene);
                 return;
             }
-            if (firstVertex >= renderer.mesh->vertexCount()) {
+            if (firstVertex >= sourceMesh->vertexCount()) {
                 return;
             }
             const std::uint32_t vertexCount = std::min(
-                requestedVertexCount, renderer.mesh->vertexCount() - firstVertex);
+                requestedVertexCount, sourceMesh->vertexCount() - firstVertex);
             if (vertexCount == 0) {
                 return;
             }
@@ -948,7 +949,7 @@ namespace Engine {
             std::vector<GpuVertex> packedVertices;
             packedVertices.reserve(vertexCount);
             for (std::uint32_t index = 0; index < vertexCount; ++index) {
-                packedVertices.push_back(GpuVertex::pack(renderer.mesh->vertices[firstVertex + index]));
+                packedVertices.push_back(GpuVertex::pack(sourceMesh->vertices[firstVertex + index]));
             }
             vertexBuffer.uploadDeviceLocal(
                 packedVertices.data(), sizeof(GpuVertex) * packedVertices.size(),
@@ -965,7 +966,7 @@ namespace Engine {
                     std::numeric_limits<float>::lowest()
                 },
             };
-            for (const Vertex &vertex: renderer.mesh->vertices) {
+            for (const Vertex &vertex: sourceMesh->vertices) {
                 localBounds.min.setX(std::min(localBounds.min.x(), vertex.position.x()));
                 localBounds.min.setY(std::min(localBounds.min.y(), vertex.position.y()));
                 localBounds.min.setZ(std::min(localBounds.min.z(), vertex.position.z()));
@@ -975,7 +976,7 @@ namespace Engine {
             }
             record.localBounds = localBounds;
             InstanceBatch &changedBatch = instanceBatches[record.batchIndex];
-            changedBatch.mesh = renderer.mesh.get();
+            changedBatch.mesh = renderer.mesh.resource().get();
 
             bool first = true;
             AABB batchBounds{};

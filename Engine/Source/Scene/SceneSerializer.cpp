@@ -706,9 +706,10 @@ namespace Engine {
             for (std::size_t layer = 0; layer < terrain.materialLayers.size(); ++layer) {
                 const Mesh::Image *image = terrain.materialLayers[layer] ? &*terrain.materialLayers[layer] : nullptr;
                 const auto localIndex = renderer.material.pbr.terrainLayerTextures[layer];
-                if (image == nullptr && renderer.mesh && localIndex >= 0 &&
-                    static_cast<std::size_t>(localIndex) < renderer.mesh->images.size()) {
-                    image = &renderer.mesh->images[static_cast<std::size_t>(localIndex)];
+                const auto sourceMesh = renderer.mesh.source();
+                if (image == nullptr && sourceMesh && localIndex >= 0 &&
+                    static_cast<std::size_t>(localIndex) < sourceMesh->images.size()) {
+                    image = &sourceMesh->images[static_cast<std::size_t>(localIndex)];
                 }
                 if (image == nullptr || image->width == 0 || image->height == 0 ||
                     image->rgbaPixels.size() != static_cast<std::size_t>(image->width) * image->height * 4) {
@@ -2026,7 +2027,7 @@ namespace Engine {
                                                         ColliderComponent &collider,
                                                         const MeshRenderer &renderer) {
             if (auto *meshCollider = std::get_if<MeshCollider>(&collider.shape)) {
-                meshCollider->mesh = renderer.mesh;
+                meshCollider->mesh = renderer.mesh.source();
             }
         });
         registry = std::move(loaded);

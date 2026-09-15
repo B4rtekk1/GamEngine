@@ -161,10 +161,11 @@ namespace Engine {
         /** Creates a triangle collider from this object's indexed mesh geometry. */
         const ColliderComponent &addMeshCollider() {
             const auto &mesh = meshRenderer().mesh;
-            if (mesh == nullptr || mesh->empty()) {
+            const auto source = mesh.source();
+            if (!source || source->empty()) {
                 throw std::logic_error("Cannot create a mesh collider without mesh vertices");
             }
-            const ColliderComponent collider{.shape = MeshCollider{mesh.source()}};
+            const ColliderComponent collider{.shape = MeshCollider{source}};
             if (has<ColliderComponent>()) {
                 modify<ColliderComponent>([&](auto &value) { value = collider; });
             } else {

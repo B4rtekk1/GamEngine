@@ -312,10 +312,14 @@ void drawLightGizmos(const Engine::ScenePreset &scene, const Engine::Entity sele
 }
 
 std::optional<Engine::AABB> meshWorldBounds(const Engine::MeshRenderer &renderer,
-                                            const Engine::Transform &transform) {
-    if (!renderer.hasMesh()) return std::nullopt;
+                                             const Engine::Transform &transform) {
+    const auto resource = renderer.mesh.resource();
+    if (!renderer.hasRenderableMesh() || !resource) return std::nullopt;
+    if (renderer.mesh.uploaded()) return resource->bounds.transformed(transform.matrix().native());
 
-    const auto &vertices = renderer.mesh->vertices;
+    const auto source = renderer.mesh.source();
+    if (!source || source->vertices.empty()) return std::nullopt;
+    const auto &vertices = source->vertices;
     Engine::AABB localBounds{
         .min = vertices.front().position,
         .max = vertices.front().position,
@@ -347,14 +351,17 @@ bool boundsOverlapOnOtherAxes(const Engine::AABB &lhs, const Engine::AABB &rhs,
 std::optional<Engine::Vec3> snapMeshVerticesTogether(
     const Engine::MeshRenderer &movingRenderer, const Engine::Transform &movingTransform,
     const Engine::MeshRenderer &targetRenderer, const Engine::Transform &targetTransform) {
-    if (!movingRenderer.hasMesh() || !targetRenderer.hasMesh()) return std::nullopt;
+    const auto movingSource = movingRenderer.mesh.source();
+    const auto targetSource = targetRenderer.mesh.source();
+    if (!movingRenderer.hasRenderableMesh() || !targetRenderer.hasRenderableMesh() ||
+        !movingSource || !targetSource) return std::nullopt;
 
     // Most editor primitives (including fence segments) have relatively few
     // vertices.  Sampling large imported meshes keeps Ctrl-drag responsive,
     // while still retaining all vertices of the common low-poly editor assets.
     constexpr std::size_t maximumSamplesPerMesh = 128;
-    const auto &movingVertices = movingRenderer.mesh->vertices;
-    const auto &targetVertices = targetRenderer.mesh->vertices;
+    const auto &movingVertices = movingSource->vertices;
+    const auto &targetVertices = targetSource->vertices;
     const std::size_t movingStep = std::max<std::size_t>(
         1, movingVertices.size() / maximumSamplesPerMesh);
     const std::size_t targetStep = std::max<std::size_t>(
@@ -1378,8 +1385,10 @@ bool drawTerrainPaint(Engine::ScenePreset& scene, const Engine::Entity selected,
         }
     }
     if (imageHovered && hit && ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
+        const auto source = meshRenderer.mesh.source();
+        if (!source) return false;
         state.strokeActive = true; state.strokeEntity = selected; state.hasPreviousPoint = false;
-        state.workingMesh = std::make_shared<Engine::Mesh>(*meshRenderer.mesh);
+        state.workingMesh = std::make_shared<Engine::Mesh>(*source);
         state.heightsBeforeStroke = terrain.heights; state.strokeDirty = {};
         scene.editor().patch<Engine::MeshRenderer>(selected, [&](auto& component) { component.mesh = state.workingMesh; });
     }
@@ -1795,8 +1804,9 @@ ViewportInteraction drawViewport(Engine::ScenePreset &scene, Engine::Assets::Con
                 const Engine::Camera camera = sceneViewCamera(renderer, imageMin, imageMax);
                 scene.editor().view<Engine::MeshRenderer, Engine::Transform>(
                     [&](const Engine::Entity, const Engine::MeshRenderer& meshRenderer, const Engine::Transform& transform) {
-                        if (!meshRenderer.hasMesh() || !settings.showMeshDiagnostics) return;
-                        const auto& mesh = *meshRenderer.mesh;
+                        const auto source = meshRenderer.mesh.source();
+                        if (!meshRenderer.hasRenderableMesh() || !settings.showMeshDiagnostics || !source) return;
+                        const auto& mesh = *source;
                         const std::size_t limit = std::min<std::size_t>(mesh.indices.size(), 900);
                         for (std::size_t index = 0; index + 2 < limit; index += 3) {
                             const std::uint32_t indexA = mesh.indices[index];
@@ -1819,8 +1829,9 @@ ViewportInteraction drawViewport(Engine::ScenePreset &scene, Engine::Assets::Con
                 const Engine::Camera camera = sceneViewCamera(renderer, imageMin, imageMax);
                 scene.editor().view<Engine::MeshRenderer, Engine::Transform>(
                     [&](const Engine::Entity, const Engine::MeshRenderer& meshRenderer, const Engine::Transform& transform) {
-                        if (!meshRenderer.hasMesh() || !settings.showMeshDiagnostics) return;
-                        const auto& vertices = meshRenderer.mesh->vertices;
+                        const auto source = meshRenderer.mesh.source();
+                        if (!meshRenderer.hasRenderableMesh() || !settings.showMeshDiagnostics || !source) return;
+                        const auto& vertices = source->vertices;
                         const std::size_t stride = std::max<std::size_t>(1, vertices.size() / 80);
                         for (std::size_t index = 0; index < vertices.size(); index += stride) {
                             const auto& vertex = vertices[index];

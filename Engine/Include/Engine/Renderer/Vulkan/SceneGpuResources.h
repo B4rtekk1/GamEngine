@@ -4,7 +4,7 @@
 #include "Engine/Renderer/Culling/CullingTypes.h"
 #include "Engine/Renderer/Materials/MaterialBuffer.h"
 #include "Engine/Renderer/Materials/Material.h"
-#include "Engine/Renderer/Geometry/Mesh.h"
+#include "Engine/Renderer/Geometry/MeshGpuResource.h"
 #include "Engine/Renderer/GPUSceneDatabase.h"
 #include "Engine/Renderer/Vulkan/renderer_types.h"
 
@@ -44,7 +44,9 @@ namespace Engine {
         };
 
         struct InstanceBatch {
-            const Mesh *mesh{nullptr};
+            // Stable MeshGpuResource identity for MeshRenderer batches; terrain
+            // grass uses its separately owned immutable Mesh identity.
+            const void *mesh{nullptr};
             std::uint32_t firstIndex{0};
             std::uint32_t indexCount{0};
             std::uint32_t lod1IndexCount{0};

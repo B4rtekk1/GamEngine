@@ -37,11 +37,15 @@ namespace Engine {
         /// Renderer-owned slot in the occlusion-query pool.
         uint32_t occlusionQueryIndex{std::numeric_limits<uint32_t>::max()};
 
-        [[nodiscard]] bool hasMesh() const noexcept {
+        [[nodiscard]] bool hasRenderableMesh() const noexcept {
             // Before the initial upload, the decoded payload establishes that
             // this is drawable. Afterwards its GPU range is authoritative.
-            return mesh != nullptr && (mesh.uploaded() ||
-                (mesh.hasSourceData() && !mesh->empty()));
+            const auto source = mesh.source();
+            return mesh != nullptr && (mesh.uploaded() || (source && !source->empty()));
         }
+
+        // Compatibility name: this describes renderability, not source-data
+        // residency. Use mesh.hasSourceData() before accessing decoded input.
+        [[nodiscard]] bool hasMesh() const noexcept { return hasRenderableMesh(); }
     };
 } // namespace Engine

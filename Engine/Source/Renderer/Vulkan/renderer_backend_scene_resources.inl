@@ -42,8 +42,9 @@
 
             std::unordered_set<const Mesh*> uploaded;
             registry.view<MeshRenderer>([&](const Entity, const MeshRenderer& renderer) {
-                if (!renderer.hasMesh() || !uploaded.insert(renderer.mesh.get()).second) return;
-                const Mesh& mesh = *renderer.mesh;
+                const auto source = renderer.mesh.source();
+                if (!renderer.hasRenderableMesh() || !source || !uploaded.insert(source.get()).second) return;
+                const Mesh& mesh = *source;
                 const auto offset = static_cast<std::uint32_t>(materialTextures.size() + 1);
                 if (mesh.images.size() > MaxMaterialTextures - offset) {
                     throw std::runtime_error("GLB scene exceeds the 4096-entry bindless texture capacity");
@@ -271,7 +272,7 @@
                 std::uint32_t firstIndex;
             };
             struct BatchKey {
-                const Mesh* mesh;
+                const void* mesh;
                 std::uint32_t shaderSlot;
                 bool foliagePipeline;
                 bool castShadow;
@@ -287,7 +288,7 @@
                 std::size_t operator()(const BatchKey& key) const noexcept {
                     constexpr std::uint32_t hashCombineConstant = 0x9e3779b9U;
                     constexpr std::uint32_t hashCombineLeftShift = 6U;
-                    const auto meshHash = std::hash<const Mesh*>{}(key.mesh);
+                    const auto meshHash = std::hash<const void*>{}(key.mesh);
                     const auto batchHash = std::hash<uint32_t>{}(key.cullingBatch);
                     const auto shaderHash = std::hash<std::uint32_t>{}(key.shaderSlot);
                     return meshHash ^ (batchHash + shaderHash + static_cast<std::size_t>(key.foliagePipeline) +
@@ -304,12 +305,14 @@
             uniqueMeshes.reserve(registry.size());
             meshResources.reserve(registry.size());
             registry.view<MeshRenderer>([&](const Entity, const MeshRenderer& renderer) {
-                if (!renderer.hasMesh() || !uniqueMeshes.insert(renderer.mesh.get()).second) {
+                const auto source = renderer.mesh.source();
+                const auto resource = renderer.mesh.resource();
+                if (!renderer.hasRenderableMesh() || !source || !resource || !uniqueMeshes.insert(source.get()).second) {
                     return;
                 }
-                meshResources.emplace(renderer.mesh.get(), renderer.mesh.resource().get());
+                meshResources.emplace(source.get(), resource.get());
                 materialSlots = std::max(materialSlots, static_cast<std::uint32_t>(
-                    std::max<std::size_t>(1, renderer.mesh->materials.size())));
+                    std::max<std::size_t>(1, source->materials.size())));
             });
             registry.view<TerrainGrassComponent>([&](const Entity, const TerrainGrassComponent& grass) {
                 if (!grass.hasPrefab() || !uniqueMeshes.insert(grass.mesh.get()).second) return;
@@ -359,9 +362,10 @@
                 return record;
             };
             registry.view<Transform, MeshRenderer>([&](const Entity entity, const Transform&, const MeshRenderer& renderer) {
-                if (!renderer.hasMesh()) return;
-                const Mesh* const mesh = renderer.mesh.get();
+                const auto source = renderer.mesh.source();
                 const MeshGpuResource* const resource = renderer.mesh.resource().get();
+                if (!renderer.hasRenderableMesh() || !source || resource == nullptr) return;
+                const Mesh* const mesh = source.get();
                 MeshUploadRecord record{};
                 if (optimizationFeatures.meshDeduplication) {
                     if (const auto found = plannedUploadedMeshes.find(resource); found != plannedUploadedMeshes.end()) {
@@ -529,11 +533,12 @@
             }
             registry.view<Transform, MeshRenderer>(
                 [&](const Entity entity, const Transform&, MeshRenderer& renderer) {
-                    if (!renderer.hasMesh()) {
+                    const auto source = renderer.mesh.source();
+                    if (!renderer.hasRenderableMesh() || !source) {
                         return;
                     }
 
-                    const Mesh* const mesh = renderer.mesh.get();
+                    const Mesh* const mesh = source.get();
                     const MeshUploadRecord& planned = rendererUploads.at(entity);
                     renderer.firstIndex = planned.firstIndex;
                     const std::uint32_t firstVertex = planned.firstVertex;
@@ -614,7 +619,7 @@
                         mesh->drawRanges.size() == Water::StitchVariantCount;
                     const auto appendRange = [&](const Mesh::DrawRange& drawRange, const AABB& rangeBounds,
                                                  const bool forceDistinctBatch) {
-                    const BatchKey batchKey{mesh, shaderSlot, usesFoliagePipeline,
+                    const BatchKey batchKey{renderer.mesh.resource().get(), shaderSlot, usesFoliagePipeline,
                                             castShadow, renderer.cullingBatch};
                     const auto [batchIt, inserted] = !forceDistinctBatch && optimizationFeatures.instancedRendering
                         ? batchIndices.try_emplace(batchKey, instanceBatches.size())
@@ -624,7 +629,7 @@
                     const AABB rangeWorldBounds = rangeBounds.transformed(worldModel(entity));
                     if (inserted) {
                         instanceBatches.push_back(InstanceBatch{
-                            .mesh = mesh,
+                            .mesh = renderer.mesh.resource().get(),
                             .firstIndex = renderer.firstIndex + drawRange.firstIndex,
                             .indexCount = drawRange.indexCount,
                             .lod1IndexCount = 0,
@@ -1756,8 +1761,10 @@
                 }
                 bool materialChanged = false;
                 if (hasRendererChange) {
-                    const Mesh& mesh = *renderer->mesh;
-                    for (std::uint32_t slot = 0; slot < materialSlots; ++slot) {
+                    const auto sourceMesh = renderer->mesh.source();
+                    if (sourceMesh) {
+                        const Mesh& mesh = *sourceMesh;
+                        for (std::uint32_t slot = 0; slot < materialSlots; ++slot) {
                         const PBRMaterial source = mesh.materials.empty() ||
                             (renderer->materialOverride && slot == 0)
                             ? renderer->material.pbr
@@ -1772,6 +1779,7 @@
                             !sameMaterial(destination, material)) {
                             destination = material;
                             materialChanged = true;
+                        }
                         }
                     }
                 }

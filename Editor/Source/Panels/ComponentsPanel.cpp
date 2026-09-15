@@ -193,13 +193,17 @@ bool ComponentsPanel::draw(Engine::ScenePreset &scene, Engine::Assets::Content& 
         bool changed = false;
 
         ImGui::TextDisabled("Mesh");
-        if (renderer.mesh && !renderer.mesh->empty()) {
-            const auto path = renderer.mesh->sourcePath.generic_string();
+        if (const auto resource = renderer.mesh.resource()) {
+            const auto path = resource->sourcePath.generic_string();
             ImGui::TextWrapped("%s", path.empty() ? "Generated geometry" : path.c_str());
-            ImGui::TextDisabled("%u vertices · %u triangles · %zu textures",
-                                renderer.mesh->vertexCount(), renderer.mesh->indexCount() / 3,
-                                renderer.mesh->images.size());
-            ImGui::TextDisabled("%zu source materials", renderer.mesh->materials.size());
+            ImGui::TextDisabled("%u vertices · %u triangles", resource->vertexCount,
+                                resource->indexCount / 3);
+            if (const auto sourceMesh = renderer.mesh.source()) {
+                ImGui::TextDisabled("%zu textures · %zu source materials", sourceMesh->images.size(),
+                                    sourceMesh->materials.size());
+            } else {
+                ImGui::TextDisabled("Source data released after GPU upload");
+            }
         } else {
             ImGui::TextColored({0.95F, 0.40F, 0.35F, 1.0F}, "Missing mesh");
         }
@@ -283,8 +287,10 @@ bool ComponentsPanel::draw(Engine::ScenePreset &scene, Engine::Assets::Content& 
         }
         ImGui::TextDisabled("Material override");
         if (ImGui::Checkbox("Override imported material slot 0##mesh-material", &renderer.materialOverride)) {
-            if (renderer.materialOverride && renderer.mesh && !renderer.mesh->materials.empty())
-                renderer.material.pbr = renderer.mesh->materials.front();
+            if (renderer.materialOverride) {
+                if (const auto sourceMesh = renderer.mesh.source(); sourceMesh && !sourceMesh->materials.empty())
+                    renderer.material.pbr = sourceMesh->materials.front();
+            }
             changed = true;
         }
         float baseColor[4] = {
@@ -918,9 +924,9 @@ bool ComponentsPanel::draw(Engine::ScenePreset &scene, Engine::Assets::Content& 
                                         : shape == 2
                                               ? Engine::ColliderShape{Engine::CapsuleCollider{}}
                                               : shape == 3
-                                                    ? Engine::ColliderShape{Engine::RampCollider{}}
-                                                    : Engine::ColliderShape{Engine::MeshCollider{
-                                                        scene.editor().read<Engine::MeshRenderer>(selected).mesh}};
+                                                     ? Engine::ColliderShape{Engine::RampCollider{}}
+                                                     : Engine::ColliderShape{Engine::MeshCollider{
+                                                         scene.editor().read<Engine::MeshRenderer>(selected).mesh.source()}};
             }
 
             ImGui::TextDisabled("Local offset");

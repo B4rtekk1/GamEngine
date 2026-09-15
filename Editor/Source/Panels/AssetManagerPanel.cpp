@@ -257,7 +257,8 @@ namespace {
         bool used = false;
         scene.view().view<Engine::MeshRenderer>([&](const Engine::Entity,
                                                     const Engine::MeshRenderer &renderer) {
-            if (renderer.mesh && renderer.mesh->sourcePath.lexically_normal() == assetPath)
+            const auto resource = renderer.mesh.resource();
+            if (resource && resource->sourcePath.lexically_normal() == assetPath)
                 used = true;
         });
         return used;
