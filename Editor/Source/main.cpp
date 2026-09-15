@@ -21,6 +21,7 @@
 #include "Engine/ECS/Components/TerrainGrassComponent.h"
 #include "Engine/ECS/Components/SmokeEmitterComponent.h"
 #include "Engine/ECS/Components/ProceduralCloudComponent.h"
+#include "Engine/ECS/Components/WaterBodyComponent.h"
 #include "Engine/Renderer/Geometry/ProceduralCloud.h"
 #include "Engine/Scene/Components/LightComponent.h"
 #include "Engine/Renderer/MeshRenderer.h"
@@ -404,6 +405,10 @@ int main(int argc, char** argv) {
         EntityClipboard clipboard;
         Engine::Entity selectedEntity = Engine::NullEntity;
         std::vector<Engine::Entity> selectedEntities;
+        // Water removal changes both the ECS topology and Virtual Water's
+        // persistent GPU state. Apply it only after the frame which captured
+        // the old ImGui viewport descriptor has been submitted.
+        std::vector<Engine::Entity> deferredWaterBodyRemovals;
         const auto setSelection = [&](const Engine::Entity entity) {
             selectedEntities.clear();
             if (entity != Engine::NullEntity) selectedEntities.push_back(entity);
@@ -754,7 +759,7 @@ int main(int argc, char** argv) {
             }
             const bool inspectorConsumesMouseWheel = showInspector &&
                 ComponentsPanel::draw(scene, content, shaderGraphSourceDirectory, selectedEntities, selectedEntity,
-                                      showInspector);
+                                      deferredWaterBodyRemovals, showInspector);
             if (showAssetManager) {
                 if (const Engine::Entity created =
                         AssetManagerPanel::draw(scene, content, playing, showAssetManager,
@@ -857,8 +862,8 @@ int main(int argc, char** argv) {
             // ImGui::Image has already captured this frame's viewport descriptor.
             // Rebuilding scene resources can release that descriptor, so defer the
             // rebuild until its draw commands have been submitted below.
-            const bool sceneResourceSyncPending = sceneStructureChanged ||
-                                                  viewportInteraction.terrainGrassChanged;
+            bool sceneResourceSyncPending = sceneStructureChanged ||
+                                            viewportInteraction.terrainGrassChanged;
             if (!sceneResourceSyncPending && viewportInteraction.terrainGeometryChanged) {
                 for (const Engine::Entity terrain : viewportInteraction.terrainGeometryEntities)
                     renderer.updateMeshGeometry(terrain);
@@ -945,6 +950,24 @@ int main(int argc, char** argv) {
                 if (!deferSceneGpuWork) {
                     renderer.renderFrame();
                 }
+            }
+            if (!deferSceneGpuWork && !deferredWaterBodyRemovals.empty()) {
+                // `renderFrame()` has submitted every command that references
+                // the old render snapshot (including ImGui::Image). Now the
+                // ECS can change and the renderer can atomically rebuild its
+                // render-facing snapshot before the next frame.
+                for (const Engine::Entity entity : deferredWaterBodyRemovals) {
+                    if (!scene.editor().valid(entity) ||
+                        !scene.editor().has<Engine::WaterBodyComponent>(entity)) {
+                        continue;
+                    }
+                    scene.editor().remove<Engine::WaterBodyComponent>(entity);
+                    if (scene.editor().has<Engine::MeshRenderer>(entity)) {
+                        scene.editor().remove<Engine::MeshRenderer>(entity);
+                    }
+                }
+                deferredWaterBodyRemovals.clear();
+                sceneResourceSyncPending = true;
             }
             if (!deferSceneGpuWork && initialSceneFirstRenderableFramePending) {
                 if (initialSceneLoadStartedAt) {

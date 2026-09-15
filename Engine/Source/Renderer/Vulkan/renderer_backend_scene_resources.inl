@@ -1051,12 +1051,18 @@
                     worldMatrix[column][row] = instance.worldMatrix[column * 4 + row];
                 }
             }
+            // A full snapshot includes retained, dead slots so their stable
+            // IDs can be reused safely. Preserve the same GPU-visible inert
+            // representation used by the incremental removal upload; otherwise
+            // a rebuild would resurrect a slot whose stored flags still have
+            // the visibility bit set.
+            const std::uint32_t flags = instance.alive ? instance.flags : 0U;
             return {
                 .worldMatrix = worldMatrix,
                 .localBoundsMin = glm::vec4{instance.localBounds.min.native(), 0.0F},
                 .localBoundsMax = glm::vec4{instance.localBounds.max.native(), 0.0F},
                 .idsAndFlags = glm::uvec4{instance.meshId, instance.materialId,
-                                          instance.objectId, instance.flags},
+                                          instance.objectId, flags},
             };
         }
 

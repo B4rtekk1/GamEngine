@@ -14,5 +14,6 @@ public:
                                    const std::filesystem::path& shaderSourceDirectory,
                                    const std::vector<Engine::Entity>& selection,
                                    Engine::Entity active,
+                                   std::vector<Engine::Entity>& deferredWaterBodyRemovals,
                                    bool& isOpen);
 };

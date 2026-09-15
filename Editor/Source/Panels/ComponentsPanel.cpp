@@ -64,7 +64,9 @@ static bool drawRemovableComponentHeader(const char *label, const char *id, bool
 bool ComponentsPanel::draw(Engine::ScenePreset &scene, Engine::Assets::Content& content,
                            const std::filesystem::path& shaderSourceDirectory,
                            const std::vector<Engine::Entity>& selection,
-                           const Engine::Entity active, bool& isOpen) {
+                           const Engine::Entity active,
+                           std::vector<Engine::Entity>& deferredWaterBodyRemovals,
+                           bool& isOpen) {
     const Engine::Entity selected = active;
     ImGui::Begin("Inspector", &isOpen);
     EditorUI::panelHeader("Inspector");
@@ -344,8 +346,15 @@ bool ComponentsPanel::draw(Engine::ScenePreset &scene, Engine::Assets::Content& 
         bool remove = false;
         const bool open = drawRemovableComponentHeader("Water Body", "water-body", remove);
         if (remove) {
-            scene.editor().remove<Engine::WaterBodyComponent>(selected);
-            if (scene.editor().has<Engine::MeshRenderer>(selected)) scene.editor().remove<Engine::MeshRenderer>(selected);
+            // The renderer submits this UI after rendering the current scene
+            // snapshot. Removing the ECS components here would make that
+            // submission combine a stale render snapshot with live ECS that
+            // no longer contains this water body. Defer the structural change
+            // until the frame has been submitted.
+            if (std::ranges::find(deferredWaterBodyRemovals, selected) ==
+                deferredWaterBodyRemovals.end()) {
+                deferredWaterBodyRemovals.push_back(selected);
+            }
         } else if (open) {
             auto water = scene.editor().read<Engine::WaterBodyComponent>(selected);
             constexpr const char* types[] = {"Ocean", "Lake", "River"};

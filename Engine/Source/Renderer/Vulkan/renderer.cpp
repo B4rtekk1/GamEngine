@@ -832,8 +832,9 @@ namespace Engine {
             materialTextureDescriptors.clear();
             meshTextureOffsets.clear();
             fallbackMaterialTexture.destroy();
-            renderables.clear();
-            instanceBatches.clear();
+            // createMeshBuffers() needs the previous renderable table to
+            // retire GPU Scene instances whose ECS entity disappeared. It
+            // clears and rebuilds both tables after that comparison.
             instanceModels.clear();
             materials.clear();
             for (auto &indices: dirtyTransforms) { indices.clear(); }

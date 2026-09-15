@@ -6,6 +6,7 @@
 #include <cstdint>
 #include <functional>
 #include <limits>
+#include <typeindex>
 #include <utility>
 #include <vector>
 #include <stdexcept>
@@ -48,6 +49,9 @@ namespace Engine {
          * @return true if the component exists; otherwise false.
          */
         [[nodiscard]] virtual bool has(Entity entity) const = 0;
+
+        /** Concrete component type stored by this type-erased pool. */
+        [[nodiscard]] virtual std::type_index componentType() const noexcept = 0;
     };
 
     /**
@@ -148,6 +152,8 @@ namespace Engine {
                    && m_sparse[index] < m_entities.size()
                    && m_entities[m_sparse[index]] == entity;
         }
+
+        [[nodiscard]] std::type_index componentType() const noexcept override { return typeid(T); }
 
         /**
          * @brief Returns a mutable component assigned to an entity.

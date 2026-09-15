@@ -182,6 +182,24 @@ TEST(Registry, DestroyRemovesComponentsAndNoOpDestroyDoesNotChangeRevision) {
     EXPECT_EQ(registry.mutationRevision(), afterDestroy);
 }
 
+TEST(Registry, DestroyPublishesRemovalChangesForEveryPresentComponent) {
+    Engine::Registry registry;
+    const auto entity = registry.create();
+    registry.add<Position>(entity, Position{1});
+    registry.add<Velocity>(entity, Velocity{2});
+    const auto positionRevision = registry.componentRevision<Position>();
+    const auto velocityRevision = registry.componentRevision<Velocity>();
+
+    registry.destroy(entity);
+
+    EXPECT_EQ(registry.componentRevision<Position>(), positionRevision + 1);
+    EXPECT_EQ(registry.componentRevision<Velocity>(), velocityRevision + 1);
+    EXPECT_EQ(registry.componentEntitiesChangedSince<Position>(positionRevision),
+              std::vector<Engine::Entity>{entity});
+    EXPECT_EQ(registry.componentEntitiesChangedSince<Velocity>(velocityRevision),
+              std::vector<Engine::Entity>{entity});
+}
+
 TEST(Registry, EmptyAndMissingComponentViewsDoNotInvokeCallbacks) {
     Engine::Registry registry;
     int invocations = 0;

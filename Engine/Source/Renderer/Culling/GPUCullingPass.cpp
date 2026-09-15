@@ -66,11 +66,6 @@ namespace Engine::Culling
         const std::uint32_t shaderFilter
     ) const
     {
-        if (objectCount == 0)
-        {
-            return;
-        }
-
         vkCmdFillBuffer(
             commandBuffer,
             m_drawCountBuffer,
@@ -78,6 +73,29 @@ namespace Engine::Culling
             sizeof(std::uint32_t),
             0
         );
+
+        if (objectCount == 0)
+        {
+            // The stale indirect commands are harmless only if the count
+            // clear is visible to the subsequent indirect draw.
+            const VkBufferMemoryBarrier2 clearToDrawBarrier{
+                .sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER_2,
+                .srcStageMask = VK_PIPELINE_STAGE_2_TRANSFER_BIT,
+                .srcAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT,
+                .dstStageMask = VK_PIPELINE_STAGE_2_DRAW_INDIRECT_BIT,
+                .dstAccessMask = VK_ACCESS_2_INDIRECT_COMMAND_READ_BIT,
+                .buffer = m_drawCountBuffer,
+                .offset = sizeof(std::uint32_t) * drawSlot,
+                .size = sizeof(std::uint32_t)
+            };
+            const VkDependencyInfo clearToDrawDependency{
+                .sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO,
+                .bufferMemoryBarrierCount = 1,
+                .pBufferMemoryBarriers = &clearToDrawBarrier
+            };
+            vkCmdPipelineBarrier2(commandBuffer, &clearToDrawDependency);
+            return;
+        }
 
         const VkBufferMemoryBarrier2 clearBarrier{
             .sType =
@@ -205,10 +223,29 @@ namespace Engine::Culling
                                       const std::uint32_t objectCount,
                                       const std::uint32_t binCount) const
     {
-        if (objectCount == 0 || binCount == 0)
-            return;
+        if (binCount == 0) return;
         const VkDeviceSize countsSize = static_cast<VkDeviceSize>(binCount) * sizeof(std::uint32_t);
         vkCmdFillBuffer(commandBuffer, m_drawCountBuffer, 0, countsSize, 0);
+
+        if (objectCount == 0) {
+            // No compute dispatch follows, so synchronize the transfer clear
+            // directly with the indirect draws which consume these counts.
+            const VkBufferMemoryBarrier2 clearToDrawBarrier{
+                .sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER_2,
+                .srcStageMask = VK_PIPELINE_STAGE_2_TRANSFER_BIT,
+                .srcAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT,
+                .dstStageMask = VK_PIPELINE_STAGE_2_DRAW_INDIRECT_BIT,
+                .dstAccessMask = VK_ACCESS_2_INDIRECT_COMMAND_READ_BIT,
+                .buffer = m_drawCountBuffer,
+                .offset = 0,
+                .size = countsSize};
+            const VkDependencyInfo clearToDrawDependency{
+                .sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO,
+                .bufferMemoryBarrierCount = 1,
+                .pBufferMemoryBarriers = &clearToDrawBarrier};
+            vkCmdPipelineBarrier2(commandBuffer, &clearToDrawDependency);
+            return;
+        }
 
         const VkBufferMemoryBarrier2 clearBarrier{
             .sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER_2,

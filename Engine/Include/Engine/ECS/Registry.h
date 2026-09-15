@@ -74,6 +74,11 @@ namespace Engine {
                 (has<MeshRendererComponent>(entity) || has<TerrainGrassComponent>(entity));
 
             for (auto &pool: m_componentPools | std::views::values) {
+                if (!pool->has(entity)) continue;
+                // Destroy is a removal from every present component pool. Log
+                // each one before erasing it so incremental observers receive
+                // the same removal event as Registry::remove<T>().
+                static_cast<void>(bumpComponentRevision(pool->componentType(), entity));
                 pool->remove(entity);
             }
             const std::uint32_t index = entityIndex(entity);
@@ -531,17 +536,22 @@ namespace Engine {
 
         template<typename T>
         void bumpComponentRevision(const Entity entity) {
-            const auto type = std::type_index(typeid(T));
-            const auto revision = ++m_componentRevisions[type];
+            const auto revision = bumpComponentRevision(std::type_index(typeid(T)), entity);
             // Keep current-state tracking alongside the sparse set, rather
             // than in a node-based Entity -> revision hash table.
             if (auto* pool = findPool<T>(); pool != nullptr && pool->has(entity)) {
                 pool->setChangeRevision(entity, revision);
             }
+        }
+
+        [[nodiscard]] std::uint64_t bumpComponentRevision(const std::type_index type,
+                                                           const Entity entity) {
+            const auto revision = ++m_componentRevisions[type];
             ComponentChangeLog& log = m_componentChangeLogs[type];
             log.records.push_back({entity, revision});
             if (log.records.size() > MaxComponentChangeLogSize) log.records.pop_front();
             log.firstRevision = log.records.front().revision;
+            return revision;
         }
 
         template<typename Pools>
