@@ -405,10 +405,17 @@ int main(int argc, char** argv) {
         EntityClipboard clipboard;
         Engine::Entity selectedEntity = Engine::NullEntity;
         std::vector<Engine::Entity> selectedEntities;
-        // Water removal changes both the ECS topology and Virtual Water's
-        // persistent GPU state. Apply it only after the frame which captured
-        // the old ImGui viewport descriptor has been submitted.
+        // These operations change ECS topology after ImGui has captured the
+        // viewport descriptor, while the renderer still owns the matching
+        // render snapshot. Apply them only after that frame is submitted.
         std::vector<Engine::Entity> deferredWaterBodyRemovals;
+        std::vector<Engine::Entity> deferredEntityDestructions;
+        const auto deferEntityDestruction = [&](const Engine::Entity entity) {
+            if (entity != Engine::NullEntity &&
+                std::ranges::find(deferredEntityDestructions, entity) == deferredEntityDestructions.end()) {
+                deferredEntityDestructions.push_back(entity);
+            }
+        };
         const auto setSelection = [&](const Engine::Entity entity) {
             selectedEntities.clear();
             if (entity != Engine::NullEntity) selectedEntities.push_back(entity);
@@ -677,7 +684,7 @@ int main(int argc, char** argv) {
             } else if (!playing && hierarchyActionEntity != Engine::NullEntity &&
                        scene.editor().valid(hierarchyActionEntity)) {
                 if (hierarchyAction == HierarchyPanel::Action::Delete) {
-                    scene.editor().destroy(hierarchyActionEntity);
+                    deferEntityDestruction(hierarchyActionEntity);
                     if (selectedEntity == hierarchyActionEntity) {
                         setSelection(Engine::NullEntity);
                     }
@@ -811,7 +818,7 @@ int main(int argc, char** argv) {
             if (!playing && selectedEntity != Engine::NullEntity &&
                 scene.editor().valid(selectedEntity) && !ImGui::GetIO().WantTextInput &&
                 ImGui::IsKeyPressed(ImGuiKey_Delete)) {
-                scene.editor().destroy(selectedEntity);
+                deferEntityDestruction(selectedEntity);
                 setSelection(Engine::NullEntity);
             }
             if (!playing && !ImGui::GetIO().WantTextInput &&
@@ -951,11 +958,18 @@ int main(int argc, char** argv) {
                     renderer.renderFrame();
                 }
             }
-            if (!deferSceneGpuWork && !deferredWaterBodyRemovals.empty()) {
+            if (!deferSceneGpuWork &&
+                (!deferredWaterBodyRemovals.empty() || !deferredEntityDestructions.empty())) {
                 // `renderFrame()` has submitted every command that references
                 // the old render snapshot (including ImGui::Image). Now the
                 // ECS can change and the renderer can atomically rebuild its
                 // render-facing snapshot before the next frame.
+                for (const Engine::Entity entity : deferredEntityDestructions) {
+                    if (scene.editor().valid(entity)) {
+                        scene.editor().destroy(entity);
+                    }
+                }
+                deferredEntityDestructions.clear();
                 for (const Engine::Entity entity : deferredWaterBodyRemovals) {
                     if (!scene.editor().valid(entity) ||
                         !scene.editor().has<Engine::WaterBodyComponent>(entity)) {

@@ -127,10 +127,11 @@ namespace Editor {
                         renderer.castShadow = false;
                     });
                 },
-                [](Engine::ScenePreset& scene, const Engine::Entity entity) {
-                    scene.editor().remove<Engine::WaterBodyComponent>(entity);
-                    if (scene.editor().has<Engine::MeshRenderer>(entity)) scene.editor().remove<Engine::MeshRenderer>(entity);
-                }, {}});
+                // Water removal is owned by ComponentsPanel's post-submit
+                // deferred path.  Do not expose an immediate descriptor
+                // callback: it could desynchronise Virtual Water's GPU state
+                // from the ECS snapshot used by the current render frame.
+                {}, {}});
             registry.registerComponent({
                 "Wind", "Environment", "Provides the scene-wide wind source.", true, true,
                 [](Engine::ScenePreset& scene, Engine::Entity entity) {
