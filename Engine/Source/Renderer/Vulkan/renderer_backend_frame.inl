@@ -261,9 +261,6 @@
             // Steady frames keep the much cheaper normal budget.
             const Vec3 currentCameraPosition = cameraController.camera()->position();
             const Vec3 currentCameraForward = cameraController.camera()->forward();
-            // Keep ocean clipmap geometry camera-local while its Gerstner
-            // phase remains world-anchored in the water shader.
-            WaterSystem{}.updateOceans(registry, currentCameraPosition);
             const Mat4 currentView = cameraController.camera()->viewMatrix();
             const Mat4 currentProjection = cameraController.camera()->projectionMatrix();
             constexpr float cameraCutDistance = 5.0F;
@@ -1931,9 +1928,12 @@
             // Both paths retain the Scene View result until the camera, scene,
             // viewport, or explicit editor state requests a redraw. The direct
             // path uses a pass whose input and output layouts are sampled.
+            // Water animation is time-dependent, therefore a cached Scene
+            // View cannot remain valid while virtual water is active.
             sceneViewportRendered = sceneViewportActive &&
                 (sceneViewportNeedsRender || sceneCameraChanged ||
-                 scene.mutationRevision() != sceneViewportRenderedRevision);
+                 scene.mutationRevision() != sceneViewportRenderedRevision ||
+                 sceneVirtualWaterRenderer.active());
             const bool renderGameViewport = !editorUiActive || !sceneViewportActive;
             if (renderGameViewport != gameShadowContextActive) {
                 shadowPass.invalidateCache();

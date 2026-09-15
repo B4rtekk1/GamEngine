@@ -301,22 +301,6 @@ namespace Engine {
                          : buildRiver(water);
     }
 
-    void WaterSystem::updateOceans(Registry &registry, const Vec3 &cameraPosition) const {
-        registry.view<WaterBodyComponent, TransformComponent>(
-            [&](const Entity entity, const WaterBodyComponent &water, const TransformComponent &) {
-                if (water.type != WaterBodyType::Ocean) return;
-                constexpr float finestCell = (2.0F * Water::OceanExtents[0]) / Water::ClipmapResolution;
-                const float snappedX = std::floor(cameraPosition.x() / finestCell) * finestCell;
-                const float snappedZ = std::floor(cameraPosition.z() / finestCell) * finestCell;
-                const TransformComponent &transform = registry.get<TransformComponent>(entity);
-                if (transform.position.x() == snappedX && transform.position.z() == snappedZ) return;
-                registry.modify<TransformComponent>(entity, [&](TransformComponent &transform) {
-                    transform.position.setX(snappedX);
-                    transform.position.setZ(snappedZ);
-                });
-            });
-    }
-
     std::optional<WaterQueryResult> WaterSystem::query(Registry& registry, const Vec3& worldPosition,
                                                        const float time) {
         std::optional<WaterQueryResult> best;

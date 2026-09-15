@@ -27,9 +27,6 @@ namespace Engine {
         /** Editor-safe rebuild path; preserves Scene's Registry encapsulation. */
         void rebuild(SceneEditor& editor, Entity entity) const;
 
-        /** Snaps every ocean's transform to the active camera in XZ. */
-        void updateOceans(Registry& registry, const Vec3& cameraPosition) const;
-
         /**
          * Analytic gameplay/physics query independent of render-page residency.
          * Returns the highest matching water surface at @p worldPosition.
