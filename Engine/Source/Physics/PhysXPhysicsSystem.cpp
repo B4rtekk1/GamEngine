@@ -32,9 +32,9 @@ namespace Engine {
         constexpr float RadiansToDegrees = 57.295779513082320876F;
         constexpr float MinimumDimension = 1.0e-4F;
         constexpr physx::PxU32 PhysXVersion =
-            (static_cast<physx::PxU32>(PX_PHYSICS_VERSION_MAJOR) << 24U) +
-            (static_cast<physx::PxU32>(PX_PHYSICS_VERSION_MINOR) << 16U) +
-            (static_cast<physx::PxU32>(PX_PHYSICS_VERSION_BUGFIX) << 8U);
+                (static_cast<physx::PxU32>(PX_PHYSICS_VERSION_MAJOR) << 24U) +
+                (static_cast<physx::PxU32>(PX_PHYSICS_VERSION_MINOR) << 16U) +
+                (static_cast<physx::PxU32>(PX_PHYSICS_VERSION_BUGFIX) << 8U);
 
         physx::PxVec3 toPhysX(const Vec3 &value) noexcept {
             return {value.x(), value.y(), value.z()};
@@ -51,54 +51,66 @@ namespace Engine {
             float radius{};
         };
 
-        void trampleTerrainGrass(Registry& registry, const float deltaTime) {
+        void trampleTerrainGrass(Registry &registry, const float deltaTime) {
             std::vector<GrassSphere> spheres;
             registry.view<Transform, ColliderComponent>(
-                [&](const Entity entity, const Transform&, const ColliderComponent& collider) {
+                [&](const Entity entity, const Transform &, const ColliderComponent &collider) {
                     const Transform transform = TransformSystem::worldTransform(registry, entity);
-                    const glm::vec3 center = glm::vec3{transform.matrix().native() *
-                        glm::vec4{collider.offset.native(), 1.0F}};
-                    const float scale = std::max({std::abs(transform.scale.x()),
-                                                  std::abs(transform.scale.y()),
-                                                  std::abs(transform.scale.z())});
+                    const glm::vec3 center = glm::vec3{
+                        transform.matrix().native() *
+                        glm::vec4{collider.offset.native(), 1.0F}
+                    };
+                    const float scale = std::max({
+                        std::abs(transform.scale.x()),
+                        std::abs(transform.scale.y()),
+                        std::abs(transform.scale.z()),
+                    });
                     const Vec3 velocity = registry.has<RigidbodyState>(entity)
-                        ? registry.get<RigidbodyState>(entity).linearVelocity : Vec3{};
+                                              ? registry.get<RigidbodyState>(entity).linearVelocity
+                                              : Vec3{};
                     // Treat every collider as a conservative horizontal
                     // interaction volume.  This keeps the inexpensive spatial
                     // hash path while allowing the common player capsule,
                     // boxes, ramps and mesh-backed props to affect grass.
                     float localRadius = 0.0F;
-                    if (const auto* sphere = std::get_if<SphereCollider>(&collider.shape)) {
+                    if (const auto *sphere = std::get_if<SphereCollider>(&collider.shape)) {
                         localRadius = sphere->radius;
-                    } else if (const auto* capsule = std::get_if<CapsuleCollider>(&collider.shape)) {
+                    } else if (const auto *capsule = std::get_if<CapsuleCollider>(&collider.shape)) {
                         localRadius = std::max(capsule->radius, capsule->height * 0.5F);
-                    } else if (const auto* box = std::get_if<BoxCollider>(&collider.shape)) {
+                    } else if (const auto *box = std::get_if<BoxCollider>(&collider.shape)) {
                         localRadius = std::hypot(box->halfExtents.x(), box->halfExtents.z());
-                    } else if (const auto* ramp = std::get_if<RampCollider>(&collider.shape)) {
+                    } else if (const auto *ramp = std::get_if<RampCollider>(&collider.shape)) {
                         localRadius = std::hypot(ramp->halfExtents.x(), ramp->halfExtents.z());
-                    } else if (const auto* mesh = std::get_if<MeshCollider>(&collider.shape)) {
+                    } else if (const auto *mesh = std::get_if<MeshCollider>(&collider.shape)) {
                         // MeshCollider has no cheap primitive bounds in this
                         // system; use its transform scale as a conservative
                         // contact radius until mesh overlap is GPU-driven.
-                        (void)mesh;
+                        (void) mesh;
                         localRadius = 0.5F;
                     }
-                    if (localRadius <= 0.0F) return;
+                    if (localRadius <= 0.0F) {
+                        return;
+                    }
                     spheres.push_back({entity, Vec3{center}, velocity, localRadius * scale});
                 });
-            if (spheres.empty()) return;
+            if (spheres.empty()) {
+                return;
+            }
             std::vector<float> grassCoverage(spheres.size());
 
             std::vector<Entity> changedTerrains;
             registry.view<Transform, TerrainGrassComponent>(
-                [&](const Entity entity, const Transform&, TerrainGrassComponent& grass) {
-                    if (grass.instances.empty()) return;
+                [&](const Entity entity, const Transform &, TerrainGrassComponent &grass) {
+                    if (grass.instances.empty()) {
+                        return;
+                    }
                     const Transform terrainTransform = TransformSystem::worldTransform(registry, entity);
                     grass.rebuildSpatialIndex();
                     const glm::mat4 terrainMatrix = terrainTransform.matrix().native();
                     const glm::mat4 inverseTerrain = glm::inverse(terrainMatrix);
                     const float terrainScale = std::max(0.001F, std::min(
-                        std::abs(terrainTransform.scale.x()), std::abs(terrainTransform.scale.z())));
+                                                            std::abs(terrainTransform.scale.x()),
+                                                            std::abs(terrainTransform.scale.z())));
                     bool changed = false;
 
                     // Recover only blades which were previously pressed.  The
@@ -108,14 +120,17 @@ namespace Engine {
                     constexpr float recoveryPerSecond = 0.75F;
                     const float recovery = std::exp(-recoveryPerSecond * deltaTime);
                     std::size_t recoveredCount = 0;
-                    for (const std::size_t index : grass.recoveringInstances) {
-                        if (index >= grass.instances.size()) continue;
-                        auto& instance = grass.instances[index];
+                    for (const std::size_t index: grass.recoveringInstances) {
+                        if (index >= grass.instances.size()) {
+                            continue;
+                        }
+                        auto &instance = grass.instances[index];
                         instance.trampled *= recovery;
                         if (instance.trampled <= 0.01F) {
                             instance.trampled = 0.0F;
-                            if (index < grass.recoveringInstanceMarks.size())
+                            if (index < grass.recoveringInstanceMarks.size()) {
                                 grass.recoveringInstanceMarks[index] = 0;
+                            }
                         } else {
                             grass.recoveringInstances[recoveredCount++] = index;
                         }
@@ -125,10 +140,14 @@ namespace Engine {
                     grass.recoveringInstances.resize(recoveredCount);
 
                     for (std::size_t sphereIndex = 0; sphereIndex < spheres.size(); ++sphereIndex) {
-                        const GrassSphere& sphere = spheres[sphereIndex];
+                        const GrassSphere &sphere = spheres[sphereIndex];
                         constexpr float grassReach = 0.45F;
-                        const Vec3 localCenter{glm::vec3{inverseTerrain *
-                            glm::vec4{sphere.center.native(), 1.0F}}};
+                        const Vec3 localCenter{
+                            glm::vec3{
+                                inverseTerrain *
+                                glm::vec4{sphere.center.native(), 1.0F}
+                            }
+                        };
                         const float localRadius = (sphere.radius + grassReach) / terrainScale;
                         const auto minimumX = static_cast<std::int32_t>(std::floor(
                             (localCenter.x() - localRadius) / TerrainGrassComponent::SpatialCellSize));
@@ -138,18 +157,26 @@ namespace Engine {
                             (localCenter.z() - localRadius) / TerrainGrassComponent::SpatialCellSize));
                         const auto maximumZ = static_cast<std::int32_t>(std::floor(
                             (localCenter.z() + localRadius) / TerrainGrassComponent::SpatialCellSize));
-                        const glm::vec3 localVelocity = glm::vec3{inverseTerrain *
-                            glm::vec4{sphere.velocity.native(), 0.0F}};
+                        const glm::vec3 localVelocity = glm::vec3{
+                            inverseTerrain *
+                            glm::vec4{sphere.velocity.native(), 0.0F}
+                        };
                         const float localSpeed = std::hypot(localVelocity.x, localVelocity.z);
                         for (std::int32_t cellX = minimumX; cellX <= maximumX; ++cellX) {
                             for (std::int32_t cellZ = minimumZ; cellZ <= maximumZ; ++cellZ) {
                                 const auto cell = grass.spatialCells.find(
                                     TerrainGrassComponent::spatialKey(cellX, cellZ));
-                                if (cell == grass.spatialCells.end()) continue;
-                                for (const std::size_t index : cell->second) {
-                                    auto& instance = grass.instances[index];
-                                    const Vec3 worldPosition{glm::vec3{terrainMatrix *
-                                        glm::vec4{instance.position.native(), 1.0F}}};
+                                if (cell == grass.spatialCells.end()) {
+                                    continue;
+                                }
+                                for (const std::size_t index: cell->second) {
+                                    auto &instance = grass.instances[index];
+                                    const Vec3 worldPosition{
+                                        glm::vec3{
+                                            terrainMatrix *
+                                            glm::vec4{instance.position.native(), 1.0F}
+                                        }
+                                    };
                                     const float influence = sphere.radius + grassReach;
                                     const Vec3 delta = worldPosition - sphere.center;
                                     const float horizontalDistance = std::hypot(delta.x(), delta.z());
@@ -157,17 +184,23 @@ namespace Engine {
                                     // the terrain. This prevents objects high
                                     // above the grass from creating a footprint.
                                     const float footprintSquared = influence * influence - delta.y() * delta.y();
-                                    if (footprintSquared <= 0.0F) continue;
+                                    if (footprintSquared <= 0.0F) {
+                                        continue;
+                                    }
                                     const float footprintRadius = std::sqrt(footprintSquared);
-                                    if (horizontalDistance >= footprintRadius) continue;
+                                    if (horizontalDistance >= footprintRadius) {
+                                        continue;
+                                    }
                                     const float target = std::clamp(
                                         (1.0F - horizontalDistance / footprintRadius) * 1.35F, 0.0F, 1.0F);
                                     grassCoverage[sphereIndex] += target;
 
                                     float directionX = localSpeed > 1.0e-4F
-                                        ? localVelocity.x : instance.position.x() - localCenter.x();
+                                                           ? localVelocity.x
+                                                           : instance.position.x() - localCenter.x();
                                     float directionZ = localSpeed > 1.0e-4F
-                                        ? localVelocity.z : instance.position.z() - localCenter.z();
+                                                           ? localVelocity.z
+                                                           : instance.position.z() - localCenter.z();
                                     float directionLength = std::hypot(directionX, directionZ);
                                     if (directionLength < 1.0e-4F) {
                                         directionX = 1.0F;
@@ -196,25 +229,36 @@ namespace Engine {
                             }
                         }
                     }
-                    if (changed) changedTerrains.push_back(entity);
+                    if (changed) {
+                        changedTerrains.push_back(entity);
+                    }
                 });
-            for (const Entity entity : changedTerrains)
+            for (const Entity entity: changedTerrains) {
                 registry.markChanged<TerrainGrassComponent>(entity);
+            }
 
             // Grass applies rolling resistance only in the horizontal plane:
             // falling, jumping, and gravity must retain their normal response.
             constexpr float grassDragPerSecond = 1.2F;
             for (std::size_t i = 0; i < spheres.size(); ++i) {
                 const float coverage = std::min(grassCoverage[i], 1.0F);
-                if (coverage <= 0.0F || !registry.has<RigidbodyComponent>(spheres[i].entity)) continue;
-                if (!registry.has<RigidbodyState>(spheres[i].entity)) continue;
-                auto& state = registry.get<RigidbodyState>(spheres[i].entity);
+                if (coverage <= 0.0F || !registry.has<RigidbodyComponent>(spheres[i].entity)) {
+                    continue;
+                }
+                if (!registry.has<RigidbodyState>(spheres[i].entity)) {
+                    continue;
+                }
+                auto &state = registry.get<RigidbodyState>(spheres[i].entity);
                 const float damping = std::exp(-grassDragPerSecond * coverage * deltaTime);
-                if (!registry.has<PhysicsCommandBuffer>(spheres[i].entity))
+                if (!registry.has<PhysicsCommandBuffer>(spheres[i].entity)) {
                     registry.add<PhysicsCommandBuffer>(spheres[i].entity);
-                registry.modify<PhysicsCommandBuffer>(spheres[i].entity, [&](auto& commands) {
-                    Vec3 velocity = state.linearVelocity; velocity.setX(velocity.x() * damping); velocity.setZ(velocity.z() * damping);
-                    commands.linearVelocity = velocity; commands.angularVelocity = state.angularVelocity * damping;
+                }
+                registry.modify<PhysicsCommandBuffer>(spheres[i].entity, [&](auto &commands) {
+                    Vec3 velocity = state.linearVelocity;
+                    velocity.setX(velocity.x() * damping);
+                    velocity.setZ(velocity.z() * damping);
+                    commands.linearVelocity = velocity;
+                    commands.angularVelocity = state.angularVelocity * damping;
                 });
             }
         }
@@ -278,9 +322,10 @@ namespace Engine {
         /** Bridges PhysX task submission into the engine-wide CPU pool. */
         class PhysicsDispatcher final : public physx::PxCpuDispatcher {
         public:
-            explicit PhysicsDispatcher(TaskScheduler& scheduler) : scheduler_(scheduler) {}
+            explicit PhysicsDispatcher(TaskScheduler &scheduler) : scheduler_(scheduler) {
+            }
 
-            void submitTask(physx::PxBaseTask& task) override {
+            void submitTask(physx::PxBaseTask &task) override {
                 static_cast<void>(scheduler_.schedule([&task] {
                     try {
                         task.run();
@@ -297,7 +342,7 @@ namespace Engine {
             }
 
         private:
-            TaskScheduler& scheduler_;
+            TaskScheduler &scheduler_;
         };
     } // namespace
 
@@ -311,22 +356,22 @@ namespace Engine {
         };
 
         struct CookedMeshKey final {
-            const Mesh* mesh{};
+            const Mesh *mesh{};
             std::uint64_t revision{};
             Vec3 scale{};
 
-            [[nodiscard]] bool operator==(const CookedMeshKey& other) const noexcept {
+            [[nodiscard]] bool operator==(const CookedMeshKey &other) const noexcept {
                 return mesh == other.mesh && revision == other.revision && scale.x() == other.scale.x() &&
                        scale.y() == other.scale.y() && scale.z() == other.scale.z();
             }
         };
 
         struct CookedMeshKeyHash final {
-            [[nodiscard]] std::size_t operator()(const CookedMeshKey& key) const noexcept {
+            [[nodiscard]] std::size_t operator()(const CookedMeshKey &key) const noexcept {
                 const auto combine = [](std::size_t seed, const std::size_t value) {
                     return seed ^ (value + 0x9e3779b9U + (seed << 6U) + (seed >> 2U));
                 };
-                std::size_t result = std::hash<const Mesh*>{}(key.mesh);
+                std::size_t result = std::hash<const Mesh *>{}(key.mesh);
                 result = combine(result, std::hash<std::uint64_t>{}(key.revision));
                 result = combine(result, std::hash<float>{}(key.scale.x()));
                 result = combine(result, std::hash<float>{}(key.scale.y()));
@@ -346,8 +391,8 @@ namespace Engine {
         std::uint64_t colliderRevision{};
         std::uint64_t rigidbodyRevision{};
         std::unordered_map<Entity, ActorRecord> actors;
-        std::unordered_map<CookedMeshKey, physx::PxConvexMesh*, CookedMeshKeyHash> convexMeshes;
-        std::unordered_map<CookedMeshKey, physx::PxTriangleMesh*, CookedMeshKeyHash> triangleMeshes;
+        std::unordered_map<CookedMeshKey, physx::PxConvexMesh *, CookedMeshKeyHash> convexMeshes;
+        std::unordered_map<CookedMeshKey, physx::PxTriangleMesh *, CookedMeshKeyHash> triangleMeshes;
 
         BroadPhaseCache() {
             using namespace physx;
@@ -424,12 +469,16 @@ namespace Engine {
         }
 
         void releaseCookedMeshes() noexcept {
-            for (const auto& mesh : convexMeshes | std::views::values) {
-                if (mesh != nullptr) mesh->release();
+            for (const auto &mesh: convexMeshes | std::views::values) {
+                if (mesh != nullptr) {
+                    mesh->release();
+                }
             }
             convexMeshes.clear();
-            for (const auto& mesh : triangleMeshes | std::views::values) {
-                if (mesh != nullptr) mesh->release();
+            for (const auto &mesh: triangleMeshes | std::views::values) {
+                if (mesh != nullptr) {
+                    mesh->release();
+                }
             }
             triangleMeshes.clear();
         }
@@ -442,10 +491,10 @@ namespace Engine {
         }
 
         static physx::PxShape *attachGeometry(physx::PxRigidActor &actor,
-                                       const physx::PxGeometry &geometry,
-                                       const physx::PxMaterial &material,
-                                       const physx::PxTransform &localPose,
-                                       const bool trigger) {
+                                              const physx::PxGeometry &geometry,
+                                              const physx::PxMaterial &material,
+                                              const physx::PxTransform &localPose,
+                                              const bool trigger) {
             physx::PxShape *shape = physx::PxRigidActorExt::createExclusiveShape(
                 actor, geometry, material);
             if (shape == nullptr) {
@@ -506,35 +555,39 @@ namespace Engine {
             return physics->createTriangleMesh(input);
         }
 
-        physx::PxConvexMesh* cachedConvexMesh(const Mesh& mesh, const Vec3& scale) {
-            const CookedMeshKey key{&mesh, mesh.geometryRevision, scale};
+        physx::PxConvexMesh *cachedConvexMesh(const Mesh &mesh, const Vec3 &scale) {
+            const CookedMeshKey key{.mesh = &mesh, .revision = mesh.geometryRevision, .scale = scale};
             if (const auto existing = convexMeshes.find(key); existing != convexMeshes.end()) {
                 return existing->second;
             }
             std::vector<physx::PxVec3> points;
             points.reserve(mesh.vertices.size());
-            for (const Vertex& vertex : mesh.vertices) {
+            for (const Vertex &vertex: mesh.vertices) {
                 points.emplace_back(vertex.position.x() * scale.x(), vertex.position.y() * scale.y(),
                                     vertex.position.z() * scale.z());
             }
-            physx::PxConvexMesh* cooked = cookConvex(points);
-            if (cooked != nullptr) convexMeshes.emplace(key, cooked);
+            physx::PxConvexMesh *cooked = cookConvex(points);
+            if (cooked != nullptr) {
+                convexMeshes.emplace(key, cooked);
+            }
             return cooked;
         }
 
-        physx::PxTriangleMesh* cachedTriangleMesh(const Mesh& mesh, const Vec3& scale) {
+        physx::PxTriangleMesh *cachedTriangleMesh(const Mesh &mesh, const Vec3 &scale) {
             const CookedMeshKey key{&mesh, mesh.geometryRevision, scale};
             if (const auto existing = triangleMeshes.find(key); existing != triangleMeshes.end()) {
                 return existing->second;
             }
-            physx::PxTriangleMesh* cooked = cookTriangleMesh(mesh, scale);
-            if (cooked != nullptr) triangleMeshes.emplace(key, cooked);
+            physx::PxTriangleMesh *cooked = cookTriangleMesh(mesh, scale);
+            if (cooked != nullptr) {
+                triangleMeshes.emplace(key, cooked);
+            }
             return cooked;
         }
 
         static bool attachBoundsFallback(physx::PxRigidActor &actor, const Mesh &mesh,
-                                  const Vec3 &scale, const ColliderComponent &collider,
-                                  physx::PxMaterial &material) {
+                                         const Vec3 &scale, const ColliderComponent &collider,
+                                         physx::PxMaterial &material) {
             if (mesh.vertices.empty()) {
                 return false;
             }
@@ -660,8 +713,8 @@ namespace Engine {
             return attached;
         }
 
-        static void configureRigidBody(physx::PxRigidDynamic& rigid,
-                                       const RigidbodyComponent& body) {
+        static void configureRigidBody(physx::PxRigidDynamic &rigid,
+                                       const RigidbodyComponent &body) {
             using namespace physx;
             rigid.setRigidBodyFlag(PxRigidBodyFlag::eKINEMATIC,
                                    body.type == RigidbodyType::Kinematic);
@@ -711,7 +764,7 @@ namespace Engine {
             if (actor == nullptr) {
                 throw std::runtime_error("PhysX rigid actor creation failed");
             }
-            actor->userData = reinterpret_cast<void*>(static_cast<std::uintptr_t>(entity));
+            actor->userData = reinterpret_cast<void *>(static_cast<std::uintptr_t>(entity));
             if (owner.has<ColliderComponent>(entity)) {
                 const ColliderComponent &collider = owner.get<ColliderComponent>(entity);
                 if (!attachCollider(*actor, collider, transform, dynamic)) {
@@ -752,12 +805,16 @@ namespace Engine {
 
         void removeActor(const Entity entity) noexcept {
             const auto record = actors.find(entity);
-            if (record == actors.end()) return;
-            if (record->second.actor != nullptr) record->second.actor->release();
+            if (record == actors.end()) {
+                return;
+            }
+            if (record->second.actor != nullptr) {
+                record->second.actor->release();
+            }
             actors.erase(record);
         }
 
-        void synchronizeActor(Registry& owner, const Entity entity) {
+        void synchronizeActor(Registry &owner, const Entity entity) {
             if (!owner.valid(entity) || !owner.has<Transform>(entity) ||
                 (!owner.has<ColliderComponent>(entity) && !owner.has<RigidbodyComponent>(entity))) {
                 removeActor(entity);
@@ -768,19 +825,23 @@ namespace Engine {
             actors.emplace(entity, createActor(entity, owner, world));
         }
 
-        void reconcileStructure(Registry& owner) {
+        void reconcileStructure(Registry &owner) {
             std::vector<Entity> stale;
             stale.reserve(actors.size());
-            for (const auto& [entity, record] : actors) {
+            for (const auto &[entity, record]: actors) {
                 if (!owner.valid(entity) || !owner.has<Transform>(entity) ||
                     (!owner.has<ColliderComponent>(entity) && !owner.has<RigidbodyComponent>(entity))) {
                     stale.push_back(entity);
                 }
             }
-            for (const Entity entity : stale) removeActor(entity);
-            owner.view<Transform>([&](const Entity entity, Transform&) {
+            for (const Entity entity: stale) {
+                removeActor(entity);
+            }
+            owner.view<Transform>([&](const Entity entity, Transform &) {
                 if (actors.contains(entity) ||
-                    (!owner.has<ColliderComponent>(entity) && !owner.has<RigidbodyComponent>(entity))) return;
+                    (!owner.has<ColliderComponent>(entity) && !owner.has<RigidbodyComponent>(entity))) {
+                    return;
+                }
                 Transform world = TransformSystem::worldTransform(owner, entity);
                 actors.emplace(entity, createActor(entity, owner, world));
             });
@@ -797,28 +858,28 @@ namespace Engine {
                 structuralRevision = owner.structuralRevision();
             }
             if (colliderRevision != owner.componentRevision<ColliderComponent>()) {
-                for (const Entity entity : owner.componentEntitiesChangedSince<ColliderComponent>(colliderRevision)) {
+                for (const Entity entity: owner.componentEntitiesChangedSince<ColliderComponent>(colliderRevision)) {
                     synchronizeActor(owner, entity);
                 }
                 colliderRevision = owner.componentRevision<ColliderComponent>();
             }
             if (rigidbodyRevision != owner.componentRevision<RigidbodyComponent>()) {
-                for (const Entity entity : owner.componentEntitiesChangedSince<RigidbodyComponent>(rigidbodyRevision)) {
+                for (const Entity entity: owner.componentEntitiesChangedSince<RigidbodyComponent>(rigidbodyRevision)) {
                     const auto record = actors.find(entity);
                     if (!owner.valid(entity) || !owner.has<RigidbodyComponent>(entity) ||
                         record == actors.end() ||
                         record->second.bodyType != owner.get<RigidbodyComponent>(entity).type) {
                         synchronizeActor(owner, entity);
                     } else if (record->second.bodyType != RigidbodyType::Static) {
-                        const RigidbodyComponent& body = owner.get<RigidbodyComponent>(entity);
-                        configureRigidBody(*static_cast<physx::PxRigidDynamic*>(record->second.actor), body);
+                        const RigidbodyComponent &body = owner.get<RigidbodyComponent>(entity);
+                        configureRigidBody(*static_cast<physx::PxRigidDynamic *>(record->second.actor), body);
                     }
                 }
                 rigidbodyRevision = owner.componentRevision<RigidbodyComponent>();
             }
 
             std::vector<Entity> scaleChanged;
-            for (const auto& [entity, record] : actors) {
+            for (const auto &[entity, record]: actors) {
                 const Vec3 currentScale = record.bodyType == RigidbodyType::Dynamic
                                               ? owner.get<Transform>(entity).scale
                                               : TransformSystem::worldTransform(owner, entity).scale;
@@ -826,7 +887,9 @@ namespace Engine {
                     scaleChanged.push_back(entity);
                 }
             }
-            for (const Entity entity : scaleChanged) synchronizeActor(owner, entity);
+            for (const Entity entity: scaleChanged) {
+                synchronizeActor(owner, entity);
+            }
         }
 
         void pushEcsState(Registry &owner) {
@@ -849,24 +912,41 @@ namespace Engine {
                     rigid.setKinematicTarget(toPhysX(transform));
                     record.lastTransform = transform;
                 }
-                PhysicsCommandBuffer* commands = owner.has<PhysicsCommandBuffer>(entity)
-                    ? &owner.get<PhysicsCommandBuffer>(entity) : nullptr;
+                PhysicsCommandBuffer *commands = owner.has<PhysicsCommandBuffer>(entity)
+                                                     ? &owner.get<PhysicsCommandBuffer>(entity)
+                                                     : nullptr;
                 if (body.type == RigidbodyType::Dynamic && commands != nullptr &&
                     (commands->teleportPosition.has_value() || commands->teleportRotation.has_value())) {
                     PxTransform pose = rigid.getGlobalPose();
-                    if (commands->teleportPosition) pose.p = toPhysX(*commands->teleportPosition);
+                    if (commands->teleportPosition) {
+                        pose.p = toPhysX(*commands->teleportPosition);
+                    }
                     if (commands->teleportRotation) {
                         pose.q = toPhysX(transformRotation(Transform{.rotation = *commands->teleportRotation}));
                     }
                     rigid.setGlobalPose(pose, true);
                 }
                 if (body.type == RigidbodyType::Dynamic && commands != nullptr) {
-                    if (commands->linearVelocity) rigid.setLinearVelocity(toPhysX(*commands->linearVelocity));
-                    if (commands->angularVelocity) rigid.setAngularVelocity(toPhysX(*commands->angularVelocity * DegreesToRadians));
-                    if (nonZero(commands->force)) rigid.addForce(toPhysX(commands->force), PxForceMode::eFORCE);
-                    if (nonZero(commands->torque)) rigid.addTorque(toPhysX(commands->torque), PxForceMode::eFORCE);
-                    if (nonZero(commands->impulse)) rigid.addForce(toPhysX(commands->impulse), PxForceMode::eIMPULSE);
-                    if (nonZero(commands->angularImpulse)) rigid.addTorque(toPhysX(commands->angularImpulse), PxForceMode::eIMPULSE);
+                    if (commands->linearVelocity) {
+                        rigid.setLinearVelocity(toPhysX(*commands->linearVelocity));
+                    }
+                    if (commands->angularVelocity) {
+                        rigid.setAngularVelocity(
+                            toPhysX(*commands->angularVelocity * DegreesToRadians));
+                    }
+                    if (nonZero(commands->force)) {
+                        rigid.addForce(toPhysX(commands->force), PxForceMode::eFORCE);
+                    }
+                    if (nonZero(commands->torque)) {
+                        rigid.addTorque(toPhysX(commands->torque), PxForceMode::eFORCE);
+                    }
+                    if (nonZero(commands->impulse)) {
+                        rigid.addForce(toPhysX(commands->impulse), PxForceMode::eIMPULSE);
+                    }
+                    if (nonZero(commands->angularImpulse)) {
+                        rigid.addTorque(
+                            toPhysX(commands->angularImpulse), PxForceMode::eIMPULSE);
+                    }
                     commands->clear();
                 }
             }
@@ -874,16 +954,16 @@ namespace Engine {
 
         void pullPhysXState(Registry &owner) {
             physx::PxU32 activeCount = 0;
-            physx::PxActor** activeActors = physicsScene->getActiveActors(activeCount);
+            physx::PxActor **activeActors = physicsScene->getActiveActors(activeCount);
             for (physx::PxU32 index = 0; index < activeCount; ++index) {
                 const auto entity = entityForActor(
-                    static_cast<physx::PxRigidActor*>(activeActors[index]));
+                    static_cast<physx::PxRigidActor *>(activeActors[index]));
                 if (!entity || !owner.valid(*entity) || !owner.has<RigidbodyComponent>(*entity)) {
                     continue;
                 }
                 const auto recordIt = actors.find(*entity);
                 if (recordIt == actors.end() || recordIt->second.actor != activeActors[index]) continue;
-                ActorRecord& record = recordIt->second;
+                ActorRecord &record = recordIt->second;
                 auto &body = owner.get<RigidbodyComponent>(*entity);
                 if (body.type != RigidbodyType::Dynamic) {
                     continue;
@@ -894,7 +974,7 @@ namespace Engine {
                 transform.position = fromPhysX(pose.p);
                 transform.rotation = eulerDegrees(fromPhysX(pose.q).normalized());
                 if (!owner.has<RigidbodyState>(*entity)) owner.add<RigidbodyState>(*entity);
-                auto& state = owner.get<RigidbodyState>(*entity);
+                auto &state = owner.get<RigidbodyState>(*entity);
                 state.linearVelocity = fromPhysX(rigid.getLinearVelocity());
                 state.angularVelocity = fromPhysX(rigid.getAngularVelocity()) * RadiansToDegrees;
                 if (body.fixedRotation) state.angularVelocity = {};

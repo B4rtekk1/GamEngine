@@ -77,8 +77,10 @@
 
             hiZValid = false;
             const auto objectCount = static_cast<uint32_t>(instanceBatches.size());
-            const auto grassInstanceCount = static_cast<uint32_t>(sceneGpu.grassInstances.size());
-            if (objectCount == 0 && grassInstanceCount == 0) return;
+            // An empty ECS scene still renders the sky, editor UI, and fallback
+            // camera.  Keep the per-view UBOs and descriptor-backed culling
+            // resources alive with inert storage entries; logical draw counts
+            // below remain zero when there are no renderables.
             // Generic descriptors remain valid in a grass-only scene, but
             // their backing allocations need one inert element. Their draw
             // counts stay zero because objectCount itself remains zero.
