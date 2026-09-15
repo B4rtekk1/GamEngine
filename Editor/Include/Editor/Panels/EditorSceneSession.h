@@ -14,7 +14,7 @@ class EditorSceneSession final {
 public:
     /** Sets the root directory used for generated project files. */
     static void setProjectRoot(std::filesystem::path path);
-    /** Sets the project startup scene used by the Save and Load menu actions. */
+    /** Selects the scene used by Save and Load actions. An empty path clears the selection. */
     static void setScenePath(std::filesystem::path path);
     [[nodiscard]] static std::filesystem::path scenePath();
     [[nodiscard]] static bool hasSavedScene();

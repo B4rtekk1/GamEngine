@@ -377,7 +377,11 @@ int main(int argc, char** argv) {
                                       ? previousSession.scenePath
                                       : project.startupScene();
         const bool loadInitialSceneAsync = std::filesystem::is_regular_file(initialScene);
-        EditorSceneSession::setScenePath(initialScene);
+        if (loadInitialSceneAsync) {
+            EditorSceneSession::setScenePath(initialScene);
+        } else {
+            EditorSceneSession::clearSavedScene();
+        }
         Engine::ScriptSystem scriptSystem{Engine::ScriptRegistry::instance()};
         Engine::PhysicsSystem physicsSystem{};
         // The editor is the visual authoring path, so shadows must be active

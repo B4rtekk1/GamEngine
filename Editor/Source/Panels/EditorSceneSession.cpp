@@ -27,6 +27,10 @@ namespace {
 std::filesystem::path activeScenePath;
 std::filesystem::path activeProjectRoot;
 bool sceneHasBeenSaved = false;
+
+std::filesystem::path defaultSceneDirectory() {
+    return activeProjectRoot / "Assets" / "Scenes";
+}
 }
 
 void EditorSceneSession::setProjectRoot(std::filesystem::path path) {
@@ -36,11 +40,10 @@ void EditorSceneSession::setProjectRoot(std::filesystem::path path) {
 /**
  * @brief Returns the path of the scene used by the editor session.
  *
- * @return The active project's default `Assets/Scenes/Editor.scene` path.
+ * @return The active scene path, or an empty path when no scene is selected.
  */
 std::filesystem::path EditorSceneSession::scenePath() {
-    if (!activeScenePath.empty()) return activeScenePath;
-    return activeProjectRoot / "Assets" / "Scenes" / "Editor.scene";
+    return activeScenePath;
 }
 
 void EditorSceneSession::setScenePath(std::filesystem::path path) {
@@ -58,11 +61,16 @@ bool EditorSceneSession::hasSavedScene() {
 std::optional<std::filesystem::path> EditorSceneSession::chooseSaveScenePath() {
 #ifdef _WIN32
     std::array<wchar_t, 32768> selectedPath{};
-    const std::wstring initialFilename = scenePath().filename().wstring();
+    const std::filesystem::path currentPath = scenePath();
+    const std::wstring initialFilename = currentPath.empty()
+                                           ? L"Untitled.scene"
+                                           : currentPath.filename().wstring();
     const std::size_t copyLength = std::min(initialFilename.size(), selectedPath.size() - 1);
     std::copy_n(initialFilename.begin(), copyLength, selectedPath.begin());
 
-    const std::filesystem::path initialDirectory = scenePath().parent_path();
+    const std::filesystem::path initialDirectory = currentPath.empty()
+                                                      ? defaultSceneDirectory()
+                                                      : currentPath.parent_path();
     const std::wstring initialDirectoryString = initialDirectory.wstring();
     OPENFILENAMEW dialog{};
     dialog.lStructSize = sizeof(dialog);
@@ -82,7 +90,10 @@ std::optional<std::filesystem::path> EditorSceneSession::chooseSaveScenePath() {
 std::optional<std::filesystem::path> EditorSceneSession::chooseLoadScenePath() {
 #ifdef _WIN32
     std::array<wchar_t, 32768> selectedPath{};
-    const std::filesystem::path initialDirectory = scenePath().parent_path();
+    const std::filesystem::path currentPath = scenePath();
+    const std::filesystem::path initialDirectory = currentPath.empty()
+                                                      ? defaultSceneDirectory()
+                                                      : currentPath.parent_path();
     const std::wstring initialDirectoryString = initialDirectory.wstring();
     OPENFILENAMEW dialog{};
     dialog.lStructSize = sizeof(dialog);

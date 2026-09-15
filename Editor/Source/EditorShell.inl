@@ -422,7 +422,7 @@ Engine::Entity drawEditorMenuBar(Engine::ScenePreset &scene, Engine::Renderer &r
         if (ImGui::BeginMenu("Project Scenes")) {
             const auto scenes = project.scenes();
             if (scenes.empty()) {
-                ImGui::TextDisabled("No scenes in %s", project.startupScene().parent_path().string().c_str());
+                ImGui::TextDisabled("No scenes in %s", (project.assetRoot() / "Scenes").string().c_str());
             }
             for (const auto& path : scenes) {
                 const std::string label = path.lexically_relative(project.rootPath()).string();
@@ -437,11 +437,16 @@ Engine::Entity drawEditorMenuBar(Engine::ScenePreset &scene, Engine::Renderer &r
             if (const auto manifestPath = EditorSceneSession::chooseLoadProjectPath()) {
                 try {
                     Engine::Project loadedProject = Engine::Project::load(*manifestPath);
-                    loadScene(loadedProject.startupScene());
                     content.clear();
                     content.setAssetRoot(loadedProject.assetRoot());
                     project = std::move(loadedProject);
                     EditorSceneSession::setProjectRoot(project.rootPath());
+                    if (std::filesystem::is_regular_file(project.startupScene())) {
+                        loadScene(project.startupScene());
+                    } else {
+                        EditorSceneSession::clearSavedScene();
+                        sceneDeleted = true;
+                    }
                     Editor::ConsolePanel::info("Loaded project: " + project.name());
                 } catch (const std::exception &error) {
                     sceneFileError = error.what();
@@ -477,6 +482,9 @@ Engine::Entity drawEditorMenuBar(Engine::ScenePreset &scene, Engine::Renderer &r
             if (std::filesystem::remove(activeScenePath, error) && !error) {
                 const auto terrainPath = std::filesystem::path{activeScenePath.string() + ".terrain"};
                 std::filesystem::remove(terrainPath, error);
+                error.clear();
+                const auto environmentPath = std::filesystem::path{activeScenePath.string() + ".environment"};
+                std::filesystem::remove(environmentPath, error);
                 EditorSceneSession::clearSavedScene();
                 sceneDeleted = true;
                 sceneFileError.clear();
@@ -503,8 +511,15 @@ Engine::Entity drawEditorMenuBar(Engine::ScenePreset &scene, Engine::Renderer &r
     ImGui::SameLine(0.0F, 5.0F);
     ImGui::BeginDisabled(playing);
     ImGui::SetNextItemWidth(240.0F);
-    const std::string activeSceneName = activeScenePath.filename().string();
+    const std::string activeSceneName = activeScenePath.empty()
+                                            ? "No scene selected"
+                                            : activeScenePath.filename().string();
     if (ImGui::BeginCombo("##active-project-scene", activeSceneName.c_str())) {
+        if (ImGui::Selectable("No scene selected", activeScenePath.empty())) {
+            EditorSceneSession::clearSavedScene();
+            sceneDeleted = true;
+        }
+        ImGui::Separator();
         for (const auto& path : project.scenes()) {
             const std::string label = path.lexically_relative(project.rootPath()).string();
             const bool active = path == activeScenePath;
