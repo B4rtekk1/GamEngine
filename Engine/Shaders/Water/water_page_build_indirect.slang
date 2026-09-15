@@ -1,6 +1,5 @@
+import Water.VirtualWaterShared;
 struct IndexedDrawCommand { uint indexCount, instanceCount, firstIndex; int vertexOffset; uint firstInstance; };
-struct GPUWaterDrawTemplate { uint indexCount, firstIndex; int vertexOffset; uint firstInstanceBase; };
-struct GPUWaterCullConfig { uint pageCount, drawBinCount, visiblePagesPerBin, enableHiZ; float reflectionVarianceScale,highQualityPixels,mediumQualityPixels,lowQualityPixels; };
 [[vk::binding(0,0)]] StructuredBuffer<uint> counts;
 [[vk::binding(1,0)]] StructuredBuffer<GPUWaterDrawTemplate> templates;
 [[vk::binding(2,0)]] RWStructuredBuffer<IndexedDrawCommand> commands;

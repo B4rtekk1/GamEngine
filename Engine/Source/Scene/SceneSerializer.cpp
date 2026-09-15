@@ -66,6 +66,8 @@ namespace Engine {
         constexpr std::uint32_t ReflectionProbeFormatVersion = 21;
         constexpr std::uint32_t TerrainMaterialLayersFormatVersion = 22;
         constexpr std::uint32_t WaterBodyFormatVersion = 23;
+        constexpr std::uint32_t WaterExecutionPolicyFormatVersion = 24;
+        constexpr std::uint32_t WaterExecutionTierFormatVersion = 25;
         constexpr std::uint32_t TerrainDataVersion = 1;
         constexpr std::array<char, 8> TerrainDataMagic{'G', 'E', 'T', 'E', 'R', 'R', '1', '\0'};
 
@@ -1159,6 +1161,13 @@ namespace Engine {
                 serialized << ' ' << water.normalMap << ' ' << water.foamTexture << ' ' << water.flowMap << ' '
                         << static_cast<int>(water.enableSSR) << ' ' << static_cast<int>(water.enableCaustics) << ' ' <<
                         static_cast<int>(water.enableUnderwater) << ' '
+                        << static_cast<unsigned>(water.execution.tier) << ' '
+                        << static_cast<unsigned>(water.execution.geometry) << ' '
+                        << static_cast<unsigned>(water.execution.shading) << ' '
+                        << static_cast<unsigned>(water.execution.state) << ' ';
+                writeFloat(serialized, water.execution.switchMargin);
+                serialized << ' ' << water.execution.minGeometryHoldFrames << ' '
+                        << water.execution.minShadingHoldFrames << ' '
                         << std::min(water.waveCount, static_cast<std::uint32_t>(water.waves.size())) << ' ' << water.
                         lakeBoundary.size() << ' ' << water.riverSpline.size();
                 for (std::uint32_t index = 0; index < std::min(water.waveCount,
@@ -1341,6 +1350,8 @@ namespace Engine {
             version != MaterialShaderFormatVersion && version != MaterialShaderSourceFormatVersion &&
             version != ReflectionProbeFormatVersion &&
             version != TerrainMaterialLayersFormatVersion &&
+            version != WaterBodyFormatVersion &&
+            version != WaterExecutionPolicyFormatVersion &&
             version != FormatVersion) {
             invalidScene("unsupported format version " + std::to_string(version));
         }
@@ -1696,6 +1707,36 @@ namespace Engine {
                     water.enableSSR = readBool(input, "water SSR flag");
                     water.enableCaustics = readBool(input, "water caustics flag");
                     water.enableUnderwater = readBool(input, "water underwater flag");
+                    if (version >= WaterExecutionPolicyFormatVersion) {
+                        if (version >= WaterExecutionTierFormatVersion) {
+                            const unsigned tier = read<unsigned>(input, "water execution tier");
+                            if (tier > static_cast<unsigned>(WaterExecutionTier::FullVirtual)) {
+                                invalidScene("invalid water execution tier");
+                            }
+                            water.execution.tier = static_cast<WaterExecutionTier>(tier);
+                        } else {
+                            water.execution.tier = WaterExecutionTier::Auto;
+                        }
+                        const unsigned geometry = read<unsigned>(input, "water geometry mode");
+                        const unsigned shading = read<unsigned>(input, "water shading mode");
+                        const unsigned state = read<unsigned>(input, "water state mode");
+                        if (geometry > static_cast<unsigned>(WaterGeometryMode::VirtualClipmap) ||
+                            shading > static_cast<unsigned>(WaterShadingMode::Budgeted) ||
+                            state > static_cast<unsigned>(WaterStateMode::Sparse)) {
+                            invalidScene("invalid water execution policy");
+                        }
+                        water.execution.geometry = static_cast<WaterGeometryMode>(geometry);
+                        water.execution.shading = static_cast<WaterShadingMode>(shading);
+                        water.execution.state = static_cast<WaterStateMode>(state);
+                        water.execution.switchMargin = readFloat(input, "water switch margin");
+                        water.execution.minGeometryHoldFrames = read<std::uint32_t>(input, "water geometry hold frames");
+                        water.execution.minShadingHoldFrames = read<std::uint32_t>(input, "water shading hold frames");
+                        if (water.execution.switchMargin < 0.0F || water.execution.switchMargin > 4.0F ||
+                            water.execution.minGeometryHoldFrames > 100000U ||
+                            water.execution.minShadingHoldFrames > 100000U) {
+                            invalidScene("invalid water execution policy thresholds");
+                        }
+                    }
                     water.waveCount = static_cast<std::uint32_t>(readCount(
                         input, "water wave count", water.waves.size()));
                     const std::size_t boundaryCount = readCount(input, "water boundary count", 100000);

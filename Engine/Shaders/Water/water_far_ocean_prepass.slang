@@ -1,4 +1,5 @@
 import Common.SceneData;
+import Water.VirtualWaterShared;
 
 [[vk::binding(1,0)]] ConstantBuffer<RendererFrameData> frame;
 [[vk::binding(2,0)]] StructuredBuffer<MaterialData> materials;
@@ -9,10 +10,6 @@ struct GPUFarOceanConfig { uint bodyCount,padding0,padding1,padding2; GPUFarOcea
 [[vk::binding(0,1)]] ConstantBuffer<GPUFarOceanConfig> config;
 
 static const float TwoPi=6.28318530718;
-static const uint FarAnalyticPageId=0x1fffu;
-static const uint FarAnalyticFlag=0x20000000u;
-
-float3 rotateQuaternion(float3 p,float4 q){return p+2.0*cross(q.xyz,cross(q.xyz,p)+q.w*p);}
 float2 octEncode(float3 n){n/=abs(n.x)+abs(n.y)+abs(n.z);float2 e=n.xz;if(n.y<0)e=(1.0-abs(e.yx))*float2(e.x>=0?1:-1,e.y>=0?1:-1);return e;}
 
 float3 rayDirection(float2 uv){
@@ -48,18 +45,18 @@ struct PSOut{
 
 [shader("fragment")]
 PSOut fragmentMain(VSOut i){
-    float3 ro=frame.cameraPosition.xyz,rd=rayDirection(i.uv);float bestT=1e30;uint bestBody=0xffffffffu;float3 bestPos=0;float3 bestNormal=float3(0,1,0);float bestVariance=0;uint bestMaterial=0;
+    float3 ro=frame.cameraPosition.xyz,rd=rayDirection(i.uv);float bestT=1e30;uint bestBody=0xffffffffu;float3 bestPos=0;float3 bestNormal=float3(0,1,0);float bestVariance=0;uint bestMaterial=0;uint bestExecutionFlags=0u;
     [loop]for(uint body=0;body<config.bodyCount;++body){
         GPUFarOceanBody far=config.bodies[body];RendererInstanceData inst=instances[far.instanceIndex];
-        float3 planeN=normalize(rotateQuaternion(float3(0,1,0),inst.rotation));float denom=dot(rd,planeN);if(abs(denom)<1e-5)continue;
+        float3 planeN=normalize(waterRotateQuaternion(float3(0,1,0),inst.rotation));float denom=dot(rd,planeN);if(abs(denom)<1e-5)continue;
         float t=dot(inst.positionMaterial.xyz-ro,planeN)/denom;if(t<=far.startDistance||t>=bestT)continue;
         float3 wp=ro+rd*t;uint mi=asuint(inst.positionMaterial.w);MaterialData m=materials[mi];float3 n;float var;
-        evaluateFarNormal(m,wp.xz,frame.windGustFrequencyTime.z,far.normalCellSize,far.waveMask,n,var);
-        bestT=t;bestBody=body;bestPos=wp;bestNormal=rotateQuaternion(n,inst.rotation);bestVariance=var;bestMaterial=mi;
+        evaluateFarNormal(m,wp.xz,frame.windGustFrequencyTime.z,far.normalCellSize,far.waveMask&0xffu,n,var);
+        bestT=t;bestBody=body;bestPos=wp;bestNormal=waterRotateQuaternion(n,inst.rotation);bestVariance=var;bestMaterial=mi;bestExecutionFlags=far.waveMask>>8u;
     }
     if(bestBody==0xffffffffu)discard;
     float4 clip=mul(mul(float4(bestPos,1),frame.view),frame.projection);float4 prev=mul(mul(float4(bestPos,1),frame.previousView),frame.previousProjection);
     float rough=clamp(sqrt(materials[bestMaterial].waterShallowColorRoughness.w*materials[bestMaterial].waterShallowColorRoughness.w+2.0*bestVariance),0.045,1.0);
-    uint packed=1u | (0u<<2u) | (0u<<4u) | (FarAnalyticPageId<<8u) | FarAnalyticFlag | 0x40000000u | 0x80000000u;
+    uint packed=1u | (0u<<2u) | (0u<<4u) | (WATER_FAR_ANALYTIC_PAGE_ID<<WATER_META_PAGE_SHIFT) | ((bestExecutionFlags&WATER_EXEC_SIMPLE_SHADING)!=0u?WATER_SIMPLE_SHADING_FLAG:0u) | WATER_FAR_ANALYTIC_FLAG | WATER_REACTIVE_FLAG | WATER_VALID_FLAG;
     PSOut o;o.surface=float4(octEncode(normalize(bestNormal)),clip.z/clip.w,rough);o.meta=float2(asfloat(bestMaterial),asfloat(packed));o.velocity=(clip.xy/clip.w-prev.xy/prev.w)*0.5;o.depth=clip.z/clip.w;return o;
 }

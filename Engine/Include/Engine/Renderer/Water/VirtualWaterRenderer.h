@@ -15,6 +15,8 @@
 #include <cstdint>
 #include <span>
 #include <vector>
+#include <deque>
+#include <memory>
 #include <vulkan/vulkan.h>
 #include <vk_mem_alloc.h>
 
@@ -48,7 +50,8 @@ public:
                              std::span<const VkBuffer> cullingUniformBuffers,
                              VkDescriptorImageInfo previousHiZ);
 
-    void recordCull(VkCommandBuffer commandBuffer, std::uint32_t frameIndex) const;
+    void recordCull(VkCommandBuffer commandBuffer, std::uint32_t frameIndex,
+                    VkDescriptorSet sceneSet);
     void recordState(VkCommandBuffer commandBuffer, std::uint32_t frameIndex,
                      VkDescriptorSet sceneSet, float deltaTime);
     void recordPrepass(VkCommandBuffer commandBuffer, std::uint32_t frameIndex,
@@ -65,6 +68,14 @@ public:
     /** Updates the full-screen underwater post-process state for one frame slot. */
     void updateUnderwaterState(std::uint32_t frameIndex, Registry& registry,
                                const Vec3& cameraPosition, float time);
+    /** Invalidates temporal water/reflection history after a discontinuous camera change. */
+    void invalidateTemporalHistory() noexcept { temporalHistoryValid_ = false; }
+    /** Feeds the completed frame cost back into the bounded quality scheduler. */
+    void onFrameCompleted(std::uint32_t frameIndex, float measuredWaterGpuMs);
+    /** Feeds the previous completed water GPU time into the feedback controller. */
+    void updateFrameBudget(float measuredGpuMs) noexcept;
+    /** Releases snapshot resources after a fence-completed frame advances the safety window. */
+    void onFrameCompleted() noexcept;
 
     [[nodiscard]] bool active() const noexcept { return active_; }
     [[nodiscard]] std::uint32_t pageCount() const noexcept { return pageCount_; }
@@ -77,7 +88,6 @@ public:
     [[nodiscard]] VkSampler velocitySampler() const noexcept { return velocity_.sampler(); }
 
 private:
-    struct TileSettings { std::uint32_t width{}, height{}, tilesX{}, maxTiles{}; };
     struct ShadePush { std::uint32_t tier{}, pad0{}, pad1{}, pad2{}; };
     struct StatePush { std::uint32_t eventCount{}, pageCount{}, frameIndex{}, pad{}; float deltaTime{}, pad1{}, pad2{}, pad3{}; };
 
@@ -93,7 +103,8 @@ private:
     std::uint32_t bodyCount_{};
     bool active_{};
     bool authoredWaterActive_{};
-    bool lightingInitialized_{};
+    std::array<bool, FramesInFlight> lightingInitialized_{};
+    bool temporalHistoryValid_{false};
     // True when stateCellsScratch_ contains the most recently committed simulation state.
     bool stateCurrentScratch_{};
 
@@ -103,7 +114,7 @@ private:
     Buffer oceanVertexBuffer_;
     Buffer oceanIndexBuffer_;
     std::vector<Mesh::DrawRange> oceanDrawRanges_;
-    Buffer cullConfig_;
+    std::array<Buffer, FramesInFlight> cullConfig_;
     Buffer farOceanConfig_;
     Buffer authoredWaterConfig_;
     std::array<Buffer, FramesInFlight> visiblePages_;
@@ -113,7 +124,6 @@ private:
     std::array<Buffer, FramesInFlight> stats_;
 
     Buffer statePageTable_;
-    Buffer stateOwners_;
     Buffer statePhysical_;
     Buffer stateCells_;
     Buffer stateCellsScratch_;
@@ -125,16 +135,33 @@ private:
     HdrBuffer surface_;
     HdrBuffer meta_;
     HdrBuffer velocity_;
-    HdrBuffer lighting_;
+    std::array<HdrBuffer, FramesInFlight> lighting_;
     Culling::HiZBuffer sssrDepth_;
     Culling::HiZPass sssrDepthPass_;
     bool sssrDepthInitialized_{};
 
-    TileSettings tileSettings_{};
-    Buffer tileSettingsBuffer_;
+    GPUWaterTileSettings tileSettings_{};
+    std::array<Buffer, FramesInFlight> tileSettingsBuffer_;
+    std::array<Buffer, FramesInFlight> frameBudgetBuffer_;
+    WaterFrameBudget frameBudget_{};
+    WaterDynamicThresholds dynamicThresholds_{};
+    std::array<Buffer, FramesInFlight> importanceHistogram_;
+    std::array<Buffer, FramesInFlight> candidateTiles_;
     std::array<Buffer, FramesInFlight> tileLists_;
     std::array<Buffer, FramesInFlight> tileCounts_;
     std::array<Buffer, FramesInFlight> tileDispatch_;
+
+    struct RetiredSnapshot final {
+        std::uint64_t retireAfterCompletedFrame{};
+        std::vector<std::shared_ptr<const MeshGpuResource>> resources;
+    };
+    std::vector<std::shared_ptr<const MeshGpuResource>> snapshotResources_;
+    std::deque<RetiredSnapshot> retiredSnapshots_;
+    std::uint64_t completedFrameSerial_{};
+    std::uint64_t waterWorldGeneration_{};
+    bool stateInitialized_{};
+    float measuredGpuMsEma_{};
+    bool denseTileClassification_{true};
 
     VkDescriptorSetLayout cullLayout_{VK_NULL_HANDLE};
     VkDescriptorSetLayout buildLayout_{VK_NULL_HANDLE};
@@ -194,6 +221,8 @@ private:
     // descriptor remains valid (depth is bound), but page culling is strictly
     // frustum based until a per-view hierarchy is introduced.
     bool hiZEnabled_{true};
+    std::uint32_t waterFrameCounter_{};
+    float measuredWaterGpuMs_{};
 
     void createBuffers();
     void createOceanGeometry();

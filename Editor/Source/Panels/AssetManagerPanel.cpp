@@ -290,8 +290,7 @@ bool delete_asset_file(const Engine::ScenePreset& scene, const std::filesystem::
         return false;
     }
     if (!std::filesystem::remove(path, filesystemError) || filesystemError) {
-        error = "Could not delete asset '" + relative.generic_string() + "'";
-        if (filesystemError) error += ": " + filesystemError.message();
+        error = "Could not delete asset: " + relative.generic_string();
         return false;
     }
     if (path.extension() == ".scene") {
@@ -431,11 +430,6 @@ Engine::Entity AssetManagerPanel::draw(Engine::ScenePreset& scene, Engine::Asset
         }
     };
     const auto requestDelete = [&](const std::filesystem::path& asset) {
-        if (disabled || !projectIsOpen) {
-            error = disabled ? "Cannot delete assets while Play Mode is active"
-                             : "Open a project before deleting assets";
-            return;
-        }
         deleteCandidate = asset;
         openDeletePopup = true;
     };
@@ -801,11 +795,6 @@ Engine::Entity AssetManagerPanel::draw(Engine::ScenePreset& scene, Engine::Asset
         ImGui::TextDisabled("This removes the file from the project.");
         ImGui::Separator();
         if (ImGui::Button("Delete", {120.0F, 0.0F})) {
-            // Previewing/importing an asset can leave an otherwise unused
-            // value cached by Content. Release such cache entries before the
-            // filesystem operation; on Windows an outstanding file handle
-            // would otherwise make deletion fail even for unused assets.
-            content.unloadUnused();
             if (delete_asset_file(scene, root, deleteCandidate, error)) {
                 Editor::ConsolePanel::info("Deleted asset: " + deleteCandidate.generic_string());
                 if (deleteCandidate.extension() == ".scene")

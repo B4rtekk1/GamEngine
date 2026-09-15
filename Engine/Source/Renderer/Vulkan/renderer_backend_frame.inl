@@ -334,6 +334,7 @@
             // a teleport or a large orientation jump produces unavoidable
             // ghosting, so treat it as a camera cut instead.
             if (cameraCut) {
+                virtualWaterRenderer.invalidateTemporalHistory();
                 // GTAO history is independent of TAA and must not survive a
                 // teleport or a large camera rotation either.
                 gtaoPass.reset();
@@ -878,7 +879,7 @@
             if (renderGameViewport && virtualWaterRenderer.active()) {
                 static const ProfileNameId waterPageCullProfileName = Profiler::registerName("Water Page Cull");
                 gpuTimestampProfiler.beginZone(commandBuffer, currentFrame, waterPageCullProfileName);
-                virtualWaterRenderer.recordCull(commandBuffer, currentFrame);
+                virtualWaterRenderer.recordCull(commandBuffer, currentFrame, shadowPass.descriptorSet(currentFrame));
                 virtualWaterRenderer.recordState(commandBuffer, currentFrame,
                                                  shadowPass.descriptorSet(currentFrame),
                                                  static_cast<float>(Time::deltaTime()));
@@ -888,7 +889,7 @@
                 static const ProfileNameId sceneWaterPageCullProfileName =
                     Profiler::registerName("Scene Water Page Cull");
                 gpuTimestampProfiler.beginZone(commandBuffer, currentFrame, sceneWaterPageCullProfileName);
-                sceneVirtualWaterRenderer.recordCull(commandBuffer, currentFrame);
+                sceneVirtualWaterRenderer.recordCull(commandBuffer, currentFrame, sceneDescriptorPass.descriptorSet(currentFrame));
                 sceneVirtualWaterRenderer.recordState(commandBuffer, currentFrame,
                                                       sceneDescriptorPass.descriptorSet(currentFrame),
                                                       static_cast<float>(Time::deltaTime()));
@@ -1285,13 +1286,21 @@
                         gpuObjects.size() * sizeof(VkDrawIndexedIndirectCommand);
                     const auto countOffset = static_cast<VkDeviceSize>(materialShaderIndex(MaterialShader::Water)) *
                         sizeof(std::uint32_t);
+                    static const ProfileNameId sceneWaterPrepassProfileName =
+                        Profiler::registerName("Scene Virtual Water Prepass");
+                    static const ProfileNameId sceneWaterShadeProfileName =
+                        Profiler::registerName("Scene Virtual Water Shading");
+                    gpuTimestampProfiler.beginZone(commandBuffer, currentFrame, sceneWaterPrepassProfileName);
                     sceneVirtualWaterRenderer.recordPrepass(commandBuffer, currentFrame,
                         sceneDescriptorPass.descriptorSet(currentFrame), vertexBuffer.handle(), indexBuffer.handle(),
                         sceneIndirectDraws[currentFrame], commandOffset, countOffset);
+                    gpuTimestampProfiler.endZone(commandBuffer, currentFrame);
+                    gpuTimestampProfiler.beginZone(commandBuffer, currentFrame, sceneWaterShadeProfileName);
                     sceneVirtualWaterRenderer.recordAdaptiveShading(commandBuffer, currentFrame,
                         sceneDescriptorPass.descriptorSet(currentFrame));
                     sceneVirtualWaterRenderer.recordComposite(commandBuffer, currentFrame,
                         sceneDescriptorPass.descriptorSet(currentFrame));
+                    gpuTimestampProfiler.endZone(commandBuffer, currentFrame);
                 }
             }
 
@@ -1725,6 +1734,21 @@
             sceneGpu.database.reclaimDeferredInstances(completedFrameValue);
             if (const auto completed = gpuTimestampProfiler.completedFrame(currentFrame)) {
                 lastGpuProfile = *completed;
+                float gameWaterMs = 0.0F;
+                float sceneWaterMs = 0.0F;
+                for (const GpuProfileEvent& event : completed->events) {
+                    const std::string_view name = Profiler::name(event.name);
+                    const float duration = std::max(event.endMs - event.startMs, 0.0F);
+                    if (name == "Water Page Cull" || name == "Virtual Water Prepass" ||
+                        name == "Virtual Water Shading") gameWaterMs += duration;
+                    else if (name == "Scene Water Page Cull" || name == "Scene Virtual Water Prepass" ||
+                             name == "Scene Virtual Water Shading") sceneWaterMs += duration;
+                }
+                virtualWaterRenderer.onFrameCompleted(currentFrame, gameWaterMs);
+                sceneVirtualWaterRenderer.onFrameCompleted(currentFrame, sceneWaterMs);
+            } else {
+                virtualWaterRenderer.onFrameCompleted();
+                sceneVirtualWaterRenderer.onFrameCompleted();
             }
             const VkResult result = vkAcquireNextImageKHR(device, swapchain.handle(), UINT64_MAX,
                 imageAvailableSemaphores[currentFrame], VK_NULL_HANDLE, &imageIndex);

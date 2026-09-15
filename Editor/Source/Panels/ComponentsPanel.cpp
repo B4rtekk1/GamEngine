@@ -389,6 +389,44 @@ bool ComponentsPanel::draw(Engine::ScenePreset &scene, Engine::Assets::Content& 
             changed |= ImGui::Checkbox("Enable SSR##water", &water.enableSSR);
             changed |= ImGui::Checkbox("Enable Caustics##water", &water.enableCaustics);
             changed |= ImGui::Checkbox("Enable Underwater##water", &water.enableUnderwater);
+
+            ImGui::SeparatorText("Virtual Water Execution");
+            constexpr const char* executionTiers[] = {"Auto / Custom", "Simple", "Virtual Lite", "Full Virtual"};
+            constexpr const char* geometryModes[] = {"Auto", "Authored Mesh", "Spline Pages", "Virtual Clipmap"};
+            constexpr const char* shadingModes[] = {"Auto", "Simple", "Budgeted"};
+            constexpr const char* stateModes[] = {"None", "Sparse"};
+            int executionTier = static_cast<int>(water.execution.tier);
+            if (ImGui::Combo("Execution Preset##water", &executionTier, executionTiers, IM_ARRAYSIZE(executionTiers))) {
+                water.execution.tier = static_cast<Engine::WaterExecutionTier>(executionTier);
+                changed = true;
+            }
+            int geometryMode = static_cast<int>(water.execution.geometry);
+            int shadingMode = static_cast<int>(water.execution.shading);
+            int stateMode = static_cast<int>(water.execution.state);
+            if (ImGui::Combo("Geometry Mode##water", &geometryMode, geometryModes, IM_ARRAYSIZE(geometryModes))) {
+                water.execution.geometry = static_cast<Engine::WaterGeometryMode>(geometryMode);
+                changed = true;
+            }
+            if (ImGui::Combo("Shading Mode##water", &shadingMode, shadingModes, IM_ARRAYSIZE(shadingModes))) {
+                water.execution.shading = static_cast<Engine::WaterShadingMode>(shadingMode);
+                changed = true;
+            }
+            if (ImGui::Combo("Persistent State##water", &stateMode, stateModes, IM_ARRAYSIZE(stateModes))) {
+                water.execution.state = static_cast<Engine::WaterStateMode>(stateMode);
+                changed = true;
+            }
+            changed |= Editor::Controls::sliderFloat("Path Switch Margin##water", &water.execution.switchMargin,
+                                                     0.0F, 1.0F, "%.2f");
+            int geometryHold = static_cast<int>(water.execution.minGeometryHoldFrames);
+            int shadingHold = static_cast<int>(water.execution.minShadingHoldFrames);
+            if (ImGui::DragInt("Geometry Hold Frames##water", &geometryHold, 1.0F, 0, 600)) {
+                water.execution.minGeometryHoldFrames = static_cast<std::uint32_t>(std::max(0, geometryHold));
+                changed = true;
+            }
+            if (ImGui::DragInt("Shading Hold Frames##water", &shadingHold, 1.0F, 0, 120)) {
+                water.execution.minShadingHoldFrames = static_cast<std::uint32_t>(std::max(0, shadingHold));
+                changed = true;
+            }
             changed |= ImGui::DragInt("Normal Map Index##water", &water.normalMap, 1.0F, -1, 4095);
             changed |= ImGui::DragInt("Foam Texture Index##water", &water.foamTexture, 1.0F, -1, 4095);
             changed |= ImGui::DragInt("Flow Map Index##water", &water.flowMap, 1.0F, -1, 4095);

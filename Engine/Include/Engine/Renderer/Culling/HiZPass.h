@@ -90,7 +90,8 @@ namespace Engine::Culling
          */
         void record(
             VkCommandBuffer commandBuffer,
-            const HiZBuffer& hiZBuffer
+            const HiZBuffer& hiZBuffer,
+            VkDescriptorSet sharedDescriptorSet = VK_NULL_HANDLE
         ) const;
 
     private:
