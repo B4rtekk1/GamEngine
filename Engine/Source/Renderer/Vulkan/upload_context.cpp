@@ -258,7 +258,7 @@ namespace Engine {
         if (vkEndCommandBuffer(commandBuffer_) != VK_SUCCESS) {
             throw std::runtime_error("Could not end upload command buffer");
         }
-        const uint64_t value = nextValue_++;
+        const uint64_t value = nextValue_;
         const bool hasFinalizer = graphicsCommandBuffer_ != VK_NULL_HANDLE;
         if (hasFinalizer && vkEndCommandBuffer(graphicsCommandBuffer_) != VK_SUCCESS) {
             throw std::runtime_error("Could not end upload graphics-finalizer command buffer");
@@ -314,6 +314,7 @@ namespace Engine {
         submitted_.push_back({commandBuffer_, hasFinalizer ? graphicsCommandBuffer_ : VK_NULL_HANDLE, value});
         commandBuffer_ = VK_NULL_HANDLE;
         graphicsCommandBuffer_ = VK_NULL_HANDLE;
+        ++nextValue_;
         return {value};
     }
 

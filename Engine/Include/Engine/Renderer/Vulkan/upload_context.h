@@ -60,6 +60,11 @@ public:
     /// when an asynchronously-uploaded destination resource is retired.
     void wait(uint64_t value) const noexcept;
     [[nodiscard]] uint64_t lastSubmittedValue() const noexcept { return nextValue_ - 1; }
+    /// Returns true only for a ticket that has left the active batch and was
+    /// submitted to Vulkan. A pending ticket is invalid after Batch::abort().
+    [[nodiscard]] bool isSubmitted(uint64_t value) const noexcept {
+        return value != 0 && value < nextValue_;
+    }
     [[nodiscard]] VkSemaphore timeline() const noexcept { return timeline_; }
     [[nodiscard]] bool requiresConcurrentSharing() const noexcept { return sharingFamilyCount() > 1; }
     [[nodiscard]] std::array<uint32_t, 3> sharingFamilies() const noexcept {

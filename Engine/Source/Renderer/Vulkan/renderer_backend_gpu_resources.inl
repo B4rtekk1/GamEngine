@@ -85,6 +85,9 @@
             // their backing allocations need one inert element. Their draw
             // counts stay zero because objectCount itself remains zero.
             const auto genericCapacity = std::max(1u, objectCount + objectCount / 2u + 1u);
+            // Passes and indirect draws require a non-zero physical capacity.
+            // Runtime culling still receives objectCount, which may be zero.
+            const auto passCapacity = genericCapacity;
             const auto clusterCountFor = [](const VkExtent2D extent) {
                 const std::uint32_t tilesX = (extent.width + ClusterTileSize - 1U) / ClusterTileSize;
                 const std::uint32_t tilesY = (extent.height + ClusterTileSize - 1U) / ClusterTileSize;
@@ -355,7 +358,7 @@
                     VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, vulkanDevice.allocator());
                 const Culling::GPUObjectData emptyObject{};
                 buffer.update(objectCount == 0 ? &emptyObject : gpuObjects.data(),
-                              sizeof(Culling::GPUObjectData) * genericCapacity);
+                              sizeof(Culling::GPUObjectData) * std::max(1u, objectCount));
             }
 
             for (uint32_t frame = 0; frame < MAX_FRAMES_IN_FLIGHT; ++frame) {
@@ -942,36 +945,36 @@
                     instanceCullSets[frame], visibleInstanceCountBuffers[frame].handle(),
                     visibleInstanceBuffers[frame].handle());
                 gpuCullingPasses[frame].create(device, cullingPipeline, cullingPipelineLayout, cullSets[frame],
-                    indirectBuffers[frame].handle(), drawCountBuffers[frame].handle(), objectCount);
+                    indirectBuffers[frame].handle(), drawCountBuffers[frame].handle(), passCapacity);
                 indirectDraws[frame].create(
-                    indirectBuffers[frame].handle(), drawCountBuffers[frame].handle(), objectCount);
+                    indirectBuffers[frame].handle(), drawCountBuffers[frame].handle(), passCapacity);
                 foliageGpuCullingPasses[frame].create(device, cullingPipeline, cullingPipelineLayout, foliageCullSet,
-                    foliageIndirectBuffers[frame].handle(), foliageDrawCountBuffers[frame].handle(), objectCount);
+                    foliageIndirectBuffers[frame].handle(), foliageDrawCountBuffers[frame].handle(), passCapacity);
                 // Grass is culled as terrain chunks in the production draw
                 // path.  The experimental GPU-scene per-instance list remains
                 // available for the compaction passes, but must not replace a
                 // valid chunk command list until its bounds source is shared
                 // with terrain extraction.
                 foliageIndirectDraws[frame].create(
-                    foliageIndirectBuffers[frame].handle(), foliageDrawCountBuffers[frame].handle(), objectCount);
+                    foliageIndirectBuffers[frame].handle(), foliageDrawCountBuffers[frame].handle(), passCapacity);
                 sceneGpuCullingPasses[frame].create(device, cullingPipeline, cullingPipelineLayout, sceneCullSet,
-                    sceneIndirectBuffers[frame].handle(), sceneDrawCountBuffers[frame].handle(), objectCount);
+                    sceneIndirectBuffers[frame].handle(), sceneDrawCountBuffers[frame].handle(), passCapacity);
                 sceneIndirectDraws[frame].create(
-                    sceneIndirectBuffers[frame].handle(), sceneDrawCountBuffers[frame].handle(), objectCount);
+                    sceneIndirectBuffers[frame].handle(), sceneDrawCountBuffers[frame].handle(), passCapacity);
                 sceneFoliageGpuCullingPasses[frame].create(device, cullingPipeline, cullingPipelineLayout, sceneFoliageCullSet,
-                    sceneFoliageIndirectBuffers[frame].handle(), sceneFoliageDrawCountBuffers[frame].handle(), objectCount);
+                    sceneFoliageIndirectBuffers[frame].handle(), sceneFoliageDrawCountBuffers[frame].handle(), passCapacity);
                 sceneFoliageIndirectDraws[frame].create(
-                    sceneFoliageIndirectBuffers[frame].handle(), sceneFoliageDrawCountBuffers[frame].handle(), objectCount);
+                    sceneFoliageIndirectBuffers[frame].handle(), sceneFoliageDrawCountBuffers[frame].handle(), passCapacity);
                 shadowCullingPasses[frame].create(device, cullingPipeline, cullingPipelineLayout, shadowCullSet,
-                    shadowIndirectBuffers[frame].handle(), shadowDrawCountBuffers[frame].handle(), objectCount,
+                    shadowIndirectBuffers[frame].handle(), shadowDrawCountBuffers[frame].handle(), passCapacity,
                     shadowCandidateCountBuffers[frame].handle(), shadowCandidateDispatchBuffers[frame].handle(), &shadowPageWorkBuffers[frame]);
                 shadowIndirectDraws[frame].create(
-                    shadowIndirectBuffers[frame].handle(), shadowDrawCountBuffers[frame].handle(), objectCount);
+                    shadowIndirectBuffers[frame].handle(), shadowDrawCountBuffers[frame].handle(), passCapacity);
                 shadowTwoSidedCullingPasses[frame].create(device, cullingPipeline, cullingPipelineLayout, shadowTwoSidedCullSet,
-                    shadowTwoSidedIndirectBuffers[frame].handle(), shadowTwoSidedDrawCountBuffers[frame].handle(), objectCount,
+                    shadowTwoSidedIndirectBuffers[frame].handle(), shadowTwoSidedDrawCountBuffers[frame].handle(), passCapacity,
                     shadowTwoSidedCandidateCountBuffers[frame].handle(), shadowTwoSidedCandidateDispatchBuffers[frame].handle(), &shadowPageWorkBuffers[frame]);
                 shadowTwoSidedIndirectDraws[frame].create(
-                    shadowTwoSidedIndirectBuffers[frame].handle(), shadowTwoSidedDrawCountBuffers[frame].handle(), objectCount);
+                    shadowTwoSidedIndirectBuffers[frame].handle(), shadowTwoSidedDrawCountBuffers[frame].handle(), passCapacity);
             }
             hiZValid = false;
             [[maybe_unused]] const UploadTicket ticket = uploadBatch.submit();

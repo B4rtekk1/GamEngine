@@ -1,4 +1,5 @@
 #include "Engine/Renderer/Vulkan/buffer.h"
+#include <cassert>
 #include "Engine/Renderer/Vulkan/upload_context.h"
 
 #include <cstring>
@@ -238,7 +239,14 @@ namespace Engine {
         // no longer a transfer destination.
         if (readyTimeline_ != 0) {
             if (UploadContext *const upload = UploadContext::current()) {
-                upload->wait(readyTimeline_);
+                // Destroying a destination referenced by the active batch is
+                // a lifetime violation. A non-submitted ticket after abort,
+                // on the other hand, has no GPU work to wait for.
+                assert(!upload->recording() ||
+                       readyTimeline_ != upload->pendingTicket().timelineValue);
+                if (upload->isSubmitted(readyTimeline_)) {
+                    upload->wait(readyTimeline_);
+                }
             }
             readyTimeline_ = 0;
         }
