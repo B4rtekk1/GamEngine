@@ -919,7 +919,8 @@ void VirtualWaterRenderer::recordPrepass(VkCommandBuffer cmd, std::uint32_t fram
     VkMemoryBarrier2 ready{VK_STRUCTURE_TYPE_MEMORY_BARRIER_2};
     ready.srcStageMask = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT;
     ready.srcAccessMask = VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT;
-    ready.dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+    ready.dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT |
+                         VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT;
     ready.dstAccessMask = VK_ACCESS_2_SHADER_SAMPLED_READ_BIT;
     VkDependencyInfo dependency{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
     dependency.memoryBarrierCount = 1; dependency.pMemoryBarriers = &ready;

@@ -481,6 +481,11 @@
             // not submit hidden Game View work: this also makes the shared
             // physical VSM atlas single-writer for the entire frame.
             const bool renderGameViewport = !editorUiActive || !sceneViewportActive;
+            // TAA consumes the Virtual Water prepass attachments.  Keep this
+            // frame-local contract separate from whether the water world has
+            // bodies, as a renderer can be active without its prepass having
+            // been recorded yet.
+            bool virtualWaterPreparedThisFrame = false;
             if (meshShaderPathActive && vulkanDevice.supportsMeshShaders() && globalMeshletCount != 0 &&
                 !sceneGpu.database.instances().empty() &&
                 meshletCullSets[currentFrame] != VK_NULL_HANDLE) {
@@ -1040,8 +1045,10 @@
             // Water must be composited before alpha-blended particles.  A
             // particle does not write depth, so rendering it into the opaque
             // source would let the later water pass incorrectly cover it.
-            const bool hasWater = activeShaderSlots.test(materialShaderIndex(MaterialShader::Water));
-            if (!hasWater) {
+            const bool hasLegacyWater = activeShaderSlots.test(materialShaderIndex(MaterialShader::Water));
+            const bool hasVirtualWater = virtualWaterRenderer.active();
+            const bool needsWaterComposite = hasLegacyWater || hasVirtualWater;
+            if (!needsWaterComposite) {
                 if (particleSystem && cameraController.camera()) {
                     const Particles::ParticleFrameData particleFrame{
                         cameraController.camera()->projectionMatrix() * cameraController.camera()->viewMatrix(),
@@ -1060,7 +1067,7 @@
             lightingForwardPass.drawOutline(commandBuffer, shadowPass.descriptorSet(currentFrame), indirectDraws[currentFrame]);
             ForwardPass::end(commandBuffer);
             gpuTimestampProfiler.endZone(commandBuffer, currentFrame);
-            if (hasWater) {
+            if (needsWaterComposite) {
                 const VkImageMemoryBarrier2 barriersBefore[] = {
                     {VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2, nullptr,
                      VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT, VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT,
@@ -1107,7 +1114,7 @@
                     gpuObjects.size() * sizeof(VkDrawIndexedIndirectCommand);
                 const auto countOffset = static_cast<VkDeviceSize>(materialShaderIndex(MaterialShader::Water)) *
                     sizeof(std::uint32_t);
-                if (virtualWaterRenderer.active()) {
+                if (hasVirtualWater) {
                     if (cameraController.camera()) {
                         virtualWaterRenderer.updateUnderwaterState(
                             currentFrame, registry, cameraController.camera()->position(),
@@ -1119,6 +1126,7 @@
                     virtualWaterRenderer.recordPrepass(commandBuffer, currentFrame,
                         shadowPass.descriptorSet(currentFrame), vertexBuffer.handle(), indexBuffer.handle(),
                         indirectDraws[currentFrame], commandOffset, countOffset);
+                    virtualWaterPreparedThisFrame = true;
                     gpuTimestampProfiler.endZone(commandBuffer, currentFrame);
                     gpuTimestampProfiler.beginZone(commandBuffer, currentFrame, waterShadeProfileName);
                     virtualWaterRenderer.recordAdaptiveShading(commandBuffer, currentFrame,
@@ -1133,7 +1141,7 @@
                 // When Virtual Water is active it owns ocean, lake and river shading.
                 // Keep this compatible render pass only for particles; drawing water here
                 // would shade authored bodies twice.
-                if (!virtualWaterRenderer.active()) {
+                if (hasLegacyWater && !hasVirtualWater) {
                     waterPass.draw(commandBuffer, shadowPass.descriptorSet(currentFrame), indirectDraws[currentFrame],
                                    commandOffset, countOffset);
                 }
@@ -1239,9 +1247,9 @@
                                         sceneIndirectDraws[currentFrame]);
                 ForwardPass::end(commandBuffer);
 
-                const bool hasSceneWater = activeShaderSlots.test(materialShaderIndex(MaterialShader::Water)) &&
-                                           sceneVirtualWaterRenderer.active();
-                if (hasSceneWater) {
+                const bool hasSceneLegacyWater = activeShaderSlots.test(materialShaderIndex(MaterialShader::Water));
+                const bool hasSceneVirtualWater = sceneVirtualWaterRenderer.active();
+                if (hasSceneLegacyWater || hasSceneVirtualWater) {
                     const VkImageMemoryBarrier2 beforeCopy[] = {
                         {VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2, nullptr,
                          VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT, VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT,
@@ -1388,7 +1396,7 @@
 
             if (renderGameViewport && taaResolveActive) {
                 gpuTimestampProfiler.beginZone(commandBuffer, currentFrame, taaProfileName);
-                temporalAaPass.setVirtualWaterEnabled(virtualWaterRenderer.active());
+                temporalAaPass.setVirtualWaterEnabled(virtualWaterPreparedThisFrame);
                 temporalAaPass.record(commandBuffer, swapchain.extent(), taaJitterX, taaJitterY);
                 gpuTimestampProfiler.endZone(commandBuffer, currentFrame);
             } else {
