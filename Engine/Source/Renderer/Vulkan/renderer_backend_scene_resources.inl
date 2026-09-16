@@ -263,11 +263,21 @@
             // vertex offsets, so discard the companion heap as one generation
             // too. Ordinary topology deltas keep both heaps intact.
             if (geometryHeapAllocations.empty() && vertexBuffer.handle() == VK_NULL_HANDLE) {
+                geometryHeapMeshIds.clear();
+                geometryHeapFreeVertices.clear();
+                geometryHeapFreeIndices.clear();
+                retiredGeometryHeapAllocations.clear();
+                nextGeometryHeapMeshId = 0;
                 meshletBuffer.destroy();
                 meshletClusterBuffer.destroy();
                 meshletVertexBuffer.destroy();
                 meshletTriangleBuffer.destroy();
                 meshletHeapAllocations.clear();
+                meshletHeapFreeRanges.clear();
+                meshletClusterHeapFreeRanges.clear();
+                meshletVertexHeapFreeRanges.clear();
+                meshletTriangleHeapFreeRanges.clear();
+                retiredMeshletHeapAllocations.clear();
                 meshletHeapHighWater = 0;
                 meshletClusterHeapHighWater = 0;
                 meshletVertexHeapHighWater = 0;
@@ -366,6 +376,78 @@
                 materialSlots = std::max(materialSlots, static_cast<std::uint32_t>(
                     std::max<std::size_t>(1, grass.mesh->materials.size())));
             });
+            // Reclaim only ranges whose last possible GPU use has completed.
+            // This runs after acquireFrameImage(), where completedFrameValue is
+            // advanced from the fence for the recycled frame slot.
+            const auto insertFreeRange = [](std::vector<GeometryHeapRange>& ranges,
+                                            const GeometryHeapRange range) {
+                if (range.count == 0U) return;
+                ranges.push_back(range);
+                std::sort(ranges.begin(), ranges.end(), [](const auto& left, const auto& right) {
+                    return left.first < right.first;
+                });
+                std::vector<GeometryHeapRange> merged;
+                merged.reserve(ranges.size());
+                for (const GeometryHeapRange current : ranges) {
+                    if (!merged.empty() && current.first <= merged.back().first + merged.back().count) {
+                        merged.back().count = std::max(merged.back().count,
+                            current.first + current.count - merged.back().first);
+                    } else {
+                        merged.push_back(current);
+                    }
+                }
+                ranges = std::move(merged);
+            };
+            for (auto retired = retiredGeometryHeapAllocations.begin();
+                 retired != retiredGeometryHeapAllocations.end();) {
+                if (retired->reclaimAfter > completedFrameValue) {
+                    ++retired;
+                    continue;
+                }
+                insertFreeRange(geometryHeapFreeVertices,
+                                {retired->allocation.firstVertex, retired->allocation.vertexCount});
+                insertFreeRange(geometryHeapFreeIndices,
+                                {retired->allocation.firstIndex, retired->allocation.indexCount});
+                retired = retiredGeometryHeapAllocations.erase(retired);
+            }
+            // An unloaded resource may have no remaining ECS owner. Retire
+            // its physical range now, but retain it through the in-flight
+            // frame. Its MeshId is deliberately not tied to either offset.
+            std::unordered_set<const void*> liveGeometryResources;
+            liveGeometryResources.reserve(meshResources.size());
+            for (const auto& [mesh, resource] : meshResources) {
+                static_cast<void>(mesh);
+                liveGeometryResources.insert(resource);
+            }
+            for (auto allocation = geometryHeapAllocations.begin(); allocation != geometryHeapAllocations.end();) {
+                if (liveGeometryResources.contains(allocation->first)) {
+                    ++allocation;
+                    continue;
+                }
+                retiredGeometryHeapAllocations.push_back({allocation->second, submittedFrameValue});
+                allocation = geometryHeapAllocations.erase(allocation);
+            }
+            for (auto retired = retiredMeshletHeapAllocations.begin();
+                 retired != retiredMeshletHeapAllocations.end();) {
+                if (retired->reclaimAfter > completedFrameValue) {
+                    ++retired;
+                    continue;
+                }
+                const MeshletHeapAllocation& allocation = retired->allocation;
+                insertFreeRange(meshletHeapFreeRanges, {allocation.firstMeshlet, allocation.meshletCount});
+                insertFreeRange(meshletClusterHeapFreeRanges, {allocation.firstCluster, allocation.clusterCount});
+                insertFreeRange(meshletVertexHeapFreeRanges, {allocation.firstVertexIndex, allocation.vertexIndexCount});
+                insertFreeRange(meshletTriangleHeapFreeRanges, {allocation.firstTriangle, allocation.triangleCount});
+                retired = retiredMeshletHeapAllocations.erase(retired);
+            }
+            for (auto allocation = meshletHeapAllocations.begin(); allocation != meshletHeapAllocations.end();) {
+                if (liveGeometryResources.contains(allocation->first)) {
+                    ++allocation;
+                    continue;
+                }
+                retiredMeshletHeapAllocations.push_back({allocation->second, submittedFrameValue});
+                allocation = meshletHeapAllocations.erase(allocation);
+            }
             // Plan every final range before allocating GPU memory.  Keeping only
             // these records avoids a second, scene-sized CPU Mesh during upload.
             std::vector<MeshUpload> meshUploads;
@@ -378,30 +460,57 @@
             plannedUploadedMeshes.reserve(uniqueMeshes.size());
             std::uint32_t vertexCount = geometryHeapVertexHighWater;
             std::uint32_t indexCount = geometryHeapIndexHighWater;
+            const auto allocateRange = [](std::vector<GeometryHeapRange>& freeRanges,
+                                          std::uint32_t& highWater, const std::uint32_t count) {
+                for (auto range = freeRanges.begin(); range != freeRanges.end(); ++range) {
+                    if (range->count < count) continue;
+                    const std::uint32_t first = range->first;
+                    range->first += count;
+                    range->count -= count;
+                    if (range->count == 0U) freeRanges.erase(range);
+                    return first;
+                }
+                if (count > std::numeric_limits<std::uint32_t>::max() - highWater)
+                    throw std::runtime_error("Scene geometry exceeds 32-bit draw limits");
+                const std::uint32_t first = highWater;
+                highWater += count;
+                return first;
+            };
             const auto planUpload = [&](const Mesh* mesh) {
                 const auto resourceIt = meshResources.find(mesh);
                 if (resourceIt == meshResources.end() || resourceIt->second == nullptr)
                     throw std::runtime_error("Mesh has no stable GPU resource identity");
                 const void* const key = resourceIt->second;
+                if (!geometryHeapMeshIds.contains(key)) {
+                    if (nextGeometryHeapMeshId == MeshId::Invalid)
+                        throw std::runtime_error("Geometry mesh ID space exhausted");
+                    geometryHeapMeshIds.emplace(key, MeshId{nextGeometryHeapMeshId++});
+                }
                 if (const auto found = geometryHeapAllocations.find(key);
                     found != geometryHeapAllocations.end() &&
                     found->second.vertexCount == mesh->vertices.size() &&
                     found->second.indexCount == mesh->indices.size()) {
                     return MeshUploadRecord{found->second.firstIndex, found->second.firstVertex, {}};
                 }
-                if (mesh->vertices.size() > std::numeric_limits<std::uint32_t>::max() - vertexCount ||
-                    mesh->indices.size() > std::numeric_limits<std::uint32_t>::max() - indexCount) {
+                if (const auto previous = geometryHeapAllocations.find(key);
+                    previous != geometryHeapAllocations.end()) {
+                    retiredGeometryHeapAllocations.push_back({previous->second, submittedFrameValue});
+                    geometryHeapAllocations.erase(previous);
+                }
+                if (mesh->vertices.size() > std::numeric_limits<std::uint32_t>::max() ||
+                    mesh->indices.size() > std::numeric_limits<std::uint32_t>::max()) {
                     throw std::runtime_error("Scene geometry exceeds 32-bit draw limits");
                 }
-                const MeshUploadRecord record{indexCount, vertexCount, {}};
-                meshUploads.push_back({mesh, vertexCount, indexCount});
-                vertexCount += static_cast<std::uint32_t>(mesh->vertices.size());
-                indexCount += static_cast<std::uint32_t>(mesh->indices.size());
+                const auto vertices = static_cast<std::uint32_t>(mesh->vertices.size());
+                const auto indices = static_cast<std::uint32_t>(mesh->indices.size());
+                const MeshUploadRecord record{allocateRange(geometryHeapFreeIndices, indexCount, indices),
+                                              allocateRange(geometryHeapFreeVertices, vertexCount, vertices), {}};
+                meshUploads.push_back({mesh, record.firstVertex, record.firstIndex});
                 geometryHeapAllocations[key] = {
                     .firstVertex = record.firstVertex,
-                    .vertexCount = static_cast<std::uint32_t>(mesh->vertices.size()),
+                    .vertexCount = vertices,
                     .firstIndex = record.firstIndex,
-                    .indexCount = static_cast<std::uint32_t>(mesh->indices.size()),
+                    .indexCount = indices,
                 };
                 return record;
             };
@@ -526,9 +635,8 @@
             }
             // Meshlet streams intentionally use global vertex references so a
             // mesh shader can fetch the same packed vertex heap as the indexed
-            // fallback.  Unlike the old dense global stream, every resource
-            // owns a stable sub-allocation. Loading a world chunk consequently
-            // uploads only that chunk's meshlet payload.
+            // fallback. Their physical sub-allocations are reclaimable after
+            // the frame fence, just like indexed geometry.
             struct MeshletUpload {
                 const Mesh* mesh{};
                 GeometryHeapAllocation geometry{};
@@ -537,6 +645,22 @@
             std::vector<MeshletUpload> meshletUploads;
             std::unordered_map<const void*, std::uint32_t> firstMeshlets;
             std::unordered_map<const void*, std::uint32_t> firstMeshletClusters;
+            const auto allocateMeshletRange = [](std::vector<GeometryHeapRange>& freeRanges,
+                                                 std::uint32_t& highWater, const std::uint32_t count) {
+                for (auto range = freeRanges.begin(); range != freeRanges.end(); ++range) {
+                    if (range->count < count) continue;
+                    const std::uint32_t first = range->first;
+                    range->first += count;
+                    range->count -= count;
+                    if (range->count == 0U) freeRanges.erase(range);
+                    return first;
+                }
+                if (count > std::numeric_limits<std::uint32_t>::max() - highWater)
+                    throw std::runtime_error("Meshlet heap exceeds 32-bit shader addressing limits");
+                const std::uint32_t first = highWater;
+                highWater += count;
+                return first;
+            };
             firstMeshlets.reserve(geometryHeapAllocations.size());
             firstMeshletClusters.reserve(geometryHeapAllocations.size());
             meshletUploads.reserve(uniqueMeshes.size());
@@ -555,26 +679,30 @@
                 const bool needsUpload = allocationIt == meshletHeapAllocations.end() ||
                                          !payloadMatches(allocationIt->second);
                 if (needsUpload) {
-                    if (mesh->meshlets.size() > std::numeric_limits<std::uint32_t>::max() - meshletHeapHighWater ||
-                        mesh->meshletClusters.size() > std::numeric_limits<std::uint32_t>::max() - meshletClusterHeapHighWater ||
-                        mesh->meshletVertices.size() > std::numeric_limits<std::uint32_t>::max() - meshletVertexHeapHighWater ||
-                        mesh->meshletTriangles.size() > std::numeric_limits<std::uint32_t>::max() - meshletTriangleHeapHighWater) {
+                    if (allocationIt != meshletHeapAllocations.end()) {
+                        retiredMeshletHeapAllocations.push_back({allocationIt->second, submittedFrameValue});
+                        meshletHeapAllocations.erase(allocationIt);
+                    }
+                    if (mesh->meshlets.size() > std::numeric_limits<std::uint32_t>::max() ||
+                        mesh->meshletClusters.size() > std::numeric_limits<std::uint32_t>::max() ||
+                        mesh->meshletVertices.size() > std::numeric_limits<std::uint32_t>::max() ||
+                        mesh->meshletTriangles.size() > std::numeric_limits<std::uint32_t>::max()) {
                         throw std::runtime_error("Meshlet heap exceeds 32-bit shader addressing limits");
                     }
                     const MeshletHeapAllocation allocation{
-                        .firstMeshlet = meshletHeapHighWater,
+                        .firstMeshlet = allocateMeshletRange(meshletHeapFreeRanges, meshletHeapHighWater,
+                                                             static_cast<std::uint32_t>(mesh->meshlets.size())),
                         .meshletCount = static_cast<std::uint32_t>(mesh->meshlets.size()),
-                        .firstCluster = meshletClusterHeapHighWater,
+                        .firstCluster = allocateMeshletRange(meshletClusterHeapFreeRanges, meshletClusterHeapHighWater,
+                                                             static_cast<std::uint32_t>(mesh->meshletClusters.size())),
                         .clusterCount = static_cast<std::uint32_t>(mesh->meshletClusters.size()),
-                        .firstVertexIndex = meshletVertexHeapHighWater,
+                        .firstVertexIndex = allocateMeshletRange(meshletVertexHeapFreeRanges, meshletVertexHeapHighWater,
+                                                                 static_cast<std::uint32_t>(mesh->meshletVertices.size())),
                         .vertexIndexCount = static_cast<std::uint32_t>(mesh->meshletVertices.size()),
-                        .firstTriangle = meshletTriangleHeapHighWater,
+                        .firstTriangle = allocateMeshletRange(meshletTriangleHeapFreeRanges, meshletTriangleHeapHighWater,
+                                                             static_cast<std::uint32_t>(mesh->meshletTriangles.size())),
                         .triangleCount = static_cast<std::uint32_t>(mesh->meshletTriangles.size()),
                     };
-                    meshletHeapHighWater += allocation.meshletCount;
-                    meshletClusterHeapHighWater += allocation.clusterCount;
-                    meshletVertexHeapHighWater += allocation.vertexIndexCount;
-                    meshletTriangleHeapHighWater += allocation.triangleCount;
                     allocationIt = meshletHeapAllocations.insert_or_assign(resourceIt->second, allocation).first;
                 }
                 const MeshletHeapAllocation& allocation = allocationIt->second;
@@ -683,7 +811,7 @@
                     // draw path can therefore stop consulting MeshSourceData
                     // once all batches use MeshGpuResource directly.
                     if (const auto& resource = renderer.mesh.resource()) {
-                        resource->handle = MeshId{renderer.firstIndex};
+                        resource->handle = geometryHeapMeshIds.at(resource.get());
                         resource->firstVertex = firstVertex;
                         resource->vertexCount = mesh->vertexCount();
                         resource->firstIndex = renderer.firstIndex;

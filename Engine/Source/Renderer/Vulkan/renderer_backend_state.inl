@@ -157,16 +157,29 @@
         // indexed draws.  Keep meshlet culling off until a mesh-shader forward
         // pipeline consumes visibleMeshletBuffers.
         bool meshShaderPathActive = false;
-        // Geometry Heap. Mesh ranges are never derived from dense ECS order:
-        // a new proxy receives an append-only sub-allocation and removing a
-        // proxy leaves the old range untouched until a future heap compaction.
+        // Geometry Heap. Mesh ranges are never derived from dense ECS order.
+        // MeshId is a stable indirection handle; the allocation below is its
+        // current physical location and may therefore be recycled or moved.
         struct GeometryHeapAllocation final {
             std::uint32_t firstVertex{};
             std::uint32_t vertexCount{};
             std::uint32_t firstIndex{};
             std::uint32_t indexCount{};
         };
+        struct GeometryHeapRange final {
+            std::uint32_t first{};
+            std::uint32_t count{};
+        };
+        struct RetiredGeometryHeapAllocation final {
+            GeometryHeapAllocation allocation{};
+            std::uint64_t reclaimAfter{};
+        };
         std::unordered_map<const void*, GeometryHeapAllocation> geometryHeapAllocations;
+        std::unordered_map<const void*, MeshId> geometryHeapMeshIds;
+        std::vector<GeometryHeapRange> geometryHeapFreeVertices;
+        std::vector<GeometryHeapRange> geometryHeapFreeIndices;
+        std::vector<RetiredGeometryHeapAllocation> retiredGeometryHeapAllocations;
+        std::uint32_t nextGeometryHeapMeshId{};
         std::uint32_t geometryHeapVertexHighWater{};
         std::uint32_t geometryHeapIndexHighWater{};
         // Meshlet streams use the same stable-resource model as indexed
@@ -183,6 +196,15 @@
             std::uint32_t triangleCount{};
         };
         std::unordered_map<const void*, MeshletHeapAllocation> meshletHeapAllocations;
+        struct RetiredMeshletHeapAllocation final {
+            MeshletHeapAllocation allocation{};
+            std::uint64_t reclaimAfter{};
+        };
+        std::vector<GeometryHeapRange> meshletHeapFreeRanges;
+        std::vector<GeometryHeapRange> meshletClusterHeapFreeRanges;
+        std::vector<GeometryHeapRange> meshletVertexHeapFreeRanges;
+        std::vector<GeometryHeapRange> meshletTriangleHeapFreeRanges;
+        std::vector<RetiredMeshletHeapAllocation> retiredMeshletHeapAllocations;
         std::uint32_t meshletHeapHighWater{};
         std::uint32_t meshletClusterHeapHighWater{};
         std::uint32_t meshletVertexHeapHighWater{};
