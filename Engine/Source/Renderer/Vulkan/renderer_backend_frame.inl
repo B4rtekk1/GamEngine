@@ -1900,23 +1900,29 @@
 
                 const VkCommandBufferSubmitInfo postGraphicsCommand{
                     .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_SUBMIT_INFO, .commandBuffer = postGraphicsBuffer};
+                // Presentation depends on the graphics work which writes the
+                // swapchain image, not on Hi-Z.  Hi-Z is an exported frame-slot
+                // resource consumed when this slot is used again.
+                const VkSemaphoreSubmitInfo renderFinished{
+                    .sType = VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO, .semaphore = signalSemaphores[0],
+                    .stageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT};
                 const VkSubmitInfo2 postGraphicsSubmit{
                     .sType = VK_STRUCTURE_TYPE_SUBMIT_INFO_2,
-                    .commandBufferInfoCount = 1, .pCommandBufferInfos = &postGraphicsCommand};
+                    .commandBufferInfoCount = 1, .pCommandBufferInfos = &postGraphicsCommand,
+                    .signalSemaphoreInfoCount = 1, .pSignalSemaphoreInfos = &renderFinished};
                 if (vkQueueSubmit2(vulkanDevice.graphicsQueue(), 1, &postGraphicsSubmit, VK_NULL_HANDLE) != VK_SUCCESS) {
                     throw std::runtime_error("Could not submit graphics batch overlapping async Hi-Z");
                 }
 
+                // Keep the frame-slot fence behind both queues: the graphics
+                // queue processes this after postGraphicsSubmit, while the
+                // timeline wait keeps Hi-Z alive until it can be reused.
                 const VkSemaphoreSubmitInfo completeWait{
                     .sType = VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO, .semaphore = asyncComputeTimeline,
                     .value = computeValue, .stageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT};
-                const VkSemaphoreSubmitInfo renderFinished{
-                    .sType = VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO, .semaphore = signalSemaphores[0],
-                    .stageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT};
                 const VkSubmitInfo2 completionSubmit{
                     .sType = VK_STRUCTURE_TYPE_SUBMIT_INFO_2,
-                    .waitSemaphoreInfoCount = 1, .pWaitSemaphoreInfos = &completeWait,
-                    .signalSemaphoreInfoCount = 1, .pSignalSemaphoreInfos = &renderFinished};
+                    .waitSemaphoreInfoCount = 1, .pWaitSemaphoreInfos = &completeWait};
                 if (vkQueueSubmit2(vulkanDevice.graphicsQueue(), 1, &completionSubmit,
                                    inFlightFences[currentFrame]) != VK_SUCCESS) {
                     throw std::runtime_error("Could not complete async Hi-Z submission chain");

@@ -169,6 +169,24 @@
         std::unordered_map<const void*, GeometryHeapAllocation> geometryHeapAllocations;
         std::uint32_t geometryHeapVertexHighWater{};
         std::uint32_t geometryHeapIndexHighWater{};
+        // Meshlet streams use the same stable-resource model as indexed
+        // geometry.  A topology delta appends only the payload for its new
+        // MeshGpuResource; existing assets retain their shader-visible IDs.
+        struct MeshletHeapAllocation final {
+            std::uint32_t firstMeshlet{};
+            std::uint32_t meshletCount{};
+            std::uint32_t firstCluster{};
+            std::uint32_t clusterCount{};
+            std::uint32_t firstVertexIndex{};
+            std::uint32_t vertexIndexCount{};
+            std::uint32_t firstTriangle{};
+            std::uint32_t triangleCount{};
+        };
+        std::unordered_map<const void*, MeshletHeapAllocation> meshletHeapAllocations;
+        std::uint32_t meshletHeapHighWater{};
+        std::uint32_t meshletClusterHeapHighWater{};
+        std::uint32_t meshletVertexHeapHighWater{};
+        std::uint32_t meshletTriangleHeapHighWater{};
         std::array<Buffer, MAX_FRAMES_IN_FLIGHT> instanceBuffers;
         std::array<Buffer, MAX_FRAMES_IN_FLIGHT> reflectionProbeBuffers;
         // Allocated only with TAA. Descriptor binding 8 falls back to the

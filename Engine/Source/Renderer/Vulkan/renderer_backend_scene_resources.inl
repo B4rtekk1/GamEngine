@@ -258,6 +258,22 @@
 
         void createMeshBuffers() {
             auto uploadBatch = uploadContext.beginBatch();
+            // A full scene reload clears the indexed Geometry Heap before it
+            // reaches this function. Its meshlet offsets are tied to those
+            // vertex offsets, so discard the companion heap as one generation
+            // too. Ordinary topology deltas keep both heaps intact.
+            if (geometryHeapAllocations.empty() && vertexBuffer.handle() == VK_NULL_HANDLE) {
+                meshletBuffer.destroy();
+                meshletClusterBuffer.destroy();
+                meshletVertexBuffer.destroy();
+                meshletTriangleBuffer.destroy();
+                meshletHeapAllocations.clear();
+                meshletHeapHighWater = 0;
+                meshletClusterHeapHighWater = 0;
+                meshletVertexHeapHighWater = 0;
+                meshletTriangleHeapHighWater = 0;
+                globalMeshletCount = 0;
+            }
             // Renderable tables are reconstructed below, but geometry itself
             // is retained in the append-only Geometry Heap.  In particular,
             // do not clear GPUSceneDatabase here: existing proxies retain
@@ -510,65 +526,131 @@
             }
             // Meshlet streams intentionally use global vertex references so a
             // mesh shader can fetch the same packed vertex heap as the indexed
-            // fallback. Build all live payloads, including allocations reused
-            // from a previous topology rebuild.
-            std::vector<Culling::GpuMeshlet> gpuMeshlets;
-            std::vector<Culling::GpuMeshletCluster> gpuMeshletClusters;
-            std::vector<std::uint32_t> meshletVertices;
-            std::vector<std::uint32_t> meshletTriangles;
+            // fallback.  Unlike the old dense global stream, every resource
+            // owns a stable sub-allocation. Loading a world chunk consequently
+            // uploads only that chunk's meshlet payload.
+            struct MeshletUpload {
+                const Mesh* mesh{};
+                GeometryHeapAllocation geometry{};
+                MeshletHeapAllocation allocation{};
+            };
+            std::vector<MeshletUpload> meshletUploads;
             std::unordered_map<const void*, std::uint32_t> firstMeshlets;
             std::unordered_map<const void*, std::uint32_t> firstMeshletClusters;
-            gpuMeshlets.reserve(indexCount / 3U);
             firstMeshlets.reserve(geometryHeapAllocations.size());
+            firstMeshletClusters.reserve(geometryHeapAllocations.size());
+            meshletUploads.reserve(uniqueMeshes.size());
             for (const Mesh* mesh : uniqueMeshes) {
                 const auto resourceIt = meshResources.find(mesh);
                 if (resourceIt == meshResources.end()) continue;
-                const auto allocation = geometryHeapAllocations.find(resourceIt->second);
-                if (allocation == geometryHeapAllocations.end() || mesh->meshlets.empty()) continue;
-                const std::uint32_t firstMeshlet = static_cast<std::uint32_t>(gpuMeshlets.size());
-                if (!Culling::appendMeshletPayload(*mesh, allocation->second.firstVertex, gpuMeshlets,
-                                                   meshletVertices, meshletTriangles)) {
+                const auto geometry = geometryHeapAllocations.find(resourceIt->second);
+                if (geometry == geometryHeapAllocations.end() || mesh->meshlets.empty()) continue;
+                const auto payloadMatches = [mesh](const MeshletHeapAllocation& allocation) {
+                    return allocation.meshletCount == mesh->meshlets.size() &&
+                           allocation.clusterCount == mesh->meshletClusters.size() &&
+                           allocation.vertexIndexCount == mesh->meshletVertices.size() &&
+                           allocation.triangleCount == mesh->meshletTriangles.size();
+                };
+                auto allocationIt = meshletHeapAllocations.find(resourceIt->second);
+                const bool needsUpload = allocationIt == meshletHeapAllocations.end() ||
+                                         !payloadMatches(allocationIt->second);
+                if (needsUpload) {
+                    if (mesh->meshlets.size() > std::numeric_limits<std::uint32_t>::max() - meshletHeapHighWater ||
+                        mesh->meshletClusters.size() > std::numeric_limits<std::uint32_t>::max() - meshletClusterHeapHighWater ||
+                        mesh->meshletVertices.size() > std::numeric_limits<std::uint32_t>::max() - meshletVertexHeapHighWater ||
+                        mesh->meshletTriangles.size() > std::numeric_limits<std::uint32_t>::max() - meshletTriangleHeapHighWater) {
+                        throw std::runtime_error("Meshlet heap exceeds 32-bit shader addressing limits");
+                    }
+                    const MeshletHeapAllocation allocation{
+                        .firstMeshlet = meshletHeapHighWater,
+                        .meshletCount = static_cast<std::uint32_t>(mesh->meshlets.size()),
+                        .firstCluster = meshletClusterHeapHighWater,
+                        .clusterCount = static_cast<std::uint32_t>(mesh->meshletClusters.size()),
+                        .firstVertexIndex = meshletVertexHeapHighWater,
+                        .vertexIndexCount = static_cast<std::uint32_t>(mesh->meshletVertices.size()),
+                        .firstTriangle = meshletTriangleHeapHighWater,
+                        .triangleCount = static_cast<std::uint32_t>(mesh->meshletTriangles.size()),
+                    };
+                    meshletHeapHighWater += allocation.meshletCount;
+                    meshletClusterHeapHighWater += allocation.clusterCount;
+                    meshletVertexHeapHighWater += allocation.vertexIndexCount;
+                    meshletTriangleHeapHighWater += allocation.triangleCount;
+                    allocationIt = meshletHeapAllocations.insert_or_assign(resourceIt->second, allocation).first;
+                }
+                const MeshletHeapAllocation& allocation = allocationIt->second;
+                firstMeshlets.emplace(resourceIt->second, allocation.firstMeshlet);
+                firstMeshletClusters.emplace(resourceIt->second, allocation.firstCluster);
+                if (needsUpload) meshletUploads.push_back({mesh, geometry->second, allocation});
+            }
+            globalMeshletCount = meshletHeapHighWater;
+            const auto growCapacity = [](const std::uint32_t required) {
+                return std::max(1U, required + required / 2U + 1U);
+            };
+            const auto ensureMeshletHeap = [&](Buffer& buffer, const std::uint32_t required,
+                                               const VkDeviceSize elementSize) {
+                const VkDeviceSize requiredBytes = elementSize * std::max(1U, required);
+                if (buffer.handle() != VK_NULL_HANDLE && buffer.size() >= requiredBytes) return false;
+                buffer.createDeviceLocalEmpty(device, elementSize * growCapacity(required),
+                    VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, vulkanDevice.allocator());
+                return true;
+            };
+            const bool meshletHeapReallocated =
+                ensureMeshletHeap(meshletBuffer, meshletHeapHighWater, sizeof(Culling::GpuMeshlet)) |
+                ensureMeshletHeap(meshletClusterBuffer, meshletClusterHeapHighWater, sizeof(Culling::GpuMeshletCluster)) |
+                ensureMeshletHeap(meshletVertexBuffer, meshletVertexHeapHighWater, sizeof(std::uint32_t)) |
+                ensureMeshletHeap(meshletTriangleBuffer, meshletTriangleHeapHighWater, sizeof(std::uint32_t));
+            if (meshletHeapReallocated) {
+                // A capacity increase replaces all four backing buffers. Their
+                // stable offsets remain valid, but every live allocation must
+                // be restored once into the enlarged heap.
+                meshletUploads.clear();
+                meshletUploads.reserve(uniqueMeshes.size());
+                for (const Mesh* mesh : uniqueMeshes) {
+                    const auto resource = meshResources.find(mesh);
+                    const auto geometry = resource == meshResources.end() ? geometryHeapAllocations.end() :
+                        geometryHeapAllocations.find(resource->second);
+                    const auto allocation = resource == meshResources.end() ? meshletHeapAllocations.end() :
+                        meshletHeapAllocations.find(resource->second);
+                    if (geometry != geometryHeapAllocations.end() && allocation != meshletHeapAllocations.end() &&
+                        !mesh->meshlets.empty()) meshletUploads.push_back({mesh, geometry->second, allocation->second});
+                }
+            }
+            for (const MeshletUpload& upload : meshletUploads) {
+                std::vector<Culling::GpuMeshlet> meshlets;
+                std::vector<Culling::GpuMeshletCluster> clusters;
+                std::vector<std::uint32_t> vertices;
+                std::vector<std::uint32_t> triangles;
+                meshlets.reserve(upload.allocation.meshletCount);
+                clusters.reserve(upload.allocation.clusterCount);
+                vertices.reserve(upload.allocation.vertexIndexCount);
+                triangles.reserve(upload.allocation.triangleCount);
+                if (!Culling::appendMeshletPayload(*upload.mesh, upload.geometry.firstVertex, meshlets, vertices, triangles) ||
+                    !Culling::appendMeshletClusterPayload(*upload.mesh, upload.allocation.firstMeshlet, clusters) ||
+                    meshlets.size() != upload.allocation.meshletCount || clusters.size() != upload.allocation.clusterCount ||
+                    vertices.size() != upload.allocation.vertexIndexCount || triangles.size() != upload.allocation.triangleCount) {
                     throw std::runtime_error("Invalid meshlet payload during GPU scene upload");
                 }
-                const std::uint32_t firstCluster = static_cast<std::uint32_t>(gpuMeshletClusters.size());
-                if (!Culling::appendMeshletClusterPayload(*mesh, firstMeshlet, gpuMeshletClusters))
-                    throw std::runtime_error("Invalid meshlet cluster hierarchy during GPU scene upload");
-                firstMeshlets.emplace(resourceIt->second, firstMeshlet);
-                firstMeshletClusters.emplace(resourceIt->second, firstCluster);
+                // appendMeshletPayload/ClusterPayload are also used by the
+                // cooker and therefore append relative to their destination.
+                // Rebase this standalone upload into the persistent heap.
+                for (Culling::GpuMeshlet& meshlet : meshlets) {
+                    meshlet.range.x += upload.allocation.firstVertexIndex;
+                    meshlet.range.z += upload.allocation.firstTriangle;
+                }
+                for (Culling::GpuMeshletCluster& cluster : clusters)
+                    cluster.range.x += upload.allocation.firstCluster;
+                meshletBuffer.uploadDeviceLocal(meshlets.data(), sizeof(Culling::GpuMeshlet) * meshlets.size(),
+                    sizeof(Culling::GpuMeshlet) * upload.allocation.firstMeshlet, commandPool, vulkanDevice.graphicsQueue());
+                meshletClusterBuffer.uploadDeviceLocal(clusters.data(), sizeof(Culling::GpuMeshletCluster) * clusters.size(),
+                    sizeof(Culling::GpuMeshletCluster) * upload.allocation.firstCluster, commandPool, vulkanDevice.graphicsQueue());
+                meshletVertexBuffer.uploadDeviceLocal(vertices.data(), sizeof(std::uint32_t) * vertices.size(),
+                    sizeof(std::uint32_t) * upload.allocation.firstVertexIndex, commandPool, vulkanDevice.graphicsQueue());
+                meshletTriangleBuffer.uploadDeviceLocal(triangles.data(), sizeof(std::uint32_t) * triangles.size(),
+                    sizeof(std::uint32_t) * upload.allocation.firstTriangle, commandPool, vulkanDevice.graphicsQueue());
             }
-            globalMeshletCount = static_cast<std::uint32_t>(gpuMeshlets.size());
-            // Vulkan forbids zero-byte buffers. Bind an inert record in an
-            // empty scene so descriptor setup can remain branch-free.
-            const Culling::GpuMeshlet emptyMeshlet{};
-            const Culling::GpuMeshletCluster emptyMeshletCluster{};
-            const std::uint32_t emptyWord{};
-            meshletBuffer.destroy();
-            meshletClusterBuffer.destroy();
-            meshletVertexBuffer.destroy();
-            meshletTriangleBuffer.destroy();
-            meshletBuffer.createDeviceLocal(vulkanDevice.physical(), device,
-                gpuMeshlets.empty() ? static_cast<const void*>(&emptyMeshlet) : gpuMeshlets.data(),
-                sizeof(Culling::GpuMeshlet) * std::max<std::size_t>(1, gpuMeshlets.size()),
-                VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
-                commandPool, vulkanDevice.graphicsQueue(), vulkanDevice.allocator());
-            meshletClusterBuffer.createDeviceLocal(vulkanDevice.physical(), device,
-                gpuMeshletClusters.empty() ? static_cast<const void*>(&emptyMeshletCluster) : gpuMeshletClusters.data(),
-                sizeof(Culling::GpuMeshletCluster) * std::max<std::size_t>(1, gpuMeshletClusters.size()),
-                VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
-                commandPool, vulkanDevice.graphicsQueue(), vulkanDevice.allocator());
-            meshletVertexBuffer.createDeviceLocal(vulkanDevice.physical(), device,
-                meshletVertices.empty() ? static_cast<const void*>(&emptyWord) : meshletVertices.data(),
-                sizeof(std::uint32_t) * std::max<std::size_t>(1, meshletVertices.size()),
-                VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
-                commandPool, vulkanDevice.graphicsQueue(), vulkanDevice.allocator());
-            meshletTriangleBuffer.createDeviceLocal(vulkanDevice.physical(), device,
-                meshletTriangles.empty() ? static_cast<const void*>(&emptyWord) : meshletTriangles.data(),
-                sizeof(std::uint32_t) * std::max<std::size_t>(1, meshletTriangles.size()),
-                VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
-                commandPool, vulkanDevice.graphicsQueue(), vulkanDevice.allocator());
-            // A topology rebuild replaces the shared meshlet SSBO. Existing
-            // per-frame descriptor sets remain valid only after this rebind.
-            if (cullingDescriptorPool != VK_NULL_HANDLE) {
+            // Descriptors change only on heap growth, never for an ordinary
+            // streamed asset upload.
+            if (meshletHeapReallocated && cullingDescriptorPool != VK_NULL_HANDLE) {
                 for (std::uint32_t frame = 0; frame < MAX_FRAMES_IN_FLIGHT; ++frame)
                     refreshGPUSceneDescriptors(frame);
             }
