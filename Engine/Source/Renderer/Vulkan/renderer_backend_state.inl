@@ -10,6 +10,9 @@
         VkDevice device = VK_NULL_HANDLE;
 
         Swapchain swapchain;
+        // Compatibility handles are retained until the renderer's remaining
+        // resize/reload call sites are consolidated. Dynamic rendering never
+        // creates or assigns them.
         VkFramebuffer hdrFramebuffer = VK_NULL_HANDLE;
         VkFramebuffer lightingHdrFramebuffer = VK_NULL_HANDLE;
         VkFramebuffer waterHdrFramebuffer = VK_NULL_HANDLE;
@@ -22,8 +25,6 @@
         // This pass starts from the descriptor's sampled layout instead of
         // discarding the cached image through an UNDEFINED transition.
         ForwardPass sceneViewportForwardPass;
-        VkRenderPass editorUiRenderPass = VK_NULL_HANDLE;
-        std::vector<VkFramebuffer> editorUiFramebuffers;
         VkDescriptorSet gameViewportDescriptor = VK_NULL_HANDLE;
         std::array<VkDescriptorSet, 2> gameViewportTemporalDescriptors{};
         VkDescriptorSet sceneViewportDescriptor = VK_NULL_HANDLE;

@@ -15,20 +15,13 @@ namespace Engine {
         if (device == VK_NULL_HANDLE) {
             throw std::invalid_argument("Could not create graphics pipeline for a null VkDevice");
         }
-        if (options.colorFormat == VK_FORMAT_UNDEFINED) {
-            throw std::invalid_argument("Graphics pipeline requires a color format");
+        if (options.colorFormat == VK_FORMAT_UNDEFINED && options.depthFormat == VK_FORMAT_UNDEFINED) {
+            throw std::invalid_argument("Graphics pipeline requires a color or depth attachment format");
         }
 
         destroy();
         device_ = device;
         try {
-            if (options.existingRenderPass != VK_NULL_HANDLE) {
-                renderPass_ = options.existingRenderPass;
-                ownsRenderPass_ = false;
-            } else {
-                createRenderPass(options);
-                ownsRenderPass_ = true;
-            }
             createPipelineLayout(options);
             createGraphicsPipeline(options);
         } catch (...) {
@@ -45,18 +38,17 @@ namespace Engine {
             if (layout_ != VK_NULL_HANDLE) {
                 vkDestroyPipelineLayout(device_, layout_, nullptr);
             }
-            if (ownsRenderPass_ && renderPass_ != VK_NULL_HANDLE) {
-                vkDestroyRenderPass(device_, renderPass_, nullptr);
-            }
         }
         pipeline_ = VK_NULL_HANDLE;
         layout_ = VK_NULL_HANDLE;
-        renderPass_ = VK_NULL_HANDLE;
-        ownsRenderPass_ = false;
         device_ = VK_NULL_HANDLE;
     }
 
-    void GraphicsPipeline::createRenderPass(const GraphicsPipelineOptions &options) {
+    namespace {
+    // Kept temporarily as source history while the surrounding migration is
+    // reviewed; it is deliberately excluded from the build and has no API.
+    [[maybe_unused]] void legacyRenderPassImplementation() {
+#if 0
         const bool usesMsaa = options.samples != VK_SAMPLE_COUNT_1_BIT;
         const bool usesDepth = options.depthFormat != VK_FORMAT_UNDEFINED;
         const bool usesAdditionalColor = options.additionalColorFormat != VK_FORMAT_UNDEFINED;
@@ -260,7 +252,9 @@ namespace Engine {
         if (result != VK_SUCCESS) {
             throw std::runtime_error("Could not create render pass");
         }
+ #endif
     }
+    } // namespace
 
     void GraphicsPipeline::createPipelineLayout(const GraphicsPipelineOptions &options) {
         VkPushConstantRange range{};
@@ -340,9 +334,10 @@ namespace Engine {
         VkPipelineColorBlendAttachmentState thirdColorAttachment = colorAttachment;
         std::array colorAttachments{colorAttachment, additionalColorAttachment, thirdColorAttachment};
         VkPipelineColorBlendStateCreateInfo blend{VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO};
-        blend.attachmentCount = 1U + (options.additionalColorFormat != VK_FORMAT_UNDEFINED ? 1U : 0U) +
-                                (options.thirdColorFormat != VK_FORMAT_UNDEFINED ? 1U : 0U);
-        blend.pAttachments = colorAttachments.data();
+        blend.attachmentCount = options.colorFormat == VK_FORMAT_UNDEFINED ? 0U :
+            1U + (options.additionalColorFormat != VK_FORMAT_UNDEFINED ? 1U : 0U) +
+            (options.thirdColorFormat != VK_FORMAT_UNDEFINED ? 1U : 0U);
+        blend.pAttachments = blend.attachmentCount == 0 ? nullptr : colorAttachments.data();
         constexpr std::array dynamicStates{VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR};
         VkPipelineDynamicStateCreateInfo dynamic{VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO};
         dynamic.dynamicStateCount = static_cast<uint32_t>(dynamicStates.size());
@@ -359,8 +354,24 @@ namespace Engine {
         info.pDepthStencilState = &depth;
         info.pColorBlendState = &blend;
         info.pDynamicState = &dynamic;
+        std::array colorFormats{options.colorFormat, options.additionalColorFormat,
+                                options.thirdColorFormat};
+        const uint32_t colorAttachmentCount = options.colorFormat == VK_FORMAT_UNDEFINED ? 0U :
+            1U + (options.additionalColorFormat != VK_FORMAT_UNDEFINED ? 1U : 0U) +
+            (options.thirdColorFormat != VK_FORMAT_UNDEFINED ? 1U : 0U);
+        VkPipelineRenderingCreateInfo rendering{
+            .sType = VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO,
+            .colorAttachmentCount = colorAttachmentCount,
+            .pColorAttachmentFormats = colorFormats.data(),
+            .depthAttachmentFormat = options.depthFormat,
+            .stencilAttachmentFormat = VK_FORMAT_UNDEFINED,
+        };
+        // GraphicsPipeline is intentionally render-pass agnostic. Attachment
+        // compatibility belongs to the dynamic-rendering declaration, not to
+        // a persistent VkRenderPass object.
+        info.pNext = &rendering;
         info.layout = layout_;
-        info.renderPass = renderPass_;
+        info.renderPass = VK_NULL_HANDLE;
         if (vkCreateGraphicsPipelines(device_, VK_NULL_HANDLE, 1, &info, nullptr, &pipeline_) != VK_SUCCESS) {
             throw std::runtime_error("Could not create graphics pipeline");
         }

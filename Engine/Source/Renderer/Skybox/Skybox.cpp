@@ -18,7 +18,7 @@ namespace Engine {
     Skybox::~Skybox() { destroy(); }
 
     void Skybox::create(VkPhysicalDevice physicalDevice, VkDevice device, VkCommandPool commandPool, VkQueue queue,
-                        VkRenderPass renderPass, VkFormat colorFormat, VkSampleCountFlagBits samples,
+                        VkFormat colorFormat, VkFormat depthFormat, VkSampleCountFlagBits samples,
                         VkDescriptorSetLayout descriptorSetLayout, const std::vector<VkBuffer> &uniformBuffers,
                         VkDeviceSize uniformBufferRange, Assets::AssetManager &assets, VmaAllocator allocator,
                         const std::uint32_t colorAttachmentCount) {
@@ -31,7 +31,7 @@ namespace Engine {
         try {
             vertexBuffer_.createDeviceLocal(physicalDevice, device_, kVertices.data(), sizeof(kVertices),
                                             VK_BUFFER_USAGE_VERTEX_BUFFER_BIT, commandPool, queue, allocator);
-            pipeline_.create(device_, renderPass, colorFormat, samples, descriptorSetLayout_, assets,
+            pipeline_.create(device_, colorFormat, depthFormat, samples, descriptorSetLayout_, assets,
                              colorAttachmentCount);
             VkDescriptorPoolSize sizes[] = {
                 {VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, static_cast<uint32_t>(uniformBuffers.size())},

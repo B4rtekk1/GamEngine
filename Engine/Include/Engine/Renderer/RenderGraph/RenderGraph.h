@@ -139,10 +139,9 @@ namespace Engine::RenderGraph {
         void read(TextureHandle texture, TextureUsage usage = TextureUsage::SampledRead);
         void write(TextureHandle texture, TextureUsage usage);
         /**
-         * Declares the state established by the pass callback itself (for
-         * example by a legacy VkRenderPass finalLayout).  No barrier is
-         * emitted here: the graph uses this state as the source of the next
-         * dependency.
+         * Declares the state established by the pass callback itself. No
+         * barrier is emitted here: the graph uses this state as the source of
+         * the next dependency.
          */
         void setFinalTextureState(TextureHandle texture, TextureState state);
         [[nodiscard]] TextureHandle writeTexture(std::string name, const TextureDesc& desc,

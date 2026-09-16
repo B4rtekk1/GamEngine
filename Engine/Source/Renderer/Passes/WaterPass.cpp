@@ -19,6 +19,7 @@ void WaterPass::create(const VkDevice device, const VkFormat colorFormat, const 
     hasVelocity_ = velocity;
     GraphicsPipelineOptions options{};
     options.colorFormat = colorFormat;
+    options.dynamicRendering = true;
     options.additionalColorFormat = velocity ? VK_FORMAT_R16G16_SFLOAT : VK_FORMAT_UNDEFINED;
     options.additionalColorLoadOp = velocity ? VK_ATTACHMENT_LOAD_OP_LOAD : VK_ATTACHMENT_LOAD_OP_CLEAR;
     options.depthFormat = depthFormat;
@@ -62,6 +63,8 @@ void WaterPass::create(const VkDevice device, const VkFormat colorFormat, const 
         {9, 0, VK_FORMAT_A2B10G10R10_SNORM_PACK32, offsetof(GpuVertex, tangent)},
     };
     pipeline_.create(device, options);
+    samples_ = samples;
+    depthResolveMode_ = depthResolveMode;
     createSceneDescriptors(opaqueColor, opaqueDepth);
 }
 
@@ -95,14 +98,46 @@ void WaterPass::destroy() noexcept {
     }
     device_ = VK_NULL_HANDLE; descriptorPool_ = VK_NULL_HANDLE; sceneTextureLayout_ = VK_NULL_HANDLE;
     sceneTextureSets_.fill(VK_NULL_HANDLE); hasVelocity_ = false;
+    samples_ = VK_SAMPLE_COUNT_1_BIT; depthResolveMode_ = VK_RESOLVE_MODE_NONE;
 }
 
-void WaterPass::begin(const VkCommandBuffer commandBuffer, const VkFramebuffer framebuffer,
-                      const VkExtent2D extent, const VkDescriptorSet descriptorSet,
+void WaterPass::begin(const VkCommandBuffer commandBuffer, const VkImageView colorView, const VkImageView depthView,
+                      const VkImageView velocityView, const VkImageView colorResolveView,
+                      const VkImageView depthResolveView, const VkExtent2D extent, const VkDescriptorSet descriptorSet,
                       const std::uint32_t frameIndex, const VkBuffer vertexBuffer, const VkBuffer indexBuffer) const {
-    VkRenderPassBeginInfo info{VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO};
-    info.renderPass = pipeline_.renderPass(); info.framebuffer = framebuffer; info.renderArea.extent = extent;
-    vkCmdBeginRenderPass(commandBuffer, &info, VK_SUBPASS_CONTENTS_INLINE);
+    VkRenderingAttachmentInfo color{VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO};
+    color.imageView = colorView;
+    color.imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+    color.loadOp = VK_ATTACHMENT_LOAD_OP_LOAD;
+    color.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+    if (samples_ != VK_SAMPLE_COUNT_1_BIT) {
+        color.resolveMode = VK_RESOLVE_MODE_AVERAGE_BIT;
+        color.resolveImageView = colorResolveView;
+        color.resolveImageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+    }
+    VkRenderingAttachmentInfo velocity{VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO};
+    velocity.imageView = velocityView;
+    velocity.imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+    velocity.loadOp = VK_ATTACHMENT_LOAD_OP_LOAD;
+    velocity.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+    std::array colors{color, velocity};
+    VkRenderingAttachmentInfo depth{VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO};
+    depth.imageView = depthView;
+    depth.imageLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL;
+    depth.loadOp = VK_ATTACHMENT_LOAD_OP_LOAD;
+    depth.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+    if (samples_ != VK_SAMPLE_COUNT_1_BIT && depthResolveMode_ != VK_RESOLVE_MODE_NONE) {
+        depth.resolveMode = depthResolveMode_;
+        depth.resolveImageView = depthResolveView;
+        depth.resolveImageLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL;
+    }
+    VkRenderingInfo rendering{VK_STRUCTURE_TYPE_RENDERING_INFO};
+    rendering.renderArea.extent = extent;
+    rendering.layerCount = 1;
+    rendering.colorAttachmentCount = hasVelocity_ ? 2U : 1U;
+    rendering.pColorAttachments = colors.data();
+    rendering.pDepthAttachment = &depth;
+    vkCmdBeginRendering(commandBuffer, &rendering);
     vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline_.handle());
     const std::array sets{descriptorSet, sceneTextureSets_.at(frameIndex % FramesInFlight)};
     vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline_.layout(), 0,
@@ -122,5 +157,5 @@ void WaterPass::draw(const VkCommandBuffer commandBuffer, const VkDescriptorSet 
     vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline_.layout(), 0, 1, &descriptorSet, 0, nullptr);
     indirectDraw.record(commandBuffer, commandOffset, countOffset);
 }
-void WaterPass::end(const VkCommandBuffer commandBuffer) { vkCmdEndRenderPass(commandBuffer); }
+void WaterPass::end(const VkCommandBuffer commandBuffer) { vkCmdEndRendering(commandBuffer); }
 } // namespace Engine

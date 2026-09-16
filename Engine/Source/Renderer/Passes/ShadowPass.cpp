@@ -412,8 +412,11 @@ void ShadowPass::create(VkPhysicalDevice physicalDevice, VkDevice device,
         pipelineInfo.pMultisampleState = &multisampling;
         pipelineInfo.pDepthStencilState = &depth;
         pipelineInfo.pDynamicState = &dynamic;
+        VkPipelineRenderingCreateInfo rendering{VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO};
+        rendering.depthAttachmentFormat = shadowMap_->format();
+        pipelineInfo.pNext = &rendering;
         pipelineInfo.layout = pipelineLayout_;
-        pipelineInfo.renderPass = shadowMap_->renderPass();
+        pipelineInfo.renderPass = VK_NULL_HANDLE;
         pipelineInfo.stageCount = std::size(opaqueStages);
         pipelineInfo.pStages = opaqueStages.data();
         if (vkCreateGraphicsPipelines(device_, VK_NULL_HANDLE, 1, &pipelineInfo,
@@ -1166,11 +1169,16 @@ void ShadowPass::record(const VkCommandBuffer commandBuffer,
     atlasDependency.pImageMemoryBarriers = &atlasBarrier;
     vkCmdPipelineBarrier2(commandBuffer, &atlasDependency);
 
-    VkRenderPassBeginInfo passInfo{VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO};
-    passInfo.renderPass = shadowMap_->renderPass();
-    passInfo.framebuffer = shadowMap_->framebuffer();
-    passInfo.renderArea.extent = {ShadowMap::Resolution, ShadowMap::Resolution};
-    vkCmdBeginRenderPass(commandBuffer, &passInfo, VK_SUBPASS_CONTENTS_INLINE);
+    VkRenderingAttachmentInfo depth{VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO};
+    depth.imageView = shadowMap_->imageView();
+    depth.imageLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+    depth.loadOp = VK_ATTACHMENT_LOAD_OP_LOAD;
+    depth.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+    VkRenderingInfo rendering{VK_STRUCTURE_TYPE_RENDERING_INFO};
+    rendering.renderArea.extent = {ShadowMap::Resolution, ShadowMap::Resolution};
+    rendering.layerCount = 1;
+    rendering.pDepthAttachment = &depth;
+    vkCmdBeginRendering(commandBuffer, &rendering);
     // The one-sided stream is built from non-foliage batches and is therefore
     // opaque. Render it with a vertex-only depth pipeline.
     vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, opaquePipeline_);
@@ -1233,10 +1241,10 @@ void ShadowPass::record(const VkCommandBuffer commandBuffer,
                                     pipelineLayout_, 0, 1, &sceneDescriptorSet, 0, nullptr);
         }
     }
-    vkCmdEndRenderPass(commandBuffer);
+    vkCmdEndRendering(commandBuffer);
 
     // This is the sole publication point for new/recycled mappings. It is
-    // deliberately after vkCmdEndRenderPass: the depth attachment write is
+    // deliberately after rendering ends: the depth attachment write is
     // ordered before the host-visible table update and the latter is made
     // visible to the following forward fragment sampling work.
     if (!pendingPageCommits_.empty()) {

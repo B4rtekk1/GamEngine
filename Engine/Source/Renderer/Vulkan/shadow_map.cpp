@@ -102,52 +102,6 @@ namespace Engine {
                 throw std::runtime_error("Could not create shadow depth sampler");
             }
 
-            VkAttachmentDescription depth{.samples = VK_SAMPLE_COUNT_1_BIT};
-            depth.format = format_;
-            depth.loadOp = VK_ATTACHMENT_LOAD_OP_LOAD;
-            depth.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
-            depth.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
-            depth.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
-            depth.initialLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
-            depth.finalLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-            VkAttachmentReference depthRef{0, VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL};
-            VkSubpassDescription subpass{};
-            subpass.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
-            subpass.pDepthStencilAttachment = &depthRef;
-            std::array dependencies{VkSubpassDependency{}, VkSubpassDependency{}};
-            dependencies[0].srcSubpass = VK_SUBPASS_EXTERNAL;
-            dependencies[0].dstSubpass = 0;
-            dependencies[0].srcStageMask = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
-            dependencies[0].srcAccessMask = VK_ACCESS_SHADER_READ_BIT;
-            dependencies[0].dstStageMask = VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT;
-            dependencies[0].dstAccessMask = VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
-            dependencies[1].srcSubpass = 0;
-            dependencies[1].dstSubpass = VK_SUBPASS_EXTERNAL;
-            dependencies[1].srcStageMask = VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT;
-            dependencies[1].srcAccessMask = VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
-            dependencies[1].dstStageMask = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
-            dependencies[1].dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
-            VkRenderPassCreateInfo pass{VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO};
-            pass.attachmentCount = 1;
-            pass.pAttachments = &depth;
-            pass.subpassCount = 1;
-            pass.pSubpasses = &subpass;
-            pass.dependencyCount = static_cast<uint32_t>(dependencies.size());
-            pass.pDependencies = dependencies.data();
-            if (vkCreateRenderPass(device_, &pass, nullptr, &renderPass_) != VK_SUCCESS) {
-                throw std::runtime_error(
-                    "Could not create shadow render pass");
-            }
-            VkFramebufferCreateInfo framebuffer{VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO};
-            framebuffer.renderPass = renderPass_;
-            framebuffer.attachmentCount = 1;
-            framebuffer.pAttachments = &imageView_;
-            framebuffer.width = Resolution;
-            framebuffer.height = Resolution;
-            framebuffer.layers = 1;
-            if (vkCreateFramebuffer(device_, &framebuffer, nullptr, &framebuffer_) != VK_SUCCESS) {
-                throw std::runtime_error("Could not create shadow framebuffer");
-            }
         } catch (...) {
             destroy();
             throw;
@@ -157,12 +111,6 @@ namespace Engine {
     void ShadowMap::destroy() noexcept {
         if (device_ == VK_NULL_HANDLE) {
             return;
-        }
-        if (framebuffer_ != nullptr) {
-            vkDestroyFramebuffer(device_, framebuffer_, nullptr);
-        }
-        if (renderPass_ != nullptr) {
-            vkDestroyRenderPass(device_, renderPass_, nullptr);
         }
         if (sampler_ != nullptr) {
             vkDestroySampler(device_, sampler_, nullptr);
@@ -179,8 +127,6 @@ namespace Engine {
         if (image_ != nullptr) {
             vmaDestroyImage(allocator_, image_, allocation_);
         }
-        framebuffer_ = VK_NULL_HANDLE;
-        renderPass_ = VK_NULL_HANDLE;
         sampler_ = VK_NULL_HANDLE;
         linearSampler_ = VK_NULL_HANDLE;
         depthSampler_ = VK_NULL_HANDLE;

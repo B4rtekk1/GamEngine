@@ -23,7 +23,7 @@ namespace Engine {
         Skybox &operator=(const Skybox &) = delete;
 
         void create(VkPhysicalDevice physicalDevice, VkDevice device, VkCommandPool commandPool,
-                    VkQueue queue, VkRenderPass renderPass, VkFormat colorFormat,
+                    VkQueue queue, VkFormat colorFormat, VkFormat depthFormat,
                     VkSampleCountFlagBits samples, VkDescriptorSetLayout descriptorSetLayout,
                     const std::vector<VkBuffer> &uniformBuffers, VkDeviceSize uniformBufferRange,
                     Assets::AssetManager &assets, VmaAllocator allocator,

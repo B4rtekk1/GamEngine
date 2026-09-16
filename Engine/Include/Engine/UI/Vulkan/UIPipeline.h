@@ -37,7 +37,7 @@ namespace Engine::UI {
     private:
         VkDevice device_ = VK_NULL_HANDLE;
         GraphicsPipeline pipeline_;
-        std::vector<VkFramebuffer> framebuffers_;
+        std::vector<VkImageView> imageViews_;
         VkDescriptorSetLayout descriptorSetLayout_ = VK_NULL_HANDLE;
         VkDescriptorPool descriptorPool_ = VK_NULL_HANDLE;
         VkDescriptorSet descriptorSet_ = VK_NULL_HANDLE;

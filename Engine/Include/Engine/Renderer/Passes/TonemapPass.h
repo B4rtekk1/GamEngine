@@ -42,7 +42,7 @@ namespace Engine {
         VkDescriptorSetLayout descriptorSetLayout_ = VK_NULL_HANDLE;
         VkDescriptorPool descriptorPool_ = VK_NULL_HANDLE;
         std::array<VkDescriptorSet, 3> descriptorSets_{};
-        std::vector<VkFramebuffer> framebuffers_;
+        std::vector<VkImageView> targetViews_;
         bool manualGamma_ = false;
     };
 } // namespace Engine

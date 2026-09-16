@@ -19,7 +19,7 @@ namespace Engine {
 
         SkyboxPipeline &operator=(const SkyboxPipeline &) = delete;
 
-        void create(VkDevice device, VkRenderPass renderPass, VkFormat colorFormat,
+        void create(VkDevice device, VkFormat colorFormat, VkFormat depthFormat,
                     VkSampleCountFlagBits samples, VkDescriptorSetLayout descriptorSetLayout,
                     Assets::AssetManager &assets, std::uint32_t colorAttachmentCount = 1);
 

@@ -537,9 +537,9 @@
 
             GraphicsPipelineOptions options{};
             options.colorFormat = HdrBuffer::Format;
+            options.dynamicRendering = true;
             options.depthFormat = depthBuffer.format();
             options.samples = msaa.sampleCount();
-            options.existingRenderPass = lightingForwardPass.renderPass();
             options.additionalColorFormat = antialiasingLevel == AntialiasingLevel::TAA
                 ? VK_FORMAT_R16G16_SFLOAT : VK_FORMAT_UNDEFINED;
             options.shader = antialiasingLevel == AntialiasingLevel::TAA
@@ -557,11 +557,9 @@
             };
             particlePipeline.create(device, options);
 
-            // Scene View uses a distinct render pass, so it requires a
-            // compatible particle pipeline of its own.
-            options.existingRenderPass = msaa.enabled()
-                ? forwardPass.renderPass()
-                : sceneViewportForwardPass.renderPass();
+            // Dynamic rendering makes this pipeline independent from the
+            // target used by the Game or Scene View.
+            options.dynamicRendering = true;
             options.shader = "shaders/particle_billboard_no_velocity.spv";
             sceneParticlePipeline.create(device, options);
 
@@ -620,20 +618,6 @@
             gtaoPass.destroy();
             destroyVelocityResources();
 
-            if (hdrFramebuffer != VK_NULL_HANDLE) {
-                vkDestroyFramebuffer(device, hdrFramebuffer, nullptr);
-                hdrFramebuffer = VK_NULL_HANDLE;
-            }
-            if (lightingHdrFramebuffer != VK_NULL_HANDLE) {
-                vkDestroyFramebuffer(device, lightingHdrFramebuffer, nullptr);
-                lightingHdrFramebuffer = VK_NULL_HANDLE;
-            }
-            if (waterHdrFramebuffer != VK_NULL_HANDLE) {
-                vkDestroyFramebuffer(device, waterHdrFramebuffer, nullptr);
-                waterHdrFramebuffer = VK_NULL_HANDLE;
-            }
-            // Scene Sky uses the Scene View render pass when MSAA is off.
-            // Destroy that pipeline before releasing its render pass.
             skyPass.destroy();
             sceneSkyPass.destroy();
             destroySceneViewportResources();
@@ -701,8 +685,7 @@
                 buffers.push_back(buffer.handle());
             }
             skyPass.create(vulkanDevice.physical(), device, commandPool,
-                           vulkanDevice.graphicsQueue(), lightingForwardPass.renderPass(),
-                           HdrBuffer::Format, msaa.sampleCount(), buffers,
+                           vulkanDevice.graphicsQueue(), HdrBuffer::Format, depthBuffer.format(), msaa.sampleCount(), buffers,
                            sizeof(UniformBufferObject), assetManager,
                            vulkanDevice.allocator(),
                            antialiasingLevel == AntialiasingLevel::TAA ? 2U : 1U);
@@ -714,9 +697,7 @@
             buffers.reserve(sceneUniformBuffers.size());
             for (const Buffer& buffer : sceneUniformBuffers) buffers.push_back(buffer.handle());
             sceneSkyPass.create(vulkanDevice.physical(), device, commandPool,
-                                vulkanDevice.graphicsQueue(),
-                                msaa.enabled() ? forwardPass.renderPass() : sceneViewportForwardPass.renderPass(),
-                                HdrBuffer::Format, msaa.sampleCount(), buffers,
+                                vulkanDevice.graphicsQueue(), HdrBuffer::Format, depthBuffer.format(), msaa.sampleCount(), buffers,
                                 sizeof(UniformBufferObject), assetManager,
                                 vulkanDevice.allocator());
             sceneSkyPass.setEnvironment(imageBasedLighting.environmentDescriptor());
@@ -773,45 +754,6 @@
 
         void createEditorUiResources(const bool addViewportTextures = true) {
             if (ImGui::GetCurrentContext() == nullptr) { return; }
-            VkAttachmentDescription color{};
-            color.format = swapchain.format(); color.samples = VK_SAMPLE_COUNT_1_BIT;
-            // In editor mode the swapchain is UI background, not a second
-            // full-screen Game View. The selected viewport is sampled only by
-            // ImGui::Image, so clear the presentation image before drawing UI.
-            color.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR; color.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
-            // The first acquired swapchain image is still UNDEFINED. The
-            // pass clears it, so preserving PRESENT_SRC_KHR is unnecessary
-            // and makes the first submit use an invalid old layout.
-            color.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-            color.finalLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
-            VkAttachmentReference reference{0, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL};
-            VkSubpassDescription subpass{};
-            subpass.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
-            subpass.colorAttachmentCount = 1; subpass.pColorAttachments = &reference;
-            VkSubpassDependency dependency{};
-            dependency.srcSubpass = VK_SUBPASS_EXTERNAL; dependency.dstSubpass = 0;
-            dependency.srcStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
-            dependency.dstStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
-            dependency.srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
-            dependency.dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_READ_BIT | VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
-            VkRenderPassCreateInfo passInfo{VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO};
-            passInfo.attachmentCount = 1; passInfo.pAttachments = &color;
-            passInfo.subpassCount = 1; passInfo.pSubpasses = &subpass;
-            passInfo.dependencyCount = 1; passInfo.pDependencies = &dependency;
-            if (vkCreateRenderPass(device, &passInfo, nullptr, &editorUiRenderPass) != VK_SUCCESS) {
-                throw std::runtime_error("Could not create ImGui render pass");
-            }
-            editorUiFramebuffers.resize(swapchain.imageCount());
-            for (std::size_t index = 0; index < editorUiFramebuffers.size(); ++index) {
-                const auto view = swapchain.imageViews()[index];
-                VkFramebufferCreateInfo framebuffer{VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO};
-                framebuffer.renderPass = editorUiRenderPass; framebuffer.attachmentCount = 1;
-                framebuffer.pAttachments = &view; framebuffer.width = swapchain.extent().width;
-                framebuffer.height = swapchain.extent().height; framebuffer.layers = 1;
-                if (vkCreateFramebuffer(device, &framebuffer, nullptr, &editorUiFramebuffers[index]) != VK_SUCCESS) {
-                    throw std::runtime_error("Could not create ImGui framebuffer");
-                }
-            }
             // ImGui_ImplVulkan_Shutdown() destroys platform windows as part of
             // its viewport cleanup. The SDL backend therefore has to be
             // initialized again after every Vulkan-backend rebuild; otherwise
@@ -826,7 +768,13 @@
             constexpr uint32_t imguiDescriptorPoolSize{128};
             info.DescriptorPoolSize = imguiDescriptorPoolSize; info.MinImageCount = 2;
             info.ImageCount = static_cast<uint32_t>(swapchain.imageCount());
-            info.PipelineInfoMain.RenderPass = editorUiRenderPass;
+            const VkFormat editorUiColorFormat = swapchain.format();
+            VkPipelineRenderingCreateInfo editorUiRendering{VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO};
+            editorUiRendering.colorAttachmentCount = 1;
+            editorUiRendering.pColorAttachmentFormats = &editorUiColorFormat;
+            info.UseDynamicRendering = true;
+            info.PipelineInfoMain.RenderPass = VK_NULL_HANDLE;
+            info.PipelineInfoMain.PipelineRenderingCreateInfo = editorUiRendering;
             info.PipelineInfoMain.MSAASamples = VK_SAMPLE_COUNT_1_BIT;
             if (!ImGui_ImplVulkan_Init(&info)) throw std::runtime_error("Could not initialize ImGui Vulkan backend");
             if (!addViewportTextures) {
@@ -874,11 +822,6 @@
             gameViewportDescriptor = sceneViewportDescriptor = VK_NULL_HANDLE;
             gameViewportTemporalDescriptors.fill(VK_NULL_HANDLE);
             editorUiActive = false;
-            for (VkFramebuffer framebuffer : editorUiFramebuffers) if (framebuffer != VK_NULL_HANDLE) vkDestroyFramebuffer(device, framebuffer, nullptr);
-            editorUiFramebuffers.clear();
-            if (editorUiRenderPass != VK_NULL_HANDLE) { vkDestroyRenderPass(device, editorUiRenderPass, nullptr);
-}
-            editorUiRenderPass = VK_NULL_HANDLE;
         }
 
         // Scene reload replaces the images displayed by ImGui::Image. Rebind

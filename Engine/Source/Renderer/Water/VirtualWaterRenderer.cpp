@@ -91,7 +91,7 @@ void VirtualWaterRenderer::create(VkPhysicalDevice physicalDevice, VkDevice devi
         for (auto& lighting : lighting_)
             lighting.create(physicalDevice_,device_,extent_,allocator_,VK_FILTER_LINEAR,VK_FORMAT_R16G16B16A16_SFLOAT,true);
         sssrDepth_.create(physicalDevice_, device_, (extent_.width + 1U) / 2U, (extent_.height + 1U) / 2U, allocator_);
-        createDescriptors(sceneLayout); createPipelines(sceneLayout,depthFormat); createFramebuffers(hdrTargetView); writeDescriptors();
+        createDescriptors(sceneLayout); createPipelines(sceneLayout,depthFormat); hdrTargetView_ = hdrTargetView; writeDescriptors();
     } catch (...) { destroy(); throw; }
 }
 
@@ -357,14 +357,6 @@ void VirtualWaterRenderer::createPipelines(VkDescriptorSetLayout sceneLayout,VkF
     authoredPrepassPipeline_.create(device_,authored);
 
     GraphicsPipelineOptions c{};c.colorFormat=HdrBuffer::Format;c.samples=VK_SAMPLE_COUNT_1_BIT;c.colorLoadOp=VK_ATTACHMENT_LOAD_OP_DONT_CARE;c.colorInitialLayout=VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;c.colorFinalLayout=VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;c.depthTestEnable=VK_FALSE;c.depthWriteEnable=VK_FALSE;c.cullMode=VK_CULL_MODE_NONE;c.shader="shaders/water_virtual_composite.spv";c.assetManager=assets_;c.descriptorSetLayouts={sceneLayout,compositeLayout_};compositePipeline_.create(device_,c);
-}
-
-void VirtualWaterRenderer::createFramebuffers(VkImageView hdrTargetView) {
-    std::array<VkImageView,4> views{surface_.imageView(),meta_.imageView(),velocity_.imageView(),depthView_};
-    VkFramebufferCreateInfo f{VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO};f.renderPass=prepassPipeline_.renderPass();f.attachmentCount=views.size();f.pAttachments=views.data();f.width=extent_.width;f.height=extent_.height;f.layers=1;
-    if(vkCreateFramebuffer(device_,&f,nullptr,&prepassFramebuffer_)!=VK_SUCCESS)throw std::runtime_error("Could not create virtual-water prepass framebuffer");
-    f.renderPass=compositePipeline_.renderPass();f.attachmentCount=1;f.pAttachments=&hdrTargetView;
-    if(vkCreateFramebuffer(device_,&f,nullptr,&compositeFramebuffer_)!=VK_SUCCESS)throw std::runtime_error("Could not create virtual-water composite framebuffer");
 }
 
 void VirtualWaterRenderer::writeDescriptors() {
@@ -854,15 +846,20 @@ void VirtualWaterRenderer::recordPrepass(VkCommandBuffer cmd, std::uint32_t fram
                                              VkDeviceSize authoredCountOffset) const {
     if (!active()) return;
     frame %= FramesInFlight;
-    std::array<VkClearValue, 4> clears{};
-    clears[0].color = {{0, 0, 0, 0}};
-    clears[1].color = {{0, 0, 0, 0}};
-    clears[2].color = {{0, 0, 0, 0}};
-    VkRenderPassBeginInfo rp{VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO};
-    rp.renderPass = prepassPipeline_.renderPass(); rp.framebuffer = prepassFramebuffer_;
-    rp.renderArea.extent = extent_; rp.clearValueCount = static_cast<std::uint32_t>(clears.size());
-    rp.pClearValues = clears.data();
-    vkCmdBeginRenderPass(cmd, &rp, VK_SUBPASS_CONTENTS_INLINE);
+    VkRenderingAttachmentInfo surface{VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO};
+    surface.imageView = surface_.imageView(); surface.imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+    surface.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR; surface.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+    VkRenderingAttachmentInfo meta = surface; meta.imageView = meta_.imageView();
+    VkRenderingAttachmentInfo velocity = surface; velocity.imageView = velocity_.imageView();
+    std::array colors{surface, meta, velocity};
+    VkRenderingAttachmentInfo depth{VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO};
+    depth.imageView = depthView_; depth.imageLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL;
+    depth.loadOp = VK_ATTACHMENT_LOAD_OP_LOAD; depth.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+    VkRenderingInfo rendering{VK_STRUCTURE_TYPE_RENDERING_INFO};
+    rendering.renderArea.extent = extent_; rendering.layerCount = 1;
+    rendering.colorAttachmentCount = static_cast<std::uint32_t>(colors.size());
+    rendering.pColorAttachments = colors.data(); rendering.pDepthAttachment = &depth;
+    vkCmdBeginRendering(cmd, &rendering);
 
     const VkViewport viewport{0, 0, float(extent_.width), float(extent_.height), 0, 1};
     const VkRect2D scissor{{0, 0}, extent_};
@@ -901,7 +898,7 @@ void VirtualWaterRenderer::recordPrepass(VkCommandBuffer cmd, std::uint32_t fram
         vkCmdBindIndexBuffer(cmd, ib, 0, VK_INDEX_TYPE_UINT32);
         authoredWaterDraw.record(cmd, authoredCommandOffset, authoredCountOffset);
     }
-    vkCmdEndRenderPass(cmd);
+    vkCmdEndRendering(cmd);
 
     VkMemoryBarrier2 ready{VK_STRUCTURE_TYPE_MEMORY_BARRIER_2};
     ready.srcStageMask = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT;
@@ -1098,11 +1095,13 @@ void VirtualWaterRenderer::recordComposite(VkCommandBuffer cmd, std::uint32_t fr
                                                   VkDescriptorSet sceneSet) const {
     if (!active()) return;
     frame %= FramesInFlight;
-    VkRenderPassBeginInfo rp{VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO};
-    rp.renderPass = compositePipeline_.renderPass();
-    rp.framebuffer = compositeFramebuffer_;
-    rp.renderArea.extent = extent_;
-    vkCmdBeginRenderPass(cmd, &rp, VK_SUBPASS_CONTENTS_INLINE);
+    VkRenderingAttachmentInfo color{VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO};
+    color.imageView = hdrTargetView_; color.imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+    color.loadOp = VK_ATTACHMENT_LOAD_OP_LOAD; color.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+    VkRenderingInfo rendering{VK_STRUCTURE_TYPE_RENDERING_INFO};
+    rendering.renderArea.extent = extent_; rendering.layerCount = 1;
+    rendering.colorAttachmentCount = 1; rendering.pColorAttachments = &color;
+    vkCmdBeginRendering(cmd, &rendering);
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, compositePipeline_.handle());
     const std::array descriptorSets{sceneSet, compositeSets_[frame]};
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, compositePipeline_.layout(),
@@ -1113,13 +1112,11 @@ void VirtualWaterRenderer::recordComposite(VkCommandBuffer cmd, std::uint32_t fr
     vkCmdSetViewport(cmd, 0, 1, &viewport);
     vkCmdSetScissor(cmd, 0, 1, &scissor);
     vkCmdDraw(cmd, 3, 1, 0, 0);
-    vkCmdEndRenderPass(cmd);
+    vkCmdEndRendering(cmd);
 }
 
 void VirtualWaterRenderer::destroy() noexcept {
     if (device_ != VK_NULL_HANDLE) {
-        if (prepassFramebuffer_ != VK_NULL_HANDLE) vkDestroyFramebuffer(device_, prepassFramebuffer_, nullptr);
-        if (compositeFramebuffer_ != VK_NULL_HANDLE) vkDestroyFramebuffer(device_, compositeFramebuffer_, nullptr);
         sssrDepthPass_.destroy();
         for (const VkPipeline pipeline : {cullPipeline_, buildPipeline_, classifyPipeline_,
                                           buildDispatchPipeline_, shadePipeline_, stateAllocatePipeline_, statePipeline_,
@@ -1201,7 +1198,7 @@ void VirtualWaterRenderer::destroy() noexcept {
         shadePipelineLayout_ = statePipelineLayout_ = sssrInitPipelineLayout_ = sssrReducePipelineLayout_ = VK_NULL_HANDLE;
     cullPipeline_ = buildPipeline_ = classifyPipeline_ = buildDispatchPipeline_ = shadePipeline_ =
         stateAllocatePipeline_ = statePipeline_ = sssrInitPipeline_ = sssrReducePipeline_ = VK_NULL_HANDLE;
-    prepassFramebuffer_ = compositeFramebuffer_ = VK_NULL_HANDLE;
+    hdrTargetView_ = VK_NULL_HANDLE;
 
     cullSets_.fill(VK_NULL_HANDLE);
     buildSets_.fill(VK_NULL_HANDLE);

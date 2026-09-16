@@ -39,7 +39,6 @@ namespace Engine {
         // binding so steady-state post processing performs no descriptor write.
         std::array<VkDescriptorImageInfo, FramesInFlight> cachedSources_{};
         std::array<bool, FramesInFlight> sourceDescriptorsValid_{};
-        VkFramebuffer framebuffer_ = VK_NULL_HANDLE;
         bool initialized_ = false;
     };
 }

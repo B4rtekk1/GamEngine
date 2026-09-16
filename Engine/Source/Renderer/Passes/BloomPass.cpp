@@ -32,6 +32,7 @@ namespace Engine {
                     "Could not create bloom layout");
             GraphicsPipelineOptions options{};
             options.colorFormat = HdrBuffer::Format;
+            options.dynamicRendering = true;
             options.colorInitialLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
             options.colorFinalLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
             options.shader = "shaders/bloom_downsample.spv";
@@ -43,17 +44,6 @@ namespace Engine {
             options.depthWriteEnable = VK_FALSE;
             options.descriptorSetLayouts = {layout_};
             pipeline_.create(device_, options);
-            VkImageView view = result_.imageView();
-            VkFramebufferCreateInfo fb{VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO};
-            fb.renderPass = pipeline_.renderPass();
-            fb.attachmentCount = 1;
-            fb.pAttachments = &view;
-            fb.width = extent_.width;
-            fb.height = extent_.height;
-            fb.layers = 1;
-            if (vkCreateFramebuffer(device_, &fb, nullptr, &framebuffer_) != VK_SUCCESS)
-                throw std::runtime_error(
-                    "Could not create bloom framebuffer");
             VkDescriptorPoolSize size{VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, FramesInFlight};
             VkDescriptorPoolCreateInfo pi{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
             pi.maxSets = FramesInFlight;
@@ -119,14 +109,17 @@ namespace Engine {
             cachedSources_[slot] = image;
             sourceDescriptorsValid_[slot] = true;
         }
-        VkClearValue clear{};
-        VkRenderPassBeginInfo begin{VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO};
-        begin.renderPass = pipeline_.renderPass();
-        begin.framebuffer = framebuffer_;
-        begin.renderArea.extent = extent_;
-        begin.clearValueCount = 1;
-        begin.pClearValues = &clear;
-        vkCmdBeginRenderPass(commandBuffer, &begin, VK_SUBPASS_CONTENTS_INLINE);
+        VkRenderingAttachmentInfo color{VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO};
+        color.imageView = result_.imageView();
+        color.imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+        color.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+        color.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+        VkRenderingInfo rendering{VK_STRUCTURE_TYPE_RENDERING_INFO};
+        rendering.renderArea.extent = extent_;
+        rendering.layerCount = 1;
+        rendering.colorAttachmentCount = 1;
+        rendering.pColorAttachments = &color;
+        vkCmdBeginRendering(commandBuffer, &rendering);
         vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline_.handle());
         vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline_.layout(), 0, 1, &set, 0,
                                 nullptr);
@@ -140,16 +133,14 @@ namespace Engine {
         vkCmdSetViewport(commandBuffer, 0, 1, &vp);
         vkCmdSetScissor(commandBuffer, 0, 1, &sc);
         vkCmdDraw(commandBuffer, 3, 1, 0, 0);
-        vkCmdEndRenderPass(commandBuffer);
+        vkCmdEndRendering(commandBuffer);
     }
 
     void BloomPass::destroy() noexcept {
         if (device_) {
-            if (framebuffer_) vkDestroyFramebuffer(device_, framebuffer_, nullptr);
             if (pool_) vkDestroyDescriptorPool(device_, pool_, nullptr);
             if (layout_) vkDestroyDescriptorSetLayout(device_, layout_, nullptr);
         }
-        framebuffer_ = VK_NULL_HANDLE;
         pool_ = VK_NULL_HANDLE;
         layout_ = VK_NULL_HANDLE;
         sets_.fill(VK_NULL_HANDLE);

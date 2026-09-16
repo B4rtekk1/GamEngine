@@ -215,8 +215,7 @@ private:
     GraphicsPipeline farPrepassPipeline_;
     GraphicsPipeline authoredPrepassPipeline_;
     GraphicsPipeline compositePipeline_;
-    VkFramebuffer prepassFramebuffer_{VK_NULL_HANDLE};
-    VkFramebuffer compositeFramebuffer_{VK_NULL_HANDLE};
+    VkImageView hdrTargetView_{VK_NULL_HANDLE};
 
     std::array<VkBuffer, FramesInFlight> instanceBuffers_{};
     std::array<VkBuffer, FramesInFlight> cullingUniformBuffers_{};
@@ -234,7 +233,6 @@ private:
     void createOceanGeometry();
     void createDescriptors(VkDescriptorSetLayout sceneLayout);
     void createPipelines(VkDescriptorSetLayout sceneLayout, VkFormat depthFormat);
-    void createFramebuffers(VkImageView hdrTargetView);
     void writeDescriptors();
     [[nodiscard]] VkPipeline makeCompute(const char* shader, VkPipelineLayout layout) const;
 };

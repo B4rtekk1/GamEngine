@@ -24,14 +24,14 @@ public:
                 Assets::AssetManager& assets, bool velocity,
                 const VkDescriptorImageInfo& opaqueColor, const VkDescriptorImageInfo& opaqueDepth);
     void destroy() noexcept;
-    void begin(VkCommandBuffer commandBuffer, VkFramebuffer framebuffer, VkExtent2D extent,
+    void begin(VkCommandBuffer commandBuffer, VkImageView colorView, VkImageView depthView,
+               VkImageView velocityView, VkImageView colorResolveView, VkImageView depthResolveView, VkExtent2D extent,
                VkDescriptorSet sceneDescriptorSet, std::uint32_t frameIndex,
                VkBuffer vertexBuffer, VkBuffer indexBuffer) const;
     void draw(VkCommandBuffer commandBuffer, VkDescriptorSet descriptorSet,
               const Culling::IndexedIndirectDrawCount& indirectDraw,
               VkDeviceSize commandOffset, VkDeviceSize countOffset) const;
     static void end(VkCommandBuffer commandBuffer);
-    [[nodiscard]] VkRenderPass renderPass() const noexcept { return pipeline_.renderPass(); }
 
 private:
     static constexpr std::uint32_t FramesInFlight = 3;
@@ -43,5 +43,7 @@ private:
     VkDescriptorPool descriptorPool_{VK_NULL_HANDLE};
     std::array<VkDescriptorSet, FramesInFlight> sceneTextureSets_{};
     bool hasVelocity_{};
+    VkSampleCountFlagBits samples_{VK_SAMPLE_COUNT_1_BIT};
+    VkResolveModeFlagBits depthResolveMode_{VK_RESOLVE_MODE_NONE};
 };
 } // namespace Engine

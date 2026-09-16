@@ -1215,7 +1215,6 @@
 
         void createFramebuffers() {
             const VkExtent2D extent = swapchain.extent();
-            const bool taaEnabled = antialiasingLevel == AntialiasingLevel::TAA;
             // The prepass writes velocity and view-normal MRTs at single sample.
             // Velocity is retained even without TAA to keep attachment locations
             // stable: view normals are fragment output location 2.
@@ -1226,47 +1225,6 @@
                 gtaoViewNormalBuffer.create(vulkanDevice.physical(), device, extent,
                                             vulkanDevice.allocator(), VK_FILTER_NEAREST,
                                             VK_FORMAT_R16G16_SNORM);
-            }
-            VkImageView msaaAttachments[] = {
-                msaa.colorImageView(), depthBuffer.imageView(), hdrBuffer.imageView(), hiZDepthBuffer.imageView()
-            };
-            VkImageView taaAttachments[] = {
-                hdrBuffer.imageView(), velocityBuffer.imageView(), gtaoViewNormalBuffer.imageView(), depthBuffer.imageView()
-            };
-            VkImageView lightingTaaAttachments[] = {hdrBuffer.imageView(), velocityBuffer.imageView(), depthBuffer.imageView()};
-            VkImageView directAttachments[] = {hdrBuffer.imageView(), depthBuffer.imageView()};
-
-            VkFramebufferCreateInfo framebufferInfo{VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO};
-            framebufferInfo.renderPass = forwardPass.renderPass();
-            framebufferInfo.attachmentCount = msaa.enabled() ? 4u : 4u;
-            framebufferInfo.pAttachments = msaa.enabled()
-                ? msaaAttachments
-                : taaAttachments;
-            framebufferInfo.width = extent.width;
-            framebufferInfo.height = extent.height;
-            framebufferInfo.layers = 1;
-
-            if (vkCreateFramebuffer(device, &framebufferInfo, nullptr,
-                                    &hdrFramebuffer) != VK_SUCCESS) {
-                throw std::runtime_error("Could not create HDR framebuffer");
-            }
-            framebufferInfo.renderPass = lightingForwardPass.renderPass();
-            framebufferInfo.attachmentCount = msaa.enabled() ? 4u : (taaEnabled ? 3u : 2u);
-            framebufferInfo.pAttachments = msaa.enabled() ? msaaAttachments : (taaEnabled ? lightingTaaAttachments : directAttachments);
-            if (vkCreateFramebuffer(device, &framebufferInfo, nullptr,
-                                    &lightingHdrFramebuffer) != VK_SUCCESS) {
-                vkDestroyFramebuffer(device, hdrFramebuffer, nullptr);
-                hdrFramebuffer = VK_NULL_HANDLE;
-                throw std::runtime_error("Could not create GTAO lighting framebuffer");
-            }
-            framebufferInfo.renderPass = waterPass.renderPass();
-            if (vkCreateFramebuffer(device, &framebufferInfo, nullptr,
-                                    &waterHdrFramebuffer) != VK_SUCCESS) {
-                vkDestroyFramebuffer(device, lightingHdrFramebuffer, nullptr);
-                lightingHdrFramebuffer = VK_NULL_HANDLE;
-                vkDestroyFramebuffer(device, hdrFramebuffer, nullptr);
-                hdrFramebuffer = VK_NULL_HANDLE;
-                throw std::runtime_error("Could not create Water framebuffer");
             }
             createVirtualWaterResources();
         }
@@ -1307,7 +1265,6 @@
             sceneViewportTarget.create(vulkanDevice.physical(), device, swapchain.extent(),
                                        vulkanDevice.allocator());
             createSceneViewportForwardPass();
-            createSceneViewportFramebuffer();
             createSceneVirtualWaterResources();
         }
 
@@ -1347,9 +1304,7 @@
             // This is called before ImGui::NewFrame(), so no current draw data
             // can retain the descriptor that is about to be retired.
             vkDeviceWaitIdle(device);
-            destroySceneViewportFramebuffer();
             sceneViewportTarget.resize(requested);
-            createSceneViewportFramebuffer();
             createSceneVirtualWaterResources();
 
             if (sceneViewportDescriptor != VK_NULL_HANDLE) {
@@ -1364,44 +1319,22 @@
             sceneViewportNeedsRender = true;
         }
 
-        void createSceneViewportFramebuffer() {
-            // The forward render pass uses the same MSAA attachment layout for
-            // Game View and Scene View: multisampled color, multisampled depth,
-            // then single-sample color and depth resolve targets.
-            VkImageView msaaAttachments[] = {
-                msaa.colorImageView(), depthBuffer.imageView(),
-                sceneViewportTarget.color().imageView(), hiZDepthBuffer.imageView()};
-            VkImageView directAttachments[] = {
-                sceneViewportTarget.color().imageView(), depthBuffer.imageView()};
-            VkFramebufferCreateInfo info{VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO};
-            info.renderPass = msaa.enabled()
-                ? forwardPass.renderPass()
-                : sceneViewportForwardPass.renderPass();
-            info.attachmentCount = msaa.enabled() ? 4u : 2u;
-            info.pAttachments = msaa.enabled() ? msaaAttachments : directAttachments;
-            info.width = sceneViewportTarget.extent().width;
-            info.height = sceneViewportTarget.extent().height;
-            info.layers = 1;
-            if (vkCreateFramebuffer(device, &info, nullptr, &sceneViewportFramebuffer) != VK_SUCCESS) {
-                sceneViewportTarget.destroy();
-                throw std::runtime_error("Could not create Scene View framebuffer");
-            }
-        }
-
         void destroySceneViewportResources() noexcept {
             sceneVirtualWaterRenderer.destroy();
             sceneOpaqueColor.destroy();
             sceneOpaqueColorInitialized = false;
-            destroySceneViewportFramebuffer();
             sceneViewportForwardPass.destroy();
             sceneViewportTarget.destroy();
         }
 
+        // Transitional no-op hooks: callers are shared by resize and shader
+        // reload paths. Dynamic rendering binds the target views directly.
+        void createSceneViewportFramebuffer() noexcept {
+            sceneViewportFramebuffer = VK_NULL_HANDLE;
+        }
+
         void destroySceneViewportFramebuffer() noexcept {
-            if (sceneViewportFramebuffer != VK_NULL_HANDLE) {
-                vkDestroyFramebuffer(device, sceneViewportFramebuffer, nullptr);
-                sceneViewportFramebuffer = VK_NULL_HANDLE;
-            }
+            sceneViewportFramebuffer = VK_NULL_HANDLE;
         }
 
         void createCommandPool() {

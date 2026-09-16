@@ -8,7 +8,7 @@
 namespace Engine {
     SkyboxPipeline::~SkyboxPipeline() { destroy(); }
 
-    void SkyboxPipeline::create(VkDevice device, VkRenderPass renderPass, VkFormat, VkSampleCountFlagBits samples,
+    void SkyboxPipeline::create(VkDevice device, VkFormat colorFormat, VkFormat depthFormat, VkSampleCountFlagBits samples,
                                 VkDescriptorSetLayout descriptorSetLayout,
                                 Assets::AssetManager &assets, const std::uint32_t colorAttachmentCount) {
         destroy();
@@ -92,8 +92,14 @@ namespace Engine {
             info.pDepthStencilState = &depth;
             info.pColorBlendState = &blend;
             info.pDynamicState = &dynamic;
+            VkPipelineRenderingCreateInfo rendering{VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO};
+            std::array colorFormats{colorFormat, colorFormat};
+            rendering.colorAttachmentCount = colorAttachmentCount;
+            rendering.pColorAttachmentFormats = colorFormats.data();
+            rendering.depthAttachmentFormat = depthFormat;
+            info.pNext = &rendering;
             info.layout = layout_;
-            info.renderPass = renderPass;
+            info.renderPass = VK_NULL_HANDLE;
             if (vkCreateGraphicsPipelines(device_, VK_NULL_HANDLE, 1, &info, nullptr, &pipeline_) != VK_SUCCESS) {
                 throw
                         std::runtime_error("Could not create skybox pipeline");

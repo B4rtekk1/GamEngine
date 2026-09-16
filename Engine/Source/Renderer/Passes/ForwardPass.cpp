@@ -23,8 +23,10 @@ namespace Engine {
         reportedMissingShaderGraphSlots_.clear();
         hasVelocityAttachment_ = velocityFormat != VK_FORMAT_UNDEFINED;
         hasViewNormalAttachment_ = viewNormalFormat != VK_FORMAT_UNDEFINED;
+        preserveDepth_ = preserveDepth;
         GraphicsPipelineOptions options{};
         options.colorFormat = colorFormat;
+        options.dynamicRendering = true;
         options.additionalColorFormat = velocityFormat;
         options.thirdColorFormat = viewNormalFormat;
         options.depthFormat = depthFormat;
@@ -94,14 +96,10 @@ namespace Engine {
 }
             GraphicsPipelineOptions materialOptions = options;
             materialOptions.shader = shaderPaths[index];
-            if (index != materialShaderIndex(MaterialShader::StandardPBR)) {
-                materialOptions.existingRenderPass = materialPipelines_[0].renderPass();
-            }
             materialPipelines_[index].create(device, materialOptions);
         }
         shaderGraphPipelineOptions_ = options;
         shaderGraphPipelineOptions_.shader.clear();
-        shaderGraphPipelineOptions_.existingRenderPass = materialPipelines_[0].renderPass();
         shaderGraphPipelines_.initialize(device, shaderGraphPipelineOptions_);
 
         GraphicsPipelineOptions foliageOptions = options;
@@ -110,7 +108,6 @@ namespace Engine {
                                     : hasVelocityAttachment_
                                           ? "shaders/forward_pbr.spv"
                                           : "shaders/forward_pbr_no_velocity.spv";
-        foliageOptions.existingRenderPass = materialPipelines_[0].renderPass();
         foliageOptions.cullMode = VK_CULL_MODE_NONE;
         // Vegetation cards use alpha cutout.  They must populate depth before the
         // sky draw and TAA resolve; treating them as a generic transparent stream
@@ -136,7 +133,6 @@ namespace Engine {
         outlineOptions.shader = hasVelocityAttachment_
                                     ? "shaders/selection_outline.spv"
                                     : "shaders/selection_outline_no_velocity.spv";
-        outlineOptions.existingRenderPass = materialPipelines_[0].renderPass();
         outlineOptions.cullMode = VK_CULL_MODE_FRONT_BIT;
         outlineOptions.depthWriteEnable = VK_FALSE;
         outlineOptions.depthCompareOp = VK_COMPARE_OP_LESS_OR_EQUAL;
@@ -159,6 +155,7 @@ namespace Engine {
         reportedMissingShaderGraphSlots_.clear();
         hasVelocityAttachment_ = false;
         hasViewNormalAttachment_ = false;
+        preserveDepth_ = false;
         shaderGraphPipelines_.destroy();
         outlinePipeline_.destroy();
         foliagePipeline_.destroy();
@@ -219,24 +216,55 @@ namespace Engine {
     }
 
     void ForwardPass::begin(VkCommandBuffer commandBuffer,
-                            VkFramebuffer framebuffer, const VkExtent2D extent,
+                            const VkImageView colorView, const VkImageView depthView,
+                            const VkImageView velocityView, const VkImageView viewNormalView,
+                            const VkImageView colorResolveView, const VkImageView depthResolveView,
+                            const VkExtent2D extent,
                             VkDescriptorSet sceneDescriptorSet,
                             VkBuffer vertexBuffer, VkBuffer instanceBuffer,
                             VkBuffer indexBuffer) const {
         (void) instanceBuffer; // Instance data is fetched from descriptor binding 5.
-        VkRenderPassBeginInfo passInfo{VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO};
-        passInfo.renderPass = materialPipelines_[0].renderPass();
-        passInfo.framebuffer = framebuffer;
-        passInfo.renderArea.extent = extent;
-        VkClearValue clearValues[4]{};
-        clearValues[0].color = {{0.02F, 0.02F, 0.05F, 1.0F}};
-        clearValues[1].color = {{0.0F, 0.0F, 0.0F, 0.0F}};
-        const uint32_t colorAttachmentCount = 1U + (hasVelocityAttachment_ ? 1U : 0U) +
-                                              (hasViewNormalAttachment_ ? 1U : 0U);
-        clearValues[colorAttachmentCount].depthStencil = {1.0F, 0};
-        passInfo.clearValueCount = colorAttachmentCount + 1U;
-        passInfo.pClearValues = clearValues;
-        vkCmdBeginRenderPass(commandBuffer, &passInfo, VK_SUBPASS_CONTENTS_INLINE);
+        VkRenderingAttachmentInfo color{VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO};
+        color.imageView = colorView;
+        color.imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+        color.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+        color.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+        color.clearValue.color = {{0.02F, 0.02F, 0.05F, 1.0F}};
+        if (colorResolveView != VK_NULL_HANDLE) {
+            color.resolveMode = VK_RESOLVE_MODE_AVERAGE_BIT;
+            color.resolveImageView = colorResolveView;
+            color.resolveImageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+        }
+        VkRenderingAttachmentInfo velocity{VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO};
+        velocity.imageView = velocityView;
+        velocity.imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+        velocity.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+        velocity.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+        velocity.clearValue.color = {{0.0F, 0.0F, 0.0F, 0.0F}};
+        VkRenderingAttachmentInfo normals = velocity;
+        normals.imageView = viewNormalView;
+        std::array colors{color, velocity, normals};
+        VkRenderingAttachmentInfo depth{VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO};
+        depth.imageView = depthView;
+        depth.imageLayout = preserveDepth_
+                                ? VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL
+                                : VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+        depth.loadOp = preserveDepth_ ? VK_ATTACHMENT_LOAD_OP_LOAD : VK_ATTACHMENT_LOAD_OP_CLEAR;
+        depth.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+        depth.clearValue.depthStencil = {1.0F, 0};
+        if (depthResolveView != VK_NULL_HANDLE) {
+            depth.resolveMode = VK_RESOLVE_MODE_SAMPLE_ZERO_BIT;
+            depth.resolveImageView = depthResolveView;
+            depth.resolveImageLayout = depth.imageLayout;
+        }
+        VkRenderingInfo rendering{VK_STRUCTURE_TYPE_RENDERING_INFO};
+        rendering.renderArea.extent = extent;
+        rendering.layerCount = 1;
+        rendering.colorAttachmentCount = 1U + (hasVelocityAttachment_ ? 1U : 0U) +
+                                        (hasViewNormalAttachment_ ? 1U : 0U);
+        rendering.pColorAttachments = colors.data();
+        rendering.pDepthAttachment = &depth;
+        vkCmdBeginRendering(commandBuffer, &rendering);
 
         const auto &pipeline = materialPipelines_[0];
         vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline.handle());
@@ -289,7 +317,7 @@ namespace Engine {
     }
 
     void ForwardPass::end(VkCommandBuffer commandBuffer) {
-        vkCmdEndRenderPass(commandBuffer);
+        vkCmdEndRendering(commandBuffer);
     }
 
     void ForwardPass::drawOutline(

@@ -34,8 +34,10 @@ namespace Engine {
 
         void destroy() noexcept;
 
-        void begin(VkCommandBuffer commandBuffer, VkFramebuffer framebuffer,
-                   VkExtent2D extent, VkDescriptorSet sceneDescriptorSet,
+        void begin(VkCommandBuffer commandBuffer, VkImageView colorView,
+                   VkImageView depthView, VkImageView velocityView,
+                   VkImageView viewNormalView, VkImageView colorResolveView,
+                   VkImageView depthResolveView, VkExtent2D extent, VkDescriptorSet sceneDescriptorSet,
                    VkBuffer vertexBuffer, VkBuffer instanceBuffer,
                    VkBuffer indexBuffer) const;
 
@@ -68,10 +70,6 @@ namespace Engine {
 
         static void end(VkCommandBuffer commandBuffer);
 
-        [[nodiscard]] VkRenderPass renderPass() const noexcept {
-            return materialPipelines_[0].renderPass();
-        }
-
     private:
         std::array<GraphicsPipeline, MaterialShaderCount> materialPipelines_;
         GraphicsPipeline foliagePipeline_;
@@ -81,6 +79,9 @@ namespace Engine {
         GraphicsPipelineOptions shaderGraphPipelineOptions_{};
         bool hasVelocityAttachment_ = false;
         bool hasViewNormalAttachment_ = false;
+        // The lighting pass reads the depth prepass with VK_COMPARE_OP_EQUAL.
+        // Dynamic rendering must carry the matching load-op/layout explicitly.
+        bool preserveDepth_ = false;
         // Avoid flooding the editor console when a stale GPU batch references
         // a missing graph pipeline for multiple frames.
         mutable std::unordered_set<std::uint32_t> reportedMissingShaderGraphSlots_;

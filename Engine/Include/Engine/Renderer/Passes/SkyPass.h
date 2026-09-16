@@ -24,8 +24,7 @@ namespace Engine {
         SkyPass &operator=(const SkyPass &) = delete;
 
         void create(VkPhysicalDevice physicalDevice, VkDevice device,
-                    VkCommandPool commandPool, VkQueue queue,
-                    VkRenderPass renderPass, VkFormat colorFormat,
+                    VkCommandPool commandPool, VkQueue queue, VkFormat colorFormat, VkFormat depthFormat,
                     VkSampleCountFlagBits samples,
                     const std::vector<VkBuffer> &uniformBuffers,
                     VkDeviceSize uniformBufferRange, Assets::AssetManager &assets,

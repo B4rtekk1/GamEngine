@@ -29,8 +29,11 @@ namespace Engine {
         /// Load operation for the optional MRT attachment.
         VkAttachmentLoadOp additionalColorLoadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
         VkAttachmentLoadOp thirdColorLoadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
-        /// Existing render pass to use instead of creating one.
-        VkRenderPass existingRenderPass = VK_NULL_HANDLE;
+        /// Pipelines are always created for Vulkan 1.3 dynamic rendering.
+        /// Attachment compatibility is declared from the formats below.
+        /// Retained temporarily so existing pass setup remains source-compatible;
+        /// GraphicsPipeline always uses dynamic rendering regardless of value.
+        bool dynamicRendering = true;
         /// Depth attachment format, or VK_FORMAT_UNDEFINED when unused.
         VkFormat depthFormat = VK_FORMAT_UNDEFINED;
         /// Optional single-sample target populated by a multisampled depth resolve.
@@ -96,11 +99,7 @@ namespace Engine {
     };
 
     /**
-     * @brief Owns a Vulkan render pass, pipeline layout and graphics pipeline.
-     *
-     * Unless an existing render pass is supplied through
-     * GraphicsPipelineOptions::existingRenderPass, the class creates and owns a
-     * compatible render pass along with the graphics pipeline resources.
+     * @brief Owns a dynamic-rendering pipeline layout and graphics pipeline.
      */
     class GraphicsPipeline final {
     public:
@@ -123,7 +122,7 @@ namespace Engine {
         GraphicsPipeline &operator=(GraphicsPipeline &&) = delete;
 
         /**
-         * @brief Creates the render pass, pipeline layout and graphics pipeline.
+         * @brief Creates the pipeline layout and graphics pipeline.
          * @param device Logical Vulkan device used for resource creation.
          * @param options Pipeline and attachment configuration.
          */
@@ -131,11 +130,6 @@ namespace Engine {
 
         /// Releases all resources owned by this pipeline.
         void destroy() noexcept;
-
-        /** @brief Returns the render pass used by the pipeline. */
-        [[nodiscard]] VkRenderPass renderPass() const noexcept {
-            return renderPass_;
-        }
 
         /** @brief Returns the pipeline layout handle. */
         [[nodiscard]] VkPipelineLayout layout() const noexcept {
@@ -149,13 +143,8 @@ namespace Engine {
 
     private:
         VkDevice device_ = VK_NULL_HANDLE;
-        VkRenderPass renderPass_ = VK_NULL_HANDLE;
         VkPipelineLayout layout_ = VK_NULL_HANDLE;
         VkPipeline pipeline_ = VK_NULL_HANDLE;
-        bool ownsRenderPass_ = false;
-
-        /// Creates a render pass when the options do not provide an existing one.
-        void createRenderPass(const GraphicsPipelineOptions &options);
 
         /// Creates the descriptor-set and push-constant pipeline layout.
         void createPipelineLayout(const GraphicsPipelineOptions &options);

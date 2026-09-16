@@ -44,6 +44,7 @@ void TemporalAaPass::create(const VkPhysicalDevice physicalDevice, const VkDevic
                                                               VK_FILTER_NEAREST);
         GraphicsPipelineOptions options{};
         options.colorFormat = HdrBuffer::Format;
+        options.dynamicRendering = true;
         options.additionalColorFormat = HdrBuffer::Format;
         options.colorInitialLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
         options.colorFinalLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
@@ -51,14 +52,6 @@ void TemporalAaPass::create(const VkPhysicalDevice physicalDevice, const VkDevic
         options.pushConstantSize = sizeof(Settings); options.pushConstantStages = VK_SHADER_STAGE_FRAGMENT_BIT;
         options.cullMode = VK_CULL_MODE_NONE; options.depthTestEnable = VK_FALSE; options.depthWriteEnable = VK_FALSE;
         options.descriptorSetLayouts = {layout_}; pipeline_.create(device_, options);
-        for (std::size_t i = 0; i < framebuffers_.size(); ++i) {
-            const VkImageView views[] = {history_[i].imageView(), historyDepth_[i].imageView()};
-            VkFramebufferCreateInfo info{VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO};
-            info.renderPass = pipeline_.renderPass(); info.attachmentCount = std::size(views); info.pAttachments = views;
-            info.width = extent.width; info.height = extent.height; info.layers = 1;
-            if (vkCreateFramebuffer(device_, &info, nullptr, &framebuffers_[i]) != VK_SUCCESS)
-                throw std::runtime_error("Could not create temporal AA framebuffer");
-        }
         VkDescriptorPoolSize size{VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 32};
         VkDescriptorPoolCreateInfo poolInfo{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
         poolInfo.maxSets = 4; poolInfo.poolSizeCount = 1; poolInfo.pPoolSizes = &size;
@@ -134,11 +127,39 @@ void TemporalAaPass::initializeHistory(const VkCommandBuffer commandBuffer) {
 void TemporalAaPass::record(const VkCommandBuffer commandBuffer, const VkExtent2D extent, const float currentJitterX, const float currentJitterY) {
     if (!initialized_) initializeHistory(commandBuffer);
     const std::uint32_t output = 1U - historyIndex_;
-    VkClearValue clearValues[2]{};
-    VkRenderPassBeginInfo begin{VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO}; begin.renderPass = pipeline_.renderPass(); begin.framebuffer = framebuffers_[output]; begin.renderArea.extent = extent;
-    begin.clearValueCount = 2;
-    begin.pClearValues = clearValues;
-    vkCmdBeginRenderPass(commandBuffer, &begin, VK_SUBPASS_CONTENTS_INLINE);
+    // The render graph owns history_, while the matching depth history is an
+    // internal attachment. Dynamic rendering has no render-pass finalLayout,
+    // so transition that internal image explicitly.
+    VkImageMemoryBarrier2 depthToAttachment{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2};
+    depthToAttachment.srcStageMask = VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT;
+    depthToAttachment.srcAccessMask = VK_ACCESS_2_SHADER_SAMPLED_READ_BIT;
+    depthToAttachment.dstStageMask = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT;
+    depthToAttachment.dstAccessMask = VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT;
+    depthToAttachment.oldLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    depthToAttachment.newLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+    depthToAttachment.image = historyDepth_[output].image();
+    depthToAttachment.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+    VkDependencyInfo depthDependency{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
+    depthDependency.imageMemoryBarrierCount = 1;
+    depthDependency.pImageMemoryBarriers = &depthToAttachment;
+    vkCmdPipelineBarrier2(commandBuffer, &depthDependency);
+    std::array colors{
+        VkRenderingAttachmentInfo{.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO,
+                                  .imageView = history_[output].imageView(),
+                                  .imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+                                  .loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR,
+                                  .storeOp = VK_ATTACHMENT_STORE_OP_STORE},
+        VkRenderingAttachmentInfo{.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO,
+                                  .imageView = historyDepth_[output].imageView(),
+                                  .imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+                                  .loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR,
+                                  .storeOp = VK_ATTACHMENT_STORE_OP_STORE}};
+    VkRenderingInfo rendering{VK_STRUCTURE_TYPE_RENDERING_INFO};
+    rendering.renderArea.extent = extent;
+    rendering.layerCount = 1;
+    rendering.colorAttachmentCount = static_cast<std::uint32_t>(colors.size());
+    rendering.pColorAttachments = colors.data();
+    vkCmdBeginRendering(commandBuffer, &rendering);
     vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline_.handle());
     constexpr std::uint32_t WaterSetOffset = 2;
     const VkDescriptorSet descriptorSet = sets_[historyIndex_ + (virtualWaterEnabled_ ? WaterSetOffset : 0U)];
@@ -150,13 +171,20 @@ void TemporalAaPass::record(const VkCommandBuffer commandBuffer, const VkExtent2
                             virtualWaterEnabled_ ? 1.0F : 0.0F};
     vkCmdPushConstants(commandBuffer, pipeline_.layout(), VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(settings), &settings);
     const VkViewport viewport{0, 0, static_cast<float>(extent.width), static_cast<float>(extent.height), 0, 1}; const VkRect2D scissor{{0, 0}, extent};
-    vkCmdSetViewport(commandBuffer, 0, 1, &viewport); vkCmdSetScissor(commandBuffer, 0, 1, &scissor); vkCmdDraw(commandBuffer, 3, 1, 0, 0); vkCmdEndRenderPass(commandBuffer);
+    vkCmdSetViewport(commandBuffer, 0, 1, &viewport); vkCmdSetScissor(commandBuffer, 0, 1, &scissor); vkCmdDraw(commandBuffer, 3, 1, 0, 0); vkCmdEndRendering(commandBuffer);
+    depthToAttachment.srcStageMask = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT;
+    depthToAttachment.srcAccessMask = VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT;
+    depthToAttachment.dstStageMask = VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT;
+    depthToAttachment.dstAccessMask = VK_ACCESS_2_SHADER_SAMPLED_READ_BIT;
+    depthToAttachment.oldLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+    depthToAttachment.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    vkCmdPipelineBarrier2(commandBuffer, &depthDependency);
     historyIndex_ = output; historyValid_ = true; previousJitterX_ = currentJitterX; previousJitterY_ = currentJitterY;
 }
 
 void TemporalAaPass::destroy() noexcept {
-    if (device_ != VK_NULL_HANDLE) { for (auto framebuffer : framebuffers_) if (framebuffer) vkDestroyFramebuffer(device_, framebuffer, nullptr); if (pool_) vkDestroyDescriptorPool(device_, pool_, nullptr); if (layout_) vkDestroyDescriptorSetLayout(device_, layout_, nullptr); }
-    framebuffers_.fill(VK_NULL_HANDLE); sets_.fill(VK_NULL_HANDLE); pool_ = VK_NULL_HANDLE;
+    if (device_ != VK_NULL_HANDLE) { if (pool_) vkDestroyDescriptorPool(device_, pool_, nullptr); if (layout_) vkDestroyDescriptorSetLayout(device_, layout_, nullptr); }
+    sets_.fill(VK_NULL_HANDLE); pool_ = VK_NULL_HANDLE;
     layout_ = VK_NULL_HANDLE; pipeline_.destroy(); for (HdrBuffer& image : history_) image.destroy(); device_ = VK_NULL_HANDLE;
     initialized_ = false;
     for (HdrBuffer& image : historyDepth_) image.destroy();

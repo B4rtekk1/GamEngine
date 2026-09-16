@@ -9,8 +9,8 @@ SkyPass::~SkyPass() {
 }
 
 void SkyPass::create(const VkPhysicalDevice physicalDevice, const VkDevice device,
-                     const VkCommandPool commandPool, const VkQueue queue,
-                     const VkRenderPass renderPass, const VkFormat colorFormat,
+                     const VkCommandPool commandPool, const VkQueue queue, const VkFormat colorFormat,
+                     const VkFormat depthFormat,
                      const VkSampleCountFlagBits samples,
                      const std::vector<VkBuffer>& uniformBuffers,
                      const VkDeviceSize uniformBufferRange,
@@ -31,8 +31,7 @@ void SkyPass::create(const VkPhysicalDevice physicalDevice, const VkDevice devic
                                         &descriptorSetLayout_) != VK_SUCCESS) {
             throw std::runtime_error("Could not create sky descriptor-set layout");
         }
-        skybox_.create(physicalDevice, device_, commandPool, queue, renderPass,
-                       colorFormat, samples, descriptorSetLayout_, uniformBuffers,
+        skybox_.create(physicalDevice, device_, commandPool, queue, colorFormat, depthFormat, samples, descriptorSetLayout_, uniformBuffers,
                        uniformBufferRange, assets, allocator, colorAttachmentCount);
     } catch (...) {
         destroy();

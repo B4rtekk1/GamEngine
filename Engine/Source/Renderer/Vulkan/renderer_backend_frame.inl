@@ -627,7 +627,8 @@
             }
             if (!renderSceneViewport && !sceneViewportImageInitialized) {
                 sceneForwardPass.begin(
-                    commandBuffer, sceneViewportFramebuffer, sceneViewportTarget.extent(),
+                    commandBuffer, sceneViewportTarget.color().imageView(), depthBuffer.imageView(),
+                    VK_NULL_HANDLE, VK_NULL_HANDLE, VK_NULL_HANDLE, VK_NULL_HANDLE, sceneViewportTarget.extent(),
                     sceneDescriptorPass.descriptorSet(currentFrame), vertexBuffer.handle(),
                     instanceBuffers[currentFrame].handle(), indexBuffer.handle());
                 ForwardPass::end(commandBuffer);
@@ -1138,7 +1139,11 @@
             }, [&](const VkCommandBuffer buffer) {
                 gpuTimestampProfiler.endZone(buffer, currentFrame);
                 gpuTimestampProfiler.beginZone(buffer, currentFrame, forwardProfileName);
-                forwardPass.begin(buffer, hdrFramebuffer, swapchain.extent(), shadowPass.descriptorSet(currentFrame),
+                forwardPass.begin(buffer, msaa.enabled() ? msaa.colorImageView() : hdrBuffer.imageView(),
+                    depthBuffer.imageView(), msaa.enabled() ? VK_NULL_HANDLE : velocityBuffer.imageView(),
+                    msaa.enabled() ? VK_NULL_HANDLE : gtaoViewNormalBuffer.imageView(),
+                    msaa.enabled() ? hdrBuffer.imageView() : VK_NULL_HANDLE,
+                    msaa.enabled() ? hiZDepthBuffer.imageView() : VK_NULL_HANDLE, swapchain.extent(), shadowPass.descriptorSet(currentFrame),
                     vertexBuffer.handle(), instanceBuffers[currentFrame].handle(), indexBuffer.handle());
                 for (std::uint32_t shader = 0; shader < MaterialProgramSlotCount; ++shader) {
                     if (!activeShaderSlots.test(shader) || shader == materialShaderIndex(MaterialShader::Water)) continue;
@@ -1185,7 +1190,10 @@
 
             gpuTimestampProfiler.beginZone(commandBuffer, currentFrame, forwardProfileName);
             gpuTimestampProfiler.beginZone(commandBuffer, currentFrame, shadowProjectionProfileName);
-            lightingForwardPass.begin(commandBuffer, lightingHdrFramebuffer, swapchain.extent(),
+            lightingForwardPass.begin(commandBuffer, msaa.enabled() ? msaa.colorImageView() : hdrBuffer.imageView(),
+                depthBuffer.imageView(), antialiasingLevel == AntialiasingLevel::TAA ? velocityBuffer.imageView() : VK_NULL_HANDLE,
+                VK_NULL_HANDLE, msaa.enabled() ? hdrBuffer.imageView() : VK_NULL_HANDLE,
+                msaa.enabled() ? hiZDepthBuffer.imageView() : VK_NULL_HANDLE, swapchain.extent(),
                 shadowPass.descriptorSet(currentFrame), vertexBuffer.handle(), instanceBuffers[currentFrame].handle(), indexBuffer.handle());
             for (std::uint32_t shader = 0; shader < MaterialProgramSlotCount; ++shader) {
                 if (!activeShaderSlots.test(shader)) continue;
@@ -1296,7 +1304,30 @@
                         shadowPass.descriptorSet(currentFrame));
                     gpuTimestampProfiler.endZone(commandBuffer, currentFrame);
                 }
-                waterPass.begin(commandBuffer, waterHdrFramebuffer, swapchain.extent(),
+                VkImageMemoryBarrier2 waterColorTransition{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2};
+                waterColorTransition.srcStageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
+                waterColorTransition.srcAccessMask = VK_ACCESS_2_MEMORY_READ_BIT | VK_ACCESS_2_MEMORY_WRITE_BIT;
+                waterColorTransition.dstStageMask = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT;
+                waterColorTransition.dstAccessMask = VK_ACCESS_2_COLOR_ATTACHMENT_READ_BIT |
+                                                       VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT;
+                waterColorTransition.oldLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+                waterColorTransition.newLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+                waterColorTransition.image = hdrBuffer.image();
+                waterColorTransition.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+                VkImageMemoryBarrier2 waterVelocityTransition = waterColorTransition;
+                waterVelocityTransition.image = velocityBuffer.image();
+                std::array waterTransitions{waterColorTransition, waterVelocityTransition};
+                VkDependencyInfo waterDependency{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
+                waterDependency.imageMemoryBarrierCount = antialiasingLevel == AntialiasingLevel::TAA ? 2U : 1U;
+                waterDependency.pImageMemoryBarriers = waterTransitions.data();
+                vkCmdPipelineBarrier2(commandBuffer, &waterDependency);
+                waterPass.begin(commandBuffer,
+                                msaa.enabled() ? msaa.colorImageView() : hdrBuffer.imageView(),
+                                depthBuffer.imageView(),
+                                velocityBuffer.imageView(),
+                                msaa.enabled() ? hdrBuffer.imageView() : VK_NULL_HANDLE,
+                                msaa.enabled() ? hiZDepthBuffer.imageView() : VK_NULL_HANDLE,
+                                swapchain.extent(),
                                 shadowPass.descriptorSet(currentFrame), currentFrame,
                                 vertexBuffer.handle(), indexBuffer.handle());
                 // When Virtual Water is active it owns ocean, lake and river shading.
@@ -1320,6 +1351,15 @@
                                                  particlePipeline.layout(), currentFrame, false);
                 }
                 WaterPass::end(commandBuffer);
+                for (auto& transition : waterTransitions) {
+                    transition.srcStageMask = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT;
+                    transition.srcAccessMask = VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT;
+                    transition.dstStageMask = VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT;
+                    transition.dstAccessMask = VK_ACCESS_2_SHADER_SAMPLED_READ_BIT;
+                    transition.oldLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+                    transition.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+                }
+                vkCmdPipelineBarrier2(commandBuffer, &waterDependency);
             }
             }
 
@@ -1353,7 +1393,8 @@
                     commandBuffer, static_cast<std::uint32_t>(gpuObjects.size()), MaterialProgramSlotCount);
 
                 sceneForwardPass.begin(
-                    commandBuffer, sceneViewportFramebuffer, sceneViewportTarget.extent(),
+                    commandBuffer, sceneViewportTarget.color().imageView(), depthBuffer.imageView(),
+                    VK_NULL_HANDLE, VK_NULL_HANDLE, VK_NULL_HANDLE, VK_NULL_HANDLE, sceneViewportTarget.extent(),
                     sceneDescriptorPass.descriptorSet(currentFrame), vertexBuffer.handle(),
                     instanceBuffers[currentFrame].handle(), indexBuffer.handle());
                 for (std::uint32_t shader = 0; shader < MaterialProgramSlotCount; ++shader) {
@@ -1695,17 +1736,20 @@
             }, [&](const VkCommandBuffer buffer) {
                 gpuTimestampProfiler.beginZone(buffer, currentFrame, tonemapProfileName);
                 if (editorUiActive) {
-                    VkRenderPassBeginInfo pass{VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO};
-                    pass.renderPass = editorUiRenderPass;
-                    pass.framebuffer = editorUiFramebuffers.at(imageIndex.value);
-                    pass.renderArea.extent = postExtent;
-                    VkClearValue clear{};
-                    clear.color = {{0.06F, 0.07F, 0.09F, 1.0F}};
-                    pass.clearValueCount = 1;
-                    pass.pClearValues = &clear;
-                    vkCmdBeginRenderPass(buffer, &pass, VK_SUBPASS_CONTENTS_INLINE);
+                    VkRenderingAttachmentInfo color{VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO};
+                    color.imageView = swapchain.imageViews().at(imageIndex.value);
+                    color.imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+                    color.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+                    color.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+                    color.clearValue.color = {{0.06F, 0.07F, 0.09F, 1.0F}};
+                    VkRenderingInfo rendering{VK_STRUCTURE_TYPE_RENDERING_INFO};
+                    rendering.renderArea.extent = postExtent;
+                    rendering.layerCount = 1;
+                    rendering.colorAttachmentCount = 1;
+                    rendering.pColorAttachments = &color;
+                    vkCmdBeginRendering(buffer, &rendering);
                     ImGui_ImplVulkan_RenderDrawData(ImGui::GetDrawData(), buffer);
-                    vkCmdEndRenderPass(buffer);
+                    vkCmdEndRendering(buffer);
                 } else {
                     if (taaResolveActive)
                         tonemapPass.record(buffer, imageIndex.value, postExtent, 0.0F,
@@ -2337,17 +2381,20 @@
             if (vkBeginCommandBuffer(commandBuffer, &beginInfo) != VK_SUCCESS) {
                 throw std::runtime_error("Could not begin core command buffer");
             }
-            VkRenderPassBeginInfo pass{VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO};
-            pass.renderPass = editorUiRenderPass;
-            pass.framebuffer = editorUiFramebuffers.at(imageIndex);
-            pass.renderArea.extent = swapchain.extent();
-            VkClearValue clear{};
-            clear.color = {{0.06F, 0.07F, 0.09F, 1.0F}};
-            pass.clearValueCount = 1;
-            pass.pClearValues = &clear;
-            vkCmdBeginRenderPass(commandBuffer, &pass, VK_SUBPASS_CONTENTS_INLINE);
+            VkRenderingAttachmentInfo color{VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO};
+            color.imageView = swapchain.imageViews().at(imageIndex);
+            color.imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+            color.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+            color.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+            color.clearValue.color = {{0.06F, 0.07F, 0.09F, 1.0F}};
+            VkRenderingInfo rendering{VK_STRUCTURE_TYPE_RENDERING_INFO};
+            rendering.renderArea.extent = swapchain.extent();
+            rendering.layerCount = 1;
+            rendering.colorAttachmentCount = 1;
+            rendering.pColorAttachments = &color;
+            vkCmdBeginRendering(commandBuffer, &rendering);
             ImGui_ImplVulkan_RenderDrawData(ImGui::GetDrawData(), commandBuffer);
-            vkCmdEndRenderPass(commandBuffer);
+            vkCmdEndRendering(commandBuffer);
             if (vkEndCommandBuffer(commandBuffer) != VK_SUCCESS) {
                 throw std::runtime_error("Could not end core command buffer");
             }

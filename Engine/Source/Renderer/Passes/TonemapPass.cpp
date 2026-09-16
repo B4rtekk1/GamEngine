@@ -56,6 +56,7 @@ void TonemapPass::create(const VkDevice device, const VkFormat swapchainFormat,
 
         GraphicsPipelineOptions options{};
         options.colorFormat = swapchainFormat;
+        options.dynamicRendering = true;
         // The UI pass loads this result before transitioning the image for presentation.
         options.colorFinalLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
         options.shader = "shaders/aces_tonemap.spv";
@@ -68,20 +69,7 @@ void TonemapPass::create(const VkDevice device, const VkFormat swapchainFormat,
         options.descriptorSetLayouts = {descriptorSetLayout_};
         pipeline_.create(device_, options);
 
-        framebuffers_.resize(swapchainViews.size());
-        for (std::size_t index = 0; index < swapchainViews.size(); ++index) {
-            VkFramebufferCreateInfo framebufferInfo{VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO};
-            framebufferInfo.renderPass = pipeline_.renderPass();
-            framebufferInfo.attachmentCount = 1;
-            framebufferInfo.pAttachments = &swapchainViews[index];
-            framebufferInfo.width = extent.width;
-            framebufferInfo.height = extent.height;
-            framebufferInfo.layers = 1;
-            if (vkCreateFramebuffer(device_, &framebufferInfo, nullptr,
-                                    &framebuffers_[index]) != VK_SUCCESS) {
-                throw std::runtime_error("Could not create tonemap framebuffer");
-            }
-        }
+        targetViews_ = swapchainViews;
 
         VkDescriptorPoolSize poolSize{VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 6};
         VkDescriptorPoolCreateInfo poolInfo{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
@@ -124,16 +112,11 @@ void TonemapPass::create(const VkDevice device, const VkFormat swapchainFormat,
 
 void TonemapPass::destroy() noexcept {
     if (device_ != VK_NULL_HANDLE) {
-        for (const VkFramebuffer framebuffer : framebuffers_) {
-            if (framebuffer != VK_NULL_HANDLE) {
-                vkDestroyFramebuffer(device_, framebuffer, nullptr);
-            }
-        }
         if (descriptorPool_ != VK_NULL_HANDLE) {
             vkDestroyDescriptorPool(device_, descriptorPool_, nullptr);
         }
     }
-    framebuffers_.clear();
+    targetViews_.clear();
     descriptorSets_.fill(VK_NULL_HANDLE);
     descriptorPool_ = VK_NULL_HANDLE;
     pipeline_.destroy();
@@ -147,15 +130,18 @@ void TonemapPass::destroy() noexcept {
 void TonemapPass::record(const VkCommandBuffer commandBuffer,
                          const std::uint32_t imageIndex, const VkExtent2D extent,
                          const float exposure, const std::uint32_t sourceIndex) const {
-    VkRenderPassBeginInfo passInfo{VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO};
-    passInfo.renderPass = pipeline_.renderPass();
-    passInfo.framebuffer = framebuffers_.at(imageIndex);
-    passInfo.renderArea.extent = extent;
-    VkClearValue clear{};
-    clear.color = {{0.0F, 0.0F, 0.0F, 1.0F}};
-    passInfo.clearValueCount = 1;
-    passInfo.pClearValues = &clear;
-    vkCmdBeginRenderPass(commandBuffer, &passInfo, VK_SUBPASS_CONTENTS_INLINE);
+    VkRenderingAttachmentInfo color{VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO};
+    color.imageView = targetViews_.at(imageIndex);
+    color.imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+    color.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+    color.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+    color.clearValue.color = {{0.0F, 0.0F, 0.0F, 1.0F}};
+    VkRenderingInfo rendering{VK_STRUCTURE_TYPE_RENDERING_INFO};
+    rendering.renderArea.extent = extent;
+    rendering.layerCount = 1;
+    rendering.colorAttachmentCount = 1;
+    rendering.pColorAttachments = &color;
+    vkCmdBeginRendering(commandBuffer, &rendering);
 
     vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline_.handle());
     vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS,
@@ -169,7 +155,7 @@ void TonemapPass::record(const VkCommandBuffer commandBuffer,
     vkCmdSetViewport(commandBuffer, 0, 1, &viewport);
     vkCmdSetScissor(commandBuffer, 0, 1, &scissor);
     vkCmdDraw(commandBuffer, 3, 1, 0, 0);
-    vkCmdEndRenderPass(commandBuffer);
+    vkCmdEndRendering(commandBuffer);
 }
 
 

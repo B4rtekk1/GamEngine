@@ -55,7 +55,6 @@ namespace Engine {
         // Two history inputs times two source variants: ordinary scene data
         // uses current HDR as a valid fallback for the water-only bindings.
         std::array<VkDescriptorSet, 4> sets_{};
-        std::array<VkFramebuffer, 2> framebuffers_{};
         std::array<HdrBuffer, 2> history_;
         // A sampled copy of the depth that produced each HDR history image.
         // It is stored by the resolve itself, so the two ping-pong histories

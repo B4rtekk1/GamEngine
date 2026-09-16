@@ -99,6 +99,7 @@ namespace Engine::UI {
 
             GraphicsPipelineOptions options{};
             options.colorFormat = colorFormat;
+            options.dynamicRendering = true;
             options.colorLoadOp = VK_ATTACHMENT_LOAD_OP_LOAD;
             options.colorInitialLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
             options.colorFinalLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
@@ -115,20 +116,7 @@ namespace Engine::UI {
             options.descriptorSetLayouts = {descriptorSetLayout_};
             pipeline_.create(device_, options);
 
-            framebuffers_.resize(imageViews.size());
-            for (std::size_t index = 0; index < imageViews.size(); ++index) {
-                VkFramebufferCreateInfo info{VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO};
-                info.renderPass = pipeline_.renderPass();
-                info.attachmentCount = 1;
-                info.pAttachments = &imageViews[index];
-                info.width = extent.width;
-                info.height = extent.height;
-                info.layers = 1;
-                if (vkCreateFramebuffer(device_, &info, nullptr,
-                                        &framebuffers_[index]) != VK_SUCCESS) {
-                    throw std::runtime_error("Could not create UI framebuffer");
-                }
-            }
+            imageViews_ = imageViews;
         } catch (...) {
             destroy();
             throw;
@@ -137,11 +125,6 @@ namespace Engine::UI {
 
     void UIPipeline::destroy() noexcept {
         if (device_ != VK_NULL_HANDLE) {
-            for (const VkFramebuffer framebuffer: framebuffers_) {
-                if (framebuffer != VK_NULL_HANDLE) {
-                    vkDestroyFramebuffer(device_, framebuffer, nullptr);
-                }
-            }
             if (descriptorPool_ != VK_NULL_HANDLE) {
                 vkDestroyDescriptorPool(device_, descriptorPool_, nullptr);
             }
@@ -149,7 +132,7 @@ namespace Engine::UI {
                 vkDestroyDescriptorSetLayout(device_, descriptorSetLayout_, nullptr);
             }
         }
-        framebuffers_.clear();
+        imageViews_.clear();
         descriptorSet_ = VK_NULL_HANDLE;
         descriptorPool_ = VK_NULL_HANDLE;
         descriptorSetLayout_ = VK_NULL_HANDLE;
@@ -161,11 +144,17 @@ namespace Engine::UI {
                             const std::uint32_t imageIndex, const VkExtent2D extent,
                             const VkBuffer vertexBuffer, const VkBuffer indexBuffer,
                             const std::uint32_t indexCount) const {
-        VkRenderPassBeginInfo passInfo{VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO};
-        passInfo.renderPass = pipeline_.renderPass();
-        passInfo.framebuffer = framebuffers_.at(imageIndex);
-        passInfo.renderArea.extent = extent;
-        vkCmdBeginRenderPass(commandBuffer, &passInfo, VK_SUBPASS_CONTENTS_INLINE);
+        VkRenderingAttachmentInfo color{VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO};
+        color.imageView = imageViews_.at(imageIndex);
+        color.imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+        color.loadOp = VK_ATTACHMENT_LOAD_OP_LOAD;
+        color.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+        VkRenderingInfo rendering{VK_STRUCTURE_TYPE_RENDERING_INFO};
+        rendering.renderArea.extent = extent;
+        rendering.layerCount = 1;
+        rendering.colorAttachmentCount = 1;
+        rendering.pColorAttachments = &color;
+        vkCmdBeginRendering(commandBuffer, &rendering);
 
         if (indexCount != 0) {
             vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS,
@@ -193,6 +182,6 @@ namespace Engine::UI {
             vkCmdDrawIndexed(commandBuffer, indexCount, 1, 0, 0, 0);
         }
 
-        vkCmdEndRenderPass(commandBuffer);
+        vkCmdEndRendering(commandBuffer);
     }
 } // namespace Engine::UI
