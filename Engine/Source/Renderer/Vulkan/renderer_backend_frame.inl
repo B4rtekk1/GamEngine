@@ -978,36 +978,71 @@
             // before either Game View or Scene View material shaders sample it.
             gtaoPass.initialize(commandBuffer);
             if (renderGameViewport) {
-            foliageGpuCullingPasses[currentFrame].recordBinned(
-                commandBuffer, static_cast<std::uint32_t>(gpuObjects.size()), MaterialProgramSlotCount);
-
-            gpuTimestampProfiler.endZone(commandBuffer, currentFrame);
-            gpuTimestampProfiler.beginZone(commandBuffer, currentFrame, forwardProfileName);
-            forwardPass.begin(
-                commandBuffer, hdrFramebuffer, swapchain.extent(),
-                shadowPass.descriptorSet(currentFrame), vertexBuffer.handle(),
-                instanceBuffers[currentFrame].handle(), indexBuffer.handle());
-            for (std::uint32_t shader = 0; shader < MaterialProgramSlotCount; ++shader) {
-                if (!activeShaderSlots.test(shader)) continue;
-                if (shader == materialShaderIndex(MaterialShader::Water)) continue;
-                const auto commandOffset = static_cast<VkDeviceSize>(shader) * gpuObjects.size() *
-                    sizeof(VkDrawIndexedIndirectCommand);
-                const auto countOffset = static_cast<VkDeviceSize>(shader) * sizeof(std::uint32_t);
-                forwardPass.drawMaterial(commandBuffer, shadowPass.descriptorSet(currentFrame),
-                    shader, indirectDraws[currentFrame], commandOffset, countOffset);
-                forwardPass.drawMaterial(commandBuffer, shadowPass.descriptorSet(currentFrame),
-                    shader, foliageIndirectDraws[currentFrame], commandOffset, countOffset);
-            }
-            if (!sceneGpu.grassInstances.empty()) {
-                const auto& lists = grassRenderLists[currentFrame];
-                Culling::IndexedIndirectDrawCount grassDraw;
-                grassDraw.create(lists.mainIndirect.handle(), lists.mainDrawCount.handle(),
-                                 static_cast<uint32_t>(std::max<std::size_t>(1, sceneGpu.grassClusters.size())));
-                shadowPass.setGrassVisibleInstances(currentFrame, lists.drawInstances[0].handle());
-                forwardPass.drawGrass(commandBuffer, shadowPass.grassDescriptorSet(currentFrame), grassDraw);
-            }
-            ForwardPass::end(commandBuffer);
-            gpuTimestampProfiler.endZone(commandBuffer, currentFrame);
+            frameGraph.reset();
+            frameGraph.enablePassCulling();
+            frameGraph.setQueueFamily(RenderGraph::Queue::Graphics, vulkanDevice.graphicsQueueFamily());
+            frameGraph.setQueueFamily(RenderGraph::Queue::AsyncCompute, vulkanDevice.computeQueueFamily());
+            const VkExtent2D graphExtent = swapchain.extent();
+            const RenderGraph::TextureDesc graphDepthDesc{
+                .extent = {graphExtent.width, graphExtent.height, 1},
+                .format = msaa.enabled() ? hiZDepthBuffer.format() : depthBuffer.format(),
+                .usage = VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
+                .aspect = VK_IMAGE_ASPECT_DEPTH_BIT};
+            // ForwardPass owns the UNDEFINED -> attachment transition in its
+            // render pass, therefore no external pre-pass barrier is emitted.
+            const auto graphDepth = frameGraph.importTexture(
+                "Forward depth", msaa.enabled() ? hiZDepthBuffer.image() : depthBuffer.image(), graphDepthDesc,
+                {.layout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL});
+            const RenderGraph::TextureDesc graphHiZDesc{
+                .extent = {hiZBuffer.width(), hiZBuffer.height(), 1}, .format = VK_FORMAT_R32_SFLOAT,
+                .usage = VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
+                .aspect = VK_IMAGE_ASPECT_COLOR_BIT, .mipLevels = hiZBuffer.mipCount()};
+            const auto graphHiZ = hizEnabled ? frameGraph.importTexture(
+                "Hi-Z pyramid", hiZBuffer.image(), graphHiZDesc,
+                {.stage = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                 .access = VK_ACCESS_2_SHADER_SAMPLED_READ_BIT,
+                 .layout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL}) : RenderGraph::TextureHandle{};
+            frameGraph.addPass("Depth / prepass", RenderGraph::Queue::Graphics,
+            [&](RenderGraph::PassBuilder& builder) {
+                builder.write(graphDepth, RenderGraph::TextureUsage::DepthAttachment);
+                builder.setFinalTextureState(graphDepth, {
+                    .stage = VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT,
+                    .access = VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT,
+                    .layout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL,
+                    .write = true});
+            }, [&](const VkCommandBuffer buffer) {
+                foliageGpuCullingPasses[currentFrame].recordBinned(
+                    buffer, static_cast<std::uint32_t>(gpuObjects.size()), MaterialProgramSlotCount);
+                gpuTimestampProfiler.endZone(buffer, currentFrame);
+                gpuTimestampProfiler.beginZone(buffer, currentFrame, forwardProfileName);
+                forwardPass.begin(buffer, hdrFramebuffer, swapchain.extent(), shadowPass.descriptorSet(currentFrame),
+                    vertexBuffer.handle(), instanceBuffers[currentFrame].handle(), indexBuffer.handle());
+                for (std::uint32_t shader = 0; shader < MaterialProgramSlotCount; ++shader) {
+                    if (!activeShaderSlots.test(shader) || shader == materialShaderIndex(MaterialShader::Water)) continue;
+                    const auto commandOffset = static_cast<VkDeviceSize>(shader) * gpuObjects.size() * sizeof(VkDrawIndexedIndirectCommand);
+                    const auto countOffset = static_cast<VkDeviceSize>(shader) * sizeof(std::uint32_t);
+                    forwardPass.drawMaterial(buffer, shadowPass.descriptorSet(currentFrame), shader, indirectDraws[currentFrame], commandOffset, countOffset);
+                    forwardPass.drawMaterial(buffer, shadowPass.descriptorSet(currentFrame), shader, foliageIndirectDraws[currentFrame], commandOffset, countOffset);
+                }
+                if (!sceneGpu.grassInstances.empty()) {
+                    const auto& lists = grassRenderLists[currentFrame]; Culling::IndexedIndirectDrawCount grassDraw;
+                    grassDraw.create(lists.mainIndirect.handle(), lists.mainDrawCount.handle(), static_cast<uint32_t>(std::max<std::size_t>(1, sceneGpu.grassClusters.size())));
+                    shadowPass.setGrassVisibleInstances(currentFrame, lists.drawInstances[0].handle());
+                    forwardPass.drawGrass(buffer, shadowPass.grassDescriptorSet(currentFrame), grassDraw);
+                }
+                ForwardPass::end(buffer);
+                gpuTimestampProfiler.endZone(buffer, currentFrame);
+            });
+            if (hizEnabled) {
+                frameGraph.addPass("Hi-Z", RenderGraph::Queue::Graphics,
+                [&](RenderGraph::PassBuilder& builder) {
+                    builder.read(graphDepth, RenderGraph::TextureUsage::SampledReadCompute);
+                    builder.write(graphHiZ, RenderGraph::TextureUsage::StorageWriteCompute);
+                }, [this](const VkCommandBuffer buffer) { hiZPass.record(buffer, hiZBuffer); });
+                frameGraph.exportTexture(graphHiZ);
+            } else frameGraph.exportTexture(graphDepth);
+            frameGraph.execute(commandBuffer);
+            if (hizEnabled) hiZValid = true;
 
             // The prepass has produced this frame's depth and velocity. GTAO
             // must finish before the lighting pass samples its result.
@@ -1316,7 +1351,11 @@
                 }
             }
 
-            if (renderGameViewport && hizEnabled) {
+            // Depth / Hi-Z is recorded by the graph directly after the
+            // prepass. This legacy submit split remains here temporarily for
+            // the other async command-buffer infrastructure, but must never
+            // record the pyramid a second time.
+            if (false && renderGameViewport && hizEnabled) {
                 // Hi-Z is a complete graph resource: Forward produces the
                 // imported depth image and this pass writes the imported mip
                 // chain.  The graph owns the outer depth/read -> storage/write

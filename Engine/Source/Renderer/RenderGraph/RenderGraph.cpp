@@ -106,6 +106,10 @@ namespace Engine::RenderGraph {
         graph_.addAccess(pass_, texture, usage, true);
     }
 
+    void PassBuilder::setFinalTextureState(const TextureHandle texture, const TextureState state) {
+        graph_.addFinalTextureState(pass_, texture, state);
+    }
+
     TextureHandle PassBuilder::writeTexture(std::string name, const TextureDesc &desc, const TextureUsage usage) {
         return graph_.addTransient(std::move(name), desc, pass_, usage);
     }
@@ -177,7 +181,7 @@ namespace Engine::RenderGraph {
     void RenderGraph::addPass(std::string name, const Queue queue, const std::function<void(PassBuilder &)> &setup,
                               ExecuteCallback execute) {
         if (compiled_) throw std::logic_error("Reset RenderGraph before adding passes");
-        passes_.push_back({std::move(name), queue, {}, {}, std::move(execute)});
+        passes_.push_back({std::move(name), queue, {}, {}, {}, std::move(execute)});
         PassBuilder builder{*this, static_cast<std::uint32_t>(passes_.size() - 1)};
         setup(builder);
     }
@@ -202,6 +206,14 @@ namespace Engine::RenderGraph {
                 usage == TextureUsage::DepthAttachment && write))
             throw std::invalid_argument("Texture usage does not match read/write declaration");
         passes_[pass].accesses.push_back({texture, usage, write});
+    }
+
+    void RenderGraph::addFinalTextureState(const std::uint32_t pass, const TextureHandle texture,
+                                           const TextureState state) {
+        requireValid(texture);
+        if (pass >= passes_.size()) throw std::logic_error("Invalid RenderGraph pass");
+        if (compiled_) throw std::logic_error("Reset RenderGraph before adding accesses");
+        passes_[pass].finalTextureStates.push_back({texture, state});
     }
     void RenderGraph::addBufferAccess(const std::uint32_t pass, const BufferHandle buffer, const BufferUsage usage,
                                       const bool write) {
@@ -486,7 +498,7 @@ namespace Engine::RenderGraph {
         }
         barriers_.assign(count, {});
         releaseBarriers_.assign(count, {});
-        for (std::uint32_t ordered = 0; ordered < order_.size(); ++ordered)
+        for (std::uint32_t ordered = 0; ordered < order_.size(); ++ordered) {
             for (const Access &access: passes_[order_[ordered]].accesses) {
                 auto &state = states[access.texture.index];
                 const auto next = usageInfo(access.usage);
@@ -544,6 +556,18 @@ namespace Engine::RenderGraph {
                 }
                 state = {next.stage, next.access, next.layout, next.write, nextQueue, static_cast<std::int32_t>(ordered)};
             }
+        // Some callbacks use legacy render passes whose finalLayout performs
+        // a transition internally.  That transition is not a command emitted
+        // by RenderGraph, but it is still the authoritative source state for
+        // the next graph pass.
+        for (const auto& finalState : passes_[order_[ordered]].finalTextureStates) {
+            requireValid(finalState.texture);
+            states[finalState.texture.index] = {finalState.state.stage, finalState.state.access,
+                                                finalState.state.layout, finalState.state.write,
+                                                passes_[order_[ordered]].queue,
+                                                static_cast<std::int32_t>(ordered)};
+        }
+        }
         struct BufferState { VkPipelineStageFlags2 stage{}; VkAccessFlags2 access{}; bool write{}; Queue queue{Queue::Graphics}; std::int32_t pass{-1}; };
         std::vector<BufferState> bufferStates(buffers_.size());
         for (std::uint32_t ordered = 0; ordered < order_.size(); ++ordered)

@@ -105,6 +105,13 @@ namespace Engine::RenderGraph {
     public:
         void read(TextureHandle texture, TextureUsage usage = TextureUsage::SampledRead);
         void write(TextureHandle texture, TextureUsage usage);
+        /**
+         * Declares the state established by the pass callback itself (for
+         * example by a legacy VkRenderPass finalLayout).  No barrier is
+         * emitted here: the graph uses this state as the source of the next
+         * dependency.
+         */
+        void setFinalTextureState(TextureHandle texture, TextureState state);
         [[nodiscard]] TextureHandle writeTexture(std::string name, const TextureDesc& desc,
                                                   TextureUsage usage = TextureUsage::StorageWrite);
         void read(BufferHandle buffer, BufferUsage usage = BufferUsage::StorageRead);
@@ -197,6 +204,8 @@ namespace Engine::RenderGraph {
             std::string name;
             Queue queue{Queue::Graphics};
             std::vector<Access> accesses;
+            struct FinalTextureState final { TextureHandle texture; TextureState state; };
+            std::vector<FinalTextureState> finalTextureStates;
             std::vector<BufferAccess> bufferAccesses;
             ExecuteCallback execute;
         };
@@ -217,6 +226,7 @@ namespace Engine::RenderGraph {
 
         friend class PassBuilder;
         void addAccess(std::uint32_t pass, TextureHandle texture, TextureUsage usage, bool write);
+        void addFinalTextureState(std::uint32_t pass, TextureHandle texture, TextureState state);
         void addBufferAccess(std::uint32_t pass, BufferHandle buffer, BufferUsage usage, bool write);
         [[nodiscard]] TextureHandle addTransient(std::string name, const TextureDesc& desc,
                                                  std::uint32_t pass, TextureUsage usage);
