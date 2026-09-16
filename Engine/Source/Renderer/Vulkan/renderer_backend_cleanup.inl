@@ -6,6 +6,7 @@
 
             if (device != VK_NULL_HANDLE) {
                 vkDeviceWaitIdle(device);
+                gpuRetirementQueue.collectAll();
                 cleanupSwapChain();
 
                 skyPass.destroy();

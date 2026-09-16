@@ -1,3 +1,25 @@
+        // Frame fences are the retirement timeline for resources owned by the
+        // graphics submission chain (including dependent async compute).
+        class GpuRetirementQueue final {
+        public:
+            void retire(std::function<void()> destroy, const std::uint64_t value) {
+                if (destroy) entries_.push_back({value, std::move(destroy)});
+            }
+
+            void collect(const std::uint64_t completed) {
+                const auto firstReady = std::stable_partition(entries_.begin(), entries_.end(),
+                    [completed](const Entry& entry) { return entry.value > completed; });
+                for (auto entry = firstReady; entry != entries_.end(); ++entry) entry->destroy();
+                entries_.erase(firstReady, entries_.end());
+            }
+
+            void collectAll() { collect(UINT64_MAX); }
+
+        private:
+            struct Entry final { std::uint64_t value{}; std::function<void()> destroy; };
+            std::vector<Entry> entries_;
+        };
+
     private:
         friend class Renderer;
         SDL_Window* window = nullptr;
@@ -548,6 +570,7 @@
         std::array<std::uint64_t, MAX_FRAMES_IN_FLIGHT> frameSubmissionValues{};
         std::uint64_t submittedFrameValue{};
         std::uint64_t completedFrameValue{};
+        GpuRetirementQueue gpuRetirementQueue;
         std::uint64_t taaSampleIndex = 0;
         float taaJitterX = 0.0F;
         float taaJitterY = 0.0F;

@@ -596,10 +596,9 @@
             antialiasingLevel = requestedLevel;
             taaSampleIndex = 0;
 
-            // Nothing may reference the old render passes or attachments while
-            // they are being replaced. This also guarantees that the old
-            // command buffers have finished before their pipelines disappear.
-            vkDeviceWaitIdle(device);
+            // Retire only frames and uploads which can reference these
+            // attachments; do not idle unrelated queues during live resize.
+            waitForGlobalResourceRebuild();
 
             // These descriptor sets bind packed grass buffers, which are
             // recreated together with culling resources below.

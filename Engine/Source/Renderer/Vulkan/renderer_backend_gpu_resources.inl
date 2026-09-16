@@ -1302,8 +1302,9 @@
                  requested.height == sceneViewportTarget.extent().height)) return;
 
             // This is called before ImGui::NewFrame(), so no current draw data
-            // can retain the descriptor that is about to be retired.
-            vkDeviceWaitIdle(device);
+            // can retain the descriptor. Fence/upload retirement covers old
+            // submitted frames without a device-wide idle.
+            waitForGlobalResourceRebuild();
             sceneViewportTarget.resize(requested);
             createSceneVirtualWaterResources();
 

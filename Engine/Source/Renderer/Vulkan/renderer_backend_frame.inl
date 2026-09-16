@@ -2072,6 +2072,7 @@
             deferredPreviousTransformBuffers[currentFrame].clear();
             completedFrameValue = std::max(completedFrameValue,
                                            frameSubmissionValues[currentFrame]);
+            gpuRetirementQueue.collect(completedFrameValue);
             sceneGpu.database.reclaimDeferredInstances(completedFrameValue);
             if (const auto completed = gpuTimestampProfiler.completedFrame(currentFrame)) {
                 lastGpuProfile = *completed;
