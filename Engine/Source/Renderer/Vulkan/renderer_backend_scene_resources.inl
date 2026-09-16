@@ -31,6 +31,10 @@
         void createMaterialTextures() {
             restoreMeshSourceDataForUpload();
             auto uploadBatch = uploadContext.beginBatch();
+            std::size_t rawImages = 0;
+            std::size_t cookedImages = 0;
+            std::size_t gtexImages = 0;
+            VkDeviceSize rawBytes = 0;
             constexpr std::array<std::uint8_t, 4> white = {255, 255, 255, 255};
             fallbackMaterialTexture.create(
                 vulkanDevice.physical(), device, commandPool, vulkanDevice.graphicsQueue(),
@@ -58,6 +62,7 @@
                             return material.baseColorTexture == index || material.emissiveTexture == index;
                         });
                     if (image.cooked) {
+                        ++cookedImages;
                         Texture2D texture;
                         texture.createCooked(vulkanDevice.physical(), device, commandPool,
                                              vulkanDevice.graphicsQueue(), *image.cooked,
@@ -69,6 +74,7 @@
                         continue;
                     }
                     if (image.gtex) {
+                        ++gtexImages;
                         Texture2D texture;
                         texture.createGtex(vulkanDevice.physical(), device, commandPool,
                                            vulkanDevice.graphicsQueue(), *image.gtex,
@@ -83,6 +89,8 @@
                         materialTextures.emplace_back();
                         continue;
                     }
+                    ++rawImages;
+                    rawBytes += image.rgbaPixels.size();
                     Texture2D texture;
                     texture.create(vulkanDevice.physical(), device, commandPool,
                                    vulkanDevice.graphicsQueue(), image.width, image.height,
@@ -111,6 +119,7 @@
                         return material.baseColorTexture == index || material.emissiveTexture == index;
                     });
                     if (image.cooked) {
+                        ++cookedImages;
                         Texture2D texture;
                         texture.createCooked(vulkanDevice.physical(), device, commandPool,
                                              vulkanDevice.graphicsQueue(), *image.cooked,
@@ -122,6 +131,7 @@
                         continue;
                     }
                     if (image.gtex) {
+                        ++gtexImages;
                         Texture2D texture;
                         texture.createGtex(vulkanDevice.physical(), device, commandPool,
                                            vulkanDevice.graphicsQueue(), *image.gtex,
@@ -136,6 +146,8 @@
                         materialTextures.emplace_back();
                         continue;
                     }
+                    ++rawImages;
+                    rawBytes += image.rgbaPixels.size();
                     Texture2D texture;
                     texture.create(vulkanDevice.physical(), device, commandPool,
                                    vulkanDevice.graphicsQueue(), image.width, image.height,
@@ -148,6 +160,17 @@
                 }
             });
             [[maybe_unused]] const UploadTicket ticket = uploadBatch.submit();
+            const auto& stats = uploadContext.statistics();
+            Diagnostics::instance().report(
+                DiagnosticSeverity::Info,
+                "[SceneSync] MaterialTextures complete: rawImages=" + std::to_string(rawImages) +
+                ", rawBytes=" + std::to_string(rawBytes) + ", cookedImages=" +
+                std::to_string(cookedImages) + ", gtexImages=" + std::to_string(gtexImages) +
+                ", uploadBytes=" + std::to_string(stats.bytesUploaded) + ", forcedSubmits=" +
+                std::to_string(stats.forcedSubmits) + ", ringWraps=" + std::to_string(stats.ringWraps) +
+                ", waits=" + std::to_string(stats.waits),
+                {.subsystem = "Renderer"});
+            Diagnostics::instance().flush();
         }
 
         [[nodiscard]] GPUMaterialData packMaterial(const PBRMaterial& source,

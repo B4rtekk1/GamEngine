@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cassert>
 #include <bit>
 #include <cstring>
 #include <limits>
@@ -689,6 +690,19 @@ namespace Engine {
     }
 
     void Texture2D::destroy() noexcept {
+        // UploadContext submits texture copies independently of frame work.
+        // Do not release an image still referenced by an active or submitted
+        // upload batch.
+        if (readyTimeline_ != 0) {
+            if (UploadContext *const upload = UploadContext::current()) {
+                assert(!upload->recording() ||
+                       readyTimeline_ != upload->pendingTicket().timelineValue);
+                if (upload->isSubmitted(readyTimeline_)) {
+                    upload->wait(readyTimeline_);
+                }
+            }
+            readyTimeline_ = 0;
+        }
         if (device_ != VK_NULL_HANDLE) {
             if (sampler_ != VK_NULL_HANDLE) {
                 vkDestroySampler(device_, sampler_, nullptr);
@@ -715,6 +729,7 @@ namespace Engine {
         width_ = 0;
         height_ = 0;
         mipLevels_ = 0;
+        readyTimeline_ = 0;
     }
 
     std::uint32_t Texture2D::findMemoryType(

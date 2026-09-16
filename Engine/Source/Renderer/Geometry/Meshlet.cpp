@@ -110,7 +110,7 @@ namespace Engine {
         }
     } // namespace
 
-    void subdivide_render_sections(Mesh &mesh, const std::uint32_t targetMeshlets) noexcept {
+    void subdivide_render_sections(Mesh &mesh, const std::uint32_t targetMeshlets) {
         if (targetMeshlets == 0 || mesh.renderSections.empty()) return;
         constexpr std::uint32_t maxClusterTriangles = MeshletBuildOptions::MaxTriangles;
         if (targetMeshlets > std::numeric_limits<std::uint32_t>::max() / maxClusterTriangles / 3U) return;
@@ -158,7 +158,7 @@ namespace Engine {
         mesh.renderSections = std::move(sections);
     }
 
-    bool build_meshlets(Mesh &mesh, const MeshletBuildOptions options) noexcept {
+    bool build_meshlets(Mesh &mesh, const MeshletBuildOptions options) {
         if (options.maxVertices == 0 || options.maxVertices > MeshletBuildOptions::MaxVertices ||
             options.maxTriangles == 0 || options.maxTriangles > MeshletBuildOptions::MaxTriangles ||
             mesh.indices.empty() || mesh.indices.size() % 3U != 0U)

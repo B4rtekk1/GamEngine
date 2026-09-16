@@ -16,6 +16,12 @@ struct UploadTicket final {
 class UploadContext final {
 public:
     struct Slice { VkBuffer buffer{}; VkDeviceSize offset{}; void* mapped{}; };
+    struct Statistics {
+        std::uint64_t forcedSubmits{};
+        std::uint64_t ringWraps{};
+        std::uint64_t waits{};
+        VkDeviceSize bytesUploaded{};
+    };
     class Batch final {
     public:
         explicit Batch(UploadContext& context);
@@ -36,7 +42,7 @@ public:
     UploadContext(const UploadContext&) = delete; UploadContext& operator=(const UploadContext&) = delete;
     void create(VkDevice device, VkQueue transferQueue, uint32_t transferFamily, VkQueue graphicsQueue,
                 uint32_t graphicsFamily, uint32_t computeFamily,
-                VmaAllocator allocator, VkDeviceSize bytes = 256ull * 1024 * 1024);
+                VmaAllocator allocator, VkDeviceSize bytes = 512ull * 1024 * 1024);
     void destroy() noexcept;
     /// Starts an explicit upload batch. Resources created while it is active
     /// append their copy commands instead of submitting independently.
@@ -78,6 +84,7 @@ public:
     }
     [[nodiscard]] bool recording() const noexcept { return recording_; }
     [[nodiscard]] VkDeviceSize capacity() const noexcept { return capacity_; }
+    [[nodiscard]] const Statistics& statistics() const noexcept { return statistics_; }
     static UploadContext* current() noexcept;
     static void setCurrent(UploadContext* context) noexcept;
 private:
@@ -99,6 +106,7 @@ private:
     VkSemaphore timeline_{}; VkSemaphore copyTimeline_{}; uint64_t nextValue_{1};
     bool splitQueues_{};
     bool recording_{};
+    mutable Statistics statistics_{};
     std::vector<Submitted> submitted_;
     std::vector<RetiredUploadRange> retiredUploadRanges_;
     [[nodiscard]] bool overlapsLiveUploadRange(VkDeviceSize begin, VkDeviceSize end) const noexcept;

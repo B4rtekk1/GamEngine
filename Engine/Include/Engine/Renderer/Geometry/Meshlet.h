@@ -48,7 +48,7 @@ namespace Engine {
      * the cooked or GPU-facing data contract.
      */
     [[nodiscard]] bool build_meshlets(Mesh& mesh,
-                                      MeshletBuildOptions options = {}) noexcept;
+                                      MeshletBuildOptions options = {});
 
     /**
      * Splits large imported sections into spatially local, contiguous index
@@ -58,5 +58,5 @@ namespace Engine {
      * at the default meshlet triangle limit.
      */
     void subdivide_render_sections(Mesh& mesh,
-                                   std::uint32_t targetMeshlets = 32U) noexcept;
+                                   std::uint32_t targetMeshlets = 32U);
 } // namespace Engine

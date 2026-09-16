@@ -180,6 +180,7 @@ namespace Engine {
         waitInfo.semaphoreCount = 1;
         waitInfo.pSemaphores = &timeline_;
         waitInfo.pValues = &value;
+        ++statistics_.waits;
         static_cast<void>(vkWaitSemaphores(device_, &waitInfo, UINT64_MAX));
     }
 
@@ -247,12 +248,14 @@ namespace Engine {
                 activeRangeBegin_ = rangeBegin;
                 activeRangeEnd_ = head_;
                 hasActiveRange_ = true;
+                statistics_.bytesUploaded += size;
                 return {staging_, offset, static_cast<char *>(mapped_) + offset};
             }
 
             // A submitted range never wraps physically. Once the current
             // batch has data, submit it before trying the start of the ring.
             if (hasActiveRange_) {
+                ++statistics_.forcedSubmits;
                 static_cast<void>(submit());
                 begin();
                 continue;
@@ -261,10 +264,12 @@ namespace Engine {
             // The beginning may already have been retired even while the end
             // is still in flight. Reuse it without waiting whenever possible.
             if (size <= capacity_ && !overlapsLiveUploadRange(0, size)) {
+                ++statistics_.ringWraps;
                 head_ = size;
                 activeRangeBegin_ = 0;
                 activeRangeEnd_ = head_;
                 hasActiveRange_ = true;
+                statistics_.bytesUploaded += size;
                 return {staging_, 0, mapped_};
             }
 
@@ -426,6 +431,7 @@ namespace Engine {
         nextValue_ = 1;
         splitQueues_ = false;
         recording_ = false;
+        statistics_ = {};
         retiredUploadRanges_.clear();
     }
 }

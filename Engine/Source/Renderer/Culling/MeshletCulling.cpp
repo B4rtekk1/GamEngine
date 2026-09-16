@@ -6,7 +6,7 @@ namespace Engine::Culling {
 bool appendMeshletPayload(const Mesh& mesh, const std::uint32_t firstVertex,
                           std::vector<GpuMeshlet>& destinationMeshlets,
                           std::vector<std::uint32_t>& destinationVertices,
-                          std::vector<std::uint32_t>& destinationTriangles) noexcept {
+                          std::vector<std::uint32_t>& destinationTriangles) {
     if (mesh.meshlets.empty() || mesh.meshletVertices.empty() || mesh.meshletTriangles.empty() ||
         mesh.vertices.size() > std::numeric_limits<std::uint32_t>::max() - firstVertex ||
         destinationVertices.size() > std::numeric_limits<std::uint32_t>::max() ||

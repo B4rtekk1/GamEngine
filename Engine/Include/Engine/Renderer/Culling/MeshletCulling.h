@@ -50,5 +50,5 @@ namespace Engine::Culling {
     [[nodiscard]] bool appendMeshletPayload(const Mesh& mesh, std::uint32_t firstVertex,
                                             std::vector<GpuMeshlet>& meshlets,
                                             std::vector<std::uint32_t>& vertices,
-                                            std::vector<std::uint32_t>& triangles) noexcept;
+                                            std::vector<std::uint32_t>& triangles);
 } // namespace Engine::Culling
