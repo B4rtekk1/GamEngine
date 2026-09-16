@@ -51,6 +51,8 @@ namespace Engine {
             std::uint32_t meshletCount{};
             std::uint32_t materialIndex{};
             AABB localBounds{};
+            /// Root in meshletClusters for this independently drawable range.
+            std::uint32_t meshletClusterRoot{};
         };
 
         /**
@@ -96,6 +98,10 @@ namespace Engine {
         std::vector<std::uint32_t> meshletVertices;
         /** Packed uint8x3 local triangle indices addressed by Meshlet::triangleOffset. */
         std::vector<std::uint32_t> meshletTriangles;
+        /** Baked hierarchy used for coarse meshlet culling and runtime LOD. */
+        std::vector<MeshletClusterNode> meshletClusters;
+        /** Root for meshes without renderSections. */
+        std::uint32_t meshletClusterRoot{};
 
         /**
          * @brief Monotonically increasing version of the mesh's collision geometry.

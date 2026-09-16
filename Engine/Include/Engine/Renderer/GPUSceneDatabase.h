@@ -63,6 +63,8 @@ namespace Engine {
             // GPU-scene data: meshlet bounds are local to an instance's mesh.
             std::uint32_t firstMeshlet{0};
             std::uint32_t meshletCount{0};
+            std::uint32_t firstMeshletCluster{0};
+            std::uint32_t meshletClusterRoot{0};
         };
 
         struct GPUMaterial {

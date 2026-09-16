@@ -55,6 +55,8 @@ namespace Engine {
             std::uint32_t lod2IndexCount{0};
             std::uint32_t firstMeshlet{0};
             std::uint32_t meshletCount{0};
+            std::uint32_t firstMeshletCluster{0};
+            std::uint32_t meshletClusterRoot{0};
             float lod1Distance{28.0F};
             float lod2Distance{60.0F};
             std::uint32_t firstInstance{0};

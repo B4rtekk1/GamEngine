@@ -22,6 +22,15 @@ namespace Engine::Culling {
     };
     static_assert(sizeof(GpuMeshlet) == 64);
 
+    /** GPU form of a baked meshlet-hierarchy node.  Child and meshlet ranges
+     * are rebased to the global payload streams during scene upload. */
+    struct alignas(16) GpuMeshletCluster final {
+        glm::vec4 bounds{}; // xyz local-space center, w conservative radius
+        glm::vec4 cone{};   // optional conservative cone; w < -1 disables it
+        glm::uvec4 range{}; // firstChild, childCount, firstMeshlet, meshletCount
+    };
+    static_assert(sizeof(GpuMeshletCluster) == 48);
+
     /** One fine-grained visibility result. Meshlet IDs address the global
      * meshlet payload; instance IDs address the GPU-scene instance table. */
     struct VisibleMeshlet final {
@@ -38,8 +47,15 @@ namespace Engine::Culling {
         float cameraZ{};
         std::uint32_t meshletCount{};
         GPUVec4 frustumPlanes[6]{};
+        float viewportWidth{};
+        float viewportHeight{};
+        float depthBias{};
+        std::uint32_t hiZMipCount{};
+        std::uint32_t enableOcclusionCulling{};
+        std::uint32_t cameraCut{};
+        std::uint32_t reserved[2]{};
     };
-    static_assert(sizeof(MeshletCullUniforms) == 176);
+    static_assert(sizeof(MeshletCullUniforms) == 208);
 
     /**
      * Append one mesh's mesh-shader payload to global GPU-ready arrays.
@@ -51,4 +67,10 @@ namespace Engine::Culling {
                                             std::vector<GpuMeshlet>& meshlets,
                                             std::vector<std::uint32_t>& vertices,
                                             std::vector<std::uint32_t>& triangles);
+
+    /** Appends the baked hierarchy using global child and meshlet indices.
+     * Returns false when the source hierarchy cannot be represented safely. */
+    [[nodiscard]] bool appendMeshletClusterPayload(const Mesh& mesh,
+                                                   std::uint32_t firstMeshlet,
+                                                   std::vector<GpuMeshletCluster>& clusters);
 } // namespace Engine::Culling

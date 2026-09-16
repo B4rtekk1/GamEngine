@@ -244,11 +244,13 @@ bool occlusionTest(float4 clipPositions[8])
     minimumTexel = clamp(minimumTexel, int2(0), mipSize - 1);
     maximumTexel = clamp(maximumTexel, int2(0), mipSize - 1);
 
-    float regionDepth = 0.0;
-    for (int y = minimumTexel.y; y <= maximumTexel.y; ++y)
-        for (int x = minimumTexel.x; x <= maximumTexel.x; ++x)
-            regionDepth = max(regionDepth,
-                              hiZTexture.Load(int3(x, y, int(selectedMip))).r);
+    // The selected mip makes the projected rectangle at most about 2x2
+    // texels.  Sampling its corners is consequently conservative for the
+    // max-depth hierarchy and gives a fixed four-fetch cost per object.
+    float regionDepth = hiZTexture.Load(int3(minimumTexel, int(selectedMip))).r;
+    regionDepth = max(regionDepth, hiZTexture.Load(int3(maximumTexel.x, minimumTexel.y, int(selectedMip))).r);
+    regionDepth = max(regionDepth, hiZTexture.Load(int3(minimumTexel.x, maximumTexel.y, int(selectedMip))).r);
+    regionDepth = max(regionDepth, hiZTexture.Load(int3(maximumTexel, int(selectedMip))).r);
 
     return nearestObjectDepth > regionDepth + culling.depthBias;
 }

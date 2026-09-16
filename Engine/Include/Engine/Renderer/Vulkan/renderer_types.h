@@ -151,6 +151,9 @@ namespace Engine {
         glm::uvec4 draw{}; // firstIndex, indexCount, vertexOffset, lod1IndexCount
         // lod2IndexCount, firstMeshlet, meshletCount, reserved
         glm::uvec4 lod{};
+        // First node in the global hierarchy payload, root for this draw
+        // range, node count, reserved.
+        glm::uvec4 clusters{};
     };
 
     struct alignas(16) GPUSceneMaterialRecord {

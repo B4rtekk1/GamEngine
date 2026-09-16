@@ -16,7 +16,7 @@
 namespace Engine::Assets {
     namespace {
         constexpr std::array<char, 8> magic{'G', 'M', 'E', 'S', 'H', '\0', '\0', '\0'};
-        constexpr std::uint32_t version = 3;
+        constexpr std::uint32_t version = 4;
         constexpr std::uint32_t maxElements = 100'000'000;
 
         struct HeaderV1 {
@@ -44,12 +44,20 @@ namespace Engine::Assets {
             std::uint32_t materials;
             std::uint32_t images;
             std::uint32_t renderSections;
+            std::uint32_t meshletClusters;
+            std::uint32_t meshletClusterRoot;
+        };
+
+        struct RenderSectionV3 final {
+            std::uint32_t firstIndex, indexCount, firstMeshlet, meshletCount, materialIndex;
+            AABB localBounds{};
         };
 
         static_assert(std::is_trivially_copyable_v<Vertex>);
         static_assert(std::is_trivially_copyable_v<PBRMaterial>);
         static_assert(std::is_trivially_copyable_v<Meshlet>);
         static_assert(std::is_trivially_copyable_v<Mesh::RenderSection>);
+        static_assert(std::is_trivially_copyable_v<MeshletClusterNode>);
 
         template<class T>
         bool write(std::ofstream &file, const T &value) {
@@ -104,14 +112,30 @@ namespace Engine::Assets {
             return !mesh.indices.empty() ? !mesh.meshlets.empty() : mesh.meshlets.empty();
         }
 
-        [[nodiscard]] bool valid_render_sections(const Mesh& mesh) {
-            for (const Mesh::RenderSection& section : mesh.renderSections) {
+        [[nodiscard]] bool valid_render_sections(const Mesh &mesh) {
+            for (const Mesh::RenderSection &section: mesh.renderSections) {
                 if (section.indexCount == 0 || section.indexCount % 3U != 0U ||
-                    section.firstIndex > mesh.indices.size() || section.indexCount > mesh.indices.size() - section.firstIndex ||
-                    section.firstMeshlet > mesh.meshlets.size() || section.meshletCount > mesh.meshlets.size() - section.firstMeshlet ||
-                    (!mesh.materials.empty() && section.materialIndex >= mesh.materials.size())) return false;
+                    section.firstIndex > mesh.indices.size() || section.indexCount > mesh.indices.size() - section.
+                    firstIndex ||
+                    section.firstMeshlet > mesh.meshlets.size() || section.meshletCount > mesh.meshlets.size() - section
+                    .firstMeshlet ||
+                    (!mesh.materials.empty() && section.materialIndex >= mesh.materials.size()) ||
+                    section.meshletClusterRoot >= mesh.meshletClusters.size())
+                    return false;
             }
             return true;
+        }
+
+        [[nodiscard]] bool valid_cluster_hierarchy(const Mesh& mesh) {
+            if (mesh.meshletClusters.empty()) return false;
+            for (const MeshletClusterNode& node : mesh.meshletClusters) {
+                if (node.radius < 0.0F || node.geometricError < 0.0F ||
+                    (node.childCount == 0U && (node.meshletCount == 0U || node.firstMeshlet > mesh.meshlets.size() ||
+                     node.meshletCount > mesh.meshlets.size() - node.firstMeshlet)) ||
+                    (node.childCount != 0U && (node.firstChild > mesh.meshletClusters.size() ||
+                     node.childCount > mesh.meshletClusters.size() - node.firstChild))) return false;
+            }
+            return mesh.renderSections.empty() ? mesh.meshletClusterRoot < mesh.meshletClusters.size() : true;
         }
     }
 
@@ -122,7 +146,8 @@ namespace Engine::Assets {
         if (cooked.vertices.size() > maxElements || cooked.indices.size() > maxElements || cooked.meshlets.size() >
             maxElements || cooked.meshletVertices.size() > maxElements || cooked.meshletTriangles.size() > maxElements
             || cooked.materials.size() > maxElements || cooked.images.size() > maxElements ||
-            cooked.renderSections.size() > maxElements) return false;
+            cooked.renderSections.size() > maxElements || cooked.meshletClusters.size() > maxElements)
+            return false;
         std::ofstream file(path, std::ios::binary | std::ios::trunc);
         const Header header{
             magic, version, static_cast<std::uint32_t>(cooked.vertices.size()),
@@ -130,12 +155,14 @@ namespace Engine::Assets {
             static_cast<std::uint32_t>(cooked.meshletVertices.size()),
             static_cast<std::uint32_t>(cooked.meshletTriangles.size()),
             static_cast<std::uint32_t>(cooked.materials.size()), static_cast<std::uint32_t>(cooked.images.size()),
-            static_cast<std::uint32_t>(cooked.renderSections.size())
+            static_cast<std::uint32_t>(cooked.renderSections.size()),
+            static_cast<std::uint32_t>(cooked.meshletClusters.size()), cooked.meshletClusterRoot
         };
         if (!file || !write(file, header) || !write_vector(file, cooked.vertices) || !write_vector(file, cooked.indices)
             || !write_vector(file, cooked.meshlets) || !write_vector(file, cooked.meshletVertices) || !
             write_vector(file, cooked.meshletTriangles) || !write_vector(file, cooked.materials) ||
-            !write_vector(file, cooked.renderSections)) return false;
+            !write_vector(file, cooked.renderSections) || !write_vector(file, cooked.meshletClusters))
+            return false;
         for (const auto &image: cooked.images) {
             const auto pathText = image.cookedPath.generic_string();
             const auto length = static_cast<std::uint32_t>(pathText.size());
@@ -150,7 +177,7 @@ namespace Engine::Assets {
         std::ifstream file(path, std::ios::binary);
         FilePrefix prefix{};
         if (!file || !read(file, prefix) || prefix.magic != magic ||
-            (prefix.version != 1 && prefix.version != 2 && prefix.version != version))
+            (prefix.version != 1 && prefix.version != 2 && prefix.version != 3 && prefix.version != version))
             return {};
         file.seekg(0);
         Mesh mesh;
@@ -158,7 +185,9 @@ namespace Engine::Assets {
             Header header{};
             if (!read(file, header) || header.vertices > maxElements || header.indices > maxElements || header.meshlets
                 > maxElements || header.meshletVertices > maxElements || header.meshletTriangles > maxElements || header
-                .materials > maxElements || header.images > maxElements || header.renderSections > maxElements) return {};
+                .materials > maxElements || header.images > maxElements || header.renderSections > maxElements ||
+                header.meshletClusters > maxElements)
+                return {};
             mesh.vertices.resize(header.vertices);
             mesh.indices.resize(header.indices);
             mesh.meshlets.resize(header.meshlets);
@@ -167,32 +196,65 @@ namespace Engine::Assets {
             mesh.materials.resize(header.materials);
             mesh.images.resize(header.images);
             mesh.renderSections.resize(header.renderSections);
+            mesh.meshletClusters.resize(header.meshletClusters);
+            mesh.meshletClusterRoot = header.meshletClusterRoot;
             if (!read_vector(file, mesh.vertices) || !read_vector(file, mesh.indices) || !
                 read_vector(file, mesh.meshlets) || !read_vector(file, mesh.meshletVertices) || !
                 read_vector(file, mesh.meshletTriangles) || !read_vector(file, mesh.materials) ||
-                !read_vector(file, mesh.renderSections)) return {};
-        } else if (prefix.version == 2) {
-            struct HeaderV2 final { std::array<char, 8> magic; std::uint32_t version, vertices, indices, meshlets,
-                meshletVertices, meshletTriangles, materials, images; } header{};
-            if (!read(file, header) || header.vertices > maxElements || header.indices > maxElements ||
-                header.meshlets > maxElements || header.meshletVertices > maxElements ||
-                header.meshletTriangles > maxElements || header.materials > maxElements || header.images > maxElements) return {};
+                !read_vector(file, mesh.renderSections) || !read_vector(file, mesh.meshletClusters))
+                return {};
+        } else if (prefix.version == 3) {
+            struct HeaderV3 final { std::array<char, 8> magic; std::uint32_t version, vertices, indices, meshlets,
+                meshletVertices, meshletTriangles, materials, images, renderSections; } header{};
+            if (!read(file, header) || header.vertices > maxElements || header.indices > maxElements || header.meshlets > maxElements ||
+                header.meshletVertices > maxElements || header.meshletTriangles > maxElements || header.materials > maxElements ||
+                header.images > maxElements || header.renderSections > maxElements) return {};
             mesh.vertices.resize(header.vertices); mesh.indices.resize(header.indices); mesh.meshlets.resize(header.meshlets);
             mesh.meshletVertices.resize(header.meshletVertices); mesh.meshletTriangles.resize(header.meshletTriangles);
             mesh.materials.resize(header.materials); mesh.images.resize(header.images);
+            std::vector<RenderSectionV3> sections(header.renderSections);
             if (!read_vector(file, mesh.vertices) || !read_vector(file, mesh.indices) || !read_vector(file, mesh.meshlets) ||
                 !read_vector(file, mesh.meshletVertices) || !read_vector(file, mesh.meshletTriangles) ||
-                !read_vector(file, mesh.materials)) return {};
+                !read_vector(file, mesh.materials) || !read_vector(file, sections)) return {};
+            mesh.renderSections.reserve(sections.size());
+            for (const RenderSectionV3& section : sections)
+                mesh.renderSections.push_back({section.firstIndex, section.indexCount, section.firstMeshlet,
+                                               section.meshletCount, section.materialIndex, section.localBounds});
+            if (!build_meshlet_cluster_hierarchy(mesh)) return {};
+        } else if (prefix.version == 2) {
+            struct HeaderV2 final {
+                std::array<char, 8> magic;
+                std::uint32_t version, vertices, indices, meshlets,
+                        meshletVertices, meshletTriangles, materials, images;
+            } header{};
+            if (!read(file, header) || header.vertices > maxElements || header.indices > maxElements ||
+                header.meshlets > maxElements || header.meshletVertices > maxElements ||
+                header.meshletTriangles > maxElements || header.materials > maxElements || header.images > maxElements)
+                return {};
+            mesh.vertices.resize(header.vertices);
+            mesh.indices.resize(header.indices);
+            mesh.meshlets.resize(header.meshlets);
+            mesh.meshletVertices.resize(header.meshletVertices);
+            mesh.meshletTriangles.resize(header.meshletTriangles);
+            mesh.materials.resize(header.materials);
+            mesh.images.resize(header.images);
+            if (!read_vector(file, mesh.vertices) || !read_vector(file, mesh.indices) || !read_vector(
+                    file, mesh.meshlets) ||
+                !read_vector(file, mesh.meshletVertices) || !read_vector(file, mesh.meshletTriangles) ||
+                !read_vector(file, mesh.materials))
+                return {};
         } else {
             HeaderV1 header{};
             if (!read(file, header) || header.vertices > maxElements || header.indices > maxElements || header.materials
-                > maxElements || header.images > maxElements) return {};
+                > maxElements || header.images > maxElements)
+                return {};
             mesh.vertices.resize(header.vertices);
             mesh.indices.resize(header.indices);
             mesh.materials.resize(header.materials);
             mesh.images.resize(header.images);
             if (!read_vector(file, mesh.vertices) || !read_vector(file, mesh.indices) || !
-                read_vector(file, mesh.materials) || !build_meshlets(mesh)) return {};
+                read_vector(file, mesh.materials) || !build_meshlets(mesh))
+                return {};
         }
         for (auto &image: mesh.images) {
             std::uint32_t length{};
@@ -207,16 +269,32 @@ namespace Engine::Assets {
             image.height = gtex->height;
             image.gtex.emplace(std::move(*gtex));
         }
-        if (mesh.empty() || !valid_meshlets(mesh) || !valid_render_sections(mesh)) return {};
+        if (mesh.empty() || !valid_meshlets(mesh)) return {};
         if (mesh.renderSections.empty()) {
-            AABB bounds{.min = Vec3{std::numeric_limits<float>::max(), std::numeric_limits<float>::max(), std::numeric_limits<float>::max()},
-                        .max = Vec3{std::numeric_limits<float>::lowest(), std::numeric_limits<float>::lowest(), std::numeric_limits<float>::lowest()}};
-            for (const Vertex& vertex : mesh.vertices) {
-                bounds.min.setX(std::min(bounds.min.x(), vertex.position.x())); bounds.min.setY(std::min(bounds.min.y(), vertex.position.y())); bounds.min.setZ(std::min(bounds.min.z(), vertex.position.z()));
-                bounds.max.setX(std::max(bounds.max.x(), vertex.position.x())); bounds.max.setY(std::max(bounds.max.y(), vertex.position.y())); bounds.max.setZ(std::max(bounds.max.z(), vertex.position.z()));
+            AABB bounds{
+                .min = Vec3{
+                    std::numeric_limits<float>::max(), std::numeric_limits<float>::max(),
+                    std::numeric_limits<float>::max()
+                },
+                .max = Vec3{
+                    std::numeric_limits<float>::lowest(), std::numeric_limits<float>::lowest(),
+                    std::numeric_limits<float>::lowest()
+                }
+            };
+            for (const Vertex &vertex: mesh.vertices) {
+                bounds.min.setX(std::min(bounds.min.x(), vertex.position.x()));
+                bounds.min.setY(std::min(bounds.min.y(), vertex.position.y()));
+                bounds.min.setZ(std::min(bounds.min.z(), vertex.position.z()));
+                bounds.max.setX(std::max(bounds.max.x(), vertex.position.x()));
+                bounds.max.setY(std::max(bounds.max.y(), vertex.position.y()));
+                bounds.max.setZ(std::max(bounds.max.z(), vertex.position.z()));
             }
-            mesh.renderSections.push_back({0, mesh.indexCount(), 0, static_cast<std::uint32_t>(mesh.meshlets.size()), 0, bounds});
+            mesh.renderSections.push_back({
+                0, mesh.indexCount(), 0, static_cast<std::uint32_t>(mesh.meshlets.size()), 0, bounds
+            });
         }
+        if (mesh.meshletClusters.empty() && !build_meshlet_cluster_hierarchy(mesh)) return {};
+        if (!valid_render_sections(mesh) || !valid_cluster_hierarchy(mesh)) return {};
         mesh.sourcePath = path;
         return std::make_shared<const Mesh>(std::move(mesh));
     }

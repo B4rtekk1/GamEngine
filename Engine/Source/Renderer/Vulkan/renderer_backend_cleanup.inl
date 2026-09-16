@@ -37,6 +37,7 @@
                 meshletTriangleBuffer.destroy();
                 meshletVertexBuffer.destroy();
                 meshletBuffer.destroy();
+                meshletClusterBuffer.destroy();
                 for (Buffer& buffer : instanceBuffers) {
                     buffer.destroy();
                 }

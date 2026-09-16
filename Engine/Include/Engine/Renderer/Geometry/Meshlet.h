@@ -31,6 +31,21 @@ namespace Engine {
 
     static_assert(sizeof(Meshlet) == 64, "Meshlet is a serialized GPU ABI");
 
+    /** A node in the baked meshlet hierarchy.  Children and meshlet ranges
+     * are local to their owning Mesh.  A node either has children or owns a
+     * contiguous leaf range of meshlets. */
+    struct MeshletClusterNode final {
+        Vec3 center{};
+        float radius{};
+        float geometricError{};
+        std::uint32_t firstChild{};
+        std::uint32_t childCount{};
+        std::uint32_t firstMeshlet{};
+        std::uint32_t meshletCount{};
+        std::uint32_t reserved[3]{};
+    };
+    static_assert(sizeof(MeshletClusterNode) == 48, "MeshletClusterNode is a serialized GPU ABI");
+
     struct MeshletBuildOptions final {
         static constexpr std::uint32_t MaxVertices = 64;
         static constexpr std::uint32_t MaxTriangles = 126;
@@ -49,6 +64,13 @@ namespace Engine {
      */
     [[nodiscard]] bool build_meshlets(Mesh& mesh,
                                       MeshletBuildOptions options = {});
+
+    /** Builds a breadth-first hierarchy over already-built meshlets.  Leaves
+     * contain at most @p leafMeshlets meshlets and internal nodes have at most
+     * @p maxChildren children.  Meshlets must be spatially ordered first. */
+    [[nodiscard]] bool build_meshlet_cluster_hierarchy(Mesh& mesh,
+                                                        std::uint32_t leafMeshlets = 32U,
+                                                        std::uint32_t maxChildren = 8U);
 
     /**
      * Splits large imported sections into spatially local, contiguous index

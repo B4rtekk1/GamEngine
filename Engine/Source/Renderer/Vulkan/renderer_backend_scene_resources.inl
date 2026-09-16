@@ -513,9 +513,11 @@
             // fallback. Build all live payloads, including allocations reused
             // from a previous topology rebuild.
             std::vector<Culling::GpuMeshlet> gpuMeshlets;
+            std::vector<Culling::GpuMeshletCluster> gpuMeshletClusters;
             std::vector<std::uint32_t> meshletVertices;
             std::vector<std::uint32_t> meshletTriangles;
             std::unordered_map<const void*, std::uint32_t> firstMeshlets;
+            std::unordered_map<const void*, std::uint32_t> firstMeshletClusters;
             gpuMeshlets.reserve(indexCount / 3U);
             firstMeshlets.reserve(geometryHeapAllocations.size());
             for (const Mesh* mesh : uniqueMeshes) {
@@ -528,19 +530,30 @@
                                                    meshletVertices, meshletTriangles)) {
                     throw std::runtime_error("Invalid meshlet payload during GPU scene upload");
                 }
+                const std::uint32_t firstCluster = static_cast<std::uint32_t>(gpuMeshletClusters.size());
+                if (!Culling::appendMeshletClusterPayload(*mesh, firstMeshlet, gpuMeshletClusters))
+                    throw std::runtime_error("Invalid meshlet cluster hierarchy during GPU scene upload");
                 firstMeshlets.emplace(resourceIt->second, firstMeshlet);
+                firstMeshletClusters.emplace(resourceIt->second, firstCluster);
             }
             globalMeshletCount = static_cast<std::uint32_t>(gpuMeshlets.size());
             // Vulkan forbids zero-byte buffers. Bind an inert record in an
             // empty scene so descriptor setup can remain branch-free.
             const Culling::GpuMeshlet emptyMeshlet{};
+            const Culling::GpuMeshletCluster emptyMeshletCluster{};
             const std::uint32_t emptyWord{};
             meshletBuffer.destroy();
+            meshletClusterBuffer.destroy();
             meshletVertexBuffer.destroy();
             meshletTriangleBuffer.destroy();
             meshletBuffer.createDeviceLocal(vulkanDevice.physical(), device,
                 gpuMeshlets.empty() ? static_cast<const void*>(&emptyMeshlet) : gpuMeshlets.data(),
                 sizeof(Culling::GpuMeshlet) * std::max<std::size_t>(1, gpuMeshlets.size()),
+                VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+                commandPool, vulkanDevice.graphicsQueue(), vulkanDevice.allocator());
+            meshletClusterBuffer.createDeviceLocal(vulkanDevice.physical(), device,
+                gpuMeshletClusters.empty() ? static_cast<const void*>(&emptyMeshletCluster) : gpuMeshletClusters.data(),
+                sizeof(Culling::GpuMeshletCluster) * std::max<std::size_t>(1, gpuMeshletClusters.size()),
                 VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
                 commandPool, vulkanDevice.graphicsQueue(), vulkanDevice.allocator());
             meshletVertexBuffer.createDeviceLocal(vulkanDevice.physical(), device,
@@ -661,6 +674,13 @@
                             .firstMeshlet = (firstMeshlets.contains(renderer.mesh.resource().get())
                                 ? firstMeshlets.at(renderer.mesh.resource().get()) : 0U) + firstMeshlet,
                             .meshletCount = meshletCount,
+                            .firstMeshletCluster = firstMeshletClusters.contains(renderer.mesh.resource().get())
+                                ? firstMeshletClusters.at(renderer.mesh.resource().get()) : 0U,
+                            .meshletClusterRoot = firstMeshletClusters.contains(renderer.mesh.resource().get())
+                                ? firstMeshletClusters.at(renderer.mesh.resource().get()) +
+                                  (sectionIndex < mesh->renderSections.size()
+                                      ? mesh->renderSections[sectionIndex].meshletClusterRoot
+                                      : mesh->meshletClusterRoot) : 0U,
                             .firstInstance = static_cast<uint32_t>(renderables.size()),
                             .instanceCount = 0,
                             .shaderSlot = shaderSlot,
@@ -1183,6 +1203,7 @@
                                    mesh.lod1IndexCount},
                 .lod = glm::uvec4{mesh.lod2IndexCount, mesh.firstMeshlet,
                                   mesh.meshletCount, 0U},
+                .clusters = glm::uvec4{mesh.firstMeshletCluster, mesh.meshletClusterRoot, 0U, 0U},
             };
         }
 
@@ -1374,14 +1395,18 @@
                     {visibleMeshletBuffers[frame].handle(), 0, VK_WHOLE_SIZE},
                     {visibleMeshletCountBuffers[frame].handle(), 0, sizeof(std::uint32_t)},
                     {meshletCullingUniformBuffers[frame].handle(), 0, sizeof(Culling::MeshletCullUniforms)},
+                    {meshletClusterBuffer.handle(), 0, VK_WHOLE_SIZE},
                 };
-                VkWriteDescriptorSet meshletWrites[8]{};
+                const VkDescriptorImageInfo meshletHiZInfo{hiZBuffer.sampler(), hiZBuffer.fullView(),
+                                                           VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
+                VkWriteDescriptorSet meshletWrites[10]{};
                 for (std::uint32_t binding = 0; binding < std::size(meshletWrites); ++binding) {
                     meshletWrites[binding] = {.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
                         .dstSet = meshletCullSets[frame], .dstBinding = binding, .descriptorCount = 1,
-                        .descriptorType = binding == 7 ? VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER
-                                                       : VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
-                        .pBufferInfo = &meshletInfos[binding]};
+                        .descriptorType = binding == 8 ? VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER :
+                                          (binding == 7 ? VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER : VK_DESCRIPTOR_TYPE_STORAGE_BUFFER),
+                        .pImageInfo = binding == 8 ? &meshletHiZInfo : nullptr,
+                        .pBufferInfo = binding == 8 ? nullptr : &meshletInfos[binding]};
                 }
                 vkUpdateDescriptorSets(device, std::size(meshletWrites), meshletWrites, 0, nullptr);
             }
@@ -1886,6 +1911,8 @@
                         .lod2IndexCount = batch.lod2IndexCount,
                         .firstMeshlet = batch.firstMeshlet,
                         .meshletCount = batch.meshletCount,
+                        .firstMeshletCluster = batch.firstMeshletCluster,
+                        .meshletClusterRoot = batch.meshletClusterRoot,
                     };
                     const GPUSceneDatabase::GPUMaterial material{
                         .materialTableOffset = record.materialTableOffset,
@@ -2054,6 +2081,12 @@
             data.cameraY = cameraController.camera()->position().y();
             data.cameraZ = cameraController.camera()->position().z();
             data.meshletCount = globalMeshletCount;
+            data.viewportWidth = static_cast<float>(swapchain.extent().width);
+            data.viewportHeight = static_cast<float>(swapchain.extent().height);
+            data.depthBias = 0.0025F;
+            data.hiZMipCount = hiZValid ? hiZBuffer.mipCount() : 0U;
+            data.enableOcclusionCulling = canUseHiZOcclusionCulling() ? 1U : 0U;
+            data.cameraCut = hiZValid ? 0U : 1U;
             meshletCullingUniformBuffers[frame].update(&data, sizeof(data));
         }
 

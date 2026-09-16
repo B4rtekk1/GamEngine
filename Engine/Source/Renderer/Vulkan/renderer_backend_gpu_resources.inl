@@ -177,6 +177,8 @@
                 {5, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
                 {6, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
                 {7, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
+                {8, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
+                {9, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
             };
             layoutInfo.bindingCount = std::size(meshletCullBindings);
             layoutInfo.pBindings = meshletCullBindings;
@@ -623,7 +625,7 @@
             const uint32_t imageDescriptors = hiZBuffer.mipCount() + cullingSetCount;
             const VkDescriptorPoolSize poolSizes[] = {
                 {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, imageDescriptors + MAX_FRAMES_IN_FLIGHT},
-                {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, cullingSetCount * 7 + instanceCullSetCount * 3 + MAX_FRAMES_IN_FLIGHT * 137},
+                {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, cullingSetCount * 7 + instanceCullSetCount * 3 + MAX_FRAMES_IN_FLIGHT * 138},
                 {VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, cullingSetCount + MAX_FRAMES_IN_FLIGHT * 30},
                 {VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, hiZBuffer.mipCount()},
             };
@@ -935,14 +937,18 @@
                     {visibleMeshletBuffers[frame].handle(), 0, VK_WHOLE_SIZE},
                     {visibleMeshletCountBuffers[frame].handle(), 0, sizeof(std::uint32_t)},
                     {meshletCullingUniformBuffers[frame].handle(), 0, sizeof(Culling::MeshletCullUniforms)},
+                    {meshletClusterBuffer.handle(), 0, VK_WHOLE_SIZE},
                 };
-                VkWriteDescriptorSet meshletWrites[8]{};
+                const VkDescriptorImageInfo meshletHiZInfo{hiZBuffer.sampler(), hiZBuffer.fullView(),
+                                                           VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
+                VkWriteDescriptorSet meshletWrites[10]{};
                 for (std::uint32_t binding = 0; binding < std::size(meshletWrites); ++binding) {
                     meshletWrites[binding] = {.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
                         .dstSet = meshletCullSets[frame], .dstBinding = binding, .descriptorCount = 1,
-                        .descriptorType = binding == 7 ? VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER
-                                                       : VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
-                        .pBufferInfo = &meshletInfos[binding]};
+                        .descriptorType = binding == 8 ? VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER :
+                                          (binding == 7 ? VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER : VK_DESCRIPTOR_TYPE_STORAGE_BUFFER),
+                        .pImageInfo = binding == 8 ? &meshletHiZInfo : nullptr,
+                        .pBufferInfo = binding == 8 ? nullptr : &meshletInfos[binding]};
                 }
                 vkUpdateDescriptorSets(device, std::size(meshletWrites), meshletWrites, 0, nullptr);
                 instanceCullingPasses[frame].create(instanceCullingPipeline, instanceCullingPipelineLayout,

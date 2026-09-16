@@ -317,6 +317,37 @@ TEST(Meshlets, KeepsImportedRenderSectionsAsHardMeshletBoundaries) {
     EXPECT_EQ(mesh.renderSections[0].meshletCount, 1u);
     EXPECT_EQ(mesh.renderSections[1].firstMeshlet, 1u);
     EXPECT_EQ(mesh.renderSections[1].meshletCount, 1u);
+    ASSERT_EQ(mesh.meshletClusters.size(), 2u);
+    EXPECT_EQ(mesh.meshletClusters[mesh.renderSections[0].meshletClusterRoot].meshletCount, 1u);
+    EXPECT_EQ(mesh.meshletClusters[mesh.renderSections[1].meshletClusterRoot].meshletCount, 1u);
+}
+
+TEST(Meshlets, BuildsBoundedHierarchyWithContiguousChildren) {
+    Engine::Mesh mesh;
+    constexpr std::uint32_t triangleCount = 80U;
+    for (std::uint32_t triangle = 0; triangle < triangleCount; ++triangle) {
+        const std::uint32_t first = triangle * 3U;
+        mesh.vertices.push_back({.position = {static_cast<float>(triangle), 0.0F, 0.0F}});
+        mesh.vertices.push_back({.position = {static_cast<float>(triangle), 1.0F, 0.0F}});
+        mesh.vertices.push_back({.position = {static_cast<float>(triangle), 0.0F, 1.0F}});
+        mesh.indices.insert(mesh.indices.end(), {first, first + 1U, first + 2U});
+    }
+    ASSERT_TRUE(Engine::build_meshlets(mesh, {.maxVertices = 3, .maxTriangles = 1}));
+    ASSERT_TRUE(Engine::build_meshlet_cluster_hierarchy(mesh, 4U, 4U));
+    ASSERT_FALSE(mesh.meshletClusters.empty());
+    const auto& root = mesh.meshletClusters[mesh.meshletClusterRoot];
+    EXPECT_GT(root.childCount, 0u);
+    EXPECT_LE(root.childCount, 4u);
+    for (const auto& node : mesh.meshletClusters) {
+        EXPECT_GE(node.radius, 0.0F);
+        EXPECT_GE(node.geometricError, 0.0F);
+        if (node.childCount == 0U) {
+            EXPECT_GT(node.meshletCount, 0u);
+            EXPECT_LE(node.meshletCount, 4u);
+        } else {
+            EXPECT_LE(node.firstChild + node.childCount, mesh.meshletClusters.size());
+        }
+    }
 }
 
 TEST(Meshlets, SpatiallySubdividesOnlyLargeImportedSections) {

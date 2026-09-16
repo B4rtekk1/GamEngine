@@ -148,6 +148,7 @@
         // It remains separate so the conventional indexed fallback does not
         // pay a descriptor or vertex-input cost for meshlet data.
         Buffer meshletBuffer;
+        Buffer meshletClusterBuffer;
         Buffer meshletVertexBuffer;
         Buffer meshletTriangleBuffer;
         std::uint32_t globalMeshletCount{};

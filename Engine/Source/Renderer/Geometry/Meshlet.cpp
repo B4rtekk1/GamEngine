@@ -108,7 +108,99 @@ namespace Engine {
                         ((z >> bit) & 1U) << (3U * bit + 2U);
             return result;
         }
+
+        [[nodiscard]] MeshletClusterNode cluster_bounds(const Mesh& mesh, const std::uint32_t first,
+                                                         const std::uint32_t count) {
+            Vec3 minimum{std::numeric_limits<float>::max(), std::numeric_limits<float>::max(),
+                         std::numeric_limits<float>::max()};
+            Vec3 maximum{std::numeric_limits<float>::lowest(), std::numeric_limits<float>::lowest(),
+                         std::numeric_limits<float>::lowest()};
+            for (std::uint32_t index = 0; index < count; ++index) {
+                const Meshlet& meshlet = mesh.meshlets[first + index];
+                const Vec3 extent{meshlet.radius, meshlet.radius, meshlet.radius};
+                minimum.setX(std::min(minimum.x(), meshlet.center.x() - extent.x()));
+                minimum.setY(std::min(minimum.y(), meshlet.center.y() - extent.y()));
+                minimum.setZ(std::min(minimum.z(), meshlet.center.z() - extent.z()));
+                maximum.setX(std::max(maximum.x(), meshlet.center.x() + extent.x()));
+                maximum.setY(std::max(maximum.y(), meshlet.center.y() + extent.y()));
+                maximum.setZ(std::max(maximum.z(), meshlet.center.z() + extent.z()));
+            }
+            MeshletClusterNode result{};
+            result.center = (minimum + maximum) * 0.5F;
+            for (std::uint32_t index = 0; index < count; ++index) {
+                const Meshlet& meshlet = mesh.meshlets[first + index];
+                result.radius = std::max(result.radius, (meshlet.center - result.center).length() + meshlet.radius);
+            }
+            // Until a simplifier supplies proxy geometry, this conservative
+            // extent is the object-space error reported to the GPU traversal.
+            result.geometricError = result.radius;
+            return result;
+        }
     } // namespace
+
+    bool build_meshlet_cluster_hierarchy(Mesh& mesh, const std::uint32_t leafMeshlets,
+                                         const std::uint32_t maxChildren) {
+        if (mesh.meshlets.empty() || leafMeshlets == 0U || maxChildren < 2U) return false;
+        mesh.meshletClusters.clear();
+        mesh.meshletClusterRoot = 0U;
+
+        const auto buildRange = [&](const std::uint32_t firstMeshlet, const std::uint32_t meshletCount) {
+            if (meshletCount == 0U || firstMeshlet > mesh.meshlets.size() ||
+                meshletCount > mesh.meshlets.size() - firstMeshlet) return std::uint32_t{0};
+            std::vector<std::uint32_t> level;
+            for (std::uint32_t first = firstMeshlet; first < firstMeshlet + meshletCount; first += leafMeshlets) {
+                const std::uint32_t count = std::min(leafMeshlets, firstMeshlet + meshletCount - first);
+                MeshletClusterNode leaf = cluster_bounds(mesh, first, count);
+                leaf.firstMeshlet = first;
+                leaf.meshletCount = count;
+                level.push_back(static_cast<std::uint32_t>(mesh.meshletClusters.size()));
+                mesh.meshletClusters.push_back(leaf);
+            }
+            while (level.size() > 1U) {
+                std::vector<std::uint32_t> parentLevel;
+                for (std::size_t first = 0; first < level.size(); first += maxChildren) {
+                    const std::uint32_t count = static_cast<std::uint32_t>(std::min<std::size_t>(
+                        maxChildren, level.size() - first));
+                    // Every node on a level is appended together, therefore a
+                    // parent's direct children are contiguous as required by GPU ABI.
+                    const std::uint32_t childFirst = level[first];
+                    MeshletClusterNode parent{};
+                    Vec3 minimum{std::numeric_limits<float>::max(), std::numeric_limits<float>::max(),
+                                 std::numeric_limits<float>::max()};
+                    Vec3 maximum{std::numeric_limits<float>::lowest(), std::numeric_limits<float>::lowest(),
+                                 std::numeric_limits<float>::lowest()};
+                    for (std::uint32_t child = 0; child < count; ++child) {
+                        const auto& node = mesh.meshletClusters[level[first + child]];
+                        const Vec3 extent{node.radius, node.radius, node.radius};
+                        minimum.setX(std::min(minimum.x(), node.center.x() - extent.x()));
+                        minimum.setY(std::min(minimum.y(), node.center.y() - extent.y()));
+                        minimum.setZ(std::min(minimum.z(), node.center.z() - extent.z()));
+                        maximum.setX(std::max(maximum.x(), node.center.x() + extent.x()));
+                        maximum.setY(std::max(maximum.y(), node.center.y() + extent.y()));
+                        maximum.setZ(std::max(maximum.z(), node.center.z() + extent.z()));
+                    }
+                    parent.center = (minimum + maximum) * 0.5F;
+                    for (std::uint32_t child = 0; child < count; ++child) {
+                        const auto& node = mesh.meshletClusters[level[first + child]];
+                        parent.radius = std::max(parent.radius, (node.center - parent.center).length() + node.radius);
+                        parent.geometricError = std::max(parent.geometricError, node.geometricError);
+                    }
+                    parent.geometricError = std::max(parent.geometricError, parent.radius);
+                    parent.firstChild = childFirst;
+                    parent.childCount = count;
+                    parentLevel.push_back(static_cast<std::uint32_t>(mesh.meshletClusters.size()));
+                    mesh.meshletClusters.push_back(parent);
+                }
+                level = std::move(parentLevel);
+            }
+            return level.front();
+        };
+
+        if (mesh.renderSections.empty()) mesh.meshletClusterRoot = buildRange(0U, static_cast<std::uint32_t>(mesh.meshlets.size()));
+        else for (Mesh::RenderSection& section : mesh.renderSections)
+            section.meshletClusterRoot = buildRange(section.firstMeshlet, section.meshletCount);
+        return !mesh.meshletClusters.empty();
+    }
 
     void subdivide_render_sections(Mesh &mesh, const std::uint32_t targetMeshlets) {
         if (targetMeshlets == 0 || mesh.renderSections.empty()) return;
@@ -225,12 +317,15 @@ namespace Engine {
             if (active) finish_meshlet(mesh, vertexStart, triangleStart, material);
             return true;
         };
-        if (mesh.renderSections.empty()) return buildRange(0, static_cast<std::uint32_t>(mesh.indices.size()));
+        if (mesh.renderSections.empty()) {
+            if (!buildRange(0, static_cast<std::uint32_t>(mesh.indices.size()))) return false;
+            return build_meshlet_cluster_hierarchy(mesh);
+        }
         for (Mesh::RenderSection &section: mesh.renderSections) {
             section.firstMeshlet = static_cast<std::uint32_t>(mesh.meshlets.size());
             if (!buildRange(section.firstIndex, section.indexCount)) return false;
             section.meshletCount = static_cast<std::uint32_t>(mesh.meshlets.size()) - section.firstMeshlet;
         }
-        return true;
+        return build_meshlet_cluster_hierarchy(mesh);
     }
 } // namespace Engine
