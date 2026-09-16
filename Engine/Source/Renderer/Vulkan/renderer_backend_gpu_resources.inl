@@ -429,8 +429,9 @@
                 const std::uint32_t meshletCapacity = static_cast<std::uint32_t>(
                     std::max<std::uint64_t>(1, requiredVisibleMeshlets));
                 meshletVisibleCapacity = meshletCapacity;
-                visibleMeshletBuffers[frame].createDeviceLocal(vulkanDevice.physical(), device, &zero,
-                    sizeof(Culling::VisibleMeshlet) * meshletCapacity,
+                std::vector<Culling::VisibleMeshlet> emptyVisibleMeshlets(meshletCapacity);
+                visibleMeshletBuffers[frame].createDeviceLocal(vulkanDevice.physical(), device,
+                    emptyVisibleMeshlets.data(), sizeof(Culling::VisibleMeshlet) * emptyVisibleMeshlets.size(),
                     VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
                     commandPool, vulkanDevice.graphicsQueue(), vulkanDevice.allocator());
                 visibleMeshletCountBuffers[frame].createDeviceLocal(vulkanDevice.physical(), device, &zero,
@@ -1023,7 +1024,6 @@
             for (Buffer& buffer : shadowDrawCountBuffers) buffer.destroy();
             for (Buffer& buffer : shadowTwoSidedDrawCountBuffers) buffer.destroy();
             for (Buffer& buffer : cullingObjectBuffers) buffer.destroy();
-            for (Buffer& buffer : previousTransformBuffers) buffer.destroy();
             for (Buffer& buffer : visibleInstanceBuffers) buffer.destroy();
             for (Buffer& buffer : visibleInstanceCountBuffers) buffer.destroy();
             for (Buffer& buffer : visibleMeshletBuffers) buffer.destroy();
