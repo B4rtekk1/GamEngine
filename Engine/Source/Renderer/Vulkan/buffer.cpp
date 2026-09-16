@@ -114,6 +114,9 @@ namespace Engine {
             throw std::runtime_error("Cannot update buffer without host-visible memory");
         }
         std::memcpy(static_cast<char *>(mapped_) + offset, data, static_cast<size_t>(size));
+        if (vmaFlushAllocation(allocator_, allocation_, offset, size) != VK_SUCCESS) {
+            throw std::runtime_error("Could not flush host-visible buffer update");
+        }
     }
 
     void Buffer::read(void *const destination, const VkDeviceSize size,
@@ -123,6 +126,9 @@ namespace Engine {
         }
         if (mapped_ == nullptr) {
             throw std::runtime_error("Cannot read buffer without host-visible memory");
+        }
+        if (vmaInvalidateAllocation(allocator_, allocation_, offset, size) != VK_SUCCESS) {
+            throw std::runtime_error("Could not invalidate host-visible buffer read");
         }
         std::memcpy(destination, static_cast<const char *>(mapped_) + offset,
                     static_cast<size_t>(size));

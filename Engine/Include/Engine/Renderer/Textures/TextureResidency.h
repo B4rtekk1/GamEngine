@@ -12,7 +12,10 @@ namespace Engine {
     /**
      * Chooses the first mip that is physically present in each streamed image.
      * A lower number means sharper texture.  Call consumeChanges() on the render
-     * thread and rebuild the corresponding Texture2D with createGtex().
+     * thread and promote the corresponding persistent Texture2D with
+     * Texture2D::promoteGtex().  Demotion only changes the requested sampling
+     * LOD with this backend: it cannot return VRAM until sparse residency or a
+     * virtual-texture page cache is introduced.
      */
     class TextureResidencyManager final {
     public:
@@ -21,7 +24,12 @@ namespace Engine {
         explicit TextureResidencyManager(std::uint64_t budgetBytes = 512ULL * 1024 * 1024)
             : budgetBytes_(budgetBytes) {}
 
-        void setBudget(std::uint64_t bytes) noexcept { budgetBytes_ = bytes; }
+        void setBudget(std::uint64_t bytes) noexcept {
+            if (budgetBytes_ != bytes) {
+                budgetBytes_ = bytes;
+                needsUpdate_ = true;
+            }
+        }
         [[nodiscard]] std::uint64_t budget() const noexcept { return budgetBytes_; }
         [[nodiscard]] std::uint64_t residentBytes() const noexcept { return residentBytes_; }
 
@@ -30,6 +38,7 @@ namespace Engine {
                         static_cast<std::uint32_t>(texture.mips.size() - 1)};
             entries_.insert_or_assign(id, entry);
             recalculateBytes();
+            needsUpdate_ = true;
         }
 
         /** desiredMip comes from projected texel density; priority breaks budget ties. */
@@ -41,13 +50,22 @@ namespace Engine {
                     entry.wantedMip = wanted;
                     entry.lastRequestedFrame = frame_;
                 }
-                entry.priority = std::max(0.0F, priority);
+                const auto clampedPriority = std::max(0.0F, priority);
+                if (clampedPriority != entry.priority) {
+                    entry.priority = clampedPriority;
+                    needsUpdate_ = true;
+                }
             }
         }
 
         /** Applies budget, priority and a frame hysteresis before emitting GPU rebuilds. */
         void update() {
             ++frame_;
+            // Avoid allocating and sorting an entry for every texture during
+            // idle frames. A second pass is retained only while hysteresis is
+            // delaying a requested promotion.
+            if (!needsUpdate_) return;
+            needsUpdate_ = false;
             std::vector<std::pair<std::uint64_t, Entry*>> ordered;
             for (auto& [id, entry] : entries_) ordered.emplace_back(id, &entry);
             std::sort(ordered.begin(), ordered.end(), [](const auto& a, const auto& b) {
@@ -59,6 +77,9 @@ namespace Engine {
                 // Avoid flapping: promotion needs two consistent frames; eviction is immediate under pressure.
                 if (target < entry->residentMip && frame_ - entry->lastRequestedFrame < kPromotionHysteresisFrames)
                     target = entry->residentMip;
+                if (entry->wantedMip < entry->residentMip &&
+                    frame_ - entry->lastRequestedFrame < kPromotionHysteresisFrames)
+                    needsUpdate_ = true;
                 while (target + 1 < entry->texture->mips.size() && used + bytesFrom(*entry->texture, target) > budgetBytes_)
                     ++target;
                 if (target != entry->residentMip) {
@@ -86,5 +107,6 @@ namespace Engine {
         std::uint64_t budgetBytes_{};
         std::uint64_t residentBytes_{};
         std::uint64_t frame_{};
+        bool needsUpdate_{true};
     };
 }
