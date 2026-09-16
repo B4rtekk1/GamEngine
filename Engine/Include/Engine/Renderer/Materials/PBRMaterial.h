@@ -16,7 +16,7 @@ namespace Engine {
     enum class VertexColorUsage : std::uint8_t { Albedo, FoliageData, TerrainWeights };
     enum class MaterialTextureSlot : std::uint8_t {
         BaseColor, MetallicRoughness, Normal, AmbientOcclusion, Opacity,
-        Translucency, Displacement, Emissive, Specular, Count
+        Translucency, Displacement, Emissive, Specular, SpecularColor, Count
     };
 
     struct TextureCoordinateTransform final {
@@ -47,6 +47,7 @@ namespace Engine {
         float emissiveIntensity{0.0F};
         std::int32_t emissiveTexture{-1};
         std::int32_t specularTexture{-1};
+        std::int32_t specularColorTexture{-1};
         // glTF normalTexture.scale; zero explicitly disables normal-map detail.
         float normalScale{1.0F};
         AlphaMode alphaMode{AlphaMode::Opaque};
@@ -57,7 +58,11 @@ namespace Engine {
         float displacementScale{0.0F};
         float displacementOffset{0.0F};
         float translucency{0.0F};
-        float specular{0.5F};
+        // KHR_materials_specular defaults. `specular` scales the dielectric
+        // F0 and is deliberately separate from legacy named Quixel maps.
+        float specular{1.0F};
+        Math::Color specularColor = Math::Color::white();
+        bool hasSpecularExtension{false};
         float ior{1.5F};
         NormalConvention normalConvention{NormalConvention::OpenGL};
         MaterialShadingModel shadingModel{MaterialShadingModel::Standard};

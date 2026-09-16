@@ -320,6 +320,13 @@ namespace Engine::Assets {
                     material.specularTexture = image_index(data, source.specular.specular_texture);
                     import_texture_transform(material, MaterialTextureSlot::Specular, source.specular.specular_texture);
                     material.specular = source.specular.specular_factor;
+                    material.specularColorTexture = image_index(data, source.specular.specular_color_texture);
+                    import_texture_transform(material, MaterialTextureSlot::SpecularColor,
+                                             source.specular.specular_color_texture);
+                    material.specularColor = {source.specular.specular_color_factor[0],
+                                              source.specular.specular_color_factor[1],
+                                              source.specular.specular_color_factor[2], 1.0F};
+                    material.hasSpecularExtension = true;
                 }
                 if (source.has_diffuse_transmission) {
                     material.translucencyTexture = image_index(

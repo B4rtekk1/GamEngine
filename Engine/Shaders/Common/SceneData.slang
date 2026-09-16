@@ -57,11 +57,12 @@ struct MaterialData
     int4 auxiliaryTextureIndices;
     float4 extensionScalars;
     int4 extensionTextureIndices;
+    float4 specularColor;
     float4 emissiveColorIntensity;
     int4 textureCoordinateSets0;
     int4 textureCoordinateSets1;
     int4 textureCoordinateSets2;
-    float4 textureTransforms[9];
+    float4 textureTransforms[10];
     float4 textureTransformRotations[3];
     float4 waterShallowColorRoughness;
     float4 waterDeepColorIor;

@@ -322,9 +322,12 @@ ForwardFragmentOutput fragmentMain(ForwardFragmentInput input)
     metallic = clamp(metallic, 0.0, 1.0);
     roughness = clamp(roughness, 0.045, 1.0);
 
-    float3 normal = normalize(input.normal);
+    // Keep the unperturbed, geometric normal.  It is required to prevent a
+    // normal map from reflecting the environment through the surface.
+    float3 geometricNormal = normalize(input.normal);
     float faceSign = doubleSided && !input.isFrontFace ? -1.0 : 1.0;
-    normal *= faceSign;
+    geometricNormal *= faceSign;
+    float3 normal = geometricNormal;
     if (material.textureIndices.z >= 0 && abs(material.extensionScalars.x) > 1e-6)
     {
         float3 tangent = normalize(input.tangent.xyz - normal * dot(normal, input.tangent.xyz)) * faceSign;
@@ -356,7 +359,24 @@ ForwardFragmentOutput fragmentMain(ForwardFragmentInput input)
 #endif
     float3 lightDirection = normalize(-frame.lightDirectionIntensity.xyz);
     float3 halfway = normalize(viewDirection + lightDirection);
-    float3 f0 = lerp(float3(0.04), albedo, metallic);
+    float3 dielectricF0 = float3(0.04);
+    // KHR_materials_specular: strength is in the alpha channel of
+    // specularTexture, while specularColorTexture provides its RGB tint.
+    // Do not reinterpret non-glTF/legacy named specular maps as this
+    // extension; they have different authoring conventions.
+    if ((material.textureIndices.w & 64) != 0)
+    {
+        float specularStrength = saturate(material.extensionScalars.w);
+        float3 specularColor = saturate(material.specularColor.rgb);
+        if (material.extensionTextureIndices.y >= 0)
+            specularStrength *= materialTextures[NonUniformResourceIndex(material.extensionTextureIndices.y)]
+                .Sample(materialTextureUv(material, 8, input.texCoord, input.texCoord1)).a;
+        if (material.extensionTextureIndices.z >= 0)
+            specularColor *= materialTextures[NonUniformResourceIndex(material.extensionTextureIndices.z)]
+                .Sample(materialTextureUv(material, 9, input.texCoord, input.texCoord1)).rgb;
+        dielectricF0 *= specularStrength * specularColor;
+    }
+    float3 f0 = lerp(dielectricF0, albedo, metallic);
     float3 fresnel = fresnelSchlick(max(dot(halfway, viewDirection), 0.0), f0);
     float nDotV = max(dot(normal, viewDirection), 0.0);
     // Thin double-sided cards (leaves, ferns and grass-like glTF meshes) do
@@ -478,6 +498,11 @@ ForwardFragmentOutput fragmentMain(ForwardFragmentInput input)
                                     localProbeReflection, skyReflection);
     float2 brdf = brdfIntegrationLut.Sample(float2(nDotV, roughness)).rg;
     float3 specularIbl = prefiltered * (fresnelIbl * brdf.x + brdf.y);
+    // Horizon specular occlusion (Filament-style): if normal mapping turns
+    // the reflection vector below the geometric surface, no environment
+    // radiance is physically visible along that direction.
+    const float horizon = saturate(1.0 + dot(reflection, geometricNormal));
+    specularIbl *= horizon * horizon;
     // Scene View has an independent render target and no matching GTAO
     // texture yet. Sampling the Game View result there mixes two unrelated
     // screen spaces and produces hard viewport-aligned seams.

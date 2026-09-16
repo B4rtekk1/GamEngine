@@ -185,7 +185,8 @@
             const int materialFlags = (source.doubleSided ? 1 : 0) |
                 (static_cast<int>(source.alphaMode) << 1) | (source.terrainLayered ? 8 : 0) |
                 (source.shadingModel == MaterialShadingModel::Foliage ? 16 : 0) |
-                (source.vertexColorUsage == VertexColorUsage::FoliageData ? 32 : 0);
+                (source.vertexColorUsage == VertexColorUsage::FoliageData ? 32 : 0) |
+                (source.hasSpecularExtension ? 64 : 0);
             const auto coordinateSet = [&](const MaterialTextureSlot slot) {
                 return static_cast<int>(source.textureTransforms[static_cast<std::size_t>(slot)].texCoord);
             };
@@ -206,19 +207,21 @@
                 glm::ivec4{textureIndex(source.aoTexture), textureIndex(source.opacityTexture),
                            textureIndex(source.translucencyTexture), textureIndex(source.displacementTexture)},
                 glm::vec4{source.normalScale, source.translucency, source.displacementScale, source.specular},
-                glm::ivec4{textureIndex(source.emissiveTexture), textureIndex(source.specularTexture), -1, -1},
+                glm::ivec4{textureIndex(source.emissiveTexture), textureIndex(source.specularTexture),
+                           textureIndex(source.specularColorTexture), -1},
+                glm::vec4{source.specularColor.r(), source.specularColor.g(), source.specularColor.b(), 1.0F},
                 glm::vec4{source.emissiveColor.r(), source.emissiveColor.g(), source.emissiveColor.b(),
                           std::max(0.0F, source.emissiveIntensity)},
                 glm::ivec4{coordinateSet(MaterialTextureSlot::BaseColor), coordinateSet(MaterialTextureSlot::MetallicRoughness),
                            coordinateSet(MaterialTextureSlot::Normal), coordinateSet(MaterialTextureSlot::AmbientOcclusion)},
                 glm::ivec4{coordinateSet(MaterialTextureSlot::Opacity), coordinateSet(MaterialTextureSlot::Translucency),
                            coordinateSet(MaterialTextureSlot::Displacement), coordinateSet(MaterialTextureSlot::Emissive)},
-                glm::ivec4{coordinateSet(MaterialTextureSlot::Specular), 0, 0, 0},
+                glm::ivec4{coordinateSet(MaterialTextureSlot::Specular), coordinateSet(MaterialTextureSlot::SpecularColor), 0, 0},
                 {transform(MaterialTextureSlot::BaseColor), transform(MaterialTextureSlot::MetallicRoughness),
                  transform(MaterialTextureSlot::Normal), transform(MaterialTextureSlot::AmbientOcclusion),
                  transform(MaterialTextureSlot::Opacity), transform(MaterialTextureSlot::Translucency),
                  transform(MaterialTextureSlot::Displacement), transform(MaterialTextureSlot::Emissive),
-                 transform(MaterialTextureSlot::Specular)},
+                 transform(MaterialTextureSlot::Specular), transform(MaterialTextureSlot::SpecularColor)},
                 rotations,
             };
             if (water != nullptr) {

@@ -554,6 +554,7 @@
                    lhs.extensionTextureIndices.y == rhs.extensionTextureIndices.y &&
                    lhs.extensionTextureIndices.z == rhs.extensionTextureIndices.z &&
                    lhs.extensionTextureIndices.w == rhs.extensionTextureIndices.w &&
+                   lhs.specularColor == rhs.specularColor &&
                    lhs.emissiveColorIntensity.x == rhs.emissiveColorIntensity.x &&
                    lhs.emissiveColorIntensity.y == rhs.emissiveColorIntensity.y &&
                    lhs.emissiveColorIntensity.z == rhs.emissiveColorIntensity.z &&

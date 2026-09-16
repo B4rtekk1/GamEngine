@@ -20,14 +20,16 @@ namespace Engine {
         glm::ivec4 auxiliaryTextureIndices{-1};
         // normalScale, translucency strength, displacement scale, specular.
         glm::vec4 extensionScalars{};
-        // emissive, specular, reserved, reserved.
+        // emissive, KHR_materials_specular strength, specular colour, reserved.
         glm::ivec4 extensionTextureIndices{-1};
+        // KHR_materials_specular colour factor in linear RGB.
+        glm::vec4 specularColor{};
         // Linear RGB emission colour and unconstrained HDR intensity.
         glm::vec4 emissiveColorIntensity{};
         glm::ivec4 textureCoordinateSets0{};
         glm::ivec4 textureCoordinateSets1{};
         glm::ivec4 textureCoordinateSets2{};
-        std::array<glm::vec4, 9> textureTransforms{};
+        std::array<glm::vec4, 10> textureTransforms{};
         std::array<glm::vec4, 3> textureTransformRotations{};
         // Dedicated water block. Kept in the material SSBO so the existing
         // GPU-driven material-index indirection remains intact.
