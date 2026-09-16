@@ -75,6 +75,14 @@ namespace Engine::RenderGraph {
         bool write{};
     };
 
+    /** A normalized mip/layer slice. A zero count means "through the end". */
+    struct TextureSubresourceRange final {
+        std::uint32_t baseMipLevel{};
+        std::uint32_t levelCount{};
+        std::uint32_t baseArrayLayer{};
+        std::uint32_t layerCount{};
+    };
+
     struct TextureLifetime final {
         std::uint32_t firstPass{};
         std::uint32_t lastPass{};
@@ -137,13 +145,16 @@ namespace Engine::RenderGraph {
     class PassBuilder final {
     public:
         void read(TextureHandle texture, TextureUsage usage = TextureUsage::SampledRead);
+        void read(TextureHandle texture, TextureUsage usage, TextureSubresourceRange range);
         void write(TextureHandle texture, TextureUsage usage);
+        void write(TextureHandle texture, TextureUsage usage, TextureSubresourceRange range);
         /**
          * Declares the state established by the pass callback itself. No
          * barrier is emitted here: the graph uses this state as the source of
          * the next dependency.
          */
         void setFinalTextureState(TextureHandle texture, TextureState state);
+        void setFinalTextureState(TextureHandle texture, TextureState state, TextureSubresourceRange range);
         [[nodiscard]] TextureHandle writeTexture(std::string name, const TextureDesc& desc,
                                                   TextureUsage usage = TextureUsage::StorageWrite);
         void read(BufferHandle buffer, BufferUsage usage = BufferUsage::StorageRead);
@@ -233,7 +244,7 @@ namespace Engine::RenderGraph {
         [[nodiscard]] VkBuffer buffer(BufferHandle buffer) const;
 
     private:
-        struct Access final { TextureHandle texture; TextureUsage usage; bool write; };
+        struct Access final { TextureHandle texture; TextureUsage usage; TextureSubresourceRange range; bool write; };
         struct BufferAccess final { BufferHandle buffer; BufferUsage usage; bool write; };
         struct Resource final {
             std::string name;
@@ -249,7 +260,7 @@ namespace Engine::RenderGraph {
             std::string name;
             Queue queue{Queue::Graphics};
             std::vector<Access> accesses;
-            struct FinalTextureState final { TextureHandle texture; TextureState state; };
+            struct FinalTextureState final { TextureHandle texture; TextureState state; TextureSubresourceRange range; };
             std::vector<FinalTextureState> finalTextureStates;
             std::vector<BufferAccess> bufferAccesses;
             ExecuteCallback execute;
@@ -270,8 +281,8 @@ namespace Engine::RenderGraph {
         };
 
         friend class PassBuilder;
-        void addAccess(std::uint32_t pass, TextureHandle texture, TextureUsage usage, bool write);
-        void addFinalTextureState(std::uint32_t pass, TextureHandle texture, TextureState state);
+        void addAccess(std::uint32_t pass, TextureHandle texture, TextureUsage usage, TextureSubresourceRange range, bool write);
+        void addFinalTextureState(std::uint32_t pass, TextureHandle texture, TextureState state, TextureSubresourceRange range);
         void addBufferAccess(std::uint32_t pass, BufferHandle buffer, BufferUsage usage, bool write);
         [[nodiscard]] TextureHandle addTransient(std::string name, const TextureDesc& desc,
                                                  std::uint32_t pass, TextureUsage usage);

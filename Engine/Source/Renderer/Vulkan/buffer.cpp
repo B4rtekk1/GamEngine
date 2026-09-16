@@ -181,17 +181,19 @@ namespace Engine {
         // Queue order alone does not make transfer writes visible to the
         // vertex-input stage, which could otherwise render stale or partially
         // updated terrain vertices during a sculpt stroke.
-        VkBufferMemoryBarrier visibilityBarrier{VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER};
-        visibilityBarrier.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
-        visibilityBarrier.dstAccessMask = VK_ACCESS_VERTEX_ATTRIBUTE_READ_BIT;
+        VkBufferMemoryBarrier2 visibilityBarrier{VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER_2};
+        visibilityBarrier.srcStageMask = VK_PIPELINE_STAGE_2_TRANSFER_BIT;
+        visibilityBarrier.srcAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT;
+        visibilityBarrier.dstStageMask = VK_PIPELINE_STAGE_2_VERTEX_INPUT_BIT;
+        visibilityBarrier.dstAccessMask = VK_ACCESS_2_VERTEX_ATTRIBUTE_READ_BIT;
         visibilityBarrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
         visibilityBarrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
         visibilityBarrier.buffer = buffer_;
         visibilityBarrier.offset = offset;
         visibilityBarrier.size = size;
-        vkCmdPipelineBarrier(commandBuffer, VK_PIPELINE_STAGE_TRANSFER_BIT,
-                             VK_PIPELINE_STAGE_VERTEX_INPUT_BIT, 0, 0, nullptr,
-                             1, &visibilityBarrier, 0, nullptr);
+        const VkDependencyInfo dependency{.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO,
+            .bufferMemoryBarrierCount = 1, .pBufferMemoryBarriers = &visibilityBarrier};
+        vkCmdPipelineBarrier2(commandBuffer, &dependency);
         if (vkEndCommandBuffer(commandBuffer) != VK_SUCCESS) {
             vkFreeCommandBuffers(device_, commandPool, 1, &commandBuffer);
             throw std::runtime_error("Could not finish device-local buffer update");

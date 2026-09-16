@@ -160,12 +160,12 @@ namespace Engine {
             std::uint32_t levelCount,
             VkImageLayout oldLayout,
             VkImageLayout newLayout,
-            VkAccessFlags sourceAccess,
-            VkAccessFlags destinationAccess,
-            VkPipelineStageFlags sourceStage,
-            VkPipelineStageFlags destinationStage
+            VkAccessFlags2 sourceAccess,
+            VkAccessFlags2 destinationAccess,
+            VkPipelineStageFlags2 sourceStage,
+            VkPipelineStageFlags2 destinationStage
         ) {
-            VkImageMemoryBarrier barrier{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER};
+            VkImageMemoryBarrier2 barrier{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2};
             barrier.oldLayout = oldLayout;
             barrier.newLayout = newLayout;
             barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
@@ -175,7 +175,11 @@ namespace Engine {
             barrier.srcAccessMask = sourceAccess;
             barrier.dstAccessMask = destinationAccess;
 
-            vkCmdPipelineBarrier(commandBuffer, sourceStage, destinationStage, 0, 0, nullptr, 0, nullptr, 1, &barrier);
+            barrier.srcStageMask = sourceStage;
+            barrier.dstStageMask = destinationStage;
+            const VkDependencyInfo dependency{.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO,
+                .imageMemoryBarrierCount = 1, .pImageMemoryBarriers = &barrier};
+            vkCmdPipelineBarrier2(commandBuffer, &dependency);
         }
     }
 
@@ -333,8 +337,8 @@ namespace Engine {
             transitionImage(
                 commandBuffer, image_, 0, mipLevels_,
                 VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-                0, VK_ACCESS_TRANSFER_WRITE_BIT,
-                VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT);
+                0, VK_ACCESS_2_TRANSFER_WRITE_BIT,
+                VK_PIPELINE_STAGE_2_NONE, VK_PIPELINE_STAGE_2_TRANSFER_BIT);
 
             if (upload != nullptr) {
                 copy_pixels_in_chunks(*upload, image_, width_, height_, bytesPerPixel, rgbaPixels);
@@ -355,8 +359,8 @@ namespace Engine {
                 transitionImage(
                     commandBuffer, image_, level - 1, 1,
                     VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
-                    VK_ACCESS_TRANSFER_WRITE_BIT, VK_ACCESS_TRANSFER_READ_BIT,
-                    VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT);
+                    VK_ACCESS_2_TRANSFER_WRITE_BIT, VK_ACCESS_2_TRANSFER_READ_BIT,
+                    VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_PIPELINE_STAGE_2_TRANSFER_BIT);
 
                 const std::int32_t nextWidth = std::max(mipWidth / 2, 1);
                 const std::int32_t nextHeight = std::max(mipHeight / 2, 1);
@@ -374,8 +378,8 @@ namespace Engine {
                 transitionImage(
                     commandBuffer, image_, level - 1, 1,
                     VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-                    VK_ACCESS_TRANSFER_READ_BIT, VK_ACCESS_SHADER_READ_BIT,
-                    VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT);
+                    VK_ACCESS_2_TRANSFER_READ_BIT, VK_ACCESS_2_SHADER_SAMPLED_READ_BIT,
+                    VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT);
                 mipWidth = nextWidth;
                 mipHeight = nextHeight;
             }
@@ -383,8 +387,8 @@ namespace Engine {
             transitionImage(
                 commandBuffer, image_, mipLevels_ - 1, 1,
                 VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-                VK_ACCESS_TRANSFER_WRITE_BIT, VK_ACCESS_SHADER_READ_BIT,
-                VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT);
+                VK_ACCESS_2_TRANSFER_WRITE_BIT, VK_ACCESS_2_SHADER_SAMPLED_READ_BIT,
+                VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT);
 
             if (upload != nullptr) {
                 readyTimeline_ = upload->pendingTicket().timelineValue;
@@ -519,8 +523,8 @@ namespace Engine {
 
             transitionImage(commandBuffer, image_, 0, mipLevels_, VK_IMAGE_LAYOUT_UNDEFINED,
                             VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-                            0, VK_ACCESS_TRANSFER_WRITE_BIT, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
-                            VK_PIPELINE_STAGE_TRANSFER_BIT);
+                            0, VK_ACCESS_2_TRANSFER_WRITE_BIT, VK_PIPELINE_STAGE_2_NONE,
+                            VK_PIPELINE_STAGE_2_TRANSFER_BIT);
             if (upload != nullptr) {
                 copy_cooked_in_chunks(*upload, image_, texture);
                 commandBuffer = upload->graphicsCommandBuffer();
@@ -540,8 +544,8 @@ namespace Engine {
             }
             transitionImage(commandBuffer, image_, 0, mipLevels_, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
                             VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-                            VK_ACCESS_TRANSFER_WRITE_BIT, VK_ACCESS_SHADER_READ_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
-                            VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT);
+                            VK_ACCESS_2_TRANSFER_WRITE_BIT, VK_ACCESS_2_SHADER_SAMPLED_READ_BIT, VK_PIPELINE_STAGE_2_TRANSFER_BIT,
+                            VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT);
             if (upload != nullptr) {
                 readyTimeline_ = upload->pendingTicket().timelineValue;
                 if (ownsUploadBatch) readyTimeline_ = upload->submit().timelineValue;
@@ -639,14 +643,14 @@ namespace Engine {
             memory_ = allocationDetails.deviceMemory;
 
             transitionImage(upload->commandBuffer(), image_, 0, mipLevels_, VK_IMAGE_LAYOUT_UNDEFINED,
-                            VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 0, VK_ACCESS_TRANSFER_WRITE_BIT,
-                            VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT);
+                            VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 0, VK_ACCESS_2_TRANSFER_WRITE_BIT,
+                            VK_PIPELINE_STAGE_2_NONE, VK_PIPELINE_STAGE_2_TRANSFER_BIT);
             copy_gtex_mips_to_ring(*upload, image_, texture, firstResidentMip, mipLevels_);
             transitionImage(upload->graphicsCommandBuffer(), image_, 0, mipLevels_,
                             VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-                            VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_ACCESS_TRANSFER_WRITE_BIT,
-                            VK_ACCESS_SHADER_READ_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
-                            VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT);
+                            VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_ACCESS_2_TRANSFER_WRITE_BIT,
+                            VK_ACCESS_2_SHADER_SAMPLED_READ_BIT, VK_PIPELINE_STAGE_2_TRANSFER_BIT,
+                            VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT);
             readyTimeline_ = upload->pendingTicket().timelineValue;
             if (ownsUploadBatch) readyTimeline_ = upload->submit().timelineValue;
 
@@ -691,14 +695,14 @@ namespace Engine {
         // already-resident tail stays in shader-read layout throughout.
         transitionImage(upload->commandBuffer(), image_, newFirstResidentMip,
                         residentFirstMip_ - newFirstResidentMip, VK_IMAGE_LAYOUT_UNDEFINED,
-                        VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 0, VK_ACCESS_TRANSFER_WRITE_BIT,
-                        VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT);
+                        VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 0, VK_ACCESS_2_TRANSFER_WRITE_BIT,
+                        VK_PIPELINE_STAGE_2_NONE, VK_PIPELINE_STAGE_2_TRANSFER_BIT);
         copy_gtex_mips_to_ring(*upload, image_, texture, newFirstResidentMip, residentFirstMip_);
         transitionImage(upload->graphicsCommandBuffer(), image_, newFirstResidentMip,
                         residentFirstMip_ - newFirstResidentMip, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-                        VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_ACCESS_TRANSFER_WRITE_BIT,
-                        VK_ACCESS_SHADER_READ_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
-                        VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT);
+                        VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_ACCESS_2_TRANSFER_WRITE_BIT,
+                        VK_ACCESS_2_SHADER_SAMPLED_READ_BIT, VK_PIPELINE_STAGE_2_TRANSFER_BIT,
+                        VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT);
         readyTimeline_ = upload->pendingTicket().timelineValue;
         if (ownsUploadBatch) readyTimeline_ = upload->submit().timelineValue;
         residentFirstMip_ = newFirstResidentMip;

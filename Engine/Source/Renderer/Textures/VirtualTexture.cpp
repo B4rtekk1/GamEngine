@@ -32,28 +32,34 @@ namespace Engine {
             return format == Assets::TextureFormat::BC4_UNORM ? 8 : 16;
         }
         void transition(VkCommandBuffer commandBuffer, VkImage image, VkImageLayout oldLayout, VkImageLayout newLayout,
-                        VkAccessFlags sourceAccess, VkAccessFlags destinationAccess,
-                        VkPipelineStageFlags sourceStage, VkPipelineStageFlags destinationStage) {
-            VkImageMemoryBarrier barrier{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER};
+                        VkAccessFlags2 sourceAccess, VkAccessFlags2 destinationAccess,
+                        VkPipelineStageFlags2 sourceStage, VkPipelineStageFlags2 destinationStage) {
+            VkImageMemoryBarrier2 barrier{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2};
             barrier.oldLayout = oldLayout; barrier.newLayout = newLayout; barrier.image = image;
             barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED; barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
             barrier.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
             barrier.srcAccessMask = sourceAccess; barrier.dstAccessMask = destinationAccess;
-            vkCmdPipelineBarrier(commandBuffer, sourceStage, destinationStage, 0, 0, nullptr, 0, nullptr, 1, &barrier);
+            barrier.srcStageMask = sourceStage; barrier.dstStageMask = destinationStage;
+            const VkDependencyInfo dependency{.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO,
+                .imageMemoryBarrierCount = 1, .pImageMemoryBarriers = &barrier};
+            vkCmdPipelineBarrier2(commandBuffer, &dependency);
         }
         void hostWriteBarrier(const VkCommandBuffer commandBuffer, const VkBuffer buffer,
-                              const VkPipelineStageFlags destinationStage,
-                              const VkAccessFlags destinationAccess) {
-            VkBufferMemoryBarrier barrier{VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER};
-            barrier.srcAccessMask = VK_ACCESS_HOST_WRITE_BIT;
+                              const VkPipelineStageFlags2 destinationStage,
+                              const VkAccessFlags2 destinationAccess) {
+            VkBufferMemoryBarrier2 barrier{VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER_2};
+            barrier.srcStageMask = VK_PIPELINE_STAGE_2_HOST_BIT;
+            barrier.srcAccessMask = VK_ACCESS_2_HOST_WRITE_BIT;
+            barrier.dstStageMask = destinationStage;
             barrier.dstAccessMask = destinationAccess;
             barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
             barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
             barrier.buffer = buffer;
             barrier.offset = 0;
             barrier.size = VK_WHOLE_SIZE;
-            vkCmdPipelineBarrier(commandBuffer, VK_PIPELINE_STAGE_HOST_BIT, destinationStage, 0,
-                                 0, nullptr, 1, &barrier, 0, nullptr);
+            const VkDependencyInfo dependency{.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO,
+                .bufferMemoryBarrierCount = 1, .pBufferMemoryBarriers = &barrier};
+            vkCmdPipelineBarrier2(commandBuffer, &dependency);
         }
     }
 
@@ -208,8 +214,8 @@ namespace Engine {
         const std::uint32_t zero = 0;
         feedback_.update(&zero, sizeof(zero));
         if (commandBuffer != VK_NULL_HANDLE)
-            hostWriteBarrier(commandBuffer, feedback_.handle(), VK_PIPELINE_STAGE_ALL_GRAPHICS_BIT,
-                             VK_ACCESS_SHADER_WRITE_BIT);
+            hostWriteBarrier(commandBuffer, feedback_.handle(), VK_PIPELINE_STAGE_2_ALL_GRAPHICS_BIT,
+                             VK_ACCESS_2_SHADER_WRITE_BIT);
     }
 
     void VirtualTexture::consumeFeedback(const float priority) {
@@ -268,9 +274,9 @@ namespace Engine {
         transition(upload->commandBuffer(), cacheImage_,
                    cacheInitialized_ ? VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL : VK_IMAGE_LAYOUT_UNDEFINED,
                    VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-                   cacheInitialized_ ? VK_ACCESS_SHADER_READ_BIT : 0, VK_ACCESS_TRANSFER_WRITE_BIT,
-                   cacheInitialized_ ? VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT : VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
-                   VK_PIPELINE_STAGE_TRANSFER_BIT);
+                   cacheInitialized_ ? VK_ACCESS_2_SHADER_SAMPLED_READ_BIT : 0, VK_ACCESS_2_TRANSFER_WRITE_BIT,
+                   cacheInitialized_ ? VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT : VK_PIPELINE_STAGE_2_NONE,
+                   VK_PIPELINE_STAGE_2_TRANSFER_BIT);
         const auto count = std::min<std::size_t>(pending.size(), config_.maxUploadsPerUpdate);
         for (std::size_t i = 0; i < count; ++i) {
             const auto pageIndex = pending[i].first;
@@ -283,10 +289,11 @@ namespace Engine {
         for (std::size_t i = count; i < pending.size(); ++i) requests_.insert(pending[i]);
         flushPageTable();
         const VkCommandBuffer finalizer = upload->graphicsCommandBuffer();
-        hostWriteBarrier(finalizer, pageTable_.handle(), VK_PIPELINE_STAGE_ALL_GRAPHICS_BIT,
-                         VK_ACCESS_SHADER_READ_BIT);
+        hostWriteBarrier(finalizer, pageTable_.handle(), VK_PIPELINE_STAGE_2_ALL_GRAPHICS_BIT,
+                         VK_ACCESS_2_SHADER_STORAGE_READ_BIT);
         transition(finalizer, cacheImage_, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-                   VK_ACCESS_TRANSFER_WRITE_BIT, VK_ACCESS_SHADER_READ_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT);
+                   VK_ACCESS_2_TRANSFER_WRITE_BIT, VK_ACCESS_2_SHADER_SAMPLED_READ_BIT,
+                   VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT);
         readyTimeline_ = upload->pendingTicket().timelineValue;
         if (ownsBatch) readyTimeline_ = batch->submit().timelineValue;
         cacheInitialized_ = true;

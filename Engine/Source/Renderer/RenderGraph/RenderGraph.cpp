@@ -138,6 +138,58 @@ namespace Engine::RenderGraph {
             }
             throw std::logic_error("Unknown buffer usage");
         }
+
+        [[nodiscard]] TextureSubresourceRange normalizeRange(const TextureDesc &desc, TextureSubresourceRange range) {
+            if (range.levelCount == 0) range.levelCount = desc.mipLevels - range.baseMipLevel;
+            if (range.layerCount == 0) range.layerCount = desc.arrayLayers - range.baseArrayLayer;
+            if (range.baseMipLevel >= desc.mipLevels || range.baseArrayLayer >= desc.arrayLayers ||
+                range.levelCount > desc.mipLevels - range.baseMipLevel ||
+                range.layerCount > desc.arrayLayers - range.baseArrayLayer) {
+                throw std::out_of_range("RenderGraph texture subresource range is out of bounds");
+            }
+            return range;
+        }
+
+        void mergeImageBarriers(std::vector<VkImageMemoryBarrier2> &barriers) {
+            // One state record is produced per mip/layer. Fold adjacent layers,
+            // then equal layer spans in adjacent mip levels, into one dependency.
+            for (std::size_t index = 0; index < barriers.size(); ++index) {
+                for (std::size_t next = index + 1; next < barriers.size();) {
+                    auto &left = barriers[index];
+                    const auto &right = barriers[next];
+                    const bool same = left.srcStageMask == right.srcStageMask && left.srcAccessMask == right.srcAccessMask &&
+                        left.dstStageMask == right.dstStageMask && left.dstAccessMask == right.dstAccessMask &&
+                        left.oldLayout == right.oldLayout && left.newLayout == right.newLayout && left.image == right.image &&
+                        left.srcQueueFamilyIndex == right.srcQueueFamilyIndex && left.dstQueueFamilyIndex == right.dstQueueFamilyIndex &&
+                        left.subresourceRange.aspectMask == right.subresourceRange.aspectMask;
+                    if (same && left.subresourceRange.baseMipLevel == right.subresourceRange.baseMipLevel &&
+                        left.subresourceRange.baseArrayLayer + left.subresourceRange.layerCount == right.subresourceRange.baseArrayLayer) {
+                        left.subresourceRange.layerCount += right.subresourceRange.layerCount;
+                        barriers.erase(barriers.begin() + static_cast<std::ptrdiff_t>(next));
+                    } else {
+                        ++next;
+                    }
+                }
+            }
+            for (std::size_t index = 0; index < barriers.size(); ++index) {
+                for (std::size_t next = index + 1; next < barriers.size();) {
+                    auto &left = barriers[index];
+                    const auto &right = barriers[next];
+                    const bool same = left.srcStageMask == right.srcStageMask && left.srcAccessMask == right.srcAccessMask &&
+                        left.dstStageMask == right.dstStageMask && left.dstAccessMask == right.dstAccessMask && left.oldLayout == right.oldLayout &&
+                        left.newLayout == right.newLayout && left.image == right.image && left.srcQueueFamilyIndex == right.srcQueueFamilyIndex &&
+                        left.dstQueueFamilyIndex == right.dstQueueFamilyIndex && left.subresourceRange.aspectMask == right.subresourceRange.aspectMask &&
+                        left.subresourceRange.baseArrayLayer == right.subresourceRange.baseArrayLayer &&
+                        left.subresourceRange.layerCount == right.subresourceRange.layerCount;
+                    if (same && left.subresourceRange.baseMipLevel + left.subresourceRange.levelCount == right.subresourceRange.baseMipLevel) {
+                        left.subresourceRange.levelCount += right.subresourceRange.levelCount;
+                        barriers.erase(barriers.begin() + static_cast<std::ptrdiff_t>(next));
+                    } else {
+                        ++next;
+                    }
+                }
+            }
+        }
     }
 
     bool TextureDesc::compatibleWith(const TextureDesc &other) const noexcept {
@@ -152,15 +204,24 @@ namespace Engine::RenderGraph {
     }
 
     void PassBuilder::read(const TextureHandle texture, const TextureUsage usage) {
-        graph_.addAccess(pass_, texture, usage, false);
+        read(texture, usage, {});
+    }
+    void PassBuilder::read(const TextureHandle texture, const TextureUsage usage, const TextureSubresourceRange range) {
+        graph_.addAccess(pass_, texture, usage, range, false);
     }
 
     void PassBuilder::write(const TextureHandle texture, const TextureUsage usage) {
-        graph_.addAccess(pass_, texture, usage, true);
+        write(texture, usage, {});
+    }
+    void PassBuilder::write(const TextureHandle texture, const TextureUsage usage, const TextureSubresourceRange range) {
+        graph_.addAccess(pass_, texture, usage, range, true);
     }
 
     void PassBuilder::setFinalTextureState(const TextureHandle texture, const TextureState state) {
-        graph_.addFinalTextureState(pass_, texture, state);
+        setFinalTextureState(texture, state, {});
+    }
+    void PassBuilder::setFinalTextureState(const TextureHandle texture, const TextureState state, const TextureSubresourceRange range) {
+        graph_.addFinalTextureState(pass_, texture, state, range);
     }
 
     TextureHandle PassBuilder::writeTexture(std::string name, const TextureDesc &desc, const TextureUsage usage) {
@@ -375,7 +436,7 @@ namespace Engine::RenderGraph {
     }
 
     void RenderGraph::addAccess(const std::uint32_t pass, const TextureHandle texture, const TextureUsage usage,
-                                const bool write) {
+                                TextureSubresourceRange range, const bool write) {
         requireValid(texture);
         if (pass >= passes_.size()) {
             throw std::logic_error("Invalid RenderGraph pass");
@@ -384,11 +445,11 @@ namespace Engine::RenderGraph {
                 usage == TextureUsage::DepthAttachment && write)) {
             throw std::invalid_argument("Texture usage does not match read/write declaration");
         }
-        passes_[pass].accesses.push_back({texture, usage, write});
+        passes_[pass].accesses.push_back({texture, usage, normalizeRange(resources_[texture.index].desc, range), write});
     }
 
     void RenderGraph::addFinalTextureState(const std::uint32_t pass, const TextureHandle texture,
-                                           const TextureState state) {
+                                           const TextureState state, TextureSubresourceRange range) {
         requireValid(texture);
         if (pass >= passes_.size()) {
             throw std::logic_error("Invalid RenderGraph pass");
@@ -396,7 +457,7 @@ namespace Engine::RenderGraph {
         if (compiled_) {
             throw std::logic_error("Reset RenderGraph before adding accesses");
         }
-        passes_[pass].finalTextureStates.push_back({texture, state});
+        passes_[pass].finalTextureStates.push_back({texture, state, normalizeRange(resources_[texture.index].desc, range)});
     }
 
     void RenderGraph::addBufferAccess(const std::uint32_t pass, const BufferHandle buffer, const BufferUsage usage,
@@ -415,7 +476,7 @@ namespace Engine::RenderGraph {
     TextureHandle RenderGraph::addTransient(std::string name, const TextureDesc &desc, const std::uint32_t pass,
                                             const TextureUsage usage) {
         const TextureHandle texture = createTexture(std::move(name), desc);
-        addAccess(pass, texture, usage, true);
+        addAccess(pass, texture, usage, {}, true);
         return texture;
     }
 
@@ -458,6 +519,10 @@ namespace Engine::RenderGraph {
             for (const auto &access: pass.accesses) {
                 mix(access.texture.index);
                 mix(static_cast<std::uint8_t>(access.usage));
+                mix(access.range.baseMipLevel);
+                mix(access.range.levelCount);
+                mix(access.range.baseArrayLayer);
+                mix(access.range.layerCount);
                 mix(access.write);
             }
             for (const auto &access: pass.bufferAccesses) {
@@ -477,32 +542,38 @@ namespace Engine::RenderGraph {
         } else {
             std::vector<std::unordered_set<std::uint32_t> > edges(count);
             std::vector<std::uint32_t> indegree(count);
-            std::vector<std::int32_t> lastWriter(resources_.size(), -1);
-            std::vector<std::vector<std::uint32_t> > readers(resources_.size());
+            std::vector<std::vector<std::int32_t>> lastWriter(resources_.size());
+            std::vector<std::vector<std::vector<std::uint32_t>>> readers(resources_.size());
+            for (std::uint32_t resource = 0; resource < resources_.size(); ++resource) {
+                const auto subresourceCount = static_cast<std::size_t>(resources_[resource].desc.mipLevels) * resources_[resource].desc.arrayLayers;
+                lastWriter[resource].assign(subresourceCount, -1);
+                readers[resource].resize(subresourceCount);
+            }
             std::vector<std::int32_t> lastBufferWriter(buffers_.size(), -1);
             std::vector<std::vector<std::uint32_t> > bufferReaders(buffers_.size());
             for (std::uint32_t pass = 0; pass < count; ++pass) {
                 for (const Access &access: passes_[pass].accesses) {
                     const auto resource = access.texture.index;
-                    if (!access.write) {
-                        if (lastWriter[resource] >= 0) {
-                            edges[static_cast<std::uint32_t>(lastWriter[resource])].insert(
-                                pass);
-                        } else if (!resources_[resource].imported) {
-                            throw std::logic_error(
-                                "Transient texture read before it is written: " + resources_[resource].name);
+                    const auto &desc = resources_[resource].desc;
+                    for (std::uint32_t mip = access.range.baseMipLevel; mip < access.range.baseMipLevel + access.range.levelCount; ++mip) {
+                        for (std::uint32_t layer = access.range.baseArrayLayer; layer < access.range.baseArrayLayer + access.range.layerCount; ++layer) {
+                            const auto subresource = static_cast<std::size_t>(mip) * desc.arrayLayers + layer;
+                            if (!access.write) {
+                                if (lastWriter[resource][subresource] >= 0 && static_cast<std::uint32_t>(lastWriter[resource][subresource]) != pass) {
+                                    edges[static_cast<std::uint32_t>(lastWriter[resource][subresource])].insert(pass);
+                                } else if (lastWriter[resource][subresource] < 0 && !resources_[resource].imported) {
+                                    throw std::logic_error("Transient texture read before it is written: " + resources_[resource].name);
+                                }
+                                readers[resource][subresource].push_back(pass);
+                            } else {
+                                if (lastWriter[resource][subresource] >= 0 && static_cast<std::uint32_t>(lastWriter[resource][subresource]) != pass) {
+                                    edges[static_cast<std::uint32_t>(lastWriter[resource][subresource])].insert(pass);
+                                }
+                                for (const auto reader: readers[resource][subresource]) if (reader != pass) edges[reader].insert(pass);
+                                readers[resource][subresource].clear();
+                                lastWriter[resource][subresource] = static_cast<std::int32_t>(pass);
+                            }
                         }
-                        readers[resource].push_back(pass);
-                    } else {
-                        if (lastWriter[resource] >= 0) {
-                            edges[static_cast<std::uint32_t>(lastWriter[resource])].insert(
-                                pass);
-                        }
-                        for (const auto reader: readers[resource]) {
-                            edges[reader].insert(pass);
-                        }
-                        readers[resource].clear();
-                        lastWriter[resource] = static_cast<std::int32_t>(pass);
                     }
                 }
                 for (const BufferAccess &access: passes_[pass].bufferAccesses) {
@@ -892,22 +963,29 @@ namespace Engine::RenderGraph {
             Queue queue{Queue::Graphics};
             std::int32_t pass{-1};
         };
-        std::vector<State> states(resources_.size());
+        std::vector<std::vector<State>> states(resources_.size());
         for (std::uint32_t resource = 0; resource < resources_.size(); ++resource) {
-            states[resource] = {
+            const State initial = {
                 resources_[resource].initialState.stage,
                 resources_[resource].initialState.access,
                 resources_[resource].initialState.layout,
                 resources_[resource].initialState.write
             };
+            states[resource].assign(static_cast<std::size_t>(resources_[resource].desc.mipLevels) *
+                                    resources_[resource].desc.arrayLayers, initial);
         }
         barriers_.assign(count, {});
         releaseBarriers_.assign(count, {});
         for (std::uint32_t ordered = 0; ordered < order_.size(); ++ordered) {
             for (const Access &access: passes_[order_[ordered]].accesses) {
-                auto &state = states[access.texture.index];
                 const auto next = usageInfo(access.usage);
                 const Queue nextQueue = passes_[order_[ordered]].queue;
+                const auto &desc = resources_[access.texture.index].desc;
+                for (std::uint32_t mip = access.range.baseMipLevel;
+                     mip < access.range.baseMipLevel + access.range.levelCount; ++mip) {
+                    for (std::uint32_t layer = access.range.baseArrayLayer;
+                         layer < access.range.baseArrayLayer + access.range.layerCount; ++layer) {
+                auto &state = states[access.texture.index][static_cast<std::size_t>(mip) * desc.arrayLayers + layer];
                 const bool crossQueue = state.queue != nextQueue;
                 if (state.layout != next.layout || state.write || next.write) {
                     VkImageMemoryBarrier2 barrier{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2};
@@ -929,6 +1007,8 @@ namespace Engine::RenderGraph {
                             release.dstAccessMask = VK_ACCESS_2_NONE;
                             release.oldLayout = state.layout;
                             release.newLayout = next.layout;
+                            release.image = resources_[access.texture.index].image;
+                            release.subresourceRange = {desc.aspect, mip, 1, layer, 1};
                             release.srcQueueFamilyIndex = sourceFamily;
                             release.dstQueueFamilyIndex = destinationFamily;
                             releaseBarriers_[state.pass].images.push_back(release);
@@ -944,7 +1024,7 @@ namespace Engine::RenderGraph {
                         // layout, but its physical image was used earlier in
                         // the frame. Preserve the discard transition while
                         // making that earlier use visible.
-                        const State &predecessor = states[imageAliasPredecessor[access.texture.index]];
+                        const State &predecessor = states[imageAliasPredecessor[access.texture.index]][0];
                         barrier.srcStageMask = predecessor.stage;
                         barrier.srcAccessMask = predecessor.access;
                     }
@@ -954,15 +1034,15 @@ namespace Engine::RenderGraph {
                     barrier.newLayout = next.layout;
                     barrier.image = resources_[access.texture.index].image;
                     barrier.subresourceRange = {
-                        resources_[access.texture.index].desc.aspect, 0,
-                        resources_[access.texture.index].desc.mipLevels, 0,
-                        resources_[access.texture.index].desc.arrayLayers
+                        resources_[access.texture.index].desc.aspect, mip, 1, layer, 1
                     };
                     barriers_[ordered].images.push_back(barrier);
                 }
                 state = {
                     next.stage, next.access, next.layout, next.write, nextQueue, static_cast<std::int32_t>(ordered)
                 };
+                    }
+                }
             }
             // Some callbacks use legacy render passes whose finalLayout performs
             // a transition internally.  That transition is not a command emitted
@@ -970,14 +1050,20 @@ namespace Engine::RenderGraph {
             // the next graph pass.
             for (const auto &finalState: passes_[order_[ordered]].finalTextureStates) {
                 requireValid(finalState.texture);
-                states[finalState.texture.index] = {
-                    finalState.state.stage, finalState.state.access,
-                    finalState.state.layout, finalState.state.write,
-                    passes_[order_[ordered]].queue,
-                    static_cast<std::int32_t>(ordered)
-                };
+                const auto &desc = resources_[finalState.texture.index].desc;
+                for (std::uint32_t mip = finalState.range.baseMipLevel;
+                     mip < finalState.range.baseMipLevel + finalState.range.levelCount; ++mip) {
+                    for (std::uint32_t layer = finalState.range.baseArrayLayer;
+                         layer < finalState.range.baseArrayLayer + finalState.range.layerCount; ++layer) {
+                        states[finalState.texture.index][static_cast<std::size_t>(mip) * desc.arrayLayers + layer] = {
+                            finalState.state.stage, finalState.state.access, finalState.state.layout, finalState.state.write,
+                            passes_[order_[ordered]].queue, static_cast<std::int32_t>(ordered)};
+                    }
+                }
             }
         }
+        for (BarrierBatch &batch: barriers_) mergeImageBarriers(batch.images);
+        for (BarrierBatch &batch: releaseBarriers_) mergeImageBarriers(batch.images);
         struct BufferState {
             VkPipelineStageFlags2 stage{};
             VkAccessFlags2 access{};
