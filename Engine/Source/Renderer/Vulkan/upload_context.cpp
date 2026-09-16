@@ -93,6 +93,25 @@ namespace Engine {
         }
     }
 
+    bool UploadContext::overlapsLiveUploadRange(const VkDeviceSize begin,
+                                                const VkDeviceSize end) const noexcept {
+        const auto overlaps = [begin, end](const VkDeviceSize rangeBegin, const VkDeviceSize rangeEnd) {
+            return begin < rangeEnd && rangeBegin < end;
+        };
+        if (hasActiveRange_ && overlaps(activeRangeBegin_, activeRangeEnd_)) return true;
+        return std::any_of(retiredUploadRanges_.begin(), retiredUploadRanges_.end(),
+                           [&overlaps](const RetiredUploadRange& range) {
+                               return overlaps(range.begin, range.end);
+                           });
+    }
+
+    void UploadContext::retireActiveUploadRange(const uint64_t timelineValue) noexcept {
+        if (!hasActiveRange_) return;
+        retiredUploadRanges_.push_back({activeRangeBegin_, activeRangeEnd_, timelineValue});
+        hasActiveRange_ = false;
+        tail_ = retiredUploadRanges_.front().begin;
+    }
+
     void UploadContext::reclaim() noexcept {
         if (device_ == nullptr) {
             return;
@@ -115,8 +134,10 @@ namespace Engine {
         std::erase_if(submitted_, [](const Submitted &submitted) {
             return submitted.copyCommandBuffer == VK_NULL_HANDLE && submitted.graphicsCommandBuffer == VK_NULL_HANDLE;
         });
-        if (submitted_.empty()) { head_ = 0;
-}
+        std::erase_if(retiredUploadRanges_, [copyDone](const RetiredUploadRange& range) {
+            return range.timelineValue <= copyDone;
+        });
+        tail_ = retiredUploadRanges_.empty() ? head_ : retiredUploadRanges_.front().begin;
     }
 
     void UploadContext::abort() noexcept {
@@ -134,6 +155,11 @@ namespace Engine {
         if (graphicsCommandBuffer_ != VK_NULL_HANDLE) {
             vkFreeCommandBuffers(device_, graphicsPool_, 1, &graphicsCommandBuffer_);
             graphicsCommandBuffer_ = VK_NULL_HANDLE;
+        }
+        // No command submitted this range, so it can immediately be reused.
+        if (hasActiveRange_) {
+            head_ = activeRangeBegin_;
+            hasActiveRange_ = false;
         }
     }
 
@@ -212,20 +238,43 @@ namespace Engine {
         if (!recording_ || size > capacity_) {
             throw std::runtime_error("Invalid upload-ring allocation");
         }
-        auto offset = (head_ + alignment - 1) & ~(alignment - 1);
-        if (offset + size > capacity_) {
-            const UploadTicket ticket = submit();
-            VkSemaphoreWaitInfo wait{VK_STRUCTURE_TYPE_SEMAPHORE_WAIT_INFO};
-            wait.semaphoreCount = 1;
-            wait.pSemaphores = &timeline_;
-            wait.pValues = &ticket.timelineValue;
-            vkWaitSemaphores(device_, &wait,UINT64_MAX);
+        for (;;) {
             reclaim();
-            begin();
-            offset = 0;
+            VkDeviceSize offset = (head_ + alignment - 1) & ~(alignment - 1);
+            if (offset + size <= capacity_ && !overlapsLiveUploadRange(offset, offset + size)) {
+                const VkDeviceSize rangeBegin = hasActiveRange_ ? activeRangeBegin_ : head_;
+                head_ = offset + size;
+                activeRangeBegin_ = rangeBegin;
+                activeRangeEnd_ = head_;
+                hasActiveRange_ = true;
+                return {staging_, offset, static_cast<char *>(mapped_) + offset};
+            }
+
+            // A submitted range never wraps physically. Once the current
+            // batch has data, submit it before trying the start of the ring.
+            if (hasActiveRange_) {
+                static_cast<void>(submit());
+                begin();
+                continue;
+            }
+
+            // The beginning may already have been retired even while the end
+            // is still in flight. Reuse it without waiting whenever possible.
+            if (size <= capacity_ && !overlapsLiveUploadRange(0, size)) {
+                head_ = size;
+                activeRangeBegin_ = 0;
+                activeRangeEnd_ = head_;
+                hasActiveRange_ = true;
+                return {staging_, 0, mapped_};
+            }
+
+            // The ring is genuinely full. Wait only for the oldest blocking
+            // submission, reclaim its range, and retry the allocation.
+            if (retiredUploadRanges_.empty()) {
+                throw std::runtime_error("Upload ring has no reclaimable range");
+            }
+            wait(retiredUploadRanges_.front().timelineValue);
         }
-        head_ = offset + size;
-        return {staging_, offset, static_cast<char *>(mapped_) + offset};
     }
 
     void UploadContext::copyBuffer(VkBuffer dst, const void *data, VkDeviceSize size, VkDeviceSize dstOffset) {
@@ -312,6 +361,7 @@ namespace Engine {
             }
         }
         submitted_.push_back({commandBuffer_, hasFinalizer ? graphicsCommandBuffer_ : VK_NULL_HANDLE, value});
+        retireActiveUploadRange(value);
         commandBuffer_ = VK_NULL_HANDLE;
         graphicsCommandBuffer_ = VK_NULL_HANDLE;
         ++nextValue_;
@@ -369,11 +419,13 @@ namespace Engine {
         staging_ = VK_NULL_HANDLE;
         allocation_ = VK_NULL_HANDLE;
         mapped_ = nullptr;
-        capacity_ = head_ = 0;
+        capacity_ = head_ = tail_ = activeRangeBegin_ = activeRangeEnd_ = 0;
+        hasActiveRange_ = false;
         pool_ = graphicsPool_ = VK_NULL_HANDLE;
         timeline_ = copyTimeline_ = VK_NULL_HANDLE;
         nextValue_ = 1;
         splitQueues_ = false;
         recording_ = false;
+        retiredUploadRanges_.clear();
     }
 }

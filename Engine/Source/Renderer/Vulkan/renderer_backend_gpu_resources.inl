@@ -23,8 +23,8 @@
                 object.shader = batch.shaderSlot;
                 object.lod1IndexCount = batch.lod1IndexCount;
                 object.lod2IndexCount = batch.lod2IndexCount;
-                object.lod1Distance = batch.lod1Distance;
-                object.lod2Distance = batch.lod2Distance;
+                object.lod1DistanceSq = batch.lod1Distance * batch.lod1Distance;
+                object.lod2DistanceSq = batch.lod2Distance * batch.lod2Distance;
             }
             const Culling::GPUObjectData emptyObject{};
             for (Buffer& buffer : cullingObjectBuffers) {
@@ -750,7 +750,7 @@
             }
             for (uint32_t frame = 0; frame < MAX_FRAMES_IN_FLIGHT; ++frame) {
                 const VkDescriptorBufferInfo sceneInstanceInfo{
-                    gpuSceneInstanceBuffers[frame].handle(), 0, VK_WHOLE_SIZE};
+                    gpuVisibilityInstanceBuffers[frame].handle(), 0, VK_WHOLE_SIZE};
                 const VkDescriptorBufferInfo visibleInfo{visibleInstanceBuffers[frame].handle(), 0, VK_WHOLE_SIZE};
                 const VkDescriptorBufferInfo visibleCountInfo{visibleInstanceCountBuffers[frame].handle(), 0, VK_WHOLE_SIZE};
                 const VkDescriptorBufferInfo instanceUniformInfo{

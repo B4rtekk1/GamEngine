@@ -561,12 +561,12 @@ namespace Engine::Culling {
                 .srcAccessMask = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT,
                 .dstStageMask = VK_PIPELINE_STAGE_2_DRAW_INDIRECT_BIT,
                 .dstAccessMask = VK_ACCESS_2_INDIRECT_COMMAND_READ_BIT, .buffer = m_drawCountBuffer,
-                .offset = 0, .size = sizeof(std::uint32_t) * pages.size()
-            }
+                .offset = 0, .size = sizeof(std::uint32_t) * pages.size(),
+            },
         };
         const VkDependencyInfo drawDependency{
             .sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO,
-            .bufferMemoryBarrierCount = 2, .pBufferMemoryBarriers = drawBarriers
+            .bufferMemoryBarrierCount = 2, .pBufferMemoryBarriers = drawBarriers,
         };
         vkCmdPipelineBarrier2(commandBuffer, &drawDependency);
     }

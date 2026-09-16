@@ -1,46 +1,21 @@
 import Culling.CullingTypes;
 
-struct GPUSceneInstanceRecord
+struct GPUVisibilityInstanceRecord
 {
-    float4x4 worldMatrix;
-    float4 localBoundsMin;
-    float4 localBoundsMax;
+    float4 worldCenterRadius;
     uint4 idsAndFlags;
 };
 
-[[vk::binding(0, 0)]] StructuredBuffer<GPUSceneInstanceRecord> instances;
+[[vk::binding(0, 0)]] StructuredBuffer<GPUVisibilityInstanceRecord> instances;
 [[vk::binding(1, 0)]] RWStructuredBuffer<uint> visibleInstances;
 [[vk::binding(2, 0)]] RWStructuredBuffer<uint> visibleCount;
 [[vk::binding(3, 0)]] ConstantBuffer<CullingUniformData> culling;
 
-bool outsideFrustum(float4 clipPositions[8])
+bool outsideFrustum(GPUVisibilityInstanceRecord instance)
 {
-    bool outsideLeft = true, outsideRight = true, outsideBottom = true;
-    bool outsideTop = true, outsideNear = true, outsideFar = true;
-    for (uint i = 0; i < 8; ++i) {
-        float4 clip = clipPositions[i];
-        outsideLeft = outsideLeft && clip.x < -clip.w;
-        outsideRight = outsideRight && clip.x > clip.w;
-        outsideBottom = outsideBottom && clip.y < -clip.w;
-        outsideTop = outsideTop && clip.y > clip.w;
-        outsideNear = outsideNear && clip.z < 0.0;
-        outsideFar = outsideFar && clip.z > clip.w;
-    }
-    return outsideLeft || outsideRight || outsideBottom || outsideTop || outsideNear || outsideFar;
-}
-
-bool worldAabbOutsideFrustum(GPUSceneInstanceRecord instance)
-{
-    const float3 localCenter = (instance.localBoundsMin.xyz + instance.localBoundsMax.xyz) * 0.5;
-    const float3 localExtent = (instance.localBoundsMax.xyz - instance.localBoundsMin.xyz) * 0.5;
-    const float3 worldCenter = mul(float4(localCenter, 1.0), instance.worldMatrix).xyz;
-    const float3 worldExtent =
-        abs(mul(float4(localExtent.x, 0.0, 0.0, 0.0), instance.worldMatrix).xyz) +
-        abs(mul(float4(0.0, localExtent.y, 0.0, 0.0), instance.worldMatrix).xyz) +
-        abs(mul(float4(0.0, 0.0, localExtent.z, 0.0), instance.worldMatrix).xyz);
     for (uint planeIndex = 0; planeIndex < 6; ++planeIndex) {
         const float4 plane = culling.frustumPlanes[planeIndex];
-        if (dot(plane.xyz, worldCenter) + plane.w + dot(abs(plane.xyz), worldExtent) < 0.0)
+        if (dot(plane.xyz, instance.worldCenterRadius.xyz) + plane.w < -instance.worldCenterRadius.w)
             return true;
     }
     return false;
@@ -60,7 +35,7 @@ void main(uint3 dispatchThreadId : SV_DispatchThreadID)
     bool visible = false;
     if (instanceId < instanceCount)
     {
-        const GPUSceneInstanceRecord instance = instances[instanceId];
+        const GPUVisibilityInstanceRecord instance = instances[instanceId];
         // Bit 0 is the renderer visibility/alive bit; inactive slots never enter the list.
         visible = (instance.idsAndFlags.w & 1U) != 0U;
         // Terrain grass is already submitted in terrain chunks.  Until the
@@ -69,7 +44,7 @@ void main(uint3 dispatchThreadId : SV_DispatchThreadID)
         // make an entire grass field disappear in the game view.
         const bool isGrass = (instance.idsAndFlags.w & 4u) != 0u;
         if (visible && !isGrass && culling.enableFrustumCulling != 0u)
-            visible = !worldAabbOutsideFrustum(instance);
+            visible = !outsideFrustum(instance);
     }
 
     // Compact visible IDs per implementation-defined subgroup. This uses one

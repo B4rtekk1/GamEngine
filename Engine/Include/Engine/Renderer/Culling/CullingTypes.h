@@ -56,8 +56,10 @@ namespace Engine::Culling {
         std::uint32_t shader;
         std::uint32_t lod1IndexCount;
         std::uint32_t lod2IndexCount;
-        float lod1Distance;
-        float lod2Distance;
+        /// Squared world-space distance at which LOD1 becomes active.
+        float lod1DistanceSq;
+        /// Squared world-space distance at which LOD2 becomes active.
+        float lod2DistanceSq;
     };
 
     /**

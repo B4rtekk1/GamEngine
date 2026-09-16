@@ -1110,6 +1110,35 @@
             };
         }
 
+        [[nodiscard]] static GPUVisibilityInstanceRecord gpuSceneVisibilityRecord(
+            const GPUSceneDatabase::GPUInstance& instance) {
+            glm::mat4 worldMatrix{1.0F};
+            for (glm::length_t column = 0; column < 4; ++column) {
+                for (glm::length_t row = 0; row < 4; ++row) {
+                    worldMatrix[column][row] = instance.worldMatrix[column * 4 + row];
+                }
+            }
+
+            const glm::vec3 localCenter = (instance.localBounds.min.native() +
+                                           instance.localBounds.max.native()) * 0.5F;
+            const glm::vec3 localExtent = (instance.localBounds.max.native() -
+                                           instance.localBounds.min.native()) * 0.5F;
+            const glm::vec3 worldCenter = glm::vec3{worldMatrix * glm::vec4{localCenter, 1.0F}};
+            // Transform local extent axes separately. The length of the
+            // resulting conservative world AABB extent encloses it in a
+            // sphere, which remains valid under rotation and non-uniform scale.
+            const glm::vec3 worldExtent =
+                glm::abs(glm::vec3{worldMatrix[0]}) * localExtent.x +
+                glm::abs(glm::vec3{worldMatrix[1]}) * localExtent.y +
+                glm::abs(glm::vec3{worldMatrix[2]}) * localExtent.z;
+            const std::uint32_t flags = instance.alive ? instance.flags : 0U;
+            return {
+                .worldCenterRadius = glm::vec4{worldCenter, glm::length(worldExtent)},
+                .idsAndFlags = glm::uvec4{instance.meshId, instance.materialId,
+                                          instance.objectId, flags},
+            };
+        }
+
         [[nodiscard]] static GPUSceneMeshRecord gpuSceneRecord(
             const GPUSceneDatabase::GPUMesh& mesh) {
             return {
@@ -1132,7 +1161,12 @@
             const std::vector<SourceRecord>& source) {
             std::vector<GPURecord> snapshot;
             snapshot.reserve(source.size());
-            for (const SourceRecord& record : source) snapshot.push_back(gpuSceneRecord(record));
+            for (const SourceRecord& record : source) {
+                if constexpr (std::is_same_v<GPURecord, GPUVisibilityInstanceRecord>)
+                    snapshot.push_back(gpuSceneVisibilityRecord(record));
+                else
+                    snapshot.push_back(gpuSceneRecord(record));
+            }
             return snapshot;
         }
 
@@ -1192,11 +1226,14 @@
                 };
                 ensureCapacity(gpuSceneInstanceBuffers[frame], instances.size(), gpuSceneInstanceHighWater,
                     4096U, sizeof(GPUSceneInstanceRecord));
+                ensureCapacity(gpuVisibilityInstanceBuffers[frame], instances.size(), gpuSceneInstanceHighWater,
+                    4096U, sizeof(GPUVisibilityInstanceRecord));
                 ensureCapacity(gpuSceneMeshBuffers[frame], meshes.size(), gpuSceneMeshHighWater,
                     1024U, sizeof(GPUSceneMeshRecord));
                 ensureCapacity(gpuSceneMaterialBuffers[frame], databaseMaterials.size(), gpuSceneMaterialHighWater,
                     1024U, sizeof(GPUSceneMaterialRecord));
                 uploadGPUSceneSnapshot<GPUSceneInstanceRecord>(gpuSceneInstanceBuffers[frame], instances);
+                uploadGPUSceneSnapshot<GPUVisibilityInstanceRecord>(gpuVisibilityInstanceBuffers[frame], instances);
                 uploadGPUSceneSnapshot<GPUSceneMeshRecord>(gpuSceneMeshBuffers[frame], meshes);
                 uploadGPUSceneSnapshot<GPUSceneMaterialRecord>(gpuSceneMaterialBuffers[frame], databaseMaterials);
                 refreshGPUSceneRoot(frame);
@@ -1251,6 +1288,8 @@
 
             const bool instanceResized = grow(gpuSceneInstanceBuffers[frame], requiredBytes(
                 sceneGpu.database.instances().size(), sizeof(GPUSceneInstanceRecord)));
+            const bool visibilityResized = grow(gpuVisibilityInstanceBuffers[frame], requiredBytes(
+                sceneGpu.database.instances().size(), sizeof(GPUVisibilityInstanceRecord)));
             const bool meshResized = grow(gpuSceneMeshBuffers[frame], requiredBytes(
                 sceneGpu.database.meshes().size(), sizeof(GPUSceneMeshRecord)));
             const bool materialResized = grow(gpuSceneMaterialBuffers[frame], requiredBytes(
@@ -1259,7 +1298,7 @@
             gpuSceneMeshHighWater = std::max(gpuSceneMeshHighWater, sceneGpu.database.meshes().size());
             gpuSceneMaterialHighWater = std::max(gpuSceneMaterialHighWater, sceneGpu.database.materials().size());
             refreshGPUSceneRoot(frame);
-            return instanceResized || meshResized || materialResized;
+            return instanceResized || visibilityResized || meshResized || materialResized;
         }
 
         void refreshGPUSceneDescriptors(const std::uint32_t frame) const {
@@ -1269,7 +1308,7 @@
                 instanceCullSets[frame] == VK_NULL_HANDLE) return;
 
             const VkDescriptorBufferInfo instanceInfo{
-                gpuSceneInstanceBuffers[frame].handle(), 0, VK_WHOLE_SIZE};
+                gpuVisibilityInstanceBuffers[frame].handle(), 0, VK_WHOLE_SIZE};
             const VkDescriptorBufferInfo visibleInfo{
                 visibleInstanceBuffers[frame].handle(), 0, VK_WHOLE_SIZE};
             const VkDescriptorBufferInfo visibleCountInfo{
@@ -1358,6 +1397,7 @@
                 const auto& meshes = sceneGpu.database.meshes();
                 const auto& databaseMaterials = sceneGpu.database.materials();
                 uploadGPUSceneSnapshot<GPUSceneInstanceRecord>(gpuSceneInstanceBuffers[frame], instances);
+                uploadGPUSceneSnapshot<GPUVisibilityInstanceRecord>(gpuVisibilityInstanceBuffers[frame], instances);
                 uploadGPUSceneSnapshot<GPUSceneMeshRecord>(gpuSceneMeshBuffers[frame], meshes);
                 uploadGPUSceneSnapshot<GPUSceneMaterialRecord>(gpuSceneMaterialBuffers[frame], databaseMaterials);
                 refreshGPUSceneDescriptors(frame);
@@ -1372,6 +1412,10 @@
                 const auto record = gpuSceneRecord(instances[id]);
                 gpuSceneInstanceBuffers[frame].uploadDeviceLocal(&record, sizeof(record), sizeof(record) * id,
                     commandPool, vulkanDevice.graphicsQueue());
+                const auto visibilityRecord = gpuSceneVisibilityRecord(instances[id]);
+                gpuVisibilityInstanceBuffers[frame].uploadDeviceLocal(
+                    &visibilityRecord, sizeof(visibilityRecord), sizeof(visibilityRecord) * id,
+                    commandPool, vulkanDevice.graphicsQueue());
             }
             // A removed slot retains its fixed address but becomes inert. This
             // makes an in-flight indirect list harmless even before compaction.
@@ -1380,6 +1424,11 @@
                 auto record = gpuSceneRecord(instances[id]);
                 record.idsAndFlags.w = 0U;
                 gpuSceneInstanceBuffers[frame].uploadDeviceLocal(&record, sizeof(record), sizeof(record) * id,
+                    commandPool, vulkanDevice.graphicsQueue());
+                auto visibilityRecord = gpuSceneVisibilityRecord(instances[id]);
+                visibilityRecord.idsAndFlags.w = 0U;
+                gpuVisibilityInstanceBuffers[frame].uploadDeviceLocal(
+                    &visibilityRecord, sizeof(visibilityRecord), sizeof(visibilityRecord) * id,
                     commandPool, vulkanDevice.graphicsQueue());
             }
             const auto& meshes = sceneGpu.database.meshes();

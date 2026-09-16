@@ -56,6 +56,7 @@
                     buffer.destroy();
                 }
                 for (Buffer& buffer : gpuSceneInstanceBuffers) buffer.destroy();
+                for (Buffer& buffer : gpuVisibilityInstanceBuffers) buffer.destroy();
                 for (Buffer& buffer : gpuSceneMeshBuffers) buffer.destroy();
                 for (Buffer& buffer : gpuSceneMaterialBuffers) buffer.destroy();
                 for (Buffer& buffer : visibleInstanceBuffers) buffer.destroy();

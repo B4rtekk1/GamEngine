@@ -36,9 +36,6 @@ public:
     UploadContext(const UploadContext&) = delete; UploadContext& operator=(const UploadContext&) = delete;
     void create(VkDevice device, VkQueue transferQueue, uint32_t transferFamily, VkQueue graphicsQueue,
                 uint32_t graphicsFamily, uint32_t computeFamily,
-                // Diagnostic capacity: avoids the known full-ring CPU wait while
-                // measuring large scene uploads. Replace with page/range reuse
-                // before treating this as a production streaming solution.
                 VmaAllocator allocator, VkDeviceSize bytes = 256ull * 1024 * 1024);
     void destroy() noexcept;
     /// Starts an explicit upload batch. Resources created while it is active
@@ -85,13 +82,27 @@ public:
     static void setCurrent(UploadContext* context) noexcept;
 private:
     struct Submitted { VkCommandBuffer copyCommandBuffer{}; VkCommandBuffer graphicsCommandBuffer{}; uint64_t value{}; };
+    struct RetiredUploadRange {
+        VkDeviceSize begin{};
+        VkDeviceSize end{};
+        uint64_t timelineValue{};
+    };
     VkDevice device_{}; VkQueue queue_{}; VkQueue graphicsQueue_{}; uint32_t queueFamily_{}; uint32_t graphicsFamily_{}; uint32_t computeFamily_{}; VmaAllocator allocator_{}; VkBuffer staging_{}; VmaAllocation allocation_{}; void* mapped_{};
-    VkDeviceSize capacity_{}; VkDeviceSize head_{}; VkCommandPool pool_{};
+    VkDeviceSize capacity_{}; VkDeviceSize head_{}; VkDeviceSize tail_{}; VkCommandPool pool_{};
+    // A batch may only occupy one non-wrapping physical range. If it reaches
+    // the end of the ring, allocate() submits it, then starts the next range
+    // at the beginning without invalidating any in-flight uploads.
+    VkDeviceSize activeRangeBegin_{};
+    VkDeviceSize activeRangeEnd_{};
+    bool hasActiveRange_{};
     VkCommandPool graphicsPool_{}; VkCommandBuffer commandBuffer_{}; VkCommandBuffer graphicsCommandBuffer_{};
     VkSemaphore timeline_{}; VkSemaphore copyTimeline_{}; uint64_t nextValue_{1};
     bool splitQueues_{};
     bool recording_{};
     std::vector<Submitted> submitted_;
+    std::vector<RetiredUploadRange> retiredUploadRanges_;
+    [[nodiscard]] bool overlapsLiveUploadRange(VkDeviceSize begin, VkDeviceSize end) const noexcept;
+    void retireActiveUploadRange(uint64_t timelineValue) noexcept;
     void reclaim() noexcept;
     void abort() noexcept;
     static UploadContext* current_;

@@ -178,6 +178,9 @@
         std::array<std::vector<Buffer>, MAX_FRAMES_IN_FLIGHT> deferredPreviousTransformBuffers;
         std::array<Buffer, MAX_FRAMES_IN_FLIGHT> materialBuffers;
         std::array<Buffer, MAX_FRAMES_IN_FLIGHT> gpuSceneInstanceBuffers;
+        // Compact, transform-derived bounds for coarse GPU visibility. Kept
+        // index-aligned with gpuSceneInstanceBuffers.
+        std::array<Buffer, MAX_FRAMES_IN_FLIGHT> gpuVisibilityInstanceBuffers;
         std::array<Buffer, MAX_FRAMES_IN_FLIGHT> gpuSceneMeshBuffers;
         std::array<Buffer, MAX_FRAMES_IN_FLIGHT> gpuSceneMaterialBuffers;
         // CPU-side roots for the frame-local BDA scene tables.  The current

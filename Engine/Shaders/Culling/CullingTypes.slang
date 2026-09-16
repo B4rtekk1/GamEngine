@@ -13,8 +13,10 @@ struct CullingObjectData
     uint shader;
     uint lod1IndexCount;
     uint lod2IndexCount;
-    float lod1Distance;
-    float lod2Distance;
+    // Squared world-space thresholds. Keeping these squared avoids a sqrt in
+    // the per-object LOD hot path.
+    float lod1DistanceSq;
+    float lod2DistanceSq;
 };
 
 struct IndexedDrawCommand

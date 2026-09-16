@@ -138,6 +138,15 @@ namespace Engine {
         glm::uvec4 idsAndFlags{}; // meshId, materialId, objectId, flags
     };
 
+    /** Compact spatial record consumed by coarse instance visibility only.
+     * Its index intentionally matches GPUSceneInstanceRecord, preserving the
+     * stable GPUScene instance ID used by all downstream passes. */
+    struct alignas(16) GPUVisibilityInstanceRecord {
+        glm::vec4 worldCenterRadius{};
+        glm::uvec4 idsAndFlags{}; // meshId, materialId, objectId, flags
+    };
+    static_assert(sizeof(GPUVisibilityInstanceRecord) == 32);
+
     struct alignas(16) GPUSceneMeshRecord {
         glm::uvec4 draw{}; // firstIndex, indexCount, vertexOffset, lod1IndexCount
         // lod2IndexCount, firstMeshlet, meshletCount, reserved

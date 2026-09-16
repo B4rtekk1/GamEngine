@@ -16,6 +16,10 @@ struct MeshletCullUniforms { float4x4 viewProjection; float3 cameraPosition; uin
 [[vk::binding(6, 0)]] RWStructuredBuffer<uint> visibleCount;
 [[vk::binding(7, 0)]] ConstantBuffer<MeshletCullUniforms> culling;
 
+// One workgroup owns one coarse-visible instance.  Cache its basis-vector
+// lengths once; every meshlet in the group uses the same world transform.
+groupshared float4 instanceScale;
+
 bool outsideFrustum(float3 center, float radius) {
     for (uint plane = 0; plane < 6; ++plane)
         if (dot(culling.frustumPlanes[plane].xyz, center) + culling.frustumPlanes[plane].w < -radius) return true;
@@ -31,31 +35,57 @@ void main(uint3 groupId : SV_GroupID, uint3 threadId : SV_GroupThreadID) {
     const GPUSceneInstanceRecord instance = instances[instanceId];
     const GPUSceneMeshRecord mesh = meshes[instance.idsAndFlags.x];
 
-    // Each workgroup handles one coarse-visible instance, not global meshlets.
-    for (uint localMeshlet = threadId.x; localMeshlet < mesh.lod.z; localMeshlet += 64) {
-        const uint meshletId = mesh.lod.y + localMeshlet;
-        if (meshletId >= culling.meshletCount) continue;
-        const GpuMeshlet meshlet = meshlets[meshletId];
-        const float3 worldCenter = mul(float4(meshlet.bounds.xyz, 1.0), instance.worldMatrix).xyz;
+    if (threadId.x == 0) {
         const float3 axisX = mul(float4(1.0, 0.0, 0.0, 0.0), instance.worldMatrix).xyz;
         const float3 axisY = mul(float4(0.0, 1.0, 0.0, 0.0), instance.worldMatrix).xyz;
         const float3 axisZ = mul(float4(0.0, 0.0, 1.0, 0.0), instance.worldMatrix).xyz;
         const float scaleX = length(axisX), scaleY = length(axisY), scaleZ = length(axisZ);
-        const float radius = meshlet.bounds.w * max(scaleX, max(scaleY, scaleZ));
-        if (outsideFrustum(worldCenter, radius)) continue;
+        instanceScale = float4(scaleX, scaleY, scaleZ, max(scaleX, max(scaleY, scaleZ)));
+    }
+    GroupMemoryBarrierWithGroupSync();
+
+    uint capacity, stride;
+    visibleMeshlets.GetDimensions(capacity, stride);
+
+    // Use rounds rather than a lane-strided loop so every active lane enters
+    // each wave operation, including the final partial round.
+    const uint meshletRounds = (mesh.lod.z + 63u) / 64u;
+    for (uint round = 0; round < meshletRounds; ++round) {
+        const uint localMeshlet = round * 64u + threadId.x;
+        const uint meshletId = mesh.lod.y + localMeshlet;
+        bool visible = localMeshlet < mesh.lod.z && meshletId < culling.meshletCount;
+        GpuMeshlet meshlet = (GpuMeshlet)0;
+        float3 worldCenter = 0.0;
+
+        if (visible) {
+            meshlet = meshlets[meshletId];
+            worldCenter = mul(float4(meshlet.bounds.xyz, 1.0), instance.worldMatrix).xyz;
+            const float radius = meshlet.bounds.w * instanceScale.w;
+            visible = !outsideFrustum(worldCenter, radius);
+        }
+
         // A cone cutoff is not invariant under non-uniform scale. Skipping
         // the optional backface test in that case is conservative.
-        const bool uniformScale = abs(scaleX - scaleY) < 1.0e-5 && abs(scaleX - scaleZ) < 1.0e-5;
-        if (meshlet.cone.w >= -1.0 && uniformScale) {
+        const bool uniformScale = abs(instanceScale.x - instanceScale.y) < 1.0e-5 &&
+                                  abs(instanceScale.x - instanceScale.z) < 1.0e-5;
+        if (visible && meshlet.cone.w >= -1.0 && uniformScale) {
             const float3 worldConeAxis = normalize(mul(float4(meshlet.cone.xyz, 0.0), instance.worldMatrix).xyz);
             const float3 toCamera = normalize(culling.cameraPosition - worldCenter);
             const float threshold = -sqrt(max(0.0, 1.0 - meshlet.cone.w * meshlet.cone.w));
-            if (dot(worldConeAxis, toCamera) <= threshold) continue;
+            visible = dot(worldConeAxis, toCamera) > threshold;
         }
-        uint destination;
-        InterlockedAdd(visibleCount[0], 1, destination);
-        uint capacity, stride;
-        visibleMeshlets.GetDimensions(capacity, stride);
-        if (destination < capacity) visibleMeshlets[destination] = VisibleMeshlet(instanceId, meshletId);
+
+        // Reserve one contiguous range per wave, rather than one atomic per
+        // visible meshlet. All lanes execute the wave operations uniformly.
+        const uint visibleInWave = WaveActiveCountBits(visible);
+        uint waveBase = 0;
+        if (WaveIsFirstLane() && visibleInWave != 0)
+            InterlockedAdd(visibleCount[0], visibleInWave, waveBase);
+        waveBase = WaveReadLaneFirst(waveBase);
+        if (visible) {
+            const uint destination = waveBase + WavePrefixCountBits(visible);
+            if (destination < capacity)
+                visibleMeshlets[destination] = VisibleMeshlet(instanceId, meshletId);
+        }
     }
 }

@@ -69,10 +69,11 @@ void appendDraw(bool visible, CullingObjectData objectData, uint drawSlot)
         // Shadow clipmaps are camera-centred. The same distance thresholds
         // are conservative for a page and avoid forcing expensive LOD0 into
         // coarse shadow levels.
-        float distanceToCamera = length(worldCenter - culling.cameraPosition.xyz);
-        if (distanceToCamera >= objectData.lod2Distance && objectData.lod2IndexCount != 0)
+        const float3 cameraDelta = worldCenter - culling.cameraPosition.xyz;
+        const float distanceToCameraSq = dot(cameraDelta, cameraDelta);
+        if (distanceToCameraSq >= objectData.lod2DistanceSq && objectData.lod2IndexCount != 0)
             command.indexCount = objectData.lod2IndexCount;
-        else if (distanceToCamera >= objectData.lod1Distance)
+        else if (distanceToCameraSq >= objectData.lod1DistanceSq)
             command.indexCount = objectData.lod1IndexCount;
     }
     command.instanceCount = objectData.instanceCount;
@@ -84,17 +85,23 @@ void appendDraw(bool visible, CullingObjectData objectData, uint drawSlot)
 
 void appendBinnedDraw(bool visible, CullingObjectData objectData)
 {
-    // Visibility/LOD/Hi-Z are evaluated once per object.  Iterate bins only
-    // for wave compaction: every lane enters each wave intrinsic uniformly.
-    // This trades N complete scene scans for one scan plus cheap wave ballots.
-    for (uint bin = 0; bin < 32; ++bin)
+    // Visibility/LOD/Hi-Z are evaluated once per object. Select the smallest
+    // still-pending bin in the wave and remove it after compaction. Unlike a
+    // fixed 0..31 scan, this iterates only over bins represented in the wave.
+    // It also preserves the existing one-dispatch/one-command-stream ABI.
+    bool pending = visible && objectData.shader < 32;
+    while (WaveActiveAnyTrue(pending))
     {
-        const bool inBin = visible && objectData.shader == bin;
+        const uint bin = WaveActiveMin(pending ? objectData.shader : 0xffffffff);
+        const bool inBin = pending && objectData.shader == bin;
         const uint visibleInWave = WaveActiveCountBits(inBin);
         uint waveBase = 0;
         if (WaveIsFirstLane() && visibleInWave != 0)
             InterlockedAdd(drawCounts[bin], visibleInWave, waveBase);
         waveBase = WaveReadLaneFirst(waveBase);
+        // Update before the early exits below; otherwise a full destination
+        // range could leave the wave spinning on the same bin.
+        pending = pending && !inBin;
         if (!inBin)
             continue;
 
@@ -108,10 +115,11 @@ void appendBinnedDraw(bool visible, CullingObjectData objectData)
         {
             float3 localCenter = (objectData.localAabbMin.xyz + objectData.localAabbMax.xyz) * 0.5;
             float3 worldCenter = mul(float4(localCenter, 1.0), objectData.model).xyz;
-            float distanceToCamera = length(worldCenter - culling.cameraPosition.xyz);
-            if (distanceToCamera >= objectData.lod2Distance && objectData.lod2IndexCount != 0)
+            const float3 cameraDelta = worldCenter - culling.cameraPosition.xyz;
+            const float distanceToCameraSq = dot(cameraDelta, cameraDelta);
+            if (distanceToCameraSq >= objectData.lod2DistanceSq && objectData.lod2IndexCount != 0)
                 command.indexCount = objectData.lod2IndexCount;
-            else if (distanceToCamera >= objectData.lod1Distance)
+            else if (distanceToCameraSq >= objectData.lod1DistanceSq)
                 command.indexCount = objectData.lod1IndexCount;
         }
         command.instanceCount = objectData.instanceCount;
@@ -119,6 +127,7 @@ void appendBinnedDraw(bool visible, CullingObjectData objectData)
         command.vertexOffset = int(objectData.vertexOffset);
         command.firstInstance = objectData.firstInstance;
         commands[bin * culling.maxDrawCount + destinationIndex] = command;
+
     }
 }
 
