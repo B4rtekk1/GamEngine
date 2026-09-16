@@ -273,13 +273,14 @@
             };
             struct BatchKey {
                 const void* mesh;
+                std::uint32_t sectionIndex;
                 std::uint32_t shaderSlot;
                 bool foliagePipeline;
                 bool castShadow;
                 uint32_t cullingBatch;
 
                 bool operator==(const BatchKey& other) const noexcept {
-                    return mesh == other.mesh && shaderSlot == other.shaderSlot &&
+                    return mesh == other.mesh && sectionIndex == other.sectionIndex && shaderSlot == other.shaderSlot &&
                            foliagePipeline == other.foliagePipeline && castShadow == other.castShadow &&
                            cullingBatch == other.cullingBatch;
                 }
@@ -289,9 +290,10 @@
                     constexpr std::uint32_t hashCombineConstant = 0x9e3779b9U;
                     constexpr std::uint32_t hashCombineLeftShift = 6U;
                     const auto meshHash = std::hash<const void*>{}(key.mesh);
+                    const auto sectionHash = std::hash<std::uint32_t>{}(key.sectionIndex);
                     const auto batchHash = std::hash<uint32_t>{}(key.cullingBatch);
                     const auto shaderHash = std::hash<std::uint32_t>{}(key.shaderSlot);
-                    return meshHash ^ (batchHash + shaderHash + static_cast<std::size_t>(key.foliagePipeline) +
+                    return meshHash ^ (sectionHash + batchHash + shaderHash + static_cast<std::size_t>(key.foliagePipeline) +
                                        static_cast<std::size_t>(key.castShadow) +
                                        hashCombineConstant + (meshHash << hashCombineLeftShift) +
                                        (meshHash >> 2U));
@@ -578,12 +580,6 @@
                         (renderer.material.pbr.doubleSided ||
                          renderer.material.pbr.alphaMode == AlphaMode::Mask ||
                          renderer.material.pbr.alphaMode == AlphaMode::Blend);
-                    const bool meshUsesFoliagePipeline = std::ranges::any_of(
-                        mesh->materials, [](const PBRMaterial& material) {
-                            return material.doubleSided || material.alphaMode == AlphaMode::Mask ||
-                                   material.alphaMode == AlphaMode::Blend;
-                        });
-                    const bool usesFoliagePipeline = overrideUsesFoliagePipeline || meshUsesFoliagePipeline;
                     const auto resolveShaderSlot = [&]() {
                         if (renderer.material.shaderSource == MaterialShaderSource::BuiltIn) {
                             return static_cast<std::uint32_t>(materialShaderIndex(renderer.material.shader));
@@ -617,9 +613,11 @@
                         registry.has<WaterBodyComponent>(entity) &&
                         registry.get<WaterBodyComponent>(entity).type == WaterBodyType::Ocean &&
                         mesh->drawRanges.size() == Water::StitchVariantCount;
-                    const auto appendRange = [&](const Mesh::DrawRange& drawRange, const AABB& rangeBounds,
-                                                 const bool forceDistinctBatch) {
-                    const BatchKey batchKey{renderer.mesh.resource().get(), shaderSlot, usesFoliagePipeline,
+                    const auto appendRange = [&](const std::uint32_t sectionIndex, const std::uint32_t firstIndex,
+                                                 const std::uint32_t indexCount, const std::uint32_t firstMeshlet,
+                                                 const std::uint32_t meshletCount, const AABB& rangeBounds,
+                                                 const bool usesFoliagePipeline, const bool forceDistinctBatch) {
+                    const BatchKey batchKey{renderer.mesh.resource().get(), sectionIndex, shaderSlot, usesFoliagePipeline,
                                             castShadow, renderer.cullingBatch};
                     const auto [batchIt, inserted] = !forceDistinctBatch && optimizationFeatures.instancedRendering
                         ? batchIndices.try_emplace(batchKey, instanceBatches.size())
@@ -630,13 +628,13 @@
                     if (inserted) {
                         instanceBatches.push_back(InstanceBatch{
                             .mesh = renderer.mesh.resource().get(),
-                            .firstIndex = renderer.firstIndex + drawRange.firstIndex,
-                            .indexCount = drawRange.indexCount,
+                            .firstIndex = renderer.firstIndex + firstIndex,
+                            .indexCount = indexCount,
                             .lod1IndexCount = 0,
                             .lod2IndexCount = 0,
-                            .firstMeshlet = firstMeshlets.contains(renderer.mesh.resource().get())
-                                ? firstMeshlets.at(renderer.mesh.resource().get()) : 0U,
-                            .meshletCount = static_cast<std::uint32_t>(mesh->meshlets.size()),
+                            .firstMeshlet = (firstMeshlets.contains(renderer.mesh.resource().get())
+                                ? firstMeshlets.at(renderer.mesh.resource().get()) : 0U) + firstMeshlet,
+                            .meshletCount = meshletCount,
                             .firstInstance = static_cast<uint32_t>(renderables.size()),
                             .instanceCount = 0,
                             .shaderSlot = shaderSlot,
@@ -662,8 +660,9 @@
                             std::max(batch.worldBounds.max.z(), rangeWorldBounds.max.z())};
                     }
                     ++batch.instanceCount;
-                    renderables.push_back({entity, rangeBounds, batchIndex,
-                                           firstVertex, mesh->vertexCount()});
+                    renderables.push_back({.entity = entity, .localBounds = rangeBounds, .batchIndex = batchIndex,
+                                           .firstVertex = firstVertex, .vertexCount = mesh->vertexCount(),
+                                           .sectionIndex = sectionIndex});
                     const std::size_t renderableIndex = renderables.size() - 1;
                     sceneGpu.batchRenderableIndices[batchIndex].push_back(renderableIndex);
                     sceneGpu.renderableIndices[entity].push_back(renderableIndex);
@@ -678,11 +677,20 @@
                             .min = {-Water::OceanExtents.back(), -2.0F, -Water::OceanExtents.back()},
                             .max = { Water::OceanExtents.back(),  2.0F,  Water::OceanExtents.back()},
                         };
-                        appendRange({.firstIndex = 0, .indexCount = 0, .localBounds = oceanBounds},
-                                    oceanBounds, false);
+                        appendRange(0, 0, 0, 0, 0, oceanBounds, overrideUsesFoliagePipeline, false);
+                    } else if (!mesh->renderSections.empty()) {
+                        for (std::uint32_t sectionIndex = 0; sectionIndex < mesh->renderSections.size(); ++sectionIndex) {
+                            const Mesh::RenderSection& section = mesh->renderSections[sectionIndex];
+                            const PBRMaterial& material = section.materialIndex < mesh->materials.size()
+                                ? mesh->materials[section.materialIndex] : PBRMaterial{};
+                            const bool usesFoliagePipeline = overrideUsesFoliagePipeline || material.doubleSided ||
+                                material.alphaMode == AlphaMode::Mask || material.alphaMode == AlphaMode::Blend;
+                            appendRange(sectionIndex, section.firstIndex, section.indexCount, section.firstMeshlet,
+                                section.meshletCount, section.localBounds, usesFoliagePipeline, false);
+                        }
                     } else {
-                        appendRange({.firstIndex = 0, .indexCount = mesh->indexCount(), .localBounds = localBounds},
-                                    localBounds, false);
+                        appendRange(0, 0, mesh->indexCount(), 0, static_cast<std::uint32_t>(mesh->meshlets.size()),
+                                    localBounds, overrideUsesFoliagePipeline, false);
                     }
                 });
 
@@ -904,12 +912,14 @@
             // updateRenderableBuffers() initializes the current transform
             // stream and preserves the prior pose for each changed record.
             previousInstanceTransforms.resize(renderables.size());
-            // Generic objects own their material-table ranges. Packed grass
-            // receives one shared range per TerrainGrassComponent below.
+            // All sections of an entity share its material table. Geometry is
+            // sectioned for culling, not duplicated material ownership.
             std::uint32_t nextMaterialOffset = 0;
+            std::unordered_map<Entity, std::uint32_t> renderableMaterialOffsets;
             for (RenderableRecord& record : renderables) {
-                record.materialTableOffset = nextMaterialOffset;
-                nextMaterialOffset += materialSlots;
+                const auto [it, inserted] = renderableMaterialOffsets.try_emplace(record.entity, nextMaterialOffset);
+                if (inserted) nextMaterialOffset += materialSlots;
+                record.materialTableOffset = it->second;
             }
             std::unordered_map<Entity, std::uint32_t> grassMaterialOffsets;
             registry.view<TerrainGrassComponent>([&](const Entity entity, const TerrainGrassComponent& grass) {
@@ -1869,12 +1879,15 @@
                     const bool proxyUninitialized = record.renderProxy.instance == InvalidGPUSceneInstanceId;
                     if (proxyUninitialized) {
                         const std::uint64_t meshKey = static_cast<std::uint64_t>(
-                            reinterpret_cast<std::uintptr_t>(batch.mesh));
+                            reinterpret_cast<std::uintptr_t>(batch.mesh)) ^
+                            (static_cast<std::uint64_t>(record.sectionIndex) << 32U);
                         record.renderProxy.mesh = sceneGpu.database.upsertMesh(meshKey, mesh);
                         record.renderProxy.material = sceneGpu.database.upsertMaterial(
-                            static_cast<std::uint64_t>(record.materialTableOffset), material);
-                        record.renderProxy.instance = sceneGpu.database.upsertInstance(
-                            static_cast<std::uint64_t>(entity), {
+                            (static_cast<std::uint64_t>(record.materialTableOffset) << 32U) |
+                            static_cast<std::uint64_t>(record.sectionIndex), material);
+                        const std::uint64_t instanceKey = (static_cast<std::uint64_t>(entity) << 32U) |
+                            static_cast<std::uint64_t>(index);
+                        record.renderProxy.instance = sceneGpu.database.upsertInstance(instanceKey, {
                                 .worldMatrix = worldMatrix,
                                 .localBounds = record.localBounds,
                                 .meshId = record.renderProxy.mesh,

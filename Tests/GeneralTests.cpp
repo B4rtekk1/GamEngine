@@ -305,6 +305,42 @@ TEST(Meshlets, RejectsInvalidInputAndLimits) {
     EXPECT_FALSE(Engine::build_meshlets(mesh));
 }
 
+TEST(Meshlets, KeepsImportedRenderSectionsAsHardMeshletBoundaries) {
+    Engine::Mesh mesh = Engine::Plane::createMesh();
+    mesh.renderSections = {
+        {.firstIndex = 0, .indexCount = 3, .materialIndex = 0},
+        {.firstIndex = 3, .indexCount = 3, .materialIndex = 0},
+    };
+    ASSERT_TRUE(Engine::build_meshlets(mesh));
+    ASSERT_EQ(mesh.renderSections.size(), 2u);
+    EXPECT_EQ(mesh.renderSections[0].firstMeshlet, 0u);
+    EXPECT_EQ(mesh.renderSections[0].meshletCount, 1u);
+    EXPECT_EQ(mesh.renderSections[1].firstMeshlet, 1u);
+    EXPECT_EQ(mesh.renderSections[1].meshletCount, 1u);
+}
+
+TEST(Meshlets, SpatiallySubdividesOnlyLargeImportedSections) {
+    Engine::Mesh mesh;
+    constexpr std::uint32_t triangleCount = Engine::MeshletBuildOptions::MaxTriangles * 2U + 1U;
+    mesh.vertices.reserve(triangleCount * 3U);
+    mesh.indices.reserve(triangleCount * 3U);
+    for (std::uint32_t triangle = 0; triangle < triangleCount; ++triangle) {
+        const std::uint32_t firstVertex = triangle * 3U;
+        mesh.vertices.push_back({.position = {static_cast<float>(triangle), 0.0F, 0.0F}});
+        mesh.vertices.push_back({.position = {static_cast<float>(triangle), 1.0F, 0.0F}});
+        mesh.vertices.push_back({.position = {static_cast<float>(triangle), 0.0F, 1.0F}});
+        mesh.indices.insert(mesh.indices.end(), {firstVertex, firstVertex + 1U, firstVertex + 2U});
+    }
+    mesh.renderSections.push_back({.firstIndex = 0, .indexCount = static_cast<std::uint32_t>(mesh.indices.size())});
+    Engine::subdivide_render_sections(mesh, 1U);
+    ASSERT_EQ(mesh.renderSections.size(), 3U);
+    EXPECT_EQ(mesh.renderSections[0].indexCount, Engine::MeshletBuildOptions::MaxTriangles * 3U);
+    EXPECT_EQ(mesh.renderSections[1].indexCount, Engine::MeshletBuildOptions::MaxTriangles * 3U);
+    EXPECT_EQ(mesh.renderSections[2].indexCount, 3U);
+    ASSERT_TRUE(Engine::build_meshlets(mesh));
+    for (const auto& section : mesh.renderSections) EXPECT_GT(section.meshletCount, 0U);
+}
+
 TEST(Meshlets, ProducesGlobalGpuPayloadWithoutChangingLocalGeometry) {
     Engine::Mesh mesh = Engine::Plane::createMesh();
     ASSERT_TRUE(Engine::build_meshlets(mesh));

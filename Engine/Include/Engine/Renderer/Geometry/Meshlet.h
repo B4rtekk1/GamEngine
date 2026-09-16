@@ -49,4 +49,14 @@ namespace Engine {
      */
     [[nodiscard]] bool build_meshlets(Mesh& mesh,
                                       MeshletBuildOptions options = {}) noexcept;
+
+    /**
+     * Splits large imported sections into spatially local, contiguous index
+     * ranges.  The index stream is reordered only inside each original
+     * section, so material ownership and the shared GPU geometry allocation
+     * are retained.  Each produced range targets @p targetMeshlets meshlets
+     * at the default meshlet triangle limit.
+     */
+    void subdivide_render_sections(Mesh& mesh,
+                                   std::uint32_t targetMeshlets = 32U) noexcept;
 } // namespace Engine

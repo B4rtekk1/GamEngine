@@ -565,6 +565,27 @@ namespace Engine::Assets {
             }
             if (normals == nullptr) generate_normals(mesh, vertexStart, indexStart);
             if (sourceTangents == nullptr && texCoords != nullptr) generate_tangents(mesh, vertexStart, indexStart);
+            AABB bounds{
+                .min = Vec3{std::numeric_limits<float>::max(), std::numeric_limits<float>::max(),
+                            std::numeric_limits<float>::max()},
+                .max = Vec3{std::numeric_limits<float>::lowest(), std::numeric_limits<float>::lowest(),
+                            std::numeric_limits<float>::lowest()},
+            };
+            for (std::size_t i = vertexStart; i < mesh.vertices.size(); ++i) {
+                const Vec3& position = mesh.vertices[i].position;
+                bounds.min.setX(std::min(bounds.min.x(), position.x()));
+                bounds.min.setY(std::min(bounds.min.y(), position.y()));
+                bounds.min.setZ(std::min(bounds.min.z(), position.z()));
+                bounds.max.setX(std::max(bounds.max.x(), position.x()));
+                bounds.max.setY(std::max(bounds.max.y(), position.y()));
+                bounds.max.setZ(std::max(bounds.max.z(), position.z()));
+            }
+            mesh.renderSections.push_back({
+                .firstIndex = static_cast<std::uint32_t>(indexStart),
+                .indexCount = static_cast<std::uint32_t>(mesh.indices.size() - indexStart),
+                .materialIndex = materialIndex,
+                .localBounds = bounds,
+            });
             return true;
         }
 
@@ -609,6 +630,9 @@ namespace Engine::Assets {
                     if (data->nodes[i].parent == nullptr && !append_node(*data, data->nodes[i], mesh)) return {};
                 }
             }
+            // Preserve primitive boundaries first, then partition only very
+            // large primitives into spatially local coarse-culling sections.
+            subdivide_render_sections(mesh);
             if (mesh.empty() || !build_meshlets(mesh)) return {};
             mesh.sourcePath = path;
             return std::make_shared<const Mesh>(std::move(mesh));

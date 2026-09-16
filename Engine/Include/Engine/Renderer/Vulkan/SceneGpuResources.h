@@ -27,6 +27,8 @@ namespace Engine {
             std::size_t batchIndex{0};
             std::uint32_t firstVertex{0};
             std::uint32_t vertexCount{0};
+            /// Imported render-section identity; keeps GPU-scene records distinct.
+            std::uint32_t sectionIndex{0};
             /// Instance data consumed only by VirtualWaterRenderer. It has no
             /// generic mesh draw or material-table allocation.
             bool waterOnly{false};

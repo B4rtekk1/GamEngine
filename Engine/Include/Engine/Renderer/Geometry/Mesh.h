@@ -43,6 +43,16 @@ namespace Engine {
             AABB localBounds{};
         };
 
+        /** A normal imported submesh, independently culled and materialized. */
+        struct RenderSection final {
+            std::uint32_t firstIndex{};
+            std::uint32_t indexCount{};
+            std::uint32_t firstMeshlet{};
+            std::uint32_t meshletCount{};
+            std::uint32_t materialIndex{};
+            AABB localBounds{};
+        };
+
         /**
          * @brief Stores one embedded RGBA image associated with the mesh.
          *
@@ -76,6 +86,9 @@ namespace Engine {
 
         /** Optional logical sub-draws, expressed in @ref indices coordinates. */
         std::vector<DrawRange> drawRanges;
+
+        /** Imported asset sections. Unlike drawRanges, these are ordinary geometry. */
+        std::vector<RenderSection> renderSections;
 
         /** Fine-grained geometry used by the GPU-driven mesh-shader path. */
         std::vector<Meshlet> meshlets;
