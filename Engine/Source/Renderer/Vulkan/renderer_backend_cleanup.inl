@@ -64,6 +64,8 @@
                 for (Buffer& buffer : visibleInstanceCountBuffers) buffer.destroy();
                 for (Buffer& buffer : visibleMeshletBuffers) buffer.destroy();
                 for (Buffer& buffer : visibleMeshletCountBuffers) buffer.destroy();
+                for (Buffer& buffer : meshletTaskIndirectBuffers) buffer.destroy();
+                for (Buffer& buffer : meshletTaskDrawCountBuffers) buffer.destroy();
                 for (Buffer& buffer : meshletCullingUniformBuffers) buffer.destroy();
                 for (Buffer& uniformBuffer : uniformBuffers) {
                     uniformBuffer.destroy();

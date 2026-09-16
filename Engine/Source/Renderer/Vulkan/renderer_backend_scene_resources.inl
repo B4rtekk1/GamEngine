@@ -1285,7 +1285,11 @@
                                    mesh.lod1IndexCount},
                 .lod = glm::uvec4{mesh.lod2IndexCount, mesh.firstMeshlet,
                                   mesh.meshletCount, 0U},
-                .clusters = glm::uvec4{mesh.firstMeshletCluster, mesh.meshletClusterRoot, 0U, 0U},
+                // z is the hierarchy-present flag. The meshlet culler uses
+                // it to select the descendant-range traversal; the node
+                // ranges themselves provide the exact bounds for each step.
+                .clusters = glm::uvec4{mesh.firstMeshletCluster, mesh.meshletClusterRoot,
+                                       mesh.meshletCount != 0U ? 1U : 0U, 0U},
             };
         }
 
@@ -1491,6 +1495,24 @@
                         .pBufferInfo = binding == 8 ? nullptr : &meshletInfos[binding]};
                 }
                 vkUpdateDescriptorSets(device, std::size(meshletWrites), meshletWrites, 0, nullptr);
+            }
+            if (meshletIndirectSets[frame] != VK_NULL_HANDLE) {
+                const VkDescriptorBufferInfo meshletIndirectInfos[] = {
+                    {visibleMeshletBuffers[frame].handle(), 0, VK_WHOLE_SIZE},
+                    {visibleMeshletCountBuffers[frame].handle(), 0, sizeof(std::uint32_t)},
+                    {meshletTaskIndirectBuffers[frame].handle(), 0,
+                     sizeof(VkDrawMeshTasksIndirectCommandEXT)},
+                    {meshletTaskDrawCountBuffers[frame].handle(), 0, sizeof(std::uint32_t)},
+                };
+                VkWriteDescriptorSet meshletIndirectWrites[4]{};
+                for (std::uint32_t binding = 0; binding < std::size(meshletIndirectWrites); ++binding) {
+                    meshletIndirectWrites[binding] = {.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+                        .dstSet = meshletIndirectSets[frame], .dstBinding = binding,
+                        .descriptorCount = 1, .descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+                        .pBufferInfo = &meshletIndirectInfos[binding]};
+                }
+                vkUpdateDescriptorSets(device, std::size(meshletIndirectWrites),
+                                       meshletIndirectWrites, 0, nullptr);
             }
 
             const auto updateGrassSet = [&](const VkDescriptorSet set,

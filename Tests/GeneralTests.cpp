@@ -346,6 +346,11 @@ TEST(Meshlets, BuildsBoundedHierarchyWithContiguousChildren) {
             EXPECT_LE(node.meshletCount, 4u);
         } else {
             EXPECT_LE(node.firstChild + node.childCount, mesh.meshletClusters.size());
+            const auto& firstChild = mesh.meshletClusters[node.firstChild];
+            const auto& lastChild = mesh.meshletClusters[node.firstChild + node.childCount - 1U];
+            EXPECT_EQ(node.firstMeshlet, firstChild.firstMeshlet);
+            EXPECT_EQ(node.firstMeshlet + node.meshletCount,
+                      lastChild.firstMeshlet + lastChild.meshletCount);
         }
     }
 }

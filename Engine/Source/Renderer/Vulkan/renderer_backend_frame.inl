@@ -509,11 +509,23 @@
                     static_cast<std::uint32_t>(sceneGpu.database.instances().size()), 1, 1);
                 const VkMemoryBarrier2 meshletBarrier{VK_STRUCTURE_TYPE_MEMORY_BARRIER_2, nullptr,
                     VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT,
-                    VK_PIPELINE_STAGE_2_MESH_SHADER_BIT_EXT,
+                    VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
                     VK_ACCESS_2_SHADER_STORAGE_READ_BIT};
                 const VkDependencyInfo meshletDependency{.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO,
                     .memoryBarrierCount = 1, .pMemoryBarriers = &meshletBarrier};
                 vkCmdPipelineBarrier2(commandBuffer, &meshletDependency);
+                vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, meshletIndirectPipeline);
+                const VkDescriptorSet meshletIndirectSet = meshletIndirectSets[currentFrame];
+                vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE,
+                                        meshletIndirectPipelineLayout, 0, 1, &meshletIndirectSet, 0, nullptr);
+                vkCmdDispatch(commandBuffer, 1, 1, 1);
+                const VkMemoryBarrier2 meshTaskIndirectBarrier{VK_STRUCTURE_TYPE_MEMORY_BARRIER_2, nullptr,
+                    VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT,
+                    VK_PIPELINE_STAGE_2_DRAW_INDIRECT_BIT | VK_PIPELINE_STAGE_2_MESH_SHADER_BIT_EXT,
+                    VK_ACCESS_2_INDIRECT_COMMAND_READ_BIT | VK_ACCESS_2_SHADER_STORAGE_READ_BIT};
+                const VkDependencyInfo meshTaskIndirectDependency{.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO,
+                    .memoryBarrierCount = 1, .pMemoryBarriers = &meshTaskIndirectBarrier};
+                vkCmdPipelineBarrier2(commandBuffer, &meshTaskIndirectDependency);
             }
             const ForwardPass& sceneForwardPass = msaa.enabled()
                 ? forwardPass

@@ -24,6 +24,10 @@ struct MeshletCullUniforms { float4x4 viewProjection; float3 cameraPosition; uin
 groupshared float4 instanceScale;
 groupshared uint clusterVisible;
 
+bool rangeContains(uint first, uint count, uint value) {
+    return value >= first && value - first < count;
+}
+
 bool outsideFrustum(float3 center, float radius) {
     for (uint plane = 0; plane < 6; ++plane)
         if (dot(culling.frustumPlanes[plane].xyz, center) + culling.frustumPlanes[plane].w < -radius) return true;
@@ -79,6 +83,42 @@ bool coneVisible(float4 cone, float3 center, bool uniformScale) {
     return dot(axis, toCamera) > threshold;
 }
 
+// Descend only through the branch that owns meshletId. Child and descendant
+// ranges are contiguous in the baked hierarchy, therefore this work is
+// bounded by hierarchy depth rather than meshlet count. Every visited node is
+// a coarse frustum/cone/Hi-Z rejection opportunity before fine culling.
+bool clusterPathVisible(GPUSceneMeshRecord mesh, uint meshletId,
+                        GPUSceneInstanceRecord instance, bool uniformScale) {
+    if (mesh.clusters.z == 0u || !rangeContains(mesh.lod.y, mesh.lod.z, meshletId)) return true;
+
+    uint nodeId = mesh.clusters.y;
+    [loop] for (uint depth = 0u; depth < 32u; ++depth) {
+        const GpuMeshletCluster node = clusters[nodeId];
+        const float3 center = mul(float4(node.bounds.xyz, 1.0), instance.worldMatrix).xyz;
+        const float radius = node.bounds.w * instanceScale.w;
+        if (outsideFrustum(center, radius) || !coneVisible(node.cone, center, uniformScale) ||
+            sphereOccluded(center, radius)) return false;
+        if (node.range.y == 0u) return true;
+
+        uint childId = 0xffffffffu;
+        [unroll] for (uint child = 0u; child < 8u; ++child) {
+            if (child >= node.range.y) break;
+            const uint candidateId = node.range.x + child;
+            const GpuMeshletCluster candidate = clusters[candidateId];
+            if (rangeContains(candidate.range.z, candidate.range.w, meshletId)) {
+                childId = candidateId;
+                break;
+            }
+        }
+        // CPU upload validates the hierarchy. Retaining a candidate on an
+        // invalid branch is conservative and avoids a false reject on corrupt
+        // streamed data.
+        if (childId == 0xffffffffu) return true;
+        nodeId = childId;
+    }
+    return true;
+}
+
 [numthreads(64, 1, 1)]
 [shader("compute")]
 void main(uint3 groupId : SV_GroupID, uint3 threadId : SV_GroupThreadID) {
@@ -97,9 +137,8 @@ void main(uint3 groupId : SV_GroupID, uint3 threadId : SV_GroupThreadID) {
     }
     GroupMemoryBarrierWithGroupSync();
 
-    // Test the hierarchy root before expanding its meshlets. This rejects a
-    // fully hidden building as one sphere/Hi-Z query instead of thousands of
-    // fine tests. Nodes are rebased to the global hierarchy stream on upload.
+    // Test the hierarchy root once before expanding. Fine culling descends
+    // through the remaining branch for each candidate meshlet below.
     if (threadId.x == 0) {
         clusterVisible = 1u;
         if (mesh.lod.z != 0u) {
@@ -110,7 +149,6 @@ void main(uint3 groupId : SV_GroupID, uint3 threadId : SV_GroupThreadID) {
                                       abs(instanceScale.x - instanceScale.z) < 1.0e-5;
             clusterVisible = !outsideFrustum(center, radius) &&
                              coneVisible(root.cone, center, uniformScale) &&
-                             !sphereTooSmall(center, radius) &&
                              !sphereOccluded(center, radius) ? 1u : 0u;
         }
     }
@@ -134,7 +172,10 @@ void main(uint3 groupId : SV_GroupID, uint3 threadId : SV_GroupThreadID) {
             meshlet = meshlets[meshletId];
             worldCenter = mul(float4(meshlet.bounds.xyz, 1.0), instance.worldMatrix).xyz;
             const float radius = meshlet.bounds.w * instanceScale.w;
-            visible = !outsideFrustum(worldCenter, radius);
+            const bool uniformScale = abs(instanceScale.x - instanceScale.y) < 1.0e-5 &&
+                                      abs(instanceScale.x - instanceScale.z) < 1.0e-5;
+            visible = clusterPathVisible(mesh, meshletId, instance, uniformScale) &&
+                      !outsideFrustum(worldCenter, radius);
             if (visible) visible = !sphereOccluded(worldCenter, radius);
         }
 

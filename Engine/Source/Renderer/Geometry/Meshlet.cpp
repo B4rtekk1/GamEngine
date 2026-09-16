@@ -186,6 +186,15 @@ namespace Engine {
                         parent.geometricError = std::max(parent.geometricError, node.geometricError);
                     }
                     parent.geometricError = std::max(parent.geometricError, parent.radius);
+                    // Internal nodes retain the contiguous descendant range.
+                    // GPU traversal uses it to select the child which owns a
+                    // candidate meshlet instead of treating the tree as a
+                    // root-only coarse-culling structure.
+                    const auto& firstChildNode = mesh.meshletClusters[level[first]];
+                    const auto& lastChildNode = mesh.meshletClusters[level[first + count - 1U]];
+                    parent.firstMeshlet = firstChildNode.firstMeshlet;
+                    parent.meshletCount = lastChildNode.firstMeshlet + lastChildNode.meshletCount -
+                                          parent.firstMeshlet;
                     parent.firstChild = childFirst;
                     parent.childCount = count;
                     parentLevel.push_back(static_cast<std::uint32_t>(mesh.meshletClusters.size()));

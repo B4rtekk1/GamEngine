@@ -216,6 +216,11 @@
         std::array<Buffer, MAX_FRAMES_IN_FLIGHT> visibleInstanceCountBuffers;
         std::array<Buffer, MAX_FRAMES_IN_FLIGHT> visibleMeshletBuffers;
         std::array<Buffer, MAX_FRAMES_IN_FLIGHT> visibleMeshletCountBuffers;
+        // One GPU-produced VkDrawMeshTasksIndirectCommandEXT plus its count.
+        // The mesh path consumes this directly; the indexed path owns a
+        // separate VkDrawIndexedIndirectCommand stream.
+        std::array<Buffer, MAX_FRAMES_IN_FLIGHT> meshletTaskIndirectBuffers;
+        std::array<Buffer, MAX_FRAMES_IN_FLIGHT> meshletTaskDrawCountBuffers;
         std::array<Buffer, MAX_FRAMES_IN_FLIGHT> meshletCullingUniformBuffers;
         // GPU-driven grass compaction: count -> prefix -> scatter -> indirect.
         std::array<Buffer, MAX_FRAMES_IN_FLIGHT> grassBinCountBuffers;
@@ -361,6 +366,7 @@
         VkDescriptorSetLayout cullingDescriptorSetLayout = VK_NULL_HANDLE;
         VkDescriptorSetLayout instanceCullingDescriptorSetLayout = VK_NULL_HANDLE;
         VkDescriptorSetLayout meshletCullingDescriptorSetLayout = VK_NULL_HANDLE;
+        VkDescriptorSetLayout meshletIndirectDescriptorSetLayout = VK_NULL_HANDLE;
         VkDescriptorSetLayout grassBuildDescriptorSetLayout = VK_NULL_HANDLE;
         VkDescriptorSetLayout grassDispatchBuildDescriptorSetLayout = VK_NULL_HANDLE;
         VkDescriptorSetLayout grassPrefixDescriptorSetLayout = VK_NULL_HANDLE;
@@ -380,6 +386,7 @@
         VkPipelineLayout cullingPipelineLayout = VK_NULL_HANDLE;
         VkPipelineLayout instanceCullingPipelineLayout = VK_NULL_HANDLE;
         VkPipelineLayout meshletCullingPipelineLayout = VK_NULL_HANDLE;
+        VkPipelineLayout meshletIndirectPipelineLayout = VK_NULL_HANDLE;
         VkPipelineLayout grassBuildPipelineLayout = VK_NULL_HANDLE;
         VkPipelineLayout grassDispatchBuildPipelineLayout = VK_NULL_HANDLE;
         VkPipelineLayout grassPrefixPipelineLayout = VK_NULL_HANDLE;
@@ -399,6 +406,7 @@
         VkPipeline cullingPipeline = VK_NULL_HANDLE;
         VkPipeline instanceCullingPipeline = VK_NULL_HANDLE;
         VkPipeline meshletCullingPipeline = VK_NULL_HANDLE;
+        VkPipeline meshletIndirectPipeline = VK_NULL_HANDLE;
         VkPipeline grassBuildPipeline = VK_NULL_HANDLE;
         VkPipeline grassDispatchBuildPipeline = VK_NULL_HANDLE;
         VkPipeline grassPrefixPipeline = VK_NULL_HANDLE;
@@ -416,6 +424,7 @@
         VkPipeline vsmPageCompactPipeline = VK_NULL_HANDLE;
         std::array<VkDescriptorSet, MAX_FRAMES_IN_FLIGHT> instanceCullSets{};
         std::array<VkDescriptorSet, MAX_FRAMES_IN_FLIGHT> meshletCullSets{};
+        std::array<VkDescriptorSet, MAX_FRAMES_IN_FLIGHT> meshletIndirectSets{};
         std::array<VkDescriptorSet, MAX_FRAMES_IN_FLIGHT> clusteredLightingSets{};
         std::array<VkDescriptorSet, MAX_FRAMES_IN_FLIGHT> sceneClusteredLightingSets{};
         std::array<VkDescriptorSet, MAX_FRAMES_IN_FLIGHT> vsmPageMarkingSets{};
