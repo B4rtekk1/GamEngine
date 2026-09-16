@@ -108,11 +108,7 @@ public:
      */
     void read(void* destination, VkDeviceSize size, VkDeviceSize offset = 0) const;
 
-    /**
-     * Uploads a subrange into an existing device-local buffer without waiting
-     * for the copy to finish. Temporary staging allocations are retained until
-     * their fences signal, so callers can safely continue recording frames.
-     */
+    /** Uploads a subrange through the central persistent upload ring. */
     void uploadDeviceLocal(const void* data, VkDeviceSize size, VkDeviceSize offset,
                            VkCommandPool commandPool, VkQueue queue) const;
 
@@ -155,20 +151,6 @@ private:
     void* mapped_ = nullptr;
     bool deviceAddressEnabled_ = false;
     mutable std::uint64_t readyTimeline_ = 0;
-
-    struct PendingUpload final {
-        std::unique_ptr<Buffer> staging;
-        VkCommandPool commandPool{VK_NULL_HANDLE};
-        VkCommandBuffer commandBuffer{VK_NULL_HANDLE};
-        VkFence fence{VK_NULL_HANDLE};
-    };
-    mutable std::vector<PendingUpload> pendingUploads_;
-
-    /// Reclaims completed asynchronous staging uploads.
-    void reapCompletedUploads() const noexcept;
-
-    /// Waits for and releases staging uploads before this buffer is destroyed.
-    void finishPendingUploads() noexcept;
 
     /**
      * @brief Creates a buffer with the requested memory properties.

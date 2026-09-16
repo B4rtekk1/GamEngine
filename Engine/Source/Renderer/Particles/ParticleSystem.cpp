@@ -1,4 +1,5 @@
 #include "Engine/Renderer/Particles/ParticleSystem.h"
+#include "Engine/Renderer/Vulkan/upload_context.h"
 
 #include <algorithm>
 #include <cmath>
@@ -318,60 +319,29 @@ void ParticleSystem::createQuadBuffer() {
 }
 
 void ParticleSystem::uploadInitialParticles() {
-    VkBuffer stagingBuffer = VK_NULL_HANDLE;
-    VmaAllocation stagingMemory = VK_NULL_HANDLE;
-    void* stagingMapped = nullptr;
-    VkCommandBuffer commandBuffer = VK_NULL_HANDLE;
     const VkDeviceSize size = sizeof(Particle) * maxParticles_;
-    try {
-        makeBuffer(allocator_, size, VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
-                   stagingBuffer, stagingMemory, &stagingMapped);
-        std::memset(stagingMapped, 0, static_cast<size_t>(size));
-        vmaFlushAllocation(allocator_, stagingMemory, 0, size);
-        VkCommandBufferAllocateInfo allocation{VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO};
-        allocation.commandPool = commandPool_;
-        allocation.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
-        allocation.commandBufferCount = 1;
-        if (vkAllocateCommandBuffers(device_, &allocation, &commandBuffer) != VK_SUCCESS) {
-            throw std::runtime_error("ParticleSystem: initial upload command allocation failed");
-        }
-        VkCommandBufferBeginInfo begin{VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
-        begin.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
-        if (vkBeginCommandBuffer(commandBuffer, &begin) != VK_SUCCESS) {
-            throw std::runtime_error("ParticleSystem: initial upload command begin failed");
-        }
-        const VkBufferCopy copy{0, 0, size};
-        vkCmdCopyBuffer(commandBuffer, stagingBuffer, particleBuffer_, 1, &copy);
-        if (vkEndCommandBuffer(commandBuffer) != VK_SUCCESS) {
-            throw std::runtime_error("ParticleSystem: initial upload command end failed");
-        }
-        VkFenceCreateInfo fenceInfo{VK_STRUCTURE_TYPE_FENCE_CREATE_INFO};
-        VkFence uploadFence = VK_NULL_HANDLE;
-        if (vkCreateFence(device_, &fenceInfo, nullptr, &uploadFence) != VK_SUCCESS) {
-            throw std::runtime_error("ParticleSystem: initial upload fence creation failed");
-        }
-        VkSubmitInfo submit{VK_STRUCTURE_TYPE_SUBMIT_INFO};
-        submit.commandBufferCount = 1;
-        submit.pCommandBuffers = &commandBuffer;
-        const VkResult submitResult = vkQueueSubmit(computeQueue_, 1, &submit, uploadFence);
-        const VkResult waitResult = submitResult == VK_SUCCESS
-            ? vkWaitForFences(device_, 1, &uploadFence, VK_TRUE, UINT64_MAX)
-            : submitResult;
-        vkDestroyFence(device_, uploadFence, nullptr);
-        if (waitResult != VK_SUCCESS) {
-            throw std::runtime_error("ParticleSystem: initial particle upload failed");
-        }
-    } catch (...) {
-        if (commandBuffer) vkFreeCommandBuffers(device_, commandPool_, 1, &commandBuffer);
-        if (stagingBuffer) vmaDestroyBuffer(allocator_, stagingBuffer, stagingMemory);
-        throw;
+    UploadContext* const upload = UploadContext::current();
+    if (upload == nullptr) {
+        throw std::logic_error("ParticleSystem initial upload requires the central UploadContext");
     }
-    vkFreeCommandBuffers(device_, commandPool_, 1, &commandBuffer);
-    vmaDestroyBuffer(allocator_, stagingBuffer, stagingMemory);
+    const bool ownsBatch = !upload->recording();
+    if (ownsBatch) upload->begin();
+    std::vector<std::byte> initialData(static_cast<size_t>(size));
+    upload->copyBuffer(particleBuffer_, initialData.data(), size);
+    readyTimeline_ = upload->pendingTicket().timelineValue;
+    if (ownsBatch) readyTimeline_ = upload->submit().timelineValue;
 }
 
 void ParticleSystem::destroy() {
     if (!device_) return;
+    // Destruction is a resource-lifetime boundary, not an upload-path stall:
+    // the transfer write must finish before its destination is released.
+    if (readyTimeline_ != 0) {
+        if (UploadContext* const upload = UploadContext::current(); upload != nullptr &&
+            upload->isSubmitted(readyTimeline_)) {
+            upload->wait(readyTimeline_);
+        }
+    }
     for (uint32_t target = 0; target < RenderTargets; ++target) {
         for (uint32_t frame = 0; frame < FramesInFlight; ++frame) {
             frameMapped_[target][frame] = nullptr;
@@ -387,6 +357,7 @@ void ParticleSystem::destroy() {
     vkDestroyDescriptorPool(device_, descriptorPool_, nullptr);
     vkDestroyDescriptorSetLayout(device_, descriptorSetLayout_, nullptr);
     vmaDestroyBuffer(allocator_, particleBuffer_, particleMemory_);
+    readyTimeline_ = 0;
     vmaDestroyBuffer(allocator_, quadBuffer_, quadMemory_);
     device_ = VK_NULL_HANDLE;
 }

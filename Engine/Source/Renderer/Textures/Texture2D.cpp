@@ -269,6 +269,9 @@ namespace Engine {
 
         Buffer staging;
         UploadContext *upload = UploadContext::current();
+        if (upload == nullptr) {
+            throw std::logic_error("Texture2D uploads require the central UploadContext");
+        }
         VkBuffer stagingBuffer = VK_NULL_HANDLE;
         VkDeviceSize stagingOffset = 0;
         VkCommandBuffer commandBuffer = VK_NULL_HANDLE;
@@ -468,6 +471,9 @@ namespace Engine {
 
         Buffer staging;
         UploadContext *upload = UploadContext::current();
+        if (upload == nullptr) {
+            throw std::logic_error("Cooked Texture2D uploads require the central UploadContext");
+        }
         VkBuffer stagingBuffer = VK_NULL_HANDLE;
         VkDeviceSize stagingOffset = 0;
         VkCommandBuffer commandBuffer = VK_NULL_HANDLE;

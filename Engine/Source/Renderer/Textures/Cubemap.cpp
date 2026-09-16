@@ -200,6 +200,9 @@ namespace Engine {
         VkDeviceMemory stagingMemory = VK_NULL_HANDLE;
         VkCommandBuffer commandBuffer = VK_NULL_HANDLE;
         UploadContext *const upload = UploadContext::current();
+        if (upload == nullptr) {
+            throw std::logic_error("Cubemap uploads require the central UploadContext");
+        }
         const bool ownsUploadBatch = upload != nullptr && !upload->recording();
         try {
             std::vector<uint16_t> halfPixels(rgbaPixels.size());

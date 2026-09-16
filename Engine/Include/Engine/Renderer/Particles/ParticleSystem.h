@@ -136,6 +136,12 @@ namespace Engine::Particles {
         [[nodiscard]] VkDescriptorSetLayout descriptorSetLayout() const noexcept {
             return descriptorSetLayout_;
         }
+        /// Upload dependency consumed by the first particle simulation pass.
+        [[nodiscard]] VkBuffer particleBuffer() const noexcept { return particleBuffer_; }
+        [[nodiscard]] VkDeviceSize particleBufferSize() const noexcept {
+            return sizeof(Particle) * static_cast<VkDeviceSize>(maxParticles_);
+        }
+        [[nodiscard]] std::uint64_t readyTimeline() const noexcept { return readyTimeline_; }
 
     private:
         void createBuffers();
@@ -157,6 +163,7 @@ namespace Engine::Particles {
         static constexpr uint32_t RenderTargets = 2;
         VkBuffer particleBuffer_{};
         VmaAllocation particleMemory_{};
+        std::uint64_t readyTimeline_{};
         std::array<std::array<VkBuffer, FramesInFlight>, RenderTargets> frameBuffers_{};
         std::array<VkBuffer, FramesInFlight> activeIndexBuffers_{};
         std::array<VmaAllocation, FramesInFlight> activeIndexMemories_{};

@@ -509,6 +509,13 @@
             importFrameUploadBuffer("Shadow culling", shadowCullingUniformBuffers[currentFrame]);
             importFrameUploadBuffer("Clustered lighting", clusteredLightingUniformBuffers[currentFrame]);
             importFrameUploadBuffer("Scene clustered lighting", sceneClusteredLightingUniformBuffers[currentFrame]);
+            if (particleSystem && particleSystem->particleBuffer() != VK_NULL_HANDLE) {
+                const auto particleBuffer = frameGraph.importBuffer("Particle state", particleSystem->particleBuffer(), {
+                    .size = particleSystem->particleBufferSize(), .usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT});
+                if (particleSystem->readyTimeline() != 0)
+                    frameGraph.markUploaded(particleBuffer, particleSystem->readyTimeline());
+                frameUploadBuffers.push_back(particleBuffer);
+            }
             std::vector<RenderGraph::TextureHandle> frameUploadTextures;
             const auto importFrameUploadTexture = [&](const char* name, const Texture2D& texture) {
                 if (!texture.valid()) return;

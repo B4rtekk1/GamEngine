@@ -5,7 +5,6 @@
 #include <cstring>
 #include <algorithm>
 #include <array>
-#include <memory>
 #include <string>
 #include <stdexcept>
 
@@ -31,13 +30,13 @@ namespace Engine {
         mapped_ = std::exchange(other.mapped_, nullptr);
         deviceAddressEnabled_ = std::exchange(other.deviceAddressEnabled_, false);
         readyTimeline_ = std::exchange(other.readyTimeline_, 0);
-        pendingUploads_ = std::move(other.pendingUploads_);
         return *this;
     }
 
     void Buffer::createDeviceLocal([[maybe_unused]] VkPhysicalDevice physicalDevice, VkDevice device,
                                    const void *data, VkDeviceSize size,
-                                   VkBufferUsageFlags usage, VkCommandPool commandPool, VkQueue queue,
+                                   VkBufferUsageFlags usage, [[maybe_unused]] VkCommandPool commandPool,
+                                   [[maybe_unused]] VkQueue queue,
                                    VmaAllocator allocator) {
         if (data == nullptr || size == 0) {
             throw std::invalid_argument("Buffer upload requires non-empty data");
@@ -61,7 +60,7 @@ namespace Engine {
             if (ownsBatch) { readyTimeline_ = upload->submit().timelineValue;
 }
         } else {
-            uploadDeviceLocal(data, size, 0, commandPool, queue);
+            throw std::logic_error("Device-local buffer uploads require the central UploadContext");
         }
     }
 
@@ -135,8 +134,8 @@ namespace Engine {
     }
 
     void Buffer::uploadDeviceLocal(const void *data, const VkDeviceSize size,
-                                   const VkDeviceSize offset, const VkCommandPool commandPool,
-                                   const VkQueue queue) const {
+                                   const VkDeviceSize offset, const VkCommandPool /*commandPool*/,
+                                   const VkQueue /*queue*/) const {
         if (data == nullptr || size == 0 || offset > size_ || size > size_ - offset ||
             device_ == VK_NULL_HANDLE || allocator_ == VK_NULL_HANDLE) {
             throw std::invalid_argument("Device-local buffer update is out of bounds");
@@ -151,94 +150,7 @@ namespace Engine {
 }
             return;
         }
-        reapCompletedUploads();
-
-        auto staging = std::make_unique<Buffer>();
-        staging->create({
-            device_, size, VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
-            VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
-            allocator_,
-        });
-        staging->update(data, size);
-
-        VkCommandBufferAllocateInfo allocateInfo{VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO};
-        allocateInfo.commandPool = commandPool;
-        allocateInfo.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
-        allocateInfo.commandBufferCount = 1;
-        VkCommandBuffer commandBuffer = VK_NULL_HANDLE;
-        if (vkAllocateCommandBuffers(device_, &allocateInfo, &commandBuffer) != VK_SUCCESS) {
-            throw std::runtime_error("Could not allocate device-local update command buffer");
-        }
-        VkCommandBufferBeginInfo beginInfo{VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
-        beginInfo.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
-        if (vkBeginCommandBuffer(commandBuffer, &beginInfo) != VK_SUCCESS) {
-            vkFreeCommandBuffers(device_, commandPool, 1, &commandBuffer);
-            throw std::runtime_error("Could not begin device-local buffer update");
-        }
-        const VkBufferCopy copy{.srcOffset = 0, .dstOffset = offset, .size = size};
-        vkCmdCopyBuffer(commandBuffer, staging->buffer_, buffer_, 1, &copy);
-        // The next graphics submission consumes this buffer as vertex data.
-        // Queue order alone does not make transfer writes visible to the
-        // vertex-input stage, which could otherwise render stale or partially
-        // updated terrain vertices during a sculpt stroke.
-        VkBufferMemoryBarrier2 visibilityBarrier{VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER_2};
-        visibilityBarrier.srcStageMask = VK_PIPELINE_STAGE_2_TRANSFER_BIT;
-        visibilityBarrier.srcAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT;
-        visibilityBarrier.dstStageMask = VK_PIPELINE_STAGE_2_VERTEX_INPUT_BIT;
-        visibilityBarrier.dstAccessMask = VK_ACCESS_2_VERTEX_ATTRIBUTE_READ_BIT;
-        visibilityBarrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-        visibilityBarrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-        visibilityBarrier.buffer = buffer_;
-        visibilityBarrier.offset = offset;
-        visibilityBarrier.size = size;
-        const VkDependencyInfo dependency{.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO,
-            .bufferMemoryBarrierCount = 1, .pBufferMemoryBarriers = &visibilityBarrier};
-        vkCmdPipelineBarrier2(commandBuffer, &dependency);
-        if (vkEndCommandBuffer(commandBuffer) != VK_SUCCESS) {
-            vkFreeCommandBuffers(device_, commandPool, 1, &commandBuffer);
-            throw std::runtime_error("Could not finish device-local buffer update");
-        }
-        VkFenceCreateInfo fenceInfo{VK_STRUCTURE_TYPE_FENCE_CREATE_INFO};
-        VkFence fence = VK_NULL_HANDLE;
-        if (vkCreateFence(device_, &fenceInfo, nullptr, &fence) != VK_SUCCESS) {
-            vkFreeCommandBuffers(device_, commandPool, 1, &commandBuffer);
-            throw std::runtime_error("Could not create device-local update fence");
-        }
-        VkSubmitInfo submitInfo{VK_STRUCTURE_TYPE_SUBMIT_INFO};
-        submitInfo.commandBufferCount = 1;
-        submitInfo.pCommandBuffers = &commandBuffer;
-        if (vkQueueSubmit(queue, 1, &submitInfo, fence) != VK_SUCCESS) {
-            vkDestroyFence(device_, fence, nullptr);
-            vkFreeCommandBuffers(device_, commandPool, 1, &commandBuffer);
-            throw std::runtime_error("Could not upload device-local buffer update");
-        }
-
-        pendingUploads_.push_back({std::move(staging), commandPool, commandBuffer, fence});
-    }
-
-    void Buffer::reapCompletedUploads() const noexcept {
-        if (device_ == VK_NULL_HANDLE) { return;
-}
-        std::erase_if(pendingUploads_, [this](PendingUpload &upload) {
-            if (vkGetFenceStatus(device_, upload.fence) != VK_SUCCESS) { return false;
-}
-            vkDestroyFence(device_, upload.fence, nullptr);
-            vkFreeCommandBuffers(device_, upload.commandPool, 1, &upload.commandBuffer);
-            return true;
-        });
-    }
-
-    void Buffer::finishPendingUploads() noexcept {
-        for (PendingUpload &upload: pendingUploads_) {
-            if (upload.fence != VK_NULL_HANDLE) {
-                vkWaitForFences(device_, 1, &upload.fence, VK_TRUE, UINT64_MAX);
-                vkDestroyFence(device_, upload.fence, nullptr);
-            }
-            if (upload.commandBuffer != VK_NULL_HANDLE) {
-                vkFreeCommandBuffers(device_, upload.commandPool, 1, &upload.commandBuffer);
-            }
-        }
-        pendingUploads_.clear();
+        throw std::logic_error("Device-local buffer uploads require the central UploadContext");
     }
 
     void Buffer::destroy() noexcept {
@@ -258,7 +170,6 @@ namespace Engine {
             }
             readyTimeline_ = 0;
         }
-        finishPendingUploads();
         if (device_ != VK_NULL_HANDLE) {
             if (buffer_ != VK_NULL_HANDLE) {
                 vmaDestroyBuffer(allocator_, buffer_, allocation_);
