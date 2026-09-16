@@ -162,6 +162,10 @@ namespace Engine {
         std::array<Mat4, ShadowMap::ClipLevelCount> cachedClipMatrices_{};
         std::array<bool, ShadowMap::ClipLevelCount> cachedClipMatricesValid_{};
         std::vector<std::uint32_t> pagesToRender_;
+        // Requests that could not be assigned a physical tile within the
+        // per-frame update budget. Keep them until they are rendered instead
+        // of depending on a later GPU feedback pass to rediscover them.
+        std::vector<std::uint32_t> deferredRequests_;
         std::vector<PendingPageCommit> pendingPageCommits_;
         std::uint32_t preparedFrameIndex_{};
         std::uint64_t cacheClock_{};
@@ -175,6 +179,16 @@ namespace Engine {
         std::vector<VkDescriptorSet> grassDescriptorSets_;
         std::vector<VkDescriptorSet> grassVelocityDescriptorSets_;
         std::vector<VkDescriptorSet> grassShadowDescriptorSets_;
+        // Per-frame-slot descriptor fingerprints. These setters are called
+        // while recording, so avoid rewriting an unchanged binding every frame.
+        mutable std::vector<VkDescriptorImageInfo> gtaoDescriptorCache_;
+        mutable std::vector<bool> gtaoDescriptorCacheValid_;
+        mutable std::vector<VkBuffer> grassVisibleDescriptorCache_;
+        mutable std::vector<VkBuffer> grassVelocityVisibleDescriptorCache_;
+        mutable std::vector<VkBuffer> grassShadowVisibleDescriptorCache_;
+        mutable std::vector<bool> grassVisibleDescriptorCacheValid_;
+        mutable std::vector<bool> grassVelocityVisibleDescriptorCacheValid_;
+        mutable std::vector<bool> grassShadowVisibleDescriptorCacheValid_;
         std::vector<std::unique_ptr<Buffer>> pageTableBuffers_;
         VkPipelineLayout pipelineLayout_{VK_NULL_HANDLE};
         VkPipeline pipeline_{VK_NULL_HANDLE};

@@ -33,6 +33,10 @@ namespace Engine {
         VkDescriptorPool pool_ = VK_NULL_HANDLE;
         static constexpr std::uint32_t FramesInFlight = 3;
         std::array<VkDescriptorSet, FramesInFlight> sets_{};
+        // A frame slot is fence-safe when record() is called.  Keep its last
+        // binding so steady-state post processing performs no descriptor write.
+        std::array<VkDescriptorImageInfo, FramesInFlight> cachedSources_{};
+        std::array<bool, FramesInFlight> sourceDescriptorsValid_{};
         VkFramebuffer framebuffer_ = VK_NULL_HANDLE;
         bool initialized_ = false;
     };

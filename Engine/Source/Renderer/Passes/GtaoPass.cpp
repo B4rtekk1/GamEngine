@@ -268,11 +268,17 @@ void GtaoPass::buildLinearDepth(VkCommandBuffer cmd, uint32_t frame, VkImageView
             VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT, 0, linearDepthMipCount_);
     VkDescriptorImageInfo src{depthSampler, depth, VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL},
         dst{VK_NULL_HANDLE, linearDepthMipViews_[0], VK_IMAGE_LAYOUT_GENERAL};
+    const auto& cachedSource = linearizeSources_[frame];
+    if (!linearizeDescriptorsValid_[frame] || cachedSource.sampler != src.sampler ||
+        cachedSource.imageView != src.imageView || cachedSource.imageLayout != src.imageLayout) {
     std::array<VkWriteDescriptorSet, 2> w{{{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr, linearizeSets_[frame], 0,
                                             0, 1, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &src, nullptr, nullptr},
                                            {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr, linearizeSets_[frame], 1,
                                             0, 1, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, &dst, nullptr, nullptr}}};
     vkUpdateDescriptorSets(device_, 2, w.data(), 0, nullptr);
+    linearizeSources_[frame] = src;
+    linearizeDescriptorsValid_[frame] = true;
+    }
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, depthPipelines_[0]);
     auto set = linearizeSets_[frame];
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, depthPipelineLayouts_[0], 0, 1, &set, 0, nullptr);
@@ -321,7 +327,16 @@ void GtaoPass::record(VkCommandBuffer cmd, uint32_t frame, uint32_t sampleIndex,
             w.push_back({VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr, computeSets_[p][frame], b, 0, 1,
                          b < in.size() ? VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER : VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,
                          &infos[b], nullptr, nullptr});
-        vkUpdateDescriptorSets(device_, uint32_t(w.size()), w.data(), 0, nullptr);
+        const auto same = [](const VkDescriptorImageInfo& a, const VkDescriptorImageInfo& b) {
+            return a.sampler == b.sampler && a.imageView == b.imageView && a.imageLayout == b.imageLayout;
+        };
+        auto& cached = computeDescriptorCache_[p][frame];
+        const bool changed = cached.size() != infos.size() ||
+            !std::equal(cached.begin(), cached.end(), infos.begin(), same);
+        if (changed) {
+            vkUpdateDescriptorSets(device_, uint32_t(w.size()), w.data(), 0, nullptr);
+            cached = std::move(infos);
+        }
     };
     auto dispatch = [&](uint32_t p, auto& constants, VkExtent2D extent) {
         auto set = computeSets_[p][frame];
@@ -378,6 +393,10 @@ void GtaoPass::reset() noexcept {
     initialized_ = false;
 }
 void GtaoPass::destroy() noexcept {
+    linearizeSources_.fill({});
+    linearizeDescriptorsValid_.fill(false);
+    for (auto& passCaches : computeDescriptorCache_)
+        for (auto& cache : passCaches) cache.clear();
     if (device_) {
         if (computeDescriptorPool_)
             vkDestroyDescriptorPool(device_, computeDescriptorPool_, nullptr);

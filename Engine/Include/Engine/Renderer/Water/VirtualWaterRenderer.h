@@ -178,14 +178,17 @@ private:
     VkDescriptorPool descriptorPool_{VK_NULL_HANDLE};
     std::array<VkDescriptorSet, FramesInFlight> cullSets_{};
     std::array<VkDescriptorSet, FramesInFlight> buildSets_{};
-    std::array<VkDescriptorSet, FramesInFlight> drawSets_{};
+    // State-dependent passes have two prewritten variants per frame slot:
+    // [0] reads stateCells_, [1] reads stateCellsScratch_.  Rendering consumes
+    // the inverse (the simulation output) variant after recordState() flips.
+    std::array<std::array<VkDescriptorSet, FramesInFlight>, 2> drawSets_{};
     std::array<VkDescriptorSet, FramesInFlight> classifySets_{};
     std::array<VkDescriptorSet, FramesInFlight> buildDispatchSets_{};
-    std::array<VkDescriptorSet, FramesInFlight> shadeSets_{};
+    std::array<std::array<VkDescriptorSet, FramesInFlight>, 2> shadeSets_{};
     std::array<VkDescriptorSet, FramesInFlight> compositeSets_{};
-    std::array<VkDescriptorSet, FramesInFlight> stateSets_{};
+    std::array<std::array<VkDescriptorSet, FramesInFlight>, 2> stateSets_{};
     std::array<VkDescriptorSet, FramesInFlight> farSets_{};
-    std::array<VkDescriptorSet, FramesInFlight> authoredSets_{};
+    std::array<std::array<VkDescriptorSet, FramesInFlight>, 2> authoredSets_{};
 
     VkPipelineLayout cullPipelineLayout_{VK_NULL_HANDLE};
     VkPipelineLayout buildPipelineLayout_{VK_NULL_HANDLE};

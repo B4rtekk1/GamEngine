@@ -289,7 +289,11 @@ void VirtualWaterRenderer::createDescriptors(VkDescriptorSetLayout sceneLayout) 
     pool.maxSets=FramesInFlight*10U+64U;pool.poolSizeCount=static_cast<std::uint32_t>(sizes.size());pool.pPoolSizes=sizes.data();
     if(vkCreateDescriptorPool(device_,&pool,nullptr,&descriptorPool_)!=VK_SUCCESS)throw std::runtime_error("Could not create virtual-water descriptor pool");
     auto alloc=[&](VkDescriptorSetLayout layout,auto& sets){std::array<VkDescriptorSetLayout,FramesInFlight> ls{};ls.fill(layout);VkDescriptorSetAllocateInfo a{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};a.descriptorPool=descriptorPool_;a.descriptorSetCount=FramesInFlight;a.pSetLayouts=ls.data();if(vkAllocateDescriptorSets(device_,&a,sets.data())!=VK_SUCCESS)throw std::runtime_error("Could not allocate virtual-water descriptor sets");};
-    alloc(cullLayout_,cullSets_);alloc(buildLayout_,buildSets_);alloc(drawLayout_,drawSets_);alloc(classifyLayout_,classifySets_);alloc(buildDispatchLayout_,buildDispatchSets_);alloc(shadeLayout_,shadeSets_);alloc(compositeLayout_,compositeSets_);alloc(stateLayout_,stateSets_);alloc(farLayout_,farSets_);alloc(authoredLayout_,authoredSets_);
+    alloc(cullLayout_,cullSets_);alloc(buildLayout_,buildSets_);alloc(classifyLayout_,classifySets_);alloc(buildDispatchLayout_,buildDispatchSets_);alloc(compositeLayout_,compositeSets_);alloc(farLayout_,farSets_);
+    for (auto& sets : drawSets_) alloc(drawLayout_, sets);
+    for (auto& sets : shadeSets_) alloc(shadeLayout_, sets);
+    for (auto& sets : stateSets_) alloc(stateLayout_, sets);
+    for (auto& sets : authoredSets_) alloc(authoredLayout_, sets);
 
     VkPipelineLayoutCreateInfo pli{VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
     std::array cullLayouts{sceneLayout,cullLayout_}; pli.setLayoutCount=2;pli.pSetLayouts=cullLayouts.data();
@@ -397,11 +401,12 @@ void VirtualWaterRenderer::writeDescriptors() {
         for(std::uint32_t i=0;i<4;++i)writeBuffer(buildWrites[i],buildSets_[frame],i,i==3?VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER:VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,&buildBuffers[i]);
         vkUpdateDescriptorSets(device_,4,buildWrites.data(),0,nullptr);
 
-        const VkBuffer stateRead=stateCurrentScratch_?stateCellsScratch_.handle():stateCells_.handle();
-        const VkBuffer stateWrite=stateCurrentScratch_?stateCells_.handle():stateCellsScratch_.handle();
+        for (std::uint32_t stateVariant = 0; stateVariant < 2; ++stateVariant) {
+        const VkBuffer stateRead=stateVariant ? stateCellsScratch_.handle() : stateCells_.handle();
+        const VkBuffer stateWrite=stateVariant ? stateCells_.handle() : stateCellsScratch_.handle();
         const VkDescriptorBufferInfo drawBuffers[]{bufferInfo(pages_.handle()),bufferInfo(visiblePages_[frame].handle()),bufferInfo(statePageTable_.handle()),bufferInfo(statePhysical_.handle()),bufferInfo(stateWrite)};
         std::array<VkWriteDescriptorSet,5> drawWrites{};
-        for(std::uint32_t i=0;i<5;++i)writeBuffer(drawWrites[i],drawSets_[frame],i,VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,&drawBuffers[i]);
+        for(std::uint32_t i=0;i<5;++i)writeBuffer(drawWrites[i],drawSets_[stateVariant][frame],i,VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,&drawBuffers[i]);
         vkUpdateDescriptorSets(device_,5,drawWrites.data(),0,nullptr);
 
         const VkDescriptorImageInfo metaInfo{meta_.sampler(),meta_.imageView(),VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
@@ -431,7 +436,7 @@ void VirtualWaterRenderer::writeDescriptors() {
             bufferInfo(frameBudgetBuffer_[frame].handle(),sizeof(GPUWaterFrameBudget))};
         std::array<VkWriteDescriptorSet,10> stateWrites{};
         for(std::uint32_t i=0;i<stateWrites.size();++i)
-            writeBuffer(stateWrites[i],stateSets_[frame],i,VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,&stateBuffers[i]);
+            writeBuffer(stateWrites[i],stateSets_[stateVariant][frame],i,VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,&stateBuffers[i]);
         vkUpdateDescriptorSets(device_,static_cast<std::uint32_t>(stateWrites.size()),stateWrites.data(),0,nullptr);
 
         const VkDescriptorImageInfo shadeImages[]{{surface_.sampler(),surface_.imageView(),VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL},{meta_.sampler(),meta_.imageView(),VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL},opaqueColor_,opaqueDepth_};
@@ -441,20 +446,20 @@ void VirtualWaterRenderer::writeDescriptors() {
         const VkDescriptorImageInfo waterVelocity{velocity_.sampler(),velocity_.imageView(),VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
         const VkDescriptorBufferInfo shadeBuffers[]{bufferInfo(tileLists_[frame].handle()),bufferInfo(tileSettingsBuffer_[frame].handle(),sizeof(GPUWaterTileSettings)),bufferInfo(statePageTable_.handle()),bufferInfo(statePhysical_.handle()),bufferInfo(pages_.handle()),bufferInfo(stateWrite)};
         std::array<VkWriteDescriptorSet,15> shadeWrites{};
-        for(std::uint32_t i=0;i<4;++i)writeImage(shadeWrites[i],shadeSets_[frame],i,VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,&shadeImages[i]);
-        writeBuffer(shadeWrites[4],shadeSets_[frame],4,VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,&shadeBuffers[0]);
-        writeImage(shadeWrites[5],shadeSets_[frame],5,VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,&lightingStorage);
-        writeBuffer(shadeWrites[6],shadeSets_[frame],6,VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,&shadeBuffers[1]);
-        writeBuffer(shadeWrites[7],shadeSets_[frame],7,VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,&shadeBuffers[2]);
-        writeBuffer(shadeWrites[8],shadeSets_[frame],8,VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,&shadeBuffers[3]);
-        writeBuffer(shadeWrites[9],shadeSets_[frame],9,VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,&shadeBuffers[4]);
-        writeBuffer(shadeWrites[10],shadeSets_[frame],10,VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,&shadeBuffers[5]);
+        for(std::uint32_t i=0;i<4;++i)writeImage(shadeWrites[i],shadeSets_[stateVariant][frame],i,VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,&shadeImages[i]);
+        writeBuffer(shadeWrites[4],shadeSets_[stateVariant][frame],4,VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,&shadeBuffers[0]);
+        writeImage(shadeWrites[5],shadeSets_[stateVariant][frame],5,VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,&lightingStorage);
+        writeBuffer(shadeWrites[6],shadeSets_[stateVariant][frame],6,VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,&shadeBuffers[1]);
+        writeBuffer(shadeWrites[7],shadeSets_[stateVariant][frame],7,VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,&shadeBuffers[2]);
+        writeBuffer(shadeWrites[8],shadeSets_[stateVariant][frame],8,VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,&shadeBuffers[3]);
+        writeBuffer(shadeWrites[9],shadeSets_[stateVariant][frame],9,VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,&shadeBuffers[4]);
+        writeBuffer(shadeWrites[10],shadeSets_[stateVariant][frame],10,VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,&shadeBuffers[5]);
         const VkDescriptorImageInfo sssrDepthInfo{sssrDepth_.sampler(),sssrDepth_.fullView(),VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
-        writeImage(shadeWrites[11],shadeSets_[frame],11,VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,&sssrDepthInfo);
+        writeImage(shadeWrites[11],shadeSets_[stateVariant][frame],11,VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,&sssrDepthInfo);
         const VkDescriptorBufferInfo shadeBudget=bufferInfo(frameBudgetBuffer_[frame].handle(),sizeof(GPUWaterFrameBudget));
-        writeBuffer(shadeWrites[12],shadeSets_[frame],12,VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,&shadeBudget);
-        writeImage(shadeWrites[13],shadeSets_[frame],13,VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,&previousLighting);
-        writeImage(shadeWrites[14],shadeSets_[frame],14,VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,&waterVelocity);
+        writeBuffer(shadeWrites[12],shadeSets_[stateVariant][frame],12,VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,&shadeBudget);
+        writeImage(shadeWrites[13],shadeSets_[stateVariant][frame],13,VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,&previousLighting);
+        writeImage(shadeWrites[14],shadeSets_[stateVariant][frame],14,VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,&waterVelocity);
         vkUpdateDescriptorSets(device_,static_cast<std::uint32_t>(shadeWrites.size()),shadeWrites.data(),0,nullptr);
 
         const VkDescriptorBufferInfo farBuffer=bufferInfo(farOceanConfig_.handle(),sizeof(GPUFarOceanConfig));VkWriteDescriptorSet farWrite{};
@@ -462,9 +467,10 @@ void VirtualWaterRenderer::writeDescriptors() {
 
         const VkDescriptorBufferInfo authoredBuffers[]{bufferInfo(authoredWaterConfig_.handle(),sizeof(GPUAuthoredWaterConfig)),bufferInfo(pages_.handle()),bufferInfo(statePageTable_.handle()),bufferInfo(statePhysical_.handle()),bufferInfo(stateWrite)};
         std::array<VkWriteDescriptorSet,5> authoredWrites{};
-        writeBuffer(authoredWrites[0],authoredSets_[frame],0,VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,&authoredBuffers[0]);
-        for(std::uint32_t i=1;i<5;++i)writeBuffer(authoredWrites[i],authoredSets_[frame],i,VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,&authoredBuffers[i]);
+        writeBuffer(authoredWrites[0],authoredSets_[stateVariant][frame],0,VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,&authoredBuffers[0]);
+        for(std::uint32_t i=1;i<5;++i)writeBuffer(authoredWrites[i],authoredSets_[stateVariant][frame],i,VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,&authoredBuffers[i]);
         vkUpdateDescriptorSets(device_,5,authoredWrites.data(),0,nullptr);
+        }
 
         const VkDescriptorImageInfo compositeImages[]{opaqueColor_,{lighting_[frame].sampler(),lighting_[frame].imageView(),VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL},{meta_.sampler(),meta_.imageView(),VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL},opaqueDepth_,{surface_.sampler(),surface_.imageView(),VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL}};
         const VkDescriptorBufferInfo underwaterBuffer=bufferInfo(underwaterConfig_[frame].handle(),sizeof(GPUWaterUnderwaterConfig));
@@ -774,26 +780,7 @@ void VirtualWaterRenderer::recordState(const VkCommandBuffer commandBuffer,
     }
     pendingInteractions_.clear();
 
-    // FramesInFlight is three, therefore frame-slot parity cannot represent temporal
-    // ping-pong. Update only the current, fence-safe descriptor sets from the actual
-    // committed state buffer. The simulation writes the other atlas.
-    const VkBuffer readBuffer = stateCurrentScratch_ ? stateCellsScratch_.handle() : stateCells_.handle();
-    const VkBuffer writeBufferHandle = stateCurrentScratch_ ? stateCells_.handle() : stateCellsScratch_.handle();
-    const VkDescriptorBufferInfo readInfo{readBuffer, 0, VK_WHOLE_SIZE};
-    const VkDescriptorBufferInfo writeInfo{writeBufferHandle, 0, VK_WHOLE_SIZE};
-    std::array<VkWriteDescriptorSet, 5> writes{};
-    auto setStorage = [](VkWriteDescriptorSet& w, VkDescriptorSet set, std::uint32_t binding,
-                         const VkDescriptorBufferInfo* info) {
-        w = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
-        w.dstSet = set; w.dstBinding = binding; w.descriptorCount = 1;
-        w.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER; w.pBufferInfo = info;
-    };
-    setStorage(writes[0], stateSets_[frameIndex], 7, &readInfo);
-    setStorage(writes[1], stateSets_[frameIndex], 8, &writeInfo);
-    setStorage(writes[2], drawSets_[frameIndex], 4, &writeInfo);
-    setStorage(writes[3], shadeSets_[frameIndex], 10, &writeInfo);
-    setStorage(writes[4], authoredSets_[frameIndex], 4, &writeInfo);
-    vkUpdateDescriptorSets(device_, static_cast<std::uint32_t>(writes.size()), writes.data(), 0, nullptr);
+    const std::uint32_t stateVariant = stateCurrentScratch_ ? 1U : 0U;
 
     const StatePush push{
         .eventCount = eventCount,
@@ -802,7 +789,7 @@ void VirtualWaterRenderer::recordState(const VkCommandBuffer commandBuffer,
         .pad = 0U,
         .deltaTime = std::clamp(deltaTime, 0.0F, 0.1F),
     };
-    const std::array descriptorSets{sceneSet, stateSets_[frameIndex]};
+    const std::array descriptorSets{sceneSet, stateSets_[stateVariant][frameIndex]};
     vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, statePipelineLayout_,
                             0, static_cast<std::uint32_t>(descriptorSets.size()),
                             descriptorSets.data(), 0, nullptr);
@@ -891,7 +878,7 @@ void VirtualWaterRenderer::recordPrepass(VkCommandBuffer cmd, std::uint32_t fram
 
     if (pageCount_ != 0U) {
         vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, prepassPipeline_.handle());
-        const std::array sets{sceneSet, drawSets_[frame]};
+        const std::array sets{sceneSet, drawSets_[stateCurrentScratch_ ? 1U : 0U][frame]};
         vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, prepassPipeline_.layout(),
                                 0, static_cast<std::uint32_t>(sets.size()), sets.data(), 0, nullptr);
         VkDeviceSize offset = 0;
@@ -906,7 +893,7 @@ void VirtualWaterRenderer::recordPrepass(VkCommandBuffer cmd, std::uint32_t fram
     // prepass here; their expensive optics now run through the same tile scheduler.
     if (authoredWaterActive_ && authoredPrepassPipeline_.handle() != VK_NULL_HANDLE && authoredWaterDraw.valid()) {
         vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, authoredPrepassPipeline_.handle());
-        const std::array authoredDescriptorSets{sceneSet, authoredSets_[frame]};
+        const std::array authoredDescriptorSets{sceneSet, authoredSets_[stateCurrentScratch_ ? 1U : 0U][frame]};
         vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, authoredPrepassPipeline_.layout(),
                                 0, static_cast<std::uint32_t>(authoredDescriptorSets.size()),
                                 authoredDescriptorSets.data(), 0, nullptr);
@@ -1008,7 +995,7 @@ void VirtualWaterRenderer::recordAdaptiveShading(VkCommandBuffer cmd, std::uint3
     vkCmdPipelineBarrier2(cmd,&clearLightingDependency);
 
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, shadePipeline_);
-    const std::array sets{sceneSet, shadeSets_[frame]};
+    const std::array sets{sceneSet, shadeSets_[stateCurrentScratch_ ? 1U : 0U][frame]};
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, shadePipelineLayout_,
                             0, static_cast<std::uint32_t>(sets.size()), sets.data(), 0, nullptr);
     for (std::uint32_t tier = 0; tier < 4; ++tier) {
@@ -1218,14 +1205,14 @@ void VirtualWaterRenderer::destroy() noexcept {
 
     cullSets_.fill(VK_NULL_HANDLE);
     buildSets_.fill(VK_NULL_HANDLE);
-    drawSets_.fill(VK_NULL_HANDLE);
+    for (auto& sets : drawSets_) sets.fill(VK_NULL_HANDLE);
     classifySets_.fill(VK_NULL_HANDLE);
     buildDispatchSets_.fill(VK_NULL_HANDLE);
-    shadeSets_.fill(VK_NULL_HANDLE);
+    for (auto& sets : shadeSets_) sets.fill(VK_NULL_HANDLE);
     compositeSets_.fill(VK_NULL_HANDLE);
-    stateSets_.fill(VK_NULL_HANDLE);
+    for (auto& sets : stateSets_) sets.fill(VK_NULL_HANDLE);
     farSets_.fill(VK_NULL_HANDLE);
-    authoredSets_.fill(VK_NULL_HANDLE);
+    for (auto& sets : authoredSets_) sets.fill(VK_NULL_HANDLE);
     instanceBuffers_.fill(VK_NULL_HANDLE);
     cullingUniformBuffers_.fill(VK_NULL_HANDLE);
     previousHiZ_ = {};

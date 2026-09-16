@@ -183,6 +183,14 @@ void ShadowPass::create(VkPhysicalDevice physicalDevice, VkDevice device,
         grassDescriptorSets_.resize(frameCount);
         grassVelocityDescriptorSets_.resize(frameCount);
         grassShadowDescriptorSets_.resize(frameCount);
+        gtaoDescriptorCache_.resize(frameCount);
+        gtaoDescriptorCacheValid_.assign(frameCount, false);
+        grassVisibleDescriptorCache_.resize(frameCount);
+        grassVelocityVisibleDescriptorCache_.resize(frameCount);
+        grassShadowVisibleDescriptorCache_.resize(frameCount);
+        grassVisibleDescriptorCacheValid_.assign(frameCount, false);
+        grassVelocityVisibleDescriptorCacheValid_.assign(frameCount, false);
+        grassShadowVisibleDescriptorCacheValid_.assign(frameCount, false);
         VkDescriptorSetAllocateInfo allocateInfo{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};
         allocateInfo.descriptorPool = descriptorPool_;
         std::vector<VkDescriptorSet> allDescriptorSets(frameCount * 4);
@@ -454,10 +462,15 @@ void ShadowPass::create(VkPhysicalDevice physicalDevice, VkDevice device,
 
 void ShadowPass::setGtaoTexture(const std::uint32_t frameIndex,
                                 const VkDescriptorImageInfo& texture) const {
+    const auto& cached = gtaoDescriptorCache_.at(frameIndex);
+    if (gtaoDescriptorCacheValid_.at(frameIndex) && cached.sampler == texture.sampler &&
+        cached.imageView == texture.imageView && cached.imageLayout == texture.imageLayout) return;
     const VkDescriptorSet set = descriptorSets_.at(frameIndex);
     const VkWriteDescriptorSet write{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr, set, 16, 0, 1,
                                      VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &texture, nullptr, nullptr};
     vkUpdateDescriptorSets(device_, 1, &write, 0, nullptr);
+    gtaoDescriptorCache_[frameIndex] = texture;
+    gtaoDescriptorCacheValid_[frameIndex] = true;
 }
 
 void ShadowPass::updateDescriptors(
@@ -489,6 +502,11 @@ void ShadowPass::updateDescriptors(
     }
 
     for (std::uint32_t frame = 0; frame < frameCount; ++frame) {
+        // This bulk update overwrites the grass binding subsequently managed
+        // by the record-time setters below.
+        grassVisibleDescriptorCacheValid_[frame] = false;
+        grassVelocityVisibleDescriptorCacheValid_[frame] = false;
+        grassShadowVisibleDescriptorCacheValid_[frame] = false;
         const VkDescriptorBufferInfo uniform{uniformBuffers[frame], 0, uniformBufferRange};
         const VkDescriptorBufferInfo material{materialBuffers[frame], 0, VK_WHOLE_SIZE};
         const VkDescriptorBufferInfo pageTable{pageTableBuffers_[frame]->handle(), 0, VK_WHOLE_SIZE};
@@ -610,6 +628,14 @@ void ShadowPass::destroy() noexcept {
     grassDescriptorSets_.clear();
     grassVelocityDescriptorSets_.clear();
     grassShadowDescriptorSets_.clear();
+    gtaoDescriptorCache_.clear();
+    gtaoDescriptorCacheValid_.clear();
+    grassVisibleDescriptorCache_.clear();
+    grassVelocityVisibleDescriptorCache_.clear();
+    grassShadowVisibleDescriptorCache_.clear();
+    grassVisibleDescriptorCacheValid_.clear();
+    grassVelocityVisibleDescriptorCacheValid_.clear();
+    grassShadowVisibleDescriptorCacheValid_.clear();
     pageTableBuffers_.clear();
     shadowMap_ = nullptr;
     atlasInitialized_ = false;
@@ -636,29 +662,41 @@ VkDescriptorSet ShadowPass::grassShadowDescriptorSet(const std::uint32_t frameIn
 
 void ShadowPass::setGrassVisibleInstances(const std::uint32_t frameIndex,
                                           const VkBuffer visibleInstances) const {
+    if (grassVisibleDescriptorCacheValid_.at(frameIndex) &&
+        grassVisibleDescriptorCache_.at(frameIndex) == visibleInstances) return;
     const VkDescriptorBufferInfo info{visibleInstances, 0, VK_WHOLE_SIZE};
     const VkWriteDescriptorSet write{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr,
                                      grassDescriptorSets_.at(frameIndex), 6, 0, 1,
                                      VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, nullptr, &info, nullptr};
     vkUpdateDescriptorSets(device_, 1, &write, 0, nullptr);
+    grassVisibleDescriptorCache_[frameIndex] = visibleInstances;
+    grassVisibleDescriptorCacheValid_[frameIndex] = true;
 }
 
 void ShadowPass::setGrassVelocityVisibleInstances(const std::uint32_t frameIndex,
                                                   const VkBuffer visibleInstances) const {
+    if (grassVelocityVisibleDescriptorCacheValid_.at(frameIndex) &&
+        grassVelocityVisibleDescriptorCache_.at(frameIndex) == visibleInstances) return;
     const VkDescriptorBufferInfo info{visibleInstances, 0, VK_WHOLE_SIZE};
     const VkWriteDescriptorSet write{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr,
                                      grassVelocityDescriptorSets_.at(frameIndex), 6, 0, 1,
                                      VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, nullptr, &info, nullptr};
     vkUpdateDescriptorSets(device_, 1, &write, 0, nullptr);
+    grassVelocityVisibleDescriptorCache_[frameIndex] = visibleInstances;
+    grassVelocityVisibleDescriptorCacheValid_[frameIndex] = true;
 }
 
 void ShadowPass::setGrassShadowVisibleInstances(const std::uint32_t frameIndex,
                                                 const VkBuffer visibleInstances) const {
+    if (grassShadowVisibleDescriptorCacheValid_.at(frameIndex) &&
+        grassShadowVisibleDescriptorCache_.at(frameIndex) == visibleInstances) return;
     const VkDescriptorBufferInfo info{visibleInstances, 0, VK_WHOLE_SIZE};
     const VkWriteDescriptorSet write{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr,
                                      grassShadowDescriptorSets_.at(frameIndex), 6, 0, 1,
                                      VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, nullptr, &info, nullptr};
     vkUpdateDescriptorSets(device_, 1, &write, 0, nullptr);
+    grassShadowVisibleDescriptorCache_[frameIndex] = visibleInstances;
+    grassShadowVisibleDescriptorCacheValid_[frameIndex] = true;
 }
 
 std::uint32_t ShadowPass::virtualPageIndex(const std::uint32_t level,
@@ -674,6 +712,7 @@ void ShadowPass::invalidateCache() noexcept {
     physicalPages_.fill({});
     cachedClipMatricesValid_.fill(false);
     pagesToRender_.clear();
+    deferredRequests_.clear();
     pendingPageCommits_.clear();
     atlasContentValid_ = false;
 }
@@ -693,6 +732,12 @@ void ShadowPass::preparePages(
     pendingPageCommits_.clear();
     preparedFrameIndex_ = frameIndex;
     const std::uint32_t maxPageUpdates = std::min(pageUpdateBudget, ShadowMap::PhysicalPageCount);
+
+    // A queued virtual coordinate is meaningful only for the clipmap layout
+    // that produced it. Discard it if that layout changes; the current frame's
+    // feedback (or bootstrap visibility pass) will repopulate it in the new
+    // coordinate system.
+    bool clipmapLayoutChanged = false;
 
     // Dynamic transforms used to invalidate the whole virtual atlas. In play
     // mode even a single rigid body therefore redrew every cached terrain and
@@ -756,6 +801,7 @@ void ShadowPass::preparePages(
     for (std::uint32_t level = 0; level < ShadowMap::ClipLevelCount; ++level) {
         if (cachedClipMatricesValid_[level] &&
             sameMatrix(cachedClipMatrices_[level], clipMatrices[level])) continue;
+        clipmapLayoutChanged = true;
         std::int32_t shiftX{};
         std::int32_t shiftY{};
         if (cachedClipMatricesValid_[level] &&
@@ -799,6 +845,8 @@ void ShadowPass::preparePages(
         cachedClipMatricesValid_[level] = true;
     }
     invalidateDirtyPages(clipMatrices, false);
+
+    if (clipmapLayoutChanged) deferredRequests_.clear();
 
     struct VisibleObject {
         std::array<glm::vec4, 8> worldCorners{};
@@ -864,12 +912,23 @@ void ShadowPass::preparePages(
             }
         }
     };
-    if (!receiverPageRequests.empty()) {
+    if (!receiverPageRequests.empty() || !deferredRequests_.empty()) {
         // The compute pass emits only set bits, so this is O(requested pages)
-        // rather than O(all virtual pages).
+        // rather than O(all virtual pages). Atomic compaction deliberately
+        // makes its output order unspecified, so impose a canonical order
+        // before applying per-level and per-frame scheduler budgets.
         constexpr std::uint32_t pagesPerLevelForRequests =
             ShadowMap::VirtualPagesPerAxis * ShadowMap::VirtualPagesPerAxis;
-        for (const std::uint32_t key : receiverPageRequests) {
+        std::vector<std::uint32_t> orderedRequests;
+        orderedRequests.reserve(deferredRequests_.size() + receiverPageRequests.size());
+        orderedRequests.insert(orderedRequests.end(), deferredRequests_.begin(),
+                               deferredRequests_.end());
+        orderedRequests.insert(orderedRequests.end(), receiverPageRequests.begin(),
+                               receiverPageRequests.end());
+        std::ranges::sort(orderedRequests);
+        orderedRequests.erase(std::unique(orderedRequests.begin(), orderedRequests.end()),
+                              orderedRequests.end());
+        for (const std::uint32_t key : orderedRequests) {
             if (key >= ShadowMap::VirtualPageCount) continue;
             const std::uint32_t level = key / pagesPerLevelForRequests;
             const std::uint32_t local = key % pagesPerLevelForRequests;
@@ -911,6 +970,9 @@ void ShadowPass::preparePages(
 
     constexpr std::uint32_t pagesPerLevel =
         ShadowMap::VirtualPagesPerAxis * ShadowMap::VirtualPagesPerAxis;
+    std::array<bool, ShadowMap::VirtualPageCount> deferred{};
+    for (const std::uint32_t key : deferredRequests_)
+        if (key < deferred.size()) deferred[key] = true;
 
     // A moving caster invalidates both its old and new footprint.  The old
     // footprint is not necessarily requested by the camera this frame, but
@@ -929,10 +991,17 @@ void ShadowPass::preparePages(
 
     for (const std::uint32_t key : requests) {
         std::uint32_t physical = pageTable_[key];
+        // This request made it through the deterministic policy limits. It
+        // ceases to be deferred if it is already resident or gets a tile
+        // below; requests excluded by a per-level limit remain queued.
+        deferred[key] = false;
         if (physical == ShadowMap::InvalidPage) {
             // Do not map a page until it can be rendered. Otherwise the
             // sampling shader could observe stale atlas contents.
-            if (pagesToRender_.size() >= maxPageUpdates) continue;
+            if (pagesToRender_.size() >= maxPageUpdates) {
+                deferred[key] = true;
+                continue;
+            }
             physical = ShadowMap::InvalidPage;
             for (std::uint32_t slot = 0; slot < physicalPages_.size(); ++slot) {
                 if (!physicalPages_[slot].allocated) { physical = slot; break; }
@@ -949,7 +1018,10 @@ void ShadowPass::preparePages(
                     }
                 }
             }
-            if (physical == ShadowMap::InvalidPage) continue;
+            if (physical == ShadowMap::InvalidPage) {
+                deferred[key] = true;
+                continue;
+            }
             std::uint32_t evictedVirtualPage = ShadowMap::InvalidPage;
             if (physicalPages_[physical].allocated) {
                 const PhysicalPage& evicted = physicalPages_[physical];
@@ -976,6 +1048,11 @@ void ShadowPass::preparePages(
             }
         }
     }
+
+    deferredRequests_.clear();
+    deferredRequests_.reserve(ShadowMap::PhysicalPageCount);
+    for (std::uint32_t key = 0; key < ShadowMap::VirtualPageCount; ++key)
+        if (deferred[key]) deferredRequests_.push_back(key);
 
     // Scroll/invalidation changes only remap already-rendered tiles and are
     // safe to publish now. Newly allocated entries are intentionally absent

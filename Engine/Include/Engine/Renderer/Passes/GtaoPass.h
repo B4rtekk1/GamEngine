@@ -90,6 +90,8 @@ private:
     std::array<VkPipeline, 2> depthPipelines_{};
     VkDescriptorPool depthDescriptorPool_ = VK_NULL_HANDLE;
     std::array<VkDescriptorSet, FramesInFlight> linearizeSets_{};
+    std::array<VkDescriptorImageInfo, FramesInFlight> linearizeSources_{};
+    std::array<bool, FramesInFlight> linearizeDescriptorsValid_{};
     std::vector<VkDescriptorSet> depthReduceSets_;
     // Main AO, 5x5 denoise and bilateral upsample are all compute pipelines.
     std::array<VkDescriptorSetLayout, 3> computeLayouts_{};
@@ -97,6 +99,7 @@ private:
     std::array<VkPipeline, 3> computePipelines_{};
     VkDescriptorPool computeDescriptorPool_ = VK_NULL_HANDLE;
     std::array<std::array<VkDescriptorSet, FramesInFlight>, 3> computeSets_{};
+    std::array<std::array<std::vector<VkDescriptorImageInfo>, FramesInFlight>, 3> computeDescriptorCache_{};
     bool initialized_ = false;
 };
 } // namespace Engine
