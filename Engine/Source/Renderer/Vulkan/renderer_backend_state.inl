@@ -45,7 +45,20 @@
         GpuTimestampProfiler gpuTimestampProfiler;
         // Retained across frames: reset() clears declarations, while the graph
         // keeps its compiled topology cache.
+        // The authoritative description of external inputs consumed anywhere
+        // in this frame.  Its upload waits replace the old global transfer
+        // timeline wait at submission time.
         RenderGraph::RenderGraph frameGraph;
+        // Incrementally migrated callbacks for the Game View raster path.
+        RenderGraph::RenderGraph viewportFrameGraph;
+        // Early compute is submitted in the same command buffer for now, but
+        // owns a separate graph so it can migrate independently of the
+        // depth/Hi-Z graph below.
+        RenderGraph::RenderGraph earlyFrameGraph;
+        // The final, presentation-facing chain is deliberately independent of
+        // the viewport graph: both Game and Scene rendering finish before it,
+        // while its output is the acquired swapchain image.
+        RenderGraph::RenderGraph postProcessFrameGraph;
         GpuProfileFrame lastGpuProfile{};
         // Single-sample depth target populated by the forward pass's MSAA depth resolve.
         DepthBuffer hiZDepthBuffer;

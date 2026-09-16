@@ -481,6 +481,59 @@
             // not submit hidden Game View work: this also makes the shared
             // physical VSM atlas single-writer for the entire frame.
             const bool renderGameViewport = !editorUiActive || !sceneViewportActive;
+            // Keep upload synchronization resource-scoped.  This graph is a
+            // declaration of every persistent input which can be consumed by
+            // the legacy shadow, compute, lighting, post-process, water and
+            // Scene View callbacks below.  The callbacks are still being
+            // migrated individually, but no upload is allowed to bypass the
+            // frame graph and reintroduce a global timeline wait.
+            frameGraph.reset();
+            frameGraph.setQueueFamily(RenderGraph::Queue::Graphics, vulkanDevice.graphicsQueueFamily());
+            frameGraph.setQueueFamily(RenderGraph::Queue::AsyncCompute, vulkanDevice.computeQueueFamily());
+            std::vector<RenderGraph::BufferHandle> frameUploadBuffers;
+            const auto importFrameUploadBuffer = [&](const char* name, const Buffer& buffer) {
+                if (buffer.handle() == VK_NULL_HANDLE || buffer.size() == 0) return;
+                const auto handle = frameGraph.importBuffer(name, buffer.handle(), {
+                    .size = buffer.size(), .usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT});
+                if (buffer.readyTimeline() != 0) frameGraph.markUploaded(handle, buffer.readyTimeline());
+                frameUploadBuffers.push_back(handle);
+            };
+            importFrameUploadBuffer("Geometry vertices", vertexBuffer);
+            importFrameUploadBuffer("Geometry indices", indexBuffer);
+            importFrameUploadBuffer("Frame instances", instanceBuffers[currentFrame]);
+            importFrameUploadBuffer("Frame materials", materialBuffers[currentFrame]);
+            importFrameUploadBuffer("GPU scene instances", gpuSceneInstanceBuffers[currentFrame]);
+            importFrameUploadBuffer("GPU scene meshes", gpuSceneMeshBuffers[currentFrame]);
+            importFrameUploadBuffer("GPU scene materials", gpuSceneMaterialBuffers[currentFrame]);
+            importFrameUploadBuffer("Frame lights", uniformBuffers[currentFrame]);
+            importFrameUploadBuffer("Shadow culling", shadowCullingUniformBuffers[currentFrame]);
+            importFrameUploadBuffer("Clustered lighting", clusteredLightingUniformBuffers[currentFrame]);
+            importFrameUploadBuffer("Scene clustered lighting", sceneClusteredLightingUniformBuffers[currentFrame]);
+            std::vector<RenderGraph::TextureHandle> frameUploadTextures;
+            const auto importFrameUploadTexture = [&](const char* name, const Texture2D& texture) {
+                if (!texture.valid()) return;
+                const auto handle = frameGraph.importTexture(name, texture.image(), {
+                    .extent = {texture.width(), texture.height(), 1}, .format = texture.format(),
+                    .usage = VK_IMAGE_USAGE_SAMPLED_BIT, .aspect = VK_IMAGE_ASPECT_COLOR_BIT,
+                    .mipLevels = texture.mipLevels()}, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+                if (texture.readyTimeline() != 0) frameGraph.markUploaded(handle, texture.readyTimeline());
+                frameUploadTextures.push_back(handle);
+            };
+            importFrameUploadTexture("Fallback material", fallbackMaterialTexture);
+            importFrameUploadTexture("Grass height", grassHeightTexture);
+            importFrameUploadTexture("Grass density", grassDensityTexture);
+            for (const Texture2D& texture : materialTextures) importFrameUploadTexture("Material texture", texture);
+            frameGraph.addPass("Legacy frame resource consumers", RenderGraph::Queue::Graphics,
+                [&](RenderGraph::PassBuilder& builder) {
+                    // ALL_COMMANDS is intentional: these resources are bound
+                    // by descriptor sets owned by still-legacy callbacks, so
+                    // their first precise stage has not yet been split out.
+                    for (const auto buffer : frameUploadBuffers)
+                        builder.read(buffer, RenderGraph::BufferUsage::ExternalRead);
+                    for (const auto texture : frameUploadTextures)
+                        builder.read(texture, RenderGraph::TextureUsage::ExternalRead);
+                }, [](VkCommandBuffer) {});
+            frameGraph.compile();
             // TAA consumes the Virtual Water prepass attachments.  Keep this
             // frame-local contract separate from whether the water world has
             // bodies, as a renderer can be active without its prepass having
@@ -899,8 +952,34 @@
                     activeShaderSlots.set(object.shader);
                 }
             }
-            gpuCullingPasses[currentFrame].recordBinned(
-                commandBuffer, static_cast<std::uint32_t>(gpuObjects.size()), MaterialProgramSlotCount);
+            // Step 1 of the frame migration: culling now has an explicit
+            // graph node and declared indirect outputs.  It still executes in
+            // this command buffer, preserving all existing ordering while the
+            // following raster passes are migrated.
+            earlyFrameGraph.reset();
+            earlyFrameGraph.enablePassCulling();
+            earlyFrameGraph.setQueueFamily(RenderGraph::Queue::Graphics, vulkanDevice.graphicsQueueFamily());
+            const RenderGraph::BufferDesc indirectDesc{
+                .size = indirectBuffers[currentFrame].size(),
+                .usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT};
+            const RenderGraph::BufferDesc drawCountDesc{
+                .size = drawCountBuffers[currentFrame].size(),
+                .usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT};
+            const auto graphIndirect = earlyFrameGraph.importBuffer(
+                "Main indirect draws", indirectBuffers[currentFrame].handle(), indirectDesc);
+            const auto graphDrawCount = earlyFrameGraph.importBuffer(
+                "Main draw counts", drawCountBuffers[currentFrame].handle(), drawCountDesc);
+            earlyFrameGraph.addPass("GPU culling", RenderGraph::Queue::Graphics,
+            [&](RenderGraph::PassBuilder& builder) {
+                builder.write(graphIndirect, RenderGraph::BufferUsage::StorageWriteCompute);
+                builder.write(graphDrawCount, RenderGraph::BufferUsage::StorageWriteCompute);
+            }, [&](const VkCommandBuffer buffer) {
+                gpuCullingPasses[currentFrame].recordBinned(
+                    buffer, static_cast<std::uint32_t>(gpuObjects.size()), MaterialProgramSlotCount);
+            });
+            earlyFrameGraph.exportBuffer(graphIndirect);
+            earlyFrameGraph.exportBuffer(graphDrawCount);
+            earlyFrameGraph.execute(commandBuffer);
             if (renderGameViewport && virtualWaterRenderer.active()) {
                 static const ProfileNameId waterPageCullProfileName = Profiler::registerName("Water Page Cull");
                 gpuTimestampProfiler.beginZone(commandBuffer, currentFrame, waterPageCullProfileName);
@@ -990,10 +1069,10 @@
             // before either Game View or Scene View material shaders sample it.
             gtaoPass.initialize(commandBuffer);
             if (renderGameViewport) {
-            frameGraph.reset();
-            frameGraph.enablePassCulling();
-            frameGraph.setQueueFamily(RenderGraph::Queue::Graphics, vulkanDevice.graphicsQueueFamily());
-            frameGraph.setQueueFamily(RenderGraph::Queue::AsyncCompute, vulkanDevice.computeQueueFamily());
+            viewportFrameGraph.reset();
+            viewportFrameGraph.enablePassCulling();
+            viewportFrameGraph.setQueueFamily(RenderGraph::Queue::Graphics, vulkanDevice.graphicsQueueFamily());
+            viewportFrameGraph.setQueueFamily(RenderGraph::Queue::AsyncCompute, vulkanDevice.computeQueueFamily());
             const VkExtent2D graphExtent = swapchain.extent();
             const RenderGraph::TextureDesc graphDepthDesc{
                 .extent = {graphExtent.width, graphExtent.height, 1},
@@ -1002,29 +1081,61 @@
                 .aspect = VK_IMAGE_ASPECT_DEPTH_BIT};
             // ForwardPass owns the UNDEFINED -> attachment transition in its
             // render pass, therefore no external pre-pass barrier is emitted.
-            const auto graphDepth = frameGraph.importTexture(
+            const auto graphDepth = viewportFrameGraph.importTexture(
                 "Forward depth", msaa.enabled() ? hiZDepthBuffer.image() : depthBuffer.image(), graphDepthDesc,
                 {.layout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL});
+            const RenderGraph::BufferDesc graphVertexDesc{
+                .size = vertexBuffer.size(), .usage = VK_BUFFER_USAGE_VERTEX_BUFFER_BIT};
+            const RenderGraph::BufferDesc graphIndexDesc{
+                .size = indexBuffer.size(), .usage = VK_BUFFER_USAGE_INDEX_BUFFER_BIT};
+            const auto graphVertices = viewportFrameGraph.importBuffer(
+                "Geometry vertices", vertexBuffer.handle(), graphVertexDesc);
+            const auto graphIndices = viewportFrameGraph.importBuffer(
+                "Geometry indices", indexBuffer.handle(), graphIndexDesc);
+            if (vertexBuffer.readyTimeline() != 0)
+                viewportFrameGraph.markUploaded(graphVertices, vertexBuffer.readyTimeline());
+            if (indexBuffer.readyTimeline() != 0)
+                viewportFrameGraph.markUploaded(graphIndices, indexBuffer.readyTimeline());
+            const RenderGraph::BufferDesc foliageIndirectDesc{
+                .size = foliageIndirectBuffers[currentFrame].size(),
+                .usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT};
+            const RenderGraph::BufferDesc foliageDrawCountDesc{
+                .size = foliageDrawCountBuffers[currentFrame].size(),
+                .usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT};
+            const auto graphFoliageIndirect = viewportFrameGraph.importBuffer(
+                "Foliage indirect draws", foliageIndirectBuffers[currentFrame].handle(), foliageIndirectDesc);
+            const auto graphFoliageDrawCount = viewportFrameGraph.importBuffer(
+                "Foliage draw counts", foliageDrawCountBuffers[currentFrame].handle(), foliageDrawCountDesc);
             const RenderGraph::TextureDesc graphHiZDesc{
                 .extent = {hiZBuffer.width(), hiZBuffer.height(), 1}, .format = VK_FORMAT_R32_SFLOAT,
                 .usage = VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
                 .aspect = VK_IMAGE_ASPECT_COLOR_BIT, .mipLevels = hiZBuffer.mipCount()};
-            const auto graphHiZ = hizEnabled ? frameGraph.importTexture(
+            const auto graphHiZ = hizEnabled ? viewportFrameGraph.importTexture(
                 "Hi-Z pyramid", hiZBuffer.image(), graphHiZDesc,
                 {.stage = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
                  .access = VK_ACCESS_2_SHADER_SAMPLED_READ_BIT,
                  .layout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL}) : RenderGraph::TextureHandle{};
-            frameGraph.addPass("Depth / prepass", RenderGraph::Queue::Graphics,
+            viewportFrameGraph.addPass("Foliage GPU culling", RenderGraph::Queue::Graphics,
+            [&](RenderGraph::PassBuilder& builder) {
+                builder.write(graphFoliageIndirect, RenderGraph::BufferUsage::StorageWriteCompute);
+                builder.write(graphFoliageDrawCount, RenderGraph::BufferUsage::StorageWriteCompute);
+            }, [&](const VkCommandBuffer buffer) {
+                foliageGpuCullingPasses[currentFrame].recordBinned(
+                    buffer, static_cast<std::uint32_t>(gpuObjects.size()), MaterialProgramSlotCount);
+            });
+            viewportFrameGraph.addPass("Depth / prepass", RenderGraph::Queue::Graphics,
             [&](RenderGraph::PassBuilder& builder) {
                 builder.write(graphDepth, RenderGraph::TextureUsage::DepthAttachment);
+                builder.read(graphVertices, RenderGraph::BufferUsage::VertexRead);
+                builder.read(graphIndices, RenderGraph::BufferUsage::IndexRead);
+                builder.read(graphFoliageIndirect, RenderGraph::BufferUsage::IndirectRead);
+                builder.read(graphFoliageDrawCount, RenderGraph::BufferUsage::IndirectRead);
                 builder.setFinalTextureState(graphDepth, {
                     .stage = VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT,
                     .access = VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT,
                     .layout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL,
                     .write = true});
             }, [&](const VkCommandBuffer buffer) {
-                foliageGpuCullingPasses[currentFrame].recordBinned(
-                    buffer, static_cast<std::uint32_t>(gpuObjects.size()), MaterialProgramSlotCount);
                 gpuTimestampProfiler.endZone(buffer, currentFrame);
                 gpuTimestampProfiler.beginZone(buffer, currentFrame, forwardProfileName);
                 forwardPass.begin(buffer, hdrFramebuffer, swapchain.extent(), shadowPass.descriptorSet(currentFrame),
@@ -1046,14 +1157,17 @@
                 gpuTimestampProfiler.endZone(buffer, currentFrame);
             });
             if (hizEnabled) {
-                frameGraph.addPass("Hi-Z", RenderGraph::Queue::Graphics,
+                viewportFrameGraph.addPass("Hi-Z", RenderGraph::Queue::Graphics,
                 [&](RenderGraph::PassBuilder& builder) {
                     builder.read(graphDepth, RenderGraph::TextureUsage::SampledReadCompute);
                     builder.write(graphHiZ, RenderGraph::TextureUsage::StorageWriteCompute);
                 }, [this](const VkCommandBuffer buffer) { hiZPass.record(buffer, hiZBuffer); });
-                frameGraph.exportTexture(graphHiZ);
-            } else frameGraph.exportTexture(graphDepth);
-            frameGraph.execute(commandBuffer);
+                viewportFrameGraph.exportTexture(graphHiZ);
+            } else viewportFrameGraph.exportTexture(graphDepth);
+            // These callbacks record the prepass and Hi-Z at their declared
+            // position.  Do not defer graph execution until the end of the
+            // viewport: GTAO and the lighting pass below consume this depth.
+            viewportFrameGraph.execute(commandBuffer);
             if (hizEnabled) hiZValid = true;
 
             // The prepass has produced this frame's depth and velocity. GTAO
@@ -1445,53 +1559,166 @@
                 hiZValid = true;
             }
 
+            // Presentation is one declarative chain.  Keeping TAA, bloom and
+            // the final raster passes in a single graph gives the compiler the
+            // actual HDR-history and swapchain hazards instead of relying on
+            // the render-pass layout transitions hidden inside their callbacks.
+            postProcessFrameGraph.reset();
+            postProcessFrameGraph.setQueueFamily(RenderGraph::Queue::Graphics,
+                                                  vulkanDevice.graphicsQueueFamily());
+            const VkExtent2D postExtent = swapchain.extent();
+            const RenderGraph::TextureDesc hdrDesc{
+                .extent = {postExtent.width, postExtent.height, 1}, .format = HdrBuffer::Format,
+                .usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
+                .aspect = VK_IMAGE_ASPECT_COLOR_BIT};
+            const auto graphHdr = postProcessFrameGraph.importTexture(
+                "Game HDR", hdrBuffer.image(), hdrDesc,
+                {.stage = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
+                 .access = VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT,
+                 .layout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, .write = true});
+            const auto graphVelocity = postProcessFrameGraph.importTexture(
+                "Game velocity", velocityBuffer.image(), hdrDesc,
+                {.stage = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
+                 .access = VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT,
+                 .layout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, .write = true});
+            const DepthBuffer& taaDepth = msaa.enabled() ? hiZDepthBuffer : depthBuffer;
+            const RenderGraph::TextureDesc depthDesc{
+                .extent = {postExtent.width, postExtent.height, 1}, .format = taaDepth.format(),
+                .usage = VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
+                .aspect = VK_IMAGE_ASPECT_DEPTH_BIT};
+            const auto graphDepth = postProcessFrameGraph.importTexture(
+                "Game depth", taaDepth.image(), depthDesc,
+                {.stage = VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT,
+                 .access = VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT,
+                 .layout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL, .write = true});
+            const auto graphBloom = postProcessFrameGraph.importTexture(
+                "Bloom", bloomPass.resultImage(), hdrDesc,
+                {.stage = VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT,
+                 .access = VK_ACCESS_2_SHADER_SAMPLED_READ_BIT,
+                 .layout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL});
+            const RenderGraph::TextureDesc presentDesc{
+                .extent = {postExtent.width, postExtent.height, 1}, .format = swapchain.format(),
+                .usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT, .aspect = VK_IMAGE_ASPECT_COLOR_BIT};
+            const auto graphPresent = postProcessFrameGraph.importTexture(
+                "Swapchain", swapchain.images().at(imageIndex.value), presentDesc,
+                {.layout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR});
+
+            RenderGraph::TextureHandle graphPostSource = graphHdr;
             if (renderGameViewport && taaResolveActive) {
-                gpuTimestampProfiler.beginZone(commandBuffer, currentFrame, taaProfileName);
-                temporalAaPass.setVirtualWaterEnabled(virtualWaterPreparedThisFrame);
-                temporalAaPass.record(commandBuffer, swapchain.extent(), taaJitterX, taaJitterY);
-                gpuTimestampProfiler.endZone(commandBuffer, currentFrame);
-            } else {
-                gpuTimestampProfiler.beginZone(commandBuffer, currentFrame, taaProfileName);
-                gpuTimestampProfiler.endZone(commandBuffer, currentFrame);
-            }
-
-            gpuTimestampProfiler.beginZone(commandBuffer, currentFrame, bloomProfileName);
-            if (renderGameViewport) {
-                bloomPass.record(commandBuffer,
-                    taaResolveActive ? temporalAaPass.resolvedView() : hdrBuffer.imageView(),
-                    hdrBuffer.sampler(), currentFrame);
-            }
-            gpuTimestampProfiler.endZone(commandBuffer, currentFrame);
-
-            gpuTimestampProfiler.beginZone(commandBuffer, currentFrame, tonemapProfileName);
-            if (editorUiActive) {
-                VkRenderPassBeginInfo pass{VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO};
-                pass.renderPass = editorUiRenderPass;
-                pass.framebuffer = editorUiFramebuffers.at(imageIndex.value);
-                pass.renderArea.extent = swapchain.extent();
-                constexpr float editorClearRed{0.06F};
-                constexpr float editorClearGreen{0.07F};
-                constexpr float editorClearBlue{0.09F};
-                VkClearValue clear{};
-                clear.color = {{editorClearRed, editorClearGreen, editorClearBlue, 1.0F}};
-                pass.clearValueCount = 1;
-                pass.pClearValues = &clear;
-                vkCmdBeginRenderPass(commandBuffer, &pass, VK_SUBPASS_CONTENTS_INLINE);
-                ImGui_ImplVulkan_RenderDrawData(ImGui::GetDrawData(), commandBuffer);
-                vkCmdEndRenderPass(commandBuffer);
-            } else {
-                if (taaResolveActive) {
-                    tonemapPass.record(commandBuffer, imageIndex.value, swapchain.extent(), 0.0F,
-                                       1U + temporalAaPass.resolvedIndex());
-                } else {
-                    tonemapPass.record(commandBuffer, imageIndex.value, swapchain.extent());
+                const std::uint32_t historyReadIndex = temporalAaPass.resolvedIndex();
+                const std::uint32_t historyWriteIndex = temporalAaPass.nextResolvedIndex();
+                const auto graphHistoryRead = postProcessFrameGraph.importTexture(
+                    "TAA history read", temporalAaPass.historyImage(historyReadIndex), hdrDesc,
+                    {.stage = VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT,
+                     .access = VK_ACCESS_2_SHADER_SAMPLED_READ_BIT,
+                     .layout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL});
+                const auto graphHistoryWrite = postProcessFrameGraph.importTexture(
+                    "TAA history write", temporalAaPass.historyImage(historyWriteIndex), hdrDesc,
+                    {.layout = VK_IMAGE_LAYOUT_UNDEFINED});
+                RenderGraph::TextureHandle graphWaterVelocity;
+                RenderGraph::TextureHandle graphWaterMeta;
+                RenderGraph::TextureHandle graphWaterSurface;
+                if (virtualWaterPreparedThisFrame) {
+                    graphWaterVelocity = postProcessFrameGraph.importTexture(
+                        "Water velocity", virtualWaterRenderer.velocityImage(), hdrDesc,
+                        {.stage = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
+                         .access = VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT,
+                         .layout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, .write = true});
+                    graphWaterMeta = postProcessFrameGraph.importTexture(
+                        "Water metadata", virtualWaterRenderer.metaImage(), hdrDesc,
+                        {.stage = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
+                         .access = VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT,
+                         .layout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, .write = true});
+                    graphWaterSurface = postProcessFrameGraph.importTexture(
+                        "Water surface", virtualWaterRenderer.surfaceImage(), hdrDesc,
+                        {.stage = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
+                         .access = VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT,
+                         .layout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, .write = true});
                 }
-                canvasRenderer.record(scene.uiCanvas(), commandBuffer,
-                                      UI::CanvasRenderer::ImageIndex{imageIndex.value},
-                                      UI::CanvasRenderer::FrameIndex{currentFrame},
-                                      swapchain.extent());
+                postProcessFrameGraph.addPass("TAA resolve", RenderGraph::Queue::Graphics,
+                [&](RenderGraph::PassBuilder& builder) {
+                    builder.read(graphHdr, RenderGraph::TextureUsage::SampledReadFragment);
+                    builder.read(graphVelocity, RenderGraph::TextureUsage::SampledReadFragment);
+                    builder.read(graphDepth, RenderGraph::TextureUsage::DepthReadFragment);
+                    builder.read(graphHistoryRead, RenderGraph::TextureUsage::SampledReadFragment);
+                    if (graphWaterVelocity) {
+                        builder.read(graphWaterVelocity, RenderGraph::TextureUsage::SampledReadFragment);
+                        builder.read(graphWaterMeta, RenderGraph::TextureUsage::SampledReadFragment);
+                        builder.read(graphWaterSurface, RenderGraph::TextureUsage::SampledReadFragment);
+                    }
+                    builder.write(graphHistoryWrite, RenderGraph::TextureUsage::ColorAttachment);
+                    builder.setFinalTextureState(graphHistoryWrite, {
+                        .stage = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
+                        .access = VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT,
+                        .layout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, .write = true});
+                }, [&](const VkCommandBuffer buffer) {
+                    gpuTimestampProfiler.beginZone(buffer, currentFrame, taaProfileName);
+                    temporalAaPass.setVirtualWaterEnabled(virtualWaterPreparedThisFrame);
+                    temporalAaPass.record(buffer, postExtent, taaJitterX, taaJitterY);
+                    gpuTimestampProfiler.endZone(buffer, currentFrame);
+                });
+                graphPostSource = graphHistoryWrite;
+            } else {
+                postProcessFrameGraph.addPass("TAA disabled", RenderGraph::Queue::Graphics,
+                    [](RenderGraph::PassBuilder&) {}, [&](const VkCommandBuffer buffer) {
+                        gpuTimestampProfiler.beginZone(buffer, currentFrame, taaProfileName);
+                        gpuTimestampProfiler.endZone(buffer, currentFrame);
+                    });
             }
-            gpuTimestampProfiler.endZone(commandBuffer, currentFrame);
+            if (renderGameViewport) {
+                postProcessFrameGraph.addPass("Bloom", RenderGraph::Queue::Graphics,
+                [&](RenderGraph::PassBuilder& builder) {
+                    builder.read(graphPostSource, RenderGraph::TextureUsage::SampledReadFragment);
+                    builder.write(graphBloom, RenderGraph::TextureUsage::ColorAttachment);
+                    builder.setFinalTextureState(graphBloom, {
+                        .stage = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
+                        .access = VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT,
+                        .layout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, .write = true});
+                }, [&](const VkCommandBuffer buffer) {
+                    gpuTimestampProfiler.beginZone(buffer, currentFrame, bloomProfileName);
+                    bloomPass.record(buffer, taaResolveActive ? temporalAaPass.resolvedView() : hdrBuffer.imageView(),
+                                     hdrBuffer.sampler(), currentFrame);
+                    gpuTimestampProfiler.endZone(buffer, currentFrame);
+                });
+            }
+            postProcessFrameGraph.addPass(editorUiActive ? "Editor UI" : "Tonemap and UI",
+                                          RenderGraph::Queue::Graphics,
+            [&](RenderGraph::PassBuilder& builder) {
+                if (!editorUiActive) {
+                    builder.read(graphPostSource, RenderGraph::TextureUsage::SampledReadFragment);
+                    if (renderGameViewport) builder.read(graphBloom, RenderGraph::TextureUsage::SampledReadFragment);
+                }
+                builder.write(graphPresent, RenderGraph::TextureUsage::ColorAttachment);
+                builder.setFinalTextureState(graphPresent, {
+                    .stage = VK_PIPELINE_STAGE_2_NONE, .access = VK_ACCESS_2_NONE,
+                    .layout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR, .write = true});
+            }, [&](const VkCommandBuffer buffer) {
+                gpuTimestampProfiler.beginZone(buffer, currentFrame, tonemapProfileName);
+                if (editorUiActive) {
+                    VkRenderPassBeginInfo pass{VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO};
+                    pass.renderPass = editorUiRenderPass;
+                    pass.framebuffer = editorUiFramebuffers.at(imageIndex.value);
+                    pass.renderArea.extent = postExtent;
+                    VkClearValue clear{};
+                    clear.color = {{0.06F, 0.07F, 0.09F, 1.0F}};
+                    pass.clearValueCount = 1;
+                    pass.pClearValues = &clear;
+                    vkCmdBeginRenderPass(buffer, &pass, VK_SUBPASS_CONTENTS_INLINE);
+                    ImGui_ImplVulkan_RenderDrawData(ImGui::GetDrawData(), buffer);
+                    vkCmdEndRenderPass(buffer);
+                } else {
+                    if (taaResolveActive)
+                        tonemapPass.record(buffer, imageIndex.value, postExtent, 0.0F,
+                                           1U + temporalAaPass.resolvedIndex());
+                    else tonemapPass.record(buffer, imageIndex.value, postExtent);
+                    canvasRenderer.record(scene.uiCanvas(), buffer,
+                        UI::CanvasRenderer::ImageIndex{imageIndex.value},
+                        UI::CanvasRenderer::FrameIndex{currentFrame}, postExtent);
+                }
+                gpuTimestampProfiler.endZone(buffer, currentFrame);
+            });
+            postProcessFrameGraph.exportTexture(graphPresent);
+            postProcessFrameGraph.execute(commandBuffer);
             gpuTimestampProfiler.endFrame(commandBuffer, currentFrame);
 
             if (vkEndCommandBuffer(commandBuffer) != VK_SUCCESS) {
@@ -1857,12 +2084,19 @@
 
         void submitAndPresentFrame(const uint32_t imageIndex) {
             VkSemaphore signalSemaphores[] = {renderFinishedSemaphores[imageIndex]};
-            // Do not block the CPU or either queue with QueueWaitIdle.  The
-            // graphics submission waits on the exact highest upload ticket
-            // known when this frame is submitted; the transfer queue can keep
-            // recording later streaming work concurrently.
-            const std::uint64_t uploadValue = uploadContext.lastSubmittedValue();
+            // Do not derive this from UploadContext::lastSubmittedValue(): a
+            // transfer unrelated to this frame must not stall graphics.  The
+            // authoritative frame graph supplies only imported resources that
+            // have an actual consumer in this frame.
+            std::uint64_t uploadValue = 0;
+            VkPipelineStageFlags2 uploadStage = VK_PIPELINE_STAGE_2_NONE;
+            for (const RenderGraph::UploadWait& wait : frameGraph.uploadWaits()) {
+                if (wait.queue != RenderGraph::Queue::Graphics) continue;
+                uploadValue = std::max(uploadValue, wait.timelineValue);
+                uploadStage |= wait.stage;
+            }
             const bool waitForUploads = uploadValue != 0;
+            if (uploadStage == VK_PIPELINE_STAGE_2_NONE) uploadStage = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
             if (asyncHiZSubmittedThisFrame) {
                 const std::uint64_t graphicsValue = ++asyncComputeTimelineValue;
                 const std::uint64_t computeValue = ++asyncComputeTimelineValue;
@@ -1876,7 +2110,7 @@
                 const VkSemaphoreSubmitInfo uploadWait{
                     .sType = VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO,
                     .semaphore = uploadContext.timeline(), .value = uploadValue,
-                    .stageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT};
+                    .stageMask = uploadStage};
                 const std::array graphicsWaits = {imageAvailable, uploadWait};
                 const VkCommandBufferSubmitInfo graphicsCommand{
                     .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_SUBMIT_INFO, .commandBuffer = graphicsBuffer};
@@ -1900,7 +2134,10 @@
                     .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_SUBMIT_INFO, .commandBuffer = computeBuffer};
                 const VkSemaphoreSubmitInfo computeSignal{
                     .sType = VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO, .semaphore = asyncComputeTimeline,
-                    .value = computeValue, .stageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT};
+                    // asyncComputeCommandBuffers contain only the graph's Hi-Z
+                    // compute pass.  Signal once its shader writes are
+                    // available instead of serialising unrelated stages.
+                    .value = computeValue, .stageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT};
                 const VkSubmitInfo2 computeSubmit{
                     .sType = VK_STRUCTURE_TYPE_SUBMIT_INFO_2,
                     .waitSemaphoreInfoCount = 1, .pWaitSemaphoreInfos = &computeWait,
@@ -1944,7 +2181,8 @@
             submitInfo.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
 
             VkSemaphore waitSemaphores[] = {imageAvailableSemaphores[currentFrame], uploadContext.timeline()};
-            VkPipelineStageFlags waitStages[] = {VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT};
+            VkPipelineStageFlags waitStages[] = {VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
+                static_cast<VkPipelineStageFlags>(uploadStage)};
             std::uint64_t waitValues[] = {0, uploadValue};
             VkTimelineSemaphoreSubmitInfo timelineInfo{VK_STRUCTURE_TYPE_TIMELINE_SEMAPHORE_SUBMIT_INFO};
             if (waitForUploads) {

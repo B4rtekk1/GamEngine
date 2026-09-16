@@ -959,7 +959,11 @@
                                   sceneCullingUniformBuffers[frame], candidates, candidateCounts, candidateDispatches, pageWork});
                 updateCullingSet({sceneFoliageCullSet, sceneFoliageIndirectBuffers[frame], sceneFoliageDrawCountBuffers[frame],
                                   sceneFoliageCullingUniformBuffers[frame], candidates, candidateCounts, candidateDispatches, pageWork});
-                const VkDescriptorBufferInfo meshletInfos[] = {
+                // Keep this indexed by descriptor binding. Binding 8 is the
+                // Hi-Z image, while binding 9 is the cluster hierarchy; the
+                // previous compact initializer put the hierarchy at index 8
+                // and made vkUpdateDescriptorSets read past the array.
+                const std::array<VkDescriptorBufferInfo, 10> meshletInfos{{
                     {meshletBuffer.handle(), 0, VK_WHOLE_SIZE},
                     {gpuSceneInstanceBuffers[frame].handle(), 0, VK_WHOLE_SIZE},
                     {gpuSceneMeshBuffers[frame].handle(), 0, VK_WHOLE_SIZE},
@@ -968,8 +972,9 @@
                     {visibleMeshletBuffers[frame].handle(), 0, VK_WHOLE_SIZE},
                     {visibleMeshletCountBuffers[frame].handle(), 0, sizeof(std::uint32_t)},
                     {meshletCullingUniformBuffers[frame].handle(), 0, sizeof(Culling::MeshletCullUniforms)},
+                    {}, // binding 8 is meshletHiZInfo below
                     {meshletClusterBuffer.handle(), 0, VK_WHOLE_SIZE},
-                };
+                }};
                 const VkDescriptorImageInfo meshletHiZInfo{hiZBuffer.sampler(), hiZBuffer.fullView(),
                                                            VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
                 VkWriteDescriptorSet meshletWrites[10]{};

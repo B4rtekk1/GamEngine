@@ -104,6 +104,106 @@ TEST(RenderGraphTests, ReportsTimelineDependenciesAcrossQueues) {
     EXPECT_EQ(dependency.consumerQueue, Queue::AsyncCompute);
 }
 
+TEST(RenderGraphTests, ReportsTheFirstTextureConsumerStage) {
+    RenderGraph graph;
+    const auto texture = graph.importTexture("Uploaded texture", reinterpret_cast<VkImage>(static_cast<std::uintptr_t>(1)),
+                                             ColorTarget, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+    graph.addPass("Fragment consumer", Queue::Graphics, [&](PassBuilder& builder) {
+        builder.read(texture, TextureUsage::SampledReadFragment);
+    }, {});
+
+    graph.compile();
+
+    const auto consumer = graph.firstConsumer(texture);
+    EXPECT_EQ(consumer.stage, VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT);
+    EXPECT_EQ(consumer.queue, Queue::Graphics);
+}
+
+TEST(RenderGraphTests, DoesNotWaitForAnUploadThatIsOverwrittenBeforeRead) {
+    RenderGraph graph;
+    const auto texture = graph.importTexture("Discarded upload", reinterpret_cast<VkImage>(static_cast<std::uintptr_t>(1)),
+                                             ColorTarget, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+    graph.addPass("Overwrite", Queue::AsyncCompute, [&](PassBuilder& builder) {
+        builder.write(texture, TextureUsage::StorageWriteCompute);
+    }, {});
+    graph.addPass("Later read", Queue::Graphics, [&](PassBuilder& builder) {
+        builder.read(texture, TextureUsage::SampledReadFragment);
+    }, {});
+
+    graph.compile();
+    EXPECT_FALSE(graph.firstConsumer(texture));
+}
+
+TEST(RenderGraphTests, ReportsVertexAndIndexInputAsTheFirstBufferConsumer) {
+    RenderGraph graph;
+    constexpr BufferDesc input{.size = 4096, .usage = VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_INDEX_BUFFER_BIT};
+    const auto buffer = graph.importBuffer("Uploaded mesh", reinterpret_cast<VkBuffer>(static_cast<std::uintptr_t>(1)), input);
+    graph.addPass("Raster", Queue::Graphics, [&](PassBuilder& builder) {
+        builder.read(buffer, BufferUsage::VertexRead);
+        builder.read(buffer, BufferUsage::IndexRead);
+    }, {});
+
+    graph.compile();
+
+    const auto consumer = graph.firstConsumer(buffer);
+    EXPECT_EQ(consumer.stage, VK_PIPELINE_STAGE_2_VERTEX_INPUT_BIT);
+    EXPECT_EQ(consumer.queue, Queue::Graphics);
+}
+
+TEST(RenderGraphTests, ReportsMeshShaderAsTheFirstMeshConsumer) {
+    RenderGraph graph;
+    constexpr BufferDesc meshlets{.size = 4096, .usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT};
+    const auto buffer = graph.importBuffer("Uploaded meshlets", reinterpret_cast<VkBuffer>(static_cast<std::uintptr_t>(1)), meshlets);
+    graph.addPass("Mesh raster", Queue::Graphics, [&](PassBuilder& builder) {
+        builder.read(buffer, BufferUsage::MeshRead);
+    }, {});
+
+    graph.compile();
+
+    EXPECT_EQ(graph.firstConsumer(buffer).stage, VK_PIPELINE_STAGE_2_MESH_SHADER_BIT_EXT);
+}
+
+TEST(RenderGraphTests, ReportsComputeAsTheFirstGpuSceneConsumer) {
+    RenderGraph graph;
+    constexpr BufferDesc storage{.size = 4096, .usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT};
+    const auto buffer = graph.importBuffer("Uploaded GPU scene", reinterpret_cast<VkBuffer>(static_cast<std::uintptr_t>(1)), storage);
+    graph.addPass("Cull", Queue::AsyncCompute, [&](PassBuilder& builder) {
+        builder.read(buffer, BufferUsage::StorageReadCompute);
+    }, {});
+
+    graph.compile();
+
+    const auto consumer = graph.firstConsumer(buffer);
+    EXPECT_EQ(consumer.stage, VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT);
+    EXPECT_EQ(consumer.queue, Queue::AsyncCompute);
+}
+
+TEST(RenderGraphTests, PlansUploadWaitsAtTheConsumerBatch) {
+    RenderGraph graph;
+    constexpr BufferDesc storage{.size = 4096, .usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT};
+    const auto scene = graph.importBuffer("GPU scene", reinterpret_cast<VkBuffer>(static_cast<std::uintptr_t>(1)), storage);
+    const auto texture = graph.importTexture("Texture", reinterpret_cast<VkImage>(static_cast<std::uintptr_t>(2)),
+                                             ColorTarget, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+    graph.markUploaded(scene, 3);
+    graph.markUploaded(texture, 5);
+    graph.addPass("Cull", Queue::AsyncCompute, [&](PassBuilder& builder) {
+        builder.read(scene, BufferUsage::StorageReadCompute);
+    }, {});
+    graph.addPass("Shade", Queue::Graphics, [&](PassBuilder& builder) {
+        builder.read(texture, TextureUsage::SampledReadFragment);
+    }, {});
+
+    graph.compile();
+
+    ASSERT_EQ(graph.uploadWaits().size(), 2U);
+    EXPECT_EQ(graph.uploadWaits()[0].timelineValue, 3U);
+    EXPECT_EQ(graph.uploadWaits()[0].stage, VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT);
+    EXPECT_EQ(graph.uploadWaits()[0].queue, Queue::AsyncCompute);
+    EXPECT_EQ(graph.uploadWaits()[1].timelineValue, 5U);
+    EXPECT_EQ(graph.uploadWaits()[1].stage, VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT);
+    EXPECT_EQ(graph.uploadWaits()[1].queue, Queue::Graphics);
+}
+
 TEST(RenderGraphTests, CullsPassesThatCannotReachAnExport) {
     RenderGraph graph;
     graph.enablePassCulling();

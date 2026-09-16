@@ -81,10 +81,13 @@ public:
     [[nodiscard]] std::uint32_t pageCount() const noexcept { return pageCount_; }
     [[nodiscard]] std::uint32_t drawBinCount() const noexcept { return drawBinCount_; }
     [[nodiscard]] VkImageView surfaceView() const noexcept { return surface_.imageView(); }
+    [[nodiscard]] VkImage surfaceImage() const noexcept { return surface_.image(); }
     [[nodiscard]] VkSampler surfaceSampler() const noexcept { return surface_.sampler(); }
     [[nodiscard]] VkImageView metaView() const noexcept { return meta_.imageView(); }
+    [[nodiscard]] VkImage metaImage() const noexcept { return meta_.image(); }
     [[nodiscard]] VkSampler metaSampler() const noexcept { return meta_.sampler(); }
     [[nodiscard]] VkImageView velocityView() const noexcept { return velocity_.imageView(); }
+    [[nodiscard]] VkImage velocityImage() const noexcept { return velocity_.image(); }
     [[nodiscard]] VkSampler velocitySampler() const noexcept { return velocity_.sampler(); }
 
 private:

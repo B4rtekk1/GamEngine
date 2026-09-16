@@ -40,6 +40,8 @@ namespace Engine::RenderGraph {
         SampledReadVertex,
         SampledReadFragment,
         SampledReadCompute,
+        /** Sample a depth image without losing its depth/stencil read-only layout. */
+        DepthReadFragment,
         StorageRead,
         StorageWrite,
         StorageReadCompute,
@@ -49,6 +51,8 @@ namespace Engine::RenderGraph {
         TransferRead,
         TransferWrite,
         Present,
+        /** A legacy pass consumes this imported image at an unknown stage. */
+        ExternalRead,
     };
 
     struct TextureDesc final {
@@ -76,7 +80,14 @@ namespace Engine::RenderGraph {
         std::uint32_t lastPass{};
         std::uint32_t allocationSlot{};
     };
-    enum class BufferUsage : std::uint8_t { UniformRead, StorageRead, StorageWrite, VertexRead, IndexRead, IndirectRead, TransferRead, TransferWrite };
+    enum class BufferUsage : std::uint8_t {
+        UniformRead, StorageRead, StorageWrite,
+        StorageReadCompute, StorageWriteCompute,
+        StorageReadFragment, StorageWriteFragment,
+        VertexRead, IndexRead, MeshRead, IndirectRead, TransferRead, TransferWrite,
+        /** A legacy pass consumes this imported buffer at an unknown shader stage. */
+        ExternalRead
+    };
     struct BufferDesc final {
         VkDeviceSize size{};
         VkBufferUsageFlags usage{};
@@ -97,6 +108,28 @@ namespace Engine::RenderGraph {
         Queue queue{Queue::Graphics};
         std::vector<std::uint32_t> passes;
         std::vector<std::uint32_t> waitBatches;
+    };
+
+    /**
+     * The earliest pass that consumes pre-existing contents of an imported
+     * resource.  This is the destination execution scope for an external
+     * producer, such as an UploadContext timeline semaphore.
+     */
+    struct FirstConsumer final {
+        VkPipelineStageFlags2 stage{VK_PIPELINE_STAGE_2_NONE};
+        Queue queue{Queue::Graphics};
+
+        [[nodiscard]] explicit operator bool() const noexcept {
+            return stage != VK_PIPELINE_STAGE_2_NONE;
+        }
+    };
+
+    /** A timeline value and destination scope required by one graph submission batch. */
+    struct UploadWait final {
+        std::uint64_t timelineValue{};
+        VkPipelineStageFlags2 stage{VK_PIPELINE_STAGE_2_NONE};
+        Queue queue{Queue::Graphics};
+        std::uint32_t batch{};
     };
 
     class RenderGraph;
@@ -157,6 +190,9 @@ namespace Engine::RenderGraph {
         void exportTexture(TextureHandle texture);
         void exportBuffer(BufferHandle buffer);
         void enablePassCulling(bool enabled = true) noexcept;
+        /** Associates an imported resource with the UploadContext timeline value that made it ready. */
+        void markUploaded(TextureHandle texture, std::uint64_t timelineValue);
+        void markUploaded(BufferHandle buffer, std::uint64_t timelineValue);
 
         void addPass(std::string name, const std::function<void(PassBuilder&)>& setup,
                      ExecuteCallback execute);
@@ -183,6 +219,15 @@ namespace Engine::RenderGraph {
         [[nodiscard]] const std::vector<std::string>& executionOrder() const noexcept;
         [[nodiscard]] const std::vector<QueueDependency>& queueDependencies() const noexcept;
         [[nodiscard]] const std::vector<QueueBatch>& queueBatches() const noexcept;
+        /** Waits grouped by submission batch, at the first actual consumer stages. */
+        [[nodiscard]] const std::vector<UploadWait>& uploadWaits() const noexcept;
+        /**
+         * Returns the first read of imported contents in compiled execution
+         * order. Writes alone deliberately do not count: they can overwrite
+         * an upload and therefore do not need to wait for it.
+         */
+        [[nodiscard]] FirstConsumer firstConsumer(TextureHandle texture) const;
+        [[nodiscard]] FirstConsumer firstConsumer(BufferHandle buffer) const;
         [[nodiscard]] const TextureLifetime& lifetime(TextureHandle texture) const;
         [[nodiscard]] const BufferLifetime& lifetime(BufferHandle buffer) const;
         [[nodiscard]] VkImage image(TextureHandle texture) const;
@@ -197,9 +242,10 @@ namespace Engine::RenderGraph {
             VkImage image{VK_NULL_HANDLE};
             TextureState initialState{};
             bool imported{};
+            std::uint64_t uploadTimeline{};
             TextureLifetime lifetime{};
         };
-        struct BufferResource final { std::string name; BufferDesc desc; VkBuffer buffer{VK_NULL_HANDLE}; bool imported{}; BufferLifetime lifetime{}; };
+        struct BufferResource final { std::string name; BufferDesc desc; VkBuffer buffer{VK_NULL_HANDLE}; bool imported{}; std::uint64_t uploadTimeline{}; BufferLifetime lifetime{}; };
         struct Pass final {
             std::string name;
             Queue queue{Queue::Graphics};
@@ -245,6 +291,7 @@ namespace Engine::RenderGraph {
         std::vector<BarrierBatch> releaseBarriers_;
         std::vector<QueueDependency> queueDependencies_;
         std::vector<QueueBatch> queueBatches_;
+        std::vector<UploadWait> uploadWaits_;
         std::vector<TextureHandle> exportedTextures_;
         std::vector<BufferHandle> exportedBuffers_;
         // Pools outlive a logical graph. The index arrays lease one pool item
