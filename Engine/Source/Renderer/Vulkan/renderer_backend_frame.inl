@@ -540,7 +540,6 @@
                     for (const auto texture : frameUploadTextures)
                         builder.read(texture, RenderGraph::TextureUsage::ExternalRead);
                 }, [](VkCommandBuffer) {});
-            frameGraph.compile();
             // TAA consumes the Virtual Water prepass attachments.  Keep this
             // frame-local contract separate from whether the water world has
             // bodies, as a renderer can be active without its prepass having
@@ -1611,20 +1610,19 @@
             // the final raster passes in a single graph gives the compiler the
             // actual HDR-history and swapchain hazards instead of relying on
             // the render-pass layout transitions hidden inside their callbacks.
-            postProcessFrameGraph.reset();
-            postProcessFrameGraph.setQueueFamily(RenderGraph::Queue::Graphics,
+            frameGraph.setQueueFamily(RenderGraph::Queue::Graphics,
                                                   vulkanDevice.graphicsQueueFamily());
             const VkExtent2D postExtent = swapchain.extent();
             const RenderGraph::TextureDesc hdrDesc{
                 .extent = {postExtent.width, postExtent.height, 1}, .format = HdrBuffer::Format,
                 .usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
                 .aspect = VK_IMAGE_ASPECT_COLOR_BIT};
-            const auto graphHdr = postProcessFrameGraph.importTexture(
+            const auto graphHdr = frameGraph.importTexture(
                 "Game HDR", hdrBuffer.image(), hdrDesc,
                 {.stage = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
                  .access = VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT,
                  .layout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, .write = true});
-            const auto graphVelocity = postProcessFrameGraph.importTexture(
+            const auto graphVelocity = frameGraph.importTexture(
                 "Game velocity", velocityBuffer.image(), hdrDesc,
                 {.stage = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
                  .access = VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT,
@@ -1634,12 +1632,12 @@
                 .extent = {postExtent.width, postExtent.height, 1}, .format = taaDepth.format(),
                 .usage = VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
                 .aspect = VK_IMAGE_ASPECT_DEPTH_BIT};
-            const auto graphDepth = postProcessFrameGraph.importTexture(
+            const auto graphDepth = frameGraph.importTexture(
                 "Game depth", taaDepth.image(), depthDesc,
                 {.stage = VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT,
                  .access = VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT,
                  .layout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL, .write = true});
-            const auto graphBloom = postProcessFrameGraph.importTexture(
+            const auto graphBloom = frameGraph.importTexture(
                 "Bloom", bloomPass.resultImage(), hdrDesc,
                 {.stage = VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT,
                  .access = VK_ACCESS_2_SHADER_SAMPLED_READ_BIT,
@@ -1647,7 +1645,7 @@
             const RenderGraph::TextureDesc presentDesc{
                 .extent = {postExtent.width, postExtent.height, 1}, .format = swapchain.format(),
                 .usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT, .aspect = VK_IMAGE_ASPECT_COLOR_BIT};
-            const auto graphPresent = postProcessFrameGraph.importTexture(
+            const auto graphPresent = frameGraph.importTexture(
                 "Swapchain", swapchain.images().at(imageIndex.value), presentDesc,
                 {.layout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR});
 
@@ -1655,35 +1653,35 @@
             if (renderGameViewport && taaResolveActive) {
                 const std::uint32_t historyReadIndex = temporalAaPass.resolvedIndex();
                 const std::uint32_t historyWriteIndex = temporalAaPass.nextResolvedIndex();
-                const auto graphHistoryRead = postProcessFrameGraph.importTexture(
+                const auto graphHistoryRead = frameGraph.importTexture(
                     "TAA history read", temporalAaPass.historyImage(historyReadIndex), hdrDesc,
                     {.stage = VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT,
                      .access = VK_ACCESS_2_SHADER_SAMPLED_READ_BIT,
                      .layout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL});
-                const auto graphHistoryWrite = postProcessFrameGraph.importTexture(
+                const auto graphHistoryWrite = frameGraph.importTexture(
                     "TAA history write", temporalAaPass.historyImage(historyWriteIndex), hdrDesc,
                     {.layout = VK_IMAGE_LAYOUT_UNDEFINED});
                 RenderGraph::TextureHandle graphWaterVelocity;
                 RenderGraph::TextureHandle graphWaterMeta;
                 RenderGraph::TextureHandle graphWaterSurface;
                 if (virtualWaterPreparedThisFrame) {
-                    graphWaterVelocity = postProcessFrameGraph.importTexture(
+                    graphWaterVelocity = frameGraph.importTexture(
                         "Water velocity", virtualWaterRenderer.velocityImage(), hdrDesc,
                         {.stage = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
                          .access = VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT,
                          .layout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, .write = true});
-                    graphWaterMeta = postProcessFrameGraph.importTexture(
+                    graphWaterMeta = frameGraph.importTexture(
                         "Water metadata", virtualWaterRenderer.metaImage(), hdrDesc,
                         {.stage = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
                          .access = VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT,
                          .layout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, .write = true});
-                    graphWaterSurface = postProcessFrameGraph.importTexture(
+                    graphWaterSurface = frameGraph.importTexture(
                         "Water surface", virtualWaterRenderer.surfaceImage(), hdrDesc,
                         {.stage = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
                          .access = VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT,
                          .layout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, .write = true});
                 }
-                postProcessFrameGraph.addPass("TAA resolve", RenderGraph::Queue::Graphics,
+                frameGraph.addPass("TAA resolve", RenderGraph::Queue::Graphics,
                 [&](RenderGraph::PassBuilder& builder) {
                     builder.read(graphHdr, RenderGraph::TextureUsage::SampledReadFragment);
                     builder.read(graphVelocity, RenderGraph::TextureUsage::SampledReadFragment);
@@ -1707,14 +1705,14 @@
                 });
                 graphPostSource = graphHistoryWrite;
             } else {
-                postProcessFrameGraph.addPass("TAA disabled", RenderGraph::Queue::Graphics,
+                frameGraph.addPass("TAA disabled", RenderGraph::Queue::Graphics,
                     [](RenderGraph::PassBuilder&) {}, [&](const VkCommandBuffer buffer) {
                         gpuTimestampProfiler.beginZone(buffer, currentFrame, taaProfileName);
                         gpuTimestampProfiler.endZone(buffer, currentFrame);
                     });
             }
             if (renderGameViewport) {
-                postProcessFrameGraph.addPass("Bloom", RenderGraph::Queue::Graphics,
+                frameGraph.addPass("Bloom", RenderGraph::Queue::Graphics,
                 [&](RenderGraph::PassBuilder& builder) {
                     builder.read(graphPostSource, RenderGraph::TextureUsage::SampledReadFragment);
                     builder.write(graphBloom, RenderGraph::TextureUsage::ColorAttachment);
@@ -1729,7 +1727,7 @@
                     gpuTimestampProfiler.endZone(buffer, currentFrame);
                 });
             }
-            postProcessFrameGraph.addPass(editorUiActive ? "Editor UI" : "Tonemap and UI",
+            frameGraph.addPass(editorUiActive ? "Editor UI" : "Tonemap and UI",
                                           RenderGraph::Queue::Graphics,
             [&](RenderGraph::PassBuilder& builder) {
                 if (!editorUiActive) {
@@ -1768,8 +1766,8 @@
                 }
                 gpuTimestampProfiler.endZone(buffer, currentFrame);
             });
-            postProcessFrameGraph.exportTexture(graphPresent);
-            postProcessFrameGraph.execute(commandBuffer);
+            frameGraph.exportTexture(graphPresent);
+            frameGraph.execute(commandBuffer);
             gpuTimestampProfiler.endFrame(commandBuffer, currentFrame);
 
             if (vkEndCommandBuffer(commandBuffer) != VK_SUCCESS) {

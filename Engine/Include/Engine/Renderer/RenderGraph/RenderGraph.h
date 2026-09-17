@@ -140,6 +140,37 @@ namespace Engine::RenderGraph {
         std::uint32_t batch{};
     };
 
+    /** An external semaphore wait attached to a compiled submission batch. */
+    struct ExternalSemaphoreWait final {
+        VkSemaphore semaphore{VK_NULL_HANDLE};
+        std::uint64_t value{}; // zero for a binary semaphore
+        VkPipelineStageFlags2 stage{VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT};
+        std::uint32_t batch{};
+    };
+
+    /** A semaphore signalled after every graph batch has completed. */
+    struct ExternalSemaphoreSignal final {
+        VkSemaphore semaphore{VK_NULL_HANDLE};
+        std::uint64_t value{}; // zero for a binary semaphore
+        VkPipelineStageFlags2 stage{VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT};
+    };
+
+    /**
+     * Runtime services required to turn the compiled schedule into Vulkan
+     * command buffers and queue submissions.  Command buffers are one-to-one
+     * with queueBatches(), and are reset and recorded by RenderGraph.
+     */
+    struct SubmissionContext final {
+        VkQueue queues[3]{VK_NULL_HANDLE, VK_NULL_HANDLE, VK_NULL_HANDLE};
+        std::vector<VkCommandBuffer> commandBuffers;
+        VkSemaphore graphTimeline{VK_NULL_HANDLE};
+        std::uint64_t* nextTimelineValue{};
+        VkSemaphore uploadTimeline{VK_NULL_HANDLE};
+        std::vector<ExternalSemaphoreWait> externalWaits;
+        std::vector<ExternalSemaphoreSignal> completionSignals;
+        VkFence completionFence{VK_NULL_HANDLE};
+    };
+
     class RenderGraph;
 
     class PassBuilder final {
@@ -218,6 +249,8 @@ namespace Engine::RenderGraph {
         void execute(VkCommandBuffer commandBuffer);
         /** Emits only work assigned to queue. Cross-queue acquire/release barriers are included. */
         void execute(Queue queue, VkCommandBuffer commandBuffer);
+        /** Records and submits every compiled queue batch using synchronization2. */
+        void recordAndSubmit(const SubmissionContext& context);
         /**
          * Starts a new logical frame. The caller must ensure commands using
          * the previous graph have completed before reusing the pool.

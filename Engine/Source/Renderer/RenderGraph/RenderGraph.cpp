@@ -1295,6 +1295,116 @@ namespace Engine::RenderGraph {
         }
     }
 
+    void RenderGraph::recordAndSubmit(const SubmissionContext& context) {
+        if (!compiled_) compile();
+        if (context.commandBuffers.size() != queueBatches_.size()) {
+            throw std::invalid_argument("RenderGraph requires one command buffer per queue batch");
+        }
+        if (context.graphTimeline == VK_NULL_HANDLE || context.nextTimelineValue == nullptr) {
+            throw std::invalid_argument("RenderGraph submission requires a timeline semaphore and counter");
+        }
+        for (const QueueBatch& batch : queueBatches_) {
+            if (context.queues[static_cast<std::uint32_t>(batch.queue)] == VK_NULL_HANDLE) {
+                throw std::invalid_argument("RenderGraph submission is missing a queue");
+            }
+        }
+        if (!uploadWaits_.empty() && context.uploadTimeline == VK_NULL_HANDLE) {
+            throw std::invalid_argument("RenderGraph upload waits require the upload timeline semaphore");
+        }
+
+        const auto emit = [](const VkCommandBuffer commandBuffer, const BarrierBatch& batch) {
+            if (batch.images.empty() && batch.buffers.empty()) return;
+            const VkDependencyInfo dependency{
+                .sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO,
+                .bufferMemoryBarrierCount = static_cast<std::uint32_t>(batch.buffers.size()),
+                .pBufferMemoryBarriers = batch.buffers.data(),
+                .imageMemoryBarrierCount = static_cast<std::uint32_t>(batch.images.size()),
+                .pImageMemoryBarriers = batch.images.data()};
+            vkCmdPipelineBarrier2(commandBuffer, &dependency);
+        };
+        std::vector<std::uint32_t> passOrder(passes_.size(), std::numeric_limits<std::uint32_t>::max());
+        for (std::uint32_t order = 0; order < order_.size(); ++order) passOrder[order_[order]] = order;
+        for (std::uint32_t index = 0; index < queueBatches_.size(); ++index) {
+            const VkCommandBuffer commandBuffer = context.commandBuffers[index];
+            if (commandBuffer == VK_NULL_HANDLE || vkResetCommandBuffer(commandBuffer, 0) != VK_SUCCESS) {
+                throw std::runtime_error("Could not reset RenderGraph batch command buffer");
+            }
+            const VkCommandBufferBeginInfo begin{.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
+            if (vkBeginCommandBuffer(commandBuffer, &begin) != VK_SUCCESS) {
+                throw std::runtime_error("Could not begin RenderGraph batch command buffer");
+            }
+            for (const std::uint32_t pass : queueBatches_[index].passes) {
+                const std::uint32_t ordered = passOrder[pass];
+                emit(commandBuffer, barriers_[ordered]);
+                if (passes_[pass].execute) passes_[pass].execute(commandBuffer);
+                emit(commandBuffer, releaseBarriers_[ordered]);
+            }
+            if (vkEndCommandBuffer(commandBuffer) != VK_SUCCESS) {
+                throw std::runtime_error("Could not end RenderGraph batch command buffer");
+            }
+        }
+
+        std::vector<std::uint64_t> batchValues(queueBatches_.size());
+        for (std::uint32_t index = 0; index < queueBatches_.size(); ++index) {
+            const QueueBatch& batch = queueBatches_[index];
+            std::vector<VkSemaphoreSubmitInfo> waits;
+            for (const std::uint32_t producer : batch.waitBatches) {
+                waits.push_back({.sType = VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO,
+                    .semaphore = context.graphTimeline, .value = batchValues[producer],
+                    .stageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT});
+            }
+            for (const UploadWait& wait : uploadWaits_) if (wait.batch == index) {
+                waits.push_back({.sType = VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO,
+                    .semaphore = context.uploadTimeline, .value = wait.timelineValue, .stageMask = wait.stage});
+            }
+            for (const ExternalSemaphoreWait& wait : context.externalWaits) if (wait.batch == index) {
+                if (wait.semaphore == VK_NULL_HANDLE) throw std::invalid_argument("RenderGraph external wait is null");
+                waits.push_back({.sType = VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO,
+                    .semaphore = wait.semaphore, .value = wait.value, .stageMask = wait.stage});
+            }
+            batchValues[index] = ++*context.nextTimelineValue;
+            const VkSemaphoreSubmitInfo signal{.sType = VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO,
+                .semaphore = context.graphTimeline, .value = batchValues[index],
+                .stageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT};
+            const VkCommandBufferSubmitInfo command{.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_SUBMIT_INFO,
+                .commandBuffer = context.commandBuffers[index]};
+            const VkSubmitInfo2 submit{.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO_2,
+                .waitSemaphoreInfoCount = static_cast<std::uint32_t>(waits.size()), .pWaitSemaphoreInfos = waits.data(),
+                .commandBufferInfoCount = 1, .pCommandBufferInfos = &command,
+                .signalSemaphoreInfoCount = 1, .pSignalSemaphoreInfos = &signal};
+            if (vkQueueSubmit2(context.queues[static_cast<std::uint32_t>(batch.queue)], 1, &submit,
+                               VK_NULL_HANDLE) != VK_SUCCESS) {
+                throw std::runtime_error("Could not submit RenderGraph queue batch");
+            }
+        }
+
+        // A frame fence must cover independent async batches too, not merely
+        // the last topological batch.  A final empty graphics submission joins
+        // all graph timeline values and is the sole owner of completion signals.
+        if (context.queues[static_cast<std::uint32_t>(Queue::Graphics)] == VK_NULL_HANDLE) {
+            throw std::invalid_argument("RenderGraph completion requires a graphics queue");
+        }
+        std::vector<VkSemaphoreSubmitInfo> completionWaits;
+        for (const std::uint64_t value : batchValues) completionWaits.push_back({
+            .sType = VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO, .semaphore = context.graphTimeline,
+            .value = value, .stageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT});
+        std::vector<VkSemaphoreSubmitInfo> completionSignals;
+        for (const ExternalSemaphoreSignal& signal : context.completionSignals) {
+            if (signal.semaphore == VK_NULL_HANDLE) throw std::invalid_argument("RenderGraph completion signal is null");
+            completionSignals.push_back({.sType = VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO,
+                .semaphore = signal.semaphore, .value = signal.value, .stageMask = signal.stage});
+        }
+        const VkSubmitInfo2 completion{.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO_2,
+            .waitSemaphoreInfoCount = static_cast<std::uint32_t>(completionWaits.size()),
+            .pWaitSemaphoreInfos = completionWaits.data(),
+            .signalSemaphoreInfoCount = static_cast<std::uint32_t>(completionSignals.size()),
+            .pSignalSemaphoreInfos = completionSignals.data()};
+        if (vkQueueSubmit2(context.queues[static_cast<std::uint32_t>(Queue::Graphics)], 1, &completion,
+                           context.completionFence) != VK_SUCCESS) {
+            throw std::runtime_error("Could not submit RenderGraph completion batch");
+        }
+    }
+
     void RenderGraph::destroyTransientPool() noexcept {
         if (allocator_ != VK_NULL_HANDLE) {
             for (const auto &allocation: transientAllocations_) {

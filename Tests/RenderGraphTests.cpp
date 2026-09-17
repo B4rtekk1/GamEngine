@@ -243,6 +243,18 @@ TEST(RenderGraphTests, BuildsQueueBatchesFromTheCompiledDag) {
     EXPECT_EQ(graph.queueBatches()[2].waitBatches, (std::vector<std::uint32_t>{1U}));
 }
 
+TEST(RenderGraphTests, SubmissionRequiresOneCommandBufferPerCompiledBatch) {
+    RenderGraph graph;
+    graph.addPass("Graphics", Queue::Graphics, [](PassBuilder&) {}, {});
+    graph.addPass("Compute", Queue::AsyncCompute, [](PassBuilder&) {}, {});
+    graph.compile();
+
+    SubmissionContext context;
+    // Validation happens before touching Vulkan, so the scheduling contract is
+    // testable without a device and prevents partial recording/submission.
+    EXPECT_THROW(graph.recordAndSubmit(context), std::invalid_argument);
+}
+
 TEST(RenderGraphTests, ReflectionFallbackOrdersSsrBeforeProbeAndSkyResolution) {
     RenderGraph graph;
     const auto image = [](const std::uintptr_t value) { return reinterpret_cast<VkImage>(value); };
