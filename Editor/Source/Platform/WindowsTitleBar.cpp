@@ -19,10 +19,6 @@ namespace {
     return GetDpiForWindow(window);
 }
 
-[[nodiscard]] int scaledToNative(const HWND window, const float value) {
-    return static_cast<int>(std::lround(value * static_cast<float>(windowDpi(window)) / 96.0F));
-}
-
 void extendFrame(const HWND window, const int titleBarHeight) {
     const MARGINS margins{
         .cxLeftWidth = 0,
@@ -123,7 +119,7 @@ void WindowsTitleBar::attach(SDL_Window* window) {
     if (handle == nullptr) return;
 
     windowHandle_ = handle;
-    titleBarHeight_ = scaledToNative(handle, 36.0F);
+    titleBarHeight_ = 36;
     interactiveRight_ = titleBarHeight_;
     extendFrame(handle, titleBarHeight_);
     if (!SetWindowSubclass(handle, titleBarProc, reinterpret_cast<UINT_PTR>(this),
@@ -149,9 +145,9 @@ void WindowsTitleBar::setInteractiveArea(const float left, const float right, co
 #ifdef _WIN32
     if (windowHandle_ == nullptr) return;
     const HWND handle = static_cast<HWND>(windowHandle_);
-    interactiveLeft_ = scaledToNative(handle, left);
-    interactiveRight_ = std::max(interactiveLeft_, scaledToNative(handle, right));
-    const int nativeHeight = std::max(1, scaledToNative(handle, height));
+    interactiveLeft_ = static_cast<int>(std::lround(left));
+    interactiveRight_ = std::max(interactiveLeft_, static_cast<int>(std::lround(right)));
+    const int nativeHeight = std::max(1, static_cast<int>(std::lround(height)));
     if (nativeHeight != titleBarHeight_) {
         titleBarHeight_ = nativeHeight;
         extendFrame(handle, titleBarHeight_);
@@ -166,31 +162,11 @@ void WindowsTitleBar::setInteractiveArea(const float left, const float right, co
 float WindowsTitleBar::contentRight() const {
 #ifdef _WIN32
     if (windowHandle_ == nullptr) return 0.0F;
-    const HWND handle = static_cast<HWND>(windowHandle_);
-    const RECT bounds = captionButtons(handle);
+    const RECT bounds = captionButtons(static_cast<HWND>(windowHandle_));
     if (!IsRectEmpty(&bounds))
-        return static_cast<float>(bounds.left) * 96.0F / static_cast<float>(windowDpi(handle));
+        return static_cast<float>(bounds.left);
 #endif
     return 0.0F;
-}
-
-CaptionButtonBounds WindowsTitleBar::captionButtonBounds() const {
-#ifdef _WIN32
-    if (windowHandle_ != nullptr) {
-        const HWND handle = static_cast<HWND>(windowHandle_);
-        const RECT bounds = captionButtons(handle);
-        if (!IsRectEmpty(&bounds)) {
-            const float scale = 96.0F / static_cast<float>(windowDpi(handle));
-            return {
-                .left = static_cast<float>(bounds.left) * scale,
-                .top = static_cast<float>(bounds.top) * scale,
-                .right = static_cast<float>(bounds.right) * scale,
-                .bottom = static_cast<float>(bounds.bottom) * scale,
-            };
-        }
-    }
-#endif
-    return {};
 }
 
 int WindowsTitleBar::captionButtonHitTest(const int x, const int y) const noexcept {
@@ -207,14 +183,6 @@ int WindowsTitleBar::captionButtonHitTest(const int x, const int y) const noexce
     static_cast<void>(x);
     static_cast<void>(y);
     return 0;
-#endif
-}
-
-bool WindowsTitleBar::isMaximized() const noexcept {
-#ifdef _WIN32
-    return windowHandle_ != nullptr && IsZoomed(static_cast<HWND>(windowHandle_));
-#else
-    return false;
 #endif
 }
 

@@ -4,15 +4,6 @@ struct SDL_Window;
 
 namespace Editor {
 
-struct CaptionButtonBounds {
-    float left = 0.0F;
-    float top = 0.0F;
-    float right = 0.0F;
-    float bottom = 0.0F;
-
-    [[nodiscard]] bool valid() const noexcept { return right > left && bottom > top; }
-};
-
 // Extends the SDL client area into the Win32 title bar while leaving the DWM
 // caption buttons (and therefore Windows 11 Snap Layouts) under Windows' control.
 class WindowsTitleBar {
@@ -26,14 +17,13 @@ public:
     void attach(SDL_Window* window);
     void detach();
 
-    // Coordinates are in the main ImGui viewport's logical pixel space.
+    // SDL and ImGui use the same window-relative physical-pixel coordinates
+    // as Win32/DWM on Windows.
     // The area contains UI which must receive mouse input rather than drag the window.
     void setInteractiveArea(float left, float right, float height);
 
     [[nodiscard]] float contentRight() const;
-    [[nodiscard]] CaptionButtonBounds captionButtonBounds() const;
     [[nodiscard]] int captionButtonHitTest(int x, int y) const noexcept;
-    [[nodiscard]] bool isMaximized() const noexcept;
     [[nodiscard]] bool isInteractiveClientPoint(int x, int y) const noexcept;
     [[nodiscard]] int nativeHeight() const noexcept;
 
