@@ -1549,7 +1549,7 @@
             // prepass. This legacy submit split remains here temporarily for
             // the other async command-buffer infrastructure, but must never
             // record the pyramid a second time.
-            if (false && renderGameViewport && hizEnabled) {
+            if (false && renderGameViewport) {
                 // Hi-Z is a complete graph resource: Forward produces the
                 // imported depth image and this pass writes the imported mip
                 // chain.  The graph owns the outer depth/read -> storage/write

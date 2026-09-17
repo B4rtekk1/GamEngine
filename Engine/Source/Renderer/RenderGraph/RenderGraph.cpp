@@ -512,7 +512,7 @@ namespace Engine::RenderGraph {
             mix(resource.desc.samples);
         }
         for (const auto &resource: buffers_) {
-            mix(resource.imported);
+            mix(static_cast<std::uint64_t>(resource.imported));
             mix(resource.desc.size);
             mix(resource.desc.usage);
         }
