@@ -53,6 +53,7 @@
 #include "Editor/EditorConstants.h"
 #include "Editor/EditorUi.h"
 #include "Editor/TerrainSculptState.h"
+#include "Editor/Platform/WindowsTitleBar.h"
 #include "ScriptHotReload.h"
 #include "ShaderHotReload.h"
 #include "Platform/UserPaths.h"
@@ -262,6 +263,8 @@ int main(int argc, char** argv) {
         if (window == nullptr) {
             throw std::runtime_error(SDL_GetError());
         }
+        Editor::WindowsTitleBar titleBar;
+        titleBar.attach(window);
 
         IMGUI_CHECKVERSION();
         ImGui::CreateContext();
@@ -557,7 +560,7 @@ int main(int argc, char** argv) {
             bool pasteRequested = false;
             bool duplicateRequested = false;
             bool resetHistoryRequested = false;
-            if (const Engine::Entity created = drawEditorMenuBar(scene, renderer, content, project,
+            if (const Engine::Entity created = drawEditorMenuBar(scene, renderer, content, project, titleBar,
                                                                  antialiasingChanged, sceneLoaded, sceneSaved,
                                                                  sceneDeleted,
                                                                  playing, paused, playToggleRequested,
@@ -1058,6 +1061,7 @@ int main(int argc, char** argv) {
         shaderGraphPanel.reset();
         ImNodes::DestroyContext();
         ImGui::DestroyContext();
+        titleBar.detach();
         SDL_DestroyWindow(window);
         SDL_Quit();
         Engine::Diagnostics::instance().shutdown();

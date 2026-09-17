@@ -251,6 +251,7 @@ void endTopMenu() {
 
 Engine::Entity drawEditorMenuBar(Engine::ScenePreset &scene, Engine::Renderer &renderer,
                                  Engine::Assets::Content& content, Engine::Project& project,
+                                 Editor::WindowsTitleBar& titleBar,
                                  bool &antialiasingChanged, bool &sceneLoaded, bool &sceneSaved,
                                  bool &sceneDeleted,
                                  const bool playing, const bool paused, bool &playToggleRequested,
@@ -370,17 +371,22 @@ Engine::Entity drawEditorMenuBar(Engine::ScenePreset &scene, Engine::Renderer &r
         }
     };
 
-    if (!ImGui::BeginMainMenuBar()) { return Engine::NullEntity;
-}
+    ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, {10.0F, 10.0F});
+    if (!ImGui::BeginMainMenuBar()) {
+        ImGui::PopStyleVar();
+        return Engine::NullEntity;
+    }
+    const float captionButtonsStart = titleBar.contentRight();
+    if (captionButtonsStart > 0.0F) {
+        const ImVec2 menuBarOrigin = ImGui::GetWindowPos();
+        ImGui::PushClipRect(menuBarOrigin,
+                            {captionButtonsStart - 8.0F, menuBarOrigin.y + ImGui::GetFrameHeight()}, true);
+    }
 
     ImGui::PushStyleColor(ImGuiCol_Text, {0.55F, 0.80F, 1.0F, 1.0F});
     ImGui::TextUnformatted("GamEngine");
     ImGui::PopStyleColor();
-    ImGui::SameLine(0.0F, 6.0F);
-    ImGui::TextDisabled("Editor");
-    ImGui::SameLine(0.0F, 12.0F);
-    ImGui::TextDisabled("|");
-    ImGui::SameLine(0.0F, 4.0F);
+    ImGui::SameLine(0.0F, 14.0F);
     const std::filesystem::path activeScenePath = EditorSceneSession::scenePath();
     if (beginTopMenu("File", "Project and scene files")) {
         ImGui::BeginDisabled(playing);
@@ -658,7 +664,56 @@ Engine::Entity drawEditorMenuBar(Engine::ScenePreset &scene, Engine::Renderer &r
         endTopMenu();
     }
 
+    const ImVec2 menuBarOrigin = ImGui::GetWindowPos();
+    const ImVec2 menuBarCursor = ImGui::GetCursorScreenPos();
+    titleBar.setInteractiveArea(menuBarOrigin.x, menuBarCursor.x, ImGui::GetFrameHeight());
+    if (captionButtonsStart > 0.0F) ImGui::PopClipRect();
+
+    // WM_NCCALCSIZE makes the complete title bar client-rendered.  Draw the
+    // glyphs here, while Windows still owns their behavior via HTMINBUTTON,
+    // HTMAXBUTTON and HTCLOSE in WindowsTitleBar's hit test.
+    const Editor::CaptionButtonBounds captionButtons = titleBar.captionButtonBounds();
+    if (captionButtons.valid()) {
+        ImDrawList* const drawList = ImGui::GetWindowDrawList();
+        const float buttonWidth = (captionButtons.right - captionButtons.left) / 3.0F;
+        const float buttonHeight = captionButtons.bottom - captionButtons.top;
+        const ImVec2 mouse = ImGui::GetMousePos();
+        for (int index = 0; index < 3; ++index) {
+            const ImVec2 minimum{captionButtons.left + buttonWidth * static_cast<float>(index),
+                                 captionButtons.top};
+            const ImVec2 maximum{minimum.x + buttonWidth, captionButtons.bottom};
+            const bool hovered = mouse.x >= minimum.x && mouse.x < maximum.x &&
+                                 mouse.y >= minimum.y && mouse.y < maximum.y;
+            if (hovered) {
+                drawList->AddRectFilled(minimum, maximum,
+                                        index == 2 ? IM_COL32(196, 43, 28, 255)
+                                                   : IM_COL32(67, 77, 100, 220));
+            }
+            const ImU32 glyphColor = IM_COL32(230, 235, 245, 255);
+            const ImVec2 center{minimum.x + buttonWidth * 0.5F,
+                                minimum.y + buttonHeight * 0.5F};
+            constexpr float glyphHalfExtent = 5.0F;
+            if (index == 0) {
+                drawList->AddLine({center.x - glyphHalfExtent, center.y + 3.0F},
+                                  {center.x + glyphHalfExtent, center.y + 3.0F}, glyphColor, 1.0F);
+            } else if (index == 1) {
+                const ImVec2 minimumBox{center.x - glyphHalfExtent, center.y - glyphHalfExtent};
+                const ImVec2 maximumBox{center.x + glyphHalfExtent, center.y + glyphHalfExtent};
+                drawList->AddRect(minimumBox, maximumBox, glyphColor, 0.0F, 0, 1.0F);
+                if (titleBar.isMaximized()) {
+                    drawList->AddRect({minimumBox.x + 2.0F, minimumBox.y - 2.0F},
+                                      {maximumBox.x + 2.0F, maximumBox.y - 2.0F}, glyphColor, 0.0F, 0, 1.0F);
+                }
+            } else {
+                drawList->AddLine({center.x - glyphHalfExtent, center.y - glyphHalfExtent},
+                                  {center.x + glyphHalfExtent, center.y + glyphHalfExtent}, glyphColor, 1.0F);
+                drawList->AddLine({center.x + glyphHalfExtent, center.y - glyphHalfExtent},
+                                  {center.x - glyphHalfExtent, center.y + glyphHalfExtent}, glyphColor, 1.0F);
+            }
+        }
+    }
     ImGui::EndMainMenuBar();
+    ImGui::PopStyleVar();
 
     if (openNewProject) {
         ImGui::OpenPopup("New Project");
