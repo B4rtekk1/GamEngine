@@ -192,6 +192,12 @@ namespace Engine::RenderGraph {
         void write(BufferHandle buffer, BufferUsage usage = BufferUsage::StorageWrite);
         [[nodiscard]] BufferHandle writeBuffer(std::string name, const BufferDesc& desc,
                                                 BufferUsage usage = BufferUsage::StorageWrite);
+        /**
+         * Keeps this pass alive when pass culling is enabled. Use this only
+         * for work observed outside graph resources (for example a legacy
+         * callback during migration, query writes, or an external encoder).
+         */
+        void setSideEffect();
 
     private:
         friend class RenderGraph;
@@ -296,6 +302,7 @@ namespace Engine::RenderGraph {
             struct FinalTextureState final { TextureHandle texture; TextureState state; TextureSubresourceRange range; };
             std::vector<FinalTextureState> finalTextureStates;
             std::vector<BufferAccess> bufferAccesses;
+            bool sideEffect{};
             ExecuteCallback execute;
         };
         // These are complete, physical Vulkan barriers after compile().  Keeping

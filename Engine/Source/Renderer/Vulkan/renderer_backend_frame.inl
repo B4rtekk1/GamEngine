@@ -488,6 +488,7 @@
             // migrated individually, but no upload is allowed to bypass the
             // frame graph and reintroduce a global timeline wait.
             frameGraph.reset();
+            frameGraph.enablePassCulling();
             frameGraph.setQueueFamily(RenderGraph::Queue::Graphics, vulkanDevice.graphicsQueueFamily());
             frameGraph.setQueueFamily(RenderGraph::Queue::AsyncCompute, vulkanDevice.computeQueueFamily());
             std::vector<RenderGraph::BufferHandle> frameUploadBuffers;
@@ -532,6 +533,10 @@
             for (const Texture2D& texture : materialTextures) importFrameUploadTexture("Material texture", texture);
             frameGraph.addPass("Legacy frame resource consumers", RenderGraph::Queue::Graphics,
                 [&](RenderGraph::PassBuilder& builder) {
+                    // The callbacks that bind these descriptor sets are not
+                    // graph-owned yet. Keep their resource-scoped upload wait
+                    // as an explicit culling root until that migration ends.
+                    builder.setSideEffect();
                     // ALL_COMMANDS is intentional: these resources are bound
                     // by descriptor sets owned by still-legacy callbacks, so
                     // their first precise stage has not yet been split out.
@@ -544,7 +549,22 @@
             // frame-local contract separate from whether the water world has
             // bodies, as a renderer can be active without its prepass having
             // been recorded yet.
-            bool virtualWaterPreparedThisFrame = false;
+            // The virtual-water prepass is recorded by the legacy work pass
+            // below whenever the Game View and the renderer are active. Keep
+            // this decision available while declaring TAA's graph resources.
+            const bool virtualWaterPreparedThisFrame = renderGameViewport && virtualWaterRenderer.active();
+            // Until each callback receives a precise resource declaration,
+            // keep the legacy recording sequence as one ordered frame-graph
+            // node. This is deliberately a side-effect root: it records
+            // shadowing, culling, raster, water and Scene View work which is
+            // still described by their legacy descriptor sets.
+            frameGraph.addPass("Legacy frame work", RenderGraph::Queue::Graphics,
+                [](RenderGraph::PassBuilder& builder) { builder.setSideEffect(); },
+                [&](const VkCommandBuffer legacyCommandBuffer) {
+            // All code in this block records into the same command buffer.
+            // Bind the graph-owned command buffer by reference so accidental
+            // future command-buffer splits cannot bypass the graph schedule.
+            commandBuffer = legacyCommandBuffer;
             if (meshShaderPathActive && vulkanDevice.supportsMeshShaders() && globalMeshletCount != 0 &&
                 !sceneGpu.database.instances().empty() &&
                 meshletCullSets[currentFrame] != VK_NULL_HANDLE) {
@@ -1301,7 +1321,6 @@
                     virtualWaterRenderer.recordPrepass(commandBuffer, currentFrame,
                         shadowPass.descriptorSet(currentFrame), vertexBuffer.handle(), indexBuffer.handle(),
                         indirectDraws[currentFrame], commandOffset, countOffset);
-                    virtualWaterPreparedThisFrame = true;
                     gpuTimestampProfiler.endZone(commandBuffer, currentFrame);
                     gpuTimestampProfiler.beginZone(commandBuffer, currentFrame, waterShadeProfileName);
                     virtualWaterRenderer.recordAdaptiveShading(commandBuffer, currentFrame,
@@ -1523,6 +1542,8 @@
                     gpuTimestampProfiler.endZone(commandBuffer, currentFrame);
                 }
             }
+
+                });
 
             // Depth / Hi-Z is recorded by the graph directly after the
             // prepass. This legacy submit split remains here temporarily for

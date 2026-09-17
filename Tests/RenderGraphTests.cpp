@@ -220,6 +220,21 @@ TEST(RenderGraphTests, CullsPassesThatCannotReachAnExport) {
     EXPECT_EQ(graph.executionOrder(), (std::vector<std::string>{"Visible"}));
 }
 
+TEST(RenderGraphTests, KeepsExplicitSideEffectsWhileCullingUnreachablePasses) {
+    RenderGraph graph;
+    graph.enablePassCulling();
+    graph.addPass("External query write", [](PassBuilder& builder) {
+        builder.setSideEffect();
+    }, {});
+    graph.addPass("Dead temporary", [](PassBuilder& builder) {
+        [[maybe_unused]] const auto temporary = builder.writeTexture("Temporary", ColorTarget);
+    }, {});
+
+    graph.compile();
+
+    EXPECT_EQ(graph.executionOrder(), (std::vector<std::string>{"External query write"}));
+}
+
 TEST(RenderGraphTests, BuildsQueueBatchesFromTheCompiledDag) {
     RenderGraph graph;
     TextureHandle depth;

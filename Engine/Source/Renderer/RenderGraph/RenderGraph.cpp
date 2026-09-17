@@ -242,6 +242,10 @@ namespace Engine::RenderGraph {
         return buffer;
     }
 
+    void PassBuilder::setSideEffect() {
+        graph_.passes_[pass_].sideEffect = true;
+    }
+
     TextureHandle RenderGraph::importTexture(std::string name, const VkImage image, const TextureDesc &desc,
                                              const TextureState initialState) {
         if (image == VK_NULL_HANDLE) {
@@ -357,7 +361,7 @@ namespace Engine::RenderGraph {
         if (compiled_) {
             throw std::logic_error("Reset RenderGraph before adding passes");
         }
-        passes_.push_back({std::move(name), queue, {}, {}, {}, std::move(execute)});
+        passes_.push_back({std::move(name), queue, {}, {}, {}, false, std::move(execute)});
         PassBuilder builder{*this, static_cast<std::uint32_t>(passes_.size() - 1)};
         setup(builder);
     }
@@ -626,11 +630,12 @@ namespace Engine::RenderGraph {
             }
             topologyCaches_.push_back({signature, order_, true});
         }
-        // An output is a real graph root: everything that cannot reach an
-        // exported image/buffer can be discarded.  Keep the legacy behaviour
-        // when no outputs are declared, which makes incremental migration
-        // safe for existing callers with command-buffer side effects.
-        if (passCullingEnabled_ && (!exportedTextures_.empty() || !exportedBuffers_.empty())) {
+        // Exports and explicitly declared external side effects are real graph
+        // roots. A side-effect root is the escape hatch required while a
+        // callback is being migrated; it must be declared rather than making
+        // every pass implicitly live and defeating culling.
+        const bool hasSideEffect = std::ranges::any_of(passes_, [](const Pass& pass) { return pass.sideEffect; });
+        if (passCullingEnabled_ && (!exportedTextures_.empty() || !exportedBuffers_.empty() || hasSideEffect)) {
             std::vector<std::vector<std::uint32_t> > dependencies(count);
             std::vector<std::int32_t> writer(resources_.size(), -1);
             std::vector<std::vector<std::uint32_t> > readers(resources_.size());
@@ -686,6 +691,9 @@ namespace Engine::RenderGraph {
                     pending.push_back(
                         static_cast<std::uint32_t>(bufferWriter[buffer.index]));
                 }
+            }
+            for (std::uint32_t pass = 0; pass < count; ++pass) {
+                if (passes_[pass].sideEffect) pending.push_back(pass);
             }
             while (!pending.empty()) {
                 const auto pass = pending.back();
