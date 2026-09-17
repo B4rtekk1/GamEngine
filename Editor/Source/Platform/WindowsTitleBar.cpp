@@ -61,6 +61,24 @@ void extendFrame(const HWND window, const int titleBarHeight) {
     return bounds;
 }
 
+// DWMWA_CAPTION_BUTTON_BOUNDS is relative to the window.  The custom client
+// rectangle may be inset while maximized, so convert it before sharing it
+// with ImGui and client-coordinate hit testing.
+[[nodiscard]] RECT captionButtonsClient(const HWND window) {
+    RECT bounds = captionButtons(window);
+    if (IsRectEmpty(&bounds)) return bounds;
+
+    RECT windowBounds{};
+    POINT clientOrigin{};
+    if (!GetWindowRect(window, &windowBounds) || !ClientToScreen(window, &clientOrigin)) {
+        SetRectEmpty(&bounds);
+        return bounds;
+    }
+
+    OffsetRect(&bounds, windowBounds.left - clientOrigin.x, windowBounds.top - clientOrigin.y);
+    return bounds;
+}
+
 LRESULT CALLBACK titleBarProc(const HWND window, const UINT message, const WPARAM wParam,
                               const LPARAM lParam, const UINT_PTR, const DWORD_PTR referenceData) {
     auto* const titleBar = reinterpret_cast<Editor::WindowsTitleBar*>(referenceData);
@@ -71,7 +89,21 @@ LRESULT CALLBACK titleBarProc(const HWND window, const UINT message, const WPARA
 
     switch (message) {
         case WM_NCCALCSIZE:
-            if (wParam == TRUE) return 0;
+            if (wParam == TRUE) {
+                auto* const parameters = reinterpret_cast<NCCALCSIZE_PARAMS*>(lParam);
+                if (IsZoomed(window)) {
+                    const UINT dpi = windowDpi(window);
+                    const int borderX = GetSystemMetricsForDpi(SM_CXSIZEFRAME, dpi) +
+                                        GetSystemMetricsForDpi(SM_CXPADDEDBORDER, dpi);
+                    const int borderY = GetSystemMetricsForDpi(SM_CYSIZEFRAME, dpi) +
+                                        GetSystemMetricsForDpi(SM_CXPADDEDBORDER, dpi);
+                    parameters->rgrc[0].left += borderX;
+                    parameters->rgrc[0].right -= borderX;
+                    parameters->rgrc[0].top += borderY;
+                    parameters->rgrc[0].bottom -= borderY;
+                }
+                return 0;
+            }
             break;
 
         case WM_NCHITTEST: {
@@ -93,6 +125,8 @@ LRESULT CALLBACK titleBarProc(const HWND window, const UINT message, const WPARA
 
         case WM_DPICHANGED:
             extendFrame(window, titleBar->nativeHeight());
+            SetWindowPos(window, nullptr, 0, 0, 0, 0,
+                         SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED);
             break;
 
         default:
@@ -120,12 +154,16 @@ void WindowsTitleBar::attach(SDL_Window* window) {
 
     windowHandle_ = handle;
     titleBarHeight_ = 36;
+    interactiveLeft_ = 0;
     interactiveRight_ = titleBarHeight_;
-    extendFrame(handle, titleBarHeight_);
     if (!SetWindowSubclass(handle, titleBarProc, reinterpret_cast<UINT_PTR>(this),
                            reinterpret_cast<DWORD_PTR>(this))) {
         windowHandle_ = nullptr;
+        return;
     }
+    extendFrame(handle, titleBarHeight_);
+    SetWindowPos(handle, nullptr, 0, 0, 0, 0,
+                 SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED);
 #else
     static_cast<void>(window);
 #endif
@@ -162,7 +200,7 @@ void WindowsTitleBar::setInteractiveArea(const float left, const float right, co
 float WindowsTitleBar::contentRight() const {
 #ifdef _WIN32
     if (windowHandle_ == nullptr) return 0.0F;
-    const RECT bounds = captionButtons(static_cast<HWND>(windowHandle_));
+    const RECT bounds = captionButtonsClient(static_cast<HWND>(windowHandle_));
     if (!IsRectEmpty(&bounds))
         return static_cast<float>(bounds.left);
 #endif
@@ -172,7 +210,7 @@ float WindowsTitleBar::contentRight() const {
 CaptionButtonBounds WindowsTitleBar::captionButtonBounds() const {
 #ifdef _WIN32
     if (windowHandle_ != nullptr) {
-        const RECT bounds = captionButtons(static_cast<HWND>(windowHandle_));
+        const RECT bounds = captionButtonsClient(static_cast<HWND>(windowHandle_));
         if (!IsRectEmpty(&bounds)) {
             return {
                 .left = static_cast<float>(bounds.left),
@@ -189,7 +227,7 @@ CaptionButtonBounds WindowsTitleBar::captionButtonBounds() const {
 int WindowsTitleBar::captionButtonHitTest(const int x, const int y) const noexcept {
 #ifdef _WIN32
     if (windowHandle_ == nullptr) return HTNOWHERE;
-    const RECT bounds = captionButtons(static_cast<HWND>(windowHandle_));
+    const RECT bounds = captionButtonsClient(static_cast<HWND>(windowHandle_));
     if (!PtInRect(&bounds, {x, y})) return HTNOWHERE;
     const int buttonWidth = (bounds.right - bounds.left) / 3;
     if (buttonWidth <= 0) return HTNOWHERE;

@@ -693,7 +693,6 @@ Engine::Entity drawEditorMenuBar(Engine::ScenePreset &scene, Engine::Renderer &r
         const float buttonHeight = captionButtons.bottom - captionButtons.top;
         const ImVec2 mouse = ImGui::GetMousePos();
         constexpr float glyphHalfExtent = 5.0F;
-        constexpr float glyphTopMargin = 2.0F;
         const ImU32 glyphColor = IM_COL32(230, 235, 245, 255);
 
         for (int index = 0; index < 3; ++index) {
@@ -709,7 +708,7 @@ Engine::Entity drawEditorMenuBar(Engine::ScenePreset &scene, Engine::Renderer &r
             }
 
             const ImVec2 center{minimum.x + buttonWidth * 0.5F,
-                                minimum.y + buttonHeight * 0.5F + glyphTopMargin};
+                                minimum.y + buttonHeight * 0.5F};
             if (index == 0) {
                 drawList->AddLine({center.x - glyphHalfExtent, center.y + 2.0F},
                                   {center.x + glyphHalfExtent, center.y + 2.0F}, glyphColor, 1.0F);
