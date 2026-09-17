@@ -105,7 +105,7 @@ namespace Engine {
             expectedHeight = std::max(1U, expectedHeight / 2);
         }
         pageTableCpu_.assign(count, InvalidPage);
-        slots_.assign(config.cacheTilesX * config.cacheTilesY, {});
+        slots_.assign(static_cast<std::size_t>(config.cacheTilesX) * config.cacheTilesY, {});
         pageTable_.createHostVisible(physicalDevice, device_, sizeof(std::uint32_t) * count,
                                      VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, allocator_);
         mipOffsets_.createHostVisible(physicalDevice, device_,
