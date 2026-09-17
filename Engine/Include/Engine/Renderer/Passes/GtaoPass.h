@@ -65,7 +65,7 @@ private:
     GtaoQualitySettings quality_ = gtaoQualitySettings(GtaoQuality::High);
     // Descriptor writes must not race command buffers submitted for earlier
     // frames.  This renderer has three frame slots.
-    static constexpr std::uint32_t FramesInFlight = 3;
+    static constexpr std::uint32_t FramesInFlight = 2;
     HdrBuffer raw_;
     // Nearest-surface depth at the AO resolution.  It is distinct from the
     // far-biased hierarchy, which is used only by horizon sampling.

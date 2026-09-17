@@ -106,7 +106,7 @@ namespace Engine::Particles {
 
     class ParticleSystem {
     public:
-        static constexpr uint32_t FramesInFlight = 3;
+        static constexpr uint32_t FramesInFlight = 2;
 
         ParticleSystem(VkDevice device, VmaAllocator allocator, VkQueue computeQueue, VkCommandPool commandPool,
                        uint32_t maxParticles);

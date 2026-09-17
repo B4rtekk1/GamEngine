@@ -34,7 +34,7 @@ public:
     static void end(VkCommandBuffer commandBuffer);
 
 private:
-    static constexpr std::uint32_t FramesInFlight = 3;
+    static constexpr std::uint32_t FramesInFlight = 2;
     void createSceneDescriptors(const VkDescriptorImageInfo& opaqueColor,
                                 const VkDescriptorImageInfo& opaqueDepth);
     GraphicsPipeline pipeline_;

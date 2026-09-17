@@ -33,7 +33,7 @@ namespace Engine {
         GraphicsPipeline pipeline_;
         VkDescriptorSetLayout layout_ = VK_NULL_HANDLE;
         VkDescriptorPool pool_ = VK_NULL_HANDLE;
-        static constexpr std::uint32_t FramesInFlight = 3;
+        static constexpr std::uint32_t FramesInFlight = 2;
         std::array<VkDescriptorSet, FramesInFlight> sets_{};
         // A frame slot is fence-safe when record() is called.  Keep its last
         // binding so steady-state post processing performs no descriptor write.

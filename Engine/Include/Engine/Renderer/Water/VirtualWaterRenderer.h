@@ -31,7 +31,7 @@ public:
     ~VirtualWaterRenderer() { destroy(); }
     VirtualWaterRenderer(const VirtualWaterRenderer&) = delete;
     VirtualWaterRenderer& operator=(const VirtualWaterRenderer&) = delete;
-    static constexpr std::uint32_t FramesInFlight = 3;
+    static constexpr std::uint32_t FramesInFlight = 2;
 
     void create(VkPhysicalDevice physicalDevice, VkDevice device, VmaAllocator allocator,
                 Assets::AssetManager& assets, VkExtent2D extent, VkFormat depthFormat,

@@ -93,9 +93,9 @@ namespace Engine {
         std::uint64_t lastMeshRendererRevision = std::numeric_limits<std::uint64_t>::max();
         std::uint64_t lastTerrainGrassRevision = std::numeric_limits<std::uint64_t>::max();
         std::uint64_t lastParentRevision = std::numeric_limits<std::uint64_t>::max();
-        std::array<std::vector<std::size_t>, 3> dirtyTransforms;
-        std::array<std::vector<std::size_t>, 3> dirtyMaterials;
-        std::array<std::vector<std::size_t>, 3> dirtyCullingObjects;
+        std::array<std::vector<std::size_t>, 2> dirtyTransforms;
+        std::array<std::vector<std::size_t>, 2> dirtyMaterials;
+        std::array<std::vector<std::size_t>, 2> dirtyCullingObjects;
         struct PendingDatabaseUploads final : GPUSceneDatabase::DirtyRanges {
             std::vector<std::uint32_t> instanceStamps;
             std::vector<std::uint32_t> meshStamps;
