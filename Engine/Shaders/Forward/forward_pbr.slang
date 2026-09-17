@@ -378,6 +378,11 @@ ForwardFragmentOutput fragmentMain(ForwardFragmentInput input)
     roughness = clamp(graphSurface.roughness, 0.045, 1.0);
     normal = normalize(graphSurface.normal);
 #endif
+    // Diagnostic: preserve every full-rendering contribution while replacing
+    // only the shading normal.  This distinguishes normal mapping/TBN/normal
+    // texture filtering from view-dependent effects elsewhere in the PBR path.
+    normal = geometricNormal;
+
     // Specular anti-aliasing: high-frequency normal maps otherwise steer
     // adjacent pixels to unrelated parts of the environment, especially at
     // grazing angles. Derivative-based normal-to-roughness broadens the GGX
