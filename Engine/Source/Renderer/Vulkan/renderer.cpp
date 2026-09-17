@@ -756,7 +756,7 @@ namespace Engine {
             lastMeshRendererRevision = std::numeric_limits<std::uint64_t>::max();
             lastTerrainGrassRevision = std::numeric_limits<std::uint64_t>::max();
             lastParentRevision = std::numeric_limits<std::uint64_t>::max();
-            hiZValid = false;
+            hiZValid.fill(false);
 
             // The previous scene may have owned a particle system. Its GPU
             // resources must not survive a registry replacement into a scene
@@ -861,7 +861,7 @@ namespace Engine {
             lastMeshRendererRevision = std::numeric_limits<std::uint64_t>::max();
             lastTerrainGrassRevision = std::numeric_limits<std::uint64_t>::max();
             lastParentRevision = std::numeric_limits<std::uint64_t>::max();
-            hiZValid = false;
+            hiZValid.fill(false);
 
             createMaterialTextures();
             createMeshBuffers();
@@ -887,14 +887,15 @@ namespace Engine {
                 std::array<VkBuffer, MAX_FRAMES_IN_FLIGHT> virtualInstances{};
                 std::array<VkBuffer, MAX_FRAMES_IN_FLIGHT> virtualCulling{};
                 std::array<VkBuffer, MAX_FRAMES_IN_FLIGHT> sceneVirtualCulling{};
+                std::array<VkDescriptorImageInfo, MAX_FRAMES_IN_FLIGHT> virtualHiZ{};
                 for (std::size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i) {
                     virtualInstances[i] = instanceBuffers[i].handle();
                     virtualCulling[i] = cullingUniformBuffers[i].handle();
                     sceneVirtualCulling[i] = sceneCullingUniformBuffers[i].handle();
+                    virtualHiZ[i] = {hiZBuffers[i].sampler(), hiZBuffers[i].fullView(),
+                                     VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
                 }
-                VkDescriptorImageInfo hizInfo{hiZBuffer.sampler(), hiZBuffer.fullView(),
-                                               VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
-                virtualWaterRenderer.updateFrameBindings(virtualInstances, virtualCulling, hizInfo);
+                virtualWaterRenderer.updateFrameBindings(virtualInstances, virtualCulling, virtualHiZ);
                 const Water::WaterRenderWorld waterWorld =
                     Water::WaterRenderWorld::capture(registry, sceneGpu);
                 virtualWaterRenderer.rebuild(waterWorld);
@@ -1020,7 +1021,7 @@ namespace Engine {
             lastRenderTopologyRevision = registry.renderTopologyRevision();
             lastParticleEmitterRevision = registry.componentRevision<ParticleEmitterComponent>();
             lastSmokeEmitterRevision = registry.componentRevision<SmokeEmitterComponent>();
-            hiZValid = false;
+            hiZValid.fill(false);
             // Vertex edits can change every depth sample inside the previous
             // and current bounds. They are interactive and infrequent, so a
             // full shadow refresh is preferable to retaining stale terrain.

@@ -70,15 +70,15 @@ void VirtualWaterRenderer::create(VkPhysicalDevice physicalDevice, VkDevice devi
                                   Assets::AssetManager& assets, VkExtent2D extent, VkFormat depthFormat,
                                   VkImageView depthView, VkDescriptorSetLayout sceneLayout,
                                   VkImageView hdrTargetView, VkDescriptorImageInfo opaqueColor,
-                                  VkDescriptorImageInfo opaqueDepth, VkDescriptorImageInfo previousHiZ,
+                                  VkDescriptorImageInfo opaqueDepth, std::span<const VkDescriptorImageInfo> previousHiZ,
                                   std::span<const VkBuffer> instanceBuffers,
                                   std::span<const VkBuffer> cullingUniformBuffers,
                                   const bool enableHiZ) {
     destroy();
     if(!device || !extent.width || !extent.height || instanceBuffers.size()<FramesInFlight ||
-       cullingUniformBuffers.size()<FramesInFlight) throw std::invalid_argument("Invalid VirtualWaterRenderer resources");
+       cullingUniformBuffers.size()<FramesInFlight || previousHiZ.size()<FramesInFlight) throw std::invalid_argument("Invalid VirtualWaterRenderer resources");
     physicalDevice_=physicalDevice; device_=device; allocator_=allocator; assets_=&assets; extent_=extent; depthView_=depthView;
-    opaqueColor_=opaqueColor; opaqueDepth_=opaqueDepth; previousHiZ_=previousHiZ;
+    opaqueColor_=opaqueColor; opaqueDepth_=opaqueDepth; std::copy_n(previousHiZ.begin(),FramesInFlight,previousHiZ_.begin());
     hiZEnabled_ = enableHiZ;
     std::copy_n(instanceBuffers.begin(),FramesInFlight,instanceBuffers_.begin());
     std::copy_n(cullingUniformBuffers.begin(),FramesInFlight,cullingUniformBuffers_.begin());
@@ -379,7 +379,7 @@ void VirtualWaterRenderer::writeDescriptors() {
         writeBuffer(cullWrites[1],cullSets_[frame],1,VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,&cullBuffers[1]);
         writeBuffer(cullWrites[2],cullSets_[frame],2,VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,&cullBuffers[2]);
         writeBuffer(cullWrites[3],cullSets_[frame],3,VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,&cullBuffers[3]);
-        writeImage(cullWrites[4],cullSets_[frame],4,VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,&previousHiZ_);
+        writeImage(cullWrites[4],cullSets_[frame],4,VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,&previousHiZ_[frame]);
         writeBuffer(cullWrites[5],cullSets_[frame],5,VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,&cullBuffers[4]);
         writeBuffer(cullWrites[6],cullSets_[frame],6,VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,&cullBuffers[5]);
         writeBuffer(cullWrites[7],cullSets_[frame],7,VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,&cullBuffers[6]);
@@ -474,8 +474,8 @@ void VirtualWaterRenderer::writeDescriptors() {
     }
 }
 
-void VirtualWaterRenderer::updateFrameBindings(std::span<const VkBuffer> instances,std::span<const VkBuffer> culling,VkDescriptorImageInfo hiz){
-    if(instances.size()<FramesInFlight||culling.size()<FramesInFlight)return;std::copy_n(instances.begin(),FramesInFlight,instanceBuffers_.begin());std::copy_n(culling.begin(),FramesInFlight,cullingUniformBuffers_.begin());previousHiZ_=hiz;if(device_)writeDescriptors();
+void VirtualWaterRenderer::updateFrameBindings(std::span<const VkBuffer> instances,std::span<const VkBuffer> culling,std::span<const VkDescriptorImageInfo> hiz){
+    if(instances.size()<FramesInFlight||culling.size()<FramesInFlight||hiz.size()<FramesInFlight)return;std::copy_n(instances.begin(),FramesInFlight,instanceBuffers_.begin());std::copy_n(culling.begin(),FramesInFlight,cullingUniformBuffers_.begin());std::copy_n(hiz.begin(),FramesInFlight,previousHiZ_.begin());if(device_)writeDescriptors();
 }
 
 void VirtualWaterRenderer::rebuild(const WaterRenderWorld& world) {
@@ -675,7 +675,7 @@ void VirtualWaterRenderer::rebuild(const WaterRenderWorld& world) {
     farOceanConfig_.update(&farConfig,sizeof(farConfig));authoredWaterConfig_.update(&authoredConfig,sizeof(authoredConfig));
 
     GPUWaterCullConfig config{};config.pageCount=pageCount_;config.drawBinCount=drawBinCount_;
-    config.enableHiZ=hiZEnabled_&&previousHiZ_.imageView!=VK_NULL_HANDLE?1U:0U;config.qualityScale=frameBudget_.qualityScale;
+    config.enableHiZ=hiZEnabled_&&previousHiZ_[0].imageView!=VK_NULL_HANDLE?1U:0U;config.qualityScale=frameBudget_.qualityScale;
     config.currentFrame=waterFrameCounter_;config.maxHighGeometryPages=frameBudget_.maxHighGeometryPages;
     for (auto& buffer : cullConfig_) buffer.update(&config,sizeof(config));
 
@@ -703,7 +703,7 @@ void VirtualWaterRenderer::recordCull(VkCommandBuffer cmd, std::uint32_t frame, 
     ++waterFrameCounter_;
     GPUWaterCullConfig config{};
     config.pageCount=pageCount_;config.drawBinCount=drawBinCount_;
-    config.enableHiZ=hiZEnabled_&&previousHiZ_.imageView!=VK_NULL_HANDLE?1U:0U;
+    config.enableHiZ=hiZEnabled_&&previousHiZ_[frame].imageView!=VK_NULL_HANDLE?1U:0U;
     config.qualityScale=frameBudget_.qualityScale;config.currentFrame=waterFrameCounter_;
     config.maxHighGeometryPages=frameBudget_.maxHighGeometryPages;
     cullConfig_[frame].update(&config,sizeof(config));
@@ -1212,7 +1212,7 @@ void VirtualWaterRenderer::destroy() noexcept {
     for (auto& sets : authoredSets_) sets.fill(VK_NULL_HANDLE);
     instanceBuffers_.fill(VK_NULL_HANDLE);
     cullingUniformBuffers_.fill(VK_NULL_HANDLE);
-    previousHiZ_ = {};
+    previousHiZ_.fill({});
     opaqueColor_ = {};
     opaqueDepth_ = {};
 }

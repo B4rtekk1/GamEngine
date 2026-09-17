@@ -334,6 +334,9 @@
             // a teleport or a large orientation jump produces unavoidable
             // ghosting, so treat it as a camera cut instead.
             if (cameraCut) {
+                // A discontinuous camera/projection change invalidates every
+                // temporal Hi-Z slot, not only the slot rendered this frame.
+                hiZValid.fill(false);
                 virtualWaterRenderer.invalidateTemporalHistory();
                 // GTAO history is independent of TAA and must not survive a
                 // teleport or a large camera rotation either.
@@ -670,9 +673,10 @@
             // Empty scenes do not allocate culling/Hi-Z resources. Keep the
             // frame path disabled for them so no barrier references the null
             // image handle left by the intentionally skipped allocation.
+            const auto& hiZBuffer = hiZBuffers[currentFrame];
             const bool hasHiZResources = hiZBuffer.image() != VK_NULL_HANDLE;
             const bool hizEnabled = canUseHiZOcclusionCulling() && hasHiZResources;
-            const bool hadPreviousHiZ = hiZValid;
+            const bool hadPreviousHiZ = hiZValid[currentFrame];
             // The culling descriptor set always contains the Hi-Z image. Keep
             // its layout valid before the compute culling dispatch, even when
             // that dispatch skips occlusion testing.
@@ -1192,14 +1196,20 @@
                 [&](RenderGraph::PassBuilder& builder) {
                     builder.read(graphDepth, RenderGraph::TextureUsage::SampledReadCompute);
                     builder.write(graphHiZ, RenderGraph::TextureUsage::StorageWriteCompute);
-                }, [this](const VkCommandBuffer buffer) { hiZPass.record(buffer, hiZBuffer); });
+                }, [this](const VkCommandBuffer buffer) {
+                    hiZPasses[currentFrame].record(buffer, hiZBuffers[currentFrame]);
+                });
                 viewportFrameGraph.exportTexture(graphHiZ);
             } else viewportFrameGraph.exportTexture(graphDepth);
             // These callbacks record the prepass and Hi-Z at their declared
             // position.  Do not defer graph execution until the end of the
             // viewport: GTAO and the lighting pass below consume this depth.
             viewportFrameGraph.execute(commandBuffer);
-            if (hizEnabled) hiZValid = true;
+            if (hizEnabled) {
+                hiZViewProjections[currentFrame] = cameraController.camera()->projectionMatrix().native() *
+                                                  cameraController.camera()->viewMatrix().native();
+                hiZValid[currentFrame] = true;
+            }
 
             // The prepass has produced this frame's depth and velocity. GTAO
             // must finish before the lighting pass samples its result.
@@ -1556,6 +1566,7 @@
                 // transition; HiZPass owns only per-mip dependencies.
                 frameGraph.reset();
                 frameGraph.enablePassCulling();
+                const auto& hiZBuffer = hiZBuffers[currentFrame];
                 const VkExtent2D extent = swapchain.extent();
                 const RenderGraph::TextureDesc depthDesc{
                     .extent = {extent.width, extent.height, 1},
@@ -1588,7 +1599,7 @@
                     builder.read(depth, RenderGraph::TextureUsage::SampledReadCompute);
                     builder.write(hiZ, RenderGraph::TextureUsage::StorageWriteCompute);
                 }, [this](const VkCommandBuffer buffer) {
-                    hiZPass.record(buffer, hiZBuffer);
+                    hiZPasses[currentFrame].record(buffer, hiZBuffers[currentFrame]);
                 });
                 // This image is sampled by culling and VSM page marking on the
                 // next use of this frame slot, so it is the graph's external
@@ -1624,7 +1635,7 @@
                 } else {
                     frameGraph.execute(commandBuffer);
                 }
-                hiZValid = true;
+                hiZValid[currentFrame] = true;
             }
 
             // Presentation is one declarative chain.  Keeping TAA, bloom and

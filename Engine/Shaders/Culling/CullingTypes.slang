@@ -31,6 +31,7 @@ struct IndexedDrawCommand
 struct CullingUniformData
 {
     float4x4 viewProjection;
+    float4x4 occlusionViewProjection;
     float4 cameraPosition;
     float4 frustumPlanes[6];
     uint objectCount;

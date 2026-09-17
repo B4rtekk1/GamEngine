@@ -37,7 +37,7 @@ public:
                 Assets::AssetManager& assets, VkExtent2D extent, VkFormat depthFormat,
                 VkImageView depthView, VkDescriptorSetLayout sceneLayout,
                 VkImageView hdrTargetView, VkDescriptorImageInfo opaqueColor,
-                VkDescriptorImageInfo opaqueDepth, VkDescriptorImageInfo previousHiZ,
+                VkDescriptorImageInfo opaqueDepth, std::span<const VkDescriptorImageInfo> previousHiZ,
                 std::span<const VkBuffer> instanceBuffers,
                 std::span<const VkBuffer> cullingUniformBuffers,
                 bool enableHiZ = true);
@@ -48,7 +48,7 @@ public:
     /** Refreshes frame-buffer bindings after renderer buffer growth/recreation. */
     void updateFrameBindings(std::span<const VkBuffer> instanceBuffers,
                              std::span<const VkBuffer> cullingUniformBuffers,
-                             VkDescriptorImageInfo previousHiZ);
+                             std::span<const VkDescriptorImageInfo> previousHiZ);
 
     void recordCull(VkCommandBuffer commandBuffer, std::uint32_t frameIndex,
                     VkDescriptorSet sceneSet);
@@ -219,7 +219,7 @@ private:
 
     std::array<VkBuffer, FramesInFlight> instanceBuffers_{};
     std::array<VkBuffer, FramesInFlight> cullingUniformBuffers_{};
-    VkDescriptorImageInfo previousHiZ_{};
+    std::array<VkDescriptorImageInfo, FramesInFlight> previousHiZ_{};
     VkDescriptorImageInfo opaqueColor_{};
     VkDescriptorImageInfo opaqueDepth_{};
     // Editor Scene View starts without a separate Hi-Z hierarchy.  Its

@@ -75,7 +75,7 @@
             const std::uint32_t grassBinCount = std::max(1u, static_cast<std::uint32_t>(
                 sceneGpu.database.meshes().size() * 3u));
 
-            hiZValid = false;
+            hiZValid.fill(false);
             const auto objectCount = static_cast<uint32_t>(instanceBatches.size());
             // An empty ECS scene still renders the sky, editor UI, and fallback
             // camera.  Keep the per-view UBOs and descriptor-backed culling
@@ -103,8 +103,10 @@
             // when object occlusion culling itself is disabled.
             const bool allocateHiZ = canUseHiZOcclusionCulling() || optimizationFeatures.shadows;
             if (allocateHiZ) {
-                hiZBuffer.create(vulkanDevice.physical(), device, swapchain.extent().width,
-                                 swapchain.extent().height, vulkanDevice.allocator());
+                for (auto& hiZBuffer : hiZBuffers) {
+                    hiZBuffer.create(vulkanDevice.physical(), device, swapchain.extent().width,
+                                     swapchain.extent().height, vulkanDevice.allocator());
+                }
             }
 
             constexpr VkDescriptorSetLayoutBinding copyBindings[] = {
@@ -647,26 +649,29 @@
             // plus 24 stream-builder sets.
             // Keep this in lockstep with allocateGrassSets below.
             constexpr uint32_t grassSetCount = MAX_FRAMES_IN_FLIGHT * 38;
-            const uint32_t imageDescriptors = hiZBuffer.mipCount() + cullingSetCount;
+            const uint32_t hiZDescriptorSetCount = hiZBuffers[0].mipCount() * MAX_FRAMES_IN_FLIGHT;
+            const uint32_t imageDescriptors = hiZDescriptorSetCount + cullingSetCount;
             const VkDescriptorPoolSize poolSizes[] = {
                 {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, imageDescriptors + MAX_FRAMES_IN_FLIGHT},
                 {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, cullingSetCount * 7 + instanceCullSetCount * 3 + MAX_FRAMES_IN_FLIGHT * 142},
                 {VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, cullingSetCount + MAX_FRAMES_IN_FLIGHT * 30},
-                {VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, hiZBuffer.mipCount()},
+                {VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, hiZDescriptorSetCount},
             };
             VkDescriptorPoolCreateInfo poolInfo{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
-            poolInfo.maxSets = hiZBuffer.mipCount() + cullingSetCount + instanceCullSetCount + grassSetCount + MAX_FRAMES_IN_FLIGHT * 6;
+            poolInfo.maxSets = hiZDescriptorSetCount + cullingSetCount + instanceCullSetCount + grassSetCount + MAX_FRAMES_IN_FLIGHT * 6;
             poolInfo.poolSizeCount = allocateHiZ ? std::size(poolSizes) : std::size(poolSizes) - 1;
             poolInfo.pPoolSizes = poolSizes;
             if (vkCreateDescriptorPool(device, &poolInfo, nullptr, &cullingDescriptorPool) != VK_SUCCESS) {
                 throw std::runtime_error("Could not create Hi-Z descriptor pool");
             }
             if (allocateHiZ) {
-                hiZPass.create(device, cullingDescriptorPool, hiZCopyPipeline, hiZCopyPipelineLayout,
-                    hiZCopyDescriptorSetLayout, hiZReducePipeline, hiZReducePipelineLayout,
-                    hiZReduceDescriptorSetLayout, hiZBuffer,
-                    msaa.enabled() ? hiZDepthBuffer.imageView() : depthBuffer.imageView(),
-                    msaa.enabled() ? hiZDepthBuffer.sampler() : depthBuffer.sampler());
+                for (std::uint32_t frame = 0; frame < MAX_FRAMES_IN_FLIGHT; ++frame) {
+                    hiZPasses[frame].create(device, cullingDescriptorPool, hiZCopyPipeline, hiZCopyPipelineLayout,
+                        hiZCopyDescriptorSetLayout, hiZReducePipeline, hiZReducePipelineLayout,
+                        hiZReduceDescriptorSetLayout, hiZBuffers[frame],
+                        msaa.enabled() ? hiZDepthBuffer.imageView() : depthBuffer.imageView(),
+                        msaa.enabled() ? hiZDepthBuffer.sampler() : depthBuffer.sampler());
+                }
             }
 
             std::array<VkDescriptorSetLayout, MAX_FRAMES_IN_FLIGHT * 6> cullLayouts{};
@@ -863,6 +868,7 @@
                 // Binding 3 is retained by the shared culling pipeline.  When
                 // Hi-Z is disabled the shader's feature flag prevents a read,
                 // so HDR is a small, already-allocated valid fallback.
+                const auto& hiZBuffer = hiZBuffers[frame];
                 const VkDescriptorImageInfo hiZInfo = hiZBuffer.image() != VK_NULL_HANDLE
                     ? VkDescriptorImageInfo{hiZBuffer.sampler(), hiZBuffer.fullView(), VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL}
                     : VkDescriptorImageInfo{hdrBuffer.sampler(), hdrBuffer.imageView(), VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
@@ -1022,12 +1028,12 @@
                 shadowTwoSidedIndirectDraws[frame].create(
                     shadowTwoSidedIndirectBuffers[frame].handle(), shadowTwoSidedDrawCountBuffers[frame].handle(), passCapacity);
             }
-            hiZValid = false;
+            hiZValid.fill(false);
             [[maybe_unused]] const UploadTicket ticket = uploadBatch.submit();
         }
 
         void destroyCullingResources() noexcept {
-            hiZPass.destroy();
+            for (auto& hiZPass : hiZPasses) hiZPass.destroy();
             for (auto& draw : indirectDraws) draw.destroy();
             for (auto& draw : foliageIndirectDraws) draw.destroy();
             for (auto& draw : sceneIndirectDraws) draw.destroy();
@@ -1210,7 +1216,8 @@
             grassBuildDescriptorSetLayout = grassPrefixDescriptorSetLayout = grassScatterDescriptorSetLayout = grassFinalizeDescriptorSetLayout = VK_NULL_HANDLE;
             grassPackedCullDescriptorSetLayout = grassBladeCullDescriptorSetLayout = grassClassifyDescriptorSetLayout = VK_NULL_HANDLE;
             grassPackedBinDescriptorSetLayout = grassPackedScatterDescriptorSetLayout = grassPackedFinalizeDescriptorSetLayout = VK_NULL_HANDLE;
-            hiZBuffer.destroy(); gpuObjects.clear(); hiZValid = false;
+            for (auto& hiZBuffer : hiZBuffers) hiZBuffer.destroy();
+            gpuObjects.clear(); hiZValid.fill(false);
         }
 
         void createFramebuffers() {
@@ -1239,15 +1246,18 @@
             const DepthBuffer& sampledDepth = msaa.enabled() ? hiZDepthBuffer : depthBuffer;
             const VkDescriptorImageInfo depthInfo{
                 sampledDepth.sampler(), sampledDepth.imageView(), VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL};
-            VkDescriptorImageInfo hizInfo{
-                hiZBuffer.sampler(), hiZBuffer.fullView(), VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
-            if (hizInfo.imageView == VK_NULL_HANDLE) hizInfo = depthInfo;
+            std::array<VkDescriptorImageInfo, MAX_FRAMES_IN_FLIGHT> hiZInfos{};
+            for (std::size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i) {
+                hiZInfos[i] = {hiZBuffers[i].sampler(), hiZBuffers[i].fullView(),
+                               VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
+                if (hiZInfos[i].imageView == VK_NULL_HANDLE) hiZInfos[i] = depthInfo;
+            }
             virtualWaterRenderer.create(
                 vulkanDevice.physical(), device, vulkanDevice.allocator(), assetManager,
                 swapchain.extent(), sampledDepth.format(), sampledDepth.imageView(),
                 shadowPass.descriptorSetLayout(), hdrBuffer.imageView(),
                 {opaqueSceneColor.sampler(), opaqueSceneColor.imageView(), VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL},
-                depthInfo, hizInfo, instances, culling);
+                depthInfo, hiZInfos, instances, culling);
             const Water::WaterRenderWorld waterWorld =
                 Water::WaterRenderWorld::capture(registry, sceneGpu);
             virtualWaterRenderer.rebuild(waterWorld);
@@ -1284,6 +1294,8 @@
             const DepthBuffer& sampledDepth = msaa.enabled() ? hiZDepthBuffer : depthBuffer;
             const VkDescriptorImageInfo depthInfo{
                 sampledDepth.sampler(), sampledDepth.imageView(), VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL};
+            std::array<VkDescriptorImageInfo, MAX_FRAMES_IN_FLIGHT> noHiZInfos{};
+            noHiZInfos.fill(depthInfo);
             // Bind depth to keep the descriptor valid, but deliberately turn
             // Hi-Z off: the Scene View owns no independent pyramid yet.
             sceneVirtualWaterRenderer.create(
@@ -1291,7 +1303,7 @@
                 sceneViewportTarget.extent(), sampledDepth.format(), sampledDepth.imageView(),
                 sceneDescriptorPass.descriptorSetLayout(), sceneViewportTarget.color().imageView(),
                 {sceneOpaqueColor.sampler(), sceneOpaqueColor.imageView(), VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL},
-                depthInfo, depthInfo, instances, culling, false);
+                depthInfo, noHiZInfos, instances, culling, false);
             sceneVirtualWaterRenderer.rebuild(Water::WaterRenderWorld::capture(registry, sceneGpu));
         }
 

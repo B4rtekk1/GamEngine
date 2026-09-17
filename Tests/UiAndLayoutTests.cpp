@@ -226,10 +226,11 @@ TEST(CullingTypes, ObjectAndUniformDataHaveGpuCompatibleAlignment) {
     EXPECT_EQ(sizeof(Engine::Culling::GPUObjectData) % 16u, 0u);
     EXPECT_EQ(sizeof(Engine::Culling::CullingUniformData) % 16u, 0u);
     EXPECT_EQ(offsetof(Engine::Culling::CullingUniformData, viewProjection), 0u);
-    EXPECT_EQ(offsetof(Engine::Culling::CullingUniformData, cameraPosition), 64u);
-    EXPECT_EQ(offsetof(Engine::Culling::CullingUniformData, objectCount), 80u);
-    EXPECT_EQ(offsetof(Engine::Culling::CullingUniformData, drawCategory), 124u);
-    EXPECT_EQ(sizeof(Engine::Culling::CullingUniformData), 128u);
+    EXPECT_EQ(offsetof(Engine::Culling::CullingUniformData, occlusionViewProjection), 64u);
+    EXPECT_EQ(offsetof(Engine::Culling::CullingUniformData, cameraPosition), 128u);
+    EXPECT_EQ(offsetof(Engine::Culling::CullingUniformData, objectCount), 240u);
+    EXPECT_EQ(offsetof(Engine::Culling::CullingUniformData, drawCategory), 284u);
+    EXPECT_EQ(sizeof(Engine::Culling::CullingUniformData), 288u);
 }
 
 TEST(InputEnums, ExposeStableDistinctButtonAndKeyValues) {

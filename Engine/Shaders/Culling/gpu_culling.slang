@@ -336,7 +336,7 @@ void main(uint3 dispatchThreadId : SV_DispatchThreadID)
             {
                 const float3 localPosition = lerp(localMinimum, localMaximum, UNIT_AABB_CORNERS[i]);
                 const float4 worldPosition = mul(float4(localPosition, 1.0), objectData.model);
-                clipPositions[i] = mul(worldPosition, culling.viewProjection);
+                clipPositions[i] = mul(worldPosition, culling.occlusionViewProjection);
             }
             visible = !occlusionTest(clipPositions);
         }

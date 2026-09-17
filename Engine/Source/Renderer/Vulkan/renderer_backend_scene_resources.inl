@@ -1612,6 +1612,7 @@
                     {meshletCullingUniformBuffers[frame].handle(), 0, sizeof(Culling::MeshletCullUniforms)},
                     {meshletClusterBuffer.handle(), 0, VK_WHOLE_SIZE},
                 };
+                const auto& hiZBuffer = hiZBuffers[frame];
                 const VkDescriptorImageInfo meshletHiZInfo{hiZBuffer.sampler(), hiZBuffer.fullView(),
                                                            VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
                 VkWriteDescriptorSet meshletWrites[10]{};
@@ -2271,12 +2272,15 @@
             if (cullingUniformBuffers[frame].handle() == VK_NULL_HANDLE) return;
             constexpr float hizDepthBias = 0.0025F;
             constexpr float hizAabbExpansion = 0.01F;
+            const auto& hiZBuffer = hiZBuffers[frame];
             Culling::CullingUniformData data{};
             if (!cameraController.camera()) {
                 throw std::runtime_error("Camera must be initialized before culling");
             }
             const glm::mat4 viewProjection = cameraController.camera()->projectionMatrix().native() * cameraController.camera()->viewMatrix().native();
             std::memcpy(data.viewProjection.data, &viewProjection, sizeof(viewProjection));
+            std::memcpy(data.occlusionViewProjection.data, &hiZViewProjections[frame],
+                        sizeof(hiZViewProjections[frame]));
             const auto frustumPlanes = extractFrustumPlanes(viewProjection);
             for (std::size_t i = 0; i < frustumPlanes.size(); ++i)
                 std::memcpy(&data.frustumPlanes[i], &frustumPlanes[i], sizeof(frustumPlanes[i]));
@@ -2291,7 +2295,7 @@
             data.depthBias = hizDepthBias;
             data.aabbExpansion = hizAabbExpansion;
             // Never reject objects using an uninitialized hierarchy.
-            data.cameraCut = hiZValid ? 0u : 1u;
+            data.cameraCut = hiZValid[frame] ? 0u : 1u;
             data.shadowPass = 0;
             data.enableFrustumCulling = optimizationFeatures.gpuCulling ? 1u : 0u;
             data.drawCategory = 0;
@@ -2307,6 +2311,8 @@
             const glm::mat4 viewProjection = cameraController.camera()->projectionMatrix().native() *
                                              cameraController.camera()->viewMatrix().native();
             std::memcpy(data.viewProjection.data, &viewProjection, sizeof(viewProjection));
+            std::memcpy(data.occlusionViewProjection.data, &hiZViewProjections[frame],
+                        sizeof(hiZViewProjections[frame]));
             const auto planes = extractFrustumPlanes(viewProjection);
             for (std::size_t index = 0; index < planes.size(); ++index)
                 std::memcpy(&data.frustumPlanes[index], &planes[index], sizeof(planes[index]));
@@ -2317,9 +2323,9 @@
             data.viewportWidth = static_cast<float>(swapchain.extent().width);
             data.viewportHeight = static_cast<float>(swapchain.extent().height);
             data.depthBias = 0.0025F;
-            data.hiZMipCount = hiZValid ? hiZBuffer.mipCount() : 0U;
+            data.hiZMipCount = hiZValid[frame] ? hiZBuffers[frame].mipCount() : 0U;
             data.enableOcclusionCulling = canUseHiZOcclusionCulling() ? 1U : 0U;
-            data.cameraCut = hiZValid ? 0U : 1U;
+            data.cameraCut = hiZValid[frame] ? 0U : 1U;
             meshletCullingUniformBuffers[frame].update(&data, sizeof(data));
         }
 
@@ -2334,6 +2340,7 @@
                                     Degrees{cameraController.editorPitch()});
             const glm::mat4 viewProjection = sceneCamera.projectionMatrix().native() * sceneCamera.viewMatrix().native();
             std::memcpy(data.viewProjection.data, &viewProjection, sizeof(viewProjection));
+            std::memcpy(data.occlusionViewProjection.data, &viewProjection, sizeof(viewProjection));
             const auto frustumPlanes = extractFrustumPlanes(viewProjection);
             for (std::size_t i = 0; i < frustumPlanes.size(); ++i)
                 std::memcpy(&data.frustumPlanes[i], &frustumPlanes[i], sizeof(frustumPlanes[i]));
@@ -2362,6 +2369,7 @@
             Culling::CullingUniformData data{};
             const glm::mat4 lightViewProjection = lightSpaceMatrix().native();
             std::memcpy(data.viewProjection.data, &lightViewProjection, sizeof(lightViewProjection));
+            std::memcpy(data.occlusionViewProjection.data, &lightViewProjection, sizeof(lightViewProjection));
             const auto frustumPlanes = extractFrustumPlanes(lightViewProjection);
             for (std::size_t i = 0; i < frustumPlanes.size(); ++i)
                 std::memcpy(&data.frustumPlanes[i], &frustumPlanes[i], sizeof(frustumPlanes[i]));

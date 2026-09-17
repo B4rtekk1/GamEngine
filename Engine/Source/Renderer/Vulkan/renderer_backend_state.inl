@@ -415,8 +415,11 @@
         std::array<Culling::IndexedIndirectDrawCount, MAX_FRAMES_IN_FLIGHT> sceneFoliageIndirectDraws;
         std::array<Culling::IndexedIndirectDrawCount, MAX_FRAMES_IN_FLIGHT> shadowIndirectDraws;
         std::array<Culling::IndexedIndirectDrawCount, MAX_FRAMES_IN_FLIGHT> shadowTwoSidedIndirectDraws;
-        Culling::HiZBuffer hiZBuffer;
-        Culling::HiZPass hiZPass;
+        // Hi-Z is temporal input for the matching frame slot.  Sharing one
+        // image between slots lets in-flight frames overwrite the hierarchy
+        // while a later culling dispatch is sampling it.
+        std::array<Culling::HiZBuffer, MAX_FRAMES_IN_FLIGHT> hiZBuffers;
+        std::array<Culling::HiZPass, MAX_FRAMES_IN_FLIGHT> hiZPasses;
         VkDescriptorPool cullingDescriptorPool = VK_NULL_HANDLE;
         VkDescriptorSetLayout hiZCopyDescriptorSetLayout = VK_NULL_HANDLE;
         VkDescriptorSetLayout hiZReduceDescriptorSetLayout = VK_NULL_HANDLE;
@@ -531,7 +534,8 @@
         std::uint64_t lastRenderTopologyRevision = std::numeric_limits<std::uint64_t>::max();
         std::uint64_t lastParticleEmitterRevision = std::numeric_limits<std::uint64_t>::max();
         std::uint64_t lastSmokeEmitterRevision = std::numeric_limits<std::uint64_t>::max();
-        bool hiZValid = false;
+        std::array<bool, MAX_FRAMES_IN_FLIGHT> hiZValid{};
+        std::array<glm::mat4, MAX_FRAMES_IN_FLIGHT> hiZViewProjections{};
         bool sceneViewportActive = false;
         VkExtent2D requestedSceneViewportExtent{};
         // Scene View is an off-screen cache. Redraw it only when its camera or

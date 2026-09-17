@@ -69,6 +69,9 @@ namespace Engine::Culling {
     {
         /// Combined view and projection matrix of the active camera.
         GPUMat4 viewProjection;
+        /// View/projection matrix used to build the sampled Hi-Z hierarchy.
+        /// This can differ from viewProjection because Hi-Z is temporal.
+        GPUMat4 occlusionViewProjection;
         GPUVec4 cameraPosition;
         /// Normalized inward-facing world-space frustum planes.
         GPUVec4 frustumPlanes[6];

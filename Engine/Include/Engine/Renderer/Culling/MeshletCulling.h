@@ -42,6 +42,7 @@ namespace Engine::Culling {
     /** Matches MeshletCullUniforms in meshlet_culling.slang. */
     struct alignas(16) MeshletCullUniforms final {
         GPUMat4 viewProjection{};
+        GPUMat4 occlusionViewProjection{};
         float cameraX{};
         float cameraY{};
         float cameraZ{};
@@ -55,7 +56,7 @@ namespace Engine::Culling {
         std::uint32_t cameraCut{};
         std::uint32_t reserved[2]{};
     };
-    static_assert(sizeof(MeshletCullUniforms) == 208);
+    static_assert(sizeof(MeshletCullUniforms) == 272);
 
     /**
      * Append one mesh's mesh-shader payload to global GPU-ready arrays.

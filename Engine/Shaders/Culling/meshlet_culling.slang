@@ -6,7 +6,7 @@ struct GPUSceneInstanceRecord { float4x4 worldMatrix; float4 localBoundsMin; flo
 struct GPUSceneMeshRecord { uint4 draw; uint4 lod; uint4 clusters; }; // clusters: first, root, count, reserved
 struct GpuMeshletCluster { float4 bounds; float4 cone; uint4 range; };
 struct VisibleMeshlet { uint instanceId; uint meshletId; };
-struct MeshletCullUniforms { float4x4 viewProjection; float3 cameraPosition; uint meshletCount; float4 frustumPlanes[6]; float viewportWidth; float viewportHeight; float depthBias; uint hiZMipCount; uint enableOcclusionCulling; uint cameraCut; uint2 reserved; };
+struct MeshletCullUniforms { float4x4 viewProjection; float4x4 occlusionViewProjection; float3 cameraPosition; uint meshletCount; float4 frustumPlanes[6]; float viewportWidth; float viewportHeight; float depthBias; uint hiZMipCount; uint enableOcclusionCulling; uint cameraCut; uint2 reserved; };
 
 [[vk::binding(0, 0)]] StructuredBuffer<GpuMeshlet> meshlets;
 [[vk::binding(1, 0)]] StructuredBuffer<GPUSceneInstanceRecord> instances;
@@ -39,7 +39,7 @@ bool outsideFrustum(float3 center, float radius) {
 bool sphereOccluded(float3 center, float radius) {
     if (culling.enableOcclusionCulling == 0u || culling.cameraCut != 0u || culling.hiZMipCount == 0u)
         return false;
-    const float4 clip = mul(float4(center, 1.0), culling.viewProjection);
+    const float4 clip = mul(float4(center, 1.0), culling.occlusionViewProjection);
     if (clip.w <= radius || clip.z <= 0.0) return false;
     const float2 ndc = clip.xy / clip.w;
     const float radiusNdc = radius / max(clip.w - radius, 1.0e-4);
