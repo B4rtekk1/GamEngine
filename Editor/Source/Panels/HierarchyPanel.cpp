@@ -14,6 +14,7 @@
 #include <algorithm>
 #include <exception>
 #include <string>
+#include <unordered_set>
 #include <vector>
 
 #include "imgui_internal.h"
@@ -31,6 +32,8 @@ Engine::Entity HierarchyPanel::draw(Engine::ScenePreset &scene, Engine::Assets::
     static std::string renameValue;
     static std::string renameError;
     static bool focusRenameInput = false;
+    static std::unordered_set<Engine::Entity> hiddenEntities;
+    static std::unordered_set<Engine::Entity> lockedEntities;
     bool openRenamePopup = false;
     Engine::Entity droppedHierarchyEntity = Engine::NullEntity;
     Engine::Entity hierarchyDropParent = Engine::NullEntity;
@@ -94,9 +97,13 @@ Engine::Entity HierarchyPanel::draw(Engine::ScenePreset &scene, Engine::Assets::
         }
     };
     ImGui::Begin("Hierarchy", &isOpen);
-    EditorUI::panelHeader("Hierarchy");
+    static char filter[64] = {};
+    const float addButtonWidth = 28.0F;
+    EditorUI::searchBox("##hierarchy-filter", "Search objects...", filter, sizeof(filter),
+                        ImGui::GetContentRegionAvail().x - addButtonWidth - ImGui::GetStyle().ItemSpacing.x);
+    ImGui::SameLine();
     ImGui::BeginDisabled(disabled);
-    if (EditorUI::primaryButton("+  New Object...", {-1.0F, 0.0F})) {
+    if (ImGui::SmallButton("+##hierarchy-create")) {
         ImGui::OpenPopup("Create Object");
     }
     if (ImGui::IsItemHovered()) {
@@ -107,10 +114,6 @@ Engine::Entity HierarchyPanel::draw(Engine::ScenePreset &scene, Engine::Assets::
         ImGui::EndPopup();
     }
     ImGui::EndDisabled();
-    static char filter[64] = {};
-    EditorUI::searchBox("##hierarchy-filter", "Search objects...", filter, sizeof(filter));
-    ImGui::Spacing();
-    ImGui::TextDisabled("Right-click an object for more actions");
     if (!scene.hasUsablePrimaryCamera()) {
         ImGui::TextColored(EditorUI::colors().warning,
                            "! No usable primary camera — fallback camera is active");
@@ -186,6 +189,24 @@ Engine::Entity HierarchyPanel::draw(Engine::ScenePreset &scene, Engine::Assets::
         }
 
         std::unordered_set<Engine::Entity> visited;
+        const auto drawRowControls = [&](const Engine::Entity entity) {
+            const bool hidden = hiddenEntities.contains(entity);
+            const bool locked = lockedEntities.contains(entity);
+            ImGui::PushID(static_cast<int>(entity));
+            ImGui::PushStyleColor(ImGuiCol_Text, hidden ? EditorUI::colors().textSecondary : EditorUI::colors().textPrimary);
+            if (ImGui::SmallButton(hidden ? "-##visibility" : "o##visibility")) {
+                if (hidden) hiddenEntities.erase(entity); else hiddenEntities.insert(entity);
+            }
+            ImGui::PopStyleColor();
+            ImGui::SameLine(0.0F, 2.0F);
+            ImGui::PushStyleColor(ImGuiCol_Text, locked ? EditorUI::colors().warning : EditorUI::colors().textSecondary);
+            if (ImGui::SmallButton(locked ? "L##lock" : "l##lock")) {
+                if (locked) lockedEntities.erase(entity); else lockedEntities.insert(entity);
+            }
+            ImGui::PopStyleColor();
+            ImGui::SameLine(0.0F, 5.0F);
+            ImGui::PopID();
+        };
         const auto drawNode = [&](auto &&self, const Engine::Entity entity) -> void {
             if (!visited.insert(entity).second) {
                 return;
@@ -235,6 +256,9 @@ Engine::Entity HierarchyPanel::draw(Engine::ScenePreset &scene, Engine::Assets::
                 ImGui::EndPopup();
             };
             if (!hasChildren) {
+                drawRowControls(entity);
+                ImGui::TextDisabled("▣");
+                ImGui::SameLine(0.0F, 4.0F);
                 if (ImGui::Selectable(label, selected(entity))) {
                     clicked = entity;
                 }
@@ -256,6 +280,8 @@ Engine::Entity HierarchyPanel::draw(Engine::ScenePreset &scene, Engine::Assets::
             }
             const ImGuiTreeNodeFlags flags = ImGuiTreeNodeFlags_SpanAvailWidth |
                                              (selected(entity) ? ImGuiTreeNodeFlags_Selected : 0);
+            drawRowControls(entity);
+            ImGui::SameLine(0.0F, 4.0F);
             const bool open = ImGui::TreeNodeEx(label, flags);
             if (ImGui::IsItemClicked()) {
                 clicked = entity;
@@ -341,7 +367,7 @@ Engine::Entity HierarchyPanel::draw(Engine::ScenePreset &scene, Engine::Assets::
                                                     ImGuiInputTextFlags_EnterReturnsTrue);
             renameValue = nameBuffer;
             if (!renameError.empty()) {
-                ImGui::TextColored({0.95F, 0.40F, 0.35F, 1.0F}, "%s", renameError.c_str());
+                ImGui::TextColored(EditorUI::colors().error, "%s", renameError.c_str());
             }
             if ((submitted || ImGui::Button("Rename")) && !renameValue.empty()) {
                 try {
@@ -373,7 +399,7 @@ Engine::Entity HierarchyPanel::draw(Engine::ScenePreset &scene, Engine::Assets::
         ImGui::EndDragDropTarget();
     }
     if (!assetDropError.empty()) {
-        ImGui::TextColored({0.95F, 0.40F, 0.35F, 1.0F}, "%s", assetDropError.c_str());
+        ImGui::TextColored(EditorUI::colors().error, "%s", assetDropError.c_str());
     }
 
     // Allow pasting from empty space in the hierarchy, without requiring an

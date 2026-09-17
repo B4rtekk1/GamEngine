@@ -52,6 +52,7 @@
 #include "Editor/EditorPreferences.h"
 #include "Editor/EditorConstants.h"
 #include "Editor/EditorUi.h"
+#include "Editor/UI/EditorTheme.h"
 #include "Editor/TerrainSculptState.h"
 #include "Editor/Platform/WindowsTitleBar.h"
 #include "ScriptHotReload.h"

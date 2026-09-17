@@ -4,17 +4,21 @@ namespace EditorUI {
 
 const Palette& colors() {
     static const Palette palette{
-        .background = {0.060F, 0.070F, 0.095F, 1.0F},
-        .surface = {0.044F, 0.052F, 0.074F, 1.0F},
-        .surfaceRaised = {0.078F, 0.092F, 0.128F, 1.0F},
-        .text = {0.910F, 0.940F, 0.990F, 1.0F},
-        .textMuted = {0.470F, 0.555F, 0.680F, 1.0F},
-        .accent = {0.105F, 0.640F, 0.835F, 1.0F},
-        .accentHovered = {0.110F, 0.530F, 0.720F, 1.0F},
-        .success = {0.330F, 0.900F, 0.840F, 1.0F},
-        .warning = {0.960F, 0.720F, 0.280F, 1.0F},
-        .error = {0.940F, 0.360F, 0.360F, 1.0F},
-        .border = {0.170F, 0.215F, 0.290F, 0.780F},
+        .appBackground = {0.051F, 0.063F, 0.086F, 1.0F},
+        .titleBar = {0.039F, 0.051F, 0.071F, 1.0F},
+        .panel = {0.071F, 0.090F, 0.133F, 1.0F},
+        .surface = {0.090F, 0.114F, 0.153F, 1.0F},
+        .surfaceRaised = {0.110F, 0.141F, 0.188F, 1.0F},
+        .control = {0.094F, 0.118F, 0.153F, 1.0F},
+        .controlHover = {0.137F, 0.176F, 0.227F, 1.0F},
+        .border = {0.161F, 0.196F, 0.251F, 1.0F},
+        .textPrimary = {0.906F, 0.925F, 0.953F, 1.0F},
+        .textSecondary = {0.537F, 0.588F, 0.659F, 1.0F},
+        .accent = {0.298F, 0.616F, 1.000F, 1.0F},
+        .accentHover = {0.420F, 0.698F, 1.000F, 1.0F},
+        .success = {0.310F, 0.816F, 0.639F, 1.0F},
+        .warning = {0.867F, 0.694F, 0.361F, 1.0F},
+        .error = {0.941F, 0.424F, 0.424F, 1.0F},
     };
     return palette;
 }

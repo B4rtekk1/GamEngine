@@ -98,7 +98,7 @@ bool ComponentsPanel::draw(Engine::ScenePreset &scene, Engine::Assets::Content& 
     // source object is reused when a duplicate becomes selected in the same
     // panel, making the inspector appear to keep editing the original.
     ImGui::PushID(reinterpret_cast<const void *>(static_cast<std::uintptr_t>(selected)));
-    ImGui::TextColored({0.94F, 0.95F, 0.98F, 1.0F}, "%s", entityName(scene, selected));
+    ImGui::TextColored(EditorUI::colors().textPrimary, "%s", entityName(scene, selected));
     ImGui::SameLine();
     ImGui::TextDisabled("· Entity %u", Engine::entityIndex(selected));
     const bool multiSelection = selection.size() > 1;
@@ -205,7 +205,7 @@ bool ComponentsPanel::draw(Engine::ScenePreset &scene, Engine::Assets::Content& 
                 ImGui::TextDisabled("Source data released after GPU upload");
             }
         } else {
-            ImGui::TextColored({0.95F, 0.40F, 0.35F, 1.0F}, "Missing mesh");
+                ImGui::TextColored(EditorUI::colors().error, "Missing mesh");
         }
 
         ImGui::Separator();
@@ -282,7 +282,7 @@ bool ComponentsPanel::draw(Engine::ScenePreset &scene, Engine::Assets::Content& 
                 ImGui::EndPopup();
             }
             if (renderer.material.shaderProgram == 0 && !renderer.material.shaderGraphAsset.empty()) {
-                ImGui::TextColored({0.95F, 0.65F, 0.25F, 1.0F}, "Shader Graph needs compilation.");
+                ImGui::TextColored(EditorUI::colors().warning, "Shader Graph needs compilation.");
             }
         }
         ImGui::TextDisabled("Material override");
@@ -1128,7 +1128,7 @@ bool ComponentsPanel::draw(Engine::ScenePreset &scene, Engine::Assets::Content& 
         static std::string error;
         ImGui::TextUnformatted("Creates Assets/Scripts/<Name>.h and .cpp in the current project");
         ImGui::InputTextWithHint("Class name", "PlayerController", name, sizeof(name));
-        if (!error.empty()) ImGui::TextColored({1, .3F, .3F, 1}, "%s", error.c_str());
+        if (!error.empty()) ImGui::TextColored(EditorUI::colors().error, "%s", error.c_str());
         if (EditorButton("Create").draw() && EditorSceneSession::createCppScript(name, error)) {
             if (!scene.editor().has<Engine::ScriptComponent>(selected))
                 scene.editor().add<

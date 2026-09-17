@@ -3,6 +3,7 @@
 #include "Editor/AssetImporter.h"
 #include "Editor/Panels/AssetDragDrop.h"
 #include "Editor/Panels/ConsolePanel.h"
+#include "Editor/UI/EditorTheme.h"
 #include "Elements/NumericControl.h"
 #include "Engine/Renderer/MeshRenderer.h"
 #include "Engine/Assets/TextureCooker.h"
@@ -862,9 +863,7 @@ Engine::Entity AssetManagerPanel::draw(Engine::ScenePreset &scene, Engine::Asset
                     for (const auto &dependency: dependencies) {
                         std::error_code dependencyError;
                         const bool exists = std::filesystem::is_regular_file(dependency, dependencyError);
-                        ImGui::TextColored(exists
-                                               ? ImVec4{0.35F, 0.82F, 0.59F, 1.0F}
-                                               : ImVec4{0.95F, 0.40F, 0.35F, 1.0F},
+                        ImGui::TextColored(exists ? EditorUI::colors().success : EditorUI::colors().error,
                                            "%s %s", exists ? "OK" : "!", dependency.filename().string().c_str());
                     }
                     ImGui::TreePop();
@@ -889,15 +888,15 @@ Engine::Entity AssetManagerPanel::draw(Engine::ScenePreset &scene, Engine::Asset
     }
     if (!error.empty()) {
         ImGui::SameLine();
-        ImGui::TextColored({0.95F, 0.40F, 0.35F, 1.0F}, "  |  %s", error.c_str());
+        ImGui::TextColored(EditorUI::colors().error, "  |  %s", error.c_str());
     }
     if (disabled) {
         ImGui::SameLine();
-        ImGui::TextColored({0.95F, 0.68F, 0.28F, 1.0F}, "  |  Play Mode: additions are temporary");
+        ImGui::TextColored(EditorUI::colors().warning, "  |  Play Mode: additions are temporary");
     }
     if (!projectIsOpen) {
         ImGui::SameLine();
-        ImGui::TextColored({0.95F, 0.68F, 0.28F, 1.0F},
+        ImGui::TextColored(EditorUI::colors().warning,
                            "  |  Open or create a project before importing assets");
     }
     ImGui::End();

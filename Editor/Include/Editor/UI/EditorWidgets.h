@@ -8,7 +8,8 @@ namespace EditorUI {
 
 bool primaryButton(const char* label, ImVec2 size = {});
 void panelHeader(const char* title, const char* detail = nullptr);
-bool searchBox(const char* id, const char* hint, char* value, std::size_t capacity);
+bool searchBox(const char* id, const char* hint, char* value, std::size_t capacity,
+               float width = -1.0F);
 void emptyState(const char* icon, const char* title, const char* description);
 
 } // namespace EditorUI

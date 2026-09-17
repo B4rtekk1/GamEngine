@@ -16,9 +16,9 @@ namespace {
 
     bool terrainModeButton(const char* label, const char* hint, const bool active) {
         if (active) {
-            ImGui::PushStyleColor(ImGuiCol_Button, {0.06F, 0.48F, 0.59F, 1.0F});
-            ImGui::PushStyleColor(ImGuiCol_ButtonHovered, {0.10F, 0.62F, 0.70F, 1.0F});
-            ImGui::PushStyleColor(ImGuiCol_ButtonActive, {0.05F, 0.38F, 0.48F, 1.0F});
+            ImGui::PushStyleColor(ImGuiCol_Button, EditorUI::colors().accent);
+            ImGui::PushStyleColor(ImGuiCol_ButtonHovered, EditorUI::colors().accentHover);
+            ImGui::PushStyleColor(ImGuiCol_ButtonActive, EditorUI::colors().accent);
         }
         const bool clicked = ImGui::Button(label, {ImGui::GetContentRegionAvail().x, 42.0F});
         if (active) ImGui::PopStyleColor(3);
@@ -63,7 +63,7 @@ namespace {
         fullWidthSlider("Spacing", &state.spacing, 0.05F, 1.0F, "%.2f");
 
         ImGui::Spacing();
-        ImGui::PushStyleColor(ImGuiCol_ChildBg, {0.075F, 0.105F, 0.135F, 1.0F});
+        ImGui::PushStyleColor(ImGuiCol_ChildBg, EditorUI::colors().surface);
         ImGui::BeginChild("##sculpt-help", {0.0F, 56.0F}, true,
                           ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
         ImGui::TextDisabled("Shift  Invert raise / lower");
@@ -213,7 +213,7 @@ void drawTerrainToolsPanel(Engine::ScenePreset& scene, Engine::Assets::Content& 
         ImGui::Dummy({0.0F, 24.0F});
         const float center = ImGui::GetContentRegionAvail().x * 0.5F;
         ImGui::SetCursorPosX(ImGui::GetCursorPosX() + std::max(0.0F, center - 28.0F));
-        ImGui::TextColored({0.35F, 0.68F, 0.76F, 1.0F}, "TERRAIN");
+        ImGui::TextColored(EditorUI::colors().textSecondary, "TERRAIN");
         ImGui::Spacing();
         ImGui::TextWrapped(playing ? "Terrain editing is unavailable in Play mode."
                                   : "Select a terrain object to start sculpting, painting, or placing details.");
@@ -222,7 +222,7 @@ void drawTerrainToolsPanel(Engine::ScenePreset& scene, Engine::Assets::Content& 
     }
 
     const auto& terrain = scene.editor().read<Engine::TerrainComponent>(selected);
-    ImGui::TextColored({0.55F, 0.82F, 0.93F, 1.0F}, "TERRAIN EDITOR");
+    ImGui::TextColored(EditorUI::colors().accent, "TERRAIN EDITOR");
     ImGui::TextDisabled("%u x %u heightmap  |  %.0f x %.0f m",
                         terrain.resolution, terrain.resolution, terrain.width, terrain.depth);
     ImGui::Spacing();

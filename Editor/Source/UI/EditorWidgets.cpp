@@ -9,7 +9,7 @@ namespace EditorUI {
 
 bool primaryButton(const char* label, const ImVec2 size) {
     ImGui::PushStyleColor(ImGuiCol_Button, colors().accent);
-    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, colors().accentHovered);
+    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, colors().accentHover);
     const bool pressed = ImGui::Button(label, size);
     ImGui::PopStyleColor(2);
     return pressed;
@@ -26,8 +26,9 @@ void panelHeader(const char* title, const char* detail) {
     ImGui::Separator();
 }
 
-bool searchBox(const char* id, const char* hint, char* value, const std::size_t capacity) {
-    ImGui::SetNextItemWidth(-1.0F);
+bool searchBox(const char* id, const char* hint, char* value, const std::size_t capacity,
+               const float width) {
+    ImGui::SetNextItemWidth(width);
     const ImVec2 padding = ImGui::GetStyle().FramePadding;
     ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, {padding.x + 18.0F, padding.y});
     const bool changed = ImGui::InputTextWithHint(id, hint, value, capacity);

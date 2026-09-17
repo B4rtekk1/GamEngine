@@ -6,17 +6,21 @@ namespace EditorUI {
 
 /** Semantic colours shared by editor panels and widgets. */
 struct Palette final {
-    ImVec4 background;
+    ImVec4 appBackground;
+    ImVec4 titleBar;
+    ImVec4 panel;
     ImVec4 surface;
     ImVec4 surfaceRaised;
-    ImVec4 text;
-    ImVec4 textMuted;
+    ImVec4 control;
+    ImVec4 controlHover;
+    ImVec4 border;
+    ImVec4 textPrimary;
+    ImVec4 textSecondary;
     ImVec4 accent;
-    ImVec4 accentHovered;
+    ImVec4 accentHover;
     ImVec4 success;
     ImVec4 warning;
     ImVec4 error;
-    ImVec4 border;
 };
 
 [[nodiscard]] const Palette& colors();

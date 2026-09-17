@@ -4,16 +4,14 @@ void drawStatusBar(const Engine::ScenePreset &scene, const Engine::Entity select
     const float barHeight = static_cast<float>(EditorConstants::statusBarHeight);
     ImGui::SetNextWindowPos({viewport->WorkPos.x, viewport->WorkPos.y + viewport->WorkSize.y - barHeight});
     ImGui::SetNextWindowSize({viewport->WorkSize.x, barHeight});
-    ImGui::PushStyleColor(ImGuiCol_WindowBg, {0.086F, 0.090F, 0.110F, 1.0F});
+    ImGui::PushStyleColor(ImGuiCol_WindowBg, EditorUI::colors().surface);
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, {14.0F, 6.0F});
     ImGui::Begin("##status-bar", nullptr, ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoDocking |
                                           ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoMove |
                                           ImGuiWindowFlags_NoNav);
     const ImVec4 statusColor = playing
-                                   ? (paused
-                                          ? ImVec4{0.95F, 0.72F, 0.32F, 1.0F}
-                                          : ImVec4{0.42F, 0.86F, 0.55F, 1.0F})
-                                   : ImVec4{0.42F, 0.68F, 0.92F, 1.0F};
+                                   ? (paused ? EditorUI::colors().warning : EditorUI::colors().success)
+                                   : EditorUI::colors().accent;
     ImGui::TextColored(statusColor, "●");
     ImGui::SameLine(0.0F, 8.0F);
     ImGui::TextUnformatted(playing ? (paused ? "Paused" : "Playing") : "Ready");
@@ -103,7 +101,7 @@ void drawStatusBar(const Engine::ScenePreset &scene, const Engine::Entity select
         lastWrite = {};
     }
     if (writeCsv) ImGui::TextDisabled("%s", csvPath.string().c_str());
-    if (!writeError.empty()) ImGui::TextColored({0.95F, 0.38F, 0.32F, 1.0F}, "%s", writeError.c_str());
+    if (!writeError.empty()) ImGui::TextColored(EditorUI::colors().error, "%s", writeError.c_str());
     ImGui::Separator();
     if (historyCount == 0) {
         ImGui::TextDisabled("Waiting for profiled frames...");
@@ -779,7 +777,7 @@ Engine::Entity drawEditorMenuBar(Engine::ScenePreset &scene, Engine::Renderer &r
         ImGui::InputText("##project-template", templateName, sizeof(templateName), ImGuiInputTextFlags_ReadOnly);
         ImGui::EndDisabled();
         ImGui::TextDisabled("Assets/Models, Materials, Textures, Scenes, Scripts and Audio will be created.");
-        if (!newProjectError.empty()) ImGui::TextColored({1.0F, 0.35F, 0.35F, 1.0F}, "%s", newProjectError.c_str());
+        if (!newProjectError.empty()) ImGui::TextColored(EditorUI::colors().error, "%s", newProjectError.c_str());
         const bool valid = newProjectName[0] != '\0' && newProjectLocation[0] != '\0';
         ImGui::BeginDisabled(!valid);
         if (EditorButton("Create", {110.0F, 0.0F}).draw()) {

@@ -1,6 +1,7 @@
 #include "Editor/EditorUi.h"
 
 #include "Editor/EditorConstants.h"
+#include "Editor/UI/EditorTheme.h"
 
 #include <cctype>
 
@@ -8,9 +9,10 @@
 
 bool drawToolbarToggle(const char *label, const bool active) {
     if (active) {
-        ImGui::PushStyleColor(ImGuiCol_Button, {0.06F, 0.48F, 0.59F, 1.0F});
-        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, {0.10F, 0.62F, 0.70F, 1.0F});
-        ImGui::PushStyleColor(ImGuiCol_ButtonActive, {0.05F, 0.38F, 0.48F, 1.0F});
+        const auto &palette = EditorUI::colors();
+        ImGui::PushStyleColor(ImGuiCol_Button, palette.accent);
+        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, palette.accentHover);
+        ImGui::PushStyleColor(ImGuiCol_ButtonActive, palette.accent);
     }
     const bool pressed = ImGui::SmallButton(label);
     if (active) ImGui::PopStyleColor(3);

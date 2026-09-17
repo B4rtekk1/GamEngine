@@ -16,26 +16,26 @@ namespace {
      *  Constants controlling padding, spacing, border thickness and rounding.
      *  @{
      */
-    constexpr float kWindowPaddingX = 14.0F;
-    constexpr float kWindowPaddingY = 12.0F;
-    constexpr float kFramePaddingX = 10.0F;
-    constexpr float kFramePaddingY = 7.0F;
-    constexpr float kItemSpacingX = 9.0F;
-    constexpr float kItemSpacingY = 8.0F;
-    constexpr float kItemInnerSpacingX = 8.0F;
-    constexpr float kItemInnerSpacingY = 6.0F;
+    constexpr float kWindowPaddingX = 8.0F;
+    constexpr float kWindowPaddingY = 7.0F;
+    constexpr float kFramePaddingX = 7.0F;
+    constexpr float kFramePaddingY = 5.0F;
+    constexpr float kItemSpacingX = 6.0F;
+    constexpr float kItemSpacingY = 5.0F;
+    constexpr float kItemInnerSpacingX = 5.0F;
+    constexpr float kItemInnerSpacingY = 4.0F;
     constexpr float kIndentSpacing = 18.0F;
     constexpr float kScrollbarSize = 11.0F;
     constexpr float kGrabMinSize = 10.0F;
     constexpr float kBorderSize = 1.0F;
     constexpr float kFrameBorderSize = 0.0F;
-    constexpr float kWindowRounding = 5.0F;
-    constexpr float kChildRounding = 4.0F;
-    constexpr float kFrameRounding = 4.0F;
-    constexpr float kPopupRounding = 5.0F;
-    constexpr float kScrollbarRounding = 8.0F;
-    constexpr float kGrabRounding = 4.0F;
-    constexpr float kTabRounding = 4.0F;
+    constexpr float kWindowRounding = 3.0F;
+    constexpr float kChildRounding = 3.0F;
+    constexpr float kFrameRounding = 3.0F;
+    constexpr float kPopupRounding = 3.0F;
+    constexpr float kScrollbarRounding = 3.0F;
+    constexpr float kGrabRounding = 3.0F;
+    constexpr float kTabRounding = 3.0F;
     /** @} */
 
     /** @name Default docking layout
@@ -59,41 +59,41 @@ void EditorStyle::apply() {
     // A cool, blue-black palette avoids the flat, uniformly-grey look of
     // the default ImGui theme. Surfaces are deliberately close together;
     // borders and the azure accent do the work of separating information.
-    const ImVec4 kWindowBackground = palette.background;
-    const ImVec4 kChildBackground = palette.surface;
-    constexpr ImVec4 kPopupBackground = {0.095F, 0.112F, 0.150F, 0.99F};
-    constexpr ImVec4 kMenuBarBackground = {0.035F, 0.043F, 0.062F, 1.0F};
-    constexpr ImVec4 kTitleBackground = {0.050F, 0.060F, 0.084F, 1.0F};
-    constexpr ImVec4 kActiveTitleBackground = {0.075F, 0.142F, 0.190F, 1.0F};
-    constexpr ImVec4 kHeader = {0.105F, 0.390F, 0.555F, 0.42F};
-    constexpr ImVec4 kHoveredHeader = {0.110F, 0.530F, 0.720F, 0.62F};
-    constexpr ImVec4 kActiveHeader = {0.105F, 0.640F, 0.835F, 0.82F};
-    constexpr ImVec4 kButton = {0.100F, 0.120F, 0.165F, 1.0F};
-    constexpr ImVec4 kHoveredButton = {0.110F, 0.355F, 0.500F, 1.0F};
-    constexpr ImVec4 kActiveButton = {0.075F, 0.535F, 0.700F, 1.0F};
-    constexpr ImVec4 kFrameBackground = {0.078F, 0.092F, 0.128F, 1.0F};
-    constexpr ImVec4 kHoveredFrameBackground = {0.110F, 0.148F, 0.202F, 1.0F};
-    constexpr ImVec4 kActiveFrameBackground = {0.080F, 0.290F, 0.390F, 1.0F};
+    const ImVec4 kWindowBackground = palette.appBackground;
+    const ImVec4 kChildBackground = palette.panel;
+    const ImVec4 kPopupBackground = palette.surfaceRaised;
+    const ImVec4 kMenuBarBackground = palette.titleBar;
+    const ImVec4 kTitleBackground = palette.titleBar;
+    const ImVec4 kActiveTitleBackground = palette.surface;
+    const ImVec4 kHeader = palette.surfaceRaised;
+    const ImVec4 kHoveredHeader = palette.controlHover;
+    const ImVec4 kActiveHeader = palette.accent;
+    const ImVec4 kButton = palette.control;
+    const ImVec4 kHoveredButton = palette.controlHover;
+    const ImVec4 kActiveButton = palette.accent;
+    const ImVec4 kFrameBackground = palette.control;
+    const ImVec4 kHoveredFrameBackground = palette.controlHover;
+    const ImVec4 kActiveFrameBackground = palette.surfaceRaised;
     const ImVec4 kBorder = palette.border;
-    constexpr ImVec4 kSeparator = {0.125F, 0.170F, 0.235F, 1.0F};
-    const ImVec4 kText = palette.text;
-    const ImVec4 kDisabledText = palette.textMuted;
+    const ImVec4 kSeparator = palette.border;
+    const ImVec4 kText = palette.textPrimary;
+    const ImVec4 kDisabledText = palette.textSecondary;
     const ImVec4 kCheckMark = palette.success;
-    constexpr ImVec4 kSliderGrab = {0.200F, 0.705F, 0.850F, 1.0F};
-    constexpr ImVec4 kActiveSliderGrab = {0.400F, 0.960F, 0.930F, 1.0F};
-    constexpr ImVec4 kTab = {0.048F, 0.057F, 0.079F, 1.0F};
-    constexpr ImVec4 kHoveredTab = {0.090F, 0.320F, 0.455F, 1.0F};
-    constexpr ImVec4 kActiveTab = {0.095F, 0.185F, 0.250F, 1.0F};
-    constexpr ImVec4 kUnfocusedTab = {0.040F, 0.047F, 0.066F, 1.0F};
-    constexpr ImVec4 kUnfocusedTabActive = {0.065F, 0.095F, 0.135F, 1.0F};
-    constexpr ImVec4 kDockingPreview = {0.120F, 0.820F, 0.900F, 0.42F};
-    constexpr ImVec4 kResizeGrip = {0.200F, 0.640F, 0.750F, 0.22F};
-    constexpr ImVec4 kHoveredResizeGrip = {0.220F, 0.800F, 0.880F, 0.66F};
-    constexpr ImVec4 kActiveResizeGrip = {0.340F, 0.940F, 0.920F, 0.94F};
-    constexpr ImVec4 kScrollbarBg = {0.035F, 0.040F, 0.052F, 0.72F};
-    constexpr ImVec4 kScrollbarGrab = {0.205F, 0.255F, 0.325F, 1.0F};
-    constexpr ImVec4 kScrollbarGrabHovered = {0.240F, 0.475F, 0.570F, 1.0F};
-    constexpr ImVec4 kScrollbarGrabActive = {0.250F, 0.680F, 0.740F, 1.0F};
+    const ImVec4 kSliderGrab = palette.accent;
+    const ImVec4 kActiveSliderGrab = palette.accentHover;
+    const ImVec4 kTab = palette.panel;
+    const ImVec4 kHoveredTab = palette.controlHover;
+    const ImVec4 kActiveTab = palette.surfaceRaised;
+    const ImVec4 kUnfocusedTab = palette.titleBar;
+    const ImVec4 kUnfocusedTabActive = palette.panel;
+    const ImVec4 kDockingPreview = {palette.accent.x, palette.accent.y, palette.accent.z, 0.42F};
+    const ImVec4 kResizeGrip = {palette.accent.x, palette.accent.y, palette.accent.z, 0.22F};
+    const ImVec4 kHoveredResizeGrip = {palette.accentHover.x, palette.accentHover.y, palette.accentHover.z, 0.66F};
+    const ImVec4 kActiveResizeGrip = {palette.accentHover.x, palette.accentHover.y, palette.accentHover.z, 0.94F};
+    const ImVec4 kScrollbarBg = {palette.appBackground.x, palette.appBackground.y, palette.appBackground.z, 0.72F};
+    const ImVec4 kScrollbarGrab = palette.control;
+    const ImVec4 kScrollbarGrabHovered = palette.controlHover;
+    const ImVec4 kScrollbarGrabActive = palette.accent;
 
     ImGui::StyleColorsDark();
     ImGuiStyle &style = ImGui::GetStyle();
@@ -166,12 +166,12 @@ void EditorStyle::apply() {
     colors[ImGuiCol_PlotHistogram] = kSliderGrab;
     colors[ImGuiCol_PlotLines] = kCheckMark;
     colors[ImGuiCol_NavHighlight] = kActiveHeader;
-    colors[ImGuiCol_ModalWindowDimBg] = {0.04F, 0.045F, 0.06F, 0.55F};
-    colors[ImGuiCol_TableHeaderBg] = {0.075F, 0.120F, 0.175F, 1.0F};
-    colors[ImGuiCol_TableBorderStrong] = {0.140F, 0.190F, 0.260F, 0.82F};
-    colors[ImGuiCol_TableBorderLight] = {0.095F, 0.135F, 0.190F, 0.64F};
+    colors[ImGuiCol_ModalWindowDimBg] = {palette.appBackground.x, palette.appBackground.y, palette.appBackground.z, 0.55F};
+    colors[ImGuiCol_TableHeaderBg] = palette.surfaceRaised;
+    colors[ImGuiCol_TableBorderStrong] = palette.border;
+    colors[ImGuiCol_TableBorderLight] = palette.border;
     colors[ImGuiCol_TableRowBg] = {0.0F, 0.0F, 0.0F, 0.0F};
-    colors[ImGuiCol_TableRowBgAlt] = {0.090F, 0.115F, 0.155F, 0.20F};
+    colors[ImGuiCol_TableRowBgAlt] = {palette.surfaceRaised.x, palette.surfaceRaised.y, palette.surfaceRaised.z, 0.20F};
 }
 
 /**
