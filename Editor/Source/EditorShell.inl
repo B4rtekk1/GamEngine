@@ -223,14 +223,18 @@ namespace {
 // The main-menu entries are navigation controls, not regular action buttons.
 // Give them a larger target and a clearly visible hover/open state while
 // keeping the rest of the editor's button styling unchanged.
-bool beginTopMenu(const char *label, const char *tooltip) {
-    ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, {11.0F, 7.0F});
+bool beginTopMenu(const char *label, const char *tooltip, Editor::WindowsTitleBar &titleBar) {
+    ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, {11.0F, ImGui::GetStyle().FramePadding.y});
     ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, {3.0F, 0.0F});
     ImGui::PushStyleColor(ImGuiCol_Header, {0.0F, 0.0F, 0.0F, 0.0F});
     ImGui::PushStyleColor(ImGuiCol_HeaderHovered, {0.10F, 0.36F, 0.48F, 0.88F});
     ImGui::PushStyleColor(ImGuiCol_HeaderActive, {0.08F, 0.52F, 0.66F, 1.0F});
 
     const bool open = ImGui::BeginMenu(label);
+    const ImVec2 itemMin = ImGui::GetItemRectMin();
+    const ImVec2 itemMax = ImGui::GetItemRectMax();
+    titleBar.addHitRegion(itemMin.x, itemMin.y, itemMax.x, itemMax.y,
+                          Editor::WindowsTitleBar::clientHitTestResult);
     if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort) && tooltip != nullptr) {
         ImGui::SetTooltip("%s", tooltip);
     }
@@ -247,19 +251,23 @@ void endTopMenu() {
     ImGui::PopStyleVar(2);
 }
 
-void drawRestoreGlyph(ImDrawList* const drawList, const ImVec2 center, const ImU32 color) {
-    constexpr float size = 8.0F;
-    constexpr float offset = 3.0F;
-    constexpr float halfSize = size * 0.5F;
+[[nodiscard]] float pixelAligned(const float value) {
+    return std::round(value) + 0.5F;
+}
+
+void drawRestoreGlyph(ImDrawList* const drawList, const ImVec2 center, const float glyphHalfExtent,
+                      const ImU32 color) {
+    const float offset = std::round(glyphHalfExtent * 0.6F);
+    const float halfSize = glyphHalfExtent;
 
     // Draw only the exposed upper and right edges of the back window.  A
     // second complete rectangle would look like two maximize glyphs.
-    drawList->AddLine({center.x - halfSize + offset, center.y - halfSize - offset},
-                      {center.x + halfSize + offset, center.y - halfSize - offset}, color);
-    drawList->AddLine({center.x + halfSize + offset, center.y - halfSize - offset},
-                      {center.x + halfSize + offset, center.y + halfSize - offset}, color);
-    drawList->AddRect({center.x - halfSize, center.y - halfSize},
-                      {center.x + halfSize, center.y + halfSize}, color);
+    drawList->AddLine({pixelAligned(center.x - halfSize + offset), pixelAligned(center.y - halfSize - offset)},
+                      {pixelAligned(center.x + halfSize + offset), pixelAligned(center.y - halfSize - offset)}, color);
+    drawList->AddLine({pixelAligned(center.x + halfSize + offset), pixelAligned(center.y - halfSize - offset)},
+                      {pixelAligned(center.x + halfSize + offset), pixelAligned(center.y + halfSize - offset)}, color);
+    drawList->AddRect({pixelAligned(center.x - halfSize), pixelAligned(center.y - halfSize)},
+                      {pixelAligned(center.x + halfSize), pixelAligned(center.y + halfSize)}, color);
 }
 
 } // namespace
@@ -386,7 +394,11 @@ Engine::Entity drawEditorMenuBar(Engine::ScenePreset &scene, Engine::Renderer &r
         }
     };
 
-    ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, {10.0F, 10.0F});
+    titleBar.clearHitRegions();
+    const float titleHeight = static_cast<float>(titleBar.nativeHeight());
+    const float fontHeight = ImGui::GetFontSize();
+    const float paddingY = std::max(0.0F, (titleHeight - fontHeight) * 0.5F);
+    ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, {8.0F, paddingY});
     if (!ImGui::BeginMainMenuBar()) {
         ImGui::PopStyleVar();
         return Engine::NullEntity;
@@ -398,12 +410,16 @@ Engine::Entity drawEditorMenuBar(Engine::ScenePreset &scene, Engine::Renderer &r
                             {captionButtonsStart - 8.0F, menuBarOrigin.y + ImGui::GetFrameHeight()}, true);
     }
 
-    ImGui::PushStyleColor(ImGuiCol_Text, {0.55F, 0.80F, 1.0F, 1.0F});
-    ImGui::TextUnformatted("GamEngine");
+    const std::filesystem::path activeScenePath = EditorSceneSession::scenePath();
+    const std::string sceneLabel = activeScenePath.empty() ? "Untitled" : activeScenePath.filename().string();
+    const std::string titleLabel = sceneLabel + " — " + (playing ? "DEMO" : "EDITOR") + " — " + project.name();
+    ImVec4 titleColor = ImGui::GetStyleColorVec4(ImGuiCol_Text);
+    if (!ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows)) titleColor.w *= 0.62F;
+    ImGui::PushStyleColor(ImGuiCol_Text, titleColor);
+    ImGui::TextUnformatted(titleLabel.c_str());
     ImGui::PopStyleColor();
     ImGui::SameLine(0.0F, 14.0F);
-    const std::filesystem::path activeScenePath = EditorSceneSession::scenePath();
-    if (beginTopMenu("File", "Project and scene files")) {
+    if (beginTopMenu("File", "Project and scene files", titleBar)) {
         ImGui::BeginDisabled(playing);
         if (ImGui::MenuItem("New Project...")) {
             if (newProjectLocation[0] == '\0') {
@@ -552,11 +568,15 @@ Engine::Entity drawEditorMenuBar(Engine::ScenePreset &scene, Engine::Renderer &r
         ImGui::EndCombo();
     }
     ImGui::EndDisabled();
+    const ImVec2 sceneSelectorMin = ImGui::GetItemRectMin();
+    const ImVec2 sceneSelectorMax = ImGui::GetItemRectMax();
+    titleBar.addHitRegion(sceneSelectorMin.x, sceneSelectorMin.y, sceneSelectorMax.x,
+                          sceneSelectorMax.y, Editor::WindowsTitleBar::clientHitTestResult);
     if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort)) {
         ImGui::SetTooltip("Switch scenes in the current project");
     }
 
-    if (beginTopMenu("GameObject", "Create objects in the current scene")) {
+    if (beginTopMenu("GameObject", "Create objects in the current scene", titleBar)) {
         ImGui::BeginDisabled(playing);
         if (ImGui::MenuItem("Create Empty", "Ctrl+Shift+N")) {
             createdEntity = scene.createGameObject();
@@ -598,7 +618,7 @@ Engine::Entity drawEditorMenuBar(Engine::ScenePreset &scene, Engine::Renderer &r
         endTopMenu();
     }
 
-    if (beginTopMenu("Scene", "Scene and rendering settings")) {
+    if (beginTopMenu("Scene", "Scene and rendering settings", titleBar)) {
         if (ImGui::MenuItem("Antialiasing...")) {
             openSceneSettings = true;
         }
@@ -632,7 +652,7 @@ Engine::Entity drawEditorMenuBar(Engine::ScenePreset &scene, Engine::Renderer &r
         endTopMenu();
     }
 
-    if (beginTopMenu("View", "Show, hide and arrange editor panels")) {
+    if (beginTopMenu("View", "Show, hide and arrange editor panels", titleBar)) {
         ImGui::MenuItem("Hierarchy", nullptr, &showHierarchy);
         ImGui::MenuItem("Viewport", nullptr, &showViewport);
         ImGui::MenuItem("Inspector", nullptr, &showInspector);
@@ -645,7 +665,7 @@ Engine::Entity drawEditorMenuBar(Engine::ScenePreset &scene, Engine::Renderer &r
         endTopMenu();
     }
 
-    if (beginTopMenu("Edit", "Undo and common object actions")) {
+    if (beginTopMenu("Edit", "Undo and common object actions", titleBar)) {
         if (ImGui::MenuItem("Undo", "Ctrl+Z", false, canUndo)) {
             undoRequested = true;
         }
@@ -668,7 +688,7 @@ Engine::Entity drawEditorMenuBar(Engine::ScenePreset &scene, Engine::Renderer &r
         endTopMenu();
     }
 
-    if (beginTopMenu("Help", "Shortcuts and editor information")) {
+    if (beginTopMenu("Help", "Shortcuts and editor information", titleBar)) {
         if (ImGui::MenuItem("Keyboard Shortcuts")) {
             showShortcuts = true;
         }
@@ -679,9 +699,6 @@ Engine::Entity drawEditorMenuBar(Engine::ScenePreset &scene, Engine::Renderer &r
         endTopMenu();
     }
 
-    const ImVec2 menuBarOrigin = ImGui::GetWindowPos();
-    const ImVec2 menuBarCursor = ImGui::GetCursorScreenPos();
-    titleBar.setInteractiveArea(menuBarOrigin.x, menuBarCursor.x, ImGui::GetFrameHeight());
     if (captionButtonsStart > 0.0F) ImGui::PopClipRect();
 
     // WM_NCCALCSIZE makes this a fully client-rendered title bar.  ImGui draws
@@ -692,8 +709,10 @@ Engine::Entity drawEditorMenuBar(Engine::ScenePreset &scene, Engine::Renderer &r
         const float buttonWidth = (captionButtons.right - captionButtons.left) / 3.0F;
         const float buttonHeight = captionButtons.bottom - captionButtons.top;
         const ImVec2 mouse = ImGui::GetMousePos();
-        constexpr float glyphHalfExtent = 5.0F;
-        const ImU32 glyphColor = IM_COL32(230, 235, 245, 255);
+        const float glyphHalfExtent = std::round(5.0F * titleBar.dpiScale());
+        const bool activeWindow = ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows);
+        const ImU32 glyphColor = activeWindow ? IM_COL32(230, 235, 245, 255)
+                                              : IM_COL32(230, 235, 245, 155);
 
         for (int index = 0; index < 3; ++index) {
             const ImVec2 minimum{captionButtons.left + buttonWidth * static_cast<float>(index),
@@ -701,30 +720,39 @@ Engine::Entity drawEditorMenuBar(Engine::ScenePreset &scene, Engine::Renderer &r
             const ImVec2 maximum{minimum.x + buttonWidth, captionButtons.bottom};
             const bool hovered = mouse.x >= minimum.x && mouse.x < maximum.x &&
                                  mouse.y >= minimum.y && mouse.y < maximum.y;
+            const bool pressed = hovered && ImGui::IsMouseDown(ImGuiMouseButton_Left);
             if (hovered) {
-                drawList->AddRectFilled(minimum, maximum,
-                                        index == 2 ? IM_COL32(196, 43, 28, 255)
-                                                   : IM_COL32(67, 77, 100, 220));
+                const ImU32 hoverColor = index == 2
+                                             ? IM_COL32(196, 43, 28, activeWindow ? (pressed ? 255 : 235) : 150)
+                                             : IM_COL32(255, 255, 255, pressed ? 28 : 16);
+                drawList->AddRectFilled(minimum, maximum, hoverColor);
             }
 
-            const ImVec2 center{minimum.x + buttonWidth * 0.5F,
-                                minimum.y + buttonHeight * 0.5F};
+            const ImVec2 center{pixelAligned(minimum.x + buttonWidth * 0.5F),
+                                pixelAligned(minimum.y + buttonHeight * 0.5F)};
             if (index == 0) {
-                drawList->AddLine({center.x - glyphHalfExtent, center.y + 2.0F},
-                                  {center.x + glyphHalfExtent, center.y + 2.0F}, glyphColor, 1.0F);
+                const float lineY = pixelAligned(center.y + std::round(2.0F * titleBar.dpiScale()));
+                drawList->AddLine({pixelAligned(center.x - glyphHalfExtent), lineY},
+                                  {pixelAligned(center.x + glyphHalfExtent), lineY}, glyphColor, 1.0F);
             } else if (index == 1) {
                 if (titleBar.isMaximized()) {
-                    drawRestoreGlyph(drawList, center, glyphColor);
+                    drawRestoreGlyph(drawList, center, glyphHalfExtent, glyphColor);
                 } else {
-                    drawList->AddRect({center.x - glyphHalfExtent, center.y - glyphHalfExtent},
-                                      {center.x + glyphHalfExtent, center.y + glyphHalfExtent},
+                    drawList->AddRect({pixelAligned(center.x - glyphHalfExtent),
+                                       pixelAligned(center.y - glyphHalfExtent)},
+                                      {pixelAligned(center.x + glyphHalfExtent),
+                                       pixelAligned(center.y + glyphHalfExtent)},
                                       glyphColor, 0.0F, 0, 1.0F);
                 }
             } else {
-                drawList->AddLine({center.x - glyphHalfExtent, center.y - glyphHalfExtent},
-                                  {center.x + glyphHalfExtent, center.y + glyphHalfExtent}, glyphColor, 1.0F);
-                drawList->AddLine({center.x + glyphHalfExtent, center.y - glyphHalfExtent},
-                                  {center.x - glyphHalfExtent, center.y + glyphHalfExtent}, glyphColor, 1.0F);
+                drawList->AddLine({pixelAligned(center.x - glyphHalfExtent),
+                                   pixelAligned(center.y - glyphHalfExtent)},
+                                  {pixelAligned(center.x + glyphHalfExtent),
+                                   pixelAligned(center.y + glyphHalfExtent)}, glyphColor, 1.0F);
+                drawList->AddLine({pixelAligned(center.x + glyphHalfExtent),
+                                   pixelAligned(center.y - glyphHalfExtent)},
+                                  {pixelAligned(center.x - glyphHalfExtent),
+                                   pixelAligned(center.y + glyphHalfExtent)}, glyphColor, 1.0F);
             }
         }
     }

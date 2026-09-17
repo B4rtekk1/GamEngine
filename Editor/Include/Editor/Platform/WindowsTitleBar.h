@@ -1,5 +1,7 @@
 #pragma once
 
+#include <vector>
+
 struct SDL_Window;
 
 namespace Editor {
@@ -25,24 +27,33 @@ public:
 
     void attach(SDL_Window* window);
     void detach();
-
-    // SDL and ImGui use the same window-relative physical-pixel coordinates
-    // as Win32/DWM on Windows.
-    // The area contains UI which must receive mouse input rather than drag the window.
-    void setInteractiveArea(float left, float right, float height);
+    void updateNativeHeight();
+    void clearHitRegions();
+    void addHitRegion(float left, float top, float right, float bottom, long result);
+    static constexpr long clientHitTestResult = 1;
 
     [[nodiscard]] float contentRight() const;
     [[nodiscard]] CaptionButtonBounds captionButtonBounds() const;
     [[nodiscard]] int captionButtonHitTest(int x, int y) const noexcept;
     [[nodiscard]] bool isMaximized() const noexcept;
-    [[nodiscard]] bool isInteractiveClientPoint(int x, int y) const noexcept;
+    [[nodiscard]] long hitTest(int x, int y) const noexcept;
     [[nodiscard]] int nativeHeight() const noexcept;
+    [[nodiscard]] float dpiScale() const noexcept;
 
 private:
+#ifdef _WIN32
+    struct HitRegion {
+        int left = 0;
+        int top = 0;
+        int right = 0;
+        int bottom = 0;
+        long result = 0;
+    };
+
+    std::vector<HitRegion> hitRegions_;
+#endif
     void* windowHandle_ = nullptr;
-    int interactiveLeft_ = 0;
-    int interactiveRight_ = 0;
-    int titleBarHeight_ = 36;
+    int titleBarHeight_ = 0;
 };
 
 } // namespace Editor
