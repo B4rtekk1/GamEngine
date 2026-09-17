@@ -370,7 +370,7 @@
                 // shadow-filter noise at sub-pixel edges.
                 0u,
                 static_cast<std::uint32_t>(Profiler::currentFrameNumber()),
-                0u,
+                static_cast<std::uint32_t>(pbrDebugView),
                 glm::vec4{static_cast<float>(swapchain.extent().width),
                           static_cast<float>(swapchain.extent().height), 0.1F, 1000.0F},
                 frameData.lights};
@@ -442,7 +442,7 @@
                 materialSlots, editorSelectedRenderable, frameData.lightCount,
                 static_cast<std::uint32_t>(reflectionProbeManager.probes().size()),
                 0u,
-                0u, 0u, 0u,
+                0u, 0u, static_cast<std::uint32_t>(pbrDebugView),
                 glm::vec4{static_cast<float>(sceneViewportTarget.extent().width),
                           static_cast<float>(sceneViewportTarget.extent().height), 0.1F, 1000.0F},
                 frameData.lights};

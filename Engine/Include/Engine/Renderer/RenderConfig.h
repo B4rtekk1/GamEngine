@@ -31,6 +31,14 @@ namespace Engine {
     /** Full-screen diagnostic stage for isolating GTAO artifacts. */
     enum class GtaoDebugView : std::uint8_t { Off, Raw, Filtered, Full };
 
+    /** Temporary lighting isolators for diagnosing view-dependent PBR artifacts. */
+    enum class PbrDebugView : std::uint8_t {
+        FinalLighting,
+        NoSpecularIbl,
+        NoDirectSpecular,
+        NoGtao,
+    };
+
     /** Tunables are deliberately data, so automated GPU benchmarks can sweep them. */
     struct GtaoQualitySettings final {
         float resolutionScale;
@@ -112,6 +120,7 @@ namespace Engine {
         ShadowQuality shadowQuality = ShadowQuality::High;
         GtaoQuality gtaoQuality = GtaoQuality::High;
         GtaoDebugView gtaoDebugView = GtaoDebugView::Off;
+        PbrDebugView pbrDebugView = PbrDebugView::FinalLighting;
         IblQuality iblQuality = IblQuality::High;
         ShadowDebugView shadowDebugView = ShadowDebugView::Off;
     };

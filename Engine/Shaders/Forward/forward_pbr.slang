@@ -13,6 +13,11 @@ import Common.ShadowSampling;
 #define FORWARD_OUTPUT_VELOCITY 1
 #endif
 
+static const uint PBR_DEBUG_FINAL_LIGHTING = 0u;
+static const uint PBR_DEBUG_NO_SPECULAR_IBL = 1u;
+static const uint PBR_DEBUG_NO_DIRECT_SPECULAR = 2u;
+static const uint PBR_DEBUG_NO_GTAO = 3u;
+
 [[vk::binding(1, 0)]] ConstantBuffer<RendererFrameData> frame;
 [[vk::binding(5, 0)]] StructuredBuffer<RendererInstanceData> visibleInstances;
 [[vk::binding(6, 0)]] StructuredBuffer<uint> visibleInstanceIndices;
@@ -357,6 +362,16 @@ ForwardFragmentOutput fragmentMain(ForwardFragmentInput input)
     roughness = clamp(graphSurface.roughness, 0.045, 1.0);
     normal = normalize(graphSurface.normal);
 #endif
+    // Specular anti-aliasing: high-frequency normal maps otherwise steer
+    // adjacent pixels to unrelated parts of the environment, especially at
+    // grazing angles. Derivative-based normal-to-roughness broadens the GGX
+    // lobe before both direct-light and IBL BRDF evaluation.
+    const float3 normalDx = ddx(normal);
+    const float3 normalDy = ddy(normal);
+    const float normalVariation = max(length(normalDx), length(normalDy));
+    const float aaRoughness = saturate(normalVariation * 0.5);
+    roughness = max(roughness, aaRoughness);
+
     float3 lightDirection = normalize(-frame.lightDirectionIntensity.xyz);
     float3 halfway = normalize(viewDirection + lightDirection);
     float3 dielectricF0 = float3(0.04);
@@ -389,6 +404,8 @@ ForwardFragmentOutput fragmentMain(ForwardFragmentInput input)
                      geometrySchlickGGX(nDotL, roughness);
     float3 specular = distributionGGX(normal, halfway, roughness) * geometry * fresnel /
                       max(4.0 * nDotV * nDotL, 0.0001);
+    if (frame.pbrDebugView == PBR_DEBUG_NO_DIRECT_SPECULAR)
+        specular = 0.0;
     float3 diffuse = (1.0 - fresnel) * (1.0 - metallic) * albedo / PBR_PI;
     ShadowSampleDebug shadowDebug = {0.0, 0.0, 0u, 0u, uint2(0, 0)};
     float shadow = frame.shadowEnabled != 0
@@ -454,6 +471,8 @@ ForwardFragmentOutput fragmentMain(ForwardFragmentInput input)
                               geometrySchlickGGX(localNDotL, roughness);
         float3 localSpecular = distributionGGX(normal, localHalfway, roughness) * localGeometry *
                                localFresnel / max(4.0 * nDotV * localNDotL, 0.0001);
+        if (frame.pbrDebugView == PBR_DEBUG_NO_DIRECT_SPECULAR)
+            localSpecular = 0.0;
         float3 localDiffuse = (1.0 - localFresnel) * (1.0 - metallic) * albedo / PBR_PI;
         direct += (localDiffuse + localSpecular) * local.colorIntensity.rgb *
                   local.colorIntensity.w * localNDotL * attenuation;
@@ -503,10 +522,12 @@ ForwardFragmentOutput fragmentMain(ForwardFragmentInput input)
     // radiance is physically visible along that direction.
     const float horizon = saturate(1.0 + dot(reflection, geometricNormal));
     specularIbl *= horizon * horizon;
+    if (frame.pbrDebugView == PBR_DEBUG_NO_SPECULAR_IBL)
+        specularIbl = 0.0;
     // Scene View has an independent render target and no matching GTAO
     // texture yet. Sampling the Game View result there mixes two unrelated
     // screen spaces and produces hard viewport-aligned seams.
-    const float dynamicAo = frame.screenSpaceEffects != 0u
+    const float dynamicAo = frame.screenSpaceEffects != 0u && frame.pbrDebugView != PBR_DEBUG_NO_GTAO
         ? gtaoVisibility.Sample(input.position.xy /
             float2(frame.clusteredViewportNearFar.x, frame.clusteredViewportNearFar.y)).r
         : 1.0;

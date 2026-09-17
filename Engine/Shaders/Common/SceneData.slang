@@ -42,7 +42,9 @@ struct RendererFrameData
     uint screenSpaceEffects;
     uint temporalShadowJitter;
     uint temporalSampleIndex;
-    uint padding;
+    // PbrDebugView: 0=final, 1=no specular IBL, 2=no direct specular,
+    // 3=no GTAO. Kept in the former padding slot to preserve UBO layout.
+    uint pbrDebugView;
     // xy viewport pixels, z near plane, w far plane.
     float4 clusteredViewportNearFar;
     LocalLightData localLights[32];

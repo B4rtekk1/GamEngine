@@ -647,6 +647,18 @@ Engine::Entity drawEditorMenuBar(Engine::ScenePreset &scene, Engine::Renderer &r
             selectGtaoDebugView("GTAO Full", Engine::GtaoDebugView::Full);
             ImGui::EndMenu();
         }
+        if (ImGui::BeginMenu("PBR Diagnostics")) {
+            const Engine::PbrDebugView current = renderer.pbrDebugView();
+            const auto selectPbrDebugView = [&](const char* label, const Engine::PbrDebugView view) {
+                if (ImGui::MenuItem(label, nullptr, current == view)) renderer.setPbrDebugView(view);
+            };
+            selectPbrDebugView("Final Lighting", Engine::PbrDebugView::FinalLighting);
+            ImGui::Separator();
+            selectPbrDebugView("Disable Specular IBL", Engine::PbrDebugView::NoSpecularIbl);
+            selectPbrDebugView("Disable Direct Specular", Engine::PbrDebugView::NoDirectSpecular);
+            selectPbrDebugView("Disable GTAO", Engine::PbrDebugView::NoGtao);
+            ImGui::EndMenu();
+        }
         endTopMenu();
     }
 

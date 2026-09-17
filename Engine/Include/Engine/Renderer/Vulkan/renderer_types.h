@@ -99,7 +99,7 @@ namespace Engine {
         // TAA; Scene View intentionally remains spatially stable.
         std::uint32_t temporalShadowJitter{0};
         std::uint32_t temporalSampleIndex{0};
-        std::uint32_t padding{};
+        std::uint32_t pbrDebugView{0};
         glm::vec4 clusteredViewportNearFar{};
         std::array<LocalLightGPU, MaxLocalLights> localLights{};
     };

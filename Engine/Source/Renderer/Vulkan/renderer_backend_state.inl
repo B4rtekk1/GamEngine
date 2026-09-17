@@ -153,6 +153,7 @@
         const ShadowQuality& shadowQuality;
         const GtaoQuality& gtaoQuality;
         const GtaoDebugView& gtaoDebugView;
+        const PbrDebugView& pbrDebugView;
         const IblQuality& iblQuality;
         const ShadowDebugView& shadowDebugView;
         const GrassRenderSettings& grassSettings;
