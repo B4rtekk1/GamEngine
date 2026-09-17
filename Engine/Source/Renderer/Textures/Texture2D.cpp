@@ -438,6 +438,13 @@ namespace Engine {
             samplerInfo.addressModeU = VK_SAMPLER_ADDRESS_MODE_REPEAT;
             samplerInfo.addressModeV = VK_SAMPLER_ADDRESS_MODE_REPEAT;
             samplerInfo.addressModeW = VK_SAMPLER_ADDRESS_MODE_REPEAT;
+            VkPhysicalDeviceFeatures supportedFeatures{};
+            VkPhysicalDeviceProperties properties{};
+            vkGetPhysicalDeviceFeatures(physicalDevice, &supportedFeatures);
+            vkGetPhysicalDeviceProperties(physicalDevice, &properties);
+            samplerInfo.anisotropyEnable = supportedFeatures.samplerAnisotropy;
+            samplerInfo.maxAnisotropy = supportedFeatures.samplerAnisotropy
+                ? std::min(8.0F, properties.limits.maxSamplerAnisotropy) : 1.0F;
             samplerInfo.minLod = 0.0F;
             samplerInfo.maxLod = static_cast<float>(mipLevels_ - 1);
             if (vkCreateSampler(device_, &samplerInfo, nullptr, &sampler_) != VK_SUCCESS) {
@@ -590,6 +597,13 @@ namespace Engine {
             samplerInfo.addressModeU = VK_SAMPLER_ADDRESS_MODE_REPEAT;
             samplerInfo.addressModeV = VK_SAMPLER_ADDRESS_MODE_REPEAT;
             samplerInfo.addressModeW = VK_SAMPLER_ADDRESS_MODE_REPEAT;
+            VkPhysicalDeviceFeatures supportedFeatures{};
+            VkPhysicalDeviceProperties properties{};
+            vkGetPhysicalDeviceFeatures(physicalDevice, &supportedFeatures);
+            vkGetPhysicalDeviceProperties(physicalDevice, &properties);
+            samplerInfo.anisotropyEnable = supportedFeatures.samplerAnisotropy;
+            samplerInfo.maxAnisotropy = supportedFeatures.samplerAnisotropy
+                ? std::min(8.0F, properties.limits.maxSamplerAnisotropy) : 1.0F;
             samplerInfo.maxLod = static_cast<float>(mipLevels_ - 1);
             if (vkCreateSampler(device_, &samplerInfo, nullptr, &sampler_) != VK_SUCCESS) throw std::runtime_error(
                 "Could not create cooked Texture2D sampler");
@@ -674,6 +688,13 @@ namespace Engine {
             samplerInfo.addressModeU = VK_SAMPLER_ADDRESS_MODE_REPEAT;
             samplerInfo.addressModeV = VK_SAMPLER_ADDRESS_MODE_REPEAT;
             samplerInfo.addressModeW = VK_SAMPLER_ADDRESS_MODE_REPEAT;
+            VkPhysicalDeviceFeatures supportedFeatures{};
+            VkPhysicalDeviceProperties properties{};
+            vkGetPhysicalDeviceFeatures(physicalDevice, &supportedFeatures);
+            vkGetPhysicalDeviceProperties(physicalDevice, &properties);
+            samplerInfo.anisotropyEnable = supportedFeatures.samplerAnisotropy;
+            samplerInfo.maxAnisotropy = supportedFeatures.samplerAnisotropy
+                ? std::min(8.0F, properties.limits.maxSamplerAnisotropy) : 1.0F;
             samplerInfo.maxLod = static_cast<float>(mipLevels_ - 1);
             if (vkCreateSampler(device_, &samplerInfo, nullptr, &sampler_) != VK_SUCCESS)
                 throw std::runtime_error("Could not create resident GTEX sampler");

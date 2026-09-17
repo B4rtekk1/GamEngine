@@ -37,6 +37,7 @@ namespace Engine {
         NoSpecularIbl,
         NoDirectSpecular,
         NoGtao,
+        GeometricDirectDiffuse,
     };
 
     /** Tunables are deliberately data, so automated GPU benchmarks can sweep them. */

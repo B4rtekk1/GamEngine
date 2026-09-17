@@ -417,10 +417,15 @@ namespace Engine {
         features11.shaderDrawParameters = VK_TRUE;
         features11.pNext = &features12;
         VkPhysicalDeviceFeatures2 features2{.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2};
+        VkPhysicalDeviceFeatures availableCoreFeatures{};
+        vkGetPhysicalDeviceFeatures(physicalDevice_, &availableCoreFeatures);
         features2.features.multiDrawIndirect = VK_TRUE;
         features2.features.shaderInt16 = VK_TRUE;
         features2.features.shaderSampledImageArrayDynamicIndexing = VK_TRUE;
         features2.features.textureCompressionBC = VK_TRUE;
+        // Anisotropic filtering is optional in Vulkan. Enable it when the
+        // selected GPU exposes it; texture samplers query the same capability.
+        features2.features.samplerAnisotropy = availableCoreFeatures.samplerAnisotropy;
         features2.pNext = &features11;
 
         VkPhysicalDeviceMeshShaderFeaturesEXT enabledMeshFeatures{

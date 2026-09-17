@@ -17,6 +17,7 @@ static const uint PBR_DEBUG_FINAL_LIGHTING = 0u;
 static const uint PBR_DEBUG_NO_SPECULAR_IBL = 1u;
 static const uint PBR_DEBUG_NO_DIRECT_SPECULAR = 2u;
 static const uint PBR_DEBUG_NO_GTAO = 3u;
+static const uint PBR_DEBUG_GEOMETRIC_DIRECT_DIFFUSE = 4u;
 
 [[vk::binding(1, 0)]] ConstantBuffer<RendererFrameData> frame;
 [[vk::binding(5, 0)]] StructuredBuffer<RendererInstanceData> visibleInstances;
@@ -344,6 +345,21 @@ ForwardFragmentOutput fragmentMain(ForwardFragmentInput input)
         normal = normalize(mul(mappedNormal, tangentFrame));
     }
 
+    // This isolates the invariant baseline: no normal map, Fresnel, IBL,
+    // specular, AO, shadows or local lights may affect it. It is deliberately
+    // evaluated before material-graph normal overrides and specular AA.
+    if (frame.pbrDebugView == PBR_DEBUG_GEOMETRIC_DIRECT_DIFFUSE)
+    {
+        ForwardFragmentOutput diagnosticOutput;
+        const float3 diagnosticLightDirection = normalize(-frame.lightDirectionIntensity.xyz);
+        diagnosticOutput.color = float4(albedo * max(dot(geometricNormal, diagnosticLightDirection), 0.0), baseColor.a);
+#if FORWARD_OUTPUT_VELOCITY
+        float2 previousNdc = input.previousClip.xy / input.previousClip.w;
+        diagnosticOutput.velocity = (input.currentNdc - previousNdc) * 0.5;
+#endif
+        return diagnosticOutput;
+    }
+
     float3 viewDirection = normalize(frame.cameraPosition.xyz - input.worldPosition);
 #ifdef ENGINE_SHADER_GRAPH
     SurfaceInput graphInput;
@@ -404,9 +420,13 @@ ForwardFragmentOutput fragmentMain(ForwardFragmentInput input)
                      geometrySchlickGGX(nDotL, roughness);
     float3 specular = distributionGGX(normal, halfway, roughness) * geometry * fresnel /
                       max(4.0 * nDotV * nDotL, 0.0001);
-    if (frame.pbrDebugView == PBR_DEBUG_NO_DIRECT_SPECULAR)
+    const bool disableDirectSpecular = frame.pbrDebugView == PBR_DEBUG_NO_DIRECT_SPECULAR;
+    if (disableDirectSpecular)
         specular = 0.0;
-    float3 diffuse = (1.0 - fresnel) * (1.0 - metallic) * albedo / PBR_PI;
+    // The diagnostic removes specular and restores its diffuse energy.  This
+    // prevents view-dependent Fresnel from masquerading as a diffuse change.
+    float3 diffuse = (1.0 - (disableDirectSpecular ? 0.0 : fresnel)) *
+                     (1.0 - metallic) * albedo / PBR_PI;
     ShadowSampleDebug shadowDebug = {0.0, 0.0, 0u, 0u, uint2(0, 0)};
     float shadow = frame.shadowEnabled != 0
         ? sampleVirtualShadow(shadowMap, linearShadowMap, shadowDepthMap, input.worldPosition, normal, lightDirection, frame.shadowClipMatrices,
@@ -471,9 +491,10 @@ ForwardFragmentOutput fragmentMain(ForwardFragmentInput input)
                               geometrySchlickGGX(localNDotL, roughness);
         float3 localSpecular = distributionGGX(normal, localHalfway, roughness) * localGeometry *
                                localFresnel / max(4.0 * nDotV * localNDotL, 0.0001);
-        if (frame.pbrDebugView == PBR_DEBUG_NO_DIRECT_SPECULAR)
+        if (disableDirectSpecular)
             localSpecular = 0.0;
-        float3 localDiffuse = (1.0 - localFresnel) * (1.0 - metallic) * albedo / PBR_PI;
+        float3 localDiffuse = (1.0 - (disableDirectSpecular ? 0.0 : localFresnel)) *
+                              (1.0 - metallic) * albedo / PBR_PI;
         direct += (localDiffuse + localSpecular) * local.colorIntensity.rgb *
                   local.colorIntensity.w * localNDotL * attenuation;
     }
@@ -494,7 +515,8 @@ ForwardFragmentOutput fragmentMain(ForwardFragmentInput input)
     emissive = graphSurface.emission;
 #endif
     float3 fresnelIbl = fresnelSchlickRoughness(nDotV, f0, roughness);
-    float3 kS = fresnelIbl;
+    const bool disableSpecularIbl = frame.pbrDebugView == PBR_DEBUG_NO_SPECULAR_IBL;
+    float3 kS = disableSpecularIbl ? 0.0 : fresnelIbl;
     float3 kD = (1.0 - kS) * (1.0 - metallic);
     float3 diffuseIbl = irradianceMap.Sample(normal).rgb * albedo * kD;
     float3 reflection = reflect(-viewDirection, normal);
@@ -522,7 +544,7 @@ ForwardFragmentOutput fragmentMain(ForwardFragmentInput input)
     // radiance is physically visible along that direction.
     const float horizon = saturate(1.0 + dot(reflection, geometricNormal));
     specularIbl *= horizon * horizon;
-    if (frame.pbrDebugView == PBR_DEBUG_NO_SPECULAR_IBL)
+    if (disableSpecularIbl)
         specularIbl = 0.0;
     // Scene View has an independent render target and no matching GTAO
     // texture yet. Sampling the Game View result there mixes two unrelated

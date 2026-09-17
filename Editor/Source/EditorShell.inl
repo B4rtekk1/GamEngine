@@ -31,18 +31,21 @@ void drawStatusBar(const Engine::ScenePreset &scene, const Engine::Entity select
     ImGui::PopStyleColor();
 }
 
-[[maybe_unused]] void drawLegacyGpuProfilePanel(const Engine::Renderer& renderer, bool& isOpen) {
-    (void)renderer;
+[[maybe_unused]] void drawLegacyGpuProfilePanel(const Engine::Renderer &renderer, bool &isOpen) {
+    (void) renderer;
     static bool writeCsv{};
     static float intervalSeconds{2.0F};
     static std::chrono::steady_clock::time_point lastWrite{};
     static std::string writeError;
     const std::filesystem::path csvPath = Platform::UserPaths::editorLogs() / "gpu-profile.csv";
     const std::uint32_t historyCount = Engine::Profiler::historySize();
-    const Engine::ProfileFrame* latestGpuFrame = nullptr;
+    const Engine::ProfileFrame *latestGpuFrame = nullptr;
     for (std::uint32_t index = historyCount; index != 0; --index) {
-        const Engine::ProfileFrame& frame = Engine::Profiler::historyFrame(index - 1);
-        if (frame.gpuReady) { latestGpuFrame = &frame; break; }
+        const Engine::ProfileFrame &frame = Engine::Profiler::historyFrame(index - 1);
+        if (frame.gpuReady) {
+            latestGpuFrame = &frame;
+            break;
+        }
     }
 
     // Sampling history has no GPU synchronization cost. Keep recording active
@@ -57,7 +60,7 @@ void drawStatusBar(const Engine::ScenePreset &scene, const Engine::Entity select
             writeError = "Could not create log directory: " + error.message();
         } else {
             const bool writeHeader = !std::filesystem::exists(csvPath, error) ||
-                (!error && std::filesystem::file_size(csvPath, error) == 0);
+                                     (!error && std::filesystem::file_size(csvPath, error) == 0);
             std::ofstream output{csvPath, std::ios::app};
             if (!output) {
                 writeError = "Could not open GPU profile CSV for writing.";
@@ -66,7 +69,7 @@ void drawStatusBar(const Engine::ScenePreset &scene, const Engine::Entity select
                     output << "timestamp_unix_ms,gpu_frame_ms,profiled_zones_ms\n";
                 }
                 float profiledMilliseconds = 0.0F;
-                for (const Engine::GpuProfileEvent& event : latestGpuFrame->gpuEvents) {
+                for (const Engine::GpuProfileEvent &event: latestGpuFrame->gpuEvents) {
                     if (event.depth == 0) profiledMilliseconds += event.endMs - event.startMs;
                 }
                 const auto timestamp = std::chrono::duration_cast<std::chrono::milliseconds>(
@@ -117,7 +120,7 @@ void drawStatusBar(const Engine::ScenePreset &scene, const Engine::Entity select
         float maxCpu = 0.0F;
         float maxGpu = 0.0F;
         for (std::uint32_t index = 0; index < historyCount; ++index) {
-            const Engine::ProfileFrame& frame = Engine::Profiler::historyFrame(index);
+            const Engine::ProfileFrame &frame = Engine::Profiler::historyFrame(index);
             cpuTimes[index] = static_cast<float>(frame.cpuFrameMs);
             gpuTimes[index] = static_cast<float>(frame.gpuFrameMs);
             maxCpu = std::max(maxCpu, cpuTimes[index]);
@@ -131,10 +134,10 @@ void drawStatusBar(const Engine::ScenePreset &scene, const Engine::Entity select
                          nullptr, 0.0F, graphMax, {0.0F, 72.0F});
         if (ImGui::BeginCombo("Selected frame", ("#" + std::to_string(selectedFrame)).c_str())) {
             for (std::uint32_t index = 0; index < historyCount; ++index) {
-                const Engine::ProfileFrame& frame = Engine::Profiler::historyFrame(index);
+                const Engine::ProfileFrame &frame = Engine::Profiler::historyFrame(index);
                 const bool selected = frame.frameNumber == selectedFrame;
                 const std::string label = "#" + std::to_string(frame.frameNumber) + "  CPU " +
-                    std::to_string(frame.cpuFrameMs).substr(0, 5) + " ms";
+                                          std::to_string(frame.cpuFrameMs).substr(0, 5) + " ms";
                 if (ImGui::Selectable(label.c_str(), selected)) {
                     selectedFrame = frame.frameNumber;
                     followLatest = false;
@@ -144,10 +147,13 @@ void drawStatusBar(const Engine::ScenePreset &scene, const Engine::Entity select
             ImGui::EndCombo();
         }
         const std::uint64_t targetFrame = selectedFrame;
-        const Engine::ProfileFrame* selected = nullptr;
+        const Engine::ProfileFrame *selected = nullptr;
         for (std::uint32_t index = 0; index < historyCount; ++index) {
-            const Engine::ProfileFrame& frame = Engine::Profiler::historyFrame(index);
-            if (frame.frameNumber == targetFrame) { selected = &frame; break; }
+            const Engine::ProfileFrame &frame = Engine::Profiler::historyFrame(index);
+            if (frame.frameNumber == targetFrame) {
+                selected = &frame;
+                break;
+            }
         }
         if (selected != nullptr) {
             ImGui::Text("CPU %.3f ms   GPU %s", selected->cpuFrameMs,
@@ -159,11 +165,11 @@ void drawStatusBar(const Engine::ScenePreset &scene, const Engine::Entity select
                 ImGui::TableSetupColumn("Self", ImGuiTableColumnFlags_WidthFixed, 86.0F);
                 ImGui::TableHeadersRow();
                 for (std::size_t index = 0; index < selected->cpuEvents.size(); ++index) {
-                    const auto& event = selected->cpuEvents[index];
+                    const auto &event = selected->cpuEvents[index];
                     const double total = static_cast<double>(event.endNs - event.startNs) * 1.0e-6;
                     std::uint64_t childNs{};
                     for (std::size_t child = index + 1; child < selected->cpuEvents.size(); ++child) {
-                        const auto& candidate = selected->cpuEvents[child];
+                        const auto &candidate = selected->cpuEvents[child];
                         if (candidate.depth <= event.depth) break;
                         if (candidate.depth == event.depth + 1) childNs += candidate.endNs - candidate.startNs;
                     }
@@ -172,8 +178,10 @@ void drawStatusBar(const Engine::ScenePreset &scene, const Engine::Entity select
                     ImGui::Indent(static_cast<float>(event.depth) * 12.0F);
                     ImGui::TextUnformatted(Engine::Profiler::name(event.name).data());
                     ImGui::Unindent(static_cast<float>(event.depth) * 12.0F);
-                    ImGui::TableSetColumnIndex(1); ImGui::Text("%.3f ms", total);
-                    ImGui::TableSetColumnIndex(2); ImGui::Text("%.3f ms", total - static_cast<double>(childNs) * 1.0e-6);
+                    ImGui::TableSetColumnIndex(1);
+                    ImGui::Text("%.3f ms", total);
+                    ImGui::TableSetColumnIndex(2);
+                    ImGui::Text("%.3f ms", total - static_cast<double>(childNs) * 1.0e-6);
                 }
                 ImGui::EndTable();
             }
@@ -181,18 +189,22 @@ void drawStatusBar(const Engine::ScenePreset &scene, const Engine::Entity select
         ImGui::Separator();
     }
 
-    const Engine::ProfileFrame* selectedGpuFrame = nullptr;
+    const Engine::ProfileFrame *selectedGpuFrame = nullptr;
     for (std::uint32_t index = 0; index < historyCount; ++index) {
-        const Engine::ProfileFrame& frame = Engine::Profiler::historyFrame(index);
-        if (frame.frameNumber == selectedFrame) { selectedGpuFrame = &frame; break; }
+        const Engine::ProfileFrame &frame = Engine::Profiler::historyFrame(index);
+        if (frame.frameNumber == selectedFrame) {
+            selectedGpuFrame = &frame;
+            break;
+        }
     }
     float profiledMilliseconds = 0.0F;
     if (selectedGpuFrame && selectedGpuFrame->gpuReady && ImGui::BeginTable("##gpu-profile-passes", 2,
-                          ImGuiTableFlags_SizingStretchProp | ImGuiTableFlags_BordersInnerV)) {
+                                                                            ImGuiTableFlags_SizingStretchProp |
+                                                                            ImGuiTableFlags_BordersInnerV)) {
         ImGui::TableSetupColumn("GPU zone");
         ImGui::TableSetupColumn("GPU time", ImGuiTableColumnFlags_WidthFixed, 92.0F);
         ImGui::TableHeadersRow();
-        for (const Engine::GpuProfileEvent& event : selectedGpuFrame->gpuEvents) {
+        for (const Engine::GpuProfileEvent &event: selectedGpuFrame->gpuEvents) {
             const float milliseconds = event.endMs - event.startMs;
             if (event.depth == 0) profiledMilliseconds += milliseconds;
             ImGui::TableNextRow();
@@ -217,44 +229,46 @@ void drawStatusBar(const Engine::ScenePreset &scene, const Engine::Entity select
 }
 
 namespace {
+    // The main-menu entries are navigation controls, not regular action buttons.
+    // Give them a larger target and a clearly visible hover/open state while
+    // keeping the rest of the editor's button styling unchanged.
+    bool beginTopMenu(const char *label, const char *tooltip, Editor::WindowsTitleBar &titleBar) {
+        ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, {11.0F, ImGui::GetStyle().FramePadding.y});
+        ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, {3.0F, 0.0F});
+        ImGui::PushStyleColor(ImGuiCol_Header, {0.0F, 0.0F, 0.0F, 0.0F});
+        ImGui::PushStyleColor(ImGuiCol_HeaderHovered, {0.10F, 0.36F, 0.48F, 0.88F});
+        ImGui::PushStyleColor(ImGuiCol_HeaderActive, {0.08F, 0.52F, 0.66F, 1.0F});
 
-// The main-menu entries are navigation controls, not regular action buttons.
-// Give them a larger target and a clearly visible hover/open state while
-// keeping the rest of the editor's button styling unchanged.
-bool beginTopMenu(const char *label, const char *tooltip, Editor::WindowsTitleBar &titleBar) {
-    ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, {11.0F, ImGui::GetStyle().FramePadding.y});
-    ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, {3.0F, 0.0F});
-    ImGui::PushStyleColor(ImGuiCol_Header, {0.0F, 0.0F, 0.0F, 0.0F});
-    ImGui::PushStyleColor(ImGuiCol_HeaderHovered, {0.10F, 0.36F, 0.48F, 0.88F});
-    ImGui::PushStyleColor(ImGuiCol_HeaderActive, {0.08F, 0.52F, 0.66F, 1.0F});
+        const bool open = ImGui::BeginMenu(label);
+        const ImVec2 itemMin = ImGui::GetItemRectMin();
+        const ImVec2 itemMax = ImGui::GetItemRectMax();
+        titleBar.addHitRegion(itemMin.x, itemMin.y, itemMax.x, itemMax.y,
+                              Editor::WindowsTitleBar::clientHitTestResult);
+        if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort) && tooltip != nullptr) {
+            ImGui::SetTooltip("%s", tooltip);
+        }
+        if (open) return true;
 
-    const bool open = ImGui::BeginMenu(label);
-    const ImVec2 itemMin = ImGui::GetItemRectMin();
-    const ImVec2 itemMax = ImGui::GetItemRectMax();
-    titleBar.addHitRegion(itemMin.x, itemMin.y, itemMax.x, itemMax.y,
-                          Editor::WindowsTitleBar::clientHitTestResult);
-    if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort) && tooltip != nullptr) {
-        ImGui::SetTooltip("%s", tooltip);
+        ImGui::PopStyleColor(3);
+        ImGui::PopStyleVar(2);
+        return false;
     }
-    if (open) return true;
 
-    ImGui::PopStyleColor(3);
-    ImGui::PopStyleVar(2);
-    return false;
-}
+    void endTopMenu() {
+        ImGui::EndMenu();
+        ImGui::PopStyleColor(3);
+        ImGui::PopStyleVar(2);
+    }
 
-void endTopMenu() {
-    ImGui::EndMenu();
-    ImGui::PopStyleColor(3);
-    ImGui::PopStyleVar(2);
-}
+    [[nodiscard]] float pixelAligned(const float value) {
+        return std::round(value) + 0.5F;
+    }
 
-[[nodiscard]] float pixelAligned(const float value) {
-    return std::round(value) + 0.5F;
-}
+    void drawRestoreGlyph(ImDrawList * const drawList, const ImVec2 center, const float glyphHalfExtent,
 
-void drawRestoreGlyph(ImDrawList* const drawList, const ImVec2 center, const float glyphHalfExtent,
-                      const ImU32 color) {
+    const ImU32 color
+    )
+ {
     const float offset = std::round(glyphHalfExtent * 0.6F);
     const float halfSize = glyphHalfExtent;
 
@@ -271,8 +285,8 @@ void drawRestoreGlyph(ImDrawList* const drawList, const ImVec2 center, const flo
 } // namespace
 
 Engine::Entity drawEditorMenuBar(Engine::ScenePreset &scene, Engine::Renderer &renderer,
-                                 Engine::Assets::Content& content, Engine::Project& project,
-                                 Editor::WindowsTitleBar& titleBar,
+                                 Engine::Assets::Content &content, Engine::Project &project,
+                                 Editor::WindowsTitleBar &titleBar,
                                  bool &antialiasingChanged, bool &sceneLoaded, bool &sceneSaved,
                                  bool &sceneDeleted,
                                  const bool playing, const bool paused, bool &playToggleRequested,
@@ -284,7 +298,7 @@ Engine::Entity drawEditorMenuBar(Engine::ScenePreset &scene, Engine::Renderer &r
                                  bool &showHierarchy, bool &showViewport,
                                  bool &showInspector, bool &showAssetManager,
                                  bool &showTerrainTools, bool &showConsole, bool &showTerminal,
-                                 bool &showShaderGraph, bool& showGpuProfile) {
+                                 bool &showShaderGraph, bool &showGpuProfile) {
     static bool showShortcuts = false;
     static bool showAbout = false;
     static bool openSceneSettings = false;
@@ -325,7 +339,7 @@ Engine::Entity drawEditorMenuBar(Engine::ScenePreset &scene, Engine::Renderer &r
             }
         }
     };
-    const auto loadScene = [&](const std::filesystem::path& path) {
+    const auto loadScene = [&](const std::filesystem::path &path) {
         std::optional<std::uint32_t> samples;
         Engine::SceneSerializer::load(scene, path, samples);
         if (!scene.environmentEquirectangular().empty() &&
@@ -336,8 +350,9 @@ Engine::Entity drawEditorMenuBar(Engine::ScenePreset &scene, Engine::Renderer &r
         if (samples) {
             renderer.setAntialiasingLevel(*samples == 2
                                               ? Engine::AntialiasingLevel::MSAA2x
-                                              : *samples == 4 ? Engine::AntialiasingLevel::MSAA4x
-                                                              : Engine::AntialiasingLevel::Off);
+                                              : *samples == 4
+                                                    ? Engine::AntialiasingLevel::MSAA4x
+                                                    : Engine::AntialiasingLevel::Off);
             antialiasingChanged = true;
         }
         sceneLoaded = true;
@@ -345,10 +360,10 @@ Engine::Entity drawEditorMenuBar(Engine::ScenePreset &scene, Engine::Renderer &r
         sceneFileError.clear();
         Editor::ConsolePanel::info("Loaded scene: " + path.string());
     };
-    const auto tryLoadScene = [&](const std::filesystem::path& path) {
+    const auto tryLoadScene = [&](const std::filesystem::path &path) {
         try {
             loadScene(path);
-        } catch (const std::exception& error) {
+        } catch (const std::exception &error) {
             sceneFileError = error.what();
             Editor::ConsolePanel::error("Could not load scene: " + sceneFileError);
         }
@@ -370,7 +385,7 @@ Engine::Entity drawEditorMenuBar(Engine::ScenePreset &scene, Engine::Renderer &r
             sceneLoaded = true;
             resetHistoryRequested = true;
             Editor::ConsolePanel::info("Created scene: " + path->string());
-        } catch (const std::exception& error) {
+        } catch (const std::exception &error) {
             sceneFileError = error.what();
             Editor::ConsolePanel::error("Could not create scene: " + sceneFileError);
         }
@@ -386,7 +401,7 @@ Engine::Entity drawEditorMenuBar(Engine::ScenePreset &scene, Engine::Renderer &r
             EditorSceneSession::setProjectRoot(project.rootPath());
             newProjectError.clear();
             Editor::ConsolePanel::info("Created project: " + project.name());
-        } catch (const std::exception& error) {
+        } catch (const std::exception &error) {
             newProjectError = error.what();
             Editor::ConsolePanel::error("Could not create project: " + newProjectError);
         }
@@ -459,7 +474,7 @@ Engine::Entity drawEditorMenuBar(Engine::ScenePreset &scene, Engine::Renderer &r
             if (scenes.empty()) {
                 ImGui::TextDisabled("No scenes in %s", (project.assetRoot() / "Scenes").string().c_str());
             }
-            for (const auto& path : scenes) {
+            for (const auto &path: scenes) {
                 const std::string label = path.lexically_relative(project.rootPath()).string();
                 const bool active = path == activeScenePath;
                 if (ImGui::MenuItem(label.c_str(), nullptr, active, !active)) {
@@ -555,7 +570,7 @@ Engine::Entity drawEditorMenuBar(Engine::ScenePreset &scene, Engine::Renderer &r
             sceneDeleted = true;
         }
         ImGui::Separator();
-        for (const auto& path : project.scenes()) {
+        for (const auto &path: project.scenes()) {
             const std::string label = path.lexically_relative(project.rootPath()).string();
             const bool active = path == activeScenePath;
             if (ImGui::Selectable(label.c_str(), active) && !active) {
@@ -622,7 +637,7 @@ Engine::Entity drawEditorMenuBar(Engine::ScenePreset &scene, Engine::Renderer &r
         }
         if (ImGui::BeginMenu("Shadow Debug")) {
             const Engine::ShadowDebugView current = renderer.shadowDebugView();
-            const auto selectDebugView = [&](const char* label, const Engine::ShadowDebugView view) {
+            const auto selectDebugView = [&](const char *label, const Engine::ShadowDebugView view) {
                 if (ImGui::MenuItem(label, nullptr, current == view)) renderer.setShadowDebugView(view);
             };
             selectDebugView("Off", Engine::ShadowDebugView::Off);
@@ -637,7 +652,7 @@ Engine::Entity drawEditorMenuBar(Engine::ScenePreset &scene, Engine::Renderer &r
         }
         if (ImGui::BeginMenu("GTAO Debug")) {
             const Engine::GtaoDebugView current = renderer.gtaoDebugView();
-            const auto selectGtaoDebugView = [&](const char* label, const Engine::GtaoDebugView view) {
+            const auto selectGtaoDebugView = [&](const char *label, const Engine::GtaoDebugView view) {
                 if (ImGui::MenuItem(label, nullptr, current == view)) renderer.setGtaoDebugView(view);
             };
             selectGtaoDebugView("Final Lighting", Engine::GtaoDebugView::Off);
@@ -649,7 +664,7 @@ Engine::Entity drawEditorMenuBar(Engine::ScenePreset &scene, Engine::Renderer &r
         }
         if (ImGui::BeginMenu("PBR Diagnostics")) {
             const Engine::PbrDebugView current = renderer.pbrDebugView();
-            const auto selectPbrDebugView = [&](const char* label, const Engine::PbrDebugView view) {
+            const auto selectPbrDebugView = [&](const char *label, const Engine::PbrDebugView view) {
                 if (ImGui::MenuItem(label, nullptr, current == view)) renderer.setPbrDebugView(view);
             };
             selectPbrDebugView("Final Lighting", Engine::PbrDebugView::FinalLighting);
@@ -657,6 +672,8 @@ Engine::Entity drawEditorMenuBar(Engine::ScenePreset &scene, Engine::Renderer &r
             selectPbrDebugView("Disable Specular IBL", Engine::PbrDebugView::NoSpecularIbl);
             selectPbrDebugView("Disable Direct Specular", Engine::PbrDebugView::NoDirectSpecular);
             selectPbrDebugView("Disable GTAO", Engine::PbrDebugView::NoGtao);
+            ImGui::Separator();
+            selectPbrDebugView("Geometric Direct Diffuse", Engine::PbrDebugView::GeometricDirectDiffuse);
             ImGui::EndMenu();
         }
         endTopMenu();
@@ -715,18 +732,21 @@ Engine::Entity drawEditorMenuBar(Engine::ScenePreset &scene, Engine::Renderer &r
     // its glyphs while DWM and HT* caption results retain native behavior.
     const Editor::CaptionButtonBounds captionButtons = titleBar.captionButtonBounds();
     if (captionButtons.valid()) {
-        ImDrawList* const drawList = ImGui::GetWindowDrawList();
+        ImDrawList *const drawList = ImGui::GetWindowDrawList();
         const float buttonWidth = (captionButtons.right - captionButtons.left) / 3.0F;
         const float buttonHeight = captionButtons.bottom - captionButtons.top;
         const ImVec2 mouse = ImGui::GetMousePos();
         const float glyphHalfExtent = std::round(5.0F * titleBar.dpiScale());
         const bool activeWindow = ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows);
-        const ImU32 glyphColor = activeWindow ? IM_COL32(230, 235, 245, 255)
-                                              : IM_COL32(230, 235, 245, 155);
+        const ImU32 glyphColor = activeWindow
+                                     ? IM_COL32(230, 235, 245, 255)
+                                     : IM_COL32(230, 235, 245, 155);
 
         for (int index = 0; index < 3; ++index) {
-            const ImVec2 minimum{captionButtons.left + buttonWidth * static_cast<float>(index),
-                                 captionButtons.top};
+            const ImVec2 minimum{
+                captionButtons.left + buttonWidth * static_cast<float>(index),
+                captionButtons.top
+            };
             const ImVec2 maximum{minimum.x + buttonWidth, captionButtons.bottom};
             const bool hovered = mouse.x >= minimum.x && mouse.x < maximum.x &&
                                  mouse.y >= minimum.y && mouse.y < maximum.y;
@@ -738,8 +758,10 @@ Engine::Entity drawEditorMenuBar(Engine::ScenePreset &scene, Engine::Renderer &r
                 drawList->AddRectFilled(minimum, maximum, hoverColor);
             }
 
-            const ImVec2 center{pixelAligned(minimum.x + buttonWidth * 0.5F),
-                                pixelAligned(minimum.y + buttonHeight * 0.5F)};
+            const ImVec2 center{
+                pixelAligned(minimum.x + buttonWidth * 0.5F),
+                pixelAligned(minimum.y + buttonHeight * 0.5F)
+            };
             if (index == 0) {
                 const float lineY = pixelAligned(center.y + std::round(2.0F * titleBar.dpiScale()));
                 drawList->AddLine({pixelAligned(center.x - glyphHalfExtent), lineY},
@@ -748,21 +770,33 @@ Engine::Entity drawEditorMenuBar(Engine::ScenePreset &scene, Engine::Renderer &r
                 if (titleBar.isMaximized()) {
                     drawRestoreGlyph(drawList, center, glyphHalfExtent, glyphColor);
                 } else {
-                    drawList->AddRect({pixelAligned(center.x - glyphHalfExtent),
-                                       pixelAligned(center.y - glyphHalfExtent)},
-                                      {pixelAligned(center.x + glyphHalfExtent),
-                                       pixelAligned(center.y + glyphHalfExtent)},
+                    drawList->AddRect({
+                                          pixelAligned(center.x - glyphHalfExtent),
+                                          pixelAligned(center.y - glyphHalfExtent)
+                                      },
+                                      {
+                                          pixelAligned(center.x + glyphHalfExtent),
+                                          pixelAligned(center.y + glyphHalfExtent)
+                                      },
                                       glyphColor, 0.0F, 0, 1.0F);
                 }
             } else {
-                drawList->AddLine({pixelAligned(center.x - glyphHalfExtent),
-                                   pixelAligned(center.y - glyphHalfExtent)},
-                                  {pixelAligned(center.x + glyphHalfExtent),
-                                   pixelAligned(center.y + glyphHalfExtent)}, glyphColor, 1.0F);
-                drawList->AddLine({pixelAligned(center.x + glyphHalfExtent),
-                                   pixelAligned(center.y - glyphHalfExtent)},
-                                  {pixelAligned(center.x - glyphHalfExtent),
-                                   pixelAligned(center.y + glyphHalfExtent)}, glyphColor, 1.0F);
+                drawList->AddLine({
+                                      pixelAligned(center.x - glyphHalfExtent),
+                                      pixelAligned(center.y - glyphHalfExtent)
+                                  },
+                                  {
+                                      pixelAligned(center.x + glyphHalfExtent),
+                                      pixelAligned(center.y + glyphHalfExtent)
+                                  }, glyphColor, 1.0F);
+                drawList->AddLine({
+                                      pixelAligned(center.x + glyphHalfExtent),
+                                      pixelAligned(center.y - glyphHalfExtent)
+                                  },
+                                  {
+                                      pixelAligned(center.x - glyphHalfExtent),
+                                      pixelAligned(center.y + glyphHalfExtent)
+                                  }, glyphColor, 1.0F);
             }
         }
     }
@@ -807,8 +841,11 @@ Engine::Entity drawEditorMenuBar(Engine::ScenePreset &scene, Engine::Renderer &r
 
     if (openSceneSettings) {
         if (antialiasingType < 0) {
-            antialiasingType = renderer.antialiasingLevel() == Engine::AntialiasingLevel::Off ? 0 :
-                                renderer.antialiasingLevel() == Engine::AntialiasingLevel::TAA ? 3 : 1;
+            antialiasingType = renderer.antialiasingLevel() == Engine::AntialiasingLevel::Off
+                                   ? 0
+                                   : renderer.antialiasingLevel() == Engine::AntialiasingLevel::TAA
+                                         ? 3
+                                         : 1;
             msaaSamples = renderer.antialiasingLevel() == Engine::AntialiasingLevel::MSAA2x ? 2 : 4;
         }
         ImGui::OpenPopup("Scene Settings");
