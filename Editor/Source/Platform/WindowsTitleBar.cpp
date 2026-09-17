@@ -169,6 +169,23 @@ float WindowsTitleBar::contentRight() const {
     return 0.0F;
 }
 
+CaptionButtonBounds WindowsTitleBar::captionButtonBounds() const {
+#ifdef _WIN32
+    if (windowHandle_ != nullptr) {
+        const RECT bounds = captionButtons(static_cast<HWND>(windowHandle_));
+        if (!IsRectEmpty(&bounds)) {
+            return {
+                .left = static_cast<float>(bounds.left),
+                .top = static_cast<float>(bounds.top),
+                .right = static_cast<float>(bounds.right),
+                .bottom = static_cast<float>(bounds.bottom),
+            };
+        }
+    }
+#endif
+    return {};
+}
+
 int WindowsTitleBar::captionButtonHitTest(const int x, const int y) const noexcept {
 #ifdef _WIN32
     if (windowHandle_ == nullptr) return HTNOWHERE;
@@ -183,6 +200,14 @@ int WindowsTitleBar::captionButtonHitTest(const int x, const int y) const noexce
     static_cast<void>(x);
     static_cast<void>(y);
     return 0;
+#endif
+}
+
+bool WindowsTitleBar::isMaximized() const noexcept {
+#ifdef _WIN32
+    return windowHandle_ != nullptr && IsZoomed(static_cast<HWND>(windowHandle_));
+#else
+    return false;
 #endif
 }
 

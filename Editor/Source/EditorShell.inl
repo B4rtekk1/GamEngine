@@ -247,6 +247,21 @@ void endTopMenu() {
     ImGui::PopStyleVar(2);
 }
 
+void drawRestoreGlyph(ImDrawList* const drawList, const ImVec2 center, const ImU32 color) {
+    constexpr float size = 8.0F;
+    constexpr float offset = 3.0F;
+    constexpr float halfSize = size * 0.5F;
+
+    // Draw only the exposed upper and right edges of the back window.  A
+    // second complete rectangle would look like two maximize glyphs.
+    drawList->AddLine({center.x - halfSize + offset, center.y - halfSize - offset},
+                      {center.x + halfSize + offset, center.y - halfSize - offset}, color);
+    drawList->AddLine({center.x + halfSize + offset, center.y - halfSize - offset},
+                      {center.x + halfSize + offset, center.y + halfSize - offset}, color);
+    drawList->AddRect({center.x - halfSize, center.y - halfSize},
+                      {center.x + halfSize, center.y + halfSize}, color);
+}
+
 } // namespace
 
 Engine::Entity drawEditorMenuBar(Engine::ScenePreset &scene, Engine::Renderer &renderer,
@@ -669,6 +684,51 @@ Engine::Entity drawEditorMenuBar(Engine::ScenePreset &scene, Engine::Renderer &r
     titleBar.setInteractiveArea(menuBarOrigin.x, menuBarCursor.x, ImGui::GetFrameHeight());
     if (captionButtonsStart > 0.0F) ImGui::PopClipRect();
 
+    // WM_NCCALCSIZE makes this a fully client-rendered title bar.  ImGui draws
+    // its glyphs while DWM and HT* caption results retain native behavior.
+    const Editor::CaptionButtonBounds captionButtons = titleBar.captionButtonBounds();
+    if (captionButtons.valid()) {
+        ImDrawList* const drawList = ImGui::GetWindowDrawList();
+        const float buttonWidth = (captionButtons.right - captionButtons.left) / 3.0F;
+        const float buttonHeight = captionButtons.bottom - captionButtons.top;
+        const ImVec2 mouse = ImGui::GetMousePos();
+        constexpr float glyphHalfExtent = 5.0F;
+        constexpr float glyphTopMargin = 2.0F;
+        const ImU32 glyphColor = IM_COL32(230, 235, 245, 255);
+
+        for (int index = 0; index < 3; ++index) {
+            const ImVec2 minimum{captionButtons.left + buttonWidth * static_cast<float>(index),
+                                 captionButtons.top};
+            const ImVec2 maximum{minimum.x + buttonWidth, captionButtons.bottom};
+            const bool hovered = mouse.x >= minimum.x && mouse.x < maximum.x &&
+                                 mouse.y >= minimum.y && mouse.y < maximum.y;
+            if (hovered) {
+                drawList->AddRectFilled(minimum, maximum,
+                                        index == 2 ? IM_COL32(196, 43, 28, 255)
+                                                   : IM_COL32(67, 77, 100, 220));
+            }
+
+            const ImVec2 center{minimum.x + buttonWidth * 0.5F,
+                                minimum.y + buttonHeight * 0.5F + glyphTopMargin};
+            if (index == 0) {
+                drawList->AddLine({center.x - glyphHalfExtent, center.y + 2.0F},
+                                  {center.x + glyphHalfExtent, center.y + 2.0F}, glyphColor, 1.0F);
+            } else if (index == 1) {
+                if (titleBar.isMaximized()) {
+                    drawRestoreGlyph(drawList, center, glyphColor);
+                } else {
+                    drawList->AddRect({center.x - glyphHalfExtent, center.y - glyphHalfExtent},
+                                      {center.x + glyphHalfExtent, center.y + glyphHalfExtent},
+                                      glyphColor, 0.0F, 0, 1.0F);
+                }
+            } else {
+                drawList->AddLine({center.x - glyphHalfExtent, center.y - glyphHalfExtent},
+                                  {center.x + glyphHalfExtent, center.y + glyphHalfExtent}, glyphColor, 1.0F);
+                drawList->AddLine({center.x + glyphHalfExtent, center.y - glyphHalfExtent},
+                                  {center.x - glyphHalfExtent, center.y + glyphHalfExtent}, glyphColor, 1.0F);
+            }
+        }
+    }
     ImGui::EndMainMenuBar();
     ImGui::PopStyleVar();
 
