@@ -7,6 +7,7 @@ static const float MIN_SHADOW_BIAS = 1.0e-5;
 static const float LEGACY_MIN_SHADOW_BIAS = 0.0002;
 static const float LEGACY_SLOPE_SHADOW_BIAS = 0.003;
 static const float SHADOW_TEXEL_BIAS_SCALE = 2.0;
+static const float GEOMETRIC_NORMAL_OFFSET_TEXELS = 0.1;
 static const uint SHADOW_CLIP_LEVELS = 7;
 static const uint PHYSICAL_PAGES_PER_AXIS = 16;
 static const uint INVALID_SHADOW_PAGE = 0xffffffff;
@@ -172,8 +173,7 @@ float shadowLightDepthScale(float4x4 lightSpace)
     return max(length(clipZGradient), 1.0e-6);
 }
 
-float shadowReceiverDepthBias(float currentDepth, float2 uv, float3 normal,
-                              float3 lightDirection, float4x4 lightSpace)
+float shadowReceiverDepthBias(float currentDepth, float2 uv, float4x4 lightSpace)
 {
     // A receiver plane may cross several shadow texels per screen pixel, or
     // only a fraction of one.  Convert the screen-space depth derivatives to
@@ -185,6 +185,9 @@ float shadowReceiverDepthBias(float currentDepth, float2 uv, float3 normal,
     const float zDx = ddx(currentDepth);
     const float zDy = ddy(currentDepth);
     const float determinant = uvDx.x * uvDy.y - uvDx.y * uvDy.x;
+    const float texelDepth = shadowWorldTexelSize(lightSpace) *
+                             shadowLightDepthScale(lightSpace);
+    const float maxReceiverBias = texelDepth * 3.0;
     // Invert the screen-to-shadow-UV Jacobian.  Taking independent maxima of
     // depth and UV derivatives can pair values from different screen axes and
     // severely underestimate the required bias on diagonally projected planes.
@@ -193,19 +196,19 @@ float shadowReceiverDepthBias(float currentDepth, float2 uv, float3 normal,
     {
         const float dzdu = (uvDy.y * zDx - uvDx.y * zDy) / determinant;
         const float dzdv = (uvDx.x * zDy - uvDy.x * zDx) / determinant;
-        receiverPlaneBias = SHADOW_TEXEL_BIAS_SCALE *
-                            (abs(dzdu) + abs(dzdv)) / float(VIRTUAL_RESOLUTION);
+        const float calculatedBias = SHADOW_TEXEL_BIAS_SCALE *
+                                     (abs(dzdu) + abs(dzdv)) /
+                                     float(VIRTUAL_RESOLUTION);
+        // A nearly singular Jacobian can turn tiny derivative noise into an
+        // arbitrarily large depth offset. Never let receiver-plane bias move
+        // the comparison by more than a few shadow texels.
+        receiverPlaneBias = min(calculatedBias, maxReceiverBias);
     }
 
-    // Normal offset is expressed in world units, so convert one world shadow
-    // texel to the normalized depth range before combining it with the plane
-    // term.  It is a conservative floor for surfaces with a tiny derivative.
-    const float NoL = saturate(dot(normalize(normal), normalize(lightDirection)));
-    const float lightDepthScale = shadowLightDepthScale(lightSpace);
-    const float normalDepthBias = shadowWorldTexelSize(lightSpace) * lightDepthScale *
-        lerp(0.5, 2.0, 1.0 - NoL);
-
-    return max(MIN_SHADOW_BIAS, max(receiverPlaneBias, normalDepthBias));
+    // The geometric normal offset is applied in world space by the caller.
+    // Keep comparison bias responsible only for receiver-plane quantization
+    // and slope acne; do not add a second angle-dependent normal offset here.
+    return max(MIN_SHADOW_BIAS, receiverPlaneBias);
 }
 
 float shadowKernelRotation(uint2 pixelCoordinate, uint temporalSampleIndex,
@@ -233,8 +236,10 @@ float sampleVirtualShadowLevel(Sampler2DShadow shadowMap, Sampler2DShadow linear
     blockerCount = 0.0;
     penumbraRadius = 0.0;
     virtualPage = 0;
-    const float NoL = saturate(dot(normalize(normal), normalize(lightDirection)));
-    const float normalBias = shadowWorldTexelSize(lightSpace) * lerp(0.5, 2.0, 1.0 - NoL);
+    // A small geometric separation prevents self-intersection. The receiver
+    // comparison bias below handles slope/quantization independently.
+    const float normalBias = shadowWorldTexelSize(lightSpace) *
+                             GEOMETRIC_NORMAL_OFFSET_TEXELS;
     const float3 shadowPosition = worldPosition + normalize(normal) * normalBias;
     float4 lightSpacePosition = mul(float4(shadowPosition, 1.0), lightSpace);
     float3 projected = lightSpacePosition.xyz / lightSpacePosition.w;
@@ -251,8 +256,7 @@ float sampleVirtualShadowLevel(Sampler2DShadow shadowMap, Sampler2DShadow linear
     const float2 virtualPixel = uv * float(VIRTUAL_RESOLUTION);
     virtualPage = uint2(virtualPixel) / PAGE_RESOLUTION;
 
-    const float bias = shadowReceiverDepthBias(currentDepth, uv, normal,
-                                                lightDirection, lightSpace);
+    const float bias = shadowReceiverDepthBias(currentDepth, uv, lightSpace);
     // Keep a single comparison exclusively for the deliberately lowest
     // settings.  A single coarse-clipmap texel spans centimetres in world
     // space, so using it at High creates visible stair-steps after a page
