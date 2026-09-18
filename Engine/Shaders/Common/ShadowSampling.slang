@@ -1,3 +1,5 @@
+import Common.ShadowLod;
+
 // This is only a numerical floor.  The actual receiver bias is calculated
 // from the shadow texel footprint below; a fixed 0.0002 depth offset was large
 // enough to hide the slope term on nearly every receiver.
@@ -6,15 +8,8 @@ static const float LEGACY_MIN_SHADOW_BIAS = 0.0002;
 static const float LEGACY_SLOPE_SHADOW_BIAS = 0.003;
 static const float SHADOW_TEXEL_BIAS_SCALE = 2.0;
 static const uint SHADOW_CLIP_LEVELS = 7;
-static const uint VIRTUAL_PAGES_PER_AXIS = 32;
 static const uint PHYSICAL_PAGES_PER_AXIS = 16;
-static const uint PAGE_RESOLUTION = 256;
-static const uint VIRTUAL_RESOLUTION = VIRTUAL_PAGES_PER_AXIS * PAGE_RESOLUTION;
 static const uint INVALID_SHADOW_PAGE = 0xffffffff;
-static const uint SHADOW_QUALITY_LOW = 0;
-static const uint SHADOW_QUALITY_MEDIUM = 1;
-static const uint SHADOW_QUALITY_HIGH = 2;
-static const uint SHADOW_QUALITY_ULTRA = 3;
 static const uint SHADOW_DEBUG_OFF = 0;
 static const uint SHADOW_DEBUG_BLOCKER_COUNT = 1;
 static const uint SHADOW_DEBUG_PENUMBRA_RADIUS = 2;
@@ -442,20 +437,13 @@ float sampleVirtualShadowLevel(Sampler2DShadow shadowMap, Sampler2DShadow linear
     return totalWeight > 0.0 ? filteredShadow / totalWeight : 0.0;
 }
 
-float shadowTexelFootprintThreshold(const uint shadowQuality)
-{
-    if (shadowQuality == SHADOW_QUALITY_ULTRA) return 3.0;
-    if (shadowQuality == SHADOW_QUALITY_HIGH) return 2.0;
-    return shadowQuality == SHADOW_QUALITY_MEDIUM ? 1.5 : 1.0;
-}
-
 float shadowFootprintInTexels(float3 worldPosition, float4x4 clipMatrix)
 {
     const float4 lightClip = mul(float4(worldPosition, 1.0), clipMatrix);
     if (abs(lightClip.w) < 1.0e-6)
         return 0.0;
     const float2 uv = lightClip.xy / lightClip.w * 0.5 + 0.5;
-    return max(length(ddx(uv)), length(ddy(uv))) * float(VIRTUAL_RESOLUTION);
+    return shadowTexelFootprintFromGradients(ddx(uv), ddx(uv), ddy(uv), ddy(uv));
 }
 
 uint selectVirtualShadowLevel(float3 worldPosition, float4x4 clipMatrices[7],

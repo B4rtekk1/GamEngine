@@ -1,3 +1,5 @@
+import Common.ShadowLod;
+
 // Receiver-driven virtual-shadow page requests.  This pass deliberately
 // consumes depth rather than the scene object list: sky pixels do no work and
 // a view with no receivers cannot turn an O(object-count) CPU loop into work.
@@ -27,15 +29,6 @@ void markPage(const uint level, const float2 uv)
     const uint pageIndex = level * uniforms.pageCountPerAxis * uniforms.pageCountPerAxis +
                            page.y * uniforms.pageCountPerAxis + page.x;
     InterlockedOr(requestedPageBits[pageIndex >> 5], 1u << (pageIndex & 31));
-}
-
-float shadowTexelFootprintThreshold(const uint shadowQuality)
-{
-    // A larger threshold retains a finer clip level.  Higher settings can
-    // afford that density and need it most where the filter footprint grows.
-    if (shadowQuality == 3u) return 3.0;
-    if (shadowQuality == 2u) return 2.0;
-    return shadowQuality == 1u ? 1.5 : 1.0;
 }
 
 void markPageAndNeighbours(const uint encodedPage)
@@ -80,10 +73,14 @@ void main(uint3 threadId : SV_DispatchThreadID, uint3 groupThreadId : SV_GroupTh
     if (inBounds && depth < 0.999999)
     {
         const float4 world = reconstructWorld(threadId.xy, depth);
-        const uint2 neighbourPixelX = uint2(min(threadId.x + 1, uniforms.depthWidth - 1), threadId.y);
-        const uint2 neighbourPixelY = uint2(threadId.x, min(threadId.y + 1, uniforms.depthHeight - 1));
-        const float4 neighbourWorldX = reconstructWorld(neighbourPixelX, depth);
-        const float4 neighbourWorldY = reconstructWorld(neighbourPixelY, depth);
+        const uint2 leftPixel = uint2(threadId.x == 0 ? 0 : threadId.x - 1, threadId.y);
+        const uint2 rightPixel = uint2(min(threadId.x + 1, uniforms.depthWidth - 1), threadId.y);
+        const uint2 upPixel = uint2(threadId.x, threadId.y == 0 ? 0 : threadId.y - 1);
+        const uint2 downPixel = uint2(threadId.x, min(threadId.y + 1, uniforms.depthHeight - 1));
+        const float4 leftWorld = reconstructWorld(leftPixel, receiverDepth.Load(int3(leftPixel, 0)));
+        const float4 rightWorld = reconstructWorld(rightPixel, receiverDepth.Load(int3(rightPixel, 0)));
+        const float4 upWorld = reconstructWorld(upPixel, receiverDepth.Load(int3(upPixel, 0)));
+        const float4 downWorld = reconstructWorld(downPixel, receiverDepth.Load(int3(downPixel, 0)));
         const uint pagesPerLevel = uniforms.pageCountPerAxis * uniforms.pageCountPerAxis;
         uint selectedLevel = 0xffffffffu;
         // Select the finest clip level whose virtual texel is no smaller
@@ -92,17 +89,25 @@ void main(uint3 threadId : SV_DispatchThreadID, uint3 groupThreadId : SV_GroupTh
         [loop] for (uint level = 0; level < uniforms.clipLevelCount; ++level)
         {
             const float4 lightClip = mul(world, uniforms.clipMatrices[level]);
-            const float4 neighbourClipX = mul(neighbourWorldX, uniforms.clipMatrices[level]);
-            const float4 neighbourClipY = mul(neighbourWorldY, uniforms.clipMatrices[level]);
-            if (abs(lightClip.w) < 1.0e-6 || abs(neighbourClipX.w) < 1.0e-6 ||
-                abs(neighbourClipY.w) < 1.0e-6) continue;
+            const float4 leftClip = mul(leftWorld, uniforms.clipMatrices[level]);
+            const float4 rightClip = mul(rightWorld, uniforms.clipMatrices[level]);
+            const float4 upClip = mul(upWorld, uniforms.clipMatrices[level]);
+            const float4 downClip = mul(downWorld, uniforms.clipMatrices[level]);
+            if (abs(lightClip.w) < 1.0e-6 || abs(leftClip.w) < 1.0e-6 ||
+                abs(rightClip.w) < 1.0e-6 || abs(upClip.w) < 1.0e-6 ||
+                abs(downClip.w) < 1.0e-6) continue;
             const float2 lightUv = lightClip.xy / lightClip.w * 0.5 + 0.5;
             if (any(lightUv < 0.0) || any(lightUv >= 1.0)) continue;
-            const float2 neighbourUvX = neighbourClipX.xy / neighbourClipX.w * 0.5 + 0.5;
-            const float2 neighbourUvY = neighbourClipY.xy / neighbourClipY.w * 0.5 + 0.5;
-            const float footprintInTexels = max(length(neighbourUvX - lightUv),
-                                                length(neighbourUvY - lightUv)) *
-                                            float(uniforms.virtualResolution);
+            const float2 leftUv = leftClip.xy / leftClip.w * 0.5 + 0.5;
+            const float2 rightUv = rightClip.xy / rightClip.w * 0.5 + 0.5;
+            const float2 upUv = upClip.xy / upClip.w * 0.5 + 0.5;
+            const float2 downUv = downClip.xy / downClip.w * 0.5 + 0.5;
+            const float2 centerToLeft = lightUv - leftUv;
+            const float2 centerToRight = rightUv - lightUv;
+            const float2 centerToUp = lightUv - upUv;
+            const float2 centerToDown = downUv - lightUv;
+            const float footprintInTexels = shadowTexelFootprintFromGradients(
+                centerToLeft, centerToRight, centerToUp, centerToDown);
             if (footprintInTexels <= shadowTexelFootprintThreshold(uniforms.shadowQuality) ||
                 level + 1 == uniforms.clipLevelCount)
             {
