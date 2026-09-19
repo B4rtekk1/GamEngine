@@ -1158,10 +1158,8 @@ namespace Engine::RenderGraph {
                     }
                 }
             }
-            // Some callbacks use legacy render passes whose finalLayout performs
-            // a transition internally.  That transition is not a command emitted
-            // by RenderGraph, but it is still the authoritative source state for
-            // the next graph pass.
+            // Dynamic rendering has no render-pass finalLayout. Emit an explicit
+            // post-pass transition before making this the next source state.
             for (const auto &finalState: passes_[order_[ordered]].finalTextureStates) {
                 requireValid(finalState.texture);
                 const auto &desc = resources_[finalState.texture.index].desc;
@@ -1169,7 +1167,21 @@ namespace Engine::RenderGraph {
                      mip < finalState.range.baseMipLevel + finalState.range.levelCount; ++mip) {
                     for (std::uint32_t layer = finalState.range.baseArrayLayer;
                          layer < finalState.range.baseArrayLayer + finalState.range.layerCount; ++layer) {
-                        states[finalState.texture.index][static_cast<std::size_t>(mip) * desc.arrayLayers + layer] = {
+                        auto &state = states[finalState.texture.index][static_cast<std::size_t>(mip) * desc.arrayLayers + layer];
+                        if (state.layout != finalState.state.layout || state.write || finalState.state.write) {
+                            VkImageMemoryBarrier2 barrier{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2};
+                            barrier.srcStageMask = state.stage;
+                            barrier.srcAccessMask = state.access;
+                            barrier.dstStageMask = finalState.state.stage;
+                            barrier.dstAccessMask = finalState.state.access;
+                            barrier.oldLayout = state.layout;
+                            barrier.newLayout = finalState.state.layout;
+                            barrier.image = resources_[finalState.texture.index].image;
+                            barrier.subresourceRange = {desc.aspect, mip, 1, layer, 1};
+                            releaseBarriers_[ordered].images.push_back(barrier);
+                            releaseBarriers_[ordered].imageResources.push_back(finalState.texture.index);
+                        }
+                        state = {
                             finalState.state.stage, finalState.state.access, finalState.state.layout, finalState.state.write,
                             passes_[order_[ordered]].queue, static_cast<std::int32_t>(ordered)};
                     }
@@ -1398,6 +1410,15 @@ namespace Engine::RenderGraph {
                 vkCmdPipelineBarrier2(commandBuffer, &dependency);
             }
             if (const auto &callback = passes_[order_[ordered]].execute) callback(commandBuffer);
+            const BarrierBatch &releaseBarriers = releaseBarriers_[ordered];
+            if (!releaseBarriers.images.empty() || !releaseBarriers.buffers.empty()) {
+                VkDependencyInfo dependency{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
+                dependency.bufferMemoryBarrierCount = static_cast<std::uint32_t>(releaseBarriers.buffers.size());
+                dependency.pBufferMemoryBarriers = releaseBarriers.buffers.data();
+                dependency.imageMemoryBarrierCount = static_cast<std::uint32_t>(releaseBarriers.images.size());
+                dependency.pImageMemoryBarriers = releaseBarriers.images.data();
+                vkCmdPipelineBarrier2(commandBuffer, &dependency);
+            }
         }
     }
 

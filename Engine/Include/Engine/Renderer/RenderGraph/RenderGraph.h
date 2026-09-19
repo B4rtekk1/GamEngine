@@ -180,9 +180,8 @@ namespace Engine::RenderGraph {
         void write(TextureHandle texture, TextureUsage usage);
         void write(TextureHandle texture, TextureUsage usage, TextureSubresourceRange range);
         /**
-         * Declares the state established by the pass callback itself. No
-         * barrier is emitted here: the graph uses this state as the source of
-         * the next dependency.
+         * Transitions the texture after the pass callback and establishes the
+         * resulting state as the source of the next dependency.
          */
         void setFinalTextureState(TextureHandle texture, TextureState state);
         void setFinalTextureState(TextureHandle texture, TextureState state, TextureSubresourceRange range);

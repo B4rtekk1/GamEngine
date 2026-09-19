@@ -1134,11 +1134,10 @@
                 .format = msaa.enabled() ? hiZDepthBuffer.format() : depthBuffer.format(),
                 .usage = VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
                 .aspect = VK_IMAGE_ASPECT_DEPTH_BIT};
-            // ForwardPass owns the UNDEFINED -> attachment transition in its
-            // render pass, therefore no external pre-pass barrier is emitted.
+            // The prepass clears this image, so the graph may discard old contents.
             const auto graphDepth = viewportFrameGraph.importTexture(
                 "Forward depth", msaa.enabled() ? hiZDepthBuffer.image() : depthBuffer.image(), graphDepthDesc,
-                {.layout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL});
+                {.layout = VK_IMAGE_LAYOUT_UNDEFINED});
             const RenderGraph::BufferDesc graphVertexDesc{
                 .size = vertexBuffer.size(), .usage = VK_BUFFER_USAGE_VERTEX_BUFFER_BIT};
             const RenderGraph::BufferDesc graphIndexDesc{
@@ -1186,10 +1185,13 @@
                 builder.read(graphFoliageIndirect, RenderGraph::BufferUsage::IndirectRead);
                 builder.read(graphFoliageDrawCount, RenderGraph::BufferUsage::IndirectRead);
                 builder.setFinalTextureState(graphDepth, {
-                    .stage = VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT,
-                    .access = VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT,
+                    .stage = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT |
+                             VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT |
+                             VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT,
+                    .access = VK_ACCESS_2_SHADER_SAMPLED_READ_BIT |
+                              VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_READ_BIT,
                     .layout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL,
-                    .write = true});
+                    .write = false});
             }, [&](const VkCommandBuffer buffer) {
                 gpuTimestampProfiler.endZone(buffer, currentFrame);
                 gpuTimestampProfiler.beginZone(buffer, currentFrame, forwardProfileName);
@@ -1703,7 +1705,7 @@
                 .usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT, .aspect = VK_IMAGE_ASPECT_COLOR_BIT};
             const auto graphPresent = frameGraph.importTexture(
                 "Swapchain", swapchain.images().at(imageIndex.value), presentDesc,
-                {.layout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR});
+                {.layout = VK_IMAGE_LAYOUT_UNDEFINED});
 
             RenderGraph::TextureHandle graphPostSource = graphHdr;
             if (renderGameViewport && taaResolveActive) {
@@ -2443,6 +2445,17 @@
             if (vkBeginCommandBuffer(commandBuffer, &beginInfo) != VK_SUCCESS) {
                 throw std::runtime_error("Could not begin core command buffer");
             }
+            VkImageMemoryBarrier2 toColor{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2};
+            toColor.dstStageMask = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT;
+            toColor.dstAccessMask = VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT;
+            toColor.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+            toColor.newLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+            toColor.image = swapchain.images().at(imageIndex);
+            toColor.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+            VkDependencyInfo toColorDependency{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
+            toColorDependency.imageMemoryBarrierCount = 1;
+            toColorDependency.pImageMemoryBarriers = &toColor;
+            vkCmdPipelineBarrier2(commandBuffer, &toColorDependency);
             VkRenderingAttachmentInfo color{VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO};
             color.imageView = swapchain.imageViews().at(imageIndex);
             color.imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
@@ -2457,6 +2470,17 @@
             vkCmdBeginRendering(commandBuffer, &rendering);
             ImGui_ImplVulkan_RenderDrawData(ImGui::GetDrawData(), commandBuffer);
             vkCmdEndRendering(commandBuffer);
+            VkImageMemoryBarrier2 toPresent{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2};
+            toPresent.srcStageMask = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT;
+            toPresent.srcAccessMask = VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT;
+            toPresent.oldLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+            toPresent.newLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
+            toPresent.image = swapchain.images().at(imageIndex);
+            toPresent.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+            VkDependencyInfo toPresentDependency{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
+            toPresentDependency.imageMemoryBarrierCount = 1;
+            toPresentDependency.pImageMemoryBarriers = &toPresent;
+            vkCmdPipelineBarrier2(commandBuffer, &toPresentDependency);
             if (vkEndCommandBuffer(commandBuffer) != VK_SUCCESS) {
                 throw std::runtime_error("Could not end core command buffer");
             }
