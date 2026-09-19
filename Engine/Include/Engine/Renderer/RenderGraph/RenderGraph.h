@@ -311,12 +311,46 @@ namespace Engine::RenderGraph {
         struct BarrierBatch final {
             std::vector<VkImageMemoryBarrier2> images;
             std::vector<VkBufferMemoryBarrier2> buffers;
+            // Logical bindings remain alongside the precomputed Vulkan barrier
+            // plan. They make rebinding independent of the physical handles
+            // captured when a template was first compiled.
+            std::vector<std::uint32_t> imageResources;
+            std::vector<std::uint32_t> bufferResources;
         };
         struct TransientAllocation final { TextureDesc desc; VkImage image; VmaAllocation allocation; };
         struct TransientBufferAllocation final { BufferDesc desc; VkBuffer buffer; VmaAllocation allocation; };
         struct TopologyCache final {
             std::uint64_t signature{};
             std::vector<std::uint32_t> order;
+            bool valid{};
+        };
+        // The point at which an imported resource first needs uploaded
+        // contents.  Timeline values are deliberately not cached: they are a
+        // frame-local binding, whereas this consumer location is structural.
+        struct UploadConsumer final {
+            std::uint32_t batch{std::numeric_limits<std::uint32_t>::max()};
+            VkPipelineStageFlags2 stage{VK_PIPELINE_STAGE_2_NONE};
+        };
+        /**
+         * Immutable scheduling/allocation plan for one declarative graph shape.
+         * Vulkan objects, upload timeline values and callbacks deliberately do
+         * not live here: they are frame-local bindings.
+         */
+        struct CompiledTemplate final {
+            std::uint64_t signature{};
+            std::vector<std::uint32_t> order;
+            std::vector<QueueDependency> queueDependencies;
+            std::vector<QueueBatch> queueBatches;
+            std::vector<TextureLifetime> textureLifetimes;
+            std::vector<BufferLifetime> bufferLifetimes;
+            std::vector<TextureDesc> imageSlotDescs;
+            std::vector<BufferDesc> bufferSlotDescs;
+            std::vector<std::uint32_t> imageAliasPredecessors;
+            std::vector<std::uint32_t> bufferAliasPredecessors;
+            std::vector<UploadConsumer> textureUploadConsumers;
+            std::vector<UploadConsumer> bufferUploadConsumers;
+            std::vector<BarrierBatch> barriers;
+            std::vector<BarrierBatch> releaseBarriers;
             bool valid{};
         };
 
@@ -353,6 +387,9 @@ namespace Engine::RenderGraph {
         // reset() deliberately retains these compilation artifacts. Resource
         // handles may change every frame; the declarative topology does not.
         std::vector<TopologyCache> topologyCaches_;
+        // Unlike topologyCaches_, this retains every CPU-only result needed to
+        // compile an identical frame graph. reset() intentionally preserves it.
+        std::vector<CompiledTemplate> compiledTemplates_;
         VkDevice device_{VK_NULL_HANDLE};
         VmaAllocator allocator_{VK_NULL_HANDLE};
         std::uint32_t queueFamilies_[3]{VK_QUEUE_FAMILY_IGNORED, VK_QUEUE_FAMILY_IGNORED, VK_QUEUE_FAMILY_IGNORED};

@@ -16,6 +16,7 @@ set_target_properties(Player PROPERTIES OUTPUT_NAME GamEngine)
 target_link_libraries(Player PRIVATE Engine GameScripts)
 gameengine_enable_warnings(Player)
 gameengine_enable_sanitizers(Player)
+gameengine_enable_release_ipo(Player)
 gameengine_copy_runtime_dependencies(Player)
 add_custom_target(GameProjectAssets
     COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_FILE_DIR:Player>/shaders"

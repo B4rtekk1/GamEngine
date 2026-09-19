@@ -14,10 +14,7 @@
     {
       "name": "dev",
       "displayName": "Development",
-      "inherits": "base",
-      "cacheVariables": {
-        "CMAKE_BUILD_TYPE": "Debug"
-      }
+      "inherits": "base"
     },
     {
       "name": "dev-tests",
@@ -30,10 +27,7 @@
     {
       "name": "release",
       "displayName": "Release",
-      "inherits": "base",
-      "cacheVariables": {
-        "CMAKE_BUILD_TYPE": "Release"
-      }
+      "inherits": "base"
     },
     {
       "name": "asan-ubsan",
@@ -45,25 +39,28 @@
     }
   ],
   "buildPresets": [
-    { "name": "dev", "configurePreset": "dev" },
-    { "name": "dev-tests", "configurePreset": "dev-tests" },
-    { "name": "release", "configurePreset": "release" },
-    { "name": "asan-ubsan", "configurePreset": "asan-ubsan" }
+    { "name": "dev", "configurePreset": "dev", "configuration": "Debug" },
+    { "name": "dev-tests", "configurePreset": "dev-tests", "configuration": "Debug" },
+    { "name": "release", "configurePreset": "release", "configuration": "Release" },
+    { "name": "asan-ubsan", "configurePreset": "asan-ubsan", "configuration": "Debug" }
   ],
   "testPresets": [
     {
       "name": "dev-tests",
       "configurePreset": "dev-tests",
+      "configuration": "Debug",
       "output": { "outputOnFailure": true }
     },
     {
       "name": "release",
       "configurePreset": "release",
+      "configuration": "Release",
       "output": { "outputOnFailure": true }
     },
     {
       "name": "asan-ubsan",
       "configurePreset": "asan-ubsan",
+      "configuration": "Debug",
       "output": { "outputOnFailure": true }
     }
   ]

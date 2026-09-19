@@ -23,3 +23,6 @@ gameengine_enable_sanitizers(Engine)
 if(WIN32)
     set_target_properties(Engine PROPERTIES WINDOWS_EXPORT_ALL_SYMBOLS ON)
 endif()
+# CMake discovers DLL exports by scanning individual COFF objects. MSVC /GL
+# produces LTCG intermediate objects, which the export scanner cannot read.
+gameengine_enable_release_ipo(Engine)

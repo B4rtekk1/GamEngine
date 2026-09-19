@@ -85,6 +85,31 @@ TEST(RenderGraphTests, RebuildsTheSameTopologyAfterLogicalReset) {
     EXPECT_EQ(graph.executionOrder(), (std::vector<std::string>{"Producer", "Consumer"}));
 }
 
+TEST(RenderGraphTests, RebindsFrameLocalResourcesAndUploadWaitsFromACompiledTemplate) {
+    RenderGraph graph;
+    const auto build = [&graph](const std::uintptr_t imageValue, const std::uint64_t uploadValue) {
+        const auto input = graph.importTexture("Frame input", reinterpret_cast<VkImage>(imageValue), ColorTarget,
+                                               VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+        graph.markUploaded(input, uploadValue);
+        graph.addPass("Consume frame input", Queue::AsyncCompute, [input](PassBuilder& builder) {
+            builder.read(input, TextureUsage::SampledReadCompute);
+        }, {});
+        return input;
+    };
+
+    build(1, 0);
+    graph.compile(); // Creates the immutable schedule template.
+
+    graph.reset();
+    const auto rebound = build(2, 17);
+    graph.compile(); // Reuses the template but binds this frame's image/value.
+
+    EXPECT_EQ(graph.image(rebound), reinterpret_cast<VkImage>(static_cast<std::uintptr_t>(2)));
+    ASSERT_EQ(graph.uploadWaits().size(), 1U);
+    EXPECT_EQ(graph.uploadWaits().front().timelineValue, 17U);
+    EXPECT_EQ(graph.uploadWaits().front().stage, VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT);
+}
+
 TEST(RenderGraphTests, ReportsTimelineDependenciesAcrossQueues) {
     RenderGraph graph;
     TextureHandle intermediate;

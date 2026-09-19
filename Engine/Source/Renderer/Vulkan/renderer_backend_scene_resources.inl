@@ -1626,6 +1626,21 @@
                 }
                 vkUpdateDescriptorSets(device, std::size(meshletWrites), meshletWrites, 0, nullptr);
             }
+            if (meshletDispatchSets[frame] != VK_NULL_HANDLE) {
+                const VkDescriptorBufferInfo meshletDispatchInfos[] = {
+                    {visibleInstanceCountBuffers[frame].handle(), 0, sizeof(std::uint32_t)},
+                    {meshletCullDispatchBuffers[frame].handle(), 0, sizeof(VkDispatchIndirectCommand)},
+                };
+                VkWriteDescriptorSet meshletDispatchWrites[2]{};
+                for (std::uint32_t binding = 0; binding < std::size(meshletDispatchWrites); ++binding) {
+                    meshletDispatchWrites[binding] = {.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+                        .dstSet = meshletDispatchSets[frame], .dstBinding = binding, .descriptorCount = 1,
+                        .descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+                        .pBufferInfo = &meshletDispatchInfos[binding]};
+                }
+                vkUpdateDescriptorSets(device, std::size(meshletDispatchWrites),
+                                       meshletDispatchWrites, 0, nullptr);
+            }
             if (meshletIndirectSets[frame] != VK_NULL_HANDLE) {
                 const VkDescriptorBufferInfo meshletIndirectInfos[] = {
                     {visibleMeshletBuffers[frame].handle(), 0, VK_WHOLE_SIZE},

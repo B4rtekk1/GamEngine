@@ -150,14 +150,16 @@ namespace Engine::RenderGraph {
             return range;
         }
 
-        void mergeImageBarriers(std::vector<VkImageMemoryBarrier2> &barriers) {
+        void mergeImageBarriers(std::vector<VkImageMemoryBarrier2> &barriers,
+                                std::vector<std::uint32_t>& resources) {
             // One state record is produced per mip/layer. Fold adjacent layers,
             // then equal layer spans in adjacent mip levels, into one dependency.
             for (std::size_t index = 0; index < barriers.size(); ++index) {
                 for (std::size_t next = index + 1; next < barriers.size();) {
                     auto &left = barriers[index];
                     const auto &right = barriers[next];
-                    const bool same = left.srcStageMask == right.srcStageMask && left.srcAccessMask == right.srcAccessMask &&
+                    const bool same = resources[index] == resources[next] &&
+                        left.srcStageMask == right.srcStageMask && left.srcAccessMask == right.srcAccessMask &&
                         left.dstStageMask == right.dstStageMask && left.dstAccessMask == right.dstAccessMask &&
                         left.oldLayout == right.oldLayout && left.newLayout == right.newLayout && left.image == right.image &&
                         left.srcQueueFamilyIndex == right.srcQueueFamilyIndex && left.dstQueueFamilyIndex == right.dstQueueFamilyIndex &&
@@ -166,6 +168,7 @@ namespace Engine::RenderGraph {
                         left.subresourceRange.baseArrayLayer + left.subresourceRange.layerCount == right.subresourceRange.baseArrayLayer) {
                         left.subresourceRange.layerCount += right.subresourceRange.layerCount;
                         barriers.erase(barriers.begin() + static_cast<std::ptrdiff_t>(next));
+                        resources.erase(resources.begin() + static_cast<std::ptrdiff_t>(next));
                     } else {
                         ++next;
                     }
@@ -175,7 +178,8 @@ namespace Engine::RenderGraph {
                 for (std::size_t next = index + 1; next < barriers.size();) {
                     auto &left = barriers[index];
                     const auto &right = barriers[next];
-                    const bool same = left.srcStageMask == right.srcStageMask && left.srcAccessMask == right.srcAccessMask &&
+                    const bool same = resources[index] == resources[next] &&
+                        left.srcStageMask == right.srcStageMask && left.srcAccessMask == right.srcAccessMask &&
                         left.dstStageMask == right.dstStageMask && left.dstAccessMask == right.dstAccessMask && left.oldLayout == right.oldLayout &&
                         left.newLayout == right.newLayout && left.image == right.image && left.srcQueueFamilyIndex == right.srcQueueFamilyIndex &&
                         left.dstQueueFamilyIndex == right.dstQueueFamilyIndex && left.subresourceRange.aspectMask == right.subresourceRange.aspectMask &&
@@ -184,6 +188,7 @@ namespace Engine::RenderGraph {
                     if (same && left.subresourceRange.baseMipLevel + left.subresourceRange.levelCount == right.subresourceRange.baseMipLevel) {
                         left.subresourceRange.levelCount += right.subresourceRange.levelCount;
                         barriers.erase(barriers.begin() + static_cast<std::ptrdiff_t>(next));
+                        resources.erase(resources.begin() + static_cast<std::ptrdiff_t>(next));
                     } else {
                         ++next;
                     }
@@ -499,6 +504,8 @@ namespace Engine::RenderGraph {
         mix(resources_.size());
         mix(buffers_.size());
         mix(count);
+        mix(passCullingEnabled_);
+        for (const auto family: queueFamilies_) mix(family);
         for (const auto &resource: resources_) {
             mix(resource.imported);
             mix(resource.desc.extent.width);
@@ -510,6 +517,10 @@ namespace Engine::RenderGraph {
             mix(resource.desc.mipLevels);
             mix(resource.desc.arrayLayers);
             mix(resource.desc.samples);
+            mix(resource.initialState.stage);
+            mix(resource.initialState.access);
+            mix(resource.initialState.layout);
+            mix(resource.initialState.write);
         }
         for (const auto &resource: buffers_) {
             mix(static_cast<std::uint64_t>(resource.imported));
@@ -519,7 +530,9 @@ namespace Engine::RenderGraph {
         for (const auto &pass: passes_) {
             mix(static_cast<std::uint8_t>(pass.queue));
             mix(pass.accesses.size());
+            mix(pass.finalTextureStates.size());
             mix(pass.bufferAccesses.size());
+            mix(pass.sideEffect);
             for (const auto &access: pass.accesses) {
                 mix(access.texture.index);
                 mix(static_cast<std::uint8_t>(access.usage));
@@ -534,7 +547,63 @@ namespace Engine::RenderGraph {
                 mix(static_cast<std::uint8_t>(access.usage));
                 mix(access.write);
             }
+            for (const auto &state: pass.finalTextureStates) {
+                mix(state.texture.index);
+                mix(state.state.stage);
+                mix(state.state.access);
+                mix(state.state.layout);
+                mix(state.state.write);
+                mix(state.range.baseMipLevel);
+                mix(state.range.levelCount);
+                mix(state.range.baseArrayLayer);
+                mix(state.range.layerCount);
+            }
         }
+        mix(exportedTextures_.size());
+        for (const auto texture: exportedTextures_) mix(texture.index);
+        mix(exportedBuffers_.size());
+        for (const auto buffer: exportedBuffers_) mix(buffer.index);
+
+        std::vector<std::uint32_t> imageAliasPredecessor;
+        std::vector<std::uint32_t> bufferAliasPredecessor;
+        std::vector<TextureDesc> cachedImageSlotDescs;
+        std::vector<BufferDesc> cachedBufferSlotDescs;
+        std::vector<UploadConsumer> textureUploadConsumers;
+        std::vector<UploadConsumer> bufferUploadConsumers;
+        const auto cachedTemplate = std::find_if(compiledTemplates_.begin(), compiledTemplates_.end(),
+            [signature](const CompiledTemplate& plan) { return plan.valid && plan.signature == signature; });
+        const bool templateHit = cachedTemplate != compiledTemplates_.end();
+        if (templateHit) {
+            order_ = cachedTemplate->order;
+            queueDependencies_ = cachedTemplate->queueDependencies;
+            queueBatches_ = cachedTemplate->queueBatches;
+            imageAliasPredecessor = cachedTemplate->imageAliasPredecessors;
+            bufferAliasPredecessor = cachedTemplate->bufferAliasPredecessors;
+            cachedImageSlotDescs = cachedTemplate->imageSlotDescs;
+            cachedBufferSlotDescs = cachedTemplate->bufferSlotDescs;
+            textureUploadConsumers = cachedTemplate->textureUploadConsumers;
+            bufferUploadConsumers = cachedTemplate->bufferUploadConsumers;
+            for (std::uint32_t resource = 0; resource < resources_.size(); ++resource)
+                resources_[resource].lifetime = cachedTemplate->textureLifetimes[resource];
+            for (std::uint32_t resource = 0; resource < buffers_.size(); ++resource)
+                buffers_[resource].lifetime = cachedTemplate->bufferLifetimes[resource];
+            orderNames_.clear();
+            for (const auto pass: order_) orderNames_.push_back(passes_[pass].name);
+            allocateTransients(cachedImageSlotDescs);
+            allocateTransientBuffers(cachedBufferSlotDescs);
+            barriers_ = cachedTemplate->barriers;
+            releaseBarriers_ = cachedTemplate->releaseBarriers;
+            const auto rebindBarriers = [this](std::vector<BarrierBatch>& batches) {
+                for (auto& batch: batches) {
+                    for (std::size_t index = 0; index < batch.images.size(); ++index)
+                        batch.images[index].image = resources_[batch.imageResources[index]].image;
+                    for (std::size_t index = 0; index < batch.buffers.size(); ++index)
+                        batch.buffers[index].buffer = buffers_[batch.bufferResources[index]].buffer;
+                }
+            };
+            rebindBarriers(barriers_);
+            rebindBarriers(releaseBarriers_);
+        } else {
         order_.clear();
         orderNames_.clear();
         const auto cachedTopology = std::find_if(topologyCaches_.begin(), topologyCaches_.end(),
@@ -796,6 +865,9 @@ namespace Engine::RenderGraph {
             if (std::ranges::find(waits, producer) == waits.end()) waits.push_back(producer);
         }
 
+        textureUploadConsumers.assign(resources_.size(), {});
+        bufferUploadConsumers.assign(buffers_.size(), {});
+
         // An imported upload is an external producer. Wait at its first read,
         // not at the beginning of the frame; an earlier write discards it.
         uploadWaits_.clear();
@@ -835,6 +907,7 @@ namespace Engine::RenderGraph {
                     }
                 }
                 if (stages != VK_PIPELINE_STAGE_2_NONE) {
+                    textureUploadConsumers[resource] = {passToBatch[pass], stages};
                     addUploadWait(resources_[resource].uploadTimeline, pass, stages);
                     break;
                 }
@@ -860,6 +933,7 @@ namespace Engine::RenderGraph {
                     }
                 }
                 if (stages != VK_PIPELINE_STAGE_2_NONE) {
+                    bufferUploadConsumers[resource] = {passToBatch[pass], stages};
                     addUploadWait(buffers_[resource].uploadTimeline, pass, stages);
                     break;
                 }
@@ -892,7 +966,7 @@ namespace Engine::RenderGraph {
         std::vector<std::uint32_t> slotsLastUse;
         std::vector<TextureDesc> slotsDesc;
         std::vector<std::uint32_t> slotLastResource;
-        std::vector<std::uint32_t> imageAliasPredecessor(resources_.size(), std::numeric_limits<std::uint32_t>::max());
+        imageAliasPredecessor.assign(resources_.size(), std::numeric_limits<std::uint32_t>::max());
         for (const auto resourceIndex: transientResources) {
             auto &resource = resources_[resourceIndex];
             std::uint32_t slot = static_cast<std::uint32_t>(slotsDesc.size());
@@ -939,7 +1013,7 @@ namespace Engine::RenderGraph {
         std::vector<std::uint32_t> bufferSlotsLastUse;
         std::vector<BufferDesc> bufferSlotsDesc;
         std::vector<std::uint32_t> bufferSlotLastResource;
-        std::vector<std::uint32_t> bufferAliasPredecessor(buffers_.size(), std::numeric_limits<std::uint32_t>::max());
+        bufferAliasPredecessor.assign(buffers_.size(), std::numeric_limits<std::uint32_t>::max());
         for (const auto resourceIndex: transientBuffers) {
             auto &resource = buffers_[resourceIndex];
             std::uint32_t slot = static_cast<std::uint32_t>(bufferSlotsDesc.size());
@@ -962,7 +1036,37 @@ namespace Engine::RenderGraph {
             resource.lifetime.allocationSlot = slot;
         }
         allocateTransientBuffers(bufferSlotsDesc);
+        cachedImageSlotDescs = slotsDesc;
+        cachedBufferSlotDescs = bufferSlotsDesc;
 
+        }
+
+        // Upload values are intentionally excluded from CompiledTemplate: an
+        // upload can complete at a different timeline value every frame.
+        if (templateHit) {
+            uploadWaits_.clear();
+            const auto addUploadWait = [this](const std::uint64_t timelineValue,
+                                               const UploadConsumer& consumer) {
+                if (timelineValue == 0 || consumer.stage == VK_PIPELINE_STAGE_2_NONE) return;
+                const auto batch = consumer.batch;
+                if (batch == std::numeric_limits<std::uint32_t>::max()) return;
+                const auto existing = std::ranges::find_if(uploadWaits_, [batch](const UploadWait& wait) {
+                    return wait.batch == batch;
+                });
+                if (existing != uploadWaits_.end()) {
+                    existing->timelineValue = std::max(existing->timelineValue, timelineValue);
+                    existing->stage |= consumer.stage;
+                } else uploadWaits_.push_back({timelineValue, consumer.stage, queueBatches_[batch].queue, batch});
+            };
+            for (std::uint32_t resource = 0; resource < resources_.size(); ++resource) {
+                addUploadWait(resources_[resource].uploadTimeline, textureUploadConsumers[resource]);
+            }
+            for (std::uint32_t resource = 0; resource < buffers_.size(); ++resource) {
+                addUploadWait(buffers_[resource].uploadTimeline, bufferUploadConsumers[resource]);
+            }
+        }
+
+        if (!templateHit) {
         struct State {
             VkPipelineStageFlags2 stage{};
             VkAccessFlags2 access{};
@@ -1020,6 +1124,7 @@ namespace Engine::RenderGraph {
                             release.srcQueueFamilyIndex = sourceFamily;
                             release.dstQueueFamilyIndex = destinationFamily;
                             releaseBarriers_[state.pass].images.push_back(release);
+                            releaseBarriers_[state.pass].imageResources.push_back(access.texture.index);
                             barrier.oldLayout = next.layout;
                             barrier.newLayout = next.layout;
                             barrier.srcQueueFamilyIndex = sourceFamily;
@@ -1045,6 +1150,7 @@ namespace Engine::RenderGraph {
                         resources_[access.texture.index].desc.aspect, mip, 1, layer, 1
                     };
                     barriers_[ordered].images.push_back(barrier);
+                    barriers_[ordered].imageResources.push_back(access.texture.index);
                 }
                 state = {
                     next.stage, next.access, next.layout, next.write, nextQueue, static_cast<std::int32_t>(ordered)
@@ -1070,8 +1176,8 @@ namespace Engine::RenderGraph {
                 }
             }
         }
-        for (BarrierBatch &batch: barriers_) mergeImageBarriers(batch.images);
-        for (BarrierBatch &batch: releaseBarriers_) mergeImageBarriers(batch.images);
+        for (BarrierBatch &batch: barriers_) mergeImageBarriers(batch.images, batch.imageResources);
+        for (BarrierBatch &batch: releaseBarriers_) mergeImageBarriers(batch.images, batch.imageResources);
         struct BufferState {
             VkPipelineStageFlags2 stage{};
             VkAccessFlags2 access{};
@@ -1106,6 +1212,7 @@ namespace Engine::RenderGraph {
                                 release.srcQueueFamilyIndex = sourceFamily;
                                 release.dstQueueFamilyIndex = destinationFamily;
                                 releaseBarriers_[state.pass].buffers.push_back(release);
+                                releaseBarriers_[state.pass].bufferResources.push_back(access.buffer.index);
                                 barrier.srcQueueFamilyIndex = sourceFamily;
                                 barrier.dstQueueFamilyIndex = destinationFamily;
                             }
@@ -1116,6 +1223,7 @@ namespace Engine::RenderGraph {
                         barrier.offset = 0;
                         barrier.size = VK_WHOLE_SIZE;
                         barriers_[ordered].buffers.push_back(barrier);
+                        barriers_[ordered].bufferResources.push_back(access.buffer.index);
                     }
                     state = {next.stage, next.access, next.write, nextQueue, static_cast<std::int32_t>(ordered)};
                 }
@@ -1142,8 +1250,26 @@ namespace Engine::RenderGraph {
                 barrier.buffer = buffers_[resource].buffer;
                 barrier.size = VK_WHOLE_SIZE;
                 barriers_[buffers_[resource].lifetime.firstPass].buffers.push_back(barrier);
+                barriers_[buffers_[resource].lifetime.firstPass].bufferResources.push_back(resource);
                 break;
             }
+        }
+        compiledTemplates_.push_back({
+            .signature = signature,
+            .order = order_,
+            .queueDependencies = queueDependencies_,
+            .queueBatches = queueBatches_,
+            .textureLifetimes = [&] { std::vector<TextureLifetime> values; values.reserve(resources_.size()); for (const auto& resource : resources_) values.push_back(resource.lifetime); return values; }(),
+            .bufferLifetimes = [&] { std::vector<BufferLifetime> values; values.reserve(buffers_.size()); for (const auto& resource : buffers_) values.push_back(resource.lifetime); return values; }(),
+            .imageSlotDescs = cachedImageSlotDescs,
+            .bufferSlotDescs = cachedBufferSlotDescs,
+            .imageAliasPredecessors = imageAliasPredecessor,
+            .bufferAliasPredecessors = bufferAliasPredecessor,
+            .textureUploadConsumers = textureUploadConsumers,
+            .bufferUploadConsumers = bufferUploadConsumers,
+            .barriers = barriers_,
+            .releaseBarriers = releaseBarriers_,
+            .valid = true});
         }
         compiled_ = true;
     }

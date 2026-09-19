@@ -571,10 +571,27 @@
             if (meshShaderPathActive && vulkanDevice.supportsMeshShaders() && globalMeshletCount != 0 &&
                 !sceneGpu.database.instances().empty() &&
                 meshletCullSets[currentFrame] != VK_NULL_HANDLE) {
-                // Meshlet culling consumes the compact coarse-visible instance
-                // list. Its workgroups therefore never scan hidden instances.
+                // Build an indirect command from the compact coarse-visible
+                // list, so meshlet culling launches one group per visible
+                // instance instead of one per instance in the whole scene.
                 instanceCullingPasses[currentFrame].record(commandBuffer,
                     static_cast<std::uint32_t>(sceneGpu.database.instances().size()));
+                vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, meshletDispatchPipeline);
+                const VkDescriptorSet meshletDispatchSet = meshletDispatchSets[currentFrame];
+                vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE,
+                                        meshletDispatchPipelineLayout, 0, 1, &meshletDispatchSet, 0, nullptr);
+                vkCmdDispatch(commandBuffer, 1, 1, 1);
+                const VkBufferMemoryBarrier2 meshletDispatchBarrier{
+                    .sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER_2,
+                    .srcStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                    .srcAccessMask = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT,
+                    .dstStageMask = VK_PIPELINE_STAGE_2_DRAW_INDIRECT_BIT,
+                    .dstAccessMask = VK_ACCESS_2_INDIRECT_COMMAND_READ_BIT,
+                    .buffer = meshletCullDispatchBuffers[currentFrame].handle(),
+                    .offset = 0, .size = sizeof(VkDispatchIndirectCommand)};
+                const VkDependencyInfo meshletDispatchDependency{.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO,
+                    .bufferMemoryBarrierCount = 1, .pBufferMemoryBarriers = &meshletDispatchBarrier};
+                vkCmdPipelineBarrier2(commandBuffer, &meshletDispatchDependency);
                 vkCmdFillBuffer(commandBuffer, visibleMeshletCountBuffers[currentFrame].handle(), 0,
                                 sizeof(std::uint32_t), 0);
                 const VkMemoryBarrier2 clearBarrier{VK_STRUCTURE_TYPE_MEMORY_BARRIER_2, nullptr,
@@ -587,8 +604,7 @@
                 const VkDescriptorSet meshletSet = meshletCullSets[currentFrame];
                 vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE,
                                         meshletCullingPipelineLayout, 0, 1, &meshletSet, 0, nullptr);
-                vkCmdDispatch(commandBuffer,
-                    static_cast<std::uint32_t>(sceneGpu.database.instances().size()), 1, 1);
+                vkCmdDispatchIndirect(commandBuffer, meshletCullDispatchBuffers[currentFrame].handle(), 0);
                 const VkMemoryBarrier2 meshletBarrier{VK_STRUCTURE_TYPE_MEMORY_BARRIER_2, nullptr,
                     VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT,
                     VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,

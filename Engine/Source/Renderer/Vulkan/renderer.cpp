@@ -729,6 +729,9 @@ namespace Engine {
             for (Buffer &buffer: visibleInstanceCountBuffers) {
                 buffer.destroy();
             }
+            for (Buffer &buffer: meshletCullDispatchBuffers) {
+                buffer.destroy();
+            }
             for (Buffer &buffer: uniformBuffers) {
                 buffer.destroy();
             }

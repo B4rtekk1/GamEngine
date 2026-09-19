@@ -172,7 +172,7 @@ struct MaterialSurface
             appendCacheInput(cacheInput, "shader-graph-cache-schema", "1");
             appendCacheInput(cacheInput, "generated-surface", result.slang);
             appendCacheInput(cacheInput, "compile-flags",
-                             "-target=spirv;-profile=glsl_460;-emit-spirv-directly;"
+                             "-target=spirv;-profile=glsl_460;-emit-spirv-directly;-g2;"
                              "-matrix-layout-row-major;FORWARD_OUTPUT_VELOCITY=0,1");
             // Hash the compiler binary rather than querying --version: this avoids
             // an extra process on a warm start and invalidates the cache for every
@@ -205,6 +205,7 @@ struct MaterialSurface
                 "-target", "spirv",
                 "-profile", "glsl_460",
                 "-emit-spirv-directly",
+                "-g2",
                 "-matrix-layout-row-major",
                 "-I", includeDirectoryString.c_str(),
                 "-o", outputPath.c_str(),
@@ -254,6 +255,7 @@ struct MaterialSurface
                 "-target", "spirv",
                 "-profile", "glsl_460",
                 "-emit-spirv-directly",
+                "-g2",
                 "-matrix-layout-row-major",
                 "-I", includeDirectoryString.c_str(),
                 "-D", "FORWARD_OUTPUT_VELOCITY=0",
