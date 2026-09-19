@@ -68,14 +68,18 @@
                     shadowCandidateBuffers[frame].size() < shadowCandidateBytes ||
                     shadowTwoSidedCandidateBuffers[frame].size() < shadowCandidateBytes ||
                     shadowInstanceTransformBuffers[frame].size() < shadowTransformBytes ||
-                    shadowTwoSidedInstanceTransformBuffers[frame].size() < shadowTransformBytes) return false;
+                    shadowTwoSidedInstanceTransformBuffers[frame].size() < shadowTransformBytes ||
+                    shadowVisibleInstanceBuffers[frame].size() < sizeof(Culling::ShadowVisibleInstance) *
+                        std::max<std::size_t>(1, instanceModels.size()) * ShadowMap::MaxPageUpdatesPerFrame ||
+                    shadowTwoSidedVisibleInstanceBuffers[frame].size() < sizeof(Culling::ShadowVisibleInstance) *
+                        std::max<std::size_t>(1, instanceModels.size()) * ShadowMap::MaxPageUpdatesPerFrame) return false;
             }
             return true;
         }
 
         void createCullingResources() {
             auto uploadBatch = uploadContext.beginBatch();
-            constexpr std::size_t cullingDescriptorBindingCount = 14;
+            constexpr std::size_t cullingDescriptorBindingCount = 15;
             const std::uint32_t grassBinCount = std::max(1u, static_cast<std::uint32_t>(
                 sceneGpu.database.meshes().size() * 3u));
 
@@ -161,6 +165,7 @@
                 {11, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
                 {12, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
                 {13, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
+                {14, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
             };
             layoutInfo.bindingCount = std::size(cullBindings);
             layoutInfo.pBindings = cullBindings;
@@ -655,12 +660,21 @@
                 const std::size_t shadowTransformCount = std::max<std::size_t>(1, instanceModels.size()) *
                     ShadowMap::MaxPageUpdatesPerFrame;
                 std::vector<RendererInstanceData> emptyShadowTransforms(shadowTransformCount);
+                std::vector<Culling::ShadowVisibleInstance> emptyShadowVisibleInstances(shadowTransformCount);
                 shadowInstanceTransformBuffers[frame].createDeviceLocal(vulkanDevice.physical(), device,
                     emptyShadowTransforms.data(), sizeof(RendererInstanceData) * emptyShadowTransforms.size(),
                     VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
                     commandPool, vulkanDevice.graphicsQueue(), vulkanDevice.allocator());
                 shadowTwoSidedInstanceTransformBuffers[frame].createDeviceLocal(vulkanDevice.physical(), device,
                     emptyShadowTransforms.data(), sizeof(RendererInstanceData) * emptyShadowTransforms.size(),
+                    VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+                    commandPool, vulkanDevice.graphicsQueue(), vulkanDevice.allocator());
+                shadowVisibleInstanceBuffers[frame].createDeviceLocal(vulkanDevice.physical(), device,
+                    emptyShadowVisibleInstances.data(), sizeof(Culling::ShadowVisibleInstance) * emptyShadowVisibleInstances.size(),
+                    VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+                    commandPool, vulkanDevice.graphicsQueue(), vulkanDevice.allocator());
+                shadowTwoSidedVisibleInstanceBuffers[frame].createDeviceLocal(vulkanDevice.physical(), device,
+                    emptyShadowVisibleInstances.data(), sizeof(Culling::ShadowVisibleInstance) * emptyShadowVisibleInstances.size(),
                     VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
                     commandPool, vulkanDevice.graphicsQueue(), vulkanDevice.allocator());
                 shadowInstanceTransformCountBuffers[frame].createDeviceLocal(vulkanDevice.physical(), device,
@@ -981,6 +995,7 @@
                     const Buffer& shadowTransformBuffer;
                     const Buffer& shadowTransformCountBuffer;
                     const Buffer& shadowMaterialBuffer;
+                    const Buffer& shadowVisibleInstanceBuffer;
                 };
                 const auto updateCullingSet = [&](const CullingSetUpdate& update) {
                     const VkDescriptorBufferInfo objectInfo{
@@ -997,6 +1012,7 @@
                     const VkDescriptorBufferInfo shadowTransformInfo{update.shadowTransformBuffer.handle(), 0, VK_WHOLE_SIZE};
                     const VkDescriptorBufferInfo shadowTransformCountInfo{update.shadowTransformCountBuffer.handle(), 0, VK_WHOLE_SIZE};
                     const VkDescriptorBufferInfo shadowMaterialInfo{update.shadowMaterialBuffer.handle(), 0, VK_WHOLE_SIZE};
+                    const VkDescriptorBufferInfo shadowVisibleInstanceInfo{update.shadowVisibleInstanceBuffer.handle(), 0, VK_WHOLE_SIZE};
                     std::array<VkWriteDescriptorSet, cullingDescriptorBindingCount> writes{};
                     for (uint32_t i = 0; i < writes.size(); ++i) {
                         writes[i].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
@@ -1018,6 +1034,7 @@
                     writes[11].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER; writes[11].pBufferInfo = &shadowTransformInfo;
                     writes[12].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER; writes[12].pBufferInfo = &shadowTransformCountInfo;
                     writes[13].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER; writes[13].pBufferInfo = &shadowMaterialInfo;
+                    writes[14].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER; writes[14].pBufferInfo = &shadowVisibleInstanceInfo;
                     vkUpdateDescriptorSets(device, static_cast<uint32_t>(writes.size()), writes.data(), 0, nullptr);
                 };
                 VkDescriptorSet cameraCullSet = cullSets[frame];
@@ -1037,17 +1054,17 @@
                 const auto& shadowMaterials = shadowInstanceMaterialBuffers[frame];
                 const auto& shadowTwoSidedMaterials = shadowTwoSidedInstanceMaterialBuffers[frame];
                 updateCullingSet({cameraCullSet, indirectBuffers[frame], drawCountBuffers[frame],
-                                  cullingUniformBuffers[frame], candidates, candidateCounts, candidateDispatches, pageWork, shadowTransforms, shadowTransformCounts, shadowMaterials});
+                                  cullingUniformBuffers[frame], candidates, candidateCounts, candidateDispatches, pageWork, shadowTransforms, shadowTransformCounts, shadowMaterials, shadowVisibleInstanceBuffers[frame]});
                 updateCullingSet({foliageCullSet, foliageIndirectBuffers[frame], foliageDrawCountBuffers[frame],
-                                  foliageCullingUniformBuffers[frame], candidates, candidateCounts, candidateDispatches, pageWork, shadowTransforms, shadowTransformCounts, shadowMaterials});
+                                  foliageCullingUniformBuffers[frame], candidates, candidateCounts, candidateDispatches, pageWork, shadowTransforms, shadowTransformCounts, shadowMaterials, shadowVisibleInstanceBuffers[frame]});
                 updateCullingSet({shadowCullSet, shadowIndirectBuffers[frame], shadowDrawCountBuffers[frame],
-                                  shadowCullingUniformBuffers[frame], candidates, candidateCounts, candidateDispatches, pageWork, shadowTransforms, shadowTransformCounts, shadowMaterials});
+                                  shadowCullingUniformBuffers[frame], candidates, candidateCounts, candidateDispatches, pageWork, shadowTransforms, shadowTransformCounts, shadowMaterials, shadowVisibleInstanceBuffers[frame]});
                 updateCullingSet({shadowTwoSidedCullSet, shadowTwoSidedIndirectBuffers[frame], shadowTwoSidedDrawCountBuffers[frame],
-                                  shadowTwoSidedCullingUniformBuffers[frame], shadowTwoSidedCandidateBuffers[frame], shadowTwoSidedCandidateCountBuffers[frame], shadowTwoSidedCandidateDispatchBuffers[frame], pageWork, shadowTwoSidedTransforms, shadowTwoSidedTransformCounts, shadowTwoSidedMaterials});
+                                  shadowTwoSidedCullingUniformBuffers[frame], shadowTwoSidedCandidateBuffers[frame], shadowTwoSidedCandidateCountBuffers[frame], shadowTwoSidedCandidateDispatchBuffers[frame], pageWork, shadowTwoSidedTransforms, shadowTwoSidedTransformCounts, shadowTwoSidedMaterials, shadowTwoSidedVisibleInstanceBuffers[frame]});
                 updateCullingSet({sceneCullSet, sceneIndirectBuffers[frame], sceneDrawCountBuffers[frame],
-                                  sceneCullingUniformBuffers[frame], candidates, candidateCounts, candidateDispatches, pageWork, shadowTransforms, shadowTransformCounts, shadowMaterials});
+                                  sceneCullingUniformBuffers[frame], candidates, candidateCounts, candidateDispatches, pageWork, shadowTransforms, shadowTransformCounts, shadowMaterials, shadowVisibleInstanceBuffers[frame]});
                 updateCullingSet({sceneFoliageCullSet, sceneFoliageIndirectBuffers[frame], sceneFoliageDrawCountBuffers[frame],
-                                  sceneFoliageCullingUniformBuffers[frame], candidates, candidateCounts, candidateDispatches, pageWork, shadowTransforms, shadowTransformCounts, shadowMaterials});
+                                  sceneFoliageCullingUniformBuffers[frame], candidates, candidateCounts, candidateDispatches, pageWork, shadowTransforms, shadowTransformCounts, shadowMaterials, shadowVisibleInstanceBuffers[frame]});
                 // Keep this indexed by descriptor binding. Binding 8 is the
                 // Hi-Z image, while binding 9 is the cluster hierarchy; the
                 // previous compact initializer put the hierarchy at index 8
@@ -1153,7 +1170,9 @@
             for (Buffer& buffer : shadowCandidateDispatchBuffers) buffer.destroy();
             for (Buffer& buffer : shadowTwoSidedCandidateDispatchBuffers) buffer.destroy();
             for (Buffer& buffer : shadowInstanceTransformBuffers) buffer.destroy();
+            for (Buffer& buffer : shadowVisibleInstanceBuffers) buffer.destroy();
             for (Buffer& buffer : shadowTwoSidedInstanceTransformBuffers) buffer.destroy();
+            for (Buffer& buffer : shadowTwoSidedVisibleInstanceBuffers) buffer.destroy();
             for (Buffer& buffer : shadowInstanceTransformCountBuffers) buffer.destroy();
             for (Buffer& buffer : shadowTwoSidedInstanceTransformCountBuffers) buffer.destroy();
             for (Buffer& buffer : shadowInstanceMaterialBuffers) buffer.destroy();

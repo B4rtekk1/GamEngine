@@ -382,7 +382,11 @@
         std::array<Buffer, MAX_FRAMES_IN_FLIGHT> shadowTwoSidedCandidateDispatchBuffers;
         // Per-page compact float3x4 streams consumed directly by shadow VS.
         std::array<Buffer, MAX_FRAMES_IN_FLIGHT> shadowInstanceTransformBuffers;
+        // Parallel identity stream: transform compaction is page-local and
+        // must not discard the source GPU-scene instance ID.
+        std::array<Buffer, MAX_FRAMES_IN_FLIGHT> shadowVisibleInstanceBuffers;
         std::array<Buffer, MAX_FRAMES_IN_FLIGHT> shadowTwoSidedInstanceTransformBuffers;
+        std::array<Buffer, MAX_FRAMES_IN_FLIGHT> shadowTwoSidedVisibleInstanceBuffers;
         std::array<Buffer, MAX_FRAMES_IN_FLIGHT> shadowInstanceTransformCountBuffers;
         std::array<Buffer, MAX_FRAMES_IN_FLIGHT> shadowTwoSidedInstanceTransformCountBuffers;
         std::array<Buffer, MAX_FRAMES_IN_FLIGHT> shadowInstanceMaterialBuffers;

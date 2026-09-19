@@ -33,6 +33,10 @@ struct ShadowInstanceTransform { float4 row0; float4 row1; float4 row2; };
 [[vk::binding(11, 0)]] RWStructuredBuffer<ShadowInstanceTransform> shadowTransforms;
 [[vk::binding(12, 0)]] RWStructuredBuffer<uint> shadowTransformCounts;
 [[vk::binding(13, 0)]] RWStructuredBuffer<uint> shadowMaterialOffsets;
+// Parallel to shadowTransforms.  A transform index alone is page-local and
+// cannot be used to recover the meshlet range of the original instance.
+struct ShadowVisibleInstance { uint sourceInstanceId; uint shadowTransformIndex; };
+[[vk::binding(14, 0)]] RWStructuredBuffer<ShadowVisibleInstance> shadowVisibleInstances;
 
 struct CullingPushConstants
 {
@@ -124,6 +128,8 @@ void appendDraw(bool visible, CullingObjectData objectData, uint drawSlot,
                 const RendererInstanceData instance = rendererInstances[source];
                 shadowTransforms[destination + instanceOffset] = makeShadowTransform(instance);
                 shadowMaterialOffsets[destination + instanceOffset] = asuint(instance.positionMaterial.w);
+                shadowVisibleInstances[destination + instanceOffset] =
+                    ShadowVisibleInstance(source, destination + instanceOffset);
             }
             command.firstInstance = destination;
         }

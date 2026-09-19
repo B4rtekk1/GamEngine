@@ -39,6 +39,35 @@ namespace Engine::Culling {
     };
     static_assert(sizeof(VisibleMeshlet) == 8);
 
+    /**
+     * Shadow visibility deliberately keeps both identities.  The transform
+     * stream is page-local, whereas sourceInstanceId addresses the persistent
+     * GPU-scene instance table used to find the instance's meshlet range.
+     * Do not replace this with a transform index: transform indices are
+     * compacted independently for every VSM page.
+     */
+    struct ShadowVisibleInstance final {
+        std::uint32_t sourceInstanceId{};
+        std::uint32_t shadowTransformIndex{};
+    };
+    static_assert(sizeof(ShadowVisibleInstance) == 8);
+
+    /** One meshlet to rasterize into a single physical VSM page. */
+    struct ShadowVisibleMeshlet final {
+        std::uint32_t pageSlot{};
+        std::uint32_t sourceInstanceId{};
+        std::uint32_t meshletId{};
+    };
+    static_assert(sizeof(ShadowVisibleMeshlet) == 12);
+
+    /** Per-page dispatch command emitted after shadow meshlet expansion. */
+    struct ShadowMeshTaskIndirectCommand final {
+        std::uint32_t groupCountX{};
+        std::uint32_t groupCountY{};
+        std::uint32_t groupCountZ{};
+    };
+    static_assert(sizeof(ShadowMeshTaskIndirectCommand) == 12);
+
     /** Matches MeshletCullUniforms in meshlet_culling.slang. */
     struct alignas(16) MeshletCullUniforms final {
         GPUMat4 viewProjection{};
