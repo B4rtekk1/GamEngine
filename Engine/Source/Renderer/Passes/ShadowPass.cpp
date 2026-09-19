@@ -1303,6 +1303,21 @@ void ShadowPass::record(const VkCommandBuffer commandBuffer,
     }
     vkCmdEndRendering(commandBuffer);
 
+    VkImageMemoryBarrier2 atlasToSampled{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2};
+    atlasToSampled.srcStageMask = VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT |
+                                   VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT;
+    atlasToSampled.srcAccessMask = VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
+    atlasToSampled.dstStageMask = VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT;
+    atlasToSampled.dstAccessMask = VK_ACCESS_2_SHADER_SAMPLED_READ_BIT;
+    atlasToSampled.oldLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+    atlasToSampled.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    atlasToSampled.image = shadowMap_->image();
+    atlasToSampled.subresourceRange = {VK_IMAGE_ASPECT_DEPTH_BIT, 0, 1, 0, 1};
+    VkDependencyInfo atlasToSampledDependency{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
+    atlasToSampledDependency.imageMemoryBarrierCount = 1;
+    atlasToSampledDependency.pImageMemoryBarriers = &atlasToSampled;
+    vkCmdPipelineBarrier2(commandBuffer, &atlasToSampledDependency);
+
     // This is the sole publication point for new/recycled mappings. It is
     // deliberately after rendering ends: the depth attachment write is
     // ordered before the host-visible table update and the latter is made

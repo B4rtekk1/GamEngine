@@ -633,17 +633,14 @@
                 optimizationFeatures.shadows && hasShadowCasters;
             // ImGui owns a persistent descriptor for Scene View and may sample
             // it even before the viewport receives its first deferred redraw.
-            // Use the normal render pass for a one-time clear: it also performs
-            // the exact attachment-layout transition used by a real Scene View
-            // render (including the MSAA resolve target).
-            // The first use may itself be a real Scene View render, so this
-            // cannot live only in the deferred-clear branch below.
-            if (!sceneViewportImageInitialized && !msaa.enabled()) {
+            // The first use may be a real Scene View render, so prepare the
+            // color target for either that render or the clear below.
+            if (!sceneViewportImageInitialized) {
                 VkImageMemoryBarrier2 initializeColor{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2};
                 initializeColor.dstStageMask = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT;
                 initializeColor.dstAccessMask = VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT;
                 initializeColor.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-                initializeColor.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+                initializeColor.newLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
                 initializeColor.image = sceneViewportTarget.color().image();
                 initializeColor.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
                 VkDependencyInfo dependency{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
@@ -671,12 +668,32 @@
                 opaqueSceneColorInitialized = true;
             }
             if (!renderSceneViewport && !sceneViewportImageInitialized) {
-                sceneForwardPass.begin(
-                    commandBuffer, sceneViewportTarget.color().imageView(), depthBuffer.imageView(),
-                    VK_NULL_HANDLE, VK_NULL_HANDLE, VK_NULL_HANDLE, VK_NULL_HANDLE, sceneViewportTarget.extent(),
-                    sceneDescriptorPass.descriptorSet(currentFrame), vertexBuffer.handle(),
-                    instanceBuffers[currentFrame].handle(), indexBuffer.handle());
-                ForwardPass::end(commandBuffer);
+                VkRenderingAttachmentInfo color{VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO};
+                color.imageView = sceneViewportTarget.color().imageView();
+                color.imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+                color.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+                color.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+                color.clearValue.color = {{0.02F, 0.02F, 0.05F, 1.0F}};
+                VkRenderingInfo rendering{VK_STRUCTURE_TYPE_RENDERING_INFO};
+                rendering.renderArea.extent = sceneViewportTarget.extent();
+                rendering.layerCount = 1;
+                rendering.colorAttachmentCount = 1;
+                rendering.pColorAttachments = &color;
+                vkCmdBeginRendering(commandBuffer, &rendering);
+                vkCmdEndRendering(commandBuffer);
+                VkImageMemoryBarrier2 colorToSampled{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2};
+                colorToSampled.srcStageMask = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT;
+                colorToSampled.srcAccessMask = VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT;
+                colorToSampled.dstStageMask = VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT;
+                colorToSampled.dstAccessMask = VK_ACCESS_2_SHADER_SAMPLED_READ_BIT;
+                colorToSampled.oldLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+                colorToSampled.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+                colorToSampled.image = sceneViewportTarget.color().image();
+                colorToSampled.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+                VkDependencyInfo dependency{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
+                dependency.imageMemoryBarrierCount = 1;
+                dependency.pImageMemoryBarriers = &colorToSampled;
+                vkCmdPipelineBarrier2(commandBuffer, &dependency);
                 sceneViewportImageInitialized = true;
             }
             // Culling runs before this frame's depth pass, so it consumes the
@@ -1427,17 +1444,16 @@
             if (renderSceneViewport) {
                 // The prior Scene View image was sampled by ImGui. Make those
                 // reads visible before the cache pass changes it back into a
-                // color attachment; the render pass itself preserves the
-                // SHADER_READ_ONLY -> COLOR_ATTACHMENT -> SHADER_READ_ONLY
-                // layout sequence.
-                if (!msaa.enabled() && sceneViewportImageInitialized) {
+                // color attachment. Dynamic rendering requires both explicit
+                // layout transitions.
+                if (sceneViewportImageInitialized) {
                     VkImageMemoryBarrier2 sampledToColor{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2};
                     sampledToColor.srcStageMask = VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT;
                     sampledToColor.srcAccessMask = VK_ACCESS_2_SHADER_SAMPLED_READ_BIT;
                     sampledToColor.dstStageMask = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT;
                     sampledToColor.dstAccessMask = VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT;
                     sampledToColor.oldLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-                    sampledToColor.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+                    sampledToColor.newLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
                     sampledToColor.image = sceneViewportTarget.color().image();
                     sampledToColor.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
                     VkDependencyInfo dependency{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
@@ -1445,6 +1461,19 @@
                     dependency.pImageMemoryBarriers = &sampledToColor;
                     vkCmdPipelineBarrier2(commandBuffer, &dependency);
                 }
+                VkImageMemoryBarrier2 depthToAttachment{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2};
+                depthToAttachment.dstStageMask = VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT |
+                                                 VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT;
+                depthToAttachment.dstAccessMask = VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_READ_BIT |
+                                                  VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
+                depthToAttachment.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+                depthToAttachment.newLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+                depthToAttachment.image = depthBuffer.image();
+                depthToAttachment.subresourceRange = {VK_IMAGE_ASPECT_DEPTH_BIT, 0, 1, 0, 1};
+                VkDependencyInfo depthDependency{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
+                depthDependency.imageMemoryBarrierCount = 1;
+                depthDependency.pImageMemoryBarriers = &depthToAttachment;
+                vkCmdPipelineBarrier2(commandBuffer, &depthDependency);
                 // Scene View has a separate frustum and therefore needs its own
                 // indirect list. The game camera's list must not hide objects
                 // which are visible from the editor camera.
@@ -1509,6 +1538,30 @@
                 sceneForwardPass.drawOutline(commandBuffer, sceneDescriptorPass.descriptorSet(currentFrame),
                                         sceneIndirectDraws[currentFrame]);
                 ForwardPass::end(commandBuffer);
+                VkImageMemoryBarrier2 colorToSampled{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2};
+                colorToSampled.srcStageMask = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT;
+                colorToSampled.srcAccessMask = VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT;
+                colorToSampled.dstStageMask = VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT;
+                colorToSampled.dstAccessMask = VK_ACCESS_2_SHADER_SAMPLED_READ_BIT;
+                colorToSampled.oldLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+                colorToSampled.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+                colorToSampled.image = sceneViewportTarget.color().image();
+                colorToSampled.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+                VkImageMemoryBarrier2 depthToSampled{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2};
+                depthToSampled.srcStageMask = VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT |
+                                                VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT;
+                depthToSampled.srcAccessMask = VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
+                depthToSampled.dstStageMask = VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT;
+                depthToSampled.dstAccessMask = VK_ACCESS_2_SHADER_SAMPLED_READ_BIT;
+                depthToSampled.oldLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+                depthToSampled.newLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL;
+                depthToSampled.image = depthBuffer.image();
+                depthToSampled.subresourceRange = {VK_IMAGE_ASPECT_DEPTH_BIT, 0, 1, 0, 1};
+                const VkImageMemoryBarrier2 sceneToSampled[] = {colorToSampled, depthToSampled};
+                VkDependencyInfo sceneToSampledDependency{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
+                sceneToSampledDependency.imageMemoryBarrierCount = std::size(sceneToSampled);
+                sceneToSampledDependency.pImageMemoryBarriers = sceneToSampled;
+                vkCmdPipelineBarrier2(commandBuffer, &sceneToSampledDependency);
 
                 const bool hasSceneLegacyWater = activeShaderSlots.test(materialShaderIndex(MaterialShader::Water));
                 const bool hasSceneVirtualWater = sceneVirtualWaterRenderer.active();
