@@ -144,7 +144,7 @@ namespace Engine {
          * Setters already clamp values, but this is useful after deserializing
          * a scene file. In release builds, assertions may be disabled.
          */
-        void validate() const noexcept {
+        static void validate() noexcept {
             assert(isValid());
         }
     };

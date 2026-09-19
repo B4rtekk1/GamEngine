@@ -17,6 +17,5 @@ namespace Engine {
 
         bool useGravity = true;
         bool fixedRotation = false;
-
     };
 }

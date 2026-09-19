@@ -49,7 +49,9 @@ namespace Engine {
                 // through the editor). Lifecycle callbacks must never let an
                 // exception escape a component destructor.
                 try {
-                    if (runtimeEnabled) runtime->onDisable();
+                    if (runtimeEnabled) {
+                        runtime->onDisable();
+                    }
                     runtime->onDestroy();
                 } catch (...) {
                 }

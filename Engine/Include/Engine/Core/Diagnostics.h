@@ -39,13 +39,19 @@ namespace Engine {
         [[nodiscard]] static Diagnostics &instance();
 
         /** Starts a file sink for this process. Safe to call again after shutdown. */
-        void initialize(const std::filesystem::path& logDirectory) noexcept;
+        void initialize(const std::filesystem::path &logDirectory) noexcept;
+
         void shutdown() noexcept;
+
         void report(DiagnosticSeverity severity, std::string message,
                     DiagnosticContext context = {}) noexcept;
+
         [[nodiscard]] std::vector<Diagnostic> entries() const;
+
         [[nodiscard]] std::filesystem::path currentLogPath() const;
+
         void clear() noexcept;
+
         void flush() noexcept;
 
     private:

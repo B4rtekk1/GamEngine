@@ -38,29 +38,39 @@ namespace Engine {
         static constexpr std::uint32_t HistorySize = 600;
 
         static ProfileNameId registerName(std::string_view name);
+
         [[nodiscard]] static std::string_view name(ProfileNameId id) noexcept;
 
         static void beginFrame();
+
         static void endFrame();
+
         static void beginCpuZone(ProfileNameId name);
+
         static void endCpuZone();
+
         /** Associates a fence-completed GPU timeline with its original CPU frame. */
         static void attachGpuFrame(std::uint64_t frameNumber, double milliseconds,
                                    std::span<const GpuProfileEvent> events) noexcept;
+
         static void clear();
 
         [[nodiscard]] static std::uint64_t currentFrameNumber() noexcept;
+
         [[nodiscard]] static std::uint32_t historySize() noexcept;
+
         /** Oldest frame is index zero. This view never copies profiling events. */
-        [[nodiscard]] static const ProfileFrame& historyFrame(std::uint32_t index) noexcept;
+        [[nodiscard]] static const ProfileFrame &historyFrame(std::uint32_t index) noexcept;
     };
 
     class CpuProfileScope final {
     public:
         explicit CpuProfileScope(ProfileNameId name) { Profiler::beginCpuZone(name); }
         ~CpuProfileScope() { Profiler::endCpuZone(); }
-        CpuProfileScope(const CpuProfileScope&) = delete;
-        CpuProfileScope& operator=(const CpuProfileScope&) = delete;
+
+        CpuProfileScope(const CpuProfileScope &) = delete;
+
+        CpuProfileScope &operator=(const CpuProfileScope &) = delete;
     };
 }
 

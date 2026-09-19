@@ -57,6 +57,7 @@ namespace Engine {
 
         TerrainComponent(std::uint32_t resolution, float width, float depth,
                          float minimumHeight = -10.0F, float maximumHeight = 10.0F);
+
         //NOLINTEND
 
         [[nodiscard]] bool valid() const noexcept;
@@ -72,7 +73,7 @@ namespace Engine {
 
         /** Attaches persistent layer images to regenerated geometry and maps
          * them to the terrain material's mesh-local texture indices. */
-        void applyMaterialLayers(Mesh& mesh, PBRMaterial& material) const;
+        void applyMaterialLayers(Mesh &mesh, PBRMaterial &material) const;
 
         /** Updates positions and normals in an existing full-resolution terrain mesh. */
         bool updateMeshRegion(Mesh &mesh, const TerrainRegion &region) const;
@@ -84,7 +85,7 @@ namespace Engine {
                     TerrainRegion *changedRegion = nullptr);
 
         /** Blends a colour into one brush sample in local terrain space. */
-        bool paint(float localX, float localZ, float radius, const Vec3& color, float opacity,
+        bool paint(float localX, float localZ, float radius, const Vec3 &color, float opacity,
                    TerrainBrushFalloff falloff = TerrainBrushFalloff::Smooth,
                    TerrainRegion *changedRegion = nullptr);
     };

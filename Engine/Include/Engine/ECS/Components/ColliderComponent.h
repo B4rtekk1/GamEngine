@@ -84,5 +84,6 @@ namespace Engine {
         /// Bounciness coefficient used by the physics solver.
         float restitution = 0.0F;
     };
+
     // NOLINTEND(readability-magic-numbers)
 }
