@@ -53,7 +53,7 @@ namespace Engine::Assets {
     };
 
     /** CPU-side decoded RGBA texture. The renderer uploads it when needed. */
-    enum class TextureFormat : std::uint32_t {
+    enum class TextureFormat : std::uint8_t {
         RGBA8_SRGB,
         RGBA8_UNORM,
         BC4_UNORM,

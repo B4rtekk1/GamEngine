@@ -31,15 +31,15 @@ namespace Engine::Assets {
 
     /** Thread-safe progress counters for a background texture-cook job. */
     struct TextureCookProgress final {
-        std::atomic<std::uint32_t> discovered{};
-        std::atomic<std::uint32_t> completed{};
+        std::atomic<std::uint32_t> discovered;
+        std::atomic<std::uint32_t> completed;
     };
 
     /** Cooks every supported source image below @p assetRoot to a sibling .gtex file. */
-    [[nodiscard]] TextureCookSummary cook_all_textures(const std::filesystem::path& assetRoot,
-                                                        TextureCookProgress* progress = nullptr);
+    [[nodiscard]] TextureCookSummary cook_all_textures(const std::filesystem::path &assetRoot,
+                                                       TextureCookProgress *progress = nullptr);
 
     /** Imports every GLB/glTF below @p assetRoot into a sibling .gmesh plus .gtex files. */
-    [[nodiscard]] TextureCookSummary cook_all_gltf_meshes(const std::filesystem::path& assetRoot,
-                                                           TextureCookProgress* progress = nullptr);
+    [[nodiscard]] TextureCookSummary cook_all_gltf_meshes(const std::filesystem::path &assetRoot,
+                                                          TextureCookProgress *progress = nullptr);
 }
