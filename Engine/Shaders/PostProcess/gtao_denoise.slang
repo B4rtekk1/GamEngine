@@ -1,35 +1,69 @@
-// XeGTAO's edge-continuity denoiser.  It deliberately does not use depth or
-// normal similarity: local edge continuity alone determines which of the
-// eight neighbouring AO values may contribute.
+// Edge-continuity 5x5 spatial filter for GTAO.  The guide contains the
+// continuity links generated from the depth pyramid by gtao_main.
 [[vk::binding(0,0)]] Sampler2D inputAo;
 [[vk::binding(1,0)]] Sampler2D inputGuide;
 [[vk::binding(2,0)]] RWTexture2D<float> outputAo;
 struct Settings { float blurAmount; };
 [[vk::push_constant]] ConstantBuffer<Settings> settings;
-// Four 2-bit, XeGTAO-compatible edge-continuity values packed by gtao_main:
-// left, right, top, bottom.
-float4 unpackEdges(float payload){uint packed=uint(payload*255.5);return saturate(float4((packed>>6)&3,(packed>>4)&3,(packed>>2)&3,packed&3)/3.0);}
-float4 edgesAt(int2 p,int2 size){return unpackEdges(inputGuide.Load(int3(clamp(p,int2(0,0),size-1),0)).z);}
-void addSample(float value,float weight,inout float sum,inout float weightSum){sum+=weight*value;weightSum+=weight;}
-float aoAt(int2 p,int2 size){return inputAo.Load(int3(clamp(p,int2(0,0),size-1),0)).r;}
+
+// Four 2-bit links, packed as left, right, top, bottom by gtao_main.
+float4 unpackEdges(float payload) {
+    uint packed = uint(payload * 255.5);
+    return saturate(float4((packed >> 6) & 3, (packed >> 4) & 3,
+                           (packed >> 2) & 3, packed & 3) / 3.0);
+}
+float4 edgesAt(int2 p, int2 size) {
+    return unpackEdges(inputGuide.Load(int3(clamp(p, int2(0, 0), size - 1), 0)).z);
+}
+float aoAt(int2 p, int2 size) {
+    return inputAo.Load(int3(clamp(p, int2(0, 0), size - 1), 0)).r;
+}
+
+// Product of the continuity links crossed by an axis-aligned path. A 5x5
+// footprint smooths flat regions while never jumping a depth discontinuity.
+float pathContinuity(int2 p, int2 delta, int2 size) {
+    float continuity = 1.0;
+    int2 cursor = p;
+    const int stepX = delta.x < 0 ? -1 : 1;
+    const int stepY = delta.y < 0 ? -1 : 1;
+    [unroll] for (int i = 0; i < 2; ++i) {
+        if (i < abs(delta.x)) {
+            float4 edge = edgesAt(cursor, size);
+            continuity *= stepX < 0 ? edge.x : edge.y;
+            cursor.x += stepX;
+        }
+    }
+    [unroll] for (int i = 0; i < 2; ++i) {
+        if (i < abs(delta.y)) {
+            float4 edge = edgesAt(cursor, size);
+            continuity *= stepY < 0 ? edge.z : edge.w;
+            cursor.y += stepY;
+        }
+    }
+    return continuity;
+}
+
 [numthreads(8,8,1)] [shader("compute")]
-void main(uint3 id:SV_DispatchThreadID){
- uint w,h;outputAo.GetDimensions(w,h);if(any(id.xy>=uint2(w,h)))return;int2 size=int2(w,h),p=int2(id.xy);
- float4 center=edgesAt(p,size),left=edgesAt(p+int2(-1,0),size),right=edgesAt(p+int2(1,0),size),top=edgesAt(p+int2(0,-1),size),bottom=edgesAt(p+int2(0,1),size);
- // Make links symmetric, then apply XeGTAO's controlled leak across pixels
- // with three or four discontinuities to suppress spatial/temporal aliasing.
- center*=float4(left.y,right.x,top.w,bottom.z);
- float edginess=saturate(1.5-dot(center,1.0))/1.5*.5;
- center=saturate(center+edginess);
- const float diagonalWeight=.85*.5;
- float weightTL=diagonalWeight*(center.x*left.z+center.z*top.x);
- float weightTR=diagonalWeight*(center.z*top.y+center.y*right.z);
- float weightBL=diagonalWeight*(center.w*bottom.x+center.x*left.w);
- float weightBR=diagonalWeight*(center.y*right.w+center.w*bottom.y);
- float weightSum=settings.blurAmount,sum=aoAt(p,size)*weightSum;
- addSample(aoAt(p+int2(-1,0),size),center.x,sum,weightSum);addSample(aoAt(p+int2(1,0),size),center.y,sum,weightSum);
- addSample(aoAt(p+int2(0,-1),size),center.z,sum,weightSum);addSample(aoAt(p+int2(0,1),size),center.w,sum,weightSum);
- addSample(aoAt(p+int2(-1,-1),size),weightTL,sum,weightSum);addSample(aoAt(p+int2(1,-1),size),weightTR,sum,weightSum);
- addSample(aoAt(p+int2(-1,1),size),weightBL,sum,weightSum);addSample(aoAt(p+int2(1,1),size),weightBR,sum,weightSum);
- outputAo[p]=sum/max(weightSum,1e-5);
+void main(uint3 id : SV_DispatchThreadID) {
+    uint w, h;
+    outputAo.GetDimensions(w, h);
+    if (any(id.xy >= uint2(w, h))) return;
+
+
+    const int2 size = int2(w, h);
+    const int2 p = int2(id.xy);
+    float sum = aoAt(p, size) * settings.blurAmount;
+    float weightSum = settings.blurAmount;
+    [unroll] for (int y = -2; y <= 2; ++y) {
+        [unroll] for (int x = -2; x <= 2; ++x) {
+            if (x == 0 && y == 0) continue;
+            const int2 offset = int2(x, y);
+            const float distanceSquared = float(x * x + y * y);
+            const float weight = exp(-0.65 * distanceSquared) *
+                                 pathContinuity(p, offset, size);
+            sum += aoAt(p + offset, size) * weight;
+            weightSum += weight;
+        }
+    }
+    outputAo[p] = sum / max(weightSum, 1e-5);
 }

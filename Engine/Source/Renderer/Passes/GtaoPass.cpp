@@ -91,6 +91,7 @@ void GtaoPass::create(VkPhysicalDevice physical, VkDevice device, VkExtent2D ful
         baseDepth_.create(physical, device_, halfExtent_, allocator, VK_FILTER_NEAREST, LinearDepthFormat, true);
         auxiliary_.create(physical, device_, halfExtent_, allocator, VK_FILTER_NEAREST, AuxiliaryFormat, true);
         filtered_.create(physical, device_, halfExtent_, allocator, VK_FILTER_NEAREST, AoFormat, true);
+        denoiseScratch_.create(physical, device_, halfExtent_, allocator, VK_FILTER_NEAREST, AoFormat, true);
         full_.create(physical, device_, fullExtent_, allocator, VK_FILTER_LINEAR, AoFormat, true);
         linearDepthMipCount_ = 1;
         for (auto d = std::max(fullExtent.width, fullExtent.height); d > 1; d >>= 1)
@@ -241,8 +242,8 @@ void GtaoPass::create(VkPhysicalDevice physical, VkDevice device, VkExtent2D ful
     }
 }
 void GtaoPass::clearImages(VkCommandBuffer cmd) {
-    const std::array<VkImage, 5> images{raw_.image(), baseDepth_.image(), auxiliary_.image(), filtered_.image(),
-                                        full_.image()};
+    const std::array<VkImage, 6> images{raw_.image(), baseDepth_.image(), auxiliary_.image(), filtered_.image(),
+                                        denoiseScratch_.image(), full_.image()};
     VkImageSubresourceRange range{VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
     for (auto image : images)
         barrier(cmd, image, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_PIPELINE_STAGE_2_NONE,
@@ -310,8 +311,8 @@ void GtaoPass::record(VkCommandBuffer cmd, uint32_t frame, uint32_t sampleIndex,
     if (!initialized_)
         clearImages(cmd);
     buildLinearDepth(cmd, frame, depth, depthSampler, inverseProjection);
-    const std::array<VkImage, 5> work{raw_.image(), baseDepth_.image(), auxiliary_.image(), filtered_.image(),
-                                      full_.image()};
+    const std::array<VkImage, 6> work{raw_.image(), baseDepth_.image(), auxiliary_.image(), filtered_.image(),
+                                      denoiseScratch_.image(), full_.image()};
     for (auto image : work)
         barrier(cmd, image, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_IMAGE_LAYOUT_GENERAL,
                 VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, VK_ACCESS_2_SHADER_SAMPLED_READ_BIT,
@@ -365,17 +366,26 @@ void GtaoPass::record(VkCommandBuffer cmd, uint32_t frame, uint32_t sampleIndex,
     barrier(cmd, baseDepth_.image(), VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_GENERAL,
             VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT,
             VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
-    update(1,
-           {{raw_.sampler(), raw_.imageView(), VK_IMAGE_LAYOUT_GENERAL},
-            {auxiliary_.sampler(), auxiliary_.imageView(), VK_IMAGE_LAYOUT_GENERAL}},
-           {filtered_.imageView()});
     DenoiseSettings denoise{1.F};
-    dispatch(1, denoise, halfExtent_);
-    barrier(cmd, filtered_.image(), VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_GENERAL,
-            VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT,
-            VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
+    const HdrBuffer* denoiseInput = &raw_;
+    const uint32_t denoisePasses = std::max(1U, quality_.denoisePassCount);
+    // Alternate targets so the final filtered result always remains in
+    // filtered_, which is also exposed by the diagnostic view.
+    HdrBuffer* denoiseOutput = (denoisePasses & 1U) ? &filtered_ : &denoiseScratch_;
+    for (uint32_t pass = 0; pass < denoisePasses; ++pass) {
+        update(1,
+               {{denoiseInput->sampler(), denoiseInput->imageView(), VK_IMAGE_LAYOUT_GENERAL},
+                {auxiliary_.sampler(), auxiliary_.imageView(), VK_IMAGE_LAYOUT_GENERAL}},
+               {denoiseOutput->imageView()});
+        dispatch(1, denoise, halfExtent_);
+        barrier(cmd, denoiseOutput->image(), VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_GENERAL,
+                VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT,
+                VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
+        denoiseInput = denoiseOutput;
+        denoiseOutput = denoiseOutput == &filtered_ ? &denoiseScratch_ : &filtered_;
+    }
     update(2,
-           {{filtered_.sampler(), filtered_.imageView(), VK_IMAGE_LAYOUT_GENERAL},
+           {{denoiseInput->sampler(), denoiseInput->imageView(), VK_IMAGE_LAYOUT_GENERAL},
             {linearDepthSampler_, linearDepthView_, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL},
             {baseDepth_.sampler(), baseDepth_.imageView(), VK_IMAGE_LAYOUT_GENERAL}},
            {full_.imageView()});
@@ -434,6 +444,7 @@ void GtaoPass::destroy() noexcept {
     baseDepth_.destroy();
     auxiliary_.destroy();
     filtered_.destroy();
+    denoiseScratch_.destroy();
     full_.destroy();
     computeLayouts_.fill({});
     computePipelineLayouts_.fill({});

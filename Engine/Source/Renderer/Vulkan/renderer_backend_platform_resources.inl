@@ -343,6 +343,7 @@
         void createGtaoPass() {
             gtaoPass.create(vulkanDevice.physical(), device, swapchain.extent(),
                             vulkanDevice.allocator(), assetManager, gtaoQualitySettings(gtaoQuality));
+            activeGtaoQuality = gtaoQuality;
         }
 
         void bindGtaoTexture(ShadowPass& descriptors) {
@@ -675,6 +676,19 @@
             sceneViewportCacheValid = false;
             sceneViewportImageInitialized = false;
             sceneViewportNeedsRender = true;
+        }
+
+        void reconfigureGtaoQuality() {
+            if (device == VK_NULL_HANDLE) return;
+            if (!sceneResourcesInitialized) return;
+
+            // GTAO owns images whose extent and mip count depend on quality.
+            // Retire in-flight readers before replacing their descriptor views.
+            waitForGlobalResourceRebuild();
+            gtaoPass.destroy();
+            createGtaoPass();
+            bindGtaoTexture(shadowPass);
+            bindGtaoTexture(sceneDescriptorPass);
         }
 
         void createSkyPass() const {

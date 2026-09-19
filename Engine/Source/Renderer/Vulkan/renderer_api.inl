@@ -152,6 +152,9 @@ void Renderer::reloadScene(Scene& scene, void* nativeWindow) {
         if (backend_->antialiasingLevel != antialiasingLevel_) {
             backend_->reconfigureAntialiasing(antialiasingLevel_);
         }
+        if (backend_->activeGtaoQuality != gtaoQuality_) {
+            backend_->reconfigureGtaoQuality();
+        }
         // Scene snapshots replace the complete ECS registry. Incremental
         // synchronization is only valid for edits made against the current
         // registry; it can otherwise retain GPU-scene IDs and buffer
