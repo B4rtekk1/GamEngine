@@ -260,6 +260,10 @@ ForwardFragmentOutput fragmentMain(ForwardFragmentInput input)
     float3 albedoMultiplier = (material.textureIndices.w & 32) != 0 ? 1.0 : vertexColor;
     float4 baseColor = float4(albedoMultiplier * material.baseColorMetallic.rgb,
                               material.roughnessAmbientOcclusion.w);
+// Unlit materials never use terrain layering.  Keeping this out of their
+// module is materially different from a runtime branch: the four descriptor
+// samples and their live values disappear before register allocation.
+#if MATERIAL_VARIANT != 1
     if ((material.textureIndices.w & 8) != 0)
     {
         baseColor = float4(material.baseColorMetallic.rgb, material.roughnessAmbientOcclusion.w);
@@ -287,7 +291,9 @@ ForwardFragmentOutput fragmentMain(ForwardFragmentInput input)
                     checker * (1.0 - saturate(appliedWeight));
         baseColor.a = 1.0;
     }
-    else if (material.textureIndices.x >= 0)
+    else
+#endif
+    if (material.textureIndices.x >= 0)
         baseColor *= materialTextures[NonUniformResourceIndex(material.textureIndices.x)].Sample(materialTextureUv(material, 0, input.texCoord, input.texCoord1));
 
     // Cooker may pack this map into base-color alpha; retain the separate
@@ -314,6 +320,23 @@ ForwardFragmentOutput fragmentMain(ForwardFragmentInput input)
         baseColor.a = 1.0;
     }
     else if (alphaMode == 0) baseColor.a = 1.0;
+
+#if MATERIAL_VARIANT == 1
+    // This return deliberately precedes metallic/roughness, normal mapping,
+    // VSM, clusters, probes, GTAO and IBL.  The unlit PSO is consequently a
+    // real compile-time specialization rather than a late colour override.
+    float3 unlitEmissive = material.emissiveColorIntensity.rgb * material.emissiveColorIntensity.w;
+    if (material.extensionTextureIndices.x >= 0)
+        unlitEmissive *= materialTextures[NonUniformResourceIndex(material.extensionTextureIndices.x)]
+            .Sample(materialTextureUv(material, 7, input.texCoord, input.texCoord1)).rgb;
+    ForwardFragmentOutput unlitOutput;
+    unlitOutput.color = float4(baseColor.rgb + unlitEmissive, baseColor.a);
+#if FORWARD_OUTPUT_VELOCITY
+    const float2 unlitPreviousNdc = input.previousClip.xy / input.previousClip.w;
+    unlitOutput.velocity = (input.currentNdc - unlitPreviousNdc) * 0.5;
+#endif
+    return unlitOutput;
+#endif
 
     float3 albedo = baseColor.rgb;
     float metallic = material.baseColorMetallic.a;
@@ -344,6 +367,23 @@ ForwardFragmentOutput fragmentMain(ForwardFragmentInput input)
         float3x3 tangentFrame = float3x3(tangent, bitangent, normal);
         normal = normalize(mul(mappedNormal, tangentFrame));
     }
+
+#if MATERIAL_VARIANT == 2
+    // Hologram keeps its authored albedo and normal-map silhouette but does
+    // not retain the full PBR/VSM/cluster/probe working set.
+    const float3 hologramView = normalize(frame.cameraPosition.xyz - input.worldPosition);
+    const float scanline = 0.55 + 0.45 * sin(input.worldPosition.y * 90.0 + frame.windGustFrequencyTime.w * 8.0);
+    const float hologramFresnel = pow(1.0 - saturate(dot(normal, hologramView)), 3.0);
+    const float3 hologramEmission = material.emissiveColorIntensity.rgb * material.emissiveColorIntensity.w;
+    ForwardFragmentOutput hologramOutput;
+    hologramOutput.color = float4(baseColor.rgb * (0.25 + scanline * 0.75) + hologramEmission +
+                                       float3(0.05, 0.65, 1.0) * hologramFresnel, baseColor.a);
+#if FORWARD_OUTPUT_VELOCITY
+    const float2 hologramPreviousNdc = input.previousClip.xy / input.previousClip.w;
+    hologramOutput.velocity = (input.currentNdc - hologramPreviousNdc) * 0.5;
+#endif
+    return hologramOutput;
+#endif
 
     // This isolates the invariant baseline: no normal map, Fresnel, IBL,
     // specular, AO, shadows or local lights may affect it. It is deliberately
@@ -567,15 +607,6 @@ ForwardFragmentOutput fragmentMain(ForwardFragmentInput input)
             exp2(-16.0 * roughness - 1.0)) - 1.0 + indirectVisibility);
     float3 ambient = diffuseIbl * diffuseAO + specularIbl * specularOcclusion;
     float3 color = ambient + direct + emissive;
-#if MATERIAL_VARIANT == 1
-    // Unlit keeps texture/base-color authoring but deliberately skips scene lighting.
-    color = albedo + emissive;
-#elif MATERIAL_VARIANT == 2
-    // Hologram is emissive, view-dependent and uses world-space scan lines.
-    float scanline = 0.55 + 0.45 * sin(input.worldPosition.y * 90.0 + frame.windGustFrequencyTime.w * 8.0);
-    float hologramFresnel = pow(1.0 - saturate(dot(normal, viewDirection)), 3.0);
-    color = albedo * (0.25 + scanline * 0.75) + emissive + float3(0.05, 0.65, 1.0) * hologramFresnel;
-#endif
     // Foliage has a cheap, stable back-lighting term.  The flag is deliberately
     // material data rather than an asset-name heuristic at runtime.
     if ((material.textureIndices.w & 16) != 0 && material.auxiliaryTextureIndices.z >= 0) {

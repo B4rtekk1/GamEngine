@@ -295,6 +295,12 @@
         std::array<std::uint64_t, MAX_FRAMES_IN_FLIGHT> uploadedGrassDeformationVersions{};
         std::array<Buffer, MAX_FRAMES_IN_FLIGHT> grassIndirectBuffers;
         std::array<Buffer, MAX_FRAMES_IN_FLIGHT> grassDrawCountBuffers;
+        // VSM grass never reuses the camera-wide shadow commands.  These
+        // arrays contain one command range and count per physical page.
+        std::array<Buffer, MAX_FRAMES_IN_FLIGHT> grassShadowPageMatricesBuffers;
+        std::array<Buffer, MAX_FRAMES_IN_FLIGHT> grassShadowPageIndirectBuffers;
+        std::array<Buffer, MAX_FRAMES_IN_FLIGHT> grassShadowPageDrawCountBuffers;
+        std::array<Buffer, MAX_FRAMES_IN_FLIGHT> grassShadowPageCullUniformBuffers;
         // Dedicated command streams. They must never alias generic object
         // indirect buffers: each stream is consumed by a grass-only shader.
         struct GrassRenderLists final {
@@ -452,6 +458,7 @@
         VkDescriptorSetLayout grassPackedBinDescriptorSetLayout = VK_NULL_HANDLE;
         VkDescriptorSetLayout grassPackedScatterDescriptorSetLayout = VK_NULL_HANDLE;
         VkDescriptorSetLayout grassPackedFinalizeDescriptorSetLayout = VK_NULL_HANDLE;
+        VkDescriptorSetLayout grassShadowPageCullDescriptorSetLayout = VK_NULL_HANDLE;
         VkDescriptorSetLayout clusteredLightingDescriptorSetLayout = VK_NULL_HANDLE;
         VkDescriptorSetLayout vsmPageMarkingDescriptorSetLayout = VK_NULL_HANDLE;
         VkDescriptorSetLayout vsmPageCompactDescriptorSetLayout = VK_NULL_HANDLE;
@@ -473,6 +480,7 @@
         VkPipelineLayout grassPackedBinPipelineLayout = VK_NULL_HANDLE;
         VkPipelineLayout grassPackedScatterPipelineLayout = VK_NULL_HANDLE;
         VkPipelineLayout grassPackedFinalizePipelineLayout = VK_NULL_HANDLE;
+        VkPipelineLayout grassShadowPageCullPipelineLayout = VK_NULL_HANDLE;
         VkPipelineLayout clusteredLightingPipelineLayout = VK_NULL_HANDLE;
         VkPipelineLayout vsmPageMarkingPipelineLayout = VK_NULL_HANDLE;
         VkPipelineLayout vsmPageCompactPipelineLayout = VK_NULL_HANDLE;
@@ -495,6 +503,7 @@
         VkPipeline grassPackedPrefixPipeline = VK_NULL_HANDLE;
         VkPipeline grassPackedScatterPipeline = VK_NULL_HANDLE;
         VkPipeline grassPackedFinalizePipeline = VK_NULL_HANDLE;
+        VkPipeline grassShadowPageCullPipeline = VK_NULL_HANDLE;
         VkPipeline clusteredLightingPipeline = VK_NULL_HANDLE;
         VkPipeline vsmPageMarkingPipeline = VK_NULL_HANDLE;
         VkPipeline vsmPageCompactPipeline = VK_NULL_HANDLE;
@@ -521,6 +530,7 @@
         std::array<std::array<VkDescriptorSet, 3>, MAX_FRAMES_IN_FLIGHT> grassPackedPrefixSets{};
         std::array<std::array<VkDescriptorSet, 3>, MAX_FRAMES_IN_FLIGHT> grassPackedScatterSets{};
         std::array<std::array<VkDescriptorSet, 3>, MAX_FRAMES_IN_FLIGHT> grassPackedFinalizeSets{};
+        std::array<VkDescriptorSet, MAX_FRAMES_IN_FLIGHT> grassShadowPageCullSets{};
         std::array<VkDescriptorSet, MAX_FRAMES_IN_FLIGHT> sceneGrassPackedCullSets{};
         std::array<VkDescriptorSet, MAX_FRAMES_IN_FLIGHT> sceneGrassBladeCullSets{};
         std::array<VkDescriptorSet, MAX_FRAMES_IN_FLIGHT> sceneGrassClassifySets{};

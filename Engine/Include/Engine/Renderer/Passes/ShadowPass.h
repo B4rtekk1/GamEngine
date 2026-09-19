@@ -97,7 +97,13 @@ namespace Engine {
                     const Culling::IndexedIndirectDrawCount &twoSidedIndirectDraw,
                     std::uint32_t objectCount,
                     VkDescriptorSet grassDescriptorSet = VK_NULL_HANDLE,
-                    const Culling::IndexedIndirectDrawCount *grassIndirectDraw = nullptr);
+                    const Culling::IndexedIndirectDrawCount *grassIndirectDraw = nullptr,
+                    std::uint32_t grassCommandsPerPage = 0);
+
+        /** Exact page transforms used by record(), in its current page order.
+         * The grass VSM culler consumes these before the render pass. */
+        [[nodiscard]] std::vector<Mat4> grassPageMatrices(
+            const std::array<Mat4, ShadowMap::ClipLevelCount>& clipMatrices) const;
 
         void preparePages(
             const std::array<Mat4, ShadowMap::ClipLevelCount>& clipMatrices,

@@ -850,8 +850,40 @@
             const Culling::IndexedIndirectDrawCount* grassShadowDrawPtr = nullptr;
             if (!sceneGpu.grassInstances.empty()) {
                 const auto& lists = grassRenderLists[currentFrame];
-                grassShadowDraw.create(lists.shadowIndirect.handle(), lists.shadowDrawCount.handle(),
-                                       static_cast<uint32_t>(std::max<std::size_t>(1, sceneGpu.grassClusters.size())));
+                // Build the real cluster -> VSM-page overlap stream. The
+                // camera-wide shadow list only limits distance; it must never
+                // be drawn unchanged into every requested virtual page.
+                const auto pageMatrices = shadowPass.grassPageMatrices(shadowClipMatrices);
+                const std::uint32_t pageCount = static_cast<std::uint32_t>(pageMatrices.size());
+                const std::uint32_t clusterCount = static_cast<std::uint32_t>(
+                    std::max<std::size_t>(1, sceneGpu.grassClusters.size()));
+                if (pageCount != 0) {
+                    grassShadowPageMatricesBuffers[currentFrame].update(pageMatrices.data(),
+                        sizeof(Mat4) * pageCount);
+                    const GrassShadowPageCullUniformData pageCullData{pageCount, clusterCount, 0, 0};
+                    grassShadowPageCullUniformBuffers[currentFrame].update(&pageCullData, sizeof(pageCullData));
+                    vkCmdFillBuffer(commandBuffer, grassShadowPageDrawCountBuffers[currentFrame].handle(), 0,
+                        sizeof(std::uint32_t) * pageCount, 0);
+                    const VkMemoryBarrier2 pageCullPrepare{VK_STRUCTURE_TYPE_MEMORY_BARRIER_2, nullptr,
+                        VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT,
+                        VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_STORAGE_READ_BIT | VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT};
+                    const VkDependencyInfo pageCullPrepareInfo{.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO,
+                        .memoryBarrierCount = 1, .pMemoryBarriers = &pageCullPrepare};
+                    vkCmdPipelineBarrier2(commandBuffer, &pageCullPrepareInfo);
+                    vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, grassShadowPageCullPipeline);
+                    const VkDescriptorSet pageCullSet = grassShadowPageCullSets[currentFrame];
+                    vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE,
+                        grassShadowPageCullPipelineLayout, 0, 1, &pageCullSet, 0, nullptr);
+                    vkCmdDispatch(commandBuffer, (clusterCount + 63U) / 64U, pageCount, 1);
+                    const VkMemoryBarrier2 pageCullReady{VK_STRUCTURE_TYPE_MEMORY_BARRIER_2, nullptr,
+                        VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT,
+                        VK_PIPELINE_STAGE_2_DRAW_INDIRECT_BIT, VK_ACCESS_2_INDIRECT_COMMAND_READ_BIT};
+                    const VkDependencyInfo pageCullReadyInfo{.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO,
+                        .memoryBarrierCount = 1, .pMemoryBarriers = &pageCullReady};
+                    vkCmdPipelineBarrier2(commandBuffer, &pageCullReadyInfo);
+                }
+                grassShadowDraw.create(grassShadowPageIndirectBuffers[currentFrame].handle(),
+                    grassShadowPageDrawCountBuffers[currentFrame].handle(), clusterCount);
                 grassShadowDrawPtr = &grassShadowDraw;
                 shadowPass.setGrassShadowVisibleInstances(currentFrame, lists.drawInstances[1].handle());
                 sceneDescriptorPass.setGrassShadowVisibleInstances(currentFrame, lists.drawInstances[1].handle());
@@ -977,7 +1009,8 @@
                     shadowTwoSidedCullingPasses[currentFrame], shadowTwoSidedIndirectDraws[currentFrame],
                     mainLightShadows
                         ? static_cast<std::uint32_t>(gpuObjects.size()) : 0u,
-                    shadowPass.grassShadowDescriptorSet(currentFrame), grassShadowDrawPtr);
+                    shadowPass.grassShadowDescriptorSet(currentFrame), grassShadowDrawPtr,
+                    static_cast<std::uint32_t>(std::max<std::size_t>(1, sceneGpu.grassClusters.size())));
             }
 
             // Scene View has its own descriptor pass and therefore its own
@@ -985,6 +1018,29 @@
             // shadows are disabled, because the forward fragment shader still
             // samples the shadow binding declared by the shared pipeline.
             if (renderSceneViewport) {
+                // The Scene View owns a distinct VSM page table. Rebuild the
+                // shared scratch ranges only after Game View has consumed its
+                // own ranges above.
+                if (!sceneGpu.grassInstances.empty()) {
+                    const auto pageMatrices = sceneDescriptorPass.grassPageMatrices(sceneShadowClipMatrices);
+                    const std::uint32_t pageCount = static_cast<std::uint32_t>(pageMatrices.size());
+                    const std::uint32_t clusterCount = static_cast<std::uint32_t>(
+                        std::max<std::size_t>(1, sceneGpu.grassClusters.size()));
+                    if (pageCount != 0) {
+                        grassShadowPageMatricesBuffers[currentFrame].update(pageMatrices.data(), sizeof(Mat4) * pageCount);
+                        const GrassShadowPageCullUniformData pageCullData{pageCount, clusterCount, 0, 0};
+                        grassShadowPageCullUniformBuffers[currentFrame].update(&pageCullData, sizeof(pageCullData));
+                        vkCmdFillBuffer(commandBuffer, grassShadowPageDrawCountBuffers[currentFrame].handle(), 0, sizeof(std::uint32_t) * pageCount, 0);
+                        const VkMemoryBarrier2 prepare{VK_STRUCTURE_TYPE_MEMORY_BARRIER_2, nullptr, VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT, VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_STORAGE_READ_BIT | VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT};
+                        const VkDependencyInfo prepareInfo{.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO, .memoryBarrierCount = 1, .pMemoryBarriers = &prepare}; vkCmdPipelineBarrier2(commandBuffer, &prepareInfo);
+                        vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, grassShadowPageCullPipeline);
+                        const VkDescriptorSet pageCullSet = grassShadowPageCullSets[currentFrame];
+                        vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, grassShadowPageCullPipelineLayout, 0, 1, &pageCullSet, 0, nullptr);
+                        vkCmdDispatch(commandBuffer, (clusterCount + 63U) / 64U, pageCount, 1);
+                        const VkMemoryBarrier2 ready{VK_STRUCTURE_TYPE_MEMORY_BARRIER_2, nullptr, VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT, VK_PIPELINE_STAGE_2_DRAW_INDIRECT_BIT, VK_ACCESS_2_INDIRECT_COMMAND_READ_BIT};
+                        const VkDependencyInfo readyInfo{.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO, .memoryBarrierCount = 1, .pMemoryBarriers = &ready}; vkCmdPipelineBarrier2(commandBuffer, &readyInfo);
+                    }
+                }
                 sceneDescriptorPass.setShadowInstanceTransforms(currentFrame,
                     shadowInstanceTransformBuffers[currentFrame].handle(), shadowInstanceMaterialBuffers[currentFrame].handle());
                 sceneDescriptorPass.setShadowInstanceTransforms(currentFrame,
@@ -997,7 +1053,8 @@
                     shadowTwoSidedCullingPasses[currentFrame], shadowTwoSidedIndirectDraws[currentFrame],
                     mainLightShadows
                         ? static_cast<std::uint32_t>(gpuObjects.size()) : 0u,
-                    sceneDescriptorPass.grassShadowDescriptorSet(currentFrame), grassShadowDrawPtr);
+                    sceneDescriptorPass.grassShadowDescriptorSet(currentFrame), grassShadowDrawPtr,
+                    static_cast<std::uint32_t>(std::max<std::size_t>(1, sceneGpu.grassClusters.size())));
             }
             gpuTimestampProfiler.endZone(commandBuffer, currentFrame);
             gpuTimestampProfiler.endZone(commandBuffer, currentFrame);

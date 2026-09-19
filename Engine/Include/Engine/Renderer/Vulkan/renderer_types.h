@@ -195,6 +195,13 @@ namespace Engine {
         std::uint32_t padding1{};
         std::uint32_t padding2{};
     };
+    /** Inputs for the VSM-specific grass command compaction pass. */
+    struct alignas(16) GrassShadowPageCullUniformData {
+        std::uint32_t pageCount{};
+        std::uint32_t clusterCount{};
+        std::uint32_t padding0{};
+        std::uint32_t padding1{};
+    };
     /** Vulkan DispatchIndirectCommand, written by the cluster cull pass. */
     struct alignas(4) GrassBladeDispatchData {
         std::uint32_t groupCountX{};

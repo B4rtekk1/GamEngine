@@ -1131,7 +1131,8 @@ void ShadowPass::record(const VkCommandBuffer commandBuffer,
                         const Culling::IndexedIndirectDrawCount& twoSidedIndirectDraw,
                         const std::uint32_t objectCount,
                         const VkDescriptorSet grassDescriptorSet,
-                        const Culling::IndexedIndirectDrawCount* const grassIndirectDraw) {
+                        const Culling::IndexedIndirectDrawCount* const grassIndirectDraw,
+                        const std::uint32_t grassCommandsPerPage) {
     (void)updateMask;
     if (objectCount == 0) {
         invalidateCache();
@@ -1295,7 +1296,12 @@ void ShadowPass::record(const VkCommandBuffer commandBuffer,
                                     pipelineLayout_, 0, 1, &grassDescriptorSet, 0, nullptr);
             vkCmdPushConstants(commandBuffer, pipelineLayout_, VK_SHADER_STAGE_VERTEX_BIT,
                                0, sizeof(Mat4), &pageMatrix);
-            grassIndirectDraw->record(commandBuffer);
+            // Unlike the camera-wide stream, this buffer is partitioned by
+            // VSM page. A page may therefore draw only clusters whose bounds
+            // overlap its exact virtual-page projection.
+            grassIndirectDraw->record(commandBuffer,
+                sizeof(VkDrawIndexedIndirectCommand) * grassCommandsPerPage * pageIndex,
+                sizeof(std::uint32_t) * pageIndex);
             vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, opaquePipeline_);
             vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS,
                                     pipelineLayout_, 0, 1, &sceneDescriptorSet, 0, nullptr);
@@ -1350,6 +1356,24 @@ void ShadowPass::record(const VkCommandBuffer commandBuffer,
     shadowMap_->markInitialized();
     if (objectCount != 0) atlasContentValid_ = true;
     pagesToRender_.clear();
+}
+
+std::vector<Mat4> ShadowPass::grassPageMatrices(
+    const std::array<Mat4, ShadowMap::ClipLevelCount>& clipMatrices) const {
+    std::vector<Mat4> matrices;
+    matrices.reserve(pagesToRender_.size());
+    for (const std::uint32_t physical : pagesToRender_) {
+        const PhysicalPage& page = physicalPages_[physical];
+        glm::mat4 transform{1.0F};
+        transform[0][0] = static_cast<float>(ShadowMap::VirtualPagesPerAxis);
+        transform[1][1] = static_cast<float>(ShadowMap::VirtualPagesPerAxis);
+        transform[3][0] = static_cast<float>(ShadowMap::VirtualPagesPerAxis) -
+                          2.0F * static_cast<float>(page.virtualX) - 1.0F;
+        transform[3][1] = static_cast<float>(ShadowMap::VirtualPagesPerAxis) -
+                          2.0F * static_cast<float>(page.virtualY) - 1.0F;
+        matrices.emplace_back(transform * clipMatrices[page.level].native());
+    }
+    return matrices;
 }
 
 } // namespace Engine

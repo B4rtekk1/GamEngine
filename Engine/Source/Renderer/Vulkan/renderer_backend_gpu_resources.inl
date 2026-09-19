@@ -285,6 +285,16 @@
             if (vkCreateDescriptorSetLayout(device, &layoutInfo, nullptr, &grassPackedCullDescriptorSetLayout) != VK_SUCCESS) {
                 throw std::runtime_error("Could not create packed grass-cull descriptor-set layout");
             }
+            const VkDescriptorSetLayoutBinding grassShadowPageCullBindings[] = {
+                {0, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
+                {1, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
+                {2, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
+                {3, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
+                {4, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
+                {5, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr}};
+            layoutInfo.bindingCount = std::size(grassShadowPageCullBindings); layoutInfo.pBindings = grassShadowPageCullBindings;
+            if (vkCreateDescriptorSetLayout(device, &layoutInfo, nullptr, &grassShadowPageCullDescriptorSetLayout) != VK_SUCCESS)
+                throw std::runtime_error("Could not create grass VSM page-cull descriptor-set layout");
             const VkDescriptorSetLayoutBinding grassBladeCullBindings[] = {
                 {0, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
                 {1, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
@@ -363,6 +373,7 @@
             createLayout(grassScatterDescriptorSetLayout, grassScatterPipelineLayout);
             createLayout(grassFinalizeDescriptorSetLayout, grassFinalizePipelineLayout);
             createLayout(grassPackedCullDescriptorSetLayout, grassPackedCullPipelineLayout);
+            createLayout(grassShadowPageCullDescriptorSetLayout, grassShadowPageCullPipelineLayout);
             createLayout(grassBladeCullDescriptorSetLayout, grassBladeCullPipelineLayout);
             createLayout(grassClassifyDescriptorSetLayout, grassClassifyPipelineLayout);
             createLayout(grassPackedBinDescriptorSetLayout, grassPackedBinPipelineLayout);
@@ -390,6 +401,7 @@
             grassBladeCullPipeline = createComputePipeline("shaders/grass_packed_cull.spv", grassBladeCullPipelineLayout);
             // Cluster cull has the compact 5-binding layout retained above.
             grassPackedCullPipeline = createComputePipeline("shaders/grass_cluster_cull.spv", grassPackedCullPipelineLayout);
+            grassShadowPageCullPipeline = createComputePipeline("shaders/grass_shadow_page_cull.spv", grassShadowPageCullPipelineLayout);
             grassClassifyPipeline = createComputePipeline("shaders/grass_classify.spv", grassClassifyPipelineLayout);
             grassPackedBinPipeline = createComputePipeline("shaders/grass_packed_bin.spv", grassPackedBinPipelineLayout);
             grassPackedPrefixPipeline = createComputePipeline("shaders/grass_packed_prefix.spv", grassPrefixPipelineLayout);
@@ -549,6 +561,23 @@
                     sizeof(zero), VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT |
                     VK_BUFFER_USAGE_TRANSFER_DST_BIT, commandPool, vulkanDevice.graphicsQueue(),
                     vulkanDevice.allocator());
+                const std::size_t grassClusterCapacity = std::max<std::size_t>(1, sceneGpu.grassClusters.size());
+                const std::size_t grassPageCommandCapacity = grassClusterCapacity * ShadowMap::MaxPageUpdatesPerFrame;
+                std::vector<VkDrawIndexedIndirectCommand> emptyGrassPageCommands(grassPageCommandCapacity);
+                std::array<std::uint32_t, ShadowMap::MaxPageUpdatesPerFrame> emptyPageCounts{};
+                std::array<glm::mat4, ShadowMap::MaxPageUpdatesPerFrame> emptyPageMatrices{};
+                grassShadowPageMatricesBuffers[frame].createHostVisible(vulkanDevice.physical(), device,
+                    sizeof(emptyPageMatrices), VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, vulkanDevice.allocator());
+                grassShadowPageMatricesBuffers[frame].update(emptyPageMatrices.data(), sizeof(emptyPageMatrices));
+                grassShadowPageIndirectBuffers[frame].createDeviceLocal(vulkanDevice.physical(), device,
+                    emptyGrassPageCommands.data(), sizeof(VkDrawIndexedIndirectCommand) * emptyGrassPageCommands.size(),
+                    VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+                    commandPool, vulkanDevice.graphicsQueue(), vulkanDevice.allocator());
+                grassShadowPageDrawCountBuffers[frame].createDeviceLocal(vulkanDevice.physical(), device,
+                    emptyPageCounts.data(), sizeof(emptyPageCounts), VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+                    commandPool, vulkanDevice.graphicsQueue(), vulkanDevice.allocator());
+                grassShadowPageCullUniformBuffers[frame].createHostVisible(vulkanDevice.physical(), device,
+                    sizeof(GrassShadowPageCullUniformData), VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT, vulkanDevice.allocator());
                 grassIndirectUniformBuffers[frame].createHostVisible(vulkanDevice.physical(), device,
                     sizeof(GrassIndirectUniformData), VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
                     vulkanDevice.allocator());
@@ -719,15 +748,15 @@
             constexpr uint32_t instanceCullSetCount = MAX_FRAMES_IN_FLIGHT;
             // Per frame: 4 legacy sets, game cluster/blade/classify sets,
             // 14 per-frame shared sets (including four dispatch builders),
-            // plus 24 stream-builder sets.
+            // plus 24 stream-builder sets and one VSM page-cull set.
             // Keep this in lockstep with allocateGrassSets below.
-            constexpr uint32_t grassSetCount = MAX_FRAMES_IN_FLIGHT * 38;
+            constexpr uint32_t grassSetCount = MAX_FRAMES_IN_FLIGHT * 39;
             const uint32_t hiZDescriptorSetCount = hiZBuffers[0].mipCount() * MAX_FRAMES_IN_FLIGHT;
             const uint32_t imageDescriptors = hiZDescriptorSetCount + cullingSetCount;
             const VkDescriptorPoolSize poolSizes[] = {
                 {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, imageDescriptors + MAX_FRAMES_IN_FLIGHT},
-                {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, cullingSetCount * 12 + instanceCullSetCount * 3 + MAX_FRAMES_IN_FLIGHT * 144},
-                {VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, cullingSetCount + MAX_FRAMES_IN_FLIGHT * 30},
+                {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, cullingSetCount * 12 + instanceCullSetCount * 3 + MAX_FRAMES_IN_FLIGHT * 149},
+                {VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, cullingSetCount + MAX_FRAMES_IN_FLIGHT * 31},
                 {VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, hiZDescriptorSetCount},
             };
             VkDescriptorPoolCreateInfo poolInfo{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
@@ -845,6 +874,7 @@
             allocateGrassSets(grassScatterDescriptorSetLayout, grassScatterSets);
             allocateGrassSets(grassFinalizeDescriptorSetLayout, grassFinalizeSets);
             allocateGrassSets(grassPackedCullDescriptorSetLayout, grassPackedCullSets);
+            allocateGrassSets(grassShadowPageCullDescriptorSetLayout, grassShadowPageCullSets);
             allocateGrassSets(grassBladeCullDescriptorSetLayout, grassBladeCullSets);
             allocateGrassSets(grassClassifyDescriptorSetLayout, grassClassifySets);
             allocateGrassSets(grassPackedCullDescriptorSetLayout, sceneGrassPackedCullSets);
@@ -906,6 +936,7 @@
                 updateGrassSet(grassVisibleDispatchBuildSets[frame], {packedLists.visibleCount.handle(), packedLists.dispatchIndirect.handle()}, VK_NULL_HANDLE);
                 updateGrassSet(grassStreamDispatchBuildSets[frame], {packedLists.classifyCounts.handle(), packedLists.dispatchIndirect.handle()}, VK_NULL_HANDLE);
                 updateGrassSet(grassPackedCullSets[frame], {grassClusterBuffers[frame].handle(), packedLists.visibleClusters.handle(), packedLists.visibleClusterCount.handle(), packedLists.bladeCullDispatch.handle()}, grassPackedCullUniformBuffers[frame].handle());
+                updateGrassSet(grassShadowPageCullSets[frame], {grassClusterBuffers[frame].handle(), packedLists.shadowIndirect.handle(), grassShadowPageMatricesBuffers[frame].handle(), grassShadowPageIndirectBuffers[frame].handle(), grassShadowPageDrawCountBuffers[frame].handle()}, grassShadowPageCullUniformBuffers[frame].handle());
                 updateGrassSet(grassBladeCullSets[frame], {generatedGrassInstanceBuffers[frame].handle(), grassClusterBuffers[frame].handle(), packedLists.visibleClusters.handle(), packedLists.visibleClusterCount.handle(), packedLists.visibleInstances.handle(), packedLists.visibleCount.handle()}, grassPackedCullUniformBuffers[frame].handle());
                 updateGrassSet(grassClassifySets[frame], {generatedGrassInstanceBuffers[frame].handle(), grassClusterBuffers[frame].handle(), packedLists.visibleInstances.handle(), packedLists.mainVisibleInstances.handle(), packedLists.shadowVisibleInstances.handle(), packedLists.velocityVisibleInstances.handle(), packedLists.classifyCounts.handle(), packedLists.visibleCount.handle()}, grassClassifyUniformBuffers[frame].handle());
                 const std::array<VkBuffer, 3> classified{packedLists.mainVisibleInstances.handle(), packedLists.shadowVisibleInstances.handle(), packedLists.velocityVisibleInstances.handle()};
@@ -1208,6 +1239,10 @@
             for (Buffer& buffer : grassDeformationBuffers) buffer.destroy();
             for (Buffer& buffer : grassIndirectBuffers) buffer.destroy();
             for (Buffer& buffer : grassDrawCountBuffers) buffer.destroy();
+            for (Buffer& buffer : grassShadowPageMatricesBuffers) buffer.destroy();
+            for (Buffer& buffer : grassShadowPageIndirectBuffers) buffer.destroy();
+            for (Buffer& buffer : grassShadowPageDrawCountBuffers) buffer.destroy();
+            for (Buffer& buffer : grassShadowPageCullUniformBuffers) buffer.destroy();
             for (Buffer& buffer : grassIndirectUniformBuffers) buffer.destroy();
             for (Buffer& buffer : grassPrefixUniformBuffers) buffer.destroy();
             for (Buffer& buffer : grassClassifyUniformBuffers) buffer.destroy();
@@ -1255,6 +1290,7 @@
             if (grassScatterPipeline != VK_NULL_HANDLE) vkDestroyPipeline(device, grassScatterPipeline, nullptr);
             if (grassFinalizePipeline != VK_NULL_HANDLE) vkDestroyPipeline(device, grassFinalizePipeline, nullptr);
             if (grassPackedCullPipeline != VK_NULL_HANDLE) vkDestroyPipeline(device, grassPackedCullPipeline, nullptr);
+            if (grassShadowPageCullPipeline != VK_NULL_HANDLE) vkDestroyPipeline(device, grassShadowPageCullPipeline, nullptr);
             if (grassBladeCullPipeline != VK_NULL_HANDLE) vkDestroyPipeline(device, grassBladeCullPipeline, nullptr);
             if (grassClassifyPipeline != VK_NULL_HANDLE) vkDestroyPipeline(device, grassClassifyPipeline, nullptr);
             if (grassPackedBinPipeline != VK_NULL_HANDLE) vkDestroyPipeline(device, grassPackedBinPipeline, nullptr);
@@ -1282,6 +1318,7 @@
             if (grassScatterPipelineLayout != VK_NULL_HANDLE) vkDestroyPipelineLayout(device, grassScatterPipelineLayout, nullptr);
             if (grassFinalizePipelineLayout != VK_NULL_HANDLE) vkDestroyPipelineLayout(device, grassFinalizePipelineLayout, nullptr);
             if (grassPackedCullPipelineLayout != VK_NULL_HANDLE) vkDestroyPipelineLayout(device, grassPackedCullPipelineLayout, nullptr);
+            if (grassShadowPageCullPipelineLayout != VK_NULL_HANDLE) vkDestroyPipelineLayout(device, grassShadowPageCullPipelineLayout, nullptr);
             if (grassBladeCullPipelineLayout != VK_NULL_HANDLE) vkDestroyPipelineLayout(device, grassBladeCullPipelineLayout, nullptr);
             if (grassClassifyPipelineLayout != VK_NULL_HANDLE) vkDestroyPipelineLayout(device, grassClassifyPipelineLayout, nullptr);
             if (grassPackedBinPipelineLayout != VK_NULL_HANDLE) vkDestroyPipelineLayout(device, grassPackedBinPipelineLayout, nullptr);
@@ -1308,6 +1345,7 @@
             if (grassScatterDescriptorSetLayout != VK_NULL_HANDLE) vkDestroyDescriptorSetLayout(device, grassScatterDescriptorSetLayout, nullptr);
             if (grassFinalizeDescriptorSetLayout != VK_NULL_HANDLE) vkDestroyDescriptorSetLayout(device, grassFinalizeDescriptorSetLayout, nullptr);
             if (grassPackedCullDescriptorSetLayout != VK_NULL_HANDLE) vkDestroyDescriptorSetLayout(device, grassPackedCullDescriptorSetLayout, nullptr);
+            if (grassShadowPageCullDescriptorSetLayout != VK_NULL_HANDLE) vkDestroyDescriptorSetLayout(device, grassShadowPageCullDescriptorSetLayout, nullptr);
             if (grassBladeCullDescriptorSetLayout != VK_NULL_HANDLE) vkDestroyDescriptorSetLayout(device, grassBladeCullDescriptorSetLayout, nullptr);
             if (grassClassifyDescriptorSetLayout != VK_NULL_HANDLE) vkDestroyDescriptorSetLayout(device, grassClassifyDescriptorSetLayout, nullptr);
             if (grassPackedBinDescriptorSetLayout != VK_NULL_HANDLE) vkDestroyDescriptorSetLayout(device, grassPackedBinDescriptorSetLayout, nullptr);
@@ -1325,6 +1363,7 @@
             meshletIndirectPipeline = VK_NULL_HANDLE;
             grassBuildPipeline = grassPrefixPipeline = grassScatterPipeline = grassFinalizePipeline = VK_NULL_HANDLE;
             grassPackedCullPipeline = grassBladeCullPipeline = grassClassifyPipeline = VK_NULL_HANDLE;
+            grassShadowPageCullPipeline = VK_NULL_HANDLE;
             grassPackedBinPipeline = grassPackedPrefixPipeline = grassPackedScatterPipeline = grassPackedFinalizePipeline = VK_NULL_HANDLE;
             hiZCopyPipelineLayout = hiZReducePipelineLayout = cullingPipelineLayout = VK_NULL_HANDLE;
             vsmPageMarkingPipelineLayout = VK_NULL_HANDLE;
@@ -1335,6 +1374,7 @@
             meshletIndirectPipelineLayout = VK_NULL_HANDLE;
             grassBuildPipelineLayout = grassPrefixPipelineLayout = grassScatterPipelineLayout = grassFinalizePipelineLayout = VK_NULL_HANDLE;
             grassPackedCullPipelineLayout = grassBladeCullPipelineLayout = grassClassifyPipelineLayout = VK_NULL_HANDLE;
+            grassShadowPageCullPipelineLayout = VK_NULL_HANDLE;
             grassPackedBinPipelineLayout = grassPackedScatterPipelineLayout = grassPackedFinalizePipelineLayout = VK_NULL_HANDLE;
             hiZCopyDescriptorSetLayout = hiZReduceDescriptorSetLayout = cullingDescriptorSetLayout = VK_NULL_HANDLE;
             vsmPageMarkingDescriptorSetLayout = VK_NULL_HANDLE;
@@ -1345,6 +1385,7 @@
             meshletIndirectDescriptorSetLayout = VK_NULL_HANDLE;
             grassBuildDescriptorSetLayout = grassPrefixDescriptorSetLayout = grassScatterDescriptorSetLayout = grassFinalizeDescriptorSetLayout = VK_NULL_HANDLE;
             grassPackedCullDescriptorSetLayout = grassBladeCullDescriptorSetLayout = grassClassifyDescriptorSetLayout = VK_NULL_HANDLE;
+            grassShadowPageCullDescriptorSetLayout = VK_NULL_HANDLE;
             grassPackedBinDescriptorSetLayout = grassPackedScatterDescriptorSetLayout = grassPackedFinalizeDescriptorSetLayout = VK_NULL_HANDLE;
             for (auto& hiZBuffer : hiZBuffers) hiZBuffer.destroy();
             gpuObjects.clear(); hiZValid.fill(false);
