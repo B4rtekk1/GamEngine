@@ -8,6 +8,14 @@
 #include <memory>
 
 namespace Engine {
+    /** Selects which VSM cache owns this caster. Auto is deliberately
+     * conservative: it is rendered into the dynamic layer. */
+    enum class ShadowCacheMode : std::uint8_t {
+        Auto,
+        Static,
+        Dynamic,
+    };
+
     /**
      * @brief ECS component that makes an entity renderable as a mesh.
      *
@@ -26,6 +34,10 @@ namespace Engine {
 
         /// Whether this mesh contributes to the shadow map.
         bool castShadow{true};
+
+        /// Static casters populate the persistent VSM atlas. A static object
+        /// must not move without changing this mode first.
+        ShadowCacheMode shadowCacheMode{ShadowCacheMode::Auto};
 
         /// Optional spatial batch identifier used by GPU culling. Objects with
         /// the same mesh, shadow flag and identifier share one indirect draw.

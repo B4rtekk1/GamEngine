@@ -11,6 +11,7 @@ struct CullingObjectData
     uint castShadow;
     uint twoSided;
     uint shader;
+    uint shadowCacheMode;
     uint lod1IndexCount;
     uint lod2IndexCount;
     // Squared world-space thresholds. Keeping these squared avoids a sqrt in
@@ -47,7 +48,7 @@ struct CullingUniformData
     uint enableFrustumCulling;
     uint drawCategory;
     uint maxShadowInstances;
-    uint padding0;
+    uint shadowCacheMode;
     uint padding1;
     uint padding2;
 };

@@ -329,12 +329,13 @@
                 std::uint32_t shaderSlot;
                 bool foliagePipeline;
                 bool castShadow;
+                ShadowCacheMode shadowCacheMode;
                 uint32_t cullingBatch;
 
                 bool operator==(const BatchKey& other) const noexcept {
                     return mesh == other.mesh && sectionIndex == other.sectionIndex && shaderSlot == other.shaderSlot &&
                            foliagePipeline == other.foliagePipeline && castShadow == other.castShadow &&
-                           cullingBatch == other.cullingBatch;
+                           shadowCacheMode == other.shadowCacheMode && cullingBatch == other.cullingBatch;
                 }
             };
             struct BatchKeyHash {
@@ -347,6 +348,7 @@
                     const auto shaderHash = std::hash<std::uint32_t>{}(key.shaderSlot);
                     return meshHash ^ (sectionHash + batchHash + shaderHash + static_cast<std::size_t>(key.foliagePipeline) +
                                        static_cast<std::size_t>(key.castShadow) +
+                                       (static_cast<std::size_t>(key.shadowCacheMode) << 3U) +
                                        hashCombineConstant + (meshHash << hashCombineLeftShift) +
                                        (meshHash >> 2U));
                 }
@@ -867,7 +869,7 @@
                                                  const std::uint32_t meshletCount, const AABB& rangeBounds,
                                                  const bool usesFoliagePipeline, const bool forceDistinctBatch) {
                     const BatchKey batchKey{renderer.mesh.resource().get(), sectionIndex, shaderSlot, usesFoliagePipeline,
-                                            castShadow, renderer.cullingBatch};
+                                            castShadow, renderer.shadowCacheMode, renderer.cullingBatch};
                     const auto [batchIt, inserted] = !forceDistinctBatch && optimizationFeatures.instancedRendering
                         ? batchIndices.try_emplace(batchKey, instanceBatches.size())
                         : std::pair{batchIndices.end(), true};
@@ -895,6 +897,7 @@
                             .instanceCount = 0,
                             .shaderSlot = shaderSlot,
                             .castShadow = castShadow,
+                            .shadowCacheMode = renderer.shadowCacheMode,
                             // The foliage stream is drawn after opaque geometry. Route
                             // blend here until transparent draws have a sorted stream.
                             .twoSided = usesFoliagePipeline,

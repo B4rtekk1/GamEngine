@@ -153,6 +153,12 @@ namespace Engine {
             modify<MeshRendererComponent>([enabled](auto& renderer) { renderer.castShadow = enabled; });
         }
 
+        /** Chooses the static or dynamic virtual-shadow cache for this mesh. */
+        void setShadowCacheMode(const ShadowCacheMode mode) {
+            ensureMeshRenderer();
+            modify<MeshRendererComponent>([mode](auto& renderer) { renderer.shadowCacheMode = mode; });
+        }
+
         void setCullingBatch(std::uint32_t batch) {
             ensureMeshRenderer();
             modify<MeshRendererComponent>([batch](auto& renderer) { renderer.cullingBatch = batch; });

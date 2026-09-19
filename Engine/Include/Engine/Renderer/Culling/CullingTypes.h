@@ -54,6 +54,9 @@ namespace Engine::Culling {
         std::uint32_t twoSided;
         /// MaterialShader value used to route the command into a pipeline bin.
         std::uint32_t shader;
+        /// MeshRendererComponent::ShadowCacheMode. Kept per draw batch so
+        /// static and dynamic VSM streams can never be merged.
+        std::uint32_t shadowCacheMode{};
         std::uint32_t lod1IndexCount;
         std::uint32_t lod2IndexCount;
         /// Squared world-space distance at which LOD1 becomes active.
@@ -104,7 +107,8 @@ namespace Engine::Culling {
         std::uint32_t drawCategory;
         /// Number of compact shadow transforms reserved for each virtual page.
         std::uint32_t maxShadowInstances;
-        std::uint32_t padding0{};
+        /// ShadowCacheMode requested by a layered VSM culling pass.
+        std::uint32_t shadowCacheMode{};
         std::uint32_t padding1{};
         std::uint32_t padding2{};
     };

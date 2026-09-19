@@ -1,5 +1,6 @@
 #pragma once
 
+#include "Engine/ECS/Components/MeshRendererComponent.h"
 #include "Engine/Math/AABB.h"
 #include "Engine/Renderer/Culling/CullingTypes.h"
 #include "Engine/Renderer/Materials/MaterialBuffer.h"
@@ -64,6 +65,7 @@ namespace Engine {
             /// GPU-culling bin of the built-in or cooked Shader Graph pipeline.
             std::uint32_t shaderSlot{};
             bool castShadow{true};
+            ShadowCacheMode shadowCacheMode{ShadowCacheMode::Auto};
             /// True for masked/double-sided vegetation that needs its own raster pipeline.
             bool twoSided{false};
             AABB worldBounds{};
