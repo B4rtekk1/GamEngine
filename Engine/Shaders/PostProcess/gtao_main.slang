@@ -117,24 +117,37 @@ void main(uint3 groupId:SV_GroupID,uint3 threadId:SV_GroupThreadID,uint3 id:SV_D
   float3 projectedNormal=normal-bitangent*dot(normal,bitangent);float normalLength=length(projectedNormal);if(normalLength<1e-4)continue;
   projectedNormal/=normalLength;float normalCos=saturate(dot(projectedNormal,viewDir));float normalAngle=sign(dot(tangent,projectedNormal))*acos(normalCos);
   float lowHorizon[2]={cos(normalAngle+Pi*.5),cos(normalAngle-Pi*.5)};float horizonCos[2]={lowHorizon[0],lowHorizon[1]};
-  for(uint side=0;side<2;++side)for(uint step=0;step<steps;++step){
-   float stepNoise=frac(localNoise.y+float(d+step*steps)*.61803398875);
-   float t=pow((float(step)+stepNoise)/float(steps),2)+minSampleDistance;
-   float2 floatOffset=ray*radiusPixels*(side==0?1.0:-1.0)*t;
-   float offsetLength=length(floatOffset);
-   float sampleMip=float(settings.sourceMip)+min(max(log2(max(offsetLength,1.0))-3.30,0.0),float(settings.maxSampleMip));
-   int2 offset=int2(round(floatOffset));if(!any(offset))continue;
-   int2 samplePixel=clamp(p+offset,int2(0,0),size-1),tilePixel=local+offset;
-   uint selectedMip=uint(round(sampleMip));
-   bool canUseShared=selectedMip==settings.sourceMip&&all(tilePixel>=int2(0,0))&&all(tilePixel<int2(16,16));
-   float sample=canUseShared?depthTile[tilePixel.y][tilePixel.x]:horizonDepth.SampleLevel((float2(samplePixel)+.5)/float2(size),sampleMip).r;
-   if(sample>=BackgroundDepth)continue;
-   float3 v=positionFromDepth(samplePixel,sample,uint2(w,h))-center;float dist2=dot(v,v);if(dist2<1e-6)continue;
-   float sampleDistance=sqrt(dist2);
-   float sampleHorizonCos=dot(v/sampleDistance,viewDir);
-   float weight=saturate(sampleDistance*falloffMul+falloffAdd);
-   sampleHorizonCos=lerp(lowHorizon[side],sampleHorizonCos,weight);
-   horizonCos[side]=max(horizonCos[side],sampleHorizonCos);
+  // Issue two independent depth reads before consuming either result.  The
+  // texture fetch latency is then overlapped with the second fetch instead of
+  // leaving the warp stalled at the first sample's background test.  Keeping
+  // this at two limits the extra live state to two depths and two positions.
+  for(uint side=0;side<2;++side)for(uint firstStep=0;firstStep<steps;firstStep+=2){
+   float samples[2]={BackgroundDepth,BackgroundDepth};int2 samplePixels[2]={p,p};
+   [unroll]for(uint lane=0;lane<2;++lane){
+    uint step=firstStep+lane;if(step>=steps)continue;
+    float stepNoise=frac(localNoise.y+float(d+step*steps)*.61803398875);
+    float t=pow((float(step)+stepNoise)/float(steps),2)+minSampleDistance;
+    float2 floatOffset=ray*radiusPixels*(side==0?1.0:-1.0)*t;
+    float offsetLength=length(floatOffset);
+    // The sampler uses nearest-mip filtering.  Quantize before the sample so
+    // its LOD input matches both the shared-tile decision and the actual
+    // discrete mip selected by the hardware.
+    uint selectedMip=uint(round(float(settings.sourceMip)+min(max(log2(max(offsetLength,1.0))-3.30,0.0),float(settings.maxSampleMip))));
+    int2 offset=int2(round(floatOffset));if(!any(offset))continue;
+    int2 samplePixel=clamp(p+offset,int2(0,0),size-1),tilePixel=local+offset;
+    bool canUseShared=selectedMip==settings.sourceMip&&all(tilePixel>=int2(0,0))&&all(tilePixel<int2(16,16));
+    samplePixels[lane]=samplePixel;
+    samples[lane]=canUseShared?depthTile[tilePixel.y][tilePixel.x]:horizonDepth.SampleLevel((float2(samplePixel)+.5)/float2(size),float(selectedMip)).r;
+   }
+   [unroll]for(uint lane=0;lane<2;++lane){
+    float sample=samples[lane];if(sample>=BackgroundDepth)continue;
+    float3 v=positionFromDepth(samplePixels[lane],sample,uint2(w,h))-center;float dist2=dot(v,v);if(dist2<1e-6)continue;
+    float sampleDistance=sqrt(dist2);
+    float sampleHorizonCos=dot(v/sampleDistance,viewDir);
+    float weight=saturate(sampleDistance*falloffMul+falloffAdd);
+    sampleHorizonCos=lerp(lowHorizon[side],sampleHorizonCos,weight);
+    horizonCos[side]=max(horizonCos[side],sampleHorizonCos);
+   }
   }
   // XeGTAO keeps these horizon angles unclamped.  The projected-normal
   // correction counters its slight high-slope over-darkening instead.
