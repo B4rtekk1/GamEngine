@@ -126,13 +126,15 @@ void main(uint3 groupId:SV_GroupID,uint3 threadId:SV_GroupThreadID,uint3 id:SV_D
    [unroll]for(uint lane=0;lane<2;++lane){
     uint step=firstStep+lane;if(step>=steps)continue;
     float stepNoise=frac(localNoise.y+float(d+step*steps)*.61803398875);
-    float t=pow((float(step)+stepNoise)/float(steps),2)+minSampleDistance;
+    float x=(float(step)+stepNoise)/float(steps);
+    float t=x*x+minSampleDistance;
     float2 floatOffset=ray*radiusPixels*(side==0?1.0:-1.0)*t;
-    float offsetLength=length(floatOffset);
+    float offsetLength2=dot(floatOffset,floatOffset);
     // The sampler uses nearest-mip filtering.  Quantize before the sample so
     // its LOD input matches both the shared-tile decision and the actual
     // discrete mip selected by the hardware.
-    uint selectedMip=uint(round(float(settings.sourceMip)+min(max(log2(max(offsetLength,1.0))-3.30,0.0),float(settings.maxSampleMip))));
+    float sampleMip=.5*log2(max(offsetLength2,1.0))-3.30;
+    uint selectedMip=uint(round(float(settings.sourceMip)+min(max(sampleMip,0.0),float(settings.maxSampleMip))));
     int2 offset=int2(round(floatOffset));if(!any(offset))continue;
     int2 samplePixel=clamp(p+offset,int2(0,0),size-1),tilePixel=local+offset;
     bool canUseShared=selectedMip==settings.sourceMip&&all(tilePixel>=int2(0,0))&&all(tilePixel<int2(16,16));

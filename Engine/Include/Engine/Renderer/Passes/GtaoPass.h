@@ -38,20 +38,24 @@ public:
                 std::uint32_t sampleIndex, VkImageView depthView,
                 VkSampler depthSampler, VkImageView viewNormal,
                 VkSampler viewNormalSampler, bool useExternalNormals, const Mat4& inverseProjection);
-    [[nodiscard]] VkImageView resultView() const noexcept { return full_.imageView(); }
-    [[nodiscard]] VkSampler resultSampler() const noexcept { return full_.sampler(); }
+    [[nodiscard]] VkImageView resultView() const noexcept {
+        return nativeResolution_ ? filtered_.imageView() : full_.imageView();
+    }
+    [[nodiscard]] VkSampler resultSampler() const noexcept {
+        return nativeResolution_ ? filtered_.sampler() : full_.sampler();
+    }
     [[nodiscard]] VkImageView debugView(GtaoDebugView view) const noexcept {
         switch (view) {
         case GtaoDebugView::Raw: return raw_.imageView();
         case GtaoDebugView::Filtered: return filtered_.imageView();
-        default: return full_.imageView();
+        default: return resultView();
         }
     }
     [[nodiscard]] VkSampler debugSampler(GtaoDebugView view) const noexcept {
         switch (view) {
         case GtaoDebugView::Raw: return raw_.sampler();
         case GtaoDebugView::Filtered: return filtered_.sampler();
-        default: return full_.sampler();
+        default: return resultSampler();
         }
     }
 
@@ -62,6 +66,7 @@ private:
     VkDevice device_ = VK_NULL_HANDLE;
     VkExtent2D fullExtent_{};
     VkExtent2D halfExtent_{};
+    bool nativeResolution_ = false;
     GtaoQualitySettings quality_ = gtaoQualitySettings(GtaoQuality::High);
     // Descriptor writes must not race command buffers submitted for earlier
     // frames.  This renderer has three frame slots.
