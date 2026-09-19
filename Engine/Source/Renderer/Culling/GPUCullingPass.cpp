@@ -28,7 +28,8 @@ namespace Engine::Culling {
         const std::uint32_t maxDrawCount,
         const VkBuffer candidateCountBuffer,
         const VkBuffer candidateDispatchBuffer,
-        const Buffer *const pageWorkBuffer
+        const Buffer *const pageWorkBuffer,
+        const VkBuffer shadowTransformCountBuffer
     ) {
         if (
             device == VK_NULL_HANDLE ||
@@ -53,6 +54,7 @@ namespace Engine::Culling {
         m_candidateCountBuffer = candidateCountBuffer;
         m_candidateDispatchBuffer = candidateDispatchBuffer;
         m_pageWorkBuffer = pageWorkBuffer;
+        m_shadowTransformCountBuffer = shadowTransformCountBuffer;
         m_maxDrawCount = maxDrawCount;
     }
 
@@ -472,7 +474,11 @@ namespace Engine::Culling {
         m_pageWorkBuffer->update(pages.data(), sizeof(ShadowPageWork) * pages.size());
         vkCmdFillBuffer(commandBuffer, m_drawCountBuffer, 0,
                         sizeof(std::uint32_t) * pages.size(), 0);
-        const VkBufferMemoryBarrier2 barriers[2]{
+        if (m_shadowTransformCountBuffer != VK_NULL_HANDLE) {
+            vkCmdFillBuffer(commandBuffer, m_shadowTransformCountBuffer, 0,
+                            sizeof(std::uint32_t) * pages.size(), 0);
+        }
+        const VkBufferMemoryBarrier2 barriers[3]{
             {
                 .sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER_2,
                 .srcStageMask = VK_PIPELINE_STAGE_2_HOST_BIT,
@@ -490,11 +496,21 @@ namespace Engine::Culling {
                 .dstAccessMask = VK_ACCESS_2_SHADER_STORAGE_READ_BIT | VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT,
                 .buffer = m_drawCountBuffer, .offset = 0,
                 .size = sizeof(std::uint32_t) * pages.size()
+            },
+            {
+                .sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER_2,
+                .srcStageMask = VK_PIPELINE_STAGE_2_TRANSFER_BIT,
+                .srcAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT,
+                .dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                .dstAccessMask = VK_ACCESS_2_SHADER_STORAGE_READ_BIT | VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT,
+                .buffer = m_shadowTransformCountBuffer, .offset = 0,
+                .size = sizeof(std::uint32_t) * pages.size()
             }
         };
         const VkDependencyInfo clearDependency{
             .sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO,
-            .bufferMemoryBarrierCount = 2, .pBufferMemoryBarriers = barriers
+            .bufferMemoryBarrierCount = m_shadowTransformCountBuffer == VK_NULL_HANDLE ? 2U : 3U,
+            .pBufferMemoryBarriers = barriers
         };
         vkCmdPipelineBarrier2(commandBuffer, &clearDependency);
 
@@ -564,8 +580,17 @@ namespace Engine::Culling {
                 .offset = 0, .size = sizeof(std::uint32_t) * pages.size(),
             },
         };
+        const VkMemoryBarrier2 shadowTransformBarrier{
+            .sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER_2,
+            .srcStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+            .srcAccessMask = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT,
+            .dstStageMask = VK_PIPELINE_STAGE_2_VERTEX_SHADER_BIT,
+            .dstAccessMask = VK_ACCESS_2_SHADER_STORAGE_READ_BIT
+        };
         const VkDependencyInfo drawDependency{
             .sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO,
+            .memoryBarrierCount = m_shadowTransformCountBuffer == VK_NULL_HANDLE ? 0U : 1U,
+            .pMemoryBarriers = m_shadowTransformCountBuffer == VK_NULL_HANDLE ? nullptr : &shadowTransformBarrier,
             .bufferMemoryBarrierCount = 2, .pBufferMemoryBarriers = drawBarriers,
         };
         vkCmdPipelineBarrier2(commandBuffer, &drawDependency);

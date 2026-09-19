@@ -380,6 +380,13 @@
         std::array<Buffer, MAX_FRAMES_IN_FLIGHT> shadowTwoSidedCandidateCountBuffers;
         std::array<Buffer, MAX_FRAMES_IN_FLIGHT> shadowCandidateDispatchBuffers;
         std::array<Buffer, MAX_FRAMES_IN_FLIGHT> shadowTwoSidedCandidateDispatchBuffers;
+        // Per-page compact float3x4 streams consumed directly by shadow VS.
+        std::array<Buffer, MAX_FRAMES_IN_FLIGHT> shadowInstanceTransformBuffers;
+        std::array<Buffer, MAX_FRAMES_IN_FLIGHT> shadowTwoSidedInstanceTransformBuffers;
+        std::array<Buffer, MAX_FRAMES_IN_FLIGHT> shadowInstanceTransformCountBuffers;
+        std::array<Buffer, MAX_FRAMES_IN_FLIGHT> shadowTwoSidedInstanceTransformCountBuffers;
+        std::array<Buffer, MAX_FRAMES_IN_FLIGHT> shadowInstanceMaterialBuffers;
+        std::array<Buffer, MAX_FRAMES_IN_FLIGHT> shadowTwoSidedInstanceMaterialBuffers;
         // One CPU-populated SSBO per frame, shared by both shadow cull passes.
         std::array<Buffer, MAX_FRAMES_IN_FLIGHT> shadowPageWorkBuffers;
         // GPU-written receiver requests. They are host-visible only so the

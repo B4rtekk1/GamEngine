@@ -46,6 +46,10 @@ struct CullingUniformData
     uint shadowPass;
     uint enableFrustumCulling;
     uint drawCategory;
+    uint maxShadowInstances;
+    uint padding0;
+    uint padding1;
+    uint padding2;
 };
 
 static const float3 UNIT_AABB_CORNERS[8] =

@@ -90,6 +90,7 @@ namespace Engine {
                     std::uint32_t updateMask,
                     VkBuffer vertexBuffer, VkBuffer instanceBuffer, VkBuffer indexBuffer,
                     VkDescriptorSet sceneDescriptorSet,
+                    VkDescriptorSet twoSidedSceneDescriptorSet,
                     const Culling::GPUCullingPass &cullingPass,
                     const Culling::IndexedIndirectDrawCount &indirectDraw,
                     const Culling::GPUCullingPass &twoSidedCullingPass,
@@ -122,9 +123,14 @@ namespace Engine {
         [[nodiscard]] VkDescriptorSet grassDescriptorSet(std::uint32_t frameIndex) const;
         [[nodiscard]] VkDescriptorSet grassVelocityDescriptorSet(std::uint32_t frameIndex) const;
         [[nodiscard]] VkDescriptorSet grassShadowDescriptorSet(std::uint32_t frameIndex) const;
+        [[nodiscard]] VkDescriptorSet shadowDescriptorSet(std::uint32_t frameIndex) const;
+        [[nodiscard]] VkDescriptorSet shadowTwoSidedDescriptorSet(std::uint32_t frameIndex) const;
         void setGrassVisibleInstances(std::uint32_t frameIndex, VkBuffer visibleInstances) const;
         void setGrassVelocityVisibleInstances(std::uint32_t frameIndex, VkBuffer visibleInstances) const;
         void setGrassShadowVisibleInstances(std::uint32_t frameIndex, VkBuffer visibleInstances) const;
+        /** Bind the GPU-compacted shadow-only transform/material streams. */
+        void setShadowInstanceTransforms(std::uint32_t frameIndex, VkBuffer transforms,
+                                         VkBuffer materialOffsets, bool twoSided = false) const;
 
         // Packed grass reserves bindings 3/7 for cluster/deformation data.
         // this explicit prevents a future grass-only descriptor set from
@@ -179,6 +185,9 @@ namespace Engine {
         std::vector<VkDescriptorSet> grassDescriptorSets_;
         std::vector<VkDescriptorSet> grassVelocityDescriptorSets_;
         std::vector<VkDescriptorSet> grassShadowDescriptorSets_;
+        // Isolated from forward descriptors: bindings 5/6 are shadow-only.
+        std::vector<VkDescriptorSet> shadowDescriptorSets_;
+        std::vector<VkDescriptorSet> shadowTwoSidedDescriptorSets_;
         // Per-frame-slot descriptor fingerprints. These setters are called
         // while recording, so avoid rewriting an unchanged binding every frame.
         mutable std::vector<VkDescriptorImageInfo> gtaoDescriptorCache_;

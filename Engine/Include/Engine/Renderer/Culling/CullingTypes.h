@@ -102,5 +102,10 @@ namespace Engine::Culling {
         std::uint32_t enableFrustumCulling;
         /// 0: opaque-only, 1: double-sided-only, 2: all objects (shadow pass).
         std::uint32_t drawCategory;
+        /// Number of compact shadow transforms reserved for each virtual page.
+        std::uint32_t maxShadowInstances;
+        std::uint32_t padding0{};
+        std::uint32_t padding1{};
+        std::uint32_t padding2{};
     };
 }

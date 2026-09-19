@@ -948,10 +948,14 @@
                                                              gtaoPass.debugView(gtaoDebugView),
                                                              VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
                 shadowPass.setGtaoTexture(currentFrame, gtaoDebugTexture);
+                shadowPass.setShadowInstanceTransforms(currentFrame,
+                    shadowInstanceTransformBuffers[currentFrame].handle(), shadowInstanceMaterialBuffers[currentFrame].handle());
+                shadowPass.setShadowInstanceTransforms(currentFrame,
+                    shadowTwoSidedInstanceTransformBuffers[currentFrame].handle(), shadowTwoSidedInstanceMaterialBuffers[currentFrame].handle(), true);
                 shadowPass.record(
                     commandBuffer, shadowClipMatrices, shadowClipUpdateMask, vertexBuffer.handle(),
                     instanceBuffers[currentFrame].handle(), indexBuffer.handle(),
-                    shadowPass.descriptorSet(currentFrame), shadowCullingPasses[currentFrame],
+                    shadowPass.shadowDescriptorSet(currentFrame), shadowPass.shadowTwoSidedDescriptorSet(currentFrame), shadowCullingPasses[currentFrame],
                     shadowIndirectDraws[currentFrame],
                     shadowTwoSidedCullingPasses[currentFrame], shadowTwoSidedIndirectDraws[currentFrame],
                     mainLightShadows
@@ -964,10 +968,14 @@
             // shadows are disabled, because the forward fragment shader still
             // samples the shadow binding declared by the shared pipeline.
             if (renderSceneViewport) {
+                sceneDescriptorPass.setShadowInstanceTransforms(currentFrame,
+                    shadowInstanceTransformBuffers[currentFrame].handle(), shadowInstanceMaterialBuffers[currentFrame].handle());
+                sceneDescriptorPass.setShadowInstanceTransforms(currentFrame,
+                    shadowTwoSidedInstanceTransformBuffers[currentFrame].handle(), shadowTwoSidedInstanceMaterialBuffers[currentFrame].handle(), true);
                 sceneDescriptorPass.record(
                     commandBuffer, sceneShadowClipMatrices, sceneShadowClipUpdateMask,
                     vertexBuffer.handle(), instanceBuffers[currentFrame].handle(), indexBuffer.handle(),
-                    sceneDescriptorPass.descriptorSet(currentFrame), shadowCullingPasses[currentFrame],
+                    sceneDescriptorPass.shadowDescriptorSet(currentFrame), sceneDescriptorPass.shadowTwoSidedDescriptorSet(currentFrame), shadowCullingPasses[currentFrame],
                     shadowIndirectDraws[currentFrame],
                     shadowTwoSidedCullingPasses[currentFrame], shadowTwoSidedIndirectDraws[currentFrame],
                     mainLightShadows

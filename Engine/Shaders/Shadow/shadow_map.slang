@@ -6,8 +6,9 @@ struct PushConstants
 };
 
 [[vk::binding(1, 0)]] ConstantBuffer<RendererFrameData> frame;
-[[vk::binding(5, 0)]] StructuredBuffer<RendererInstanceData> visibleInstances;
-[[vk::binding(6, 0)]] StructuredBuffer<uint> visibleInstanceIndices;
+struct ShadowInstanceTransform { float4 row0; float4 row1; float4 row2; };
+[[vk::binding(5, 0)]] StructuredBuffer<ShadowInstanceTransform> shadowTransforms;
+[[vk::binding(6, 0)]] StructuredBuffer<uint> shadowMaterialOffsets;
 [[vk::push_constant]] ConstantBuffer<PushConstants> pushConstants;
 
 struct ShadowVertexInput
@@ -30,19 +31,16 @@ struct ShadowVertexOutput
 ShadowVertexOutput vertexMain(ShadowVertexInput input, uint instanceIndex : SV_InstanceID,
                               uint baseInstance : SV_StartInstanceLocation)
 {
-    RendererInstanceData instance = visibleInstances[visibleInstanceIndices[baseInstance + instanceIndex]];
+    const uint transformIndex = baseInstance + instanceIndex;
+    const ShadowInstanceTransform transform = shadowTransforms[transformIndex];
     ShadowVertexOutput output;
     const float3 localPosition = input.position;
-    float4 q = instance.rotation;
-    float3x3 rotationMatrix = float3x3(
-        1.0 - 2.0 * (q.y * q.y + q.z * q.z), 2.0 * (q.x * q.y + q.z * q.w), 2.0 * (q.x * q.z - q.y * q.w),
-        2.0 * (q.x * q.y - q.z * q.w), 1.0 - 2.0 * (q.x * q.x + q.z * q.z), 2.0 * (q.y * q.z + q.x * q.w),
-        2.0 * (q.x * q.z + q.y * q.w), 2.0 * (q.y * q.z - q.x * q.w), 1.0 - 2.0 * (q.x * q.x + q.y * q.y));
-    float4 worldPosition = float4(mul(localPosition * instance.scaleBase.xyz, rotationMatrix) +
-                                  instance.positionMaterial.xyz, 1.0);
+    float4 worldPosition = float4(dot(transform.row0, float4(localPosition, 1.0)),
+                                  dot(transform.row1, float4(localPosition, 1.0)),
+                                  dot(transform.row2, float4(localPosition, 1.0)), 1.0);
     output.position = mul(worldPosition, pushConstants.lightSpace);
     output.texCoord = input.texCoord;
-    output.materialIndex = asuint(instance.positionMaterial.w) + input.materialIndex;
+    output.materialIndex = shadowMaterialOffsets[transformIndex] + input.materialIndex;
     output.texCoord1 = input.texCoord1;
     return output;
 }

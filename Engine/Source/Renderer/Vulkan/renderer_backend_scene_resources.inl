@@ -2399,6 +2399,7 @@
             data.shadowPass = 1;
             data.enableFrustumCulling = optimizationFeatures.gpuCulling ? 1u : 0u;
             data.drawCategory = 0;
+            data.maxShadowInstances = static_cast<uint32_t>(std::max<std::size_t>(1, instanceModels.size()));
             shadowCullingUniformBuffers[frame].update(&data, sizeof(data));
             data.drawCategory = 1;
             shadowTwoSidedCullingUniformBuffers[frame].update(&data, sizeof(data));

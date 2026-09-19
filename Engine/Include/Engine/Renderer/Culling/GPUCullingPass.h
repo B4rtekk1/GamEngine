@@ -59,7 +59,8 @@ namespace Engine::Culling
             std::uint32_t maxDrawCount,
             VkBuffer candidateCountBuffer = VK_NULL_HANDLE,
             VkBuffer candidateDispatchBuffer = VK_NULL_HANDLE,
-            const Buffer* pageWorkBuffer = nullptr
+            const Buffer* pageWorkBuffer = nullptr,
+            VkBuffer shadowTransformCountBuffer = VK_NULL_HANDLE
         );
 
         /**
@@ -138,6 +139,7 @@ namespace Engine::Culling
         VkBuffer m_candidateCountBuffer{VK_NULL_HANDLE};
         VkBuffer m_candidateDispatchBuffer{VK_NULL_HANDLE};
         const Buffer* m_pageWorkBuffer{};
+        VkBuffer m_shadowTransformCountBuffer{VK_NULL_HANDLE};
 
         std::uint32_t m_maxDrawCount{0};
     };

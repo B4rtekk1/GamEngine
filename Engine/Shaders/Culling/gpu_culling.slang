@@ -1,4 +1,5 @@
 import Culling.CullingTypes;
+import Common.SceneData;
 
 [[vk::binding(0, 0)]] StructuredBuffer<CullingObjectData> objects;
 [[vk::binding(1, 0)]] RWStructuredBuffer<IndexedDrawCommand> commands;
@@ -24,6 +25,14 @@ struct ShadowPageWork
     uint virtualPage;
 };
 [[vk::binding(8, 0)]] StructuredBuffer<ShadowPageWork> shadowPageWork;
+// Shadow-only output.  A page owns one fixed-capacity slice; commands point
+// directly into that slice with firstInstance, so VS needs no ID indirection.
+struct ShadowInstanceTransform { float4 row0; float4 row1; float4 row2; };
+[[vk::binding(9, 0)]] StructuredBuffer<RendererInstanceData> rendererInstances;
+[[vk::binding(10, 0)]] StructuredBuffer<uint> rendererInstanceIndices;
+[[vk::binding(11, 0)]] RWStructuredBuffer<ShadowInstanceTransform> shadowTransforms;
+[[vk::binding(12, 0)]] RWStructuredBuffer<uint> shadowTransformCounts;
+[[vk::binding(13, 0)]] RWStructuredBuffer<uint> shadowMaterialOffsets;
 
 struct CullingPushConstants
 {
@@ -41,7 +50,27 @@ struct CullingPushConstants
 
 [[vk::push_constant]] ConstantBuffer<CullingPushConstants> pushConstants;
 
-void appendDraw(bool visible, CullingObjectData objectData, uint drawSlot)
+ShadowInstanceTransform makeShadowTransform(RendererInstanceData instance)
+{
+    const float4 q = instance.rotation;
+    const float3 s = instance.scaleBase.xyz;
+    ShadowInstanceTransform result;
+    // These are rows of the affine transform for the row-vector convention
+    // used by the graphics shaders: dot(rowN, float4(localPosition, 1)).
+    result.row0 = float4(s.x * (1.0 - 2.0 * (q.y*q.y + q.z*q.z)),
+                         s.y * (2.0 * (q.x*q.y - q.z*q.w)),
+                         s.z * (2.0 * (q.x*q.z + q.y*q.w)), instance.positionMaterial.x);
+    result.row1 = float4(s.x * (2.0 * (q.x*q.y + q.z*q.w)),
+                         s.y * (1.0 - 2.0 * (q.x*q.x + q.z*q.z)),
+                         s.z * (2.0 * (q.y*q.z - q.x*q.w)), instance.positionMaterial.y);
+    result.row2 = float4(s.x * (2.0 * (q.x*q.z - q.y*q.w)),
+                         s.y * (2.0 * (q.y*q.z + q.x*q.w)),
+                         s.z * (1.0 - 2.0 * (q.x*q.x + q.y*q.y)), instance.positionMaterial.z);
+    return result;
+}
+
+void appendDraw(bool visible, CullingObjectData objectData, uint drawSlot,
+                bool emitShadowTransforms)
 {
     // Reserve one contiguous range per wave.  Calling this from every active
     // lane is important: wave operations must not be nested in divergent flow.
@@ -80,6 +109,31 @@ void appendDraw(bool visible, CullingObjectData objectData, uint drawSlot)
     command.firstIndex = objectData.firstIndex;
     command.vertexOffset = int(objectData.vertexOffset);
     command.firstInstance = objectData.firstInstance;
+    if (emitShadowTransforms)
+    {
+        uint transformBase = 0;
+        InterlockedAdd(shadowTransformCounts[drawSlot], objectData.instanceCount, transformBase);
+        // Keep every page's destination range independent, allowing all page
+        // rows of the 2D culling dispatch to compact concurrently.
+        if (transformBase + objectData.instanceCount <= culling.maxShadowInstances)
+        {
+            const uint destination = drawSlot * culling.maxShadowInstances + transformBase;
+            for (uint instanceOffset = 0; instanceOffset < objectData.instanceCount; ++instanceOffset)
+            {
+                const uint source = rendererInstanceIndices[objectData.firstInstance + instanceOffset];
+                const RendererInstanceData instance = rendererInstances[source];
+                shadowTransforms[destination + instanceOffset] = makeShadowTransform(instance);
+                shadowMaterialOffsets[destination + instanceOffset] = asuint(instance.positionMaterial.w);
+            }
+            command.firstInstance = destination;
+        }
+        else
+        {
+            // Capacity is sized to all renderer instances. This fallback is
+            // defensive: never let an overflow read another page's slice.
+            command.instanceCount = 0;
+        }
+    }
     commands[drawSlot * culling.maxDrawCount + destinationIndex] = command;
 }
 
@@ -351,5 +405,6 @@ void main(uint3 dispatchThreadId : SV_DispatchThreadID)
         appendBinnedDraw(visible, objectData);
     else
         appendDraw(visible, objectData,
-                   batchedShadowPages ? pageWork.drawSlot : pushConstants.drawSlot);
+                   batchedShadowPages ? pageWork.drawSlot : pushConstants.drawSlot,
+                   batchedShadowPages && culling.shadowPass != 0 && culling.maxShadowInstances != 0);
 }
