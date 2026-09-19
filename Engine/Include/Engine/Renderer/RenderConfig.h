@@ -59,8 +59,8 @@ namespace Engine {
         case GtaoQuality::Medium: return {.resolutionScale=.5F, .directions=4, .stepsPerDirection=3, .depthMipCount=3, .denoisePassCount=1, .temporal=false, .historyWeight=0.F, .specularOcclusion=false, .bentNormals=false};
         // Match Intel XeGTAO High: 3 slices, 3 samples per side, at native
         // resolution. Half-resolution AO remains available in Low/Medium.
-        case GtaoQuality::High:   return {.resolutionScale=1.F, .directions=3, .stepsPerDirection=3, .depthMipCount=5, .denoisePassCount=2, .temporal=false, .historyWeight=0.F, .specularOcclusion=false, .bentNormals=false};
-        case GtaoQuality::Ultra:  return {.resolutionScale=1.F, .directions=8, .stepsPerDirection=4, .depthMipCount=5, .denoisePassCount=2, .temporal=false, .historyWeight=0.F, .specularOcclusion=false, .bentNormals=false};
+        case GtaoQuality::High:   return {.resolutionScale=1.F, .directions=3, .stepsPerDirection=3, .depthMipCount=5, .denoisePassCount=1, .temporal=false, .historyWeight=0.F, .specularOcclusion=false, .bentNormals=false};
+        case GtaoQuality::Ultra:  return {.resolutionScale=1.F, .directions=8, .stepsPerDirection=4, .depthMipCount=5, .denoisePassCount=1, .temporal=false, .historyWeight=0.F, .specularOcclusion=false, .bentNormals=false};
         }
         return gtaoQualitySettings(GtaoQuality::High);
     }

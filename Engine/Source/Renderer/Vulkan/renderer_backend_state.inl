@@ -152,9 +152,6 @@
         AntialiasingLevel antialiasingLevel;
         const ShadowQuality& shadowQuality;
         const GtaoQuality& gtaoQuality;
-        // The public setting is a reference owned by Renderer, so retain the
-        // quality used to allocate the current GTAO resources separately.
-        GtaoQuality activeGtaoQuality = GtaoQuality::High;
         const GtaoDebugView& gtaoDebugView;
         const PbrDebugView& pbrDebugView;
         const IblQuality& iblQuality;

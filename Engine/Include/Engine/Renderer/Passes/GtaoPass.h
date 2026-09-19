@@ -74,9 +74,6 @@ private:
     // is the representative half-resolution baseDepth_ above.
     HdrBuffer auxiliary_;
     HdrBuffer filtered_;
-    // Ping-pong target for quality levels which request more than one spatial
-    // denoise pass.  Keeping it separate preserves raw_ for the debug view.
-    HdrBuffer denoiseScratch_;
     HdrBuffer full_;
     // A dedicated R32F view-depth hierarchy.  It intentionally is not Hi-Z:
     // GTAO consumes filtered view depths, while culling consumes extrema.

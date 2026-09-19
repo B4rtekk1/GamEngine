@@ -15,9 +15,10 @@ void main(uint3 groupId:SV_GroupID,uint3 threadId:SV_GroupThreadID,uint3 id:SV_D
  uint hw,hh;halfAo.GetDimensions(hw,hh);
  int2 tileBase=int2(floor((float2(groupId.xy*8)+.5)*settings.inputToOutputScale-.5));
  int2 tileSize=int2(settings.inputToOutputScale.x>.75?9:6,settings.inputToOutputScale.y>.75?9:6);
- uint loadIndex=threadId.y*8+threadId.x;
- if(loadIndex<uint(tileSize.x*tileSize.y)){
-  int2 tilePixel=int2(loadIndex%tileSize.x,loadIndex/tileSize.x);
+ uint lane=threadId.y*8+threadId.x;
+ uint tileCount=uint(tileSize.x*tileSize.y);
+ for(uint loadIndex=lane;loadIndex<tileCount;loadIndex+=64){
+  int2 tilePixel=int2(loadIndex%uint(tileSize.x),loadIndex/uint(tileSize.x));
   int2 q=clamp(tileBase+tilePixel,int2(0,0),int2(hw,hh)-1);
   aoTile[tilePixel.y][tilePixel.x]=halfAo.Load(int3(q,0)).r;
   depthTile[tilePixel.y][tilePixel.x]=baseDepth.Load(int3(q,0)).r;
