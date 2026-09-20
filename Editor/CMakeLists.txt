@@ -1,5 +1,5 @@
 add_executable(Editor
-    Source/main.cpp Source/App/EditorEntityHelpers.cpp Source/ComponentDescriptor.cpp Source/EditorUi.cpp Source/UI/EditorTheme.cpp Source/UI/EditorWidgets.cpp Source/UI/PropertyGrid.cpp Source/UI/ComponentCard.cpp Source/EditorPreferences.cpp
+    Source/main.cpp Source/App/EditorEntityHelpers.cpp Source/Build/GameBuildPipeline.cpp Source/ComponentDescriptor.cpp Source/EditorUi.cpp Source/UI/EditorTheme.cpp Source/UI/EditorWidgets.cpp Source/UI/PropertyGrid.cpp Source/UI/ComponentCard.cpp Source/EditorPreferences.cpp
     Source/Panels/EditorStyle.cpp Source/Panels/EditorSceneSession.cpp Source/Panels/HierarchyPanel.cpp Source/Panels/ComponentsPanel.cpp Source/Panels/AssetManagerPanel.cpp Source/Panels/ShaderGraphPanel.cpp Source/Panels/ProfilerPanel.cpp Source/AssetImporter.cpp Source/Panels/ConsolePanel.cpp Source/Panels/TerminalPanel.cpp Source/Platform/WindowsTitleBar.cpp ${PROJECT_SOURCE_DIR}/Platform/Terminal/TerminalBuffer.cpp
         Include/Editor/EditorState.h)
 if(WIN32)
@@ -40,3 +40,14 @@ add_custom_command(TARGET Editor POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy_if_different "${PROJECT_SOURCE_DIR}/Tools/GenerateGameScriptsModule.cmake" "$<TARGET_FILE_DIR:Editor>/SDK/Tools/GenerateGameScriptsModule.cmake"
     COMMAND ${CMAKE_COMMAND} -E copy_if_different "${PROJECT_SOURCE_DIR}/cmake/GameScriptsStandalone/CMakeLists.txt" "$<TARGET_FILE_DIR:Editor>/SDK/GameScripts/CMakeLists.txt"
     COMMENT "Copying C++ scripting SDK for Editor")
+
+# A build export consumes this fixed runtime template.  Keeping it beside the
+# Editor makes development and portable Editor builds follow the same contract.
+if(TARGET Player)
+    add_custom_command(TARGET Editor POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_FILE_DIR:Editor>/Runtime/Win64/Release"
+        COMMAND ${CMAKE_COMMAND} -E copy_directory "$<TARGET_FILE_DIR:Player>" "$<TARGET_FILE_DIR:Editor>/Runtime/Win64/Release"
+        COMMAND ${CMAKE_COMMAND} -E copy_directory "${GAMEENGINE_SHADER_OUTPUT_DIR}" "$<TARGET_FILE_DIR:Editor>/Runtime/Win64/Release/shaders"
+        COMMENT "Copying runtime template for game builds")
+    add_dependencies(Editor Player)
+endif()

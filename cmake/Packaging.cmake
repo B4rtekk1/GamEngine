@@ -1,6 +1,33 @@
 option(GAMEENGINE_INSTALL_PORTABLE_EDITOR "Install a self-contained GamEngine Editor package" ON)
+
+# This is deliberately separate from the Editor package.  A game export copies
+# this immutable template; it never recompiles Engine, Player or built-in shaders.
+if(TARGET Player)
+    install(TARGETS Player Engine DearImGui COMPONENT GamEngineRuntime RUNTIME DESTINATION . LIBRARY DESTINATION .)
+    install(IMPORTED_RUNTIME_ARTIFACTS SDL3::SDL3-shared COMPONENT GamEngineRuntime
+        RUNTIME DESTINATION . LIBRARY DESTINATION .)
+    install(DIRECTORY "${GAMEENGINE_SHADER_OUTPUT_DIR}/" DESTINATION shaders COMPONENT GamEngineRuntime)
+    install(FILES "${PROJECT_SOURCE_DIR}/LICENSE" DESTINATION Licenses
+        COMPONENT GamEngineRuntime RENAME LICENSE-GamEngine.txt)
+    add_custom_target(PackageRuntime
+        COMMAND ${CMAKE_COMMAND} --install "${CMAKE_BINARY_DIR}" --config $<CONFIG>
+            --component GamEngineRuntime --prefix "${CMAKE_BINARY_DIR}/GamEngineRuntime"
+        DEPENDS Player EngineShaders
+        COMMENT "Creating portable GamEngine runtime template")
+endif()
+
 if(GAMEENGINE_INSTALL_PORTABLE_EDITOR)
     install(TARGETS Editor Engine DearImGui COMPONENT GamEngineEditor RUNTIME DESTINATION . LIBRARY DESTINATION . ARCHIVE DESTINATION lib)
+    if(TARGET Player)
+        install(TARGETS Player Engine COMPONENT GamEngineEditor
+            RUNTIME DESTINATION Runtime/Win64/Release LIBRARY DESTINATION Runtime/Win64/Release)
+        install(IMPORTED_RUNTIME_ARTIFACTS SDL3::SDL3-shared COMPONENT GamEngineEditor
+            RUNTIME DESTINATION Runtime/Win64/Release LIBRARY DESTINATION Runtime/Win64/Release)
+        install(DIRECTORY "${GAMEENGINE_SHADER_OUTPUT_DIR}/" DESTINATION Runtime/Win64/Release/shaders
+            COMPONENT GamEngineEditor)
+        install(FILES "${PROJECT_SOURCE_DIR}/LICENSE" DESTINATION Runtime/Win64/Release/Licenses
+            COMPONENT GamEngineEditor RENAME LICENSE-GamEngine.txt)
+    endif()
     # A project-side C++ script module links to this import library, not to a
     # GamEngine source/build tree.
     install(FILES "$<TARGET_LINKER_FILE:Engine>" DESTINATION SDK/Lib COMPONENT GamEngineEditor)
@@ -13,12 +40,6 @@ if(GAMEENGINE_INSTALL_PORTABLE_EDITOR)
         DESTINATION SDK/Tools COMPONENT GamEngineEditor)
     install(FILES "${PROJECT_SOURCE_DIR}/cmake/GameScriptsStandalone/CMakeLists.txt"
         DESTINATION SDK/GameScripts COMPONENT GamEngineEditor)
-    if(TARGET GameScripts)
-        # Keep the script module built with the same configuration as the
-        # Editor.  A Debug script DLL cannot safely exchange STL-owned data
-        # with a Release Engine DLL (and vice versa).
-        install(TARGETS GameScripts COMPONENT GamEngineEditor RUNTIME DESTINATION . LIBRARY DESTINATION . ARCHIVE DESTINATION lib)
-    endif()
     install(IMPORTED_RUNTIME_ARTIFACTS SDL3::SDL3-shared COMPONENT GamEngineEditor RUNTIME DESTINATION . LIBRARY DESTINATION .)
     install(DIRECTORY "${GAMEENGINE_SHADER_OUTPUT_DIR}/" DESTINATION shaders COMPONENT GamEngineEditor)
     # Shader Graph authoring compiles a generated module that imports these
@@ -57,13 +78,11 @@ if(GAMEENGINE_INSTALL_PORTABLE_EDITOR)
             DESTINATION Tools/Slang COMPONENT GamEngineEditor RENAME LICENSE-VulkanSDK.txt)
     endif()
 
-    # The install manifest contains GameScripts whenever that target exists.
-    # PackageEditor must therefore build it before invoking `cmake --install`;
-    # otherwise a parallel/package-only build can reach the install step while
-    # Player/<config>/GameScripts.dll has never been produced.
     set(GAMEENGINE_EDITOR_PACKAGE_DEPENDS Editor EngineShaders)
-    if(TARGET GameScripts)
-        list(APPEND GAMEENGINE_EDITOR_PACKAGE_DEPENDS GameScripts)
+    if(TARGET Player)
+        # Runtime files are installed into the portable Editor package too;
+        # ensure the multi-config Player artifact exists before cmake --install.
+        list(APPEND GAMEENGINE_EDITOR_PACKAGE_DEPENDS Player)
     endif()
 
     add_custom_target(PackageEditor

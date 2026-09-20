@@ -1,4 +1,6 @@
 #include <Engine/Engine.h>
+#include <Engine/Scripting/ScriptModuleManager.h>
+#include <Engine/Scripting/ScriptRegistry.h>
 
 #include <SDL3/SDL.h>
 
@@ -28,23 +30,23 @@ int main(int argc, char** argv) {
                 sceneOverride = std::filesystem::path{argv[index]};
             }
         }
+        const char* const basePath = SDL_GetBasePath();
+        if (basePath == nullptr) throw std::runtime_error("Could not determine executable directory");
+        const std::filesystem::path executableRoot{basePath};
         const Engine::Project project = projectPath
                                             ? Engine::Project::load(*projectPath)
-                                            : [&] {
-                                                  try {
-                                                      return Engine::Project::discover(
-                                                          std::filesystem::current_path());
-                                                  } catch (const std::runtime_error&) {
-                                                      const char* basePath = SDL_GetBasePath();
-                                                      if (basePath == nullptr) {
-                                                          throw std::runtime_error("Could not determine executable directory");
-                                                      }
-                                                      return Engine::Project::defaults(basePath);
-                                                  }
-                                              }();
+                                            : Engine::Project::load(executableRoot / "GamEngine.project");
         const std::filesystem::path scenePath = sceneOverride
                                                     ? project.resolve(*sceneOverride)
                                                     : project.startupScene();
+        Engine::ScriptModuleManager scriptModules{Engine::ScriptRegistry::instance()};
+        const auto scriptModule = executableRoot / "GameScripts.dll";
+        if (!std::filesystem::is_regular_file(scriptModule)) {
+            throw std::runtime_error("Missing GameScripts.dll: " + scriptModule.string());
+        }
+        if (!scriptModules.loadInitialModule(scriptModule, Engine::ScriptModuleLoadMode::Direct)) {
+            throw std::runtime_error("Could not load GameScripts.dll");
+        }
         Engine::Application app{{.title = project.name(), .width = 800, .height = 600,
                                  .assetRoot = project.assetRoot()}};
         if (std::filesystem::is_regular_file(scenePath)) {
@@ -53,6 +55,7 @@ int main(int argc, char** argv) {
             throw std::runtime_error("Scene file does not exist: " + scenePath.string());
         }
         app.run();
+        scriptModules.unload(app.scene());
     } catch (const std::exception& exception) {
         std::cerr << "Error: " << exception.what() << '\n';
         return EXIT_FAILURE;

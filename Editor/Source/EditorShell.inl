@@ -298,7 +298,7 @@ Engine::Entity drawEditorMenuBar(Engine::ScenePreset &scene, Engine::Renderer &r
                                  bool &showHierarchy, bool &showViewport,
                                  bool &showInspector, bool &showAssetManager,
                                  bool &showTerrainTools, bool &showConsole, bool &showTerminal,
-                                 bool &showShaderGraph, bool &showGpuProfile) {
+                                 bool &showShaderGraph, bool &showGpuProfile, bool &gameBuildRequested) {
     static bool showShortcuts = false;
     static bool showAbout = false;
     static bool openSceneSettings = false;
@@ -494,6 +494,10 @@ Engine::Entity drawEditorMenuBar(Engine::ScenePreset &scene, Engine::Renderer &r
                     Editor::ConsolePanel::error("Could not load scene: " + sceneFileError);
                 }
             }
+        }
+        ImGui::Separator();
+        if (ImGui::MenuItem("Build Game", "", false, !project.manifestPath().empty())) {
+            gameBuildRequested = true;
         }
         ImGui::EndDisabled();
         ImGui::Separator();

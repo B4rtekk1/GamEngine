@@ -45,6 +45,6 @@ if(GE_BUILD_TESTS)
     add_subdirectory(Tests)
 endif()
 
-if(GE_BUILD_EDITOR)
+if(GE_BUILD_EDITOR OR GE_BUILD_PLAYER)
     include(cmake/Packaging.cmake)
 endif()

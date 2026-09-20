@@ -30,10 +30,13 @@ namespace Engine {
         return error ? std::filesystem::path{} : versioned;
     }
 
-    bool ScriptModuleManager::loadCandidate(const std::filesystem::path &path, LoadedModule &out) {
+    bool ScriptModuleManager::loadCandidate(const std::filesystem::path &path, LoadedModule &out,
+                                            const ScriptModuleLoadMode mode) {
         const std::uint64_t generation = nextGeneration_;
-        const auto versionedPath = makeVersionedCopy(path, generation);
-        if (versionedPath.empty() || !out.library.load(versionedPath)) {
+        const auto modulePath = mode == ScriptModuleLoadMode::HotReload
+                                    ? makeVersionedCopy(path, generation)
+                                    : path;
+        if (modulePath.empty() || !out.library.load(modulePath)) {
             return false;
         }
 
@@ -60,18 +63,19 @@ namespace Engine {
             }
         }
         out.generation = generation;
-        out.path = versionedPath;
+        out.path = modulePath;
         out.descriptors = registrar.descriptors();
         ++nextGeneration_;
         return true;
     }
 
-    bool ScriptModuleManager::loadInitialModule(const std::filesystem::path &path) {
+    bool ScriptModuleManager::loadInitialModule(const std::filesystem::path &path,
+                                                const ScriptModuleLoadMode mode) {
         if (active_.library.loaded()) {
             return false;
         }
         LoadedModule candidate;
-        if (!loadCandidate(path, candidate)) {
+        if (!loadCandidate(path, candidate, mode)) {
             return false;
         }
         for (auto &descriptor: candidate.descriptors) {
@@ -113,7 +117,7 @@ namespace Engine {
 
     bool ScriptModuleManager::tryReload(const std::filesystem::path &candidatePath, Registry &scene) {
         LoadedModule candidate;
-        if (!loadCandidate(candidatePath, candidate)) {
+        if (!loadCandidate(candidatePath, candidate, ScriptModuleLoadMode::HotReload)) {
             return false;
         }
 

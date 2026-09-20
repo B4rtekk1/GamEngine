@@ -12,7 +12,14 @@ namespace Engine {
     class Scene;
     class ScriptRegistry;
 
-    /** Loads versioned game-script DLLs and swaps them only after validation. */
+    enum class ScriptModuleLoadMode {
+        /** Load the supplied DLL directly; suitable for read-only game installs. */
+        Direct,
+        /** Load a versioned copy so the source DLL can be rebuilt on Windows. */
+        HotReload,
+    };
+
+    /** Loads game-script DLLs and swaps them only after validation. */
     class ScriptModuleManager final {
     public:
         explicit ScriptModuleManager(ScriptRegistry &registry) noexcept : registry_(registry) {}
@@ -20,7 +27,8 @@ namespace Engine {
         ScriptModuleManager(const ScriptModuleManager &) = delete;
         ScriptModuleManager &operator=(const ScriptModuleManager &) = delete;
 
-        [[nodiscard]] bool loadInitialModule(const std::filesystem::path &path);
+        [[nodiscard]] bool loadInitialModule(const std::filesystem::path &path,
+                                             ScriptModuleLoadMode mode = ScriptModuleLoadMode::Direct);
         [[nodiscard]] bool tryReload(const std::filesystem::path &candidate, Registry &scene);
         [[nodiscard]] bool tryReload(const std::filesystem::path &candidate, Scene &scene);
         void unload(Registry &scene);
@@ -35,7 +43,8 @@ namespace Engine {
             std::vector<ScriptClassDescriptor> descriptors;
         };
 
-        [[nodiscard]] bool loadCandidate(const std::filesystem::path &path, LoadedModule &out);
+        [[nodiscard]] bool loadCandidate(const std::filesystem::path &path, LoadedModule &out,
+                                         ScriptModuleLoadMode mode);
         [[nodiscard]] static std::filesystem::path makeVersionedCopy(const std::filesystem::path &path,
                                                                      std::uint64_t generation);
         void destroyGeneration(Registry &scene, std::uint64_t generation) const;

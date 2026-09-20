@@ -55,6 +55,7 @@
 #include "Editor/UI/EditorTheme.h"
 #include "Editor/TerrainSculptState.h"
 #include "Editor/Platform/WindowsTitleBar.h"
+#include "Editor/Build/GameBuildPipeline.h"
 #include "ScriptHotReload.h"
 #include "ShaderHotReload.h"
 #include "Platform/UserPaths.h"
@@ -297,9 +298,11 @@ int main(int argc, char** argv) {
         Engine::ScriptModuleManager scriptModules{Engine::ScriptRegistry::instance()};
         std::optional<Editor::ScriptHotReload> scriptHotReload;
         std::optional<Editor::ShaderHotReload> shaderHotReload;
+        std::future<Editor::GameBuildResult> gameBuild;
+        bool gameBuildRunning = false;
         const std::filesystem::path scriptBuildDirectory = project.rootPath() / "Library" / "ScriptBuild";
         const std::filesystem::path modulePath = project.rootPath() / "Library" / "ScriptModules" / "GameScripts.dll";
-        if (!scriptModules.loadInitialModule(modulePath)) {
+        if (!scriptModules.loadInitialModule(modulePath, Engine::ScriptModuleLoadMode::HotReload)) {
             Editor::ConsolePanel::info("No compiled game scripts module yet; it will be built for this project.");
         }
         // Shader hot reload still uses the source build. C++ script hot reload
@@ -567,6 +570,7 @@ int main(int argc, char** argv) {
             bool pasteRequested = false;
             bool duplicateRequested = false;
             bool resetHistoryRequested = false;
+            bool gameBuildRequested = false;
             if (const Engine::Entity created = drawEditorMenuBar(scene, renderer, content, project, titleBar,
                                                                  antialiasingChanged, sceneLoaded, sceneSaved,
                                                                  sceneDeleted,
@@ -578,12 +582,41 @@ int main(int argc, char** argv) {
                                                                  resetHistoryRequested, showHierarchy,
                                                                  showViewport, showInspector, showAssetManager,
                                                                  showTerrainTools, showConsole, showTerminal,
-                                                                 showShaderGraph, showProfiler);
+                                                                 showShaderGraph, showProfiler, gameBuildRequested);
                 created != Engine::NullEntity) {
                 setSelection(created);
             }
             if (resetHistoryRequested) {
                 history.reset(scene);
+            }
+            if (gameBuildRequested && !gameBuildRunning) {
+                try {
+                    const auto activeScenePath = EditorSceneSession::scenePath();
+                    if (activeScenePath.empty()) throw std::runtime_error("Save the startup scene before building the game.");
+                    Engine::SceneSerializer::save(scene, activeScenePath, renderer.antialiasingLevel());
+                    EditorSceneSession::markSceneSaved(activeScenePath);
+                    Editor::ConsolePanel::info("Building Windows x64 Release game in background...");
+                    const Engine::Project buildProject = project;
+                    const std::filesystem::path buildEditorRoot = editorRoot;
+                    gameBuildRunning = true;
+                    gameBuild = std::async(std::launch::async,
+                                           [buildEditorRoot, buildProject] {
+                                               const Editor::GameBuildPipeline pipeline{buildEditorRoot};
+                                               return pipeline.build(buildProject, {});
+                                           });
+                } catch (const std::exception& error) {
+                    Editor::ConsolePanel::error("Game build failed: " + std::string{error.what()});
+                }
+            }
+            if (gameBuildRunning && gameBuild.valid() &&
+                gameBuild.wait_for(std::chrono::seconds::zero()) == std::future_status::ready) {
+                const Editor::GameBuildResult build = gameBuild.get();
+                gameBuildRunning = false;
+                if (build.success) {
+                    Editor::ConsolePanel::info("Game build complete: " + build.executable.string());
+                } else {
+                    for (const auto& error : build.errors) Editor::ConsolePanel::error("Game build failed: " + error);
+                }
             }
             if (sceneDeleted) {
                 Engine::ScenePreset emptyScene;

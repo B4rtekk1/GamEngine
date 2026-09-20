@@ -42,8 +42,6 @@ target_include_directories(DearImGui PUBLIC ${dearimgui_SOURCE_DIR} ${dearimgui_
 target_link_libraries(DearImGui PUBLIC SDL3::SDL3 Vulkan::Vulkan)
 if(WIN32)
     set_target_properties(DearImGui PROPERTIES WINDOWS_EXPORT_ALL_SYMBOLS ON)
-    # imnodes instantiates inline ImGui containers which reference ImGui data
-    # symbols; export those symbols explicitly from the shared ImGui target.
     target_compile_definitions(DearImGui PRIVATE "IMGUI_API=__declspec(dllexport)"
                                              INTERFACE "IMGUI_API=__declspec(dllimport)")
 endif()
