@@ -137,19 +137,14 @@ void EditorSceneSession::clearSavedScene() {
 }
 
 /**
- * @brief Converts the renderer's MSAA level to a numeric sample count.
+ * @brief Returns the renderer's complete antialiasing selection.
  *
  * @param renderer Renderer whose antialiasing configuration is queried.
  *
- * @return `2` for MSAA 2x, `4` for MSAA 4x, or `0` when neither supported
- *         MSAA mode is active.
+ * @return The active antialiasing mode.
  */
-std::uint32_t EditorSceneSession::msaaSampleCount(const Engine::Renderer &renderer) {
-    return renderer.antialiasingLevel() == Engine::AntialiasingLevel::MSAA2x
-               ? 2U
-               : renderer.antialiasingLevel() == Engine::AntialiasingLevel::MSAA4x
-                     ? 4U
-                     : 0U;
+Engine::AntialiasingLevel EditorSceneSession::antialiasingLevel(const Engine::Renderer &renderer) {
+    return renderer.antialiasingLevel();
 }
 
 /**
@@ -165,8 +160,7 @@ std::uint32_t EditorSceneSession::msaaSampleCount(const Engine::Renderer &render
  * @param snapshot Storage for the serialized editor-scene state.
  * @param error Receives an exception message on failure and is cleared on
  *              success.
- * @param samples MSAA sample count forwarded to the scene serializer while
- *                capturing the scene.
+ * @param antialiasing Antialiasing mode forwarded to the scene serializer.
  *
  * @retval true The scene was captured or restored successfully.
  * @retval false Serialization or deserialization threw an exception.
@@ -174,11 +168,12 @@ std::uint32_t EditorSceneSession::msaaSampleCount(const Engine::Renderer &render
 // NOLINTBEGIN(readability-identifier-length)
 
 bool EditorSceneSession::setPlayMode(const bool play, Engine::ScenePreset &scene,
-                                     std::string &snapshot, std::string &error, const std::uint32_t samples) {
+                                     std::string &snapshot, std::string &error,
+                                     const Engine::AntialiasingLevel antialiasing) {
     try {
         if (play) {
             std::ostringstream output;
-            Engine::SceneSerializer::save(scene, output, samples);
+            Engine::SceneSerializer::save(scene, output, antialiasing);
             snapshot = std::move(output).str();
         } else {
             std::istringstream input{snapshot};

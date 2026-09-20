@@ -5,6 +5,8 @@
 #include <optional>
 #include <cstdint>
 
+#include "Engine/Renderer/RenderConfig.h"
+
 namespace Engine {
     class Registry;
     class Scene;
@@ -29,11 +31,14 @@ namespace Engine {
          * buffers in a lossless binary sidecar (<scene>.terrain).  This avoids
          * formatting and parsing every height/colour as decimal text.
          */
-        static constexpr std::uint32_t FormatVersion = 25;
+        static constexpr std::uint32_t FormatVersion = 26;
 
         /** @brief Writes a scene to a text file. */
         static void save(const Registry &registry, const std::filesystem::path &path);
 
+        static void save(const Registry &registry, const std::filesystem::path &path,
+                         AntialiasingLevel antialiasing);
+        /** @deprecated Use the AntialiasingLevel overload. */
         static void save(const Registry &registry, const std::filesystem::path &path,
                          std::uint32_t msaaSamples);
 
@@ -41,16 +46,24 @@ namespace Engine {
         static void save(const Registry &registry, std::ostream &output);
 
         static void save(const Registry &registry, std::ostream &output,
+                         AntialiasingLevel antialiasing);
+        /** @deprecated Use the AntialiasingLevel overload. */
+        static void save(const Registry &registry, std::ostream &output,
                          std::uint32_t msaaSamples);
 
         // High-level scene API. These overloads keep Registry out of application code.
         static void save(const Scene &scene, const std::filesystem::path &path);
 
         static void save(const Scene &scene, const std::filesystem::path &path,
+                         AntialiasingLevel antialiasing);
+        /** @deprecated Use the AntialiasingLevel overload. */
+        static void save(const Scene &scene, const std::filesystem::path &path,
                          std::uint32_t msaaSamples);
 
         static void save(const Scene &scene, std::ostream &output);
 
+        static void save(const Scene &scene, std::ostream &output, AntialiasingLevel antialiasing);
+        /** @deprecated Use the AntialiasingLevel overload. */
         static void save(const Scene &scene, std::ostream &output, std::uint32_t msaaSamples);
 
         /**
@@ -61,21 +74,32 @@ namespace Engine {
         static void load(Registry &registry, const std::filesystem::path &path);
 
         static void load(Registry &registry, const std::filesystem::path &path,
+                         std::optional<AntialiasingLevel> &antialiasing);
+        /** @deprecated Use the AntialiasingLevel overload. */
+        static void load(Registry &registry, const std::filesystem::path &path,
                          std::optional<std::uint32_t> &msaaSamples);
 
         /** @brief Replaces registry with the scene read from a stream. */
         static void load(Registry &registry, std::istream &input);
 
         static void load(Registry &registry, std::istream &input,
+                         std::optional<AntialiasingLevel> &antialiasing);
+        /** @deprecated Use the AntialiasingLevel overload. */
+        static void load(Registry &registry, std::istream &input,
                          std::optional<std::uint32_t> &msaaSamples);
 
         static void load(Scene &scene, const std::filesystem::path &path);
 
         static void load(Scene &scene, const std::filesystem::path &path,
+                         std::optional<AntialiasingLevel> &antialiasing);
+        /** @deprecated Use the AntialiasingLevel overload. */
+        static void load(Scene &scene, const std::filesystem::path &path,
                          std::optional<std::uint32_t> &msaaSamples);
 
         static void load(Scene &scene, std::istream &input);
 
+        static void load(Scene &scene, std::istream &input, std::optional<AntialiasingLevel> &antialiasing);
+        /** @deprecated Use the AntialiasingLevel overload. */
         static void load(Scene &scene, std::istream &input, std::optional<std::uint32_t> &msaaSamples);
 
         /**

@@ -318,12 +318,7 @@ Engine::Entity drawEditorMenuBar(Engine::ScenePreset &scene, Engine::Renderer &r
         if (!path.parent_path().empty()) {
             std::filesystem::create_directories(path.parent_path());
         }
-        const auto samples = renderer.antialiasingLevel() == Engine::AntialiasingLevel::MSAA2x
-                                 ? 2u
-                                 : renderer.antialiasingLevel() == Engine::AntialiasingLevel::MSAA4x
-                                       ? 4u
-                                       : 0u;
-        Engine::SceneSerializer::save(scene, path, samples);
+        Engine::SceneSerializer::save(scene, path, renderer.antialiasingLevel());
         EditorSceneSession::markSceneSaved(path);
         sceneSaved = true;
         sceneFileError.clear();
@@ -340,19 +335,15 @@ Engine::Entity drawEditorMenuBar(Engine::ScenePreset &scene, Engine::Renderer &r
         }
     };
     const auto loadScene = [&](const std::filesystem::path &path) {
-        std::optional<std::uint32_t> samples;
-        Engine::SceneSerializer::load(scene, path, samples);
+        std::optional<Engine::AntialiasingLevel> antialiasing;
+        Engine::SceneSerializer::load(scene, path, antialiasing);
         if (!scene.environmentEquirectangular().empty() &&
             !renderer.setEnvironmentEquirectangular(content.assetRoot() / scene.environmentEquirectangular())) {
             throw std::runtime_error("Could not load scene HDR/EXR environment");
         }
         EditorSceneSession::markSceneSaved(path);
-        if (samples) {
-            renderer.setAntialiasingLevel(*samples == 2
-                                              ? Engine::AntialiasingLevel::MSAA2x
-                                              : *samples == 4
-                                                    ? Engine::AntialiasingLevel::MSAA4x
-                                                    : Engine::AntialiasingLevel::Off);
+        if (antialiasing) {
+            renderer.setAntialiasingLevel(*antialiasing);
             antialiasingChanged = true;
         }
         sceneLoaded = true;
@@ -377,7 +368,7 @@ Engine::Entity drawEditorMenuBar(Engine::ScenePreset &scene, Engine::Renderer &r
             }
             Engine::ScenePreset emptyScene;
             Engine::SceneSerializer::save(emptyScene, *path,
-                                          EditorSceneSession::msaaSampleCount(renderer));
+                                          EditorSceneSession::antialiasingLevel(renderer));
             Engine::SceneSerializer::load(scene, *path);
             EditorSceneSession::markSceneSaved(*path);
             sceneSaved = true;

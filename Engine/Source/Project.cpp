@@ -159,7 +159,7 @@ namespace Engine {
         if (!sceneOutput) {
             throw std::runtime_error("Could not create starter scene: " + scene.string());
         }
-        sceneOutput << "GAMENGINE_SCENE 12\nSETTINGS MSAA 0\nMESHES 0\nENTITIES 0\nEND_SCENE\n";
+        sceneOutput << "GAMENGINE_SCENE 26\nSETTINGS AA TAA\nMESHES 0\nENTITIES 0\nEND_SCENE\n";
         if (!sceneOutput) {
             throw std::runtime_error("Could not write starter scene: " + scene.string());
         }

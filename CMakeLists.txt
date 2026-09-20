@@ -4,7 +4,7 @@ project(GamEngine LANGUAGES CXX)
 include(cmake/CompilerOptions.cmake)
 include(cmake/Dependencies.cmake)
 
-set(GAMEENGINE_GAME_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/DEMO" CACHE PATH "Directory containing GamEngine.project and Assets")
+set(GAMEENGINE_GAME_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/MyGame" CACHE PATH "Directory containing GamEngine.project and Assets")
 get_filename_component(GAMEENGINE_GAME_ROOT "${GAMEENGINE_GAME_DIRECTORY}" ABSOLUTE BASE_DIR "${CMAKE_CURRENT_SOURCE_DIR}")
 if(NOT EXISTS "${GAMEENGINE_GAME_ROOT}/GamEngine.project" OR NOT IS_DIRECTORY "${GAMEENGINE_GAME_ROOT}/Assets")
     message(FATAL_ERROR "GAMEENGINE_GAME_DIRECTORY must contain GamEngine.project and Assets: ${GAMEENGINE_GAME_ROOT}")
@@ -26,6 +26,7 @@ gameengine_enable_warnings(GenerateBRDFLut)
 add_custom_target(BrdfLutAsset
     # This is project content, not an executable-side cache.  The Editor uses
     # GAMEENGINE_GAME_ROOT directly, while Player copies it beside the binary.
+    COMMAND ${CMAKE_COMMAND} -E make_directory "${GAMEENGINE_GAME_ROOT}/Assets/BRDF"
     COMMAND "$<TARGET_FILE:GenerateBRDFLut>" "${GAMEENGINE_GAME_ROOT}/Assets/BRDF/brdf_lut.bin"
     DEPENDS GenerateBRDFLut
     BYPRODUCTS "${GAMEENGINE_GAME_ROOT}/Assets/BRDF/brdf_lut.bin"

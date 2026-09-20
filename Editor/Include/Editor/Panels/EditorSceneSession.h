@@ -1,5 +1,6 @@
 #pragma once
 
+#include "Engine/Renderer/RenderConfig.h"
 #include "Engine/Scene/ScenePresets.h"
 
 #include <cstdint>
@@ -28,9 +29,9 @@ public:
     static void markSceneSaved(std::filesystem::path path);
     /** Clears the persisted-scene association after its file was removed. */
     static void clearSavedScene();
-    [[nodiscard]] static std::uint32_t msaaSampleCount(const Engine::Renderer& renderer);
+    [[nodiscard]] static Engine::AntialiasingLevel antialiasingLevel(const Engine::Renderer& renderer);
 
     static bool setPlayMode(bool play, Engine::ScenePreset& scene, std::string& snapshot,
-                            std::string& error, std::uint32_t msaaSamples);
+                            std::string& error, Engine::AntialiasingLevel antialiasing);
     static bool createCppScript(std::string_view name, std::string& error);
 };

@@ -116,7 +116,7 @@ namespace Engine {
 
     struct RenderConfig final {
         RenderFeatures features{};
-        AntialiasingLevel antialiasing = AntialiasingLevel::Off;
+        AntialiasingLevel antialiasing = AntialiasingLevel::TAA;
         GrassRenderSettings grass{};
         ShadowQuality shadowQuality = ShadowQuality::High;
         GtaoQuality gtaoQuality = GtaoQuality::High;

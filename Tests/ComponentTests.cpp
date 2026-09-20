@@ -221,7 +221,7 @@ TEST(RenderTypes, ExposeStableDefaultsAndHandles) {
     EXPECT_TRUE(config.features.instancedRendering);
     EXPECT_TRUE(config.features.gpuCulling);
     EXPECT_FALSE(config.features.shadows);
-    EXPECT_EQ(config.antialiasing, Engine::AntialiasingLevel::Off);
+    EXPECT_EQ(config.antialiasing, Engine::AntialiasingLevel::TAA);
     EXPECT_FALSE(Engine::ViewportHandle{});
     EXPECT_TRUE((Engine::ViewportHandle{123}));
     const Engine::EditorEventState events;

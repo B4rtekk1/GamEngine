@@ -71,6 +71,27 @@ namespace Engine {
         constexpr std::uint32_t TerrainDataVersion = 1;
         constexpr std::array<char, 8> TerrainDataMagic{'G', 'E', 'T', 'E', 'R', 'R', '1', '\0'};
 
+        [[nodiscard]] const char *antialiasingName(const AntialiasingLevel level) {
+            switch (level) {
+            case AntialiasingLevel::Off: return "Off";
+            case AntialiasingLevel::MSAA2x: return "MSAA2x";
+            case AntialiasingLevel::MSAA4x: return "MSAA4x";
+            case AntialiasingLevel::TAA: return "TAA";
+            }
+            return "TAA";
+        }
+
+        [[nodiscard]] AntialiasingLevel antialiasingFromMsaa(const std::uint32_t samples) {
+            if (samples == 2) return AntialiasingLevel::MSAA2x;
+            if (samples == 4) return AntialiasingLevel::MSAA4x;
+            if (samples == 0) return AntialiasingLevel::Off;
+            throw std::invalid_argument("MSAA samples must be 0, 2 or 4");
+        }
+
+        [[nodiscard]] std::uint32_t msaaFromAntialiasing(const AntialiasingLevel level) {
+            return level == AntialiasingLevel::MSAA2x ? 2U : level == AntialiasingLevel::MSAA4x ? 4U : 0U;
+        }
+
         [[nodiscard]] int terrainDataStreamSlot() {
             static const int slot = std::ios_base::xalloc();
             return slot;
@@ -835,9 +856,14 @@ namespace Engine {
     }
 
     void SceneSerializer::save(const Scene &scene, const std::filesystem::path &path,
-                               const std::uint32_t msaaSamples) {
-        save(scene.registry(), path, msaaSamples);
+                               const AntialiasingLevel antialiasing) {
+        save(scene.registry(), path, antialiasing);
         saveEnvironment(scene, path);
+    }
+
+    void SceneSerializer::save(const Scene &scene, const std::filesystem::path &path,
+                               const std::uint32_t msaaSamples) {
+        save(scene, path, antialiasingFromMsaa(msaaSamples));
     }
 
     void SceneSerializer::save(const Scene &scene, std::ostream &output) {
@@ -845,8 +871,13 @@ namespace Engine {
     }
 
     void SceneSerializer::save(const Scene &scene, std::ostream &output,
+                               const AntialiasingLevel antialiasing) {
+        save(scene.registry(), output, antialiasing);
+    }
+
+    void SceneSerializer::save(const Scene &scene, std::ostream &output,
                                const std::uint32_t msaaSamples) {
-        save(scene.registry(), output, msaaSamples);
+        save(scene, output, antialiasingFromMsaa(msaaSamples));
     }
 
     void SceneSerializer::load(Scene &scene, const std::filesystem::path &path) {
@@ -865,16 +896,23 @@ namespace Engine {
     }
 
     void SceneSerializer::load(Scene &scene, const std::filesystem::path &path,
-                               std::optional<std::uint32_t> &msaaSamples) {
+                               std::optional<AntialiasingLevel> &antialiasing) {
         scene.detachObjectHandles();
         try {
-            load(scene.registry(), path, msaaSamples);
+            load(scene.registry(), path, antialiasing);
         } catch (...) {
             scene.rebuildObjectHandles();
             throw;
         }
         scene.rebuildObjectHandles();
         loadEnvironment(scene, path);
+    }
+
+    void SceneSerializer::load(Scene &scene, const std::filesystem::path &path,
+                               std::optional<std::uint32_t> &msaaSamples) {
+        std::optional<AntialiasingLevel> antialiasing;
+        load(scene, path, antialiasing);
+        msaaSamples = antialiasing ? std::optional{msaaFromAntialiasing(*antialiasing)} : std::nullopt;
     }
 
     void SceneSerializer::load(Scene &scene, std::istream &input) {
@@ -889,15 +927,22 @@ namespace Engine {
     }
 
     void SceneSerializer::load(Scene &scene, std::istream &input,
-                               std::optional<std::uint32_t> &msaaSamples) {
+                               std::optional<AntialiasingLevel> &antialiasing) {
         scene.detachObjectHandles();
         try {
-            load(scene.registry(), input, msaaSamples);
+            load(scene.registry(), input, antialiasing);
         } catch (...) {
             scene.rebuildObjectHandles();
             throw;
         }
         scene.rebuildObjectHandles();
+    }
+
+    void SceneSerializer::load(Scene &scene, std::istream &input,
+                               std::optional<std::uint32_t> &msaaSamples) {
+        std::optional<AntialiasingLevel> antialiasing;
+        load(scene, input, antialiasing);
+        msaaSamples = antialiasing ? std::optional{msaaFromAntialiasing(*antialiasing)} : std::nullopt;
     }
 
     void SceneSerializer::replace(Scene &destination, Scene &source) {
@@ -920,12 +965,12 @@ namespace Engine {
 #ifndef SCENE_SERIALIZER_SCENE_ONLY
     void SceneSerializer::save(const Registry &registry,
                                const std::filesystem::path &path) {
-        save(registry, path, 0);
+        save(registry, path, AntialiasingLevel::TAA);
     }
 
     void SceneSerializer::save(const Registry &registry,
                                const std::filesystem::path &path,
-                               const std::uint32_t msaaSamples) {
+                               const AntialiasingLevel antialiasing) {
         std::ofstream output(path);
         if (!output) {
             throw std::runtime_error("Could not open scene for writing: " + path.string());
@@ -936,7 +981,7 @@ namespace Engine {
         terrainData.write(TerrainDataMagic.data(), static_cast<std::streamsize>(TerrainDataMagic.size()));
         writeLittleEndianU32(terrainData, TerrainDataVersion);
         output.pword(terrainDataStreamSlot()) = &terrainData;
-        save(registry, output, msaaSamples);
+        save(registry, output, antialiasing);
         output.pword(terrainDataStreamSlot()) = nullptr;
         if (!output) {
             throw std::runtime_error("Could not finish writing scene: " + path.string());
@@ -944,15 +989,21 @@ namespace Engine {
         if (!terrainData) throw std::runtime_error("Could not finish writing terrain data: " + dataPath.string());
     }
 
+    void SceneSerializer::save(const Registry &registry,
+                               const std::filesystem::path &path,
+                               const std::uint32_t msaaSamples) {
+        save(registry, path, antialiasingFromMsaa(msaaSamples));
+    }
+
     void SceneSerializer::save(const Registry &registry, std::ostream &output) {
-        save(registry, output, 0);
+        save(registry, output, AntialiasingLevel::TAA);
     }
 
     // The serializer's format branches are kept together to make the output
     // grammar explicit and preserve field ordering.
     // NOLINTNEXTLINE(readability-function-cognitive-complexity)
     void SceneSerializer::save(const Registry &registry, std::ostream &output,
-                               const std::uint32_t msaaSamples) {
+                               const AntialiasingLevel antialiasing) {
         output.imbue(std::locale::classic());
         std::ostream &serialized = output;
         auto *terrainData = static_cast<std::ostream *>(output.pword(terrainDataStreamSlot()));
@@ -989,11 +1040,8 @@ namespace Engine {
             }
         }
 
-        if (msaaSamples != 0 && msaaSamples != 2 && msaaSamples != 4) {
-            throw std::invalid_argument("MSAA samples must be 0, 2 or 4");
-        }
         serialized << "GAMENGINE_SCENE " << FormatVersion << '\n';
-        serialized << "SETTINGS MSAA " << msaaSamples << '\n';
+        serialized << "SETTINGS AA " << antialiasingName(antialiasing) << '\n';
         serialized << "MESHES " << meshes.size() << '\n';
         for (std::size_t meshId = 0; meshId < meshes.size(); ++meshId) {
             const SerializedMesh &saved = meshes[meshId];
@@ -1298,15 +1346,20 @@ namespace Engine {
         }
     }
 
+    void SceneSerializer::save(const Registry &registry, std::ostream &output,
+                               const std::uint32_t msaaSamples) {
+        save(registry, output, antialiasingFromMsaa(msaaSamples));
+    }
+
     void SceneSerializer::load(Registry &registry,
                                const std::filesystem::path &path) {
-        std::optional<std::uint32_t> ignoredMsaa;
-        load(registry, path, ignoredMsaa);
+        std::optional<AntialiasingLevel> ignoredAntialiasing;
+        load(registry, path, ignoredAntialiasing);
     }
 
     void SceneSerializer::load(Registry &registry,
                                const std::filesystem::path &path,
-                               std::optional<std::uint32_t> &msaaSamples) {
+                               std::optional<AntialiasingLevel> &antialiasing) {
         std::ifstream input(path);
         if (!input) {
             throw std::runtime_error("Could not open scene for reading: " + path.string());
@@ -1324,13 +1377,21 @@ namespace Engine {
             }
             input.pword(terrainDataStreamSlot()) = &terrainData;
         }
-        load(registry, input, msaaSamples);
+        load(registry, input, antialiasing);
         input.pword(terrainDataStreamSlot()) = nullptr;
     }
 
+    void SceneSerializer::load(Registry &registry,
+                               const std::filesystem::path &path,
+                               std::optional<std::uint32_t> &msaaSamples) {
+        std::optional<AntialiasingLevel> antialiasing;
+        load(registry, path, antialiasing);
+        msaaSamples = antialiasing ? std::optional{msaaFromAntialiasing(*antialiasing)} : std::nullopt;
+    }
+
     void SceneSerializer::load(Registry &registry, std::istream &input) {
-        std::optional<std::uint32_t> ignoredMsaa;
-        load(registry, input, ignoredMsaa);
+        std::optional<AntialiasingLevel> ignoredAntialiasing;
+        load(registry, input, ignoredAntialiasing);
     }
 
     // The scene format is intentionally decoded in one transaction so that a
@@ -1340,8 +1401,8 @@ namespace Engine {
     // the on-disk format.
     // NOLINTNEXTLINE(readability-function-cognitive-complexity)
     void SceneSerializer::load(Registry &registry, std::istream &input,
-                               std::optional<std::uint32_t> &msaaSamples) {
-        msaaSamples.reset();
+                               std::optional<AntialiasingLevel> &antialiasing) {
+        antialiasing.reset();
         input.imbue(std::locale::classic());
         expect(input, "GAMENGINE_SCENE");
         const auto version = read<unsigned>(input, "format version");
@@ -1353,7 +1414,7 @@ namespace Engine {
             version != TerrainMaterialLayersFormatVersion &&
             version != WaterBodyFormatVersion &&
             version != WaterExecutionPolicyFormatVersion &&
-            version != FormatVersion) {
+            version != WaterExecutionTierFormatVersion && version != FormatVersion) {
             invalidScene("unsupported format version " + std::to_string(version));
         }
         auto *terrainData = static_cast<std::istream *>(input.pword(terrainDataStreamSlot()));
@@ -1364,12 +1425,19 @@ namespace Engine {
             invalidScene("expected 'MESHES'");
         }
         if (section == "SETTINGS") {
-            expect(input, "MSAA");
-            const auto samples = read<unsigned>(input, "MSAA sample count");
-            if (samples != 0 && samples != 2 && samples != 4) {
-                invalidScene("MSAA sample count must be 0, 2 or 4");
+            const auto setting = read<std::string>(input, "render setting");
+            if (setting == "MSAA") {
+                antialiasing = antialiasingFromMsaa(read<unsigned>(input, "MSAA sample count"));
+            } else if (setting == "AA" || setting == "ANTIALIASING") {
+                const auto mode = read<std::string>(input, "antialiasing mode");
+                if (mode == "Off") antialiasing = AntialiasingLevel::Off;
+                else if (mode == "MSAA2x") antialiasing = AntialiasingLevel::MSAA2x;
+                else if (mode == "MSAA4x") antialiasing = AntialiasingLevel::MSAA4x;
+                else if (mode == "TAA") antialiasing = AntialiasingLevel::TAA;
+                else invalidScene("unsupported antialiasing mode: " + mode);
+            } else {
+                invalidScene("expected 'MSAA', 'AA' or 'ANTIALIASING'");
             }
-            msaaSamples = samples;
             expect(input, "MESHES");
         } else if (section != "MESHES") {
             invalidScene("expected 'MESHES'");
@@ -2035,6 +2103,13 @@ namespace Engine {
         // address-keyed runtime caches and every deserialized world transform.
         TransformSystem::invalidate(registry);
         TransformSystem::updateDirty(registry);
+    }
+
+    void SceneSerializer::load(Registry &registry, std::istream &input,
+                               std::optional<std::uint32_t> &msaaSamples) {
+        std::optional<AntialiasingLevel> antialiasing;
+        load(registry, input, antialiasing);
+        msaaSamples = antialiasing ? std::optional{msaaFromAntialiasing(*antialiasing)} : std::nullopt;
     }
 #endif
 } // namespace Engine

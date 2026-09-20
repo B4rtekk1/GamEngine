@@ -389,8 +389,8 @@ int main(int argc, char** argv) {
         Engine::ScriptSystem scriptSystem{Engine::ScriptRegistry::instance()};
         Engine::PhysicsSystem physicsSystem{};
         // The editor is the visual authoring path, so shadows must be active
-        // by default. The engine-level default stays conservative for clients
-        // which explicitly optimize for an unshadowed renderer.
+        // by default. Antialiasing defaults to TAA and is overridden by the
+        // startup scene when that scene stores a different mode.
         Engine::Renderer renderer{Engine::RenderConfig{
             .features = Engine::RenderFeatures{.shadows = true}}};
         renderer.setProjectRoot(project.rootPath());
@@ -398,6 +398,7 @@ int main(int argc, char** argv) {
         SceneHistory history;
         history.reset(scene);
         std::optional<std::future<std::unique_ptr<Engine::ScenePreset>>> initialSceneLoad;
+        std::optional<Engine::AntialiasingLevel> initialSceneAntialiasing;
         bool startInitialSceneLoad = loadInitialSceneAsync;
         bool startEmptySceneResources = !loadInitialSceneAsync;
         bool initialSceneSyncPending = false;
@@ -488,6 +489,10 @@ int main(int argc, char** argv) {
                         Engine::SceneSerializer::replace(scene, *loadedScene);
                         reportSceneLoadStage("Scene adopt", stageStartedAt);
                     }
+                    if (initialSceneAntialiasing) {
+                        renderer.setAntialiasingLevel(*initialSceneAntialiasing);
+                        rendererReloadPending = true;
+                    }
                     {
                         GE_PROFILE_SCOPE("SceneLoad.ShaderGraphResolve");
                         const auto stageStartedAt = std::chrono::steady_clock::now();
@@ -519,7 +524,7 @@ int main(int argc, char** argv) {
             renderer.updateEditorSceneCameraInput();
             if (events.togglePlay) {
                 if (EditorSceneSession::setPlayMode(!playing, scene, playSceneSnapshot, playModeError,
-                                                    EditorSceneSession::msaaSampleCount(renderer))) {
+                                                    EditorSceneSession::antialiasingLevel(renderer))) {
                     physicsSystem.reset();
                     playing = !playing;
                     if (!playing) resolveShaderGraphMaterials();
@@ -627,7 +632,7 @@ int main(int argc, char** argv) {
             }
             const auto setPlayMode = [&](const bool enabled) {
                 if (!EditorSceneSession::setPlayMode(enabled, scene, playSceneSnapshot, playModeError,
-                                                     EditorSceneSession::msaaSampleCount(renderer))) {
+                                                     EditorSceneSession::antialiasingLevel(renderer))) {
                     Editor::ConsolePanel::error("Could not change Play mode: " + playModeError);
                     return false;
                 }
@@ -913,7 +918,7 @@ int main(int argc, char** argv) {
                     const std::filesystem::path path = EditorSceneSession::scenePath();
                     if (!path.parent_path().empty()) std::filesystem::create_directories(path.parent_path());
                     Engine::SceneSerializer::save(scene, path,
-                                                  EditorSceneSession::msaaSampleCount(renderer));
+                                                  EditorSceneSession::antialiasingLevel(renderer));
                     EditorSceneSession::markSceneSaved(path);
                     lastPersistedSceneRevision = currentSceneRevision;
                     Editor::ConsolePanel::info("Auto-saved scene: " + path.string());
@@ -1032,9 +1037,9 @@ int main(int argc, char** argv) {
                 startInitialSceneLoad = false;
                 initialSceneLoadStartedAt = std::chrono::steady_clock::now();
                 Editor::ConsolePanel::info("Loading startup scene in background: " + initialScene.string());
-                initialSceneLoad.emplace(std::async(std::launch::async, [initialScene] {
+                initialSceneLoad.emplace(std::async(std::launch::async, [initialScene, &initialSceneAntialiasing] {
                     auto loadedScene = std::make_unique<Engine::ScenePreset>();
-                    Engine::SceneSerializer::load(*loadedScene, initialScene);
+                    Engine::SceneSerializer::load(*loadedScene, initialScene, initialSceneAntialiasing);
                     return loadedScene;
                 }));
             }
