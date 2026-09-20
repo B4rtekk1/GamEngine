@@ -1208,6 +1208,23 @@
                 .format = msaa.enabled() ? hiZDepthBuffer.format() : depthBuffer.format(),
                 .usage = VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
                 .aspect = VK_IMAGE_ASPECT_DEPTH_BIT};
+            const RenderGraph::TextureDesc graphHdrDesc{
+                .extent = {graphExtent.width, graphExtent.height, 1},
+                .format = HdrBuffer::Format,
+                .usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT |
+                         VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT,
+                .aspect = VK_IMAGE_ASPECT_COLOR_BIT};
+            const RenderGraph::TextureState graphHdrInitialState = hdrBufferInitialized
+                ? RenderGraph::TextureState{
+                    .stage = VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT,
+                    .access = VK_ACCESS_2_SHADER_SAMPLED_READ_BIT,
+                    .layout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL}
+                : RenderGraph::TextureState{
+                    .stage = VK_PIPELINE_STAGE_2_NONE,
+                    .access = VK_ACCESS_2_NONE,
+                    .layout = VK_IMAGE_LAYOUT_UNDEFINED};
+            const auto graphPrepassHdr = viewportFrameGraph.importTexture(
+                "Forward HDR", hdrBuffer.image(), graphHdrDesc, graphHdrInitialState);
             // The prepass clears this image, so the graph may discard old contents.
             const auto graphDepth = viewportFrameGraph.importTexture(
                 "Forward depth", msaa.enabled() ? hiZDepthBuffer.image() : depthBuffer.image(), graphDepthDesc,
@@ -1271,6 +1288,7 @@
             });
             viewportFrameGraph.addPass("Depth / prepass", RenderGraph::Queue::Graphics,
             [&](RenderGraph::PassBuilder& builder) {
+                builder.write(graphPrepassHdr, RenderGraph::TextureUsage::ColorAttachment);
                 builder.write(graphDepth, RenderGraph::TextureUsage::DepthAttachment);
                 if (graphVelocity)
                     builder.write(graphVelocity, RenderGraph::TextureUsage::ColorAttachment);
@@ -1333,6 +1351,7 @@
             // position.  Do not defer graph execution until the end of the
             // viewport: GTAO and the lighting pass below consume this depth.
             viewportFrameGraph.execute(commandBuffer);
+            hdrBufferInitialized = true;
             if (hizEnabled) {
                 hiZViewProjections[currentFrame] = cameraController.camera()->projectionMatrix().native() *
                                                   cameraController.camera()->viewMatrix().native();
@@ -2061,6 +2080,7 @@
 
             msaa.destroy();
             hdrBuffer.destroy();
+            hdrBufferInitialized = false;
             opaqueSceneColor.destroy();
             opaqueSceneColorInitialized = false;
             destroyDepthResources();
@@ -2135,6 +2155,7 @@
             destroySceneViewportResources();
             msaa.destroy();
             hdrBuffer.destroy();
+            hdrBufferInitialized = false;
             opaqueSceneColor.destroy();
             opaqueSceneColorInitialized = false;
             destroyDepthResources();
@@ -2153,6 +2174,7 @@
                 return;
             }
             hdrBuffer.create(vulkanDevice.physical(), device, swapchain.extent(), vulkanDevice.allocator());
+            hdrBufferInitialized = false;
             opaqueSceneColor.create(vulkanDevice.physical(), device, swapchain.extent(), vulkanDevice.allocator());
             opaqueSceneColorInitialized = false;
             msaa.create(swapchain.extent(), HdrBuffer::Format);

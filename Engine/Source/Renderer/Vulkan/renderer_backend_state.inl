@@ -55,6 +55,9 @@
 
         MsaaResources msaa;
         HdrBuffer hdrBuffer;
+        // HDR is persistent. Its first graph import must start from UNDEFINED;
+        // subsequent frames begin after the post path left it sampled.
+        bool hdrBufferInitialized{false};
         // Immutable opaque HDR source sampled by the refracting water pass.
         HdrBuffer opaqueSceneColor;
         bool opaqueSceneColorInitialized{false};

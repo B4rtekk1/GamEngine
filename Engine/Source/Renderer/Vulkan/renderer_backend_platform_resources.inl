@@ -69,6 +69,7 @@
                     VK_SAMPLE_COUNT_1_BIT;
                 msaa.initialize(vulkanDevice.physical(), device, requestedSamples, vulkanDevice.allocator());
                 hdrBuffer.create(vulkanDevice.physical(), device, swapchain.extent(), vulkanDevice.allocator());
+                hdrBufferInitialized = false;
                 opaqueSceneColor.create(vulkanDevice.physical(), device, swapchain.extent(), vulkanDevice.allocator());
                 opaqueSceneColorInitialized = false;
                 msaa.create(swapchain.extent(), HdrBuffer::Format);
@@ -626,6 +627,7 @@
 
             msaa.destroy();
             hdrBuffer.destroy();
+            hdrBufferInitialized = false;
             opaqueSceneColor.destroy();
             opaqueSceneColorInitialized = false;
             destroyDepthResources();
@@ -636,6 +638,7 @@
                 VK_SAMPLE_COUNT_1_BIT;
             msaa.initialize(vulkanDevice.physical(), device, requestedSamples, vulkanDevice.allocator());
             hdrBuffer.create(vulkanDevice.physical(), device, swapchain.extent(), vulkanDevice.allocator());
+            hdrBufferInitialized = false;
             opaqueSceneColor.create(vulkanDevice.physical(), device, swapchain.extent(), vulkanDevice.allocator());
             opaqueSceneColorInitialized = false;
             msaa.create(swapchain.extent(), HdrBuffer::Format);
