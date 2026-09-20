@@ -76,6 +76,7 @@ namespace Engine {
         constexpr float RampRoughness = 0.72F;
 
         void buildFont(UI::UIFontAtlas &atlas) {
+            if (atlas.width() != 0 && atlas.height() != 0) return;
             const std::array<std::filesystem::path, DefaultFontCandidateCount> candidates{
                 "C:/Windows/Fonts/segoeui.ttf", "C:/Windows/Fonts/arial.ttf",
                 "C:/Windows/Fonts/consola.ttf", "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",

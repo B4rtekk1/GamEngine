@@ -297,7 +297,13 @@ void ImageBasedLighting::create(VkPhysicalDevice physicalDevice, VkDevice device
     const auto environmentCache = iblDirectory / "environment.gtex";
     const auto irradianceCache = iblDirectory / "irradiance.gtex";
     const auto prefilteredCache = iblDirectory / "prefiltered.gtex";
-    const auto brdfAsset = libraryDirectory.parent_path() / "Assets" / "BRDF" / "brdf_lut.bin";
+    // Editor projects keep the immutable LUT under Assets, while exported
+    // games rename the asset root to Content in their generated manifest.
+    auto brdfAsset = libraryDirectory.parent_path() / "Assets" / "BRDF" / "brdf_lut.bin";
+    if (!std::filesystem::is_regular_file(brdfAsset)) {
+        const auto packagedBrdfAsset = libraryDirectory.parent_path() / "Content" / "BRDF" / "brdf_lut.bin";
+        if (std::filesystem::is_regular_file(packagedBrdfAsset)) brdfAsset = packagedBrdfAsset;
+    }
     // Build every resource away from the live set. A decode, allocation or
     // upload failure must leave the active descriptor targets intact.
     ImageBasedLighting replacement;

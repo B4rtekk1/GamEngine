@@ -81,6 +81,11 @@ void Renderer::setProjectRoot(std::filesystem::path root) {
     state_->projectRoot = std::move(root).lexically_normal();
 }
 
+void Renderer::setEditorUiBackend(EditorUiBackend *backend) noexcept {
+    if (backend_) return;
+    editorUiBackend_ = backend;
+}
+
 void Renderer::initializeCore(Scene& scene, void* nativeWindow) {
     auto* window = static_cast<SDL_Window*>(nativeWindow);
     if (backend_) throw std::logic_error("Renderer is already initialized");
@@ -88,7 +93,7 @@ void Renderer::initializeCore(Scene& scene, void* nativeWindow) {
                                          state_->assetManager, state_->forwardPass, state_->skyPass,
                                          state_->tonemapPass, state_->temporalAaPass, state_->bloomPass, state_->gtaoPass,
                                          state_->particlePipeline,
-                                         state_->canvasRenderer);
+                                         state_->canvasRenderer, editorUiBackend_);
     backend_->initializeCore();
 }
 
@@ -204,8 +209,4 @@ void Renderer::setEditorCameraPosition(const Vec3 position) const noexcept {
 }
 void Renderer::shutdown() noexcept {
     backend_.reset();
-    if (ImGui::GetCurrentContext() != nullptr &&
-        ImGui::GetIO().BackendPlatformUserData != nullptr) {
-        ImGui_ImplSDL3_Shutdown();
-    }
 }

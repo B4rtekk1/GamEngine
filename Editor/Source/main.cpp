@@ -1,6 +1,7 @@
 #include "imgui.h"
 #include "imgui_internal.h"
 #include "imgui_impl_sdl3.h"
+#include "imgui_impl_vulkan.h"
 #include "imnodes.h"
 
 #include "Engine/Renderer/Renderer.h"
@@ -218,12 +219,76 @@ namespace {
         return *font;
     }
 }
+class EditorUiBackend final : public Engine::EditorUiBackend {
+public:
+    bool initialize(void *window, const Engine::EditorUiInitInfo &source) override {
+        if (!ImGui_ImplSDL3_InitForVulkan(static_cast<SDL_Window *>(window))) return false;
+        ImGui_ImplVulkan_InitInfo info{};
+        info.ApiVersion = VK_API_VERSION_1_3;
+        info.Instance = reinterpret_cast<VkInstance>(source.instance);
+        info.PhysicalDevice = reinterpret_cast<VkPhysicalDevice>(source.physicalDevice);
+        info.Device = reinterpret_cast<VkDevice>(source.device);
+        info.QueueFamily = source.queueFamily;
+        info.Queue = reinterpret_cast<VkQueue>(source.queue);
+        info.DescriptorPoolSize = 128;
+        info.MinImageCount = 2;
+        info.ImageCount = source.imageCount;
+        const VkFormat colorFormat = static_cast<VkFormat>(source.colorFormat);
+        VkPipelineRenderingCreateInfo rendering{VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO};
+        rendering.colorAttachmentCount = 1;
+        rendering.pColorAttachmentFormats = &colorFormat;
+        info.UseDynamicRendering = true;
+        info.PipelineInfoMain.RenderPass = VK_NULL_HANDLE;
+        info.PipelineInfoMain.PipelineRenderingCreateInfo = rendering;
+        info.PipelineInfoMain.MSAASamples = VK_SAMPLE_COUNT_1_BIT;
+        if (!ImGui_ImplVulkan_Init(&info)) {
+            ImGui_ImplSDL3_Shutdown();
+            return false;
+        }
+        return true;
+    }
+
+    void shutdown() noexcept override {
+        if (ImGui::GetCurrentContext() != nullptr && ImGui::GetIO().BackendRendererUserData != nullptr)
+            ImGui_ImplVulkan_Shutdown();
+        if (ImGui::GetCurrentContext() != nullptr && ImGui::GetIO().BackendPlatformUserData != nullptr)
+            ImGui_ImplSDL3_Shutdown();
+    }
+
+    void processEvent(const void *event) override {
+        ImGui_ImplSDL3_ProcessEvent(static_cast<const SDL_Event *>(event));
+    }
+
+    bool wantsTextInput() const override { return ImGui::GetIO().WantTextInput; }
+
+    void newFrame() override {
+        ImGui_ImplVulkan_NewFrame();
+        ImGui_ImplSDL3_NewFrame();
+        ImGui::NewFrame();
+    }
+
+    std::uintptr_t addTexture(const std::uint64_t imageView, const std::uint32_t imageLayout) override {
+        return reinterpret_cast<std::uintptr_t>(ImGui_ImplVulkan_AddTexture(
+            reinterpret_cast<VkImageView>(imageView), static_cast<VkImageLayout>(imageLayout)));
+    }
+
+    void removeTexture(const std::uintptr_t texture) noexcept override {
+        ImGui_ImplVulkan_RemoveTexture(reinterpret_cast<VkDescriptorSet>(texture));
+    }
+
+    void renderDrawData(const std::uint64_t commandBuffer) override {
+        ImGui_ImplVulkan_RenderDrawData(ImGui::GetDrawData(), reinterpret_cast<VkCommandBuffer>(commandBuffer));
+    }
+};
+
 // NOLINTBEGIN(readability-magic-numbers)
 
 int main(int argc, char** argv) {
     Editor::registerBuiltinComponents();
     try {
-        Engine::Diagnostics::instance().initialize(Platform::UserPaths::editorLogs());
+        Engine::Diagnostics::instance().initialize(Platform::UserPaths::editorLogs(),
+                                                   Engine::DiagnosticApplication::Editor,
+                                                   "GamEngine");
         const std::filesystem::path editorRoot = executableDirectory();
         const std::filesystem::path shaderGraphSourceDirectory = findShaderGraphSourceDirectory(editorRoot);
         std::optional<std::filesystem::path> projectPath;
@@ -395,8 +460,10 @@ int main(int argc, char** argv) {
         // The editor is the visual authoring path, so shadows must be active
         // by default. Antialiasing defaults to TAA and is overridden by the
         // startup scene when that scene stores a different mode.
+        EditorUiBackend editorUiBackend;
         Engine::Renderer renderer{Engine::RenderConfig{
             .features = Engine::RenderFeatures{.shadows = true}}};
+        renderer.setEditorUiBackend(&editorUiBackend);
         renderer.setProjectRoot(project.rootPath());
         renderer.initializeCore(scene, window);
         SceneHistory history;

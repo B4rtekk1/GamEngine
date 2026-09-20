@@ -9,9 +9,6 @@
 #include <SDL3/SDL.h>
 #include <SDL3/SDL_vulkan.h>
 #include <vulkan/vulkan.h>
-#include "backends/imgui_impl_sdl3.h"
-#include "backends/imgui_impl_vulkan.h"
-#include "imgui.h"
 
 #include <glm/glm.hpp>
 #include <glm/gtc/packing.hpp>
@@ -208,7 +205,8 @@ namespace Engine {
                          BloomPass &bloomPass,
                          GtaoPass &gtaoPass,
                          GraphicsPipeline &particlePipeline,
-                         UI::CanvasRenderer &canvasRenderer)
+                         UI::CanvasRenderer &canvasRenderer,
+                         EditorUiBackend *editorUiBackend)
             : window(window), forwardPass(forwardPass),
               particlePipeline(particlePipeline),
               skyPass(skyPass),
@@ -217,6 +215,7 @@ namespace Engine {
               bloomPass(bloomPass),
               gtaoPass(gtaoPass),
               canvasRenderer(canvasRenderer),
+              editorUiBackend(editorUiBackend),
               projectRoot(std::move(projectRoot)),
               scene(scene),
               registry(scene.registry()),
@@ -314,8 +313,8 @@ namespace Engine {
                 // While Play Mode owns the mouse, do not let the hidden cursor
                 // activate editor controls below it. Escape releases the capture
                 // and restores normal ImGui mouse input on the next frame.
-                if (editorUiActive && (!mouseEvent || !cameraController.gameMouseCaptured())) {
-                    ImGui_ImplSDL3_ProcessEvent(&event);
+                if (editorUiActive && editorUiBackend && (!mouseEvent || !cameraController.gameMouseCaptured())) {
+                    editorUiBackend->processEvent(&event);
                 }
                 processEvent(event);
                 if (event.type == SDL_EVENT_QUIT ||
@@ -323,7 +322,8 @@ namespace Engine {
                      event.window.windowID == SDL_GetWindowID(window))) {
                     result.quitRequested = true;
                 }
-                if (event.type == SDL_EVENT_KEY_DOWN && !ImGui::GetIO().WantTextInput) {
+                if (event.type == SDL_EVENT_KEY_DOWN &&
+                    (!editorUiBackend || !editorUiBackend->wantsTextInput())) {
                     if (event.key.key == SDLK_F5) {
                         result.togglePlay = true;
                     }
@@ -336,13 +336,9 @@ namespace Engine {
         }
 
         void beginEditorUiFrame() {
-            if (!editorUiActive) {
-                throw std::logic_error("Renderer was initialized without an ImGui context");
-            }
+            if (!editorUiActive || !editorUiBackend) return;
             applyPendingSceneViewportResize();
-            ImGui_ImplVulkan_NewFrame();
-            ImGui_ImplSDL3_NewFrame();
-            ImGui::NewFrame();
+            editorUiBackend->newFrame();
         }
 
         [[nodiscard]] VkDescriptorSet gameViewportTexture() const noexcept {

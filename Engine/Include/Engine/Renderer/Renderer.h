@@ -17,6 +17,31 @@ namespace Engine {
     class Scene;
     using RenderOptimizationFeatures = RenderFeatures;
 
+    struct EditorUiInitInfo final {
+        std::uint64_t instance{};
+        std::uint64_t physicalDevice{};
+        std::uint64_t device{};
+        std::uint64_t queue{};
+        std::uint32_t queueFamily{};
+        std::uint32_t imageCount{};
+        std::uint32_t colorFormat{};
+    };
+
+    /** Editor-owned UI backend. Engine only supplies Vulkan resources and draw timing. */
+    class EditorUiBackend {
+    public:
+        virtual ~EditorUiBackend() = default;
+        virtual bool initialize(void *window, const EditorUiInitInfo &info) = 0;
+        virtual void shutdown() noexcept = 0;
+        virtual void processEvent(const void *event) = 0;
+        [[nodiscard]] virtual bool wantsTextInput() const = 0;
+        virtual void newFrame() = 0;
+        [[nodiscard]] virtual std::uintptr_t addTexture(std::uint64_t imageView,
+                                                         std::uint32_t imageLayout) = 0;
+        virtual void removeTexture(std::uintptr_t texture) noexcept = 0;
+        virtual void renderDrawData(std::uint64_t commandBuffer) = 0;
+    };
+
     /** GPU timeline for a fence-completed frame, matched to its CPU frame number. */
     struct GpuProfileFrame final {
         std::uint64_t frameNumber{};
@@ -81,9 +106,11 @@ namespace Engine {
         /** Sets the project directory used for project-owned runtime caches. Must be called before initializeCore(). */
         void setProjectRoot(std::filesystem::path root);
 
+        void setEditorUiBackend(EditorUiBackend *backend) noexcept;
+
         // nativeWindow and nativeEvent are opaque platform handles. Applications
         // do not need to include graphics-backend headers to use the renderer.
-        /** Initializes presentation, synchronization and the ImGui backend only. */
+        /** Initializes presentation and synchronization; editor UI is optional. */
         void initializeCore(Scene &scene, void *nativeWindow);
 
         /** Creates GPU resources derived from the current scene. */
@@ -179,5 +206,6 @@ namespace Engine {
         GrassRenderSettings grassSettings_{};
         std::unique_ptr<State> state_;
         std::unique_ptr<Backend> backend_;
+        EditorUiBackend *editorUiBackend_ = nullptr;
     };
 } // namespace Engine

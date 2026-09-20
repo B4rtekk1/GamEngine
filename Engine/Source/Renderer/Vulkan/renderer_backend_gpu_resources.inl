@@ -1113,8 +1113,16 @@
                     {}, // binding 8 is meshletHiZInfo below
                     {meshletClusterBuffer.handle(), 0, VK_WHOLE_SIZE},
                 }};
-                const VkDescriptorImageInfo meshletHiZInfo{hiZBuffer.sampler(), hiZBuffer.fullView(),
-                                                           VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
+                // Meshlet culling keeps binding 8 populated even when the
+                // optional Hi-Z pyramid was not allocated for this renderer
+                // configuration.  A valid depth fallback is required because
+                // nullDescriptor is not enabled on the device.
+                const auto& meshletDepthFallback = msaa.enabled() ? hiZDepthBuffer : depthBuffer;
+                const VkDescriptorImageInfo meshletHiZInfo = hiZBuffer.image() != VK_NULL_HANDLE
+                    ? VkDescriptorImageInfo{hiZBuffer.sampler(), hiZBuffer.fullView(),
+                                            VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL}
+                    : VkDescriptorImageInfo{meshletDepthFallback.sampler(), meshletDepthFallback.imageView(),
+                                            VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL};
                 VkWriteDescriptorSet meshletWrites[10]{};
                 for (std::uint32_t binding = 0; binding < std::size(meshletWrites); ++binding) {
                     meshletWrites[binding] = {.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
@@ -1504,7 +1512,7 @@
                 // Recent ImGui Vulkan backends use a SAMPLED_IMAGE descriptor
                 // plus a separate sampler. Its descriptor type is backend
                 // owned, so a direct COMBINED_IMAGE_SAMPLER write is invalid.
-                ImGui_ImplVulkan_RemoveTexture(sceneViewportDescriptor);
+                if (editorUiBackend) editorUiBackend->removeTexture(reinterpret_cast<std::uintptr_t>(sceneViewportDescriptor));
                 sceneViewportDescriptor = VK_NULL_HANDLE;
             }
             sceneViewportCacheValid = false;

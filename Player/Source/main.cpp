@@ -1,6 +1,8 @@
 #include <Engine/Engine.h>
+#include <Engine/Core/Diagnostics.h>
 #include <Engine/Scripting/ScriptModuleManager.h>
 #include <Engine/Scripting/ScriptRegistry.h>
+#include <Platform/UserPaths.h>
 
 #include <SDL3/SDL.h>
 
@@ -15,7 +17,23 @@
 // NOLINTBEGIN(readability-magic-numbers)
 
 int main(int argc, char** argv) {
+    struct DiagnosticsGuard final {
+        ~DiagnosticsGuard() { Engine::Diagnostics::instance().shutdown(); }
+    };
+    DiagnosticsGuard diagnosticsGuard;
+
     try {
+        const char* const basePath = SDL_GetBasePath();
+        if (basePath == nullptr) throw std::runtime_error("Could not determine executable directory");
+        const std::filesystem::path executableRoot{basePath};
+        std::filesystem::path executablePath = argc > 0 && argv[0] != nullptr
+                                                   ? std::filesystem::path{argv[0]}
+                                                   : executableRoot / "GamEnginePlayer.exe";
+        std::string gameName = executablePath.stem().string();
+        if (gameName.empty()) gameName = "Game";
+        Engine::Diagnostics::instance().initialize(
+            Platform::UserPaths::gameLogs(gameName), Engine::DiagnosticApplication::Game, gameName);
+
         std::optional<std::filesystem::path> projectPath;
         std::optional<std::filesystem::path> sceneOverride;
         for (int index = 1; index < argc; ++index) {
@@ -30,9 +48,6 @@ int main(int argc, char** argv) {
                 sceneOverride = std::filesystem::path{argv[index]};
             }
         }
-        const char* const basePath = SDL_GetBasePath();
-        if (basePath == nullptr) throw std::runtime_error("Could not determine executable directory");
-        const std::filesystem::path executableRoot{basePath};
         const Engine::Project project = projectPath
                                             ? Engine::Project::load(*projectPath)
                                             : Engine::Project::load(executableRoot / "GamEngine.project");
@@ -57,7 +72,10 @@ int main(int argc, char** argv) {
         app.run();
         scriptModules.unload(app.scene());
     } catch (const std::exception& exception) {
-        std::cerr << "Error: " << exception.what() << '\n';
+        auto& diagnostics = Engine::Diagnostics::instance();
+        diagnostics.report(Engine::DiagnosticSeverity::Error, exception.what(), {.subsystem = "Player"});
+        diagnostics.flush();
+        std::cerr << "Fatal error: " << exception.what() << '\n';
         return EXIT_FAILURE;
     }
 

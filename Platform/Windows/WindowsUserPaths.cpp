@@ -23,5 +23,10 @@ std::filesystem::path UserPaths::editorData() { return localData() / "GamEngine"
 std::filesystem::path UserPaths::editorLogs() { return editorData() / "Logs"; }
 std::filesystem::path UserPaths::editorCrashes() { return editorData() / "Crashes"; }
 std::filesystem::path UserPaths::editorState() { return editorData() / "State"; }
+std::filesystem::path UserPaths::gameData(const std::string_view gameName) {
+    return localData() / "GamEngine" / "Games" / std::filesystem::path{std::string{gameName}};
+}
+std::filesystem::path UserPaths::gameLogs(const std::string_view gameName) { return gameData(gameName) / "Logs"; }
+std::filesystem::path UserPaths::gameCrashes(const std::string_view gameName) { return gameData(gameName) / "Crashes"; }
 
 } // namespace Platform

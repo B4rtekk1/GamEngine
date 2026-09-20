@@ -6,6 +6,7 @@
 
 #include <cctype>
 #include <cmath>
+#include <array>
 #include <stdexcept>
 #include <utility>
 
@@ -18,6 +19,21 @@
 
 namespace Engine {
     namespace {
+        void buildDefaultFont(UI::UIFontAtlas &atlas) {
+            const std::array<std::filesystem::path, 5> candidates{
+                "C:/Windows/Fonts/segoeui.ttf", "C:/Windows/Fonts/arial.ttf",
+                "C:/Windows/Fonts/consola.ttf", "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+                "/usr/share/fonts/truetype/liberation2/LiberationSans-Regular.ttf",
+            };
+            const auto font = std::ranges::find_if(candidates, [](const auto &path) {
+                return std::filesystem::is_regular_file(path);
+            });
+            if (font == candidates.end()) throw std::runtime_error("No default TrueType font found");
+            if (const std::string error = atlas.build(font->string(), 24, 32, 126); !error.empty()) {
+                throw std::runtime_error("Could not build default font atlas: " + error);
+            }
+        }
+
         [[nodiscard]] bool isGltfPath(const std::filesystem::path &path) {
             std::string extension = path.extension().string();
             std::ranges::transform(extension, extension.begin(),
@@ -45,6 +61,7 @@ namespace Engine {
     }
 
     Scene::Scene() : physics_(*this) {
+        buildDefaultFont(fontAtlas_);
     }
 
     Actor Scene::primaryCamera() noexcept {

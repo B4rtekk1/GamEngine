@@ -104,7 +104,9 @@ namespace Engine {
         return diagnostics;
     }
 
-    void Diagnostics::initialize(const std::filesystem::path& logDirectory) noexcept {
+    void Diagnostics::initialize(const std::filesystem::path& logDirectory,
+                                 const DiagnosticApplication application,
+                                 const std::string_view applicationName) noexcept {
         try {
             std::scoped_lock lock{mutex_};
             if (logFile_.is_open()) return;
@@ -113,15 +115,21 @@ namespace Engine {
             cleanupOldLogs(logDirectory);
             const auto directory = logDirectory / formatTime(now, "%Y-%m-%d");
             std::filesystem::create_directories(directory);
-            currentLogPath_ = directory / ("Editor_" + formatTime(now, "%Y-%m-%d_%H-%M-%S") +
-                                           "_" + std::to_string(processId()) + ".log");
+            const char* const applicationPrefix = application == DiagnosticApplication::Game ? "Game" : "Editor";
+            currentLogPath_ = directory / (std::string{applicationPrefix} + "_" +
+                                           formatTime(now, "%Y-%m-%d_%H-%M-%S") + "_" +
+                                           std::to_string(processId()) + ".log");
             logFile_.open(currentLogPath_, std::ios::out | std::ios::app);
             if (!logFile_) {
                 currentLogPath_.clear();
                 return;
             }
+            const std::string sessionName = applicationName.empty()
+                                                 ? (application == DiagnosticApplication::Game ? "GamEngine Game" : "GamEngine Editor")
+                                                 : std::string{applicationName} +
+                                                       (application == DiagnosticApplication::Game ? " Game" : " Editor");
             logFile_ << "============================================================\n"
-                     << "GamEngine Editor Session\n"
+                     << sessionName << " Session\n"
                      << "============================================================\n"
                      << "Started: " << formatTime(now, "%Y-%m-%d %H:%M:%S") << '\n'
                      << "PID: " << processId() << "\n============================================================\n";
@@ -161,11 +169,7 @@ namespace Engine {
                 // In Debug an editor can be terminated while blocked inside
                 // a graphics-driver call.  Persist every entry so the last
                 // line identifies the actual blocking boundary.
-#ifndef NDEBUG
-                logFile_.flush();
-#else
-                if (severity == DiagnosticSeverity::Error) logFile_.flush();
-#endif
+                if (severity != DiagnosticSeverity::Info) logFile_.flush();
             }
         } catch (...) {
             // Reporting must never turn a recoverable runtime problem into a crash.

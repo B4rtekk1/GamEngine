@@ -8,12 +8,15 @@
 #include <mutex>
 #include <fstream>
 #include <string>
+#include <string_view>
 #include <thread>
 #include <vector>
 
 namespace Engine {
     /** Severity used by the engine-wide diagnostic stream. */
     enum class DiagnosticSeverity { Info, Warning, Error };
+
+    enum class DiagnosticApplication { Editor, Game };
 
     /** Context that lets an editor identify both the failure and its owner. */
     struct DiagnosticContext final {
@@ -39,7 +42,9 @@ namespace Engine {
         [[nodiscard]] static Diagnostics &instance();
 
         /** Starts a file sink for this process. Safe to call again after shutdown. */
-        void initialize(const std::filesystem::path &logDirectory) noexcept;
+        void initialize(const std::filesystem::path &logDirectory,
+                        DiagnosticApplication application = DiagnosticApplication::Editor,
+                        std::string_view applicationName = {}) noexcept;
 
         void shutdown() noexcept;
 

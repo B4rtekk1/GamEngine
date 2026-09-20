@@ -1987,7 +1987,7 @@
                                           RenderGraph::Queue::Graphics,
             [&](RenderGraph::PassBuilder& builder) {
                 if (editorUiActive) {
-                    // ImGui::Image samples the Game View descriptor.  Make
+                    // The editor samples the Game View descriptor. Make
                     // that external shader read visible to the graph so its
                     // producer (notably TAA resolve) is not dead-pass culled.
                     if (renderGameViewport)
@@ -2015,7 +2015,7 @@
                     rendering.colorAttachmentCount = 1;
                     rendering.pColorAttachments = &color;
                     vkCmdBeginRendering(buffer, &rendering);
-                    ImGui_ImplVulkan_RenderDrawData(ImGui::GetDrawData(), buffer);
+                    if (editorUiBackend) editorUiBackend->renderDrawData(reinterpret_cast<std::uint64_t>(buffer));
                     vkCmdEndRendering(buffer);
                 } else {
                     if (taaResolveActive)
@@ -2632,9 +2632,9 @@
                 sceneViewportImageInitialized = true;
             }
             if (sceneViewportImageInitialized && sceneViewportDescriptor == VK_NULL_HANDLE) {
-                sceneViewportDescriptor = ImGui_ImplVulkan_AddTexture(
-                    sceneViewportTarget.color().imageView(),
-                    VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+                if (editorUiBackend) sceneViewportDescriptor = reinterpret_cast<VkDescriptorSet>(editorUiBackend->addTexture(
+                    reinterpret_cast<std::uint64_t>(sceneViewportTarget.color().imageView()),
+                    VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL));
             }
 
             currentFrame = (currentFrame + 1) % MAX_FRAMES_IN_FLIGHT;
@@ -2675,7 +2675,7 @@
             rendering.colorAttachmentCount = 1;
             rendering.pColorAttachments = &color;
             vkCmdBeginRendering(commandBuffer, &rendering);
-            ImGui_ImplVulkan_RenderDrawData(ImGui::GetDrawData(), commandBuffer);
+            if (editorUiBackend) editorUiBackend->renderDrawData(reinterpret_cast<std::uint64_t>(commandBuffer));
             vkCmdEndRendering(commandBuffer);
             VkImageMemoryBarrier2 toPresent{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2};
             toPresent.srcStageMask = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT;

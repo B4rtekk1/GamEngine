@@ -3,7 +3,7 @@ option(GAMEENGINE_INSTALL_PORTABLE_EDITOR "Install a self-contained GamEngine Ed
 # This is deliberately separate from the Editor package.  A game export copies
 # this immutable template; it never recompiles Engine, Player or built-in shaders.
 if(TARGET Player)
-    install(TARGETS Player Engine DearImGui COMPONENT GamEngineRuntime RUNTIME DESTINATION . LIBRARY DESTINATION .)
+    install(TARGETS Player Engine COMPONENT GamEngineRuntime RUNTIME DESTINATION . LIBRARY DESTINATION .)
     install(IMPORTED_RUNTIME_ARTIFACTS SDL3::SDL3-shared COMPONENT GamEngineRuntime
         RUNTIME DESTINATION . LIBRARY DESTINATION .)
     install(DIRECTORY "${GAMEENGINE_SHADER_OUTPUT_DIR}/" DESTINATION shaders COMPONENT GamEngineRuntime)

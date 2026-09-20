@@ -760,40 +760,28 @@
         }
 
         void createEditorUiResources(const bool addViewportTextures = true) {
-            if (ImGui::GetCurrentContext() == nullptr) { return; }
-            // ImGui_ImplVulkan_Shutdown() destroys platform windows as part of
-            // its viewport cleanup. The SDL backend therefore has to be
-            // initialized again after every Vulkan-backend rebuild; otherwise
-            // its stale state rejects all events for the main SDL window.
-            if (!ImGui_ImplSDL3_InitForVulkan(window)) {
-                throw std::runtime_error("Could not initialize ImGui SDL backend");
-            }
-            ImGui_ImplVulkan_InitInfo info{};
-            info.ApiVersion = VK_API_VERSION_1_3; info.Instance = instance;
-            info.PhysicalDevice = vulkanDevice.physical(); info.Device = device;
-            info.QueueFamily = vulkanDevice.graphicsQueueFamily(); info.Queue = vulkanDevice.graphicsQueue();
-            constexpr uint32_t imguiDescriptorPoolSize{128};
-            info.DescriptorPoolSize = imguiDescriptorPoolSize; info.MinImageCount = 2;
-            info.ImageCount = static_cast<uint32_t>(swapchain.imageCount());
-            const VkFormat editorUiColorFormat = swapchain.format();
-            VkPipelineRenderingCreateInfo editorUiRendering{VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO};
-            editorUiRendering.colorAttachmentCount = 1;
-            editorUiRendering.pColorAttachmentFormats = &editorUiColorFormat;
-            info.UseDynamicRendering = true;
-            info.PipelineInfoMain.RenderPass = VK_NULL_HANDLE;
-            info.PipelineInfoMain.PipelineRenderingCreateInfo = editorUiRendering;
-            info.PipelineInfoMain.MSAASamples = VK_SAMPLE_COUNT_1_BIT;
-            if (!ImGui_ImplVulkan_Init(&info)) throw std::runtime_error("Could not initialize ImGui Vulkan backend");
+            if (!editorUiBackend) return;
+            const EditorUiInitInfo info{
+                reinterpret_cast<std::uint64_t>(instance),
+                reinterpret_cast<std::uint64_t>(vulkanDevice.physical()),
+                reinterpret_cast<std::uint64_t>(device),
+                reinterpret_cast<std::uint64_t>(vulkanDevice.graphicsQueue()),
+                vulkanDevice.graphicsQueueFamily(),
+                static_cast<std::uint32_t>(swapchain.imageCount()),
+                static_cast<std::uint32_t>(swapchain.format())};
+            if (!editorUiBackend->initialize(window, info))
+                throw std::runtime_error("Could not initialize editor UI backend");
             if (!addViewportTextures) {
                 editorUiActive = true;
                 return;
             }
-            gameViewportDescriptor = ImGui_ImplVulkan_AddTexture(hdrBuffer.imageView(), VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+            gameViewportDescriptor = reinterpret_cast<VkDescriptorSet>(editorUiBackend->addTexture(
+                reinterpret_cast<std::uint64_t>(hdrBuffer.imageView()), VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL));
             if (antialiasingLevel == AntialiasingLevel::TAA) {
                 const auto historyViews = temporalAaPass.historyViews();
                 for (std::size_t index = 0; index < historyViews.size(); ++index) {
-                    gameViewportTemporalDescriptors[index] = ImGui_ImplVulkan_AddTexture(
-                        historyViews[index], VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+                    gameViewportTemporalDescriptors[index] = reinterpret_cast<VkDescriptorSet>(editorUiBackend->addTexture(
+                        reinterpret_cast<std::uint64_t>(historyViews[index]), VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL));
                 }
             }
             // The image starts in UNDEFINED layout. Publish it only after a
@@ -804,55 +792,42 @@
 
         void destroyEditorUiResources() noexcept {
             if (editorUiActive) {
-                if (gameViewportDescriptor != VK_NULL_HANDLE) { ImGui_ImplVulkan_RemoveTexture(gameViewportDescriptor);
+                if (gameViewportDescriptor != VK_NULL_HANDLE) { editorUiBackend->removeTexture(reinterpret_cast<std::uintptr_t>(gameViewportDescriptor));
 }
                 for (const VkDescriptorSet descriptor : gameViewportTemporalDescriptors) {
-                    if (descriptor != VK_NULL_HANDLE) ImGui_ImplVulkan_RemoveTexture(descriptor);
+                    if (descriptor != VK_NULL_HANDLE) editorUiBackend->removeTexture(reinterpret_cast<std::uintptr_t>(descriptor));
                 }
-                if (sceneViewportDescriptor != VK_NULL_HANDLE) { ImGui_ImplVulkan_RemoveTexture(sceneViewportDescriptor);
+                if (sceneViewportDescriptor != VK_NULL_HANDLE) { editorUiBackend->removeTexture(reinterpret_cast<std::uintptr_t>(sceneViewportDescriptor));
 }
             }
-            // Do not rely only on editorUiActive here. If initialization failed
-            // halfway through, ImGui can still own a renderer backend and the
-            // next Vulkan rebuild would assert in ImGui_ImplVulkan_Init.
-            if (ImGui::GetCurrentContext() != nullptr &&
-                ImGui::GetIO().BackendRendererUserData != nullptr) {
-                ImGui_ImplVulkan_Shutdown();
-            }
-            // Vulkan shutdown clears the main viewport's PlatformHandle.
-            // Shut down SDL too so createEditorUiResources() can register the
-            // application window again on the next renderer rebuild.
-            if (ImGui::GetCurrentContext() != nullptr &&
-                ImGui::GetIO().BackendPlatformUserData != nullptr) {
-                ImGui_ImplSDL3_Shutdown();
-            }
+            if (editorUiBackend) editorUiBackend->shutdown();
             gameViewportDescriptor = sceneViewportDescriptor = VK_NULL_HANDLE;
             gameViewportTemporalDescriptors.fill(VK_NULL_HANDLE);
             editorUiActive = false;
         }
 
-        // Scene reload replaces the images displayed by ImGui::Image. Rebind
+        // Scene reload replaces the image displayed by the editor. Rebind
         // its descriptors before the next UI command buffer is recorded.
         void refreshEditorViewportTextures() {
             if (!editorUiActive) { return;
 }
             if (gameViewportDescriptor != VK_NULL_HANDLE) {
-                ImGui_ImplVulkan_RemoveTexture(gameViewportDescriptor);
+                editorUiBackend->removeTexture(reinterpret_cast<std::uintptr_t>(gameViewportDescriptor));
             }
             for (const VkDescriptorSet descriptor : gameViewportTemporalDescriptors) {
-                if (descriptor != VK_NULL_HANDLE) ImGui_ImplVulkan_RemoveTexture(descriptor);
+                if (descriptor != VK_NULL_HANDLE) editorUiBackend->removeTexture(reinterpret_cast<std::uintptr_t>(descriptor));
             }
             gameViewportTemporalDescriptors.fill(VK_NULL_HANDLE);
             if (sceneViewportDescriptor != VK_NULL_HANDLE) {
-                ImGui_ImplVulkan_RemoveTexture(sceneViewportDescriptor);
+                editorUiBackend->removeTexture(reinterpret_cast<std::uintptr_t>(sceneViewportDescriptor));
             }
-            gameViewportDescriptor = ImGui_ImplVulkan_AddTexture(
-                hdrBuffer.imageView(), VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+            gameViewportDescriptor = reinterpret_cast<VkDescriptorSet>(editorUiBackend->addTexture(
+                reinterpret_cast<std::uint64_t>(hdrBuffer.imageView()), VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL));
             if (antialiasingLevel == AntialiasingLevel::TAA) {
                 const auto historyViews = temporalAaPass.historyViews();
                 for (std::size_t index = 0; index < historyViews.size(); ++index) {
-                    gameViewportTemporalDescriptors[index] = ImGui_ImplVulkan_AddTexture(
-                        historyViews[index], VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+                    gameViewportTemporalDescriptors[index] = reinterpret_cast<VkDescriptorSet>(editorUiBackend->addTexture(
+                        reinterpret_cast<std::uint64_t>(historyViews[index]), VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL));
                 }
             }
             sceneViewportDescriptor = VK_NULL_HANDLE;

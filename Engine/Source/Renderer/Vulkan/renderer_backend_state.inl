@@ -23,6 +23,7 @@
     private:
         friend class Renderer;
         SDL_Window* window = nullptr;
+        EditorUiBackend* editorUiBackend = nullptr;
 
         VkInstance instance{};
         VkDebugUtilsMessengerEXT debugMessenger{};
