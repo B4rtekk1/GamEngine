@@ -155,6 +155,7 @@
         AntialiasingLevel antialiasingLevel;
         const ShadowQuality& shadowQuality;
         const GtaoQuality& gtaoQuality;
+        GtaoQuality configuredGtaoQuality;
         const GtaoDebugView& gtaoDebugView;
         const PbrDebugView& pbrDebugView;
         const IblQuality& iblQuality;

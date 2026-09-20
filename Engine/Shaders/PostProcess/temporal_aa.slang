@@ -102,15 +102,15 @@ FragmentOutput fragmentMain(FragmentInput input) {
     }
 
     // Our velocity is current UV - previous UV, unlike Godot's convention.
-    // The velocity buffers are generated from jittered projections, so remove
-    // the temporal jitter component before looking up the previous history.
+    // The projection stores jitter with the opposite sign of the resulting
+    // NDC offset (clip.w = -z), so compensate for that sign before history lookup.
     // Jitter is stored in NDC, while velocity is in UV space (NDC * 0.5).
     const float2 currentJitter = float2(settings.currentJitterX,
                                         settings.currentJitterY) * 0.5;
     const float2 previousJitter = float2(settings.previousJitterX,
                                          settings.previousJitterY) * 0.5;
     const float2 jitterDelta = currentJitter - previousJitter;
-    const float2 velocityWithoutJitter = velocitySample - jitterDelta;
+    const float2 velocityWithoutJitter = velocitySample + jitterDelta;
     const float2 historyUv = input.uv - velocityWithoutJitter;
     const bool historyInBounds = all(historyUv >= 0.0) && all(historyUv <= 1.0);
     const float historyDepth = historyDepthFrame.Sample(historyUv).r;

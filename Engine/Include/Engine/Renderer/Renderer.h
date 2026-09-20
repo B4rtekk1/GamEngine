@@ -55,6 +55,8 @@ namespace Engine {
 
         [[nodiscard]] ShadowQuality shadowQuality() const noexcept;
 
+        void applyRenderQualityPreset(RenderQualityPreset preset) noexcept;
+
         void setGtaoQuality(GtaoQuality quality) noexcept;
         [[nodiscard]] GtaoQuality gtaoQuality() const noexcept;
         void setGtaoDebugView(GtaoDebugView view) noexcept;

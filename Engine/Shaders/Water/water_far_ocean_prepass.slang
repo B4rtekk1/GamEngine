@@ -57,6 +57,6 @@ PSOut fragmentMain(VSOut i){
     if(bestBody==0xffffffffu)discard;
     float4 clip=mul(mul(float4(bestPos,1),frame.view),frame.projection);float4 prev=mul(mul(float4(bestPos,1),frame.previousView),frame.previousProjection);
     float rough=clamp(sqrt(materials[bestMaterial].waterShallowColorRoughness.w*materials[bestMaterial].waterShallowColorRoughness.w+2.0*bestVariance),0.045,1.0);
-    uint packed=1u | (0u<<2u) | (0u<<4u) | (WATER_FAR_ANALYTIC_PAGE_ID<<WATER_META_PAGE_SHIFT) | ((bestExecutionFlags&WATER_EXEC_SIMPLE_SHADING)!=0u?WATER_SIMPLE_SHADING_FLAG:0u) | WATER_FAR_ANALYTIC_FLAG | WATER_REACTIVE_FLAG | WATER_VALID_FLAG;
+    uint packed=1u | (0u<<2u) | (0u<<4u) | (WATER_FAR_ANALYTIC_PAGE_ID<<WATER_META_PAGE_SHIFT) | ((bestExecutionFlags&WATER_EXEC_SIMPLE_SHADING)!=0u?WATER_SIMPLE_SHADING_FLAG:0u) | WATER_FAR_ANALYTIC_FLAG | WATER_VALID_FLAG;
     PSOut o;o.surface=float4(octEncode(normalize(bestNormal)),clip.z/clip.w,rough);o.meta=float2(asfloat(bestMaterial),asfloat(packed));o.velocity=(clip.xy/clip.w-prev.xy/prev.w)*0.5;o.depth=clip.z/clip.w;return o;
 }

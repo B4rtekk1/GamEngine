@@ -92,8 +92,9 @@ namespace Engine {
             // immutable opaque scene.  Building a forward-compatible pipeline
             // here produces a validation warning (velocity target mismatch) and
             // can never be selected by a draw loop.
-            if (index == materialShaderIndex(MaterialShader::Water)) { continue;
-}
+            if (index == materialShaderIndex(MaterialShader::Water)) {
+                continue;
+            }
             GraphicsPipelineOptions materialOptions = options;
             materialOptions.shader = shaderPaths[index];
             materialPipelines_[index].create(device, materialOptions);
@@ -261,7 +262,7 @@ namespace Engine {
         rendering.renderArea.extent = extent;
         rendering.layerCount = 1;
         rendering.colorAttachmentCount = 1U + (hasVelocityAttachment_ ? 1U : 0U) +
-                                        (hasViewNormalAttachment_ ? 1U : 0U);
+                                         (hasViewNormalAttachment_ ? 1U : 0U);
         rendering.pColorAttachments = colors.data();
         rendering.pDepthAttachment = &depth;
         vkCmdBeginRendering(commandBuffer, &rendering);

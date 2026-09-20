@@ -3,160 +3,168 @@
 #include <stdexcept>
 
 namespace Engine {
-namespace {
+    namespace {
+        struct TonemapSettings {
+            float exposure;
+            float applyGamma;
+        };
 
-struct TonemapSettings {
-    float exposure;
-    float applyGamma;
-};
-
-bool isSrgbFormat(const VkFormat format) {
-    return format == VK_FORMAT_R8G8B8A8_SRGB ||
-           format == VK_FORMAT_B8G8R8A8_SRGB ||
-           format == VK_FORMAT_A8B8G8R8_SRGB_PACK32;
-}
-
-} // namespace
-
-TonemapPass::~TonemapPass() {
-    destroy();
-}
-
-void TonemapPass::create(const VkDevice device, const VkFormat swapchainFormat,
-                         const VkExtent2D extent,
-                         const std::vector<VkImageView>& swapchainViews,
-                         const VkImageView hdrView, const VkSampler hdrSampler, const VkImageView bloomView,
-                         Assets::AssetManager& assets,
-                         const std::array<VkImageView, 2> temporalViews) {
-    if (device == VK_NULL_HANDLE || swapchainFormat == VK_FORMAT_UNDEFINED ||
-        swapchainViews.empty() || hdrView == VK_NULL_HANDLE || hdrSampler == VK_NULL_HANDLE) {
-        throw std::invalid_argument("Tonemap pass received incomplete resources");
-    }
-
-    destroy();
-    device_ = device;
-    manualGamma_ = !isSrgbFormat(swapchainFormat);
-    try {
-        VkDescriptorSetLayoutBinding binding{};
-        binding.binding = 0;
-        binding.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-        binding.descriptorCount = 1;
-        binding.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
-        VkDescriptorSetLayoutCreateInfo layoutInfo{
-            VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
-        VkDescriptorSetLayoutBinding bloomBinding = binding;
-        bloomBinding.binding = 1;
-        std::array bindings{binding, bloomBinding};
-        layoutInfo.bindingCount = static_cast<std::uint32_t>(bindings.size());
-        layoutInfo.pBindings = bindings.data();
-        if (vkCreateDescriptorSetLayout(device_, &layoutInfo, nullptr,
-                                        &descriptorSetLayout_) != VK_SUCCESS) {
-            throw std::runtime_error("Could not create tonemap descriptor layout");
+        bool isSrgbFormat(const VkFormat format) {
+            return format == VK_FORMAT_R8G8B8A8_SRGB ||
+                   format == VK_FORMAT_B8G8R8A8_SRGB ||
+                   format == VK_FORMAT_A8B8G8R8_SRGB_PACK32;
         }
+    } // namespace
 
-        GraphicsPipelineOptions options{};
-        options.colorFormat = swapchainFormat;
-        options.dynamicRendering = true;
-        // The UI pass loads this result before transitioning the image for presentation.
-        options.colorFinalLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
-        options.shader = "shaders/aces_tonemap.spv";
-        options.assetManager = &assets;
-        options.pushConstantSize = sizeof(TonemapSettings);
-        options.pushConstantStages = VK_SHADER_STAGE_FRAGMENT_BIT;
-        options.cullMode = VK_CULL_MODE_NONE;
-        options.depthTestEnable = VK_FALSE;
-        options.depthWriteEnable = VK_FALSE;
-        options.descriptorSetLayouts = {descriptorSetLayout_};
-        pipeline_.create(device_, options);
-
-        targetViews_ = swapchainViews;
-
-        VkDescriptorPoolSize poolSize{VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 6};
-        VkDescriptorPoolCreateInfo poolInfo{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
-        poolInfo.maxSets = static_cast<std::uint32_t>(descriptorSets_.size());
-        poolInfo.poolSizeCount = 1;
-        poolInfo.pPoolSizes = &poolSize;
-        if (vkCreateDescriptorPool(device_, &poolInfo, nullptr, &descriptorPool_) != VK_SUCCESS) {
-            throw std::runtime_error("Could not create tonemap descriptor pool");
-        }
-
-        VkDescriptorSetAllocateInfo allocation{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};
-        allocation.descriptorPool = descriptorPool_;
-        allocation.descriptorSetCount = static_cast<std::uint32_t>(descriptorSets_.size());
-        allocation.pSetLayouts = &descriptorSetLayout_;
-        std::array<VkDescriptorSetLayout, 3> layouts{descriptorSetLayout_, descriptorSetLayout_, descriptorSetLayout_};
-        allocation.pSetLayouts = layouts.data();
-        if (vkAllocateDescriptorSets(device_, &allocation, descriptorSets_.data()) != VK_SUCCESS) {
-            throw std::runtime_error("Could not allocate tonemap descriptor set");
-        }
-
-        const std::array<VkImageView, 3> sources{hdrView,
-            temporalViews[0] == VK_NULL_HANDLE ? hdrView : temporalViews[0],
-            temporalViews[1] == VK_NULL_HANDLE ? hdrView : temporalViews[1]};
-        for (std::size_t index = 0; index < descriptorSets_.size(); ++index) {
-            const VkDescriptorImageInfo images[2]{{hdrSampler, sources[index], VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL},
-                                                  {hdrSampler, bloomView, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL}};
-            VkWriteDescriptorSet writes[2]{};
-            for (std::uint32_t bindingIndex = 0; bindingIndex < 2; ++bindingIndex) {
-                writes[bindingIndex] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET}; writes[bindingIndex].dstSet = descriptorSets_[index];
-                writes[bindingIndex].dstBinding = bindingIndex; writes[bindingIndex].descriptorCount = 1;
-                writes[bindingIndex].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER; writes[bindingIndex].pImageInfo = &images[bindingIndex];
-            }
-            vkUpdateDescriptorSets(device_, 2, writes, 0, nullptr);
-        }
-    } catch (...) {
+    TonemapPass::~TonemapPass() {
         destroy();
-        throw;
     }
-}
 
-void TonemapPass::destroy() noexcept {
-    if (device_ != VK_NULL_HANDLE) {
-        if (descriptorPool_ != VK_NULL_HANDLE) {
-            vkDestroyDescriptorPool(device_, descriptorPool_, nullptr);
+    void TonemapPass::create(const VkDevice device, const VkFormat swapchainFormat,
+                             const VkExtent2D extent,
+                             const std::vector<VkImageView> &swapchainViews,
+                             const VkImageView hdrView, const VkSampler hdrSampler, const VkImageView bloomView,
+                             Assets::AssetManager &assets,
+                             const std::array<VkImageView, 2> temporalViews) {
+        if (device == VK_NULL_HANDLE || swapchainFormat == VK_FORMAT_UNDEFINED ||
+            swapchainViews.empty() || hdrView == VK_NULL_HANDLE || hdrSampler == VK_NULL_HANDLE) {
+            throw std::invalid_argument("Tonemap pass received incomplete resources");
+        }
+
+        destroy();
+        device_ = device;
+        manualGamma_ = !isSrgbFormat(swapchainFormat);
+        try {
+            VkDescriptorSetLayoutBinding binding{};
+            binding.binding = 0;
+            binding.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+            binding.descriptorCount = 1;
+            binding.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+            VkDescriptorSetLayoutCreateInfo layoutInfo{
+                VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO
+            };
+            VkDescriptorSetLayoutBinding bloomBinding = binding;
+            bloomBinding.binding = 1;
+            std::array bindings{binding, bloomBinding};
+            layoutInfo.bindingCount = static_cast<std::uint32_t>(bindings.size());
+            layoutInfo.pBindings = bindings.data();
+            if (vkCreateDescriptorSetLayout(device_, &layoutInfo, nullptr,
+                                            &descriptorSetLayout_) != VK_SUCCESS) {
+                throw std::runtime_error("Could not create tonemap descriptor layout");
+            }
+
+            GraphicsPipelineOptions options{};
+            options.colorFormat = swapchainFormat;
+            options.dynamicRendering = true;
+            // The UI pass loads this result before transitioning the image for presentation.
+            options.colorFinalLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+            options.shader = "shaders/aces_tonemap.spv";
+            options.assetManager = &assets;
+            options.pushConstantSize = sizeof(TonemapSettings);
+            options.pushConstantStages = VK_SHADER_STAGE_FRAGMENT_BIT;
+            options.cullMode = VK_CULL_MODE_NONE;
+            options.depthTestEnable = VK_FALSE;
+            options.depthWriteEnable = VK_FALSE;
+            options.descriptorSetLayouts = {descriptorSetLayout_};
+            pipeline_.create(device_, options);
+
+            targetViews_ = swapchainViews;
+
+            VkDescriptorPoolSize poolSize{VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 6};
+            VkDescriptorPoolCreateInfo poolInfo{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
+            poolInfo.maxSets = static_cast<std::uint32_t>(descriptorSets_.size());
+            poolInfo.poolSizeCount = 1;
+            poolInfo.pPoolSizes = &poolSize;
+            if (vkCreateDescriptorPool(device_, &poolInfo, nullptr, &descriptorPool_) != VK_SUCCESS) {
+                throw std::runtime_error("Could not create tonemap descriptor pool");
+            }
+
+            VkDescriptorSetAllocateInfo allocation{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};
+            allocation.descriptorPool = descriptorPool_;
+            allocation.descriptorSetCount = static_cast<std::uint32_t>(descriptorSets_.size());
+            allocation.pSetLayouts = &descriptorSetLayout_;
+            std::array<VkDescriptorSetLayout, 3> layouts{
+                descriptorSetLayout_, descriptorSetLayout_, descriptorSetLayout_
+            };
+            allocation.pSetLayouts = layouts.data();
+            if (vkAllocateDescriptorSets(device_, &allocation, descriptorSets_.data()) != VK_SUCCESS) {
+                throw std::runtime_error("Could not allocate tonemap descriptor set");
+            }
+
+            const std::array<VkImageView, 3> sources{
+                hdrView,
+                temporalViews[0] == VK_NULL_HANDLE ? hdrView : temporalViews[0],
+                temporalViews[1] == VK_NULL_HANDLE ? hdrView : temporalViews[1]
+            };
+            for (std::size_t index = 0; index < descriptorSets_.size(); ++index) {
+                const VkDescriptorImageInfo images[2]{
+                    {hdrSampler, sources[index], VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL},
+                    {hdrSampler, bloomView, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL}
+                };
+                VkWriteDescriptorSet writes[2]{};
+                for (std::uint32_t bindingIndex = 0; bindingIndex < 2; ++bindingIndex) {
+                    writes[bindingIndex] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
+                    writes[bindingIndex].dstSet = descriptorSets_[index];
+                    writes[bindingIndex].dstBinding = bindingIndex;
+                    writes[bindingIndex].descriptorCount = 1;
+                    writes[bindingIndex].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+                    writes[bindingIndex].pImageInfo = &images[bindingIndex];
+                }
+                vkUpdateDescriptorSets(device_, 2, writes, 0, nullptr);
+            }
+        } catch (...) {
+            destroy();
+            throw;
         }
     }
-    targetViews_.clear();
-    descriptorSets_.fill(VK_NULL_HANDLE);
-    descriptorPool_ = VK_NULL_HANDLE;
-    pipeline_.destroy();
-    if (device_ != VK_NULL_HANDLE && descriptorSetLayout_ != VK_NULL_HANDLE) {
-        vkDestroyDescriptorSetLayout(device_, descriptorSetLayout_, nullptr);
+
+    void TonemapPass::destroy() noexcept {
+        if (device_ != VK_NULL_HANDLE) {
+            if (descriptorPool_ != VK_NULL_HANDLE) {
+                vkDestroyDescriptorPool(device_, descriptorPool_, nullptr);
+            }
+        }
+        targetViews_.clear();
+        descriptorSets_.fill(VK_NULL_HANDLE);
+        descriptorPool_ = VK_NULL_HANDLE;
+        pipeline_.destroy();
+        if (device_ != VK_NULL_HANDLE && descriptorSetLayout_ != VK_NULL_HANDLE) {
+            vkDestroyDescriptorSetLayout(device_, descriptorSetLayout_, nullptr);
+        }
+        descriptorSetLayout_ = VK_NULL_HANDLE;
+        device_ = VK_NULL_HANDLE;
     }
-    descriptorSetLayout_ = VK_NULL_HANDLE;
-    device_ = VK_NULL_HANDLE;
-}
 
-void TonemapPass::record(const VkCommandBuffer commandBuffer,
-                         const std::uint32_t imageIndex, const VkExtent2D extent,
-                         const float exposure, const std::uint32_t sourceIndex) const {
-    VkRenderingAttachmentInfo color{VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO};
-    color.imageView = targetViews_.at(imageIndex);
-    color.imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
-    color.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
-    color.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
-    color.clearValue.color = {{0.0F, 0.0F, 0.0F, 1.0F}};
-    VkRenderingInfo rendering{VK_STRUCTURE_TYPE_RENDERING_INFO};
-    rendering.renderArea.extent = extent;
-    rendering.layerCount = 1;
-    rendering.colorAttachmentCount = 1;
-    rendering.pColorAttachments = &color;
-    vkCmdBeginRendering(commandBuffer, &rendering);
+    void TonemapPass::record(const VkCommandBuffer commandBuffer,
+                             const std::uint32_t imageIndex, const VkExtent2D extent,
+                             const float exposure, const std::uint32_t sourceIndex) const {
+        VkRenderingAttachmentInfo color{VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO};
+        color.imageView = targetViews_.at(imageIndex);
+        color.imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+        color.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+        color.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+        color.clearValue.color = {{0.0F, 0.0F, 0.0F, 1.0F}};
+        VkRenderingInfo rendering{VK_STRUCTURE_TYPE_RENDERING_INFO};
+        rendering.renderArea.extent = extent;
+        rendering.layerCount = 1;
+        rendering.colorAttachmentCount = 1;
+        rendering.pColorAttachments = &color;
+        vkCmdBeginRendering(commandBuffer, &rendering);
 
-    vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline_.handle());
-    vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS,
-                            pipeline_.layout(), 0, 1, &descriptorSets_.at(sourceIndex), 0, nullptr);
-    const TonemapSettings settings{exposure, manualGamma_ ? 1.0F : 0.0F};
-    vkCmdPushConstants(commandBuffer, pipeline_.layout(), VK_SHADER_STAGE_FRAGMENT_BIT,
-                       0, sizeof(settings), &settings);
-    const VkViewport viewport{0.0F, 0.0F, static_cast<float>(extent.width),
-                              static_cast<float>(extent.height), 0.0F, 1.0F};
-    const VkRect2D scissor{{0, 0}, extent};
-    vkCmdSetViewport(commandBuffer, 0, 1, &viewport);
-    vkCmdSetScissor(commandBuffer, 0, 1, &scissor);
-    vkCmdDraw(commandBuffer, 3, 1, 0, 0);
-    vkCmdEndRendering(commandBuffer);
-}
-
-
+        vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline_.handle());
+        vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS,
+                                pipeline_.layout(), 0, 1, &descriptorSets_.at(sourceIndex), 0, nullptr);
+        const TonemapSettings settings{exposure, manualGamma_ ? 1.0F : 0.0F};
+        vkCmdPushConstants(commandBuffer, pipeline_.layout(), VK_SHADER_STAGE_FRAGMENT_BIT,
+                           0, sizeof(settings), &settings);
+        const VkViewport viewport{
+            0.0F, 0.0F, static_cast<float>(extent.width),
+            static_cast<float>(extent.height), 0.0F, 1.0F
+        };
+        const VkRect2D scissor{{0, 0}, extent};
+        vkCmdSetViewport(commandBuffer, 0, 1, &viewport);
+        vkCmdSetScissor(commandBuffer, 0, 1, &scissor);
+        vkCmdDraw(commandBuffer, 3, 1, 0, 0);
+        vkCmdEndRendering(commandBuffer);
+    }
 } // namespace Engine

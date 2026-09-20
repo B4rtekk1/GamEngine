@@ -21,1170 +21,1438 @@
 #include <vector>
 
 namespace Engine {
-namespace {
-// Receiver-side bias tracks the virtual-shadow texel footprint.  Raster bias
-// only protects caster rasterization, so keep it deliberately small; a large
-// per-level raster bias causes detached shadows before it fixes receiver acne.
-constexpr std::array<float, ShadowMap::ClipLevelCount> DepthBiasConstant{
-    0.001F, 0.001F, 0.001F, 0.001F, 0.001F, 0.001F, 0.001F};
-constexpr std::array<float, ShadowMap::ClipLevelCount> DepthBiasSlope{
-    0.003F, 0.003F, 0.003F, 0.003F, 0.003F, 0.003F, 0.003F};
+    namespace {
+        // Receiver-side bias tracks the virtual-shadow texel footprint.  Raster bias
+        // only protects caster rasterization, so keep it deliberately small; a large
+        // per-level raster bias causes detached shadows before it fixes receiver acne.
+        constexpr std::array<float, ShadowMap::ClipLevelCount> DepthBiasConstant{
+            0.001F, 0.001F, 0.001F, 0.001F, 0.001F, 0.001F, 0.001F
+        };
+        constexpr std::array<float, ShadowMap::ClipLevelCount> DepthBiasSlope{
+            0.003F, 0.003F, 0.003F, 0.003F, 0.003F, 0.003F, 0.003F
+        };
 
-bool sameMatrix(const Mat4& left, const Mat4& right) {
-    return std::memcmp(&left.native(), &right.native(), sizeof(glm::mat4)) == 0;
-}
+        bool sameMatrix(const Mat4 &left, const Mat4 &right) {
+            return std::memcmp(&left.native(), &right.native(), sizeof(glm::mat4)) == 0;
+        }
 
-bool clipPageShift(const Mat4& previous, const Mat4& current,
-                   std::int32_t& shiftX, std::int32_t& shiftY) {
-    const glm::mat4& oldMatrix = previous.native();
-    const glm::mat4& newMatrix = current.native();
-    for (glm::length_t column = 0; column < 4; ++column) {
-        for (glm::length_t row = 0; row < 4; ++row) {
-            if (column == 3 && (row == 0 || row == 1)) continue;
-            if (std::abs(oldMatrix[column][row] - newMatrix[column][row]) > 1.0e-5F)
-                return false;
+        bool clipPageShift(const Mat4 &previous, const Mat4 &current,
+                           std::int32_t &shiftX, std::int32_t &shiftY) {
+            const glm::mat4 &oldMatrix = previous.native();
+            const glm::mat4 &newMatrix = current.native();
+            for (glm::length_t column = 0; column < 4; ++column) {
+                for (glm::length_t row = 0; row < 4; ++row) {
+                    if (column == 3 && (row == 0 || row == 1)) continue;
+                    if (std::abs(oldMatrix[column][row] - newMatrix[column][row]) > 1.0e-5F)
+                        return false;
+                }
+            }
+            const glm::vec4 oldOrigin = oldMatrix * glm::vec4{0.0F, 0.0F, 0.0F, 1.0F};
+            const glm::vec4 newOrigin = newMatrix * glm::vec4{0.0F, 0.0F, 0.0F, 1.0F};
+            const glm::vec2 pageDelta =
+                    ((glm::vec2{newOrigin} / newOrigin.w) - (glm::vec2{oldOrigin} / oldOrigin.w)) *
+                    (0.5F * static_cast<float>(ShadowMap::VirtualPagesPerAxis));
+            shiftX = static_cast<std::int32_t>(std::round(pageDelta.x));
+            shiftY = static_cast<std::int32_t>(std::round(pageDelta.y));
+            return std::abs(pageDelta.x - static_cast<float>(shiftX)) < 1.0e-3F &&
+                   std::abs(pageDelta.y - static_cast<float>(shiftY)) < 1.0e-3F;
+        }
+
+        glm::mat4 gpuMatrix(const Culling::GPUMat4 &source) {
+            glm::mat4 result{};
+            std::memcpy(&result, source.data, sizeof(result));
+            return result;
         }
     }
-    const glm::vec4 oldOrigin = oldMatrix * glm::vec4{0.0F, 0.0F, 0.0F, 1.0F};
-    const glm::vec4 newOrigin = newMatrix * glm::vec4{0.0F, 0.0F, 0.0F, 1.0F};
-    const glm::vec2 pageDelta =
-        ((glm::vec2{newOrigin} / newOrigin.w) - (glm::vec2{oldOrigin} / oldOrigin.w)) *
-        (0.5F * static_cast<float>(ShadowMap::VirtualPagesPerAxis));
-    shiftX = static_cast<std::int32_t>(std::round(pageDelta.x));
-    shiftY = static_cast<std::int32_t>(std::round(pageDelta.y));
-    return std::abs(pageDelta.x - static_cast<float>(shiftX)) < 1.0e-3F &&
-           std::abs(pageDelta.y - static_cast<float>(shiftY)) < 1.0e-3F;
-}
 
-glm::mat4 gpuMatrix(const Culling::GPUMat4& source) {
-    glm::mat4 result{};
-    std::memcpy(&result, source.data, sizeof(result));
-    return result;
-}
-}
+    ShadowPass::~ShadowPass() {
+        destroy();
+    }
 
-ShadowPass::~ShadowPass() {
-    destroy();
-}
+    void ShadowPass::create(VkPhysicalDevice physicalDevice, VkDevice device,
+                            ShadowMap &physicalPagePool,
+                            const std::vector<VkBuffer> &uniformBuffers,
+                            const std::vector<VkBuffer> &materialBuffers,
+                            const std::vector<VkBuffer> &instanceBuffers,
+                            const std::vector<VkBuffer> &previousTransformBuffers,
+                            const std::vector<VkBuffer> &instanceIndexBuffers,
+                            const std::vector<VkBuffer> &grassInstanceBuffers,
+                            const std::vector<VkBuffer> &grassClusterBuffers,
+                            const std::vector<VkBuffer> &grassDeformationBuffers,
+                            const std::vector<VkBuffer> &clusterRangeBuffers,
+                            const std::vector<VkBuffer> &clusterIndexBuffers,
+                            const std::vector<VkBuffer> &reflectionProbeBuffers,
+                            const std::vector<VkDescriptorImageInfo> &materialTextures,
+                            const std::array<VkDescriptorImageInfo, 3> &imageBasedLighting,
+                            const VkDeviceSize uniformBufferRange,
+                            const VmaAllocator allocator,
+                            Assets::AssetManager &assets) {
+        destroy();
+        device_ = device;
 
-void ShadowPass::create(VkPhysicalDevice physicalDevice, VkDevice device,
-        ShadowMap& physicalPagePool,
-        const std::vector<VkBuffer>& uniformBuffers,
-        const std::vector<VkBuffer>& materialBuffers,
-        const std::vector<VkBuffer>& instanceBuffers,
-        const std::vector<VkBuffer>& previousTransformBuffers,
-        const std::vector<VkBuffer>& instanceIndexBuffers,
-        const std::vector<VkBuffer>& grassInstanceBuffers,
-        const std::vector<VkBuffer>& grassClusterBuffers,
-        const std::vector<VkBuffer>& grassDeformationBuffers,
-        const std::vector<VkBuffer>& clusterRangeBuffers,
-        const std::vector<VkBuffer>& clusterIndexBuffers,
-        const std::vector<VkBuffer>& reflectionProbeBuffers,
-        const std::vector<VkDescriptorImageInfo>& materialTextures,
-        const std::array<VkDescriptorImageInfo, 3>& imageBasedLighting,
-                        const VkDeviceSize uniformBufferRange,
-                        const VmaAllocator allocator,
-                        Assets::AssetManager& assets) {
-    destroy();
-    device_ = device;
+        try {
+            if (physicalPagePool.image() == VK_NULL_HANDLE) {
+                physicalPagePool.create(physicalDevice, device_, allocator);
+            }
+            shadowMap_ = &physicalPagePool;
+            pageTable_.fill(ShadowMap::InvalidPage);
+            pagesToRender_.reserve(ShadowMap::PhysicalPageCount);
+            pendingPageCommits_.reserve(ShadowMap::PhysicalPageCount);
 
-    try {
-        if (physicalPagePool.image() == VK_NULL_HANDLE) {
-            physicalPagePool.create(physicalDevice, device_, allocator);
+            if (materialBuffers.size() != uniformBuffers.size() ||
+                instanceBuffers.size() != uniformBuffers.size() ||
+                previousTransformBuffers.size() != uniformBuffers.size() ||
+                instanceIndexBuffers.size() != uniformBuffers.size() ||
+                grassInstanceBuffers.size() != uniformBuffers.size() ||
+                grassClusterBuffers.size() != uniformBuffers.size() ||
+                grassDeformationBuffers.size() != uniformBuffers.size() ||
+                clusterRangeBuffers.size() != uniformBuffers.size() ||
+                clusterIndexBuffers.size() != uniformBuffers.size() ||
+                reflectionProbeBuffers.size() != uniformBuffers.size() ||
+                materialTextures.size() != MaxMaterialTextures) {
+                throw std::invalid_argument("Invalid material descriptor resources");
+            }
+
+            // This is a compact list, not an array indexed by binding number.
+            VkDescriptorSetLayoutBinding bindings[18]{};
+            bindings[0] = {
+                0, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1,
+                VK_SHADER_STAGE_FRAGMENT_BIT, nullptr
+            };
+            bindings[1] = {
+                1, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1,
+                VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT | VK_SHADER_STAGE_COMPUTE_BIT, nullptr
+            };
+            bindings[2] = {
+                2, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1,
+                VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT | VK_SHADER_STAGE_COMPUTE_BIT, nullptr
+            };
+            bindings[3] = {
+                GrassClusterBinding, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1,
+                VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT | VK_SHADER_STAGE_COMPUTE_BIT, nullptr
+            };
+            bindings[4] = {
+                4, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1,
+                VK_SHADER_STAGE_FRAGMENT_BIT, nullptr
+            };
+            bindings[5] = {
+                5, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1,
+                VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT | VK_SHADER_STAGE_COMPUTE_BIT, nullptr
+            };
+            bindings[6] = {
+                6, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1,
+                VK_SHADER_STAGE_VERTEX_BIT, nullptr
+            };
+            bindings[7] = {
+                GrassDeformationBinding, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1,
+                VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT | VK_SHADER_STAGE_COMPUTE_BIT, nullptr
+            };
+            bindings[8] = {
+                8, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1,
+                VK_SHADER_STAGE_VERTEX_BIT, nullptr
+            };
+            bindings[9] = {
+                9, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1,
+                VK_SHADER_STAGE_FRAGMENT_BIT, nullptr
+            };
+            bindings[10] = {
+                10, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1,
+                VK_SHADER_STAGE_FRAGMENT_BIT, nullptr
+            }; // diffuse irradiance
+            bindings[11] = {
+                11, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1,
+                VK_SHADER_STAGE_FRAGMENT_BIT | VK_SHADER_STAGE_COMPUTE_BIT, nullptr
+            }; // GGX prefilter
+            bindings[12] = {
+                12, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1,
+                VK_SHADER_STAGE_FRAGMENT_BIT, nullptr
+            }; // BRDF integration LUT
+            // This is fully populated with fallback descriptors, so it need not be
+            // a variable-count binding. Keeping it fixed permits subsequent scene
+            // resources (reflection probes) in this shared forward layout.
+            bindings[13] = {
+                13, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, MaxMaterialTextures,
+                VK_SHADER_STAGE_FRAGMENT_BIT | VK_SHADER_STAGE_COMPUTE_BIT, nullptr
+            };
+            bindings[14] = {
+                14, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1,
+                VK_SHADER_STAGE_FRAGMENT_BIT | VK_SHADER_STAGE_COMPUTE_BIT, nullptr
+            };
+            bindings[15] = {
+                15, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+                ReflectionProbeManager::TextureDescriptorCount,
+                VK_SHADER_STAGE_FRAGMENT_BIT | VK_SHADER_STAGE_COMPUTE_BIT, nullptr
+            };
+            bindings[16] = {
+                16, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1,
+                VK_SHADER_STAGE_FRAGMENT_BIT, nullptr
+            }; // full-res GTAO visibility
+            bindings[17] = {
+                17, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1,
+                VK_SHADER_STAGE_FRAGMENT_BIT, nullptr
+            }; // linear VSM comparison
+            const VkDescriptorSetLayoutCreateInfo layoutInfo{
+                VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO, nullptr, 0,
+                static_cast<std::uint32_t>(std::size(bindings)), bindings
+            };
+            if (vkCreateDescriptorSetLayout(device_, &layoutInfo, nullptr,
+                                            &descriptorSetLayout_) != VK_SUCCESS) {
+                throw std::runtime_error("Could not create shadow descriptor-set layout");
+            }
+
+            const std::uint32_t frameCount = static_cast<std::uint32_t>(uniformBuffers.size());
+            // Six descriptor sets are allocated per frame. Each carries shadow,
+            // IBL and material samplers, one UBO and seven SSBOs.
+            const VkDescriptorPoolSize poolSizes[] = {
+                {
+                    VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, frameCount * 6U *
+                                                               (MaxMaterialTextures + 9U +
+                                                                ReflectionProbeManager::TextureDescriptorCount)
+                },
+                {VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, frameCount * 6U},
+                {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, frameCount * 6U * 8U},
+            };
+            VkDescriptorPoolCreateInfo poolInfo{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
+            poolInfo.maxSets = frameCount * 6;
+            poolInfo.poolSizeCount = std::size(poolSizes);
+            poolInfo.pPoolSizes = poolSizes;
+            if (vkCreateDescriptorPool(device_, &poolInfo, nullptr, &descriptorPool_) != VK_SUCCESS) {
+                throw std::runtime_error("Could not create shadow descriptor pool");
+            }
+
+            std::vector<VkDescriptorSetLayout> layouts(frameCount * 6, descriptorSetLayout_);
+            descriptorSets_.resize(frameCount);
+            grassDescriptorSets_.resize(frameCount);
+            grassVelocityDescriptorSets_.resize(frameCount);
+            grassShadowDescriptorSets_.resize(frameCount);
+            shadowDescriptorSets_.resize(frameCount);
+            shadowTwoSidedDescriptorSets_.resize(frameCount);
+            gtaoDescriptorCache_.resize(frameCount);
+            gtaoDescriptorCacheValid_.assign(frameCount, false);
+            grassVisibleDescriptorCache_.resize(frameCount);
+            grassVelocityVisibleDescriptorCache_.resize(frameCount);
+            grassShadowVisibleDescriptorCache_.resize(frameCount);
+            grassVisibleDescriptorCacheValid_.assign(frameCount, false);
+            grassVelocityVisibleDescriptorCacheValid_.assign(frameCount, false);
+            grassShadowVisibleDescriptorCacheValid_.assign(frameCount, false);
+            VkDescriptorSetAllocateInfo allocateInfo{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};
+            allocateInfo.descriptorPool = descriptorPool_;
+            std::vector<VkDescriptorSet> allDescriptorSets(frameCount * 6);
+            allocateInfo.descriptorSetCount = frameCount * 6;
+            allocateInfo.pSetLayouts = layouts.data();
+            if (vkAllocateDescriptorSets(device_, &allocateInfo, allDescriptorSets.data()) != VK_SUCCESS) {
+                throw std::runtime_error("Could not allocate shadow descriptor sets");
+            }
+            std::copy_n(allDescriptorSets.begin(), frameCount, descriptorSets_.begin());
+            std::copy_n(allDescriptorSets.begin() + frameCount, frameCount, grassDescriptorSets_.begin());
+            std::copy_n(allDescriptorSets.begin() + frameCount * 2, frameCount,
+                        grassVelocityDescriptorSets_.begin());
+            std::copy_n(allDescriptorSets.begin() + frameCount * 3, frameCount,
+                        grassShadowDescriptorSets_.begin());
+            std::copy_n(allDescriptorSets.begin() + frameCount * 4, frameCount,
+                        shadowDescriptorSets_.begin());
+            std::copy_n(allDescriptorSets.begin() + frameCount * 5, frameCount,
+                        shadowTwoSidedDescriptorSets_.begin());
+
+            pageTableBuffers_.resize(frameCount);
+            for (std::unique_ptr<Buffer> &buffer: pageTableBuffers_) {
+                buffer = std::make_unique<Buffer>();
+                buffer->createHostVisible(physicalDevice, device_,
+                                          sizeof(std::uint32_t) * pageTable_.size(),
+                                          VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, allocator);
+                buffer->update(pageTable_.data(), sizeof(std::uint32_t) * pageTable_.size());
+            }
+
+            const VkDescriptorImageInfo imageInfo{
+                shadowMap_->sampler(), shadowMap_->imageView(),
+                VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL
+            };
+            const VkDescriptorImageInfo depthImageInfo{
+                shadowMap_->depthSampler(), shadowMap_->imageView(),
+                VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL
+            };
+            const VkDescriptorImageInfo linearImageInfo{
+                shadowMap_->linearSampler(), shadowMap_->imageView(),
+                VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL
+            };
+            for (std::uint32_t frame = 0; frame < frameCount; ++frame) {
+                const VkDescriptorBufferInfo bufferInfo{
+                    uniformBuffers[frame], 0, uniformBufferRange
+                };
+                const VkDescriptorBufferInfo materialInfo{
+                    materialBuffers[frame], 0, VK_WHOLE_SIZE
+                };
+                const VkDescriptorBufferInfo pageTableInfo{
+                    pageTableBuffers_[frame]->handle(), 0, VK_WHOLE_SIZE
+                };
+                const VkDescriptorBufferInfo instanceInfo{instanceBuffers[frame], 0, VK_WHOLE_SIZE};
+                const VkDescriptorBufferInfo previousTransformInfo{previousTransformBuffers[frame], 0, VK_WHOLE_SIZE};
+                const VkDescriptorBufferInfo instanceIndexInfo{instanceIndexBuffers[frame], 0, VK_WHOLE_SIZE};
+                const VkDescriptorBufferInfo grassInstanceInfo{grassInstanceBuffers[frame], 0, VK_WHOLE_SIZE};
+                const VkDescriptorBufferInfo grassClusterInfo{grassClusterBuffers[frame], 0, VK_WHOLE_SIZE};
+                const VkDescriptorBufferInfo grassDeformationInfo{grassDeformationBuffers[frame], 0, VK_WHOLE_SIZE};
+                const VkDescriptorBufferInfo clusterRangeInfo{clusterRangeBuffers[frame], 0, VK_WHOLE_SIZE};
+                const VkDescriptorBufferInfo clusterIndexInfo{clusterIndexBuffers[frame], 0, VK_WHOLE_SIZE};
+                const VkDescriptorBufferInfo reflectionProbeInfo{reflectionProbeBuffers[frame], 0, VK_WHOLE_SIZE};
+                std::vector<VkDescriptorImageInfo> reflectionTextures(
+                    ReflectionProbeManager::TextureDescriptorCount, imageBasedLighting[1]);
+                VkWriteDescriptorSet writes[18]{};
+                writes[0] = {
+                    VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr,
+                    descriptorSets_[frame], 0, 0, 1,
+                    VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &imageInfo, nullptr, nullptr
+                };
+                writes[1] = {
+                    VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr,
+                    descriptorSets_[frame], 1, 0, 1,
+                    VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, nullptr, &bufferInfo, nullptr
+                };
+                writes[2] = {
+                    VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr,
+                    descriptorSets_[frame], 2, 0, 1,
+                    VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, nullptr, &materialInfo, nullptr
+                };
+                writes[3] = {
+                    VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr,
+                    descriptorSets_[frame], 13, 0, MaxMaterialTextures,
+                    VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, materialTextures.data(), nullptr
+                };
+                writes[4] = {
+                    VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr,
+                    descriptorSets_[frame], 4, 0, 1,
+                    VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, nullptr, &pageTableInfo, nullptr
+                };
+                writes[5] = {
+                    VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr,
+                    descriptorSets_[frame], 5, 0, 1,
+                    VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, nullptr, &instanceInfo, nullptr
+                };
+                writes[6] = {
+                    VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr,
+                    descriptorSets_[frame], 6, 0, 1,
+                    VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, nullptr, &instanceIndexInfo, nullptr
+                };
+                writes[7] = {
+                    VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr,
+                    descriptorSets_[frame], GrassClusterBinding, 0, 1,
+                    VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, nullptr, &grassClusterInfo, nullptr
+                };
+                writes[8] = {
+                    VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr,
+                    descriptorSets_[frame], GrassDeformationBinding, 0, 1,
+                    VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, nullptr, &grassDeformationInfo, nullptr
+                };
+                writes[9] = {
+                    VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr,
+                    descriptorSets_[frame], 9, 0, 1,
+                    VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &depthImageInfo, nullptr, nullptr
+                };
+                writes[10] = {
+                    VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr,
+                    descriptorSets_[frame], 8, 0, 1,
+                    VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, nullptr, &previousTransformInfo, nullptr
+                };
+                writes[11] = {
+                    VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr,
+                    descriptorSets_[frame], 10, 0, 1,
+                    VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &imageBasedLighting[0], nullptr, nullptr
+                };
+                writes[12] = {
+                    VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr,
+                    descriptorSets_[frame], 11, 0, 1,
+                    VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &imageBasedLighting[1], nullptr, nullptr
+                };
+                writes[13] = {
+                    VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr,
+                    descriptorSets_[frame], 12, 0, 1,
+                    VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &imageBasedLighting[2], nullptr, nullptr
+                };
+                writes[14] = {
+                    VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr,
+                    descriptorSets_[frame], 14, 0, 1,
+                    VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, nullptr, &reflectionProbeInfo, nullptr
+                };
+                writes[15] = {
+                    VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr,
+                    descriptorSets_[frame], 15, 0,
+                    ReflectionProbeManager::TextureDescriptorCount,
+                    VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+                    reflectionTextures.data(), nullptr, nullptr
+                };
+                // Replaced with the GTAO output as soon as that pass is created.
+                // A valid 2D fallback is required even while the first history is cleared.
+                writes[16] = {
+                    VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr,
+                    descriptorSets_[frame], 16, 0, 1,
+                    VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+                    materialTextures.data(), nullptr, nullptr
+                };
+                writes[17] = {
+                    VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr,
+                    descriptorSets_[frame], 17, 0, 1,
+                    VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+                    &linearImageInfo, nullptr, nullptr
+                };
+                // Standard forward consumes bindings 3/7 as the clustered range
+                // headers and compact light-index list.  Grass descriptors below
+                // retain their vertex-only cluster/deformation bindings.
+                writes[7].pBufferInfo = &clusterRangeInfo;
+                writes[8].pBufferInfo = &clusterIndexInfo;
+                vkUpdateDescriptorSets(device_, std::size(writes), writes, 0, nullptr);
+                writes[7].pBufferInfo = &grassClusterInfo;
+                writes[8].pBufferInfo = &grassDeformationInfo;
+                writes[0].dstSet = grassDescriptorSets_[frame];
+                writes[1].dstSet = grassDescriptorSets_[frame];
+                writes[2].dstSet = grassDescriptorSets_[frame];
+                writes[3].dstSet = grassDescriptorSets_[frame];
+                writes[4].dstSet = grassDescriptorSets_[frame];
+                writes[5].dstSet = grassDescriptorSets_[frame];
+                writes[5].pBufferInfo = &grassInstanceInfo;
+                writes[6].dstSet = grassDescriptorSets_[frame];
+                writes[7].dstSet = grassDescriptorSets_[frame];
+                writes[8].dstSet = grassDescriptorSets_[frame];
+                writes[9].dstSet = grassDescriptorSets_[frame];
+                writes[10].dstSet = grassDescriptorSets_[frame];
+                vkUpdateDescriptorSets(device_, std::size(writes), writes, 0, nullptr);
+                for (VkWriteDescriptorSet &write: writes) write.dstSet = grassVelocityDescriptorSets_[frame];
+                vkUpdateDescriptorSets(device_, std::size(writes), writes, 0, nullptr);
+                for (VkWriteDescriptorSet &write: writes) write.dstSet = grassShadowDescriptorSets_[frame];
+                vkUpdateDescriptorSets(device_, std::size(writes), writes, 0, nullptr);
+                // Start from the generic scene contract. setShadowInstanceTransforms()
+                // replaces only 5/6 immediately before the shadow draw.
+                writes[5].pBufferInfo = &instanceInfo;
+                writes[6].pBufferInfo = &instanceIndexInfo;
+                writes[7].pBufferInfo = &clusterRangeInfo;
+                writes[8].pBufferInfo = &clusterIndexInfo;
+                for (VkWriteDescriptorSet &write: writes) write.dstSet = shadowDescriptorSets_[frame];
+                vkUpdateDescriptorSets(device_, std::size(writes), writes, 0, nullptr);
+                for (VkWriteDescriptorSet &write: writes) write.dstSet = shadowTwoSidedDescriptorSets_[frame];
+                vkUpdateDescriptorSets(device_, std::size(writes), writes, 0, nullptr);
+            }
+
+            const auto opaqueShader = Vkutil::loadShaderModule(device_, assets, "shaders/shadow_opaque.spv");
+            const std::array opaqueStages{
+                VkPipelineShaderStageCreateInfo{
+                    VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO, nullptr, 0,
+                    VK_SHADER_STAGE_VERTEX_BIT, opaqueShader.get(), "main", nullptr
+                },
+            };
+            const auto shader = Vkutil::loadShaderModule(device_, assets, "shaders/shadow_map.spv");
+            const std::array stages{
+                VkPipelineShaderStageCreateInfo{
+                    VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO, nullptr, 0,
+                    VK_SHADER_STAGE_VERTEX_BIT, shader.get(), "vertexMain", nullptr
+                },
+                VkPipelineShaderStageCreateInfo{
+                    VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO, nullptr, 0,
+                    VK_SHADER_STAGE_FRAGMENT_BIT, shader.get(), "fragmentMain", nullptr
+                },
+            };
+            const VkPushConstantRange pushConstantRange{
+                VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(glm::mat4)
+            };
+            VkPipelineLayoutCreateInfo pipelineLayoutInfo{
+                VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO
+            };
+            pipelineLayoutInfo.setLayoutCount = 1;
+            pipelineLayoutInfo.pSetLayouts = &descriptorSetLayout_;
+            pipelineLayoutInfo.pushConstantRangeCount = 1;
+            pipelineLayoutInfo.pPushConstantRanges = &pushConstantRange;
+            if (vkCreatePipelineLayout(device_, &pipelineLayoutInfo, nullptr,
+                                       &pipelineLayout_) != VK_SUCCESS) {
+                throw std::runtime_error("Could not create shadow pipeline layout");
+            }
+
+            const VkVertexInputBindingDescription vertexBindings[] = {
+                {0, sizeof(GpuVertex), VK_VERTEX_INPUT_RATE_VERTEX},
+            };
+            const VkVertexInputAttributeDescription attributes[] = {
+                {0, 0, VK_FORMAT_R32G32B32_SFLOAT, offsetof(GpuVertex, px)},
+                {2, 0, VK_FORMAT_R16G16_SFLOAT, offsetof(GpuVertex, texCoord)},
+                {4, 0, VK_FORMAT_R16G16_SFLOAT, offsetof(GpuVertex, texCoord1)},
+                {8, 0, VK_FORMAT_R32_UINT, offsetof(GpuVertex, materialIndex)},
+            };
+            VkPipelineVertexInputStateCreateInfo vertexInput{
+                VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO
+            };
+            vertexInput.vertexBindingDescriptionCount = std::size(vertexBindings);
+            vertexInput.pVertexBindingDescriptions = vertexBindings;
+            vertexInput.vertexAttributeDescriptionCount = std::size(attributes);
+            vertexInput.pVertexAttributeDescriptions = attributes;
+            VkPipelineInputAssemblyStateCreateInfo assembly{
+                VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO
+            };
+            assembly.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
+            VkPipelineViewportStateCreateInfo viewport{
+                VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO
+            };
+            viewport.viewportCount = 1;
+            viewport.scissorCount = 1;
+            VkPipelineRasterizationStateCreateInfo rasterizer{
+                VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO
+            };
+            rasterizer.polygonMode = VK_POLYGON_MODE_FILL;
+            // The main pass renders glTF double-sided foliage. Its transparent
+            // pixels are already discarded by shadow_map::fragmentMain, so it must also cast
+            // a shadow when the light sees the back of a leaf card.
+            rasterizer.cullMode = VK_CULL_MODE_BACK_BIT;
+            rasterizer.frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE;
+            rasterizer.lineWidth = 1.0F;
+            rasterizer.depthBiasEnable = VK_TRUE;
+            VkPipelineMultisampleStateCreateInfo multisampling{
+                VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO
+            };
+            multisampling.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
+            VkPipelineDepthStencilStateCreateInfo depth{
+                VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO
+            };
+            depth.depthTestEnable = VK_TRUE;
+            depth.depthWriteEnable = VK_TRUE;
+            depth.depthCompareOp = VK_COMPARE_OP_LESS;
+            constexpr VkDynamicState dynamicStates[] = {
+                VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR,
+                VK_DYNAMIC_STATE_DEPTH_BIAS
+            };
+            VkPipelineDynamicStateCreateInfo dynamic{
+                VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO
+            };
+            dynamic.dynamicStateCount = std::size(dynamicStates);
+            dynamic.pDynamicStates = dynamicStates;
+            VkGraphicsPipelineCreateInfo pipelineInfo{
+                VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO
+            };
+            pipelineInfo.stageCount = std::size(stages);
+            pipelineInfo.pStages = stages.data();
+            pipelineInfo.pVertexInputState = &vertexInput;
+            pipelineInfo.pInputAssemblyState = &assembly;
+            pipelineInfo.pViewportState = &viewport;
+            pipelineInfo.pRasterizationState = &rasterizer;
+            pipelineInfo.pMultisampleState = &multisampling;
+            pipelineInfo.pDepthStencilState = &depth;
+            pipelineInfo.pDynamicState = &dynamic;
+            VkPipelineRenderingCreateInfo rendering{VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO};
+            rendering.depthAttachmentFormat = shadowMap_->format();
+            pipelineInfo.pNext = &rendering;
+            pipelineInfo.layout = pipelineLayout_;
+            pipelineInfo.renderPass = VK_NULL_HANDLE;
+            pipelineInfo.stageCount = std::size(opaqueStages);
+            pipelineInfo.pStages = opaqueStages.data();
+            if (vkCreateGraphicsPipelines(device_, VK_NULL_HANDLE, 1, &pipelineInfo,
+                                          nullptr, &opaquePipeline_) != VK_SUCCESS) {
+                throw std::runtime_error("Could not create opaque shadow pipeline");
+            }
+            pipelineInfo.stageCount = std::size(stages);
+            pipelineInfo.pStages = stages.data();
+            if (vkCreateGraphicsPipelines(device_, VK_NULL_HANDLE, 1, &pipelineInfo,
+                                          nullptr, &pipeline_) != VK_SUCCESS) {
+                throw std::runtime_error("Could not create shadow pipeline");
+            }
+
+            rasterizer.cullMode = VK_CULL_MODE_NONE;
+            if (vkCreateGraphicsPipelines(device_, VK_NULL_HANDLE, 1, &pipelineInfo,
+                                          nullptr, &twoSidedPipeline_) != VK_SUCCESS) {
+                throw std::runtime_error("Could not create two-sided shadow pipeline");
+            }
+
+            const auto grassShader = Vkutil::loadShaderModule(device_, assets, "shaders/grass_shadow.spv");
+            const std::array grassStages{
+                VkPipelineShaderStageCreateInfo{
+                    VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO, nullptr, 0,
+                    VK_SHADER_STAGE_VERTEX_BIT, grassShader.get(), "vertexMain", nullptr
+                },
+                VkPipelineShaderStageCreateInfo{
+                    VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO, nullptr, 0,
+                    VK_SHADER_STAGE_FRAGMENT_BIT, grassShader.get(), "fragmentMain", nullptr
+                },
+            };
+            pipelineInfo.stageCount = std::size(grassStages);
+            pipelineInfo.pStages = grassStages.data();
+            // grass_shadow consumes position, UV0 and material index only.
+            const VkVertexInputAttributeDescription grassAttributes[] = {
+                {0, 0, VK_FORMAT_R32G32B32_SFLOAT, offsetof(GpuVertex, px)},
+                {2, 0, VK_FORMAT_R16G16_SFLOAT, offsetof(GpuVertex, texCoord)},
+                {8, 0, VK_FORMAT_R32_UINT, offsetof(GpuVertex, materialIndex)},
+            };
+            vertexInput.vertexAttributeDescriptionCount = std::size(grassAttributes);
+            vertexInput.pVertexAttributeDescriptions = grassAttributes;
+            if (vkCreateGraphicsPipelines(device_, VK_NULL_HANDLE, 1, &pipelineInfo,
+                                          nullptr, &grassPipeline_) != VK_SUCCESS) {
+                throw std::runtime_error("Could not create grass shadow pipeline");
+            }
+        } catch (...) {
+            destroy();
+            throw;
         }
-        shadowMap_ = &physicalPagePool;
-        pageTable_.fill(ShadowMap::InvalidPage);
-        pagesToRender_.reserve(ShadowMap::PhysicalPageCount);
-        pendingPageCommits_.reserve(ShadowMap::PhysicalPageCount);
+    }
 
-        if (materialBuffers.size() != uniformBuffers.size() ||
-            instanceBuffers.size() != uniformBuffers.size() ||
-            previousTransformBuffers.size() != uniformBuffers.size() ||
-            instanceIndexBuffers.size() != uniformBuffers.size() ||
-            grassInstanceBuffers.size() != uniformBuffers.size() ||
-            grassClusterBuffers.size() != uniformBuffers.size() ||
-            grassDeformationBuffers.size() != uniformBuffers.size() ||
-            clusterRangeBuffers.size() != uniformBuffers.size() ||
-            clusterIndexBuffers.size() != uniformBuffers.size() ||
-            reflectionProbeBuffers.size() != uniformBuffers.size() ||
-            materialTextures.size() != MaxMaterialTextures) {
-            throw std::invalid_argument("Invalid material descriptor resources");
-        }
-
-        // This is a compact list, not an array indexed by binding number.
-        VkDescriptorSetLayoutBinding bindings[18]{};
-        bindings[0] = {0, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1,
-                       VK_SHADER_STAGE_FRAGMENT_BIT, nullptr};
-        bindings[1] = {1, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1,
-                       VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT | VK_SHADER_STAGE_COMPUTE_BIT, nullptr};
-        bindings[2] = {2, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1,
-                       VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT | VK_SHADER_STAGE_COMPUTE_BIT, nullptr};
-        bindings[3] = {GrassClusterBinding, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1,
-                       VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT | VK_SHADER_STAGE_COMPUTE_BIT, nullptr};
-        bindings[4] = {4, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1,
-                       VK_SHADER_STAGE_FRAGMENT_BIT, nullptr};
-        bindings[5] = {5, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1,
-                       VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT | VK_SHADER_STAGE_COMPUTE_BIT, nullptr};
-        bindings[6] = {6, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1,
-                       VK_SHADER_STAGE_VERTEX_BIT, nullptr};
-        bindings[7] = {GrassDeformationBinding, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1,
-                       VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT | VK_SHADER_STAGE_COMPUTE_BIT, nullptr};
-        bindings[8] = {8, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1,
-                       VK_SHADER_STAGE_VERTEX_BIT, nullptr};
-        bindings[9] = {9, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1,
-                       VK_SHADER_STAGE_FRAGMENT_BIT, nullptr};
-        bindings[10] = {10, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1,
-                        VK_SHADER_STAGE_FRAGMENT_BIT, nullptr}; // diffuse irradiance
-        bindings[11] = {11, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1,
-                        VK_SHADER_STAGE_FRAGMENT_BIT | VK_SHADER_STAGE_COMPUTE_BIT, nullptr}; // GGX prefilter
-        bindings[12] = {12, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1,
-                        VK_SHADER_STAGE_FRAGMENT_BIT, nullptr}; // BRDF integration LUT
-        // This is fully populated with fallback descriptors, so it need not be
-        // a variable-count binding. Keeping it fixed permits subsequent scene
-        // resources (reflection probes) in this shared forward layout.
-        bindings[13] = {13, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, MaxMaterialTextures,
-                        VK_SHADER_STAGE_FRAGMENT_BIT | VK_SHADER_STAGE_COMPUTE_BIT, nullptr};
-        bindings[14] = {14, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1,
-                        VK_SHADER_STAGE_FRAGMENT_BIT | VK_SHADER_STAGE_COMPUTE_BIT, nullptr};
-        bindings[15] = {15, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
-                        ReflectionProbeManager::TextureDescriptorCount,
-                        VK_SHADER_STAGE_FRAGMENT_BIT | VK_SHADER_STAGE_COMPUTE_BIT, nullptr};
-        bindings[16] = {16, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1,
-                        VK_SHADER_STAGE_FRAGMENT_BIT, nullptr}; // full-res GTAO visibility
-        bindings[17] = {17, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1,
-                        VK_SHADER_STAGE_FRAGMENT_BIT, nullptr}; // linear VSM comparison
-        const VkDescriptorSetLayoutCreateInfo layoutInfo{
-            VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO, nullptr, 0,
-            static_cast<std::uint32_t>(std::size(bindings)), bindings};
-        if (vkCreateDescriptorSetLayout(device_, &layoutInfo, nullptr,
-                                        &descriptorSetLayout_) != VK_SUCCESS) {
-            throw std::runtime_error("Could not create shadow descriptor-set layout");
-        }
-
-        const std::uint32_t frameCount = static_cast<std::uint32_t>(uniformBuffers.size());
-        // Six descriptor sets are allocated per frame. Each carries shadow,
-        // IBL and material samplers, one UBO and seven SSBOs.
-        const VkDescriptorPoolSize poolSizes[] = {
-            {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, frameCount * 6U *
-                (MaxMaterialTextures + 9U + ReflectionProbeManager::TextureDescriptorCount)},
-            {VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, frameCount * 6U},
-            {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, frameCount * 6U * 8U},
+    void ShadowPass::setGtaoTexture(const std::uint32_t frameIndex,
+                                    const VkDescriptorImageInfo &texture) const {
+        const auto &cached = gtaoDescriptorCache_.at(frameIndex);
+        if (gtaoDescriptorCacheValid_.at(frameIndex) && cached.sampler == texture.sampler &&
+            cached.imageView == texture.imageView && cached.imageLayout == texture.imageLayout)
+            return;
+        const VkDescriptorSet set = descriptorSets_.at(frameIndex);
+        const VkWriteDescriptorSet write{
+            VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr, set, 16, 0, 1,
+            VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &texture, nullptr, nullptr
         };
-        VkDescriptorPoolCreateInfo poolInfo{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
-        poolInfo.maxSets = frameCount * 6;
-        poolInfo.poolSizeCount = std::size(poolSizes);
-        poolInfo.pPoolSizes = poolSizes;
-        if (vkCreateDescriptorPool(device_, &poolInfo, nullptr, &descriptorPool_) != VK_SUCCESS) {
-            throw std::runtime_error("Could not create shadow descriptor pool");
+        vkUpdateDescriptorSets(device_, 1, &write, 0, nullptr);
+        gtaoDescriptorCache_[frameIndex] = texture;
+        gtaoDescriptorCacheValid_[frameIndex] = true;
+    }
+
+    void ShadowPass::setShadowInstanceTransforms(const std::uint32_t frameIndex,
+                                                 const VkBuffer transforms,
+                                                 const VkBuffer materialOffsets, const bool twoSided) const {
+        if (frameIndex >= descriptorSets_.size() || transforms == VK_NULL_HANDLE ||
+            materialOffsets == VK_NULL_HANDLE) {
+            throw std::out_of_range("Shadow transform descriptor resources are invalid");
+        }
+        const VkDescriptorBufferInfo transformInfo{transforms, 0, VK_WHOLE_SIZE};
+        const VkDescriptorBufferInfo materialInfo{materialOffsets, 0, VK_WHOLE_SIZE};
+        VkWriteDescriptorSet writes[2]{};
+        const VkDescriptorSet target = twoSided
+                                           ? shadowTwoSidedDescriptorSets_.at(frameIndex)
+                                           : shadowDescriptorSets_.at(frameIndex);
+        writes[0] = {
+            VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr, target, 5, 0, 1,
+            VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, nullptr, &transformInfo, nullptr
+        };
+        writes[1] = {
+            VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr, target, 6, 0, 1,
+            VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, nullptr, &materialInfo, nullptr
+        };
+        vkUpdateDescriptorSets(device_, std::size(writes), writes, 0, nullptr);
+    }
+
+    void ShadowPass::updateDescriptors(
+        const std::vector<VkBuffer> &uniformBuffers,
+        const std::vector<VkBuffer> &materialBuffers,
+        const std::vector<VkBuffer> &instanceBuffers,
+        const std::vector<VkBuffer> &previousTransformBuffers,
+        const std::vector<VkBuffer> &instanceIndexBuffers,
+        const std::vector<VkBuffer> &grassInstanceBuffers,
+        const std::vector<VkBuffer> &grassClusterBuffers,
+        const std::vector<VkBuffer> &grassDeformationBuffers,
+        const std::vector<VkBuffer> &clusterRangeBuffers,
+        const std::vector<VkBuffer> &clusterIndexBuffers,
+        const std::vector<VkBuffer> &reflectionProbeBuffers,
+        const std::vector<VkDescriptorImageInfo> &materialTextures,
+        const std::array<VkDescriptorImageInfo, 3> &imageBasedLighting,
+        const VkDeviceSize uniformBufferRange) const {
+        const std::size_t frameCount = descriptorSets_.size();
+        if (device_ == VK_NULL_HANDLE || descriptorPool_ == VK_NULL_HANDLE ||
+            materialBuffers.size() != frameCount || uniformBuffers.size() != frameCount ||
+            instanceBuffers.size() != frameCount || previousTransformBuffers.size() != frameCount ||
+            instanceIndexBuffers.size() != frameCount ||
+            grassInstanceBuffers.size() != frameCount || grassClusterBuffers.size() != frameCount ||
+            grassDeformationBuffers.size() != frameCount || clusterRangeBuffers.size() != frameCount ||
+            clusterIndexBuffers.size() != frameCount || reflectionProbeBuffers.size() != frameCount || materialTextures.
+            size() != MaxMaterialTextures ||
+            grassDescriptorSets_.size() != frameCount || grassVelocityDescriptorSets_.size() != frameCount ||
+            grassShadowDescriptorSets_.size() != frameCount || shadowDescriptorSets_.size() != frameCount ||
+            shadowTwoSidedDescriptorSets_.size() != frameCount || pageTableBuffers_.size() != frameCount) {
+            throw std::invalid_argument("Invalid shadow descriptor update resources");
         }
 
-        std::vector<VkDescriptorSetLayout> layouts(frameCount * 6, descriptorSetLayout_);
-        descriptorSets_.resize(frameCount);
-        grassDescriptorSets_.resize(frameCount);
-        grassVelocityDescriptorSets_.resize(frameCount);
-        grassShadowDescriptorSets_.resize(frameCount);
-        shadowDescriptorSets_.resize(frameCount);
-        shadowTwoSidedDescriptorSets_.resize(frameCount);
-        gtaoDescriptorCache_.resize(frameCount);
-        gtaoDescriptorCacheValid_.assign(frameCount, false);
-        grassVisibleDescriptorCache_.resize(frameCount);
-        grassVelocityVisibleDescriptorCache_.resize(frameCount);
-        grassShadowVisibleDescriptorCache_.resize(frameCount);
-        grassVisibleDescriptorCacheValid_.assign(frameCount, false);
-        grassVelocityVisibleDescriptorCacheValid_.assign(frameCount, false);
-        grassShadowVisibleDescriptorCacheValid_.assign(frameCount, false);
-        VkDescriptorSetAllocateInfo allocateInfo{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};
-        allocateInfo.descriptorPool = descriptorPool_;
-        std::vector<VkDescriptorSet> allDescriptorSets(frameCount * 6);
-        allocateInfo.descriptorSetCount = frameCount * 6;
-        allocateInfo.pSetLayouts = layouts.data();
-        if (vkAllocateDescriptorSets(device_, &allocateInfo, allDescriptorSets.data()) != VK_SUCCESS) {
-            throw std::runtime_error("Could not allocate shadow descriptor sets");
-        }
-        std::copy_n(allDescriptorSets.begin(), frameCount, descriptorSets_.begin());
-        std::copy_n(allDescriptorSets.begin() + frameCount, frameCount, grassDescriptorSets_.begin());
-        std::copy_n(allDescriptorSets.begin() + frameCount * 2, frameCount,
-                    grassVelocityDescriptorSets_.begin());
-        std::copy_n(allDescriptorSets.begin() + frameCount * 3, frameCount,
-                    grassShadowDescriptorSets_.begin());
-        std::copy_n(allDescriptorSets.begin() + frameCount * 4, frameCount,
-                    shadowDescriptorSets_.begin());
-        std::copy_n(allDescriptorSets.begin() + frameCount * 5, frameCount,
-                    shadowTwoSidedDescriptorSets_.begin());
-
-        pageTableBuffers_.resize(frameCount);
-        for (std::unique_ptr<Buffer>& buffer : pageTableBuffers_) {
-            buffer = std::make_unique<Buffer>();
-            buffer->createHostVisible(physicalDevice, device_,
-                                      sizeof(std::uint32_t) * pageTable_.size(),
-                                      VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, allocator);
-            buffer->update(pageTable_.data(), sizeof(std::uint32_t) * pageTable_.size());
-        }
-
-        const VkDescriptorImageInfo imageInfo{
-            shadowMap_->sampler(), shadowMap_->imageView(),
-            VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
-        const VkDescriptorImageInfo depthImageInfo{
-            shadowMap_->depthSampler(), shadowMap_->imageView(),
-            VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
-        const VkDescriptorImageInfo linearImageInfo{
-            shadowMap_->linearSampler(), shadowMap_->imageView(),
-            VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
         for (std::uint32_t frame = 0; frame < frameCount; ++frame) {
-            const VkDescriptorBufferInfo bufferInfo{
-                uniformBuffers[frame], 0, uniformBufferRange};
-            const VkDescriptorBufferInfo materialInfo{
-                materialBuffers[frame], 0, VK_WHOLE_SIZE};
-            const VkDescriptorBufferInfo pageTableInfo{
-                pageTableBuffers_[frame]->handle(), 0, VK_WHOLE_SIZE};
-            const VkDescriptorBufferInfo instanceInfo{instanceBuffers[frame], 0, VK_WHOLE_SIZE};
-            const VkDescriptorBufferInfo previousTransformInfo{previousTransformBuffers[frame], 0, VK_WHOLE_SIZE};
-            const VkDescriptorBufferInfo instanceIndexInfo{instanceIndexBuffers[frame], 0, VK_WHOLE_SIZE};
-            const VkDescriptorBufferInfo grassInstanceInfo{grassInstanceBuffers[frame], 0, VK_WHOLE_SIZE};
-            const VkDescriptorBufferInfo grassClusterInfo{grassClusterBuffers[frame], 0, VK_WHOLE_SIZE};
-            const VkDescriptorBufferInfo grassDeformationInfo{grassDeformationBuffers[frame], 0, VK_WHOLE_SIZE};
-            const VkDescriptorBufferInfo clusterRangeInfo{clusterRangeBuffers[frame], 0, VK_WHOLE_SIZE};
-            const VkDescriptorBufferInfo clusterIndexInfo{clusterIndexBuffers[frame], 0, VK_WHOLE_SIZE};
-            const VkDescriptorBufferInfo reflectionProbeInfo{reflectionProbeBuffers[frame], 0, VK_WHOLE_SIZE};
+            // This bulk update overwrites the grass binding subsequently managed
+            // by the record-time setters below.
+            grassVisibleDescriptorCacheValid_[frame] = false;
+            grassVelocityVisibleDescriptorCacheValid_[frame] = false;
+            grassShadowVisibleDescriptorCacheValid_[frame] = false;
+            const VkDescriptorBufferInfo uniform{uniformBuffers[frame], 0, uniformBufferRange};
+            const VkDescriptorBufferInfo material{materialBuffers[frame], 0, VK_WHOLE_SIZE};
+            const VkDescriptorBufferInfo pageTable{pageTableBuffers_[frame]->handle(), 0, VK_WHOLE_SIZE};
+            const VkDescriptorBufferInfo instance{instanceBuffers[frame], 0, VK_WHOLE_SIZE};
+            const VkDescriptorBufferInfo previousTransform{previousTransformBuffers[frame], 0, VK_WHOLE_SIZE};
+            const VkDescriptorBufferInfo instanceIndex{instanceIndexBuffers[frame], 0, VK_WHOLE_SIZE};
+            const VkDescriptorBufferInfo grassInstance{grassInstanceBuffers[frame], 0, VK_WHOLE_SIZE};
+            const VkDescriptorBufferInfo grassCluster{grassClusterBuffers[frame], 0, VK_WHOLE_SIZE};
+            const VkDescriptorBufferInfo grassDeformation{grassDeformationBuffers[frame], 0, VK_WHOLE_SIZE};
+            const VkDescriptorBufferInfo clusterRanges{clusterRangeBuffers[frame], 0, VK_WHOLE_SIZE};
+            const VkDescriptorBufferInfo clusterIndices{clusterIndexBuffers[frame], 0, VK_WHOLE_SIZE};
+            const VkDescriptorBufferInfo reflectionProbes{reflectionProbeBuffers[frame], 0, VK_WHOLE_SIZE};
             std::vector<VkDescriptorImageInfo> reflectionTextures(
                 ReflectionProbeManager::TextureDescriptorCount, imageBasedLighting[1]);
-            VkWriteDescriptorSet writes[18]{};
-            writes[0] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr,
-                         descriptorSets_[frame], 0, 0, 1,
-                         VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &imageInfo, nullptr, nullptr};
-            writes[1] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr,
-                         descriptorSets_[frame], 1, 0, 1,
-                         VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, nullptr, &bufferInfo, nullptr};
-            writes[2] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr,
-                         descriptorSets_[frame], 2, 0, 1,
-                         VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, nullptr, &materialInfo, nullptr};
-            writes[3] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr,
-                         descriptorSets_[frame], 13, 0, MaxMaterialTextures,
-                         VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, materialTextures.data(), nullptr};
-            writes[4] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr,
-                         descriptorSets_[frame], 4, 0, 1,
-                         VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, nullptr, &pageTableInfo, nullptr};
-            writes[5] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr,
-                         descriptorSets_[frame], 5, 0, 1,
-                         VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, nullptr, &instanceInfo, nullptr};
-            writes[6] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr,
-                         descriptorSets_[frame], 6, 0, 1,
-                         VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, nullptr, &instanceIndexInfo, nullptr};
-            writes[7] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr,
-                         descriptorSets_[frame], GrassClusterBinding, 0, 1,
-                         VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, nullptr, &grassClusterInfo, nullptr};
-            writes[8] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr,
-                         descriptorSets_[frame], GrassDeformationBinding, 0, 1,
-                         VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, nullptr, &grassDeformationInfo, nullptr};
-            writes[9] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr,
-                         descriptorSets_[frame], 9, 0, 1,
-                         VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &depthImageInfo, nullptr, nullptr};
-            writes[10] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr,
-                          descriptorSets_[frame], 8, 0, 1,
-                          VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, nullptr, &previousTransformInfo, nullptr};
-            writes[11] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr,
-                          descriptorSets_[frame], 10, 0, 1,
-                          VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &imageBasedLighting[0], nullptr, nullptr};
-            writes[12] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr,
-                          descriptorSets_[frame], 11, 0, 1,
-                          VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &imageBasedLighting[1], nullptr, nullptr};
-            writes[13] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr,
-                          descriptorSets_[frame], 12, 0, 1,
-                          VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &imageBasedLighting[2], nullptr, nullptr};
-            writes[14] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr,
-                          descriptorSets_[frame], 14, 0, 1,
-                          VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, nullptr, &reflectionProbeInfo, nullptr};
-            writes[15] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr,
-                          descriptorSets_[frame], 15, 0,
-                          ReflectionProbeManager::TextureDescriptorCount,
-                          VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
-                          reflectionTextures.data(), nullptr, nullptr};
-            // Replaced with the GTAO output as soon as that pass is created.
-            // A valid 2D fallback is required even while the first history is cleared.
-            writes[16] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr,
-                          descriptorSets_[frame], 16, 0, 1,
-                          VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
-                          materialTextures.data(), nullptr, nullptr};
-            writes[17] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr,
-                          descriptorSets_[frame], 17, 0, 1,
-                          VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
-                          &linearImageInfo, nullptr, nullptr};
-            // Standard forward consumes bindings 3/7 as the clustered range
-            // headers and compact light-index list.  Grass descriptors below
-            // retain their vertex-only cluster/deformation bindings.
-            writes[7].pBufferInfo = &clusterRangeInfo;
-            writes[8].pBufferInfo = &clusterIndexInfo;
-            vkUpdateDescriptorSets(device_, std::size(writes), writes, 0, nullptr);
-            writes[7].pBufferInfo = &grassClusterInfo;
-            writes[8].pBufferInfo = &grassDeformationInfo;
-            writes[0].dstSet = grassDescriptorSets_[frame];
-            writes[1].dstSet = grassDescriptorSets_[frame];
-            writes[2].dstSet = grassDescriptorSets_[frame];
-            writes[3].dstSet = grassDescriptorSets_[frame];
-            writes[4].dstSet = grassDescriptorSets_[frame];
-            writes[5].dstSet = grassDescriptorSets_[frame]; writes[5].pBufferInfo = &grassInstanceInfo;
-            writes[6].dstSet = grassDescriptorSets_[frame];
-            writes[7].dstSet = grassDescriptorSets_[frame];
-            writes[8].dstSet = grassDescriptorSets_[frame];
-            writes[9].dstSet = grassDescriptorSets_[frame];
-            writes[10].dstSet = grassDescriptorSets_[frame];
-            vkUpdateDescriptorSets(device_, std::size(writes), writes, 0, nullptr);
-            for (VkWriteDescriptorSet& write : writes) write.dstSet = grassVelocityDescriptorSets_[frame];
-            vkUpdateDescriptorSets(device_, std::size(writes), writes, 0, nullptr);
-            for (VkWriteDescriptorSet& write : writes) write.dstSet = grassShadowDescriptorSets_[frame];
-            vkUpdateDescriptorSets(device_, std::size(writes), writes, 0, nullptr);
-            // Start from the generic scene contract. setShadowInstanceTransforms()
-            // replaces only 5/6 immediately before the shadow draw.
-            writes[5].pBufferInfo = &instanceInfo;
-            writes[6].pBufferInfo = &instanceIndexInfo;
-            writes[7].pBufferInfo = &clusterRangeInfo;
-            writes[8].pBufferInfo = &clusterIndexInfo;
-            for (VkWriteDescriptorSet& write : writes) write.dstSet = shadowDescriptorSets_[frame];
-            vkUpdateDescriptorSets(device_, std::size(writes), writes, 0, nullptr);
-            for (VkWriteDescriptorSet& write : writes) write.dstSet = shadowTwoSidedDescriptorSets_[frame];
-            vkUpdateDescriptorSets(device_, std::size(writes), writes, 0, nullptr);
-        }
-
-        const auto opaqueShader = Vkutil::loadShaderModule(device_, assets, "shaders/shadow_opaque.spv");
-        const std::array opaqueStages{
-            VkPipelineShaderStageCreateInfo{VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO, nullptr, 0,
-                VK_SHADER_STAGE_VERTEX_BIT, opaqueShader.get(), "main", nullptr},
-        };
-        const auto shader = Vkutil::loadShaderModule(device_, assets, "shaders/shadow_map.spv");
-        const std::array stages{
-            VkPipelineShaderStageCreateInfo{VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO, nullptr, 0,
-                VK_SHADER_STAGE_VERTEX_BIT, shader.get(), "vertexMain", nullptr},
-            VkPipelineShaderStageCreateInfo{VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO, nullptr, 0,
-                VK_SHADER_STAGE_FRAGMENT_BIT, shader.get(), "fragmentMain", nullptr},
-        };
-        const VkPushConstantRange pushConstantRange{
-            VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(glm::mat4)};
-        VkPipelineLayoutCreateInfo pipelineLayoutInfo{
-            VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
-        pipelineLayoutInfo.setLayoutCount = 1;
-        pipelineLayoutInfo.pSetLayouts = &descriptorSetLayout_;
-        pipelineLayoutInfo.pushConstantRangeCount = 1;
-        pipelineLayoutInfo.pPushConstantRanges = &pushConstantRange;
-        if (vkCreatePipelineLayout(device_, &pipelineLayoutInfo, nullptr,
-                                   &pipelineLayout_) != VK_SUCCESS) {
-            throw std::runtime_error("Could not create shadow pipeline layout");
-        }
-
-        const VkVertexInputBindingDescription vertexBindings[] = {
-            {0, sizeof(GpuVertex), VK_VERTEX_INPUT_RATE_VERTEX},
-        };
-        const VkVertexInputAttributeDescription attributes[] = {
-            {0, 0, VK_FORMAT_R32G32B32_SFLOAT, offsetof(GpuVertex, px)},
-            {2, 0, VK_FORMAT_R16G16_SFLOAT, offsetof(GpuVertex, texCoord)},
-            {4, 0, VK_FORMAT_R16G16_SFLOAT, offsetof(GpuVertex, texCoord1)},
-            {8, 0, VK_FORMAT_R32_UINT, offsetof(GpuVertex, materialIndex)},
-        };
-        VkPipelineVertexInputStateCreateInfo vertexInput{
-            VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO};
-        vertexInput.vertexBindingDescriptionCount = std::size(vertexBindings);
-        vertexInput.pVertexBindingDescriptions = vertexBindings;
-        vertexInput.vertexAttributeDescriptionCount = std::size(attributes);
-        vertexInput.pVertexAttributeDescriptions = attributes;
-        VkPipelineInputAssemblyStateCreateInfo assembly{
-            VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO};
-        assembly.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
-        VkPipelineViewportStateCreateInfo viewport{
-            VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO};
-        viewport.viewportCount = 1;
-        viewport.scissorCount = 1;
-        VkPipelineRasterizationStateCreateInfo rasterizer{
-            VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO};
-        rasterizer.polygonMode = VK_POLYGON_MODE_FILL;
-        // The main pass renders glTF double-sided foliage. Its transparent
-        // pixels are already discarded by shadow_map::fragmentMain, so it must also cast
-        // a shadow when the light sees the back of a leaf card.
-        rasterizer.cullMode = VK_CULL_MODE_BACK_BIT;
-        rasterizer.frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE;
-        rasterizer.lineWidth = 1.0F;
-        rasterizer.depthBiasEnable = VK_TRUE;
-        VkPipelineMultisampleStateCreateInfo multisampling{
-            VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO};
-        multisampling.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
-        VkPipelineDepthStencilStateCreateInfo depth{
-            VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO};
-        depth.depthTestEnable = VK_TRUE;
-        depth.depthWriteEnable = VK_TRUE;
-        depth.depthCompareOp = VK_COMPARE_OP_LESS;
-        constexpr VkDynamicState dynamicStates[] = {
-            VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR,
-            VK_DYNAMIC_STATE_DEPTH_BIAS};
-        VkPipelineDynamicStateCreateInfo dynamic{
-            VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO};
-        dynamic.dynamicStateCount = std::size(dynamicStates);
-        dynamic.pDynamicStates = dynamicStates;
-        VkGraphicsPipelineCreateInfo pipelineInfo{
-            VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO};
-        pipelineInfo.stageCount = std::size(stages);
-        pipelineInfo.pStages = stages.data();
-        pipelineInfo.pVertexInputState = &vertexInput;
-        pipelineInfo.pInputAssemblyState = &assembly;
-        pipelineInfo.pViewportState = &viewport;
-        pipelineInfo.pRasterizationState = &rasterizer;
-        pipelineInfo.pMultisampleState = &multisampling;
-        pipelineInfo.pDepthStencilState = &depth;
-        pipelineInfo.pDynamicState = &dynamic;
-        VkPipelineRenderingCreateInfo rendering{VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO};
-        rendering.depthAttachmentFormat = shadowMap_->format();
-        pipelineInfo.pNext = &rendering;
-        pipelineInfo.layout = pipelineLayout_;
-        pipelineInfo.renderPass = VK_NULL_HANDLE;
-        pipelineInfo.stageCount = std::size(opaqueStages);
-        pipelineInfo.pStages = opaqueStages.data();
-        if (vkCreateGraphicsPipelines(device_, VK_NULL_HANDLE, 1, &pipelineInfo,
-                                      nullptr, &opaquePipeline_) != VK_SUCCESS) {
-            throw std::runtime_error("Could not create opaque shadow pipeline");
-        }
-        pipelineInfo.stageCount = std::size(stages);
-        pipelineInfo.pStages = stages.data();
-        if (vkCreateGraphicsPipelines(device_, VK_NULL_HANDLE, 1, &pipelineInfo,
-                                      nullptr, &pipeline_) != VK_SUCCESS) {
-            throw std::runtime_error("Could not create shadow pipeline");
-        }
-
-        rasterizer.cullMode = VK_CULL_MODE_NONE;
-        if (vkCreateGraphicsPipelines(device_, VK_NULL_HANDLE, 1, &pipelineInfo,
-                                      nullptr, &twoSidedPipeline_) != VK_SUCCESS) {
-            throw std::runtime_error("Could not create two-sided shadow pipeline");
-        }
-
-        const auto grassShader = Vkutil::loadShaderModule(device_, assets, "shaders/grass_shadow.spv");
-        const std::array grassStages{
-            VkPipelineShaderStageCreateInfo{VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO, nullptr, 0,
-                VK_SHADER_STAGE_VERTEX_BIT, grassShader.get(), "vertexMain", nullptr},
-            VkPipelineShaderStageCreateInfo{VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO, nullptr, 0,
-                VK_SHADER_STAGE_FRAGMENT_BIT, grassShader.get(), "fragmentMain", nullptr},
-        };
-        pipelineInfo.stageCount = std::size(grassStages);
-        pipelineInfo.pStages = grassStages.data();
-        // grass_shadow consumes position, UV0 and material index only.
-        const VkVertexInputAttributeDescription grassAttributes[] = {
-            {0, 0, VK_FORMAT_R32G32B32_SFLOAT, offsetof(GpuVertex, px)},
-            {2, 0, VK_FORMAT_R16G16_SFLOAT, offsetof(GpuVertex, texCoord)},
-            {8, 0, VK_FORMAT_R32_UINT, offsetof(GpuVertex, materialIndex)},
-        };
-        vertexInput.vertexAttributeDescriptionCount = std::size(grassAttributes);
-        vertexInput.pVertexAttributeDescriptions = grassAttributes;
-        if (vkCreateGraphicsPipelines(device_, VK_NULL_HANDLE, 1, &pipelineInfo,
-                                      nullptr, &grassPipeline_) != VK_SUCCESS) {
-            throw std::runtime_error("Could not create grass shadow pipeline");
-        }
-    } catch (...) {
-        destroy();
-        throw;
-    }
-}
-
-void ShadowPass::setGtaoTexture(const std::uint32_t frameIndex,
-                                const VkDescriptorImageInfo& texture) const {
-    const auto& cached = gtaoDescriptorCache_.at(frameIndex);
-    if (gtaoDescriptorCacheValid_.at(frameIndex) && cached.sampler == texture.sampler &&
-        cached.imageView == texture.imageView && cached.imageLayout == texture.imageLayout) return;
-    const VkDescriptorSet set = descriptorSets_.at(frameIndex);
-    const VkWriteDescriptorSet write{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr, set, 16, 0, 1,
-                                     VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &texture, nullptr, nullptr};
-    vkUpdateDescriptorSets(device_, 1, &write, 0, nullptr);
-    gtaoDescriptorCache_[frameIndex] = texture;
-    gtaoDescriptorCacheValid_[frameIndex] = true;
-}
-
-void ShadowPass::setShadowInstanceTransforms(const std::uint32_t frameIndex,
-                                             const VkBuffer transforms,
-                                             const VkBuffer materialOffsets, const bool twoSided) const {
-    if (frameIndex >= descriptorSets_.size() || transforms == VK_NULL_HANDLE ||
-        materialOffsets == VK_NULL_HANDLE) {
-        throw std::out_of_range("Shadow transform descriptor resources are invalid");
-    }
-    const VkDescriptorBufferInfo transformInfo{transforms, 0, VK_WHOLE_SIZE};
-    const VkDescriptorBufferInfo materialInfo{materialOffsets, 0, VK_WHOLE_SIZE};
-    VkWriteDescriptorSet writes[2]{};
-    const VkDescriptorSet target = twoSided ? shadowTwoSidedDescriptorSets_.at(frameIndex) : shadowDescriptorSets_.at(frameIndex);
-    writes[0] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr, target, 5, 0, 1,
-                 VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, nullptr, &transformInfo, nullptr};
-    writes[1] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr, target, 6, 0, 1,
-                 VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, nullptr, &materialInfo, nullptr};
-    vkUpdateDescriptorSets(device_, std::size(writes), writes, 0, nullptr);
-}
-
-void ShadowPass::updateDescriptors(
-        const std::vector<VkBuffer>& uniformBuffers,
-        const std::vector<VkBuffer>& materialBuffers,
-        const std::vector<VkBuffer>& instanceBuffers,
-        const std::vector<VkBuffer>& previousTransformBuffers,
-        const std::vector<VkBuffer>& instanceIndexBuffers,
-        const std::vector<VkBuffer>& grassInstanceBuffers,
-        const std::vector<VkBuffer>& grassClusterBuffers,
-        const std::vector<VkBuffer>& grassDeformationBuffers,
-        const std::vector<VkBuffer>& clusterRangeBuffers,
-        const std::vector<VkBuffer>& clusterIndexBuffers,
-        const std::vector<VkBuffer>& reflectionProbeBuffers,
-        const std::vector<VkDescriptorImageInfo>& materialTextures,
-        const std::array<VkDescriptorImageInfo, 3>& imageBasedLighting,
-        const VkDeviceSize uniformBufferRange) const {
-    const std::size_t frameCount = descriptorSets_.size();
-    if (device_ == VK_NULL_HANDLE || descriptorPool_ == VK_NULL_HANDLE ||
-        materialBuffers.size() != frameCount || uniformBuffers.size() != frameCount ||
-        instanceBuffers.size() != frameCount || previousTransformBuffers.size() != frameCount ||
-        instanceIndexBuffers.size() != frameCount ||
-        grassInstanceBuffers.size() != frameCount || grassClusterBuffers.size() != frameCount ||
-        grassDeformationBuffers.size() != frameCount || clusterRangeBuffers.size() != frameCount ||
-        clusterIndexBuffers.size() != frameCount || reflectionProbeBuffers.size() != frameCount || materialTextures.size() != MaxMaterialTextures ||
-        grassDescriptorSets_.size() != frameCount || grassVelocityDescriptorSets_.size() != frameCount ||
-        grassShadowDescriptorSets_.size() != frameCount || shadowDescriptorSets_.size() != frameCount ||
-        shadowTwoSidedDescriptorSets_.size() != frameCount || pageTableBuffers_.size() != frameCount) {
-        throw std::invalid_argument("Invalid shadow descriptor update resources");
-    }
-
-    for (std::uint32_t frame = 0; frame < frameCount; ++frame) {
-        // This bulk update overwrites the grass binding subsequently managed
-        // by the record-time setters below.
-        grassVisibleDescriptorCacheValid_[frame] = false;
-        grassVelocityVisibleDescriptorCacheValid_[frame] = false;
-        grassShadowVisibleDescriptorCacheValid_[frame] = false;
-        const VkDescriptorBufferInfo uniform{uniformBuffers[frame], 0, uniformBufferRange};
-        const VkDescriptorBufferInfo material{materialBuffers[frame], 0, VK_WHOLE_SIZE};
-        const VkDescriptorBufferInfo pageTable{pageTableBuffers_[frame]->handle(), 0, VK_WHOLE_SIZE};
-        const VkDescriptorBufferInfo instance{instanceBuffers[frame], 0, VK_WHOLE_SIZE};
-        const VkDescriptorBufferInfo previousTransform{previousTransformBuffers[frame], 0, VK_WHOLE_SIZE};
-        const VkDescriptorBufferInfo instanceIndex{instanceIndexBuffers[frame], 0, VK_WHOLE_SIZE};
-        const VkDescriptorBufferInfo grassInstance{grassInstanceBuffers[frame], 0, VK_WHOLE_SIZE};
-        const VkDescriptorBufferInfo grassCluster{grassClusterBuffers[frame], 0, VK_WHOLE_SIZE};
-        const VkDescriptorBufferInfo grassDeformation{grassDeformationBuffers[frame], 0, VK_WHOLE_SIZE};
-        const VkDescriptorBufferInfo clusterRanges{clusterRangeBuffers[frame], 0, VK_WHOLE_SIZE};
-        const VkDescriptorBufferInfo clusterIndices{clusterIndexBuffers[frame], 0, VK_WHOLE_SIZE};
-        const VkDescriptorBufferInfo reflectionProbes{reflectionProbeBuffers[frame], 0, VK_WHOLE_SIZE};
-        std::vector<VkDescriptorImageInfo> reflectionTextures(
-            ReflectionProbeManager::TextureDescriptorCount, imageBasedLighting[1]);
-        VkWriteDescriptorSet writes[14]{};
-        writes[0] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr, descriptorSets_[frame], 1, 0, 1,
-                     VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, nullptr, &uniform, nullptr};
-        writes[1] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr, descriptorSets_[frame], 2, 0, 1,
-                     VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, nullptr, &material, nullptr};
-        writes[2] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr, descriptorSets_[frame], 4, 0, 1,
-                     VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, nullptr, &pageTable, nullptr};
-        writes[3] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr, descriptorSets_[frame], 5, 0, 1,
-                     VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, nullptr, &instance, nullptr};
-        writes[4] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr, descriptorSets_[frame], 6, 0, 1,
-                     VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, nullptr, &instanceIndex, nullptr};
-        writes[5] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr, descriptorSets_[frame], GrassClusterBinding, 0, 1,
-                     VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, nullptr, &clusterRanges, nullptr};
-        writes[6] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr, descriptorSets_[frame], GrassDeformationBinding, 0, 1,
-                     VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, nullptr, &clusterIndices, nullptr};
-        writes[7] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr, descriptorSets_[frame], 13, 0,
-                     MaxMaterialTextures, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
-                     materialTextures.data(), nullptr, nullptr};
-        writes[8] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr, descriptorSets_[frame], 8, 0, 1,
-                     VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, nullptr, &previousTransform, nullptr};
-        for (std::uint32_t index = 0; index < 3; ++index) {
-            writes[9 + index] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr, descriptorSets_[frame], 10 + index, 0, 1,
-                                 VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &imageBasedLighting[index], nullptr, nullptr};
-        }
-        writes[12] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr, descriptorSets_[frame], 14, 0, 1,
-                      VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, nullptr, &reflectionProbes, nullptr};
-        writes[13] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr, descriptorSets_[frame], 15, 0,
-                      ReflectionProbeManager::TextureDescriptorCount,
-                      VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
-                      reflectionTextures.data(), nullptr, nullptr};
-        vkUpdateDescriptorSets(device_, std::size(writes), writes, 0, nullptr);
-
-        for (VkDescriptorSet set : {grassDescriptorSets_[frame], grassVelocityDescriptorSets_[frame],
-                                    grassShadowDescriptorSets_[frame]}) {
-            for (VkWriteDescriptorSet& write : writes) write.dstSet = set;
-            writes[3].pBufferInfo = &grassInstance;
-            writes[5].pBufferInfo = &grassCluster;
-            writes[6].pBufferInfo = &grassDeformation;
-            vkUpdateDescriptorSets(device_, std::size(writes), writes, 0, nullptr);
-        }
-        // Keep the isolated shadow sets current without mutating the forward
-        // descriptor set. Their bindings 5/6 are overwritten at record time.
-        writes[3].pBufferInfo = &instance;
-        writes[4].pBufferInfo = &instanceIndex;
-        writes[5].pBufferInfo = &clusterRanges;
-        writes[6].pBufferInfo = &clusterIndices;
-        for (VkDescriptorSet set : {shadowDescriptorSets_[frame], shadowTwoSidedDescriptorSets_[frame]}) {
-            for (VkWriteDescriptorSet& write : writes) write.dstSet = set;
-            vkUpdateDescriptorSets(device_, std::size(writes), writes, 0, nullptr);
-        }
-    }
-}
-
-void ShadowPass::updateImageBasedLightingDescriptors(
-        const std::array<VkDescriptorImageInfo, 3>& imageBasedLighting) const {
-    if (device_ == VK_NULL_HANDLE || descriptorPool_ == VK_NULL_HANDLE) {
-        throw std::logic_error("Cannot update IBL descriptors before creating the shadow pass");
-    }
-    for (std::uint32_t frame = 0; frame < descriptorSets_.size(); ++frame) {
-        std::vector<VkDescriptorImageInfo> reflectionTextures(
-            ReflectionProbeManager::TextureDescriptorCount, imageBasedLighting[1]);
-        VkWriteDescriptorSet writes[4]{};
-        for (std::uint32_t index = 0; index < 3; ++index) {
-            writes[index] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr,
-                descriptorSets_[frame], 10 + index, 0, 1,
+            VkWriteDescriptorSet writes[14]{};
+            writes[0] = {
+                VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr, descriptorSets_[frame], 1, 0, 1,
+                VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, nullptr, &uniform, nullptr
+            };
+            writes[1] = {
+                VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr, descriptorSets_[frame], 2, 0, 1,
+                VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, nullptr, &material, nullptr
+            };
+            writes[2] = {
+                VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr, descriptorSets_[frame], 4, 0, 1,
+                VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, nullptr, &pageTable, nullptr
+            };
+            writes[3] = {
+                VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr, descriptorSets_[frame], 5, 0, 1,
+                VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, nullptr, &instance, nullptr
+            };
+            writes[4] = {
+                VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr, descriptorSets_[frame], 6, 0, 1,
+                VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, nullptr, &instanceIndex, nullptr
+            };
+            writes[5] = {
+                VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr, descriptorSets_[frame], GrassClusterBinding, 0, 1,
+                VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, nullptr, &clusterRanges, nullptr
+            };
+            writes[6] = {
+                VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr, descriptorSets_[frame], GrassDeformationBinding, 0, 1,
+                VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, nullptr, &clusterIndices, nullptr
+            };
+            writes[7] = {
+                VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr, descriptorSets_[frame], 13, 0,
+                MaxMaterialTextures, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+                materialTextures.data(), nullptr, nullptr
+            };
+            writes[8] = {
+                VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr, descriptorSets_[frame], 8, 0, 1,
+                VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, nullptr, &previousTransform, nullptr
+            };
+            for (std::uint32_t index = 0; index < 3; ++index) {
+                writes[9 + index] = {
+                    VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr, descriptorSets_[frame], 10 + index, 0, 1,
+                    VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &imageBasedLighting[index], nullptr, nullptr
+                };
+            }
+            writes[12] = {
+                VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr, descriptorSets_[frame], 14, 0, 1,
+                VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, nullptr, &reflectionProbes, nullptr
+            };
+            writes[13] = {
+                VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr, descriptorSets_[frame], 15, 0,
+                ReflectionProbeManager::TextureDescriptorCount,
                 VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
-                &imageBasedLighting[index], nullptr, nullptr};
-        }
-        writes[3] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr,
-            descriptorSets_[frame], 15, 0,
-            ReflectionProbeManager::TextureDescriptorCount,
-            VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
-            reflectionTextures.data(), nullptr, nullptr};
-        for (const VkDescriptorSet set : {descriptorSets_[frame], grassDescriptorSets_[frame],
-                                          grassVelocityDescriptorSets_[frame], grassShadowDescriptorSets_[frame]}) {
-            for (VkWriteDescriptorSet& write : writes) write.dstSet = set;
+                reflectionTextures.data(), nullptr, nullptr
+            };
             vkUpdateDescriptorSets(device_, std::size(writes), writes, 0, nullptr);
-        }
-    }
-}
 
-void ShadowPass::setReflectionProbeTexture(const std::uint32_t frameIndex,
-                                           const std::uint32_t textureIndex,
-                                           const VkDescriptorImageInfo& texture) const {
-    if (device_ == VK_NULL_HANDLE || frameIndex >= descriptorSets_.size() ||
-        textureIndex >= ReflectionProbeManager::TextureDescriptorCount) {
-        throw std::out_of_range("Reflection-probe descriptor index is invalid");
-    }
-    for (const VkDescriptorSet set : {descriptorSets_[frameIndex], grassDescriptorSets_[frameIndex],
-                                      grassVelocityDescriptorSets_[frameIndex], grassShadowDescriptorSets_[frameIndex]}) {
-        const VkWriteDescriptorSet write{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr, set, 15,
-            textureIndex, 1, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &texture, nullptr, nullptr};
-        vkUpdateDescriptorSets(device_, 1, &write, 0, nullptr);
-    }
-}
-
-void ShadowPass::destroy() noexcept {
-    if (device_ != VK_NULL_HANDLE) {
-        if (grassPipeline_ != VK_NULL_HANDLE) vkDestroyPipeline(device_, grassPipeline_, nullptr);
-        if (twoSidedPipeline_ != VK_NULL_HANDLE) vkDestroyPipeline(device_, twoSidedPipeline_, nullptr);
-        if (opaquePipeline_ != VK_NULL_HANDLE) vkDestroyPipeline(device_, opaquePipeline_, nullptr);
-        if (pipeline_ != VK_NULL_HANDLE) vkDestroyPipeline(device_, pipeline_, nullptr);
-        if (pipelineLayout_ != VK_NULL_HANDLE) vkDestroyPipelineLayout(device_, pipelineLayout_, nullptr);
-        if (descriptorPool_ != VK_NULL_HANDLE) vkDestroyDescriptorPool(device_, descriptorPool_, nullptr);
-        if (descriptorSetLayout_ != VK_NULL_HANDLE) vkDestroyDescriptorSetLayout(device_, descriptorSetLayout_, nullptr);
-    }
-    pipeline_ = VK_NULL_HANDLE;
-    opaquePipeline_ = VK_NULL_HANDLE;
-    twoSidedPipeline_ = VK_NULL_HANDLE;
-    grassPipeline_ = VK_NULL_HANDLE;
-    pipelineLayout_ = VK_NULL_HANDLE;
-    descriptorPool_ = VK_NULL_HANDLE;
-    descriptorSetLayout_ = VK_NULL_HANDLE;
-    descriptorSets_.clear();
-    grassDescriptorSets_.clear();
-    grassVelocityDescriptorSets_.clear();
-    grassShadowDescriptorSets_.clear();
-    shadowDescriptorSets_.clear();
-    shadowTwoSidedDescriptorSets_.clear();
-    gtaoDescriptorCache_.clear();
-    gtaoDescriptorCacheValid_.clear();
-    grassVisibleDescriptorCache_.clear();
-    grassVelocityVisibleDescriptorCache_.clear();
-    grassShadowVisibleDescriptorCache_.clear();
-    grassVisibleDescriptorCacheValid_.clear();
-    grassVelocityVisibleDescriptorCacheValid_.clear();
-    grassShadowVisibleDescriptorCacheValid_.clear();
-    pageTableBuffers_.clear();
-    shadowMap_ = nullptr;
-    atlasInitialized_ = false;
-    atlasContentValid_ = false;
-    invalidateCache();
-    device_ = VK_NULL_HANDLE;
-}
-
-VkDescriptorSet ShadowPass::descriptorSet(const std::uint32_t frameIndex) const {
-    return descriptorSets_.at(frameIndex);
-}
-
-VkDescriptorSet ShadowPass::grassDescriptorSet(const std::uint32_t frameIndex) const {
-    return grassDescriptorSets_.at(frameIndex);
-}
-
-VkDescriptorSet ShadowPass::grassVelocityDescriptorSet(const std::uint32_t frameIndex) const {
-    return grassVelocityDescriptorSets_.at(frameIndex);
-}
-
-VkDescriptorSet ShadowPass::grassShadowDescriptorSet(const std::uint32_t frameIndex) const {
-    return grassShadowDescriptorSets_.at(frameIndex);
-}
-
-VkDescriptorSet ShadowPass::shadowDescriptorSet(const std::uint32_t frameIndex) const {
-    return shadowDescriptorSets_.at(frameIndex);
-}
-
-VkDescriptorSet ShadowPass::shadowTwoSidedDescriptorSet(const std::uint32_t frameIndex) const {
-    return shadowTwoSidedDescriptorSets_.at(frameIndex);
-}
-
-void ShadowPass::setGrassVisibleInstances(const std::uint32_t frameIndex,
-                                          const VkBuffer visibleInstances) const {
-    if (grassVisibleDescriptorCacheValid_.at(frameIndex) &&
-        grassVisibleDescriptorCache_.at(frameIndex) == visibleInstances) return;
-    const VkDescriptorBufferInfo info{visibleInstances, 0, VK_WHOLE_SIZE};
-    const VkWriteDescriptorSet write{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr,
-                                     grassDescriptorSets_.at(frameIndex), 6, 0, 1,
-                                     VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, nullptr, &info, nullptr};
-    vkUpdateDescriptorSets(device_, 1, &write, 0, nullptr);
-    grassVisibleDescriptorCache_[frameIndex] = visibleInstances;
-    grassVisibleDescriptorCacheValid_[frameIndex] = true;
-}
-
-void ShadowPass::setGrassVelocityVisibleInstances(const std::uint32_t frameIndex,
-                                                  const VkBuffer visibleInstances) const {
-    if (grassVelocityVisibleDescriptorCacheValid_.at(frameIndex) &&
-        grassVelocityVisibleDescriptorCache_.at(frameIndex) == visibleInstances) return;
-    const VkDescriptorBufferInfo info{visibleInstances, 0, VK_WHOLE_SIZE};
-    const VkWriteDescriptorSet write{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr,
-                                     grassVelocityDescriptorSets_.at(frameIndex), 6, 0, 1,
-                                     VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, nullptr, &info, nullptr};
-    vkUpdateDescriptorSets(device_, 1, &write, 0, nullptr);
-    grassVelocityVisibleDescriptorCache_[frameIndex] = visibleInstances;
-    grassVelocityVisibleDescriptorCacheValid_[frameIndex] = true;
-}
-
-void ShadowPass::setGrassShadowVisibleInstances(const std::uint32_t frameIndex,
-                                                const VkBuffer visibleInstances) const {
-    if (grassShadowVisibleDescriptorCacheValid_.at(frameIndex) &&
-        grassShadowVisibleDescriptorCache_.at(frameIndex) == visibleInstances) return;
-    const VkDescriptorBufferInfo info{visibleInstances, 0, VK_WHOLE_SIZE};
-    const VkWriteDescriptorSet write{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr,
-                                     grassShadowDescriptorSets_.at(frameIndex), 6, 0, 1,
-                                     VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, nullptr, &info, nullptr};
-    vkUpdateDescriptorSets(device_, 1, &write, 0, nullptr);
-    grassShadowVisibleDescriptorCache_[frameIndex] = visibleInstances;
-    grassShadowVisibleDescriptorCacheValid_[frameIndex] = true;
-}
-
-std::uint32_t ShadowPass::virtualPageIndex(const std::uint32_t level,
-                                           const std::uint32_t x,
-                                           const std::uint32_t y) noexcept {
-    constexpr std::uint32_t pagesPerLevel =
-        ShadowMap::VirtualPagesPerAxis * ShadowMap::VirtualPagesPerAxis;
-    return level * pagesPerLevel + y * ShadowMap::VirtualPagesPerAxis + x;
-}
-
-void ShadowPass::invalidateCache() noexcept {
-    pageTable_.fill(ShadowMap::InvalidPage);
-    physicalPages_.fill({});
-    cachedClipMatricesValid_.fill(false);
-    pagesToRender_.clear();
-    deferredRequests_.clear();
-    pendingPageCommits_.clear();
-    atlasContentValid_ = false;
-}
-
-void ShadowPass::preparePages(
-    const std::array<Mat4, ShadowMap::ClipLevelCount>& clipMatrices,
-    const Mat4& cameraViewProjection,
-    const std::span<const Culling::GPUObjectData> objects,
-    const std::span<const Culling::GPUObjectData> dirtyObjects,
-    const std::span<const std::uint32_t> receiverPageRequests,
-    const std::uint32_t frameIndex,
-    const std::uint32_t pageUpdateBudget) {
-    constexpr std::int32_t pageCount =
-        static_cast<std::int32_t>(ShadowMap::VirtualPagesPerAxis);
-    ++cacheClock_;
-    pagesToRender_.clear();
-    pendingPageCommits_.clear();
-    preparedFrameIndex_ = frameIndex;
-    const std::uint32_t maxPageUpdates = std::min(pageUpdateBudget, ShadowMap::PhysicalPageCount);
-
-    // A queued virtual coordinate is meaningful only for the clipmap layout
-    // that produced it. Discard it if that layout changes; the current frame's
-    // feedback (or bootstrap visibility pass) will repopulate it in the new
-    // coordinate system.
-    bool clipmapLayoutChanged = false;
-
-    // Dynamic transforms used to invalidate the whole virtual atlas. In play
-    // mode even a single rigid body therefore redrew every cached terrain and
-    // grass page on every physics tick. Mark only pages touched by the old or
-    // new batch bounds. Their previous contents remain sampleable until the
-    // bounded refresh below has rendered the replacement.
-    constexpr glm::vec3 unitCorners[8] = {
-        {0, 0, 0}, {1, 0, 0}, {0, 1, 0}, {1, 1, 0},
-        {0, 0, 1}, {1, 0, 1}, {0, 1, 1}, {1, 1, 1},
-    };
-    const auto invalidateDirtyPages = [&](const auto& matrices,
-                                          const bool requireCachedMatrix) {
-        for (const Culling::GPUObjectData& object : dirtyObjects) {
-            const glm::vec3 minimum{object.localAabbMin.x, object.localAabbMin.y,
-                                    object.localAabbMin.z};
-            const glm::vec3 maximum{object.localAabbMax.x, object.localAabbMax.y,
-                                    object.localAabbMax.z};
-            const glm::mat4 model = gpuMatrix(object.model);
-            for (std::uint32_t level = 0; level < ShadowMap::ClipLevelCount; ++level) {
-                if (requireCachedMatrix && !cachedClipMatricesValid_[level]) continue;
-                glm::vec2 minimumUv{std::numeric_limits<float>::max()};
-                glm::vec2 maximumUv{-std::numeric_limits<float>::max()};
-                for (const glm::vec3& corner : unitCorners) {
-                    const glm::vec3 local = glm::mix(minimum, maximum, corner);
-                    const glm::vec4 clip = matrices[level].native() * model *
-                                           glm::vec4{local, 1.0F};
-                    const glm::vec2 uv = glm::vec2{clip} / clip.w * 0.5F + 0.5F;
-                    minimumUv = glm::min(minimumUv, uv);
-                    maximumUv = glm::max(maximumUv, uv);
-                }
-                if (maximumUv.x <= 0.0F || maximumUv.y <= 0.0F ||
-                    minimumUv.x >= 1.0F || minimumUv.y >= 1.0F) continue;
-                const std::int32_t minimumX = std::clamp(
-                    static_cast<std::int32_t>(std::floor(minimumUv.x * pageCount)) - 1,
-                    0, pageCount - 1);
-                const std::int32_t minimumY = std::clamp(
-                    static_cast<std::int32_t>(std::floor(minimumUv.y * pageCount)) - 1,
-                    0, pageCount - 1);
-                const std::int32_t maximumX = std::clamp(
-                    static_cast<std::int32_t>(std::floor(maximumUv.x * pageCount)) + 1,
-                    0, pageCount - 1);
-                const std::int32_t maximumY = std::clamp(
-                    static_cast<std::int32_t>(std::floor(maximumUv.y * pageCount)) + 1,
-                    0, pageCount - 1);
-                for (std::int32_t y = minimumY; y <= maximumY; ++y) {
-                    for (std::int32_t x = minimumX; x <= maximumX; ++x) {
-                        const std::uint32_t key = virtualPageIndex(
-                            level, static_cast<std::uint32_t>(x), static_cast<std::uint32_t>(y));
-                        const std::uint32_t physical = pageTable_[key];
-                        if (physical == ShadowMap::InvalidPage) continue;
-                        physicalPages_[physical].dirty = true;
-                    }
-                }
+            for (VkDescriptorSet set: {
+                     grassDescriptorSets_[frame], grassVelocityDescriptorSets_[frame],
+                     grassShadowDescriptorSets_[frame]
+                 }) {
+                for (VkWriteDescriptorSet &write: writes) write.dstSet = set;
+                writes[3].pBufferInfo = &grassInstance;
+                writes[5].pBufferInfo = &grassCluster;
+                writes[6].pBufferInfo = &grassDeformation;
+                vkUpdateDescriptorSets(device_, std::size(writes), writes, 0, nullptr);
             }
-        }
-    };
-    // Cached pages are still addressed in the previous clipmap coordinates.
-    // Clear there first; after scrolling, clear the new coordinates as well.
-    invalidateDirtyPages(cachedClipMatrices_, true);
-
-    for (std::uint32_t level = 0; level < ShadowMap::ClipLevelCount; ++level) {
-        if (cachedClipMatricesValid_[level] &&
-            sameMatrix(cachedClipMatrices_[level], clipMatrices[level])) continue;
-        clipmapLayoutChanged = true;
-        std::int32_t shiftX{};
-        std::int32_t shiftY{};
-        if (cachedClipMatricesValid_[level] &&
-            clipPageShift(cachedClipMatrices_[level], clipMatrices[level], shiftX, shiftY)) {
-            std::array<std::uint32_t,
-                ShadowMap::VirtualPagesPerAxis * ShadowMap::VirtualPagesPerAxis> remapped{};
-            remapped.fill(ShadowMap::InvalidPage);
-            for (std::int32_t y = 0; y < pageCount; ++y) {
-                for (std::int32_t x = 0; x < pageCount; ++x) {
-                    const std::uint32_t oldIndex = virtualPageIndex(
-                        level, static_cast<std::uint32_t>(x), static_cast<std::uint32_t>(y));
-                    const std::uint32_t physical = pageTable_[oldIndex];
-                    if (physical == ShadowMap::InvalidPage) continue;
-                    const std::int32_t newX = x + shiftX;
-                    const std::int32_t newY = y + shiftY;
-                    if (newX < 0 || newY < 0 || newX >= pageCount || newY >= pageCount) {
-                        physicalPages_[physical] = {};
-                        continue;
-                    }
-                    remapped[static_cast<std::size_t>(newY * pageCount + newX)] = physical;
-                    physicalPages_[physical].virtualX = static_cast<std::uint16_t>(newX);
-                    physicalPages_[physical].virtualY = static_cast<std::uint16_t>(newY);
-                }
-            }
-            for (std::uint32_t y = 0; y < ShadowMap::VirtualPagesPerAxis; ++y)
-                for (std::uint32_t x = 0; x < ShadowMap::VirtualPagesPerAxis; ++x)
-                    pageTable_[virtualPageIndex(level, x, y)] =
-                        remapped[y * ShadowMap::VirtualPagesPerAxis + x];
-            cachedClipMatrices_[level] = clipMatrices[level];
-            continue;
-        }
-        for (std::uint32_t y = 0; y < ShadowMap::VirtualPagesPerAxis; ++y) {
-            for (std::uint32_t x = 0; x < ShadowMap::VirtualPagesPerAxis; ++x) {
-                const std::uint32_t index = virtualPageIndex(level, x, y);
-                const std::uint32_t physical = pageTable_[index];
-                if (physical != ShadowMap::InvalidPage) physicalPages_[physical] = {};
-                pageTable_[index] = ShadowMap::InvalidPage;
-            }
-        }
-        cachedClipMatrices_[level] = clipMatrices[level];
-        cachedClipMatricesValid_[level] = true;
-    }
-    invalidateDirtyPages(clipMatrices, false);
-
-    if (clipmapLayoutChanged) deferredRequests_.clear();
-
-    struct VisibleObject {
-        std::array<glm::vec4, 8> worldCorners{};
-        float nearestDepth{};
-    };
-    std::vector<VisibleObject> visibleObjects;
-    visibleObjects.reserve(objects.size());
-    const glm::mat4 cameraMatrix = cameraViewProjection.native();
-    // This is only a bootstrap fallback until the first completed depth
-    // request bitset is available for a frame slot. Steady-state VSM page
-    // selection never scans GPU objects on the CPU.
-    if (receiverPageRequests.empty()) for (const Culling::GPUObjectData& object : objects) {
-        const glm::vec3 minimum{object.localAabbMin.x, object.localAabbMin.y,
-                                object.localAabbMin.z};
-        const glm::vec3 maximum{object.localAabbMax.x, object.localAabbMax.y,
-                                object.localAabbMax.z};
-        const glm::mat4 model = gpuMatrix(object.model);
-        VisibleObject candidate{};
-        bool outsideLeft = true, outsideRight = true, outsideBottom = true;
-        bool outsideTop = true, outsideNear = true, outsideFar = true;
-        candidate.nearestDepth = std::numeric_limits<float>::max();
-        for (std::uint32_t corner = 0; corner < 8; ++corner) {
-            const glm::vec3 local = glm::mix(minimum, maximum, unitCorners[corner]);
-            candidate.worldCorners[corner] = model * glm::vec4{local, 1.0F};
-            const glm::vec4 clip = cameraMatrix * candidate.worldCorners[corner];
-            outsideLeft &= clip.x < -clip.w;
-            outsideRight &= clip.x > clip.w;
-            outsideBottom &= clip.y < -clip.w;
-            outsideTop &= clip.y > clip.w;
-            outsideNear &= clip.z < 0.0F;
-            outsideFar &= clip.z > clip.w;
-            if (clip.w > 1.0e-5F) candidate.nearestDepth =
-                std::min(candidate.nearestDepth, clip.z / clip.w);
-        }
-        if (!(outsideLeft || outsideRight || outsideBottom || outsideTop ||
-              outsideNear || outsideFar)) visibleObjects.push_back(candidate);
-    }
-    if (receiverPageRequests.empty())
-        std::ranges::sort(visibleObjects, {}, &VisibleObject::nearestDepth);
-
-    std::array<bool, ShadowMap::VirtualPageCount> requested{};
-    std::vector<std::uint32_t> requests;
-    requests.reserve(ShadowMap::PhysicalPageCount);
-    // Reserve atlas capacity for progressively coarser clip levels.  A page
-    // missed at a detailed level can then fall through to a resident coarse
-    // level instead of producing a fully lit, page-shaped hole.
-    constexpr std::array<std::uint32_t, ShadowMap::ClipLevelCount> levelBudgets{
-        72, 48, 40, 32, 24, 20, 20};
-    std::array<std::uint32_t, ShadowMap::ClipLevelCount> levelCounts{};
-    const auto requestRectangle = [&](const std::uint32_t level,
-                                      const std::int32_t minimumX, const std::int32_t minimumY,
-                                      const std::int32_t maximumX, const std::int32_t maximumY) {
-        for (std::int32_t y = minimumY; y <= maximumY; ++y) {
-            for (std::int32_t x = minimumX; x <= maximumX; ++x) {
-                if (levelCounts[level] >= levelBudgets[level] ||
-                    requests.size() >= ShadowMap::PhysicalPageCount) return;
-                const std::uint32_t key = virtualPageIndex(
-                    level, static_cast<std::uint32_t>(x), static_cast<std::uint32_t>(y));
-                if (requested[key]) continue;
-                requested[key] = true;
-                requests.push_back(key);
-                ++levelCounts[level];
-            }
-        }
-    };
-    if (!receiverPageRequests.empty() || !deferredRequests_.empty()) {
-        // The compute pass emits only set bits, so this is O(requested pages)
-        // rather than O(all virtual pages). Atomic compaction deliberately
-        // makes its output order unspecified, so impose a canonical order
-        // before applying per-level and per-frame scheduler budgets.
-        constexpr std::uint32_t pagesPerLevelForRequests =
-            ShadowMap::VirtualPagesPerAxis * ShadowMap::VirtualPagesPerAxis;
-        std::vector<std::uint32_t> orderedRequests;
-        orderedRequests.reserve(deferredRequests_.size() + receiverPageRequests.size());
-        orderedRequests.insert(orderedRequests.end(), deferredRequests_.begin(),
-                               deferredRequests_.end());
-        orderedRequests.insert(orderedRequests.end(), receiverPageRequests.begin(),
-                               receiverPageRequests.end());
-        std::ranges::sort(orderedRequests);
-        orderedRequests.erase(std::unique(orderedRequests.begin(), orderedRequests.end()),
-                              orderedRequests.end());
-        for (const std::uint32_t key : orderedRequests) {
-            if (key >= ShadowMap::VirtualPageCount) continue;
-            const std::uint32_t level = key / pagesPerLevelForRequests;
-            const std::uint32_t local = key % pagesPerLevelForRequests;
-            requestRectangle(level, static_cast<std::int32_t>(local % ShadowMap::VirtualPagesPerAxis),
-                             static_cast<std::int32_t>(local / ShadowMap::VirtualPagesPerAxis),
-                             static_cast<std::int32_t>(local % ShadowMap::VirtualPagesPerAxis),
-                             static_cast<std::int32_t>(local / ShadowMap::VirtualPagesPerAxis));
-        }
-    } else for (const VisibleObject& object : visibleObjects) {
-        for (std::uint32_t level = 0; level < ShadowMap::ClipLevelCount; ++level) {
-            glm::vec2 minimumUv{std::numeric_limits<float>::max()};
-            glm::vec2 maximumUv{-std::numeric_limits<float>::max()};
-            for (const glm::vec4& world : object.worldCorners) {
-                const glm::vec4 clip = clipMatrices[level].native() * world;
-                const glm::vec2 uv = glm::vec2{clip} / clip.w * 0.5F + 0.5F;
-                minimumUv = glm::min(minimumUv, uv);
-                maximumUv = glm::max(maximumUv, uv);
-            }
-            if (maximumUv.x <= 0.0F || maximumUv.y <= 0.0F ||
-                minimumUv.x >= 1.0F || minimumUv.y >= 1.0F) continue;
-            const std::int32_t minimumX = std::clamp(
-                static_cast<std::int32_t>(std::floor(minimumUv.x * pageCount)) - 1,
-                0, pageCount - 1);
-            const std::int32_t minimumY = std::clamp(
-                static_cast<std::int32_t>(std::floor(minimumUv.y * pageCount)) - 1,
-                0, pageCount - 1);
-            const std::int32_t maximumX = std::clamp(
-                static_cast<std::int32_t>(std::floor(maximumUv.x * pageCount)) + 1,
-                0, pageCount - 1);
-            const std::int32_t maximumY = std::clamp(
-                static_cast<std::int32_t>(std::floor(maximumUv.y * pageCount)) + 1,
-                0, pageCount - 1);
-            // Request the actual projected footprint even when a large
-            // receiver (terrain, walls) spans many pages.  Per-level budgets
-            // bound the work while avoiding arbitrary camera-centred holes.
-            requestRectangle(level, minimumX, minimumY, maximumX, maximumY);
-        }
-    }
-
-    constexpr std::uint32_t pagesPerLevel =
-        ShadowMap::VirtualPagesPerAxis * ShadowMap::VirtualPagesPerAxis;
-    std::array<bool, ShadowMap::VirtualPageCount> deferred{};
-    for (const std::uint32_t key : deferredRequests_)
-        if (key < deferred.size()) deferred[key] = true;
-
-    // A moving caster invalidates both its old and new footprint.  The old
-    // footprint is not necessarily requested by the camera this frame, but
-    // it can still be sampled through an existing page-table entry. Refresh
-    // dirty resident pages before serving new requests so clearing the tile
-    // removes the caster's previous shadow instead of leaving it in the
-    // atlas until that page happens to be requested again.
-    for (std::uint32_t physical = 0; physical < physicalPages_.size() &&
-                                      pagesToRender_.size() < maxPageUpdates;
-         ++physical) {
-        PhysicalPage& page = physicalPages_[physical];
-        if (!page.allocated || !page.dirty) continue;
-        page.dirty = false;
-        pagesToRender_.push_back(physical);
-    }
-
-    for (const std::uint32_t key : requests) {
-        std::uint32_t physical = pageTable_[key];
-        // This request made it through the deterministic policy limits. It
-        // ceases to be deferred if it is already resident or gets a tile
-        // below; requests excluded by a per-level limit remain queued.
-        deferred[key] = false;
-        if (physical == ShadowMap::InvalidPage) {
-            // Do not map a page until it can be rendered. Otherwise the
-            // sampling shader could observe stale atlas contents.
-            if (pagesToRender_.size() >= maxPageUpdates) {
-                deferred[key] = true;
-                continue;
-            }
-            physical = ShadowMap::InvalidPage;
-            for (std::uint32_t slot = 0; slot < physicalPages_.size(); ++slot) {
-                if (!physicalPages_[slot].allocated) { physical = slot; break; }
-            }
-            if (physical == ShadowMap::InvalidPage) {
-                std::uint64_t oldest = std::numeric_limits<std::uint64_t>::max();
-                for (std::uint32_t slot = 0; slot < physicalPages_.size(); ++slot) {
-                    const PhysicalPage& page = physicalPages_[slot];
-                    const std::uint32_t owner = virtualPageIndex(
-                        page.level, page.virtualX, page.virtualY);
-                    if (!requested[owner] && page.lastUsed < oldest) {
-                        oldest = page.lastUsed;
-                        physical = slot;
-                    }
-                }
-            }
-            if (physical == ShadowMap::InvalidPage) {
-                deferred[key] = true;
-                continue;
-            }
-            std::uint32_t evictedVirtualPage = ShadowMap::InvalidPage;
-            if (physicalPages_[physical].allocated) {
-                const PhysicalPage& evicted = physicalPages_[physical];
-                evictedVirtualPage = virtualPageIndex(evicted.level, evicted.virtualX,
-                                                       evicted.virtualY);
-            }
-            const std::uint32_t level = key / pagesPerLevel;
-            const std::uint32_t local = key % pagesPerLevel;
-            physicalPages_[physical] = PhysicalPage{
-                static_cast<std::uint16_t>(local % ShadowMap::VirtualPagesPerAxis),
-                static_cast<std::uint16_t>(local / ShadowMap::VirtualPagesPerAxis),
-                static_cast<std::uint8_t>(level), true, false, cacheClock_};
-            // Do not publish pageTable_[key] yet. The physical tile still
-            // contains its previous depth until record() has cleared and
-            // rasterized it. The explicit commit below runs after that pass.
-            pendingPageCommits_.push_back({key, physical, evictedVirtualPage});
-            pagesToRender_.push_back(physical);
-        } else {
-            physicalPages_[physical].lastUsed = cacheClock_;
-            if (physicalPages_[physical].dirty &&
-                pagesToRender_.size() < maxPageUpdates) {
-                physicalPages_[physical].dirty = false;
-                pagesToRender_.push_back(physical);
+            // Keep the isolated shadow sets current without mutating the forward
+            // descriptor set. Their bindings 5/6 are overwritten at record time.
+            writes[3].pBufferInfo = &instance;
+            writes[4].pBufferInfo = &instanceIndex;
+            writes[5].pBufferInfo = &clusterRanges;
+            writes[6].pBufferInfo = &clusterIndices;
+            for (VkDescriptorSet set: {shadowDescriptorSets_[frame], shadowTwoSidedDescriptorSets_[frame]}) {
+                for (VkWriteDescriptorSet &write: writes) write.dstSet = set;
+                vkUpdateDescriptorSets(device_, std::size(writes), writes, 0, nullptr);
             }
         }
     }
 
-    deferredRequests_.clear();
-    deferredRequests_.reserve(ShadowMap::PhysicalPageCount);
-    for (std::uint32_t key = 0; key < ShadowMap::VirtualPageCount; ++key)
-        if (deferred[key]) deferredRequests_.push_back(key);
+    void ShadowPass::updateImageBasedLightingDescriptors(
+        const std::array<VkDescriptorImageInfo, 3> &imageBasedLighting) const {
+        if (device_ == VK_NULL_HANDLE || descriptorPool_ == VK_NULL_HANDLE) {
+            throw std::logic_error("Cannot update IBL descriptors before creating the shadow pass");
+        }
+        for (std::uint32_t frame = 0; frame < descriptorSets_.size(); ++frame) {
+            std::vector<VkDescriptorImageInfo> reflectionTextures(
+                ReflectionProbeManager::TextureDescriptorCount, imageBasedLighting[1]);
+            VkWriteDescriptorSet writes[4]{};
+            for (std::uint32_t index = 0; index < 3; ++index) {
+                writes[index] = {
+                    VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr,
+                    descriptorSets_[frame], 10 + index, 0, 1,
+                    VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+                    &imageBasedLighting[index], nullptr, nullptr
+                };
+            }
+            writes[3] = {
+                VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr,
+                descriptorSets_[frame], 15, 0,
+                ReflectionProbeManager::TextureDescriptorCount,
+                VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+                reflectionTextures.data(), nullptr, nullptr
+            };
+            for (const VkDescriptorSet set: {
+                     descriptorSets_[frame], grassDescriptorSets_[frame],
+                     grassVelocityDescriptorSets_[frame], grassShadowDescriptorSets_[frame]
+                 }) {
+                for (VkWriteDescriptorSet &write: writes) write.dstSet = set;
+                vkUpdateDescriptorSets(device_, std::size(writes), writes, 0, nullptr);
+            }
+        }
+    }
 
-    // Scroll/invalidation changes only remap already-rendered tiles and are
-    // safe to publish now. Newly allocated entries are intentionally absent
-    // from pageTable_ until the post-render commit in record().
-    pageTableBuffers_.at(frameIndex)->update(pageTable_.data(),
-                                              sizeof(std::uint32_t) * pageTable_.size());
-}
+    void ShadowPass::setReflectionProbeTexture(const std::uint32_t frameIndex,
+                                               const std::uint32_t textureIndex,
+                                               const VkDescriptorImageInfo &texture) const {
+        if (device_ == VK_NULL_HANDLE || frameIndex >= descriptorSets_.size() ||
+            textureIndex >= ReflectionProbeManager::TextureDescriptorCount) {
+            throw std::out_of_range("Reflection-probe descriptor index is invalid");
+        }
+        for (const VkDescriptorSet set: {
+                 descriptorSets_[frameIndex], grassDescriptorSets_[frameIndex],
+                 grassVelocityDescriptorSets_[frameIndex], grassShadowDescriptorSets_[frameIndex]
+             }) {
+            const VkWriteDescriptorSet write{
+                VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr, set, 15,
+                textureIndex, 1, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &texture, nullptr, nullptr
+            };
+            vkUpdateDescriptorSets(device_, 1, &write, 0, nullptr);
+        }
+    }
 
-void ShadowPass::record(const VkCommandBuffer commandBuffer,
-                        const std::array<Mat4, ShadowMap::ClipLevelCount>& clipMatrices,
-                        std::uint32_t updateMask,
-                        const VkBuffer vertexBuffer, const VkBuffer instanceBuffer,
-                        const VkBuffer indexBuffer, const VkDescriptorSet sceneDescriptorSet,
-                        const VkDescriptorSet twoSidedSceneDescriptorSet,
-                        const Culling::GPUCullingPass& cullingPass,
-                        const Culling::IndexedIndirectDrawCount& indirectDraw,
-                        const Culling::GPUCullingPass& twoSidedCullingPass,
-                        const Culling::IndexedIndirectDrawCount& twoSidedIndirectDraw,
-                        const std::uint32_t objectCount,
-                        const VkDescriptorSet grassDescriptorSet,
-                        const Culling::IndexedIndirectDrawCount* const grassIndirectDraw,
-                        const std::uint32_t grassCommandsPerPage) {
-    (void)updateMask;
-    if (objectCount == 0) {
+    void ShadowPass::destroy() noexcept {
+        if (device_ != VK_NULL_HANDLE) {
+            if (grassPipeline_ != VK_NULL_HANDLE) vkDestroyPipeline(device_, grassPipeline_, nullptr);
+            if (twoSidedPipeline_ != VK_NULL_HANDLE) vkDestroyPipeline(device_, twoSidedPipeline_, nullptr);
+            if (opaquePipeline_ != VK_NULL_HANDLE) vkDestroyPipeline(device_, opaquePipeline_, nullptr);
+            if (pipeline_ != VK_NULL_HANDLE) vkDestroyPipeline(device_, pipeline_, nullptr);
+            if (pipelineLayout_ != VK_NULL_HANDLE) vkDestroyPipelineLayout(device_, pipelineLayout_, nullptr);
+            if (descriptorPool_ != VK_NULL_HANDLE) vkDestroyDescriptorPool(device_, descriptorPool_, nullptr);
+            if (descriptorSetLayout_ != VK_NULL_HANDLE) vkDestroyDescriptorSetLayout(
+                device_, descriptorSetLayout_, nullptr);
+        }
+        pipeline_ = VK_NULL_HANDLE;
+        opaquePipeline_ = VK_NULL_HANDLE;
+        twoSidedPipeline_ = VK_NULL_HANDLE;
+        grassPipeline_ = VK_NULL_HANDLE;
+        pipelineLayout_ = VK_NULL_HANDLE;
+        descriptorPool_ = VK_NULL_HANDLE;
+        descriptorSetLayout_ = VK_NULL_HANDLE;
+        descriptorSets_.clear();
+        grassDescriptorSets_.clear();
+        grassVelocityDescriptorSets_.clear();
+        grassShadowDescriptorSets_.clear();
+        shadowDescriptorSets_.clear();
+        shadowTwoSidedDescriptorSets_.clear();
+        gtaoDescriptorCache_.clear();
+        gtaoDescriptorCacheValid_.clear();
+        grassVisibleDescriptorCache_.clear();
+        grassVelocityVisibleDescriptorCache_.clear();
+        grassShadowVisibleDescriptorCache_.clear();
+        grassVisibleDescriptorCacheValid_.clear();
+        grassVelocityVisibleDescriptorCacheValid_.clear();
+        grassShadowVisibleDescriptorCacheValid_.clear();
+        pageTableBuffers_.clear();
+        shadowMap_ = nullptr;
+        atlasInitialized_ = false;
+        atlasContentValid_ = false;
         invalidateCache();
+        device_ = VK_NULL_HANDLE;
+    }
+
+    VkDescriptorSet ShadowPass::descriptorSet(const std::uint32_t frameIndex) const {
+        return descriptorSets_.at(frameIndex);
+    }
+
+    VkDescriptorSet ShadowPass::grassDescriptorSet(const std::uint32_t frameIndex) const {
+        return grassDescriptorSets_.at(frameIndex);
+    }
+
+    VkDescriptorSet ShadowPass::grassVelocityDescriptorSet(const std::uint32_t frameIndex) const {
+        return grassVelocityDescriptorSets_.at(frameIndex);
+    }
+
+    VkDescriptorSet ShadowPass::grassShadowDescriptorSet(const std::uint32_t frameIndex) const {
+        return grassShadowDescriptorSets_.at(frameIndex);
+    }
+
+    VkDescriptorSet ShadowPass::shadowDescriptorSet(const std::uint32_t frameIndex) const {
+        return shadowDescriptorSets_.at(frameIndex);
+    }
+
+    VkDescriptorSet ShadowPass::shadowTwoSidedDescriptorSet(const std::uint32_t frameIndex) const {
+        return shadowTwoSidedDescriptorSets_.at(frameIndex);
+    }
+
+    void ShadowPass::setGrassVisibleInstances(const std::uint32_t frameIndex,
+                                              const VkBuffer visibleInstances) const {
+        if (grassVisibleDescriptorCacheValid_.at(frameIndex) &&
+            grassVisibleDescriptorCache_.at(frameIndex) == visibleInstances)
+            return;
+        const VkDescriptorBufferInfo info{visibleInstances, 0, VK_WHOLE_SIZE};
+        const VkWriteDescriptorSet write{
+            VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr,
+            grassDescriptorSets_.at(frameIndex), 6, 0, 1,
+            VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, nullptr, &info, nullptr
+        };
+        vkUpdateDescriptorSets(device_, 1, &write, 0, nullptr);
+        grassVisibleDescriptorCache_[frameIndex] = visibleInstances;
+        grassVisibleDescriptorCacheValid_[frameIndex] = true;
+    }
+
+    void ShadowPass::setGrassVelocityVisibleInstances(const std::uint32_t frameIndex,
+                                                      const VkBuffer visibleInstances) const {
+        if (grassVelocityVisibleDescriptorCacheValid_.at(frameIndex) &&
+            grassVelocityVisibleDescriptorCache_.at(frameIndex) == visibleInstances)
+            return;
+        const VkDescriptorBufferInfo info{visibleInstances, 0, VK_WHOLE_SIZE};
+        const VkWriteDescriptorSet write{
+            VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr,
+            grassVelocityDescriptorSets_.at(frameIndex), 6, 0, 1,
+            VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, nullptr, &info, nullptr
+        };
+        vkUpdateDescriptorSets(device_, 1, &write, 0, nullptr);
+        grassVelocityVisibleDescriptorCache_[frameIndex] = visibleInstances;
+        grassVelocityVisibleDescriptorCacheValid_[frameIndex] = true;
+    }
+
+    void ShadowPass::setGrassShadowVisibleInstances(const std::uint32_t frameIndex,
+                                                    const VkBuffer visibleInstances) const {
+        if (grassShadowVisibleDescriptorCacheValid_.at(frameIndex) &&
+            grassShadowVisibleDescriptorCache_.at(frameIndex) == visibleInstances)
+            return;
+        const VkDescriptorBufferInfo info{visibleInstances, 0, VK_WHOLE_SIZE};
+        const VkWriteDescriptorSet write{
+            VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr,
+            grassShadowDescriptorSets_.at(frameIndex), 6, 0, 1,
+            VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, nullptr, &info, nullptr
+        };
+        vkUpdateDescriptorSets(device_, 1, &write, 0, nullptr);
+        grassShadowVisibleDescriptorCache_[frameIndex] = visibleInstances;
+        grassShadowVisibleDescriptorCacheValid_[frameIndex] = true;
+    }
+
+    std::uint32_t ShadowPass::virtualPageIndex(const std::uint32_t level,
+                                               const std::uint32_t x,
+                                               const std::uint32_t y) noexcept {
+        constexpr std::uint32_t pagesPerLevel =
+                ShadowMap::VirtualPagesPerAxis * ShadowMap::VirtualPagesPerAxis;
+        return level * pagesPerLevel + y * ShadowMap::VirtualPagesPerAxis + x;
+    }
+
+    void ShadowPass::invalidateCache() noexcept {
+        pageTable_.fill(ShadowMap::InvalidPage);
+        physicalPages_.fill({});
+        cachedClipMatricesValid_.fill(false);
+        pagesToRender_.clear();
+        deferredRequests_.clear();
+        pendingPageCommits_.clear();
         atlasContentValid_ = false;
     }
-    // preparePages() may have published clipmap-scroll/removal updates for
-    // entries that already point at valid depth. Publish those host writes
-    // even when this frame has no tiles to rasterize.
-    const VkBufferMemoryBarrier2 preparedTableBarrier{
-        .sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER_2,
-        .srcStageMask = VK_PIPELINE_STAGE_2_HOST_BIT,
-        .srcAccessMask = VK_ACCESS_2_HOST_WRITE_BIT,
-        .dstStageMask = VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT,
-        .dstAccessMask = VK_ACCESS_2_SHADER_STORAGE_READ_BIT,
-        .buffer = pageTableBuffers_.at(preparedFrameIndex_)->handle(),
-        .offset = 0,
-        .size = VK_WHOLE_SIZE};
-    const VkDependencyInfo preparedTableDependency{
-        .sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO,
-        .bufferMemoryBarrierCount = 1,
-        .pBufferMemoryBarriers = &preparedTableBarrier};
-    vkCmdPipelineBarrier2(commandBuffer, &preparedTableDependency);
-    // The atlas already stays in shader-read layout after a completed pass.
-    // Avoid opening a 4096x4096 LOAD render pass when every requested page is
-    // cached; this is the steady state for both editor and play mode.
-    if (atlasInitialized_ && pagesToRender_.empty()) return;
-    // Compute all page-specific indirect lists before the render pass:
-    // dispatches, fills and their barriers are invalid inside a render pass.
-    if (objectCount != 0) {
-        std::array<bool, ShadowMap::ClipLevelCount> activeLevels{};
-        for (const std::uint32_t physical : pagesToRender_)
-            activeLevels[physicalPages_[physical].level] = true;
 
-        // Cull the full caster set once per clip level. Page culling below
-        // consumes only this compact list instead of scanning every caster.
+    void ShadowPass::preparePages(
+        const std::array<Mat4, ShadowMap::ClipLevelCount> &clipMatrices,
+        const Mat4 &cameraViewProjection,
+        const std::span<const Culling::GPUObjectData> objects,
+        const std::span<const Culling::GPUObjectData> dirtyObjects,
+        const std::span<const std::uint32_t> receiverPageRequests,
+        const std::uint32_t frameIndex,
+        const std::uint32_t pageUpdateBudget) {
+        constexpr std::int32_t pageCount =
+                static_cast<std::int32_t>(ShadowMap::VirtualPagesPerAxis);
+        ++cacheClock_;
+        pagesToRender_.clear();
+        pendingPageCommits_.clear();
+        preparedFrameIndex_ = frameIndex;
+        const std::uint32_t maxPageUpdates = std::min(pageUpdateBudget, ShadowMap::PhysicalPageCount);
+
+        // A queued virtual coordinate is meaningful only for the clipmap layout
+        // that produced it. Discard it if that layout changes; the current frame's
+        // feedback (or bootstrap visibility pass) will repopulate it in the new
+        // coordinate system.
+        bool clipmapLayoutChanged = false;
+
+        // Dynamic transforms used to invalidate the whole virtual atlas. In play
+        // mode even a single rigid body therefore redrew every cached terrain and
+        // grass page on every physics tick. Mark only pages touched by the old or
+        // new batch bounds. Their previous contents remain sampleable until the
+        // bounded refresh below has rendered the replacement.
+        constexpr glm::vec3 unitCorners[8] = {
+            {0, 0, 0}, {1, 0, 0}, {0, 1, 0}, {1, 1, 0},
+            {0, 0, 1}, {1, 0, 1}, {0, 1, 1}, {1, 1, 1},
+        };
+        const auto invalidateDirtyPages = [&](const auto &matrices,
+                                              const bool requireCachedMatrix) {
+            for (const Culling::GPUObjectData &object: dirtyObjects) {
+                const glm::vec3 minimum{
+                    object.localAabbMin.x, object.localAabbMin.y,
+                    object.localAabbMin.z
+                };
+                const glm::vec3 maximum{
+                    object.localAabbMax.x, object.localAabbMax.y,
+                    object.localAabbMax.z
+                };
+                const glm::mat4 model = gpuMatrix(object.model);
+                for (std::uint32_t level = 0; level < ShadowMap::ClipLevelCount; ++level) {
+                    if (requireCachedMatrix && !cachedClipMatricesValid_[level]) continue;
+                    glm::vec2 minimumUv{std::numeric_limits<float>::max()};
+                    glm::vec2 maximumUv{-std::numeric_limits<float>::max()};
+                    for (const glm::vec3 &corner: unitCorners) {
+                        const glm::vec3 local = glm::mix(minimum, maximum, corner);
+                        const glm::vec4 clip = matrices[level].native() * model *
+                                               glm::vec4{local, 1.0F};
+                        const glm::vec2 uv = glm::vec2{clip} / clip.w * 0.5F + 0.5F;
+                        minimumUv = glm::min(minimumUv, uv);
+                        maximumUv = glm::max(maximumUv, uv);
+                    }
+                    if (maximumUv.x <= 0.0F || maximumUv.y <= 0.0F ||
+                        minimumUv.x >= 1.0F || minimumUv.y >= 1.0F)
+                        continue;
+                    const std::int32_t minimumX = std::clamp(
+                        static_cast<std::int32_t>(std::floor(minimumUv.x * pageCount)) - 1,
+                        0, pageCount - 1);
+                    const std::int32_t minimumY = std::clamp(
+                        static_cast<std::int32_t>(std::floor(minimumUv.y * pageCount)) - 1,
+                        0, pageCount - 1);
+                    const std::int32_t maximumX = std::clamp(
+                        static_cast<std::int32_t>(std::floor(maximumUv.x * pageCount)) + 1,
+                        0, pageCount - 1);
+                    const std::int32_t maximumY = std::clamp(
+                        static_cast<std::int32_t>(std::floor(maximumUv.y * pageCount)) + 1,
+                        0, pageCount - 1);
+                    for (std::int32_t y = minimumY; y <= maximumY; ++y) {
+                        for (std::int32_t x = minimumX; x <= maximumX; ++x) {
+                            const std::uint32_t key = virtualPageIndex(
+                                level, static_cast<std::uint32_t>(x), static_cast<std::uint32_t>(y));
+                            const std::uint32_t physical = pageTable_[key];
+                            if (physical == ShadowMap::InvalidPage) continue;
+                            physicalPages_[physical].dirty = true;
+                        }
+                    }
+                }
+            }
+        };
+        // Cached pages are still addressed in the previous clipmap coordinates.
+        // Clear there first; after scrolling, clear the new coordinates as well.
+        invalidateDirtyPages(cachedClipMatrices_, true);
+
         for (std::uint32_t level = 0; level < ShadowMap::ClipLevelCount; ++level) {
-            if (activeLevels[level])
-                cullingPass.recordCandidates(commandBuffer, objectCount,
-                                             clipMatrices[level], level);
-            if (activeLevels[level])
-                twoSidedCullingPass.recordCandidates(commandBuffer, objectCount,
-                                                      clipMatrices[level], level);
+            if (cachedClipMatricesValid_[level] &&
+                sameMatrix(cachedClipMatrices_[level], clipMatrices[level]))
+                continue;
+            clipmapLayoutChanged = true;
+            std::int32_t shiftX{};
+            std::int32_t shiftY{};
+            if (cachedClipMatricesValid_[level] &&
+                clipPageShift(cachedClipMatrices_[level], clipMatrices[level], shiftX, shiftY)) {
+                std::array<std::uint32_t,
+                    ShadowMap::VirtualPagesPerAxis * ShadowMap::VirtualPagesPerAxis> remapped{};
+                remapped.fill(ShadowMap::InvalidPage);
+                for (std::int32_t y = 0; y < pageCount; ++y) {
+                    for (std::int32_t x = 0; x < pageCount; ++x) {
+                        const std::uint32_t oldIndex = virtualPageIndex(
+                            level, static_cast<std::uint32_t>(x), static_cast<std::uint32_t>(y));
+                        const std::uint32_t physical = pageTable_[oldIndex];
+                        if (physical == ShadowMap::InvalidPage) continue;
+                        const std::int32_t newX = x + shiftX;
+                        const std::int32_t newY = y + shiftY;
+                        if (newX < 0 || newY < 0 || newX >= pageCount || newY >= pageCount) {
+                            physicalPages_[physical] = {};
+                            continue;
+                        }
+                        remapped[static_cast<std::size_t>(newY * pageCount + newX)] = physical;
+                        physicalPages_[physical].virtualX = static_cast<std::uint16_t>(newX);
+                        physicalPages_[physical].virtualY = static_cast<std::uint16_t>(newY);
+                    }
+                }
+                for (std::uint32_t y = 0; y < ShadowMap::VirtualPagesPerAxis; ++y)
+                    for (std::uint32_t x = 0; x < ShadowMap::VirtualPagesPerAxis; ++x)
+                        pageTable_[virtualPageIndex(level, x, y)] =
+                                remapped[y * ShadowMap::VirtualPagesPerAxis + x];
+                cachedClipMatrices_[level] = clipMatrices[level];
+                continue;
+            }
+            for (std::uint32_t y = 0; y < ShadowMap::VirtualPagesPerAxis; ++y) {
+                for (std::uint32_t x = 0; x < ShadowMap::VirtualPagesPerAxis; ++x) {
+                    const std::uint32_t index = virtualPageIndex(level, x, y);
+                    const std::uint32_t physical = pageTable_[index];
+                    if (physical != ShadowMap::InvalidPage) physicalPages_[physical] = {};
+                    pageTable_[index] = ShadowMap::InvalidPage;
+                }
+            }
+            cachedClipMatrices_[level] = clipMatrices[level];
+            cachedClipMatricesValid_[level] = true;
         }
-        cullingPass.prepareCandidateReads(commandBuffer);
-        twoSidedCullingPass.prepareCandidateReads(commandBuffer);
-        // The second dispatch dimension selects an active virtual page.  This
-        // replaces the former one-dispatch-per-page pattern with a single
-        // compute launch for each material-sidedness stream.
-        std::vector<Culling::ShadowPageWork> pageWork;
-        pageWork.reserve(pagesToRender_.size());
+        invalidateDirtyPages(clipMatrices, false);
+
+        if (clipmapLayoutChanged) deferredRequests_.clear();
+
+        struct VisibleObject {
+            std::array<glm::vec4, 8> worldCorners{};
+            float nearestDepth{};
+        };
+        std::vector<VisibleObject> visibleObjects;
+        visibleObjects.reserve(objects.size());
+        const glm::mat4 cameraMatrix = cameraViewProjection.native();
+        // This is only a bootstrap fallback until the first completed depth
+        // request bitset is available for a frame slot. Steady-state VSM page
+        // selection never scans GPU objects on the CPU.
+        if (receiverPageRequests.empty())
+            for (const Culling::GPUObjectData &object: objects) {
+                const glm::vec3 minimum{
+                    object.localAabbMin.x, object.localAabbMin.y,
+                    object.localAabbMin.z
+                };
+                const glm::vec3 maximum{
+                    object.localAabbMax.x, object.localAabbMax.y,
+                    object.localAabbMax.z
+                };
+                const glm::mat4 model = gpuMatrix(object.model);
+                VisibleObject candidate{};
+                bool outsideLeft = true, outsideRight = true, outsideBottom = true;
+                bool outsideTop = true, outsideNear = true, outsideFar = true;
+                candidate.nearestDepth = std::numeric_limits<float>::max();
+                for (std::uint32_t corner = 0; corner < 8; ++corner) {
+                    const glm::vec3 local = glm::mix(minimum, maximum, unitCorners[corner]);
+                    candidate.worldCorners[corner] = model * glm::vec4{local, 1.0F};
+                    const glm::vec4 clip = cameraMatrix * candidate.worldCorners[corner];
+                    outsideLeft &= clip.x < -clip.w;
+                    outsideRight &= clip.x > clip.w;
+                    outsideBottom &= clip.y < -clip.w;
+                    outsideTop &= clip.y > clip.w;
+                    outsideNear &= clip.z < 0.0F;
+                    outsideFar &= clip.z > clip.w;
+                    if (clip.w > 1.0e-5F)
+                        candidate.nearestDepth =
+                                std::min(candidate.nearestDepth, clip.z / clip.w);
+                }
+                if (!(outsideLeft || outsideRight || outsideBottom || outsideTop ||
+                      outsideNear || outsideFar))
+                    visibleObjects.push_back(candidate);
+            }
+        if (receiverPageRequests.empty())
+            std::ranges::sort(visibleObjects, {}, &VisibleObject::nearestDepth);
+
+        std::array<bool, ShadowMap::VirtualPageCount> requested{};
+        std::vector<std::uint32_t> requests;
+        requests.reserve(ShadowMap::PhysicalPageCount);
+        // Reserve atlas capacity for progressively coarser clip levels.  A page
+        // missed at a detailed level can then fall through to a resident coarse
+        // level instead of producing a fully lit, page-shaped hole.
+        constexpr std::array<std::uint32_t, ShadowMap::ClipLevelCount> levelBudgets{
+            72, 48, 40, 32, 24, 20, 20
+        };
+        std::array<std::uint32_t, ShadowMap::ClipLevelCount> levelCounts{};
+        const auto requestRectangle = [&](const std::uint32_t level,
+                                          const std::int32_t minimumX, const std::int32_t minimumY,
+                                          const std::int32_t maximumX, const std::int32_t maximumY) {
+            for (std::int32_t y = minimumY; y <= maximumY; ++y) {
+                for (std::int32_t x = minimumX; x <= maximumX; ++x) {
+                    if (levelCounts[level] >= levelBudgets[level] ||
+                        requests.size() >= ShadowMap::PhysicalPageCount)
+                        return;
+                    const std::uint32_t key = virtualPageIndex(
+                        level, static_cast<std::uint32_t>(x), static_cast<std::uint32_t>(y));
+                    if (requested[key]) continue;
+                    requested[key] = true;
+                    requests.push_back(key);
+                    ++levelCounts[level];
+                }
+            }
+        };
+        if (!receiverPageRequests.empty() || !deferredRequests_.empty()) {
+            // The compute pass emits only set bits, so this is O(requested pages)
+            // rather than O(all virtual pages). Atomic compaction deliberately
+            // makes its output order unspecified, so impose a canonical order
+            // before applying per-level and per-frame scheduler budgets.
+            constexpr std::uint32_t pagesPerLevelForRequests =
+                    ShadowMap::VirtualPagesPerAxis * ShadowMap::VirtualPagesPerAxis;
+            std::vector<std::uint32_t> orderedRequests;
+            orderedRequests.reserve(deferredRequests_.size() + receiverPageRequests.size());
+            orderedRequests.insert(orderedRequests.end(), deferredRequests_.begin(),
+                                   deferredRequests_.end());
+            orderedRequests.insert(orderedRequests.end(), receiverPageRequests.begin(),
+                                   receiverPageRequests.end());
+            std::ranges::sort(orderedRequests);
+            orderedRequests.erase(std::unique(orderedRequests.begin(), orderedRequests.end()),
+                                  orderedRequests.end());
+            for (const std::uint32_t key: orderedRequests) {
+                if (key >= ShadowMap::VirtualPageCount) continue;
+                const std::uint32_t level = key / pagesPerLevelForRequests;
+                const std::uint32_t local = key % pagesPerLevelForRequests;
+                requestRectangle(level, static_cast<std::int32_t>(local % ShadowMap::VirtualPagesPerAxis),
+                                 static_cast<std::int32_t>(local / ShadowMap::VirtualPagesPerAxis),
+                                 static_cast<std::int32_t>(local % ShadowMap::VirtualPagesPerAxis),
+                                 static_cast<std::int32_t>(local / ShadowMap::VirtualPagesPerAxis));
+            }
+        } else
+            for (const VisibleObject &object: visibleObjects) {
+                for (std::uint32_t level = 0; level < ShadowMap::ClipLevelCount; ++level) {
+                    glm::vec2 minimumUv{std::numeric_limits<float>::max()};
+                    glm::vec2 maximumUv{-std::numeric_limits<float>::max()};
+                    for (const glm::vec4 &world: object.worldCorners) {
+                        const glm::vec4 clip = clipMatrices[level].native() * world;
+                        const glm::vec2 uv = glm::vec2{clip} / clip.w * 0.5F + 0.5F;
+                        minimumUv = glm::min(minimumUv, uv);
+                        maximumUv = glm::max(maximumUv, uv);
+                    }
+                    if (maximumUv.x <= 0.0F || maximumUv.y <= 0.0F ||
+                        minimumUv.x >= 1.0F || minimumUv.y >= 1.0F)
+                        continue;
+                    const std::int32_t minimumX = std::clamp(
+                        static_cast<std::int32_t>(std::floor(minimumUv.x * pageCount)) - 1,
+                        0, pageCount - 1);
+                    const std::int32_t minimumY = std::clamp(
+                        static_cast<std::int32_t>(std::floor(minimumUv.y * pageCount)) - 1,
+                        0, pageCount - 1);
+                    const std::int32_t maximumX = std::clamp(
+                        static_cast<std::int32_t>(std::floor(maximumUv.x * pageCount)) + 1,
+                        0, pageCount - 1);
+                    const std::int32_t maximumY = std::clamp(
+                        static_cast<std::int32_t>(std::floor(maximumUv.y * pageCount)) + 1,
+                        0, pageCount - 1);
+                    // Request the actual projected footprint even when a large
+                    // receiver (terrain, walls) spans many pages.  Per-level budgets
+                    // bound the work while avoiding arbitrary camera-centred holes.
+                    requestRectangle(level, minimumX, minimumY, maximumX, maximumY);
+                }
+            }
+
+        constexpr std::uint32_t pagesPerLevel =
+                ShadowMap::VirtualPagesPerAxis * ShadowMap::VirtualPagesPerAxis;
+        std::array<bool, ShadowMap::VirtualPageCount> deferred{};
+        for (const std::uint32_t key: deferredRequests_)
+            if (key < deferred.size()) deferred[key] = true;
+
+        // A moving caster invalidates both its old and new footprint.  The old
+        // footprint is not necessarily requested by the camera this frame, but
+        // it can still be sampled through an existing page-table entry. Refresh
+        // dirty resident pages before serving new requests so clearing the tile
+        // removes the caster's previous shadow instead of leaving it in the
+        // atlas until that page happens to be requested again.
+        for (std::uint32_t physical = 0; physical < physicalPages_.size() &&
+                                         pagesToRender_.size() < maxPageUpdates;
+             ++physical) {
+            PhysicalPage &page = physicalPages_[physical];
+            if (!page.allocated || !page.dirty) continue;
+            page.dirty = false;
+            pagesToRender_.push_back(physical);
+        }
+
+        for (const std::uint32_t key: requests) {
+            std::uint32_t physical = pageTable_[key];
+            // This request made it through the deterministic policy limits. It
+            // ceases to be deferred if it is already resident or gets a tile
+            // below; requests excluded by a per-level limit remain queued.
+            deferred[key] = false;
+            if (physical == ShadowMap::InvalidPage) {
+                // Do not map a page until it can be rendered. Otherwise the
+                // sampling shader could observe stale atlas contents.
+                if (pagesToRender_.size() >= maxPageUpdates) {
+                    deferred[key] = true;
+                    continue;
+                }
+                physical = ShadowMap::InvalidPage;
+                for (std::uint32_t slot = 0; slot < physicalPages_.size(); ++slot) {
+                    if (!physicalPages_[slot].allocated) {
+                        physical = slot;
+                        break;
+                    }
+                }
+                if (physical == ShadowMap::InvalidPage) {
+                    std::uint64_t oldest = std::numeric_limits<std::uint64_t>::max();
+                    for (std::uint32_t slot = 0; slot < physicalPages_.size(); ++slot) {
+                        const PhysicalPage &page = physicalPages_[slot];
+                        const std::uint32_t owner = virtualPageIndex(
+                            page.level, page.virtualX, page.virtualY);
+                        if (!requested[owner] && page.lastUsed < oldest) {
+                            oldest = page.lastUsed;
+                            physical = slot;
+                        }
+                    }
+                }
+                if (physical == ShadowMap::InvalidPage) {
+                    deferred[key] = true;
+                    continue;
+                }
+                std::uint32_t evictedVirtualPage = ShadowMap::InvalidPage;
+                if (physicalPages_[physical].allocated) {
+                    const PhysicalPage &evicted = physicalPages_[physical];
+                    evictedVirtualPage = virtualPageIndex(evicted.level, evicted.virtualX,
+                                                          evicted.virtualY);
+                }
+                const std::uint32_t level = key / pagesPerLevel;
+                const std::uint32_t local = key % pagesPerLevel;
+                physicalPages_[physical] = PhysicalPage{
+                    static_cast<std::uint16_t>(local % ShadowMap::VirtualPagesPerAxis),
+                    static_cast<std::uint16_t>(local / ShadowMap::VirtualPagesPerAxis),
+                    static_cast<std::uint8_t>(level), true, false, cacheClock_
+                };
+                // Do not publish pageTable_[key] yet. The physical tile still
+                // contains its previous depth until record() has cleared and
+                // rasterized it. The explicit commit below runs after that pass.
+                pendingPageCommits_.push_back({key, physical, evictedVirtualPage});
+                pagesToRender_.push_back(physical);
+            } else {
+                physicalPages_[physical].lastUsed = cacheClock_;
+                if (physicalPages_[physical].dirty &&
+                    pagesToRender_.size() < maxPageUpdates) {
+                    physicalPages_[physical].dirty = false;
+                    pagesToRender_.push_back(physical);
+                }
+            }
+        }
+
+        deferredRequests_.clear();
+        deferredRequests_.reserve(ShadowMap::PhysicalPageCount);
+        for (std::uint32_t key = 0; key < ShadowMap::VirtualPageCount; ++key)
+            if (deferred[key]) deferredRequests_.push_back(key);
+
+        // Scroll/invalidation changes only remap already-rendered tiles and are
+        // safe to publish now. Newly allocated entries are intentionally absent
+        // from pageTable_ until the post-render commit in record().
+        pageTableBuffers_.at(frameIndex)->update(pageTable_.data(),
+                                                 sizeof(std::uint32_t) * pageTable_.size());
+    }
+
+    void ShadowPass::record(const VkCommandBuffer commandBuffer,
+                            const std::array<Mat4, ShadowMap::ClipLevelCount> &clipMatrices,
+                            std::uint32_t updateMask,
+                            const VkBuffer vertexBuffer, const VkBuffer instanceBuffer,
+                            const VkBuffer indexBuffer, const VkDescriptorSet sceneDescriptorSet,
+                            const VkDescriptorSet twoSidedSceneDescriptorSet,
+                            const Culling::GPUCullingPass &cullingPass,
+                            const Culling::IndexedIndirectDrawCount &indirectDraw,
+                            const Culling::GPUCullingPass &twoSidedCullingPass,
+                            const Culling::IndexedIndirectDrawCount &twoSidedIndirectDraw,
+                            const std::uint32_t objectCount,
+                            const VkDescriptorSet grassDescriptorSet,
+                            const Culling::IndexedIndirectDrawCount *const grassIndirectDraw,
+                            const std::uint32_t grassCommandsPerPage) {
+        (void) updateMask;
+        if (objectCount == 0) {
+            invalidateCache();
+            atlasContentValid_ = false;
+        }
+        // preparePages() may have published clipmap-scroll/removal updates for
+        // entries that already point at valid depth. Publish those host writes
+        // even when this frame has no tiles to rasterize.
+        const VkBufferMemoryBarrier2 preparedTableBarrier{
+            .sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER_2,
+            .srcStageMask = VK_PIPELINE_STAGE_2_HOST_BIT,
+            .srcAccessMask = VK_ACCESS_2_HOST_WRITE_BIT,
+            .dstStageMask = VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT,
+            .dstAccessMask = VK_ACCESS_2_SHADER_STORAGE_READ_BIT,
+            .buffer = pageTableBuffers_.at(preparedFrameIndex_)->handle(),
+            .offset = 0,
+            .size = VK_WHOLE_SIZE
+        };
+        const VkDependencyInfo preparedTableDependency{
+            .sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO,
+            .bufferMemoryBarrierCount = 1,
+            .pBufferMemoryBarriers = &preparedTableBarrier
+        };
+        vkCmdPipelineBarrier2(commandBuffer, &preparedTableDependency);
+        // The atlas already stays in shader-read layout after a completed pass.
+        // Avoid opening a 4096x4096 LOAD render pass when every requested page is
+        // cached; this is the steady state for both editor and play mode.
+        if (atlasInitialized_ && pagesToRender_.empty()) return;
+        // Compute all page-specific indirect lists before the render pass:
+        // dispatches, fills and their barriers are invalid inside a render pass.
+        if (objectCount != 0) {
+            std::array<bool, ShadowMap::ClipLevelCount> activeLevels{};
+            for (const std::uint32_t physical: pagesToRender_)
+                activeLevels[physicalPages_[physical].level] = true;
+
+            // Cull the full caster set once per clip level. Page culling below
+            // consumes only this compact list instead of scanning every caster.
+            for (std::uint32_t level = 0; level < ShadowMap::ClipLevelCount; ++level) {
+                if (activeLevels[level])
+                    cullingPass.recordCandidates(commandBuffer, objectCount,
+                                                 clipMatrices[level], level);
+                if (activeLevels[level])
+                    twoSidedCullingPass.recordCandidates(commandBuffer, objectCount,
+                                                         clipMatrices[level], level);
+            }
+            cullingPass.prepareCandidateReads(commandBuffer);
+            twoSidedCullingPass.prepareCandidateReads(commandBuffer);
+            // The second dispatch dimension selects an active virtual page.  This
+            // replaces the former one-dispatch-per-page pattern with a single
+            // compute launch for each material-sidedness stream.
+            std::vector<Culling::ShadowPageWork> pageWork;
+            pageWork.reserve(pagesToRender_.size());
+            for (std::size_t pageIndex = 0; pageIndex < pagesToRender_.size(); ++pageIndex) {
+                const PhysicalPage &page = physicalPages_[pagesToRender_[pageIndex]];
+                glm::mat4 pageTransform{1.0F};
+                pageTransform[0][0] = static_cast<float>(ShadowMap::VirtualPagesPerAxis);
+                pageTransform[1][1] = static_cast<float>(ShadowMap::VirtualPagesPerAxis);
+                pageTransform[3][0] = static_cast<float>(ShadowMap::VirtualPagesPerAxis) -
+                                      2.0F * static_cast<float>(page.virtualX) - 1.0F;
+                pageTransform[3][1] = static_cast<float>(ShadowMap::VirtualPagesPerAxis) -
+                                      2.0F * static_cast<float>(page.virtualY) - 1.0F;
+                pageWork.push_back(Culling::ShadowPageWork{
+                    .viewProjection = pageTransform * clipMatrices[page.level].native(),
+                    .drawSlot = static_cast<std::uint32_t>(pageIndex),
+                    .clipLevel = page.level,
+                    .physicalPage = pagesToRender_[pageIndex],
+                    .virtualPage = virtualPageIndex(page.level, page.virtualX, page.virtualY)
+                });
+            }
+            std::stable_sort(pageWork.begin(), pageWork.end(),
+                             [](const Culling::ShadowPageWork &left,
+                                const Culling::ShadowPageWork &right) {
+                                 return left.clipLevel < right.clipLevel;
+                             });
+            cullingPass.recordCandidatesForPages(commandBuffer, objectCount, pageWork);
+            twoSidedCullingPass.recordCandidatesForPages(commandBuffer, objectCount, pageWork);
+        }
+
+        VkImageMemoryBarrier2 atlasBarrier{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2};
+        const bool physicalAtlasInitialized = shadowMap_->initialized();
+        atlasBarrier.srcStageMask = physicalAtlasInitialized
+                                        ? VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT
+                                        : VK_PIPELINE_STAGE_2_NONE;
+        atlasBarrier.srcAccessMask = physicalAtlasInitialized ? VK_ACCESS_2_SHADER_SAMPLED_READ_BIT : 0;
+        atlasBarrier.dstStageMask = VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT;
+        atlasBarrier.dstAccessMask = VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_READ_BIT |
+                                     VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
+        atlasBarrier.oldLayout = physicalAtlasInitialized
+                                     ? VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL
+                                     : VK_IMAGE_LAYOUT_UNDEFINED;
+        atlasBarrier.newLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+        atlasBarrier.image = shadowMap_->image();
+        atlasBarrier.subresourceRange = {VK_IMAGE_ASPECT_DEPTH_BIT, 0, 1, 0, 1};
+        VkDependencyInfo atlasDependency{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
+        atlasDependency.imageMemoryBarrierCount = 1;
+        atlasDependency.pImageMemoryBarriers = &atlasBarrier;
+        vkCmdPipelineBarrier2(commandBuffer, &atlasDependency);
+
+        VkRenderingAttachmentInfo depth{VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO};
+        depth.imageView = shadowMap_->imageView();
+        depth.imageLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+        depth.loadOp = VK_ATTACHMENT_LOAD_OP_LOAD;
+        depth.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+        VkRenderingInfo rendering{VK_STRUCTURE_TYPE_RENDERING_INFO};
+        rendering.renderArea.extent = {ShadowMap::Resolution, ShadowMap::Resolution};
+        rendering.layerCount = 1;
+        rendering.pDepthAttachment = &depth;
+        vkCmdBeginRendering(commandBuffer, &rendering);
+        // The one-sided stream is built from non-foliage batches and is therefore
+        // opaque. Render it with a vertex-only depth pipeline.
+        vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, opaquePipeline_);
+        vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS,
+                                pipelineLayout_, 0, 1, &sceneDescriptorSet, 0, nullptr);
+        const VkBuffer vertexBuffers[] = {vertexBuffer, instanceBuffer};
+        constexpr VkDeviceSize offsets[] = {0, 0};
+        vkCmdBindVertexBuffers(commandBuffer, 0, 2, vertexBuffers, offsets);
+        vkCmdBindIndexBuffer(commandBuffer, indexBuffer, 0, VK_INDEX_TYPE_UINT32);
         for (std::size_t pageIndex = 0; pageIndex < pagesToRender_.size(); ++pageIndex) {
-            const PhysicalPage& page = physicalPages_[pagesToRender_[pageIndex]];
+            const std::uint32_t physical = pagesToRender_[pageIndex];
+            const PhysicalPage &page = physicalPages_[physical];
+            vkCmdSetDepthBias(commandBuffer, DepthBiasConstant[page.level], 0.0F,
+                              DepthBiasSlope[page.level]);
+            const std::int32_t x = static_cast<std::int32_t>(
+                (physical % ShadowMap::PhysicalPagesPerAxis) * ShadowMap::PageResolution);
+            const std::int32_t y = static_cast<std::int32_t>(
+                (physical / ShadowMap::PhysicalPagesPerAxis) * ShadowMap::PageResolution);
+            const VkRect2D tile{{x, y}, {ShadowMap::PageResolution, ShadowMap::PageResolution}};
+            const VkClearAttachment clear{VK_IMAGE_ASPECT_DEPTH_BIT, 0, {.depthStencil = {1.0F, 0}}};
+            const VkClearRect clearRect{tile, 0, 1};
+            vkCmdClearAttachments(commandBuffer, 1, &clear, 1, &clearRect);
+            const VkViewport viewport{
+                static_cast<float>(x), static_cast<float>(y),
+                static_cast<float>(ShadowMap::PageResolution), static_cast<float>(ShadowMap::PageResolution),
+                0.0F, 1.0F
+            };
+            vkCmdSetViewport(commandBuffer, 0, 1, &viewport);
+            vkCmdSetScissor(commandBuffer, 0, 1, &tile);
             glm::mat4 pageTransform{1.0F};
             pageTransform[0][0] = static_cast<float>(ShadowMap::VirtualPagesPerAxis);
             pageTransform[1][1] = static_cast<float>(ShadowMap::VirtualPagesPerAxis);
@@ -1192,188 +1460,111 @@ void ShadowPass::record(const VkCommandBuffer commandBuffer,
                                   2.0F * static_cast<float>(page.virtualX) - 1.0F;
             pageTransform[3][1] = static_cast<float>(ShadowMap::VirtualPagesPerAxis) -
                                   2.0F * static_cast<float>(page.virtualY) - 1.0F;
-            pageWork.push_back(Culling::ShadowPageWork{
-                .viewProjection = pageTransform * clipMatrices[page.level].native(),
-                .drawSlot = static_cast<std::uint32_t>(pageIndex),
-                .clipLevel = page.level,
-                .physicalPage = pagesToRender_[pageIndex],
-                .virtualPage = virtualPageIndex(page.level, page.virtualX, page.virtualY)});
-        }
-        std::stable_sort(pageWork.begin(), pageWork.end(),
-                         [](const Culling::ShadowPageWork& left,
-                            const Culling::ShadowPageWork& right) {
-                             return left.clipLevel < right.clipLevel;
-                         });
-        cullingPass.recordCandidatesForPages(commandBuffer, objectCount, pageWork);
-        twoSidedCullingPass.recordCandidatesForPages(commandBuffer, objectCount, pageWork);
-    }
-
-    VkImageMemoryBarrier2 atlasBarrier{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2};
-    const bool physicalAtlasInitialized = shadowMap_->initialized();
-    atlasBarrier.srcStageMask = physicalAtlasInitialized ? VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT
-                                                          : VK_PIPELINE_STAGE_2_NONE;
-    atlasBarrier.srcAccessMask = physicalAtlasInitialized ? VK_ACCESS_2_SHADER_SAMPLED_READ_BIT : 0;
-    atlasBarrier.dstStageMask = VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT;
-    atlasBarrier.dstAccessMask = VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_READ_BIT |
-                                 VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
-    atlasBarrier.oldLayout = physicalAtlasInitialized ? VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL
-                                                       : VK_IMAGE_LAYOUT_UNDEFINED;
-    atlasBarrier.newLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
-    atlasBarrier.image = shadowMap_->image();
-    atlasBarrier.subresourceRange = {VK_IMAGE_ASPECT_DEPTH_BIT, 0, 1, 0, 1};
-    VkDependencyInfo atlasDependency{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
-    atlasDependency.imageMemoryBarrierCount = 1;
-    atlasDependency.pImageMemoryBarriers = &atlasBarrier;
-    vkCmdPipelineBarrier2(commandBuffer, &atlasDependency);
-
-    VkRenderingAttachmentInfo depth{VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO};
-    depth.imageView = shadowMap_->imageView();
-    depth.imageLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
-    depth.loadOp = VK_ATTACHMENT_LOAD_OP_LOAD;
-    depth.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
-    VkRenderingInfo rendering{VK_STRUCTURE_TYPE_RENDERING_INFO};
-    rendering.renderArea.extent = {ShadowMap::Resolution, ShadowMap::Resolution};
-    rendering.layerCount = 1;
-    rendering.pDepthAttachment = &depth;
-    vkCmdBeginRendering(commandBuffer, &rendering);
-    // The one-sided stream is built from non-foliage batches and is therefore
-    // opaque. Render it with a vertex-only depth pipeline.
-    vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, opaquePipeline_);
-    vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS,
-                            pipelineLayout_, 0, 1, &sceneDescriptorSet, 0, nullptr);
-    const VkBuffer vertexBuffers[] = {vertexBuffer, instanceBuffer};
-    constexpr VkDeviceSize offsets[] = {0, 0};
-    vkCmdBindVertexBuffers(commandBuffer, 0, 2, vertexBuffers, offsets);
-    vkCmdBindIndexBuffer(commandBuffer, indexBuffer, 0, VK_INDEX_TYPE_UINT32);
-    for (std::size_t pageIndex = 0; pageIndex < pagesToRender_.size(); ++pageIndex) {
-        const std::uint32_t physical = pagesToRender_[pageIndex];
-        const PhysicalPage& page = physicalPages_[physical];
-        vkCmdSetDepthBias(commandBuffer, DepthBiasConstant[page.level], 0.0F,
-                          DepthBiasSlope[page.level]);
-        const std::int32_t x = static_cast<std::int32_t>(
-            (physical % ShadowMap::PhysicalPagesPerAxis) * ShadowMap::PageResolution);
-        const std::int32_t y = static_cast<std::int32_t>(
-            (physical / ShadowMap::PhysicalPagesPerAxis) * ShadowMap::PageResolution);
-        const VkRect2D tile{{x, y}, {ShadowMap::PageResolution, ShadowMap::PageResolution}};
-        const VkClearAttachment clear{VK_IMAGE_ASPECT_DEPTH_BIT, 0, {.depthStencil = {1.0F, 0}}};
-        const VkClearRect clearRect{tile, 0, 1};
-        vkCmdClearAttachments(commandBuffer, 1, &clear, 1, &clearRect);
-        const VkViewport viewport{static_cast<float>(x), static_cast<float>(y),
-            static_cast<float>(ShadowMap::PageResolution), static_cast<float>(ShadowMap::PageResolution),
-            0.0F, 1.0F};
-        vkCmdSetViewport(commandBuffer, 0, 1, &viewport);
-        vkCmdSetScissor(commandBuffer, 0, 1, &tile);
-        glm::mat4 pageTransform{1.0F};
-        pageTransform[0][0] = static_cast<float>(ShadowMap::VirtualPagesPerAxis);
-        pageTransform[1][1] = static_cast<float>(ShadowMap::VirtualPagesPerAxis);
-        pageTransform[3][0] = static_cast<float>(ShadowMap::VirtualPagesPerAxis) -
-                              2.0F * static_cast<float>(page.virtualX) - 1.0F;
-        pageTransform[3][1] = static_cast<float>(ShadowMap::VirtualPagesPerAxis) -
-                              2.0F * static_cast<float>(page.virtualY) - 1.0F;
-        const Mat4 pageMatrix{pageTransform * clipMatrices[page.level].native()};
-        vkCmdPushConstants(commandBuffer, pipelineLayout_, VK_SHADER_STAGE_VERTEX_BIT,
-                           0, sizeof(Mat4), &pageMatrix);
-        if (objectCount != 0 && indirectDraw.valid()) {
-            indirectDraw.record(commandBuffer,
-                sizeof(VkDrawIndexedIndirectCommand) * objectCount * pageIndex,
-                sizeof(std::uint32_t) * pageIndex);
-        }
-        if (objectCount != 0 && twoSidedIndirectDraw.valid()) {
-            vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, twoSidedPipeline_);
-            vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS,
-                                    pipelineLayout_, 0, 1, &twoSidedSceneDescriptorSet, 0, nullptr);
-            twoSidedIndirectDraw.record(commandBuffer,
-                sizeof(VkDrawIndexedIndirectCommand) * objectCount * pageIndex,
-                sizeof(std::uint32_t) * pageIndex);
-            vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, opaquePipeline_);
-            vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS,
-                                    pipelineLayout_, 0, 1, &sceneDescriptorSet, 0, nullptr);
-        }
-        if (grassDescriptorSet != VK_NULL_HANDLE && grassIndirectDraw != nullptr &&
-            grassIndirectDraw->valid()) {
-            vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, grassPipeline_);
-            vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS,
-                                    pipelineLayout_, 0, 1, &grassDescriptorSet, 0, nullptr);
+            const Mat4 pageMatrix{pageTransform * clipMatrices[page.level].native()};
             vkCmdPushConstants(commandBuffer, pipelineLayout_, VK_SHADER_STAGE_VERTEX_BIT,
                                0, sizeof(Mat4), &pageMatrix);
-            // Unlike the camera-wide stream, this buffer is partitioned by
-            // VSM page. A page may therefore draw only clusters whose bounds
-            // overlap its exact virtual-page projection.
-            grassIndirectDraw->record(commandBuffer,
-                sizeof(VkDrawIndexedIndirectCommand) * grassCommandsPerPage * pageIndex,
-                sizeof(std::uint32_t) * pageIndex);
-            vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, opaquePipeline_);
-            vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS,
-                                    pipelineLayout_, 0, 1, &sceneDescriptorSet, 0, nullptr);
+            if (objectCount != 0 && indirectDraw.valid()) {
+                indirectDraw.record(commandBuffer,
+                                    sizeof(VkDrawIndexedIndirectCommand) * objectCount * pageIndex,
+                                    sizeof(std::uint32_t) * pageIndex);
+            }
+            if (objectCount != 0 && twoSidedIndirectDraw.valid()) {
+                vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, twoSidedPipeline_);
+                vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS,
+                                        pipelineLayout_, 0, 1, &twoSidedSceneDescriptorSet, 0, nullptr);
+                twoSidedIndirectDraw.record(commandBuffer,
+                                            sizeof(VkDrawIndexedIndirectCommand) * objectCount * pageIndex,
+                                            sizeof(std::uint32_t) * pageIndex);
+                vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, opaquePipeline_);
+                vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS,
+                                        pipelineLayout_, 0, 1, &sceneDescriptorSet, 0, nullptr);
+            }
+            if (grassDescriptorSet != VK_NULL_HANDLE && grassIndirectDraw != nullptr &&
+                grassIndirectDraw->valid()) {
+                vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, grassPipeline_);
+                vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS,
+                                        pipelineLayout_, 0, 1, &grassDescriptorSet, 0, nullptr);
+                vkCmdPushConstants(commandBuffer, pipelineLayout_, VK_SHADER_STAGE_VERTEX_BIT,
+                                   0, sizeof(Mat4), &pageMatrix);
+                // Unlike the camera-wide stream, this buffer is partitioned by
+                // VSM page. A page may therefore draw only clusters whose bounds
+                // overlap its exact virtual-page projection.
+                grassIndirectDraw->record(commandBuffer,
+                                          sizeof(VkDrawIndexedIndirectCommand) * grassCommandsPerPage * pageIndex,
+                                          sizeof(std::uint32_t) * pageIndex);
+                vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, opaquePipeline_);
+                vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS,
+                                        pipelineLayout_, 0, 1, &sceneDescriptorSet, 0, nullptr);
+            }
         }
-    }
-    vkCmdEndRendering(commandBuffer);
+        vkCmdEndRendering(commandBuffer);
 
-    VkImageMemoryBarrier2 atlasToSampled{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2};
-    atlasToSampled.srcStageMask = VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT |
-                                   VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT;
-    atlasToSampled.srcAccessMask = VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
-    atlasToSampled.dstStageMask = VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT;
-    atlasToSampled.dstAccessMask = VK_ACCESS_2_SHADER_SAMPLED_READ_BIT;
-    atlasToSampled.oldLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
-    atlasToSampled.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-    atlasToSampled.image = shadowMap_->image();
-    atlasToSampled.subresourceRange = {VK_IMAGE_ASPECT_DEPTH_BIT, 0, 1, 0, 1};
-    VkDependencyInfo atlasToSampledDependency{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
-    atlasToSampledDependency.imageMemoryBarrierCount = 1;
-    atlasToSampledDependency.pImageMemoryBarriers = &atlasToSampled;
-    vkCmdPipelineBarrier2(commandBuffer, &atlasToSampledDependency);
+        VkImageMemoryBarrier2 atlasToSampled{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2};
+        atlasToSampled.srcStageMask = VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT |
+                                      VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT;
+        atlasToSampled.srcAccessMask = VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
+        atlasToSampled.dstStageMask = VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT;
+        atlasToSampled.dstAccessMask = VK_ACCESS_2_SHADER_SAMPLED_READ_BIT;
+        atlasToSampled.oldLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+        atlasToSampled.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        atlasToSampled.image = shadowMap_->image();
+        atlasToSampled.subresourceRange = {VK_IMAGE_ASPECT_DEPTH_BIT, 0, 1, 0, 1};
+        VkDependencyInfo atlasToSampledDependency{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
+        atlasToSampledDependency.imageMemoryBarrierCount = 1;
+        atlasToSampledDependency.pImageMemoryBarriers = &atlasToSampled;
+        vkCmdPipelineBarrier2(commandBuffer, &atlasToSampledDependency);
 
-    // This is the sole publication point for new/recycled mappings. It is
-    // deliberately after rendering ends: the depth attachment write is
-    // ordered before the host-visible table update and the latter is made
-    // visible to the following forward fragment sampling work.
-    if (!pendingPageCommits_.empty()) {
-        for (const PendingPageCommit& commit : pendingPageCommits_) {
-            if (commit.evictedVirtualPage != ShadowMap::InvalidPage)
-                pageTable_[commit.evictedVirtualPage] = ShadowMap::InvalidPage;
-            pageTable_[commit.virtualPage] = commit.physicalPage;
+        // This is the sole publication point for new/recycled mappings. It is
+        // deliberately after rendering ends: the depth attachment write is
+        // ordered before the host-visible table update and the latter is made
+        // visible to the following forward fragment sampling work.
+        if (!pendingPageCommits_.empty()) {
+            for (const PendingPageCommit &commit: pendingPageCommits_) {
+                if (commit.evictedVirtualPage != ShadowMap::InvalidPage)
+                    pageTable_[commit.evictedVirtualPage] = ShadowMap::InvalidPage;
+                pageTable_[commit.virtualPage] = commit.physicalPage;
+            }
+            Buffer &pageTableBuffer = *pageTableBuffers_.at(preparedFrameIndex_);
+            pageTableBuffer.update(pageTable_.data(), sizeof(std::uint32_t) * pageTable_.size());
+            const VkBufferMemoryBarrier2 pageTableBarrier{
+                .sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER_2,
+                .srcStageMask = VK_PIPELINE_STAGE_2_HOST_BIT,
+                .srcAccessMask = VK_ACCESS_2_HOST_WRITE_BIT,
+                .dstStageMask = VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT,
+                .dstAccessMask = VK_ACCESS_2_SHADER_STORAGE_READ_BIT,
+                .buffer = pageTableBuffer.handle(),
+                .offset = 0,
+                .size = VK_WHOLE_SIZE
+            };
+            const VkDependencyInfo pageTableDependency{
+                .sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO,
+                .bufferMemoryBarrierCount = 1,
+                .pBufferMemoryBarriers = &pageTableBarrier
+            };
+            vkCmdPipelineBarrier2(commandBuffer, &pageTableDependency);
+            pendingPageCommits_.clear();
         }
-        Buffer& pageTableBuffer = *pageTableBuffers_.at(preparedFrameIndex_);
-        pageTableBuffer.update(pageTable_.data(), sizeof(std::uint32_t) * pageTable_.size());
-        const VkBufferMemoryBarrier2 pageTableBarrier{
-            .sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER_2,
-            .srcStageMask = VK_PIPELINE_STAGE_2_HOST_BIT,
-            .srcAccessMask = VK_ACCESS_2_HOST_WRITE_BIT,
-            .dstStageMask = VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT,
-            .dstAccessMask = VK_ACCESS_2_SHADER_STORAGE_READ_BIT,
-            .buffer = pageTableBuffer.handle(),
-            .offset = 0,
-            .size = VK_WHOLE_SIZE};
-        const VkDependencyInfo pageTableDependency{
-            .sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO,
-            .bufferMemoryBarrierCount = 1,
-            .pBufferMemoryBarriers = &pageTableBarrier};
-        vkCmdPipelineBarrier2(commandBuffer, &pageTableDependency);
-        pendingPageCommits_.clear();
+        atlasInitialized_ = true;
+        shadowMap_->markInitialized();
+        if (objectCount != 0) atlasContentValid_ = true;
+        pagesToRender_.clear();
     }
-    atlasInitialized_ = true;
-    shadowMap_->markInitialized();
-    if (objectCount != 0) atlasContentValid_ = true;
-    pagesToRender_.clear();
-}
 
-std::vector<Mat4> ShadowPass::grassPageMatrices(
-    const std::array<Mat4, ShadowMap::ClipLevelCount>& clipMatrices) const {
-    std::vector<Mat4> matrices;
-    matrices.reserve(pagesToRender_.size());
-    for (const std::uint32_t physical : pagesToRender_) {
-        const PhysicalPage& page = physicalPages_[physical];
-        glm::mat4 transform{1.0F};
-        transform[0][0] = static_cast<float>(ShadowMap::VirtualPagesPerAxis);
-        transform[1][1] = static_cast<float>(ShadowMap::VirtualPagesPerAxis);
-        transform[3][0] = static_cast<float>(ShadowMap::VirtualPagesPerAxis) -
-                          2.0F * static_cast<float>(page.virtualX) - 1.0F;
-        transform[3][1] = static_cast<float>(ShadowMap::VirtualPagesPerAxis) -
-                          2.0F * static_cast<float>(page.virtualY) - 1.0F;
-        matrices.emplace_back(transform * clipMatrices[page.level].native());
+    std::vector<Mat4> ShadowPass::grassPageMatrices(
+        const std::array<Mat4, ShadowMap::ClipLevelCount> &clipMatrices) const {
+        std::vector<Mat4> matrices;
+        matrices.reserve(pagesToRender_.size());
+        for (const std::uint32_t physical: pagesToRender_) {
+            const PhysicalPage &page = physicalPages_[physical];
+            glm::mat4 transform{1.0F};
+            transform[0][0] = static_cast<float>(ShadowMap::VirtualPagesPerAxis);
+            transform[1][1] = static_cast<float>(ShadowMap::VirtualPagesPerAxis);
+            transform[3][0] = static_cast<float>(ShadowMap::VirtualPagesPerAxis) -
+                              2.0F * static_cast<float>(page.virtualX) - 1.0F;
+            transform[3][1] = static_cast<float>(ShadowMap::VirtualPagesPerAxis) -
+                              2.0F * static_cast<float>(page.virtualY) - 1.0F;
+            matrices.emplace_back(transform * clipMatrices[page.level].native());
+        }
+        return matrices;
     }
-    return matrices;
-}
-
 } // namespace Engine

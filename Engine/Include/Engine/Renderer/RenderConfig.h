@@ -28,6 +28,30 @@ namespace Engine {
 
     enum class GtaoQuality : std::uint8_t { Low, Medium, High, Ultra };
 
+    /** Coarse renderer profiles intended for quick editor/runtime switching. */
+    enum class RenderQualityPreset : std::uint8_t { Low, Medium, High, Ultra };
+
+    struct RenderQualityPresetSettings final {
+        ShadowQuality shadows;
+        GtaoQuality gtao;
+        AntialiasingLevel antialiasing;
+    };
+
+    constexpr RenderQualityPresetSettings renderQualityPresetSettings(
+        const RenderQualityPreset preset) noexcept {
+        switch (preset) {
+        case RenderQualityPreset::Low:
+            return {ShadowQuality::Low, GtaoQuality::Low, AntialiasingLevel::Off};
+        case RenderQualityPreset::Medium:
+            return {ShadowQuality::Medium, GtaoQuality::Medium, AntialiasingLevel::TAA};
+        case RenderQualityPreset::High:
+            return {ShadowQuality::High, GtaoQuality::High, AntialiasingLevel::TAA};
+        case RenderQualityPreset::Ultra:
+            return {ShadowQuality::Ultra, GtaoQuality::Ultra, AntialiasingLevel::TAA};
+        }
+        return renderQualityPresetSettings(RenderQualityPreset::High);
+    }
+
     /** Full-screen diagnostic stage for isolating GTAO artifacts. */
     enum class GtaoDebugView : std::uint8_t { Off, Raw, Filtered, Full };
 

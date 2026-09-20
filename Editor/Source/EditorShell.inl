@@ -670,6 +670,35 @@ Engine::Entity drawEditorMenuBar(Engine::ScenePreset &scene, Engine::Renderer &r
         endTopMenu();
     }
 
+    if (beginTopMenu("Rendering", "Quickly switch renderer quality", titleBar)) {
+        constexpr std::array<const char *, 4> presetLabels{"Low", "Medium", "High", "Ultra"};
+        const auto currentPreset = [&] {
+            for (const auto preset : {Engine::RenderQualityPreset::Low,
+                                      Engine::RenderQualityPreset::Medium,
+                                      Engine::RenderQualityPreset::High,
+                                      Engine::RenderQualityPreset::Ultra}) {
+                const auto settings = Engine::renderQualityPresetSettings(preset);
+                if (renderer.shadowQuality() == settings.shadows &&
+                    renderer.gtaoQuality() == settings.gtao &&
+                    renderer.antialiasingLevel() == settings.antialiasing) return preset;
+            }
+            return Engine::RenderQualityPreset::High;
+        }();
+        const int currentIndex = static_cast<int>(currentPreset);
+        for (int index = 0; index < static_cast<int>(presetLabels.size()); ++index) {
+            if (ImGui::MenuItem(presetLabels[static_cast<std::size_t>(index)], nullptr,
+                                currentIndex == index)) {
+                renderer.applyRenderQualityPreset(
+                    static_cast<Engine::RenderQualityPreset>(index));
+                antialiasingChanged = true;
+                Editor::ConsolePanel::info(std::string{"Renderer preset: "} + presetLabels[static_cast<std::size_t>(index)]);
+            }
+        }
+        ImGui::Separator();
+        ImGui::TextDisabled("Shadows apply next frame; GTAO resources are rebuilt safely.");
+        endTopMenu();
+    }
+
     if (beginTopMenu("View", "Show, hide and arrange editor panels", titleBar)) {
         ImGui::MenuItem("Hierarchy", nullptr, &showHierarchy);
         ImGui::MenuItem("Viewport", nullptr, &showViewport);

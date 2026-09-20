@@ -224,6 +224,7 @@ namespace Engine {
               antialiasingLevel(antialiasingLevel), shadowQuality(shadowQuality), gtaoQuality(gtaoQuality),
               gtaoDebugView(gtaoDebugView), pbrDebugView(pbrDebugView), iblQuality(iblQuality),
               shadowDebugView(shadowDebugView),
+              configuredGtaoQuality(gtaoQuality),
               grassSettings(grassSettings),
               assetManager(assetManager),
               renderables(sceneGpu.renderables),

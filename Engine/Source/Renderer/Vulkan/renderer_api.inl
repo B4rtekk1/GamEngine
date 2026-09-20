@@ -33,7 +33,17 @@ ShadowQuality Renderer::shadowQuality() const noexcept {
     return shadowQuality_;
 }
 
-void Renderer::setGtaoQuality(const GtaoQuality quality) noexcept { gtaoQuality_ = quality; }
+void Renderer::applyRenderQualityPreset(const RenderQualityPreset preset) noexcept {
+    const RenderQualityPresetSettings settings = renderQualityPresetSettings(preset);
+    shadowQuality_ = settings.shadows;
+    gtaoQuality_ = settings.gtao;
+    antialiasingLevel_ = settings.antialiasing;
+}
+
+void Renderer::setGtaoQuality(const GtaoQuality quality) noexcept {
+    if (gtaoQuality_ == quality) return;
+    gtaoQuality_ = quality;
+}
 GtaoQuality Renderer::gtaoQuality() const noexcept { return gtaoQuality_; }
 void Renderer::setGtaoDebugView(const GtaoDebugView view) noexcept { gtaoDebugView_ = view; }
 GtaoDebugView Renderer::gtaoDebugView() const noexcept { return gtaoDebugView_; }
@@ -149,7 +159,8 @@ void Renderer::reloadScene(Scene& scene, void* nativeWindow) {
             backend_->initializeSceneResources(scene);
             return;
         }
-        if (backend_->antialiasingLevel != antialiasingLevel_) {
+        if (backend_->antialiasingLevel != antialiasingLevel_ ||
+            backend_->configuredGtaoQuality != gtaoQuality_) {
             backend_->reconfigureAntialiasing(antialiasingLevel_);
         }
         // Scene snapshots replace the complete ECS registry. Incremental

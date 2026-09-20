@@ -49,9 +49,10 @@ namespace Engine {
             pi.maxSets = FramesInFlight;
             pi.poolSizeCount = 1;
             pi.pPoolSizes = &size;
-            if (vkCreateDescriptorPool(device_, &pi, nullptr, &pool_) != VK_SUCCESS)
+            if (vkCreateDescriptorPool(device_, &pi, nullptr, &pool_) != VK_SUCCESS) {
                 throw std::runtime_error(
                     "Could not create bloom pool");
+}
             std::array<VkDescriptorSetLayout, FramesInFlight> layouts{};
             layouts.fill(layout_);
             VkDescriptorSetAllocateInfo ai{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};

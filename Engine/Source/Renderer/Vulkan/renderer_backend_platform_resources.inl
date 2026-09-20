@@ -644,6 +644,7 @@
             msaa.create(swapchain.extent(), HdrBuffer::Format);
             createDepthResources();
             createGtaoPass();
+            configuredGtaoQuality = gtaoQuality;
 
             // Instance buffers outlive swapchain attachments, so changing
             // AA mode must explicitly add/remove the TAA-only history stream.
