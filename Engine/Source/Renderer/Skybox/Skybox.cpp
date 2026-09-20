@@ -21,7 +21,7 @@ namespace Engine {
                         VkFormat colorFormat, VkFormat depthFormat, VkSampleCountFlagBits samples,
                         VkDescriptorSetLayout descriptorSetLayout, const std::vector<VkBuffer> &uniformBuffers,
                         VkDeviceSize uniformBufferRange, Assets::AssetManager &assets, VmaAllocator allocator,
-                        const std::uint32_t colorAttachmentCount) {
+                        const VkFormat velocityFormat) {
         if (uniformBuffers.empty()) {
             throw std::invalid_argument("Skybox requires camera uniform buffers");
         }
@@ -32,7 +32,7 @@ namespace Engine {
             vertexBuffer_.createDeviceLocal(physicalDevice, device_, kVertices.data(), sizeof(kVertices),
                                             VK_BUFFER_USAGE_VERTEX_BUFFER_BIT, commandPool, queue, allocator);
             pipeline_.create(device_, colorFormat, depthFormat, samples, descriptorSetLayout_, assets,
-                             colorAttachmentCount);
+                             velocityFormat);
             VkDescriptorPoolSize sizes[] = {
                 {VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, static_cast<uint32_t>(uniformBuffers.size())},
                 {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, static_cast<uint32_t>(uniformBuffers.size())},

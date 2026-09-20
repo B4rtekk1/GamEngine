@@ -27,6 +27,8 @@ namespace Engine {
                     Assets::AssetManager& assets);
         void destroy() noexcept;
         void reset() noexcept;
+        /** Clears newly-created histories before the render graph takes ownership. */
+        void prepareHistory(VkCommandBuffer commandBuffer);
         void setVirtualWaterEnabled(bool enabled) noexcept { virtualWaterEnabled_ = enabled; }
         void record(VkCommandBuffer commandBuffer, VkExtent2D extent,
                     float currentJitterX, float currentJitterY);

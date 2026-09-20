@@ -27,7 +27,7 @@ namespace Engine {
                     VkSampleCountFlagBits samples, VkDescriptorSetLayout descriptorSetLayout,
                     const std::vector<VkBuffer> &uniformBuffers, VkDeviceSize uniformBufferRange,
                     Assets::AssetManager &assets, VmaAllocator allocator,
-                    std::uint32_t colorAttachmentCount = 1);
+                    VkFormat velocityFormat = VK_FORMAT_UNDEFINED);
 
         void draw(VkCommandBuffer commandBuffer, uint32_t frameIndex) const;
         void setEnvironment(const VkDescriptorImageInfo& environment) const;

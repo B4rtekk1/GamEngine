@@ -28,7 +28,7 @@ namespace Engine {
                     VkSampleCountFlagBits samples,
                     const std::vector<VkBuffer> &uniformBuffers,
                     VkDeviceSize uniformBufferRange, Assets::AssetManager &assets,
-                    VmaAllocator allocator, std::uint32_t colorAttachmentCount = 1);
+                    VmaAllocator allocator, VkFormat velocityFormat = VK_FORMAT_UNDEFINED);
 
         void destroy() noexcept;
 

@@ -687,7 +687,9 @@
                            vulkanDevice.graphicsQueue(), HdrBuffer::Format, depthBuffer.format(), msaa.sampleCount(), buffers,
                            sizeof(UniformBufferObject), assetManager,
                            vulkanDevice.allocator(),
-                           antialiasingLevel == AntialiasingLevel::TAA ? 2U : 1U);
+                           antialiasingLevel == AntialiasingLevel::TAA
+                               ? VK_FORMAT_R16G16_SFLOAT
+                               : VK_FORMAT_UNDEFINED);
             skyPass.setEnvironment(imageBasedLighting.environmentDescriptor());
         }
 

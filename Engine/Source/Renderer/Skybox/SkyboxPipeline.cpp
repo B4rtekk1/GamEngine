@@ -10,12 +10,12 @@ namespace Engine {
 
     void SkyboxPipeline::create(VkDevice device, VkFormat colorFormat, VkFormat depthFormat, VkSampleCountFlagBits samples,
                                 VkDescriptorSetLayout descriptorSetLayout,
-                                Assets::AssetManager &assets, const std::uint32_t colorAttachmentCount) {
+                                Assets::AssetManager &assets, const VkFormat velocityFormat) {
         destroy();
         device_ = device;
         try {
             const auto shader = Vkutil::loadShaderModule(device_, assets,
-                                                         colorAttachmentCount > 1
+                                                         velocityFormat != VK_FORMAT_UNDEFINED
                                                              ? "shaders/skybox.spv"
                                                              : "shaders/skybox_no_velocity.spv");
             const std::array stages{
@@ -75,7 +75,7 @@ namespace Engine {
                                    VK_COLOR_COMPONENT_A_BIT;
             std::array colors{color, color};
             VkPipelineColorBlendStateCreateInfo blend{VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO};
-            blend.attachmentCount = colorAttachmentCount;
+            blend.attachmentCount = velocityFormat != VK_FORMAT_UNDEFINED ? 2U : 1U;
             blend.pAttachments = colors.data();
             constexpr std::array dynamicStates{VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR};
             VkPipelineDynamicStateCreateInfo dynamic{VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO};
@@ -93,8 +93,8 @@ namespace Engine {
             info.pColorBlendState = &blend;
             info.pDynamicState = &dynamic;
             VkPipelineRenderingCreateInfo rendering{VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO};
-            std::array colorFormats{colorFormat, colorFormat};
-            rendering.colorAttachmentCount = colorAttachmentCount;
+            const std::array colorFormats{colorFormat, velocityFormat};
+            rendering.colorAttachmentCount = velocityFormat != VK_FORMAT_UNDEFINED ? 2U : 1U;
             rendering.pColorAttachmentFormats = colorFormats.data();
             rendering.depthAttachmentFormat = depthFormat;
             info.pNext = &rendering;

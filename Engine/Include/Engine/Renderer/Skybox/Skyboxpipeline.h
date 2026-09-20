@@ -21,7 +21,7 @@ namespace Engine {
 
         void create(VkDevice device, VkFormat colorFormat, VkFormat depthFormat,
                     VkSampleCountFlagBits samples, VkDescriptorSetLayout descriptorSetLayout,
-                    Assets::AssetManager &assets, std::uint32_t colorAttachmentCount = 1);
+                    Assets::AssetManager &assets, VkFormat velocityFormat = VK_FORMAT_UNDEFINED);
 
         void destroy() noexcept;
 

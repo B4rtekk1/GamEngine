@@ -1212,6 +1212,24 @@
             const auto graphDepth = viewportFrameGraph.importTexture(
                 "Forward depth", msaa.enabled() ? hiZDepthBuffer.image() : depthBuffer.image(), graphDepthDesc,
                 {.layout = VK_IMAGE_LAYOUT_UNDEFINED});
+            const RenderGraph::TextureDesc graphVelocityDesc{
+                .extent = {graphExtent.width, graphExtent.height, 1},
+                .format = VK_FORMAT_R16G16_SFLOAT,
+                .usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
+                .aspect = VK_IMAGE_ASPECT_COLOR_BIT};
+            const RenderGraph::TextureDesc graphViewNormalDesc{
+                .extent = {graphExtent.width, graphExtent.height, 1},
+                .format = VK_FORMAT_R16G16_SNORM,
+                .usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
+                .aspect = VK_IMAGE_ASPECT_COLOR_BIT};
+            const auto graphVelocity = !msaa.enabled()
+                ? viewportFrameGraph.importTexture("Forward velocity", velocityBuffer.image(), graphVelocityDesc,
+                                                   {.layout = VK_IMAGE_LAYOUT_UNDEFINED})
+                : RenderGraph::TextureHandle{};
+            const auto graphViewNormal = !msaa.enabled()
+                ? viewportFrameGraph.importTexture("GTAO view normals", gtaoViewNormalBuffer.image(), graphViewNormalDesc,
+                                                   {.layout = VK_IMAGE_LAYOUT_UNDEFINED})
+                : RenderGraph::TextureHandle{};
             const RenderGraph::BufferDesc graphVertexDesc{
                 .size = vertexBuffer.size(), .usage = VK_BUFFER_USAGE_VERTEX_BUFFER_BIT};
             const RenderGraph::BufferDesc graphIndexDesc{
@@ -1254,6 +1272,16 @@
             viewportFrameGraph.addPass("Depth / prepass", RenderGraph::Queue::Graphics,
             [&](RenderGraph::PassBuilder& builder) {
                 builder.write(graphDepth, RenderGraph::TextureUsage::DepthAttachment);
+                if (graphVelocity)
+                    builder.write(graphVelocity, RenderGraph::TextureUsage::ColorAttachment);
+                if (graphViewNormal) {
+                    builder.write(graphViewNormal, RenderGraph::TextureUsage::ColorAttachment);
+                    builder.setFinalTextureState(graphViewNormal, {
+                        .stage = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                        .access = VK_ACCESS_2_SHADER_SAMPLED_READ_BIT,
+                        .layout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                        .write = false});
+                }
                 builder.read(graphVertices, RenderGraph::BufferUsage::VertexRead);
                 builder.read(graphIndices, RenderGraph::BufferUsage::IndexRead);
                 builder.read(graphFoliageIndirect, RenderGraph::BufferUsage::IndirectRead);
@@ -1372,12 +1400,33 @@
             lightingForwardPass.drawOutline(commandBuffer, shadowPass.descriptorSet(currentFrame), indirectDraws[currentFrame]);
             ForwardPass::end(commandBuffer);
             gpuTimestampProfiler.endZone(commandBuffer, currentFrame);
+            // Dynamic rendering has no render-pass finalLayout.  The post graph
+            // samples these images, so make their real state match its import.
+            if (!needsWaterComposite) {
+                VkImageMemoryBarrier2 hdrToSampled{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2};
+                hdrToSampled.srcStageMask = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT;
+                hdrToSampled.srcAccessMask = VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT;
+                hdrToSampled.dstStageMask = VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT;
+                hdrToSampled.dstAccessMask = VK_ACCESS_2_SHADER_SAMPLED_READ_BIT;
+                hdrToSampled.oldLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+                hdrToSampled.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+                hdrToSampled.image = hdrBuffer.image();
+                hdrToSampled.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+                VkImageMemoryBarrier2 velocityToSampled = hdrToSampled;
+                velocityToSampled.image = velocityBuffer.image();
+                const std::array postLightingTransitions{hdrToSampled, velocityToSampled};
+                const VkDependencyInfo postLightingDependency{
+                    .sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO,
+                    .imageMemoryBarrierCount = antialiasingLevel == AntialiasingLevel::TAA ? 2U : 1U,
+                    .pImageMemoryBarriers = postLightingTransitions.data()};
+                vkCmdPipelineBarrier2(commandBuffer, &postLightingDependency);
+            }
             if (needsWaterComposite) {
                 const VkImageMemoryBarrier2 barriersBefore[] = {
                     {VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2, nullptr,
                      VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT, VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT,
                      VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_ACCESS_2_TRANSFER_READ_BIT,
-                     VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                     VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
                      VK_QUEUE_FAMILY_IGNORED, VK_QUEUE_FAMILY_IGNORED, hdrBuffer.image(),
                      {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1}},
                     {VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2, nullptr,
@@ -1400,8 +1449,9 @@
                 const VkImageMemoryBarrier2 barriersAfter[] = {
                     {VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2, nullptr,
                      VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_ACCESS_2_TRANSFER_READ_BIT,
-                     VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT, VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT,
-                     VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                     VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT, VK_ACCESS_2_COLOR_ATTACHMENT_READ_BIT |
+                         VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT,
+                     VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
                      VK_QUEUE_FAMILY_IGNORED, VK_QUEUE_FAMILY_IGNORED, hdrBuffer.image(),
                      {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1}},
                     {VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2, nullptr,
@@ -1445,7 +1495,7 @@
                 waterColorTransition.dstStageMask = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT;
                 waterColorTransition.dstAccessMask = VK_ACCESS_2_COLOR_ATTACHMENT_READ_BIT |
                                                        VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT;
-                waterColorTransition.oldLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+                waterColorTransition.oldLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
                 waterColorTransition.newLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
                 waterColorTransition.image = hdrBuffer.image();
                 waterColorTransition.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
@@ -1785,16 +1835,20 @@
                 .extent = {postExtent.width, postExtent.height, 1}, .format = HdrBuffer::Format,
                 .usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
                 .aspect = VK_IMAGE_ASPECT_COLOR_BIT};
+            const RenderGraph::TextureDesc velocityDesc{
+                .extent = {postExtent.width, postExtent.height, 1}, .format = VK_FORMAT_R16G16_SFLOAT,
+                .usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
+                .aspect = VK_IMAGE_ASPECT_COLOR_BIT};
             const auto graphHdr = frameGraph.importTexture(
                 "Game HDR", hdrBuffer.image(), hdrDesc,
-                {.stage = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
-                 .access = VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT,
-                 .layout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, .write = true});
+                {.stage = VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT,
+                 .access = VK_ACCESS_2_SHADER_SAMPLED_READ_BIT,
+                 .layout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL});
             const auto graphVelocity = frameGraph.importTexture(
-                "Game velocity", velocityBuffer.image(), hdrDesc,
-                {.stage = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
-                 .access = VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT,
-                 .layout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, .write = true});
+                "Game velocity", velocityBuffer.image(), velocityDesc,
+                {.stage = VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT,
+                 .access = VK_ACCESS_2_SHADER_SAMPLED_READ_BIT,
+                 .layout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL});
             const DepthBuffer& taaDepth = msaa.enabled() ? hiZDepthBuffer : depthBuffer;
             const RenderGraph::TextureDesc depthDesc{
                 .extent = {postExtent.width, postExtent.height, 1}, .format = taaDepth.format(),
@@ -1819,6 +1873,9 @@
 
             RenderGraph::TextureHandle graphPostSource = graphHdr;
             if (renderGameViewport && taaResolveActive) {
+                // Initialize before importing: from here the render graph is
+                // the sole owner of the color-history image layouts.
+                temporalAaPass.prepareHistory(commandBuffer);
                 const std::uint32_t historyReadIndex = temporalAaPass.resolvedIndex();
                 const std::uint32_t historyWriteIndex = temporalAaPass.nextResolvedIndex();
                 const auto graphHistoryRead = frameGraph.importTexture(
@@ -1828,7 +1885,9 @@
                      .layout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL});
                 const auto graphHistoryWrite = frameGraph.importTexture(
                     "TAA history write", temporalAaPass.historyImage(historyWriteIndex), hdrDesc,
-                    {.layout = VK_IMAGE_LAYOUT_UNDEFINED});
+                    {.stage = VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT,
+                     .access = VK_ACCESS_2_SHADER_SAMPLED_READ_BIT,
+                     .layout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL});
                 RenderGraph::TextureHandle graphWaterVelocity;
                 RenderGraph::TextureHandle graphWaterMeta;
                 RenderGraph::TextureHandle graphWaterSurface;
@@ -1862,9 +1921,9 @@
                     }
                     builder.write(graphHistoryWrite, RenderGraph::TextureUsage::ColorAttachment);
                     builder.setFinalTextureState(graphHistoryWrite, {
-                        .stage = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
-                        .access = VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT,
-                        .layout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, .write = true});
+                        .stage = VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT,
+                        .access = VK_ACCESS_2_SHADER_SAMPLED_READ_BIT,
+                        .layout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, .write = false});
                 }, [&](const VkCommandBuffer buffer) {
                     gpuTimestampProfiler.beginZone(buffer, currentFrame, taaProfileName);
                     temporalAaPass.setVirtualWaterEnabled(virtualWaterPreparedThisFrame);

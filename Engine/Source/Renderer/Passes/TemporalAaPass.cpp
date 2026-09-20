@@ -124,8 +124,11 @@ void TemporalAaPass::initializeHistory(const VkCommandBuffer commandBuffer) {
     vkCmdPipelineBarrier2(commandBuffer, &dependency); initialized_ = true;
 }
 
-void TemporalAaPass::record(const VkCommandBuffer commandBuffer, const VkExtent2D extent, const float currentJitterX, const float currentJitterY) {
+void TemporalAaPass::prepareHistory(const VkCommandBuffer commandBuffer) {
     if (!initialized_) initializeHistory(commandBuffer);
+}
+
+void TemporalAaPass::record(const VkCommandBuffer commandBuffer, const VkExtent2D extent, const float currentJitterX, const float currentJitterY) {
     const std::uint32_t output = 1U - historyIndex_;
     // The render graph owns history_, while the matching depth history is an
     // internal attachment. Dynamic rendering has no render-pass finalLayout,
