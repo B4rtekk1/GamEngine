@@ -16,11 +16,10 @@ float aoAt(int2 p,int2 size){return inputAo.Load(int3(clamp(p,int2(0,0),size-1),
 void main(uint3 id:SV_DispatchThreadID){
  uint w,h;outputAo.GetDimensions(w,h);if(any(id.xy>=uint2(w,h)))return;int2 size=int2(w,h),p=int2(id.xy);
  float4 center=edgesAt(p,size),left=edgesAt(p+int2(-1,0),size),right=edgesAt(p+int2(1,0),size),top=edgesAt(p+int2(0,-1),size),bottom=edgesAt(p+int2(0,1),size);
- // Make links symmetric, then apply XeGTAO's controlled leak across pixels
- // with three or four discontinuities to suppress spatial/temporal aliasing.
+ // Make links symmetric. Do not reopen rejected links: doing so lets AO
+ // cross silhouette discontinuities and produces visible halos.
  center*=float4(left.y,right.x,top.w,bottom.z);
- float edginess=saturate(1.5-dot(center,1.0))/1.5*.5;
- center=saturate(center+edginess);
+ center=saturate(center);
  const float diagonalWeight=.85*.5;
  float weightTL=diagonalWeight*(center.x*left.z+center.z*top.x);
  float weightTR=diagonalWeight*(center.z*top.y+center.y*right.z);

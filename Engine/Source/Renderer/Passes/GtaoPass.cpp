@@ -222,7 +222,7 @@ namespace Engine {
                 };
                 vkUpdateDescriptorSets(device_, 2, w.data(), 0, nullptr);
             }
-            const std::array<uint32_t, 3> inputCount{2, 2, 3}, outputCount{3, 1, 1},
+            const std::array<uint32_t, 3> inputCount{3, 2, 3}, outputCount{3, 1, 1},
                     pushSize{sizeof(MainSettings), sizeof(DenoiseSettings), sizeof(UpsampleSettings)};
             const std::array<const char *, 3> shader{
                 "shaders/gtao_main.spv", "shaders/gtao_denoise.spv",
@@ -406,7 +406,8 @@ namespace Engine {
         const uint32_t sourceMip = std::min(quality_.resolutionScale == 1.F ? 0U : 1U, linearDepthMipCount_ - 1);
         update(0, {
                    {linearDepthSampler_, linearDepthView_, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL},
-                   {viewNormalSampler, viewNormal, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL}
+                   {viewNormalSampler, viewNormal, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL},
+                   {linearDepthSampler_, linearDepthView_, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL}
                },
                {raw_.imageView(), auxiliary_.imageView(), baseDepth_.imageView()});
         MainSettings main{{1.f / inverse[0][0], 1.f / inverse[1][1]}, 1.f, 1.f, sampleIndex, 0.f};
@@ -448,7 +449,7 @@ namespace Engine {
                     float(halfExtent_.width) / float(fullExtent_.width),
                     float(halfExtent_.height) / float(fullExtent_.height)
                 },
-                2,
+                64.F,
                 0
             };
             dispatch(2, up, fullExtent_);

@@ -3,9 +3,12 @@
 // samples per half-resolution pixel. The shared tile keeps those reads local.
 [[vk::binding(0,0)]] Sampler2D horizonDepth;
 [[vk::binding(1,0)]] Sampler2D viewNormalTexture;
-[[vk::binding(2,0)]] RWTexture2D<float> rawAo;
-[[vk::binding(3,0)]] RWTexture2D<float4> guide;
-[[vk::binding(4,0)]] RWTexture2D<float> baseDepth;
+// Mip 0 stays separate from horizonDepth so the half-resolution guide can
+// represent the nearest surface in its native-resolution footprint.
+[[vk::binding(2,0)]] Sampler2D guideDepth;
+[[vk::binding(3,0)]] RWTexture2D<float> rawAo;
+[[vk::binding(4,0)]] RWTexture2D<float4> guide;
+[[vk::binding(5,0)]] RWTexture2D<float> baseDepth;
 struct Settings { float2 projectionScale; float radiusView, falloff; uint frameIndex; float padding; uint directions, stepsPerDirection, sourceMip, maxSampleMip; };
 [[vk::push_constant]] ConstantBuffer<Settings> settings;
 groupshared float depthTile[16][16];
@@ -67,6 +70,16 @@ float3 loadViewNormal(int2 pixel,uint2 aoSize){
  int2 normalPixel=clamp(int2(uv*float2(normalW,normalH)),int2(0,0),int2(normalW,normalH)-1);
  return decodeOct(viewNormalTexture.Load(int3(normalPixel,0)).xy);
 }
+float nearestGuideDepth(int2 pixel,uint2 aoSize){
+ uint fullW,fullH;guideDepth.GetDimensions(fullW,fullH);
+ uint2 fullSize=uint2(fullW,fullH),p=uint2(pixel);
+ uint2 first=p*fullSize/aoSize;
+ uint2 last=((p+1u)*fullSize+aoSize-1u)/aoSize;
+ float nearest=BackgroundDepth;
+ for(uint y=first.y;y<last.y;++y)for(uint x=first.x;x<last.x;++x)
+  nearest=min(nearest,guideDepth.Load(int3(uint2(x,y),0)).r);
+ return nearest;
+}
 // Integral of the projected cosine over one unoccluded horizon arc.
 float integrateHorizon(float horizon,float normalAngle,float normalCos){return(normalCos+2*horizon*sin(normalAngle)-cos(2*horizon-normalAngle))*.25;}
 [numthreads(8,8,1)] [shader("compute")]
@@ -77,7 +90,7 @@ void main(uint3 groupId:SV_GroupID,uint3 threadId:SV_GroupThreadID,uint3 id:SV_D
  // rebuilding it here would make AO depend on workgroup boundaries.
  for(uint y=threadId.y;y<16;y+=8) for(uint x=threadId.x;x<16;x+=8){int2 q=clamp(base+int2(x,y),int2(0,0),size-1);float2 uv=(float2(q)+.5)/float2(size);depthTile[y][x]=horizonDepth.SampleLevel(uv,float(settings.sourceMip)).r;}
  GroupMemoryBarrierWithGroupSync(); if(any(id.xy>=uint2(w,h)))return;
- int2 local=int2(threadId.xy)+4,p=int2(id.xy);float depth=depthTile[local.y][local.x];baseDepth[p]=depth;if(depth>=BackgroundDepth){rawAo[p]=1;guide[p]=float4(0,1,1,1);return;}
+ int2 local=int2(threadId.xy)+4,p=int2(id.xy);float depth=depthTile[local.y][local.x];baseDepth[p]=nearestGuideDepth(p,uint2(w,h));if(depth>=BackgroundDepth){rawAo[p]=1;guide[p]=float4(0,1,1,1);return;}
  // Keep edge detection on the original depth, but move the AO center a tiny
  // amount toward the camera to prevent FP32 depth quantization self-occlusion.
  float centerDepth=depth*.99999;float3 center=positionFromDepth(p,centerDepth,uint2(w,h));float left=depthTile[local.y][local.x-1],right=depthTile[local.y][local.x+1],top=depthTile[local.y-1][local.x],bottom=depthTile[local.y+1][local.x];float3 normal=settings.padding>0.5?loadViewNormal(p,uint2(w,h)):reconstructNormal(p,depth,left,right,top,bottom,uint2(w,h));
