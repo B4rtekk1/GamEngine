@@ -469,7 +469,7 @@ ForwardFragmentOutput fragmentMain(ForwardFragmentInput input)
                      (1.0 - metallic) * albedo / PBR_PI;
     ShadowSampleDebug shadowDebug = {0.0, 0.0, 0u, 0u, uint2(0, 0)};
     float shadow = frame.shadowEnabled != 0
-        ? sampleVirtualShadow(shadowMap, linearShadowMap, shadowDepthMap, input.worldPosition, normal, lightDirection, frame.shadowClipMatrices,
+        ? sampleVirtualShadow(shadowMap, linearShadowMap, shadowDepthMap, input.worldPosition, geometricNormal, lightDirection, frame.shadowClipMatrices,
                               shadowPageTable, frame.shadowQuality, uint2(input.position.xy),
                               frame.temporalSampleIndex, frame.temporalShadowJitter != 0, shadowDebug) : 0.0;
     if (frame.shadowDebugView != SHADOW_DEBUG_OFF)

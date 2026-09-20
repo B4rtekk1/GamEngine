@@ -22,14 +22,14 @@
 
 namespace Engine {
     namespace {
-        // Receiver-side bias tracks the virtual-shadow texel footprint.  Raster bias
-        // only protects caster rasterization, so keep it deliberately small; a large
-        // per-level raster bias causes detached shadows before it fixes receiver acne.
+        // Receiver-side bias tracks the virtual-shadow texel footprint. Raster bias
+        // provides a second line of defense for caster rasterization; keep it
+        // moderate so it suppresses acne without visibly detaching shadows.
         constexpr std::array<float, ShadowMap::ClipLevelCount> DepthBiasConstant{
             0.001F, 0.001F, 0.001F, 0.001F, 0.001F, 0.001F, 0.001F
         };
         constexpr std::array<float, ShadowMap::ClipLevelCount> DepthBiasSlope{
-            0.003F, 0.003F, 0.003F, 0.003F, 0.003F, 0.003F, 0.003F
+            0.5F, 0.5F, 0.5F, 0.5F, 0.5F, 0.5F, 0.5F
         };
 
         bool sameMatrix(const Mat4 &left, const Mat4 &right) {

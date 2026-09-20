@@ -139,8 +139,10 @@ namespace Engine {
 
     void BloomPass::destroy() noexcept {
         if (device_) {
-            if (pool_) vkDestroyDescriptorPool(device_, pool_, nullptr);
-            if (layout_) vkDestroyDescriptorSetLayout(device_, layout_, nullptr);
+            if (pool_) { vkDestroyDescriptorPool(device_, pool_, nullptr);
+}
+            if (layout_) { vkDestroyDescriptorSetLayout(device_, layout_, nullptr);
+}
         }
         pool_ = VK_NULL_HANDLE;
         layout_ = VK_NULL_HANDLE;
