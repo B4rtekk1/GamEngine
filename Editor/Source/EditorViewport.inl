@@ -1523,8 +1523,19 @@ bool drawTerrainGrass(Engine::ScenePreset& scene, const Engine::Entity selected,
 
 enum class SceneViewMode : std::uint8_t { Lit, Unlit, LightingOnly, Wireframe, Normals, Collision, Overdraw };
 
+enum class SceneRenderResolution : std::uint8_t {
+    Auto,
+    R320x180,
+    R640x360,
+    R960x540,
+    R1280x720,
+    R1920x1080,
+    R2560x1440
+};
+
 struct SceneViewSettings final {
     SceneViewMode mode{SceneViewMode::Lit};
+    SceneRenderResolution renderResolution{SceneRenderResolution::Auto};
     bool showCameraGizmos{true};
     bool showLightGizmos{true};
     bool showColliders{false};
@@ -1532,6 +1543,33 @@ struct SceneViewSettings final {
     struct Bookmark final { Engine::Vec3 position{}; float yaw{}; float pitch{}; };
     std::array<std::optional<Bookmark>, 4> bookmarks{};
 };
+
+const char* sceneRenderResolutionName(const SceneRenderResolution resolution) {
+    switch (resolution) {
+        case SceneRenderResolution::Auto: return "Auto (panel)";
+        case SceneRenderResolution::R320x180: return "320 x 180";
+        case SceneRenderResolution::R640x360: return "640 x 360";
+        case SceneRenderResolution::R960x540: return "960 x 540";
+        case SceneRenderResolution::R1280x720: return "1280 x 720";
+        case SceneRenderResolution::R1920x1080: return "1920 x 1080";
+        case SceneRenderResolution::R2560x1440: return "2560 x 1440";
+    }
+    return "Auto (panel)";
+}
+
+std::optional<std::pair<std::uint32_t, std::uint32_t>> sceneRenderResolutionExtent(
+    const SceneRenderResolution resolution) {
+    switch (resolution) {
+        case SceneRenderResolution::Auto: return std::nullopt;
+        case SceneRenderResolution::R320x180: return std::pair{320U, 180U};
+        case SceneRenderResolution::R640x360: return std::pair{640U, 360U};
+        case SceneRenderResolution::R960x540: return std::pair{960U, 540U};
+        case SceneRenderResolution::R1280x720: return std::pair{1280U, 720U};
+        case SceneRenderResolution::R1920x1080: return std::pair{1920U, 1080U};
+        case SceneRenderResolution::R2560x1440: return std::pair{2560U, 1440U};
+    }
+    return std::nullopt;
+}
 
 const char* sceneViewModeName(const SceneViewMode mode) {
     switch (mode) {
@@ -1679,6 +1717,23 @@ ViewportInteraction drawViewport(Engine::ScenePreset &scene, Engine::Assets::Con
                 ImGui::EndCombo();
             }
             ImGui::SameLine();
+            ImGui::SetNextItemWidth(132.0F);
+            if (ImGui::BeginCombo("##scene-render-resolution",
+                                  sceneRenderResolutionName(settings.renderResolution))) {
+                for (int resolution = 0;
+                     resolution <= static_cast<int>(SceneRenderResolution::R2560x1440); ++resolution) {
+                    const auto value = static_cast<SceneRenderResolution>(resolution);
+                    if (ImGui::Selectable(sceneRenderResolutionName(value),
+                                          settings.renderResolution == value)) {
+                        settings.renderResolution = value;
+                    }
+                }
+                ImGui::EndCombo();
+            }
+            if (ImGui::IsItemHovered()) {
+                ImGui::SetTooltip("Scene View render resolution; the result is scaled to fit the panel");
+            }
+            ImGui::SameLine();
             if (ImGui::Button("Visibility##scene")) ImGui::OpenPopup("Scene visibility");
             if (ImGui::BeginPopup("Scene visibility")) {
                 ImGui::TextDisabled("Gizmo categories");
@@ -1714,9 +1769,13 @@ ViewportInteraction drawViewport(Engine::ScenePreset &scene, Engine::Assets::Con
                      {frameSize.x, imageHeight}, {0, 0}, {1, 1});
         if (!showGameView && !playing) {
             const ImVec2 framebufferScale = ImGui::GetIO().DisplayFramebufferScale;
-            renderer.setSceneViewportExtent(
-                static_cast<std::uint32_t>(std::max(1.0F, std::round(frameSize.x * framebufferScale.x))),
-                static_cast<std::uint32_t>(std::max(1.0F, std::round(imageHeight * framebufferScale.y))));
+            if (const auto selectedResolution = sceneRenderResolutionExtent(settings.renderResolution)) {
+                renderer.setSceneViewportExtent(selectedResolution->first, selectedResolution->second);
+            } else {
+                renderer.setSceneViewportExtent(
+                    static_cast<std::uint32_t>(std::max(1.0F, std::round(frameSize.x * framebufferScale.x))),
+                    static_cast<std::uint32_t>(std::max(1.0F, std::round(imageHeight * framebufferScale.y))));
+            }
         }
         const ImVec2 imageMin = ImGui::GetItemRectMin();
         const ImVec2 imageMax = ImGui::GetItemRectMax();

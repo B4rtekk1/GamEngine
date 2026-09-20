@@ -318,11 +318,12 @@
                 vsmRequestsReady.fill(false);
             }
             if (vsmPageMarkingUniformBuffers[currentFrame].handle() != VK_NULL_HANDLE) {
-                const glm::mat4 markingViewProjection =
-                    (previousGameCameraValid ? previousGameProjection * previousGameView
-                                             : currentProjection * currentView).native();
                 VsmPageMarkingUniforms marking{};
-                marking.inverseViewProjection = glm::inverse(markingViewProjection);
+                // Page marking samples the Hi-Z image from this frame slot.
+                // That image was produced when this slot was last rendered,
+                // so reconstruct with the VP stored alongside that Hi-Z
+                // image—not the camera from the immediately preceding frame.
+                marking.inverseViewProjection = glm::inverse(hiZViewProjections[currentFrame]);
                 for (std::uint32_t level = 0; level < ShadowMap::ClipLevelCount; ++level)
                     marking.clipMatrices[level] = shadowClipMatrices[level].native();
                 marking.pageCountPerAxis = ShadowMap::VirtualPagesPerAxis;
@@ -1591,13 +1592,18 @@
                     vkCmdPipelineBarrier2(commandBuffer, &dependency);
                 }
                 VkImageMemoryBarrier2 depthToAttachment{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2};
+                depthToAttachment.srcStageMask = sceneViewportDepthInitialized
+                    ? VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT : VK_PIPELINE_STAGE_2_NONE;
+                depthToAttachment.srcAccessMask = sceneViewportDepthInitialized
+                    ? VK_ACCESS_2_SHADER_SAMPLED_READ_BIT : 0;
                 depthToAttachment.dstStageMask = VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT |
                                                  VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT;
                 depthToAttachment.dstAccessMask = VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_READ_BIT |
                                                   VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
-                depthToAttachment.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+                depthToAttachment.oldLayout = sceneViewportDepthInitialized
+                    ? VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL : VK_IMAGE_LAYOUT_UNDEFINED;
                 depthToAttachment.newLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
-                depthToAttachment.image = depthBuffer.image();
+                depthToAttachment.image = sceneViewportDepthBuffer.image();
                 depthToAttachment.subresourceRange = {VK_IMAGE_ASPECT_DEPTH_BIT, 0, 1, 0, 1};
                 VkDependencyInfo depthDependency{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
                 depthDependency.imageMemoryBarrierCount = 1;
@@ -1612,7 +1618,7 @@
                     commandBuffer, static_cast<std::uint32_t>(gpuObjects.size()), MaterialProgramSlotCount);
 
                 sceneForwardPass.begin(
-                    commandBuffer, sceneViewportTarget.color().imageView(), depthBuffer.imageView(),
+                    commandBuffer, sceneViewportTarget.color().imageView(), sceneViewportDepthBuffer.imageView(),
                     VK_NULL_HANDLE, VK_NULL_HANDLE, VK_NULL_HANDLE, VK_NULL_HANDLE, sceneViewportTarget.extent(),
                     sceneDescriptorPass.descriptorSet(currentFrame), vertexBuffer.handle(),
                     instanceBuffers[currentFrame].handle(), indexBuffer.handle());
@@ -1684,13 +1690,14 @@
                 depthToSampled.dstAccessMask = VK_ACCESS_2_SHADER_SAMPLED_READ_BIT;
                 depthToSampled.oldLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
                 depthToSampled.newLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL;
-                depthToSampled.image = depthBuffer.image();
+                depthToSampled.image = sceneViewportDepthBuffer.image();
                 depthToSampled.subresourceRange = {VK_IMAGE_ASPECT_DEPTH_BIT, 0, 1, 0, 1};
                 const VkImageMemoryBarrier2 sceneToSampled[] = {colorToSampled, depthToSampled};
                 VkDependencyInfo sceneToSampledDependency{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
                 sceneToSampledDependency.imageMemoryBarrierCount = std::size(sceneToSampled);
                 sceneToSampledDependency.pImageMemoryBarriers = sceneToSampled;
                 vkCmdPipelineBarrier2(commandBuffer, &sceneToSampledDependency);
+                sceneViewportDepthInitialized = true;
 
                 const bool hasSceneLegacyWater = activeShaderSlots.test(materialShaderIndex(MaterialShader::Water));
                 const bool hasSceneVirtualWater = sceneVirtualWaterRenderer.active();

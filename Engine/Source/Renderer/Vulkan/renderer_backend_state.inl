@@ -42,6 +42,10 @@
         // UI-only placeholder. It has the same attachment formats as the game
         // path, so both views share the forward/sky/particle pipelines.
         ViewportRenderTarget sceneViewportTarget;
+        // Scene View may use a resolution different from the swapchain, so it
+        // needs a depth attachment with the same extent as its color target.
+        DepthBuffer sceneViewportDepthBuffer;
+        bool sceneViewportDepthInitialized{false};
         VkFramebuffer sceneViewportFramebuffer = VK_NULL_HANDLE;
         // With AA off, Scene View preserves its color image between redraws.
         // This pass starts from the descriptor's sampled layout instead of

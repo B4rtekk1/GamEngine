@@ -1445,6 +1445,10 @@
             // also makes the off-screen lifecycle valid for non-editor users.
             sceneViewportTarget.create(vulkanDevice.physical(), device, swapchain.extent(),
                                        vulkanDevice.allocator());
+            sceneViewportDepthBuffer.create(
+                sceneViewportTarget.extent(), VK_SAMPLE_COUNT_1_BIT,
+                msaa.enabled() ? hiZDepthBuffer.format() : depthBuffer.format());
+            sceneViewportDepthInitialized = false;
             createSceneViewportForwardPass();
             createSceneVirtualWaterResources();
         }
@@ -1462,7 +1466,7 @@
                 instances[i] = instanceBuffers[i].handle();
                 culling[i] = sceneCullingUniformBuffers[i].handle();
             }
-            const DepthBuffer& sampledDepth = msaa.enabled() ? hiZDepthBuffer : depthBuffer;
+            const DepthBuffer& sampledDepth = sceneViewportDepthBuffer;
             const VkDescriptorImageInfo depthInfo{
                 sampledDepth.sampler(), sampledDepth.imageView(), VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL};
             std::array<VkDescriptorImageInfo, MAX_FRAMES_IN_FLIGHT> noHiZInfos{};
@@ -1484,11 +1488,16 @@
                 (requested.width == sceneViewportTarget.extent().width &&
                  requested.height == sceneViewportTarget.extent().height)) return;
 
-            // This is called before ImGui::NewFrame(), so no current draw data
-            // can retain the descriptor. Fence/upload retirement covers old
-            // submitted frames without a device-wide idle.
-            waitForGlobalResourceRebuild();
+            // Resolution changes replace color, depth and water attachments at
+            // once. This path is user-driven and infrequent, so wait for every
+            // queue explicitly; frame fences do not cover every submission
+            // made by optional async renderer paths on all drivers.
+            waitIdle();
             sceneViewportTarget.resize(requested);
+            sceneViewportDepthBuffer.create(
+                requested, VK_SAMPLE_COUNT_1_BIT,
+                msaa.enabled() ? hiZDepthBuffer.format() : depthBuffer.format());
+            sceneViewportDepthInitialized = false;
             createSceneVirtualWaterResources();
 
             if (sceneViewportDescriptor != VK_NULL_HANDLE) {
@@ -1507,6 +1516,8 @@
             sceneVirtualWaterRenderer.destroy();
             sceneOpaqueColor.destroy();
             sceneOpaqueColorInitialized = false;
+            sceneViewportDepthBuffer.destroy();
+            sceneViewportDepthInitialized = false;
             sceneViewportForwardPass.destroy();
             sceneViewportTarget.destroy();
         }

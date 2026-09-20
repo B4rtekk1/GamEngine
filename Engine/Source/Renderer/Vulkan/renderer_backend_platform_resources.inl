@@ -329,6 +329,7 @@
 
         void createDepthResources() {
             depthBuffer.create(swapchain.extent(), msaa.sampleCount());
+            sceneViewportDepthBuffer.initialize(vulkanDevice.physical(), device, vulkanDevice.allocator());
             hiZDepthBuffer.initialize(vulkanDevice.physical(), device, vulkanDevice.allocator());
             if (msaa.enabled()) {
                 hiZDepthBuffer.create(swapchain.extent(), VK_SAMPLE_COUNT_1_BIT,
@@ -337,6 +338,7 @@
         }
 
         void destroyDepthResources() {
+            sceneViewportDepthBuffer.destroy();
             hiZDepthBuffer.destroy();
             depthBuffer.destroy();
         }
