@@ -26,8 +26,9 @@ void TemporalAaPass::create(const VkPhysicalDevice physicalDevice, const VkDevic
         currentDepthView == VK_NULL_HANDLE || currentDepthSampler == VK_NULL_HANDLE ||
         waterVelocityView == VK_NULL_HANDLE || waterVelocitySampler == VK_NULL_HANDLE ||
         waterMetaView == VK_NULL_HANDLE || waterMetaSampler == VK_NULL_HANDLE ||
-        waterSurfaceView == VK_NULL_HANDLE || waterSurfaceSampler == VK_NULL_HANDLE)
+        waterSurfaceView == VK_NULL_HANDLE || waterSurfaceSampler == VK_NULL_HANDLE) {
         throw std::invalid_argument("Temporal AA pass received incomplete resources");
+}
     destroy(); device_ = device;
     try {
         VkDescriptorSetLayoutBinding bindings[8]{};
@@ -37,11 +38,14 @@ void TemporalAaPass::create(const VkPhysicalDevice physicalDevice, const VkDevic
         }
         VkDescriptorSetLayoutCreateInfo layoutInfo{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
         layoutInfo.bindingCount = std::size(bindings); layoutInfo.pBindings = bindings;
-        if (vkCreateDescriptorSetLayout(device_, &layoutInfo, nullptr, &layout_) != VK_SUCCESS)
+        if (vkCreateDescriptorSetLayout(device_, &layoutInfo, nullptr, &layout_) != VK_SUCCESS) {
             throw std::runtime_error("Could not create temporal AA descriptor layout");
-        for (HdrBuffer& image : history_) image.create(physicalDevice, device_, extent, allocator);
-        for (HdrBuffer& image : historyDepth_) image.create(physicalDevice, device_, extent, allocator,
+}
+        for (HdrBuffer& image : history_) { image.create(physicalDevice, device_, extent, allocator);
+}
+        for (HdrBuffer& image : historyDepth_) { image.create(physicalDevice, device_, extent, allocator,
                                                               VK_FILTER_NEAREST);
+}
         GraphicsPipelineOptions options{};
         options.colorFormat = HdrBuffer::Format;
         options.dynamicRendering = true;
@@ -55,15 +59,16 @@ void TemporalAaPass::create(const VkPhysicalDevice physicalDevice, const VkDevic
         VkDescriptorPoolSize size{VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 32};
         VkDescriptorPoolCreateInfo poolInfo{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
         poolInfo.maxSets = 4; poolInfo.poolSizeCount = 1; poolInfo.pPoolSizes = &size;
-        if (vkCreateDescriptorPool(device_, &poolInfo, nullptr, &pool_) != VK_SUCCESS)
+        if (vkCreateDescriptorPool(device_, &poolInfo, nullptr, &pool_) != VK_SUCCESS) {
             throw std::runtime_error("Could not create temporal AA descriptor pool");
+}
         VkDescriptorSetAllocateInfo allocation{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};
         const std::array<VkDescriptorSetLayout, 4> layouts{layout_, layout_, layout_, layout_};
         allocation.descriptorPool = pool_; allocation.descriptorSetCount = 4;
         allocation.pSetLayouts = layouts.data();
-        if (vkAllocateDescriptorSets(device_, &allocation, sets_.data()) != VK_SUCCESS)
+        if (vkAllocateDescriptorSets(device_, &allocation, sets_.data()) != VK_SUCCESS) {
             throw std::runtime_error("Could not allocate temporal AA descriptor sets");
-        constexpr std::uint32_t WaterSetOffset = 2;
+}
         for (std::uint32_t i = 0; i < 2; ++i) {
             VkDescriptorImageInfo images[8] = {{sampler, currentView, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL},
                                                {sampler, history_[i].imageView(), VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL},
@@ -74,7 +79,7 @@ void TemporalAaPass::create(const VkPhysicalDevice physicalDevice, const VkDevic
                                                // fallbacks keep bindings 5-7 legal while virtual water is unprepared.
                                                {sampler, currentView, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL},
                                                {sampler, currentView, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL},
-                                               {sampler, currentView, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL}};
+                                               {sampler, currentView, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL},};
             VkWriteDescriptorSet writes[8]{};
             for (std::uint32_t binding = 0; binding < 8; ++binding) {
                 writes[binding] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET}; writes[binding].dstSet = sets_[i];
@@ -86,8 +91,10 @@ void TemporalAaPass::create(const VkPhysicalDevice physicalDevice, const VkDevic
             images[5] = {waterVelocitySampler, waterVelocityView, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
             images[6] = {waterMetaSampler, waterMetaView, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
             images[7] = {waterSurfaceSampler, waterSurfaceView, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
-            for (std::uint32_t binding = 0; binding < 8; ++binding)
+            for (std::uint32_t binding = 0; binding < 8; ++binding) {
+                constexpr std::uint32_t WaterSetOffset = 2;
                 writes[binding].dstSet = sets_[i + WaterSetOffset];
+}
             vkUpdateDescriptorSets(device_, 8, writes, 0, nullptr);
         }
         reset();
@@ -118,14 +125,17 @@ void TemporalAaPass::initializeHistory(const VkCommandBuffer commandBuffer) {
     VkDependencyInfo dependency{VK_STRUCTURE_TYPE_DEPENDENCY_INFO}; dependency.imageMemoryBarrierCount = 4; dependency.pImageMemoryBarriers = barriers;
     vkCmdPipelineBarrier2(commandBuffer, &dependency);
     VkClearColorValue clear{};
-    for (const HdrBuffer& image : history_) vkCmdClearColorImage(commandBuffer, image.image(), VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &clear, 1, &barriers[0].subresourceRange);
-    for (const HdrBuffer& image : historyDepth_) vkCmdClearColorImage(commandBuffer, image.image(), VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &clear, 1, &barriers[0].subresourceRange);
+    for (const HdrBuffer& image : history_) { vkCmdClearColorImage(commandBuffer, image.image(), VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &clear, 1, &barriers[0].subresourceRange);
+}
+    for (const HdrBuffer& image : historyDepth_) { vkCmdClearColorImage(commandBuffer, image.image(), VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &clear, 1, &barriers[0].subresourceRange);
+}
     for (auto& barrier : barriers) { barrier.srcStageMask = VK_PIPELINE_STAGE_2_TRANSFER_BIT; barrier.srcAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT; barrier.dstStageMask = VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT; barrier.dstAccessMask = VK_ACCESS_2_SHADER_SAMPLED_READ_BIT; barrier.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL; barrier.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL; }
     vkCmdPipelineBarrier2(commandBuffer, &dependency); initialized_ = true;
 }
 
 void TemporalAaPass::prepareHistory(const VkCommandBuffer commandBuffer) {
-    if (!initialized_) initializeHistory(commandBuffer);
+    if (!initialized_) { initializeHistory(commandBuffer);
+}
 }
 
 void TemporalAaPass::record(const VkCommandBuffer commandBuffer, const VkExtent2D extent, const float currentJitterX, const float currentJitterY) {
@@ -167,11 +177,11 @@ void TemporalAaPass::record(const VkCommandBuffer commandBuffer, const VkExtent2
     constexpr std::uint32_t WaterSetOffset = 2;
     const VkDescriptorSet descriptorSet = sets_[historyIndex_ + (virtualWaterEnabled_ ? WaterSetOffset : 0U)];
     vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline_.layout(), 0, 1, &descriptorSet, 0, nullptr);
-    // A 16-frame accumulation is too soft for this renderer's jitter pattern.
-    // Retain temporal stability while letting the current frame restore detail.
-    const Settings settings{currentJitterX, currentJitterY, previousJitterX_, previousJitterY_, historyValid_ ? 0.80F : 0.0F,
-                            1.0F / static_cast<float>(extent.width), 1.0F / static_cast<float>(extent.height),
-                            virtualWaterEnabled_ ? 1.0F : 0.0F};
+    // Keep most of the stable history while retaining enough current-frame
+    // contribution to limit ghosting on moving or newly revealed geometry.
+    const Settings settings{.currentJitterX = currentJitterX, .currentJitterY = currentJitterY, .previousJitterX = previousJitterX_, .previousJitterY = previousJitterY_, .historyWeight = historyValid_ ? 0.90F : 0.0F,
+                            .inverseWidth = 1.0F / static_cast<float>(extent.width), .inverseHeight = 1.0F / static_cast<float>(extent.height),
+                            .padding = virtualWaterEnabled_ ? 1.0F : 0.0F};
     vkCmdPushConstants(commandBuffer, pipeline_.layout(), VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(settings), &settings);
     const VkViewport viewport{0, 0, static_cast<float>(extent.width), static_cast<float>(extent.height), 0, 1}; const VkRect2D scissor{{0, 0}, extent};
     vkCmdSetViewport(commandBuffer, 0, 1, &viewport); vkCmdSetScissor(commandBuffer, 0, 1, &scissor); vkCmdDraw(commandBuffer, 3, 1, 0, 0); vkCmdEndRendering(commandBuffer);
@@ -186,11 +196,15 @@ void TemporalAaPass::record(const VkCommandBuffer commandBuffer, const VkExtent2
 }
 
 void TemporalAaPass::destroy() noexcept {
-    if (device_ != VK_NULL_HANDLE) { if (pool_) vkDestroyDescriptorPool(device_, pool_, nullptr); if (layout_) vkDestroyDescriptorSetLayout(device_, layout_, nullptr); }
+    if (device_ != VK_NULL_HANDLE) { if (pool_) { vkDestroyDescriptorPool(device_, pool_, nullptr);
+}if (layout_) { vkDestroyDescriptorSetLayout(device_, layout_, nullptr);
+}}
     sets_.fill(VK_NULL_HANDLE); pool_ = VK_NULL_HANDLE;
-    layout_ = VK_NULL_HANDLE; pipeline_.destroy(); for (HdrBuffer& image : history_) image.destroy(); device_ = VK_NULL_HANDLE;
+    layout_ = VK_NULL_HANDLE; pipeline_.destroy(); for (HdrBuffer& image : history_) { image.destroy();
+}device_ = VK_NULL_HANDLE;
     initialized_ = false;
-    for (HdrBuffer& image : historyDepth_) image.destroy();
+    for (HdrBuffer& image : historyDepth_) { image.destroy();
+}
     reset();
 }
 } // namespace Engine

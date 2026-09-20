@@ -237,6 +237,7 @@
                 taaSampleIndex = 0;
             }
             if (taaResolveActive) {
+                constexpr std::uint32_t TaaSampleCount = 8;
                 const auto halton = [](std::uint64_t index, const std::uint32_t base) {
                     float result = 0.0F;
                     float factor = 1.0F;
@@ -248,9 +249,11 @@
                     return result;
                 };
                 const VkExtent2D extent = swapchain.extent();
-                taaJitterX = (halton(taaSampleIndex + 1, 2) - 0.5F) * 2.0F /
+                const std::uint32_t sampleIndex =
+                    static_cast<std::uint32_t>(taaSampleIndex % TaaSampleCount);
+                taaJitterX = (halton(sampleIndex + 1, 2) - 0.5F) * 2.0F /
                              static_cast<float>(extent.width);
-                taaJitterY = (halton(taaSampleIndex + 1, 3) - 0.5F) * 2.0F /
+                taaJitterY = (halton(sampleIndex + 1, 3) - 0.5F) * 2.0F /
                              static_cast<float>(extent.height);
                 ++taaSampleIndex;
                 cameraController.camera()->setProjectionJitter(taaJitterX, taaJitterY);
