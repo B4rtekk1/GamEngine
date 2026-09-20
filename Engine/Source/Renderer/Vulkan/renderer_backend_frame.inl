@@ -1976,7 +1976,13 @@
             frameGraph.addPass(editorUiActive ? "Editor UI" : "Tonemap and UI",
                                           RenderGraph::Queue::Graphics,
             [&](RenderGraph::PassBuilder& builder) {
-                if (!editorUiActive) {
+                if (editorUiActive) {
+                    // ImGui::Image samples the Game View descriptor.  Make
+                    // that external shader read visible to the graph so its
+                    // producer (notably TAA resolve) is not dead-pass culled.
+                    if (renderGameViewport)
+                        builder.read(graphPostSource, RenderGraph::TextureUsage::SampledReadFragment);
+                } else {
                     builder.read(graphPostSource, RenderGraph::TextureUsage::SampledReadFragment);
                     if (renderGameViewport) builder.read(graphBloom, RenderGraph::TextureUsage::SampledReadFragment);
                 }
