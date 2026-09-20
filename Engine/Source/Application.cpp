@@ -95,6 +95,11 @@ namespace Engine {
         return impl_->running;
     }
 
+    void Application::loadScene(const std::filesystem::path &path) {
+        scene_.load(path);
+        impl_->renderer.initializeScene(scene_);
+    }
+
     void Application::run() {
         if (game_ != nullptr) { game_->onStart(scene_); }
         impl_->running = true;
@@ -113,7 +118,7 @@ namespace Engine {
         }
         impl_->sdl.initialize();
         impl_->window.create(config_.title, config_.width, config_.height);
-        impl_->renderer.initialize(scene_, impl_->window.get());
+        impl_->renderer.initializeCore(scene_, impl_->window.get());
     }
 
     void Application::processEvents() const {

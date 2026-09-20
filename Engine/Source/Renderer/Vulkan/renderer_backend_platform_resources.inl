@@ -221,7 +221,7 @@
 
         void createInstance() {
             const bool validationSupported = checkValidationLayerSupport();
-            const bool useValidation = validationSupported;
+            const bool useValidation = enableValidationLayers && validationSupported;
 
             if (!validationSupported) {
                 std::cerr << "Validation layers are incorrect\n";
@@ -279,7 +279,7 @@
         // NOLINTEND(bugprone-easily-swappable-parameters)
 
         void setupDebugMessenger() {
-            if (!checkValidationLayerSupport()) { return; }
+            if (!enableValidationLayers || !checkValidationLayerSupport()) { return; }
             VkDebugUtilsMessengerCreateInfoEXT createInfo;
             populateDebugMessengerCreateInfo(createInfo);
             if (CreateDebugUtilsMessengerEXT(instance, &createInfo, nullptr, &debugMessenger) != VK_SUCCESS) {

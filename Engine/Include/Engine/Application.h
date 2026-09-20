@@ -5,6 +5,7 @@
 #include "Engine/Assets/Content.h"
 
 #include <cstdint>
+#include <filesystem>
 #include <functional>
 #include <memory>
 #include <string>
@@ -47,6 +48,9 @@ public:
     [[nodiscard]] const Scene& scene() const noexcept { return scene_; }
     [[nodiscard]] Assets::Content& content() noexcept { return content_; }
     [[nodiscard]] const Assets::Content& content() const noexcept { return content_; }
+
+    /** Loads the scene and creates GPU resources derived from it. */
+    void loadScene(const std::filesystem::path& path);
 
     /** Called once per frame before rendering, when provided. */
     void setUpdateCallback(std::function<void(Scene&, float)> callback) {

@@ -63,12 +63,12 @@ int main(int argc, char** argv) {
             throw std::runtime_error("Could not load GameScripts.dll");
         }
         Engine::Application app{{.title = project.name(), .width = 800, .height = 600,
+                                 .closeOnEscape = false,
                                  .assetRoot = project.assetRoot()}};
-        if (std::filesystem::is_regular_file(scenePath)) {
-            app.scene().load(scenePath);
-        } else {
+        if (!std::filesystem::is_regular_file(scenePath)) {
             throw std::runtime_error("Scene file does not exist: " + scenePath.string());
         }
+        app.loadScene(scenePath);
         app.run();
         scriptModules.unload(app.scene());
     } catch (const std::exception& exception) {
