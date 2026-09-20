@@ -45,7 +45,8 @@ namespace Engine {
         if (Input::keyPressed(KeyCode::Escape)) {
             gameMouseCaptureEnabled_ = false;
             disableRelativeMouseMode(window);
-        } else if (!gameMouseCaptureEnabled_ && gameMouseCaptureRequested_) {
+        } else if (!gameMouseCaptureEnabled_ &&
+                   (gameMouseCaptureRequested_ || Input::mousePressed(MouseButton::Left))) {
             gameMouseCaptureEnabled_ = true;
         }
         gameMouseCaptureRequested_ = false;

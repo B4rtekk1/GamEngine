@@ -62,9 +62,17 @@ int main(int argc, char** argv) {
         if (!scriptModules.loadInitialModule(scriptModule, Engine::ScriptModuleLoadMode::Direct)) {
             throw std::runtime_error("Could not load GameScripts.dll");
         }
+        const Engine::RenderConfig renderConfig{
+            .features = Engine::RenderFeatures{.shadows = true},
+            .antialiasing = Engine::AntialiasingLevel::TAA,
+            .shadowQuality = Engine::ShadowQuality::High,
+            .gtaoQuality = Engine::GtaoQuality::High,
+            .iblQuality = Engine::IblQuality::High,
+        };
         Engine::Application app{{.title = project.name(), .width = 800, .height = 600,
                                  .closeOnEscape = false,
-                                 .assetRoot = project.assetRoot()}};
+                                 .assetRoot = project.assetRoot(),
+                                 .render = renderConfig}};
         if (!std::filesystem::is_regular_file(scenePath)) {
             throw std::runtime_error("Scene file does not exist: " + scenePath.string());
         }

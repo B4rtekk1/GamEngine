@@ -29,20 +29,35 @@
         }
 
         void createImageBasedLighting() {
-            // SDL's base path is the executable directory. Project assets
-            // live in its Assets subdirectory for both the Editor and Player.
+            // SDL's base path is the executable directory. Development
+            // projects use Assets, while packaged builds use Content.
             const auto runtimeRoot = projectRoot.empty() ? assetManager.asset_root() : projectRoot;
-            const auto assetDirectory = runtimeRoot / "Assets";
+            const auto contentDirectory = runtimeRoot / "Content";
+            const auto assetDirectory = std::filesystem::is_directory(contentDirectory)
+                ? contentDirectory
+                : runtimeRoot / "Assets";
             const auto hdrEnvironment = assetDirectory / "Environment.hdr";
             const auto exrEnvironment = assetDirectory / "Environment.exr";
             const auto sceneEnvironment = scene.environmentEquirectangular();
+            auto sceneEnvironmentPath = sceneEnvironment;
+            // Older scenes stored the source tree's "Assets/" prefix. The
+            // serialized environment path is asset-root-relative, so accept
+            // that legacy form while resolving both development and packaged
+            // layouts.
+            if (!sceneEnvironmentPath.empty() && sceneEnvironmentPath.is_relative()) {
+                const auto first = sceneEnvironmentPath.begin();
+                if (first != sceneEnvironmentPath.end() &&
+                    (first->generic_string() == "Assets" || first->generic_string() == "Content")) {
+                    sceneEnvironmentPath = sceneEnvironmentPath.lexically_relative(*first);
+                }
+            }
             const auto environmentPath = !environmentEquirectangularPath.empty()
                 ? environmentEquirectangularPath
-                : sceneEnvironment.empty()
+                : sceneEnvironmentPath.empty()
                 ? (std::filesystem::exists(hdrEnvironment) ? hdrEnvironment
                     : std::filesystem::exists(exrEnvironment) ? exrEnvironment
                     : std::filesystem::path{})
-                : sceneEnvironment.is_absolute() ? sceneEnvironment : assetDirectory / sceneEnvironment;
+                : sceneEnvironmentPath.is_absolute() ? sceneEnvironmentPath : assetDirectory / sceneEnvironmentPath;
             imageBasedLighting.create(vulkanDevice.physical(), device, commandPool,
                                       vulkanDevice.graphicsQueue(), vulkanDevice.allocator(),
                                       environmentPath, runtimeRoot / "Library", iblQualitySettings(iblQuality));
