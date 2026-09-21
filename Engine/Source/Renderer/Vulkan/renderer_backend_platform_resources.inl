@@ -14,6 +14,7 @@
             createSurface();
             vulkanDevice.create(instance, surface);
             device = vulkanDevice.logical();
+            if (vulkanDevice.supportsRayQuery()) accelerationStructures.create(device, vulkanDevice.allocator());
             gpuTimestampProfiler.create(vulkanDevice.physical(), device);
             waitForDrawableExtent();
             createSwapChain();
@@ -363,11 +364,28 @@
                             vulkanDevice.allocator(), assetManager, gtaoQualitySettings(gtaoQuality));
         }
 
+        void createRtContactShadowPass() {
+            if (!vulkanDevice.supportsRayQuery() || msaa.enabled() ||
+                rtContactShadowPass.resultView() != VK_NULL_HANDLE) return;
+            std::array<VkBuffer, MAX_FRAMES_IN_FLIGHT> buffers{};
+            for (std::uint32_t frame = 0; frame < MAX_FRAMES_IN_FLIGHT; ++frame)
+                buffers[frame] = uniformBuffers[frame].handle();
+            rtContactShadowPass.create(vulkanDevice.physical(), device, swapchain.extent(),
+                                       vulkanDevice.allocator(), assetManager, buffers);
+        }
+
         void bindGtaoTexture(ShadowPass& descriptors) {
             const VkDescriptorImageInfo gtao{gtaoPass.resultSampler(), gtaoPass.resultView(),
                                              VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
             for (std::uint32_t frame = 0; frame < MAX_FRAMES_IN_FLIGHT; ++frame)
                 descriptors.setGtaoTexture(frame, gtao);
+        }
+
+        void bindContactShadowFallback(ShadowPass& descriptors) {
+            const VkDescriptorImageInfo white{fallbackMaterialTexture.sampler(), fallbackMaterialTexture.imageView(),
+                                              VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
+            for (std::uint32_t frame = 0; frame < MAX_FRAMES_IN_FLIGHT; ++frame)
+                descriptors.setContactShadowTexture(frame, white);
         }
 
         void createShadowPass() {
@@ -431,6 +449,8 @@
                     materialTextureDescriptors, imageBasedLighting.descriptors(), sizeof(UniformBufferObject));
             }
             bindGtaoTexture(shadowPass);
+            bindContactShadowFallback(shadowPass);
+            createRtContactShadowPass();
         }
 
         void createSceneDescriptorPass() {

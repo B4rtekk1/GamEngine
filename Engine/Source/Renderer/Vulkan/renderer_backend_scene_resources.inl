@@ -586,12 +586,22 @@
                 if (growVertexHeap) {
                     vertexBuffer.createDeviceLocalEmpty(device,
                         sizeof(GpuVertex) * static_cast<VkDeviceSize>(growCapacity(vertexCount)),
-                        VK_BUFFER_USAGE_VERTEX_BUFFER_BIT, vulkanDevice.allocator());
+                        VK_BUFFER_USAGE_VERTEX_BUFFER_BIT |
+                        (vulkanDevice.supportsRayQuery()
+                            ? VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR |
+                              VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT
+                            : 0),
+                        vulkanDevice.allocator(), vulkanDevice.supportsRayQuery());
                 }
                 if (growIndexHeap) {
                     indexBuffer.createDeviceLocalEmpty(device,
                         sizeof(std::uint32_t) * static_cast<VkDeviceSize>(growCapacity(indexCount)),
-                        VK_BUFFER_USAGE_INDEX_BUFFER_BIT, vulkanDevice.allocator());
+                        VK_BUFFER_USAGE_INDEX_BUFFER_BIT |
+                        (vulkanDevice.supportsRayQuery()
+                            ? VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR |
+                              VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT
+                            : 0),
+                        vulkanDevice.allocator(), vulkanDevice.supportsRayQuery());
                 }
                 if (growVertexHeap || growIndexHeap) {
                     // A newly allocated heap has no contents from the old
@@ -1160,6 +1170,7 @@
                     vulkanDevice.graphicsQueue(), terrain.resolution, terrain.resolution, density,
                     TextureColorSpace::Linear, false, vulkanDevice.allocator(), TexturePixelFormat::R8);
             });
+            rayTracingBlasDirty = vulkanDevice.supportsRayQuery();
             [[maybe_unused]] const UploadTicket ticket = uploadBatch.submit();
         }
 

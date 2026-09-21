@@ -80,6 +80,11 @@ namespace Engine {
 
         [[nodiscard]] ShadowQuality shadowQuality() const noexcept;
 
+        void setContactShadowMode(ContactShadowMode mode) noexcept;
+        [[nodiscard]] ContactShadowMode contactShadowMode() const noexcept;
+        void setRtContactShadowSettings(const RtContactShadowSettings& settings) noexcept;
+        [[nodiscard]] const RtContactShadowSettings& rtContactShadowSettings() const noexcept;
+
         void applyRenderQualityPreset(RenderQualityPreset preset) noexcept;
 
         void setGtaoQuality(GtaoQuality quality) noexcept;
@@ -198,6 +203,7 @@ namespace Engine {
         RenderOptimizationFeatures optimizationFeatures_{};
         AntialiasingLevel antialiasingLevel_ = AntialiasingLevel::Off;
         ShadowQuality shadowQuality_ = ShadowQuality::High;
+        RtContactShadowSettings rtContactShadowSettings_{};
         GtaoQuality gtaoQuality_ = GtaoQuality::High;
         GtaoDebugView gtaoDebugView_ = GtaoDebugView::Off;
         PbrDebugView pbrDebugView_ = PbrDebugView::FinalLighting;

@@ -699,6 +699,20 @@ Engine::Entity drawEditorMenuBar(Engine::ScenePreset &scene, Engine::Renderer &r
             }
         }
         ImGui::Separator();
+        bool contactShadowsEnabled = renderer.contactShadowMode() == Engine::ContactShadowMode::RayTraced;
+        if (ImGui::MenuItem("Ray-Traced Contact Shadows", nullptr, &contactShadowsEnabled)) {
+            renderer.setContactShadowMode(contactShadowsEnabled
+                ? Engine::ContactShadowMode::RayTraced
+                : Engine::ContactShadowMode::Off);
+        }
+        if (contactShadowsEnabled) {
+            auto settings = renderer.rtContactShadowSettings();
+            bool settingsChanged = false;
+            settingsChanged |= ImGui::SliderFloat("Contact distance", &settings.maxDistance, 0.05F, 5.0F, "%.2f m");
+            settingsChanged |= ImGui::SliderFloat("Normal bias", &settings.normalBias, 0.0005F, 0.05F, "%.4f");
+            settingsChanged |= ImGui::SliderFloat("Resolution scale", &settings.resolutionScale, 0.25F, 1.0F, "%.2f");
+            if (settingsChanged) renderer.setRtContactShadowSettings(settings);
+        }
         ImGui::TextDisabled("Shadows apply next frame; GTAO resources are rebuilt safely.");
         endTopMenu();
     }

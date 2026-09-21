@@ -1001,6 +1001,13 @@
                                                              gtaoPass.debugView(gtaoDebugView),
                                                              VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
                 shadowPass.setGtaoTexture(currentFrame, gtaoDebugTexture);
+                if (vulkanDevice.supportsRayQuery() && !msaa.enabled() &&
+                    rtContactShadowSettings.mode == ContactShadowMode::RayTraced &&
+                    rtContactShadowPass.resultView() != VK_NULL_HANDLE) {
+                    shadowPass.setContactShadowTexture(currentFrame, {
+                        rtContactShadowPass.resultSampler(), rtContactShadowPass.resultView(),
+                        VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL});
+                }
                 shadowPass.setShadowInstanceTransforms(currentFrame,
                     shadowInstanceTransformBuffers[currentFrame].handle(), shadowInstanceMaterialBuffers[currentFrame].handle());
                 shadowPass.setShadowInstanceTransforms(currentFrame,
@@ -1374,6 +1381,44 @@
                             gtaoDepth.imageView(), gtaoDepth.sampler(),
                             msaa.enabled() ? gtaoDepth.imageView() : gtaoViewNormalBuffer.imageView(),
                             msaa.enabled() ? gtaoDepth.sampler() : gtaoViewNormalBuffer.sampler(), !msaa.enabled(), inverseProjection);
+
+            const bool rtContactRequested = vulkanDevice.supportsRayQuery() && !msaa.enabled() &&
+                rtContactShadowSettings.mode == ContactShadowMode::RayTraced;
+            if (rtContactRequested && rayTracingBlasDirty && vertexBuffer.hasDeviceAddress() && indexBuffer.hasDeviceAddress()) {
+                std::vector<AccelerationStructureManager::MeshBuildInput> meshes;
+                meshes.reserve(geometryHeapAllocations.size());
+                for (const auto& [key, allocation] : geometryHeapAllocations) {
+                    meshes.push_back({key,
+                        vertexBuffer.deviceAddress() + VkDeviceAddress(allocation.firstVertex) * sizeof(GpuVertex),
+                        indexBuffer.deviceAddress() + VkDeviceAddress(allocation.firstIndex) * sizeof(std::uint32_t),
+                        allocation.vertexCount, allocation.indexCount});
+                }
+                accelerationStructures.rebuildBlases(commandBuffer, meshes);
+                rayTracingBlasDirty = false;
+            }
+            if (rtContactRequested && !rayTracingBlasDirty) {
+                std::vector<AccelerationStructureManager::InstanceBuildInput> instances;
+                for (const InstanceBatch& batch : instanceBatches) {
+                    if (batch.twoSided || batch.mesh == nullptr) continue;
+                    for (std::uint32_t offset = 0; offset < batch.instanceCount; ++offset) {
+                        const RendererInstanceData& source = instanceModels[batch.firstInstance + offset];
+                        const glm::quat q{source.rotation.w, source.rotation.x, source.rotation.y, source.rotation.z};
+                        glm::mat4 model = glm::mat4_cast(q);
+                        model[0] *= source.scaleBase.x; model[1] *= source.scaleBase.y; model[2] *= source.scaleBase.z;
+                        model[3] = glm::vec4(source.positionMaterial.x, source.positionMaterial.y, source.positionMaterial.z, 1.0F);
+                        AccelerationStructureManager::InstanceBuildInput input{};
+                        input.meshKey = batch.mesh; input.mask = 0x01; input.customIndex = batch.firstInstance + offset;
+                        for (std::uint32_t row = 0; row < 3; ++row)
+                            for (std::uint32_t column = 0; column < 4; ++column)
+                                input.transform[row * 4 + column] = model[column][row];
+                        instances.push_back(input);
+                    }
+                }
+                accelerationStructures.updateTlas(commandBuffer, instances);
+                rtContactShadowPass.record(commandBuffer, currentFrame, accelerationStructures.tlas(),
+                    depthBuffer.imageView(), depthBuffer.sampler(), gtaoViewNormalBuffer.imageView(),
+                    gtaoViewNormalBuffer.sampler(), rtContactShadowSettings);
+            }
 
             gpuTimestampProfiler.beginZone(commandBuffer, currentFrame, forwardProfileName);
             gpuTimestampProfiler.beginZone(commandBuffer, currentFrame, shadowProjectionProfileName);

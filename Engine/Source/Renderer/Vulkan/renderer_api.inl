@@ -4,6 +4,7 @@ Renderer::~Renderer() { shutdown(); }
 Renderer::Renderer(RenderConfig config)
     : optimizationFeatures_(config.features), antialiasingLevel_(config.antialiasing),
       shadowQuality_(config.shadowQuality),
+      rtContactShadowSettings_(config.rtContactShadows),
       gtaoQuality_(config.gtaoQuality), gtaoDebugView_(config.gtaoDebugView), pbrDebugView_(config.pbrDebugView), iblQuality_(config.iblQuality),
       shadowDebugView_(config.shadowDebugView),
       grassSettings_(config.grass),
@@ -31,6 +32,22 @@ void Renderer::setShadowQuality(const ShadowQuality quality) noexcept {
 
 ShadowQuality Renderer::shadowQuality() const noexcept {
     return shadowQuality_;
+}
+
+void Renderer::setContactShadowMode(const ContactShadowMode mode) noexcept {
+    rtContactShadowSettings_.mode = mode;
+}
+
+ContactShadowMode Renderer::contactShadowMode() const noexcept {
+    return rtContactShadowSettings_.mode;
+}
+
+void Renderer::setRtContactShadowSettings(const RtContactShadowSettings& settings) noexcept {
+    rtContactShadowSettings_ = settings;
+}
+
+const RtContactShadowSettings& Renderer::rtContactShadowSettings() const noexcept {
+    return rtContactShadowSettings_;
 }
 
 void Renderer::applyRenderQualityPreset(const RenderQualityPreset preset) noexcept {
@@ -89,7 +106,7 @@ void Renderer::setEditorUiBackend(EditorUiBackend *backend) noexcept {
 void Renderer::initializeCore(Scene& scene, void* nativeWindow) {
     auto* window = static_cast<SDL_Window*>(nativeWindow);
     if (backend_) throw std::logic_error("Renderer is already initialized");
-    backend_ = std::make_unique<Backend>(scene, window, optimizationFeatures_, antialiasingLevel_, shadowQuality_, gtaoQuality_, gtaoDebugView_, pbrDebugView_, iblQuality_, shadowDebugView_, grassSettings_, state_->projectRoot,
+    backend_ = std::make_unique<Backend>(scene, window, optimizationFeatures_, antialiasingLevel_, shadowQuality_, rtContactShadowSettings_, gtaoQuality_, gtaoDebugView_, pbrDebugView_, iblQuality_, shadowDebugView_, grassSettings_, state_->projectRoot,
                                          state_->assetManager, state_->forwardPass, state_->skyPass,
                                          state_->tonemapPass, state_->temporalAaPass, state_->bloomPass, state_->gtaoPass,
                                          state_->particlePipeline,

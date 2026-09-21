@@ -20,6 +20,8 @@
 #include "Engine/Renderer/Vulkan/hdr_buffer.h"
 #include "Engine/Renderer/Passes/BloomPass.h"
 #include "Engine/Renderer/Passes/GtaoPass.h"
+#include "Engine/Renderer/Passes/RtContactShadowPass.h"
+#include "Engine/Renderer/RayTracing/AccelerationStructureManager.h"
 #include "Engine/Renderer/Vulkan/ViewportRenderTarget.h"
 #include "Engine/Renderer/ViewportCamera.h"
 #include "Engine/Renderer/shader_loader.h"
@@ -191,6 +193,7 @@ namespace Engine {
                          const RenderOptimizationFeatures &optimizationFeatures,
                          const AntialiasingLevel antialiasingLevel,
                          const ShadowQuality &shadowQuality,
+                         const RtContactShadowSettings &rtContactShadowSettings,
                          const GtaoQuality &gtaoQuality, const GtaoDebugView &gtaoDebugView,
                          const PbrDebugView &pbrDebugView,
                          const IblQuality &iblQuality,
@@ -220,7 +223,7 @@ namespace Engine {
               scene(scene),
               registry(scene.registry()),
               optimizationFeatures(optimizationFeatures),
-              antialiasingLevel(antialiasingLevel), shadowQuality(shadowQuality), gtaoQuality(gtaoQuality),
+              antialiasingLevel(antialiasingLevel), shadowQuality(shadowQuality), rtContactShadowSettings(rtContactShadowSettings), gtaoQuality(gtaoQuality),
               gtaoDebugView(gtaoDebugView), pbrDebugView(pbrDebugView), iblQuality(iblQuality),
               shadowDebugView(shadowDebugView),
               configuredGtaoQuality(gtaoQuality),

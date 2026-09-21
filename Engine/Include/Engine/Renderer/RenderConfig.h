@@ -28,6 +28,16 @@ namespace Engine {
 
     enum class GtaoQuality : std::uint8_t { Low, Medium, High, Ultra };
 
+    /** Optional short-range hardware ray queried visibility refinement. */
+    enum class ContactShadowMode : std::uint8_t { Off, RayTraced };
+
+    struct RtContactShadowSettings final {
+        ContactShadowMode mode = ContactShadowMode::Off;
+        float maxDistance = 1.0F;
+        float normalBias = 0.005F;
+        float resolutionScale = 1.0F;
+    };
+
     /** Coarse renderer profiles intended for quick editor/runtime switching. */
     enum class RenderQualityPreset : std::uint8_t { Low, Medium, High, Ultra };
 
@@ -143,6 +153,7 @@ namespace Engine {
         AntialiasingLevel antialiasing = AntialiasingLevel::TAA;
         GrassRenderSettings grass{};
         ShadowQuality shadowQuality = ShadowQuality::High;
+        RtContactShadowSettings rtContactShadows{};
         GtaoQuality gtaoQuality = GtaoQuality::High;
         GtaoDebugView gtaoDebugView = GtaoDebugView::Off;
         PbrDebugView pbrDebugView = PbrDebugView::FinalLighting;

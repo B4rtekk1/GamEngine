@@ -82,6 +82,7 @@ namespace Engine {
 
         /** Binds the full-resolution GTAO visibility texture for one safe frame slot. */
         void setGtaoTexture(std::uint32_t frameIndex, const VkDescriptorImageInfo& texture) const;
+        void setContactShadowTexture(std::uint32_t frameIndex, const VkDescriptorImageInfo& texture) const;
 
         void destroy() noexcept;
 

@@ -73,6 +73,9 @@
         HdrBuffer velocityBuffer;
         // Octahedrally encoded view-space normals written by the opaque depth prepass.
         HdrBuffer gtaoViewNormalBuffer;
+        RtContactShadowPass rtContactShadowPass;
+        AccelerationStructureManager accelerationStructures;
+        bool rayTracingBlasDirty{true};
         GpuTimestampProfiler gpuTimestampProfiler;
         // Retained across frames: reset() clears declarations, while the graph
         // keeps its compiled topology cache.
@@ -159,6 +162,7 @@
         const RenderOptimizationFeatures& optimizationFeatures;
         AntialiasingLevel antialiasingLevel;
         const ShadowQuality& shadowQuality;
+        const RtContactShadowSettings& rtContactShadowSettings;
         const GtaoQuality& gtaoQuality;
         GtaoQuality configuredGtaoQuality;
         const GtaoDebugView& gtaoDebugView;

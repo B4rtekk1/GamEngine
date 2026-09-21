@@ -24,6 +24,8 @@
                 lightingForwardPass.destroy();
                 waterPass.destroy();
                 gtaoPass.destroy();
+                rtContactShadowPass.destroy();
+                accelerationStructures.destroy();
                 shadowPass.destroy();
                 sceneDescriptorPass.destroy();
                 // Cubemap owns samplers, views, images and memory; the BRDF

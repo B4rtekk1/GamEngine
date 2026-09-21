@@ -84,6 +84,10 @@ namespace Engine {
         memoryBudgetExtensionSupported_ = false;
         meshShaderExtensionSupported_ = false;
         meshShaderSupported_ = false;
+        accelerationStructureExtensionSupported_ = false;
+        rayQueryExtensionSupported_ = false;
+        deferredHostOperationsExtensionSupported_ = false;
+        rayQuerySupported_ = false;
     }
 
     QueueFamilyIndices VulkanDevice::findQueueFamilies(VkPhysicalDevice candidate) const {
@@ -346,7 +350,21 @@ namespace Engine {
                                                             [](const VkExtensionProperties &extension) {
                                                                 return std::strcmp(extension.extensionName,
                                                                                    VK_EXT_MESH_SHADER_EXTENSION_NAME) == 0;
-                                                            });
+                                                           });
+        accelerationStructureExtensionSupported_ = std::ranges::any_of(extensions,
+            [](const VkExtensionProperties &extension) {
+                return std::strcmp(extension.extensionName,
+                    VK_KHR_ACCELERATION_STRUCTURE_EXTENSION_NAME) == 0;
+            });
+        rayQueryExtensionSupported_ = std::ranges::any_of(extensions,
+            [](const VkExtensionProperties &extension) {
+                return std::strcmp(extension.extensionName, VK_KHR_RAY_QUERY_EXTENSION_NAME) == 0;
+            });
+        deferredHostOperationsExtensionSupported_ = std::ranges::any_of(extensions,
+            [](const VkExtensionProperties &extension) {
+                return std::strcmp(extension.extensionName,
+                    VK_KHR_DEFERRED_HOST_OPERATIONS_EXTENSION_NAME) == 0;
+            });
         if (meshShaderExtensionSupported_) {
             VkPhysicalDeviceMeshShaderFeaturesEXT meshFeatures{
                 .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MESH_SHADER_FEATURES_EXT,
@@ -357,6 +375,26 @@ namespace Engine {
             };
             vkGetPhysicalDeviceFeatures2(physicalDevice_, &features);
             meshShaderSupported_ = meshFeatures.meshShader == VK_TRUE;
+        }
+        // Ray query is deliberately all-or-nothing: acceleration structures
+        // require deferred host operations, and enabling a partial extension
+        // set would make logical-device creation fail on otherwise valid GPUs.
+        if (accelerationStructureExtensionSupported_ && rayQueryExtensionSupported_ &&
+            deferredHostOperationsExtensionSupported_) {
+            VkPhysicalDeviceRayQueryFeaturesKHR rayQueryFeatures{
+                .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_RAY_QUERY_FEATURES_KHR,
+            };
+            VkPhysicalDeviceAccelerationStructureFeaturesKHR accelerationStructureFeatures{
+                .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ACCELERATION_STRUCTURE_FEATURES_KHR,
+                .pNext = &rayQueryFeatures,
+            };
+            VkPhysicalDeviceFeatures2 features{
+                .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2,
+                .pNext = &accelerationStructureFeatures,
+            };
+            vkGetPhysicalDeviceFeatures2(physicalDevice_, &features);
+            rayQuerySupported_ = accelerationStructureFeatures.accelerationStructure == VK_TRUE &&
+                rayQueryFeatures.rayQuery == VK_TRUE;
         }
         queueFamilies_ = findQueueFamilies(physicalDevice_);
         VkPhysicalDeviceDepthStencilResolveProperties depthResolveProperties{
@@ -444,21 +482,45 @@ namespace Engine {
             // Task shaders are useful for a later amplification stage, but mesh
             // shaders and compute-driven meshlet culling do not require them.
         }
-        if (meshShaderSupported_) { enabledMeshFeatures.pNext = &features2;
-}
+        VkPhysicalDeviceAccelerationStructureFeaturesKHR enabledAccelerationStructureFeatures{
+            .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ACCELERATION_STRUCTURE_FEATURES_KHR,
+        };
+        VkPhysicalDeviceRayQueryFeaturesKHR enabledRayQueryFeatures{
+            .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_RAY_QUERY_FEATURES_KHR,
+        };
+        if (rayQuerySupported_) {
+            enabledAccelerationStructureFeatures.accelerationStructure = VK_TRUE;
+            enabledRayQueryFeatures.rayQuery = VK_TRUE;
+        }
+
+        // Keep a single canonical feature chain.  Optional feature structs
+        // are linked only after their extension set and feature bits passed
+        // probing during physical-device selection.
+        void** nextFeature = &features13.pNext;
+        if (meshShaderSupported_) {
+            *nextFeature = &enabledMeshFeatures;
+            nextFeature = &enabledMeshFeatures.pNext;
+        }
+        if (rayQuerySupported_) {
+            *nextFeature = &enabledAccelerationStructureFeatures;
+            enabledAccelerationStructureFeatures.pNext = &enabledRayQueryFeatures;
+        }
         std::vector<const char *> enabledExtensions(kRequiredDeviceExtensions.begin(), kRequiredDeviceExtensions.end());
         if (memoryBudgetExtensionSupported_) { enabledExtensions.push_back(VK_EXT_MEMORY_BUDGET_EXTENSION_NAME);
 }
         if (meshShaderSupported_) { enabledExtensions.push_back(VK_EXT_MESH_SHADER_EXTENSION_NAME);
 }
+        if (rayQuerySupported_) {
+            enabledExtensions.push_back(VK_KHR_DEFERRED_HOST_OPERATIONS_EXTENSION_NAME);
+            enabledExtensions.push_back(VK_KHR_ACCELERATION_STRUCTURE_EXTENSION_NAME);
+            enabledExtensions.push_back(VK_KHR_RAY_QUERY_EXTENSION_NAME);
+        }
         VkDeviceCreateInfo createInfo{};
         createInfo.sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO;
         createInfo.queueCreateInfoCount =
                 static_cast<uint32_t>(queueCreateInfos.size());
         createInfo.pQueueCreateInfos = queueCreateInfos.data();
-        createInfo.pNext = meshShaderSupported_
-                               ? static_cast<void *>(&enabledMeshFeatures)
-                               : static_cast<void *>(&features2);
+        createInfo.pNext = &features2;
         createInfo.enabledExtensionCount =
                 static_cast<uint32_t>(enabledExtensions.size());
         createInfo.ppEnabledExtensionNames = enabledExtensions.data();

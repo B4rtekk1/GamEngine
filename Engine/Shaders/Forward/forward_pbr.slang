@@ -29,6 +29,7 @@ static const uint PBR_DEBUG_GEOMETRIC_DIRECT_DIFFUSE = 4u;
 // full resolution after a depth-aware upsample and therefore needs no final
 // HDR darkening pass.
 [[vk::binding(16, 0)]] Sampler2D gtaoVisibility;
+[[vk::binding(18, 0)]] Sampler2D rtContactVisibility;
 
 struct ForwardVertexInput
 {
@@ -493,8 +494,10 @@ ForwardFragmentOutput fragmentMain(ForwardFragmentInput input)
 #endif
         return debugOutput;
     }
+    float contactVisibility = rtContactVisibility.Sample(input.position.xy / frame.clusteredViewportNearFar.xy).r;
+    float finalVisibility = min(1.0 - shadow, contactVisibility);
     float3 direct = (diffuse + specular) * frame.lightDirectionIntensity.w *
-                    frame.lightColor.rgb * nDotL * (1.0 - shadow);
+                    frame.lightColor.rgb * nDotL * finalVisibility;
     const uint2 grid = uint2((uint(frame.clusteredViewportNearFar.x) + 63u) / 64u,
                              (uint(frame.clusteredViewportNearFar.y) + 63u) / 64u);
     const float nearPlane = frame.clusteredViewportNearFar.z;

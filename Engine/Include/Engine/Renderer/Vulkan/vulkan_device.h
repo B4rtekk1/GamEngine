@@ -108,6 +108,9 @@ namespace Engine {
         /** Whether the selected GPU exposes the optional VK_EXT_mesh_shader path. */
         [[nodiscard]] bool supportsMeshShaders() const noexcept { return meshShaderSupported_; }
 
+        /** Whether the selected GPU exposes the optional VK_KHR_ray_query path. */
+        [[nodiscard]] bool supportsRayQuery() const noexcept { return rayQuerySupported_; }
+
         [[nodiscard]] const MemoryBudgetManager& memoryBudgetManager() const noexcept {
             return memoryBudgetManager_;
         }
@@ -126,6 +129,10 @@ namespace Engine {
         bool memoryBudgetExtensionSupported_ = false;
         bool meshShaderExtensionSupported_ = false;
         bool meshShaderSupported_ = false;
+        bool accelerationStructureExtensionSupported_ = false;
+        bool rayQueryExtensionSupported_ = false;
+        bool deferredHostOperationsExtensionSupported_ = false;
+        bool rayQuerySupported_ = false;
         MemoryBudgetManager memoryBudgetManager_{};
 
         [[nodiscard]] QueueFamilyIndices findQueueFamilies(VkPhysicalDevice candidate) const;

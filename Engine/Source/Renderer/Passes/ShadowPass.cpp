@@ -114,7 +114,7 @@ namespace Engine {
             }
 
             // This is a compact list, not an array indexed by binding number.
-            VkDescriptorSetLayoutBinding bindings[18]{};
+            VkDescriptorSetLayoutBinding bindings[19]{};
             bindings[0] = {
                 0, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1,
                 VK_SHADER_STAGE_FRAGMENT_BIT, nullptr
@@ -191,6 +191,8 @@ namespace Engine {
                 17, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1,
                 VK_SHADER_STAGE_FRAGMENT_BIT, nullptr
             }; // linear VSM comparison
+            bindings[18] = {18, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1,
+                            VK_SHADER_STAGE_FRAGMENT_BIT, nullptr}; // RT contact visibility
             const VkDescriptorSetLayoutCreateInfo layoutInfo{
                 VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO, nullptr, 0,
                 static_cast<std::uint32_t>(std::size(bindings)), bindings
@@ -206,7 +208,7 @@ namespace Engine {
             const VkDescriptorPoolSize poolSizes[] = {
                 {
                     VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, frameCount * 6U *
-                                                               (MaxMaterialTextures + 9U +
+                                                               (MaxMaterialTextures + 10U +
                                                                 ReflectionProbeManager::TextureDescriptorCount)
                 },
                 {VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, frameCount * 6U},
@@ -599,6 +601,14 @@ namespace Engine {
         vkUpdateDescriptorSets(device_, 1, &write, 0, nullptr);
         gtaoDescriptorCache_[frameIndex] = texture;
         gtaoDescriptorCacheValid_[frameIndex] = true;
+    }
+
+    void ShadowPass::setContactShadowTexture(const std::uint32_t frameIndex,
+                                              const VkDescriptorImageInfo &texture) const {
+        const VkWriteDescriptorSet write{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr,
+            descriptorSets_.at(frameIndex), 18, 0, 1, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+            &texture, nullptr, nullptr};
+        vkUpdateDescriptorSets(device_, 1, &write, 0, nullptr);
     }
 
     void ShadowPass::setShadowInstanceTransforms(const std::uint32_t frameIndex,
