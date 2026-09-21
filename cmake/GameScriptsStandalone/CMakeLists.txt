@@ -2,6 +2,11 @@ cmake_minimum_required(VERSION 3.25)
 
 project(GamEngineGameScripts LANGUAGES CXX)
 
+if(MSVC)
+    set(CMAKE_MSVC_RUNTIME_LIBRARY
+        "MultiThreaded$<$<CONFIG:Debug>:Debug>DLL")
+endif()
+
 if(NOT DEFINED GE_PROJECT_ROOT)
     message(FATAL_ERROR "GE_PROJECT_ROOT is required")
 endif()

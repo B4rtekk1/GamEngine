@@ -12,7 +12,7 @@ set(PX_GENERATE_STATIC_LIBRARIES ON CACHE BOOL "Build PhysX static libraries" FO
 set(PX_BUILDSNIPPETS OFF CACHE BOOL "Build PhysX snippets" FORCE)
 set(PX_BUILDPVDRUNTIME OFF CACHE BOOL "Build PhysX PVD runtime" FORCE)
 if(MSVC)
-    set(NV_USE_STATIC_WINCRT ON CACHE BOOL "Use static Windows CRT in PhysX" FORCE)
+    set(NV_USE_STATIC_WINCRT OFF CACHE BOOL "Use static Windows CRT in PhysX" FORCE)
 endif()
 if(WIN32 AND CMAKE_SIZEOF_VOID_P EQUAL 8)
     set(PX_OUTPUT_ARCH "x64" CACHE INTERNAL "PhysX output architecture" FORCE)

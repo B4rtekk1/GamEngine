@@ -1,11 +1,21 @@
 option(GAMEENGINE_INSTALL_PORTABLE_EDITOR "Install a self-contained GamEngine Editor package" ON)
 
+if(MSVC)
+    set(CMAKE_INSTALL_SYSTEM_RUNTIME_LIBS_SKIP TRUE)
+    set(CMAKE_INSTALL_DEBUG_LIBRARIES OFF)
+    include(InstallRequiredSystemLibraries)
+endif()
+
 # This is deliberately separate from the Editor package.  A game export copies
 # this immutable template; it never recompiles Engine, Player or built-in shaders.
 if(TARGET Player)
     install(TARGETS Player Engine COMPONENT GamEngineRuntime RUNTIME DESTINATION . LIBRARY DESTINATION .)
     install(IMPORTED_RUNTIME_ARTIFACTS SDL3::SDL3-shared COMPONENT GamEngineRuntime
         RUNTIME DESTINATION . LIBRARY DESTINATION .)
+    if(MSVC)
+        install(PROGRAMS ${CMAKE_INSTALL_SYSTEM_RUNTIME_LIBS}
+            DESTINATION . COMPONENT GamEngineRuntime)
+    endif()
     install(DIRECTORY "${GAMEENGINE_SHADER_OUTPUT_DIR}/" DESTINATION shaders COMPONENT GamEngineRuntime)
     install(FILES "${PROJECT_SOURCE_DIR}/LICENSE" DESTINATION Licenses
         COMPONENT GamEngineRuntime RENAME LICENSE-GamEngine.txt)
@@ -23,6 +33,10 @@ if(GAMEENGINE_INSTALL_PORTABLE_EDITOR)
             RUNTIME DESTINATION Runtime/Win64/Release LIBRARY DESTINATION Runtime/Win64/Release)
         install(IMPORTED_RUNTIME_ARTIFACTS SDL3::SDL3-shared COMPONENT GamEngineEditor
             RUNTIME DESTINATION Runtime/Win64/Release LIBRARY DESTINATION Runtime/Win64/Release)
+        if(MSVC)
+            install(PROGRAMS ${CMAKE_INSTALL_SYSTEM_RUNTIME_LIBS}
+                DESTINATION Runtime/Win64/Release COMPONENT GamEngineEditor)
+        endif()
         install(DIRECTORY "${GAMEENGINE_SHADER_OUTPUT_DIR}/" DESTINATION Runtime/Win64/Release/shaders
             COMPONENT GamEngineEditor)
         install(FILES "${PROJECT_SOURCE_DIR}/LICENSE" DESTINATION Runtime/Win64/Release/Licenses
@@ -41,6 +55,10 @@ if(GAMEENGINE_INSTALL_PORTABLE_EDITOR)
     install(FILES "${PROJECT_SOURCE_DIR}/cmake/GameScriptsStandalone/CMakeLists.txt"
         DESTINATION SDK/GameScripts COMPONENT GamEngineEditor)
     install(IMPORTED_RUNTIME_ARTIFACTS SDL3::SDL3-shared COMPONENT GamEngineEditor RUNTIME DESTINATION . LIBRARY DESTINATION .)
+    if(MSVC)
+        install(PROGRAMS ${CMAKE_INSTALL_SYSTEM_RUNTIME_LIBS}
+            DESTINATION . COMPONENT GamEngineEditor)
+    endif()
     install(DIRECTORY "${GAMEENGINE_SHADER_OUTPUT_DIR}/" DESTINATION shaders COMPONENT GamEngineEditor)
     # Shader Graph authoring compiles a generated module that imports these
     # source files.  Cooked SPIR-V above is enough for Player, but not Editor.
