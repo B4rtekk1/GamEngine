@@ -967,12 +967,8 @@ int main(int argc, char** argv) {
                 viewportInteraction.cameraInput && !inspectorConsumesMouseWheel);
             // A Stop click changes `playing` after drawViewport() has produced
             // its interaction state.  Do not pass that stale state to the
-            // camera controller: it would interpret the same click as a
-            // request to capture the game mouse again.
+            // camera controller, so its relative-mouse mode is released now.
             renderer.setGameCameraInput(playing && viewportInteraction.gameCameraInput);
-            if (playing && viewportInteraction.gameMouseCaptureRequested) {
-                renderer.requestGameMouseCapture();
-            }
             renderer.setSceneViewportActive(showViewport && !showGameView && !playing);
 
             if (antialiasingChanged) {

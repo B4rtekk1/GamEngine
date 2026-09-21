@@ -1,6 +1,6 @@
 #pragma once
 
-#include "Engine/Renderer/Particles/ParticleSystem.h"
+#include "Engine/Renderer/Particles/ParticleTypes.h"
 
 namespace Engine {
     /** Marks an entity as a physically-aware smoke source. */

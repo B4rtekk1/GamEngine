@@ -42,15 +42,6 @@ namespace Engine {
             disableRelativeMouseMode(window);
             return;
         }
-        if (Input::keyPressed(KeyCode::Escape)) {
-            gameMouseCaptureEnabled_ = false;
-            disableRelativeMouseMode(window);
-        } else if (!gameMouseCaptureEnabled_ &&
-                   (gameMouseCaptureRequested_ || Input::mousePressed(MouseButton::Left))) {
-            gameMouseCaptureEnabled_ = true;
-        }
-        gameMouseCaptureRequested_ = false;
-
         CameraComponent *activeCamera = nullptr;
         Transform *activeTransform = nullptr;
         registry.view<CameraComponent, Transform>(
@@ -74,12 +65,10 @@ namespace Engine {
         camera_->setRotation(Degrees{transform.rotation.y()}, Degrees{transform.rotation.x()},
                              Degrees{transform.rotation.z()});
 
-        // Relative mode hides the system cursor and keeps mouse-look working
-        // when the pointer reaches a window edge. Escape releases it and a
-        // left click captures it again. RMB remains the fly-camera movement
-        // modifier, so gameplay scripts can still use WASD normally.
-        const bool mouseLook = gameMouseCaptureEnabled_;
+        // Relative mode is only active while navigating with RMB.  A normal
+        // left click must never hide the cursor or block the editor UI.
         const bool flyMode = Input::mouseDown(MouseButton::Right);
+        const bool mouseLook = flyMode;
         const bool moveFast = Input::keyDown(KeyCode::LeftShift) ||
                               Input::keyDown(KeyCode::RightShift);
         Vec3 movement{};

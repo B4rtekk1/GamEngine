@@ -313,10 +313,13 @@ namespace Engine {
                                         event.type == SDL_EVENT_MOUSE_BUTTON_DOWN ||
                                         event.type == SDL_EVENT_MOUSE_BUTTON_UP ||
                                         event.type == SDL_EVENT_MOUSE_WHEEL;
-                // While Play Mode owns the mouse, do not let the hidden cursor
-                // activate editor controls below it. Escape releases the capture
-                // and restores normal ImGui mouse input on the next frame.
-                if (editorUiActive && editorUiBackend && (!mouseEvent || !cameraController.gameMouseCaptured())) {
+                // While RMB navigation owns the mouse, do not let the hidden
+                // cursor activate editor controls below it.  The matching
+                // button-up event still reaches ImGui so it cannot retain a
+                // stuck right-button state after the cursor is released.
+                const bool mouseButtonReleased = event.type == SDL_EVENT_MOUSE_BUTTON_UP;
+                if (editorUiActive && editorUiBackend &&
+                    (!mouseEvent || !cameraController.gameMouseCaptured() || mouseButtonReleased)) {
                     editorUiBackend->processEvent(&event);
                 }
                 processEvent(event);
@@ -431,11 +434,15 @@ namespace Engine {
         }
 
         void setGameCameraInput(const bool active) {
+            const bool wasActive = cameraController.gameInputEnabled();
             cameraController.setGameInputEnabled(active);
-        }
-
-        void requestGameMouseCapture() {
-            cameraController.requestGameMouseCapture();
+            // Play Mode can skip its next render frame while restoring the
+            // editor scene.  Release the OS mouse grab here instead of
+            // waiting for that frame, otherwise Stop/F5 leaves the editor
+            // looking frozen with a hidden cursor.
+            if (wasActive && !active) {
+                cameraController.update(window, registry);
+            }
         }
 
         void setEditorSelection(const Entity entity) {

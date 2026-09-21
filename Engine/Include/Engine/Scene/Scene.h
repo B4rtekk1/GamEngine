@@ -3,7 +3,6 @@
 #include "Engine/ECS/GameObject.h"
 #include "Engine/ECS/Actor.h"
 #include "Engine/ECS/Registry.h"
-#include "Engine/Renderer/Particles/ParticleSystem.h"
 #include "Engine/ECS/Components/ParticleEmitterComponent.h"
 #include "Engine/ECS/Components/SmokeEmitterComponent.h"
 #include "Engine/UI/Canvas.h"

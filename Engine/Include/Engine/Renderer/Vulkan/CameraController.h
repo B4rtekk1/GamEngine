@@ -15,14 +15,10 @@ class CameraController final {
 public:
     void setEditorInputEnabled(bool enabled) noexcept { editorInputEnabled_ = enabled; }
     [[nodiscard]] bool editorInputEnabled() const noexcept { return editorInputEnabled_; }
-    void setGameInputEnabled(bool enabled) noexcept {
-        if (enabled && !gameInputEnabled_) gameMouseCaptureEnabled_ = true;
-        gameInputEnabled_ = enabled;
-    }
+    void setGameInputEnabled(bool enabled) noexcept { gameInputEnabled_ = enabled; }
     [[nodiscard]] bool gameInputEnabled() const noexcept { return gameInputEnabled_; }
-    void requestGameMouseCapture() noexcept { gameMouseCaptureRequested_ = true; }
     [[nodiscard]] bool gameMouseCaptured() const noexcept {
-        return gameInputEnabled_ && gameMouseCaptureEnabled_;
+        return gameInputEnabled_ && mouseLookActive_;
     }
     void update(SDL_Window* window, Registry& registry);
     void updateEditor(SDL_Window* window);
@@ -44,9 +40,7 @@ private:
     std::optional<Camera> camera_;
     bool mouseLookActive_{false};
     bool editorInputEnabled_{false};
-    bool gameInputEnabled_{true};
-    bool gameMouseCaptureEnabled_{true};
-    bool gameMouseCaptureRequested_{false};
+    bool gameInputEnabled_{false};
     Vec3 editorPosition_{8.0F, 6.0F, 8.0F};
     float editorYaw_{-135.0F};
     float editorPitch_{-28.0F};

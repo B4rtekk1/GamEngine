@@ -1,6 +1,6 @@
 #pragma once
 
-#include "Engine/Renderer/Particles/ParticleSystem.h"
+#include "Engine/Renderer/Particles/ParticleTypes.h"
 
 namespace Engine {
     /** ECS data that makes a particle emitter part of the scene hierarchy. */
