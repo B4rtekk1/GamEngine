@@ -108,6 +108,17 @@ void RtContactShadowPass::record(const VkCommandBuffer cmd, const std::uint32_t 
     dependency.imageMemoryBarrierCount = 1;
     dependency.pImageMemoryBarriers = &toStorage;
     vkCmdPipelineBarrier2(cmd, &dependency);
+    // The TLAS was built earlier in this command buffer.  RayQuery reads it
+    // from the compute shader, so make the build writes visible first.
+    VkMemoryBarrier2 asBarrier{VK_STRUCTURE_TYPE_MEMORY_BARRIER_2};
+    asBarrier.srcStageMask = VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR;
+    asBarrier.srcAccessMask = VK_ACCESS_2_ACCELERATION_STRUCTURE_WRITE_BIT_KHR;
+    asBarrier.dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+    asBarrier.dstAccessMask = VK_ACCESS_2_ACCELERATION_STRUCTURE_READ_BIT_KHR;
+    VkDependencyInfo asDependency{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
+    asDependency.memoryBarrierCount = 1;
+    asDependency.pMemoryBarriers = &asBarrier;
+    vkCmdPipelineBarrier2(cmd, &asDependency);
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, pipeline_);
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, pipelineLayout_, 0, 1, &sets_[frame], 0, nullptr);
     const float constants[] = {settings.maxDistance, settings.normalBias};

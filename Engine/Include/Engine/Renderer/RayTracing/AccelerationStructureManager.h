@@ -37,14 +37,15 @@ namespace Engine {
         AccelerationStructureManager(const AccelerationStructureManager&) = delete;
         AccelerationStructureManager& operator=(const AccelerationStructureManager&) = delete;
 
-        void create(VkDevice device, VmaAllocator allocator);
+        void create(VkPhysicalDevice physicalDevice, VkDevice device, VmaAllocator allocator);
         void destroy() noexcept;
         /** Recreates cached BLASes. Call after heap reallocation or mesh edits. */
         void rebuildBlases(VkCommandBuffer commandBuffer, std::span<const MeshBuildInput> meshes);
         /** Builds/refits the TLAS from current transforms; BLAS geometry is untouched. */
-        void updateTlas(VkCommandBuffer commandBuffer, std::span<const InstanceBuildInput> instances);
-        [[nodiscard]] VkAccelerationStructureKHR tlas() const noexcept { return tlas_.handle; }
-        [[nodiscard]] bool ready() const noexcept { return tlas_.handle != VK_NULL_HANDLE; }
+        void updateTlas(VkCommandBuffer commandBuffer, std::uint32_t frameIndex,
+                        std::span<const InstanceBuildInput> instances);
+        [[nodiscard]] VkAccelerationStructureKHR tlas(std::uint32_t frameIndex) const noexcept;
+        [[nodiscard]] bool ready(std::uint32_t frameIndex) const noexcept;
 
     private:
         struct Structure final {
@@ -64,10 +65,17 @@ namespace Engine {
         PFN_vkCmdBuildAccelerationStructuresKHR cmdBuild_{};
         PFN_vkGetAccelerationStructureDeviceAddressKHR getAddress_{};
         std::unordered_map<const void*, Structure> blases_;
-        Structure tlas_;
-        Buffer tlasInstances_;
-        Buffer scratch_;
-        std::uint32_t tlasCapacity_{};
-        bool tlasBuilt_{};
+        static constexpr std::uint32_t FramesInFlight = 2;
+        struct FrameResources final {
+            Structure tlas;
+            Buffer instances;
+            Buffer scratch;
+            VkDeviceSize tlasAllocatedSize{};
+            std::uint32_t instanceCapacity{};
+            bool tlasBuilt{};
+        };
+        Buffer blasScratch_;
+        std::array<FrameResources, FramesInFlight> frames_{};
+        VkDeviceSize scratchAlignment_{1};
     };
 } // namespace Engine

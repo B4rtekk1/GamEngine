@@ -20,6 +20,7 @@
 #include <cstdint>
 #include <ranges>
 #include <optional>
+#include <mutex>
 #include <stdexcept>
 #include <type_traits>
 #include <unordered_map>
@@ -346,6 +347,36 @@ namespace Engine {
         };
     } // namespace
 
+    struct PhysXContext final {
+        physx::PxDefaultAllocator allocator;
+        physx::PxDefaultErrorCallback errorCallback;
+        physx::PxFoundation *foundation{};
+        physx::PxPhysics *physics{};
+
+        PhysXContext() {
+            foundation = PxCreateFoundation(PhysXVersion, allocator, errorCallback);
+            if (foundation == nullptr) throw std::runtime_error("PxCreateFoundation failed");
+            physx::PxTolerancesScale scale;
+            scale.length = 1.0F; scale.speed = 9.81F;
+            physics = PxCreatePhysics(PhysXVersion, *foundation, scale, true, nullptr);
+            if (physics == nullptr) { foundation->release(); foundation = nullptr; throw std::runtime_error("PxCreatePhysics failed"); }
+            if (!PxInitExtensions(*physics, nullptr)) { physics->release(); foundation->release(); physics = nullptr; foundation = nullptr; throw std::runtime_error("PxInitExtensions failed"); }
+        }
+        ~PhysXContext() {
+            if (physics != nullptr) { PxCloseExtensions(); physics->release(); }
+            if (foundation != nullptr) foundation->release();
+        }
+    };
+
+    [[nodiscard]] std::shared_ptr<PhysXContext> processPhysXContext() {
+        static std::mutex mutex;
+        static std::weak_ptr<PhysXContext> context;
+        std::scoped_lock lock{mutex};
+        auto shared = context.lock();
+        if (!shared) { shared = std::make_shared<PhysXContext>(); context = shared; }
+        return shared;
+    }
+
     struct PhysicsSystem::BroadPhaseCache final {
         struct ActorRecord final {
             physx::PxRigidActor *actor{};
@@ -379,10 +410,7 @@ namespace Engine {
             }
         };
 
-        physx::PxDefaultAllocator allocator;
-        physx::PxDefaultErrorCallback errorCallback;
-        physx::PxFoundation *foundation{};
-        physx::PxPhysics *physics{};
+        std::shared_ptr<PhysXContext> context;
         physx::PxCookingParams cookingParameters{physx::PxTolerancesScale{}};
         std::unique_ptr<PhysicsDispatcher> dispatcher;
         physx::PxScene *physicsScene{};
@@ -396,21 +424,10 @@ namespace Engine {
 
         BroadPhaseCache() {
             using namespace physx;
-            foundation = PxCreateFoundation(PhysXVersion, allocator, errorCallback);
-            if (foundation == nullptr) {
-                fail("PxCreateFoundation failed");
-            }
-
             PxTolerancesScale scale;
             scale.length = 1.0F;
             scale.speed = 9.81F; // NOLINT g=9.81
-            physics = PxCreatePhysics(PhysXVersion, *foundation, scale, true, nullptr);
-            if (physics == nullptr) {
-                fail("PxCreatePhysics failed");
-            }
-            if (!PxInitExtensions(*physics, nullptr)) {
-                fail("PxInitExtensions failed");
-            }
+            context = processPhysXContext();
 
             cookingParameters = PxCookingParams{scale};
             cookingParameters.meshPreprocessParams |= PxMeshPreprocessingFlag::eWELD_VERTICES;
@@ -423,7 +440,7 @@ namespace Engine {
             sceneDescription.cpuDispatcher = dispatcher.get();
             sceneDescription.filterShader = PxDefaultSimulationFilterShader;
             sceneDescription.flags |= PxSceneFlag::eENABLE_ACTIVE_ACTORS;
-            physicsScene = physics->createScene(sceneDescription);
+            physicsScene = context->physics->createScene(sceneDescription);
             if (physicsScene == nullptr) {
                 fail("PxPhysics::createScene failed");
             }
@@ -448,15 +465,7 @@ namespace Engine {
                 physicsScene = nullptr;
             }
             dispatcher.reset();
-            if (physics != nullptr) {
-                PxCloseExtensions();
-                physics->release();
-                physics = nullptr;
-            }
-            if (foundation != nullptr) {
-                foundation->release();
-                foundation = nullptr;
-            }
+            context.reset();
         }
 
         void releaseActors() noexcept {
@@ -522,7 +531,7 @@ namespace Engine {
                 return nullptr;
             }
             physx::PxDefaultMemoryInputData input{output.getData(), output.getSize()};
-            return physics->createConvexMesh(input);
+            return context->physics->createConvexMesh(input);
         }
 
         physx::PxTriangleMesh *cookTriangleMesh(const Mesh &mesh, const Vec3 &scale) const {
@@ -552,7 +561,7 @@ namespace Engine {
                 return nullptr;
             }
             physx::PxDefaultMemoryInputData input{output.getData(), output.getSize()};
-            return physics->createTriangleMesh(input);
+            return context->physics->createTriangleMesh(input);
         }
 
         physx::PxConvexMesh *cachedConvexMesh(const Mesh &mesh, const Vec3 &scale) {
@@ -621,7 +630,7 @@ namespace Engine {
         bool attachCollider(physx::PxRigidActor &actor, const ColliderComponent &collider,
                             const Transform &transform, const bool dynamic) {
             using namespace physx;
-            PxMaterial *material = physics->createMaterial(
+            PxMaterial *material = context->physics->createMaterial(
                 std::max(collider.friction, 0.0F), std::max(collider.friction, 0.0F),
                 std::clamp(collider.restitution, 0.0F, 1.0F));
             if (material == nullptr) {
@@ -759,8 +768,8 @@ namespace Engine {
             }
 
             PxRigidActor *actor = dynamic
-                                      ? static_cast<PxRigidActor *>(physics->createRigidDynamic(toPhysX(transform)))
-                                      : static_cast<PxRigidActor *>(physics->createRigidStatic(toPhysX(transform)));
+                                      ? static_cast<PxRigidActor *>(context->physics->createRigidDynamic(toPhysX(transform)))
+                                      : static_cast<PxRigidActor *>(context->physics->createRigidStatic(toPhysX(transform)));
             if (actor == nullptr) {
                 throw std::runtime_error("PhysX rigid actor creation failed");
             }

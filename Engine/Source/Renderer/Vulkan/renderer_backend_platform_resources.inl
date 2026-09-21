@@ -14,7 +14,7 @@
             createSurface();
             vulkanDevice.create(instance, surface);
             device = vulkanDevice.logical();
-            if (vulkanDevice.supportsRayQuery()) accelerationStructures.create(device, vulkanDevice.allocator());
+            if (vulkanDevice.supportsRayQuery()) accelerationStructures.create(vulkanDevice.physical(), device, vulkanDevice.allocator());
             gpuTimestampProfiler.create(vulkanDevice.physical(), device);
             waitForDrawableExtent();
             createSwapChain();

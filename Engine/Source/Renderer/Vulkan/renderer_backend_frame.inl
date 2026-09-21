@@ -1414,8 +1414,8 @@
                         instances.push_back(input);
                     }
                 }
-                accelerationStructures.updateTlas(commandBuffer, instances);
-                rtContactShadowPass.record(commandBuffer, currentFrame, accelerationStructures.tlas(),
+                accelerationStructures.updateTlas(commandBuffer, currentFrame, instances);
+                rtContactShadowPass.record(commandBuffer, currentFrame, accelerationStructures.tlas(currentFrame),
                     depthBuffer.imageView(), depthBuffer.sampler(), gtaoViewNormalBuffer.imageView(),
                     gtaoViewNormalBuffer.sampler(), rtContactShadowSettings);
             }
