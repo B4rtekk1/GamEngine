@@ -483,6 +483,8 @@
             static const ProfileNameId taaProfileName = Profiler::registerName("TAA");
             static const ProfileNameId bloomProfileName = Profiler::registerName("Bloom");
             static const ProfileNameId tonemapProfileName = Profiler::registerName("Tonemap");
+            static const ProfileNameId rtTlasProfileName = Profiler::registerName("RT TLAS");
+            static const ProfileNameId rtContactProfileName = Profiler::registerName("RT Contact Shadows");
             const bool renderSceneViewport = editorUiActive && sceneViewportRendered;
             // Scene View replaces the embedded Game View in the editor.  Do
             // not submit hidden Game View work: this also makes the shared
@@ -1395,29 +1397,48 @@
                 }
                 accelerationStructures.rebuildBlases(commandBuffer, meshes);
                 rayTracingBlasDirty = false;
+                rtTlasInputDirty = true;
             }
             if (rtContactRequested && !rayTracingBlasDirty) {
-                std::vector<AccelerationStructureManager::InstanceBuildInput> instances;
-                for (const InstanceBatch& batch : instanceBatches) {
-                    if (batch.twoSided || batch.mesh == nullptr) continue;
-                    for (std::uint32_t offset = 0; offset < batch.instanceCount; ++offset) {
-                        const RendererInstanceData& source = instanceModels[batch.firstInstance + offset];
-                        const glm::quat q{source.rotation.w, source.rotation.x, source.rotation.y, source.rotation.z};
-                        glm::mat4 model = glm::mat4_cast(q);
-                        model[0] *= source.scaleBase.x; model[1] *= source.scaleBase.y; model[2] *= source.scaleBase.z;
-                        model[3] = glm::vec4(source.positionMaterial.x, source.positionMaterial.y, source.positionMaterial.z, 1.0F);
-                        AccelerationStructureManager::InstanceBuildInput input{};
-                        input.meshKey = batch.mesh; input.mask = 0x01; input.customIndex = batch.firstInstance + offset;
-                        for (std::uint32_t row = 0; row < 3; ++row)
-                            for (std::uint32_t column = 0; column < 4; ++column)
-                                input.transform[row * 4 + column] = model[column][row];
-                        instances.push_back(input);
+                const std::uint64_t transformRevision = registry.componentRevision<Transform>();
+                const std::uint64_t topologyRevision = registry.renderTopologyRevision();
+                const bool inputChanged = rtTlasInputDirty ||
+                    transformRevision != lastRtTlasTransformRevision ||
+                    topologyRevision != lastRtTlasTopologyRevision;
+                if (inputChanged) {
+                    rtTlasInstances.clear();
+                    for (const InstanceBatch& batch : instanceBatches) {
+                        if (batch.twoSided || batch.mesh == nullptr) continue;
+                        for (std::uint32_t offset = 0; offset < batch.instanceCount; ++offset) {
+                            const RendererInstanceData& source = instanceModels[batch.firstInstance + offset];
+                            const glm::quat q{source.rotation.w, source.rotation.x, source.rotation.y, source.rotation.z};
+                            glm::mat4 model = glm::mat4_cast(q);
+                            model[0] *= source.scaleBase.x; model[1] *= source.scaleBase.y; model[2] *= source.scaleBase.z;
+                            model[3] = glm::vec4(source.positionMaterial.x, source.positionMaterial.y, source.positionMaterial.z, 1.0F);
+                            AccelerationStructureManager::InstanceBuildInput input{};
+                            input.meshKey = batch.mesh; input.mask = 0x01; input.customIndex = batch.firstInstance + offset;
+                            for (std::uint32_t row = 0; row < 3; ++row)
+                                for (std::uint32_t column = 0; column < 4; ++column)
+                                    input.transform[row * 4 + column] = model[column][row];
+                            rtTlasInstances.push_back(input);
+                        }
                     }
+                    lastRtTlasTransformRevision = transformRevision;
+                    lastRtTlasTopologyRevision = topologyRevision;
+                    rtTlasInputDirty = false;
                 }
-                accelerationStructures.updateTlas(commandBuffer, currentFrame, instances);
-                rtContactShadowPass.record(commandBuffer, currentFrame, accelerationStructures.tlas(currentFrame),
-                    depthBuffer.imageView(), depthBuffer.sampler(), gtaoViewNormalBuffer.imageView(),
-                    gtaoViewNormalBuffer.sampler(), rtContactShadowSettings);
+                if (inputChanged || !accelerationStructures.built(currentFrame)) {
+                    gpuTimestampProfiler.beginZone(commandBuffer, currentFrame, rtTlasProfileName);
+                    accelerationStructures.updateTlas(commandBuffer, currentFrame, rtTlasInstances);
+                    gpuTimestampProfiler.endZone(commandBuffer, currentFrame);
+                }
+                if (accelerationStructures.built(currentFrame)) {
+                    gpuTimestampProfiler.beginZone(commandBuffer, currentFrame, rtContactProfileName);
+                    rtContactShadowPass.record(commandBuffer, currentFrame, accelerationStructures.tlas(currentFrame),
+                        depthBuffer.imageView(), depthBuffer.sampler(), gtaoViewNormalBuffer.imageView(),
+                        gtaoViewNormalBuffer.sampler(), rtContactShadowSettings);
+                    gpuTimestampProfiler.endZone(commandBuffer, currentFrame);
+                }
             }
 
             gpuTimestampProfiler.beginZone(commandBuffer, currentFrame, forwardProfileName);
@@ -2656,6 +2677,9 @@
             if (mainLight.enabled && mainLight.castShadows && optimizationFeatures.shadows && hasShadowCasters) {
                 updateShadowCullingUniformBuffer(currentFrame);
             }
+            // Apply a Resolution scale edit before descriptor updates and
+            // command recording; this is a no-op unless its target extent changed.
+            createRtContactShadowPass();
             {
                 GE_PROFILE_SCOPE("Command Recording");
                 recordCommandBuffer(commandBuffers[currentFrame], SwapchainImageIndex{imageIndex});

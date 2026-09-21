@@ -46,6 +46,8 @@ namespace Engine {
                         std::span<const InstanceBuildInput> instances);
         [[nodiscard]] VkAccelerationStructureKHR tlas(std::uint32_t frameIndex) const noexcept;
         [[nodiscard]] bool ready(std::uint32_t frameIndex) const noexcept;
+        /** True only after this frame slot has received a successful build. */
+        [[nodiscard]] bool built(std::uint32_t frameIndex) const noexcept;
 
     private:
         struct Structure final {

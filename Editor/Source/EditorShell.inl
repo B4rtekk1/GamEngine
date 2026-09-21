@@ -708,7 +708,7 @@ Engine::Entity drawEditorMenuBar(Engine::ScenePreset &scene, Engine::Renderer &r
         if (contactShadowsEnabled) {
             auto settings = renderer.rtContactShadowSettings();
             bool settingsChanged = false;
-            settingsChanged |= ImGui::SliderFloat("Contact distance", &settings.maxDistance, 0.05F, 5.0F, "%.2f m");
+            settingsChanged |= ImGui::SliderFloat("Contact distance", &settings.maxDistance, 0.05F, 2.0F, "%.2f m");
             settingsChanged |= ImGui::SliderFloat("Normal bias", &settings.normalBias, 0.0005F, 0.05F, "%.4f");
             settingsChanged |= ImGui::SliderFloat("Resolution scale", &settings.resolutionScale, 0.25F, 1.0F, "%.2f");
             if (settingsChanged) renderer.setRtContactShadowSettings(settings);

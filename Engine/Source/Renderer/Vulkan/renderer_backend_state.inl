@@ -76,6 +76,12 @@
         RtContactShadowPass rtContactShadowPass;
         AccelerationStructureManager accelerationStructures;
         bool rayTracingBlasDirty{true};
+        // TLAS input is reconstructed only when ECS render state changes. Each
+        // frame slot still receives its initial build before being reused.
+        std::uint64_t lastRtTlasTransformRevision{};
+        std::uint64_t lastRtTlasTopologyRevision{};
+        bool rtTlasInputDirty{true};
+        std::vector<AccelerationStructureManager::InstanceBuildInput> rtTlasInstances;
         GpuTimestampProfiler gpuTimestampProfiler;
         // Retained across frames: reset() clears declarations, while the graph
         // keeps its compiled topology cache.

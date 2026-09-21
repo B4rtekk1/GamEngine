@@ -33,9 +33,9 @@ namespace Engine {
 
     struct RtContactShadowSettings final {
         ContactShadowMode mode = ContactShadowMode::Off;
-        float maxDistance = 1.0F;
+        float maxDistance = 0.5F;
         float normalBias = 0.005F;
-        float resolutionScale = 1.0F;
+        float resolutionScale = 0.5F;
     };
 
     /** Coarse renderer profiles intended for quick editor/runtime switching. */

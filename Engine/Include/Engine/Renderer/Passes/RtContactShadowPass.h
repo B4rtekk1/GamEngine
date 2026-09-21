@@ -27,6 +27,7 @@ public:
                 const RtContactShadowSettings& settings);
     [[nodiscard]] VkImageView resultView() const noexcept { return visibility_.imageView(); }
     [[nodiscard]] VkSampler resultSampler() const noexcept { return visibility_.sampler(); }
+    [[nodiscard]] VkExtent2D extent() const noexcept { return extent_; }
 
 private:
     VkDevice device_{VK_NULL_HANDLE};

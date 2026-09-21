@@ -21,7 +21,10 @@ void RtContactShadowPass::create(const VkPhysicalDevice physical, const VkDevice
     device_ = device;
     extent_ = extent;
     try {
-        visibility_.create(physical, device_, extent_, allocator, VK_FILTER_NEAREST, VK_FORMAT_R16_SFLOAT, true);
+        // The forward pass samples this low-resolution mask at full-resolution.
+        // Linear filtering is the inexpensive base upsample; edge-aware
+        // reconstruction can be layered on top without changing this pass.
+        visibility_.create(physical, device_, extent_, allocator, VK_FILTER_LINEAR, VK_FORMAT_R16_SFLOAT, true);
         const std::array<VkDescriptorSetLayoutBinding, 5> bindings{{
             {0, VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
             {1, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},

@@ -10,6 +10,7 @@
 #include <SDL3/SDL_vulkan.h>
 #include <vulkan/vulkan.h>
 
+#include <algorithm>
 #include <glm/glm.hpp>
 #include <glm/gtc/packing.hpp>
 #define GLM_ENABLE_EXPERIMENTAL

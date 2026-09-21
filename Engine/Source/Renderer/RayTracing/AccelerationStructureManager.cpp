@@ -63,8 +63,11 @@ void AccelerationStructureManager::rebuildBlases(VkCommandBuffer cmd, std::span<
         VkAccelerationStructureBuildRangeInfoKHR r{.primitiveCount = p.primitives}; const VkAccelerationStructureBuildRangeInfoKHR* rs[] = {&r}; cmdBuild_(cmd, 1, &b, rs); buildBarrier(cmd, VK_ACCESS_2_ACCELERATION_STRUCTURE_READ_BIT_KHR | VK_ACCESS_2_ACCELERATION_STRUCTURE_WRITE_BIT_KHR); }
 }
 void AccelerationStructureManager::updateTlas(VkCommandBuffer cmd, uint32_t index, std::span<const InstanceBuildInput> instances) {
-    if (!device_ || !cmd || instances.empty()) return; auto& f = frames_.at(index % FramesInFlight); std::vector<VkAccelerationStructureInstanceKHR> records; records.reserve(instances.size());
-    for (const auto& i : instances) { const auto address = meshAddress(i.meshKey); if (!address) continue; VkAccelerationStructureInstanceKHR r{}; std::memcpy(r.transform.matrix, i.transform.data(), sizeof(r.transform.matrix)); r.instanceCustomIndex = i.customIndex; r.mask = i.mask; r.flags = VK_GEOMETRY_INSTANCE_TRIANGLE_FACING_CULL_DISABLE_BIT_KHR | VK_GEOMETRY_INSTANCE_FORCE_OPAQUE_BIT_KHR; r.accelerationStructureReference = address; records.push_back(r); } if (records.empty()) return;
+    if (!device_ || !cmd) return;
+    auto& f = frames_.at(index % FramesInFlight);
+    if (instances.empty()) { f.tlasBuilt = false; return; }
+    std::vector<VkAccelerationStructureInstanceKHR> records; records.reserve(instances.size());
+    for (const auto& i : instances) { const auto address = meshAddress(i.meshKey); if (!address) continue; VkAccelerationStructureInstanceKHR r{}; std::memcpy(r.transform.matrix, i.transform.data(), sizeof(r.transform.matrix)); r.instanceCustomIndex = i.customIndex; r.mask = i.mask; r.flags = VK_GEOMETRY_INSTANCE_TRIANGLE_FACING_CULL_DISABLE_BIT_KHR | VK_GEOMETRY_INSTANCE_FORCE_OPAQUE_BIT_KHR; r.accelerationStructureReference = address; records.push_back(r); } if (records.empty()) { f.tlasBuilt = false; return; }
     const VkDeviceSize bytes = sizeof(VkAccelerationStructureInstanceKHR) * records.size(); if (f.instances.size() < bytes) { f.instances.destroy(); f.instances.createHostVisible(VK_NULL_HANDLE, device_, bytes, Input, allocator_, true); f.instanceCapacity = static_cast<uint32_t>(records.size()); f.tlasBuilt = false; } f.instances.update(records.data(), bytes);
     VkAccelerationStructureGeometryInstancesDataKHR data{VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_INSTANCES_DATA_KHR}; data.data.deviceAddress = f.instances.deviceAddress(); VkAccelerationStructureGeometryKHR g{VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_KHR}; g.geometryType = VK_GEOMETRY_TYPE_INSTANCES_KHR; g.geometry.instances = data; uint32_t count = static_cast<uint32_t>(records.size());
     VkAccelerationStructureBuildGeometryInfoKHR b{VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_GEOMETRY_INFO_KHR}; b.type = VK_ACCELERATION_STRUCTURE_TYPE_TOP_LEVEL_KHR; b.flags = VK_BUILD_ACCELERATION_STRUCTURE_PREFER_FAST_TRACE_BIT_KHR | VK_BUILD_ACCELERATION_STRUCTURE_ALLOW_UPDATE_BIT_KHR; b.mode = f.tlasBuilt && count <= f.instanceCapacity ? VK_BUILD_ACCELERATION_STRUCTURE_MODE_UPDATE_KHR : VK_BUILD_ACCELERATION_STRUCTURE_MODE_BUILD_KHR; b.geometryCount = 1; b.pGeometries = &g; VkAccelerationStructureBuildSizesInfoKHR z{VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_SIZES_INFO_KHR}; getBuildSizes_(device_, VK_ACCELERATION_STRUCTURE_BUILD_TYPE_DEVICE_KHR, &b, &count, &z);
@@ -74,4 +77,7 @@ void AccelerationStructureManager::updateTlas(VkCommandBuffer cmd, uint32_t inde
 }
 VkAccelerationStructureKHR AccelerationStructureManager::tlas(uint32_t index) const noexcept { return frames_[index % FramesInFlight].tlas.handle; }
 bool AccelerationStructureManager::ready(uint32_t index) const noexcept { return tlas(index) != VK_NULL_HANDLE; }
+bool AccelerationStructureManager::built(uint32_t index) const noexcept {
+    return frames_[index % FramesInFlight].tlasBuilt;
+}
 } // namespace Engine

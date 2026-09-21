@@ -365,12 +365,25 @@
         }
 
         void createRtContactShadowPass() {
-            if (!vulkanDevice.supportsRayQuery() || msaa.enabled() ||
-                rtContactShadowPass.resultView() != VK_NULL_HANDLE) return;
+            if (!vulkanDevice.supportsRayQuery() || msaa.enabled()) return;
+            const float scale = std::clamp(rtContactShadowSettings.resolutionScale, 0.25F, 1.0F);
+            const VkExtent2D fullExtent = swapchain.extent();
+            const VkExtent2D targetExtent{
+                std::max(1u, static_cast<std::uint32_t>(float(fullExtent.width) * scale)),
+                std::max(1u, static_cast<std::uint32_t>(float(fullExtent.height) * scale))};
+            if (rtContactShadowPass.resultView() != VK_NULL_HANDLE &&
+                rtContactShadowPass.extent().width == targetExtent.width &&
+                rtContactShadowPass.extent().height == targetExtent.height) return;
+            // A resolution change replaces descriptors/images shared by both
+            // in-flight slots. This happens only after a UI setting change or
+            // resize, so retire all old users before destroying them.
+            if (rtContactShadowPass.resultView() != VK_NULL_HANDLE &&
+                vkDeviceWaitIdle(device) != VK_SUCCESS)
+                throw std::runtime_error("Could not idle device to resize RT contact shadows");
             std::array<VkBuffer, MAX_FRAMES_IN_FLIGHT> buffers{};
             for (std::uint32_t frame = 0; frame < MAX_FRAMES_IN_FLIGHT; ++frame)
                 buffers[frame] = uniformBuffers[frame].handle();
-            rtContactShadowPass.create(vulkanDevice.physical(), device, swapchain.extent(),
+            rtContactShadowPass.create(vulkanDevice.physical(), device, targetExtent,
                                        vulkanDevice.allocator(), assetManager, buffers);
         }
 

@@ -22,14 +22,20 @@ void main(uint3 id : SV_DispatchThreadID) {
     uint width, height; contactVisibility.GetDimensions(width, height);
     if (id.x >= width || id.y >= height) return;
     int2 pixel = int2(id.xy);
-    float depth = depthTexture.Load(int3(pixel, 0)).x;
+    uint sourceWidth, sourceHeight; depthTexture.GetDimensions(sourceWidth, sourceHeight);
+    // The visibility target can be smaller than the depth/normal targets.
+    // Address the centre of the corresponding full-resolution footprint.
+    int2 sourcePixel = min(int2((float2(id.xy) + 0.5) * float2(sourceWidth, sourceHeight) /
+                                float2(width, height)), int2(sourceWidth, sourceHeight) - 1);
+    float depth = depthTexture.Load(int3(sourcePixel, 0)).x;
     if (depth >= 0.999999) { contactVisibility[pixel] = 1.0; return; }
     float2 uv = (float2(id.xy) + 0.5) / float2(width, height);
     float4 viewPosition = mul(float4(uv * 2.0 - 1.0, depth, 1.0), frame.inverseProjection);
     viewPosition /= viewPosition.w;
     float3 worldPosition = mul(viewPosition, frame.inverseView).xyz;
-    float3 viewNormal = decodeOct(viewNormalTexture.Load(int3(pixel, 0)).xy);
+    float3 viewNormal = decodeOct(viewNormalTexture.Load(int3(sourcePixel, 0)).xy);
     float3 worldNormal = normalize(mul(float4(viewNormal, 0.0), frame.inverseView).xyz);
+    if (frame.lightDirectionIntensity.w <= 0.0001) { contactVisibility[pixel] = 1.0; return; }
     float3 lightDirection = normalize(-frame.lightDirectionIntensity.xyz);
     if (dot(worldNormal, lightDirection) <= 0.0) { contactVisibility[pixel] = 1.0; return; }
     RayDesc ray;
