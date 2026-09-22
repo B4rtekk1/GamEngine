@@ -19,6 +19,8 @@ enum class TexturePixelFormat:uint8_t {
     R8,
     /** Two 16-bit floating-point channels, for data textures such as a BRDF LUT. */
     RG16F,
+    /** A single unsigned 16-bit channel, for integer lookup textures. */
+    R16_UINT,
 };
 
 // Owns a sampled image uploaded to device-local memory and ready for sampling.

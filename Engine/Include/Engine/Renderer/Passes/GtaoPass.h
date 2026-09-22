@@ -3,6 +3,7 @@
 #include "Engine/Math/Mat4.h"
 #include "Engine/Renderer/Vulkan/hdr_buffer.h"
 #include "Engine/Renderer/RenderConfig.h"
+#include "Engine/Renderer/Textures/Texture2D.h"
 
 #include <array>
 #include <vulkan/vulkan.h>
@@ -23,7 +24,8 @@ public:
     GtaoPass(const GtaoPass&) = delete;
     GtaoPass& operator=(const GtaoPass&) = delete;
 
-    void create(VkPhysicalDevice physicalDevice, VkDevice device, VkExtent2D fullExtent,
+    void create(VkPhysicalDevice physicalDevice, VkDevice device, VkCommandPool commandPool, VkQueue queue,
+                VkExtent2D fullExtent,
                 VmaAllocator allocator, Assets::AssetManager& assets,
                 GtaoQualitySettings quality = gtaoQualitySettings(GtaoQuality::High));
     void destroy() noexcept;
@@ -80,6 +82,7 @@ private:
     HdrBuffer auxiliary_;
     HdrBuffer filtered_;
     HdrBuffer full_;
+    Texture2D hilbertLut_;
     // A dedicated R32F view-depth hierarchy.  It intentionally is not Hi-Z:
     // GTAO consumes filtered view depths, while culling consumes extrema.
     VkImage linearDepthImage_ = VK_NULL_HANDLE;

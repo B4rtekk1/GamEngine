@@ -360,7 +360,7 @@
         }
 
         void createGtaoPass() {
-            gtaoPass.create(vulkanDevice.physical(), device, swapchain.extent(),
+            gtaoPass.create(vulkanDevice.physical(), device, commandPool, vulkanDevice.graphicsQueue(), swapchain.extent(),
                             vulkanDevice.allocator(), assetManager, gtaoQualitySettings(gtaoQuality));
         }
 

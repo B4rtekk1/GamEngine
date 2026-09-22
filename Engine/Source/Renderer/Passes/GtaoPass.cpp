@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <array>
+#include <span>
 #include <glm/glm.hpp>
 #include <stdexcept>
 #include <vector>
@@ -45,6 +46,25 @@ namespace Engine {
                 AuxiliaryFormat = VK_FORMAT_R8_UNORM;
         constexpr float XeGtaoEffectFalloffRange = 0.615F;
 
+        std::uint16_t hilbertIndex(std::uint32_t x, std::uint32_t y) {
+            x &= 63U;
+            y &= 63U;
+            std::uint32_t index = 0;
+            for (std::uint32_t scale = 32; scale > 0; scale >>= 1U) {
+                const std::uint32_t rx = (x & scale) != 0 ? 1U : 0U;
+                const std::uint32_t ry = (y & scale) != 0 ? 1U : 0U;
+                index += scale * scale * ((3U * rx) ^ ry);
+                if (ry == 0) {
+                    if (rx != 0) {
+                        x = (scale * 2U - 1U) - x;
+                        y = (scale * 2U - 1U) - y;
+                    }
+                    std::swap(x, y);
+                }
+            }
+            return static_cast<std::uint16_t>(index);
+        }
+
         void barrier(VkCommandBuffer cmd, VkImage image, VkImageLayout oldLayout, VkImageLayout newLayout,
                      VkPipelineStageFlags2 srcStage, VkAccessFlags2 srcAccess, VkPipelineStageFlags2 dstStage,
                      VkAccessFlags2 dstAccess, uint32_t baseMip = 0, uint32_t levels = 1) {
@@ -83,7 +103,8 @@ namespace Engine {
         destroy();
     }
 
-    void GtaoPass::create(VkPhysicalDevice physical, VkDevice device, VkExtent2D fullExtent, VmaAllocator allocator,
+    void GtaoPass::create(VkPhysicalDevice physical, VkDevice device, VkCommandPool commandPool, VkQueue queue,
+                          VkExtent2D fullExtent, VmaAllocator allocator,
                           Assets::AssetManager &assets, const GtaoQualitySettings quality) {
         if (!device || !fullExtent.width || !fullExtent.height)
             throw std::invalid_argument("GTAO requires a valid extent");
@@ -106,6 +127,15 @@ namespace Engine {
             filtered_.create(physical, device_, halfExtent_, allocator, VK_FILTER_NEAREST, AoFormat, true);
             if (!nativeResolution_)
                 full_.create(physical, device_, fullExtent_, allocator, VK_FILTER_LINEAR, AoFormat, true);
+            std::array<std::uint16_t, 64 * 64> hilbertValues{};
+            for (std::uint32_t y = 0; y < 64; ++y)
+                for (std::uint32_t x = 0; x < 64; ++x)
+                    hilbertValues[y * 64 + x] = hilbertIndex(x, y);
+            hilbertLut_.create(
+                physical, device_, commandPool, queue, 64, 64,
+                std::span<const std::uint8_t>{reinterpret_cast<const std::uint8_t *>(hilbertValues.data()),
+                                              hilbertValues.size() * sizeof(std::uint16_t)},
+                TextureColorSpace::Linear, false, allocator, TexturePixelFormat::R16_UINT);
             linearDepthMipCount_ = 1;
             for (auto d = std::max(fullExtent.width, fullExtent.height); d > 1; d >>= 1)
                 ++linearDepthMipCount_;
@@ -192,7 +222,7 @@ namespace Engine {
             lai.pSetLayouts = ls.data();
             if (vkAllocateDescriptorSets(device_, &lai, depthSets_.data()) != VK_SUCCESS)
                 throw std::runtime_error("Could not allocate GTAO depth sets");
-            const std::array<uint32_t, 3> inputCount{3, 2, 3}, outputCount{3, 1, 1},
+            const std::array<uint32_t, 3> inputCount{4, 2, 3}, outputCount{3, 1, 1},
                     pushSize{sizeof(MainSettings), sizeof(DenoiseSettings), sizeof(UpsampleSettings)};
             const std::array<const char *, 3> shader{
                 "shaders/gtao_main.spv", "shaders/gtao_denoise.spv",
@@ -202,7 +232,9 @@ namespace Engine {
                 std::vector<VkDescriptorSetLayoutBinding> b;
                 for (uint32_t i = 0; i < inputCount[p]; ++i)
                     b.push_back({
-                        i, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr
+                        i, p == 0 && i == 3 ? VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE
+                                            : VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+                        1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr
                     });
                 for (uint32_t i = 0; i < outputCount[p]; ++i)
                     b.push_back(
@@ -222,12 +254,14 @@ namespace Engine {
                     throw std::runtime_error("Could not create GTAO compute pipeline layout");
                 computePipelines_[p] = makeCompute(device_, assets, shader[p], computePipelineLayouts_[p]);
             }
-            std::array<VkDescriptorPoolSize, 2> cs{
-                {{VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 24}, {VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 15}}
+            std::array<VkDescriptorPoolSize, 3> cs{
+                {{VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 23},
+                 {VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, FramesInFlight},
+                 {VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 15}}
             };
             VkDescriptorPoolCreateInfo cp{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
             cp.maxSets = 9;
-            cp.poolSizeCount = 2;
+            cp.poolSizeCount = 3;
             cp.pPoolSizes = cs.data();
             if (vkCreateDescriptorPool(device_, &cp, nullptr, &computeDescriptorPool_) != VK_SUCCESS)
                 throw std::runtime_error("Could not create GTAO compute pool");
@@ -330,7 +364,10 @@ namespace Engine {
             for (uint32_t b = 0; b < infos.size(); ++b)
                 w.push_back({
                     VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr, computeSets_[p][frame], b, 0, 1,
-                    b < in.size() ? VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER : VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,
+                    b < in.size()
+                        ? (p == 0 && b == 3 ? VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE
+                                            : VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER)
+                        : VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,
                     &infos[b], nullptr, nullptr
                 });
             const auto same = [](const VkDescriptorImageInfo &a, const VkDescriptorImageInfo &b) {
@@ -358,7 +395,8 @@ namespace Engine {
         update(0, {
                    {linearDepthSampler_, linearDepthView_, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL},
                    {viewNormalSampler, viewNormal, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL},
-                   {linearDepthSampler_, linearDepthView_, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL}
+                   {linearDepthSampler_, linearDepthView_, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL},
+                   {VK_NULL_HANDLE, hilbertLut_.imageView(), VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL}
                },
                {raw_.imageView(), auxiliary_.imageView(), baseDepth_.imageView()});
         MainSettings main{{1.f / inverse[0][0], 1.f / inverse[1][1]}, 1.f, 1.f, sampleIndex, 0.f};
@@ -453,6 +491,7 @@ namespace Engine {
         auxiliary_.destroy();
         filtered_.destroy();
         full_.destroy();
+        hilbertLut_.destroy();
         computeLayouts_.fill({});
         computePipelineLayouts_.fill({});
         computePipelines_.fill({});

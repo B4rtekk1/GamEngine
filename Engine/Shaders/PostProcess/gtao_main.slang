@@ -6,9 +6,10 @@
 // Mip 0 stays separate from horizonDepth so the half-resolution guide can
 // represent the nearest surface in its native-resolution footprint.
 [[vk::binding(2,0)]] Sampler2D guideDepth;
-[[vk::binding(3,0)]] RWTexture2D<float> rawAo;
-[[vk::binding(4,0)]] RWTexture2D<float> guide;
-[[vk::binding(5,0)]] RWTexture2D<float> baseDepth;
+[[vk::binding(3,0)]] Texture2D<uint> hilbertLut;
+[[vk::binding(4,0)]] RWTexture2D<float> rawAo;
+[[vk::binding(5,0)]] RWTexture2D<float> guide;
+[[vk::binding(6,0)]] RWTexture2D<float> baseDepth;
 struct Settings { float2 projectionScale; float radiusView, falloff; uint frameIndex; float padding; uint directions, stepsPerDirection, sourceMip, maxSampleMip; };
 [[vk::push_constant]] ConstantBuffer<Settings> settings;
 groupshared float depthTile[16][16];
@@ -16,21 +17,9 @@ static const float BackgroundDepth=65500.0;
 static const float Pi=3.14159265359;
 float3 positionFromDepth(int2 pixel,float depth,uint2 size){float2 uv=(float2(pixel)+.5)/size;return float3((uv*2-1)/settings.projectionScale,-1)*depth;}
 float3 safeNormalize(float3 value){return value*rsqrt(max(dot(value,value),1e-12));}
-// XeGTAO uses a deliberately small 64x64 Hilbert pattern.  Keeping the index
-// below 4096 preserves every spatial bit when it is converted to float for
-// the R2 sequence; a full-screen Hilbert index loses low bits in FP32.
-uint hilbertIndex(uint2 pixel){
- uint x=pixel.x&63u,y=pixel.y&63u,index=0;
- for(uint scale=32;scale>0;scale>>=1){
-  uint rx=(x&scale)!=0?1:0,ry=(y&scale)!=0?1:0;
-  index+=scale*scale*((3*rx)^ry);
-  if(ry==0){if(rx!=0){x=(scale*2-1)-x;y=(scale*2-1)-y;}uint swap=x;x=y;y=swap;}
- }
- return index;
-}
 float2 lowDiscrepancyNoise(uint2 pixel,uint frame){
  const float2 r2=float2(0.754877666,0.569840296);
- uint index=hilbertIndex(pixel)+288u*(frame%64u);
+ uint index=hilbertLut.Load(int3(int2(pixel & 63u),0))+288u*(frame%64u);
  return frac(float(index)*r2+.5);
 }
 // XeGTAO's slope-adjusted continuity test.  It rejects the neighbour on the

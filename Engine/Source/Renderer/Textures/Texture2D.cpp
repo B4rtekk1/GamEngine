@@ -230,7 +230,9 @@ namespace Engine {
         if (width == 0 || height == 0) {
             throw std::invalid_argument("Texture2D dimensions cannot be zero");
         }
-        const std::size_t bytesPerPixel = pixelFormat == TexturePixelFormat::R8 ? 1u : 4u;
+        const std::size_t bytesPerPixel = pixelFormat == TexturePixelFormat::R8
+                                              ? 1u
+                                              : (pixelFormat == TexturePixelFormat::R16_UINT ? 2u : 4u);
         if (width > std::numeric_limits<std::size_t>::max() / bytesPerPixel / height) {
             throw std::invalid_argument("Texture2D dimensions are too large");
         }
@@ -242,11 +244,13 @@ namespace Engine {
 
         const VkFormat format = pixelFormat == TexturePixelFormat::R8
                                     ? VK_FORMAT_R8_UNORM
-                                    : (pixelFormat == TexturePixelFormat::RG16F
-                                           ? VK_FORMAT_R16G16_SFLOAT
-                                           : (colorSpace == TextureColorSpace::SRGB
-                                                  ? VK_FORMAT_R8G8B8A8_SRGB
-                                                  : VK_FORMAT_R8G8B8A8_UNORM));
+                                    : (pixelFormat == TexturePixelFormat::R16_UINT
+                                           ? VK_FORMAT_R16_UINT
+                                           : (pixelFormat == TexturePixelFormat::RG16F
+                                                  ? VK_FORMAT_R16G16_SFLOAT
+                                                  : (colorSpace == TextureColorSpace::SRGB
+                                                         ? VK_FORMAT_R8G8B8A8_SRGB
+                                                         : VK_FORMAT_R8G8B8A8_UNORM)));
         const std::uint32_t mipLevels = generateMipmaps
                                             ? std::bit_width(std::max(width, height))
                                             : 1u;
