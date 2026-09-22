@@ -9,7 +9,7 @@ struct Settings { float blurAmount; };
 // Four 2-bit, XeGTAO-compatible edge-continuity values packed by gtao_main:
 // left, right, top, bottom.
 float4 unpackEdges(float payload){uint packed=uint(payload*255.5);return saturate(float4((packed>>6)&3,(packed>>4)&3,(packed>>2)&3,packed&3)/3.0);}
-float4 edgesAt(int2 p,int2 size){return unpackEdges(inputGuide.Load(int3(clamp(p,int2(0,0),size-1),0)).z);}
+float4 edgesAt(int2 p,int2 size){return unpackEdges(inputGuide.Load(int3(clamp(p,int2(0,0),size-1),0)).r);}
 void addSample(float value,float weight,inout float sum,inout float weightSum){sum+=weight*value;weightSum+=weight;}
 float aoAt(int2 p,int2 size){return inputAo.Load(int3(clamp(p,int2(0,0),size-1),0)).r;}
 [numthreads(8,8,1)] [shader("compute")]

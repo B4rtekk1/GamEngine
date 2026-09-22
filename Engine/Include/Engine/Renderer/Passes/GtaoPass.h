@@ -75,8 +75,8 @@ private:
     // Nearest-surface depth at the AO resolution.  It is distinct from the
     // far-biased hierarchy, which is used only by horizon sampling.
     HdrBuffer baseDepth_;
-    // Oct-normal and a discontinuity mask guide the 5x5 denoiser; its depth
-    // is the representative half-resolution baseDepth_ above.
+    // The discontinuity mask guides the denoiser; its depth is the
+    // representative half-resolution baseDepth_ above.
     HdrBuffer auxiliary_;
     HdrBuffer filtered_;
     HdrBuffer full_;

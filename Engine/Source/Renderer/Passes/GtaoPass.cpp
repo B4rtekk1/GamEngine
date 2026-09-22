@@ -42,7 +42,8 @@ namespace Engine {
         };
 
         constexpr VkFormat AoFormat = VK_FORMAT_R16_SFLOAT, BaseDepthFormat = VK_FORMAT_R32_SFLOAT,
-                AuxiliaryFormat = VK_FORMAT_R16G16B16A16_SFLOAT;
+                AuxiliaryFormat = VK_FORMAT_R8_UNORM;
+        constexpr float XeGtaoEffectFalloffRange = 0.615F;
 
         void barrier(VkCommandBuffer cmd, VkImage image, VkImageLayout oldLayout, VkImageLayout newLayout,
                      VkPipelineStageFlags2 srcStage, VkAccessFlags2 srcAccess, VkPipelineStageFlags2 dstStage,
@@ -293,7 +294,9 @@ namespace Engine {
         vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, depthPipeline_);
         auto set = depthSets_[frame];
         vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, depthPipelineLayout_, 0, 1, &set, 0, nullptr);
-        const DepthPrefilterSettings pc{inverseProjection.native(), 1.F, 1.F, linearDepthMipCount_};
+        const DepthPrefilterSettings pc{
+            inverseProjection.native(), 1.F, XeGtaoEffectFalloffRange, linearDepthMipCount_
+        };
         vkCmdPushConstants(cmd, depthPipelineLayout_, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(pc), &pc);
         vkCmdDispatch(cmd, (fullExtent_.width + 15) / 16, (fullExtent_.height + 15) / 16, 1);
         barrier(cmd, linearDepthImage_, VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,

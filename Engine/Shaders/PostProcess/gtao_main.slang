@@ -7,7 +7,7 @@
 // represent the nearest surface in its native-resolution footprint.
 [[vk::binding(2,0)]] Sampler2D guideDepth;
 [[vk::binding(3,0)]] RWTexture2D<float> rawAo;
-[[vk::binding(4,0)]] RWTexture2D<float4> guide;
+[[vk::binding(4,0)]] RWTexture2D<float> guide;
 [[vk::binding(5,0)]] RWTexture2D<float> baseDepth;
 struct Settings { float2 projectionScale; float radiusView, falloff; uint frameIndex; float padding; uint directions, stepsPerDirection, sourceMip, maxSampleMip; };
 [[vk::push_constant]] ConstantBuffer<Settings> settings;
@@ -90,7 +90,7 @@ void main(uint3 groupId:SV_GroupID,uint3 threadId:SV_GroupThreadID,uint3 id:SV_D
  // rebuilding it here would make AO depend on workgroup boundaries.
  for(uint y=threadId.y;y<16;y+=8) for(uint x=threadId.x;x<16;x+=8){int2 q=clamp(base+int2(x,y),int2(0,0),size-1);float2 uv=(float2(q)+.5)/float2(size);depthTile[y][x]=horizonDepth.SampleLevel(uv,float(settings.sourceMip)).r;}
  GroupMemoryBarrierWithGroupSync(); if(any(id.xy>=uint2(w,h)))return;
- int2 local=int2(threadId.xy)+4,p=int2(id.xy);float depth=depthTile[local.y][local.x];baseDepth[p]=nearestGuideDepth(p,uint2(w,h));if(depth>=BackgroundDepth){rawAo[p]=1;guide[p]=float4(0,1,1,1);return;}
+ int2 local=int2(threadId.xy)+4,p=int2(id.xy);float depth=depthTile[local.y][local.x];if(settings.sourceMip!=0)baseDepth[p]=nearestGuideDepth(p,uint2(w,h));if(depth>=BackgroundDepth){rawAo[p]=1;guide[p]=1;return;}
  // Keep edge detection on the original depth, but move the AO center a tiny
  // amount toward the camera to prevent FP32 depth quantization self-occlusion.
  float centerDepth=depth*.99999;float3 center=positionFromDepth(p,centerDepth,uint2(w,h));float left=depthTile[local.y][local.x-1],right=depthTile[local.y][local.x+1],top=depthTile[local.y-1][local.x],bottom=depthTile[local.y+1][local.x];float3 normal=settings.padding>0.5?loadViewNormal(p,uint2(w,h)):reconstructNormal(p,depth,left,right,top,bottom,uint2(w,h));
@@ -175,5 +175,5 @@ void main(uint3 groupId:SV_GroupID,uint3 threadId:SV_GroupThreadID,uint3 id:SV_D
  float4 localEdges=depthEdges(depth,left,right,top,bottom);
  float4 packedEdges=round(saturate(localEdges)*2.9);
  float edgePayload=dot(packedEdges,float4(64.0/255.0,16.0/255.0,4.0/255.0,1.0/255.0));
- rawAo[p]=pow(saturate(visibility/float(directions)),2.2);guide[p]=float4(encodeOct(normal),edgePayload,0);
+ rawAo[p]=pow(saturate(visibility/float(directions)),2.2);guide[p]=edgePayload;
 }
