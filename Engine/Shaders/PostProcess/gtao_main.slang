@@ -119,39 +119,38 @@ void main(uint3 groupId:SV_GroupID,uint3 threadId:SV_GroupThreadID,uint3 id:SV_D
   float3 projectedNormal=normal-bitangent*dot(normal,bitangent);float normalLength=length(projectedNormal);if(normalLength<1e-4)continue;
   projectedNormal/=normalLength;float normalCos=saturate(dot(projectedNormal,viewDir));float normalAngle=sign(dot(tangent,projectedNormal))*acos(normalCos);
   float lowHorizon[2]={cos(normalAngle+Pi*.5),cos(normalAngle-Pi*.5)};float horizonCos[2]={lowHorizon[0],lowHorizon[1]};
-  // Issue two independent depth reads before consuming either result.  The
-  // texture fetch latency is then overlapped with the second fetch instead of
-  // leaving the warp stalled at the first sample's background test.  Keeping
-  // this at two limits the extra live state to two depths and two positions.
-  for(uint side=0;side<2;++side)for(uint firstStep=0;firstStep<steps;firstStep+=2){
-   float samples[2]={BackgroundDepth,BackgroundDepth};int2 samplePixels[2]={p,p};
-   [unroll]for(uint lane=0;lane<2;++lane){
-    uint step=firstStep+lane;if(step>=steps)continue;
-    float stepNoise=frac(localNoise.y+float(d+step*steps)*.61803398875);
-    float x=(float(step)+stepNoise)/float(steps);
-    float t=x*x+minSampleDistance;
-    float2 floatOffset=ray*radiusPixels*(side==0?1.0:-1.0)*t;
-    float offsetLength2=dot(floatOffset,floatOffset);
-    // The sampler uses nearest-mip filtering.  Quantize before the sample so
-    // its LOD input matches both the shared-tile decision and the actual
-    // discrete mip selected by the hardware.
-    float sampleMip=.5*log2(max(offsetLength2,1.0))-3.30;
-    uint selectedMip=uint(round(float(settings.sourceMip)+min(max(sampleMip,0.0),float(settings.maxSampleMip))));
-    int2 offset=int2(round(floatOffset));if(!any(offset))continue;
-    int2 samplePixel=clamp(p+offset,int2(0,0),size-1),tilePixel=local+offset;
-    bool canUseShared=selectedMip==settings.sourceMip&&all(tilePixel>=int2(0,0))&&all(tilePixel<int2(16,16));
-    samplePixels[lane]=samplePixel;
-    samples[lane]=canUseShared?depthTile[tilePixel.y][tilePixel.x]:horizonDepth.SampleLevel((float2(samplePixel)+.5)/float2(size),float(selectedMip)).r;
+  // Both sides share the same jitter, radius, rounded offset and selected mip.
+  // Compute those once, then issue the symmetric pair of depth reads.
+  for(uint step=0;step<steps;++step){
+   float stepNoise=frac(localNoise.y+float(d+step*steps)*.61803398875);
+   float x=(float(step)+stepNoise)/float(steps);
+   float t=x*x+minSampleDistance;
+   float2 floatOffset=ray*radiusPixels*t;
+   float offsetLength2=dot(floatOffset,floatOffset);
+   // The sampler uses nearest-mip filtering. These squared-offset thresholds
+   // are the rounded integer mip boundaries for the -3.30 bias above.
+   uint relativeMip=uint(offsetLength2>=194.012)+uint(offsetLength2>=776.047)
+                   +uint(offsetLength2>=3104.19)+uint(offsetLength2>=12416.75);
+   relativeMip=min(relativeMip,settings.maxSampleMip);
+   uint selectedMip=settings.sourceMip+relativeMip;
+   int2 offset=int2(round(floatOffset));if(!any(offset))continue;
+   int2 pixel0=clamp(p+offset,int2(0,0),size-1),pixel1=clamp(p-offset,int2(0,0),size-1);
+   int2 tilePixel0=local+offset,tilePixel1=local-offset;
+   bool shared0=selectedMip==settings.sourceMip&&all(tilePixel0>=int2(0,0))&&all(tilePixel0<int2(16,16));
+   bool shared1=selectedMip==settings.sourceMip&&all(tilePixel1>=int2(0,0))&&all(tilePixel1<int2(16,16));
+   float depth0=shared0?depthTile[tilePixel0.y][tilePixel0.x]:horizonDepth.SampleLevel((float2(pixel0)+.5)/float2(size),float(selectedMip)).r;
+   float depth1=shared1?depthTile[tilePixel1.y][tilePixel1.x]:horizonDepth.SampleLevel((float2(pixel1)+.5)/float2(size),float(selectedMip)).r;
+   if(depth0<BackgroundDepth){
+    float3 v=positionFromDepth(pixel0,depth0,uint2(w,h))-center;float dist2=dot(v,v);
+    if(dist2>=1e-6){float invDistance=rsqrt(dist2);float sampleDistance=dist2*invDistance;
+     float sampleHorizonCos=dot(v,viewDir)*invDistance;float weight=saturate(sampleDistance*falloffMul+falloffAdd);
+     sampleHorizonCos=lerp(lowHorizon[0],sampleHorizonCos,weight);horizonCos[0]=max(horizonCos[0],sampleHorizonCos);}
    }
-   [unroll]for(uint lane=0;lane<2;++lane){
-    float sample=samples[lane];if(sample>=BackgroundDepth)continue;
-    float3 v=positionFromDepth(samplePixels[lane],sample,uint2(w,h))-center;float dist2=dot(v,v);if(dist2<1e-6)continue;
-    float invDistance=rsqrt(dist2);
-    float sampleDistance=dist2*invDistance;
-    float sampleHorizonCos=dot(v,viewDir)*invDistance;
-    float weight=saturate(sampleDistance*falloffMul+falloffAdd);
-    sampleHorizonCos=lerp(lowHorizon[side],sampleHorizonCos,weight);
-    horizonCos[side]=max(horizonCos[side],sampleHorizonCos);
+   if(depth1<BackgroundDepth){
+    float3 v=positionFromDepth(pixel1,depth1,uint2(w,h))-center;float dist2=dot(v,v);
+    if(dist2>=1e-6){float invDistance=rsqrt(dist2);float sampleDistance=dist2*invDistance;
+     float sampleHorizonCos=dot(v,viewDir)*invDistance;float weight=saturate(sampleDistance*falloffMul+falloffAdd);
+     sampleHorizonCos=lerp(lowHorizon[1],sampleHorizonCos,weight);horizonCos[1]=max(horizonCos[1],sampleHorizonCos);}
    }
   }
   // XeGTAO keeps these horizon angles unclamped.  The projected-normal
