@@ -108,7 +108,7 @@ void main(uint3 groupId:SV_GroupID,uint3 threadId:SV_GroupThreadID,uint3 id:SV_D
   // Jitter slices and radial locations independently.  The squared
   // distribution places more samples where near-field occluders matter most.
   float angle=(float(d)+localNoise.x)*(Pi/float(directions));
-  float cosPhi=cos(angle),sinPhi=sin(angle);
+  float sinPhi,cosPhi;sincos(angle,sinPhi,cosPhi);
   // Vulkan pixel coordinates grow downward, whereas view-space Y grows up.
   float2 ray=float2(cosPhi,-sinPhi);
   // radiusPixels already converts the view-space radius into pixels; applying
@@ -146,8 +146,9 @@ void main(uint3 groupId:SV_GroupID,uint3 threadId:SV_GroupThreadID,uint3 id:SV_D
    [unroll]for(uint lane=0;lane<2;++lane){
     float sample=samples[lane];if(sample>=BackgroundDepth)continue;
     float3 v=positionFromDepth(samplePixels[lane],sample,uint2(w,h))-center;float dist2=dot(v,v);if(dist2<1e-6)continue;
-    float sampleDistance=sqrt(dist2);
-    float sampleHorizonCos=dot(v/sampleDistance,viewDir);
+    float invDistance=rsqrt(dist2);
+    float sampleDistance=dist2*invDistance;
+    float sampleHorizonCos=dot(v,viewDir)*invDistance;
     float weight=saturate(sampleDistance*falloffMul+falloffAdd);
     sampleHorizonCos=lerp(lowHorizon[side],sampleHorizonCos,weight);
     horizonCos[side]=max(horizonCos[side],sampleHorizonCos);

@@ -29,7 +29,8 @@ float integrateHorizon(float horizon, float normalAngle, float normalCos) { retu
     float noise=frac(sin(dot(floor(input.uv*float2(settings.fullWidth,settings.fullHeight)/2),float2(12.9898,78.233)))*43758.5453)*Pi;
     float3 viewDir=normalize(-p);
     [unroll] for(uint d=0;d<directions;++d) {
-        float2 ray=float2(cos(noise+Pi*d/directions),sin(noise+Pi*d/directions));
+        float angle=noise+Pi*d/directions; float sinPhi,cosPhi; sincos(angle,sinPhi,cosPhi);
+        float2 ray=float2(cosPhi,sinPhi);
         float3 screenTangent=normalize(float3(ray.x/projectionScale.x,ray.y/projectionScale.y,0));
         float3 bitangent=normalize(cross(viewDir,screenTangent)); float3 tangent=normalize(cross(bitangent,viewDir));
         float3 projectedNormal=n-bitangent*dot(n,bitangent); float normalLength=length(projectedNormal); if(normalLength<1e-4) continue;
@@ -47,8 +48,8 @@ float integrateHorizon(float horizon, float normalAngle, float normalCos) { retu
             float mip=s < 3 ? 0 : s == 3 ? 1 : 2;
             float sampleDepth=linearDepthTexture.SampleLevel(suv,mip).r; if(sampleDepth>=BackgroundViewDepth) continue;
             float3 v=positionFromLinearDepth(suv,sampleDepth)-p; float dist2=dot(v,v); if(dist2<1e-6) continue;
-            float3 sliceV=v-bitangent*dot(v,bitangent); float sliceLength=length(sliceV); if(sliceLength<1e-5) continue;
-            float horizonCos=dot(sliceV/sliceLength,viewDir); float attenuation=saturate(1.0-dist2/(settings.radiusView*settings.radiusView));
+            float3 sliceV=v-bitangent*dot(v,bitangent); float sliceLength2=dot(sliceV,sliceV); if(sliceLength2<1e-10) continue;
+            float invSliceLength=rsqrt(sliceLength2); float horizonCos=dot(sliceV,viewDir)*invSliceLength; float attenuation=saturate(1.0-dist2/(settings.radiusView*settings.radiusView));
             horizons[side]=max(horizons[side],lerp(lowHorizons[side],horizonCos,attenuation));
         }
         float h0=-acos(clamp(horizons[1],-1.0,1.0));
