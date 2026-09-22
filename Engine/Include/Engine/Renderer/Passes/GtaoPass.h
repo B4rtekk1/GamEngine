@@ -83,6 +83,7 @@ private:
     // A dedicated R32F view-depth hierarchy.  It intentionally is not Hi-Z:
     // GTAO consumes filtered view depths, while culling consumes extrema.
     VkImage linearDepthImage_ = VK_NULL_HANDLE;
+    VkFormat linearDepthFormat_ = VK_FORMAT_UNDEFINED;
     VmaAllocation linearDepthAllocation_ = VK_NULL_HANDLE;
     VmaAllocator allocator_ = VK_NULL_HANDLE;
     VkImageView linearDepthView_ = VK_NULL_HANDLE;
@@ -90,14 +91,11 @@ private:
     VkSampler linearDepthSampler_ = VK_NULL_HANDLE;
     std::uint32_t linearDepthMipCount_ = 0;
     bool linearDepthInitialized_ = false;
-    std::array<VkDescriptorSetLayout, 2> depthLayouts_{};
-    std::array<VkPipelineLayout, 2> depthPipelineLayouts_{};
-    std::array<VkPipeline, 2> depthPipelines_{};
+    VkDescriptorSetLayout depthLayout_ = VK_NULL_HANDLE;
+    VkPipelineLayout depthPipelineLayout_ = VK_NULL_HANDLE;
+    VkPipeline depthPipeline_ = VK_NULL_HANDLE;
     VkDescriptorPool depthDescriptorPool_ = VK_NULL_HANDLE;
-    std::array<VkDescriptorSet, FramesInFlight> linearizeSets_{};
-    std::array<VkDescriptorImageInfo, FramesInFlight> linearizeSources_{};
-    std::array<bool, FramesInFlight> linearizeDescriptorsValid_{};
-    std::vector<VkDescriptorSet> depthReduceSets_;
+    std::array<VkDescriptorSet, FramesInFlight> depthSets_{};
     // Main AO, 5x5 denoise and bilateral upsample are all compute pipelines.
     std::array<VkDescriptorSetLayout, 3> computeLayouts_{};
     std::array<VkPipelineLayout, 3> computePipelineLayouts_{};

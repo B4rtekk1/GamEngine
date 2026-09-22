@@ -10,12 +10,10 @@
 
 namespace Engine {
     namespace {
-        struct LinearizeSettings {
+        struct DepthPrefilterSettings {
             glm::mat4 inverseProjection;
-        };
-
-        struct DepthMipSettings {
             float effectRadius, effectFalloffRange;
+            std::uint32_t mipCount;
         };
 
         struct MainSettings {
@@ -43,7 +41,7 @@ namespace Engine {
             std::uint32_t sourceMip;
         };
 
-        constexpr VkFormat AoFormat = VK_FORMAT_R16_SFLOAT, LinearDepthFormat = VK_FORMAT_R32_SFLOAT,
+        constexpr VkFormat AoFormat = VK_FORMAT_R16_SFLOAT, BaseDepthFormat = VK_FORMAT_R32_SFLOAT,
                 AuxiliaryFormat = VK_FORMAT_R16G16B16A16_SFLOAT;
 
         void barrier(VkCommandBuffer cmd, VkImage image, VkImageLayout oldLayout, VkImageLayout newLayout,
@@ -102,7 +100,7 @@ namespace Engine {
         nativeResolution_ = halfExtent_.width == fullExtent_.width && halfExtent_.height == fullExtent_.height;
         try {
             raw_.create(physical, device_, halfExtent_, allocator, VK_FILTER_NEAREST, AoFormat, true);
-            baseDepth_.create(physical, device_, halfExtent_, allocator, VK_FILTER_NEAREST, LinearDepthFormat, true);
+            baseDepth_.create(physical, device_, halfExtent_, allocator, VK_FILTER_NEAREST, BaseDepthFormat, true);
             auxiliary_.create(physical, device_, halfExtent_, allocator, VK_FILTER_NEAREST, AuxiliaryFormat, true);
             filtered_.create(physical, device_, halfExtent_, allocator, VK_FILTER_NEAREST, AoFormat, true);
             if (!nativeResolution_)
@@ -113,7 +111,14 @@ namespace Engine {
             linearDepthMipCount_ = std::min(linearDepthMipCount_, std::max(1u, quality_.depthMipCount));
             VkImageCreateInfo image{VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO};
             image.imageType = VK_IMAGE_TYPE_2D;
-            image.format = LinearDepthFormat;
+            VkFormatProperties fp16Properties{};
+            vkGetPhysicalDeviceFormatProperties(physical, VK_FORMAT_R16_SFLOAT, &fp16Properties);
+            const VkFormatFeatureFlags requiredFeatures = VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT |
+                                                            VK_FORMAT_FEATURE_STORAGE_IMAGE_BIT;
+            linearDepthFormat_ = (fp16Properties.optimalTilingFeatures & requiredFeatures) == requiredFeatures
+                                     ? VK_FORMAT_R16_SFLOAT
+                                     : VK_FORMAT_R32_SFLOAT;
+            image.format = linearDepthFormat_;
             image.extent = {fullExtent.width, fullExtent.height, 1};
             image.mipLevels = linearDepthMipCount_;
             image.arrayLayers = 1;
@@ -129,7 +134,7 @@ namespace Engine {
             VkImageViewCreateInfo view{VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
             view.image = linearDepthImage_;
             view.viewType = VK_IMAGE_VIEW_TYPE_2D;
-            view.format = LinearDepthFormat;
+            view.format = linearDepthFormat_;
             view.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, linearDepthMipCount_, 0, 1};
             if (vkCreateImageView(device_, &view, nullptr, &linearDepthView_) != VK_SUCCESS)
                 throw std::runtime_error("Could not create GTAO depth view");
@@ -148,80 +153,44 @@ namespace Engine {
             sampler.maxLod = float(linearDepthMipCount_ - 1);
             if (vkCreateSampler(device_, &sampler, nullptr, &linearDepthSampler_) != VK_SUCCESS)
                 throw std::runtime_error("Could not create GTAO depth sampler");
-            const std::array<VkDescriptorSetLayoutBinding, 2> depthBindings{
-                {
-                    {0, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
-                    {1, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr}
-                }
-            };
+            std::array<VkDescriptorSetLayoutBinding, 6> depthBindings{};
+            depthBindings[0] = {0, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr};
+            for (uint32_t binding = 1; binding < depthBindings.size(); ++binding)
+                depthBindings[binding] = {binding, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr};
             VkDescriptorSetLayoutCreateInfo dl{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
-            dl.bindingCount = 2;
+            dl.bindingCount = uint32_t(depthBindings.size());
             dl.pBindings = depthBindings.data();
-            for (auto &l: depthLayouts_)
-                if (vkCreateDescriptorSetLayout(device_, &dl, nullptr, &l) != VK_SUCCESS)
-                    throw std::runtime_error("Could not create GTAO depth layout");
-            for (uint32_t i = 0; i < 2; ++i) {
-                VkPipelineLayoutCreateInfo pi{VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
-                pi.setLayoutCount = 1;
-                pi.pSetLayouts = &depthLayouts_[i];
-                VkPushConstantRange pc{
-                    VK_SHADER_STAGE_COMPUTE_BIT, 0,
-                    i == 0 ? sizeof(LinearizeSettings) : sizeof(DepthMipSettings)
-                };
-                pi.pushConstantRangeCount = 1;
-                pi.pPushConstantRanges = &pc;
-                if (vkCreatePipelineLayout(device_, &pi, nullptr, &depthPipelineLayouts_[i]) != VK_SUCCESS)
-                    throw std::runtime_error("Could not create GTAO depth pipeline layout");
-            }
-            depthPipelines_[0] = makeCompute(device_, assets, "shaders/gtao_linearize_depth.spv",
-                                             depthPipelineLayouts_[0]);
-            depthPipelines_[1] =
-                    makeCompute(device_, assets, "shaders/gtao_depth_downsample.spv", depthPipelineLayouts_[1]);
+            if (vkCreateDescriptorSetLayout(device_, &dl, nullptr, &depthLayout_) != VK_SUCCESS)
+                throw std::runtime_error("Could not create GTAO depth layout");
+            VkPipelineLayoutCreateInfo pi{VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
+            pi.setLayoutCount = 1;
+            pi.pSetLayouts = &depthLayout_;
+            VkPushConstantRange pc{VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(DepthPrefilterSettings)};
+            pi.pushConstantRangeCount = 1;
+            pi.pPushConstantRanges = &pc;
+            if (vkCreatePipelineLayout(device_, &pi, nullptr, &depthPipelineLayout_) != VK_SUCCESS)
+                throw std::runtime_error("Could not create GTAO depth pipeline layout");
+            depthPipeline_ = makeCompute(device_, assets, "shaders/gtao_prefilter_depth.spv", depthPipelineLayout_);
             std::array<VkDescriptorPoolSize, 2> depthSizes{
                 {
-                    {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, FramesInFlight + linearDepthMipCount_ - 1},
-                    {VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, FramesInFlight + linearDepthMipCount_ - 1}
+                    {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, FramesInFlight},
+                    {VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, FramesInFlight * 5}
                 }
             };
             VkDescriptorPoolCreateInfo dp{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
-            dp.maxSets = FramesInFlight + linearDepthMipCount_ - 1;
+            dp.maxSets = FramesInFlight;
             dp.poolSizeCount = 2;
             dp.pPoolSizes = depthSizes.data();
             if (vkCreateDescriptorPool(device_, &dp, nullptr, &depthDescriptorPool_) != VK_SUCCESS)
                 throw std::runtime_error("Could not create GTAO depth pool");
             std::array<VkDescriptorSetLayout, FramesInFlight> ls{};
-            ls.fill(depthLayouts_[0]);
+            ls.fill(depthLayout_);
             VkDescriptorSetAllocateInfo lai{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};
             lai.descriptorPool = depthDescriptorPool_;
             lai.descriptorSetCount = FramesInFlight;
             lai.pSetLayouts = ls.data();
-            if (vkAllocateDescriptorSets(device_, &lai, linearizeSets_.data()) != VK_SUCCESS)
+            if (vkAllocateDescriptorSets(device_, &lai, depthSets_.data()) != VK_SUCCESS)
                 throw std::runtime_error("Could not allocate GTAO depth sets");
-            depthReduceSets_.resize(linearDepthMipCount_ - 1);
-            std::vector<VkDescriptorSetLayout> rls(linearDepthMipCount_ - 1, depthLayouts_[1]);
-            VkDescriptorSetAllocateInfo rai{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};
-            rai.descriptorPool = depthDescriptorPool_;
-            rai.descriptorSetCount = uint32_t(rls.size());
-            rai.pSetLayouts = rls.data();
-            if (vkAllocateDescriptorSets(device_, &rai, depthReduceSets_.data()) != VK_SUCCESS)
-                throw std::runtime_error("Could not allocate GTAO mip sets");
-            for (uint32_t mip = 1; mip < linearDepthMipCount_; ++mip) {
-                VkDescriptorImageInfo src{linearDepthSampler_, linearDepthMipViews_[mip - 1], VK_IMAGE_LAYOUT_GENERAL},
-                        dst{VK_NULL_HANDLE, linearDepthMipViews_[mip], VK_IMAGE_LAYOUT_GENERAL};
-                std::array<VkWriteDescriptorSet, 2> w{
-                    {
-                        {
-                            VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr, depthReduceSets_[mip - 1], 0, 0, 1,
-                            VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &src, nullptr, nullptr
-                        },
-                        {
-                            VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr, depthReduceSets_[mip - 1], 1, 0, 1,
-                            VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, &dst, nullptr, nullptr
-                        }
-                    }
-                };
-                vkUpdateDescriptorSets(device_, 2, w.data(), 0, nullptr);
-            }
             const std::array<uint32_t, 3> inputCount{3, 2, 3}, outputCount{3, 1, 1},
                     pushSize{sizeof(MainSettings), sizeof(DenoiseSettings), sizeof(UpsampleSettings)};
             const std::array<const char *, 3> shader{
@@ -307,47 +276,26 @@ namespace Engine {
                 linearDepthInitialized_ ? VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL : VK_IMAGE_LAYOUT_UNDEFINED,
                 VK_IMAGE_LAYOUT_GENERAL, VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, VK_ACCESS_2_SHADER_SAMPLED_READ_BIT,
                 VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT, 0, linearDepthMipCount_);
-        VkDescriptorImageInfo src{depthSampler, depth, VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL},
-                dst{VK_NULL_HANDLE, linearDepthMipViews_[0], VK_IMAGE_LAYOUT_GENERAL};
-        const auto &cachedSource = linearizeSources_[frame];
-        if (!linearizeDescriptorsValid_[frame] || cachedSource.sampler != src.sampler ||
-            cachedSource.imageView != src.imageView || cachedSource.imageLayout != src.imageLayout) {
-            std::array<VkWriteDescriptorSet, 2> w{
-                {
-                    {
-                        VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr, linearizeSets_[frame], 0,
-                        0, 1, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &src, nullptr, nullptr
-                    },
-                    {
-                        VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr, linearizeSets_[frame], 1,
-                        0, 1, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, &dst, nullptr, nullptr
-                    }
-                }
-            };
-            vkUpdateDescriptorSets(device_, 2, w.data(), 0, nullptr);
-            linearizeSources_[frame] = src;
-            linearizeDescriptorsValid_[frame] = true;
+        VkDescriptorImageInfo src{depthSampler, depth, VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL};
+        std::array<VkDescriptorImageInfo, 6> images{};
+        images[0] = src;
+        for (uint32_t binding = 1; binding < images.size(); ++binding)
+            images[binding] = {VK_NULL_HANDLE,
+                               linearDepthMipViews_[std::min(binding - 1, linearDepthMipCount_ - 1)],
+                               VK_IMAGE_LAYOUT_GENERAL};
+        std::array<VkWriteDescriptorSet, 6> writes{};
+        for (uint32_t binding = 0; binding < writes.size(); ++binding) {
+            writes[binding] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr, depthSets_[frame], binding, 0, 1,
+                               binding == 0 ? VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER : VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,
+                               &images[binding], nullptr, nullptr};
         }
-        vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, depthPipelines_[0]);
-        auto set = linearizeSets_[frame];
-        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, depthPipelineLayouts_[0], 0, 1, &set, 0, nullptr);
-        LinearizeSettings pc{inverseProjection.native()};
-        vkCmdPushConstants(cmd, depthPipelineLayouts_[0], VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(pc), &pc);
-        vkCmdDispatch(cmd, (fullExtent_.width + 7) / 8, (fullExtent_.height + 7) / 8, 1);
-        const DepthMipSettings mipSettings{1.F, 1.F};
-        for (uint32_t mip = 1; mip < linearDepthMipCount_; ++mip) {
-            barrier(cmd, linearDepthImage_, VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_GENERAL,
-                    VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT,
-                    VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_SAMPLED_READ_BIT, mip - 1, 1);
-            vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, depthPipelines_[1]);
-            set = depthReduceSets_[mip - 1];
-            vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, depthPipelineLayouts_[1], 0, 1, &set, 0,
-                                    nullptr);
-            vkCmdPushConstants(cmd, depthPipelineLayouts_[1], VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(mipSettings),
-                               &mipSettings);
-            vkCmdDispatch(cmd, (std::max(1u, fullExtent_.width >> mip) + 7) / 8,
-                          (std::max(1u, fullExtent_.height >> mip) + 7) / 8, 1);
-        }
+        vkUpdateDescriptorSets(device_, uint32_t(writes.size()), writes.data(), 0, nullptr);
+        vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, depthPipeline_);
+        auto set = depthSets_[frame];
+        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, depthPipelineLayout_, 0, 1, &set, 0, nullptr);
+        const DepthPrefilterSettings pc{inverseProjection.native(), 1.F, 1.F, linearDepthMipCount_};
+        vkCmdPushConstants(cmd, depthPipelineLayout_, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(pc), &pc);
+        vkCmdDispatch(cmd, (fullExtent_.width + 15) / 16, (fullExtent_.height + 15) / 16, 1);
         barrier(cmd, linearDepthImage_, VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
                 VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT,
                 VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_SAMPLED_READ_BIT, 0, linearDepthMipCount_);
@@ -465,8 +413,6 @@ namespace Engine {
     }
 
     void GtaoPass::destroy() noexcept {
-        linearizeSources_.fill({});
-        linearizeDescriptorsValid_.fill(false);
         for (auto &passCaches: computeDescriptorCache_)
             for (auto &cache: passCaches) cache.clear();
         if (device_) {
@@ -483,15 +429,12 @@ namespace Engine {
                     vkDestroyDescriptorSetLayout(device_, p, nullptr);
             if (depthDescriptorPool_)
                 vkDestroyDescriptorPool(device_, depthDescriptorPool_, nullptr);
-            for (auto p: depthPipelines_)
-                if (p)
-                    vkDestroyPipeline(device_, p, nullptr);
-            for (auto p: depthPipelineLayouts_)
-                if (p)
-                    vkDestroyPipelineLayout(device_, p, nullptr);
-            for (auto p: depthLayouts_)
-                if (p)
-                    vkDestroyDescriptorSetLayout(device_, p, nullptr);
+            if (depthPipeline_)
+                vkDestroyPipeline(device_, depthPipeline_, nullptr);
+            if (depthPipelineLayout_)
+                vkDestroyPipelineLayout(device_, depthPipelineLayout_, nullptr);
+            if (depthLayout_)
+                vkDestroyDescriptorSetLayout(device_, depthLayout_, nullptr);
             if (linearDepthSampler_)
                 vkDestroySampler(device_, linearDepthSampler_, nullptr);
             for (auto v: linearDepthMipViews_)
@@ -513,14 +456,14 @@ namespace Engine {
         for (auto &s: computeSets_)
             s.fill({});
         computeDescriptorPool_ = {};
-        depthLayouts_.fill({});
-        depthPipelineLayouts_.fill({});
-        depthPipelines_.fill({});
+        depthLayout_ = {};
+        depthPipelineLayout_ = {};
+        depthPipeline_ = {};
         depthDescriptorPool_ = {};
-        linearizeSets_.fill({});
-        depthReduceSets_.clear();
+        depthSets_.fill({});
         linearDepthMipViews_.clear();
         linearDepthImage_ = {};
+        linearDepthFormat_ = VK_FORMAT_UNDEFINED;
         linearDepthAllocation_ = {};
         linearDepthView_ = {};
         linearDepthSampler_ = {};

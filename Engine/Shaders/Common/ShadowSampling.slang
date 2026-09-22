@@ -303,6 +303,36 @@ float sampleVirtualShadowLevel(Sampler2DShadow shadowMap, Sampler2DShadow linear
 
     if (useStablePoisson)
     {
+        // Classify the overwhelmingly common interior cases before entering
+        // PCSS.  The four taps are the same cheap virtual bilinear probes
+        // used by the HIGH path; only a mixed footprint needs blocker search
+        // and the expensive Poisson filter.  This is deliberately conservative
+        // around the edge so contact silhouettes retain the ULTRA quality.
+        float classificationShadow = 0.0;
+        uint classificationSamples = 0;
+        [unroll]
+        for (int y = 0; y < 2; ++y)
+        {
+            [unroll]
+            for (int x = 0; x < 2; ++x)
+            {
+                bool tapResident;
+                const float tapShadow = sampleVirtualShadowBilinear(
+                    shadowMap, linearShadowMap,
+                    virtualPixel + float2(x - 0.5, y - 0.5), level, pageTable,
+                    currentDepth - bias, tapResident);
+                if (!tapResident) continue;
+                classificationShadow += tapShadow;
+                ++classificationSamples;
+            }
+        }
+        if (classificationSamples == 4)
+        {
+            classificationShadow *= 0.25;
+            if (classificationShadow <= 0.001 || classificationShadow >= 0.999)
+                return classificationShadow;
+        }
+
         // PCSS needs a receiver-dependent search region too: a finite light
         // subtends a larger cone at receivers farther along the light axis.
         // The first four samples cover the centre. If all four are blockers,
