@@ -1001,7 +1001,7 @@
                 // buffer unless UPDATE_AFTER_BIND is enabled.
                 const VkDescriptorImageInfo gtaoDebugTexture{gtaoPass.debugSampler(gtaoDebugView),
                                                              gtaoPass.debugView(gtaoDebugView),
-                                                             VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
+                                                             gtaoPass.debugLayout(gtaoDebugView)};
                 shadowPass.setGtaoTexture(currentFrame, gtaoDebugTexture);
                 if (vulkanDevice.supportsRayQuery() && !msaa.enabled() &&
                     rtContactShadowSettings.mode == ContactShadowMode::RayTraced &&

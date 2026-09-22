@@ -1,6 +1,16 @@
 // 8x8 output pixels cooperatively cache a 16x16 half-resolution depth tile.
 // Ultra quality traces eight directions, two sides and four steps: 64 horizon
-// samples per half-resolution pixel. The shared tile keeps those reads local.
+// samples per output pixel. The shared tile keeps source-mip reads local.
+#ifndef GTAO_DIRECTIONS
+#define GTAO_DIRECTIONS 3
+#endif
+#ifndef GTAO_STEPS
+#define GTAO_STEPS 3
+#endif
+#ifndef GTAO_HALF_RES
+#define GTAO_HALF_RES 0
+#endif
+
 [[vk::binding(0,0)]] Sampler2D horizonDepth;
 [[vk::binding(1,0)]] Sampler2D viewNormalTexture;
 // Mip 0 stays separate from horizonDepth so the half-resolution guide can
@@ -10,7 +20,7 @@
 [[vk::binding(4,0)]] RWTexture2D<float> rawAo;
 [[vk::binding(5,0)]] RWTexture2D<float> guide;
 [[vk::binding(6,0)]] RWTexture2D<float> baseDepth;
-struct Settings { float2 projectionScale; float radiusView, falloff; uint frameIndex; float padding; uint directions, stepsPerDirection, sourceMip, maxSampleMip; };
+struct Settings { float2 projectionScale; float radiusView, falloff; uint frameIndex; float padding; uint maxSampleMip; };
 [[vk::push_constant]] ConstantBuffer<Settings> settings;
 groupshared float depthTile[16][16];
 static const float BackgroundDepth=65500.0;
@@ -24,12 +34,12 @@ float2 lowDiscrepancyNoise(uint2 pixel,uint frame){
 }
 // XeGTAO's slope-adjusted continuity test.  It rejects the neighbour on the
 // other side of a depth discontinuity without rejecting a continuous slope.
-float4 depthEdges(float center,float left,float right,float top,float bottom){
- float4 edges=float4(left,right,top,bottom)-center;
- float slopeLR=(edges.y-edges.x)*.5,slopeTB=(edges.w-edges.z)*.5;
- float4 adjusted=edges+float4(slopeLR,-slopeLR,slopeTB,-slopeTB);
+half4 depthEdges(float center,float left,float right,float top,float bottom){
+ half4 edges=half4(half(left),half(right),half(top),half(bottom))-half(center);
+ half slopeLR=(edges.y-edges.x)*half(.5),slopeTB=(edges.w-edges.z)*half(.5);
+ half4 adjusted=edges+half4(slopeLR,-slopeLR,slopeTB,-slopeTB);
  edges=min(abs(edges),abs(adjusted));
- return saturate(1.25-edges/max(center*.011,1e-4));
+ return saturate(half(1.25)-edges/max(half(center)*half(.011),half(1e-4)));
 }
 float3 reconstructNormal(int2 pixel,float center,float left,float right,float top,float bottom,uint2 size){
  int2 minPixel=int2(0,0),maxPixel=int2(size)-1;
@@ -38,8 +48,8 @@ float3 reconstructNormal(int2 pixel,float center,float left,float right,float to
  float3 r=safeNormalize(positionFromDepth(clamp(pixel+int2( 1,0),minPixel,maxPixel),right,size)-c);
  float3 t=safeNormalize(positionFromDepth(clamp(pixel+int2(0,-1),minPixel,maxPixel),top,size)-c);
  float3 b=safeNormalize(positionFromDepth(clamp(pixel+int2(0, 1),minPixel,maxPixel),bottom,size)-c);
- float4 edge=depthEdges(center,left,right,top,bottom);
- float4 weight=saturate(float4(edge.x*edge.z,edge.z*edge.y,edge.y*edge.w,edge.w*edge.x)+.01);
+ half4 edge=depthEdges(center,left,right,top,bottom);
+ half4 weight=saturate(half4(edge.x*edge.z,edge.z*edge.y,edge.y*edge.w,edge.w*edge.x)+half(.01));
  float3 normal=weight.x*cross(l,t)+weight.y*cross(t,r)+weight.z*cross(r,b)+weight.w*cross(b,l);
  normal=safeNormalize(normal);
  // positionFromDepth uses negative view-space Z in front of the camera.
@@ -77,18 +87,22 @@ void main(uint3 groupId:SV_GroupID,uint3 threadId:SV_GroupThreadID,uint3 id:SV_D
  // Cache the exact selected-mip value that a non-shared horizon sample would
  // read.  The depth pyramid's filter is deliberately not min(2x2), so
  // rebuilding it here would make AO depend on workgroup boundaries.
- for(uint y=threadId.y;y<16;y+=8) for(uint x=threadId.x;x<16;x+=8){int2 q=clamp(base+int2(x,y),int2(0,0),size-1);float2 uv=(float2(q)+.5)/float2(size);depthTile[y][x]=horizonDepth.SampleLevel(uv,float(settings.sourceMip)).r;}
+ for(uint y=threadId.y;y<16;y+=8) for(uint x=threadId.x;x<16;x+=8){int2 q=clamp(base+int2(x,y),int2(0,0),size-1);float2 uv=(float2(q)+.5)/float2(size);depthTile[y][x]=horizonDepth.SampleLevel(uv,float(GTAO_HALF_RES)).r;}
  GroupMemoryBarrierWithGroupSync(); if(any(id.xy>=uint2(w,h)))return;
- int2 local=int2(threadId.xy)+4,p=int2(id.xy);float depth=depthTile[local.y][local.x];if(settings.sourceMip!=0)baseDepth[p]=nearestGuideDepth(p,uint2(w,h));if(depth>=BackgroundDepth){rawAo[p]=1;guide[p]=1;return;}
+ int2 local=int2(threadId.xy)+4,p=int2(id.xy);float depth=depthTile[local.y][local.x];
+#if GTAO_HALF_RES
+ baseDepth[p]=nearestGuideDepth(p,uint2(w,h));
+#endif
+ if(depth>=BackgroundDepth){rawAo[p]=1;guide[p]=1;return;}
  // Keep edge detection on the original depth, but move the AO center a tiny
  // amount toward the camera to prevent FP32 depth quantization self-occlusion.
  float centerDepth=depth*.99999;float3 center=positionFromDepth(p,centerDepth,uint2(w,h));float left=depthTile[local.y][local.x-1],right=depthTile[local.y][local.x+1],top=depthTile[local.y-1][local.x],bottom=depthTile[local.y+1][local.x];float3 normal=settings.padding>0.5?loadViewNormal(p,uint2(w,h)):reconstructNormal(p,depth,left,right,top,bottom,uint2(w,h));
- float2 localNoise=lowDiscrepancyNoise(uint2(p),settings.frameIndex);
- float visibility=0;
+ half2 localNoise=half2(lowDiscrepancyNoise(uint2(p),settings.frameIndex));
+ half visibility=0;
  // The shared tile is used only for the source mip.  Horizon samples may
  // select a coarser mip based on their offset, so reading them from the tile
  // would make their depth depend on the workgroup boundary.
- const uint directions=max(settings.directions,1u),steps=min(max(settings.stepsPerDirection,1u),4u);
+ const uint directions=GTAO_DIRECTIONS,steps=GTAO_STEPS;
  float3 viewDir=normalize(-center);
  // Intel's defaults are EffectRadius 0.5 multiplied by RadiusMultiplier
  // 1.457, and EffectFalloffRange 0.615.
@@ -103,8 +117,8 @@ void main(uint3 groupId:SV_GroupID,uint3 threadId:SV_GroupThreadID,uint3 id:SV_D
  const float minSampleDistance=1.3/max(max(radiusPixels.x,radiusPixels.y),1e-4);
  // Match XeGTAO's small-radius fade.  Integer-rounded offsets otherwise
  // cause abrupt visibility changes when the radius spans only a few pixels.
- visibility+=saturate((10.0-radiusPixels.x)/100.0)*.5;
- for(uint d=0;d<directions;++d){
+ visibility+=half(saturate((10.0-radiusPixels.x)/100.0))*half(.5);
+ [unroll]for(uint d=0;d<directions;++d){
   // Jitter slices and radial locations independently.  The squared
   // distribution places more samples where near-field occluders matter most.
   float angle=(float(d)+localNoise.x)*(Pi/float(directions));
@@ -117,11 +131,11 @@ void main(uint3 groupId:SV_GroupID,uint3 threadId:SV_GroupThreadID,uint3 id:SV_D
   float3 screenTangent=float3(cosPhi,sinPhi,0);
   float3 bitangent=normalize(cross(viewDir,screenTangent));float3 tangent=normalize(cross(bitangent,viewDir));
   float3 projectedNormal=normal-bitangent*dot(normal,bitangent);float normalLength=length(projectedNormal);if(normalLength<1e-4)continue;
-  projectedNormal/=normalLength;float normalCos=saturate(dot(projectedNormal,viewDir));float normalAngle=sign(dot(tangent,projectedNormal))*acos(normalCos);
-  float lowHorizon[2]={cos(normalAngle+Pi*.5),cos(normalAngle-Pi*.5)};float horizonCos[2]={lowHorizon[0],lowHorizon[1]};
+  projectedNormal/=normalLength;half normalCos=half(saturate(dot(projectedNormal,viewDir)));float normalAngle=sign(dot(tangent,projectedNormal))*acos(float(normalCos));
+  half lowHorizon[2]={half(cos(normalAngle+Pi*.5)),half(cos(normalAngle-Pi*.5))};half horizonCos[2]={lowHorizon[0],lowHorizon[1]};
   // Both sides share the same jitter, radius, rounded offset and selected mip.
   // Compute those once, then issue the symmetric pair of depth reads.
-  for(uint step=0;step<steps;++step){
+  [unroll]for(uint step=0;step<steps;++step){
    float stepNoise=frac(localNoise.y+float(d+step*steps)*.61803398875);
    float x=(float(step)+stepNoise)/float(steps);
    float t=x*x+minSampleDistance;
@@ -132,37 +146,37 @@ void main(uint3 groupId:SV_GroupID,uint3 threadId:SV_GroupThreadID,uint3 id:SV_D
    uint relativeMip=uint(offsetLength2>=194.012)+uint(offsetLength2>=776.047)
                    +uint(offsetLength2>=3104.19)+uint(offsetLength2>=12416.75);
    relativeMip=min(relativeMip,settings.maxSampleMip);
-   uint selectedMip=settings.sourceMip+relativeMip;
+   uint selectedMip=uint(GTAO_HALF_RES)+relativeMip;
    int2 offset=int2(round(floatOffset));if(!any(offset))continue;
    int2 pixel0=clamp(p+offset,int2(0,0),size-1),pixel1=clamp(p-offset,int2(0,0),size-1);
    int2 tilePixel0=local+offset,tilePixel1=local-offset;
-   bool shared0=selectedMip==settings.sourceMip&&all(tilePixel0>=int2(0,0))&&all(tilePixel0<int2(16,16));
-   bool shared1=selectedMip==settings.sourceMip&&all(tilePixel1>=int2(0,0))&&all(tilePixel1<int2(16,16));
+   bool shared0=relativeMip==0u&&all(tilePixel0>=int2(0,0))&&all(tilePixel0<int2(16,16));
+   bool shared1=relativeMip==0u&&all(tilePixel1>=int2(0,0))&&all(tilePixel1<int2(16,16));
    float depth0=shared0?depthTile[tilePixel0.y][tilePixel0.x]:horizonDepth.SampleLevel((float2(pixel0)+.5)/float2(size),float(selectedMip)).r;
    float depth1=shared1?depthTile[tilePixel1.y][tilePixel1.x]:horizonDepth.SampleLevel((float2(pixel1)+.5)/float2(size),float(selectedMip)).r;
    if(depth0<BackgroundDepth){
     float3 v=positionFromDepth(pixel0,depth0,uint2(w,h))-center;float dist2=dot(v,v);
     if(dist2>=1e-6){float invDistance=rsqrt(dist2);float sampleDistance=dist2*invDistance;
-     float sampleHorizonCos=dot(v,viewDir)*invDistance;float weight=saturate(sampleDistance*falloffMul+falloffAdd);
+     half sampleHorizonCos=half(dot(v,viewDir)*invDistance);half weight=half(saturate(sampleDistance*falloffMul+falloffAdd));
      sampleHorizonCos=lerp(lowHorizon[0],sampleHorizonCos,weight);horizonCos[0]=max(horizonCos[0],sampleHorizonCos);}
    }
    if(depth1<BackgroundDepth){
     float3 v=positionFromDepth(pixel1,depth1,uint2(w,h))-center;float dist2=dot(v,v);
     if(dist2>=1e-6){float invDistance=rsqrt(dist2);float sampleDistance=dist2*invDistance;
-     float sampleHorizonCos=dot(v,viewDir)*invDistance;float weight=saturate(sampleDistance*falloffMul+falloffAdd);
+     half sampleHorizonCos=half(dot(v,viewDir)*invDistance);half weight=half(saturate(sampleDistance*falloffMul+falloffAdd));
      sampleHorizonCos=lerp(lowHorizon[1],sampleHorizonCos,weight);horizonCos[1]=max(horizonCos[1],sampleHorizonCos);}
    }
   }
   // XeGTAO keeps these horizon angles unclamped.  The projected-normal
   // correction counters its slight high-slope over-darkening instead.
-  normalLength=lerp(normalLength,1.0,.05);
-  float h0=-acos(clamp(horizonCos[1],-1.0,1.0));float h1=acos(clamp(horizonCos[0],-1.0,1.0));
-  visibility+=normalLength*(integrateHorizon(h0,normalAngle,normalCos)+integrateHorizon(h1,normalAngle,normalCos));
+  half adjustedNormalLength=half(lerp(normalLength,1.0,.05));
+  float h0=-acos(clamp(float(horizonCos[1]),-1.0,1.0));float h1=acos(clamp(float(horizonCos[0]),-1.0,1.0));
+  visibility+=adjustedNormalLength*half(integrateHorizon(h0,normalAngle,float(normalCos))+integrateHorizon(h1,normalAngle,float(normalCos)));
  }
  // Preserve directional local continuity for the denoiser.  Horizon samples
  // are deliberately excluded: a distant wall is not an edge of this pixel.
- float4 localEdges=depthEdges(depth,left,right,top,bottom);
- float4 packedEdges=round(saturate(localEdges)*2.9);
+ half4 localEdges=depthEdges(depth,left,right,top,bottom);
+ float4 packedEdges=round(saturate(float4(localEdges))*2.9);
  float edgePayload=dot(packedEdges,float4(64.0/255.0,16.0/255.0,4.0/255.0,1.0/255.0));
  rawAo[p]=pow(saturate(visibility/float(directions)),2.2);guide[p]=edgePayload;
 }

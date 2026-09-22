@@ -60,6 +60,11 @@ public:
         default: return resultSampler();
         }
     }
+    [[nodiscard]] VkImageLayout debugLayout(GtaoDebugView view) const noexcept {
+        if (view == GtaoDebugView::Raw) return VK_IMAGE_LAYOUT_GENERAL;
+        if (view == GtaoDebugView::Filtered && !nativeResolution_) return VK_IMAGE_LAYOUT_GENERAL;
+        return VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    }
 
 private:
     void clearImages(VkCommandBuffer commandBuffer);
@@ -103,6 +108,7 @@ private:
     std::array<VkDescriptorSetLayout, 3> computeLayouts_{};
     std::array<VkPipelineLayout, 3> computePipelineLayouts_{};
     std::array<VkPipeline, 3> computePipelines_{};
+    std::array<VkPipeline, 4> mainQualityPipelines_{};
     VkDescriptorPool computeDescriptorPool_ = VK_NULL_HANDLE;
     std::array<std::array<VkDescriptorSet, FramesInFlight>, 3> computeSets_{};
     std::array<std::array<std::vector<VkDescriptorImageInfo>, FramesInFlight>, 3> computeDescriptorCache_{};

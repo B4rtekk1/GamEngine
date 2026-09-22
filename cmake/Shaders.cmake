@@ -8,7 +8,7 @@ function(gameengine_add_engine_shaders)
     set(shader_entries
         Culling/gpu_culling.slang Culling/gpu_instance_culling.slang Culling/meshlet_culling.slang Culling/meshlet_build_dispatch.slang Culling/meshlet_build_indirect.slang Culling/shadow_meshlet_culling.slang Culling/shadow_meshlet_build_indirect.slang Culling/hiz_initialize.slang Culling/hiz_reduce.slang Culling/clustered_light_culling.slang
         Grass/grass_generate.slang Grass/grass_cull.slang Grass/grass_packed_cull.slang Grass/grass_cluster_cull.slang Grass/grass_shadow_page_cull.slang Grass/grass_packed_bin.slang Grass/grass_packed_prefix.slang Grass/grass_packed_scatter.slang Grass/grass_packed_finalize.slang Grass/grass_classify.slang Grass/grass_build_dispatch.slang Grass/grass_forward.slang Grass/grass_shadow.slang Grass/grass_velocity.slang Grass/grass_build_indirect.slang Grass/grass_finalize_indirect.slang Grass/grass_prefix_sum.slang Grass/grass_scatter_instances.slang
-        Environment/skybox.slang Forward/forward_pbr.slang Forward/depth_velocity.slang Forward/selection_outline.slang Particles/particle_billboard.slang Particles/particle_simulation.slang Water/water_page_cull.slang Water/water_page_build_indirect.slang Water/water_sssr_depth_init.slang Water/water_sssr_depth_reduce.slang Water/water_state_allocate.slang Water/water_state_update.slang Water/water_far_ocean_prepass.slang Water/water_authored_prepass.slang Water/water_virtual_prepass.slang Water/water_tile_classify.slang Water/water_tile_build_dispatch.slang Water/water_virtual_shade.slang Water/water_virtual_composite.slang PostProcess/aces_tonemap.slang PostProcess/bloom_downsample.slang PostProcess/gtao.slang PostProcess/gtao_prefilter_depth.slang PostProcess/gtao_main.slang PostProcess/gtao_denoise.slang PostProcess/gtao_upsample_compute.slang PostProcess/temporal_aa.slang PostProcess/temporal_velocity.slang Samples/basic_pbr.slang Shadow/shadow_map.slang Shadow/shadow_opaque.slang Shadow/vsm_page_marking.slang Shadow/vsm_page_compact.slang Shadow/rt_contact_shadow.slang UI/canvas.slang)
+        Environment/skybox.slang Forward/forward_pbr.slang Forward/depth_velocity.slang Forward/selection_outline.slang Particles/particle_billboard.slang Particles/particle_simulation.slang Water/water_page_cull.slang Water/water_page_build_indirect.slang Water/water_sssr_depth_init.slang Water/water_sssr_depth_reduce.slang Water/water_state_allocate.slang Water/water_state_update.slang Water/water_far_ocean_prepass.slang Water/water_authored_prepass.slang Water/water_virtual_prepass.slang Water/water_tile_classify.slang Water/water_tile_build_dispatch.slang Water/water_virtual_shade.slang Water/water_virtual_composite.slang PostProcess/aces_tonemap.slang PostProcess/bloom_downsample.slang PostProcess/gtao.slang PostProcess/gtao_prefilter_depth.slang PostProcess/gtao_denoise.slang PostProcess/gtao_upsample_compute.slang PostProcess/temporal_aa.slang PostProcess/temporal_velocity.slang Samples/basic_pbr.slang Shadow/shadow_map.slang Shadow/shadow_opaque.slang Shadow/vsm_page_marking.slang Shadow/vsm_page_compact.slang Shadow/rt_contact_shadow.slang UI/canvas.slang)
     set(shader_outputs)
     foreach(shader_entry IN LISTS shader_entries)
         set(shader_source "${ENGINE_SHADER_SOURCE_DIR}/${shader_entry}")
@@ -21,16 +21,43 @@ function(gameengine_add_engine_shaders)
         list(APPEND shader_outputs "${shader_output}")
         add_custom_command(OUTPUT "${shader_output}"
             COMMAND ${CMAKE_COMMAND} -E make_directory "${shader_output_dir}"
-            COMMAND ${SLANGC} "${shader_source}" -target spirv -profile glsl_460 -emit-spirv-directly -g2 -matrix-layout-row-major -I "${ENGINE_SHADER_SOURCE_DIR}" -o "${shader_output}"
-            DEPENDS "${shader_source}" ${shader_modules} COMMENT "Compiling Slang shader ${shader_relative}" VERBATIM)
+            COMMAND ${SLANGC} "${shader_source}" -target spirv -profile glsl_460 -emit-spirv-directly "$<$<CONFIG:Release>:-O3;-fp-mode;fast>" "$<$<OR:$<CONFIG:Debug>,$<CONFIG:Profile>>:-g2>" -matrix-layout-row-major -I "${ENGINE_SHADER_SOURCE_DIR}" -o "${shader_output}"
+            DEPENDS "${shader_source}" ${shader_modules} COMMENT "Compiling Slang shader ${shader_relative}" COMMAND_EXPAND_LISTS VERBATIM)
+    endforeach()
+    set(gtao_main_source "${ENGINE_SHADER_SOURCE_DIR}/PostProcess/gtao_main.slang")
+    foreach(gtao_variant IN ITEMS low medium high ultra)
+        if(gtao_variant STREQUAL "low")
+            set(gtao_directions 3)
+            set(gtao_steps 2)
+            set(gtao_half_res 1)
+        elseif(gtao_variant STREQUAL "medium")
+            set(gtao_directions 4)
+            set(gtao_steps 3)
+            set(gtao_half_res 1)
+        elseif(gtao_variant STREQUAL "high")
+            set(gtao_directions 3)
+            set(gtao_steps 3)
+            set(gtao_half_res 0)
+        else()
+            set(gtao_directions 9)
+            set(gtao_steps 3)
+            set(gtao_half_res 0)
+        endif()
+        set(gtao_output "${SHADER_OUT_DIR}/gtao_main_${gtao_variant}.spv")
+        list(APPEND shader_outputs "${gtao_output}")
+        add_custom_command(OUTPUT "${gtao_output}"
+            COMMAND ${CMAKE_COMMAND} -E make_directory "${SHADER_OUT_DIR}"
+            COMMAND ${SLANGC} "${gtao_main_source}" -target spirv -profile glsl_460 -emit-spirv-directly "$<$<CONFIG:Release>:-O3;-fp-mode;fast>" "$<$<OR:$<CONFIG:Debug>,$<CONFIG:Profile>>:-g2>" -matrix-layout-row-major -I "${ENGINE_SHADER_SOURCE_DIR}" -D GTAO_DIRECTIONS=${gtao_directions} -D GTAO_STEPS=${gtao_steps} -D GTAO_HALF_RES=${gtao_half_res} -o "${gtao_output}"
+            DEPENDS "${gtao_main_source}" ${shader_modules}
+            COMMENT "Compiling GTAO ${gtao_variant} shader variant" COMMAND_EXPAND_LISTS VERBATIM)
     endforeach()
     set(depth_velocity_no_velocity_output "${SHADER_OUT_DIR}/depth_velocity_no_velocity.spv")
     list(APPEND shader_outputs "${depth_velocity_no_velocity_output}")
     add_custom_command(OUTPUT "${depth_velocity_no_velocity_output}"
         COMMAND ${CMAKE_COMMAND} -E make_directory "${SHADER_OUT_DIR}"
-        COMMAND ${SLANGC} "${ENGINE_SHADER_SOURCE_DIR}/Forward/depth_velocity.slang" -target spirv -profile glsl_460 -emit-spirv-directly -g2 -matrix-layout-row-major -I "${ENGINE_SHADER_SOURCE_DIR}" -D DEPTH_OUTPUT_VELOCITY=0 -o "${depth_velocity_no_velocity_output}"
+        COMMAND ${SLANGC} "${ENGINE_SHADER_SOURCE_DIR}/Forward/depth_velocity.slang" -target spirv -profile glsl_460 -emit-spirv-directly "$<$<CONFIG:Release>:-O3;-fp-mode;fast>" "$<$<OR:$<CONFIG:Debug>,$<CONFIG:Profile>>:-g2>" -matrix-layout-row-major -I "${ENGINE_SHADER_SOURCE_DIR}" -D DEPTH_OUTPUT_VELOCITY=0 -o "${depth_velocity_no_velocity_output}"
         DEPENDS "${ENGINE_SHADER_SOURCE_DIR}/Forward/depth_velocity.slang" ${shader_modules}
-        COMMENT "Compiling depth-only shader without velocity" VERBATIM)
+        COMMENT "Compiling depth-only shader without velocity" COMMAND_EXPAND_LISTS VERBATIM)
     foreach(temporal_variant IN ITEMS skybox selection_outline particle_billboard)
         set(temporal_variant_output "${SHADER_OUT_DIR}/${temporal_variant}_no_velocity.spv")
         list(APPEND shader_outputs "${temporal_variant_output}")
@@ -46,9 +73,9 @@ function(gameengine_add_engine_shaders)
         endif()
         add_custom_command(OUTPUT "${temporal_variant_output}"
             COMMAND ${CMAKE_COMMAND} -E make_directory "${SHADER_OUT_DIR}"
-            COMMAND ${SLANGC} "${temporal_variant_source}" -target spirv -profile glsl_460 -emit-spirv-directly -g2 -matrix-layout-row-major -I "${ENGINE_SHADER_SOURCE_DIR}" -D ${temporal_variant_define} -o "${temporal_variant_output}"
+            COMMAND ${SLANGC} "${temporal_variant_source}" -target spirv -profile glsl_460 -emit-spirv-directly "$<$<CONFIG:Release>:-O3;-fp-mode;fast>" "$<$<OR:$<CONFIG:Debug>,$<CONFIG:Profile>>:-g2>" -matrix-layout-row-major -I "${ENGINE_SHADER_SOURCE_DIR}" -D ${temporal_variant_define} -o "${temporal_variant_output}"
             DEPENDS "${temporal_variant_source}" ${shader_modules}
-            COMMENT "Compiling color-only ${temporal_variant} shader" VERBATIM)
+            COMMENT "Compiling color-only ${temporal_variant} shader" COMMAND_EXPAND_LISTS VERBATIM)
     endforeach()
     # Surface families share the forward material descriptor contract.  They
     # are separate SPIR-V modules so ForwardPass can select one pipeline per
@@ -63,18 +90,18 @@ function(gameengine_add_engine_shaders)
         list(APPEND shader_outputs "${variant_output}")
         add_custom_command(OUTPUT "${variant_output}"
             COMMAND ${CMAKE_COMMAND} -E make_directory "${SHADER_OUT_DIR}"
-            COMMAND ${SLANGC} "${ENGINE_SHADER_SOURCE_DIR}/Forward/forward_pbr.slang" -target spirv -profile glsl_460 -emit-spirv-directly -g2 -matrix-layout-row-major -I "${ENGINE_SHADER_SOURCE_DIR}" -D MATERIAL_VARIANT=${variant_define} -o "${variant_output}"
+            COMMAND ${SLANGC} "${ENGINE_SHADER_SOURCE_DIR}/Forward/forward_pbr.slang" -target spirv -profile glsl_460 -emit-spirv-directly "$<$<CONFIG:Release>:-O3;-fp-mode;fast>" "$<$<OR:$<CONFIG:Debug>,$<CONFIG:Profile>>:-g2>" -matrix-layout-row-major -I "${ENGINE_SHADER_SOURCE_DIR}" -D MATERIAL_VARIANT=${variant_define} -o "${variant_output}"
             DEPENDS "${ENGINE_SHADER_SOURCE_DIR}/Forward/forward_pbr.slang" ${shader_modules}
-            COMMENT "Compiling forward ${variant_name} material shader" VERBATIM)
+            COMMENT "Compiling forward ${variant_name} material shader" COMMAND_EXPAND_LISTS VERBATIM)
     endforeach()
     set(water_shader_source "${ENGINE_SHADER_SOURCE_DIR}/Water/water_surface.slang")
     set(water_shader_output "${SHADER_OUT_DIR}/forward_water.spv")
     list(APPEND shader_outputs "${water_shader_output}")
     add_custom_command(OUTPUT "${water_shader_output}"
         COMMAND ${CMAKE_COMMAND} -E make_directory "${SHADER_OUT_DIR}"
-        COMMAND ${SLANGC} "${water_shader_source}" -target spirv -profile glsl_460 -emit-spirv-directly -g2 -matrix-layout-row-major -I "${ENGINE_SHADER_SOURCE_DIR}" -o "${water_shader_output}"
+        COMMAND ${SLANGC} "${water_shader_source}" -target spirv -profile glsl_460 -emit-spirv-directly "$<$<CONFIG:Release>:-O3;-fp-mode;fast>" "$<$<OR:$<CONFIG:Debug>,$<CONFIG:Profile>>:-g2>" -matrix-layout-row-major -I "${ENGINE_SHADER_SOURCE_DIR}" -o "${water_shader_output}"
         DEPENDS "${water_shader_source}" ${shader_modules}
-        COMMENT "Compiling dedicated water surface shader" VERBATIM)
+        COMMENT "Compiling dedicated water surface shader" COMMAND_EXPAND_LISTS VERBATIM)
     # The editor Scene View does not allocate a motion-vector target.  Build
     # matching forward modules whose fragment entry point writes color only.
     foreach(variant_name IN ITEMS pbr unlit hologram)
@@ -89,24 +116,24 @@ function(gameengine_add_engine_shaders)
         list(APPEND shader_outputs "${variant_output}")
         add_custom_command(OUTPUT "${variant_output}"
             COMMAND ${CMAKE_COMMAND} -E make_directory "${SHADER_OUT_DIR}"
-            COMMAND ${SLANGC} "${ENGINE_SHADER_SOURCE_DIR}/Forward/forward_pbr.slang" -target spirv -profile glsl_460 -emit-spirv-directly -g2 -matrix-layout-row-major -I "${ENGINE_SHADER_SOURCE_DIR}" -D MATERIAL_VARIANT=${variant_define} -D FORWARD_OUTPUT_VELOCITY=0 -o "${variant_output}"
+            COMMAND ${SLANGC} "${ENGINE_SHADER_SOURCE_DIR}/Forward/forward_pbr.slang" -target spirv -profile glsl_460 -emit-spirv-directly "$<$<CONFIG:Release>:-O3;-fp-mode;fast>" "$<$<OR:$<CONFIG:Debug>,$<CONFIG:Profile>>:-g2>" -matrix-layout-row-major -I "${ENGINE_SHADER_SOURCE_DIR}" -D MATERIAL_VARIANT=${variant_define} -D FORWARD_OUTPUT_VELOCITY=0 -o "${variant_output}"
             DEPENDS "${ENGINE_SHADER_SOURCE_DIR}/Forward/forward_pbr.slang" ${shader_modules}
-            COMMENT "Compiling color-only forward ${variant_name} material shader" VERBATIM)
+            COMMENT "Compiling color-only forward ${variant_name} material shader" COMMAND_EXPAND_LISTS VERBATIM)
     endforeach()
     set(water_no_velocity_output "${SHADER_OUT_DIR}/forward_water_no_velocity.spv")
     list(APPEND shader_outputs "${water_no_velocity_output}")
     add_custom_command(OUTPUT "${water_no_velocity_output}"
         COMMAND ${CMAKE_COMMAND} -E make_directory "${SHADER_OUT_DIR}"
-        COMMAND ${SLANGC} "${water_shader_source}" -target spirv -profile glsl_460 -emit-spirv-directly -g2 -matrix-layout-row-major -I "${ENGINE_SHADER_SOURCE_DIR}" -D FORWARD_OUTPUT_VELOCITY=0 -o "${water_no_velocity_output}"
+        COMMAND ${SLANGC} "${water_shader_source}" -target spirv -profile glsl_460 -emit-spirv-directly "$<$<CONFIG:Release>:-O3;-fp-mode;fast>" "$<$<OR:$<CONFIG:Debug>,$<CONFIG:Profile>>:-g2>" -matrix-layout-row-major -I "${ENGINE_SHADER_SOURCE_DIR}" -D FORWARD_OUTPUT_VELOCITY=0 -o "${water_no_velocity_output}"
         DEPENDS "${water_shader_source}" ${shader_modules}
-        COMMENT "Compiling color-only dedicated water surface shader" VERBATIM)
+        COMMENT "Compiling color-only dedicated water surface shader" COMMAND_EXPAND_LISTS VERBATIM)
     set(grass_no_velocity_output "${SHADER_OUT_DIR}/grass_forward_no_velocity.spv")
     list(APPEND shader_outputs "${grass_no_velocity_output}")
     add_custom_command(OUTPUT "${grass_no_velocity_output}"
         COMMAND ${CMAKE_COMMAND} -E make_directory "${SHADER_OUT_DIR}"
-        COMMAND ${SLANGC} "${ENGINE_SHADER_SOURCE_DIR}/Grass/grass_forward.slang" -target spirv -profile glsl_460 -emit-spirv-directly -g2 -matrix-layout-row-major -I "${ENGINE_SHADER_SOURCE_DIR}" -D FORWARD_OUTPUT_VELOCITY=0 -o "${grass_no_velocity_output}"
+        COMMAND ${SLANGC} "${ENGINE_SHADER_SOURCE_DIR}/Grass/grass_forward.slang" -target spirv -profile glsl_460 -emit-spirv-directly "$<$<CONFIG:Release>:-O3;-fp-mode;fast>" "$<$<OR:$<CONFIG:Debug>,$<CONFIG:Profile>>:-g2>" -matrix-layout-row-major -I "${ENGINE_SHADER_SOURCE_DIR}" -D FORWARD_OUTPUT_VELOCITY=0 -o "${grass_no_velocity_output}"
         DEPENDS "${ENGINE_SHADER_SOURCE_DIR}/Grass/grass_forward.slang" ${shader_modules}
-        COMMENT "Compiling color-only grass forward shader" VERBATIM)
+        COMMENT "Compiling color-only grass forward shader" COMMAND_EXPAND_LISTS VERBATIM)
     add_custom_target(EngineShaders DEPENDS ${shader_outputs})
     set(GAMEENGINE_SHADER_OUTPUT_DIR "${SHADER_OUT_DIR}" PARENT_SCOPE)
 endfunction()
