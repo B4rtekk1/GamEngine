@@ -24,7 +24,8 @@ void RtContactShadowPass::create(const VkPhysicalDevice physical, const VkDevice
         // The forward pass samples this low-resolution mask at full-resolution.
         // Linear filtering is the inexpensive base upsample; edge-aware
         // reconstruction can be layered on top without changing this pass.
-        visibility_.create(physical, device_, extent_, allocator, VK_FILTER_LINEAR, VK_FORMAT_R16_SFLOAT, true);
+        for (auto& target : visibility_)
+            target.create(physical, device_, extent_, allocator, VK_FILTER_LINEAR, VK_FORMAT_R16_SFLOAT, true);
         const std::array<VkDescriptorSetLayoutBinding, 6> bindings{{
             {0, VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
             {1, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
@@ -59,7 +60,7 @@ void RtContactShadowPass::create(const VkPhysicalDevice physical, const VkDevice
         if (vkAllocateDescriptorSets(device_, &allocation, sets_.data()) != VK_SUCCESS)
             throw std::runtime_error("Could not allocate RT contact descriptor sets");
         for (std::uint32_t frame = 0; frame < FramesInFlight; ++frame) {
-            const VkDescriptorImageInfo output{VK_NULL_HANDLE, visibility_.imageView(), VK_IMAGE_LAYOUT_GENERAL};
+            const VkDescriptorImageInfo output{VK_NULL_HANDLE, visibility_[frame].imageView(), VK_IMAGE_LAYOUT_GENERAL};
             const VkDescriptorBufferInfo ubo{ubos[frame], 0, VK_WHOLE_SIZE};
             const std::array<VkWriteDescriptorSet, 2> writes{{
                 {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr, sets_[frame], 3, 0, 1, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, &output},
@@ -109,7 +110,7 @@ void RtContactShadowPass::record(const VkCommandBuffer cmd, const std::uint32_t 
     toStorage.dstAccessMask = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
     toStorage.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
     toStorage.newLayout = VK_IMAGE_LAYOUT_GENERAL;
-    toStorage.image = visibility_.image();
+    toStorage.image = visibility_[frame].image();
     toStorage.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
     VkDependencyInfo dependency{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
     dependency.imageMemoryBarrierCount = 1;
@@ -138,7 +139,7 @@ void RtContactShadowPass::record(const VkCommandBuffer cmd, const std::uint32_t 
     toSample.dstAccessMask = VK_ACCESS_2_SHADER_SAMPLED_READ_BIT;
     toSample.oldLayout = VK_IMAGE_LAYOUT_GENERAL;
     toSample.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-    toSample.image = visibility_.image();
+    toSample.image = visibility_[frame].image();
     toSample.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
     dependency.pImageMemoryBarriers = &toSample;
     vkCmdPipelineBarrier2(cmd, &dependency);
@@ -151,7 +152,7 @@ void RtContactShadowPass::destroy() noexcept {
         if (pool_) vkDestroyDescriptorPool(device_, pool_, nullptr);
         if (layout_) vkDestroyDescriptorSetLayout(device_, layout_, nullptr);
     }
-    visibility_.destroy();
+    for (auto& target : visibility_) target.destroy();
     pipeline_ = VK_NULL_HANDLE; pipelineLayout_ = VK_NULL_HANDLE;
     pool_ = VK_NULL_HANDLE; layout_ = VK_NULL_HANDLE; sets_ = {};
     extent_ = {}; device_ = VK_NULL_HANDLE;

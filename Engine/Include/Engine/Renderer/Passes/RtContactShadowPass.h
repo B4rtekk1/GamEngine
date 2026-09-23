@@ -26,14 +26,18 @@ public:
                 VkImageView normals, VkSampler normalSampler,
                 VkImageView directionalVisibility, VkSampler directionalSampler,
                 const RtContactShadowSettings& settings);
-    [[nodiscard]] VkImageView resultView() const noexcept { return visibility_.imageView(); }
-    [[nodiscard]] VkSampler resultSampler() const noexcept { return visibility_.sampler(); }
+    [[nodiscard]] VkImageView resultView(std::uint32_t frameSlot) const noexcept {
+        return visibility_[frameSlot % visibility_.size()].imageView();
+    }
+    [[nodiscard]] VkSampler resultSampler(std::uint32_t frameSlot) const noexcept {
+        return visibility_[frameSlot % visibility_.size()].sampler();
+    }
     [[nodiscard]] VkExtent2D extent() const noexcept { return extent_; }
 
 private:
     VkDevice device_{VK_NULL_HANDLE};
     VkExtent2D extent_{};
-    HdrBuffer visibility_;
+    std::array<HdrBuffer, 2> visibility_{};
     VkDescriptorSetLayout layout_{VK_NULL_HANDLE};
     VkDescriptorPool pool_{VK_NULL_HANDLE};
     std::array<VkDescriptorSet, 2> sets_{};

@@ -66,8 +66,11 @@ namespace Engine {
             std::uint32_t shaderSlot{};
             bool castShadow{true};
             ShadowCacheMode shadowCacheMode{ShadowCacheMode::Auto};
-            /// True for masked/double-sided vegetation that needs its own raster pipeline.
+            /// Actual material sidedness, independent of alpha mode.
             bool twoSided{false};
+            /// Raster stream selection for masked/blended foliage materials.
+            bool foliagePipeline{false};
+            AlphaMode alphaMode{AlphaMode::Opaque};
             AABB worldBounds{};
         };
 

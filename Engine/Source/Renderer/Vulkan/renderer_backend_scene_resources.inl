@@ -901,7 +901,8 @@
                     const auto appendRange = [&](const std::uint32_t rangeShaderSlot, const std::uint32_t sectionIndex, const std::uint32_t firstIndex,
                                                  const std::uint32_t indexCount, const std::uint32_t firstMeshlet,
                                                  const std::uint32_t meshletCount, const AABB& rangeBounds,
-                                                 const bool usesFoliagePipeline, const bool forceDistinctBatch) {
+                                                 const bool usesFoliagePipeline, const AlphaMode alphaMode,
+                                                 const bool twoSided, const bool forceDistinctBatch) {
                     const BatchKey batchKey{renderer.mesh.resource().get(), sectionIndex, rangeShaderSlot, usesFoliagePipeline,
                                             castShadow, renderer.shadowCacheMode, renderer.cullingBatch};
                     const auto [batchIt, inserted] = !forceDistinctBatch && optimizationFeatures.instancedRendering
@@ -934,7 +935,9 @@
                             .shadowCacheMode = renderer.shadowCacheMode,
                             // The foliage stream is drawn after opaque geometry. Route
                             // blend here until transparent draws have a sorted stream.
-                            .twoSided = usesFoliagePipeline,
+                            .twoSided = twoSided,
+                            .foliagePipeline = usesFoliagePipeline,
+                            .alphaMode = alphaMode,
                             .worldBounds = rangeWorldBounds,
                         });
                         sceneGpu.batchRenderableIndices.emplace_back();
@@ -970,21 +973,25 @@
                             .min = {-Water::OceanExtents.back(), -2.0F, -Water::OceanExtents.back()},
                             .max = { Water::OceanExtents.back(),  2.0F,  Water::OceanExtents.back()},
                         };
-                        appendRange(shaderSlot, 0, 0, 0, 0, 0, oceanBounds, overrideUsesFoliagePipeline, false);
+                        appendRange(shaderSlot, 0, 0, 0, 0, 0, oceanBounds, overrideUsesFoliagePipeline,
+                            renderer.material.pbr.alphaMode, renderer.material.pbr.doubleSided, false);
                     } else if (!mesh->renderSections.empty()) {
                         for (std::uint32_t sectionIndex = 0; sectionIndex < mesh->renderSections.size(); ++sectionIndex) {
                             const Mesh::RenderSection& section = mesh->renderSections[sectionIndex];
                             const PBRMaterial& material = section.materialIndex < mesh->materials.size()
                                 ? mesh->materials[section.materialIndex] : PBRMaterial{};
-                            const bool usesFoliagePipeline = overrideUsesFoliagePipeline || material.doubleSided ||
-                                material.alphaMode == AlphaMode::Mask || material.alphaMode == AlphaMode::Blend;
+                            const PBRMaterial& effectiveMaterial = renderer.materialOverride ? renderer.material.pbr : material;
+                            const bool usesFoliagePipeline = renderer.materialOverride ? overrideUsesFoliagePipeline :
+                                (material.doubleSided || material.alphaMode == AlphaMode::Mask || material.alphaMode == AlphaMode::Blend);
                             appendRange(pbrShaderSlot(renderer.materialOverride ? renderer.material.pbr : material),
                                 sectionIndex, section.firstIndex, section.indexCount, section.firstMeshlet,
-                                section.meshletCount, section.localBounds, usesFoliagePipeline, false);
+                                section.meshletCount, section.localBounds, usesFoliagePipeline,
+                                effectiveMaterial.alphaMode, effectiveMaterial.doubleSided, false);
                         }
                     } else {
                         appendRange(pbrShaderSlot(renderer.material.pbr), 0, 0, mesh->indexCount(), 0, static_cast<std::uint32_t>(mesh->meshlets.size()),
-                                    localBounds, overrideUsesFoliagePipeline, false);
+                                    localBounds, overrideUsesFoliagePipeline, renderer.material.pbr.alphaMode,
+                                    renderer.material.pbr.doubleSided, false);
                     }
                 });
 
@@ -2204,7 +2211,7 @@
                     };
                     const GPUSceneDatabase::GPUMaterial material{
                         .materialTableOffset = record.materialTableOffset,
-                        .pipelineClass = batch.twoSided ? 1U : 0U,
+                        .pipelineClass = batch.foliagePipeline ? 1U : 0U,
                         .flags = batch.castShadow ? 1U : 0U,
                     };
                     const auto worldMatrix = [&model] {
@@ -2216,7 +2223,7 @@
                         }
                         return matrix;
                     }();
-                    const std::uint32_t instanceFlags = 1U | (batch.twoSided ? 2U : 0U);
+                    const std::uint32_t instanceFlags = 1U | (batch.foliagePipeline ? 2U : 0U);
                     const bool proxyUninitialized = record.renderProxy.instance == InvalidGPUSceneInstanceId;
                     if (proxyUninitialized) {
                         const std::uint64_t meshKey = static_cast<std::uint64_t>(

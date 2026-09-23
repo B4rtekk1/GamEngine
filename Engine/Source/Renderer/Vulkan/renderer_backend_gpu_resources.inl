@@ -20,7 +20,7 @@
                 object.firstInstance = batch.firstInstance;
                 object.castShadow = batch.castShadow ? 1U : 0U;
                 object.shadowCacheMode = static_cast<std::uint32_t>(batch.shadowCacheMode);
-                object.twoSided = batch.twoSided ? 1U : 0U;
+                object.twoSided = batch.foliagePipeline ? 1U : 0U;
                 object.shader = batch.shaderSlot;
                 object.lod1IndexCount = batch.lod1IndexCount;
                 object.lod2IndexCount = batch.lod2IndexCount;

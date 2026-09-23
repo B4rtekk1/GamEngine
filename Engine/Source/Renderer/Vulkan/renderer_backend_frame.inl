@@ -383,7 +383,7 @@
                           -std::log2(0.1F) * (24.0F / std::log2(1000.0F / 0.1F)),
                           static_cast<float>(imageBasedLighting.prefilteredMipLevels()),
                           !msaa.enabled() && rtContactShadowSettings.mode == ContactShadowMode::RayTraced &&
-                              rtContactShadowPass.resultView() != VK_NULL_HANDLE ? 1.0F : 0.0F},
+                              rtContactShadowPass.resultView(frame) != VK_NULL_HANDLE ? 1.0F : 0.0F},
                 frameData.lights};
             uniformBuffers[frame].update(&data, sizeof(data));
             const ClusteredLightingUniforms clustered{
@@ -1022,9 +1022,9 @@
                 }
                 if (vulkanDevice.supportsRayQuery() && !msaa.enabled() &&
                     rtContactShadowSettings.mode == ContactShadowMode::RayTraced &&
-                    rtContactShadowPass.resultView() != VK_NULL_HANDLE) {
+                    rtContactShadowPass.resultView(currentFrame) != VK_NULL_HANDLE) {
                     shadowPass.setContactShadowTexture(currentFrame, {
-                        rtContactShadowPass.resultSampler(), rtContactShadowPass.resultView(),
+                        rtContactShadowPass.resultSampler(currentFrame), rtContactShadowPass.resultView(currentFrame),
                         VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL});
                 }
                 shadowPass.setShadowInstanceTransforms(currentFrame,
@@ -1410,12 +1410,21 @@
                 rtContactShadowSettings.mode == ContactShadowMode::RayTraced;
             if (rtContactRequested && rayTracingBlasDirty && vertexBuffer.hasDeviceAddress() && indexBuffer.hasDeviceAddress()) {
                 std::vector<AccelerationStructureManager::MeshBuildInput> meshes;
-                meshes.reserve(geometryHeapAllocations.size());
-                for (const auto& [key, allocation] : geometryHeapAllocations) {
+                meshes.reserve(instanceBatches.size());
+                std::unordered_set<AccelerationStructureManager::BlasKey,
+                    AccelerationStructureManager::BlasKeyHash> builtSections;
+                for (const InstanceBatch& batch : instanceBatches) {
+                    if (!batch.castShadow || batch.alphaMode != AlphaMode::Opaque ||
+                        batch.mesh == nullptr || batch.indexCount < 3) continue;
+                    const auto allocationIt = geometryHeapAllocations.find(batch.mesh);
+                    if (allocationIt == geometryHeapAllocations.end()) continue;
+                    const auto& allocation = allocationIt->second;
+                    const AccelerationStructureManager::BlasKey key{batch.mesh, batch.firstIndex, batch.indexCount};
+                    if (!builtSections.insert(key).second) continue;
                     meshes.push_back({key,
-                        vertexBuffer.deviceAddress() + VkDeviceAddress(allocation.firstVertex) * sizeof(GpuVertex),
-                        indexBuffer.deviceAddress() + VkDeviceAddress(allocation.firstIndex) * sizeof(std::uint32_t),
-                        allocation.vertexCount, allocation.indexCount});
+                        vertexBuffer.deviceAddress(),
+                        indexBuffer.deviceAddress() + VkDeviceAddress(batch.firstIndex) * sizeof(std::uint32_t),
+                        allocation.firstVertex, allocation.vertexCount, batch.indexCount});
                 }
                 accelerationStructures.rebuildBlases(commandBuffer, meshes);
                 rayTracingBlasDirty = false;
@@ -1430,7 +1439,10 @@
                 if (inputChanged) {
                     rtTlasInstances.clear();
                     for (const InstanceBatch& batch : instanceBatches) {
-                        if (batch.twoSided || batch.mesh == nullptr) continue;
+                        // Current RT shadow traversal treats triangles as opaque. Masked materials
+                        // need alpha testing and blended materials do not have opaque shadow semantics.
+                        if (!batch.castShadow || batch.alphaMode != AlphaMode::Opaque || batch.mesh == nullptr ||
+                            batch.indexCount < 3) continue;
                         for (std::uint32_t offset = 0; offset < batch.instanceCount; ++offset) {
                             const RendererInstanceData& source = instanceModels[batch.firstInstance + offset];
                             const glm::quat q{source.rotation.w, source.rotation.x, source.rotation.y, source.rotation.z};
@@ -1438,7 +1450,8 @@
                             model[0] *= source.scaleBase.x; model[1] *= source.scaleBase.y; model[2] *= source.scaleBase.z;
                             model[3] = glm::vec4(source.positionMaterial.x, source.positionMaterial.y, source.positionMaterial.z, 1.0F);
                             AccelerationStructureManager::InstanceBuildInput input{};
-                            input.meshKey = batch.mesh; input.mask = 0x01; input.customIndex = batch.firstInstance + offset;
+                            input.meshKey = {batch.mesh, batch.firstIndex, batch.indexCount};
+                            input.mask = 0x01; input.customIndex = batch.firstInstance + offset;
                             for (std::uint32_t row = 0; row < 3; ++row)
                                 for (std::uint32_t column = 0; column < 4; ++column)
                                     input.transform[row * 4 + column] = model[column][row];
