@@ -226,6 +226,7 @@
 
             taaJitterX = 0.0F;
             taaJitterY = 0.0F;
+            cameraController.camera()->setProjectionJitter(0.0F, 0.0F);
             // The embedded Game View is also rendered before the ImGui pass.
             // Apply TAA there, but leave the independent Scene View camera
             // stable so editor gizmos and picking stay pixel-precise.

@@ -15,9 +15,6 @@ struct Settings {
     float projectionA, projectionB;
 };
 [[vk::push_constant]] ConstantBuffer<Settings> settings;
-// One 16x16 group loads the 18x18 current-color footprint once.
-groupshared float3 Tile[18 * 18];
-
 float3 reinhard(float3 color) { return color / (color + 1.0); }
 float3 reinhardInverse(float3 color) { return color / max(1.0 - color, 1e-5); }
 float viewDepth(float deviceDepth) {
@@ -73,32 +70,32 @@ void main(uint3 groupId : SV_GroupID, uint3 threadId : SV_GroupThreadID,
     const int2 extent = int2(width, height);
     const float2 resolution = float2(width, height);
     const float2 texel = 1.0 / resolution;
-    const int2 tileOrigin = int2(groupId.xy * 16) - 1;
-    const uint lane = threadId.y * 16 + threadId.x;
-    for (uint index = lane; index < 18 * 18; index += 16 * 16) {
-        const int2 tileCoord = int2(index % 18, index / 18);
-        const int2 pixel = clamp(tileOrigin + tileCoord, int2(0, 0), extent - 1);
-        Tile[index] = reinhard(max(currentFrame.Load(int3(pixel, 0)).rgb, 0.0));
-    }
-    GroupMemoryBarrierWithGroupSync();
     if (any(dispatchId.xy >= uint2(extent))) return;
-    const float2 uv = (float2(dispatchId.xy) + 0.5) * texel;
-    const float3 currentTm = Tile[(threadId.y + 1) * 18 + threadId.x + 1];
-    const uint waterQuality = settings.padding > 0.5 ? asuint(waterMetaFrame.Sample(uv).y) : 0u;
+    // The resolve writes stable, unjittered pixels. Locate each output pixel's
+    // corresponding sample in the jittered current render.
+    const float2 outputUv = (float2(dispatchId.xy) + 0.5) * texel;
+    const float2 currentJitter = float2(settings.currentJitterX,
+                                        settings.currentJitterY) * 0.5;
+    const float2 previousJitter = float2(settings.previousJitterX,
+                                         settings.previousJitterY) * 0.5;
+    const float2 jitterDelta = currentJitter - previousJitter;
+    const float2 currentUv = clamp(outputUv - currentJitter, texel * 0.5, 1.0 - texel * 0.5);
+    const float3 currentTm = reinhard(max(currentFrame.Sample(currentUv).rgb, 0.0));
+    const uint waterQuality = settings.padding > 0.5 ? asuint(waterMetaFrame.Sample(currentUv).y) : 0u;
     const bool waterPixel = (waterQuality & 0x80000000u) != 0;
-    const float currentDepth = waterPixel ? waterSurfaceFrame.Sample(uv).z
-                                          : currentDepthFrame.Sample(uv).r;
+    const float currentDepth = waterPixel ? waterSurfaceFrame.Sample(currentUv).z
+                                          : currentDepthFrame.Sample(currentUv).r;
     const float reactive = (waterQuality & 0x40000000u) != 0 ? 1.0 : 0.0;
     // At a silhouette, bilinear velocity may contain the background's motion
     // even though the current pixel belongs to the foreground.  Vulkan's
     // depth convention is near=0, so select the velocity at the nearest depth
     // in a compact 3x3 footprint before reprojection.
     float nearestDepth = currentDepth;
-    float2 velocitySample = waterPixel ? waterVelocityFrame.Sample(uv).xy
-                                       : velocityFrame.Sample(uv).xy;
+    float2 velocitySample = waterPixel ? waterVelocityFrame.Sample(currentUv).xy
+                                       : velocityFrame.Sample(currentUv).xy;
     [unroll] for (int y = -1; y <= 1; ++y) {
         [unroll] for (int x = -1; x <= 1; ++x) {
-            const float2 sampleUv = clamp(uv + float2(x, y) * texel, 0.0, 1.0);
+            const float2 sampleUv = clamp(currentUv + float2(x, y) * texel, texel * 0.5, 1.0 - texel * 0.5);
             const uint sampleWaterQuality = settings.padding > 0.5 ? asuint(waterMetaFrame.Sample(sampleUv).y) : 0u;
             const bool sampleWater = (sampleWaterQuality & 0x80000000u) != 0;
             const float sampleDepth = sampleWater ? waterSurfaceFrame.Sample(sampleUv).z
@@ -115,14 +112,8 @@ void main(uint3 groupId : SV_GroupID, uint3 threadId : SV_GroupThreadID,
     // from the current UV to locate the corresponding previous-frame sample.
     // Remove jitter only when estimating actual scene motion.
     // Jitter is stored in NDC, while velocity is in UV space (NDC * 0.5).
-    const float2 currentJitter = float2(settings.currentJitterX,
-                                        settings.currentJitterY) * 0.5;
-    const float2 previousJitter = float2(settings.previousJitterX,
-                                         settings.previousJitterY) * 0.5;
-    const float2 jitterDelta = currentJitter - previousJitter;
-    const float2 reprojectionVelocity = velocitySample;
     const float2 physicalVelocity = velocitySample + jitterDelta;
-    const float2 historyUv = uv - reprojectionVelocity;
+    const float2 historyUv = outputUv - physicalVelocity;
     const bool historyInBounds = all(historyUv >= 0.0) && all(historyUv <= 1.0);
     // Keep history depth linear before quantizing it to R16F. Device depth
     // loses too much precision near the far plane in a half-float image.
@@ -131,14 +122,14 @@ void main(uint3 groupId : SV_GroupID, uint3 threadId : SV_GroupThreadID,
     const bool depthMatches = abs(currentViewDepth - historyViewDepth) <=
         0.02 * max(currentViewDepth, historyViewDepth);
 
-    // Compute weighted neighbourhood statistics in the same bounded space as
-    // the stored history. Motion tightens the box at disocclusions.
+    // Compute clipping statistics around the reconstructed current sample.
     float3 mean = 0.0;
     float3 meanSquared = 0.0;
     float totalWeight = 0.0;
     [unroll] for (int y = -1; y <= 1; ++y) {
         [unroll] for (int x = -1; x <= 1; ++x) {
-            const float3 sample = Tile[(threadId.y + 1 + y) * 18 + threadId.x + 1 + x];
+            const float2 sampleUv = clamp(currentUv + float2(x, y) * texel, texel * 0.5, 1.0 - texel * 0.5);
+            const float3 sample = reinhard(max(currentFrame.Sample(sampleUv).rgb, 0.0));
             const float weight = exp(-3.0 * float(x * x + y * y) / 4.0);
             mean += sample * weight;
             meanSquared += sample * sample * weight;
