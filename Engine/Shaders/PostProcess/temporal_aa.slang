@@ -1,10 +1,3 @@
-struct VertexOutput { float4 position : SV_Position; [[vk::location(0)]] float2 uv; };
-[shader("vertex")]
-VertexOutput vertexMain(uint index : SV_VertexID) {
-    VertexOutput output; float2 p = float2((index << 1) & 2, index & 2);
-    output.uv = p; output.position = float4(p * 2.0 - 1.0, 0.0, 1.0); return output;
-}
-
 [[vk::binding(0, 0)]] Sampler2D currentFrame;
 [[vk::binding(1, 0)]] Sampler2D historyFrame;
 [[vk::binding(2, 0)]] Sampler2D velocityFrame;
@@ -13,18 +6,17 @@ VertexOutput vertexMain(uint index : SV_VertexID) {
 [[vk::binding(5, 0)]] Sampler2D waterVelocityFrame;
 [[vk::binding(6, 0)]] Sampler2D waterMetaFrame;
 [[vk::binding(7, 0)]] Sampler2D waterSurfaceFrame;
+[[vk::binding(8, 0)]] RWTexture2D<float4> resolvedFrame;
+[[vk::binding(9, 0)]] RWTexture2D<float4> resolvedDepthFrame;
+[[vk::binding(10, 0)]] RWTexture2D<float4> resolvedHistoryFrame;
 struct Settings {
     float currentJitterX, currentJitterY, previousJitterX, previousJitterY;
     float historyWeight, inverseWidth, inverseHeight, padding;
     float projectionA, projectionB;
 };
 [[vk::push_constant]] ConstantBuffer<Settings> settings;
-struct FragmentInput { [[vk::location(0)]] float2 uv; };
-struct FragmentOutput {
-    [[vk::location(0)]] float4 color : SV_Target;
-    [[vk::location(1)]] float4 depth : SV_Target1;
-    [[vk::location(2)]] float4 historyColor : SV_Target2;
-};
+// One 16x16 group loads the 18x18 current-color footprint once.
+groupshared float3 Tile[18 * 18];
 
 float3 reinhard(float3 color) { return color / (color + 1.0); }
 float3 reinhardInverse(float3 color) { return color / max(1.0 - color, 1e-5); }
@@ -56,7 +48,7 @@ float3 sampleHistoryCatmullRom(float2 uv, float2 resolution) {
     cubic += historyFrame.Sample(float2(uv0.x, uv3.y)).rgb * w0.x * w3.y;
     cubic += historyFrame.Sample(float2(uv12.x, uv3.y)).rgb * w12.x * w3.y;
     cubic += historyFrame.Sample(float2(uv3.x, uv3.y)).rgb * w3.x * w3.y;
-    return saturate(cubic);
+    return max(cubic, 0.0);
 }
 
 // Playdead/Godot AABB clipping avoids the colour shifts of per-channel clamp.
@@ -73,27 +65,38 @@ float3 clipAabb(float3 boxMin, float3 boxMax, float3 center, float3 history) {
     return center + direction;
 }
 
-[shader("fragment")]
-FragmentOutput fragmentMain(FragmentInput input) {
-    FragmentOutput output;
+[numthreads(16, 16, 1)] [shader("compute")]
+void main(uint3 groupId : SV_GroupID, uint3 threadId : SV_GroupThreadID,
+          uint3 dispatchId : SV_DispatchThreadID) {
     const float2 texel = float2(settings.inverseWidth, settings.inverseHeight);
     const float2 resolution = 1.0 / texel;
-    const float3 current = currentFrame.Sample(input.uv).rgb;
-    const uint waterQuality = settings.padding > 0.5 ? asuint(waterMetaFrame.Sample(input.uv).y) : 0u;
+    const int2 extent = int2(resolution);
+    const int2 tileOrigin = int2(groupId.xy * 16) - 1;
+    const uint lane = threadId.y * 16 + threadId.x;
+    for (uint index = lane; index < 18 * 18; index += 16 * 16) {
+        const int2 tileCoord = int2(index % 18, index / 18);
+        const int2 pixel = clamp(tileOrigin + tileCoord, int2(0, 0), extent - 1);
+        Tile[index] = reinhard(max(currentFrame.Load(int3(pixel, 0)).rgb, 0.0));
+    }
+    GroupMemoryBarrierWithGroupSync();
+    if (any(dispatchId.xy >= uint2(extent))) return;
+    const float2 uv = (float2(dispatchId.xy) + 0.5) * texel;
+    const float3 currentTm = Tile[(threadId.y + 1) * 18 + threadId.x + 1];
+    const uint waterQuality = settings.padding > 0.5 ? asuint(waterMetaFrame.Sample(uv).y) : 0u;
     const bool waterPixel = (waterQuality & 0x80000000u) != 0;
-    const float currentDepth = waterPixel ? waterSurfaceFrame.Sample(input.uv).z
-                                          : currentDepthFrame.Sample(input.uv).r;
+    const float currentDepth = waterPixel ? waterSurfaceFrame.Sample(uv).z
+                                          : currentDepthFrame.Sample(uv).r;
     const float reactive = (waterQuality & 0x40000000u) != 0 ? 1.0 : 0.0;
     // At a silhouette, bilinear velocity may contain the background's motion
     // even though the current pixel belongs to the foreground.  Vulkan's
     // depth convention is near=0, so select the velocity at the nearest depth
     // in a compact 3x3 footprint before reprojection.
     float nearestDepth = currentDepth;
-    float2 velocitySample = waterPixel ? waterVelocityFrame.Sample(input.uv).xy
-                                       : velocityFrame.Sample(input.uv).xy;
+    float2 velocitySample = waterPixel ? waterVelocityFrame.Sample(uv).xy
+                                       : velocityFrame.Sample(uv).xy;
     [unroll] for (int y = -1; y <= 1; ++y) {
         [unroll] for (int x = -1; x <= 1; ++x) {
-            const float2 sampleUv = clamp(input.uv + float2(x, y) * texel, 0.0, 1.0);
+            const float2 sampleUv = clamp(uv + float2(x, y) * texel, 0.0, 1.0);
             const uint sampleWaterQuality = settings.padding > 0.5 ? asuint(waterMetaFrame.Sample(sampleUv).y) : 0u;
             const bool sampleWater = (sampleWaterQuality & 0x80000000u) != 0;
             const float sampleDepth = sampleWater ? waterSurfaceFrame.Sample(sampleUv).z
@@ -116,7 +119,7 @@ FragmentOutput fragmentMain(FragmentInput input) {
                                          settings.previousJitterY) * 0.5;
     const float2 jitterDelta = currentJitter - previousJitter;
     const float2 velocityWithoutJitter = velocitySample + jitterDelta;
-    const float2 historyUv = input.uv - velocityWithoutJitter;
+    const float2 historyUv = uv - velocityWithoutJitter;
     const bool historyInBounds = all(historyUv >= 0.0) && all(historyUv <= 1.0);
     const float historyDepth = historyDepthFrame.Sample(historyUv).r;
     // Compare positive view-space distances; device-depth differences lose
@@ -133,8 +136,7 @@ FragmentOutput fragmentMain(FragmentInput input) {
     float totalWeight = 0.0;
     [unroll] for (int y = -1; y <= 1; ++y) {
         [unroll] for (int x = -1; x <= 1; ++x) {
-            const float2 sampleUv = clamp(input.uv + float2(x, y) * texel, 0.0, 1.0);
-            const float3 sample = reinhard(max(currentFrame.Sample(sampleUv).rgb, 0.0));
+            const float3 sample = Tile[(threadId.y + 1 + y) * 18 + threadId.x + 1 + x];
             const float weight = exp(-3.0 * float(x * x + y * y) / 4.0);
             mean += sample * weight;
             meanSquared += sample * sample * weight;
@@ -143,19 +145,17 @@ FragmentOutput fragmentMain(FragmentInput input) {
     }
     mean /= totalWeight;
     meanSquared /= totalWeight;
-    const float motion = length(velocityWithoutJitter);
-    const float motionT = saturate(motion / 0.02);
+    const float motionPixels = length(velocityWithoutJitter * resolution);
+    const float motionT = saturate(motionPixels / 32.0);
     const float boxSize = lerp(2.5, 0.5, motionT * motionT * (3.0 - 2.0 * motionT));
     const float3 deviation = sqrt(max(meanSquared - mean * mean, 0.0)) * boxSize;
     float3 history = sampleHistoryCatmullRom(historyUv, resolution);
     history = clipAabb(mean - deviation, mean + deviation, mean, history);
 
-    const float3 currentTm = reinhard(max(current, 0.0));
     const float historyWeight = settings.historyWeight * lerp(1.0, 0.12, reactive);
     const float3 resolvedTm = lerp(currentTm, history,
         (historyInBounds && depthMatches) ? historyWeight : 0.0);
-    output.color = float4(reinhardInverse(resolvedTm), 1.0);
-    output.depth = float4(currentDepth, 0.0, 0.0, 1.0);
-    output.historyColor = float4(resolvedTm, 1.0);
-    return output;
+    resolvedFrame[dispatchId.xy] = float4(reinhardInverse(resolvedTm), 1.0);
+    resolvedDepthFrame[dispatchId.xy] = float4(currentDepth, 0.0, 0.0, 1.0);
+    resolvedHistoryFrame[dispatchId.xy] = float4(resolvedTm, 1.0);
 }

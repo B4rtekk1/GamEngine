@@ -1,6 +1,5 @@
 #pragma once
 
-#include "Engine/Renderer/Vulkan/graphics_pipeline.h"
 #include "Engine/Renderer/Vulkan/hdr_buffer.h"
 
 #include <array>
@@ -52,7 +51,8 @@ namespace Engine {
     private:
         void initializeHistory(VkCommandBuffer commandBuffer);
         VkDevice device_ = VK_NULL_HANDLE;
-        GraphicsPipeline pipeline_;
+        VkPipelineLayout pipelineLayout_ = VK_NULL_HANDLE;
+        VkPipeline pipeline_ = VK_NULL_HANDLE;
         VkDescriptorSetLayout layout_ = VK_NULL_HANDLE;
         VkDescriptorPool pool_ = VK_NULL_HANDLE;
         // Two history inputs times two source variants: ordinary scene data

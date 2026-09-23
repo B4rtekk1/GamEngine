@@ -1941,10 +1941,8 @@
                 hiZValid[currentFrame] = true;
             }
 
-            // Presentation is one declarative chain.  Keeping TAA, bloom and
-            // the final raster passes in a single graph gives the compiler the
-            // actual HDR-history and swapchain hazards instead of relying on
-            // the render-pass layout transitions hidden inside their callbacks.
+            // Presentation is one declarative chain. The graph owns the HDR
+            // history and swapchain transitions between TAA, bloom and raster passes.
             frameGraph.setQueueFamily(RenderGraph::Queue::Graphics,
                                                   vulkanDevice.graphicsQueueFamily());
             const VkExtent2D postExtent = swapchain.extent();
@@ -1952,6 +1950,8 @@
                 .extent = {postExtent.width, postExtent.height, 1}, .format = HdrBuffer::Format,
                 .usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
                 .aspect = VK_IMAGE_ASPECT_COLOR_BIT};
+            auto taaHistoryDesc = hdrDesc;
+            taaHistoryDesc.usage |= VK_IMAGE_USAGE_STORAGE_BIT;
             const RenderGraph::TextureDesc velocityDesc{
                 .extent = {postExtent.width, postExtent.height, 1}, .format = VK_FORMAT_R16G16_SFLOAT,
                 .usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
@@ -1988,6 +1988,7 @@
                 "Swapchain", swapchain.images().at(imageIndex.value), presentDesc,
                 {.layout = VK_IMAGE_LAYOUT_UNDEFINED});
 
+            const Mat4 taaProjection = cameraController.camera()->projectionMatrix();
             RenderGraph::TextureHandle graphPostSource = graphHdr;
             if (renderGameViewport && taaResolveActive) {
                 // Initialize before importing: from here the render graph is
@@ -1996,13 +1997,13 @@
                 const std::uint32_t historyReadIndex = temporalAaPass.resolvedIndex();
                 const std::uint32_t historyWriteIndex = temporalAaPass.nextResolvedIndex();
                 const auto graphHistoryRead = frameGraph.importTexture(
-                    "TAA history read", temporalAaPass.historyImage(historyReadIndex), hdrDesc,
-                    {.stage = VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT,
+                    "TAA history read", temporalAaPass.historyImage(historyReadIndex), taaHistoryDesc,
+                    {.stage = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
                      .access = VK_ACCESS_2_SHADER_SAMPLED_READ_BIT,
                      .layout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL});
                 const auto graphHistoryWrite = frameGraph.importTexture(
-                    "TAA history write", temporalAaPass.historyImage(historyWriteIndex), hdrDesc,
-                    {.stage = VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT,
+                    "TAA history write", temporalAaPass.historyImage(historyWriteIndex), taaHistoryDesc,
+                    {.stage = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
                      .access = VK_ACCESS_2_SHADER_SAMPLED_READ_BIT,
                      .layout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL});
                 RenderGraph::TextureHandle graphWaterVelocity;
@@ -2027,16 +2028,16 @@
                 }
                 frameGraph.addPass("TAA resolve", RenderGraph::Queue::Graphics,
                 [&](RenderGraph::PassBuilder& builder) {
-                    builder.read(graphHdr, RenderGraph::TextureUsage::SampledReadFragment);
-                    builder.read(graphVelocity, RenderGraph::TextureUsage::SampledReadFragment);
-                    builder.read(graphDepth, RenderGraph::TextureUsage::DepthReadFragment);
-                    builder.read(graphHistoryRead, RenderGraph::TextureUsage::SampledReadFragment);
+                    builder.read(graphHdr, RenderGraph::TextureUsage::SampledReadCompute);
+                    builder.read(graphVelocity, RenderGraph::TextureUsage::SampledReadCompute);
+                    builder.read(graphDepth, RenderGraph::TextureUsage::DepthReadCompute);
+                    builder.read(graphHistoryRead, RenderGraph::TextureUsage::SampledReadCompute);
                     if (graphWaterVelocity) {
-                        builder.read(graphWaterVelocity, RenderGraph::TextureUsage::SampledReadFragment);
-                        builder.read(graphWaterMeta, RenderGraph::TextureUsage::SampledReadFragment);
-                        builder.read(graphWaterSurface, RenderGraph::TextureUsage::SampledReadFragment);
+                        builder.read(graphWaterVelocity, RenderGraph::TextureUsage::SampledReadCompute);
+                        builder.read(graphWaterMeta, RenderGraph::TextureUsage::SampledReadCompute);
+                        builder.read(graphWaterSurface, RenderGraph::TextureUsage::SampledReadCompute);
                     }
-                    builder.write(graphHistoryWrite, RenderGraph::TextureUsage::ColorAttachment);
+                    builder.write(graphHistoryWrite, RenderGraph::TextureUsage::StorageWriteCompute);
                     builder.setFinalTextureState(graphHistoryWrite, {
                         .stage = VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT,
                         .access = VK_ACCESS_2_SHADER_SAMPLED_READ_BIT,
@@ -2045,7 +2046,7 @@
                     gpuTimestampProfiler.beginZone(buffer, currentFrame, taaProfileName);
                     temporalAaPass.setVirtualWaterEnabled(virtualWaterPreparedThisFrame);
                     temporalAaPass.record(buffer, postExtent, taaJitterX, taaJitterY,
-                                          currentProjection.native()[2][2], currentProjection.native()[3][2]);
+                                          taaProjection.native()[2][2], taaProjection.native()[3][2]);
                     gpuTimestampProfiler.endZone(buffer, currentFrame);
                 });
                 graphPostSource = graphHistoryWrite;

@@ -42,6 +42,7 @@ namespace Engine::RenderGraph {
         SampledReadCompute,
         /** Sample a depth image without losing its depth/stencil read-only layout. */
         DepthReadFragment,
+        DepthReadCompute,
         StorageRead,
         StorageWrite,
         StorageReadCompute,
