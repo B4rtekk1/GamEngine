@@ -9,8 +9,22 @@ import Common.ShadowSampling;
 #define MATERIAL_VARIANT 0
 #endif
 
+// 0 basic, 3 normal, 4 extended, 5 foliage, 6 terrain.
+#ifdef ENGINE_SHADER_GRAPH
+#define PBR_HAS_NORMAL 1
+#define PBR_HAS_EXTENSIONS 1
+#define PBR_HAS_PROBES 1
+#else
+#define PBR_HAS_NORMAL (MATERIAL_VARIANT == 3 || MATERIAL_VARIANT == 4 || MATERIAL_VARIANT == 5 || MATERIAL_VARIANT == 6)
+#define PBR_HAS_EXTENSIONS (MATERIAL_VARIANT == 4 || MATERIAL_VARIANT == 5 || MATERIAL_VARIANT == 6)
+#define PBR_HAS_PROBES (MATERIAL_VARIANT == 4 || MATERIAL_VARIANT == 5 || MATERIAL_VARIANT == 6)
+#endif
+
 #ifndef FORWARD_OUTPUT_VELOCITY
 #define FORWARD_OUTPUT_VELOCITY 1
+#endif
+#ifndef FORWARD_RESOLVED_VSM
+#define FORWARD_RESOLVED_VSM 0
 #endif
 
 static const uint PBR_DEBUG_FINAL_LIGHTING = 0u;
@@ -30,6 +44,9 @@ static const uint PBR_DEBUG_GEOMETRIC_DIRECT_DIFFUSE = 4u;
 // HDR darkening pass.
 [[vk::binding(16, 0)]] Sampler2D gtaoVisibility;
 [[vk::binding(18, 0)]] Sampler2D rtContactVisibility;
+#if FORWARD_RESOLVED_VSM
+[[vk::binding(19, 0)]] Sampler2D directionalVisibility;
+#endif
 
 struct ForwardVertexInput
 {
@@ -261,7 +278,7 @@ ForwardFragmentOutput fragmentMain(ForwardFragmentInput input)
 // Unlit materials never use terrain layering.  Keeping this out of their
 // module is materially different from a runtime branch: the four descriptor
 // samples and their live values disappear before register allocation.
-#if MATERIAL_VARIANT != 1
+#if MATERIAL_VARIANT == 6 || defined(ENGINE_SHADER_GRAPH)
     if ((material.textureIndices.w & 8) != 0)
     {
         baseColor = float4(material.baseColorMetallic.rgb, material.roughnessAmbientOcclusion.w);
@@ -355,6 +372,7 @@ ForwardFragmentOutput fragmentMain(ForwardFragmentInput input)
     float faceSign = doubleSided && !input.isFrontFace ? -1.0 : 1.0;
     geometricNormal *= faceSign;
     float3 normal = geometricNormal;
+#if PBR_HAS_NORMAL || MATERIAL_VARIANT == 2
     if (material.textureIndices.z >= 0 && abs(material.extensionScalars.x) > 1e-6)
     {
         float3 tangent = normalize(input.tangent.xyz - normal * dot(normal, input.tangent.xyz)) * faceSign;
@@ -365,6 +383,7 @@ ForwardFragmentOutput fragmentMain(ForwardFragmentInput input)
         float3x3 tangentFrame = float3x3(tangent, bitangent, normal);
         normal = normalize(mul(mappedNormal, tangentFrame));
     }
+#endif
 
 #if MATERIAL_VARIANT == 2
     // Hologram keeps its authored albedo and normal-map silhouette but does
@@ -420,11 +439,13 @@ ForwardFragmentOutput fragmentMain(ForwardFragmentInput input)
     // adjacent pixels to unrelated parts of the environment, especially at
     // grazing angles. Derivative-based normal-to-roughness broadens the GGX
     // lobe before both direct-light and IBL BRDF evaluation.
+#if PBR_HAS_NORMAL
     const float3 normalDx = ddx(normal);
     const float3 normalDy = ddy(normal);
     const float normalVariation = max(length(normalDx), length(normalDy));
     const float aaRoughness = saturate(normalVariation * 0.5);
     roughness = max(roughness, aaRoughness);
+#endif
 
     float3 lightDirection = normalize(-frame.lightDirectionIntensity.xyz);
     float3 halfway = normalize(viewDirection + lightDirection);
@@ -433,6 +454,7 @@ ForwardFragmentOutput fragmentMain(ForwardFragmentInput input)
     // specularTexture, while specularColorTexture provides its RGB tint.
     // Do not reinterpret non-glTF/legacy named specular maps as this
     // extension; they have different authoring conventions.
+#if PBR_HAS_EXTENSIONS
     if ((material.textureIndices.w & 64) != 0)
     {
         float specularStrength = saturate(material.extensionScalars.w);
@@ -445,6 +467,7 @@ ForwardFragmentOutput fragmentMain(ForwardFragmentInput input)
                 .Sample(materialTextureUv(material, 9, input.texCoord, input.texCoord1)).rgb;
         dielectricF0 *= specularStrength * specularColor;
     }
+#endif
     float3 f0 = lerp(dielectricF0, albedo, metallic);
     float3 fresnel = fresnelSchlick(max(dot(halfway, viewDirection), 0.0), f0);
     float nDotV = max(dot(normal, viewDirection), 0.0);
@@ -466,14 +489,26 @@ ForwardFragmentOutput fragmentMain(ForwardFragmentInput input)
     float3 diffuse = (1.0 - (disableDirectSpecular ? 0.0 : fresnel)) *
                      (1.0 - metallic) * albedo / PBR_PI;
     ShadowSampleDebug shadowDebug = {0.0, 0.0, 0u, 0u, uint2(0, 0)};
+#if FORWARD_RESOLVED_VSM
+    float shadow = frame.shadowEnabled != 0 &&
+                   frame.clusterZScaleBiasEnvironmentMipRtContact.w == 0.0
+        ? 1.0 - directionalVisibility.Sample(input.position.xy / frame.clusteredViewportNearFar.xy).r : 0.0;
+#else
     float shadow = frame.shadowEnabled != 0
         ? sampleVirtualShadow(shadowMap, linearShadowMap, shadowDepthMap, input.worldPosition, geometricNormal, lightDirection, frame.shadowClipMatrices,
                               shadowPageTable, frame.shadowQuality, uint2(input.position.xy),
                               frame.temporalSampleIndex, frame.temporalShadowJitter != 0, shadowDebug) : 0.0;
+#endif
     if (frame.shadowDebugView != SHADOW_DEBUG_OFF)
     {
         ForwardFragmentOutput debugOutput;
+#if FORWARD_RESOLVED_VSM
+        const float debugShadow = 1.0 - directionalVisibility.Sample(
+            input.position.xy / frame.clusteredViewportNearFar.xy).r;
+        debugOutput.color = float4(debugShadow.xxx, baseColor.a);
+#else
         debugOutput.color = float4(shadowDebugColor(frame.shadowDebugView, shadowDebug), baseColor.a);
+#endif
 #if FORWARD_OUTPUT_VELOCITY
         float2 previousNdc = input.previousClip.xy / input.previousClip.w;
         debugOutput.velocity = (input.currentNdc - previousNdc) * 0.5;
@@ -491,10 +526,16 @@ ForwardFragmentOutput fragmentMain(ForwardFragmentInput input)
 #endif
         return debugOutput;
     }
-    float contactVisibility = 1.0;
+    float finalVisibility = 1.0 - shadow;
     if (frame.clusterZScaleBiasEnvironmentMipRtContact.w != 0.0)
-        contactVisibility = rtContactVisibility.Sample(input.position.xy / frame.clusteredViewportNearFar.xy).r;
-    float finalVisibility = min(1.0 - shadow, contactVisibility);
+    {
+        const float contactVisibility = rtContactVisibility.Sample(input.position.xy / frame.clusteredViewportNearFar.xy).r;
+#if FORWARD_RESOLVED_VSM
+        finalVisibility = contactVisibility;
+#else
+        finalVisibility = min(finalVisibility, contactVisibility);
+#endif
+    }
     float3 direct = (diffuse + specular) * frame.lightDirectionIntensity.w *
                     frame.lightColor.rgb * nDotL * finalVisibility;
     const uint2 grid = uint2((uint(frame.clusteredViewportNearFar.x) + 63u) / 64u,
@@ -567,8 +608,12 @@ ForwardFragmentOutput fragmentMain(ForwardFragmentInput input)
     // available; this explicit resolver keeps the material-side priority
     // fixed as RT -> SSR -> probe -> sky.
     ReflectionCandidate skyReflection = {prefiltered, 1.0};
+#if PBR_HAS_PROBES
     ReflectionCandidate localProbeReflection = sampleLocalProbes(input.worldPosition, reflection, roughness,
                                                                   prefilteredMipCount, lightRange);
+#else
+    ReflectionCandidate localProbeReflection = {0.0, 0.0};
+#endif
     ReflectionCandidate screenSpaceReflection = {0.0, 0.0};
     ReflectionCandidate rayTracedReflection = {0.0, 0.0};
     prefiltered = resolveReflection(rayTracedReflection, screenSpaceReflection,
@@ -605,12 +650,14 @@ ForwardFragmentOutput fragmentMain(ForwardFragmentInput input)
     float3 color = ambient + direct + emissive;
     // Foliage has a cheap, stable back-lighting term.  The flag is deliberately
     // material data rather than an asset-name heuristic at runtime.
+#if MATERIAL_VARIANT == 5 || defined(ENGINE_SHADER_GRAPH)
     if ((material.textureIndices.w & 16) != 0 && material.auxiliaryTextureIndices.z >= 0) {
         float mask = materialTextures[NonUniformResourceIndex(material.auxiliaryTextureIndices.z)].Sample(materialTextureUv(material, 5, input.texCoord, input.texCoord1)).r;
         float backLight = saturate(dot(-normal, lightDirection));
         color += albedo * frame.lightColor.rgb * frame.lightDirectionIntensity.w *
                  backLight * mask * material.extensionScalars.y;
     }
+#endif
 
     ForwardFragmentOutput output;
     output.color = float4(color, baseColor.a);

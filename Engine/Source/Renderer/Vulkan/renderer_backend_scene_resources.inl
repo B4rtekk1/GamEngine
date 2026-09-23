@@ -188,15 +188,26 @@
                 (source.vertexColorUsage == VertexColorUsage::FoliageData ? 32 : 0) |
                 (source.hasSpecularExtension ? 64 : 0);
             const auto coordinateSet = [&](const MaterialTextureSlot slot) {
-                return static_cast<int>(source.textureTransforms[static_cast<std::size_t>(slot)].texCoord);
+                const auto& value = source.textureTransforms[static_cast<std::size_t>(slot)];
+                const bool identity = value.offsetX == 0.0F && value.offsetY == 0.0F &&
+                                      value.scaleX == 1.0F && value.scaleY == 1.0F && value.rotation == 0.0F;
+                return static_cast<int>(value.texCoord) | (identity ? 2 : 0);
             };
             const auto transform = [&](const MaterialTextureSlot slot) {
                 const auto& value = source.textureTransforms[static_cast<std::size_t>(slot)];
-                return glm::vec4{value.offsetX, value.offsetY, value.scaleX, value.scaleY};
+                const float cosine = std::cos(value.rotation);
+                const float sine = std::sin(value.rotation);
+                return glm::vec4{cosine * value.scaleX, -sine * value.scaleY,
+                                 value.offsetX, value.offsetY};
             };
-            std::array<glm::vec4, 3> rotations{};
-            for (std::size_t i = 0; i < source.textureTransforms.size(); ++i)
-                rotations[i / 4][i % 4] = source.textureTransforms[i].rotation;
+            std::array<glm::vec4, 6> transformRows1{};
+            for (std::size_t i = 0; i < source.textureTransforms.size(); ++i) {
+                const auto& value = source.textureTransforms[i];
+                const float sine = std::sin(value.rotation);
+                const float cosine = std::cos(value.rotation);
+                transformRows1[(i / 4) * 2][i % 4] = sine * value.scaleX;
+                transformRows1[(i / 4) * 2 + 1][i % 4] = cosine * value.scaleY;
+            }
             GPUMaterialData packed{
                 glm::vec4{source.baseColor.r(), source.baseColor.g(), source.baseColor.b(), source.metallic},
                 glm::vec4{source.roughness, source.aoStrength, source.alphaCutoff, source.baseColor.a()},
@@ -222,7 +233,7 @@
                  transform(MaterialTextureSlot::Opacity), transform(MaterialTextureSlot::Translucency),
                  transform(MaterialTextureSlot::Displacement), transform(MaterialTextureSlot::Emissive),
                  transform(MaterialTextureSlot::Specular), transform(MaterialTextureSlot::SpecularColor)},
-                rotations,
+                transformRows1,
             };
             if (water != nullptr) {
                 const std::int32_t normalMap = textureIndex(water->normalMap);
@@ -868,17 +879,30 @@
                         return shaderSlot;
                     };
                     const std::uint32_t shaderSlot = resolveShaderSlot();
+                    const auto pbrShaderSlot = [&](const PBRMaterial& material) -> std::uint32_t {
+                        if (shaderSlot != materialShaderIndex(MaterialShader::StandardPBR))
+                            return shaderSlot;
+                        if (material.terrainLayered)
+                            return static_cast<std::uint32_t>(PbrTerrainProgramSlot);
+                        if (material.shadingModel == MaterialShadingModel::Foliage)
+                            return static_cast<std::uint32_t>(PbrFoliageProgramSlot);
+                        if (material.hasSpecularExtension)
+                            return static_cast<std::uint32_t>(PbrExtendedProgramSlot);
+                        if (material.normalTexture >= 0 && material.normalScale != 0.0F)
+                            return static_cast<std::uint32_t>(PbrNormalProgramSlot);
+                        return shaderSlot;
+                    };
                     const bool virtualOcean = renderer.materialOverride &&
                         renderer.material.shaderSource == MaterialShaderSource::BuiltIn &&
                         renderer.material.shader == MaterialShader::Water &&
                         registry.has<WaterBodyComponent>(entity) &&
                         registry.get<WaterBodyComponent>(entity).type == WaterBodyType::Ocean &&
                         mesh->drawRanges.size() == Water::StitchVariantCount;
-                    const auto appendRange = [&](const std::uint32_t sectionIndex, const std::uint32_t firstIndex,
+                    const auto appendRange = [&](const std::uint32_t rangeShaderSlot, const std::uint32_t sectionIndex, const std::uint32_t firstIndex,
                                                  const std::uint32_t indexCount, const std::uint32_t firstMeshlet,
                                                  const std::uint32_t meshletCount, const AABB& rangeBounds,
                                                  const bool usesFoliagePipeline, const bool forceDistinctBatch) {
-                    const BatchKey batchKey{renderer.mesh.resource().get(), sectionIndex, shaderSlot, usesFoliagePipeline,
+                    const BatchKey batchKey{renderer.mesh.resource().get(), sectionIndex, rangeShaderSlot, usesFoliagePipeline,
                                             castShadow, renderer.shadowCacheMode, renderer.cullingBatch};
                     const auto [batchIt, inserted] = !forceDistinctBatch && optimizationFeatures.instancedRendering
                         ? batchIndices.try_emplace(batchKey, instanceBatches.size())
@@ -905,7 +929,7 @@
                                       : mesh->meshletClusterRoot) : 0U,
                             .firstInstance = static_cast<uint32_t>(renderables.size()),
                             .instanceCount = 0,
-                            .shaderSlot = shaderSlot,
+                            .shaderSlot = rangeShaderSlot,
                             .castShadow = castShadow,
                             .shadowCacheMode = renderer.shadowCacheMode,
                             // The foliage stream is drawn after opaque geometry. Route
@@ -946,7 +970,7 @@
                             .min = {-Water::OceanExtents.back(), -2.0F, -Water::OceanExtents.back()},
                             .max = { Water::OceanExtents.back(),  2.0F,  Water::OceanExtents.back()},
                         };
-                        appendRange(0, 0, 0, 0, 0, oceanBounds, overrideUsesFoliagePipeline, false);
+                        appendRange(shaderSlot, 0, 0, 0, 0, 0, oceanBounds, overrideUsesFoliagePipeline, false);
                     } else if (!mesh->renderSections.empty()) {
                         for (std::uint32_t sectionIndex = 0; sectionIndex < mesh->renderSections.size(); ++sectionIndex) {
                             const Mesh::RenderSection& section = mesh->renderSections[sectionIndex];
@@ -954,11 +978,12 @@
                                 ? mesh->materials[section.materialIndex] : PBRMaterial{};
                             const bool usesFoliagePipeline = overrideUsesFoliagePipeline || material.doubleSided ||
                                 material.alphaMode == AlphaMode::Mask || material.alphaMode == AlphaMode::Blend;
-                            appendRange(sectionIndex, section.firstIndex, section.indexCount, section.firstMeshlet,
+                            appendRange(pbrShaderSlot(renderer.materialOverride ? renderer.material.pbr : material),
+                                sectionIndex, section.firstIndex, section.indexCount, section.firstMeshlet,
                                 section.meshletCount, section.localBounds, usesFoliagePipeline, false);
                         }
                     } else {
-                        appendRange(0, 0, mesh->indexCount(), 0, static_cast<std::uint32_t>(mesh->meshlets.size()),
+                        appendRange(pbrShaderSlot(renderer.material.pbr), 0, 0, mesh->indexCount(), 0, static_cast<std::uint32_t>(mesh->meshlets.size()),
                                     localBounds, overrideUsesFoliagePipeline, false);
                     }
                 });

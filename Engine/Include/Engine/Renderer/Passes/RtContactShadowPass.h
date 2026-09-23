@@ -24,6 +24,7 @@ public:
     void record(VkCommandBuffer commandBuffer, std::uint32_t frameSlot,
                 VkAccelerationStructureKHR tlas, VkImageView depth, VkSampler depthSampler,
                 VkImageView normals, VkSampler normalSampler,
+                VkImageView directionalVisibility, VkSampler directionalSampler,
                 const RtContactShadowSettings& settings);
     [[nodiscard]] VkImageView resultView() const noexcept { return visibility_.imageView(); }
     [[nodiscard]] VkSampler resultSampler() const noexcept { return visibility_.sampler(); }

@@ -2,8 +2,6 @@
 
 #include "Engine/Core/Camera.h"
 
-#include <SDL3/SDL.h>
-
 #include <optional>
 
 namespace Engine {
@@ -17,11 +15,8 @@ public:
     [[nodiscard]] bool editorInputEnabled() const noexcept { return editorInputEnabled_; }
     void setGameInputEnabled(bool enabled) noexcept { gameInputEnabled_ = enabled; }
     [[nodiscard]] bool gameInputEnabled() const noexcept { return gameInputEnabled_; }
-    [[nodiscard]] bool gameMouseCaptured() const noexcept {
-        return gameInputEnabled_ && mouseLookActive_;
-    }
-    void update(SDL_Window* window, Registry& registry);
-    void updateEditor(SDL_Window* window);
+    void update(Registry& registry);
+    void updateEditor();
 
     [[nodiscard]] const std::optional<Camera>& camera() const noexcept { return camera_; }
     [[nodiscard]] std::optional<Camera>& camera() noexcept { return camera_; }
@@ -35,10 +30,7 @@ public:
     }
 
 private:
-    void disableRelativeMouseMode(SDL_Window* window);
-
     std::optional<Camera> camera_;
-    bool mouseLookActive_{false};
     bool editorInputEnabled_{false};
     bool gameInputEnabled_{false};
     Vec3 editorPosition_{8.0F, 6.0F, 8.0F};

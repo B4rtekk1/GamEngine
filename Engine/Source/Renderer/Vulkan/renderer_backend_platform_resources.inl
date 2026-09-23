@@ -387,6 +387,25 @@
                                        vulkanDevice.allocator(), assetManager, buffers);
         }
 
+        void createDirectionalVisibilityPass() {
+            if (msaa.enabled()) return;
+            const VkExtent2D targetExtent = swapchain.extent();
+            if (directionalVisibilityPass.resultView(0) != VK_NULL_HANDLE &&
+                directionalVisibilityPass.extent().width == targetExtent.width &&
+                directionalVisibilityPass.extent().height == targetExtent.height) return;
+            if (directionalVisibilityPass.resultView(0) != VK_NULL_HANDLE &&
+                vkDeviceWaitIdle(device) != VK_SUCCESS)
+                throw std::runtime_error("Could not idle device to resize directional visibility");
+            std::array<VkBuffer, MAX_FRAMES_IN_FLIGHT> frames{};
+            std::array<VkBuffer, MAX_FRAMES_IN_FLIGHT> pages{};
+            for (std::uint32_t frame = 0; frame < MAX_FRAMES_IN_FLIGHT; ++frame) {
+                frames[frame] = uniformBuffers[frame].handle();
+                pages[frame] = shadowPass.pageTableBuffer(frame);
+            }
+            directionalVisibilityPass.create(vulkanDevice.physical(), device, targetExtent,
+                vulkanDevice.allocator(), assetManager, physicalShadowPagePool, frames, pages);
+        }
+
         void bindGtaoTexture(ShadowPass& descriptors) {
             const VkDescriptorImageInfo gtao{gtaoPass.resultSampler(), gtaoPass.resultView(),
                                              VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
@@ -463,6 +482,7 @@
             }
             bindGtaoTexture(shadowPass);
             bindContactShadowFallback(shadowPass);
+            createDirectionalVisibilityPass();
             createRtContactShadowPass();
         }
 
@@ -657,6 +677,7 @@
             forwardPass.destroy();
             lightingForwardPass.destroy();
             waterPass.destroy();
+            directionalVisibilityPass.destroy();
             shadowPass.destroy();
             sceneDescriptorPass.destroy();
             destroyCullingResources();

@@ -1,6 +1,7 @@
 #pragma once
 
 #include <SDL3/SDL.h>
+#include "Engine/Input/CursorMode.h"
 
 namespace Engine {
 
@@ -8,6 +9,8 @@ namespace Engine {
     public:
         static void processEvent(const SDL_Event& event);
 
-        static void setRelativeMouseMode(SDL_Window* window, bool enabled);
+        static void setWindow(SDL_Window* window);
+        static bool setCursorMode(CursorMode mode);
+        static CursorMode cursorMode();
     };
 }

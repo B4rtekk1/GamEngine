@@ -380,7 +380,7 @@
                 glm::vec4{24.0F / std::log2(1000.0F / 0.1F),
                           -std::log2(0.1F) * (24.0F / std::log2(1000.0F / 0.1F)),
                           static_cast<float>(imageBasedLighting.prefilteredMipLevels()),
-                          rtContactShadowSettings.mode == ContactShadowMode::RayTraced &&
+                          !msaa.enabled() && rtContactShadowSettings.mode == ContactShadowMode::RayTraced &&
                               rtContactShadowPass.resultView() != VK_NULL_HANDLE ? 1.0F : 0.0F},
                 frameData.lights};
             uniformBuffers[frame].update(&data, sizeof(data));
@@ -1011,6 +1011,12 @@
                                                              gtaoPass.debugView(gtaoDebugView),
                                                              gtaoPass.debugLayout(gtaoDebugView)};
                 shadowPass.setGtaoTexture(currentFrame, gtaoDebugTexture);
+                if (!msaa.enabled() && directionalVisibilityPass.resultView(currentFrame) != VK_NULL_HANDLE) {
+                    const VkDescriptorImageInfo directionalTexture{
+                        directionalVisibilityPass.resultSampler(currentFrame),
+                        directionalVisibilityPass.resultView(currentFrame), VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
+                    shadowPass.setDirectionalVisibility(currentFrame, directionalTexture);
+                }
                 if (vulkanDevice.supportsRayQuery() && !msaa.enabled() &&
                     rtContactShadowSettings.mode == ContactShadowMode::RayTraced &&
                     rtContactShadowPass.resultView() != VK_NULL_HANDLE) {
@@ -1392,6 +1398,11 @@
                             msaa.enabled() ? gtaoDepth.imageView() : gtaoViewNormalBuffer.imageView(),
                             msaa.enabled() ? gtaoDepth.sampler() : gtaoViewNormalBuffer.sampler(), !msaa.enabled(), inverseProjection);
 
+            if (!msaa.enabled())
+                directionalVisibilityPass.record(commandBuffer, currentFrame,
+                    depthBuffer.imageView(), depthBuffer.sampler(),
+                    gtaoViewNormalBuffer.imageView(), gtaoViewNormalBuffer.sampler());
+
             const bool rtContactRequested = vulkanDevice.supportsRayQuery() && !msaa.enabled() &&
                 rtContactShadowSettings.mode == ContactShadowMode::RayTraced;
             if (rtContactRequested && rayTracingBlasDirty && vertexBuffer.hasDeviceAddress() && indexBuffer.hasDeviceAddress()) {
@@ -1444,7 +1455,8 @@
                     gpuTimestampProfiler.beginZone(commandBuffer, currentFrame, rtContactProfileName);
                     rtContactShadowPass.record(commandBuffer, currentFrame, accelerationStructures.tlas(currentFrame),
                         depthBuffer.imageView(), depthBuffer.sampler(), gtaoViewNormalBuffer.imageView(),
-                        gtaoViewNormalBuffer.sampler(), rtContactShadowSettings);
+                        gtaoViewNormalBuffer.sampler(), directionalVisibilityPass.resultView(currentFrame),
+                        directionalVisibilityPass.resultSampler(currentFrame), rtContactShadowSettings);
                     gpuTimestampProfiler.endZone(commandBuffer, currentFrame);
                 }
             }
@@ -2220,6 +2232,7 @@
             forwardPass.destroy();
             lightingForwardPass.destroy();
             waterPass.destroy();
+            directionalVisibilityPass.destroy();
             shadowPass.destroy();
             sceneDescriptorPass.destroy();
             destroyCullingResources();
@@ -2288,18 +2301,7 @@
         // ---------- MAIN LOOP ----------
 
         void updateCameraInput() {
-            // In the editor, Scene View and Game View are mutually exclusive.
-            // Do not skip this update merely because the Scene View controller
-            // is off: Play Mode still needs to enter SDL relative mouse mode.
-            if (editorUiActive && !cameraController.editorInputEnabled() &&
-                !cameraController.gameInputEnabled()) {
-                // update() is also responsible for leaving SDL relative mouse
-                // mode.  It must run once when Play Mode is stopped; otherwise
-                // a cursor captured in the preceding frame remains locked.
-                cameraController.update(window, registry);
-                return;
-            }
-            cameraController.update(window, registry);
+            cameraController.update(registry);
         }
 
         void updateEditorSceneCameraInput() {
@@ -2307,7 +2309,7 @@
             const Vec3 beforePosition = cameraController.editorPosition();
             const float beforeYaw = cameraController.editorYaw();
             const float beforePitch = cameraController.editorPitch();
-            cameraController.updateEditor(window);
+            cameraController.updateEditor();
             if (beforePosition.x() != cameraController.editorPosition().x() ||
                 beforePosition.y() != cameraController.editorPosition().y() ||
                 beforePosition.z() != cameraController.editorPosition().z() ||
@@ -2687,6 +2689,7 @@
             }
             // Apply a Resolution scale edit before descriptor updates and
             // command recording; this is a no-op unless its target extent changed.
+            createDirectionalVisibilityPass();
             createRtContactShadowPass();
             {
                 GE_PROFILE_SCOPE("Command Recording");

@@ -114,7 +114,7 @@ namespace Engine {
             }
 
             // This is a compact list, not an array indexed by binding number.
-            VkDescriptorSetLayoutBinding bindings[19]{};
+            VkDescriptorSetLayoutBinding bindings[20]{};
             bindings[0] = {
                 0, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1,
                 VK_SHADER_STAGE_FRAGMENT_BIT, nullptr
@@ -193,6 +193,8 @@ namespace Engine {
             }; // linear VSM comparison
             bindings[18] = {18, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1,
                             VK_SHADER_STAGE_FRAGMENT_BIT, nullptr}; // RT contact visibility
+            bindings[19] = {19, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1,
+                            VK_SHADER_STAGE_FRAGMENT_BIT, nullptr}; // resolved directional visibility
             const VkDescriptorSetLayoutCreateInfo layoutInfo{
                 VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO, nullptr, 0,
                 static_cast<std::uint32_t>(std::size(bindings)), bindings
@@ -607,6 +609,14 @@ namespace Engine {
                                               const VkDescriptorImageInfo &texture) const {
         const VkWriteDescriptorSet write{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr,
             descriptorSets_.at(frameIndex), 18, 0, 1, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+            &texture, nullptr, nullptr};
+        vkUpdateDescriptorSets(device_, 1, &write, 0, nullptr);
+    }
+
+    void ShadowPass::setDirectionalVisibility(const std::uint32_t frameIndex,
+                                               const VkDescriptorImageInfo& texture) const {
+        const VkWriteDescriptorSet write{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr,
+            descriptorSets_.at(frameIndex), 19, 0, 1, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
             &texture, nullptr, nullptr};
         vkUpdateDescriptorSets(device_, 1, &write, 0, nullptr);
     }
@@ -1338,7 +1348,7 @@ namespace Engine {
             .sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER_2,
             .srcStageMask = VK_PIPELINE_STAGE_2_HOST_BIT,
             .srcAccessMask = VK_ACCESS_2_HOST_WRITE_BIT,
-            .dstStageMask = VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT,
+            .dstStageMask = VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT | VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
             .dstAccessMask = VK_ACCESS_2_SHADER_STORAGE_READ_BIT,
             .buffer = pageTableBuffers_.at(preparedFrameIndex_)->handle(),
             .offset = 0,
@@ -1407,7 +1417,7 @@ namespace Engine {
         VkImageMemoryBarrier2 atlasBarrier{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2};
         const bool physicalAtlasInitialized = shadowMap_->initialized();
         atlasBarrier.srcStageMask = physicalAtlasInitialized
-                                        ? VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT
+                                        ? VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT | VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT
                                         : VK_PIPELINE_STAGE_2_NONE;
         atlasBarrier.srcAccessMask = physicalAtlasInitialized ? VK_ACCESS_2_SHADER_SAMPLED_READ_BIT : 0;
         atlasBarrier.dstStageMask = VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT;
@@ -1513,7 +1523,7 @@ namespace Engine {
         atlasToSampled.srcStageMask = VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT |
                                       VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT;
         atlasToSampled.srcAccessMask = VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
-        atlasToSampled.dstStageMask = VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT;
+        atlasToSampled.dstStageMask = VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT | VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
         atlasToSampled.dstAccessMask = VK_ACCESS_2_SHADER_SAMPLED_READ_BIT;
         atlasToSampled.oldLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
         atlasToSampled.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
@@ -1540,7 +1550,7 @@ namespace Engine {
                 .sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER_2,
                 .srcStageMask = VK_PIPELINE_STAGE_2_HOST_BIT,
                 .srcAccessMask = VK_ACCESS_2_HOST_WRITE_BIT,
-                .dstStageMask = VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT,
+                .dstStageMask = VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT | VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
                 .dstAccessMask = VK_ACCESS_2_SHADER_STORAGE_READ_BIT,
                 .buffer = pageTableBuffer.handle(),
                 .offset = 0,

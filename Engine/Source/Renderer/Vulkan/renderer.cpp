@@ -22,6 +22,7 @@
 #include "Engine/Renderer/Passes/BloomPass.h"
 #include "Engine/Renderer/Passes/GtaoPass.h"
 #include "Engine/Renderer/Passes/RtContactShadowPass.h"
+#include "Engine/Renderer/Passes/DirectionalVisibilityPass.h"
 #include "Engine/Renderer/RayTracing/AccelerationStructureManager.h"
 #include "Engine/Renderer/Vulkan/ViewportRenderTarget.h"
 #include "Engine/Renderer/ViewportCamera.h"
@@ -249,11 +250,14 @@ namespace Engine {
         }
 
         ~Backend() {
+            static_cast<void>(Input::setCursorMode(CursorMode::Normal));
+            SDLInput::setWindow(nullptr);
             cleanup();
         }
 
         void initializeCore() {
             initWindow();
+            SDLInput::setWindow(window);
             initVulkanCore();
             Time::init();
         }
@@ -314,16 +318,20 @@ namespace Engine {
                                         event.type == SDL_EVENT_MOUSE_BUTTON_DOWN ||
                                         event.type == SDL_EVENT_MOUSE_BUTTON_UP ||
                                         event.type == SDL_EVENT_MOUSE_WHEEL;
-                // While RMB navigation owns the mouse, do not let the hidden
+                // While Play Mode owns the mouse, do not let the hidden
                 // cursor activate editor controls below it.  The matching
                 // button-up event still reaches ImGui so it cannot retain a
                 // stuck right-button state after the cursor is released.
                 const bool mouseButtonReleased = event.type == SDL_EVENT_MOUSE_BUTTON_UP;
                 if (editorUiActive && editorUiBackend &&
-                    (!mouseEvent || !cameraController.gameMouseCaptured() || mouseButtonReleased)) {
+                    (!mouseEvent || Input::cursorMode() != CursorMode::Locked || mouseButtonReleased)) {
                     editorUiBackend->processEvent(&event);
                 }
                 processEvent(event);
+                if (event.type == SDL_EVENT_KEY_DOWN && event.key.key == SDLK_ESCAPE &&
+                    Input::cursorMode() == CursorMode::Locked) {
+                    static_cast<void>(Input::setCursorMode(CursorMode::Normal));
+                }
                 if (event.type == SDL_EVENT_QUIT ||
                     (event.type == SDL_EVENT_WINDOW_CLOSE_REQUESTED &&
                      event.window.windowID == SDL_GetWindowID(window))) {
@@ -437,12 +445,8 @@ namespace Engine {
         void setGameCameraInput(const bool active) {
             const bool wasActive = cameraController.gameInputEnabled();
             cameraController.setGameInputEnabled(active);
-            // Play Mode can skip its next render frame while restoring the
-            // editor scene.  Release the OS mouse grab here instead of
-            // waiting for that frame, otherwise Stop/F5 leaves the editor
-            // looking frozen with a hidden cursor.
             if (wasActive && !active) {
-                cameraController.update(window, registry);
+                static_cast<void>(Input::setCursorMode(CursorMode::Normal));
             }
         }
 

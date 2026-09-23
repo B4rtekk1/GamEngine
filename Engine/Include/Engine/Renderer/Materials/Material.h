@@ -28,9 +28,13 @@ namespace Engine {
         ShaderGraph,
     };
 
-    inline constexpr std::size_t MaterialShaderCount = 4;
-    /** GPU-culling bins: four built-ins plus room for cooked Shader Graphs. */
+    inline constexpr std::size_t MaterialShaderCount = 8;
+    /** GPU-culling bins: eight built-ins plus room for cooked Shader Graphs. */
     inline constexpr std::size_t MaterialProgramSlotCount = 32;
+    inline constexpr std::size_t PbrNormalProgramSlot = 4;
+    inline constexpr std::size_t PbrExtendedProgramSlot = 5;
+    inline constexpr std::size_t PbrFoliageProgramSlot = 6;
+    inline constexpr std::size_t PbrTerrainProgramSlot = 7;
 
     [[nodiscard]] constexpr std::size_t materialShaderIndex(const MaterialShader shader) noexcept {
         return static_cast<std::size_t>(shader);

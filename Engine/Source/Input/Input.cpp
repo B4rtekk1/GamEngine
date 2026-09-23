@@ -1,5 +1,6 @@
 #include "Engine/Input/Input.h"
 #include "Engine/Input/InputMap.h"
+#include "Platform/SDL/SDLInput.h"
 
 #include <array>
 #include <algorithm>
@@ -99,6 +100,14 @@ namespace Engine {
 
     float Input::mouseWheel() {
         return frameMouseWheel;
+    }
+
+    bool Input::setCursorMode(const CursorMode mode) {
+        return SDLInput::setCursorMode(mode);
+    }
+
+    CursorMode Input::cursorMode() {
+        return SDLInput::cursorMode();
     }
 
     bool Input::gamepadDown(const GamepadButton button) { return isValidGamepadButton(button) && currentGamepadButtons[static_cast<std::size_t>(button)]; }

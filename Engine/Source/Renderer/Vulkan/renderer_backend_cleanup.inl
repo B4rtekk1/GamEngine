@@ -25,6 +25,7 @@
                 waterPass.destroy();
                 gtaoPass.destroy();
                 rtContactShadowPass.destroy();
+                directionalVisibilityPass.destroy();
                 accelerationStructures.destroy();
                 shadowPass.destroy();
                 sceneDescriptorPass.destroy();

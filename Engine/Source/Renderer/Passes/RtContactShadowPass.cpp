@@ -25,12 +25,13 @@ void RtContactShadowPass::create(const VkPhysicalDevice physical, const VkDevice
         // Linear filtering is the inexpensive base upsample; edge-aware
         // reconstruction can be layered on top without changing this pass.
         visibility_.create(physical, device_, extent_, allocator, VK_FILTER_LINEAR, VK_FORMAT_R16_SFLOAT, true);
-        const std::array<VkDescriptorSetLayoutBinding, 5> bindings{{
+        const std::array<VkDescriptorSetLayoutBinding, 6> bindings{{
             {0, VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
             {1, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
             {2, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
             {3, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
             {4, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
+            {5, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
         }};
         VkDescriptorSetLayoutCreateInfo layoutInfo{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
         layoutInfo.bindingCount = static_cast<std::uint32_t>(bindings.size());
@@ -39,7 +40,7 @@ void RtContactShadowPass::create(const VkPhysicalDevice physical, const VkDevice
             throw std::runtime_error("Could not create RT contact descriptor layout");
         const std::array<VkDescriptorPoolSize, 4> sizes{{
             {VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR, FramesInFlight},
-            {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, FramesInFlight * 2},
+            {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, FramesInFlight * 3},
             {VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, FramesInFlight},
             {VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, FramesInFlight},
         }};
@@ -87,16 +88,19 @@ void RtContactShadowPass::create(const VkPhysicalDevice physical, const VkDevice
 void RtContactShadowPass::record(const VkCommandBuffer cmd, const std::uint32_t frame,
                                  const VkAccelerationStructureKHR tlas, const VkImageView depth,
                                  const VkSampler depthSampler, const VkImageView normals,
-                                 const VkSampler normalSampler, const RtContactShadowSettings& settings) {
-    if (!pipeline_ || !tlas || !depth || !normals || frame >= FramesInFlight) return;
+                                 const VkSampler normalSampler, const VkImageView directionalVisibility,
+                                 const VkSampler directionalSampler, const RtContactShadowSettings& settings) {
+    if (!pipeline_ || !tlas || !depth || !normals || !directionalVisibility || frame >= FramesInFlight) return;
     const VkWriteDescriptorSetAccelerationStructureKHR structureWrite{
         VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET_ACCELERATION_STRUCTURE_KHR, nullptr, 1, &tlas};
     const VkDescriptorImageInfo depthInfo{depthSampler, depth, VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL};
     const VkDescriptorImageInfo normalInfo{normalSampler, normals, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
-    const std::array<VkWriteDescriptorSet, 3> writes{{
+    const VkDescriptorImageInfo directionalInfo{directionalSampler, directionalVisibility, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
+    const std::array<VkWriteDescriptorSet, 4> writes{{
         {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, &structureWrite, sets_[frame], 0, 0, 1, VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR},
         {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr, sets_[frame], 1, 0, 1, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &depthInfo},
         {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr, sets_[frame], 2, 0, 1, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &normalInfo},
+        {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr, sets_[frame], 5, 0, 1, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &directionalInfo},
     }};
     vkUpdateDescriptorSets(device_, static_cast<std::uint32_t>(writes.size()), writes.data(), 0, nullptr);
     VkImageMemoryBarrier2 toStorage{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2};

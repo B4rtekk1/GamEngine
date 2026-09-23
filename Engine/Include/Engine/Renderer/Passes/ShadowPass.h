@@ -127,6 +127,10 @@ namespace Engine {
         }
 
         [[nodiscard]] VkDescriptorSet descriptorSet(std::uint32_t frameIndex) const;
+        [[nodiscard]] VkBuffer pageTableBuffer(std::uint32_t frameIndex) const {
+            return pageTableBuffers_.at(frameIndex)->handle();
+        }
+        void setDirectionalVisibility(std::uint32_t frameIndex, const VkDescriptorImageInfo& texture) const;
         [[nodiscard]] VkDescriptorSet grassDescriptorSet(std::uint32_t frameIndex) const;
         [[nodiscard]] VkDescriptorSet grassVelocityDescriptorSet(std::uint32_t frameIndex) const;
         [[nodiscard]] VkDescriptorSet grassShadowDescriptorSet(std::uint32_t frameIndex) const;

@@ -5,7 +5,6 @@
 #include "Engine/ECS/Components/CameraComponent.h"
 #include "Engine/ECS/Registry.h"
 #include "Engine/Input/Input.h"
-#include "Platform/SDL/SDLInput.h"
 
 #include <algorithm>
 
@@ -25,21 +24,12 @@ namespace Engine {
         constexpr float EditorFastMovementMultiplier = 4.0F;
     } // namespace
 
-    void CameraController::disableRelativeMouseMode(SDL_Window *window) {
-        if (!mouseLookActive_) {
-            return;
-        }
-        SDLInput::setRelativeMouseMode(window, false);
-        mouseLookActive_ = false;
-    }
-
-    void CameraController::update(SDL_Window *window, Registry &registry) {
+    void CameraController::update(Registry &registry) {
         if (editorInputEnabled_) {
-            updateEditor(window);
+            updateEditor();
             return;
         }
         if (!gameInputEnabled_) {
-            disableRelativeMouseMode(window);
             return;
         }
         CameraComponent *activeCamera = nullptr;
@@ -53,7 +43,6 @@ namespace Engine {
             });
 
         if (activeCamera == nullptr) {
-            disableRelativeMouseMode(window);
             camera_.reset();
             return;
         }
@@ -65,10 +54,7 @@ namespace Engine {
         camera_->setRotation(Degrees{transform.rotation.y()}, Degrees{transform.rotation.x()},
                              Degrees{transform.rotation.z()});
 
-        // Relative mode is only active while navigating with RMB.  A normal
-        // left click must never hide the cursor or block the editor UI.
-        const bool flyMode = Input::mouseDown(MouseButton::Right);
-        const bool mouseLook = flyMode;
+        const bool flyMode = Input::cursorMode() == CursorMode::Locked;
         const bool moveFast = Input::keyDown(KeyCode::LeftShift) ||
                               Input::keyDown(KeyCode::RightShift);
         Vec3 movement{};
@@ -104,22 +90,15 @@ namespace Engine {
             transform.position += camera_->forward() * (Input::mouseWheel() * MouseWheelSpeed);
         }
 
-        if (mouseLook) {
-            if (!mouseLookActive_) {
-                SDLInput::setRelativeMouseMode(window, true);
-                mouseLookActive_ = true;
-            }
+        if (flyMode) {
             const Vec2 delta = Input::mouseDelta();
             transform.rotation.setY(transform.rotation.y() + (delta.x() * MouseSensitivity));
             transform.rotation.setX(std::clamp(transform.rotation.x() - (delta.y() * MouseSensitivity),
                                                -MaxPitchDegrees, MaxPitchDegrees));
-        } else {
-            disableRelativeMouseMode(window);
         }
     }
 
-    void CameraController::updateEditor(SDL_Window *window) {
-        disableRelativeMouseMode(window);
+    void CameraController::updateEditor() {
         Camera sceneCamera{
             Degrees{EditorCameraFovDegrees}, EditorCameraAspectRatio,
             EditorCameraNearClip, EditorCameraFarClip

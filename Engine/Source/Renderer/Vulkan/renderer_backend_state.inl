@@ -74,6 +74,7 @@
         // Octahedrally encoded view-space normals written by the opaque depth prepass.
         HdrBuffer gtaoViewNormalBuffer;
         RtContactShadowPass rtContactShadowPass;
+        DirectionalVisibilityPass directionalVisibilityPass;
         AccelerationStructureManager accelerationStructures;
         bool rayTracingBlasDirty{true};
         // TLAS input is reconstructed only when ECS render state changes. Each
@@ -699,7 +700,7 @@
                    lhs.textureCoordinateSets1 == rhs.textureCoordinateSets1 &&
                    lhs.textureCoordinateSets2 == rhs.textureCoordinateSets2 &&
                    lhs.textureTransforms == rhs.textureTransforms &&
-                   lhs.textureTransformRotations == rhs.textureTransformRotations &&
+                   lhs.textureTransformRows1 == rhs.textureTransformRows1 &&
                    lhs.waterShallowColorRoughness == rhs.waterShallowColorRoughness &&
                    lhs.waterDeepColorIor == rhs.waterDeepColorIor &&
                    lhs.waterAbsorptionRefraction == rhs.waterAbsorptionRefraction &&

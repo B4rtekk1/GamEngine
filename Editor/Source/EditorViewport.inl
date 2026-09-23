@@ -68,6 +68,7 @@ enum class PlayModeAction { None, Start, Stop, Restart };
 struct ViewportInteraction final {
     bool cameraInput{};
     bool gameCameraInput{};
+    bool gameViewClicked{};
     bool sceneClicked{};
     bool terrainGeometryChanged{};
     std::vector<Engine::Entity> terrainGeometryEntities;
@@ -1812,6 +1813,8 @@ ViewportInteraction drawViewport(Engine::ScenePreset &scene, Engine::Assets::Con
             ImGui::EndDragDropTarget();
         }
         const bool imageHovered = ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenBlockedByActiveItem);
+        interaction.gameViewClicked = playing && showGameView && imageHovered &&
+            ImGui::IsMouseClicked(ImGuiMouseButton_Left);
         if (imageHovered && !assetDropError.empty()) {
             ImGui::SetTooltip("Could not add model: %s", assetDropError.c_str());
         }
@@ -2012,9 +2015,7 @@ ViewportInteraction drawViewport(Engine::ScenePreset &scene, Engine::Assets::Con
     // cursor after right- or middle-clicking menus and side panels, leaving
     // ImGui unable to receive subsequent clicks.
     interaction.cameraInput = !playing && !showGameView && viewportHovered;
-    // Play Mode owns the cursor for the whole session. Requiring the Game
-    // View to be hovered let ImGui release relative mouse mode as soon as the
-    // pointer left its image, which breaks mouse-look at the window edge.
+    // Game input remains active after the cursor leaves the image while locked.
     interaction.gameCameraInput = playing && showGameView;
     return interaction;
 }

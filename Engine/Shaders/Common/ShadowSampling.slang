@@ -184,11 +184,13 @@ float shadowReceiverDepthBias(float currentDepth, float2 uv, float4x4 lightSpace
     // depth per virtual-shadow texel, then cover the 2-texel comparison
     // footprint.  This prevents quantized shadow depths from producing acne
     // bands on large, nearly planar receivers.
+#if !defined(SHADOW_COMPUTE)
     const float2 uvDx = ddx(uv);
     const float2 uvDy = ddy(uv);
     const float zDx = ddx(currentDepth);
     const float zDy = ddy(currentDepth);
     const float determinant = uvDx.x * uvDy.y - uvDx.y * uvDy.x;
+#endif
     const float texelDepth = shadowWorldTexelSize(lightSpace) *
                              shadowLightDepthScale(lightSpace);
     const float noL = saturate(abs(dot(normalize(geometricNormal),
@@ -203,6 +205,7 @@ float shadowReceiverDepthBias(float currentDepth, float2 uv, float4x4 lightSpace
     // provide a stable plane estimate. Use an angle-aware fallback instead of
     // dropping to MIN_SHADOW_BIAS, which reintroduces grazing-angle acne.
     float receiverPlaneBias = maxReceiverBias;
+#if !defined(SHADOW_COMPUTE)
     if (abs(determinant) > 1.0e-8)
     {
         const float dzdu = (uvDy.y * zDx - uvDx.y * zDy) / determinant;
@@ -215,6 +218,7 @@ float shadowReceiverDepthBias(float currentDepth, float2 uv, float4x4 lightSpace
         // the comparison by more than a few shadow texels.
         receiverPlaneBias = min(calculatedBias, maxReceiverBias);
     }
+#endif
 
     // The geometric normal offset is applied in world space by the caller.
     // Keep comparison bias responsible only for receiver-plane quantization
@@ -483,17 +487,33 @@ float sampleVirtualShadowLevel(Sampler2DShadow shadowMap, Sampler2DShadow linear
     return totalWeight > 0.0 ? filteredShadow / totalWeight : 0.0;
 }
 
-float shadowFootprintInTexels(float3 worldPosition, float4x4 clipMatrix)
+float shadowFootprintInTexels(float3 worldPosition, float4x4 clipMatrix
+#if defined(SHADOW_COMPUTE)
+    , float3 worldRight, float3 worldDown
+#endif
+)
 {
     const float4 lightClip = mul(float4(worldPosition, 1.0), clipMatrix);
     if (abs(lightClip.w) < 1.0e-6)
         return 0.0;
     const float2 uv = lightClip.xy / lightClip.w * 0.5 + 0.5;
+#if defined(SHADOW_COMPUTE)
+    const float4 rightClip = mul(float4(worldRight, 1.0), clipMatrix);
+    const float4 downClip = mul(float4(worldDown, 1.0), clipMatrix);
+    const float2 uvDx = rightClip.xy / rightClip.w * 0.5 + 0.5 - uv;
+    const float2 uvDy = downClip.xy / downClip.w * 0.5 + 0.5 - uv;
+    return shadowTexelFootprintFromGradients(uvDx, uvDx, uvDy, uvDy);
+#else
     return shadowTexelFootprintFromGradients(ddx(uv), ddx(uv), ddy(uv), ddy(uv));
+#endif
 }
 
 uint selectVirtualShadowLevel(float3 worldPosition, float4x4 clipMatrices[7],
-                              const uint shadowQuality, out float footprintInTexels)
+                              const uint shadowQuality,
+#if defined(SHADOW_COMPUTE)
+                              float3 worldRight, float3 worldDown,
+#endif
+                              out float footprintInTexels)
 {
     const float threshold = shadowTexelFootprintThreshold(shadowQuality);
     footprintInTexels = 0.0;
@@ -508,7 +528,11 @@ uint selectVirtualShadowLevel(float3 worldPosition, float4x4 clipMatrices[7],
         // This is the same LOD rule as receiver marking, but uses both
         // screen-space axes.  Sampling must never let incidental L0 cache
         // residency override the requested geometric LOD.
-        const float levelFootprint = shadowFootprintInTexels(worldPosition, clipMatrices[level]);
+        const float levelFootprint = shadowFootprintInTexels(worldPosition, clipMatrices[level]
+#if defined(SHADOW_COMPUTE)
+            , worldRight, worldDown
+#endif
+        );
         if (levelFootprint <= threshold || level + 1 == SHADOW_CLIP_LEVELS)
         {
             footprintInTexels = levelFootprint;
@@ -525,6 +549,9 @@ float sampleVirtualShadow(Sampler2DShadow shadowMap, Sampler2DShadow linearShado
                           float4x4 clipMatrices[7], StructuredBuffer<uint4> pageTable,
                           uint shadowQuality, uint2 pixelCoordinate,
                           uint temporalSampleIndex, bool temporalShadowJitter,
+#if defined(SHADOW_COMPUTE)
+                          float3 worldRight, float3 worldDown,
+#endif
                           out ShadowSampleDebug debug)
 {
     debug.blockerCount = 0.0;
@@ -535,7 +562,11 @@ float sampleVirtualShadow(Sampler2DShadow shadowMap, Sampler2DShadow linearShado
     bool resident;
     float desiredFootprintInTexels;
     const uint desiredLevel = selectVirtualShadowLevel(
-        worldPosition, clipMatrices, shadowQuality, desiredFootprintInTexels);
+        worldPosition, clipMatrices, shadowQuality,
+#if defined(SHADOW_COMPUTE)
+        worldRight, worldDown,
+#endif
+        desiredFootprintInTexels);
     debug.desiredClipLevel = desiredLevel;
     debug.resolvedClipLevel = desiredLevel;
     [loop]
@@ -562,7 +593,11 @@ float sampleVirtualShadow(Sampler2DShadow shadowMap, Sampler2DShadow linearShado
             // clip levels, which otherwise appears as horizontal LOD seams.
             const float footprintInTexels = level == desiredLevel
                 ? desiredFootprintInTexels
-                : shadowFootprintInTexels(worldPosition, clipMatrices[level]);
+                : shadowFootprintInTexels(worldPosition, clipMatrices[level]
+#if defined(SHADOW_COMPUTE)
+                    , worldRight, worldDown
+#endif
+                );
             const float threshold = shadowTexelFootprintThreshold(shadowQuality);
             const float lodBlend = smoothstep(threshold * 0.70, threshold, footprintInTexels);
             const float clipBlend = smoothstep(0.75, 0.95, clipEdge);

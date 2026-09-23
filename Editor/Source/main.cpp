@@ -14,6 +14,7 @@
 #include "Engine/Core/Diagnostics.h"
 #include "Engine/Core/Transform.h"
 #include "Engine/Core/Camera.h"
+#include "Engine/Input/Input.h"
 #include "Engine/Math/AABB.h"
 #include "Engine/ECS/Components/ScriptComponent.h"
 #include "Engine/ECS/Components/CameraComponent.h"
@@ -262,6 +263,11 @@ public:
     bool wantsTextInput() const override { return ImGui::GetIO().WantTextInput; }
 
     void newFrame() override {
+        auto& io = ImGui::GetIO();
+        if (Engine::Input::cursorMode() == Engine::CursorMode::Locked)
+            io.ConfigFlags |= ImGuiConfigFlags_NoMouseCursorChange;
+        else
+            io.ConfigFlags &= ~ImGuiConfigFlags_NoMouseCursorChange;
         ImGui_ImplVulkan_NewFrame();
         ImGui_ImplSDL3_NewFrame();
         ImGui::NewFrame();
@@ -598,6 +604,7 @@ int main(int argc, char** argv) {
                                                     EditorSceneSession::antialiasingLevel(renderer))) {
                     physicsSystem.reset();
                     playing = !playing;
+                    if (!playing) static_cast<void>(Engine::Input::setCursorMode(Engine::CursorMode::Normal));
                     if (!playing) resolveShaderGraphMaterials();
                     paused = false;
                     physicsAccumulator = 0.0;
@@ -739,6 +746,7 @@ int main(int argc, char** argv) {
                 }
                 physicsSystem.reset();
                 playing = enabled;
+                if (!playing) static_cast<void>(Engine::Input::setCursorMode(Engine::CursorMode::Normal));
                 paused = false;
                 physicsAccumulator = 0.0;
                 showGameView = playing;
@@ -844,6 +852,8 @@ int main(int argc, char** argv) {
                        setPlayMode(false)) {
                 static_cast<void>(setPlayMode(true));
             }
+            if (playing && viewportInteraction.gameViewClicked)
+                static_cast<void>(Engine::Input::setCursorMode(Engine::CursorMode::Locked));
             if (showTerrainTools) {
                 drawTerrainToolsPanel(scene, content, selectedEntity, renderer, terrainSculpt,
                                       playing, showTerrainTools);

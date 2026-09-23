@@ -29,8 +29,10 @@ namespace Engine {
         glm::ivec4 textureCoordinateSets0{};
         glm::ivec4 textureCoordinateSets1{};
         glm::ivec4 textureCoordinateSets2{};
+        // Per-slot affine UV transform. textureTransforms stores (m00, m01,
+        // offsetX, offsetY); textureTransformRows1 packs (m10, m11).
         std::array<glm::vec4, 10> textureTransforms{};
-        std::array<glm::vec4, 3> textureTransformRotations{};
+        std::array<glm::vec4, 6> textureTransformRows1{};
         // Dedicated water block. Kept in the material SSBO so the existing
         // GPU-driven material-index indirection remains intact.
         glm::vec4 waterShallowColorRoughness{};

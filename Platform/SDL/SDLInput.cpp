@@ -1,11 +1,21 @@
 #include "SDLInput.h"
 
 #include "Engine/Input/Input.h"
+#include "Engine/Core/Diagnostics.h"
 
 #include <algorithm>
+#include <string>
 
 namespace Engine {
     namespace {
+    SDL_Window* inputWindow = nullptr;
+    CursorMode currentCursorMode = CursorMode::Normal;
+
+    bool reportCursorError(const char* operation) {
+        Diagnostics::instance().report(DiagnosticSeverity::Error,
+            std::string{operation} + ": " + SDL_GetError(), {.subsystem = "Input"});
+        return false;
+    }
 
     KeyCode toKeyCode(const SDL_Scancode key) {
         switch (key) {
@@ -114,6 +124,10 @@ namespace Engine {
     } // namespace
 
     void SDLInput::processEvent(const SDL_Event& event) {
+        if (event.type == SDL_EVENT_WINDOW_FOCUS_LOST && inputWindow != nullptr &&
+            event.window.windowID == SDL_GetWindowID(inputWindow)) {
+            static_cast<void>(setCursorMode(CursorMode::Normal));
+        }
         switch (event.type) {
             case SDL_EVENT_KEY_DOWN:
             case SDL_EVENT_KEY_UP:
@@ -164,7 +178,33 @@ namespace Engine {
         }
     }
 
-    void SDLInput::setRelativeMouseMode(SDL_Window* window, bool enabled) {
-        SDL_SetWindowRelativeMouseMode(window, enabled);
+    void SDLInput::setWindow(SDL_Window* window) {
+        if (inputWindow != nullptr && inputWindow != window) {
+            static_cast<void>(setCursorMode(CursorMode::Normal));
+        }
+        inputWindow = window;
+        currentCursorMode = CursorMode::Normal;
+    }
+
+    bool SDLInput::setCursorMode(const CursorMode mode) {
+        if (inputWindow == nullptr) return false;
+        if (mode == CursorMode::Locked) {
+            if (!SDL_SetWindowRelativeMouseMode(inputWindow, true))
+                return reportCursorError("SDL_SetWindowRelativeMouseMode(true)");
+        } else {
+            if (!SDL_SetWindowRelativeMouseMode(inputWindow, false))
+                return reportCursorError("SDL_SetWindowRelativeMouseMode(false)");
+            const bool visible = mode == CursorMode::Normal ? SDL_ShowCursor() : SDL_HideCursor();
+            if (!visible) return reportCursorError(mode == CursorMode::Normal ? "SDL_ShowCursor" : "SDL_HideCursor");
+        }
+        currentCursorMode = mode;
+        return true;
+    }
+
+    CursorMode SDLInput::cursorMode() {
+        if (inputWindow == nullptr) return CursorMode::Normal;
+        if (currentCursorMode == CursorMode::Locked &&
+            !SDL_GetWindowRelativeMouseMode(inputWindow)) return CursorMode::Normal;
+        return currentCursorMode;
     }
 }

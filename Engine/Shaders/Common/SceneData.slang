@@ -69,7 +69,7 @@ struct MaterialData
     int4 textureCoordinateSets1;
     int4 textureCoordinateSets2;
     float4 textureTransforms[10];
-    float4 textureTransformRotations[3];
+    float4 textureTransformRows1[6];
     float4 waterShallowColorRoughness;
     float4 waterDeepColorIor;
     float4 waterAbsorptionRefraction;
@@ -85,17 +85,15 @@ struct MaterialData
 
 float2 materialTextureUv(MaterialData material, uint slot, float2 uv0, float2 uv1)
 {
-    int texCoord = slot < 4 ? material.textureCoordinateSets0[slot] :
+    int encodedTexCoord = slot < 4 ? material.textureCoordinateSets0[slot] :
                    slot < 8 ? material.textureCoordinateSets1[slot - 4] :
                               material.textureCoordinateSets2[slot - 8];
-    float2 uv = texCoord == 1 ? uv1 : uv0;
+    float2 uv = (encodedTexCoord & 1) != 0 ? uv1 : uv0;
+    if ((encodedTexCoord & 2) != 0) return uv;
     float4 transform = material.textureTransforms[slot];
-    float sine; float cosine;
-    sincos(material.textureTransformRotations[slot / 4][slot % 4], sine, cosine);
-    float2 scaled = uv * transform.zw;
-    float2 rotated = float2(cosine * scaled.x - sine * scaled.y,
-                            sine * scaled.x + cosine * scaled.y);
-    return rotated + transform.xy;
+    float2 row1 = float2(material.textureTransformRows1[(slot / 4) * 2][slot % 4],
+                         material.textureTransformRows1[(slot / 4) * 2 + 1][slot % 4]);
+    return float2(dot(uv, transform.xy), dot(uv, row1)) + transform.zw;
 }
 
 // Mirrors Engine::RendererInstanceData and RendererPreviousTransformData.

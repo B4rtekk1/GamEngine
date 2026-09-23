@@ -79,12 +79,16 @@ namespace Engine {
         } else if (hasVelocityAttachment_) {
             shaderPaths = {
                 "shaders/forward_pbr.spv", "shaders/forward_unlit.spv",
-                "shaders/forward_hologram.spv", "shaders/forward_water.spv"
+                "shaders/forward_hologram.spv", "shaders/forward_water.spv",
+                "shaders/forward_pbr_normal.spv", "shaders/forward_pbr_extended.spv",
+                "shaders/forward_pbr_foliage.spv", "shaders/forward_pbr_terrain.spv"
             };
         } else {
             shaderPaths = {
                 "shaders/forward_pbr_no_velocity.spv", "shaders/forward_unlit_no_velocity.spv",
-                "shaders/forward_hologram_no_velocity.spv", "shaders/forward_water_no_velocity.spv"
+                "shaders/forward_hologram_no_velocity.spv", "shaders/forward_water_no_velocity.spv",
+                "shaders/forward_pbr_normal_no_velocity.spv", "shaders/forward_pbr_extended_no_velocity.spv",
+                "shaders/forward_pbr_foliage_no_velocity.spv", "shaders/forward_pbr_terrain_no_velocity.spv"
             };
         }
         for (std::size_t index = 0; index < shaderPaths.size(); ++index) {
@@ -97,6 +101,15 @@ namespace Engine {
             }
             GraphicsPipelineOptions materialOptions = options;
             materialOptions.shader = shaderPaths[index];
+            if (preserveDepth && samples == VK_SAMPLE_COUNT_1_BIT &&
+                (index == materialShaderIndex(MaterialShader::StandardPBR) ||
+                 index >= PbrNormalProgramSlot)) {
+                const auto& path = materialOptions.shader;
+                materialOptions.shader = path.parent_path() /
+                    (path.stem().string() + "_resolved" + path.extension().string());
+            }
+            if (index == PbrFoliageProgramSlot)
+                materialOptions.cullMode = VK_CULL_MODE_NONE;
             materialPipelines_[index].create(device, materialOptions);
         }
         shaderGraphPipelineOptions_ = options;
@@ -109,6 +122,11 @@ namespace Engine {
                                     : hasVelocityAttachment_
                                           ? "shaders/forward_pbr.spv"
                                           : "shaders/forward_pbr_no_velocity.spv";
+        if (preserveDepth && samples == VK_SAMPLE_COUNT_1_BIT) {
+            const auto& path = foliageOptions.shader;
+            foliageOptions.shader = path.parent_path() /
+                (path.stem().string() + "_resolved" + path.extension().string());
+        }
         foliageOptions.cullMode = VK_CULL_MODE_NONE;
         // Vegetation cards use alpha cutout.  They must populate depth before the
         // sky draw and TAA resolve; treating them as a generic transparent stream

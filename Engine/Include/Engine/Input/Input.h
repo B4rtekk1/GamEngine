@@ -8,6 +8,7 @@
 #include "Engine/Input/KeyCode.h"
 #include "Engine/Input/Gamepad.h"
 #include "Engine/Input/MouseButton.h"
+#include "Engine/Input/CursorMode.h"
 #include "Engine/Math/Vec2.h"
 
 #include <string_view>
@@ -56,6 +57,12 @@ namespace Engine {
 
         /** @brief Returns the mouse-wheel movement accumulated during the current frame. */
         static float mouseWheel();
+
+        /** Changes the system cursor mode for the active game window. Returns false on SDL failure. */
+        static bool setCursorMode(CursorMode mode);
+
+        /** Returns the effective mode, including whether SDL still holds relative mouse mode. */
+        static CursorMode cursorMode();
 
         static bool gamepadDown(GamepadButton button);
         static bool gamepadPressed(GamepadButton button);
