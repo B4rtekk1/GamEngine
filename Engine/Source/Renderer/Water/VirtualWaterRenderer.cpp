@@ -90,7 +90,7 @@ void VirtualWaterRenderer::create(VkPhysicalDevice physicalDevice, VkDevice devi
         velocity_.create(physicalDevice_,device_,extent_,allocator_,VK_FILTER_NEAREST,VK_FORMAT_R16G16_SFLOAT,false);
         for (auto& lighting : lighting_)
             lighting.create(physicalDevice_,device_,extent_,allocator_,VK_FILTER_LINEAR,VK_FORMAT_R16G16B16A16_SFLOAT,true);
-        sssrDepth_.create(physicalDevice_, device_, (extent_.width + 1U) / 2U, (extent_.height + 1U) / 2U, allocator_);
+        sssrDepth_.create(physicalDevice_, device_, extent_.width, extent_.height, allocator_);
         createDescriptors(sceneLayout); createPipelines(sceneLayout,depthFormat); hdrTargetView_ = hdrTargetView; writeDescriptors();
     } catch (...) { destroy(); throw; }
 }

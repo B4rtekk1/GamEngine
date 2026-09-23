@@ -42,8 +42,8 @@ namespace {
      *  @{
      */
     constexpr ImGuiID kEmptyDockNodeId = 0;
-    constexpr float kHierarchyWidthRatio = 0.22F;
-    constexpr float kInspectorWidthRatio = 0.28F;
+    constexpr float kHierarchyWidthRatio = 0.23F;
+    constexpr float kInspectorWidthRatio = 0.27F;
     /** @} */
 }
 
@@ -194,7 +194,7 @@ void EditorStyle::configureDockLayout(const ImVec2 dockSize, const bool restoreP
     ImGui::DockBuilderSetNodeSize(root, dockSize);
     ImGuiID bottom = kEmptyDockNodeId;
     ImGuiID workspace = kEmptyDockNodeId;
-    ImGui::DockBuilderSplitNode(root, ImGuiDir_Down, 0.30F, &bottom, &workspace);
+    ImGui::DockBuilderSplitNode(root, ImGuiDir_Down, 0.24F, &bottom, &workspace);
     ImGuiID assetManager = kEmptyDockNodeId;
     ImGuiID console = kEmptyDockNodeId;
     ImGui::DockBuilderSplitNode(bottom, ImGuiDir_Right, 0.52F, &console, &assetManager);
@@ -205,16 +205,16 @@ void EditorStyle::configureDockLayout(const ImVec2 dockSize, const bool restoreP
     ImGui::DockBuilderSplitNode(workspace, ImGuiDir_Left, kHierarchyWidthRatio, &hierarchy, &center);
     ImGuiID inspector = kEmptyDockNodeId;
     ImGui::DockBuilderSplitNode(center, ImGuiDir_Right, kInspectorWidthRatio, &inspector, &center);
-    ImGuiID terrainTools = kEmptyDockNodeId;
-    ImGuiID inspectorTop = kEmptyDockNodeId;
-    ImGui::DockBuilderSplitNode(inspector, ImGuiDir_Down, 0.52F, &terrainTools, &inspectorTop);
+    // Keep the inspector full height. Terrain editing is occasional, so make
+    // its panel a tab beside the inspector instead of permanently taking half
+    // of the right column.
     ImGui::DockBuilderDockWindow("Hierarchy", hierarchy);
     ImGui::DockBuilderDockWindow("Asset Manager", assetManager);
     ImGui::DockBuilderDockWindow("Console", console);
     ImGui::DockBuilderDockWindow("Terminal", terminal);
     ImGui::DockBuilderDockWindow("Viewport", center);
-    ImGui::DockBuilderDockWindow("Inspector", inspectorTop);
-    ImGui::DockBuilderDockWindow("Terrain Tools", terrainTools);
+    ImGui::DockBuilderDockWindow("Inspector", inspector);
+    ImGui::DockBuilderDockWindow("Terrain Tools", inspector);
     ImGui::DockBuilderFinish(root);
     configured = true;
 }

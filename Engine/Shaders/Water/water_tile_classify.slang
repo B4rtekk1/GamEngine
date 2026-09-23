@@ -1,5 +1,9 @@
 import Water.VirtualWaterShared;
 
+// Set these independently to 1 for SSR diagnosis, then rebuild the shader.
+#define WATER_DIAGNOSTIC_FULL_REFLECTION_TIER 0
+#define WATER_DIAGNOSTIC_UNLIMITED_REFLECTION_BUDGET 0
+
 [[vk::binding(0,0)]] Sampler2D waterMeta;
 [[vk::binding(1,0)]] Sampler2D waterSurface;
 [[vk::binding(2,0)]] RWStructuredBuffer<uint> tileLists;
@@ -82,15 +86,20 @@ void main(uint3 gid:SV_GroupID,uint3 lid3:SV_GroupThreadID,uint3 tid:SV_Dispatch
     if(quantized<settings.cheapThreshold){reflectionCap=0u;refractionCap=0u;}
     else if(quantized<settings.mediumThreshold){reflectionCap=min(reflectionCap,1u);refractionCap=min(refractionCap,1u);}
     else if(quantized<settings.highThreshold){reflectionCap=min(reflectionCap,2u);refractionCap=min(refractionCap,2u);}
+#if WATER_DIAGNOSTIC_FULL_REFLECTION_TIER
+    reflectionCap=groupReflection;
+#endif
     // The full-resolution allowance covers the viewport. Only ray work is
     // reduced under load; a failed ray reservation cannot lower pixel density.
     reserveBudget(2u,64u,budgets[0].maxFullRateSamples);
     const uint sampleCount=64u;
     uint reflectionSteps=reflectionCap==3u?40u:(reflectionCap==2u?26u:(reflectionCap==1u?14u:0u));
     uint refractionSteps=refractionCap==3u?32u:(refractionCap==2u?20u:(refractionCap==1u?1u:0u));
+#if !WATER_DIAGNOSTIC_UNLIMITED_REFLECTION_BUDGET
     if(reflectionCap>0u&&!reserveBudget(0u,sampleCount*reflectionSteps,budgets[0].maxReflectionWork)){
         reflectionCap=0u;uint ignoredSat=0u;InterlockedOr(budgets[0].budgetSaturated,1u,ignoredSat);
     }
+#endif
     if(refractionCap>0u&&!reserveBudget(1u,sampleCount*refractionSteps,budgets[0].maxRefractionWork)){
         refractionCap=0u;uint ignoredSat=0u;InterlockedOr(budgets[0].budgetSaturated,1u,ignoredSat);
     }

@@ -204,7 +204,7 @@ bool sampleTemporalHistory(uint2 px,float currentDepth,out float3 historyColor){
     return true;
 }
 
-float3 shadePixel(uint2 px,uint packedTile,uint tierBin){
+float3 shadePixel(uint2 px,uint packedTile){
     float2 meta=waterMeta.Load(int3(px,0)).xy;uint q=asuint(meta.y);
     if((q&WaterMetaValid)==0u)return float3(0);
     float4 surf=waterSurface.Load(int3(px,0));float2 uv=(float2(px)+0.5)/float2(settings.width,settings.height);
@@ -228,7 +228,7 @@ float3 shadePixel(uint2 px,uint packedTile,uint tierBin){
     float2 flowVelocity=frame.windDirectionStrength.xz*0.04;
     if(hasStatePage&&page.flowSpeed>1.0e-4){float3 wf=waterRotateQuaternion(float3(page.flowX,0,page.flowZ),instance.rotation);float2 dir=wf.xz;float dl=length(dir);if(dl>1e-5)flowVelocity=dir/dl*page.flowSpeed*0.04;}
     if(m.waterTextureIndices.z>=0){float2 f=materialTextures[NonUniformResourceIndex(m.waterTextureIndices.z)].SampleLevel(worldPos.xz*0.025,0).xy*2.0-1.0;flowVelocity+=f*0.035;}
-    if(m.waterTextureIndices.x>=0){float2 wuv=worldPos.xz*0.15+flowVelocity*frame.windGustFrequencyTime.z;float3 micro=materialTextures[NonUniformResourceIndex(m.waterTextureIndices.x)].SampleLevel(wuv,0).xyz*2.0-1.0;float3 Tm=buildTangent(N),Bm=normalize(cross(N,Tm));float3 microN=normalize(Tm*micro.x+Bm*micro.y+N*micro.z);N=normalize(lerp(N,microN,saturate(m.waterFoam.z)*(tierBin>=2?1.0:0.55)));}
+    if(m.waterTextureIndices.x>=0){float2 wuv=worldPos.xz*0.15+flowVelocity*frame.windGustFrequencyTime.z;float3 micro=materialTextures[NonUniformResourceIndex(m.waterTextureIndices.x)].SampleLevel(wuv,0).xyz*2.0-1.0;float3 Tm=buildTangent(N),Bm=normalize(cross(N,Tm));float3 microN=normalize(Tm*micro.x+Bm*micro.y+N*micro.z);N=normalize(lerp(N,microN,saturate(m.waterFoam.z)));}
 
     float3 Nvs=normalize(mul(N,(float3x3)frame.view));float3 viewDir=normalize(viewPos);
     uint reflectionCap=(packedTile>>26u)&3u,refractionCap=(packedTile>>28u)&3u;
@@ -304,7 +304,7 @@ void main(uint3 gid:SV_GroupID,uint3 lid:SV_GroupThreadID){
     if(px.x>=settings.width||px.y>=settings.height)return;
     uint q=asuint(waterMeta.Load(int3(px,0)).y);
     if((q&WaterMetaValid)==0u)return;
-    float3 color=shadePixel(px,packedTile,push.tier);
+    float3 color=shadePixel(px,packedTile);
     float depth=waterSurface.Load(int3(px,0)).z;
     waterLighting[px]=float4(color,depth);
 }
