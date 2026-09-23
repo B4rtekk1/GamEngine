@@ -179,14 +179,11 @@ ReflectionCandidate sampleLocalProbes(float3 worldPosition, float3 reflection, f
     float secondWeight = 0.0;
     ReflectionProbeData best;
     ReflectionProbeData second;
-    // The compute pass writes probe IDs with its high bit set into the same
-    // compact Forward+ list as local lights.  This keeps selection GPU-driven
-    // and bounds fragment work by MaxLightsPerCluster, not MaxProbes.
-    [loop] for (uint candidate = 0u; candidate < clusterRange.count; ++candidate)
+    // Probe indices occupy a separate fixed-stride region in the cluster list,
+    // so this loop never loads local-light indices.
+    [loop] for (uint candidate = 0u; candidate < clusterRange.probeCount; ++candidate)
     {
-        const uint encodedIndex = clusterLightIndices[clusterRange.offset + candidate];
-        if ((encodedIndex & 0x80000000u) == 0u) continue;
-        const uint index = encodedIndex & 0x7fffffffu;
+        const uint index = clusterLightIndices[clusterRange.probeOffset + candidate];
         if (index >= frame.reflectionProbeCount) continue;
         ReflectionProbeData probe = reflectionProbes[index];
         float weight = probeInfluence(probe, worldPosition);
@@ -494,23 +491,22 @@ ForwardFragmentOutput fragmentMain(ForwardFragmentInput input)
 #endif
         return debugOutput;
     }
-    float contactVisibility = rtContactVisibility.Sample(input.position.xy / frame.clusteredViewportNearFar.xy).r;
+    float contactVisibility = 1.0;
+    if (frame.clusterZScaleBiasEnvironmentMipRtContact.w != 0.0)
+        contactVisibility = rtContactVisibility.Sample(input.position.xy / frame.clusteredViewportNearFar.xy).r;
     float finalVisibility = min(1.0 - shadow, contactVisibility);
     float3 direct = (diffuse + specular) * frame.lightDirectionIntensity.w *
                     frame.lightColor.rgb * nDotL * finalVisibility;
     const uint2 grid = uint2((uint(frame.clusteredViewportNearFar.x) + 63u) / 64u,
                              (uint(frame.clusteredViewportNearFar.y) + 63u) / 64u);
-    const float nearPlane = frame.clusteredViewportNearFar.z;
-    const float farPlane = frame.clusteredViewportNearFar.w;
-    const float viewDepth = max(-mul(float4(input.worldPosition, 1.0), frame.view).z, nearPlane);
-    const uint slice = min(uint(log(viewDepth / nearPlane) / log(farPlane / nearPlane) * 24.0), 23u);
+    const float viewDepth = max(-mul(float4(input.worldPosition, 1.0), frame.view).z, frame.clusteredViewportNearFar.z);
+    const uint slice = min(uint(max(log2(viewDepth) * frame.clusterZScaleBiasEnvironmentMipRtContact.x + frame.clusterZScaleBiasEnvironmentMipRtContact.y, 0.0)), 23u);
     const uint2 tile = min(uint2(input.position.xy) / 64u, grid - 1u);
     const uint clusterIndex = (slice * grid.y + tile.y) * grid.x + tile.x;
     const ClusterLightRange lightRange = clusterRanges[clusterIndex];
-    for (uint i = 0u; i < lightRange.count; ++i)
+    for (uint i = 0u; i < lightRange.lightCount; ++i)
     {
-        const uint lightIndex = clusterLightIndices[lightRange.offset + i];
-        if ((lightIndex & 0x80000000u) != 0u) continue;
+        const uint lightIndex = clusterLightIndices[lightRange.lightOffset + i];
         if (lightIndex >= frame.localLightCount) continue;
         LocalLightData local = frame.localLights[lightIndex];
         float3 toLight = local.positionRange.xyz - input.worldPosition;
@@ -563,10 +559,7 @@ ForwardFragmentOutput fragmentMain(ForwardFragmentInput input)
     float3 kD = (1.0 - kS) * (1.0 - metallic);
     float3 diffuseIbl = irradianceMap.Sample(normal).rgb * albedo * kD;
     float3 reflection = reflect(-viewDirection, normal);
-    uint prefilteredWidth;
-    uint prefilteredHeight;
-    uint prefilteredMipCount;
-    prefilteredEnvironmentMap.GetDimensions(0, prefilteredWidth, prefilteredHeight, prefilteredMipCount);
+    const uint prefilteredMipCount = max(uint(frame.clusterZScaleBiasEnvironmentMipRtContact.z), 1u);
     float3 prefiltered = prefilteredEnvironmentMap.SampleLevel(
         reflection, roughness * float(max(prefilteredMipCount, 1u) - 1u)).rgb;
     // The current forward pass provides the global sky.  Local-probe, SSR and

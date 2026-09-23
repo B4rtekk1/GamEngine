@@ -34,8 +34,10 @@ namespace Engine {
 
     /** std430 header for one (x, y, logarithmic-depth) forward+ cluster. */
     struct alignas(8) ClusterLightRangeGPU {
-        std::uint32_t offset{};
-        std::uint32_t count{};
+        std::uint32_t lightOffset{};
+        std::uint32_t lightCount{};
+        std::uint32_t probeOffset{};
+        std::uint32_t probeCount{};
     };
 
     /**
@@ -101,6 +103,8 @@ namespace Engine {
         std::uint32_t temporalSampleIndex{0};
         std::uint32_t pbrDebugView{0};
         glm::vec4 clusteredViewportNearFar{};
+        // x: logarithmic cluster Z scale, y: bias, z: prefiltered environment mip count, w: RT contact shadows enabled.
+        glm::vec4 clusterZScaleBiasEnvironmentMipRtContact{};
         std::array<LocalLightGPU, MaxLocalLights> localLights{};
     };
 

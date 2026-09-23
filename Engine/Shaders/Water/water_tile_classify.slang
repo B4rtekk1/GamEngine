@@ -71,21 +71,21 @@ void main(uint3 gid:SV_GroupID,uint3 lid3:SV_GroupThreadID,uint3 tid:SV_Dispatch
 
     float error=asfloat(groupErrorBits);float importance=asfloat(groupImportanceBits);
     uint quantized=min(uint(importance*255.0+0.5),255u);uint ignored=0;InterlockedAdd(importanceHistogram[quantized],1u,ignored);
-    uint rate=error>0.42?0u:(error>0.16?1u:2u); // 1x1, 2x2, 4x4 software shading rate
+    // Keep surface shading at native resolution. Reusing one lighting result
+    // across 2x2 or 4x4 pixels makes reflections and refraction visibly blocky.
+    const uint rate=0u;
     uint reflectionCap=groupReflection;uint refractionCap=groupRefraction;
     const bool simpleOnly=groupSimpleCount==groupWaterCount;
-    if(simpleOnly){reflectionCap=min(reflectionCap,1u);refractionCap=min(refractionCap,1u);rate=2u;}
+    if(simpleOnly){reflectionCap=min(reflectionCap,1u);refractionCap=min(refractionCap,1u);}
     // Histogram-derived thresholds redistribute the fixed frame budget toward
     // the most important tiles. Tier zero has strict NO_RAY semantics.
-    if(quantized<settings.cheapThreshold){reflectionCap=0u;refractionCap=0u;rate=2u;}
-    else if(quantized<settings.mediumThreshold){reflectionCap=min(reflectionCap,1u);refractionCap=min(refractionCap,1u);rate=max(rate,1u);}
+    if(quantized<settings.cheapThreshold){reflectionCap=0u;refractionCap=0u;}
+    else if(quantized<settings.mediumThreshold){reflectionCap=min(reflectionCap,1u);refractionCap=min(refractionCap,1u);}
     else if(quantized<settings.highThreshold){reflectionCap=min(reflectionCap,2u);refractionCap=min(refractionCap,2u);}
-    // Reserve full-rate shading before estimating ray work because a failed
-    // reservation changes the software shading rate and therefore sample count.
-    if(rate==0u&&!reserveBudget(2u,64u,budgets[0].maxFullRateSamples)){
-        rate=1u;uint ignoredSat=0u;InterlockedOr(budgets[0].budgetSaturated,1u,ignoredSat);
-    }
-    uint sampleCount=rate==0u?64u:(rate==1u?16u:4u);
+    // The full-resolution allowance covers the viewport. Only ray work is
+    // reduced under load; a failed ray reservation cannot lower pixel density.
+    reserveBudget(2u,64u,budgets[0].maxFullRateSamples);
+    const uint sampleCount=64u;
     uint reflectionSteps=reflectionCap==3u?40u:(reflectionCap==2u?26u:(reflectionCap==1u?14u:0u));
     uint refractionSteps=refractionCap==3u?32u:(refractionCap==2u?20u:(refractionCap==1u?1u:0u));
     if(reflectionCap>0u&&!reserveBudget(0u,sampleCount*reflectionSteps,budgets[0].maxReflectionWork)){

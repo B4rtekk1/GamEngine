@@ -13,8 +13,7 @@ struct Settings {
 };
 [[vk::push_constant]] ConstantBuffer<Settings> settings;
 
-// Each workgroup covers 16x16 mip0 pixels. Mip reductions alternate buffers
-// so a phase never overwrites values that another thread in that phase reads.
+
 groupshared float scratchA[8][8];
 groupshared float scratchB[8][8];
 
@@ -57,7 +56,6 @@ void main(uint3 groupId : SV_GroupID, uint3 localId : SV_GroupThreadID) {
     hardwareDepth.GetDimensions(width, height);
     uint2 sourceBase = groupId.xy * 16u + localId.xy * 2u;
 
-    // Keep all four mip0 values in registers while producing mip1.
     float d00 = linearizeDepth(hardwareDepth.Load(int3(min(sourceBase + uint2(0, 0), uint2(width, height) - 1u), 0)).r);
     float d10 = linearizeDepth(hardwareDepth.Load(int3(min(sourceBase + uint2(1, 0), uint2(width, height) - 1u), 0)).r);
     float d01 = linearizeDepth(hardwareDepth.Load(int3(min(sourceBase + uint2(0, 1), uint2(width, height) - 1u), 0)).r);

@@ -8,8 +8,10 @@ struct LocalLightData
 
 struct ClusterLightRange
 {
-    uint offset;
-    uint count;
+    uint lightOffset;
+    uint lightCount;
+    uint probeOffset;
+    uint probeCount;
 };
 
 struct RendererFrameData
@@ -48,6 +50,7 @@ struct RendererFrameData
     uint pbrDebugView;
     // xy viewport pixels, z near plane, w far plane.
     float4 clusteredViewportNearFar;
+    float4 clusterZScaleBiasEnvironmentMipRtContact;
     LocalLightData localLights[32];
 };
 

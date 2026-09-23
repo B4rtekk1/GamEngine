@@ -377,6 +377,11 @@
                 static_cast<std::uint32_t>(pbrDebugView),
                 glm::vec4{static_cast<float>(swapchain.extent().width),
                           static_cast<float>(swapchain.extent().height), 0.1F, 1000.0F},
+                glm::vec4{24.0F / std::log2(1000.0F / 0.1F),
+                          -std::log2(0.1F) * (24.0F / std::log2(1000.0F / 0.1F)),
+                          static_cast<float>(imageBasedLighting.prefilteredMipLevels()),
+                          rtContactShadowSettings.mode == ContactShadowMode::RayTraced &&
+                              rtContactShadowPass.resultView() != VK_NULL_HANDLE ? 1.0F : 0.0F},
                 frameData.lights};
             uniformBuffers[frame].update(&data, sizeof(data));
             const ClusteredLightingUniforms clustered{
@@ -449,6 +454,9 @@
                 0u, 0u, static_cast<std::uint32_t>(pbrDebugView),
                 glm::vec4{static_cast<float>(sceneViewportTarget.extent().width),
                           static_cast<float>(sceneViewportTarget.extent().height), 0.1F, 1000.0F},
+                glm::vec4{24.0F / std::log2(1000.0F / 0.1F),
+                          -std::log2(0.1F) * (24.0F / std::log2(1000.0F / 0.1F)),
+                          static_cast<float>(imageBasedLighting.prefilteredMipLevels()), 0.0F},
                 frameData.lights};
             sceneUniformBuffers[frame].update(&data, sizeof(data));
             const ClusteredLightingUniforms clustered{

@@ -32,7 +32,6 @@ static const uint MaxLightsPerCluster = 64u;
 static const uint MaxLocalLightsPerCluster = 48u;
 static const uint MaxProbesPerCluster = MaxLightsPerCluster - MaxLocalLightsPerCluster;
 static const uint Probe_Enabled = 1u << 2u;
-static const uint ProbeIndexBit = 0x80000000u;
 
 // Conservative sphere-vs-cluster test in view space.  Every local light is
 // represented by its influence sphere; spot lights can safely use the same
@@ -77,20 +76,23 @@ void main(uint3 id : SV_DispatchThreadID)
     if (any(id >= uniforms.gridAndLightCount.xyz)) return;
     uint clusterIndex = (id.z * uniforms.gridAndLightCount.y + id.y) * uniforms.gridAndLightCount.x + id.x;
     uint offset = clusterIndex * MaxLightsPerCluster;
-    uint count = 0u;
+    uint lightCount = 0u;
     for (uint lightIndex = 0u; lightIndex < uniforms.gridAndLightCount.w; ++lightIndex)
     {
-        if (affectsCluster(frame.localLights[lightIndex], id) && count < MaxLocalLightsPerCluster)
-            clusterLightIndices[offset + count++] = lightIndex;
+        if (affectsCluster(frame.localLights[lightIndex], id) && lightCount < MaxLocalLightsPerCluster)
+            clusterLightIndices[offset + lightCount++] = lightIndex;
     }
-    const uint probeStart = count;
+    const uint probeOffset = offset + MaxLocalLightsPerCluster;
+    uint probeCount = 0u;
     for (uint probeIndex = 0u; probeIndex < frame.reflectionProbeCount; ++probeIndex)
     {
-        if (affectsCluster(reflectionProbes[probeIndex], id) && count - probeStart < MaxProbesPerCluster)
-            clusterLightIndices[offset + count++] = ProbeIndexBit | probeIndex;
+        if (affectsCluster(reflectionProbes[probeIndex], id) && probeCount < MaxProbesPerCluster)
+            clusterLightIndices[probeOffset + probeCount++] = probeIndex;
     }
     ClusterLightRange range;
-    range.offset = offset;
-    range.count = count;
+    range.lightOffset = offset;
+    range.lightCount = lightCount;
+    range.probeOffset = probeOffset;
+    range.probeCount = probeCount;
     clusterRanges[clusterIndex] = range;
 }

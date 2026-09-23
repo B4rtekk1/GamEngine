@@ -24,6 +24,7 @@ public:
 
     [[nodiscard]] std::array<VkDescriptorImageInfo, 3> descriptors() const noexcept;
     [[nodiscard]] VkDescriptorImageInfo environmentDescriptor() const noexcept;
+    [[nodiscard]] std::uint32_t prefilteredMipLevels() const noexcept { return prefiltered_.mipLevels(); }
 
 private:
     Cubemap environment_;

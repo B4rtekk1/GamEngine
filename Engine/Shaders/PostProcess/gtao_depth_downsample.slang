@@ -3,15 +3,10 @@
 struct Settings { float effectRadius, effectFalloffRange; };
 [[vk::push_constant]] ConstantBuffer<Settings> settings;
 
-// XeGTAO's depth MIP filter retains the farthest depth in a discontinuity
-// while still averaging values on a continuous slope.  The far-depth bias
-// prevents a 2x2 footprint spanning foreground and background geometry from
-// inventing a surface between them.
 float depthMipFilter(float d0, float d1, float d2, float d3) {
     float maxDepth = max(max(d0, d1), max(d2, d3));
     const float depthRangeScaleFactor = 0.75;
-    // Keep the hierarchy filter in lockstep with the XeGTAO main-pass
-    // defaults (radius 0.5 * 1.457, falloff range 0.615).
+
     float effectRadius = depthRangeScaleFactor * settings.effectRadius * 0.5 * 1.457;
     const float effectFalloffRange = 0.615;
     float falloffRange = effectFalloffRange * effectRadius;
@@ -35,7 +30,5 @@ void main(uint3 id : SV_DispatchThreadID) {
     float d1=sourceMip.Load(int3(min(base+int2(1,0),size-1),0)).r;
     float d2=sourceMip.Load(int3(min(base+int2(0,1),size-1),0)).r;
     float d3=sourceMip.Load(int3(min(base+int2(1,1),size-1),0)).r;
-    // Preserve the sky sentinel as a far depth. Replacing it with geometry
-    // would dilate silhouettes into the coarse horizon hierarchy.
     destinationMip[id.xy]=depthMipFilter(d0,d1,d2,d3);
 }

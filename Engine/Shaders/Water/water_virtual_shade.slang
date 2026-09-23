@@ -154,16 +154,15 @@ float3 boxProjectedReflection(ReflectionProbeData probe,float3 worldPosition,flo
 }
 ClusterLightRange waterClusterRange(uint2 px,float3 worldPos){
     uint2 grid=uint2((uint(frame.clusteredViewportNearFar.x)+63u)/64u,(uint(frame.clusteredViewportNearFar.y)+63u)/64u);
-    float nearP=max(frame.clusteredViewportNearFar.z,1e-4),farP=max(frame.clusteredViewportNearFar.w,nearP+1e-3);
+    float nearP=max(frame.clusteredViewportNearFar.z,1e-4);
     float viewDepth=max(-mul(float4(worldPos,1),frame.view).z,nearP);
-    uint slice=min(uint(log(viewDepth/nearP)/log(farP/nearP)*24.0),23u);
+    uint slice=min(uint(max(log2(viewDepth)*frame.clusterZScaleBiasEnvironmentMipRtContact.x+frame.clusterZScaleBiasEnvironmentMipRtContact.y,0.0)),23u);
     uint2 tile=min(px/64u,grid-1u);return clusterRanges[(slice*grid.y+tile.y)*grid.x+tile.x];
 }
 ReflectionCandidate sampleLocalProbes(float3 worldPos,float3 reflection,float roughness,uint mipCount,ClusterLightRange range){
     ReflectionCandidate none={float3(0),0};if(frame.reflectionProbeCount==0u)return none;
     int bestPriority=-2147483647,secondPriority=-2147483647;float bw=0,sw=0;ReflectionProbeData best,second;
-    [loop]for(uint c=0;c<range.count;++c){uint encoded=clusterLightIndices[range.offset+c];if((encoded&0x80000000u)==0u)continue;
-        uint index=encoded&0x7fffffffu;if(index>=frame.reflectionProbeCount)continue;ReflectionProbeData p=reflectionProbes[index];float w=probeInfluence(p,worldPos);if(w<=0)continue;
+    [loop]for(uint c=0;c<range.probeCount;++c){uint index=clusterLightIndices[range.probeOffset+c];if(index>=frame.reflectionProbeCount)continue;ReflectionProbeData p=reflectionProbes[index];float w=probeInfluence(p,worldPos);if(w<=0)continue;
         if(p.priority>bestPriority||(p.priority==bestPriority&&w>bw)){second=best;secondPriority=bestPriority;sw=bw;best=p;bestPriority=p.priority;bw=w;}
         else if(p.priority>secondPriority||(p.priority==secondPriority&&w>sw)){second=p;secondPriority=p.priority;sw=w;}}
     float total=bw+sw;if(total<=0)return none;float mip=roughness*float(max(mipCount,1u)-1u);
@@ -301,19 +300,11 @@ float3 shadePixel(uint2 px,uint packedTile,uint tierBin){
 void main(uint3 gid:SV_GroupID,uint3 lid:SV_GroupThreadID){
     uint packedTile=tileLists[push.tier*settings.maxTiles+gid.x];
     uint tile=packedTile&0x00ffffffu;uint2 tileXY=uint2(tile%settings.tilesX,tile/settings.tilesX);uint2 tileOrigin=tileXY*8u;
-    uint rate=(packedTile>>24u)&3u;uint step=1u<<min(rate,2u);
-    if((lid.x&(step-1u))!=0u||(lid.y&(step-1u))!=0u)return;
-    uint2 samplePx=min(tileOrigin+lid.xy+uint2(step/2u),uint2(settings.width-1u,settings.height-1u));
-    uint sampleQ=asuint(waterMeta.Load(int3(samplePx,0)).y);
-    if((sampleQ&WaterMetaValid)==0u)return;
-    float3 color=shadePixel(samplePx,packedTile,push.tier);
-    [loop]for(uint oy=0u;oy<step;++oy)[loop]for(uint ox=0u;ox<step;++ox){
-        uint2 dst=tileOrigin+lid.xy+uint2(ox,oy);if(dst.x>=settings.width||dst.y>=settings.height)continue;
-        uint q=asuint(waterMeta.Load(int3(dst,0)).y);if((q&WaterMetaValid)==0u)continue;
-        // Classifier forces full rate on waterline/material discontinuities. This
-        // extra identity check prevents any accidental cross-body interpolation.
-        if(asuint(waterMeta.Load(int3(dst,0)).x)!=asuint(waterMeta.Load(int3(samplePx,0)).x))continue;
-        const float dstDepth=waterSurface.Load(int3(dst,0)).z;
-        waterLighting[dst]=float4(color,dstDepth);
-    }
+    uint2 px=tileOrigin+lid.xy;
+    if(px.x>=settings.width||px.y>=settings.height)return;
+    uint q=asuint(waterMeta.Load(int3(px,0)).y);
+    if((q&WaterMetaValid)==0u)return;
+    float3 color=shadePixel(px,packedTile,push.tier);
+    float depth=waterSurface.Load(int3(px,0)).z;
+    waterLighting[px]=float4(color,depth);
 }

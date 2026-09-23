@@ -140,7 +140,7 @@ void VirtualWaterRenderer::createBuffers() {
     gpuBudget.targetGpuMs=frameBudget_.targetGpuMs;
     gpuBudget.qualityScale=frameBudget_.qualityScale;
     gpuBudget.feedbackGain=0.08F;
-    gpuBudget.maxFullRateSamples=frameBudget_.maxFullRateSamples;
+    gpuBudget.maxFullRateSamples=tileSettings_.maxTiles*64U;
     gpuBudget.maxReflectionWork=frameBudget_.maxReflectionWork;
     gpuBudget.maxRefractionWork=frameBudget_.maxRefractionWork;
     gpuBudget.maxStateSimulationCells=frameBudget_.maxStateSimulationCells;
@@ -718,7 +718,7 @@ void VirtualWaterRenderer::recordCull(VkCommandBuffer cmd, std::uint32_t frame, 
     GPUWaterFrameBudget gpuBudget{};
     gpuBudget.targetGpuMs=frameBudget_.targetGpuMs;gpuBudget.measuredGpuMs=measuredWaterGpuMs_;
     gpuBudget.qualityScale=frameBudget_.qualityScale;gpuBudget.feedbackGain=0.08F;
-    gpuBudget.maxFullRateSamples=frameBudget_.maxFullRateSamples;
+    gpuBudget.maxFullRateSamples=tileSettings_.maxTiles*64U;
     gpuBudget.maxReflectionWork=frameBudget_.maxReflectionWork;
     gpuBudget.maxRefractionWork=frameBudget_.maxRefractionWork;
     gpuBudget.maxStateSimulationCells=frameBudget_.maxStateSimulationCells;
