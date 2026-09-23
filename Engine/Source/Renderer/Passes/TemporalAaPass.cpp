@@ -61,7 +61,7 @@ namespace Engine {
             }
             for (HdrBuffer &image: historyDepth_) {
                 image.create(physicalDevice, device_, extent, allocator,
-                             VK_FILTER_NEAREST, HdrBuffer::Format, true);
+                             VK_FILTER_NEAREST, VK_FORMAT_R16_SFLOAT, true);
             }
             const VkPushConstantRange push{VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(Settings)};
             VkPipelineLayoutCreateInfo pipelineLayoutInfo{VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};

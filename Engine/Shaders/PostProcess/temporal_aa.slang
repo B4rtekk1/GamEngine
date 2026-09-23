@@ -7,7 +7,7 @@
 [[vk::binding(6, 0)]] Sampler2D waterMetaFrame;
 [[vk::binding(7, 0)]] Sampler2D waterSurfaceFrame;
 [[vk::binding(8, 0)]] RWTexture2D<float4> resolvedFrame;
-[[vk::binding(9, 0)]] RWTexture2D<float4> resolvedDepthFrame;
+[[vk::binding(9, 0)]] RWTexture2D<float> resolvedDepthFrame;
 [[vk::binding(10, 0)]] RWTexture2D<float4> resolvedHistoryFrame;
 struct Settings {
     float currentJitterX, currentJitterY, previousJitterX, previousJitterY;
@@ -124,11 +124,10 @@ void main(uint3 groupId : SV_GroupID, uint3 threadId : SV_GroupThreadID,
     const float2 physicalVelocity = velocitySample + jitterDelta;
     const float2 historyUv = uv - reprojectionVelocity;
     const bool historyInBounds = all(historyUv >= 0.0) && all(historyUv <= 1.0);
-    const float historyDepth = historyDepthFrame.Sample(historyUv).r;
-    // Compare positive view-space distances; device-depth differences lose
-    // meaning as geometry approaches the far plane.
+    // Keep history depth linear before quantizing it to R16F. Device depth
+    // loses too much precision near the far plane in a half-float image.
     const float currentViewDepth = viewDepth(currentDepth);
-    const float historyViewDepth = viewDepth(historyDepth);
+    const float historyViewDepth = historyDepthFrame.Sample(historyUv).r;
     const bool depthMatches = abs(currentViewDepth - historyViewDepth) <=
         0.02 * max(currentViewDepth, historyViewDepth);
 
@@ -159,6 +158,6 @@ void main(uint3 groupId : SV_GroupID, uint3 threadId : SV_GroupThreadID,
     const float3 resolvedTm = lerp(currentTm, history,
         (historyInBounds && depthMatches) ? historyWeight : 0.0);
     resolvedFrame[dispatchId.xy] = float4(reinhardInverse(resolvedTm), 1.0);
-    resolvedDepthFrame[dispatchId.xy] = float4(currentDepth, 0.0, 0.0, 1.0);
+    resolvedDepthFrame[dispatchId.xy] = currentViewDepth;
     resolvedHistoryFrame[dispatchId.xy] = float4(resolvedTm, 1.0);
 }
