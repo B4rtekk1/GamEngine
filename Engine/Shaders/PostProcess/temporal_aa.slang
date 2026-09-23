@@ -68,9 +68,11 @@ float3 clipAabb(float3 boxMin, float3 boxMax, float3 center, float3 history) {
 [numthreads(16, 16, 1)] [shader("compute")]
 void main(uint3 groupId : SV_GroupID, uint3 threadId : SV_GroupThreadID,
           uint3 dispatchId : SV_DispatchThreadID) {
-    const float2 texel = float2(settings.inverseWidth, settings.inverseHeight);
-    const float2 resolution = 1.0 / texel;
-    const int2 extent = int2(resolution);
+    uint width, height;
+    resolvedFrame.GetDimensions(width, height);
+    const int2 extent = int2(width, height);
+    const float2 resolution = float2(width, height);
+    const float2 texel = 1.0 / resolution;
     const int2 tileOrigin = int2(groupId.xy * 16) - 1;
     const uint lane = threadId.y * 16 + threadId.x;
     for (uint index = lane; index < 18 * 18; index += 16 * 16) {
@@ -109,17 +111,18 @@ void main(uint3 groupId : SV_GroupID, uint3 threadId : SV_GroupThreadID,
         }
     }
 
-    // Our velocity is current UV - previous UV, unlike Godot's convention.
-    // The projection stores jitter with the opposite sign of the resulting
-    // NDC offset (clip.w = -z), so compensate for that sign before history lookup.
+    // Velocity includes the jitter in both projection matrices. Subtract it
+    // from the current UV to locate the corresponding previous-frame sample.
+    // Remove jitter only when estimating actual scene motion.
     // Jitter is stored in NDC, while velocity is in UV space (NDC * 0.5).
     const float2 currentJitter = float2(settings.currentJitterX,
                                         settings.currentJitterY) * 0.5;
     const float2 previousJitter = float2(settings.previousJitterX,
                                          settings.previousJitterY) * 0.5;
     const float2 jitterDelta = currentJitter - previousJitter;
-    const float2 velocityWithoutJitter = velocitySample + jitterDelta;
-    const float2 historyUv = uv - velocityWithoutJitter;
+    const float2 reprojectionVelocity = velocitySample;
+    const float2 physicalVelocity = velocitySample + jitterDelta;
+    const float2 historyUv = uv - reprojectionVelocity;
     const bool historyInBounds = all(historyUv >= 0.0) && all(historyUv <= 1.0);
     const float historyDepth = historyDepthFrame.Sample(historyUv).r;
     // Compare positive view-space distances; device-depth differences lose
@@ -145,7 +148,7 @@ void main(uint3 groupId : SV_GroupID, uint3 threadId : SV_GroupThreadID,
     }
     mean /= totalWeight;
     meanSquared /= totalWeight;
-    const float motionPixels = length(velocityWithoutJitter * resolution);
+    const float motionPixels = length(physicalVelocity * resolution);
     const float motionT = saturate(motionPixels / 32.0);
     const float boxSize = lerp(2.5, 0.5, motionT * motionT * (3.0 - 2.0 * motionT));
     const float3 deviation = sqrt(max(meanSquared - mean * mean, 0.0)) * boxSize;
