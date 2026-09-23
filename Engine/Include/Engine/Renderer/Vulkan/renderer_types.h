@@ -67,6 +67,28 @@ namespace Engine {
         std::uint32_t padding[2]{};
     };
 
+    struct alignas(16) ShadowClipConstantsGPU {
+        float worldTexelSize{};
+        float depthScale{};
+        glm::vec2 padding{};
+    };
+    static_assert(sizeof(ShadowClipConstantsGPU) == 16);
+
+    inline std::array<ShadowClipConstantsGPU, ShadowMap::ClipLevelCount> makeShadowClipConstants(
+        const std::array<Mat4, ShadowMap::ClipLevelCount>& matrices) {
+        std::array<ShadowClipConstantsGPU, ShadowMap::ClipLevelCount> constants{};
+        for (std::size_t level = 0; level < constants.size(); ++level) {
+            const glm::mat4& matrix = matrices[level].native();
+            const float xScale = glm::length(glm::vec3(matrix[0][0], matrix[1][0], matrix[2][0]));
+            const float yScale = glm::length(glm::vec3(matrix[0][1], matrix[1][1], matrix[2][1]));
+            const float zScale = glm::length(glm::vec3(matrix[0][2], matrix[1][2], matrix[2][2]));
+            constants[level].worldTexelSize = 2.0F /
+                (static_cast<float>(ShadowMap::VirtualResolution) * glm::max(glm::max(xScale, yScale), 1.0e-6F));
+            constants[level].depthScale = glm::max(zScale, 1.0e-6F);
+        }
+        return constants;
+    }
+
     struct RendererUniformBufferObject {
         Mat4 view;
         Mat4 projection;
@@ -76,6 +98,7 @@ namespace Engine {
         Mat4 previousProjection;
         // Camera-centred directional-light virtual clipmaps.
         std::array<Mat4, ShadowMap::ClipLevelCount> shadowClipMatrices{};
+        std::array<ShadowClipConstantsGPU, ShadowMap::ClipLevelCount> shadowClipConstants{};
         Vec4 cameraPosition;
         Vec4 lightDirectionIntensity;
         Vec4 lightColor;

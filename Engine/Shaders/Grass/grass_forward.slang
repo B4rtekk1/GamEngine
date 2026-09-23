@@ -107,7 +107,8 @@ GrassFragmentOutput fragmentMain(FragmentInput input)
     float diffuse = saturate(dot(normal, lightDirection) * 0.5 + 0.5);
     ShadowSampleDebug shadowDebug = {0.0, 0.0, 0u, 0u, uint2(0, 0)};
     float shadow = frame.shadowEnabled != 0 ? sampleVirtualShadow(
-        shadowMap, linearShadowMap, shadowDepthMap, input.worldPosition, normal, lightDirection, frame.shadowClipMatrices, shadowPageTable,
+        shadowMap, linearShadowMap, shadowDepthMap, input.worldPosition, normal, lightDirection,
+        frame.shadowClipMatrices, frame.shadowClipConstants, shadowPageTable,
         frame.shadowQuality, uint2(input.position.xy), frame.temporalSampleIndex,
         frame.temporalShadowJitter != 0, shadowDebug) : 0.0;
     GrassFragmentOutput output;

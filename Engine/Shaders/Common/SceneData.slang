@@ -14,6 +14,13 @@ struct ClusterLightRange
     uint probeCount;
 };
 
+struct ShadowClipConstants
+{
+    float worldTexelSize;
+    float depthScale;
+    float2 padding;
+};
+
 struct RendererFrameData
 {
     float4x4 view;
@@ -23,6 +30,7 @@ struct RendererFrameData
     float4x4 previousView;
     float4x4 previousProjection;
     float4x4 shadowClipMatrices[7];
+    ShadowClipConstants shadowClipConstants[7];
     float4 cameraPosition;
     float4 lightDirectionIntensity;
     float4 lightColor;

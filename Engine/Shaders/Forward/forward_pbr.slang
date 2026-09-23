@@ -495,8 +495,9 @@ ForwardFragmentOutput fragmentMain(ForwardFragmentInput input)
         ? 1.0 - directionalVisibility.Sample(input.position.xy / frame.clusteredViewportNearFar.xy).r : 0.0;
 #else
     float shadow = frame.shadowEnabled != 0
-        ? sampleVirtualShadow(shadowMap, linearShadowMap, shadowDepthMap, input.worldPosition, geometricNormal, lightDirection, frame.shadowClipMatrices,
-                              shadowPageTable, frame.shadowQuality, uint2(input.position.xy),
+        ? sampleVirtualShadow(shadowMap, linearShadowMap, shadowDepthMap, input.worldPosition, geometricNormal, lightDirection,
+                              frame.shadowClipMatrices, frame.shadowClipConstants, shadowPageTable,
+                              frame.shadowQuality, uint2(input.position.xy),
                               frame.temporalSampleIndex, frame.temporalShadowJitter != 0, shadowDebug) : 0.0;
 #endif
     if (frame.shadowDebugView != SHADOW_DEBUG_OFF)

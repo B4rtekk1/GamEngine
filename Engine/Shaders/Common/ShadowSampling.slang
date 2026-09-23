@@ -1,4 +1,5 @@
 import Common.ShadowLod;
+import Common.SceneData;
 
 // This is only a numerical floor.  The actual receiver bias is calculated
 // from the shadow texel footprint below; a fixed 0.0002 depth offset was large
@@ -141,6 +142,30 @@ float sampleVirtualShadowBilinear(Sampler2DShadow shadowMap, Sampler2DShadow lin
     return hasSamples ? shadow / totalWeight : 0.0;
 }
 
+// A rotated Poisson offset can reach sqrt(2) times the nominal radius on
+// either axis. Include the complete bilinear footprint of every tap.
+bool resolveShadowKernelPage(float2 virtualPixel, float radius, uint level,
+                             StructuredBuffer<uint4> pageTable, out uint physical)
+{
+    const float reach = radius * 1.41421357;
+    const int2 minPixel = int2(floor(virtualPixel - reach - 0.5));
+    const int2 maxPixel = int2(floor(virtualPixel + reach - 0.5)) + int2(1);
+    physical = INVALID_SHADOW_PAGE;
+    if (any(minPixel < int2(0)) || any(maxPixel >= int2(VIRTUAL_RESOLUTION)))
+        return false;
+    const uint2 minPage = uint2(minPixel) / PAGE_RESOLUTION;
+    const uint2 maxPage = uint2(maxPixel) / PAGE_RESOLUTION;
+    return all(minPage == maxPage) &&
+           resolveVirtualShadowPage(minPage, level, pageTable, physical);
+}
+
+float sampleResolvedShadowKernelTap(Sampler2DShadow linearShadowMap,
+                                    float2 virtualPixel, uint physical, float compareDepth)
+{
+    return 1.0 - linearShadowMap.SampleCmpLevelZero(
+        virtualPixelAtlasUv(virtualPixel, physical), compareDepth);
+}
+
 // Read one unfiltered virtual texel for the PCSS blocker pass. Sampling the
 // physical atlas directly is safe only after this virtual-to-physical resolve.
 bool sampleVirtualShadowDepth(Sampler2D shadowDepthMap, float2 virtualPixel,
@@ -157,26 +182,8 @@ bool sampleVirtualShadowDepth(Sampler2D shadowDepthMap, float2 virtualPixel,
     return true;
 }
 
-float shadowWorldTexelSize(float4x4 lightSpace)
-{
-    // Orthographic clip matrices scale the light-space X/Y axes by 1/extent.
-    // Reading that scale keeps the receiver bias correct for the dynamic far
-    // clipmap as well as the fixed near levels.
-    // Positions are transformed as row vectors below, so each clip-space
-    // component is formed from a *column* of the matrix, not a row.
-    const float3 clipXGradient = float3(lightSpace[0][0], lightSpace[1][0], lightSpace[2][0]);
-    const float3 clipYGradient = float3(lightSpace[0][1], lightSpace[1][1], lightSpace[2][1]);
-    const float lightSpaceScale = max(max(length(clipXGradient), length(clipYGradient)), 1.0e-6);
-    return 2.0 / (float(VIRTUAL_RESOLUTION) * lightSpaceScale);
-}
-
-float shadowLightDepthScale(float4x4 lightSpace)
-{
-    const float3 clipZGradient = float3(lightSpace[0][2], lightSpace[1][2], lightSpace[2][2]);
-    return max(length(clipZGradient), 1.0e-6);
-}
-
-float shadowReceiverDepthBias(float currentDepth, float2 uv, float4x4 lightSpace,
+float shadowReceiverDepthBias(float currentDepth, float2 uv, float worldTexelSize,
+                              float depthScale,
                               float3 geometricNormal, float3 lightDirection)
 {
     // A receiver plane may cross several shadow texels per screen pixel, or
@@ -191,8 +198,7 @@ float shadowReceiverDepthBias(float currentDepth, float2 uv, float4x4 lightSpace
     const float zDy = ddy(currentDepth);
     const float determinant = uvDx.x * uvDy.y - uvDx.y * uvDy.x;
 #endif
-    const float texelDepth = shadowWorldTexelSize(lightSpace) *
-                             shadowLightDepthScale(lightSpace);
+    const float texelDepth = worldTexelSize * depthScale;
     const float noL = saturate(abs(dot(normalize(geometricNormal),
                                         normalize(lightDirection))));
     const float slope = sqrt(saturate(1.0 - noL * noL)) / max(noL, 0.05);
@@ -241,7 +247,7 @@ float sampleVirtualShadowLevel(Sampler2DShadow shadowMap, Sampler2DShadow linear
                                Sampler2D shadowDepthMap,
                                float3 worldPosition,
                                float3 normal, float3 lightDirection,
-                               float4x4 lightSpace, uint level,
+                               float4x4 lightSpace, ShadowClipConstants clipConstants, uint level,
                                StructuredBuffer<uint4> pageTable, uint shadowQuality,
                                uint2 pixelCoordinate, uint temporalSampleIndex,
                                bool temporalShadowJitter, out bool resident,
@@ -253,7 +259,7 @@ float sampleVirtualShadowLevel(Sampler2DShadow shadowMap, Sampler2DShadow linear
     virtualPage = 0;
     // A small geometric separation prevents self-intersection. The receiver
     // comparison bias below handles slope/quantization independently.
-    const float normalBias = shadowWorldTexelSize(lightSpace) *
+    const float normalBias = clipConstants.worldTexelSize *
                              GEOMETRIC_NORMAL_OFFSET_TEXELS;
     const float3 shadowPosition = worldPosition + normalize(normal) * normalBias;
     float4 lightSpacePosition = mul(float4(shadowPosition, 1.0), lightSpace);
@@ -271,7 +277,8 @@ float sampleVirtualShadowLevel(Sampler2DShadow shadowMap, Sampler2DShadow linear
     const float2 virtualPixel = uv * float(VIRTUAL_RESOLUTION);
     virtualPage = uint2(virtualPixel) / PAGE_RESOLUTION;
 
-    const float bias = shadowReceiverDepthBias(currentDepth, uv, lightSpace,
+    const float bias = shadowReceiverDepthBias(currentDepth, uv,
+                                               clipConstants.worldTexelSize, clipConstants.depthScale,
                                                normal, lightDirection);
     // Keep a single comparison exclusively for the deliberately lowest
     // settings.  A single coarse-clipmap texel spans centimetres in world
@@ -342,11 +349,11 @@ float sampleVirtualShadowLevel(Sampler2DShadow shadowMap, Sampler2DShadow linear
         // The first four samples cover the centre. If all four are blockers,
         // the receiver is inside a stable solid shadow and the outer ring is
         // skipped; silhouette and foliage pixels receive all eight samples.
-        const float lightDepthScale = shadowLightDepthScale(lightSpace);
+        const float lightDepthScale = clipConstants.depthScale;
         const float sunAngularRadius = 0.00465;
         const float blockerSearchRadius = clamp(
             tan(sunAngularRadius) * max(currentDepth, 0.02) /
-            (lightDepthScale * shadowWorldTexelSize(lightSpace)), 0.75, 4.0);
+            (lightDepthScale * clipConstants.worldTexelSize), 0.75, 4.0);
         static const float2 blockerOffsets[8] = {
             float2(0.0, 0.0), float2(-0.45, -0.35),
             float2(0.45, -0.35), float2(0.0, 0.48),
@@ -395,11 +402,14 @@ float sampleVirtualShadowLevel(Sampler2DShadow shadowMap, Sampler2DShadow linear
             max(currentDepth - averageBlockerDepth, 0.0) / lightDepthScale;
         penumbraRadius = clamp(
             tan(sunAngularRadius) * receiverBlockerDistance /
-            shadowWorldTexelSize(lightSpace), 0.25, 6.0);
+            clipConstants.worldTexelSize, 0.25, 6.0);
 
         // Contact shadows need silhouette antialiasing too; penumbra width
         // must not reduce the comparison budget below twelve samples.
         const uint tapCount = penumbraRadius < 3.5 ? 12u : 16u;
+        uint kernelPhysical;
+        const bool kernelInPage = resolveShadowKernelPage(
+            virtualPixel, penumbraRadius, level, pageTable, kernelPhysical);
         float filteredShadow = 0.0;
         float totalWeight = 0.0;
         [loop]
@@ -409,9 +419,18 @@ float sampleVirtualShadowLevel(Sampler2DShadow shadowMap, Sampler2DShadow linear
             const float2 offset = float2(
                 poisson[tap].x * rotationCos - poisson[tap].y * rotationSin,
                 poisson[tap].x * rotationSin + poisson[tap].y * rotationCos);
-            const float tapShadow = sampleVirtualShadowBilinear(
-                shadowMap, linearShadowMap, virtualPixel + offset * penumbraRadius, level, pageTable,
-                currentDepth - bias, tapResident);
+            const float2 tapPixel = virtualPixel + offset * penumbraRadius;
+            float tapShadow;
+            if (kernelInPage)
+            {
+                tapResident = true;
+                tapShadow = sampleResolvedShadowKernelTap(
+                    linearShadowMap, tapPixel, kernelPhysical, currentDepth - bias);
+            }
+            else
+                tapShadow = sampleVirtualShadowBilinear(
+                    shadowMap, linearShadowMap, tapPixel, level, pageTable,
+                    currentDepth - bias, tapResident);
             if (!tapResident)
                 continue;
             filteredShadow += tapShadow;
@@ -470,6 +489,9 @@ float sampleVirtualShadowLevel(Sampler2DShadow shadowMap, Sampler2DShadow linear
 
     float filteredShadow = 0.0;
     float totalWeight = 0.0;
+    uint kernelPhysical;
+    const bool kernelInPage = resolveShadowKernelPage(
+        virtualPixel, 1.25, level, pageTable, kernelPhysical);
     [unroll]
     for (uint tap = 0; tap < 16; ++tap)
     {
@@ -477,14 +499,40 @@ float sampleVirtualShadowLevel(Sampler2DShadow shadowMap, Sampler2DShadow linear
             poisson[tap].x * rotationCos - poisson[tap].y * rotationSin,
             poisson[tap].x * rotationSin + poisson[tap].y * rotationCos);
         bool tapResident;
-        const float tapShadow = sampleVirtualShadowBilinear(
-            shadowMap, linearShadowMap, virtualPixel + offset * 1.25, level, pageTable,
-            currentDepth - bias, tapResident);
+        const float2 tapPixel = virtualPixel + offset * 1.25;
+        float tapShadow;
+        if (kernelInPage)
+        {
+            tapResident = true;
+            tapShadow = sampleResolvedShadowKernelTap(
+                linearShadowMap, tapPixel, kernelPhysical, currentDepth - bias);
+        }
+        else
+            tapShadow = sampleVirtualShadowBilinear(
+                shadowMap, linearShadowMap, tapPixel, level, pageTable,
+                currentDepth - bias, tapResident);
         if (!tapResident) continue;
         filteredShadow += tapShadow;
         totalWeight += 1.0;
     }
     return totalWeight > 0.0 ? filteredShadow / totalWeight : 0.0;
+}
+
+float shadowFootprintFromProjectedUv(float2 uv, float4x4 clipMatrix
+#if defined(SHADOW_COMPUTE)
+    , float3 worldRight, float3 worldDown
+#endif
+)
+{
+#if defined(SHADOW_COMPUTE)
+    const float4 rightClip = mul(float4(worldRight, 1.0), clipMatrix);
+    const float4 downClip = mul(float4(worldDown, 1.0), clipMatrix);
+    const float2 uvDx = rightClip.xy / rightClip.w * 0.5 + 0.5 - uv;
+    const float2 uvDy = downClip.xy / downClip.w * 0.5 + 0.5 - uv;
+    return shadowTexelFootprintFromGradients(uvDx, uvDx, uvDy, uvDy);
+#else
+    return shadowTexelFootprintFromGradients(ddx(uv), ddx(uv), ddy(uv), ddy(uv));
+#endif
 }
 
 float shadowFootprintInTexels(float3 worldPosition, float4x4 clipMatrix
@@ -497,15 +545,11 @@ float shadowFootprintInTexels(float3 worldPosition, float4x4 clipMatrix
     if (abs(lightClip.w) < 1.0e-6)
         return 0.0;
     const float2 uv = lightClip.xy / lightClip.w * 0.5 + 0.5;
+    return shadowFootprintFromProjectedUv(uv, clipMatrix
 #if defined(SHADOW_COMPUTE)
-    const float4 rightClip = mul(float4(worldRight, 1.0), clipMatrix);
-    const float4 downClip = mul(float4(worldDown, 1.0), clipMatrix);
-    const float2 uvDx = rightClip.xy / rightClip.w * 0.5 + 0.5 - uv;
-    const float2 uvDy = downClip.xy / downClip.w * 0.5 + 0.5 - uv;
-    return shadowTexelFootprintFromGradients(uvDx, uvDx, uvDy, uvDy);
-#else
-    return shadowTexelFootprintFromGradients(ddx(uv), ddx(uv), ddy(uv), ddy(uv));
+        , worldRight, worldDown
 #endif
+    );
 }
 
 uint selectVirtualShadowLevel(float3 worldPosition, float4x4 clipMatrices[7],
@@ -528,7 +572,7 @@ uint selectVirtualShadowLevel(float3 worldPosition, float4x4 clipMatrices[7],
         // This is the same LOD rule as receiver marking, but uses both
         // screen-space axes.  Sampling must never let incidental L0 cache
         // residency override the requested geometric LOD.
-        const float levelFootprint = shadowFootprintInTexels(worldPosition, clipMatrices[level]
+        const float levelFootprint = shadowFootprintFromProjectedUv(uv, clipMatrices[level]
 #if defined(SHADOW_COMPUTE)
             , worldRight, worldDown
 #endif
@@ -546,7 +590,8 @@ float sampleVirtualShadow(Sampler2DShadow shadowMap, Sampler2DShadow linearShado
                           Sampler2D shadowDepthMap,
                           float3 worldPosition,
                           float3 normal, float3 lightDirection,
-                          float4x4 clipMatrices[7], StructuredBuffer<uint4> pageTable,
+                          float4x4 clipMatrices[7], ShadowClipConstants clipConstants[7],
+                          StructuredBuffer<uint4> pageTable,
                           uint shadowQuality, uint2 pixelCoordinate,
                           uint temporalSampleIndex, bool temporalShadowJitter,
 #if defined(SHADOW_COMPUTE)
@@ -578,7 +623,7 @@ float sampleVirtualShadow(Sampler2DShadow shadowMap, Sampler2DShadow linearShado
         uint2 virtualPage;
         float shadow = sampleVirtualShadowLevel(
             shadowMap, linearShadowMap, shadowDepthMap, worldPosition, normal, lightDirection,
-            clipMatrices[level], level, pageTable, shadowQuality, pixelCoordinate,
+            clipMatrices[level], clipConstants[level], level, pageTable, shadowQuality, pixelCoordinate,
             temporalSampleIndex, temporalShadowJitter, resident, clipEdge,
             blockerCount, penumbraRadius, virtualPage);
         if (resident)
@@ -612,7 +657,8 @@ float sampleVirtualShadow(Sampler2DShadow shadowMap, Sampler2DShadow linearShado
                 float nextPenumbraRadius;
                 uint2 nextVirtualPage;
                 float nextShadow = sampleVirtualShadowLevel(
-                    shadowMap, linearShadowMap, shadowDepthMap, worldPosition, normal, lightDirection, clipMatrices[level + 1], level + 1,
+                    shadowMap, linearShadowMap, shadowDepthMap, worldPosition, normal, lightDirection,
+                    clipMatrices[level + 1], clipConstants[level + 1], level + 1,
                     pageTable, shadowQuality, pixelCoordinate, temporalSampleIndex,
                     temporalShadowJitter, nextResident, nextClipEdge,
                     nextBlockerCount, nextPenumbraRadius, nextVirtualPage);
