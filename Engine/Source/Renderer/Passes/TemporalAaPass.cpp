@@ -7,6 +7,7 @@ namespace Engine {
         struct Settings {
             float currentJitterX, currentJitterY, previousJitterX, previousJitterY;
             float historyWeight, inverseWidth, inverseHeight, padding;
+            float projectionA, projectionB;
         };
     }
 
@@ -48,6 +49,9 @@ namespace Engine {
             for (HdrBuffer &image: history_) {
                 image.create(physicalDevice, device_, extent, allocator);
             }
+            for (HdrBuffer &image: historyColor_) {
+                image.create(physicalDevice, device_, extent, allocator);
+            }
             for (HdrBuffer &image: historyDepth_) {
                 image.create(physicalDevice, device_, extent, allocator,
                              VK_FILTER_NEAREST);
@@ -56,6 +60,7 @@ namespace Engine {
             options.colorFormat = HdrBuffer::Format;
             options.dynamicRendering = true;
             options.additionalColorFormat = HdrBuffer::Format;
+            options.thirdColorFormat = HdrBuffer::Format;
             options.colorInitialLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
             options.colorFinalLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
             options.shader = "shaders/temporal_aa.spv";
@@ -86,7 +91,7 @@ namespace Engine {
             for (std::uint32_t i = 0; i < 2; ++i) {
                 VkDescriptorImageInfo images[8] = {
                     {sampler, currentView, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL},
-                    {sampler, history_[i].imageView(), VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL},
+                    {historyColor_[i].sampler(), historyColor_[i].imageView(), VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL},
                     {velocitySampler, velocityView, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL},
                     {currentDepthSampler, currentDepthView, VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL},
                     {
@@ -138,7 +143,7 @@ namespace Engine {
     }
 
     void TemporalAaPass::initializeHistory(const VkCommandBuffer commandBuffer) {
-        VkImageMemoryBarrier2 barriers[4]{};
+        VkImageMemoryBarrier2 barriers[6]{};
         for (std::uint32_t i = 0; i < 2; ++i) {
             barriers[i] = {VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2};
             barriers[i].dstStageMask = VK_PIPELINE_STAGE_2_TRANSFER_BIT;
@@ -149,9 +154,11 @@ namespace Engine {
             barriers[i].subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
             barriers[i + 2] = barriers[i];
             barriers[i + 2].image = historyDepth_[i].image();
+            barriers[i + 4] = barriers[i];
+            barriers[i + 4].image = historyColor_[i].image();
         }
         VkDependencyInfo dependency{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
-        dependency.imageMemoryBarrierCount = 4;
+        dependency.imageMemoryBarrierCount = 6;
         dependency.pImageMemoryBarriers = barriers;
         vkCmdPipelineBarrier2(commandBuffer, &dependency);
         VkClearColorValue clear{};
@@ -160,6 +167,10 @@ namespace Engine {
                                  &barriers[0].subresourceRange);
         }
         for (const HdrBuffer &image: historyDepth_) {
+            vkCmdClearColorImage(commandBuffer, image.image(), VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &clear, 1,
+                                 &barriers[0].subresourceRange);
+        }
+        for (const HdrBuffer &image: historyColor_) {
             vkCmdClearColorImage(commandBuffer, image.image(), VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &clear, 1,
                                  &barriers[0].subresourceRange);
         }
@@ -182,24 +193,28 @@ namespace Engine {
     }
 
     void TemporalAaPass::record(const VkCommandBuffer commandBuffer, const VkExtent2D extent,
-                                const float currentJitterX, const float currentJitterY) {
+                                const float currentJitterX, const float currentJitterY,
+                                const float projectionA, const float projectionB) {
         const std::uint32_t output = 1U - historyIndex_;
-        // The render graph owns history_, while the matching depth history is an
-        // internal attachment. Dynamic rendering has no render-pass finalLayout,
-        // so transition that internal image explicitly.
-        VkImageMemoryBarrier2 depthToAttachment{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2};
-        depthToAttachment.srcStageMask = VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT;
-        depthToAttachment.srcAccessMask = VK_ACCESS_2_SHADER_SAMPLED_READ_BIT;
-        depthToAttachment.dstStageMask = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT;
-        depthToAttachment.dstAccessMask = VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT;
-        depthToAttachment.oldLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-        depthToAttachment.newLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
-        depthToAttachment.image = historyDepth_[output].image();
-        depthToAttachment.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
-        VkDependencyInfo depthDependency{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
-        depthDependency.imageMemoryBarrierCount = 1;
-        depthDependency.pImageMemoryBarriers = &depthToAttachment;
-        vkCmdPipelineBarrier2(commandBuffer, &depthDependency);
+        // The render graph owns the HDR output. Depth and bounded-color history
+        // are internal attachments and need explicit layout transitions.
+        VkImageMemoryBarrier2 internalBarriers[2]{};
+        for (auto &barrier : internalBarriers) {
+            barrier = {VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2};
+            barrier.srcStageMask = VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT;
+            barrier.srcAccessMask = VK_ACCESS_2_SHADER_SAMPLED_READ_BIT;
+            barrier.dstStageMask = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT;
+            barrier.dstAccessMask = VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT;
+            barrier.oldLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+            barrier.newLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+            barrier.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+        }
+        internalBarriers[0].image = historyDepth_[output].image();
+        internalBarriers[1].image = historyColor_[output].image();
+        VkDependencyInfo internalDependency{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
+        internalDependency.imageMemoryBarrierCount = 2;
+        internalDependency.pImageMemoryBarriers = internalBarriers;
+        vkCmdPipelineBarrier2(commandBuffer, &internalDependency);
         std::array colors{
             VkRenderingAttachmentInfo{
                 .sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO,
@@ -211,6 +226,13 @@ namespace Engine {
             VkRenderingAttachmentInfo{
                 .sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO,
                 .imageView = historyDepth_[output].imageView(),
+                .imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+                .loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR,
+                .storeOp = VK_ATTACHMENT_STORE_OP_STORE
+            },
+            VkRenderingAttachmentInfo{
+                .sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO,
+                .imageView = historyColor_[output].imageView(),
                 .imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
                 .loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR,
                 .storeOp = VK_ATTACHMENT_STORE_OP_STORE
@@ -227,14 +249,15 @@ namespace Engine {
         const VkDescriptorSet descriptorSet = sets_[historyIndex_ + (virtualWaterEnabled_ ? WaterSetOffset : 0U)];
         vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline_.layout(), 0, 1,
                                 &descriptorSet, 0, nullptr);
-        // Keep most of the stable history while retaining enough current-frame
-        // contribution to limit ghosting on moving or newly revealed geometry.
+        // Reprojection, depth rejection and motion-scaled clipping gate the
+        // stronger stable-pixel accumulation.
         const Settings settings{
             .currentJitterX = currentJitterX, .currentJitterY = currentJitterY, .previousJitterX = previousJitterX_,
-            .previousJitterY = previousJitterY_, .historyWeight = historyValid_ ? 0.82F : 0.0F,
+            .previousJitterY = previousJitterY_, .historyWeight = historyValid_ ? 0.9375F : 0.0F,
             .inverseWidth = 1.0F / static_cast<float>(extent.width),
             .inverseHeight = 1.0F / static_cast<float>(extent.height),
-            .padding = virtualWaterEnabled_ ? 1.0F : 0.0F
+            .padding = virtualWaterEnabled_ ? 1.0F : 0.0F,
+            .projectionA = projectionA, .projectionB = projectionB
         };
         vkCmdPushConstants(commandBuffer, pipeline_.layout(), VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(settings),
                            &settings);
@@ -244,13 +267,15 @@ namespace Engine {
         vkCmdSetScissor(commandBuffer, 0, 1, &scissor);
         vkCmdDraw(commandBuffer, 3, 1, 0, 0);
         vkCmdEndRendering(commandBuffer);
-        depthToAttachment.srcStageMask = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT;
-        depthToAttachment.srcAccessMask = VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT;
-        depthToAttachment.dstStageMask = VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT;
-        depthToAttachment.dstAccessMask = VK_ACCESS_2_SHADER_SAMPLED_READ_BIT;
-        depthToAttachment.oldLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
-        depthToAttachment.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-        vkCmdPipelineBarrier2(commandBuffer, &depthDependency);
+        for (auto &barrier : internalBarriers) {
+            barrier.srcStageMask = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT;
+            barrier.srcAccessMask = VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT;
+            barrier.dstStageMask = VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT;
+            barrier.dstAccessMask = VK_ACCESS_2_SHADER_SAMPLED_READ_BIT;
+            barrier.oldLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+            barrier.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        }
+        vkCmdPipelineBarrier2(commandBuffer, &internalDependency);
         historyIndex_ = output;
         historyValid_ = true;
         previousJitterX_ = currentJitterX;
@@ -271,6 +296,9 @@ namespace Engine {
         layout_ = VK_NULL_HANDLE;
         pipeline_.destroy();
         for (HdrBuffer &image: history_) {
+            image.destroy();
+        }
+        for (HdrBuffer &image: historyColor_) {
             image.destroy();
         }
         device_ = VK_NULL_HANDLE;

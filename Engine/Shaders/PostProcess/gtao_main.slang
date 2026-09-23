@@ -150,5 +150,5 @@ void main(uint3 groupId:SV_GroupID,uint3 threadId:SV_GroupThreadID,uint3 id:SV_D
  half4 localEdges=depthEdges(depth,left,right,top,bottom);
  float4 packedEdges=round(saturate(float4(localEdges))*2.9);
  float edgePayload=dot(packedEdges,float4(64.0/255.0,16.0/255.0,4.0/255.0,1.0/255.0));
- rawAo[p]=pow(saturate(visibility/float(directions)),2.2);guide[p]=edgePayload;
+ rawAo[p]=max(.03,pow(saturate(visibility/float(directions)),2.2));guide[p]=edgePayload;
 }

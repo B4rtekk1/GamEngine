@@ -31,7 +31,8 @@ namespace Engine {
         void prepareHistory(VkCommandBuffer commandBuffer);
         void setVirtualWaterEnabled(bool enabled) noexcept { virtualWaterEnabled_ = enabled; }
         void record(VkCommandBuffer commandBuffer, VkExtent2D extent,
-                    float currentJitterX, float currentJitterY);
+                    float currentJitterX, float currentJitterY,
+                    float projectionA, float projectionB);
         [[nodiscard]] VkImageView resolvedView() const noexcept { return history_[historyIndex_].imageView(); }
         /** Image backing resolvedView(); exposed for render-graph declarations. */
         [[nodiscard]] VkImage resolvedImage() const noexcept { return history_[historyIndex_].image(); }
@@ -58,6 +59,8 @@ namespace Engine {
         // uses current HDR as a valid fallback for the water-only bindings.
         std::array<VkDescriptorSet, 4> sets_{};
         std::array<HdrBuffer, 2> history_;
+        // Bounded-color feedback is separate from the HDR image consumed by bloom and presentation.
+        std::array<HdrBuffer, 2> historyColor_;
         // A sampled copy of the depth that produced each HDR history image.
         // It is stored by the resolve itself, so the two ping-pong histories
         // always refer to exactly the same frame.

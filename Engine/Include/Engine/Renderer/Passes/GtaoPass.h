@@ -41,27 +41,29 @@ public:
                 VkSampler depthSampler, VkImageView viewNormal,
                 VkSampler viewNormalSampler, bool useExternalNormals, const Mat4& inverseProjection);
     [[nodiscard]] VkImageView resultView() const noexcept {
-        return nativeResolution_ ? filtered_.imageView() : full_.imageView();
+        return nativeResolution_ ? (quality_.denoisePassCount == 0 ? raw_.imageView() : filtered_.imageView()) : full_.imageView();
     }
     [[nodiscard]] VkSampler resultSampler() const noexcept {
-        return nativeResolution_ ? filtered_.sampler() : full_.sampler();
+        return nativeResolution_ ? (quality_.denoisePassCount == 0 ? raw_.sampler() : filtered_.sampler()) : full_.sampler();
     }
     [[nodiscard]] VkImageView debugView(GtaoDebugView view) const noexcept {
         switch (view) {
         case GtaoDebugView::Raw: return raw_.imageView();
-        case GtaoDebugView::Filtered: return filtered_.imageView();
+        case GtaoDebugView::Filtered: return quality_.denoisePassCount == 0 ? raw_.imageView() : filtered_.imageView();
         default: return resultView();
         }
     }
     [[nodiscard]] VkSampler debugSampler(GtaoDebugView view) const noexcept {
         switch (view) {
         case GtaoDebugView::Raw: return raw_.sampler();
-        case GtaoDebugView::Filtered: return filtered_.sampler();
+        case GtaoDebugView::Filtered: return quality_.denoisePassCount == 0 ? raw_.sampler() : filtered_.sampler();
         default: return resultSampler();
         }
     }
     [[nodiscard]] VkImageLayout debugLayout(GtaoDebugView view) const noexcept {
-        if (view == GtaoDebugView::Raw) return VK_IMAGE_LAYOUT_GENERAL;
+        if (view == GtaoDebugView::Raw || (view == GtaoDebugView::Filtered && quality_.denoisePassCount == 0))
+            return nativeResolution_ && quality_.denoisePassCount == 0
+                ? VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL : VK_IMAGE_LAYOUT_GENERAL;
         if (view == GtaoDebugView::Filtered && !nativeResolution_) return VK_IMAGE_LAYOUT_GENERAL;
         return VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
     }
@@ -86,6 +88,8 @@ private:
     // representative half-resolution baseDepth_ above.
     HdrBuffer auxiliary_;
     HdrBuffer filtered_;
+    // Intermediate AO for the second of up to three denoise passes.
+    HdrBuffer scratch_;
     HdrBuffer full_;
     Texture2D hilbertLut_;
     // A dedicated R32F view-depth hierarchy.  It intentionally is not Hi-Z:
@@ -108,10 +112,12 @@ private:
     std::array<VkDescriptorSetLayout, 3> computeLayouts_{};
     std::array<VkPipelineLayout, 3> computePipelineLayouts_{};
     std::array<VkPipeline, 3> computePipelines_{};
-    std::array<VkPipeline, 4> mainQualityPipelines_{};
+    std::array<VkPipeline, 6> mainQualityPipelines_{};
     VkDescriptorPool computeDescriptorPool_ = VK_NULL_HANDLE;
     std::array<std::array<VkDescriptorSet, FramesInFlight>, 3> computeSets_{};
     std::array<std::array<std::vector<VkDescriptorImageInfo>, FramesInFlight>, 3> computeDescriptorCache_{};
+    std::array<std::array<VkDescriptorSet, FramesInFlight>, 2> extraDenoiseSets_{};
+    std::array<std::array<std::vector<VkDescriptorImageInfo>, FramesInFlight>, 2> extraDenoiseDescriptorCache_{};
     bool initialized_ = false;
 };
 } // namespace Engine

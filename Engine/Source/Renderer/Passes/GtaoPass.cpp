@@ -107,6 +107,8 @@ namespace Engine {
                           Assets::AssetManager &assets, const GtaoQualitySettings quality) {
         if (!device || !fullExtent.width || !fullExtent.height)
             throw std::invalid_argument("GTAO requires a valid extent");
+        if (quality.denoisePassCount > 3)
+            throw std::invalid_argument("GTAO supports at most three denoise passes");
         destroy();
         device_ = device;
         allocator_ = allocator;
@@ -131,6 +133,8 @@ namespace Engine {
             baseDepth_.create(physical, device_, halfExtent_, allocator, VK_FILTER_NEAREST, BaseDepthFormat, true);
             auxiliary_.create(physical, device_, halfExtent_, allocator, VK_FILTER_NEAREST, AuxiliaryFormat, true);
             filtered_.create(physical, device_, halfExtent_, allocator, VK_FILTER_NEAREST, filteredAoFormat, true);
+            if (quality_.denoisePassCount > 1)
+                scratch_.create(physical, device_, halfExtent_, allocator, VK_FILTER_NEAREST, filteredAoFormat, true);
             if (!nativeResolution_)
                 full_.create(physical, device_, fullExtent_, allocator, VK_FILTER_LINEAR, filteredAoFormat, true);
             std::array<std::uint16_t, 64 * 64> hilbertValues{};
@@ -261,19 +265,20 @@ namespace Engine {
                 if (p != 0)
                     computePipelines_[p] = makeCompute(device_, assets, shader[p], computePipelineLayouts_[p]);
             }
-            const std::array<const char *, 4> mainShaders{
+            const std::array<const char *, 6> mainShaders{
                 "shaders/gtao_main_low.spv", "shaders/gtao_main_medium.spv",
-                "shaders/gtao_main_high.spv", "shaders/gtao_main_ultra.spv"
+                "shaders/gtao_main_high.spv", "shaders/gtao_main_ultra.spv",
+                "shaders/gtao_main_performance_half.spv", "shaders/gtao_main_balanced_half.spv"
             };
             for (uint32_t q = 0; q < mainShaders.size(); ++q)
                 mainQualityPipelines_[q] = makeCompute(device_, assets, mainShaders[q], computePipelineLayouts_[0]);
             std::array<VkDescriptorPoolSize, 3> cs{
-                {{VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 23},
+                {{VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 31},
                  {VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, FramesInFlight},
-                 {VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 15}}
+                 {VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 19}}
             };
             VkDescriptorPoolCreateInfo cp{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
-            cp.maxSets = 9;
+            cp.maxSets = 10;
             cp.poolSizeCount = 3;
             cp.pPoolSizes = cs.data();
             if (vkCreateDescriptorPool(device_, &cp, nullptr, &computeDescriptorPool_) != VK_SUCCESS)
@@ -288,6 +293,16 @@ namespace Engine {
                 if (vkAllocateDescriptorSets(device_, &ai, computeSets_[p].data()) != VK_SUCCESS)
                     throw std::runtime_error("Could not allocate GTAO compute sets");
             }
+            for (auto &sets : extraDenoiseSets_) {
+                std::array<VkDescriptorSetLayout, FramesInFlight> layouts{};
+                layouts.fill(computeLayouts_[1]);
+                VkDescriptorSetAllocateInfo ai{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};
+                ai.descriptorPool = computeDescriptorPool_;
+                ai.descriptorSetCount = FramesInFlight;
+                ai.pSetLayouts = layouts.data();
+                if (vkAllocateDescriptorSets(device_, &ai, sets.data()) != VK_SUCCESS)
+                    throw std::runtime_error("Could not allocate GTAO denoise sets");
+            }
         } catch (...) {
             destroy();
             throw;
@@ -296,6 +311,8 @@ namespace Engine {
 
     void GtaoPass::clearImages(VkCommandBuffer cmd) {
         std::vector<VkImage> images{raw_.image(), baseDepth_.image(), auxiliary_.image(), filtered_.image()};
+        if (quality_.denoisePassCount > 1)
+            images.push_back(scratch_.image());
         if (!nativeResolution_)
             images.push_back(full_.image());
         VkImageSubresourceRange range{VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
@@ -311,6 +328,14 @@ namespace Engine {
                     VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT,
                     VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT | VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT,
                     VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT | VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
+        if (nativeResolution_ && quality_.denoisePassCount == 0)
+            barrier(cmd, raw_.image(), VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                    VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT,
+                    VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT, VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
+        if (quality_.denoisePassCount > 1)
+            barrier(cmd, scratch_.image(), VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_GENERAL,
+                    VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT,
+                    VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT);
         if (nativeResolution_)
             barrier(cmd, filtered_.image(), VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
                     VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_PIPELINE_STAGE_2_TRANSFER_BIT,
@@ -384,30 +409,39 @@ namespace Engine {
                     VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT | VK_ACCESS_2_SHADER_SAMPLED_READ_BIT,
                     VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT);
         };
-        beginInternalWrite(raw_.image(), VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT |
-                                             VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT);
+        if (nativeResolution_ && quality_.denoisePassCount == 0)
+            barrier(cmd, raw_.image(), VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_IMAGE_LAYOUT_GENERAL,
+                    VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT, VK_ACCESS_2_SHADER_SAMPLED_READ_BIT,
+                    VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT);
+        else
+            beginInternalWrite(raw_.image(), VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT |
+                                                 VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT);
         beginInternalWrite(baseDepth_.image(), VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT);
         beginInternalWrite(auxiliary_.image(), VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT);
-        if (nativeResolution_)
+        if (nativeResolution_ && quality_.denoisePassCount != 0)
             barrier(cmd, filtered_.image(), VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_IMAGE_LAYOUT_GENERAL,
                     VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT, VK_ACCESS_2_SHADER_SAMPLED_READ_BIT,
                     VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT);
-        else {
+        else if (!nativeResolution_) {
             beginInternalWrite(filtered_.image(), VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT |
                                                     VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT);
             barrier(cmd, full_.image(), VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_IMAGE_LAYOUT_GENERAL,
                     VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT, VK_ACCESS_2_SHADER_SAMPLED_READ_BIT,
                     VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT);
         }
+        if (quality_.denoisePassCount > 1)
+            beginInternalWrite(scratch_.image(), VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT);
         auto update = [&](uint32_t p, std::initializer_list<VkDescriptorImageInfo> in,
-                          std::initializer_list<VkImageView> out) {
+                          std::initializer_list<VkImageView> out, uint32_t denoiseIndex = 0) {
+            const VkDescriptorSet descriptorSet = p == 1 && denoiseIndex > 0
+                ? extraDenoiseSets_[denoiseIndex - 1][frame] : computeSets_[p][frame];
             std::vector<VkDescriptorImageInfo> infos(in);
             for (auto image: out)
                 infos.push_back({VK_NULL_HANDLE, image, VK_IMAGE_LAYOUT_GENERAL});
             std::vector<VkWriteDescriptorSet> w;
             for (uint32_t b = 0; b < infos.size(); ++b)
                 w.push_back({
-                    VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr, computeSets_[p][frame], b, 0, 1,
+                    VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr, descriptorSet, b, 0, 1,
                     b < in.size()
                         ? (p == 0 && b == 3 ? VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE
                                             : VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER)
@@ -417,7 +451,8 @@ namespace Engine {
             const auto same = [](const VkDescriptorImageInfo &a, const VkDescriptorImageInfo &b) {
                 return a.sampler == b.sampler && a.imageView == b.imageView && a.imageLayout == b.imageLayout;
             };
-            auto &cached = computeDescriptorCache_[p][frame];
+            auto &cached = p == 1 && denoiseIndex > 0
+                ? extraDenoiseDescriptorCache_[denoiseIndex - 1][frame] : computeDescriptorCache_[p][frame];
             const bool changed = cached.size() != infos.size() ||
                                  !std::equal(cached.begin(), cached.end(), infos.begin(), same);
             if (changed) {
@@ -425,14 +460,17 @@ namespace Engine {
                 cached = std::move(infos);
             }
         };
-        auto dispatch = [&](uint32_t p, auto &constants, VkExtent2D extent) {
-            auto set = computeSets_[p][frame];
+        auto dispatch = [&](uint32_t p, auto &constants, VkExtent2D extent, uint32_t denoiseIndex = 0) {
+            auto set = p == 1 && denoiseIndex > 0
+                ? extraDenoiseSets_[denoiseIndex - 1][frame] : computeSets_[p][frame];
             VkPipeline pipeline = computePipelines_[p];
             if (p == 0) {
-                const uint32_t qualityIndex = quality_.directions == 3 && quality_.stepsPerDirection == 2 ? 0U
-                                            : quality_.directions == 4 && quality_.stepsPerDirection == 3 ? 1U
+                const uint32_t qualityIndex = quality_.directions == 1 && quality_.stepsPerDirection == 2 ? 0U
+                                            : quality_.directions == 2 && quality_.stepsPerDirection == 2 ? 1U
                                             : quality_.directions == 3 && quality_.stepsPerDirection == 3 ? 2U
-                                                                                                          : 3U;
+                                            : quality_.directions == 9 && quality_.stepsPerDirection == 3 ? 3U
+                                            : quality_.directions == 3 && quality_.stepsPerDirection == 2 ? 4U
+                                                                                                          : 5U;
                 pipeline = mainQualityPipelines_[qualityIndex];
             }
             vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, pipeline);
@@ -466,22 +504,29 @@ namespace Engine {
         barrier(cmd, baseDepth_.image(), VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_GENERAL,
                 VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT,
                 VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
-        update(1,
-               {
-                   {raw_.sampler(), raw_.imageView(), VK_IMAGE_LAYOUT_GENERAL},
-                   {auxiliary_.sampler(), auxiliary_.imageView(), VK_IMAGE_LAYOUT_GENERAL}
-               },
-               {filtered_.imageView()});
-        DenoiseSettings denoise{1.F};
-        dispatch(1, denoise, halfExtent_);
-        if (!nativeResolution_) {
-            barrier(cmd, filtered_.image(), VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_GENERAL,
+        const HdrBuffer *denoised = &raw_;
+        for (uint32_t pass = 0; pass < quality_.denoisePassCount; ++pass) {
+            HdrBuffer &output = (quality_.denoisePassCount - pass) % 2 == 1 ? filtered_ : scratch_;
+            if (pass > 1)
+                barrier(cmd, output.image(), VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_GENERAL,
+                        VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_SAMPLED_READ_BIT,
+                        VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT);
+            update(1,
+                   {{denoised->sampler(), denoised->imageView(), VK_IMAGE_LAYOUT_GENERAL},
+                    {auxiliary_.sampler(), auxiliary_.imageView(), VK_IMAGE_LAYOUT_GENERAL}},
+                   {output.imageView()}, pass);
+            DenoiseSettings denoise{pass + 1 == quality_.denoisePassCount ? 1.2F : 1.2F / 5.F};
+            dispatch(1, denoise, halfExtent_, pass);
+            barrier(cmd, output.image(), VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_GENERAL,
                     VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT,
                     VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT | VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT,
                     VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
+            denoised = &output;
+        }
+        if (!nativeResolution_) {
             update(2,
                    {
-                       {filtered_.sampler(), filtered_.imageView(), VK_IMAGE_LAYOUT_GENERAL},
+                       {denoised->sampler(), denoised->imageView(), VK_IMAGE_LAYOUT_GENERAL},
                        {linearDepthSampler_, linearDepthView_, VK_IMAGE_LAYOUT_GENERAL},
                        {baseDepth_.sampler(), baseDepth_.imageView(), VK_IMAGE_LAYOUT_GENERAL}
                    },
@@ -496,7 +541,7 @@ namespace Engine {
             };
             dispatch(2, up, fullExtent_);
         }
-        const VkImage finalImage = nativeResolution_ ? filtered_.image() : full_.image();
+        const VkImage finalImage = nativeResolution_ ? denoised->image() : full_.image();
         barrier(cmd, finalImage, VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
                 VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT,
                 VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT, VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
@@ -508,6 +553,8 @@ namespace Engine {
 
     void GtaoPass::destroy() noexcept {
         for (auto &passCaches: computeDescriptorCache_)
+            for (auto &cache: passCaches) cache.clear();
+        for (auto &passCaches: extraDenoiseDescriptorCache_)
             for (auto &cache: passCaches) cache.clear();
         if (device_) {
             if (computeDescriptorPool_)
@@ -546,12 +593,16 @@ namespace Engine {
         baseDepth_.destroy();
         auxiliary_.destroy();
         filtered_.destroy();
+        scratch_.destroy();
         full_.destroy();
         hilbertLut_.destroy();
         computeLayouts_.fill({});
         computePipelineLayouts_.fill({});
         computePipelines_.fill({});
+        mainQualityPipelines_.fill({});
         for (auto &s: computeSets_)
+            s.fill({});
+        for (auto &s: extraDenoiseSets_)
             s.fill({});
         computeDescriptorPool_ = {};
         depthLayout_ = {};

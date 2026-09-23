@@ -237,7 +237,7 @@
                 taaSampleIndex = 0;
             }
             if (taaResolveActive) {
-                constexpr std::uint32_t TaaSampleCount = 8;
+                constexpr std::uint32_t TaaSampleCount = 16;
                 const auto halton = [](std::uint64_t index, const std::uint32_t base) {
                     float result = 0.0F;
                     float factor = 1.0F;
@@ -2044,7 +2044,8 @@
                 }, [&](const VkCommandBuffer buffer) {
                     gpuTimestampProfiler.beginZone(buffer, currentFrame, taaProfileName);
                     temporalAaPass.setVirtualWaterEnabled(virtualWaterPreparedThisFrame);
-                    temporalAaPass.record(buffer, postExtent, taaJitterX, taaJitterY);
+                    temporalAaPass.record(buffer, postExtent, taaJitterX, taaJitterY,
+                                          currentProjection.native()[2][2], currentProjection.native()[3][2]);
                     gpuTimestampProfiler.endZone(buffer, currentFrame);
                 });
                 graphPostSource = graphHistoryWrite;

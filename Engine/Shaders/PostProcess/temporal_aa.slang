@@ -16,21 +16,24 @@ VertexOutput vertexMain(uint index : SV_VertexID) {
 struct Settings {
     float currentJitterX, currentJitterY, previousJitterX, previousJitterY;
     float historyWeight, inverseWidth, inverseHeight, padding;
+    float projectionA, projectionB;
 };
 [[vk::push_constant]] ConstantBuffer<Settings> settings;
 struct FragmentInput { [[vk::location(0)]] float2 uv; };
 struct FragmentOutput {
     [[vk::location(0)]] float4 color : SV_Target;
     [[vk::location(1)]] float4 depth : SV_Target1;
+    [[vk::location(2)]] float4 historyColor : SV_Target2;
 };
 
 float3 reinhard(float3 color) { return color / (color + 1.0); }
 float3 reinhardInverse(float3 color) { return color / max(1.0 - color, 1e-5); }
-float luminance(float3 color) { return max(dot(color, float3(0.299, 0.587, 0.114)), 1e-4); }
+float viewDepth(float deviceDepth) {
+    // Perspective RH_ZO: deviceDepth = -projectionA + projectionB / distance.
+    return settings.projectionB / min(deviceDepth + settings.projectionA, -1e-6);
+}
 
-// Five-tap Catmull-Rom-style history reconstruction. Four bilinear samples
-// coalesce the 4x4 cubic footprint; a small centre contribution suppresses
-// ringing from the negative Catmull-Rom lobes.
+// Nine bilinear taps reconstruct the 4x4 Catmull-Rom footprint.
 float3 sampleHistoryCatmullRom(float2 uv, float2 resolution) {
     float2 samplePos = uv * resolution;
     float2 texPos1 = floor(samplePos - 0.5) + 0.5;
@@ -39,19 +42,21 @@ float3 sampleHistoryCatmullRom(float2 uv, float2 resolution) {
     float2 w1 = 1.0 + f * f * (-2.5 + 1.5 * f);
     float2 w2 = f * (0.5 + f * (2.0 - 1.5 * f));
     float2 w3 = f * f * (-0.5 + 0.5 * f);
-    const float2 w01 = w0 + w1;
-    const float2 w23 = w2 + w3;
-    const float2 uv01 = (texPos1 - 1.0 + w1 / max(w01, 1e-5)) / resolution;
-    const float2 uv23 = (texPos1 + 1.0 + w3 / max(w23, 1e-5)) / resolution;
-
+    const float2 w12 = w1 + w2;
+    const float2 uv0 = (texPos1 - 1.0) / resolution;
+    const float2 uv12 = (texPos1 + w2 / w12) / resolution;
+    const float2 uv3 = (texPos1 + 2.0) / resolution;
     float3 cubic = 0.0;
-    cubic += historyFrame.Sample(float2(uv01.x, uv01.y)).rgb * w01.x * w01.y;
-    cubic += historyFrame.Sample(float2(uv23.x, uv01.y)).rgb * w23.x * w01.y;
-    cubic += historyFrame.Sample(float2(uv01.x, uv23.y)).rgb * w01.x * w23.y;
-    cubic += historyFrame.Sample(float2(uv23.x, uv23.y)).rgb * w23.x * w23.y;
-
-    const float3 centre = historyFrame.Sample(uv).rgb;
-    return max(lerp(cubic, centre, 0.125), 0.0);
+    cubic += historyFrame.Sample(float2(uv0.x, uv0.y)).rgb * w0.x * w0.y;
+    cubic += historyFrame.Sample(float2(uv12.x, uv0.y)).rgb * w12.x * w0.y;
+    cubic += historyFrame.Sample(float2(uv3.x, uv0.y)).rgb * w3.x * w0.y;
+    cubic += historyFrame.Sample(float2(uv0.x, uv12.y)).rgb * w0.x * w12.y;
+    cubic += historyFrame.Sample(float2(uv12.x, uv12.y)).rgb * w12.x * w12.y;
+    cubic += historyFrame.Sample(float2(uv3.x, uv12.y)).rgb * w3.x * w12.y;
+    cubic += historyFrame.Sample(float2(uv0.x, uv3.y)).rgb * w0.x * w3.y;
+    cubic += historyFrame.Sample(float2(uv12.x, uv3.y)).rgb * w12.x * w3.y;
+    cubic += historyFrame.Sample(float2(uv3.x, uv3.y)).rgb * w3.x * w3.y;
+    return saturate(cubic);
 }
 
 // Playdead/Godot AABB clipping avoids the colour shifts of per-channel clamp.
@@ -114,43 +119,43 @@ FragmentOutput fragmentMain(FragmentInput input) {
     const float2 historyUv = input.uv - velocityWithoutJitter;
     const bool historyInBounds = all(historyUv >= 0.0) && all(historyUv <= 1.0);
     const float historyDepth = historyDepthFrame.Sample(historyUv).r;
-    // The stored device depth is deliberately sampled nearest.  This is a
-    // conservative visibility test: rejecting a valid history costs a little
-    // stability, whereas accepting a different surface creates a trail.
-    const float depthTolerance = max(0.0025, max(currentDepth, historyDepth) * 0.02);
-    const bool depthMatches = abs(currentDepth - historyDepth) <= depthTolerance;
+    // Compare positive view-space distances; device-depth differences lose
+    // meaning as geometry approaches the far plane.
+    const float currentViewDepth = viewDepth(currentDepth);
+    const float historyViewDepth = viewDepth(historyDepth);
+    const bool depthMatches = abs(currentViewDepth - historyViewDepth) <=
+        0.02 * max(currentViewDepth, historyViewDepth);
 
-    // Full 3x3 neighbourhood captures diagonal and one-pixel geometry that
-    // a cross-shaped kernel misses.  Its variance bounds feed AABB clipping.
+    // Compute weighted neighbourhood statistics in the same bounded space as
+    // the stored history. Motion tightens the box at disocclusions.
     float3 mean = 0.0;
     float3 meanSquared = 0.0;
+    float totalWeight = 0.0;
     [unroll] for (int y = -1; y <= 1; ++y) {
         [unroll] for (int x = -1; x <= 1; ++x) {
-            const float3 sample = currentFrame.Sample(clamp(input.uv + float2(x, y) * texel, 0.0, 1.0)).rgb;
-            mean += sample;
-            meanSquared += sample * sample;
+            const float2 sampleUv = clamp(input.uv + float2(x, y) * texel, 0.0, 1.0);
+            const float3 sample = reinhard(max(currentFrame.Sample(sampleUv).rgb, 0.0));
+            const float weight = exp(-3.0 * float(x * x + y * y) / 4.0);
+            mean += sample * weight;
+            meanSquared += sample * sample * weight;
+            totalWeight += weight;
         }
     }
-    mean *= (1.0 / 9.0);
-    meanSquared *= (1.0 / 9.0);
-    const float varianceScale = clamp(1.1 * 1080.0 * settings.inverseHeight, 0.75, 1.0);
-    const float3 deviation = sqrt(abs(meanSquared - mean * mean)) * varianceScale;
+    mean /= totalWeight;
+    meanSquared /= totalWeight;
+    const float motion = length(velocityWithoutJitter);
+    const float motionT = saturate(motion / 0.02);
+    const float boxSize = lerp(2.5, 0.5, motionT * motionT * (3.0 - 2.0 * motionT));
+    const float3 deviation = sqrt(max(meanSquared - mean * mean, 0.0)) * boxSize;
     float3 history = sampleHistoryCatmullRom(historyUv, resolution);
     history = clipAabb(mean - deviation, mean + deviation, mean, history);
 
-    // Resolve HDR in a bounded domain, following Godot's flicker suppression.
-    const float3 currentTm = reinhard(current);
-    const float3 historyTm = reinhard(history);
-    const float luminanceDifference = abs(luminance(currentTm) - luminance(historyTm)) /
-        max(luminance(currentTm), max(luminance(historyTm), 1.001));
-    const float similarity = 1.0 - luminanceDifference;
-    // Retain history only when its luminance agrees with this frame. A large
-    // difference is a disocclusion/change signal, so it must favour current.
-    const float historyConfidence = similarity * similarity;
-    const float historyWeight = settings.historyWeight * historyConfidence * lerp(1.0, 0.12, reactive);
-    const float3 resolved = reinhardInverse(lerp(currentTm, historyTm,
-        (historyInBounds && depthMatches) ? historyWeight : 0.0));
-    output.color = float4(resolved, 1.0);
+    const float3 currentTm = reinhard(max(current, 0.0));
+    const float historyWeight = settings.historyWeight * lerp(1.0, 0.12, reactive);
+    const float3 resolvedTm = lerp(currentTm, history,
+        (historyInBounds && depthMatches) ? historyWeight : 0.0);
+    output.color = float4(reinhardInverse(resolvedTm), 1.0);
     output.depth = float4(currentDepth, 0.0, 0.0, 1.0);
+    output.historyColor = float4(resolvedTm, 1.0);
     return output;
 }

@@ -30,10 +30,11 @@ void main(uint3 groupId:SV_GroupID,uint3 threadId:SV_GroupThreadID,uint3 id:SV_D
  float4 right=unpackEdges(edgeTile[c.y][c.x+1u]);
  float4 top=unpackEdges(edgeTile[c.y-1u][c.x]);
  float4 bottom=unpackEdges(edgeTile[c.y+1u][c.x]);
- // Make links symmetric. Do not reopen rejected links: doing so lets AO
- // cross silhouette discontinuities and produces visible halos.
+ // Match XeGTAO's symmetric edges and small leak for closed neighbourhoods.
  center*=float4(left.y,right.x,top.w,bottom.z);
- center=saturate(center);
+ const float leakThreshold=2.5,leakStrength=.5;
+ float edginess=saturate((4.0-leakThreshold-dot(center,float4(1,1,1,1)))/(4.0-leakThreshold))*leakStrength;
+ center=saturate(center+edginess);
  const float diagonalWeight=.85*.5;
  float weightTL=diagonalWeight*(center.x*left.z+center.z*top.x);
  float weightTR=diagonalWeight*(center.z*top.y+center.y*right.z);
