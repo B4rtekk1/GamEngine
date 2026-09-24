@@ -5,6 +5,9 @@
 
 #include <cmp_core.h>
 #include <stb_image.h>
+#if GAMEENGINE_BC7E_ENABLED
+#include "bc7e_ispc.h"
+#endif
 
 #include <algorithm>
 #include <atomic>
@@ -13,6 +16,7 @@
 #include <cctype>
 #include <chrono>
 #include <condition_variable>
+#include <cstring>
 #include <deque>
 #include <functional>
 #include <limits>
@@ -45,11 +49,15 @@ namespace Engine::Assets {
         struct WorkerOptions final {
             void *bc4{};
             void *bc5{};
+#if !GAMEENGINE_BC7E_ENABLED
             void *bc7{};
+#endif
             ~WorkerOptions() {
                 if (bc4 != nullptr) DestroyOptionsBC4(bc4);
                 if (bc5 != nullptr) DestroyOptionsBC5(bc5);
+#if !GAMEENGINE_BC7E_ENABLED
                 if (bc7 != nullptr) DestroyOptionsBC7(bc7);
+#endif
             }
         };
 
@@ -124,11 +132,13 @@ namespace Engine::Assets {
                     if (options.bc5 != nullptr) DestroyOptionsBC5(options.bc5);
                     options.bc5 = nullptr;
                 }
+#if !GAMEENGINE_BC7E_ENABLED
                 if (CreateOptionsBC7(&options.bc7) != 0 || options.bc7 == nullptr ||
                     SetQualityBC7(options.bc7, compressionQuality) != 0) {
                     if (options.bc7 != nullptr) DestroyOptionsBC7(options.bc7);
                     options.bc7 = nullptr;
                 }
+#endif
 
                 for (;;) {
                     Task task;
@@ -258,7 +268,8 @@ namespace Engine::Assets {
             return result;
         }
 
-        void encode_mip_bc7(const std::span<const std::uint8_t> rgba, const std::uint32_t width,
+#if !GAMEENGINE_BC7E_ENABLED
+        void encode_mip_bc7_scalar(const std::span<const std::uint8_t> rgba, const std::uint32_t width,
                             const std::uint32_t height, std::vector<std::uint8_t> &destination) {
             const std::uint32_t blocksWide = (width + 3) / 4;
             const std::uint32_t blocksHigh = (height + 3) / 4;
@@ -307,6 +318,68 @@ namespace Engine::Assets {
             if (failed.load(std::memory_order_relaxed))
                 throw std::runtime_error("Compressonator could not encode a BC7 block");
         }
+#endif
+
+#if GAMEENGINE_BC7E_ENABLED
+        void encode_mip_bc7_simd(const std::span<const std::uint8_t> rgba, const std::uint32_t width,
+                                 const std::uint32_t height, std::vector<std::uint8_t> &destination,
+                                 const bool perceptual) {
+            static std::once_flag initFlag;
+            std::call_once(initFlag, [] { ispc::bc7e_compress_block_init(); });
+
+            constexpr std::uint32_t batchSize = 64;
+            const std::uint32_t blocksWide = (width + 3) / 4;
+            const std::uint32_t blocksHigh = (height + 3) / 4;
+            const std::uint32_t blockCount = blocksWide * blocksHigh;
+            const std::size_t outputOffset = destination.size();
+            destination.resize(outputOffset + static_cast<std::size_t>(blockCount) * 16);
+            auto *output = destination.data() + outputOffset;
+            std::atomic<std::uint32_t> nextBlock{};
+
+            texture_cooker_workers().parallel_for(texture_cooker_worker_count(), [&](void *, std::size_t) {
+                alignas(32) std::array<std::uint32_t, batchSize * 16> pixels{};
+                alignas(32) std::array<std::uint64_t, batchSize * 2> compressed{};
+                ispc::bc7e_compress_block_params params{};
+#if GAMEENGINE_BC7E_PROFILE == 0
+                ispc::bc7e_compress_block_params_init_veryfast(&params, perceptual);
+#elif GAMEENGINE_BC7E_PROFILE == 1
+                ispc::bc7e_compress_block_params_init_fast(&params, perceptual);
+#elif GAMEENGINE_BC7E_PROFILE == 2
+                ispc::bc7e_compress_block_params_init_basic(&params, perceptual);
+#else
+                ispc::bc7e_compress_block_params_init_slow(&params, perceptual);
+#endif
+                for (;;) {
+                    const auto first = nextBlock.fetch_add(batchSize, std::memory_order_relaxed);
+                    if (first >= blockCount) break;
+                    const auto count = std::min(batchSize, blockCount - first);
+                    for (std::uint32_t b = 0; b < count; ++b) {
+                        const auto index = first + b;
+                        const auto px = index % blocksWide * 4;
+                        const auto py = index / blocksWide * 4;
+                        auto *block = reinterpret_cast<std::uint8_t *>(pixels.data() + b * 16);
+                        if (px + 4 <= width && py + 4 <= height) {
+                            for (std::uint32_t y = 0; y < 4; ++y) {
+                                const auto sourceOffset = (static_cast<std::size_t>(py + y) * width + px) * 4;
+                                std::memcpy(block + y * 16, rgba.data() + sourceOffset, 16);
+                            }
+                        } else {
+                            for (std::uint32_t y = 0; y < 4; ++y)
+                                for (std::uint32_t x = 0; x < 4; ++x) {
+                                    const auto sx = std::min(width - 1, px + x);
+                                    const auto sy = std::min(height - 1, py + y);
+                                    const auto sourceOffset = (static_cast<std::size_t>(sy) * width + sx) * 4;
+                                    std::memcpy(block + (y * 4 + x) * 4, rgba.data() + sourceOffset, 4);
+                                }
+                        }
+                    }
+                    ispc::bc7e_compress_blocks(count, compressed.data(), pixels.data(), &params);
+                    std::memcpy(output + static_cast<std::size_t>(first) * 16,
+                                compressed.data(), static_cast<std::size_t>(count) * 16);
+                }
+            });
+        }
+#endif
 
         void encode_mip_bc4_bc5(const std::span<const std::uint8_t> rgba, const std::uint32_t width,
                                 const std::uint32_t height, const TextureFormat format,
@@ -422,7 +495,13 @@ namespace Engine::Assets {
             const auto encodeStarted = std::chrono::steady_clock::now();
             if (format == TextureFormat::BC4_UNORM || format == TextureFormat::BC5_UNORM)
                 encode_mip_bc4_bc5(mip, mipWidth, mipHeight, format, result.data);
-            else encode_mip_bc7(mip, mipWidth, mipHeight, result.data);
+            else {
+#if GAMEENGINE_BC7E_ENABLED
+                encode_mip_bc7_simd(mip, mipWidth, mipHeight, result.data, format == TextureFormat::BC7_SRGB);
+#else
+                encode_mip_bc7_scalar(mip, mipWidth, mipHeight, result.data);
+#endif
+            }
             if (timings != nullptr)
                 timings->blockEncode += std::chrono::steady_clock::now() - encodeStarted;
             result.mips.push_back(

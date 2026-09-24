@@ -10,6 +10,9 @@
 #ifndef GAMEENGINE_COMPRESSONATOR_REVISION
 #define GAMEENGINE_COMPRESSONATOR_REVISION "unknown"
 #endif
+#ifndef GAMEENGINE_BC7_ENCODER
+#define GAMEENGINE_BC7_ENCODER "compressonator"
+#endif
 
 namespace Engine::Assets::CookCache {
     void Hash64::add(const std::span<const std::uint8_t> bytes) noexcept {
@@ -47,6 +50,7 @@ namespace Engine::Assets::CookCache {
         Hash64 hash;
         hash.add("texture-cook-settings-v1");
         hash.add(GAMEENGINE_COMPRESSONATOR_REVISION);
+        hash.add(GAMEENGINE_BC7_ENCODER);
         hash.add(cookerVersion);
         hash.add(mipPolicy);
         hash.add(normalPolicy);
@@ -58,6 +62,7 @@ namespace Engine::Assets::CookCache {
         Hash64 hash;
         hash.add("gtex-v1");
         hash.add(GAMEENGINE_COMPRESSONATOR_REVISION);
+        hash.add(GAMEENGINE_BC7_ENCODER);
         hash.add(key.sourceHash);
         hash.add(static_cast<std::uint64_t>(key.format));
         hash.add(static_cast<std::uint64_t>(key.srgb));

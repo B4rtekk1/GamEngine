@@ -12,7 +12,7 @@
 namespace Engine::Assets::CookCache {
     // Bump these when encoder behavior or mip/normal processing changes.
     inline constexpr float compressionQuality = 0.10F;
-    inline constexpr std::uint32_t cookerVersion = 3;
+    inline constexpr std::uint32_t cookerVersion = 4;
     inline constexpr std::uint32_t mipPolicy = 2; // Full chain; sRGB and normal mips use semantic filtering.
     inline constexpr std::uint32_t normalPolicy = 1; // Normalize tangent-space vectors before encoding RG.
 
