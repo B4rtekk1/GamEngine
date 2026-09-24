@@ -30,20 +30,23 @@ void main(uint3 id : SV_DispatchThreadID) {
                                 float2(width, height)), int2(sourceWidth, sourceHeight) - 1);
     float depth = depthTexture.Load(int3(sourcePixel, 0)).x;
     if (depth >= 0.999999) { contactVisibility[pixel] = 1.0; return; }
-    float2 uv = (float2(id.xy) + 0.5) / float2(width, height);
-    const float vsmVisibility = directionalVisibility.SampleLevel(uv, 0).r;
+    // Use the exact full-resolution texel center selected for depth and
+    // normals, so the reconstructed receiver and VSM sample stay aligned.
+    float2 sourceUv = (float2(sourcePixel) + 0.5) / float2(sourceWidth, sourceHeight);
+    const float vsmVisibility = directionalVisibility.SampleLevel(sourceUv, 0).r;
     if (vsmVisibility <= 1.0 / 255.0) {
         contactVisibility[pixel] = 0.0;
         return;
     }
-    float4 viewPosition = mul(float4(uv * 2.0 - 1.0, depth, 1.0), frame.inverseProjection);
+    float4 viewPosition = mul(float4(sourceUv * 2.0 - 1.0, depth, 1.0), frame.inverseProjection);
     viewPosition /= viewPosition.w;
     float3 worldPosition = mul(viewPosition, frame.inverseView).xyz;
     float3 viewNormal = decodeOct(viewNormalTexture.Load(int3(sourcePixel, 0)).xy);
     float3 worldNormal = normalize(mul(float4(viewNormal, 0.0), frame.inverseView).xyz);
     if (frame.lightDirectionIntensity.w <= 0.0001) { contactVisibility[pixel] = vsmVisibility; return; }
     float3 lightDirection = normalize(-frame.lightDirectionIntensity.xyz);
-    if (dot(worldNormal, lightDirection) <= 0.0) { contactVisibility[pixel] = vsmVisibility; return; }
+    // The prepass normal is not face-corrected for double-sided materials.
+    // Trace for either orientation; forward lighting applies its own sidedness.
     RayDesc ray;
     ray.Origin = worldPosition + worldNormal * settings.normalBias;
     ray.Direction = lightDirection;

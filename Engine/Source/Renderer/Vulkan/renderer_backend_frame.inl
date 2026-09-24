@@ -383,7 +383,8 @@
                           -std::log2(0.1F) * (24.0F / std::log2(1000.0F / 0.1F)),
                           static_cast<float>(imageBasedLighting.prefilteredMipLevels()),
                           !msaa.enabled() && rtContactShadowSettings.mode == ContactShadowMode::RayTraced &&
-                              rtContactShadowPass.resultView(frame) != VK_NULL_HANDLE ? 1.0F : 0.0F},
+                              rtContactShadowPass.resultView(frame) != VK_NULL_HANDLE &&
+                              accelerationStructures.built(frame) ? 1.0F : 0.0F},
                 frameData.lights};
             uniformBuffers[frame].update(&data, sizeof(data));
             const ClusteredLightingUniforms clustered{

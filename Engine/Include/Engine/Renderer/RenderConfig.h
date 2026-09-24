@@ -35,7 +35,9 @@ namespace Engine {
         ContactShadowMode mode = ContactShadowMode::Off;
         float maxDistance = 0.5F;
         float normalBias = 0.005F;
-        float resolutionScale = 0.5F;
+        // Keep full resolution until the forward pass has depth/normal-aware
+        // reconstruction; linear upsampling of a half-res mask creates halos.
+        float resolutionScale = 1.0F;
     };
 
     /** Coarse renderer profiles intended for quick editor/runtime switching. */

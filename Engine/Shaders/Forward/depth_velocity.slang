@@ -85,11 +85,14 @@ void alphaTest(VertexOutput input) {
 float2 encodeOct(float3 n) { n /= max(abs(n.x) + abs(n.y) + abs(n.z), 1e-5); if(n.z < 0) n.xy = (1-abs(n.yx))*float2(n.x>=0?1:-1,n.y>=0?1:-1); return n.xy; }
 struct FragmentOutput { [[vk::location(1)]] float2 velocity : SV_Target1; [[vk::location(2)]] float2 viewNormal : SV_Target2; };
 [shader("fragment")]
-FragmentOutput fragmentMain(VertexOutput input) {
+FragmentOutput fragmentMain(VertexOutput input, bool frontFace : SV_IsFrontFace) {
     alphaTest(input);
     FragmentOutput output;
     output.velocity = (input.currentNdc - input.previousClip.xy / input.previousClip.w) * 0.5;
-    output.viewNormal = encodeOct(input.viewNormal);
+    float3 viewNormal = normalize(input.viewNormal);
+    MaterialData material = materials[input.materialIndex];
+    if ((material.textureIndices.w & 1) != 0 && !frontFace) viewNormal = -viewNormal;
+    output.viewNormal = encodeOct(viewNormal);
     return output;
 }
 #else
