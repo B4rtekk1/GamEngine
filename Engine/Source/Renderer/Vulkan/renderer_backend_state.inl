@@ -691,6 +691,7 @@
                    lhs.extensionScalars.y == rhs.extensionScalars.y &&
                    lhs.extensionScalars.z == rhs.extensionScalars.z &&
                    lhs.extensionScalars.w == rhs.extensionScalars.w &&
+                   lhs.displacementParams == rhs.displacementParams &&
                    lhs.extensionTextureIndices.x == rhs.extensionTextureIndices.x &&
                    lhs.extensionTextureIndices.y == rhs.extensionTextureIndices.y &&
                    lhs.extensionTextureIndices.z == rhs.extensionTextureIndices.z &&

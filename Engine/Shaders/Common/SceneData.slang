@@ -70,6 +70,8 @@ struct MaterialData
     int4 terrainLayerTextures;
     int4 auxiliaryTextureIndices;
     float4 extensionScalars;
+    // x = scale, y = offset
+    float4 displacementParams;
     int4 extensionTextureIndices;
     float4 specularColor;
     float4 emissiveColorIntensity;

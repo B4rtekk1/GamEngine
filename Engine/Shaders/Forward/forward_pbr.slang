@@ -81,8 +81,22 @@ ForwardVertexOutput vertexMain(ForwardVertexInput input, uint instanceIndex : SV
 {
     const uint visibleIndex = visibleInstanceIndices[baseInstance + instanceIndex];
     RendererInstanceData instance = visibleInstances[visibleIndex];
-    const float3 localPosition = input.position;
-    const float3 localNormal = input.normal;
+    const uint materialIndex = asuint(instance.positionMaterial.w) + input.materialIndex;
+    MaterialData material = materials[materialIndex];
+
+    float3 localPosition = input.position;
+    const float3 localNormal = normalize(input.normal);
+    const int displacementTexture = material.auxiliaryTextureIndices.w;
+    if (displacementTexture >= 0 && abs(material.displacementParams.x) > 1e-6)
+    {
+        const float2 displacementUv = materialTextureUv(
+            material, 6, input.texCoord, input.texCoord1);
+        const float height = materialTextures[
+            NonUniformResourceIndex(displacementTexture)].SampleLevel(displacementUv, 0.0).r;
+        const float displacement = height * material.displacementParams.x +
+                                   material.displacementParams.y;
+        localPosition += localNormal * displacement;
+    }
 
     float4 q = instance.rotation;
     float3x3 rotationMatrix = float3x3(
@@ -104,14 +118,14 @@ ForwardVertexOutput vertexMain(ForwardVertexInput input, uint instanceIndex : SV
         1.0 - 2.0 * (previousQ.y * previousQ.y + previousQ.z * previousQ.z), 2.0 * (previousQ.x * previousQ.y + previousQ.z * previousQ.w), 2.0 * (previousQ.x * previousQ.z - previousQ.y * previousQ.w),
         2.0 * (previousQ.x * previousQ.y - previousQ.z * previousQ.w), 1.0 - 2.0 * (previousQ.x * previousQ.x + previousQ.z * previousQ.z), 2.0 * (previousQ.y * previousQ.z + previousQ.x * previousQ.w),
         2.0 * (previousQ.x * previousQ.z + previousQ.y * previousQ.w), 2.0 * (previousQ.y * previousQ.z - previousQ.x * previousQ.w), 1.0 - 2.0 * (previousQ.x * previousQ.x + previousQ.y * previousQ.y));
-    float3 previousWorldPosition = mul(input.position * previousTransform.previousScale.xyz, previousRotationMatrix) +
+    float3 previousWorldPosition = mul(localPosition * previousTransform.previousScale.xyz, previousRotationMatrix) +
                                    previousTransform.previousPosition.xyz;
 #endif
     output.position = currentClip;
     output.color = input.color;
     output.worldPosition = worldPosition.xyz;
     output.normal = mul(localNormal, normalMatrix);
-    output.materialIndex = asuint(instance.positionMaterial.w) + input.materialIndex;
+    output.materialIndex = materialIndex;
     output.texCoord = input.texCoord;
     output.texCoord1 = input.texCoord1;
     output.tangent = float4(mul(input.tangent.xyz, normalMatrix), input.tangent.w);

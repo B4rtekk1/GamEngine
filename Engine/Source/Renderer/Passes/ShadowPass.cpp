@@ -172,7 +172,8 @@ namespace Engine {
             // resources (reflection probes) in this shared forward layout.
             bindings[13] = {
                 13, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, MaxMaterialTextures,
-                VK_SHADER_STAGE_FRAGMENT_BIT | VK_SHADER_STAGE_COMPUTE_BIT, nullptr
+                VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT |
+                    VK_SHADER_STAGE_COMPUTE_BIT, nullptr
             };
             bindings[14] = {
                 14, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1,
@@ -473,6 +474,7 @@ namespace Engine {
             const VkVertexInputAttributeDescription attributes[] = {
                 {0, 0, VK_FORMAT_R32G32B32_SFLOAT, offsetof(GpuVertex, px)},
                 {2, 0, VK_FORMAT_R16G16_SFLOAT, offsetof(GpuVertex, texCoord)},
+                {3, 0, VK_FORMAT_A2B10G10R10_SNORM_PACK32, offsetof(GpuVertex, normal)},
                 {4, 0, VK_FORMAT_R16G16_SFLOAT, offsetof(GpuVertex, texCoord1)},
                 {8, 0, VK_FORMAT_R32_UINT, offsetof(GpuVertex, materialIndex)},
             };

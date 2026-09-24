@@ -47,18 +47,30 @@ VertexOutput vertexMain(VertexInput input, uint instanceIndex : SV_InstanceID,
                         uint baseInstance : SV_StartInstanceLocation) {
     uint visibleIndex = visibleInstanceIndices[baseInstance + instanceIndex];
     RendererInstanceData instance = visibleInstances[visibleIndex];
-    float3 world = mul(input.position * instance.scaleBase.xyz, rotation(instance.rotation)) + instance.positionMaterial.xyz;
+    uint materialIndex = asuint(instance.positionMaterial.w) + input.materialIndex;
+    MaterialData material = materials[materialIndex];
+    float3 localPosition = input.position;
+    if (material.auxiliaryTextureIndices.w >= 0 &&
+        abs(material.displacementParams.x) > 1e-6) {
+        float2 uv = materialTextureUv(material, 6, input.texCoord, input.texCoord1);
+        float height = materialTextures[
+            NonUniformResourceIndex(material.auxiliaryTextureIndices.w)].SampleLevel(uv, 0.0).r;
+        float displacement = height * material.displacementParams.x +
+                             material.displacementParams.y;
+        localPosition += normalize(input.normal) * displacement;
+    }
+    float3 world = mul(localPosition * instance.scaleBase.xyz, rotation(instance.rotation)) + instance.positionMaterial.xyz;
     VertexOutput output;
     float4 currentClip = mul(mul(float4(world, 1.0), frame.view), frame.projection);
     output.position = currentClip;
     output.texCoord = input.texCoord;
     output.texCoord1 = input.texCoord1;
-    output.materialIndex = asuint(instance.positionMaterial.w) + input.materialIndex;
+    output.materialIndex = materialIndex;
     float3 worldNormal = normalize(mul(input.normal / instance.scaleBase.xyz, rotation(instance.rotation)));
     output.viewNormal = normalize(mul(float4(worldNormal, 0.0), frame.view).xyz);
 #if DEPTH_OUTPUT_VELOCITY
     RendererPreviousTransformData previous = previousTransforms[visibleIndex];
-    float3 previousWorld = mul(input.position * previous.previousScale.xyz, rotation(previous.previousRotation)) + previous.previousPosition.xyz;
+    float3 previousWorld = mul(localPosition * previous.previousScale.xyz, rotation(previous.previousRotation)) + previous.previousPosition.xyz;
     output.currentNdc = currentClip.xy / currentClip.w;
     output.previousClip = mul(mul(float4(previousWorld, 1.0), frame.previousView), frame.previousProjection);
 #endif

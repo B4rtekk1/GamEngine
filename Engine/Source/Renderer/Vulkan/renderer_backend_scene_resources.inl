@@ -218,6 +218,7 @@
                 glm::ivec4{textureIndex(source.aoTexture), textureIndex(source.opacityTexture),
                            textureIndex(source.translucencyTexture), textureIndex(source.displacementTexture)},
                 glm::vec4{source.normalScale, source.translucency, source.displacementScale, source.specular},
+                glm::vec4{source.displacementScale, source.displacementOffset, 0.0F, 0.0F},
                 glm::ivec4{textureIndex(source.emissiveTexture), textureIndex(source.specularTexture),
                            textureIndex(source.specularColorTexture), -1},
                 glm::vec4{source.specularColor.r(), source.specularColor.g(), source.specularColor.b(), 1.0F},
@@ -902,7 +903,8 @@
                                                  const std::uint32_t indexCount, const std::uint32_t firstMeshlet,
                                                  const std::uint32_t meshletCount, const AABB& rangeBounds,
                                                  const bool usesFoliagePipeline, const AlphaMode alphaMode,
-                                                 const bool twoSided, const bool forceDistinctBatch) {
+                                                 const bool twoSided, const bool forceDistinctBatch,
+                                                 const PBRMaterial& pbrMaterial) {
                     const BatchKey batchKey{renderer.mesh.resource().get(), sectionIndex, rangeShaderSlot, usesFoliagePipeline,
                                             castShadow, renderer.shadowCacheMode, renderer.cullingBatch};
                     const auto [batchIt, inserted] = !forceDistinctBatch && optimizationFeatures.instancedRendering
@@ -910,7 +912,16 @@
                         : std::pair{batchIndices.end(), true};
                     const std::size_t batchIndex = !forceDistinctBatch && optimizationFeatures.instancedRendering
                         ? batchIt->second : instanceBatches.size();
-                    const AABB rangeWorldBounds = rangeBounds.transformed(worldModel(entity));
+                    AABB displacedRangeBounds = rangeBounds;
+                    if (pbrMaterial.displacementTexture >= 0) {
+                        const float d0 = pbrMaterial.displacementOffset;
+                        const float d1 = pbrMaterial.displacementOffset + pbrMaterial.displacementScale;
+                        const float expansion = std::max(std::abs(d0), std::abs(d1));
+                        const Vec3 padding{expansion, expansion, expansion};
+                        displacedRangeBounds.min -= padding;
+                        displacedRangeBounds.max += padding;
+                    }
+                    const AABB rangeWorldBounds = displacedRangeBounds.transformed(worldModel(entity));
                     if (inserted) {
                         instanceBatches.push_back(InstanceBatch{
                             .mesh = renderer.mesh.resource().get(),
@@ -956,7 +967,7 @@
                             std::max(batch.worldBounds.max.z(), rangeWorldBounds.max.z())};
                     }
                     ++batch.instanceCount;
-                    renderables.push_back({.entity = entity, .localBounds = rangeBounds, .batchIndex = batchIndex,
+                    renderables.push_back({.entity = entity, .localBounds = displacedRangeBounds, .batchIndex = batchIndex,
                                            .firstVertex = firstVertex, .vertexCount = mesh->vertexCount(),
                                            .sectionIndex = sectionIndex});
                     const std::size_t renderableIndex = renderables.size() - 1;
@@ -974,7 +985,8 @@
                             .max = { Water::OceanExtents.back(),  2.0F,  Water::OceanExtents.back()},
                         };
                         appendRange(shaderSlot, 0, 0, 0, 0, 0, oceanBounds, overrideUsesFoliagePipeline,
-                            renderer.material.pbr.alphaMode, renderer.material.pbr.doubleSided, false);
+                            renderer.material.pbr.alphaMode, renderer.material.pbr.doubleSided, false,
+                            renderer.material.pbr);
                     } else if (!mesh->renderSections.empty()) {
                         for (std::uint32_t sectionIndex = 0; sectionIndex < mesh->renderSections.size(); ++sectionIndex) {
                             const Mesh::RenderSection& section = mesh->renderSections[sectionIndex];
@@ -986,12 +998,13 @@
                             appendRange(pbrShaderSlot(renderer.materialOverride ? renderer.material.pbr : material),
                                 sectionIndex, section.firstIndex, section.indexCount, section.firstMeshlet,
                                 section.meshletCount, section.localBounds, usesFoliagePipeline,
-                                effectiveMaterial.alphaMode, effectiveMaterial.doubleSided, false);
+                                effectiveMaterial.alphaMode, effectiveMaterial.doubleSided, false,
+                                effectiveMaterial);
                         }
                     } else {
                         appendRange(pbrShaderSlot(renderer.material.pbr), 0, 0, mesh->indexCount(), 0, static_cast<std::uint32_t>(mesh->meshlets.size()),
                                     localBounds, overrideUsesFoliagePipeline, renderer.material.pbr.alphaMode,
-                                    renderer.material.pbr.doubleSided, false);
+                                    renderer.material.pbr.doubleSided, false, renderer.material.pbr);
                     }
                 });
 

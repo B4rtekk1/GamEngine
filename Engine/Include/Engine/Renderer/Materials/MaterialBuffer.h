@@ -20,6 +20,8 @@ namespace Engine {
         glm::ivec4 auxiliaryTextureIndices{-1};
         // normalScale, translucency strength, displacement scale, specular.
         glm::vec4 extensionScalars{};
+        // x displacementScale, y displacementOffset, zw reserved.
+        glm::vec4 displacementParams{};
         // emissive, KHR_materials_specular strength, specular colour, reserved.
         glm::ivec4 extensionTextureIndices{-1};
         // KHR_materials_specular colour factor in linear RGB.
