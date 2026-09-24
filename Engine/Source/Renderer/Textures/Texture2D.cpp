@@ -748,9 +748,7 @@ namespace Engine {
             return;
         }
         if (asset.gtex) {
-            // Start from the smallest level: a residency manager can promote this later.
-            createGtex(physicalDevice, device, commandPool, queue, *asset.gtex,
-                       static_cast<std::uint32_t>(asset.gtex->mips.size() - 1), allocator);
+            createGtex(physicalDevice, device, commandPool, queue, *asset.gtex, 0, allocator);
             return;
         }
         create(physicalDevice, device, commandPool, queue, asset.width, asset.height, asset.rgbaPixels,

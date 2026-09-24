@@ -95,8 +95,7 @@
                 } else if (image.gtex) {
                     ++gtexImages;
                     texture.createGtex(vulkanDevice.physical(), device, commandPool,
-                        vulkanDevice.graphicsQueue(), *image.gtex,
-                        static_cast<std::uint32_t>(image.gtex->mips.size() - 1), vulkanDevice.allocator());
+                        vulkanDevice.graphicsQueue(), *image.gtex, 0, vulkanDevice.allocator());
                 } else if (image.width != 0 && image.height != 0 && !image.rgbaPixels.empty()) {
                     ++rawImages;
                     rawBytes += image.rgbaPixels.size();
