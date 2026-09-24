@@ -24,13 +24,17 @@ namespace Engine {
 
         struct RenderableRecord {
             Entity entity{NullEntity};
+            AABB geometryLocalBounds{};
             AABB localBounds{};
             std::size_t batchIndex{0};
             std::uint32_t firstVertex{0};
             std::uint32_t vertexCount{0};
             /// Imported render-section identity; keeps GPU-scene records distinct.
             std::uint32_t sectionIndex{0};
+            std::uint32_t materialIndex{0};
             float displacementBoundsPadding{0.0F};
+            float sourceDisplacementBoundsPadding{0.0F};
+            bool materialFromRenderer{false};
             /// Instance data consumed only by VirtualWaterRenderer. It has no
             /// generic mesh draw or material-table allocation.
             bool waterOnly{false};

@@ -173,6 +173,13 @@
             Diagnostics::instance().flush();
         }
 
+        [[nodiscard]] static float displacementExpansion(const PBRMaterial& material) {
+            if (material.displacementTexture < 0) return 0.0F;
+            const float d0 = material.displacementOffset;
+            const float d1 = material.displacementOffset + material.displacementScale;
+            return std::max(std::abs(d0), std::abs(d1));
+        }
+
         [[nodiscard]] GPUMaterialData packMaterial(const PBRMaterial& source,
                                                    const Mesh& mesh,
                                                    const WaterMaterial* water = nullptr) const {
@@ -904,6 +911,8 @@
                                                  const std::uint32_t meshletCount, const AABB& rangeBounds,
                                                  const bool usesFoliagePipeline, const AlphaMode alphaMode,
                                                  const bool twoSided, const bool forceDistinctBatch,
+                                                 const bool materialFromRenderer,
+                                                 const std::uint32_t materialIndex,
                                                  const PBRMaterial& pbrMaterial) {
                     const BatchKey batchKey{renderer.mesh.resource().get(), sectionIndex, rangeShaderSlot, usesFoliagePipeline,
                                             castShadow, renderer.shadowCacheMode, renderer.cullingBatch};
@@ -913,15 +922,10 @@
                     const std::size_t batchIndex = !forceDistinctBatch && optimizationFeatures.instancedRendering
                         ? batchIt->second : instanceBatches.size();
                     AABB displacedRangeBounds = rangeBounds;
-                    float displacementExpansion = 0.0F;
-                    if (pbrMaterial.displacementTexture >= 0) {
-                        const float d0 = pbrMaterial.displacementOffset;
-                        const float d1 = pbrMaterial.displacementOffset + pbrMaterial.displacementScale;
-                        displacementExpansion = std::max(std::abs(d0), std::abs(d1));
-                        const Vec3 padding{displacementExpansion, displacementExpansion, displacementExpansion};
-                        displacedRangeBounds.min -= padding;
-                        displacedRangeBounds.max += padding;
-                    }
+                    const float paddingAmount = displacementExpansion(pbrMaterial);
+                    const Vec3 padding{paddingAmount, paddingAmount, paddingAmount};
+                    displacedRangeBounds.min -= padding;
+                    displacedRangeBounds.max += padding;
                     const AABB rangeWorldBounds = displacedRangeBounds.transformed(worldModel(entity));
                     if (inserted) {
                         instanceBatches.push_back(InstanceBatch{
@@ -949,14 +953,14 @@
                             // blend here until transparent draws have a sorted stream.
                             .twoSided = twoSided,
                             .foliagePipeline = usesFoliagePipeline,
-                            .displacedGeometry = displacementExpansion > 1.0e-6F,
+                            .displacedGeometry = paddingAmount > 1.0e-6F,
                             .alphaMode = alphaMode,
                             .worldBounds = rangeWorldBounds,
                         });
                         sceneGpu.batchRenderableIndices.emplace_back();
                     }
                     InstanceBatch& batch = instanceBatches[batchIndex];
-                    batch.displacedGeometry = batch.displacedGeometry || displacementExpansion > 1.0e-6F;
+                    batch.displacedGeometry = batch.displacedGeometry || paddingAmount > 1.0e-6F;
                     if (batch.instanceCount == 0) {
                         batch.worldBounds = rangeWorldBounds;
                     } else {
@@ -970,10 +974,13 @@
                             std::max(batch.worldBounds.max.z(), rangeWorldBounds.max.z())};
                     }
                     ++batch.instanceCount;
-                    renderables.push_back({.entity = entity, .localBounds = displacedRangeBounds, .batchIndex = batchIndex,
+                    renderables.push_back({.entity = entity, .geometryLocalBounds = rangeBounds,
+                                           .localBounds = displacedRangeBounds, .batchIndex = batchIndex,
                                            .firstVertex = firstVertex, .vertexCount = mesh->vertexCount(),
-                                           .sectionIndex = sectionIndex,
-                                           .displacementBoundsPadding = displacementExpansion});
+                                           .sectionIndex = sectionIndex, .materialIndex = materialIndex,
+                                           .displacementBoundsPadding = paddingAmount,
+                                           .sourceDisplacementBoundsPadding = paddingAmount,
+                                           .materialFromRenderer = materialFromRenderer});
                     const std::size_t renderableIndex = renderables.size() - 1;
                     sceneGpu.batchRenderableIndices[batchIndex].push_back(renderableIndex);
                     sceneGpu.renderableIndices[entity].push_back(renderableIndex);
@@ -989,26 +996,30 @@
                             .max = { Water::OceanExtents.back(),  2.0F,  Water::OceanExtents.back()},
                         };
                         appendRange(shaderSlot, 0, 0, 0, 0, 0, oceanBounds, overrideUsesFoliagePipeline,
-                            renderer.material.pbr.alphaMode, renderer.material.pbr.doubleSided, false,
+                            renderer.material.pbr.alphaMode, renderer.material.pbr.doubleSided, false, true, 0,
                             renderer.material.pbr);
                     } else if (!mesh->renderSections.empty()) {
                         for (std::uint32_t sectionIndex = 0; sectionIndex < mesh->renderSections.size(); ++sectionIndex) {
                             const Mesh::RenderSection& section = mesh->renderSections[sectionIndex];
                             const PBRMaterial& material = section.materialIndex < mesh->materials.size()
                                 ? mesh->materials[section.materialIndex] : PBRMaterial{};
-                            const PBRMaterial& effectiveMaterial = renderer.materialOverride ? renderer.material.pbr : material;
-                            const bool usesFoliagePipeline = renderer.materialOverride ? overrideUsesFoliagePipeline :
+                            const bool usesRendererMaterial = mesh->materials.empty() ||
+                                (renderer.materialOverride && section.materialIndex == 0);
+                            const PBRMaterial& effectiveMaterial = usesRendererMaterial ? renderer.material.pbr : material;
+                            const bool usesFoliagePipeline = usesRendererMaterial ? overrideUsesFoliagePipeline :
                                 (material.doubleSided || material.alphaMode == AlphaMode::Mask || material.alphaMode == AlphaMode::Blend);
-                            appendRange(pbrShaderSlot(renderer.materialOverride ? renderer.material.pbr : material),
+                            appendRange(pbrShaderSlot(effectiveMaterial),
                                 sectionIndex, section.firstIndex, section.indexCount, section.firstMeshlet,
                                 section.meshletCount, section.localBounds, usesFoliagePipeline,
                                 effectiveMaterial.alphaMode, effectiveMaterial.doubleSided, false,
+                                mesh->materials.empty(),
+                                mesh->materials.empty() ? 0U : section.materialIndex,
                                 effectiveMaterial);
                         }
                     } else {
                         appendRange(pbrShaderSlot(renderer.material.pbr), 0, 0, mesh->indexCount(), 0, static_cast<std::uint32_t>(mesh->meshlets.size()),
                                     localBounds, overrideUsesFoliagePipeline, renderer.material.pbr.alphaMode,
-                                    renderer.material.pbr.doubleSided, false, renderer.material.pbr);
+                                    renderer.material.pbr.doubleSided, false, true, 0, renderer.material.pbr);
                     }
                 });
 
@@ -2204,6 +2215,45 @@
                             materialChanged = true;
                         }
                         }
+                    } else if (record.materialFromRenderer ||
+                               (renderer->materialOverride && record.materialIndex == 0)) {
+                        // Imported mesh source data is released after upload. Scale and
+                        // offset can still be edited using the retained GPU material.
+                        const std::uint32_t slot = record.materialFromRenderer ? record.materialIndex : 0;
+                        GPUMaterialData& destination = materials[record.materialTableOffset + slot];
+                        const float scale = renderer->material.pbr.displacementScale;
+                        const float offset = renderer->material.pbr.displacementOffset;
+                        if (destination.displacementParams.x != scale ||
+                            destination.displacementParams.y != offset) {
+                            destination.displacementParams.x = scale;
+                            destination.displacementParams.y = offset;
+                            destination.extensionScalars.z = scale;
+                            materialChanged = true;
+                        }
+                    }
+                    if (sourceMesh && !record.materialFromRenderer &&
+                        record.materialIndex < sourceMesh->materials.size()) {
+                        record.sourceDisplacementBoundsPadding =
+                            displacementExpansion(sourceMesh->materials[record.materialIndex]);
+                    }
+                    const float newPadding = (record.materialFromRenderer ||
+                        (renderer->materialOverride && record.materialIndex == 0))
+                        ? displacementExpansion(renderer->material.pbr)
+                        : record.sourceDisplacementBoundsPadding;
+                    if (newPadding != record.displacementBoundsPadding) {
+                        const AABB previousBounds = shadowBounds(model);
+                        record.displacementBoundsPadding = newPadding;
+                        record.localBounds = record.geometryLocalBounds;
+                        const Vec3 padding{newPadding, newPadding, newPadding};
+                        record.localBounds.min -= padding;
+                        record.localBounds.max += padding;
+                        if (record.batchIndex < instanceBatches.size() &&
+                            instanceBatches[record.batchIndex].castShadow) {
+                            appendDirtyShadowBounds(previousBounds);
+                            appendDirtyShadowBounds(shadowBounds(model));
+                        }
+                        markDirty(index, &RenderableRecord::cullingDirtyFrames, dirtyCullingObjects);
+                        changedBatches.push_back(record.batchIndex);
                     }
                 }
                 if (materialChanged) {
@@ -2285,9 +2335,11 @@
                     if (batchIndex >= sceneGpu.batchRenderableIndices.size()) continue;
                     AABB bounds{};
                     bool initialized = false;
+                    bool displacedGeometry = false;
                     for (std::size_t index : sceneGpu.batchRenderableIndices[batchIndex]) {
                         const RenderableRecord& record = renderables[index];
                         if (!readRegistry.has<Transform>(record.entity)) continue;
+                        displacedGeometry |= record.displacementBoundsPadding > 1.0e-6F;
                         const glm::mat4 instanceModel = modelFromInstance(instanceModels[index]);
                         const AABB worldBounds = record.localBounds.transformed(instanceModel);
                         if (!initialized) {
@@ -2301,6 +2353,11 @@
                                               std::max(bounds.max.y(), worldBounds.max.y()),
                                               std::max(bounds.max.z(), worldBounds.max.z())};
                         }
+                    }
+                    if (instanceBatches[batchIndex].displacedGeometry != displacedGeometry) {
+                        instanceBatches[batchIndex].displacedGeometry = displacedGeometry;
+                        rayTracingBlasDirty = vulkanDevice.supportsRayQuery();
+                        rtTlasInputDirty = true;
                     }
                     if (!initialized) continue;
                     instanceBatches[batchIndex].worldBounds = bounds;
