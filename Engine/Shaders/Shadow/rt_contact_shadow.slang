@@ -5,7 +5,8 @@ import Common.SceneData;
 [[vk::binding(0, 0)]] RaytracingAccelerationStructure sceneTlas;
 [[vk::binding(1, 0)]] Sampler2D depthTexture;
 [[vk::binding(2, 0)]] Sampler2D viewNormalTexture;
-[[vk::binding(3, 0)]] RWTexture2D<float> contactVisibility;
+// Match RtContactShadowPass's storage image without requiring formatless writes.
+[[vk::binding(3, 0), vk::image_format("r32f")]] RWTexture2D<float> contactVisibility;
 [[vk::binding(4, 0)]] ConstantBuffer<RendererFrameData> frame;
 [[vk::binding(5, 0)]] Sampler2D directionalVisibility;
 
@@ -14,7 +15,7 @@ struct ContactSettings { float maxDistance; float normalBias; };
 
 float3 decodeOct(float2 e) {
     float3 n = float3(e, 1.0 - abs(e.x) - abs(e.y));
-    if (n.z < 0.0) n.xy = (1.0 - abs(n.yx)) * select(-1.0, 1.0, n.xy >= 0.0);
+    if (n.z < 0.0) n.xy = (1.0 - abs(n.yx)) * select(n.xy >= 0.0, 1.0, -1.0);
     return normalize(n);
 }
 
@@ -46,8 +47,7 @@ void main(uint3 id : SV_DispatchThreadID) {
     float3 worldNormal = normalize(mul(float4(viewNormal, 0.0), frame.inverseView).xyz);
     if (frame.lightDirectionIntensity.w <= 0.0001) { contactVisibility[pixel] = 1.0; return; }
     float3 lightDirection = normalize(-frame.lightDirectionIntensity.xyz);
-    // The prepass normal is not face-corrected for double-sided materials.
-    // Trace for either orientation; forward lighting applies its own sidedness.
+    // The prepass supplies a face-corrected receiver normal.
     RayDesc ray;
     ray.Origin = worldPosition + worldNormal * settings.normalBias;
     ray.Direction = lightDirection;

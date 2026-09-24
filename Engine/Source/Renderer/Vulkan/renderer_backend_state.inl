@@ -82,6 +82,9 @@
         std::uint64_t lastRtTlasTransformRevision{};
         std::uint64_t lastRtTlasTopologyRevision{};
         bool rtTlasInputDirty{true};
+        // A transform change must reach every in-flight TLAS, not just the
+        // slot which happened to rebuild the shared CPU instance list.
+        std::array<bool, MAX_FRAMES_IN_FLIGHT> rtTlasUpdatePending{};
         std::vector<AccelerationStructureManager::InstanceBuildInput> rtTlasInstances;
         GpuTimestampProfiler gpuTimestampProfiler;
         // Retained across frames: reset() clears declarations, while the graph

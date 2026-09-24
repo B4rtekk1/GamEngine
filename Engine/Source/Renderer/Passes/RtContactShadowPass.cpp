@@ -25,7 +25,7 @@ void RtContactShadowPass::create(const VkPhysicalDevice physical, const VkDevice
         // Linear filtering is the inexpensive base upsample; edge-aware
         // reconstruction can be layered on top without changing this pass.
         for (auto& target : visibility_)
-            target.create(physical, device_, extent_, allocator, VK_FILTER_LINEAR, VK_FORMAT_R16_SFLOAT, true);
+            target.create(physical, device_, extent_, allocator, VK_FILTER_LINEAR, VK_FORMAT_R32_SFLOAT, true);
         const std::array<VkDescriptorSetLayoutBinding, 6> bindings{{
             {0, VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
             {1, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},

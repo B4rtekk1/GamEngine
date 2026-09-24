@@ -19,7 +19,7 @@ void DirectionalVisibilityPass::create(const VkPhysicalDevice physical, const Vk
     extent_ = extent;
     try {
         for (auto& target : visibility_)
-            target.create(physical, device_, extent_, allocator, VK_FILTER_NEAREST, VK_FORMAT_R8_UNORM, true);
+            target.create(physical, device_, extent_, allocator, VK_FILTER_NEAREST, VK_FORMAT_R32_SFLOAT, true);
         const std::array<VkDescriptorSetLayoutBinding, 8> bindings{{
             {0, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
             {1, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},

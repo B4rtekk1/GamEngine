@@ -8,13 +8,14 @@ import Common.ShadowSampling;
 [[vk::binding(4, 0)]] Sampler2D depthTexture;
 [[vk::binding(5, 0)]] Sampler2D viewNormalTexture;
 [[vk::binding(6, 0)]] ConstantBuffer<RendererFrameData> frame;
-[[vk::binding(7, 0)]] RWTexture2D<float> visibility;
+// Match DirectionalVisibilityPass's storage image without optional format features.
+[[vk::binding(7, 0), vk::image_format("r32f")]] RWTexture2D<float> visibility;
 
 float3 decodeOct(float2 e)
 {
     float3 n = float3(e, 1.0 - abs(e.x) - abs(e.y));
     if (n.z < 0.0)
-        n.xy = (1.0 - abs(n.yx)) * select(-1.0, 1.0, n.xy >= 0.0);
+        n.xy = (1.0 - abs(n.yx)) * select(n.xy >= 0.0, 1.0, -1.0);
     return normalize(n);
 }
 

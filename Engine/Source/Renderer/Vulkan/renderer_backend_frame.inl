@@ -382,9 +382,9 @@
                 glm::vec4{24.0F / std::log2(1000.0F / 0.1F),
                           -std::log2(0.1F) * (24.0F / std::log2(1000.0F / 0.1F)),
                           static_cast<float>(imageBasedLighting.prefilteredMipLevels()),
-                          !msaa.enabled() && rtContactShadowSettings.mode == ContactShadowMode::RayTraced &&
-                              rtContactShadowPass.resultView(frame) != VK_NULL_HANDLE &&
-                              accelerationStructures.built(frame) ? 1.0F : 0.0F},
+                          // Enabled after recording this frame's RT mask. A
+                          // previous TLAS build does not prove it is valid now.
+                          0.0F},
                 frameData.lights};
             uniformBuffers[frame].update(&data, sizeof(data));
             const ClusteredLightingUniforms clustered{
@@ -1408,7 +1408,8 @@
                     gtaoViewNormalBuffer.imageView(), gtaoViewNormalBuffer.sampler());
 
             const bool rtContactRequested = vulkanDevice.supportsRayQuery() && !msaa.enabled() &&
-                rtContactShadowSettings.mode == ContactShadowMode::RayTraced;
+                mainLightShadows && rtContactShadowSettings.mode == ContactShadowMode::RayTraced &&
+                rtContactShadowPass.resultView(currentFrame) != VK_NULL_HANDLE;
             if (rtContactRequested && rayTracingBlasDirty && vertexBuffer.hasDeviceAddress() && indexBuffer.hasDeviceAddress()) {
                 std::vector<AccelerationStructureManager::MeshBuildInput> meshes;
                 meshes.reserve(instanceBatches.size());
@@ -1463,10 +1464,12 @@
                     lastRtTlasTransformRevision = transformRevision;
                     lastRtTlasTopologyRevision = topologyRevision;
                     rtTlasInputDirty = false;
+                    rtTlasUpdatePending.fill(true);
                 }
-                if (inputChanged || !accelerationStructures.built(currentFrame)) {
+                if (rtTlasUpdatePending[currentFrame] || !accelerationStructures.built(currentFrame)) {
                     gpuTimestampProfiler.beginZone(commandBuffer, currentFrame, rtTlasProfileName);
                     accelerationStructures.updateTlas(commandBuffer, currentFrame, rtTlasInstances);
+                    rtTlasUpdatePending[currentFrame] = false;
                     gpuTimestampProfiler.endZone(commandBuffer, currentFrame);
                 }
                 if (accelerationStructures.built(currentFrame)) {
@@ -1475,6 +1478,9 @@
                         depthBuffer.imageView(), depthBuffer.sampler(), gtaoViewNormalBuffer.imageView(),
                         gtaoViewNormalBuffer.sampler(), directionalVisibilityPass.resultView(currentFrame),
                         directionalVisibilityPass.resultSampler(currentFrame), rtContactShadowSettings);
+                    const float rtContactEnabled = 1.0F;
+                    uniformBuffers[currentFrame].update(&rtContactEnabled, sizeof(rtContactEnabled),
+                        offsetof(UniformBufferObject, clusterZScaleBiasEnvironmentMipRtContact) + sizeof(float) * 3);
                     gpuTimestampProfiler.endZone(commandBuffer, currentFrame);
                 }
             }
