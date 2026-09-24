@@ -76,6 +76,7 @@ namespace Engine::Assets {
     struct TextureCookProgress final {
         std::atomic<std::uint32_t> discovered;
         std::atomic<std::uint32_t> completed;
+        std::atomic<bool> paused{};
     };
 
     /** Cooks every supported source image below @p assetRoot to a sibling .gtex file. */

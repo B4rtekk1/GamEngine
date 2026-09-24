@@ -30,6 +30,10 @@
 
 namespace Engine::Assets {
     namespace {
+        void wait_if_paused(TextureCookProgress *progress) {
+            while (progress != nullptr && progress->paused.load(std::memory_order_acquire))
+                std::this_thread::sleep_for(std::chrono::milliseconds(50));
+        }
         constexpr float compressionQuality = CookCache::compressionQuality;
 
         struct TextureCookTimings final {
@@ -680,6 +684,7 @@ namespace Engine::Assets {
             progress->discovered.store(summary.discovered, std::memory_order_release);
 
         for (const auto &source: sources) {
+            wait_if_paused(progress);
             auto output = source;
             output.replace_extension(".gtex");
             switch (cook_source_texture_cached(source, output, default_texture_format(source),
@@ -723,6 +728,7 @@ namespace Engine::Assets {
         summary.discovered = static_cast<std::uint32_t>(sources.size());
         if (progress != nullptr) progress->discovered.store(summary.discovered, std::memory_order_release);
         for (const auto &source: sources) {
+            wait_if_paused(progress);
             auto cooked = source;
             cooked.replace_extension(".gmesh");
             const auto scanStarted = std::chrono::steady_clock::now();

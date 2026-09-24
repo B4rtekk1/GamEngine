@@ -95,7 +95,7 @@ namespace {
 
     bool is_model(const std::filesystem::path &path) {
         const auto ext = lower(path.extension().string());
-        return ext == ".gltf" || ext == ".glb";
+        return ext == ".gltf" || ext == ".glb" || ext == ".gmesh";
     }
 
     bool is_shader_graph(const std::filesystem::path &path) {
@@ -104,7 +104,7 @@ namespace {
 
     AssetKind asset_kind(const std::filesystem::path &path) {
         const auto ext = lower(path.extension().string());
-        if (ext == ".gltf" || ext == ".glb" || ext == ".obj" || ext == ".fbx")
+        if (ext == ".gltf" || ext == ".glb" || ext == ".gmesh" || ext == ".obj" || ext == ".fbx")
             return AssetKind::Model;
         if (ext == ".png" || ext == ".jpg" || ext == ".jpeg" || ext == ".tga" || ext == ".bmp" || ext == ".hdr")
             return AssetKind::Texture;
@@ -566,9 +566,16 @@ Engine::Entity AssetManagerPanel::draw(Engine::ScenePreset &scene, Engine::Asset
     if (cookJob.running.load(std::memory_order_acquire)) {
         const auto discovered = cookJob.progress.discovered.load(std::memory_order_acquire);
         const auto completed = cookJob.progress.completed.load(std::memory_order_acquire);
-        ImGui::Text("Compressing textures: %u / %u", completed, discovered);
+        ImGui::Text("%s textures: %u / %u",
+                    cookJob.progress.paused.load(std::memory_order_acquire) ? "Paused" : "Compressing",
+                    completed, discovered);
         ImGui::ProgressBar(discovered == 0 ? 0.0F : static_cast<float>(completed) / discovered,
                            {-1.0F, 0.0F});
+        ImGui::SameLine();
+        if (ImGui::Button(cookJob.progress.paused.load(std::memory_order_acquire)
+                              ? "Resume##asset-cook" : "Pause##asset-cook"))
+            cookJob.progress.paused.store(!cookJob.progress.paused.load(std::memory_order_relaxed),
+                                          std::memory_order_release);
     }
     ImGui::SameLine();
     ImGui::BeginDisabled(!projectIsOpen);
