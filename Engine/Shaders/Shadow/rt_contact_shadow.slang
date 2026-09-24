@@ -35,7 +35,8 @@ void main(uint3 id : SV_DispatchThreadID) {
     float2 sourceUv = (float2(sourcePixel) + 0.5) / float2(sourceWidth, sourceHeight);
     const float vsmVisibility = directionalVisibility.SampleLevel(sourceUv, 0).r;
     if (vsmVisibility <= 1.0 / 255.0) {
-        contactVisibility[pixel] = 0.0;
+        // VSM already occludes this receiver; skip the ray without copying VSM into the contact mask.
+        contactVisibility[pixel] = 1.0;
         return;
     }
     float4 viewPosition = mul(float4(sourceUv * 2.0 - 1.0, depth, 1.0), frame.inverseProjection);
@@ -43,7 +44,7 @@ void main(uint3 id : SV_DispatchThreadID) {
     float3 worldPosition = mul(viewPosition, frame.inverseView).xyz;
     float3 viewNormal = decodeOct(viewNormalTexture.Load(int3(sourcePixel, 0)).xy);
     float3 worldNormal = normalize(mul(float4(viewNormal, 0.0), frame.inverseView).xyz);
-    if (frame.lightDirectionIntensity.w <= 0.0001) { contactVisibility[pixel] = vsmVisibility; return; }
+    if (frame.lightDirectionIntensity.w <= 0.0001) { contactVisibility[pixel] = 1.0; return; }
     float3 lightDirection = normalize(-frame.lightDirectionIntensity.xyz);
     // The prepass normal is not face-corrected for double-sided materials.
     // Trace for either orientation; forward lighting applies its own sidedness.
@@ -55,5 +56,5 @@ void main(uint3 id : SV_DispatchThreadID) {
     RayQuery<RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH | RAY_FLAG_SKIP_PROCEDURAL_PRIMITIVES | RAY_FLAG_FORCE_OPAQUE> query;
     query.TraceRayInline(sceneTlas, RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH | RAY_FLAG_SKIP_PROCEDURAL_PRIMITIVES | RAY_FLAG_FORCE_OPAQUE, 0x01, ray);
     query.Proceed();
-    contactVisibility[pixel] = query.CommittedStatus() == COMMITTED_TRIANGLE_HIT ? 0.0 : vsmVisibility;
+    contactVisibility[pixel] = query.CommittedStatus() == COMMITTED_TRIANGLE_HIT ? 0.0 : 1.0;
 }

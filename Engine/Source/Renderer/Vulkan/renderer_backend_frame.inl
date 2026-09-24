@@ -1439,20 +1439,21 @@
                     topologyRevision != lastRtTlasTopologyRevision;
                 if (inputChanged) {
                     rtTlasInstances.clear();
-                    for (const InstanceBatch& batch : instanceBatches) {
+                    for (std::size_t batchIndex = 0; batchIndex < instanceBatches.size(); ++batchIndex) {
+                        const InstanceBatch& batch = instanceBatches[batchIndex];
                         // Current RT shadow traversal treats triangles as opaque. Masked materials
                         // need alpha testing and blended materials do not have opaque shadow semantics.
                         if (!batch.castShadow || batch.alphaMode != AlphaMode::Opaque || batch.mesh == nullptr ||
                             batch.indexCount < 3) continue;
-                        for (std::uint32_t offset = 0; offset < batch.instanceCount; ++offset) {
-                            const RendererInstanceData& source = instanceModels[batch.firstInstance + offset];
+                        for (const std::size_t renderableIndex : sceneGpu.batchRenderableIndices[batchIndex]) {
+                            const RendererInstanceData& source = instanceModels[renderableIndex];
                             const glm::quat q{source.rotation.w, source.rotation.x, source.rotation.y, source.rotation.z};
                             glm::mat4 model = glm::mat4_cast(q);
                             model[0] *= source.scaleBase.x; model[1] *= source.scaleBase.y; model[2] *= source.scaleBase.z;
                             model[3] = glm::vec4(source.positionMaterial.x, source.positionMaterial.y, source.positionMaterial.z, 1.0F);
                             AccelerationStructureManager::InstanceBuildInput input{};
                             input.meshKey = {batch.mesh, batch.firstIndex, batch.indexCount};
-                            input.mask = 0x01; input.customIndex = batch.firstInstance + offset;
+                            input.mask = 0x01; input.customIndex = static_cast<std::uint32_t>(renderableIndex);
                             for (std::uint32_t row = 0; row < 3; ++row)
                                 for (std::uint32_t column = 0; column < 4; ++column)
                                     input.transform[row * 4 + column] = model[column][row];

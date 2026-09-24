@@ -490,8 +490,7 @@ ForwardFragmentOutput fragmentMain(ForwardFragmentInput input)
                      (1.0 - metallic) * albedo / PBR_PI;
     ShadowSampleDebug shadowDebug = {0.0, 0.0, 0u, 0u, uint2(0, 0)};
 #if FORWARD_RESOLVED_VSM
-    float shadow = frame.shadowEnabled != 0 &&
-                   frame.clusterZScaleBiasEnvironmentMipRtContact.w == 0.0
+    float shadow = frame.shadowEnabled != 0
         ? 1.0 - directionalVisibility.Sample(input.position.xy / frame.clusteredViewportNearFar.xy).r : 0.0;
 #else
     float shadow = frame.shadowEnabled != 0
@@ -531,11 +530,7 @@ ForwardFragmentOutput fragmentMain(ForwardFragmentInput input)
     if (frame.clusterZScaleBiasEnvironmentMipRtContact.w != 0.0)
     {
         const float contactVisibility = rtContactVisibility.Sample(input.position.xy / frame.clusteredViewportNearFar.xy).r;
-#if FORWARD_RESOLVED_VSM
-        finalVisibility = contactVisibility;
-#else
         finalVisibility = min(finalVisibility, contactVisibility);
-#endif
     }
     float3 direct = (diffuse + specular) * frame.lightDirectionIntensity.w *
                     frame.lightColor.rgb * nDotL * finalVisibility;

@@ -33,7 +33,7 @@ namespace Engine {
 
     struct RtContactShadowSettings final {
         ContactShadowMode mode = ContactShadowMode::Off;
-        float maxDistance = 0.5F;
+        float maxDistance = 2.0F;
         float normalBias = 0.005F;
         // Keep full resolution until the forward pass has depth/normal-aware
         // reconstruction; linear upsampling of a half-res mask creates halos.
