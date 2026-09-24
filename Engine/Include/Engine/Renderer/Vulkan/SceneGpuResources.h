@@ -75,8 +75,8 @@ namespace Engine {
             bool twoSided{false};
             /// Raster stream selection for masked/blended foliage materials.
             bool foliagePipeline{false};
-            /// RT contact rays use the source BLAS, so omit batches whose
-            /// raster geometry is displaced until a displaced BLAS exists.
+            /// Tracks whether any instance has displaced geometry. RT contact
+            /// rays filter each instance before referencing the source BLAS.
             bool displacedGeometry{false};
             AlphaMode alphaMode{AlphaMode::Opaque};
             AABB worldBounds{};

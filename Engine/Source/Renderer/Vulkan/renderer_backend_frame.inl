@@ -1416,9 +1416,18 @@
                 meshes.reserve(instanceBatches.size());
                 std::unordered_set<AccelerationStructureManager::BlasKey,
                     AccelerationStructureManager::BlasKeyHash> builtSections;
-                for (const InstanceBatch& batch : instanceBatches) {
-                    if (!batch.castShadow || batch.alphaMode != AlphaMode::Opaque || batch.displacedGeometry ||
+                for (std::size_t batchIndex = 0; batchIndex < instanceBatches.size(); ++batchIndex) {
+                    const InstanceBatch& batch = instanceBatches[batchIndex];
+                    if (!batch.castShadow || batch.alphaMode != AlphaMode::Opaque ||
                         batch.mesh == nullptr || batch.indexCount < 3) continue;
+                    bool hasUndisplacedInstance = false;
+                    for (const std::size_t renderableIndex : sceneGpu.batchRenderableIndices[batchIndex]) {
+                        if (renderables[renderableIndex].displacementBoundsPadding <= 1.0e-6F) {
+                            hasUndisplacedInstance = true;
+                            break;
+                        }
+                    }
+                    if (!hasUndisplacedInstance) continue;
                     const auto allocationIt = geometryHeapAllocations.find(batch.mesh);
                     if (allocationIt == geometryHeapAllocations.end()) continue;
                     const auto& allocation = allocationIt->second;
@@ -1445,9 +1454,12 @@
                         const InstanceBatch& batch = instanceBatches[batchIndex];
                         // Current RT shadow traversal treats triangles as opaque. Masked materials
                         // need alpha testing and blended materials do not have opaque shadow semantics.
-                        if (!batch.castShadow || batch.alphaMode != AlphaMode::Opaque || batch.displacedGeometry || batch.mesh == nullptr ||
+                        if (!batch.castShadow || batch.alphaMode != AlphaMode::Opaque || batch.mesh == nullptr ||
                             batch.indexCount < 3) continue;
                         for (const std::size_t renderableIndex : sceneGpu.batchRenderableIndices[batchIndex]) {
+                            // The BLAS contains source vertices. Include only instances whose
+                            // raster geometry still matches those vertices.
+                            if (renderables[renderableIndex].displacementBoundsPadding > 1.0e-6F) continue;
                             const RendererInstanceData& source = instanceModels[renderableIndex];
                             const glm::quat q{source.rotation.w, source.rotation.x, source.rotation.y, source.rotation.z};
                             glm::mat4 model = glm::mat4_cast(q);

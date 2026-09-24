@@ -1,8 +1,8 @@
 import Common.SceneData;
+import Common.Displacement;
 
 [[vk::binding(1, 0)]] ConstantBuffer<RendererFrameData> frame;
 [[vk::binding(2, 0)]] StructuredBuffer<MaterialData> materials;
-[[vk::binding(13, 0)]] Sampler2D materialTextures[];
 [[vk::binding(5, 0)]] StructuredBuffer<RendererInstanceData> visibleInstances;
 [[vk::binding(6, 0)]] StructuredBuffer<uint> visibleInstanceIndices;
 [[vk::binding(8, 0)]] StructuredBuffer<RendererPreviousTransformData> previousTransforms;
@@ -12,6 +12,7 @@ struct VertexInput
     [[vk::location(0)]] float3 position : POSITION;
     [[vk::location(2)]] float2 texCoord : TEXCOORD0;
     [[vk::location(4)]] float2 texCoord1 : TEXCOORD1;
+    [[vk::location(3)]] float3 normal : NORMAL;
     [[vk::location(8)]] uint materialIndex : MATERIAL_INDEX;
 };
 
@@ -39,8 +40,11 @@ VertexOutput vertexMain(VertexInput input, uint instanceIndex : SV_InstanceID,
     const uint visibleIndex = visibleInstanceIndices[baseInstance + instanceIndex];
     RendererInstanceData instance = visibleInstances[visibleIndex];
     RendererPreviousTransformData previousTransform = previousTransforms[visibleIndex];
-    const float3 localPosition = input.position;
-    const float3 previousLocalPosition = input.position;
+    const uint materialIndex = asuint(instance.positionMaterial.w) + input.materialIndex;
+    const float3 localPosition = displaceMaterialPosition(
+        materials[materialIndex], input.position, input.normal,
+        input.texCoord, input.texCoord1);
+    const float3 previousLocalPosition = localPosition;
 
     float4 currentWorld = float4(rotateByQuaternion(localPosition * instance.scaleBase.xyz,
                                                     instance.rotation) + instance.positionMaterial.xyz, 1.0);
@@ -55,7 +59,7 @@ VertexOutput vertexMain(VertexInput input, uint instanceIndex : SV_InstanceID,
     output.previousClip = previousClip;
     output.texCoord = input.texCoord;
     output.texCoord1 = input.texCoord1;
-    output.materialIndex = asuint(instance.positionMaterial.w) + input.materialIndex;
+    output.materialIndex = materialIndex;
     return output;
 }
 

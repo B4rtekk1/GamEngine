@@ -22,6 +22,7 @@ struct VertexInput {
     [[vk::location(2)]] float2 texCoord : TEXCOORD0;
     [[vk::location(4)]] float2 texCoord1 : TEXCOORD1;
     [[vk::location(8)]] uint materialIndex : MATERIAL_INDEX;
+    [[vk::location(9)]] float4 tangent : TANGENT;
 };
 struct VertexOutput {
     float4 position : SV_Position;
@@ -49,9 +50,10 @@ VertexOutput vertexMain(VertexInput input, uint instanceIndex : SV_InstanceID,
     RendererInstanceData instance = visibleInstances[visibleIndex];
     uint materialIndex = asuint(instance.positionMaterial.w) + input.materialIndex;
     MaterialData material = materials[materialIndex];
-    float3 localPosition = input.position;
-    localPosition = displaceMaterialPosition(material, localPosition, input.normal,
-                                             input.texCoord, input.texCoord1);
+    const DisplacedVertex displaced = displaceMaterialVertex(
+        material, input.position, input.normal, input.tangent,
+        input.texCoord, input.texCoord1);
+    const float3 localPosition = displaced.position;
     float3 world = mul(localPosition * instance.scaleBase.xyz, rotation(instance.rotation)) + instance.positionMaterial.xyz;
     VertexOutput output;
     float4 currentClip = mul(mul(float4(world, 1.0), frame.view), frame.projection);
@@ -59,7 +61,7 @@ VertexOutput vertexMain(VertexInput input, uint instanceIndex : SV_InstanceID,
     output.texCoord = input.texCoord;
     output.texCoord1 = input.texCoord1;
     output.materialIndex = materialIndex;
-    float3 worldNormal = normalize(mul(input.normal / instance.scaleBase.xyz, rotation(instance.rotation)));
+    float3 worldNormal = normalize(mul(displaced.normal / instance.scaleBase.xyz, rotation(instance.rotation)));
     output.viewNormal = normalize(mul(float4(worldNormal, 0.0), frame.view).xyz);
 #if DEPTH_OUTPUT_VELOCITY
     RendererPreviousTransformData previous = previousTransforms[visibleIndex];

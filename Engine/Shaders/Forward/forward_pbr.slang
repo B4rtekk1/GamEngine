@@ -85,10 +85,10 @@ ForwardVertexOutput vertexMain(ForwardVertexInput input, uint instanceIndex : SV
     const uint materialIndex = asuint(instance.positionMaterial.w) + input.materialIndex;
     MaterialData material = materials[materialIndex];
 
-    float3 localPosition = input.position;
-    const float3 localNormal = normalize(input.normal);
-    localPosition = displaceMaterialPosition(material, localPosition, localNormal,
-                                             input.texCoord, input.texCoord1);
+    const DisplacedVertex displaced = displaceMaterialVertex(
+        material, input.position, input.normal, input.tangent,
+        input.texCoord, input.texCoord1);
+    const float3 localPosition = displaced.position;
 
     float4 q = instance.rotation;
     float3x3 rotationMatrix = float3x3(
@@ -116,11 +116,12 @@ ForwardVertexOutput vertexMain(ForwardVertexInput input, uint instanceIndex : SV
     output.position = currentClip;
     output.color = input.color;
     output.worldPosition = worldPosition.xyz;
-    output.normal = mul(localNormal, normalMatrix);
+    output.normal = mul(displaced.normal, normalMatrix);
     output.materialIndex = materialIndex;
     output.texCoord = input.texCoord;
     output.texCoord1 = input.texCoord1;
-    output.tangent = float4(mul(input.tangent.xyz, normalMatrix), input.tangent.w);
+    output.tangent = float4(mul(displaced.tangent.xyz * instance.scaleBase.xyz, rotationMatrix),
+                            displaced.tangent.w);
 #if FORWARD_OUTPUT_VELOCITY
     output.currentNdc = currentClip.xy / currentClip.w;
     output.previousClip = mul(mul(float4(previousWorldPosition, 1.0), frame.previousView), frame.previousProjection);

@@ -2090,6 +2090,7 @@
             };
             std::vector<std::size_t> changedBatches;
             changedBatches.reserve(changedIndices.size());
+            bool displacementChanged = false;
             for (const std::size_t index : changedIndices) {
                 const Entity entity = renderables[index].entity;
                 RenderableRecord& record = renderables[index];
@@ -2211,6 +2212,9 @@
                         GPUMaterialData& destination = materials[record.materialTableOffset + slot];
                         if (!optimizationFeatures.materialCaching ||
                             !sameMaterial(destination, material)) {
+                            displacementChanged |= destination.displacementParams.x != material.displacementParams.x ||
+                                destination.displacementParams.y != material.displacementParams.y ||
+                                destination.auxiliaryTextureIndices.w != material.auxiliaryTextureIndices.w;
                             destination = material;
                             materialChanged = true;
                         }
@@ -2225,6 +2229,7 @@
                         const float offset = renderer->material.pbr.displacementOffset;
                         if (destination.displacementParams.x != scale ||
                             destination.displacementParams.y != offset) {
+                            displacementChanged = true;
                             destination.displacementParams.x = scale;
                             destination.displacementParams.y = offset;
                             destination.extensionScalars.z = scale;
@@ -2385,6 +2390,9 @@
                     }
                 }
             }
+            // The previous vertex position uses the current height parameters.
+            // Discard TAA history when they change until previous material data is available.
+            if (displacementChanged) temporalAaPass.reset();
             uploadPendingRenderableBuffers();
             registry.view<TerrainGrassComponent>([](const Entity, const TerrainGrassComponent& grass) {
                 grass.clearDirtyInstances();
