@@ -260,12 +260,13 @@ namespace Engine {
                         shadowTwoSidedDescriptorSets_.begin());
 
             pageTableBuffers_.resize(frameCount);
+            uploadedPageTables_.resize(frameCount);
+            uploadedPageTablesValid_.assign(frameCount, false);
             for (std::unique_ptr<Buffer> &buffer: pageTableBuffers_) {
                 buffer = std::make_unique<Buffer>();
-                buffer->createHostVisible(physicalDevice, device_,
-                                          sizeof(std::uint32_t) * pageTable_.size(),
-                                          VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, allocator);
-                buffer->update(pageTable_.data(), sizeof(std::uint32_t) * pageTable_.size());
+                buffer->createDeviceLocalEmpty(device_,
+                                           sizeof(std::uint32_t) * pageTable_.size(),
+                                           VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, allocator);
             }
 
             const VkDescriptorImageInfo imageInfo{
@@ -867,6 +868,8 @@ namespace Engine {
         grassVelocityVisibleDescriptorCacheValid_.clear();
         grassShadowVisibleDescriptorCacheValid_.clear();
         pageTableBuffers_.clear();
+        uploadedPageTables_.clear();
+        uploadedPageTablesValid_.clear();
         shadowMap_ = nullptr;
         atlasInitialized_ = false;
         atlasContentValid_ = false;
@@ -1325,8 +1328,46 @@ namespace Engine {
         // Scroll/invalidation changes only remap already-rendered tiles and are
         // safe to publish now. Newly allocated entries are intentionally absent
         // from pageTable_ until the post-render commit in record().
-        pageTableBuffers_.at(frameIndex)->update(pageTable_.data(),
-                                                 sizeof(std::uint32_t) * pageTable_.size());
+        // The table is published by record(), on the queue that reads it.
+    }
+
+    void ShadowPass::recordPageTableUpdate(const VkCommandBuffer commandBuffer,
+                                           const bool afterShaderReads) {
+        const std::uint32_t frame = preparedFrameIndex_;
+        if (uploadedPageTablesValid_.at(frame) && uploadedPageTables_[frame] == pageTable_) return;
+        const VkBuffer buffer = pageTableBuffers_.at(frame)->handle();
+        if (afterShaderReads) {
+            const VkBufferMemoryBarrier2 before{
+                .sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER_2,
+                .srcStageMask = VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT | VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                .srcAccessMask = VK_ACCESS_2_SHADER_STORAGE_READ_BIT,
+                .dstStageMask = VK_PIPELINE_STAGE_2_TRANSFER_BIT,
+                .dstAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT,
+                .buffer = buffer, .offset = 0, .size = VK_WHOLE_SIZE
+            };
+            const VkDependencyInfo dependency{
+                .sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO,
+                .bufferMemoryBarrierCount = 1, .pBufferMemoryBarriers = &before
+            };
+            vkCmdPipelineBarrier2(commandBuffer, &dependency);
+        }
+        vkCmdUpdateBuffer(commandBuffer, buffer, 0,
+                          sizeof(std::uint32_t) * pageTable_.size(), pageTable_.data());
+        const VkBufferMemoryBarrier2 after{
+            .sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER_2,
+            .srcStageMask = VK_PIPELINE_STAGE_2_TRANSFER_BIT,
+            .srcAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT,
+            .dstStageMask = VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT | VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+            .dstAccessMask = VK_ACCESS_2_SHADER_STORAGE_READ_BIT,
+            .buffer = buffer, .offset = 0, .size = VK_WHOLE_SIZE
+        };
+        const VkDependencyInfo dependency{
+            .sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO,
+            .bufferMemoryBarrierCount = 1, .pBufferMemoryBarriers = &after
+        };
+        vkCmdPipelineBarrier2(commandBuffer, &dependency);
+        uploadedPageTables_[frame] = pageTable_;
+        uploadedPageTablesValid_[frame] = true;
     }
 
     void ShadowPass::record(const VkCommandBuffer commandBuffer,
@@ -1348,25 +1389,8 @@ namespace Engine {
             invalidateCache();
             atlasContentValid_ = false;
         }
-        // preparePages() may have published clipmap-scroll/removal updates for
-        // entries that already point at valid depth. Publish those host writes
-        // even when this frame has no tiles to rasterize.
-        const VkBufferMemoryBarrier2 preparedTableBarrier{
-            .sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER_2,
-            .srcStageMask = VK_PIPELINE_STAGE_2_HOST_BIT,
-            .srcAccessMask = VK_ACCESS_2_HOST_WRITE_BIT,
-            .dstStageMask = VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT | VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-            .dstAccessMask = VK_ACCESS_2_SHADER_STORAGE_READ_BIT,
-            .buffer = pageTableBuffers_.at(preparedFrameIndex_)->handle(),
-            .offset = 0,
-            .size = VK_WHOLE_SIZE
-        };
-        const VkDependencyInfo preparedTableDependency{
-            .sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO,
-            .bufferMemoryBarrierCount = 1,
-            .pBufferMemoryBarriers = &preparedTableBarrier
-        };
-        vkCmdPipelineBarrier2(commandBuffer, &preparedTableDependency);
+        // Publish scroll/removal changes before any shader reads the table.
+        recordPageTableUpdate(commandBuffer, false);
         // The atlas already stays in shader-read layout after a completed pass.
         // Avoid opening a 4096x4096 LOAD render pass when every requested page is
         // cached; this is the steady state for both editor and play mode.
@@ -1551,24 +1575,7 @@ namespace Engine {
                     pageTable_[commit.evictedVirtualPage] = ShadowMap::InvalidPage;
                 pageTable_[commit.virtualPage] = commit.physicalPage;
             }
-            Buffer &pageTableBuffer = *pageTableBuffers_.at(preparedFrameIndex_);
-            pageTableBuffer.update(pageTable_.data(), sizeof(std::uint32_t) * pageTable_.size());
-            const VkBufferMemoryBarrier2 pageTableBarrier{
-                .sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER_2,
-                .srcStageMask = VK_PIPELINE_STAGE_2_HOST_BIT,
-                .srcAccessMask = VK_ACCESS_2_HOST_WRITE_BIT,
-                .dstStageMask = VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT | VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-                .dstAccessMask = VK_ACCESS_2_SHADER_STORAGE_READ_BIT,
-                .buffer = pageTableBuffer.handle(),
-                .offset = 0,
-                .size = VK_WHOLE_SIZE
-            };
-            const VkDependencyInfo pageTableDependency{
-                .sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO,
-                .bufferMemoryBarrierCount = 1,
-                .pBufferMemoryBarriers = &pageTableBarrier
-            };
-            vkCmdPipelineBarrier2(commandBuffer, &pageTableDependency);
+            recordPageTableUpdate(commandBuffer, true);
             pendingPageCommits_.clear();
         }
         atlasInitialized_ = true;

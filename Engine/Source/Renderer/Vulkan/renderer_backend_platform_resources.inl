@@ -722,15 +722,21 @@
             // AA mode must explicitly add/remove the TAA-only history stream.
             for (Buffer& buffer : previousTransformBuffers) buffer.destroy();
             if (antialiasingLevel == AntialiasingLevel::TAA) {
+                const bool ownsPreviousTransformUploadBatch = !uploadContext.recording();
+                if (ownsPreviousTransformUploadBatch) uploadContext.begin();
                 for (Buffer& buffer : previousTransformBuffers) {
-                    buffer.createHostVisible(vulkanDevice.physical(), device,
+                    buffer.createDeviceLocalEmpty(device,
                         sizeof(RendererPreviousTransformData) *
                             std::max<std::size_t>(1, previousInstanceTransforms.size()),
                         VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, vulkanDevice.allocator());
                     if (!previousInstanceTransforms.empty()) {
-                        buffer.update(previousInstanceTransforms.data(),
-                            sizeof(RendererPreviousTransformData) * previousInstanceTransforms.size());
+                        buffer.uploadDeviceLocal(previousInstanceTransforms.data(),
+                            sizeof(RendererPreviousTransformData) * previousInstanceTransforms.size(),
+                            0, commandPool, vulkanDevice.graphicsQueue());
                     }
+                }
+                if (ownsPreviousTransformUploadBatch) {
+                    [[maybe_unused]] const UploadTicket ticket = uploadContext.submit();
                 }
             }
 

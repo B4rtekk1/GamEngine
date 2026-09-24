@@ -307,6 +307,18 @@ namespace Engine {
             append("Instances", gpuSceneInstanceBuffers[currentFrame]);
             append("Meshes", gpuSceneMeshBuffers[currentFrame]);
             append("Materials", gpuSceneMaterialBuffers[currentFrame]);
+            append("Frame instances", instanceBuffers[currentFrame]);
+            append("Previous transforms", previousTransformBuffers[currentFrame]);
+            append("Frame materials", materialBuffers[currentFrame]);
+            const Buffer::MemoryInfo pageTableInfo =
+                shadowPass.pageTableMemoryInfo(currentFrame, vulkanDevice.physical());
+            if (pageTableInfo.bytes != 0) {
+                result.push_back({"VSM page table", pageTableInfo.heapIndex,
+                    (pageTableInfo.properties & VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT) != 0,
+                    (pageTableInfo.properties & VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT) != 0,
+                    (pageTableInfo.properties & VK_MEMORY_PROPERTY_HOST_COHERENT_BIT) != 0,
+                    pageTableInfo.bytes});
+            }
             return result;
         }
 

@@ -241,8 +241,11 @@ namespace Engine {
         constexpr VkMemoryPropertyFlags hostVisibleBit =
                 static_cast<VkMemoryPropertyFlags>(VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT);
         allocationInfo.usage = (parameters.properties & hostVisibleBit) != 0
-                                   ? VMA_MEMORY_USAGE_AUTO_PREFER_HOST
-                                   : VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE;
+                                    ? VMA_MEMORY_USAGE_AUTO_PREFER_HOST
+                                    : VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE;
+        if ((parameters.properties & hostVisibleBit) == 0) {
+            allocationInfo.requiredFlags = VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT;
+        }
         if ((parameters.properties & hostVisibleBit) != 0) {
             allocationInfo.flags = static_cast<VmaAllocationCreateFlags>(
                                        VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT) |

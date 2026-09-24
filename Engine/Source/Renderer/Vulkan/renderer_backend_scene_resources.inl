@@ -1259,7 +1259,7 @@
             // current frame.  A topology rebuild may have changed both the
             // number of records and the global material-table stride, so
             // reserve every target before it can issue any such write.
-            const auto ensureHostVisibleCapacity = [&](auto& buffers, const std::size_t requiredCount,
+            const auto ensureDeviceLocalCapacity = [&](auto& buffers, const std::size_t requiredCount,
                                                         const VkDeviceSize elementSize,
                                                         const VkBufferUsageFlags usage) {
                 const std::size_t minimumCount = std::max<std::size_t>(1, requiredCount);
@@ -1267,12 +1267,12 @@
                     const std::size_t oldCapacity = static_cast<std::size_t>(buffer.size() / elementSize);
                     const std::size_t capacity = std::max(minimumCount, oldCapacity + oldCapacity / 2U);
                     if (buffer.handle() == VK_NULL_HANDLE || oldCapacity < minimumCount) {
-                        buffer.createHostVisible(vulkanDevice.physical(), device, capacity * elementSize,
+                        buffer.createDeviceLocalEmpty(device, capacity * elementSize,
                             usage, vulkanDevice.allocator());
                     }
                 }
             };
-            ensureHostVisibleCapacity(instanceBuffers, instanceModels.size(), sizeof(RendererInstanceData),
+            ensureDeviceLocalCapacity(instanceBuffers, instanceModels.size(), sizeof(RendererInstanceData),
                 VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT);
             if (antialiasingLevel == AntialiasingLevel::TAA) {
                 const std::size_t minimumCount = std::max<std::size_t>(1, previousInstanceTransforms.size());
@@ -1283,7 +1283,7 @@
                     if (current.handle() == VK_NULL_HANDLE || oldCapacity < minimumCount) {
                         Buffer replacement;
                         const std::size_t capacity = std::max(minimumCount, oldCapacity + oldCapacity / 2U);
-                        replacement.createHostVisible(vulkanDevice.physical(), device,
+                        replacement.createDeviceLocalEmpty(device,
                             capacity * sizeof(RendererPreviousTransformData),
                             VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, vulkanDevice.allocator());
                         if (current.handle() != VK_NULL_HANDLE) {
@@ -1293,7 +1293,7 @@
                     }
                 }
             }
-            ensureHostVisibleCapacity(materialBuffers, materials.size(), sizeof(GPUMaterialData),
+            ensureDeviceLocalCapacity(materialBuffers, materials.size(), sizeof(GPUMaterialData),
                 VK_BUFFER_USAGE_STORAGE_BUFFER_BIT);
             updateRenderableBuffers();
             // Packed grass has no RenderableRecord. Populate its shared
@@ -1316,17 +1316,20 @@
                     .previousScale = model.scaleBase,
                 };
             }
+            const bool ownsRenderableUploadBatch = !uploadContext.recording();
+            if (ownsRenderableUploadBatch) uploadContext.begin();
             for (Buffer& buffer : instanceBuffers) {
                 const VkDeviceSize required = sizeof(RendererInstanceData) *
                     std::max<std::size_t>(1, instanceModels.size());
                 if (buffer.handle() == VK_NULL_HANDLE || buffer.size() < required) {
-                    buffer.createHostVisible(vulkanDevice.physical(), device, required + required / 2U,
+                    buffer.createDeviceLocalEmpty(device, required + required / 2U,
                         VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
                         vulkanDevice.allocator());
                 }
                 if (!instanceModels.empty()) {
-                    buffer.update(instanceModels.data(),
-                                  sizeof(RendererInstanceData) * instanceModels.size());
+                    buffer.uploadDeviceLocal(instanceModels.data(),
+                        sizeof(RendererInstanceData) * instanceModels.size(), 0,
+                        commandPool, vulkanDevice.graphicsQueue());
                 }
             }
             if (antialiasingLevel == AntialiasingLevel::TAA) {
@@ -1334,12 +1337,13 @@
                     const VkDeviceSize required = sizeof(RendererPreviousTransformData) *
                         std::max<std::size_t>(1, previousInstanceTransforms.size());
                     if (buffer.handle() == VK_NULL_HANDLE || buffer.size() < required) {
-                        buffer.createHostVisible(vulkanDevice.physical(), device, required + required / 2U,
+                        buffer.createDeviceLocalEmpty(device, required + required / 2U,
                             VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, vulkanDevice.allocator());
                     }
                     if (!previousInstanceTransforms.empty()) {
-                        buffer.update(previousInstanceTransforms.data(),
-                            sizeof(RendererPreviousTransformData) * previousInstanceTransforms.size());
+                        buffer.uploadDeviceLocal(previousInstanceTransforms.data(),
+                            sizeof(RendererPreviousTransformData) * previousInstanceTransforms.size(), 0,
+                            commandPool, vulkanDevice.graphicsQueue());
                     }
                 }
             } else {
@@ -1389,12 +1393,16 @@
                 const VkDeviceSize required = sizeof(GPUMaterialData) *
                     std::max<std::size_t>(1, materials.size());
                 if (buffer.handle() == VK_NULL_HANDLE || buffer.size() < required) {
-                    buffer.createHostVisible(vulkanDevice.physical(), device, required + required / 2U,
+                    buffer.createDeviceLocalEmpty(device, required + required / 2U,
                         VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, vulkanDevice.allocator());
                 }
                 if (!materials.empty()) {
-                    buffer.update(materials.data(), sizeof(GPUMaterialData) * materials.size());
+                    buffer.uploadDeviceLocal(materials.data(), sizeof(GPUMaterialData) * materials.size(),
+                        0, commandPool, vulkanDevice.graphicsQueue());
                 }
+            }
+            if (ownsRenderableUploadBatch) {
+                [[maybe_unused]] const UploadTicket ticket = uploadContext.submit();
             }
 
             // Every instance/material buffer has just received the complete
@@ -1860,7 +1868,7 @@
         };
 
         template <typename T>
-        static void uploadDirtyIndices(const DirtyIndexUploadRequest<T>& request) {
+        void uploadDirtyIndices(const DirtyIndexUploadRequest<T>& request) const {
             std::size_t rangeStart = 0;
             while (rangeStart < request.indices.size()) {
                 std::size_t rangeEnd = rangeStart + 1;
@@ -1869,9 +1877,9 @@
                     ++rangeEnd;
                 }
                 const std::size_t first = request.indices[rangeStart];
-                request.buffer.update(request.data.data() + first,
-                              sizeof(T) * (rangeEnd - rangeStart),
-                              sizeof(T) * first);
+                request.buffer.uploadDeviceLocal(request.data.data() + first,
+                    sizeof(T) * (rangeEnd - rangeStart), sizeof(T) * first,
+                    commandPool, vulkanDevice.graphicsQueue());
                 rangeStart = rangeEnd;
             }
         }
@@ -1899,6 +1907,10 @@
             }
 
             const uint8_t bit = frameBit(currentFrame);
+            const bool hasRenderableUploads = !dirtyTransforms[currentFrame].empty() ||
+                                              !dirtyMaterials[currentFrame].empty();
+            const bool ownsRenderableUploadBatch = hasRenderableUploads && !uploadContext.recording();
+            if (ownsRenderableUploadBatch) uploadContext.begin();
             // The dirty list is populated for every frame-in-flight. Sort it
             // here so adjacent instance IDs become a single mapped-buffer
             // write; static instances remain entirely untouched.
@@ -1937,13 +1949,17 @@
             }
             for (const std::size_t index : dirtyMaterials[currentFrame                                                                        ]) {
                 const RenderableRecord& record = renderables[index];
-                materialBuffers[currentFrame].update(
+                materialBuffers[currentFrame].uploadDeviceLocal(
                     materials.data() + record.materialTableOffset,
                     sizeof(GPUMaterialData) * materialSlots,
-                    sizeof(GPUMaterialData) * record.materialTableOffset);
+                    sizeof(GPUMaterialData) * record.materialTableOffset,
+                    commandPool, vulkanDevice.graphicsQueue());
             }
             clearDirtyIndices(&RenderableRecord::materialDirtyFrames,
                               dirtyMaterials[currentFrame], bit);
+            if (ownsRenderableUploadBatch) {
+                [[maybe_unused]] const UploadTicket ticket = uploadContext.submit();
+            }
             uploadPendingGPUSceneDatabase(currentFrame);
         }
 

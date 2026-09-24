@@ -130,6 +130,11 @@ namespace Engine {
         [[nodiscard]] VkBuffer pageTableBuffer(std::uint32_t frameIndex) const {
             return pageTableBuffers_.at(frameIndex)->handle();
         }
+        [[nodiscard]] Buffer::MemoryInfo pageTableMemoryInfo(
+            std::uint32_t frameIndex, VkPhysicalDevice physicalDevice) const {
+            if (frameIndex >= pageTableBuffers_.size()) return {};
+            return pageTableBuffers_.at(frameIndex)->memoryInfo(physicalDevice);
+        }
         void setDirectionalVisibility(std::uint32_t frameIndex, const VkDescriptorImageInfo& texture) const;
         [[nodiscard]] VkDescriptorSet grassDescriptorSet(std::uint32_t frameIndex) const;
         [[nodiscard]] VkDescriptorSet grassVelocityDescriptorSet(std::uint32_t frameIndex) const;
@@ -171,6 +176,7 @@ namespace Engine {
 
         [[nodiscard]] static std::uint32_t virtualPageIndex(
             std::uint32_t level, std::uint32_t x, std::uint32_t y) noexcept;
+        void recordPageTableUpdate(VkCommandBuffer commandBuffer, bool afterShaderReads);
 
         mutable bool atlasInitialized_{false};
         mutable bool atlasContentValid_{false};
@@ -210,6 +216,8 @@ namespace Engine {
         mutable std::vector<bool> grassVelocityVisibleDescriptorCacheValid_;
         mutable std::vector<bool> grassShadowVisibleDescriptorCacheValid_;
         std::vector<std::unique_ptr<Buffer>> pageTableBuffers_;
+        std::vector<std::array<std::uint32_t, ShadowMap::VirtualPageCount>> uploadedPageTables_;
+        std::vector<bool> uploadedPageTablesValid_;
         VkPipelineLayout pipelineLayout_{VK_NULL_HANDLE};
         VkPipeline pipeline_{VK_NULL_HANDLE};
         VkPipeline opaquePipeline_{VK_NULL_HANDLE};

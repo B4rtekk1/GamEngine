@@ -524,6 +524,7 @@
             importFrameUploadBuffer("Geometry vertices", vertexBuffer);
             importFrameUploadBuffer("Geometry indices", indexBuffer);
             importFrameUploadBuffer("Frame instances", instanceBuffers[currentFrame]);
+            importFrameUploadBuffer("Previous transforms", previousTransformBuffers[currentFrame]);
             importFrameUploadBuffer("Frame materials", materialBuffers[currentFrame]);
             importFrameUploadBuffer("GPU scene instances", gpuSceneInstanceBuffers[currentFrame]);
             importFrameUploadBuffer("GPU scene meshes", gpuSceneMeshBuffers[currentFrame]);
