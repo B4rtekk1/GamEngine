@@ -1,13 +1,13 @@
 // Opaque one-sided VSM casters: vertex-to-depth only.  Alpha-tested and
 // foliage casters remain in shadow_map.slang, where discard is required.
 import Common.SceneData;
+import Common.Displacement;
 
 struct PushConstants { float4x4 lightSpace; };
 struct ShadowInstanceTransform { float4 row0; float4 row1; float4 row2; };
 [[vk::binding(5, 0)]] StructuredBuffer<ShadowInstanceTransform> shadowTransforms;
 [[vk::binding(2, 0)]] StructuredBuffer<MaterialData> materials;
 [[vk::binding(6, 0)]] StructuredBuffer<uint> shadowMaterialOffsets;
-[[vk::binding(13, 0)]] Sampler2D materialTextures[];
 [[vk::push_constant]] ConstantBuffer<PushConstants> pushConstants;
 
 struct ShadowVertexInput
@@ -29,16 +29,8 @@ ShadowVertexOutput vertexMain(ShadowVertexInput input, uint instanceIndex : SV_I
     const uint materialIndex = shadowMaterialOffsets[transformIndex] + input.materialIndex;
     MaterialData material = materials[materialIndex];
     float3 localPosition = input.position;
-    if (material.auxiliaryTextureIndices.w >= 0 &&
-        abs(material.displacementParams.x) > 1e-6)
-    {
-        const float2 uv = materialTextureUv(material, 6, input.texCoord, input.texCoord1);
-        const float height = materialTextures[
-            NonUniformResourceIndex(material.auxiliaryTextureIndices.w)].SampleLevel(uv, 0.0).r;
-        const float amount = height * material.displacementParams.x +
-                             material.displacementParams.y;
-        localPosition += normalize(input.normal) * amount;
-    }
+    localPosition = displaceMaterialPosition(material, localPosition, input.normal,
+                                             input.texCoord, input.texCoord1);
     ShadowVertexOutput output;
     const float3 world = float3(dot(transform.row0, float4(localPosition, 1.0)),
                                 dot(transform.row1, float4(localPosition, 1.0)),

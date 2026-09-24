@@ -1417,7 +1417,7 @@
                 std::unordered_set<AccelerationStructureManager::BlasKey,
                     AccelerationStructureManager::BlasKeyHash> builtSections;
                 for (const InstanceBatch& batch : instanceBatches) {
-                    if (!batch.castShadow || batch.alphaMode != AlphaMode::Opaque ||
+                    if (!batch.castShadow || batch.alphaMode != AlphaMode::Opaque || batch.displacedGeometry ||
                         batch.mesh == nullptr || batch.indexCount < 3) continue;
                     const auto allocationIt = geometryHeapAllocations.find(batch.mesh);
                     if (allocationIt == geometryHeapAllocations.end()) continue;
@@ -1445,7 +1445,7 @@
                         const InstanceBatch& batch = instanceBatches[batchIndex];
                         // Current RT shadow traversal treats triangles as opaque. Masked materials
                         // need alpha testing and blended materials do not have opaque shadow semantics.
-                        if (!batch.castShadow || batch.alphaMode != AlphaMode::Opaque || batch.mesh == nullptr ||
+                        if (!batch.castShadow || batch.alphaMode != AlphaMode::Opaque || batch.displacedGeometry || batch.mesh == nullptr ||
                             batch.indexCount < 3) continue;
                         for (const std::size_t renderableIndex : sceneGpu.batchRenderableIndices[batchIndex]) {
                             const RendererInstanceData& source = instanceModels[renderableIndex];

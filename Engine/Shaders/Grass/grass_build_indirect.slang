@@ -4,7 +4,7 @@ import Grass.GrassTypes;
 // Consumes the compact GPU-scene visibility list and emits fixed-capacity
 // mesh/LOD bins. firstInstance addresses the compact renderer-index list,
 // not the legacy instance table.
-struct GPUSceneInstanceRecord { float4x4 worldMatrix; float4 localBoundsMin; float4 localBoundsMax; uint4 idsAndFlags; };
+struct GPUSceneInstanceRecord { float4x4 worldMatrix; float4 localBoundsMin; float4 localBoundsMax; uint4 idsAndFlags; float4 displacementBoundsPadding; };
 struct GPUSceneMeshRecord { uint4 draw; uint4 lod; };
 struct GrassIndirectUniforms { uint visibleCapacity; uint binCapacity; uint compactBase; uint maxBins; float4 cameraPosition; };
 [[vk::binding(0, 0)]] StructuredBuffer<GPUSceneInstanceRecord> instances;

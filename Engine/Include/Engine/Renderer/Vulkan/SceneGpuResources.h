@@ -30,6 +30,7 @@ namespace Engine {
             std::uint32_t vertexCount{0};
             /// Imported render-section identity; keeps GPU-scene records distinct.
             std::uint32_t sectionIndex{0};
+            float displacementBoundsPadding{0.0F};
             /// Instance data consumed only by VirtualWaterRenderer. It has no
             /// generic mesh draw or material-table allocation.
             bool waterOnly{false};
@@ -70,6 +71,9 @@ namespace Engine {
             bool twoSided{false};
             /// Raster stream selection for masked/blended foliage materials.
             bool foliagePipeline{false};
+            /// RT contact rays use the source BLAS, so omit batches whose
+            /// raster geometry is displaced until a displaced BLAS exists.
+            bool displacedGeometry{false};
             AlphaMode alphaMode{AlphaMode::Opaque};
             AABB worldBounds{};
         };

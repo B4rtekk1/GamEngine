@@ -163,7 +163,9 @@ namespace Engine {
         glm::vec4 localBoundsMin{};
         glm::vec4 localBoundsMax{};
         glm::uvec4 idsAndFlags{}; // meshId, materialId, objectId, flags
+        glm::vec4 displacementBoundsPadding{}; // x local-space radius padding; yzw reserved
     };
+    static_assert(sizeof(GPUSceneInstanceRecord) == 128);
 
     /** Compact spatial record consumed by coarse instance visibility only.
      * Its index intentionally matches GPUSceneInstanceRecord, preserving the

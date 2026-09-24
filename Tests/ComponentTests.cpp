@@ -23,6 +23,7 @@
 #include "Engine/UI/UIVertex.h"
 
 #include <limits>
+#include <cstddef>
 #include <memory>
 #include <type_traits>
 #include <variant>
@@ -378,7 +379,10 @@ TEST(ParticleTypes, SmokeEmitterProvidesStableSimulationDefaults) {
 TEST(MaterialTypes, ExposeGpuFriendlyDefaultsAndLayerConfiguration) {
     EXPECT_EQ(Engine::MaxMaterialTextures, 4096u);
     EXPECT_EQ(alignof(Engine::GPUMaterialData), 16u);
-    EXPECT_EQ(sizeof(Engine::GPUMaterialData), 128u);
+    EXPECT_EQ(offsetof(Engine::GPUMaterialData, displacementParams), 96u);
+    EXPECT_EQ(offsetof(Engine::GPUMaterialData, extensionTextureIndices), 112u);
+    EXPECT_EQ(offsetof(Engine::GPUMaterialData, waterWaveCount), 816u);
+    EXPECT_EQ(sizeof(Engine::GPUMaterialData), 832u);
     const Engine::GPUMaterialData gpuMaterial;
     EXPECT_EQ(gpuMaterial.textureIndices[0], -1);
     EXPECT_EQ(gpuMaterial.textureIndices[3], -1);

@@ -913,11 +913,12 @@
                     const std::size_t batchIndex = !forceDistinctBatch && optimizationFeatures.instancedRendering
                         ? batchIt->second : instanceBatches.size();
                     AABB displacedRangeBounds = rangeBounds;
+                    float displacementExpansion = 0.0F;
                     if (pbrMaterial.displacementTexture >= 0) {
                         const float d0 = pbrMaterial.displacementOffset;
                         const float d1 = pbrMaterial.displacementOffset + pbrMaterial.displacementScale;
-                        const float expansion = std::max(std::abs(d0), std::abs(d1));
-                        const Vec3 padding{expansion, expansion, expansion};
+                        displacementExpansion = std::max(std::abs(d0), std::abs(d1));
+                        const Vec3 padding{displacementExpansion, displacementExpansion, displacementExpansion};
                         displacedRangeBounds.min -= padding;
                         displacedRangeBounds.max += padding;
                     }
@@ -948,12 +949,14 @@
                             // blend here until transparent draws have a sorted stream.
                             .twoSided = twoSided,
                             .foliagePipeline = usesFoliagePipeline,
+                            .displacedGeometry = displacementExpansion > 1.0e-6F,
                             .alphaMode = alphaMode,
                             .worldBounds = rangeWorldBounds,
                         });
                         sceneGpu.batchRenderableIndices.emplace_back();
                     }
                     InstanceBatch& batch = instanceBatches[batchIndex];
+                    batch.displacedGeometry = batch.displacedGeometry || displacementExpansion > 1.0e-6F;
                     if (batch.instanceCount == 0) {
                         batch.worldBounds = rangeWorldBounds;
                     } else {
@@ -969,7 +972,8 @@
                     ++batch.instanceCount;
                     renderables.push_back({.entity = entity, .localBounds = displacedRangeBounds, .batchIndex = batchIndex,
                                            .firstVertex = firstVertex, .vertexCount = mesh->vertexCount(),
-                                           .sectionIndex = sectionIndex});
+                                           .sectionIndex = sectionIndex,
+                                           .displacementBoundsPadding = displacementExpansion});
                     const std::size_t renderableIndex = renderables.size() - 1;
                     sceneGpu.batchRenderableIndices[batchIndex].push_back(renderableIndex);
                     sceneGpu.renderableIndices[entity].push_back(renderableIndex);
@@ -1432,6 +1436,7 @@
                 .localBoundsMax = glm::vec4{instance.localBounds.max.native(), 0.0F},
                 .idsAndFlags = glm::uvec4{instance.meshId, instance.materialId,
                                           instance.objectId, flags},
+                .displacementBoundsPadding = glm::vec4{instance.displacementBoundsPadding, 0.0F, 0.0F, 0.0F},
             };
         }
 
@@ -2251,6 +2256,7 @@
                         record.renderProxy.instance = sceneGpu.database.upsertInstance(instanceKey, {
                                 .worldMatrix = worldMatrix,
                                 .localBounds = record.localBounds,
+                                .displacementBoundsPadding = record.displacementBoundsPadding,
                                 .meshId = record.renderProxy.mesh,
                                 .materialId = record.renderProxy.material,
                                 .objectId = static_cast<std::uint32_t>(index),
@@ -2259,9 +2265,10 @@
                     } else {
                         // A transform-only update deliberately does no hashing,
                         // lookup or write to the mesh/material tables.
-                        if (transformChanged) {
+                        if (transformChanged || hasRendererChange) {
                             sceneGpu.database.updateInstanceTransform(
-                                record.renderProxy.instance, worldMatrix, record.localBounds);
+                                record.renderProxy.instance, worldMatrix, record.localBounds,
+                                record.displacementBoundsPadding);
                         }
                         if (hasRendererChange) {
                             sceneGpu.database.updateMesh(record.renderProxy.mesh, mesh);

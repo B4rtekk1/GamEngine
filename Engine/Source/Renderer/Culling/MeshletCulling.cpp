@@ -40,11 +40,13 @@ bool appendMeshletPayload(const Mesh& mesh, const std::uint32_t firstVertex,
             source.triangleCount > mesh.meshletTriangles.size() - source.triangleOffset) return false;
         const float expansion = source.materialIndex < mesh.materials.size()
             ? displacementExpansion(mesh.materials[source.materialIndex]) : 0.0F;
+        const glm::vec4 sourceCone{source.coneAxis.x(), source.coneAxis.y(),
+                                   source.coneAxis.z(), source.coneCutoff};
         destinationMeshlets.push_back({
             .range = {vertexBase + source.vertexOffset, source.vertexCount,
                       triangleBase + source.triangleOffset, source.triangleCount},
-            .bounds = {source.center.x(), source.center.y(), source.center.z(), source.radius + expansion},
-            .cone = {source.coneAxis.x(), source.coneAxis.y(), source.coneAxis.z(), source.coneCutoff},
+            .bounds = {source.center.x(), source.center.y(), source.center.z(), source.radius},
+            .cone = expansion > 0.0F ? glm::vec4{0.0F, 0.0F, 0.0F, -2.0F} : sourceCone,
             .material = {source.materialIndex, 0U, 0U, 0U},
         });
     }
@@ -56,9 +58,6 @@ bool appendMeshletClusterPayload(const Mesh& mesh, const std::uint32_t firstMesh
     if (mesh.meshletClusters.empty() ||
         destination.size() > std::numeric_limits<std::uint32_t>::max() - mesh.meshletClusters.size()) return false;
     const std::uint32_t clusterBase = static_cast<std::uint32_t>(destination.size());
-    float maxDisplacement = 0.0F;
-    for (const PBRMaterial& material : mesh.materials)
-        maxDisplacement = std::max(maxDisplacement, displacementExpansion(material));
     for (const MeshletClusterNode& node : mesh.meshletClusters) {
         if ((node.childCount == 0u && node.meshletCount == 0u) ||
             (node.childCount != 0u && (node.firstChild > mesh.meshletClusters.size() ||
@@ -110,7 +109,7 @@ bool appendMeshletClusterPayload(const Mesh& mesh, const std::uint32_t firstMesh
             if (halfAngle < 3.14159265F) cone = glm::vec4{axis, std::cos(halfAngle)};
         }
         destination.push_back({
-            .bounds = {node.center.x(), node.center.y(), node.center.z(), node.radius + maxDisplacement},
+            .bounds = {node.center.x(), node.center.y(), node.center.z(), node.radius},
             .cone = cone,
             .range = {clusterBase + node.firstChild, node.childCount,
                       firstMeshlet + node.firstMeshlet, node.meshletCount},

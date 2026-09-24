@@ -2,7 +2,7 @@
 // are in mesh local space, while the camera and frustum planes are world space.
 
 struct GpuMeshlet { uint4 range; float4 bounds; float4 cone; uint4 material; };
-struct GPUSceneInstanceRecord { float4x4 worldMatrix; float4 localBoundsMin; float4 localBoundsMax; uint4 idsAndFlags; };
+struct GPUSceneInstanceRecord { float4x4 worldMatrix; float4 localBoundsMin; float4 localBoundsMax; uint4 idsAndFlags; float4 displacementBoundsPadding; };
 struct GPUSceneMeshRecord { uint4 draw; uint4 lod; uint4 clusters; }; // clusters: first, root, count, reserved
 struct GpuMeshletCluster { float4 bounds; float4 cone; uint4 range; };
 struct VisibleMeshlet { uint instanceId; uint meshletId; };
@@ -95,7 +95,7 @@ bool clusterPathVisible(GPUSceneMeshRecord mesh, uint meshletId,
     [loop] for (uint depth = 0u; depth < 32u; ++depth) {
         const GpuMeshletCluster node = clusters[nodeId];
         const float3 center = mul(float4(node.bounds.xyz, 1.0), instance.worldMatrix).xyz;
-        const float radius = node.bounds.w * instanceScale.w;
+        const float radius = (node.bounds.w + instance.displacementBoundsPadding.x) * instanceScale.w;
         if (outsideFrustum(center, radius) || !coneVisible(node.cone, center, uniformScale) ||
             sphereOccluded(center, radius)) return false;
         if (node.range.y == 0u) return true;
@@ -144,9 +144,10 @@ void main(uint3 groupId : SV_GroupID, uint3 threadId : SV_GroupThreadID) {
         if (mesh.lod.z != 0u) {
             const GpuMeshletCluster root = clusters[mesh.clusters.y];
             const float3 center = mul(float4(root.bounds.xyz, 1.0), instance.worldMatrix).xyz;
-            const float radius = root.bounds.w * instanceScale.w;
+            const float radius = (root.bounds.w + instance.displacementBoundsPadding.x) * instanceScale.w;
             const bool uniformScale = abs(instanceScale.x - instanceScale.y) < 1.0e-5 &&
-                                      abs(instanceScale.x - instanceScale.z) < 1.0e-5;
+                                      abs(instanceScale.x - instanceScale.z) < 1.0e-5 &&
+                                      instance.displacementBoundsPadding.x <= 1.0e-6;
             clusterVisible = !outsideFrustum(center, radius) &&
                              coneVisible(root.cone, center, uniformScale) &&
                              !sphereOccluded(center, radius) ? 1u : 0u;
@@ -171,9 +172,10 @@ void main(uint3 groupId : SV_GroupID, uint3 threadId : SV_GroupThreadID) {
         if (visible) {
             meshlet = meshlets[meshletId];
             worldCenter = mul(float4(meshlet.bounds.xyz, 1.0), instance.worldMatrix).xyz;
-            const float radius = meshlet.bounds.w * instanceScale.w;
+            const float radius = (meshlet.bounds.w + instance.displacementBoundsPadding.x) * instanceScale.w;
             const bool uniformScale = abs(instanceScale.x - instanceScale.y) < 1.0e-5 &&
-                                      abs(instanceScale.x - instanceScale.z) < 1.0e-5;
+                                      abs(instanceScale.x - instanceScale.z) < 1.0e-5 &&
+                                      instance.displacementBoundsPadding.x <= 1.0e-6;
             visible = clusterPathVisible(mesh, meshletId, instance, uniformScale) &&
                       !outsideFrustum(worldCenter, radius);
             if (visible) visible = !sphereOccluded(worldCenter, radius);
@@ -182,7 +184,8 @@ void main(uint3 groupId : SV_GroupID, uint3 threadId : SV_GroupThreadID) {
         // A cone cutoff is not invariant under non-uniform scale. Skipping
         // the optional backface test in that case is conservative.
         const bool uniformScale = abs(instanceScale.x - instanceScale.y) < 1.0e-5 &&
-                                  abs(instanceScale.x - instanceScale.z) < 1.0e-5;
+                                  abs(instanceScale.x - instanceScale.z) < 1.0e-5 &&
+                                  instance.displacementBoundsPadding.x <= 1.0e-6;
         if (visible && meshlet.cone.w >= -1.0 && uniformScale) {
             const float3 worldConeAxis = normalize(mul(float4(meshlet.cone.xyz, 0.0), instance.worldMatrix).xyz);
             const float3 toCamera = normalize(culling.cameraPosition - worldCenter);

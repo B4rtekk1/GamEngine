@@ -1,4 +1,4 @@
-struct GPUSceneInstanceRecord { float4x4 worldMatrix; float4 localBoundsMin; float4 localBoundsMax; uint4 idsAndFlags; };
+struct GPUSceneInstanceRecord { float4x4 worldMatrix; float4 localBoundsMin; float4 localBoundsMax; uint4 idsAndFlags; float4 displacementBoundsPadding; };
 struct ScatterUniforms { uint visibleCapacity; uint maxBins; uint _pad0; uint _pad1; float4 cameraPosition; };
 [[vk::binding(0, 0)]] StructuredBuffer<GPUSceneInstanceRecord> instances;
 [[vk::binding(1, 0)]] StructuredBuffer<uint> visibleInstanceIds;

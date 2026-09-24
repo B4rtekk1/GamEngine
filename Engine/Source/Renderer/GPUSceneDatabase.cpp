@@ -78,12 +78,14 @@ namespace Engine {
 
     void GPUSceneDatabase::updateInstanceTransform(const GPUSceneInstanceId instanceId,
                                                    const std::array<float, 16> &worldMatrix,
-                                                   const AABB &localBounds) {
+                                                   const AABB &localBounds,
+                                                   const float displacementBoundsPadding) {
         if (instanceId >= m_instances.size() || !m_instances[instanceId].alive) { return;
 }
         GPUInstance &instance = m_instances[instanceId];
         instance.worldMatrix = worldMatrix;
         instance.localBounds = localBounds;
+        instance.displacementBoundsPadding = displacementBoundsPadding;
         markDirty(m_dirty.instances, m_dirtyInstanceStamps, m_dirtyGeneration, instanceId);
     }
 

@@ -2,6 +2,7 @@ import Common.PbrLighting;
 import Common.ReflectionFallback;
 import Common.SceneData;
 import Common.ShadowSampling;
+import Common.Displacement;
 
 // GENERATED_SHADER_GRAPH_DECLARATIONS
 
@@ -86,17 +87,8 @@ ForwardVertexOutput vertexMain(ForwardVertexInput input, uint instanceIndex : SV
 
     float3 localPosition = input.position;
     const float3 localNormal = normalize(input.normal);
-    const int displacementTexture = material.auxiliaryTextureIndices.w;
-    if (displacementTexture >= 0 && abs(material.displacementParams.x) > 1e-6)
-    {
-        const float2 displacementUv = materialTextureUv(
-            material, 6, input.texCoord, input.texCoord1);
-        const float height = materialTextures[
-            NonUniformResourceIndex(displacementTexture)].SampleLevel(displacementUv, 0.0).r;
-        const float displacement = height * material.displacementParams.x +
-                                   material.displacementParams.y;
-        localPosition += localNormal * displacement;
-    }
+    localPosition = displaceMaterialPosition(material, localPosition, localNormal,
+                                             input.texCoord, input.texCoord1);
 
     float4 q = instance.rotation;
     float3x3 rotationMatrix = float3x3(
@@ -143,7 +135,6 @@ ForwardVertexOutput vertexMain(ForwardVertexInput input, uint instanceIndex : SV
 [[vk::binding(10, 0)]] SamplerCube irradianceMap;
 [[vk::binding(11, 0)]] SamplerCube prefilteredEnvironmentMap;
 [[vk::binding(12, 0)]] Sampler2D brdfIntegrationLut;
-[[vk::binding(13, 0)]] Sampler2D materialTextures[];
 [[vk::binding(4, 0)]] StructuredBuffer<uint4> shadowPageTable;
 [[vk::binding(3, 0)]] StructuredBuffer<ClusterLightRange> clusterRanges;
 [[vk::binding(7, 0)]] StructuredBuffer<uint> clusterLightIndices;

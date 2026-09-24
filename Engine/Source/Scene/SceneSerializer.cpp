@@ -68,6 +68,8 @@ namespace Engine {
         constexpr std::uint32_t WaterBodyFormatVersion = 23;
         constexpr std::uint32_t WaterExecutionPolicyFormatVersion = 24;
         constexpr std::uint32_t WaterExecutionTierFormatVersion = 25;
+        constexpr std::uint32_t DisplacementFormatVersion = 27;
+        constexpr std::uint32_t MaterialDisplacementFormatVersion = 28;
         constexpr std::uint32_t TerrainDataVersion = 1;
         constexpr std::array<char, 8> TerrainDataMagic{'G', 'E', 'T', 'E', 'R', 'R', '1', '\0'};
 
@@ -318,7 +320,10 @@ namespace Engine {
             writeColorRgba(output, material.emissiveColor);
             output << ' ';
             writeFloat(output, material.emissiveIntensity);
-            output << ' ' << material.emissiveTexture;
+            output << ' ' << material.emissiveTexture << ' ' << material.displacementTexture << ' ';
+            writeFloat(output, material.displacementScale);
+            output << ' ';
+            writeFloat(output, material.displacementOffset);
         }
 
         PBRMaterial readMaterial(std::istream &input, const std::uint32_t version) {
@@ -342,6 +347,13 @@ namespace Engine {
                 material.emissiveColor = readColorRgba(input, "material emissive color");
                 material.emissiveIntensity = readFloat(input, "material emissive intensity");
                 material.emissiveTexture = read<std::int32_t>(input, "emissive texture index");
+            }
+            if (version >= MaterialDisplacementFormatVersion) {
+                material.displacementTexture = read<std::int32_t>(input, "material displacement texture index");
+            }
+            if (version >= DisplacementFormatVersion) {
+                material.displacementScale = readFloat(input, "material displacement scale");
+                material.displacementOffset = readFloat(input, "material displacement offset");
             }
             return material;
         }
@@ -1414,7 +1426,9 @@ namespace Engine {
             version != TerrainMaterialLayersFormatVersion &&
             version != WaterBodyFormatVersion &&
             version != WaterExecutionPolicyFormatVersion &&
-            version != WaterExecutionTierFormatVersion && version != FormatVersion) {
+            version != WaterExecutionTierFormatVersion && version != FormatVersion - 2 &&
+            version != FormatVersion - 1 &&
+            version != FormatVersion) {
             invalidScene("unsupported format version " + std::to_string(version));
         }
         auto *terrainData = static_cast<std::istream *>(input.pword(terrainDataStreamSlot()));

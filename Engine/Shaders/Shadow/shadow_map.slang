@@ -1,4 +1,5 @@
 import Common.SceneData;
+import Common.Displacement;
 
 struct PushConstants
 {
@@ -15,6 +16,7 @@ struct ShadowVertexInput
 {
     [[vk::location(0)]] float3 position : POSITION;
     [[vk::location(2)]] float2 texCoord : TEXCOORD0;
+    [[vk::location(3)]] float3 normal : NORMAL;
     [[vk::location(4)]] float2 texCoord1 : TEXCOORD1;
     [[vk::location(8)]] uint materialIndex : MATERIAL_INDEX;
 };
@@ -34,7 +36,9 @@ ShadowVertexOutput vertexMain(ShadowVertexInput input, uint instanceIndex : SV_I
     const uint transformIndex = baseInstance + instanceIndex;
     const ShadowInstanceTransform transform = shadowTransforms[transformIndex];
     ShadowVertexOutput output;
-    const float3 localPosition = input.position;
+    const MaterialData material = materials[shadowMaterialOffsets[transformIndex] + input.materialIndex];
+    const float3 localPosition = displaceMaterialPosition(
+        material, input.position, input.normal, input.texCoord, input.texCoord1);
     float4 worldPosition = float4(dot(transform.row0, float4(localPosition, 1.0)),
                                   dot(transform.row1, float4(localPosition, 1.0)),
                                   dot(transform.row2, float4(localPosition, 1.0)), 1.0);
@@ -46,7 +50,6 @@ ShadowVertexOutput vertexMain(ShadowVertexInput input, uint instanceIndex : SV_I
 }
 
 [[vk::binding(2, 0)]] StructuredBuffer<MaterialData> materials;
-[[vk::binding(13, 0)]] Sampler2D materialTextures[];
 
 struct ShadowFragmentInput
 {

@@ -3,7 +3,7 @@
 // for a caster which is outside the camera but overlaps a shadow page.
 
 struct GpuMeshlet { uint4 range; float4 bounds; float4 cone; uint4 material; };
-struct GPUSceneInstanceRecord { float4x4 worldMatrix; float4 localBoundsMin; float4 localBoundsMax; uint4 idsAndFlags; };
+struct GPUSceneInstanceRecord { float4x4 worldMatrix; float4 localBoundsMin; float4 localBoundsMax; uint4 idsAndFlags; float4 displacementBoundsPadding; };
 struct GPUSceneMeshRecord { uint4 draw; uint4 lod; uint4 clusters; };
 struct ShadowVisibleInstance { uint sourceInstanceId; uint shadowTransformIndex; };
 struct ShadowVisibleMeshlet { uint pageSlot; uint sourceInstanceId; uint meshletId; };
@@ -58,7 +58,8 @@ void main(uint3 groupId : SV_GroupID, uint3 threadId : SV_GroupThreadID)
         if (meshletId >= culling.meshletCount) continue;
         const GpuMeshlet meshlet = meshlets[meshletId];
         const float3 center = mul(float4(meshlet.bounds.xyz, 1.0), instance.worldMatrix).xyz;
-        if (sphereOutsidePage(center, meshlet.bounds.w * maxScale, page.viewProjection)) continue;
+        const float radius = (meshlet.bounds.w + instance.displacementBoundsPadding.x) * maxScale;
+        if (sphereOutsidePage(center, radius, page.viewProjection)) continue;
 
         uint destination;
         InterlockedAdd(visibleMeshletCounts[pageSlot], 1u, destination);

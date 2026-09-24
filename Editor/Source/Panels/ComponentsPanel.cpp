@@ -312,6 +312,16 @@ bool ComponentsPanel::draw(Engine::ScenePreset &scene, Engine::Assets::Content& 
         changed |= ImGui::DragFloat("Normal Scale##mesh-material", &renderer.material.pbr.normalScale,
                                     0.01F, 0.0F, 10.0F, "%.2f");
         ImGui::Separator();
+        ImGui::TextDisabled("Displacement");
+        changed |= ImGui::DragFloat("Scale##mesh-material", &renderer.material.pbr.displacementScale,
+                                    0.001F, -10.0F, 10.0F, "%.4f m");
+        changed |= ImGui::DragFloat("Offset##mesh-material", &renderer.material.pbr.displacementOffset,
+                                    0.001F, -10.0F, 10.0F, "%.4f m");
+        renderer.material.pbr.displacementScale = std::clamp(renderer.material.pbr.displacementScale,
+                                                              -10.0F, 10.0F);
+        renderer.material.pbr.displacementOffset = std::clamp(renderer.material.pbr.displacementOffset,
+                                                               -10.0F, 10.0F);
+        ImGui::Separator();
         ImGui::TextDisabled("Emission");
         float emissive[3] = {renderer.material.pbr.emissiveColor.r(), renderer.material.pbr.emissiveColor.g(),
                              renderer.material.pbr.emissiveColor.b()};

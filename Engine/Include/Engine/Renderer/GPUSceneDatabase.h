@@ -46,6 +46,7 @@ namespace Engine {
         struct GPUInstance {
             std::array<float, 16> worldMatrix{};
             AABB localBounds{};
+            float displacementBoundsPadding{0.0F};
             GPUSceneMeshId meshId{InvalidGPUSceneInstanceId};
             GPUSceneMaterialId materialId{InvalidGPUSceneInstanceId};
             std::uint32_t objectId{0};
@@ -88,7 +89,8 @@ namespace Engine {
         /// write and a single dirty instance range.
         void updateInstanceTransform(GPUSceneInstanceId instanceId,
                                      const std::array<float, 16>& worldMatrix,
-                                     const AABB& localBounds);
+                                     const AABB& localBounds,
+                                     float displacementBoundsPadding = 0.0F);
         void updateInstanceFlags(GPUSceneInstanceId instanceId, std::uint32_t flags);
         /// Marks an instance inactive immediately. Its slot is reusable only
         /// after reclaimDeferredInstances() observes the submission value

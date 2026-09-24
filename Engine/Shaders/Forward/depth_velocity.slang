@@ -2,6 +2,7 @@
 // from forward_pbr: depth must not pay for BRDF, IBL, clustered lights, GTAO
 // or virtual-shadow projection a second time.
 import Common.SceneData;
+import Common.Displacement;
 
 #ifndef DEPTH_OUTPUT_VELOCITY
 #define DEPTH_OUTPUT_VELOCITY 1
@@ -11,7 +12,6 @@ import Common.SceneData;
 [[vk::binding(2, 0)]] StructuredBuffer<MaterialData> materials;
 [[vk::binding(5, 0)]] StructuredBuffer<RendererInstanceData> visibleInstances;
 [[vk::binding(6, 0)]] StructuredBuffer<uint> visibleInstanceIndices;
-[[vk::binding(13, 0)]] Sampler2D materialTextures[];
 #if DEPTH_OUTPUT_VELOCITY
 [[vk::binding(8, 0)]] StructuredBuffer<RendererPreviousTransformData> previousTransforms;
 #endif
@@ -50,15 +50,8 @@ VertexOutput vertexMain(VertexInput input, uint instanceIndex : SV_InstanceID,
     uint materialIndex = asuint(instance.positionMaterial.w) + input.materialIndex;
     MaterialData material = materials[materialIndex];
     float3 localPosition = input.position;
-    if (material.auxiliaryTextureIndices.w >= 0 &&
-        abs(material.displacementParams.x) > 1e-6) {
-        float2 uv = materialTextureUv(material, 6, input.texCoord, input.texCoord1);
-        float height = materialTextures[
-            NonUniformResourceIndex(material.auxiliaryTextureIndices.w)].SampleLevel(uv, 0.0).r;
-        float displacement = height * material.displacementParams.x +
-                             material.displacementParams.y;
-        localPosition += normalize(input.normal) * displacement;
-    }
+    localPosition = displaceMaterialPosition(material, localPosition, input.normal,
+                                             input.texCoord, input.texCoord1);
     float3 world = mul(localPosition * instance.scaleBase.xyz, rotation(instance.rotation)) + instance.positionMaterial.xyz;
     VertexOutput output;
     float4 currentClip = mul(mul(float4(world, 1.0), frame.view), frame.projection);
