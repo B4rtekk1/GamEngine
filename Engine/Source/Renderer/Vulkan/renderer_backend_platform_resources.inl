@@ -543,6 +543,7 @@
                     materialTextureDescriptors, imageBasedLighting.descriptors(), sizeof(UniformBufferObject));
             }
             bindGtaoTexture(sceneDescriptorPass);
+            bindContactShadowFallback(sceneDescriptorPass);
         }
 
         void createForwardPass() {

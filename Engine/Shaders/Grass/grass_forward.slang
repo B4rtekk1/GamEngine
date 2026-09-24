@@ -12,6 +12,7 @@ import Grass.GrassDeformation;
 [[vk::binding(0, 0)]] Sampler2DShadow shadowMap;
 [[vk::binding(9, 0)]] Sampler2D shadowDepthMap;
 [[vk::binding(17, 0)]] Sampler2DShadow linearShadowMap;
+[[vk::binding(18, 0)]] Sampler2D rtContactVisibility;
 [[vk::binding(1, 0)]] ConstantBuffer<RendererFrameData> frame;
 [[vk::binding(2, 0)]] StructuredBuffer<MaterialData> materials;
 [[vk::binding(13, 0)]] Sampler2D materialTextures[];
@@ -111,10 +112,14 @@ GrassFragmentOutput fragmentMain(FragmentInput input)
         frame.shadowClipMatrices, frame.shadowClipConstants, shadowPageTable,
         frame.shadowQuality, uint2(input.position.xy), frame.temporalSampleIndex,
         frame.temporalShadowJitter != 0, shadowDebug) : 0.0;
+    float visibility = 1.0 - shadow;
+    if (frame.clusterZScaleBiasEnvironmentMipRtContact.w != 0.0)
+        visibility = min(visibility,
+            rtContactVisibility.Sample(input.position.xy / frame.clusteredViewportNearFar.xy).r);
     GrassFragmentOutput output;
     output.color = frame.shadowDebugView != SHADOW_DEBUG_OFF
         ? float4(shadowDebugColor(frame.shadowDebugView, shadowDebug), 1.0)
-        : float4(albedo.rgb * (0.20 + diffuse * frame.lightDirectionIntensity.w * (1.0 - shadow) * frame.lightColor.rgb), 1.0);
+        : float4(albedo.rgb * (0.20 + diffuse * frame.lightDirectionIntensity.w * visibility * frame.lightColor.rgb), 1.0);
 #if FORWARD_OUTPUT_VELOCITY
     output.velocity = (input.currentNdc - input.previousClip.xy / input.previousClip.w) * 0.5;
 #endif

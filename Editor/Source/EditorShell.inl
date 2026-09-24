@@ -700,17 +700,29 @@ Engine::Entity drawEditorMenuBar(Engine::ScenePreset &scene, Engine::Renderer &r
         }
         ImGui::Separator();
         bool contactShadowsEnabled = renderer.contactShadowMode() == Engine::ContactShadowMode::RayTraced;
-        if (ImGui::MenuItem("Ray-Traced Contact Shadows", nullptr, &contactShadowsEnabled)) {
+        if (ImGui::MenuItem("RT contact refinement (VSM)", nullptr, &contactShadowsEnabled)) {
             renderer.setContactShadowMode(contactShadowsEnabled
                 ? Engine::ContactShadowMode::RayTraced
                 : Engine::ContactShadowMode::Off);
         }
         if (contactShadowsEnabled) {
+            ImGui::TextDisabled(renderer.contactShadowsActive()
+                ? "Active in Game View"
+                : "Requested; inactive in current view/frame");
+            ImGui::TextDisabled("Requires Game View, VSM shadows, Ray Query and no MSAA.");
             auto settings = renderer.rtContactShadowSettings();
             bool settingsChanged = false;
             settingsChanged |= ImGui::SliderFloat("Contact distance", &settings.maxDistance, 0.05F, 2.0F, "%.2f m");
             settingsChanged |= ImGui::SliderFloat("Normal bias", &settings.normalBias, 0.0005F, 0.05F, "%.4f");
-            settingsChanged |= ImGui::SliderFloat("Resolution scale", &settings.resolutionScale, 0.25F, 1.0F, "%.2f");
+            static float resolutionScaleDraft = -1.0F;
+            if (resolutionScaleDraft < 0.0F) resolutionScaleDraft = settings.resolutionScale;
+            ImGui::SliderFloat("Resolution scale", &resolutionScaleDraft, 0.25F, 1.0F, "%.2f");
+            if (ImGui::IsItemDeactivatedAfterEdit()) {
+                settings.resolutionScale = resolutionScaleDraft;
+                settingsChanged = true;
+            } else if (!ImGui::IsItemActive()) {
+                resolutionScaleDraft = settings.resolutionScale;
+            }
             if (settingsChanged) renderer.setRtContactShadowSettings(settings);
         }
         ImGui::TextDisabled("Shadows apply next frame; GTAO resources are rebuilt safely.");

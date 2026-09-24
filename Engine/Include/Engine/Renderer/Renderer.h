@@ -82,6 +82,7 @@ namespace Engine {
 
         void setContactShadowMode(ContactShadowMode mode) noexcept;
         [[nodiscard]] ContactShadowMode contactShadowMode() const noexcept;
+        [[nodiscard]] bool contactShadowsActive() const noexcept;
         void setRtContactShadowSettings(const RtContactShadowSettings& settings) noexcept;
         [[nodiscard]] const RtContactShadowSettings& rtContactShadowSettings() const noexcept;
 

@@ -712,6 +712,10 @@ namespace Engine {
             virtualWaterRenderer.destroy();
             lightingForwardPass.destroy();
             waterPass.destroy();
+            // These passes retain descriptors for the frame UBO and VSM page
+            // table. A scene reload replaces both buffers even at the same extent.
+            rtContactShadowPass.destroy();
+            directionalVisibilityPass.destroy();
             shadowPass.destroy();
             sceneDescriptorPass.destroy();
             indexBuffer.destroy();
@@ -773,6 +777,14 @@ namespace Engine {
             lastTerrainGrassRevision = std::numeric_limits<std::uint64_t>::max();
             lastParentRevision = std::numeric_limits<std::uint64_t>::max();
             hiZValid.fill(false);
+
+            // SceneSerializer replaces the Registry at the same address. Its
+            // revision numbers can match the previous Registry by coincidence.
+            sceneFrameDataCache = {};
+            reflectionProbeTableInitialized = false;
+            reflectionProbeBufferDirtyMask = (1U << MAX_FRAMES_IN_FLIGHT) - 1U;
+            shadowClipmapsValid = false;
+            sceneShadowClipmapsValid = false;
 
             // The previous scene may have owned a particle system. Its GPU
             // resources must not survive a registry replacement into a scene

@@ -42,6 +42,10 @@ ContactShadowMode Renderer::contactShadowMode() const noexcept {
     return rtContactShadowSettings_.mode;
 }
 
+bool Renderer::contactShadowsActive() const noexcept {
+    return backend_ && backend_->rtContactActive;
+}
+
 void Renderer::setRtContactShadowSettings(const RtContactShadowSettings& settings) noexcept {
     rtContactShadowSettings_ = settings;
 }

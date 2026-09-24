@@ -164,6 +164,7 @@
         // A physical page can hold data for only one virtual-shadow context.
         // Switching views invalidates both logical caches before the next use.
         bool gameShadowContextActive{true};
+        bool rtContactActive{false};
         bool fallbackCameraWarningReported{false};
         SceneFrameDataCache sceneFrameDataCache;
         SkyPass sceneSkyPass;

@@ -607,10 +607,15 @@ namespace Engine {
 
     void ShadowPass::setContactShadowTexture(const std::uint32_t frameIndex,
                                               const VkDescriptorImageInfo &texture) const {
-        const VkWriteDescriptorSet write{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr,
-            descriptorSets_.at(frameIndex), 18, 0, 1, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
-            &texture, nullptr, nullptr};
-        vkUpdateDescriptorSets(device_, 1, &write, 0, nullptr);
+        const std::array sets{descriptorSets_.at(frameIndex), grassDescriptorSets_.at(frameIndex),
+                              grassVelocityDescriptorSets_.at(frameIndex)};
+        std::array<VkWriteDescriptorSet, sets.size()> writes{};
+        for (std::size_t index = 0; index < sets.size(); ++index) {
+            writes[index] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr,
+                sets[index], 18, 0, 1, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+                &texture, nullptr, nullptr};
+        }
+        vkUpdateDescriptorSets(device_, static_cast<std::uint32_t>(writes.size()), writes.data(), 0, nullptr);
     }
 
     void ShadowPass::setDirectionalVisibility(const std::uint32_t frameIndex,

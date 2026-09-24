@@ -502,6 +502,7 @@
             // not submit hidden Game View work: this also makes the shared
             // physical VSM atlas single-writer for the entire frame.
             const bool renderGameViewport = !editorUiActive || !sceneViewportActive;
+            rtContactActive = false;
             // Keep upload synchronization resource-scoped.  This graph is a
             // declaration of every persistent input which can be consumed by
             // the legacy shadow, compute, lighting, post-process, water and
@@ -1481,6 +1482,7 @@
                     const float rtContactEnabled = 1.0F;
                     uniformBuffers[currentFrame].update(&rtContactEnabled, sizeof(rtContactEnabled),
                         offsetof(UniformBufferObject, clusterZScaleBiasEnvironmentMipRtContact) + sizeof(float) * 3);
+                    rtContactActive = true;
                     gpuTimestampProfiler.endZone(commandBuffer, currentFrame);
                 }
             }
