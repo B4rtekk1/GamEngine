@@ -22,7 +22,7 @@ Currently supported:
 
 Several other dependencies, including PhysX, Dear ImGui and ImNodes, are downloaded automatically by CMake.
 
-For SIMD BC7 texture cooking, install [ISPC](https://ispc.github.io/) and put `ispc` on `PATH` before configuring CMake. The default `GE_BC7_BACKEND=auto` selects BC7E when ISPC is available and otherwise uses Compressonator. CMake downloads BC7E from `bc7enc_rdo` when selected. Use `-DGE_BC7_BACKEND=bc7e` to require it, or `-DGE_BC7_BACKEND=compressonator` for the scalar encoder. `-DGE_BC7E_PROFILE=basic` is the default; `veryfast`, `fast`, and `slow` are also available. Changing backend or profile changes the texture cook cache key.
+For SIMD BC7 texture cooking, CMake downloads a pinned ISPC 1.31.0 compiler and BC7E source from `bc7enc_rdo` during the first configuration. The default `GE_BC7_BACKEND=auto` uses BC7E. Use `-DGE_BC7_BACKEND=bc7e` to select it explicitly, or `-DGE_BC7_BACKEND=compressonator` for the scalar encoder without downloading ISPC. Automatic ISPC download is configured for x86-64 Windows and Linux hosts. `-DGE_BC7E_PROFILE=basic` is the default; `veryfast`, `fast`, and `slow` are also available. Changing backend or profile changes the texture cook cache key.
 
 ### Clone
 
