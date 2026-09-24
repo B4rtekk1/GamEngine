@@ -9,10 +9,28 @@
                 if (!resource || resource->sourcePath.empty()) {
                     throw std::runtime_error("Mesh GPU resource has no source data or reloadable asset path");
                 }
-                const auto decoded = assetManager.reload<Mesh>(resource->sourcePath, Assets::AssetType::Mesh).shared();
+                auto decoded = Assets::load_gmesh_geometry(resource->sourcePath);
                 if (!decoded || decoded->empty()) {
-                    throw std::runtime_error("Could not decode mesh source for GPU resource rebuild: " +
+                    throw std::runtime_error("Could not stream mesh geometry for GPU resource rebuild: " +
                                              resource->sourcePath.string());
+                }
+                decoded->materials = resource->metadata.materials;
+                decoded->renderSections = resource->metadata.sections;
+                decoded->images.resize(resource->metadata.imagePaths.size());
+                for (std::size_t imageIndex = 0; imageIndex < decoded->images.size(); ++imageIndex) {
+                    Mesh::Image& image = decoded->images[imageIndex];
+                    image.cookedPath = resource->metadata.imagePaths[imageIndex];
+                    const TextureId id{resource->textureIdentity, static_cast<std::uint32_t>(imageIndex)};
+                    if (!textureGpuResources.contains(id)) {
+                        const auto texturePath = resource->sourcePath.parent_path() / image.cookedPath;
+                        image.gtex = Assets::load_gtex(texturePath);
+                        if (!image.gtex) {
+                            throw std::runtime_error("Could not read mesh texture header during GPU resource rebuild: " +
+                                                     texturePath.string());
+                        }
+                        image.width = image.gtex->width;
+                        image.height = image.gtex->height;
+                    }
                 }
                 resource->sourceData = decoded;
             });
@@ -31,145 +49,126 @@
         void createMaterialTextures() {
             restoreMeshSourceDataForUpload();
             auto uploadBatch = uploadContext.beginBatch();
-            std::size_t rawImages = 0;
-            std::size_t cookedImages = 0;
-            std::size_t gtexImages = 0;
+            std::size_t rawImages = 0, cookedImages = 0, gtexImages = 0;
             VkDeviceSize rawBytes = 0;
             constexpr std::array<std::uint8_t, 4> white = {255, 255, 255, 255};
-            fallbackMaterialTexture.create(
-                vulkanDevice.physical(), device, commandPool, vulkanDevice.graphicsQueue(),
-                1, 1, white, TextureColorSpace::SRGB, false, vulkanDevice.allocator());
-            const VkDescriptorImageInfo fallback{
-                fallbackMaterialTexture.sampler(), fallbackMaterialTexture.imageView(),
-                VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
-            materialTextureDescriptors.assign(MaxMaterialTextures, fallback);
+            if (!fallbackMaterialTexture.valid()) {
+                fallbackMaterialTexture.create(vulkanDevice.physical(), device, commandPool,
+                    vulkanDevice.graphicsQueue(), 1, 1, white, TextureColorSpace::SRGB, false,
+                    vulkanDevice.allocator());
+            }
+            const VkDescriptorImageInfo fallback{fallbackMaterialTexture.sampler(),
+                fallbackMaterialTexture.imageView(), VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
+            if (materialTextureDescriptors.empty())
+                materialTextureDescriptors.assign(MaxMaterialTextures, fallback);
+            for (auto& [id, resource] : textureGpuResources) { (void)id; resource.refCount = 0; }
+            meshTextureSlots.clear();
 
-            std::unordered_set<const Mesh*> uploaded;
+            struct ActiveMesh final {
+                const Mesh* mesh;
+                const std::vector<PBRMaterial>* materials;
+                std::uint64_t owner;
+            };
+            std::vector<ActiveMesh> activeMeshes;
+            std::unordered_set<std::uint64_t> activeOwners;
             registry.view<MeshRenderer>([&](const Entity, const MeshRenderer& renderer) {
                 const auto source = renderer.mesh.source();
-                if (!renderer.hasRenderableMesh() || !source || !uploaded.insert(source.get()).second) return;
-                const Mesh& mesh = *source;
-                const auto offset = static_cast<std::uint32_t>(materialTextures.size() + 1);
-                if (mesh.images.size() > MaxMaterialTextures - offset) {
-                    throw std::runtime_error("GLB scene exceeds the 4096-entry bindless texture capacity");
+                const auto resource = renderer.mesh.resource();
+                if (!renderer.hasRenderableMesh() || !source || !resource) return;
+                activeMeshes.push_back({source.get(), &resource->metadata.materials, resource->textureIdentity});
+                activeOwners.insert(resource->textureIdentity);
+            });
+            registry.view<TerrainGrassComponent>([&](const Entity, const TerrainGrassComponent& grass) {
+                if (!grass.hasPrefab()) return;
+                const auto owner = (std::uint64_t{1} << 63U) |
+                    (static_cast<std::uint64_t>(reinterpret_cast<std::uintptr_t>(grass.mesh.get())) &
+                     ~(std::uint64_t{1} << 63U));
+                activeMeshes.push_back({grass.mesh.get(), &grass.mesh->materials, owner});
+                activeOwners.insert(owner);
+            });
+
+            auto uploadImage = [&](const Mesh::Image& image, const bool srgb, Texture2D& texture) {
+                if (image.cooked) {
+                    ++cookedImages;
+                    texture.createCooked(vulkanDevice.physical(), device, commandPool,
+                        vulkanDevice.graphicsQueue(), *image.cooked, vulkanDevice.allocator());
+                } else if (image.gtex) {
+                    ++gtexImages;
+                    texture.createGtex(vulkanDevice.physical(), device, commandPool,
+                        vulkanDevice.graphicsQueue(), *image.gtex,
+                        static_cast<std::uint32_t>(image.gtex->mips.size() - 1), vulkanDevice.allocator());
+                } else if (image.width != 0 && image.height != 0 && !image.rgbaPixels.empty()) {
+                    ++rawImages;
+                    rawBytes += image.rgbaPixels.size();
+                    texture.create(vulkanDevice.physical(), device, commandPool, vulkanDevice.graphicsQueue(),
+                        image.width, image.height, image.rgbaPixels,
+                        srgb ? TextureColorSpace::SRGB : TextureColorSpace::Linear, true,
+                        vulkanDevice.allocator());
                 }
-                meshTextureOffsets.emplace(&mesh, offset);
+            };
+
+            std::unordered_set<std::uint64_t> processedOwners;
+            for (const ActiveMesh& active : activeMeshes) {
+                const Mesh& mesh = *active.mesh;
+                auto& ids = meshTextureIds[active.owner];
+                if (ids.size() < mesh.images.size()) ids.resize(mesh.images.size());
+                auto& slots = meshTextureSlots[active.mesh];
+                slots.resize(mesh.images.size());
+                const bool ownerFirstUse = processedOwners.insert(active.owner).second;
                 for (std::size_t i = 0; i < mesh.images.size(); ++i) {
-                    const Mesh::Image& image = mesh.images[i];
-                    const bool isColorTexture = std::ranges::any_of(
-                        mesh.materials, [i](const PBRMaterial& material) {
+                    const TextureId id{active.owner, static_cast<std::uint32_t>(i)};
+                    auto found = textureGpuResources.find(id);
+                    if (found == textureGpuResources.end()) {
+                        if (freeMaterialTextureSlots.empty() && nextMaterialTextureSlot >= MaxMaterialTextures)
+                            throw std::runtime_error("Scene exceeds the 4096-entry bindless texture capacity");
+                        TextureGpuResource gpu;
+                        if (freeMaterialTextureSlots.empty()) gpu.descriptorIndex = nextMaterialTextureSlot++;
+                        else {
+                            gpu.descriptorIndex = freeMaterialTextureSlots.back();
+                            freeMaterialTextureSlots.pop_back();
+                        }
+                        ids[i] = id;
+                        const bool srgb = std::ranges::any_of(*active.materials, [i](const PBRMaterial& material) {
                             const auto index = static_cast<std::int32_t>(i);
                             return material.baseColorTexture == index || material.emissiveTexture == index;
                         });
-                    if (image.cooked) {
-                        ++cookedImages;
-                        Texture2D texture;
-                        texture.createCooked(vulkanDevice.physical(), device, commandPool,
-                                             vulkanDevice.graphicsQueue(), *image.cooked,
-                                             vulkanDevice.allocator());
-                        materialTextureDescriptors[offset + i] = {
-                            texture.sampler(), texture.imageView(),
+                        uploadImage(mesh.images[i], srgb, gpu.texture);
+                        found = textureGpuResources.emplace(id, std::move(gpu)).first;
+                    }
+                    ids[i] = id;
+                    if (ownerFirstUse) ++found->second.refCount;
+                    slots[i] = found->second.descriptorIndex;
+                    if (found->second.texture.valid()) {
+                        materialTextureDescriptors[found->second.descriptorIndex] = {
+                            found->second.texture.sampler(), found->second.texture.imageView(),
                             VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
-                        materialTextures.push_back(std::move(texture));
-                        continue;
+                    } else {
+                        materialTextureDescriptors[found->second.descriptorIndex] = fallback;
                     }
-                    if (image.gtex) {
-                        ++gtexImages;
-                        Texture2D texture;
-                        texture.createGtex(vulkanDevice.physical(), device, commandPool,
-                                           vulkanDevice.graphicsQueue(), *image.gtex,
-                                           static_cast<std::uint32_t>(image.gtex->mips.size() - 1),
-                                           vulkanDevice.allocator());
-                        materialTextureDescriptors[offset + i] = {texture.sampler(), texture.imageView(),
-                                                                    VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
-                        materialTextures.push_back(std::move(texture));
-                        continue;
-                    }
-                    if (image.width == 0 || image.height == 0 || image.rgbaPixels.empty()) {
-                        materialTextures.emplace_back();
-                        continue;
-                    }
-                    ++rawImages;
-                    rawBytes += image.rgbaPixels.size();
-                    Texture2D texture;
-                    texture.create(vulkanDevice.physical(), device, commandPool,
-                                   vulkanDevice.graphicsQueue(), image.width, image.height,
-                                   image.rgbaPixels, isColorTexture ? TextureColorSpace::SRGB
-                                                                        : TextureColorSpace::Linear,
-                                   true,
-                                   vulkanDevice.allocator());
-                    materialTextureDescriptors[offset + i] = {
-                        texture.sampler(), texture.imageView(),
-                        VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
-                    materialTextures.push_back(std::move(texture));
                 }
-            });
-            registry.view<TerrainGrassComponent>([&](const Entity, const TerrainGrassComponent& grass) {
-                if (!grass.hasPrefab() || !uploaded.insert(grass.mesh.get()).second) return;
-                const Mesh& mesh = *grass.mesh;
-                const auto offset = static_cast<std::uint32_t>(materialTextures.size() + 1);
-                if (mesh.images.size() > MaxMaterialTextures - offset) {
-                    throw std::runtime_error("Grass prefab exceeds the 4096-entry bindless texture capacity");
-                }
-                meshTextureOffsets.emplace(&mesh, offset);
-                for (std::size_t i = 0; i < mesh.images.size(); ++i) {
-                    const Mesh::Image& image = mesh.images[i];
-                    const bool srgb = std::ranges::any_of(mesh.materials, [i](const PBRMaterial& material) {
-                        const auto index = static_cast<std::int32_t>(i);
-                        return material.baseColorTexture == index || material.emissiveTexture == index;
-                    });
-                    if (image.cooked) {
-                        ++cookedImages;
-                        Texture2D texture;
-                        texture.createCooked(vulkanDevice.physical(), device, commandPool,
-                                             vulkanDevice.graphicsQueue(), *image.cooked,
-                                             vulkanDevice.allocator());
-                        materialTextureDescriptors[offset + i] = {
-                            texture.sampler(), texture.imageView(),
-                            VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
-                        materialTextures.push_back(std::move(texture));
-                        continue;
-                    }
-                    if (image.gtex) {
-                        ++gtexImages;
-                        Texture2D texture;
-                        texture.createGtex(vulkanDevice.physical(), device, commandPool,
-                                           vulkanDevice.graphicsQueue(), *image.gtex,
-                                           static_cast<std::uint32_t>(image.gtex->mips.size() - 1),
-                                           vulkanDevice.allocator());
-                        materialTextureDescriptors[offset + i] = {texture.sampler(), texture.imageView(),
-                                                                    VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
-                        materialTextures.push_back(std::move(texture));
-                        continue;
-                    }
-                    if (image.width == 0 || image.height == 0 || image.rgbaPixels.empty()) {
-                        materialTextures.emplace_back();
-                        continue;
-                    }
-                    ++rawImages;
-                    rawBytes += image.rgbaPixels.size();
-                    Texture2D texture;
-                    texture.create(vulkanDevice.physical(), device, commandPool,
-                                   vulkanDevice.graphicsQueue(), image.width, image.height,
-                                   image.rgbaPixels, srgb ? TextureColorSpace::SRGB
-                                                          : TextureColorSpace::Linear,
-                                   true, vulkanDevice.allocator());
-                    materialTextureDescriptors[offset + i] = {
-                        texture.sampler(), texture.imageView(), VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
-                    materialTextures.push_back(std::move(texture));
-                }
-            });
+            }
+            // Drop only textures whose owning mesh resource disappeared. After
+            // the rebuild fence above, their slots can safely serve new assets.
+            for (auto it = textureGpuResources.begin(); it != textureGpuResources.end();) {
+                if (it->second.refCount != 0) { ++it; continue; }
+                materialTextureDescriptors[it->second.descriptorIndex] = fallback;
+                freeMaterialTextureSlots.push_back(it->second.descriptorIndex);
+                it->second.texture.destroy();
+                it = textureGpuResources.erase(it);
+            }
+            for (auto it = meshTextureIds.begin(); it != meshTextureIds.end();) {
+                if (activeOwners.contains(it->first)) ++it;
+                else it = meshTextureIds.erase(it);
+            }
             [[maybe_unused]] const UploadTicket ticket = uploadBatch.submit();
             const auto& stats = uploadContext.statistics();
-            Diagnostics::instance().report(
-                DiagnosticSeverity::Info,
+            Diagnostics::instance().report(DiagnosticSeverity::Info,
                 "[SceneSync] MaterialTextures complete: rawImages=" + std::to_string(rawImages) +
                 ", rawBytes=" + std::to_string(rawBytes) + ", cookedImages=" +
                 std::to_string(cookedImages) + ", gtexImages=" + std::to_string(gtexImages) +
                 ", uploadBytes=" + std::to_string(stats.bytesUploaded) + ", forcedSubmits=" +
                 std::to_string(stats.forcedSubmits) + ", ringWraps=" + std::to_string(stats.ringWraps) +
-                ", waits=" + std::to_string(stats.waits),
-                {.subsystem = "Renderer"});
+                ", waits=" + std::to_string(stats.waits), {.subsystem = "Renderer"});
             Diagnostics::instance().flush();
         }
 
@@ -184,10 +183,10 @@
                                                    const Mesh& mesh,
                                                    const WaterMaterial* water = nullptr) const {
             const auto textureIndex = [&](const std::int32_t localIndex) {
-                const auto offset = meshTextureOffsets.find(&mesh);
-                if (localIndex < 0 || offset == meshTextureOffsets.end() ||
-                    static_cast<std::size_t>(localIndex) >= mesh.images.size()) return -1;
-                return static_cast<std::int32_t>(offset->second + localIndex);
+                const auto slots = meshTextureSlots.find(&mesh);
+                if (localIndex < 0 || slots == meshTextureSlots.end() ||
+                    static_cast<std::size_t>(localIndex) >= slots->second.size()) return -1;
+                return static_cast<std::int32_t>(slots->second[static_cast<std::size_t>(localIndex)]);
             };
             const int materialFlags = (source.doubleSided ? 1 : 0) |
                 (static_cast<int>(source.alphaMode) << 1) | (source.terrainLayered ? 8 : 0) |
@@ -821,23 +820,11 @@
                     }
 
                     const Mesh* const mesh = source.get();
+                    const MeshAssetMetadata& metadata = renderer.mesh.resource()->metadata;
                     const MeshUploadRecord& planned = rendererUploads.at(entity);
                     renderer.firstIndex = planned.firstIndex;
                     const std::uint32_t firstVertex = planned.firstVertex;
-                    AABB localBounds{
-                        .min = Vec3{std::numeric_limits<float>::max(), std::numeric_limits<float>::max(),
-                                    std::numeric_limits<float>::max()},
-                        .max = Vec3{std::numeric_limits<float>::lowest(), std::numeric_limits<float>::lowest(),
-                                    std::numeric_limits<float>::lowest()},
-                    };
-                    for (const Vertex& vertex : mesh->vertices) {
-                        localBounds.min.setX(std::min(localBounds.min.x(), vertex.position.x()));
-                        localBounds.min.setY(std::min(localBounds.min.y(), vertex.position.y()));
-                        localBounds.min.setZ(std::min(localBounds.min.z(), vertex.position.z()));
-                        localBounds.max.setX(std::max(localBounds.max.x(), vertex.position.x()));
-                        localBounds.max.setY(std::max(localBounds.max.y(), vertex.position.y()));
-                        localBounds.max.setZ(std::max(localBounds.max.z(), vertex.position.z()));
-                    }
+                    const AABB localBounds = mesh->localBounds;
                     // Persist the GPU range on the ECS-facing handle.  The
                     // draw path can therefore stop consulting MeshSourceData
                     // once all batches use MeshGpuResource directly.
@@ -850,6 +837,7 @@
                         resource->meshletCount = static_cast<std::uint32_t>(mesh->meshlets.size());
                         resource->firstMeshlet = firstMeshlets.contains(resource.get()) ? firstMeshlets.at(resource.get()) : 0U;
                         resource->bounds = localBounds;
+                        resource->metadata.bounds = localBounds;
                     }
                     // Culling must use the same parent-composed matrix as the
                     // instance renderer. Otherwise a child can be rendered at
@@ -998,12 +986,12 @@
                         appendRange(shaderSlot, 0, 0, 0, 0, 0, oceanBounds, overrideUsesFoliagePipeline,
                             renderer.material.pbr.alphaMode, renderer.material.pbr.doubleSided, false, true, 0,
                             renderer.material.pbr);
-                    } else if (!mesh->renderSections.empty()) {
-                        for (std::uint32_t sectionIndex = 0; sectionIndex < mesh->renderSections.size(); ++sectionIndex) {
-                            const Mesh::RenderSection& section = mesh->renderSections[sectionIndex];
-                            const PBRMaterial& material = section.materialIndex < mesh->materials.size()
-                                ? mesh->materials[section.materialIndex] : PBRMaterial{};
-                            const bool usesRendererMaterial = mesh->materials.empty() ||
+                    } else if (!metadata.sections.empty()) {
+                        for (std::uint32_t sectionIndex = 0; sectionIndex < metadata.sections.size(); ++sectionIndex) {
+                            const Mesh::RenderSection& section = metadata.sections[sectionIndex];
+                            const PBRMaterial& material = section.materialIndex < metadata.materials.size()
+                                ? metadata.materials[section.materialIndex] : PBRMaterial{};
+                            const bool usesRendererMaterial = metadata.materials.empty() ||
                                 (renderer.materialOverride && section.materialIndex == 0);
                             const PBRMaterial& effectiveMaterial = usesRendererMaterial ? renderer.material.pbr : material;
                             const bool usesFoliagePipeline = usesRendererMaterial ? overrideUsesFoliagePipeline :
@@ -1012,12 +1000,12 @@
                                 sectionIndex, section.firstIndex, section.indexCount, section.firstMeshlet,
                                 section.meshletCount, section.localBounds, usesFoliagePipeline,
                                 effectiveMaterial.alphaMode, effectiveMaterial.doubleSided, false,
-                                mesh->materials.empty(),
-                                mesh->materials.empty() ? 0U : section.materialIndex,
+                                metadata.materials.empty(),
+                                metadata.materials.empty() ? 0U : section.materialIndex,
                                 effectiveMaterial);
                         }
                     } else {
-                        appendRange(pbrShaderSlot(renderer.material.pbr), 0, 0, mesh->indexCount(), 0, static_cast<std::uint32_t>(mesh->meshlets.size()),
+                        appendRange(pbrShaderSlot(renderer.material.pbr), 0, 0, metadata.indexCount, 0, metadata.meshletCount,
                                     localBounds, overrideUsesFoliagePipeline, renderer.material.pbr.alphaMode,
                                     renderer.material.pbr.doubleSided, false, true, 0, renderer.material.pbr);
                     }

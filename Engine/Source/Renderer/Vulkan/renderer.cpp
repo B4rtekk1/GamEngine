@@ -68,6 +68,8 @@
 #include "Engine/Renderer/Passes/TonemapPass.h"
 #include "Engine/Renderer/Passes/TemporalAaPass.h"
 #include "Engine/Assets/AssetManager.h"
+#include "Engine/Assets/Gmesh.h"
+#include "Engine/Assets/Gtex.h"
 #include "Engine/Renderer/Culling/CullingTypes.h"
 #include "Engine/Renderer/Culling/GPUCullingPass.h"
 #include "Engine/Renderer/Culling/GPUInstanceCullingPass.h"
@@ -751,12 +753,16 @@ namespace Engine {
             for (Buffer &buffer: uniformBuffers) {
                 buffer.destroy();
             }
-            for (Texture2D &texture: materialTextures) {
-                texture.destroy();
+            for (auto& [id, resource] : textureGpuResources) {
+                (void)id;
+                resource.texture.destroy();
             }
-            materialTextures.clear();
+            textureGpuResources.clear();
+            meshTextureIds.clear();
+            meshTextureSlots.clear();
+            nextMaterialTextureSlot = 1;
+            freeMaterialTextureSlots.clear();
             materialTextureDescriptors.clear();
-            meshTextureOffsets.clear();
             fallbackMaterialTexture.destroy();
             imageBasedLighting.destroy();
             renderables.clear();
@@ -872,11 +878,6 @@ namespace Engine {
             // Persistent scene tables retain their backing allocations. Their
             // creators grow geometrically only when a new delta exceeds the
             // current capacity, otherwise they overwrite changed records.
-            for (Texture2D &texture: materialTextures) { texture.destroy(); }
-            materialTextures.clear();
-            materialTextureDescriptors.clear();
-            meshTextureOffsets.clear();
-            fallbackMaterialTexture.destroy();
             // createMeshBuffers() needs the previous renderable table to
             // retire GPU Scene instances whose ECS entity disappeared. It
             // clears and rebuilds both tables after that comparison.

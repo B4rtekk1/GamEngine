@@ -4,12 +4,24 @@
 #include "Engine/Renderer/Geometry/Mesh.h"
 
 #include <cstdint>
+#include <atomic>
 #include <filesystem>
 #include <limits>
 #include <memory>
 #include <type_traits>
 
 namespace Engine {
+    /** Small CPU resident description kept after decoded geometry is released. */
+    struct MeshAssetMetadata final {
+        AABB bounds{};
+        std::vector<Mesh::RenderSection> sections;
+        std::vector<PBRMaterial> materials;
+        std::vector<std::filesystem::path> imagePaths;
+        std::uint32_t vertexCount{};
+        std::uint32_t indexCount{};
+        std::uint32_t meshletCount{};
+        std::uint32_t textureCount{};
+    };
     /** Stable, renderer-owned identity of an uploaded mesh. */
     struct MeshId final {
         static constexpr std::uint32_t Invalid = std::numeric_limits<std::uint32_t>::max();
@@ -28,6 +40,11 @@ namespace Engine {
      * asset has released those CPU arrays.
      */
     struct MeshGpuResource final {
+        /** Process-unique identity survives source-data reloads and pointer reuse. */
+        const std::uint64_t textureIdentity = [] {
+            static std::atomic<std::uint64_t> next{1};
+            return next.fetch_add(1, std::memory_order_relaxed);
+        }();
         MeshId handle{};
         std::uint32_t firstVertex{};
         std::uint32_t vertexCount{};
@@ -39,6 +56,7 @@ namespace Engine {
         /// Offset into the renderer-wide GpuMeshlet buffer for this mesh LOD.
         std::uint32_t firstMeshlet{};
         AABB bounds{};
+        MeshAssetMetadata metadata{};
         /// Asset path used to decode a short-lived source payload on a GPU
         /// resource rebuild. Empty paths identify procedural/editor meshes.
         std::filesystem::path sourcePath;
@@ -65,6 +83,26 @@ namespace Engine {
             if (resource_->sourceData) {
                 resource_->sourcePath = resource_->sourceData->sourcePath;
                 resource_->retainSourceData = resource_->sourcePath.empty();
+                const Mesh& mesh = *resource_->sourceData;
+                resource_->metadata.vertexCount = mesh.vertexCount();
+                resource_->metadata.indexCount = mesh.indexCount();
+                resource_->metadata.meshletCount = static_cast<std::uint32_t>(mesh.meshlets.size());
+                resource_->metadata.textureCount = static_cast<std::uint32_t>(mesh.images.size());
+                resource_->metadata.sections = mesh.renderSections;
+                resource_->metadata.materials = mesh.materials;
+                resource_->metadata.imagePaths.reserve(mesh.images.size());
+                for (const Mesh::Image& image : mesh.images)
+                    resource_->metadata.imagePaths.push_back(image.cookedPath);
+                if (!mesh.vertices.empty()) {
+                    glm::vec3 minimum{std::numeric_limits<float>::max()};
+                    glm::vec3 maximum{std::numeric_limits<float>::lowest()};
+                    for (const Vertex& vertex : mesh.vertices) {
+                        minimum = glm::min(minimum, vertex.position.native());
+                        maximum = glm::max(maximum, vertex.position.native());
+                    }
+                    resource_->metadata.bounds = {Vec3{minimum}, Vec3{maximum}};
+                    resource_->bounds = resource_->metadata.bounds;
+                }
             }
         }
         template <typename T>

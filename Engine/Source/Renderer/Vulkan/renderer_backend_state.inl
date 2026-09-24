@@ -140,9 +140,28 @@
         Texture2D grassHeightTexture;
         Texture2D grassDensityTexture;
         std::vector<VkDescriptorImageInfo> materialTextureDescriptors;
-        std::unordered_map<const Mesh*, std::uint32_t> meshTextureOffsets;
+        struct TextureId final {
+            std::uint64_t owner{};
+            std::uint32_t imageIndex{};
+            bool operator==(const TextureId&) const noexcept = default;
+        };
+        struct TextureIdHash final {
+            std::size_t operator()(const TextureId& id) const noexcept {
+                return std::hash<std::uint64_t>{}(id.owner) ^
+                       (std::hash<std::uint32_t>{}(id.imageIndex) + 0x9e3779b9U);
+            }
+        };
+        struct TextureGpuResource final {
+            Texture2D texture;
+            std::uint32_t descriptorIndex{};
+            std::uint32_t refCount{};
+        };
+        std::unordered_map<TextureId, TextureGpuResource, TextureIdHash> textureGpuResources;
+        std::unordered_map<std::uint64_t, std::vector<TextureId>> meshTextureIds;
+        std::unordered_map<const Mesh*, std::vector<std::uint32_t>> meshTextureSlots;
+        std::uint32_t nextMaterialTextureSlot{1};
+        std::vector<std::uint32_t> freeMaterialTextureSlots;
         DepthBuffer depthBuffer;
-        std::vector<Texture2D> materialTextures;
         // Shared physical 4096x4096 VSM atlas. Game and Scene contexts own
         // their descriptors/page tables, never concurrent atlas writes.
         ShadowMap physicalShadowPagePool;

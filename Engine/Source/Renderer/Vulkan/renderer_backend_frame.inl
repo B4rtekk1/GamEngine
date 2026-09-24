@@ -552,7 +552,10 @@
             importFrameUploadTexture("Fallback material", fallbackMaterialTexture);
             importFrameUploadTexture("Grass height", grassHeightTexture);
             importFrameUploadTexture("Grass density", grassDensityTexture);
-            for (const Texture2D& texture : materialTextures) importFrameUploadTexture("Material texture", texture);
+            for (const auto& [id, resource] : textureGpuResources) {
+                (void)id;
+                importFrameUploadTexture("Material texture", resource.texture);
+            }
             frameGraph.addPass("Legacy frame resource consumers", RenderGraph::Queue::Graphics,
                 [&](RenderGraph::PassBuilder& builder) {
                     // The callbacks that bind these descriptor sets are not

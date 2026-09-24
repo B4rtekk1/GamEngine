@@ -11,6 +11,9 @@ namespace Engine::Assets {
     /** Loads a cooked mesh and its referenced .gtex textures. */
     [[nodiscard]] std::shared_ptr<const Mesh> load_gmesh(const std::filesystem::path &path);
 
+    /** Loads only geometry and meshlet payload; materials, sections, and image references are skipped. */
+    [[nodiscard]] std::shared_ptr<Mesh> load_gmesh_geometry(const std::filesystem::path &path);
+
     /** Writes geometry, materials, and relative .gtex references to a .gmesh file. */
     [[nodiscard]] bool save_gmesh(const std::filesystem::path &path, const Mesh &mesh);
 

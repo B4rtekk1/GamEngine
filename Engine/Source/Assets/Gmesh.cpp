@@ -16,7 +16,7 @@
 namespace Engine::Assets {
     namespace {
         constexpr std::array<char, 8> magic{'G', 'M', 'E', 'S', 'H', '\0', '\0', '\0'};
-        constexpr std::uint32_t version = 4;
+        constexpr std::uint32_t version = 5;
         constexpr std::uint32_t maxElements = 100'000'000;
 
         struct HeaderV1 {
@@ -46,6 +46,7 @@ namespace Engine::Assets {
             std::uint32_t renderSections;
             std::uint32_t meshletClusters;
             std::uint32_t meshletClusterRoot;
+            AABB localBounds;
         };
 
         struct RenderSectionV3 final {
@@ -141,6 +142,16 @@ namespace Engine::Assets {
 
     bool save_gmesh(const std::filesystem::path &path, const Mesh &mesh) {
         Mesh cooked = mesh;
+        if (!cooked.vertices.empty()) {
+            cooked.localBounds = {.min = Vec3{std::numeric_limits<float>::max(), std::numeric_limits<float>::max(),
+                                               std::numeric_limits<float>::max()},
+                                  .max = Vec3{std::numeric_limits<float>::lowest(), std::numeric_limits<float>::lowest(),
+                                               std::numeric_limits<float>::lowest()}};
+            for (const Vertex& vertex : cooked.vertices) {
+                cooked.localBounds.min = Vec3{glm::min(cooked.localBounds.min.native(), vertex.position.native())};
+                cooked.localBounds.max = Vec3{glm::max(cooked.localBounds.max.native(), vertex.position.native())};
+            }
+        }
         subdivide_render_sections(cooked);
         if (!build_meshlets(cooked)) return false;
         if (cooked.vertices.size() > maxElements || cooked.indices.size() > maxElements || cooked.meshlets.size() >
@@ -156,7 +167,7 @@ namespace Engine::Assets {
             static_cast<std::uint32_t>(cooked.meshletTriangles.size()),
             static_cast<std::uint32_t>(cooked.materials.size()), static_cast<std::uint32_t>(cooked.images.size()),
             static_cast<std::uint32_t>(cooked.renderSections.size()),
-            static_cast<std::uint32_t>(cooked.meshletClusters.size()), cooked.meshletClusterRoot
+            static_cast<std::uint32_t>(cooked.meshletClusters.size()), cooked.meshletClusterRoot, cooked.localBounds
         };
         if (!file || !write(file, header) || !write_vector(file, cooked.vertices) || !write_vector(file, cooked.indices)
             || !write_vector(file, cooked.meshlets) || !write_vector(file, cooked.meshletVertices) || !
@@ -177,7 +188,7 @@ namespace Engine::Assets {
         std::ifstream file(path, std::ios::binary);
         FilePrefix prefix{};
         if (!file || !read(file, prefix) || prefix.magic != magic ||
-            (prefix.version != 1 && prefix.version != 2 && prefix.version != 3 && prefix.version != version))
+            (prefix.version < 1 || prefix.version > version))
             return {};
         file.seekg(0);
         Mesh mesh;
@@ -198,11 +209,32 @@ namespace Engine::Assets {
             mesh.renderSections.resize(header.renderSections);
             mesh.meshletClusters.resize(header.meshletClusters);
             mesh.meshletClusterRoot = header.meshletClusterRoot;
+            mesh.localBounds = header.localBounds;
             if (!read_vector(file, mesh.vertices) || !read_vector(file, mesh.indices) || !
                 read_vector(file, mesh.meshlets) || !read_vector(file, mesh.meshletVertices) || !
                 read_vector(file, mesh.meshletTriangles) || !read_vector(file, mesh.materials) ||
                 !read_vector(file, mesh.renderSections) || !read_vector(file, mesh.meshletClusters))
                 return {};
+        } else if (prefix.version == 4) {
+            struct HeaderV4 final {
+                std::array<char, 8> magic;
+                std::uint32_t version, vertices, indices, meshlets, meshletVertices, meshletTriangles,
+                    materials, images, renderSections, meshletClusters, meshletClusterRoot;
+            } header{};
+            if (!read(file, header) || header.vertices > maxElements || header.indices > maxElements ||
+                header.meshlets > maxElements || header.meshletVertices > maxElements ||
+                header.meshletTriangles > maxElements || header.materials > maxElements ||
+                header.images > maxElements || header.renderSections > maxElements || header.meshletClusters > maxElements)
+                return {};
+            mesh.vertices.resize(header.vertices); mesh.indices.resize(header.indices); mesh.meshlets.resize(header.meshlets);
+            mesh.meshletVertices.resize(header.meshletVertices); mesh.meshletTriangles.resize(header.meshletTriangles);
+            mesh.materials.resize(header.materials); mesh.images.resize(header.images);
+            mesh.renderSections.resize(header.renderSections); mesh.meshletClusters.resize(header.meshletClusters);
+            mesh.meshletClusterRoot = header.meshletClusterRoot;
+            if (!read_vector(file, mesh.vertices) || !read_vector(file, mesh.indices) ||
+                !read_vector(file, mesh.meshlets) || !read_vector(file, mesh.meshletVertices) ||
+                !read_vector(file, mesh.meshletTriangles) || !read_vector(file, mesh.materials) ||
+                !read_vector(file, mesh.renderSections) || !read_vector(file, mesh.meshletClusters)) return {};
         } else if (prefix.version == 3) {
             struct HeaderV3 final { std::array<char, 8> magic; std::uint32_t version, vertices, indices, meshlets,
                 meshletVertices, meshletTriangles, materials, images, renderSections; } header{};
@@ -270,6 +302,16 @@ namespace Engine::Assets {
             image.gtex.emplace(std::move(*gtex));
         }
         if (mesh.empty() || !valid_meshlets(mesh)) return {};
+        if (prefix.version != version && !mesh.vertices.empty()) {
+            mesh.localBounds = {.min = Vec3{std::numeric_limits<float>::max(), std::numeric_limits<float>::max(),
+                                             std::numeric_limits<float>::max()},
+                                .max = Vec3{std::numeric_limits<float>::lowest(), std::numeric_limits<float>::lowest(),
+                                             std::numeric_limits<float>::lowest()}};
+            for (const Vertex& vertex : mesh.vertices) {
+                mesh.localBounds.min = Vec3{glm::min(mesh.localBounds.min.native(), vertex.position.native())};
+                mesh.localBounds.max = Vec3{glm::max(mesh.localBounds.max.native(), vertex.position.native())};
+            }
+        }
         if (mesh.renderSections.empty()) {
             AABB bounds{
                 .min = Vec3{
@@ -297,6 +339,51 @@ namespace Engine::Assets {
         if (!valid_render_sections(mesh) || !valid_cluster_hierarchy(mesh)) return {};
         mesh.sourcePath = path;
         return std::make_shared<const Mesh>(std::move(mesh));
+    }
+
+    std::shared_ptr<Mesh> load_gmesh_geometry(const std::filesystem::path& path) {
+        std::ifstream file(path, std::ios::binary);
+        FilePrefix prefix{};
+        if (!file || !read(file, prefix) || prefix.magic != magic) return {};
+        // Older versions do not have the same independently skippable payload
+        // layout. Keep them loadable while current cooked assets use streaming.
+        if (prefix.version != version) {
+            const auto complete = load_gmesh(path);
+            return complete ? std::make_shared<Mesh>(*complete) : nullptr;
+        }
+        file.seekg(0);
+        Header header{};
+        if (!read(file, header) || header.vertices > maxElements || header.indices > maxElements ||
+            header.meshlets > maxElements || header.meshletVertices > maxElements ||
+            header.meshletTriangles > maxElements || header.materials > maxElements ||
+            header.images > maxElements || header.renderSections > maxElements ||
+            header.meshletClusters > maxElements) return {};
+
+        Mesh mesh;
+        mesh.vertices.resize(header.vertices);
+        mesh.indices.resize(header.indices);
+        mesh.meshlets.resize(header.meshlets);
+        mesh.meshletVertices.resize(header.meshletVertices);
+        mesh.meshletTriangles.resize(header.meshletTriangles);
+        mesh.meshletClusters.resize(header.meshletClusters);
+        mesh.meshletClusterRoot = header.meshletClusterRoot;
+        mesh.localBounds = header.localBounds;
+        if (!read_vector(file, mesh.vertices) || !read_vector(file, mesh.indices) ||
+            !read_vector(file, mesh.meshlets) || !read_vector(file, mesh.meshletVertices) ||
+            !read_vector(file, mesh.meshletTriangles)) return {};
+
+        const auto skipRecords = [&file](const std::uint32_t count, const std::size_t stride) {
+            const auto bytes = static_cast<std::uint64_t>(count) * stride;
+            if (bytes > static_cast<std::uint64_t>(std::numeric_limits<std::streamoff>::max())) return false;
+            file.seekg(static_cast<std::streamoff>(bytes), std::ios::cur);
+            return static_cast<bool>(file);
+        };
+        if (!skipRecords(header.materials, sizeof(PBRMaterial)) ||
+            !skipRecords(header.renderSections, sizeof(Mesh::RenderSection)) ||
+            !read_vector(file, mesh.meshletClusters) || mesh.empty() || !valid_meshlets(mesh) ||
+            !valid_cluster_hierarchy(mesh)) return {};
+        mesh.sourcePath = path;
+        return std::make_shared<Mesh>(std::move(mesh));
     }
 
     bool cook_gltf_mesh(const std::filesystem::path &source) {

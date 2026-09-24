@@ -83,6 +83,9 @@ namespace Engine {
         /** @brief Vertex array referenced by the mesh indices. */
         std::vector<Vertex> vertices;
 
+        /** Bounds of all vertices in mesh local space, persisted in cooked meshes. */
+        AABB localBounds{};
+
         /** @brief Index array used for indexed rendering. */
         std::vector<uint32_t> indices;
 

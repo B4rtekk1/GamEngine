@@ -79,12 +79,15 @@
                     reflectionProbeBuffer.destroy();
                 }
                 fpsFontTexture.destroy();
-                for (Texture2D& texture : materialTextures) {
-                    texture.destroy();
+                for (auto& [id, resource] : textureGpuResources) {
+                    (void)id;
+                    resource.texture.destroy();
                 }
-                materialTextures.clear();
+                textureGpuResources.clear();
+                meshTextureIds.clear();
+                meshTextureSlots.clear();
+                freeMaterialTextureSlots.clear();
                 materialTextureDescriptors.clear();
-                meshTextureOffsets.clear();
                 fallbackMaterialTexture.destroy();
                 grassHeightTexture.destroy();
                 grassDensityTexture.destroy();
