@@ -394,9 +394,10 @@ ForwardFragmentOutput fragmentMain(ForwardFragmentInput input)
     {
         float3 tangent = normalize(input.tangent.xyz - normal * dot(normal, input.tangent.xyz)) * faceSign;
         float3 bitangent = normalize(cross(normal, tangent)) * input.tangent.w;
-        float3 mappedNormal =
-            materialTextures[NonUniformResourceIndex(material.textureIndices.z)].Sample(materialTextureUv(material, 2, input.texCoord, input.texCoord1)).xyz * 2.0 - 1.0;
-        mappedNormal.xy *= material.extensionScalars.x;
+        float2 mappedXY = materialTextures[NonUniformResourceIndex(material.textureIndices.z)]
+            .Sample(materialTextureUv(material, 2, input.texCoord, input.texCoord1)).rg * 2.0 - 1.0;
+        float mappedZ = sqrt(saturate(1.0 - dot(mappedXY, mappedXY)));
+        float3 mappedNormal = float3(mappedXY * material.extensionScalars.x, mappedZ);
         float3x3 tangentFrame = float3x3(tangent, bitangent, normal);
         normal = normalize(mul(mappedNormal, tangentFrame));
     }

@@ -57,7 +57,7 @@ namespace Engine {
         };
 
         /**
-         * @brief Stores one embedded RGBA image associated with the mesh.
+         * @brief Stores one image associated with the mesh.
          *
          * Pixels are stored in row-major order as four 8-bit channels per pixel.
          */
@@ -79,6 +79,9 @@ namespace Engine {
 
             /** Path stored by .gmesh, relative to that mesh file. */
             std::filesystem::path cookedPath;
+
+            /** External source image, when this glTF image comes from a file. */
+            std::filesystem::path sourcePath;
         };
 
         /** @brief Vertex array referenced by the mesh indices. */

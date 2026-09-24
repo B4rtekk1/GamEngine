@@ -1,6 +1,7 @@
 #include "Engine/Assets/AssetManager.h"
 #include "Engine/Assets/Gtex.h"
 #include "Engine/Assets/Gmesh.h"
+#include "Engine/Assets/TextureCooker.h"
 
 #include "GlbLoader.h"
 #include "Engine/Renderer/Geometry/Mesh.h"
@@ -379,7 +380,9 @@ namespace Engine::Assets {
             }
             auto cookedPath = path;
             cookedPath.replace_extension(".gtex");
-            if (auto gtex = load_gtex(cookedPath)) {
+            if (current_source_texture(path, cookedPath, default_texture_format(path))) {
+                auto gtex = load_gtex(cookedPath);
+                if (!gtex) return std::shared_ptr<const TextureAsset>{};
                 TextureAsset texture;
                 texture.width = gtex->width;
                 texture.height = gtex->height;
@@ -435,10 +438,7 @@ namespace Engine::Assets {
                 extension == ".gltf" || extension == ".GLTF") {
                 auto cookedPath = path;
                 cookedPath.replace_extension(".gmesh");
-                std::error_code error;
-                if (std::filesystem::is_regular_file(cookedPath, error) &&
-                    std::filesystem::last_write_time(cookedPath, error) >=
-                    std::filesystem::last_write_time(path, error))
+                if (current_gltf_mesh(path, cookedPath))
                     return load_gmesh(cookedPath);
                 return load_gltf_mesh(path);
             }

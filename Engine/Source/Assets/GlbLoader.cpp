@@ -1,6 +1,6 @@
 #include "GlbLoader.h"
+#include "CookCache.h"
 
-#include "Engine/Assets/Gtex.h"
 #include "Engine/Renderer/Geometry/Mesh.h"
 #include "Engine/Renderer/Geometry/Meshlet.h"
 
@@ -198,22 +198,36 @@ namespace Engine::Assets {
             return bytes;
         }
 
+        [[nodiscard]] std::filesystem::path external_image_path(const cgltf_image &image,
+                                                                 const std::filesystem::path &modelPath) {
+            if (image.buffer_view != nullptr || image.uri == nullptr ||
+                std::string_view{image.uri}.starts_with("data:")) return {};
+            std::string decoded{image.uri};
+            decoded.push_back('\0');
+            cgltf_decode_uri(decoded.data());
+            return (modelPath.parent_path() / decoded.c_str()).lexically_normal();
+        }
+
+        [[nodiscard]] std::filesystem::path external_buffer_path(const cgltf_buffer &buffer,
+                                                                  const std::filesystem::path &modelPath) {
+            if (buffer.uri == nullptr || std::string_view{buffer.uri}.starts_with("data:")) return {};
+            std::string decoded{buffer.uri};
+            decoded.push_back('\0');
+            cgltf_decode_uri(decoded.data());
+            return (modelPath.parent_path() / decoded.c_str()).lexically_normal();
+        }
+
         [[nodiscard]] bool load_images(const cgltf_data &data, const std::filesystem::path &path,
-                                       Mesh &mesh, const bool preferCooked) {
+                                       Mesh &mesh, const bool forCooking) {
             mesh.images.reserve(data.images_count);
             for (cgltf_size i = 0; i < data.images_count; ++i) {
-                const auto cookedPath = path.parent_path() /
-                                        (path.stem().string() + ".image" + std::to_string(i) + ".gtex");
-                if (preferCooked)
-                    if (auto gtex = load_gtex(cookedPath)) {
-                        Mesh::Image result;
-                        result.width = gtex->width;
-                        result.height = gtex->height;
-                        result.gtex.emplace(std::move(*gtex));
-                        result.cookedPath = cookedPath.filename();
-                        mesh.images.push_back(std::move(result));
-                        continue;
-                    }
+                const auto sourcePath = external_image_path(data.images[i], path);
+                if (forCooking && !sourcePath.empty()) {
+                    Mesh::Image result;
+                    result.sourcePath = sourcePath;
+                    mesh.images.push_back(std::move(result));
+                    continue;
+                }
                 const auto encoded = image_bytes(data.images[i], path);
                 if (encoded.empty() || encoded.size() > static_cast<std::size_t>(std::numeric_limits<int>::max())) {
                     return false;
@@ -228,6 +242,7 @@ namespace Engine::Assets {
                     return false;
                 }
                 Mesh::Image result;
+                result.sourcePath = sourcePath;
                 result.width = static_cast<std::uint32_t>(width);
                 result.height = static_cast<std::uint32_t>(height);
                 const auto byteCount = static_cast<std::size_t>(width) * static_cast<std::size_t>(height) *
@@ -241,7 +256,7 @@ namespace Engine::Assets {
 
         [[nodiscard]] std::vector<NamedImage> load_quixel_external_images(const cgltf_data &data,
                                                                           const std::filesystem::path &path,
-                                                                          Mesh &mesh) {
+                                                                          Mesh &mesh, const bool forCooking) {
             std::vector<NamedImage> result;
             result.reserve(data.images_count);
             for (cgltf_size i = 0; i < data.images_count; ++i)
@@ -250,6 +265,12 @@ namespace Engine::Assets {
             std::error_code error;
             for (const auto &entry: std::filesystem::directory_iterator(path.parent_path(), error)) {
                 if (error || !entry.is_regular_file(error)) continue;
+                std::string extension = entry.path().extension().string();
+                std::ranges::transform(extension, extension.begin(), [](const unsigned char character) {
+                    return static_cast<char>(std::tolower(character));
+                });
+                if (extension != ".png" && extension != ".jpg" && extension != ".jpeg" &&
+                    extension != ".tga" && extension != ".bmp") continue;
                 const std::string label = lower_label(entry.path().filename().string().c_str());
                 if (!contains_any(label, {
                                       "opacity", "_op.", "translucency", "_trans.",
@@ -259,6 +280,13 @@ namespace Engine::Assets {
                 if (std::ranges::any_of(result, [&](const NamedImage &image) {
                     return image.label == label;
                 })) continue;
+                if (forCooking) {
+                    Mesh::Image image;
+                    image.sourcePath = entry.path();
+                    result.push_back({label, static_cast<std::int32_t>(mesh.images.size())});
+                    mesh.images.push_back(std::move(image));
+                    continue;
+                }
                 int width = 0;
                 int height = 0;
                 int channels = 0;
@@ -268,6 +296,7 @@ namespace Engine::Assets {
                     continue;
                 }
                 Mesh::Image image;
+                image.sourcePath = entry.path();
                 image.width = static_cast<std::uint32_t>(width);
                 image.height = static_cast<std::uint32_t>(height);
                 const auto byteCount = static_cast<std::size_t>(width) * static_cast<std::size_t>(height) *
@@ -610,7 +639,10 @@ namespace Engine::Assets {
     } // namespace
 
     namespace {
-        std::shared_ptr<const Mesh> load_gltf_mesh_impl(const std::filesystem::path &path, const bool preferCooked) {
+        std::shared_ptr<const Mesh> load_gltf_mesh_impl(const std::filesystem::path &path,
+                                                        const bool forCooking,
+                                                        GltfImportTimings *const timings) {
+            const auto parseStarted = std::chrono::steady_clock::now();
             cgltf_options options{};
             cgltf_data *parsed = nullptr;
             const std::string pathString = path.string();
@@ -620,10 +652,14 @@ namespace Engine::Assets {
                 cgltf_load_buffers(&options, data.get(), pathString.c_str()) != cgltf_result_success ||
                 cgltf_validate(data.get()) != cgltf_result_success)
                 return {};
+            if (timings != nullptr) timings->parse += std::chrono::steady_clock::now() - parseStarted;
 
             Mesh mesh;
-            if (!load_images(*data, path, mesh, preferCooked)) return {};
-            const auto quixelImages = load_quixel_external_images(*data, path, mesh);
+            const auto imagesStarted = std::chrono::steady_clock::now();
+            if (!load_images(*data, path, mesh, forCooking)) return {};
+            const auto quixelImages = load_quixel_external_images(*data, path, mesh, forCooking);
+            if (timings != nullptr) timings->imageDecode += std::chrono::steady_clock::now() - imagesStarted;
+            const auto geometryStarted = std::chrono::steady_clock::now();
             load_materials(*data, quixelImages, mesh);
             // The last slot is the glTF default material used by primitives without one.
             mesh.materials.emplace_back();
@@ -640,7 +676,10 @@ namespace Engine::Assets {
             // Preserve primitive boundaries first, then partition only very
             // large primitives into spatially local coarse-culling sections.
             subdivide_render_sections(mesh);
+            if (timings != nullptr) timings->geometryImport += std::chrono::steady_clock::now() - geometryStarted;
+            const auto meshletsStarted = std::chrono::steady_clock::now();
             if (mesh.empty() || !build_meshlets(mesh)) return {};
+            if (timings != nullptr) timings->meshletBuild += std::chrono::steady_clock::now() - meshletsStarted;
             mesh.recalculateLocalBounds();
             mesh.sourcePath = path;
             return std::make_shared<const Mesh>(std::move(mesh));
@@ -648,11 +687,62 @@ namespace Engine::Assets {
     } // namespace
 
     std::shared_ptr<const Mesh> load_gltf_mesh(const std::filesystem::path &path) {
-        return load_gltf_mesh_impl(path, true);
+        return load_gltf_mesh_impl(path, false, nullptr);
     }
 
-    std::shared_ptr<const Mesh> load_gltf_mesh_uncooked(const std::filesystem::path &path) {
-        return load_gltf_mesh_impl(path, false);
+    std::shared_ptr<const Mesh> load_gltf_mesh_for_cooking(const std::filesystem::path &path,
+                                                           GltfImportTimings *const timings) {
+        return load_gltf_mesh_impl(path, true, timings);
+    }
+
+    std::optional<std::uint64_t> gltf_source_hash(const std::filesystem::path &path) {
+        const auto sourceHash = CookCache::hash_file(path);
+        if (!sourceHash) return std::nullopt;
+        cgltf_options options{};
+        cgltf_data *parsed = nullptr;
+        const auto sourceName = path.string();
+        if (cgltf_parse_file(&options, sourceName.c_str(), &parsed) != cgltf_result_success) return std::nullopt;
+        GltfData data{parsed, &cgltf_free};
+        CookCache::Hash64 hash;
+        hash.add("gltf-dependencies-v1");
+        hash.add(*sourceHash);
+        std::vector<std::filesystem::path> dependencies;
+        for (cgltf_size i = 0; i < data->buffers_count; ++i) {
+            const auto external = external_buffer_path(data->buffers[i], path);
+            if (!external.empty()) dependencies.push_back(external);
+        }
+        for (cgltf_size i = 0; i < data->images_count; ++i) {
+            const auto external = external_image_path(data->images[i], path);
+            if (!external.empty()) dependencies.push_back(external);
+        }
+        std::error_code error;
+        for (const auto &entry: std::filesystem::directory_iterator(
+                 path.parent_path().empty() ? std::filesystem::path{"."} : path.parent_path(), error)) {
+            if (error) return std::nullopt;
+            if (!entry.is_regular_file(error)) continue;
+            std::string extension = entry.path().extension().string();
+            std::ranges::transform(extension, extension.begin(), [](const unsigned char character) {
+                return static_cast<char>(std::tolower(character));
+            });
+            if (extension != ".png" && extension != ".jpg" && extension != ".jpeg" &&
+                extension != ".tga" && extension != ".bmp") continue;
+            const auto label = lower_label(entry.path().filename().string().c_str());
+            if (contains_any(label, {"opacity", "_op.", "translucency", "_trans.",
+                                     "displacement", "height", "_disp.", "specular", "_spec."}))
+                dependencies.push_back(entry.path());
+        }
+        if (error) return std::nullopt;
+        std::ranges::sort(dependencies);
+        dependencies.erase(std::unique(dependencies.begin(), dependencies.end()), dependencies.end());
+        for (const auto &dependency: dependencies) {
+            const auto contentHash = CookCache::hash_file(dependency);
+            if (!contentHash) return std::nullopt;
+            const auto name = dependency.lexically_normal().generic_string();
+            hash.add(name.size());
+            hash.add(name);
+            hash.add(*contentHash);
+        }
+        return hash.value;
     }
 } // namespace Engine::Assets
 

@@ -469,19 +469,34 @@ Engine::Entity AssetManagerPanel::draw(Engine::ScenePreset &scene, Engine::Asset
         cookJob.running.store(false, std::memory_order_release);
         if (summary) {
             refresh();
+            const auto ms = [](const double duration) {
+                char buffer[32]{};
+                std::snprintf(buffer, sizeof buffer, "%.1f", duration);
+                return std::string{buffer};
+            };
+            const auto report = "Cooked " + std::to_string(summary->cooked) + " assets; skipped " +
+                                std::to_string(summary->skipped) + " of " +
+                                std::to_string(summary->discovered) + ".\nTextures: source hash " +
+                                ms(summary->standalone.sourceHashMilliseconds) + " ms, decode " +
+                                ms(summary->standalone.decodeMilliseconds) + " ms, mips " +
+                                ms(summary->standalone.mipGenerationMilliseconds) + " ms, encode " +
+                                ms(summary->standalone.blockEncodeMilliseconds) + " ms, .gtex write " +
+                                ms(summary->standalone.writeMilliseconds) + " ms.\nglTF: source scan " +
+                                ms(summary->gltf.sourceScanMilliseconds) + " ms, parse " +
+                                ms(summary->gltf.parseMilliseconds) + " ms, image decode " +
+                                ms(summary->gltfTextures.decodeMilliseconds) + " ms, image hash " +
+                                ms(summary->gltfTextures.sourceHashMilliseconds) + " ms, geometry " +
+                                ms(summary->gltf.geometryImportMilliseconds) + " ms, meshlets " +
+                                ms(summary->gltf.meshletBuildMilliseconds) + " ms, mips " +
+                                ms(summary->gltfTextures.mipGenerationMilliseconds) + " ms, encode " +
+                                ms(summary->gltfTextures.blockEncodeMilliseconds) + " ms, .gtex write " +
+                                ms(summary->gltfTextures.writeMilliseconds) + " ms, .gmesh write " +
+                                ms(summary->gltf.meshWriteMilliseconds) + " ms.";
             if (summary->failed == 0) {
-                Editor::ConsolePanel::info("Cooked " + std::to_string(summary->cooked) + " textures; skipped " +
-                                           std::to_string(summary->skipped) + " unchanged of " +
-                                           std::to_string(summary->discovered) + ". Decode: " +
-                                           std::to_string(summary->decodeMilliseconds) + " ms, mips: " +
-                                           std::to_string(summary->mipGenerationMilliseconds) + " ms, BC7: " +
-                                           std::to_string(summary->bc7EncodeMilliseconds) + " ms, save: " +
-                                           std::to_string(summary->saveMilliseconds) + " ms.");
+                Editor::ConsolePanel::info(report);
             } else {
-                Editor::ConsolePanel::error("Cooked " + std::to_string(summary->cooked) + "/" +
-                                            std::to_string(summary->discovered) + " textures; skipped " +
-                                            std::to_string(summary->skipped) + "; " +
-                                            std::to_string(summary->failed) + " failed.\n" + summary->errors);
+                Editor::ConsolePanel::error(report + "\n" + std::to_string(summary->failed) +
+                                            " failed.\n" + summary->errors);
             }
         }
     }
@@ -506,7 +521,7 @@ Engine::Entity AssetManagerPanel::draw(Engine::ScenePreset &scene, Engine::Asset
         ImGui::OpenPopup("##asset-compress-confirm");
     if (ImGui::BeginPopupModal("##asset-compress-confirm", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
         ImGui::TextWrapped(
-            "Generate .gtex files for source images and .gmesh + .gtex files for every GLB/glTF in Assets?");
+            "Generate .gtex files for source images and .gmesh files for every GLB/glTF in Assets? Embedded model images also get .gtex files.");
         ImGui::TextDisabled("Unchanged cooked assets are skipped. This can take a while.");
         if (ImGui::Button("Compress all")) {
             cookJob.progress.discovered.store(0, std::memory_order_release);
@@ -527,6 +542,8 @@ Engine::Entity AssetManagerPanel::draw(Engine::ScenePreset &scene, Engine::Asset
                     summary.skipped += meshes.skipped;
                     summary.failed += meshes.failed;
                     summary.errors += meshes.errors;
+                    summary.gltfTextures = meshes.gltfTextures;
+                    summary.gltf = meshes.gltf;
                 } catch (const std::exception &exception) {
                     summary.failed = 1;
                     summary.errors = exception.what();

@@ -1,12 +1,14 @@
 #include "Engine/Assets/Gmesh.h"
 
 #include "Engine/Assets/Gtex.h"
+#include "CookCache.h"
 #include "GlbLoader.h"
 #include "Engine/Assets/TextureCooker.h"
 #include "Engine/Renderer/Geometry/Mesh.h"
 #include "Engine/Renderer/Geometry/Meshlet.h"
 
 #include <array>
+#include <chrono>
 #include <fstream>
 #include <limits>
 #include <ranges>
@@ -16,7 +18,7 @@
 namespace Engine::Assets {
     namespace {
         constexpr std::array<char, 8> magic{'G', 'M', 'E', 'S', 'H', '\0', '\0', '\0'};
-        constexpr std::uint32_t version = 5;
+        constexpr std::uint32_t version = 6;
         constexpr std::uint32_t maxElements = 100'000'000;
 
         struct HeaderV1 {
@@ -91,6 +93,92 @@ namespace Engine::Assets {
             return mesh.parent_path() / (mesh.stem().string() + ".image" + std::to_string(index) + ".gtex");
         }
 
+        [[nodiscard]] TextureFormat image_format(const Mesh &mesh, const std::size_t imageIndex) {
+            const auto index = static_cast<std::int32_t>(imageIndex);
+            bool color = false, normal = false, scalar = false, other = false;
+            for (const PBRMaterial &material: mesh.materials) {
+                color |= material.baseColorTexture == index || material.emissiveTexture == index ||
+                         material.specularColorTexture == index;
+                normal |= material.normalTexture == index;
+                scalar |= material.aoTexture == index || material.opacityTexture == index ||
+                          material.displacementTexture == index;
+                other |= material.metallicRoughnessTexture == index || material.translucencyTexture == index ||
+                         material.specularTexture == index;
+            }
+            if (color) return TextureFormat::BC7_SRGB;
+            if (other) return TextureFormat::BC7_UNORM;
+            if (normal) return TextureFormat::BC5_UNORM;
+            if (scalar) return TextureFormat::BC4_UNORM;
+            return mesh.images[imageIndex].sourcePath.empty()
+                       ? TextureFormat::BC7_UNORM
+                       : default_texture_format(mesh.images[imageIndex].sourcePath);
+        }
+
+        void separate_normal_images(Mesh &mesh) {
+            const auto originalCount = mesh.images.size();
+            for (std::size_t imageIndex = 0; imageIndex < originalCount; ++imageIndex) {
+                const auto index = static_cast<std::int32_t>(imageIndex);
+                bool usedAsNormal = false;
+                bool usedElsewhere = false;
+                for (const PBRMaterial &material: mesh.materials) {
+                    usedAsNormal |= material.normalTexture == index;
+                    usedElsewhere |= material.baseColorTexture == index ||
+                                     material.emissiveTexture == index ||
+                                     material.specularColorTexture == index ||
+                                     material.metallicRoughnessTexture == index ||
+                                     material.aoTexture == index ||
+                                     material.opacityTexture == index ||
+                                     material.displacementTexture == index ||
+                                     material.translucencyTexture == index ||
+                                     material.specularTexture == index;
+                }
+                if (!usedAsNormal || !usedElsewhere) continue;
+                const auto normalIndex = static_cast<std::int32_t>(mesh.images.size());
+                mesh.images.push_back(mesh.images[imageIndex]);
+                for (PBRMaterial &material: mesh.materials)
+                    if (material.normalTexture == index) material.normalTexture = normalIndex;
+            }
+        }
+
+        [[nodiscard]] std::string_view format_suffix(const TextureFormat format) {
+            switch (format) {
+                case TextureFormat::BC4_UNORM: return ".bc4.gtex";
+                case TextureFormat::BC5_UNORM: return ".bc5.gtex";
+                case TextureFormat::BC7_SRGB: return ".bc7-srgb.gtex";
+                default: return ".bc7-linear.gtex";
+            }
+        }
+
+        [[nodiscard]] bool current_references_exist(const std::filesystem::path &path) {
+            std::ifstream file(path, std::ios::binary);
+            Header header{};
+            if (!file || !read(file, header) || header.magic != magic || header.version != version ||
+                header.vertices > maxElements || header.indices > maxElements || header.meshlets > maxElements ||
+                header.meshletVertices > maxElements || header.meshletTriangles > maxElements ||
+                header.materials > maxElements || header.images > maxElements ||
+                header.renderSections > maxElements || header.meshletClusters > maxElements) return false;
+            const std::uint64_t bytes =
+                static_cast<std::uint64_t>(header.vertices) * sizeof(Vertex) +
+                static_cast<std::uint64_t>(header.indices) * sizeof(std::uint32_t) +
+                static_cast<std::uint64_t>(header.meshlets) * sizeof(Meshlet) +
+                static_cast<std::uint64_t>(header.meshletVertices) * sizeof(std::uint32_t) +
+                static_cast<std::uint64_t>(header.meshletTriangles) * sizeof(std::uint32_t) +
+                static_cast<std::uint64_t>(header.materials) * sizeof(PBRMaterial) +
+                static_cast<std::uint64_t>(header.renderSections) * sizeof(Mesh::RenderSection) +
+                static_cast<std::uint64_t>(header.meshletClusters) * sizeof(MeshletClusterNode);
+            if (bytes > static_cast<std::uint64_t>(std::numeric_limits<std::streamoff>::max())) return false;
+            file.seekg(static_cast<std::streamoff>(bytes), std::ios::cur);
+            if (!file) return false;
+            for (std::uint32_t i = 0; i < header.images; ++i) {
+                std::uint32_t length{};
+                if (!read(file, length) || length == 0 || length > 32'768) return false;
+                std::string name(length, '\0');
+                file.read(name.data(), length);
+                if (!file || !load_gtex(path.parent_path() / name)) return false;
+            }
+            return true;
+        }
+
         [[nodiscard]] bool valid_meshlets(const Mesh &mesh) {
             for (const Meshlet &meshlet: mesh.meshlets) {
                 if (meshlet.vertexCount == 0 || meshlet.vertexCount > MeshletBuildOptions::MaxVertices ||
@@ -140,16 +228,46 @@ namespace Engine::Assets {
         }
     }
 
-    bool save_gmesh(const std::filesystem::path &path, const Mesh &mesh) {
+    bool current_gmesh_version(const std::filesystem::path &path) {
+        std::ifstream file(path, std::ios::binary);
+        FilePrefix prefix{};
+        return file && read(file, prefix) && prefix.magic == magic && prefix.version == version;
+    }
+
+    std::optional<std::uint64_t> gltf_cook_key(const std::filesystem::path &source) {
+        const auto dependencies = gltf_source_hash(source);
+        if (!dependencies) return std::nullopt;
+        CookCache::Hash64 hash;
+        hash.add("gmesh-cook-v1");
+        hash.add(source.lexically_normal().generic_string());
+        hash.add(*dependencies);
+        hash.add(CookCache::texture_settings_key());
+        hash.add(version);
+        return hash.value;
+    }
+
+    bool current_gltf_mesh(const std::filesystem::path &source, const std::filesystem::path &cooked) {
+        const auto key = gltf_cook_key(source);
+        return key && current_gmesh_version(cooked) && CookCache::artifact_has_key(cooked, *key)
+               && current_references_exist(cooked);
+    }
+
+    bool save_gmesh(const std::filesystem::path &path, const Mesh &mesh,
+                    GltfPhaseTimings *const timings) {
+        const auto meshletStarted = std::chrono::steady_clock::now();
         Mesh cooked = mesh;
         cooked.recalculateLocalBounds();
         subdivide_render_sections(cooked);
         if (!build_meshlets(cooked)) return false;
+        if (timings != nullptr)
+            timings->meshletBuildMilliseconds += std::chrono::duration<double, std::milli>(
+                std::chrono::steady_clock::now() - meshletStarted).count();
         if (cooked.vertices.size() > maxElements || cooked.indices.size() > maxElements || cooked.meshlets.size() >
             maxElements || cooked.meshletVertices.size() > maxElements || cooked.meshletTriangles.size() > maxElements
             || cooked.materials.size() > maxElements || cooked.images.size() > maxElements ||
             cooked.renderSections.size() > maxElements || cooked.meshletClusters.size() > maxElements)
             return false;
+        const auto writeStarted = std::chrono::steady_clock::now();
         std::ofstream file(path, std::ios::binary | std::ios::trunc);
         const Header header{
             magic, version, static_cast<std::uint32_t>(cooked.vertices.size()),
@@ -172,6 +290,11 @@ namespace Engine::Assets {
             file.write(pathText.data(), length);
             if (!file) return false;
         }
+        file.close();
+        if (!file) return false;
+        if (timings != nullptr)
+            timings->meshWriteMilliseconds += std::chrono::duration<double, std::milli>(
+                std::chrono::steady_clock::now() - writeStarted).count();
         return true;
     }
 
@@ -183,7 +306,7 @@ namespace Engine::Assets {
             return {};
         file.seekg(0);
         Mesh mesh;
-        if (prefix.version == version) {
+        if (prefix.version == version || prefix.version == 5) {
             Header header{};
             if (!read(file, header) || header.vertices > maxElements || header.indices > maxElements || header.meshlets
                 > maxElements || header.meshletVertices > maxElements || header.meshletTriangles > maxElements || header
@@ -329,7 +452,7 @@ namespace Engine::Assets {
         if (!file || !read(file, prefix) || prefix.magic != magic) return {};
         // Older versions do not have the same independently skippable payload
         // layout. Keep them loadable while current cooked assets use streaming.
-        if (prefix.version != version) {
+        if (prefix.version != version && prefix.version != 5) {
             const auto complete = load_gmesh(path);
             return complete ? std::make_shared<Mesh>(*complete) : nullptr;
         }
@@ -369,27 +492,66 @@ namespace Engine::Assets {
         return std::make_shared<Mesh>(std::move(mesh));
     }
 
-    bool cook_gltf_mesh(const std::filesystem::path &source) {
-        const auto imported = load_gltf_mesh_uncooked(source);
-        if (!imported) return false;
-        Mesh mesh = *imported;
+    bool cook_gltf_mesh(const std::filesystem::path &source,
+                        const std::filesystem::path &requestedCacheRoot,
+                        TextureCookSummary *const summary) {
+        const auto scanStarted = std::chrono::steady_clock::now();
+        const auto meshKey = gltf_cook_key(source);
+        if (summary != nullptr)
+            summary->gltf.sourceScanMilliseconds += std::chrono::duration<double, std::milli>(
+                std::chrono::steady_clock::now() - scanStarted).count();
+        if (!meshKey) return false;
         auto output = source;
         output.replace_extension(".gmesh");
+        if (current_gmesh_version(output) && CookCache::artifact_has_key(output, *meshKey) &&
+            current_references_exist(output)) return true;
+        const auto cacheRoot = requestedCacheRoot.empty() ? CookCache::root_for_source(source)
+                                                          : requestedCacheRoot;
+        GltfImportTimings importTimings;
+        const auto imported = load_gltf_mesh_for_cooking(source, summary == nullptr ? nullptr : &importTimings);
+        if (!imported) return false;
+        if (summary != nullptr) {
+            const auto asMilliseconds = [](const std::chrono::nanoseconds duration) {
+                return std::chrono::duration<double, std::milli>(duration).count();
+            };
+            summary->gltf.parseMilliseconds += asMilliseconds(importTimings.parse);
+            summary->gltfTextures.decodeMilliseconds += asMilliseconds(importTimings.imageDecode);
+            summary->gltf.geometryImportMilliseconds += asMilliseconds(importTimings.geometryImport);
+            summary->gltf.meshletBuildMilliseconds += asMilliseconds(importTimings.meshletBuild);
+        }
+        const auto copyStarted = std::chrono::steady_clock::now();
+        Mesh mesh = *imported;
+        separate_normal_images(mesh);
+        if (summary != nullptr)
+            summary->gltf.geometryImportMilliseconds += std::chrono::duration<double, std::milli>(
+                std::chrono::steady_clock::now() - copyStarted).count();
         for (std::size_t i = 0; i < mesh.images.size(); ++i) {
             auto &image = mesh.images[i];
+            const auto format = image_format(mesh, i);
+            if (!image.sourcePath.empty()) {
+                auto texture = image.sourcePath;
+                texture.replace_extension(format == default_texture_format(image.sourcePath)
+                                              ? std::string_view{".gtex"} : format_suffix(format));
+                if (cook_source_texture_cached(image.sourcePath, texture, format, cacheRoot,
+                                               summary == nullptr ? nullptr : &summary->gltfTextures) ==
+                    TextureCookResult::Failed) return false;
+                image.cookedPath = texture.lexically_relative(output.parent_path().empty()
+                                                                 ? std::filesystem::path{"."}
+                                                                 : output.parent_path());
+                if (image.cookedPath.empty()) return false;
+                continue;
+            }
             if (image.width == 0 || image.height == 0 || image.rgbaPixels.empty()) return false;
-            const bool srgb = std::ranges::any_of(mesh.materials, [i](const PBRMaterial &material) {
-                const auto index = static_cast<std::int32_t>(i);
-                return material.baseColorTexture == index || material.
-                       emissiveTexture == index;
-            });
-            const auto cooked = cook_bc7(image.rgbaPixels, image.width, image.height, srgb);
             const auto texture = texture_path(output, i);
-            if (!save_gtex(texture, cooked)) return false;
+            if (cook_image_texture_cached(image.rgbaPixels, image.width, image.height, texture,
+                                          format, cacheRoot,
+                                          summary == nullptr ? nullptr : &summary->gltfTextures) ==
+                TextureCookResult::Failed) return false;
             image.cookedPath = texture.filename();
             image.cooked.reset();
             image.rgbaPixels.clear();
         }
-        return save_gmesh(output, mesh);
+        return save_gmesh(output, mesh, summary == nullptr ? nullptr : &summary->gltf) &&
+               CookCache::write_artifact_key(output, *meshKey);
     }
 } // namespace Engine::Assets

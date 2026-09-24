@@ -59,9 +59,10 @@ find_path(VMA_INCLUDE_DIR NAMES vk_mem_alloc.h HINTS "$ENV{VULKAN_SDK}/Include/v
 # top-level project: it also configures GUI/CLI tools and their dependencies.
 # cmp_core's standalone CMake file uses this visual-studio folder variable.
 set(PROJECT_FOLDER_SDK_LIBS "ThirdParty/Compressonator")
+set(GAMEENGINE_COMPRESSONATOR_REVISION "f4b53d79ec5abbb50924f58aebb7bf2793200b94")
 FetchContent_Declare(CompressonatorCore
     GIT_REPOSITORY https://github.com/GPUOpen-Tools/compressonator.git
-    GIT_TAG f4b53d79ec5abbb50924f58aebb7bf2793200b94
+    GIT_TAG ${GAMEENGINE_COMPRESSONATOR_REVISION}
     GIT_SHALLOW TRUE
     SOURCE_SUBDIR cmp_core)
 FetchContent_MakeAvailable(CompressonatorCore)
