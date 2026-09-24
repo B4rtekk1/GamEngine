@@ -2,6 +2,7 @@
 #include "Engine/Renderer/Geometry/GpuVertex.h"
 #include <algorithm>
 #include <cstring>
+#include <limits>
 #include <stdexcept>
 
 namespace Engine {
@@ -45,6 +46,20 @@ void AccelerationStructureManager::createStructure(Structure& s, VkAccelerationS
     VkAccelerationStructureDeviceAddressInfoKHR address{VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_DEVICE_ADDRESS_INFO_KHR}; address.accelerationStructure = s.handle; s.address = getAddress_(device_, &address);
 }
 VkDeviceAddress AccelerationStructureManager::meshAddress(const BlasKey& key) const noexcept { const auto i = blases_.find(key); return i == blases_.end() ? 0 : i->second.address; }
+VkDeviceAddress AccelerationStructureManager::ensureScratch(Buffer& buffer, VkDeviceSize requiredSize) {
+    if (requiredSize == 0) return 0;
+    const VkDeviceSize padding = scratchAlignment_ - 1;
+    if (requiredSize > std::numeric_limits<VkDeviceSize>::max() - padding)
+        throw std::overflow_error("Acceleration structure scratch size overflow");
+    const VkDeviceSize allocationSize = requiredSize + padding;
+    if (buffer.size() < allocationSize) {
+        buffer.destroy();
+        buffer.createDeviceLocalEmpty(device_, allocationSize, Scratch, allocator_, true);
+    }
+    const VkDeviceAddress base = buffer.deviceAddress();
+    const VkDeviceAddress alignment = static_cast<VkDeviceAddress>(scratchAlignment_);
+    return (base + alignment - 1) & ~(alignment - 1);
+}
 void AccelerationStructureManager::rebuildBlases(VkCommandBuffer cmd, std::span<const MeshBuildInput> meshes) {
     if (!device_ || !cmd) throw std::logic_error("Acceleration structure manager is not initialized");
     if (!blases_.empty() && vkDeviceWaitIdle(device_) != VK_SUCCESS) throw std::runtime_error("Could not idle device before rebuilding BLASes");
@@ -56,10 +71,9 @@ void AccelerationStructureManager::rebuildBlases(VkCommandBuffer cmd, std::span<
         VkAccelerationStructureGeometryKHR g{VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_KHR}; g.geometryType = VK_GEOMETRY_TYPE_TRIANGLES_KHR; g.geometry.triangles = t; g.flags = VK_GEOMETRY_OPAQUE_BIT_KHR; uint32_t pc = m.indexCount / 3;
         VkAccelerationStructureBuildGeometryInfoKHR b{VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_GEOMETRY_INFO_KHR}; b.type = VK_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL_KHR; b.flags = VK_BUILD_ACCELERATION_STRUCTURE_PREFER_FAST_TRACE_BIT_KHR; b.mode = VK_BUILD_ACCELERATION_STRUCTURE_MODE_BUILD_KHR; b.geometryCount = 1; b.pGeometries = &g;
         VkAccelerationStructureBuildSizesInfoKHR z{VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_SIZES_INFO_KHR}; getBuildSizes_(device_, VK_ACCELERATION_STRUCTURE_BUILD_TYPE_DEVICE_KHR, &b, &pc, &z); maxScratch = std::max(maxScratch, z.buildScratchSize); pending.push_back({&m, g, z, pc}); }
-    const VkDeviceSize scratch = (maxScratch + scratchAlignment_ - 1) / scratchAlignment_ * scratchAlignment_;
-    if (blasScratch_.size() < scratch) { blasScratch_.destroy(); if (scratch) blasScratch_.createDeviceLocalEmpty(device_, scratch, Scratch, allocator_, true); }
+    const VkDeviceAddress scratchAddress = ensureScratch(blasScratch_, maxScratch);
     for (const auto& p : pending) { auto& s = blases_[p.mesh->key]; createStructure(s, VK_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL_KHR, p.sizes.accelerationStructureSize);
-        VkAccelerationStructureBuildGeometryInfoKHR b{VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_GEOMETRY_INFO_KHR}; b.type = VK_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL_KHR; b.flags = VK_BUILD_ACCELERATION_STRUCTURE_PREFER_FAST_TRACE_BIT_KHR; b.mode = VK_BUILD_ACCELERATION_STRUCTURE_MODE_BUILD_KHR; b.geometryCount = 1; b.pGeometries = &p.geometry; b.dstAccelerationStructure = s.handle; b.scratchData.deviceAddress = blasScratch_.deviceAddress();
+        VkAccelerationStructureBuildGeometryInfoKHR b{VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_GEOMETRY_INFO_KHR}; b.type = VK_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL_KHR; b.flags = VK_BUILD_ACCELERATION_STRUCTURE_PREFER_FAST_TRACE_BIT_KHR; b.mode = VK_BUILD_ACCELERATION_STRUCTURE_MODE_BUILD_KHR; b.geometryCount = 1; b.pGeometries = &p.geometry; b.dstAccelerationStructure = s.handle; b.scratchData.deviceAddress = scratchAddress;
         VkAccelerationStructureBuildRangeInfoKHR r{.primitiveCount = p.primitives}; const VkAccelerationStructureBuildRangeInfoKHR* rs[] = {&r}; cmdBuild_(cmd, 1, &b, rs); buildBarrier(cmd, VK_ACCESS_2_ACCELERATION_STRUCTURE_READ_BIT_KHR | VK_ACCESS_2_ACCELERATION_STRUCTURE_WRITE_BIT_KHR); }
 }
 void AccelerationStructureManager::updateTlas(VkCommandBuffer cmd, uint32_t index, std::span<const InstanceBuildInput> instances) {
@@ -72,8 +86,9 @@ void AccelerationStructureManager::updateTlas(VkCommandBuffer cmd, uint32_t inde
     VkAccelerationStructureGeometryInstancesDataKHR data{VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_INSTANCES_DATA_KHR}; data.data.deviceAddress = f.instances.deviceAddress(); VkAccelerationStructureGeometryKHR g{VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_KHR}; g.geometryType = VK_GEOMETRY_TYPE_INSTANCES_KHR; g.geometry.instances = data; uint32_t count = static_cast<uint32_t>(records.size());
     VkAccelerationStructureBuildGeometryInfoKHR b{VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_GEOMETRY_INFO_KHR}; b.type = VK_ACCELERATION_STRUCTURE_TYPE_TOP_LEVEL_KHR; b.flags = VK_BUILD_ACCELERATION_STRUCTURE_PREFER_FAST_TRACE_BIT_KHR | VK_BUILD_ACCELERATION_STRUCTURE_ALLOW_UPDATE_BIT_KHR; b.mode = f.tlasBuilt && count == f.builtInstanceCount ? VK_BUILD_ACCELERATION_STRUCTURE_MODE_UPDATE_KHR : VK_BUILD_ACCELERATION_STRUCTURE_MODE_BUILD_KHR; b.geometryCount = 1; b.pGeometries = &g; VkAccelerationStructureBuildSizesInfoKHR z{VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_SIZES_INFO_KHR}; getBuildSizes_(device_, VK_ACCELERATION_STRUCTURE_BUILD_TYPE_DEVICE_KHR, &b, &count, &z);
     if (!f.tlas.handle || f.tlasAllocatedSize < z.accelerationStructureSize) { destroyStructure(f.tlas); createStructure(f.tlas, VK_ACCELERATION_STRUCTURE_TYPE_TOP_LEVEL_KHR, z.accelerationStructureSize); f.tlasAllocatedSize = z.accelerationStructureSize; f.tlasBuilt = false; b.mode = VK_BUILD_ACCELERATION_STRUCTURE_MODE_BUILD_KHR; }
-    const VkDeviceSize need = std::max(z.buildScratchSize, z.updateScratchSize); const VkDeviceSize scratch = (need + scratchAlignment_ - 1) / scratchAlignment_ * scratchAlignment_; if (f.scratch.size() < scratch) { f.scratch.destroy(); f.scratch.createDeviceLocalEmpty(device_, scratch, Scratch, allocator_, true); }
-    buildBarrier(cmd, VK_ACCESS_2_ACCELERATION_STRUCTURE_READ_BIT_KHR | VK_ACCESS_2_ACCELERATION_STRUCTURE_WRITE_BIT_KHR); b.srcAccelerationStructure = b.mode == VK_BUILD_ACCELERATION_STRUCTURE_MODE_UPDATE_KHR ? f.tlas.handle : VK_NULL_HANDLE; b.dstAccelerationStructure = f.tlas.handle; b.scratchData.deviceAddress = f.scratch.deviceAddress(); VkAccelerationStructureBuildRangeInfoKHR r{.primitiveCount = count}; const VkAccelerationStructureBuildRangeInfoKHR* rs[] = {&r}; cmdBuild_(cmd, 1, &b, rs); f.builtInstanceCount = count; f.tlasBuilt = true;
+    const VkDeviceSize need = b.mode == VK_BUILD_ACCELERATION_STRUCTURE_MODE_UPDATE_KHR ? z.updateScratchSize : z.buildScratchSize;
+    const VkDeviceAddress scratchAddress = ensureScratch(f.scratch, need);
+    buildBarrier(cmd, VK_ACCESS_2_ACCELERATION_STRUCTURE_READ_BIT_KHR | VK_ACCESS_2_ACCELERATION_STRUCTURE_WRITE_BIT_KHR); b.srcAccelerationStructure = b.mode == VK_BUILD_ACCELERATION_STRUCTURE_MODE_UPDATE_KHR ? f.tlas.handle : VK_NULL_HANDLE; b.dstAccelerationStructure = f.tlas.handle; b.scratchData.deviceAddress = scratchAddress; VkAccelerationStructureBuildRangeInfoKHR r{.primitiveCount = count}; const VkAccelerationStructureBuildRangeInfoKHR* rs[] = {&r}; cmdBuild_(cmd, 1, &b, rs); f.builtInstanceCount = count; f.tlasBuilt = true;
 }
 VkAccelerationStructureKHR AccelerationStructureManager::tlas(uint32_t index) const noexcept { return frames_[index % FramesInFlight].tlas.handle; }
 bool AccelerationStructureManager::ready(uint32_t index) const noexcept { return tlas(index) != VK_NULL_HANDLE; }

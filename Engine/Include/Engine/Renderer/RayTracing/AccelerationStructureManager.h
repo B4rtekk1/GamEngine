@@ -73,6 +73,7 @@ namespace Engine {
         void destroyStructure(Structure& structure) noexcept;
         void createStructure(Structure& structure, VkAccelerationStructureTypeKHR type, VkDeviceSize bytes);
         [[nodiscard]] VkDeviceAddress meshAddress(const BlasKey& key) const noexcept;
+        [[nodiscard]] VkDeviceAddress ensureScratch(Buffer& buffer, VkDeviceSize requiredSize);
 
         VkDevice device_{VK_NULL_HANDLE};
         VmaAllocator allocator_{VK_NULL_HANDLE};
