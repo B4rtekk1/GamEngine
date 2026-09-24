@@ -159,12 +159,9 @@ namespace Engine {
             std::remove_if(outlineOptions.vertexAttributes.begin(),
                            outlineOptions.vertexAttributes.end(),
                            [](const VkVertexInputAttributeDescription &attribute) {
-                               // The outline only needs position (0), normal (3),
-                               // and the instance model columns (4-7).
-                               return attribute.location == 1 ||
-                                      attribute.location == 2 ||
-                                      attribute.location == 8 ||
-                                      attribute.location >= 9;
+                               // The outline reads position, both UV sets,
+                               // normal, material index, and tangent.
+                               return attribute.location == 1;
                            }),
             outlineOptions.vertexAttributes.end());
         outlinePipeline_.create(device, outlineOptions);

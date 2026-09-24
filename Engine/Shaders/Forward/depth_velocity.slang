@@ -29,7 +29,9 @@ struct VertexOutput {
     [[vk::location(0)]] float2 texCoord;
     [[vk::location(1)]] float2 texCoord1;
     [[vk::location(2)]] nointerpolation uint materialIndex;
-    [[vk::location(5)]] float3 viewNormal;
+    [[vk::location(5)]] float3 worldNormal;
+    [[vk::location(6)]] float3 baseWorldPosition;
+    [[vk::location(7)]] float3 worldDisplacementDirection;
 #if DEPTH_OUTPUT_VELOCITY
     [[vk::location(3)]] noperspective float2 currentNdc;
     [[vk::location(4)]] float4 previousClip;
@@ -61,8 +63,11 @@ VertexOutput vertexMain(VertexInput input, uint instanceIndex : SV_InstanceID,
     output.texCoord = input.texCoord;
     output.texCoord1 = input.texCoord1;
     output.materialIndex = materialIndex;
-    float3 worldNormal = normalize(mul(displaced.normal / instance.scaleBase.xyz, rotation(instance.rotation)));
-    output.viewNormal = normalize(mul(float4(worldNormal, 0.0), frame.view).xyz);
+    output.worldNormal = normalize(mul(displaced.normal / instance.scaleBase.xyz, rotation(instance.rotation)));
+    output.baseWorldPosition = mul(input.position * instance.scaleBase.xyz,
+                                   rotation(instance.rotation)) + instance.positionMaterial.xyz;
+    output.worldDisplacementDirection = mul(normalize(input.normal) * instance.scaleBase.xyz,
+                                            rotation(instance.rotation));
 #if DEPTH_OUTPUT_VELOCITY
     RendererPreviousTransformData previous = previousTransforms[visibleIndex];
     float3 previousWorld = mul(localPosition * previous.previousScale.xyz, rotation(previous.previousRotation)) + previous.previousPosition.xyz;
@@ -93,11 +98,14 @@ float2 encodeOct(float3 n) { n /= max(abs(n.x) + abs(n.y) + abs(n.z), 1e-5); if(
 struct FragmentOutput { [[vk::location(1)]] float2 velocity : SV_Target1; [[vk::location(2)]] float2 viewNormal : SV_Target2; };
 [shader("fragment")]
 FragmentOutput fragmentMain(VertexOutput input, bool frontFace : SV_IsFrontFace) {
+    MaterialData material = materials[input.materialIndex];
+    float3 worldNormal = displacedMaterialWorldNormal(
+        material, input.baseWorldPosition, input.worldNormal, input.worldDisplacementDirection,
+        input.texCoord, input.texCoord1);
     alphaTest(input);
     FragmentOutput output;
     output.velocity = (input.currentNdc - input.previousClip.xy / input.previousClip.w) * 0.5;
-    float3 viewNormal = normalize(input.viewNormal);
-    MaterialData material = materials[input.materialIndex];
+    float3 viewNormal = normalize(mul(float4(worldNormal, 0.0), frame.view).xyz);
     if ((material.textureIndices.w & 1) != 0 && !frontFace) viewNormal = -viewNormal;
     output.viewNormal = encodeOct(viewNormal);
     return output;

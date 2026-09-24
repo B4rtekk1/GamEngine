@@ -70,6 +70,8 @@ struct ForwardVertexOutput
     [[vk::location(4)]] float2 texCoord;
     [[vk::location(5)]] float4 tangent;
     [[vk::location(6)]] float2 texCoord1;
+    [[vk::location(9)]] float3 baseWorldPosition;
+    [[vk::location(10)]] float3 worldDisplacementDirection;
 #if FORWARD_OUTPUT_VELOCITY
     [[vk::location(7)]] noperspective float2 currentNdc;
     [[vk::location(8)]] float4 previousClip;
@@ -117,6 +119,10 @@ ForwardVertexOutput vertexMain(ForwardVertexInput input, uint instanceIndex : SV
     output.color = input.color;
     output.worldPosition = worldPosition.xyz;
     output.normal = mul(displaced.normal, normalMatrix);
+    output.baseWorldPosition = mul(input.position * instance.scaleBase.xyz, rotationMatrix) +
+                               instance.positionMaterial.xyz;
+    output.worldDisplacementDirection = mul(normalize(input.normal) * instance.scaleBase.xyz,
+                                            rotationMatrix);
     output.materialIndex = materialIndex;
     output.texCoord = input.texCoord;
     output.texCoord1 = input.texCoord1;
@@ -247,6 +253,8 @@ struct ForwardFragmentInput
     [[vk::location(4)]] float2 texCoord;
     [[vk::location(5)]] float4 tangent;
     [[vk::location(6)]] float2 texCoord1;
+    [[vk::location(9)]] float3 baseWorldPosition;
+    [[vk::location(10)]] float3 worldDisplacementDirection;
 #if FORWARD_OUTPUT_VELOCITY
     [[vk::location(7)]] noperspective float2 currentNdc;
     [[vk::location(8)]] float4 previousClip;
@@ -266,6 +274,9 @@ struct ForwardFragmentOutput
 ForwardFragmentOutput fragmentMain(ForwardFragmentInput input)
 {
     MaterialData material = materials[input.materialIndex];
+    const float3 displacedGeometricNormal = displacedMaterialWorldNormal(
+        material, input.baseWorldPosition, input.normal, input.worldDisplacementDirection,
+        input.texCoord, input.texCoord1);
     float3 vertexColor = input.color;
     if (input.color.r < 0.0)
     {
@@ -374,7 +385,7 @@ ForwardFragmentOutput fragmentMain(ForwardFragmentInput input)
 
     // Keep the unperturbed, geometric normal.  It is required to prevent a
     // normal map from reflecting the environment through the surface.
-    float3 geometricNormal = normalize(input.normal);
+    float3 geometricNormal = displacedGeometricNormal;
     float faceSign = doubleSided && !input.isFrontFace ? -1.0 : 1.0;
     geometricNormal *= faceSign;
     float3 normal = geometricNormal;
@@ -431,7 +442,7 @@ ForwardFragmentOutput fragmentMain(ForwardFragmentInput input)
     graphInput.viewDirection = viewDirection;
     graphInput.uv0 = input.texCoord;
     graphInput.uv1 = input.texCoord1;
-    graphInput.tangent = normalize(input.tangent.xyz);
+    graphInput.tangent = normalize(input.tangent.xyz - normal * dot(normal, input.tangent.xyz));
     graphInput.bitangent = normalize(cross(normal, graphInput.tangent)) * input.tangent.w;
     graphInput.time = frame.windGustFrequencyTime.w;
     MaterialSurface graphSurface = evaluateMaterial(graphInput);
