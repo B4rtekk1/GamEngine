@@ -8,6 +8,7 @@
 
 #include <cstdint>
 #include <filesystem>
+#include <limits>
 #include <optional>
 #include <vector>
 
@@ -152,6 +153,23 @@ namespace Engine {
         [[nodiscard]] uint32_t indexCount() const noexcept {
             return static_cast<uint32_t>(indices.size());
         }
+
+        /** Computes bounds directly from the current vertex positions. */
+        [[nodiscard]] AABB calculatedLocalBounds() const noexcept {
+            if (vertices.empty()) {
+                return {};
+            }
+            glm::vec3 minimum{std::numeric_limits<float>::max()};
+            glm::vec3 maximum{std::numeric_limits<float>::lowest()};
+            for (const Vertex& vertex : vertices) {
+                minimum = glm::min(minimum, vertex.position.native());
+                maximum = glm::max(maximum, vertex.position.native());
+            }
+            return {Vec3{minimum}, Vec3{maximum}};
+        }
+
+        /** Rebuilds the cached local-space bounds after vertex positions change. */
+        void recalculateLocalBounds() noexcept { localBounds = calculatedLocalBounds(); }
 
         /** @brief Marks CPU-side vertex or index geometry as having changed. */
         void markGeometryChanged() noexcept { ++geometryRevision; }

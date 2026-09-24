@@ -142,16 +142,7 @@ namespace Engine::Assets {
 
     bool save_gmesh(const std::filesystem::path &path, const Mesh &mesh) {
         Mesh cooked = mesh;
-        if (!cooked.vertices.empty()) {
-            cooked.localBounds = {.min = Vec3{std::numeric_limits<float>::max(), std::numeric_limits<float>::max(),
-                                               std::numeric_limits<float>::max()},
-                                  .max = Vec3{std::numeric_limits<float>::lowest(), std::numeric_limits<float>::lowest(),
-                                               std::numeric_limits<float>::lowest()}};
-            for (const Vertex& vertex : cooked.vertices) {
-                cooked.localBounds.min = Vec3{glm::min(cooked.localBounds.min.native(), vertex.position.native())};
-                cooked.localBounds.max = Vec3{glm::max(cooked.localBounds.max.native(), vertex.position.native())};
-            }
-        }
+        cooked.recalculateLocalBounds();
         subdivide_render_sections(cooked);
         if (!build_meshlets(cooked)) return false;
         if (cooked.vertices.size() > maxElements || cooked.indices.size() > maxElements || cooked.meshlets.size() >
@@ -302,16 +293,7 @@ namespace Engine::Assets {
             image.gtex.emplace(std::move(*gtex));
         }
         if (mesh.empty() || !valid_meshlets(mesh)) return {};
-        if (prefix.version != version && !mesh.vertices.empty()) {
-            mesh.localBounds = {.min = Vec3{std::numeric_limits<float>::max(), std::numeric_limits<float>::max(),
-                                             std::numeric_limits<float>::max()},
-                                .max = Vec3{std::numeric_limits<float>::lowest(), std::numeric_limits<float>::lowest(),
-                                             std::numeric_limits<float>::lowest()}};
-            for (const Vertex& vertex : mesh.vertices) {
-                mesh.localBounds.min = Vec3{glm::min(mesh.localBounds.min.native(), vertex.position.native())};
-                mesh.localBounds.max = Vec3{glm::max(mesh.localBounds.max.native(), vertex.position.native())};
-            }
-        }
+        mesh.recalculateLocalBounds();
         if (mesh.renderSections.empty()) {
             AABB bounds{
                 .min = Vec3{
@@ -382,6 +364,7 @@ namespace Engine::Assets {
             !skipRecords(header.renderSections, sizeof(Mesh::RenderSection)) ||
             !read_vector(file, mesh.meshletClusters) || mesh.empty() || !valid_meshlets(mesh) ||
             !valid_cluster_hierarchy(mesh)) return {};
+        mesh.recalculateLocalBounds();
         mesh.sourcePath = path;
         return std::make_shared<Mesh>(std::move(mesh));
     }

@@ -8,7 +8,7 @@ namespace Engine {
 class Plane final {
 public:
     [[nodiscard]] static Mesh createMesh() {
-        return {
+        Mesh mesh{
             .vertices = {
                 {{-0.5F, 0.0F, -0.5F}, {0.70F, 0.70F, 0.70F}, {0.0F, 0.0F}, {0.0F, 1.0F, 0.0F}},
                 {{ 0.5F, 0.0F, -0.5F}, {0.70F, 0.70F, 0.70F}, {1.0F, 0.0F}, {0.0F, 1.0F, 0.0F}},
@@ -17,6 +17,8 @@ public:
             },
             .indices = {0, 2, 1, 2, 0, 3},
         };
+        mesh.recalculateLocalBounds();
+        return mesh;
     }
 };
 

@@ -38,6 +38,7 @@ namespace Engine {
                     mesh.indices.insert(mesh.indices.end(), {first, first + 1, second, first + 1, second + 1, second});
                 }
             }
+            mesh.recalculateLocalBounds();
             return mesh;
         }
     };

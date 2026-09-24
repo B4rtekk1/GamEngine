@@ -824,7 +824,7 @@
                     const MeshUploadRecord& planned = rendererUploads.at(entity);
                     renderer.firstIndex = planned.firstIndex;
                     const std::uint32_t firstVertex = planned.firstVertex;
-                    const AABB localBounds = mesh->localBounds;
+                    const AABB localBounds = metadata.bounds;
                     // Persist the GPU range on the ECS-facing handle.  The
                     // draw path can therefore stop consulting MeshSourceData
                     // once all batches use MeshGpuResource directly.
@@ -837,7 +837,6 @@
                         resource->meshletCount = static_cast<std::uint32_t>(mesh->meshlets.size());
                         resource->firstMeshlet = firstMeshlets.contains(resource.get()) ? firstMeshlets.at(resource.get()) : 0U;
                         resource->bounds = localBounds;
-                        resource->metadata.bounds = localBounds;
                     }
                     // Culling must use the same parent-composed matrix as the
                     // instance renderer. Otherwise a child can be rendered at

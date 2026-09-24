@@ -423,6 +423,7 @@ Mesh buildReusableOceanPageMesh() {
             .localBounds = {.min = {0.0F, 0.0F, 0.0F}, .max = {1.0F, 0.0F, 1.0F}},
         });
     }
+    mesh.recalculateLocalBounds();
     return mesh;
 }
 } // namespace Engine::Water

@@ -75,6 +75,7 @@ namespace Engine {
                     });
                 }
             }
+            mesh.recalculateLocalBounds();
             return mesh;
         }
     };

@@ -641,6 +641,7 @@ namespace Engine::Assets {
             // large primitives into spatially local coarse-culling sections.
             subdivide_render_sections(mesh);
             if (mesh.empty() || !build_meshlets(mesh)) return {};
+            mesh.recalculateLocalBounds();
             mesh.sourcePath = path;
             return std::make_shared<const Mesh>(std::move(mesh));
         }

@@ -137,6 +137,7 @@ Mesh TerrainComponent::createMesh(const std::uint32_t lodLevel) const {
             });
         }
     }
+    mesh.recalculateLocalBounds();
     return mesh;
 }
 

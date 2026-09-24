@@ -93,16 +93,8 @@ namespace Engine {
                 resource_->metadata.imagePaths.reserve(mesh.images.size());
                 for (const Mesh::Image& image : mesh.images)
                     resource_->metadata.imagePaths.push_back(image.cookedPath);
-                if (!mesh.vertices.empty()) {
-                    glm::vec3 minimum{std::numeric_limits<float>::max()};
-                    glm::vec3 maximum{std::numeric_limits<float>::lowest()};
-                    for (const Vertex& vertex : mesh.vertices) {
-                        minimum = glm::min(minimum, vertex.position.native());
-                        maximum = glm::max(maximum, vertex.position.native());
-                    }
-                    resource_->metadata.bounds = {Vec3{minimum}, Vec3{maximum}};
-                    resource_->bounds = resource_->metadata.bounds;
-                }
+                resource_->metadata.bounds = mesh.calculatedLocalBounds();
+                resource_->bounds = resource_->metadata.bounds;
             }
         }
         template <typename T>

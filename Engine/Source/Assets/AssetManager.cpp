@@ -190,6 +190,7 @@ namespace Engine::Assets {
                     }
                 }
             }
+            mesh.recalculateLocalBounds();
             return std::make_shared<const Mesh>(std::move(mesh));
         }
     } // namespace

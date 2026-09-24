@@ -1558,6 +1558,7 @@ namespace Engine {
                 }
                 mesh->images.push_back(std::move(value));
             }
+            mesh->recalculateLocalBounds();
             meshes.push_back(std::move(mesh));
         }
 

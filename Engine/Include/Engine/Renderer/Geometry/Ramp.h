@@ -11,7 +11,7 @@ namespace Engine {
         static constexpr Vec3 halfExtents() noexcept { return {3.0F, 2.0F, 2.0F}; }
 
         [[nodiscard]] static Mesh createMesh() {
-            return {
+            Mesh mesh{
                 .vertices = {
                     {{-3.0F, -2.0F, -2.0F}, {0.92F, 0.52F, 0.18F}, {0, 0}, {0, -1, 0}},
                     {{3.0F, -2.0F, -2.0F}, {0.92F, 0.52F, 0.18F}, {1, 0}, {0, -1, 0}},
@@ -39,6 +39,8 @@ namespace Engine {
                     14, 15, 16, 16, 17, 14,
                 },
             };
+            mesh.recalculateLocalBounds();
+            return mesh;
         }
     };
 } // namespace Engine

@@ -68,6 +68,7 @@ Mesh ProceduralCloud::createMesh(const ProceduralCloudComponent& settings) {
         }
         for (const std::uint32_t index : puff.indices) cloud.indices.push_back(firstVertex + index);
     }
+    cloud.recalculateLocalBounds();
     return cloud;
 }
 } // namespace Engine

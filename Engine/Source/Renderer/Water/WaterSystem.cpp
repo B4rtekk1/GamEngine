@@ -252,6 +252,7 @@ namespace Engine {
             if (ccw) mesh.indices.insert(mesh.indices.end(), {polygon[0], polygon[1], polygon[2]});
             else mesh.indices.insert(mesh.indices.end(), {polygon[0], polygon[2], polygon[1]});
         }
+        mesh.recalculateLocalBounds();
         return mesh;
     }
 
@@ -280,6 +281,7 @@ namespace Engine {
             const uint32_t first = i * 2U;
             mesh.indices.insert(mesh.indices.end(), {first, first + 1U, first + 3U, first, first + 3U, first + 2U});
         }
+        mesh.recalculateLocalBounds();
         return mesh;
     }
 
