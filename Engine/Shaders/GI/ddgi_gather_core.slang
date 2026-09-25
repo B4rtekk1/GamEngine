@@ -87,6 +87,6 @@ DDGIGatherResult ddgiGatherCascade(float3 position, float3 geometricNormal,
         ? irradiance / result.postVisibilityWeight : float3(0.0);
     result.visibility = weightedVisibility / max(result.preVisibilityWeight, 0.0001);
     result.activeProbeFraction = float(activeProbeCount) / 8.0;
-    result.blendWeight = saturate(validWeight * 4.0) * transition;
+    result.blendWeight = saturate(validWeight) * transition;
     return result;
 }
