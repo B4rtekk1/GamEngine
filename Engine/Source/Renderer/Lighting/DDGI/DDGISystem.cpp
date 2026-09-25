@@ -18,6 +18,12 @@ namespace {
     };
     static_assert(sizeof(PushConstants) == 64);
 
+    struct ProbeUpdate final {
+        std::uint32_t probeIndex;
+        std::uint32_t framesSinceLastUpdate;
+    };
+    static_assert(sizeof(ProbeUpdate) == 8);
+
     std::int32_t positiveModulo(std::int32_t value, std::int32_t count) {
         return (value % count + count) % count;
     }
@@ -57,7 +63,8 @@ void DDGISystem::create(VkPhysicalDevice physical, VkDevice device, VmaAllocator
     device_ = device;
     try {
         constexpr std::array<float, 3> spacings{2.0F, 6.0F, 18.0F};
-        constexpr std::array<std::uint32_t, 3> rays{64, 32, 16};
+        // Diagnostic quality setting for checking DDGI sampling and scheduling.
+        constexpr std::array<std::uint32_t, 3> rays{256, 256, 256};
         for (std::size_t cascade = 0; cascade < volumes_.size(); ++cascade) {
             volumes_[cascade].probeSpacing = spacings[cascade];
             volumes_[cascade].raysPerProbe = rays[cascade];
@@ -66,7 +73,7 @@ void DDGISystem::create(VkPhysicalDevice physical, VkDevice device, VmaAllocator
         }
         for (auto& cascade : resources_.cascades) {
             auto& frame = cascade.history;
-            frame.rayData.create(physical, device, {64, 2048}, allocator,
+            frame.rayData.create(physical, device, {256, 2048}, allocator,
                                  VK_FILTER_NEAREST, VK_FORMAT_R16G16B16A16_SFLOAT, true);
             frame.irradiance.create(physical, device, {160, 1280}, allocator,
                                     VK_FILTER_LINEAR, VK_FORMAT_R16G16B16A16_SFLOAT, true);
@@ -78,7 +85,7 @@ void DDGISystem::create(VkPhysicalDevice physical, VkDevice device, VmaAllocator
                                    VK_FILTER_NEAREST, VK_FORMAT_R16G16B16A16_SFLOAT, true);
             frame.probeStates.createDeviceLocalEmpty(device, 2048 * 12,
                                                      VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, allocator);
-            frame.updateList.createDeviceLocalEmpty(device, 256 * sizeof(std::uint32_t),
+            frame.updateList.createDeviceLocalEmpty(device, 256 * sizeof(ProbeUpdate),
                                                     VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, allocator);
         }
         const std::array<VkDescriptorSetLayoutBinding, 16> bindings{{
@@ -165,10 +172,10 @@ void DDGISystem::record(VkCommandBuffer commandBuffer, std::uint32_t frameSlot,
     if (!created() || !commandBuffer || !sceneSet || !tlas || !instances || !meshes ||
         !materials || !vertices || !indices) return;
     frameSlot %= 2;
-    // Across the three cascades this is 256 probes, up to 11,264 trace
-    // rays (128*64 + 64*32 + 64*16), and up to 8,192 validation rays.
+    // Diagnostic setting: 768 probes, 196,608 trace rays and up to 24,576
+    // validation rays across the three cascades each frame.
     // Each cascade has its own 2048-probe history.
-    constexpr std::array<std::uint32_t, 3> cascadeUpdates{128, 64, 64};
+    constexpr std::array<std::uint32_t, 3> cascadeUpdates{256, 256, 256};
     for (std::size_t cascadeIndex = 0; cascadeIndex < volumes_.size(); ++cascadeIndex) {
     auto& volume = volumes_[cascadeIndex];
     const std::uint32_t updateCount = cascadeUpdates[cascadeIndex];
@@ -339,10 +346,10 @@ void DDGISystem::record(VkCommandBuffer commandBuffer, std::uint32_t frameSlot,
     vkCmdDispatch(commandBuffer, (updateCount + 63) / 64, 1, 1);
     computeBarrier();
     vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, irradiancePipeline_);
-    // The tile dispatches also write their atlas border texels.
-    vkCmdDispatch(commandBuffer, 2, 2, updateCount);
+    // One workgroup per probe synchronizes interior blending with border copies.
+    vkCmdDispatch(commandBuffer, 1, 1, updateCount);
     vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, distancePipeline_);
-    vkCmdDispatch(commandBuffer, 3, 3, updateCount);
+    vkCmdDispatch(commandBuffer, 1, 1, updateCount);
     const auto finishIrradiance = imageBarrier(frame.irradiance.image(), VK_IMAGE_LAYOUT_GENERAL,
         VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
         VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT, VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT,

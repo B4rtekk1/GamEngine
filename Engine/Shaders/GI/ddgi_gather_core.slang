@@ -2,8 +2,9 @@ import GI.ddgi_common;
 
 float4 ddgiSampleProbe(Sampler2D atlas, uint probeIndex, float3 direction, uint interior) {
     const uint2 base = ddgiAtlasBase(probeIndex, interior);
-    const float2 local = ddgiOctEncode(direction) * 0.5 + 0.5;
-    const float2 pixel = float2(base) + 1.5 + local * float(interior - 1u);
+    const float2 oct = ddgiOctEncode(direction);
+    const float tileSize = float(interior + 2u);
+    const float2 pixel = float2(base) + tileSize * 0.5 + oct * (float(interior) * 0.5);
     const float2 extent = float2(16u * (interior + 2u), 128u * (interior + 2u));
     return atlas.SampleLevel(pixel / extent, 0.0);
 }
@@ -18,7 +19,7 @@ struct DDGIGatherResult {
 };
 
 DDGIGatherResult ddgiGatherCascade(float3 position, float3 geometricNormal,
-                         float3 viewDirection, float3 origin,
+                         float3 shadingNormal, float3 viewDirection, float3 origin,
                          float spacing, int3 scrollOffset,
                          Sampler2D irradianceTexture, Sampler2D distanceTexture,
                          Sampler2D probeTexture) {
@@ -56,7 +57,7 @@ DDGIGatherResult ddgiGatherCascade(float3 position, float3 geometricNormal,
         const float3 direction = distance > 1e-4 ? toSurface / distance : geometricNormal;
         const float3 cornerWeight = lerp(1.0 - fractional, fractional, float3(offset));
         const float trilinearWeight = cornerWeight.x * cornerWeight.y * cornerWeight.z;
-        const float4 probeIrradiance = ddgiSampleProbe(irradianceTexture, index, geometricNormal, DDGI_IRRADIANCE_INTERIOR);
+        const float4 probeIrradiance = ddgiSampleProbe(irradianceTexture, index, shadingNormal, DDGI_IRRADIANCE_INTERIOR);
         const float confidence = saturate(probeIrradiance.a);
         if (confidence <= 0.0) continue;
         // Volume coverage controls cascade blending independently of the

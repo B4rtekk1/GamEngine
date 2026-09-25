@@ -12,7 +12,7 @@ import GI.ddgi_gather_core;
 [[vk::binding(0, 1)]] RaytracingAccelerationStructure sceneTlas;
 [[vk::binding(5, 1), vk::image_format("rgba16f")]] RWTexture2D<float4> rayData;
 [[vk::binding(9, 1), vk::image_format("rgba16f")]] RWTexture2D<float4> probeData;
-[[vk::binding(12, 1)]] StructuredBuffer<uint> probeUpdateList;
+[[vk::binding(12, 1)]] StructuredBuffer<DDGIProbeUpdate> probeUpdateList;
 // These views read the previous atlas contents while the DDGI update keeps
 // the images in GENERAL for storage writes later in the command buffer.
 [[vk::binding(13, 1)]] Sampler2D previousIrradiance;
@@ -95,7 +95,7 @@ float3 evaluateLocalDiffuse(float3 position, float3 normal, float3 albedo) {
 [numthreads(8, 8, 1)]
 void main(uint3 id : SV_DispatchThreadID) {
     if (id.x >= uint(ddgi.scrollOffsetRays.w) || id.y >= ddgiUpdateCount(ddgi)) return;
-    const uint probeIndex = probeUpdateList[id.y];
+    const uint probeIndex = probeUpdateList[id.y].probeIndex;
     const float4 probe = probeData[int2(ddgiProbePixel(probeIndex))];
     if (probe.w < 0.5) return;
     const uint rayCount = uint(ddgi.scrollOffsetRays.w);
@@ -131,7 +131,7 @@ void main(uint3 id : SV_DispatchThreadID) {
         float3 indirectIrradiance = diffuseIrradianceMap.SampleLevel(hit.normal, 0.0).rgb * 3.14159265;
         if (ddgi.distanceInitialized.y > 0.5) {
             const DDGIGatherResult recursive = ddgiGatherCascade(
-                hit.position, hit.normal, -direction, ddgi.originSpacing.xyz,
+                hit.position, hit.normal, hit.normal, -direction, ddgi.originSpacing.xyz,
                 ddgi.originSpacing.w, ddgi.scrollOffsetRays.xyz,
                 previousIrradiance, previousDistance, previousProbeData);
             indirectIrradiance = lerp(indirectIrradiance, recursive.irradiance, recursive.blendWeight);

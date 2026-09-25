@@ -1,7 +1,7 @@
 import GI.ddgi_common;
 [[vk::push_constant]] DDGIConstants ddgi;
 [[vk::binding(11, 1)]] RWStructuredBuffer<DDGIProbeState> probeStates;
-[[vk::binding(12, 1)]] RWStructuredBuffer<uint> probeUpdateList;
+[[vk::binding(12, 1)]] RWStructuredBuffer<DDGIProbeUpdate> probeUpdateList;
 
 groupshared uint scores[DDGI_PROBES];
 groupshared uint indices[DDGI_PROBES];
@@ -33,7 +33,12 @@ void main(uint3 id : SV_DispatchThreadID, uint groupIndex : SV_GroupIndex) {
     }
     if (groupIndex < ddgiUpdateCount(ddgi)) {
         const uint probeIndex = indices[groupIndex];
-        probeUpdateList[groupIndex] = probeIndex;
-        probeStates[probeIndex].lastUpdatedFrame = uint(ddgi.scrollDeltaFrame.w);
+        const uint currentFrame = uint(ddgi.scrollDeltaFrame.w);
+        DDGIProbeUpdate update;
+        update.probeIndex = probeIndex;
+        update.framesSinceLastUpdate = max(
+            currentFrame - probeStates[probeIndex].lastUpdatedFrame, 1u);
+        probeUpdateList[groupIndex] = update;
+        probeStates[probeIndex].lastUpdatedFrame = currentFrame;
     }
 }

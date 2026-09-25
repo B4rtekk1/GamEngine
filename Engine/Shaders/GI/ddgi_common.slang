@@ -1,6 +1,7 @@
 static const uint3 DDGI_COUNTS = uint3(16u, 8u, 16u);
 static const uint DDGI_FIXED_RAYS = 32u;
 static const float DDGI_BACKFACE_THRESHOLD = 0.25;
+static const float DDGI_RANDOM_BACKFACE_THRESHOLD = 0.1;
 static const uint DDGI_PROBES = 2048u;
 static const uint DDGI_UPDATES_PER_FRAME = 256u;
 static const uint DDGI_IRRADIANCE_INTERIOR = 8u;
@@ -20,6 +21,11 @@ struct DDGIProbeState {
     uint state;
     uint lastUpdatedFrame;
     float variability;
+};
+
+struct DDGIProbeUpdate {
+    uint probeIndex;
+    uint framesSinceLastUpdate;
 };
 
 uint3 ddgiGrid(uint probeIndex) {
@@ -93,4 +99,16 @@ bool ddgiShouldValidate(float state, uint probeIndex, uint frameIndex) {
 uint2 ddgiAtlasBase(uint probeIndex, uint interior) {
     const uint stride = interior + 2u;
     return uint2((probeIndex % 16u) * stride, (probeIndex / 16u) * stride);
+}
+
+uint2 ddgiBorderSource(uint2 texel, uint interior) {
+    const uint last = interior + 1u;
+    const bool xBorder = texel.x == 0u || texel.x == last;
+    const bool yBorder = texel.y == 0u || texel.y == last;
+    if (xBorder && yBorder)
+        return uint2(texel.x == 0u ? interior : 1u,
+                     texel.y == 0u ? interior : 1u);
+    if (yBorder)
+        return uint2(last - texel.x, texel.y == 0u ? 1u : interior);
+    return uint2(texel.x == 0u ? 1u : interior, last - texel.y);
 }
