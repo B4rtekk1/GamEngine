@@ -129,6 +129,9 @@ namespace Engine {
         // x: logarithmic cluster Z scale, y: bias, z: prefiltered environment mip count, w: RT contact shadows enabled.
         glm::vec4 clusterZScaleBiasEnvironmentMipRtContact{};
         std::array<LocalLightGPU, MaxLocalLights> localLights{};
+        // Each cascade uses a snapped world origin and a toroidal atlas offset.
+        std::array<glm::vec4, 3> ddgiOriginSpacing{};
+        std::array<glm::ivec4, 3> ddgiScrollOffsets{};
     };
 
     /**

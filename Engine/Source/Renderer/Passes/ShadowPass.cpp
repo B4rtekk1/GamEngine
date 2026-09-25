@@ -114,7 +114,7 @@ namespace Engine {
             }
 
             // This is a compact list, not an array indexed by binding number.
-            VkDescriptorSetLayoutBinding bindings[20]{};
+            VkDescriptorSetLayoutBinding bindings[29]{};
             bindings[0] = {
                 0, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1,
                 VK_SHADER_STAGE_FRAGMENT_BIT, nullptr
@@ -196,6 +196,15 @@ namespace Engine {
                             VK_SHADER_STAGE_FRAGMENT_BIT, nullptr}; // RT contact visibility
             bindings[19] = {19, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1,
                             VK_SHADER_STAGE_FRAGMENT_BIT, nullptr}; // resolved directional visibility
+            bindings[20] = {20, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1,
+                            VK_SHADER_STAGE_FRAGMENT_BIT, nullptr}; // DDGI irradiance
+            bindings[21] = {21, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1,
+                            VK_SHADER_STAGE_FRAGMENT_BIT, nullptr}; // DDGI distance moments
+            bindings[22] = {22, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1,
+                            VK_SHADER_STAGE_FRAGMENT_BIT, nullptr}; // DDGI probe state
+            for (std::uint32_t binding = 23; binding <= 28; ++binding)
+                bindings[binding] = {binding, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1,
+                                     VK_SHADER_STAGE_FRAGMENT_BIT, nullptr};
             const VkDescriptorSetLayoutCreateInfo layoutInfo{
                 VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO, nullptr, 0,
                 static_cast<std::uint32_t>(std::size(bindings)), bindings
@@ -211,7 +220,7 @@ namespace Engine {
             const VkDescriptorPoolSize poolSizes[] = {
                 {
                     VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, frameCount * 6U *
-                                                               (MaxMaterialTextures + 10U +
+                                                               (MaxMaterialTextures + 19U +
                                                                 ReflectionProbeManager::TextureDescriptorCount)
                 },
                 {VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, frameCount * 6U},
@@ -302,7 +311,7 @@ namespace Engine {
                 const VkDescriptorBufferInfo reflectionProbeInfo{reflectionProbeBuffers[frame], 0, VK_WHOLE_SIZE};
                 std::vector<VkDescriptorImageInfo> reflectionTextures(
                     ReflectionProbeManager::TextureDescriptorCount, imageBasedLighting[1]);
-                VkWriteDescriptorSet writes[18]{};
+                VkWriteDescriptorSet writes[27]{};
                 writes[0] = {
                     VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr,
                     descriptorSets_[frame], 0, 0, 1,
@@ -399,6 +408,14 @@ namespace Engine {
                     VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
                     &linearImageInfo, nullptr, nullptr
                 };
+                for (std::uint32_t binding = 20; binding <= 28; ++binding) {
+                    writes[binding - 2] = {
+                        VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr,
+                        descriptorSets_[frame], binding, 0, 1,
+                        VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+                        materialTextures.data(), nullptr, nullptr
+                    };
+                }
                 // Standard forward consumes bindings 3/7 as the clustered range
                 // headers and compact light-index list.  Grass descriptors below
                 // retain their vertex-only cluster/deformation bindings.
@@ -618,6 +635,17 @@ namespace Engine {
                 sets[index], 18, 0, 1, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
                 &texture, nullptr, nullptr};
         }
+        vkUpdateDescriptorSets(device_, static_cast<std::uint32_t>(writes.size()), writes.data(), 0, nullptr);
+    }
+
+    void ShadowPass::setDDGITextures(const std::uint32_t frameIndex,
+                                     const std::array<VkDescriptorImageInfo, 9>& textures) const {
+        const VkDescriptorSet set = descriptorSets_.at(frameIndex);
+        std::array<VkWriteDescriptorSet, 9> writes{};
+        for (std::uint32_t index = 0; index < writes.size(); ++index)
+            writes[index] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr, set,
+                             20 + index, 0, 1, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+                             &textures[index]};
         vkUpdateDescriptorSets(device_, static_cast<std::uint32_t>(writes.size()), writes.data(), 0, nullptr);
     }
 

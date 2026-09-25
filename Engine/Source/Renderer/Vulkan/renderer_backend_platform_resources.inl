@@ -484,6 +484,23 @@
             bindContactShadowFallback(shadowPass);
             createDirectionalVisibilityPass();
             createRtContactShadowPass();
+            if (vulkanDevice.supportsRayQuery()) {
+                ddgi.create(vulkanDevice.physical(), device, vulkanDevice.allocator(),
+                            shadowPass.descriptorSetLayout(), assetManager);
+                for (std::uint32_t frame = 0; frame < MAX_FRAMES_IN_FLIGHT; ++frame) {
+                    std::array<VkDescriptorImageInfo, 9> textures{};
+                    for (std::uint32_t cascade = 0; cascade < 3; ++cascade) {
+                        const auto& probes = ddgi.resources().cascades[cascade].frames[frame];
+                        textures[cascade * 3] = {probes.irradiance.sampler(),
+                            probes.irradiance.imageView(), VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
+                        textures[cascade * 3 + 1] = {probes.distance.sampler(),
+                            probes.distance.imageView(), VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
+                        textures[cascade * 3 + 2] = {probes.probeData.sampler(),
+                            probes.probeData.imageView(), VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
+                    }
+                    shadowPass.setDDGITextures(frame, textures);
+                }
+            }
         }
 
         void createSceneDescriptorPass() {
@@ -679,6 +696,7 @@
             lightingForwardPass.destroy();
             waterPass.destroy();
             directionalVisibilityPass.destroy();
+            ddgi.destroy();
             shadowPass.destroy();
             sceneDescriptorPass.destroy();
             destroyCullingResources();

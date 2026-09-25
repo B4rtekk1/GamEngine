@@ -76,6 +76,7 @@
         RtContactShadowPass rtContactShadowPass;
         DirectionalVisibilityPass directionalVisibilityPass;
         AccelerationStructureManager accelerationStructures;
+        DDGISystem ddgi;
         bool rayTracingBlasDirty{true};
         // TLAS input is reconstructed only when ECS render state changes. Each
         // frame slot still receives its initial build before being reused.

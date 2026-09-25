@@ -43,7 +43,9 @@ namespace Engine {
             BlasKey meshKey{};
             // VkTransformMatrixKHR is explicitly row-major 3x4.
             std::array<float, 12> transform{};
+            // Bit 0: contact-shadow casters; bit 1: opaque GI surfaces.
             std::uint8_t mask{0x01};
+            // Stable GPUSceneInstanceId, limited to Vulkan's 24-bit instanceCustomIndex.
             std::uint32_t customIndex{};
         };
 

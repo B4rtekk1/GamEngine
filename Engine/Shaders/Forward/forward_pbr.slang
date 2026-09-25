@@ -3,6 +3,7 @@ import Common.ReflectionFallback;
 import Common.SceneData;
 import Common.ShadowSampling;
 import Common.Displacement;
+import GI.ddgi_gather;
 
 // GENERATED_SHADER_GRAPH_DECLARATIONS
 
@@ -140,6 +141,32 @@ ForwardVertexOutput vertexMain(ForwardVertexInput input, uint instanceIndex : SV
 [[vk::binding(17, 0)]] Sampler2DShadow linearShadowMap;
 [[vk::binding(2, 0)]] StructuredBuffer<MaterialData> materials;
 [[vk::binding(10, 0)]] SamplerCube irradianceMap;
+// Returns incident diffuse irradiance E. The existing sky IBL texture stores
+// the equivalent diffuse response, so scale it by PI before the Lambert term.
+float3 sampleDDGIIrradiance(float3 worldPosition, float3 worldNormal)
+{
+    const float3 skyIrradiance = irradianceMap.Sample(worldNormal).rgb * PBR_PI;
+    float3 result = skyIrradiance;
+    if (frame.ddgiOriginSpacing[2].w > 0.0) {
+        const float4 probe = ddgiGatherCascade(worldPosition, worldNormal,
+            frame.ddgiOriginSpacing[2].xyz, frame.ddgiOriginSpacing[2].w,
+            frame.ddgiScrollOffsets[2].xyz, ddgiIrradiance2, ddgiDistance2, ddgiProbeData2);
+        result = lerp(result, probe.rgb, probe.a);
+    }
+    if (frame.ddgiOriginSpacing[1].w > 0.0) {
+        const float4 probe = ddgiGatherCascade(worldPosition, worldNormal,
+            frame.ddgiOriginSpacing[1].xyz, frame.ddgiOriginSpacing[1].w,
+            frame.ddgiScrollOffsets[1].xyz, ddgiIrradiance1, ddgiDistance1, ddgiProbeData1);
+        result = lerp(result, probe.rgb, probe.a);
+    }
+    if (frame.ddgiOriginSpacing[0].w > 0.0) {
+        const float4 probe = ddgiGatherCascade(worldPosition, worldNormal,
+            frame.ddgiOriginSpacing[0].xyz, frame.ddgiOriginSpacing[0].w,
+            frame.ddgiScrollOffsets[0].xyz, ddgiIrradiance, ddgiDistance, ddgiProbeData);
+        result = lerp(result, probe.rgb, probe.a);
+    }
+    return result;
+}
 [[vk::binding(11, 0)]] SamplerCube prefilteredEnvironmentMap;
 [[vk::binding(12, 0)]] Sampler2D brdfIntegrationLut;
 [[vk::binding(4, 0)]] StructuredBuffer<uint4> shadowPageTable;
@@ -612,7 +639,8 @@ ForwardFragmentOutput fragmentMain(ForwardFragmentInput input)
     const bool disableSpecularIbl = frame.pbrDebugView == PBR_DEBUG_NO_SPECULAR_IBL;
     float3 kS = disableSpecularIbl ? 0.0 : fresnelIbl;
     float3 kD = (1.0 - kS) * (1.0 - metallic);
-    float3 diffuseIbl = irradianceMap.Sample(normal).rgb * albedo * kD;
+    const float3 indirectDiffuse = sampleDDGIIrradiance(input.worldPosition, normal) *
+                                   albedo * kD / PBR_PI;
     float3 reflection = reflect(-viewDirection, normal);
     const uint prefilteredMipCount = max(uint(frame.clusterZScaleBiasEnvironmentMipRtContact.z), 1u);
     float3 prefiltered = prefilteredEnvironmentMap.SampleLevel(
@@ -660,8 +688,8 @@ ForwardFragmentOutput fragmentMain(ForwardFragmentInput input)
     const float specularOcclusion = saturate(
         pow(saturate(nDotV) + indirectVisibility,
             exp2(-16.0 * roughness - 1.0)) - 1.0 + indirectVisibility);
-    float3 ambient = diffuseIbl * diffuseAO + specularIbl * specularOcclusion;
-    float3 color = ambient + direct + emissive;
+    float3 color = direct + indirectDiffuse * diffuseAO +
+                   specularIbl * specularOcclusion + emissive;
     // Foliage has a cheap, stable back-lighting term.  The flag is deliberately
     // material data rather than an asset-name heuristic at runtime.
 #if MATERIAL_VARIANT == 5 || defined(ENGINE_SHADER_GRAPH)

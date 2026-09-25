@@ -24,6 +24,7 @@
 #include "Engine/Renderer/Passes/RtContactShadowPass.h"
 #include "Engine/Renderer/Passes/DirectionalVisibilityPass.h"
 #include "Engine/Renderer/RayTracing/AccelerationStructureManager.h"
+#include "Engine/Renderer/Lighting/DDGI/DDGISystem.h"
 #include "Engine/Renderer/Vulkan/ViewportRenderTarget.h"
 #include "Engine/Renderer/ViewportCamera.h"
 #include "Engine/Renderer/shader_loader.h"
@@ -89,6 +90,7 @@
 
 #include <cstdint>
 #include <array>
+#include <cassert>
 #include <bit>
 #include <bitset>
 #include <chrono>
@@ -650,6 +652,7 @@ namespace Engine {
                 sceneSkyPass.destroy();
                 sceneViewportForwardPass.destroy();
                 forwardPass.destroy();
+                ddgi.destroy();
                 shadowPass.destroy();
                 sceneDescriptorPass.destroy();
                 destroyCullingResources();
@@ -730,6 +733,7 @@ namespace Engine {
             // table. A scene reload replaces both buffers even at the same extent.
             rtContactShadowPass.destroy();
             directionalVisibilityPass.destroy();
+            ddgi.destroy();
             shadowPass.destroy();
             sceneDescriptorPass.destroy();
             indexBuffer.destroy();

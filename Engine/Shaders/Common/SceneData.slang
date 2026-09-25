@@ -60,6 +60,8 @@ struct RendererFrameData
     float4 clusteredViewportNearFar;
     float4 clusterZScaleBiasEnvironmentMipRtContact;
     LocalLightData localLights[32];
+    float4 ddgiOriginSpacing[3];
+    int4 ddgiScrollOffsets[3];
 };
 
 struct MaterialData

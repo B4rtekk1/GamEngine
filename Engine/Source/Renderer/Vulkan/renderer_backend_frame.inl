@@ -1415,14 +1415,15 @@
             const bool rtContactRequested = vulkanDevice.supportsRayQuery() && !msaa.enabled() &&
                 mainLightShadows && rtContactShadowSettings.mode == ContactShadowMode::RayTraced &&
                 rtContactShadowPass.resultView(currentFrame) != VK_NULL_HANDLE;
-            if (rtContactRequested && rayTracingBlasDirty && vertexBuffer.hasDeviceAddress() && indexBuffer.hasDeviceAddress()) {
+            const bool rtSceneRequested = vulkanDevice.supportsRayQuery() && ddgi.created();
+            if (rtSceneRequested && rayTracingBlasDirty && vertexBuffer.hasDeviceAddress() && indexBuffer.hasDeviceAddress()) {
                 std::vector<AccelerationStructureManager::MeshBuildInput> meshes;
                 meshes.reserve(instanceBatches.size());
                 std::unordered_set<AccelerationStructureManager::BlasKey,
                     AccelerationStructureManager::BlasKeyHash> builtSections;
                 for (std::size_t batchIndex = 0; batchIndex < instanceBatches.size(); ++batchIndex) {
                     const InstanceBatch& batch = instanceBatches[batchIndex];
-                    if (!batch.castShadow || batch.alphaMode != AlphaMode::Opaque ||
+                    if (batch.alphaMode != AlphaMode::Opaque ||
                         batch.mesh == nullptr || batch.indexCount < 3) continue;
                     bool hasUndisplacedInstance = false;
                     for (const std::size_t renderableIndex : sceneGpu.batchRenderableIndices[batchIndex]) {
@@ -1446,7 +1447,7 @@
                 rayTracingBlasDirty = false;
                 rtTlasInputDirty = true;
             }
-            if (rtContactRequested && !rayTracingBlasDirty) {
+            if (rtSceneRequested && !rayTracingBlasDirty) {
                 const std::uint64_t transformRevision = registry.componentRevision<Transform>();
                 const std::uint64_t topologyRevision = registry.renderTopologyRevision();
                 const bool inputChanged = rtTlasInputDirty ||
@@ -1456,13 +1457,15 @@
                     rtTlasInstances.clear();
                     for (std::size_t batchIndex = 0; batchIndex < instanceBatches.size(); ++batchIndex) {
                         const InstanceBatch& batch = instanceBatches[batchIndex];
-                        // Current RT shadow traversal treats triangles as opaque. Masked materials
-                        // need alpha testing and blended materials do not have opaque shadow semantics.
-                        if (!batch.castShadow || batch.alphaMode != AlphaMode::Opaque || batch.mesh == nullptr ||
+                        // Contact rays use bit 0; GI rays use bit 1. Masked
+                        // surfaces need candidate alpha testing before they can
+                        // join this opaque-only TLAS. Procedural grass needs a
+                        // coarse GI proxy rather than per-blade RT geometry.
+                        if (batch.alphaMode != AlphaMode::Opaque || batch.mesh == nullptr ||
                             batch.indexCount < 3) continue;
                         for (const std::size_t renderableIndex : sceneGpu.batchRenderableIndices[batchIndex]) {
-                            // The BLAS contains source vertices. Include only instances whose
-                            // raster geometry still matches those vertices.
+                            // The BLAS contains source vertices. Displaced
+                            // instances need cooked or updated RT geometry.
                             if (renderables[renderableIndex].displacementBoundsPadding > 1.0e-6F) continue;
                             const RendererInstanceData& source = instanceModels[renderableIndex];
                             const glm::quat q{source.rotation.w, source.rotation.x, source.rotation.y, source.rotation.z};
@@ -1471,7 +1474,10 @@
                             model[3] = glm::vec4(source.positionMaterial.x, source.positionMaterial.y, source.positionMaterial.z, 1.0F);
                             AccelerationStructureManager::InstanceBuildInput input{};
                             input.meshKey = {batch.mesh, batch.firstIndex, batch.indexCount};
-                            input.mask = 0x01; input.customIndex = static_cast<std::uint32_t>(renderableIndex);
+                            const GPUSceneInstanceId instanceId = renderables[renderableIndex].renderProxy.instance;
+                            assert(instanceId < (1U << 24U));
+                            input.mask = 0x02 | (batch.castShadow ? 0x01 : 0x00);
+                            input.customIndex = instanceId;
                             for (std::uint32_t row = 0; row < 3; ++row)
                                 for (std::uint32_t column = 0; column < 4; ++column)
                                     input.transform[row * 4 + column] = model[column][row];
@@ -1490,6 +1496,35 @@
                     gpuTimestampProfiler.endZone(commandBuffer, currentFrame);
                 }
                 if (accelerationStructures.built(currentFrame)) {
+                    const auto cameraPosition = cameraController.camera()->position().native();
+                    const std::array<float, 3> giCenter{
+                        cameraPosition.x, cameraPosition.y, cameraPosition.z};
+                    // Keep TLAS build, DDGI and Forward on this graphics command
+                    // buffer until the RenderGraph can declare an AS dependency.
+                    ddgi.record(commandBuffer, currentFrame,
+                        static_cast<std::uint32_t>(submittedFrameValue),
+                        shadowPass.descriptorSet(currentFrame), accelerationStructures.tlas(currentFrame),
+                        gpuSceneInstanceBuffers[currentFrame].handle(),
+                        gpuSceneMeshBuffers[currentFrame].handle(),
+                        gpuSceneMaterialBuffers[currentFrame].handle(),
+                        vertexBuffer.handle(), indexBuffer.handle(), giCenter);
+                    if (ddgi.ready(currentFrame)) {
+                        std::array<glm::vec4, 3> origins{};
+                        std::array<glm::ivec4, 3> offsets{};
+                        for (std::uint32_t cascade = 0; cascade < 3; ++cascade) {
+                            const auto& volume = ddgi.volume(cascade);
+                            origins[cascade] = {volume.origin[0], volume.origin[1],
+                                                volume.origin[2], volume.probeSpacing};
+                            offsets[cascade] = {volume.scrollOffset[0], volume.scrollOffset[1],
+                                                volume.scrollOffset[2], 0};
+                        }
+                        uniformBuffers[currentFrame].update(origins.data(), sizeof(origins),
+                            offsetof(UniformBufferObject, ddgiOriginSpacing));
+                        uniformBuffers[currentFrame].update(offsets.data(), sizeof(offsets),
+                            offsetof(UniformBufferObject, ddgiScrollOffsets));
+                    }
+                }
+                if (rtContactRequested && accelerationStructures.built(currentFrame)) {
                     gpuTimestampProfiler.beginZone(commandBuffer, currentFrame, rtContactProfileName);
                     rtContactShadowPass.record(commandBuffer, currentFrame, accelerationStructures.tlas(currentFrame),
                         depthBuffer.imageView(), depthBuffer.sampler(), gtaoViewNormalBuffer.imageView(),
@@ -2277,6 +2312,7 @@
             lightingForwardPass.destroy();
             waterPass.destroy();
             directionalVisibilityPass.destroy();
+            ddgi.destroy();
             shadowPass.destroy();
             sceneDescriptorPass.destroy();
             destroyCullingResources();
