@@ -61,26 +61,33 @@ void main(uint3 group : SV_GroupID, uint3 local : SV_GroupThreadID, uint groupIn
     // The weighted mean is radiance. Its cosine-weighted hemisphere integral
     // is irradiance, so the atlas stores E for the forward Lambert term E / PI.
     const float3 irradiance = 3.14159265 * sum / max(weightSum, 1e-5);
-    float3 blended = irradiance;
+    const float3 encodedIrradiance = ddgiEncodeIrradiance(irradiance);
+    float3 blended = encodedIrradiance;
     float texelVariability = 1.0;
     // The first update has no valid history. History is weighted per probe update.
     if (ddgi.distanceInitialized.y > 0.5 && state < 1.5 &&
         irradianceAtlas[int2(atlasPixel)].a > 0.0) {
         const float3 previous = irradianceAtlas[int2(atlasPixel)].rgb;
-        float3 delta = irradiance - previous;
+        float3 delta = encodedIrradiance - previous;
         const float3 luminanceWeights = float3(0.2126, 0.7152, 0.0722);
         const float previousLuminance = dot(previous, luminanceWeights);
-        const float hysteresis = 0.97;
-        // Bound a single bright estimate before it can enter recursive probe
-        // lighting on later frames. Repeated real changes still accumulate.
-        const float increase = dot(delta, luminanceWeights);
-        const float maxIncrease = max(0.10, previousLuminance);
-        if (increase > maxIncrease)
-            delta *= maxIncrease / increase;
-        blended = previous + (1.0 - hysteresis) * delta;
-        // Measure the new ray estimate before hysteresis, which can hide
-        // persistent sampling noise while the atlas is still changing.
-        texelVariability = abs(dot(irradiance - previous, luminanceWeights)) /
+        float hysteresis = ddgiUpdateHysteresis(update.framesSinceLastUpdate);
+        if (max(max(abs(delta.x), abs(delta.y)), abs(delta.z)) >
+            DDGI_IRRADIANCE_CHANGE_THRESHOLD)
+            hysteresis = max(0.0, hysteresis - 0.75);
+        if (dot(delta, luminanceWeights) > DDGI_BRIGHTNESS_THRESHOLD)
+            delta *= 0.25;
+        float3 blendedDelta = (1.0 - hysteresis) * delta;
+        // Preserve progress when repeatedly converging toward darker values.
+        if (max(max(encodedIrradiance.x, encodedIrradiance.y), encodedIrradiance.z) <
+            max(max(previous.x, previous.y), previous.z)) {
+            const float3 minimumStep = min(max(1.0 / 1024.0, abs(blendedDelta)), abs(delta));
+            blendedDelta = minimumStep * sign(blendedDelta);
+        }
+        blended = previous + blendedDelta;
+        // Measure the change that enters encoded history, rather than raw
+        // Monte Carlo noise in the unblended estimate.
+        texelVariability = dot(abs(blendedDelta), luminanceWeights) /
                            max(previousLuminance, 0.10);
     }
     variabilitySamples[groupIndex] = texelVariability;

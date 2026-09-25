@@ -11,7 +11,7 @@ function(gameengine_add_engine_shaders)
     # imports and are still explicit dependencies of every compilation.
     set(shader_entries
         GI/ddgi_trace.slang GI/ddgi_validate.slang GI/ddgi_relocate.slang GI/ddgi_classify.slang
-        GI/ddgi_scroll_reset.slang GI/ddgi_schedule.slang GI/ddgi_finish.slang
+        GI/ddgi_cache_store.slang GI/ddgi_scroll_reset.slang GI/ddgi_schedule.slang GI/ddgi_finish.slang
         GI/ddgi_blend_irradiance.slang GI/ddgi_blend_distance.slang
         Culling/gpu_culling.slang Culling/gpu_instance_culling.slang Culling/meshlet_culling.slang Culling/meshlet_build_dispatch.slang Culling/meshlet_build_indirect.slang Culling/shadow_meshlet_culling.slang Culling/shadow_meshlet_build_indirect.slang Culling/hiz_initialize.slang Culling/hiz_reduce.slang Culling/clustered_light_culling.slang
         Grass/grass_generate.slang Grass/grass_cull.slang Grass/grass_packed_cull.slang Grass/grass_cluster_cull.slang Grass/grass_shadow_page_cull.slang Grass/grass_packed_bin.slang Grass/grass_packed_prefix.slang Grass/grass_packed_scatter.slang Grass/grass_packed_finalize.slang Grass/grass_classify.slang Grass/grass_build_dispatch.slang Grass/grass_forward.slang Grass/grass_shadow.slang Grass/grass_velocity.slang Grass/grass_build_indirect.slang Grass/grass_finalize_indirect.slang Grass/grass_prefix_sum.slang Grass/grass_scatter_instances.slang

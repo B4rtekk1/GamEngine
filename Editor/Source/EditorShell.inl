@@ -630,6 +630,9 @@ Engine::Entity drawEditorMenuBar(Engine::ScenePreset &scene, Engine::Renderer &r
         if (ImGui::MenuItem("Antialiasing...")) {
             openSceneSettings = true;
         }
+        bool ddgiEnabled = renderer.ddgiEnabled();
+        if (ImGui::MenuItem("DDGI", nullptr, &ddgiEnabled)) renderer.setDDGIEnabled(ddgiEnabled);
+        ImGui::Separator();
         if (ImGui::BeginMenu("Shadow Debug")) {
             const Engine::ShadowDebugView current = renderer.shadowDebugView();
             const auto selectDebugView = [&](const char *label, const Engine::ShadowDebugView view) {

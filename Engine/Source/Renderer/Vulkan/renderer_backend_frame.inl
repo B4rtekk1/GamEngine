@@ -348,7 +348,7 @@
                 gtaoPass.reset();
                 if (taaResolveActive) temporalAaPass.reset();
             }
-            const UniformBufferObject data{
+            UniformBufferObject data{
                 currentView, currentProjection, Mat4{glm::inverse(currentProjection.native())},
                 Mat4{glm::inverse(currentView.native())},
                 previousGameCameraValid ? previousGameView : currentView,
@@ -386,6 +386,7 @@
                           // previous TLAS build does not prove it is valid now.
                           0.0F},
                 frameData.lights};
+            data.ddgiIndirectIntensity = ddgiEnabled ? 15.0F : 0.0F;
             uniformBuffers[frame].update(&data, sizeof(data));
             const ClusteredLightingUniforms clustered{
                 currentView.native(), currentProjection.native(),
@@ -436,7 +437,7 @@
             }
             const Mat4 sceneView = sceneCamera.viewMatrix();
             const Mat4 sceneProjection = sceneCamera.projectionMatrix();
-            const UniformBufferObject data{
+            UniformBufferObject data{
                 sceneView, sceneProjection, Mat4{glm::inverse(sceneProjection.native())},
                 Mat4{glm::inverse(sceneView.native())}, sceneView, sceneProjection,
                 sceneShadowClipMatrices,
@@ -462,6 +463,7 @@
                           -std::log2(0.1F) * (24.0F / std::log2(1000.0F / 0.1F)),
                           static_cast<float>(imageBasedLighting.prefilteredMipLevels()), 0.0F},
                 frameData.lights};
+            data.ddgiIndirectIntensity = ddgiEnabled ? 15.0F : 0.0F;
             sceneUniformBuffers[frame].update(&data, sizeof(data));
             const ClusteredLightingUniforms clustered{
                 sceneView.native(), sceneProjection.native(),
@@ -1509,7 +1511,7 @@
                     }
                     // Keep TLAS build, DDGI and Forward on this graphics command
                     // buffer until the RenderGraph can declare an AS dependency.
-                    ddgi.record(commandBuffer, currentFrame,
+                    if (ddgiEnabled) ddgi.record(commandBuffer, currentFrame,
                         static_cast<std::uint32_t>(submittedFrameValue),
                         shadowPass.descriptorSet(currentFrame), accelerationStructures.tlas(currentFrame),
                         gpuSceneInstanceBuffers[currentFrame].handle(),

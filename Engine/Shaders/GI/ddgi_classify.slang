@@ -3,6 +3,7 @@ import GI.ddgi_common;
 
 [[vk::binding(9, 1), vk::image_format("rgba16f")]] RWTexture2D<float4> probeData;
 [[vk::binding(10, 1), vk::image_format("rgba16f")]] RWTexture2D<float4> fixedRayData;
+[[vk::binding(11, 1)]] RWStructuredBuffer<DDGIProbeState> probeStates;
 [[vk::binding(12, 1)]] StructuredBuffer<DDGIProbeUpdate> probeUpdateList;
 
 [numthreads(64, 1, 1)]
@@ -35,4 +36,7 @@ void main(uint3 id : SV_DispatchThreadID) {
     }
     const float state = active ? (probe.w < 0.5 ? 2.0 : probe.w) : 0.0;
     probeData[pixel] = float4(probe.xyz, state);
+    DDGIProbeState schedulingState = probeStates[probeIndex];
+    schedulingState.state = state > 1.5 ? 2u : (state > 0.5 ? 1u : 0u);
+    probeStates[probeIndex] = schedulingState;
 }

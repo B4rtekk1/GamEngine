@@ -10,6 +10,7 @@ import GI.ddgi_common;
 // xyz stores direction; w stores the signed distance, with no unused RGB.
 groupshared float4 cachedRays[DDGI_MAX_RAYS];
 groupshared float2 blendedTexels[256];
+groupshared uint rejectUpdate;
 
 [numthreads(16, 16, 1)]
 void main(uint3 group : SV_GroupID, uint3 local : SV_GroupThreadID, uint groupIndex : SV_GroupIndex) {
@@ -33,6 +34,17 @@ void main(uint3 group : SV_GroupID, uint3 local : SV_GroupThreadID, uint groupIn
     }
     GroupMemoryBarrierWithGroupSync();
 
+    if (groupIndex == 0u) {
+        uint backfaceCount = 0u;
+        for (uint rayIndex = 0u; rayIndex < rayCount; ++rayIndex)
+            backfaceCount += cachedRays[rayIndex].a < 0.0 ? 1u : 0u;
+        rejectUpdate = float(backfaceCount) / float(rayCount) >
+            DDGI_RANDOM_BACKFACE_THRESHOLD ? 1u : 0u;
+    }
+    GroupMemoryBarrierWithGroupSync();
+    // Keep irradiance and visibility moments on the same accepted ray update.
+    if (rejectUpdate != 0u) return;
+
     const float2 oct = (float2(local.xy) + 0.5) /
                        float(DDGI_DISTANCE_INTERIOR) * 2.0 - 1.0;
     const float3 direction = ddgiOctDecode(oct);
@@ -46,8 +58,8 @@ void main(uint3 group : SV_GroupID, uint3 local : SV_GroupThreadID, uint groupIn
     for (uint rayIndex = 0u; rayIndex < rayCount; ++rayIndex) {
         const float3 rayDirection = cachedRays[rayIndex].xyz;
         const float weight = pow(max(dot(direction, rayDirection), 0.0), 50.0);
-        // Backface hits still contribute to visibility moments. Only the
-        // irradiance update uses the random-ray backface rejection threshold.
+        // Accepted updates may still include individual backface hits in the
+        // moments; the probe-wide ratio gate above rejects both atlases alike.
         const float distance = min(
             abs(cachedRays[rayIndex].a),
             visibilityMaxDistance);
@@ -60,7 +72,7 @@ void main(uint3 group : SV_GroupID, uint3 local : SV_GroupThreadID, uint groupIn
         : float2(visibilityMaxDistance, visibilityMaxDistance * visibilityMaxDistance);
     float2 blended = result;
     if (ddgi.distanceInitialized.y > 0.5 && state < 1.5) {
-        const float hysteresis = 0.97;
+        const float hysteresis = ddgiUpdateHysteresis(update.framesSinceLastUpdate);
         blended = lerp(result, distanceAtlas[int2(atlasPixel)], hysteresis);
     }
     blendedTexels[groupIndex] = blended;

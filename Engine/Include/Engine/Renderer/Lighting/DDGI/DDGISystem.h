@@ -46,10 +46,20 @@ namespace Engine {
         VkPipeline validatePipeline_{VK_NULL_HANDLE};
         VkPipeline relocatePipeline_{VK_NULL_HANDLE};
         VkPipeline classifyPipeline_{VK_NULL_HANDLE};
+        VkPipeline cacheStorePipeline_{VK_NULL_HANDLE};
         VkPipeline scrollResetPipeline_{VK_NULL_HANDLE};
         VkPipeline irradiancePipeline_{VK_NULL_HANDLE};
         VkPipeline distancePipeline_{VK_NULL_HANDLE};
+        // 256 world-space regions per cascade; each region owns 4x4x4 probes.
+        static constexpr std::uint32_t cacheRegionCount = 256;
+        struct CachedRegion final {
+            std::array<std::int32_t, 3> cell{};
+            std::uint64_t lastUsed{};
+            bool occupied{};
+        };
         struct CascadeState final {
+            std::array<CachedRegion, cacheRegionCount> regions{};
+            std::uint64_t cacheTick{};
             std::array<std::int32_t, 3> originCell{};
             std::array<std::int32_t, 3> scrollOffset{};
             bool initialized{};

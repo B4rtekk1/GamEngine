@@ -5,9 +5,14 @@ static const float DDGI_RANDOM_BACKFACE_THRESHOLD = 0.1;
 static const uint DDGI_PROBES = 2048u;
 static const uint DDGI_UPDATES_PER_FRAME = 256u;
 static const uint DDGI_MAX_RAYS = 256u;
-static const uint DDGI_MIN_CONVERGENCE_UPDATES = 64u;
+static const uint DDGI_MIN_CONVERGENCE_UPDATES = 16u;
 static const uint DDGI_STABLE_UPDATES = 8u;
-static const float DDGI_VARIABILITY_THRESHOLD = 0.05;
+static const float DDGI_VARIABILITY_THRESHOLD = 0.005;
+static const float DDGI_HYSTERESIS = 0.97;
+static const float DDGI_MAX_UPDATE_BLEND = 0.08;
+static const float DDGI_IRRADIANCE_ENCODING_GAMMA = 5.0;
+static const float DDGI_IRRADIANCE_CHANGE_THRESHOLD = 0.25;
+static const float DDGI_BRIGHTNESS_THRESHOLD = 0.10;
 static const uint DDGI_IRRADIANCE_INTERIOR = 8u;
 static const uint DDGI_DISTANCE_INTERIOR = 16u;
 
@@ -20,6 +25,18 @@ struct DDGIConstants {
 };
 uint ddgiUpdateCount(DDGIConstants constants) {
     return min(uint(constants.distanceInitialized.z), DDGI_UPDATES_PER_FRAME);
+}
+float ddgiUpdateHysteresis(uint framesSinceLastUpdate) {
+    const float timeAdjustedBlend = 1.0 - pow(DDGI_HYSTERESIS,
+                                               float(max(framesSinceLastUpdate, 1u)));
+    const float newSampleWeight = min(timeAdjustedBlend, DDGI_MAX_UPDATE_BLEND);
+    return 1.0 - newSampleWeight;
+}
+float3 ddgiEncodeIrradiance(float3 irradiance) {
+    return pow(max(irradiance, 0.0), 1.0 / DDGI_IRRADIANCE_ENCODING_GAMMA);
+}
+float3 ddgiDecodeIrradiance(float3 encodedIrradiance) {
+    return pow(max(encodedIrradiance, 0.0), DDGI_IRRADIANCE_ENCODING_GAMMA);
 }
 
 struct DDGIProbeState {
@@ -116,4 +133,14 @@ uint2 ddgiBorderSource(uint2 texel, uint interior) {
     if (yBorder)
         return uint2(last - texel.x, texel.y == 0u ? 1u : interior);
     return uint2(texel.x == 0u ? 1u : interior, last - texel.y);
+}
+
+// Region-cache record: valid, five scheduling words, half4 placement,
+// 100 half4 irradiance texels (including borders), 324 half2 distance texels.
+static const uint DDGI_CACHE_PROBE_WORDS = 532u;
+uint ddgiPackHalf2(float2 value) {
+    return f32tof16(value.x) | (f32tof16(value.y) << 16u);
+}
+float2 ddgiUnpackHalf2(uint value) {
+    return float2(f16tof32(value & 65535u), f16tof32(value >> 16u));
 }

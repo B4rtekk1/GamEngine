@@ -3,6 +3,7 @@ import GI.ddgi_common;
 
 [[vk::binding(9, 1), vk::image_format("rgba16f")]] RWTexture2D<float4> probeData;
 [[vk::binding(10, 1), vk::image_format("rgba16f")]] RWTexture2D<float4> fixedRayData;
+[[vk::binding(11, 1)]] RWStructuredBuffer<DDGIProbeState> probeStates;
 [[vk::binding(12, 1)]] RWStructuredBuffer<DDGIProbeUpdate> probeUpdateList;
 
 [numthreads(64, 1, 1)]
@@ -67,16 +68,16 @@ void main(uint3 id : SV_DispatchThreadID) {
     const float offsetLength = length(offset);
     if (offsetLength > maxOffset) offset *= maxOffset / offsetLength;
     const bool moved = length(offset - previous.xyz) > 0.02;
-    const int3 oldLogical = int3(ddgiLogicalGrid(probeIndex, ddgi.scrollOffsetRays.xyz)) +
-                            ddgi.scrollDeltaFrame.xyz;
-    const bool newlyExposed = ddgi.distanceInitialized.y < 0.5 ||
-        any(oldLogical < 0) || any(oldLogical >= int3(DDGI_COUNTS));
+    // Ignore sub-threshold changes entirely. They do not invalidate history,
+    // so the position used by the next trace must remain identical too.
+    if (!moved) offset = previous.xyz;
     // Only a successful atlas update may clear the pending-history state.
-    const float state = moved || newlyExposed || previous.w > 1.5 ? 2.0 :
+    const float state = moved || previous.w > 1.5 ? 2.0 :
                         (previous.w > 0.5 ? 1.0 : 0.0);
     probeData[pixel] = float4(offset, state);
-    // Reuse this frame's validation rays only if their origin did not change.
-    // Do not use the 0.02 history-reset threshold here: smaller moves also
-    // change the distances needed by classification.
-    probeUpdateList[id.x].relocated = any(offset != previous.xyz) ? 1u : 0u;
+    DDGIProbeState schedulingState = probeStates[probeIndex];
+    schedulingState.state = state > 1.5 ? 2u : (state > 0.5 ? 1u : 0u);
+    probeStates[probeIndex] = schedulingState;
+    // Revalidate only when the committed next-frame position changed.
+    probeUpdateList[id.x].relocated = moved ? 1u : 0u;
 }

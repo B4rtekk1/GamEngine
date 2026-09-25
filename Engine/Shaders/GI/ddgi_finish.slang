@@ -27,7 +27,12 @@ void main(uint3 id : SV_DispatchThreadID) {
     DDGIProbeState state = probeStates[probeIndex];
     // Scheduling tracks attempts separately from atlas validity. Retrying
     // rejected probes at startup priority would starve the rest of the grid.
-    state.state = probe.w < 0.5 ? 0u : 1u;
+    if (probe.w < 0.5)
+        state.state = 0u;
+    else if (probe.w > 1.5 && !accepted)
+        state.state = 2u;
+    else
+        state.state = 1u;
     state.updateCount = min(state.updateCount + 1u, DDGI_MIN_CONVERGENCE_UPDATES);
     if (probe.w < 0.5) state.variability = 0.0;
     if (probe.w < 0.5 || (accepted && probe.w < 1.5 &&

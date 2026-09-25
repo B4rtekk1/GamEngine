@@ -94,6 +94,8 @@ namespace Engine {
         [[nodiscard]] GtaoDebugView gtaoDebugView() const noexcept;
         void setPbrDebugView(PbrDebugView view) noexcept;
         [[nodiscard]] PbrDebugView pbrDebugView() const noexcept;
+        void setDDGIEnabled(bool enabled) noexcept;
+        [[nodiscard]] bool ddgiEnabled() const noexcept;
         void setIblQuality(IblQuality quality) noexcept;
         [[nodiscard]] IblQuality iblQuality() const noexcept;
 
@@ -205,6 +207,7 @@ namespace Engine {
         GtaoQuality gtaoQuality_ = GtaoQuality::High;
         GtaoDebugView gtaoDebugView_ = GtaoDebugView::Off;
         PbrDebugView pbrDebugView_ = PbrDebugView::FinalLighting;
+        bool ddgiEnabled_ = true;
         IblQuality iblQuality_ = IblQuality::High;
         ShadowDebugView shadowDebugView_ = ShadowDebugView::Off;
         GrassRenderSettings grassSettings_{};

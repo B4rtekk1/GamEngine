@@ -198,6 +198,7 @@
         GtaoQuality configuredGtaoQuality;
         const GtaoDebugView& gtaoDebugView;
         const PbrDebugView& pbrDebugView;
+        const bool& ddgiEnabled;
         const IblQuality& iblQuality;
         const ShadowDebugView& shadowDebugView;
         const GrassRenderSettings& grassSettings;

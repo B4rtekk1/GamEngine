@@ -43,6 +43,7 @@ DDGIGatherResult ddgiGatherCascade(float3 position, float3 geometricNormal,
     float3 irradiance = 0.0;
     float weightedVisibility = 0.0;
     float validWeight = 0.0;
+    float validTrilinearWeight = 0.0;
     uint activeProbeCount = 0u;
     for (uint corner = 0u; corner < 8u; ++corner) {
         const uint3 offset = uint3(corner & 1u, (corner >> 1u) & 1u, (corner >> 2u) & 1u);
@@ -59,12 +60,15 @@ DDGIGatherResult ddgiGatherCascade(float3 position, float3 geometricNormal,
         const float3 direction = distance > 1e-4 ? toSurface / distance : geometricNormal;
         const float3 cornerWeight = lerp(1.0 - fractional, fractional, float3(offset));
         const float trilinearWeight = cornerWeight.x * cornerWeight.y * cornerWeight.z;
-        const float4 probeIrradiance = ddgiSampleProbe(irradianceTexture, index, irradianceNormal, DDGI_IRRADIANCE_INTERIOR);
-        const float confidence = saturate(probeIrradiance.a);
+        const float4 encodedProbeIrradiance = ddgiSampleProbe(
+            irradianceTexture, index, irradianceNormal, DDGI_IRRADIANCE_INTERIOR);
+        const float3 probeIrradiance = ddgiDecodeIrradiance(encodedProbeIrradiance.rgb);
+        const float confidence = saturate(encodedProbeIrradiance.a);
         if (confidence <= 0.0) continue;
-        // Volume coverage controls cascade blending independently of the
-        // distance visibility used to interpolate the probe irradiance.
+        // Normalize confidence over the probes that can actually contribute.
+        // Missing/pending probes must not reduce the volume's cascade weight.
         validWeight += trilinearWeight * confidence;
+        validTrilinearWeight += trilinearWeight;
         const float3 surfaceToProbe = -direction;
         const float wrap = (dot(geometricNormal, surfaceToProbe) + 1.0) * 0.5;
         float weight = (wrap * wrap + 0.2) * confidence;
@@ -92,6 +96,8 @@ DDGIGatherResult ddgiGatherCascade(float3 position, float3 geometricNormal,
         ? irradiance / result.postVisibilityWeight : float3(0.0);
     result.visibility = weightedVisibility / max(result.preVisibilityWeight, 0.0001);
     result.activeProbeFraction = float(activeProbeCount) / 8.0;
-    result.blendWeight = saturate(validWeight) * transition;
+    const float probeConfidence = validTrilinearWeight > 0.0
+        ? saturate(validWeight / validTrilinearWeight) : 0.0;
+    result.blendWeight = probeConfidence * transition;
     return result;
 }

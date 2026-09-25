@@ -167,6 +167,7 @@ namespace Engine {
         GtaoQuality gtaoQuality = GtaoQuality::High;
         GtaoDebugView gtaoDebugView = GtaoDebugView::Off;
         PbrDebugView pbrDebugView = PbrDebugView::FinalLighting;
+        bool ddgiEnabled = true;
         IblQuality iblQuality = IblQuality::High;
         ShadowDebugView shadowDebugView = ShadowDebugView::Off;
     };

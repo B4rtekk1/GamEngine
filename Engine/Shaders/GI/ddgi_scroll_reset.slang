@@ -6,6 +6,9 @@ import GI.ddgi_common;
 [[vk::binding(9, 1), vk::image_format("rgba16f")]] RWTexture2D<float4> probeData;
 [[vk::binding(11, 1)]] RWStructuredBuffer<DDGIProbeState> probeStates;
 
+[[vk::binding(16, 1)]] StructuredBuffer<uint> regionCache;
+[[vk::binding(17, 1)]] StructuredBuffer<uint> cacheMapping;
+
 [numthreads(64, 1, 1)]
 void main(uint3 id : SV_DispatchThreadID) {
     if (id.x >= DDGI_PROBES) return;
@@ -14,6 +17,30 @@ void main(uint3 id : SV_DispatchThreadID) {
     const bool exposed = ddgi.distanceInitialized.y < 0.5 ||
         any(oldLogical < 0) || any(oldLogical >= int3(DDGI_COUNTS));
     if (!exposed) return;
+    const uint base = cacheMapping[DDGI_PROBES + id.x];
+    if (regionCache[base] != 0u) {
+        DDGIProbeState cached;
+        cached.state = regionCache[base + 1u];
+        cached.lastUpdatedFrame = regionCache[base + 2u];
+        cached.variability = asfloat(regionCache[base + 3u]);
+        cached.updateCount = regionCache[base + 4u];
+        // Revisit cached lighting after the local recursive-gather neighborhood
+        // changed, while retaining its atlas and accumulated convergence count.
+        cached.stableUpdates = 0u;
+        probeStates[id.x] = cached;
+        probeData[int2(ddgiProbePixel(id.x))] = float4(
+            ddgiUnpackHalf2(regionCache[base + 6u]), ddgiUnpackHalf2(regionCache[base + 7u]));
+        const uint2 ib = ddgiAtlasBase(id.x, DDGI_IRRADIANCE_INTERIOR);
+        for (uint i = 0u; i < 100u; ++i)
+            irradianceAtlas[int2(ib + uint2(i % 10u, i / 10u))] = float4(
+                ddgiUnpackHalf2(regionCache[base + 8u + i * 2u]),
+                ddgiUnpackHalf2(regionCache[base + 9u + i * 2u]));
+        const uint2 db = ddgiAtlasBase(id.x, DDGI_DISTANCE_INTERIOR);
+        for (uint i = 0u; i < 324u; ++i)
+            distanceAtlas[int2(db + uint2(i % 18u, i / 18u))] =
+                ddgiUnpackHalf2(regionCache[base + 208u + i]);
+        return;
+    }
     probeData[int2(ddgiProbePixel(id.x))] = float4(0.0, 0.0, 0.0, 2.0);
     DDGIProbeState state;
     state.state = 2u;
