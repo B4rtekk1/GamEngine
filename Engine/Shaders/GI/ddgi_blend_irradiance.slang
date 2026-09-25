@@ -53,16 +53,22 @@ void main(uint3 id : SV_DispatchThreadID) {
         // is irradiance, so the atlas stores E for the forward Lambert term E / PI.
         const float3 irradiance = 3.14159265 * sum / max(weightSum, 1e-5);
         float3 blended = irradiance;
-        // The first update has no valid history. The 0.97 weight is per frame,
-        // and a large lighting change must converge faster.
+        // The first update has no valid history. The 0.97 weight is per frame.
         if (ddgi.distanceInitialized.y > 0.5 && state < 1.5) {
             const float3 previous = irradianceAtlas[int2(atlasPixel)].rgb;
-            const float previousLuminance = dot(previous, float3(0.2126, 0.7152, 0.0722));
-            const float change = dot(abs(irradiance - previous), float3(0.2126, 0.7152, 0.0722));
+            float3 delta = irradiance - previous;
+            const float3 luminanceWeights = float3(0.2126, 0.7152, 0.0722);
+            const float previousLuminance = dot(previous, luminanceWeights);
+            const float previousMax = max(previous.r, max(previous.g, previous.b));
+            const float decrease = max(-delta.r, max(-delta.g, -delta.b));
             float hysteresis = pow(0.97, float(update.framesSinceLastUpdate));
-            if (change > max(0.5, previousLuminance * 0.75))
-                hysteresis = min(hysteresis, 0.7);
-            blended = lerp(irradiance, previous, hysteresis);
+            // Rapidly remove stale light while keeping a relative threshold for HDR values.
+            if (decrease > max(0.25, previousMax * 0.25))
+                hysteresis = max(0.0, hysteresis - 0.75);
+            // Limit a large upward impulse to one quarter of its measured change.
+            if (dot(delta, luminanceWeights) > max(0.10, previousLuminance * 0.10))
+                delta = min(delta, 0.0) + max(delta, 0.0) * 0.25;
+            blended = previous + (1.0 - hysteresis) * delta;
         }
         irradianceAtlas[int2(atlasPixel)] = float4(blended, 1.0);
     }

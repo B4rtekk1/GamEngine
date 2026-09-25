@@ -93,9 +93,6 @@ float3 ddgiFixedRayDirection(uint rayIndex) {
 uint2 ddgiProbePixel(uint probeIndex) {
     return uint2(probeIndex % 16u, probeIndex / 16u);
 }
-bool ddgiShouldValidate(float state, uint probeIndex, uint frameIndex) {
-    return state > 0.5 || frameIndex % 8u == probeIndex % 8u;
-}
 uint2 ddgiAtlasBase(uint probeIndex, uint interior) {
     const uint stride = interior + 2u;
     return uint2((probeIndex % 16u) * stride, (probeIndex / 16u) * stride);

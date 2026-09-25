@@ -3,10 +3,10 @@ import Common.Displacement;
 import Common.RayHitGeometry;
 import GI.ddgi_common;
 import GI.ddgi_gather_core;
+import GI.ddgi_alpha;
 [[vk::push_constant]] DDGIConstants ddgi;
 
 [[vk::binding(1, 0)]] ConstantBuffer<RendererFrameData> frame;
-[[vk::binding(2, 0)]] StructuredBuffer<MaterialData> materials;
 [[vk::binding(10, 0)]] SamplerCube diffuseIrradianceMap;
 [[vk::binding(11, 0)]] SamplerCube skyEnvironment;
 [[vk::binding(0, 1)]] RaytracingAccelerationStructure sceneTlas;
@@ -78,12 +78,17 @@ float3 evaluateLocalDiffuse(float3 position, float3 normal, float3 albedo) {
             shadow.Direction = toLight / distanceToLight;
             shadow.TMin = 0.02;
             shadow.TMax = distanceToLight - 0.02;
-            RayQuery<RAY_FLAG_FORCE_OPAQUE | RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH |
+            RayQuery<RAY_FLAG_FORCE_NON_OPAQUE | RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH |
                      RAY_FLAG_SKIP_PROCEDURAL_PRIMITIVES> lightQuery;
             lightQuery.TraceRayInline(sceneTlas,
-                RAY_FLAG_FORCE_OPAQUE | RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH |
+                RAY_FLAG_FORCE_NON_OPAQUE | RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH |
                 RAY_FLAG_SKIP_PROCEDURAL_PRIMITIVES, 0x02, shadow);
-            while (lightQuery.Proceed()) {}
+            while (lightQuery.Proceed()) {
+                if (lightQuery.CandidateType() == CANDIDATE_NON_OPAQUE_TRIANGLE &&
+                    ddgiCandidatePassesAlpha(lightQuery.CandidateInstanceID(), lightQuery.CandidatePrimitiveIndex(),
+                                             lightQuery.CandidateTriangleBarycentrics()))
+                    lightQuery.CommitNonOpaqueTriangleHit();
+            }
             visibility = lightQuery.CommittedStatus() == COMMITTED_TRIANGLE_HIT ? 0.0 : 1.0;
         }
         result += light.colorIntensity.rgb * light.colorIntensity.w *
@@ -106,10 +111,15 @@ void main(uint3 id : SV_DispatchThreadID) {
     ray.Direction = direction;
     ray.TMin = 0.02;
     ray.TMax = ddgi.distanceInitialized.x;
-    RayQuery<RAY_FLAG_FORCE_OPAQUE | RAY_FLAG_SKIP_PROCEDURAL_PRIMITIVES> query;
-    query.TraceRayInline(sceneTlas, RAY_FLAG_FORCE_OPAQUE | RAY_FLAG_SKIP_PROCEDURAL_PRIMITIVES,
+    RayQuery<RAY_FLAG_FORCE_NON_OPAQUE | RAY_FLAG_SKIP_PROCEDURAL_PRIMITIVES> query;
+    query.TraceRayInline(sceneTlas, RAY_FLAG_FORCE_NON_OPAQUE | RAY_FLAG_SKIP_PROCEDURAL_PRIMITIVES,
                          0x02, ray);
-    while (query.Proceed()) {}
+    while (query.Proceed()) {
+        if (query.CandidateType() == CANDIDATE_NON_OPAQUE_TRIANGLE &&
+            ddgiCandidatePassesAlpha(query.CandidateInstanceID(), query.CandidatePrimitiveIndex(),
+                                     query.CandidateTriangleBarycentrics()))
+            query.CommitNonOpaqueTriangleHit();
+    }
     float3 radiance = skyRadiance(direction);
     float distance = ddgi.distanceInitialized.x;
     if (query.CommittedStatus() == COMMITTED_TRIANGLE_HIT) {
@@ -118,6 +128,10 @@ void main(uint3 id : SV_DispatchThreadID) {
             query.CommittedInstanceID(), query.CommittedPrimitiveIndex(),
             query.CommittedTriangleBarycentrics());
         const MaterialData material = materials[hit.materialIndex];
+        const bool doubleSided = (material.textureIndices.w & 1) != 0;
+        const bool realBackface = !query.CommittedTriangleFrontFace() && !doubleSided;
+        const float3 hitNormal = !query.CommittedTriangleFrontFace() && doubleSided
+            ? -hit.normal : hit.normal;
         const float3 vertexColor = (material.textureIndices.w & 32) != 0 ? 1.0 : hit.color;
         float3 albedo = material.baseColorMetallic.rgb * vertexColor *
                         (1.0 - material.baseColorMetallic.a);
@@ -128,10 +142,10 @@ void main(uint3 id : SV_DispatchThreadID) {
         if (material.extensionTextureIndices.x >= 0)
             emissive *= materialTextures[NonUniformResourceIndex(material.extensionTextureIndices.x)]
                 .SampleLevel(materialTextureUv(material, 7u, hit.uv0, hit.uv1), 0.0).rgb;
-        float3 indirectIrradiance = diffuseIrradianceMap.SampleLevel(hit.normal, 0.0).rgb * 3.14159265;
+        float3 indirectIrradiance = diffuseIrradianceMap.SampleLevel(hitNormal, 0.0).rgb * 3.14159265;
         if (ddgi.distanceInitialized.y > 0.5) {
             const DDGIGatherResult recursive = ddgiGatherCascade(
-                hit.position, hit.normal, hit.normal, -direction, ddgi.originSpacing.xyz,
+                hit.position, hitNormal, hitNormal, -direction, ddgi.originSpacing.xyz,
                 ddgi.originSpacing.w, ddgi.scrollOffsetRays.xyz,
                 previousIrradiance, previousDistance, previousProbeData);
             indirectIrradiance = lerp(indirectIrradiance, recursive.irradiance, recursive.blendWeight);
@@ -139,26 +153,31 @@ void main(uint3 id : SV_DispatchThreadID) {
         radiance = emissive + indirectIrradiance * albedo / 3.14159265;
         if (frame.lightDirectionIntensity.w > 0.0) {
             const float3 toSun = normalize(-frame.lightDirectionIntensity.xyz);
-            const float nDotL = max(dot(hit.normal, toSun), 0.0);
+            const float nDotL = max(dot(hitNormal, toSun), 0.0);
             if (nDotL > 0.0) {
                 RayDesc shadow;
-                shadow.Origin = hit.position + hit.normal * 0.025;
+                shadow.Origin = hit.position + hitNormal * 0.025;
                 shadow.Direction = toSun;
                 shadow.TMin = 0.02;
                 shadow.TMax = 10000.0;
-                RayQuery<RAY_FLAG_FORCE_OPAQUE | RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH |
+                RayQuery<RAY_FLAG_FORCE_NON_OPAQUE | RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH |
                          RAY_FLAG_SKIP_PROCEDURAL_PRIMITIVES> sunQuery;
                 sunQuery.TraceRayInline(sceneTlas,
-                    RAY_FLAG_FORCE_OPAQUE | RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH |
+                    RAY_FLAG_FORCE_NON_OPAQUE | RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH |
                     RAY_FLAG_SKIP_PROCEDURAL_PRIMITIVES, 0x02, shadow);
-                while (sunQuery.Proceed()) {}
+                while (sunQuery.Proceed()) {
+                    if (sunQuery.CandidateType() == CANDIDATE_NON_OPAQUE_TRIANGLE &&
+                        ddgiCandidatePassesAlpha(sunQuery.CandidateInstanceID(), sunQuery.CandidatePrimitiveIndex(),
+                                                 sunQuery.CandidateTriangleBarycentrics()))
+                        sunQuery.CommitNonOpaqueTriangleHit();
+                }
                 const float visibility = sunQuery.CommittedStatus() == COMMITTED_TRIANGLE_HIT ? 0.0 : 1.0;
-                radiance += evaluateSunDiffuse(hit.normal, toSun, albedo,
+                radiance += evaluateSunDiffuse(hitNormal, toSun, albedo,
                     frame.lightColor.rgb * frame.lightDirectionIntensity.w, visibility);
             }
         }
-        radiance += evaluateLocalDiffuse(hit.position, hit.normal, albedo);
-        if (!query.CommittedTriangleFrontFace()) distance = -distance;
+        radiance += evaluateLocalDiffuse(hit.position, hitNormal, albedo);
+        if (realBackface) distance = -distance;
     }
     rayData[int2(id.x, probeIndex)] = float4(radiance, distance);
 }

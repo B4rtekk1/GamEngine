@@ -19,7 +19,7 @@ struct DDGIGatherResult {
 };
 
 DDGIGatherResult ddgiGatherCascade(float3 position, float3 geometricNormal,
-                         float3 shadingNormal, float3 viewDirection, float3 origin,
+                         float3 irradianceNormal, float3 viewDirection, float3 origin,
                          float spacing, int3 scrollOffset,
                          Sampler2D irradianceTexture, Sampler2D distanceTexture,
                          Sampler2D probeTexture) {
@@ -57,13 +57,15 @@ DDGIGatherResult ddgiGatherCascade(float3 position, float3 geometricNormal,
         const float3 direction = distance > 1e-4 ? toSurface / distance : geometricNormal;
         const float3 cornerWeight = lerp(1.0 - fractional, fractional, float3(offset));
         const float trilinearWeight = cornerWeight.x * cornerWeight.y * cornerWeight.z;
-        const float4 probeIrradiance = ddgiSampleProbe(irradianceTexture, index, shadingNormal, DDGI_IRRADIANCE_INTERIOR);
+        const float4 probeIrradiance = ddgiSampleProbe(irradianceTexture, index, irradianceNormal, DDGI_IRRADIANCE_INTERIOR);
         const float confidence = saturate(probeIrradiance.a);
         if (confidence <= 0.0) continue;
         // Volume coverage controls cascade blending independently of the
         // distance visibility used to interpolate the probe irradiance.
         validWeight += trilinearWeight * confidence;
-        float weight = max(dot(geometricNormal, -direction) * 0.5 + 0.5, 0.05) * confidence;
+        const float3 surfaceToProbe = -direction;
+        const float wrap = (dot(geometricNormal, surfaceToProbe) + 1.0) * 0.5;
+        float weight = (wrap * wrap + 0.2) * confidence;
         const float weightBeforeVisibility = weight * trilinearWeight;
         result.preVisibilityWeight += weightBeforeVisibility;
         const float2 moments = ddgiSampleProbe(distanceTexture, index, direction, DDGI_DISTANCE_INTERIOR).rg;

@@ -12,7 +12,6 @@ void main(uint3 id : SV_DispatchThreadID) {
     const int2 pixel = int2(ddgiProbePixel(probeIndex));
     const float4 previous = ddgi.distanceInitialized.y > 0.5
         ? probeData[pixel] : float4(0.0, 0.0, 0.0, 2.0);
-    if (!ddgiShouldValidate(previous.w, probeIndex, uint(ddgi.scrollDeltaFrame.w))) return;
     uint backfaces = 0u;
     int closestBackfaceIndex = -1;
     int closestFrontfaceIndex = -1;

@@ -190,21 +190,21 @@ DDGISampleResult sampleDDGIIrradiance(float3 worldPosition, float3 shadingNormal
     result.activeProbeFraction = 0.0;
     result.preVisibilityWeight = 0.0;
     result.postVisibilityWeight = 0.0;
-    // Visibility uses the geometric normal; irradiance follows the normal map.
+    // DDGI visibility and irradiance both use the geometric normal.
     if (frame.ddgiOriginSpacing[2].w > 0.0) {
-        const DDGIGatherResult probe = ddgiGatherCascade(worldPosition, geometricNormal, shadingNormal, viewDirection,
+        const DDGIGatherResult probe = ddgiGatherCascade(worldPosition, geometricNormal, geometricNormal, viewDirection,
             frame.ddgiOriginSpacing[2].xyz, frame.ddgiOriginSpacing[2].w,
             frame.ddgiScrollOffsets[2].xyz, ddgiIrradiance2, ddgiDistance2, ddgiProbeData2);
         accumulateDDGICascade(result, probe, float3(0.0, 0.0, 1.0));
     }
     if (frame.ddgiOriginSpacing[1].w > 0.0) {
-        const DDGIGatherResult probe = ddgiGatherCascade(worldPosition, geometricNormal, shadingNormal, viewDirection,
+        const DDGIGatherResult probe = ddgiGatherCascade(worldPosition, geometricNormal, geometricNormal, viewDirection,
             frame.ddgiOriginSpacing[1].xyz, frame.ddgiOriginSpacing[1].w,
             frame.ddgiScrollOffsets[1].xyz, ddgiIrradiance1, ddgiDistance1, ddgiProbeData1);
         accumulateDDGICascade(result, probe, float3(0.0, 1.0, 0.0));
     }
     if (frame.ddgiOriginSpacing[0].w > 0.0) {
-        const DDGIGatherResult probe = ddgiGatherCascade(worldPosition, geometricNormal, shadingNormal, viewDirection,
+        const DDGIGatherResult probe = ddgiGatherCascade(worldPosition, geometricNormal, geometricNormal, viewDirection,
             frame.ddgiOriginSpacing[0].xyz, frame.ddgiOriginSpacing[0].w,
             frame.ddgiScrollOffsets[0].xyz, ddgiIrradiance, ddgiDistance, ddgiProbeData);
         accumulateDDGICascade(result, probe, float3(1.0, 0.0, 0.0));

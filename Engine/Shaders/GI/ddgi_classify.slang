@@ -11,7 +11,6 @@ void main(uint3 id : SV_DispatchThreadID) {
     const uint probeIndex = probeUpdateList[id.x].probeIndex;
     const int2 pixel = int2(ddgiProbePixel(probeIndex));
     const float4 probe = probeData[pixel];
-    if (!ddgiShouldValidate(probe.w, probeIndex, uint(ddgi.scrollDeltaFrame.w))) return;
     uint backfaces = 0u;
     for (uint rayIndex = 0u; rayIndex < DDGI_FIXED_RAYS; ++rayIndex) {
         const float distance = fixedRayData[int2(rayIndex, probeIndex)].r;

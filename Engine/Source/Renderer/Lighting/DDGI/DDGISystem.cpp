@@ -68,7 +68,8 @@ void DDGISystem::create(VkPhysicalDevice physical, VkDevice device, VmaAllocator
         for (std::size_t cascade = 0; cascade < volumes_.size(); ++cascade) {
             volumes_[cascade].probeSpacing = spacings[cascade];
             volumes_[cascade].raysPerProbe = rays[cascade];
-            // RG16F distance moments must represent the squared far hit.
+            // Keep traced rays long enough for lighting; visibility moments
+            // are clamped separately to the local probe spacing in the shader.
             volumes_[cascade].maxRayDistance = std::min(spacings[cascade] * 16.0F, 252.0F);
         }
         for (auto& cascade : resources_.cascades) {
