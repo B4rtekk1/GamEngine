@@ -65,9 +65,13 @@ void main(uint3 id : SV_DispatchThreadID) {
             // Rapidly remove stale light while keeping a relative threshold for HDR values.
             if (decrease > max(0.25, previousMax * 0.25))
                 hysteresis = max(0.0, hysteresis - 0.75);
-            // Limit a large upward impulse to one quarter of its measured change.
-            if (dot(delta, luminanceWeights) > max(0.10, previousLuminance * 0.10))
-                delta = min(delta, 0.0) + max(delta, 0.0) * 0.25;
+            // Large increases should reach the atlas quickly so recursive
+            // bounces are not starved by the probe update schedule.
+            const float increase = dot(delta, luminanceWeights);
+            if (increase > max(0.10, previousLuminance))
+                hysteresis = min(hysteresis, 0.25);
+            else if (increase > max(0.10, previousLuminance * 0.25))
+                hysteresis = min(hysteresis, 0.5);
             blended = previous + (1.0 - hysteresis) * delta;
         }
         irradianceAtlas[int2(atlasPixel)] = float4(blended, 1.0);
