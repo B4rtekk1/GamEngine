@@ -54,7 +54,8 @@ void main(uint3 id : SV_DispatchThreadID) {
         const float3 irradiance = 3.14159265 * sum / max(weightSum, 1e-5);
         float3 blended = irradiance;
         // The first update has no valid history. The 0.97 weight is per frame.
-        if (ddgi.distanceInitialized.y > 0.5 && state < 1.5) {
+        if (ddgi.distanceInitialized.y > 0.5 && state < 1.5 &&
+            irradianceAtlas[int2(atlasPixel)].a > 0.0) {
             const float3 previous = irradianceAtlas[int2(atlasPixel)].rgb;
             float3 delta = irradiance - previous;
             const float3 luminanceWeights = float3(0.2126, 0.7152, 0.0722);

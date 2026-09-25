@@ -173,7 +173,7 @@ void DDGISystem::record(VkCommandBuffer commandBuffer, std::uint32_t frameSlot,
     if (!created() || !commandBuffer || !sceneSet || !tlas || !instances || !meshes ||
         !materials || !vertices || !indices) return;
     frameSlot %= 2;
-    // Diagnostic setting: 768 probes, 196,608 trace rays and up to 24,576
+    // Diagnostic setting: 768 probes, 196,608 trace rays and up to 49,152
     // validation rays across the three cascades each frame.
     // Each cascade has its own 2048-probe history.
     constexpr std::array<std::uint32_t, 3> cascadeUpdates{256, 256, 256};
@@ -337,20 +337,26 @@ void DDGISystem::record(VkCommandBuffer commandBuffer, std::uint32_t frameSlot,
     vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, relocatePipeline_);
     vkCmdDispatch(commandBuffer, (updateCount + 63) / 64, 1, 1);
     computeBarrier();
+    // Classification must use distances from the relocated position, not
+    // the position used to decide the relocation above.
+    vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, validatePipeline_);
+    vkCmdDispatch(commandBuffer, 4, (updateCount + 7) / 8, 1);
+    computeBarrier();
     vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, classifyPipeline_);
     vkCmdDispatch(commandBuffer, (updateCount + 63) / 64, 1, 1);
     computeBarrier();
     vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, tracePipeline_);
     vkCmdDispatch(commandBuffer, (volume.raysPerProbe + 7) / 8, (updateCount + 7) / 8, 1);
     computeBarrier();
-    vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, finishPipeline_);
-    vkCmdDispatch(commandBuffer, (updateCount + 63) / 64, 1, 1);
-    computeBarrier();
     vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, irradiancePipeline_);
     // One workgroup per probe synchronizes interior blending with border copies.
     vkCmdDispatch(commandBuffer, 1, 1, updateCount);
     vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, distancePipeline_);
     vkCmdDispatch(commandBuffer, 1, 1, updateCount);
+    computeBarrier();
+    // Preserve pending-history flags until both atlases have been written.
+    vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, finishPipeline_);
+    vkCmdDispatch(commandBuffer, (updateCount + 63) / 64, 1, 1);
     const auto finishIrradiance = imageBarrier(frame.irradiance.image(), VK_IMAGE_LAYOUT_GENERAL,
         VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
         VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT, VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT,

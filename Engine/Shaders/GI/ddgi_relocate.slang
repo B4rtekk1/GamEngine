@@ -70,7 +70,8 @@ void main(uint3 id : SV_DispatchThreadID) {
                             ddgi.scrollDeltaFrame.xyz;
     const bool newlyExposed = ddgi.distanceInitialized.y < 0.5 ||
         any(oldLogical < 0) || any(oldLogical >= int3(DDGI_COUNTS));
-    const float state = moved || newlyExposed ? 2.0 :
+    // Only a successful atlas update may clear the pending-history state.
+    const float state = moved || newlyExposed || previous.w > 1.5 ? 2.0 :
                         (previous.w > 0.5 ? 1.0 : 0.0);
     probeData[pixel] = float4(offset, state);
 }

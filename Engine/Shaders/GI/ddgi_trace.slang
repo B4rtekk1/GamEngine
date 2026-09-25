@@ -44,11 +44,12 @@ float localLightFactor(LocalLightData light, float3 position, float3 normal) {
     return nDotL * attenuation;
 }
 
-float3 evaluateLocalDiffuse(float3 position, float3 normal, float3 albedo) {
+float3 evaluateLocalDiffuse(float3 position, float3 normal, float3 geometricNormal, float3 albedo) {
     float topScores[4] = {0.0, 0.0, 0.0, 0.0};
     uint topIndices[4] = {0u, 0u, 0u, 0u};
     for (uint lightIndex = 0u; lightIndex < min(frame.localLightCount, 32u); ++lightIndex) {
         const LocalLightData light = frame.localLights[lightIndex];
+        if (dot(geometricNormal, light.positionRange.xyz - position) <= 0.0) continue;
         const float factor = localLightFactor(light, position, normal);
         const float luminance = dot(albedo * light.colorIntensity.rgb,
                                     float3(0.2126, 0.7152, 0.0722));
@@ -74,15 +75,19 @@ float3 evaluateLocalDiffuse(float3 position, float3 normal, float3 albedo) {
         float visibility = 1.0;
         if (distanceToLight > 0.05) {
             RayDesc shadow;
-            shadow.Origin = position + normal * 0.025;
-            shadow.Direction = toLight / distanceToLight;
-            shadow.TMin = 0.02;
-            shadow.TMax = distanceToLight - 0.02;
+            shadow.Origin = position + geometricNormal * 0.025;
+            // Aim at the light from the displaced origin, including the endpoint.
+            const float3 shadowToLight = light.positionRange.xyz - shadow.Origin;
+            const float shadowDistance = length(shadowToLight);
+            shadow.Direction = shadowToLight / shadowDistance;
+            shadow.TMin = min(0.02, shadowDistance * 0.25);
+            shadow.TMax = shadowDistance - shadow.TMin;
             RayQuery<RAY_FLAG_FORCE_NON_OPAQUE | RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH |
                      RAY_FLAG_SKIP_PROCEDURAL_PRIMITIVES> lightQuery;
+            // Bit 0 selects shadow casters; bit 1 is for GI surface hits.
             lightQuery.TraceRayInline(sceneTlas,
                 RAY_FLAG_FORCE_NON_OPAQUE | RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH |
-                RAY_FLAG_SKIP_PROCEDURAL_PRIMITIVES, 0x02, shadow);
+                RAY_FLAG_SKIP_PROCEDURAL_PRIMITIVES, 0x01, shadow);
             while (lightQuery.Proceed()) {
                 if (lightQuery.CandidateType() == CANDIDATE_NON_OPAQUE_TRIANGLE &&
                     ddgiCandidatePassesAlpha(lightQuery.CandidateInstanceID(), lightQuery.CandidatePrimitiveIndex(),
@@ -120,7 +125,7 @@ void main(uint3 id : SV_DispatchThreadID) {
                                      query.CandidateTriangleBarycentrics()))
             query.CommitNonOpaqueTriangleHit();
     }
-    float3 radiance = float3(0.0);
+    float3 radiance = skyRadiance(direction);
     float distance = ddgi.distanceInitialized.x;
     if (query.CommittedStatus() == COMMITTED_TRIANGLE_HIT) {
         distance = query.CommittedRayT();
@@ -130,14 +135,27 @@ void main(uint3 id : SV_DispatchThreadID) {
         const MaterialData material = materials[hit.materialIndex];
         const bool doubleSided = (material.textureIndices.w & 1) != 0;
         const bool realBackface = !query.CommittedTriangleFrontFace() && !doubleSided;
-        const float3 hitNormal = !query.CommittedTriangleFrontFace() && doubleSided
+        if (realBackface) {
+            rayData[int2(id.x, probeIndex)] = float4(0.0, 0.0, 0.0, -distance);
+            return;
+        }
+        // Orient the actual triangle plane toward the incoming ray. This also
+        // handles mirrored instances and the back side of double-sided materials.
+        const float3 geometricNormal = dot(hit.geometricNormal, direction) > 0.0
+            ? -hit.geometricNormal : hit.geometricNormal;
+        float3 hitNormal = !query.CommittedTriangleFrontFace() && doubleSided
             ? -hit.normal : hit.normal;
+        if (dot(hitNormal, geometricNormal) < 0.0) hitNormal = -hitNormal;
         const float3 vertexColor = (material.textureIndices.w & 32) != 0 ? 1.0 : hit.color;
-        float3 albedo = material.baseColorMetallic.rgb * vertexColor *
-                        (1.0 - material.baseColorMetallic.a);
+        float3 albedo = material.baseColorMetallic.rgb * vertexColor;
         if (material.textureIndices.x >= 0)
             albedo *= materialTextures[NonUniformResourceIndex(material.textureIndices.x)]
                 .SampleLevel(materialTextureUv(material, 0u, hit.uv0, hit.uv1), 0.0).rgb;
+        float metallic = material.baseColorMetallic.a;
+        if (material.textureIndices.y >= 0)
+            metallic *= materialTextures[NonUniformResourceIndex(material.textureIndices.y)]
+                .SampleLevel(materialTextureUv(material, 1u, hit.uv0, hit.uv1), 0.0).b;
+        albedo *= 1.0 - saturate(metallic);
         float3 emissive = material.emissiveColorIntensity.rgb * material.emissiveColorIntensity.w;
         if (material.extensionTextureIndices.x >= 0)
             emissive *= materialTextures[NonUniformResourceIndex(material.extensionTextureIndices.x)]
@@ -145,7 +163,7 @@ void main(uint3 id : SV_DispatchThreadID) {
         float3 indirectIrradiance = diffuseIrradianceMap.SampleLevel(hitNormal, 0.0).rgb * 3.14159265;
         if (ddgi.distanceInitialized.y > 0.5) {
             const DDGIGatherResult recursive = ddgiGatherCascade(
-                hit.position, hitNormal, hitNormal, -direction, ddgi.originSpacing.xyz,
+                hit.position, geometricNormal, hitNormal, -direction, ddgi.originSpacing.xyz,
                 ddgi.originSpacing.w, ddgi.scrollOffsetRays.xyz,
                 previousIrradiance, previousDistance, previousProbeData);
             indirectIrradiance = lerp(indirectIrradiance, recursive.irradiance, recursive.blendWeight);
@@ -154,9 +172,9 @@ void main(uint3 id : SV_DispatchThreadID) {
         if (frame.lightDirectionIntensity.w > 0.0) {
             const float3 toSun = normalize(-frame.lightDirectionIntensity.xyz);
             const float nDotL = max(dot(hitNormal, toSun), 0.0);
-            if (nDotL > 0.0) {
+            if (nDotL > 0.0 && dot(geometricNormal, toSun) > 0.0) {
                 RayDesc shadow;
-                shadow.Origin = hit.position + hitNormal * 0.025;
+                shadow.Origin = hit.position + geometricNormal * 0.025;
                 shadow.Direction = toSun;
                 shadow.TMin = 0.02;
                 shadow.TMax = 10000.0;
@@ -164,7 +182,7 @@ void main(uint3 id : SV_DispatchThreadID) {
                          RAY_FLAG_SKIP_PROCEDURAL_PRIMITIVES> sunQuery;
                 sunQuery.TraceRayInline(sceneTlas,
                     RAY_FLAG_FORCE_NON_OPAQUE | RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH |
-                    RAY_FLAG_SKIP_PROCEDURAL_PRIMITIVES, 0x02, shadow);
+                    RAY_FLAG_SKIP_PROCEDURAL_PRIMITIVES, 0x01, shadow);
                 while (sunQuery.Proceed()) {
                     if (sunQuery.CandidateType() == CANDIDATE_NON_OPAQUE_TRIANGLE &&
                         ddgiCandidatePassesAlpha(sunQuery.CandidateInstanceID(), sunQuery.CandidatePrimitiveIndex(),
@@ -176,9 +194,7 @@ void main(uint3 id : SV_DispatchThreadID) {
                     frame.lightColor.rgb * frame.lightDirectionIntensity.w, visibility);
             }
         }
-        radiance += evaluateLocalDiffuse(hit.position, hitNormal, albedo);
-        if (realBackface) distance = -distance;
-        radiance = float3(1.0, 1.0, 1.0);
+        radiance += evaluateLocalDiffuse(hit.position, hitNormal, geometricNormal, albedo);
     }
     rayData[int2(id.x, probeIndex)] = float4(radiance, distance);
 }

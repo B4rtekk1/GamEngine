@@ -49,7 +49,9 @@ DDGIGatherResult ddgiGatherCascade(float3 position, float3 geometricNormal,
         const uint3 grid = lower + offset;
         const uint index = ddgiPhysicalIndex(grid, scrollOffset);
         const float4 probe = probeTexture.Load(int3(ddgiProbePixel(index), 0));
-        if (probe.w < 0.5) continue;
+        // Pending probes have no valid irradiance at their current position.
+        // In particular, a relocated probe must not reuse its old atlas here.
+        if (probe.w < 0.5 || probe.w > 1.5) continue;
         ++activeProbeCount;
         const float3 probePosition = origin + float3(grid) * spacing + probe.xyz;
         const float3 toSurface = biasedPosition - probePosition;

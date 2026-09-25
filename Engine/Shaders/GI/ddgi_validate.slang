@@ -11,8 +11,9 @@ import GI.ddgi_alpha;
 void main(uint3 id : SV_DispatchThreadID) {
     if (id.x >= DDGI_FIXED_RAYS || id.y >= ddgiUpdateCount(ddgi)) return;
     const uint probeIndex = probeUpdateList[id.y].probeIndex;
-    const float4 probe = ddgi.distanceInitialized.y > 0.5
-        ? probeData[int2(ddgiProbePixel(probeIndex))] : float4(0.0, 0.0, 0.0, 2.0);
+    // Scroll reset initializes every probe before validation, including the
+    // first frame. Read relocation offsets on the second validation pass too.
+    const float4 probe = probeData[int2(ddgiProbePixel(probeIndex))];
     RayDesc ray;
     ray.Origin = ddgiPosition(probeIndex, ddgi.originSpacing.xyz, ddgi.originSpacing.w, ddgi.scrollOffsetRays.xyz) + probe.xyz;
     ray.Direction = ddgiFixedRayDirection(id.x);

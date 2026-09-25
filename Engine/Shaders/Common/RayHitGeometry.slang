@@ -56,6 +56,7 @@ RayVertex loadRayVertex(uint index) {
 struct RayHitSurface {
     float3 position;
     float3 normal;
+    float3 geometricNormal;
     float2 uv0;
     float2 uv1;
     float3 color;
@@ -84,6 +85,14 @@ RayHitSurface loadRayHitSurface(uint instanceId, uint primitiveId, float2 baryce
     RayHitSurface surface;
     surface.position = mul(float4(localPosition, 1.0), instance.worldMatrix).xyz;
     surface.normal = worldNormal;
+    // Transform the triangle edges before taking their cross product so this
+    // remains perpendicular to the surface under non-uniform or mirrored scale.
+    const float3 edgeAB = mul(float4(b.position - a.position, 0.0), instance.worldMatrix).xyz;
+    const float3 edgeAC = mul(float4(c.position - a.position, 0.0), instance.worldMatrix).xyz;
+    const float3 geometricNormal = cross(edgeAB, edgeAC);
+    const float normalLengthSquared = dot(geometricNormal, geometricNormal);
+    surface.geometricNormal = normalLengthSquared > 1e-20
+        ? geometricNormal * rsqrt(normalLengthSquared) : worldNormal;
     surface.uv0 = a.uv0 * weights.x + b.uv0 * weights.y + c.uv0 * weights.z;
     surface.uv1 = a.uv1 * weights.x + b.uv1 * weights.y + c.uv1 * weights.z;
     surface.color = a.color * weights.x + b.color * weights.y + c.color * weights.z;
