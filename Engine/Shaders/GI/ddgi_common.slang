@@ -1,5 +1,6 @@
 static const uint3 DDGI_COUNTS = uint3(16u, 8u, 16u);
-static const uint DDGI_FIXED_RAYS = 16u;
+static const uint DDGI_FIXED_RAYS = 32u;
+static const float DDGI_BACKFACE_THRESHOLD = 0.25;
 static const uint DDGI_PROBES = 2048u;
 static const uint DDGI_UPDATES_PER_FRAME = 256u;
 static const uint DDGI_IRRADIANCE_INTERIOR = 8u;
@@ -49,12 +50,33 @@ float3 ddgiOctDecode(float2 uv) {
         direction.xy = (1.0 - abs(direction.yx)) * select(direction.xy >= 0.0, 1.0, -1.0);
     return normalize(direction);
 }
-float3 ddgiRayDirection(uint rayIndex, uint frameIndex, uint rayCount) {
-    const float golden = 2.39996323;
+uint ddgiHash(uint value) {
+    value ^= value >> 16u;
+    value *= 0x7feb352du;
+    value ^= value >> 15u;
+    value *= 0x846ca68bu;
+    return value ^ (value >> 16u);
+}
+float4 ddgiRayRotation(uint frameIndex, uint rayCount) {
+    const uint seed = frameIndex ^ (rayCount * 0x9e3779b9u);
+    const float scale = 1.0 / 4294967296.0;
+    const float u1 = (float(ddgiHash(seed ^ 0xa511e9b3u)) + 0.5) * scale;
+    const float u2 = (float(ddgiHash(seed ^ 0x63d83595u)) + 0.5) * scale;
+    const float u3 = (float(ddgiHash(seed ^ 0x8d22f6e6u)) + 0.5) * scale;
+    const float a = 6.2831853 * u2;
+    const float b = 6.2831853 * u3;
+    const float r1 = sqrt(1.0 - u1);
+    const float r2 = sqrt(u1);
+    return float4(r1 * sin(a), r1 * cos(a), r2 * sin(b), r2 * cos(b));
+}
+float3 ddgiRayDirection(uint rayIndex, uint rayCount, float4 rotation) {
     const float z = 1.0 - 2.0 * (float(rayIndex) + 0.5) / float(rayCount);
-    const float angle = float(rayIndex) * golden + float(frameIndex % 64u) * 0.61803399;
+    const float angle = float(rayIndex) * 2.39996323;
     const float radius = sqrt(max(1.0 - z * z, 0.0));
-    return float3(cos(angle) * radius, sin(angle) * radius, z);
+    const float3 baseDirection = float3(cos(angle) * radius, sin(angle) * radius, z);
+    const float3 qv = rotation.xyz;
+    const float3 t = 2.0 * cross(qv, baseDirection);
+    return baseDirection + rotation.w * t + cross(qv, t);
 }
 float3 ddgiFixedRayDirection(uint rayIndex) {
     const float z = 1.0 - 2.0 * (float(rayIndex) + 0.5) / float(DDGI_FIXED_RAYS);

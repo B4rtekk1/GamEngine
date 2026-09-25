@@ -490,7 +490,7 @@
                 for (std::uint32_t frame = 0; frame < MAX_FRAMES_IN_FLIGHT; ++frame) {
                     std::array<VkDescriptorImageInfo, 9> textures{};
                     for (std::uint32_t cascade = 0; cascade < 3; ++cascade) {
-                        const auto& probes = ddgi.resources().cascades[cascade].frames[frame];
+                        const auto& probes = ddgi.resources().cascades[cascade].history;
                         textures[cascade * 3] = {probes.irradiance.sampler(),
                             probes.irradiance.imageView(), VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
                         textures[cascade * 3 + 1] = {probes.distance.sampler(),

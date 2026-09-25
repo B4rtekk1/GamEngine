@@ -157,7 +157,7 @@ namespace Engine {
             };
             bindings[10] = {
                 10, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1,
-                VK_SHADER_STAGE_FRAGMENT_BIT, nullptr
+                VK_SHADER_STAGE_FRAGMENT_BIT | VK_SHADER_STAGE_COMPUTE_BIT, nullptr
             }; // diffuse irradiance
             bindings[11] = {
                 11, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1,

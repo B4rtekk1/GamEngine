@@ -31,7 +31,8 @@ void main(uint3 id : SV_DispatchThreadID) {
         }
     }
     float3 offset = previous.xyz;
-    if (backfaces >= DDGI_FIXED_RAYS / 4u && nearestBackface < ddgi.distanceInitialized.x) {
+    const bool insideGeometry = float(backfaces) / float(DDGI_FIXED_RAYS) >= DDGI_BACKFACE_THRESHOLD;
+    if (insideGeometry && nearestBackface < ddgi.distanceInitialized.x) {
         offset += exitDirection * min(nearestBackface + 0.05, ddgi.originSpacing.w * 0.25);
     } else if (dot(frontfacePush, frontfacePush) > 1e-6) {
         offset += normalize(frontfacePush) *

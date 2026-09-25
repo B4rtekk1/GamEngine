@@ -6,30 +6,13 @@ import GI.ddgi_common;
 groupshared uint scores[DDGI_PROBES];
 groupshared uint indices[DDGI_PROBES];
 
-uint priority(uint probeIndex) {
-    const DDGIProbeState probe = probeStates[probeIndex];
-    if (probe.state == 2u) return 3u;
-    if (probe.variability > 0.25) return 2u;
-    const uint3 logical = ddgiLogicalGrid(probeIndex, ddgi.scrollOffsetRays.xyz);
-    for (uint axis = 0u; axis < 3u; ++axis) {
-        for (int sign = -1; sign <= 1; sign += 2) {
-            int3 adjacent = int3(logical);
-            adjacent[axis] += sign;
-            if (any(adjacent < 0) || any(adjacent >= int3(DDGI_COUNTS))) continue;
-            if (probeStates[ddgiPhysicalIndex(uint3(adjacent), ddgi.scrollOffsetRays.xyz)].state == 2u)
-                return 2u;
-        }
-    }
-    return uint(uint(ddgi.scrollDeltaFrame.w) - probe.lastUpdatedFrame > 8u);
-}
-
 [numthreads(256, 1, 1)]
 void main(uint3 id : SV_DispatchThreadID, uint groupIndex : SV_GroupIndex) {
     for (uint i = groupIndex; i < DDGI_PROBES; i += 256u) {
         const DDGIProbeState state = probeStates[i];
         const uint age = min(uint(ddgi.scrollDeltaFrame.w) - state.lastUpdatedFrame, 4095u);
-        const uint variation = uint(saturate(state.variability) * 255.0);
-        scores[i] = (priority(i) << 29u) | (age << 17u) | (variation << 9u) | (511u - (i & 511u));
+        // Newly exposed probes first, then the least recently updated probes.
+        scores[i] = (uint(state.state == 2u) << 23u) | (age << 11u) | (2047u - i);
         indices[i] = i;
     }
     GroupMemoryBarrierWithGroupSync();

@@ -25,7 +25,7 @@ namespace Engine {
                     VkAccelerationStructureKHR tlas, VkBuffer instances,
                     VkBuffer meshes, VkBuffer materials, VkBuffer vertices,
                     VkBuffer indices, const std::array<float, 3>& cameraPosition);
-        [[nodiscard]] bool ready(std::uint32_t frameSlot) const noexcept;
+        [[nodiscard]] bool ready() const noexcept;
         [[nodiscard]] const DDGIResources& resources() const noexcept { return resources_; }
         [[nodiscard]] const DDGIVolume& volume(std::uint32_t cascade) const noexcept { return volumes_[cascade]; }
         [[nodiscard]] bool created() const noexcept { return tracePipeline_ != VK_NULL_HANDLE; }
@@ -47,11 +47,11 @@ namespace Engine {
         VkPipeline scrollResetPipeline_{VK_NULL_HANDLE};
         VkPipeline irradiancePipeline_{VK_NULL_HANDLE};
         VkPipeline distancePipeline_{VK_NULL_HANDLE};
-        struct SlotState final {
+        struct CascadeState final {
             std::array<std::int32_t, 3> originCell{};
             std::array<std::int32_t, 3> scrollOffset{};
             bool initialized{};
         };
-        std::array<std::array<SlotState, 2>, 3> slotStates_{};
+        std::array<CascadeState, 3> cascadeStates_{};
     };
 }

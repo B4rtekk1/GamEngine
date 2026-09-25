@@ -19,7 +19,8 @@ void main(uint3 id : SV_DispatchThreadID) {
         backfaces += distance < 0.0 ? 1u : 0u;
         hits += abs(distance) < ddgi.distanceInitialized.x - 0.01 ? 1u : 0u;
     }
-    const bool active = backfaces < DDGI_FIXED_RAYS / 2u && hits > 0u;
+    const bool insideGeometry = float(backfaces) / float(DDGI_FIXED_RAYS) >= DDGI_BACKFACE_THRESHOLD;
+    const bool active = !insideGeometry && hits > 0u;
     const float state = active ? (probe.w < 0.5 ? 2.0 : probe.w) : 0.0;
     probeData[pixel] = float4(probe.xyz, state);
 }

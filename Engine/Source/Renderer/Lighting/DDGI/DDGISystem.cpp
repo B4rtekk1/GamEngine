@@ -64,14 +64,15 @@ void DDGISystem::create(VkPhysicalDevice physical, VkDevice device, VmaAllocator
             // RG16F distance moments must represent the squared far hit.
             volumes_[cascade].maxRayDistance = std::min(spacings[cascade] * 16.0F, 252.0F);
         }
-        for (auto& cascade : resources_.cascades) for (auto& frame : cascade.frames) {
+        for (auto& cascade : resources_.cascades) {
+            auto& frame = cascade.history;
             frame.rayData.create(physical, device, {64, 2048}, allocator,
                                  VK_FILTER_NEAREST, VK_FORMAT_R16G16B16A16_SFLOAT, true);
             frame.irradiance.create(physical, device, {160, 1280}, allocator,
                                     VK_FILTER_LINEAR, VK_FORMAT_R16G16B16A16_SFLOAT, true);
             frame.distance.create(physical, device, {288, 2304}, allocator,
                                   VK_FILTER_LINEAR, VK_FORMAT_R16G16_SFLOAT, true);
-            frame.fixedRayData.create(physical, device, {16, 2048}, allocator,
+            frame.fixedRayData.create(physical, device, {32, 2048}, allocator,
                                       VK_FILTER_NEAREST, VK_FORMAT_R16G16B16A16_SFLOAT, true);
             frame.probeData.create(physical, device, {16, 128}, allocator,
                                    VK_FILTER_NEAREST, VK_FORMAT_R16G16B16A16_SFLOAT, true);
@@ -160,27 +161,27 @@ void DDGISystem::record(VkCommandBuffer commandBuffer, std::uint32_t frameSlot,
     if (!created() || !commandBuffer || !sceneSet || !tlas || !instances || !meshes ||
         !materials || !vertices || !indices) return;
     frameSlot %= 2;
-    // Across the three cascades this is 256 probes and at most 15,360
-    // non-shadow rays: 128*64 + 64*32 + 64*16 trace rays, plus 256*16
-    // validation rays. Each cascade has its own 2048-probe history.
+    // Across the three cascades this is 256 probes, up to 11,264 trace
+    // rays (128*64 + 64*32 + 64*16), and up to 8,192 validation rays.
+    // Each cascade has its own 2048-probe history.
     constexpr std::array<std::uint32_t, 3> cascadeUpdates{128, 64, 64};
     for (std::size_t cascadeIndex = 0; cascadeIndex < volumes_.size(); ++cascadeIndex) {
     auto& volume = volumes_[cascadeIndex];
     const std::uint32_t updateCount = cascadeUpdates[cascadeIndex];
-    auto& slot = slotStates_[cascadeIndex][frameSlot];
+    auto& state = cascadeStates_[cascadeIndex];
     std::array<std::int32_t, 3> newOriginCell{};
     std::array<std::int32_t, 3> scrollDelta{};
     constexpr std::array<std::int32_t, 3> counts{16, 8, 16};
     for (std::size_t axis = 0; axis < 3; ++axis) {
         newOriginCell[axis] = static_cast<std::int32_t>(
             std::floor(cameraPosition[axis] / volume.probeSpacing)) - counts[axis] / 2;
-        scrollDelta[axis] = slot.initialized ? newOriginCell[axis] - slot.originCell[axis] : 0;
-        slot.scrollOffset[axis] = positiveModulo(slot.scrollOffset[axis] + scrollDelta[axis], counts[axis]);
+        scrollDelta[axis] = state.initialized ? newOriginCell[axis] - state.originCell[axis] : 0;
+        state.scrollOffset[axis] = positiveModulo(state.scrollOffset[axis] + scrollDelta[axis], counts[axis]);
         volume.origin[axis] = static_cast<float>(newOriginCell[axis]) * volume.probeSpacing;
     }
-    slot.originCell = newOriginCell;
-    volume.scrollOffset = slot.scrollOffset;
-    auto& frame = resources_.cascades[cascadeIndex].frames[frameSlot];
+    state.originCell = newOriginCell;
+    volume.scrollOffset = state.scrollOffset;
+    auto& frame = resources_.cascades[cascadeIndex].history;
     const VkWriteDescriptorSetAccelerationStructureKHR structure{
         VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET_ACCELERATION_STRUCTURE_KHR, nullptr, 1, &tlas};
     const std::array<VkDescriptorBufferInfo, 7> buffers{{
@@ -229,7 +230,21 @@ void DDGISystem::record(VkCommandBuffer commandBuffer, std::uint32_t frameSlot,
     asDependency.memoryBarrierCount = 1;
     asDependency.pMemoryBarriers = &asBarrier;
     vkCmdPipelineBarrier2(commandBuffer, &asDependency);
-    const bool initialized = slot.initialized;
+    const bool initialized = state.initialized;
+    if (initialized) {
+        // The previous graphics submission wrote the shared probe state. Make
+        // it visible to this frame's schedule, validation and blend passes.
+        VkMemoryBarrier2 historyBarrier{VK_STRUCTURE_TYPE_MEMORY_BARRIER_2};
+        historyBarrier.srcStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+        historyBarrier.srcAccessMask = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
+        historyBarrier.dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+        historyBarrier.dstAccessMask = VK_ACCESS_2_SHADER_STORAGE_READ_BIT |
+                                       VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
+        VkDependencyInfo historyDependency{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
+        historyDependency.memoryBarrierCount = 1;
+        historyDependency.pMemoryBarriers = &historyBarrier;
+        vkCmdPipelineBarrier2(commandBuffer, &historyDependency);
+    }
     const std::array startBarriers{
         imageBarrier(frame.rayData.image(), initialized ? VK_IMAGE_LAYOUT_GENERAL : VK_IMAGE_LAYOUT_UNDEFINED,
                      VK_IMAGE_LAYOUT_GENERAL, VK_PIPELINE_STAGE_2_NONE, 0,
@@ -263,7 +278,7 @@ void DDGISystem::record(VkCommandBuffer commandBuffer, std::uint32_t frameSlot,
                             0, 2, sets.data(), 0, nullptr);
     const PushConstants push{
         {volume.origin[0], volume.origin[1], volume.origin[2], volume.probeSpacing},
-        {slot.scrollOffset[0], slot.scrollOffset[1], slot.scrollOffset[2],
+        {state.scrollOffset[0], state.scrollOffset[1], state.scrollOffset[2],
          static_cast<std::int32_t>(volume.raysPerProbe)},
         {scrollDelta[0], scrollDelta[1], scrollDelta[2], static_cast<std::int32_t>(frameIndex)},
         {volume.maxRayDistance, initialized ? 1.0F : 0.0F, static_cast<float>(updateCount), 0.0F}};
@@ -290,7 +305,7 @@ void DDGISystem::record(VkCommandBuffer commandBuffer, std::uint32_t frameSlot,
     vkCmdDispatch(commandBuffer, 1, 1, 1);
     computeBarrier();
     vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, validatePipeline_);
-    vkCmdDispatch(commandBuffer, 2, (updateCount + 7) / 8, 1);
+    vkCmdDispatch(commandBuffer, 4, (updateCount + 7) / 8, 1);
     computeBarrier();
     // Trace uses the relocated position and classification of each probe, so
     // these passes must consume the validation rays before tracing this frame.
@@ -325,13 +340,13 @@ void DDGISystem::record(VkCommandBuffer commandBuffer, std::uint32_t frameSlot,
         VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
     const std::array finish{finishIrradiance, finishDistance, finishProbeData};
     emitImageBarriers(commandBuffer, finish);
-    slot.initialized = true;
+    state.initialized = true;
     }
 }
 
-bool DDGISystem::ready(std::uint32_t frameSlot) const noexcept {
-    return std::all_of(slotStates_.begin(), slotStates_.end(),
-        [frameSlot](const auto& cascade) { return cascade[frameSlot % 2].initialized; });
+bool DDGISystem::ready() const noexcept {
+    return std::all_of(cascadeStates_.begin(), cascadeStates_.end(),
+        [](const auto& cascade) { return cascade.initialized; });
 }
 
 void DDGISystem::destroy() noexcept {
@@ -349,7 +364,8 @@ void DDGISystem::destroy() noexcept {
         if (pool_) vkDestroyDescriptorPool(device_, pool_, nullptr);
         if (layout_) vkDestroyDescriptorSetLayout(device_, layout_, nullptr);
     }
-    for (auto& cascade : resources_.cascades) for (auto& frame : cascade.frames) {
+    for (auto& cascade : resources_.cascades) {
+        auto& frame = cascade.history;
         frame.rayData.destroy();
         frame.irradiance.destroy();
         frame.distance.destroy();
@@ -366,7 +382,7 @@ void DDGISystem::destroy() noexcept {
     pool_ = VK_NULL_HANDLE;
     layout_ = VK_NULL_HANDLE;
     sets_ = {};
-    slotStates_ = {};
+    cascadeStates_ = {};
     volumes_ = {};
     device_ = VK_NULL_HANDLE;
 }

@@ -16,7 +16,7 @@ namespace Engine {
             Buffer probeStates;
             Buffer updateList;
         };
-        struct Cascade final { std::array<Frame, 2> frames{}; };
+        struct Cascade final { Frame history; };
         std::array<Cascade, 3> cascades{};
     };
 }

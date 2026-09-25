@@ -143,24 +143,26 @@ ForwardVertexOutput vertexMain(ForwardVertexInput input, uint instanceIndex : SV
 [[vk::binding(10, 0)]] SamplerCube irradianceMap;
 // Returns incident diffuse irradiance E. The existing sky IBL texture stores
 // the equivalent diffuse response, so scale it by PI before the Lambert term.
-float3 sampleDDGIIrradiance(float3 worldPosition, float3 worldNormal)
+float3 sampleDDGIIrradiance(float3 worldPosition, float3 shadingNormal,
+                            float3 geometricNormal, float3 viewDirection)
 {
-    const float3 skyIrradiance = irradianceMap.Sample(worldNormal).rgb * PBR_PI;
+    const float3 skyIrradiance = irradianceMap.Sample(shadingNormal).rgb * PBR_PI;
     float3 result = skyIrradiance;
+    // Probe visibility and atlas lookup use the surface normal before normal mapping.
     if (frame.ddgiOriginSpacing[2].w > 0.0) {
-        const float4 probe = ddgiGatherCascade(worldPosition, worldNormal,
+        const float4 probe = ddgiGatherCascade(worldPosition, geometricNormal, viewDirection,
             frame.ddgiOriginSpacing[2].xyz, frame.ddgiOriginSpacing[2].w,
             frame.ddgiScrollOffsets[2].xyz, ddgiIrradiance2, ddgiDistance2, ddgiProbeData2);
         result = lerp(result, probe.rgb, probe.a);
     }
     if (frame.ddgiOriginSpacing[1].w > 0.0) {
-        const float4 probe = ddgiGatherCascade(worldPosition, worldNormal,
+        const float4 probe = ddgiGatherCascade(worldPosition, geometricNormal, viewDirection,
             frame.ddgiOriginSpacing[1].xyz, frame.ddgiOriginSpacing[1].w,
             frame.ddgiScrollOffsets[1].xyz, ddgiIrradiance1, ddgiDistance1, ddgiProbeData1);
         result = lerp(result, probe.rgb, probe.a);
     }
     if (frame.ddgiOriginSpacing[0].w > 0.0) {
-        const float4 probe = ddgiGatherCascade(worldPosition, worldNormal,
+        const float4 probe = ddgiGatherCascade(worldPosition, geometricNormal, viewDirection,
             frame.ddgiOriginSpacing[0].xyz, frame.ddgiOriginSpacing[0].w,
             frame.ddgiScrollOffsets[0].xyz, ddgiIrradiance, ddgiDistance, ddgiProbeData);
         result = lerp(result, probe.rgb, probe.a);
@@ -639,7 +641,8 @@ ForwardFragmentOutput fragmentMain(ForwardFragmentInput input)
     const bool disableSpecularIbl = frame.pbrDebugView == PBR_DEBUG_NO_SPECULAR_IBL;
     float3 kS = disableSpecularIbl ? 0.0 : fresnelIbl;
     float3 kD = (1.0 - kS) * (1.0 - metallic);
-    const float3 indirectDiffuse = sampleDDGIIrradiance(input.worldPosition, normal) *
+    const float3 indirectDiffuse = sampleDDGIIrradiance(input.worldPosition, normal,
+                                   geometricNormal, viewDirection) *
                                    albedo * kD / PBR_PI;
     float3 reflection = reflect(-viewDirection, normal);
     const uint prefilteredMipCount = max(uint(frame.clusterZScaleBiasEnvironmentMipRtContact.z), 1u);

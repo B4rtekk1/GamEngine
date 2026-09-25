@@ -21,8 +21,10 @@ void main(uint3 id : SV_DispatchThreadID) {
     const float3 direction = ddgiOctDecode(oct);
     float3 sum = 0.0;
     float weightSum = 0.0;
-    for (uint rayIndex = 0u; rayIndex < uint(ddgi.scrollOffsetRays.w); ++rayIndex) {
-        const float3 rayDirection = ddgiRayDirection(rayIndex, uint(ddgi.scrollDeltaFrame.w), uint(ddgi.scrollOffsetRays.w));
+    const uint rayCount = uint(ddgi.scrollOffsetRays.w);
+    const float4 rotation = ddgiRayRotation(uint(ddgi.scrollDeltaFrame.w), rayCount);
+    for (uint rayIndex = 0u; rayIndex < rayCount; ++rayIndex) {
+        const float3 rayDirection = ddgiRayDirection(rayIndex, rayCount, rotation);
         const float weight = max(dot(direction, rayDirection), 0.0);
         const float4 sample = rayData[int2(rayIndex, probeIndex)];
         sum += sample.rgb * weight;

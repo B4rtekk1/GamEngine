@@ -22,8 +22,10 @@ void main(uint3 id : SV_DispatchThreadID) {
     float mean = 0.0;
     float meanSquared = 0.0;
     float weightSum = 0.0;
-    for (uint rayIndex = 0u; rayIndex < uint(ddgi.scrollOffsetRays.w); ++rayIndex) {
-        const float3 rayDirection = ddgiRayDirection(rayIndex, uint(ddgi.scrollDeltaFrame.w), uint(ddgi.scrollOffsetRays.w));
+    const uint rayCount = uint(ddgi.scrollOffsetRays.w);
+    const float4 rotation = ddgiRayRotation(uint(ddgi.scrollDeltaFrame.w), rayCount);
+    for (uint rayIndex = 0u; rayIndex < rayCount; ++rayIndex) {
+        const float3 rayDirection = ddgiRayDirection(rayIndex, rayCount, rotation);
         const float weight = pow(max(dot(direction, rayDirection), 0.0), 8.0);
         const float distance = abs(rayData[int2(rayIndex, probeIndex)].a);
         mean += distance * weight;

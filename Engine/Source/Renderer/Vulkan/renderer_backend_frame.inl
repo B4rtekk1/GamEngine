@@ -1508,7 +1508,7 @@
                         gpuSceneMeshBuffers[currentFrame].handle(),
                         gpuSceneMaterialBuffers[currentFrame].handle(),
                         vertexBuffer.handle(), indexBuffer.handle(), giCenter);
-                    if (ddgi.ready(currentFrame)) {
+                    if (ddgi.ready()) {
                         std::array<glm::vec4, 3> origins{};
                         std::array<glm::ivec4, 3> offsets{};
                         for (std::uint32_t cascade = 0; cascade < 3; ++cascade) {

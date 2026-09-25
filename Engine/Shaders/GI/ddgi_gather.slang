@@ -18,7 +18,8 @@ float4 ddgiSampleProbe(Sampler2D atlas, uint probeIndex, float3 direction, uint 
     return atlas.SampleLevel(pixel / extent, 0.0);
 }
 
-float4 ddgiGatherCascade(float3 position, float3 normal, float3 origin,
+float4 ddgiGatherCascade(float3 position, float3 geometricNormal,
+                         float3 viewDirection, float3 origin,
                          float spacing, int3 scrollOffset,
                          Sampler2D irradianceTexture, Sampler2D distanceTexture,
                          Sampler2D probeTexture) {
@@ -26,6 +27,12 @@ float4 ddgiGatherCascade(float3 position, float3 normal, float3 origin,
     if (any(cell < 0.0) || any(cell > float3(DDGI_COUNTS - 1u))) return float4(0.0);
     const uint3 lower = uint3(min(floor(cell), float3(DDGI_COUNTS - 2u)));
     const float3 fractional = saturate(cell - float3(lower));
+    // Move the visibility query off the surface; keep the original position
+    // for cell selection so the trilinear weights remain spatially stable.
+    const float normalBias = min(spacing * 0.0375, 0.10);
+    const float viewBias = min(spacing * 0.075, 0.20);
+    const float3 biasedPosition = position + geometricNormal * normalBias +
+                                  viewDirection * viewBias;
     float3 irradiance = 0.0;
     float totalWeight = 0.0;
     for (uint corner = 0u; corner < 8u; ++corner) {
@@ -35,13 +42,13 @@ float4 ddgiGatherCascade(float3 position, float3 normal, float3 origin,
         const float4 probe = probeTexture.Load(int3(ddgiProbePixel(index), 0));
         if (probe.w < 0.5) continue;
         const float3 probePosition = origin + float3(grid) * spacing + probe.xyz;
-        const float3 toSurface = position - probePosition;
+        const float3 toSurface = biasedPosition - probePosition;
         const float distance = length(toSurface);
-        const float3 direction = distance > 1e-4 ? toSurface / distance : normal;
+        const float3 direction = distance > 1e-4 ? toSurface / distance : geometricNormal;
         const float3 cornerWeight = lerp(1.0 - fractional, fractional, float3(offset));
         float weight = cornerWeight.x * cornerWeight.y * cornerWeight.z;
-        weight *= max(dot(normal, -direction) * 0.5 + 0.5, 0.05);
-        const float4 probeIrradiance = ddgiSampleProbe(irradianceTexture, index, normal, DDGI_IRRADIANCE_INTERIOR);
+        weight *= max(dot(geometricNormal, -direction) * 0.5 + 0.5, 0.05);
+        const float4 probeIrradiance = ddgiSampleProbe(irradianceTexture, index, geometricNormal, DDGI_IRRADIANCE_INTERIOR);
         weight *= saturate(probeIrradiance.a);
         const float2 moments = ddgiSampleProbe(distanceTexture, index, direction, DDGI_DISTANCE_INTERIOR).rg;
         const float variance = max(moments.y - moments.x * moments.x, 0.0001);
@@ -49,7 +56,7 @@ float4 ddgiGatherCascade(float3 position, float3 normal, float3 origin,
         const float visibility = saturate(variance / (variance + delta * delta));
         // Preserve occlusion: a nonzero visibility floor would let probes
         // contribute through a wall even when the distance moments reject them.
-        weight *= visibility * visibility;
+        weight *= visibility;
         irradiance += probeIrradiance.rgb * weight;
         totalWeight += weight;
     }
