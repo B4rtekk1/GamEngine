@@ -81,7 +81,7 @@ void DDGISystem::create(VkPhysicalDevice physical, VkDevice device, VmaAllocator
             frame.updateList.createDeviceLocalEmpty(device, 256 * sizeof(std::uint32_t),
                                                     VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, allocator);
         }
-        const std::array<VkDescriptorSetLayoutBinding, 13> bindings{{
+        const std::array<VkDescriptorSetLayoutBinding, 16> bindings{{
             {0, VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
             {1, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
             {2, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
@@ -95,16 +95,20 @@ void DDGISystem::create(VkPhysicalDevice physical, VkDevice device, VmaAllocator
             {10, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
             {11, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
             {12, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
+            {13, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
+            {14, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
+            {15, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
         }};
         VkDescriptorSetLayoutCreateInfo layoutInfo{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
         layoutInfo.bindingCount = static_cast<std::uint32_t>(bindings.size());
         layoutInfo.pBindings = bindings.data();
         if (vkCreateDescriptorSetLayout(device_, &layoutInfo, nullptr, &layout_) != VK_SUCCESS)
             throw std::runtime_error("Could not create DDGI descriptor layout");
-        const std::array<VkDescriptorPoolSize, 3> poolSizes{{
+        const std::array<VkDescriptorPoolSize, 4> poolSizes{{
             {VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR, 6},
             {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 42},
             {VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 30},
+            {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 18},
         }};
         VkDescriptorPoolCreateInfo poolInfo{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
         poolInfo.maxSets = 6;
@@ -198,7 +202,12 @@ void DDGISystem::record(VkCommandBuffer commandBuffer, std::uint32_t frameSlot,
         {VK_NULL_HANDLE, frame.probeData.imageView(), VK_IMAGE_LAYOUT_GENERAL},
         {VK_NULL_HANDLE, frame.fixedRayData.imageView(), VK_IMAGE_LAYOUT_GENERAL},
     }};
-    std::array<VkWriteDescriptorSet, 13> writes{};
+    const std::array<VkDescriptorImageInfo, 3> sampledImages{{
+        {frame.irradiance.sampler(), frame.irradiance.imageView(), VK_IMAGE_LAYOUT_GENERAL},
+        {frame.distance.sampler(), frame.distance.imageView(), VK_IMAGE_LAYOUT_GENERAL},
+        {frame.probeData.sampler(), frame.probeData.imageView(), VK_IMAGE_LAYOUT_GENERAL},
+    }};
+    std::array<VkWriteDescriptorSet, 16> writes{};
     writes[0] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, &structure, sets_[cascadeIndex][frameSlot], 0, 0, 1,
                  VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR};
     for (std::uint32_t binding = 1; binding <= 4; ++binding)
@@ -216,6 +225,10 @@ void DDGISystem::record(VkCommandBuffer commandBuffer, std::uint32_t frameSlot,
     for (std::uint32_t binding = 11; binding <= 12; ++binding)
         writes[binding] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr, sets_[cascadeIndex][frameSlot],
                            binding, 0, 1, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, nullptr, &buffers[binding - 6]};
+    for (std::uint32_t binding = 13; binding <= 15; ++binding)
+        writes[binding] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr, sets_[cascadeIndex][frameSlot],
+                           binding, 0, 1, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+                           &sampledImages[binding - 13]};
     vkUpdateDescriptorSets(device_, static_cast<std::uint32_t>(writes.size()), writes.data(), 0, nullptr);
 
     // TLAS was built or updated earlier on this graphics command buffer.
@@ -254,13 +267,15 @@ void DDGISystem::record(VkCommandBuffer commandBuffer, std::uint32_t frameSlot,
                      initialized ? VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT : VK_PIPELINE_STAGE_2_NONE,
                      initialized ? VK_ACCESS_2_SHADER_SAMPLED_READ_BIT : 0,
                      VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-                     VK_ACCESS_2_SHADER_STORAGE_READ_BIT | VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT),
+                     VK_ACCESS_2_SHADER_STORAGE_READ_BIT | VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT |
+                     VK_ACCESS_2_SHADER_SAMPLED_READ_BIT),
         imageBarrier(frame.distance.image(), initialized ? VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL : VK_IMAGE_LAYOUT_UNDEFINED,
                      VK_IMAGE_LAYOUT_GENERAL,
                      initialized ? VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT : VK_PIPELINE_STAGE_2_NONE,
                      initialized ? VK_ACCESS_2_SHADER_SAMPLED_READ_BIT : 0,
                      VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-                     VK_ACCESS_2_SHADER_STORAGE_READ_BIT | VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT),
+                     VK_ACCESS_2_SHADER_STORAGE_READ_BIT | VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT |
+                     VK_ACCESS_2_SHADER_SAMPLED_READ_BIT),
         imageBarrier(frame.fixedRayData.image(), initialized ? VK_IMAGE_LAYOUT_GENERAL : VK_IMAGE_LAYOUT_UNDEFINED,
                      VK_IMAGE_LAYOUT_GENERAL, VK_PIPELINE_STAGE_2_NONE, 0,
                      VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
@@ -270,7 +285,8 @@ void DDGISystem::record(VkCommandBuffer commandBuffer, std::uint32_t frameSlot,
                      initialized ? VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT : VK_PIPELINE_STAGE_2_NONE,
                      initialized ? VK_ACCESS_2_SHADER_SAMPLED_READ_BIT : 0,
                      VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-                     VK_ACCESS_2_SHADER_STORAGE_READ_BIT | VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT),
+                     VK_ACCESS_2_SHADER_STORAGE_READ_BIT | VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT |
+                     VK_ACCESS_2_SHADER_SAMPLED_READ_BIT),
     };
     emitImageBarriers(commandBuffer, startBarriers);
     const std::array sets{sceneSet, sets_[cascadeIndex][frameSlot]};
@@ -290,7 +306,8 @@ void DDGISystem::record(VkCommandBuffer commandBuffer, std::uint32_t frameSlot,
         barrier.srcAccessMask = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
         barrier.dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
         barrier.dstAccessMask = VK_ACCESS_2_SHADER_STORAGE_READ_BIT |
-                                VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
+                                VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT |
+                                VK_ACCESS_2_SHADER_SAMPLED_READ_BIT;
         VkDependencyInfo dependency{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
         dependency.memoryBarrierCount = 1;
         dependency.pMemoryBarriers = &barrier;

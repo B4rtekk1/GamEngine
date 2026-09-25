@@ -2,6 +2,7 @@ import Common.SceneData;
 import Common.Displacement;
 import Common.RayHitGeometry;
 import GI.ddgi_common;
+import GI.ddgi_gather_core;
 [[vk::push_constant]] DDGIConstants ddgi;
 
 [[vk::binding(1, 0)]] ConstantBuffer<RendererFrameData> frame;
@@ -12,6 +13,11 @@ import GI.ddgi_common;
 [[vk::binding(5, 1), vk::image_format("rgba16f")]] RWTexture2D<float4> rayData;
 [[vk::binding(9, 1), vk::image_format("rgba16f")]] RWTexture2D<float4> probeData;
 [[vk::binding(12, 1)]] StructuredBuffer<uint> probeUpdateList;
+// These views read the previous atlas contents while the DDGI update keeps
+// the images in GENERAL for storage writes later in the command buffer.
+[[vk::binding(13, 1)]] Sampler2D previousIrradiance;
+[[vk::binding(14, 1)]] Sampler2D previousDistance;
+[[vk::binding(15, 1)]] Sampler2D previousProbeData;
 
 float3 skyRadiance(float3 direction) {
     return skyEnvironment.SampleLevel(direction, 0.0).rgb;
@@ -122,7 +128,15 @@ void main(uint3 id : SV_DispatchThreadID) {
         if (material.extensionTextureIndices.x >= 0)
             emissive *= materialTextures[NonUniformResourceIndex(material.extensionTextureIndices.x)]
                 .SampleLevel(materialTextureUv(material, 7u, hit.uv0, hit.uv1), 0.0).rgb;
-        radiance = emissive + diffuseIrradianceMap.SampleLevel(hit.normal, 0.0).rgb * albedo;
+        float3 indirectIrradiance = diffuseIrradianceMap.SampleLevel(hit.normal, 0.0).rgb * 3.14159265;
+        if (ddgi.distanceInitialized.y > 0.5) {
+            const float4 recursive = ddgiGatherCascade(
+                hit.position, hit.normal, -direction, ddgi.originSpacing.xyz,
+                ddgi.originSpacing.w, ddgi.scrollOffsetRays.xyz,
+                previousIrradiance, previousDistance, previousProbeData);
+            indirectIrradiance = lerp(indirectIrradiance, recursive.rgb, recursive.a);
+        }
+        radiance = emissive + indirectIrradiance * albedo / 3.14159265;
         if (frame.lightDirectionIntensity.w > 0.0) {
             const float3 toSun = normalize(-frame.lightDirectionIntensity.xyz);
             const float nDotL = max(dot(hit.normal, toSun), 0.0);

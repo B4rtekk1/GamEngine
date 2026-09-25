@@ -26,13 +26,16 @@ void main(uint3 id : SV_DispatchThreadID) {
     const float4 rotation = ddgiRayRotation(uint(ddgi.scrollDeltaFrame.w), rayCount);
     for (uint rayIndex = 0u; rayIndex < rayCount; ++rayIndex) {
         const float3 rayDirection = ddgiRayDirection(rayIndex, rayCount, rotation);
-        const float weight = pow(max(dot(direction, rayDirection), 0.0), 8.0);
+        const float weight = pow(max(dot(direction, rayDirection), 0.0), 50.0);
         const float distance = abs(rayData[int2(rayIndex, probeIndex)].a);
         mean += distance * weight;
         meanSquared += distance * distance * weight;
         weightSum += weight;
     }
-    const float2 result = float2(mean, meanSquared) / max(weightSum, 1e-5);
+    const float maxDistance = ddgi.distanceInitialized.x;
+    const float2 result = weightSum > 0.0
+        ? float2(mean, meanSquared) / weightSum
+        : float2(maxDistance, maxDistance * maxDistance);
     float2 blended = result;
     if (ddgi.distanceInitialized.y > 0.5 && state < 1.5)
         blended = lerp(result, distanceAtlas[int2(atlasPixel)], 0.97);

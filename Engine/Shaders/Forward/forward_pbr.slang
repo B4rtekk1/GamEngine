@@ -4,6 +4,7 @@ import Common.SceneData;
 import Common.ShadowSampling;
 import Common.Displacement;
 import GI.ddgi_gather;
+import GI.ddgi_gather_core;
 
 // GENERATED_SHADER_GRAPH_DECLARATIONS
 
