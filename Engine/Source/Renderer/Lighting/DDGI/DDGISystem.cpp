@@ -21,8 +21,9 @@ namespace {
     struct ProbeUpdate final {
         std::uint32_t probeIndex;
         std::uint32_t framesSinceLastUpdate;
+        std::uint32_t relocated;
     };
-    static_assert(sizeof(ProbeUpdate) == 8);
+    static_assert(sizeof(ProbeUpdate) == 12);
 
     std::int32_t positiveModulo(std::int32_t value, std::int32_t count) {
         return (value % count + count) % count;
@@ -39,6 +40,8 @@ namespace {
         barrier.dstAccessMask = destinationAccess;
         barrier.oldLayout = oldLayout;
         barrier.newLayout = newLayout;
+        barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
         barrier.image = image;
         barrier.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
         return barrier;
@@ -74,13 +77,13 @@ void DDGISystem::create(VkPhysicalDevice physical, VkDevice device, VmaAllocator
         }
         for (auto& cascade : resources_.cascades) {
             auto& frame = cascade.history;
-            frame.rayData.create(physical, device, {256, 2048}, allocator,
+            frame.rayData.create(physical, device, {256, 256}, allocator,
                                  VK_FILTER_NEAREST, VK_FORMAT_R16G16B16A16_SFLOAT, true);
             frame.irradiance.create(physical, device, {160, 1280}, allocator,
                                     VK_FILTER_LINEAR, VK_FORMAT_R16G16B16A16_SFLOAT, true);
             frame.distance.create(physical, device, {288, 2304}, allocator,
                                   VK_FILTER_LINEAR, VK_FORMAT_R16G16_SFLOAT, true);
-            frame.fixedRayData.create(physical, device, {32, 2048}, allocator,
+            frame.fixedRayData.create(physical, device, {32, 256}, allocator,
                                       VK_FILTER_NEAREST, VK_FORMAT_R16G16B16A16_SFLOAT, true);
             frame.probeData.create(physical, device, {16, 128}, allocator,
                                    VK_FILTER_NEAREST, VK_FORMAT_R16G16B16A16_SFLOAT, true);
@@ -177,6 +180,18 @@ void DDGISystem::record(VkCommandBuffer commandBuffer, std::uint32_t frameSlot,
     // validation rays across the three cascades each frame.
     // Each cascade has its own 2048-probe history.
     constexpr std::array<std::uint32_t, 3> cascadeUpdates{256, 256, 256};
+    // TLAS was built or updated earlier on this graphics command buffer.
+    // Ray queries must wait for the AS writes even though the RenderGraph
+    // does not yet model acceleration structures as resources.
+    VkMemoryBarrier2 asBarrier{VK_STRUCTURE_TYPE_MEMORY_BARRIER_2};
+    asBarrier.srcStageMask = VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR;
+    asBarrier.srcAccessMask = VK_ACCESS_2_ACCELERATION_STRUCTURE_WRITE_BIT_KHR;
+    asBarrier.dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+    asBarrier.dstAccessMask = VK_ACCESS_2_ACCELERATION_STRUCTURE_READ_BIT_KHR;
+    VkDependencyInfo asDependency{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
+    asDependency.memoryBarrierCount = 1;
+    asDependency.pMemoryBarriers = &asBarrier;
+    vkCmdPipelineBarrier2(commandBuffer, &asDependency);
     for (std::size_t cascadeIndex = 0; cascadeIndex < volumes_.size(); ++cascadeIndex) {
     auto& volume = volumes_[cascadeIndex];
     const std::uint32_t updateCount = cascadeUpdates[cascadeIndex];
@@ -239,18 +254,6 @@ void DDGISystem::record(VkCommandBuffer commandBuffer, std::uint32_t frameSlot,
                            &sampledImages[binding - 13]};
     vkUpdateDescriptorSets(device_, static_cast<std::uint32_t>(writes.size()), writes.data(), 0, nullptr);
 
-    // TLAS was built or updated earlier on this graphics command buffer.
-    // Ray queries must wait for the AS writes even though the RenderGraph
-    // does not yet model acceleration structures as resources.
-    VkMemoryBarrier2 asBarrier{VK_STRUCTURE_TYPE_MEMORY_BARRIER_2};
-    asBarrier.srcStageMask = VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR;
-    asBarrier.srcAccessMask = VK_ACCESS_2_ACCELERATION_STRUCTURE_WRITE_BIT_KHR;
-    asBarrier.dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
-    asBarrier.dstAccessMask = VK_ACCESS_2_ACCELERATION_STRUCTURE_READ_BIT_KHR;
-    VkDependencyInfo asDependency{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
-    asDependency.memoryBarrierCount = 1;
-    asDependency.pMemoryBarriers = &asBarrier;
-    vkCmdPipelineBarrier2(commandBuffer, &asDependency);
     const bool initialized = state.initialized;
     if (initialized) {
         // The previous graphics submission wrote the shared probe state. Make
@@ -339,8 +342,14 @@ void DDGISystem::record(VkCommandBuffer commandBuffer, std::uint32_t frameSlot,
     computeBarrier();
     // Classification must use distances from the relocated position, not
     // the position used to decide the relocation above.
+    auto revalidatePush = push;
+    revalidatePush.distanceInitialized[3] = 1.0F;
+    vkCmdPushConstants(commandBuffer, pipelineLayout_, VK_SHADER_STAGE_COMPUTE_BIT,
+                       0, sizeof(revalidatePush), &revalidatePush);
     vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, validatePipeline_);
     vkCmdDispatch(commandBuffer, 4, (updateCount + 7) / 8, 1);
+    vkCmdPushConstants(commandBuffer, pipelineLayout_, VK_SHADER_STAGE_COMPUTE_BIT,
+                       0, sizeof(push), &push);
     computeBarrier();
     vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, classifyPipeline_);
     vkCmdDispatch(commandBuffer, (updateCount + 63) / 64, 1, 1);

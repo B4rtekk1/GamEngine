@@ -4,6 +4,7 @@ static const float DDGI_BACKFACE_THRESHOLD = 0.25;
 static const float DDGI_RANDOM_BACKFACE_THRESHOLD = 0.1;
 static const uint DDGI_PROBES = 2048u;
 static const uint DDGI_UPDATES_PER_FRAME = 256u;
+static const uint DDGI_MAX_RAYS = 256u;
 static const uint DDGI_IRRADIANCE_INTERIOR = 8u;
 static const uint DDGI_DISTANCE_INTERIOR = 16u;
 
@@ -26,6 +27,7 @@ struct DDGIProbeState {
 struct DDGIProbeUpdate {
     uint probeIndex;
     uint framesSinceLastUpdate;
+    uint relocated;
 };
 
 uint3 ddgiGrid(uint probeIndex) {

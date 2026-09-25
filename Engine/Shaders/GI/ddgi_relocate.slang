@@ -3,7 +3,7 @@ import GI.ddgi_common;
 
 [[vk::binding(9, 1), vk::image_format("rgba16f")]] RWTexture2D<float4> probeData;
 [[vk::binding(10, 1), vk::image_format("rgba16f")]] RWTexture2D<float4> fixedRayData;
-[[vk::binding(12, 1)]] StructuredBuffer<DDGIProbeUpdate> probeUpdateList;
+[[vk::binding(12, 1)]] RWStructuredBuffer<DDGIProbeUpdate> probeUpdateList;
 
 [numthreads(64, 1, 1)]
 void main(uint3 id : SV_DispatchThreadID) {
@@ -20,7 +20,7 @@ void main(uint3 id : SV_DispatchThreadID) {
     float closestFrontfaceDistance = ddgi.distanceInitialized.x;
     float farthestFrontfaceDistance = 0.0;
     for (uint rayIndex = 0u; rayIndex < DDGI_FIXED_RAYS; ++rayIndex) {
-        const float distance = fixedRayData[int2(rayIndex, probeIndex)].r;
+        const float distance = fixedRayData[int2(rayIndex, id.x)].r;
         if (distance < 0.0) {
             ++backfaces;
             // Fixed-ray data stores the full signed hit distance.
@@ -74,4 +74,8 @@ void main(uint3 id : SV_DispatchThreadID) {
     const float state = moved || newlyExposed || previous.w > 1.5 ? 2.0 :
                         (previous.w > 0.5 ? 1.0 : 0.0);
     probeData[pixel] = float4(offset, state);
+    // Reuse this frame's validation rays only if their origin did not change.
+    // Do not use the 0.02 history-reset threshold here: smaller moves also
+    // change the distances needed by classification.
+    probeUpdateList[id.x].relocated = any(offset != previous.xyz) ? 1u : 0u;
 }

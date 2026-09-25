@@ -13,14 +13,14 @@ void main(uint3 id : SV_DispatchThreadID) {
     const float4 probe = probeData[pixel];
     uint backfaces = 0u;
     for (uint rayIndex = 0u; rayIndex < DDGI_FIXED_RAYS; ++rayIndex) {
-        const float distance = fixedRayData[int2(rayIndex, probeIndex)].r;
+        const float distance = fixedRayData[int2(rayIndex, id.x)].r;
         backfaces += distance < 0.0 ? 1u : 0u;
     }
     const bool insideGeometry = float(backfaces) / float(DDGI_FIXED_RAYS) > DDGI_BACKFACE_THRESHOLD;
     bool active = false;
     if (!insideGeometry) {
         for (uint rayIndex = 0u; rayIndex < DDGI_FIXED_RAYS; ++rayIndex) {
-            const float distance = fixedRayData[int2(rayIndex, probeIndex)].r;
+            const float distance = fixedRayData[int2(rayIndex, id.x)].r;
             if (distance < 0.0 || distance >= ddgi.distanceInitialized.x - 0.01) continue;
             const float3 direction = ddgiFixedRayDirection(rayIndex);
             // The nearest probe-spacing boundary along this ray.

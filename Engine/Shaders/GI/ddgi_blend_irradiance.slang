@@ -7,81 +7,92 @@ import GI.ddgi_common;
 [[vk::binding(12, 1)]] StructuredBuffer<DDGIProbeUpdate> probeUpdateList;
 
 groupshared uint rejectUpdate;
+// Each ray is loaded and its direction evaluated once per probe workgroup.
+groupshared float4 cachedRays[DDGI_MAX_RAYS];
+groupshared float3 cachedDirections[DDGI_MAX_RAYS];
+groupshared float4 blendedTexels[64];
 
-[numthreads(10, 10, 1)]
-void main(uint3 id : SV_DispatchThreadID) {
-    if (id.z >= ddgiUpdateCount(ddgi)) return;
-    const DDGIProbeUpdate update = probeUpdateList[id.z];
+[numthreads(8, 8, 1)]
+void main(uint3 group : SV_GroupID, uint3 local : SV_GroupThreadID, uint groupIndex : SV_GroupIndex) {
+    if (group.z >= ddgiUpdateCount(ddgi)) return;
+    const DDGIProbeUpdate update = probeUpdateList[group.z];
     const uint probeIndex = update.probeIndex;
-    const uint2 atlasPixel = ddgiAtlasBase(probeIndex, DDGI_IRRADIANCE_INTERIOR) + id.xy;
+    const uint2 atlasBase = ddgiAtlasBase(probeIndex, DDGI_IRRADIANCE_INTERIOR);
+    const uint2 atlasPixel = atlasBase + local.xy + 1u;
     const float state = probeData[int2(ddgiProbePixel(probeIndex))].w;
     if (state < 0.5) {
-        irradianceAtlas[int2(atlasPixel)] = float4(0.0);
+        for (uint pixel = groupIndex; pixel < 100u; pixel += 64u)
+            irradianceAtlas[int2(atlasBase + uint2(pixel % 10u, pixel / 10u))] = float4(0.0);
         return;
     }
     const uint rayCount = uint(ddgi.scrollOffsetRays.w);
-    if (id.x == 0u && id.y == 0u) {
+    const float4 rotation = ddgiRayRotation(uint(ddgi.scrollDeltaFrame.w), rayCount);
+    for (uint rayIndex = groupIndex; rayIndex < rayCount; rayIndex += 64u) {
+        cachedRays[rayIndex] = rayData[int2(rayIndex, group.z)];
+        cachedDirections[rayIndex] = ddgiRayDirection(rayIndex, rayCount, rotation);
+    }
+    GroupMemoryBarrierWithGroupSync();
+    if (groupIndex == 0u) {
         uint backfaceCount = 0u;
         for (uint rayIndex = 0u; rayIndex < rayCount; ++rayIndex)
-            backfaceCount += rayData[int2(rayIndex, probeIndex)].a < 0.0 ? 1u : 0u;
+            backfaceCount += cachedRays[rayIndex].a < 0.0 ? 1u : 0u;
         rejectUpdate = float(backfaceCount) / float(rayCount) >
             DDGI_RANDOM_BACKFACE_THRESHOLD ? 1u : 0u;
     }
     GroupMemoryBarrierWithGroupSync();
     if (rejectUpdate != 0u) return;
 
-    const uint2 texel = id.xy;
-    const uint last = DDGI_IRRADIANCE_INTERIOR + 1u;
-    const bool border = texel.x == 0u || texel.y == 0u ||
-                        texel.x == last || texel.y == last;
-    if (!border) {
-        const float2 oct = (float2(texel - 1u) + 0.5) /
-                           float(DDGI_IRRADIANCE_INTERIOR) * 2.0 - 1.0;
-        const float3 direction = ddgiOctDecode(oct);
-        float3 sum = 0.0;
-        float weightSum = 0.0;
-        const float4 rotation = ddgiRayRotation(uint(ddgi.scrollDeltaFrame.w), rayCount);
-        for (uint rayIndex = 0u; rayIndex < rayCount; ++rayIndex) {
-            const float4 sample = rayData[int2(rayIndex, probeIndex)];
-            if (sample.a < 0.0) continue;
-            const float3 rayDirection = ddgiRayDirection(rayIndex, rayCount, rotation);
-            const float weight = max(dot(direction, rayDirection), 0.0);
-            sum += sample.rgb * weight;
-            weightSum += weight;
-        }
-        // The weighted mean is radiance. Its cosine-weighted hemisphere integral
-        // is irradiance, so the atlas stores E for the forward Lambert term E / PI.
-        const float3 irradiance = 3.14159265 * sum / max(weightSum, 1e-5);
-        float3 blended = irradiance;
-        // The first update has no valid history. The 0.97 weight is per frame.
-        if (ddgi.distanceInitialized.y > 0.5 && state < 1.5 &&
-            irradianceAtlas[int2(atlasPixel)].a > 0.0) {
-            const float3 previous = irradianceAtlas[int2(atlasPixel)].rgb;
-            float3 delta = irradiance - previous;
-            const float3 luminanceWeights = float3(0.2126, 0.7152, 0.0722);
-            const float previousLuminance = dot(previous, luminanceWeights);
-            const float previousMax = max(previous.r, max(previous.g, previous.b));
-            const float decrease = max(-delta.r, max(-delta.g, -delta.b));
-            float hysteresis = pow(0.97, float(update.framesSinceLastUpdate));
-            // Rapidly remove stale light while keeping a relative threshold for HDR values.
-            if (decrease > max(0.25, previousMax * 0.25))
-                hysteresis = max(0.0, hysteresis - 0.75);
-            // Large increases should reach the atlas quickly so recursive
-            // bounces are not starved by the probe update schedule.
-            const float increase = dot(delta, luminanceWeights);
-            if (increase > max(0.10, previousLuminance))
-                hysteresis = min(hysteresis, 0.25);
-            else if (increase > max(0.10, previousLuminance * 0.25))
-                hysteresis = min(hysteresis, 0.5);
-            blended = previous + (1.0 - hysteresis) * delta;
-        }
-        irradianceAtlas[int2(atlasPixel)] = float4(blended, 1.0);
+    const float2 oct = (float2(local.xy) + 0.5) /
+                       float(DDGI_IRRADIANCE_INTERIOR) * 2.0 - 1.0;
+    const float3 direction = ddgiOctDecode(oct);
+    float3 sum = 0.0;
+    float weightSum = 0.0;
+    for (uint rayIndex = 0u; rayIndex < rayCount; ++rayIndex) {
+        const float4 sample = cachedRays[rayIndex];
+        if (sample.a < 0.0) continue;
+        const float3 rayDirection = cachedDirections[rayIndex];
+        const float weight = max(dot(direction, rayDirection), 0.0);
+        sum += sample.rgb * weight;
+        weightSum += weight;
     }
+    // The weighted mean is radiance. Its cosine-weighted hemisphere integral
+    // is irradiance, so the atlas stores E for the forward Lambert term E / PI.
+    const float3 irradiance = 3.14159265 * sum / max(weightSum, 1e-5);
+    float3 blended = irradiance;
+    // The first update has no valid history. The 0.97 weight is per frame.
+    if (ddgi.distanceInitialized.y > 0.5 && state < 1.5 &&
+        irradianceAtlas[int2(atlasPixel)].a > 0.0) {
+        const float3 previous = irradianceAtlas[int2(atlasPixel)].rgb;
+        float3 delta = irradiance - previous;
+        const float3 luminanceWeights = float3(0.2126, 0.7152, 0.0722);
+        const float previousLuminance = dot(previous, luminanceWeights);
+        const float previousMax = max(previous.r, max(previous.g, previous.b));
+        const float decrease = max(-delta.r, max(-delta.g, -delta.b));
+        float hysteresis = pow(0.97, float(update.framesSinceLastUpdate));
+        // Rapidly remove stale light while keeping a relative threshold for HDR values.
+        if (decrease > max(0.25, previousMax * 0.25))
+            hysteresis = max(0.0, hysteresis - 0.75);
+        // Limit bright outliers from one ray rotation without lowering hysteresis.
+        const float increase = dot(delta, luminanceWeights);
+        if (increase > max(0.10, previousLuminance))
+            delta *= 0.25;
+        blended = previous + (1.0 - hysteresis) * delta;
+    }
+    blendedTexels[groupIndex] = float4(blended, 1.0);
+    irradianceAtlas[int2(atlasPixel)] = float4(blended, 1.0);
 
-    AllMemoryBarrierWithGroupSync();
-    if (border) {
-        const uint2 source = ddgiAtlasBase(probeIndex, DDGI_IRRADIANCE_INTERIOR) +
-                             ddgiBorderSource(texel, DDGI_IRRADIANCE_INTERIOR);
-        irradianceAtlas[int2(atlasPixel)] = irradianceAtlas[int2(source)];
+    // Borders copy the same value as the interior, without reading the UAV.
+    GroupMemoryBarrierWithGroupSync();
+    // Enumerate top/bottom rows, then the sides without their corners.
+    for (uint edge = groupIndex; edge < 36u; edge += 64u) {
+        uint2 texel;
+        if (edge < 20u)
+            texel = uint2(edge % 10u, edge < 10u ? 0u : 9u);
+        else {
+            const uint side = edge - 20u;
+            texel = uint2(side < 8u ? 0u : 9u, side % 8u + 1u);
+        }
+        const uint2 source = ddgiBorderSource(texel, DDGI_IRRADIANCE_INTERIOR) - 1u;
+        irradianceAtlas[int2(atlasBase + texel)] = blendedTexels[source.y * 8u + source.x];
     }
 }

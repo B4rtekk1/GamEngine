@@ -10,7 +10,9 @@ import GI.ddgi_alpha;
 [numthreads(8, 8, 1)]
 void main(uint3 id : SV_DispatchThreadID) {
     if (id.x >= DDGI_FIXED_RAYS || id.y >= ddgiUpdateCount(ddgi)) return;
-    const uint probeIndex = probeUpdateList[id.y].probeIndex;
+    const DDGIProbeUpdate update = probeUpdateList[id.y];
+    if (ddgi.distanceInitialized.w > 0.5 && update.relocated == 0u) return;
+    const uint probeIndex = update.probeIndex;
     // Scroll reset initializes every probe before validation, including the
     // first frame. Read relocation offsets on the second validation pass too.
     const float4 probe = probeData[int2(ddgiProbePixel(probeIndex))];
@@ -34,5 +36,5 @@ void main(uint3 id : SV_DispatchThreadID) {
             !ddgiHitIsDoubleSided(query.CommittedInstanceID(), query.CommittedPrimitiveIndex());
         distance = query.CommittedRayT() * (realBackface ? -1.0 : 1.0);
     }
-    fixedRayData[int2(id.x, probeIndex)] = float4(distance, 0.0, 0.0, 0.0);
+    fixedRayData[int2(id.x, id.y)] = float4(distance, 0.0, 0.0, 0.0);
 }

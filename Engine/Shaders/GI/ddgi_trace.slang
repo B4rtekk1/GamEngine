@@ -136,7 +136,7 @@ void main(uint3 id : SV_DispatchThreadID) {
         const bool doubleSided = (material.textureIndices.w & 1) != 0;
         const bool realBackface = !query.CommittedTriangleFrontFace() && !doubleSided;
         if (realBackface) {
-            rayData[int2(id.x, probeIndex)] = float4(0.0, 0.0, 0.0, -distance);
+            rayData[int2(id.x, id.y)] = float4(0.0, 0.0, 0.0, -distance);
             return;
         }
         // Orient the actual triangle plane toward the incoming ray. This also
@@ -196,5 +196,5 @@ void main(uint3 id : SV_DispatchThreadID) {
         }
         radiance += evaluateLocalDiffuse(hit.position, hitNormal, geometricNormal, albedo);
     }
-    rayData[int2(id.x, probeIndex)] = float4(radiance, distance);
+    rayData[int2(id.x, id.y)] = float4(radiance, distance);
 }
