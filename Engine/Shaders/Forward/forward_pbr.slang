@@ -167,8 +167,9 @@ struct DDGISampleResult {
 void accumulateDDGICascade(inout DDGISampleResult result, DDGIGatherResult probe, float3 cascadeColor)
 {
     const float weight = probe.blendWeight;
-    result.lightingIrradiance = lerp(result.lightingIrradiance, probe.irradiance, weight);
-    result.irradiance = lerp(result.irradiance, probe.irradiance, weight);
+    const float3 probeLighting = probe.irradiance * frame.ddgiIndirectIntensity;
+    result.lightingIrradiance = lerp(result.lightingIrradiance, probeLighting, weight);
+    result.irradiance = lerp(result.irradiance, probeLighting, weight);
     result.visibility = lerp(result.visibility, probe.visibility, weight);
     result.activeProbeFraction = lerp(result.activeProbeFraction, probe.activeProbeFraction, weight);
     result.preVisibilityWeight = lerp(result.preVisibilityWeight, probe.preVisibilityWeight, weight);
@@ -182,6 +183,7 @@ DDGISampleResult sampleDDGIIrradiance(float3 worldPosition, float3 shadingNormal
 {
     DDGISampleResult result;
     result.skyIrradiance = irradianceMap.Sample(shadingNormal).rgb * PBR_PI;
+    const float3 giNormal = normalize(lerp(geometricNormal, shadingNormal, 0.7));
     result.lightingIrradiance = result.skyIrradiance;
     result.irradiance = 0.0;
     result.cascadeColor = 0.0;
@@ -190,21 +192,22 @@ DDGISampleResult sampleDDGIIrradiance(float3 worldPosition, float3 shadingNormal
     result.activeProbeFraction = 0.0;
     result.preVisibilityWeight = 0.0;
     result.postVisibilityWeight = 0.0;
-    // DDGI visibility and irradiance both use the geometric normal.
+    // Keep geometric-normal bias and visibility stable while retaining most
+    // of the normal-map detail in the diffuse irradiance lookup.
     if (frame.ddgiOriginSpacing[2].w > 0.0) {
-        const DDGIGatherResult probe = ddgiGatherCascade(worldPosition, geometricNormal, geometricNormal, viewDirection,
+        const DDGIGatherResult probe = ddgiGatherCascade(worldPosition, geometricNormal, giNormal, viewDirection,
             frame.ddgiOriginSpacing[2].xyz, frame.ddgiOriginSpacing[2].w,
             frame.ddgiScrollOffsets[2].xyz, ddgiIrradiance2, ddgiDistance2, ddgiProbeData2);
         accumulateDDGICascade(result, probe, float3(0.0, 0.0, 1.0));
     }
     if (frame.ddgiOriginSpacing[1].w > 0.0) {
-        const DDGIGatherResult probe = ddgiGatherCascade(worldPosition, geometricNormal, geometricNormal, viewDirection,
+        const DDGIGatherResult probe = ddgiGatherCascade(worldPosition, geometricNormal, giNormal, viewDirection,
             frame.ddgiOriginSpacing[1].xyz, frame.ddgiOriginSpacing[1].w,
             frame.ddgiScrollOffsets[1].xyz, ddgiIrradiance1, ddgiDistance1, ddgiProbeData1);
         accumulateDDGICascade(result, probe, float3(0.0, 1.0, 0.0));
     }
     if (frame.ddgiOriginSpacing[0].w > 0.0) {
-        const DDGIGatherResult probe = ddgiGatherCascade(worldPosition, geometricNormal, geometricNormal, viewDirection,
+        const DDGIGatherResult probe = ddgiGatherCascade(worldPosition, geometricNormal, giNormal, viewDirection,
             frame.ddgiOriginSpacing[0].xyz, frame.ddgiOriginSpacing[0].w,
             frame.ddgiScrollOffsets[0].xyz, ddgiIrradiance, ddgiDistance, ddgiProbeData);
         accumulateDDGICascade(result, probe, float3(1.0, 0.0, 0.0));

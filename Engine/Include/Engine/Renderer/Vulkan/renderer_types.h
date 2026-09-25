@@ -132,6 +132,7 @@ namespace Engine {
         // Each cascade uses a snapped world origin and a toroidal atlas offset.
         std::array<glm::vec4, 3> ddgiOriginSpacing{};
         std::array<glm::ivec4, 3> ddgiScrollOffsets{};
+        float ddgiIndirectIntensity{15.0F};
     };
 
     /**

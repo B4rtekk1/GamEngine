@@ -62,6 +62,7 @@ struct RendererFrameData
     LocalLightData localLights[32];
     float4 ddgiOriginSpacing[3];
     int4 ddgiScrollOffsets[3];
+    float ddgiIndirectIntensity;
 };
 
 struct MaterialData
