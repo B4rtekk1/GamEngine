@@ -25,7 +25,7 @@ namespace Engine {
                     VkAccelerationStructureKHR tlas, VkBuffer instances,
                     VkBuffer meshes, VkBuffer materials, VkBuffer vertices,
                     VkBuffer indices, const std::array<float, 3>& cameraPosition,
-                    const std::array<std::uint64_t, 3>& sceneRevisions,
+                    const std::array<std::uint64_t, 4>& sceneRevisions,
                     bool sceneGeometryChanged);
         [[nodiscard]] bool ready() const noexcept;
         [[nodiscard]] const DDGIResources& resources() const noexcept { return resources_; }
@@ -55,7 +55,7 @@ namespace Engine {
             bool initialized{};
         };
         std::array<CascadeState, 3> cascadeStates_{};
-        std::array<std::uint64_t, 3> sceneRevisions_{};
+        std::array<std::uint64_t, 4> sceneRevisions_{};
         bool sceneRevisionsInitialized_{};
     };
 }

@@ -136,11 +136,11 @@ namespace Engine {
             registry.forEachComponentChangedSince<Transform>(observedTransformRevision, markDirty);
         }
         cache.initialized = true;
-        cache.changedWorldTransforms.clear();
         if (!hasDirty) {
             cache.transformRevision = registry.componentRevision<Transform>();
             return;
         }
+        cache.changedWorldTransforms.clear();
         const Registry &readRegistry = registry;
 
         const auto resolve = [&](auto &&self, const Entity entity) -> void {

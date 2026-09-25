@@ -174,13 +174,18 @@ void DDGISystem::record(VkCommandBuffer commandBuffer, std::uint32_t frameSlot,
                         VkAccelerationStructureKHR tlas, VkBuffer instances,
                         VkBuffer meshes, VkBuffer materials, VkBuffer vertices,
                         VkBuffer indices, const std::array<float, 3>& cameraPosition,
-                        const std::array<std::uint64_t, 3>& sceneRevisions,
+                        const std::array<std::uint64_t, 4>& sceneRevisions,
                         bool sceneGeometryChanged) {
     if (!created() || !commandBuffer || !sceneSet || !tlas || !instances || !meshes ||
         !materials || !vertices || !indices) return;
     frameSlot %= 2;
-    const bool sceneChanged = sceneGeometryChanged || !sceneRevisionsInitialized_ ||
-                              sceneRevisions_ != sceneRevisions;
+    // The transform list survives a no-op updateDirty(). Consume it only
+    // when its registry revision advances; camera-only edits do not reset GI.
+    const bool sceneChanged = !sceneRevisionsInitialized_ ||
+        sceneRevisions_[0] != sceneRevisions[0] ||
+        sceneRevisions_[1] != sceneRevisions[1] ||
+        sceneRevisions_[2] != sceneRevisions[2] ||
+        (sceneGeometryChanged && sceneRevisions_[3] != sceneRevisions[3]);
     sceneRevisions_ = sceneRevisions;
     sceneRevisionsInitialized_ = true;
     // Diagnostic maximum: 768 probes, 196,608 trace rays and up to 49,152

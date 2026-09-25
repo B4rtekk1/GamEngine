@@ -1518,7 +1518,8 @@
                         vertexBuffer.handle(), indexBuffer.handle(), giCenter,
                         {registry.componentRevision<LightComponent>(),
                          registry.renderTopologyRevision(),
-                         registry.componentRevision<MeshRendererComponent>()},
+                         registry.componentRevision<MeshRendererComponent>(),
+                         registry.componentRevision<Transform>()},
                         giGeometryChanged);
                     if (ddgi.ready()) {
                         std::array<glm::vec4, 3> origins{};
