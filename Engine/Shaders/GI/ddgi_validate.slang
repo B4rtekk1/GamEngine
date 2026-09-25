@@ -11,6 +11,7 @@ import GI.ddgi_alpha;
 void main(uint3 id : SV_DispatchThreadID) {
     if (id.x >= DDGI_FIXED_RAYS || id.y >= ddgiUpdateCount(ddgi)) return;
     const DDGIProbeUpdate update = probeUpdateList[id.y];
+    if (update.probeIndex >= DDGI_PROBES) return;
     if (ddgi.distanceInitialized.w > 0.5 && update.relocated == 0u) return;
     const uint probeIndex = update.probeIndex;
     // Scroll reset initializes every probe before validation, including the

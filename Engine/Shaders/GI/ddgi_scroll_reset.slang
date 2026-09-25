@@ -19,6 +19,8 @@ void main(uint3 id : SV_DispatchThreadID) {
     state.state = 2u;
     state.lastUpdatedFrame = 0u;
     state.variability = 0.0;
+    state.updateCount = 0u;
+    state.stableUpdates = 0u;
     probeStates[id.x] = state;
     const uint2 irradianceBase = ddgiAtlasBase(id.x, DDGI_IRRADIANCE_INTERIOR);
     for (uint y = 0u; y < DDGI_IRRADIANCE_INTERIOR + 2u; ++y)

@@ -9,6 +9,7 @@ import GI.ddgi_common;
 void main(uint3 id : SV_DispatchThreadID) {
     if (id.x >= ddgiUpdateCount(ddgi)) return;
     const uint probeIndex = probeUpdateList[id.x].probeIndex;
+    if (probeIndex >= DDGI_PROBES) return;
     const int2 pixel = int2(ddgiProbePixel(probeIndex));
     const float4 previous = ddgi.distanceInitialized.y > 0.5
         ? probeData[pixel] : float4(0.0, 0.0, 0.0, 2.0);

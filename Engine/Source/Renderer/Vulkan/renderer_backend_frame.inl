@@ -1499,6 +1499,14 @@
                     const auto cameraPosition = cameraController.camera()->position().native();
                     const std::array<float, 3> giCenter{
                         cameraPosition.x, cameraPosition.y, cameraPosition.z};
+                    bool giGeometryChanged = false;
+                    for (const Entity entity : TransformSystem::changedWorldTransforms(registry)) {
+                        if (registry.has<MeshRendererComponent>(entity) ||
+                            registry.has<LightComponent>(entity)) {
+                            giGeometryChanged = true;
+                            break;
+                        }
+                    }
                     // Keep TLAS build, DDGI and Forward on this graphics command
                     // buffer until the RenderGraph can declare an AS dependency.
                     ddgi.record(commandBuffer, currentFrame,
@@ -1507,7 +1515,11 @@
                         gpuSceneInstanceBuffers[currentFrame].handle(),
                         gpuSceneMeshBuffers[currentFrame].handle(),
                         gpuSceneMaterialBuffers[currentFrame].handle(),
-                        vertexBuffer.handle(), indexBuffer.handle(), giCenter);
+                        vertexBuffer.handle(), indexBuffer.handle(), giCenter,
+                        {registry.componentRevision<LightComponent>(),
+                         registry.renderTopologyRevision(),
+                         registry.componentRevision<MeshRendererComponent>()},
+                        giGeometryChanged);
                     if (ddgi.ready()) {
                         std::array<glm::vec4, 3> origins{};
                         std::array<glm::ivec4, 3> offsets{};

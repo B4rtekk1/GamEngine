@@ -5,6 +5,9 @@ static const float DDGI_RANDOM_BACKFACE_THRESHOLD = 0.1;
 static const uint DDGI_PROBES = 2048u;
 static const uint DDGI_UPDATES_PER_FRAME = 256u;
 static const uint DDGI_MAX_RAYS = 256u;
+static const uint DDGI_MIN_CONVERGENCE_UPDATES = 64u;
+static const uint DDGI_STABLE_UPDATES = 8u;
+static const float DDGI_VARIABILITY_THRESHOLD = 0.05;
 static const uint DDGI_IRRADIANCE_INTERIOR = 8u;
 static const uint DDGI_DISTANCE_INTERIOR = 16u;
 
@@ -13,6 +16,7 @@ struct DDGIConstants {
     int4 scrollOffsetRays;
     int4 scrollDeltaFrame;
     float4 distanceInitialized;
+    float4 updateControl;
 };
 uint ddgiUpdateCount(DDGIConstants constants) {
     return min(uint(constants.distanceInitialized.z), DDGI_UPDATES_PER_FRAME);
@@ -22,6 +26,8 @@ struct DDGIProbeState {
     uint state;
     uint lastUpdatedFrame;
     float variability;
+    uint updateCount;
+    uint stableUpdates;
 };
 
 struct DDGIProbeUpdate {

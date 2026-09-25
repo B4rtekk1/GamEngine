@@ -106,6 +106,7 @@ float3 evaluateLocalDiffuse(float3 position, float3 normal, float3 geometricNorm
 void main(uint3 id : SV_DispatchThreadID) {
     if (id.x >= uint(ddgi.scrollOffsetRays.w) || id.y >= ddgiUpdateCount(ddgi)) return;
     const uint probeIndex = probeUpdateList[id.y].probeIndex;
+    if (probeIndex >= DDGI_PROBES) return;
     const float4 probe = probeData[int2(ddgiProbePixel(probeIndex))];
     if (probe.w < 0.5) return;
     const uint rayCount = uint(ddgi.scrollOffsetRays.w);
@@ -136,7 +137,10 @@ void main(uint3 id : SV_DispatchThreadID) {
         const bool doubleSided = (material.textureIndices.w & 1) != 0;
         const bool realBackface = !query.CommittedTriangleFrontFace() && !doubleSided;
         if (realBackface) {
-            rayData[int2(id.x, id.y)] = float4(0.0, 0.0, 0.0, -distance);
+            // Random-ray distance moments use a shortened backface hit so
+            // visibility gives this probe less weight near thin geometry.
+            // Fixed validation rays retain the full distance for relocation.
+            rayData[int2(id.x, id.y)] = float4(0.0, 0.0, 0.0, -distance * 0.2);
             return;
         }
         // Orient the actual triangle plane toward the incoming ray. This also

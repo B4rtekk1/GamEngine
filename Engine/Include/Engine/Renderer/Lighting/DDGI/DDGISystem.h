@@ -24,7 +24,9 @@ namespace Engine {
                     std::uint32_t frameIndex, VkDescriptorSet sceneSet,
                     VkAccelerationStructureKHR tlas, VkBuffer instances,
                     VkBuffer meshes, VkBuffer materials, VkBuffer vertices,
-                    VkBuffer indices, const std::array<float, 3>& cameraPosition);
+                    VkBuffer indices, const std::array<float, 3>& cameraPosition,
+                    const std::array<std::uint64_t, 3>& sceneRevisions,
+                    bool sceneGeometryChanged);
         [[nodiscard]] bool ready() const noexcept;
         [[nodiscard]] const DDGIResources& resources() const noexcept { return resources_; }
         [[nodiscard]] const DDGIVolume& volume(std::uint32_t cascade) const noexcept { return volumes_[cascade]; }
@@ -53,5 +55,7 @@ namespace Engine {
             bool initialized{};
         };
         std::array<CascadeState, 3> cascadeStates_{};
+        std::array<std::uint64_t, 3> sceneRevisions_{};
+        bool sceneRevisionsInitialized_{};
     };
 }

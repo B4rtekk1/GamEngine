@@ -6,7 +6,6 @@ import GI.ddgi_common;
 [[vk::binding(9, 1), vk::image_format("rgba16f")]] RWTexture2D<float4> probeData;
 [[vk::binding(12, 1)]] StructuredBuffer<DDGIProbeUpdate> probeUpdateList;
 
-groupshared uint rejectUpdate;
 // Each ray is loaded and its direction evaluated once per probe workgroup.
 // xyz stores direction; w stores the signed distance, with no unused RGB.
 groupshared float4 cachedRays[DDGI_MAX_RAYS];
@@ -17,6 +16,7 @@ void main(uint3 group : SV_GroupID, uint3 local : SV_GroupThreadID, uint groupIn
     if (group.z >= ddgiUpdateCount(ddgi)) return;
     const DDGIProbeUpdate update = probeUpdateList[group.z];
     const uint probeIndex = update.probeIndex;
+    if (probeIndex >= DDGI_PROBES) return;
     const uint2 atlasBase = ddgiAtlasBase(probeIndex, DDGI_DISTANCE_INTERIOR);
     const uint2 atlasPixel = atlasBase + local.xy + 1u;
     const float state = probeData[int2(ddgiProbePixel(probeIndex))].w;
@@ -32,15 +32,6 @@ void main(uint3 group : SV_GroupID, uint3 local : SV_GroupThreadID, uint groupIn
                                      rayData[int2(rayIndex, group.z)].a);
     }
     GroupMemoryBarrierWithGroupSync();
-    if (groupIndex == 0u) {
-        uint backfaceCount = 0u;
-        for (uint rayIndex = 0u; rayIndex < rayCount; ++rayIndex)
-            backfaceCount += cachedRays[rayIndex].a < 0.0 ? 1u : 0u;
-        rejectUpdate = float(backfaceCount) / float(rayCount) >
-            DDGI_RANDOM_BACKFACE_THRESHOLD ? 1u : 0u;
-    }
-    GroupMemoryBarrierWithGroupSync();
-    if (rejectUpdate != 0u) return;
 
     const float2 oct = (float2(local.xy) + 0.5) /
                        float(DDGI_DISTANCE_INTERIOR) * 2.0 - 1.0;
@@ -55,6 +46,8 @@ void main(uint3 group : SV_GroupID, uint3 local : SV_GroupThreadID, uint groupIn
     for (uint rayIndex = 0u; rayIndex < rayCount; ++rayIndex) {
         const float3 rayDirection = cachedRays[rayIndex].xyz;
         const float weight = pow(max(dot(direction, rayDirection), 0.0), 50.0);
+        // Backface hits still contribute to visibility moments. Only the
+        // irradiance update uses the random-ray backface rejection threshold.
         const float distance = min(
             abs(cachedRays[rayIndex].a),
             visibilityMaxDistance);
@@ -67,7 +60,7 @@ void main(uint3 group : SV_GroupID, uint3 local : SV_GroupThreadID, uint groupIn
         : float2(visibilityMaxDistance, visibilityMaxDistance * visibilityMaxDistance);
     float2 blended = result;
     if (ddgi.distanceInitialized.y > 0.5 && state < 1.5) {
-        const float hysteresis = pow(0.97, float(update.framesSinceLastUpdate));
+        const float hysteresis = 0.97;
         blended = lerp(result, distanceAtlas[int2(atlasPixel)], hysteresis);
     }
     blendedTexels[groupIndex] = blended;

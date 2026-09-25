@@ -4,6 +4,7 @@ import GI.ddgi_common;
 [[vk::binding(5, 1), vk::image_format("rgba16f")]] RWTexture2D<float4> rayData;
 [[vk::binding(6, 1), vk::image_format("rgba16f")]] RWTexture2D<float4> irradianceAtlas;
 [[vk::binding(9, 1), vk::image_format("rgba16f")]] RWTexture2D<float4> probeData;
+[[vk::binding(11, 1)]] RWStructuredBuffer<DDGIProbeState> probeStates;
 [[vk::binding(12, 1)]] StructuredBuffer<DDGIProbeUpdate> probeUpdateList;
 
 groupshared uint rejectUpdate;
@@ -11,12 +12,14 @@ groupshared uint rejectUpdate;
 groupshared float4 cachedRays[DDGI_MAX_RAYS];
 groupshared float3 cachedDirections[DDGI_MAX_RAYS];
 groupshared float4 blendedTexels[64];
+groupshared float variabilitySamples[64];
 
 [numthreads(8, 8, 1)]
 void main(uint3 group : SV_GroupID, uint3 local : SV_GroupThreadID, uint groupIndex : SV_GroupIndex) {
     if (group.z >= ddgiUpdateCount(ddgi)) return;
     const DDGIProbeUpdate update = probeUpdateList[group.z];
     const uint probeIndex = update.probeIndex;
+    if (probeIndex >= DDGI_PROBES) return;
     const uint2 atlasBase = ddgiAtlasBase(probeIndex, DDGI_IRRADIANCE_INTERIOR);
     const uint2 atlasPixel = atlasBase + local.xy + 1u;
     const float state = probeData[int2(ddgiProbePixel(probeIndex))].w;
@@ -59,30 +62,41 @@ void main(uint3 group : SV_GroupID, uint3 local : SV_GroupThreadID, uint groupIn
     // is irradiance, so the atlas stores E for the forward Lambert term E / PI.
     const float3 irradiance = 3.14159265 * sum / max(weightSum, 1e-5);
     float3 blended = irradiance;
-    // The first update has no valid history. The 0.97 weight is per frame.
+    float texelVariability = 1.0;
+    // The first update has no valid history. History is weighted per probe update.
     if (ddgi.distanceInitialized.y > 0.5 && state < 1.5 &&
         irradianceAtlas[int2(atlasPixel)].a > 0.0) {
         const float3 previous = irradianceAtlas[int2(atlasPixel)].rgb;
         float3 delta = irradiance - previous;
         const float3 luminanceWeights = float3(0.2126, 0.7152, 0.0722);
         const float previousLuminance = dot(previous, luminanceWeights);
-        const float previousMax = max(previous.r, max(previous.g, previous.b));
-        const float decrease = max(-delta.r, max(-delta.g, -delta.b));
-        float hysteresis = pow(0.97, float(update.framesSinceLastUpdate));
-        // Rapidly remove stale light while keeping a relative threshold for HDR values.
-        if (decrease > max(0.25, previousMax * 0.25))
-            hysteresis = max(0.0, hysteresis - 0.75);
-        // Limit bright outliers from one ray rotation without lowering hysteresis.
+        const float hysteresis = 0.97;
+        // Bound a single bright estimate before it can enter recursive probe
+        // lighting on later frames. Repeated real changes still accumulate.
         const float increase = dot(delta, luminanceWeights);
-        if (increase > max(0.10, previousLuminance))
-            delta *= 0.25;
+        const float maxIncrease = max(0.10, previousLuminance);
+        if (increase > maxIncrease)
+            delta *= maxIncrease / increase;
         blended = previous + (1.0 - hysteresis) * delta;
+        // Measure the new ray estimate before hysteresis, which can hide
+        // persistent sampling noise while the atlas is still changing.
+        texelVariability = abs(dot(irradiance - previous, luminanceWeights)) /
+                           max(previousLuminance, 0.10);
     }
+    variabilitySamples[groupIndex] = texelVariability;
     blendedTexels[groupIndex] = float4(blended, 1.0);
     irradianceAtlas[int2(atlasPixel)] = float4(blended, 1.0);
 
     // Borders copy the same value as the interior, without reading the UAV.
     GroupMemoryBarrierWithGroupSync();
+    if (groupIndex == 0u) {
+        float variability = 0.0;
+        for (uint texel = 0u; texel < 64u; ++texel)
+            variability += variabilitySamples[texel];
+        DDGIProbeState probeState = probeStates[probeIndex];
+        probeState.variability = lerp(probeState.variability, variability / 64.0, 0.2);
+        probeStates[probeIndex] = probeState;
+    }
     // Enumerate top/bottom rows, then the sides without their corners.
     for (uint edge = groupIndex; edge < 36u; edge += 64u) {
         uint2 texel;

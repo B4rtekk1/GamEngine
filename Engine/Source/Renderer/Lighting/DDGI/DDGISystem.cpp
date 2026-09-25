@@ -15,8 +15,9 @@ namespace {
         std::array<std::int32_t, 4> scrollOffsetRays;
         std::array<std::int32_t, 4> scrollDeltaFrame;
         std::array<float, 4> distanceInitialized;
+        std::array<float, 4> updateControl;
     };
-    static_assert(sizeof(PushConstants) == 64);
+    static_assert(sizeof(PushConstants) == 80);
 
     struct ProbeUpdate final {
         std::uint32_t probeIndex;
@@ -87,7 +88,7 @@ void DDGISystem::create(VkPhysicalDevice physical, VkDevice device, VmaAllocator
                                       VK_FILTER_NEAREST, VK_FORMAT_R16G16B16A16_SFLOAT, true);
             frame.probeData.create(physical, device, {16, 128}, allocator,
                                    VK_FILTER_NEAREST, VK_FORMAT_R16G16B16A16_SFLOAT, true);
-            frame.probeStates.createDeviceLocalEmpty(device, 2048 * 12,
+            frame.probeStates.createDeviceLocalEmpty(device, 2048 * 20,
                                                      VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, allocator);
             frame.updateList.createDeviceLocalEmpty(device, 256 * sizeof(ProbeUpdate),
                                                     VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, allocator);
@@ -172,12 +173,18 @@ void DDGISystem::record(VkCommandBuffer commandBuffer, std::uint32_t frameSlot,
                         std::uint32_t frameIndex, VkDescriptorSet sceneSet,
                         VkAccelerationStructureKHR tlas, VkBuffer instances,
                         VkBuffer meshes, VkBuffer materials, VkBuffer vertices,
-                        VkBuffer indices, const std::array<float, 3>& cameraPosition) {
+                        VkBuffer indices, const std::array<float, 3>& cameraPosition,
+                        const std::array<std::uint64_t, 3>& sceneRevisions,
+                        bool sceneGeometryChanged) {
     if (!created() || !commandBuffer || !sceneSet || !tlas || !instances || !meshes ||
         !materials || !vertices || !indices) return;
     frameSlot %= 2;
-    // Diagnostic setting: 768 probes, 196,608 trace rays and up to 49,152
-    // validation rays across the three cascades each frame.
+    const bool sceneChanged = sceneGeometryChanged || !sceneRevisionsInitialized_ ||
+                              sceneRevisions_ != sceneRevisions;
+    sceneRevisions_ = sceneRevisions;
+    sceneRevisionsInitialized_ = true;
+    // Diagnostic maximum: 768 probes, 196,608 trace rays and up to 49,152
+    // validation rays across the three cascades before convergence.
     // Each cascade has its own 2048-probe history.
     constexpr std::array<std::uint32_t, 3> cascadeUpdates{256, 256, 256};
     // TLAS was built or updated earlier on this graphics command buffer.
@@ -308,7 +315,8 @@ void DDGISystem::record(VkCommandBuffer commandBuffer, std::uint32_t frameSlot,
         {state.scrollOffset[0], state.scrollOffset[1], state.scrollOffset[2],
          static_cast<std::int32_t>(volume.raysPerProbe)},
         {scrollDelta[0], scrollDelta[1], scrollDelta[2], static_cast<std::int32_t>(frameIndex)},
-        {volume.maxRayDistance, initialized ? 1.0F : 0.0F, static_cast<float>(updateCount), 0.0F}};
+        {volume.maxRayDistance, initialized ? 1.0F : 0.0F, static_cast<float>(updateCount), 0.0F},
+        {sceneChanged ? 1.0F : 0.0F, 0.0F, 0.0F, 0.0F}};
     vkCmdPushConstants(commandBuffer, pipelineLayout_, VK_SHADER_STAGE_COMPUTE_BIT,
                        0, sizeof(push), &push);
     const auto computeBarrier = [&] {
@@ -423,6 +431,8 @@ void DDGISystem::destroy() noexcept {
     layout_ = VK_NULL_HANDLE;
     sets_ = {};
     cascadeStates_ = {};
+    sceneRevisions_ = {};
+    sceneRevisionsInitialized_ = false;
     volumes_ = {};
     device_ = VK_NULL_HANDLE;
 }
