@@ -12,8 +12,8 @@
 
 namespace Engine {
 namespace {
-    // Must match ddgi_common.slang. Packed half texels retain atlas precision.
-    constexpr std::uint32_t cacheProbeWords = 532;
+    // Must match ddgi_common.slang: metadata, packed RGBA8, packed half2.
+    constexpr std::uint32_t cacheProbeWords = 328;
     constexpr VkDeviceSize cacheRegionBytes = 64 * cacheProbeWords * sizeof(std::uint32_t);
 
     struct ProbeUpdate final {
@@ -100,8 +100,7 @@ void DDGISystem::create(VkPhysicalDevice physical, VkDevice device, VmaAllocator
     device_ = device;
     try {
         constexpr std::array<float, 3> spacings{2.0F, 6.0F, 18.0F};
-        // Diagnostic quality setting for checking DDGI sampling and scheduling.
-        constexpr std::array<std::uint32_t, 3> rays{256, 256, 256};
+        constexpr std::array<std::uint32_t, 3> rays{256, 160, 96};
         for (std::size_t cascade = 0; cascade < volumes_.size(); ++cascade) {
             volumes_[cascade].probeSpacing = spacings[cascade];
             volumes_[cascade].raysPerProbe = rays[cascade];
@@ -120,9 +119,9 @@ void DDGISystem::create(VkPhysicalDevice physical, VkDevice device, VmaAllocator
                 VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT, allocator);
             frame.rayData.create(physical, device, {256, 256}, allocator,
                                  VK_FILTER_NEAREST, VK_FORMAT_R16G16B16A16_SFLOAT, true);
-            frame.irradiance.create(physical, device, {160, 1280}, allocator,
-                                    VK_FILTER_LINEAR, VK_FORMAT_R16G16B16A16_SFLOAT, true);
-            frame.distance.create(physical, device, {288, 2304}, allocator,
+            frame.irradiance.create(physical, device, {128, 1024}, allocator,
+                                    VK_FILTER_LINEAR, VK_FORMAT_R8G8B8A8_UNORM, true);
+            frame.distance.create(physical, device, {256, 2048}, allocator,
                                   VK_FILTER_LINEAR, VK_FORMAT_R16G16_SFLOAT, true);
             frame.fixedRayData.create(physical, device, {32, 256}, allocator,
                                       VK_FILTER_NEAREST, VK_FORMAT_R16G16B16A16_SFLOAT, true);
@@ -233,10 +232,11 @@ void DDGISystem::record(VkCommandBuffer commandBuffer, std::uint32_t frameSlot,
         (sceneGeometryChanged && sceneRevisions_[3] != sceneRevisions[3]);
     sceneRevisions_ = sceneRevisions;
     sceneRevisionsInitialized_ = true;
-    // Diagnostic maximum: 768 probes, 196,608 trace rays and up to 49,152
-    // validation rays across the three cascades before convergence.
+    // Maximum: 672 probes and 119,808 primary probe rays across the cascades.
+    // Every probe's ray quota includes 32 fixed validation rays; a relocated
+    // probe spends another 32 on revalidation and traces fewer random rays.
     // Each cascade has its own 2048-probe history.
-    constexpr std::array<std::uint32_t, 3> cascadeUpdates{256, 256, 256};
+    constexpr std::array<std::uint32_t, 3> cascadeUpdates{256, 224, 192};
     // TLAS was built or updated earlier on this graphics command buffer.
     // Ray queries must wait for the AS writes even though the RenderGraph
     // does not yet model acceleration structures as resources.
@@ -249,6 +249,7 @@ void DDGISystem::record(VkCommandBuffer commandBuffer, std::uint32_t frameSlot,
     asDependency.memoryBarrierCount = 1;
     asDependency.pMemoryBarriers = &asBarrier;
     vkCmdPipelineBarrier2(commandBuffer, &asDependency);
+    std::array<PushConstants, 3> cascadePushes{};
     for (std::size_t cascadeIndex = 0; cascadeIndex < volumes_.size(); ++cascadeIndex) {
     auto& volume = volumes_[cascadeIndex];
     const std::uint32_t updateCount = cascadeUpdates[cascadeIndex];
@@ -373,6 +374,7 @@ void DDGISystem::record(VkCommandBuffer commandBuffer, std::uint32_t frameSlot,
         {scrollDelta[0], scrollDelta[1], scrollDelta[2], static_cast<std::int32_t>(frameIndex)},
         {volume.maxRayDistance, initialized ? 1.0F : 0.0F, static_cast<float>(updateCount), 0.0F},
         {sceneChanged ? 1.0F : 0.0F, 0.0F, 0.0F, 0.0F}};
+    cascadePushes[cascadeIndex] = push;
     vkCmdPushConstants(commandBuffer, pipelineLayout_, VK_SHADER_STAGE_COMPUTE_BIT,
                        0, sizeof(push), &push);
     const bool scrolled = scrollDelta != std::array<std::int32_t, 3>{};
@@ -492,34 +494,65 @@ void DDGISystem::record(VkCommandBuffer commandBuffer, std::uint32_t frameSlot,
     // Recursive gathers see relocated probes as pending until their new rays
     // have replaced the atlas. The finish pass activates successful updates.
     computeResourceBarrier(commandBuffer, {frame.probeStates.handle()}, {frame.probeData.image()});
-    vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, tracePipeline_);
-    vkCmdDispatch(commandBuffer, (volume.raysPerProbe + 7) / 8, (updateCount + 7) / 8, 1);
-    computeResourceBarrier(commandBuffer, {}, {frame.rayData.image()});
-    vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, irradiancePipeline_);
-    // One workgroup per probe synchronizes interior blending with border copies.
-    vkCmdDispatch(commandBuffer, 1, 1, updateCount);
-    vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, distancePipeline_);
-    vkCmdDispatch(commandBuffer, 1, 1, updateCount);
-    computeResourceBarrier(commandBuffer, {frame.probeStates.handle()});
-    // Finish the update while probeData still describes the traced position.
-    vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, finishPipeline_);
-    vkCmdDispatch(commandBuffer, (updateCount + 63) / 64, 1, 1);
-    const auto finishIrradiance = imageBarrier(frame.irradiance.image(), VK_IMAGE_LAYOUT_GENERAL,
-        VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-        VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT, VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT,
-        VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
-    const auto finishDistance = imageBarrier(frame.distance.image(), VK_IMAGE_LAYOUT_GENERAL,
-        VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-        VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT, VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT,
-        VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
-    const auto finishProbeData = imageBarrier(frame.probeData.image(), VK_IMAGE_LAYOUT_GENERAL,
-        VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-        VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT, VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT,
-        VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
-    const std::array finish{finishIrradiance, finishDistance, finishProbeData};
-    emitImageBarriers(commandBuffer, finish);
-    state.initialized = true;
     }
+
+    const auto bindCascade = [&](std::size_t cascadeIndex) {
+        const std::array cascadeSets{sceneSet, sets_[cascadeIndex][frameSlot]};
+        vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, pipelineLayout_,
+                                0, 2, cascadeSets.data(), 0, nullptr);
+        vkCmdPushConstants(commandBuffer, pipelineLayout_, VK_SHADER_STAGE_COMPUTE_BIT,
+                           0, sizeof(PushConstants), &cascadePushes[cascadeIndex]);
+    };
+    // Trace all cascades against their previous atlas contents before any blend writes.
+    vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, tracePipeline_);
+    for (std::size_t cascadeIndex = 0; cascadeIndex < volumes_.size(); ++cascadeIndex) {
+        bindCascade(cascadeIndex);
+        vkCmdDispatch(commandBuffer, (volumes_[cascadeIndex].raysPerProbe - 32 + 7) / 8,
+                      (cascadeUpdates[cascadeIndex] + 7) / 8, 1);
+    }
+    computeResourceBarrier(commandBuffer, {},
+        {resources_.cascades[0].history.rayData.image(),
+         resources_.cascades[1].history.rayData.image(),
+         resources_.cascades[2].history.rayData.image()});
+
+    // Both blend passes read ray data and write separate atlases. No barrier is
+    // needed between their dispatches, including across different cascades.
+    vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, irradiancePipeline_);
+    for (std::size_t cascadeIndex = 0; cascadeIndex < volumes_.size(); ++cascadeIndex) {
+        bindCascade(cascadeIndex);
+        vkCmdDispatch(commandBuffer, 1, 1, cascadeUpdates[cascadeIndex]);
+    }
+    vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, distancePipeline_);
+    for (std::size_t cascadeIndex = 0; cascadeIndex < volumes_.size(); ++cascadeIndex) {
+        bindCascade(cascadeIndex);
+        vkCmdDispatch(commandBuffer, 1, 1, cascadeUpdates[cascadeIndex]);
+    }
+    computeResourceBarrier(commandBuffer,
+        {resources_.cascades[0].history.probeStates.handle(),
+         resources_.cascades[1].history.probeStates.handle(),
+         resources_.cascades[2].history.probeStates.handle()});
+
+    // Finish reads each probe's acceptance from the irradiance pass.
+    vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, finishPipeline_);
+    for (std::size_t cascadeIndex = 0; cascadeIndex < volumes_.size(); ++cascadeIndex) {
+        bindCascade(cascadeIndex);
+        vkCmdDispatch(commandBuffer, (cascadeUpdates[cascadeIndex] + 63) / 64, 1, 1);
+    }
+    std::array<VkImageMemoryBarrier2, 9> finishBarriers{};
+    for (std::size_t cascadeIndex = 0; cascadeIndex < volumes_.size(); ++cascadeIndex) {
+        auto& frame = resources_.cascades[cascadeIndex].history;
+        const auto toFragmentRead = [&](VkImage image) {
+            return imageBarrier(image, VK_IMAGE_LAYOUT_GENERAL,
+                VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT, VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT,
+                VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
+        };
+        finishBarriers[cascadeIndex * 3] = toFragmentRead(frame.irradiance.image());
+        finishBarriers[cascadeIndex * 3 + 1] = toFragmentRead(frame.distance.image());
+        finishBarriers[cascadeIndex * 3 + 2] = toFragmentRead(frame.probeData.image());
+        cascadeStates_[cascadeIndex].initialized = true;
+    }
+    emitImageBarriers(commandBuffer, finishBarriers);
 }
 
 bool DDGISystem::ready() const noexcept {

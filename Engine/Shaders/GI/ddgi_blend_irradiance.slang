@@ -2,7 +2,7 @@ import GI.ddgi_common;
 [[vk::push_constant]] DDGIConstants ddgi;
 
 [[vk::binding(5, 1), vk::image_format("rgba16f")]] RWTexture2D<float4> rayData;
-[[vk::binding(6, 1), vk::image_format("rgba16f")]] RWTexture2D<float4> irradianceAtlas;
+[[vk::binding(6, 1), vk::image_format("rgba8")]] RWTexture2D<float4> irradianceAtlas;
 [[vk::binding(9, 1), vk::image_format("rgba16f")]] RWTexture2D<float4> probeData;
 [[vk::binding(11, 1)]] RWStructuredBuffer<DDGIProbeState> probeStates;
 [[vk::binding(12, 1)]] StructuredBuffer<DDGIProbeUpdate> probeUpdateList;
@@ -12,10 +12,10 @@ groupshared uint rejectUpdate;
 // Each ray is loaded and its direction evaluated once per probe workgroup.
 groupshared float4 cachedRays[DDGI_MAX_RAYS];
 groupshared float3 cachedDirections[DDGI_MAX_RAYS];
-groupshared float4 blendedTexels[64];
-groupshared float variabilitySamples[64];
+groupshared float4 blendedTexels[36];
+groupshared float variabilitySamples[36];
 
-[numthreads(8, 8, 1)]
+[numthreads(6, 6, 1)]
 void main(uint3 group : SV_GroupID, uint3 local : SV_GroupThreadID, uint groupIndex : SV_GroupIndex) {
     if (group.z >= ddgiUpdateCount(ddgi)) return;
     const DDGIProbeUpdate update = probeUpdateList[group.z];
@@ -25,14 +25,16 @@ void main(uint3 group : SV_GroupID, uint3 local : SV_GroupThreadID, uint groupIn
     const uint2 atlasPixel = atlasBase + local.xy + 1u;
     const float state = probeData[int2(ddgiProbePixel(probeIndex))].w;
     if (state < 0.5) {
-        for (uint pixel = groupIndex; pixel < 100u; pixel += 64u)
-            irradianceAtlas[int2(atlasBase + uint2(pixel % 10u, pixel / 10u))] = float4(0.0);
+        for (uint pixel = groupIndex; pixel < 64u; pixel += 36u)
+            irradianceAtlas[int2(atlasBase + uint2(pixel % 8u, pixel / 8u))] = float4(0.0);
         return;
     }
-    const uint rayCount = uint(ddgi.scrollOffsetRays.w);
-    for (uint rayIndex = groupIndex; rayIndex < rayCount; rayIndex += 64u) {
+    const uint rayCount = ddgiRandomRayCount(ddgi, update.relocated);
+    for (uint rayIndex = groupIndex; rayIndex < rayCount; rayIndex += 36u) {
         cachedRays[rayIndex] = rayData[int2(rayIndex, group.z)];
-        cachedDirections[rayIndex] = rayDirections[rayIndex].xyz;
+        const uint directionIndex = ddgiRandomDirectionIndex(
+            rayIndex, rayCount, ddgiRandomRayCount(ddgi, 0u));
+        cachedDirections[rayIndex] = rayDirections[directionIndex].xyz;
     }
     GroupMemoryBarrierWithGroupSync();
     if (groupIndex == 0u) {
@@ -85,7 +87,7 @@ void main(uint3 group : SV_GroupID, uint3 local : SV_GroupThreadID, uint groupIn
         // Preserve progress when repeatedly converging toward darker values.
         if (max(max(encodedIrradiance.x, encodedIrradiance.y), encodedIrradiance.z) <
             max(max(previous.x, previous.y), previous.z)) {
-            const float3 minimumStep = min(max(1.0 / 1024.0, abs(blendedDelta)), abs(delta));
+            const float3 minimumStep = min(max(1.0 / 255.0, abs(blendedDelta)), abs(delta));
             blendedDelta = minimumStep * sign(blendedDelta);
         }
         blended = previous + blendedDelta;
@@ -98,22 +100,23 @@ void main(uint3 group : SV_GroupID, uint3 local : SV_GroupThreadID, uint groupIn
     GroupMemoryBarrierWithGroupSync();
     if (groupIndex == 0u) {
         float variability = 0.0;
-        for (uint texel = 0u; texel < 64u; ++texel)
+        for (uint texel = 0u; texel < 36u; ++texel)
             variability += variabilitySamples[texel];
         DDGIProbeState probeState = probeStates[probeIndex];
-        probeState.variability = lerp(probeState.variability, variability / 64.0, 0.2);
+        probeState.variability = lerp(probeState.variability, variability / 36.0, 0.2);
+        probeState.state = DDGI_ACCEPTED_UPDATE_STATE;
         probeStates[probeIndex] = probeState;
     }
     // Enumerate top/bottom rows, then the sides without their corners.
-    for (uint edge = groupIndex; edge < 36u; edge += 64u) {
+    for (uint edge = groupIndex; edge < 28u; edge += 36u) {
         uint2 texel;
-        if (edge < 20u)
-            texel = uint2(edge % 10u, edge < 10u ? 0u : 9u);
+        if (edge < 16u)
+            texel = uint2(edge % 8u, edge < 8u ? 0u : 7u);
         else {
-            const uint side = edge - 20u;
-            texel = uint2(side < 8u ? 0u : 9u, side % 8u + 1u);
+            const uint side = edge - 16u;
+            texel = uint2(side < 6u ? 0u : 7u, side % 6u + 1u);
         }
         const uint2 source = ddgiBorderSource(texel, DDGI_IRRADIANCE_INTERIOR) - 1u;
-        irradianceAtlas[int2(atlasBase + texel)] = blendedTexels[source.y * 8u + source.x];
+        irradianceAtlas[int2(atlasBase + texel)] = blendedTexels[source.y * 6u + source.x];
     }
 }

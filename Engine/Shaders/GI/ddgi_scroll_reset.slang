@@ -1,7 +1,7 @@
 import GI.ddgi_common;
 [[vk::push_constant]] DDGIConstants ddgi;
 
-[[vk::binding(6, 1), vk::image_format("rgba16f")]] RWTexture2D<float4> irradianceAtlas;
+[[vk::binding(6, 1), vk::image_format("rgba8")]] RWTexture2D<float4> irradianceAtlas;
 [[vk::binding(7, 1), vk::image_format("rg16f")]] RWTexture2D<float2> distanceAtlas;
 [[vk::binding(9, 1), vk::image_format("rgba16f")]] RWTexture2D<float4> probeData;
 [[vk::binding(11, 1)]] RWStructuredBuffer<DDGIProbeState> probeStates;
@@ -34,14 +34,13 @@ void main(uint3 id : SV_DispatchThreadID) {
         cachedProbe.w = 2.0;
         probeData[int2(ddgiProbePixel(id.x))] = cachedProbe;
         const uint2 ib = ddgiAtlasBase(id.x, DDGI_IRRADIANCE_INTERIOR);
-        for (uint i = 0u; i < 100u; ++i)
-            irradianceAtlas[int2(ib + uint2(i % 10u, i / 10u))] = float4(
-                ddgiUnpackHalf2(regionCache[base + 8u + i * 2u]),
-                ddgiUnpackHalf2(regionCache[base + 9u + i * 2u]));
+        for (uint i = 0u; i < 64u; ++i)
+            irradianceAtlas[int2(ib + uint2(i % 8u, i / 8u))] =
+                ddgiUnpackRgba8(regionCache[base + 8u + i]);
         const uint2 db = ddgiAtlasBase(id.x, DDGI_DISTANCE_INTERIOR);
-        for (uint i = 0u; i < 324u; ++i)
-            distanceAtlas[int2(db + uint2(i % 18u, i / 18u))] =
-                ddgiUnpackHalf2(regionCache[base + 208u + i]);
+        for (uint i = 0u; i < 256u; ++i)
+            distanceAtlas[int2(db + uint2(i % 16u, i / 16u))] =
+                ddgiUnpackHalf2(regionCache[base + 72u + i]);
         return;
     }
     probeData[int2(ddgiProbePixel(id.x))] = float4(0.0, 0.0, 0.0, 2.0);

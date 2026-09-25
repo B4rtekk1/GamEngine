@@ -10,9 +10,9 @@ import GI.ddgi_common;
 // Each ray is loaded and its direction evaluated once per probe workgroup.
 // xyz stores direction; w stores the signed distance, with no unused RGB.
 groupshared float4 cachedRays[DDGI_MAX_RAYS];
-groupshared float2 blendedTexels[256];
+groupshared float2 blendedTexels[196];
 
-[numthreads(16, 16, 1)]
+[numthreads(14, 14, 1)]
 void main(uint3 group : SV_GroupID, uint3 local : SV_GroupThreadID, uint groupIndex : SV_GroupIndex) {
     if (group.z >= ddgiUpdateCount(ddgi)) return;
     const DDGIProbeUpdate update = probeUpdateList[group.z];
@@ -22,13 +22,15 @@ void main(uint3 group : SV_GroupID, uint3 local : SV_GroupThreadID, uint groupIn
     const uint2 atlasPixel = atlasBase + local.xy + 1u;
     const float state = probeData[int2(ddgiProbePixel(probeIndex))].w;
     if (state < 0.5) {
-        for (uint pixel = groupIndex; pixel < 324u; pixel += 256u)
-            distanceAtlas[int2(atlasBase + uint2(pixel % 18u, pixel / 18u))] = float2(0.0);
+        for (uint pixel = groupIndex; pixel < 256u; pixel += 196u)
+            distanceAtlas[int2(atlasBase + uint2(pixel % 16u, pixel / 16u))] = float2(0.0);
         return;
     }
-    const uint rayCount = uint(ddgi.scrollOffsetRays.w);
-    for (uint rayIndex = groupIndex; rayIndex < rayCount; rayIndex += 256u) {
-        cachedRays[rayIndex] = float4(rayDirections[rayIndex].xyz,
+    const uint rayCount = ddgiRandomRayCount(ddgi, update.relocated);
+    for (uint rayIndex = groupIndex; rayIndex < rayCount; rayIndex += 196u) {
+        const uint directionIndex = ddgiRandomDirectionIndex(
+            rayIndex, rayCount, ddgiRandomRayCount(ddgi, 0u));
+        cachedRays[rayIndex] = float4(rayDirections[directionIndex].xyz,
                                      rayData[int2(rayIndex, group.z)].a);
     }
     GroupMemoryBarrierWithGroupSync();
@@ -75,15 +77,15 @@ void main(uint3 group : SV_GroupID, uint3 local : SV_GroupThreadID, uint groupIn
     // Borders copy the same value as the interior, without reading the UAV.
     GroupMemoryBarrierWithGroupSync();
     // Enumerate top/bottom rows, then the sides without their corners.
-    for (uint edge = groupIndex; edge < 68u; edge += 256u) {
+    for (uint edge = groupIndex; edge < 60u; edge += 196u) {
         uint2 texel;
-        if (edge < 36u)
-            texel = uint2(edge % 18u, edge < 18u ? 0u : 17u);
+        if (edge < 32u)
+            texel = uint2(edge % 16u, edge < 16u ? 0u : 15u);
         else {
-            const uint side = edge - 36u;
-            texel = uint2(side < 16u ? 0u : 17u, side % 16u + 1u);
+            const uint side = edge - 32u;
+            texel = uint2(side < 14u ? 0u : 15u, side % 14u + 1u);
         }
         const uint2 source = ddgiBorderSource(texel, DDGI_DISTANCE_INTERIOR) - 1u;
-        distanceAtlas[int2(atlasBase + texel)] = blendedTexels[source.y * 16u + source.x];
+        distanceAtlas[int2(atlasBase + texel)] = blendedTexels[source.y * 14u + source.x];
     }
 }

@@ -113,13 +113,17 @@ float3 evaluateLocalDiffuse(float3 position, float3 normal, float3 geometricNorm
 
 [numthreads(8, 8, 1)]
 void main(uint3 id : SV_DispatchThreadID) {
-    if (id.x >= uint(ddgi.scrollOffsetRays.w) || id.y >= ddgiUpdateCount(ddgi)) return;
-    const uint probeIndex = probeUpdateList[id.y].probeIndex;
+    if (id.y >= ddgiUpdateCount(ddgi)) return;
+    const DDGIProbeUpdate update = probeUpdateList[id.y];
+    const uint rayCount = ddgiRandomRayCount(ddgi, update.relocated);
+    if (id.x >= rayCount) return;
+    const uint probeIndex = update.probeIndex;
     if (probeIndex >= DDGI_PROBES) return;
     const float4 probe = probeData[int2(ddgiProbePixel(probeIndex))];
     if (probe.w < 0.5) return;
-    const uint rayCount = uint(ddgi.scrollOffsetRays.w);
-    const float3 direction = rayDirections[id.x].xyz;
+    const uint directionIndex = ddgiRandomDirectionIndex(
+        id.x, rayCount, ddgiRandomRayCount(ddgi, 0u));
+    const float3 direction = rayDirections[directionIndex].xyz;
     RayDesc ray;
     ray.Origin = ddgiPosition(probeIndex, ddgi.originSpacing.xyz, ddgi.originSpacing.w, ddgi.scrollOffsetRays.xyz) + probe.xyz;
     ray.Direction = direction;

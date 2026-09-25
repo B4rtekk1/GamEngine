@@ -7,16 +7,21 @@ static const uint DDGI_UPDATES_PER_FRAME = 256u;
 static const uint DDGI_MAX_RAYS = 256u;
 static const uint DDGI_MIN_CONVERGENCE_UPDATES = 64u;
 static const uint DDGI_STABLE_UPDATES = 8u;
+// Temporary result written by irradiance blending and consumed by finish.
+static const uint DDGI_ACCEPTED_UPDATE_STATE = 3u;
 static const float DDGI_VARIABILITY_THRESHOLD = 0.005;
 static const float DDGI_HYSTERESIS = 0.97;
 // Active probeData.w runs from 1.4 toward 1.0 after a pending probe is retraced.
 static const float DDGI_REACTIVATION_STATE = 1.4;
 static const float DDGI_REACTIVATION_STEP = 0.1;
 static const float DDGI_IRRADIANCE_ENCODING_GAMMA = 5.0;
+// The atlas stores gamma-encoded HDR irradiance in normalized 8-bit channels.
+static const float DDGI_IRRADIANCE_ENCODING_RANGE = 256.0;
 static const float DDGI_IRRADIANCE_CHANGE_THRESHOLD = 0.25;
 static const float DDGI_BRIGHTNESS_THRESHOLD = 0.10;
-static const uint DDGI_IRRADIANCE_INTERIOR = 8u;
-static const uint DDGI_DISTANCE_INTERIOR = 16u;
+// RTXGI tile sizes include the one-texel border on every side.
+static const uint DDGI_IRRADIANCE_INTERIOR = 6u;
+static const uint DDGI_DISTANCE_INTERIOR = 14u;
 
 struct DDGIConstants {
     float4 originSpacing;
@@ -29,10 +34,12 @@ uint ddgiUpdateCount(DDGIConstants constants) {
     return min(uint(constants.distanceInitialized.z), DDGI_UPDATES_PER_FRAME);
 }
 float3 ddgiEncodeIrradiance(float3 irradiance) {
-    return pow(max(irradiance, 0.0), 1.0 / DDGI_IRRADIANCE_ENCODING_GAMMA);
+    return pow(saturate(irradiance / DDGI_IRRADIANCE_ENCODING_RANGE),
+               1.0 / DDGI_IRRADIANCE_ENCODING_GAMMA);
 }
 float3 ddgiDecodeIrradiance(float3 encodedIrradiance) {
-    return pow(max(encodedIrradiance, 0.0), DDGI_IRRADIANCE_ENCODING_GAMMA);
+    return DDGI_IRRADIANCE_ENCODING_RANGE *
+           pow(saturate(encodedIrradiance), DDGI_IRRADIANCE_ENCODING_GAMMA);
 }
 
 struct DDGIProbeState {
@@ -50,6 +57,14 @@ struct DDGIProbeUpdate {
     uint padding;
     uint4 localLightIndices;
 };
+// raysPerProbe includes validation at the old and, when moved, new position.
+uint ddgiRandomRayCount(DDGIConstants constants, uint relocated) {
+    return uint(constants.scrollOffsetRays.w) - DDGI_FIXED_RAYS * (1u + min(relocated, 1u));
+}
+uint ddgiRandomDirectionIndex(uint rayIndex, uint rayCount, uint maxRandomRays) {
+    // Spread the smaller relocated set over the same spherical sequence.
+    return rayIndex * maxRandomRays / rayCount;
+}
 
 uint3 ddgiGrid(uint probeIndex) {
     return uint3(probeIndex % DDGI_COUNTS.x,
@@ -134,8 +149,16 @@ uint2 ddgiBorderSource(uint2 texel, uint interior) {
 }
 
 // Region-cache record: valid, five scheduling words, half4 placement,
-// 100 half4 irradiance texels (including borders), 324 half2 distance texels.
-static const uint DDGI_CACHE_PROBE_WORDS = 532u;
+// 64 packed RGBA8 irradiance texels (including borders), 256 half2 distance texels.
+static const uint DDGI_CACHE_PROBE_WORDS = 328u;
+uint ddgiPackRgba8(float4 value) {
+    const uint4 bytes = uint4(round(saturate(value) * 255.0));
+    return bytes.x | (bytes.y << 8u) | (bytes.z << 16u) | (bytes.w << 24u);
+}
+float4 ddgiUnpackRgba8(uint value) {
+    return float4(value & 255u, (value >> 8u) & 255u,
+                  (value >> 16u) & 255u, value >> 24u) / 255.0;
+}
 uint ddgiPackHalf2(float2 value) {
     return f32tof16(value.x) | (f32tof16(value.y) << 16u);
 }
