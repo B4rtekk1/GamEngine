@@ -120,7 +120,7 @@ void main(uint3 id : SV_DispatchThreadID) {
                                      query.CandidateTriangleBarycentrics()))
             query.CommitNonOpaqueTriangleHit();
     }
-    float3 radiance = skyRadiance(direction);
+    float3 radiance = float3(0.0);
     float distance = ddgi.distanceInitialized.x;
     if (query.CommittedStatus() == COMMITTED_TRIANGLE_HIT) {
         distance = query.CommittedRayT();
@@ -143,6 +143,13 @@ void main(uint3 id : SV_DispatchThreadID) {
             emissive *= materialTextures[NonUniformResourceIndex(material.extensionTextureIndices.x)]
                 .SampleLevel(materialTextureUv(material, 7u, hit.uv0, hit.uv1), 0.0).rgb;
         float3 indirectIrradiance = diffuseIrradianceMap.SampleLevel(hitNormal, 0.0).rgb * 3.14159265;
+        if (ddgi.distanceInitialized.y > 0.5) {
+            const DDGIGatherResult recursive = ddgiGatherCascade(
+                hit.position, hitNormal, hitNormal, -direction, ddgi.originSpacing.xyz,
+                ddgi.originSpacing.w, ddgi.scrollOffsetRays.xyz,
+                previousIrradiance, previousDistance, previousProbeData);
+            indirectIrradiance = lerp(indirectIrradiance, recursive.irradiance, recursive.blendWeight);
+        }
         radiance = emissive + indirectIrradiance * albedo / 3.14159265;
         if (frame.lightDirectionIntensity.w > 0.0) {
             const float3 toSun = normalize(-frame.lightDirectionIntensity.xyz);
@@ -171,6 +178,7 @@ void main(uint3 id : SV_DispatchThreadID) {
         }
         radiance += evaluateLocalDiffuse(hit.position, hitNormal, albedo);
         if (realBackface) distance = -distance;
+        radiance = float3(1.0, 1.0, 1.0);
     }
     rayData[int2(id.x, probeIndex)] = float4(radiance, distance);
 }
