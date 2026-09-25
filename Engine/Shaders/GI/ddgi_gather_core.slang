@@ -8,13 +8,29 @@ float4 ddgiSampleProbe(Sampler2D atlas, uint probeIndex, float3 direction, uint 
     return atlas.SampleLevel(pixel / extent, 0.0);
 }
 
-float4 ddgiGatherCascade(float3 position, float3 geometricNormal,
+struct DDGIGatherResult {
+    float3 irradiance;
+    float blendWeight;
+    float visibility;
+    float activeProbeFraction;
+    float preVisibilityWeight;
+    float postVisibilityWeight;
+};
+
+DDGIGatherResult ddgiGatherCascade(float3 position, float3 geometricNormal,
                          float3 viewDirection, float3 origin,
                          float spacing, int3 scrollOffset,
                          Sampler2D irradianceTexture, Sampler2D distanceTexture,
                          Sampler2D probeTexture) {
     const float3 cell = (position - origin) / spacing;
-    if (any(cell < 0.0) || any(cell > float3(DDGI_COUNTS - 1u))) return float4(0.0);
+    DDGIGatherResult result;
+    result.irradiance = 0.0;
+    result.blendWeight = 0.0;
+    result.visibility = 0.0;
+    result.activeProbeFraction = 0.0;
+    result.preVisibilityWeight = 0.0;
+    result.postVisibilityWeight = 0.0;
+    if (any(cell < 0.0) || any(cell > float3(DDGI_COUNTS - 1u))) return result;
     const uint3 lower = uint3(min(floor(cell), float3(DDGI_COUNTS - 2u)));
     const float3 fractional = saturate(cell - float3(lower));
     // Move the visibility query off the surface; keep the original position
@@ -24,14 +40,16 @@ float4 ddgiGatherCascade(float3 position, float3 geometricNormal,
     const float3 biasedPosition = position + geometricNormal * normalBias +
                                   viewDirection * viewBias;
     float3 irradiance = 0.0;
-    float totalWeight = 0.0;
+    float weightedVisibility = 0.0;
     float validWeight = 0.0;
+    uint activeProbeCount = 0u;
     for (uint corner = 0u; corner < 8u; ++corner) {
         const uint3 offset = uint3(corner & 1u, (corner >> 1u) & 1u, (corner >> 2u) & 1u);
         const uint3 grid = lower + offset;
         const uint index = ddgiPhysicalIndex(grid, scrollOffset);
         const float4 probe = probeTexture.Load(int3(ddgiProbePixel(index), 0));
         if (probe.w < 0.5) continue;
+        ++activeProbeCount;
         const float3 probePosition = origin + float3(grid) * spacing + probe.xyz;
         const float3 toSurface = biasedPosition - probePosition;
         const float distance = length(toSurface);
@@ -45,10 +63,13 @@ float4 ddgiGatherCascade(float3 position, float3 geometricNormal,
         // distance visibility used to interpolate the probe irradiance.
         validWeight += trilinearWeight * confidence;
         float weight = max(dot(geometricNormal, -direction) * 0.5 + 0.5, 0.05) * confidence;
+        const float weightBeforeVisibility = weight * trilinearWeight;
+        result.preVisibilityWeight += weightBeforeVisibility;
         const float2 moments = ddgiSampleProbe(distanceTexture, index, direction, DDGI_DISTANCE_INTERIOR).rg;
         const float variance = max(moments.y - moments.x * moments.x, 0.0001);
         const float delta = max(distance - moments.x, 0.0);
         const float chebyshev = saturate(variance / (variance + delta * delta));
+        weightedVisibility += chebyshev * weightBeforeVisibility;
         weight *= max(0.05, chebyshev * chebyshev * chebyshev);
         // Keep a fallback when every probe is occluded, while suppressing
         // light leaking from probes with only a small visibility weight.
@@ -56,12 +77,16 @@ float4 ddgiGatherCascade(float3 position, float3 geometricNormal,
         if (weight < 0.2) weight *= weight * weight / (0.2 * 0.2);
         weight *= trilinearWeight;
         irradiance += probeIrradiance.rgb * weight;
-        totalWeight += weight;
+        result.postVisibilityWeight += weight;
     }
     const float edge = min(min(cell.x, float(DDGI_COUNTS.x - 1u) - cell.x),
         min(min(cell.y, float(DDGI_COUNTS.y - 1u) - cell.y),
             min(cell.z, float(DDGI_COUNTS.z - 1u) - cell.z)));
     const float transition = smoothstep(0.0, 2.0, edge);
-    return float4(totalWeight > 0.0 ? irradiance / totalWeight : float3(0.0),
-                  saturate(validWeight * 4.0) * transition);
+    result.irradiance = result.postVisibilityWeight > 0.0
+        ? irradiance / result.postVisibilityWeight : float3(0.0);
+    result.visibility = weightedVisibility / max(result.preVisibilityWeight, 0.0001);
+    result.activeProbeFraction = float(activeProbeCount) / 8.0;
+    result.blendWeight = saturate(validWeight * 4.0) * transition;
+    return result;
 }

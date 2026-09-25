@@ -74,6 +74,14 @@ namespace Engine {
         NoDirectSpecular,
         NoGtao,
         GeometricDirectDiffuse,
+        DdgiIrradiance,
+        DdgiBlendWeight,
+        DdgiVisibility,
+        DdgiProbeCount,
+        DdgiCascade,
+        DdgiVsSky,
+        DdgiPreVisibilityWeight,
+        DdgiPostVisibilityWeight,
     };
 
     /** Tunables are deliberately data, so automated GPU benchmarks can sweep them. */

@@ -669,6 +669,15 @@ Engine::Entity drawEditorMenuBar(Engine::ScenePreset &scene, Engine::Renderer &r
             selectPbrDebugView("Disable GTAO", Engine::PbrDebugView::NoGtao);
             ImGui::Separator();
             selectPbrDebugView("Geometric Direct Diffuse", Engine::PbrDebugView::GeometricDirectDiffuse);
+            ImGui::Separator();
+            selectPbrDebugView("DDGI Irradiance", Engine::PbrDebugView::DdgiIrradiance);
+            selectPbrDebugView("DDGI Blend Weight", Engine::PbrDebugView::DdgiBlendWeight);
+            selectPbrDebugView("DDGI Visibility", Engine::PbrDebugView::DdgiVisibility);
+            selectPbrDebugView("DDGI Active Probes", Engine::PbrDebugView::DdgiProbeCount);
+            selectPbrDebugView("DDGI Cascade", Engine::PbrDebugView::DdgiCascade);
+            selectPbrDebugView("DDGI vs Sky", Engine::PbrDebugView::DdgiVsSky);
+            selectPbrDebugView("DDGI Pre-Visibility Weight", Engine::PbrDebugView::DdgiPreVisibilityWeight);
+            selectPbrDebugView("DDGI Post-Visibility Weight", Engine::PbrDebugView::DdgiPostVisibilityWeight);
             ImGui::EndMenu();
         }
         endTopMenu();
