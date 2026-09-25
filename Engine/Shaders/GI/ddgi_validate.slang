@@ -22,15 +22,10 @@ void main(uint3 id : SV_DispatchThreadID) {
     ray.Direction = ddgiFixedRayDirection(id.x);
     ray.TMin = 0.02;
     ray.TMax = ddgi.distanceInitialized.x;
-    RayQuery<RAY_FLAG_FORCE_NON_OPAQUE | RAY_FLAG_SKIP_PROCEDURAL_PRIMITIVES> query;
-    query.TraceRayInline(sceneTlas, RAY_FLAG_FORCE_NON_OPAQUE | RAY_FLAG_SKIP_PROCEDURAL_PRIMITIVES,
+    RayQuery<RAY_FLAG_SKIP_PROCEDURAL_PRIMITIVES> query;
+    query.TraceRayInline(sceneTlas, RAY_FLAG_SKIP_PROCEDURAL_PRIMITIVES,
                          0x02, ray);
-    while (query.Proceed()) {
-        if (query.CandidateType() == CANDIDATE_NON_OPAQUE_TRIANGLE &&
-            ddgiCandidatePassesAlpha(query.CandidateInstanceID(), query.CandidatePrimitiveIndex(),
-                                     query.CandidateTriangleBarycentrics()))
-            query.CommitNonOpaqueTriangleHit();
-    }
+    query.Proceed();
     float distance = ddgi.distanceInitialized.x;
     if (query.CommittedStatus() == COMMITTED_TRIANGLE_HIT) {
         const bool realBackface = !query.CommittedTriangleFrontFace() &&

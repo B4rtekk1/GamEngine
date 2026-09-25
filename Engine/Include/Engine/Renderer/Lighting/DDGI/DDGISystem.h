@@ -33,6 +33,14 @@ namespace Engine {
         [[nodiscard]] bool created() const noexcept { return tracePipeline_ != VK_NULL_HANDLE; }
 
     private:
+        struct PushConstants final {
+            std::array<float, 4> originSpacing;
+            std::array<std::int32_t, 4> scrollOffsetRays;
+            std::array<std::int32_t, 4> scrollDeltaFrame;
+            std::array<float, 4> distanceInitialized;
+            std::array<float, 4> updateControl;
+        };
+        static_assert(sizeof(PushConstants) == 80);
         VkDevice device_{VK_NULL_HANDLE};
         std::array<DDGIVolume, 3> volumes_{};
         DDGIResources resources_{};
@@ -41,6 +49,7 @@ namespace Engine {
         std::array<std::array<VkDescriptorSet, 2>, 3> sets_{};
         VkPipelineLayout pipelineLayout_{VK_NULL_HANDLE};
         VkPipeline tracePipeline_{VK_NULL_HANDLE};
+        VkPipeline directionsPipeline_{VK_NULL_HANDLE};
         VkPipeline schedulePipeline_{VK_NULL_HANDLE};
         VkPipeline finishPipeline_{VK_NULL_HANDLE};
         VkPipeline validatePipeline_{VK_NULL_HANDLE};

@@ -5,11 +5,13 @@ static const float DDGI_RANDOM_BACKFACE_THRESHOLD = 0.1;
 static const uint DDGI_PROBES = 2048u;
 static const uint DDGI_UPDATES_PER_FRAME = 256u;
 static const uint DDGI_MAX_RAYS = 256u;
-static const uint DDGI_MIN_CONVERGENCE_UPDATES = 16u;
+static const uint DDGI_MIN_CONVERGENCE_UPDATES = 64u;
 static const uint DDGI_STABLE_UPDATES = 8u;
 static const float DDGI_VARIABILITY_THRESHOLD = 0.005;
 static const float DDGI_HYSTERESIS = 0.97;
-static const float DDGI_MAX_UPDATE_BLEND = 0.08;
+// Active probeData.w runs from 1.4 toward 1.0 after a pending probe is retraced.
+static const float DDGI_REACTIVATION_STATE = 1.4;
+static const float DDGI_REACTIVATION_STEP = 0.1;
 static const float DDGI_IRRADIANCE_ENCODING_GAMMA = 5.0;
 static const float DDGI_IRRADIANCE_CHANGE_THRESHOLD = 0.25;
 static const float DDGI_BRIGHTNESS_THRESHOLD = 0.10;
@@ -25,12 +27,6 @@ struct DDGIConstants {
 };
 uint ddgiUpdateCount(DDGIConstants constants) {
     return min(uint(constants.distanceInitialized.z), DDGI_UPDATES_PER_FRAME);
-}
-float ddgiUpdateHysteresis(uint framesSinceLastUpdate) {
-    const float timeAdjustedBlend = 1.0 - pow(DDGI_HYSTERESIS,
-                                               float(max(framesSinceLastUpdate, 1u)));
-    const float newSampleWeight = min(timeAdjustedBlend, DDGI_MAX_UPDATE_BLEND);
-    return 1.0 - newSampleWeight;
 }
 float3 ddgiEncodeIrradiance(float3 irradiance) {
     return pow(max(irradiance, 0.0), 1.0 / DDGI_IRRADIANCE_ENCODING_GAMMA);
@@ -51,6 +47,8 @@ struct DDGIProbeUpdate {
     uint probeIndex;
     uint framesSinceLastUpdate;
     uint relocated;
+    uint padding;
+    uint4 localLightIndices;
 };
 
 uint3 ddgiGrid(uint probeIndex) {

@@ -6,6 +6,7 @@ import GI.ddgi_common;
 [[vk::binding(9, 1), vk::image_format("rgba16f")]] RWTexture2D<float4> probeData;
 [[vk::binding(11, 1)]] RWStructuredBuffer<DDGIProbeState> probeStates;
 [[vk::binding(12, 1)]] StructuredBuffer<DDGIProbeUpdate> probeUpdateList;
+[[vk::binding(18, 1)]] StructuredBuffer<float4> rayDirections;
 
 groupshared uint rejectUpdate;
 // Each ray is loaded and its direction evaluated once per probe workgroup.
@@ -29,10 +30,9 @@ void main(uint3 group : SV_GroupID, uint3 local : SV_GroupThreadID, uint groupIn
         return;
     }
     const uint rayCount = uint(ddgi.scrollOffsetRays.w);
-    const float4 rotation = ddgiRayRotation(uint(ddgi.scrollDeltaFrame.w), rayCount);
     for (uint rayIndex = groupIndex; rayIndex < rayCount; rayIndex += 64u) {
         cachedRays[rayIndex] = rayData[int2(rayIndex, group.z)];
-        cachedDirections[rayIndex] = ddgiRayDirection(rayIndex, rayCount, rotation);
+        cachedDirections[rayIndex] = rayDirections[rayIndex].xyz;
     }
     GroupMemoryBarrierWithGroupSync();
     if (groupIndex == 0u) {
@@ -71,8 +71,12 @@ void main(uint3 group : SV_GroupID, uint3 local : SV_GroupThreadID, uint groupIn
         float3 delta = encodedIrradiance - previous;
         const float3 luminanceWeights = float3(0.2126, 0.7152, 0.0722);
         const float previousLuminance = dot(previous, luminanceWeights);
-        float hysteresis = ddgiUpdateHysteresis(update.framesSinceLastUpdate);
-        if (max(max(abs(delta.x), abs(delta.y)), abs(delta.z)) >
+        // Convergence measures the unfiltered sample against the history.
+        texelVariability = dot(abs(delta), luminanceWeights) /
+                           max(previousLuminance, 0.10);
+        float hysteresis = DDGI_HYSTERESIS;
+        const float3 darkening = previous - encodedIrradiance;
+        if (max(max(darkening.x, darkening.y), darkening.z) >
             DDGI_IRRADIANCE_CHANGE_THRESHOLD)
             hysteresis = max(0.0, hysteresis - 0.75);
         if (dot(delta, luminanceWeights) > DDGI_BRIGHTNESS_THRESHOLD)
@@ -85,10 +89,6 @@ void main(uint3 group : SV_GroupID, uint3 local : SV_GroupThreadID, uint groupIn
             blendedDelta = minimumStep * sign(blendedDelta);
         }
         blended = previous + blendedDelta;
-        // Measure the change that enters encoded history, rather than raw
-        // Monte Carlo noise in the unblended estimate.
-        texelVariability = dot(abs(blendedDelta), luminanceWeights) /
-                           max(previousLuminance, 0.10);
     }
     variabilitySamples[groupIndex] = texelVariability;
     blendedTexels[groupIndex] = float4(blended, 1.0);

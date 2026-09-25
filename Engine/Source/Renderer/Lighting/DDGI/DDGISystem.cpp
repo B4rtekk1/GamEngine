@@ -5,20 +5,13 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <initializer_list>
 #include <span>
 #include <stdexcept>
+#include <vector>
 
 namespace Engine {
 namespace {
-    struct PushConstants final {
-        std::array<float, 4> originSpacing;
-        std::array<std::int32_t, 4> scrollOffsetRays;
-        std::array<std::int32_t, 4> scrollDeltaFrame;
-        std::array<float, 4> distanceInitialized;
-        std::array<float, 4> updateControl;
-    };
-    static_assert(sizeof(PushConstants) == 80);
-
     // Must match ddgi_common.slang. Packed half texels retain atlas precision.
     constexpr std::uint32_t cacheProbeWords = 532;
     constexpr VkDeviceSize cacheRegionBytes = 64 * cacheProbeWords * sizeof(std::uint32_t);
@@ -27,8 +20,10 @@ namespace {
         std::uint32_t probeIndex;
         std::uint32_t framesSinceLastUpdate;
         std::uint32_t relocated;
+        std::uint32_t padding;
+        std::array<std::uint32_t, 4> localLightIndices;
     };
-    static_assert(sizeof(ProbeUpdate) == 12);
+    static_assert(sizeof(ProbeUpdate) == 32);
 
     std::int32_t positiveModulo(std::int32_t value, std::int32_t count) {
         return (value % count + count) % count;
@@ -59,6 +54,40 @@ namespace {
         dependency.pImageMemoryBarriers = barriers.data();
         vkCmdPipelineBarrier2(commandBuffer, &dependency);
     }
+
+    void computeResourceBarrier(VkCommandBuffer commandBuffer,
+                                std::initializer_list<VkBuffer> buffers,
+                                std::initializer_list<VkImage> images = {}) {
+        std::vector<VkBufferMemoryBarrier2> bufferBarriers;
+        bufferBarriers.reserve(buffers.size());
+        for (const VkBuffer buffer : buffers) {
+            VkBufferMemoryBarrier2 barrier{VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER_2};
+            barrier.srcStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+            barrier.srcAccessMask = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
+            barrier.dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+            barrier.dstAccessMask = VK_ACCESS_2_SHADER_STORAGE_READ_BIT |
+                                    VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
+            barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+            barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+            barrier.buffer = buffer;
+            barrier.size = VK_WHOLE_SIZE;
+            bufferBarriers.push_back(barrier);
+        }
+        std::vector<VkImageMemoryBarrier2> imageBarriers;
+        imageBarriers.reserve(images.size());
+        for (const VkImage image : images)
+            imageBarriers.push_back(imageBarrier(image, VK_IMAGE_LAYOUT_GENERAL,
+                VK_IMAGE_LAYOUT_GENERAL, VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT, VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                VK_ACCESS_2_SHADER_STORAGE_READ_BIT | VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT |
+                VK_ACCESS_2_SHADER_SAMPLED_READ_BIT));
+        VkDependencyInfo dependency{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
+        dependency.bufferMemoryBarrierCount = static_cast<std::uint32_t>(bufferBarriers.size());
+        dependency.pBufferMemoryBarriers = bufferBarriers.data();
+        dependency.imageMemoryBarrierCount = static_cast<std::uint32_t>(imageBarriers.size());
+        dependency.pImageMemoryBarriers = imageBarriers.data();
+        vkCmdPipelineBarrier2(commandBuffer, &dependency);
+    }
 }
 
 DDGISystem::~DDGISystem() { destroy(); }
@@ -82,6 +111,9 @@ void DDGISystem::create(VkPhysicalDevice physical, VkDevice device, VmaAllocator
         }
         for (auto& cascade : resources_.cascades) {
             auto& frame = cascade.history;
+            for (auto& directions : cascade.rayDirections)
+                directions.createDeviceLocalEmpty(device, 256 * sizeof(float) * 4,
+                    VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, allocator);
             cascade.regionCache.createDeviceLocalEmpty(device, cacheRegionCount * cacheRegionBytes,
                 VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT, allocator);
             cascade.cacheMapping.createDeviceLocalEmpty(device, 4096 * sizeof(std::uint32_t),
@@ -101,7 +133,7 @@ void DDGISystem::create(VkPhysicalDevice physical, VkDevice device, VmaAllocator
             frame.updateList.createDeviceLocalEmpty(device, 256 * sizeof(ProbeUpdate),
                                                     VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, allocator);
         }
-        const std::array<VkDescriptorSetLayoutBinding, 18> bindings{{
+        const std::array<VkDescriptorSetLayoutBinding, 19> bindings{{
             {0, VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
             {1, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
             {2, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
@@ -120,6 +152,7 @@ void DDGISystem::create(VkPhysicalDevice physical, VkDevice device, VmaAllocator
             {15, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
             {16, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
             {17, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
+            {18, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
         }};
         VkDescriptorSetLayoutCreateInfo layoutInfo{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
         layoutInfo.bindingCount = static_cast<std::uint32_t>(bindings.size());
@@ -128,7 +161,7 @@ void DDGISystem::create(VkPhysicalDevice physical, VkDevice device, VmaAllocator
             throw std::runtime_error("Could not create DDGI descriptor layout");
         const std::array<VkDescriptorPoolSize, 4> poolSizes{{
             {VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR, 6},
-            {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 54},
+            {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 60},
             {VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 30},
             {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 18},
         }};
@@ -168,6 +201,7 @@ void DDGISystem::create(VkPhysicalDevice physical, VkDevice device, VmaAllocator
                 throw std::runtime_error("Could not create DDGI compute pipeline");
         };
         createPipeline("shaders/ddgi_trace.spv", tracePipeline_);
+        createPipeline("shaders/ddgi_directions.spv", directionsPipeline_);
         createPipeline("shaders/ddgi_schedule.spv", schedulePipeline_);
         createPipeline("shaders/ddgi_finish.spv", finishPipeline_);
         createPipeline("shaders/ddgi_validate.spv", validatePipeline_);
@@ -236,7 +270,7 @@ void DDGISystem::record(VkCommandBuffer commandBuffer, std::uint32_t frameSlot,
     auto& frame = resources_.cascades[cascadeIndex].history;
     const VkWriteDescriptorSetAccelerationStructureKHR structure{
         VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET_ACCELERATION_STRUCTURE_KHR, nullptr, 1, &tlas};
-    const std::array<VkDescriptorBufferInfo, 9> buffers{{
+    const std::array<VkDescriptorBufferInfo, 10> buffers{{
         {instances, 0, VK_WHOLE_SIZE}, {meshes, 0, VK_WHOLE_SIZE},
         {vertices, 0, VK_WHOLE_SIZE}, {indices, 0, VK_WHOLE_SIZE},
         {materials, 0, VK_WHOLE_SIZE},
@@ -244,6 +278,7 @@ void DDGISystem::record(VkCommandBuffer commandBuffer, std::uint32_t frameSlot,
         {frame.updateList.handle(), 0, VK_WHOLE_SIZE},
         {resources_.cascades[cascadeIndex].regionCache.handle(), 0, VK_WHOLE_SIZE},
         {resources_.cascades[cascadeIndex].cacheMapping.handle(), 0, VK_WHOLE_SIZE},
+        {resources_.cascades[cascadeIndex].rayDirections[frameSlot].handle(), 0, VK_WHOLE_SIZE},
     }};
     const std::array<VkDescriptorImageInfo, 5> images{{
         {VK_NULL_HANDLE, frame.rayData.imageView(), VK_IMAGE_LAYOUT_GENERAL},
@@ -257,7 +292,7 @@ void DDGISystem::record(VkCommandBuffer commandBuffer, std::uint32_t frameSlot,
         {frame.distance.sampler(), frame.distance.imageView(), VK_IMAGE_LAYOUT_GENERAL},
         {frame.probeData.sampler(), frame.probeData.imageView(), VK_IMAGE_LAYOUT_GENERAL},
     }};
-    std::array<VkWriteDescriptorSet, 18> writes{};
+    std::array<VkWriteDescriptorSet, 19> writes{};
     writes[0] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, &structure, sets_[cascadeIndex][frameSlot], 0, 0, 1,
                  VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR};
     for (std::uint32_t binding = 1; binding <= 4; ++binding)
@@ -282,26 +317,22 @@ void DDGISystem::record(VkCommandBuffer commandBuffer, std::uint32_t frameSlot,
     for (std::uint32_t binding = 16; binding <= 17; ++binding)
         writes[binding] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr, sets_[cascadeIndex][frameSlot],
                            binding, 0, 1, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, nullptr, &buffers[binding - 9]};
+    writes[18] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr, sets_[cascadeIndex][frameSlot],
+                  18, 0, 1, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, nullptr, &buffers[9]};
     vkUpdateDescriptorSets(device_, static_cast<std::uint32_t>(writes.size()), writes.data(), 0, nullptr);
 
     const bool initialized = state.initialized;
     if (initialized) {
         // The previous graphics submission wrote the shared probe state. Make
         // it visible to this frame's schedule, validation and blend passes.
-        VkMemoryBarrier2 historyBarrier{VK_STRUCTURE_TYPE_MEMORY_BARRIER_2};
-        historyBarrier.srcStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
-        historyBarrier.srcAccessMask = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
-        historyBarrier.dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
-        historyBarrier.dstAccessMask = VK_ACCESS_2_SHADER_STORAGE_READ_BIT |
-                                       VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
-        VkDependencyInfo historyDependency{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
-        historyDependency.memoryBarrierCount = 1;
-        historyDependency.pMemoryBarriers = &historyBarrier;
-        vkCmdPipelineBarrier2(commandBuffer, &historyDependency);
+        computeResourceBarrier(commandBuffer,
+            {frame.probeStates.handle(), frame.updateList.handle()});
     }
     const std::array startBarriers{
         imageBarrier(frame.rayData.image(), initialized ? VK_IMAGE_LAYOUT_GENERAL : VK_IMAGE_LAYOUT_UNDEFINED,
-                     VK_IMAGE_LAYOUT_GENERAL, VK_PIPELINE_STAGE_2_NONE, 0,
+                     VK_IMAGE_LAYOUT_GENERAL,
+                     initialized ? VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT : VK_PIPELINE_STAGE_2_NONE,
+                     initialized ? VK_ACCESS_2_SHADER_STORAGE_READ_BIT | VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT : 0,
                      VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT),
         imageBarrier(frame.irradiance.image(), initialized ? VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL : VK_IMAGE_LAYOUT_UNDEFINED,
                      VK_IMAGE_LAYOUT_GENERAL,
@@ -318,7 +349,9 @@ void DDGISystem::record(VkCommandBuffer commandBuffer, std::uint32_t frameSlot,
                      VK_ACCESS_2_SHADER_STORAGE_READ_BIT | VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT |
                      VK_ACCESS_2_SHADER_SAMPLED_READ_BIT),
         imageBarrier(frame.fixedRayData.image(), initialized ? VK_IMAGE_LAYOUT_GENERAL : VK_IMAGE_LAYOUT_UNDEFINED,
-                     VK_IMAGE_LAYOUT_GENERAL, VK_PIPELINE_STAGE_2_NONE, 0,
+                     VK_IMAGE_LAYOUT_GENERAL,
+                     initialized ? VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT : VK_PIPELINE_STAGE_2_NONE,
+                     initialized ? VK_ACCESS_2_SHADER_STORAGE_READ_BIT | VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT : 0,
                      VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
                      VK_ACCESS_2_SHADER_STORAGE_READ_BIT | VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT),
         imageBarrier(frame.probeData.image(), initialized ? VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL : VK_IMAGE_LAYOUT_UNDEFINED,
@@ -342,20 +375,9 @@ void DDGISystem::record(VkCommandBuffer commandBuffer, std::uint32_t frameSlot,
         {sceneChanged ? 1.0F : 0.0F, 0.0F, 0.0F, 0.0F}};
     vkCmdPushConstants(commandBuffer, pipelineLayout_, VK_SHADER_STAGE_COMPUTE_BIT,
                        0, sizeof(push), &push);
-    const auto computeBarrier = [&] {
-        VkMemoryBarrier2 barrier{VK_STRUCTURE_TYPE_MEMORY_BARRIER_2};
-        barrier.srcStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
-        barrier.srcAccessMask = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
-        barrier.dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
-        barrier.dstAccessMask = VK_ACCESS_2_SHADER_STORAGE_READ_BIT |
-                                VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT |
-                                VK_ACCESS_2_SHADER_SAMPLED_READ_BIT;
-        VkDependencyInfo dependency{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
-        dependency.memoryBarrierCount = 1;
-        dependency.pMemoryBarriers = &barrier;
-        vkCmdPipelineBarrier2(commandBuffer, &dependency);
-    };
     const bool scrolled = scrollDelta != std::array<std::int32_t, 3>{};
+    vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, directionsPipeline_);
+    vkCmdDispatch(commandBuffer, 1, 1, 1);
     if (!initialized || scrolled || sceneChanged) {
         auto& cache = resources_.cascades[cascadeIndex];
         // Protect both the old and new grids before choosing LRU victims. Their
@@ -386,14 +408,22 @@ void DDGISystem::record(VkCommandBuffer commandBuffer, std::uint32_t frameSlot,
         for (auto& region : state.regions)
             if (region.occupied && std::find(cells.begin() + first, cells.end(), region.cell) != cells.end())
                 region.lastUsed = tick;
-        VkMemoryBarrier2 cacheBarrier{VK_STRUCTURE_TYPE_MEMORY_BARRIER_2};
+        VkBufferMemoryBarrier2 cacheBarrier{VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER_2};
         cacheBarrier.srcStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
-        cacheBarrier.srcAccessMask = VK_ACCESS_2_SHADER_STORAGE_READ_BIT | VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
+        cacheBarrier.srcAccessMask = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
         cacheBarrier.dstStageMask = VK_PIPELINE_STAGE_2_TRANSFER_BIT;
         cacheBarrier.dstAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT;
+        cacheBarrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        cacheBarrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        cacheBarrier.buffer = cache.regionCache.handle();
+        cacheBarrier.size = VK_WHOLE_SIZE;
+        VkBufferMemoryBarrier2 mappingReadBarrier = cacheBarrier;
+        mappingReadBarrier.buffer = cache.cacheMapping.handle();
+        mappingReadBarrier.srcAccessMask = VK_ACCESS_2_SHADER_STORAGE_READ_BIT;
+        const std::array beforeTransfer{cacheBarrier, mappingReadBarrier};
         VkDependencyInfo cacheDependency{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
-        cacheDependency.memoryBarrierCount = 1;
-        cacheDependency.pMemoryBarriers = &cacheBarrier;
+        cacheDependency.bufferMemoryBarrierCount = static_cast<std::uint32_t>(beforeTransfer.size());
+        cacheDependency.pBufferMemoryBarriers = beforeTransfer.data();
         vkCmdPipelineBarrier2(commandBuffer, &cacheDependency);
         std::array<std::uint32_t, 4096> mapping{};
         for (std::uint32_t i = first; i < mapping.size(); ++i) {
@@ -417,49 +447,37 @@ void DDGISystem::record(VkCommandBuffer commandBuffer, std::uint32_t frameSlot,
         cacheBarrier.srcAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT;
         cacheBarrier.dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
         cacheBarrier.dstAccessMask = VK_ACCESS_2_SHADER_STORAGE_READ_BIT | VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
+        VkBufferMemoryBarrier2 mappingBarrier = cacheBarrier;
+        mappingBarrier.buffer = cache.cacheMapping.handle();
+        const std::array transferBarriers{cacheBarrier, mappingBarrier};
+        cacheDependency.bufferMemoryBarrierCount = static_cast<std::uint32_t>(transferBarriers.size());
+        cacheDependency.pBufferMemoryBarriers = transferBarriers.data();
         vkCmdPipelineBarrier2(commandBuffer, &cacheDependency);
         if (initialized && scrolled && !sceneChanged) {
             vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, cacheStorePipeline_);
             vkCmdDispatch(commandBuffer, 2048, 1, 1);
-            computeBarrier();
+            computeResourceBarrier(commandBuffer, {cache.regionCache.handle()});
         }
     }
     if (!initialized || scrolled) {
         vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, scrollResetPipeline_);
         vkCmdDispatch(commandBuffer, 32, 1, 1);
-        computeBarrier();
+        computeResourceBarrier(commandBuffer, {frame.probeStates.handle()},
+            {frame.probeData.image(), frame.irradiance.image(), frame.distance.image()});
     }
     vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, schedulePipeline_);
     vkCmdDispatch(commandBuffer, 1, 1, 1);
-    computeBarrier();
+    computeResourceBarrier(commandBuffer,
+        {frame.updateList.handle(), frame.probeStates.handle(),
+         resources_.cascades[cascadeIndex].rayDirections[frameSlot].handle()},
+        {frame.probeData.image()});
     vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, validatePipeline_);
     vkCmdDispatch(commandBuffer, 4, (updateCount + 7) / 8, 1);
-    computeBarrier();
-    // Trace and blend against one coherent history snapshot. In particular,
-    // previousProbeData aliases probeData, so do not change probe placement or
-    // classification until recursive gathers and atlas blending are complete.
-    vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, tracePipeline_);
-    vkCmdDispatch(commandBuffer, (volume.raysPerProbe + 7) / 8, (updateCount + 7) / 8, 1);
-    computeBarrier();
-    vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, irradiancePipeline_);
-    // One workgroup per probe synchronizes interior blending with border copies.
-    vkCmdDispatch(commandBuffer, 1, 1, updateCount);
-    vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, distancePipeline_);
-    vkCmdDispatch(commandBuffer, 1, 1, updateCount);
-    computeBarrier();
-    // Finish the update while probeData still describes the traced position.
-    vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, finishPipeline_);
-    vkCmdDispatch(commandBuffer, (updateCount + 63) / 64, 1, 1);
-    computeBarrier();
-
-    // Prepare placement and classification for the next update. Relocation
-    // consumes fixed-ray validation from the old position, then moved probes
-    // are revalidated before classification.
+    computeResourceBarrier(commandBuffer, {}, {frame.fixedRayData.image()});
     vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, relocatePipeline_);
     vkCmdDispatch(commandBuffer, (updateCount + 63) / 64, 1, 1);
-    computeBarrier();
-    // Classification must use distances from the relocated position, not
-    // the position used to decide the relocation above.
+    computeResourceBarrier(commandBuffer, {frame.updateList.handle(), frame.probeStates.handle()},
+        {frame.probeData.image()});
     auto revalidatePush = push;
     revalidatePush.distanceInitialized[3] = 1.0F;
     vkCmdPushConstants(commandBuffer, pipelineLayout_, VK_SHADER_STAGE_COMPUTE_BIT,
@@ -468,8 +486,23 @@ void DDGISystem::record(VkCommandBuffer commandBuffer, std::uint32_t frameSlot,
     vkCmdDispatch(commandBuffer, 4, (updateCount + 7) / 8, 1);
     vkCmdPushConstants(commandBuffer, pipelineLayout_, VK_SHADER_STAGE_COMPUTE_BIT,
                        0, sizeof(push), &push);
-    computeBarrier();
+    computeResourceBarrier(commandBuffer, {}, {frame.fixedRayData.image()});
     vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, classifyPipeline_);
+    vkCmdDispatch(commandBuffer, (updateCount + 63) / 64, 1, 1);
+    // Recursive gathers see relocated probes as pending until their new rays
+    // have replaced the atlas. The finish pass activates successful updates.
+    computeResourceBarrier(commandBuffer, {frame.probeStates.handle()}, {frame.probeData.image()});
+    vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, tracePipeline_);
+    vkCmdDispatch(commandBuffer, (volume.raysPerProbe + 7) / 8, (updateCount + 7) / 8, 1);
+    computeResourceBarrier(commandBuffer, {}, {frame.rayData.image()});
+    vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, irradiancePipeline_);
+    // One workgroup per probe synchronizes interior blending with border copies.
+    vkCmdDispatch(commandBuffer, 1, 1, updateCount);
+    vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, distancePipeline_);
+    vkCmdDispatch(commandBuffer, 1, 1, updateCount);
+    computeResourceBarrier(commandBuffer, {frame.probeStates.handle()});
+    // Finish the update while probeData still describes the traced position.
+    vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, finishPipeline_);
     vkCmdDispatch(commandBuffer, (updateCount + 63) / 64, 1, 1);
     const auto finishIrradiance = imageBarrier(frame.irradiance.image(), VK_IMAGE_LAYOUT_GENERAL,
         VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
@@ -497,6 +530,7 @@ bool DDGISystem::ready() const noexcept {
 void DDGISystem::destroy() noexcept {
     if (device_) {
         if (tracePipeline_) vkDestroyPipeline(device_, tracePipeline_, nullptr);
+        if (directionsPipeline_) vkDestroyPipeline(device_, directionsPipeline_, nullptr);
         if (schedulePipeline_) vkDestroyPipeline(device_, schedulePipeline_, nullptr);
         if (finishPipeline_) vkDestroyPipeline(device_, finishPipeline_, nullptr);
         if (validatePipeline_) vkDestroyPipeline(device_, validatePipeline_, nullptr);
@@ -514,6 +548,7 @@ void DDGISystem::destroy() noexcept {
         auto& frame = cascade.history;
         cascade.regionCache.destroy();
         cascade.cacheMapping.destroy();
+        for (auto& directions : cascade.rayDirections) directions.destroy();
         frame.rayData.destroy();
         frame.irradiance.destroy();
         frame.distance.destroy();
@@ -523,6 +558,7 @@ void DDGISystem::destroy() noexcept {
         frame.updateList.destroy();
     }
     tracePipeline_ = irradiancePipeline_ = distancePipeline_ = VK_NULL_HANDLE;
+    directionsPipeline_ = VK_NULL_HANDLE;
     schedulePipeline_ = finishPipeline_ = VK_NULL_HANDLE;
     validatePipeline_ = relocatePipeline_ = classifyPipeline_ = VK_NULL_HANDLE;
     cacheStorePipeline_ = scrollResetPipeline_ = VK_NULL_HANDLE;

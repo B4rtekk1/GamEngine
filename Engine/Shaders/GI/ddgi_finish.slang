@@ -22,7 +22,8 @@ void main(uint3 id : SV_DispatchThreadID) {
         // turn an empty or relocated probe into valid lighting history.
         accepted = float(backfaces) / float(rayCount) <= DDGI_RANDOM_BACKFACE_THRESHOLD;
         if (accepted)
-            probeData[pixel] = float4(probe.xyz, 1.0);
+            probeData[pixel] = float4(probe.xyz,
+                probe.w > 1.5 ? DDGI_REACTIVATION_STATE : probe.w);
     }
     DDGIProbeState state = probeStates[probeIndex];
     // Scheduling tracks attempts separately from atlas validity. Retrying

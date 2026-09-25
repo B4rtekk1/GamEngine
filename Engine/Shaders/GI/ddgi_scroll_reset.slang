@@ -20,7 +20,8 @@ void main(uint3 id : SV_DispatchThreadID) {
     const uint base = cacheMapping[DDGI_PROBES + id.x];
     if (regionCache[base] != 0u) {
         DDGIProbeState cached;
-        cached.state = regionCache[base + 1u];
+        // Cached lighting is a starting history, not a validated probe.
+        cached.state = 2u;
         cached.lastUpdatedFrame = regionCache[base + 2u];
         cached.variability = asfloat(regionCache[base + 3u]);
         cached.updateCount = regionCache[base + 4u];
@@ -28,8 +29,10 @@ void main(uint3 id : SV_DispatchThreadID) {
         // changed, while retaining its atlas and accumulated convergence count.
         cached.stableUpdates = 0u;
         probeStates[id.x] = cached;
-        probeData[int2(ddgiProbePixel(id.x))] = float4(
+        float4 cachedProbe = float4(
             ddgiUnpackHalf2(regionCache[base + 6u]), ddgiUnpackHalf2(regionCache[base + 7u]));
+        cachedProbe.w = 2.0;
+        probeData[int2(ddgiProbePixel(id.x))] = cachedProbe;
         const uint2 ib = ddgiAtlasBase(id.x, DDGI_IRRADIANCE_INTERIOR);
         for (uint i = 0u; i < 100u; ++i)
             irradianceAtlas[int2(ib + uint2(i % 10u, i / 10u))] = float4(

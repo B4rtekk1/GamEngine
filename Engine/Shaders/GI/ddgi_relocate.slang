@@ -69,11 +69,10 @@ void main(uint3 id : SV_DispatchThreadID) {
     if (offsetLength > maxOffset) offset *= maxOffset / offsetLength;
     const bool moved = length(offset - previous.xyz) > 0.02;
     // Ignore sub-threshold changes entirely. They do not invalidate history,
-    // so the position used by the next trace must remain identical too.
+    // so the position used by this frame's trace must remain identical too.
     if (!moved) offset = previous.xyz;
     // Only a successful atlas update may clear the pending-history state.
-    const float state = moved || previous.w > 1.5 ? 2.0 :
-                        (previous.w > 0.5 ? 1.0 : 0.0);
+    const float state = moved || previous.w > 1.5 ? 2.0 : previous.w;
     probeData[pixel] = float4(offset, state);
     DDGIProbeState schedulingState = probeStates[probeIndex];
     schedulingState.state = state > 1.5 ? 2u : (state > 0.5 ? 1u : 0u);

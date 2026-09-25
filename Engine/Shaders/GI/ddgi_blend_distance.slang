@@ -5,12 +5,12 @@ import GI.ddgi_common;
 [[vk::binding(7, 1), vk::image_format("rg16f")]] RWTexture2D<float2> distanceAtlas;
 [[vk::binding(9, 1), vk::image_format("rgba16f")]] RWTexture2D<float4> probeData;
 [[vk::binding(12, 1)]] StructuredBuffer<DDGIProbeUpdate> probeUpdateList;
+[[vk::binding(18, 1)]] StructuredBuffer<float4> rayDirections;
 
 // Each ray is loaded and its direction evaluated once per probe workgroup.
 // xyz stores direction; w stores the signed distance, with no unused RGB.
 groupshared float4 cachedRays[DDGI_MAX_RAYS];
 groupshared float2 blendedTexels[256];
-groupshared uint rejectUpdate;
 
 [numthreads(16, 16, 1)]
 void main(uint3 group : SV_GroupID, uint3 local : SV_GroupThreadID, uint groupIndex : SV_GroupIndex) {
@@ -27,23 +27,11 @@ void main(uint3 group : SV_GroupID, uint3 local : SV_GroupThreadID, uint groupIn
         return;
     }
     const uint rayCount = uint(ddgi.scrollOffsetRays.w);
-    const float4 rotation = ddgiRayRotation(uint(ddgi.scrollDeltaFrame.w), rayCount);
     for (uint rayIndex = groupIndex; rayIndex < rayCount; rayIndex += 256u) {
-        cachedRays[rayIndex] = float4(ddgiRayDirection(rayIndex, rayCount, rotation),
+        cachedRays[rayIndex] = float4(rayDirections[rayIndex].xyz,
                                      rayData[int2(rayIndex, group.z)].a);
     }
     GroupMemoryBarrierWithGroupSync();
-
-    if (groupIndex == 0u) {
-        uint backfaceCount = 0u;
-        for (uint rayIndex = 0u; rayIndex < rayCount; ++rayIndex)
-            backfaceCount += cachedRays[rayIndex].a < 0.0 ? 1u : 0u;
-        rejectUpdate = float(backfaceCount) / float(rayCount) >
-            DDGI_RANDOM_BACKFACE_THRESHOLD ? 1u : 0u;
-    }
-    GroupMemoryBarrierWithGroupSync();
-    // Keep irradiance and visibility moments on the same accepted ray update.
-    if (rejectUpdate != 0u) return;
 
     const float2 oct = (float2(local.xy) + 0.5) /
                        float(DDGI_DISTANCE_INTERIOR) * 2.0 - 1.0;
@@ -57,7 +45,13 @@ void main(uint3 group : SV_GroupID, uint3 local : SV_GroupThreadID, uint groupIn
         1.5 * length(float3(spacing, spacing, spacing)));
     for (uint rayIndex = 0u; rayIndex < rayCount; ++rayIndex) {
         const float3 rayDirection = cachedRays[rayIndex].xyz;
-        const float weight = pow(max(dot(direction, rayDirection), 0.0), 50.0);
+        const float x = max(dot(direction, rayDirection), 0.0);
+        const float x2 = x * x;
+        const float x4 = x2 * x2;
+        const float x8 = x4 * x4;
+        const float x16 = x8 * x8;
+        const float x32 = x16 * x16;
+        const float weight = x32 * x16 * x2;
         // Accepted updates may still include individual backface hits in the
         // moments; the probe-wide ratio gate above rejects both atlases alike.
         const float distance = min(
@@ -72,7 +66,7 @@ void main(uint3 group : SV_GroupID, uint3 local : SV_GroupThreadID, uint groupIn
         : float2(visibilityMaxDistance, visibilityMaxDistance * visibilityMaxDistance);
     float2 blended = result;
     if (ddgi.distanceInitialized.y > 0.5 && state < 1.5) {
-        const float hysteresis = ddgiUpdateHysteresis(update.framesSinceLastUpdate);
+        const float hysteresis = DDGI_HYSTERESIS;
         blended = lerp(result, distanceAtlas[int2(atlasPixel)], hysteresis);
     }
     blendedTexels[groupIndex] = blended;

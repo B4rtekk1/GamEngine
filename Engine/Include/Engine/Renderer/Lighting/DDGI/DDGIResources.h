@@ -20,6 +20,7 @@ namespace Engine {
             Frame history;
             Buffer regionCache;
             Buffer cacheMapping;
+            std::array<Buffer, 2> rayDirections;
         };
         std::array<Cascade, 3> cascades{};
     };
