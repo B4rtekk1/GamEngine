@@ -44,14 +44,14 @@ DDGIGatherResult ddgiGatherCascade(float3 position, float3 geometricNormal,
     result.preVisibilityWeight = 0.0;
     result.postVisibilityWeight = 0.0;
     if (any(cell < 0.0) || any(cell > float3(DDGI_COUNTS - 1u))) return result;
-    const uint3 lower = uint3(min(floor(cell), float3(DDGI_COUNTS - 2u)));
-    const float3 fractional = saturate(cell - float3(lower));
-    // Move the visibility query off the surface; keep the original position
-    // for cell selection so the trilinear weights remain spatially stable.
     const float normalBias = min(spacing * 0.0375, 0.10);
     const float viewBias = min(spacing * 0.075, 0.20);
     const float3 biasedPosition = position + geometricNormal * normalBias +
                                   viewDirection * viewBias;
+    const uint3 lower = uint3(clamp(floor((biasedPosition - origin) / spacing),
+                                     float3(0.0), float3(DDGI_COUNTS - 2u)));
+    const float3 fractional = saturate((biasedPosition -
+        (origin + float3(lower) * spacing)) / spacing);
     const float2 irradianceOct = ddgiOctEncode(irradianceNormal);
     float3 irradiance = 0.0;
     float weightedVisibility = 0.0;
@@ -76,46 +76,53 @@ DDGIGatherResult ddgiGatherCascade(float3 position, float3 geometricNormal,
             ++activeProbeCount;
             const float3 cornerWeight = lerp(1.0 - fractional, fractional, float3(offset));
             const float trilinearWeight = cornerWeight.x * cornerWeight.y * cornerWeight.z;
-            // A zero-weight corner still counts for diagnostics, but its atlas
-            // texels cannot contribute to irradiance, visibility, or coverage.
-            if (trilinearWeight <= 0.0) continue;
+            const float3 trilinear = max(0.001, cornerWeight);
+            const float rtxgiTrilinearWeight = trilinear.x * trilinear.y * trilinear.z;
             const float3 probePosition = origin + float3(grid) * spacing + probe.xyz;
-            const float3 toSurface = biasedPosition - probePosition;
-            const float distance = length(toSurface);
-            const float3 direction = distance > 1e-4 ? toSurface / distance : geometricNormal;
+            const float3 toProbe = probePosition - biasedPosition;
+            const float distance = length(toProbe);
+            const float3 biasedToProbe = normalize(toProbe);
+            const float3 surfaceToProbe = normalize(probePosition - position);
             const float4 encodedProbeIrradiance = ddgiSampleProbeOct(
                 irradianceTexture, index, irradianceOct, DDGI_IRRADIANCE_INTERIOR);
-            const float3 probeIrradiance = ddgiDecodeIrradiance(encodedProbeIrradiance.rgb);
-            const float reactivation = saturate((1.5 - probe.w) * 2.0);
-            const float confidence = saturate(encodedProbeIrradiance.a) * reactivation;
+            const float3 probeIrradiance = pow(encodedProbeIrradiance.rgb,
+                DDGI_IRRADIANCE_ENCODING_GAMMA * 0.5);
+            const float confidence = saturate(encodedProbeIrradiance.a);
             if (confidence <= 0.0) continue;
-            const float2 visibilityOct = ddgiOctEncode(direction);
+            const float2 visibilityOct = ddgiOctEncode(-biasedToProbe);
             const float2 moments = ddgiSampleProbeOct(distanceTexture, index, visibilityOct,
                                                       DDGI_DISTANCE_INTERIOR).rg;
             // Missing or pending probes reduce the cascade's valid coverage.
             validWeight += trilinearWeight * confidence;
-            const float3 surfaceToProbe = -direction;
-            const float wrap = (dot(geometricNormal, surfaceToProbe) + 1.0) * 0.5;
-            float weight = (wrap * wrap + 0.2) * confidence;
-            const float weightBeforeVisibility = weight * trilinearWeight;
+            const float wrap = (dot(irradianceNormal, surfaceToProbe) + 1.0) * 0.5;
+            float weight = wrap * wrap + 0.2;
+            const float weightBeforeVisibility = weight * rtxgiTrilinearWeight;
             result.preVisibilityWeight += weightBeforeVisibility;
-            const float variance = max(moments.y - moments.x * moments.x, 0.0001);
-            const float delta = max(distance - moments.x, 0.0);
-            const float chebyshev = saturate(variance / (variance + delta * delta));
+            const float2 filteredDistance = moments * 2.0;
+            const float variance = abs(filteredDistance.x * filteredDistance.x - filteredDistance.y);
+            float chebyshev = 1.0;
+            if (distance > filteredDistance.x) {
+                const float delta = distance - filteredDistance.x;
+                const float probability = variance / (variance + delta * delta);
+                chebyshev = max(probability * probability * probability, 0.0);
+            }
             weightedVisibility += chebyshev * weightBeforeVisibility;
-            weight *= max(0.05, chebyshev * chebyshev * chebyshev);
-            // Keep a fallback when every probe is occluded, while suppressing
-            // light leaking from probes with only a small visibility weight.
+            weight *= max(0.05, chebyshev);
             weight = max(weight, 0.000001);
             if (weight < 0.2) weight *= weight * weight / (0.2 * 0.2);
-            weight *= trilinearWeight;
+            weight *= rtxgiTrilinearWeight;
             irradiance += probeIrradiance.rgb * weight;
             result.postVisibilityWeight += weight;
         }
     }
     const float transition = ddgiCellTransition(cell);
-    result.irradiance = result.postVisibilityWeight > 0.0
-        ? irradiance / result.postVisibilityWeight : float3(0.0);
+    if (result.postVisibilityWeight > 0.0) {
+        irradiance /= result.postVisibilityWeight;
+        result.irradiance = irradiance * irradiance *
+            (2.0 * 3.14159265 * DDGI_IRRADIANCE_ENCODING_RANGE);
+    } else {
+        result.irradiance = 0.0;
+    }
     result.visibility = weightedVisibility / max(result.preVisibilityWeight, 0.0001);
     result.activeProbeFraction = float(activeProbeCount) / 8.0;
     // Eight fully valid trilinear weights can sum just below one in FP32.

@@ -1,5 +1,5 @@
 import GI.ddgi_common;
-[[vk::binding(6, 1), vk::image_format("rgba8")]] RWTexture2D<float4> irradianceAtlas;
+[[vk::binding(6, 1), vk::image_format("rgba16f")]] RWTexture2D<float4> irradianceAtlas;
 [[vk::binding(7, 1), vk::image_format("rg16f")]] RWTexture2D<float2> distanceAtlas;
 [[vk::binding(9, 1), vk::image_format("rgba16f")]] RWTexture2D<float4> probeData;
 [[vk::binding(11, 1)]] StructuredBuffer<DDGIProbeState> probeStates;
@@ -27,10 +27,11 @@ void main(uint3 group : SV_GroupID, uint lane : SV_GroupIndex) {
     const uint2 irradianceBase = ddgiAtlasBase(probe, DDGI_IRRADIANCE_INTERIOR);
     for (uint i = lane; i < 64u; i += 64u) {
         const float4 value = irradianceAtlas[int2(irradianceBase + uint2(i % 8u, i / 8u))];
-        regionCache[base + 8u + i] = ddgiPackRgba8(value);
+        regionCache[base + 8u + 2u * i] = ddgiPackHalf2(value.xy);
+        regionCache[base + 9u + 2u * i] = ddgiPackHalf2(value.zw);
     }
     const uint2 distanceBase = ddgiAtlasBase(probe, DDGI_DISTANCE_INTERIOR);
     for (uint i = lane; i < 256u; i += 64u)
-        regionCache[base + 72u + i] = ddgiPackHalf2(
+        regionCache[base + 136u + i] = ddgiPackHalf2(
             distanceAtlas[int2(distanceBase + uint2(i % 16u, i / 16u))]);
 }

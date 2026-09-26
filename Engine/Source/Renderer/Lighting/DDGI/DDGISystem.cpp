@@ -12,8 +12,8 @@
 
 namespace Engine {
 namespace {
-    // Must match ddgi_common.slang: metadata, packed RGBA8, packed half2.
-    constexpr std::uint32_t cacheProbeWords = 328;
+    // Must match ddgi_common.slang: metadata, half4 irradiance, half2 distance.
+    constexpr std::uint32_t cacheProbeWords = 392;
     constexpr VkDeviceSize cacheRegionBytes = 64 * cacheProbeWords * sizeof(std::uint32_t);
 
     struct ProbeUpdate final {
@@ -121,7 +121,7 @@ void DDGISystem::create(VkPhysicalDevice physical, VkDevice device, VmaAllocator
             frame.rayData.create(physical, device, {256, 256}, allocator,
                                  VK_FILTER_NEAREST, VK_FORMAT_R16G16B16A16_SFLOAT, true, sharingFamilies);
             frame.irradiance.create(physical, device, {128, 1024}, allocator,
-                                    VK_FILTER_LINEAR, VK_FORMAT_R8G8B8A8_UNORM, true, sharingFamilies);
+                                    VK_FILTER_LINEAR, VK_FORMAT_R16G16B16A16_SFLOAT, true, sharingFamilies);
             frame.distance.create(physical, device, {256, 2048}, allocator,
                                   VK_FILTER_LINEAR, VK_FORMAT_R16G16_SFLOAT, true, sharingFamilies);
             frame.fixedRayData.create(physical, device, {32, 256}, allocator,

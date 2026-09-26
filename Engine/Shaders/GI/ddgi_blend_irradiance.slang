@@ -2,7 +2,7 @@ import GI.ddgi_common;
 [[vk::push_constant]] DDGIConstants ddgi;
 
 [[vk::binding(5, 1), vk::image_format("rgba16f")]] RWTexture2D<float4> rayData;
-[[vk::binding(6, 1), vk::image_format("rgba8")]] RWTexture2D<float4> irradianceAtlas;
+[[vk::binding(6, 1), vk::image_format("rgba16f")]] RWTexture2D<float4> irradianceAtlas;
 [[vk::binding(9, 1), vk::image_format("rgba16f")]] RWTexture2D<float4> probeData;
 [[vk::binding(11, 1)]] RWStructuredBuffer<DDGIProbeState> probeStates;
 [[vk::binding(12, 1)]] StructuredBuffer<DDGIProbeUpdate> probeUpdateList;
@@ -39,10 +39,10 @@ void main(uint3 group : SV_GroupID, uint3 local : SV_GroupThreadID, uint groupIn
     GroupMemoryBarrierWithGroupSync();
     if (groupIndex == 0u) {
         uint backfaceCount = 0u;
+        const uint maxBackfaces = uint(float(rayCount) * DDGI_RANDOM_BACKFACE_THRESHOLD);
         for (uint rayIndex = 0u; rayIndex < rayCount; ++rayIndex)
             backfaceCount += cachedRays[rayIndex].a < 0.0 ? 1u : 0u;
-        rejectUpdate = float(backfaceCount) / float(rayCount) >
-            DDGI_RANDOM_BACKFACE_THRESHOLD ? 1u : 0u;
+        rejectUpdate = backfaceCount >= maxBackfaces ? 1u : 0u;
     }
     GroupMemoryBarrierWithGroupSync();
     if (rejectUpdate != 0u) return;
@@ -60,37 +60,30 @@ void main(uint3 group : SV_GroupID, uint3 local : SV_GroupThreadID, uint groupIn
         sum += sample.rgb * weight;
         weightSum += weight;
     }
-    // The weighted mean is radiance. Its cosine-weighted hemisphere integral
-    // is irradiance, so the atlas stores E for the forward Lambert term E / PI.
-    const float3 irradiance = 3.14159265 * sum / max(weightSum, 1e-5);
-    const float3 encodedIrradiance = ddgiEncodeIrradiance(irradiance);
+    // RTXGI stores half the cosine-weighted radiance mean. The 2*PI
+    // hemisphere factor is applied after spatial filtering at lookup.
+    const float3 encodedIrradiance = ddgiEncodeIrradiance(
+        sum / max(weightSum, float(rayCount) * 1e-9));
     float3 blended = encodedIrradiance;
-    float texelVariability = 1.0;
+    float texelVariability = 0.0;
     // The first update has no valid history. History is weighted per probe update.
-    if (ddgi.distanceInitialized.y > 0.5 && state < 1.5 &&
-        irradianceAtlas[int2(atlasPixel)].a > 0.0) {
+    if (ddgi.distanceInitialized.y > 0.5 && state < 1.5) {
         const float3 previous = irradianceAtlas[int2(atlasPixel)].rgb;
         float3 delta = encodedIrradiance - previous;
         const float3 luminanceWeights = float3(0.2126, 0.7152, 0.0722);
-        const float previousLuminance = dot(previous, luminanceWeights);
-        // Convergence measures the unfiltered sample against the history.
-        texelVariability = dot(abs(delta), luminanceWeights) /
-                           max(previousLuminance, 0.10);
-        float hysteresis = DDGI_HYSTERESIS;
+        float hysteresis = dot(previous, previous) == 0.0 ? 0.0 : DDGI_HYSTERESIS;
         const float3 darkening = previous - encodedIrradiance;
         if (max(max(darkening.x, darkening.y), darkening.z) >
             DDGI_IRRADIANCE_CHANGE_THRESHOLD)
             hysteresis = max(0.0, hysteresis - 0.75);
         if (dot(delta, luminanceWeights) > DDGI_BRIGHTNESS_THRESHOLD)
             delta *= 0.25;
-        float3 blendedDelta = (1.0 - hysteresis) * delta;
-        // Preserve progress when repeatedly converging toward darker values.
-        if (max(max(encodedIrradiance.x, encodedIrradiance.y), encodedIrradiance.z) <
-            max(max(previous.x, previous.y), previous.z)) {
-            const float3 minimumStep = min(max(1.0 / 255.0, abs(blendedDelta)), abs(delta));
-            blendedDelta = minimumStep * sign(blendedDelta);
-        }
-        blended = previous + blendedDelta;
+        blended = previous + (1.0 - hysteresis) * delta;
+        const float3 variance = (encodedIrradiance - previous) *
+                                (encodedIrradiance - blended);
+        const float meanLuminance = dot(blended, luminanceWeights);
+        texelVariability = meanLuminance <= 1.0 / 1024.0 ? 0.0 :
+            sqrt(max(dot(variance, luminanceWeights), 0.0)) / meanLuminance;
     }
     variabilitySamples[groupIndex] = texelVariability;
     blendedTexels[groupIndex] = float4(blended, 1.0);

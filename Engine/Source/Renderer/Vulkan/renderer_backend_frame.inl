@@ -1800,7 +1800,7 @@
                                 handles.fixedRayData = importDdgiImage("DDGI fixed ray data", frame.fixedRayData,
                                     {32, 256}, VK_FORMAT_R16G16B16A16_SFLOAT);
                                 handles.irradiance = importDdgiImage("DDGI irradiance", frame.irradiance,
-                                    {128, 1024}, VK_FORMAT_R8G8B8A8_UNORM);
+                                    {128, 1024}, VK_FORMAT_R16G16B16A16_SFLOAT);
                                 handles.distance = importDdgiImage("DDGI distance", frame.distance,
                                     {256, 2048}, VK_FORMAT_R16G16_SFLOAT);
                                 handles.probeData = importDdgiImage("DDGI probe data", frame.probeData,

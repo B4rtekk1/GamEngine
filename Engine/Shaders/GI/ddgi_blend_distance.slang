@@ -42,9 +42,7 @@ void main(uint3 group : SV_GroupID, uint3 local : SV_GroupThreadID, uint groupIn
     float meanSquared = 0.0;
     float weightSum = 0.0;
     const float spacing = ddgi.originSpacing.w;
-    const float visibilityMaxDistance = min(
-        ddgi.distanceInitialized.x,
-        1.5 * length(float3(spacing, spacing, spacing)));
+    const float visibilityMaxDistance = 1.5 * length(float3(spacing, spacing, spacing));
     for (uint rayIndex = 0u; rayIndex < rayCount; ++rayIndex) {
         const float3 rayDirection = cachedRays[rayIndex].xyz;
         const float x = max(dot(direction, rayDirection), 0.0);
@@ -63,13 +61,14 @@ void main(uint3 group : SV_GroupID, uint3 local : SV_GroupThreadID, uint groupIn
         meanSquared += distance * distance * weight;
         weightSum += weight;
     }
-    const float2 result = weightSum > 0.0
-        ? float2(mean, meanSquared) / weightSum
-        : float2(visibilityMaxDistance, visibilityMaxDistance * visibilityMaxDistance);
+    // RTXGI stores half the first and second moments and doubles them at lookup.
+    const float2 result = float2(mean, meanSquared) /
+        (2.0 * max(weightSum, float(rayCount) * 1e-9));
     float2 blended = result;
     if (ddgi.distanceInitialized.y > 0.5 && state < 1.5) {
-        const float hysteresis = DDGI_HYSTERESIS;
-        blended = lerp(result, distanceAtlas[int2(atlasPixel)], hysteresis);
+        const float2 previous = distanceAtlas[int2(atlasPixel)];
+        const float hysteresis = dot(previous, previous) == 0.0 ? 0.0 : DDGI_HYSTERESIS;
+        blended = lerp(result, previous, hysteresis);
     }
     blendedTexels[groupIndex] = blended;
     distanceAtlas[int2(atlasPixel)] = blended;
