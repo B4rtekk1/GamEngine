@@ -14,6 +14,10 @@
 namespace Engine {
 namespace Assets { class AssetManager; }
 
+struct GtaoExternalState {
+    bool graphOwnsResultState = false;
+};
+
 /**
  * Screen-space ground-truth ambient occlusion.  The pass deliberately writes
  * visibility, not shaded colour: Forward PBR consumes it only for IBL.
@@ -34,6 +38,7 @@ public:
     void reset() noexcept;
     /** Makes the white (unoccluded) bootstrap visibility sampleable before Forward reads it. */
     void initialize(VkCommandBuffer commandBuffer);
+    [[nodiscard]] bool resultInitialized() const noexcept { return initialized_; }
     // `frameSlot` selects per-frame descriptors. `sampleIndex` drives the
     // stochastic sequence when a temporal accumulator is active; callers use
     // zero for a stable, non-temporal GTAO pattern.
@@ -42,14 +47,14 @@ public:
                 std::uint32_t sampleIndex, VkImageView depthView,
                 VkSampler depthSampler, VkImageView viewNormal,
                 VkSampler viewNormalSampler, bool useExternalNormals, const Mat4& inverseProjection,
-                bool manageOutputTransitions = true);
+                GtaoExternalState externalState = {});
     [[nodiscard]] VkImage resultImage() const noexcept {
         return nativeResolution_ ? (quality_.denoisePassCount == 0 ? raw_.image() : filtered_.image()) : full_.image();
     }
     [[nodiscard]] VkFormat resultFormat() const noexcept {
-        return nativeResolution_ && quality_.denoisePassCount == 0 ? VK_FORMAT_R16_SFLOAT : filteredAoFormat_;
+        return resultFormat_;
     }
-    [[nodiscard]] VkExtent2D resultExtent() const noexcept { return fullExtent_; }
+    [[nodiscard]] VkExtent2D resultExtent() const noexcept { return nativeResolution_ ? halfExtent_ : fullExtent_; }
     [[nodiscard]] VkImageView resultView() const noexcept {
         return nativeResolution_ ? (quality_.denoisePassCount == 0 ? raw_.imageView() : filtered_.imageView()) : full_.imageView();
     }
@@ -79,14 +84,14 @@ public:
     }
 
 private:
-    void clearImages(VkCommandBuffer commandBuffer);
+    void clearImages(VkCommandBuffer commandBuffer, bool graphOwnsResultState = false);
     void buildLinearDepth(VkCommandBuffer commandBuffer, std::uint32_t frameIndex, VkImageView depthView, VkSampler depthSampler,
                           const Mat4& inverseProjection);
     VkDevice device_ = VK_NULL_HANDLE;
     VkExtent2D fullExtent_{};
     VkExtent2D halfExtent_{};
     bool nativeResolution_ = false;
-    VkFormat filteredAoFormat_ = VK_FORMAT_UNDEFINED;
+    VkFormat resultFormat_ = VK_FORMAT_UNDEFINED;
     GtaoQualitySettings quality_ = gtaoQualitySettings(GtaoQuality::High);
     // Descriptor writes must not race command buffers submitted for earlier
     // frames.  This renderer has three frame slots.

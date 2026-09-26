@@ -1269,9 +1269,10 @@
                     vkCmdPipelineBarrier2(commandBuffer, &grassDrawDependency);
                 }
             }
-            // The first frame has no previous AO yet. Clear it to visibility=1
-            // before either Game View or Scene View material shaders sample it.
-            gtaoPass.initialize(commandBuffer);
+            // Scene View does not run the GTAO graph. Bootstrap its white AO
+            // texture here only when it is the active viewport.
+            if (!renderGameViewport && !gtaoPass.resultInitialized())
+                gtaoPass.initialize(commandBuffer);
             if (renderGameViewport) {
             viewportFrameGraph.reset();
             viewportFrameGraph.enablePassCulling();
@@ -1368,11 +1369,14 @@
                 .aspect = VK_IMAGE_ASPECT_COLOR_BIT,
                 .concurrentSharing = vulkanDevice.hasAsyncComputeQueue() &&
                     vulkanDevice.computeQueueFamily() != vulkanDevice.graphicsQueueFamily()};
+            const RenderGraph::TextureState graphAoInitialState = gtaoPass.resultInitialized()
+                ? RenderGraph::TextureState{
+                    .stage = VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT,
+                    .access = VK_ACCESS_2_SHADER_SAMPLED_READ_BIT,
+                    .layout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL}
+                : RenderGraph::TextureState{.layout = VK_IMAGE_LAYOUT_UNDEFINED};
             const auto graphAo = viewportFrameGraph.importTexture(
-                "GTAO visibility", gtaoPass.resultImage(), graphAoDesc,
-                {.stage = VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT,
-                 .access = VK_ACCESS_2_SHADER_SAMPLED_READ_BIT,
-                 .layout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL});
+                "GTAO visibility", gtaoPass.resultImage(), graphAoDesc, graphAoInitialState);
             viewportFrameGraph.addPass("Foliage GPU culling", RenderGraph::Queue::Graphics,
             [&](RenderGraph::PassBuilder& builder) {
                 builder.write(graphFoliageIndirect, RenderGraph::BufferUsage::StorageWriteCompute);
@@ -1479,7 +1483,7 @@
                     gtaoDepth.imageView(), gtaoDepth.sampler(),
                     msaa.enabled() ? gtaoDepth.imageView() : gtaoViewNormalBuffer.imageView(),
                     msaa.enabled() ? gtaoDepth.sampler() : gtaoViewNormalBuffer.sampler(),
-                    !msaa.enabled(), inverseProjection, false);
+                    !msaa.enabled(), inverseProjection, {.graphOwnsResultState = true});
             });
             viewportFrameGraph.exportTexture(graphAo);
             RenderGraph::TextureHandle graphDirectionalVisibility{};
@@ -1514,9 +1518,9 @@
                         gtaoViewNormalBuffer.imageView(), gtaoViewNormalBuffer.sampler(), false);
                 });
             }
-            // Lighting still records outside this graph. Declare its image
-            // reads here so ownership and visibility are established first.
-            viewportFrameGraph.addPass("Lighting inputs", RenderGraph::Queue::Graphics,
+            // Forward lighting records after this graph. Its input pass waits
+            // for GTAO while directional visibility can run on graphics.
+            viewportFrameGraph.addPass("Forward lighting inputs", RenderGraph::Queue::Graphics,
             [&](RenderGraph::PassBuilder& builder) {
                 builder.startNewBatch();
                 builder.read(graphAo, RenderGraph::TextureUsage::SampledReadFragment);

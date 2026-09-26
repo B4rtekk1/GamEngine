@@ -132,7 +132,6 @@ namespace Engine {
                     (r8Properties.optimalTilingFeatures & aoRequiredFeatures) == aoRequiredFeatures
                         ? VK_FORMAT_R8_UNORM
                         : VK_FORMAT_R16_SFLOAT;
-            filteredAoFormat_ = filteredAoFormat;
             raw_.create(physical, device_, halfExtent_, allocator, VK_FILTER_NEAREST, RawAoFormat, true, sharingFamilies);
             baseDepth_.create(physical, device_, halfExtent_, allocator, VK_FILTER_NEAREST, BaseDepthFormat, true, sharingFamilies);
             auxiliary_.create(physical, device_, halfExtent_, allocator, VK_FILTER_NEAREST, AuxiliaryFormat, true, sharingFamilies);
@@ -141,6 +140,8 @@ namespace Engine {
                 scratch_.create(physical, device_, halfExtent_, allocator, VK_FILTER_NEAREST, filteredAoFormat, true, sharingFamilies);
             if (!nativeResolution_)
                 full_.create(physical, device_, fullExtent_, allocator, VK_FILTER_LINEAR, filteredAoFormat, true, sharingFamilies);
+            resultFormat_ = nativeResolution_ && quality_.denoisePassCount == 0
+                ? RawAoFormat : filteredAoFormat;
             std::array<std::uint16_t, 64 * 64> hilbertValues{};
             for (std::uint32_t y = 0; y < 64; ++y)
                 for (std::uint32_t x = 0; x < 64; ++x)
@@ -316,12 +317,23 @@ namespace Engine {
         }
     }
 
-    void GtaoPass::clearImages(VkCommandBuffer cmd) {
-        std::vector<VkImage> images{raw_.image(), baseDepth_.image(), auxiliary_.image(), filtered_.image()};
+    void GtaoPass::clearImages(VkCommandBuffer cmd, const bool graphOwnsResultState) {
+        const VkImage graphResult = graphOwnsResultState ? resultImage() : VK_NULL_HANDLE;
+        const VkPipelineStageFlags2 readStages = graphOwnsResultState
+            ? VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT
+            : VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT | VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT;
+        const VkPipelineStageFlags2 sampledStage = graphOwnsResultState
+            ? VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT : VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT;
+        std::vector<VkImage> images;
+        const auto addInternalImage = [&](const VkImage image) {
+            if (image != graphResult) images.push_back(image);
+        };
+        for (const VkImage image : {raw_.image(), baseDepth_.image(), auxiliary_.image(), filtered_.image()})
+            addInternalImage(image);
         if (quality_.denoisePassCount > 1)
-            images.push_back(scratch_.image());
+            addInternalImage(scratch_.image());
         if (!nativeResolution_)
-            images.push_back(full_.image());
+            addInternalImage(full_.image());
         VkImageSubresourceRange range{VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
         for (auto image: images)
             barrier(cmd, image, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
@@ -331,32 +343,36 @@ namespace Engine {
         for (auto image: images)
             vkCmdClearColorImage(cmd, image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &white, 1, &range);
         for (auto image: {raw_.image(), baseDepth_.image(), auxiliary_.image()})
-            barrier(cmd, image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_GENERAL,
-                    VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT,
-                    VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT | VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT,
-                    VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT | VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
-        if (nativeResolution_ && quality_.denoisePassCount == 0)
+            if (image != graphResult)
+                barrier(cmd, image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_GENERAL,
+                        VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT,
+                        readStages,
+                        VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT | VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
+        if (nativeResolution_ && quality_.denoisePassCount == 0 && raw_.image() != graphResult)
             barrier(cmd, raw_.image(), VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
                     VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT,
-                    VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT, VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
+                    sampledStage, VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
         if (quality_.denoisePassCount > 1)
             barrier(cmd, scratch_.image(), VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_GENERAL,
                     VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT,
                     VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT);
-        if (nativeResolution_)
-            barrier(cmd, filtered_.image(), VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-                    VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_PIPELINE_STAGE_2_TRANSFER_BIT,
-                    VK_ACCESS_2_TRANSFER_WRITE_BIT, VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT,
-                    VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
+        if (nativeResolution_) {
+            if (filtered_.image() != graphResult)
+                barrier(cmd, filtered_.image(), VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                        VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_PIPELINE_STAGE_2_TRANSFER_BIT,
+                        VK_ACCESS_2_TRANSFER_WRITE_BIT, sampledStage,
+                        VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
+        }
         else {
             barrier(cmd, filtered_.image(), VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_GENERAL,
                     VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT,
-                    VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT | VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT,
+                    readStages,
                     VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT | VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
-            barrier(cmd, full_.image(), VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-                    VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_PIPELINE_STAGE_2_TRANSFER_BIT,
-                    VK_ACCESS_2_TRANSFER_WRITE_BIT, VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT,
-                    VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
+            if (full_.image() != graphResult)
+                barrier(cmd, full_.image(), VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                        VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_PIPELINE_STAGE_2_TRANSFER_BIT,
+                        VK_ACCESS_2_TRANSFER_WRITE_BIT, sampledStage,
+                        VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
         }
         initialized_ = true;
     }
@@ -406,11 +422,12 @@ namespace Engine {
     void GtaoPass::record(VkCommandBuffer cmd, uint32_t frame, uint32_t sampleIndex, VkImageView depth,
                           VkSampler depthSampler, VkImageView viewNormal, VkSampler viewNormalSampler,
                           bool useExternalNormals, const Mat4 &inverseProjection,
-                          const bool manageOutputTransitions) {
+                          const GtaoExternalState externalState) {
         if (frame >= FramesInFlight)
             throw std::out_of_range("Invalid GTAO frame slot");
+        const bool transitionResult = !externalState.graphOwnsResultState;
         if (!initialized_)
-            clearImages(cmd);
+            clearImages(cmd, externalState.graphOwnsResultState);
         buildLinearDepth(cmd, frame, depth, depthSampler, inverseProjection);
         const auto beginInternalWrite = [&](VkImage image, VkPipelineStageFlags2 previousStages) {
             barrier(cmd, image, VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_GENERAL, previousStages,
@@ -418,7 +435,7 @@ namespace Engine {
                     VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT);
         };
         if (nativeResolution_ && quality_.denoisePassCount == 0) {
-            if (manageOutputTransitions)
+            if (transitionResult)
                 barrier(cmd, raw_.image(), VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_IMAGE_LAYOUT_GENERAL,
                         VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT, VK_ACCESS_2_SHADER_SAMPLED_READ_BIT,
                         VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT);
@@ -428,14 +445,14 @@ namespace Engine {
         beginInternalWrite(baseDepth_.image(), VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT);
         beginInternalWrite(auxiliary_.image(), VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT);
         if (nativeResolution_ && quality_.denoisePassCount != 0) {
-            if (manageOutputTransitions)
+            if (transitionResult)
                 barrier(cmd, filtered_.image(), VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_IMAGE_LAYOUT_GENERAL,
                         VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT, VK_ACCESS_2_SHADER_SAMPLED_READ_BIT,
                         VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT);
         }
         else if (!nativeResolution_) {
             beginInternalWrite(filtered_.image(), VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT);
-            if (manageOutputTransitions)
+            if (transitionResult)
                 barrier(cmd, full_.image(), VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_IMAGE_LAYOUT_GENERAL,
                         VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT, VK_ACCESS_2_SHADER_SAMPLED_READ_BIT,
                         VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT);
@@ -555,7 +572,7 @@ namespace Engine {
             dispatch(2, up, fullExtent_);
         }
         const VkImage finalImage = nativeResolution_ ? denoised->image() : full_.image();
-        if (manageOutputTransitions)
+        if (transitionResult)
             barrier(cmd, finalImage, VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
                     VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT,
                     VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT, VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
@@ -633,7 +650,7 @@ namespace Engine {
         linearDepthMipCount_ = 0;
         linearDepthInitialized_ = false;
         nativeResolution_ = false;
-        filteredAoFormat_ = VK_FORMAT_UNDEFINED;
+        resultFormat_ = VK_FORMAT_UNDEFINED;
         allocator_ = {};
         device_ = {};
         reset();
