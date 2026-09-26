@@ -1,16 +1,12 @@
 import Common.SceneData;
 import Common.Displacement;
 import Common.RayHitGeometry;
-import Common.ShadowLod;
-import Common.ShadowSampling;
 import GI.ddgi_common;
 import GI.ddgi_gather_core;
 [[vk::push_constant]] DDGIConstants ddgi;
 
 [[vk::binding(1, 0)]] ConstantBuffer<RendererFrameData> frame;
 [[vk::binding(2, 0)]] StructuredBuffer<MaterialData> materials;
-[[vk::binding(0, 0)]] Sampler2DShadow shadowMap;
-[[vk::binding(4, 0)]] StructuredBuffer<uint4> shadowPageTable;
 [[vk::binding(10, 0)]] SamplerCube diffuseIrradianceMap;
 [[vk::binding(11, 0)]] SamplerCube skyEnvironment;
 [[vk::binding(0, 1)]] RaytracingAccelerationStructure sceneTlas;
@@ -36,27 +32,19 @@ float3 evaluateSunDiffuse(float3 normal, float3 toSun, float3 baseColor,
 
 float ddgiSunVisibility(float3 position, float3 normal, float3 toSun) {
     if (frame.shadowEnabled == 0u) return 1.0;
-    [loop]
-    for (uint level = 0u; level < SHADOW_CLIP_LEVELS; ++level) {
-        const ShadowClipConstants clip = frame.shadowClipConstants[level];
-        const float3 receiver = position + normal *
-            (clip.worldTexelSize * GEOMETRIC_NORMAL_OFFSET_TEXELS);
-        const float4 projected = mul(float4(receiver, 1.0), frame.shadowClipMatrices[level]);
-        if (abs(projected.w) < 1.0e-6) continue;
-        const float3 ndc = projected.xyz / projected.w;
-        const float2 uv = ndc.xy * 0.5 + 0.5;
-        if (any(uv < 0.0) || any(uv >= 1.0) || ndc.z <= 0.0 || ndc.z >= 1.0) continue;
-        float2 atlasUv;
-        if (!virtualShadowAtlasUv(uv * VIRTUAL_RESOLUTION, level, shadowPageTable, atlasUv))
-            continue;
-        const float noL = saturate(abs(dot(normalize(normal), toSun)));
-        const float slope = sqrt(saturate(1.0 - noL * noL)) / max(noL, 0.05);
-        const float bias = max(MIN_SHADOW_BIAS,
-            clip.worldTexelSize * clip.depthScale * (1.0 + min(slope, 8.0)));
-        return shadowMap.SampleCmpLevelZero(atlasUv, ndc.z - bias);
-    }
-    // VSM pages are allocated for raster receivers; unallocated GI hits are lit.
-    return 1.0;
+    RayDesc shadow;
+    shadow.Origin = position + normal * 0.025;
+    shadow.Direction = toSun;
+    shadow.TMin = 0.02;
+    shadow.TMax = 100000.0;
+    RayQuery<RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH |
+             RAY_FLAG_SKIP_PROCEDURAL_PRIMITIVES> sunQuery;
+    // Bit 0 selects shadow casters, independently of VSM page residency.
+    sunQuery.TraceRayInline(sceneTlas,
+        RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH |
+        RAY_FLAG_SKIP_PROCEDURAL_PRIMITIVES, 0x01, shadow);
+    sunQuery.Proceed();
+    return sunQuery.CommittedStatus() == COMMITTED_TRIANGLE_HIT ? 0.0 : 1.0;
 }
 
 float localLightFactor(LocalLightData light, float3 position, float3 normal) {
@@ -174,12 +162,13 @@ void main(uint3 id : SV_DispatchThreadID) {
         float3 indirectIrradiance = diffuseIrradianceMap.SampleLevel(hitNormal, 0.0).rgb * 3.14159265;
         if (ddgi.distanceInitialized.y > 0.5) {
             const DDGIGatherResult recursive = ddgiGatherCascade(
-                hit.position, geometricNormal, hitNormal, -direction, ddgi.originSpacing.xyz,
+                hit.position, geometricNormal, geometricNormal, -direction, ddgi.originSpacing.xyz,
                 ddgi.originSpacing.w, ddgi.scrollOffsetRays.xyz,
                 previousIrradiance, previousDistance, previousProbeData);
             indirectIrradiance = lerp(indirectIrradiance, recursive.irradiance, recursive.blendWeight);
         }
-        radiance = emissive + indirectIrradiance * albedo / 3.14159265;
+        const float3 bounceAlbedo = min(albedo, float3(0.9));
+        radiance = emissive + indirectIrradiance * bounceAlbedo / 3.14159265;
         if (frame.lightDirectionIntensity.w > 0.0) {
             const float3 toSun = normalize(-frame.lightDirectionIntensity.xyz);
             const float nDotL = max(dot(hitNormal, toSun), 0.0);

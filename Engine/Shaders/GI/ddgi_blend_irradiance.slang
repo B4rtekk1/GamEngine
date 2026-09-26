@@ -78,7 +78,13 @@ void main(uint3 group : SV_GroupID, uint3 local : SV_GroupThreadID, uint groupIn
             hysteresis = max(0.0, hysteresis - 0.75);
         if (dot(delta, luminanceWeights) > DDGI_BRIGHTNESS_THRESHOLD)
             delta *= 0.25;
-        blended = previous + (1.0 - hysteresis) * delta;
+        float3 lerpDelta = (1.0 - hysteresis) * delta;
+        if (max(encodedIrradiance.x, max(encodedIrradiance.y, encodedIrradiance.z)) <
+            max(previous.x, max(previous.y, previous.z))) {
+            lerpDelta = min(max(float3(1.0 / 1024.0), abs(lerpDelta)), abs(delta)) *
+                        sign(lerpDelta);
+        }
+        blended = previous + lerpDelta;
         const float3 variance = (encodedIrradiance - previous) *
                                 (encodedIrradiance - blended);
         const float meanLuminance = dot(blended, luminanceWeights);

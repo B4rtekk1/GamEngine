@@ -383,7 +383,7 @@
                           // previous TLAS build does not prove it is valid now.
                           0.0F},
                 frameData.lights};
-            data.ddgiIndirectIntensity = ddgiEnabled ? 15.0F : 0.0F;
+            data.ddgiIndirectIntensity = ddgiEnabled ? 1.0F : 0.0F;
             uniformBuffers[frame].update(&data, sizeof(data));
             const ClusteredLightingUniforms clustered{
                 currentView.native(), currentProjection.native(),
@@ -1768,9 +1768,13 @@
                                 RenderGraph::TextureHandle irradiance;
                                 RenderGraph::TextureHandle distance;
                                 RenderGraph::TextureHandle probeData;
+                                RenderGraph::TextureHandle publishedIrradiance;
+                                RenderGraph::TextureHandle publishedDistance;
+                                RenderGraph::TextureHandle publishedProbeData;
                                 RenderGraph::BufferHandle probeStates;
                                 RenderGraph::BufferHandle updateList;
                                 RenderGraph::BufferHandle rayDirections;
+                                RenderGraph::BufferHandle dispatchCommands;
                             };
                             std::array<DdgiGraphCascade, 3> ddgiResources{};
                             const auto importDdgiImage = [&](const char* name, const HdrBuffer& image,
@@ -1791,6 +1795,22 @@
                                 return ddgiFrameGraph.importBuffer(name, buffer.handle(),
                                     {.size = buffer.size(), .usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT});
                             };
+                            const auto importPublishedImage = [&](const char* name, const HdrBuffer& image,
+                                                                  const VkExtent2D extent, const VkFormat format,
+                                                                  const bool initialized) {
+                                const RenderGraph::TextureDesc desc{
+                                    .extent = {extent.width, extent.height, 1}, .format = format,
+                                    .usage = VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT,
+                                    .aspect = VK_IMAGE_ASPECT_COLOR_BIT,
+                                    .concurrentSharing = sharedDdgiImages};
+                                return ddgiFrameGraph.importTexture(name, image.image(), desc,
+                                    {.stage = initialized ? VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT
+                                                          : VK_PIPELINE_STAGE_2_NONE,
+                                     .access = initialized ? VK_ACCESS_2_SHADER_SAMPLED_READ_BIT : 0,
+                                     .layout = initialized ? VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL
+                                                           : VK_IMAGE_LAYOUT_UNDEFINED,
+                                     .write = false});
+                            };
                             for (std::uint32_t cascade = 0; cascade < 3; ++cascade) {
                                 const auto& resources = ddgi.resources().cascades[cascade];
                                 const auto& frame = resources.history;
@@ -1805,10 +1825,24 @@
                                     {256, 2048}, VK_FORMAT_R16G16_SFLOAT);
                                 handles.probeData = importDdgiImage("DDGI probe data", frame.probeData,
                                     {16, 128}, VK_FORMAT_R16G16B16A16_SFLOAT);
+                                const bool published = ddgi.publicationInitialized(cascade);
+                                handles.publishedIrradiance = importPublishedImage("DDGI published irradiance",
+                                    resources.publishedIrradiance, {128, 1024},
+                                    VK_FORMAT_R16G16B16A16_SFLOAT, published);
+                                handles.publishedDistance = importPublishedImage("DDGI published distance",
+                                    resources.publishedDistance, {256, 2048}, VK_FORMAT_R16G16_SFLOAT, published);
+                                handles.publishedProbeData = importPublishedImage("DDGI published probe data",
+                                    resources.publishedProbeData, {16, 128},
+                                    VK_FORMAT_R16G16B16A16_SFLOAT, published);
                                 handles.probeStates = importDdgiBuffer("DDGI probe states", frame.probeStates);
                                 handles.updateList = importDdgiBuffer("DDGI update list", frame.updateList);
                                 handles.rayDirections = importDdgiBuffer("DDGI ray directions",
                                     resources.rayDirections[currentFrame]);
+                                handles.dispatchCommands = ddgiFrameGraph.importBuffer("DDGI dispatch commands",
+                                    resources.dispatchCommands.handle(),
+                                    {.size = resources.dispatchCommands.size(),
+                                     .usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
+                                              VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT});
                             }
                             ddgiFrameGraph.addPass("DDGI Relocation", RenderGraph::Queue::AsyncCompute,
                             [&](RenderGraph::PassBuilder& builder) {
@@ -1817,6 +1851,7 @@
                                     builder.write(resource.probeData, RenderGraph::TextureUsage::StorageWriteCompute);
                                     builder.write(resource.probeStates, RenderGraph::BufferUsage::StorageWriteCompute);
                                     builder.write(resource.updateList, RenderGraph::BufferUsage::StorageWriteCompute);
+                                    builder.read(resource.dispatchCommands, RenderGraph::BufferUsage::IndirectRead);
                                 }
                             }, [&](const VkCommandBuffer buffer) { ddgi.recordRelocation(buffer); });
                             ddgiFrameGraph.addPass("DDGI Classification", RenderGraph::Queue::AsyncCompute,
@@ -1825,6 +1860,7 @@
                                     builder.read(resource.fixedRayData, RenderGraph::TextureUsage::StorageReadCompute);
                                     builder.read(resource.probeData, RenderGraph::TextureUsage::StorageReadCompute);
                                     builder.read(resource.updateList, RenderGraph::BufferUsage::StorageReadCompute);
+                                    builder.read(resource.dispatchCommands, RenderGraph::BufferUsage::IndirectRead);
                                     builder.write(resource.probeStates, RenderGraph::BufferUsage::StorageWriteCompute);
                                 }
                             }, [&](const VkCommandBuffer buffer) { ddgi.recordClassification(buffer); });
@@ -1837,6 +1873,7 @@
                                     builder.read(resource.probeStates, RenderGraph::BufferUsage::StorageReadCompute);
                                     builder.read(resource.updateList, RenderGraph::BufferUsage::StorageReadCompute);
                                     builder.read(resource.rayDirections, RenderGraph::BufferUsage::StorageReadCompute);
+                                    builder.read(resource.dispatchCommands, RenderGraph::BufferUsage::IndirectRead);
                                     builder.write(resource.rayData, RenderGraph::TextureUsage::StorageWriteCompute);
                                 }
                             }, [&](const VkCommandBuffer buffer) { ddgi.recordTrace(buffer); });
@@ -1847,6 +1884,7 @@
                                     builder.read(resource.probeData, RenderGraph::TextureUsage::StorageReadCompute);
                                     builder.read(resource.updateList, RenderGraph::BufferUsage::StorageReadCompute);
                                     builder.read(resource.rayDirections, RenderGraph::BufferUsage::StorageReadCompute);
+                                    builder.read(resource.dispatchCommands, RenderGraph::BufferUsage::IndirectRead);
                                     builder.write(resource.irradiance, RenderGraph::TextureUsage::StorageWriteCompute);
                                     builder.write(resource.probeStates, RenderGraph::BufferUsage::StorageWriteCompute);
                                 }
@@ -1858,6 +1896,7 @@
                                     builder.read(resource.probeData, RenderGraph::TextureUsage::StorageReadCompute);
                                     builder.read(resource.updateList, RenderGraph::BufferUsage::StorageReadCompute);
                                     builder.read(resource.rayDirections, RenderGraph::BufferUsage::StorageReadCompute);
+                                    builder.read(resource.dispatchCommands, RenderGraph::BufferUsage::IndirectRead);
                                     builder.write(resource.distance, RenderGraph::TextureUsage::StorageWriteCompute);
                                 }
                             }, [&](const VkCommandBuffer buffer) { ddgi.recordDistanceUpdate(buffer); });
@@ -1886,6 +1925,7 @@
                                 for (const auto& resource : ddgiResources) {
                                     builder.read(resource.probeStates, RenderGraph::BufferUsage::StorageReadCompute);
                                     builder.read(resource.updateList, RenderGraph::BufferUsage::StorageReadCompute);
+                                    builder.read(resource.dispatchCommands, RenderGraph::BufferUsage::IndirectRead);
                                     builder.write(resource.probeData, RenderGraph::TextureUsage::StorageWriteCompute);
                                     for (const auto image : {resource.irradiance, resource.distance,
                                                              resource.probeData})
@@ -1896,15 +1936,42 @@
                                             .write = false});
                                 }
                             }, [&](const VkCommandBuffer buffer) { ddgi.recordFinish(buffer, false); });
+                            ddgiFrameGraph.addPass("DDGI Publish", RenderGraph::Queue::AsyncCompute,
+                            [&](RenderGraph::PassBuilder& builder) {
+                                builder.setSideEffect();
+                                for (std::uint32_t cascade = 0; cascade < 3; ++cascade) {
+                                    if (!ddgi.publicationPending(cascade)) continue;
+                                    const auto& resource = ddgiResources[cascade];
+                                    const std::array sources{resource.irradiance, resource.distance,
+                                                             resource.probeData};
+                                    const std::array targets{resource.publishedIrradiance,
+                                                             resource.publishedDistance,
+                                                             resource.publishedProbeData};
+                                    for (std::size_t image = 0; image < sources.size(); ++image) {
+                                        builder.read(sources[image], RenderGraph::TextureUsage::TransferRead);
+                                        builder.write(targets[image], RenderGraph::TextureUsage::TransferWrite);
+                                        builder.setFinalTextureState(sources[image], {
+                                            .stage = VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT,
+                                            .access = VK_ACCESS_2_SHADER_SAMPLED_READ_BIT,
+                                            .layout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                                            .write = false});
+                                        builder.setFinalTextureState(targets[image], {
+                                            .stage = VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT,
+                                            .access = VK_ACCESS_2_SHADER_SAMPLED_READ_BIT,
+                                            .layout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                                            .write = false});
+                                    }
+                                }
+                            }, [&](const VkCommandBuffer buffer) { ddgi.recordPublish(buffer, false); });
                             ddgiFrameGraph.addPass("DDGI Lighting Inputs", RenderGraph::Queue::Graphics,
                             [&](RenderGraph::PassBuilder& builder) {
                                 builder.startNewBatch();
                                 for (const auto& resource : ddgiResources) {
-                                    builder.read(resource.irradiance,
+                                    builder.read(resource.publishedIrradiance,
                                         RenderGraph::TextureUsage::SampledReadFragment);
-                                    builder.read(resource.distance,
+                                    builder.read(resource.publishedDistance,
                                         RenderGraph::TextureUsage::SampledReadFragment);
-                                    builder.read(resource.probeData,
+                                    builder.read(resource.publishedProbeData,
                                         RenderGraph::TextureUsage::SampledReadFragment);
                                 }
                                 builder.setSideEffect();
@@ -1946,7 +2013,8 @@
                             ddgi.recordTrace(commandBuffer);
                             ddgi.recordIrradianceUpdate(commandBuffer);
                             ddgi.recordDistanceUpdate(commandBuffer);
-                            ddgi.recordFinish(commandBuffer);
+                            ddgi.recordFinish(commandBuffer, false);
+                            ddgi.recordPublish(commandBuffer);
                         }
                     }
                     if (ddgi.ready()) {

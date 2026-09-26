@@ -18,8 +18,12 @@ namespace Engine {
         };
         struct Cascade final {
             Frame history;
+            HdrBuffer publishedIrradiance;
+            HdrBuffer publishedDistance;
+            HdrBuffer publishedProbeData;
             Buffer regionCache;
             Buffer cacheMapping;
+            Buffer dispatchCommands;
             std::array<Buffer, 2> rayDirections;
         };
         std::array<Cascade, 3> cascades{};

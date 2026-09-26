@@ -5,11 +5,13 @@ import GI.ddgi_common;
 [[vk::binding(9, 1), vk::image_format("rgba16f")]] RWTexture2D<float4> probeData;
 [[vk::binding(11, 1)]] RWStructuredBuffer<DDGIProbeState> probeStates;
 [[vk::binding(12, 1)]] RWStructuredBuffer<DDGIProbeUpdate> probeUpdateList;
+[[vk::binding(19, 1)]] RWStructuredBuffer<uint> dispatchCommands;
 
-groupshared uint scores[DDGI_PROBES];
+groupshared uint pendingUpdates[256];
 
 [numthreads(256, 1, 1)]
 void main(uint3 id : SV_DispatchThreadID, uint groupIndex : SV_GroupIndex) {
+    uint hasPendingUpdate = 0u;
     for (uint i = groupIndex; i < DDGI_PROBES; i += 256u) {
         DDGIProbeState state = probeStates[i];
         if (ddgi.updateControl.x > 0.5) {
@@ -18,33 +20,40 @@ void main(uint3 id : SV_DispatchThreadID, uint groupIndex : SV_GroupIndex) {
             state.stableUpdates = 0u;
             probeStates[i] = state;
         }
-        const uint age = min(uint(ddgi.scrollDeltaFrame.w) - state.lastUpdatedFrame, 4095u);
         const bool converged = state.updateCount >= DDGI_MIN_CONVERGENCE_UPDATES &&
                                state.stableUpdates >= DDGI_STABLE_UPDATES;
-        // Converged probes leave the update list; exposed probes stay first.
-        scores[i] = (uint(!converged) << 24u) | (uint(state.state == 2u) << 23u) |
-                    (age << 11u) | (2047u - i);
+        hasPendingUpdate |= uint(!converged);
     }
+    pendingUpdates[groupIndex] = hasPendingUpdate;
     GroupMemoryBarrierWithGroupSync();
-    // Sort 2048 probe keys in shared memory; only the cascade's quota is traced.
-    for (uint width = 2u; width <= DDGI_PROBES; width <<= 1u) {
-        for (uint stride = width >> 1u; stride > 0u; stride >>= 1u) {
-            for (uint pair = groupIndex; pair < DDGI_PROBES / 2u; pair += 256u) {
-                // Insert a zero at the stride bit: each lane owns one pair.
-                const uint i = (pair / stride) * (2u * stride) + pair % stride;
-                const uint peer = i + stride;
-                const bool descending = (i & width) == 0u;
-                if ((scores[i] < scores[peer]) == descending) {
-                    const uint score = scores[i]; scores[i] = scores[peer]; scores[peer] = score;
-                }
-            }
-            GroupMemoryBarrierWithGroupSync();
-        }
+    // Pause tracing and blending only when the whole cascade has converged.
+    for (uint stride = 128u; stride > 0u; stride >>= 1u) {
+        if (groupIndex < stride)
+            pendingUpdates[groupIndex] |= pendingUpdates[groupIndex + stride];
+        GroupMemoryBarrierWithGroupSync();
+    }
+    if (groupIndex == 0u) {
+        const uint count = pendingUpdates[0] != 0u
+            ? min(ddgiUpdateCount(ddgi), DDGI_PROBES - uint(ddgi.updateControl.y)) : 0u;
+        const uint randomRays = ddgiRandomRayCount(ddgi, 0u);
+        dispatchCommands[0] = (DDGI_FIXED_RAYS + 7u) / 8u;
+        dispatchCommands[1] = (count + 7u) / 8u;
+        dispatchCommands[2] = 1u;
+        dispatchCommands[3] = (count + 63u) / 64u;
+        dispatchCommands[4] = 1u;
+        dispatchCommands[5] = 1u;
+        dispatchCommands[6] = (randomRays + 7u) / 8u;
+        dispatchCommands[7] = (count + 7u) / 8u;
+        dispatchCommands[8] = 1u;
+        dispatchCommands[9] = 1u;
+        dispatchCommands[10] = 1u;
+        dispatchCommands[11] = count;
     }
     if (groupIndex < ddgiUpdateCount(ddgi)) {
-        // The unique tie-breaker already encodes the physical probe index.
-        const bool eligible = (scores[groupIndex] & (1u << 24u)) != 0u;
-        const uint probeIndex = eligible ? 2047u - (scores[groupIndex] & 2047u) : DDGI_PROBES;
+        // A sweep covers each physical probe exactly once before publication.
+        const uint scheduledIndex = uint(ddgi.updateControl.y) + groupIndex;
+        const bool eligible = pendingUpdates[0] != 0u && scheduledIndex < DDGI_PROBES;
+        const uint probeIndex = eligible ? scheduledIndex : DDGI_PROBES;
         const uint currentFrame = uint(ddgi.scrollDeltaFrame.w);
         DDGIProbeUpdate update;
         update.probeIndex = probeIndex;

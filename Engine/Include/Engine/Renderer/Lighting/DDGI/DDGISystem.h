@@ -36,10 +36,17 @@ namespace Engine {
         void recordIrradianceUpdate(VkCommandBuffer commandBuffer);
         void recordDistanceUpdate(VkCommandBuffer commandBuffer);
         void recordFinish(VkCommandBuffer commandBuffer, bool manageOutputTransitions = true);
+        void recordPublish(VkCommandBuffer commandBuffer, bool manageOutputTransitions = true);
         [[nodiscard]] bool ready() const noexcept;
+        [[nodiscard]] bool publicationPending(std::uint32_t cascade) const noexcept {
+            return cascadeStates_[cascade].publishPending;
+        }
+        [[nodiscard]] bool publicationInitialized(std::uint32_t cascade) const noexcept {
+            return cascadeStates_[cascade].publishedInitialized;
+        }
         [[nodiscard]] bool prepared() const noexcept { return prepared_; }
         [[nodiscard]] const DDGIResources& resources() const noexcept { return resources_; }
-        [[nodiscard]] const DDGIVolume& volume(std::uint32_t cascade) const noexcept { return volumes_[cascade]; }
+        [[nodiscard]] const DDGIVolume& volume(std::uint32_t cascade) const noexcept { return publishedVolumes_[cascade]; }
         [[nodiscard]] bool created() const noexcept { return tracePipeline_ != VK_NULL_HANDLE; }
 
     private:
@@ -58,6 +65,7 @@ namespace Engine {
         bool prepared_{};
         VkDevice device_{VK_NULL_HANDLE};
         std::array<DDGIVolume, 3> volumes_{};
+        std::array<DDGIVolume, 3> publishedVolumes_{};
         DDGIResources resources_{};
         VkDescriptorSetLayout layout_{VK_NULL_HANDLE};
         VkDescriptorPool pool_{VK_NULL_HANDLE};
@@ -86,6 +94,9 @@ namespace Engine {
             std::uint64_t cacheTick{};
             std::array<std::int32_t, 3> originCell{};
             std::array<std::int32_t, 3> scrollOffset{};
+            std::uint32_t sweepFrame{};
+            bool publishPending{};
+            bool publishedInitialized{};
             bool initialized{};
         };
         std::array<CascadeState, 3> cascadeStates_{};

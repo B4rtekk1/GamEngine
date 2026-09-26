@@ -183,7 +183,7 @@ DDGISampleResult sampleDDGIIrradiance(float3 worldPosition, float3 shadingNormal
 {
     DDGISampleResult result;
     result.skyIrradiance = 0.0;
-    const float3 giNormal = normalize(lerp(geometricNormal, shadingNormal, 0.7));
+    const float3 giNormal = normalize(geometricNormal);
     result.lightingIrradiance = 0.0;
     result.irradiance = 0.0;
     result.cascadeColor = 0.0;

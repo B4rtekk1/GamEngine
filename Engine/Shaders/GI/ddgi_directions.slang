@@ -7,8 +7,10 @@ groupshared float4 sharedRotation;
 [numthreads(256, 1, 1)]
 void main(uint groupIndex : SV_GroupIndex) {
     const uint rayCount = min(ddgiRandomRayCount(ddgi, 0u), DDGI_MAX_RAYS);
+    // A partial cascade update must not give neighboring probes different
+    // frame-dependent ray estimators during trilinear interpolation.
     if (groupIndex == 0u)
-        sharedRotation = ddgiRayRotation(uint(ddgi.scrollDeltaFrame.w), rayCount);
+        sharedRotation = ddgiRayRotation(0u, rayCount);
     GroupMemoryBarrierWithGroupSync();
     if (groupIndex < rayCount)
         rayDirections[groupIndex] = float4(

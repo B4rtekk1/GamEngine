@@ -8,6 +8,7 @@
 #include <initializer_list>
 #include <span>
 #include <stdexcept>
+#include <utility>
 #include <vector>
 
 namespace Engine {
@@ -118,6 +119,8 @@ void DDGISystem::create(VkPhysicalDevice physical, VkDevice device, VmaAllocator
                 VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT, allocator);
             cascade.cacheMapping.createDeviceLocalEmpty(device, 4096 * sizeof(std::uint32_t),
                 VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT, allocator);
+            cascade.dispatchCommands.createDeviceLocalEmpty(device, 4 * 3 * sizeof(std::uint32_t),
+                VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT, allocator);
             frame.rayData.create(physical, device, {256, 256}, allocator,
                                  VK_FILTER_NEAREST, VK_FORMAT_R16G16B16A16_SFLOAT, true, sharingFamilies);
             frame.irradiance.create(physical, device, {128, 1024}, allocator,
@@ -128,12 +131,18 @@ void DDGISystem::create(VkPhysicalDevice physical, VkDevice device, VmaAllocator
                                       VK_FILTER_NEAREST, VK_FORMAT_R16G16B16A16_SFLOAT, true, sharingFamilies);
             frame.probeData.create(physical, device, {16, 128}, allocator,
                                    VK_FILTER_NEAREST, VK_FORMAT_R16G16B16A16_SFLOAT, true, sharingFamilies);
+            cascade.publishedIrradiance.create(physical, device, {128, 1024}, allocator,
+                VK_FILTER_LINEAR, VK_FORMAT_R16G16B16A16_SFLOAT, true, sharingFamilies);
+            cascade.publishedDistance.create(physical, device, {256, 2048}, allocator,
+                VK_FILTER_LINEAR, VK_FORMAT_R16G16_SFLOAT, true, sharingFamilies);
+            cascade.publishedProbeData.create(physical, device, {16, 128}, allocator,
+                VK_FILTER_NEAREST, VK_FORMAT_R16G16B16A16_SFLOAT, true, sharingFamilies);
             frame.probeStates.createDeviceLocalEmpty(device, 2048 * 20,
                                                      VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, allocator);
             frame.updateList.createDeviceLocalEmpty(device, 256 * sizeof(ProbeUpdate),
                                                     VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, allocator);
         }
-        const std::array<VkDescriptorSetLayoutBinding, 19> bindings{{
+        const std::array<VkDescriptorSetLayoutBinding, 20> bindings{{
             {0, VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
             {1, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
             {2, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
@@ -153,6 +162,7 @@ void DDGISystem::create(VkPhysicalDevice physical, VkDevice device, VmaAllocator
             {16, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
             {17, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
             {18, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
+            {19, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
         }};
         VkDescriptorSetLayoutCreateInfo layoutInfo{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
         layoutInfo.bindingCount = static_cast<std::uint32_t>(bindings.size());
@@ -161,7 +171,7 @@ void DDGISystem::create(VkPhysicalDevice physical, VkDevice device, VmaAllocator
             throw std::runtime_error("Could not create DDGI descriptor layout");
         const std::array<VkDescriptorPoolSize, 4> poolSizes{{
             {VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR, 6},
-            {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 60},
+            {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 66},
             {VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 30},
             {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 18},
         }};
@@ -257,6 +267,10 @@ void DDGISystem::recordPreparation(VkCommandBuffer commandBuffer, std::uint32_t 
     auto& volume = volumes_[cascadeIndex];
     const std::uint32_t updateCount = cascadeUpdates[cascadeIndex];
     auto& state = cascadeStates_[cascadeIndex];
+    const std::uint32_t sweepLength = (2048u + updateCount - 1u) / updateCount;
+    const std::uint32_t sweepOffset = state.sweepFrame * updateCount;
+    state.publishPending = state.sweepFrame + 1u == sweepLength;
+    state.sweepFrame = (state.sweepFrame + 1u) % sweepLength;
     const auto previousOrigin = state.originCell;
     const auto previousScroll = state.scrollOffset;
     std::array<std::int32_t, 3> newOriginCell{};
@@ -274,7 +288,7 @@ void DDGISystem::recordPreparation(VkCommandBuffer commandBuffer, std::uint32_t 
     auto& frame = resources_.cascades[cascadeIndex].history;
     const VkWriteDescriptorSetAccelerationStructureKHR structure{
         VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET_ACCELERATION_STRUCTURE_KHR, nullptr, 1, &tlas};
-    const std::array<VkDescriptorBufferInfo, 10> buffers{{
+    const std::array<VkDescriptorBufferInfo, 11> buffers{{
         {instances, 0, VK_WHOLE_SIZE}, {meshes, 0, VK_WHOLE_SIZE},
         {vertices, 0, VK_WHOLE_SIZE}, {indices, 0, VK_WHOLE_SIZE},
         {materials, 0, VK_WHOLE_SIZE},
@@ -283,6 +297,7 @@ void DDGISystem::recordPreparation(VkCommandBuffer commandBuffer, std::uint32_t 
         {resources_.cascades[cascadeIndex].regionCache.handle(), 0, VK_WHOLE_SIZE},
         {resources_.cascades[cascadeIndex].cacheMapping.handle(), 0, VK_WHOLE_SIZE},
         {resources_.cascades[cascadeIndex].rayDirections[frameSlot].handle(), 0, VK_WHOLE_SIZE},
+        {resources_.cascades[cascadeIndex].dispatchCommands.handle(), 0, VK_WHOLE_SIZE},
     }};
     const std::array<VkDescriptorImageInfo, 5> images{{
         {VK_NULL_HANDLE, frame.rayData.imageView(), VK_IMAGE_LAYOUT_GENERAL},
@@ -296,7 +311,7 @@ void DDGISystem::recordPreparation(VkCommandBuffer commandBuffer, std::uint32_t 
         {frame.distance.sampler(), frame.distance.imageView(), VK_IMAGE_LAYOUT_GENERAL},
         {frame.probeData.sampler(), frame.probeData.imageView(), VK_IMAGE_LAYOUT_GENERAL},
     }};
-    std::array<VkWriteDescriptorSet, 19> writes{};
+    std::array<VkWriteDescriptorSet, 20> writes{};
     writes[0] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, &structure, sets_[cascadeIndex][frameSlot], 0, 0, 1,
                  VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR};
     for (std::uint32_t binding = 1; binding <= 4; ++binding)
@@ -323,6 +338,8 @@ void DDGISystem::recordPreparation(VkCommandBuffer commandBuffer, std::uint32_t 
                            binding, 0, 1, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, nullptr, &buffers[binding - 9]};
     writes[18] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr, sets_[cascadeIndex][frameSlot],
                   18, 0, 1, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, nullptr, &buffers[9]};
+    writes[19] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr, sets_[cascadeIndex][frameSlot],
+                  19, 0, 1, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, nullptr, &buffers[10]};
     vkUpdateDescriptorSets(device_, static_cast<std::uint32_t>(writes.size()), writes.data(), 0, nullptr);
 
     const bool initialized = state.initialized;
@@ -376,7 +393,7 @@ void DDGISystem::recordPreparation(VkCommandBuffer commandBuffer, std::uint32_t 
          static_cast<std::int32_t>(volume.raysPerProbe)},
         {scrollDelta[0], scrollDelta[1], scrollDelta[2], static_cast<std::int32_t>(frameIndex)},
         {volume.maxRayDistance, initialized ? 1.0F : 0.0F, static_cast<float>(updateCount), 0.0F},
-        {sceneChanged ? 1.0F : 0.0F, 0.0F, 0.0F, 0.0F}};
+        {sceneChanged ? 1.0F : 0.0F, static_cast<float>(sweepOffset), 0.0F, 0.0F}};
     preparedPushes_[cascadeIndex] = push;
     vkCmdPushConstants(commandBuffer, pipelineLayout_, VK_SHADER_STAGE_COMPUTE_BIT,
                        0, sizeof(push), &push);
@@ -472,12 +489,25 @@ void DDGISystem::recordPreparation(VkCommandBuffer commandBuffer, std::uint32_t 
     }
     vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, schedulePipeline_);
     vkCmdDispatch(commandBuffer, 1, 1, 1);
+    VkBufferMemoryBarrier2 indirectBarrier{VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER_2};
+    indirectBarrier.srcStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+    indirectBarrier.srcAccessMask = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
+    indirectBarrier.dstStageMask = VK_PIPELINE_STAGE_2_DRAW_INDIRECT_BIT;
+    indirectBarrier.dstAccessMask = VK_ACCESS_2_INDIRECT_COMMAND_READ_BIT;
+    indirectBarrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    indirectBarrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    indirectBarrier.buffer = resources_.cascades[cascadeIndex].dispatchCommands.handle();
+    indirectBarrier.size = VK_WHOLE_SIZE;
+    VkDependencyInfo indirectDependency{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
+    indirectDependency.bufferMemoryBarrierCount = 1;
+    indirectDependency.pBufferMemoryBarriers = &indirectBarrier;
+    vkCmdPipelineBarrier2(commandBuffer, &indirectDependency);
     computeResourceBarrier(commandBuffer,
         {frame.updateList.handle(), frame.probeStates.handle(),
          resources_.cascades[cascadeIndex].rayDirections[frameSlot].handle()},
         {frame.probeData.image()});
     vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, validatePipeline_);
-    vkCmdDispatch(commandBuffer, 4, (updateCount + 7) / 8, 1);
+    vkCmdDispatchIndirect(commandBuffer, resources_.cascades[cascadeIndex].dispatchCommands.handle(), 0);
     computeResourceBarrier(commandBuffer, {}, {frame.fixedRayData.image()});
     }
     prepared_ = true;
@@ -485,14 +515,12 @@ void DDGISystem::recordPreparation(VkCommandBuffer commandBuffer, std::uint32_t 
 
 void DDGISystem::recordRelocation(const VkCommandBuffer commandBuffer) {
     if (!prepared_ || !commandBuffer) return;
-    constexpr std::array<std::uint32_t, 3> cascadeUpdates{256, 224, 192};
     for (std::size_t cascadeIndex = 0; cascadeIndex < volumes_.size(); ++cascadeIndex) {
         auto& frame = resources_.cascades[cascadeIndex].history;
-        const auto updateCount = cascadeUpdates[cascadeIndex];
         const auto& push = preparedPushes_[cascadeIndex];
         bindPreparedCascade(commandBuffer, cascadeIndex);
         vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, relocatePipeline_);
-        vkCmdDispatch(commandBuffer, (updateCount + 63) / 64, 1, 1);
+        vkCmdDispatchIndirect(commandBuffer, resources_.cascades[cascadeIndex].dispatchCommands.handle(), 12);
         computeResourceBarrier(commandBuffer, {frame.updateList.handle(), frame.probeStates.handle()},
             {frame.probeData.image()});
         auto revalidatePush = push;
@@ -500,7 +528,7 @@ void DDGISystem::recordRelocation(const VkCommandBuffer commandBuffer) {
         vkCmdPushConstants(commandBuffer, pipelineLayout_, VK_SHADER_STAGE_COMPUTE_BIT,
                            0, sizeof(revalidatePush), &revalidatePush);
         vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, validatePipeline_);
-        vkCmdDispatch(commandBuffer, 4, (updateCount + 7) / 8, 1);
+        vkCmdDispatchIndirect(commandBuffer, resources_.cascades[cascadeIndex].dispatchCommands.handle(), 0);
         vkCmdPushConstants(commandBuffer, pipelineLayout_, VK_SHADER_STAGE_COMPUTE_BIT,
                            0, sizeof(push), &push);
         computeResourceBarrier(commandBuffer, {}, {frame.fixedRayData.image()});
@@ -509,13 +537,11 @@ void DDGISystem::recordRelocation(const VkCommandBuffer commandBuffer) {
 
 void DDGISystem::recordClassification(const VkCommandBuffer commandBuffer) {
     if (!prepared_ || !commandBuffer) return;
-    constexpr std::array<std::uint32_t, 3> cascadeUpdates{256, 224, 192};
     for (std::size_t cascadeIndex = 0; cascadeIndex < volumes_.size(); ++cascadeIndex) {
         auto& frame = resources_.cascades[cascadeIndex].history;
-        const auto updateCount = cascadeUpdates[cascadeIndex];
         bindPreparedCascade(commandBuffer, cascadeIndex);
         vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, classifyPipeline_);
-        vkCmdDispatch(commandBuffer, (updateCount + 63) / 64, 1, 1);
+        vkCmdDispatchIndirect(commandBuffer, resources_.cascades[cascadeIndex].dispatchCommands.handle(), 12);
         // Recursive gathers see relocated probes as pending until their new rays
         // have replaced the atlas. The finish pass activates successful updates.
         computeResourceBarrier(commandBuffer, {frame.probeStates.handle()}, {frame.probeData.image()});
@@ -533,13 +559,11 @@ void DDGISystem::bindPreparedCascade(const VkCommandBuffer commandBuffer,
 
 void DDGISystem::recordTrace(const VkCommandBuffer commandBuffer) {
     if (!prepared_ || !commandBuffer) return;
-    constexpr std::array<std::uint32_t, 3> cascadeUpdates{256, 224, 192};
     // Trace all cascades against their previous atlas contents before any blend writes.
     vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, tracePipeline_);
     for (std::size_t cascadeIndex = 0; cascadeIndex < volumes_.size(); ++cascadeIndex) {
         bindPreparedCascade(commandBuffer, cascadeIndex);
-        vkCmdDispatch(commandBuffer, (volumes_[cascadeIndex].raysPerProbe - 32 + 7) / 8,
-                      (cascadeUpdates[cascadeIndex] + 7) / 8, 1);
+        vkCmdDispatchIndirect(commandBuffer, resources_.cascades[cascadeIndex].dispatchCommands.handle(), 24);
     }
     computeResourceBarrier(commandBuffer, {},
         {resources_.cascades[0].history.rayData.image(),
@@ -549,27 +573,24 @@ void DDGISystem::recordTrace(const VkCommandBuffer commandBuffer) {
 
 void DDGISystem::recordIrradianceUpdate(const VkCommandBuffer commandBuffer) {
     if (!prepared_ || !commandBuffer) return;
-    constexpr std::array<std::uint32_t, 3> cascadeUpdates{256, 224, 192};
     vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, irradiancePipeline_);
     for (std::size_t cascadeIndex = 0; cascadeIndex < volumes_.size(); ++cascadeIndex) {
         bindPreparedCascade(commandBuffer, cascadeIndex);
-        vkCmdDispatch(commandBuffer, 1, 1, cascadeUpdates[cascadeIndex]);
+        vkCmdDispatchIndirect(commandBuffer, resources_.cascades[cascadeIndex].dispatchCommands.handle(), 36);
     }
 }
 
 void DDGISystem::recordDistanceUpdate(const VkCommandBuffer commandBuffer) {
     if (!prepared_ || !commandBuffer) return;
-    constexpr std::array<std::uint32_t, 3> cascadeUpdates{256, 224, 192};
     vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, distancePipeline_);
     for (std::size_t cascadeIndex = 0; cascadeIndex < volumes_.size(); ++cascadeIndex) {
         bindPreparedCascade(commandBuffer, cascadeIndex);
-        vkCmdDispatch(commandBuffer, 1, 1, cascadeUpdates[cascadeIndex]);
+        vkCmdDispatchIndirect(commandBuffer, resources_.cascades[cascadeIndex].dispatchCommands.handle(), 36);
     }
 }
 
 void DDGISystem::recordFinish(const VkCommandBuffer commandBuffer, const bool manageOutputTransitions) {
     if (!prepared_ || !commandBuffer) return;
-    constexpr std::array<std::uint32_t, 3> cascadeUpdates{256, 224, 192};
     computeResourceBarrier(commandBuffer,
         {resources_.cascades[0].history.probeStates.handle(),
          resources_.cascades[1].history.probeStates.handle(),
@@ -579,7 +600,7 @@ void DDGISystem::recordFinish(const VkCommandBuffer commandBuffer, const bool ma
     vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, finishPipeline_);
     for (std::size_t cascadeIndex = 0; cascadeIndex < volumes_.size(); ++cascadeIndex) {
         bindPreparedCascade(commandBuffer, cascadeIndex);
-        vkCmdDispatch(commandBuffer, (cascadeUpdates[cascadeIndex] + 63) / 64, 1, 1);
+        vkCmdDispatchIndirect(commandBuffer, resources_.cascades[cascadeIndex].dispatchCommands.handle(), 12);
     }
     std::array<VkImageMemoryBarrier2, 9> finishBarriers{};
     for (std::size_t cascadeIndex = 0; cascadeIndex < volumes_.size(); ++cascadeIndex) {
@@ -597,6 +618,68 @@ void DDGISystem::recordFinish(const VkCommandBuffer commandBuffer, const bool ma
     }
     if (manageOutputTransitions) emitImageBarriers(commandBuffer, finishBarriers);
     prepared_ = false;
+}
+
+void DDGISystem::recordPublish(const VkCommandBuffer commandBuffer, const bool manageOutputTransitions) {
+    if (!commandBuffer || !created()) return;
+    for (std::size_t cascadeIndex = 0; cascadeIndex < volumes_.size(); ++cascadeIndex) {
+        auto& state = cascadeStates_[cascadeIndex];
+        auto& cascade = resources_.cascades[cascadeIndex];
+        const auto& working = cascade.history;
+        const std::array<std::pair<VkImage, VkImage>, 3> images{{
+            {working.irradiance.image(), cascade.publishedIrradiance.image()},
+            {working.distance.image(), cascade.publishedDistance.image()},
+            {working.probeData.image(), cascade.publishedProbeData.image()},
+        }};
+        const std::array<VkExtent3D, 3> extents{{{128, 1024, 1}, {256, 2048, 1}, {16, 128, 1}}};
+        if (manageOutputTransitions) {
+            std::array<VkImageMemoryBarrier2, 6> before{};
+            for (std::size_t imageIndex = 0; imageIndex < images.size(); ++imageIndex) {
+                before[imageIndex] = imageBarrier(images[imageIndex].first, VK_IMAGE_LAYOUT_GENERAL,
+                    state.publishPending ? VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL
+                                         : VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                    VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT,
+                    state.publishPending ? VK_PIPELINE_STAGE_2_COPY_BIT : VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT,
+                    state.publishPending ? VK_ACCESS_2_TRANSFER_READ_BIT : VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
+                if (state.publishPending)
+                    before[3 + imageIndex] = imageBarrier(images[imageIndex].second,
+                        state.publishedInitialized ? VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL
+                                                   : VK_IMAGE_LAYOUT_UNDEFINED,
+                        VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                        state.publishedInitialized ? VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT
+                                                   : VK_PIPELINE_STAGE_2_NONE,
+                        state.publishedInitialized ? VK_ACCESS_2_SHADER_SAMPLED_READ_BIT : 0,
+                        VK_PIPELINE_STAGE_2_COPY_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT);
+            }
+            emitImageBarriers(commandBuffer, std::span(before.data(),
+                state.publishPending ? before.size() : images.size()));
+        }
+        if (!state.publishPending) continue;
+        for (std::size_t imageIndex = 0; imageIndex < images.size(); ++imageIndex) {
+            VkImageCopy region{};
+            region.srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+            region.dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+            region.extent = extents[imageIndex];
+            vkCmdCopyImage(commandBuffer, images[imageIndex].first, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                           images[imageIndex].second, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region);
+        }
+        if (manageOutputTransitions) {
+            std::array<VkImageMemoryBarrier2, 6> after{};
+            for (std::size_t imageIndex = 0; imageIndex < images.size(); ++imageIndex) {
+                after[imageIndex] = imageBarrier(images[imageIndex].first,
+                    VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                    VK_PIPELINE_STAGE_2_COPY_BIT, VK_ACCESS_2_TRANSFER_READ_BIT,
+                    VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT, VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
+                after[3 + imageIndex] = imageBarrier(images[imageIndex].second,
+                    VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                    VK_PIPELINE_STAGE_2_COPY_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT,
+                    VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT, VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
+            }
+            emitImageBarriers(commandBuffer, after);
+        }
+        publishedVolumes_[cascadeIndex] = volumes_[cascadeIndex];
+        state.publishedInitialized = true;
+    }
 }
 
 bool DDGISystem::ready() const noexcept {
@@ -625,6 +708,7 @@ void DDGISystem::destroy() noexcept {
         auto& frame = cascade.history;
         cascade.regionCache.destroy();
         cascade.cacheMapping.destroy();
+        cascade.dispatchCommands.destroy();
         for (auto& directions : cascade.rayDirections) directions.destroy();
         frame.rayData.destroy();
         frame.irradiance.destroy();
@@ -633,6 +717,9 @@ void DDGISystem::destroy() noexcept {
         frame.probeData.destroy();
         frame.probeStates.destroy();
         frame.updateList.destroy();
+        cascade.publishedIrradiance.destroy();
+        cascade.publishedDistance.destroy();
+        cascade.publishedProbeData.destroy();
     }
     tracePipeline_ = irradiancePipeline_ = distancePipeline_ = VK_NULL_HANDLE;
     directionsPipeline_ = VK_NULL_HANDLE;
@@ -647,6 +734,7 @@ void DDGISystem::destroy() noexcept {
     sceneRevisions_ = {};
     sceneRevisionsInitialized_ = false;
     volumes_ = {};
+    publishedVolumes_ = {};
     device_ = VK_NULL_HANDLE;
 }
 }
