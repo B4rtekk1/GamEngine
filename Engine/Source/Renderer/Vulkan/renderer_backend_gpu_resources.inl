@@ -1405,12 +1405,18 @@
             // Velocity is retained even without TAA to keep attachment locations
             // stable: view normals are fragment output location 2.
             if (!msaa.enabled()) {
+                const std::array normalFamilies{
+                    vulkanDevice.graphicsQueueFamily(), vulkanDevice.computeQueueFamily()};
+                const std::span<const std::uint32_t> sharingFamilies =
+                    vulkanDevice.hasAsyncComputeQueue() && normalFamilies[0] != normalFamilies[1]
+                        ? std::span<const std::uint32_t>(normalFamilies)
+                        : std::span<const std::uint32_t>{};
                 velocityBuffer.create(vulkanDevice.physical(), device, extent,
                                       vulkanDevice.allocator(), VK_FILTER_NEAREST,
                                       VK_FORMAT_R16G16_SFLOAT);
                 gtaoViewNormalBuffer.create(vulkanDevice.physical(), device, extent,
                                             vulkanDevice.allocator(), VK_FILTER_NEAREST,
-                                            VK_FORMAT_R16G16_SNORM);
+                                            VK_FORMAT_R16G16_SNORM, false, sharingFamilies);
             }
             createVirtualWaterResources();
         }
@@ -1550,16 +1556,21 @@
                 throw std::runtime_error("Could not create command pool");
             }
 
-            if (!vulkanDevice.hasAsyncComputeQueue()) return;
-            poolInfo.queueFamilyIndex = vulkanDevice.computeQueueFamily();
-            if (vkCreateCommandPool(device, &poolInfo, nullptr, &asyncComputeCommandPool) != VK_SUCCESS) {
-                throw std::runtime_error("Could not create async compute command pool");
+            if (vulkanDevice.hasAsyncComputeQueue()) {
+                poolInfo.queueFamilyIndex = vulkanDevice.computeQueueFamily();
+                if (vkCreateCommandPool(device, &poolInfo, nullptr, &asyncComputeCommandPool) != VK_SUCCESS) {
+                    throw std::runtime_error("Could not create async compute command pool");
+                }
+            }
+            poolInfo.queueFamilyIndex = vulkanDevice.transferQueueFamily();
+            if (vkCreateCommandPool(device, &poolInfo, nullptr, &transferCommandPool) != VK_SUCCESS) {
+                throw std::runtime_error("Could not create transfer command pool");
             }
         }
 
         void createCommandBuffers() {
             commandBuffers.resize(MAX_FRAMES_IN_FLIGHT);
-            postAsyncGraphicsCommandBuffers.resize(MAX_FRAMES_IN_FLIGHT);
+            postViewportGraphicsCommandBuffers.resize(MAX_FRAMES_IN_FLIGHT);
 
             VkCommandBufferAllocateInfo allocInfo{};
             allocInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
@@ -1570,16 +1581,8 @@
             if (vkAllocateCommandBuffers(device, &allocInfo, commandBuffers.data()) != VK_SUCCESS) {
                 throw std::runtime_error("Could not allocate command buffers");
             }
-            if (vkAllocateCommandBuffers(device, &allocInfo, postAsyncGraphicsCommandBuffers.data()) != VK_SUCCESS) {
-                throw std::runtime_error("Could not allocate post-async graphics command buffers");
-            }
-
-            if (asyncComputeCommandPool == VK_NULL_HANDLE) return;
-            asyncComputeCommandBuffers.resize(MAX_FRAMES_IN_FLIGHT);
-            allocInfo.commandPool = asyncComputeCommandPool;
-            allocInfo.commandBufferCount = static_cast<uint32_t>(asyncComputeCommandBuffers.size());
-            if (vkAllocateCommandBuffers(device, &allocInfo, asyncComputeCommandBuffers.data()) != VK_SUCCESS) {
-                throw std::runtime_error("Could not allocate async compute command buffers");
+            if (vkAllocateCommandBuffers(device, &allocInfo, postViewportGraphicsCommandBuffers.data()) != VK_SUCCESS) {
+                throw std::runtime_error("Could not allocate post-viewport graphics command buffers");
             }
         }
 

@@ -19,7 +19,11 @@ public:
     void destroy() noexcept;
     void record(VkCommandBuffer commandBuffer, std::uint32_t frameSlot,
                 VkImageView depth, VkSampler depthSampler,
-                VkImageView normals, VkSampler normalSampler);
+                VkImageView normals, VkSampler normalSampler,
+                bool manageOutputTransitions = true);
+    [[nodiscard]] VkImage resultImage(std::uint32_t frameSlot) const noexcept {
+        return visibility_[frameSlot].image();
+    }
     [[nodiscard]] VkImageView resultView(std::uint32_t frameSlot) const noexcept {
         return visibility_[frameSlot].imageView();
     }

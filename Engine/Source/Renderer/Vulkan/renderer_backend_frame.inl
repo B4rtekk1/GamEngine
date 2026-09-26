@@ -478,6 +478,51 @@
             uint32_t value;
         };
 
+        std::vector<VkCommandBuffer> prepareGraphCommandBuffers(
+            const RenderGraph::RenderGraph& graph, const uint32_t frame,
+            std::array<std::vector<GraphCommandBuffer>, MAX_FRAMES_IN_FLIGHT>& storage) {
+            const auto& batches = graph.queueBatches();
+            auto& allocated = storage[frame];
+            const auto poolFor = [this](const RenderGraph::Queue queue) {
+                switch (queue) {
+                case RenderGraph::Queue::Graphics: return commandPool;
+                case RenderGraph::Queue::AsyncCompute:
+                    return vulkanDevice.hasAsyncComputeQueue() ? asyncComputeCommandPool : commandPool;
+                case RenderGraph::Queue::Transfer:
+                    return vulkanDevice.hasAsyncTransferQueue() ? transferCommandPool : commandPool;
+                }
+                throw std::invalid_argument("Unknown RenderGraph queue");
+            };
+            bool changed = allocated.size() != batches.size();
+            for (std::size_t i = 0; !changed && i < batches.size(); ++i)
+                changed = allocated[i].queue != batches[i].queue;
+            if (changed) {
+                for (const auto& entry : allocated) {
+                    const VkCommandPool pool = poolFor(entry.queue);
+                    vkFreeCommandBuffers(device, pool, 1, &entry.buffer);
+                }
+                allocated.clear();
+                for (const auto& batch : batches) {
+                    const VkCommandPool pool = poolFor(batch.queue);
+                    if (pool == VK_NULL_HANDLE)
+                        throw std::runtime_error("RenderGraph queue has no command pool");
+                    const VkCommandBufferAllocateInfo info{
+                        .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO,
+                        .commandPool = pool,
+                        .level = VK_COMMAND_BUFFER_LEVEL_PRIMARY,
+                        .commandBufferCount = 1};
+                    VkCommandBuffer buffer{};
+                    if (vkAllocateCommandBuffers(device, &info, &buffer) != VK_SUCCESS)
+                        throw std::runtime_error("Could not allocate RenderGraph command buffer");
+                    allocated.push_back({batch.queue, buffer});
+                }
+            }
+            std::vector<VkCommandBuffer> buffers;
+            buffers.reserve(allocated.size());
+            for (const auto& entry : allocated) buffers.push_back(entry.buffer);
+            return buffers;
+        }
+
         void recordCommandBuffer(VkCommandBuffer commandBuffer, const SwapchainImageIndex imageIndex) {
             VkCommandBufferBeginInfo beginInfo{};
             beginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
@@ -581,18 +626,10 @@
             // below whenever the Game View and the renderer are active. Keep
             // this decision available while declaring TAA's graph resources.
             const bool virtualWaterPreparedThisFrame = renderGameViewport && virtualWaterRenderer.active();
-            // Until each callback receives a precise resource declaration,
-            // keep the legacy recording sequence as one ordered frame-graph
-            // node. This is deliberately a side-effect root: it records
-            // shadowing, culling, raster, water and Scene View work which is
-            // still described by their legacy descriptor sets.
-            frameGraph.addPass("Legacy frame work", RenderGraph::Queue::Graphics,
-                [](RenderGraph::PassBuilder& builder) { builder.setSideEffect(); },
-                [&](const VkCommandBuffer legacyCommandBuffer) {
-            // All code in this block records into the same command buffer.
-            // Bind the graph-owned command buffer by reference so accidental
-            // future command-buffer splits cannot bypass the graph schedule.
-            commandBuffer = legacyCommandBuffer;
+            // Record legacy shadowing, culling, lighting and Scene View before
+            // submitting the presentation graph. The viewport graph may split
+            // this work across graphics and compute submissions.
+            {
             if (meshShaderPathActive && vulkanDevice.supportsMeshShaders() && globalMeshletCount != 0 &&
                 !sceneGpu.database.instances().empty() &&
                 meshletCullSets[currentFrame] != VK_NULL_HANDLE) {
@@ -1239,13 +1276,20 @@
             viewportFrameGraph.reset();
             viewportFrameGraph.enablePassCulling();
             viewportFrameGraph.setQueueFamily(RenderGraph::Queue::Graphics, vulkanDevice.graphicsQueueFamily());
-            viewportFrameGraph.setQueueFamily(RenderGraph::Queue::AsyncCompute, vulkanDevice.computeQueueFamily());
+            viewportFrameGraph.setQueueFamily(RenderGraph::Queue::AsyncCompute,
+                vulkanDevice.hasAsyncComputeQueue()
+                    ? vulkanDevice.computeQueueFamily() : vulkanDevice.graphicsQueueFamily());
+            viewportFrameGraph.setQueueFamily(RenderGraph::Queue::Transfer,
+                vulkanDevice.hasAsyncTransferQueue()
+                    ? vulkanDevice.transferQueueFamily() : vulkanDevice.graphicsQueueFamily());
             const VkExtent2D graphExtent = swapchain.extent();
+            const bool sharedDepthReads = vulkanDevice.hasAsyncComputeQueue() &&
+                vulkanDevice.computeQueueFamily() != vulkanDevice.graphicsQueueFamily();
             const RenderGraph::TextureDesc graphDepthDesc{
                 .extent = {graphExtent.width, graphExtent.height, 1},
                 .format = msaa.enabled() ? hiZDepthBuffer.format() : depthBuffer.format(),
                 .usage = VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
-                .aspect = VK_IMAGE_ASPECT_DEPTH_BIT};
+                .aspect = VK_IMAGE_ASPECT_DEPTH_BIT, .concurrentSharing = sharedDepthReads};
             const RenderGraph::TextureDesc graphHdrDesc{
                 .extent = {graphExtent.width, graphExtent.height, 1},
                 .format = HdrBuffer::Format,
@@ -1276,7 +1320,7 @@
                 .extent = {graphExtent.width, graphExtent.height, 1},
                 .format = VK_FORMAT_R16G16_SNORM,
                 .usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
-                .aspect = VK_IMAGE_ASPECT_COLOR_BIT};
+                .aspect = VK_IMAGE_ASPECT_COLOR_BIT, .concurrentSharing = sharedDepthReads};
             const auto graphVelocity = !msaa.enabled()
                 ? viewportFrameGraph.importTexture("Forward velocity", velocityBuffer.image(), graphVelocityDesc,
                                                    {.layout = VK_IMAGE_LAYOUT_UNDEFINED})
@@ -1316,6 +1360,19 @@
                 {.stage = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
                  .access = VK_ACCESS_2_SHADER_SAMPLED_READ_BIT,
                  .layout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL}) : RenderGraph::TextureHandle{};
+            const auto aoExtent = gtaoPass.resultExtent();
+            const RenderGraph::TextureDesc graphAoDesc{
+                .extent = {aoExtent.width, aoExtent.height, 1},
+                .format = gtaoPass.resultFormat(),
+                .usage = VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
+                .aspect = VK_IMAGE_ASPECT_COLOR_BIT,
+                .concurrentSharing = vulkanDevice.hasAsyncComputeQueue() &&
+                    vulkanDevice.computeQueueFamily() != vulkanDevice.graphicsQueueFamily()};
+            const auto graphAo = viewportFrameGraph.importTexture(
+                "GTAO visibility", gtaoPass.resultImage(), graphAoDesc,
+                {.stage = VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT,
+                 .access = VK_ACCESS_2_SHADER_SAMPLED_READ_BIT,
+                 .layout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL});
             viewportFrameGraph.addPass("Foliage GPU culling", RenderGraph::Queue::Graphics,
             [&](RenderGraph::PassBuilder& builder) {
                 builder.write(graphFoliageIndirect, RenderGraph::BufferUsage::StorageWriteCompute);
@@ -1376,43 +1433,151 @@
                 gpuTimestampProfiler.endZone(buffer, currentFrame);
             });
             if (hizEnabled) {
-                viewportFrameGraph.addPass("Hi-Z", RenderGraph::Queue::Graphics,
+                const auto hizQueue = vulkanDevice.hasAsyncComputeQueue()
+                    ? RenderGraph::Queue::AsyncCompute
+                    : RenderGraph::Queue::Graphics;
+                if (hizQueue == RenderGraph::Queue::AsyncCompute) {
+                    // The previous frame leaves this imported pyramid owned by graphics.
+                    viewportFrameGraph.addPass("Hi-Z compute handoff", RenderGraph::Queue::Graphics,
+                    [&](RenderGraph::PassBuilder& builder) {
+                        builder.read(graphHiZ, RenderGraph::TextureUsage::SampledReadCompute);
+                        builder.setSideEffect();
+                    }, {});
+                }
+                viewportFrameGraph.addPass("Hi-Z", hizQueue,
                 [&](RenderGraph::PassBuilder& builder) {
-                    builder.read(graphDepth, RenderGraph::TextureUsage::SampledReadCompute);
+                    builder.read(graphDepth, RenderGraph::TextureUsage::DepthReadCompute);
                     builder.write(graphHiZ, RenderGraph::TextureUsage::StorageWriteCompute);
+                    builder.setFinalTextureState(graphHiZ, {
+                        .stage = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                        .access = VK_ACCESS_2_SHADER_SAMPLED_READ_BIT,
+                        .layout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                        .write = false});
                 }, [this](const VkCommandBuffer buffer) {
-                    hiZPasses[currentFrame].record(buffer, hiZBuffers[currentFrame]);
+                    hiZPasses[currentFrame].record(buffer, hiZBuffers[currentFrame], VK_NULL_HANDLE, false);
                 });
                 viewportFrameGraph.exportTexture(graphHiZ);
             } else viewportFrameGraph.exportTexture(graphDepth);
-            // These callbacks record the prepass and Hi-Z at their declared
-            // position.  Do not defer graph execution until the end of the
-            // viewport: GTAO and the lighting pass below consume this depth.
-            viewportFrameGraph.execute(commandBuffer);
+            const auto gtaoQueue = vulkanDevice.hasAsyncComputeQueue()
+                ? RenderGraph::Queue::AsyncCompute : RenderGraph::Queue::Graphics;
+            const DepthBuffer& gtaoDepth = msaa.enabled() ? hiZDepthBuffer : depthBuffer;
+            const Mat4 inverseProjection{glm::inverse(cameraController.camera()->projectionMatrix().native())};
+            viewportFrameGraph.addPass("GTAO", gtaoQueue,
+            [&](RenderGraph::PassBuilder& builder) {
+                builder.read(graphDepth, RenderGraph::TextureUsage::DepthReadCompute);
+                if (graphViewNormal)
+                    builder.read(graphViewNormal, RenderGraph::TextureUsage::SampledReadCompute);
+                builder.write(graphAo, RenderGraph::TextureUsage::StorageWriteCompute);
+                builder.setFinalTextureState(graphAo, {
+                    .stage = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                    .access = VK_ACCESS_2_SHADER_SAMPLED_READ_BIT,
+                    .layout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                    .write = false});
+            }, [&](const VkCommandBuffer buffer) {
+                gtaoPass.record(buffer, currentFrame,
+                    taaResolveActive ? static_cast<std::uint32_t>(submittedFrameValue) : 0U,
+                    gtaoDepth.imageView(), gtaoDepth.sampler(),
+                    msaa.enabled() ? gtaoDepth.imageView() : gtaoViewNormalBuffer.imageView(),
+                    msaa.enabled() ? gtaoDepth.sampler() : gtaoViewNormalBuffer.sampler(),
+                    !msaa.enabled(), inverseProjection, false);
+            });
+            viewportFrameGraph.exportTexture(graphAo);
+            RenderGraph::TextureHandle graphDirectionalVisibility{};
+            if (!msaa.enabled() && directionalVisibilityPass.resultImage(currentFrame) != VK_NULL_HANDLE) {
+                const VkExtent2D visibilityExtent = directionalVisibilityPass.extent();
+                const RenderGraph::TextureDesc visibilityDesc{
+                    .extent = {visibilityExtent.width, visibilityExtent.height, 1},
+                    .format = VK_FORMAT_R32_SFLOAT,
+                    .usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT |
+                             VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT |
+                             VK_IMAGE_USAGE_TRANSFER_DST_BIT,
+                    .aspect = VK_IMAGE_ASPECT_COLOR_BIT};
+                graphDirectionalVisibility = viewportFrameGraph.importTexture(
+                    "Directional visibility", directionalVisibilityPass.resultImage(currentFrame),
+                    visibilityDesc, {.layout = VK_IMAGE_LAYOUT_UNDEFINED});
+                // This graphics-queue compute pass only needs prepass outputs.
+                // It can run while GTAO and Hi-Z execute on async compute.
+                viewportFrameGraph.addPass("Directional visibility", RenderGraph::Queue::Graphics,
+                [&](RenderGraph::PassBuilder& builder) {
+                    builder.read(graphDepth, RenderGraph::TextureUsage::DepthReadCompute);
+                    builder.read(graphViewNormal, RenderGraph::TextureUsage::SampledReadCompute);
+                    builder.write(graphDirectionalVisibility, RenderGraph::TextureUsage::StorageWriteCompute);
+                    builder.setFinalTextureState(graphDirectionalVisibility, {
+                        .stage = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT |
+                                 VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT,
+                        .access = VK_ACCESS_2_SHADER_SAMPLED_READ_BIT,
+                        .layout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                        .write = false});
+                }, [&](const VkCommandBuffer buffer) {
+                    directionalVisibilityPass.record(buffer, currentFrame,
+                        depthBuffer.imageView(), depthBuffer.sampler(),
+                        gtaoViewNormalBuffer.imageView(), gtaoViewNormalBuffer.sampler(), false);
+                });
+            }
+            // Lighting still records outside this graph. Declare its image
+            // reads here so ownership and visibility are established first.
+            viewportFrameGraph.addPass("Lighting inputs", RenderGraph::Queue::Graphics,
+            [&](RenderGraph::PassBuilder& builder) {
+                builder.startNewBatch();
+                builder.read(graphAo, RenderGraph::TextureUsage::SampledReadFragment);
+                if (graphDirectionalVisibility)
+                    builder.read(graphDirectionalVisibility, RenderGraph::TextureUsage::SampledReadCompute);
+                builder.read(graphDepth, RenderGraph::TextureUsage::DepthReadCompute);
+                if (graphViewNormal)
+                    builder.read(graphViewNormal, RenderGraph::TextureUsage::SampledReadCompute);
+                if (graphHiZ)
+                    builder.read(graphHiZ, RenderGraph::TextureUsage::SampledReadCompute);
+                builder.setSideEffect();
+            }, {});
+            viewportFrameGraph.compile();
+            const auto graphCommands = prepareGraphCommandBuffers(
+                viewportFrameGraph, currentFrame, renderGraphCommandBuffers);
+            RenderGraph::SubmissionContext context{};
+            context.queues[static_cast<std::uint32_t>(RenderGraph::Queue::Graphics)] =
+                vulkanDevice.graphicsQueue();
+            context.queues[static_cast<std::uint32_t>(RenderGraph::Queue::AsyncCompute)] =
+                vulkanDevice.hasAsyncComputeQueue()
+                    ? vulkanDevice.computeQueue() : vulkanDevice.graphicsQueue();
+            context.queues[static_cast<std::uint32_t>(RenderGraph::Queue::Transfer)] =
+                vulkanDevice.hasAsyncTransferQueue()
+                    ? vulkanDevice.transferQueue() : vulkanDevice.graphicsQueue();
+            context.commandBuffers = graphCommands;
+            context.queueTimelines[0] = renderGraphTimeline;
+            context.queueTimelines[1] = renderGraphComputeTimeline;
+            context.queueTimelines[2] = renderGraphTransferTimeline;
+            context.nextQueueTimelineValues[0] = &renderGraphTimelineValue;
+            context.nextQueueTimelineValues[1] = &renderGraphComputeTimelineValue;
+            context.nextQueueTimelineValues[2] = &renderGraphTransferTimelineValue;
+            context.uploadTimeline = uploadContext.timeline();
+            if (vkEndCommandBuffer(commandBuffer) != VK_SUCCESS)
+                throw std::runtime_error("Could not end graphics commands before viewport RenderGraph");
+            const std::uint64_t earlyUploadValue = uploadContext.lastSubmittedValue();
+            const VkSemaphoreSubmitInfo earlyUploadWait{
+                .sType = VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO,
+                .semaphore = uploadContext.timeline(), .value = earlyUploadValue,
+                .stageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT};
+            const VkCommandBufferSubmitInfo earlyCommand{
+                .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_SUBMIT_INFO,
+                .commandBuffer = commandBuffer};
+            const VkSubmitInfo2 earlySubmit{
+                .sType = VK_STRUCTURE_TYPE_SUBMIT_INFO_2,
+                .waitSemaphoreInfoCount = earlyUploadValue != 0 ? 1U : 0U,
+                .pWaitSemaphoreInfos = earlyUploadValue != 0 ? &earlyUploadWait : nullptr,
+                .commandBufferInfoCount = 1, .pCommandBufferInfos = &earlyCommand};
+            if (vkQueueSubmit2(vulkanDevice.graphicsQueue(), 1, &earlySubmit, VK_NULL_HANDLE) != VK_SUCCESS)
+                throw std::runtime_error("Could not submit graphics commands before viewport RenderGraph");
+            viewportFrameGraph.recordAndSubmit(context);
+            commandBuffer = postViewportGraphicsCommandBuffers.at(currentFrame);
+            const VkCommandBufferBeginInfo postBegin{
+                .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
+            if (vkBeginCommandBuffer(commandBuffer, &postBegin) != VK_SUCCESS)
+                throw std::runtime_error("Could not begin graphics commands after viewport RenderGraph");
             hdrBufferInitialized = true;
             if (hizEnabled) {
                 hiZViewProjections[currentFrame] = cameraController.camera()->projectionMatrix().native() *
                                                   cameraController.camera()->viewMatrix().native();
                 hiZValid[currentFrame] = true;
             }
-
-            // The prepass has produced this frame's depth and velocity. GTAO
-            // must finish before the lighting pass samples its result.
-            const DepthBuffer& gtaoDepth = msaa.enabled() ? hiZDepthBuffer : depthBuffer;
-            const Mat4 inverseProjection{glm::inverse(cameraController.camera()->projectionMatrix().native())};
-            // The rotating GTAO pattern is only stable when TAA accumulates
-            // it.  Without TAA, hold it fixed instead of producing per-frame
-            // AO shimmer.
-            gtaoPass.record(commandBuffer, currentFrame,
-                            taaResolveActive ? static_cast<std::uint32_t>(submittedFrameValue) : 0U,
-                            gtaoDepth.imageView(), gtaoDepth.sampler(),
-                            msaa.enabled() ? gtaoDepth.imageView() : gtaoViewNormalBuffer.imageView(),
-                            msaa.enabled() ? gtaoDepth.sampler() : gtaoViewNormalBuffer.sampler(), !msaa.enabled(), inverseProjection);
-
-            if (!msaa.enabled())
-                directionalVisibilityPass.record(commandBuffer, currentFrame,
-                    depthBuffer.imageView(), depthBuffer.sampler(),
-                    gtaoViewNormalBuffer.imageView(), gtaoViewNormalBuffer.sampler());
 
             const bool rtContactRequested = vulkanDevice.supportsRayQuery() && !msaa.enabled() &&
                 mainLightShadows && rtContactShadowSettings.mode == ContactShadowMode::RayTraced &&
@@ -1946,89 +2111,6 @@
                 }
             }
 
-                });
-
-            // Depth / Hi-Z is recorded by the graph directly after the
-            // prepass. This legacy submit split remains here temporarily for
-            // the other async command-buffer infrastructure, but must never
-            // record the pyramid a second time.
-            if (false && renderGameViewport) {
-                // Hi-Z is a complete graph resource: Forward produces the
-                // imported depth image and this pass writes the imported mip
-                // chain.  The graph owns the outer depth/read -> storage/write
-                // transition; HiZPass owns only per-mip dependencies.
-                frameGraph.reset();
-                frameGraph.enablePassCulling();
-                const auto& hiZBuffer = hiZBuffers[currentFrame];
-                const VkExtent2D extent = swapchain.extent();
-                const RenderGraph::TextureDesc depthDesc{
-                    .extent = {extent.width, extent.height, 1},
-                    .format = msaa.enabled() ? hiZDepthBuffer.format() : depthBuffer.format(),
-                    .usage = VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
-                    .aspect = VK_IMAGE_ASPECT_DEPTH_BIT};
-                const auto depth = frameGraph.importTexture(
-                    "Forward depth", msaa.enabled() ? hiZDepthBuffer.image() : depthBuffer.image(), depthDesc,
-                    {.stage = VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT,
-                     .access = VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT,
-                     .layout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL,
-                     .write = true});
-                const RenderGraph::TextureDesc hiZDesc{
-                    .extent = {hiZBuffer.width(), hiZBuffer.height(), 1},
-                    .format = VK_FORMAT_R32_SFLOAT,
-                    .usage = VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
-                    .aspect = VK_IMAGE_ASPECT_COLOR_BIT,
-                    .mipLevels = hiZBuffer.mipCount()};
-                const auto hiZ = frameGraph.importTexture(
-                    "Hi-Z pyramid", hiZBuffer.image(), hiZDesc,
-                    {.stage = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-                     .access = VK_ACCESS_2_SHADER_SAMPLED_READ_BIT,
-                     .layout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL});
-                const bool canSubmitHiZAsync = vulkanDevice.hasAsyncComputeQueue() &&
-                    vulkanDevice.computeQueueFamily() == vulkanDevice.graphicsQueueFamily();
-                frameGraph.setQueueFamily(RenderGraph::Queue::Graphics, vulkanDevice.graphicsQueueFamily());
-                frameGraph.setQueueFamily(RenderGraph::Queue::AsyncCompute, vulkanDevice.computeQueueFamily());
-                frameGraph.addPass("Hi-Z", canSubmitHiZAsync ? RenderGraph::Queue::AsyncCompute : RenderGraph::Queue::Graphics,
-                [&](RenderGraph::PassBuilder& builder) {
-                    builder.read(depth, RenderGraph::TextureUsage::SampledReadCompute);
-                    builder.write(hiZ, RenderGraph::TextureUsage::StorageWriteCompute);
-                }, [this](const VkCommandBuffer buffer) {
-                    hiZPasses[currentFrame].record(buffer, hiZBuffers[currentFrame]);
-                });
-                // This image is sampled by culling and VSM page marking on the
-                // next use of this frame slot, so it is the graph's external
-                // output even though Present is produced later in the frame.
-                frameGraph.exportTexture(hiZ);
-                // Depth is produced outside this graph by Forward. Until that
-                // producer is graph-owned too, async Hi-Z is restricted to a
-                // same-family compute queue; RenderGraph already handles
-                // ownership release/acquire for graph-to-graph edges.
-                if (canSubmitHiZAsync) {
-                    // Close the producer batch now. The remaining post work
-                    // is recorded in a second graphics command buffer and can
-                    // overlap the compute queue after the first batch signals.
-                    if (vkEndCommandBuffer(commandBuffer) != VK_SUCCESS) {
-                        throw std::runtime_error("Could not end graphics producer command buffer for async Hi-Z");
-                    }
-                    VkCommandBuffer asyncBuffer = asyncComputeCommandBuffers.at(currentFrame);
-                    vkResetCommandBuffer(asyncBuffer, 0);
-                    VkCommandBufferBeginInfo begin{VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
-                    if (vkBeginCommandBuffer(asyncBuffer, &begin) != VK_SUCCESS) {
-                        throw std::runtime_error("Could not begin async Hi-Z command buffer");
-                    }
-                    frameGraph.execute(RenderGraph::Queue::AsyncCompute, asyncBuffer);
-                    if (vkEndCommandBuffer(asyncBuffer) != VK_SUCCESS) {
-                        throw std::runtime_error("Could not end async Hi-Z command buffer");
-                    }
-                    commandBuffer = postAsyncGraphicsCommandBuffers.at(currentFrame);
-                    vkResetCommandBuffer(commandBuffer, 0);
-                    if (vkBeginCommandBuffer(commandBuffer, &begin) != VK_SUCCESS) {
-                        throw std::runtime_error("Could not begin post-async graphics command buffer");
-                    }
-                    asyncHiZSubmittedThisFrame = true;
-                } else {
-                    frameGraph.execute(commandBuffer);
-                }
-                hiZValid[currentFrame] = true;
             }
 
             // Presentation is one declarative chain. The graph owns the HDR
@@ -2207,14 +2289,67 @@
                         UI::CanvasRenderer::FrameIndex{currentFrame}, postExtent);
                 }
                 gpuTimestampProfiler.endZone(buffer, currentFrame);
+                gpuTimestampProfiler.endFrame(buffer, currentFrame);
             });
             frameGraph.exportTexture(graphPresent);
-            frameGraph.execute(commandBuffer);
-            gpuTimestampProfiler.endFrame(commandBuffer, currentFrame);
-
-            if (vkEndCommandBuffer(commandBuffer) != VK_SUCCESS) {
-                throw std::runtime_error("Could not end command buffer");
+            frameGraph.compile();
+            const auto& presentationBatches = frameGraph.queueBatches();
+            std::uint32_t firstGraphicsBatch = 0;
+            bool foundGraphicsBatch = false;
+            for (std::uint32_t i = 0; i < presentationBatches.size(); ++i) {
+                if (presentationBatches[i].queue == RenderGraph::Queue::Graphics) {
+                    firstGraphicsBatch = i;
+                    foundGraphicsBatch = true;
+                    break;
+                }
             }
+            if (!foundGraphicsBatch)
+                throw std::runtime_error("Presentation RenderGraph has no graphics batch");
+            RenderGraph::SubmissionContext presentationContext{};
+            presentationContext.queues[static_cast<std::uint32_t>(RenderGraph::Queue::Graphics)] =
+                vulkanDevice.graphicsQueue();
+            presentationContext.queues[static_cast<std::uint32_t>(RenderGraph::Queue::AsyncCompute)] =
+                vulkanDevice.hasAsyncComputeQueue()
+                    ? vulkanDevice.computeQueue() : vulkanDevice.graphicsQueue();
+            presentationContext.queues[static_cast<std::uint32_t>(RenderGraph::Queue::Transfer)] =
+                vulkanDevice.hasAsyncTransferQueue()
+                    ? vulkanDevice.transferQueue() : vulkanDevice.graphicsQueue();
+            presentationContext.commandBuffers = prepareGraphCommandBuffers(
+                frameGraph, currentFrame, presentationGraphCommandBuffers);
+            presentationContext.queueTimelines[0] = renderGraphTimeline;
+            presentationContext.queueTimelines[1] = renderGraphComputeTimeline;
+            presentationContext.queueTimelines[2] = renderGraphTransferTimeline;
+            presentationContext.nextQueueTimelineValues[0] = &renderGraphTimelineValue;
+            presentationContext.nextQueueTimelineValues[1] = &renderGraphComputeTimelineValue;
+            presentationContext.nextQueueTimelineValues[2] = &renderGraphTransferTimelineValue;
+            presentationContext.uploadTimeline = uploadContext.timeline();
+            presentationContext.externalWaits.push_back({
+                .semaphore = imageAvailableSemaphores[currentFrame], .value = 0,
+                .stage = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
+                .batch = firstGraphicsBatch});
+            presentationContext.completionSignals.push_back({
+                .semaphore = renderFinishedSemaphores[imageIndex.value], .value = 0,
+                .stage = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT});
+            presentationContext.completionFence = inFlightFences[currentFrame];
+            if (vkEndCommandBuffer(commandBuffer) != VK_SUCCESS)
+                throw std::runtime_error("Could not end graphics commands before presentation RenderGraph");
+            const std::uint64_t prePresentationUploadValue = uploadContext.lastSubmittedValue();
+            const VkSemaphoreSubmitInfo prePresentationUploadWait{
+                .sType = VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO,
+                .semaphore = uploadContext.timeline(), .value = prePresentationUploadValue,
+                .stageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT};
+            const VkCommandBufferSubmitInfo prePresentationCommand{
+                .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_SUBMIT_INFO,
+                .commandBuffer = commandBuffer};
+            const VkSubmitInfo2 prePresentationSubmit{
+                .sType = VK_STRUCTURE_TYPE_SUBMIT_INFO_2,
+                .waitSemaphoreInfoCount = prePresentationUploadValue != 0 ? 1U : 0U,
+                .pWaitSemaphoreInfos = prePresentationUploadValue != 0 ? &prePresentationUploadWait : nullptr,
+                .commandBufferInfoCount = 1, .pCommandBufferInfos = &prePresentationCommand};
+            if (vkQueueSubmit2(vulkanDevice.graphicsQueue(), 1, &prePresentationSubmit, VK_NULL_HANDLE) != VK_SUCCESS)
+                throw std::runtime_error("Could not submit graphics commands before presentation RenderGraph");
+            frameGraph.recordAndSubmit(presentationContext);
+            presentationGraphSubmittedThisFrame = true;
         }
 
         void createSyncObjects() {
@@ -2225,15 +2360,17 @@
             VkSemaphoreCreateInfo semaphoreInfo{};
             semaphoreInfo.sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO;
 
-            if (vulkanDevice.hasAsyncComputeQueue()) {
-                VkSemaphoreTypeCreateInfo timelineInfo{VK_STRUCTURE_TYPE_SEMAPHORE_TYPE_CREATE_INFO};
-                timelineInfo.semaphoreType = VK_SEMAPHORE_TYPE_TIMELINE;
-                semaphoreInfo.pNext = &timelineInfo;
-                if (vkCreateSemaphore(device, &semaphoreInfo, nullptr, &asyncComputeTimeline) != VK_SUCCESS) {
-                    throw std::runtime_error("Could not create async compute timeline semaphore");
-                }
-                semaphoreInfo.pNext = nullptr;
+            VkSemaphoreTypeCreateInfo timelineInfo{VK_STRUCTURE_TYPE_SEMAPHORE_TYPE_CREATE_INFO};
+            timelineInfo.semaphoreType = VK_SEMAPHORE_TYPE_TIMELINE;
+            semaphoreInfo.pNext = &timelineInfo;
+            if (vkCreateSemaphore(device, &semaphoreInfo, nullptr, &renderGraphTimeline) != VK_SUCCESS) {
+                throw std::runtime_error("Could not create RenderGraph timeline semaphore");
             }
+            if (vkCreateSemaphore(device, &semaphoreInfo, nullptr, &renderGraphComputeTimeline) != VK_SUCCESS ||
+                vkCreateSemaphore(device, &semaphoreInfo, nullptr, &renderGraphTransferTimeline) != VK_SUCCESS) {
+                throw std::runtime_error("Could not create RenderGraph queue timeline semaphores");
+            }
+            semaphoreInfo.pNext = nullptr;
 
             VkFenceCreateInfo fenceInfo{};
             fenceInfo.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
@@ -2569,6 +2706,7 @@
         }
 
         void submitAndPresentFrame(const uint32_t imageIndex) {
+            if (!presentationGraphSubmittedThisFrame) {
             VkSemaphore signalSemaphores[] = {renderFinishedSemaphores[imageIndex]};
             // Do not derive this from UploadContext::lastSubmittedValue(): a
             // transfer unrelated to this frame must not stall graphics.  The
@@ -2583,86 +2721,6 @@
             }
             const bool waitForUploads = uploadValue != 0;
             if (uploadStage == VK_PIPELINE_STAGE_2_NONE) uploadStage = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
-            if (asyncHiZSubmittedThisFrame) {
-                const std::uint64_t graphicsValue = ++asyncComputeTimelineValue;
-                const std::uint64_t computeValue = ++asyncComputeTimelineValue;
-                const VkCommandBuffer graphicsBuffer = commandBuffers[currentFrame];
-                const VkCommandBuffer postGraphicsBuffer = postAsyncGraphicsCommandBuffers.at(currentFrame);
-                const VkCommandBuffer computeBuffer = asyncComputeCommandBuffers.at(currentFrame);
-                const VkSemaphoreSubmitInfo imageAvailable{
-                    .sType = VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO,
-                    .semaphore = imageAvailableSemaphores[currentFrame],
-                    .stageMask = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT};
-                const VkSemaphoreSubmitInfo uploadWait{
-                    .sType = VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO,
-                    .semaphore = uploadContext.timeline(), .value = uploadValue,
-                    .stageMask = uploadStage};
-                const std::array graphicsWaits = {imageAvailable, uploadWait};
-                const VkCommandBufferSubmitInfo graphicsCommand{
-                    .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_SUBMIT_INFO, .commandBuffer = graphicsBuffer};
-                const VkSemaphoreSubmitInfo graphicsSignal{
-                    .sType = VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO, .semaphore = asyncComputeTimeline,
-                    .value = graphicsValue, .stageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT};
-                const VkSubmitInfo2 graphicsSubmit{
-                    .sType = VK_STRUCTURE_TYPE_SUBMIT_INFO_2,
-                    .waitSemaphoreInfoCount = waitForUploads ? 2u : 1u,
-                    .pWaitSemaphoreInfos = graphicsWaits.data(),
-                    .commandBufferInfoCount = 1, .pCommandBufferInfos = &graphicsCommand,
-                    .signalSemaphoreInfoCount = 1, .pSignalSemaphoreInfos = &graphicsSignal};
-                if (vkQueueSubmit2(vulkanDevice.graphicsQueue(), 1, &graphicsSubmit, VK_NULL_HANDLE) != VK_SUCCESS) {
-                    throw std::runtime_error("Could not submit graphics batch before async Hi-Z");
-                }
-
-                const VkSemaphoreSubmitInfo computeWait{
-                    .sType = VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO, .semaphore = asyncComputeTimeline,
-                    .value = graphicsValue, .stageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT};
-                const VkCommandBufferSubmitInfo computeCommand{
-                    .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_SUBMIT_INFO, .commandBuffer = computeBuffer};
-                const VkSemaphoreSubmitInfo computeSignal{
-                    .sType = VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO, .semaphore = asyncComputeTimeline,
-                    // asyncComputeCommandBuffers contain only the graph's Hi-Z
-                    // compute pass.  Signal once its shader writes are
-                    // available instead of serialising unrelated stages.
-                    .value = computeValue, .stageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT};
-                const VkSubmitInfo2 computeSubmit{
-                    .sType = VK_STRUCTURE_TYPE_SUBMIT_INFO_2,
-                    .waitSemaphoreInfoCount = 1, .pWaitSemaphoreInfos = &computeWait,
-                    .commandBufferInfoCount = 1, .pCommandBufferInfos = &computeCommand,
-                    .signalSemaphoreInfoCount = 1, .pSignalSemaphoreInfos = &computeSignal};
-                if (vkQueueSubmit2(vulkanDevice.computeQueue(), 1, &computeSubmit, VK_NULL_HANDLE) != VK_SUCCESS) {
-                    throw std::runtime_error("Could not submit async Hi-Z command buffer");
-                }
-
-                const VkCommandBufferSubmitInfo postGraphicsCommand{
-                    .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_SUBMIT_INFO, .commandBuffer = postGraphicsBuffer};
-                // Presentation depends on the graphics work which writes the
-                // swapchain image, not on Hi-Z.  Hi-Z is an exported frame-slot
-                // resource consumed when this slot is used again.
-                const VkSemaphoreSubmitInfo renderFinished{
-                    .sType = VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO, .semaphore = signalSemaphores[0],
-                    .stageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT};
-                const VkSubmitInfo2 postGraphicsSubmit{
-                    .sType = VK_STRUCTURE_TYPE_SUBMIT_INFO_2,
-                    .commandBufferInfoCount = 1, .pCommandBufferInfos = &postGraphicsCommand,
-                    .signalSemaphoreInfoCount = 1, .pSignalSemaphoreInfos = &renderFinished};
-                if (vkQueueSubmit2(vulkanDevice.graphicsQueue(), 1, &postGraphicsSubmit, VK_NULL_HANDLE) != VK_SUCCESS) {
-                    throw std::runtime_error("Could not submit graphics batch overlapping async Hi-Z");
-                }
-
-                // Keep the frame-slot fence behind both queues: the graphics
-                // queue processes this after postGraphicsSubmit, while the
-                // timeline wait keeps Hi-Z alive until it can be reused.
-                const VkSemaphoreSubmitInfo completeWait{
-                    .sType = VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO, .semaphore = asyncComputeTimeline,
-                    .value = computeValue, .stageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT};
-                const VkSubmitInfo2 completionSubmit{
-                    .sType = VK_STRUCTURE_TYPE_SUBMIT_INFO_2,
-                    .waitSemaphoreInfoCount = 1, .pWaitSemaphoreInfos = &completeWait};
-                if (vkQueueSubmit2(vulkanDevice.graphicsQueue(), 1, &completionSubmit,
-                                   inFlightFences[currentFrame]) != VK_SUCCESS) {
-                    throw std::runtime_error("Could not complete async Hi-Z submission chain");
-                }
-            } else {
             VkSubmitInfo submitInfo{};
             submitInfo.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
 
@@ -2697,7 +2755,7 @@
             VkPresentInfoKHR presentInfo{};
             presentInfo.sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR;
             presentInfo.waitSemaphoreCount = 1;
-            presentInfo.pWaitSemaphores = signalSemaphores;
+            presentInfo.pWaitSemaphores = &renderFinishedSemaphores[imageIndex];
 
             VkSwapchainKHR swapChains[] = {swapchain.handle()};
             presentInfo.swapchainCount = 1;
@@ -2723,8 +2781,8 @@
             if (!acquireFrameImage(imageIndex)) { return; }
 
             vkResetCommandBuffer(commandBuffers[currentFrame], 0);
-            vkResetCommandBuffer(postAsyncGraphicsCommandBuffers[currentFrame], 0);
-            asyncHiZSubmittedThisFrame = false;
+            vkResetCommandBuffer(postViewportGraphicsCommandBuffers[currentFrame], 0);
+            presentationGraphSubmittedThisFrame = false;
             {
                 GE_PROFILE_SCOPE("Refresh Scene Data");
                 refreshSceneFrameData();
@@ -2820,7 +2878,7 @@
             if (!hasDrawableExtent()) return;
             uint32_t imageIndex;
             if (!acquireFrameImage(imageIndex)) return;
-            asyncHiZSubmittedThisFrame = false;
+            presentationGraphSubmittedThisFrame = false;
             VkCommandBuffer commandBuffer = commandBuffers[currentFrame];
             vkResetCommandBuffer(commandBuffer, 0);
             VkCommandBufferBeginInfo beginInfo{VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};

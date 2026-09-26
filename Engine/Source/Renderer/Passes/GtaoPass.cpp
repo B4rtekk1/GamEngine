@@ -74,6 +74,8 @@ namespace Engine {
             b.dstAccessMask = dstAccess;
             b.oldLayout = oldLayout;
             b.newLayout = newLayout;
+            b.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+            b.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
             b.image = image;
             b.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, baseMip, levels, 0, 1};
             VkDependencyInfo d{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
@@ -104,7 +106,8 @@ namespace Engine {
 
     void GtaoPass::create(VkPhysicalDevice physical, VkDevice device, VkCommandPool commandPool, VkQueue queue,
                           VkExtent2D fullExtent, VmaAllocator allocator,
-                          Assets::AssetManager &assets, const GtaoQualitySettings quality) {
+                          Assets::AssetManager &assets, const GtaoQualitySettings quality,
+                          const std::span<const std::uint32_t> sharingFamilies) {
         if (!device || !fullExtent.width || !fullExtent.height)
             throw std::invalid_argument("GTAO requires a valid extent");
         if (quality.denoisePassCount > 3)
@@ -129,14 +132,15 @@ namespace Engine {
                     (r8Properties.optimalTilingFeatures & aoRequiredFeatures) == aoRequiredFeatures
                         ? VK_FORMAT_R8_UNORM
                         : VK_FORMAT_R16_SFLOAT;
-            raw_.create(physical, device_, halfExtent_, allocator, VK_FILTER_NEAREST, RawAoFormat, true);
-            baseDepth_.create(physical, device_, halfExtent_, allocator, VK_FILTER_NEAREST, BaseDepthFormat, true);
-            auxiliary_.create(physical, device_, halfExtent_, allocator, VK_FILTER_NEAREST, AuxiliaryFormat, true);
-            filtered_.create(physical, device_, halfExtent_, allocator, VK_FILTER_NEAREST, filteredAoFormat, true);
+            filteredAoFormat_ = filteredAoFormat;
+            raw_.create(physical, device_, halfExtent_, allocator, VK_FILTER_NEAREST, RawAoFormat, true, sharingFamilies);
+            baseDepth_.create(physical, device_, halfExtent_, allocator, VK_FILTER_NEAREST, BaseDepthFormat, true, sharingFamilies);
+            auxiliary_.create(physical, device_, halfExtent_, allocator, VK_FILTER_NEAREST, AuxiliaryFormat, true, sharingFamilies);
+            filtered_.create(physical, device_, halfExtent_, allocator, VK_FILTER_NEAREST, filteredAoFormat, true, sharingFamilies);
             if (quality_.denoisePassCount > 1)
-                scratch_.create(physical, device_, halfExtent_, allocator, VK_FILTER_NEAREST, filteredAoFormat, true);
+                scratch_.create(physical, device_, halfExtent_, allocator, VK_FILTER_NEAREST, filteredAoFormat, true, sharingFamilies);
             if (!nativeResolution_)
-                full_.create(physical, device_, fullExtent_, allocator, VK_FILTER_LINEAR, filteredAoFormat, true);
+                full_.create(physical, device_, fullExtent_, allocator, VK_FILTER_LINEAR, filteredAoFormat, true, sharingFamilies);
             std::array<std::uint16_t, 64 * 64> hilbertValues{};
             for (std::uint32_t y = 0; y < 64; ++y)
                 for (std::uint32_t x = 0; x < 64; ++x)
@@ -166,7 +170,10 @@ namespace Engine {
             image.samples = VK_SAMPLE_COUNT_1_BIT;
             image.tiling = VK_IMAGE_TILING_OPTIMAL;
             image.usage = VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_STORAGE_BIT;
-            image.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+            image.sharingMode = sharingFamilies.size() > 1 ? VK_SHARING_MODE_CONCURRENT : VK_SHARING_MODE_EXCLUSIVE;
+            image.queueFamilyIndexCount = sharingFamilies.size() > 1
+                ? static_cast<std::uint32_t>(sharingFamilies.size()) : 0;
+            image.pQueueFamilyIndices = sharingFamilies.size() > 1 ? sharingFamilies.data() : nullptr;
             VmaAllocationCreateInfo alloc{};
             alloc.usage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE;
             if (vmaCreateImage(allocator, &image, &alloc, &linearDepthImage_, &linearDepthAllocation_, nullptr) !=
@@ -398,7 +405,8 @@ namespace Engine {
 
     void GtaoPass::record(VkCommandBuffer cmd, uint32_t frame, uint32_t sampleIndex, VkImageView depth,
                           VkSampler depthSampler, VkImageView viewNormal, VkSampler viewNormalSampler,
-                          bool useExternalNormals, const Mat4 &inverseProjection) {
+                          bool useExternalNormals, const Mat4 &inverseProjection,
+                          const bool manageOutputTransitions) {
         if (frame >= FramesInFlight)
             throw std::out_of_range("Invalid GTAO frame slot");
         if (!initialized_)
@@ -409,25 +417,28 @@ namespace Engine {
                     VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT | VK_ACCESS_2_SHADER_SAMPLED_READ_BIT,
                     VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT);
         };
-        if (nativeResolution_ && quality_.denoisePassCount == 0)
-            barrier(cmd, raw_.image(), VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_IMAGE_LAYOUT_GENERAL,
-                    VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT, VK_ACCESS_2_SHADER_SAMPLED_READ_BIT,
-                    VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT);
+        if (nativeResolution_ && quality_.denoisePassCount == 0) {
+            if (manageOutputTransitions)
+                barrier(cmd, raw_.image(), VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_IMAGE_LAYOUT_GENERAL,
+                        VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT, VK_ACCESS_2_SHADER_SAMPLED_READ_BIT,
+                        VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT);
+        }
         else
-            beginInternalWrite(raw_.image(), VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT |
-                                                 VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT);
+            beginInternalWrite(raw_.image(), VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT);
         beginInternalWrite(baseDepth_.image(), VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT);
         beginInternalWrite(auxiliary_.image(), VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT);
-        if (nativeResolution_ && quality_.denoisePassCount != 0)
-            barrier(cmd, filtered_.image(), VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_IMAGE_LAYOUT_GENERAL,
-                    VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT, VK_ACCESS_2_SHADER_SAMPLED_READ_BIT,
-                    VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT);
+        if (nativeResolution_ && quality_.denoisePassCount != 0) {
+            if (manageOutputTransitions)
+                barrier(cmd, filtered_.image(), VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_IMAGE_LAYOUT_GENERAL,
+                        VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT, VK_ACCESS_2_SHADER_SAMPLED_READ_BIT,
+                        VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT);
+        }
         else if (!nativeResolution_) {
-            beginInternalWrite(filtered_.image(), VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT |
-                                                    VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT);
-            barrier(cmd, full_.image(), VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_IMAGE_LAYOUT_GENERAL,
-                    VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT, VK_ACCESS_2_SHADER_SAMPLED_READ_BIT,
-                    VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT);
+            beginInternalWrite(filtered_.image(), VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT);
+            if (manageOutputTransitions)
+                barrier(cmd, full_.image(), VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_IMAGE_LAYOUT_GENERAL,
+                        VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT, VK_ACCESS_2_SHADER_SAMPLED_READ_BIT,
+                        VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT);
         }
         if (quality_.denoisePassCount > 1)
             beginInternalWrite(scratch_.image(), VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT);
@@ -484,7 +495,9 @@ namespace Engine {
         const uint32_t sourceMip = quality_.resolutionScale == 1.F ? 0U : 1U;
         update(0, {
                    {linearDepthSampler_, linearDepthView_, VK_IMAGE_LAYOUT_GENERAL},
-                   {viewNormalSampler, viewNormal, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL},
+                   {viewNormalSampler, viewNormal, useExternalNormals
+                       ? VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL
+                       : VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL},
                    {linearDepthSampler_, linearDepthView_, VK_IMAGE_LAYOUT_GENERAL},
                    {VK_NULL_HANDLE, hilbertLut_.imageView(), VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL}
                },
@@ -496,7 +509,7 @@ namespace Engine {
         barrier(cmd, raw_.image(), VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_GENERAL,
                 VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
                 VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT,
-                VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT | VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT,
+                VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
                 VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
         barrier(cmd, auxiliary_.image(), VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_GENERAL,
                 VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT,
@@ -519,7 +532,7 @@ namespace Engine {
             dispatch(1, denoise, halfExtent_, pass);
             barrier(cmd, output.image(), VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_GENERAL,
                     VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT,
-                    VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT | VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT,
+                    VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
                     VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
             denoised = &output;
         }
@@ -542,9 +555,10 @@ namespace Engine {
             dispatch(2, up, fullExtent_);
         }
         const VkImage finalImage = nativeResolution_ ? denoised->image() : full_.image();
-        barrier(cmd, finalImage, VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-                VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT,
-                VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT, VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
+        if (manageOutputTransitions)
+            barrier(cmd, finalImage, VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                    VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT,
+                    VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT, VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
     }
 
     void GtaoPass::reset() noexcept {
@@ -619,6 +633,7 @@ namespace Engine {
         linearDepthMipCount_ = 0;
         linearDepthInitialized_ = false;
         nativeResolution_ = false;
+        filteredAoFormat_ = VK_FORMAT_UNDEFINED;
         allocator_ = {};
         device_ = {};
         reset();

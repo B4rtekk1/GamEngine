@@ -1,6 +1,7 @@
 #include "Engine/Renderer/RenderGraph/RenderGraph.h"
 
 #include <algorithm>
+#include <array>
 #include <queue>
 #include <stdexcept>
 #include <unordered_set>
@@ -205,7 +206,7 @@ namespace Engine::RenderGraph {
         return extent.width == other.extent.width && extent.height == other.extent.height &&
                extent.depth == other.extent.depth && format == other.format && usage == other.usage &&
                aspect == other.aspect && mipLevels == other.mipLevels && arrayLayers == other.arrayLayers &&
-               samples == other.samples;
+               samples == other.samples && concurrentSharing == other.concurrentSharing;
     }
 
     bool BufferDesc::compatibleWith(const BufferDesc &other) const noexcept {
@@ -255,6 +256,10 @@ namespace Engine::RenderGraph {
         graph_.passes_[pass_].sideEffect = true;
     }
 
+    void PassBuilder::startNewBatch() {
+        graph_.passes_[pass_].startsNewBatch = true;
+    }
+
     TextureHandle RenderGraph::importTexture(std::string name, const VkImage image, const TextureDesc &desc,
                                              const TextureState initialState) {
         if (image == VK_NULL_HANDLE) {
@@ -268,6 +273,8 @@ namespace Engine::RenderGraph {
     }
 
     TextureHandle RenderGraph::createTexture(std::string name, const TextureDesc &desc) {
+        if (desc.concurrentSharing)
+            throw std::invalid_argument("Concurrent RenderGraph textures must be imported");
         if (compiled_) {
             throw std::logic_error("Reset RenderGraph before adding resources");
         }
@@ -370,7 +377,7 @@ namespace Engine::RenderGraph {
         if (compiled_) {
             throw std::logic_error("Reset RenderGraph before adding passes");
         }
-        passes_.push_back({std::move(name), queue, {}, {}, {}, false, std::move(execute)});
+        passes_.push_back({std::move(name), queue, {}, {}, {}, false, false, std::move(execute)});
         PassBuilder builder{*this, static_cast<std::uint32_t>(passes_.size() - 1)};
         setup(builder);
     }
@@ -521,6 +528,7 @@ namespace Engine::RenderGraph {
             mix(resource.desc.mipLevels);
             mix(resource.desc.arrayLayers);
             mix(resource.desc.samples);
+            mix(resource.desc.concurrentSharing);
             mix(resource.initialState.stage);
             mix(resource.initialState.access);
             mix(resource.initialState.layout);
@@ -537,6 +545,7 @@ namespace Engine::RenderGraph {
             mix(pass.finalTextureStates.size());
             mix(pass.bufferAccesses.size());
             mix(pass.sideEffect);
+            mix(pass.startsNewBatch);
             for (const auto &access: pass.accesses) {
                 mix(access.texture.index);
                 mix(static_cast<std::uint8_t>(access.usage));
@@ -853,7 +862,8 @@ namespace Engine::RenderGraph {
         queueBatches_.clear();
         std::vector<std::uint32_t> passToBatch(count, std::numeric_limits<std::uint32_t>::max());
         for (const auto pass: order_) {
-            if (queueBatches_.empty() || queueBatches_.back().queue != passes_[pass].queue)
+            if (queueBatches_.empty() || queueBatches_.back().queue != passes_[pass].queue ||
+                passes_[pass].startsNewBatch)
                 queueBatches_.push_back({.queue = passes_[pass].queue});
             const auto batch = static_cast<std::uint32_t>(queueBatches_.size() - 1);
             queueBatches_.back().passes.push_back(pass);
@@ -1103,8 +1113,13 @@ namespace Engine::RenderGraph {
                          layer < access.range.baseArrayLayer + access.range.layerCount; ++layer) {
                 auto &state = states[access.texture.index][static_cast<std::size_t>(mip) * desc.arrayLayers + layer];
                 const bool crossQueue = state.queue != nextQueue;
-                if (state.layout != next.layout || state.write || next.write) {
+                const bool crossFamily = crossQueue && !desc.concurrentSharing &&
+                    queueFamilies_[static_cast<std::uint32_t>(state.queue)] !=
+                    queueFamilies_[static_cast<std::uint32_t>(nextQueue)];
+                if (state.layout != next.layout || state.write || next.write || crossFamily) {
                     VkImageMemoryBarrier2 barrier{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2};
+                    barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+                    barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
                     barrier.srcStageMask = state.stage;
                     barrier.srcAccessMask = state.access;
                     if (crossQueue) {
@@ -1114,7 +1129,8 @@ namespace Engine::RenderGraph {
                         barrier.srcAccessMask = VK_ACCESS_2_NONE;
                         const auto sourceFamily = queueFamilies_[static_cast<std::uint32_t>(state.queue)];
                         const auto destinationFamily = queueFamilies_[static_cast<std::uint32_t>(nextQueue)];
-                        if (state.pass >= 0 && sourceFamily != VK_QUEUE_FAMILY_IGNORED && destinationFamily !=
+                        if (!desc.concurrentSharing && state.pass >= 0 &&
+                            sourceFamily != VK_QUEUE_FAMILY_IGNORED && destinationFamily !=
                             VK_QUEUE_FAMILY_IGNORED && sourceFamily != destinationFamily) {
                             VkImageMemoryBarrier2 release = barrier;
                             release.srcStageMask = state.stage;
@@ -1174,6 +1190,8 @@ namespace Engine::RenderGraph {
                         auto &state = states[finalState.texture.index][static_cast<std::size_t>(mip) * desc.arrayLayers + layer];
                         if (state.layout != finalState.state.layout || state.write || finalState.state.write) {
                             VkImageMemoryBarrier2 barrier{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2};
+                            barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+                            barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
                             barrier.srcStageMask = state.stage;
                             barrier.srcAccessMask = state.access;
                             barrier.dstStageMask = finalState.state.stage;
@@ -1459,12 +1477,11 @@ namespace Engine::RenderGraph {
         if (context.commandBuffers.size() != queueBatches_.size()) {
             throw std::invalid_argument("RenderGraph requires one command buffer per queue batch");
         }
-        if (context.graphTimeline == VK_NULL_HANDLE || context.nextTimelineValue == nullptr) {
-            throw std::invalid_argument("RenderGraph submission requires a timeline semaphore and counter");
-        }
         for (const QueueBatch& batch : queueBatches_) {
-            if (context.queues[static_cast<std::uint32_t>(batch.queue)] == VK_NULL_HANDLE) {
-                throw std::invalid_argument("RenderGraph submission is missing a queue");
+            const auto queue = static_cast<std::uint32_t>(batch.queue);
+            if (context.queues[queue] == VK_NULL_HANDLE || context.queueTimelines[queue] == VK_NULL_HANDLE ||
+                context.nextQueueTimelineValues[queue] == nullptr) {
+                throw std::invalid_argument("RenderGraph submission is missing a queue or its timeline");
             }
         }
         if (!uploadWaits_.empty() && context.uploadTimeline == VK_NULL_HANDLE) {
@@ -1504,12 +1521,20 @@ namespace Engine::RenderGraph {
         }
 
         std::vector<std::uint64_t> batchValues(queueBatches_.size());
+        std::array<std::uint64_t, 3> lastQueueValues{};
         for (std::uint32_t index = 0; index < queueBatches_.size(); ++index) {
             const QueueBatch& batch = queueBatches_[index];
+            const auto queue = static_cast<std::uint32_t>(batch.queue);
             std::vector<VkSemaphoreSubmitInfo> waits;
+            // Same-queue submissions are ordered by Vulkan. Only resource edges
+            // crossing queues need a timeline wait, allowing independent work
+            // on graphics and compute to overlap.
             for (const std::uint32_t producer : batch.waitBatches) {
+                if (producer >= index) throw std::logic_error("RenderGraph batch dependency is not ordered");
+                const auto producerQueue = static_cast<std::uint32_t>(queueBatches_[producer].queue);
+                if (context.queues[producerQueue] == context.queues[queue]) continue;
                 waits.push_back({.sType = VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO,
-                    .semaphore = context.graphTimeline, .value = batchValues[producer],
+                    .semaphore = context.queueTimelines[producerQueue], .value = batchValues[producer],
                     .stageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT});
             }
             for (const UploadWait& wait : uploadWaits_) if (wait.batch == index) {
@@ -1521,9 +1546,10 @@ namespace Engine::RenderGraph {
                 waits.push_back({.sType = VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO,
                     .semaphore = wait.semaphore, .value = wait.value, .stageMask = wait.stage});
             }
-            batchValues[index] = ++*context.nextTimelineValue;
+            batchValues[index] = ++*context.nextQueueTimelineValues[queue];
+            lastQueueValues[queue] = batchValues[index];
             const VkSemaphoreSubmitInfo signal{.sType = VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO,
-                .semaphore = context.graphTimeline, .value = batchValues[index],
+                .semaphore = context.queueTimelines[queue], .value = batchValues[index],
                 .stageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT};
             const VkCommandBufferSubmitInfo command{.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_SUBMIT_INFO,
                 .commandBuffer = context.commandBuffers[index]};
@@ -1537,16 +1563,18 @@ namespace Engine::RenderGraph {
             }
         }
 
-        // A frame fence must cover independent async batches too, not merely
-        // the last topological batch.  A final empty graphics submission joins
-        // all graph timeline values and is the sole owner of completion signals.
+        // Join the last submission from each used queue before signalling frame
+        // completion. Values on each timeline are ordered by that queue.
         if (context.queues[static_cast<std::uint32_t>(Queue::Graphics)] == VK_NULL_HANDLE) {
             throw std::invalid_argument("RenderGraph completion requires a graphics queue");
         }
         std::vector<VkSemaphoreSubmitInfo> completionWaits;
-        for (const std::uint64_t value : batchValues) completionWaits.push_back({
-            .sType = VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO, .semaphore = context.graphTimeline,
-            .value = value, .stageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT});
+        for (std::uint32_t queue = 0; queue < lastQueueValues.size(); ++queue) {
+            if (lastQueueValues[queue] == 0) continue;
+            completionWaits.push_back({.sType = VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO,
+                .semaphore = context.queueTimelines[queue], .value = lastQueueValues[queue],
+                .stageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT});
+        }
         std::vector<VkSemaphoreSubmitInfo> completionSignals;
         for (const ExternalSemaphoreSignal& signal : context.completionSignals) {
             if (signal.semaphore == VK_NULL_HANDLE) throw std::invalid_argument("RenderGraph completion signal is null");

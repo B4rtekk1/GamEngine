@@ -6,6 +6,7 @@
 #include "Engine/Renderer/Textures/Texture2D.h"
 
 #include <array>
+#include <span>
 #include <vulkan/vulkan.h>
 #include <vk_mem_alloc.h>
 #include <vector>
@@ -27,7 +28,8 @@ public:
     void create(VkPhysicalDevice physicalDevice, VkDevice device, VkCommandPool commandPool, VkQueue queue,
                 VkExtent2D fullExtent,
                 VmaAllocator allocator, Assets::AssetManager& assets,
-                GtaoQualitySettings quality = gtaoQualitySettings(GtaoQuality::High));
+                GtaoQualitySettings quality = gtaoQualitySettings(GtaoQuality::High),
+                std::span<const std::uint32_t> sharingFamilies = {});
     void destroy() noexcept;
     void reset() noexcept;
     /** Makes the white (unoccluded) bootstrap visibility sampleable before Forward reads it. */
@@ -39,7 +41,15 @@ public:
     void record(VkCommandBuffer commandBuffer, std::uint32_t frameSlot,
                 std::uint32_t sampleIndex, VkImageView depthView,
                 VkSampler depthSampler, VkImageView viewNormal,
-                VkSampler viewNormalSampler, bool useExternalNormals, const Mat4& inverseProjection);
+                VkSampler viewNormalSampler, bool useExternalNormals, const Mat4& inverseProjection,
+                bool manageOutputTransitions = true);
+    [[nodiscard]] VkImage resultImage() const noexcept {
+        return nativeResolution_ ? (quality_.denoisePassCount == 0 ? raw_.image() : filtered_.image()) : full_.image();
+    }
+    [[nodiscard]] VkFormat resultFormat() const noexcept {
+        return nativeResolution_ && quality_.denoisePassCount == 0 ? VK_FORMAT_R16_SFLOAT : filteredAoFormat_;
+    }
+    [[nodiscard]] VkExtent2D resultExtent() const noexcept { return fullExtent_; }
     [[nodiscard]] VkImageView resultView() const noexcept {
         return nativeResolution_ ? (quality_.denoisePassCount == 0 ? raw_.imageView() : filtered_.imageView()) : full_.imageView();
     }
@@ -76,6 +86,7 @@ private:
     VkExtent2D fullExtent_{};
     VkExtent2D halfExtent_{};
     bool nativeResolution_ = false;
+    VkFormat filteredAoFormat_ = VK_FORMAT_UNDEFINED;
     GtaoQualitySettings quality_ = gtaoQualitySettings(GtaoQuality::High);
     // Descriptor writes must not race command buffers submitted for earlier
     // frames.  This renderer has three frame slots.

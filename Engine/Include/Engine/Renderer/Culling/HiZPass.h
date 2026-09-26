@@ -85,13 +85,14 @@ namespace Engine::Culling
          * The caller must transition the complete destination image to
          * GENERAL with compute-storage write access before recording. This
          * makes the external depth/Hi-Z dependency visible to RenderGraph;
-         * this pass retains only the barriers required between individual
-         * mip levels and the final sampled-read transition.
+         * this pass retains the barriers required between individual mip levels.
+         * The final sampled-read transition can be delegated to RenderGraph.
          */
         void record(
             VkCommandBuffer commandBuffer,
             const HiZBuffer& hiZBuffer,
-            VkDescriptorSet sharedDescriptorSet = VK_NULL_HANDLE
+            VkDescriptorSet sharedDescriptorSet = VK_NULL_HANDLE,
+            bool transitionForSampling = true
         ) const;
 
     private:

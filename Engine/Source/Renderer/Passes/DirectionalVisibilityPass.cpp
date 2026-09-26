@@ -90,7 +90,8 @@ void DirectionalVisibilityPass::create(const VkPhysicalDevice physical, const Vk
 
 void DirectionalVisibilityPass::record(const VkCommandBuffer commandBuffer, const std::uint32_t frameSlot,
     const VkImageView depth, const VkSampler depthSampler,
-    const VkImageView normals, const VkSampler normalSampler) {
+    const VkImageView normals, const VkSampler normalSampler,
+    const bool manageOutputTransitions) {
     if (!pipeline_ || !depth || !normals || frameSlot >= sets_.size()) return;
     const VkDescriptorImageInfo depthInfo{depthSampler, depth, VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL};
     const VkDescriptorImageInfo normalInfo{normalSampler, normals, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
@@ -110,7 +111,7 @@ void DirectionalVisibilityPass::record(const VkCommandBuffer commandBuffer, cons
     VkDependencyInfo dependency{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
     dependency.imageMemoryBarrierCount = 1;
     dependency.pImageMemoryBarriers = &barrier;
-    vkCmdPipelineBarrier2(commandBuffer, &dependency);
+    if (manageOutputTransitions) vkCmdPipelineBarrier2(commandBuffer, &dependency);
     vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, pipeline_);
     vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE,
         pipelineLayout_, 0, 1, &sets_[frameSlot], 0, nullptr);
@@ -124,7 +125,7 @@ void DirectionalVisibilityPass::record(const VkCommandBuffer commandBuffer, cons
     barrier.dstAccessMask = VK_ACCESS_2_SHADER_SAMPLED_READ_BIT;
     barrier.oldLayout = VK_IMAGE_LAYOUT_GENERAL;
     barrier.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-    vkCmdPipelineBarrier2(commandBuffer, &dependency);
+    if (manageOutputTransitions) vkCmdPipelineBarrier2(commandBuffer, &dependency);
 }
 
 void DirectionalVisibilityPass::destroy() noexcept {

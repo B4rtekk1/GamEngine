@@ -9,7 +9,8 @@ namespace Engine {
 
     void HdrBuffer::create(const VkPhysicalDevice physicalDevice, const VkDevice device,
                            const VkExtent2D extent, const VmaAllocator allocator,
-                           const VkFilter filter, const VkFormat format, const bool storage) {
+                           const VkFilter filter, const VkFormat format, const bool storage,
+                           const std::span<const std::uint32_t> sharingFamilies) {
         if (physicalDevice == VK_NULL_HANDLE || device == VK_NULL_HANDLE ||
             extent.width == 0 || extent.height == 0 || allocator == VK_NULL_HANDLE) {
             throw std::invalid_argument("HDR buffer requires a device and non-zero extent");
@@ -53,9 +54,10 @@ namespace Engine {
                          // first use, which requires TRANSFER_DST usage.
                          static_cast<VkImageUsageFlags>(VK_IMAGE_USAGE_TRANSFER_DST_BIT) |
                          (storage ? static_cast<VkImageUsageFlags>(VK_IMAGE_USAGE_STORAGE_BIT) : 0),
-                .sharingMode = VK_SHARING_MODE_EXCLUSIVE,
-                .queueFamilyIndexCount = 0,
-                .pQueueFamilyIndices = nullptr,
+                .sharingMode = sharingFamilies.size() > 1 ? VK_SHARING_MODE_CONCURRENT : VK_SHARING_MODE_EXCLUSIVE,
+                .queueFamilyIndexCount = sharingFamilies.size() > 1
+                    ? static_cast<std::uint32_t>(sharingFamilies.size()) : 0,
+                .pQueueFamilyIndices = sharingFamilies.size() > 1 ? sharingFamilies.data() : nullptr,
                 .initialLayout = VK_IMAGE_LAYOUT_UNDEFINED,
             };
             VmaAllocationCreateInfo allocationInfo{};

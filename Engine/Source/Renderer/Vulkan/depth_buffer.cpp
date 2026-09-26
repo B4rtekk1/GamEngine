@@ -74,7 +74,8 @@ namespace Engine {
     void DepthBuffer::create(
         VkExtent2D extent,
         VkSampleCountFlagBits samples,
-        VkFormat requiredFormat) {
+        VkFormat requiredFormat,
+        const std::span<const std::uint32_t> sharingFamilies) {
         if (physicalDevice_ == VK_NULL_HANDLE || device_ == VK_NULL_HANDLE) {
             throw std::logic_error("DepthBuffer has not been initialized");
         }
@@ -97,9 +98,9 @@ namespace Engine {
             VK_IMAGE_TILING_OPTIMAL,
             static_cast<VkImageUsageFlags>(VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT) |
             static_cast<VkImageUsageFlags>(VK_IMAGE_USAGE_SAMPLED_BIT),
-            VK_SHARING_MODE_EXCLUSIVE,
-            0,
-            nullptr,
+            sharingFamilies.size() > 1 ? VK_SHARING_MODE_CONCURRENT : VK_SHARING_MODE_EXCLUSIVE,
+            sharingFamilies.size() > 1 ? static_cast<std::uint32_t>(sharingFamilies.size()) : 0,
+            sharingFamilies.size() > 1 ? sharingFamilies.data() : nullptr,
             VK_IMAGE_LAYOUT_UNDEFINED,
         };
 

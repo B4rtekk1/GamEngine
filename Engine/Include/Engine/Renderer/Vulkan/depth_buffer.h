@@ -9,6 +9,7 @@
 #include <vk_mem_alloc.h>
 
 #include <cstdint>
+#include <span>
 
 namespace Engine {
 
@@ -52,7 +53,8 @@ public:
      * @param requiredFormat Optional Vulkan format to use for the depth image. If VK_FORMAT_UNDEFINED, a supported format is selected automatically.
      */
     void create(VkExtent2D extent, VkSampleCountFlagBits samples,
-                VkFormat requiredFormat = VK_FORMAT_UNDEFINED);
+                VkFormat requiredFormat = VK_FORMAT_UNDEFINED,
+                std::span<const std::uint32_t> sharingFamilies = {});
 
     /// Releases the depth image, view, sampler and allocated memory.
     void destroy() noexcept;

@@ -344,12 +344,19 @@
 
 
         void createDepthResources() {
-            depthBuffer.create(swapchain.extent(), msaa.sampleCount());
+            const std::array depthFamilies{
+                vulkanDevice.graphicsQueueFamily(), vulkanDevice.computeQueueFamily()};
+            const std::span<const std::uint32_t> sharingFamilies =
+                vulkanDevice.hasAsyncComputeQueue() && depthFamilies[0] != depthFamilies[1]
+                    ? std::span<const std::uint32_t>(depthFamilies)
+                    : std::span<const std::uint32_t>{};
+            depthBuffer.create(swapchain.extent(), msaa.sampleCount(), VK_FORMAT_UNDEFINED,
+                               sharingFamilies);
             sceneViewportDepthBuffer.initialize(vulkanDevice.physical(), device, vulkanDevice.allocator());
             hiZDepthBuffer.initialize(vulkanDevice.physical(), device, vulkanDevice.allocator());
             if (msaa.enabled()) {
                 hiZDepthBuffer.create(swapchain.extent(), VK_SAMPLE_COUNT_1_BIT,
-                                      depthBuffer.format());
+                                      depthBuffer.format(), sharingFamilies);
             }
         }
 
@@ -360,8 +367,14 @@
         }
 
         void createGtaoPass() {
+            const std::array gtaoFamilies{
+                vulkanDevice.graphicsQueueFamily(), vulkanDevice.computeQueueFamily()};
+            const std::span<const std::uint32_t> sharingFamilies =
+                vulkanDevice.hasAsyncComputeQueue() && gtaoFamilies[0] != gtaoFamilies[1]
+                    ? std::span<const std::uint32_t>(gtaoFamilies)
+                    : std::span<const std::uint32_t>{};
             gtaoPass.create(vulkanDevice.physical(), device, commandPool, vulkanDevice.graphicsQueue(), swapchain.extent(),
-                            vulkanDevice.allocator(), assetManager, gtaoQualitySettings(gtaoQuality));
+                            vulkanDevice.allocator(), assetManager, gtaoQualitySettings(gtaoQuality), sharingFamilies);
         }
 
         void createRtContactShadowPass() {

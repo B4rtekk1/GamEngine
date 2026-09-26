@@ -629,13 +629,23 @@
 
         VkCommandPool commandPool{};
         VkCommandPool asyncComputeCommandPool{};
+        VkCommandPool transferCommandPool{};
         UploadContext uploadContext;
         std::vector<VkCommandBuffer> commandBuffers;
-        std::vector<VkCommandBuffer> postAsyncGraphicsCommandBuffers;
-        std::vector<VkCommandBuffer> asyncComputeCommandBuffers;
-        VkSemaphore asyncComputeTimeline{};
-        std::uint64_t asyncComputeTimelineValue{};
-        bool asyncHiZSubmittedThisFrame{};
+        std::vector<VkCommandBuffer> postViewportGraphicsCommandBuffers;
+        struct GraphCommandBuffer {
+            RenderGraph::Queue queue{};
+            VkCommandBuffer buffer{};
+        };
+        std::array<std::vector<GraphCommandBuffer>, MAX_FRAMES_IN_FLIGHT> renderGraphCommandBuffers;
+        std::array<std::vector<GraphCommandBuffer>, MAX_FRAMES_IN_FLIGHT> presentationGraphCommandBuffers;
+        VkSemaphore renderGraphTimeline{};
+        std::uint64_t renderGraphTimelineValue{};
+        VkSemaphore renderGraphComputeTimeline{};
+        std::uint64_t renderGraphComputeTimelineValue{};
+        VkSemaphore renderGraphTransferTimeline{};
+        std::uint64_t renderGraphTransferTimelineValue{};
+        bool presentationGraphSubmittedThisFrame{};
 
         std::vector<VkSemaphore> imageAvailableSemaphores;
         std::vector<VkSemaphore> renderFinishedSemaphores;

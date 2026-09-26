@@ -64,6 +64,7 @@ namespace Engine::RenderGraph {
         std::uint32_t mipLevels{1};
         std::uint32_t arrayLayers{1};
         VkSampleCountFlagBits samples{VK_SAMPLE_COUNT_1_BIT};
+        bool concurrentSharing{};
 
         [[nodiscard]] bool compatibleWith(const TextureDesc& other) const noexcept;
     };
@@ -112,7 +113,7 @@ namespace Engine::RenderGraph {
         Queue consumerQueue{Queue::Graphics};
     };
 
-    /** A submission-sized contiguous run of passes for one hardware queue. */
+    /** A submission-sized run of passes for one hardware queue. */
     struct QueueBatch final {
         Queue queue{Queue::Graphics};
         std::vector<std::uint32_t> passes;
@@ -164,8 +165,8 @@ namespace Engine::RenderGraph {
     struct SubmissionContext final {
         VkQueue queues[3]{VK_NULL_HANDLE, VK_NULL_HANDLE, VK_NULL_HANDLE};
         std::vector<VkCommandBuffer> commandBuffers;
-        VkSemaphore graphTimeline{VK_NULL_HANDLE};
-        std::uint64_t* nextTimelineValue{};
+        VkSemaphore queueTimelines[3]{VK_NULL_HANDLE, VK_NULL_HANDLE, VK_NULL_HANDLE};
+        std::uint64_t* nextQueueTimelineValues[3]{};
         VkSemaphore uploadTimeline{VK_NULL_HANDLE};
         std::vector<ExternalSemaphoreWait> externalWaits;
         std::vector<ExternalSemaphoreSignal> completionSignals;
@@ -198,6 +199,8 @@ namespace Engine::RenderGraph {
          * callback during migration, query writes, or an external encoder).
          */
         void setSideEffect();
+        /** Starts a new submission batch at this pass, even when its queue matches the previous pass. */
+        void startNewBatch();
 
     private:
         friend class RenderGraph;
@@ -303,6 +306,7 @@ namespace Engine::RenderGraph {
             std::vector<FinalTextureState> finalTextureStates;
             std::vector<BufferAccess> bufferAccesses;
             bool sideEffect{};
+            bool startsNewBatch{};
             ExecuteCallback execute;
         };
         // These are complete, physical Vulkan barriers after compile().  Keeping

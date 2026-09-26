@@ -260,7 +260,8 @@ namespace Engine::Culling
     void HiZPass::record(
         VkCommandBuffer commandBuffer,
         const HiZBuffer& hiZBuffer,
-        const VkDescriptorSet sharedDescriptorSet
+        const VkDescriptorSet sharedDescriptorSet,
+        const bool transitionForSampling
     ) const
     {
         vkCmdBindPipeline(
@@ -357,6 +358,8 @@ namespace Engine::Culling
                 1
             );
         }
+
+        if (!transitionForSampling) return;
 
         VkImageMemoryBarrier2 cullingBarrier{
             .sType =

@@ -109,12 +109,25 @@
                 imageAvailableSemaphores.clear();
                 inFlightFences.clear();
 
-                if (asyncComputeTimeline != VK_NULL_HANDLE) {
-                    vkDestroySemaphore(device, asyncComputeTimeline, nullptr);
-                    asyncComputeTimeline = VK_NULL_HANDLE;
+                if (renderGraphTimeline != VK_NULL_HANDLE) {
+                    vkDestroySemaphore(device, renderGraphTimeline, nullptr);
+                    renderGraphTimeline = VK_NULL_HANDLE;
                 }
-                asyncComputeCommandBuffers.clear();
-                postAsyncGraphicsCommandBuffers.clear();
+                if (renderGraphComputeTimeline != VK_NULL_HANDLE) {
+                    vkDestroySemaphore(device, renderGraphComputeTimeline, nullptr);
+                    renderGraphComputeTimeline = VK_NULL_HANDLE;
+                }
+                if (renderGraphTransferTimeline != VK_NULL_HANDLE) {
+                    vkDestroySemaphore(device, renderGraphTransferTimeline, nullptr);
+                    renderGraphTransferTimeline = VK_NULL_HANDLE;
+                }
+                for (auto& buffers : renderGraphCommandBuffers) buffers.clear();
+                for (auto& buffers : presentationGraphCommandBuffers) buffers.clear();
+                postViewportGraphicsCommandBuffers.clear();
+                if (transferCommandPool != VK_NULL_HANDLE) {
+                    vkDestroyCommandPool(device, transferCommandPool, nullptr);
+                    transferCommandPool = VK_NULL_HANDLE;
+                }
                 if (asyncComputeCommandPool != VK_NULL_HANDLE) {
                     vkDestroyCommandPool(device, asyncComputeCommandPool, nullptr);
                     asyncComputeCommandPool = VK_NULL_HANDLE;

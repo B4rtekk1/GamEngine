@@ -7,6 +7,8 @@
 
 #include <vulkan/vulkan.h>
 #include <vk_mem_alloc.h>
+#include <cstdint>
+#include <span>
 
 namespace Engine {
     /**
@@ -40,7 +42,8 @@ namespace Engine {
          */
         void create(VkPhysicalDevice physicalDevice, VkDevice device, VkExtent2D extent,
                     VmaAllocator allocator, VkFilter filter = VK_FILTER_LINEAR,
-                    VkFormat format = Format, bool storage = false);
+                    VkFormat format = Format, bool storage = false,
+                    std::span<const std::uint32_t> sharingFamilies = {});
 
         /// Releases the HDR image, memory, view and sampler.
         void destroy() noexcept;
