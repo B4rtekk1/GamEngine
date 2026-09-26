@@ -1518,6 +1518,28 @@
                 commandPool, vulkanDevice.graphicsQueue());
         }
 
+        template <typename GPURecord, typename SourceRecord, typename Convert>
+        void uploadGPUSceneDirtyIds(const Buffer& buffer, const std::vector<SourceRecord>& source,
+                                    std::vector<std::uint32_t> ids, Convert convert) {
+            std::sort(ids.begin(), ids.end());
+            ids.erase(std::unique(ids.begin(), ids.end()), ids.end());
+            ids.erase(std::lower_bound(ids.begin(), ids.end(), source.size(),
+                      [](const std::uint32_t id, const std::size_t size) { return id < size; }),
+                      ids.end());
+            std::vector<GPURecord> records;
+            for (std::size_t first = 0; first < ids.size();) {
+                std::size_t last = first + 1;
+                while (last < ids.size() && ids[last] == ids[last - 1] + 1U) ++last;
+                records.clear();
+                records.reserve(last - first);
+                for (std::size_t index = first; index < last; ++index)
+                    records.push_back(convert(source[ids[index]]));
+                buffer.uploadDeviceLocal(records.data(), sizeof(GPURecord) * records.size(),
+                    sizeof(GPURecord) * ids[first], commandPool, vulkanDevice.graphicsQueue());
+                first = last;
+            }
+        }
+
         template <typename Id>
         static void appendPendingIds(std::vector<Id>& destination, std::vector<std::uint32_t>& stamps,
                                      const std::uint32_t generation, const std::vector<Id>& source) {
@@ -1681,7 +1703,8 @@
                     {meshletCullingUniformBuffers[frame].handle(), 0, sizeof(Culling::MeshletCullUniforms)},
                     {meshletClusterBuffer.handle(), 0, VK_WHOLE_SIZE},
                 };
-                const auto& hiZBuffer = hiZBuffers[frame];
+                const auto previousHiZFrame = (frame + MAX_FRAMES_IN_FLIGHT - 1U) % MAX_FRAMES_IN_FLIGHT;
+                const auto& hiZBuffer = hiZBuffers[previousHiZFrame];
                 const VkDescriptorImageInfo meshletHiZInfo{hiZBuffer.sampler(), hiZBuffer.fullView(),
                                                            VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
                 VkWriteDescriptorSet meshletWrites[10]{};
@@ -1786,44 +1809,20 @@
                 return;
             }
             const auto& instances = sceneGpu.database.instances();
-            for (const GPUSceneInstanceId id : pending.instances) {
-                if (id >= instances.size()) continue;
-                const auto record = gpuSceneRecord(instances[id]);
-                gpuSceneInstanceBuffers[frame].uploadDeviceLocal(&record, sizeof(record), sizeof(record) * id,
-                    commandPool, vulkanDevice.graphicsQueue());
-                const auto visibilityRecord = gpuSceneVisibilityRecord(instances[id]);
-                gpuVisibilityInstanceBuffers[frame].uploadDeviceLocal(
-                    &visibilityRecord, sizeof(visibilityRecord), sizeof(visibilityRecord) * id,
-                    commandPool, vulkanDevice.graphicsQueue());
-            }
-            // A removed slot retains its fixed address but becomes inert. This
-            // makes an in-flight indirect list harmless even before compaction.
-            for (const GPUSceneInstanceId id : pending.removedInstances) {
-                if (id >= instances.size()) continue;
-                auto record = gpuSceneRecord(instances[id]);
-                record.idsAndFlags.w = 0U;
-                gpuSceneInstanceBuffers[frame].uploadDeviceLocal(&record, sizeof(record), sizeof(record) * id,
-                    commandPool, vulkanDevice.graphicsQueue());
-                auto visibilityRecord = gpuSceneVisibilityRecord(instances[id]);
-                visibilityRecord.idsAndFlags.w = 0U;
-                gpuVisibilityInstanceBuffers[frame].uploadDeviceLocal(
-                    &visibilityRecord, sizeof(visibilityRecord), sizeof(visibilityRecord) * id,
-                    commandPool, vulkanDevice.graphicsQueue());
-            }
+            // Both lists can contain the same slot after a remove/reuse cycle.
+            // Convert its current state once; dead slots become inert in both records.
+            std::vector<std::uint32_t> instanceIds = pending.instances;
+            instanceIds.insert(instanceIds.end(), pending.removedInstances.begin(), pending.removedInstances.end());
+            uploadGPUSceneDirtyIds<GPUSceneInstanceRecord>(gpuSceneInstanceBuffers[frame], instances,
+                instanceIds, [](const auto& instance) { return gpuSceneRecord(instance); });
+            uploadGPUSceneDirtyIds<GPUVisibilityInstanceRecord>(gpuVisibilityInstanceBuffers[frame], instances,
+                instanceIds, [](const auto& instance) { return gpuSceneVisibilityRecord(instance); });
             const auto& meshes = sceneGpu.database.meshes();
-            for (const GPUSceneMeshId id : pending.meshes) {
-                if (id >= meshes.size()) continue;
-                const auto record = gpuSceneRecord(meshes[id]);
-                gpuSceneMeshBuffers[frame].uploadDeviceLocal(&record, sizeof(record), sizeof(record) * id,
-                    commandPool, vulkanDevice.graphicsQueue());
-            }
+            uploadGPUSceneDirtyIds<GPUSceneMeshRecord>(gpuSceneMeshBuffers[frame], meshes,
+                pending.meshes, [](const auto& mesh) { return gpuSceneRecord(mesh); });
             const auto& databaseMaterials = sceneGpu.database.materials();
-            for (const GPUSceneMaterialId id : pending.materials) {
-                if (id >= databaseMaterials.size()) continue;
-                const auto record = gpuSceneRecord(databaseMaterials[id]);
-                gpuSceneMaterialBuffers[frame].uploadDeviceLocal(&record, sizeof(record), sizeof(record) * id,
-                    commandPool, vulkanDevice.graphicsQueue());
-            }
+            uploadGPUSceneDirtyIds<GPUSceneMaterialRecord>(gpuSceneMaterialBuffers[frame], databaseMaterials,
+                pending.materials, [](const auto& material) { return gpuSceneRecord(material); });
             pending.clear();
             recordGPUSceneUploadBarrier();
             [[maybe_unused]] const UploadTicket ticket = uploadBatch.submit();
@@ -2417,15 +2416,16 @@
             if (cullingUniformBuffers[frame].handle() == VK_NULL_HANDLE) return;
             constexpr float hizDepthBias = 0.0025F;
             constexpr float hizAabbExpansion = 0.01F;
-            const auto& hiZBuffer = hiZBuffers[frame];
+            const auto previousHiZFrame = (frame + MAX_FRAMES_IN_FLIGHT - 1U) % MAX_FRAMES_IN_FLIGHT;
+            const auto& hiZBuffer = hiZBuffers[previousHiZFrame];
             Culling::CullingUniformData data{};
             if (!cameraController.camera()) {
                 throw std::runtime_error("Camera must be initialized before culling");
             }
             const glm::mat4 viewProjection = cameraController.camera()->projectionMatrix().native() * cameraController.camera()->viewMatrix().native();
             std::memcpy(data.viewProjection.data, &viewProjection, sizeof(viewProjection));
-            std::memcpy(data.occlusionViewProjection.data, &hiZViewProjections[frame],
-                        sizeof(hiZViewProjections[frame]));
+            std::memcpy(data.occlusionViewProjection.data, &hiZViewProjections[previousHiZFrame],
+                        sizeof(hiZViewProjections[previousHiZFrame]));
             const auto frustumPlanes = extractFrustumPlanes(viewProjection);
             for (std::size_t i = 0; i < frustumPlanes.size(); ++i)
                 std::memcpy(&data.frustumPlanes[i], &frustumPlanes[i], sizeof(frustumPlanes[i]));
@@ -2440,7 +2440,7 @@
             data.depthBias = hizDepthBias;
             data.aabbExpansion = hizAabbExpansion;
             // Never reject objects using an uninitialized hierarchy.
-            data.cameraCut = hiZValid[frame] ? 0u : 1u;
+            data.cameraCut = hiZValid[previousHiZFrame] ? 0u : 1u;
             data.shadowPass = 0;
             data.enableFrustumCulling = optimizationFeatures.gpuCulling ? 1u : 0u;
             data.drawCategory = 0;
@@ -2453,11 +2453,12 @@
             if (meshletCullingUniformBuffers[frame].handle() == VK_NULL_HANDLE ||
                 !cameraController.camera()) return;
             Culling::MeshletCullUniforms data{};
+            const auto previousHiZFrame = (frame + MAX_FRAMES_IN_FLIGHT - 1U) % MAX_FRAMES_IN_FLIGHT;
             const glm::mat4 viewProjection = cameraController.camera()->projectionMatrix().native() *
                                              cameraController.camera()->viewMatrix().native();
             std::memcpy(data.viewProjection.data, &viewProjection, sizeof(viewProjection));
-            std::memcpy(data.occlusionViewProjection.data, &hiZViewProjections[frame],
-                        sizeof(hiZViewProjections[frame]));
+            std::memcpy(data.occlusionViewProjection.data, &hiZViewProjections[previousHiZFrame],
+                        sizeof(hiZViewProjections[previousHiZFrame]));
             const auto planes = extractFrustumPlanes(viewProjection);
             for (std::size_t index = 0; index < planes.size(); ++index)
                 std::memcpy(&data.frustumPlanes[index], &planes[index], sizeof(planes[index]));
@@ -2468,9 +2469,9 @@
             data.viewportWidth = static_cast<float>(swapchain.extent().width);
             data.viewportHeight = static_cast<float>(swapchain.extent().height);
             data.depthBias = 0.0025F;
-            data.hiZMipCount = hiZValid[frame] ? hiZBuffers[frame].mipCount() : 0U;
+            data.hiZMipCount = hiZValid[previousHiZFrame] ? hiZBuffers[previousHiZFrame].mipCount() : 0U;
             data.enableOcclusionCulling = canUseHiZOcclusionCulling() ? 1U : 0U;
-            data.cameraCut = hiZValid[frame] ? 0U : 1U;
+            data.cameraCut = hiZValid[previousHiZFrame] ? 0U : 1U;
             meshletCullingUniformBuffers[frame].update(&data, sizeof(data));
         }
 

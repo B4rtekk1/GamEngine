@@ -4,6 +4,7 @@
 #include <array>
 #include <queue>
 #include <stdexcept>
+#include <unordered_map>
 #include <unordered_set>
 
 namespace Engine::RenderGraph {
@@ -796,11 +797,25 @@ namespace Engine::RenderGraph {
         // The submitter turns each of these into a timeline wait/signal pair;
         // multiple resource hazards between the same two passes collapse here.
         queueDependencies_.clear();
-        std::unordered_set<std::uint64_t> seenQueueEdges;
+        std::unordered_map<std::uint64_t, std::size_t> queueEdgeIndices;
         const auto isLive = [this](const std::uint32_t pass) {
             return std::ranges::find(order_, pass) != order_.end();
         };
-        const auto addQueueEdge = [&](const std::uint32_t producer, const std::uint32_t consumer) {
+        const auto textureStage = [&](const std::uint32_t pass, const std::uint32_t resource) {
+            VkPipelineStageFlags2 stages = VK_PIPELINE_STAGE_2_NONE;
+            for (const auto& access : passes_[pass].accesses)
+                if (access.texture.index == resource) stages |= usageInfo(access.usage).stage;
+            return stages;
+        };
+        const auto bufferStage = [&](const std::uint32_t pass, const std::uint32_t resource) {
+            VkPipelineStageFlags2 stages = VK_PIPELINE_STAGE_2_NONE;
+            for (const auto& access : passes_[pass].bufferAccesses)
+                if (access.buffer.index == resource) stages |= bufferUsageInfo(access.usage).stage;
+            return stages;
+        };
+        const auto addQueueEdge = [&](const std::uint32_t producer, const std::uint32_t consumer,
+                                      const VkPipelineStageFlags2 producerStage,
+                                      const VkPipelineStageFlags2 consumerStage) {
             if (!isLive(producer) || !isLive(consumer)) {
                 return;
             }
@@ -808,8 +823,13 @@ namespace Engine::RenderGraph {
                 return;
             }
             const auto key = (static_cast<std::uint64_t>(producer) << 32U) | consumer;
-            if (seenQueueEdges.insert(key).second) {
-                queueDependencies_.push_back({producer, consumer, passes_[producer].queue, passes_[consumer].queue});
+            const auto [entry, inserted] = queueEdgeIndices.emplace(key, queueDependencies_.size());
+            if (inserted)
+                queueDependencies_.push_back({producer, consumer, passes_[producer].queue,
+                    passes_[consumer].queue, producerStage, consumerStage});
+            else {
+                queueDependencies_[entry->second].producerStage |= producerStage;
+                queueDependencies_[entry->second].consumerStage |= consumerStage;
             }
         };
         std::vector<std::int32_t> dependencyWriter(resources_.size(), -1);
@@ -821,15 +841,17 @@ namespace Engine::RenderGraph {
                 const auto resource = access.texture.index;
                 if (!access.write) {
                     if (dependencyWriter[resource] >= 0) {
-                        addQueueEdge(dependencyWriter[resource], pass);
+                        addQueueEdge(dependencyWriter[resource], pass,
+                            textureStage(dependencyWriter[resource], resource), usageInfo(access.usage).stage);
                     }
                     dependencyReaders[resource].push_back(pass);
                 } else {
                     if (dependencyWriter[resource] >= 0) {
-                        addQueueEdge(dependencyWriter[resource], pass);
+                        addQueueEdge(dependencyWriter[resource], pass,
+                            textureStage(dependencyWriter[resource], resource), usageInfo(access.usage).stage);
                     }
                     for (const auto reader: dependencyReaders[resource]) {
-                        addQueueEdge(reader, pass);
+                        addQueueEdge(reader, pass, textureStage(reader, resource), usageInfo(access.usage).stage);
                     }
                     dependencyReaders[resource].clear();
                     dependencyWriter[resource] = static_cast<std::int32_t>(pass);
@@ -839,15 +861,17 @@ namespace Engine::RenderGraph {
                 const auto resource = access.buffer.index;
                 if (!access.write) {
                     if (dependencyBufferWriter[resource] >= 0) {
-                        addQueueEdge(dependencyBufferWriter[resource], pass);
+                        addQueueEdge(dependencyBufferWriter[resource], pass,
+                            bufferStage(dependencyBufferWriter[resource], resource), bufferUsageInfo(access.usage).stage);
                     }
                     dependencyBufferReaders[resource].push_back(pass);
                 } else {
                     if (dependencyBufferWriter[resource] >= 0) {
-                        addQueueEdge(dependencyBufferWriter[resource], pass);
+                        addQueueEdge(dependencyBufferWriter[resource], pass,
+                            bufferStage(dependencyBufferWriter[resource], resource), bufferUsageInfo(access.usage).stage);
                     }
                     for (const auto reader: dependencyBufferReaders[resource]) {
-                        addQueueEdge(reader, pass);
+                        addQueueEdge(reader, pass, bufferStage(reader, resource), bufferUsageInfo(access.usage).stage);
                     }
                     dependencyBufferReaders[resource].clear();
                     dependencyBufferWriter[resource] = static_cast<std::int32_t>(pass);
@@ -876,7 +900,14 @@ namespace Engine::RenderGraph {
                 consumer == std::numeric_limits<std::uint32_t>::max())
                 continue;
             auto &waits = queueBatches_[consumer].waitBatches;
-            if (std::ranges::find(waits, producer) == waits.end()) waits.push_back(producer);
+            const auto existing = std::ranges::find(waits, producer);
+            if (existing == waits.end()) {
+                waits.push_back(producer);
+                queueBatches_[consumer].waitStages.push_back(dependency.consumerStage);
+            } else {
+                queueBatches_[consumer].waitStages[static_cast<std::size_t>(existing - waits.begin())] |=
+                    dependency.consumerStage;
+            }
         }
 
         textureUploadConsumers.assign(resources_.size(), {});
@@ -1288,6 +1319,28 @@ namespace Engine::RenderGraph {
                 break;
             }
         }
+        std::vector<VkPipelineStageFlags2> producerStages(queueBatches_.size(), VK_PIPELINE_STAGE_2_NONE);
+        std::vector<std::uint32_t> producerBatchForPass(passes_.size());
+        for (std::uint32_t batchIndex = 0; batchIndex < queueBatches_.size(); ++batchIndex)
+            for (const auto pass : queueBatches_[batchIndex].passes)
+                producerBatchForPass[pass] = batchIndex;
+        for (const auto& dependency : queueDependencies_)
+            producerStages[producerBatchForPass[dependency.producerPass]] |= dependency.producerStage;
+        for (std::size_t batchIndex = 0; batchIndex < queueBatches_.size(); ++batchIndex) {
+            auto& batch = queueBatches_[batchIndex];
+            VkPipelineStageFlags2 stages = producerStages[batchIndex];
+            bool opaqueWork = false;
+            for (const auto pass : batch.passes) {
+                opaqueWork |= passes_[pass].sideEffect;
+                const auto ordered = std::ranges::find(order_, pass) - order_.begin();
+                for (const auto& barrier : releaseBarriers_[ordered].images)
+                    stages |= barrier.srcStageMask;
+                for (const auto& barrier : releaseBarriers_[ordered].buffers)
+                    stages |= barrier.srcStageMask;
+            }
+            batch.signalStage = opaqueWork || stages == VK_PIPELINE_STAGE_2_NONE
+                ? VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT : stages;
+        }
         compiledTemplates_.push_back({
             .signature = signature,
             .order = order_,
@@ -1522,6 +1575,10 @@ namespace Engine::RenderGraph {
 
         std::vector<std::uint64_t> batchValues(queueBatches_.size());
         std::array<std::uint64_t, 3> lastQueueValues{};
+        std::array<std::uint32_t, 3> lastBatchForQueue{};
+        lastBatchForQueue.fill(std::numeric_limits<std::uint32_t>::max());
+        for (std::uint32_t index = 0; index < queueBatches_.size(); ++index)
+            lastBatchForQueue[static_cast<std::uint32_t>(queueBatches_[index].queue)] = index;
         for (std::uint32_t index = 0; index < queueBatches_.size(); ++index) {
             const QueueBatch& batch = queueBatches_[index];
             const auto queue = static_cast<std::uint32_t>(batch.queue);
@@ -1529,13 +1586,15 @@ namespace Engine::RenderGraph {
             // Same-queue submissions are ordered by Vulkan. Only resource edges
             // crossing queues need a timeline wait, allowing independent work
             // on graphics and compute to overlap.
-            for (const std::uint32_t producer : batch.waitBatches) {
+            for (std::size_t waitIndex = 0; waitIndex < batch.waitBatches.size(); ++waitIndex) {
+                const std::uint32_t producer = batch.waitBatches[waitIndex];
                 if (producer >= index) throw std::logic_error("RenderGraph batch dependency is not ordered");
                 const auto producerQueue = static_cast<std::uint32_t>(queueBatches_[producer].queue);
                 if (context.queues[producerQueue] == context.queues[queue]) continue;
                 waits.push_back({.sType = VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO,
                     .semaphore = context.queueTimelines[producerQueue], .value = batchValues[producer],
-                    .stageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT});
+                    .stageMask = batch.waitStages[waitIndex] != VK_PIPELINE_STAGE_2_NONE
+                        ? batch.waitStages[waitIndex] : VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT});
             }
             for (const UploadWait& wait : uploadWaits_) if (wait.batch == index) {
                 waits.push_back({.sType = VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO,
@@ -1550,7 +1609,8 @@ namespace Engine::RenderGraph {
             lastQueueValues[queue] = batchValues[index];
             const VkSemaphoreSubmitInfo signal{.sType = VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO,
                 .semaphore = context.queueTimelines[queue], .value = batchValues[index],
-                .stageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT};
+                .stageMask = lastBatchForQueue[queue] == index
+                    ? VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT : batch.signalStage};
             const VkCommandBufferSubmitInfo command{.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_SUBMIT_INFO,
                 .commandBuffer = context.commandBuffers[index]};
             const VkSubmitInfo2 submit{.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO_2,
@@ -1632,6 +1692,38 @@ namespace Engine::RenderGraph {
     const std::vector<std::string> &RenderGraph::executionOrder() const noexcept { return orderNames_; }
     const std::vector<QueueDependency> &RenderGraph::queueDependencies() const noexcept { return queueDependencies_; }
     const std::vector<QueueBatch> &RenderGraph::queueBatches() const noexcept { return queueBatches_; }
+
+    Statistics RenderGraph::statistics() const noexcept {
+        Statistics result{};
+        if (!compiled_) return result;
+        result.passes = static_cast<std::uint32_t>(order_.size());
+        result.crossQueueEdges = static_cast<std::uint32_t>(queueDependencies_.size());
+        for (const auto& batch : queueBatches_) {
+            switch (batch.queue) {
+            case Queue::Graphics: ++result.graphicsBatches; break;
+            case Queue::AsyncCompute: ++result.computeBatches; break;
+            case Queue::Transfer: ++result.transferBatches; break;
+            }
+        }
+        const auto countBarriers = [&](const BarrierBatch& batch, const bool release) {
+            if (!batch.images.empty() || !batch.buffers.empty()) ++result.pipelineBarriers;
+            result.imageBarriers += static_cast<std::uint32_t>(batch.images.size());
+            result.bufferBarriers += static_cast<std::uint32_t>(batch.buffers.size());
+            if (release) {
+                for (const auto& barrier : batch.images)
+                    result.ownershipTransfers += barrier.srcQueueFamilyIndex != VK_QUEUE_FAMILY_IGNORED &&
+                        barrier.dstQueueFamilyIndex != VK_QUEUE_FAMILY_IGNORED &&
+                        barrier.srcQueueFamilyIndex != barrier.dstQueueFamilyIndex;
+                for (const auto& barrier : batch.buffers)
+                    result.ownershipTransfers += barrier.srcQueueFamilyIndex != VK_QUEUE_FAMILY_IGNORED &&
+                        barrier.dstQueueFamilyIndex != VK_QUEUE_FAMILY_IGNORED &&
+                        barrier.srcQueueFamilyIndex != barrier.dstQueueFamilyIndex;
+            }
+        };
+        for (const auto& batch : barriers_) countBarriers(batch, false);
+        for (const auto& batch : releaseBarriers_) countBarriers(batch, true);
+        return result;
+    }
 
     const TextureLifetime &RenderGraph::lifetime(const TextureHandle texture) const {
         requireValid(texture);

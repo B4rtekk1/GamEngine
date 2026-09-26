@@ -65,6 +65,7 @@ void Profiler::beginFrame() {
             frame.gpuFrameMs = 0.0;
             frame.cpuEvents.clear();
             frame.gpuEvents.clear();
+            frame.renderGraph = {};
             frame.gpuReady = false;
         }
         state.nextFrame = 0;
@@ -77,6 +78,7 @@ void Profiler::beginFrame() {
     frame.gpuFrameMs = 0.0;
     frame.cpuEvents.clear();
     frame.gpuEvents.clear();
+    frame.renderGraph = {};
     frame.gpuReady = false;
     state.frameStart = Clock::now();
     state.recording = true;
@@ -128,6 +130,21 @@ void Profiler::attachGpuFrame(const std::uint64_t frameNumber, const double mill
         frame.gpuReady = true;
         return;
     }
+}
+
+void Profiler::addRenderGraphStats(const RenderGraphProfileStats& stats) noexcept {
+    Storage& state = storage();
+    if (!state.recording || std::this_thread::get_id() != state.recordingThread) return;
+    auto& total = state.frames[state.nextFrame].renderGraph;
+    total.passes += stats.passes;
+    total.graphicsBatches += stats.graphicsBatches;
+    total.computeBatches += stats.computeBatches;
+    total.transferBatches += stats.transferBatches;
+    total.crossQueueEdges += stats.crossQueueEdges;
+    total.pipelineBarriers += stats.pipelineBarriers;
+    total.imageBarriers += stats.imageBarriers;
+    total.bufferBarriers += stats.bufferBarriers;
+    total.ownershipTransfers += stats.ownershipTransfers;
 }
 
 void Profiler::clear() {

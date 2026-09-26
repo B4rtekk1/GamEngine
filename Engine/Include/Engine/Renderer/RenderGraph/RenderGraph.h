@@ -111,6 +111,8 @@ namespace Engine::RenderGraph {
         std::uint32_t consumerPass{};
         Queue producerQueue{Queue::Graphics};
         Queue consumerQueue{Queue::Graphics};
+        VkPipelineStageFlags2 producerStage{VK_PIPELINE_STAGE_2_NONE};
+        VkPipelineStageFlags2 consumerStage{VK_PIPELINE_STAGE_2_NONE};
     };
 
     /** A submission-sized run of passes for one hardware queue. */
@@ -118,6 +120,20 @@ namespace Engine::RenderGraph {
         Queue queue{Queue::Graphics};
         std::vector<std::uint32_t> passes;
         std::vector<std::uint32_t> waitBatches;
+        std::vector<VkPipelineStageFlags2> waitStages;
+        VkPipelineStageFlags2 signalStage{VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT};
+    };
+
+    struct Statistics final {
+        std::uint32_t passes{};
+        std::uint32_t graphicsBatches{};
+        std::uint32_t computeBatches{};
+        std::uint32_t transferBatches{};
+        std::uint32_t crossQueueEdges{};
+        std::uint32_t pipelineBarriers{};
+        std::uint32_t imageBarriers{};
+        std::uint32_t bufferBarriers{};
+        std::uint32_t ownershipTransfers{};
     };
 
     /**
@@ -271,6 +287,7 @@ namespace Engine::RenderGraph {
         [[nodiscard]] const std::vector<std::string>& executionOrder() const noexcept;
         [[nodiscard]] const std::vector<QueueDependency>& queueDependencies() const noexcept;
         [[nodiscard]] const std::vector<QueueBatch>& queueBatches() const noexcept;
+        [[nodiscard]] Statistics statistics() const noexcept;
         /** Waits grouped by submission batch, at the first actual consumer stages. */
         [[nodiscard]] const std::vector<UploadWait>& uploadWaits() const noexcept;
         /**

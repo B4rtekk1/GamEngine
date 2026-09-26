@@ -51,7 +51,7 @@ public:
                              std::span<const VkDescriptorImageInfo> previousHiZ);
 
     void recordCull(VkCommandBuffer commandBuffer, std::uint32_t frameIndex,
-                    VkDescriptorSet sceneSet);
+                    VkDescriptorSet sceneSet, bool hiZHistoryValid);
     void recordState(VkCommandBuffer commandBuffer, std::uint32_t frameIndex,
                      VkDescriptorSet sceneSet, float deltaTime);
     void recordPrepass(VkCommandBuffer commandBuffer, std::uint32_t frameIndex,

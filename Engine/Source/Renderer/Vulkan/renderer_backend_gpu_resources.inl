@@ -978,7 +978,8 @@
                 // Binding 3 is retained by the shared culling pipeline.  When
                 // Hi-Z is disabled the shader's feature flag prevents a read,
                 // so HDR is a small, already-allocated valid fallback.
-                const auto& hiZBuffer = hiZBuffers[frame];
+                const auto previousHiZFrame = (frame + MAX_FRAMES_IN_FLIGHT - 1U) % MAX_FRAMES_IN_FLIGHT;
+                const auto& hiZBuffer = hiZBuffers[previousHiZFrame];
                 const VkDescriptorImageInfo hiZInfo = hiZBuffer.image() != VK_NULL_HANDLE
                     ? VkDescriptorImageInfo{hiZBuffer.sampler(), hiZBuffer.fullView(), VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL}
                     : VkDescriptorImageInfo{hdrBuffer.sampler(), hdrBuffer.imageView(), VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
@@ -1433,7 +1434,8 @@
                 sampledDepth.sampler(), sampledDepth.imageView(), VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL};
             std::array<VkDescriptorImageInfo, MAX_FRAMES_IN_FLIGHT> hiZInfos{};
             for (std::size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i) {
-                hiZInfos[i] = {hiZBuffers[i].sampler(), hiZBuffers[i].fullView(),
+                const auto previousHiZFrame = (i + MAX_FRAMES_IN_FLIGHT - 1U) % MAX_FRAMES_IN_FLIGHT;
+                hiZInfos[i] = {hiZBuffers[previousHiZFrame].sampler(), hiZBuffers[previousHiZFrame].fullView(),
                                VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
                 if (hiZInfos[i].imageView == VK_NULL_HANDLE) hiZInfos[i] = depthInfo;
             }

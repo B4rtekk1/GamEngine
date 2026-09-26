@@ -320,11 +320,8 @@
             }
             if (vsmPageMarkingUniformBuffers[currentFrame].handle() != VK_NULL_HANDLE) {
                 VsmPageMarkingUniforms marking{};
-                // Page marking samples the Hi-Z image from this frame slot.
-                // That image was produced when this slot was last rendered,
-                // so reconstruct with the VP stored alongside that Hi-Z
-                // image—not the camera from the immediately preceding frame.
-                marking.inverseViewProjection = glm::inverse(hiZViewProjections[currentFrame]);
+                const auto previousHiZFrame = (currentFrame + MAX_FRAMES_IN_FLIGHT - 1U) % MAX_FRAMES_IN_FLIGHT;
+                marking.inverseViewProjection = glm::inverse(hiZViewProjections[previousHiZFrame]);
                 for (std::uint32_t level = 0; level < ShadowMap::ClipLevelCount; ++level)
                     marking.clipMatrices[level] = shadowClipMatrices[level].native();
                 marking.pageCountPerAxis = ShadowMap::VirtualPagesPerAxis;
@@ -531,6 +528,20 @@
                 throw std::runtime_error("Could not begin command buffer");
             }
             gpuTimestampProfiler.beginFrame(commandBuffer, currentFrame);
+            const auto profileRenderGraph = [](const RenderGraph::RenderGraph& graph,
+                                               const bool submitted) {
+                const auto stats = graph.statistics();
+                Profiler::addRenderGraphStats({
+                    .passes = stats.passes,
+                    .graphicsBatches = submitted ? stats.graphicsBatches : 0U,
+                    .computeBatches = submitted ? stats.computeBatches : 0U,
+                    .transferBatches = submitted ? stats.transferBatches : 0U,
+                    .crossQueueEdges = stats.crossQueueEdges,
+                    .pipelineBarriers = stats.pipelineBarriers,
+                    .imageBarriers = stats.imageBarriers,
+                    .bufferBarriers = stats.bufferBarriers,
+                    .ownershipTransfers = stats.ownershipTransfers});
+            };
             static const ProfileNameId shadowProfileName = Profiler::registerName("Shadow");
             static const ProfileNameId shadowPageMarkProfileName = Profiler::registerName("Shadow.PageMark");
             static const ProfileNameId shadowPageCompactProfileName = Profiler::registerName("Shadow.PageCompact");
@@ -758,38 +769,42 @@
                 vkCmdPipelineBarrier2(commandBuffer, &dependency);
                 sceneViewportImageInitialized = true;
             }
-            // Culling runs before this frame's depth pass, so it consumes the
-            // Hi-Z result from the previous frame. On the first frame there is
-            // no previous result, but the descriptor is still bound and the
-            // image must be in the layout declared in that descriptor. The
-            // culling uniform's cameraCut flag disables occlusion testing for
-            // this frame, so an undefined image contents is acceptable after
-            // this layout transition.
+            // Culling samples the previous frame's pyramid while this frame's
+            // depth is reduced into a different image.
             // Empty scenes do not allocate culling/Hi-Z resources. Keep the
             // frame path disabled for them so no barrier references the null
             // image handle left by the intentionally skipped allocation.
             const auto& hiZBuffer = hiZBuffers[currentFrame];
+            const auto previousHiZFrame = (currentFrame + MAX_FRAMES_IN_FLIGHT - 1U) % MAX_FRAMES_IN_FLIGHT;
+            const auto& previousHiZBuffer = hiZBuffers[previousHiZFrame];
             const bool hasHiZResources = hiZBuffer.image() != VK_NULL_HANDLE;
             const bool hizEnabled = canUseHiZOcclusionCulling() && hasHiZResources;
-            const bool hadPreviousHiZ = hiZValid[currentFrame];
-            // The culling descriptor set always contains the Hi-Z image. Keep
-            // its layout valid before the compute culling dispatch, even when
-            // that dispatch skips occlusion testing.
-            if (hasHiZResources && !hadPreviousHiZ) {
-                VkImageMemoryBarrier2 initialBarrier{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2};
-                initialBarrier.srcStageMask = VK_PIPELINE_STAGE_2_NONE;
-                initialBarrier.dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
-                initialBarrier.dstAccessMask = VK_ACCESS_2_SHADER_SAMPLED_READ_BIT;
-                initialBarrier.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-                initialBarrier.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-                initialBarrier.image = hiZBuffer.image();
-                initialBarrier.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0,
-                                                   hiZBuffer.mipCount(), 0, 1};
-
-                VkDependencyInfo initialDependency{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
-                initialDependency.imageMemoryBarrierCount = 1;
-                initialDependency.pImageMemoryBarriers = &initialBarrier;
-                vkCmdPipelineBarrier2(commandBuffer, &initialDependency);
+            const bool hadPreviousHiZ = hiZValid[previousHiZFrame];
+            // Descriptors stay bound on the first frame and after a camera
+            // cut. Give both images a sampled layout before any shader can
+            // reference them; UNDEFINED discards stale history in those cases.
+            if (hasHiZResources) {
+                std::array<VkImageMemoryBarrier2, 2> initialBarriers{};
+                std::uint32_t barrierCount = 0;
+                for (const std::uint32_t slot : {previousHiZFrame, currentFrame}) {
+                    if (hiZValid[slot]) continue;
+                    const auto& image = hiZBuffers[slot];
+                    auto& barrier = initialBarriers[barrierCount++];
+                    barrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2;
+                    barrier.srcStageMask = VK_PIPELINE_STAGE_2_NONE;
+                    barrier.dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+                    barrier.dstAccessMask = VK_ACCESS_2_SHADER_SAMPLED_READ_BIT;
+                    barrier.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+                    barrier.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+                    barrier.image = image.image();
+                    barrier.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, image.mipCount(), 0, 1};
+                }
+                if (barrierCount != 0) {
+                    VkDependencyInfo initialDependency{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
+                    initialDependency.imageMemoryBarrierCount = barrierCount;
+                    initialDependency.pImageMemoryBarriers = initialBarriers.data();
+                    vkCmdPipelineBarrier2(commandBuffer, &initialDependency);
+                }
             }
 
             if (particleSystem) {
@@ -958,103 +973,101 @@
             // Mark VSM pages from the completed depth hierarchy. The result
             // is consumed the next time this frame slot is reused, so this
             // dispatch never creates a CPU/GPU synchronization point.
-            if (renderGameViewport && mainLightShadows && hadPreviousHiZ &&
-                vsmPageMarkingPipeline != VK_NULL_HANDLE &&
-                vsmPageMarkingSets[currentFrame] != VK_NULL_HANDLE &&
-                vsmPageCompactPipeline != VK_NULL_HANDLE &&
-                vsmPageCompactSets[currentFrame] != VK_NULL_HANDLE) {
-                vkCmdFillBuffer(commandBuffer, vsmRequestedPageBuffers[currentFrame].handle(),
-                                0, VK_WHOLE_SIZE, 0);
-                const VkBufferMemoryBarrier2 clearBarrier{
-                    .sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER_2,
-                    .srcStageMask = VK_PIPELINE_STAGE_2_TRANSFER_BIT,
-                    .srcAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT,
-                    .dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-                    .dstAccessMask = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT,
-                    .buffer = vsmRequestedPageBuffers[currentFrame].handle(),
-                    .offset = 0, .size = VK_WHOLE_SIZE};
-                const VkDependencyInfo clearDependency{
-                    .sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO,
-                    .bufferMemoryBarrierCount = 1, .pBufferMemoryBarriers = &clearBarrier};
-                vkCmdPipelineBarrier2(commandBuffer, &clearDependency);
-                gpuTimestampProfiler.beginZone(commandBuffer, currentFrame, shadowPageMarkProfileName);
-                vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE,
-                                  vsmPageMarkingPipeline);
-                const VkDescriptorSet markingSet = vsmPageMarkingSets[currentFrame];
-                vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE,
-                                        vsmPageMarkingPipelineLayout, 0, 1,
-                                        &markingSet, 0, nullptr);
-                vkCmdDispatch(commandBuffer, (swapchain.extent().width + 7U) / 8U,
-                              (swapchain.extent().height + 7U) / 8U, 1);
-                const VkBufferMemoryBarrier2 markingBarrier{
-                    .sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER_2,
-                    .srcStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-                    .srcAccessMask = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT,
-                    .dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-                    .dstAccessMask = VK_ACCESS_2_SHADER_STORAGE_READ_BIT,
-                    .buffer = vsmRequestedPageBuffers[currentFrame].handle(),
-                    .offset = 0, .size = VK_WHOLE_SIZE};
-                const VkDependencyInfo markingDependency{
-                    .sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO,
-                    .bufferMemoryBarrierCount = 1, .pBufferMemoryBarriers = &markingBarrier};
-                vkCmdPipelineBarrier2(commandBuffer, &markingDependency);
-                gpuTimestampProfiler.endZone(commandBuffer, currentFrame);
-                gpuTimestampProfiler.beginZone(commandBuffer, currentFrame, shadowPageCompactProfileName);
-                vkCmdFillBuffer(commandBuffer, vsmCompactedPageCountBuffers[currentFrame].handle(),
-                                0, sizeof(std::uint32_t), 0);
-                const VkBufferMemoryBarrier2 countBarrier{
-                    .sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER_2,
-                    .srcStageMask = VK_PIPELINE_STAGE_2_TRANSFER_BIT,
-                    .srcAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT,
-                    .dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-                    .dstAccessMask = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT,
-                    .buffer = vsmCompactedPageCountBuffers[currentFrame].handle(),
-                    .offset = 0, .size = sizeof(std::uint32_t)};
-                const VkDependencyInfo countDependency{
-                    .sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO,
-                    .bufferMemoryBarrierCount = 1, .pBufferMemoryBarriers = &countBarrier};
-                vkCmdPipelineBarrier2(commandBuffer, &countDependency);
-                vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, vsmPageCompactPipeline);
-                const VkDescriptorSet compactSet = vsmPageCompactSets[currentFrame];
-                vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE,
-                                        vsmPageCompactPipelineLayout, 0, 1, &compactSet, 0, nullptr);
-                constexpr std::uint32_t vsmRequestWordCount =
-                    (ShadowMap::VirtualPageCount + 31U) / 32U;
-                constexpr std::uint32_t vsmCompactionThreadsPerGroup = 64U;
-                vkCmdDispatch(commandBuffer,
-                              (vsmRequestWordCount + vsmCompactionThreadsPerGroup - 1U) /
-                                  vsmCompactionThreadsPerGroup,
-                              1, 1);
-                const VkBufferMemoryBarrier2 completionBarriers[] = {
-                    {.sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER_2,
-                     .srcStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-                     .srcAccessMask = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT,
-                     .dstStageMask = VK_PIPELINE_STAGE_2_HOST_BIT,
-                     .dstAccessMask = VK_ACCESS_2_HOST_READ_BIT,
-                     .buffer = vsmCompactedPageBuffers[currentFrame].handle(),
-                     .offset = 0, .size = VK_WHOLE_SIZE},
-                    {.sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER_2,
-                     .srcStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-                     .srcAccessMask = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT,
-                     .dstStageMask = VK_PIPELINE_STAGE_2_HOST_BIT,
-                     .dstAccessMask = VK_ACCESS_2_HOST_READ_BIT,
-                     .buffer = vsmCompactedPageCountBuffers[currentFrame].handle(),
-                     .offset = 0, .size = sizeof(std::uint32_t)}};
-                const VkDependencyInfo completionDependency{
-                    .sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO,
-                    .bufferMemoryBarrierCount = std::size(completionBarriers),
-                    .pBufferMemoryBarriers = completionBarriers};
-                vkCmdPipelineBarrier2(commandBuffer, &completionDependency);
-                vsmRequestsReady[currentFrame] = true;
-                gpuTimestampProfiler.endZone(commandBuffer, currentFrame);
-            }
-            gpuTimestampProfiler.beginZone(commandBuffer, currentFrame, shadowProfileName);
-            gpuTimestampProfiler.beginZone(commandBuffer, currentFrame, shadowDepthRasterProfileName);
+            const auto recordGameVsmPageRequests = [&](const VkCommandBuffer buffer) {
+                if (renderGameViewport && mainLightShadows && hadPreviousHiZ &&
+                    vsmPageMarkingPipeline != VK_NULL_HANDLE &&
+                    vsmPageMarkingSets[currentFrame] != VK_NULL_HANDLE &&
+                    vsmPageCompactPipeline != VK_NULL_HANDLE &&
+                    vsmPageCompactSets[currentFrame] != VK_NULL_HANDLE) {
+                    vkCmdFillBuffer(buffer, vsmRequestedPageBuffers[currentFrame].handle(),
+                                    0, VK_WHOLE_SIZE, 0);
+                    const VkBufferMemoryBarrier2 clearBarrier{
+                        .sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER_2,
+                        .srcStageMask = VK_PIPELINE_STAGE_2_TRANSFER_BIT,
+                        .srcAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT,
+                        .dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                        .dstAccessMask = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT,
+                        .buffer = vsmRequestedPageBuffers[currentFrame].handle(),
+                        .offset = 0, .size = VK_WHOLE_SIZE};
+                    const VkDependencyInfo clearDependency{
+                        .sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO,
+                        .bufferMemoryBarrierCount = 1, .pBufferMemoryBarriers = &clearBarrier};
+                    vkCmdPipelineBarrier2(buffer, &clearDependency);
+                    gpuTimestampProfiler.beginZone(buffer, currentFrame, shadowPageMarkProfileName);
+                    vkCmdBindPipeline(buffer, VK_PIPELINE_BIND_POINT_COMPUTE,
+                                      vsmPageMarkingPipeline);
+                    const VkDescriptorSet markingSet = vsmPageMarkingSets[currentFrame];
+                    vkCmdBindDescriptorSets(buffer, VK_PIPELINE_BIND_POINT_COMPUTE,
+                                            vsmPageMarkingPipelineLayout, 0, 1,
+                                            &markingSet, 0, nullptr);
+                    vkCmdDispatch(buffer, (swapchain.extent().width + 7U) / 8U,
+                                  (swapchain.extent().height + 7U) / 8U, 1);
+                    const VkBufferMemoryBarrier2 markingBarrier{
+                        .sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER_2,
+                        .srcStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                        .srcAccessMask = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT,
+                        .dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                        .dstAccessMask = VK_ACCESS_2_SHADER_STORAGE_READ_BIT,
+                        .buffer = vsmRequestedPageBuffers[currentFrame].handle(),
+                        .offset = 0, .size = VK_WHOLE_SIZE};
+                    const VkDependencyInfo markingDependency{
+                        .sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO,
+                        .bufferMemoryBarrierCount = 1, .pBufferMemoryBarriers = &markingBarrier};
+                    vkCmdPipelineBarrier2(buffer, &markingDependency);
+                    gpuTimestampProfiler.endZone(buffer, currentFrame);
+                    gpuTimestampProfiler.beginZone(buffer, currentFrame, shadowPageCompactProfileName);
+                    vkCmdFillBuffer(buffer, vsmCompactedPageCountBuffers[currentFrame].handle(),
+                                    0, sizeof(std::uint32_t), 0);
+                    const VkBufferMemoryBarrier2 countBarrier{
+                        .sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER_2,
+                        .srcStageMask = VK_PIPELINE_STAGE_2_TRANSFER_BIT,
+                        .srcAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT,
+                        .dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                        .dstAccessMask = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT,
+                        .buffer = vsmCompactedPageCountBuffers[currentFrame].handle(),
+                        .offset = 0, .size = sizeof(std::uint32_t)};
+                    const VkDependencyInfo countDependency{
+                        .sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO,
+                        .bufferMemoryBarrierCount = 1, .pBufferMemoryBarriers = &countBarrier};
+                    vkCmdPipelineBarrier2(buffer, &countDependency);
+                    vkCmdBindPipeline(buffer, VK_PIPELINE_BIND_POINT_COMPUTE, vsmPageCompactPipeline);
+                    const VkDescriptorSet compactSet = vsmPageCompactSets[currentFrame];
+                    vkCmdBindDescriptorSets(buffer, VK_PIPELINE_BIND_POINT_COMPUTE,
+                                            vsmPageCompactPipelineLayout, 0, 1, &compactSet, 0, nullptr);
+                    constexpr std::uint32_t vsmRequestWordCount =
+                        (ShadowMap::VirtualPageCount + 31U) / 32U;
+                    constexpr std::uint32_t vsmCompactionThreadsPerGroup = 64U;
+                    vkCmdDispatch(buffer,
+                                  (vsmRequestWordCount + vsmCompactionThreadsPerGroup - 1U) /
+                                      vsmCompactionThreadsPerGroup,
+                                  1, 1);
+                    const VkBufferMemoryBarrier2 completionBarriers[] = {
+                        {.sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER_2,
+                         .srcStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                         .srcAccessMask = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT,
+                         .dstStageMask = VK_PIPELINE_STAGE_2_HOST_BIT,
+                         .dstAccessMask = VK_ACCESS_2_HOST_READ_BIT,
+                         .buffer = vsmCompactedPageBuffers[currentFrame].handle(),
+                         .offset = 0, .size = VK_WHOLE_SIZE},
+                        {.sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER_2,
+                         .srcStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                         .srcAccessMask = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT,
+                         .dstStageMask = VK_PIPELINE_STAGE_2_HOST_BIT,
+                         .dstAccessMask = VK_ACCESS_2_HOST_READ_BIT,
+                         .buffer = vsmCompactedPageCountBuffers[currentFrame].handle(),
+                         .offset = 0, .size = sizeof(std::uint32_t)}};
+                    const VkDependencyInfo completionDependency{
+                        .sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO,
+                        .bufferMemoryBarrierCount = std::size(completionBarriers),
+                        .pBufferMemoryBarriers = completionBarriers};
+                    vkCmdPipelineBarrier2(buffer, &completionDependency);
+                    vsmRequestsReady[currentFrame] = true;
+                    gpuTimestampProfiler.endZone(buffer, currentFrame);
+                }
+            };
             if (renderGameViewport) {
-                // This descriptor set is bound by shadowPass.record(). Update
-                // the GTAO image before that first use; Vulkan does not allow
-                // updating a bound descriptor set while recording the command
-                // buffer unless UPDATE_AFTER_BIND is enabled.
+                // Update the shared scene descriptor before the depth prepass
+                // binds it; the VSM pass records later in the frame graph.
                 const VkDescriptorImageInfo gtaoDebugTexture{gtaoPass.debugSampler(gtaoDebugView),
                                                              gtaoPass.debugView(gtaoDebugView),
                                                              gtaoPass.debugLayout(gtaoDebugView)};
@@ -1076,16 +1089,6 @@
                     shadowInstanceTransformBuffers[currentFrame].handle(), shadowInstanceMaterialBuffers[currentFrame].handle());
                 shadowPass.setShadowInstanceTransforms(currentFrame,
                     shadowTwoSidedInstanceTransformBuffers[currentFrame].handle(), shadowTwoSidedInstanceMaterialBuffers[currentFrame].handle(), true);
-                shadowPass.record(
-                    commandBuffer, shadowClipMatrices, shadowClipUpdateMask, vertexBuffer.handle(),
-                    instanceBuffers[currentFrame].handle(), indexBuffer.handle(),
-                    shadowPass.shadowDescriptorSet(currentFrame), shadowPass.shadowTwoSidedDescriptorSet(currentFrame), shadowCullingPasses[currentFrame],
-                    shadowIndirectDraws[currentFrame],
-                    shadowTwoSidedCullingPasses[currentFrame], shadowTwoSidedIndirectDraws[currentFrame],
-                    mainLightShadows
-                        ? static_cast<std::uint32_t>(gpuObjects.size()) : 0u,
-                    shadowPass.grassShadowDescriptorSet(currentFrame), grassShadowDrawPtr,
-                    static_cast<std::uint32_t>(std::max<std::size_t>(1, sceneGpu.grassClusters.size())));
             }
 
             // Scene View has its own descriptor pass and therefore its own
@@ -1093,6 +1096,8 @@
             // shadows are disabled, because the forward fragment shader still
             // samples the shadow binding declared by the shared pipeline.
             if (renderSceneViewport) {
+                gpuTimestampProfiler.beginZone(commandBuffer, currentFrame, shadowProfileName);
+                gpuTimestampProfiler.beginZone(commandBuffer, currentFrame, shadowDepthRasterProfileName);
                 // The Scene View owns a distinct VSM page table. Rebuild the
                 // shared scratch ranges only after Game View has consumed its
                 // own ranges above.
@@ -1130,9 +1135,9 @@
                         ? static_cast<std::uint32_t>(gpuObjects.size()) : 0u,
                     sceneDescriptorPass.grassShadowDescriptorSet(currentFrame), grassShadowDrawPtr,
                     static_cast<std::uint32_t>(std::max<std::size_t>(1, sceneGpu.grassClusters.size())));
+                gpuTimestampProfiler.endZone(commandBuffer, currentFrame);
+                gpuTimestampProfiler.endZone(commandBuffer, currentFrame);
             }
-            gpuTimestampProfiler.endZone(commandBuffer, currentFrame);
-            gpuTimestampProfiler.endZone(commandBuffer, currentFrame);
             gpuTimestampProfiler.beginZone(commandBuffer, currentFrame, cullingProfileName);
             const auto dispatchClusteredLights = [&](VkDescriptorSet set, const VkExtent2D extent) {
                 const uint32_t tilesX = (extent.width + ClusterTileSize - 1U) / ClusterTileSize;
@@ -1184,10 +1189,12 @@
             earlyFrameGraph.exportBuffer(graphIndirect);
             earlyFrameGraph.exportBuffer(graphDrawCount);
             earlyFrameGraph.execute(commandBuffer);
+            profileRenderGraph(earlyFrameGraph, false);
             if (renderGameViewport && virtualWaterRenderer.active()) {
                 static const ProfileNameId waterPageCullProfileName = Profiler::registerName("Water Page Cull");
                 gpuTimestampProfiler.beginZone(commandBuffer, currentFrame, waterPageCullProfileName);
-                virtualWaterRenderer.recordCull(commandBuffer, currentFrame, shadowPass.descriptorSet(currentFrame));
+                virtualWaterRenderer.recordCull(commandBuffer, currentFrame,
+                                                shadowPass.descriptorSet(currentFrame), hadPreviousHiZ);
                 virtualWaterRenderer.recordState(commandBuffer, currentFrame,
                                                  shadowPass.descriptorSet(currentFrame),
                                                  static_cast<float>(Time::deltaTime()));
@@ -1197,7 +1204,8 @@
                 static const ProfileNameId sceneWaterPageCullProfileName =
                     Profiler::registerName("Scene Water Page Cull");
                 gpuTimestampProfiler.beginZone(commandBuffer, currentFrame, sceneWaterPageCullProfileName);
-                sceneVirtualWaterRenderer.recordCull(commandBuffer, currentFrame, sceneDescriptorPass.descriptorSet(currentFrame));
+                sceneVirtualWaterRenderer.recordCull(commandBuffer, currentFrame,
+                                                     sceneDescriptorPass.descriptorSet(currentFrame), false);
                 sceneVirtualWaterRenderer.recordState(commandBuffer, currentFrame,
                                                       sceneDescriptorPass.descriptorSet(currentFrame),
                                                       static_cast<float>(Time::deltaTime()));
@@ -1361,6 +1369,11 @@
                 {.stage = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
                  .access = VK_ACCESS_2_SHADER_SAMPLED_READ_BIT,
                  .layout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL}) : RenderGraph::TextureHandle{};
+            const auto graphPreviousHiZ = hizEnabled && hadPreviousHiZ ? viewportFrameGraph.importTexture(
+                "Previous Hi-Z pyramid", previousHiZBuffer.image(), graphHiZDesc,
+                {.stage = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                 .access = VK_ACCESS_2_SHADER_SAMPLED_READ_BIT,
+                 .layout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL}) : RenderGraph::TextureHandle{};
             const auto aoExtent = gtaoPass.resultExtent();
             const RenderGraph::TextureDesc graphAoDesc{
                 .extent = {aoExtent.width, aoExtent.height, 1},
@@ -1436,32 +1449,6 @@
                 ForwardPass::end(buffer);
                 gpuTimestampProfiler.endZone(buffer, currentFrame);
             });
-            if (hizEnabled) {
-                const auto hizQueue = vulkanDevice.hasAsyncComputeQueue()
-                    ? RenderGraph::Queue::AsyncCompute
-                    : RenderGraph::Queue::Graphics;
-                if (hizQueue == RenderGraph::Queue::AsyncCompute) {
-                    // The previous frame leaves this imported pyramid owned by graphics.
-                    viewportFrameGraph.addPass("Hi-Z compute handoff", RenderGraph::Queue::Graphics,
-                    [&](RenderGraph::PassBuilder& builder) {
-                        builder.read(graphHiZ, RenderGraph::TextureUsage::SampledReadCompute);
-                        builder.setSideEffect();
-                    }, {});
-                }
-                viewportFrameGraph.addPass("Hi-Z", hizQueue,
-                [&](RenderGraph::PassBuilder& builder) {
-                    builder.read(graphDepth, RenderGraph::TextureUsage::DepthReadCompute);
-                    builder.write(graphHiZ, RenderGraph::TextureUsage::StorageWriteCompute);
-                    builder.setFinalTextureState(graphHiZ, {
-                        .stage = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-                        .access = VK_ACCESS_2_SHADER_SAMPLED_READ_BIT,
-                        .layout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-                        .write = false});
-                }, [this](const VkCommandBuffer buffer) {
-                    hiZPasses[currentFrame].record(buffer, hiZBuffers[currentFrame], VK_NULL_HANDLE, false);
-                });
-                viewportFrameGraph.exportTexture(graphHiZ);
-            } else viewportFrameGraph.exportTexture(graphDepth);
             const auto gtaoQueue = vulkanDevice.hasAsyncComputeQueue()
                 ? RenderGraph::Queue::AsyncCompute : RenderGraph::Queue::Graphics;
             const DepthBuffer& gtaoDepth = msaa.enabled() ? hiZDepthBuffer : depthBuffer;
@@ -1486,6 +1473,48 @@
                     !msaa.enabled(), inverseProjection, {.graphOwnsResultState = true});
             });
             viewportFrameGraph.exportTexture(graphAo);
+            // Shadow atlas work follows depth on graphics and overlaps GTAO on compute.
+            // The previous Hi-Z is read by page marking before the current Hi-Z write.
+            viewportFrameGraph.addPass("Shadow VSM", RenderGraph::Queue::Graphics,
+            [&](RenderGraph::PassBuilder& builder) {
+                builder.read(graphDepth, RenderGraph::TextureUsage::DepthReadCompute);
+                if (graphPreviousHiZ)
+                    builder.read(graphPreviousHiZ, RenderGraph::TextureUsage::SampledReadCompute);
+                builder.setSideEffect();
+            }, [&](const VkCommandBuffer buffer) {
+                gpuTimestampProfiler.beginZone(buffer, currentFrame, shadowProfileName);
+                recordGameVsmPageRequests(buffer);
+                gpuTimestampProfiler.beginZone(buffer, currentFrame, shadowDepthRasterProfileName);
+                shadowPass.record(
+                    buffer, shadowClipMatrices, shadowClipUpdateMask, vertexBuffer.handle(),
+                    instanceBuffers[currentFrame].handle(), indexBuffer.handle(),
+                    shadowPass.shadowDescriptorSet(currentFrame), shadowPass.shadowTwoSidedDescriptorSet(currentFrame), shadowCullingPasses[currentFrame],
+                    shadowIndirectDraws[currentFrame],
+                    shadowTwoSidedCullingPasses[currentFrame], shadowTwoSidedIndirectDraws[currentFrame],
+                    mainLightShadows
+                        ? static_cast<std::uint32_t>(gpuObjects.size()) : 0u,
+                    shadowPass.grassShadowDescriptorSet(currentFrame), grassShadowDrawPtr,
+                    static_cast<std::uint32_t>(std::max<std::size_t>(1, sceneGpu.grassClusters.size())));
+                gpuTimestampProfiler.endZone(buffer, currentFrame);
+                gpuTimestampProfiler.endZone(buffer, currentFrame);
+            });
+            // Submit GTAO as the first compute work after the depth prepass.
+            // Hi-Z does not feed AO and should not delay its critical path.
+            if (hizEnabled) {
+                viewportFrameGraph.addPass("Hi-Z", RenderGraph::Queue::Graphics,
+                [&](RenderGraph::PassBuilder& builder) {
+                    builder.read(graphDepth, RenderGraph::TextureUsage::DepthReadCompute);
+                    builder.write(graphHiZ, RenderGraph::TextureUsage::StorageWriteCompute);
+                    builder.setFinalTextureState(graphHiZ, {
+                        .stage = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                        .access = VK_ACCESS_2_SHADER_SAMPLED_READ_BIT,
+                        .layout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                        .write = false});
+                }, [this](const VkCommandBuffer buffer) {
+                    hiZPasses[currentFrame].record(buffer, hiZBuffers[currentFrame], VK_NULL_HANDLE, false);
+                });
+                viewportFrameGraph.exportTexture(graphHiZ);
+            } else viewportFrameGraph.exportTexture(graphDepth);
             RenderGraph::TextureHandle graphDirectionalVisibility{};
             if (!msaa.enabled() && directionalVisibilityPass.resultImage(currentFrame) != VK_NULL_HANDLE) {
                 const VkExtent2D visibilityExtent = directionalVisibilityPass.extent();
@@ -1529,11 +1558,12 @@
                 builder.read(graphDepth, RenderGraph::TextureUsage::DepthReadCompute);
                 if (graphViewNormal)
                     builder.read(graphViewNormal, RenderGraph::TextureUsage::SampledReadCompute);
-                if (graphHiZ)
-                    builder.read(graphHiZ, RenderGraph::TextureUsage::SampledReadCompute);
+                if (graphPreviousHiZ)
+                    builder.read(graphPreviousHiZ, RenderGraph::TextureUsage::SampledReadCompute);
                 builder.setSideEffect();
             }, {});
             viewportFrameGraph.compile();
+            profileRenderGraph(viewportFrameGraph, true);
             const auto graphCommands = prepareGraphCommandBuffers(
                 viewportFrameGraph, currentFrame, renderGraphCommandBuffers);
             RenderGraph::SubmissionContext context{};
@@ -1880,6 +1910,7 @@
                                 builder.setSideEffect();
                             }, {});
                             ddgiFrameGraph.compile();
+                            profileRenderGraph(ddgiFrameGraph, true);
                             RenderGraph::SubmissionContext ddgiContext{};
                             ddgiContext.queues[0] = vulkanDevice.graphicsQueue();
                             ddgiContext.queues[1] = vulkanDevice.computeQueue();
@@ -2524,6 +2555,7 @@
             });
             frameGraph.exportTexture(graphPresent);
             frameGraph.compile();
+            profileRenderGraph(frameGraph, true);
             const auto& presentationBatches = frameGraph.queueBatches();
             std::uint32_t firstGraphicsBatch = 0;
             bool foundGraphicsBatch = false;
@@ -3049,6 +3081,9 @@
                 sceneShadowClipmapsValid = false;
                 gameShadowContextActive = renderGameViewport;
             }
+            // A slot without a Game View depth pass cannot provide history
+            // to the next frame, even if it contains an older pyramid.
+            if (!renderGameViewport) hiZValid[currentFrame] = false;
             // Scene View is deliberately not rendered in play mode. Its cache
             // cannot consume this frame's dirty list, so discard it lazily;
             // the active game-view cache is updated page-by-page below.

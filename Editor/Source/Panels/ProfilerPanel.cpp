@@ -156,6 +156,29 @@ void drawProfilerPanel(const Engine::Renderer& renderer, bool& isOpen) {
     const Engine::ProfileFrame* selected = &Engine::Profiler::historyFrame(count - 1);
     for (std::uint32_t i = 0; i < count; ++i) if (Engine::Profiler::historyFrame(i).frameNumber == selectedFrame) selected = &Engine::Profiler::historyFrame(i);
     ImGui::Text("CPU %.3f ms   GPU %s   %.1f FPS", selected->cpuFrameMs, selected->gpuReady ? (std::to_string(selected->gpuFrameMs) + " ms").c_str() : "pending", selected->cpuFrameMs > 0.0 ? 1000.0 / selected->cpuFrameMs : 0.0);
+    const auto& graph = selected->renderGraph;
+    if (graph.passes != 0) {
+        ImGui::Separator();
+        ImGui::TextUnformatted("RENDER GRAPH");
+        if (ImGui::BeginTable("##render-graph-stats", 2, ImGuiTableFlags_SizingStretchProp |
+            ImGuiTableFlags_BordersInnerV | ImGuiTableFlags_RowBg)) {
+            const auto row = [](const char* label, const std::uint32_t value) {
+                ImGui::TableNextRow();
+                ImGui::TableSetColumnIndex(0); ImGui::TextUnformatted(label);
+                ImGui::TableSetColumnIndex(1); ImGui::Text("%u", value);
+            };
+            row("Passes", graph.passes);
+            row("Graphics batches", graph.graphicsBatches);
+            row("Compute batches", graph.computeBatches);
+            row("Transfer batches", graph.transferBatches);
+            row("Cross-queue edges", graph.crossQueueEdges);
+            row("Pipeline barriers", graph.pipelineBarriers);
+            row("Image barriers", graph.imageBarriers);
+            row("Buffer barriers", graph.bufferBarriers);
+            row("Ownership transfers", graph.ownershipTransfers);
+            ImGui::EndTable();
+        }
+    }
     ImGui::Separator(); ImGui::TextUnformatted("FRAME TIME"); drawFrameGraph(count, selectedFrame, followLatest);
     ImGui::Separator(); drawTimeline("CPU TIMELINE", *selected, false);
     if (selected->gpuReady) drawTimeline("GPU TIMELINE", *selected, true);

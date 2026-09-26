@@ -697,13 +697,14 @@ void VirtualWaterRenderer::rebuild(const WaterRenderWorld& world) {
     }
 }
 
-void VirtualWaterRenderer::recordCull(VkCommandBuffer cmd, std::uint32_t frame, VkDescriptorSet sceneSet) {
+void VirtualWaterRenderer::recordCull(VkCommandBuffer cmd, std::uint32_t frame, VkDescriptorSet sceneSet,
+                                      const bool hiZHistoryValid) {
     if (!active() || pageCount_ == 0U) return;
     frame %= FramesInFlight;
     ++waterFrameCounter_;
     GPUWaterCullConfig config{};
     config.pageCount=pageCount_;config.drawBinCount=drawBinCount_;
-    config.enableHiZ=hiZEnabled_&&previousHiZ_[frame].imageView!=VK_NULL_HANDLE?1U:0U;
+    config.enableHiZ=hiZEnabled_&&hiZHistoryValid&&previousHiZ_[frame].imageView!=VK_NULL_HANDLE?1U:0U;
     config.qualityScale=frameBudget_.qualityScale;config.currentFrame=waterFrameCounter_;
     config.maxHighGeometryPages=frameBudget_.maxHighGeometryPages;
     cullConfig_[frame].update(&config,sizeof(config));

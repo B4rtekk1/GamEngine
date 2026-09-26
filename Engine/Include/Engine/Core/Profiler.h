@@ -23,12 +23,25 @@ namespace Engine {
         std::uint16_t depth{};
     };
 
+    struct RenderGraphProfileStats final {
+        std::uint32_t passes{};
+        std::uint32_t graphicsBatches{};
+        std::uint32_t computeBatches{};
+        std::uint32_t transferBatches{};
+        std::uint32_t crossQueueEdges{};
+        std::uint32_t pipelineBarriers{};
+        std::uint32_t imageBarriers{};
+        std::uint32_t bufferBarriers{};
+        std::uint32_t ownershipTransfers{};
+    };
+
     struct ProfileFrame final {
         std::uint64_t frameNumber{};
         double cpuFrameMs{};
         double gpuFrameMs{};
         std::vector<CpuProfileEvent> cpuEvents;
         std::vector<GpuProfileEvent> gpuEvents;
+        RenderGraphProfileStats renderGraph{};
         bool gpuReady{};
     };
 
@@ -52,6 +65,7 @@ namespace Engine {
         /** Associates a fence-completed GPU timeline with its original CPU frame. */
         static void attachGpuFrame(std::uint64_t frameNumber, double milliseconds,
                                    std::span<const GpuProfileEvent> events) noexcept;
+        static void addRenderGraphStats(const RenderGraphProfileStats& stats) noexcept;
 
         static void clear();
 
