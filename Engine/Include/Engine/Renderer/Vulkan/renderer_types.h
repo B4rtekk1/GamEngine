@@ -158,6 +158,17 @@ namespace Engine {
         glm::vec4 previousPosition{};
         glm::vec4 previousRotation{0.0F, 0.0F, 0.0F, 1.0F};
         glm::vec4 previousScale{1.0F};
+
+        /** Advances TAA history; true only when GPU history needs another upload. */
+        bool settle(const RendererInstanceData& current) noexcept {
+            const glm::vec4 position{glm::vec3{current.positionMaterial}, 0.0F};
+            if (previousPosition == position && previousRotation == current.rotation &&
+                previousScale == current.scaleBase) return false;
+            previousPosition = position;
+            previousRotation = current.rotation;
+            previousScale = current.scaleBase;
+            return true;
+        }
     };
     static_assert(sizeof(RendererPreviousTransformData) == 48);
 

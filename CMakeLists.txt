@@ -13,6 +13,19 @@ endif()
 option(GE_BUILD_EDITOR "Build GamEngine Editor" ON)
 option(GE_BUILD_PLAYER "Build GamEngine Player and game scripts" ON)
 option(GE_BUILD_TESTS "Build GamEngine tests" OFF)
+option(GE_BUILD_BENCHMARKS "Build CPU scene-update microbenchmarks" OFF)
+if(GE_BUILD_BENCHMARKS)
+    add_executable(BenchmarkSceneUpdates
+        Tools/BenchmarkSceneUpdates/main.cpp
+        Engine/Source/Scene/TransformSystem.cpp)
+    target_include_directories(BenchmarkSceneUpdates PRIVATE Engine/Include ${GLM_INCLUDE_DIR})
+    gameengine_enable_warnings(BenchmarkSceneUpdates)
+    add_executable(BenchmarkScriptFields
+        Tools/BenchmarkScriptFields/main.cpp
+        Engine/Source/Scripting/ScriptRegistry.cpp)
+    target_include_directories(BenchmarkScriptFields PRIVATE Engine/Include ${GLM_INCLUDE_DIR})
+    gameengine_enable_warnings(BenchmarkScriptFields)
+endif()
 
 # Slang is used to cook built-in shaders and, in a development build, is the
 # fallback compiler for Shader Graphs.  Portable Editor packages bundle this

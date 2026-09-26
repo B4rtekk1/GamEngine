@@ -1933,18 +1933,18 @@
             // frames must see a stationary pair unless the transform changes
             // again. Keep just the M uploaded IDs while their dirty bit is
             // advanced to the next frame-in-flight.
-            const std::vector<std::size_t> uploadedTransforms = dirtyTransforms[currentFrame];
-            for (const std::size_t index : uploadedTransforms) {
-                const RendererInstanceData& rendererInstance = instanceModels[index];
-                previousInstanceTransforms[index] = {
-                    .previousPosition = glm::vec4{glm::vec3{rendererInstance.positionMaterial}, 0.0F},
-                    .previousRotation = rendererInstance.rotation,
-                    .previousScale = rendererInstance.scaleBase,
-                };
+            settledTransformIndices.clear();
+            for (const std::size_t index : dirtyTransforms[currentFrame]) {
+                if (previousInstanceTransforms[index].settle(instanceModels[index]) &&
+                    antialiasingLevel == AntialiasingLevel::TAA) {
+                    settledTransformIndices.push_back(index);
+                }
             }
             clearDirtyIndices(&RenderableRecord::transformDirtyFrames,
                               dirtyTransforms[currentFrame], bit);
-            for (const std::size_t index : uploadedTransforms) {
+            // Requeue only changed history. Requeuing every uploaded ID keeps
+            // static transforms dirty forever, including when TAA is disabled.
+            for (const std::size_t index : settledTransformIndices) {
                 markDirty(index, &RenderableRecord::transformDirtyFrames, dirtyTransforms);
             }
             for (const std::size_t index : dirtyMaterials[currentFrame                                                                        ]) {
@@ -2039,8 +2039,8 @@
                 return;
             }
 
-            std::vector<std::size_t> changedIndices;
-            changedIndices.reserve(renderables.size());
+            auto& changedIndices = changedRenderableIndices;
+            changedIndices.clear();
             constexpr std::uint8_t transformChange = 1U;
             constexpr std::uint8_t rendererChange = 2U;
             if (renderableChangeMarks.size() != renderables.size()) {
@@ -2068,30 +2068,24 @@
                         renderableChangeKinds[index] |= kind;
                     }
                 };
-                const auto addChangedEntities = [&](const auto& entities, const auto revision,
-                                                    const std::uint8_t kind) {
-                    if (revision == 0) { return;
-}
-
-                    for (const Entity entity : entities) {
-                        const auto it = sceneGpu.renderableIndices.find(entity);
-                        if (it != sceneGpu.renderableIndices.end())
-                            for (const std::size_t index : it->second) addIndex(index, kind);
-                    }
+                const auto addChangedEntity = [&](const Entity entity, const std::uint8_t kind) {
+                    const auto it = sceneGpu.renderableIndices.find(entity);
+                    if (it != sceneGpu.renderableIndices.end())
+                        for (const std::size_t index : it->second) addIndex(index, kind);
                 };
-                addChangedEntities(
-                    TransformSystem::changedWorldTransforms(registry), transformRevision, transformChange);
-                addChangedEntities(
-                    registry.componentEntitiesChangedSince<MeshRenderer>(lastMeshRendererRevision),
-                    meshRendererRevision, rendererChange);
+                for (const Entity entity : TransformSystem::changedWorldTransforms(registry)) {
+                    addChangedEntity(entity, transformChange);
+                }
+                registry.forEachComponentChangedSince<MeshRenderer>(lastMeshRendererRevision,
+                    [&](const Entity entity) { addChangedEntity(entity, rendererChange); });
             }
 
             const Registry& readRegistry = registry;
             const auto worldModel = [&](const Entity entity) {
                 return readRegistry.get<Transform>(entity).worldMatrix().native();
             };
-            std::vector<std::size_t> changedBatches;
-            changedBatches.reserve(changedIndices.size());
+            auto& changedBatches = changedRenderableBatches;
+            changedBatches.clear();
             bool displacementChanged = false;
             for (const std::size_t index : changedIndices) {
                 const Entity entity = renderables[index].entity;
@@ -2130,6 +2124,7 @@
                         instance.rotation = {rotation.x, rotation.y, rotation.z, rotation.w};
                         instance.scaleBase = {scale, 0.0F};
                         record.lastWorldRevision = transform.worldRevision();
+                        rtTlasInputDirty = true;
                         markDirty(index, &RenderableRecord::transformDirtyFrames, dirtyTransforms);
                     }
                     continue;
@@ -2155,6 +2150,7 @@
                     (!optimizationFeatures.transformCaching ||
                      record.lastWorldRevision != transform.worldRevision());
                 if (transformChanged) {
+                    rtTlasInputDirty = true;
                     // Preserve history only for an instance whose pose is
                     // changing. The dirty upload below carries both poses to
                     // every frame-in-flight, so velocity always observes the
@@ -2248,6 +2244,7 @@
                         ? displacementExpansion(renderer->material.pbr)
                         : record.sourceDisplacementBoundsPadding;
                     if (newPadding != record.displacementBoundsPadding) {
+                        rtTlasInputDirty = true;
                         const AABB previousBounds = shadowBounds(model);
                         record.displacementBoundsPadding = newPadding;
                         record.localBounds = record.geometryLocalBounds;

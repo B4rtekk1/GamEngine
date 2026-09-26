@@ -114,6 +114,9 @@ namespace Engine {
                                       cache.parentRevision != registry.componentRevision<ParentComponent>();
 
         const std::uint64_t observedTransformRevision = cache.transformRevision;
+        if (!hierarchyChanged && observedTransformRevision == registry.componentRevision<Transform>()) {
+            return;
+        }
         const std::size_t entityCapacity = registry.entityIndexCapacity();
         if (cache.dirtyGeneration.size() < entityCapacity) {
             cache.dirtyGeneration.resize(entityCapacity);
@@ -189,9 +192,14 @@ namespace Engine {
             }
             cache.visitingGeneration[index] = 0;
             cache.resolvedGeneration[index] = generation;
-            if (const auto children = cache.children.find(entity); children != cache.children.end()) {
-                for (const Entity child: children->second) {
-                    self(self, child);
+            // Resolving an unchanged ancestor must not visit all its other
+            // branches. Explicitly dirty descendants are resolved by the
+            // outer work list; only a changed world matrix propagates here.
+            if (changed) {
+                if (const auto children = cache.children.find(entity); children != cache.children.end()) {
+                    for (const Entity child: children->second) {
+                        self(self, child);
+                    }
                 }
             }
         };
@@ -201,9 +209,8 @@ namespace Engine {
             registry.forEachComponentChangedSince<Transform>(observedTransformRevision,
                                                              [&](const Entity entity) { resolve(resolve, entity); });
         }
-        // Resolving writes the runtime world cache into Transform and therefore
-        // advances its component revision. Record the revision afterwards so
-        // that those internal cache writes are not rediscovered next frame.
+        // Cache writes do not publish local Transform edits. Remember the
+        // consumed revision and retain the world-change list for renderers.
         cache.transformRevision = registry.componentRevision<Transform>();
     }
 

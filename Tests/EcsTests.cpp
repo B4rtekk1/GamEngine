@@ -230,6 +230,42 @@ TEST(Registry, EmptyViewVisitsEveryLiveEntityAndRemovalTracksRevision) {
     EXPECT_EQ(changed.front(), first);
 }
 
+TEST(Registry, RecentChangesSkipOldRecordsAndPreserveRemovalEvents) {
+    Engine::Registry registry;
+    const auto first = registry.create();
+    const auto second = registry.create();
+    registry.add<Position>(first, Position{1});
+    registry.add<Position>(second, Position{2});
+    for (int index = 0; index < 5000; ++index) registry.markChanged<Position>(first);
+    const auto baseline = registry.componentRevision<Position>();
+    registry.markChanged<Position>(second);
+    registry.markChanged<Position>(second);
+    registry.remove<Position>(first);
+
+    std::vector<Engine::Entity> visits;
+    registry.forEachComponentChangedSince<Position>(baseline,
+        [&](const Engine::Entity entity) { visits.push_back(entity); });
+    EXPECT_EQ(visits, (std::vector<Engine::Entity>{second, second, first}));
+    const auto unique = registry.componentEntitiesChangedSince<Position>(baseline);
+    EXPECT_EQ(unique, (std::vector<Engine::Entity>{first, second}));
+    EXPECT_TRUE(registry.componentEntitiesChangedSince<Position>(baseline + 3).empty());
+    EXPECT_TRUE(registry.componentEntitiesChangedSince<Position>(baseline + 100).empty());
+    registry.forEachComponentChangedSince<Position>(baseline + 3,
+        [](Engine::Entity) { ADD_FAILURE() << "An unchanged component was visited"; });
+}
+
+TEST(Registry, RecentChangesIncludeFirstRetainedRevision) {
+    Engine::Registry registry;
+    const auto entity = registry.create();
+    registry.add<Position>(entity, Position{});
+    for (int index = 0; index < 5000; ++index) registry.markChanged<Position>(entity);
+    const auto revision = registry.componentRevision<Position>();
+    std::size_t visits = 0;
+    registry.forEachComponentChangedSince<Position>(revision - 4096,
+        [&](Engine::Entity) { ++visits; });
+    EXPECT_EQ(visits, 4096U);
+}
+
 TEST(Registry, DenseChangeRevisionsFollowSwapAndPopAfterDeltaLogExpires) {
     Engine::Registry registry;
     const auto removed = registry.create();

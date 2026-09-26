@@ -80,7 +80,6 @@
         bool rayTracingBlasDirty{true};
         // TLAS input is reconstructed only when ECS render state changes. Each
         // frame slot still receives its initial build before being reused.
-        std::uint64_t lastRtTlasTransformRevision{};
         std::uint64_t lastRtTlasTopologyRevision{};
         bool rtTlasInputDirty{true};
         // A transform change must reach every in-flight TLAS, not just the
@@ -599,6 +598,9 @@
         std::uint64_t particleColliderTransformRevision = 0;
         // Reused frame-stamped deduplication storage for changed renderables.
         std::vector<std::uint32_t> renderableChangeMarks;
+        std::vector<std::size_t> changedRenderableIndices;
+        std::vector<std::size_t> changedRenderableBatches;
+        std::vector<std::size_t> settledTransformIndices;
         std::vector<std::uint8_t> renderableChangeKinds;
         std::uint32_t renderableChangeEpoch = 0;
         // O(1) ECS-provided revision.  Do not derive this by traversing every

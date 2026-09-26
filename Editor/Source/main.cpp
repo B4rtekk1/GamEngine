@@ -1036,7 +1036,7 @@ int main(int argc, char** argv) {
             }
             if (playing && !paused) {
                 GE_PROFILE_SCOPE("Game Update");
-                physicsAccumulator += Engine::Time::deltaTime();
+                physicsAccumulator += std::clamp(Engine::Time::deltaTime(), 0.0, 0.25);
                 int physicsSteps = 0;
                 while (physicsAccumulator >= EditorConstants::physicsStep &&
                        physicsSteps < EditorConstants::maximumPhysicsStepsPerFrame) {
@@ -1051,6 +1051,11 @@ int main(int argc, char** argv) {
                     }
                     physicsAccumulator -= EditorConstants::physicsStep;
                     ++physicsSteps;
+                }
+                if (physicsAccumulator >= EditorConstants::physicsStep) {
+                    // Bound catch-up work after a stall, just like Application.
+                    // Keeping whole pending steps overloads subsequent frames.
+                    physicsAccumulator = std::fmod(physicsAccumulator, EditorConstants::physicsStep);
                 }
                 if (playing) {
                     GE_PROFILE_SCOPE("Scripts");

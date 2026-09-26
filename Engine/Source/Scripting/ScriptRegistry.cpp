@@ -76,6 +76,17 @@ namespace Engine {
         if (classDescriptor == nullptr) {
             return;
         }
+        // Most calls come from the per-frame script update. Keep the existing
+        // nodes and string values when the serialized schema already matches.
+        // Check types as well as names so edits and hot reload still migrate.
+        if (component.fields.size() == classDescriptor->fields.size() &&
+            std::ranges::all_of(classDescriptor->fields, [&](const auto &field) {
+                const auto found = component.fields.find(field.name);
+                return found != component.fields.end() &&
+                       found->second.index() == field.defaultValue.index();
+            })) {
+            return;
+        }
         std::map<std::string, ScriptFieldValue> synchronized;
         for (const auto &field: classDescriptor->fields) {
             const auto found = component.fields.find(field.name);

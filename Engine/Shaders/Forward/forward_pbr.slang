@@ -182,9 +182,9 @@ DDGISampleResult sampleDDGIIrradiance(float3 worldPosition, float3 shadingNormal
                                      float3 geometricNormal, float3 viewDirection)
 {
     DDGISampleResult result;
-    result.skyIrradiance = irradianceMap.Sample(shadingNormal).rgb * PBR_PI;
+    result.skyIrradiance = 0.0;
     const float3 giNormal = normalize(lerp(geometricNormal, shadingNormal, 0.7));
-    result.lightingIrradiance = result.skyIrradiance;
+    result.lightingIrradiance = 0.0;
     result.irradiance = 0.0;
     result.cascadeColor = 0.0;
     result.blendWeight = 0.0;
@@ -192,25 +192,47 @@ DDGISampleResult sampleDDGIIrradiance(float3 worldPosition, float3 shadingNormal
     result.activeProbeFraction = 0.0;
     result.preVisibilityWeight = 0.0;
     result.postVisibilityWeight = 0.0;
-    // Keep geometric-normal bias and visibility stable while retaining most
-    // of the normal-map detail in the diffuse irradiance lookup.
-    if (frame.ddgiOriginSpacing[2].w > 0.0) {
-        const DDGIGatherResult probe = ddgiGatherCascade(worldPosition, geometricNormal, giNormal, viewDirection,
-            frame.ddgiOriginSpacing[2].xyz, frame.ddgiOriginSpacing[2].w,
-            frame.ddgiScrollOffsets[2].xyz, ddgiIrradiance2, ddgiDistance2, ddgiProbeData2);
-        accumulateDDGICascade(result, probe, float3(0.0, 0.0, 1.0));
-    }
-    if (frame.ddgiOriginSpacing[1].w > 0.0) {
-        const DDGIGatherResult probe = ddgiGatherCascade(worldPosition, geometricNormal, giNormal, viewDirection,
-            frame.ddgiOriginSpacing[1].xyz, frame.ddgiOriginSpacing[1].w,
-            frame.ddgiScrollOffsets[1].xyz, ddgiIrradiance1, ddgiDistance1, ddgiProbeData1);
-        accumulateDDGICascade(result, probe, float3(0.0, 1.0, 0.0));
-    }
-    if (frame.ddgiOriginSpacing[0].w > 0.0) {
-        const DDGIGatherResult probe = ddgiGatherCascade(worldPosition, geometricNormal, giNormal, viewDirection,
+    // Gather finer cascades first. Their spatial transition and probe coverage
+    // determine whether a coarser cascade can affect the final blend.
+    DDGIGatherResult fineProbe;
+    DDGIGatherResult middleProbe;
+    bool hasFine = false;
+    bool hasMiddle = false;
+    float uncovered = 1.0;
+    if (ddgiCascadeTransition(worldPosition, frame.ddgiOriginSpacing[0].xyz,
+                              frame.ddgiOriginSpacing[0].w) > 0.0) {
+        fineProbe = ddgiGatherCascade(worldPosition, geometricNormal, giNormal, viewDirection,
             frame.ddgiOriginSpacing[0].xyz, frame.ddgiOriginSpacing[0].w,
             frame.ddgiScrollOffsets[0].xyz, ddgiIrradiance, ddgiDistance, ddgiProbeData);
-        accumulateDDGICascade(result, probe, float3(1.0, 0.0, 0.0));
+        hasFine = true;
+        uncovered *= 1.0 - fineProbe.blendWeight;
+    }
+    if (uncovered > 0.0 &&
+        ddgiCascadeTransition(worldPosition, frame.ddgiOriginSpacing[1].xyz,
+                              frame.ddgiOriginSpacing[1].w) > 0.0) {
+        middleProbe = ddgiGatherCascade(worldPosition, geometricNormal, giNormal, viewDirection,
+            frame.ddgiOriginSpacing[1].xyz, frame.ddgiOriginSpacing[1].w,
+            frame.ddgiScrollOffsets[1].xyz, ddgiIrradiance1, ddgiDistance1, ddgiProbeData1);
+        hasMiddle = true;
+        uncovered *= 1.0 - middleProbe.blendWeight;
+    }
+    // Apply the samples in the original coarse-to-fine order so sky fallback
+    // and all DDGI diagnostic views keep the same blend semantics.
+    if (uncovered > 0.0 &&
+        ddgiCascadeTransition(worldPosition, frame.ddgiOriginSpacing[2].xyz,
+                              frame.ddgiOriginSpacing[2].w) > 0.0) {
+        const DDGIGatherResult coarseProbe = ddgiGatherCascade(worldPosition, geometricNormal, giNormal, viewDirection,
+            frame.ddgiOriginSpacing[2].xyz, frame.ddgiOriginSpacing[2].w,
+            frame.ddgiScrollOffsets[2].xyz, ddgiIrradiance2, ddgiDistance2, ddgiProbeData2);
+        accumulateDDGICascade(result, coarseProbe, float3(0.0, 0.0, 1.0));
+    }
+    if (hasMiddle)
+        accumulateDDGICascade(result, middleProbe, float3(0.0, 1.0, 0.0));
+    if (hasFine)
+        accumulateDDGICascade(result, fineProbe, float3(1.0, 0.0, 0.0));
+    if (result.blendWeight < 1.0 || frame.pbrDebugView == PBR_DEBUG_DDGI_VS_SKY) {
+        result.skyIrradiance = irradianceMap.SampleLevel(shadingNormal, 0.0).rgb * PBR_PI;
+        result.lightingIrradiance += result.skyIrradiance * (1.0 - result.blendWeight);
     }
     // The diagnostic values describe the DDGI contribution independently of
     // the amount of sky that remains after the cascade blend.

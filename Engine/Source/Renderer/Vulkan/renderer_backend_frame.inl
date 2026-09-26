@@ -1450,10 +1450,11 @@
                 rtTlasInputDirty = true;
             }
             if (rtSceneRequested && !rayTracingBlasDirty) {
-                const std::uint64_t transformRevision = registry.componentRevision<Transform>();
                 const std::uint64_t topologyRevision = registry.renderTopologyRevision();
+                // Camera/light-only motion does not change RT geometry.
+                // Instance updates publish rtTlasInputDirty after resolving
+                // world transforms, including motion inherited from parents.
                 const bool inputChanged = rtTlasInputDirty ||
-                    transformRevision != lastRtTlasTransformRevision ||
                     topologyRevision != lastRtTlasTopologyRevision;
                 if (inputChanged) {
                     rtTlasInstances.clear();
@@ -1486,7 +1487,6 @@
                             rtTlasInstances.push_back(input);
                         }
                     }
-                    lastRtTlasTransformRevision = transformRevision;
                     lastRtTlasTopologyRevision = topologyRevision;
                     rtTlasInputDirty = false;
                     rtTlasUpdatePending.fill(true);

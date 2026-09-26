@@ -7,7 +7,6 @@
 #include "Components/TerrainGrassComponent.h"
 
 #include <unordered_map>
-#include <unordered_set>
 #include <algorithm>
 #include <typeindex>
 #include <memory>
@@ -190,12 +189,15 @@ namespace Engine {
             const auto log = m_componentChangeLogs.find(type);
             if (log != m_componentChangeLogs.end() && !log->second.records.empty() &&
                 revision >= log->second.firstRevision - 1) {
-                std::unordered_set<Entity> unique;
-                unique.reserve(log->second.records.size());
-                for (const ComponentChange& entry : log->second.records) {
-                    if (entry.revision > revision) unique.insert(entry.entity);
+                const auto& records = log->second.records;
+                if (revision >= records.back().revision) return changed;
+                const auto first = static_cast<std::size_t>(revision - log->second.firstRevision + 1);
+                changed.reserve(records.size() - first);
+                for (std::size_t index = first; index < records.size(); ++index) {
+                    changed.push_back(records[index].entity);
                 }
-                changed.assign(unique.begin(), unique.end());
+                std::ranges::sort(changed);
+                changed.erase(std::unique(changed.begin(), changed.end()), changed.end());
                 return changed;
             }
 
@@ -221,8 +223,13 @@ namespace Engine {
             const auto log = m_componentChangeLogs.find(type);
             if (log != m_componentChangeLogs.end() && !log->second.records.empty() &&
                 revision >= log->second.firstRevision - 1) {
-                for (const ComponentChange &entry : log->second.records) {
-                    if (entry.revision > revision) std::invoke(func, entry.entity);
+                const auto& records = log->second.records;
+                if (revision >= records.back().revision) return;
+                // Component revisions are consecutive, so jump directly to
+                // the first unseen record instead of scanning the old prefix.
+                const auto first = static_cast<std::size_t>(revision - log->second.firstRevision + 1);
+                for (std::size_t index = first; index < records.size(); ++index) {
+                    std::invoke(func, records[index].entity);
                 }
                 return;
             }
@@ -609,6 +616,9 @@ namespace Engine {
         template<typename T>
         ComponentPool<T> &getOrCreatePool() {
             const std::type_index type = typeid(T);
+            if (const auto found = m_componentPools.find(type); found != m_componentPools.end()) {
+                return static_cast<ComponentPool<T> &>(*found->second);
+            }
             const auto it = m_componentPools.try_emplace( //NOLINT
                 type,
                 std::make_unique<ComponentPool<T> >()).first;

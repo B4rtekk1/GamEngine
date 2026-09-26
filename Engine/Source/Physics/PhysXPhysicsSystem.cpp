@@ -53,6 +53,14 @@ namespace Engine {
         };
 
         void trampleTerrainGrass(Registry &registry, const float deltaTime) {
+            bool hasGrass = false;
+            registry.view<Transform, TerrainGrassComponent>(
+                [&](Entity, const Transform &, const TerrainGrassComponent &grass) {
+                    hasGrass = hasGrass || !grass.instances.empty();
+                });
+            if (!hasGrass) {
+                return;
+            }
             std::vector<GrassSphere> spheres;
             registry.view<Transform, ColliderComponent>(
                 [&](const Entity entity, const Transform &, const ColliderComponent &collider) {
@@ -382,6 +390,8 @@ namespace Engine {
             physx::PxRigidActor *actor{};
             Transform lastTransform{};
             RigidbodyType bodyType{RigidbodyType::Static};
+            std::uint64_t scaleWorldRevision{};
+            std::uint64_t poseWorldRevision{};
             Vec3 lastLinearVelocity;
             Vec3 lastAngularVelocity;
         };
@@ -419,6 +429,7 @@ namespace Engine {
         std::uint64_t colliderRevision{};
         std::uint64_t rigidbodyRevision{};
         std::unordered_map<Entity, ActorRecord> actors;
+        std::vector<Entity> scaleChanged;
         std::unordered_map<CookedMeshKey, physx::PxConvexMesh *, CookedMeshKeyHash> convexMeshes;
         std::unordered_map<CookedMeshKey, physx::PxTriangleMesh *, CookedMeshKeyHash> triangleMeshes;
 
@@ -786,6 +797,8 @@ namespace Engine {
                 .actor = actor,
                 .lastTransform = transform,
                 .bodyType = body == nullptr ? RigidbodyType::Static : body->type,
+                .scaleWorldRevision = owner.get<Transform>(entity).worldRevision(),
+                .poseWorldRevision = owner.get<Transform>(entity).worldRevision(),
             };
             if (dynamic) {
                 auto &rigid = *static_cast<PxRigidDynamic *>(actor);
@@ -837,10 +850,15 @@ namespace Engine {
         void reconcileStructure(Registry &owner) {
             std::vector<Entity> stale;
             stale.reserve(actors.size());
-            for (const auto &[entity, record]: actors) {
+            for (auto &[entity, record]: actors) {
                 if (!owner.valid(entity) || !owner.has<Transform>(entity) ||
                     (!owner.has<ColliderComponent>(entity) && !owner.has<RigidbodyComponent>(entity))) {
                     stale.push_back(entity);
+                } else {
+                    // A Transform can be removed and re-added between physics
+                    // calls, restarting its world revision at the same value.
+                    record.scaleWorldRevision = 0;
+                    record.poseWorldRevision = 0;
                 }
             }
             for (const Entity entity: stale) {
@@ -887,13 +905,19 @@ namespace Engine {
                 rigidbodyRevision = owner.componentRevision<RigidbodyComponent>();
             }
 
-            std::vector<Entity> scaleChanged;
-            for (const auto &[entity, record]: actors) {
+            scaleChanged.clear();
+            for (auto &[entity, record]: actors) {
+                const Transform &local = owner.get<Transform>(entity);
+                if (record.scaleWorldRevision == local.worldRevision()) {
+                    continue;
+                }
                 const Vec3 currentScale = record.bodyType == RigidbodyType::Dynamic
-                                              ? owner.get<Transform>(entity).scale
-                                              : TransformSystem::worldTransform(owner, entity).scale;
+                                              ? local.scale
+                                              : local.worldScale();
                 if (!same(record.lastTransform.scale, currentScale)) {
                     scaleChanged.push_back(entity);
+                } else {
+                    record.scaleWorldRevision = local.worldRevision();
                 }
             }
             for (const Entity entity: scaleChanged) {
@@ -904,27 +928,29 @@ namespace Engine {
         void pushEcsState(Registry &owner) {
             using namespace physx;
             for (auto &[entity, record]: actors) {
-                Transform transform = TransformSystem::worldTransform(owner, entity);
                 // Transform owns Static and Kinematic poses. Dynamic poses are
                 // owned by PhysX and cross this boundary only through teleport.
-                if (!owner.has<RigidbodyComponent>(entity) ||
-                    owner.get<RigidbodyComponent>(entity).type == RigidbodyType::Static) {
-                    if (!samePose(transform, record.lastTransform)) {
-                        record.actor->setGlobalPose(toPhysX(transform), true);
-                        record.lastTransform = transform;
+                if (record.bodyType != RigidbodyType::Dynamic) {
+                    const Transform &local = owner.get<Transform>(entity);
+                    if (record.poseWorldRevision != local.worldRevision()) {
+                        const Transform transform = local.worldTransform();
+                        if (!samePose(transform, record.lastTransform)) {
+                            if (record.bodyType == RigidbodyType::Static) {
+                                record.actor->setGlobalPose(toPhysX(transform), true);
+                            } else {
+                                static_cast<PxRigidDynamic *>(record.actor)->setKinematicTarget(toPhysX(transform));
+                            }
+                            record.lastTransform = transform;
+                        }
+                        record.poseWorldRevision = local.worldRevision();
                     }
                     continue;
                 }
-                auto &body = owner.get<RigidbodyComponent>(entity);
                 auto &rigid = *static_cast<PxRigidDynamic *>(record.actor);
-                if (body.type == RigidbodyType::Kinematic && !samePose(transform, record.lastTransform)) {
-                    rigid.setKinematicTarget(toPhysX(transform));
-                    record.lastTransform = transform;
-                }
                 PhysicsCommandBuffer *commands = owner.has<PhysicsCommandBuffer>(entity)
                                                      ? &owner.get<PhysicsCommandBuffer>(entity)
                                                      : nullptr;
-                if (body.type == RigidbodyType::Dynamic && commands != nullptr &&
+                if (commands != nullptr &&
                     (commands->teleportPosition.has_value() || commands->teleportRotation.has_value())) {
                     PxTransform pose = rigid.getGlobalPose();
                     if (commands->teleportPosition) {
@@ -935,7 +961,7 @@ namespace Engine {
                     }
                     rigid.setGlobalPose(pose, true);
                 }
-                if (body.type == RigidbodyType::Dynamic && commands != nullptr) {
+                if (commands != nullptr) {
                     if (commands->linearVelocity) {
                         rigid.setLinearVelocity(toPhysX(*commands->linearVelocity));
                     }

@@ -51,6 +51,23 @@ target_include_directories(ShaderGraphCompilerTests PRIVATE "${PROJECT_SOURCE_DI
 gameengine_enable_warnings(ShaderGraphCompilerTests)
 gameengine_enable_sanitizers(ShaderGraphCompilerTests)
 include(GoogleTest)
+add_executable(PlayModePerformanceTests
+    PlayModePerformanceTests.cpp ScriptRegistryTests.cpp ScriptSystemTests.cpp)
+target_link_libraries(PlayModePerformanceTests PRIVATE Engine GTest::gtest_main)
+gameengine_enable_warnings(PlayModePerformanceTests)
+gameengine_enable_sanitizers(PlayModePerformanceTests)
+gameengine_copy_runtime_dependencies(PlayModePerformanceTests)
+gtest_discover_tests(PlayModePerformanceTests TEST_PREFIX "PlayMode.")
+
+add_executable(TransformPerformanceTests
+    TransformPerformanceTests.cpp
+    ${PROJECT_SOURCE_DIR}/Engine/Source/Scene/TransformSystem.cpp)
+target_link_libraries(TransformPerformanceTests PRIVATE GTest::gtest_main Vulkan::Vulkan)
+target_include_directories(TransformPerformanceTests PRIVATE "${PROJECT_SOURCE_DIR}/Engine/Include" ${GLM_INCLUDE_DIR} ${VMA_INCLUDE_DIR})
+gameengine_enable_warnings(TransformPerformanceTests)
+gameengine_enable_sanitizers(TransformPerformanceTests)
+gtest_discover_tests(TransformPerformanceTests)
+
 gtest_discover_tests(GamEngineTests)
 gtest_discover_tests(TaskSchedulerTests)
 gtest_discover_tests(RenderGraphTests)
