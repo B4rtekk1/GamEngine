@@ -1940,7 +1940,6 @@
                             [&](RenderGraph::PassBuilder& builder) {
                                 builder.setSideEffect();
                                 for (std::uint32_t cascade = 0; cascade < 3; ++cascade) {
-                                    if (!ddgi.publicationPending(cascade)) continue;
                                     const auto& resource = ddgiResources[cascade];
                                     const std::array sources{resource.irradiance, resource.distance,
                                                              resource.probeData};

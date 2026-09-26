@@ -38,9 +38,6 @@ namespace Engine {
         void recordFinish(VkCommandBuffer commandBuffer, bool manageOutputTransitions = true);
         void recordPublish(VkCommandBuffer commandBuffer, bool manageOutputTransitions = true);
         [[nodiscard]] bool ready() const noexcept;
-        [[nodiscard]] bool publicationPending(std::uint32_t cascade) const noexcept {
-            return cascadeStates_[cascade].publishPending;
-        }
         [[nodiscard]] bool publicationInitialized(std::uint32_t cascade) const noexcept {
             return cascadeStates_[cascade].publishedInitialized;
         }
@@ -95,7 +92,6 @@ namespace Engine {
             std::array<std::int32_t, 3> originCell{};
             std::array<std::int32_t, 3> scrollOffset{};
             std::uint32_t sweepFrame{};
-            bool publishPending{};
             bool publishedInitialized{};
             bool initialized{};
         };

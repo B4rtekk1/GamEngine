@@ -269,7 +269,6 @@ void DDGISystem::recordPreparation(VkCommandBuffer commandBuffer, std::uint32_t 
     auto& state = cascadeStates_[cascadeIndex];
     const std::uint32_t sweepLength = (2048u + updateCount - 1u) / updateCount;
     const std::uint32_t sweepOffset = state.sweepFrame * updateCount;
-    state.publishPending = state.sweepFrame + 1u == sweepLength;
     state.sweepFrame = (state.sweepFrame + 1u) % sweepLength;
     const auto previousOrigin = state.originCell;
     const auto previousScroll = state.scrollOffset;
@@ -636,25 +635,20 @@ void DDGISystem::recordPublish(const VkCommandBuffer commandBuffer, const bool m
             std::array<VkImageMemoryBarrier2, 6> before{};
             for (std::size_t imageIndex = 0; imageIndex < images.size(); ++imageIndex) {
                 before[imageIndex] = imageBarrier(images[imageIndex].first, VK_IMAGE_LAYOUT_GENERAL,
-                    state.publishPending ? VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL
-                                         : VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                    VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
                     VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT,
-                    state.publishPending ? VK_PIPELINE_STAGE_2_COPY_BIT : VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT,
-                    state.publishPending ? VK_ACCESS_2_TRANSFER_READ_BIT : VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
-                if (state.publishPending)
-                    before[3 + imageIndex] = imageBarrier(images[imageIndex].second,
-                        state.publishedInitialized ? VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL
-                                                   : VK_IMAGE_LAYOUT_UNDEFINED,
-                        VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-                        state.publishedInitialized ? VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT
-                                                   : VK_PIPELINE_STAGE_2_NONE,
-                        state.publishedInitialized ? VK_ACCESS_2_SHADER_SAMPLED_READ_BIT : 0,
-                        VK_PIPELINE_STAGE_2_COPY_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT);
+                    VK_PIPELINE_STAGE_2_COPY_BIT, VK_ACCESS_2_TRANSFER_READ_BIT);
+                before[3 + imageIndex] = imageBarrier(images[imageIndex].second,
+                    state.publishedInitialized ? VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL
+                                               : VK_IMAGE_LAYOUT_UNDEFINED,
+                    VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                    state.publishedInitialized ? VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT
+                                               : VK_PIPELINE_STAGE_2_NONE,
+                    state.publishedInitialized ? VK_ACCESS_2_SHADER_SAMPLED_READ_BIT : 0,
+                    VK_PIPELINE_STAGE_2_COPY_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT);
             }
-            emitImageBarriers(commandBuffer, std::span(before.data(),
-                state.publishPending ? before.size() : images.size()));
+            emitImageBarriers(commandBuffer, before);
         }
-        if (!state.publishPending) continue;
         for (std::size_t imageIndex = 0; imageIndex < images.size(); ++imageIndex) {
             VkImageCopy region{};
             region.srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};

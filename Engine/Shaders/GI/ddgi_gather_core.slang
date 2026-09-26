@@ -73,6 +73,7 @@ DDGIGatherResult ddgiGatherCascade(float3 position, float3 geometricNormal,
             // Pending probes have no valid irradiance at their current position.
             // In particular, a relocated probe must not reuse its old atlas here.
             if (probe.w < 0.5 || probe.w > 1.5) continue;
+            const float reactivationWeight = saturate((1.5 - probe.w) / 0.5);
             ++activeProbeCount;
             const float3 cornerWeight = lerp(1.0 - fractional, fractional, float3(offset));
             const float trilinearWeight = cornerWeight.x * cornerWeight.y * cornerWeight.z;
@@ -93,10 +94,10 @@ DDGIGatherResult ddgiGatherCascade(float3 position, float3 geometricNormal,
             const float2 moments = ddgiSampleProbeOct(distanceTexture, index, visibilityOct,
                                                       DDGI_DISTANCE_INTERIOR).rg;
             // Missing or pending probes reduce the cascade's valid coverage.
-            validWeight += trilinearWeight * confidence;
+            validWeight += trilinearWeight * confidence * reactivationWeight;
             const float wrap = (dot(irradianceNormal, surfaceToProbe) + 1.0) * 0.5;
             float weight = wrap * wrap + 0.2;
-            const float weightBeforeVisibility = weight * rtxgiTrilinearWeight;
+            const float weightBeforeVisibility = weight * rtxgiTrilinearWeight * reactivationWeight;
             result.preVisibilityWeight += weightBeforeVisibility;
             const float2 filteredDistance = moments * 2.0;
             const float variance = abs(filteredDistance.x * filteredDistance.x - filteredDistance.y);
@@ -110,7 +111,7 @@ DDGIGatherResult ddgiGatherCascade(float3 position, float3 geometricNormal,
             weight *= max(0.05, chebyshev);
             weight = max(weight, 0.000001);
             if (weight < 0.2) weight *= weight * weight / (0.2 * 0.2);
-            weight *= rtxgiTrilinearWeight;
+            weight *= rtxgiTrilinearWeight * reactivationWeight;
             irradiance += probeIrradiance.rgb * weight;
             result.postVisibilityWeight += weight;
         }
