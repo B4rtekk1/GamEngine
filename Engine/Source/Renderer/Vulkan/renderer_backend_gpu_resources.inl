@@ -1571,6 +1571,7 @@
         void createCommandBuffers() {
             commandBuffers.resize(MAX_FRAMES_IN_FLIGHT);
             postViewportGraphicsCommandBuffers.resize(MAX_FRAMES_IN_FLIGHT);
+            postDdgiGraphicsCommandBuffers.resize(MAX_FRAMES_IN_FLIGHT);
 
             VkCommandBufferAllocateInfo allocInfo{};
             allocInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
@@ -1583,6 +1584,9 @@
             }
             if (vkAllocateCommandBuffers(device, &allocInfo, postViewportGraphicsCommandBuffers.data()) != VK_SUCCESS) {
                 throw std::runtime_error("Could not allocate post-viewport graphics command buffers");
+            }
+            if (vkAllocateCommandBuffers(device, &allocInfo, postDdgiGraphicsCommandBuffers.data()) != VK_SUCCESS) {
+                throw std::runtime_error("Could not allocate post-DDGI graphics command buffers");
             }
         }
 

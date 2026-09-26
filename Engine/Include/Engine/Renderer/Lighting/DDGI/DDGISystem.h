@@ -5,6 +5,7 @@
 
 #include <array>
 #include <cstdint>
+#include <span>
 #include <vulkan/vulkan.h>
 
 namespace Engine {
@@ -18,16 +19,25 @@ namespace Engine {
         DDGISystem& operator=(const DDGISystem&) = delete;
 
         void create(VkPhysicalDevice physical, VkDevice device, VmaAllocator allocator,
-                    VkDescriptorSetLayout sceneLayout, Assets::AssetManager& assets);
+                    VkDescriptorSetLayout sceneLayout, Assets::AssetManager& assets,
+                    std::span<const std::uint32_t> sharingFamilies = {});
         void destroy() noexcept;
-        void record(VkCommandBuffer commandBuffer, std::uint32_t frameSlot,
+        /** Record in declaration order; preparation updates descriptors and push constants for later stages. */
+        void recordPreparation(VkCommandBuffer commandBuffer, std::uint32_t frameSlot,
                     std::uint32_t frameIndex, VkDescriptorSet sceneSet,
                     VkAccelerationStructureKHR tlas, VkBuffer instances,
                     VkBuffer meshes, VkBuffer materials, VkBuffer vertices,
                     VkBuffer indices, const std::array<float, 3>& cameraPosition,
                     const std::array<std::uint64_t, 4>& sceneRevisions,
                     bool sceneGeometryChanged);
+        void recordTrace(VkCommandBuffer commandBuffer);
+        void recordRelocation(VkCommandBuffer commandBuffer);
+        void recordClassification(VkCommandBuffer commandBuffer);
+        void recordIrradianceUpdate(VkCommandBuffer commandBuffer);
+        void recordDistanceUpdate(VkCommandBuffer commandBuffer);
+        void recordFinish(VkCommandBuffer commandBuffer, bool manageOutputTransitions = true);
         [[nodiscard]] bool ready() const noexcept;
+        [[nodiscard]] bool prepared() const noexcept { return prepared_; }
         [[nodiscard]] const DDGIResources& resources() const noexcept { return resources_; }
         [[nodiscard]] const DDGIVolume& volume(std::uint32_t cascade) const noexcept { return volumes_[cascade]; }
         [[nodiscard]] bool created() const noexcept { return tracePipeline_ != VK_NULL_HANDLE; }
@@ -41,6 +51,11 @@ namespace Engine {
             std::array<float, 4> updateControl;
         };
         static_assert(sizeof(PushConstants) == 80);
+        void bindPreparedCascade(VkCommandBuffer commandBuffer, std::size_t cascadeIndex) const;
+        std::array<PushConstants, 3> preparedPushes_{};
+        VkDescriptorSet preparedSceneSet_{VK_NULL_HANDLE};
+        std::uint32_t preparedFrameSlot_{};
+        bool prepared_{};
         VkDevice device_{VK_NULL_HANDLE};
         std::array<DDGIVolume, 3> volumes_{};
         DDGIResources resources_{};

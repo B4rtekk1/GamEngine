@@ -498,8 +498,14 @@
             createDirectionalVisibilityPass();
             createRtContactShadowPass();
             if (vulkanDevice.supportsRayQuery()) {
+                const std::array ddgiFamilies{
+                    vulkanDevice.graphicsQueueFamily(), vulkanDevice.computeQueueFamily()};
+                const std::span<const std::uint32_t> ddgiSharingFamilies =
+                    vulkanDevice.hasAsyncComputeQueue() && ddgiFamilies[0] != ddgiFamilies[1]
+                        ? std::span<const std::uint32_t>(ddgiFamilies)
+                        : std::span<const std::uint32_t>{};
                 ddgi.create(vulkanDevice.physical(), device, vulkanDevice.allocator(),
-                            shadowPass.descriptorSetLayout(), assetManager);
+                            shadowPass.descriptorSetLayout(), assetManager, ddgiSharingFamilies);
                 for (std::uint32_t frame = 0; frame < MAX_FRAMES_IN_FLIGHT; ++frame) {
                     std::array<VkDescriptorImageInfo, 9> textures{};
                     for (std::uint32_t cascade = 0; cascade < 3; ++cascade) {

@@ -95,6 +95,7 @@
         RenderGraph::RenderGraph frameGraph;
         // Incrementally migrated callbacks for the Game View raster path.
         RenderGraph::RenderGraph viewportFrameGraph;
+        RenderGraph::RenderGraph ddgiFrameGraph;
         // Early compute is submitted in the same command buffer for now, but
         // owns a separate graph so it can migrate independently of the
         // depth/Hi-Z graph below.
@@ -633,11 +634,13 @@
         UploadContext uploadContext;
         std::vector<VkCommandBuffer> commandBuffers;
         std::vector<VkCommandBuffer> postViewportGraphicsCommandBuffers;
+        std::vector<VkCommandBuffer> postDdgiGraphicsCommandBuffers;
         struct GraphCommandBuffer {
             RenderGraph::Queue queue{};
             VkCommandBuffer buffer{};
         };
         std::array<std::vector<GraphCommandBuffer>, MAX_FRAMES_IN_FLIGHT> renderGraphCommandBuffers;
+        std::array<std::vector<GraphCommandBuffer>, MAX_FRAMES_IN_FLIGHT> ddgiGraphCommandBuffers;
         std::array<std::vector<GraphCommandBuffer>, MAX_FRAMES_IN_FLIGHT> presentationGraphCommandBuffers;
         VkSemaphore renderGraphTimeline{};
         std::uint64_t renderGraphTimelineValue{};
