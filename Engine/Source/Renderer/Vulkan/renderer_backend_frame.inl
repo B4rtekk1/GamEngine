@@ -1679,9 +1679,8 @@
                             break;
                         }
                     }
-                    // Ray-query stages consume the graphics-built TLAS. Atlas
-                    // blending and finish need only DDGI-owned resources, so
-                    // those stages can run on async compute after trace.
+                    // Preparation consumes the graphics-built TLAS. The remaining
+                    // DDGI stages can run on async compute after the TLAS submission.
                     if (ddgiEnabled) {
                         ddgi.recordPreparation(commandBuffer, currentFrame,
                             static_cast<std::uint32_t>(submittedFrameValue),
@@ -1695,9 +1694,6 @@
                              registry.componentRevision<MeshRendererComponent>(),
                              registry.componentRevision<Transform>()},
                             giGeometryChanged);
-                        ddgi.recordRelocation(commandBuffer);
-                        ddgi.recordClassification(commandBuffer);
-                        ddgi.recordTrace(commandBuffer);
                         if (vulkanDevice.hasAsyncComputeQueue() && ddgi.prepared()) {
                             if (vkEndCommandBuffer(commandBuffer) != VK_SUCCESS)
                                 throw std::runtime_error("Could not end graphics commands before DDGI async updates");
@@ -1738,6 +1734,7 @@
                                 vulkanDevice.graphicsQueueFamily();
                             struct DdgiGraphCascade final {
                                 RenderGraph::TextureHandle rayData;
+                                RenderGraph::TextureHandle fixedRayData;
                                 RenderGraph::TextureHandle irradiance;
                                 RenderGraph::TextureHandle distance;
                                 RenderGraph::TextureHandle probeData;
@@ -1770,6 +1767,8 @@
                                 auto& handles = ddgiResources[cascade];
                                 handles.rayData = importDdgiImage("DDGI ray data", frame.rayData,
                                     {256, 256}, VK_FORMAT_R16G16B16A16_SFLOAT);
+                                handles.fixedRayData = importDdgiImage("DDGI fixed ray data", frame.fixedRayData,
+                                    {32, 256}, VK_FORMAT_R16G16B16A16_SFLOAT);
                                 handles.irradiance = importDdgiImage("DDGI irradiance", frame.irradiance,
                                     {128, 1024}, VK_FORMAT_R8G8B8A8_UNORM);
                                 handles.distance = importDdgiImage("DDGI distance", frame.distance,
@@ -1781,6 +1780,36 @@
                                 handles.rayDirections = importDdgiBuffer("DDGI ray directions",
                                     resources.rayDirections[currentFrame]);
                             }
+                            ddgiFrameGraph.addPass("DDGI Relocation", RenderGraph::Queue::AsyncCompute,
+                            [&](RenderGraph::PassBuilder& builder) {
+                                for (const auto& resource : ddgiResources) {
+                                    builder.read(resource.fixedRayData, RenderGraph::TextureUsage::StorageReadCompute);
+                                    builder.write(resource.probeData, RenderGraph::TextureUsage::StorageWriteCompute);
+                                    builder.write(resource.probeStates, RenderGraph::BufferUsage::StorageWriteCompute);
+                                    builder.write(resource.updateList, RenderGraph::BufferUsage::StorageWriteCompute);
+                                }
+                            }, [&](const VkCommandBuffer buffer) { ddgi.recordRelocation(buffer); });
+                            ddgiFrameGraph.addPass("DDGI Classification", RenderGraph::Queue::AsyncCompute,
+                            [&](RenderGraph::PassBuilder& builder) {
+                                for (const auto& resource : ddgiResources) {
+                                    builder.read(resource.fixedRayData, RenderGraph::TextureUsage::StorageReadCompute);
+                                    builder.read(resource.probeData, RenderGraph::TextureUsage::StorageReadCompute);
+                                    builder.read(resource.updateList, RenderGraph::BufferUsage::StorageReadCompute);
+                                    builder.write(resource.probeStates, RenderGraph::BufferUsage::StorageWriteCompute);
+                                }
+                            }, [&](const VkCommandBuffer buffer) { ddgi.recordClassification(buffer); });
+                            ddgiFrameGraph.addPass("DDGI Trace", RenderGraph::Queue::AsyncCompute,
+                            [&](RenderGraph::PassBuilder& builder) {
+                                for (const auto& resource : ddgiResources) {
+                                    builder.read(resource.probeData, RenderGraph::TextureUsage::StorageReadCompute);
+                                    builder.read(resource.irradiance, RenderGraph::TextureUsage::StorageReadCompute);
+                                    builder.read(resource.distance, RenderGraph::TextureUsage::StorageReadCompute);
+                                    builder.read(resource.probeStates, RenderGraph::BufferUsage::StorageReadCompute);
+                                    builder.read(resource.updateList, RenderGraph::BufferUsage::StorageReadCompute);
+                                    builder.read(resource.rayDirections, RenderGraph::BufferUsage::StorageReadCompute);
+                                    builder.write(resource.rayData, RenderGraph::TextureUsage::StorageWriteCompute);
+                                }
+                            }, [&](const VkCommandBuffer buffer) { ddgi.recordTrace(buffer); });
                             ddgiFrameGraph.addPass("DDGI Irradiance Update", RenderGraph::Queue::AsyncCompute,
                             [&](RenderGraph::PassBuilder& builder) {
                                 for (const auto& resource : ddgiResources) {
@@ -1881,6 +1910,9 @@
                             if (vkBeginCommandBuffer(commandBuffer, &postDdgiBegin) != VK_SUCCESS)
                                 throw std::runtime_error("Could not begin graphics commands after DDGI async updates");
                         } else {
+                            ddgi.recordRelocation(commandBuffer);
+                            ddgi.recordClassification(commandBuffer);
+                            ddgi.recordTrace(commandBuffer);
                             ddgi.recordIrradianceUpdate(commandBuffer);
                             ddgi.recordDistanceUpdate(commandBuffer);
                             ddgi.recordFinish(commandBuffer);
