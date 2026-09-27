@@ -1,61 +1,78 @@
 # GamEngine
 
-GamEngine is an experimental 3D game engine written in **C++23**, built around **Vulkan 1.4** and a modern GPU-driven rendering architecture.
+A modern experimental 3D game engine written in **C++23**, built around **Vulkan 1.4** and GPU-driven rendering.
 
-It includes an integrated editor, native C++ gameplay scripting, asset cooking, standalone game builds, and a renderer designed around GPU-side visibility and scene processing.
+GamEngine focuses on real-time graphics, low CPU overhead, native C++ gameplay, and an integrated editor.
 
+## Demo
 
-## Quick Start
+https://github.com/user-attachments/assets/890f518c-f8e2-4121-b0ee-bb9da5fcbfc0
+
+## Features
+
+### Rendering
+
+- GPU-driven rendering
+- Physically Based Rendering
+- Virtual Shadow Maps
+- Temporal Anti-Aliasing
+- GPU particles
+- And more...
+
+### Engine
+
+- Entity Component System
+- Native C++ gameplay scripting
+- Asset management and cooking
+- NVIDIA PhysX integration
+- Standalone game builds
+- And more...
+
+## Editor
+
+- Scene Hierarchy
+- Component Inspector
+- Asset Manager
+- Shader Graph
+- CPU / GPU Profiler
+- And more...
+
+## Build
 
 ### Requirements
 
-Currently supported:
+- Windows 10 / 11
+- Visual Studio 2022
+- CMake 4.4+
+- Vulkan SDK
+- Slang
+- SDL3
+- Git
 
-* Windows 10 / 11 x64
-* Visual Studio 2022 with C++ development tools
-* CMake 4.4+
-* Git
-* Vulkan SDK with Vulkan 1.4 support
-* Slang compiler (`slangc`)
-* SDL3
-
-Several other dependencies, including PhysX, Dear ImGui and ImNodes, are downloaded automatically by CMake.
-
-For SIMD BC7 texture cooking, CMake downloads a pinned ISPC 1.31.0 compiler and BC7E source from `bc7enc_rdo` during the first configuration. The default `GE_BC7_BACKEND=auto` uses BC7E. Use `-DGE_BC7_BACKEND=bc7e` to select it explicitly, or `-DGE_BC7_BACKEND=compressonator` for the scalar encoder without downloading ISPC. Automatic ISPC download is configured for x86-64 Windows and Linux hosts. `-DGE_BC7E_PROFILE=basic` is the default; `veryfast`, `fast`, and `slow` are also available. Changing backend or profile changes the texture cook cache key.
-
-### Clone
+Clone:
 
 ```bash
 git clone --recurse-submodules https://github.com/B4rtekk1/GamEngine.git
 cd GamEngine
 ```
 
-### Build the Editor
-
-Development build:
+Build the editor:
 
 ```bash
 cmake --preset dev
 cmake --build --preset dev
 ```
 
-Run:
-
-```text
-Editor.exe
-```
-
-### Release Build
+Release:
 
 ```bash
 cmake --preset release
 cmake --build --preset release
 ```
 
-
 ## Projects
 
-By default, GamEngine uses the project stored in:
+Projects use a simple structure:
 
 ```text
 MyGame/
@@ -63,54 +80,23 @@ MyGame/
 └── Assets/
 ```
 
-A different project can be selected during CMake configuration:
+A custom project can be selected during configuration:
 
 ```bash
 cmake --preset dev -DGAMEENGINE_GAME_DIRECTORY="C:/Path/To/MyGame"
 cmake --build --preset dev
 ```
 
-The selected directory must contain:
+## Game Builds
 
-```text
-GamEngine.project
-Assets/
-```
+Standalone builds can be exported directly from the editor.
 
-## Editor
-
-The GamEngine Editor provides the main development workflow for creating scenes and games.
-
-Main tools include:
-
-* Scene Hierarchy
-* Component Inspector
-* Asset Manager
-* Shader Graph
-
-* Terrain tools
-* CPU/GPU Profiler
-* Console and integrated terminal
-* Play / Pause workflow
-* Script hot reload
-* Shader hot reload
-* Standalone game builds
-
-Gameplay code can be written as native C++ modules and reloaded during development.
-
-## Building a Game
-
-Standalone Windows builds can be created directly from the editor using **Build Game**.
-
-The export pipeline packages the runtime, cooked project content, compiled shaders, project configuration and gameplay module.
-
-A typical game build looks like:
+A typical build contains:
 
 ```text
 Game/
 ├── Game.exe
 ├── Engine.dll
-├── SDL3.dll
 ├── GameScripts.dll
 ├── GamEngine.project
 ├── shaders/
@@ -119,86 +105,10 @@ Game/
 
 The exported game does not require the GamEngine source tree.
 
-## Portable Editor
-
-A portable editor package can be created with:
-
-```bash
-cmake --preset release
-cmake --build --preset release --target PackageEditor
-```
-
-The resulting package is placed in:
-
-```text
-out/build/release/GamEngineEditor/
-```
-
-The package contains the editor, engine runtime, shader compiler support, C++ scripting SDK and standalone runtime template.
-
-A standalone runtime package can also be generated separately:
-
-```bash
-cmake --build --preset release --target PackageRuntime
-```
-
-Output:
-
-```text
-out/build/release/GamEngineRuntime/
-```
-
-## Rendering
-
-GamEngine uses a GPU-oriented renderer designed to minimize CPU-side draw submission and visibility work.
-
-Currently implemented systems include:
-
-* GPU-driven rendering
-* GPU frustum culling
-* Hi-Z occlusion culling
-* Meshlet rendering
-* GPU Scene database
-* Render Graph
-* Physically Based Rendering
-* Directional Virtual Shadow Maps
-* GTAO
-* Temporal Anti-Aliasing
-* MSAA
-* Image-Based Lighting
-* Reflection probes
-* Bloom
-* ACES tonemapping
-* GPU particle simulation
-* GPU-driven grass
-* Experimental Virtual Water
-* Slang shader pipeline
-* Shader Graph
-
-## Engine Systems
-
-The runtime currently provides:
-
-* Entity Component System
-* Scene hierarchy
-* Prefabs
-* Asset management and cooking
-* glTF / GLB importing
-* NVIDIA PhysX integration
-* Native C++ gameplay scripting
-* Script hot reload
-* CPU and GPU profiling
-
 ## Contributing
 
-See:
-
-* [CONTRIBUTING.md](CONTRIBUTING.md)
-* [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md)
-* [SECURITY.md](SECURITY.md)
+See [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## License
 
-GamEngine is licensed under the **Apache License 2.0**.
-
-See [LICENSE](LICENSE) for details.
+Licensed under the [Apache License 2.0](LICENSE).

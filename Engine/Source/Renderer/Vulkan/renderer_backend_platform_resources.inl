@@ -111,8 +111,18 @@
                 else if (view == "gradient") brixelizerDebugView = BrixelizerSystem::DebugView::Gradient;
                 else if (view == "brick") brixelizerDebugView = BrixelizerSystem::DebugView::BrickId;
                 else if (view == "cascade") brixelizerDebugView = BrixelizerSystem::DebugView::CascadeId;
+                brixelizerEnabled = brixelizerDebugView != BrixelizerSystem::DebugView::Off;
             }
-            if (!msaa.enabled() || brixelizerDebugView != BrixelizerSystem::DebugView::Off) {
+            if (const char* gi = std::getenv("GAMEENGINE_BRIXELIZER_GI")) {
+                const std::string_view value{gi};
+                brixelizerGIEnabled = value == "1" || value == "true" || value == "on";
+                brixelizerEnabled = brixelizerEnabled || brixelizerGIEnabled;
+            }
+            if (const char* enabled = std::getenv("GAMEENGINE_BRIXELIZER")) {
+                const std::string_view value{enabled};
+                brixelizerEnabled = brixelizerEnabled || value == "1" || value == "true" || value == "on";
+            }
+            if (brixelizerEnabled && (!msaa.enabled() || brixelizerDebugView != BrixelizerSystem::DebugView::Off)) {
                 timeInitialization("Brixelizer SDF", [&] {
                     brixelizer.create(vulkanDevice.physical(), device, vulkanDevice.allocator(),
                                       swapchain.extent(), MAX_FRAMES_IN_FLIGHT,

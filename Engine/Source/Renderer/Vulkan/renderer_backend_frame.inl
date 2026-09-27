@@ -1976,7 +1976,7 @@
                 dependency.pImageMemoryBarriers = afterCopy.data();
                 vkCmdPipelineBarrier2(commandBuffer, &dependency);
             }
-            if (renderGameViewport && !msaa.enabled() &&
+            if (brixelizerGIEnabled && renderGameViewport && !msaa.enabled() &&
                 brixelizerDebugView == BrixelizerSystem::DebugView::Off && brixelizer.hasStaticMeshes()) {
                 brixelizer.dispatchGI(commandBuffer, currentFrame,
                     depthBuffer.imageView(), depthBuffer.sampler(),
