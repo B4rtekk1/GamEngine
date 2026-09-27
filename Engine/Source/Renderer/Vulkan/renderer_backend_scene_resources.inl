@@ -309,7 +309,8 @@
                 if (!registry.has<Transform>(record.entity) ||
                     !registry.has<MeshRenderer>(record.entity) ||
                     !registry.get<MeshRenderer>(record.entity).hasMesh()) {
-                    sceneGpu.database.removeInstance(static_cast<std::uint64_t>(record.entity),
+                    sceneGpu.database.removeInstance(SceneGpuResources::instanceSourceKey(
+                                                         record.entity, record.sectionIndex),
                                                      submittedFrameValue);
                 }
             }
@@ -348,11 +349,13 @@
                 bool castShadow;
                 ShadowCacheMode shadowCacheMode;
                 uint32_t cullingBatch;
+                SceneGpuResources::InstanceCell spatialCell;
 
                 bool operator==(const BatchKey& other) const noexcept {
                     return mesh == other.mesh && sectionIndex == other.sectionIndex && shaderSlot == other.shaderSlot &&
                            foliagePipeline == other.foliagePipeline && castShadow == other.castShadow &&
-                           shadowCacheMode == other.shadowCacheMode && cullingBatch == other.cullingBatch;
+                           shadowCacheMode == other.shadowCacheMode && cullingBatch == other.cullingBatch &&
+                           spatialCell == other.spatialCell;
                 }
             };
             struct BatchKeyHash {
@@ -363,11 +366,16 @@
                     const auto sectionHash = std::hash<std::uint32_t>{}(key.sectionIndex);
                     const auto batchHash = std::hash<uint32_t>{}(key.cullingBatch);
                     const auto shaderHash = std::hash<std::uint32_t>{}(key.shaderSlot);
-                    return meshHash ^ (sectionHash + batchHash + shaderHash + static_cast<std::size_t>(key.foliagePipeline) +
+                    std::size_t hash = meshHash ^ (sectionHash + batchHash + shaderHash + static_cast<std::size_t>(key.foliagePipeline) +
                                        static_cast<std::size_t>(key.castShadow) +
                                        (static_cast<std::size_t>(key.shadowCacheMode) << 3U) +
                                        hashCombineConstant + (meshHash << hashCombineLeftShift) +
                                        (meshHash >> 2U));
+                    for (const auto coordinate : key.spatialCell) {
+                        const auto value = std::hash<std::int64_t>{}(coordinate);
+                        hash ^= value + hashCombineConstant + (hash << hashCombineLeftShift) + (hash >> 2U);
+                    }
+                    return hash;
                 }
             };
             std::unordered_map<BatchKey, std::size_t, BatchKeyHash> batchIndices;
@@ -900,19 +908,30 @@
                                                  const bool materialFromRenderer,
                                                  const std::uint32_t materialIndex,
                                                  const PBRMaterial& pbrMaterial) {
-                    const BatchKey batchKey{renderer.mesh.resource().get(), sectionIndex, rangeShaderSlot, usesFoliagePipeline,
-                                            castShadow, renderer.shadowCacheMode, renderer.cullingBatch};
-                    const auto [batchIt, inserted] = !forceDistinctBatch && optimizationFeatures.instancedRendering
-                        ? batchIndices.try_emplace(batchKey, instanceBatches.size())
-                        : std::pair{batchIndices.end(), true};
-                    const std::size_t batchIndex = !forceDistinctBatch && optimizationFeatures.instancedRendering
-                        ? batchIt->second : instanceBatches.size();
                     AABB displacedRangeBounds = rangeBounds;
                     const float paddingAmount = displacementExpansion(pbrMaterial);
                     const Vec3 padding{paddingAmount, paddingAmount, paddingAmount};
                     displacedRangeBounds.min -= padding;
                     displacedRangeBounds.max += padding;
                     const AABB rangeWorldBounds = displacedRangeBounds.transformed(worldModel(entity));
+                    const auto spatialCell = SceneGpuResources::cellFor(rangeWorldBounds);
+                    const BatchKey batchKey{renderer.mesh.resource().get(), sectionIndex, rangeShaderSlot, usesFoliagePipeline,
+                                            castShadow, renderer.shadowCacheMode, renderer.cullingBatch, spatialCell};
+                    const Vec3 rangeExtent = rangeWorldBounds.max - rangeWorldBounds.min;
+                    const bool fitsCell = rangeExtent.x() <= SceneGpuResources::InstanceCellSize &&
+                                          rangeExtent.y() <= SceneGpuResources::InstanceCellSize &&
+                                          rangeExtent.z() <= SceneGpuResources::InstanceCellSize;
+                    const bool canInstance = !forceDistinctBatch && fitsCell &&
+                                             optimizationFeatures.instancedRendering;
+                    auto batchIt = canInstance ? batchIndices.find(batchKey) : batchIndices.end();
+                    if (batchIt != batchIndices.end() &&
+                        instanceBatches[batchIt->second].instanceCount == SceneGpuResources::MaxInstancesPerBatch) {
+                        batchIndices.erase(batchIt);
+                        batchIt = batchIndices.end();
+                    }
+                    const bool inserted = batchIt == batchIndices.end();
+                    const std::size_t batchIndex = inserted ? instanceBatches.size() : batchIt->second;
+                    if (inserted && canInstance) batchIndices.emplace(batchKey, batchIndex);
                     if (inserted) {
                         instanceBatches.push_back(InstanceBatch{
                             .mesh = renderer.mesh.resource().get(),
@@ -962,6 +981,7 @@
                     ++batch.instanceCount;
                     renderables.push_back({.entity = entity, .geometryLocalBounds = rangeBounds,
                                            .localBounds = displacedRangeBounds, .batchIndex = batchIndex,
+                                           .spatialCell = spatialCell,
                                            .firstVertex = firstVertex, .vertexCount = mesh->vertexCount(),
                                            .sectionIndex = sectionIndex, .materialIndex = materialIndex,
                                            .displacementBoundsPadding = paddingAmount,
@@ -1008,6 +1028,32 @@
                                     renderer.material.pbr.doubleSided, false, true, 0, renderer.material.pbr);
                     }
                 });
+
+            // Indirect draws address a contiguous instance range. Build that
+            // range after grouping, since registry iteration interleaves cells
+            // and mesh types. Rebuild both lookup tables for the new indices.
+            if (!renderables.empty()) {
+                std::vector<RenderableRecord> ordered;
+                ordered.reserve(renderables.size());
+                sceneGpu.renderableIndices.clear();
+                for (std::size_t batchIndex = 0; batchIndex < instanceBatches.size(); ++batchIndex) {
+                    auto& indices = sceneGpu.batchRenderableIndices[batchIndex];
+                    instanceBatches[batchIndex].firstInstance = static_cast<std::uint32_t>(ordered.size());
+                    for (std::size_t& index : indices) {
+                        const std::size_t newIndex = ordered.size();
+                        ordered.push_back(std::move(renderables[index]));
+                        sceneGpu.renderableIndices[ordered.back().entity].push_back(newIndex);
+                        index = newIndex;
+                    }
+                }
+                for (RenderableRecord& record : renderables) {
+                    if (!record.waterOnly) continue;
+                    const std::size_t newIndex = ordered.size();
+                    sceneGpu.renderableIndices[record.entity].push_back(newIndex);
+                    ordered.push_back(std::move(record));
+                }
+                renderables = std::move(ordered);
+            }
 
             // Painted grass stays compact in the ECS and is expanded into
             // spatially-local GPU batches.  A single terrain-wide batch has
@@ -2123,7 +2169,8 @@
                 const Entity entity = renderables[index].entity;
                 RenderableRecord& record = renderables[index];
                 if (!readRegistry.has<Transform>(entity)) {
-                    sceneGpu.database.removeInstance(static_cast<std::uint64_t>(entity),
+                    sceneGpu.database.removeInstance(SceneGpuResources::instanceSourceKey(
+                                                         entity, record.sectionIndex),
                                                      submittedFrameValue);
                     record.renderProxy.instance = InvalidGPUSceneInstanceId;
                     continue;
@@ -2162,7 +2209,8 @@
                     continue;
                 }
                 if (!readRegistry.has<MeshRenderer>(entity)) {
-                    sceneGpu.database.removeInstance(static_cast<std::uint64_t>(entity),
+                    sceneGpu.database.removeInstance(SceneGpuResources::instanceSourceKey(
+                                                         entity, record.sectionIndex),
                                                      submittedFrameValue);
                     record.renderProxy.instance = InvalidGPUSceneInstanceId;
                     continue;
@@ -2283,6 +2331,8 @@
                         const Vec3 padding{newPadding, newPadding, newPadding};
                         record.localBounds.min -= padding;
                         record.localBounds.max += padding;
+                        if (SceneGpuResources::cellFor(record.localBounds.transformed(model)) !=
+                            record.spatialCell) spatialBatchRebuildPending = true;
                         if (record.batchIndex < instanceBatches.size() &&
                             instanceBatches[record.batchIndex].castShadow) {
                             appendDirtyShadowBounds(previousBounds);
@@ -2337,8 +2387,8 @@
                         record.renderProxy.material = sceneGpu.database.upsertMaterial(
                             (static_cast<std::uint64_t>(record.materialTableOffset) << 32U) |
                             static_cast<std::uint64_t>(record.sectionIndex), material);
-                        const std::uint64_t instanceKey = (static_cast<std::uint64_t>(entity) << 32U) |
-                            static_cast<std::uint64_t>(index);
+                        const std::uint64_t instanceKey = SceneGpuResources::instanceSourceKey(
+                            entity, record.sectionIndex);
                         record.renderProxy.instance = sceneGpu.database.upsertInstance(instanceKey, {
                                 .worldMatrix = worldMatrix,
                                 .localBounds = record.localBounds,
@@ -2555,7 +2605,7 @@
                 std::memcpy(&data.frustumPlanes[i], &frustumPlanes[i], sizeof(frustumPlanes[i]));
             data.cameraPosition = {0.0F, 0.0F, 0.0F, 1.0F};
             data.objectCount = static_cast<uint32_t>(gpuObjects.size());
-            data.maxDrawCount = data.objectCount;
+            data.maxDrawCount = std::min(data.objectCount, ShadowMap::MaxCasterInstancesPerPage);
             // Shadow culling uses only the light frustum. Camera Hi-Z cannot safely
             // reject casters which are invisible to the camera but visible to the light.
             data.enableOcclusionCulling = 0;
@@ -2564,7 +2614,8 @@
             data.shadowPass = 1;
             data.enableFrustumCulling = optimizationFeatures.gpuCulling ? 1u : 0u;
             data.drawCategory = 0;
-            data.maxShadowInstances = static_cast<uint32_t>(std::max<std::size_t>(1, instanceModels.size()));
+            data.maxShadowInstances = static_cast<uint32_t>(std::min<std::size_t>(
+                std::max<std::size_t>(1, instanceModels.size()), ShadowMap::MaxCasterInstancesPerPage));
             shadowCullingUniformBuffers[frame].update(&data, sizeof(data));
             data.drawCategory = 1;
             shadowTwoSidedCullingUniformBuffers[frame].update(&data, sizeof(data));

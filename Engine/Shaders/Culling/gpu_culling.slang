@@ -135,8 +135,8 @@ void appendDraw(bool visible, CullingObjectData objectData, uint drawSlot,
         }
         else
         {
-            // Capacity is sized to all renderer instances. This fallback is
-            // defensive: never let an overflow read another page's slice.
+            // The per-page caster budget is bounded. Drop this draw rather
+            // than letting an overflow read another page's slice.
             command.instanceCount = 0;
         }
     }

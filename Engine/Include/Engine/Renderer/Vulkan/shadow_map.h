@@ -26,6 +26,9 @@ namespace Engine {
         // frame so camera cuts and large receiver footprints do not leave
         // tiled holes in directional shadows.
         static constexpr uint32_t MaxPageUpdatesPerFrame = PhysicalPageCount;
+        // Each updated page gets an independent caster slice. Bound the VSM
+        // scratch allocation even when a scene contains many render sections.
+        static constexpr uint32_t MaxCasterInstancesPerPage = 2048;
         static constexpr uint32_t InvalidPage = 0xffffffffu;
 
         ~ShadowMap();

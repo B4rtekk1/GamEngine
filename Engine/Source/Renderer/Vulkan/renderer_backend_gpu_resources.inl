@@ -45,20 +45,32 @@
                 std::max<std::size_t>(1, instanceBatches.size());
             const VkDeviceSize visibleBytes = sizeof(std::uint32_t) *
                 std::max<std::size_t>(1, sceneGpu.database.instances().size());
-            std::uint64_t requiredVisibleMeshlets = 0;
-            for (const auto& instance : sceneGpu.database.instances()) {
-                if (!instance.alive || instance.meshId >= sceneGpu.database.meshes().size()) continue;
-                requiredVisibleMeshlets += sceneGpu.database.meshes()[instance.meshId].meshletCount;
+            if (!meshShaderPathActive) {
+                if (meshletVisibleCapacity != 1) return false;
+            } else {
+                std::uint64_t requiredVisibleMeshlets = 0;
+                for (const auto& instance : sceneGpu.database.instances()) {
+                    if (!instance.alive || instance.meshId >= sceneGpu.database.meshes().size()) continue;
+                    requiredVisibleMeshlets += sceneGpu.database.meshes()[instance.meshId].meshletCount;
+                }
+                if (requiredVisibleMeshlets > meshletVisibleCapacity) return false;
             }
-            if (requiredVisibleMeshlets > meshletVisibleCapacity) return false;
             const VkDeviceSize indirectBytes = sizeof(VkDrawIndexedIndirectCommand) *
                 std::max<std::size_t>(1, instanceBatches.size()) * MaterialProgramSlotCount;
             const VkDeviceSize shadowIndirectBytes = sizeof(VkDrawIndexedIndirectCommand) *
-                std::max<std::size_t>(1, instanceBatches.size()) * ShadowMap::MaxPageUpdatesPerFrame;
+                std::min<std::size_t>(std::max<std::size_t>(1, instanceBatches.size()),
+                                      ShadowMap::MaxCasterInstancesPerPage) * ShadowMap::MaxPageUpdatesPerFrame;
             const VkDeviceSize shadowCandidateBytes = sizeof(std::uint32_t) *
                 std::max<std::size_t>(1, instanceBatches.size()) * ShadowMap::ClipLevelCount;
             const VkDeviceSize shadowTransformBytes = sizeof(RendererInstanceData) *
-                std::max<std::size_t>(1, instanceModels.size()) * ShadowMap::MaxPageUpdatesPerFrame;
+                std::min<std::size_t>(std::max<std::size_t>(1, instanceModels.size()),
+                                      ShadowMap::MaxCasterInstancesPerPage) * ShadowMap::MaxPageUpdatesPerFrame;
+            const VkDeviceSize shadowVisibleBytes = sizeof(Culling::ShadowVisibleInstance) *
+                std::min<std::size_t>(std::max<std::size_t>(1, instanceModels.size()),
+                                      ShadowMap::MaxCasterInstancesPerPage) * ShadowMap::MaxPageUpdatesPerFrame;
+            const VkDeviceSize shadowMaterialBytes = sizeof(std::uint32_t) *
+                std::min<std::size_t>(std::max<std::size_t>(1, instanceModels.size()),
+                                      ShadowMap::MaxCasterInstancesPerPage) * ShadowMap::MaxPageUpdatesPerFrame;
             for (std::uint32_t frame = 0; frame < MAX_FRAMES_IN_FLIGHT; ++frame) {
                 if (cullingObjectBuffers[frame].size() < objectBytes ||
                     visibleInstanceBuffers[frame].size() < visibleBytes ||
@@ -70,10 +82,10 @@
                     shadowTwoSidedCandidateBuffers[frame].size() < shadowCandidateBytes ||
                     shadowInstanceTransformBuffers[frame].size() < shadowTransformBytes ||
                     shadowTwoSidedInstanceTransformBuffers[frame].size() < shadowTransformBytes ||
-                    shadowVisibleInstanceBuffers[frame].size() < sizeof(Culling::ShadowVisibleInstance) *
-                        std::max<std::size_t>(1, instanceModels.size()) * ShadowMap::MaxPageUpdatesPerFrame ||
-                    shadowTwoSidedVisibleInstanceBuffers[frame].size() < sizeof(Culling::ShadowVisibleInstance) *
-                        std::max<std::size_t>(1, instanceModels.size()) * ShadowMap::MaxPageUpdatesPerFrame) return false;
+                    shadowVisibleInstanceBuffers[frame].size() < shadowVisibleBytes ||
+                    shadowTwoSidedVisibleInstanceBuffers[frame].size() < shadowVisibleBytes ||
+                    shadowInstanceMaterialBuffers[frame].size() < shadowMaterialBytes ||
+                    shadowTwoSidedInstanceMaterialBuffers[frame].size() < shadowMaterialBytes) return false;
             }
             return true;
         }
@@ -86,6 +98,18 @@
 
             hiZValid.fill(false);
             const auto objectCount = static_cast<uint32_t>(instanceBatches.size());
+            std::uint64_t requiredVisibleMeshlets = 0;
+            if (meshShaderPathActive) {
+                for (const auto& instance : sceneGpu.database.instances()) {
+                    if (!instance.alive || instance.meshId >= sceneGpu.database.meshes().size()) continue;
+                    requiredVisibleMeshlets += sceneGpu.database.meshes()[instance.meshId].meshletCount;
+                }
+                if (requiredVisibleMeshlets > std::numeric_limits<std::uint32_t>::max())
+                    throw std::runtime_error("Visible meshlet list exceeds uint32 capacity");
+            }
+            const std::uint32_t meshletCapacity = static_cast<std::uint32_t>(
+                std::max<std::uint64_t>(1, requiredVisibleMeshlets));
+            meshletVisibleCapacity = meshletCapacity;
             // An empty ECS scene still renders the sky, editor UI, and fallback
             // camera.  Keep the per-view UBOs and descriptor-backed culling
             // resources alive with inert storage entries; logical draw counts
@@ -97,6 +121,7 @@
             // Passes and indirect draws require a non-zero physical capacity.
             // Runtime culling still receives objectCount, which may be zero.
             const auto passCapacity = genericCapacity;
+            const auto shadowPassCapacity = std::min(passCapacity, ShadowMap::MaxCasterInstancesPerPage);
             const auto clusterCountFor = [](const VkExtent2D extent) {
                 const std::uint32_t tilesX = (extent.width + ClusterTileSize - 1U) / ClusterTileSize;
                 const std::uint32_t tilesY = (extent.height + ClusterTileSize - 1U) / ClusterTileSize;
@@ -484,21 +509,11 @@
                     VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT |
                     VK_BUFFER_USAGE_TRANSFER_DST_BIT, commandPool, vulkanDevice.graphicsQueue(),
                     vulkanDevice.allocator());
-                std::uint64_t requiredVisibleMeshlets = 0;
-                for (const auto& instance : sceneGpu.database.instances()) {
-                    if (!instance.alive || instance.meshId >= sceneGpu.database.meshes().size()) continue;
-                    requiredVisibleMeshlets += sceneGpu.database.meshes()[instance.meshId].meshletCount;
-                }
-                if (requiredVisibleMeshlets > std::numeric_limits<std::uint32_t>::max())
-                    throw std::runtime_error("Visible meshlet list exceeds uint32 capacity");
-                const std::uint32_t meshletCapacity = static_cast<std::uint32_t>(
-                    std::max<std::uint64_t>(1, requiredVisibleMeshlets));
-                meshletVisibleCapacity = meshletCapacity;
-                std::vector<Culling::VisibleMeshlet> emptyVisibleMeshlets(meshletCapacity);
-                visibleMeshletBuffers[frame].createDeviceLocal(vulkanDevice.physical(), device,
-                    emptyVisibleMeshlets.data(), sizeof(Culling::VisibleMeshlet) * emptyVisibleMeshlets.size(),
-                    VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
-                    commandPool, vulkanDevice.graphicsQueue(), vulkanDevice.allocator());
+                // The indexed forward path still binds this descriptor, but
+                // never consumes the meshlet list. One entry is enough there.
+                visibleMeshletBuffers[frame].createDeviceLocalEmpty(device,
+                    sizeof(Culling::VisibleMeshlet) * meshletCapacity,
+                    VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, vulkanDevice.allocator());
                 visibleMeshletCountBuffers[frame].createDeviceLocal(vulkanDevice.physical(), device, &zero,
                     sizeof(zero), VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
                     commandPool, vulkanDevice.graphicsQueue(), vulkanDevice.allocator());
@@ -626,8 +641,6 @@
                     sizeof(VkDrawIndexedIndirectCommand) * genericCapacity * MaterialProgramSlotCount,
                     VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
                     commandPool, vulkanDevice.graphicsQueue(), vulkanDevice.allocator());
-                std::vector<VkDrawIndexedIndirectCommand> emptyShadowCommands(
-                    genericCapacity * ShadowMap::MaxPageUpdatesPerFrame);
                 std::vector<std::uint32_t> emptyShadowCandidates(
                     genericCapacity * ShadowMap::ClipLevelCount);
                 shadowCandidateBuffers[frame].createDeviceLocal(vulkanDevice.physical(), device,
@@ -656,10 +669,10 @@
                     emptyCandidateDispatches.data(), sizeof(emptyCandidateDispatches),
                     VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT |
                     VK_BUFFER_USAGE_TRANSFER_DST_BIT, commandPool, vulkanDevice.graphicsQueue(), vulkanDevice.allocator());
-                shadowIndirectBuffers[frame].createDeviceLocal(vulkanDevice.physical(), device, emptyShadowCommands.data(),
-                    sizeof(VkDrawIndexedIndirectCommand) * emptyShadowCommands.size(),
-                    VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
-                    commandPool, vulkanDevice.graphicsQueue(), vulkanDevice.allocator());
+                shadowIndirectBuffers[frame].createDeviceLocalEmpty(device,
+                    sizeof(VkDrawIndexedIndirectCommand) * shadowPassCapacity * ShadowMap::MaxPageUpdatesPerFrame,
+                    VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT,
+                    vulkanDevice.allocator());
                 std::array<Culling::ShadowPageWork, ShadowMap::MaxPageUpdatesPerFrame> emptyPageWork{};
                 shadowPageWorkBuffers[frame].createHostVisible(vulkanDevice.physical(), device,
                     sizeof(emptyPageWork), VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, vulkanDevice.allocator());
@@ -680,33 +693,26 @@
                 vsmPageMarkingUniformBuffers[frame].createHostVisible(vulkanDevice.physical(), device,
                     sizeof(VsmPageMarkingUniforms), VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
                     vulkanDevice.allocator());
-                shadowTwoSidedIndirectBuffers[frame].createDeviceLocal(vulkanDevice.physical(), device, emptyShadowCommands.data(),
-                    sizeof(VkDrawIndexedIndirectCommand) * emptyShadowCommands.size(),
-                    VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
-                    commandPool, vulkanDevice.graphicsQueue(), vulkanDevice.allocator());
+                shadowTwoSidedIndirectBuffers[frame].createDeviceLocalEmpty(device,
+                    sizeof(VkDrawIndexedIndirectCommand) * shadowPassCapacity * ShadowMap::MaxPageUpdatesPerFrame,
+                    VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT,
+                    vulkanDevice.allocator());
                 std::array<std::uint32_t, ShadowMap::MaxPageUpdatesPerFrame> zeroShadowCounts{};
                 // One independent compact range per page lets the 2D page
                 // culling dispatch write transforms without cross-page atomics.
-                const std::size_t shadowTransformCount = std::max<std::size_t>(1, instanceModels.size()) *
+                const std::size_t shadowTransformCount =
+                    std::min<std::size_t>(std::max<std::size_t>(1, instanceModels.size()),
+                                          ShadowMap::MaxCasterInstancesPerPage) *
                     ShadowMap::MaxPageUpdatesPerFrame;
-                std::vector<RendererInstanceData> emptyShadowTransforms(shadowTransformCount);
-                std::vector<Culling::ShadowVisibleInstance> emptyShadowVisibleInstances(shadowTransformCount);
-                shadowInstanceTransformBuffers[frame].createDeviceLocal(vulkanDevice.physical(), device,
-                    emptyShadowTransforms.data(), sizeof(RendererInstanceData) * emptyShadowTransforms.size(),
-                    VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
-                    commandPool, vulkanDevice.graphicsQueue(), vulkanDevice.allocator());
-                shadowTwoSidedInstanceTransformBuffers[frame].createDeviceLocal(vulkanDevice.physical(), device,
-                    emptyShadowTransforms.data(), sizeof(RendererInstanceData) * emptyShadowTransforms.size(),
-                    VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
-                    commandPool, vulkanDevice.graphicsQueue(), vulkanDevice.allocator());
-                shadowVisibleInstanceBuffers[frame].createDeviceLocal(vulkanDevice.physical(), device,
-                    emptyShadowVisibleInstances.data(), sizeof(Culling::ShadowVisibleInstance) * emptyShadowVisibleInstances.size(),
-                    VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
-                    commandPool, vulkanDevice.graphicsQueue(), vulkanDevice.allocator());
-                shadowTwoSidedVisibleInstanceBuffers[frame].createDeviceLocal(vulkanDevice.physical(), device,
-                    emptyShadowVisibleInstances.data(), sizeof(Culling::ShadowVisibleInstance) * emptyShadowVisibleInstances.size(),
-                    VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
-                    commandPool, vulkanDevice.graphicsQueue(), vulkanDevice.allocator());
+                for (Buffer* buffer : {&shadowInstanceTransformBuffers[frame],
+                                       &shadowTwoSidedInstanceTransformBuffers[frame]})
+                    buffer->createDeviceLocalEmpty(device, sizeof(RendererInstanceData) * shadowTransformCount,
+                        VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, vulkanDevice.allocator());
+                for (Buffer* buffer : {&shadowVisibleInstanceBuffers[frame],
+                                       &shadowTwoSidedVisibleInstanceBuffers[frame]})
+                    buffer->createDeviceLocalEmpty(device,
+                        sizeof(Culling::ShadowVisibleInstance) * shadowTransformCount,
+                        VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, vulkanDevice.allocator());
                 shadowInstanceTransformCountBuffers[frame].createDeviceLocal(vulkanDevice.physical(), device,
                     zeroShadowCounts.data(), sizeof(zeroShadowCounts),
                     VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
@@ -715,15 +721,10 @@
                     zeroShadowCounts.data(), sizeof(zeroShadowCounts),
                     VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
                     commandPool, vulkanDevice.graphicsQueue(), vulkanDevice.allocator());
-                std::vector<std::uint32_t> emptyShadowMaterials(shadowTransformCount);
-                shadowInstanceMaterialBuffers[frame].createDeviceLocal(vulkanDevice.physical(), device,
-                    emptyShadowMaterials.data(), sizeof(std::uint32_t) * emptyShadowMaterials.size(),
-                    VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
-                    commandPool, vulkanDevice.graphicsQueue(), vulkanDevice.allocator());
-                shadowTwoSidedInstanceMaterialBuffers[frame].createDeviceLocal(vulkanDevice.physical(), device,
-                    emptyShadowMaterials.data(), sizeof(std::uint32_t) * emptyShadowMaterials.size(),
-                    VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
-                    commandPool, vulkanDevice.graphicsQueue(), vulkanDevice.allocator());
+                for (Buffer* buffer : {&shadowInstanceMaterialBuffers[frame],
+                                       &shadowTwoSidedInstanceMaterialBuffers[frame]})
+                    buffer->createDeviceLocalEmpty(device, sizeof(std::uint32_t) * shadowTransformCount,
+                        VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, vulkanDevice.allocator());
                 const std::array<std::uint32_t, MaterialProgramSlotCount> zeroMaterialDrawCounts{};
                 drawCountBuffers[frame].createDeviceLocal(vulkanDevice.physical(), device, zeroMaterialDrawCounts.data(), sizeof(zeroMaterialDrawCounts),
                     VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT |
@@ -1171,17 +1172,17 @@
                 sceneFoliageIndirectDraws[frame].create(
                     sceneFoliageIndirectBuffers[frame].handle(), sceneFoliageDrawCountBuffers[frame].handle(), passCapacity);
                 shadowCullingPasses[frame].create(device, cullingPipeline, cullingPipelineLayout, shadowCullSet,
-                    shadowIndirectBuffers[frame].handle(), shadowDrawCountBuffers[frame].handle(), passCapacity,
+                    shadowIndirectBuffers[frame].handle(), shadowDrawCountBuffers[frame].handle(), shadowPassCapacity,
                     shadowCandidateCountBuffers[frame].handle(), shadowCandidateDispatchBuffers[frame].handle(), &shadowPageWorkBuffers[frame],
                     shadowInstanceTransformCountBuffers[frame].handle());
                 shadowIndirectDraws[frame].create(
-                    shadowIndirectBuffers[frame].handle(), shadowDrawCountBuffers[frame].handle(), passCapacity);
+                    shadowIndirectBuffers[frame].handle(), shadowDrawCountBuffers[frame].handle(), shadowPassCapacity);
                 shadowTwoSidedCullingPasses[frame].create(device, cullingPipeline, cullingPipelineLayout, shadowTwoSidedCullSet,
-                    shadowTwoSidedIndirectBuffers[frame].handle(), shadowTwoSidedDrawCountBuffers[frame].handle(), passCapacity,
+                    shadowTwoSidedIndirectBuffers[frame].handle(), shadowTwoSidedDrawCountBuffers[frame].handle(), shadowPassCapacity,
                     shadowTwoSidedCandidateCountBuffers[frame].handle(), shadowTwoSidedCandidateDispatchBuffers[frame].handle(), &shadowPageWorkBuffers[frame],
                     shadowTwoSidedInstanceTransformCountBuffers[frame].handle());
                 shadowTwoSidedIndirectDraws[frame].create(
-                    shadowTwoSidedIndirectBuffers[frame].handle(), shadowTwoSidedDrawCountBuffers[frame].handle(), passCapacity);
+                    shadowTwoSidedIndirectBuffers[frame].handle(), shadowTwoSidedDrawCountBuffers[frame].handle(), shadowPassCapacity);
             }
             hiZValid.fill(false);
             [[maybe_unused]] const UploadTicket ticket = uploadBatch.submit();

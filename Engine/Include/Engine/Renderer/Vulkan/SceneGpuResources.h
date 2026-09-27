@@ -11,6 +11,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cmath>
 #include <cstdint>
 #include <limits>
 #include <vector>
@@ -20,6 +21,28 @@ namespace Engine {
     /** ECS-derived CPU data shared by the scene upload and culling stages. */
     class SceneGpuResources final {
     public:
+        static constexpr float InstanceCellSize = 32.0F;
+        static constexpr std::uint32_t MaxInstancesPerBatch = 64;
+        using InstanceCell = std::array<std::int64_t, 3>;
+
+        [[nodiscard]] static InstanceCell cellFor(const AABB& bounds) noexcept {
+            const auto center = (bounds.min.native() + bounds.max.native()) * 0.5F;
+            return {static_cast<std::int64_t>(std::floor(center.x / InstanceCellSize)),
+                    static_cast<std::int64_t>(std::floor(center.y / InstanceCellSize)),
+                    static_cast<std::int64_t>(std::floor(center.z / InstanceCellSize))};
+        }
+
+        [[nodiscard]] static std::uint64_t instanceSourceKey(const Entity entity,
+                                                               const std::uint32_t sectionIndex) noexcept {
+            // Entity already uses all 64 bits (index and generation).
+            std::uint64_t key = entity +
+                (static_cast<std::uint64_t>(sectionIndex) + 1U) * 0xd6e8feb86659fd93ULL;
+            key += 0x9e3779b97f4a7c15ULL;
+            key = (key ^ (key >> 30U)) * 0xbf58476d1ce4e5b9ULL;
+            key = (key ^ (key >> 27U)) * 0x94d049bb133111ebULL;
+            return key ^ (key >> 31U);
+        }
+
         GPUSceneDatabase database;
 
         struct RenderableRecord {
@@ -27,6 +50,7 @@ namespace Engine {
             AABB geometryLocalBounds{};
             AABB localBounds{};
             std::size_t batchIndex{0};
+            InstanceCell spatialCell{};
             std::uint32_t firstVertex{0};
             std::uint32_t vertexCount{0};
             /// Imported render-section identity; keeps GPU-scene records distinct.

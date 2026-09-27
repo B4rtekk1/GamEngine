@@ -41,7 +41,8 @@ void main(uint3 groupId : SV_GroupID, uint3 threadId : SV_GroupThreadID)
 {
     const uint pageSlot = groupId.y;
     const uint visibleInstanceIndex = groupId.x;
-    if (pageSlot >= culling.pageCount || visibleInstanceIndex >= visibleInstanceCounts[pageSlot]) return;
+    if (pageSlot >= culling.pageCount || visibleInstanceIndex >= culling.instancesPerPage ||
+        visibleInstanceIndex >= visibleInstanceCounts[pageSlot]) return;
 
     const uint sourceOffset = pageSlot * culling.instancesPerPage + visibleInstanceIndex;
     const ShadowVisibleInstance shadowInstance = visibleInstances[sourceOffset];

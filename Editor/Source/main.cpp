@@ -544,10 +544,14 @@ int main(int argc, char** argv) {
         TerrainSculptState terrainSculpt;
         std::string playSceneSnapshot;
         std::string playModeError;
-        // Restoring the editor snapshot replaces registry-owned render data.
-        // Its GPU resources are rebuilt at the start of the following loop,
-        // so never render the one intervening frame against stale buffers.
+        // Replacing the registry invalidates every render-facing scene snapshot.
+        // Skip rendering until reloadScene has rebuilt those resources.
         bool skipRendererFrameAfterSceneRestore = false;
+        const auto requestFullSceneReload = [&] {
+            setSelection(Engine::NullEntity);
+            rendererReloadPending = true;
+            skipRendererFrameAfterSceneRestore = true;
+        };
         constexpr auto autoSaveInterval = std::chrono::seconds{30};
         auto lastAutoSaveAttempt = std::chrono::steady_clock::now();
         std::uint64_t lastPersistedSceneRevision = scene.editor().mutationRevision();
@@ -566,6 +570,7 @@ int main(int argc, char** argv) {
                         GE_PROFILE_SCOPE("SceneLoad.Adopt");
                         const auto stageStartedAt = std::chrono::steady_clock::now();
                         Engine::SceneSerializer::replace(scene, *loadedScene);
+                        requestFullSceneReload();
                         reportSceneLoadStage("Scene adopt", stageStartedAt);
                     }
                     if (initialSceneAntialiasing) {
@@ -585,7 +590,6 @@ int main(int argc, char** argv) {
                         reportSceneLoadStage("History reset", stageStartedAt);
                     }
                     lastPersistedSceneRevision = scene.editor().mutationRevision();
-                    setSelection(Engine::NullEntity);
                     initialSceneSyncPending = true;
                     Editor::ConsolePanel::info("[SceneLoad] ECS ready: " + initialScene.string());
                 } catch (const std::exception& error) {
@@ -611,8 +615,7 @@ int main(int argc, char** argv) {
                     paused = false;
                     physicsAccumulator = 0.0;
                     showGameView = playing;
-                    rendererReloadPending = !playing;
-                    skipRendererFrameAfterSceneRestore = !playing;
+                    if (!playing) requestFullSceneReload();
                     Editor::ConsolePanel::info(playing ? "Entered Play mode." : "Stopped Play mode.");
                 } else Editor::ConsolePanel::error("Could not change Play mode: " + playModeError);
             }
@@ -711,8 +714,7 @@ int main(int argc, char** argv) {
                 scene.editorClouds.clear();
                 history.reset(scene);
                 lastPersistedSceneRevision = scene.editor().mutationRevision();
-                setSelection(Engine::NullEntity);
-                rendererReloadPending = true;
+                requestFullSceneReload();
             }
             if (!playing && undoRequested && history.undo(scene)) {
                 sceneLoaded = true;
@@ -722,11 +724,7 @@ int main(int argc, char** argv) {
             }
             if (sceneLoaded) {
                 resolveShaderGraphMaterials();
-                // Loading replaces the registry, so any selection from the
-                // previous scene is stale before the hierarchy/inspector are
-                // drawn for this frame.
-                setSelection(Engine::NullEntity);
-                rendererReloadPending = true;
+                requestFullSceneReload();
             }
             if (!playing && selectedEntity != Engine::NullEntity &&
                 scene.editor().valid(selectedEntity)) {
@@ -754,9 +752,7 @@ int main(int argc, char** argv) {
                 showGameView = playing;
                 if (!playing) {
                     resolveShaderGraphMaterials();
-                    setSelection(Engine::NullEntity);
-                    rendererReloadPending = true;
-                    skipRendererFrameAfterSceneRestore = true;
+                    requestFullSceneReload();
                 }
                 Editor::ConsolePanel::info(playing ? "Entered Play mode." : "Stopped Play mode.");
                 return true;
@@ -929,8 +925,7 @@ int main(int argc, char** argv) {
                                                     scene.editorClouds.clear();
                                                     history.reset(scene);
                                                     lastPersistedSceneRevision = scene.editor().mutationRevision();
-                                                    setSelection(Engine::NullEntity);
-                                                    rendererReloadPending = true;
+                                                    requestFullSceneReload();
                                                 });
                     created != Engine::NullEntity) {
                     setSelection(created);
@@ -953,11 +948,18 @@ int main(int argc, char** argv) {
                     selectedEntity = scene.createGameObject();
                     renderer.setEditorSelection(selectedEntity);
                 }
+                bool sceneRestoredByShortcut = false;
                 if (ImGui::IsKeyPressed(ImGuiKey_Z) && history.undo(scene)) {
                     sceneLoaded = true;
+                    sceneRestoredByShortcut = true;
                 }
                 if (ImGui::IsKeyPressed(ImGuiKey_Y) && history.redo(scene)) {
                     sceneLoaded = true;
+                    sceneRestoredByShortcut = true;
+                }
+                if (sceneRestoredByShortcut) {
+                    resolveShaderGraphMaterials();
+                    requestFullSceneReload();
                 }
                 if (selectedEntity != Engine::NullEntity && scene.editor().valid(selectedEntity)) {
                     if (ImGui::IsKeyPressed(ImGuiKey_C)) {
@@ -969,10 +971,6 @@ int main(int argc, char** argv) {
                     if (ImGui::IsKeyPressed(ImGuiKey_V)) {
                         setSelection(clipboard.paste(scene));
                     }
-                }
-                if (sceneLoaded) {
-                    setSelection(Engine::NullEntity);
-                    rendererReloadPending = true;
                 }
             }
             renderer.setEditorSceneCameraInput(

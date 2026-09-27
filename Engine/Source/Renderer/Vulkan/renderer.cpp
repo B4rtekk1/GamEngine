@@ -854,7 +854,7 @@ namespace Engine {
         // particular, preserve the Vulkan instance/device, swapchain, ImGui
         // backend and Scene View images: adding an object must not look like a
         // complete scene reload to the editor.
-        void synchronizeSceneResources(const Scene &updatedScene) {
+        void synchronizeSceneResources(const Scene &updatedScene, const bool spatialBatchChanged = false) {
             if (&updatedScene != &scene) {
                 throw std::invalid_argument("Renderer cannot switch Scene instances while initialized");
             }
@@ -869,11 +869,12 @@ namespace Engine {
                     registry.componentRevision<ParticleEmitterComponent>();
             const std::uint64_t updatedSmokeEmitterRevision =
                     registry.componentRevision<SmokeEmitterComponent>();
-            if (updatedTopologyRevision == lastRenderTopologyRevision &&
+            if (!spatialBatchChanged && updatedTopologyRevision == lastRenderTopologyRevision &&
                 updatedParticleEmitterRevision == lastParticleEmitterRevision &&
                 updatedSmokeEmitterRevision == lastSmokeEmitterRevision) {
                 return;
             }
+            spatialBatchRebuildPending = false;
             sceneViewportNeedsRender = true;
             // Retire the previous scene generation before changing shared
             // descriptor bindings and scene tables.  This is fence/timeline

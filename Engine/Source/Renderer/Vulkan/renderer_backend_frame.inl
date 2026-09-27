@@ -2854,6 +2854,29 @@
             // A minimized window has no presentable Vulkan extent.  Do not
             // acquire or recreate resources until it becomes drawable again.
             if (!hasDrawableExtent()) { return; }
+            // A moved instance must leave its old cell before the batch AABB
+            // grows across the world. Rebuild before acquiring a frame fence.
+            TransformSystem::updateDirty(registry);
+            bool spatialBatchChanged = false;
+            for (const Entity entity : TransformSystem::changedWorldTransforms(registry)) {
+                const auto it = sceneGpu.renderableIndices.find(entity);
+                if (it == sceneGpu.renderableIndices.end() || !registry.has<Transform>(entity)) continue;
+                const Transform& transform = registry.get<Transform>(entity);
+                for (const std::size_t index : it->second) {
+                    const RenderableRecord& record = renderables[index];
+                    if (record.lastWorldRevision == transform.worldRevision()) continue;
+                    const AABB bounds = record.localBounds.transformed(transform.worldMatrix().native());
+                    if (SceneGpuResources::cellFor(bounds) != record.spatialCell) {
+                        spatialBatchChanged = true;
+                        break;
+                    }
+                }
+                if (spatialBatchChanged) break;
+            }
+            if (spatialBatchChanged || spatialBatchRebuildPending) {
+                spatialBatchRebuildPending = false;
+                synchronizeSceneResources(scene, true);
+            }
             uint32_t imageIndex;
             if (!acquireFrameImage(imageIndex)) { return; }
 

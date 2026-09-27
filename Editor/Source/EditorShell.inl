@@ -336,7 +336,11 @@ Engine::Entity drawEditorMenuBar(Engine::ScenePreset &scene, Engine::Renderer &r
     };
     const auto loadScene = [&](const std::filesystem::path &path) {
         std::optional<Engine::AntialiasingLevel> antialiasing;
+        // Loading may fail after replacing the registry (for example while
+        // reading environment settings). The caller must still reload it.
+        sceneLoaded = true;
         Engine::SceneSerializer::load(scene, path, antialiasing);
+        resetHistoryRequested = true;
         if (!scene.environmentEquirectangular().empty() &&
             !renderer.setEnvironmentEquirectangular(content.assetRoot() / scene.environmentEquirectangular())) {
             throw std::runtime_error("Could not load scene HDR/EXR environment");
@@ -346,8 +350,6 @@ Engine::Entity drawEditorMenuBar(Engine::ScenePreset &scene, Engine::Renderer &r
             renderer.setAntialiasingLevel(*antialiasing);
             antialiasingChanged = true;
         }
-        sceneLoaded = true;
-        resetHistoryRequested = true;
         sceneFileError.clear();
         Editor::ConsolePanel::info("Loaded scene: " + path.string());
     };
@@ -369,12 +371,12 @@ Engine::Entity drawEditorMenuBar(Engine::ScenePreset &scene, Engine::Renderer &r
             Engine::ScenePreset emptyScene;
             Engine::SceneSerializer::save(emptyScene, *path,
                                           EditorSceneSession::antialiasingLevel(renderer));
+            sceneLoaded = true;
             Engine::SceneSerializer::load(scene, *path);
+            resetHistoryRequested = true;
             EditorSceneSession::markSceneSaved(*path);
             sceneSaved = true;
             sceneFileError.clear();
-            sceneLoaded = true;
-            resetHistoryRequested = true;
             Editor::ConsolePanel::info("Created scene: " + path->string());
         } catch (const std::exception &error) {
             sceneFileError = error.what();
