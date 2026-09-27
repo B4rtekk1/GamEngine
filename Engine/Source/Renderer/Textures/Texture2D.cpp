@@ -143,7 +143,7 @@ namespace Engine {
                         throw std::runtime_error("Could not read GTEX mip payload into upload ring");
                     VkBufferImageCopy copy{};
                     copy.bufferOffset = slice.offset;
-                    copy.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, sourceLevel, 0, 1};
+                    copy.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, sourceLevel - firstMip, 0, 1};
                     copy.imageOffset = {0, static_cast<std::int32_t>(blockY * blockExtent), 0};
                     copy.imageExtent = {mip.width, std::min(rows * blockExtent, mip.height - blockY * blockExtent), 1};
                     vkCmdCopyBufferToImage(upload.commandBuffer(), slice.buffer, image,
@@ -207,6 +207,9 @@ namespace Engine {
         height_ = std::exchange(other.height_, 0);
         mipLevels_ = std::exchange(other.mipLevels_, 0);
         residentFirstMip_ = std::exchange(other.residentFirstMip_, 0);
+        sourceWidth_ = std::exchange(other.sourceWidth_, 0);
+        sourceHeight_ = std::exchange(other.sourceHeight_, 0);
+        sourceMipLevels_ = std::exchange(other.sourceMipLevels_, 0);
         readyTimeline_ = std::exchange(other.readyTimeline_, 0);
         return *this;
     }
@@ -634,9 +637,12 @@ namespace Engine {
         device_ = device;
         allocator_ = allocator;
         format_ = to_vk_format(texture.format);
-        width_ = texture.width;
-        height_ = texture.height;
-        mipLevels_ = static_cast<std::uint32_t>(texture.mips.size());
+        sourceWidth_ = texture.width;
+        sourceHeight_ = texture.height;
+        sourceMipLevels_ = static_cast<std::uint32_t>(texture.mips.size());
+        width_ = texture.mips[firstResidentMip].width;
+        height_ = texture.mips[firstResidentMip].height;
+        mipLevels_ = sourceMipLevels_ - firstResidentMip;
         residentFirstMip_ = firstResidentMip;
         const bool ownsUploadBatch = !upload->recording();
         try {
@@ -669,7 +675,7 @@ namespace Engine {
             transitionImage(upload->commandBuffer(), image_, 0, mipLevels_, VK_IMAGE_LAYOUT_UNDEFINED,
                             VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 0, VK_ACCESS_2_TRANSFER_WRITE_BIT,
                             VK_PIPELINE_STAGE_2_NONE, VK_PIPELINE_STAGE_2_TRANSFER_BIT);
-            copy_gtex_mips_to_ring(*upload, image_, texture, firstResidentMip, mipLevels_);
+            copy_gtex_mips_to_ring(*upload, image_, texture, firstResidentMip, sourceMipLevels_);
             transitionImage(upload->graphicsCommandBuffer(), image_, 0, mipLevels_,
                             VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
                             VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_ACCESS_2_TRANSFER_WRITE_BIT,
@@ -708,35 +714,21 @@ namespace Engine {
         }
     }
 
-    void Texture2D::promoteGtex(
-        const VkCommandPool commandPool, const VkQueue queue, const Assets::GtexTexture& texture,
-        const std::uint32_t newFirstResidentMip) {
-        if (commandPool == VK_NULL_HANDLE || queue == VK_NULL_HANDLE || !valid() || allocator_ == VK_NULL_HANDLE ||
-            texture.mips.size() != mipLevels_ || texture.width != width_ || texture.height != height_ ||
-            to_vk_format(texture.format) != format_ || newFirstResidentMip > residentFirstMip_) {
-            throw std::invalid_argument("Texture2D::promoteGtex received incompatible texture or mip range");
-        }
-        if (newFirstResidentMip == residentFirstMip_) return;
-        UploadContext* const upload = UploadContext::current();
-        if (upload == nullptr) throw std::logic_error("GTEX streaming requires an active UploadContext");
+    Texture2D Texture2D::replaceGtex(
+        const VkPhysicalDevice physicalDevice, const VkCommandPool commandPool, const VkQueue queue,
+        const Assets::GtexTexture& texture, const std::uint32_t newFirstResidentMip) {
+        if (!valid() || allocator_ == VK_NULL_HANDLE || texture.mips.size() != sourceMipLevels_ ||
+            texture.width != sourceWidth_ || texture.height != sourceHeight_ ||
+            to_vk_format(texture.format) != format_ || newFirstResidentMip >= sourceMipLevels_)
+            throw std::invalid_argument("Texture2D::replaceGtex received incompatible texture or mip range");
+        if (newFirstResidentMip == residentFirstMip_) return {};
 
-        const bool ownsUploadBatch = !upload->recording();
-        if (ownsUploadBatch) upload->begin();
-        // Only the previously absent levels are transitioned and copied.  The
-        // already-resident tail stays in shader-read layout throughout.
-        transitionImage(upload->commandBuffer(), image_, newFirstResidentMip,
-                        residentFirstMip_ - newFirstResidentMip, VK_IMAGE_LAYOUT_UNDEFINED,
-                        VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 0, VK_ACCESS_2_TRANSFER_WRITE_BIT,
-                        VK_PIPELINE_STAGE_2_NONE, VK_PIPELINE_STAGE_2_TRANSFER_BIT);
-        copy_gtex_mips_to_ring(*upload, image_, texture, newFirstResidentMip, residentFirstMip_);
-        transitionImage(upload->graphicsCommandBuffer(), image_, newFirstResidentMip,
-                        residentFirstMip_ - newFirstResidentMip, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-                        VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_ACCESS_2_TRANSFER_WRITE_BIT,
-                        VK_ACCESS_2_SHADER_SAMPLED_READ_BIT, VK_PIPELINE_STAGE_2_TRANSFER_BIT,
-                        VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT);
-        readyTimeline_ = upload->pendingTicket().timelineValue;
-        if (ownsUploadBatch) readyTimeline_ = upload->submit().timelineValue;
-        residentFirstMip_ = newFirstResidentMip;
+        Texture2D replacement;
+        replacement.createGtex(physicalDevice, device_, commandPool, queue, texture,
+                               newFirstResidentMip, allocator_);
+        Texture2D retired = std::move(*this);
+        *this = std::move(replacement);
+        return retired;
     }
 
     void Texture2D::createFromAsset(
@@ -796,6 +788,9 @@ namespace Engine {
         height_ = 0;
         mipLevels_ = 0;
         residentFirstMip_ = 0;
+        sourceWidth_ = 0;
+        sourceHeight_ = 0;
+        sourceMipLevels_ = 0;
         readyTimeline_ = 0;
     }
 

@@ -26,6 +26,7 @@
 #include <fstream>
 #include <iostream>
 #include <limits>
+#include <memory>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -222,9 +223,11 @@ namespace Engine::Assets {
             mesh.images.reserve(data.images_count);
             for (cgltf_size i = 0; i < data.images_count; ++i) {
                 const auto sourcePath = external_image_path(data.images[i], path);
-                if (forCooking && !sourcePath.empty()) {
+                if (forCooking) {
                     Mesh::Image result;
                     result.sourcePath = sourcePath;
+                    if (i >= std::numeric_limits<std::uint32_t>::max()) return false;
+                    result.sourceImageIndex = static_cast<std::uint32_t>(i);
                     mesh.images.push_back(std::move(result));
                     continue;
                 }
@@ -693,6 +696,37 @@ namespace Engine::Assets {
     std::shared_ptr<const Mesh> load_gltf_mesh_for_cooking(const std::filesystem::path &path,
                                                            GltfImportTimings *const timings) {
         return load_gltf_mesh_impl(path, true, timings);
+    }
+
+    bool visit_gltf_embedded_images_for_cooking(const std::filesystem::path &path,
+                                                const EmbeddedImageVisitor &visitor,
+                                                std::chrono::nanoseconds *const decodeTime) {
+        cgltf_options options{};
+        cgltf_data *parsed = nullptr;
+        const auto pathString = path.string();
+        if (cgltf_parse_file(&options, pathString.c_str(), &parsed) != cgltf_result_success) return false;
+        GltfData data{parsed, &cgltf_free};
+        if (cgltf_load_buffers(&options, data.get(), pathString.c_str()) != cgltf_result_success ||
+            cgltf_validate(data.get()) != cgltf_result_success) return false;
+        for (cgltf_size i = 0; i < data->images_count; ++i) {
+            if (!external_image_path(data->images[i], path).empty()) continue;
+            if (i >= std::numeric_limits<std::uint32_t>::max()) return false;
+            const auto started = std::chrono::steady_clock::now();
+            const auto encoded = image_bytes(data->images[i], path);
+            if (encoded.empty() || encoded.size() > static_cast<std::size_t>(std::numeric_limits<int>::max()))
+                return false;
+            int width = 0, height = 0, channels = 0;
+            std::unique_ptr<stbi_uc, decltype(&stbi_image_free)> pixels{
+                stbi_load_from_memory(encoded.data(), static_cast<int>(encoded.size()),
+                                      &width, &height, &channels, STBI_rgb_alpha), &stbi_image_free};
+            if (!pixels || width <= 0 || height <= 0) return false;
+            if (decodeTime != nullptr) *decodeTime += std::chrono::steady_clock::now() - started;
+            const auto byteCount = static_cast<std::size_t>(width) * static_cast<std::size_t>(height) * STBI_rgb_alpha;
+            if (!visitor(static_cast<std::uint32_t>(i),
+                         std::span<const std::uint8_t>{pixels.get(), byteCount},
+                         static_cast<std::uint32_t>(width), static_cast<std::uint32_t>(height))) return false;
+        }
+        return true;
     }
 
     std::optional<std::uint64_t> gltf_source_hash(const std::filesystem::path &path) {

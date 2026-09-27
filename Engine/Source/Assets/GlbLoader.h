@@ -5,6 +5,8 @@
 #include <optional>
 #include <cstdint>
 #include <chrono>
+#include <functional>
+#include <span>
 
 namespace Engine {
     class Mesh;
@@ -24,9 +26,16 @@ namespace Engine::Assets {
      */
     [[nodiscard]] std::shared_ptr<const Mesh> load_gltf_mesh(const std::filesystem::path &path);
 
-    /** Import for cooking: reuses current external .gtex files before decoding images. */
+    /** Imports geometry and image references without decoding textures. */
     [[nodiscard]] std::shared_ptr<const Mesh> load_gltf_mesh_for_cooking(
         const std::filesystem::path &path, GltfImportTimings *timings = nullptr);
+
+    /** Decodes one embedded image at a time; pixel spans expire after each callback. */
+    using EmbeddedImageVisitor = std::function<bool(std::uint32_t, std::span<const std::uint8_t>,
+                                                    std::uint32_t, std::uint32_t)>;
+    [[nodiscard]] bool visit_gltf_embedded_images_for_cooking(
+        const std::filesystem::path &path, const EmbeddedImageVisitor &visitor,
+        std::chrono::nanoseconds *decodeTime = nullptr);
 
     /** Hashes glTF/GLB bytes and every external buffer and image used by import. */
     [[nodiscard]] std::optional<std::uint64_t> gltf_source_hash(const std::filesystem::path &path);

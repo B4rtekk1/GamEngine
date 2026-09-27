@@ -527,30 +527,45 @@ namespace Engine::Assets {
                 std::chrono::steady_clock::now() - copyStarted).count();
         for (std::size_t i = 0; i < mesh.images.size(); ++i) {
             auto &image = mesh.images[i];
+            if (image.sourcePath.empty()) continue;
             const auto format = image_format(mesh, i);
-            if (!image.sourcePath.empty()) {
-                auto texture = image.sourcePath;
-                texture.replace_extension(format == default_texture_format(image.sourcePath)
-                                              ? std::string_view{".gtex"} : format_suffix(format));
-                if (cook_source_texture_cached(image.sourcePath, texture, format, cacheRoot,
-                                               summary == nullptr ? nullptr : &summary->gltfTextures) ==
-                    TextureCookResult::Failed) return false;
-                image.cookedPath = texture.lexically_relative(output.parent_path().empty()
-                                                                 ? std::filesystem::path{"."}
-                                                                 : output.parent_path());
-                if (image.cookedPath.empty()) return false;
-                continue;
-            }
-            if (image.width == 0 || image.height == 0 || image.rgbaPixels.empty()) return false;
-            const auto texture = texture_path(output, i);
-            if (cook_image_texture_cached(image.rgbaPixels, image.width, image.height, texture,
-                                          format, cacheRoot,
-                                          summary == nullptr ? nullptr : &summary->gltfTextures) ==
+            auto texture = image.sourcePath;
+            texture.replace_extension(format == default_texture_format(image.sourcePath)
+                                          ? std::string_view{".gtex"} : format_suffix(format));
+            if (cook_source_texture_cached(image.sourcePath, texture, format, cacheRoot,
+                                           summary == nullptr ? nullptr : &summary->gltfTextures) ==
                 TextureCookResult::Failed) return false;
-            image.cookedPath = texture.filename();
-            image.cooked.reset();
-            image.rgbaPixels.clear();
+            image.cookedPath = texture.lexically_relative(output.parent_path().empty()
+                                                             ? std::filesystem::path{"."}
+                                                             : output.parent_path());
+            if (image.cookedPath.empty()) return false;
         }
+        std::chrono::nanoseconds embeddedDecodeTime{};
+        const bool hasEmbeddedImages = std::ranges::any_of(mesh.images, [](const Mesh::Image& image) {
+            return image.sourcePath.empty();
+        });
+        if (hasEmbeddedImages && !visit_gltf_embedded_images_for_cooking(source,
+            [&](const std::uint32_t sourceIndex, const std::span<const std::uint8_t> rgba,
+                const std::uint32_t width, const std::uint32_t height) {
+                for (std::size_t i = 0; i < mesh.images.size(); ++i) {
+                    auto& image = mesh.images[i];
+                    if (!image.sourcePath.empty() || image.sourceImageIndex != sourceIndex) continue;
+                    const auto texture = texture_path(output, i);
+                    if (cook_image_texture_cached(rgba, width, height, texture,
+                                                  image_format(mesh, i), cacheRoot,
+                                                  summary == nullptr ? nullptr : &summary->gltfTextures) ==
+                        TextureCookResult::Failed) return false;
+                    image.width = width;
+                    image.height = height;
+                    image.cookedPath = texture.filename();
+                }
+                return true;
+            }, &embeddedDecodeTime)) return false;
+        if (summary != nullptr)
+            summary->gltfTextures.decodeMilliseconds +=
+                std::chrono::duration<double, std::milli>(embeddedDecodeTime).count();
+        for (const auto& image : mesh.images)
+            if (image.cookedPath.empty()) return false;
         return save_gmesh(output, mesh, summary == nullptr ? nullptr : &summary->gltf) &&
                CookCache::write_artifact_key(output, *meshKey);
     }

@@ -82,6 +82,9 @@ namespace Engine {
 
             /** External source image, when this glTF image comes from a file. */
             std::filesystem::path sourcePath;
+
+            /** glTF image index used to decode embedded images only when cooking. */
+            std::uint32_t sourceImageIndex{~std::uint32_t{0}};
         };
 
         /** @brief Vertex array referenced by the mesh indices. */

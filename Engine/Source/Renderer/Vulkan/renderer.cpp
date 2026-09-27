@@ -890,10 +890,9 @@ namespace Engine {
             // Bloom/Tonemap/sky/forward/particle pipelines. ShadowPass now
             // updates descriptor-set contents in place, preserving its set
             // layout and therefore every pipeline which consumes it.
-            // Geometry is an append-only heap. Topology changes only append
-            // sub-allocations; old mesh ranges stay valid for in-flight draw
-            // calls. createMeshBuffers() grows its backing buffer only when
-            // this heap has exhausted its reserved capacity.
+            // Geometry keeps stable ranges across ordinary topology changes.
+            // After frame retirement, createMeshBuffers() may compact a mostly
+            // empty heap and rebuild its backing buffers at smaller capacity.
             // Persistent scene tables retain their backing allocations. Their
             // creators grow geometrically only when a new delta exceeds the
             // current capacity, otherwise they overwrite changed records.

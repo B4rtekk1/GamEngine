@@ -59,25 +59,21 @@ public:
         const Assets::CookedTexture& texture,
         VmaAllocator allocator = VK_NULL_HANDLE);
 
-    /**
-     * Creates one persistent image with the complete GTEX mip chain and uploads
-     * the tail beginning at firstResidentMip.  Later promotions do not replace
-     * the image, its allocation, or its image view.
-     */
+    /** Allocates only the GTEX mip tail beginning at firstResidentMip. */
     void createGtex(
         VkPhysicalDevice physicalDevice, VkDevice device, VkCommandPool commandPool, VkQueue queue,
         const Assets::GtexTexture& texture, std::uint32_t firstResidentMip,
         VmaAllocator allocator = VK_NULL_HANDLE);
 
     /**
-     * Uploads missing, sharper GTEX mip levels into an existing persistent
-     * image. newFirstResidentMip must be no greater than residentFirstMip().
-     * Sampling must be LOD-clamped by the residency consumer until this upload
-     * has completed; the texture descriptor itself remains stable.
+     * Builds a new physical mip tail for promotion or demotion and installs it.
+     * Update descriptors and keep the returned old texture alive until all
+     * frames referencing its image view have retired. The new image must be
+     * synchronized with readyTimeline() before sampling.
      */
-    void promoteGtex(
-        VkCommandPool commandPool, VkQueue queue, const Assets::GtexTexture& texture,
-        std::uint32_t newFirstResidentMip);
+    [[nodiscard]] Texture2D replaceGtex(
+        VkPhysicalDevice physicalDevice, VkCommandPool commandPool, VkQueue queue,
+        const Assets::GtexTexture& texture, std::uint32_t newFirstResidentMip);
 
     /** Uses the cooked payload when available; decoded RGBA remains a development fallback. */
     void createFromAsset(
@@ -120,6 +116,9 @@ private:
     std::uint32_t height_ = 0;
     std::uint32_t mipLevels_ = 0;
     std::uint32_t residentFirstMip_ = 0;
+    std::uint32_t sourceWidth_ = 0;
+    std::uint32_t sourceHeight_ = 0;
+    std::uint32_t sourceMipLevels_ = 0;
     std::uint64_t readyTimeline_ = 0;
 };
 

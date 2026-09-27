@@ -454,6 +454,35 @@
                 retiredGeometryHeapAllocations.push_back({allocation->second, submittedFrameValue});
                 allocation = geometryHeapAllocations.erase(allocation);
             }
+            // Topology rebuilds have already retired every frame and upload that
+            // could reference the old buffers. Compact only when enough device
+            // memory can be returned to justify reuploading the live meshes.
+            const VkDeviceSize committedGeometryBytes = vertexBuffer.size() + indexBuffer.size();
+            VkDeviceSize liveGeometryBytes = 0;
+            for (const auto& [key, allocation] : geometryHeapAllocations) {
+                (void)key;
+                liveGeometryBytes += static_cast<VkDeviceSize>(allocation.vertexCount) * sizeof(GpuVertex) +
+                    static_cast<VkDeviceSize>(allocation.indexCount) * sizeof(std::uint32_t);
+            }
+            constexpr VkDeviceSize compactMinimumBytes = 32ULL * 1024 * 1024;
+            const bool compactGeometryHeap = committedGeometryBytes >= compactMinimumBytes &&
+                liveGeometryBytes < committedGeometryBytes / 2;
+            if (compactGeometryHeap) {
+                std::uint32_t nextVertex = 0;
+                std::uint32_t nextIndex = 0;
+                for (auto& [key, allocation] : geometryHeapAllocations) {
+                    (void)key;
+                    allocation.firstVertex = nextVertex;
+                    allocation.firstIndex = nextIndex;
+                    nextVertex += allocation.vertexCount;
+                    nextIndex += allocation.indexCount;
+                }
+                geometryHeapVertexHighWater = nextVertex;
+                geometryHeapIndexHighWater = nextIndex;
+                geometryHeapFreeVertices.clear();
+                geometryHeapFreeIndices.clear();
+                retiredGeometryHeapAllocations.clear();
+            }
             for (auto retired = retiredMeshletHeapAllocations.begin();
                  retired != retiredMeshletHeapAllocations.end();) {
                 if (retired->reclaimAfter > completedFrameValue) {
@@ -596,21 +625,23 @@
             if (vertexCount == 0 || indexCount == 0) {
                 // The empty-scene path below keeps valid dummy bindings.
             } else {
-                const auto growCapacity = [](const std::uint32_t required) {
-                    // Leave headroom for normal editor additions. Growth is
-                    // deliberately rare; it is the only point at which the
-                    // heap must be reallocated.
-                    return std::max(required, required + required / 2U + 1U);
+                const auto geometryCapacity = [](const VkDeviceSize required) {
+                    constexpr VkDeviceSize smallLimit = 16ULL * 1024 * 1024;
+                    constexpr VkDeviceSize largeLimit = 128ULL * 1024 * 1024;
+                    constexpr VkDeviceSize page = 32ULL * 1024 * 1024;
+                    if (required < smallLimit) return required + required / 2 + 1;
+                    if (required < largeLimit) return required + required / 4 + 1;
+                    return ((required + page - 1) / page) * page;
                 };
                 const VkDeviceSize requiredVertexBytes = sizeof(GpuVertex) * static_cast<VkDeviceSize>(vertexCount);
                 const VkDeviceSize requiredIndexBytes = sizeof(std::uint32_t) * static_cast<VkDeviceSize>(indexCount);
-                const bool growVertexHeap = vertexBuffer.handle() == VK_NULL_HANDLE ||
+                const bool growVertexHeap = compactGeometryHeap || vertexBuffer.handle() == VK_NULL_HANDLE ||
                     vertexBuffer.size() < requiredVertexBytes;
-                const bool growIndexHeap = indexBuffer.handle() == VK_NULL_HANDLE ||
+                const bool growIndexHeap = compactGeometryHeap || indexBuffer.handle() == VK_NULL_HANDLE ||
                     indexBuffer.size() < requiredIndexBytes;
                 if (growVertexHeap) {
                     vertexBuffer.createDeviceLocalEmpty(device,
-                        sizeof(GpuVertex) * static_cast<VkDeviceSize>(growCapacity(vertexCount)),
+                        geometryCapacity(requiredVertexBytes),
                         VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
                         (vulkanDevice.supportsRayQuery()
                             ? VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR |
@@ -620,7 +651,7 @@
                 }
                 if (growIndexHeap) {
                     indexBuffer.createDeviceLocalEmpty(device,
-                        sizeof(std::uint32_t) * static_cast<VkDeviceSize>(growCapacity(indexCount)),
+                        geometryCapacity(requiredIndexBytes),
                         VK_BUFFER_USAGE_INDEX_BUFFER_BIT | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
                         (vulkanDevice.supportsRayQuery()
                             ? VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR |
@@ -649,14 +680,22 @@
                     }
                 }
                 for (const MeshUpload& upload : meshUploads) {
-                    std::vector<GpuVertex> packedVertices;
-                    packedVertices.reserve(upload.mesh->vertices.size());
-                    for (const Vertex& vertex : upload.mesh->vertices) {
-                        packedVertices.push_back(GpuVertex::pack(vertex));
+                    constexpr std::size_t verticesPerChunk = 64U * 1024U;
+                    const auto ringVerticesPerChunk = static_cast<std::size_t>(
+                        uploadContext.capacity() / sizeof(GpuVertex));
+                    if (ringVerticesPerChunk == 0)
+                        throw std::runtime_error("Upload ring is too small for a packed vertex");
+                    const auto chunkCapacity = std::min(verticesPerChunk, ringVerticesPerChunk);
+                    for (std::size_t first = 0; first < upload.mesh->vertices.size(); first += chunkCapacity) {
+                        const auto count = std::min(chunkCapacity, upload.mesh->vertices.size() - first);
+                        const auto bytes = static_cast<VkDeviceSize>(count) * sizeof(GpuVertex);
+                        const auto slice = uploadContext.allocate(bytes, alignof(GpuVertex));
+                        auto* const packed = static_cast<GpuVertex*>(slice.mapped);
+                        for (std::size_t i = 0; i < count; ++i)
+                            packed[i] = GpuVertex::pack(upload.mesh->vertices[first + i]);
+                        vertexBuffer.copyFromUploadRing(slice.buffer, slice.offset, bytes,
+                            sizeof(GpuVertex) * (static_cast<VkDeviceSize>(upload.firstVertex) + first));
                     }
-                    vertexBuffer.uploadDeviceLocal(packedVertices.data(),
-                        sizeof(GpuVertex) * packedVertices.size(), sizeof(GpuVertex) * upload.firstVertex,
-                        commandPool, vulkanDevice.graphicsQueue());
                     const auto indicesPerChunk = static_cast<std::size_t>(uploadContext.capacity() / sizeof(std::uint32_t));
                     for (std::size_t first = 0; first < upload.mesh->indices.size(); first += indicesPerChunk) {
                         const auto count = std::min(indicesPerChunk, upload.mesh->indices.size() - first);
@@ -713,7 +752,7 @@
                            allocation.triangleCount == mesh->meshletTriangles.size();
                 };
                 auto allocationIt = meshletHeapAllocations.find(resourceIt->second);
-                const bool needsUpload = allocationIt == meshletHeapAllocations.end() ||
+                const bool needsUpload = compactGeometryHeap || allocationIt == meshletHeapAllocations.end() ||
                                          !payloadMatches(allocationIt->second);
                 if (needsUpload) {
                     if (allocationIt != meshletHeapAllocations.end()) {
@@ -1263,6 +1302,35 @@
                     TextureColorSpace::Linear, false, vulkanDevice.allocator(), TexturePixelFormat::R8);
             });
             rayTracingBlasDirty = vulkanDevice.supportsRayQuery();
+            const auto heapMetrics = [](const Buffer& buffer, const std::uint32_t highWater,
+                                        const VkDeviceSize elementBytes,
+                                        const std::vector<GeometryHeapRange>& freeRanges,
+                                        const VkDeviceSize liveBytes) {
+                const VkDeviceSize committed = buffer.size();
+                const VkDeviceSize free = committed > liveBytes ? committed - liveBytes : 0;
+                VkDeviceSize largest = committed > elementBytes * highWater
+                    ? committed - elementBytes * highWater : 0;
+                for (const auto& range : freeRanges)
+                    largest = std::max(largest, elementBytes * range.count);
+                const std::uint32_t fragmentation = free == 0 ? 0 :
+                    static_cast<std::uint32_t>(100 * (free - std::min(free, largest)) / free);
+                return std::to_string(liveBytes) + "/" + std::to_string(committed) +
+                    " free=" + std::to_string(free) + " largest=" + std::to_string(largest) +
+                    " fragmentation=" + std::to_string(fragmentation) + "%";
+            };
+            VkDeviceSize liveVertexBytes = 0;
+            VkDeviceSize liveIndexBytes = 0;
+            for (const auto& [key, allocation] : geometryHeapAllocations) {
+                (void)key;
+                liveVertexBytes += static_cast<VkDeviceSize>(allocation.vertexCount) * sizeof(GpuVertex);
+                liveIndexBytes += static_cast<VkDeviceSize>(allocation.indexCount) * sizeof(std::uint32_t);
+            }
+            Diagnostics::instance().report(DiagnosticSeverity::Info,
+                "[GeometryHeap] vertex live/committed=" + heapMetrics(vertexBuffer,
+                    geometryHeapVertexHighWater, sizeof(GpuVertex), geometryHeapFreeVertices, liveVertexBytes) +
+                ", index live/committed=" + heapMetrics(indexBuffer,
+                    geometryHeapIndexHighWater, sizeof(std::uint32_t), geometryHeapFreeIndices, liveIndexBytes) +
+                (compactGeometryHeap ? ", compacted" : ""), {.subsystem = "Renderer"});
             [[maybe_unused]] const UploadTicket ticket = uploadBatch.submit();
         }
 

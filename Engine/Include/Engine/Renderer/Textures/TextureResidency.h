@@ -11,11 +11,10 @@
 namespace Engine {
     /**
      * Chooses the first mip that is physically present in each streamed image.
-     * A lower number means sharper texture.  Call consumeChanges() on the render
-     * thread and promote the corresponding persistent Texture2D with
-     * Texture2D::promoteGtex().  Demotion only changes the requested sampling
-     * LOD with this backend: it cannot return VRAM until sparse residency or a
-     * virtual-texture page cache is introduced.
+     * A lower number means sharper texture. Call consumeChanges() on the render
+     * thread and replace the corresponding Texture2D with replaceGtex(). Keep
+     * the old image alive until descriptors and in-flight frames have retired.
+     * Both promotion and demotion change the physical image allocation.
      */
     class TextureResidencyManager final {
     public:
@@ -49,6 +48,7 @@ namespace Engine {
                 if (wanted != entry.wantedMip) {
                     entry.wantedMip = wanted;
                     entry.lastRequestedFrame = frame_;
+                    needsUpdate_ = true;
                 }
                 const auto clampedPriority = std::max(0.0F, priority);
                 if (clampedPriority != entry.priority) {
@@ -58,7 +58,7 @@ namespace Engine {
             }
         }
 
-        /** Applies budget, priority and a frame hysteresis before emitting GPU rebuilds. */
+        /** Applies budget, priority and a frame hysteresis before emitting image replacements. */
         void update() {
             ++frame_;
             // Avoid allocating and sorting an entry for every texture during
