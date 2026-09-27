@@ -480,7 +480,7 @@ void DDGISystem::recordPreparation(VkCommandBuffer commandBuffer, std::uint32_t 
             computeResourceBarrier(commandBuffer, {cache.regionCache.handle()});
         }
     }
-    if (!initialized || scrolled) {
+    if (!initialized || scrolled || sceneChanged) {
         vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, scrollResetPipeline_);
         vkCmdDispatch(commandBuffer, 32, 1, 1);
         computeResourceBarrier(commandBuffer, {frame.probeStates.handle()},

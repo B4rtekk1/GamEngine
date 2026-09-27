@@ -82,8 +82,14 @@ DDGIGatherResult ddgiGatherCascade(float3 position, float3 geometricNormal,
             const float3 probePosition = origin + float3(grid) * spacing + probe.xyz;
             const float3 toProbe = probePosition - biasedPosition;
             const float distance = length(toProbe);
-            const float3 biasedToProbe = normalize(toProbe);
-            const float3 surfaceToProbe = normalize(probePosition - position);
+            // A surface can coincide with a probe (including after relocation).
+            // Avoid NaNs in the octahedral lookup and the wrap weight.
+            const float3 biasedToProbe = distance > 1e-6
+                ? toProbe / distance : irradianceNormal;
+            const float3 surfaceDelta = probePosition - position;
+            const float surfaceDistance = length(surfaceDelta);
+            const float3 surfaceToProbe = surfaceDistance > 1e-6
+                ? surfaceDelta / surfaceDistance : irradianceNormal;
             const float4 encodedProbeIrradiance = ddgiSampleProbeOct(
                 irradianceTexture, index, irradianceOct, DDGI_IRRADIANCE_INTERIOR);
             const float3 probeIrradiance = pow(encodedProbeIrradiance.rgb,

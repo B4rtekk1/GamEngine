@@ -15,10 +15,11 @@ void main(uint3 id : SV_DispatchThreadID) {
     const uint3 logical = ddgiLogicalGrid(id.x, ddgi.scrollOffsetRays.xyz);
     const int3 oldLogical = int3(logical) + ddgi.scrollDeltaFrame.xyz;
     const bool exposed = ddgi.distanceInitialized.y < 0.5 ||
+        ddgi.updateControl.x > 0.5 ||
         any(oldLogical < 0) || any(oldLogical >= int3(DDGI_COUNTS));
     if (!exposed) return;
     const uint base = cacheMapping[DDGI_PROBES + id.x];
-    if (regionCache[base] != 0u) {
+    if (ddgi.updateControl.x <= 0.5 && regionCache[base] != 0u) {
         DDGIProbeState cached;
         // Cached lighting is a starting history, not a validated probe.
         cached.state = 2u;

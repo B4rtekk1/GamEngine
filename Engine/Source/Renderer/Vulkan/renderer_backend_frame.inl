@@ -1698,7 +1698,9 @@
                     gpuTimestampProfiler.endZone(commandBuffer, currentFrame);
                 }
                 if (accelerationStructures.built(currentFrame)) {
-                    const auto cameraPosition = cameraController.camera()->position().native();
+                    const auto cameraPosition = renderSceneViewport
+                        ? cameraController.editorPosition().native()
+                        : cameraController.camera()->position().native();
                     const std::array<float, 3> giCenter{
                         cameraPosition.x, cameraPosition.y, cameraPosition.z};
                     bool giGeometryChanged = false;

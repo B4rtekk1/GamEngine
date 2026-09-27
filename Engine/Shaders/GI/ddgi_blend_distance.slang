@@ -11,6 +11,7 @@ import GI.ddgi_common;
 // xyz stores direction; w stores the signed distance, with no unused RGB.
 groupshared float4 cachedRays[DDGI_MAX_RAYS];
 groupshared float2 blendedTexels[196];
+groupshared uint rejectUpdate;
 
 [numthreads(14, 14, 1)]
 void main(uint3 group : SV_GroupID, uint3 local : SV_GroupThreadID, uint groupIndex : SV_GroupIndex) {
@@ -34,6 +35,15 @@ void main(uint3 group : SV_GroupID, uint3 local : SV_GroupThreadID, uint groupIn
                                      rayData[int2(rayIndex, group.z)].a);
     }
     GroupMemoryBarrierWithGroupSync();
+    if (groupIndex == 0u) {
+        uint backfaceCount = 0u;
+        const uint maxBackfaces = uint(float(rayCount) * DDGI_RANDOM_BACKFACE_THRESHOLD);
+        for (uint rayIndex = 0u; rayIndex < rayCount; ++rayIndex)
+            backfaceCount += cachedRays[rayIndex].w < 0.0 ? 1u : 0u;
+        rejectUpdate = backfaceCount >= maxBackfaces ? 1u : 0u;
+    }
+    GroupMemoryBarrierWithGroupSync();
+    if (rejectUpdate != 0u) return;
 
     const float2 oct = (float2(local.xy) + 0.5) /
                        float(DDGI_DISTANCE_INTERIOR) * 2.0 - 1.0;
