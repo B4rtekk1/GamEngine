@@ -3,15 +3,19 @@
 #include "Engine/Renderer/Geometry/GpuVertex.h"
 #include "Engine/Renderer/Lighting/Brixelizer/BrixelizerResources.h"
 #include "Engine/Renderer/Vulkan/hdr_buffer.h"
+#include "Engine/Renderer/Textures/Texture2D.h"
+#include "Engine/Renderer/shader_loader.h"
 
 #include <FidelityFX/host/backends/vk/ffx_vk.h>
 #include <FidelityFX/host/ffx_brixelizer.h>
+#include <FidelityFX/host/ffx_brixelizergi.h>
 
 #include <algorithm>
 #include <array>
 #include <cmath>
 #include <cstddef>
 #include <cstring>
+#include <deque>
 #include <stdexcept>
 #include <string>
 #include <utility>
@@ -39,21 +43,27 @@ namespace {
 
     FfxResource imageResource(const VkImage image, const VkImageType type,
                               const VkFormat format, const VkExtent3D extent,
-                              const wchar_t* name, const FfxResourceStates state) {
+                              const wchar_t* name, const FfxResourceStates state,
+                              const std::uint32_t mipLevels = 1,
+                              const std::uint32_t arrayLayers = 1) {
         const VkImageCreateInfo info{
             .sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO,
+            .flags = arrayLayers == 6 ? VK_IMAGE_CREATE_CUBE_COMPATIBLE_BIT : 0U,
             .imageType = type,
             .format = format,
             .extent = extent,
-            .mipLevels = 1,
-            .arrayLayers = 1,
+            .mipLevels = mipLevels,
+            .arrayLayers = arrayLayers,
             .samples = VK_SAMPLE_COUNT_1_BIT,
             .tiling = VK_IMAGE_TILING_OPTIMAL,
-            .usage = VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
+            .usage = VK_IMAGE_USAGE_SAMPLED_BIT |
+                     (state == FFX_RESOURCE_STATE_UNORDERED_ACCESS ? VK_IMAGE_USAGE_STORAGE_BIT : 0U),
             .sharingMode = VK_SHARING_MODE_EXCLUSIVE,
             .initialLayout = VK_IMAGE_LAYOUT_UNDEFINED};
         return ffxGetResourceVK(reinterpret_cast<void*>(image),
-            ffxGetImageResourceDescriptionVK(image, info, FFX_RESOURCE_USAGE_UAV), name, state);
+            ffxGetImageResourceDescriptionVK(image, info,
+                state == FFX_RESOURCE_STATE_UNORDERED_ACCESS
+                    ? FFX_RESOURCE_USAGE_UAV : FFX_RESOURCE_USAGE_READ_ONLY), name, state);
     }
 }
 
@@ -67,8 +77,10 @@ struct BrixelizerSystem::Impl final {
     std::vector<std::byte> backendScratch;
     FfxInterface backend{};
     std::unique_ptr<FfxBrixelizerContext> context;
+    std::unique_ptr<FfxBrixelizerGIContext> giContext;
     std::unique_ptr<FfxBrixelizerBakedUpdateDescription> baked;
     std::vector<FfxBrixelizerInstanceID> instanceIds;
+    std::vector<BrixelizerSystem::StaticMesh> staticMeshes;
     std::array<std::uint32_t, 2> bufferIndices{};
     VkBuffer registeredVertices{VK_NULL_HANDLE};
     VkBuffer registeredIndices{VK_NULL_HANDLE};
@@ -77,6 +89,23 @@ struct BrixelizerSystem::Impl final {
     bool buffersRegistered{};
     bool atlasInitialized{};
     bool debugInitialized{};
+    std::deque<HdrBuffer> giNormals;
+    std::deque<HdrBuffer> giDepth;
+    std::deque<HdrBuffer> giLitHistory;
+    std::deque<HdrBuffer> giDiffuse;
+    std::deque<HdrBuffer> giSpecular;
+    std::vector<bool> giSlotInitialized;
+    std::vector<bool> giOutputInitialized;
+    std::uint32_t giLastOutputSlot{};
+    bool giHistoryValid{};
+    glm::mat4 giPreviousView{1.0F};
+    glm::mat4 giPreviousProjection{1.0F};
+    Texture2D giNoise;
+    VkDescriptorSetLayout giPrepareLayout{VK_NULL_HANDLE};
+    VkDescriptorPool giPreparePool{VK_NULL_HANDLE};
+    VkPipelineLayout giPreparePipelineLayout{VK_NULL_HANDLE};
+    VkPipeline giPreparePipeline{VK_NULL_HANDLE};
+    std::vector<VkDescriptorSet> giPrepareSets;
 
     void clearGeometry() {
         if (!context) return;
@@ -85,6 +114,7 @@ struct BrixelizerSystem::Impl final {
                   static_cast<std::uint32_t>(instanceIds.size())), "delete static instances");
             instanceIds.clear();
         }
+        staticMeshes.clear();
         if (buffersRegistered) {
             check(ffxBrixelizerUnregisterBuffers(context.get(), bufferIndices.data(),
                   static_cast<std::uint32_t>(bufferIndices.size())), "unregister geometry buffers");
@@ -95,6 +125,30 @@ struct BrixelizerSystem::Impl final {
     }
 
     void destroy() noexcept {
+        if (giContext) {
+            ffxBrixelizerGIContextDestroy(giContext.get());
+            giContext.reset();
+        }
+        if (device) {
+            vkDestroyPipeline(device, giPreparePipeline, nullptr);
+            vkDestroyPipelineLayout(device, giPreparePipelineLayout, nullptr);
+            vkDestroyDescriptorPool(device, giPreparePool, nullptr);
+            vkDestroyDescriptorSetLayout(device, giPrepareLayout, nullptr);
+        }
+        giPreparePipeline = VK_NULL_HANDLE;
+        giPreparePipelineLayout = VK_NULL_HANDLE;
+        giPreparePool = VK_NULL_HANDLE;
+        giPrepareLayout = VK_NULL_HANDLE;
+        giPrepareSets.clear();
+        giNormals.clear();
+        giDepth.clear();
+        giLitHistory.clear();
+        giDiffuse.clear();
+        giSpecular.clear();
+        giSlotInitialized.clear();
+        giOutputInitialized.clear();
+        giHistoryValid = false;
+        giNoise.destroy();
         if (context) {
             // Context teardown releases registrations and all SDK-owned resources.
             ffxBrixelizerContextDestroy(context.get());
@@ -102,6 +156,7 @@ struct BrixelizerSystem::Impl final {
         }
         baked.reset();
         instanceIds.clear();
+        staticMeshes.clear();
         buffersRegistered = false;
         debug.destroy();
         resources.scratch.clear();
@@ -129,7 +184,9 @@ BrixelizerSystem::~BrixelizerSystem() { destroy(); }
 
 void BrixelizerSystem::create(const VkPhysicalDevice physicalDevice, const VkDevice device,
                               const VmaAllocator allocator, const VkExtent2D extent,
-                              const std::uint32_t framesInFlight) {
+                              const std::uint32_t framesInFlight,
+                              const VkCommandPool commandPool, const VkQueue queue,
+                              Assets::AssetManager& assets) {
     destroy();
     if (!physicalDevice || !device || !allocator || !extent.width || !extent.height || !framesInFlight)
         throw std::invalid_argument("Brixelizer needs a device, allocator, extent and frame slots");
@@ -140,7 +197,7 @@ void BrixelizerSystem::create(const VkPhysicalDevice physicalDevice, const VkDev
     state.size = extent;
     state.resources.scratch.resize(framesInFlight);
     try {
-        constexpr size_t maxContexts = 1;
+        constexpr size_t maxContexts = 2;
         state.backendScratch.resize(ffxGetScratchMemorySizeVK(physicalDevice, maxContexts));
         VkDeviceContext deviceContext{device, physicalDevice, vkGetDeviceProcAddr};
         check(ffxGetInterfaceVK(&state.backend, ffxGetDeviceVK(&deviceContext),
@@ -188,6 +245,88 @@ void BrixelizerSystem::create(const VkPhysicalDevice physicalDevice, const VkDev
             voxelSize *= 2.0F;
         }
         check(ffxBrixelizerContextCreate(&description, state.context.get()), "create context");
+
+        state.giContext = std::make_unique<FfxBrixelizerGIContext>();
+        FfxBrixelizerGIContextDescription giDescription{};
+        giDescription.flags = FFX_BRIXELIZER_GI_FLAG_DISABLE_SPECULAR;
+        giDescription.internalResolution = FFX_BRIXELIZER_GI_INTERNAL_RESOLUTION_50_PERCENT;
+        giDescription.displaySize = {extent.width, extent.height};
+        giDescription.backendInterface = state.backend;
+        check(ffxBrixelizerGIContextCreate(state.giContext.get(), &giDescription), "create GI context");
+
+        state.giNormals.resize(framesInFlight);
+        state.giDepth.resize(framesInFlight);
+        state.giLitHistory.resize(framesInFlight);
+        state.giDiffuse.resize(framesInFlight);
+        state.giSpecular.resize(framesInFlight);
+        state.giSlotInitialized.resize(framesInFlight, false);
+        state.giOutputInitialized.resize(framesInFlight, false);
+        for (std::uint32_t i = 0; i < framesInFlight; ++i) {
+            state.giNormals[i].create(physicalDevice, device, extent, allocator, VK_FILTER_NEAREST,
+                                      VK_FORMAT_R16G16B16A16_SFLOAT, true);
+            state.giDepth[i].create(physicalDevice, device, extent, allocator, VK_FILTER_NEAREST,
+                                    VK_FORMAT_R32_SFLOAT, true);
+            state.giLitHistory[i].create(physicalDevice, device, extent, allocator, VK_FILTER_NEAREST,
+                                         HdrBuffer::Format);
+            state.giDiffuse[i].create(physicalDevice, device, extent, allocator, VK_FILTER_LINEAR,
+                                      HdrBuffer::Format, true);
+            state.giSpecular[i].create(physicalDevice, device, extent, allocator, VK_FILTER_LINEAR,
+                                       HdrBuffer::Format, true);
+        }
+        std::array<std::uint8_t, 64 * 64 * 4> noise{};
+        std::uint32_t seed = 0x1234abceu;
+        for (std::uint8_t& byte : noise) {
+            seed ^= seed << 13U;
+            seed ^= seed >> 17U;
+            seed ^= seed << 5U;
+            byte = static_cast<std::uint8_t>(seed);
+        }
+        state.giNoise.create(physicalDevice, device, commandPool, queue, 64, 64, noise,
+                             TextureColorSpace::Linear, false, allocator);
+        const std::array<VkDescriptorSetLayoutBinding, 4> giBindings{{
+            {0, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
+            {1, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
+            {2, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
+            {3, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr}}};
+        VkDescriptorSetLayoutCreateInfo giLayoutInfo{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
+        giLayoutInfo.bindingCount = static_cast<std::uint32_t>(giBindings.size());
+        giLayoutInfo.pBindings = giBindings.data();
+        if (vkCreateDescriptorSetLayout(device, &giLayoutInfo, nullptr, &state.giPrepareLayout) != VK_SUCCESS)
+            throw std::runtime_error("Brixelizer: create GI input layout");
+        const std::array<VkDescriptorPoolSize, 2> giPoolSizes{{
+            {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, framesInFlight * 2U},
+            {VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, framesInFlight * 2U}}};
+        VkDescriptorPoolCreateInfo giPoolInfo{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
+        giPoolInfo.maxSets = framesInFlight;
+        giPoolInfo.poolSizeCount = static_cast<std::uint32_t>(giPoolSizes.size());
+        giPoolInfo.pPoolSizes = giPoolSizes.data();
+        if (vkCreateDescriptorPool(device, &giPoolInfo, nullptr, &state.giPreparePool) != VK_SUCCESS)
+            throw std::runtime_error("Brixelizer: create GI input descriptor pool");
+        std::vector<VkDescriptorSetLayout> layouts(framesInFlight, state.giPrepareLayout);
+        state.giPrepareSets.resize(framesInFlight);
+        VkDescriptorSetAllocateInfo giSetsInfo{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};
+        giSetsInfo.descriptorPool = state.giPreparePool;
+        giSetsInfo.descriptorSetCount = framesInFlight;
+        giSetsInfo.pSetLayouts = layouts.data();
+        if (vkAllocateDescriptorSets(device, &giSetsInfo, state.giPrepareSets.data()) != VK_SUCCESS)
+            throw std::runtime_error("Brixelizer: allocate GI input descriptors");
+        const VkPushConstantRange giPush{VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(glm::mat4)};
+        VkPipelineLayoutCreateInfo giPipelineLayoutInfo{VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
+        giPipelineLayoutInfo.setLayoutCount = 1;
+        giPipelineLayoutInfo.pSetLayouts = &state.giPrepareLayout;
+        giPipelineLayoutInfo.pushConstantRangeCount = 1;
+        giPipelineLayoutInfo.pPushConstantRanges = &giPush;
+        if (vkCreatePipelineLayout(device, &giPipelineLayoutInfo, nullptr,
+                                   &state.giPreparePipelineLayout) != VK_SUCCESS)
+            throw std::runtime_error("Brixelizer: create GI input pipeline layout");
+        const auto giShader = Vkutil::loadShaderModule(device, assets, "shaders/brixelizer_gi_prepare.spv");
+        VkComputePipelineCreateInfo giPipelineInfo{VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO};
+        giPipelineInfo.stage = {VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO, nullptr, 0,
+                                VK_SHADER_STAGE_COMPUTE_BIT, giShader.get(), "main", nullptr};
+        giPipelineInfo.layout = state.giPreparePipelineLayout;
+        if (vkCreateComputePipelines(device, VK_NULL_HANDLE, 1, &giPipelineInfo,
+                                     nullptr, &state.giPreparePipeline) != VK_SUCCESS)
+            throw std::runtime_error("Brixelizer: create GI input pipeline");
     } catch (...) {
         state.destroy();
         throw;
@@ -201,6 +340,31 @@ void BrixelizerSystem::resize(const VkExtent2D extent) {
     if (!extent.width || !extent.height) throw std::invalid_argument("Brixelizer: zero extent");
     impl_->debug.create(impl_->physicalDevice, impl_->device, extent, impl_->allocator,
                          VK_FILTER_NEAREST, HdrBuffer::Format, true);
+    if (impl_->giContext) {
+        check(ffxBrixelizerGIContextDestroy(impl_->giContext.get()), "destroy resized GI context");
+        FfxBrixelizerGIContextDescription giDescription{};
+        giDescription.flags = FFX_BRIXELIZER_GI_FLAG_DISABLE_SPECULAR;
+        giDescription.internalResolution = FFX_BRIXELIZER_GI_INTERNAL_RESOLUTION_50_PERCENT;
+        giDescription.displaySize = {extent.width, extent.height};
+        giDescription.backendInterface = impl_->backend;
+        check(ffxBrixelizerGIContextCreate(impl_->giContext.get(), &giDescription),
+              "recreate resized GI context");
+    }
+    for (std::size_t i = 0; i < impl_->giNormals.size(); ++i) {
+        impl_->giNormals[i].create(impl_->physicalDevice, impl_->device, extent, impl_->allocator,
+                                   VK_FILTER_NEAREST, VK_FORMAT_R16G16B16A16_SFLOAT, true);
+        impl_->giDepth[i].create(impl_->physicalDevice, impl_->device, extent, impl_->allocator,
+                                 VK_FILTER_NEAREST, VK_FORMAT_R32_SFLOAT, true);
+        impl_->giLitHistory[i].create(impl_->physicalDevice, impl_->device, extent, impl_->allocator,
+                                      VK_FILTER_NEAREST, HdrBuffer::Format);
+        impl_->giDiffuse[i].create(impl_->physicalDevice, impl_->device, extent, impl_->allocator,
+                                   VK_FILTER_LINEAR, HdrBuffer::Format, true);
+        impl_->giSpecular[i].create(impl_->physicalDevice, impl_->device, extent, impl_->allocator,
+                                    VK_FILTER_LINEAR, HdrBuffer::Format, true);
+    }
+    std::fill(impl_->giSlotInitialized.begin(), impl_->giSlotInitialized.end(), false);
+    std::fill(impl_->giOutputInitialized.begin(), impl_->giOutputInitialized.end(), false);
+    impl_->giHistoryValid = false;
     impl_->size = extent;
     impl_->debugInitialized = false;
 }
@@ -210,7 +374,59 @@ void BrixelizerSystem::setStaticMeshes(const VkBuffer vertices, const VkDeviceSi
                                        const std::span<const StaticMesh> meshes) {
     if (!ready()) return;
     auto& state = *impl_;
+    const auto makeInstance = [&](const StaticMesh& mesh) {
+        FfxBrixelizerInstanceDescription instance{};
+        instance.maxCascade = BrixelizerResources::CascadeCount - 1;
+        instance.aabb = {{mesh.worldBounds.min.x(), mesh.worldBounds.min.y(), mesh.worldBounds.min.z()},
+                         {mesh.worldBounds.max.x(), mesh.worldBounds.max.y(), mesh.worldBounds.max.z()}};
+        for (std::uint32_t row = 0; row < 3; ++row)
+            for (std::uint32_t column = 0; column < 4; ++column)
+                instance.transform[row * 4 + column] = mesh.transform[column][row];
+        instance.indexFormat = FFX_INDEX_TYPE_UINT32;
+        instance.indexBuffer = state.bufferIndices[1];
+        instance.indexBufferOffset = mesh.firstIndex * sizeof(std::uint32_t);
+        instance.triangleCount = mesh.indexCount / 3;
+        instance.vertexBuffer = state.bufferIndices[0];
+        instance.vertexStride = sizeof(GpuVertex);
+        // GamEngine stores global indices in the shared index heap.
+        instance.vertexBufferOffset = 0;
+        instance.vertexCount = static_cast<std::uint32_t>(vertexBytes / sizeof(GpuVertex));
+        instance.vertexFormat = FFX_SURFACE_FORMAT_R32G32B32_FLOAT;
+        return instance;
+    };
+    const auto sameGeometry = [&](const StaticMesh& left, const StaticMesh& right) {
+        return left.firstVertex == right.firstVertex && left.vertexCount == right.vertexCount &&
+               left.firstIndex == right.firstIndex && left.indexCount == right.indexCount;
+    };
+    const bool sameBuffers = state.buffersRegistered && state.registeredVertices == vertices &&
+        state.registeredIndices == indices && state.registeredVertexBytes == vertexBytes &&
+        state.registeredIndexBytes == indexBytes;
+    const bool sameMeshLayout = sameBuffers && state.staticMeshes.size() == meshes.size() &&
+        std::equal(meshes.begin(), meshes.end(), state.staticMeshes.begin(), sameGeometry);
+    if (sameMeshLayout) {
+        const auto changed = [](const StaticMesh& left, const StaticMesh& right) {
+            return std::memcmp(&left.transform, &right.transform, sizeof(glm::mat4)) != 0 ||
+                   left.worldBounds.min.x() != right.worldBounds.min.x() ||
+                   left.worldBounds.min.y() != right.worldBounds.min.y() ||
+                   left.worldBounds.min.z() != right.worldBounds.min.z() ||
+                   left.worldBounds.max.x() != right.worldBounds.max.x() ||
+                   left.worldBounds.max.y() != right.worldBounds.max.y() ||
+                   left.worldBounds.max.z() != right.worldBounds.max.z();
+        };
+        for (std::size_t i = 0; i < meshes.size(); ++i) {
+            if (!changed(meshes[i], state.staticMeshes[i])) continue;
+            check(ffxBrixelizerDeleteInstances(state.context.get(), &state.instanceIds[i], 1),
+                  "delete moved instance");
+            FfxBrixelizerInstanceDescription instance = makeInstance(meshes[i]);
+            instance.outInstanceID = &state.instanceIds[i];
+            check(ffxBrixelizerCreateInstances(state.context.get(), &instance, 1),
+                  "create moved instance");
+            state.staticMeshes[i] = meshes[i];
+        }
+        return;
+    }
     state.clearGeometry();
+    state.giHistoryValid = false;
     if (!vertices || !indices || meshes.empty()) return;
     state.registeredVertices = vertices;
     state.registeredIndices = indices;
@@ -232,24 +448,8 @@ void BrixelizerSystem::setStaticMeshes(const VkBuffer vertices, const VkDeviceSi
             mesh.firstIndex >= indexBytes / sizeof(std::uint32_t) ||
             mesh.indexCount > indexBytes / sizeof(std::uint32_t) - mesh.firstIndex)
             continue;
-        FfxBrixelizerInstanceDescription instance{};
-        instance.maxCascade = BrixelizerResources::CascadeCount - 1;
-        instance.aabb = {{mesh.worldBounds.min.x(), mesh.worldBounds.min.y(), mesh.worldBounds.min.z()},
-                         {mesh.worldBounds.max.x(), mesh.worldBounds.max.y(), mesh.worldBounds.max.z()}};
-        for (std::uint32_t row = 0; row < 3; ++row)
-            for (std::uint32_t column = 0; column < 4; ++column)
-                instance.transform[row * 4 + column] = mesh.transform[column][row];
-        instance.indexFormat = FFX_INDEX_TYPE_UINT32;
-        instance.indexBuffer = state.bufferIndices[1];
-        instance.indexBufferOffset = mesh.firstIndex * sizeof(std::uint32_t);
-        instance.triangleCount = mesh.indexCount / 3;
-        instance.vertexBuffer = state.bufferIndices[0];
-        instance.vertexStride = sizeof(GpuVertex);
-        // GamEngine stores global indices in the shared index heap.
-        instance.vertexBufferOffset = 0;
-        instance.vertexCount = static_cast<std::uint32_t>(vertexBytes / sizeof(GpuVertex));
-        instance.vertexFormat = FFX_SURFACE_FORMAT_R32G32B32_FLOAT;
-        instances.push_back(instance);
+        instances.push_back(makeInstance(mesh));
+        state.staticMeshes.push_back(mesh);
     }
     if (!instances.empty()) {
         state.instanceIds.resize(instances.size(), FFX_BRIXELIZER_INVALID_ID);
@@ -350,6 +550,201 @@ void BrixelizerSystem::update(const VkCommandBuffer commandBuffer, const float c
         scratchBuffer.size(), L"Brixelizer scratch", FFX_RESOURCE_STATE_UNORDERED_ACCESS);
     check(ffxBrixelizerUpdate(state.context.get(), state.baked.get(), scratch,
           ffxGetCommandListVK(commandBuffer)), "record SDF update");
+}
+
+void BrixelizerSystem::dispatchGI(const VkCommandBuffer commandBuffer,
+                                  const std::uint32_t frameSlot,
+                                  const VkImageView depthView, const VkSampler depthSampler,
+                                  const VkImageView viewNormalView, const VkSampler viewNormalSampler,
+                                  const VkImage velocity, const VkImage litImage,
+                                  const VkImage environmentImage, const std::uint32_t environmentSize,
+                                  const std::uint32_t environmentMipLevels,
+                                  const glm::mat4& view, const glm::mat4& projection,
+                                  const glm::mat4& inverseView,
+                                  const glm::vec3& cameraPosition) {
+    if (!ready() || !hasStaticMeshes() || !impl_->giContext ||
+        frameSlot >= impl_->giNormals.size()) return;
+    auto& state = *impl_;
+    const VkExtent3D extent{state.size.width, state.size.height, 1};
+    const auto transition = [&](const VkImage image, const VkImageLayout oldLayout,
+                                const VkImageLayout newLayout,
+                                const VkPipelineStageFlags2 srcStage, const VkAccessFlags2 srcAccess,
+                                const VkPipelineStageFlags2 dstStage, const VkAccessFlags2 dstAccess) {
+        const VkImageMemoryBarrier2 barrier{.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2,
+            .srcStageMask = srcStage, .srcAccessMask = srcAccess,
+            .dstStageMask = dstStage, .dstAccessMask = dstAccess,
+            .oldLayout = oldLayout, .newLayout = newLayout,
+            .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+            .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+            .image = image,
+            .subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1}};
+        const VkDependencyInfo dependency{.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO,
+            .imageMemoryBarrierCount = 1, .pImageMemoryBarriers = &barrier};
+        vkCmdPipelineBarrier2(commandBuffer, &dependency);
+    };
+    const bool slotInitialized = state.giSlotInitialized[frameSlot];
+    for (const VkImage image : {state.giNormals[frameSlot].image(), state.giDepth[frameSlot].image()})
+        transition(image, slotInitialized ? VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL : VK_IMAGE_LAYOUT_UNDEFINED,
+                   VK_IMAGE_LAYOUT_GENERAL,
+                   slotInitialized ? VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT : VK_PIPELINE_STAGE_2_NONE,
+                   slotInitialized ? VK_ACCESS_2_SHADER_SAMPLED_READ_BIT : VK_ACCESS_2_NONE,
+                   VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT);
+
+    const std::array<VkDescriptorImageInfo, 4> images{{
+        {depthSampler, depthView, VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL},
+        {viewNormalSampler, viewNormalView, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL},
+        {VK_NULL_HANDLE, state.giNormals[frameSlot].imageView(), VK_IMAGE_LAYOUT_GENERAL},
+        {VK_NULL_HANDLE, state.giDepth[frameSlot].imageView(), VK_IMAGE_LAYOUT_GENERAL}}};
+    std::array<VkWriteDescriptorSet, 4> writes{};
+    for (std::uint32_t binding = 0; binding < writes.size(); ++binding)
+        writes[binding] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr,
+            state.giPrepareSets[frameSlot], binding, 0, 1,
+            binding < 2 ? VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER : VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,
+            &images[binding], nullptr, nullptr};
+    vkUpdateDescriptorSets(state.device, static_cast<std::uint32_t>(writes.size()), writes.data(), 0, nullptr);
+    vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, state.giPreparePipeline);
+    vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE,
+                            state.giPreparePipelineLayout, 0, 1,
+                            &state.giPrepareSets[frameSlot], 0, nullptr);
+    vkCmdPushConstants(commandBuffer, state.giPreparePipelineLayout, VK_SHADER_STAGE_COMPUTE_BIT,
+                        0, sizeof(inverseView), &inverseView);
+    vkCmdDispatch(commandBuffer, (extent.width + 7U) / 8U, (extent.height + 7U) / 8U, 1);
+    for (const VkImage image : {state.giNormals[frameSlot].image(), state.giDepth[frameSlot].image()})
+        transition(image, VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                   VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT,
+                   VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
+
+    transition(litImage, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+               VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT, VK_ACCESS_2_SHADER_SAMPLED_READ_BIT,
+               VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_ACCESS_2_TRANSFER_READ_BIT);
+    transition(state.giLitHistory[frameSlot].image(),
+               slotInitialized ? VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL : VK_IMAGE_LAYOUT_UNDEFINED,
+               VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+               slotInitialized ? VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT : VK_PIPELINE_STAGE_2_NONE,
+               slotInitialized ? VK_ACCESS_2_SHADER_SAMPLED_READ_BIT : VK_ACCESS_2_NONE,
+               VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT);
+    const VkImageCopy copy{{VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1}, {0, 0, 0},
+                           {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1}, {0, 0, 0}, extent};
+    vkCmdCopyImage(commandBuffer, litImage, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                   state.giLitHistory[frameSlot].image(), VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &copy);
+    transition(litImage, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+               VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_ACCESS_2_TRANSFER_READ_BIT,
+               VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT, VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
+    transition(state.giLitHistory[frameSlot].image(), VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+               VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+               VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT,
+               VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
+
+    const bool outputInitialized = state.giOutputInitialized[frameSlot];
+    for (const VkImage image : {state.giDiffuse[frameSlot].image(), state.giSpecular[frameSlot].image()})
+        transition(image, outputInitialized ? VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL : VK_IMAGE_LAYOUT_UNDEFINED,
+                   VK_IMAGE_LAYOUT_GENERAL,
+                   outputInitialized ? VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT : VK_PIPELINE_STAGE_2_NONE,
+                   outputInitialized ? VK_ACCESS_2_SHADER_SAMPLED_READ_BIT : VK_ACCESS_2_NONE,
+                   VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT);
+    const VkMemoryBarrier2 sdfBarrier{.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER_2,
+        .srcStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+        .srcAccessMask = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT,
+        .dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+        .dstAccessMask = VK_ACCESS_2_SHADER_SAMPLED_READ_BIT};
+    const VkDependencyInfo sdfDependency{.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO,
+        .memoryBarrierCount = 1, .pMemoryBarriers = &sdfBarrier};
+    vkCmdPipelineBarrier2(commandBuffer, &sdfDependency);
+    transition(state.resources.sdfAtlas, VK_IMAGE_LAYOUT_GENERAL,
+               VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+               VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT,
+               VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
+
+    const std::uint32_t historySlot = state.giHistoryValid ? state.giLastOutputSlot : frameSlot;
+    FfxBrixelizerGIDispatchDescription gi{};
+    std::memcpy(&gi.view, &view, sizeof(gi.view));
+    std::memcpy(&gi.projection, &projection, sizeof(gi.projection));
+    std::memcpy(&gi.prevView, state.giHistoryValid ? &state.giPreviousView : &view, sizeof(gi.prevView));
+    std::memcpy(&gi.prevProjection, state.giHistoryValid ? &state.giPreviousProjection : &projection,
+                sizeof(gi.prevProjection));
+    std::memcpy(&gi.cameraPosition, &cameraPosition, sizeof(gi.cameraPosition));
+    gi.startCascade = 0;
+    gi.endCascade = BrixelizerResources::CascadeCount - 1;
+    gi.rayPushoff = 0.1F;
+    gi.sdfSolveEps = 0.01F;
+    gi.specularRayPushoff = 0.1F;
+    gi.specularSDFSolveEps = 0.01F;
+    gi.tMin = 0.01F;
+    gi.tMax = 100.0F;
+    gi.normalsUnpackMul = 2.0F;
+    gi.normalsUnpackAdd = -1.0F;
+    gi.isRoughnessPerceptual = true;
+    gi.roughnessChannel = 3;
+    gi.roughnessThreshold = 0.9F;
+    gi.environmentMapIntensity = 1.0F;
+    gi.motionVectorScale = {1.0F, 1.0F};
+    const auto sampled2D = [&](const VkImage image, const VkFormat format,
+                               const wchar_t* name) {
+        return imageResource(image, VK_IMAGE_TYPE_2D, format, extent, name, FFX_RESOURCE_STATE_COMPUTE_READ);
+    };
+    gi.environmentMap = imageResource(environmentImage, VK_IMAGE_TYPE_2D,
+        VK_FORMAT_R16G16B16A16_SFLOAT, {environmentSize, environmentSize, 1},
+        L"Environment", FFX_RESOURCE_STATE_COMPUTE_READ, environmentMipLevels, 6);
+    gi.prevLitOutput = sampled2D(state.giLitHistory[historySlot].image(), HdrBuffer::Format,
+                                 L"Previous lit output");
+    gi.depth = sampled2D(state.giDepth[frameSlot].image(), VK_FORMAT_R32_SFLOAT, L"GI depth");
+    gi.historyDepth = sampled2D(state.giDepth[historySlot].image(), VK_FORMAT_R32_SFLOAT,
+                                L"GI history depth");
+    gi.normal = sampled2D(state.giNormals[frameSlot].image(), VK_FORMAT_R16G16B16A16_SFLOAT,
+                          L"GI world normals");
+    gi.historyNormal = sampled2D(state.giNormals[historySlot].image(), VK_FORMAT_R16G16B16A16_SFLOAT,
+                                 L"GI history normals");
+    gi.roughness = gi.normal;
+    gi.motionVectors = sampled2D(velocity, VK_FORMAT_R16G16_SFLOAT, L"GI motion vectors");
+    gi.noiseTexture = imageResource(state.giNoise.image(), VK_IMAGE_TYPE_2D,
+        VK_FORMAT_R8G8B8A8_UNORM, {64, 64, 1}, L"GI noise", FFX_RESOURCE_STATE_COMPUTE_READ);
+    gi.sdfAtlas = imageResource(state.resources.sdfAtlas, VK_IMAGE_TYPE_3D,
+        VK_FORMAT_R8_UNORM, {512, 512, 512}, L"GI SDF atlas", FFX_RESOURCE_STATE_COMPUTE_READ);
+    gi.bricksAABBs = bufferResource(state.resources.brickAabbs.handle(),
+        state.resources.brickAabbs.size(), L"GI brick AABBs", FFX_RESOURCE_STATE_COMPUTE_READ);
+    for (std::size_t i = 0; i < state.resources.cascades.size(); ++i) {
+        gi.cascadeAABBTrees[i] = bufferResource(state.resources.cascades[i].aabbTree.handle(),
+            state.resources.cascades[i].aabbTree.size(), L"GI cascade tree", FFX_RESOURCE_STATE_COMPUTE_READ);
+        gi.cascadeBrickMaps[i] = bufferResource(state.resources.cascades[i].brickMap.handle(),
+            state.resources.cascades[i].brickMap.size(), L"GI cascade map", FFX_RESOURCE_STATE_COMPUTE_READ);
+    }
+    gi.outputDiffuseGI = imageResource(state.giDiffuse[frameSlot].image(), VK_IMAGE_TYPE_2D,
+        HdrBuffer::Format, extent, L"Diffuse GI", FFX_RESOURCE_STATE_UNORDERED_ACCESS);
+    gi.outputSpecularGI = imageResource(state.giSpecular[frameSlot].image(), VK_IMAGE_TYPE_2D,
+        HdrBuffer::Format, extent, L"Specular GI", FFX_RESOURCE_STATE_UNORDERED_ACCESS);
+    check(ffxBrixelizerGetRawContext(state.context.get(), &gi.brixelizerContext),
+          "get raw SDF context");
+    check(ffxBrixelizerGIContextDispatch(state.giContext.get(), &gi,
+          ffxGetCommandListVK(commandBuffer)), "dispatch GI");
+    transition(state.resources.sdfAtlas, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+               VK_IMAGE_LAYOUT_GENERAL,
+               VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_SAMPLED_READ_BIT,
+               VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_STORAGE_READ_BIT |
+                   VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT);
+    for (const VkImage image : {state.giDiffuse[frameSlot].image(), state.giSpecular[frameSlot].image()})
+        transition(image, VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                   VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT,
+                   VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT, VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
+    state.giSlotInitialized[frameSlot] = true;
+    state.giOutputInitialized[frameSlot] = true;
+    state.giLastOutputSlot = frameSlot;
+    state.giPreviousView = view;
+    state.giPreviousProjection = projection;
+    state.giHistoryValid = true;
+}
+
+VkDescriptorImageInfo BrixelizerSystem::giDiffuseDescriptor(const std::uint32_t frameSlot) const noexcept {
+    if (!impl_ || frameSlot >= impl_->giDiffuse.size()) return {};
+    return {impl_->giDiffuse[frameSlot].sampler(), impl_->giDiffuse[frameSlot].imageView(),
+            VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
+}
+
+bool BrixelizerSystem::giHasHistory() const noexcept { return impl_ && impl_->giHistoryValid; }
+std::uint32_t BrixelizerSystem::giLatestOutputSlot() const noexcept {
+    return impl_ ? impl_->giLastOutputSlot : 0;
+}
+void BrixelizerSystem::invalidateGI() noexcept {
+    if (impl_) impl_->giHistoryValid = false;
 }
 
 bool BrixelizerSystem::ready() const noexcept { return impl_ && impl_->context != nullptr; }

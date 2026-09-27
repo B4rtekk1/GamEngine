@@ -24,6 +24,9 @@ public:
 
     [[nodiscard]] std::array<VkDescriptorImageInfo, 3> descriptors() const noexcept;
     [[nodiscard]] VkDescriptorImageInfo environmentDescriptor() const noexcept;
+    [[nodiscard]] VkImage environmentImage() const noexcept { return environment_.image(); }
+    [[nodiscard]] std::uint32_t environmentSize() const noexcept { return environment_.faceSize(); }
+    [[nodiscard]] std::uint32_t environmentMipLevels() const noexcept { return environment_.mipLevels(); }
     [[nodiscard]] std::uint32_t prefilteredMipLevels() const noexcept { return prefiltered_.mipLevels(); }
 
 private:

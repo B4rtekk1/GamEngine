@@ -2424,6 +2424,7 @@
             // The previous vertex position uses the current height parameters.
             // Discard TAA history when they change until previous material data is available.
             if (displacementChanged) temporalAaPass.reset();
+            if (brixelizer.ready() && !changedIndices.empty()) brixelizerGeometryDirty = true;
             uploadPendingRenderableBuffers();
             registry.view<TerrainGrassComponent>([](const Entity, const TerrainGrassComponent& grass) {
                 grass.clearDirtyInstances();

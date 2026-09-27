@@ -86,7 +86,7 @@ message(STATUS "GamEngine BC7 encoder: ${GAMEENGINE_BC7_ENCODER}")
 file(GLOB_RECURSE ENGINE_PUBLIC_HEADERS CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/Include/*.h" "${CMAKE_CURRENT_SOURCE_DIR}/Include/*.hpp")
 target_sources(Engine PRIVATE FILE_SET engine_public_headers TYPE HEADERS BASE_DIRS "${CMAKE_CURRENT_SOURCE_DIR}/Include" FILES ${ENGINE_PUBLIC_HEADERS})
 target_link_libraries(Engine PUBLIC SDL3::SDL3 Vulkan::Vulkan PRIVATE physx_lib CMP_Core GameEngineTinyExr
-    ffx_brixelizer_x64 ffx_backend_vk_x64)
+    ffx_brixelizer_x64 ffx_brixelizergi_x64 ffx_backend_vk_x64)
 target_compile_definitions(Engine PRIVATE PX_PHYSX_STATIC_LIB
     GAMEENGINE_BC7E_ENABLED=${GAMEENGINE_BC7E_ENABLED}
     GAMEENGINE_BC7E_PROFILE=${GAMEENGINE_BC7E_PROFILE}

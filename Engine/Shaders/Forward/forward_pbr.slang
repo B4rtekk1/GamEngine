@@ -44,6 +44,7 @@ static const uint PBR_DEBUG_GEOMETRIC_DIRECT_DIFFUSE = 4u;
 // full resolution after a depth-aware upsample and therefore needs no final
 // HDR darkening pass.
 [[vk::binding(16, 0)]] Sampler2D gtaoVisibility;
+[[vk::binding(20, 0)]] Sampler2D diffuseGI;
 [[vk::binding(18, 0)]] Sampler2D rtContactVisibility;
 #if FORWARD_RESOLVED_VSM
 [[vk::binding(19, 0)]] Sampler2D directionalVisibility;
@@ -612,7 +613,14 @@ ForwardFragmentOutput fragmentMain(ForwardFragmentInput input)
     const bool disableSpecularIbl = frame.pbrDebugView == PBR_DEBUG_NO_SPECULAR_IBL;
     float3 kS = disableSpecularIbl ? 0.0 : fresnelIbl;
     float3 kD = (1.0 - kS) * (1.0 - metallic);
-    const float3 indirectDiffuse = irradianceMap.SampleLevel(normal, 0.0).rgb * albedo * kD;
+    float3 indirectDiffuse = irradianceMap.SampleLevel(normal, 0.0).rgb * albedo * kD;
+    if ((frame.screenSpaceEffects & 2u) != 0u) {
+        float2 giUv = input.position.xy / frame.clusteredViewportNearFar.xy;
+#if FORWARD_OUTPUT_VELOCITY
+        giUv -= (input.currentNdc - input.previousClip.xy / input.previousClip.w) * 0.5;
+#endif
+        indirectDiffuse = diffuseGI.SampleLevel(giUv, 0.0).rgb * albedo * kD;
+    }
     float3 reflection = reflect(-viewDirection, normal);
     const uint prefilteredMipCount = max(uint(frame.clusterZScaleBiasEnvironmentMipRtContact.z), 1u);
     float3 prefiltered = prefilteredEnvironmentMap.SampleLevel(
@@ -652,7 +660,7 @@ ForwardFragmentOutput fragmentMain(ForwardFragmentInput input)
     // accessibility, so neither is allowed to brighten the other.  The
     // GTAO visibility is used at full strength after its bilateral upsample.
     const float indirectVisibility = min(ao, dynamicAo);
-    const float diffuseAO = indirectVisibility;
+    const float diffuseAO = (frame.screenSpaceEffects & 2u) != 0u ? ao : indirectVisibility;
     // Lagarde's visibility-based specular-occlusion approximation.  It
     // suppresses sky/probe reflections in contact cavities without needing a
     // bent normal; rough surfaces converge to the diffuse visibility while

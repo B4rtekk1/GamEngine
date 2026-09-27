@@ -85,6 +85,7 @@ namespace Engine {
         faceImageViews_ = std::exchange(other.faceImageViews_, {});
         sampler_ = std::exchange(other.sampler_, VK_NULL_HANDLE);
         mipLevels_ = std::exchange(other.mipLevels_, 0);
+        faceSize_ = std::exchange(other.faceSize_, 0);
         readyTimeline_ = std::exchange(other.readyTimeline_, 0);
         return *this;
     }
@@ -99,6 +100,7 @@ namespace Engine {
         destroy();
         device_ = device;
         mipLevels_ = mipLevels;
+        faceSize_ = faceSize;
         try {
             VkImageCreateInfo imageInfo{VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO};
             imageInfo.flags = VK_IMAGE_CREATE_CUBE_COMPATIBLE_BIT;
@@ -196,6 +198,7 @@ namespace Engine {
         destroy();
         device_ = device;
         mipLevels_ = mipLevels;
+        faceSize_ = faceSize;
         VkBuffer staging = VK_NULL_HANDLE;
         VkDeviceMemory stagingMemory = VK_NULL_HANDLE;
         VkCommandBuffer commandBuffer = VK_NULL_HANDLE;
@@ -423,6 +426,7 @@ namespace Engine {
         memory_ = VK_NULL_HANDLE;
         device_ = VK_NULL_HANDLE;
         mipLevels_ = 0;
+        faceSize_ = 0;
         readyTimeline_ = 0;
     }
 } // namespace Engine

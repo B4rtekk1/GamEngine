@@ -354,6 +354,7 @@
             // history after a teleport or a large orientation jump produces
             // unavoidable ghosting, so reset those histories at cameraCut.
             if (cameraCut) {
+                brixelizer.invalidateGI();
                 virtualWaterRenderer.invalidateTemporalHistory();
                 // GTAO history is independent of TAA and must not survive a
                 // teleport or a large camera rotation either.
@@ -386,7 +387,7 @@
                 static_cast<std::uint32_t>(gtaoDebugView),
                 materialSlots, editorSelectedRenderable, frameData.lightCount,
                 static_cast<std::uint32_t>(reflectionProbes.size()),
-                1u,
+                1u | (brixelizer.giHasHistory() && brixelizer.hasStaticMeshes() ? 2u : 0u),
                 // Do not vary PCF/VSM sample phase until TAA has stronger
                 // per-surface confidence (normals/reactive mask).  Depth
                 // rejection prevents trails, but cannot fully hide changing
@@ -1975,6 +1976,18 @@
                 dependency.pImageMemoryBarriers = afterCopy.data();
                 vkCmdPipelineBarrier2(commandBuffer, &dependency);
             }
+            if (renderGameViewport && !msaa.enabled() &&
+                brixelizerDebugView == BrixelizerSystem::DebugView::Off && brixelizer.hasStaticMeshes()) {
+                brixelizer.dispatchGI(commandBuffer, currentFrame,
+                    depthBuffer.imageView(), depthBuffer.sampler(),
+                    gtaoViewNormalBuffer.imageView(), gtaoViewNormalBuffer.sampler(),
+                    velocityBuffer.image(), hdrBuffer.image(), imageBasedLighting.environmentImage(),
+                    imageBasedLighting.environmentSize(), imageBasedLighting.environmentMipLevels(),
+                    cameraController.camera()->viewMatrix().native(),
+                    cameraController.camera()->projectionMatrix().native(),
+                    glm::inverse(cameraController.camera()->viewMatrix().native()),
+                    cameraController.camera()->position().native());
+            }
             }
 
             if (renderSceneViewport) {
@@ -2855,6 +2868,18 @@
                 GE_PROFILE_SCOPE("GPU Object Update");
                 updateRenderableBuffers();
             }
+            if (brixelizerGeometryDirty) {
+                // The current slot was retired by acquireFrameImage() and its
+                // fence has already been reset. Retire only the other slots
+                // before replacing Brixelizer's registered instances.
+                for (std::size_t slot = 0; slot < inFlightFences.size(); ++slot) {
+                    if (slot == currentFrame) continue;
+                    if (vkWaitForFences(device, 1, &inFlightFences[slot], VK_TRUE, UINT64_MAX) != VK_SUCCESS)
+                        throw std::runtime_error("Could not retire Brixelizer geometry users");
+                }
+                refreshBrixelizerGeometry();
+                brixelizerGeometryDirty = false;
+            }
             const Vec3 sceneCameraPosition = cameraController.editorPosition();
             const float sceneCameraYaw = cameraController.editorYaw();
             const float sceneCameraPitch = cameraController.editorPitch();
@@ -2883,7 +2908,10 @@
             }
             // A slot without a Game View depth pass cannot provide history
             // to the next frame, even if it contains an older pyramid.
-            if (!renderGameViewport) hiZValid[currentFrame] = false;
+            if (!renderGameViewport) {
+                hiZValid[currentFrame] = false;
+                brixelizer.invalidateGI();
+            }
             // Scene View is deliberately not rendered in play mode. Its cache
             // cannot consume this frame's dirty list, so discard it lazily;
             // the active game-view cache is updated page-by-page below.
@@ -2893,6 +2921,9 @@
             {
                 GE_PROFILE_SCOPE("Update Uniforms");
                 updateUniformBuffer(currentFrame);
+                if (brixelizer.giHasHistory())
+                    shadowPass.setDiffuseGI(currentFrame,
+                        brixelizer.giDiffuseDescriptor(brixelizer.giLatestOutputSlot()));
             }
             if (sceneViewportRendered) {
                 updateSceneViewportUniformBuffer(currentFrame);

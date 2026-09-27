@@ -114,7 +114,7 @@ namespace Engine {
             }
 
             // This is a compact list, not an array indexed by binding number.
-            VkDescriptorSetLayoutBinding bindings[20]{};
+            VkDescriptorSetLayoutBinding bindings[21]{};
             bindings[0] = {
                 0, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1,
                 VK_SHADER_STAGE_FRAGMENT_BIT, nullptr
@@ -196,6 +196,8 @@ namespace Engine {
                             VK_SHADER_STAGE_FRAGMENT_BIT, nullptr}; // RT contact visibility
             bindings[19] = {19, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1,
                             VK_SHADER_STAGE_FRAGMENT_BIT, nullptr}; // resolved directional visibility
+            bindings[20] = {20, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1,
+                            VK_SHADER_STAGE_FRAGMENT_BIT, nullptr}; // previous-frame diffuse GI
             const VkDescriptorSetLayoutCreateInfo layoutInfo{
                 VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO, nullptr, 0,
                 static_cast<std::uint32_t>(std::size(bindings)), bindings
@@ -211,7 +213,7 @@ namespace Engine {
             const VkDescriptorPoolSize poolSizes[] = {
                 {
                     VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, frameCount * 6U *
-                                                               (MaxMaterialTextures + 10U +
+                                                               (MaxMaterialTextures + 11U +
                                                                 ReflectionProbeManager::TextureDescriptorCount)
                 },
                 {VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, frameCount * 6U},
@@ -302,7 +304,7 @@ namespace Engine {
                 const VkDescriptorBufferInfo reflectionProbeInfo{reflectionProbeBuffers[frame], 0, VK_WHOLE_SIZE};
                 std::vector<VkDescriptorImageInfo> reflectionTextures(
                     ReflectionProbeManager::TextureDescriptorCount, imageBasedLighting[1]);
-                VkWriteDescriptorSet writes[18]{};
+                VkWriteDescriptorSet writes[19]{};
                 writes[0] = {
                     VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr,
                     descriptorSets_[frame], 0, 0, 1,
@@ -399,6 +401,9 @@ namespace Engine {
                     VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
                     &linearImageInfo, nullptr, nullptr
                 };
+                writes[18] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr,
+                    descriptorSets_[frame], 20, 0, 1, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+                    materialTextures.data(), nullptr, nullptr};
                 // Standard forward consumes bindings 3/7 as the clustered range
                 // headers and compact light-index list.  Grass descriptors below
                 // retain their vertex-only cluster/deformation bindings.
@@ -606,6 +611,14 @@ namespace Engine {
         vkUpdateDescriptorSets(device_, 1, &write, 0, nullptr);
         gtaoDescriptorCache_[frameIndex] = texture;
         gtaoDescriptorCacheValid_[frameIndex] = true;
+    }
+
+    void ShadowPass::setDiffuseGI(const std::uint32_t frameIndex,
+                                  const VkDescriptorImageInfo& texture) const {
+        const VkWriteDescriptorSet write{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr,
+            descriptorSets_.at(frameIndex), 20, 0, 1,
+            VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &texture, nullptr, nullptr};
+        vkUpdateDescriptorSets(device_, 1, &write, 0, nullptr);
     }
 
     void ShadowPass::setContactShadowTexture(const std::uint32_t frameIndex,

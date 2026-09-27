@@ -3,12 +3,15 @@
 #include "Engine/Math/AABB.h"
 
 #include <glm/mat4x4.hpp>
+#include <glm/vec3.hpp>
 #include <vulkan/vulkan.h>
 #include <vk_mem_alloc.h>
 
 #include <cstdint>
 #include <memory>
 #include <span>
+
+namespace Engine::Assets { class AssetManager; }
 
 namespace Engine {
 
@@ -32,7 +35,8 @@ public:
     BrixelizerSystem& operator=(const BrixelizerSystem&) = delete;
 
     void create(VkPhysicalDevice physicalDevice, VkDevice device, VmaAllocator allocator,
-                VkExtent2D extent, std::uint32_t framesInFlight);
+                VkExtent2D extent, std::uint32_t framesInFlight,
+                VkCommandPool commandPool, VkQueue queue, Assets::AssetManager& assets);
     void destroy() noexcept;
     void resize(VkExtent2D extent);
 
@@ -47,6 +51,19 @@ public:
                 DebugView debugView = DebugView::Off,
                 const glm::mat4& inverseView = glm::mat4(1.0F),
                 const glm::mat4& inverseProjection = glm::mat4(1.0F));
+
+    /** Generates diffuse GI after opaque lighting. The previous result is sampled by PBR. */
+    void dispatchGI(VkCommandBuffer commandBuffer, std::uint32_t frameSlot,
+                    VkImageView depthView, VkSampler depthSampler,
+                    VkImageView viewNormalView, VkSampler viewNormalSampler,
+                    VkImage velocity, VkImage litImage, VkImage environmentImage,
+                    std::uint32_t environmentSize, std::uint32_t environmentMipLevels,
+                    const glm::mat4& view, const glm::mat4& projection,
+                    const glm::mat4& inverseView, const glm::vec3& cameraPosition);
+    [[nodiscard]] VkDescriptorImageInfo giDiffuseDescriptor(std::uint32_t frameSlot) const noexcept;
+    [[nodiscard]] bool giHasHistory() const noexcept;
+    [[nodiscard]] std::uint32_t giLatestOutputSlot() const noexcept;
+    void invalidateGI() noexcept;
 
     [[nodiscard]] bool ready() const noexcept;
     [[nodiscard]] bool hasStaticMeshes() const noexcept;

@@ -78,6 +78,7 @@
         AccelerationStructureManager accelerationStructures;
         BrixelizerSystem brixelizer;
         BrixelizerSystem::DebugView brixelizerDebugView{BrixelizerSystem::DebugView::Off};
+        bool brixelizerGeometryDirty{false};
         bool rayTracingBlasDirty{true};
         // TLAS input is reconstructed only when ECS render state changes. Each
         // frame slot still receives its initial build before being reused.

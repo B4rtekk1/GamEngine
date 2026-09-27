@@ -112,10 +112,11 @@
                 else if (view == "brick") brixelizerDebugView = BrixelizerSystem::DebugView::BrickId;
                 else if (view == "cascade") brixelizerDebugView = BrixelizerSystem::DebugView::CascadeId;
             }
-            if (brixelizerDebugView != BrixelizerSystem::DebugView::Off) {
+            if (!msaa.enabled() || brixelizerDebugView != BrixelizerSystem::DebugView::Off) {
                 timeInitialization("Brixelizer SDF", [&] {
                     brixelizer.create(vulkanDevice.physical(), device, vulkanDevice.allocator(),
-                                      swapchain.extent(), MAX_FRAMES_IN_FLIGHT);
+                                      swapchain.extent(), MAX_FRAMES_IN_FLIGHT,
+                                      commandPool, vulkanDevice.graphicsQueue(), assetManager);
                     refreshBrixelizerGeometry();
                 });
             }

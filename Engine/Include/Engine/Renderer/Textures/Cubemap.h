@@ -43,6 +43,7 @@ public:
     [[nodiscard]] VkImage image() const noexcept { return image_; }
     [[nodiscard]] VkSampler sampler() const noexcept { return sampler_; }
     [[nodiscard]] std::uint32_t mipLevels() const noexcept { return mipLevels_; }
+    [[nodiscard]] std::uint32_t faceSize() const noexcept { return faceSize_; }
 
 private:
     VkDevice device_ = VK_NULL_HANDLE;
@@ -52,6 +53,7 @@ private:
     std::array<VkImageView, 6> faceImageViews_{};
     VkSampler sampler_ = VK_NULL_HANDLE;
     std::uint32_t mipLevels_ = 0;
+    std::uint32_t faceSize_ = 0;
     std::uint64_t readyTimeline_ = 0;
 };
 
