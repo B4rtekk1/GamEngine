@@ -32,7 +32,7 @@ public:
     BrixelizerSystem& operator=(const BrixelizerSystem&) = delete;
 
     void create(VkPhysicalDevice physicalDevice, VkDevice device, VmaAllocator allocator,
-                VkExtent2D extent);
+                VkExtent2D extent, std::uint32_t framesInFlight);
     void destroy() noexcept;
     void resize(VkExtent2D extent);
 
@@ -41,8 +41,10 @@ public:
                          VkBuffer indices, VkDeviceSize indexBytes,
                          std::span<const StaticMesh> meshes);
 
+    /** The caller must wait for the frame slot's fence before reusing its scratch buffer. */
     void update(VkCommandBuffer commandBuffer, const float cameraPosition[3],
-                std::uint32_t frameIndex, DebugView debugView = DebugView::Off,
+                std::uint32_t frameIndex, std::uint32_t frameSlot,
+                DebugView debugView = DebugView::Off,
                 const glm::mat4& inverseView = glm::mat4(1.0F),
                 const glm::mat4& inverseProjection = glm::mat4(1.0F));
 

@@ -3,8 +3,6 @@ import Common.ReflectionFallback;
 import Common.SceneData;
 import Common.ShadowSampling;
 import Common.Displacement;
-import GI.ddgi_gather;
-import GI.ddgi_gather_core;
 
 // GENERATED_SHADER_GRAPH_DECLARATIONS
 
@@ -35,14 +33,6 @@ static const uint PBR_DEBUG_NO_SPECULAR_IBL = 1u;
 static const uint PBR_DEBUG_NO_DIRECT_SPECULAR = 2u;
 static const uint PBR_DEBUG_NO_GTAO = 3u;
 static const uint PBR_DEBUG_GEOMETRIC_DIRECT_DIFFUSE = 4u;
-static const uint PBR_DEBUG_DDGI_IRRADIANCE = 5u;
-static const uint PBR_DEBUG_DDGI_BLEND = 6u;
-static const uint PBR_DEBUG_DDGI_VISIBILITY = 7u;
-static const uint PBR_DEBUG_DDGI_PROBES = 8u;
-static const uint PBR_DEBUG_DDGI_CASCADE = 9u;
-static const uint PBR_DEBUG_DDGI_VS_SKY = 10u;
-static const uint PBR_DEBUG_DDGI_PRE_VISIBILITY = 11u;
-static const uint PBR_DEBUG_DDGI_POST_VISIBILITY = 12u;
 
 [[vk::binding(1, 0)]] ConstantBuffer<RendererFrameData> frame;
 [[vk::binding(5, 0)]] StructuredBuffer<RendererInstanceData> visibleInstances;
@@ -150,100 +140,6 @@ ForwardVertexOutput vertexMain(ForwardVertexInput input, uint instanceIndex : SV
 [[vk::binding(17, 0)]] Sampler2DShadow linearShadowMap;
 [[vk::binding(2, 0)]] StructuredBuffer<MaterialData> materials;
 [[vk::binding(10, 0)]] SamplerCube irradianceMap;
-// Returns incident diffuse irradiance E. The existing sky IBL texture stores
-// the equivalent diffuse response, so scale it by PI before the Lambert term.
-struct DDGISampleResult {
-    float3 lightingIrradiance;
-    float3 irradiance;
-    float3 skyIrradiance;
-    float3 cascadeColor;
-    float blendWeight;
-    float visibility;
-    float activeProbeFraction;
-    float preVisibilityWeight;
-    float postVisibilityWeight;
-};
-
-void accumulateDDGICascade(inout DDGISampleResult result, DDGIGatherResult probe, float3 cascadeColor)
-{
-    const float weight = probe.blendWeight;
-    const float3 probeLighting = probe.irradiance * frame.ddgiIndirectIntensity;
-    result.lightingIrradiance = lerp(result.lightingIrradiance, probeLighting, weight);
-    result.irradiance = lerp(result.irradiance, probeLighting, weight);
-    result.visibility = lerp(result.visibility, probe.visibility, weight);
-    result.activeProbeFraction = lerp(result.activeProbeFraction, probe.activeProbeFraction, weight);
-    result.preVisibilityWeight = lerp(result.preVisibilityWeight, probe.preVisibilityWeight, weight);
-    result.postVisibilityWeight = lerp(result.postVisibilityWeight, probe.postVisibilityWeight, weight);
-    result.cascadeColor = lerp(result.cascadeColor, cascadeColor, weight);
-    result.blendWeight = lerp(result.blendWeight, 1.0, weight);
-}
-
-DDGISampleResult sampleDDGIIrradiance(float3 worldPosition, float3 shadingNormal,
-                                     float3 geometricNormal, float3 viewDirection)
-{
-    DDGISampleResult result;
-    result.skyIrradiance = 0.0;
-    const float3 giNormal = normalize(geometricNormal);
-    result.lightingIrradiance = 0.0;
-    result.irradiance = 0.0;
-    result.cascadeColor = 0.0;
-    result.blendWeight = 0.0;
-    result.visibility = 0.0;
-    result.activeProbeFraction = 0.0;
-    result.preVisibilityWeight = 0.0;
-    result.postVisibilityWeight = 0.0;
-    // Gather finer cascades first. Their spatial transition and probe coverage
-    // determine whether a coarser cascade can affect the final blend.
-    DDGIGatherResult fineProbe;
-    DDGIGatherResult middleProbe;
-    bool hasFine = false;
-    bool hasMiddle = false;
-    float uncovered = 1.0;
-    if (ddgiCascadeTransition(worldPosition, frame.ddgiOriginSpacing[0].xyz,
-                              frame.ddgiOriginSpacing[0].w) > 0.0) {
-        fineProbe = ddgiGatherCascade(worldPosition, geometricNormal, giNormal, viewDirection,
-            frame.ddgiOriginSpacing[0].xyz, frame.ddgiOriginSpacing[0].w,
-            frame.ddgiScrollOffsets[0].xyz, ddgiIrradiance, ddgiDistance, ddgiProbeData);
-        hasFine = true;
-        uncovered *= 1.0 - fineProbe.blendWeight;
-    }
-    if (uncovered > 0.0 &&
-        ddgiCascadeTransition(worldPosition, frame.ddgiOriginSpacing[1].xyz,
-                              frame.ddgiOriginSpacing[1].w) > 0.0) {
-        middleProbe = ddgiGatherCascade(worldPosition, geometricNormal, giNormal, viewDirection,
-            frame.ddgiOriginSpacing[1].xyz, frame.ddgiOriginSpacing[1].w,
-            frame.ddgiScrollOffsets[1].xyz, ddgiIrradiance1, ddgiDistance1, ddgiProbeData1);
-        hasMiddle = true;
-        uncovered *= 1.0 - middleProbe.blendWeight;
-    }
-    // Apply the samples in the original coarse-to-fine order so sky fallback
-    // and all DDGI diagnostic views keep the same blend semantics.
-    if (uncovered > 0.0 &&
-        ddgiCascadeTransition(worldPosition, frame.ddgiOriginSpacing[2].xyz,
-                              frame.ddgiOriginSpacing[2].w) > 0.0) {
-        const DDGIGatherResult coarseProbe = ddgiGatherCascade(worldPosition, geometricNormal, giNormal, viewDirection,
-            frame.ddgiOriginSpacing[2].xyz, frame.ddgiOriginSpacing[2].w,
-            frame.ddgiScrollOffsets[2].xyz, ddgiIrradiance2, ddgiDistance2, ddgiProbeData2);
-        accumulateDDGICascade(result, coarseProbe, float3(0.0, 0.0, 1.0));
-    }
-    if (hasMiddle)
-        accumulateDDGICascade(result, middleProbe, float3(0.0, 1.0, 0.0));
-    if (hasFine)
-        accumulateDDGICascade(result, fineProbe, float3(1.0, 0.0, 0.0));
-    if (result.blendWeight < 1.0 || frame.pbrDebugView == PBR_DEBUG_DDGI_VS_SKY) {
-        result.skyIrradiance = irradianceMap.SampleLevel(shadingNormal, 0.0).rgb * PBR_PI;
-        result.lightingIrradiance += result.skyIrradiance * (1.0 - result.blendWeight);
-    }
-    // The diagnostic values describe the DDGI contribution independently of
-    // the amount of sky that remains after the cascade blend.
-    const float normalization = max(result.blendWeight, 0.0001);
-    result.irradiance /= normalization;
-    result.visibility /= normalization;
-    result.activeProbeFraction /= normalization;
-    result.preVisibilityWeight /= normalization;
-    result.postVisibilityWeight /= normalization;
-    return result;
-}
 [[vk::binding(11, 0)]] SamplerCube prefilteredEnvironmentMap;
 [[vk::binding(12, 0)]] Sampler2D brdfIntegrationLut;
 [[vk::binding(4, 0)]] StructuredBuffer<uint4> shadowPageTable;
@@ -716,50 +612,7 @@ ForwardFragmentOutput fragmentMain(ForwardFragmentInput input)
     const bool disableSpecularIbl = frame.pbrDebugView == PBR_DEBUG_NO_SPECULAR_IBL;
     float3 kS = disableSpecularIbl ? 0.0 : fresnelIbl;
     float3 kD = (1.0 - kS) * (1.0 - metallic);
-    const DDGISampleResult ddgiDebug = sampleDDGIIrradiance(input.worldPosition, normal,
-                                                             geometricNormal, viewDirection);
-    if (frame.pbrDebugView >= PBR_DEBUG_DDGI_IRRADIANCE &&
-        frame.pbrDebugView <= PBR_DEBUG_DDGI_POST_VISIBILITY)
-    {
-        float3 debugColor = 0.0;
-        if (frame.pbrDebugView == PBR_DEBUG_DDGI_IRRADIANCE)
-            debugColor = ddgiDebug.irradiance;
-        else if (frame.pbrDebugView == PBR_DEBUG_DDGI_BLEND)
-            debugColor = ddgiDebug.blendWeight.xxx;
-        else if (frame.pbrDebugView == PBR_DEBUG_DDGI_VISIBILITY)
-            debugColor = saturate(ddgiDebug.visibility).xxx;
-        else if (frame.pbrDebugView == PBR_DEBUG_DDGI_PROBES)
-            debugColor = float3(1.0 - ddgiDebug.activeProbeFraction,
-                                ddgiDebug.activeProbeFraction, 0.0);
-        else if (frame.pbrDebugView == PBR_DEBUG_DDGI_CASCADE)
-            debugColor = ddgiDebug.cascadeColor;
-        else if (frame.pbrDebugView == PBR_DEBUG_DDGI_VS_SKY)
-        {
-            const float3 luminanceWeights = float3(0.2126, 0.7152, 0.0722);
-            const float skyLum = dot(ddgiDebug.skyIrradiance, luminanceWeights);
-            const float ddgiLum = dot(ddgiDebug.irradiance, luminanceWeights);
-            const float ratio = ddgiLum / max(skyLum, 0.0001);
-            if (ddgiDebug.blendWeight <= 0.0) debugColor = 0.0;
-            else if (ratio < 0.10) debugColor = float3(1.0, 0.0, 1.0);
-            else if (ratio < 0.25) debugColor = float3(1.0, 0.0, 0.0);
-            else if (ratio < 0.50) debugColor = float3(1.0, 1.0, 0.0);
-            else if (ratio < 1.00) debugColor = float3(0.0, 1.0, 0.0);
-            else debugColor = float3(0.0, 1.0, 1.0);
-        }
-        else if (frame.pbrDebugView == PBR_DEBUG_DDGI_PRE_VISIBILITY)
-            debugColor = saturate(ddgiDebug.preVisibilityWeight).xxx;
-        else if (frame.pbrDebugView == PBR_DEBUG_DDGI_POST_VISIBILITY)
-            debugColor = saturate(ddgiDebug.postVisibilityWeight).xxx;
-
-        ForwardFragmentOutput debugOutput;
-        debugOutput.color = float4(debugColor, 1.0);
-#if FORWARD_OUTPUT_VELOCITY
-        const float2 previousNdc = input.previousClip.xy / input.previousClip.w;
-        debugOutput.velocity = (input.currentNdc - previousNdc) * 0.5;
-#endif
-        return debugOutput;
-    }
-    const float3 indirectDiffuse = ddgiDebug.lightingIrradiance * albedo * kD / PBR_PI;
+    const float3 indirectDiffuse = irradianceMap.SampleLevel(normal, 0.0).rgb * albedo * kD;
     float3 reflection = reflect(-viewDirection, normal);
     const uint prefilteredMipCount = max(uint(frame.clusterZScaleBiasEnvironmentMipRtContact.z), 1u);
     float3 prefiltered = prefilteredEnvironmentMap.SampleLevel(

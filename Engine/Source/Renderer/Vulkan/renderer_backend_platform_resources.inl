@@ -114,7 +114,8 @@
             }
             if (brixelizerDebugView != BrixelizerSystem::DebugView::Off) {
                 timeInitialization("Brixelizer SDF", [&] {
-                    brixelizer.create(vulkanDevice.physical(), device, vulkanDevice.allocator(), swapchain.extent());
+                    brixelizer.create(vulkanDevice.physical(), device, vulkanDevice.allocator(),
+                                      swapchain.extent(), MAX_FRAMES_IN_FLIGHT);
                     refreshBrixelizerGeometry();
                 });
             }
@@ -510,29 +511,6 @@
             bindContactShadowFallback(shadowPass);
             createDirectionalVisibilityPass();
             createRtContactShadowPass();
-            if (vulkanDevice.supportsRayQuery()) {
-                const std::array ddgiFamilies{
-                    vulkanDevice.graphicsQueueFamily(), vulkanDevice.computeQueueFamily()};
-                const std::span<const std::uint32_t> ddgiSharingFamilies =
-                    vulkanDevice.hasAsyncComputeQueue() && ddgiFamilies[0] != ddgiFamilies[1]
-                        ? std::span<const std::uint32_t>(ddgiFamilies)
-                        : std::span<const std::uint32_t>{};
-                ddgi.create(vulkanDevice.physical(), device, vulkanDevice.allocator(),
-                            shadowPass.descriptorSetLayout(), assetManager, ddgiSharingFamilies);
-                for (std::uint32_t frame = 0; frame < MAX_FRAMES_IN_FLIGHT; ++frame) {
-                    std::array<VkDescriptorImageInfo, 9> textures{};
-                    for (std::uint32_t cascade = 0; cascade < 3; ++cascade) {
-                        const auto& probes = ddgi.resources().cascades[cascade];
-                        textures[cascade * 3] = {probes.publishedIrradiance.sampler(),
-                            probes.publishedIrradiance.imageView(), VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
-                        textures[cascade * 3 + 1] = {probes.publishedDistance.sampler(),
-                            probes.publishedDistance.imageView(), VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
-                        textures[cascade * 3 + 2] = {probes.publishedProbeData.sampler(),
-                            probes.publishedProbeData.imageView(), VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
-                    }
-                    shadowPass.setDDGITextures(frame, textures);
-                }
-            }
         }
 
         void createSceneDescriptorPass() {
@@ -728,7 +706,6 @@
             lightingForwardPass.destroy();
             waterPass.destroy();
             directionalVisibilityPass.destroy();
-            ddgi.destroy();
             shadowPass.destroy();
             sceneDescriptorPass.destroy();
             destroyCullingResources();

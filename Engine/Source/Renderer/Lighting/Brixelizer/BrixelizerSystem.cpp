@@ -9,6 +9,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cmath>
 #include <cstddef>
 #include <cstring>
 #include <stdexcept>
@@ -18,6 +19,9 @@
 
 namespace Engine {
 namespace {
+    constexpr float FinestCascadeVoxelSize = 0.2F;
+    constexpr float SdfCenterSnap = 4.0F * FinestCascadeVoxelSize;
+
     void check(const FfxErrorCode result, const char* operation) {
         if (result != FFX_OK) throw std::runtime_error(std::string("Brixelizer: ") + operation);
     }
@@ -60,7 +64,6 @@ struct BrixelizerSystem::Impl final {
     VkExtent2D size{};
     BrixelizerResources resources;
     HdrBuffer debug;
-    std::vector<Buffer> retiredScratch;
     std::vector<std::byte> backendScratch;
     FfxInterface backend{};
     std::unique_ptr<FfxBrixelizerContext> context;
@@ -74,7 +77,6 @@ struct BrixelizerSystem::Impl final {
     bool buffersRegistered{};
     bool atlasInitialized{};
     bool debugInitialized{};
-    std::uint32_t scratchBytes{};
 
     void clearGeometry() {
         if (!context) return;
@@ -102,8 +104,7 @@ struct BrixelizerSystem::Impl final {
         instanceIds.clear();
         buffersRegistered = false;
         debug.destroy();
-        resources.scratch.destroy();
-        retiredScratch.clear();
+        resources.scratch.clear();
         resources.brickAabbs.destroy();
         for (auto& cascade : resources.cascades) {
             cascade.aabbTree.destroy();
@@ -118,7 +119,6 @@ struct BrixelizerSystem::Impl final {
         device = VK_NULL_HANDLE;
         allocator = VK_NULL_HANDLE;
         size = {};
-        scratchBytes = 0;
         atlasInitialized = false;
         debugInitialized = false;
     }
@@ -128,15 +128,17 @@ BrixelizerSystem::BrixelizerSystem() : impl_(std::make_unique<Impl>()) {}
 BrixelizerSystem::~BrixelizerSystem() { destroy(); }
 
 void BrixelizerSystem::create(const VkPhysicalDevice physicalDevice, const VkDevice device,
-                              const VmaAllocator allocator, const VkExtent2D extent) {
+                              const VmaAllocator allocator, const VkExtent2D extent,
+                              const std::uint32_t framesInFlight) {
     destroy();
-    if (!physicalDevice || !device || !allocator || !extent.width || !extent.height)
-        throw std::invalid_argument("Brixelizer needs a device, allocator and nonzero extent");
+    if (!physicalDevice || !device || !allocator || !extent.width || !extent.height || !framesInFlight)
+        throw std::invalid_argument("Brixelizer needs a device, allocator, extent and frame slots");
     auto& state = *impl_;
     state.physicalDevice = physicalDevice;
     state.device = device;
     state.allocator = allocator;
     state.size = extent;
+    state.resources.scratch.resize(framesInFlight);
     try {
         constexpr size_t maxContexts = 1;
         state.backendScratch.resize(ffxGetScratchMemorySizeVK(physicalDevice, maxContexts));
@@ -179,7 +181,7 @@ void BrixelizerSystem::create(const VkPhysicalDevice physicalDevice, const VkDev
         FfxBrixelizerContextDescription description{};
         description.numCascades = BrixelizerResources::CascadeCount;
         description.backendInterface = state.backend;
-        float voxelSize = 0.2F;
+        float voxelSize = FinestCascadeVoxelSize;
         for (auto& cascade : description.cascadeDescs) {
             cascade.flags = FFX_BRIXELIZER_CASCADE_STATIC;
             cascade.voxelSize = voxelSize;
@@ -223,6 +225,8 @@ void BrixelizerSystem::setStaticMeshes(const VkBuffer vertices, const VkDeviceSi
           static_cast<std::uint32_t>(buffers.size())), "register geometry buffers");
     state.buffersRegistered = true;
 
+    std::vector<FfxBrixelizerInstanceDescription> instances;
+    instances.reserve(meshes.size());
     for (const StaticMesh& mesh : meshes) {
         if (mesh.indexCount < 3 || mesh.vertexCount == 0 ||
             mesh.firstIndex >= indexBytes / sizeof(std::uint32_t) ||
@@ -245,21 +249,30 @@ void BrixelizerSystem::setStaticMeshes(const VkBuffer vertices, const VkDeviceSi
         instance.vertexBufferOffset = 0;
         instance.vertexCount = static_cast<std::uint32_t>(vertexBytes / sizeof(GpuVertex));
         instance.vertexFormat = FFX_SURFACE_FORMAT_R32G32B32_FLOAT;
-        FfxBrixelizerInstanceID id = FFX_BRIXELIZER_INVALID_ID;
-        instance.outInstanceID = &id;
-        check(ffxBrixelizerCreateInstances(state.context.get(), &instance, 1), "create static instance");
-        state.instanceIds.push_back(id);
+        instances.push_back(instance);
+    }
+    if (!instances.empty()) {
+        state.instanceIds.resize(instances.size(), FFX_BRIXELIZER_INVALID_ID);
+        for (std::size_t i = 0; i < instances.size(); ++i)
+            instances[i].outInstanceID = &state.instanceIds[i];
+        check(ffxBrixelizerCreateInstances(state.context.get(), instances.data(),
+              static_cast<std::uint32_t>(instances.size())), "create static instances");
     }
 }
 
 void BrixelizerSystem::update(const VkCommandBuffer commandBuffer, const float cameraPosition[3],
-                              const std::uint32_t frameIndex, const DebugView debugView,
+                              const std::uint32_t frameIndex, const std::uint32_t frameSlot,
+                              const DebugView debugView,
                               const glm::mat4& inverseView, const glm::mat4& inverseProjection) {
     if (!ready() || !impl_->buffersRegistered || impl_->instanceIds.empty()) return;
     auto& state = *impl_;
+    if (frameSlot >= state.resources.scratch.size())
+        throw std::out_of_range("Brixelizer: invalid frame slot");
     FfxBrixelizerUpdateDescription update{};
     update.frameIndex = frameIndex;
-    std::copy_n(cameraPosition, 3, update.sdfCenter);
+    // The SDK snaps each cascade to voxels; this coarser grid reduces SDF scrolling.
+    for (std::size_t axis = 0; axis < 3; ++axis)
+        update.sdfCenter[axis] = std::floor(cameraPosition[axis] / SdfCenterSnap) * SdfCenterSnap;
     update.maxReferences = 32U << 20U;
     update.triangleSwapSize = 300U << 20U;
     update.maxBricksPerBake = 1U << 14U;
@@ -303,12 +316,10 @@ void BrixelizerSystem::update(const VkCommandBuffer commandBuffer, const float c
     update.outScratchBufferSize = &requiredScratch;
     check(ffxBrixelizerBakeUpdate(state.context.get(), &update, state.baked.get()), "bake update");
     requiredScratch = std::max<std::size_t>(requiredScratch, 4096);
-    if (requiredScratch > state.scratchBytes) {
-        if (state.resources.scratch.handle() != VK_NULL_HANDLE)
-            state.retiredScratch.push_back(std::move(state.resources.scratch));
-        state.resources.scratch.createDeviceLocalEmpty(state.device, requiredScratch,
+    Buffer& scratchBuffer = state.resources.scratch[frameSlot];
+    if (requiredScratch > scratchBuffer.size()) {
+        scratchBuffer.createDeviceLocalEmpty(state.device, requiredScratch,
             VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT, state.allocator);
-        state.scratchBytes = static_cast<std::uint32_t>(requiredScratch);
     }
     VkImageMemoryBarrier2 atlasBarrier{.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2,
         .srcStageMask = state.atlasInitialized ? VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT : VK_PIPELINE_STAGE_2_NONE,
@@ -335,8 +346,8 @@ void BrixelizerSystem::update(const VkCommandBuffer commandBuffer, const float c
     vkCmdPipelineBarrier2(commandBuffer, &dependency);
     state.atlasInitialized = true;
     if (debugView != DebugView::Off) state.debugInitialized = true;
-    const FfxResource scratch = bufferResource(state.resources.scratch.handle(),
-        state.resources.scratch.size(), L"Brixelizer scratch", FFX_RESOURCE_STATE_UNORDERED_ACCESS);
+    const FfxResource scratch = bufferResource(scratchBuffer.handle(),
+        scratchBuffer.size(), L"Brixelizer scratch", FFX_RESOURCE_STATE_UNORDERED_ACCESS);
     check(ffxBrixelizerUpdate(state.context.get(), state.baked.get(), scratch,
           ffxGetCommandListVK(commandBuffer)), "record SDF update");
 }

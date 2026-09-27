@@ -24,7 +24,6 @@
 #include "Engine/Renderer/Passes/RtContactShadowPass.h"
 #include "Engine/Renderer/Passes/DirectionalVisibilityPass.h"
 #include "Engine/Renderer/RayTracing/AccelerationStructureManager.h"
-#include "Engine/Renderer/Lighting/DDGI/DDGISystem.h"
 #include "Engine/Renderer/Lighting/Brixelizer/BrixelizerSystem.h"
 #include "Engine/Renderer/Vulkan/ViewportRenderTarget.h"
 #include "Engine/Renderer/ViewportCamera.h"
@@ -204,7 +203,6 @@ namespace Engine {
                          const RtContactShadowSettings &rtContactShadowSettings,
                          const GtaoQuality &gtaoQuality, const GtaoDebugView &gtaoDebugView,
                          const PbrDebugView &pbrDebugView,
-                         const bool &ddgiEnabled,
                          const IblQuality &iblQuality,
                          const ShadowDebugView &shadowDebugView,
                          const GrassRenderSettings &grassSettings,
@@ -233,7 +231,7 @@ namespace Engine {
               registry(scene.registry()),
               optimizationFeatures(optimizationFeatures),
               antialiasingLevel(antialiasingLevel), shadowQuality(shadowQuality), rtContactShadowSettings(rtContactShadowSettings), gtaoQuality(gtaoQuality),
-              gtaoDebugView(gtaoDebugView), pbrDebugView(pbrDebugView), ddgiEnabled(ddgiEnabled), iblQuality(iblQuality),
+              gtaoDebugView(gtaoDebugView), pbrDebugView(pbrDebugView), iblQuality(iblQuality),
               shadowDebugView(shadowDebugView),
               configuredGtaoQuality(gtaoQuality),
               grassSettings(grassSettings),
@@ -655,7 +653,6 @@ namespace Engine {
                 sceneSkyPass.destroy();
                 sceneViewportForwardPass.destroy();
                 forwardPass.destroy();
-                ddgi.destroy();
                 shadowPass.destroy();
                 sceneDescriptorPass.destroy();
                 destroyCullingResources();
@@ -736,7 +733,6 @@ namespace Engine {
             // table. A scene reload replaces both buffers even at the same extent.
             rtContactShadowPass.destroy();
             directionalVisibilityPass.destroy();
-            ddgi.destroy();
             brixelizer.setStaticMeshes(VK_NULL_HANDLE, 0, VK_NULL_HANDLE, 0, {});
             shadowPass.destroy();
             sceneDescriptorPass.destroy();

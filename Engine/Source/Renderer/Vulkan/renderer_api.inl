@@ -6,7 +6,7 @@ Renderer::Renderer(RenderConfig config)
       shadowQuality_(config.shadowQuality),
       rtContactShadowSettings_(config.rtContactShadows),
       gtaoQuality_(config.gtaoQuality), gtaoDebugView_(config.gtaoDebugView), pbrDebugView_(config.pbrDebugView),
-      ddgiEnabled_(config.ddgiEnabled), iblQuality_(config.iblQuality),
+      iblQuality_(config.iblQuality),
       shadowDebugView_(config.shadowDebugView),
       grassSettings_(config.grass),
       state_(std::make_unique<State>()) {}
@@ -71,8 +71,6 @@ void Renderer::setGtaoDebugView(const GtaoDebugView view) noexcept { gtaoDebugVi
 GtaoDebugView Renderer::gtaoDebugView() const noexcept { return gtaoDebugView_; }
 void Renderer::setPbrDebugView(const PbrDebugView view) noexcept { pbrDebugView_ = view; }
 PbrDebugView Renderer::pbrDebugView() const noexcept { return pbrDebugView_; }
-void Renderer::setDDGIEnabled(const bool enabled) noexcept { ddgiEnabled_ = enabled; }
-bool Renderer::ddgiEnabled() const noexcept { return ddgiEnabled_; }
 void Renderer::setIblQuality(const IblQuality quality) noexcept { iblQuality_ = quality; }
 IblQuality Renderer::iblQuality() const noexcept { return iblQuality_; }
 
@@ -113,7 +111,7 @@ void Renderer::setEditorUiBackend(EditorUiBackend *backend) noexcept {
 void Renderer::initializeCore(Scene& scene, void* nativeWindow) {
     auto* window = static_cast<SDL_Window*>(nativeWindow);
     if (backend_) throw std::logic_error("Renderer is already initialized");
-    backend_ = std::make_unique<Backend>(scene, window, optimizationFeatures_, antialiasingLevel_, shadowQuality_, rtContactShadowSettings_, gtaoQuality_, gtaoDebugView_, pbrDebugView_, ddgiEnabled_, iblQuality_, shadowDebugView_, grassSettings_, state_->projectRoot,
+    backend_ = std::make_unique<Backend>(scene, window, optimizationFeatures_, antialiasingLevel_, shadowQuality_, rtContactShadowSettings_, gtaoQuality_, gtaoDebugView_, pbrDebugView_, iblQuality_, shadowDebugView_, grassSettings_, state_->projectRoot,
                                          state_->assetManager, state_->forwardPass, state_->skyPass,
                                          state_->tonemapPass, state_->temporalAaPass, state_->bloomPass, state_->gtaoPass,
                                          state_->particlePipeline,

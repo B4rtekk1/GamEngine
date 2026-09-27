@@ -7,7 +7,7 @@ add_library(Engine SHARED
     Source/Renderer/shader_loader.cpp Source/Renderer/Textures/Cubemap.cpp Source/Renderer/Textures/Texture2D.cpp Source/Renderer/Textures/VirtualTexture.cpp Source/Renderer/Skybox/Skybox.cpp Source/Renderer/Skybox/SkyboxPipeline.cpp Source/Renderer/Lighting/LightingBuffer.cpp Source/Renderer/Lighting/EnvironmentBaker.cpp Source/Renderer/Lighting/ImageBasedLighting.cpp Source/Renderer/Lighting/ReflectionProbeManager.cpp Source/Renderer/Lighting/ReflectionProbeCapture.cpp
     Source/Renderer/ShaderGraph/ShaderGraphCompiler.cpp Source/Renderer/ShaderGraph/ShaderGraphVulkan.cpp Source/Renderer/ShaderGraph/ShaderNodeFactory.cpp Source/Renderer/ShaderGraph/ShaderNodeRegistry.cpp Source/Renderer/ShaderGraph/ShaderGraphSerializer.cpp
     Source/Renderer/Passes/ForwardPass.cpp Source/Renderer/Passes/ShadowPass.cpp Source/Renderer/Passes/SkyPass.cpp Source/Renderer/Passes/TonemapPass.cpp Source/Renderer/Passes/BloomPass.cpp Source/Renderer/Passes/GtaoPass.cpp Source/Renderer/Passes/TemporalAaPass.cpp Source/Renderer/Passes/RtContactShadowPass.cpp Source/Renderer/Passes/DirectionalVisibilityPass.cpp Source/Renderer/RayTracing/AccelerationStructureManager.cpp
-    Source/Renderer/RenderGraph/RenderGraph.cpp Source/Renderer/Lighting/DDGI/DDGISystem.cpp
+    Source/Renderer/RenderGraph/RenderGraph.cpp
     Source/Renderer/Lighting/Brixelizer/BrixelizerSystem.cpp
     Source/Renderer/Lighting/Brixelizer/FidelityFXNoFrameGeneration.cpp
     Source/Renderer/Culling/GPUCullingPass.cpp Source/Renderer/Culling/GPUInstanceCullingPass.cpp Source/Renderer/Culling/MeshletCulling.cpp Source/Renderer/Culling/IndexedIndirectDrawCount.cpp Source/Renderer/Culling/HiZBuffer.cpp Source/Renderer/Culling/HiZPass.cpp Source/Renderer/GPUSceneDatabase.cpp

@@ -6,6 +6,7 @@
 #include <vk_mem_alloc.h>
 
 #include <array>
+#include <vector>
 
 namespace Engine {
 
@@ -22,7 +23,7 @@ struct BrixelizerResources final {
         Buffer brickMap;
     };
     std::array<Cascade, CascadeCount> cascades;
-    Buffer scratch;
+    std::vector<Buffer> scratch;
 };
 
 } // namespace Engine

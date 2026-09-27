@@ -27,7 +27,6 @@
                 rtContactShadowPass.destroy();
                 directionalVisibilityPass.destroy();
                 accelerationStructures.destroy();
-                ddgi.destroy();
                 brixelizer.destroy();
                 shadowPass.destroy();
                 sceneDescriptorPass.destroy();
@@ -123,10 +122,8 @@
                     renderGraphTransferTimeline = VK_NULL_HANDLE;
                 }
                 for (auto& buffers : renderGraphCommandBuffers) buffers.clear();
-                for (auto& buffers : ddgiGraphCommandBuffers) buffers.clear();
                 for (auto& buffers : presentationGraphCommandBuffers) buffers.clear();
                 postViewportGraphicsCommandBuffers.clear();
-                postDdgiGraphicsCommandBuffers.clear();
                 if (transferCommandPool != VK_NULL_HANDLE) {
                     vkDestroyCommandPool(device, transferCommandPool, nullptr);
                     transferCommandPool = VK_NULL_HANDLE;

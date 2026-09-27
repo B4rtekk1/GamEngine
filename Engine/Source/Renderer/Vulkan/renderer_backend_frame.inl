@@ -383,7 +383,6 @@
                           // previous TLAS build does not prove it is valid now.
                           0.0F},
                 frameData.lights};
-            data.ddgiIndirectIntensity = ddgiEnabled ? 1.0F : 0.0F;
             uniformBuffers[frame].update(&data, sizeof(data));
             const ClusteredLightingUniforms clustered{
                 currentView.native(), currentProjection.native(),
@@ -460,7 +459,6 @@
                           -std::log2(0.1F) * (24.0F / std::log2(1000.0F / 0.1F)),
                           static_cast<float>(imageBasedLighting.prefilteredMipLevels()), 0.0F},
                 frameData.lights};
-            data.ddgiIndirectIntensity = ddgiEnabled ? 15.0F : 0.0F;
             sceneUniformBuffers[frame].update(&data, sizeof(data));
             const ClusteredLightingUniforms clustered{
                 sceneView.native(), sceneProjection.native(),
@@ -1611,7 +1609,7 @@
                 const glm::vec3 center = cameraController.camera()->position().native();
                 const float centerCoords[3]{center.x, center.y, center.z};
                 brixelizer.update(commandBuffer, centerCoords,
-                    static_cast<std::uint32_t>(submittedFrameValue), brixelizerDebugView,
+                    static_cast<std::uint32_t>(submittedFrameValue), currentFrame, brixelizerDebugView,
                     glm::inverse(cameraController.camera()->viewMatrix().native()),
                     glm::inverse(cameraController.camera()->projectionMatrix().native()));
             }
@@ -1624,8 +1622,7 @@
             const bool rtContactRequested = vulkanDevice.supportsRayQuery() && !msaa.enabled() &&
                 mainLightShadows && rtContactShadowSettings.mode == ContactShadowMode::RayTraced &&
                 rtContactShadowPass.resultView(currentFrame) != VK_NULL_HANDLE;
-            bool rtContactRecordedInDdgiGraph = false;
-            const bool rtSceneRequested = vulkanDevice.supportsRayQuery() && ddgi.created();
+            const bool rtSceneRequested = rtContactRequested;
             if (rtSceneRequested && rayTracingBlasDirty && vertexBuffer.hasDeviceAddress() && indexBuffer.hasDeviceAddress()) {
                 std::vector<AccelerationStructureManager::MeshBuildInput> meshes;
                 meshes.reserve(instanceBatches.size());
@@ -1633,7 +1630,7 @@
                     AccelerationStructureManager::BlasKeyHash> builtSections;
                 for (std::size_t batchIndex = 0; batchIndex < instanceBatches.size(); ++batchIndex) {
                     const InstanceBatch& batch = instanceBatches[batchIndex];
-                    if (batch.alphaMode != AlphaMode::Opaque ||
+                    if (!batch.castShadow || batch.alphaMode != AlphaMode::Opaque ||
                         batch.mesh == nullptr || batch.indexCount < 3) continue;
                     bool hasUndisplacedInstance = false;
                     for (const std::size_t renderableIndex : sceneGpu.batchRenderableIndices[batchIndex]) {
@@ -1668,11 +1665,10 @@
                     rtTlasInstances.clear();
                     for (std::size_t batchIndex = 0; batchIndex < instanceBatches.size(); ++batchIndex) {
                         const InstanceBatch& batch = instanceBatches[batchIndex];
-                        // Contact rays use bit 0; GI rays use bit 1. Masked
-                        // surfaces need candidate alpha testing before they can
-                        // join this opaque-only TLAS. Procedural grass needs a
-                        // coarse GI proxy rather than per-blade RT geometry.
-                        if (batch.alphaMode != AlphaMode::Opaque || batch.mesh == nullptr ||
+                        // Masked surfaces need candidate alpha testing before
+                        // they can join this opaque-only TLAS.
+                        if (!batch.castShadow || batch.alphaMode != AlphaMode::Opaque ||
+                            batch.mesh == nullptr ||
                             batch.indexCount < 3) continue;
                         for (const std::size_t renderableIndex : sceneGpu.batchRenderableIndices[batchIndex]) {
                             // The BLAS contains source vertices. Displaced
@@ -1687,7 +1683,7 @@
                             input.meshKey = {batch.mesh, batch.firstIndex, batch.indexCount};
                             const GPUSceneInstanceId instanceId = renderables[renderableIndex].renderProxy.instance;
                             assert(instanceId < (1U << 24U));
-                            input.mask = 0x02 | (batch.castShadow ? 0x01 : 0x00);
+                            input.mask = 0x01;
                             input.customIndex = instanceId;
                             for (std::uint32_t row = 0; row < 3; ++row)
                                 for (std::uint32_t column = 0; column < 4; ++column)
@@ -1705,345 +1701,7 @@
                     rtTlasUpdatePending[currentFrame] = false;
                     gpuTimestampProfiler.endZone(commandBuffer, currentFrame);
                 }
-                if (accelerationStructures.built(currentFrame)) {
-                    const auto cameraPosition = renderSceneViewport
-                        ? cameraController.editorPosition().native()
-                        : cameraController.camera()->position().native();
-                    const std::array<float, 3> giCenter{
-                        cameraPosition.x, cameraPosition.y, cameraPosition.z};
-                    bool giGeometryChanged = false;
-                    for (const Entity entity : TransformSystem::changedWorldTransforms(registry)) {
-                        if (registry.has<MeshRendererComponent>(entity) ||
-                            registry.has<LightComponent>(entity)) {
-                            giGeometryChanged = true;
-                            break;
-                        }
-                    }
-                    // Preparation consumes the graphics-built TLAS. The remaining
-                    // DDGI stages can run on async compute after the TLAS submission.
-                    if (ddgiEnabled) {
-                        ddgi.recordPreparation(commandBuffer, currentFrame,
-                            static_cast<std::uint32_t>(submittedFrameValue),
-                            shadowPass.descriptorSet(currentFrame), accelerationStructures.tlas(currentFrame),
-                            gpuSceneInstanceBuffers[currentFrame].handle(),
-                            gpuSceneMeshBuffers[currentFrame].handle(),
-                            gpuSceneMaterialBuffers[currentFrame].handle(),
-                            vertexBuffer.handle(), indexBuffer.handle(), giCenter,
-                            {registry.componentRevision<LightComponent>(),
-                             registry.renderTopologyRevision(),
-                             registry.componentRevision<MeshRendererComponent>(),
-                             registry.componentRevision<Transform>()},
-                            giGeometryChanged);
-                        if (vulkanDevice.hasAsyncComputeQueue() && ddgi.prepared()) {
-                            if (vkEndCommandBuffer(commandBuffer) != VK_SUCCESS)
-                                throw std::runtime_error("Could not end graphics commands before DDGI async updates");
-                            const std::uint64_t ddgiGraphicsValue = ++renderGraphTimelineValue;
-                            const VkSemaphoreSubmitInfo ddgiGraphicsSignal{
-                                .sType = VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO,
-                                .semaphore = renderGraphTimeline,
-                                .value = ddgiGraphicsValue,
-                                .stageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT};
-                            const std::uint64_t ddgiUploadValue = uploadContext.lastSubmittedValue();
-                            const VkSemaphoreSubmitInfo ddgiUploadWait{
-                                .sType = VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO,
-                                .semaphore = uploadContext.timeline(),
-                                .value = ddgiUploadValue,
-                                .stageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT};
-                            const VkCommandBufferSubmitInfo ddgiGraphicsCommand{
-                                .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_SUBMIT_INFO,
-                                .commandBuffer = commandBuffer};
-                            const VkSubmitInfo2 ddgiGraphicsSubmit{
-                                .sType = VK_STRUCTURE_TYPE_SUBMIT_INFO_2,
-                                .waitSemaphoreInfoCount = ddgiUploadValue != 0 ? 1U : 0U,
-                                .pWaitSemaphoreInfos = ddgiUploadValue != 0 ? &ddgiUploadWait : nullptr,
-                                .commandBufferInfoCount = 1,
-                                .pCommandBufferInfos = &ddgiGraphicsCommand,
-                                .signalSemaphoreInfoCount = 1,
-                                .pSignalSemaphoreInfos = &ddgiGraphicsSignal};
-                            if (vkQueueSubmit2(vulkanDevice.graphicsQueue(), 1, &ddgiGraphicsSubmit,
-                                               VK_NULL_HANDLE) != VK_SUCCESS)
-                                throw std::runtime_error("Could not submit graphics commands before DDGI async updates");
-
-                            ddgiFrameGraph.reset();
-                            ddgiFrameGraph.enablePassCulling();
-                            ddgiFrameGraph.setQueueFamily(RenderGraph::Queue::Graphics,
-                                vulkanDevice.graphicsQueueFamily());
-                            ddgiFrameGraph.setQueueFamily(RenderGraph::Queue::AsyncCompute,
-                                vulkanDevice.computeQueueFamily());
-                            const bool sharedDdgiImages = vulkanDevice.computeQueueFamily() !=
-                                vulkanDevice.graphicsQueueFamily();
-                            struct DdgiGraphCascade final {
-                                RenderGraph::TextureHandle rayData;
-                                RenderGraph::TextureHandle fixedRayData;
-                                RenderGraph::TextureHandle irradiance;
-                                RenderGraph::TextureHandle distance;
-                                RenderGraph::TextureHandle probeData;
-                                RenderGraph::TextureHandle publishedIrradiance;
-                                RenderGraph::TextureHandle publishedDistance;
-                                RenderGraph::TextureHandle publishedProbeData;
-                                RenderGraph::BufferHandle probeStates;
-                                RenderGraph::BufferHandle updateList;
-                                RenderGraph::BufferHandle rayDirections;
-                                RenderGraph::BufferHandle dispatchCommands;
-                            };
-                            std::array<DdgiGraphCascade, 3> ddgiResources{};
-                            const auto importDdgiImage = [&](const char* name, const HdrBuffer& image,
-                                                              const VkExtent2D extent, const VkFormat format) {
-                                const RenderGraph::TextureDesc desc{
-                                    .extent = {extent.width, extent.height, 1}, .format = format,
-                                    .usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT |
-                                             VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT |
-                                             VK_IMAGE_USAGE_TRANSFER_DST_BIT,
-                                    .aspect = VK_IMAGE_ASPECT_COLOR_BIT,
-                                    .concurrentSharing = sharedDdgiImages};
-                                return ddgiFrameGraph.importTexture(name, image.image(), desc,
-                                    {.stage = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-                                     .access = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT,
-                                     .layout = VK_IMAGE_LAYOUT_GENERAL, .write = true});
-                            };
-                            const auto importDdgiBuffer = [&](const char* name, const Buffer& buffer) {
-                                return ddgiFrameGraph.importBuffer(name, buffer.handle(),
-                                    {.size = buffer.size(), .usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT});
-                            };
-                            const auto importPublishedImage = [&](const char* name, const HdrBuffer& image,
-                                                                  const VkExtent2D extent, const VkFormat format,
-                                                                  const bool initialized) {
-                                const RenderGraph::TextureDesc desc{
-                                    .extent = {extent.width, extent.height, 1}, .format = format,
-                                    .usage = VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT,
-                                    .aspect = VK_IMAGE_ASPECT_COLOR_BIT,
-                                    .concurrentSharing = sharedDdgiImages};
-                                return ddgiFrameGraph.importTexture(name, image.image(), desc,
-                                    {.stage = initialized ? VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT
-                                                          : VK_PIPELINE_STAGE_2_NONE,
-                                     .access = initialized ? VK_ACCESS_2_SHADER_SAMPLED_READ_BIT : 0,
-                                     .layout = initialized ? VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL
-                                                           : VK_IMAGE_LAYOUT_UNDEFINED,
-                                     .write = false});
-                            };
-                            for (std::uint32_t cascade = 0; cascade < 3; ++cascade) {
-                                const auto& resources = ddgi.resources().cascades[cascade];
-                                const auto& frame = resources.history;
-                                auto& handles = ddgiResources[cascade];
-                                handles.rayData = importDdgiImage("DDGI ray data", frame.rayData,
-                                    {256, 256}, VK_FORMAT_R16G16B16A16_SFLOAT);
-                                handles.fixedRayData = importDdgiImage("DDGI fixed ray data", frame.fixedRayData,
-                                    {32, 256}, VK_FORMAT_R16G16B16A16_SFLOAT);
-                                handles.irradiance = importDdgiImage("DDGI irradiance", frame.irradiance,
-                                    {128, 1024}, VK_FORMAT_R16G16B16A16_SFLOAT);
-                                handles.distance = importDdgiImage("DDGI distance", frame.distance,
-                                    {256, 2048}, VK_FORMAT_R16G16_SFLOAT);
-                                handles.probeData = importDdgiImage("DDGI probe data", frame.probeData,
-                                    {16, 128}, VK_FORMAT_R16G16B16A16_SFLOAT);
-                                const bool published = ddgi.publicationInitialized(cascade);
-                                handles.publishedIrradiance = importPublishedImage("DDGI published irradiance",
-                                    resources.publishedIrradiance, {128, 1024},
-                                    VK_FORMAT_R16G16B16A16_SFLOAT, published);
-                                handles.publishedDistance = importPublishedImage("DDGI published distance",
-                                    resources.publishedDistance, {256, 2048}, VK_FORMAT_R16G16_SFLOAT, published);
-                                handles.publishedProbeData = importPublishedImage("DDGI published probe data",
-                                    resources.publishedProbeData, {16, 128},
-                                    VK_FORMAT_R16G16B16A16_SFLOAT, published);
-                                handles.probeStates = importDdgiBuffer("DDGI probe states", frame.probeStates);
-                                handles.updateList = importDdgiBuffer("DDGI update list", frame.updateList);
-                                handles.rayDirections = importDdgiBuffer("DDGI ray directions",
-                                    resources.rayDirections[currentFrame]);
-                                handles.dispatchCommands = ddgiFrameGraph.importBuffer("DDGI dispatch commands",
-                                    resources.dispatchCommands.handle(),
-                                    {.size = resources.dispatchCommands.size(),
-                                     .usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
-                                              VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT});
-                            }
-                            ddgiFrameGraph.addPass("DDGI Relocation", RenderGraph::Queue::AsyncCompute,
-                            [&](RenderGraph::PassBuilder& builder) {
-                                for (const auto& resource : ddgiResources) {
-                                    builder.read(resource.fixedRayData, RenderGraph::TextureUsage::StorageReadCompute);
-                                    builder.write(resource.probeData, RenderGraph::TextureUsage::StorageWriteCompute);
-                                    builder.write(resource.probeStates, RenderGraph::BufferUsage::StorageWriteCompute);
-                                    builder.write(resource.updateList, RenderGraph::BufferUsage::StorageWriteCompute);
-                                    builder.read(resource.dispatchCommands, RenderGraph::BufferUsage::IndirectRead);
-                                }
-                            }, [&](const VkCommandBuffer buffer) { ddgi.recordRelocation(buffer); });
-                            ddgiFrameGraph.addPass("DDGI Classification", RenderGraph::Queue::AsyncCompute,
-                            [&](RenderGraph::PassBuilder& builder) {
-                                for (const auto& resource : ddgiResources) {
-                                    builder.read(resource.fixedRayData, RenderGraph::TextureUsage::StorageReadCompute);
-                                    builder.read(resource.probeData, RenderGraph::TextureUsage::StorageReadCompute);
-                                    builder.read(resource.updateList, RenderGraph::BufferUsage::StorageReadCompute);
-                                    builder.read(resource.dispatchCommands, RenderGraph::BufferUsage::IndirectRead);
-                                    builder.write(resource.probeStates, RenderGraph::BufferUsage::StorageWriteCompute);
-                                }
-                            }, [&](const VkCommandBuffer buffer) { ddgi.recordClassification(buffer); });
-                            ddgiFrameGraph.addPass("DDGI Trace", RenderGraph::Queue::AsyncCompute,
-                            [&](RenderGraph::PassBuilder& builder) {
-                                for (const auto& resource : ddgiResources) {
-                                    builder.read(resource.probeData, RenderGraph::TextureUsage::StorageReadCompute);
-                                    builder.read(resource.irradiance, RenderGraph::TextureUsage::StorageReadCompute);
-                                    builder.read(resource.distance, RenderGraph::TextureUsage::StorageReadCompute);
-                                    builder.read(resource.probeStates, RenderGraph::BufferUsage::StorageReadCompute);
-                                    builder.read(resource.updateList, RenderGraph::BufferUsage::StorageReadCompute);
-                                    builder.read(resource.rayDirections, RenderGraph::BufferUsage::StorageReadCompute);
-                                    builder.read(resource.dispatchCommands, RenderGraph::BufferUsage::IndirectRead);
-                                    builder.write(resource.rayData, RenderGraph::TextureUsage::StorageWriteCompute);
-                                }
-                            }, [&](const VkCommandBuffer buffer) { ddgi.recordTrace(buffer); });
-                            ddgiFrameGraph.addPass("DDGI Irradiance Update", RenderGraph::Queue::AsyncCompute,
-                            [&](RenderGraph::PassBuilder& builder) {
-                                for (const auto& resource : ddgiResources) {
-                                    builder.read(resource.rayData, RenderGraph::TextureUsage::StorageReadCompute);
-                                    builder.read(resource.probeData, RenderGraph::TextureUsage::StorageReadCompute);
-                                    builder.read(resource.updateList, RenderGraph::BufferUsage::StorageReadCompute);
-                                    builder.read(resource.rayDirections, RenderGraph::BufferUsage::StorageReadCompute);
-                                    builder.read(resource.dispatchCommands, RenderGraph::BufferUsage::IndirectRead);
-                                    builder.write(resource.irradiance, RenderGraph::TextureUsage::StorageWriteCompute);
-                                    builder.write(resource.probeStates, RenderGraph::BufferUsage::StorageWriteCompute);
-                                }
-                            }, [&](const VkCommandBuffer buffer) { ddgi.recordIrradianceUpdate(buffer); });
-                            ddgiFrameGraph.addPass("DDGI Distance Update", RenderGraph::Queue::AsyncCompute,
-                            [&](RenderGraph::PassBuilder& builder) {
-                                for (const auto& resource : ddgiResources) {
-                                    builder.read(resource.rayData, RenderGraph::TextureUsage::StorageReadCompute);
-                                    builder.read(resource.probeData, RenderGraph::TextureUsage::StorageReadCompute);
-                                    builder.read(resource.updateList, RenderGraph::BufferUsage::StorageReadCompute);
-                                    builder.read(resource.rayDirections, RenderGraph::BufferUsage::StorageReadCompute);
-                                    builder.read(resource.dispatchCommands, RenderGraph::BufferUsage::IndirectRead);
-                                    builder.write(resource.distance, RenderGraph::TextureUsage::StorageWriteCompute);
-                                }
-                            }, [&](const VkCommandBuffer buffer) { ddgi.recordDistanceUpdate(buffer); });
-                            if (rtContactRequested) {
-                                ddgiFrameGraph.addPass("RT Contact Shadows", RenderGraph::Queue::Graphics,
-                                [&](RenderGraph::PassBuilder& builder) { builder.setSideEffect(); },
-                                [&](const VkCommandBuffer buffer) {
-                                    gpuTimestampProfiler.beginZone(buffer, currentFrame, rtContactProfileName);
-                                    rtContactShadowPass.record(buffer, currentFrame,
-                                        accelerationStructures.tlas(currentFrame), depthBuffer.imageView(),
-                                        depthBuffer.sampler(), gtaoViewNormalBuffer.imageView(),
-                                        gtaoViewNormalBuffer.sampler(),
-                                        directionalVisibilityPass.resultView(currentFrame),
-                                        directionalVisibilityPass.resultSampler(currentFrame), rtContactShadowSettings);
-                                    gpuTimestampProfiler.endZone(buffer, currentFrame);
-                                    const float rtContactEnabled = 1.0F;
-                                    uniformBuffers[currentFrame].update(&rtContactEnabled, sizeof(rtContactEnabled),
-                                        offsetof(UniformBufferObject, clusterZScaleBiasEnvironmentMipRtContact) +
-                                        sizeof(float) * 3);
-                                    rtContactActive = true;
-                                });
-                                rtContactRecordedInDdgiGraph = true;
-                            }
-                            ddgiFrameGraph.addPass("DDGI Finish", RenderGraph::Queue::AsyncCompute,
-                            [&](RenderGraph::PassBuilder& builder) {
-                                for (const auto& resource : ddgiResources) {
-                                    builder.read(resource.probeStates, RenderGraph::BufferUsage::StorageReadCompute);
-                                    builder.read(resource.updateList, RenderGraph::BufferUsage::StorageReadCompute);
-                                    builder.read(resource.dispatchCommands, RenderGraph::BufferUsage::IndirectRead);
-                                    builder.write(resource.probeData, RenderGraph::TextureUsage::StorageWriteCompute);
-                                    for (const auto image : {resource.irradiance, resource.distance,
-                                                             resource.probeData})
-                                        builder.setFinalTextureState(image, {
-                                            .stage = VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT,
-                                            .access = VK_ACCESS_2_SHADER_SAMPLED_READ_BIT,
-                                            .layout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-                                            .write = false});
-                                }
-                            }, [&](const VkCommandBuffer buffer) { ddgi.recordFinish(buffer, false); });
-                            ddgiFrameGraph.addPass("DDGI Publish", RenderGraph::Queue::AsyncCompute,
-                            [&](RenderGraph::PassBuilder& builder) {
-                                builder.setSideEffect();
-                                for (std::uint32_t cascade = 0; cascade < 3; ++cascade) {
-                                    const auto& resource = ddgiResources[cascade];
-                                    const std::array sources{resource.irradiance, resource.distance,
-                                                             resource.probeData};
-                                    const std::array targets{resource.publishedIrradiance,
-                                                             resource.publishedDistance,
-                                                             resource.publishedProbeData};
-                                    for (std::size_t image = 0; image < sources.size(); ++image) {
-                                        builder.read(sources[image], RenderGraph::TextureUsage::TransferRead);
-                                        builder.write(targets[image], RenderGraph::TextureUsage::TransferWrite);
-                                        builder.setFinalTextureState(sources[image], {
-                                            .stage = VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT,
-                                            .access = VK_ACCESS_2_SHADER_SAMPLED_READ_BIT,
-                                            .layout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-                                            .write = false});
-                                        builder.setFinalTextureState(targets[image], {
-                                            .stage = VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT,
-                                            .access = VK_ACCESS_2_SHADER_SAMPLED_READ_BIT,
-                                            .layout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-                                            .write = false});
-                                    }
-                                }
-                            }, [&](const VkCommandBuffer buffer) { ddgi.recordPublish(buffer, false); });
-                            ddgiFrameGraph.addPass("DDGI Lighting Inputs", RenderGraph::Queue::Graphics,
-                            [&](RenderGraph::PassBuilder& builder) {
-                                builder.startNewBatch();
-                                for (const auto& resource : ddgiResources) {
-                                    builder.read(resource.publishedIrradiance,
-                                        RenderGraph::TextureUsage::SampledReadFragment);
-                                    builder.read(resource.publishedDistance,
-                                        RenderGraph::TextureUsage::SampledReadFragment);
-                                    builder.read(resource.publishedProbeData,
-                                        RenderGraph::TextureUsage::SampledReadFragment);
-                                }
-                                builder.setSideEffect();
-                            }, {});
-                            ddgiFrameGraph.compile();
-                            profileRenderGraph(ddgiFrameGraph, true);
-                            RenderGraph::SubmissionContext ddgiContext{};
-                            ddgiContext.queues[0] = vulkanDevice.graphicsQueue();
-                            ddgiContext.queues[1] = vulkanDevice.computeQueue();
-                            ddgiContext.queues[2] = vulkanDevice.hasAsyncTransferQueue()
-                                ? vulkanDevice.transferQueue() : vulkanDevice.graphicsQueue();
-                            ddgiContext.commandBuffers = prepareGraphCommandBuffers(
-                                ddgiFrameGraph, currentFrame, ddgiGraphCommandBuffers);
-                            ddgiContext.queueTimelines[0] = renderGraphTimeline;
-                            ddgiContext.queueTimelines[1] = renderGraphComputeTimeline;
-                            ddgiContext.queueTimelines[2] = renderGraphTransferTimeline;
-                            ddgiContext.nextQueueTimelineValues[0] = &renderGraphTimelineValue;
-                            ddgiContext.nextQueueTimelineValues[1] = &renderGraphComputeTimelineValue;
-                            ddgiContext.nextQueueTimelineValues[2] = &renderGraphTransferTimelineValue;
-                            ddgiContext.uploadTimeline = uploadContext.timeline();
-                            const auto& ddgiBatches = ddgiFrameGraph.queueBatches();
-                            for (std::uint32_t batch = 0; batch < ddgiBatches.size(); ++batch) {
-                                if (ddgiBatches[batch].queue == RenderGraph::Queue::AsyncCompute) {
-                                    ddgiContext.externalWaits.push_back({
-                                        .semaphore = renderGraphTimeline, .value = ddgiGraphicsValue,
-                                        .stage = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, .batch = batch});
-                                    break;
-                                }
-                            }
-                            ddgiFrameGraph.recordAndSubmit(ddgiContext);
-                            commandBuffer = postDdgiGraphicsCommandBuffers.at(currentFrame);
-                            const VkCommandBufferBeginInfo postDdgiBegin{
-                                .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
-                            if (vkBeginCommandBuffer(commandBuffer, &postDdgiBegin) != VK_SUCCESS)
-                                throw std::runtime_error("Could not begin graphics commands after DDGI async updates");
-                        } else {
-                            ddgi.recordRelocation(commandBuffer);
-                            ddgi.recordClassification(commandBuffer);
-                            ddgi.recordTrace(commandBuffer);
-                            ddgi.recordIrradianceUpdate(commandBuffer);
-                            ddgi.recordDistanceUpdate(commandBuffer);
-                            ddgi.recordFinish(commandBuffer, false);
-                            ddgi.recordPublish(commandBuffer);
-                        }
-                    }
-                    if (ddgi.ready()) {
-                        std::array<glm::vec4, 3> origins{};
-                        std::array<glm::ivec4, 3> offsets{};
-                        for (std::uint32_t cascade = 0; cascade < 3; ++cascade) {
-                            const auto& volume = ddgi.volume(cascade);
-                            origins[cascade] = {volume.origin[0], volume.origin[1],
-                                                volume.origin[2], volume.probeSpacing};
-                            offsets[cascade] = {volume.scrollOffset[0], volume.scrollOffset[1],
-                                                volume.scrollOffset[2], 0};
-                        }
-                        uniformBuffers[currentFrame].update(origins.data(), sizeof(origins),
-                            offsetof(UniformBufferObject, ddgiOriginSpacing));
-                        uniformBuffers[currentFrame].update(offsets.data(), sizeof(offsets),
-                            offsetof(UniformBufferObject, ddgiScrollOffsets));
-                    }
-                }
-                if (rtContactRequested && accelerationStructures.built(currentFrame) &&
-                    !rtContactRecordedInDdgiGraph) {
+                if (rtContactRequested && accelerationStructures.built(currentFrame)) {
                     gpuTimestampProfiler.beginZone(commandBuffer, currentFrame, rtContactProfileName);
                     rtContactShadowPass.record(commandBuffer, currentFrame, accelerationStructures.tlas(currentFrame),
                         depthBuffer.imageView(), depthBuffer.sampler(), gtaoViewNormalBuffer.imageView(),
@@ -2850,7 +2508,6 @@
             lightingForwardPass.destroy();
             waterPass.destroy();
             directionalVisibilityPass.destroy();
-            ddgi.destroy();
             shadowPass.destroy();
             sceneDescriptorPass.destroy();
             destroyCullingResources();
@@ -3169,7 +2826,6 @@
 
             vkResetCommandBuffer(commandBuffers[currentFrame], 0);
             vkResetCommandBuffer(postViewportGraphicsCommandBuffers[currentFrame], 0);
-            vkResetCommandBuffer(postDdgiGraphicsCommandBuffers[currentFrame], 0);
             presentationGraphSubmittedThisFrame = false;
             {
                 GE_PROFILE_SCOPE("Refresh Scene Data");

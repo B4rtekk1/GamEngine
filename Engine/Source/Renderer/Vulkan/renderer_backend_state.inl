@@ -76,7 +76,6 @@
         RtContactShadowPass rtContactShadowPass;
         DirectionalVisibilityPass directionalVisibilityPass;
         AccelerationStructureManager accelerationStructures;
-        DDGISystem ddgi;
         BrixelizerSystem brixelizer;
         BrixelizerSystem::DebugView brixelizerDebugView{BrixelizerSystem::DebugView::Off};
         bool rayTracingBlasDirty{true};
@@ -97,7 +96,6 @@
         RenderGraph::RenderGraph frameGraph;
         // Incrementally migrated callbacks for the Game View raster path.
         RenderGraph::RenderGraph viewportFrameGraph;
-        RenderGraph::RenderGraph ddgiFrameGraph;
         // Early compute is submitted in the same command buffer for now, but
         // owns a separate graph so it can migrate independently of the
         // depth/Hi-Z graph below.
@@ -200,7 +198,6 @@
         GtaoQuality configuredGtaoQuality;
         const GtaoDebugView& gtaoDebugView;
         const PbrDebugView& pbrDebugView;
-        const bool& ddgiEnabled;
         const IblQuality& iblQuality;
         const ShadowDebugView& shadowDebugView;
         const GrassRenderSettings& grassSettings;
@@ -636,13 +633,11 @@
         UploadContext uploadContext;
         std::vector<VkCommandBuffer> commandBuffers;
         std::vector<VkCommandBuffer> postViewportGraphicsCommandBuffers;
-        std::vector<VkCommandBuffer> postDdgiGraphicsCommandBuffers;
         struct GraphCommandBuffer {
             RenderGraph::Queue queue{};
             VkCommandBuffer buffer{};
         };
         std::array<std::vector<GraphCommandBuffer>, MAX_FRAMES_IN_FLIGHT> renderGraphCommandBuffers;
-        std::array<std::vector<GraphCommandBuffer>, MAX_FRAMES_IN_FLIGHT> ddgiGraphCommandBuffers;
         std::array<std::vector<GraphCommandBuffer>, MAX_FRAMES_IN_FLIGHT> presentationGraphCommandBuffers;
         VkSemaphore renderGraphTimeline{};
         std::uint64_t renderGraphTimelineValue{};

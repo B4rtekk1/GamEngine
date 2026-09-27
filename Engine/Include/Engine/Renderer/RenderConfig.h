@@ -74,14 +74,6 @@ namespace Engine {
         NoDirectSpecular,
         NoGtao,
         GeometricDirectDiffuse,
-        DdgiIrradiance,
-        DdgiBlendWeight,
-        DdgiVisibility,
-        DdgiProbeCount,
-        DdgiCascade,
-        DdgiVsSky,
-        DdgiPreVisibilityWeight,
-        DdgiPostVisibilityWeight,
     };
 
     /** Tunables are deliberately data, so automated GPU benchmarks can sweep them. */
@@ -167,7 +159,6 @@ namespace Engine {
         GtaoQuality gtaoQuality = GtaoQuality::High;
         GtaoDebugView gtaoDebugView = GtaoDebugView::Off;
         PbrDebugView pbrDebugView = PbrDebugView::FinalLighting;
-        bool ddgiEnabled = false;
         IblQuality iblQuality = IblQuality::High;
         ShadowDebugView shadowDebugView = ShadowDebugView::Off;
     };
