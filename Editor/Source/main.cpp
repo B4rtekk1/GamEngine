@@ -365,8 +365,10 @@ int main(int argc, char** argv) {
             Engine::ShaderNodeType::SurfaceOutput, 1, shaderGraphPinId));
         shaderGraphPanel->open(shaderGraph);
 
-        Engine::ScenePreset scene;
         Engine::ScriptModuleManager scriptModules{Engine::ScriptRegistry::instance()};
+        // Scene components can call into GameScripts.dll while being destroyed.
+        // Destroy the scene before unloading the module during exception unwinding.
+        Engine::ScenePreset scene;
         std::optional<Editor::ScriptHotReload> scriptHotReload;
         std::optional<Editor::ShaderHotReload> shaderHotReload;
         std::future<Editor::GameBuildResult> gameBuild;

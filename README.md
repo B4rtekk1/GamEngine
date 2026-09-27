@@ -4,7 +4,6 @@ GamEngine is an experimental 3D game engine written in **C++23**, built around *
 
 It includes an integrated editor, native C++ gameplay scripting, asset cooking, standalone game builds, and a renderer designed around GPU-side visibility and scene processing.
 
-> GamEngine is under active development. APIs, project formats, rendering systems, and editor workflows may change.
 
 ## Quick Start
 
@@ -31,8 +30,6 @@ git clone --recurse-submodules https://github.com/B4rtekk1/GamEngine.git
 cd GamEngine
 ```
 
-For an existing checkout, run `git submodule update --init --recursive` to fetch the pinned FidelityFX SDK 1.1.4 dependency.
-
 ### Build the Editor
 
 Development build:
@@ -40,18 +37,6 @@ Development build:
 ```bash
 cmake --preset dev
 cmake --build --preset dev
-```
-
-The default project is:
-
-```text
-MyGame/
-```
-
-A development build of the editor is typically located under:
-
-```text
-out/build/dev/Editor/Debug/
 ```
 
 Run:
@@ -67,11 +52,6 @@ cmake --preset release
 cmake --build --preset release
 ```
 
-Release artifacts are generated under:
-
-```text
-out/build/release/
-```
 
 ## Projects
 
@@ -195,16 +175,6 @@ Currently implemented systems include:
 * Slang shader pipeline
 * Shader Graph
 
-### Brixelizer SDF debug
-
-The first Brixelizer integration stage registers opaque, undisplaced scene meshes, updates six static SDF cascades, and displays the SDK debug output. Set `GAMEENGINE_BRIXELIZER_DEBUG` to `brick`, `cascade`, `distance`, or `gradient` before launching the editor. For example, in PowerShell:
-
-```powershell
-$env:GAMEENGINE_BRIXELIZER_DEBUG = 'brick'
-```
-
-The SDF debug view replaces the Game View HDR image for inspection. This stage does not feed GI into PBR; moving meshes are registered as static snapshots until dynamic instance support is added.
-
 ## Engine Systems
 
 The runtime currently provides:
@@ -218,15 +188,6 @@ The runtime currently provides:
 * Native C++ gameplay scripting
 * Script hot reload
 * CPU and GPU profiling
-
-
-## Development Status
-
-GamEngine is currently an experimental engine rather than a stable production SDK.
-
-The renderer, editor, asset pipeline, scripting API and project format are still evolving. Breaking changes should be expected between revisions.
-
-The primary supported platform is currently **Windows x64**.
 
 ## Contributing
 

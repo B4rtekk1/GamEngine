@@ -21,10 +21,22 @@
 #include <utility>
 #include <vector>
 
+float samplerBlueNoiseErrorDistribution_128x128_OptimizedFor_2d2d2d2d_16spp(
+    int pixel_i, int pixel_j, int sampleIndex, int sampleDimension);
+
 namespace Engine {
 namespace {
     constexpr float FinestCascadeVoxelSize = 0.2F;
     constexpr float SdfCenterSnap = 4.0F * FinestCascadeVoxelSize;
+    constexpr std::uint32_t GiNoiseSize = 128;
+    constexpr std::uint32_t GiNoiseFrames = 16;
+
+    PFN_vkVoidFunction VKAPI_PTR getFfxDeviceProcAddr(const VkDevice device, const char* name) {
+        if (const auto proc = vkGetDeviceProcAddr(device, name)) return proc;
+        if (std::strcmp(name, "vkGetBufferMemoryRequirements2KHR") == 0)
+            return vkGetDeviceProcAddr(device, "vkGetBufferMemoryRequirements2");
+        return nullptr;
+    }
 
     void check(const FfxErrorCode result, const char* operation) {
         if (result != FFX_OK) throw std::runtime_error(std::string("Brixelizer: ") + operation);
@@ -72,6 +84,7 @@ struct BrixelizerSystem::Impl final {
     VkDevice device{VK_NULL_HANDLE};
     VmaAllocator allocator{VK_NULL_HANDLE};
     VkExtent2D size{};
+    bool limitedGpuMemory{};
     BrixelizerResources resources;
     HdrBuffer debug;
     std::vector<std::byte> backendScratch;
@@ -100,7 +113,8 @@ struct BrixelizerSystem::Impl final {
     bool giHistoryValid{};
     glm::mat4 giPreviousView{1.0F};
     glm::mat4 giPreviousProjection{1.0F};
-    Texture2D giNoise;
+    std::array<Texture2D, GiNoiseFrames> giNoise;
+    std::uint32_t giNoiseFrame{};
     VkDescriptorSetLayout giPrepareLayout{VK_NULL_HANDLE};
     VkDescriptorPool giPreparePool{VK_NULL_HANDLE};
     VkPipelineLayout giPreparePipelineLayout{VK_NULL_HANDLE};
@@ -148,7 +162,8 @@ struct BrixelizerSystem::Impl final {
         giSlotInitialized.clear();
         giOutputInitialized.clear();
         giHistoryValid = false;
-        giNoise.destroy();
+        for (auto& noise : giNoise) noise.destroy();
+        giNoiseFrame = 0;
         if (context) {
             // Context teardown releases registrations and all SDK-owned resources.
             ffxBrixelizerContextDestroy(context.get());
@@ -174,6 +189,7 @@ struct BrixelizerSystem::Impl final {
         device = VK_NULL_HANDLE;
         allocator = VK_NULL_HANDLE;
         size = {};
+        limitedGpuMemory = false;
         atlasInitialized = false;
         debugInitialized = false;
     }
@@ -195,11 +211,24 @@ void BrixelizerSystem::create(const VkPhysicalDevice physicalDevice, const VkDev
     state.device = device;
     state.allocator = allocator;
     state.size = extent;
+    VkPhysicalDeviceMemoryProperties memoryProperties{};
+    vkGetPhysicalDeviceMemoryProperties(physicalDevice, &memoryProperties);
+    constexpr VkDeviceSize GiB = VkDeviceSize{1} << 30U;
+    for (std::uint32_t heap = 0; heap < memoryProperties.memoryHeapCount; ++heap) {
+        const auto& memoryHeap = memoryProperties.memoryHeaps[heap];
+        if ((memoryHeap.flags & VK_MEMORY_HEAP_DEVICE_LOCAL_BIT) != 0U &&
+            memoryHeap.size <= 6U * GiB) {
+            state.limitedGpuMemory = true;
+            break;
+        }
+    }
     state.resources.scratch.resize(framesInFlight);
     try {
+        if (!getFfxDeviceProcAddr(device, "vkGetBufferMemoryRequirements2KHR"))
+            throw std::runtime_error("Brixelizer requires vkGetBufferMemoryRequirements2");
         constexpr size_t maxContexts = 2;
         state.backendScratch.resize(ffxGetScratchMemorySizeVK(physicalDevice, maxContexts));
-        VkDeviceContext deviceContext{device, physicalDevice, vkGetDeviceProcAddr};
+        VkDeviceContext deviceContext{device, physicalDevice, getFfxDeviceProcAddr};
         check(ffxGetInterfaceVK(&state.backend, ffxGetDeviceVK(&deviceContext),
               state.backendScratch.data(), state.backendScratch.size(), maxContexts),
               "initialize Vulkan backend");
@@ -273,16 +302,24 @@ void BrixelizerSystem::create(const VkPhysicalDevice physicalDevice, const VkDev
             state.giSpecular[i].create(physicalDevice, device, extent, allocator, VK_FILTER_LINEAR,
                                        HdrBuffer::Format, true);
         }
-        std::array<std::uint8_t, 64 * 64 * 4> noise{};
-        std::uint32_t seed = 0x1234abceu;
-        for (std::uint8_t& byte : noise) {
-            seed ^= seed << 13U;
-            seed ^= seed >> 17U;
-            seed ^= seed << 5U;
-            byte = static_cast<std::uint8_t>(seed);
+        std::array<std::uint8_t, GiNoiseSize * GiNoiseSize * 4> noise{};
+        for (std::uint32_t frame = 0; frame < GiNoiseFrames; ++frame) {
+            for (std::uint32_t y = 0; y < GiNoiseSize; ++y) {
+                for (std::uint32_t x = 0; x < GiNoiseSize; ++x) {
+                    const auto offset = (y * GiNoiseSize + x) * 4;
+                    for (int dimension = 0; dimension < 2; ++dimension) {
+                        const float sample = samplerBlueNoiseErrorDistribution_128x128_OptimizedFor_2d2d2d2d_16spp(
+                            static_cast<int>(x), static_cast<int>(y), static_cast<int>(frame), dimension);
+                        noise[offset + dimension] = static_cast<std::uint8_t>(sample * 256.0F);
+                    }
+                    noise[offset + 2] = 0;
+                    noise[offset + 3] = 255;
+                }
+            }
+            state.giNoise[frame].create(physicalDevice, device, commandPool, queue,
+                                        GiNoiseSize, GiNoiseSize, noise,
+                                        TextureColorSpace::Linear, false, allocator);
         }
-        state.giNoise.create(physicalDevice, device, commandPool, queue, 64, 64, noise,
-                             TextureColorSpace::Linear, false, allocator);
         const std::array<VkDescriptorSetLayoutBinding, 4> giBindings{{
             {0, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
             {1, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
@@ -473,9 +510,11 @@ void BrixelizerSystem::update(const VkCommandBuffer commandBuffer, const float c
     // The SDK snaps each cascade to voxels; this coarser grid reduces SDF scrolling.
     for (std::size_t axis = 0; axis < 3; ++axis)
         update.sdfCenter[axis] = std::floor(cameraPosition[axis] / SdfCenterSnap) * SdfCenterSnap;
-    update.maxReferences = 32U << 20U;
-    update.triangleSwapSize = 300U << 20U;
-    update.maxBricksPerBake = 1U << 14U;
+    // The SDK sample's scratch settings need roughly 851 MiB per frame slot.
+    // Keep a smaller working set on devices with limited local memory.
+    update.maxReferences = state.limitedGpuMemory ? 4U << 20U : 32U << 20U;
+    update.triangleSwapSize = state.limitedGpuMemory ? 64U << 20U : 300U << 20U;
+    update.maxBricksPerBake = state.limitedGpuMemory ? 1U << 12U : 1U << 14U;
     update.resources.sdfAtlas = imageResource(state.resources.sdfAtlas, VK_IMAGE_TYPE_3D,
         VK_FORMAT_R8_UNORM, {512, 512, 512}, L"Brixelizer SDF", FFX_RESOURCE_STATE_UNORDERED_ACCESS);
     update.resources.brickAABBs = bufferResource(state.resources.brickAabbs.handle(),
@@ -677,7 +716,8 @@ void BrixelizerSystem::dispatchGI(const VkCommandBuffer commandBuffer,
     gi.roughnessChannel = 3;
     gi.roughnessThreshold = 0.9F;
     gi.environmentMapIntensity = 1.0F;
-    gi.motionVectorScale = {1.0F, 1.0F};
+    // Engine velocity is current UV minus previous UV; GI adds it to current UV.
+    gi.motionVectorScale = {-1.0F, -1.0F};
     const auto sampled2D = [&](const VkImage image, const VkFormat format,
                                const wchar_t* name) {
         return imageResource(image, VK_IMAGE_TYPE_2D, format, extent, name, FFX_RESOURCE_STATE_COMPUTE_READ);
@@ -696,8 +736,9 @@ void BrixelizerSystem::dispatchGI(const VkCommandBuffer commandBuffer,
                                  L"GI history normals");
     gi.roughness = gi.normal;
     gi.motionVectors = sampled2D(velocity, VK_FORMAT_R16G16_SFLOAT, L"GI motion vectors");
-    gi.noiseTexture = imageResource(state.giNoise.image(), VK_IMAGE_TYPE_2D,
-        VK_FORMAT_R8G8B8A8_UNORM, {64, 64, 1}, L"GI noise", FFX_RESOURCE_STATE_COMPUTE_READ);
+    gi.noiseTexture = imageResource(state.giNoise[state.giNoiseFrame].image(), VK_IMAGE_TYPE_2D,
+        VK_FORMAT_R8G8B8A8_UNORM, {GiNoiseSize, GiNoiseSize, 1},
+        L"GI noise", FFX_RESOURCE_STATE_COMPUTE_READ);
     gi.sdfAtlas = imageResource(state.resources.sdfAtlas, VK_IMAGE_TYPE_3D,
         VK_FORMAT_R8_UNORM, {512, 512, 512}, L"GI SDF atlas", FFX_RESOURCE_STATE_COMPUTE_READ);
     gi.bricksAABBs = bufferResource(state.resources.brickAabbs.handle(),
@@ -716,6 +757,7 @@ void BrixelizerSystem::dispatchGI(const VkCommandBuffer commandBuffer,
           "get raw SDF context");
     check(ffxBrixelizerGIContextDispatch(state.giContext.get(), &gi,
           ffxGetCommandListVK(commandBuffer)), "dispatch GI");
+    state.giNoiseFrame = (state.giNoiseFrame + 1) % GiNoiseFrames;
     transition(state.resources.sdfAtlas, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
                VK_IMAGE_LAYOUT_GENERAL,
                VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_SAMPLED_READ_BIT,
