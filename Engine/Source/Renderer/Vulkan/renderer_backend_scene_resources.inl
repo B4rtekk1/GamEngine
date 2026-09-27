@@ -603,7 +603,7 @@
                 if (growVertexHeap) {
                     vertexBuffer.createDeviceLocalEmpty(device,
                         sizeof(GpuVertex) * static_cast<VkDeviceSize>(growCapacity(vertexCount)),
-                        VK_BUFFER_USAGE_VERTEX_BUFFER_BIT |
+                        VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
                         (vulkanDevice.supportsRayQuery()
                             ? VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR |
                               VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT
@@ -613,7 +613,7 @@
                 if (growIndexHeap) {
                     indexBuffer.createDeviceLocalEmpty(device,
                         sizeof(std::uint32_t) * static_cast<VkDeviceSize>(growCapacity(indexCount)),
-                        VK_BUFFER_USAGE_INDEX_BUFFER_BIT |
+                        VK_BUFFER_USAGE_INDEX_BUFFER_BIT | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
                         (vulkanDevice.supportsRayQuery()
                             ? VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR |
                               VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT
@@ -1218,6 +1218,39 @@
             });
             rayTracingBlasDirty = vulkanDevice.supportsRayQuery();
             [[maybe_unused]] const UploadTicket ticket = uploadBatch.submit();
+        }
+
+        void refreshBrixelizerGeometry() {
+            if (!brixelizer.ready()) return;
+            std::vector<BrixelizerSystem::StaticMesh> meshes;
+            meshes.reserve(renderables.size());
+            for (std::size_t batchIndex = 0; batchIndex < instanceBatches.size(); ++batchIndex) {
+                const InstanceBatch& batch = instanceBatches[batchIndex];
+                if (batch.alphaMode != AlphaMode::Opaque || batch.mesh == nullptr ||
+                    batch.indexCount < 3) continue;
+                for (const std::size_t renderableIndex : sceneGpu.batchRenderableIndices[batchIndex]) {
+                    if (renderableIndex >= instanceModels.size()) continue;
+                    const RenderableRecord& record = renderables[renderableIndex];
+                    if (record.displacementBoundsPadding > 1.0e-6F) continue;
+                    const RendererInstanceData& source = instanceModels[renderableIndex];
+                    const glm::quat rotation{source.rotation.w, source.rotation.x,
+                                             source.rotation.y, source.rotation.z};
+                    glm::mat4 transform = glm::mat4_cast(rotation);
+                    transform[0] *= source.scaleBase.x;
+                    transform[1] *= source.scaleBase.y;
+                    transform[2] *= source.scaleBase.z;
+                    transform[3] = glm::vec4{source.positionMaterial.x, source.positionMaterial.y,
+                                               source.positionMaterial.z, 1.0F};
+                    meshes.push_back({.worldBounds = record.geometryLocalBounds.transformed(transform),
+                                      .transform = transform,
+                                      .firstVertex = record.firstVertex,
+                                      .vertexCount = record.vertexCount,
+                                      .firstIndex = batch.firstIndex,
+                                      .indexCount = batch.indexCount});
+                }
+            }
+            brixelizer.setStaticMeshes(vertexBuffer.handle(), vertexBuffer.size(),
+                                       indexBuffer.handle(), indexBuffer.size(), meshes);
         }
 
         void createInstanceBuffer() {

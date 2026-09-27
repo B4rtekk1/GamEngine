@@ -71,7 +71,8 @@ void main(uint3 group : SV_GroupID, uint3 local : SV_GroupThreadID, uint groupIn
         const float3 previous = irradianceAtlas[int2(atlasPixel)].rgb;
         float3 delta = encodedIrradiance - previous;
         const float3 luminanceWeights = float3(0.2126, 0.7152, 0.0722);
-        float hysteresis = dot(previous, previous) == 0.0 ? 0.0 : DDGI_HYSTERESIS;
+        float hysteresis = dot(previous, previous) == 0.0 ? 0.0 :
+            pow(DDGI_HYSTERESIS, float(update.framesSinceLastUpdate));
         const float3 darkening = previous - encodedIrradiance;
         if (max(max(darkening.x, darkening.y), darkening.z) >
             DDGI_IRRADIANCE_CHANGE_THRESHOLD)

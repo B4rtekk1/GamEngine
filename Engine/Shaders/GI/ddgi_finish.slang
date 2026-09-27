@@ -14,9 +14,11 @@ void main(uint3 id : SV_DispatchThreadID) {
     const float4 probe = probeData[pixel];
     DDGIProbeState state = probeStates[probeIndex];
     const bool accepted = probe.w > 0.5 && state.state == DDGI_ACCEPTED_UPDATE_STATE;
-    if (accepted)
+    if (accepted) {
         probeData[pixel] = float4(probe.xyz,
             probe.w > 1.5 ? DDGI_REACTIVATION_STATE : probe.w);
+        state.lastUpdatedFrame = uint(ddgi.scrollDeltaFrame.w);
+    }
     // Scheduling tracks attempts separately from atlas validity. Retrying
     // rejected probes at startup priority would starve the rest of the grid.
     if (probe.w < 0.5)

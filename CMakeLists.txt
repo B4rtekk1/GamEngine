@@ -4,6 +4,27 @@ project(GamEngine LANGUAGES CXX)
 include(cmake/CompilerOptions.cmake)
 include(cmake/Dependencies.cmake)
 
+# FidelityFX owns its Vulkan shader permutations independently of GamEngine's Slang shaders.
+set(FFX_API_BACKEND VK_X64)
+set(FFX_ALL OFF)
+set(FFX_BRIXELIZER ON)
+set(FFX_BRIXELIZER_GI OFF)
+set(FFX_BUILD_AS_DLL OFF)
+set(FFX_AUTO_COMPILE_SHADERS ON)
+set(_ge_linker_flags_before_ffx "${CMAKE_EXE_LINKER_FLAGS}")
+if(WIN32 AND CMAKE_GENERATOR_PLATFORM STREQUAL "")
+    # SDK 1.1.4 determines its library suffix from this exact flag.
+    set(CMAKE_EXE_LINKER_FLAGS "/machine:x64")
+endif()
+add_subdirectory(ThridParty/FidelityFX-SDK/sdk)
+set(CMAKE_EXE_LINKER_FLAGS "${_ge_linker_flags_before_ffx}")
+# The 1.1.4 Vulkan backend includes Frame Interpolation swapchain sources even
+# when that effect is disabled. They are independent of Brixelizer and fail to
+# compile with the project's newer MSVC toolset.
+get_target_property(_ge_ffx_vk_sources ffx_backend_vk_x64 SOURCES)
+list(FILTER _ge_ffx_vk_sources EXCLUDE REGEX "[/\\\\]FrameInterpolationSwapchain[/\\\\]")
+set_property(TARGET ffx_backend_vk_x64 PROPERTY SOURCES "${_ge_ffx_vk_sources}")
+
 set(GAMEENGINE_GAME_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/MyGame" CACHE PATH "Directory containing GamEngine.project and Assets")
 get_filename_component(GAMEENGINE_GAME_ROOT "${GAMEENGINE_GAME_DIRECTORY}" ABSOLUTE BASE_DIR "${CMAKE_CURRENT_SOURCE_DIR}")
 if(NOT EXISTS "${GAMEENGINE_GAME_ROOT}/GamEngine.project" OR NOT IS_DIRECTORY "${GAMEENGINE_GAME_ROOT}/Assets")

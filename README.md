@@ -27,9 +27,11 @@ For SIMD BC7 texture cooking, CMake downloads a pinned ISPC 1.31.0 compiler and 
 ### Clone
 
 ```bash
-git clone https://github.com/B4rtekk1/GamEngine.git
+git clone --recurse-submodules https://github.com/B4rtekk1/GamEngine.git
 cd GamEngine
 ```
+
+For an existing checkout, run `git submodule update --init --recursive` to fetch the pinned FidelityFX SDK 1.1.4 dependency.
 
 ### Build the Editor
 
@@ -105,6 +107,7 @@ Main tools include:
 * Component Inspector
 * Asset Manager
 * Shader Graph
+
 * Terrain tools
 * CPU/GPU Profiler
 * Console and integrated terminal
@@ -191,6 +194,16 @@ Currently implemented systems include:
 * Experimental Virtual Water
 * Slang shader pipeline
 * Shader Graph
+
+### Brixelizer SDF debug
+
+The first Brixelizer integration stage registers opaque, undisplaced scene meshes, updates six static SDF cascades, and displays the SDK debug output. Set `GAMEENGINE_BRIXELIZER_DEBUG` to `brick`, `cascade`, `distance`, or `gradient` before launching the editor. For example, in PowerShell:
+
+```powershell
+$env:GAMEENGINE_BRIXELIZER_DEBUG = 'brick'
+```
+
+The SDF debug view replaces the Game View HDR image for inspection. This stage does not feed GI into PBR; moving meshes are registered as static snapshots until dynamic instance support is added.
 
 ## Engine Systems
 

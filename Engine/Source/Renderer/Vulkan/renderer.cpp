@@ -25,6 +25,7 @@
 #include "Engine/Renderer/Passes/DirectionalVisibilityPass.h"
 #include "Engine/Renderer/RayTracing/AccelerationStructureManager.h"
 #include "Engine/Renderer/Lighting/DDGI/DDGISystem.h"
+#include "Engine/Renderer/Lighting/Brixelizer/BrixelizerSystem.h"
 #include "Engine/Renderer/Vulkan/ViewportRenderTarget.h"
 #include "Engine/Renderer/ViewportCamera.h"
 #include "Engine/Renderer/shader_loader.h"
@@ -96,6 +97,7 @@
 #include <chrono>
 #include <cmath>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <iostream>
 #include <limits>
@@ -735,6 +737,7 @@ namespace Engine {
             rtContactShadowPass.destroy();
             directionalVisibilityPass.destroy();
             ddgi.destroy();
+            brixelizer.setStaticMeshes(VK_NULL_HANDLE, 0, VK_NULL_HANDLE, 0, {});
             shadowPass.destroy();
             sceneDescriptorPass.destroy();
             indexBuffer.destroy();
@@ -826,6 +829,7 @@ namespace Engine {
             createImageBasedLighting();
             createMeshBuffers();
             createInstanceBuffer();
+            refreshBrixelizerGeometry();
             lastRenderTopologyRevision = registry.renderTopologyRevision();
             lastParticleEmitterRevision = registry.componentRevision<ParticleEmitterComponent>();
             lastSmokeEmitterRevision = registry.componentRevision<SmokeEmitterComponent>();
@@ -879,6 +883,7 @@ namespace Engine {
             // descriptor bindings and scene tables.  This is fence/timeline
             // based rather than a device-wide idle wait.
             waitForGlobalResourceRebuild();
+            brixelizer.setStaticMeshes(VK_NULL_HANDLE, 0, VK_NULL_HANDLE, 0, {});
 
             // ECS topology is not renderer topology.  Only resources whose
             // contents or descriptor bindings refer to the renderable tables
@@ -912,6 +917,7 @@ namespace Engine {
             createMaterialTextures();
             createMeshBuffers();
             createInstanceBuffer();
+            refreshBrixelizerGeometry();
             lastRenderTopologyRevision = registry.renderTopologyRevision();
             lastParticleEmitterRevision = registry.componentRevision<ParticleEmitterComponent>();
             lastSmokeEmitterRevision = registry.componentRevision<SmokeEmitterComponent>();

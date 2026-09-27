@@ -207,7 +207,7 @@ namespace Engine {
         GtaoQuality gtaoQuality_ = GtaoQuality::High;
         GtaoDebugView gtaoDebugView_ = GtaoDebugView::Off;
         PbrDebugView pbrDebugView_ = PbrDebugView::FinalLighting;
-        bool ddgiEnabled_ = true;
+        bool ddgiEnabled_ = false;
         IblQuality iblQuality_ = IblQuality::High;
         ShadowDebugView shadowDebugView_ = ShadowDebugView::Off;
         GrassRenderSettings grassSettings_{};

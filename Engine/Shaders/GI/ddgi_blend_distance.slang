@@ -77,7 +77,8 @@ void main(uint3 group : SV_GroupID, uint3 local : SV_GroupThreadID, uint groupIn
     float2 blended = result;
     if (ddgi.distanceInitialized.y > 0.5 && state < 1.5) {
         const float2 previous = distanceAtlas[int2(atlasPixel)];
-        const float hysteresis = dot(previous, previous) == 0.0 ? 0.0 : DDGI_HYSTERESIS;
+        const float hysteresis = dot(previous, previous) == 0.0 ? 0.0 :
+            pow(DDGI_HYSTERESIS, float(update.framesSinceLastUpdate));
         blended = lerp(result, previous, hysteresis);
     }
     blendedTexels[groupIndex] = blended;

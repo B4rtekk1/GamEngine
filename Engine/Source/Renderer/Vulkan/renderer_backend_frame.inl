@@ -1607,6 +1607,14 @@
             if (vkBeginCommandBuffer(commandBuffer, &postBegin) != VK_SUCCESS)
                 throw std::runtime_error("Could not begin graphics commands after viewport RenderGraph");
             hdrBufferInitialized = true;
+            if (brixelizer.ready() && cameraController.camera()) {
+                const glm::vec3 center = cameraController.camera()->position().native();
+                const float centerCoords[3]{center.x, center.y, center.z};
+                brixelizer.update(commandBuffer, centerCoords,
+                    static_cast<std::uint32_t>(submittedFrameValue), brixelizerDebugView,
+                    glm::inverse(cameraController.camera()->viewMatrix().native()),
+                    glm::inverse(cameraController.camera()->projectionMatrix().native()));
+            }
             if (hizEnabled) {
                 hiZViewProjections[currentFrame] = cameraController.camera()->projectionMatrix().native() *
                                                   cameraController.camera()->viewMatrix().native();
@@ -2243,6 +2251,52 @@
                 }
                 vkCmdPipelineBarrier2(commandBuffer, &waterDependency);
             }
+            if (brixelizer.hasStaticMeshes() && brixelizerDebugView != BrixelizerSystem::DebugView::Off) {
+                VkImageMemoryBarrier2 debugToCopy{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2};
+                debugToCopy.srcStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+                debugToCopy.srcAccessMask = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
+                debugToCopy.dstStageMask = VK_PIPELINE_STAGE_2_TRANSFER_BIT;
+                debugToCopy.dstAccessMask = VK_ACCESS_2_TRANSFER_READ_BIT;
+                debugToCopy.oldLayout = VK_IMAGE_LAYOUT_GENERAL;
+                debugToCopy.newLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+                debugToCopy.image = brixelizer.debugImage();
+                debugToCopy.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+                VkImageMemoryBarrier2 hdrToCopy{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2};
+                hdrToCopy.srcStageMask = VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT;
+                hdrToCopy.srcAccessMask = VK_ACCESS_2_SHADER_SAMPLED_READ_BIT;
+                hdrToCopy.dstStageMask = VK_PIPELINE_STAGE_2_TRANSFER_BIT;
+                hdrToCopy.dstAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT;
+                hdrToCopy.oldLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+                hdrToCopy.newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+                hdrToCopy.image = hdrBuffer.image();
+                hdrToCopy.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+                const std::array beforeCopy{debugToCopy, hdrToCopy};
+                VkDependencyInfo dependency{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
+                dependency.imageMemoryBarrierCount = static_cast<std::uint32_t>(beforeCopy.size());
+                dependency.pImageMemoryBarriers = beforeCopy.data();
+                vkCmdPipelineBarrier2(commandBuffer, &dependency);
+                const VkExtent2D extent = swapchain.extent();
+                const VkImageCopy region{{VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1}, {0, 0, 0},
+                                         {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1}, {0, 0, 0},
+                                         {extent.width, extent.height, 1}};
+                vkCmdCopyImage(commandBuffer, brixelizer.debugImage(), VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                               hdrBuffer.image(), VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region);
+                debugToCopy.srcStageMask = VK_PIPELINE_STAGE_2_TRANSFER_BIT;
+                debugToCopy.srcAccessMask = VK_ACCESS_2_TRANSFER_READ_BIT;
+                debugToCopy.dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+                debugToCopy.dstAccessMask = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
+                debugToCopy.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+                debugToCopy.newLayout = VK_IMAGE_LAYOUT_GENERAL;
+                hdrToCopy.srcStageMask = VK_PIPELINE_STAGE_2_TRANSFER_BIT;
+                hdrToCopy.srcAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT;
+                hdrToCopy.dstStageMask = VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT;
+                hdrToCopy.dstAccessMask = VK_ACCESS_2_SHADER_SAMPLED_READ_BIT;
+                hdrToCopy.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+                hdrToCopy.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+                const std::array afterCopy{debugToCopy, hdrToCopy};
+                dependency.pImageMemoryBarriers = afterCopy.data();
+                vkCmdPipelineBarrier2(commandBuffer, &dependency);
+            }
             }
 
             if (renderSceneViewport) {
@@ -2829,6 +2883,7 @@
             destroyRenderFinishedSemaphores();
 
             swapchain.recreate();
+            if (brixelizer.ready()) brixelizer.resize(swapchain.extent());
             registry.view<CameraComponent>([&](const Entity, CameraComponent& component) {
                 if (component.primary) {
                     component.setAspectRatio(static_cast<float>(swapchain.extent().width),

@@ -105,6 +105,19 @@
                 GE_PROFILE_SCOPE("Renderer.InstanceBuffers");
                 createInstanceBuffer();
             });
+            if (const char* debug = std::getenv("GAMEENGINE_BRIXELIZER_DEBUG")) {
+                const std::string_view view{debug};
+                if (view == "distance") brixelizerDebugView = BrixelizerSystem::DebugView::Distance;
+                else if (view == "gradient") brixelizerDebugView = BrixelizerSystem::DebugView::Gradient;
+                else if (view == "brick") brixelizerDebugView = BrixelizerSystem::DebugView::BrickId;
+                else if (view == "cascade") brixelizerDebugView = BrixelizerSystem::DebugView::CascadeId;
+            }
+            if (brixelizerDebugView != BrixelizerSystem::DebugView::Off) {
+                timeInitialization("Brixelizer SDF", [&] {
+                    brixelizer.create(vulkanDevice.physical(), device, vulkanDevice.allocator(), swapchain.extent());
+                    refreshBrixelizerGeometry();
+                });
+            }
             timeInitialization("Uniform buffers", [&] {
                 GE_PROFILE_SCOPE("Renderer.UniformBuffers");
                 createUniformBuffers();

@@ -28,6 +28,7 @@
                 directionalVisibilityPass.destroy();
                 accelerationStructures.destroy();
                 ddgi.destroy();
+                brixelizer.destroy();
                 shadowPass.destroy();
                 sceneDescriptorPass.destroy();
                 // Cubemap owns samplers, views, images and memory; the BRDF

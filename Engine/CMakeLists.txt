@@ -8,6 +8,8 @@ add_library(Engine SHARED
     Source/Renderer/ShaderGraph/ShaderGraphCompiler.cpp Source/Renderer/ShaderGraph/ShaderGraphVulkan.cpp Source/Renderer/ShaderGraph/ShaderNodeFactory.cpp Source/Renderer/ShaderGraph/ShaderNodeRegistry.cpp Source/Renderer/ShaderGraph/ShaderGraphSerializer.cpp
     Source/Renderer/Passes/ForwardPass.cpp Source/Renderer/Passes/ShadowPass.cpp Source/Renderer/Passes/SkyPass.cpp Source/Renderer/Passes/TonemapPass.cpp Source/Renderer/Passes/BloomPass.cpp Source/Renderer/Passes/GtaoPass.cpp Source/Renderer/Passes/TemporalAaPass.cpp Source/Renderer/Passes/RtContactShadowPass.cpp Source/Renderer/Passes/DirectionalVisibilityPass.cpp Source/Renderer/RayTracing/AccelerationStructureManager.cpp
     Source/Renderer/RenderGraph/RenderGraph.cpp Source/Renderer/Lighting/DDGI/DDGISystem.cpp
+    Source/Renderer/Lighting/Brixelizer/BrixelizerSystem.cpp
+    Source/Renderer/Lighting/Brixelizer/FidelityFXNoFrameGeneration.cpp
     Source/Renderer/Culling/GPUCullingPass.cpp Source/Renderer/Culling/GPUInstanceCullingPass.cpp Source/Renderer/Culling/MeshletCulling.cpp Source/Renderer/Culling/IndexedIndirectDrawCount.cpp Source/Renderer/Culling/HiZBuffer.cpp Source/Renderer/Culling/HiZPass.cpp Source/Renderer/GPUSceneDatabase.cpp
     Source/Renderer/Vulkan/buffer.cpp Source/Renderer/Vulkan/upload_context.cpp Source/Renderer/Vulkan/depth_buffer.cpp Source/Renderer/Vulkan/graphics_pipeline.cpp Source/Renderer/Vulkan/hdr_buffer.cpp Source/Renderer/Vulkan/msaa.cpp Source/Renderer/Vulkan/renderer.cpp Source/Renderer/Vulkan/renderer_scene_helpers.cpp Source/Renderer/Vulkan/CameraController.cpp Source/Renderer/Vulkan/ViewportRenderTarget.cpp Source/Renderer/Vulkan/GpuTimestampProfiler.cpp Source/Renderer/Vulkan/MemoryBudgetManager.cpp Source/Renderer/Vulkan/shadow_map.cpp Source/Renderer/Vulkan/swapchain.cpp Source/Renderer/Vulkan/vulkan_device.cpp Source/Renderer/Vulkan/vma_impl.cpp
     Source/Renderer/Particles/ParticleSystem.cpp Source/Renderer/Geometry/Terrain.cpp Source/Renderer/Geometry/ProceduralCloud.cpp Source/Renderer/Geometry/Meshlet.cpp Source/Renderer/Water/WaterSystem.cpp Source/Renderer/Water/VirtualWaterPageBuilder.cpp Source/Renderer/Water/WaterRenderWorld.cpp Source/Renderer/Water/VirtualWaterRenderer.cpp Source/Renderer/Passes/WaterPass.cpp
@@ -83,7 +85,8 @@ endif()
 message(STATUS "GamEngine BC7 encoder: ${GAMEENGINE_BC7_ENCODER}")
 file(GLOB_RECURSE ENGINE_PUBLIC_HEADERS CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/Include/*.h" "${CMAKE_CURRENT_SOURCE_DIR}/Include/*.hpp")
 target_sources(Engine PRIVATE FILE_SET engine_public_headers TYPE HEADERS BASE_DIRS "${CMAKE_CURRENT_SOURCE_DIR}/Include" FILES ${ENGINE_PUBLIC_HEADERS})
-target_link_libraries(Engine PUBLIC SDL3::SDL3 Vulkan::Vulkan PRIVATE physx_lib CMP_Core GameEngineTinyExr)
+target_link_libraries(Engine PUBLIC SDL3::SDL3 Vulkan::Vulkan PRIVATE physx_lib CMP_Core GameEngineTinyExr
+    ffx_brixelizer_x64 ffx_backend_vk_x64)
 target_compile_definitions(Engine PRIVATE PX_PHYSX_STATIC_LIB
     GAMEENGINE_BC7E_ENABLED=${GAMEENGINE_BC7E_ENABLED}
     GAMEENGINE_BC7E_PROFILE=${GAMEENGINE_BC7E_PROFILE}
