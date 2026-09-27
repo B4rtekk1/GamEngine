@@ -269,6 +269,7 @@
             const Mat4 currentProjection = cameraController.camera()->projectionMatrix();
             constexpr float cameraCutDistance = 5.0F;
             constexpr float cameraCutDirectionDot = 0.8660254F; // 30 degrees
+            constexpr float hiZCameraCutDirectionDot = 0.0F; // 90 degrees
             // Motion vectors cannot make a retained frame valid after a
             // camera switch or a discontinuous projection change (FOV,
             // aspect, near/far plane).  Compare the non-zero perspective
@@ -284,14 +285,31 @@
                 ((currentCameraPosition - previousGameCameraPosition).length() > cameraCutDistance ||
                  dot(currentCameraForward, previousGameCameraForward) < cameraCutDirectionDot ||
                  activeCamera != previousGameCamera || projectionChanged);
-            const std::uint32_t shadowPageBudget = (!previousGameCameraValid || cameraCut) ? 128u : 64u;
+            // Keep Hi-Z history through ordinary fast turns. Its occlusion
+            // tests remain useful for moderate camera motion, while a near
+            // reversal can make the previous view too stale to cull safely.
+            const bool hiZCameraCut = previousGameCameraValid &&
+                ((currentCameraPosition - previousGameCameraPosition).length() > cameraCutDistance ||
+                 dot(currentCameraForward, previousGameCameraForward) < hiZCameraCutDirectionDot ||
+                 activeCamera != previousGameCamera || projectionChanged);
+            const float cameraPositionDelta =
+                (currentCameraPosition - previousGameCameraPosition).length();
+            // Clipmap layout is camera-position/light based, not view-direction
+            // based. A yaw/pitch cut keeps its feedback; a large translation
+            // does not, since it can invalidate the virtual page coordinates.
+            const bool vsmLayoutCut = !previousGameCameraValid || !shadowClipmapsValid ||
+                                      cameraPositionDelta > 8.0F;
+            // Use the larger budget only for the first VSM bootstrap. Later
+            // cuts converge at the normal rate to avoid a second frame spike.
+            const std::uint32_t shadowPageBudget = previousGameCameraValid ? 64u : 128u;
 
             std::array<std::uint32_t, ShadowMap::VirtualPageCount> completedVsmRequests{};
             std::span<const std::uint32_t> receiverPageRequests;
             // currentFrame's fence was waited before this per-frame update.
             // Reading this mapped allocation therefore consumes GPU work from
-            // its prior use with no queue wait or submission-time readback.
-            if (!cameraCut && vsmRequestsReady[currentFrame] &&
+            // its prior use with no queue wait or submission-time readback. A
+            // view-direction cut does not invalidate shadow page coordinates.
+            if (!vsmLayoutCut && vsmRequestsReady[currentFrame] &&
                 vsmCompactedPageCountBuffers[currentFrame].handle() != VK_NULL_HANDLE) {
                 std::uint32_t requestCount{};
                 vsmCompactedPageCountBuffers[currentFrame].read(&requestCount, sizeof(requestCount));
@@ -332,18 +350,20 @@
                 marking.shadowQuality = static_cast<std::uint32_t>(shadowQuality);
                 vsmPageMarkingUniformBuffers[currentFrame].update(&marking, sizeof(marking));
             }
-            // Motion vectors describe continuous motion.  Reusing history after
-            // a teleport or a large orientation jump produces unavoidable
-            // ghosting, so treat it as a camera cut instead.
+            // Motion vectors describe continuous motion. Reusing temporal
+            // history after a teleport or a large orientation jump produces
+            // unavoidable ghosting, so reset those histories at cameraCut.
             if (cameraCut) {
-                // A discontinuous camera/projection change invalidates every
-                // temporal Hi-Z slot, not only the slot rendered this frame.
-                hiZValid.fill(false);
                 virtualWaterRenderer.invalidateTemporalHistory();
                 // GTAO history is independent of TAA and must not survive a
                 // teleport or a large camera rotation either.
                 gtaoPass.reset();
                 if (taaResolveActive) temporalAaPass.reset();
+            }
+            if (hiZCameraCut) {
+                // A discontinuous camera/projection change invalidates every
+                // Hi-Z slot, not only the slot rendered this frame.
+                hiZValid.fill(false);
             }
             UniformBufferObject data{
                 currentView, currentProjection, Mat4{glm::inverse(currentProjection.native())},
