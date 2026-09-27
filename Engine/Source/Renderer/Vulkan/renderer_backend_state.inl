@@ -240,7 +240,7 @@
         // The current forward pipelines use vertex/fragment entry points and
         // indexed draws.  Keep meshlet culling off until a mesh-shader forward
         // pipeline consumes visibleMeshletBuffers.
-        bool meshShaderPathActive = false;
+        bool meshShaderPathActive = true;
         // Geometry Heap. Mesh ranges are never derived from dense ECS order.
         // MeshId is a stable indirection handle; the allocation below is its
         // current physical location and may therefore be recycled or moved.

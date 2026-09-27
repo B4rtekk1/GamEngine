@@ -269,7 +269,6 @@
             const Mat4 currentProjection = cameraController.camera()->projectionMatrix();
             constexpr float cameraCutDistance = 5.0F;
             constexpr float cameraCutDirectionDot = 0.8660254F; // 30 degrees
-            constexpr float hiZCameraCutDirectionDot = 0.0F; // 90 degrees
             // Motion vectors cannot make a retained frame valid after a
             // camera switch or a discontinuous projection change (FOV,
             // aspect, near/far plane).  Compare the non-zero perspective
@@ -285,12 +284,11 @@
                 ((currentCameraPosition - previousGameCameraPosition).length() > cameraCutDistance ||
                  dot(currentCameraForward, previousGameCameraForward) < cameraCutDirectionDot ||
                  activeCamera != previousGameCamera || projectionChanged);
-            // Keep Hi-Z history through ordinary fast turns. Its occlusion
-            // tests remain useful for moderate camera motion, while a near
-            // reversal can make the previous view too stale to cull safely.
+            // Hi-Z tests project bounds into the previous camera view. A pure
+            // rotation does not invalidate that depth image: bounds outside
+            // its viewport pass the conservative shader checks.
             const bool hiZCameraCut = previousGameCameraValid &&
                 ((currentCameraPosition - previousGameCameraPosition).length() > cameraCutDistance ||
-                 dot(currentCameraForward, previousGameCameraForward) < hiZCameraCutDirectionDot ||
                  activeCamera != previousGameCamera || projectionChanged);
             const float cameraPositionDelta =
                 (currentCameraPosition - previousGameCameraPosition).length();

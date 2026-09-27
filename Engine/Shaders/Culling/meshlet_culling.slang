@@ -43,6 +43,10 @@ bool sphereOccluded(float3 center, float radius) {
     if (clip.w <= radius || clip.z <= 0.0) return false;
     const float2 ndc = clip.xy / clip.w;
     const float radiusNdc = radius / max(clip.w - radius, 1.0e-4);
+    // A sphere crossing the previous viewport edge has no complete depth
+    // coverage there, even when it enters the current view after a turn.
+    if (any(ndc - radiusNdc < -1.0) || any(ndc + radiusNdc > 1.0) ||
+        clip.z + radius > clip.w) return false;
     float2 minimumUv = saturate((ndc - radiusNdc) * float2(0.5, -0.5) + 0.5);
     float2 maximumUv = saturate((ndc + radiusNdc) * float2(0.5, -0.5) + 0.5);
     const float loY = min(minimumUv.y, maximumUv.y);

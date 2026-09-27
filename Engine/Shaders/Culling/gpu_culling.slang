@@ -270,6 +270,10 @@ bool occlusionTest(float4 clipPositions[8])
             return false;
 
         float3 ndc = clip.xyz / clip.w;
+        // The previous depth image covers only its own viewport. If any part
+        // of the bound was offscreen, it may be visible after a camera turn.
+        if (any(ndc.xy < -1.0) || any(ndc.xy > 1.0) || ndc.z > 1.0)
+            return false;
         minimumNdc = min(minimumNdc, ndc.xy);
         maximumNdc = max(maximumNdc, ndc.xy);
         nearestObjectDepth = min(nearestObjectDepth, ndc.z);
