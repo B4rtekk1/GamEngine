@@ -12,10 +12,13 @@
 #include <algorithm>
 #include <array>
 #include <bit>
+#include <cctype>
 #include <cmath>
 #include <limits>
 #include <memory>
+#include <ranges>
 #include <string>
+#include <string_view>
 #include <unordered_map>
 #include <vector>
 
@@ -76,13 +79,121 @@ namespace {
         return true;
     }
 
-    std::int32_t image_index(const ufbx_material_map& map, const std::vector<std::int32_t>& files) {
-        if (!map.texture || !map.texture_enabled) return -1;
-        const ufbx_texture* texture = map.texture;
+    std::int32_t image_index(const ufbx_texture* texture, const std::vector<std::int32_t>& files) {
+        if (!texture) return -1;
         if (!texture->has_file && texture->file_textures.count == 1)
             texture = texture->file_textures.data[0];
         if (!texture || !texture->has_file || texture->file_index >= files.size()) return -1;
         return files[texture->file_index];
+    }
+
+    std::int32_t image_index(const ufbx_material_map& map, const std::vector<std::int32_t>& files) {
+        return map.texture_enabled ? image_index(map.texture, files) : -1;
+    }
+
+    bool read_image_rgba(const Mesh::Image& image, const ufbx_texture_file* file,
+                         std::vector<std::uint8_t>& decoded, std::uint32_t& width, std::uint32_t& height) {
+        if (!image.rgbaPixels.empty()) {
+            decoded = image.rgbaPixels;
+            width = image.width;
+            height = image.height;
+            return true;
+        }
+        if (file && file->content.size) {
+            Mesh::Image embedded;
+            if (!decode_image({static_cast<const std::uint8_t*>(file->content.data), file->content.size}, embedded))
+                return false;
+            width = embedded.width;
+            height = embedded.height;
+            decoded = std::move(embedded.rgbaPixels);
+        } else if (!image.sourcePath.empty()) {
+            const auto extension = image.sourcePath.extension().string();
+            if (extension == ".dds" || extension == ".DDS") {
+                if (!decode_dds_image(image.sourcePath, decoded, width, height)) return false;
+            } else {
+                int w{}, h{}, channels{};
+                const auto filename = utf8_path(image.sourcePath);
+                auto* pixels = stbi_load(filename.c_str(), &w, &h, &channels, STBI_rgb_alpha);
+                if (!pixels || w <= 0 || h <= 0) {
+                    stbi_image_free(pixels);
+                    return false;
+                }
+                width = static_cast<std::uint32_t>(w);
+                height = static_cast<std::uint32_t>(h);
+                decoded.assign(pixels, pixels + static_cast<std::size_t>(w) * h * STBI_rgb_alpha);
+                stbi_image_free(pixels);
+            }
+        }
+        return !decoded.empty();
+    }
+
+    bool has_cutout_alpha(const Mesh::Image& image, const ufbx_texture_file* file) {
+        if (!image.rgbaPixels.empty()) {
+            for (std::size_t i = 3; i < image.rgbaPixels.size(); i += 4)
+                if (image.rgbaPixels[i] < 255) return true;
+            return false;
+        }
+        std::vector<std::uint8_t> decoded;
+        std::uint32_t width{}, height{};
+        if (!read_image_rgba(image, file, decoded, width, height)) return false;
+        for (std::size_t i = 3; i < decoded.size(); i += 4)
+            if (decoded[i] < 255) return true;
+        return false;
+    }
+
+    bool foliage_name(const ufbx_string name) {
+        if (!name.data) return false;
+        std::string label{name.data, name.length};
+        std::ranges::transform(label, label.begin(), [](unsigned char c) {
+            return static_cast<char>(std::tolower(c));
+        });
+        return label.find("foliage") != std::string::npos || label.find("leaves") != std::string::npos ||
+               label.find("leaf") != std::string::npos || label.find("plant") != std::string::npos ||
+               label.find("grass") != std::string::npos;
+    }
+
+    struct FbxOpacitySource {
+        std::int32_t image{-1};
+        bool transparency{false};
+    };
+
+    FbxOpacitySource find_opacity_source(const ufbx_material& source,
+                                         const std::vector<std::int32_t>& imageIndices) {
+        if (const auto image = image_index(source.pbr.opacity, imageIndices); image >= 0)
+            return {image, false};
+        for (const auto* map : {&source.fbx.transparency_color, &source.fbx.transparency_factor})
+            if (const auto image = image_index(*map, imageIndices); image >= 0)
+                return {image, true};
+        for (const auto* property : {"TransparentColor", "TransparencyFactor"})
+            if (const auto image = image_index(ufbx_find_prop_texture(&source, property), imageIndices); image >= 0)
+                return {image, true};
+        return {};
+    }
+
+    std::int32_t append_opacity_mask(Mesh& mesh, const ufbx_scene& scene,
+                                     const std::vector<std::size_t>& imageFiles,
+                                     const FbxOpacitySource source) {
+        if (source.image < 0) return -1;
+        if (!source.transparency) return source.image;
+        const auto index = static_cast<std::size_t>(source.image);
+        if (index >= imageFiles.size()) return -1;
+        std::vector<std::uint8_t> rgba;
+        std::uint32_t width{}, height{};
+        if (!read_image_rgba(mesh.images[index], &scene.texture_files.data[imageFiles[index]],
+                             rgba, width, height)) return -1;
+        // FBX transparency is the inverse of the engine's opacity convention.
+        for (std::size_t i = 0; i < rgba.size(); i += 4) {
+            const auto opacity = static_cast<std::uint8_t>(255 - rgba[i]);
+            rgba[i] = rgba[i + 1] = rgba[i + 2] = opacity;
+            rgba[i + 3] = 255;
+        }
+        Mesh::Image mask;
+        mask.width = width;
+        mask.height = height;
+        mask.rgbaPixels = std::move(rgba);
+        const auto result = static_cast<std::int32_t>(mesh.images.size());
+        mesh.images.push_back(std::move(mask));
+        return result;
     }
 
     glm::vec3 normalize_or(glm::vec3 value, const glm::vec3 fallback) {
@@ -256,6 +367,7 @@ std::shared_ptr<const Mesh> load_fbx_mesh(const std::filesystem::path& path, boo
     if (!scene || scene->materials.count >= std::numeric_limits<std::uint32_t>::max()) return {};
     Mesh result;
     std::vector<std::int32_t> imageIndices(scene->texture_files.count, -1);
+    std::vector<std::size_t> imageFiles;
     for (std::size_t i = 0; i < scene->texture_files.count; ++i) {
         const auto& file = scene->texture_files.data[i];
         Mesh::Image image;
@@ -280,7 +392,9 @@ std::shared_ptr<const Mesh> load_fbx_mesh(const std::filesystem::path& path, boo
         }
         imageIndices[i] = static_cast<std::int32_t>(result.images.size());
         result.images.push_back(std::move(image));
+        imageFiles.push_back(i);
     }
+    std::vector<std::int8_t> imageAlpha(imageFiles.size(), -1);
     for (std::size_t i = 0; i < scene->materials.count; ++i) {
         const auto& source = *scene->materials.data[i];
         PBRMaterial material;
@@ -296,9 +410,11 @@ std::shared_ptr<const Mesh> load_fbx_mesh(const std::filesystem::path& path, boo
                                   transparentColor.value_vec3.z) / 3.0) : 1.0F;
         const float fbxTransparencyOpacity = 1.0F - transparency * transparentIntensity;
         const float fbxPropertyOpacity = fbxOpacity ? static_cast<float>(fbxOpacity->value_real) : 1.0F;
+        const auto opacitySource = find_opacity_source(source, imageIndices);
         const float opacity = std::clamp(source.pbr.opacity.has_value
             ? static_cast<float>(source.pbr.opacity.value_real)
-            : std::min(fbxPropertyOpacity, fbxTransparencyOpacity), 0.0F, 1.0F);
+            : std::min(fbxPropertyOpacity, opacitySource.transparency ? 1.0F : fbxTransparencyOpacity),
+            0.0F, 1.0F);
         material.baseColor = Math::Color{
             base.has_value ? static_cast<float>(base.value_vec3.x) : 1.0F,
             base.has_value ? static_cast<float>(base.value_vec3.y) : 1.0F,
@@ -312,12 +428,28 @@ std::shared_ptr<const Mesh> load_fbx_mesh(const std::filesystem::path& path, boo
         if (material.normalTexture < 0) material.normalTexture = image_index(source.fbx.normal_map, imageIndices);
         material.aoTexture = image_index(source.pbr.ambient_occlusion, imageIndices);
         material.emissiveTexture = image_index(source.pbr.emission_color, imageIndices);
-        material.opacityTexture = image_index(source.pbr.opacity, imageIndices);
+        material.opacityTexture = append_opacity_mask(result, *scene, imageFiles, opacitySource);
+        if (opacitySource.image >= 0 && material.opacityTexture < 0) return {};
         material.displacementTexture = image_index(source.pbr.displacement_map, imageIndices);
         material.specularColorTexture = image_index(source.pbr.specular_color, imageIndices);
         if (opacity < 1.0F) material.alphaMode = AlphaMode::Blend;
-        if (material.opacityTexture >= 0) material.alphaMode = AlphaMode::Mask;
-        material.doubleSided = source.features.double_sided.enabled;
+        bool baseHasAlpha = false;
+        if (material.baseColorTexture >= 0) {
+            const auto index = static_cast<std::size_t>(material.baseColorTexture);
+            if (imageAlpha[index] < 0)
+                imageAlpha[index] = has_cutout_alpha(result.images[index],
+                    &scene->texture_files.data[imageFiles[index]]) ? 1 : 0;
+            baseHasAlpha = imageAlpha[index] != 0;
+        }
+        const bool foliage = foliage_name(source.name);
+        if (material.opacityTexture >= 0 || (baseHasAlpha && (opacity >= 1.0F || foliage))) {
+            material.alphaMode = AlphaMode::Mask;
+            material.alphaCutoff = 0.3F;
+        }
+        const std::string_view name{source.name.data ? source.name.data : "", source.name.length};
+        material.doubleSided = source.features.double_sided.enabled ||
+                               name.find(".DoubleSided") != std::string_view::npos ||
+                               (foliage && material.alphaMode == AlphaMode::Mask);
         result.materials.push_back(material);
     }
     result.materials.emplace_back();

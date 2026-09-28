@@ -257,7 +257,7 @@ namespace Engine::Assets {
         const auto dependencies = fbx_source_hash(source);
         if (!dependencies) return std::nullopt;
         CookCache::Hash64 hash;
-        hash.add("fbx-gmesh-cook-v3");
+        hash.add("fbx-gmesh-cook-v4");
         hash.add(source.lexically_normal().generic_string());
         hash.add(*dependencies);
         hash.add(CookCache::texture_settings_key());
@@ -605,6 +605,15 @@ namespace Engine::Assets {
         const auto cacheRoot = requestedCacheRoot.empty() ? CookCache::root_for_source(source) : requestedCacheRoot;
         for (std::size_t i = 0; i < mesh.images.size(); ++i) {
             auto& image = mesh.images[i];
+            if (image.sourcePath.empty() && !image.rgbaPixels.empty()) {
+                const auto texture = texture_path(output, i);
+                if (cook_image_texture_cached(image.rgbaPixels, image.width, image.height, texture,
+                                              image_format(mesh, i), cacheRoot,
+                                              summary == nullptr ? nullptr : &summary->gltfTextures) ==
+                    TextureCookResult::Failed) return false;
+                image.cookedPath = texture.filename();
+                continue;
+            }
             if (image.sourcePath.empty()) continue;
             const auto format = image_format(mesh, i);
             auto texture = image.sourcePath;
@@ -619,7 +628,7 @@ namespace Engine::Assets {
             if (image.cookedPath.empty()) return false;
         }
         const bool hasEmbedded = std::ranges::any_of(mesh.images, [](const Mesh::Image& image) {
-            return image.sourcePath.empty();
+            return image.sourcePath.empty() && image.rgbaPixels.empty();
         });
         if (hasEmbedded && !visit_fbx_embedded_images(source,
             [&](std::uint32_t sourceIndex, std::span<const std::uint8_t> rgba,
