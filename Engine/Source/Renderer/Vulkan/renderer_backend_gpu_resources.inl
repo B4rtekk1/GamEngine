@@ -1628,9 +1628,12 @@
 
             constexpr std::array<float, 6> baseExtents{
                 6.0F, 12.0F, 24.0F, 48.0F, 96.0F, 192.0F};
-            const float cameraSceneDistance = (cameraPosition - sceneCenter).length();
+            // sceneRadius is the largest AABB half-extent, not a sphere radius.
+            // Enclose its diagonal for every light orientation. The final level
+            // is scene-centred and fits in the permanently requested 10x10 tiles.
+            const float sceneBoundingRadius = sceneRadius * std::sqrt(3.0F);
             const float farExtent = std::max(324.0F,
-                (cameraSceneDistance + sceneRadius) * 1.1F);
+                sceneBoundingRadius * ShadowMap::FallbackExtentScale);
             const Vec3 direction = light.direction.normalized();
             Vec3 up{0.0F, 1.0F, 0.0F};
             if (std::abs(dot(direction, up)) > 0.98F) up = Vec3{0.0F, 0.0F, 1.0F};
@@ -1640,14 +1643,16 @@
             for (std::uint32_t level = 0; level < ShadowMap::ClipLevelCount; ++level) {
                 if ((updateMask & (1u << level)) == 0) continue;
                 const float extent = level < baseExtents.size() ? baseExtents[level] : farExtent;
+                const Vec3 clipCenter = level + 1 == ShadowMap::ClipLevelCount
+                    ? sceneCenter : cameraPosition;
                 // Page-sized snapping makes the virtual address space stable
                 // while the camera moves inside a page. Cached physical pages
                 // therefore survive ordinary sub-page camera motion.
                 const float worldUnitsPerPage = extent * 2.0F /
                     static_cast<float>(ShadowMap::VirtualPagesPerAxis);
-                const float snappedX = std::round(dot(cameraPosition, right) / worldUnitsPerPage) *
+                const float snappedX = std::round(dot(clipCenter, right) / worldUnitsPerPage) *
                                        worldUnitsPerPage;
-                const float snappedY = std::round(dot(cameraPosition, lightUp) / worldUnitsPerPage) *
+                const float snappedY = std::round(dot(clipCenter, lightUp) / worldUnitsPerPage) *
                                        worldUnitsPerPage;
                 // Keep depth encoding independent of the camera so pages can
                 // be remapped when the clipmap scrolls without being redrawn.

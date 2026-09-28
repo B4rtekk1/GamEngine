@@ -1164,14 +1164,31 @@ namespace Engine {
             std::ranges::sort(visibleObjects, {}, &VisibleObject::nearestDepth);
 
         std::array<bool, ShadowMap::VirtualPageCount> requested{};
+        std::array<bool, ShadowMap::VirtualPageCount> deferred{};
+        for (const std::uint32_t key: deferredRequests_)
+            if (key < deferred.size()) deferred[key] = true;
+        // Completed receiver feedback replaces the old view's pending work.
+        // Keep age/fairness only for misses that are still requested.
+        if (!receiverPageRequests.empty()) {
+            std::array<bool, ShadowMap::VirtualPageCount> currentRequests{};
+            for (const std::uint32_t key: receiverPageRequests)
+                if (key < currentRequests.size()) currentRequests[key] = true;
+            std::erase_if(deferredRequests_, [&](const std::uint32_t key) {
+                return key >= currentRequests.size() || !currentRequests[key];
+            });
+            for (std::size_t key = 0; key < deferred.size(); ++key)
+                deferred[key] = deferred[key] && currentRequests[key];
+        }
         std::vector<std::uint32_t> requests;
         requests.reserve(ShadowMap::PhysicalPageCount);
         // Reserve atlas capacity for progressively coarser clip levels.  A page
         // missed at a detailed level can then fall through to a resident coarse
         // level instead of producing a fully lit, page-shaped hole.
         constexpr std::array<std::uint32_t, ShadowMap::ClipLevelCount> levelBudgets{
-            72, 48, 40, 32, 24, 20, 20
+            48, 32, 24, 20, 16, 16, ShadowMap::FallbackPageCount
         };
+        static_assert(48 + 32 + 24 + 20 + 16 + 16 + ShadowMap::FallbackPageCount ==
+                      ShadowMap::PhysicalPageCount);
         std::array<std::uint32_t, ShadowMap::ClipLevelCount> levelCounts{};
         const auto requestRectangle = [&](const std::uint32_t level,
                                           const std::int32_t minimumX, const std::int32_t minimumY,
@@ -1190,11 +1207,17 @@ namespace Engine {
                 }
             }
         };
+        // Keep complete coarse coverage independently of delayed GPU feedback,
+        // camera direction, and fine-level oversubscription. These pages never
+        // compete with rotating fine-page requests for their reserved capacity.
+        requestRectangle(ShadowMap::ClipLevelCount - 1,
+                         ShadowMap::FallbackFirstPage, ShadowMap::FallbackFirstPage,
+                         ShadowMap::FallbackFirstPage + ShadowMap::FallbackPagesPerAxis - 1,
+                         ShadowMap::FallbackFirstPage + ShadowMap::FallbackPagesPerAxis - 1);
         if (!receiverPageRequests.empty() || !deferredRequests_.empty()) {
             // The compute pass emits only set bits, so this is O(requested pages)
-            // rather than O(all virtual pages). Atomic compaction deliberately
-            // makes its output order unspecified, so impose a canonical order
-            // before applying per-level and per-frame scheduler budgets.
+            // rather than O(all virtual pages). Atomic compaction makes its
+            // output order unspecified; deduplicate before scheduling.
             constexpr std::uint32_t pagesPerLevelForRequests =
                     ShadowMap::VirtualPagesPerAxis * ShadowMap::VirtualPagesPerAxis;
             std::vector<std::uint32_t> orderedRequests;
@@ -1206,14 +1229,42 @@ namespace Engine {
             std::ranges::sort(orderedRequests);
             orderedRequests.erase(std::unique(orderedRequests.begin(), orderedRequests.end()),
                                   orderedRequests.end());
+            // Old misses get the first chance at a tile. Rotate the starting
+            // coordinate each frame so a persistent excess of receiver requests
+            // cannot permanently favor low virtual page indices.
+            const std::uint32_t firstLocal =
+                    static_cast<std::uint32_t>((cacheClock_ * 257) % pagesPerLevelForRequests);
+            std::ranges::sort(orderedRequests, [&](const std::uint32_t left,
+                                                   const std::uint32_t right) {
+                const std::uint32_t leftLevel = left / pagesPerLevelForRequests;
+                const std::uint32_t rightLevel = right / pagesPerLevelForRequests;
+                if (leftLevel != rightLevel) return leftLevel < rightLevel;
+                const bool leftDeferred = left < deferred.size() && deferred[left];
+                const bool rightDeferred = right < deferred.size() && deferred[right];
+                if (leftDeferred != rightDeferred) return leftDeferred;
+                const std::uint32_t leftRank =
+                        (left % pagesPerLevelForRequests + pagesPerLevelForRequests - firstLocal) %
+                        pagesPerLevelForRequests;
+                const std::uint32_t rightRank =
+                        (right % pagesPerLevelForRequests + pagesPerLevelForRequests - firstLocal) %
+                        pagesPerLevelForRequests;
+                return leftRank < rightRank;
+            });
             for (const std::uint32_t key: orderedRequests) {
                 if (key >= ShadowMap::VirtualPageCount) continue;
+                if (requested[key]) continue;
                 const std::uint32_t level = key / pagesPerLevelForRequests;
-                const std::uint32_t local = key % pagesPerLevelForRequests;
-                requestRectangle(level, static_cast<std::int32_t>(local % ShadowMap::VirtualPagesPerAxis),
-                                 static_cast<std::int32_t>(local / ShadowMap::VirtualPagesPerAxis),
-                                 static_cast<std::int32_t>(local % ShadowMap::VirtualPagesPerAxis),
-                                 static_cast<std::int32_t>(local / ShadowMap::VirtualPagesPerAxis));
+                // Protect only the admitted working set (at most 256 pages).
+                // Protecting every dilated GPU request can pin the entire
+                // atlas and prevent a missing fallback from ever getting a tile.
+                if (levelCounts[level] >= levelBudgets[level] ||
+                    requests.size() >= ShadowMap::PhysicalPageCount) {
+                    deferred[key] = pageTable_[key] == ShadowMap::InvalidPage;
+                    continue;
+                }
+                requested[key] = true;
+                requests.push_back(key);
+                ++levelCounts[level];
             }
         } else
             for (const VisibleObject &object: visibleObjects) {
@@ -1250,25 +1301,18 @@ namespace Engine {
 
         constexpr std::uint32_t pagesPerLevel =
                 ShadowMap::VirtualPagesPerAxis * ShadowMap::VirtualPagesPerAxis;
-        std::array<bool, ShadowMap::VirtualPageCount> deferred{};
-        for (const std::uint32_t key: deferredRequests_)
-            if (key < deferred.size()) deferred[key] = true;
-
-        // A moving caster invalidates both its old and new footprint.  The old
-        // footprint is not necessarily requested by the camera this frame, but
-        // it can still be sampled through an existing page-table entry. Refresh
-        // dirty resident pages before serving new requests so clearing the tile
-        // removes the caster's previous shadow instead of leaving it in the
-        // atlas until that page happens to be requested again.
-        for (std::uint32_t physical = 0; physical < physicalPages_.size() &&
-                                         pagesToRender_.size() < maxPageUpdates;
-             ++physical) {
-            PhysicalPage &page = physicalPages_[physical];
-            if (!page.allocated || !page.dirty) continue;
-            page.dirty = false;
-            pagesToRender_.push_back(physical);
-        }
-
+        // A per-level admission quota does not reserve any of the per-frame
+        // render budget. Fill fallback levels first so continuous fine-level
+        // misses cannot consume all updates before a fallback is rendered.
+        std::stable_sort(requests.begin(), requests.end(), [&](const auto left, const auto right) {
+            if (left / pagesPerLevel != right / pagesPerLevel)
+                return left / pagesPerLevel > right / pagesPerLevel;
+            // Even dirty resident fallback pages remain sampleable. Fill holes
+            // before refreshing them so animation cannot stall initial coverage.
+            return pageTable_[left] == ShadowMap::InvalidPage &&
+                   pageTable_[right] != ShadowMap::InvalidPage;
+        });
+        std::array<bool, ShadowMap::PhysicalPageCount> scheduled{};
         for (const std::uint32_t key: requests) {
             std::uint32_t physical = pageTable_[key];
             // This request made it through the deterministic policy limits. It
@@ -1295,7 +1339,7 @@ namespace Engine {
                         const PhysicalPage &page = physicalPages_[slot];
                         const std::uint32_t owner = virtualPageIndex(
                             page.level, page.virtualX, page.virtualY);
-                        if (!requested[owner] && page.lastUsed < oldest) {
+                        if (!scheduled[slot] && !requested[owner] && page.lastUsed < oldest) {
                             oldest = page.lastUsed;
                             physical = slot;
                         }
@@ -1323,14 +1367,29 @@ namespace Engine {
                 // rasterized it. The explicit commit below runs after that pass.
                 pendingPageCommits_.push_back({key, physical, evictedVirtualPage});
                 pagesToRender_.push_back(physical);
+                scheduled[physical] = true;
             } else {
                 physicalPages_[physical].lastUsed = cacheClock_;
                 if (physicalPages_[physical].dirty &&
                     pagesToRender_.size() < maxPageUpdates) {
                     physicalPages_[physical].dirty = false;
                     pagesToRender_.push_back(physical);
+                    scheduled[physical] = true;
                 }
             }
+        }
+
+        // Refresh unrequested dirty pages with the remaining budget. Missing
+        // coverage must be allocated first: moving casters must not consume
+        // every update while the scene-wide fallback is still incomplete.
+        for (std::uint32_t physical = 0; physical < physicalPages_.size() &&
+                                         pagesToRender_.size() < maxPageUpdates;
+             ++physical) {
+            PhysicalPage &page = physicalPages_[physical];
+            if (!page.allocated || !page.dirty) continue;
+            page.dirty = false;
+            pagesToRender_.push_back(physical);
+            scheduled[physical] = true;
         }
 
         deferredRequests_.clear();

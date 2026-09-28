@@ -35,10 +35,20 @@ void main(uint3 id : SV_DispatchThreadID)
     const float2 uv = (float2(id.xy) + 0.5) / float2(width, height);
     float4 viewPosition = mul(float4(uv * 2.0 - 1.0, depth, 1.0), frame.inverseProjection);
     viewPosition /= viewPosition.w;
-    float4 viewRight = mul(float4((uv + float2(1.0 / width, 0.0)) * 2.0 - 1.0,
-        depth, 1.0), frame.inverseProjection);
-    float4 viewDown = mul(float4((uv + float2(0.0, 1.0 / height)) * 2.0 - 1.0,
-        depth, 1.0), frame.inverseProjection);
+    // Reconstruct the actual surface footprint. Reusing the centre depth
+    // assumes a camera-facing plane and underestimates grazing receivers,
+    // selecting fine levels that the depth-driven marker never requested.
+    // Quad partners match fragment derivatives, including the viewport edge.
+    const uint2 rightPixel = uint2(min(id.x ^ 1u, width - 1u), id.y);
+    const uint2 downPixel = uint2(id.x, min(id.y ^ 1u, height - 1u));
+    const float rightDepth = depthTexture.Load(int3(rightPixel, 0)).r;
+    const float downDepth = depthTexture.Load(int3(downPixel, 0)).r;
+    const float2 rightUv = (float2(rightPixel) + 0.5) / float2(width, height);
+    const float2 downUv = (float2(downPixel) + 0.5) / float2(width, height);
+    float4 viewRight = mul(float4(rightUv * 2.0 - 1.0,
+        rightDepth < 0.999999 ? rightDepth : depth, 1.0), frame.inverseProjection);
+    float4 viewDown = mul(float4(downUv * 2.0 - 1.0,
+        downDepth < 0.999999 ? downDepth : depth, 1.0), frame.inverseProjection);
     viewRight /= viewRight.w;
     viewDown /= viewDown.w;
     const float3 worldPosition = mul(viewPosition, frame.inverseView).xyz;

@@ -21,6 +21,14 @@ namespace Engine {
             VirtualPagesPerAxis * VirtualPagesPerAxis;
         static constexpr uint32_t PhysicalPageCount =
             PhysicalPagesPerAxis * PhysicalPagesPerAxis;
+        // The final clipmap fits the scene into eight central pages per axis.
+        // One extra page on each side covers snapping and the filter footprint.
+        static constexpr uint32_t FallbackPagesPerAxis = 10;
+        static constexpr uint32_t FallbackFirstPage =
+            (VirtualPagesPerAxis - FallbackPagesPerAxis) / 2;
+        static constexpr uint32_t FallbackPageCount =
+            FallbackPagesPerAxis * FallbackPagesPerAxis;
+        static constexpr float FallbackExtentScale = 4.0F;
         // A page miss is rendered as fully lit until the page becomes
         // available. Allow the allocator to refresh the complete atlas in a
         // frame so camera cuts and large receiver footprints do not leave
