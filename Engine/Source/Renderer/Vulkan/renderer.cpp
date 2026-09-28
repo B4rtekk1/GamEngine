@@ -441,6 +441,10 @@ namespace Engine {
             }
         }
 
+        void markRenderSettingsChanged() noexcept {
+            ++renderSettingsRevision;
+        }
+
         void setSceneViewportExtent(const std::uint32_t width, const std::uint32_t height) noexcept {
             if (width != 0 && height != 0) {
                 requestedSceneViewportExtent = {width, height};

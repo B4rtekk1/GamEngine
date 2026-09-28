@@ -12,7 +12,15 @@ Renderer::Renderer(RenderConfig config)
       state_(std::make_unique<State>()) {}
 
 void Renderer::setOptimizationFeatures(RenderOptimizationFeatures features) noexcept {
+    if (optimizationFeatures_.shadows == features.shadows &&
+        optimizationFeatures_.instancedRendering == features.instancedRendering &&
+        optimizationFeatures_.meshDeduplication == features.meshDeduplication &&
+        optimizationFeatures_.transformCaching == features.transformCaching &&
+        optimizationFeatures_.materialCaching == features.materialCaching &&
+        optimizationFeatures_.gpuCulling == features.gpuCulling &&
+        optimizationFeatures_.occlusionCulling == features.occlusionCulling) return;
     optimizationFeatures_ = features;
+    if (backend_) backend_->markRenderSettingsChanged();
 }
 
 const RenderOptimizationFeatures& Renderer::optimizationFeatures() const noexcept {
@@ -20,7 +28,9 @@ const RenderOptimizationFeatures& Renderer::optimizationFeatures() const noexcep
 }
 
 void Renderer::setAntialiasingLevel(AntialiasingLevel level) noexcept {
+    if (antialiasingLevel_ == level) return;
     antialiasingLevel_ = level;
+    if (backend_) backend_->markRenderSettingsChanged();
 }
 
 AntialiasingLevel Renderer::antialiasingLevel() const noexcept {
@@ -28,7 +38,9 @@ AntialiasingLevel Renderer::antialiasingLevel() const noexcept {
 }
 
 void Renderer::setShadowQuality(const ShadowQuality quality) noexcept {
+    if (shadowQuality_ == quality) return;
     shadowQuality_ = quality;
+    if (backend_) backend_->markRenderSettingsChanged();
 }
 
 ShadowQuality Renderer::shadowQuality() const noexcept {
@@ -36,7 +48,9 @@ ShadowQuality Renderer::shadowQuality() const noexcept {
 }
 
 void Renderer::setContactShadowMode(const ContactShadowMode mode) noexcept {
+    if (rtContactShadowSettings_.mode == mode) return;
     rtContactShadowSettings_.mode = mode;
+    if (backend_) backend_->markRenderSettingsChanged();
 }
 
 ContactShadowMode Renderer::contactShadowMode() const noexcept {
@@ -48,7 +62,12 @@ bool Renderer::contactShadowsActive() const noexcept {
 }
 
 void Renderer::setRtContactShadowSettings(const RtContactShadowSettings& settings) noexcept {
+    if (rtContactShadowSettings_.mode == settings.mode &&
+        rtContactShadowSettings_.maxDistance == settings.maxDistance &&
+        rtContactShadowSettings_.normalBias == settings.normalBias &&
+        rtContactShadowSettings_.resolutionScale == settings.resolutionScale) return;
     rtContactShadowSettings_ = settings;
+    if (backend_) backend_->markRenderSettingsChanged();
 }
 
 const RtContactShadowSettings& Renderer::rtContactShadowSettings() const noexcept {
@@ -57,25 +76,43 @@ const RtContactShadowSettings& Renderer::rtContactShadowSettings() const noexcep
 
 void Renderer::applyRenderQualityPreset(const RenderQualityPreset preset) noexcept {
     const RenderQualityPresetSettings settings = renderQualityPresetSettings(preset);
+    if (shadowQuality_ == settings.shadows && gtaoQuality_ == settings.gtao &&
+        antialiasingLevel_ == settings.antialiasing) return;
     shadowQuality_ = settings.shadows;
     gtaoQuality_ = settings.gtao;
     antialiasingLevel_ = settings.antialiasing;
+    if (backend_) backend_->markRenderSettingsChanged();
 }
 
 void Renderer::setGtaoQuality(const GtaoQuality quality) noexcept {
     if (gtaoQuality_ == quality) return;
     gtaoQuality_ = quality;
+    if (backend_) backend_->markRenderSettingsChanged();
 }
 GtaoQuality Renderer::gtaoQuality() const noexcept { return gtaoQuality_; }
-void Renderer::setGtaoDebugView(const GtaoDebugView view) noexcept { gtaoDebugView_ = view; }
+void Renderer::setGtaoDebugView(const GtaoDebugView view) noexcept {
+    if (gtaoDebugView_ == view) return;
+    gtaoDebugView_ = view;
+    if (backend_) backend_->markRenderSettingsChanged();
+}
 GtaoDebugView Renderer::gtaoDebugView() const noexcept { return gtaoDebugView_; }
-void Renderer::setPbrDebugView(const PbrDebugView view) noexcept { pbrDebugView_ = view; }
+void Renderer::setPbrDebugView(const PbrDebugView view) noexcept {
+    if (pbrDebugView_ == view) return;
+    pbrDebugView_ = view;
+    if (backend_) backend_->markRenderSettingsChanged();
+}
 PbrDebugView Renderer::pbrDebugView() const noexcept { return pbrDebugView_; }
-void Renderer::setIblQuality(const IblQuality quality) noexcept { iblQuality_ = quality; }
+void Renderer::setIblQuality(const IblQuality quality) noexcept {
+    if (iblQuality_ == quality) return;
+    iblQuality_ = quality;
+    if (backend_) backend_->markRenderSettingsChanged();
+}
 IblQuality Renderer::iblQuality() const noexcept { return iblQuality_; }
 
 void Renderer::setShadowDebugView(const ShadowDebugView view) noexcept {
+    if (shadowDebugView_ == view) return;
     shadowDebugView_ = view;
+    if (backend_) backend_->markRenderSettingsChanged();
 }
 
 ShadowDebugView Renderer::shadowDebugView() const noexcept {

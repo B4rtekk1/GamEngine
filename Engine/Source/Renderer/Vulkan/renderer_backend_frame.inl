@@ -2920,6 +2920,7 @@
             sceneViewportRendered = sceneViewportActive &&
                 (sceneViewportNeedsRender || sceneCameraChanged ||
                  scene.mutationRevision() != sceneViewportRenderedRevision ||
+                 renderSettingsRevision != sceneViewportRenderedSettingsRevision ||
                  sceneVirtualWaterRenderer.active());
             const bool renderGameViewport = !editorUiActive || !sceneViewportActive;
             if (renderGameViewport != gameShadowContextActive) {
@@ -2981,6 +2982,7 @@
                 renderedSceneViewportYaw = sceneCameraYaw;
                 renderedSceneViewportPitch = sceneCameraPitch;
                 sceneViewportRenderedRevision = scene.mutationRevision();
+                sceneViewportRenderedSettingsRevision = renderSettingsRevision;
                 sceneViewportNeedsRender = false;
                 sceneViewportCacheValid = true;
                 sceneViewportImageInitialized = true;

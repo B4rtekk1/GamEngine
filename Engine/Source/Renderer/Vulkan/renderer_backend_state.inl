@@ -625,6 +625,8 @@
         bool sceneViewportImageInitialized = false;
         bool sceneViewportRendered = false;
         std::uint64_t sceneViewportRenderedRevision = 0;
+        std::uint64_t renderSettingsRevision = 0;
+        std::uint64_t sceneViewportRenderedSettingsRevision = 0;
         Vec3 renderedSceneViewportPosition{};
         float renderedSceneViewportYaw = 0.0F;
         float renderedSceneViewportPitch = 0.0F;

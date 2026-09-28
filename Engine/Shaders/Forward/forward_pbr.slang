@@ -524,12 +524,16 @@ ForwardFragmentOutput fragmentMain(ForwardFragmentInput input)
     {
         ForwardFragmentOutput debugOutput;
 #if FORWARD_RESOLVED_VSM
-        const float debugShadow = 1.0 - directionalVisibility.Sample(
-            input.position.xy / frame.clusteredViewportNearFar.xy).r;
-        debugOutput.color = float4(debugShadow.xxx, baseColor.a);
-#else
-        debugOutput.color = float4(shadowDebugColor(frame.shadowDebugView, shadowDebug), baseColor.a);
+        // The resolved visibility texture contains only the final shadow value.
+        // Sample the virtual pages here for the per-mode debug data.
+        if (frame.shadowEnabled != 0)
+            shadow = sampleVirtualShadow(shadowMap, linearShadowMap, shadowDepthMap,
+                input.worldPosition, geometricNormal, lightDirection,
+                frame.shadowClipMatrices, frame.shadowClipConstants, shadowPageTable,
+                frame.shadowQuality, uint2(input.position.xy),
+                frame.temporalSampleIndex, frame.temporalShadowJitter != 0, shadowDebug);
 #endif
+        debugOutput.color = float4(shadowDebugColor(frame.shadowDebugView, shadowDebug), baseColor.a);
 #if FORWARD_OUTPUT_VELOCITY
         float2 previousNdc = input.previousClip.xy / input.previousClip.w;
         debugOutput.velocity = (input.currentNdc - previousNdc) * 0.5;
