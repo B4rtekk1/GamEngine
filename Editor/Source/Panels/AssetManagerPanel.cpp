@@ -95,7 +95,7 @@ namespace {
 
     bool is_model(const std::filesystem::path &path) {
         const auto ext = lower(path.extension().string());
-        return ext == ".gltf" || ext == ".glb" || ext == ".gmesh";
+        return ext == ".gltf" || ext == ".glb" || ext == ".fbx" || ext == ".gmesh";
     }
 
     bool is_shader_graph(const std::filesystem::path &path) {
@@ -106,7 +106,8 @@ namespace {
         const auto ext = lower(path.extension().string());
         if (ext == ".gltf" || ext == ".glb" || ext == ".gmesh" || ext == ".obj" || ext == ".fbx")
             return AssetKind::Model;
-        if (ext == ".png" || ext == ".jpg" || ext == ".jpeg" || ext == ".tga" || ext == ".bmp" || ext == ".hdr")
+        if (ext == ".png" || ext == ".jpg" || ext == ".jpeg" || ext == ".tga" || ext == ".bmp" ||
+            ext == ".dds" || ext == ".hdr")
             return AssetKind::Texture;
         if (ext == ".vert" || ext == ".frag" || ext == ".comp" || ext == ".glsl" || ext == ".slang" || ext == ".spv" ||
             ext == ".shadergraph")

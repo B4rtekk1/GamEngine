@@ -3,6 +3,7 @@
 #include "Engine/Assets/Gtex.h"
 #include "CookCache.h"
 #include "GlbLoader.h"
+#include "FbxLoader.h"
 #include "Engine/Assets/TextureCooker.h"
 #include "Engine/Renderer/Geometry/Mesh.h"
 #include "Engine/Renderer/Geometry/Meshlet.h"
@@ -248,6 +249,24 @@ namespace Engine::Assets {
 
     bool current_gltf_mesh(const std::filesystem::path &source, const std::filesystem::path &cooked) {
         const auto key = gltf_cook_key(source);
+        return key && current_gmesh_version(cooked) && CookCache::artifact_has_key(cooked, *key)
+               && current_references_exist(cooked);
+    }
+
+    std::optional<std::uint64_t> fbx_cook_key(const std::filesystem::path &source) {
+        const auto dependencies = fbx_source_hash(source);
+        if (!dependencies) return std::nullopt;
+        CookCache::Hash64 hash;
+        hash.add("fbx-gmesh-cook-v2");
+        hash.add(source.lexically_normal().generic_string());
+        hash.add(*dependencies);
+        hash.add(CookCache::texture_settings_key());
+        hash.add(version);
+        return hash.value;
+    }
+
+    bool current_fbx_mesh(const std::filesystem::path &source, const std::filesystem::path &cooked) {
+        const auto key = fbx_cook_key(source);
         return key && current_gmesh_version(cooked) && CookCache::artifact_has_key(cooked, *key)
                && current_references_exist(cooked);
     }
@@ -568,5 +587,57 @@ namespace Engine::Assets {
             if (image.cookedPath.empty()) return false;
         return save_gmesh(output, mesh, summary == nullptr ? nullptr : &summary->gltf) &&
                CookCache::write_artifact_key(output, *meshKey);
+    }
+
+    bool cook_fbx_mesh(const std::filesystem::path &source,
+                       const std::filesystem::path &requestedCacheRoot,
+                       TextureCookSummary *const summary) {
+        const auto key = fbx_cook_key(source);
+        if (!key) return false;
+        auto output = source;
+        output.replace_extension(".gmesh");
+        if (current_gmesh_version(output) && CookCache::artifact_has_key(output, *key) &&
+            current_references_exist(output)) return true;
+        const auto imported = load_fbx_mesh(source, true);
+        if (!imported) return false;
+        Mesh mesh = *imported;
+        separate_normal_images(mesh);
+        const auto cacheRoot = requestedCacheRoot.empty() ? CookCache::root_for_source(source) : requestedCacheRoot;
+        for (std::size_t i = 0; i < mesh.images.size(); ++i) {
+            auto& image = mesh.images[i];
+            if (image.sourcePath.empty()) continue;
+            const auto format = image_format(mesh, i);
+            auto texture = image.sourcePath;
+            texture.replace_extension(format == default_texture_format(image.sourcePath)
+                                          ? std::string_view{".gtex"} : format_suffix(format));
+            if (cook_source_texture_cached(image.sourcePath, texture, format, cacheRoot,
+                                           summary == nullptr ? nullptr : &summary->gltfTextures) ==
+                TextureCookResult::Failed) return false;
+            image.cookedPath = texture.lexically_relative(output.parent_path().empty()
+                                                            ? std::filesystem::path{"."}
+                                                            : output.parent_path());
+            if (image.cookedPath.empty()) return false;
+        }
+        const bool hasEmbedded = std::ranges::any_of(mesh.images, [](const Mesh::Image& image) {
+            return image.sourcePath.empty();
+        });
+        if (hasEmbedded && !visit_fbx_embedded_images(source,
+            [&](std::uint32_t sourceIndex, std::span<const std::uint8_t> rgba,
+                std::uint32_t width, std::uint32_t height) {
+                for (std::size_t i = 0; i < mesh.images.size(); ++i) {
+                    auto& image = mesh.images[i];
+                    if (!image.sourcePath.empty() || image.sourceImageIndex != sourceIndex) continue;
+                    const auto texture = texture_path(output, i);
+                    if (cook_image_texture_cached(rgba, width, height, texture, image_format(mesh, i), cacheRoot,
+                                                  summary == nullptr ? nullptr : &summary->gltfTextures) ==
+                        TextureCookResult::Failed) return false;
+                    image.cookedPath = texture.filename();
+                }
+                return true;
+            })) return false;
+        for (const auto& image : mesh.images)
+            if (image.cookedPath.empty()) return false;
+        return save_gmesh(output, mesh, summary == nullptr ? nullptr : &summary->gltf) &&
+               CookCache::write_artifact_key(output, *key);
     }
 } // namespace Engine::Assets

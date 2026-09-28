@@ -1,6 +1,8 @@
 #include "Engine/Assets/AssetManager.h"
 #include "Engine/Assets/Gtex.h"
 #include "Engine/Assets/Gmesh.h"
+#include "FbxLoader.h"
+#include "DdsImage.h"
 #include "Engine/Assets/TextureCooker.h"
 
 #include "GlbLoader.h"
@@ -389,6 +391,12 @@ namespace Engine::Assets {
                 texture.gtex.emplace(std::move(*gtex));
                 return std::make_shared<const TextureAsset>(std::move(texture));
             }
+            if (path.extension() == ".dds" || path.extension() == ".DDS") {
+                TextureAsset texture;
+                if (!decode_dds_image(path, texture.rgbaPixels, texture.width, texture.height))
+                    return std::shared_ptr<const TextureAsset>{};
+                return std::make_shared<const TextureAsset>(std::move(texture));
+            }
             int width{};
             int height{};
             int channels{};
@@ -441,6 +449,13 @@ namespace Engine::Assets {
                 if (current_gltf_mesh(path, cookedPath))
                     return load_gmesh(cookedPath);
                 return load_gltf_mesh(path);
+            }
+            if (extension == ".fbx" || extension == ".FBX") {
+                auto cookedPath = path;
+                cookedPath.replace_extension(".gmesh");
+                if (!current_fbx_mesh(path, cookedPath) && !cook_fbx_mesh(path))
+                    return std::shared_ptr<const Mesh>{};
+                return load_gmesh(cookedPath);
             }
             return std::shared_ptr<const Mesh>{};
         });

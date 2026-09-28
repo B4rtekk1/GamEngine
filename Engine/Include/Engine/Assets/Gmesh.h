@@ -36,4 +36,11 @@ namespace Engine::Assets {
     [[nodiscard]] bool cook_gltf_mesh(const std::filesystem::path &source,
                                       const std::filesystem::path &cacheRoot = {},
                                       TextureCookSummary *summary = nullptr);
+
+    [[nodiscard]] std::optional<std::uint64_t> fbx_cook_key(const std::filesystem::path &source);
+    [[nodiscard]] bool current_fbx_mesh(const std::filesystem::path &source,
+                                        const std::filesystem::path &cooked);
+    [[nodiscard]] bool cook_fbx_mesh(const std::filesystem::path &source,
+                                     const std::filesystem::path &cacheRoot = {},
+                                     TextureCookSummary *summary = nullptr);
 } // namespace Engine::Assets

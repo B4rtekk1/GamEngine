@@ -2,6 +2,7 @@
 #include "CookCache.h"
 #include "Engine/Assets/Gtex.h"
 #include "Engine/Assets/Gmesh.h"
+#include "DdsImage.h"
 
 #include <cmp_core.h>
 #include <stb_image.h>
@@ -615,29 +616,30 @@ namespace Engine::Assets {
         return resolve_cached_texture(*sourceHash, output, format, cacheRoot, [&] {
             int width = 0, height = 0, channels = 0;
             const auto decodeStarted = std::chrono::steady_clock::now();
-            stbi_uc *pixels = stbi_load(source.string().c_str(), &width, &height, &channels, STBI_rgb_alpha);
+            std::vector<std::uint8_t> rgba;
+            if (source.extension() == ".dds" || source.extension() == ".DDS") {
+                std::uint32_t ddsWidth{}, ddsHeight{};
+                if (!decode_dds_image(source, rgba, ddsWidth, ddsHeight))
+                    throw std::runtime_error("cannot decode source DDS image");
+                width = static_cast<int>(ddsWidth);
+                height = static_cast<int>(ddsHeight);
+            } else {
+                stbi_uc *pixels = stbi_load(source.string().c_str(), &width, &height, &channels, STBI_rgb_alpha);
+                if (pixels != nullptr && width > 0 && height > 0)
+                    rgba.assign(pixels, pixels + static_cast<std::size_t>(width) * height * STBI_rgb_alpha);
+                stbi_image_free(pixels);
+            }
             if (timings != nullptr)
                 timings->decodeMilliseconds += milliseconds(std::chrono::steady_clock::now() - decodeStarted);
-            if (pixels == nullptr || width <= 0 || height <= 0) {
-                stbi_image_free(pixels);
-                throw std::runtime_error("cannot decode source image");
-            }
-            const auto count = static_cast<std::size_t>(width) * static_cast<std::size_t>(height) * STBI_rgb_alpha;
+            if (rgba.empty() || width <= 0 || height <= 0) throw std::runtime_error("cannot decode source image");
             TextureCookTimings cookTimings;
-            try {
-                auto cooked = cook_texture_impl(std::span<const std::uint8_t>{pixels, count},
-                                                static_cast<std::uint32_t>(width),
-                                                static_cast<std::uint32_t>(height), format, &cookTimings);
-                stbi_image_free(pixels);
-                if (timings != nullptr) {
-                    timings->mipGenerationMilliseconds += milliseconds(cookTimings.mipGeneration);
-                    timings->blockEncodeMilliseconds += milliseconds(cookTimings.blockEncode);
-                }
-                return cooked;
-            } catch (...) {
-                stbi_image_free(pixels);
-                throw;
+            auto cooked = cook_texture_impl(rgba, static_cast<std::uint32_t>(width),
+                                            static_cast<std::uint32_t>(height), format, &cookTimings);
+            if (timings != nullptr) {
+                timings->mipGenerationMilliseconds += milliseconds(cookTimings.mipGeneration);
+                timings->blockEncodeMilliseconds += milliseconds(cookTimings.blockEncode);
             }
+            return cooked;
         }, timings);
     }
 
@@ -723,7 +725,7 @@ namespace Engine::Assets {
             std::ranges::transform(extension, extension.begin(), [](const unsigned char value) {
                 return static_cast<char>(std::tolower(value));
             });
-            if (extension == ".glb" || extension == ".gltf") sources.push_back(it->path());
+            if (extension == ".glb" || extension == ".gltf" || extension == ".fbx") sources.push_back(it->path());
         }
         summary.discovered = static_cast<std::uint32_t>(sources.size());
         if (progress != nullptr) progress->discovered.store(summary.discovered, std::memory_order_release);
@@ -732,13 +734,15 @@ namespace Engine::Assets {
             auto cooked = source;
             cooked.replace_extension(".gmesh");
             const auto scanStarted = std::chrono::steady_clock::now();
-            const auto current = current_gltf_mesh(source, cooked);
+            const bool fbx = source.extension() == ".fbx" || source.extension() == ".FBX";
+            const auto current = fbx ? current_fbx_mesh(source, cooked) : current_gltf_mesh(source, cooked);
             summary.gltf.sourceScanMilliseconds += milliseconds(std::chrono::steady_clock::now() - scanStarted);
             if (current) ++summary.skipped;
-            else if (cook_gltf_mesh(source, assetRoot.parent_path() / "Library" / "DDC", &summary)) ++summary.cooked;
+            else if (fbx ? cook_fbx_mesh(source, assetRoot.parent_path() / "Library" / "DDC", &summary)
+                         : cook_gltf_mesh(source, assetRoot.parent_path() / "Library" / "DDC", &summary)) ++summary.cooked;
             else {
                 ++summary.failed;
-                summary.errors += source.string() + ": could not cook glTF mesh\n";
+                summary.errors += source.string() + ": could not cook mesh\n";
             }
             if (progress != nullptr) progress->completed.fetch_add(1, std::memory_order_release);
         }
