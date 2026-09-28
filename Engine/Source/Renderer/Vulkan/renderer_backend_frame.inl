@@ -65,6 +65,7 @@
             if (dataDirty) {
                 SceneFrameData data{};
                 bool directionalLightFound = false;
+                bool mainLightPresent = false;
                 readRegistry.view<CameraComponent, Transform>(
                     [&](const Entity entity, const CameraComponent& component, const Transform&) {
                         if (data.primaryCamera == NullEntity && component.primary && component.isPerspective() &&
@@ -75,6 +76,8 @@
                     });
                 readRegistry.view<Transform, LightComponent>(
                     [&](const Entity, const Transform& transform, const LightComponent& light) {
+                        if (light.type == LightType::Directional && light.mainLight)
+                            mainLightPresent = true;
                         if (!light.enabled) return;
                         const glm::mat4 world = transform.worldMatrix().native();
                         const glm::vec3 direction = glm::vec3(
@@ -104,6 +107,20 @@
                         gpu.parameters = {std::cos(light.innerConeAngle * pi / 180.0F),
                                           static_cast<float>(light.type), light.castShadows ? 1.0F : 0.0F, 0.0F};
                     });
+                if (const auto& sun = imageBasedLighting.sun(); sun) {
+                    if (data.directionalLight.enabled || !mainLightPresent) {
+                        // The panorama direction points toward the sun; the renderer's
+                        // directional light stores the direction in which rays travel.
+                        data.directionalLight.direction = -sun->direction;
+                        data.directionalLight.color = Math::Color{
+                            sun->color.x(), sun->color.y(), sun->color.z()};
+                        data.directionalLight.intensity = sun->intensity;
+                        if (!mainLightPresent) {
+                            data.directionalLight.enabled = true;
+                            data.directionalLight.castShadows = true;
+                        }
+                    }
+                }
                 sceneFrameDataCache.hasWind = false;
                 readRegistry.view<Transform, WindComponent>(
                     [&](const Entity, const Transform& transform, const WindComponent& wind) {

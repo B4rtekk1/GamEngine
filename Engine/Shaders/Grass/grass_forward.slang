@@ -106,7 +106,7 @@ GrassFragmentOutput fragmentMain(FragmentInput input)
     float3 normal = normalize(input.isFrontFace ? input.normal : -input.normal);
     float3 lightDirection = normalize(-frame.lightDirectionIntensity.xyz);
     float diffuse = saturate(dot(normal, lightDirection) * 0.5 + 0.5);
-    ShadowSampleDebug shadowDebug = {0.0, 0.0, 0u, 0u, uint2(0, 0)};
+    ShadowSampleDebug shadowDebug = {0.0, 0.0, 0u, 0u, uint2(0, 0), 0u, 0u};
     float shadow = frame.shadowEnabled != 0 ? sampleVirtualShadow(
         shadowMap, linearShadowMap, shadowDepthMap, input.worldPosition, normal, lightDirection,
         frame.shadowClipMatrices, frame.shadowClipConstants, shadowPageTable,

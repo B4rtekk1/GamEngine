@@ -131,6 +131,8 @@ namespace Engine {
         /** Cache-fallback distance: green=0, yellow=1, orange=2, red=3+. */
         FallbackDelta,
         VirtualPage,
+        /** Green: desired page, yellow: fallback page, red: no resident page. */
+        Residency,
     };
 
     struct RenderFeatures final {

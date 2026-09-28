@@ -509,7 +509,7 @@ ForwardFragmentOutput fragmentMain(ForwardFragmentInput input)
     // prevents view-dependent Fresnel from masquerading as a diffuse change.
     float3 diffuse = (1.0 - (disableDirectSpecular ? 0.0 : fresnel)) *
                      (1.0 - metallic) * albedo / PBR_PI;
-    ShadowSampleDebug shadowDebug = {0.0, 0.0, 0u, 0u, uint2(0, 0)};
+    ShadowSampleDebug shadowDebug = {0.0, 0.0, 0u, 0u, uint2(0, 0), 0u, 0u};
 #if FORWARD_RESOLVED_VSM
     float shadow = frame.shadowEnabled != 0
         ? 1.0 - directionalVisibility.Sample(input.position.xy / frame.clusteredViewportNearFar.xy).r : 0.0;

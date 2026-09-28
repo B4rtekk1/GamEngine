@@ -285,6 +285,85 @@ EnvironmentSource loadEquirectangular(const std::filesystem::path& path) {
     return source;
 }
 
+std::optional<ImageBasedLighting::EnvironmentSun> extractSun(const EnvironmentSource& source) {
+    if (!source.loaded()) return std::nullopt;
+    const auto& image = source.mips.front();
+    const float longitudeStep = Tau / static_cast<float>(image.width);
+    const float latitudeStep = Pi / static_cast<float>(image.height);
+    std::vector<float> longitudeCos(image.width), longitudeSin(image.width);
+    std::vector<float> latitudeCos(image.height), latitudeSin(image.height);
+    for (int x = 0; x < image.width; ++x) {
+        const float longitude = (static_cast<float>(x) + 0.5F) * longitudeStep - Pi;
+        longitudeCos[x] = std::cos(longitude);
+        longitudeSin[x] = std::sin(longitude);
+    }
+    for (int y = 0; y < image.height; ++y) {
+        const float latitude = (static_cast<float>(y) + 0.5F) * latitudeStep;
+        latitudeCos[y] = std::cos(latitude);
+        latitudeSin[y] = std::sin(latitude);
+    }
+    Vec3 totalRadiance{};
+    float peakLuminance = 0.0F;
+    int peakX = 0, peakY = 0;
+    const auto radianceAt = [&](int x, int y) {
+        const auto index = (static_cast<std::size_t>(y) * image.width + x) * 4;
+        return Vec3{image.pixels[index], image.pixels[index + 1], image.pixels[index + 2]};
+    };
+    const auto luminance = [](const Vec3& color) {
+        return 0.2126F * color.x() + 0.7152F * color.y() + 0.0722F * color.z();
+    };
+    const auto directionAt = [&](int x, int y) {
+        return Vec3{longitudeCos[x] * latitudeSin[y], latitudeCos[y],
+                    longitudeSin[x] * latitudeSin[y]};
+    };
+    for (int y = 0; y < image.height; ++y) {
+        const float solidAngle = longitudeStep * latitudeStep * latitudeSin[y];
+        for (int x = 0; x < image.width; ++x) {
+            const Vec3 radiance = radianceAt(x, y);
+            if (!std::isfinite(radiance.x()) || !std::isfinite(radiance.y()) ||
+                !std::isfinite(radiance.z())) continue;
+            const float brightness = luminance(radiance);
+            totalRadiance += radiance * solidAngle;
+            if (brightness > peakLuminance) {
+                peakLuminance = brightness;
+                peakX = x;
+                peakY = y;
+            }
+        }
+    }
+    const Vec3 ambient = totalRadiance * (1.0F / (4.0F * Pi));
+    const float ambientLuminance = luminance(ambient);
+    // A uniformly bright sky has no useful shadow direction.
+    if (peakLuminance < 8.0F * ambientLuminance || peakLuminance < 1.0F)
+        return std::nullopt;
+
+    const Vec3 peakDirection = directionAt(peakX, peakY);
+    constexpr float CosSunRadius = 0.9961947F; // five degrees
+    const float cutoff = std::max(peakLuminance * 0.05F, ambientLuminance * 4.0F);
+    Vec3 energy{};
+    Vec3 weightedDirection{};
+    for (int y = 0; y < image.height; ++y) {
+        const float solidAngle = longitudeStep * latitudeStep * latitudeSin[y];
+        for (int x = 0; x < image.width; ++x) {
+            const Vec3 direction = directionAt(x, y);
+            if (dot(direction, peakDirection) < CosSunRadius) continue;
+            const Vec3 radiance = radianceAt(x, y);
+            const float brightness = luminance(radiance);
+            if (!std::isfinite(brightness) || brightness < cutoff) continue;
+            const Vec3 excess{std::max(0.0F, radiance.x() - ambient.x()),
+                              std::max(0.0F, radiance.y() - ambient.y()),
+                              std::max(0.0F, radiance.z() - ambient.z())};
+            energy += excess * solidAngle;
+            weightedDirection += direction * (luminance(excess) * solidAngle);
+        }
+    }
+    const float intensity = std::max({energy.x(), energy.y(), energy.z()});
+    if (!std::isfinite(intensity) || intensity < 0.01F || weightedDirection.length() < 1.0e-6F)
+        return std::nullopt;
+    return ImageBasedLighting::EnvironmentSun{weightedDirection.normalized(),
+        energy * (1.0F / intensity), intensity};
+}
+
 }
 
 void ImageBasedLighting::create(VkPhysicalDevice physicalDevice, VkDevice device, VkCommandPool commandPool,
@@ -336,6 +415,7 @@ void ImageBasedLighting::create(VkPhysicalDevice physicalDevice, VkDevice device
         if (!source) source.emplace(loadEquirectangular(equirectangularPath));
         return *source;
     };
+    replacement.sun_ = extractSun(getSource());
     uploadCubemap(environmentCache, quality.environmentResolution, environmentMips, [&] {
         const auto& decoded = getSource();
         return EnvironmentBaker::bakeCubemap(quality.environmentResolution, environmentMips,
@@ -366,7 +446,9 @@ void ImageBasedLighting::create(VkPhysicalDevice physicalDevice, VkDevice device
     swap(replacement);
 }
 
-void ImageBasedLighting::destroy() noexcept { brdfLut_.destroy(); prefiltered_.destroy(); irradiance_.destroy(); environment_.destroy(); }
+void ImageBasedLighting::destroy() noexcept {
+    brdfLut_.destroy(); prefiltered_.destroy(); irradiance_.destroy(); environment_.destroy(); sun_.reset();
+}
 
 void ImageBasedLighting::swap(ImageBasedLighting& other) noexcept {
     using std::swap;
@@ -374,6 +456,7 @@ void ImageBasedLighting::swap(ImageBasedLighting& other) noexcept {
     swap(irradiance_, other.irradiance_);
     swap(prefiltered_, other.prefiltered_);
     swap(brdfLut_, other.brdfLut_);
+    swap(sun_, other.sun_);
 }
 
 std::array<VkDescriptorImageInfo, 3> ImageBasedLighting::descriptors() const noexcept {

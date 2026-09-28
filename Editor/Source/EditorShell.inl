@@ -646,6 +646,7 @@ Engine::Entity drawEditorMenuBar(Engine::ScenePreset &scene, Engine::Renderer &r
             selectDebugView("Resolved Clip Level", Engine::ShadowDebugView::ResolvedClipLevel);
             selectDebugView("Fallback Delta", Engine::ShadowDebugView::FallbackDelta);
             selectDebugView("Virtual Page", Engine::ShadowDebugView::VirtualPage);
+            selectDebugView("Residency", Engine::ShadowDebugView::Residency);
             ImGui::EndMenu();
         }
         if (ImGui::BeginMenu("GTAO Debug")) {

@@ -585,6 +585,7 @@ namespace Engine {
                                    vulkanDevice.graphicsQueue(), vulkanDevice.allocator(), path,
                                    runtimeRoot / "Library");
                 imageBasedLighting.swap(replacement);
+                sceneFrameDataCache.initialized = false;
                 const auto descriptors = imageBasedLighting.descriptors();
                 shadowPass.updateImageBasedLightingDescriptors(descriptors);
                 sceneDescriptorPass.updateImageBasedLightingDescriptors(descriptors);

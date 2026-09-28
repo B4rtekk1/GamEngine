@@ -22,6 +22,7 @@ static const uint SHADOW_DEBUG_DESIRED_CLIP_LEVEL = 3;
 static const uint SHADOW_DEBUG_RESOLVED_CLIP_LEVEL = 4;
 static const uint SHADOW_DEBUG_FALLBACK_DELTA = 5;
 static const uint SHADOW_DEBUG_VIRTUAL_PAGE = 6;
+static const uint SHADOW_DEBUG_RESIDENCY = 7;
 
 struct ShadowSampleDebug
 {
@@ -30,6 +31,8 @@ struct ShadowSampleDebug
     uint desiredClipLevel;
     uint resolvedClipLevel;
     uint2 virtualPage;
+    uint desiredResident;
+    uint resolvedResident;
 };
 
 // Resolving the page once is enough for every texel of a bilinear footprint
@@ -604,6 +607,8 @@ float sampleVirtualShadow(Sampler2DShadow shadowMap, Sampler2DShadow linearShado
     debug.desiredClipLevel = 0;
     debug.resolvedClipLevel = 0;
     debug.virtualPage = 0;
+    debug.desiredResident = 0;
+    debug.resolvedResident = 0;
     bool resident;
     float desiredFootprintInTexels;
     const uint desiredLevel = selectVirtualShadowLevel(
@@ -626,8 +631,11 @@ float sampleVirtualShadow(Sampler2DShadow shadowMap, Sampler2DShadow linearShado
             clipMatrices[level], clipConstants[level], level, pageTable, shadowQuality, pixelCoordinate,
             temporalSampleIndex, temporalShadowJitter, resident, clipEdge,
             blockerCount, penumbraRadius, virtualPage);
+        if (level == desiredLevel)
+            debug.desiredResident = resident ? 1u : 0u;
         if (resident)
         {
+            debug.resolvedResident = 1u;
             debug.blockerCount = blockerCount;
             debug.penumbraRadius = penumbraRadius;
             debug.resolvedClipLevel = level;
@@ -673,6 +681,12 @@ float sampleVirtualShadow(Sampler2DShadow shadowMap, Sampler2DShadow linearShado
 
 float3 shadowDebugColor(uint view, ShadowSampleDebug debug)
 {
+    if (view == SHADOW_DEBUG_RESIDENCY)
+    {
+        if (debug.desiredResident != 0u) return float3(0.10, 0.90, 0.20);
+        if (debug.resolvedResident != 0u) return float3(1.00, 0.85, 0.10);
+        return float3(0.95, 0.05, 0.05);
+    }
     if (view == SHADOW_DEBUG_BLOCKER_COUNT)
         return saturate(debug.blockerCount / 8.0).xxx;
     if (view == SHADOW_DEBUG_PENUMBRA_RADIUS)
