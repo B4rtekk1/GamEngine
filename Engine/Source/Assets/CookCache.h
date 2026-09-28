@@ -14,6 +14,7 @@ namespace Engine::Assets::CookCache {
     inline constexpr float compressionQuality = 0.10F;
     inline constexpr std::uint32_t cookerVersion = 4;
     inline constexpr std::uint32_t mipPolicy = 3; // Cutout mips filter colour by alpha and preserve coverage.
+    inline constexpr std::uint32_t cutoutDilationPolicy = 1; // RGB dilation applies only to alpha cutouts.
     inline constexpr std::uint32_t normalPolicy = 1; // Normalize tangent-space vectors before encoding RG.
 
     struct Hash64 final {

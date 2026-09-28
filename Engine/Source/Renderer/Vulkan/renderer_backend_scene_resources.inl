@@ -87,28 +87,44 @@
                 activeOwners.insert(owner);
             });
 
-            auto uploadImage = [&](const Mesh::Image& image, const bool srgb, Texture2D& texture) {
+            auto uploadImage = [&](const Mesh::Image& image, const bool srgb,
+                                   const VkSamplerAddressMode addressMode,
+                                   const bool compactInitialMips, Texture2D& texture) {
                 if (image.cooked) {
                     ++cookedImages;
                     texture.createCooked(vulkanDevice.physical(), device, commandPool,
-                        vulkanDevice.graphicsQueue(), *image.cooked, vulkanDevice.allocator());
+                        vulkanDevice.graphicsQueue(), *image.cooked, vulkanDevice.allocator(), addressMode);
                 } else if (image.gtex) {
                     ++gtexImages;
+                    std::uint32_t firstResidentMip = 0;
+                    if (compactInitialMips) {
+                        while (firstResidentMip + 1 < image.gtex->mips.size() &&
+                               std::max(image.gtex->mips[firstResidentMip].width,
+                                        image.gtex->mips[firstResidentMip].height) > 1024U)
+                            ++firstResidentMip;
+                    }
                     texture.createGtex(vulkanDevice.physical(), device, commandPool,
-                        vulkanDevice.graphicsQueue(), *image.gtex, 0, vulkanDevice.allocator());
+                        vulkanDevice.graphicsQueue(), *image.gtex, firstResidentMip,
+                        vulkanDevice.allocator(), addressMode);
                 } else if (image.width != 0 && image.height != 0 && !image.rgbaPixels.empty()) {
                     ++rawImages;
                     rawBytes += image.rgbaPixels.size();
                     texture.create(vulkanDevice.physical(), device, commandPool, vulkanDevice.graphicsQueue(),
                         image.width, image.height, image.rgbaPixels,
                         srgb ? TextureColorSpace::SRGB : TextureColorSpace::Linear, true,
-                        vulkanDevice.allocator());
+                        vulkanDevice.allocator(), TexturePixelFormat::RGBA8, addressMode);
                 }
             };
 
             std::unordered_set<std::uint64_t> processedOwners;
             for (const ActiveMesh& active : activeMeshes) {
                 const Mesh& mesh = *active.mesh;
+                std::uint64_t textureBytes = 0;
+                for (const auto& image : mesh.images)
+                    if (image.gtex)
+                        for (const auto& mip : image.gtex->mips)
+                            textureBytes += mip.size;
+                const bool compactInitialMips = textureBytes > 512ULL * 1024 * 1024;
                 auto& ids = meshTextureIds[active.owner];
                 if (ids.size() < mesh.images.size()) ids.resize(mesh.images.size());
                 auto& slots = meshTextureSlots[active.mesh];
@@ -131,7 +147,15 @@
                             const auto index = static_cast<std::int32_t>(i);
                             return material.baseColorTexture == index || material.emissiveTexture == index;
                         });
-                        uploadImage(mesh.images[i], srgb, gpu.texture);
+                        const bool alphaCard = std::ranges::any_of(*active.materials, [i](const PBRMaterial& material) {
+                            const auto index = static_cast<std::int32_t>(i);
+                            return (material.alphaMode == AlphaMode::Mask ||
+                                    material.shadingModel == MaterialShadingModel::Foliage) &&
+                                   (material.baseColorTexture == index || material.opacityTexture == index);
+                        });
+                        uploadImage(mesh.images[i], srgb, alphaCard ? VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE
+                                                                    : VK_SAMPLER_ADDRESS_MODE_REPEAT,
+                                    compactInitialMips, gpu.texture);
                         found = textureGpuResources.emplace(id, std::move(gpu)).first;
                     }
                     ids[i] = id;
@@ -187,11 +211,23 @@
                     static_cast<std::size_t>(localIndex) >= slots->second.size()) return -1;
                 return static_cast<std::int32_t>(slots->second[static_cast<std::size_t>(localIndex)]);
             };
+            const auto assetName = mesh.sourcePath.stem().string();
+            const bool bistro = assetName == "BistroExterior" || assetName == "BistroInterior" ||
+                                assetName == "BistroInterior_Wine";
             const int materialFlags = (source.doubleSided ? 1 : 0) |
                 (static_cast<int>(source.alphaMode) << 1) | (source.terrainLayered ? 8 : 0) |
                 (source.shadingModel == MaterialShadingModel::Foliage ? 16 : 0) |
-                (source.vertexColorUsage == VertexColorUsage::FoliageData ? 32 : 0) |
-                (source.hasSpecularExtension ? 64 : 0);
+                (bistro ||
+                 source.vertexColorUsage == VertexColorUsage::None ||
+                 source.vertexColorUsage == VertexColorUsage::FoliageData ? 32 : 0) |
+                (source.hasSpecularExtension ? 64 : 0) |
+                (source.normalConvention == NormalConvention::DirectX ? 128 : 0);
+            // Already-cooked Bistro meshes share the packed Specular image
+            // between AO and metallic/roughness. Its red channel is zero.
+            const bool bistroPackedSpecular = bistro &&
+                source.aoTexture >= 0 && source.aoTexture == source.metallicRoughnessTexture;
+            const bool bistroBaseAlpha = bistro &&
+                source.baseColorTexture >= 0 && source.opacityTexture == source.baseColorTexture;
             const auto coordinateSet = [&](const MaterialTextureSlot slot) {
                 const auto& value = source.textureTransforms[static_cast<std::size_t>(slot)];
                 const bool identity = value.offsetX == 0.0F && value.offsetY == 0.0F &&
@@ -220,7 +256,8 @@
                            textureIndex(source.normalTexture), materialFlags},
                 glm::ivec4{textureIndex(source.terrainLayerTextures[0]), textureIndex(source.terrainLayerTextures[1]),
                            textureIndex(source.terrainLayerTextures[2]), textureIndex(source.terrainLayerTextures[3])},
-                glm::ivec4{textureIndex(source.aoTexture), textureIndex(source.opacityTexture),
+                glm::ivec4{textureIndex(bistroPackedSpecular ? -1 : source.aoTexture),
+                           textureIndex(bistroBaseAlpha ? -1 : source.opacityTexture),
                            textureIndex(source.translucencyTexture), textureIndex(source.displacementTexture)},
                 glm::vec4{source.normalScale, source.translucency, source.displacementScale, source.specular},
                 glm::vec4{source.displacementScale, source.displacementOffset, 0.0F, 0.0F},

@@ -14,11 +14,14 @@
 #include <bit>
 #include <cctype>
 #include <cmath>
+#include <fstream>
+#include <iostream>
 #include <limits>
 #include <memory>
 #include <ranges>
 #include <string>
 #include <string_view>
+#include <system_error>
 #include <unordered_map>
 #include <vector>
 
@@ -150,6 +153,16 @@ namespace {
         return label.find("foliage") != std::string::npos || label.find("leaves") != std::string::npos ||
                label.find("leaf") != std::string::npos || label.find("plant") != std::string::npos ||
                label.find("grass") != std::string::npos;
+    }
+
+    bool bistro_asset(const std::filesystem::path& path) {
+        const auto stem = path.stem().string();
+        if (stem != "BistroExterior" && stem != "BistroInterior" && stem != "BistroInterior_Wine")
+            return false;
+        std::ifstream readme(path.parent_path() / "README.txt");
+        std::string title;
+        return static_cast<bool>(std::getline(readme, title)) &&
+               title.starts_with("Amazon Lumberyard Bistro");
     }
 
     struct FbxOpacitySource {
@@ -365,6 +378,7 @@ namespace {
 std::shared_ptr<const Mesh> load_fbx_mesh(const std::filesystem::path& path, bool forCooking) {
     const auto scene = open_scene(path);
     if (!scene || scene->materials.count >= std::numeric_limits<std::uint32_t>::max()) return {};
+    const bool bistro = bistro_asset(path);
     Mesh result;
     std::vector<std::int32_t> imageIndices(scene->texture_files.count, -1);
     std::vector<std::size_t> imageFiles;
@@ -398,6 +412,7 @@ std::shared_ptr<const Mesh> load_fbx_mesh(const std::filesystem::path& path, boo
     for (std::size_t i = 0; i < scene->materials.count; ++i) {
         const auto& source = *scene->materials.data[i];
         PBRMaterial material;
+        material.vertexColorUsage = VertexColorUsage::None;
         const auto& base = source.pbr.base_color.has_value ? source.pbr.base_color : source.fbx.diffuse_color;
         // FBX transparency is a factor multiplied by TransparentColor. A
         // factor of one with a black color still describes an opaque surface.
@@ -428,10 +443,34 @@ std::shared_ptr<const Mesh> load_fbx_mesh(const std::filesystem::path& path, boo
         if (material.normalTexture < 0) material.normalTexture = image_index(source.fbx.normal_map, imageIndices);
         material.aoTexture = image_index(source.pbr.ambient_occlusion, imageIndices);
         material.emissiveTexture = image_index(source.pbr.emission_color, imageIndices);
-        material.opacityTexture = append_opacity_mask(result, *scene, imageFiles, opacitySource);
-        if (opacitySource.image >= 0 && material.opacityTexture < 0) return {};
+        if (opacitySource.image >= 0 && opacitySource.image == material.baseColorTexture) {
+            const std::string_view name{source.name.data ? source.name.data : "", source.name.length};
+            std::clog << "FBX material '" << name << "': BaseColor and opacity reference the same image"
+                      << (bistro ? "; using BaseColor alpha\n" : "; opacity samples red separately\n");
+        }
+        // Bistro specifies opacity in BaseColor.A. FBX opacity links may
+        // point to that image, but the separate shader slot samples red.
+        if (!bistro || material.baseColorTexture < 0) {
+            material.opacityTexture = append_opacity_mask(result, *scene, imageFiles, opacitySource);
+            if (opacitySource.image >= 0 && material.opacityTexture < 0) return {};
+        }
         material.displacementTexture = image_index(source.pbr.displacement_map, imageIndices);
         material.specularColorTexture = image_index(source.pbr.specular_color, imageIndices);
+        if (bistro) {
+            const auto packed = image_index(source.fbx.specular_color, imageIndices);
+            const auto specular = packed >= 0 ? packed : material.specularColorTexture;
+            material.specularColorTexture = -1;
+            if (specular >= 0) {
+                // Bistro's packed red channel contains zero in its default
+                // maps. Sampling it as visibility would erase indirect light.
+                // The green and blue channels contain roughness and metalness.
+                material.aoTexture = -1;
+                material.metallicRoughnessTexture = specular;
+                material.metallic = 1.0F;
+                material.roughness = 1.0F;
+            }
+            material.normalConvention = NormalConvention::DirectX;
+        }
         if (opacity < 1.0F) material.alphaMode = AlphaMode::Blend;
         bool baseHasAlpha = false;
         if (material.baseColorTexture >= 0) {
@@ -462,6 +501,7 @@ std::shared_ptr<const Mesh> load_fbx_mesh(const std::filesystem::path& path, boo
         result.materials.push_back(material);
     }
     result.materials.emplace_back();
+    result.materials.back().vertexColorUsage = VertexColorUsage::None;
     for (std::size_t i = 0; i < scene->nodes.count; ++i) {
         if (!append_node(*scene->nodes.data[i], *scene, result)) return {};
     }
@@ -486,6 +526,40 @@ std::shared_ptr<const Mesh> load_fbx_mesh(const std::filesystem::path& path, boo
 }
 
 std::optional<std::uint64_t> fbx_source_hash(const std::filesystem::path& path) {
+    if (bistro_asset(path)) {
+        // Bistro contains hundreds of textures. Checking file metadata avoids
+        // parsing the multi-million-triangle FBX just to validate its cache.
+        CookCache::Hash64 hash;
+        hash.add("bistro-dependencies-metadata-v1");
+        const auto addFile = [&](const std::filesystem::path& file) {
+            std::error_code error;
+            const auto size = std::filesystem::file_size(file, error);
+            if (error) return false;
+            const auto modified = std::filesystem::last_write_time(file, error);
+            if (error) return false;
+            hash.add(file.lexically_normal().generic_string());
+            hash.add(size);
+            hash.add(static_cast<std::uint64_t>(modified.time_since_epoch().count()));
+            return true;
+        };
+        if (!addFile(path)) return std::nullopt;
+        const auto textureRoot = path.parent_path() / "Textures";
+        std::error_code error;
+        std::vector<std::filesystem::path> textures;
+        for (std::filesystem::recursive_directory_iterator it(textureRoot, error), end;
+             !error && it != end; it.increment(error)) {
+            if (!it->is_regular_file(error)) continue;
+            const auto extension = it->path().extension().string();
+            if (extension == ".dds" || extension == ".DDS" || extension == ".png" ||
+                extension == ".tga" || extension == ".jpg" || extension == ".jpeg")
+                textures.push_back(it->path());
+        }
+        if (error || textures.empty()) return std::nullopt;
+        std::ranges::sort(textures);
+        for (const auto& texture : textures)
+            if (!addFile(texture)) return std::nullopt;
+        return hash.value;
+    }
     const auto sourceHash = CookCache::hash_file(path);
     if (!sourceHash) return std::nullopt;
     const auto scene = open_scene(path);
@@ -493,6 +567,7 @@ std::optional<std::uint64_t> fbx_source_hash(const std::filesystem::path& path) 
     CookCache::Hash64 hash;
     hash.add("fbx-dependencies-v1");
     hash.add(*sourceHash);
+    hash.add(bistro_asset(path));
     for (std::size_t i = 0; i < scene->texture_files.count; ++i) {
         const auto& file = scene->texture_files.data[i];
         if (file.content.size) continue;

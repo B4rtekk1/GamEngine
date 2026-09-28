@@ -7,13 +7,12 @@
 
 namespace Engine {
     enum class AlphaMode : std::uint8_t { Opaque, Mask, Blend };
-    // All runtime normal maps use the glTF/OpenGL (+Y) convention.  The
-    // cooker converts DirectX assets before they reach this structure.
+    // Normal maps use OpenGL (+Y) by default; the shader flips Y for DirectX.
     enum class NormalConvention : std::uint8_t { OpenGL, DirectX };
     enum class MaterialShadingModel : std::uint8_t { Standard, Foliage };
-    // COLOR_0 is normally an albedo multiplier in glTF, but vegetation
-    // exporters commonly store wind and per-leaf masks in it instead.
-    enum class VertexColorUsage : std::uint8_t { Albedo, FoliageData, TerrainWeights };
+    // glTF defines COLOR_0 as an albedo multiplier. FBX vertex colors may
+    // carry unrelated data, so importers select the intended usage explicitly.
+    enum class VertexColorUsage : std::uint8_t { Albedo, FoliageData, TerrainWeights, None };
     enum class MaterialTextureSlot : std::uint8_t {
         BaseColor, MetallicRoughness, Normal, AmbientOcclusion, Opacity,
         Translucency, Displacement, Emissive, Specular, SpecularColor, Count

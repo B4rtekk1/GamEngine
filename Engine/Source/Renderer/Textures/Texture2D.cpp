@@ -202,6 +202,7 @@ namespace Engine {
         allocator_ = std::exchange(other.allocator_, VK_NULL_HANDLE);
         imageView_ = std::exchange(other.imageView_, VK_NULL_HANDLE);
         sampler_ = std::exchange(other.sampler_, VK_NULL_HANDLE);
+        addressMode_ = std::exchange(other.addressMode_, VK_SAMPLER_ADDRESS_MODE_REPEAT);
         format_ = std::exchange(other.format_, VK_FORMAT_UNDEFINED);
         width_ = std::exchange(other.width_, 0);
         height_ = std::exchange(other.height_, 0);
@@ -225,7 +226,8 @@ namespace Engine {
         const TextureColorSpace colorSpace,
         const bool generateMipmaps,
         const VmaAllocator allocator,
-        const TexturePixelFormat pixelFormat) {
+        const TexturePixelFormat pixelFormat,
+        const VkSamplerAddressMode addressMode) {
         if (physicalDevice == VK_NULL_HANDLE || device == VK_NULL_HANDLE ||
             commandPool == VK_NULL_HANDLE || queue == VK_NULL_HANDLE) {
             throw std::invalid_argument("Texture2D requires valid Vulkan handles");
@@ -273,6 +275,7 @@ namespace Engine {
         width_ = width;
         height_ = height;
         mipLevels_ = mipLevels;
+        addressMode_ = addressMode;
 
         Buffer staging;
         UploadContext *upload = UploadContext::current();
@@ -442,9 +445,9 @@ namespace Engine {
             samplerInfo.magFilter = VK_FILTER_LINEAR;
             samplerInfo.minFilter = VK_FILTER_LINEAR;
             samplerInfo.mipmapMode = VK_SAMPLER_MIPMAP_MODE_LINEAR;
-            samplerInfo.addressModeU = VK_SAMPLER_ADDRESS_MODE_REPEAT;
-            samplerInfo.addressModeV = VK_SAMPLER_ADDRESS_MODE_REPEAT;
-            samplerInfo.addressModeW = VK_SAMPLER_ADDRESS_MODE_REPEAT;
+            samplerInfo.addressModeU = addressMode_;
+            samplerInfo.addressModeV = addressMode_;
+            samplerInfo.addressModeW = addressMode_;
             VkPhysicalDeviceFeatures supportedFeatures{};
             VkPhysicalDeviceProperties properties{};
             vkGetPhysicalDeviceFeatures(physicalDevice, &supportedFeatures);
@@ -468,7 +471,8 @@ namespace Engine {
 
     void Texture2D::createCooked(
         const VkPhysicalDevice physicalDevice, const VkDevice device, const VkCommandPool commandPool,
-        const VkQueue queue, const Assets::CookedTexture &texture, const VmaAllocator allocator) {
+        const VkQueue queue, const Assets::CookedTexture &texture, const VmaAllocator allocator,
+        const VkSamplerAddressMode addressMode) {
         if (physicalDevice == VK_NULL_HANDLE || device == VK_NULL_HANDLE || commandPool == VK_NULL_HANDLE || queue ==
             VK_NULL_HANDLE ||
             allocator == VK_NULL_HANDLE)
@@ -482,6 +486,7 @@ namespace Engine {
         width_ = texture.width;
         height_ = texture.height;
         mipLevels_ = static_cast<std::uint32_t>(texture.mips.size());
+        addressMode_ = addressMode;
 
         Buffer staging;
         UploadContext *upload = UploadContext::current();
@@ -601,9 +606,9 @@ namespace Engine {
             samplerInfo.magFilter = VK_FILTER_LINEAR;
             samplerInfo.minFilter = VK_FILTER_LINEAR;
             samplerInfo.mipmapMode = VK_SAMPLER_MIPMAP_MODE_LINEAR;
-            samplerInfo.addressModeU = VK_SAMPLER_ADDRESS_MODE_REPEAT;
-            samplerInfo.addressModeV = VK_SAMPLER_ADDRESS_MODE_REPEAT;
-            samplerInfo.addressModeW = VK_SAMPLER_ADDRESS_MODE_REPEAT;
+            samplerInfo.addressModeU = addressMode_;
+            samplerInfo.addressModeV = addressMode_;
+            samplerInfo.addressModeW = addressMode_;
             VkPhysicalDeviceFeatures supportedFeatures{};
             VkPhysicalDeviceProperties properties{};
             vkGetPhysicalDeviceFeatures(physicalDevice, &supportedFeatures);
@@ -625,7 +630,7 @@ namespace Engine {
     void Texture2D::createGtex(
         const VkPhysicalDevice physicalDevice, const VkDevice device, const VkCommandPool commandPool,
         const VkQueue queue, const Assets::GtexTexture &texture, const std::uint32_t firstResidentMip,
-        const VmaAllocator allocator) {
+        const VmaAllocator allocator, const VkSamplerAddressMode addressMode) {
         if (physicalDevice == VK_NULL_HANDLE || device == VK_NULL_HANDLE || commandPool == VK_NULL_HANDLE || queue ==
             VK_NULL_HANDLE ||
             allocator == VK_NULL_HANDLE || firstResidentMip >= texture.mips.size())
@@ -644,6 +649,7 @@ namespace Engine {
         height_ = texture.mips[firstResidentMip].height;
         mipLevels_ = sourceMipLevels_ - firstResidentMip;
         residentFirstMip_ = firstResidentMip;
+        addressMode_ = addressMode;
         const bool ownsUploadBatch = !upload->recording();
         try {
             if (ownsUploadBatch) upload->begin();
@@ -695,9 +701,9 @@ namespace Engine {
             samplerInfo.magFilter = VK_FILTER_LINEAR;
             samplerInfo.minFilter = VK_FILTER_LINEAR;
             samplerInfo.mipmapMode = VK_SAMPLER_MIPMAP_MODE_LINEAR;
-            samplerInfo.addressModeU = VK_SAMPLER_ADDRESS_MODE_REPEAT;
-            samplerInfo.addressModeV = VK_SAMPLER_ADDRESS_MODE_REPEAT;
-            samplerInfo.addressModeW = VK_SAMPLER_ADDRESS_MODE_REPEAT;
+            samplerInfo.addressModeU = addressMode_;
+            samplerInfo.addressModeV = addressMode_;
+            samplerInfo.addressModeW = addressMode_;
             VkPhysicalDeviceFeatures supportedFeatures{};
             VkPhysicalDeviceProperties properties{};
             vkGetPhysicalDeviceFeatures(physicalDevice, &supportedFeatures);
@@ -725,7 +731,7 @@ namespace Engine {
 
         Texture2D replacement;
         replacement.createGtex(physicalDevice, device_, commandPool, queue, texture,
-                               newFirstResidentMip, allocator_);
+                               newFirstResidentMip, allocator_, addressMode_);
         Texture2D retired = std::move(*this);
         *this = std::move(replacement);
         return retired;
@@ -783,6 +789,7 @@ namespace Engine {
         allocator_ = VK_NULL_HANDLE;
         imageView_ = VK_NULL_HANDLE;
         sampler_ = VK_NULL_HANDLE;
+        addressMode_ = VK_SAMPLER_ADDRESS_MODE_REPEAT;
         format_ = VK_FORMAT_UNDEFINED;
         width_ = 0;
         height_ = 0;

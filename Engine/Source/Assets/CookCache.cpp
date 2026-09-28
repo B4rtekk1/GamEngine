@@ -1,4 +1,5 @@
 #include "CookCache.h"
+#include "Engine/Assets/TextureCooker.h"
 
 #include <array>
 #include <bit>
@@ -53,6 +54,7 @@ namespace Engine::Assets::CookCache {
         hash.add(GAMEENGINE_BC7_ENCODER);
         hash.add(cookerVersion);
         hash.add(mipPolicy);
+        hash.add(cutoutDilationPolicy);
         hash.add(normalPolicy);
         hash.add(std::bit_cast<std::uint32_t>(compressionQuality));
         return hash.value;
@@ -72,6 +74,8 @@ namespace Engine::Assets::CookCache {
         hash.add(key.mipPolicy);
         hash.add(key.normalPolicy);
         hash.add(std::bit_cast<std::uint32_t>(key.quality));
+        if (key.cutoutChannel == static_cast<std::uint32_t>(CutoutChannel::Alpha))
+            hash.add(cutoutDilationPolicy);
         return hash.value;
     }
 

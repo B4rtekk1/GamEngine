@@ -27,6 +27,7 @@
 #include <string_view>
 #include <system_error>
 #include <thread>
+#include <utility>
 #include <vector>
 
 namespace Engine::Assets {
@@ -242,6 +243,51 @@ namespace Engine::Assets {
                 }
             });
             return result;
+        }
+
+        void dilate_transparent_rgb(std::vector<std::uint8_t>& pixels,
+                                    const std::uint32_t width, const std::uint32_t height) {
+            constexpr std::uint8_t transparentThreshold = 8;
+            const std::size_t count = static_cast<std::size_t>(width) * height;
+            bool hasTransparentPixels = false;
+            for (std::size_t i = 3; i < pixels.size(); i += 4)
+                if (pixels[i] <= transparentThreshold) {
+                    hasTransparentPixels = true;
+                    break;
+                }
+            if (!hasTransparentPixels) return;
+            std::vector<std::uint8_t> filled(count, 0);
+            constexpr std::uint8_t maxDistance = 8;
+            std::deque<std::pair<std::size_t, std::uint8_t>> frontier;
+            const auto fill = [&](const std::size_t from, const std::size_t to,
+                                  const std::uint8_t distance) {
+                if (pixels[to * 4 + 3] > transparentThreshold || filled[to]) return;
+                for (std::size_t channel = 0; channel < 3; ++channel)
+                    pixels[to * 4 + channel] = pixels[from * 4 + channel];
+                filled[to] = 1;
+                frontier.emplace_back(to, distance);
+            };
+            for (std::uint32_t y = 0; y < height; ++y)
+                for (std::uint32_t x = 0; x < width; ++x) {
+                    const auto index = static_cast<std::size_t>(y) * width + x;
+                    if (pixels[index * 4 + 3] <= transparentThreshold) continue;
+                    if (x > 0) fill(index, index - 1, 1);
+                    if (x + 1 < width) fill(index, index + 1, 1);
+                    if (y > 0) fill(index, index - width, 1);
+                    if (y + 1 < height) fill(index, index + width, 1);
+                }
+            while (!frontier.empty()) {
+                const auto [index, distance] = frontier.front();
+                frontier.pop_front();
+                if (distance == maxDistance) continue;
+                const auto x = index % width;
+                const auto y = index / width;
+                const auto nextDistance = static_cast<std::uint8_t>(distance + 1);
+                if (x > 0) fill(index, index - 1, nextDistance);
+                if (x + 1 < width) fill(index, index + 1, nextDistance);
+                if (y > 0) fill(index, index - width, nextDistance);
+                if (y + 1 < height) fill(index, index + width, nextDistance);
+            }
         }
 
         [[nodiscard]] float alpha_coverage(const std::span<const std::uint8_t> pixels,
@@ -537,6 +583,13 @@ namespace Engine::Assets {
         std::vector<std::uint8_t> ownedMip;
         std::uint32_t mipWidth = width;
         std::uint32_t mipHeight = height;
+        const bool dilateCutout = cutout.channel == CutoutChannel::Alpha &&
+            (format == TextureFormat::BC7_UNORM || format == TextureFormat::BC7_SRGB);
+        if (dilateCutout) {
+            ownedMip.assign(rgbaPixels.begin(), rgbaPixels.end());
+            dilate_transparent_rgb(ownedMip, width, height);
+            mip = ownedMip;
+        }
         const float targetCoverage = cutout.channel == CutoutChannel::None
             ? 0.0F : alpha_coverage(rgbaPixels, cutout);
         while (true) {
@@ -561,6 +614,8 @@ namespace Engine::Assets {
                            ? downsample_normal_map(mip, mipWidth, mipHeight)
                            : downsample_rgba(mip, mipWidth, mipHeight, format == TextureFormat::BC7_SRGB,
                                              cutout.channel == CutoutChannel::Alpha);
+            if (dilateCutout)
+                dilate_transparent_rgb(ownedMip, std::max(1U, mipWidth / 2), std::max(1U, mipHeight / 2));
             if (cutout.channel != CutoutChannel::None && targetCoverage > 0.0F && targetCoverage < 1.0F)
                 preserve_alpha_coverage(ownedMip, cutout, targetCoverage);
             mip = ownedMip;

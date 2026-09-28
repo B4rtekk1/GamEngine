@@ -288,8 +288,8 @@ ForwardFragmentOutput fragmentMain(ForwardFragmentInput input)
         vertexColor = shade;
     }
 
-    // Quixel foliage uses COLOR_0 for wind/mask data, not pigment.  Preserve
-    // glTF's usual vertex-colour modulation for every other material.
+    // The material flag disables albedo modulation for FBX colors with
+    // unspecified semantics and for foliage wind/mask data.
     float3 albedoMultiplier = (material.textureIndices.w & 32) != 0 ? 1.0 : vertexColor;
     float4 baseColor = float4(albedoMultiplier * material.baseColorMetallic.rgb,
                               material.roughnessAmbientOcclusion.w);
@@ -397,6 +397,8 @@ ForwardFragmentOutput fragmentMain(ForwardFragmentInput input)
         float3 bitangent = normalize(cross(normal, tangent)) * input.tangent.w;
         float2 mappedXY = materialTextures[NonUniformResourceIndex(material.textureIndices.z)]
             .Sample(materialTextureUv(material, 2, input.texCoord, input.texCoord1)).rg * 2.0 - 1.0;
+        if ((material.textureIndices.w & 128) != 0)
+            mappedXY.y = -mappedXY.y;
         float mappedZ = sqrt(saturate(1.0 - dot(mappedXY, mappedXY)));
         float3 mappedNormal = float3(mappedXY * material.extensionScalars.x, mappedZ);
         float3x3 tangentFrame = float3x3(tangent, bitangent, normal);

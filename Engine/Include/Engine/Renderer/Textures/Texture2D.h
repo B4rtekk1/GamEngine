@@ -48,7 +48,8 @@ public:
         TextureColorSpace colorSpace = TextureColorSpace::SRGB,
         bool generateMipmaps = true,
         VmaAllocator allocator = VK_NULL_HANDLE,
-        TexturePixelFormat pixelFormat = TexturePixelFormat::RGBA8);
+        TexturePixelFormat pixelFormat = TexturePixelFormat::RGBA8,
+        VkSamplerAddressMode addressMode = VK_SAMPLER_ADDRESS_MODE_REPEAT);
 
     /** Uploads pre-cooked RGBA/BC mip blocks without runtime decompression or blits. */
     void createCooked(
@@ -57,13 +58,15 @@ public:
         VkCommandPool commandPool,
         VkQueue queue,
         const Assets::CookedTexture& texture,
-        VmaAllocator allocator = VK_NULL_HANDLE);
+        VmaAllocator allocator = VK_NULL_HANDLE,
+        VkSamplerAddressMode addressMode = VK_SAMPLER_ADDRESS_MODE_REPEAT);
 
     /** Allocates only the GTEX mip tail beginning at firstResidentMip. */
     void createGtex(
         VkPhysicalDevice physicalDevice, VkDevice device, VkCommandPool commandPool, VkQueue queue,
         const Assets::GtexTexture& texture, std::uint32_t firstResidentMip,
-        VmaAllocator allocator = VK_NULL_HANDLE);
+        VmaAllocator allocator = VK_NULL_HANDLE,
+        VkSamplerAddressMode addressMode = VK_SAMPLER_ADDRESS_MODE_REPEAT);
 
     /**
      * Builds a new physical mip tail for promotion or demotion and installs it.
@@ -111,6 +114,7 @@ private:
     VmaAllocator allocator_ = VK_NULL_HANDLE;
     VkImageView imageView_ = VK_NULL_HANDLE;
     VkSampler sampler_ = VK_NULL_HANDLE;
+    VkSamplerAddressMode addressMode_ = VK_SAMPLER_ADDRESS_MODE_REPEAT;
     VkFormat format_ = VK_FORMAT_UNDEFINED;
     std::uint32_t width_ = 0;
     std::uint32_t height_ = 0;
