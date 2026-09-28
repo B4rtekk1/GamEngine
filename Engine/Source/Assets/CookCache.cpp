@@ -66,6 +66,8 @@ namespace Engine::Assets::CookCache {
         hash.add(key.sourceHash);
         hash.add(static_cast<std::uint64_t>(key.format));
         hash.add(static_cast<std::uint64_t>(key.srgb));
+        hash.add(key.cutoutChannel);
+        hash.add(std::bit_cast<std::uint32_t>(key.alphaCutoff));
         hash.add(key.cookerVersion);
         hash.add(key.mipPolicy);
         hash.add(key.normalPolicy);

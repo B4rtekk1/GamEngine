@@ -208,7 +208,7 @@ namespace Engine::Assets {
         [[nodiscard]] std::vector<std::uint8_t> downsample_rgba(const std::span<const std::uint8_t> source,
                                                                 const std::uint32_t sourceWidth,
                                                                 const std::uint32_t sourceHeight,
-                                                                const bool srgb) {
+                                                                const bool srgb, const bool alphaWeighted) {
             const std::uint32_t width = std::max(1U, sourceWidth / 2);
             const std::uint32_t height = std::max(1U, sourceHeight / 2);
             std::vector<std::uint8_t> result(static_cast<std::size_t>(width) * height * 4);
@@ -217,26 +217,67 @@ namespace Engine::Assets {
                 const std::uint32_t y = static_cast<std::uint32_t>(row);
                 for (std::uint32_t x = 0; x < width; ++x) {
                     std::array<float, 4> sum{};
+                    float colorWeight = 0.0F;
                     for (std::uint32_t oy = 0; oy < 2; ++oy)
                         for (std::uint32_t ox = 0; ox < 2; ++ox) {
                             const auto sx = std::min(sourceWidth - 1, x * 2 + ox);
                             const auto sy = std::min(sourceHeight - 1, y * 2 + oy);
                             const auto offset = (static_cast<std::size_t>(sy) * sourceWidth + sx) * 4;
+                            const float weight = alphaWeighted
+                                ? static_cast<float>(source[offset + 3]) / 255.0F : 1.0F;
                             for (std::uint32_t channel = 0; channel < 3; ++channel)
-                                sum[channel] += srgb
+                                sum[channel] += weight * (srgb
                                                     ? srgbToLinear[source[offset + channel]]
-                                                    : static_cast<float>(source[offset + channel]);
+                                                    : static_cast<float>(source[offset + channel]));
+                            colorWeight += weight;
                             sum[3] += static_cast<float>(source[offset + 3]);
                         }
                     const auto output = (static_cast<std::size_t>(y) * width + x) * 4;
                     for (std::uint32_t channel = 0; channel < 3; ++channel)
                         result[output + channel] = srgb
-                                                       ? linear_to_srgb(sum[channel] / 4.0F)
-                                                       : static_cast<std::uint8_t>(std::round(sum[channel] / 4.0F));
+                                                       ? linear_to_srgb(colorWeight > 1e-6F ? sum[channel] / colorWeight : 0.0F)
+                                                       : static_cast<std::uint8_t>(std::round(
+                                                           colorWeight > 1e-6F ? sum[channel] / colorWeight : 0.0F));
                     result[output + 3] = static_cast<std::uint8_t>(std::round(sum[3] / 4.0F));
                 }
             });
             return result;
+        }
+
+        [[nodiscard]] float alpha_coverage(const std::span<const std::uint8_t> pixels,
+                                           const CutoutMipSettings cutout) {
+            const std::size_t channel = cutout.channel == CutoutChannel::Red ? 0 : 3;
+            std::size_t covered = 0;
+            for (std::size_t i = channel; i < pixels.size(); i += 4)
+                covered += static_cast<float>(pixels[i]) / 255.0F >= cutout.cutoff;
+            return static_cast<float>(covered) / static_cast<float>(pixels.size() / 4);
+        }
+
+        void preserve_alpha_coverage(std::vector<std::uint8_t>& pixels,
+                                     const CutoutMipSettings cutout, const float targetCoverage) {
+            const std::size_t channel = cutout.channel == CutoutChannel::Red ? 0 : 3;
+            const auto coverage_at = [&](const float scale) {
+                std::size_t covered = 0;
+                for (std::size_t i = channel; i < pixels.size(); i += 4)
+                    covered += std::min(255.0F, static_cast<float>(pixels[i]) * scale) / 255.0F >= cutout.cutoff;
+                return static_cast<float>(covered) / static_cast<float>(pixels.size() / 4);
+            };
+            float low = 0.0F, high = 16.0F;
+            for (int i = 0; i < 16; ++i) {
+                const float middle = (low + high) * 0.5F;
+                if (coverage_at(middle) < targetCoverage) low = middle;
+                else high = middle;
+            }
+            const float lowError = std::abs(coverage_at(low) - targetCoverage);
+            const float highError = std::abs(coverage_at(high) - targetCoverage);
+            const float scale = lowError < highError ? low : high;
+            for (std::size_t i = channel; i < pixels.size(); i += 4) {
+                const auto value = static_cast<std::uint8_t>(std::round(
+                    std::min(255.0F, static_cast<float>(pixels[i]) * scale)));
+                if (cutout.channel == CutoutChannel::Red)
+                    pixels[i] = pixels[i + 1] = pixels[i + 2] = value;
+                else pixels[i] = value;
+            }
         }
 
         [[nodiscard]] std::vector<std::uint8_t> downsample_normal_map(const std::span<const std::uint8_t> source,
@@ -463,7 +504,8 @@ namespace Engine::Assets {
 
     [[nodiscard]] CookedTexture cook_texture_impl(const std::span<const std::uint8_t> rgbaPixels,
                                                   const std::uint32_t width, const std::uint32_t height,
-                                                  const TextureFormat format, TextureCookTimings *const timings) {
+                                                  const TextureFormat format, TextureCookTimings *const timings,
+                                                  const CutoutMipSettings cutout = {}) {
         if (width == 0 || height == 0 || width > std::numeric_limits<std::size_t>::max() / height / 4 ||
             rgbaPixels.size() != static_cast<std::size_t>(width) * height * 4)
             throw std::invalid_argument("Texture cooker requires a complete RGBA8 image");
@@ -495,6 +537,8 @@ namespace Engine::Assets {
         std::vector<std::uint8_t> ownedMip;
         std::uint32_t mipWidth = width;
         std::uint32_t mipHeight = height;
+        const float targetCoverage = cutout.channel == CutoutChannel::None
+            ? 0.0F : alpha_coverage(rgbaPixels, cutout);
         while (true) {
             const auto offset = static_cast<std::uint64_t>(result.data.size());
             const auto encodeStarted = std::chrono::steady_clock::now();
@@ -515,7 +559,10 @@ namespace Engine::Assets {
             const auto mipStarted = std::chrono::steady_clock::now();
             ownedMip = format == TextureFormat::BC5_UNORM
                            ? downsample_normal_map(mip, mipWidth, mipHeight)
-                           : downsample_rgba(mip, mipWidth, mipHeight, format == TextureFormat::BC7_SRGB);
+                           : downsample_rgba(mip, mipWidth, mipHeight, format == TextureFormat::BC7_SRGB,
+                                             cutout.channel == CutoutChannel::Alpha);
+            if (cutout.channel != CutoutChannel::None && targetCoverage > 0.0F && targetCoverage < 1.0F)
+                preserve_alpha_coverage(ownedMip, cutout, targetCoverage);
             mip = ownedMip;
             if (timings != nullptr)
                 timings->mipGeneration += std::chrono::steady_clock::now() - mipStarted;
@@ -557,11 +604,14 @@ namespace Engine::Assets {
                                                                 const TextureFormat format,
                                                                 const std::filesystem::path &cacheRoot,
                                                                 const std::function<CookedTexture()> &encode,
-                                                                TexturePhaseTimings *const timings) {
+                                                                TexturePhaseTimings *const timings,
+                                                                const CutoutMipSettings cutout) {
             const CookCache::TextureCookKey settings{
                 .sourceHash = sourceHash,
                 .format = format,
                 .srgb = format == TextureFormat::BC7_SRGB,
+                .cutoutChannel = static_cast<std::uint32_t>(cutout.channel),
+                .alphaCutoff = cutout.cutoff,
             };
             const auto key = CookCache::texture_key(settings);
             const auto cached = CookCache::texture_path(cacheRoot, key);
@@ -607,7 +657,8 @@ namespace Engine::Assets {
     TextureCookResult cook_source_texture_cached(const std::filesystem::path &source,
                                                  const std::filesystem::path &output, const TextureFormat format,
                                                  const std::filesystem::path &cacheRoot,
-                                                 TexturePhaseTimings *const timings) {
+                                                 TexturePhaseTimings *const timings,
+                                                 const CutoutMipSettings cutout) {
         const auto hashStarted = std::chrono::steady_clock::now();
         const auto sourceHash = CookCache::hash_file(source);
         if (timings != nullptr)
@@ -634,33 +685,34 @@ namespace Engine::Assets {
             if (rgba.empty() || width <= 0 || height <= 0) throw std::runtime_error("cannot decode source image");
             TextureCookTimings cookTimings;
             auto cooked = cook_texture_impl(rgba, static_cast<std::uint32_t>(width),
-                                            static_cast<std::uint32_t>(height), format, &cookTimings);
+                                            static_cast<std::uint32_t>(height), format, &cookTimings, cutout);
             if (timings != nullptr) {
                 timings->mipGenerationMilliseconds += milliseconds(cookTimings.mipGeneration);
                 timings->blockEncodeMilliseconds += milliseconds(cookTimings.blockEncode);
             }
             return cooked;
-        }, timings);
+        }, timings, cutout);
     }
 
     TextureCookResult cook_image_texture_cached(const std::span<const std::uint8_t> rgbaPixels,
                                                 const std::uint32_t width, const std::uint32_t height,
                                                 const std::filesystem::path &output, const TextureFormat format,
                                                 const std::filesystem::path &cacheRoot,
-                                                TexturePhaseTimings *const timings) {
+                                                TexturePhaseTimings *const timings,
+                                                const CutoutMipSettings cutout) {
         CookCache::Hash64 sourceHash;
         sourceHash.add(rgbaPixels);
         sourceHash.add(width);
         sourceHash.add(height);
         return resolve_cached_texture(sourceHash.value, output, format, cacheRoot, [&] {
             TextureCookTimings cookTimings;
-            auto cooked = cook_texture_impl(rgbaPixels, width, height, format, &cookTimings);
+            auto cooked = cook_texture_impl(rgbaPixels, width, height, format, &cookTimings, cutout);
             if (timings != nullptr) {
                 timings->mipGenerationMilliseconds += milliseconds(cookTimings.mipGeneration);
                 timings->blockEncodeMilliseconds += milliseconds(cookTimings.blockEncode);
             }
             return cooked;
-        }, timings);
+        }, timings, cutout);
     }
 
     TextureCookSummary cook_all_textures(const std::filesystem::path &assetRoot, TextureCookProgress *progress) {

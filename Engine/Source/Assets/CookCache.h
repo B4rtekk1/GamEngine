@@ -13,7 +13,7 @@ namespace Engine::Assets::CookCache {
     // Bump these when encoder behavior or mip/normal processing changes.
     inline constexpr float compressionQuality = 0.10F;
     inline constexpr std::uint32_t cookerVersion = 4;
-    inline constexpr std::uint32_t mipPolicy = 2; // Full chain; sRGB and normal mips use semantic filtering.
+    inline constexpr std::uint32_t mipPolicy = 3; // Cutout mips filter colour by alpha and preserve coverage.
     inline constexpr std::uint32_t normalPolicy = 1; // Normalize tangent-space vectors before encoding RG.
 
     struct Hash64 final {
@@ -27,6 +27,8 @@ namespace Engine::Assets::CookCache {
         std::uint64_t sourceHash{};
         TextureFormat format{TextureFormat::BC7_UNORM};
         bool srgb{};
+        std::uint32_t cutoutChannel{};
+        float alphaCutoff{};
         std::uint32_t cookerVersion{CookCache::cookerVersion};
         std::uint32_t mipPolicy{CookCache::mipPolicy};
         std::uint32_t normalPolicy{CookCache::normalPolicy};

@@ -8,7 +8,9 @@
 #include "Engine/Renderer/Geometry/Mesh.h"
 #include "Engine/Renderer/Geometry/Meshlet.h"
 
+#include <algorithm>
 #include <array>
+#include <bit>
 #include <chrono>
 #include <fstream>
 #include <limits>
@@ -113,6 +115,40 @@ namespace Engine::Assets {
             return mesh.images[imageIndex].sourcePath.empty()
                        ? TextureFormat::BC7_UNORM
                        : default_texture_format(mesh.images[imageIndex].sourcePath);
+        }
+
+        [[nodiscard]] std::string_view format_suffix(TextureFormat format);
+
+        [[nodiscard]] CutoutMipSettings cutout_mip_settings(const Mesh& mesh, const std::size_t imageIndex) {
+            const auto index = static_cast<std::int32_t>(imageIndex);
+            CutoutMipSettings settings;
+            for (const PBRMaterial& material : mesh.materials) {
+                if (material.alphaMode == AlphaMode::Opaque) continue;
+                const float cutoff = material.alphaMode == AlphaMode::Mask ? material.alphaCutoff : 0.3F;
+                if (material.baseColorTexture == index) {
+                    settings.channel = CutoutChannel::Alpha;
+                    settings.cutoff = std::max(settings.cutoff, cutoff);
+                } else if (material.opacityTexture == index && settings.channel != CutoutChannel::Alpha) {
+                    settings.channel = CutoutChannel::Red;
+                    settings.cutoff = std::max(settings.cutoff, cutoff);
+                }
+            }
+            return settings;
+        }
+
+        [[nodiscard]] std::filesystem::path cooked_source_texture_path(
+            const Mesh& mesh, const std::size_t imageIndex, const TextureFormat format) {
+            auto path = mesh.images[imageIndex].sourcePath;
+            const auto cutout = cutout_mip_settings(mesh, imageIndex);
+            if (cutout.channel != CutoutChannel::None) {
+                path.replace_extension(".cutout" + std::to_string(static_cast<unsigned>(cutout.channel)) +
+                                       "." + std::to_string(std::bit_cast<std::uint32_t>(cutout.cutoff)) +
+                                       std::string{format_suffix(format)});
+            } else {
+                path.replace_extension(format == default_texture_format(path)
+                                           ? std::string_view{".gtex"} : format_suffix(format));
+            }
+            return path;
         }
 
         void separate_normal_images(Mesh &mesh) {
@@ -257,7 +293,7 @@ namespace Engine::Assets {
         const auto dependencies = fbx_source_hash(source);
         if (!dependencies) return std::nullopt;
         CookCache::Hash64 hash;
-        hash.add("fbx-gmesh-cook-v4");
+        hash.add("fbx-gmesh-cook-v5");
         hash.add(source.lexically_normal().generic_string());
         hash.add(*dependencies);
         hash.add(CookCache::texture_settings_key());
@@ -548,11 +584,10 @@ namespace Engine::Assets {
             auto &image = mesh.images[i];
             if (image.sourcePath.empty()) continue;
             const auto format = image_format(mesh, i);
-            auto texture = image.sourcePath;
-            texture.replace_extension(format == default_texture_format(image.sourcePath)
-                                          ? std::string_view{".gtex"} : format_suffix(format));
+            auto texture = cooked_source_texture_path(mesh, i, format);
             if (cook_source_texture_cached(image.sourcePath, texture, format, cacheRoot,
-                                           summary == nullptr ? nullptr : &summary->gltfTextures) ==
+                                           summary == nullptr ? nullptr : &summary->gltfTextures,
+                                           cutout_mip_settings(mesh, i)) ==
                 TextureCookResult::Failed) return false;
             image.cookedPath = texture.lexically_relative(output.parent_path().empty()
                                                              ? std::filesystem::path{"."}
@@ -572,7 +607,8 @@ namespace Engine::Assets {
                     const auto texture = texture_path(output, i);
                     if (cook_image_texture_cached(rgba, width, height, texture,
                                                   image_format(mesh, i), cacheRoot,
-                                                  summary == nullptr ? nullptr : &summary->gltfTextures) ==
+                                                  summary == nullptr ? nullptr : &summary->gltfTextures,
+                                                  cutout_mip_settings(mesh, i)) ==
                         TextureCookResult::Failed) return false;
                     image.width = width;
                     image.height = height;
@@ -609,18 +645,18 @@ namespace Engine::Assets {
                 const auto texture = texture_path(output, i);
                 if (cook_image_texture_cached(image.rgbaPixels, image.width, image.height, texture,
                                               image_format(mesh, i), cacheRoot,
-                                              summary == nullptr ? nullptr : &summary->gltfTextures) ==
+                                              summary == nullptr ? nullptr : &summary->gltfTextures,
+                                              cutout_mip_settings(mesh, i)) ==
                     TextureCookResult::Failed) return false;
                 image.cookedPath = texture.filename();
                 continue;
             }
             if (image.sourcePath.empty()) continue;
             const auto format = image_format(mesh, i);
-            auto texture = image.sourcePath;
-            texture.replace_extension(format == default_texture_format(image.sourcePath)
-                                          ? std::string_view{".gtex"} : format_suffix(format));
+            auto texture = cooked_source_texture_path(mesh, i, format);
             if (cook_source_texture_cached(image.sourcePath, texture, format, cacheRoot,
-                                           summary == nullptr ? nullptr : &summary->gltfTextures) ==
+                                           summary == nullptr ? nullptr : &summary->gltfTextures,
+                                           cutout_mip_settings(mesh, i)) ==
                 TextureCookResult::Failed) return false;
             image.cookedPath = texture.lexically_relative(output.parent_path().empty()
                                                             ? std::filesystem::path{"."}
@@ -638,7 +674,8 @@ namespace Engine::Assets {
                     if (!image.sourcePath.empty() || image.sourceImageIndex != sourceIndex) continue;
                     const auto texture = texture_path(output, i);
                     if (cook_image_texture_cached(rgba, width, height, texture, image_format(mesh, i), cacheRoot,
-                                                  summary == nullptr ? nullptr : &summary->gltfTextures) ==
+                                                  summary == nullptr ? nullptr : &summary->gltfTextures,
+                                                  cutout_mip_settings(mesh, i)) ==
                         TextureCookResult::Failed) return false;
                     image.cookedPath = texture.filename();
                 }

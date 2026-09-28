@@ -50,6 +50,13 @@ namespace Engine::Assets {
 
     enum class TextureCookResult { Failed, Reused, Cooked };
 
+    enum class CutoutChannel : std::uint8_t { None, Alpha, Red };
+
+    struct CutoutMipSettings {
+        CutoutChannel channel{CutoutChannel::None};
+        float cutoff{};
+    };
+
     /** Filename-based fallback used when a source image has no material semantics. */
     [[nodiscard]] TextureFormat default_texture_format(const std::filesystem::path &source);
 
@@ -62,7 +69,8 @@ namespace Engine::Assets {
                                                                const std::filesystem::path &output,
                                                                TextureFormat format,
                                                                const std::filesystem::path &cacheRoot,
-                                                               TexturePhaseTimings *timings = nullptr);
+                                                               TexturePhaseTimings *timings = nullptr,
+                                                               CutoutMipSettings cutout = {});
 
     /** Resolves one embedded RGBA image through the same cache. */
     [[nodiscard]] TextureCookResult cook_image_texture_cached(std::span<const std::uint8_t> rgbaPixels,
@@ -70,7 +78,8 @@ namespace Engine::Assets {
                                                               const std::filesystem::path &output,
                                                               TextureFormat format,
                                                               const std::filesystem::path &cacheRoot,
-                                                              TexturePhaseTimings *timings = nullptr);
+                                                              TexturePhaseTimings *timings = nullptr,
+                                                              CutoutMipSettings cutout = {});
 
     /** Thread-safe progress counters for a background texture-cook job. */
     struct TextureCookProgress final {

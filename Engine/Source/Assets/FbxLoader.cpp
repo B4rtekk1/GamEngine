@@ -450,6 +450,15 @@ std::shared_ptr<const Mesh> load_fbx_mesh(const std::filesystem::path& path, boo
         material.doubleSided = source.features.double_sided.enabled ||
                                name.find(".DoubleSided") != std::string_view::npos ||
                                (foliage && material.alphaMode == AlphaMode::Mask);
+        if (foliage) {
+            material.shadingModel = MaterialShadingModel::Foliage;
+            material.vertexColorUsage = VertexColorUsage::FoliageData;
+            material.doubleSided = true;
+            if (material.alphaMode == AlphaMode::Opaque) {
+                material.alphaMode = AlphaMode::Mask;
+                material.alphaCutoff = 0.3F;
+            }
+        }
         result.materials.push_back(material);
     }
     result.materials.emplace_back();
