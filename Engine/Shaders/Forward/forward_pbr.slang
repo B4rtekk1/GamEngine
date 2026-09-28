@@ -616,12 +616,22 @@ ForwardFragmentOutput fragmentMain(ForwardFragmentInput input)
     float3 kS = disableSpecularIbl ? 0.0 : fresnelIbl;
     float3 kD = (1.0 - kS) * (1.0 - metallic);
     float3 indirectDiffuse = irradianceMap.SampleLevel(normal, 0.0).rgb * albedo * kD;
-    if ((frame.screenSpaceEffects & 2u) != 0u) {
+    bool useDiffuseGI = false;
+    // Brixelizer only voxelizes opaque, non-displaced geometry. Cutout and
+    // blended receivers must keep the environment irradiance.
+    if ((frame.screenSpaceEffects & 2u) != 0u && alphaMode == 0u &&
+        !materialHasDisplacement(material)) {
         float2 giUv = input.position.xy / frame.clusteredViewportNearFar.xy;
 #if FORWARD_OUTPUT_VELOCITY
         giUv -= (input.currentNdc - input.previousClip.xy / input.previousClip.w) * 0.5;
 #endif
-        indirectDiffuse = diffuseGI.SampleLevel(giUv, 0.0).rgb * albedo * kD;
+        if (all(giUv >= 0.0) && all(giUv <= 1.0)) {
+            const float3 giRadiance = diffuseGI.SampleLevel(giUv, 0.0).rgb;
+            // An empty GI sample is not a valid replacement for sky IBL.
+            useDiffuseGI = max(max(giRadiance.r, giRadiance.g), giRadiance.b) > 1.0e-5;
+            if (useDiffuseGI)
+                indirectDiffuse = giRadiance * albedo * kD;
+        }
     }
     float3 reflection = reflect(-viewDirection, normal);
     const uint prefilteredMipCount = max(uint(frame.clusterZScaleBiasEnvironmentMipRtContact.z), 1u);
@@ -662,7 +672,7 @@ ForwardFragmentOutput fragmentMain(ForwardFragmentInput input)
     // accessibility, so neither is allowed to brighten the other.  The
     // GTAO visibility is used at full strength after its bilateral upsample.
     const float indirectVisibility = min(ao, dynamicAo);
-    const float diffuseAO = (frame.screenSpaceEffects & 2u) != 0u ? ao : indirectVisibility;
+    const float diffuseAO = useDiffuseGI ? ao : indirectVisibility;
     // Lagarde's visibility-based specular-occlusion approximation.  It
     // suppresses sky/probe reflections in contact cavities without needing a
     // bent normal; rough surfaces converge to the diffuse visibility while

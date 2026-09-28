@@ -385,7 +385,9 @@
                 static_cast<std::uint32_t>(gtaoDebugView),
                 materialSlots, editorSelectedRenderable, frameData.lightCount,
                 static_cast<std::uint32_t>(reflectionProbes.size()),
-                1u | (brixelizer.giHasHistory() && brixelizer.hasStaticMeshes() ? 2u : 0u),
+                1u | (brixelizerGIEnabled && !msaa.enabled() &&
+                      brixelizerDebugView == BrixelizerSystem::DebugView::Off &&
+                      brixelizer.giHasHistory() && brixelizer.hasStaticMeshes() ? 2u : 0u),
                 // Do not vary PCF/VSM sample phase until TAA has stronger
                 // per-surface confidence (normals/reactive mask).  Depth
                 // rejection prevents trails, but cannot fully hide changing
