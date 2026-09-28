@@ -22,7 +22,7 @@ namespace Engine::Assets {
     namespace {
         constexpr std::array<char, 8> magic{'G', 'M', 'E', 'S', 'H', '\0', '\0', '\0'};
         constexpr std::uint32_t version = 6;
-        constexpr std::uint32_t FbxImporterVersion = 9;
+        constexpr std::uint32_t FbxImporterVersion = 11;
         constexpr std::uint32_t maxElements = 100'000'000;
 
         struct HeaderV1 {

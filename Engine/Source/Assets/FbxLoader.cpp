@@ -156,13 +156,29 @@ namespace {
     }
 
     bool bistro_asset(const std::filesystem::path& path) {
-        const auto stem = path.stem().string();
-        if (stem != "BistroExterior" && stem != "BistroInterior" && stem != "BistroInterior_Wine")
-            return false;
         std::ifstream readme(path.parent_path() / "README.txt");
         std::string title;
-        return static_cast<bool>(std::getline(readme, title)) &&
-               title.starts_with("Amazon Lumberyard Bistro");
+        if (std::getline(readme, title) && title.starts_with("Amazon Lumberyard Bistro")) return true;
+
+        // Copies of Bistro often omit the README or rename the FBX. Its
+        // unusually large set of BaseColor/Specular/Normal DDS triplets is a
+        // useful signature without relying on the model's filename.
+        const auto textureRoot = path.parent_path() / "Textures";
+        std::error_code error;
+        std::filesystem::directory_iterator it(textureRoot, error), end;
+        if (error) return false;
+        std::size_t triplets = 0;
+        for (; it != end; it.increment(error)) {
+            if (error) return false;
+            const auto stem = it->path().stem().string();
+            constexpr std::string_view suffix = "_Specular";
+            if (it->path().extension() != ".dds" || !stem.ends_with(suffix)) continue;
+            const auto prefix = stem.substr(0, stem.size() - suffix.size());
+            if (std::filesystem::is_regular_file(textureRoot / (prefix + "_BaseColor.dds")) &&
+                std::filesystem::is_regular_file(textureRoot / (prefix + "_Normal.dds")) &&
+                ++triplets >= 16) return true;
+        }
+        return false;
     }
 
     struct FbxOpacitySource {
@@ -409,6 +425,32 @@ std::shared_ptr<const Mesh> load_fbx_mesh(const std::filesystem::path& path, boo
         imageFiles.push_back(i);
     }
     std::vector<std::int8_t> imageAlpha(imageFiles.size(), -1);
+    const auto bistro_specular = [&](const std::int32_t baseColor, const std::int32_t fbxSpecular,
+                                    const std::int32_t pbrSpecular, const std::int32_t ao) -> std::int32_t {
+        const auto isSpecular = [&](const std::int32_t index) {
+            if (index < 0 || static_cast<std::size_t>(index) >= result.images.size()) return false;
+            const auto& image = result.images[static_cast<std::size_t>(index)];
+            return image.sourcePath.stem().string().ends_with("_Specular");
+        };
+        if (isSpecular(fbxSpecular)) return fbxSpecular;
+        if (isSpecular(pbrSpecular)) return pbrSpecular;
+        if (isSpecular(ao)) return ao;
+        if (baseColor < 0 || static_cast<std::size_t>(baseColor) >= result.images.size()) return -1;
+        const auto& basePath = result.images[static_cast<std::size_t>(baseColor)].sourcePath;
+        const auto stem = basePath.stem().string();
+        constexpr std::string_view suffix = "_BaseColor";
+        if (!stem.ends_with(suffix)) return -1;
+        const auto companion = basePath.parent_path() / (stem.substr(0, stem.size() - suffix.size()) + "_Specular.dds");
+        if (!std::filesystem::is_regular_file(companion)) return -1;
+        for (std::size_t i = 0; i < result.images.size(); ++i)
+            if (result.images[i].sourcePath == companion) return static_cast<std::int32_t>(i);
+        Mesh::Image image;
+        image.sourcePath = companion;
+        if (!forCooking && !decode_dds_image(companion, image.rgbaPixels, image.width, image.height)) return -1;
+        const auto index = static_cast<std::int32_t>(result.images.size());
+        result.images.push_back(std::move(image));
+        return index;
+    };
     for (std::size_t i = 0; i < scene->materials.count; ++i) {
         const auto& source = *scene->materials.data[i];
         PBRMaterial material;
@@ -458,13 +500,18 @@ std::shared_ptr<const Mesh> load_fbx_mesh(const std::filesystem::path& path, boo
         material.specularColorTexture = image_index(source.pbr.specular_color, imageIndices);
         if (bistro) {
             const auto packed = image_index(source.fbx.specular_color, imageIndices);
-            const auto specular = packed >= 0 ? packed : material.specularColorTexture;
+            const auto specular = bistro_specular(material.baseColorTexture, packed,
+                                                  material.specularColorTexture, material.aoTexture);
             material.specularColorTexture = -1;
+            // Bistro's packed red channel is zero in its default maps. FBX
+            // AO links must never feed that channel into indirect visibility.
+            material.aoTexture = -1;
+            // ufbx can infer metalness from Bistro's FBX material even when
+            // its packed map is missing. Such a value removes all diffuse light.
+            material.metallic = 0.0F;
+            material.roughness = 0.55F;
             if (specular >= 0) {
-                // Bistro's packed red channel contains zero in its default
-                // maps. Sampling it as visibility would erase indirect light.
                 // The green and blue channels contain roughness and metalness.
-                material.aoTexture = -1;
                 material.metallicRoughnessTexture = specular;
                 material.metallic = 1.0F;
                 material.roughness = 1.0F;
