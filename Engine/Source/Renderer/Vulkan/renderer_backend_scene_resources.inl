@@ -1839,7 +1839,7 @@
                                    instanceWrites.data(), 0, nullptr);
 
             if (meshletCullSets[frame] != VK_NULL_HANDLE && meshletBuffer.handle() != VK_NULL_HANDLE) {
-                const VkDescriptorBufferInfo meshletInfos[] = {
+                const std::array<VkDescriptorBufferInfo, 10> meshletInfos{{
                     {meshletBuffer.handle(), 0, VK_WHOLE_SIZE},
                     {gpuSceneInstanceBuffers[frame].handle(), 0, VK_WHOLE_SIZE},
                     {gpuSceneMeshBuffers[frame].handle(), 0, VK_WHOLE_SIZE},
@@ -1848,8 +1848,9 @@
                     {visibleMeshletBuffers[frame].handle(), 0, VK_WHOLE_SIZE},
                     {visibleMeshletCountBuffers[frame].handle(), 0, sizeof(std::uint32_t)},
                     {meshletCullingUniformBuffers[frame].handle(), 0, sizeof(Culling::MeshletCullUniforms)},
+                    {}, // binding 8 is the Hi-Z image
                     {meshletClusterBuffer.handle(), 0, VK_WHOLE_SIZE},
-                };
+                }};
                 const auto previousHiZFrame = (frame + MAX_FRAMES_IN_FLIGHT - 1U) % MAX_FRAMES_IN_FLIGHT;
                 const auto& hiZBuffer = hiZBuffers[previousHiZFrame];
                 const VkDescriptorImageInfo meshletHiZInfo{hiZBuffer.sampler(), hiZBuffer.fullView(),

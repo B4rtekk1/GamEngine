@@ -285,14 +285,25 @@ std::shared_ptr<const Mesh> load_fbx_mesh(const std::filesystem::path& path, boo
         const auto& source = *scene->materials.data[i];
         PBRMaterial material;
         const auto& base = source.pbr.base_color.has_value ? source.pbr.base_color : source.fbx.diffuse_color;
-        const float opacity = source.pbr.opacity.has_value
+        // FBX transparency is a factor multiplied by TransparentColor. A
+        // factor of one with a black color still describes an opaque surface.
+        const auto* fbxOpacity = ufbx_find_prop(&source.props, "Opacity");
+        const float transparency = source.fbx.transparency_factor.has_value
+            ? static_cast<float>(source.fbx.transparency_factor.value_real) : 0.0F;
+        const auto& transparentColor = source.fbx.transparency_color;
+        const float transparentIntensity = transparentColor.has_value
+            ? static_cast<float>((transparentColor.value_vec3.x + transparentColor.value_vec3.y +
+                                  transparentColor.value_vec3.z) / 3.0) : 1.0F;
+        const float fbxTransparencyOpacity = 1.0F - transparency * transparentIntensity;
+        const float fbxPropertyOpacity = fbxOpacity ? static_cast<float>(fbxOpacity->value_real) : 1.0F;
+        const float opacity = std::clamp(source.pbr.opacity.has_value
             ? static_cast<float>(source.pbr.opacity.value_real)
-            : source.fbx.transparency_factor.has_value
-                ? 1.0F - static_cast<float>(source.fbx.transparency_factor.value_real) : 1.0F;
-        if (base.has_value)
-            material.baseColor = Math::Color{static_cast<float>(base.value_vec3.x),
-                                             static_cast<float>(base.value_vec3.y),
-                                             static_cast<float>(base.value_vec3.z), opacity};
+            : std::min(fbxPropertyOpacity, fbxTransparencyOpacity), 0.0F, 1.0F);
+        material.baseColor = Math::Color{
+            base.has_value ? static_cast<float>(base.value_vec3.x) : 1.0F,
+            base.has_value ? static_cast<float>(base.value_vec3.y) : 1.0F,
+            base.has_value ? static_cast<float>(base.value_vec3.z) : 1.0F,
+            opacity};
         if (source.pbr.metalness.has_value) material.metallic = static_cast<float>(source.pbr.metalness.value_real);
         if (source.pbr.roughness.has_value) material.roughness = static_cast<float>(source.pbr.roughness.value_real);
         material.baseColorTexture = image_index(source.pbr.base_color, imageIndices);

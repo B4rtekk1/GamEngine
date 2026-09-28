@@ -438,7 +438,15 @@ namespace Engine::Assets {
         });
         manager.register_loader<Mesh>(AssetType::Mesh, [](const auto &path, const auto &) {
             const auto extension = path.extension().string();
-            if (extension == ".gmesh" || extension == ".GMESH") return load_gmesh(path);
+            if (extension == ".gmesh" || extension == ".GMESH") {
+                auto source = path;
+                source.replace_extension(".fbx");
+                if (!std::filesystem::is_regular_file(source)) source.replace_extension(".FBX");
+                if (std::filesystem::is_regular_file(source) &&
+                    !current_fbx_mesh(source, path) && !cook_fbx_mesh(source))
+                    return std::shared_ptr<const Mesh>{};
+                return load_gmesh(path);
+            }
             if (extension == ".obj" || extension == ".OBJ") {
                 return load_obj_mesh(path);
             }

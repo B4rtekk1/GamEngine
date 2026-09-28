@@ -257,7 +257,7 @@ namespace Engine::Assets {
         const auto dependencies = fbx_source_hash(source);
         if (!dependencies) return std::nullopt;
         CookCache::Hash64 hash;
-        hash.add("fbx-gmesh-cook-v2");
+        hash.add("fbx-gmesh-cook-v3");
         hash.add(source.lexically_normal().generic_string());
         hash.add(*dependencies);
         hash.add(CookCache::texture_settings_key());
