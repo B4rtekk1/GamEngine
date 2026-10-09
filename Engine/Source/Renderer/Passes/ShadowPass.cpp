@@ -986,6 +986,7 @@ namespace Engine {
         const std::span<const Culling::GPUObjectData> objects,
         const std::span<const Culling::GPUObjectData> dirtyObjects,
         const std::span<const std::uint32_t> receiverPageRequests,
+        const bool feedbackValid,
         const std::uint32_t frameIndex,
         const std::uint32_t pageUpdateBudget) {
         constexpr std::int32_t pageCount =
@@ -1122,12 +1123,12 @@ namespace Engine {
             float nearestDepth{};
         };
         std::vector<VisibleObject> visibleObjects;
-        visibleObjects.reserve(objects.size());
+        if (!feedbackValid) visibleObjects.reserve(objects.size());
         const glm::mat4 cameraMatrix = cameraViewProjection.native();
         // This is only a bootstrap fallback until the first completed depth
         // request bitset is available for a frame slot. Steady-state VSM page
         // selection never scans GPU objects on the CPU.
-        if (receiverPageRequests.empty())
+        if (!feedbackValid)
             for (const Culling::GPUObjectData &object: objects) {
                 const glm::vec3 minimum{
                     object.localAabbMin.x, object.localAabbMin.y,
@@ -1160,7 +1161,7 @@ namespace Engine {
                       outsideNear || outsideFar))
                     visibleObjects.push_back(candidate);
             }
-        if (receiverPageRequests.empty())
+        if (!feedbackValid)
             std::ranges::sort(visibleObjects, {}, &VisibleObject::nearestDepth);
 
         std::array<bool, ShadowMap::VirtualPageCount> requested{};
@@ -1169,7 +1170,7 @@ namespace Engine {
             if (key < deferred.size()) deferred[key] = true;
         // Completed receiver feedback replaces the old view's pending work.
         // Keep age/fairness only for misses that are still requested.
-        if (!receiverPageRequests.empty()) {
+        if (feedbackValid) {
             std::array<bool, ShadowMap::VirtualPageCount> currentRequests{};
             for (const std::uint32_t key: receiverPageRequests)
                 if (key < currentRequests.size()) currentRequests[key] = true;
@@ -1214,7 +1215,7 @@ namespace Engine {
                          ShadowMap::FallbackFirstPage, ShadowMap::FallbackFirstPage,
                          ShadowMap::FallbackFirstPage + ShadowMap::FallbackPagesPerAxis - 1,
                          ShadowMap::FallbackFirstPage + ShadowMap::FallbackPagesPerAxis - 1);
-        if (!receiverPageRequests.empty() || !deferredRequests_.empty()) {
+        if (feedbackValid || !deferredRequests_.empty()) {
             // The compute pass emits only set bits, so this is O(requested pages)
             // rather than O(all virtual pages). Atomic compaction makes its
             // output order unspecified; deduplicate before scheduling.

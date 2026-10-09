@@ -113,8 +113,9 @@ namespace Engine {
             std::span<const Culling::GPUObjectData> objects,
             std::span<const Culling::GPUObjectData> dirtyObjects,
             // GPU-compacted page keys from the completed frame's depth pass.
-            // An empty span is the one-frame bootstrap fallback only.
+            // feedbackValid distinguishes zero requests from unavailable feedback.
             std::span<const std::uint32_t> receiverPageRequests,
+            bool feedbackValid,
             std::uint32_t frameIndex,
             std::uint32_t pageUpdateBudget = ShadowMap::PhysicalPageCount);
 

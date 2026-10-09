@@ -107,6 +107,9 @@
         // the viewport graph: both Game and Scene rendering finish before it,
         // while its output is the acquired swapchain image.
         GpuProfileFrame lastGpuProfile{};
+        std::uint32_t adaptiveShadowPageBudget{64};
+        float smoothedGameVsmMs{0.0F};
+        std::array<bool, MAX_FRAMES_IN_FLIGHT> gameVsmProfiled{};
         // Single-sample depth target populated by the forward pass's MSAA depth resolve.
         DepthBuffer hiZDepthBuffer;
 

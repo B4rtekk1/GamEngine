@@ -314,12 +314,14 @@
             // does not, since it can invalidate the virtual page coordinates.
             const bool vsmLayoutCut = !previousGameCameraValid || !shadowClipmapsValid ||
                                       cameraPositionDelta > 8.0F;
-            // Use the larger budget only for the first VSM bootstrap. Later
-            // cuts converge at the normal rate to avoid a second frame spike.
-            const std::uint32_t shadowPageBudget = previousGameCameraValid ? 64u : 128u;
+            // Bootstrap coarse coverage quickly. Steady-state budgets follow
+            // delayed GPU timestamps from completed frame slots.
+            const std::uint32_t shadowPageBudget = previousGameCameraValid
+                ? adaptiveShadowPageBudget : 128u;
 
             std::array<std::uint32_t, ShadowMap::VirtualPageCount> completedVsmRequests{};
             std::span<const std::uint32_t> receiverPageRequests;
+            bool receiverFeedbackValid = false;
             // currentFrame's fence was waited before this per-frame update.
             // Reading this mapped allocation therefore consumes GPU work from
             // its prior use with no queue wait or submission-time readback. A
@@ -328,6 +330,7 @@
                 vsmCompactedPageCountBuffers[currentFrame].handle() != VK_NULL_HANDLE) {
                 std::uint32_t requestCount{};
                 vsmCompactedPageCountBuffers[currentFrame].read(&requestCount, sizeof(requestCount));
+                receiverFeedbackValid = true;
                 requestCount = std::min(requestCount, ShadowMap::VirtualPageCount);
                 if (requestCount != 0) {
                     vsmCompactedPageBuffers[currentFrame].read(completedVsmRequests.data(),
@@ -344,7 +347,8 @@
                     shadowClipMatrices,
                     cameraController.camera()->projectionMatrix() *
                         cameraController.camera()->viewMatrix(),
-                    gpuObjects, dirtyShadowObjects, receiverPageRequests, currentFrame, shadowPageBudget);
+                    gpuObjects, dirtyShadowObjects, receiverPageRequests, receiverFeedbackValid,
+                    currentFrame, shadowPageBudget);
             } else {
                 shadowClipUpdateMask = 0;
                 shadowClipmapsValid = false;
@@ -463,7 +467,7 @@
                 sceneDescriptorPass.preparePages(
                     sceneShadowClipMatrices,
                     sceneCamera.projectionMatrix() * sceneCamera.viewMatrix(),
-                    gpuObjects, dirtyShadowObjects, {}, currentFrame, 32);
+                    gpuObjects, dirtyShadowObjects, {}, false, currentFrame, 32);
             } else {
                 sceneShadowClipUpdateMask = 0;
                 sceneShadowClipmapsValid = false;
@@ -651,6 +655,44 @@
                 (void)id;
                 importFrameUploadTexture("Material texture", resource.texture);
             }
+            // The command buffers surrounding the viewport and presentation
+            // graphs still contain legacy callbacks. Wait only for resources
+            // those callbacks can bind, never for an unrelated transfer on the
+            // shared upload timeline. Keep this in sync with the imports above.
+            const auto legacyUploadValue = [&]() {
+                std::uint64_t value = 0;
+                const std::array<const Buffer*, 11> buffers{
+                    &vertexBuffer, &indexBuffer, &instanceBuffers[currentFrame],
+                    &previousTransformBuffers[currentFrame], &materialBuffers[currentFrame],
+                    &gpuSceneInstanceBuffers[currentFrame], &gpuSceneMeshBuffers[currentFrame],
+                    &gpuSceneMaterialBuffers[currentFrame], &uniformBuffers[currentFrame],
+                    &shadowCullingUniformBuffers[currentFrame],
+                    &clusteredLightingUniformBuffers[currentFrame]};
+                for (const Buffer* buffer : buffers)
+                    if (buffer->handle() != VK_NULL_HANDLE)
+                        value = std::max(value, buffer->readyTimeline());
+                value = std::max(value, sceneClusteredLightingUniformBuffers[currentFrame].readyTimeline());
+                if (particleSystem && particleSystem->particleBuffer() != VK_NULL_HANDLE)
+                    value = std::max(value, particleSystem->readyTimeline());
+                const auto includeTexture = [&](const Texture2D& texture) {
+                    if (texture.valid()) value = std::max(value, texture.readyTimeline());
+                };
+                includeTexture(fallbackMaterialTexture);
+                includeTexture(grassHeightTexture);
+                includeTexture(grassDensityTexture);
+                for (const auto& [id, resource] : textureGpuResources) {
+                    (void)id;
+                    includeTexture(resource.texture);
+                }
+                return value;
+            };
+            VkPipelineStageFlags2 legacyUploadStages =
+                VK_PIPELINE_STAGE_2_ALL_GRAPHICS_BIT |
+                VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT |
+                VK_PIPELINE_STAGE_2_TRANSFER_BIT |
+                VK_PIPELINE_STAGE_2_DRAW_INDIRECT_BIT;
+            if (vulkanDevice.supportsRayQuery())
+                legacyUploadStages |= VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR;
             frameGraph.addPass("Legacy frame resource consumers", RenderGraph::Queue::Graphics,
                 [&](RenderGraph::PassBuilder& builder) {
                     // The callbacks that bind these descriptor sets are not
@@ -1518,6 +1560,7 @@
                     builder.read(graphPreviousHiZ, RenderGraph::TextureUsage::SampledReadCompute);
                 builder.setSideEffect();
             }, [&](const VkCommandBuffer buffer) {
+                gameVsmProfiled[currentFrame] = true;
                 gpuTimestampProfiler.beginZone(buffer, currentFrame, shadowProfileName);
                 recordGameVsmPageRequests(buffer);
                 gpuTimestampProfiler.beginZone(buffer, currentFrame, shadowDepthRasterProfileName);
@@ -1621,11 +1664,11 @@
             context.uploadTimeline = uploadContext.timeline();
             if (vkEndCommandBuffer(commandBuffer) != VK_SUCCESS)
                 throw std::runtime_error("Could not end graphics commands before viewport RenderGraph");
-            const std::uint64_t earlyUploadValue = uploadContext.lastSubmittedValue();
+            const std::uint64_t earlyUploadValue = legacyUploadValue();
             const VkSemaphoreSubmitInfo earlyUploadWait{
                 .sType = VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO,
                 .semaphore = uploadContext.timeline(), .value = earlyUploadValue,
-                .stageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT};
+                .stageMask = legacyUploadStages};
             const VkCommandBufferSubmitInfo earlyCommand{
                 .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_SUBMIT_INFO,
                 .commandBuffer = commandBuffer};
@@ -2427,11 +2470,11 @@
             presentationContext.completionFence = inFlightFences[currentFrame];
             if (vkEndCommandBuffer(commandBuffer) != VK_SUCCESS)
                 throw std::runtime_error("Could not end graphics commands before presentation RenderGraph");
-            const std::uint64_t prePresentationUploadValue = uploadContext.lastSubmittedValue();
+            const std::uint64_t prePresentationUploadValue = legacyUploadValue();
             const VkSemaphoreSubmitInfo prePresentationUploadWait{
                 .sType = VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO,
                 .semaphore = uploadContext.timeline(), .value = prePresentationUploadValue,
-                .stageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT};
+                .stageMask = legacyUploadStages};
             const VkCommandBufferSubmitInfo prePresentationCommand{
                 .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_SUBMIT_INFO,
                 .commandBuffer = commandBuffer};
@@ -2743,6 +2786,20 @@
                 lastGpuProfile = *completed;
                 float gameWaterMs = 0.0F;
                 float sceneWaterMs = 0.0F;
+                if (gameVsmProfiled[currentFrame]) {
+                    for (const GpuProfileEvent& event : completed->events) {
+                        if (Profiler::name(event.name) != "Shadow") continue;
+                        const float gpuMs = std::max(event.endMs - event.startMs, 0.0F);
+                        smoothedGameVsmMs = smoothedGameVsmMs == 0.0F
+                            ? gpuMs : 0.75F * smoothedGameVsmMs + 0.25F * gpuMs;
+                        constexpr float targetVsmMs = 2.0F;
+                        if (smoothedGameVsmMs > targetVsmMs)
+                            adaptiveShadowPageBudget = std::max(16u, adaptiveShadowPageBudget - 8u);
+                        else if (smoothedGameVsmMs < targetVsmMs * 0.7F)
+                            adaptiveShadowPageBudget = std::min(128u, adaptiveShadowPageBudget + 4u);
+                        break;
+                    }
+                }
                 for (const GpuProfileEvent& event : completed->events) {
                     const std::string_view name = Profiler::name(event.name);
                     const float duration = std::max(event.endMs - event.startMs, 0.0F);
@@ -2757,6 +2814,7 @@
                 virtualWaterRenderer.onFrameCompleted();
                 sceneVirtualWaterRenderer.onFrameCompleted();
             }
+            gameVsmProfiled[currentFrame] = false;
             const VkResult result = vkAcquireNextImageKHR(device, swapchain.handle(), UINT64_MAX,
                 imageAvailableSemaphores[currentFrame], VK_NULL_HANDLE, &imageIndex);
 
