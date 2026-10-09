@@ -41,6 +41,12 @@ project-ascii-tree.txt
 # Doxygen generated documentation
 /docs/
 out/
+Installer/ReleasePayload/
+Installer/dist/
+Installer/out/
+Installer/**/bin/
+Installer/**/obj/
+Installer/**/*.csproj.user
 Assets/Models
 DEMO/Assets/*
 DEMO/Library

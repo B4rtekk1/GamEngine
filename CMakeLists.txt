@@ -35,6 +35,7 @@ option(GE_BUILD_EDITOR "Build GamEngine Editor" ON)
 option(GE_BUILD_PLAYER "Build GamEngine Player and game scripts" ON)
 option(GE_BUILD_TESTS "Build GamEngine tests" OFF)
 option(GE_BUILD_BENCHMARKS "Build CPU scene-update microbenchmarks" OFF)
+option(GE_DISTRIBUTION_BUILD "Build a portable editor without source-tree fallbacks" OFF)
 if(GE_BUILD_BENCHMARKS)
     add_executable(BenchmarkSceneUpdates
         Tools/BenchmarkSceneUpdates/main.cpp

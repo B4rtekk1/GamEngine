@@ -104,6 +104,9 @@ if(GAMEENGINE_INSTALL_PORTABLE_EDITOR)
     endif()
 
     add_custom_target(PackageEditor
+        COMMAND ${CMAKE_COMMAND} -DGE_CONFIG=$<CONFIG> -DGE_DISTRIBUTION_BUILD=${GE_DISTRIBUTION_BUILD}
+            -P "${PROJECT_SOURCE_DIR}/cmake/ValidateEditorPackageConfiguration.cmake"
+        COMMAND ${CMAKE_COMMAND} -E rm -rf "${CMAKE_BINARY_DIR}/GamEngineEditor"
         COMMAND ${CMAKE_COMMAND} --install "${CMAKE_BINARY_DIR}" --config $<CONFIG> --component GamEngineEditor --prefix "${CMAKE_BINARY_DIR}/GamEngineEditor"
         DEPENDS ${GAMEENGINE_EDITOR_PACKAGE_DEPENDS}
         COMMENT "Creating portable GamEngine Editor package")

@@ -19,6 +19,15 @@ std::filesystem::path UserPaths::localData() {
     return path;
 }
 
+std::filesystem::path UserPaths::documents() {
+    PWSTR value = nullptr;
+    const HRESULT result = SHGetKnownFolderPath(FOLDERID_Documents, KF_FLAG_CREATE, nullptr, &value);
+    if (FAILED(result) || value == nullptr) throw std::runtime_error("Could not determine Documents directory");
+    const std::filesystem::path path{value};
+    CoTaskMemFree(value);
+    return path;
+}
+
 std::filesystem::path UserPaths::editorData() { return localData() / "GamEngine" / "Editor"; }
 std::filesystem::path UserPaths::editorLogs() { return editorData() / "Logs"; }
 std::filesystem::path UserPaths::editorCrashes() { return editorData() / "Crashes"; }

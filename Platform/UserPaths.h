@@ -10,6 +10,7 @@ namespace Platform {
 class UserPaths final {
 public:
     [[nodiscard]] static std::filesystem::path localData();
+    [[nodiscard]] static std::filesystem::path documents();
     [[nodiscard]] static std::filesystem::path editorData();
     [[nodiscard]] static std::filesystem::path editorLogs();
     [[nodiscard]] static std::filesystem::path editorCrashes();

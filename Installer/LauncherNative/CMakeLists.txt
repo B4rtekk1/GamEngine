@@ -1,0 +1,7 @@
+cmake_minimum_required(VERSION 3.20)
+project(GamEngineLauncher LANGUAGES CXX)
+set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+add_executable(GamEngineLauncher WIN32 main.cpp)
+target_compile_features(GamEngineLauncher PRIVATE cxx_std_20)
+target_compile_definitions(GamEngineLauncher PRIVATE UNICODE _UNICODE)
+target_link_libraries(GamEngineLauncher PRIVATE shell32)

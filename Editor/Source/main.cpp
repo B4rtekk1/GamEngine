@@ -99,6 +99,21 @@ using Editor::SceneHistory;
 #include "EditorShell.inl"
 
 namespace {
+    [[nodiscard]] Engine::Project createOrLoadFirstRunProject() {
+        const std::filesystem::path projectsDirectory = Platform::UserPaths::documents() / "GamEngine Projects";
+        const std::filesystem::path firstProject = projectsDirectory / "MyFirstProject";
+        const std::filesystem::path firstManifest = firstProject / "GamEngine.project";
+        if (std::filesystem::is_regular_file(firstManifest)) return Engine::Project::load(firstManifest);
+
+        std::filesystem::path projectDirectory = firstProject;
+        std::string projectName = "MyFirstProject";
+        for (std::uint32_t suffix = 2; std::filesystem::exists(projectDirectory); ++suffix) {
+            projectName = "MyFirstProject " + std::to_string(suffix);
+            projectDirectory = projectsDirectory / projectName;
+        }
+        return Engine::Project::create(projectDirectory, projectName);
+    }
+
     [[nodiscard]] std::filesystem::path executableDirectory() {
         const char* const basePath = SDL_GetBasePath();
         if (basePath == nullptr) throw std::runtime_error("Could not determine executable directory");
@@ -132,8 +147,10 @@ namespace {
         const auto bundled = editorRoot / "ShaderSources";
         if (std::filesystem::is_regular_file(bundled / "Forward/forward_pbr.slang")) return bundled;
 
+#ifndef GE_DISTRIBUTION_BUILD
         const auto development = std::filesystem::path{GAMEENGINE_SOURCE_DIR} / "Engine/Shaders";
         if (std::filesystem::is_regular_file(development / "Forward/forward_pbr.slang")) return development;
+#endif
 
         throw std::runtime_error("Shader Graph sources are not available. Reinstall the GamEngine Editor.");
     }
@@ -323,7 +340,7 @@ int main(int argc, char** argv) {
                                                       return Engine::Project::discover(
                                                           std::filesystem::current_path());
                                                   } catch (const std::runtime_error&) {
-                                                      return Engine::Project::defaults(editorRoot);
+                                                      return createOrLoadFirstRunProject();
                                                   }
                                               }();
         EditorSceneSession::setProjectRoot(project.rootPath());

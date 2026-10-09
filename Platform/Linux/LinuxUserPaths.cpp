@@ -1,6 +1,7 @@
 #include "Platform/UserPaths.h"
 
 #include <cstdlib>
+#include <stdexcept>
 
 namespace Platform {
 
@@ -10,6 +11,11 @@ std::filesystem::path UserPaths::localData() {
     }
     if (const char* home = std::getenv("HOME"); home != nullptr && *home != '\0') return std::filesystem::path{home} / ".local" / "share";
     return std::filesystem::temp_directory_path();
+}
+std::filesystem::path UserPaths::documents() {
+    const char* home = std::getenv("HOME");
+    if (home == nullptr || *home == '\0') throw std::runtime_error("Could not determine home directory");
+    return std::filesystem::path{home} / "Documents";
 }
 
 std::filesystem::path UserPaths::editorData() { return localData() / "GamEngine" / "Editor"; }
