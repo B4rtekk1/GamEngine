@@ -4,6 +4,7 @@
 #include "Componentpool.h"
 #include "Engine/Core/Transform.h"
 #include "Components/MeshRendererComponent.h"
+#include "Components/RigidbodyComponent.h"
 #include "Components/TerrainGrassComponent.h"
 
 #include <unordered_map>
@@ -463,13 +464,16 @@ namespace Engine {
         template<typename T>
         [[nodiscard]] static consteval bool isRenderTopologyComponent() {
             return std::is_same_v<T, MeshRendererComponent> ||
-                   std::is_same_v<T, TerrainGrassComponent>;
+                   std::is_same_v<T, TerrainGrassComponent> ||
+                   std::is_same_v<T, RigidbodyComponent>;
         }
 
         template<typename T>
         [[nodiscard]] bool changesRenderTopology(const Entity entity) const {
             if constexpr (std::is_same_v<T, Transform>) {
                 return has<MeshRendererComponent>(entity) || has<TerrainGrassComponent>(entity);
+            } else if constexpr (std::is_same_v<T, RigidbodyComponent>) {
+                return has<Transform>(entity) && has<MeshRendererComponent>(entity);
             } else if constexpr (isRenderTopologyComponent<T>()) {
                 return has<Transform>(entity);
             } else {
@@ -487,6 +491,8 @@ namespace Engine {
             bool materialOverride{};
             bool twoSided{};
             std::uint8_t alphaMode{};
+            std::uint8_t shadowCacheMode{};
+            std::uint8_t rigidbodyType{};
 
             [[nodiscard]] bool operator==(const RenderTopologyState&) const = default;
         };
@@ -508,7 +514,13 @@ namespace Engine {
                 .twoSided = renderer.materialOverride && renderer.material.pbr.doubleSided,
                 .alphaMode = renderer.materialOverride
                     ? static_cast<std::uint8_t>(renderer.material.pbr.alphaMode) : std::uint8_t{0},
+                .shadowCacheMode = static_cast<std::uint8_t>(renderer.shadowCacheMode),
             };
+        }
+
+        [[nodiscard]] static RenderTopologyState renderTopologyState(
+            const RigidbodyComponent& body) noexcept {
+            return {.rigidbodyType = static_cast<std::uint8_t>(body.type)};
         }
 
         [[nodiscard]] static RenderTopologyState renderTopologyState(

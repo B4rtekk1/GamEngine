@@ -16,6 +16,7 @@
 #include <limits>
 #include <vector>
 #include <unordered_map>
+#include <unordered_set>
 
 namespace Engine {
     /** ECS-derived CPU data shared by the scene upload and culling stages. */
@@ -24,6 +25,17 @@ namespace Engine {
         static constexpr float InstanceCellSize = 32.0F;
         static constexpr std::uint32_t MaxInstancesPerBatch = 64;
         using InstanceCell = std::array<std::int64_t, 3>;
+
+        struct InstanceCellHash {
+            [[nodiscard]] std::size_t operator()(const InstanceCell& cell) const noexcept {
+                std::size_t hash = 0;
+                for (const auto coordinate : cell) {
+                    const auto value = std::hash<std::int64_t>{}(coordinate);
+                    hash ^= value + 0x9e3779b9U + (hash << 6U) + (hash >> 2U);
+                }
+                return hash;
+            }
+        };
 
         [[nodiscard]] static InstanceCell cellFor(const AABB& bounds) noexcept {
             const auto center = (bounds.min.native() + bounds.max.native()) * 0.5F;
@@ -59,6 +71,7 @@ namespace Engine {
             float displacementBoundsPadding{0.0F};
             float sourceDisplacementBoundsPadding{0.0F};
             bool materialFromRenderer{false};
+            bool dynamic{false};
             /// Instance data consumed only by VirtualWaterRenderer. It has no
             /// generic mesh draw or material-table allocation.
             bool waterOnly{false};
@@ -109,6 +122,21 @@ namespace Engine {
         std::vector<RenderableRecord> renderables;
         std::vector<InstanceBatch> instanceBatches;
         std::vector<std::vector<std::size_t> > batchRenderableIndices;
+        // Spatial membership is independent of the stable indirect-draw ranges.
+        // Moving an instance updates these local sets without reordering GPU IDs.
+        std::unordered_map<InstanceCell, std::unordered_set<std::size_t>, InstanceCellHash> cellRenderableIndices;
+
+        void moveRenderableToCell(const std::size_t index, const InstanceCell& cell) {
+            auto& record = renderables[index];
+            if (record.spatialCell == cell) return;
+            const auto old = cellRenderableIndices.find(record.spatialCell);
+            if (old != cellRenderableIndices.end()) {
+                old->second.erase(index);
+                if (old->second.empty()) cellRenderableIndices.erase(old);
+            }
+            cellRenderableIndices[cell].insert(index);
+            record.spatialCell = cell;
+        }
         // A normal entity has one record. Virtual-water meshes expand into
         // independently culled page records which all retain the same owner.
         std::unordered_map<Entity, std::vector<std::size_t>> renderableIndices;

@@ -85,6 +85,22 @@ TEST(Registry, TracksRenderableTopologyWithoutTransformOrDeformationNoise) {
         [](auto& renderer) { renderer.cullingBatch = 7; });
     EXPECT_GT(registry.renderTopologyRevision(), afterRenderer);
 
+    const auto beforeBody = registry.renderTopologyRevision();
+    registry.add<Engine::RigidbodyComponent>(entity);
+    EXPECT_GT(registry.renderTopologyRevision(), beforeBody);
+    const auto afterBody = registry.renderTopologyRevision();
+    registry.modify<Engine::RigidbodyComponent>(entity,
+        [](auto& body) { body.mass = 2.0F; });
+    EXPECT_EQ(registry.renderTopologyRevision(), afterBody);
+    registry.modify<Engine::RigidbodyComponent>(entity,
+        [](auto& body) { body.type = Engine::RigidbodyType::Static; });
+    EXPECT_GT(registry.renderTopologyRevision(), afterBody);
+
+    const auto beforeShadowMode = registry.renderTopologyRevision();
+    registry.modify<Engine::MeshRendererComponent>(entity,
+        [](auto& renderer) { renderer.shadowCacheMode = Engine::ShadowCacheMode::Dynamic; });
+    EXPECT_GT(registry.renderTopologyRevision(), beforeShadowMode);
+
     const Engine::Entity terrain = registry.create();
     registry.add<Engine::Transform>(terrain);
     registry.add<Engine::TerrainGrassComponent>(terrain);

@@ -211,7 +211,6 @@
         using InstanceBatch = SceneGpuResources::InstanceBatch;
         std::vector<RenderableRecord>& renderables;
         std::vector<InstanceBatch>& instanceBatches;
-        bool spatialBatchRebuildPending{false};
         std::vector<RendererInstanceData>& instanceModels;
         std::vector<RendererPreviousTransformData>& previousInstanceTransforms;
         std::vector<GPUMaterialData>& materials;

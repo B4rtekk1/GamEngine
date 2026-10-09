@@ -355,6 +355,7 @@
             renderables.clear();
             instanceBatches.clear();
             sceneGpu.batchRenderableIndices.clear();
+            sceneGpu.cellRenderableIndices.clear();
             sceneGpu.renderableIndices.clear();
             sceneGpu.grassInstances.clear();
             sceneGpu.grassDeformations.clear();
@@ -997,7 +998,12 @@
                     const bool fitsCell = rangeExtent.x() <= SceneGpuResources::InstanceCellSize &&
                                           rangeExtent.y() <= SceneGpuResources::InstanceCellSize &&
                                           rangeExtent.z() <= SceneGpuResources::InstanceCellSize;
-                    const bool canInstance = !forceDistinctBatch && fitsCell &&
+                    // Physics-driven objects keep a dedicated draw range, so
+                    // crossing a cell never stretches a static spatial batch.
+                    const bool dynamicInstance = registry.has<RigidbodyComponent>(entity) &&
+                        registry.get<RigidbodyComponent>(entity).type != RigidbodyType::Static;
+                    const bool canInstance = !forceDistinctBatch && !dynamicInstance &&
+                                             renderer.shadowCacheMode != ShadowCacheMode::Dynamic && fitsCell &&
                                              optimizationFeatures.instancedRendering;
                     auto batchIt = canInstance ? batchIndices.find(batchKey) : batchIndices.end();
                     if (batchIt != batchIndices.end() &&
@@ -1062,7 +1068,8 @@
                                            .sectionIndex = sectionIndex, .materialIndex = materialIndex,
                                            .displacementBoundsPadding = paddingAmount,
                                            .sourceDisplacementBoundsPadding = paddingAmount,
-                                           .materialFromRenderer = materialFromRenderer});
+                                           .materialFromRenderer = materialFromRenderer,
+                                           .dynamic = dynamicInstance || renderer.shadowCacheMode == ShadowCacheMode::Dynamic});
                     const std::size_t renderableIndex = renderables.size() - 1;
                     sceneGpu.batchRenderableIndices[batchIndex].push_back(renderableIndex);
                     sceneGpu.renderableIndices[entity].push_back(renderableIndex);
@@ -1129,6 +1136,10 @@
                     ordered.push_back(std::move(record));
                 }
                 renderables = std::move(ordered);
+            }
+            for (std::size_t index = 0; index < renderables.size(); ++index) {
+                if (!renderables[index].waterOnly)
+                    sceneGpu.cellRenderableIndices[renderables[index].spatialCell].insert(index);
             }
 
             // Painted grass stays compact in the ECS and is expanded into
@@ -1382,7 +1393,7 @@
                 for (const std::size_t renderableIndex : sceneGpu.batchRenderableIndices[batchIndex]) {
                     if (renderableIndex >= instanceModels.size()) continue;
                     const RenderableRecord& record = renderables[renderableIndex];
-                    if (record.displacementBoundsPadding > 1.0e-6F) continue;
+                    if (record.dynamic || record.displacementBoundsPadding > 1.0e-6F) continue;
                     const RendererInstanceData& source = instanceModels[renderableIndex];
                     const glm::quat rotation{source.rotation.w, source.rotation.x,
                                              source.rotation.y, source.rotation.z};
@@ -2271,9 +2282,11 @@
             auto& changedBatches = changedRenderableBatches;
             changedBatches.clear();
             bool displacementChanged = false;
+            bool staticBrixelizerGeometryChanged = false;
             for (const std::size_t index : changedIndices) {
                 const Entity entity = renderables[index].entity;
                 RenderableRecord& record = renderables[index];
+                staticBrixelizerGeometryChanged |= !record.dynamic;
                 if (!readRegistry.has<Transform>(entity)) {
                     sceneGpu.database.removeInstance(SceneGpuResources::instanceSourceKey(
                                                          entity, record.sectionIndex),
@@ -2369,6 +2382,8 @@
                                                            decomposedRotation.z, decomposedRotation.w};
                     rendererInstance.scaleBase = glm::vec4{decomposedScale, 0.0F};
                     record.lastWorldRevision = transform.worldRevision();
+                    sceneGpu.moveRenderableToCell(index,
+                        SceneGpuResources::cellFor(record.localBounds.transformed(model)));
                     if (record.batchIndex < instanceBatches.size() &&
                         instanceBatches[record.batchIndex].castShadow) {
                         if (hadWorldTransform) appendDirtyShadowBounds(previousShadowBounds);
@@ -2437,8 +2452,8 @@
                         const Vec3 padding{newPadding, newPadding, newPadding};
                         record.localBounds.min -= padding;
                         record.localBounds.max += padding;
-                        if (SceneGpuResources::cellFor(record.localBounds.transformed(model)) !=
-                            record.spatialCell) spatialBatchRebuildPending = true;
+                        sceneGpu.moveRenderableToCell(index,
+                            SceneGpuResources::cellFor(record.localBounds.transformed(model)));
                         if (record.batchIndex < instanceBatches.size() &&
                             instanceBatches[record.batchIndex].castShadow) {
                             appendDirtyShadowBounds(previousBounds);
@@ -2580,7 +2595,7 @@
             // The previous vertex position uses the current height parameters.
             // Discard TAA history when they change until previous material data is available.
             if (displacementChanged) temporalAaPass.reset();
-            if (brixelizer.ready() && !changedIndices.empty()) brixelizerGeometryDirty = true;
+            if (brixelizer.ready() && staticBrixelizerGeometryChanged) brixelizerGeometryDirty = true;
             uploadPendingRenderableBuffers();
             registry.view<TerrainGrassComponent>([](const Entity, const TerrainGrassComponent& grass) {
                 grass.clearDirtyInstances();
