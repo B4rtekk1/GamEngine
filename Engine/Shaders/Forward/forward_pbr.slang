@@ -27,6 +27,9 @@ import Common.Displacement;
 #ifndef FORWARD_RESOLVED_VSM
 #define FORWARD_RESOLVED_VSM 0
 #endif
+#ifndef FORWARD_MESHLET_INDEXED
+#define FORWARD_MESHLET_INDEXED 0
+#endif
 
 static const uint PBR_DEBUG_FINAL_LIGHTING = 0u;
 static const uint PBR_DEBUG_NO_SPECULAR_IBL = 1u;
@@ -83,7 +86,11 @@ struct ForwardVertexOutput
 ForwardVertexOutput vertexMain(ForwardVertexInput input, uint instanceIndex : SV_InstanceID,
                                uint baseInstance : SV_StartInstanceLocation)
 {
+#if FORWARD_MESHLET_INDEXED
+    const uint visibleIndex = baseInstance + instanceIndex;
+#else
     const uint visibleIndex = visibleInstanceIndices[baseInstance + instanceIndex];
+#endif
     RendererInstanceData instance = visibleInstances[visibleIndex];
     const uint materialIndex = asuint(instance.positionMaterial.w) + input.materialIndex;
     MaterialData material = materials[materialIndex];

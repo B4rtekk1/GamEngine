@@ -588,6 +588,7 @@
             static const ProfileNameId shadowDepthRasterProfileName = Profiler::registerName("Shadow.CasterCullDepth");
             static const ProfileNameId shadowProjectionProfileName = Profiler::registerName("Shadow.Projection");
             static const ProfileNameId cullingProfileName = Profiler::registerName("Culling");
+            static const ProfileNameId meshletForwardProfileName = Profiler::registerName("Meshlet Forward Prepare");
             static const ProfileNameId forwardProfileName = Profiler::registerName("Forward");
             static const ProfileNameId velocityProfileName = Profiler::registerName("Velocity");
             static const ProfileNameId taaProfileName = Profiler::registerName("TAA");
@@ -621,6 +622,11 @@
             };
             importFrameUploadBuffer("Geometry vertices", vertexBuffer);
             importFrameUploadBuffer("Geometry indices", indexBuffer);
+            importFrameUploadBuffer("Meshlet records", meshletBuffer);
+            importFrameUploadBuffer("Meshlet clusters", meshletClusterBuffer);
+            importFrameUploadBuffer("Meshlet vertex references", meshletVertexBuffer);
+            importFrameUploadBuffer("Meshlet triangles", meshletTriangleBuffer);
+            importFrameUploadBuffer("Meshlet indices", meshletIndexBuffer);
             importFrameUploadBuffer("Frame instances", instanceBuffers[currentFrame]);
             importFrameUploadBuffer("Previous transforms", previousTransformBuffers[currentFrame]);
             importFrameUploadBuffer("Frame materials", materialBuffers[currentFrame]);
@@ -661,13 +667,15 @@
             // shared upload timeline. Keep this in sync with the imports above.
             const auto legacyUploadValue = [&]() {
                 std::uint64_t value = 0;
-                const std::array<const Buffer*, 11> buffers{
+                const std::array<const Buffer*, 16> buffers{
                     &vertexBuffer, &indexBuffer, &instanceBuffers[currentFrame],
                     &previousTransformBuffers[currentFrame], &materialBuffers[currentFrame],
                     &gpuSceneInstanceBuffers[currentFrame], &gpuSceneMeshBuffers[currentFrame],
                     &gpuSceneMaterialBuffers[currentFrame], &uniformBuffers[currentFrame],
                     &shadowCullingUniformBuffers[currentFrame],
-                    &clusteredLightingUniformBuffers[currentFrame]};
+                    &clusteredLightingUniformBuffers[currentFrame], &meshletBuffer,
+                    &meshletClusterBuffer, &meshletVertexBuffer, &meshletTriangleBuffer,
+                    &meshletIndexBuffer};
                 for (const Buffer* buffer : buffers)
                     if (buffer->handle() != VK_NULL_HANDLE)
                         value = std::max(value, buffer->readyTimeline());
@@ -719,9 +727,24 @@
             // submitting the presentation graph. The viewport graph may split
             // this work across graphics and compute submissions.
             {
-            if (meshShaderPathActive && vulkanDevice.supportsMeshShaders() && globalMeshletCount != 0 &&
-                !sceneGpu.database.instances().empty() &&
-                meshletCullSets[currentFrame] != VK_NULL_HANDLE) {
+            bool meshletForwardReady = meshletForwardPathActive && renderGameViewport &&
+                vulkanDevice.supportsMeshShaders() &&
+                optimizationFeatures.gpuCulling && globalMeshletCount != 0 &&
+                meshletIndexBuffer.handle() != VK_NULL_HANDLE &&
+                !instanceBatches.empty() && !sceneGpu.database.instances().empty() &&
+                meshletCullSets[currentFrame] != VK_NULL_HANDLE;
+            if (meshletForwardReady) {
+                for (const InstanceBatch& batch : instanceBatches) {
+                    if (batch.shaderSlot == materialShaderIndex(MaterialShader::Water)) continue;
+                    if (batch.meshletCount == 0 || batch.shaderSlot >= MaterialShaderCount ||
+                        batch.lod1IndexCount != 0 || batch.lod2IndexCount != 0) {
+                        meshletForwardReady = false;
+                        break;
+                    }
+                }
+            }
+            if (meshletForwardReady) {
+                gpuTimestampProfiler.beginZone(commandBuffer, currentFrame, meshletForwardProfileName);
                 // Build an indirect command from the compact coarse-visible
                 // list, so meshlet culling launches one group per visible
                 // instance instead of one per instance in the whole scene.
@@ -764,17 +787,27 @@
                     .memoryBarrierCount = 1, .pMemoryBarriers = &meshletBarrier};
                 vkCmdPipelineBarrier2(commandBuffer, &meshletDependency);
                 vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, meshletIndirectPipeline);
+                vkCmdFillBuffer(commandBuffer, meshletIndexedDrawCountBuffers[currentFrame].handle(), 0,
+                                sizeof(std::uint32_t) * MaterialProgramSlotCount, 0);
+                const VkMemoryBarrier2 meshletCountClearBarrier{VK_STRUCTURE_TYPE_MEMORY_BARRIER_2, nullptr,
+                    VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT,
+                    VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_STORAGE_READ_BIT |
+                        VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT};
+                const VkDependencyInfo meshletCountClearDependency{.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO,
+                    .memoryBarrierCount = 1, .pMemoryBarriers = &meshletCountClearBarrier};
+                vkCmdPipelineBarrier2(commandBuffer, &meshletCountClearDependency);
                 const VkDescriptorSet meshletIndirectSet = meshletIndirectSets[currentFrame];
                 vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE,
                                         meshletIndirectPipelineLayout, 0, 1, &meshletIndirectSet, 0, nullptr);
-                vkCmdDispatch(commandBuffer, 1, 1, 1);
+                vkCmdDispatch(commandBuffer, (meshletVisibleCapacity + 63U) / 64U, 1, 1);
                 const VkMemoryBarrier2 meshTaskIndirectBarrier{VK_STRUCTURE_TYPE_MEMORY_BARRIER_2, nullptr,
                     VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT,
-                    VK_PIPELINE_STAGE_2_DRAW_INDIRECT_BIT | VK_PIPELINE_STAGE_2_MESH_SHADER_BIT_EXT,
-                    VK_ACCESS_2_INDIRECT_COMMAND_READ_BIT | VK_ACCESS_2_SHADER_STORAGE_READ_BIT};
+                    VK_PIPELINE_STAGE_2_DRAW_INDIRECT_BIT,
+                    VK_ACCESS_2_INDIRECT_COMMAND_READ_BIT};
                 const VkDependencyInfo meshTaskIndirectDependency{.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO,
                     .memoryBarrierCount = 1, .pMemoryBarriers = &meshTaskIndirectBarrier};
                 vkCmdPipelineBarrier2(commandBuffer, &meshTaskIndirectDependency);
+                gpuTimestampProfiler.endZone(commandBuffer, currentFrame);
             }
             const ForwardPass& sceneForwardPass = msaa.enabled()
                 ? forwardPass
@@ -1511,13 +1544,27 @@
                     msaa.enabled() ? hdrBuffer.imageView() : VK_NULL_HANDLE,
                     msaa.enabled() ? hiZDepthBuffer.imageView() : VK_NULL_HANDLE, swapchain.extent(), shadowPass.descriptorSet(currentFrame),
                     vertexBuffer.handle(), instanceBuffers[currentFrame].handle(), indexBuffer.handle());
+                if (meshletForwardReady)
+                    vkCmdBindIndexBuffer(buffer, meshletIndexBuffer.handle(), 0, VK_INDEX_TYPE_UINT32);
                 for (std::uint32_t shader = 0; shader < MaterialProgramSlotCount; ++shader) {
                     if (!activeShaderSlots.test(shader) || shader == materialShaderIndex(MaterialShader::Water)) continue;
-                    const auto commandOffset = static_cast<VkDeviceSize>(shader) * gpuObjects.size() * sizeof(VkDrawIndexedIndirectCommand);
                     const auto countOffset = static_cast<VkDeviceSize>(shader) * sizeof(std::uint32_t);
-                    forwardPass.drawMaterial(buffer, shadowPass.descriptorSet(currentFrame), shader, indirectDraws[currentFrame], commandOffset, countOffset);
-                    forwardPass.drawMaterial(buffer, shadowPass.descriptorSet(currentFrame), shader, foliageIndirectDraws[currentFrame], commandOffset, countOffset);
+                    if (meshletForwardReady) {
+                        const auto commandOffset = static_cast<VkDeviceSize>(shader) * meshletVisibleCapacity *
+                            sizeof(VkDrawIndexedIndirectCommand);
+                        forwardPass.drawMeshletMaterial(buffer, shadowPass.descriptorSet(currentFrame), shader,
+                            meshletIndexedIndirectDraws[currentFrame], commandOffset, countOffset);
+                    } else {
+                        const auto commandOffset = static_cast<VkDeviceSize>(shader) * gpuObjects.size() *
+                            sizeof(VkDrawIndexedIndirectCommand);
+                        forwardPass.drawMaterial(buffer, shadowPass.descriptorSet(currentFrame), shader,
+                            indirectDraws[currentFrame], commandOffset, countOffset);
+                        forwardPass.drawMaterial(buffer, shadowPass.descriptorSet(currentFrame), shader,
+                            foliageIndirectDraws[currentFrame], commandOffset, countOffset);
+                    }
                 }
+                if (meshletForwardReady)
+                    vkCmdBindIndexBuffer(buffer, indexBuffer.handle(), 0, VK_INDEX_TYPE_UINT32);
                 if (!sceneGpu.grassInstances.empty()) {
                     const auto& lists = grassRenderLists[currentFrame]; Culling::IndexedIndirectDrawCount grassDraw;
                     grassDraw.create(lists.mainIndirect.handle(), lists.mainDrawCount.handle(), static_cast<uint32_t>(std::max<std::size_t>(1, sceneGpu.grassClusters.size())));
@@ -1803,14 +1850,28 @@
                 VK_NULL_HANDLE, msaa.enabled() ? hdrBuffer.imageView() : VK_NULL_HANDLE,
                 msaa.enabled() ? hiZDepthBuffer.imageView() : VK_NULL_HANDLE, swapchain.extent(),
                 shadowPass.descriptorSet(currentFrame), vertexBuffer.handle(), instanceBuffers[currentFrame].handle(), indexBuffer.handle());
+            if (meshletForwardReady)
+                vkCmdBindIndexBuffer(commandBuffer, meshletIndexBuffer.handle(), 0, VK_INDEX_TYPE_UINT32);
             for (std::uint32_t shader = 0; shader < MaterialProgramSlotCount; ++shader) {
                 if (!activeShaderSlots.test(shader)) continue;
                 if (shader == materialShaderIndex(MaterialShader::Water)) continue;
-                const auto commandOffset = static_cast<VkDeviceSize>(shader) * gpuObjects.size() * sizeof(VkDrawIndexedIndirectCommand);
                 const auto countOffset = static_cast<VkDeviceSize>(shader) * sizeof(std::uint32_t);
-                lightingForwardPass.drawMaterial(commandBuffer, shadowPass.descriptorSet(currentFrame), shader, indirectDraws[currentFrame], commandOffset, countOffset);
-                lightingForwardPass.drawMaterial(commandBuffer, shadowPass.descriptorSet(currentFrame), shader, foliageIndirectDraws[currentFrame], commandOffset, countOffset);
+                if (meshletForwardReady) {
+                    const auto commandOffset = static_cast<VkDeviceSize>(shader) * meshletVisibleCapacity *
+                        sizeof(VkDrawIndexedIndirectCommand);
+                    lightingForwardPass.drawMeshletMaterial(commandBuffer, shadowPass.descriptorSet(currentFrame),
+                        shader, meshletIndexedIndirectDraws[currentFrame], commandOffset, countOffset);
+                } else {
+                    const auto commandOffset = static_cast<VkDeviceSize>(shader) * gpuObjects.size() *
+                        sizeof(VkDrawIndexedIndirectCommand);
+                    lightingForwardPass.drawMaterial(commandBuffer, shadowPass.descriptorSet(currentFrame), shader,
+                        indirectDraws[currentFrame], commandOffset, countOffset);
+                    lightingForwardPass.drawMaterial(commandBuffer, shadowPass.descriptorSet(currentFrame), shader,
+                        foliageIndirectDraws[currentFrame], commandOffset, countOffset);
+                }
             }
+            if (meshletForwardReady)
+                vkCmdBindIndexBuffer(commandBuffer, indexBuffer.handle(), 0, VK_INDEX_TYPE_UINT32);
             if (!sceneGpu.grassInstances.empty()) {
                 const auto& lists = grassRenderLists[currentFrame]; Culling::IndexedIndirectDrawCount grassDraw;
                 grassDraw.create(lists.mainIndirect.handle(), lists.mainDrawCount.handle(), static_cast<uint32_t>(std::max<std::size_t>(1, sceneGpu.grassClusters.size())));

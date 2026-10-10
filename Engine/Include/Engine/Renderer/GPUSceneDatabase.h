@@ -72,6 +72,7 @@ namespace Engine {
             std::uint32_t materialTableOffset{0};
             std::uint32_t pipelineClass{0};
             std::uint32_t flags{0};
+            std::uint32_t shaderSlot{0};
         };
 
         struct DirtyRanges {
@@ -92,6 +93,7 @@ namespace Engine {
                                      const AABB& localBounds,
                                      float displacementBoundsPadding = 0.0F);
         void updateInstanceFlags(GPUSceneInstanceId instanceId, std::uint32_t flags);
+        void updateInstanceObjectId(GPUSceneInstanceId instanceId, std::uint32_t objectId);
         /// Marks an instance inactive immediately. Its slot is reusable only
         /// after reclaimDeferredInstances() observes the submission value
         /// which was current when it was removed.

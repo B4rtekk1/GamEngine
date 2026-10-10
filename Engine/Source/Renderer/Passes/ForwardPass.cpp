@@ -19,7 +19,7 @@ namespace Engine {
                              const VkImageLayout colorInitialLayout,
                              const bool colorInitialLayoutExternallySynchronized,
                              const VkFormat velocityFormat, const VkFormat viewNormalFormat, const bool preserveDepth,
-                             const bool depthOnly) {
+                             const bool depthOnly, const bool enableMeshletPipelines) {
         reportedMissingShaderGraphSlots_.clear();
         hasVelocityAttachment_ = velocityFormat != VK_FORMAT_UNDEFINED;
         hasViewNormalAttachment_ = viewNormalFormat != VK_FORMAT_UNDEFINED;
@@ -111,6 +111,13 @@ namespace Engine {
             if (index == PbrFoliageProgramSlot)
                 materialOptions.cullMode = VK_CULL_MODE_NONE;
             materialPipelines_[index].create(device, materialOptions);
+            if (enableMeshletPipelines) {
+                GraphicsPipelineOptions meshletOptions = materialOptions;
+                const auto& path = materialOptions.shader;
+                meshletOptions.shader = path.parent_path() /
+                    (path.stem().string() + "_meshlet" + path.extension().string());
+                meshletMaterialPipelines_[index].create(device, meshletOptions);
+            }
         }
         shaderGraphPipelineOptions_ = options;
         shaderGraphPipelineOptions_.shader.clear();
@@ -177,6 +184,7 @@ namespace Engine {
         foliagePipeline_.destroy();
         grassPipeline_.destroy();
         for (auto &pipeline: materialPipelines_) pipeline.destroy();
+        for (auto &pipeline: meshletMaterialPipelines_) pipeline.destroy();
     }
 
     std::uint32_t
@@ -316,6 +324,19 @@ namespace Engine {
             return;
         }
         const auto &pipeline = materialPipelines_[shaderSlot];
+        vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline.handle());
+        vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline.layout(),
+                                0, 1, &sceneDescriptorSet, 0, nullptr);
+        indirectDraw.record(commandBuffer, commandOffset, countOffset);
+    }
+
+    void ForwardPass::drawMeshletMaterial(VkCommandBuffer commandBuffer, VkDescriptorSet sceneDescriptorSet,
+                                          const std::uint32_t shaderSlot,
+                                          const Culling::IndexedIndirectDrawCount& indirectDraw,
+                                          const VkDeviceSize commandOffset,
+                                          const VkDeviceSize countOffset) const {
+        if (shaderSlot >= MaterialShaderCount || !indirectDraw.valid()) return;
+        const auto& pipeline = meshletMaterialPipelines_[shaderSlot];
         vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline.handle());
         vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline.layout(),
                                 0, 1, &sceneDescriptorSet, 0, nullptr);

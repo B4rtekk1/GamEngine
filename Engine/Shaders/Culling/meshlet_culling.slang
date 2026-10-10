@@ -100,7 +100,9 @@ bool clusterPathVisible(GPUSceneMeshRecord mesh, uint meshletId,
         const GpuMeshletCluster node = clusters[nodeId];
         const float3 center = mul(float4(node.bounds.xyz, 1.0), instance.worldMatrix).xyz;
         const float radius = (node.bounds.w + instance.displacementBoundsPadding.x) * instanceScale.w;
-        if (outsideFrustum(center, radius) || !coneVisible(node.cone, center, uniformScale) ||
+        if (outsideFrustum(center, radius) ||
+            (((instance.idsAndFlags.w & 10u) == 0u) &&
+             !coneVisible(node.cone, center, uniformScale)) ||
             sphereOccluded(center, radius)) return false;
         if (node.range.y == 0u) return true;
 
@@ -153,7 +155,8 @@ void main(uint3 groupId : SV_GroupID, uint3 threadId : SV_GroupThreadID) {
                                       abs(instanceScale.x - instanceScale.z) < 1.0e-5 &&
                                       instance.displacementBoundsPadding.x <= 1.0e-6;
             clusterVisible = !outsideFrustum(center, radius) &&
-                             coneVisible(root.cone, center, uniformScale) &&
+                             (((instance.idsAndFlags.w & 10u) != 0u) ||
+                              coneVisible(root.cone, center, uniformScale)) &&
                              !sphereOccluded(center, radius) ? 1u : 0u;
         }
     }
@@ -190,7 +193,8 @@ void main(uint3 groupId : SV_GroupID, uint3 threadId : SV_GroupThreadID) {
         const bool uniformScale = abs(instanceScale.x - instanceScale.y) < 1.0e-5 &&
                                   abs(instanceScale.x - instanceScale.z) < 1.0e-5 &&
                                   instance.displacementBoundsPadding.x <= 1.0e-6;
-        if (visible && meshlet.cone.w >= -1.0 && uniformScale) {
+        if (visible && meshlet.cone.w >= -1.0 && uniformScale &&
+            (instance.idsAndFlags.w & 10u) == 0u) {
             const float3 worldConeAxis = normalize(mul(float4(meshlet.cone.xyz, 0.0), instance.worldMatrix).xyz);
             const float3 toCamera = normalize(culling.cameraPosition - worldCenter);
             const float threshold = -sqrt(max(0.0, 1.0 - meshlet.cone.w * meshlet.cone.w));

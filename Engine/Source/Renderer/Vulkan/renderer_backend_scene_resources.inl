@@ -326,6 +326,7 @@
                 meshletClusterBuffer.destroy();
                 meshletVertexBuffer.destroy();
                 meshletTriangleBuffer.destroy();
+                meshletIndexBuffer.destroy();
                 meshletHeapAllocations.clear();
                 meshletHeapFreeRanges.clear();
                 meshletClusterHeapFreeRanges.clear();
@@ -841,7 +842,17 @@
                 ensureMeshletHeap(meshletClusterBuffer, meshletClusterHeapHighWater, sizeof(Culling::GpuMeshletCluster)) |
                 ensureMeshletHeap(meshletVertexBuffer, meshletVertexHeapHighWater, sizeof(std::uint32_t)) |
                 ensureMeshletHeap(meshletTriangleBuffer, meshletTriangleHeapHighWater, sizeof(std::uint32_t));
-            if (meshletHeapReallocated) {
+            const VkDeviceSize meshletIndexBytes = sizeof(std::uint32_t) * 3ULL *
+                std::max(1U, meshletTriangleHeapHighWater);
+            const bool meshletIndexReallocated = vulkanDevice.supportsMeshShaders() &&
+                (meshletIndexBuffer.handle() == VK_NULL_HANDLE ||
+                 meshletIndexBuffer.size() < meshletIndexBytes);
+            if (meshletIndexReallocated)
+                meshletIndexBuffer.createDeviceLocalEmpty(device,
+                    sizeof(std::uint32_t) * 3ULL * growCapacity(meshletTriangleHeapHighWater),
+                    VK_BUFFER_USAGE_INDEX_BUFFER_BIT | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+                    vulkanDevice.allocator());
+            if (meshletHeapReallocated || meshletIndexReallocated) {
                 // A capacity increase replaces all four backing buffers. Their
                 // stable offsets remain valid, but every live allocation must
                 // be restored once into the enlarged heap.
@@ -872,6 +883,19 @@
                     vertices.size() != upload.allocation.vertexIndexCount || triangles.size() != upload.allocation.triangleCount) {
                     throw std::runtime_error("Invalid meshlet payload during GPU scene upload");
                 }
+                std::vector<std::uint32_t> expandedIndices;
+                if (vulkanDevice.supportsMeshShaders()) {
+                    expandedIndices.resize(triangles.size() * 3U);
+                    for (const Culling::GpuMeshlet& meshlet : meshlets) {
+                        for (std::uint32_t triangle = 0; triangle < meshlet.range.w; ++triangle) {
+                            const std::uint32_t packed = triangles[meshlet.range.z + triangle];
+                            const std::size_t destination = 3ULL * (meshlet.range.z + triangle);
+                            expandedIndices[destination] = vertices[meshlet.range.x + (packed & 0xffU)];
+                            expandedIndices[destination + 1U] = vertices[meshlet.range.x + ((packed >> 8U) & 0xffU)];
+                            expandedIndices[destination + 2U] = vertices[meshlet.range.x + ((packed >> 16U) & 0xffU)];
+                        }
+                    }
+                }
                 // appendMeshletPayload/ClusterPayload are also used by the
                 // cooker and therefore append relative to their destination.
                 // Rebase this standalone upload into the persistent heap.
@@ -889,6 +913,11 @@
                     sizeof(std::uint32_t) * upload.allocation.firstVertexIndex, commandPool, vulkanDevice.graphicsQueue());
                 meshletTriangleBuffer.uploadDeviceLocal(triangles.data(), sizeof(std::uint32_t) * triangles.size(),
                     sizeof(std::uint32_t) * upload.allocation.firstTriangle, commandPool, vulkanDevice.graphicsQueue());
+                if (!expandedIndices.empty())
+                    meshletIndexBuffer.uploadDeviceLocal(expandedIndices.data(),
+                        sizeof(std::uint32_t) * expandedIndices.size(),
+                        sizeof(std::uint32_t) * 3ULL * upload.allocation.firstTriangle,
+                        commandPool, vulkanDevice.graphicsQueue());
             }
             // Descriptors change only on heap growth, never for an ordinary
             // streamed asset upload.
@@ -1688,7 +1717,7 @@
         [[nodiscard]] static GPUSceneMaterialRecord gpuSceneRecord(
             const GPUSceneDatabase::GPUMaterial& material) {
             return {.data = glm::uvec4{material.materialTableOffset,
-                                       material.pipelineClass, material.flags, 0U}};
+                                       material.pipelineClass, material.flags, material.shaderSlot}};
         }
 
         template <typename GPURecord, typename SourceRecord>
@@ -1901,8 +1930,13 @@
                 }};
                 const auto previousHiZFrame = (frame + MAX_FRAMES_IN_FLIGHT - 1U) % MAX_FRAMES_IN_FLIGHT;
                 const auto& hiZBuffer = hiZBuffers[previousHiZFrame];
-                const VkDescriptorImageInfo meshletHiZInfo{hiZBuffer.sampler(), hiZBuffer.fullView(),
-                                                           VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
+                const auto& meshletDepthFallback = msaa.enabled() ? hiZDepthBuffer : depthBuffer;
+                const VkDescriptorImageInfo meshletHiZInfo = hiZBuffer.image() != VK_NULL_HANDLE
+                    ? VkDescriptorImageInfo{hiZBuffer.sampler(), hiZBuffer.fullView(),
+                                            VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL}
+                    : VkDescriptorImageInfo{meshletDepthFallback.sampler(),
+                                            meshletDepthFallback.imageView(),
+                                            VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL};
                 VkWriteDescriptorSet meshletWrites[10]{};
                 for (std::uint32_t binding = 0; binding < std::size(meshletWrites); ++binding) {
                     meshletWrites[binding] = {.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
@@ -1929,15 +1963,20 @@
                 vkUpdateDescriptorSets(device, std::size(meshletDispatchWrites),
                                        meshletDispatchWrites, 0, nullptr);
             }
-            if (meshletIndirectSets[frame] != VK_NULL_HANDLE) {
+            if (meshletIndirectSets[frame] != VK_NULL_HANDLE &&
+                meshletBuffer.handle() != VK_NULL_HANDLE &&
+                gpuSceneInstanceBuffers[frame].handle() != VK_NULL_HANDLE &&
+                gpuSceneMaterialBuffers[frame].handle() != VK_NULL_HANDLE) {
                 const VkDescriptorBufferInfo meshletIndirectInfos[] = {
                     {visibleMeshletBuffers[frame].handle(), 0, VK_WHOLE_SIZE},
                     {visibleMeshletCountBuffers[frame].handle(), 0, sizeof(std::uint32_t)},
-                    {meshletTaskIndirectBuffers[frame].handle(), 0,
-                     sizeof(VkDrawMeshTasksIndirectCommandEXT)},
-                    {meshletTaskDrawCountBuffers[frame].handle(), 0, sizeof(std::uint32_t)},
+                    {meshletBuffer.handle(), 0, VK_WHOLE_SIZE},
+                    {gpuSceneInstanceBuffers[frame].handle(), 0, VK_WHOLE_SIZE},
+                    {gpuSceneMaterialBuffers[frame].handle(), 0, VK_WHOLE_SIZE},
+                    {meshletIndexedIndirectBuffers[frame].handle(), 0, VK_WHOLE_SIZE},
+                    {meshletIndexedDrawCountBuffers[frame].handle(), 0, VK_WHOLE_SIZE},
                 };
-                VkWriteDescriptorSet meshletIndirectWrites[4]{};
+                VkWriteDescriptorSet meshletIndirectWrites[7]{};
                 for (std::uint32_t binding = 0; binding < std::size(meshletIndirectWrites); ++binding) {
                     meshletIndirectWrites[binding] = {.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
                         .dstSet = meshletIndirectSets[frame], .dstBinding = binding,
@@ -2488,6 +2527,7 @@
                         .materialTableOffset = record.materialTableOffset,
                         .pipelineClass = batch.foliagePipeline ? 1U : 0U,
                         .flags = batch.castShadow ? 1U : 0U,
+                        .shaderSlot = batch.shaderSlot,
                     };
                     const auto worldMatrix = [&model] {
                         std::array<float, 16> matrix{};
@@ -2498,7 +2538,8 @@
                         }
                         return matrix;
                     }();
-                    const std::uint32_t instanceFlags = 1U | (batch.foliagePipeline ? 2U : 0U);
+                    const std::uint32_t instanceFlags = 1U | (batch.foliagePipeline ? 2U : 0U) |
+                        (batch.twoSided ? 8U : 0U);
                     const bool proxyUninitialized = record.renderProxy.instance == InvalidGPUSceneInstanceId;
                     if (proxyUninitialized) {
                         const std::uint64_t meshKey = static_cast<std::uint64_t>(
@@ -2520,6 +2561,8 @@
                                 .flags = instanceFlags,
                             });
                     } else {
+                        sceneGpu.database.updateInstanceObjectId(record.renderProxy.instance,
+                            static_cast<std::uint32_t>(index));
                         // A transform-only update deliberately does no hashing,
                         // lookup or write to the mesh/material tables.
                         if (transformChanged || hasRendererChange) {
@@ -2608,9 +2651,7 @@
         }
 
         [[nodiscard]] bool canUseHiZOcclusionCulling() const noexcept {
-            constexpr std::size_t minimumHiZRenderableCount = 256;
             return optimizationFeatures.gpuCulling && optimizationFeatures.occlusionCulling &&
-                   instanceBatches.size() >= minimumHiZRenderableCount &&
                    (!msaa.enabled() || vulkanDevice.supportsConservativeDepthResolve());
         }
 

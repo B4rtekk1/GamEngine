@@ -80,6 +80,19 @@ namespace Engine {
         EXPECT_EQ(database.instances()[instance].worldMatrix, matrix);
     }
 
+    TEST(GPUSceneDatabaseTests, ReorderedRenderableUpdatesTheGpuObjectId) {
+        GPUSceneDatabase database;
+        const auto instance = database.upsertInstance(7, {.objectId = 3});
+        database.clearDirty();
+
+        database.updateInstanceObjectId(instance, 9);
+
+        EXPECT_EQ(database.instances()[instance].objectId, 9U);
+        EXPECT_EQ(database.dirty().instances, std::vector{instance});
+        EXPECT_TRUE(database.dirty().meshes.empty());
+        EXPECT_TRUE(database.dirty().materials.empty());
+    }
+
     TEST(GPUSceneDatabaseTests, DirectRecordUpdatesMarkOnlyTheirOwnTable) {
         GPUSceneDatabase database;
         const auto mesh = database.upsertMesh(1, {});

@@ -16,26 +16,26 @@ namespace {
      *  Constants controlling padding, spacing, border thickness and rounding.
      *  @{
      */
-    constexpr float kWindowPaddingX = 8.0F;
-    constexpr float kWindowPaddingY = 7.0F;
-    constexpr float kFramePaddingX = 7.0F;
-    constexpr float kFramePaddingY = 5.0F;
-    constexpr float kItemSpacingX = 6.0F;
-    constexpr float kItemSpacingY = 5.0F;
-    constexpr float kItemInnerSpacingX = 5.0F;
-    constexpr float kItemInnerSpacingY = 4.0F;
+    constexpr float kWindowPaddingX = 10.0F;
+    constexpr float kWindowPaddingY = 8.0F;
+    constexpr float kFramePaddingX = 8.0F;
+    constexpr float kFramePaddingY = 6.0F;
+    constexpr float kItemSpacingX = 7.0F;
+    constexpr float kItemSpacingY = 7.0F;
+    constexpr float kItemInnerSpacingX = 6.0F;
+    constexpr float kItemInnerSpacingY = 5.0F;
     constexpr float kIndentSpacing = 18.0F;
     constexpr float kScrollbarSize = 11.0F;
     constexpr float kGrabMinSize = 10.0F;
     constexpr float kBorderSize = 1.0F;
     constexpr float kFrameBorderSize = 0.0F;
-    constexpr float kWindowRounding = 3.0F;
-    constexpr float kChildRounding = 3.0F;
-    constexpr float kFrameRounding = 3.0F;
-    constexpr float kPopupRounding = 3.0F;
-    constexpr float kScrollbarRounding = 3.0F;
-    constexpr float kGrabRounding = 3.0F;
-    constexpr float kTabRounding = 3.0F;
+    constexpr float kWindowRounding = 5.0F;
+    constexpr float kChildRounding = 5.0F;
+    constexpr float kFrameRounding = 4.0F;
+    constexpr float kPopupRounding = 5.0F;
+    constexpr float kScrollbarRounding = 5.0F;
+    constexpr float kGrabRounding = 4.0F;
+    constexpr float kTabRounding = 5.0F;
     /** @} */
 
     /** @name Default docking layout

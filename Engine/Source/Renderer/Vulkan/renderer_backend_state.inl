@@ -237,12 +237,11 @@
         Buffer meshletClusterBuffer;
         Buffer meshletVertexBuffer;
         Buffer meshletTriangleBuffer;
+        Buffer meshletIndexBuffer;
         std::uint32_t globalMeshletCount{};
         std::uint32_t meshletVisibleCapacity{};
-        // The current forward pipelines use vertex/fragment entry points and
-        // indexed draws.  Keep meshlet culling off until a mesh-shader forward
-        // pipeline consumes visibleMeshletBuffers.
-        bool meshShaderPathActive = true;
+        // The indexed meshlet forward path consumes visibleMeshletBuffers.
+        bool meshletForwardPathActive = true;
         // Geometry Heap. Mesh ranges are never derived from dense ECS order.
         // MeshId is a stable indirection handle; the allocation below is its
         // current physical location and may therefore be recycled or moved.
@@ -325,11 +324,9 @@
         std::array<Buffer, MAX_FRAMES_IN_FLIGHT> meshletCullDispatchBuffers;
         std::array<Buffer, MAX_FRAMES_IN_FLIGHT> visibleMeshletBuffers;
         std::array<Buffer, MAX_FRAMES_IN_FLIGHT> visibleMeshletCountBuffers;
-        // One GPU-produced VkDrawMeshTasksIndirectCommandEXT plus its count.
-        // The mesh path consumes this directly; the indexed path owns a
-        // separate VkDrawIndexedIndirectCommand stream.
-        std::array<Buffer, MAX_FRAMES_IN_FLIGHT> meshletTaskIndirectBuffers;
-        std::array<Buffer, MAX_FRAMES_IN_FLIGHT> meshletTaskDrawCountBuffers;
+        std::array<Buffer, MAX_FRAMES_IN_FLIGHT> meshletIndexedIndirectBuffers;
+        std::array<Buffer, MAX_FRAMES_IN_FLIGHT> meshletIndexedDrawCountBuffers;
+        std::array<Culling::IndexedIndirectDrawCount, MAX_FRAMES_IN_FLIGHT> meshletIndexedIndirectDraws;
         std::array<Buffer, MAX_FRAMES_IN_FLIGHT> meshletCullingUniformBuffers;
         // GPU-driven grass compaction: count -> prefix -> scatter -> indirect.
         std::array<Buffer, MAX_FRAMES_IN_FLIGHT> grassBinCountBuffers;

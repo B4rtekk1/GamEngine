@@ -7,6 +7,9 @@ import Common.Displacement;
 #ifndef DEPTH_OUTPUT_VELOCITY
 #define DEPTH_OUTPUT_VELOCITY 1
 #endif
+#ifndef FORWARD_MESHLET_INDEXED
+#define FORWARD_MESHLET_INDEXED 0
+#endif
 
 [[vk::binding(1, 0)]] ConstantBuffer<RendererFrameData> frame;
 [[vk::binding(2, 0)]] StructuredBuffer<MaterialData> materials;
@@ -48,7 +51,11 @@ float3x3 rotation(float4 q) {
 [shader("vertex")]
 VertexOutput vertexMain(VertexInput input, uint instanceIndex : SV_InstanceID,
                         uint baseInstance : SV_StartInstanceLocation) {
+#if FORWARD_MESHLET_INDEXED
+    uint visibleIndex = baseInstance + instanceIndex;
+#else
     uint visibleIndex = visibleInstanceIndices[baseInstance + instanceIndex];
+#endif
     RendererInstanceData instance = visibleInstances[visibleIndex];
     uint materialIndex = asuint(instance.positionMaterial.w) + input.materialIndex;
     MaterialData material = materials[materialIndex];

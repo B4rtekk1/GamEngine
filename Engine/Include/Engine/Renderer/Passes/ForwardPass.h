@@ -30,7 +30,8 @@ namespace Engine {
                     bool colorInitialLayoutExternallySynchronized = false,
                     VkFormat velocityFormat = VK_FORMAT_UNDEFINED,
                     VkFormat viewNormalFormat = VK_FORMAT_UNDEFINED,
-                    bool preserveDepth = false, bool depthOnly = false);
+                    bool preserveDepth = false, bool depthOnly = false,
+                    bool enableMeshletPipelines = false);
 
         void destroy() noexcept;
 
@@ -49,6 +50,11 @@ namespace Engine {
                           const Culling::IndexedIndirectDrawCount& indirectDraw,
                           VkDeviceSize commandOffset = 0,
                           VkDeviceSize countOffset = 0) const;
+
+        void drawMeshletMaterial(VkCommandBuffer commandBuffer, VkDescriptorSet sceneDescriptorSet,
+                                 std::uint32_t shaderSlot,
+                                 const Culling::IndexedIndirectDrawCount& indirectDraw,
+                                 VkDeviceSize commandOffset, VkDeviceSize countOffset) const;
 
         /** Adds a cooked graph module to the Vulkan pipeline cache. Render-thread only. */
         [[nodiscard]] std::uint32_t registerShaderGraph(const ShaderGraphProgram& program,
@@ -72,6 +78,7 @@ namespace Engine {
 
     private:
         std::array<GraphicsPipeline, MaterialShaderCount> materialPipelines_;
+        std::array<GraphicsPipeline, MaterialShaderCount> meshletMaterialPipelines_;
         GraphicsPipeline foliagePipeline_;
         GraphicsPipeline grassPipeline_;
         GraphicsPipeline outlinePipeline_;

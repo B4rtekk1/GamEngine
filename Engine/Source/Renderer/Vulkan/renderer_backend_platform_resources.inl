@@ -592,7 +592,7 @@
                                shadowPass.descriptorSetLayout(), assetManager,
                                VK_IMAGE_LAYOUT_UNDEFINED, false,
                                !msaa.enabled() ? VK_FORMAT_R16G16_SFLOAT : VK_FORMAT_UNDEFINED,
-                               !msaa.enabled() ? VK_FORMAT_R16G16_SNORM : VK_FORMAT_UNDEFINED, false, true);
+                               !msaa.enabled() ? VK_FORMAT_R16G16_SNORM : VK_FORMAT_UNDEFINED, false, true, true);
             lightingForwardPass.create(device, HdrBuffer::Format, depthBuffer.format(),
                                msaa.sampleCount(),
                                msaa.enabled() ? hiZDepthBuffer.format() : VK_FORMAT_UNDEFINED,
@@ -600,7 +600,7 @@
                                shadowPass.descriptorSetLayout(), assetManager,
                                VK_IMAGE_LAYOUT_UNDEFINED, false,
                                antialiasingLevel == AntialiasingLevel::TAA ? VK_FORMAT_R16G16_SFLOAT : VK_FORMAT_UNDEFINED,
-                               VK_FORMAT_UNDEFINED, true);
+                               VK_FORMAT_UNDEFINED, true, false, true);
             waterPass.create(device, HdrBuffer::Format, depthBuffer.format(), msaa.sampleCount(),
                              msaa.enabled() ? hiZDepthBuffer.format() : VK_FORMAT_UNDEFINED,
                              msaa.enabled() ? vulkanDevice.depthResolveMode() : VK_RESOLVE_MODE_NONE,

@@ -40,6 +40,7 @@
                 indexBuffer.destroy();
                 vertexBuffer.destroy();
                 meshletTriangleBuffer.destroy();
+                meshletIndexBuffer.destroy();
                 meshletVertexBuffer.destroy();
                 meshletBuffer.destroy();
                 meshletClusterBuffer.destroy();
@@ -70,8 +71,8 @@
                 for (Buffer& buffer : meshletCullDispatchBuffers) buffer.destroy();
                 for (Buffer& buffer : visibleMeshletBuffers) buffer.destroy();
                 for (Buffer& buffer : visibleMeshletCountBuffers) buffer.destroy();
-                for (Buffer& buffer : meshletTaskIndirectBuffers) buffer.destroy();
-                for (Buffer& buffer : meshletTaskDrawCountBuffers) buffer.destroy();
+                for (Buffer& buffer : meshletIndexedIndirectBuffers) buffer.destroy();
+                for (Buffer& buffer : meshletIndexedDrawCountBuffers) buffer.destroy();
                 for (Buffer& buffer : meshletCullingUniformBuffers) buffer.destroy();
                 for (Buffer& uniformBuffer : uniformBuffers) {
                     uniformBuffer.destroy();

@@ -10,7 +10,7 @@ function(gameengine_add_engine_shaders)
     # Only entry-point modules produce SPIR-V.  The remaining .slang files are
     # imports and are still explicit dependencies of every compilation.
     set(shader_entries
-        Culling/gpu_culling.slang Culling/gpu_instance_culling.slang Culling/meshlet_culling.slang Culling/meshlet_build_dispatch.slang Culling/meshlet_build_indirect.slang Culling/shadow_meshlet_culling.slang Culling/shadow_meshlet_build_indirect.slang Culling/hiz_initialize.slang Culling/hiz_reduce.slang Culling/clustered_light_culling.slang
+        Culling/gpu_culling.slang Culling/gpu_instance_culling.slang Culling/meshlet_culling.slang Culling/meshlet_build_dispatch.slang Culling/meshlet_build_indirect.slang Culling/meshlet_build_indexed.slang Culling/shadow_meshlet_culling.slang Culling/shadow_meshlet_build_indirect.slang Culling/hiz_initialize.slang Culling/hiz_reduce.slang Culling/clustered_light_culling.slang
         Grass/grass_generate.slang Grass/grass_cull.slang Grass/grass_packed_cull.slang Grass/grass_cluster_cull.slang Grass/grass_shadow_page_cull.slang Grass/grass_packed_bin.slang Grass/grass_packed_prefix.slang Grass/grass_packed_scatter.slang Grass/grass_packed_finalize.slang Grass/grass_classify.slang Grass/grass_build_dispatch.slang Grass/grass_forward.slang Grass/grass_shadow.slang Grass/grass_velocity.slang Grass/grass_build_indirect.slang Grass/grass_finalize_indirect.slang Grass/grass_prefix_sum.slang Grass/grass_scatter_instances.slang
         Environment/skybox.slang Forward/forward_pbr.slang Forward/depth_velocity.slang Forward/selection_outline.slang Particles/particle_billboard.slang Particles/particle_simulation.slang Water/water_page_cull.slang Water/water_page_build_indirect.slang Water/water_sssr_depth_init.slang Water/water_sssr_depth_reduce.slang Water/water_state_allocate.slang Water/water_state_update.slang Water/water_far_ocean_prepass.slang Water/water_authored_prepass.slang Water/water_virtual_prepass.slang Water/water_tile_classify.slang Water/water_tile_build_dispatch.slang Water/water_virtual_shade.slang Water/water_virtual_composite.slang PostProcess/aces_tonemap.slang PostProcess/bloom_downsample.slang PostProcess/gtao.slang PostProcess/gtao_prefilter_depth.slang PostProcess/gtao_denoise.slang PostProcess/gtao_upsample_compute.slang PostProcess/brixelizer_gi_prepare.slang PostProcess/temporal_aa.slang PostProcess/temporal_velocity.slang Samples/basic_pbr.slang Shadow/shadow_map.slang Shadow/shadow_opaque.slang Shadow/vsm_page_marking.slang Shadow/vsm_page_compact.slang Shadow/rt_contact_shadow.slang UI/canvas.slang)
     set(shader_outputs)
@@ -212,6 +212,66 @@ function(gameengine_add_engine_shaders)
         COMMAND ${SLANGC} "${ENGINE_SHADER_SOURCE_DIR}/Grass/grass_forward.slang" -target spirv -profile glsl_460 -emit-spirv-directly "$<$<CONFIG:Release>:-O3;-fp-mode;fast>" ${shader_debug_options} -matrix-layout-row-major -I "${ENGINE_SHADER_SOURCE_DIR}" -D FORWARD_OUTPUT_VELOCITY=0 -o "${grass_no_velocity_output}"
         DEPENDS "${ENGINE_SHADER_SOURCE_DIR}/Grass/grass_forward.slang" ${shader_modules}
         COMMENT "Compiling color-only grass forward shader" COMMAND_EXPAND_LISTS VERBATIM)
+    foreach(meshlet_depth_velocity IN ITEMS full no_velocity)
+        if(meshlet_depth_velocity STREQUAL "full")
+            set(meshlet_depth_suffix "")
+            set(meshlet_depth_define 1)
+        else()
+            set(meshlet_depth_suffix "_no_velocity")
+            set(meshlet_depth_define 0)
+        endif()
+        set(meshlet_depth_output "${SHADER_OUT_DIR}/depth_velocity${meshlet_depth_suffix}_meshlet.spv")
+        list(APPEND shader_outputs "${meshlet_depth_output}")
+        add_custom_command(OUTPUT "${meshlet_depth_output}"
+            COMMAND ${CMAKE_COMMAND} -E make_directory "${SHADER_OUT_DIR}"
+            COMMAND ${SLANGC} "${ENGINE_SHADER_SOURCE_DIR}/Forward/depth_velocity.slang" -target spirv -profile glsl_460 -emit-spirv-directly "$<$<CONFIG:Release>:-O3;-fp-mode;fast>" ${shader_debug_options} -matrix-layout-row-major -I "${ENGINE_SHADER_SOURCE_DIR}" -D DEPTH_OUTPUT_VELOCITY=${meshlet_depth_define} -D FORWARD_MESHLET_INDEXED=1 -o "${meshlet_depth_output}"
+            DEPENDS "${ENGINE_SHADER_SOURCE_DIR}/Forward/depth_velocity.slang" ${shader_modules}
+            COMMENT "Compiling meshlet depth prepass shader" COMMAND_EXPAND_LISTS VERBATIM)
+    endforeach()
+    # Indexed meshlet draws use the same material fragment programs, but their
+    # firstInstance directly addresses RendererInstanceData.
+    foreach(meshlet_variant IN ITEMS pbr unlit hologram pbr_normal pbr_extended pbr_foliage pbr_terrain)
+        if(meshlet_variant STREQUAL "pbr")
+            set(meshlet_define 0)
+        elseif(meshlet_variant STREQUAL "unlit")
+            set(meshlet_define 1)
+        elseif(meshlet_variant STREQUAL "hologram")
+            set(meshlet_define 2)
+        elseif(meshlet_variant STREQUAL "pbr_normal")
+            set(meshlet_define 3)
+        elseif(meshlet_variant STREQUAL "pbr_extended")
+            set(meshlet_define 4)
+        elseif(meshlet_variant STREQUAL "pbr_foliage")
+            set(meshlet_define 5)
+        else()
+            set(meshlet_define 6)
+        endif()
+        foreach(meshlet_velocity IN ITEMS full no_velocity)
+            if(meshlet_velocity STREQUAL "full")
+                set(meshlet_velocity_suffix "")
+                set(meshlet_velocity_define 1)
+            else()
+                set(meshlet_velocity_suffix "_no_velocity")
+                set(meshlet_velocity_define 0)
+            endif()
+            foreach(meshlet_resolved IN ITEMS plain resolved)
+                if(meshlet_resolved STREQUAL "plain")
+                    set(meshlet_resolved_suffix "")
+                    set(meshlet_resolved_define 0)
+                else()
+                    set(meshlet_resolved_suffix "_resolved")
+                    set(meshlet_resolved_define 1)
+                endif()
+                set(meshlet_output "${SHADER_OUT_DIR}/forward_${meshlet_variant}${meshlet_velocity_suffix}${meshlet_resolved_suffix}_meshlet.spv")
+                list(APPEND shader_outputs "${meshlet_output}")
+                add_custom_command(OUTPUT "${meshlet_output}"
+                    COMMAND ${CMAKE_COMMAND} -E make_directory "${SHADER_OUT_DIR}"
+                    COMMAND ${SLANGC} "${ENGINE_SHADER_SOURCE_DIR}/Forward/forward_pbr.slang" -target spirv -profile glsl_460 -emit-spirv-directly "$<$<CONFIG:Release>:-O3;-fp-mode;fast>" ${shader_debug_options} -matrix-layout-row-major -I "${ENGINE_SHADER_SOURCE_DIR}" -D MATERIAL_VARIANT=${meshlet_define} -D FORWARD_OUTPUT_VELOCITY=${meshlet_velocity_define} -D FORWARD_RESOLVED_VSM=${meshlet_resolved_define} -D FORWARD_MESHLET_INDEXED=1 -o "${meshlet_output}"
+                    DEPENDS "${ENGINE_SHADER_SOURCE_DIR}/Forward/forward_pbr.slang" ${shader_modules}
+                    COMMENT "Compiling forward ${meshlet_variant} meshlet shader" COMMAND_EXPAND_LISTS VERBATIM)
+            endforeach()
+        endforeach()
+    endforeach()
     add_custom_target(EngineShaders DEPENDS ${shader_outputs})
     set(GAMEENGINE_SHADER_OUTPUT_DIR "${SHADER_OUT_DIR}" PARENT_SCOPE)
 endfunction()

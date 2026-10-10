@@ -45,7 +45,7 @@
                 std::max<std::size_t>(1, instanceBatches.size());
             const VkDeviceSize visibleBytes = sizeof(std::uint32_t) *
                 std::max<std::size_t>(1, sceneGpu.database.instances().size());
-            if (!meshShaderPathActive) {
+            if (!meshletForwardPathActive || !vulkanDevice.supportsMeshShaders()) {
                 if (meshletVisibleCapacity != 1) return false;
             } else {
                 std::uint64_t requiredVisibleMeshlets = 0;
@@ -99,7 +99,7 @@
             hiZValid.fill(false);
             const auto objectCount = static_cast<uint32_t>(instanceBatches.size());
             std::uint64_t requiredVisibleMeshlets = 0;
-            if (meshShaderPathActive) {
+            if (meshletForwardPathActive && vulkanDevice.supportsMeshShaders()) {
                 for (const auto& instance : sceneGpu.database.instances()) {
                     if (!instance.alive || instance.meshId >= sceneGpu.database.meshes().size()) continue;
                     requiredVisibleMeshlets += sceneGpu.database.meshes()[instance.meshId].meshletCount;
@@ -243,6 +243,9 @@
                 {1, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
                 {2, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
                 {3, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
+                {4, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
+                {5, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
+                {6, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
             };
             layoutInfo.bindingCount = std::size(meshletIndirectBindings);
             layoutInfo.pBindings = meshletIndirectBindings;
@@ -416,7 +419,7 @@
                                                             meshletCullingPipelineLayout);
             meshletDispatchPipeline = createComputePipeline("shaders/meshlet_build_dispatch.spv",
                                                              meshletDispatchPipelineLayout);
-            meshletIndirectPipeline = createComputePipeline("shaders/meshlet_build_indirect.spv",
+            meshletIndirectPipeline = createComputePipeline("shaders/meshlet_build_indexed.spv",
                                                              meshletIndirectPipelineLayout);
             grassBuildPipeline = createComputePipeline("shaders/grass_build_indirect.spv", grassBuildPipelineLayout);
             grassDispatchBuildPipeline = createComputePipeline("shaders/grass_build_dispatch.spv", grassDispatchBuildPipelineLayout);
@@ -509,24 +512,26 @@
                     VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT |
                     VK_BUFFER_USAGE_TRANSFER_DST_BIT, commandPool, vulkanDevice.graphicsQueue(),
                     vulkanDevice.allocator());
-                // The indexed forward path still binds this descriptor, but
-                // never consumes the meshlet list. One entry is enough there.
                 visibleMeshletBuffers[frame].createDeviceLocalEmpty(device,
                     sizeof(Culling::VisibleMeshlet) * meshletCapacity,
                     VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, vulkanDevice.allocator());
                 visibleMeshletCountBuffers[frame].createDeviceLocal(vulkanDevice.physical(), device, &zero,
                     sizeof(zero), VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
                     commandPool, vulkanDevice.graphicsQueue(), vulkanDevice.allocator());
-                const VkDrawMeshTasksIndirectCommandEXT emptyMeshTaskCommand{};
-                meshletTaskIndirectBuffers[frame].createDeviceLocal(vulkanDevice.physical(), device,
-                    &emptyMeshTaskCommand, sizeof(emptyMeshTaskCommand),
+                meshletIndexedIndirectBuffers[frame].createDeviceLocalEmpty(device,
+                    sizeof(VkDrawIndexedIndirectCommand) * static_cast<VkDeviceSize>(meshletCapacity) *
+                        MaterialProgramSlotCount,
+                    VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT,
+                    vulkanDevice.allocator());
+                std::array<std::uint32_t, MaterialProgramSlotCount> emptyMeshletCounts{};
+                meshletIndexedDrawCountBuffers[frame].createDeviceLocal(vulkanDevice.physical(), device,
+                    emptyMeshletCounts.data(), sizeof(emptyMeshletCounts),
                     VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT |
                     VK_BUFFER_USAGE_TRANSFER_DST_BIT, commandPool, vulkanDevice.graphicsQueue(),
                     vulkanDevice.allocator());
-                meshletTaskDrawCountBuffers[frame].createDeviceLocal(vulkanDevice.physical(), device, &zero,
-                    sizeof(zero), VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT |
-                    VK_BUFFER_USAGE_TRANSFER_DST_BIT, commandPool, vulkanDevice.graphicsQueue(),
-                    vulkanDevice.allocator());
+                meshletIndexedIndirectDraws[frame].create(
+                    meshletIndexedIndirectBuffers[frame].handle(),
+                    meshletIndexedDrawCountBuffers[frame].handle(), meshletCapacity);
                 std::vector<std::uint32_t> emptyGrassBins(grassBinCount, 0U);
                 grassBinCountBuffers[frame].createDeviceLocal(vulkanDevice.physical(), device,
                     emptyGrassBins.data(), sizeof(std::uint32_t) * emptyGrassBins.size(),
@@ -756,7 +761,7 @@
             const uint32_t imageDescriptors = hiZDescriptorSetCount + cullingSetCount;
             const VkDescriptorPoolSize poolSizes[] = {
                 {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, imageDescriptors + MAX_FRAMES_IN_FLIGHT},
-                {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, cullingSetCount * 12 + instanceCullSetCount * 3 + MAX_FRAMES_IN_FLIGHT * 149},
+                {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, cullingSetCount * 12 + instanceCullSetCount * 3 + MAX_FRAMES_IN_FLIGHT * 152},
                 {VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, cullingSetCount + MAX_FRAMES_IN_FLIGHT * 31},
                 {VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, hiZDescriptorSetCount},
             };
@@ -1184,6 +1189,8 @@
                 shadowTwoSidedIndirectDraws[frame].create(
                     shadowTwoSidedIndirectBuffers[frame].handle(), shadowTwoSidedDrawCountBuffers[frame].handle(), shadowPassCapacity);
             }
+            for (std::uint32_t frame = 0; frame < MAX_FRAMES_IN_FLIGHT; ++frame)
+                refreshGPUSceneDescriptors(frame);
             hiZValid.fill(false);
             [[maybe_unused]] const UploadTicket ticket = uploadBatch.submit();
         }
@@ -1196,6 +1203,7 @@
             for (auto& draw : sceneFoliageIndirectDraws) draw.destroy();
             for (auto& draw : shadowIndirectDraws) draw.destroy();
             for (auto& draw : shadowTwoSidedIndirectDraws) draw.destroy();
+            for (auto& draw : meshletIndexedIndirectDraws) draw.destroy();
             for (Buffer& buffer : cullingUniformBuffers) buffer.destroy();
             for (Buffer& buffer : sceneCullingUniformBuffers) buffer.destroy();
             for (Buffer& buffer : foliageCullingUniformBuffers) buffer.destroy();
@@ -1241,6 +1249,8 @@
             for (Buffer& buffer : meshletCullDispatchBuffers) buffer.destroy();
             for (Buffer& buffer : visibleMeshletBuffers) buffer.destroy();
             for (Buffer& buffer : visibleMeshletCountBuffers) buffer.destroy();
+            for (Buffer& buffer : meshletIndexedIndirectBuffers) buffer.destroy();
+            for (Buffer& buffer : meshletIndexedDrawCountBuffers) buffer.destroy();
             for (Buffer& buffer : meshletCullingUniformBuffers) buffer.destroy();
             for (Buffer& buffer : grassBinCountBuffers) buffer.destroy();
             for (Buffer& buffer : grassBinOffsetBuffers) buffer.destroy();

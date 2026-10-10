@@ -97,6 +97,14 @@ namespace Engine {
         markDirty(m_dirty.instances, m_dirtyInstanceStamps, m_dirtyGeneration, instanceId);
     }
 
+    void GPUSceneDatabase::updateInstanceObjectId(const GPUSceneInstanceId instanceId,
+                                                  const std::uint32_t objectId) {
+        if (instanceId >= m_instances.size() || !m_instances[instanceId].alive ||
+            m_instances[instanceId].objectId == objectId) return;
+        m_instances[instanceId].objectId = objectId;
+        markDirty(m_dirty.instances, m_dirtyInstanceStamps, m_dirtyGeneration, instanceId);
+    }
+
     void GPUSceneDatabase::removeInstance(const std::uint64_t sourceKey,
                                           const GPUSceneRetireValue retireValue) {
         const auto found = m_instanceIds.find(sourceKey);

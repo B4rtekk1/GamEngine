@@ -1,6 +1,6 @@
 # GamEngine Setup (Windows x64)
 
-The release installer is a small native Windows application in `Installer/Bootstrapper`. It contains no editor payload or .NET runtime. At installation time it reads the latest published release of [B4rtekk1/GamEngine](https://github.com/B4rtekk1/GamEngine/releases), downloads `GamEngineEditor.zip`, and checks its size and GitHub's SHA-256 asset digest before extraction. The older WinUI project remains in the repository but is not used for releases.
+The release installer is a small native Windows application in `Installer/Bootstrapper`. It contains no editor payload or .NET runtime. At installation time it reads the latest published release of [B4rtekk1/GamEngine](https://github.com/B4rtekk1/GamEngine/releases), downloads `GamEngineEditor.zip`, and checks its size and GitHub's SHA-256 asset digest before extraction.
 
 ## Build a local release
 
@@ -17,6 +17,8 @@ If a code-signing certificate is available, pass `-CertificateThumbprint <thumbp
 ## Install and update
 
 The default location is `%LOCALAPPDATA%\Programs\GamEngine`. The installer downloads the latest release, validates the ZIP, extracts into a staging directory, moves the completed directory under `Versions/<version>`, then atomically changes `current.json`. The installed setup executable also launches the active `Editor.exe` from shortcuts. Previous versions remain in place for rollback. Running setup again in the same location fetches the latest release. To switch back to the previous version, run the installed `GamEngineSetup.exe --rollback`.
+
+The setup window includes folder selection, shortcut preferences, download progress, a link to the project page, and the full Apache License 2.0 text directly on the license step. Installation is available only after the user accepts the license. On completion, the user can choose whether to launch the editor. The license and application icon are embedded in the small setup executable.
 
 The setup registers an entry under the current user's Installed apps list. The uninstall command starts a temporary copy of setup, waits for the original to close, then removes the version directories, known shortcuts, and registry entry. Unknown files in the install directory are preserved. A log for background failures is written to `%TEMP%\GamEngineSetupError.log`.
 
