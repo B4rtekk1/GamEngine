@@ -227,6 +227,16 @@ ReflectionCandidate glassSsr(float3 worldPosition, float3 N, float3 R, float rou
     return miss;
 }
 
+// Unpolarized dielectric Fresnel for the air/glass boundary. Using the
+// refracted angle preserves the correct grazing response for clear glass.
+float dielectricFresnel(float cosine, float ior)
+{
+    float ct = sqrt(max(0.0, 1.0 - (1.0 - cosine * cosine) / (ior * ior)));
+    float rs = (cosine - ior * ct) / max(cosine + ior * ct, 1e-6);
+    float rp = (ior * cosine - ct) / max(ior * cosine + ct, 1e-6);
+    return ior <= 1.00001 ? 0.0 : saturate(0.5 * (rs * rs + rp * rp));
+}
+
 float3 glassBrdf(float3 N, float3 V, float3 L, float roughness, float3 f0, float3 diffuseAlbedo)
 {
     float nv = max(dot(N, V), 1e-4), nl = saturate(dot(N, L));
@@ -344,11 +354,29 @@ ForwardFragmentOutput fragmentMain(ForwardFragmentInput input)
         N = normalize(N + (tangent * gradient.x + bitangent * gradient.y) * 0.18);
         roughness = lerp(roughness, max(roughness, 0.5), crack);
         transmission *= 1.0 - crack * 0.22;
+        if (input.texCoord1.y > 0.5 && input.texCoord1.x > 0.5)
+        {
+            // Fresh fracture faces have small conchoidal facets. Keep this
+            // variation in pane coordinates so tumbling shards never shimmer
+            // from a time-varying noise field. Broad faces stay optically flat.
+            float edgeId = floor(input.texCoord1.x + 0.5);
+            float fragmentId = floor(input.texCoord1.y + 0.5);
+            float phase = edgeId * 17.13 + fragmentId * 9.71;
+            float coordinate = dot(input.crackPosition, float2(183.7, 271.3)) + phase;
+            float detail = 1.0 - smoothstep(0.5, 3.0, fwidth(coordinate));
+            float facet = sin(coordinate);
+            N = normalize(N + (tangent * facet * 0.12 + bitangent * sin(phase + facet * 2.1) * 0.08) * detail);
+            roughness = max(roughness, 0.12 + 0.08 * abs(facet));
+            // A grazing ray through a broken edge traverses more glass than
+            // the pane thickness and picks up its absorption tint.
+            thickness *= 2.0;
+        }
     }
     float ior = max(m.glassParams.y, 1.0);
     float f0Scalar = pow((ior - 1.0) / (ior + 1.0), 2.0);
     float3 f0 = lerp(float3(f0Scalar), base.rgb, saturate(metallic));
-    float3 F = fresnelSchlick(saturate(dot(N, V)), f0);
+    float3 F = lerp(float3(dielectricFresnel(saturate(dot(N, V)), ior)),
+        fresnelSchlick(saturate(dot(N, V)), f0), saturate(metallic));
     float3 I = -V;
     float3 T = refract(I, N, 1.0 / ior);
     float travel = thickness / max(abs(dot(T, N)), 0.1);
@@ -370,7 +398,13 @@ ForwardFragmentOutput fragmentMain(ForwardFragmentInput input)
     if (m.glassAttenuation.w > 0.0)
         absorption = exp(log(clamp(m.glassAttenuation.rgb, 1e-4, 1.0)) * travel / m.glassAttenuation.w);
     absorption *= lerp(float3(1.0), float3(0.65, 0.62, 0.56), dirt * 0.25);
-    transmitted *= base.rgb * absorption;
+    transmitted *= base.rgb;
+    // Incoherent internal reflections in a parallel slab. With no absorption,
+    // reflected + transmitted energy is exactly one, including both interfaces.
+    float3 roundTrip = F * F * absorption * absorption;
+    float3 slabDenominator = max(1.0 - roundTrip, float3(1e-6));
+    float3 slabTransmission = (1.0 - F) * (1.0 - F) * absorption / slabDenominator;
+    float3 slabReflection = F + F * (1.0 - F) * (1.0 - F) * absorption * absorption / slabDenominator;
 
     ClusterLightRange range = {0u, 0u, 0u, 0u};
     if (frame.localLightCount != 0u || frame.reflectionProbeCount != 0u)
@@ -418,7 +452,8 @@ ForwardFragmentOutput fragmentMain(ForwardFragmentInput input)
         direct += glassBrdf(N, V, localL, roughness, f0, diffuseAlbedo) * light.colorIntensity.rgb *
                   light.colorIntensity.w * attenuation;
     }
-    float3 color = F * reflection + (1.0 - F) * transmitted * transmission + direct +
+    float3 color = lerp(F, slabReflection, transmission) * reflection +
+        slabTransmission * transmitted * transmission + direct +
         (1.0 - F) * irradianceMap.SampleLevel(N, 0.0).rgb * diffuseAlbedo;
     float3 emissive = m.emissiveColorIntensity.rgb * m.emissiveColorIntensity.w;
     if (m.extensionTextureIndices.x >= 0)

@@ -59,8 +59,8 @@ namespace {
         const auto impactStart = std::chrono::steady_clock::now();
         ASSERT_TRUE(scene.physics().shootRay({0.0F, 0.0F, 2.0F}, {0.0F, 0.0F, -1.0F}));
         const auto fracturedHandle = editor.read<Engine::MeshRendererComponent>(entity).mesh;
-        ASSERT_EQ(fracturedHandle.resource(), graphHandle.resource());
-        EXPECT_EQ(editor.renderTopologyRevision(), topology);
+        ASSERT_NE(fracturedHandle.resource(), graphHandle.resource());
+        EXPECT_GT(editor.renderTopologyRevision(), topology);
         topology = editor.renderTopologyRevision();
         std::size_t debrisCount = 0;
         editor.view<Engine::GlassDebrisComponent, Engine::GlassFragmentBindingComponent>(
@@ -75,25 +75,27 @@ namespace {
             std::chrono::steady_clock::now() - impactStart).count() << " ms\n";
         EXPECT_TRUE(fracturedHandle.uploaded());
         EXPECT_EQ(fracturedHandle.resource()->indexCount, fracturedHandle.source()->indexCount());
-        // A later hit changes visibility without replacing/reuploading the heap range.
-        const auto firstVertex = fracturedHandle.resource()->firstVertex;
-        const auto firstIndex = fracturedHandle.resource()->firstIndex;
+        // A later hit refines surviving glass and uploads new packed sections.
+        const auto hitTopology = editor.renderTopologyRevision();
         const auto glass = editor.read<Engine::GlassDestructionComponent>(entity);
         const auto next = std::ranges::find_if(glass.fragments, [](const auto &fragment) { return fragment.attached; });
         ASSERT_NE(next, glass.fragments.end());
         ASSERT_TRUE(Engine::GlassDestructionSystem::onImpact(scene, entity,
             {.worldPosition = {next->center.x, next->center.y, 0.0F}}));
         renderer.renderFrame();
-        EXPECT_EQ(editor.renderTopologyRevision(), topology);
-        EXPECT_EQ(editor.read<Engine::MeshRendererComponent>(entity).mesh.resource(), fracturedHandle.resource());
-        EXPECT_EQ(fracturedHandle.resource()->firstVertex, firstVertex);
-        EXPECT_EQ(fracturedHandle.resource()->firstIndex, firstIndex);
+        EXPECT_GT(editor.renderTopologyRevision(), hitTopology);
+        const auto refinedHandle = editor.read<Engine::MeshRendererComponent>(entity).mesh;
+        EXPECT_NE(refinedHandle.resource(), fracturedHandle.resource());
+        EXPECT_TRUE(refinedHandle.uploaded());
+        EXPECT_EQ(refinedHandle.resource()->metadata.sections.size(),
+            editor.read<Engine::GlassDestructionComponent>(entity).fragments.size() + 1);
+        const auto refinedTopology = editor.renderTopologyRevision();
         Engine::PhysicsSystem physics;
         physics.update(scene, 1.0F / 60.0F);
         renderer.renderFrame();
         Engine::GlassDestructionSystem::update(scene, 5.0F);
         renderer.renderFrame();
-        EXPECT_EQ(editor.renderTopologyRevision(), topology);
+        EXPECT_EQ(editor.renderTopologyRevision(), refinedTopology);
         renderer.shutdown();
     }
     TEST(GlassRendering, LoadedPaneReplacementRetiresBatchesBeforeDrawing) {

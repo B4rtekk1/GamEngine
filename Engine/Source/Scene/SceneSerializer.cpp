@@ -2347,6 +2347,11 @@ namespace Engine {
             const auto [cached, inserted] = sharedGlassHandles.try_emplace(renderer.mesh.source().get(), renderer.mesh);
             if (!inserted) renderer.mesh = cached->second;
         });
+        loaded.view<GlassDebrisComponent, ColliderComponent>([&](Entity entity, const auto &, auto &collider) {
+            if (loaded.has<GlassFragmentBindingComponent>(entity)) return;
+            if (auto *mesh=std::get_if<MeshCollider>(&collider.shape))
+                mesh->mesh=GlassDestructionSystem::restoreDebrisCollision(mesh->mesh);
+        });
         loaded.view<GlassFragmentBindingComponent, ColliderComponent>([&](const Entity entity,
             GlassFragmentBindingComponent &binding, ColliderComponent &collider) {
             const auto found = entitiesByUuid.find(binding.paneUuid);

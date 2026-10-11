@@ -7,10 +7,119 @@
 #include <sstream>
 #include <algorithm>
 #include <limits>
+#include <fstream>
+#include <cstdlib>
+#include <glm/gtc/constants.hpp>
 
 namespace {
     std::size_t attachedCount(const Engine::GlassDestructionComponent &glass) {
         return std::ranges::count_if(glass.fragments, [](const auto &fragment) { return fragment.attached; });
+    }
+
+    float frontFaceArea(const Engine::Mesh &mesh) {
+        float area=0;
+        for (std::size_t i=0; i<mesh.indices.size(); i+=3) {
+            const auto &a=mesh.vertices[mesh.indices[i]], &b=mesh.vertices[mesh.indices[i+1]],
+                &c=mesh.vertices[mesh.indices[i+2]];
+            if (a.normal.z()<0.9F || b.normal.z()<0.9F || c.normal.z()<0.9F) continue;
+            const auto ab=b.position.native()-a.position.native(), ac=c.position.native()-a.position.native();
+            const float triangle=glm::cross(ab,ac).z*0.5F;
+            EXPECT_GT(triangle,0);
+            area+=triangle;
+        }
+        return area;
+    }
+
+    TEST(GlassDestruction, ConcaveCrackBoundariesHaveExactRenderAndCollisionArea) {
+        Engine::Scene scene;
+        for (unsigned seed:{1U,7U,42U,1337U}) {
+            Engine::GlassDestructionComponent settings;
+            settings.seed=seed; settings.maxFragments=128; settings.size={3,1.5F};
+            const auto pane=Engine::GlassDestructionSystem::createPane(scene,"Curved",settings);
+            Engine::SceneEditor editor(scene);
+            const auto &glass=editor.read<Engine::GlassDestructionComponent>(scene.findEntity(pane.id()));
+            float area=0; unsigned concave=0;
+            for (const auto &fragment:glass.fragments) {
+                area+=fragment.area;
+                ASSERT_TRUE(fragment.collisionGeometry);
+                EXPECT_NEAR(frontFaceArea(*fragment.collisionGeometry),fragment.area,0.00001F);
+                const auto &parts=fragment.collisionGeometry->convexCollisionParts;
+                concave+=!parts.empty();
+                if (parts.empty()) continue;
+                float collisionArea=0;
+                for (const auto &part:parts) {
+                    collisionArea+=frontFaceArea(*part);
+                    const auto count=part->vertices.size()/6;
+                    ASSERT_GE(count,3U);
+                    for (std::size_t i=0; i<count; ++i) {
+                        const auto a=part->vertices[i].position.native(), b=part->vertices[(i+1)%count].position.native(),
+                            c=part->vertices[(i+2)%count].position.native();
+                        EXPECT_GE(glm::cross(b-a,c-b).z,-1.0e-9F);
+                    }
+                }
+                EXPECT_NEAR(collisionArea,fragment.area,0.00001F);
+                EXPECT_LT(fragment.polygon.size(),128U); // Renderer side-exposure bit capacity.
+            }
+            EXPECT_GT(concave,glass.fragments.size()/2);
+            EXPECT_NEAR(area,4.5F,0.0001F);
+        }
+    }
+
+    TEST(GlassDestruction, ConcaveRigidShardRaycastsDoNotFillItsNotches) {
+        Engine::Scene source;
+        const auto pane=Engine::GlassDestructionSystem::createPane(source,"Source");
+        Engine::SceneEditor sourceEditor(source);
+        const auto &glass=sourceEditor.read<Engine::GlassDestructionComponent>(source.findEntity(pane.id()));
+        const auto selected=std::ranges::max_element(glass.fragments,{},[](const auto &fragment) {
+            return fragment.collisionGeometry->convexCollisionParts.empty() ? 0.0F : fragment.area;
+        });
+        ASSERT_FALSE(selected->collisionGeometry->convexCollisionParts.empty());
+        Engine::Scene scene;
+        const auto shard=scene.createMesh("Shard",selected->collisionGeometry);
+        Engine::SceneEditor editor(scene);
+        const auto entity=scene.findEntity(shard.id());
+        editor.add<Engine::ColliderComponent>(entity,Engine::ColliderComponent{
+            .shape=Engine::MeshCollider{selected->collisionGeometry},.offset={}});
+        editor.add<Engine::RigidbodyComponent>(entity,Engine::RigidbodyComponent{
+            .type=Engine::RigidbodyType::Kinematic,.useGravity=false});
+        editor.add<Engine::GlassDebrisComponent>(entity);
+        std::ostringstream saved;
+        Engine::SceneSerializer::save(scene,saved);
+        Engine::Scene loaded;
+        std::istringstream input(saved.str());
+        Engine::SceneSerializer::load(loaded,input);
+        Engine::SceneEditor loadedEditor(loaded);
+        const auto loadedEntity=loaded.findEntity(loaded.findActor("Shard").id());
+        const auto &loadedCollider=loadedEditor.read<Engine::ColliderComponent>(loadedEntity);
+        ASSERT_FALSE(std::get<Engine::MeshCollider>(loadedCollider.shape).mesh->convexCollisionParts.empty());
+        Engine::PhysicsSystem physics;
+        auto inside=[&](glm::vec2 point) {
+            bool result=false;
+            const auto &polygon=selected->polygon;
+            for (std::size_t i=0,j=polygon.size()-1; i<polygon.size();j=i++) {
+                const auto a=polygon[j],b=polygon[i];
+                if ((a.y>point.y)!=(b.y>point.y) && point.x<(b.x-a.x)*(point.y-a.y)/(b.y-a.y)+a.x)
+                    result=!result;
+            }
+            return result;
+        };
+        // Probe both sides of every curved boundary, including concave notches.
+        unsigned hits=0,misses=0;
+        for (std::size_t i=0; i<selected->polygon.size(); ++i) {
+            const auto a=selected->polygon[i],b=selected->polygon[(i+1)%selected->polygon.size()],d=b-a;
+            if (glm::length(d)<0.002F) continue;
+            const auto normal=glm::vec2{-d.y,d.x}/glm::length(d);
+            for (float sign:{-1.0F,1.0F}) {
+                const auto point=(a+b)*0.5F+normal*0.001F*sign;
+                const auto local=point-selected->center;
+                const auto hit=physics.raycast(scene,{local.x,local.y,1},{0,0,-1},2);
+                const auto restoredHit=loaded.physics().raycast({local.x,local.y,1},{0,0,-1},2);
+                EXPECT_EQ(bool(restoredHit),inside(point));
+                EXPECT_EQ(bool(hit),inside(point));
+                if (hit) ++hits; else ++misses;
+            }
+        }
+        EXPECT_GT(hits,3U); EXPECT_GT(misses,3U);
     }
 
     TEST(GlassDestruction, LegacyGlassCubeIsPreparedDuringLoadBeforeFirstShot) {
@@ -112,10 +221,17 @@ namespace {
         ASSERT_TRUE(Engine::GlassDestructionSystem::onImpact(scene, entity,
             {.worldPosition = {found->center.x, found->center.y, 0.0F}}));
         const auto &after = editor.read<Engine::GlassDestructionComponent>(entity);
-        EXPECT_EQ(after.fragments.size(), before.fragments.size());
-        EXPECT_LT(attachedCount(after), attachedCount(before));
+        EXPECT_GT(after.fragments.size(), before.fragments.size());
+        EXPECT_LE(after.fragments.size(), settings.maxFragments);
+        auto attachedArea = [](const auto &glass) {
+            float area = 0;
+            for (const auto &fragment : glass.fragments) if (fragment.attached) area += fragment.area;
+            return area;
+        };
+        EXPECT_LT(attachedArea(after), attachedArea(before));
         for (std::size_t i = 0; i < before.fragments.size(); ++i)
-            EXPECT_EQ(after.fragments[i].polygon, before.fragments[i].polygon);
+            if (!before.fragments[i].attached) EXPECT_EQ(after.fragments[i].polygon, before.fragments[i].polygon);
+        EXPECT_FALSE(scene.physics().raycast({found->center.x, found->center.y, 2}, {0, 0, -1}));
     }
 
     TEST(GlassDestruction, DebrisUsesPhysXAndExpiresWithinBudget) {
@@ -262,7 +378,7 @@ namespace {
         EXPECT_LT(restoredEditor.read<Engine::Transform>(debris.front()).position.y(), start);
     }
 
-    TEST(GlassDestruction, RepeatedDamageKeepsPackedRenderGeometryAndSeparateHoleCollision) {
+    TEST(GlassDestruction, RepeatedDamageRefinesPackedGeometryAndPreservesHoleCollision) {
         Engine::Scene scene;
         Engine::GlassDestructionComponent settings;
         settings.maxDynamicFragments = 0;
@@ -279,7 +395,7 @@ namespace {
         ASSERT_NE(next, glass.fragments.end());
         ASSERT_TRUE(Engine::GlassDestructionSystem::onImpact(scene, entity,
             {.worldPosition = {next->center.x, next->center.y, 0.0F}}));
-        EXPECT_EQ(editor.read<Engine::MeshRendererComponent>(entity).mesh.resource(), handle.resource());
+        EXPECT_NE(editor.read<Engine::MeshRendererComponent>(entity).mesh.resource(), handle.resource());
         EXPECT_EQ(handle.source()->indexCount(), count);
         EXPECT_FALSE(scene.physics().raycast({0.0F, 0.0F, 2.0F}, {0.0F, 0.0F, -1.0F}));
         std::ostringstream saved;
@@ -291,7 +407,7 @@ namespace {
         Engine::SceneEditor restoredEditor(restored);
         const auto restoredEntity = restored.findEntity(restored.findActor("Pane").id());
         EXPECT_EQ(restoredEditor.read<Engine::MeshRendererComponent>(restoredEntity).mesh.resource()->metadata.sections.size(),
-            glass.fragments.size() + 1);
+            editor.read<Engine::GlassDestructionComponent>(entity).fragments.size() + 1);
     }
 
     TEST(GlassDestruction, DebrisExpiresDuringPhysicsStepWithoutStaleActors) {
@@ -405,11 +521,9 @@ namespace {
         for (const auto &fragment : a.fragments) {
             area += fragment.area;
             EXPECT_GT(fragment.area, 0);
-            for (std::size_t i = 0; i < fragment.polygon.size(); ++i) {
-                const auto p = fragment.polygon[i], q = fragment.polygon[(i+1)%fragment.polygon.size()];
-                const auto r = fragment.polygon[(i+2)%fragment.polygon.size()];
-                EXPECT_GE((q.x-p.x)*(r.y-q.y)-(q.y-p.y)*(r.x-q.x), -0.00001F);
-            }
+            ASSERT_TRUE(fragment.collisionGeometry);
+            for (const auto &part:fragment.collisionGeometry->convexCollisionParts)
+                EXPECT_GE(part->vertices.size(),6U);
         }
         EXPECT_NEAR(area, 4.5F, 0.0001F);
         EXPECT_LE(a.fragments.size(), settings.maxFragments);
@@ -423,6 +537,117 @@ namespace {
         std::size_t expectedVertices = 0;
         for (const auto &fragment : a.fragments) expectedVertices += fragment.polygon.size()*6;
         EXPECT_EQ(mesh->vertices.size(), expectedVertices + 24);
+    }
+
+    TEST(GlassDestruction, RadialFractureStartsAtImpactAndConservesPaneAtEdges) {
+        for (unsigned seed : {1U, 7U, 42U}) {
+            for (glm::vec2 hit : {glm::vec2{0.35F,-0.2F}, glm::vec2{1.5F,0}, glm::vec2{1.5F,0.75F}}) {
+                Engine::Scene scene;
+                Engine::GlassDestructionComponent settings;
+                settings.size = {3,1.5F}; settings.seed = seed;
+                const auto pane = Engine::GlassDestructionSystem::createPane(scene,"Radial",settings);
+                const auto entity = scene.findEntity(pane.id());
+                ASSERT_TRUE(Engine::GlassDestructionSystem::onImpact(scene,entity,
+                    {.worldPosition={hit.x,hit.y,0}, .energy=2}));
+                Engine::SceneEditor editor(scene);
+                const auto &glass = editor.read<Engine::GlassDestructionComponent>(entity);
+                float area = 0;
+                unsigned originEdges = 0;
+                for (const auto &fragment : glass.fragments) {
+                    EXPECT_GT(fragment.area,0);
+                    area += fragment.area;
+                    for (unsigned i=0; i<fragment.polygon.size(); ++i) {
+                        const auto a=fragment.polygon[i];
+                        EXPECT_LE(std::abs(a.x),1.50001F); EXPECT_LE(std::abs(a.y),0.75001F);
+                    }
+                }
+                for (const auto &bond : glass.bonds)
+                    originEdges += glm::distance(bond.edgeStart,hit)<0.0001F ||
+                                   glm::distance(bond.edgeEnd,hit)<0.0001F;
+                EXPECT_NEAR(area,4.5F,0.0001F);
+                EXPECT_LE(glass.fragments.size(),settings.maxFragments);
+                EXPECT_GE(originEdges,2U);
+                for (const auto &vertex : Engine::GlassDestructionSystem::renderMesh(glass)->vertices)
+                    ASSERT_NEAR(glm::length(vertex.normal.native()),1.0F,0.0001F);
+            }
+        }
+    }
+
+    TEST(GlassDestruction, PrimarySpiderwebContainsContinuousCircumferentialFractureBands) {
+        Engine::Scene scene;
+        const auto pane=Engine::GlassDestructionSystem::createPane(scene,"Spiderweb");
+        const auto entity=scene.findEntity(pane.id());
+        ASSERT_TRUE(Engine::GlassDestructionSystem::onImpact(scene,entity,{.energy=2,.radius=0.4F}));
+        Engine::SceneEditor editor(scene);
+        const auto &glass=editor.read<Engine::GlassDestructionComponent>(entity);
+        ASSERT_FALSE(glass.bonds.empty());
+        auto cross=[](glm::vec2 a,glm::vec2 b){return a.x*b.y-a.y*b.x;};
+        // Every direction from a central impact crosses multiple complete
+        // physical ring boundaries, rather than random neighboring cell edges.
+        for (unsigned ray=0; ray<24; ++ray) {
+            const float angle=(float(ray)+0.317F)*glm::two_pi<float>()/24.0F;
+            const glm::vec2 direction{std::cos(angle),std::sin(angle)};
+            std::vector<float> radii;
+            for (const auto &bond:glass.bonds) {
+                const auto edge=bond.edgeEnd-bond.edgeStart;
+                const float denominator=cross(direction,edge);
+                if (std::abs(denominator)<1.0e-8F) continue;
+                const float t=cross(bond.edgeStart,edge)/denominator;
+                const float u=cross(bond.edgeStart,direction)/denominator;
+                if (t<0.02F || t>0.9F || u<0 || u>1) continue;
+                if (std::ranges::none_of(radii,[&](float value){return std::abs(t-value)<0.001F;}))
+                    radii.push_back(t);
+            }
+            EXPECT_GE(radii.size(),4U);
+        }
+        const auto segments=Engine::GlassDestructionSystem::crackSegments(glass,glass.cracks.front());
+        unsigned shared=0;
+        for (const auto &bond:glass.bonds) {
+            if (glm::distance(bond.edgeStart,glass.cracks.front().position)>glass.cracks.front().radius ||
+                glm::distance(bond.edgeEnd,glass.cracks.front().position)>glass.cracks.front().radius) continue;
+            const auto visible=std::ranges::find_if(segments,[&](const auto &segment) {
+                return glm::distance(segment.start,bond.edgeStart)<1.0e-5F &&
+                    glm::distance(segment.end,bond.edgeEnd)<1.0e-5F && segment.intensity>0;
+            });
+            EXPECT_NE(visible,segments.end()); ++shared;
+        }
+        EXPECT_GT(shared,100U);
+        EXPECT_FALSE(glass.fractured);
+        if (const char *path=std::getenv("GE_GLASS_PATTERN_CSV")) {
+            std::ofstream output(path);
+            output << "x1,y1,x2,y2,intensity\n";
+            for (const auto &segment:segments)
+                output << segment.start.x << ',' << segment.start.y << ',' << segment.end.x << ',' << segment.end.y << ',' << segment.intensity << '\n';
+        }
+    }
+
+    TEST(GlassDestruction, RigidAndParticleDebrisShareOutwardImpulseDirections) {
+        Engine::Scene rigidScene, particleScene;
+        Engine::GlassDestructionComponent settings;
+        settings.maxDynamicFragments=128;
+        rigidScene.glassSimulationSettings().maxNewDynamicFragmentsPerStep=128;
+        const auto rigid = Engine::GlassDestructionSystem::createPane(rigidScene,"Rigid",settings);
+        settings.maxDynamicFragments=0;
+        const auto particles = Engine::GlassDestructionSystem::createPane(particleScene,"Particles",settings);
+        const Engine::GlassImpact impact{.worldDirection={0,0,-1}, .energy=80, .radius=0.35F};
+        ASSERT_TRUE(Engine::GlassDestructionSystem::onImpact(rigidScene,rigidScene.findEntity(rigid.id()),impact));
+        ASSERT_TRUE(Engine::GlassDestructionSystem::onImpact(particleScene,particleScene.findEntity(particles.id()),impact));
+        Engine::SceneEditor editor(rigidScene);
+        unsigned compared=0;
+        editor.view<Engine::GlassDebrisComponent,Engine::Transform,Engine::RigidbodyState>(
+            [&](auto,const auto &,const auto &pose,const auto &state) {
+                const auto burst=std::ranges::find_if(particleScene.glassParticleBursts(),[&](const auto &value) {
+                    return glm::distance(value.position,pose.position.native())<0.0001F;
+                });
+                ASSERT_NE(burst,particleScene.glassParticleBursts().end());
+                const auto velocity=state.linearVelocity.native();
+                if (glm::length(velocity)<0.001F) return;
+                ++compared;
+                EXPECT_NEAR(glm::dot(glm::normalize(velocity),glm::normalize(burst->velocity)),1.0F,0.0001F);
+                EXPECT_LT(velocity.z,0);
+                EXPECT_GT(glm::dot(glm::vec2{velocity},glm::vec2{pose.position.native()}),0);
+            });
+        EXPECT_GT(compared,3U);
     }
 
     TEST(GlassDestruction, PreparedPhysicsShapesToggleWithoutCookingOrReplacingPaneActor) {
@@ -576,7 +801,10 @@ namespace {
         EXPECT_EQ(editor.read<Engine::GlassDestructionComponent>(a).fragments.front().collisionGeometry,
             editor.read<Engine::GlassDestructionComponent>(b).fragments.front().collisionGeometry);
         Engine::PhysicsSystem physics; physics.update(scene,1.0F/60);
-        EXPECT_EQ(physics.diagnostics().convexCookCount, editor.read<Engine::GlassDestructionComponent>(a).fragments.size());
+        std::size_t expectedCooks=0;
+        for (const auto &fragment:editor.read<Engine::GlassDestructionComponent>(a).fragments)
+            expectedCooks+=std::max(std::size_t{1},fragment.collisionGeometry->convexCollisionParts.size());
+        EXPECT_EQ(physics.diagnostics().convexCookCount, expectedCooks);
         ASSERT_TRUE(Engine::GlassDestructionSystem::onImpact(scene,a,{}));
         EXPECT_FALSE(editor.read<Engine::GlassDestructionComponent>(b).fractured);
         EXPECT_TRUE(editor.read<Engine::GlassDestructionComponent>(b).cracks.empty());
@@ -660,6 +888,81 @@ namespace {
             EXPECT_EQ(replay[i].start,segments[i].start); EXPECT_EQ(replay[i].end,segments[i].end);
             EXPECT_EQ(replay[i].intensity,segments[i].intensity);
         }
+    }
+
+    TEST(GlassDestruction, NewImpactPreservesLiveShardBindingsAndConservesArea) {
+        Engine::Scene scene;
+        Engine::GlassDestructionComponent settings;
+        settings.maxDynamicFragments = 4;
+        const auto pane = Engine::GlassDestructionSystem::createPane(scene, "Multi impact", settings);
+        const auto entity = scene.findEntity(pane.id());
+        Engine::SceneEditor editor(scene);
+        ASSERT_TRUE(Engine::GlassDestructionSystem::onImpact(scene, entity, {}));
+        const auto before = editor.read<Engine::GlassDestructionComponent>(entity);
+        const auto target = std::ranges::max_element(before.fragments, {}, [](const auto &fragment) {
+            return fragment.attached ? fragment.area : 0.0F;
+        });
+        ASSERT_TRUE(target->attached);
+        ASSERT_TRUE(Engine::GlassDestructionSystem::onImpact(scene, entity,
+            {.worldPosition = {target->center.x, target->center.y, 0}}));
+        const auto &after = editor.read<Engine::GlassDestructionComponent>(entity);
+        EXPECT_GT(after.fragments.size(), before.fragments.size());
+        EXPECT_LE(after.fragments.size(), settings.maxFragments);
+        float area = 0;
+        unsigned liveShards = 0;
+        for (const auto &fragment : after.fragments) {
+            area += fragment.area;
+            EXPECT_GT(fragment.area, 0);
+            ASSERT_TRUE(fragment.collisionGeometry);
+        }
+        EXPECT_NEAR(area, settings.size.x * settings.size.y, 0.0001F);
+        for (unsigned i = 0; i < before.fragments.size(); ++i) {
+            if (before.fragments[i].attached) continue;
+            EXPECT_FALSE(after.fragments[i].attached);
+            EXPECT_EQ(after.fragments[i].polygon, before.fragments[i].polygon);
+            EXPECT_EQ(after.fragments[i].center, before.fragments[i].center);
+            EXPECT_EQ(after.fragments[i].collisionGeometry, before.fragments[i].collisionGeometry);
+            EXPECT_EQ(after.fragments[i].debrisEntity, before.fragments[i].debrisEntity);
+            if (scene.valid(before.fragments[i].debrisEntity)) {
+                ++liveShards;
+                EXPECT_EQ(editor.read<Engine::GlassFragmentBindingComponent>(before.fragments[i].debrisEntity).fragmentIndex, i);
+            }
+        }
+        EXPECT_GT(liveShards, 0U);
+        for (const auto &bond : after.bonds) {
+            EXPECT_LT(bond.first, after.fragments.size());
+            EXPECT_LT(bond.second, after.fragments.size());
+            EXPECT_GT(bond.length, 0);
+        }
+    }
+
+    TEST(GlassDestruction, WeakShotsRevealPrimarySpiderwebAndIndependentSecondaryCracks) {
+        Engine::Scene scene;
+        const auto pane = Engine::GlassDestructionSystem::createPane(scene, "Surface cracks");
+        const auto entity = scene.findEntity(pane.id());
+        for (float x : {-0.65F, 0.65F})
+            ASSERT_TRUE(Engine::GlassDestructionSystem::onImpact(scene, entity,
+                {.worldPosition = {x, 0, 0}, .energy = 2, .radius = 0.1F}));
+        Engine::SceneEditor editor(scene);
+        const auto &glass = editor.read<Engine::GlassDestructionComponent>(entity);
+        ASSERT_EQ(glass.cracks.size(), 2);
+        for (const auto &crack : glass.cracks) {
+            const auto segments = Engine::GlassDestructionSystem::crackSegments(glass, crack);
+            ASSERT_FALSE(segments.empty());
+            unsigned origins = 0;
+            float reach = 0;
+            for (const auto &segment : segments) {
+                origins += glm::distance(segment.start, crack.position) < 0.00001F ||
+                           glm::distance(segment.end, crack.position) < 0.00001F;
+                reach = std::max(reach, glm::distance(segment.end, crack.position));
+                if (crack.position!=glass.cracks.front().position)
+                    for (const auto &bond : glass.bonds)
+                        EXPECT_FALSE(segment.start == bond.edgeStart && segment.end == bond.edgeEnd);
+            }
+            EXPECT_GE(origins, 7U);
+            EXPECT_GT(reach, crack.radius * 0.2F);
+        }
+        EXPECT_FALSE(glass.fractured);
     }
 
 }

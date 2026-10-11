@@ -43,7 +43,9 @@
             return std::bit_cast<float>(slot+1U);
         }
 
-        // Glass keeps immutable packed geometry. Detached sections are inactive
+        // Each glass mesh version keeps immutable packed geometry. Local impact
+        // refinement replaces the handle while preserving detached section IDs.
+        // Detached sections are inactive
         // GPU objects; compute culling compacts only the live indirect commands.
         [[nodiscard]] bool glassSectionVisible(const RenderableRecord &record) const {
             if (!scene.registry().has<GlassDestructionComponent>(record.entity)) return true;

@@ -331,6 +331,23 @@ namespace Engine {
             return value.x() != 0.0F || value.y() != 0.0F || value.z() != 0.0F;
         }
 
+        physx::PxFilterFlags simulationFilter(physx::PxFilterObjectAttributes attributes0,
+            physx::PxFilterData filter0, physx::PxFilterObjectAttributes attributes1,
+            physx::PxFilterData filter1, physx::PxPairFlags &pairFlags,
+            const void *constantBlock, physx::PxU32 constantBlockSize) {
+            constexpr physx::PxU32 glassGroup = 0x474c4153U;
+            if (filter0.word2 == glassGroup && filter1.word2 == glassGroup &&
+                filter0.word0 == filter1.word0 && filter0.word1 == filter1.word1 &&
+                (filter0.word3 || filter1.word3)) return physx::PxFilterFlag::eSUPPRESS;
+            if (filter0.word2 == glassGroup) filter0 = {};
+            if (filter1.word2 == glassGroup) filter1 = {};
+            const auto result = physx::PxDefaultSimulationFilterShader(attributes0, filter0,
+                attributes1, filter1, pairFlags, constantBlock, constantBlockSize);
+            if (!physx::PxFilterObjectIsTrigger(attributes0) && !physx::PxFilterObjectIsTrigger(attributes1))
+                pairFlags |= physx::PxPairFlag::eDETECT_CCD_CONTACT;
+            return result;
+        }
+
         /** Bridges PhysX task submission into the engine-wide CPU pool. */
         class PhysicsDispatcher final : public physx::PxCpuDispatcher {
         public:
@@ -398,9 +415,10 @@ namespace Engine {
             std::uint64_t poseWorldRevision{};
             Vec3 lastLinearVelocity;
             Vec3 lastAngularVelocity;
-            std::vector<physx::PxShape *> glassShapes;
+            std::vector<std::vector<physx::PxShape *>> glassShapes;
             physx::PxShape *intactGlassShape{};
             std::shared_ptr<const Mesh> glassGeometry;
+            float glassSeparationTime{};
         };
 
         struct CookedMeshKey final {
@@ -457,8 +475,9 @@ namespace Engine {
             PxSceneDesc sceneDescription{scale};
             sceneDescription.gravity = {0.0F, -9.81F, 0.0F}; // NOLINT g=9.81
             sceneDescription.cpuDispatcher = dispatcher.get();
-            sceneDescription.filterShader = PxDefaultSimulationFilterShader;
+            sceneDescription.filterShader = simulationFilter;
             sceneDescription.flags |= PxSceneFlag::eENABLE_ACTIVE_ACTORS;
+            sceneDescription.flags |= PxSceneFlag::eENABLE_CCD;
             physicsScene = context->physics->createScene(sceneDescription);
             if (physicsScene == nullptr) {
                 fail("PxPhysics::createScene failed");
@@ -727,6 +746,18 @@ namespace Engine {
                         return false;
                     }
                     if (dynamic) {
+                        if (!shape.mesh->convexCollisionParts.empty()) {
+                            bool success=true;
+                            for (const auto &part:shape.mesh->convexCollisionParts) {
+                                auto *mesh=cachedConvexMesh(part,scale);
+                                auto *attachedPart=mesh ? attachGeometry(actor,PxConvexMeshGeometry{mesh},*material,
+                                    localOffset,collider.isTrigger) : nullptr;
+                                if (!attachedPart) {success=false; break;}
+                                const float depth=shape.mesh->localBounds.max.z()-shape.mesh->localBounds.min.z();
+                                attachedPart->setContactOffset(std::clamp(depth*scale.z()*0.2F,0.0001F,0.02F));
+                            }
+                            return success;
+                        }
                         if (PxConvexMesh *mesh = cachedConvexMesh(shape.mesh, scale); mesh != nullptr) {
                             const PxConvexMeshGeometry geometry{mesh};
                             const bool result = attachGeometry(
@@ -792,26 +823,44 @@ namespace Engine {
         }
 
         bool attachGlass(physx::PxRigidActor &actor, const GlassDestructionComponent &glass,
-            const ColliderComponent &collider, const Transform &transform, std::vector<physx::PxShape *> &shapes) {
+            const ColliderComponent &collider, const Transform &transform, std::vector<std::vector<physx::PxShape *>> &shapes,
+            physx::PxShape *&intactShape) {
             using namespace physx;
             auto *material = context->physics->createMaterial(std::max(collider.friction, 0.0F),
                 std::max(collider.friction, 0.0F), std::clamp(collider.restitution, 0.0F, 1.0F));
             if (!material) return false;
             const auto scale = absoluteScale(transform);
-            bool success = true;
+            // An intact pane has a continuous surface. Cooked shard hulls can
+            // shrink slightly at shared vertices and must not leak raycasts.
+            intactShape = attachGeometry(actor, PxBoxGeometry{glass.size.x*scale.x()*0.5F,
+                glass.size.y*scale.y()*0.5F, glass.thickness*scale.z()*0.5F},
+                *material, PxTransform{PxIdentity}, collider.isTrigger);
+            bool success = intactShape != nullptr;
+            if (intactShape) {
+                intactShape->setFlag(PxShapeFlag::eSIMULATION_SHAPE, !glass.fractured && !collider.isTrigger);
+                intactShape->setFlag(PxShapeFlag::eSCENE_QUERY_SHAPE, !glass.fractured);
+                intactShape->setFlag(PxShapeFlag::eTRIGGER_SHAPE, !glass.fractured && collider.isTrigger);
+            }
             for (const auto &fragment : glass.fragments) {
-                auto *convex = fragment.collisionGeometry ? cachedConvexMesh(fragment.collisionGeometry, scale) : nullptr;
-                auto *shape = convex ? attachGeometry(actor, PxConvexMeshGeometry{convex}, *material,
-                    PxTransform{toPhysX(Vec3{fragment.center.x, fragment.center.y, 0.0F} * scale)}, collider.isTrigger) : nullptr;
-                if (!shape) {
-                    success = false;
-                    break;
-                }
-                const bool active = fragment.attached;
-                shape->setFlag(PxShapeFlag::eSIMULATION_SHAPE, active && !collider.isTrigger);
-                shape->setFlag(PxShapeFlag::eSCENE_QUERY_SHAPE, active);
-                shape->setFlag(PxShapeFlag::eTRIGGER_SHAPE, active && collider.isTrigger);
-                shapes.push_back(shape);
+                shapes.emplace_back();
+                auto attachPart = [&](const std::shared_ptr<const Mesh> &part) {
+                    auto *convex=part ? cachedConvexMesh(part,scale) : nullptr;
+                    auto *shape=convex ? attachGeometry(actor,PxConvexMeshGeometry{convex},*material,
+                        PxTransform{toPhysX(Vec3{fragment.center.x,fragment.center.y,0}*scale)},collider.isTrigger) : nullptr;
+                    if (!shape) return false;
+                    const bool active=glass.fractured && fragment.attached;
+                    shape->setContactOffset(std::clamp(glass.thickness*scale.z()*0.2F,0.0001F,0.02F));
+                    shape->setFlag(PxShapeFlag::eSIMULATION_SHAPE,active && !collider.isTrigger);
+                    shape->setFlag(PxShapeFlag::eSCENE_QUERY_SHAPE,active);
+                    shape->setFlag(PxShapeFlag::eTRIGGER_SHAPE,active && collider.isTrigger);
+                    shapes.back().push_back(shape);
+                    return true;
+                };
+                if (fragment.collisionGeometry && !fragment.collisionGeometry->convexCollisionParts.empty()) {
+                    for (const auto &part:fragment.collisionGeometry->convexCollisionParts)
+                        success=attachPart(part) && success;
+                } else success=attachPart(fragment.collisionGeometry) && success;
+                if (!success) break;
             }
             material->release();
             return success;
@@ -835,7 +884,7 @@ namespace Engine {
                 throw std::runtime_error("PhysX rigid actor creation failed");
             }
             actor->userData = reinterpret_cast<void *>(static_cast<std::uintptr_t>(entity));
-            std::vector<PxShape *> glassShapes;
+            std::vector<std::vector<PxShape *>> glassShapes;
             PxShape *intactGlassShape = nullptr;
             if (owner.has<ColliderComponent>(entity)) {
                 const ColliderComponent &collider = owner.get<ColliderComponent>(entity);
@@ -843,9 +892,8 @@ namespace Engine {
                 bool attached = true;
                 if (compoundGlass) {
                     const auto &glass = owner.get<GlassDestructionComponent>(entity);
-                    // Prepare the actual continuous union at load time. A hit
-                    // removes shapes; it never inserts the whole pane into broadphase.
-                    attached = attached && attachGlass(*actor, glass, collider, transform, glassShapes);
+                    // Reserve both intact and fractured shapes before gameplay.
+                    attached = attached && attachGlass(*actor, glass, collider, transform, glassShapes, intactGlassShape);
                 } else attached = attachCollider(*actor, collider, transform, dynamic);
                 if (!attached) {
                     actor->release();
@@ -864,13 +912,33 @@ namespace Engine {
             record.intactGlassShape = intactGlassShape;
             if (owner.has<GlassDestructionComponent>(entity))
                 record.glassGeometry = owner.get<GlassDestructionComponent>(entity).fractureRenderGeometry;
+            Entity sourcePane = owner.has<GlassDestructionComponent>(entity) ? entity : NullEntity;
+            if (owner.has<GlassFragmentBindingComponent>(entity))
+                sourcePane = owner.get<GlassFragmentBindingComponent>(entity).paneEntity;
+            if (sourcePane != NullEntity) {
+                const bool debris = owner.has<GlassDebrisComponent>(entity);
+                record.glassSeparationTime = debris ? 0.08F : 0.0F;
+                const PxFilterData filter{PxU32(sourcePane), PxU32(sourcePane >> 32), 0x474c4153U, debris ? 1U : 0U};
+                std::vector<PxShape *> shapes(actor->getNbShapes());
+                actor->getShapes(shapes.data(), PxU32(shapes.size()));
+                for (auto *shape : shapes) shape->setSimulationFilterData(filter);
+            }
             if (dynamic) {
                 auto &rigid = *static_cast<PxRigidDynamic *>(actor);
                 configureRigidBody(rigid, *body);
                 if (owner.has<GlassDebrisComponent>(entity)) {
-                    // Thin shards need swept contact prediction even at high
-                    // impact speeds and while rotating between physics steps.
-                    rigid.setRigidBodyFlag(PxRigidBodyFlag::eENABLE_SPECULATIVE_CCD, true);
+                    float thickness = 0.006F;
+                    if (owner.has<GlassFragmentBindingComponent>(entity)) {
+                        const auto pane = owner.get<GlassFragmentBindingComponent>(entity).paneEntity;
+                        if (owner.valid(pane) && owner.has<GlassDestructionComponent>(pane))
+                            thickness = owner.get<GlassDestructionComponent>(pane).thickness;
+                    }
+                    PxShape *shape = nullptr;
+                    if (rigid.getShapes(&shape, 1) && shape)
+                        shape->setContactOffset(std::clamp(thickness * absoluteScale(transform).z() * 0.2F, 0.0001F, 0.02F));
+                    // Sweep thin shards rather than inflating coplanar contacts;
+                    // speculative contacts can lock fresh splinters in a pane.
+                    rigid.setRigidBodyFlag(PxRigidBodyFlag::eENABLE_CCD, true);
                     rigid.setSolverIterationCounts(8, 2);
                 }
                 restoreRigidBodyState(owner, entity, rigid);
@@ -923,18 +991,30 @@ namespace Engine {
                 if (record.glassShapes.size() == glass.fragments.size() &&
                     record.glassGeometry == glass.fractureRenderGeometry) {
                     ++diagnostics.glassShapeUpdates;
-                    for (std::size_t i = 0; i < record.glassShapes.size(); ++i) {
-                        const bool active = glass.fragments[i].attached;
-                        auto *shape = record.glassShapes[i];
-                        auto flags = shape->getFlags();
+                    if (record.intactGlassShape) {
+                        auto flags = record.intactGlassShape->getFlags();
                         flags.clear(physx::PxShapeFlag::eSIMULATION_SHAPE);
                         flags.clear(physx::PxShapeFlag::eSCENE_QUERY_SHAPE);
                         flags.clear(physx::PxShapeFlag::eTRIGGER_SHAPE);
-                        if (active) {
+                        if (!glass.fractured) {
                             flags |= physx::PxShapeFlag::eSCENE_QUERY_SHAPE;
                             flags |= collider.isTrigger ? physx::PxShapeFlag::eTRIGGER_SHAPE : physx::PxShapeFlag::eSIMULATION_SHAPE;
                         }
-                        if (flags != shape->getFlags()) shape->setFlags(flags);
+                        if (flags != record.intactGlassShape->getFlags()) record.intactGlassShape->setFlags(flags);
+                    }
+                    for (std::size_t i = 0; i < record.glassShapes.size(); ++i) {
+                        const bool active = glass.fractured && glass.fragments[i].attached;
+                        for (auto *shape : record.glassShapes[i]) {
+                            auto flags = shape->getFlags();
+                            flags.clear(physx::PxShapeFlag::eSIMULATION_SHAPE);
+                            flags.clear(physx::PxShapeFlag::eSCENE_QUERY_SHAPE);
+                            flags.clear(physx::PxShapeFlag::eTRIGGER_SHAPE);
+                            if (active) {
+                                flags |= physx::PxShapeFlag::eSCENE_QUERY_SHAPE;
+                                flags |= collider.isTrigger ? physx::PxShapeFlag::eTRIGGER_SHAPE : physx::PxShapeFlag::eSIMULATION_SHAPE;
+                            }
+                            if (flags != shape->getFlags()) shape->setFlags(flags);
+                        }
                     }
                     return;
                 }
@@ -1133,6 +1213,25 @@ namespace Engine {
                 owner.markChanged<Transform>(*entity);
             }
         }
+
+        void updateGlassSeparation(float deltaTime) {
+            for (auto &[entity, record] : actors) {
+                if (record.glassSeparationTime <= 0) continue;
+                record.glassSeparationTime -= deltaTime;
+                if (record.glassSeparationTime > 0) continue;
+                // Fresh coplanar fracture faces need a few integration steps to
+                // separate before colliding with their own pane and siblings.
+                // Contacts with floors, props and other panes remain enabled.
+                std::vector<physx::PxShape *> shapes(record.actor->getNbShapes());
+                record.actor->getShapes(shapes.data(), physx::PxU32(shapes.size()));
+                for (auto *shape : shapes) {
+                    auto filter = shape->getSimulationFilterData();
+                    filter.word3 = 0;
+                    shape->setSimulationFilterData(filter);
+                }
+                physicsScene->resetFiltering(*record.actor);
+            }
+        }
     };
 
     PhysicsDiagnostics PhysicsSystem::diagnostics() const noexcept {
@@ -1162,6 +1261,7 @@ namespace Engine {
         runtime.pushEcsState(registry);
         {
             GE_PROFILE_SCOPE("PhysXSimulationCPU");
+            runtime.updateGlassSeparation(deltaTime);
             const auto simulationStart = std::chrono::steady_clock::now();
             runtime.physicsScene->simulate(deltaTime);
             runtime.physicsScene->fetchResults(true);

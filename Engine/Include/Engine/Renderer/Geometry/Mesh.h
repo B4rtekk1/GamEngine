@@ -10,6 +10,7 @@
 #include <filesystem>
 #include <limits>
 #include <optional>
+#include <memory>
 #include <vector>
 
 /**
@@ -121,6 +122,12 @@ namespace Engine {
          * use this value to avoid reusing stale data.
          */
         std::uint64_t geometryRevision{};
+
+        /** Runtime convex decomposition for concave procedural rigid bodies.
+         * Parts share the mesh coordinate system; rendering uses the outer mesh.
+         * Glass persistence rebuilds these from saved fragment polygons.
+         */
+        std::vector<std::shared_ptr<const Mesh>> convexCollisionParts;
 
         /** @brief Physically based materials used by the mesh. */
         std::vector<PBRMaterial> materials;

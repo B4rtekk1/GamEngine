@@ -282,6 +282,13 @@ namespace Engine {
             for (const auto &fragment:glass.fragments) exposureState.push_back(fragment.attached);
             for (const auto &bond:glass.bonds) exposureState.push_back(bond.broken);
             if (state.geometry!=glass.fractureRenderGeometry.get() || state.exposureState!=exposureState) {
+                // Pending segments were built from a previous bond graph. Replay
+                // against the current graph, newest impacts first, so newly
+                // exposed cracks also appear after support loss without a shot.
+                state.submitted = 0;
+                state.segmentOffset = 0;
+                state.segments.clear();
+                state.reverse = true;
                 state.geometry=glass.fractureRenderGeometry.get();
                 state.exposureState=std::move(exposureState);
                 state.exposureMasks={};

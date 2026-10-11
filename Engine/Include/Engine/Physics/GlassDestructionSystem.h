@@ -28,6 +28,8 @@ namespace Engine {
         static bool prepareLegacyPane(Registry &registry, Entity entity);
         /** Reuse an authored template only when loaded polygons match exactly. */
         static void restoreGeometryCache(GlassDestructionComponent &glass);
+        /** Rebuild convex parts of saved standalone debris after pane removal. */
+        [[nodiscard]] static std::shared_ptr<const Mesh> restoreDebrisCollision(std::shared_ptr<const Mesh> mesh);
         static void onActorDestroyed(Scene &scene, Entity entity);
         static void update(Scene &scene, float deltaTime, const PhysicsSystem *physics = nullptr);
         /** Bond boundaries plus short, energy-limited surface microcracks. */
@@ -35,7 +37,7 @@ namespace Engine {
             const GlassDestructionComponent &glass, const GlassCrack &crack);
         [[nodiscard]] static bool edgeExposed(const GlassDestructionComponent &glass,
             unsigned fragmentIndex, unsigned edgeIndex);
-        /** Stable packed fragment sections, used by GPU indirect rendering and scene loading. */
+        /** Packed fragment sections; detached indices survive local impact refinement. */
         [[nodiscard]] static std::shared_ptr<Mesh> renderMesh(const GlassDestructionComponent &glass);
         [[nodiscard]] static std::shared_ptr<Mesh> collisionMesh(const GlassDestructionComponent &glass);
     };
