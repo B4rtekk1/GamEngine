@@ -234,6 +234,7 @@ namespace Engine {
         friend class SceneView;
         friend class ScenePreset;
         friend class PhysicsSystem;
+        friend class GlassDestructionSystem;
         friend class Script;
 
         explicit GameObject(Registry &registry, std::string_view name = {})

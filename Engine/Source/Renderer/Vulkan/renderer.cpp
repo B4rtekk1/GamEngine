@@ -65,6 +65,7 @@
 #include "Engine/Renderer/Passes/ForwardPass.h"
 #include "Engine/Renderer/Passes/WaterPass.h"
 #include "Engine/Renderer/Passes/GlassPass.h"
+#include "Engine/ECS/Components/GlassDestructionComponent.h"
 #include "Engine/Renderer/Water/WaterSystem.h"
 #include "Engine/Renderer/Water/VirtualWaterRenderer.h"
 #include "Engine/Renderer/Passes/ShadowPass.h"
@@ -537,6 +538,12 @@ namespace Engine {
             TransformSystem::update(registry);
             updateFpsCounter();
             drawFrame();
+            // Gameplay can replace meshes and create/destroy renderables after
+            // the editor's UI change check. Synchronize at the frame boundary
+            // after submitting draws that still reference the old scene tables
+            // and viewport descriptors. The revision check makes unchanged
+            // frames cheap, and the next frame sees the new geometry.
+            synchronizeSceneResources(scene);
         }
 
         void waitIdle() const {
@@ -952,8 +959,16 @@ namespace Engine {
                     virtualInstances[i] = instanceBuffers[i].handle();
                     virtualCulling[i] = cullingUniformBuffers[i].handle();
                     sceneVirtualCulling[i] = sceneCullingUniformBuffers[i].handle();
-                    virtualHiZ[i] = {hiZBuffers[i].sampler(), hiZBuffers[i].fullView(),
+                    const auto previousHiZFrame = (i + MAX_FRAMES_IN_FLIGHT - 1U) % MAX_FRAMES_IN_FLIGHT;
+                    virtualHiZ[i] = {hiZBuffers[previousHiZFrame].sampler(), hiZBuffers[previousHiZFrame].fullView(),
                                      VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
+                    // Match initial water resource creation: with occlusion
+                    // culling disabled there is no Hi-Z image to bind.
+                    if (virtualHiZ[i].imageView == VK_NULL_HANDLE) {
+                        const DepthBuffer &sampledDepth = msaa.enabled() ? hiZDepthBuffer : depthBuffer;
+                        virtualHiZ[i] = {sampledDepth.sampler(), sampledDepth.imageView(),
+                                        VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL};
+                    }
                 }
                 virtualWaterRenderer.updateFrameBindings(virtualInstances, virtualCulling, virtualHiZ);
                 const Water::WaterRenderWorld waterWorld =

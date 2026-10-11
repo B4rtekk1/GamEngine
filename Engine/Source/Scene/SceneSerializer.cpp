@@ -1,3 +1,5 @@
+#include "Engine/ECS/Components/GlassDestructionComponent.h"
+#include "Engine/Physics/GlassDestructionSystem.h"
 #include "Engine/Scene/SceneSerializer.h"
 
 #include "Engine/Assets/AssetManager.h"
@@ -1192,6 +1194,26 @@ namespace Engine {
                 writeVec3(serialized, transform.scale);
                 serialized << '\n';
             }
+            if (registry.has<GlassDestructionComponent>(entity)) {
+                const auto &glass = registry.get<GlassDestructionComponent>(entity);
+                serialized << "GLASS_DESTRUCTION " << glass.size.x << ' ' << glass.size.y << ' '
+                    << glass.thickness << ' ' << glass.fractureThreshold << ' ' << glass.density << ' '
+                    << glass.maxFragments << ' ' << glass.maxDynamicFragments << ' ' << glass.seed << ' '
+                    << glass.fragmentLifetime << ' ' << glass.fractured << ' ' << glass.fullyDestroyed << ' '
+                    << glass.fragments.size() << ' ' << glass.bonds.size() << ' ' << glass.hadPhysicalSupport << '\n';
+                for (const auto &fragment : glass.fragments) {
+                    serialized << fragment.center.x << ' ' << fragment.center.y << ' ' << fragment.area << ' '
+                        << fragment.damage << ' ' << fragment.attached << ' ' << fragment.frameSupported << ' '
+                        << fragment.polygon.size();
+                    for (auto point : fragment.polygon) serialized << ' ' << point.x << ' ' << point.y;
+                    serialized << '\n';
+                }
+                for (const auto &bond : glass.bonds)
+                    serialized << bond.first << ' ' << bond.second << ' ' << bond.center.x << ' '
+                        << bond.center.y << ' ' << bond.damage << '\n';
+            }
+            if (registry.has<GlassDebrisComponent>(entity))
+                serialized << "GLASS_DEBRIS " << registry.get<GlassDebrisComponent>(entity).remainingLifetime << '\n';
             if (registry.has<ColliderComponent>(entity)) {
                 serialized << "COLLIDER ";
                 writeCollider(serialized, registry.get<ColliderComponent>(entity));
@@ -1470,7 +1492,7 @@ namespace Engine {
             version != TerrainMaterialLayersFormatVersion &&
             version != WaterBodyFormatVersion &&
             version != WaterExecutionPolicyFormatVersion &&
-            version != WaterExecutionTierFormatVersion && version != 26 && version != FormatVersion - 2 &&
+            version != WaterExecutionTierFormatVersion && version != 26 && version != 27 && version != FormatVersion - 2 &&
             version != FormatVersion - 1 &&
             version != FormatVersion) {
             invalidScene("unsupported format version " + std::to_string(version));
@@ -1697,6 +1719,58 @@ namespace Engine {
                                               .rotation = readVec3(input, "transform rotation"),
                                               .scale = readVec3(input, "transform scale"),
                                           });
+                } else if (component == "GLASS_DESTRUCTION") {
+                    if (version < 30 || loaded.has<GlassDestructionComponent>(entity)) invalidScene("invalid glass component");
+                    GlassDestructionComponent glass;
+                    glass.size.x = readFloat(input, "glass width");
+                    glass.size.y = readFloat(input, "glass height");
+                    glass.thickness = readFloat(input, "glass thickness");
+                    glass.fractureThreshold = readFloat(input, "glass threshold");
+                    glass.density = readFloat(input, "glass density");
+                    glass.maxFragments = read<unsigned>(input, "glass fragment budget");
+                    glass.maxDynamicFragments = read<unsigned>(input, "glass physics budget");
+                    glass.seed = read<unsigned>(input, "glass seed");
+                    glass.fragmentLifetime = readFloat(input, "glass lifetime");
+                    glass.fractured = read<bool>(input, "glass fractured");
+                    glass.fullyDestroyed = read<bool>(input, "glass destroyed");
+                    const auto fragmentCount = readCount(input, "glass fragments", 128);
+                    const auto bondCount = readCount(input, "glass bonds", 8192);
+                    if (version >= 31) glass.hadPhysicalSupport = read<bool>(input, "glass physical support");
+                    if (glass.size.x < 0.01F || glass.size.y < 0.01F || glass.thickness < 0.001F ||
+                        glass.fractureThreshold <= 0.0F || glass.density <= 0.0F || glass.fragmentLifetime <= 0.0F ||
+                        glass.maxFragments < 4 || glass.maxFragments > 128 || glass.maxDynamicFragments > 128 ||
+                        (!glass.fractured && fragmentCount != 0)) invalidScene("invalid glass settings");
+                    for (std::size_t i = 0; i < fragmentCount; ++i) {
+                        GlassFragment fragment;
+                        fragment.center.x = readFloat(input, "fragment center x");
+                        fragment.center.y = readFloat(input, "fragment center y");
+                        fragment.area = readFloat(input, "fragment area");
+                        fragment.damage = readFloat(input, "fragment damage");
+                        fragment.attached = read<bool>(input, "fragment attached");
+                        fragment.frameSupported = read<bool>(input, "fragment support");
+                        const auto points = readCount(input, "fragment vertices", 256);
+                        if (points < 3 || fragment.area < 0.0F || fragment.damage < 0.0F) invalidScene("invalid glass fragment");
+                        for (std::size_t j = 0; j < points; ++j) {
+                            const float x = readFloat(input, "fragment x"), y = readFloat(input, "fragment y");
+                            fragment.polygon.push_back({x, y});
+                        }
+                        glass.fragments.push_back(std::move(fragment));
+                    }
+                    for (std::size_t i = 0; i < bondCount; ++i) {
+                        GlassBond bond;
+                        bond.first = read<unsigned>(input, "bond first");
+                        bond.second = read<unsigned>(input, "bond second");
+                        bond.center.x = readFloat(input, "bond x");
+                        bond.center.y = readFloat(input, "bond y");
+                        bond.damage = readFloat(input, "bond damage");
+                        if (bond.first >= fragmentCount || bond.second >= fragmentCount || bond.damage < 0.0F)
+                            invalidScene("invalid glass bond");
+                        glass.bonds.push_back(bond);
+                    }
+                    loaded.add<GlassDestructionComponent>(entity, std::move(glass));
+                } else if (component == "GLASS_DEBRIS") {
+                    if (version < 30 || loaded.has<GlassDebrisComponent>(entity)) invalidScene("invalid glass debris");
+                    loaded.add<GlassDebrisComponent>(entity, GlassDebrisComponent{readFloat(input, "debris lifetime")});
                 } else if (component == "COLLIDER") {
                     if (hasCollider) {
                         invalidScene("entity contains an invalid ColliderComponent");
@@ -2150,12 +2224,30 @@ namespace Engine {
             }
         }
 
-        loaded.view<ColliderComponent, MeshRenderer>([](const Entity,
+        loaded.view<ColliderComponent, MeshRenderer>([&](const Entity entity,
                                                         ColliderComponent &collider,
                                                         const MeshRenderer &renderer) {
             if (auto *meshCollider = std::get_if<MeshCollider>(&collider.shape)) {
-                meshCollider->mesh = renderer.mesh.source();
+                meshCollider->mesh = loaded.has<GlassDestructionComponent>(entity) &&
+                    loaded.get<GlassDestructionComponent>(entity).fractured
+                    ? GlassDestructionSystem::collisionMesh(loaded.get<GlassDestructionComponent>(entity))
+                    : renderer.mesh.source();
             }
+        });
+        loaded.view<GlassDestructionComponent, MeshRenderer>([](const Entity,
+            GlassDestructionComponent &glass, MeshRenderer &renderer) {
+            if (!glass.fractured) return;
+            // Version 30 treated every perimeter cell as permanently supported.
+            const float bottom = -glass.size.y * 0.5F;
+            for (auto &fragment : glass.fragments) {
+                fragment.frameSupported = false;
+                for (std::size_t i = 0; i < fragment.polygon.size(); ++i) {
+                    const auto a = fragment.polygon[i], b = fragment.polygon[(i + 1) % fragment.polygon.size()];
+                    fragment.frameSupported |= std::abs(a.y - bottom) < 1.0e-5F &&
+                        std::abs(b.y - bottom) < 1.0e-5F && glm::distance(a, b) > 1.0e-5F;
+                }
+            }
+            renderer.mesh = MeshHandle{GlassDestructionSystem::renderMesh(glass)};
         });
         registry = std::move(loaded);
         // Registry replacement preserves its address, but invalidates all

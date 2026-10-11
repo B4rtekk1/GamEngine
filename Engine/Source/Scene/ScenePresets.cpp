@@ -1,3 +1,4 @@
+#include "Engine/Physics/GlassDestructionSystem.h"
 #include "Platform/DefaultFonts.h"
 #include "Engine/Scene/ScenePresets.h"
 
@@ -220,7 +221,8 @@ namespace Engine {
         constexpr float GlassThickness = 0.01F;
         // A slight tint and surface haze keep the sample pane readable even
         // when viewed head-on against a uniform background.
-        auto &object = createMeshObject("Glass", cubeMesh_,
+        const Actor object = GlassDestructionSystem::createPane(*this, "Glass",
+                                       GlassDestructionComponent{.size = {1.0F, 2.0F}, .thickness = GlassThickness},
                                        PBRMaterial{
                                            .baseColor = {0.92F, 0.98F, 0.95F},
                                            .metallic = 0.0F,
@@ -233,9 +235,7 @@ namespace Engine {
                                            .dirtIntensity = 0.05F,
                                        });
         object.setPosition({0.0F, 1.0F, 0.0F});
-        object.setScale({1.0F, 2.0F, GlassThickness});
-        object.add<ColliderComponent>();
-        return object.entity();
+        return findEntity(object.id());
     }
 
     Entity ScenePreset::createPlane() {

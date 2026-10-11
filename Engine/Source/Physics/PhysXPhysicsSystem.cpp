@@ -1,4 +1,5 @@
 #include "Engine/Physics/PhysicsSystem.h"
+#include "Engine/Physics/GlassDestructionSystem.h"
 #include "Engine/Core/Transform.h"
 #include "Engine/Core/TaskScheduler.h"
 #include "Engine/ECS/Components/ColliderComponent.h"
@@ -432,6 +433,7 @@ namespace Engine {
         std::vector<Entity> scaleChanged;
         std::unordered_map<CookedMeshKey, physx::PxConvexMesh *, CookedMeshKeyHash> convexMeshes;
         std::unordered_map<CookedMeshKey, physx::PxTriangleMesh *, CookedMeshKeyHash> triangleMeshes;
+        std::unordered_map<CookedMeshKey, std::weak_ptr<const Mesh>, CookedMeshKeyHash> meshSources;
 
         BroadPhaseCache() {
             using namespace physx;
@@ -495,6 +497,7 @@ namespace Engine {
                 }
             }
             convexMeshes.clear();
+            meshSources.clear();
             for (const auto &mesh: triangleMeshes | std::views::values) {
                 if (mesh != nullptr) {
                     mesh->release();
@@ -575,7 +578,8 @@ namespace Engine {
             return context->physics->createTriangleMesh(input);
         }
 
-        physx::PxConvexMesh *cachedConvexMesh(const Mesh &mesh, const Vec3 &scale) {
+        physx::PxConvexMesh *cachedConvexMesh(const std::shared_ptr<const Mesh> &source, const Vec3 &scale) {
+            const Mesh &mesh = *source;
             const CookedMeshKey key{.mesh = &mesh, .revision = mesh.geometryRevision, .scale = scale};
             if (const auto existing = convexMeshes.find(key); existing != convexMeshes.end()) {
                 return existing->second;
@@ -589,11 +593,13 @@ namespace Engine {
             physx::PxConvexMesh *cooked = cookConvex(points);
             if (cooked != nullptr) {
                 convexMeshes.emplace(key, cooked);
+                meshSources[key] = source;
             }
             return cooked;
         }
 
-        physx::PxTriangleMesh *cachedTriangleMesh(const Mesh &mesh, const Vec3 &scale) {
+        physx::PxTriangleMesh *cachedTriangleMesh(const std::shared_ptr<const Mesh> &source, const Vec3 &scale) {
+            const Mesh &mesh = *source;
             const CookedMeshKey key{&mesh, mesh.geometryRevision, scale};
             if (const auto existing = triangleMeshes.find(key); existing != triangleMeshes.end()) {
                 return existing->second;
@@ -601,6 +607,7 @@ namespace Engine {
             physx::PxTriangleMesh *cooked = cookTriangleMesh(mesh, scale);
             if (cooked != nullptr) {
                 triangleMeshes.emplace(key, cooked);
+                meshSources[key] = source;
             }
             return cooked;
         }
@@ -704,7 +711,7 @@ namespace Engine {
                         return false;
                     }
                     if (dynamic) {
-                        if (PxConvexMesh *mesh = cachedConvexMesh(*shape.mesh, scale); mesh != nullptr) {
+                        if (PxConvexMesh *mesh = cachedConvexMesh(shape.mesh, scale); mesh != nullptr) {
                             const PxConvexMeshGeometry geometry{mesh};
                             const bool result = attachGeometry(
                                                     actor, geometry, *material, localOffset,
@@ -715,7 +722,7 @@ namespace Engine {
                             actor, *shape.mesh, scale, collider, *material);
                     }
 
-                    PxTriangleMesh *mesh = cachedTriangleMesh(*shape.mesh, scale);
+                    PxTriangleMesh *mesh = cachedTriangleMesh(shape.mesh, scale);
                     if (mesh == nullptr) {
                         return false;
                     }
@@ -803,6 +810,12 @@ namespace Engine {
             if (dynamic) {
                 auto &rigid = *static_cast<PxRigidDynamic *>(actor);
                 configureRigidBody(rigid, *body);
+                if (owner.has<GlassDebrisComponent>(entity)) {
+                    // Thin shards need swept contact prediction even at high
+                    // impact speeds and while rotating between physics steps.
+                    rigid.setRigidBodyFlag(PxRigidBodyFlag::eENABLE_SPECULATIVE_CCD, true);
+                    rigid.setSolverIterationCounts(8, 2);
+                }
                 restoreRigidBodyState(owner, entity, rigid);
             }
             physicsScene->addActor(*actor);
@@ -874,7 +887,25 @@ namespace Engine {
             });
         }
 
+        void pruneCookedMeshes() {
+            // Procedural meshes are replaced frequently. Retire stale entries
+            // before an allocator can reuse their source address as a cache key.
+            for (auto it = meshSources.begin(); it != meshSources.end();) {
+                if (!it->second.expired()) { ++it; continue; }
+                if (auto convex = convexMeshes.find(it->first); convex != convexMeshes.end()) {
+                    convex->second->release();
+                    convexMeshes.erase(convex);
+                }
+                if (auto triangle = triangleMeshes.find(it->first); triangle != triangleMeshes.end()) {
+                    triangle->second->release();
+                    triangleMeshes.erase(triangle);
+                }
+                it = meshSources.erase(it);
+            }
+        }
+
         void ensureWorld(Registry &owner) {
+            pruneCookedMeshes();
             if (registry != &owner) {
                 rebuild(owner);
                 return;
@@ -1034,6 +1065,10 @@ namespace Engine {
         Registry &registry = scene.registry();
         TransformSystem::updateDirty(registry);
         runtime.ensureWorld(registry);
+        runtime.pushEcsState(registry);
+        GlassDestructionSystem::update(scene, deltaTime, this);
+        TransformSystem::updateDirty(registry);
+        runtime.ensureWorld(registry);
         runtime.physicsScene->setGravity(toPhysX(gravity_));
         runtime.pushEcsState(registry);
         runtime.physicsScene->simulate(deltaTime);
@@ -1060,6 +1095,14 @@ namespace Engine {
         runtime.ensureWorld(registry);
         runtime.pushEcsState(registry);
 
+        return raycastPrepared(scene, origin, direction, maxDistance, ignoredActor);
+    }
+
+    std::optional<RaycastHit> PhysicsSystem::raycastPrepared(
+        Scene &scene, const Vec3 origin, const Vec3 direction, const float maxDistance,
+        const ObjectId ignoredActor) const {
+        if (!broadPhaseCache_ || !broadPhaseCache_->physicsScene) return std::nullopt;
+        BroadPhaseCache &runtime = *broadPhaseCache_;
         physx::PxRaycastBuffer hit;
         const physx::PxHitFlags hitFlags =
                 physx::PxHitFlag::ePOSITION | physx::PxHitFlag::eNORMAL;
@@ -1109,11 +1152,20 @@ namespace Engine {
 
     std::optional<RaycastHit> Physics::shootRay(
         const Vec3 origin, const Vec3 direction, const float maxDistance, const ObjectId ignoredActor) {
+        return shootRay(origin, direction, maxDistance, ignoredActor, 40.0F, 0.18F);
+    }
+
+    std::optional<RaycastHit> Physics::shootRay(
+        const Vec3 origin, const Vec3 direction, const float maxDistance,
+        const ObjectId ignoredActor, const float energy, const float radius) {
         auto hit = system_.raycast(*scene_, origin, direction, maxDistance, ignoredActor);
         if (hit) {
             constexpr std::size_t MaxBulletImpacts = 128;
             if (bulletImpacts_.size() == MaxBulletImpacts) bulletImpacts_.erase(bulletImpacts_.begin());
             bulletImpacts_.push_back({origin, hit->point, hit->normal, hit->actor.id()});
+            GlassDestructionSystem::onImpact(*scene_, scene_->findEntity(hit->actor.id()),
+                GlassImpact{.worldPosition = hit->point, .worldDirection = direction,
+                    .energy = energy, .radius = radius});
         }
         return hit;
     }

@@ -40,11 +40,17 @@ target_include_directories(RenderGraphTests PRIVATE "${PROJECT_SOURCE_DIR}/Engin
 gameengine_enable_warnings(RenderGraphTests)
 gameengine_enable_sanitizers(RenderGraphTests)
 
-add_executable(PhysicsMeshTests PhysicsMeshTests.cpp PhysXPhysicsTests.cpp ScriptSystemTests.cpp GlassMaterialTests.cpp CameraControllerTests.cpp)
+add_executable(PhysicsMeshTests PhysicsMeshTests.cpp PhysXPhysicsTests.cpp ScriptSystemTests.cpp GlassMaterialTests.cpp GlassDestructionTests.cpp GlassRenderingTests.cpp CameraControllerTests.cpp)
 target_link_libraries(PhysicsMeshTests PRIVATE Engine GTest::gtest_main)
 gameengine_enable_warnings(PhysicsMeshTests)
 gameengine_enable_sanitizers(PhysicsMeshTests)
 gameengine_copy_runtime_dependencies(PhysicsMeshTests)
+add_dependencies(PhysicsMeshTests EngineShaders BrdfLutAsset)
+add_custom_command(TARGET PhysicsMeshTests POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_directory "${GAMEENGINE_SHADER_OUTPUT_DIR}" "$<TARGET_FILE_DIR:PhysicsMeshTests>/shaders"
+    COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_FILE_DIR:PhysicsMeshTests>/Assets/BRDF"
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different "${GAMEENGINE_GAME_ROOT}/Assets/BRDF/brdf_lut.bin" "$<TARGET_FILE_DIR:PhysicsMeshTests>/Assets/BRDF/brdf_lut.bin"
+    COMMENT "Copying renderer assets for integration tests")
 
 # Kept independent from the historical mixed component test target so the
 # compiler contract remains runnable without a Vulkan or PhysX runtime.

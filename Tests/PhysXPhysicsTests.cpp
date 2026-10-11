@@ -403,21 +403,22 @@ TEST(SceneSerializer, RoundTripsCubeActorTransformAndMaterial) {
     EXPECT_TRUE(renderer.material.shaderProgramSpirv.empty());
 }
 
-TEST(SceneSerializer, LoadsVersion22AndResavesAsVersion23) {
+TEST(SceneSerializer, LoadsVersion30AndResavesAsCurrentVersion) {
     Engine::Scene source;
-    source.createCube("Version 22 migration");
+    source.createCube("Version 30 migration");
     std::ostringstream currentFormat;
     ASSERT_NO_THROW(Engine::SceneSerializer::save(source, currentFormat));
     std::string legacy = currentFormat.str();
-    ASSERT_TRUE(legacy.starts_with("GAMENGINE_SCENE 23\n"));
-    legacy.replace(0, std::string{"GAMENGINE_SCENE 23"}.size(), "GAMENGINE_SCENE 22");
+    const auto currentHeader = "GAMENGINE_SCENE " + std::to_string(Engine::SceneSerializer::FormatVersion);
+    ASSERT_TRUE(legacy.starts_with(currentHeader + "\n"));
+    legacy.replace(0, currentHeader.size(), "GAMENGINE_SCENE 30");
 
     Engine::Scene loaded;
     std::istringstream input{legacy};
     ASSERT_NO_THROW(Engine::SceneSerializer::load(loaded, input));
     std::ostringstream migrated;
     ASSERT_NO_THROW(Engine::SceneSerializer::save(loaded, migrated));
-    EXPECT_TRUE(migrated.str().starts_with("GAMENGINE_SCENE 23\n"));
+    EXPECT_TRUE(migrated.str().starts_with(currentHeader + "\n"));
 }
 
 TEST(SceneSerializer, PreservesShaderGraphSourceWithoutAsset) {

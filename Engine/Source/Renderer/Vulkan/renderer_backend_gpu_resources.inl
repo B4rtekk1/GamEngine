@@ -1,9 +1,34 @@
+        // Glass keeps immutable packed geometry. Detached sections are inactive
+        // GPU objects; compute culling compacts only the live indirect commands.
+        [[nodiscard]] bool glassSectionVisible(const RenderableRecord &record) const {
+            if (!scene.registry().has<GlassDestructionComponent>(record.entity)) return true;
+            const auto &glass = scene.registry().get<GlassDestructionComponent>(record.entity);
+            return !glass.fullyDestroyed && (!glass.fractured ||
+                (record.sectionIndex < glass.fragments.size() && glass.fragments[record.sectionIndex].attached));
+        }
+
+        [[nodiscard]] std::uint32_t liveBatchIndexCount(std::size_t batchIndex) const {
+            const auto &batch = instanceBatches[batchIndex];
+            const auto &indices = sceneGpu.batchRenderableIndices[batchIndex];
+            if (indices.empty() || !scene.registry().has<GlassDestructionComponent>(renderables[indices.front()].entity))
+                return batch.indexCount;
+            for (auto index : sceneGpu.batchRenderableIndices[batchIndex])
+                if (glassSectionVisible(renderables[index])) {
+                    const auto *resource = static_cast<const MeshGpuResource *>(batch.mesh);
+                    const auto &sections = resource->metadata.sections;
+                    const auto section = renderables[index].sectionIndex;
+                    return section < sections.size() ? sections[section].indexCount : resource->metadata.indexCount;
+                }
+            return 0;
+        }
+
         void refreshCullingBatchObjects() {
             constexpr std::size_t modelDiagonalStride = 5;
             const std::uint32_t objectCount = static_cast<std::uint32_t>(instanceBatches.size());
             gpuObjects.resize(objectCount);
             for (std::uint32_t i = 0; i < objectCount; ++i) {
-                const InstanceBatch& batch = instanceBatches[i];
+                InstanceBatch& batch = instanceBatches[i];
+                batch.indexCount = liveBatchIndexCount(i);
                 auto& object = gpuObjects[i];
                 object.model = {};
                 object.model.data[0] = 1.0F;

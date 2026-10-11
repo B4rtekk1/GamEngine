@@ -556,6 +556,7 @@ namespace Engine {
         friend class Renderer;
         friend class ScriptSystem;
         friend class PhysicsSystem;
+        friend class GlassDestructionSystem;
 
         void rebuildObjectHandles();
         void indexObject(GameObject& object) {

@@ -50,6 +50,10 @@ namespace Engine {
             ObjectId ignoredActor = NullObjectId) const; //NOLINT
 
     private:
+        friend class GlassDestructionSystem;
+        /** Read-only query after update has synchronized the PhysX world. */
+        [[nodiscard]] std::optional<RaycastHit> raycastPrepared(
+            Scene &scene, Vec3 origin, Vec3 direction, float maxDistance, ObjectId ignoredActor) const;
         struct BroadPhaseCache;
 
         Vec3 gravity_;
@@ -73,10 +77,15 @@ namespace Engine {
         [[nodiscard]] std::optional<RaycastHit> raycast(
             Vec3 origin, Vec3 direction, float maxDistance = 1000.0F) const; //NOLINT
 
-        /** Fires a hitscan shot and retains the most recent 128 surface impacts. */
+        /** Fires a hitscan shot, damages opt-in glass and retains the most recent 128 surface impacts. */
         [[nodiscard]] std::optional<RaycastHit> shootRay(
             Vec3 origin, Vec3 direction, float maxDistance = 1000.0F,
             ObjectId ignoredActor = NullObjectId); //NOLINT
+
+        /** Hitscan with explicit glass impact energy and world-space radius. */
+        [[nodiscard]] std::optional<RaycastHit> shootRay(
+            Vec3 origin, Vec3 direction, float maxDistance, ObjectId ignoredActor,
+            float energy, float radius = 0.18F);
 
         [[nodiscard]] std::span<const BulletImpact> bulletImpacts() const noexcept { return bulletImpacts_; }
         void clearBulletImpacts() noexcept { bulletImpacts_.clear(); }

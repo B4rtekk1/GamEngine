@@ -1152,7 +1152,8 @@
                             appendRange(pbrShaderSlot(effectiveMaterial),
                                 sectionIndex, section.firstIndex, section.indexCount, section.firstMeshlet,
                                 section.meshletCount, section.localBounds, usesFoliagePipeline,
-                                effectiveMaterial.alphaMode, effectiveMaterial.doubleSided, false,
+                                effectiveMaterial.alphaMode, effectiveMaterial.doubleSided,
+                                registry.has<GlassDestructionComponent>(entity),
                                 metadata.materials.empty(),
                                 metadata.materials.empty() ? 0U : section.materialIndex,
                                 effectiveMaterial);
@@ -2441,6 +2442,12 @@
                     changedBatches.push_back(record.batchIndex);
                 }
                 bool materialChanged = false;
+                if (hasRendererChange && readRegistry.has<GlassDestructionComponent>(entity)) {
+                    instanceBatches[record.batchIndex].indexCount = liveBatchIndexCount(record.batchIndex);
+                    markDirty(index, &RenderableRecord::cullingDirtyFrames, dirtyCullingObjects);
+                    changedBatches.push_back(record.batchIndex);
+                    rtTlasInputDirty = true;
+                }
                 if (hasRendererChange) {
                     const auto sourceMesh = renderer->mesh.source();
                     if (sourceMesh) {
@@ -2560,7 +2567,7 @@
                         }
                         return matrix;
                     }();
-                    const std::uint32_t instanceFlags = 1U | (batch.foliagePipeline ? 2U : 0U) |
+                    const std::uint32_t instanceFlags = (glassSectionVisible(record) ? 1U : 0U) | (batch.foliagePipeline ? 2U : 0U) |
                         (batch.twoSided ? 8U : 0U);
                     const bool proxyUninitialized = record.renderProxy.instance == InvalidGPUSceneInstanceId;
                     if (proxyUninitialized) {
@@ -2634,6 +2641,7 @@
                     if (!initialized) continue;
                     instanceBatches[batchIndex].worldBounds = bounds;
                     auto& object = gpuObjects[batchIndex];
+                    object.indexCount = instanceBatches[batchIndex].indexCount;
                     object.localAabbMin = {bounds.min.x(), bounds.min.y(), bounds.min.z(), 0.0F};
                     object.localAabbMax = {bounds.max.x(), bounds.max.y(), bounds.max.z(), 0.0F};
                     object.model = {};

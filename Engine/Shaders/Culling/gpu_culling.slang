@@ -354,7 +354,8 @@ void main(uint3 dispatchThreadId : SV_DispatchThreadID)
             : sourceIndex;
         if (objectIndex < culling.objectCount) {
             objectData = objects[objectIndex];
-            visible = !(culling.shadowPass != 0 && objectData.castShadow == 0) &&
+            visible = objectData.indexCount != 0 && objectData.instanceCount != 0 &&
+                      !(culling.shadowPass != 0 && objectData.castShadow == 0) &&
                       !(culling.drawCategory != 2 && objectData.twoSided != culling.drawCategory) &&
                       (pushConstants.shaderFilter == 0xffffffff ||
                        objectData.shader == pushConstants.shaderFilter);
