@@ -1,3 +1,4 @@
+#include "Engine/Renderer/Vulkan/PipelineCache.h"
 #include "Engine/Renderer/Lighting/Brixelizer/BrixelizerSystem.h"
 
 #include "Engine/Renderer/Geometry/GpuVertex.h"
@@ -361,7 +362,7 @@ void BrixelizerSystem::create(const VkPhysicalDevice physicalDevice, const VkDev
         giPipelineInfo.stage = {VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO, nullptr, 0,
                                 VK_SHADER_STAGE_COMPUTE_BIT, giShader.get(), "main", nullptr};
         giPipelineInfo.layout = state.giPreparePipelineLayout;
-        if (vkCreateComputePipelines(device, VK_NULL_HANDLE, 1, &giPipelineInfo,
+        if (vkCreateComputePipelines(device, PipelineCache::get(device), 1, &giPipelineInfo,
                                      nullptr, &state.giPreparePipeline) != VK_SUCCESS)
             throw std::runtime_error("Brixelizer: create GI input pipeline");
     } catch (...) {

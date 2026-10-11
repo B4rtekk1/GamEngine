@@ -1,3 +1,4 @@
+#include "Platform/DefaultFonts.h"
 #include "Engine/Scene/ScenePresets.h"
 
 #include "Engine/Core/Transform.h"
@@ -27,7 +28,6 @@ namespace Engine {
     namespace {
         constexpr std::size_t CubesPerAxis = 30;
         constexpr float CubeSpacing = 1.25F;
-        constexpr std::size_t DefaultFontCandidateCount = 5;
         constexpr int DefaultFontPixelHeight = 24;
         constexpr int DefaultFontFirstCharacter = 32;
         constexpr int DefaultFontLastCharacter = 126;
@@ -77,18 +77,11 @@ namespace Engine {
 
         void buildFont(UI::UIFontAtlas &atlas) {
             if (atlas.width() != 0 && atlas.height() != 0) return;
-            const std::array<std::filesystem::path, DefaultFontCandidateCount> candidates{
-                "C:/Windows/Fonts/segoeui.ttf", "C:/Windows/Fonts/arial.ttf",
-                "C:/Windows/Fonts/consola.ttf", "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
-                "/usr/share/fonts/truetype/liberation2/LiberationSans-Regular.ttf",
-            };
-            const auto font = std::ranges::find_if(candidates, [](const auto &path) {
-                return std::filesystem::is_regular_file(path);
-            });
-            if (font == candidates.end()) {
+            const auto font = Platform::defaultUiFont();
+            if (font.empty()) {
                 throw std::runtime_error("No default TrueType font found");
             }
-            if (const std::string error = atlas.build(font->string(), DefaultFontPixelHeight,
+            if (const std::string error = atlas.build(font.string(), DefaultFontPixelHeight,
                                                       DefaultFontFirstCharacter, DefaultFontLastCharacter);
                 !error.empty()) {
                 throw std::runtime_error("Could not build sample font atlas: " + error);

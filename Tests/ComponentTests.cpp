@@ -3,6 +3,7 @@
 #include "Engine/ECS/Components/ColliderComponent.h"
 #include "Engine/ECS/Components/MeshRendererComponent.h"
 #include "Engine/ECS/Components/RigidbodyComponent.h"
+#include "Engine/ECS/Components/RigidbodyRuntime.h"
 #include "Engine/ECS/Components/ScriptComponent.h"
 #include "Engine/ECS/Components/TerrainComponent.h"
 #include "Engine/ECS/Components/TerrainGrassComponent.h"
@@ -79,22 +80,22 @@ void ExpectVec3Near(const Engine::Vec3& value, float x, float y, float z) {
     EXPECT_NEAR(value.z(), z, 1.0e-5F);
 }
 
-TEST(RigidbodyComponent, AccumulatesAndClearsForcesAndImpulses) {
-    Engine::RigidbodyComponent body;
-    body.mass = 2.0F;
-    body.addForce({1.0F, 2.0F, 3.0F});
-    body.addForce({-1.0F, 4.0F, -2.0F});
-    body.addTorque({5.0F, 6.0F, 7.0F});
-    body.addAngularImpulse({2.0F, 3.0F, 4.0F});
-    body.addImpulse({4.0F, -2.0F, 6.0F});
-    ExpectVec3Near(body.accumulatedForce(), 0.0F, 6.0F, 1.0F);
-    ExpectVec3Near(body.accumulatedTorque(), 5.0F, 6.0F, 7.0F);
-    ExpectVec3Near(body.accumulatedAngularImpulse(), 2.0F, 3.0F, 4.0F);
-    ExpectVec3Near(body.linearVelocity, 2.0F, -1.0F, 3.0F);
-    body.zeroForces();
-    ExpectVec3Near(body.accumulatedForce(), 0.0F, 0.0F, 0.0F);
-    ExpectVec3Near(body.accumulatedTorque(), 0.0F, 0.0F, 0.0F);
-    ExpectVec3Near(body.accumulatedAngularImpulse(), 0.0F, 0.0F, 0.0F);
+TEST(PhysicsCommandBuffer, AccumulatesAndClearsForcesAndImpulses) {
+    Engine::PhysicsCommandBuffer commands;
+    commands.force += Engine::Vec3{1.0F, 2.0F, 3.0F};
+    commands.force += Engine::Vec3{-1.0F, 4.0F, -2.0F};
+    commands.torque = {5.0F, 6.0F, 7.0F};
+    commands.angularImpulse = {2.0F, 3.0F, 4.0F};
+    commands.impulse = {4.0F, -2.0F, 6.0F};
+    ExpectVec3Near(commands.force, 0.0F, 6.0F, 1.0F);
+    ExpectVec3Near(commands.torque, 5.0F, 6.0F, 7.0F);
+    ExpectVec3Near(commands.angularImpulse, 2.0F, 3.0F, 4.0F);
+    ExpectVec3Near(commands.impulse, 4.0F, -2.0F, 6.0F);
+    commands.clear();
+    ExpectVec3Near(commands.force, 0.0F, 0.0F, 0.0F);
+    ExpectVec3Near(commands.torque, 0.0F, 0.0F, 0.0F);
+    ExpectVec3Near(commands.angularImpulse, 0.0F, 0.0F, 0.0F);
+    ExpectVec3Near(commands.impulse, 0.0F, 0.0F, 0.0F);
 }
 
 TEST(ProceduralCloud, ProducesDeterministicThreeDimensionalMesh) {
@@ -149,18 +150,17 @@ TEST(GpuVertex, PacksMeshAttributesIntoTheGpuLayout) {
     EXPECT_FLOAT_EQ(color.a, 1.0F);
 }
 
-TEST(RigidbodyComponent, IgnoresLinearImpulseForNonPositiveMassAndStops) {
-    Engine::RigidbodyComponent body;
-    body.mass = 0.0F;
-    body.addImpulse({1.0F, 2.0F, 3.0F});
-    ExpectVec3Near(body.linearVelocity, 0.0F, 0.0F, 0.0F);
-    body.linearVelocity = {1.0F, 2.0F, 3.0F};
-    body.angularVelocity = {4.0F, 5.0F, 6.0F};
-    body.addAngularImpulse({7.0F, 8.0F, 9.0F});
-    body.stop();
-    ExpectVec3Near(body.linearVelocity, 0.0F, 0.0F, 0.0F);
-    ExpectVec3Near(body.angularVelocity, 0.0F, 0.0F, 0.0F);
-    ExpectVec3Near(body.accumulatedAngularImpulse(), 0.0F, 0.0F, 0.0F);
+TEST(PhysicsCommandBuffer, ClearsVelocityOverridesAndTeleports) {
+    Engine::PhysicsCommandBuffer commands;
+    commands.linearVelocity = Engine::Vec3{1.0F, 2.0F, 3.0F};
+    commands.angularVelocity = Engine::Vec3{4.0F, 5.0F, 6.0F};
+    commands.teleportPosition = Engine::Vec3{7.0F, 8.0F, 9.0F};
+    commands.teleportRotation = Engine::Vec3{0.0F, 90.0F, 0.0F};
+    commands.clear();
+    EXPECT_FALSE(commands.linearVelocity.has_value());
+    EXPECT_FALSE(commands.angularVelocity.has_value());
+    EXPECT_FALSE(commands.teleportPosition.has_value());
+    EXPECT_FALSE(commands.teleportRotation.has_value());
 }
 
 TEST(ColliderComponent, DefaultsToBoxAndSupportsAllValueShapes) {

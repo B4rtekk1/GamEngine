@@ -2805,7 +2805,7 @@
             info.stage = stage;
             info.layout = layout;
             VkPipeline pipeline = VK_NULL_HANDLE;
-            if (vkCreateComputePipelines(device, VK_NULL_HANDLE, 1, &info, nullptr, &pipeline) != VK_SUCCESS) {
+            if (vkCreateComputePipelines(device, PipelineCache::get(device), 1, &info, nullptr, &pipeline) != VK_SUCCESS) {
                 throw std::runtime_error("Could not create Hi-Z compute pipeline");
             }
             return pipeline;

@@ -286,6 +286,7 @@ namespace {
 
 Engine::Entity drawEditorMenuBar(Engine::ScenePreset &scene, Engine::Renderer &renderer,
                                  Engine::Assets::Content &content, Engine::Project &project,
+                                 const std::filesystem::path &editorRoot,
                                  Editor::WindowsTitleBar &titleBar,
                                  bool &antialiasingChanged, bool &sceneLoaded, bool &sceneSaved,
                                  bool &sceneDeleted,
@@ -325,14 +326,7 @@ Engine::Entity drawEditorMenuBar(Engine::ScenePreset &scene, Engine::Renderer &r
         Editor::ConsolePanel::info("Saved scene: " + path.string());
     };
     const auto saveSceneAs = [&] {
-        if (const auto path = EditorSceneSession::chooseSaveScenePath()) {
-            try {
-                saveScene(*path);
-            } catch (const std::exception &error) {
-                sceneFileError = error.what();
-                Editor::ConsolePanel::error("Could not save scene: " + sceneFileError);
-            }
-        }
+        EditorSceneSession::requestFileDialog(EditorSceneSession::FileDialogAction::SaveScene);
     };
     const auto loadScene = [&](const std::filesystem::path &path) {
         std::optional<Engine::AntialiasingLevel> antialiasing;
@@ -361,37 +355,39 @@ Engine::Entity drawEditorMenuBar(Engine::ScenePreset &scene, Engine::Renderer &r
             Editor::ConsolePanel::error("Could not load scene: " + sceneFileError);
         }
     };
-    const auto createScene = [&] {
-        const auto path = EditorSceneSession::chooseSaveScenePath();
-        if (!path) return;
+    const auto createSceneFromPath = [&](const std::filesystem::path& path) {
         try {
-            if (!path->parent_path().empty()) {
-                std::filesystem::create_directories(path->parent_path());
+            if (!path.parent_path().empty()) {
+                std::filesystem::create_directories(path.parent_path());
             }
             Engine::ScenePreset emptyScene;
-            Engine::SceneSerializer::save(emptyScene, *path,
+            Engine::SceneSerializer::save(emptyScene, path,
                                           EditorSceneSession::antialiasingLevel(renderer));
             sceneLoaded = true;
-            Engine::SceneSerializer::load(scene, *path);
+            Engine::SceneSerializer::load(scene, path);
             resetHistoryRequested = true;
-            EditorSceneSession::markSceneSaved(*path);
+            EditorSceneSession::markSceneSaved(path);
             sceneSaved = true;
             sceneFileError.clear();
-            Editor::ConsolePanel::info("Created scene: " + path->string());
+            Editor::ConsolePanel::info("Created scene: " + path.string());
         } catch (const std::exception &error) {
             sceneFileError = error.what();
             Editor::ConsolePanel::error("Could not create scene: " + sceneFileError);
         }
     };
+    const auto createScene = [&] {
+        EditorSceneSession::requestFileDialog(EditorSceneSession::FileDialogAction::NewScene);
+    };
     const auto createProject = [&] {
         try {
             const std::filesystem::path root{newProjectLocation};
             Engine::Project createdProject = Engine::Project::create(root, newProjectName);
-            loadScene(createdProject.startupScene());
+            Editor::ensureProjectBrdfLut(createdProject.assetRoot(), editorRoot);
             content.clear();
             content.setAssetRoot(createdProject.assetRoot());
             project = std::move(createdProject);
-            EditorSceneSession::setProjectRoot(project.rootPath());
+            EditorSceneSession::setProjectRoot(project.rootPath(), project.assetRoot());
+            loadScene(project.startupScene());
             newProjectError.clear();
             Editor::ConsolePanel::info("Created project: " + project.name());
         } catch (const std::exception &error) {
@@ -399,6 +395,45 @@ Engine::Entity drawEditorMenuBar(Engine::ScenePreset &scene, Engine::Renderer &r
             Editor::ConsolePanel::error("Could not create project: " + newProjectError);
         }
     };
+
+    const auto loadProject = [&](const std::filesystem::path& manifestPath) {
+        try {
+            Engine::Project loadedProject = Engine::Project::load(manifestPath);
+            Editor::ensureProjectBrdfLut(loadedProject.assetRoot(), editorRoot);
+            content.clear();
+            content.setAssetRoot(loadedProject.assetRoot());
+            project = std::move(loadedProject);
+            EditorSceneSession::setProjectRoot(project.rootPath(), project.assetRoot());
+            if (std::filesystem::is_regular_file(project.startupScene())) {
+                loadScene(project.startupScene());
+            } else {
+                EditorSceneSession::clearSavedScene();
+                sceneDeleted = true;
+            }
+            Editor::ConsolePanel::info("Loaded project: " + project.name());
+        } catch (const std::exception &error) {
+            sceneFileError = error.what();
+            Editor::ConsolePanel::error("Could not load scene: " + sceneFileError);
+        }
+    };
+    if (const auto result = EditorSceneSession::pollFileDialog()) {
+        if (!result->error.empty()) {
+            sceneFileError = result->error;
+            Editor::ConsolePanel::error("File dialog failed: " + sceneFileError);
+        } else if (result->path && result->projectRoot == project.rootPath() && !playing) {
+            try {
+                switch (result->action) {
+                    case EditorSceneSession::FileDialogAction::SaveScene: saveScene(*result->path); break;
+                    case EditorSceneSession::FileDialogAction::NewScene: createSceneFromPath(*result->path); break;
+                    case EditorSceneSession::FileDialogAction::LoadScene: tryLoadScene(*result->path); break;
+                    case EditorSceneSession::FileDialogAction::LoadProject: loadProject(*result->path); break;
+                }
+            } catch (const std::exception& error) {
+                sceneFileError = error.what();
+                Editor::ConsolePanel::error("Could not complete file operation: " + sceneFileError);
+            }
+        }
+    }
 
     titleBar.clearHitRegions();
     const float titleHeight = static_cast<float>(titleBar.nativeHeight());
@@ -458,9 +493,7 @@ Engine::Entity drawEditorMenuBar(Engine::ScenePreset &scene, Engine::Renderer &r
             openDeleteScene = true;
         }
         if (ImGui::MenuItem("Open Scene...", "Ctrl+Alt+O")) {
-            if (const auto path = EditorSceneSession::chooseLoadScenePath()) {
-                tryLoadScene(*path);
-            }
+            EditorSceneSession::requestFileDialog(EditorSceneSession::FileDialogAction::LoadScene);
         }
         if (ImGui::BeginMenu("Project Scenes")) {
             const auto scenes = project.scenes();
@@ -477,25 +510,7 @@ Engine::Entity drawEditorMenuBar(Engine::ScenePreset &scene, Engine::Renderer &r
             ImGui::EndMenu();
         }
         if (ImGui::MenuItem("Load Project...", "Ctrl+O")) {
-            if (const auto manifestPath = EditorSceneSession::chooseLoadProjectPath()) {
-                try {
-                    Engine::Project loadedProject = Engine::Project::load(*manifestPath);
-                    content.clear();
-                    content.setAssetRoot(loadedProject.assetRoot());
-                    project = std::move(loadedProject);
-                    EditorSceneSession::setProjectRoot(project.rootPath());
-                    if (std::filesystem::is_regular_file(project.startupScene())) {
-                        loadScene(project.startupScene());
-                    } else {
-                        EditorSceneSession::clearSavedScene();
-                        sceneDeleted = true;
-                    }
-                    Editor::ConsolePanel::info("Loaded project: " + project.name());
-                } catch (const std::exception &error) {
-                    sceneFileError = error.what();
-                    Editor::ConsolePanel::error("Could not load scene: " + sceneFileError);
-                }
-            }
+            EditorSceneSession::requestFileDialog(EditorSceneSession::FileDialogAction::LoadProject);
         }
         ImGui::Separator();
         if (ImGui::MenuItem("Build Game", "", false, !project.manifestPath().empty())) {

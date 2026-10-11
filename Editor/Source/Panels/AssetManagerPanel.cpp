@@ -25,14 +25,9 @@
 #include <string>
 #include <vector>
 
-#ifdef _WIN32
-#ifndef NOMINMAX
-#define NOMINMAX
-#endif
-#include <windows.h>
-#include <commdlg.h>
-#include <shlobj.h>
-#endif
+#include <SDL3/SDL.h>
+#include <future>
+#include <memory>
 
 // NOLINTBEGIN(readability-magic-numbers)
 // NOLINTBEGIN(readability-identifier-length)
@@ -65,33 +60,53 @@ namespace {
         return value;
     }
 
-#ifdef _WIN32
-    std::optional<std::filesystem::path> chooseImportFile(const bool archiveOnly) {
-        std::array<wchar_t, 32768> path{};
-        OPENFILENAMEW dialog{};
-        dialog.lStructSize = sizeof(dialog);
-        dialog.lpstrFilter = archiveOnly
-                                 ? L"ZIP archive (*.zip)\0*.zip\0\0"
-                                 : L"All files (*.*)\0*.*\0\0";
-        dialog.lpstrFile = path.data();
-        dialog.nMaxFile = static_cast<DWORD>(path.size());
-        dialog.Flags = OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST | OFN_NOCHANGEDIR;
-        if (!GetOpenFileNameW(&dialog)) return std::nullopt;
-        return std::filesystem::path{path.data()};
+    struct ImportDialogState {
+        std::mutex mutex;
+        bool ready{};
+        std::vector<std::filesystem::path> sources;
+        std::string error;
+        std::filesystem::path destination;
+        std::filesystem::path assetRoot;
+    };
+
+    struct ImportResult {
+        std::filesystem::path assetRoot;
+        std::vector<std::string> imported;
+        std::string error;
+    };
+
+    void SDLCALL importDialogFinished(void* userdata, const char* const* files, int) {
+        // The dialog owns this reference until its callback, including on shutdown.
+        const std::unique_ptr<std::shared_ptr<ImportDialogState>> owner{
+            static_cast<std::shared_ptr<ImportDialogState>*>(userdata)};
+        const auto& state = *owner;
+        std::lock_guard lock(state->mutex);
+        try {
+            if (!files) state->error = SDL_GetError();
+            else for (auto file = files; *file; ++file) {
+                const std::string_view utf8{*file};
+                state->sources.emplace_back(std::u8string{utf8.begin(), utf8.end()});
+            }
+        } catch (const std::exception& exception) {
+            state->error = exception.what();
+        }
+        state->ready = true;
     }
 
-    std::optional<std::filesystem::path> chooseImportFolder() {
-        BROWSEINFOW dialog{};
-        dialog.lpszTitle = L"Choose asset folder to import";
-        dialog.ulFlags = BIF_RETURNONLYFSDIRS | BIF_NEWDIALOGSTYLE;
-        PIDLIST_ABSOLUTE item = SHBrowseForFolderW(&dialog);
-        if (item == nullptr) return std::nullopt;
-        std::array<wchar_t, MAX_PATH> path{};
-        const bool resolved = SHGetPathFromIDListW(item, path.data()) != FALSE;
-        CoTaskMemFree(item);
-        return resolved ? std::optional<std::filesystem::path>{std::filesystem::path{path.data()}} : std::nullopt;
+    void showImportDialog(const std::shared_ptr<ImportDialogState>& state,
+                          const bool folder, const bool archiveOnly) {
+        static constexpr SDL_DialogFileFilter archiveFilter{"ZIP archives", "zip;ZIP"};
+        static constexpr SDL_DialogFileFilter allFilesFilter{"All files", "*"};
+        auto* callbackState = new std::shared_ptr<ImportDialogState>{state};
+        // The focused window belongs to this Editor; SDL supports portal dialogs on Wayland.
+        SDL_Window* window = SDL_GetKeyboardFocus();
+        if (folder) {
+            SDL_ShowOpenFolderDialog(importDialogFinished, callbackState, window, nullptr, true);
+        } else {
+            SDL_ShowOpenFileDialog(importDialogFinished, callbackState, window,
+                                  archiveOnly ? &archiveFilter : &allFilesFilter, 1, nullptr, true);
+        }
     }
-#endif
 
     bool is_model(const std::filesystem::path &path) {
         const auto ext = lower(path.extension().string());
@@ -409,6 +424,8 @@ Engine::Entity AssetManagerPanel::draw(Engine::ScenePreset &scene, Engine::Asset
     static bool showInspector = true;
     static std::filesystem::path deleteCandidate;
     static TextureCookJob cookJob;
+    static std::shared_ptr<ImportDialogState> importDialog;
+    static std::optional<std::future<ImportResult>> importJob;
     bool openDeletePopup = false;
     Engine::Entity created = Engine::NullEntity;
 
@@ -428,6 +445,52 @@ Engine::Entity AssetManagerPanel::draw(Engine::ScenePreset &scene, Engine::Asset
         if (!selectedFolder.empty() && std::ranges::find(catalog.folders, selectedFolder) == catalog.folders.end())
             selectedFolder.clear();
     };
+    if (importDialog) {
+        std::lock_guard lock(importDialog->mutex);
+        if (importDialog->ready) {
+            if (!importDialog->error.empty()) {
+                error = importDialog->error;
+                Editor::ConsolePanel::error("Could not open import dialog: " + error);
+            } else if (!importDialog->sources.empty()) {
+                const auto state = importDialog;
+                importJob.emplace(std::async(std::launch::async, [state] {
+                    ImportResult result{.assetRoot = state->assetRoot};
+                    for (const auto& source : state->sources) {
+                        std::string failure;
+                        if (Editor::AssetImporter::import(source, state->destination, failure))
+                            result.imported.push_back(source.filename().string());
+                        else {
+                            if (!result.error.empty()) result.error += "\n";
+                            result.error += source.filename().string() + ": " + failure;
+                        }
+                    }
+                    return result;
+                }));
+            }
+        }
+    }
+    // Release the dialog state after dropping its lock; a callback may have
+    // been delivered synchronously by the platform.
+    if (importDialog) {
+        bool ready;
+        { std::lock_guard lock(importDialog->mutex); ready = importDialog->ready; }
+        if (ready) importDialog.reset();
+    }
+    if (importJob && importJob->wait_for(std::chrono::seconds{0}) == std::future_status::ready) {
+        try {
+            const auto result = importJob->get();
+            if (result.assetRoot == root) refresh();
+            for (const auto& name : result.imported) Editor::ConsolePanel::info("Imported asset: " + name);
+            if (!result.error.empty()) {
+                error = result.error;
+                Editor::ConsolePanel::error("Could not import asset: " + error);
+            } else error.clear();
+        } catch (const std::exception& exception) {
+            error = exception.what();
+            Editor::ConsolePanel::error("Could not import asset: " + error);
+        }
+        importJob.reset();
+    }
     const auto instantiate = [&] {
         if (selected.empty() || !is_model(selected))
             return;
@@ -579,29 +642,26 @@ Engine::Entity AssetManagerPanel::draw(Engine::ScenePreset &scene, Engine::Asset
                                           std::memory_order_release);
     }
     ImGui::SameLine();
-    ImGui::BeginDisabled(!projectIsOpen);
+    ImGui::BeginDisabled(!projectIsOpen || importDialog || importJob);
     if (ImGui::Button("Import...##asset-import"))
         ImGui::OpenPopup("##asset-import-menu");
     if (ImGui::BeginPopup("##asset-import-menu")) {
-#ifdef _WIN32
-        const auto importSelected = [&](const std::optional<std::filesystem::path> &source) {
-            if (!source) return;
-            if (Editor::AssetImporter::import(*source, root / selectedFolder, error)) {
-                refresh();
-                Editor::ConsolePanel::info("Imported asset: " + source->filename().string());
-            } else {
-                Editor::ConsolePanel::error("Could not import asset: " + error);
-            }
+        const auto requestImport = [&](const bool folder, const bool archiveOnly) {
+            importDialog = std::make_shared<ImportDialogState>();
+            importDialog->destination = root / selectedFolder;
+            importDialog->assetRoot = root;
+            showImportDialog(importDialog, folder, archiveOnly);
         };
-        if (ImGui::MenuItem("File...")) importSelected(chooseImportFile(false));
-        if (ImGui::MenuItem("Folder...")) importSelected(chooseImportFolder());
-        if (ImGui::MenuItem("ZIP archive...")) importSelected(chooseImportFile(true));
-#else
-        ImGui::TextDisabled("Asset import dialog is available in the Windows editor.");
-#endif
+        if (ImGui::MenuItem("File...")) requestImport(false, false);
+        if (ImGui::MenuItem("Folder...")) requestImport(true, false);
+        if (ImGui::MenuItem("ZIP archive...")) requestImport(false, true);
         ImGui::EndPopup();
     }
     ImGui::EndDisabled();
+    if (importDialog || importJob) {
+        ImGui::SameLine();
+        ImGui::TextDisabled(importDialog ? "Selecting assets..." : "Importing assets...");
+    }
     ImGui::SameLine();
     ImGui::BeginDisabled(!projectIsOpen);
     if (ImGui::Button("New Shader Graph")) createShaderGraph();

@@ -30,6 +30,7 @@
         VkSurfaceKHR surface{};
 
         VulkanDevice vulkanDevice;
+        PipelineCache pipelineCache;
         VkDevice device = VK_NULL_HANDLE;
 
         Swapchain swapchain;

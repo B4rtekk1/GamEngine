@@ -53,6 +53,7 @@ private:
     std::vector<HitRegion> hitRegions_;
 #endif
     void* windowHandle_ = nullptr;
+    SDL_Window* window_ = nullptr;
     int titleBarHeight_ = 0;
 };
 

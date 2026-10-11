@@ -1,3 +1,5 @@
+#include "Platform/DefaultFonts.h"
+#include "Platform/RuntimePaths.h"
 #include "imgui.h"
 #include "imgui_internal.h"
 #include "imgui_impl_sdl3.h"
@@ -50,6 +52,7 @@
 #include "Engine/Renderer/ShaderGraph/ShaderNodeFactory.h"
 #include "Engine/Renderer/ShaderGraph/ShaderGraphSerializer.h"
 #include "Editor/App/EditorEntityHelpers.h"
+#include "Editor/App/ProjectAssets.h"
 #include "Editor/EditorState.h"
 #include "Editor/EditorPreferences.h"
 #include "Editor/EditorConstants.h"
@@ -194,12 +197,13 @@ namespace {
     }
 
     [[nodiscard]] bool configureScriptBuild(const std::filesystem::path &editorRoot,
-                                            const std::filesystem::path &projectRoot) {
+                                            const std::filesystem::path &projectRoot,
+                                            const std::filesystem::path &assetRoot) {
         const auto source = editorRoot / "SDK" / "GameScripts";
         const auto sdk = editorRoot / "SDK";
         const auto build = projectRoot / "Library" / "ScriptBuild";
         if (!std::filesystem::is_regular_file(source / "CMakeLists.txt") ||
-            !std::filesystem::is_regular_file(sdk / "Lib" / "Engine.lib")) return false;
+            !std::filesystem::is_regular_file(sdk / "Lib" / Platform::EngineLinkLibraryFilename)) return false;
         std::error_code error;
         std::filesystem::create_directories(build, error);
         if (error) return false;
@@ -211,30 +215,31 @@ namespace {
             const std::string contents{std::istreambuf_iterator<char>{verification}, {}};
             // Earlier SDK revisions wrote native Windows paths into this CMake
             // script. CMake then interprets \U in a user path as an escape.
-            if (contents.find('\\') == std::string::npos) return true;
-            std::filesystem::remove_all(build, error);
-            if (error) return false;
-            std::filesystem::create_directories(build, error);
-            if (error) return false;
+            if (contents.find('\\') != std::string::npos) {
+                std::filesystem::remove_all(build, error);
+                if (error) return false;
+                std::filesystem::create_directories(build, error);
+                if (error) return false;
+            }
         }
         return runCmake({"-S", source.string(), "-B", build.string(),
                          "-DGE_PROJECT_ROOT=" + projectRoot.string(),
+                         "-DGE_ASSET_ROOT=" + assetRoot.string(),
                          "-DGE_SDK_ROOT=" + sdk.string(), "-DCMAKE_BUILD_TYPE=Release"});
     }
 
-    std::filesystem::path findDefaultUiFont() {
-        constexpr std::array<const char *, 5> candidates{
-            "C:/Windows/Fonts/segoeui.ttf", "C:/Windows/Fonts/arial.ttf",
-            "C:/Windows/Fonts/consola.ttf", "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
-            "/usr/share/fonts/truetype/liberation2/LiberationSans-Regular.ttf",
+    std::filesystem::path findDefaultTerminalFont() {
+        constexpr std::array<const char *, 4> candidates{
+            "C:/Windows/Fonts/consola.ttf",
+            "/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf",
+            "/usr/share/fonts/truetype/liberation2/LiberationMono-Regular.ttf",
+            "/usr/share/fonts/truetype/liberation/LiberationMono-Regular.ttf",
         };
         const auto font = std::ranges::find_if(candidates, [](const char *path) {
-            return std::filesystem::is_regular_file(path);
+            std::error_code error;
+            return std::filesystem::is_regular_file(path, error);
         });
-        if (font == candidates.end()) {
-            throw std::runtime_error("No default TrueType font found for ImGui");
-        }
-        return *font;
+        return font == candidates.end() ? std::filesystem::path{} : *font;
     }
 }
 class EditorUiBackend final : public Engine::EditorUiBackend {
@@ -343,7 +348,8 @@ int main(int argc, char** argv) {
                                                       return createOrLoadFirstRunProject();
                                                   }
                                               }();
-        EditorSceneSession::setProjectRoot(project.rootPath());
+        Editor::ensureProjectBrdfLut(project.assetRoot(), editorRoot);
+        EditorSceneSession::setProjectRoot(project.rootPath(), project.assetRoot());
         if (!SDL_Init(SDL_INIT_VIDEO | SDL_INIT_EVENTS)) {
             throw std::runtime_error(SDL_GetError());
         }
@@ -369,11 +375,19 @@ int main(int argc, char** argv) {
         const bool restorePersistedLayout = std::filesystem::is_regular_file(imguiIniPath);
         imguiIo.IniFilename = imguiIniPath.c_str();
         imguiIo.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard | ImGuiConfigFlags_DockingEnable;
-        const std::filesystem::path uiFont = findDefaultUiFont();
-        if (imguiIo.Fonts->AddFontFromFileTTF(uiFont.string().c_str(), 16.0F) == nullptr) {
+        const std::filesystem::path uiFont = Platform::defaultUiFont();
+        ImFont* defaultFont = uiFont.empty()
+            ? imguiIo.Fonts->AddFontDefault()
+            : imguiIo.Fonts->AddFontFromFileTTF(uiFont.string().c_str(), 16.0F);
+        if (defaultFont == nullptr) {
             throw std::runtime_error("Could not load ImGui font: " + uiFont.string());
         }
-        ImFont* terminalFont = imguiIo.Fonts->AddFontFromFileTTF("C:/Windows/Fonts/consola.ttf", 16.0F);
+        const std::filesystem::path terminalFontPath = findDefaultTerminalFont();
+        ImFontConfig terminalFontConfig;
+        terminalFontConfig.SizePixels = 16.0F;
+        ImFont* terminalFont = terminalFontPath.empty()
+            ? imguiIo.Fonts->AddFontDefault(&terminalFontConfig)
+            : imguiIo.Fonts->AddFontFromFileTTF(terminalFontPath.string().c_str(), 16.0F);
         EditorStyle::apply();
         auto shaderGraphPanel = std::make_unique<Editor::ShaderGraphPanel>();
         Engine::ShaderGraphAsset shaderGraph{.name = "Untitled Shader Graph"};
@@ -390,8 +404,9 @@ int main(int argc, char** argv) {
         std::optional<Editor::ShaderHotReload> shaderHotReload;
         std::future<Editor::GameBuildResult> gameBuild;
         bool gameBuildRunning = false;
+        std::filesystem::path scriptProjectRoot = project.rootPath();
         const std::filesystem::path scriptBuildDirectory = project.rootPath() / "Library" / "ScriptBuild";
-        const std::filesystem::path modulePath = project.rootPath() / "Library" / "ScriptModules" / "GameScripts.dll";
+        const std::filesystem::path modulePath = project.rootPath() / "Library" / "ScriptModules" / Platform::ScriptModuleFilename;
         if (!scriptModules.loadInitialModule(modulePath, Engine::ScriptModuleLoadMode::HotReload)) {
             Editor::ConsolePanel::info("No compiled game scripts module yet; it will be built for this project.");
         }
@@ -405,13 +420,13 @@ int main(int argc, char** argv) {
             "slangc"
 #endif
         );
-        if (configureScriptBuild(editorRoot, project.rootPath())) {
-            scriptHotReload.emplace(project.rootPath() / "Assets" / "Scripts", modulePath,
+        if (configureScriptBuild(editorRoot, project.rootPath(), project.assetRoot())) {
+            scriptHotReload.emplace(project.assetRoot() / "Scripts", modulePath,
                                     scriptBuildDirectory, "Release");
             scriptHotReload->requestBuild();
             Editor::ConsolePanel::info("C++ script hot reload enabled.");
         } else {
-            Editor::ConsolePanel::warning("C++ script toolchain is unavailable. Install CMake and MSVC Build Tools, then reopen the project.");
+            Editor::ConsolePanel::warning("C++ script toolchain is unavailable. Install CMake and a C++23 compiler (MSVC on Windows, GCC or Clang on Linux), then reopen the project.");
         }
         if (!portableEditor) {
             if (const auto buildDirectory = findDevelopmentBuildDirectory(editorRoot)) {
@@ -667,7 +682,7 @@ int main(int argc, char** argv) {
             bool duplicateRequested = false;
             bool resetHistoryRequested = false;
             bool gameBuildRequested = false;
-            if (const Engine::Entity created = drawEditorMenuBar(scene, renderer, content, project, titleBar,
+            if (const Engine::Entity created = drawEditorMenuBar(scene, renderer, content, project, editorRoot, titleBar,
                                                                  antialiasingChanged, sceneLoaded, sceneSaved,
                                                                  sceneDeleted,
                                                                  playing, paused, playToggleRequested,
@@ -691,7 +706,8 @@ int main(int argc, char** argv) {
                     if (activeScenePath.empty()) throw std::runtime_error("Save the startup scene before building the game.");
                     Engine::SceneSerializer::save(scene, activeScenePath, renderer.antialiasingLevel());
                     EditorSceneSession::markSceneSaved(activeScenePath);
-                    Editor::ConsolePanel::info("Building Windows x64 Release game in background...");
+                    Editor::ConsolePanel::info(std::string{"Building "} + Platform::BuildPlatform +
+                                               " x64 Release game in background...");
                     const Engine::Project buildProject = project;
                     const std::filesystem::path buildEditorRoot = editorRoot;
                     gameBuildRunning = true;
@@ -1079,8 +1095,26 @@ int main(int argc, char** argv) {
                     scriptSystem.update(scene, static_cast<float>(Engine::Time::deltaTime()));
                 }
             }
+            if (scriptProjectRoot != project.rootPath()) {
+                renderer.setProjectRoot(project.rootPath());
+                scriptModules.unload(scene);
+                if (configureScriptBuild(editorRoot, project.rootPath(), project.assetRoot())) {
+                    if (!scriptHotReload) {
+                        scriptHotReload.emplace(project.assetRoot() / "Scripts",
+                            project.rootPath() / "Library/ScriptModules" / Platform::ScriptModuleFilename,
+                            project.rootPath() / "Library/ScriptBuild", "Release");
+                        scriptHotReload->requestBuild();
+                    }
+                } else {
+                    scriptHotReload.reset();
+                    Editor::ConsolePanel::warning("Could not configure game scripts for the new project.");
+                }
+                scriptProjectRoot = project.rootPath();
+            }
             if (scriptHotReload) {
-                scriptHotReload->setProject(project.rootPath() / "Assets" / "Scripts");
+                scriptHotReload->setProject(project.assetRoot() / "Scripts",
+                    project.rootPath() / "Library/ScriptModules" / Platform::ScriptModuleFilename,
+                    project.rootPath() / "Library/ScriptBuild");
                 scriptHotReload->poll(
                     scriptModules, scene,
                     [](const std::string &message) { Editor::ConsolePanel::info(message); },

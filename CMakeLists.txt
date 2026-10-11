@@ -2,6 +2,11 @@ cmake_minimum_required(VERSION 4.4)
 project(GamEngine LANGUAGES CXX)
 
 include(cmake/CompilerOptions.cmake)
+if(WIN32)
+    set(GAMEENGINE_RUNTIME_DIRECTORY "Runtime/Win64/Release")
+else()
+    set(GAMEENGINE_RUNTIME_DIRECTORY "Runtime/Linux64/Release")
+endif()
 include(cmake/Dependencies.cmake)
 
 # FidelityFX owns its Vulkan shader permutations independently of GamEngine's Slang shaders.
@@ -52,7 +57,10 @@ endif()
 # Slang is used to cook built-in shaders and, in a development build, is the
 # fallback compiler for Shader Graphs.  Portable Editor packages bundle this
 # exact tool instead of relying on PATH or a Vulkan SDK installation.
-find_program(GAMEENGINE_SLANGC NAMES slangc REQUIRED)
+find_program(GAMEENGINE_SLANGC
+    NAMES slangc
+    HINTS "$ENV{VULKAN_SDK}/Bin" "$ENV{VULKAN_SDK}/bin"
+    REQUIRED)
 
 add_subdirectory(Engine)
 add_executable(GenerateBRDFLut Tools/GenerateBRDFLut/main.cpp Engine/Source/Renderer/Lighting/EnvironmentBaker.cpp)
@@ -69,11 +77,11 @@ add_custom_target(BrdfLutAsset
 include(cmake/Shaders.cmake)
 gameengine_add_engine_shaders()
 
-if(GE_BUILD_EDITOR)
-    add_subdirectory(Editor)
-endif()
 if(GE_BUILD_PLAYER)
     add_subdirectory(Player)
+endif()
+if(GE_BUILD_EDITOR)
+    add_subdirectory(Editor)
 endif()
 if(GE_BUILD_TESTS)
     enable_testing()

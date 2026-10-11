@@ -18,7 +18,12 @@ if(WIN32 AND CMAKE_SIZEOF_VOID_P EQUAL 8)
     set(PX_OUTPUT_ARCH "x64" CACHE INTERNAL "PhysX output architecture" FORCE)
 endif()
 FetchContent_Declare(NVIDIA_PhysX GIT_REPOSITORY https://github.com/NVIDIA-Omniverse/PhysX.git GIT_TAG 4f2103c GIT_SHALLOW TRUE SOURCE_SUBDIR physx)
+# PhysX's Linux build uses C++14; do not override it with the engine's C++23.
+set(_ge_cxx_standard_before_physx "${CMAKE_CXX_STANDARD}")
+set(CMAKE_CXX_STANDARD 14)
 FetchContent_MakeAvailable(NVIDIA_PhysX)
+set(CMAKE_CXX_STANDARD "${_ge_cxx_standard_before_physx}")
+unset(_ge_cxx_standard_before_physx)
 if(MSVC)
     function(gameengine_suppress_physx_c5054 directory)
         get_property(physx_targets DIRECTORY "${directory}" PROPERTY BUILDSYSTEM_TARGETS)
@@ -53,7 +58,16 @@ add_library(GameEngineImNodes STATIC ${imnodes_SOURCE_DIR}/imnodes.cpp)
 target_include_directories(GameEngineImNodes PUBLIC ${imnodes_SOURCE_DIR})
 target_link_libraries(GameEngineImNodes PUBLIC DearImGui)
 find_path(GLM_INCLUDE_DIR NAMES glm/glm.hpp HINTS "$ENV{VULKAN_SDK}/Include" REQUIRED)
-find_path(VMA_INCLUDE_DIR NAMES vk_mem_alloc.h HINTS "$ENV{VULKAN_SDK}/Include/vma" REQUIRED)
+# Prefer an installed VMA, then fall back to the header bundled with FidelityFX.
+find_path(VMA_INCLUDE_DIR
+    NAMES vk_mem_alloc.h
+    HINTS
+        "$ENV{VULKAN_SDK}/Include/vma"
+        "$ENV{VULKAN_SDK}/Include"
+        "$ENV{VULKAN_SDK}/include/vma"
+        "$ENV{VULKAN_SDK}/include"
+    PATHS "${PROJECT_SOURCE_DIR}/ThridParty/FidelityFX-SDK/framework/cauldron/framework/libs/memoryallocator"
+    REQUIRED)
 
 # The cooker uses only the portable block codec. Do not add Compressonator's
 # top-level project: it also configures GUI/CLI tools and their dependencies.
@@ -66,6 +80,14 @@ FetchContent_Declare(CompressonatorCore
     GIT_SHALLOW TRUE
     SOURCE_SUBDIR cmp_core)
 FetchContent_MakeAvailable(CompressonatorCore)
+if(UNIX AND CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+    # The AVX-512 TU uses AVX512F intrinsics. New GCC releases removed knl.
+    get_target_property(_ge_avx512_options CMP_Core_AVX512 COMPILE_OPTIONS)
+    list(REMOVE_ITEM _ge_avx512_options "-march=knl")
+    set_property(TARGET CMP_Core_AVX512 PROPERTY COMPILE_OPTIONS "${_ge_avx512_options}")
+    target_compile_options(CMP_Core_AVX512 PRIVATE -mavx512f)
+    unset(_ge_avx512_options)
+endif()
 FetchContent_Declare(TinyEXR
     GIT_REPOSITORY https://github.com/syoyo/tinyexr.git
     GIT_TAG v1.0.7

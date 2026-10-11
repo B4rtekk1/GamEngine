@@ -30,6 +30,8 @@ namespace Engine {
 
         void recreate();
 
+        void logPresentationState() const;
+
         void destroy() noexcept;
 
         [[nodiscard]] VkSwapchainKHR handle() const noexcept {
@@ -64,6 +66,8 @@ namespace Engine {
         VkSwapchainKHR swapchain_ = VK_NULL_HANDLE;
         VkFormat imageFormat_ = VK_FORMAT_UNDEFINED;
         VkExtent2D extent_{};
+        VkPresentModeKHR presentMode_ = VK_PRESENT_MODE_FIFO_KHR;
+        std::vector<VkPresentModeKHR> supportedPresentModes_;
         std::vector<VkImage> images_;
         std::vector<VkImageView> imageViews_;
 

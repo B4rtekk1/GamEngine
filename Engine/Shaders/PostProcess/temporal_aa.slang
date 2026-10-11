@@ -1,3 +1,4 @@
+// Compute resolve operates on single-mip render targets; explicit LOD avoids compute derivatives.
 [[vk::binding(0, 0)]] Sampler2D currentFrame;
 [[vk::binding(1, 0)]] Sampler2D historyFrame;
 [[vk::binding(2, 0)]] Sampler2D velocityFrame;
@@ -36,15 +37,15 @@ float3 sampleHistoryCatmullRom(float2 uv, float2 resolution) {
     const float2 uv12 = (texPos1 + w2 / w12) / resolution;
     const float2 uv3 = (texPos1 + 2.0) / resolution;
     float3 cubic = 0.0;
-    cubic += historyFrame.Sample(float2(uv0.x, uv0.y)).rgb * w0.x * w0.y;
-    cubic += historyFrame.Sample(float2(uv12.x, uv0.y)).rgb * w12.x * w0.y;
-    cubic += historyFrame.Sample(float2(uv3.x, uv0.y)).rgb * w3.x * w0.y;
-    cubic += historyFrame.Sample(float2(uv0.x, uv12.y)).rgb * w0.x * w12.y;
-    cubic += historyFrame.Sample(float2(uv12.x, uv12.y)).rgb * w12.x * w12.y;
-    cubic += historyFrame.Sample(float2(uv3.x, uv12.y)).rgb * w3.x * w12.y;
-    cubic += historyFrame.Sample(float2(uv0.x, uv3.y)).rgb * w0.x * w3.y;
-    cubic += historyFrame.Sample(float2(uv12.x, uv3.y)).rgb * w12.x * w3.y;
-    cubic += historyFrame.Sample(float2(uv3.x, uv3.y)).rgb * w3.x * w3.y;
+    cubic += historyFrame.SampleLevel(float2(uv0.x, uv0.y), 0.0).rgb * w0.x * w0.y;
+    cubic += historyFrame.SampleLevel(float2(uv12.x, uv0.y), 0.0).rgb * w12.x * w0.y;
+    cubic += historyFrame.SampleLevel(float2(uv3.x, uv0.y), 0.0).rgb * w3.x * w0.y;
+    cubic += historyFrame.SampleLevel(float2(uv0.x, uv12.y), 0.0).rgb * w0.x * w12.y;
+    cubic += historyFrame.SampleLevel(float2(uv12.x, uv12.y), 0.0).rgb * w12.x * w12.y;
+    cubic += historyFrame.SampleLevel(float2(uv3.x, uv12.y), 0.0).rgb * w3.x * w12.y;
+    cubic += historyFrame.SampleLevel(float2(uv0.x, uv3.y), 0.0).rgb * w0.x * w3.y;
+    cubic += historyFrame.SampleLevel(float2(uv12.x, uv3.y), 0.0).rgb * w12.x * w3.y;
+    cubic += historyFrame.SampleLevel(float2(uv3.x, uv3.y), 0.0).rgb * w3.x * w3.y;
     return max(cubic, 0.0);
 }
 
@@ -80,30 +81,30 @@ void main(uint3 groupId : SV_GroupID, uint3 threadId : SV_GroupThreadID,
                                          settings.previousJitterY) * 0.5;
     const float2 jitterDelta = currentJitter - previousJitter;
     const float2 currentUv = clamp(outputUv - currentJitter, texel * 0.5, 1.0 - texel * 0.5);
-    const float3 currentTm = reinhard(max(currentFrame.Sample(currentUv).rgb, 0.0));
-    const uint waterQuality = settings.padding > 0.5 ? asuint(waterMetaFrame.Sample(currentUv).y) : 0u;
+    const float3 currentTm = reinhard(max(currentFrame.SampleLevel(currentUv, 0.0).rgb, 0.0));
+    const uint waterQuality = settings.padding > 0.5 ? asuint(waterMetaFrame.SampleLevel(currentUv, 0.0).y) : 0u;
     const bool waterPixel = (waterQuality & 0x80000000u) != 0;
-    const float currentDepth = waterPixel ? waterSurfaceFrame.Sample(currentUv).z
-                                          : currentDepthFrame.Sample(currentUv).r;
+    const float currentDepth = waterPixel ? waterSurfaceFrame.SampleLevel(currentUv, 0.0).z
+                                          : currentDepthFrame.SampleLevel(currentUv, 0.0).r;
     const float reactive = (waterQuality & 0x40000000u) != 0 ? 1.0 : 0.0;
     // At a silhouette, bilinear velocity may contain the background's motion
     // even though the current pixel belongs to the foreground.  Vulkan's
     // depth convention is near=0, so select the velocity at the nearest depth
     // in a compact 3x3 footprint before reprojection.
     float nearestDepth = currentDepth;
-    float2 velocitySample = waterPixel ? waterVelocityFrame.Sample(currentUv).xy
-                                       : velocityFrame.Sample(currentUv).xy;
+    float2 velocitySample = waterPixel ? waterVelocityFrame.SampleLevel(currentUv, 0.0).xy
+                                       : velocityFrame.SampleLevel(currentUv, 0.0).xy;
     [unroll] for (int y = -1; y <= 1; ++y) {
         [unroll] for (int x = -1; x <= 1; ++x) {
             const float2 sampleUv = clamp(currentUv + float2(x, y) * texel, texel * 0.5, 1.0 - texel * 0.5);
-            const uint sampleWaterQuality = settings.padding > 0.5 ? asuint(waterMetaFrame.Sample(sampleUv).y) : 0u;
+            const uint sampleWaterQuality = settings.padding > 0.5 ? asuint(waterMetaFrame.SampleLevel(sampleUv, 0.0).y) : 0u;
             const bool sampleWater = (sampleWaterQuality & 0x80000000u) != 0;
-            const float sampleDepth = sampleWater ? waterSurfaceFrame.Sample(sampleUv).z
-                                                  : currentDepthFrame.Sample(sampleUv).r;
+            const float sampleDepth = sampleWater ? waterSurfaceFrame.SampleLevel(sampleUv, 0.0).z
+                                                  : currentDepthFrame.SampleLevel(sampleUv, 0.0).r;
             if (sampleDepth < nearestDepth) {
                 nearestDepth = sampleDepth;
-                velocitySample = sampleWater ? waterVelocityFrame.Sample(sampleUv).xy
-                                             : velocityFrame.Sample(sampleUv).xy;
+                velocitySample = sampleWater ? waterVelocityFrame.SampleLevel(sampleUv, 0.0).xy
+                                             : velocityFrame.SampleLevel(sampleUv, 0.0).xy;
             }
         }
     }
@@ -118,7 +119,7 @@ void main(uint3 groupId : SV_GroupID, uint3 threadId : SV_GroupThreadID,
     // Keep history depth linear before quantizing it to R16F. Device depth
     // loses too much precision near the far plane in a half-float image.
     const float currentViewDepth = viewDepth(currentDepth);
-    const float historyViewDepth = historyDepthFrame.Sample(historyUv).r;
+    const float historyViewDepth = historyDepthFrame.SampleLevel(historyUv, 0.0).r;
     const bool depthMatches = abs(currentViewDepth - historyViewDepth) <=
         0.02 * max(currentViewDepth, historyViewDepth);
 
@@ -129,7 +130,7 @@ void main(uint3 groupId : SV_GroupID, uint3 threadId : SV_GroupThreadID,
     [unroll] for (int y = -1; y <= 1; ++y) {
         [unroll] for (int x = -1; x <= 1; ++x) {
             const float2 sampleUv = clamp(currentUv + float2(x, y) * texel, texel * 0.5, 1.0 - texel * 0.5);
-            const float3 sample = reinhard(max(currentFrame.Sample(sampleUv).rgb, 0.0));
+            const float3 sample = reinhard(max(currentFrame.SampleLevel(sampleUv, 0.0).rgb, 0.0));
             const float weight = exp(-3.0 * float(x * x + y * y) / 4.0);
             mean += sample * weight;
             meanSquared += sample * sample * weight;

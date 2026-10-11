@@ -27,7 +27,10 @@ namespace Engine {
 #ifdef _WIN32
         handle_ = reinterpret_cast<void *>(LoadLibraryW(path.c_str()));
 #else
-        handle_ = dlopen(path.c_str(), RTLD_NOW | RTLD_LOCAL);
+        // A bare filename makes dlopen search system library directories rather
+        // than the current directory, unlike filesystem operations on the path.
+        const auto absolutePath = std::filesystem::absolute(path);
+        handle_ = dlopen(absolutePath.c_str(), RTLD_NOW | RTLD_LOCAL);
 #endif
         return handle_ != nullptr;
     }

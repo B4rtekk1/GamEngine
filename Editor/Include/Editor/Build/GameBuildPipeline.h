@@ -23,7 +23,7 @@ namespace Editor {
         std::vector<std::string> errors;
     };
 
-    /** Assembles a self-contained Windows game from the Editor runtime template. */
+    /** Assembles a game for the host platform from the Editor runtime template. */
     class GameBuildPipeline final {
     public:
         explicit GameBuildPipeline(std::filesystem::path editorRoot);

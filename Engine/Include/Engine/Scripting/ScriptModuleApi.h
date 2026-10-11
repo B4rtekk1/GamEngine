@@ -13,7 +13,7 @@
 #    define GAME_SCRIPT_API __declspec(dllimport)
 #  endif
 #else
-#  define GAME_SCRIPT_API
+#  define GAME_SCRIPT_API __attribute__((visibility("default")))
 #endif
 
 namespace Engine {

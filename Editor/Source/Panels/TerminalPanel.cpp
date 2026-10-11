@@ -173,7 +173,11 @@ void TerminalPanel::draw(bool& isOpen) {
     ImGui::Separator();
     if (startFailed_) {
         ImGui::TextColored({0.95F, 0.35F, 0.35F, 1.0F}, "Could not start %s.", shell_.string().c_str());
+#ifdef _WIN32
         ImGui::TextDisabled("Windows 10 version 1809 or newer is required for ConPTY.");
+#else
+        ImGui::TextDisabled("Check that the shell is executable, the project directory exists, and /dev/pts is available.");
+#endif
     } else if (session_) {
         buffer_.feed(session_->readAvailable());
         ImGui::PushFont(terminalFont_ != nullptr ? terminalFont_ : ImGui::GetFont());

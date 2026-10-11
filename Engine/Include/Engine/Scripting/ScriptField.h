@@ -77,6 +77,7 @@ namespace Engine {
     template<typename T>
     constexpr ScriptFieldType scriptFieldType() {
         static_assert(sizeof(T) == 0, "Unsupported reflected script field type");
+        return {};
     }
 #define ENGINE_SCRIPT_FIELD_TYPE(type, value) \
     template<> constexpr ScriptFieldType scriptFieldType<type>() { return ScriptFieldType::value; }

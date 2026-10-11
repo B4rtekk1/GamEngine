@@ -1,3 +1,4 @@
+#include "Engine/Renderer/Vulkan/PipelineCache.h"
 #include "Engine/Renderer/Passes/GtaoPass.h"
 
 #include "Engine/Renderer/shader_loader.h"
@@ -95,7 +96,7 @@ namespace Engine {
             info.stage = stage;
             info.layout = layout;
             VkPipeline pipeline{};
-            if (vkCreateComputePipelines(device, VK_NULL_HANDLE, 1, &info, nullptr, &pipeline) != VK_SUCCESS)
+            if (vkCreateComputePipelines(device, PipelineCache::get(device), 1, &info, nullptr, &pipeline) != VK_SUCCESS)
                 throw std::runtime_error("Could not create GTAO compute pipeline");
             return pipeline;
         }

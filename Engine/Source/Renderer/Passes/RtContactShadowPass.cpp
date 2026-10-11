@@ -1,3 +1,4 @@
+#include "Engine/Renderer/Vulkan/PipelineCache.h"
 #include "Engine/Renderer/Passes/RtContactShadowPass.h"
 
 #include "Engine/Renderer/shader_loader.h"
@@ -81,7 +82,7 @@ void RtContactShadowPass::create(const VkPhysicalDevice physical, const VkDevice
         pipelineInfo.stage = {VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO, nullptr, 0,
                               VK_SHADER_STAGE_COMPUTE_BIT, shader.get(), "main", nullptr};
         pipelineInfo.layout = pipelineLayout_;
-        if (vkCreateComputePipelines(device_, VK_NULL_HANDLE, 1, &pipelineInfo, nullptr, &pipeline_) != VK_SUCCESS)
+        if (vkCreateComputePipelines(device_, PipelineCache::get(device_), 1, &pipelineInfo, nullptr, &pipeline_) != VK_SUCCESS)
             throw std::runtime_error("Could not create RT contact compute pipeline");
     } catch (...) { destroy(); throw; }
 }

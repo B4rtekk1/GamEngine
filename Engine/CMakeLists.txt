@@ -1,4 +1,5 @@
 add_library(Engine SHARED
+    Source/Renderer/Vulkan/PipelineCache.cpp
     Source/Application.cpp Source/Project.cpp Source/Assets/StbImage.cpp Source/Assets/AssetManager.cpp Source/Assets/Gtex.cpp Source/Assets/Gmesh.cpp Source/Assets/CookCache.cpp Source/Assets/TextureCooker.cpp Source/Assets/GlbLoader.cpp Source/Assets/FbxLoader.cpp Source/Assets/DdsImage.cpp Source/Assets/Content.cpp
     ${PROJECT_SOURCE_DIR}/ThridParty/ufbx.c
     Source/Core/Camera.cpp Source/Core/Diagnostics.cpp Source/Core/Profiler.cpp Source/Core/TaskScheduler.cpp Source/Core/Time.cpp Source/ECS/Registry.cpp Source/Input/Input.cpp Source/Input/InputMap.cpp
@@ -98,6 +99,7 @@ target_compile_definitions(Engine PRIVATE PX_PHYSX_STATIC_LIB
     GAMEENGINE_SLANGC_PATH="${GAMEENGINE_SLANGC}")
 target_include_directories(Engine PUBLIC $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/Include> ${GLM_INCLUDE_DIR} ${VMA_INCLUDE_DIR} PRIVATE "${PROJECT_SOURCE_DIR}" "${CMAKE_CURRENT_SOURCE_DIR}/Source" "${PROJECT_SOURCE_DIR}/ThridParty/stb")
 gameengine_enable_warnings(Engine)
+target_link_libraries(Engine PRIVATE ${CMAKE_DL_LIBS})
 gameengine_enable_sanitizers(Engine)
 if(WIN32)
     set_target_properties(Engine PROPERTIES WINDOWS_EXPORT_ALL_SYMBOLS ON)

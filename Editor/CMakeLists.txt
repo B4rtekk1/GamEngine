@@ -5,20 +5,23 @@ add_executable(Editor
 if(WIN32)
     target_sources(Editor PRIVATE ${PROJECT_SOURCE_DIR}/Platform/Windows/Win32FileWatcher.cpp ${PROJECT_SOURCE_DIR}/Platform/Windows/ConPtyTerminal.cpp ${PROJECT_SOURCE_DIR}/Platform/Windows/WindowsUserPaths.cpp)
 elseif(UNIX AND NOT APPLE)
-    target_sources(Editor PRIVATE ${PROJECT_SOURCE_DIR}/Platform/Linux/InotifyFileWatcher.cpp ${PROJECT_SOURCE_DIR}/Platform/Linux/LinuxUserPaths.cpp)
+    target_sources(Editor PRIVATE ${PROJECT_SOURCE_DIR}/Platform/Linux/InotifyFileWatcher.cpp ${PROJECT_SOURCE_DIR}/Platform/Linux/LinuxUserPaths.cpp ${PROJECT_SOURCE_DIR}/Platform/Linux/PtyTerminal.cpp)
+    find_library(GAMEENGINE_PTY_LIBRARY NAMES util REQUIRED)
+    target_link_libraries(Editor PRIVATE ${GAMEENGINE_PTY_LIBRARY})
 endif()
 target_include_directories(Editor PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/Include" "${PROJECT_SOURCE_DIR}")
 target_compile_definitions(Editor PRIVATE GAMEENGINE_SOURCE_DIR="${PROJECT_SOURCE_DIR}")
 if(GE_DISTRIBUTION_BUILD)
     target_compile_definitions(Editor PRIVATE GE_DISTRIBUTION_BUILD=1)
 endif()
-target_link_libraries(Editor PRIVATE DearImGui GameEngineImNodes Engine SDL3::SDL3 Vulkan::Vulkan)
+target_link_libraries(Editor PRIVATE DearImGui GameEngineImNodes Engine SDL3::SDL3 Vulkan::Vulkan GameEngineMiniz)
 if(WIN32)
     target_link_libraries(Editor PRIVATE Comdlg32 Shell32 dwmapi comctl32)
 endif()
 gameengine_enable_warnings(Editor)
 gameengine_enable_sanitizers(Editor)
 gameengine_copy_runtime_dependencies(Editor)
+gameengine_copy_default_font(Editor)
 add_dependencies(Editor EngineShaders BrdfLutAsset)
 add_custom_command(TARGET Editor POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_FILE_DIR:Editor>/shaders"
@@ -38,7 +41,7 @@ add_custom_command(TARGET Editor POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_FILE_DIR:Editor>/SDK/GameScripts"
     COMMAND ${CMAKE_COMMAND} -E copy_directory "${PROJECT_SOURCE_DIR}/Engine/Include" "$<TARGET_FILE_DIR:Editor>/SDK/Include"
     COMMAND ${CMAKE_COMMAND} -E copy_directory "${GLM_INCLUDE_DIR}/glm" "$<TARGET_FILE_DIR:Editor>/SDK/ThirdParty/glm"
-    COMMAND ${CMAKE_COMMAND} -E copy_if_different "$<TARGET_LINKER_FILE:Engine>" "$<TARGET_FILE_DIR:Editor>/SDK/Lib/Engine.lib"
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different "$<TARGET_LINKER_FILE:Engine>" "$<TARGET_FILE_DIR:Editor>/SDK/Lib/$<TARGET_LINKER_FILE_NAME:Engine>"
     COMMAND ${CMAKE_COMMAND} -E copy_if_different "${PROJECT_SOURCE_DIR}/Player/GameScriptsPCH.h" "$<TARGET_FILE_DIR:Editor>/SDK/GameScriptsPCH.h"
     COMMAND ${CMAKE_COMMAND} -E copy_if_different "${PROJECT_SOURCE_DIR}/Tools/GenerateGameScriptsModule.cmake" "$<TARGET_FILE_DIR:Editor>/SDK/Tools/GenerateGameScriptsModule.cmake"
     COMMAND ${CMAKE_COMMAND} -E copy_if_different "${PROJECT_SOURCE_DIR}/cmake/GameScriptsStandalone/CMakeLists.txt" "$<TARGET_FILE_DIR:Editor>/SDK/GameScripts/CMakeLists.txt"
@@ -48,9 +51,24 @@ add_custom_command(TARGET Editor POST_BUILD
 # Editor makes development and portable Editor builds follow the same contract.
 if(TARGET Player)
     add_custom_command(TARGET Editor POST_BUILD
-        COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_FILE_DIR:Editor>/Runtime/Win64/Release"
-        COMMAND ${CMAKE_COMMAND} -E copy_directory "$<TARGET_FILE_DIR:Player>" "$<TARGET_FILE_DIR:Editor>/Runtime/Win64/Release"
-        COMMAND ${CMAKE_COMMAND} -E copy_directory "${GAMEENGINE_SHADER_OUTPUT_DIR}" "$<TARGET_FILE_DIR:Editor>/Runtime/Win64/Release/shaders"
+        COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_FILE_DIR:Editor>/${GAMEENGINE_RUNTIME_DIRECTORY}"
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different "$<TARGET_FILE:Engine>" "$<TARGET_FILE_DIR:Editor>/${GAMEENGINE_RUNTIME_DIRECTORY}/$<TARGET_FILE_NAME:Engine>"
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different "$<TARGET_FILE:SDL3::SDL3-shared>" "$<TARGET_FILE_DIR:Editor>/${GAMEENGINE_RUNTIME_DIRECTORY}/$<TARGET_FILE_NAME:SDL3::SDL3-shared>"
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different "$<TARGET_FILE:Player>" "$<TARGET_FILE_DIR:Editor>/${GAMEENGINE_RUNTIME_DIRECTORY}/$<TARGET_FILE_NAME:Player>"
+        COMMAND ${CMAKE_COMMAND} -E copy_directory "${GAMEENGINE_SHADER_OUTPUT_DIR}" "$<TARGET_FILE_DIR:Editor>/${GAMEENGINE_RUNTIME_DIRECTORY}/shaders"
+        COMMAND ${CMAKE_COMMAND} -E copy_directory "$<TARGET_FILE_DIR:Player>/Fonts" "$<TARGET_FILE_DIR:Editor>/${GAMEENGINE_RUNTIME_DIRECTORY}/Fonts"
+        COMMAND ${CMAKE_COMMAND} -E copy_directory "$<TARGET_FILE_DIR:Player>/Licenses" "$<TARGET_FILE_DIR:Editor>/${GAMEENGINE_RUNTIME_DIRECTORY}/Licenses"
         COMMENT "Copying runtime template for game builds")
     add_dependencies(Editor Player)
+endif()
+
+if(UNIX AND NOT APPLE AND TARGET Player)
+    add_custom_command(TARGET Editor POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different "$<TARGET_FILE:SDL3::SDL3-shared>" "$<TARGET_FILE_DIR:Editor>/${GAMEENGINE_RUNTIME_DIRECTORY}/$<TARGET_SONAME_FILE_NAME:SDL3::SDL3-shared>")
+endif()
+
+if(WIN32 AND TARGET Player)
+    add_custom_command(TARGET Editor POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different $<TARGET_RUNTIME_DLLS:Player> "$<TARGET_FILE_DIR:Editor>/${GAMEENGINE_RUNTIME_DIRECTORY}"
+        COMMAND_EXPAND_LISTS)
 endif()

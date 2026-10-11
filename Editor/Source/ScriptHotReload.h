@@ -2,6 +2,7 @@
 
 #include "Engine/ECS/Registry.h"
 #include "Engine/Scripting/ScriptModuleManager.h"
+#include "Engine/Scripting/ScriptRegistry.h"
 #include "Engine/Scene/Scene.h"
 #include "Platform/FileWatcher.h"
 
@@ -28,11 +29,15 @@ namespace Editor {
         ScriptHotReload(const ScriptHotReload &) = delete;
         ScriptHotReload &operator=(const ScriptHotReload &) = delete;
 
-        void setProject(std::filesystem::path scriptsRoot) {
+        void setProject(std::filesystem::path scriptsRoot, std::filesystem::path candidatePath,
+                        std::filesystem::path buildDirectory) {
             if (scriptsRoot_ == scriptsRoot) return;
             scriptsRoot_ = std::move(scriptsRoot);
+            candidatePath_ = std::move(candidatePath);
+            buildDirectory_ = std::move(buildDirectory);
             watcher_.watch(scriptsRoot_);
-            reloadPending_ = false;
+            lastLoadedModuleTime_ = {};
+            requestBuild();
         }
 
         void requestBuild() {
@@ -48,7 +53,10 @@ namespace Editor {
                 building_ = false;
                 const auto buildDuration = std::chrono::duration_cast<std::chrono::milliseconds>(
                     std::chrono::steady_clock::now() - buildStartedAt_);
-                if (result.exitCode == 0) {
+                if (buildProject_ != buildDirectory_) {
+                    // A completed build of the previous project cannot populate
+                    // the new project's Inspector registry.
+                } else if (result.exitCode == 0) {
                     info("Game scripts build completed in " + std::to_string(buildDuration.count()) + " ms.");
                     std::error_code error;
                     const auto writeTime = std::filesystem::last_write_time(candidatePath_, error);
@@ -59,9 +67,14 @@ namespace Editor {
                             const auto reloadDuration = std::chrono::duration_cast<std::chrono::milliseconds>(
                                 std::chrono::steady_clock::now() - reloadStartedAt);
                             info("Game scripts reloaded in " + std::to_string(reloadDuration.count()) + " ms.");
+                            const auto names = Engine::ScriptRegistry::instance().classNames();
+                            info("Registered script classes: " + std::to_string(names.size()));
+                            for (const auto& name : names) info("Script class available in Inspector: " + name);
                         } else {
-                            warning("GameScripts.dll was built, but validation failed; keeping the active module.");
+                            warning(candidatePath_.filename().string() + " was built, but validation failed; keeping the active module.");
                         }
+                    } else if (error) {
+                        warning("Game scripts build succeeded, but the module is missing: " + candidatePath_.string());
                     }
                 } else {
                     warning("Game scripts build failed; keeping the active module." +
@@ -81,7 +94,8 @@ namespace Editor {
                 reloadPending_ = false;
                 building_ = true;
                 buildStartedAt_ = now;
-                info("Game script change detected; rebuilding GameScripts.dll...");
+                info("Game script change detected; rebuilding " + candidatePath_.filename().string() + "...");
+                buildProject_ = buildDirectory_;
                 const auto buildDirectory = buildDirectory_.string();
                 const auto buildConfiguration = buildConfiguration_;
                 build_ = std::async(std::launch::async, [buildDirectory, buildConfiguration] {
@@ -134,6 +148,7 @@ namespace Editor {
         std::filesystem::path scriptsRoot_;
         std::filesystem::path candidatePath_;
         std::filesystem::path buildDirectory_;
+        std::filesystem::path buildProject_;
         std::string buildConfiguration_;
         Platform::FileWatcher watcher_;
         std::filesystem::file_time_type lastLoadedModuleTime_{};

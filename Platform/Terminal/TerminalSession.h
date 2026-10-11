@@ -24,7 +24,7 @@ public:
 
 /** Creates the native terminal backend for the current platform. */
 [[nodiscard]] std::unique_ptr<TerminalSession> createTerminalSession();
-/** Returns pwsh, Windows PowerShell, or cmd in that order when available. */
+/** Returns an available platform shell: PowerShell/cmd on Windows, SHELL/bash/sh on Linux. */
 [[nodiscard]] std::filesystem::path defaultTerminalShell();
 
 } // namespace Platform

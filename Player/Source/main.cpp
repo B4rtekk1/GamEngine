@@ -1,3 +1,4 @@
+#include "Platform/RuntimePaths.h"
 #include <Engine/Engine.h>
 #include <Engine/Core/Diagnostics.h>
 #include <Engine/Scripting/ScriptModuleManager.h>
@@ -28,7 +29,7 @@ int main(int argc, char** argv) {
         const std::filesystem::path executableRoot{basePath};
         std::filesystem::path executablePath = argc > 0 && argv[0] != nullptr
                                                    ? std::filesystem::path{argv[0]}
-                                                   : executableRoot / "GamEnginePlayer.exe";
+                                                   : executableRoot / Platform::PlayerFilename;
         std::string gameName = executablePath.stem().string();
         if (gameName.empty()) gameName = "Game";
         Engine::Diagnostics::instance().initialize(
@@ -55,12 +56,12 @@ int main(int argc, char** argv) {
                                                     ? project.resolve(*sceneOverride)
                                                     : project.startupScene();
         Engine::ScriptModuleManager scriptModules{Engine::ScriptRegistry::instance()};
-        const auto scriptModule = executableRoot / "GameScripts.dll";
+        const auto scriptModule = executableRoot / Platform::ScriptModuleFilename;
         if (!std::filesystem::is_regular_file(scriptModule)) {
-            throw std::runtime_error("Missing GameScripts.dll: " + scriptModule.string());
+            throw std::runtime_error("Missing game script module: " + scriptModule.string());
         }
         if (!scriptModules.loadInitialModule(scriptModule, Engine::ScriptModuleLoadMode::Direct)) {
-            throw std::runtime_error("Could not load GameScripts.dll");
+            throw std::runtime_error("Could not load game script module");
         }
         const Engine::RenderConfig renderConfig{
             .features = Engine::RenderFeatures{.shadows = true},

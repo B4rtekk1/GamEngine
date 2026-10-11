@@ -10,8 +10,9 @@ add_executable(GamEngineTests
     ${PROJECT_SOURCE_DIR}/Engine/Source/Core/Camera.cpp ${PROJECT_SOURCE_DIR}/Engine/Source/Core/TaskScheduler.cpp ${PROJECT_SOURCE_DIR}/Engine/Source/Core/Time.cpp ${PROJECT_SOURCE_DIR}/Engine/Source/Project.cpp
     ${PROJECT_SOURCE_DIR}/Engine/Source/Renderer/Geometry/Terrain.cpp ${PROJECT_SOURCE_DIR}/Engine/Source/Renderer/Geometry/ProceduralCloud.cpp ${PROJECT_SOURCE_DIR}/Engine/Source/Renderer/Geometry/Meshlet.cpp ${PROJECT_SOURCE_DIR}/Engine/Source/Renderer/Culling/MeshletCulling.cpp ${PROJECT_SOURCE_DIR}/Engine/Source/Renderer/GPUSceneDatabase.cpp ${PROJECT_SOURCE_DIR}/Engine/Source/Renderer/Lighting/EnvironmentBaker.cpp
     ${PROJECT_SOURCE_DIR}/Engine/Source/UI/Canvas.cpp ${PROJECT_SOURCE_DIR}/Engine/Source/UI/RectTransform.cpp ${PROJECT_SOURCE_DIR}/Engine/Source/UI/UIBatch.cpp ${PROJECT_SOURCE_DIR}/Engine/Source/UI/Vulkan/UIFontAtlas.cpp ${PROJECT_SOURCE_DIR}/Engine/Source/UI/Vulkan/UIFontAtlasRuntime.cpp ${PROJECT_SOURCE_DIR}/Engine/Source/Scripting/ScriptRegistry.cpp)
+target_sources(GamEngineTests PRIVATE ${PROJECT_SOURCE_DIR}/Engine/Source/Renderer/Lighting/ReflectionProbeCapture.cpp)
 target_link_libraries(GamEngineTests PRIVATE GTest::gtest_main)
-target_include_directories(GamEngineTests PRIVATE "${PROJECT_SOURCE_DIR}/Engine/Include" ${GLM_INCLUDE_DIR})
+target_include_directories(GamEngineTests PRIVATE "${PROJECT_SOURCE_DIR}/Engine/Include" ${GLM_INCLUDE_DIR} ${VMA_INCLUDE_DIR})
 gameengine_enable_warnings(GamEngineTests)
 gameengine_enable_sanitizers(GamEngineTests)
 
@@ -51,6 +52,41 @@ target_include_directories(ShaderGraphCompilerTests PRIVATE "${PROJECT_SOURCE_DI
 gameengine_enable_warnings(ShaderGraphCompilerTests)
 gameengine_enable_sanitizers(ShaderGraphCompilerTests)
 include(GoogleTest)
+add_executable(AssetImporterTests AssetImporterTests.cpp ${PROJECT_SOURCE_DIR}/Editor/Source/AssetImporter.cpp)
+target_include_directories(AssetImporterTests PRIVATE "${PROJECT_SOURCE_DIR}/Editor/Include")
+target_link_libraries(AssetImporterTests PRIVATE GTest::gtest_main GameEngineMiniz)
+gameengine_enable_warnings(AssetImporterTests)
+gameengine_enable_sanitizers(AssetImporterTests)
+gtest_discover_tests(AssetImporterTests)
+
+if(TARGET Editor AND TARGET Player)
+    add_executable(GameBuildPipelineTests GameBuildPipelineTests.cpp ${PROJECT_SOURCE_DIR}/Editor/Source/Build/GameBuildPipeline.cpp)
+    target_include_directories(GameBuildPipelineTests PRIVATE "${PROJECT_SOURCE_DIR}" "${PROJECT_SOURCE_DIR}/Editor/Include")
+    target_compile_definitions(GameBuildPipelineTests PRIVATE GE_TEST_EDITOR_ROOT="$<TARGET_FILE_DIR:Editor>")
+    target_link_libraries(GameBuildPipelineTests PRIVATE Engine GTest::gtest_main)
+    add_dependencies(GameBuildPipelineTests Editor)
+    gameengine_enable_warnings(GameBuildPipelineTests)
+    gameengine_enable_sanitizers(GameBuildPipelineTests)
+    gameengine_copy_runtime_dependencies(GameBuildPipelineTests)
+    gtest_discover_tests(GameBuildPipelineTests)
+endif()
+
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    add_library(LinuxTestModule SHARED LinuxTestModule.cpp)
+    add_executable(LinuxPlatformTests LinuxPlatformTests.cpp
+        ${PROJECT_SOURCE_DIR}/Platform/Linux/InotifyFileWatcher.cpp
+        ${PROJECT_SOURCE_DIR}/Platform/Linux/LinuxUserPaths.cpp
+        ${PROJECT_SOURCE_DIR}/Platform/Linux/PtyTerminal.cpp
+        ${PROJECT_SOURCE_DIR}/Engine/Source/Scripting/DynamicLibrary.cpp)
+    find_library(GAMEENGINE_TEST_PTY_LIBRARY NAMES util REQUIRED)
+    target_include_directories(LinuxPlatformTests PRIVATE "${PROJECT_SOURCE_DIR}" "${PROJECT_SOURCE_DIR}/Engine/Include")
+    target_link_libraries(LinuxPlatformTests PRIVATE GTest::gtest_main ${GAMEENGINE_TEST_PTY_LIBRARY} ${CMAKE_DL_LIBS})
+    add_dependencies(LinuxPlatformTests LinuxTestModule)
+    gameengine_enable_warnings(LinuxPlatformTests)
+    gameengine_enable_sanitizers(LinuxPlatformTests)
+    gtest_discover_tests(LinuxPlatformTests WORKING_DIRECTORY "$<TARGET_FILE_DIR:LinuxTestModule>")
+endif()
+
 add_executable(PlayModePerformanceTests
     PlayModePerformanceTests.cpp ScriptRegistryTests.cpp ScriptSystemTests.cpp)
 target_link_libraries(PlayModePerformanceTests PRIVATE Engine GTest::gtest_main)

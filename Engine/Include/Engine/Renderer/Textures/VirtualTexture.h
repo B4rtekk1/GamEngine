@@ -34,7 +34,9 @@ namespace Engine {
         VirtualTexture& operator=(VirtualTexture&&) = delete;
 
         void create(VkPhysicalDevice physicalDevice, VkDevice device, VkCommandPool commandPool, VkQueue queue,
-                    const Assets::GtexTexture& source, VmaAllocator allocator, Config config = {});
+                    const Assets::GtexTexture& source, VmaAllocator allocator);
+        void create(VkPhysicalDevice physicalDevice, VkDevice device, VkCommandPool commandPool, VkQueue queue,
+                    const Assets::GtexTexture& source, VmaAllocator allocator, Config config);
         void destroy() noexcept;
 
         /** Queue a page requested by GPU feedback. Larger priority wins. */

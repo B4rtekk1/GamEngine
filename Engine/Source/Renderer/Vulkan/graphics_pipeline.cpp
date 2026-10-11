@@ -1,3 +1,4 @@
+#include "Engine/Renderer/Vulkan/PipelineCache.h"
 #include "Engine/Renderer/Vulkan/graphics_pipeline.h"
 
 #include "Engine/Renderer/shader_loader.h"
@@ -372,7 +373,7 @@ namespace Engine {
         info.pNext = &rendering;
         info.layout = layout_;
         info.renderPass = VK_NULL_HANDLE;
-        if (vkCreateGraphicsPipelines(device_, VK_NULL_HANDLE, 1, &info, nullptr, &pipeline_) != VK_SUCCESS) {
+        if (vkCreateGraphicsPipelines(device_, PipelineCache::get(device_), 1, &info, nullptr, &pipeline_) != VK_SUCCESS) {
             throw std::runtime_error("Could not create graphics pipeline");
         }
     }

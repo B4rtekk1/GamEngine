@@ -1,0 +1,3 @@
+DroidSans.ttf by Steve Matteson, distributed under the Apache License 2.0.
+The font is supplied by Dear ImGui's misc/fonts directory.
+See LICENSE-Fonts-Apache-2.0.txt in Licenses for the license text.

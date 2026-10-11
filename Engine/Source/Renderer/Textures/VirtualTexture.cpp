@@ -65,6 +65,12 @@ namespace Engine {
 
     VirtualTexture::~VirtualTexture() { destroy(); }
 
+    void VirtualTexture::create(VkPhysicalDevice physicalDevice, VkDevice device,
+                                VkCommandPool commandPool, VkQueue queue,
+                                const Assets::GtexTexture& source, VmaAllocator allocator) {
+        create(physicalDevice, device, commandPool, queue, source, allocator, Config{});
+    }
+
     void VirtualTexture::create(const VkPhysicalDevice physicalDevice, const VkDevice device,
                                 const VkCommandPool commandPool, const VkQueue queue,
                                 const Assets::GtexTexture& source, const VmaAllocator allocator, Config config) {

@@ -5,7 +5,7 @@
  * @brief Declares the hierarchical-Z depth pyramid used for occlusion culling.
  */
 
-#include <vulkan\vulkan.h>
+#include <vulkan/vulkan.h>
 #include <vk_mem_alloc.h>
 
 #include <cstdint>

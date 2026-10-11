@@ -155,6 +155,7 @@ namespace Editor {
 
     void WindowsTitleBar::attach(SDL_Window *window) {
         detach();
+        window_ = window;
 #ifdef _WIN32
         if (window == nullptr) return;
         const HWND handle = static_cast<HWND>(SDL_GetPointerProperty(
@@ -211,6 +212,7 @@ namespace Editor {
     }
 
     void WindowsTitleBar::detach() {
+        window_ = nullptr;
 #ifdef _WIN32
         if (windowHandle_ != nullptr) {
             const HWND handle = static_cast<HWND>(windowHandle_);
@@ -268,7 +270,7 @@ namespace Editor {
 #ifdef _WIN32
         return windowHandle_ != nullptr && IsZoomed(static_cast<HWND>(windowHandle_));
 #else
-        return false;
+        return window_ && (SDL_GetWindowFlags(window_) & SDL_WINDOW_MAXIMIZED) != 0;
 #endif
     }
 
@@ -295,6 +297,7 @@ namespace Editor {
             return static_cast<float>(GetDpiForWindow(static_cast<HWND>(windowHandle_))) / 96.0F;
         }
 #endif
+        if (window_) return SDL_GetWindowDisplayScale(window_);
         return 1.0F;
     }
 } // namespace Editor

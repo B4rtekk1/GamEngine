@@ -139,6 +139,7 @@
                     commandPool = VK_NULL_HANDLE;
                 }
 
+                pipelineCache.destroy();
                 vulkanDevice.destroy();
                 device = VK_NULL_HANDLE;
             }

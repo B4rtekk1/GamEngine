@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstdint>
 
 namespace Engine {
     enum class RigidbodyType:uint8_t {

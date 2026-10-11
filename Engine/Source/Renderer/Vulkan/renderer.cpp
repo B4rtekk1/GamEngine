@@ -33,6 +33,7 @@
 #include "Engine/Renderer/Vulkan/graphics_pipeline.h"
 #include "Engine/Renderer/Vulkan/GpuTimestampProfiler.h"
 #include "Engine/Renderer/Vulkan/vulkan_device.h"
+#include "Engine/Renderer/Vulkan/PipelineCache.h"
 #include "Engine/Renderer/Vulkan/swapchain.h"
 #include "Engine/Renderer/Textures/Texture2D.h"
 #include "Engine/Renderer/Lighting/ImageBasedLighting.h"
@@ -276,6 +277,7 @@ namespace Engine {
                 return;
             }
             initSceneResources();
+            pipelineCache.save();
             sceneResourcesInitialized = true;
         }
 
@@ -454,6 +456,10 @@ namespace Engine {
 
         void processEvent(const SDL_Event &event) {
             SDLInput::processEvent(event);
+            if (event.type == SDL_EVENT_WINDOW_DISPLAY_CHANGED &&
+                event.window.windowID == SDL_GetWindowID(window)) {
+                swapchain.logPresentationState();
+            }
             if (event.type == SDL_EVENT_WINDOW_RESIZED ||
                 event.type == SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED) {
                 framebufferResized = true;

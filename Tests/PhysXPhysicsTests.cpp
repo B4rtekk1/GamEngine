@@ -7,6 +7,7 @@
 #include "Engine/Scene/Prefab.h"
 #include "Engine/ECS/Components/TerrainGrassComponent.h"
 #include "Engine/ECS/Components/MeshRendererComponent.h"
+#include "Engine/ECS/Components/RigidbodyRuntime.h"
 #include "Engine/Scene/Components/IdentityComponents.h"
 #include "Engine/Scene/Components/LightComponent.h"
 
@@ -161,7 +162,7 @@ TEST(Prefab, CubePreservesRenderSettingsWhenInstantiatedInScene) {
     const auto entity = scene.findEntity(actor.id());
     ASSERT_NE(entity, Engine::NullEntity);
     const auto& renderer = scene.editor().read<Engine::MeshRendererComponent>(entity);
-    EXPECT_EQ(renderer.mesh, prefab.mesh());
+    EXPECT_EQ(renderer.mesh.source(), prefab.mesh());
     EXPECT_FLOAT_EQ(renderer.material.pbr.metallic, 0.7F);
     EXPECT_FLOAT_EQ(renderer.material.pbr.roughness, 0.2F);
     EXPECT_FALSE(renderer.castShadow);
@@ -227,17 +228,17 @@ TEST(Scene, KeepsExactlyOneMainDirectionalLightWithoutDisablingOthers) {
     const auto firstEntity = scene.findEntity(first.id());
     const auto secondEntity = scene.findEntity(second.id());
     auto editor = scene.editor();
-    EXPECT_TRUE(editor.get<Engine::LightComponent>(firstEntity).enabled);
-    EXPECT_FALSE(editor.get<Engine::LightComponent>(secondEntity).mainLight);
-    EXPECT_TRUE(editor.get<Engine::LightComponent>(secondEntity).enabled);
-    EXPECT_TRUE(editor.get<Engine::LightComponent>(firstEntity).mainLight);
+    EXPECT_TRUE(editor.read<Engine::LightComponent>(firstEntity).enabled);
+    EXPECT_FALSE(editor.read<Engine::LightComponent>(secondEntity).mainLight);
+    EXPECT_TRUE(editor.read<Engine::LightComponent>(secondEntity).enabled);
+    EXPECT_TRUE(editor.read<Engine::LightComponent>(firstEntity).mainLight);
 
     scene.setActiveDirectionalLight(firstEntity);
     EXPECT_EQ(scene.activeDirectionalLight().id(), first.id());
-    EXPECT_TRUE(editor.get<Engine::LightComponent>(firstEntity).enabled);
-    EXPECT_TRUE(editor.get<Engine::LightComponent>(firstEntity).mainLight);
-    EXPECT_TRUE(editor.get<Engine::LightComponent>(secondEntity).enabled);
-    EXPECT_FALSE(editor.get<Engine::LightComponent>(secondEntity).mainLight);
+    EXPECT_TRUE(editor.read<Engine::LightComponent>(firstEntity).enabled);
+    EXPECT_TRUE(editor.read<Engine::LightComponent>(firstEntity).mainLight);
+    EXPECT_TRUE(editor.read<Engine::LightComponent>(secondEntity).enabled);
+    EXPECT_FALSE(editor.read<Engine::LightComponent>(secondEntity).mainLight);
 
     first.setLightEnabled(false);
     EXPECT_FALSE(scene.activeDirectionalLight().valid());
@@ -405,7 +406,7 @@ TEST(SceneSerializer, RestoresTerrainMaterialLayersAfterRegeneratingGeometry) {
             .width = 1, .height = 1, .rgbaPixels = {40, 50, 60, 255}};
     });
     const auto& terrain = source.editor().read<Engine::TerrainComponent>(entity);
-    source.editor().patch<Engine::MeshRenderer>(entity, [&](auto& renderer) {
+    source.editor().patch<Engine::MeshRendererComponent>(entity, [&](auto& renderer) {
         auto mesh = std::make_shared<Engine::Mesh>(terrain.createMesh());
         terrain.applyMaterialLayers(*mesh, renderer.material.pbr);
         renderer.mesh = std::move(mesh);
@@ -417,7 +418,7 @@ TEST(SceneSerializer, RestoresTerrainMaterialLayersAfterRegeneratingGeometry) {
     ASSERT_NO_THROW(Engine::SceneSerializer::load(loaded, serialized));
     const auto loadedEntity = loaded.findEntity(loaded.findActor("Layered terrain").id());
     const auto& restoredTerrain = loaded.editor().read<Engine::TerrainComponent>(loadedEntity);
-    const auto& renderer = loaded.editor().read<Engine::MeshRenderer>(loadedEntity);
+    const auto& renderer = loaded.editor().read<Engine::MeshRendererComponent>(loadedEntity);
     ASSERT_TRUE(restoredTerrain.materialLayers[0].has_value());
     ASSERT_TRUE(restoredTerrain.materialLayers[2].has_value());
     ASSERT_TRUE(renderer.mesh);
@@ -673,7 +674,7 @@ TEST(SceneSerializer, RoundTripsParentRelationshipAndHierarchyOrder) {
     const auto parentEntity = source.findEntity(parent.id());
     const auto childEntity = source.findEntity(child.id());
     auto editor = source.editor();
-    const auto parentUuid = editor.get<Engine::UUIDComponent>(parentEntity).value;
+    const auto parentUuid = editor.read<Engine::UUIDComponent>(parentEntity).value;
     editor.add<Engine::ParentComponent>(childEntity, Engine::ParentComponent{parentUuid});
     editor.add<Engine::HierarchyOrderComponent>(childEntity, Engine::HierarchyOrderComponent{7});
     ASSERT_NO_THROW(source.save(path));
@@ -688,9 +689,9 @@ TEST(SceneSerializer, RoundTripsParentRelationshipAndHierarchyOrder) {
     const auto loadedParentEntity = loaded.findEntity(loadedParent.id());
     const auto loadedChildEntity = loaded.findEntity(loadedChild.id());
     auto loadedEditor = loaded.editor();
-    EXPECT_EQ(loadedEditor.get<Engine::ParentComponent>(loadedChildEntity).parentUuid,
-              loadedEditor.get<Engine::UUIDComponent>(loadedParentEntity).value);
-    EXPECT_EQ(loadedEditor.get<Engine::HierarchyOrderComponent>(loadedChildEntity).value, 7u);
+    EXPECT_EQ(loadedEditor.read<Engine::ParentComponent>(loadedChildEntity).parentUuid,
+              loadedEditor.read<Engine::UUIDComponent>(loadedParentEntity).value);
+    EXPECT_EQ(loadedEditor.read<Engine::HierarchyOrderComponent>(loadedChildEntity).value, 7u);
 }
 
 TEST(SceneSerializer, RejectsCyclicParentRelationships) {
@@ -703,8 +704,8 @@ TEST(SceneSerializer, RejectsCyclicParentRelationships) {
     const auto firstEntity = source.findEntity(first.id());
     const auto secondEntity = source.findEntity(second.id());
     auto editor = source.editor();
-    const auto firstUuid = editor.get<Engine::UUIDComponent>(firstEntity).value;
-    const auto secondUuid = editor.get<Engine::UUIDComponent>(secondEntity).value;
+    const auto firstUuid = editor.read<Engine::UUIDComponent>(firstEntity).value;
+    const auto secondUuid = editor.read<Engine::UUIDComponent>(secondEntity).value;
     editor.add<Engine::ParentComponent>(firstEntity, Engine::ParentComponent{secondUuid});
     editor.add<Engine::ParentComponent>(secondEntity, Engine::ParentComponent{firstUuid});
     ASSERT_NO_THROW(source.save(path));
@@ -740,17 +741,19 @@ TEST(Actor, UpdatesPhysicsAndCameraComponentsThroughHighLevelApi) {
 
     const auto entity = scene.findEntity(actor.id());
     auto editor = scene.editor();
-    const auto& body = editor.get<Engine::RigidbodyComponent>(entity);
+    const auto& body = editor.read<Engine::RigidbodyComponent>(entity);
     EXPECT_FLOAT_EQ(body.mass, 4.0F);
     EXPECT_FALSE(body.useGravity);
-    EXPECT_FLOAT_EQ(body.linearVelocity.z(), -1.0F);
-    const auto& collider = editor.get<Engine::ColliderComponent>(entity);
+    const auto& commands = editor.read<Engine::PhysicsCommandBuffer>(entity);
+    ASSERT_TRUE(commands.linearVelocity.has_value());
+    EXPECT_FLOAT_EQ(commands.linearVelocity->z(), -1.0F);
+    const auto& collider = editor.read<Engine::ColliderComponent>(entity);
     ASSERT_TRUE(std::holds_alternative<Engine::SphereCollider>(collider.shape));
     EXPECT_FLOAT_EQ(std::get<Engine::SphereCollider>(collider.shape).radius, 2.0F);
     EXPECT_TRUE(collider.isTrigger);
     EXPECT_FLOAT_EQ(collider.friction, 0.2F);
     EXPECT_FLOAT_EQ(collider.restitution, 0.8F);
-    const auto& camera = editor.get<Engine::CameraComponent>(entity);
+    const auto& camera = editor.read<Engine::CameraComponent>(entity);
     EXPECT_TRUE(camera.isOrthographic());
     EXPECT_FLOAT_EQ(camera.orthographicSize, 25.0F);
     EXPECT_FLOAT_EQ(camera.nearClip, 0.5F);

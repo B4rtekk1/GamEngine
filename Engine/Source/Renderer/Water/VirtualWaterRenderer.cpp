@@ -1,3 +1,4 @@
+#include "Engine/Renderer/Vulkan/PipelineCache.h"
 #include "Engine/Renderer/Water/VirtualWaterRenderer.h"
 
 #include "Engine/Assets/AssetManager.h"
@@ -61,7 +62,7 @@ VkPipeline VirtualWaterRenderer::makeCompute(const char* shader, VkPipelineLayou
     VkComputePipelineCreateInfo info{VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO};
     info.stage=stage; info.layout=layout;
     VkPipeline result{};
-    if(vkCreateComputePipelines(device_,VK_NULL_HANDLE,1,&info,nullptr,&result)!=VK_SUCCESS)
+    if(vkCreateComputePipelines(device_,PipelineCache::get(device_),1,&info,nullptr,&result)!=VK_SUCCESS)
         throw std::runtime_error(std::string("Could not create virtual-water compute pipeline: ")+shader);
     return result;
 }

@@ -15,26 +15,52 @@
 #include <fstream>
 #include <sstream>
 
-#ifdef _WIN32
-#ifndef NOMINMAX
-#define NOMINMAX
-#endif
-#include <windows.h>
-#include <commdlg.h>
-#endif
+#include <SDL3/SDL.h>
+#include <memory>
+#include <mutex>
 
 namespace {
 std::filesystem::path activeScenePath;
 std::filesystem::path activeProjectRoot;
+std::filesystem::path activeAssetRoot;
 bool sceneHasBeenSaved = false;
 
 std::filesystem::path defaultSceneDirectory() {
-    return activeProjectRoot / "Assets" / "Scenes";
+    return activeAssetRoot / "Scenes";
 }
+struct SceneDialogState {
+    std::mutex mutex;
+    bool ready{};
+    EditorSceneSession::FileDialogResult result;
+    std::string initialPath;
+};
+std::shared_ptr<SceneDialogState> activeDialog;
+
+void SDLCALL sceneDialogFinished(void* userdata, const char* const* files, int) {
+    const std::unique_ptr<std::shared_ptr<SceneDialogState>> owner{
+        static_cast<std::shared_ptr<SceneDialogState>*>(userdata)};
+    const auto& state = *owner;
+    std::lock_guard lock(state->mutex);
+    try {
+        if (!files) state->result.error = SDL_GetError();
+        else if (*files) {
+            const std::string_view utf8{*files};
+            state->result.path = std::filesystem::path{std::u8string{utf8.begin(), utf8.end()}};
+            if ((state->result.action == EditorSceneSession::FileDialogAction::SaveScene ||
+                 state->result.action == EditorSceneSession::FileDialogAction::NewScene) &&
+                state->result.path->extension().empty()) *state->result.path += ".scene";
+        }
+    } catch (const std::exception& error) {
+        state->result.error = error.what();
+    }
+    state->ready = true;
 }
 
-void EditorSceneSession::setProjectRoot(std::filesystem::path path) {
+}
+
+void EditorSceneSession::setProjectRoot(std::filesystem::path path, std::filesystem::path assetRoot) {
     activeProjectRoot = std::filesystem::absolute(std::move(path)).lexically_normal();
+    activeAssetRoot = assetRoot.empty() ? activeProjectRoot / "Assets" : std::move(assetRoot);
 }
 
 /**
@@ -58,72 +84,37 @@ bool EditorSceneSession::hasSavedScene() {
     return sceneHasBeenSaved;
 }
 
-std::optional<std::filesystem::path> EditorSceneSession::chooseSaveScenePath() {
-#ifdef _WIN32
-    std::array<wchar_t, 32768> selectedPath{};
-    const std::filesystem::path currentPath = scenePath();
-    const std::wstring initialFilename = currentPath.empty()
-                                           ? L"Untitled.scene"
-                                           : currentPath.filename().wstring();
-    const std::size_t copyLength = std::min(initialFilename.size(), selectedPath.size() - 1);
-    std::copy_n(initialFilename.begin(), copyLength, selectedPath.begin());
-
-    const std::filesystem::path initialDirectory = currentPath.empty()
-                                                      ? defaultSceneDirectory()
-                                                      : currentPath.parent_path();
-    const std::wstring initialDirectoryString = initialDirectory.wstring();
-    OPENFILENAMEW dialog{};
-    dialog.lStructSize = sizeof(dialog);
-    dialog.lpstrFilter = L"GamEngine Scene (*.scene)\0*.scene\0All Files (*.*)\0*.*\0\0";
-    dialog.lpstrFile = selectedPath.data();
-    dialog.nMaxFile = static_cast<DWORD>(selectedPath.size());
-    dialog.lpstrInitialDir = initialDirectoryString.empty() ? nullptr : initialDirectoryString.c_str();
-    dialog.lpstrDefExt = L"scene";
-    dialog.Flags = OFN_OVERWRITEPROMPT | OFN_PATHMUSTEXIST | OFN_NOCHANGEDIR;
-    if (!GetSaveFileNameW(&dialog)) return std::nullopt;
-    return std::filesystem::path{selectedPath.data()};
-#else
-    return std::nullopt;
-#endif
+void EditorSceneSession::requestFileDialog(const FileDialogAction action) {
+    if (activeDialog) return;
+    static constexpr SDL_DialogFileFilter sceneFilter{"GamEngine scenes", "scene"};
+    static constexpr SDL_DialogFileFilter projectFilter{"GamEngine projects", "project"};
+    activeDialog = std::make_shared<SceneDialogState>();
+    activeDialog->result.action = action;
+    activeDialog->result.projectRoot = activeProjectRoot;
+    const bool saving = action == FileDialogAction::SaveScene || action == FileDialogAction::NewScene;
+    const auto initial = action == FileDialogAction::LoadProject ? activeProjectRoot :
+        saving ? (action == FileDialogAction::NewScene || activeScenePath.empty()
+                    ? defaultSceneDirectory() / "Untitled.scene" : activeScenePath) : defaultSceneDirectory();
+    const auto utf8 = initial.u8string();
+    activeDialog->initialPath.assign(utf8.begin(), utf8.end());
+    auto* userdata = new std::shared_ptr<SceneDialogState>{activeDialog};
+    const auto* filter = action == FileDialogAction::LoadProject ? &projectFilter : &sceneFilter;
+    if (saving) SDL_ShowSaveFileDialog(sceneDialogFinished, userdata, SDL_GetKeyboardFocus(),
+                                     filter, 1, activeDialog->initialPath.c_str());
+    else SDL_ShowOpenFileDialog(sceneDialogFinished, userdata, SDL_GetKeyboardFocus(),
+                               filter, 1, activeDialog->initialPath.c_str(), false);
 }
 
-std::optional<std::filesystem::path> EditorSceneSession::chooseLoadScenePath() {
-#ifdef _WIN32
-    std::array<wchar_t, 32768> selectedPath{};
-    const std::filesystem::path currentPath = scenePath();
-    const std::filesystem::path initialDirectory = currentPath.empty()
-                                                      ? defaultSceneDirectory()
-                                                      : currentPath.parent_path();
-    const std::wstring initialDirectoryString = initialDirectory.wstring();
-    OPENFILENAMEW dialog{};
-    dialog.lStructSize = sizeof(dialog);
-    dialog.lpstrFilter = L"GamEngine Scene (*.scene)\0*.scene\0All Files (*.*)\0*.*\0\0";
-    dialog.lpstrFile = selectedPath.data();
-    dialog.nMaxFile = static_cast<DWORD>(selectedPath.size());
-    dialog.lpstrInitialDir = initialDirectoryString.empty() ? nullptr : initialDirectoryString.c_str();
-    dialog.Flags = OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST | OFN_NOCHANGEDIR;
-    if (!GetOpenFileNameW(&dialog)) return std::nullopt;
-    return std::filesystem::path{selectedPath.data()};
-#else
-    return std::nullopt;
-#endif
-}
-
-std::optional<std::filesystem::path> EditorSceneSession::chooseLoadProjectPath() {
-#ifdef _WIN32
-    std::array<wchar_t, 32768> selectedPath{};
-    OPENFILENAMEW dialog{};
-    dialog.lStructSize = sizeof(dialog);
-    dialog.lpstrFilter = L"GamEngine Project (*.project)\0*.project\0All Files (*.*)\0*.*\0\0";
-    dialog.lpstrFile = selectedPath.data();
-    dialog.nMaxFile = static_cast<DWORD>(selectedPath.size());
-    dialog.lpstrDefExt = L"project";
-    dialog.Flags = OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST | OFN_NOCHANGEDIR;
-    if (!GetOpenFileNameW(&dialog)) return std::nullopt;
-    return std::filesystem::path{selectedPath.data()};
-#else
-    return std::nullopt;
-#endif
+std::optional<EditorSceneSession::FileDialogResult> EditorSceneSession::pollFileDialog() {
+    if (!activeDialog) return std::nullopt;
+    std::optional<FileDialogResult> result;
+    {
+        std::lock_guard lock(activeDialog->mutex);
+        if (!activeDialog->ready) return std::nullopt;
+        result = std::move(activeDialog->result);
+    }
+    activeDialog.reset();
+    return result;
 }
 
 void EditorSceneSession::markSceneSaved(std::filesystem::path path) {
@@ -214,7 +205,7 @@ bool EditorSceneSession::createCppScript(const std::string_view name, std::strin
         error = "No project is currently open.";
         return false;
     }
-    const auto directory = activeProjectRoot / "Assets" / "Scripts";
+    const auto directory = activeAssetRoot / "Scripts";
     const auto header = directory / (std::string{name} + ".h");
     const auto source = directory / (std::string{name} + ".cpp");
     if (std::filesystem::exists(header) || std::filesystem::exists(source)) {

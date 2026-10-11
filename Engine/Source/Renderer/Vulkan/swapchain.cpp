@@ -1,13 +1,25 @@
 #include "Engine/Renderer/Vulkan/swapchain.h"
+#include "Engine/Core/Diagnostics.h"
 
 #include <algorithm>
 #include <array>
 #include <stdexcept>
+#include <string>
 #include <utility>
 #include <vector>
 
 namespace Engine {
     namespace {
+        const char* presentModeName(const VkPresentModeKHR mode) {
+            switch (mode) {
+                case VK_PRESENT_MODE_IMMEDIATE_KHR: return "IMMEDIATE";
+                case VK_PRESENT_MODE_MAILBOX_KHR: return "MAILBOX";
+                case VK_PRESENT_MODE_FIFO_KHR: return "FIFO";
+                case VK_PRESENT_MODE_FIFO_RELAXED_KHR: return "FIFO_RELAXED";
+                default: return "OTHER";
+            }
+        }
+
         struct SwapchainSupport {
             // Vulkan writes every member of this output structure.
             VkSurfaceCapabilitiesKHR capabilities;
@@ -328,6 +340,30 @@ namespace Engine {
         extent_ = newExtent;
         images_ = std::move(newImages);
         imageViews_ = std::move(newImageViews);
+        presentMode_ = presentMode;
+        supportedPresentModes_ = support.presentModes;
+        logPresentationState();
+    }
+
+    void Swapchain::logPresentationState() const {
+        if (!window_ || swapchain_ == VK_NULL_HANDLE) return;
+        const auto display = SDL_GetDisplayForWindow(window_);
+        const char* displayName = display ? SDL_GetDisplayName(display) : nullptr;
+        const auto* mode = display ? SDL_GetCurrentDisplayMode(display) : nullptr;
+        const char* driver = SDL_GetCurrentVideoDriver();
+        std::string supported;
+        for (const auto available : supportedPresentModes_) {
+            if (!supported.empty()) supported += ",";
+            supported += presentModeName(available);
+        }
+        Diagnostics::instance().report(DiagnosticSeverity::Info,
+            "[Presentation] backend=" + std::string{driver ? driver : "unknown"} +
+            "; display=" + std::string{displayName ? displayName : "unknown"} +
+            "; refresh=" + (mode ? std::to_string(mode->refresh_rate) : "unknown") +
+            " Hz; present=" + presentModeName(presentMode_) +
+            "; supported-at-creation=" + supported,
+            {.subsystem = "Vulkan"});
+        Diagnostics::instance().flush();
     }
 
     void Swapchain::destroyImageViews() noexcept {
@@ -351,6 +387,7 @@ namespace Engine {
         }
 
         images_.clear();
+        supportedPresentModes_.clear();
         extent_ = {};
         imageFormat_ = VK_FORMAT_UNDEFINED;
         swapchain_ = VK_NULL_HANDLE;

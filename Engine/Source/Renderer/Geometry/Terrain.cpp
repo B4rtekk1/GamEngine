@@ -29,7 +29,7 @@ namespace {
 
 TerrainComponent::TerrainComponent()
     : heights(checkedSampleCount(resolution), 0.0F),
-      colors(sampleCount(), {}) {}
+      colors(sampleCount()) {}
 
 TerrainComponent::TerrainComponent(const std::uint32_t requestedResolution,
                                    const float requestedWidth,
@@ -39,7 +39,7 @@ TerrainComponent::TerrainComponent(const std::uint32_t requestedResolution,
     : resolution(requestedResolution), width(requestedWidth), depth(requestedDepth),
       minimumHeight(requestedMinimumHeight), maximumHeight(requestedMaximumHeight),
       heights(checkedSampleCount(requestedResolution), 0.0F),
-      colors(sampleCount(), {}) {
+      colors(sampleCount()) {
     if (!valid()) throw std::invalid_argument("Terrain dimensions or height range are invalid");
 }
 

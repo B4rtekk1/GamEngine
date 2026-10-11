@@ -1,3 +1,4 @@
+#include "Engine/Renderer/Vulkan/PipelineCache.h"
 #include "Engine/Renderer/Passes/ShadowPass.h"
 
 #include "Engine/Renderer/Lighting/ReflectionProbeManager.h"
@@ -549,19 +550,19 @@ namespace Engine {
             pipelineInfo.renderPass = VK_NULL_HANDLE;
             pipelineInfo.stageCount = std::size(opaqueStages);
             pipelineInfo.pStages = opaqueStages.data();
-            if (vkCreateGraphicsPipelines(device_, VK_NULL_HANDLE, 1, &pipelineInfo,
+            if (vkCreateGraphicsPipelines(device_, PipelineCache::get(device_), 1, &pipelineInfo,
                                           nullptr, &opaquePipeline_) != VK_SUCCESS) {
                 throw std::runtime_error("Could not create opaque shadow pipeline");
             }
             pipelineInfo.stageCount = std::size(stages);
             pipelineInfo.pStages = stages.data();
-            if (vkCreateGraphicsPipelines(device_, VK_NULL_HANDLE, 1, &pipelineInfo,
+            if (vkCreateGraphicsPipelines(device_, PipelineCache::get(device_), 1, &pipelineInfo,
                                           nullptr, &pipeline_) != VK_SUCCESS) {
                 throw std::runtime_error("Could not create shadow pipeline");
             }
 
             rasterizer.cullMode = VK_CULL_MODE_NONE;
-            if (vkCreateGraphicsPipelines(device_, VK_NULL_HANDLE, 1, &pipelineInfo,
+            if (vkCreateGraphicsPipelines(device_, PipelineCache::get(device_), 1, &pipelineInfo,
                                           nullptr, &twoSidedPipeline_) != VK_SUCCESS) {
                 throw std::runtime_error("Could not create two-sided shadow pipeline");
             }
@@ -587,7 +588,7 @@ namespace Engine {
             };
             vertexInput.vertexAttributeDescriptionCount = std::size(grassAttributes);
             vertexInput.pVertexAttributeDescriptions = grassAttributes;
-            if (vkCreateGraphicsPipelines(device_, VK_NULL_HANDLE, 1, &pipelineInfo,
+            if (vkCreateGraphicsPipelines(device_, PipelineCache::get(device_), 1, &pipelineInfo,
                                           nullptr, &grassPipeline_) != VK_SUCCESS) {
                 throw std::runtime_error("Could not create grass shadow pipeline");
             }

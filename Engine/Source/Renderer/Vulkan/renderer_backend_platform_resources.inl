@@ -14,6 +14,8 @@
             createSurface();
             vulkanDevice.create(instance, surface);
             device = vulkanDevice.logical();
+            pipelineCache.create(vulkanDevice.physical(), device,
+                (projectRoot.empty() ? assetManager.asset_root() : projectRoot) / "Library" / "Vulkan");
             if (vulkanDevice.supportsRayQuery()) accelerationStructures.create(vulkanDevice.physical(), device, vulkanDevice.allocator());
             gpuTimestampProfiler.create(vulkanDevice.physical(), device);
             waitForDrawableExtent();
@@ -68,6 +70,7 @@
             const auto timeInitialization = [](const std::string_view stage, const auto& initialize) {
                 const auto startedAt = std::chrono::steady_clock::now();
                 initialize();
+                SDL_PumpEvents();
                 const auto elapsed = std::chrono::steady_clock::now() - startedAt;
                 const auto milliseconds = std::chrono::duration_cast<std::chrono::milliseconds>(elapsed).count();
                 Diagnostics::instance().report(

@@ -775,6 +775,9 @@ bool ComponentsPanel::draw(Engine::ScenePreset &scene, Engine::Assets::Content& 
             });
         }
         const auto *descriptor = Engine::ScriptRegistry::instance().descriptor(script.className);
+        if (descriptor == nullptr) {
+            ImGui::TextWrapped("Script class is not loaded. Check the Console for script build or module load errors.");
+        }
         if (descriptor != nullptr) {
             for (const auto &field : descriptor->fields) {
                 if (Engine::findScriptAttribute<Engine::ScriptHideInInspectorAttribute>(field) != nullptr) continue;

@@ -1,5 +1,14 @@
 option(GAMEENGINE_INSTALL_PORTABLE_EDITOR "Install a self-contained GamEngine Editor package" ON)
 
+function(gameengine_install_default_font destination component)
+    install(FILES "${dearimgui_SOURCE_DIR}/misc/fonts/DroidSans.ttf"
+        DESTINATION "${destination}/Fonts" COMPONENT ${component})
+    install(FILES "${PROJECT_SOURCE_DIR}/Assets/Fonts/NOTICE.txt"
+        DESTINATION "${destination}/Licenses" COMPONENT ${component} RENAME NOTICE-Fonts.txt)
+    install(FILES "${PROJECT_SOURCE_DIR}/LICENSE"
+        DESTINATION "${destination}/Licenses" COMPONENT ${component} RENAME LICENSE-Fonts-Apache-2.0.txt)
+endfunction()
+
 if(MSVC)
     set(CMAKE_INSTALL_SYSTEM_RUNTIME_LIBS_SKIP TRUE)
     set(CMAKE_INSTALL_DEBUG_LIBRARIES OFF)
@@ -9,6 +18,7 @@ endif()
 # This is deliberately separate from the Editor package.  A game export copies
 # this immutable template; it never recompiles Engine, Player or built-in shaders.
 if(TARGET Player)
+    gameengine_install_default_font("." GamEngineRuntime)
     install(TARGETS Player Engine COMPONENT GamEngineRuntime RUNTIME DESTINATION . LIBRARY DESTINATION .)
     install(IMPORTED_RUNTIME_ARTIFACTS SDL3::SDL3-shared COMPONENT GamEngineRuntime
         RUNTIME DESTINATION . LIBRARY DESTINATION .)
@@ -26,20 +36,24 @@ if(TARGET Player)
         COMMENT "Creating portable GamEngine runtime template")
 endif()
 
-if(GAMEENGINE_INSTALL_PORTABLE_EDITOR)
+if(GAMEENGINE_INSTALL_PORTABLE_EDITOR AND TARGET Editor)
+    gameengine_install_default_font("." GamEngineEditor)
+    install(FILES "${GAMEENGINE_GAME_ROOT}/Assets/BRDF/brdf_lut.bin"
+        DESTINATION Assets/BRDF COMPONENT GamEngineEditor)
     install(TARGETS Editor Engine DearImGui COMPONENT GamEngineEditor RUNTIME DESTINATION . LIBRARY DESTINATION . ARCHIVE DESTINATION lib)
     if(TARGET Player)
+        gameengine_install_default_font("${GAMEENGINE_RUNTIME_DIRECTORY}" GamEngineEditor)
         install(TARGETS Player Engine COMPONENT GamEngineEditor
-            RUNTIME DESTINATION Runtime/Win64/Release LIBRARY DESTINATION Runtime/Win64/Release)
+            RUNTIME DESTINATION ${GAMEENGINE_RUNTIME_DIRECTORY} LIBRARY DESTINATION ${GAMEENGINE_RUNTIME_DIRECTORY})
         install(IMPORTED_RUNTIME_ARTIFACTS SDL3::SDL3-shared COMPONENT GamEngineEditor
-            RUNTIME DESTINATION Runtime/Win64/Release LIBRARY DESTINATION Runtime/Win64/Release)
+            RUNTIME DESTINATION ${GAMEENGINE_RUNTIME_DIRECTORY} LIBRARY DESTINATION ${GAMEENGINE_RUNTIME_DIRECTORY})
         if(MSVC)
             install(PROGRAMS ${CMAKE_INSTALL_SYSTEM_RUNTIME_LIBS}
-                DESTINATION Runtime/Win64/Release COMPONENT GamEngineEditor)
+                DESTINATION ${GAMEENGINE_RUNTIME_DIRECTORY} COMPONENT GamEngineEditor)
         endif()
-        install(DIRECTORY "${GAMEENGINE_SHADER_OUTPUT_DIR}/" DESTINATION Runtime/Win64/Release/shaders
+        install(DIRECTORY "${GAMEENGINE_SHADER_OUTPUT_DIR}/" DESTINATION ${GAMEENGINE_RUNTIME_DIRECTORY}/shaders
             COMPONENT GamEngineEditor)
-        install(FILES "${PROJECT_SOURCE_DIR}/LICENSE" DESTINATION Runtime/Win64/Release/Licenses
+        install(FILES "${PROJECT_SOURCE_DIR}/LICENSE" DESTINATION ${GAMEENGINE_RUNTIME_DIRECTORY}/Licenses
             COMPONENT GamEngineEditor RENAME LICENSE-GamEngine.txt)
     endif()
     # A project-side C++ script module links to this import library, not to a
@@ -65,7 +79,8 @@ if(GAMEENGINE_INSTALL_PORTABLE_EDITOR)
     install(DIRECTORY "${PROJECT_SOURCE_DIR}/Engine/Shaders/" DESTINATION ShaderSources COMPONENT GamEngineEditor)
 
     get_filename_component(GAMEENGINE_SLANG_RUNTIME_DIR "${GAMEENGINE_SLANGC}" DIRECTORY)
-    set(GAMEENGINE_SLANG_RUNTIME_FILES "${GAMEENGINE_SLANGC}")
+    set(GAMEENGINE_SLANG_RUNTIME_FILES "")
+    install(PROGRAMS "${GAMEENGINE_SLANGC}" DESTINATION Tools/Slang COMPONENT GamEngineEditor)
     if(EXISTS "${GAMEENGINE_SLANG_RUNTIME_DIR}/slang.slang")
         list(APPEND GAMEENGINE_SLANG_RUNTIME_FILES "${GAMEENGINE_SLANG_RUNTIME_DIR}/slang.slang")
     endif()
@@ -78,6 +93,18 @@ if(GAMEENGINE_INSTALL_PORTABLE_EDITOR)
             "${GAMEENGINE_SLANG_RUNTIME_DIR}/SPIRV*.dll")
         list(FILTER GAMEENGINE_SLANG_RUNTIME_DLLS EXCLUDE REGEX "d\\.dll$")
         list(APPEND GAMEENGINE_SLANG_RUNTIME_FILES ${GAMEENGINE_SLANG_RUNTIME_DLLS})
+    endif()
+    if(UNIX AND NOT APPLE)
+        # SDK slangc searches $ORIGIN and $ORIGIN/../lib for its compiler backends.
+        get_filename_component(GAMEENGINE_SLANG_PARENT "${GAMEENGINE_SLANG_RUNTIME_DIR}" DIRECTORY)
+        file(GLOB GAMEENGINE_SLANG_RUNTIME_LIBRARIES
+            "${GAMEENGINE_SLANG_RUNTIME_DIR}/libslang*.so*"
+            "${GAMEENGINE_SLANG_RUNTIME_DIR}/libglslang*.so*"
+            "${GAMEENGINE_SLANG_RUNTIME_DIR}/libSPIRV*.so*"
+            "${GAMEENGINE_SLANG_PARENT}/lib/libslang*.so*"
+            "${GAMEENGINE_SLANG_PARENT}/lib/libglslang*.so*"
+            "${GAMEENGINE_SLANG_PARENT}/lib/libSPIRV*.so*")
+        list(APPEND GAMEENGINE_SLANG_RUNTIME_FILES ${GAMEENGINE_SLANG_RUNTIME_LIBRARIES})
     endif()
     install(FILES ${GAMEENGINE_SLANG_RUNTIME_FILES} DESTINATION Tools/Slang COMPONENT GamEngineEditor)
     # Recent Slang distributions keep their standard module beside slangc.

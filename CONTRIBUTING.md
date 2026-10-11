@@ -44,12 +44,11 @@ This helps avoid duplicated work and large changes that conflict with the curren
 
 ## Development environment
 
-The primary development environment is Windows with the Visual Studio toolchain.
+Development is supported on Linux x86-64 and Windows x64.
 
 Recommended tools:
 
-- Windows 11;
-- Visual Studio 2022 with the C++ workload;
+- Linux with GCC 15+ or a compatible Clang/libstdc++, or Windows 11 with Visual Studio 2022 and the C++ workload;
 - CMake;
 - Vulkan SDK;
 - Slang compiler;
@@ -60,6 +59,16 @@ Recommended tools:
 If you use another operating system or toolchain, make sure the complete engine, editor, shaders, and tests build successfully before submitting changes.
 
 ## Building the project
+
+On Linux, configure, build and run tests with:
+
+```bash
+cmake --preset linux-tests
+cmake --build --preset linux-tests --parallel 4
+ctest --preset linux-tests
+```
+
+Use `linux-release` and target `PackageEditor` to build a portable Linux editor.
 
 A typical Visual Studio build can be configured with:
 
